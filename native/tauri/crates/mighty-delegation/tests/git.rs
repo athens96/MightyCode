@@ -27,7 +27,7 @@ mod windows {
         ChildWorktree, ChildWorktreeCheck, ChildWorktreeOutcome, MINIMUM_FREE_BYTES, Maker, NOTES_FOLDER, is_safe_session_id,
         report_file_in, task_file_in,
     };
-    use mighty_delegation::git::{Git, GitFailure, is_object_name, line, message, report_file, run};
+    use mighty_delegation::git::{Git, GitFailure, GitRun, is_object_name, line, message, report_file, run};
     use mighty_delegation::host::DelegationPaneActivity;
     use mighty_delegation::model::{ChildState, MergeKind, MergeRecord};
     use mighty_delegation::request::{DelegationName, DelegationReasonCode};
@@ -71,6 +71,14 @@ mod windows {
             .unwrap_or_default();
         names.sort();
         names
+    }
+
+    /// A relative path that names nothing: a check's current folder is in the app's own checkout, so a relative path there must never
+    /// name a real folder git could be pointed at.
+    fn relative() -> String {
+        let path = format!("mighty-relative-{}/folder", mighty_core::wire::new_id());
+        assert!(!Path::new(&path).exists());
+        path
     }
 
     /// How many worktrees `git worktree list --porcelain` names.
@@ -236,7 +244,7 @@ mod windows {
         for workspace in [
             plain.repo(),
             combine(&plain.repo(), "missing"),
-            "relative/folder".into(),
+            relative(),
             r"\rooted\only".into(),
             "C:relative".into(),
             format!("{}\0x", plain.repo()),
@@ -435,7 +443,7 @@ mod windows {
         .await;
         place.fixture_git(&["checkout", "-q", "--detach", "main"]).await;
         tool_refuses(&place, &watched, &child, &head, &place.repo(), DelegationReasonCode::BranchNotCheckedOut, "a detached parent").await;
-        for folder in [place.base(), combine(&place.base(), "missing"), "relative/folder".into()] {
+        for folder in [place.base(), combine(&place.base(), "missing"), relative()] {
             tool_refuses(
                 &place,
                 &watched,
@@ -619,7 +627,7 @@ mod windows {
         card_refuses(&place, &child, &place.repo(), DelegationReasonCode::BranchNotCheckedOut, "another branch").await;
         place.fixture_git(&["checkout", "-q", "--detach", "main"]).await;
         card_refuses(&place, &child, &place.repo(), DelegationReasonCode::BranchNotCheckedOut, "a detached HEAD").await;
-        for folder in [place.base(), "relative/folder".into()] {
+        for folder in [place.base(), relative()] {
             card_refuses(&place, &child, &folder, DelegationReasonCode::BranchNotCheckedOut, &format!("no checkout at {folder}")).await;
         }
         place.fixture_git(&["checkout", "-q", "main"]).await;
@@ -894,6 +902,10 @@ mod windows {
             let elsewhere = combine(&combine(&place.base(), "elsewhere"), "f6");
             std::fs::create_dir_all(&elsewhere).unwrap();
             std::fs::write(combine(&elsewhere, "keep.txt"), "mine\n").unwrap();
+            // Something of the root's own, which a discard naming the root itself would take.
+            let sentinel = combine(&combine(&place.root(), "kept"), "sentinel.txt");
+            std::fs::create_dir_all(combine(&place.root(), "kept")).unwrap();
+            std::fs::write(&sentinel, "root's\n").unwrap();
             let climbing = combine(&combine(&combine(&combine(&combine(&place.root(), "f6"), ".."), ".."), "elsewhere"), "f6");
             let dots =
                 PlaceChild::make("..", &combine(&place.root(), ".."), "main", &first.base_commit, ChildState::Failed, Some(&place.repo()));
@@ -911,9 +923,11 @@ mod windows {
                 );
             }
             assert!(
-                std::fs::read_to_string(combine(&elsewhere, "keep.txt")).unwrap() == "mine\n" && Path::new(&place.root()).is_dir(),
-                "the other folder is as it was"
+                std::fs::read_to_string(combine(&elsewhere, "keep.txt")).unwrap() == "mine\n"
+                    && std::fs::read_to_string(&sentinel).unwrap() == "root's\n",
+                "the other folder and the root are as they were"
             );
+            remove_folder(Path::new(&combine(&place.root(), "kept")));
             // The child's place written another way is still its place.
             std::fs::create_dir_all(maker.worktree_path("f7")).unwrap();
             let f7 = PlaceChild { worktree_path: maker.worktree_path("f7").to_uppercase().replace('\\', "/"), ..failed("f7") };
@@ -1030,6 +1044,8 @@ mod windows {
             let short = combine(&folder_text, "REALFO~1");
             if Path::new(&short).is_dir() {
                 assert!(same(&paths.canonical(&short), &paths.canonical(&real)), "a short 8.3 name resolves to the long one");
+            } else {
+                eprintln!("note: the volume of {folder_text} keeps no 8.3 names, so the short-name check was skipped");
             }
             remove_folder(&folder);
         }
@@ -1216,21 +1232,26 @@ mod windows {
             failed.exit_code != 0 && message(&failed).starts_with("fatal:") && failed.stdout.is_empty(),
             "a failure carries git's own words, apart from its output"
         );
+        let repo = PathBuf::from(place.repo());
         assert!(
-            run(&git, &["status"], &combine(&place.base(), "missing"), 10.0).await.is_none()
+            git.run_detailed(&["status"], &Path::new(&place.base()).join("missing"), 10.0, None).await
+                == GitRun::failed(GitFailure::NotStarted)
                 && run(&git, &["cat-file", "--batch"], &place.repo(), 60.0).await.is_some_and(|r| r.exit_code == 0),
             "a folder that is gone starts no git, and stdin is closed"
         );
-        // A command past its time is stopped with everything it started, and is no answer.
+        // A command past its time is stopped with everything it started, and is no answer: what it started never writes afterwards.
         let clock = Instant::now();
+        let late = git.run_detailed(&["-c", "alias.wait=!sleep 4 && echo late > late.txt", "wait"], &repo, 1.0, None).await;
         assert!(
-            run(&git, &["-c", "alias.wait=!sleep 20", "wait"], &place.repo(), 1.0).await.is_none()
-                && clock.elapsed() < Duration::from_secs(15),
-            "a command past its time is no answer"
+            late == GitRun::failed(GitFailure::TimedOut) && clock.elapsed() < Duration::from_secs(15),
+            "a command past its time is no answer: {late:?}"
         );
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        assert!(!repo.join("late.txt").exists(), "what the command started was stopped with it");
         std::fs::write(combine(&place.repo(), "big.txt"), "0123456789abcdef\n".repeat(70_000)).unwrap();
-        assert!(
-            run(&git, &["--no-pager", "diff", "--no-index", "--", "file-0.txt", "big.txt"], &place.repo(), 10.0).await.is_none(),
+        assert_eq!(
+            git.run_detailed(&["--no-pager", "diff", "--no-index", "--", "file-0.txt", "big.txt"], &repo, 10.0, None).await,
+            GitRun::failed(GitFailure::TooMuchOutput),
             "more than 1 MiB of output is no answer"
         );
         assert!(
@@ -1261,16 +1282,18 @@ mod windows {
             let start = place.fixture_git(&["rev-parse", "HEAD"]).await;
             let child = place.child("c1", Some(&place.repo())).await;
             let worktree = child.worktree_path.clone();
-            std::fs::write(combine(&worktree, "file-0.txt"), "changed\n").unwrap();
             std::fs::write(combine(&worktree, "note.txt"), "Note\n").unwrap();
-            std::fs::write(combine(&worktree, "build.log"), "noise\n").unwrap();
             std::fs::write(report_file_in(&worktree), "# Report\n\nAdded the note.\n").unwrap();
             // A Claude child commits its own work: the app never does.
             let claude = auto_commit::run(&git, &paths, &worktree, "c1", 1, "claude").await;
             assert!(
-                claude.outcome == AutoCommitOutcome::Nothing && place.git_in(&worktree, &["rev-parse", "HEAD"]).await == start,
+                claude.outcome == AutoCommitOutcome::Nothing
+                    && place.git_in(&worktree, &["rev-parse", "HEAD"]).await == start
+                    && place.git_in(&worktree, &["status", "--porcelain"]).await == "?? note.txt",
                 "a Claude child commits its own work"
             );
+            std::fs::write(combine(&worktree, "file-0.txt"), "changed\n").unwrap();
+            std::fs::write(combine(&worktree, "build.log"), "noise\n").unwrap();
             let done = auto_commit::run(&git, &paths, &worktree, "c1", 1, "codex").await;
             assert!(
                 done.outcome == AutoCommitOutcome::Committed && done.left_out.is_empty() && done.why.is_none(),
@@ -1388,6 +1411,15 @@ mod windows {
         let big = "x".repeat(20_000_000);
         let late = git.run_detailed(&["hash-object", "--stdin"], &repo, 0.01, Some(&big)).await;
         assert!(late.failure == GitFailure::TimedOut && late.result.is_none(), "the app's own kill on its deadline is a timeout: {late:?}");
+        // A run whose caller stops waiting (its future dropped) ends git with everything it started.
+        let dropped = tokio::time::timeout(
+            Duration::from_secs(1),
+            git.run_detailed(&["-c", "alias.wait=!sleep 3 && echo late > dropped.txt", "wait"], &repo, 60.0, None),
+        )
+        .await;
+        assert!(dropped.is_err(), "the run was still going when its future was dropped");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!repo.join("dropped.txt").exists(), "git and what it started ended with the dropped future");
         let hashed = git.run_detailed(&["hash-object", "--stdin"], &repo, 60.0, Some("hello\n")).await;
         assert!(
             hashed.failure == GitFailure::None
@@ -1452,16 +1484,18 @@ mod windows {
         std::fs::create_dir_all(combine(&child.worktree_path, "node_modules")).unwrap();
         junction(&combine(&combine(&child.worktree_path, "node_modules"), "linked"), &outside).await;
         let merge = merged(merge::tool_merge(&git, &child.view(), &head, &place.repo()).await);
+        let before = place.disk().await;
         assert_eq!(
             cleanup::clean_up(&git, &paths, &child.with_state(ChildState::Merged).view(), &merge, &place.repo(), None).await,
             ChildCleanupOutcome::Kept(ChildCleanupHold::Link),
             "cleanup holds for the junction"
         );
         assert!(
-            Path::new(&sentinel).exists()
+            place.disk().await == before
+                && Path::new(&sentinel).exists()
                 && Path::new(&child.worktree_path).is_dir()
                 && place.mighty_branches().await.contains(&child.branch),
-            "the outside folder, the worktree and the branch stay"
+            "the outside folder, the worktree and the branch stay, and nothing on disk changed"
         );
         // A discard unlinks the junction itself first, then removes everything of the child's.
         assert!(
@@ -1482,6 +1516,69 @@ mod windows {
         );
     }
 
+    /// Beyond C# (W7 review M1): a child's worktree folder replaced by a junction to another registered worktree. The cleanup keeps
+    /// everything, the app's commit refuses it, and the discard unlinks the junction alone: the other worktree, its files, its
+    /// registration and its branch stay, and the child's own registration and branch go.
+    #[tokio::test]
+    async fn a_worktree_folder_replaced_by_a_junction_never_reaches_what_it_points_to() {
+        let _lane = lane::enter().await;
+        let locale = en();
+        let place = DelegationPlace::new();
+        let (git, paths) = (place.git(), place.paths());
+        place.repository_default().await;
+        let (child, head) = place.reported_child("c1", &[], Some(&place.repo())).await;
+        let (other, other_head) = place.reported_child("c2", &[], Some(&place.repo())).await;
+        std::fs::write(combine(&other.worktree_path, "unsaved.txt"), "c2's own work\n").unwrap();
+        std::fs::write(combine(&other.worktree_path, "c2.txt"), "c2 changed\n").unwrap();
+        let merge = merged(merge::tool_merge(&git, &child.view(), &head, &place.repo()).await);
+        // c1's folder goes (its registration stays) and a junction to c2's worktree takes its place.
+        remove_folder(Path::new(&child.worktree_path));
+        junction(&child.worktree_path, &other.worktree_path).await;
+        let other_state = async || {
+            (
+                std::fs::read_to_string(combine(&other.worktree_path, "unsaved.txt")).ok(),
+                place.git_in(&other.worktree_path, &["status", "--porcelain"]).await,
+                place.fixture_git(&["rev-parse", "refs/heads/mighty/c2"]).await,
+            )
+        };
+        let untouched = other_state().await;
+        assert!(untouched.0.is_some() && untouched.2 == other_head);
+
+        let before = place.disk().await;
+        assert_eq!(
+            cleanup::clean_up(&git, &paths, &child.with_state(ChildState::Merged).view(), &merge, &place.repo(), None).await,
+            ChildCleanupOutcome::Kept(ChildCleanupHold::Link),
+            "cleanup keeps everything for a worktree folder that is a junction"
+        );
+        assert!(place.disk().await == before && other_state().await == untouched, "nothing changed");
+        let commit = auto_commit::run(&git, &paths, &child.worktree_path, "c1", 1, "codex").await;
+        assert!(
+            commit.outcome == AutoCommitOutcome::Failed
+                && commit.why.as_deref() == Some("The child's folder is not its own git worktree.")
+                && other_state().await == untouched,
+            "the app never commits through the junction: {commit:?}"
+        );
+        // Its place is still its place, named as the junction and not as what it points to.
+        assert!(same(&paths.canonical_place(&child.worktree_path), &combine(&paths.canonical(&place.root()), "c1")));
+        assert!(!same(&paths.canonical(&child.worktree_path), &paths.canonical_place(&child.worktree_path)));
+        assert_eq!(
+            cleanup::discard(&git, &paths, &child.view(), &place.repo(), &place.root(), &locale).await,
+            ChildDiscardOutcome::Discarded,
+            "the discard goes through"
+        );
+        assert!(
+            !Path::new(&child.worktree_path).exists() && Path::new(&other.worktree_path).is_dir() && other_state().await == untouched,
+            "only the junction went: the other worktree and its work stay"
+        );
+        let listed = place.worktree_list().await;
+        assert!(
+            listed.len() == 2
+                && listed.iter().any(|path| same(path, &paths.canonical(&other.worktree_path)))
+                && place.mighty_branches().await == "refs/heads/mighty/c2",
+            "the other worktree stays registered with its branch, and the child's registration and branch are gone: {listed:?}"
+        );
+    }
+
     /// "delegation: git ends on its deadline, and reports and the file read the Windows way" (the delegation file's half, read again
     /// while another program holds it, is W7-A's store check)
     #[tokio::test]
@@ -1491,14 +1588,25 @@ mod windows {
         let folder_text = folder.to_string_lossy().into_owned();
         let git = Git::new(processes(), folder.join("profile").join("git-no-hooks")).with_global_config(folder.join("fixture.gitconfig"));
         std::fs::write(folder.join("fixture.gitconfig"), "").unwrap();
-        // A process git started keeps its output open after git exits: the deadline still ends the call.
+        // A process git started keeps its output open after git exits: the deadline still ends the call, and that process with it.
         let timer = Instant::now();
-        run(&git, &["-c", "alias.hold=!sleep 60 &", "hold"], &folder_text, 3.0).await;
-        assert!(timer.elapsed() < Duration::from_secs(30), "a held pipe ends with the deadline, after {:?}", timer.elapsed());
+        let held = git.run_detailed(&["-c", "alias.hold=!(sleep 5; echo late > late.txt) &", "hold"], &folder, 3.0, None).await;
         assert!(
-            git.hooks().is_absolute() && git.program().is_some_and(Path::is_absolute) && git.hooks().starts_with(&folder),
-            "git and its hooks folder are absolute, and the hooks folder is the profile's"
+            held == GitRun::failed(GitFailure::TimedOut) && timer.elapsed() < Duration::from_secs(30),
+            "a held pipe ends with the deadline, after {:?}: {held:?}",
+            timer.elapsed()
         );
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert!(!folder.join("late.txt").exists(), "the process holding the pipe ended with the deadline");
+        assert!(git.hooks().is_absolute() && git.program().is_some_and(Path::is_absolute), "git and its hooks folder are absolute");
+        // Every git is pointed at this hooks folder, the profile's and never the install folder, for hooks and signature programs.
+        let hooks = git.hooks().to_string_lossy().into_owned();
+        for setting in ["core.hooksPath", "gpg.program", "gpg.ssh.program", "gpg.x509.program"] {
+            let read = run(&git, &["config", "--get", setting], &folder_text, 10.0).await;
+            assert!(read.as_ref().is_some_and(|r| r.exit_code == 0 && line(&r.stdout) == hooks), "{setting} is the hooks folder: {read:?}");
+        }
+        let install = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        assert!(git.hooks().starts_with(&folder) && !git.hooks().starts_with(&install), "the hooks folder is the profile's");
         // Git does not run while anything is in the hooks folder.
         assert!(
             run(&git, &["--version"], &folder_text, 10.0).await.is_some_and(|r| r.exit_code == 0),
@@ -1511,6 +1619,18 @@ mod windows {
             GitFailure::NotStarted,
             "and says it did not start"
         );
+        // Nor while the hooks folder is a junction, even to an empty folder.
+        let empty = folder.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let linked = folder.join("linked-hooks");
+        junction(&linked.to_string_lossy(), &empty.to_string_lossy()).await;
+        let through = Git::new(processes(), linked.clone()).with_global_config(folder.join("fixture.gitconfig"));
+        assert_eq!(
+            through.run_detailed(&["--version"], &folder, 10.0, None).await.failure,
+            GitFailure::NotStarted,
+            "a hooks folder that is a junction is no plain folder"
+        );
+        std::fs::remove_dir(&linked).unwrap();
         let disk = mighty_platform_windows::WindowsDiskSpace;
         assert!(
             disk.available_bytes(&folder).is_ok_and(|b| b > 0)

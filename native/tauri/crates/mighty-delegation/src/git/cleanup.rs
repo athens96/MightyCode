@@ -11,7 +11,7 @@ use mighty_core::locale::Locale;
 use mighty_run::os;
 
 use super::merge::{checked_out_head, has_tracked_changes, head};
-use super::paths::{DelegationPaths, is_inside, same};
+use super::paths::{DelegationPaths, is_inside, is_link, same};
 use super::worktree::is_safe_session_id;
 use super::{ChildGit, Git, branch_name, exists, is_folder, is_object_name, line, message, run, usable_folder};
 use crate::host::DelegationPaneActivity;
@@ -113,6 +113,10 @@ pub async fn clean_up(
     if !is_folder(child.worktree_path) {
         return Kept(ChildCleanupHold::WorktreeMissing);
     }
+    // The worktree folder itself replaced by a link or junction (beyond C#): no git is ever pointed through it.
+    if is_link(child.worktree_path) {
+        return Kept(ChildCleanupHold::Link);
+    }
     if !git.available() {
         return Failed("Git is missing.".into());
     }
@@ -122,7 +126,7 @@ pub async fn clean_up(
     let Some(listed) = worktrees(git, paths, parent_checkout).await else {
         return Failed("Git could not list the worktrees.".into());
     };
-    let own = paths.canonical(child.worktree_path);
+    let own = paths.canonical_place(child.worktree_path);
     if !listed.iter().any(|path| same(path, &own)) {
         return Kept(ChildCleanupHold::WorktreeMissing);
     }
@@ -195,7 +199,7 @@ pub async fn clean_up(
 /// none does.
 async fn link_hold(worktree: &str) -> Option<ChildCleanupOutcome> {
     let folder = worktree.to_string();
-    match blocking(move || has_links(&folder)).await {
+    match blocking(move || Ok(is_link(&folder) || has_links(&folder)?)).await {
         Ok(true) => Some(ChildCleanupOutcome::Kept(ChildCleanupHold::Link)),
         Ok(false) => None,
         Err(error) => Some(ChildCleanupOutcome::Failed(error.to_string())),
@@ -211,7 +215,7 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> std::io::Result<T> +
 /// name; None when git failed.
 pub async fn nested_worktrees(git: &Git, paths: &DelegationPaths, worktree_path: &str, parent_checkout: &str) -> Option<Vec<String>> {
     let listed = worktrees(git, paths, parent_checkout).await?;
-    Some(nested(&listed, &paths.canonical(worktree_path)))
+    Some(nested(&listed, &paths.canonical_place(worktree_path)))
 }
 
 /// `Nested`: those of `listed` inside `own`, longest first.
@@ -257,9 +261,10 @@ pub async fn remove_own_worktree(
     locale: &Locale,
 ) -> ChildDiscardOutcome {
     let failed = |text: String| ChildDiscardOutcome::Failed(text);
-    // Only the child's own place is ever forced away, never a folder a record names elsewhere.
-    let own = paths.canonical(worktree_path);
-    if !is_safe_session_id(id) || !same(&own, &paths.canonical(&os::combine(worktree_root, id))) {
+    // Only the child's own place is ever forced away, never a folder a record names elsewhere. Its last name is compared as written
+    // (beyond C#): a place that is now a link to another folder is still this place, not the folder it points to.
+    let own = paths.canonical_place(worktree_path);
+    if !is_safe_session_id(id) || !same(&own, &os::combine(&paths.canonical(worktree_root), id)) {
         return failed(locale.get("delegation.card.error.worktreeMisplaced"));
     }
     // Only the child's own branch is ever deleted by force.
@@ -269,17 +274,32 @@ pub async fn remove_own_worktree(
     if !git.available() {
         return failed(locale.get("delegation.card.error.gitMissing"));
     }
+    if !usable_folder(parent_checkout) {
+        return failed(locale.get("delegation.card.error.parentCheckoutUnreachable"));
+    }
+    // The place itself replaced by a link or junction (beyond C#): only the link goes, by itself, before git is asked anything, so no
+    // git step ever reaches through it to the folder it points to (another worktree among them).
+    if is_link(worktree_path) {
+        let link = worktree_path.to_string();
+        if let Err(error) = blocking(move || unlink(&link)).await {
+            return failed(error.to_string());
+        }
+    }
     let Some(listed) = worktrees(git, paths, parent_checkout).await else {
         return failed(locale.get("delegation.card.error.parentCheckoutUnreachable"));
     };
     // A directory link inside goes first, by itself: git's forced remove must never reach what it points to. Looked for again right
-    // before git, a link made meanwhile stops the discard with nothing removed by git.
+    // before git, a link made meanwhile (the place itself among them) stops the discard with nothing removed by git.
     let folder = worktree_path.to_string();
     let unlinked = blocking(move || {
+        // A place that became a link again is never walked: the walk would be the folder it points to.
+        if is_link(&folder) {
+            return Ok(true);
+        }
         for link in links(&folder)? {
             unlink(&link)?;
         }
-        has_links(&folder)
+        Ok(is_link(&folder) || has_links(&folder)?)
     })
     .await;
     match unlinked {
@@ -386,6 +406,20 @@ fn is_directory_link(path: &Path, meta: &std::fs::Metadata) -> bool {
     }
 }
 
+/// `FileAttributes.ReparsePoint` of what `symlink_metadata` read (a link elsewhere).
+fn reparse_point(meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        meta.file_type().is_symlink()
+    }
+}
+
 /// `Unlink`: removes the junction or link at `path` itself, never what it points to.
 fn unlink(path: &str) -> std::io::Result<()> {
     let meta = std::fs::symlink_metadata(path)?;
@@ -395,7 +429,12 @@ fn unlink(path: &str) -> std::io::Result<()> {
         permissions.set_readonly(false);
         std::fs::set_permissions(path, permissions)?;
     }
-    if is_directory_link(Path::new(path), &meta) { std::fs::remove_dir(path) } else { std::fs::remove_file(path) }
+    if is_directory_link(Path::new(path), &meta) {
+        std::fs::remove_dir(path)
+    } else {
+        // A link whose target is gone or is no folder: a folder link as a folder, a file link as a file.
+        std::fs::remove_file(path).or_else(|_| std::fs::remove_dir(path))
+    }
 }
 
 /// `Remove`: the file or folder at `path` with everything in it, if it is there. A read-only file is made writable first (Windows
@@ -412,8 +451,9 @@ fn remove_entry(path: &Path, meta: &std::fs::Metadata) -> std::io::Result<()> {
         permissions.set_readonly(false);
         std::fs::set_permissions(path, permissions)?;
     }
-    if meta.file_type().is_symlink() {
-        // A link is removed itself: a folder link as a folder, a file link as a file.
+    if meta.file_type().is_symlink() || reparse_point(meta) {
+        // A link, or any other reparse point (a cloud placeholder), is removed itself and never descended, as .NET's recursive
+        // delete does: a folder one as a folder, a file one as a file.
         return std::fs::remove_dir(path).or_else(|_| std::fs::remove_file(path));
     }
     if !meta.is_dir() {
@@ -427,14 +467,15 @@ fn remove_entry(path: &Path, meta: &std::fs::Metadata) -> std::io::Result<()> {
     std::fs::remove_dir(path)
 }
 
-/// `ChildCleanup.Worktrees`: the canonical paths of the worktrees registered in `folder`'s repository (`worktree list --porcelain
-/// -z`), or None when git failed.
+/// `ChildCleanup.Worktrees`: the paths of the worktrees registered in `folder`'s repository (`worktree list --porcelain -z`), each
+/// with its parent canonical and its own last name as git wrote it ([`DelegationPaths::canonical_place`]: a worktree folder replaced
+/// by a link is listed as itself, never as what the link points to); None when git failed.
 pub async fn worktrees(git: &Git, paths: &DelegationPaths, folder: &str) -> Option<Vec<String>> {
     if !usable_folder(folder) {
         return None;
     }
     let list = run(git, &["worktree", "list", "--porcelain", "-z"], folder, STEP_TIMEOUT).await.filter(|list| list.exit_code == 0)?;
-    Some(list.stdout.split('\0').filter_map(|entry| entry.strip_prefix("worktree ")).map(|path| paths.canonical(path)).collect())
+    Some(list.stdout.split('\0').filter_map(|entry| entry.strip_prefix("worktree ")).map(|path| paths.canonical_place(path)).collect())
 }
 
 /// `DelegationWorkspaceRemoval.Refusal`: `workspace_has_children` when the workspace at `folder`, with the panes `pane_ids`, still has

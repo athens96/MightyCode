@@ -9,7 +9,7 @@ use std::path::Path;
 
 use mighty_run::os;
 
-use super::paths::{DelegationPaths, same};
+use super::paths::{DelegationPaths, is_link, same};
 use super::{Git, GitFailure, message};
 
 /// `ChildAutoCommit.MaximumNewFileBytes`: the largest new file the app commits for a child.
@@ -39,10 +39,27 @@ const SECRET_NAMES: [&str; 2] = [".npmrc", ".pypirc"];
 /// `*.p12`, `*.ppk`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `id_dsa*`, `credentials*`, `secrets.*`, `.npmrc` or `.pypirc`, in any case.
 pub fn looks_secret(path: &str) -> bool {
     let name = path.replace('\\', "/");
-    let name = name.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_lowercase();
+    let name = to_lower_invariant(name.trim_end_matches('/').rsplit('/').next().unwrap_or(""));
     SECRET_STARTS.iter().any(|start| name.starts_with(start))
         || SECRET_ENDS.iter().any(|end| name.ends_with(end))
         || SECRET_NAMES.contains(&name.as_str())
+}
+
+/// `ToLowerInvariant`: each character by its simple lowercase mapping, one character for one (`İ` U+0130 is `i`, never `i` and a dot
+/// above as Rust's full mapping writes it).
+fn to_lower_invariant(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '\u{130}' => 'i',
+            c => {
+                let mut lower = c.to_lowercase();
+                match (lower.next(), lower.next()) {
+                    (Some(single), None) => single,
+                    _ => c,
+                }
+            }
+        })
+        .collect()
 }
 
 /// `ChildAutoCommit.Outcome`: what the app found or did in the child's worktree.
@@ -96,6 +113,11 @@ pub async fn run(
         return AutoCommitResult::of(Nothing);
     }
     let unreadable = || "Git could not read the worktree.";
+    let not_own = "The child's folder is not its own git worktree.";
+    // A worktree folder replaced by a link or junction is never committed through (beyond C#): git would commit in what it points to.
+    if is_link(worktree_path) {
+        return AutoCommitResult::failing(not_own, vec![]);
+    }
     let Some(top) = super::run(git, &["rev-parse", "--show-toplevel", "--absolute-git-dir"], worktree_path, 10.0)
         .await
         .filter(|top| top.exit_code == 0)
@@ -103,8 +125,9 @@ pub async fn run(
         return AutoCommitResult::failing(unreadable(), vec![]);
     };
     let lines: Vec<&str> = top.stdout.split('\n').map(str::trim).filter(|line| !line.is_empty()).collect();
-    if lines.len() != 2 || !same(&paths.canonical(lines[0]), &paths.canonical(worktree_path)) {
-        return AutoCommitResult::failing("The child's folder is not its own git worktree.", vec![]);
+    // The worktree's own last name as written, never resolved: git's top folder is the real one.
+    if lines.len() != 2 || !same(&paths.canonical(lines[0]), &paths.canonical_place(worktree_path)) {
+        return AutoCommitResult::failing(not_own, vec![]);
     }
     let lock_file = os::combine(lines[1], "index.lock");
     let unmerged = super::run(git, &["ls-files", "-u"], worktree_path, TIMEOUT).await.filter(|r| r.exit_code == 0);
@@ -204,28 +227,53 @@ mod tests {
 
     #[test]
     fn secret_looking_names_and_the_commit_message() {
+        // C# DelegationHumanChildVerification.cs:103-105, then a few more.
         for name in [
             ".env",
+            ".ENV.production",
+            "a/b/cert.pem",
+            "x.key",
+            "id_rsa.pub",
+            "credentials",
+            r"keys\deploy.key",
+            "cert.PFX",
+            "store.p12",
+            "putty.ppk",
+            "id_ed25519",
+            "id_ed25519.pub",
+            "id_ecdsa",
+            "id_dsa.pub",
+            ".npmrc",
+            "home/.pypirc",
+            "secrets.json",
+            "Secrets.yaml",
             ".env.local",
             "keys/server.PEM",
-            r"keys\deploy.key",
             "id_rsa",
-            "id_ed25519.pub",
             "Credentials.json",
-            "secrets.yaml",
-            ".npmrc",
-            ".pypirc",
-            "a.pfx",
-            "b.p12",
-            "c.ppk",
-            "id_ecdsa",
-            "id_dsa",
+            // ToLowerInvariant reads U+0130 as `i`.
+            "\u{130}D_RSA",
         ] {
-            assert!(looks_secret(name), "{name}");
+            assert!(looks_secret(name), "{name} looks secret");
         }
-        for name in ["config.json", "environment.txt", "my.env", "keys/", "npmrc", "secret.txt"] {
-            assert!(!looks_secret(name), "{name}");
+        for name in [
+            "environment.txt",
+            "keyboard.swift",
+            "a/.envoy/config",
+            "my-credentials.txt",
+            "npmrc",
+            ".npmrc.example",
+            "my-secrets.json",
+            "secrets",
+            "pfx.txt",
+            "config.json",
+            "my.env",
+            "keys/",
+            "secret.txt",
+        ] {
+            assert!(!looks_secret(name), "{name} does not");
         }
+        assert_eq!(to_lower_invariant("\u{130}A\u{3A3}"), "ia\u{3C3}");
         assert_eq!(message_for("c1", 3), "mighty: c1 report r3");
         assert!(should_commit("codex", true, true, false) && !should_commit("claude", true, true, false));
         assert!(

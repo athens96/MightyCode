@@ -252,6 +252,8 @@ impl DelegationPlace {
         request = request
             .env("GIT_CONFIG_GLOBAL", self.global_config().to_string_lossy())
             .env("GIT_CONFIG_NOSYSTEM", "1")
+            // Never above the place: a folder in it that is no repository never climbs into one around it.
+            .env("GIT_CEILING_DIRECTORIES", self.base.parent().unwrap_or(&self.base).to_string_lossy())
             .env("GIT_OPTIONAL_LOCKS", "0")
             .env("GIT_TERMINAL_PROMPT", "0");
         for who in ["GIT_AUTHOR", "GIT_COMMITTER"] {

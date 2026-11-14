@@ -23,11 +23,19 @@ async fn inherited_git_variables_are_dropped_and_no_hook_runs() {
         std::env::set_var("GIT_WORK_TREE", place.base());
     }
     let made = place.maker().create("hooked", &place.repo(), "t").await;
+    // GIT_WORK_TREE alone, which git would honour inside the repository: delegation's git still names the repository's own top.
     // SAFETY: as above.
-    unsafe {
-        std::env::remove_var("GIT_DIR");
-        std::env::remove_var("GIT_WORK_TREE");
-    }
+    unsafe { std::env::remove_var("GIT_DIR") };
+    let top = mighty_delegation::git::run(&place.git(), &["rev-parse", "--show-toplevel"], &place.repo(), 10.0).await;
+    // SAFETY: as above.
+    unsafe { std::env::remove_var("GIT_WORK_TREE") };
+    let paths = place.paths();
+    assert!(
+        top.as_ref().is_some_and(|top| {
+            top.exit_code == 0 && mighty_delegation::git::paths::same(&paths.canonical(top.stdout.trim()), &paths.canonical(&place.repo()))
+        }),
+        "an inherited GIT_WORK_TREE is dropped: {top:?}"
+    );
     assert!(
         matches!(made, ChildWorktreeOutcome::Created(_)) && !Path::new(&place.repo()).join(".git").join("hook-ran").exists(),
         "inherited GIT_* variables are dropped and no hook runs: {made:?}"
