@@ -593,3 +593,34 @@ pub fn error_kind(error: &PlatformError) -> &'static str {
         _ => "Exception",
     }
 }
+
+/// `MobileQrSize`: the side the pairing QR is drawn nearest to, in DIPs.
+pub const QR_SIZE: f64 = 200.0;
+
+/// The pairing QR (C#'s QRCoder at ECC M, `PngByteQRCode(code).GetGraphic(perModule)`; D13): `link` at error correction M, the quiet
+/// zone's four modules a side included, a whole number of pixels per module (at least 2) bringing the side nearest [`QR_SIZE`] at
+/// `scale`, black on white, as a PNG; its side in pixels. The mask may differ from QRCoder's; the content is the pairing link.
+pub fn pairing_qr(link: &str, scale: f64) -> Option<(Vec<u8>, u32)> {
+    use image::ImageEncoder;
+    let code = qrcode::QrCode::with_error_correction_level(link.as_bytes(), qrcode::EcLevel::M).ok()?;
+    let width = code.width();
+    let colors = code.to_colors();
+    let modules = width + 8;
+    let per_module = ((QR_SIZE * scale.max(0.1) / modules as f64).round() as usize).max(2);
+    let side = modules * per_module;
+    let mut pixels = vec![255u8; side * side];
+    for y in 0..width {
+        for x in 0..width {
+            if colors[y * width + x] == qrcode::Color::Dark {
+                for dy in 0..per_module {
+                    let row = (y + 4) * per_module + dy;
+                    let start = row * side + (x + 4) * per_module;
+                    pixels[start..start + per_module].fill(0);
+                }
+            }
+        }
+    }
+    let mut png = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut png).write_image(&pixels, side as u32, side as u32, image::ExtendedColorType::L8).ok()?;
+    Some((png, side as u32))
+}

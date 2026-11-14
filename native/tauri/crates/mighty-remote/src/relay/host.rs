@@ -105,6 +105,9 @@ pub struct RelayOptions {
     /// The direct path admits any peer, not only Tailscale's (C#'s `SetDirectAddressSource` seam: loopback in the checks; never set by
     /// the app).
     pub any_direct_peer: bool,
+    /// Where the direct path's endpoints are read (src-tauri: W8-C's `direct::endpoints`); none: those set by
+    /// [`RelayHost::set_direct_endpoints`].
+    pub direct_endpoints: Option<Arc<dyn Fn() -> Vec<String> + Send + Sync>>,
 }
 
 impl Default for RelayOptions {
@@ -120,6 +123,7 @@ impl Default for RelayOptions {
             path_settle: policy::PATH_SETTLE,
             handshake_deadline: crate::direct::wire::HANDSHAKE_DEADLINE,
             any_direct_peer: false,
+            direct_endpoints: None,
         }
     }
 }
@@ -128,35 +132,9 @@ type StatusListener = Arc<dyn Fn(&MobileRelayStatus) + Send + Sync>;
 
 struct Table {
     clients: HashMap<String, Arc<Connection>>,
-    /// Direct sockets admitted and not yet handed over (their upgrade under way), each with when it was admitted: a reservation not
-    /// claimed within the handshake deadline lapses, as the socket it stood for has failed its upgrade.
+    /// Direct sockets admitted and not yet handed over (their upgrade under way), each with when it was admitted: W8-C's path hands
+    /// each back exactly once, with its socket ([`DirectSink::accept`]) or without ([`DirectSink::refused`]).
     reserved: Vec<(IpAddr, Instant)>,
-}
-
-/// `DirectAuthFailures`: failed direct authentications per remote address, kept for a minute; at most 256 addresses unless all are
-/// recent.
-#[derive(Default)]
-struct Failures(HashMap<IpAddr, Vec<Instant>>);
-
-impl Failures {
-    fn recent(&mut self, peer: IpAddr, now: Instant) -> usize {
-        let window = crate::direct::admit::FAILURE_WINDOW;
-        let Some(times) = self.0.get_mut(&peer) else { return 0 };
-        times.retain(|at| now.duration_since(*at) < window);
-        let count = times.len();
-        if count == 0 {
-            self.0.remove(&peer);
-        }
-        count
-    }
-
-    fn record(&mut self, peer: IpAddr, now: Instant) {
-        let window = crate::direct::admit::FAILURE_WINDOW;
-        if !self.0.contains_key(&peer) && self.0.len() >= crate::direct::admit::TRACKED_PEERS {
-            self.0.retain(|_, times| times.iter().any(|at| now.duration_since(*at) < window));
-        }
-        self.0.entry(peer).or_default().push(now);
-    }
 }
 
 struct Lifecycle {
@@ -186,7 +164,8 @@ pub(crate) struct Shared {
     generation: AtomicU64,
     disposed: AtomicBool,
     table: Mutex<Table>,
-    failures: Mutex<Failures>,
+    /// C#'s `DirectAuthFailures` (W8-C's `direct::admit`).
+    failures: crate::direct::admit::DirectAuthFailures,
     status: Mutex<MobileRelayStatus>,
     listeners: Mutex<Vec<(u64, StatusListener)>>,
     next_listener: AtomicU64,
@@ -245,7 +224,7 @@ impl RelayHost {
                 generation: AtomicU64::new(0),
                 disposed: AtomicBool::new(false),
                 table: Mutex::new(Table { clients: HashMap::new(), reserved: vec![] }),
-                failures: Mutex::new(Failures::default()),
+                failures: crate::direct::admit::DirectAuthFailures::default(),
                 status: Mutex::new(MobileRelayStatus::disabled()),
                 listeners: Mutex::new(vec![]),
                 next_listener: AtomicU64::new(1),
@@ -341,25 +320,35 @@ impl RelayHost {
 
     /// `AcceptDirect`'s hand-over: an upgraded direct socket from `peer` (admitted already through [`DirectSink::admit`], whose
     /// reservation it claims), run as a direct connection (auth reason `unauthorized` on any failure). Answers once the connection has
-    /// ended, so the listener may give its slot back then; a socket arriving while the host is off or disposed is dropped.
+    /// ended, so the listener may give its slot back then; dropping the future ends the connection, which leaves the table as an end
+    /// does. One deadline from the admission to `auth_ok` (C#'s 10 s covers the upgrade too); a socket arriving while the host is off
+    /// or disposed is dropped.
     pub async fn accept_direct(&self, socket: WebSocketStream<TcpStream>, peer: SocketAddr) {
         let shared = self.shared.clone();
-        let connection = {
+        let (connection, admitted) = {
             let mut table = lock(&shared.table);
             let ip = canonical(peer.ip());
-            if let Some(at) = table.reserved.iter().position(|(reserved, _)| *reserved == ip) {
-                table.reserved.remove(at);
-            }
+            let admitted = table.reserved.iter().position(|(reserved, _)| *reserved == ip).map(|at| table.reserved.remove(at).1);
             let settings = shared.settings();
             if shared.disposed.load(Ordering::SeqCst) || !settings.enabled || !settings.direct_enabled {
                 return;
             }
             let connection = Connection::new(format!("{DIRECT_PREFIX}{}", uuid::Uuid::new_v4()), true, Some(ip));
             table.clients.insert(connection.id.clone(), connection.clone());
-            connection
+            (connection, admitted.unwrap_or_else(Instant::now))
         };
+        let deadline = admitted + shared.options.handshake_deadline;
         let open: BoxFuture<'static, Option<WebSocketStream<TcpStream>>> = Box::pin(async move { Some(socket) });
-        shared.serve(connection, open).await;
+        /// Ends the connection when the caller lets go of the future first.
+        struct Ends(Arc<Connection>);
+        impl Drop for Ends {
+            fn drop(&mut self) {
+                self.0.cancel();
+            }
+        }
+        let _ends = Ends(connection.clone());
+        let served = tokio::spawn(shared.serve_until(connection, open, deadline));
+        let _ = served.await;
     }
 
     /// The direct path's endpoints now (W8-C's listener sets them), as `auth_ok`, `/m1/info` and the pairing link carry them.
@@ -453,7 +442,10 @@ impl Shared {
     }
 
     fn direct_endpoints(&self) -> Vec<String> {
-        self.direct_endpoints.read().unwrap_or_else(|p| p.into_inner()).clone()
+        match &self.options.direct_endpoints {
+            Some(source) => source(),
+            None => self.direct_endpoints.read().unwrap_or_else(|p| p.into_inner()).clone(),
+        }
     }
 
     fn relay_for_push(&self) -> String {
@@ -667,7 +659,20 @@ impl Shared {
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
-        let run = tokio::spawn(connection.clone().run(self.clone(), open));
+        let deadline = Instant::now() + self.options.handshake_deadline;
+        self.serve_until(connection, open, deadline).await;
+    }
+
+    /// [`Shared::serve`] with the handshake's deadline given.
+    async fn serve_until<S>(
+        self: Arc<Self>,
+        connection: Arc<Connection>,
+        open: BoxFuture<'static, Option<WebSocketStream<S>>>,
+        deadline: Instant,
+    ) where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
+        let run = tokio::spawn(connection.clone().run(self.clone(), open, deadline));
         let _ = run.await;
         {
             let mut table = lock(&self.table);
@@ -811,38 +816,41 @@ impl Shared {
         }
     }
 
-    /// `MobileDirect.Admit` under the table lock: a Tailscale peer (any through the checks' seam), room in the table, fewer than four
-    /// handshakes on the direct path and two from this address, fewer than five failed auths from it in the last minute. True
-    /// reserves the slot until the socket is handed over (or the handshake deadline passes).
+    /// `MobileDirect.Admit` under the table lock (W8-C's `direct::admit::admit`; the listener refused a peer outside Tailscale's ranges
+    /// already): room in the table, fewer than four handshakes on the direct path and two from this address, fewer than five failed
+    /// auths from it in the last minute. True reserves the slot until the path hands it back.
     fn admit_direct(&self, peer: IpAddr) -> bool {
         let peer = canonical(peer);
         let settings = self.settings();
         if self.disposed.load(Ordering::SeqCst) || !settings.enabled || !settings.direct_enabled {
             return false;
         }
-        if !self.options.any_direct_peer && !crate::tailscale::is_tailscale(peer) {
-            return false;
-        }
+        let text = crate::tailscale::canonical(peer);
         let now = Instant::now();
-        let failures = lock(&self.failures).recent(peer, now);
+        let failures = self.failures.recent(&text, now.into_std());
         let mut table = lock(&self.table);
-        let deadline = self.options.handshake_deadline;
-        table.reserved.retain(|(_, at)| now.duration_since(*at) < deadline);
-        let mut pending: Vec<IpAddr> = table
+        let mut pending: Vec<String> = table
             .clients
             .values()
             .filter(|c| c.direct && !c.authenticated())
-            .map(|c| c.peer.unwrap_or(IpAddr::from([0, 0, 0, 0])))
+            .map(|c| c.peer.map(crate::tailscale::canonical).unwrap_or_default())
             .collect();
-        pending.extend(table.reserved.iter().map(|(ip, _)| *ip));
-        let admitted = table.clients.len() + table.reserved.len() < MAXIMUM_CLIENTS
-            && pending.len() < crate::direct::admit::MAXIMUM_UNAUTHENTICATED
-            && pending.iter().filter(|ip| **ip == peer).count() < crate::direct::admit::MAXIMUM_UNAUTHENTICATED_PER_PEER
-            && failures < crate::direct::admit::MAXIMUM_FAILURES;
+        pending.extend(table.reserved.iter().map(|(ip, _)| crate::tailscale::canonical(*ip)));
+        let clients = table.clients.len() + table.reserved.len();
+        let admitted = crate::direct::admit::admit(Some(&text), true, clients, &pending, failures);
         if admitted {
             table.reserved.push((peer, now));
         }
         admitted
+    }
+
+    /// An admitted peer's reservation given back (its upgrade did not happen).
+    fn refused_direct(&self, peer: IpAddr) {
+        let peer = canonical(peer);
+        let mut table = lock(&self.table);
+        if let Some(at) = table.reserved.iter().position(|(reserved, _)| *reserved == peer) {
+            table.reserved.remove(at);
+        }
     }
 }
 
@@ -855,9 +863,6 @@ impl ConnectionHost for Shared {
     }
     fn handler(&self) -> Arc<dyn RequestHandler> {
         self.handler.clone()
-    }
-    fn handshake_deadline(&self) -> Duration {
-        self.options.handshake_deadline
     }
     fn host_name(&self) -> String {
         self.options.host_name.clone()
@@ -882,7 +887,7 @@ impl ConnectionHost for Shared {
         Shared::direct_endpoints(self)
     }
     fn record_direct_failure(&self, peer: IpAddr) {
-        lock(&self.failures).record(canonical(peer), Instant::now());
+        self.failures.record(&crate::tailscale::canonical(canonical(peer)), std::time::Instant::now());
     }
     fn authenticated(&self) {
         self.republish();
@@ -900,6 +905,10 @@ impl crate::direct::listener::DirectSink for DirectHost {
     fn accept(&self, socket: WebSocketStream<TcpStream>, peer: SocketAddr) -> BoxFuture<'static, ()> {
         let host = RelayHost { shared: self.0.clone() };
         Box::pin(async move { host.accept_direct(socket, peer).await })
+    }
+
+    fn refused(&self, peer: IpAddr) {
+        self.0.refused_direct(peer);
     }
 }
 

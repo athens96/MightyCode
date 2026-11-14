@@ -108,7 +108,6 @@ pub(crate) trait ConnectionHost: Send + Sync + 'static {
     fn identity(&self) -> &crate::identity::Identity;
     fn allow_legacy(&self) -> bool;
     fn handler(&self) -> Arc<dyn RequestHandler>;
-    fn handshake_deadline(&self) -> Duration;
     /// `auth_ok`'s `hostName`, `appVersion`, `capabilities` and `direct`.
     fn host_name(&self) -> String;
     fn app_version(&self) -> String;
@@ -208,7 +207,7 @@ impl Connection {
 
     /// `Run`: the whole connection, from opening its socket (inside the handshake deadline) to its end; the caller (the host's `Serve`)
     /// removes it from the table afterwards.
-    pub async fn run<S, H>(self: Arc<Self>, host: Arc<H>, open: BoxFuture<'static, Option<WebSocketStream<S>>>)
+    pub async fn run<S, H>(self: Arc<Self>, host: Arc<H>, open: BoxFuture<'static, Option<WebSocketStream<S>>>, deadline: Instant)
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
         H: ConnectionHost,
@@ -217,7 +216,7 @@ impl Connection {
         let mut requests = tokio::task::JoinSet::new();
         let mut tasks = tokio::task::JoinSet::new();
         {
-            let session = self.clone().session(host, open, &mut requests, &mut tasks);
+            let session = self.clone().session(host, open, deadline, &mut requests, &mut tasks);
             tokio::select! {
                 _ = session => {}
                 _ = until_true(&mut cancelled) => {}
@@ -236,19 +235,21 @@ impl Connection {
         self: Arc<Self>,
         host: Arc<H>,
         open: BoxFuture<'static, Option<WebSocketStream<S>>>,
+        deadline: Instant,
         requests: &mut tokio::task::JoinSet<()>,
         tasks: &mut tokio::task::JoinSet<()>,
     ) where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
         H: ConnectionHost,
     {
-        let _ = self.handshake_and_serve(host, open, requests, tasks).await;
+        let _ = self.handshake_and_serve(host, open, deadline, requests, tasks).await;
     }
 
     async fn handshake_and_serve<S, H>(
         self: Arc<Self>,
         host: Arc<H>,
         open: BoxFuture<'static, Option<WebSocketStream<S>>>,
+        deadline: Instant,
         requests: &mut tokio::task::JoinSet<()>,
         tasks: &mut tokio::task::JoinSet<()>,
     ) -> Step<()>
@@ -256,9 +257,8 @@ impl Connection {
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
         H: ConnectionHost,
     {
-        // One deadline from the socket to auth_ok: the relay path dials its data socket, the direct path's upgrade was read before,
-        // and both then read hello and auth, all within it.
-        let deadline = Instant::now() + host.handshake_deadline();
+        // One deadline from the socket to auth_ok (`deadline`, set by the host): the relay path dials its data socket, the direct
+        // path's upgrade was read since its admission, and both then read hello and auth, all within it.
         let socket = tokio::time::timeout_at(deadline, open).await.map_err(|_| Ended)?.ok_or(Ended)?;
         if self.cancelled() {
             return Err(Ended);

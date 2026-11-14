@@ -247,6 +247,34 @@ impl ScriptedPhone {
         self.socket.send(Message::binary(frame)).await.unwrap();
     }
 
+    /// `plaintext` sealed as it is, JSON or not.
+    pub async fn send_bytes(&mut self, plaintext: &[u8]) {
+        let frame = self.cipher.as_ref().unwrap().seal(plaintext).unwrap();
+        self.socket.send(Message::binary(frame)).await.unwrap();
+    }
+
+    /// One binary frame sent unsealed (the cipher will not seal past its limit); false when the socket refused it.
+    pub async fn send_frame(&mut self, frame: Vec<u8>) -> bool {
+        self.socket.send(Message::binary(frame)).await.is_ok()
+    }
+
+    /// Whether the host ended the connection: the next read is a close, a failure or the end, not a frame.
+    pub async fn ended(&mut self) -> bool {
+        loop {
+            match self.socket.next().await {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return true,
+                Some(Ok(Message::Binary(frame))) => {
+                    let plain = self.cipher.as_ref().unwrap().open(&frame).unwrap();
+                    if serde_json::from_slice::<Value>(&plain).is_ok_and(|v| v["type"] == "ping") {
+                        continue;
+                    }
+                    return false;
+                }
+                Some(Ok(_)) => continue,
+            }
+        }
+    }
+
     /// The next encrypted frame, opened; None when the socket ended first.
     pub async fn receive(&mut self) -> Option<Value> {
         loop {

@@ -426,6 +426,8 @@ impl Host {
 
     /// One event of the run service (C# `RunEventReceived`, `ToolPermissionChanged`, the save queue).
     pub fn service_event(self: &Arc<Self>, event: ServiceEvent) {
+        // What the phone's push hub follows (mobile.rs, W8-A), read before the event is consumed.
+        let push = crate::mobile::push_note(&event);
         match event {
             ServiceEvent::Run { event, .. } => {
                 let drain = {
@@ -475,7 +477,8 @@ impl Host {
                 }
             }
         }
-        // Something a phone may show moved (phone.rs, W8-B: the router's `Changed`), outside the view's lock.
+        // Something a phone may show moved (phone.rs, W8-B: the router's `Changed`; mobile.rs, W8-A: the push hub), outside the view's lock.
+        crate::mobile::noted(self, push);
         crate::phone::changed(self);
     }
 
