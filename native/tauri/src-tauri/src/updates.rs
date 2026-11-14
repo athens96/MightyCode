@@ -187,9 +187,10 @@ pub fn holds(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) -> bool {
 }
 
 /// `updates::manual_block`: C# `ManualMutationBlockReason(pane)` — why a manual update or plugin change refuses the pane's sends.
-/// Called with the state locked, as [`holds`]. (A delegated child still recording its last run's end is W7's; until then none is.)
+/// Called with the state locked, as [`holds`]; a delegated child still recording its last run's end blocks too (delegation.rs, W7-D).
 pub fn manual_block(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) -> Option<String> {
-    of(host)?.activity().manual_mutation_block_reason(&HoldPane::of(pane, remote(snapshot, pane)), false)
+    let ending = crate::delegation::ending_run(host, pane.id());
+    of(host)?.activity().manual_mutation_block_reason(&HoldPane::of(pane, remote(snapshot, pane)), ending)
 }
 
 /// `updates::manual_update`: C# `ManualUpdateReason(pane)` — the manual update of the pane's CLI (or a plugin change) under way.

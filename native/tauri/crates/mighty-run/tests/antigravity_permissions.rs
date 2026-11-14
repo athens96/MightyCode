@@ -1390,6 +1390,8 @@ async fn a_service_given_no_settings_refuses_every_grant() {
         remote: None,
         configure: None,
         admitting: None,
+        binding: None,
+        delegation: None,
     };
     let (service, _events) =
         mighty_run::service::RunService::new(mighty_core::model::AppSnapshot::default(), common::absent_catalog(), options);
@@ -1502,6 +1504,8 @@ mod runs {
                 remote: None,
                 configure: Some(configure),
                 admitting: None,
+                binding: None,
+                delegation: None,
             },
         );
         drop(events);

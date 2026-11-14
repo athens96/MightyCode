@@ -28,7 +28,15 @@ fn service() -> (RunService, tokio::sync::mpsc::UnboundedReceiver<ServiceEvent>)
     RunService::new(
         snapshot,
         catalog,
-        RunServiceOptions { plugin_directory: String::new(), permission_card: false, remote: None, configure: None, admitting: None },
+        RunServiceOptions {
+            plugin_directory: String::new(),
+            permission_card: false,
+            remote: None,
+            configure: None,
+            admitting: None,
+            binding: None,
+            delegation: None,
+        },
     )
 }
 

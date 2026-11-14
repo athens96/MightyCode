@@ -122,7 +122,13 @@ pub fn requests(host: &Host, id: &str) -> Vec<ToolPermissionRequest> {
 /// CLI's install W6-B's (setup.rs: `SetupItemForMissingCli`), each read with the state locked.
 fn window_rules(host: &Host, snapshot: &AppSnapshot, pane: &RunSession, pending: usize) -> WindowRules {
     crate::ask::refresh_catalog(host, snapshot, pane, false);
+    // The second send, the worktree menu, the held items and a child's ending run (delegation.rs, W7-D).
+    let delegation = crate::delegation::window_inputs(host, snapshot, pane);
     WindowRules {
+        second_send: delegation.second_send,
+        worktree_menu_only: delegation.worktree_menu_only,
+        held_items: delegation.held_items,
+        ending_run: delegation.ending_run,
         background_update_holds: crate::updates::holds(host, snapshot, pane),
         manual_mutation_block: crate::updates::manual_block(host, snapshot, pane),
         manual_update_reason: crate::updates::manual_update(host, snapshot, pane),
@@ -225,6 +231,8 @@ pub fn cards_of(host: &Host, view: &mut View, id: &str) -> Option<(Vec<Card>, bo
     let terminal_prompt = crate::terminal::prompt_input(host, id);
     // The pane's Antigravity card (antigravity.rs, C# `AntigravityCard`/`AntigravityError`/`AntigravityAnswering`).
     let antigravity = crate::antigravity::card_input(host, id);
+    // The agents' open_url prompts (agent_io.rs, W7-C).
+    let web_open = crate::agent_io::web_open_cards(host, id);
     let inputs = CardInputs {
         locale: host.locale,
         utc_offset_minutes: utc_offset_minutes(),
@@ -239,7 +247,7 @@ pub fn cards_of(host: &Host, view: &mut View, id: &str) -> Option<(Vec<Card>, bo
         background_rows: &[],
         antigravity: antigravity.as_ref(),
         terminal_prompt: terminal_prompt.as_ref(),
-        web_open: &[],
+        web_open: &web_open,
         login: login.as_ref(),
         status_line: status_line.as_ref(),
     };

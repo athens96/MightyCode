@@ -642,7 +642,15 @@ async fn desktop_routing_retains_cancellation_before_manager_admission() {
     let (service, mut events) = RunService::new(
         snapshot,
         common::absent_catalog(),
-        RunServiceOptions { plugin_directory: String::new(), permission_card: false, remote: None, configure: None, admitting: None },
+        RunServiceOptions {
+            plugin_directory: String::new(),
+            permission_card: false,
+            remote: None,
+            configure: None,
+            admitting: None,
+            binding: None,
+            delegation: None,
+        },
     );
     let service = Arc::new(service);
     // `RunEventReceived += value => { if (value.Status == "running") _ = service.StopAsync(value.SessionId); }`
@@ -702,6 +710,8 @@ async fn a_stop_right_after_the_send_is_never_lost() {
             remote: None,
             configure: None,
             admitting: Some(admitting),
+            binding: None,
+            delegation: None,
         },
     );
     let service = Arc::new(service);
@@ -734,7 +744,15 @@ async fn the_delegation_root_comes_from_the_pane() {
     let (service, mut events) = RunService::new(
         snapshot,
         common::absent_catalog(),
-        RunServiceOptions { plugin_directory: String::new(), permission_card: false, remote: None, configure: None, admitting: None },
+        RunServiceOptions {
+            plugin_directory: String::new(),
+            permission_card: false,
+            remote: None,
+            configure: None,
+            admitting: None,
+            binding: None,
+            delegation: None,
+        },
     );
     let mut asked = request(&pane_id, &workspace, "shell", "echo ROOT");
     asked.delegation_worktree_root = Some(directory.to_string_lossy().into_owned());

@@ -358,8 +358,11 @@ async fn pick_resumed_session(
 }
 
 /// C# `CloseSession` / `ClosePane` / `CloseSessionAsync`: the pane's run stopped and ended (at most ten seconds), then the pane gone.
-/// Delegation's parent-close question is W7's: no pane has children yet.
-async fn close_session(host: &Arc<Host>, id: &str) -> Result<(), String> {
+/// Delegation's parent-close question and a child's close cleanup come first (delegation.rs, W7-D).
+pub(crate) async fn close_session(host: &Arc<Host>, id: &str) -> Result<(), String> {
+    if let crate::delegation::CloseDecision::Keep = crate::delegation::before_close(host, id).await {
+        return Ok(());
+    }
     if let Some(runs) = host.runs()
         && let Err(error) = runs.service.stop(id).await
         && !matches!(error, mighty_run::RunError::TimedOut(_))
@@ -416,16 +419,24 @@ pub async fn pick_folder_path(host: &Arc<Host>) -> Option<std::path::PathBuf> {
 /// C# `ConfirmRemoveWorkspace`: asked in the page (danger, Cancel the default), then `RemoveWorkspaceAsync`: every pane's run stopped,
 /// the workspace and its panes gone, another one active. The sheet stays up until the workspace is gone, so the add menu and the
 /// other sheets stay off while its runs stop (nothing is added to a workspace on its way out).
-async fn remove_workspace(host: &Arc<Host>, id: &str) -> Result<(), String> {
+pub(crate) async fn remove_workspace(host: &Arc<Host>, id: &str) -> Result<(), String> {
     let Some(name) = host.view().snapshot.workspace(id).map(|w| w.name().to_string()) else { return Ok(()) };
+    // An open delegated child or a kept worktree refuses it before anything is asked (C# `WorkspaceRemovalRefusal`, delegation.rs, W7-D).
+    if let Some(refusal) = crate::delegation::removal_refusal(host, id) {
+        return Err(refusal);
+    }
     let Some(_sheet) = Sheet::begin(host) else { return Ok(()) };
     let confirmed = {
         let l = host.locale;
-        let (_, answer) = dialogs::of(host).open(json!({
+        let dialog = json!({
             "type": "confirm", "title": l.get("workspace.remove.title"), "message": l.get_with("workspace.remove.body", &[("name", &name)]),
             "primary": l.get("workspace.menu.remove"), "close": l.get("settings.run.cancelButton"), "defaultPrimary": false, "destructive": true,
-        }));
-        answer_of(answer).await == Value::Bool(true)
+        });
+        // The delegation smoke answers it in the page's place (delegation.rs's smoke driver).
+        match crate::delegation::smoke_dialog_answer(host, &dialog) {
+            Some(answer) => answer,
+            None => answer_of(dialogs::of(host).open(dialog).1).await == Value::Bool(true),
+        }
     };
     if !confirmed || host.view().snapshot.workspace(id).is_none() {
         return Ok(());

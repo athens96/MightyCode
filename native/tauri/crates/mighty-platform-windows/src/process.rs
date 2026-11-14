@@ -253,7 +253,8 @@ pub(crate) type ExitWatch = watch::Receiver<Option<std::result::Result<i32, i32>
 /// `Ok(code)`, or `Err(win32 error)` when Windows could not say. The thread owns the process handle and closes it after.
 pub(crate) fn watch_exit(process: OwnedHandle, name: &str) -> io::Result<(ExitWatch, std::thread::JoinHandle<()>)> {
     let (sender, receiver) = watch::channel(None);
-    let thread = std::thread::Builder::new().name(name.to_string()).stack_size(64 * 1024).spawn(move || {
+    // The default stack: 64 KiB overflowed in debug builds as the exit wakes its waiters (Windows only commits what is touched).
+    let thread = std::thread::Builder::new().name(name.to_string()).spawn(move || {
         // SAFETY: a process handle this thread owns.
         let result = unsafe {
             let mut code = 0u32;

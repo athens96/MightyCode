@@ -13,8 +13,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+pub mod agent_io;
 pub mod clipboard;
 pub mod console;
+pub mod disk;
 pub mod environment;
 mod error;
 pub mod fake;
@@ -35,8 +37,10 @@ pub mod surface;
 pub mod unsupported;
 pub mod update;
 
+pub use agent_io::{AgentIoConnection, AgentIoConnector, AgentIoListener, AgentIoStream};
 pub use clipboard::Clipboard;
 pub use console::{TerminalLaunch, TerminalLauncher, TerminalWindow};
+pub use disk::DiskSpace;
 pub use environment::{CliEnvironment, EnvironmentSource, ShellEnvironment};
 pub use error::{PlatformError, Result};
 pub use files::{ClipboardImage, Desktop, FileHandles, FilePorts, PathProbe, PdfPage, PdfRaster, SaveDialog, SaveRequest};

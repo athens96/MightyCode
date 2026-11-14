@@ -76,6 +76,17 @@ pub enum McpTransport {
     NamedPipe,
 }
 
+impl McpTransport {
+    /// The environment variable that hands an agent run's MCP servers the app's listener (C# `AgentIOBinding`, the Mac's
+    /// `AgentPaneMCPBinding.swift`): the pipe's name on Windows, the socket's path on the Mac.
+    pub fn env_key(self) -> &'static str {
+        match self {
+            McpTransport::NamedPipe => "MIGHTY_AGENT_IO_PIPE",
+            McpTransport::UnixSocket => "MIGHTY_AGENT_IO_SOCKET",
+        }
+    }
+}
+
 /// The deliberate differences, one value per behaviour.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlatformProfile {

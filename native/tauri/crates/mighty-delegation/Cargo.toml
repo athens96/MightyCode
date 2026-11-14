@@ -1,0 +1,50 @@
+[package]
+name = "mighty-delegation"
+version = "0.1.0"
+description = "Mighty Code's delegation (C# Delegation*.cs, AgentIO/*.cs): the delegation file, the task tree, worktrees and merges, both stdio MCP servers, the Agent IO binding and transport framing, the scripted fake Claude and the desktop service's delegation port. No Tauri, no OS code."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+# The checks' relaunched exe (C# `Verification.Self`): `--agent-io-mcp`, `--agent-delegation-mcp` and `--fake-claude <root> …` handed
+# to the library, as the app's own MightyCode.exe hands them (src-tauri main.rs).
+[[bin]]
+name = "mighty-delegation-fake"
+path = "tests/fake/exe.rs"
+test = false
+doc = false
+
+# The checks' Codex child (mighty-run's stand-in CLI, `--fake-cli codex …`): a `[[bin]]` is only named by its own package's tests.
+[[bin]]
+name = "mighty-delegation-fake-cli"
+path = "../mighty-run/tests/fake/cli.rs"
+test = false
+doc = false
+
+[dependencies]
+mighty-core.workspace = true
+mighty-platform.workspace = true
+mighty-run.workspace = true
+mighty-composer.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+indexmap = { workspace = true, features = ["serde"] }
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "io-util"] }
+sha2.workspace = true
+uuid.workspace = true
+unicode-segmentation.workspace = true
+getrandom = "0.3"
+# open_url's address (`Uri.TryCreate`, `AbsoluteUri`; W7-C's agent_io::tools): the parser Tauri already brings.
+url = "2"
+
+# Only the fake exe (tests/fake/exe.rs) names it, for the real pipe and process host on Windows; the library never does.
+[target.'cfg(windows)'.dependencies]
+mighty-platform-windows.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread", "macros", "io-util"] }
+
+# W7 Step 0 lists the parts' dependencies before their code uses them; this table goes once every one is used.
+[lints.cargo]
+unused_dependencies = "allow"

@@ -22,6 +22,7 @@
 //! | `ModBridge.cs`, `HttpHost.cs` | [`mods`] |
 //! | `AttachmentSupport.cs` | [`attachments`] |
 //! | `AcpChannel.cs`, `AcpAgents.cs`, `AgentQuestions.cs` (`AcpElicitationForm`), `OpencodeAccounts.cs`, `HermesAccounts.cs` | [`acp`] (and the parser's `acp` part, OutputParser.Acp.cs) |
+//! | `DelegationWorktree.cs` `DelegationGit` (the runner the work map and delegation share; W7-B's from W7 Step 0) | [`git`] |
 //! | `RunManager.cs` | [`manager`] (with the [`graph::GraphSink`] the graph tracker plugs into) |
 //! | `DesktopService.cs` (runs) | [`service`] |
 //! | `AntigravityPermissions.cs`, `AntigravityRecords.cs` (the records' helpers), `AntigravityMigration.ModelUnavailable` | [`antigravity`] |
@@ -36,6 +37,7 @@ pub mod codex_approval;
 pub mod compaction;
 pub mod failure;
 pub mod flow_steps;
+pub mod git;
 pub mod graph;
 pub mod handback;
 pub mod kept_lists;

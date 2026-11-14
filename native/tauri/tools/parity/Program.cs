@@ -17,6 +17,8 @@
 //                        DesktopService runs a Claude pane's request through the Rust fake CLI (`mighty-fake-cli --replay-cli`):
 //                        it asks one Bash permission (allowed) and one plan (approved, auto-edit), then replays the recording.
 //                        Writes the pane as Wire.Json saves it, and the answers the CLI received (mighty-run tests/service.rs).
+//   delegation <in> <out>  W7-A's (Delegation.cs)
+//   agent-io <in> <out>    W7-C's (AgentIo.cs)
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -53,6 +55,8 @@ internal static class Program
             case "delta": return Delta(args[1], args[2]);
             case "schema": return Schema(args[1]);
             case "composer": return ComposerParity.Run(args[1], args[2]);
+            case "delegation": return DelegationParity.Run(args[1], args[2]);
+            case "agent-io": return AgentIoParity.Run(args[1], args[2]);
             case "run-replay": return await RunReplay(args[1], args[2], args[3], args[4]);
             default: Console.Error.WriteLine("unknown command " + args[0]); return 2;
         }

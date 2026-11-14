@@ -26,10 +26,6 @@ pub enum Pending {
     /// `PendingRequests` / `DashboardAttention`: tool permissions and questions waiting on the user (W2, run engine). The host
     /// passes none yet: every pane's attention is 0.
     Attention,
-    /// `DesktopService.SidebarTree` reads the delegation file (W7): no child rows yet, every pane is top level.
-    DelegationChildren,
-    /// `WebChildCard`'s busy state and notes (`IsCardBusy`, `CardNote`, `ChildClose`, W7).
-    ChildCardNotes,
     /// `runtime` and `runtimeChecks` (`ProviderCatalog.GetRuntimeAsync`, W2): the machine words say "checking" until it is known.
     Runtime,
     /// `appUpdate` (W9): no update badge, staged badge or countdown.
@@ -46,10 +42,8 @@ pub enum Pending {
     ModelCatalog,
 }
 
-pub const PENDING: [Pending; 10] = [
+pub const PENDING: [Pending; 8] = [
     Pending::Attention,
-    Pending::DelegationChildren,
-    Pending::ChildCardNotes,
     Pending::Runtime,
     Pending::AppUpdate,
     Pending::Companion,
@@ -663,6 +657,22 @@ impl DelegationChildRow {
     }
 }
 
+/// `WebChildCard`'s live parts, the desktop service's: `IsCardBusy`, the last answer `CardNote` as `DelegationText.Note` words it (its
+/// text and tone), and what closing the child kept as `DelegationText.CloseNote` words it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ChildCardState {
+    pub busy: bool,
+    pub note: Option<(String, Tone)>,
+    pub kept: Option<String>,
+}
+
+/// One delegated child as the frame draws it (C# `DesktopService.DelegationChildren` with the card's live parts).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SidebarChild {
+    pub row: DelegationChildRow,
+    pub card: ChildCardState,
+}
+
 /// `DelegationPaths.Standardized` and `Same`/`IsInside` the Windows way (case and separators do not matter).
 fn standardized(path: &str) -> String {
     let unified = path.replace('/', "\\");
@@ -794,22 +804,29 @@ pub enum SidebarItem {
     },
 }
 
-/// C# `WebChildCard` (busy and notes are [`Pending::ChildCardNotes`]).
-fn child_card(locale: &Locale, child: &DelegationChildRow, held_notices: usize) -> Option<ChildCard> {
+/// C# `WebChildCard`: its actions (none while busy), the busy line, held notices, its last answer (not while busy) and the kept-link
+/// note; none when it has nothing to show.
+fn child_card(locale: &Locale, child: &DelegationChildRow, held_notices: usize, card: &ChildCardState) -> Option<ChildCard> {
     let actions = child.card_actions();
-    if actions.is_empty() && held_notices == 0 {
+    let busy = card.busy;
+    let note = card.note.as_ref().filter(|_| !busy);
+    if actions.is_empty() && !busy && held_notices == 0 && note.is_none() && card.kept.is_none() {
         return None;
     }
     Some(ChildCard {
-        busy: false,
-        actions: actions
-            .iter()
-            .map(|a| ActionModel { action: a.name(), label: locale.get(a.label_key()), help: Some(child.action_help(*a, locale)) })
-            .collect(),
+        busy,
+        actions: if busy {
+            vec![]
+        } else {
+            actions
+                .iter()
+                .map(|a| ActionModel { action: a.name(), label: locale.get(a.label_key()), help: Some(child.action_help(*a, locale)) })
+                .collect()
+        },
         held: (held_notices > 0).then(|| locale.get_with("delegation.card.heldNotices", &[("count", &held_notices.to_string())])),
-        note: None,
-        note_tone: None,
-        kept: None,
+        note: note.map(|(text, _)| text.clone()),
+        note_tone: note.map(|(_, tone)| tone.name()),
+        kept: card.kept.clone(),
     })
 }
 
@@ -817,6 +834,7 @@ fn child_card(locale: &Locale, child: &DelegationChildRow, held_notices: usize) 
 fn child_item(
     locale: &Locale,
     child: &DelegationChildRow,
+    card: &ChildCardState,
     state: &AppSnapshot,
     parent_closed: bool,
     attention: &dyn Fn(&str) -> Attention,
@@ -832,7 +850,7 @@ fn child_item(
         tone: child.state.tone().name(),
         state_word: locale.get(shown.word_key()),
         state_tone: shown.tone().name(),
-        card: child_card(locale, child, if parent_closed { child.held_notices } else { 0 }),
+        card: child_card(locale, child, if parent_closed { child.held_notices } else { 0 }, card),
         menu: child.card_actions().iter().map(|a| ActionModel { action: a.name(), label: locale.get(a.label_key()), help: None }).collect(),
     }
 }
@@ -842,15 +860,19 @@ fn sidebar_items(
     locale: &Locale,
     state: &AppSnapshot,
     workspace_id: &str,
-    children: &[DelegationChildRow],
+    children: &[SidebarChild],
     attention: &dyn Fn(&str) -> Attention,
 ) -> Vec<SidebarItem> {
-    let tree = delegation_tree(workspace_id, state, children);
+    let rows: Vec<DelegationChildRow> = children.iter().map(|child| child.row.clone()).collect();
+    let cards: HashMap<&str, &ChildCardState> = children.iter().map(|child| (child.row.id.as_str(), &child.card)).collect();
+    let resting = ChildCardState::default();
+    let card = |id: &str| cards.get(id).copied().unwrap_or(&resting);
+    let tree = delegation_tree(workspace_id, state, &rows);
     let mut items = vec![];
     for session in &tree.top {
         items.push(SidebarItem::Pane { kind: "pane", id: session.id().into(), depth: 0 });
         for child in tree.children.get(session.id()).into_iter().flatten() {
-            items.push(child_item(locale, child, state, false, attention));
+            items.push(child_item(locale, child, card(&child.id), state, false, attention));
         }
     }
     for (id, branch, rows) in &tree.parent_closed {
@@ -865,7 +887,7 @@ fn sidebar_items(
             name: locale.get_with("delegation.tree.parentClosedAccessibility", &[("count", &rows.len().to_string())]),
         });
         for child in rows {
-            items.push(child_item(locale, child, state, true, attention));
+            items.push(child_item(locale, child, card(&child.id), state, true, attention));
         }
     }
     items
@@ -1121,7 +1143,8 @@ pub struct ShellContext<'a> {
     /// The active workspace's git, read for its folder (`gitInfo` while `gitWorkspaceKey` is the active workspace's).
     pub git: Option<&'a WorkspaceGitInfo>,
     pub dashboard_git: &'a HashMap<String, WorkspaceGitInfo>,
-    pub children: &'a [DelegationChildRow],
+    /// The delegated children with their cards' live parts (the host's delegation, W7).
+    pub children: &'a [SidebarChild],
     pub runtime: Runtime,
     pub setup_badge: bool,
     pub setup_needed: bool,
@@ -1490,8 +1513,12 @@ mod tests {
             started_by_human: false,
             agent: "claude".into(),
         };
-        let children =
-            vec![row("c1", "p1", ChildState::Running), row("c2", "gone", ChildState::Reported), row("c3", "gone", ChildState::Merged)];
+        let resting = |row: DelegationChildRow| SidebarChild { row, card: ChildCardState::default() };
+        let children = vec![
+            resting(row("c1", "p1", ChildState::Running)),
+            resting(row("c2", "gone", ChildState::Reported)),
+            resting(row("c3", "gone", ChildState::Merged)),
+        ];
         let items = sidebar_items(&en, &state, "w1", &children, &|_| Attention::default());
         let text = serde_json::to_value(&items).unwrap();
         assert_eq!(text[0], json!({"type": "pane", "id": "p1", "depth": 0}));
@@ -1507,6 +1534,27 @@ mod tests {
         assert_eq!(text[4]["id"], "c3");
         assert_eq!(text[4]["type"], "pane");
         assert_eq!(items.len(), 5);
+
+        // A busy card waits without its actions or its last answer; an idle one shows its answer in its tone and the kept-link note.
+        let mut live = children.clone();
+        live[0].card = ChildCardState { busy: true, note: Some(("merged".into(), Tone::Done)), kept: None };
+        live[2].card = ChildCardState { busy: false, note: Some(("refused".into(), Tone::Err)), kept: Some("kept".into()) };
+        let text = serde_json::to_value(sidebar_items(&en, &state, "w1", &live, &|_| Attention::default())).unwrap();
+        assert_eq!(text[1]["card"], json!({"busy": true, "actions": []}), "busy: no actions, no answer");
+        assert_eq!(text[4]["card"]["note"], "refused");
+        assert_eq!(text[4]["card"]["noteTone"], "err");
+        assert_eq!(text[4]["card"]["kept"], "kept");
+        assert_eq!(text[4]["card"]["actions"].as_array().unwrap().len(), 1, "a merged child keeps its discard");
+        // A card with nothing else to show still shows its answer.
+        let mut discarded = row("c4", "p1", ChildState::Discarded);
+        discarded.held_notices = 0;
+        let quiet = [SidebarChild { row: discarded.clone(), card: ChildCardState::default() }];
+        let text = serde_json::to_value(sidebar_items(&en, &state, "w1", &quiet, &|_| Attention::default())).unwrap();
+        assert!(text[1].get("card").is_none(), "nothing to show: no card");
+        let answered =
+            [SidebarChild { row: discarded, card: ChildCardState { busy: false, note: Some(("gone".into(), Tone::Idle)), kept: None } }];
+        let text = serde_json::to_value(sidebar_items(&en, &state, "w1", &answered, &|_| Attention::default())).unwrap();
+        assert_eq!(text[1]["card"], json!({"busy": false, "actions": [], "note": "gone", "noteTone": "idle"}));
     }
 
     /// WorkDashboard.cs:67: waiting first, then running, failed, done, stopped, idle; newest first within a tone.
