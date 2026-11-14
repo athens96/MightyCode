@@ -11,9 +11,10 @@
 //! card ([`ServiceEvent::AntigravityCard`] when it changes), the rules a continuation puts in agy's settings before its run starts and
 //! takes out when it ends, the card back with the reason when the continuation cannot start.
 //!
-//! Until their stages: a remote workspace's runs go through a [`RemoteRunner`] (W8); delegation's run ledger, merges and notices
-//! (W7), the file originals' pruning (W4), the style's own tool permissions (W6) and the known-session list (W4:
-//! [`ServiceEvent::RememberSession`] hands the id to the host) are not here.
+//! Delegation (W7) hears every run's start and end and every closed pane through [`DelegationRunHooks`]; its ledger, merges and
+//! notices are mighty-delegation's. Until their stages: a remote workspace's runs go through a [`RemoteRunner`] (W8); the file
+//! originals' pruning (W4), the style's own tool permissions (W6) and the known-session list (W4: [`ServiceEvent::RememberSession`]
+//! hands the id to the host) are not here.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -89,6 +90,15 @@ pub trait RemoteRunner: Send + Sync {
     fn is_running(&self, session_id: &str) -> bool;
 }
 
+/// What `Receive` learnt under the lock, for what follows it outside.
+#[derive(Debug, Clone, Copy)]
+struct Received {
+    /// Delegation's ledger had a run of this launch going in the pane, and it ended now (C# `DelegationRunEnded`'s answer).
+    delegation_ended: bool,
+    /// A notice turn ran before the event and no longer does.
+    notice_turn_ended: bool,
+}
+
 #[derive(Default)]
 struct Route {
     started: bool,
@@ -140,35 +150,49 @@ impl Shared {
         if !value.valid() {
             return;
         }
-        let notice_turn_ended = {
+        let received = {
             let mut state = lock(&self.state);
             self.receive_locked(&mut state, &value)
         };
-        self.after_receive(value, notice_turn_ended);
+        self.after_receive(value, received);
     }
 
-    fn receive_locked(&self, state: &mut State, value: &RunEvent) -> bool {
+    /// `Receive` under the lock: the event applied, the route of a run that ended removed and its end told to delegation
+    /// (`DelegationRunEnded`), the save asked for.
+    fn receive_locked(&self, state: &mut State, value: &RunEvent) -> Received {
         let before = state.snapshot.session(&value.session_id).map(|s| s.graph_runs().to_vec()).unwrap_or_default();
         state.snapshot = apply::apply(&state.snapshot, value, DateTimeOffset::now());
         let after = state.snapshot.session(&value.session_id).map(|s| s.graph_runs().to_vec()).unwrap_or_default();
         let ended = value.kind == "status" && matches!(value.status.as_deref(), Some("stopped" | "completed" | "error"));
+        let mut delegation_ended = false;
         if ended {
             state.routes.remove(&value.session_id);
+            delegation_ended = self
+                .delegation
+                .as_ref()
+                .is_some_and(|hooks| hooks.ended(&value.session_id, value.status.as_deref().unwrap_or_default(), state.closing));
             self.send(ServiceEvent::SaveNow);
         } else {
             self.send(ServiceEvent::SaveSoon);
         }
-        apply::notice_turn_ended(&before, &after)
+        Received { delegation_ended, notice_turn_ended: apply::notice_turn_ended(&before, &after) }
     }
 
-    fn after_receive(&self, value: RunEvent, notice_turn_ended: bool) {
+    fn after_receive(&self, value: RunEvent, received: Received) {
+        let Received { delegation_ended, notice_turn_ended } = received;
         self.receive_antigravity(&value);
         if value.kind == "resume"
             && let Some(resumed) = &value.resume_id
         {
             self.send(ServiceEvent::RememberSession(resumed.clone()));
         }
+        let hooks = self.delegation.clone();
+        let event = hooks.is_some().then(|| value.clone());
         self.send(ServiceEvent::Run { event: Box::new(value), notice_turn_ended });
+        // After the host heard it (C# `RunEventReceived`, then `OfferDelegationPending` and `KickQueuedMerges`).
+        if let (Some(hooks), Some(event)) = (hooks, event) {
+            hooks.received(&event, delegation_ended, notice_turn_ended);
+        }
     }
 
     /// `ReceiveToolPermission`: a request waiting or settled, kept per pane and handed to the host.
@@ -216,8 +240,9 @@ pub struct RunServiceOptions {
     pub delegation: Option<Arc<dyn DelegationRunHooks>>,
 }
 
-/// What delegation hears of the runs the service starts and ends (C# DesktopService.cs:261-273, 346-351;
-/// DesktopService.Delegation.cs:196-218, 369-371). Each is called under the service's lock, so none may take it again or wait.
+/// What delegation hears of the runs the service starts and ends (C# DesktopService.cs:189, 261-275, 346-351;
+/// DesktopService.Delegation.cs:196-218, 369-371). `worktree_root`, `began` and `ended` are called under the service's lock, so none may
+/// take it again or wait; `received` and `pane_closed` after it is let go.
 /// Owner from W7 Step 0: W7-D, which also places the calls of [`DelegationRunHooks::began`] and [`DelegationRunHooks::ended`]
 /// (C#: after the route is added, and where a status event ends the route).
 pub trait DelegationRunHooks: Send + Sync {
@@ -229,6 +254,18 @@ pub trait DelegationRunHooks: Send + Sync {
     /// C# `DelegationRunEnded(sessionId, status)`: a run of the pane ended with `status` (`closing`: the app quits); false when no run of
     /// this launch was going there.
     fn ended(&self, session_id: &str, status: &str, closing: bool) -> bool;
+    /// The end of C# `Receive` (DesktopService.cs:271-275), after the event went to the host and with the service's lock let go: `ended`
+    /// is what [`DelegationRunHooks::ended`] answered for this event, `notice_turn_ended` that a notice turn's answer came. C# offers
+    /// delegation's pending items again on a run's start, a run's end or a notice turn's end, and moves the queued merges on after an
+    /// end. Never waits.
+    fn received(&self, event: &RunEvent, ended: bool, notice_turn_ended: bool) {
+        let _ = (event, ended, notice_turn_ended);
+    }
+    /// C# `UpdateAsync`'s `PaneClosed(pane)` (DesktopService.cs:189): the pane left the state through [`RunService::update`], however it
+    /// was closed (the window, the phone, its workspace removed). Called with the service's lock let go; never waits.
+    fn pane_closed(&self, pane: &RunSession) {
+        let _ = pane;
+    }
 }
 
 pub type Configure = Box<dyn FnOnce(&mut RunManagerOptions) + Send>;
@@ -293,28 +330,44 @@ impl RunService {
 
     /// `UpdateAsync`: a change normalized as C# normalizes every change, then saved.
     pub fn update(&self, change: impl FnOnce(&AppSnapshot) -> AppSnapshot) -> Result<()> {
-        let closed: Vec<String> = {
+        self.try_update(|current| Some(change(current))).map(|_| ())
+    }
+
+    /// [`RunService::update`] for a change that may not happen: `change` gives None to leave the state as it is, unsaved (C#'s
+    /// `snapshot = StateStore.Normalize(next, false); QueueSave()` after a check under the lock, as delegation's `CreatePane` and `Note`
+    /// do). True when it changed.
+    pub fn try_update(&self, change: impl FnOnce(&AppSnapshot) -> Option<AppSnapshot>) -> Result<bool> {
+        let closed: Vec<Arc<RunSession>> = {
             let mut state = lock(&self.shared.state);
             if state.closing {
                 return Err(RunError::State("the service is closing".into()));
             }
-            let next = normalize::normalize(&change(&state.snapshot), false).map_err(|e| RunError::Invalid(e.to_string()))?;
-            let closed = state
-                .snapshot
-                .sessions()
-                .iter()
-                .filter(|before| next.session(before.id()).is_none())
-                .map(|before| before.id().to_string())
-                .collect();
+            let Some(changed) = change(&state.snapshot) else { return Ok(false) };
+            let next = normalize::normalize(&changed, false).map_err(|e| RunError::Invalid(e.to_string()))?;
+            let closed = state.snapshot.sessions().iter().filter(|before| next.session(before.id()).is_none()).cloned().collect();
             state.snapshot = next;
             closed
         };
         // A closed pane's Antigravity card and reason go with it (C# `ForgetAntigravity`).
+        // A delegated child's close reaches delegation (C# `PaneClosed`).
         for pane in closed {
-            self.shared.forget_antigravity(&pane);
+            self.shared.forget_antigravity(pane.id());
+            if let Some(hooks) = &self.shared.delegation {
+                hooks.pane_closed(&pane);
+            }
         }
         self.shared.send(ServiceEvent::SaveNow);
-        Ok(())
+        Ok(true)
+    }
+
+    /// C# `closing`: the service began to close ([`RunService::dispose`]).
+    pub fn closing(&self) -> bool {
+        lock(&self.shared.state).closing
+    }
+
+    /// C# `routes.ContainsKey(id)`: a run of the pane is starting or going (its route ends with its status event).
+    pub fn has_route(&self, id: &str) -> bool {
+        lock(&self.shared.state).routes.contains_key(id)
     }
 
     /// `UpdateDraft` (DesktopService.cs:198): a pane's draft, cleaned to at most 100,000 characters, replaced on that pane alone without
@@ -397,20 +450,23 @@ impl RunService {
 
     /// `StartAsync`.
     pub async fn start(&self, value: StartRunRequest) -> Result<Option<()>> {
-        self.launch(value, None, false).await
+        self.launch(value, None, false).await.map(|run| run.map(|_| ()))
     }
 
     /// `StartReachedAsync`: returns once the run's process is up with its input open.
     pub async fn start_reached(&self, value: StartRunRequest) -> Result<Option<()>> {
-        self.launch(value, None, true).await
+        self.launch(value, None, true).await.map(|run| run.map(|_| ()))
     }
 
-    /// `Launch`: the request recorded on its pane and handed to the runner (or the workspace's host). None when it was stopped before
-    /// it started.
-    pub async fn launch(&self, value: StartRunRequest, title_from: Option<&str>, reach: bool) -> Result<Option<()>> {
+    /// `Launch`: the request recorded on its pane and handed to the runner (or the workspace's host). The run's id as delegation names
+    /// it (C# `DelegationRunBegan`, [`DelegationRunHooks::began`]; without hooks an id of its own, `"run-" + guid`); None when it was
+    /// stopped before it started. `title_from`: what an automatic title follows when it is not the input (`Some("")` for a run
+    /// delegation starts on its own: none).
+    pub async fn launch(&self, value: StartRunRequest, title_from: Option<&str>, reach: bool) -> Result<Option<String>> {
         let mut request = value.validate()?;
         let workspace;
         let remote;
+        let run_id;
         {
             let mut state = lock(&self.shared.state);
             if state.closing {
@@ -444,6 +500,11 @@ impl RunService {
                 return Err(RunError::State(strings::get("run.error.alreadyRunning")));
             }
             state.routes.insert(request.session_id.clone(), Route { holder: antigravity::next_holder(), ..Route::default() });
+            // After the route is added, as C# `DelegationRunBegan(pane)`: a child's run is recorded running before anything else of it.
+            run_id = match &self.shared.delegation {
+                Some(hooks) => hooks.began(&pane),
+                None => format!("run-{}", wire::new_id()),
+            };
             let title_input = if request.antigravity_grant.is_some() { "" } else { title_from.unwrap_or(&request.input) };
             let now = DateTimeOffset::now();
             for session in state.snapshot.sessions_mut().iter_mut() {
@@ -492,9 +553,9 @@ impl RunService {
                     let cancelled = state.closing || state.routes.get(&session_id).is_none_or(|r| r.cancelled);
                     if cancelled {
                         let stopped = RunEvent::state(&session_id, "stopped", None);
-                        let ended = self.shared.receive_locked(&mut state, &stopped);
+                        let received = self.shared.receive_locked(&mut state, &stopped);
                         drop(state);
-                        self.shared.after_receive(stopped, ended);
+                        self.shared.after_receive(stopped, received);
                         if request.attachment_list().is_some() {
                             return Err(RunError::Cancelled(strings::get("run.error.attachmentSendCancelled")));
                         }
@@ -523,7 +584,7 @@ impl RunService {
             }
         };
         match started {
-            Ok(Some(())) => Ok(Some(())),
+            Ok(Some(())) => Ok(Some(run_id)),
             Ok(None) => {
                 self.shared.receive(RunEvent::state(&session_id, "stopped", None));
                 Ok(None)

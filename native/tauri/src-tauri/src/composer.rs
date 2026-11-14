@@ -5,7 +5,8 @@
 //! a new conversation and the "send to" switch.
 //!
 //! What a later stage owns answers as C# does without it: a typed built-in, a guided question and a style's prompt are W9's (the text
-//! goes to the agent as typed); the worktree send and held items are W7's; plugins, rename and the custom model dialog are W6's.
+//! goes to the agent as typed). The second send (Ctrl+Enter), 바로 실행's worktree and held rows and the worktree menu go through
+//! delegation.rs (W7-D); plugins, rename and the custom model dialog are W6's.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -163,10 +164,12 @@ fn reset_unavailable_agy_model(host: &Host, id: &str) -> Result<(), String> {
     })
 }
 
-/// C# `PaneView.Submit` (MainWindow.cs:533): the editor's text and attachments go the way the spec orders it — a busy pane's queue,
-/// then a start. What happened: started, notStarted, queued, blocked or none, with the request's user entry and graph run when it
-/// started at once.
-async fn submit(host: &Arc<Host>, id: &str) -> Result<SubmitReceipt, String> {
+/// C# `PaneView.Submit` (MainWindow.cs:533): the editor's text and attachments go the way the spec orders it — a busy pane's queue or
+/// new worktree, then a start. What happened: started, notStarted, queued, worktree, blocked or none, with the request's user entry
+/// and graph run when it started at once. `second`: Ctrl+Enter, which on a busy pane runs written words in a new child worktree where
+/// delegation offers one (`SecondSend` is `Worktree`), and otherwise queues them as Enter does (the menu-only state too: the page has
+/// no worktree-agent menu, W7 plan D7).
+async fn submit(host: &Arc<Host>, id: &str, second: bool) -> Result<SubmitReceipt, String> {
     // A saved "send to" choice not yet known to stand waits briefly for the pane's catalogue and the PATH read (ask.rs).
     crate::ask::await_targets(host, id).await;
     // Asking another CLI carries the words alone, wrapped once here: staged files stay in the composer.
@@ -183,6 +186,11 @@ async fn submit(host: &Arc<Host>, id: &str) -> Result<SubmitReceipt, String> {
         let mut view = host.view();
         let pane = session(&view, id)?;
         let busy_run = pane.status() == "running" || running(host, id);
+        // C# `DeferBusyComposer`'s second send: on a pane that may have children, written words run now in a new child worktree.
+        let holds = crate::updates::holds(host, &view.snapshot, &pane);
+        let worktree = second
+            && !holds
+            && crate::delegation::window_inputs(host, &view.snapshot, &pane).second_send == queue::ComposerSecondSend::Worktree;
         let ui = panes::ui(&mut view, id)?;
         if asked.is_some() && ask_targets::wrap(&ui.view.draft, asked).is_none() {
             return Ok(SubmitReceipt::new("none"));
@@ -200,6 +208,20 @@ async fn submit(host: &Arc<Host>, id: &str) -> Result<SubmitReceipt, String> {
             probe.settings = pane.settings.clone();
             probe.attachments = (!files.is_empty()).then(|| files.clone());
             probe.validate().map_err(|e| e.message().to_string())?;
+            if worktree && !text.chars().all(char::is_whitespace) {
+                // Taken from the composer now, so a second Ctrl+Enter cannot send it again.
+                let sent: HashSet<String> = files.iter().map(|f| f.id.clone()).collect();
+                ui.view.attachments.retain(|a| !sent.contains(&a.id));
+                ui.view.draft.clear();
+                ui.dirty = true;
+                drop(view);
+                if let Some(runs) = host.runs() {
+                    let _ = runs.service.update_draft(id, "");
+                }
+                host.view().sync();
+                crate::delegation::run_in_new_worktree(host, id, text, files, None, None);
+                return Ok(SubmitReceipt::new("worktree"));
+            }
             let override_mode = queue::background::queued_override(ui.view.launches_in_plan_mode);
             let consumed: HashSet<String> = files.iter().map(|f| f.id.clone()).collect();
             ui.queue.add(&text, files, override_mode, false, false, &host.locale).map_err(|e| e.to_string())?;
@@ -832,7 +854,7 @@ pub fn register(methods: &mut Registry) {
             ui.dirty = true;
             id
         };
-        let receipt = submit(&host, &id).await?;
+        let receipt = submit(&host, &id, flag(&args, "second")).await?;
         let mut view = host.view();
         let draft = view.panes.get(&id).map(|u| u.view.draft.clone()).unwrap_or_default();
         // C# `view.WebComposerState()`: the answer always carries the composer, else the pane is gone.
@@ -879,8 +901,10 @@ pub fn register(methods: &mut Registry) {
         }
         Ok(Value::Null)
     });
+    // 바로 실행 on one queued row (`agent`: the row's menu pick), C# `RunQueuedNow`.
     methods.add("queueRunNow", |host: Arc<Host>, args| async move {
         let item = text(&args, "itemId").unwrap_or("").to_string();
+        let agent = text(&args, "agent").map(str::to_string);
         let (id, path) = {
             let mut view = host.view();
             let id = ensure(&mut view, pane_id(&args))?;
@@ -907,8 +931,29 @@ pub fn register(methods: &mut Registry) {
                     ui.dirty = true;
                 }
             }
-            // Worktrees and held items are delegation's (delegation.rs, W7-D); the waits do nothing.
-            other => crate::delegation::run_now(&host, &id, &item, other).await,
+            // Every held item released now (delegation.rs, W7-D).
+            QueueRunNowPath::Held => crate::delegation::release_held_now(&host, &id),
+            // A new worktree child (of `agent` when the row's menu picked one); a pick needs the menu still on offer, and an Antigravity
+            // card's continuation never leaves its pane.
+            QueueRunNowPath::Worktree | QueueRunNowPath::AgentMenu if path == QueueRunNowPath::Worktree || agent.is_some() => {
+                let row = {
+                    let mut view = host.view();
+                    let offered = agent.is_none() || crate::delegation::offers_worktree_menu(&host, &view.snapshot, &id);
+                    let Ok(ui) = panes::ui(&mut view, &id) else { return Ok(Value::Null) };
+                    let row = ui.queue.items().iter().find(|q| q.id == item).cloned().filter(|row| offered && !queue::is_continuation(row));
+                    if let Some(row) = &row {
+                        ui.queue.remove(&row.id);
+                        ui.forget_unqueued();
+                        ui.dirty = true;
+                    }
+                    row
+                };
+                if let Some(row) = row {
+                    crate::delegation::run_in_new_worktree(&host, &id, row.text.clone(), row.attachments.clone(), agent, Some(row));
+                }
+            }
+            // The waits, a menu row without a pick and a hidden row do nothing.
+            _ => {}
         }
         Ok(Value::Null)
     });
@@ -1167,7 +1212,17 @@ fn run_now_rows(host: &Host, view: &mut View, id: &str) -> Vec<(String, QueueRun
     let runs = host.runs();
     let runtime = runs.and_then(|r| r.composer_runtime(pane.provider()));
     let efforts = runs.map(|r| r.efforts(&pane, workspace.as_ref(), &view.snapshot)).unwrap_or_default();
-    let window = mighty_composer::composer::WindowRules::default();
+    // The second send, the worktree menu, the held items and a child's ending run (delegation.rs, W7-D), as panes.rs reads them.
+    let delegation = crate::delegation::window_inputs(host, &view.snapshot, &pane);
+    let window = mighty_composer::composer::WindowRules {
+        second_send: delegation.second_send,
+        worktree_menu_only: delegation.worktree_menu_only,
+        held_items: delegation.held_items,
+        ending_run: delegation.ending_run,
+        background_update_holds: crate::updates::holds(host, &view.snapshot, &pane),
+        manual_update_reason: crate::updates::manual_update(host, &view.snapshot, &pane),
+        ..mighty_composer::composer::WindowRules::default()
+    };
     let Some(ui) = view.panes.get_mut(id) else { return vec![] };
     ui.view.queue = ui.queue.items().to_vec();
     let inputs = mighty_composer::composer::ComposerInputs {
