@@ -367,7 +367,7 @@ async fn steps(
     let tree_probe = page_probe(
         host,
         &format!(
-            "const ids = {ids_json}; r.cards = !!(await until(() => ids.every((id) => document.querySelector('[data-testid=\"child-card-' + id + '\"]')), 15000)); r.rows = ids.every((id) => {{ const row = document.querySelector('.sidebar-child [data-session-id=\"' + id + '\"]')?.closest('.sidebar-child'); return !!row && parseFloat(row.style.paddingLeft) === 38; }}); const slot = () => document.querySelector('.pane-slot:not(.hidden)[data-pane-id=\"{parent}\"]'); const first = await until(() => slot()?.querySelector('.composer-queue-item'), 15000); r.held = first?.dataset.queueHeld ?? null;"
+            "const ids = {ids_json}; r.cards = !!(await until(() => ids.every((id) => document.querySelector('[data-testid=\"child-card-' + id + '\"]')), 15000)); const placed = () => ids.every((id) => {{ const row = document.querySelector('.sidebar-child [data-session-id=\"' + id + '\"]')?.closest('.sidebar-child'); return !!row && parseFloat(row.style.paddingLeft) === 38; }}); r.rows = !!(await until(placed, 15000)); if (!r.rows) r.paddings = ids.map((id) => document.querySelector('.sidebar-child [data-session-id=\"' + id + '\"]')?.closest('.sidebar-child')?.style.paddingLeft ?? null); const slot = () => document.querySelector('.pane-slot:not(.hidden)[data-pane-id=\"{parent}\"]'); const first = await until(() => slot()?.querySelector('.composer-queue-item'), 15000); r.held = first?.dataset.queueHeld ?? null;"
         ),
     )
     .await?;

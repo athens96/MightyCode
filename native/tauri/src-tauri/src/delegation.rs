@@ -211,11 +211,17 @@ pub fn smoke_root(host: &Host) -> PathBuf {
 /// Whether a git step of delegation that writes may touch the repository or worktree folder at `path` ([`Host::may_touch_repo`]); in a
 /// smoke also the smoke's own delegation folder ([`smoke_root`]) as written: an absolute path with no `..` inside it.
 pub fn may_touch(host: &Host, path: &Path) -> bool {
-    host.may_touch_repo(path)
-        || host.smoke.is_some()
-            && path.is_absolute()
-            && !path.components().any(|part| matches!(part, std::path::Component::ParentDir))
-            && path.starts_with(smoke_root(host))
+    if host.may_touch_repo(path) {
+        return true;
+    }
+    if host.smoke.is_none() || !path.is_absolute() || path.components().any(|part| matches!(part, std::path::Component::ParentDir)) {
+        return false;
+    }
+    // Both sides as the OS finally names them: the coordinator keeps a worktree's path in its long form, while the temporary folder can
+    // be written in its 8.3 form (CI's `C:\Users\RUNNER~1\...`).
+    let paths = DelegationPaths::new(crate::platform::file_ports().handles);
+    let (path, root) = (paths.canonical(&path.to_string_lossy()), paths.canonical(&smoke_root(host).to_string_lossy()));
+    mighty_delegation::git::paths::same(&path, &root) || mighty_delegation::git::paths::is_inside(&path, &root)
 }
 
 /// Where `delegation-state.json` is kept this launch: the profile when delegation may write it (W7 plan section 4), else a copy made

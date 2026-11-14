@@ -6,16 +6,22 @@
 
 mod support;
 
+#[cfg(windows)]
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use mighty_delegation::app_host::{ChildRunEnd, DelegationRunEvent, DelegationRunEventPump};
+#[cfg(windows)]
 use mighty_delegation::cards::DelegationCardAction;
+#[cfg(windows)]
 use mighty_delegation::git::worktree::report_file_in;
 use mighty_delegation::host::DelegationPaneActivity;
-use mighty_delegation::model::{ChildRecord, ChildState, DeliveryLane, NoticeKind};
+use mighty_delegation::model::{ChildRecord, ChildState};
+#[cfg(windows)]
+use mighty_delegation::model::{ChildRecordOptions, DeliveryLane, NoticeKind};
+#[cfg(windows)]
+use mighty_delegation::sidebar;
 use mighty_delegation::store::{DelegationFile, DelegationFileStore};
-use mighty_delegation::{model::ChildRecordOptions, sidebar};
 use support::{host, lane, place::DelegationPlace};
 
 fn runtime() -> tokio::runtime::Handle {
@@ -50,6 +56,8 @@ async fn the_pumps_events_are_recorded_in_order() {
 
 /// L665's pump half: with the switch off, a child still runs in its worktree, and its run's end, through the app's ordered events,
 /// still records its report for the parent; its card and its cleanup go on.
+/// Its git (the child's commit) runs through the process host, Windows' until the Mac stage.
+#[cfg(windows)]
 #[tokio::test]
 async fn with_the_switch_off_a_childs_end_still_records_its_report() {
     let _lane = lane::enter().await;
