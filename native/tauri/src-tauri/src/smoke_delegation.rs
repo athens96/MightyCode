@@ -34,6 +34,8 @@ use mighty_platform::fake::FixedDiskSpace;
 use mighty_run::model::CliCommand;
 use serde_json::{Map, Value, json};
 
+use tauri::Manager;
+
 use crate::host::Host;
 
 /// The keys the step reports, in C#'s order, then the Rust-only one.
@@ -145,6 +147,10 @@ fn add_parent(host: &Arc<Host>, folder: &Path, provider: &str, mode: &str, title
         state.sessions_mut().push(Arc::new(parent.clone()));
         state.active_workspace_id = Some(workspace_id.clone());
         state.active_session_id = Some(pane.clone());
+        // Open in the sidebar, as a folder the user opens is (frame.rs `open_workspace_folder`): its children are drawn there.
+        if let Some(expanded) = mighty_core::shell::open_disclosure(state, &workspace_id) {
+            state.expanded_workspace_ids = Some(expanded);
+        }
     })?;
     host.schedule();
     Ok((pane, workspace_id))
@@ -160,6 +166,46 @@ async fn cleaned(app: &DelegationApp, runner: &Git, repo: &Path, id: &str) -> Re
         && !Path::new(&child.worktree_path).exists()
         && branches.is_empty()
         && file.merges.iter().any(|merge| merge.child_id == id))
+}
+
+/// A check of what the page draws (C# `DelegationSmokeFind` over the WinUI tree): `body` runs in the page with `until(test, ms)` and
+/// fills `r`; the page hands `r` back through the bridge's `log` method, which this step reads from the host's log (the step goes on,
+/// where the smoke's own probe would end it).
+async fn page_probe(host: &Host, body: &str) -> Result<Value, String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let mark = format!("smoke-delegation-dom-{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+    let script = format!(
+        "(async () => {{ const until = async (test, ms) => {{ const end = performance.now() + ms; while (performance.now() < end) {{ const v = await test(); if (v) return v; await new Promise((r) => setTimeout(r, 100)); }} return test(); }}; const r = {{}}; try {{ {body} }} catch (error) {{ r.error = String(error); }} await window.__TAURI_INTERNALS__.invoke('host_post', {{ message: {{ kind: 'call', id: 990000 + Math.floor(Math.random() * 9999), method: 'log', args: {{ level: 'info', message: '{mark} ' + JSON.stringify(r) }} }} }}); }})()"
+    );
+    let page = host.app.get_webview(crate::host::WINDOW).ok_or("no main window")?;
+    page.eval(&script).map_err(|e| e.to_string())?;
+    let log = host.log.dir().join("host.log");
+    let needle = format!("web info: {mark} ");
+    let line = wait("the page probe's answer", 40, || {
+        std::fs::read_to_string(&log).ok()?.lines().find_map(|line| line.split_once(&needle).map(|(_, rest)| rest.to_string()))
+    })
+    .await?;
+    serde_json::from_str(&line).map_err(|e| format!("the page probe's answer is no JSON: {e}"))
+}
+
+/// The pane's status in the state as the switch's check reads it (a busy pane's).
+fn set_status(host: &Host, pane: &str, status: &str) -> Result<(), String> {
+    host.view().update(|state| {
+        if let Some(found) = state.sessions_mut().iter_mut().find(|p| p.id() == pane) {
+            *found = Arc::new(RunSession { status: Some(status.into()), ..(**found).clone() });
+        }
+    })
+}
+
+/// The dialogs the smoke's driver was shown, and its answer to each (C# `smokeDelegationDialog`).
+fn record_dialogs(answer: bool) -> Arc<std::sync::Mutex<Vec<Value>>> {
+    let shown: Arc<std::sync::Mutex<Vec<Value>>> = Arc::default();
+    let keep = shown.clone();
+    crate::delegation::set_smoke_dialog(Some(Arc::new(move |dialog: &Value| {
+        keep.lock().unwrap().push(dialog.clone());
+        answer
+    })));
+    shown
 }
 
 /// A card's merge from the human (C# `DelegationSmokeMerge`).
@@ -189,8 +235,12 @@ async fn run(host: &Arc<Host>, checks: &mut Map<String, Value>) -> Result<(), St
     );
     let runner = Git::new(host.processes.clone(), crate::delegation::smoke_root(host).join("git-no-hooks"));
     let outcome = steps(host, &app, &runner, &repo, &fake, &root, checks).await;
-    // What the step added goes, whatever happened: the switch, the override, its panes and workspaces.
+    // What the step added goes, whatever happened: the switch, the dialog driver, the override, the Agent IO listener its delegateTool
+    // step started (Agent IO is off in a smoke, as C#'s), its panes and workspaces.
     crate::settings::general::set_delegation_on(host, false);
+    crate::delegation::set_smoke_dialog(None);
+    let closing = host.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || crate::agent_io::shutdown(&closing)).await;
     runs.catalog.set_override("claude", None);
     let added: Vec<String> =
         host.view().snapshot.workspaces().iter().filter(|w| Path::new(w.path()).starts_with(&root)).map(|w| w.id().to_string()).collect();
@@ -313,7 +363,20 @@ async fn steps(
             })
     });
     require(listed, "the children are not listed one step in under their parent with merge and discard")?;
+    let ids_json = serde_json::to_string(&ids).unwrap_or_default();
+    let tree_probe = page_probe(
+        host,
+        &format!(
+            "const ids = {ids_json}; r.cards = !!(await until(() => ids.every((id) => document.querySelector('[data-testid=\"child-card-' + id + '\"]')), 15000)); r.rows = ids.every((id) => document.querySelector('.sidebar-child [data-session-id=\"' + id + '\"]')); const slot = () => document.querySelector('.pane-slot:not(.hidden)[data-pane-id=\"{parent}\"]'); const first = await until(() => slot()?.querySelector('.composer-queue-item'), 15000); r.held = first?.dataset.queueHeld ?? null;"
+        ),
+    )
+    .await?;
+    require(
+        tree_probe["cards"] == true && tree_probe["rows"] == true,
+        &format!("the page does not list the children one step in under their parent with their cards: {tree_probe}"),
+    )?;
     checks.insert("sidebarTree".into(), json!(true));
+    require(tree_probe["held"] == notice.id.as_str(), &format!("the page's first queue row is not the held notice: {tree_probe}"))?;
     let held = {
         let mut view = host.view();
         crate::panes::composer_state(host, &mut view, &parent).map(|state| state.queue.held.first().map(|row| row.id.clone()))
@@ -324,6 +387,12 @@ async fn steps(
     host.log.line("smoke: delegation: 1. A merged child closed in the window is cleaned up: its wo");
     // 1. A merged child closed in the window is cleaned up: its worktree and branch go, its merge record stays.
     merge(app, &a).await?;
+    let merged_card = app.sidebar_children().into_iter().find(|child| child.row.id == a);
+    require(
+        merged_card
+            .is_some_and(|child| child.row.card_actions().contains(&mighty_core::shell::CardAction::Undo) && child.card.note.is_some()),
+        "the merged child's card does not offer undo or say it merged",
+    )?;
     crate::frame::close_session(host, &a).await?;
     checks.insert("windowCloseMergedChild".into(), json!(cleaned(app, runner, repo, &a).await?));
 
@@ -394,8 +463,9 @@ async fn steps(
         app.second_send(&snapshot, &parent_pane) != mighty_composer::queue::ComposerSecondSend::Worktree,
         "the second send offered a worktree with the switch off",
     )?;
+    // The switch itself has every running pane checked again (C# `SetDelegationOn`); the parent reads as running, as a busy pane's does.
+    set_status(host, &parent, "running")?;
     crate::settings::general::set_delegation_on(host, true);
-    app.refresh_worktree_readiness(&parent_pane);
     wait("the parent's folder to be ready for worktrees", 30, || {
         let (snapshot, pane) = running(host)?;
         (app.second_send(&snapshot, &pane) == mighty_composer::queue::ComposerSecondSend::Worktree).then_some(())
@@ -436,13 +506,16 @@ async fn steps(
     checks.insert("secondSendNewWorktree".into(), json!(true));
     host.log.line("smoke: delegation: Its card's discard, through its confirmation, removes it aga");
     // Its card's discard, through its confirmation, removes it again.
-    let pending = app.ask_to_discard_child(&human_child.id).await.ok_or("no discard confirmation")?;
-    app.discard_child(&pending).await;
+    let shown = record_dialogs(true);
+    crate::delegation::child_action(host.clone(), json!({"id": human_child.id, "action": "discard"})).await?;
+    crate::delegation::set_smoke_dialog(None);
+    require(!shown.lock().unwrap().is_empty(), "the human's child's discard asked nothing")?;
     let gone = app
         .coordinator()
         .is_some_and(|c| c.file().children.iter().any(|child| child.id == human_child.id && child.state == ChildState::Discarded));
     require(gone && !Path::new(&human_child.worktree_path).exists(), "the human's child was not discarded")?;
     crate::settings::general::set_delegation_on(host, false);
+    set_status(host, &parent, "idle")?;
 
     host.log.line("smoke: delegation: 4. A workspace with an open child is not removed.");
     // 4. A workspace with an open child is not removed.
@@ -454,8 +527,22 @@ async fn steps(
 
     host.log.line("smoke: delegation: 5. Closing the parent in the window asks first, naming its o");
     // 5. Closing the parent in the window asks first, naming its open child, and closes nothing yet.
-    let question = app.parent_close_question(&parent).ok_or("the window's close of a parent with an open child did not ask")?;
-    require(question.open_children == 1 && host.view().snapshot.session(&parent).is_some(), "the parent close question is wrong")?;
+    let parent_title = host.view().snapshot.session(&parent).map(|p| p.title().to_string()).unwrap_or_default();
+    let asked = record_dialogs(false);
+    crate::frame::close_session(host, &parent).await?;
+    crate::delegation::set_smoke_dialog(None);
+    let expected = mighty_delegation::text::parent_close_message(
+        &mighty_delegation::cards::PendingParentClose { id: parent.clone(), title: parent_title.clone(), open_children: 1 },
+        &host.locale,
+    );
+    let dialogs = asked.lock().unwrap().clone();
+    require(
+        dialogs.len() == 1
+            && dialogs[0]["message"] == expected.as_str()
+            && !parent_title.is_empty()
+            && host.view().snapshot.session(&parent).is_some(),
+        &format!("the window's close of a parent with an open child did not ask first, or closed it: {dialogs:?}"),
+    )?;
     checks.insert("windowParentCloseAsks".into(), json!(true));
 
     host.log.line("smoke: delegation: 6. From the phone it closes only the parent at once: C stays");
@@ -470,6 +557,17 @@ async fn steps(
             && tree.parent_closed.iter().any(|(id, _, children)| *id == parent && children.iter().any(|child| child.id == c)),
         "closing the parent did not keep its open child under 'parent closed'",
     )?;
+    let closed_probe = page_probe(
+        host,
+        &format!(
+            "r.node = !!(await until(() => document.querySelector('[data-testid=\"sidebar-parent-closed-{parent}\"]'), 15000)); r.child = !!document.querySelector('.sidebar-child [data-session-id=\"{c}\"]');"
+        ),
+    )
+    .await?;
+    require(
+        closed_probe["node"] == true && closed_probe["child"] == true,
+        &format!("the page shows no 'parent closed' node with C: {closed_probe}"),
+    )?;
     checks.insert("phoneParentCloseKeepsChild".into(), json!(true));
 
     host.log.line("smoke: delegation: 7. Closing the unmerged child keeps its worktree, and the wo");
@@ -482,21 +580,35 @@ async fn steps(
             && crate::delegation::removal_refusal(host, &workspace).is_some(),
         "a workspace with a child worktree not cleaned up was removed, or C's close removed its work",
     )?;
+    let refused = crate::frame::remove_workspace(host, &workspace).await;
+    require(
+        refused.as_ref().err().is_some_and(|reason| reason.contains(DelegationReasonCode::WorkspaceHasChildren.name()))
+            && host.view().snapshot.workspace(&workspace).is_some(),
+        &format!("the window removed a workspace with a kept child worktree: {refused:?}"),
+    )?;
     checks.insert("removeRefusedKeptWorktree".into(), json!(true));
 
     host.log.line("smoke: delegation: 8. Once the human discards C from its card, through its conf");
     // 8. Once the human discards C from its card, through its confirmation, the workspace goes.
-    let pending = app.ask_to_discard_child(&c).await.ok_or("no discard confirmation for C")?;
-    require(pending.nested.as_ref().is_some_and(Vec::is_empty), "the discard confirmation did not name what goes")?;
-    app.discard_child(&pending).await;
+    let confirmation = record_dialogs(true);
+    crate::delegation::child_action(host.clone(), json!({"id": c, "action": "discard"})).await?;
+    crate::delegation::set_smoke_dialog(None);
+    let dialogs = confirmation.lock().unwrap().clone();
+    require(
+        dialogs.first().is_some_and(|dialog| {
+            dialog["message"].as_str().is_some_and(|m| m.contains(&host.locale.get("delegation.discard.noNested")))
+                && dialog["primary"] == host.locale.get("delegation.discard.confirm").as_str()
+        }),
+        &format!("the discard confirmation did not name what goes: {dialogs:?}"),
+    )?;
     let discarded =
         app.coordinator().is_some_and(|co| co.file().children.iter().any(|child| child.id == c && child.state == ChildState::Discarded));
     require(discarded && !Path::new(&records[2].worktree_path).exists(), "C was not discarded")?;
     require(crate::delegation::removal_refusal(host, &workspace).is_none(), "the workspace is still refused")?;
-    host.view().update(|state| {
-        state.sessions_mut().retain(|s| s.workspace_id() != workspace);
-        state.workspaces_mut().retain(|w| w.id() != workspace);
-    })?;
+    let removal = record_dialogs(true);
+    crate::frame::remove_workspace(host, &workspace).await?;
+    crate::delegation::set_smoke_dialog(None);
+    require(removal.lock().unwrap().len() == 1, "the workspace's removal asked nothing")?;
     checks.insert("removedAfterDiscard".into(), json!(host.view().snapshot.workspace(&workspace).is_none()));
 
     host.log.line("smoke: delegation: 9. A child of another agent: on a Codex pane in manual mode,");
@@ -508,7 +620,10 @@ async fn steps(
     repository(runner, &cross, "Cross-agent smoke").await?;
     let (codex_pane, _) = add_parent(host, &cross, "codex", "manual", "Codex parent")?;
     let codex = host.view().snapshot.session(&codex_pane).map(|p| (**p).clone()).ok_or("no Codex pane")?;
-    app.refresh_worktree_readiness(&codex);
+    // The switch's own check reaches the pane as it reads running, as a busy pane's does.
+    set_status(host, &codex_pane, "running")?;
+    crate::settings::general::set_delegation_on(host, false);
+    crate::settings::general::set_delegation_on(host, true);
     wait("the Codex pane's worktree menu", 30, || {
         let snapshot = host.view().snapshot.clone();
         app.worktree_menu_only(&snapshot, &codex, false).then_some(())
@@ -560,7 +675,9 @@ async fn steps(
 
     host.log.line("smoke: delegation: Rust only: the fake Claude parent calls delegate through the");
     // Rust only: the fake Claude parent calls delegate through the real exe mode and the real pipe, and the child appears.
+    host.log.line("smoke: delegation: listening");
     crate::agent_io::listen(host).ok_or("the Agent IO listener did not start")?;
+    host.log.line("smoke: delegation: listener up");
     let tool_repo = root.join("tool");
     repository(runner, &tool_repo, "Delegate tool smoke").await?;
     let (tool_parent, tool_workspace) = add_parent(host, &tool_repo, "claude", "acceptEdits", "Delegating parent")?;
@@ -576,7 +693,9 @@ async fn steps(
     let mut request = mighty_run::model::StartRunRequest::new(&tool_parent, &tool_workspace, "claude", "Delegate the tool note.");
     request.provider = "claude".into();
     request.settings = Some(RunSettings { permission_mode: "acceptEdits".into(), ..RunSettings::default() });
+    host.log.line("smoke: delegation: delegating parent asked");
     app.send(request).await.map_err(|e| e.to_string())?;
+    host.log.line("smoke: delegation: delegating parent sent");
     let delegated = wait("the delegate tool's child", 60, || {
         let coordinator = app.coordinator()?;
         let file = coordinator.file();
@@ -594,6 +713,7 @@ async fn steps(
     while Instant::now() < settle && app.coordinator().is_some_and(|c| c.is_starting(&delegated.id)) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    require(delegated.state != ChildState::Failed, "the delegate tool's child failed to start")?;
     checks.insert("delegateTool".into(), json!({"child": delegated.id, "state": delegated.state.name()}));
     crate::delegation::set_smoke_agent_ready("claude", false);
     Ok(())

@@ -3,6 +3,8 @@
 //! starts and ends (C# DesktopService.Delegation.cs `IDelegationHost`, `DelegationRunBegan`, `DelegationRunEnded`, `PaneClosed`). No
 //! CLI is found, so a start fails without a process.
 
+mod support;
+
 use std::sync::{Arc, Mutex};
 
 use mighty_core::model::{AppSnapshot, RemoteWorkspaceReference, RunSession, RunSettings, Workspace};
@@ -16,6 +18,8 @@ use mighty_run::service::{DelegationRunHooks, RunService, RunServiceOptions};
 /// The window's part as the checks give it: what it was told, and a refusal to switch on.
 #[derive(Default)]
 struct Window {
+    /// W7 plan D2: a launch without `--allow-state-write` when false.
+    read_only: std::sync::atomic::AtomicBool,
     heard: Mutex<Vec<String>>,
     blocked: Mutex<Option<String>>,
 }
@@ -27,6 +31,9 @@ impl Window {
 }
 
 impl DelegationWindow for Window {
+    fn live(&self) -> bool {
+        !self.read_only.load(std::sync::atomic::Ordering::SeqCst)
+    }
     fn run_blocked(&self, _pane: &RunSession) -> Option<String> {
         self.blocked.lock().unwrap().clone()
     }
@@ -241,4 +248,57 @@ async fn the_host_reads_panes_and_starts_runs_only_where_they_can_run() {
     assert!(place.app.run_id("other").is_none(), "the closed pane is forgotten");
     place.app.stop_run("parent".into()).await;
     assert!(place.app.stop_and_wait("parent").await, "nothing to stop");
+}
+
+/// W7 plan D2 (review M5): a read-only launch hands nothing held to a run. The human's send starts as the service starts it, with the
+/// human's words alone, run next has nothing held to run, and the held notice stays held on disk.
+#[tokio::test]
+async fn a_read_only_launch_leaves_held_items_held() {
+    use mighty_delegation::app::DelegationStart;
+    use mighty_delegation::delivery::DelegationRelease;
+    use mighty_delegation::model::{ChildRecord, ChildRecordOptions, ChildState, DeliveryLane, Notice, NoticeKind};
+    use mighty_delegation::store::{DelegationFile, DelegationFileStore};
+    let place = place("read-only");
+    place.window.read_only.store(true, std::sync::atomic::Ordering::SeqCst);
+    let fixture = support::place::DelegationPlace::new();
+    let profile = fixture.profile();
+    let reported = ChildRecord::make_with(
+        "c1",
+        "parent",
+        &std::path::Path::new(&fixture.root()).join("c1").to_string_lossy(),
+        "main",
+        &"a".repeat(40),
+        "plan",
+        "key-c1",
+        ChildRecordOptions {
+            state: Some(ChildState::Reported),
+            report_revision: 1,
+            report_head: Some("a".repeat(40)),
+            ..Default::default()
+        },
+    );
+    let notice = Notice::new("n1", "c1", 1, NoticeKind::Reported, DeliveryLane::Pending);
+    DelegationFileStore::new(&profile).save(&DelegationFile::of(vec![reported], vec![notice], vec![], vec![], vec![])).unwrap();
+    let start = DelegationStart::new(profile.clone().into(), fixture.maker(), fixture.paths(), Arc::new(|| true));
+    assert!(place.app.start(start).await, "the file loads");
+    assert_eq!(place.app.held_items("parent").iter().map(|item| item.id.as_str()).collect::<Vec<_>>(), ["n1"], "the held row is shown");
+    assert_eq!(place.app.run_next("parent").await, DelegationRelease::NothingHeld, "run next has nothing held to run");
+    let mut request = mighty_run::model::StartRunRequest::new("parent", "w", "claude", "Only my words.");
+    request.settings = place.service.snapshot().session("parent").unwrap().settings.clone();
+    let sent = place.app.send(request).await;
+    assert!(!matches!(sent, Ok(DelegationRelease::Released { .. })), "the send released nothing: {sent:?}");
+    let asked: Vec<String> = place
+        .service
+        .snapshot()
+        .session("parent")
+        .unwrap()
+        .logs()
+        .iter()
+        .filter(|l| l.kind() == "user")
+        .map(|l| l.text().to_string())
+        .collect();
+    assert_eq!(asked, ["Only my words."], "a plain run of the human's words began");
+    assert!(place.app.run_id("parent").is_some(), "the run service began it");
+    let saved = DelegationFileStore::new(&profile).load().unwrap();
+    assert!(saved.notices.iter().all(|n| n.lane == DeliveryLane::Held && n.receipt.is_none()), "the notice stays held on disk");
 }

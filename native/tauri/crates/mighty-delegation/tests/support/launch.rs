@@ -17,6 +17,7 @@ use mighty_core::locale::Locale;
 use mighty_core::model::{AppSnapshot, RunSession, RunSettings, Workspace};
 use mighty_core::permission::ToolPermissionRequest;
 use mighty_core::store::Store;
+use mighty_delegation::agent_io::binding::{AgentIoBinding, TOKEN_KEY};
 use mighty_delegation::agent_io::server::{AgentIo, DelegationLink, TerminalCall, TerminalHandler, binding_factory};
 use mighty_delegation::app::{DelegationApp, DelegationStart, DelegationWindow, MERGE_RETRY};
 use mighty_delegation::coordinator::Coordinator;
@@ -70,6 +71,7 @@ pub struct DelegationLaunch {
     pub app: Arc<DelegationApp>,
     pub switch_on: Arc<AtomicBool>,
     io: Arc<AgentIo>,
+    tokens: Arc<Mutex<HashMap<String, String>>>,
     store: Arc<Mutex<Store>>,
     record: Arc<Mutex<Record>>,
     _pump: tokio::task::JoinHandle<()>,
@@ -149,6 +151,7 @@ impl DelegationLaunch {
             let handler = link_app.upgrade().and_then(|app| app.coordinator()).map(|c| Arc::new(c) as Arc<dyn DelegationHandler>);
             (handler, link_switch.load(Ordering::SeqCst))
         });
+        let tokens: Arc<Mutex<HashMap<String, String>>> = Arc::default();
         let (service, events) = RunService::new(
             loaded,
             catalog,
@@ -158,7 +161,19 @@ impl DelegationLaunch {
                 remote: None,
                 configure: None,
                 admitting: None,
-                binding: Some(binding_factory(io.clone(), fake_exe(), link)),
+                binding: Some({
+                    // The token each pane's newest run got, so a check reads that run's binding (C# `Bindings[pane]`).
+                    let (inner, tokens) = (binding_factory(io.clone(), fake_exe(), link), tokens.clone());
+                    Arc::new(move |request: &StartRunRequest, workspace: &Workspace| {
+                        let made = inner(request, workspace);
+                        if let Some(binding) = &made
+                            && let Some(token) = binding.environment.get(TOKEN_KEY)
+                        {
+                            tokens.lock().unwrap().insert(request.session_id.clone(), token.clone());
+                        }
+                        made
+                    })
+                }),
                 delegation: Some(app.clone()),
             },
         );
@@ -211,6 +226,7 @@ impl DelegationLaunch {
             app,
             switch_on: switch,
             io,
+            tokens,
             store,
             record,
             _pump: pump,
@@ -262,6 +278,17 @@ impl DelegationLaunch {
                 _ => {}
             }
         }
+    }
+
+    /// The binding the pane's newest run got (C# `Bindings[pane]`), while it is the pane's current one.
+    pub fn binding(&self, pane: &str) -> Option<Arc<AgentIoBinding>> {
+        let token = self.tokens.lock().unwrap().get(pane).cloned()?;
+        self.io.bindings().resolve(&token)
+    }
+
+    /// Whether any run of the pane got a binding.
+    pub fn bound(&self, pane: &str) -> bool {
+        self.tokens.lock().unwrap().contains_key(pane)
     }
 
     pub fn coordinator(&self) -> Coordinator {

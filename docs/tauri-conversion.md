@@ -77,6 +77,7 @@ native/tauri/
 각 단계: 구현 → 테스트(C# 테스트 이전 + 공통 기대값) → 독립 코드 리뷰 → 지적 수정 → 커밋·push → Tauri CI(Windows·Mac) 통과.
 정하지 않은 것의 기본값(2026-11-14): 업데이트 손넘김은 Rust exe에 직접, 화면 공유는 W8 맨 끝, 상태 저장은 개발 중 꺼 두고 W9에서 기본으로 켬.
 W6 기본값(2026-11-14, `.omc/research/tauri/w6-plan.md`): 자동 업데이트·자동 로그인과 PC를 바꾸는 동작(로그아웃, 로그인, CLI 업데이트, 플러그인·도구 설치, HKCU·`~/.claude/settings.json`·omc/Ouroboros 설정 쓰기)은 W9 전까지 `--allow-state-write`가 있을 때만; smoke에서는 언제나 꺼 둠.
+W7 기본값(2026-11-15, `.omc/research/tauri/w7-plan.md` D1–D11): 기준은 0.4.59와 `fix/csharp-from-tauri-review`의 위임 수정(PaneWorktree·미러 닫기는 `origin/main` 병합 뒤 W7-E); `--allow-state-write` 없이 위임은 읽기만(트리·보류 항목 표시, 서버 안 붙임, Ctrl+Enter는 대기열, 카드 동작은 확인 모드라고만 말함); Agent IO는 C#처럼 켜 둠(설정 파일 안 씀, smoke에서는 꺼 둠); Mac 전송은 트레잇과 줄 단위 framing만, Unix 소켓은 Mac 단계(시나리오·파이프 테스트는 Windows 전용); git 실행기는 `mighty-run::git`; 카드 병합 커밋 서명은 강화된 C#과 같게(서명 프로그램 없음); 페이지에 없는 작업 트리 에이전트 메뉴 대신 메뉴만 상태의 Ctrl+Enter는 대기열; smoke의 `phone*` 키는 W8 전까지 폰 라우터가 부를 함수를 직접 호출; CI에서 `scripts/delegation-record.py`로 S1·S2 기록 판정; RenameMigration의 작업 트리 부분은 W9; `webOpenChoose`는 C#이 구현하고 README 미구현 목록이 카드 메서드를 놓친 것을 적음.
 
 | 단계 | 커밋 | 리뷰 | CI |
 |---|---|---|---|

@@ -51,11 +51,13 @@ function ProfileTree {
     $values = [ordered]@{}
     $root = $Profile.TrimEnd('\')
     $outFull = [IO.Path]::GetFullPath($Out).TrimEnd('\') + '\'
-    $files = Get-ChildItem -LiteralPath $root -Recurse -Force -File -ErrorAction SilentlyContinue | Sort-Object FullName
+    # Folders too, so an empty one a run made (a hooks folder) is caught as surely as a file.
+    $files = Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue | Sort-Object FullName
     foreach ($file in $files) {
         $relative = $file.FullName.Substring($root.Length + 1)
-        if ($file.FullName.StartsWith($outFull, [StringComparison]::OrdinalIgnoreCase)) { continue }
-        if ($relative -like 'tauri-logs\*') { continue }
+        if (($file.FullName + '\').StartsWith($outFull, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if ($relative -eq 'tauri-logs' -or $relative -like 'tauri-logs\*') { continue }
+        if ($file.PSIsContainer) { $values[$relative + '\'] = 'folder'; continue }
         $values[$relative] = Probe { "$($file.Length) $($file.LastWriteTimeUtc.ToString('o')) $((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash)" }
     }
     $values
@@ -91,12 +93,34 @@ function UserConfig {
     }
     $values
 }
+# What delegation may change outside the profile's own files, which a read-only run must leave alone (W7 plan section 4): the listing of
+# %USERPROFILE%\.mightycode\worktrees, the profile's delegation-state.json (its hash), and `git worktree list` of each local workspace the
+# profile names (read with optional locks off, so the probe itself writes nothing).
+function DelegationPlaces {
+    $values = [ordered]@{}
+    $worktrees = Join-Path $env:USERPROFILE '.mightycode\worktrees'
+    $values[$worktrees] = Probe { if (Test-Path -LiteralPath $worktrees) { (Get-ChildItem -LiteralPath $worktrees -Force -ErrorAction Stop | Sort-Object Name | ForEach-Object Name) -join '|' } else { $null } }
+    $file = Join-Path $Profile 'delegation-state.json'
+    $values[$file] = Probe { if (Test-Path -LiteralPath $file) { (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash } else { $null } }
+    $state = Join-Path $Profile 'workspace-state.json'
+    $paths = Probe { if (Test-Path -LiteralPath $state) { @((Get-Content -LiteralPath $state -Raw -Encoding utf8 | ConvertFrom-Json).workspaces | Where-Object { $null -eq $_.remote -and $_.path } | ForEach-Object { [string]$_.path }) } else { @() } }
+    if ($paths -is [string] -and $paths.StartsWith('probe failed')) { $values[$state] = $paths; return $values }
+    $previous = $env:GIT_OPTIONAL_LOCKS; $env:GIT_OPTIONAL_LOCKS = '0'
+    try {
+        foreach ($path in $paths | Sort-Object -Unique) {
+            if (-not (Test-Path -LiteralPath (Join-Path $path '.git'))) { continue }
+            $values["git worktree list $path"] = Probe { ((& git -C $path worktree list --porcelain 2>&1) | Out-String).Trim() }
+        }
+    } finally { $env:GIT_OPTIONAL_LOCKS = $previous }
+    $values
+}
 # The names whose value differs between two probes (added and removed ones included).
 function Changed($Before, $After) {
     @(@($Before.Keys) + @($After.Keys) | Sort-Object -Unique | Where-Object { $Before[$_] -ne $After[$_] })
 }
 
 $treeBefore = if ($readOnly) { ProfileTree } else { $null }; $userBefore = UserConfig
+$placesBefore = if ($readOnly) { DelegationPlaces } else { $null }
 $arguments = @('--smoke-test', '--smoke-exit', '--profile', $Profile, '--smoke-out', $result)
 if ($RealClaude) {
     $arguments += '--smoke-real-claude'
@@ -114,6 +138,7 @@ $watch = [Diagnostics.Stopwatch]::StartNew()
 $process = Start-Process -FilePath $Exe -ArgumentList $arguments -PassThru -Wait -WindowStyle Normal
 $watch.Stop()
 $treeAfter = if ($readOnly) { ProfileTree } else { $null }; $userAfter = UserConfig
+$placesAfter = if ($readOnly) { DelegationPlaces } else { $null }
 $userChanged = Changed $userBefore $userAfter
 $exitCode = $process.ExitCode
 
@@ -128,6 +153,14 @@ if ($readOnly) {
         $exitCode = 1
     } else {
         Write-Output "profile unchanged: $($treeBefore.Count) files"
+    }
+    $placesChanged = Changed $placesBefore $placesAfter
+    if ($placesChanged.Count -gt 0) {
+        Write-Output "DELEGATION PLACES CHANGED (a read-only run must leave the worktrees, the delegation file and the workspaces' worktrees alone):"
+        foreach ($name in $placesChanged) { Write-Output "  $name`: $($placesBefore[$name]) -> $($placesAfter[$name])" }
+        $exitCode = 1
+    } else {
+        Write-Output "delegation places unchanged: $($placesBefore.Count) probes (~\.mightycode\worktrees, delegation-state.json, git worktree list)"
     }
 }
 if ($userChanged.Count -gt 0) {

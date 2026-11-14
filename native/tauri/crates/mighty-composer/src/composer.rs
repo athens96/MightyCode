@@ -34,8 +34,6 @@ pub enum Pending {
     CliMaintenance,
     /// `SetupItemForMissingCli` (setup catalogue, W6).
     Setup,
-    /// `service.SecondSend`, `WorktreeMenuOnly`, `HeldItems`, `Delegation.EndingRuns` (delegation, W7).
-    Delegation,
     /// `BackgroundNoticeRuns.AwaitsNotice` (graph tracker, W3).
     AwaitsNotice,
     /// `RemoteWorkspaceFeatures.BlockedReason` for a remote workspace's pane (W8).
@@ -44,12 +42,11 @@ pub enum Pending {
     Style,
 }
 
-pub const PENDING: [Pending; 8] = [
+pub const PENDING: [Pending; 7] = [
     Pending::Runtime,
     Pending::Attention,
     Pending::CliMaintenance,
     Pending::Setup,
-    Pending::Delegation,
     Pending::AwaitsNotice,
     Pending::RemoteBlock,
     Pending::Style,

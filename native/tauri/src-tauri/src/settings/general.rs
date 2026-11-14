@@ -87,7 +87,8 @@ pub fn set_delegation_on(host: &Host, on: bool) {
         }
         None => lock(&DELEGATION).held = Some(on),
     }
-    host.panes_changed();
+    // C# `SetDelegationOn`: every running pane learns again whether its folder can host a child worktree (delegation.rs, W7-D).
+    crate::delegation::switch_changed(host);
 }
 
 /// `InstalledFamilies`: every installed family and the code picker's (`CodeFamilies`), read once per run from the font catalog

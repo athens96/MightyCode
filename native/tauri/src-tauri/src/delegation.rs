@@ -226,10 +226,16 @@ fn store_folder(host: &Host) -> PathBuf {
     }
     if host.smoke.is_some() {
         let root = smoke_root(host);
+        // A folder of this process's own, never one an earlier process of the same id left (the profile itself is never removed).
+        if root != host.data_dir {
+            let _ = std::fs::remove_dir_all(&root);
+        }
         let _ = std::fs::create_dir_all(&root);
         return root;
     }
     let copy = std::env::temp_dir().join(format!("mighty-delegation-read-only-{}", std::process::id()));
+    // Made afresh: never a file an earlier process of the same id left.
+    let _ = std::fs::remove_dir_all(&copy);
     let _ = std::fs::create_dir_all(&copy);
     let file = DelegationFileStore::new(&host.data_dir).file_path();
     let _ = std::fs::copy(&file, DelegationFileStore::new(&copy).file_path());
@@ -243,8 +249,13 @@ pub fn start(host: &Arc<Host>) {
     let (Some(app), Some(runs)) = (app(), host.runs()) else { return };
     app.attach(runs.service.clone());
     let machine = tauri::Manager::try_state::<crate::workmap::Folders>(&host.app).map(|folders| folders.hooks.clone());
-    let live = host.writes() || host.smoke.is_some();
-    let hooks = if cfg!(windows) { hooks_folder(&host.data_dir, machine.as_deref(), live) } else { PathBuf::from("/dev/null") };
+    // The profile's hooks folder only when the app may write the profile; a smoke's in its own folder (review M2: a read-only smoke of
+    // an existing profile makes nothing in it).
+    let hooks = match (cfg!(windows), host.smoke.is_some()) {
+        (false, _) => PathBuf::from("/dev/null"),
+        (true, true) => smoke_root(host).join("git-no-hooks"),
+        (true, false) => hooks_folder(&host.data_dir, machine.as_deref(), host.writes()),
+    };
     let git = Git::new(host.processes.clone(), hooks);
     // A smoke's worktrees are under its own profile, with room for them whatever the disk says.
     let (root, disk): (String, Arc<dyn mighty_platform::DiskSpace>) = match host.smoke {
@@ -262,17 +273,28 @@ pub fn start(host: &Arc<Host>) {
         switch_on,
     );
     start.locale = Arc::new(move || locale);
+    // Loaded now, as C#'s `StartDelegation` is, so no run started after this goes unrecorded; the sweep of what quitting killed follows.
+    if !app.begin(start) {
+        host.log.line("delegation: the delegation file could not be read; delegation is off for this launch");
+        return;
+    }
+    crate::agent_io::set_delegation_handler(host, Some(Arc::new(CurrentCoordinator)));
+    host.log.line("delegation: started");
     let host = host.clone();
     tauri::async_runtime::spawn(async move {
-        if !app.start(start).await {
-            host.log.line("delegation: the delegation file could not be read; delegation is off for this launch");
-            return;
-        }
-        crate::agent_io::set_delegation_handler(&host, Some(Arc::new(CurrentCoordinator)));
-        host.log.line("delegation: started");
+        app.interrupt_runs_killed_by_quit().await;
         host.panes_changed();
         host.schedule();
     });
+}
+
+/// C# `SetDelegationOn`'s `RefreshRunningWorktreeReadiness`: the switch changed (settings/general.rs), so every running pane learns again
+/// whether its folder can host a child worktree and its Ctrl+Enter follows at once.
+pub fn switch_changed(host: &Host) {
+    if let Some(app) = app() {
+        app.refresh_running_worktree_readiness();
+    }
+    host.panes_changed();
 }
 
 /// Who answers the runs' delegation calls (C# `local.DelegationHandler = coordinator`): the coordinator delegation has now, so a smoke's
@@ -415,9 +437,30 @@ pub async fn send(runs: &crate::runs::Runs, request: StartRunRequest) -> Result<
 /// A confirmation in the page (C# `ShowDelegationDialog` over `WebDialog`): true when the human chose its primary button. None is asked
 /// while another sheet is up.
 async fn confirm(host: &Arc<Host>, dialog: Value) -> bool {
+    let dialog = crate::dialogs::without_nulls(dialog);
+    if let Some(answer) = smoke_dialog_answer(host, &dialog) {
+        return answer;
+    }
     let Some(_sheet) = crate::frame::Sheet::begin(host) else { return false };
-    let (_, answer) = crate::dialogs::of(host).open(crate::dialogs::without_nulls(dialog));
+    let (_, answer) = crate::dialogs::of(host).open(dialog);
     answer.await.unwrap_or(Value::Null) == Value::Bool(true)
+}
+
+/// What answers a confirmation in the delegation smoke instead of the page (C# `smokeDelegationDialog`): it sees the dialog and
+/// answers it, true for its primary button.
+pub type SmokeDialog = Arc<dyn Fn(&Value) -> bool + Send + Sync>;
+
+static SMOKE_DIALOG: Mutex<Option<SmokeDialog>> = Mutex::new(None);
+
+/// The delegation smoke's dialog driver, or None to let the page answer again (smoke_delegation.rs).
+pub fn set_smoke_dialog(driver: Option<SmokeDialog>) {
+    *lock(&SMOKE_DIALOG) = driver;
+}
+
+/// The smoke driver's answer to `dialog`, in a smoke with one set; None lets the page answer (frame.rs's workspace removal asks it too).
+pub fn smoke_dialog_answer(host: &Host, dialog: &Value) -> Option<bool> {
+    let driver = host.smoke.as_ref().and_then(|_| lock(&SMOKE_DIALOG).clone())?;
+    Some(driver(dialog))
 }
 
 /// C# `RunInNewWorktree` (MainWindow.Delegation.cs:396-425): the composer's second send on the busy pane `pane`, the worktree menu's pick

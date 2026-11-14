@@ -458,6 +458,11 @@ fn main() {
                 updates::shutdown(&host);
                 // The agents' bindings revoked and their listener closed (agent_io.rs, W7-C), delegation's retries stopped (W7-D).
                 agent_io::shutdown(&host);
+                // Every run stopped and ended before delegation stops (C# DisposeAsync: `local.DisposeAsync`, then `StopDelegation`), so a
+                // child killed by quitting is recorded with its quit end; `host.close` below then makes the last save.
+                if let Some(runs) = host.runs() {
+                    tauri::async_runtime::block_on(runs.service.dispose());
+                }
                 delegation::shutdown(&host);
                 // The last save (C# DesktopService.DisposeAsync), written only with --allow-state-write.
                 host.close();

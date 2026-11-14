@@ -273,16 +273,27 @@ impl DelegationApp {
     /// file whether or not the switch is on; an unreadable file leaves delegation unavailable this launch (false). Children whose runs
     /// quitting killed come back interrupted, before any pane runs again.
     pub async fn start(&self, start: DelegationStart) -> bool {
-        *lock(&self.start) = Some(start);
-        if !self.load() {
-            return false;
+        self.begin(start) && {
+            self.interrupt_runs_killed_by_quit().await;
+            true
         }
+    }
+
+    /// C# `StartDelegation` alone, synchronously, so no run the app starts after it goes unrecorded: the coordinator made from the
+    /// delegation file; false when it cannot be read.
+    pub fn begin(&self, start: DelegationStart) -> bool {
+        *lock(&self.start) = Some(start);
+        self.load()
+    }
+
+    /// C# `InterruptRunsKilledByQuit` (DesktopService.cs:136-138): children whose runs quitting killed come back interrupted, before any
+    /// pane runs again. Nothing in a read-only launch (W7 plan D2).
+    pub async fn interrupt_runs_killed_by_quit(&self) {
         if self.window.live()
             && let Some(coordinator) = self.coordinator()
         {
             coordinator.interrupt_runs_killed_by_quit().await;
         }
-        true
     }
 
     fn load(&self) -> bool {
@@ -300,14 +311,14 @@ impl DelegationApp {
         let host: Arc<dyn DelegationHost> = Arc::new(HostLink(self.me.clone()));
         let Ok(coordinator) = Coordinator::new(DelegationFileStore::new(&start.store), host, options) else { return false };
         // A child's end is recorded (the app's commit of its work among it) before its queue or delivery may start its next run.
-        let me = self.me.clone();
+        let (me, receiving) = (self.me.clone(), coordinator.clone());
         let pump = Arc::new(DelegationRunEventPump::new(
             &self.runtime,
             Arc::new(move |change| {
-                let me = me.clone();
+                let (me, coordinator) = (me.clone(), receiving.clone());
                 Box::pin(async move {
                     if let Some(app) = me.upgrade() {
-                        app.hand_on(change).await;
+                        app.hand_on(&coordinator, change).await;
                     }
                 })
             }),
@@ -341,8 +352,7 @@ impl DelegationApp {
     }
 
     /// Hands one run event of a child to the coordinator (C# `ChildRunStarted`, `ChildRunEndRecorded`).
-    async fn hand_on(&self, change: DelegationRunEvent) {
-        let Some(coordinator) = self.coordinator() else { return };
+    async fn hand_on(&self, coordinator: &Coordinator, change: DelegationRunEvent) {
         match change {
             DelegationRunEvent::Started { child_id, run_id } => coordinator.child_run_started(&child_id, &run_id).await,
             DelegationRunEvent::Ended { child_id, run_id, end } => {
@@ -603,6 +613,9 @@ impl DelegationApp {
     /// C# `RefreshWorktreeReadiness`: checks again whether the pane's folder can host a child worktree; one check per folder at a time,
     /// a changed answer redraws.
     pub fn refresh_worktree_readiness(&self, session: &RunSession) {
+        if !self.window.live() {
+            return;
+        }
         let Some(coordinator) = self.coordinator() else { return };
         let mode = session.settings.as_ref().map(|s| s.permission_mode.clone()).unwrap_or_default();
         if session.parent_session_id.is_some()
@@ -616,8 +629,11 @@ impl DelegationApp {
             return;
         }
         let me = self.me.clone();
+        let runtime = self.runtime.clone();
         self.runtime.spawn(async move {
-            let ready = coordinator.worktrees().check(&folder).await.can_host_worktree();
+            let checking = folder.clone();
+            let check = runtime.spawn(async move { coordinator.worktrees().check(&checking).await.can_host_worktree() });
+            let ready = check.await.unwrap_or(false);
             let Some(app) = me.upgrade() else { return };
             let changed = {
                 let mut cards = lock(&app.cards);
@@ -756,7 +772,9 @@ impl DelegationApp {
     /// started). A start that is refused or fails gives its error.
     pub async fn send(&self, request: StartRunRequest) -> Result<DelegationRelease, RunError> {
         let service = self.service().cloned().ok_or_else(|| RunError::State("the run engine is not ready".into()))?;
-        let coordinator = self.coordinator().filter(|coordinator| !coordinator.held_items(&request.session_id).is_empty());
+        // A read-only launch (W7 plan D2) hands nothing held to a run: the send starts as the service starts it.
+        let coordinator =
+            self.coordinator().filter(|coordinator| self.window.live() && !coordinator.held_items(&request.session_id).is_empty());
         let Some(coordinator) = coordinator else {
             return Ok(if service.start(request).await?.is_some() {
                 DelegationRelease::NothingHeld
@@ -797,7 +815,7 @@ impl DelegationApp {
 
     /// C# `RunNextAsync`: items held for the pane go first, all of them in one run, steered into its running Claude run when it has one.
     pub async fn run_next(&self, session_id: &str) -> DelegationRelease {
-        match self.coordinator() {
+        match self.coordinator().filter(|_| self.window.live()) {
             Some(coordinator) => coordinator.run_next(session_id).await,
             None => DelegationRelease::NothingHeld,
         }
@@ -978,7 +996,12 @@ impl DelegationApp {
             let owned = id.to_string();
             self.card_action(id, DelegationCardAction::Merge, work(merging, owned)).await
         } else {
-            lock(&self.cards).retrying.insert(id.to_string());
+            {
+                let mut cards = lock(&self.cards);
+                if cards.busy.contains(id) || !cards.retrying.insert(id.to_string()) {
+                    return None;
+                }
+            }
             let result = work(coordinator.clone(), id.to_string()).await;
             lock(&self.cards).retrying.remove(id);
             let note = DelegationCardNote { action: DelegationCardAction::Merge, result };
@@ -1303,7 +1326,9 @@ impl DelegationRunHooks for DelegationApp {
             let ended = app.stop_and_wait(&id).await;
             app.window.end_agent_terminal(id.clone()).await;
             app.runs.forget(&id);
-            let outcome = coordinator.close_child(&id, !ended).await;
+            let closing = id.clone();
+            let task = app.runtime.spawn(async move { coordinator.close_child(&closing, !ended).await });
+            let outcome = task.await.unwrap_or_else(|error| ChildCleanupOutcome::Failed(error.to_string()));
             let _ = close.send(Some(outcome));
             app.window.changed();
         });
