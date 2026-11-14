@@ -132,7 +132,8 @@ async fn start_run(
         }
         request
     };
-    match engine.service.start(request).await {
+    // C# `SendAsync`: the items delegation holds for the pane go with it, ahead of its words, in one run (delegation.rs).
+    match crate::delegation::send(&engine, request).await {
         Ok(Some(())) => {
             let made = lock(&receipt);
             Ok(Some((made.entry_id.clone(), made.graph_run_id.clone())))

@@ -102,7 +102,7 @@ fn place(name: &str) -> Place {
         ..AppSnapshot::default()
     };
     let window = Arc::new(Window::default());
-    let app = DelegationApp::new(window.clone());
+    let app = DelegationApp::new(tokio::runtime::Handle::current(), window.clone());
     let finder: Finder = Arc::new(|_: String| Box::pin(async { None }));
     let catalog = Arc::new(ProviderCatalog::new(
         Arc::new(mighty_platform::fake::FakeProcessHost::default()),

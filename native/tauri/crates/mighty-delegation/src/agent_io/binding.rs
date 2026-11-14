@@ -66,20 +66,8 @@ impl Revocation {
     }
 }
 
-/// `DelegationProviders.CanParentByAgent`: an agent pane (kind claude) running Claude or Codex may delegate by tool.
-fn can_parent_by_agent(kind: &str, provider: &str) -> bool {
-    kind == "claude" && matches!(provider, "claude" | "codex")
-}
-
-/// `DelegationProviders.CodexApprovesTools`: a Codex run in acceptEdits or fullAccess approves the delegation server's tools ahead.
-pub fn codex_approves_tools(mode: &str) -> bool {
-    matches!(mode, "acceptEdits" | "fullAccess")
-}
-
-/// `DelegationProviders.AttachesDelegation`: every Claude run, and a Codex run in acceptEdits or fullAccess, gets the delegation tools.
-pub fn attaches_delegation(kind: &str, provider: &str, mode: &str) -> bool {
-    can_parent_by_agent(kind, provider) && (provider != "codex" || codex_approves_tools(mode))
-}
+/// `DelegationProviders.CodexApprovesTools` and `AttachesDelegation`: the delegation core's rules (W7-A's [`crate::providers`]).
+pub use crate::providers::{attaches_delegation, codex_approves_tools};
 
 /// What `ConnectDelegation` set: who answers the run's delegation calls, the mode it started in, whether it got the server.
 #[derive(Default)]

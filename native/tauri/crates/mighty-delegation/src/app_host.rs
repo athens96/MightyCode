@@ -19,20 +19,8 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::host::{DelegationChildPane, DelegationPaneActivity, DelegationPaneState};
+pub use crate::reports::ChildRunEnd;
 use crate::request::DelegationReasonCode;
-
-/// How a run in a child's pane ended, as the host saw it (C# `ChildRunEnd`, DelegationReports.cs:7-17; M/DelegationReports.swift:5-15).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ChildRunEnd {
-    /// It finished normally.
-    Finished,
-    /// A human stopped it.
-    Stopped,
-    /// It ended with an error.
-    Errored,
-    /// Quitting the app killed it.
-    Quit,
-}
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -329,6 +317,24 @@ impl DelegationRunEventPump {
             }
         });
         DelegationRunEventPump { events: Mutex::new(Some(events)), pump: Mutex::new(Some(pump)) }
+    }
+
+    /// C# `new DelegationRunEventPump(coordinator)`: each event reaches the coordinator's record of its child's runs.
+    pub fn for_coordinator(runtime: &tokio::runtime::Handle, coordinator: crate::coordinator::Coordinator) -> DelegationRunEventPump {
+        DelegationRunEventPump::new(
+            runtime,
+            Arc::new(move |change| {
+                let coordinator = coordinator.clone();
+                Box::pin(async move {
+                    match change {
+                        DelegationRunEvent::Started { child_id, run_id } => coordinator.child_run_started(&child_id, &run_id).await,
+                        DelegationRunEvent::Ended { child_id, run_id, end } => {
+                            coordinator.child_run_ended(&child_id, &run_id, end).await;
+                        }
+                    }
+                })
+            }),
+        )
     }
 
     /// An event to hand on; none is taken after [`DelegationRunEventPump::finish`].

@@ -15,9 +15,10 @@
 //!
 //! Gating (W7 plan section 4): without `--allow-state-write` delegation is read-only (the file read, the tree and held rows shown; the
 //! server not attached; Ctrl+Enter queues; card actions and child-close cleanup explain why they did nothing); a smoke runs it for real
-//! only on its fixture under its own profile. Every git step asks [`Host::may_touch_repo`], every live action [`Host::delegation_live`].
+//! only on its fixture under its own profile. Every git step asks [`may_touch`], every live action [`Host::delegation_live`].
 
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
 use mighty_composer::composer::HeldItem;
@@ -25,8 +26,22 @@ use mighty_composer::queue::{self, ComposerSecondSend, QueuedComposerInput};
 use mighty_core::attachment::RunAttachment;
 use mighty_core::model::{AppSnapshot, RunSession};
 use mighty_core::shell::SidebarChild;
-use mighty_delegation::app::{DelegationApp, DelegationWindow};
+use mighty_delegation::app::{DelegationApp, DelegationStart, DelegationWindow};
+use mighty_delegation::cards::{DelegationCardAction, DelegationCardResult, PendingChildDiscard};
+use mighty_delegation::delivery::DelegationRelease;
+use mighty_delegation::git::Git;
+use mighty_delegation::git::paths::DelegationPaths;
+use mighty_delegation::git::worktree::{self, Maker};
+use mighty_delegation::host::DelegationAgentAvailability;
+use mighty_delegation::providers::{self, DelegationChildBlock, DelegationChildChoice};
+use mighty_delegation::request::{
+    DelegationCaller, DelegationHandler, DelegationIoHandler, DelegationName, DelegationRequest, DelegationResponse,
+};
+use mighty_delegation::store::DelegationFileStore;
+use mighty_delegation::text;
+use mighty_delegation::tools::delegate::HumanChildStart;
 use mighty_platform::BoxFuture;
+use mighty_platform::fake::FixedDiskSpace;
 use mighty_run::model::{RunEvent, StartRunRequest};
 use mighty_run::service::DelegationRunHooks;
 use serde_json::{Value, json};
@@ -41,6 +56,18 @@ static APP: Mutex<Option<Arc<DelegationApp>>> = Mutex::new(None);
 /// The app's delegation, once runs.rs made it.
 pub fn app() -> Option<Arc<DelegationApp>> {
     lock(&APP).clone()
+}
+
+/// C# `smokeAgentsReady`: agents the delegation smoke treats as ready whatever the CLI search found (its scripted Claude).
+static SMOKE_READY: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// The delegation smoke's word that `provider`'s CLI is ready (smoke_delegation.rs).
+pub fn set_smoke_agent_ready(provider: &str, ready: bool) {
+    let mut ready_now = lock(&SMOKE_READY);
+    ready_now.retain(|agent| agent != provider);
+    if ready {
+        ready_now.push(provider.to_string());
+    }
 }
 
 /// The window's part of delegation (C# MainWindow.Delegation.cs `InitializeDelegation`), over the host it does not keep alive.
@@ -78,6 +105,45 @@ impl DelegationWindow for Window {
             }
             request
         })
+    }
+
+    /// C# `EndAgentTerminal` (agent_io.rs): the pane's agent terminal and everything it started, ended.
+    fn end_agent_terminal(&self, session_id: String) -> BoxFuture<'static, ()> {
+        let host = self.host.upgrade();
+        Box::pin(async move {
+            if let Some(host) = host {
+                crate::agent_io::end_agent_terminal(&host, &session_id).await;
+            }
+        })
+    }
+
+    /// C# `AgentAvailabilityFromCli`: found by the CLI search the run engine made, and not signed out by the account status last read;
+    /// no CLI is asked.
+    fn agent_availability(&self, provider: &str) -> DelegationAgentAvailability {
+        let Some(host) = self.host.upgrade() else { return DelegationAgentAvailability::Ready };
+        if host.smoke.is_some() && lock(&SMOKE_READY).iter().any(|agent| agent == provider) {
+            return DelegationAgentAvailability::Ready;
+        }
+        let installed = host.runs().and_then(|runs| runs.runtime(provider)).map(|runtime| runtime.available);
+        let account = crate::accounts::statuses(&host).into_iter().find(|status| status.provider == provider);
+        providers::availability(installed, account.as_ref())
+    }
+
+    /// W7 plan D2: delegation acts with `--allow-state-write` or in a smoke.
+    fn live(&self) -> bool {
+        self.host.upgrade().is_some_and(|host| host.delegation_live())
+    }
+
+    /// C# `QueuedMergeDone`: the discard is offered as after a merge the human waited for.
+    fn queued_merge_done(&self, child_id: &str) {
+        let (Some(host), Some(app)) = (self.host.upgrade(), app()) else { return };
+        let id = child_id.to_string();
+        tauri::async_runtime::spawn(async move {
+            if !host.closing() {
+                offer_discard_after_merge(&host, &app, &id).await;
+                host.schedule();
+            }
+        });
     }
 
     /// The state changed through the run service: the page's copy follows on the next tick.
@@ -125,39 +191,149 @@ fn run_block_reason(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) -> O
     })
 }
 
-/// Delegation's start with the app (C# `DesktopService.InitializeAsync`'s delegation half, then `InterruptRunsKilledByQuit`), after the
-/// run service is up (runs.rs): the app made with the service's hooks is attached to it.
-pub fn start(host: &Arc<Host>) {
-    if let (Some(app), Some(runs)) = (app(), host.runs()) {
-        app.attach(runs.service.clone());
+/// The delegation's git hooks folder (C# `DelegationGit.UseProfile(profile)` → `<profile>\git-no-hooks`): the profile's when the app may
+/// write it (`--allow-state-write`, or a smoke's own profile), else this machine's own empty folder for the profile, the work map's
+/// (`workmap::Folders::hooks`), so a read-only launch writes nothing in the profile. Never under the install folder.
+pub fn hooks_folder(data_dir: &Path, machine: Option<&Path>, writes: bool) -> PathBuf {
+    match machine {
+        Some(machine) if !writes => machine.to_path_buf(),
+        _ => data_dir.join("git-no-hooks"),
     }
 }
 
-/// The app quits: the merge queue's retries and the coordinator's pump stop (C# `DesktopService.DisposeAsync`'s delegation half).
+/// The folder a smoke's delegation works in (its fixture repositories, its worktrees, its delegation file and hooks folder): the smoke's
+/// own profile when the smoke may write it, else a folder of this process's own, so a read-only smoke of an existing profile
+/// (`smoke.ps1 -Profile`) leaves every file of it alone.
+pub fn smoke_root(host: &Host) -> PathBuf {
+    if host.writes() { host.data_dir.clone() } else { std::env::temp_dir().join(format!("mighty-delegation-smoke-{}", std::process::id())) }
+}
+
+/// Whether a git step of delegation that writes may touch the repository or worktree folder at `path` ([`Host::may_touch_repo`]); in a
+/// smoke also the smoke's own delegation folder ([`smoke_root`]) as written: an absolute path with no `..` inside it.
+pub fn may_touch(host: &Host, path: &Path) -> bool {
+    host.may_touch_repo(path)
+        || host.smoke.is_some()
+            && path.is_absolute()
+            && !path.components().any(|part| matches!(part, std::path::Component::ParentDir))
+            && path.starts_with(smoke_root(host))
+}
+
+/// Where `delegation-state.json` is kept this launch: the profile when delegation may write it (W7 plan section 4), else a copy made
+/// now in a folder of this process's own, so the tree and held rows show and nothing reaches the profile's file.
+fn store_folder(host: &Host) -> PathBuf {
+    if host.writes() {
+        return host.data_dir.clone();
+    }
+    if host.smoke.is_some() {
+        let root = smoke_root(host);
+        let _ = std::fs::create_dir_all(&root);
+        return root;
+    }
+    let copy = std::env::temp_dir().join(format!("mighty-delegation-read-only-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&copy);
+    let file = DelegationFileStore::new(&host.data_dir).file_path();
+    let _ = std::fs::copy(&file, DelegationFileStore::new(&copy).file_path());
+    copy
+}
+
+/// Delegation's start with the app (C# `DesktopService.InitializeAsync`'s delegation half, then `InterruptRunsKilledByQuit`), after the
+/// run service is up (runs.rs): the app attached to the service, the coordinator made from the delegation file (an unreadable file
+/// leaves delegation unavailable this launch), and the runs' delegation calls handed to it (agent_io.rs).
+pub fn start(host: &Arc<Host>) {
+    let (Some(app), Some(runs)) = (app(), host.runs()) else { return };
+    app.attach(runs.service.clone());
+    let machine = tauri::Manager::try_state::<crate::workmap::Folders>(&host.app).map(|folders| folders.hooks.clone());
+    let live = host.writes() || host.smoke.is_some();
+    let hooks = if cfg!(windows) { hooks_folder(&host.data_dir, machine.as_deref(), live) } else { PathBuf::from("/dev/null") };
+    let git = Git::new(host.processes.clone(), hooks);
+    // A smoke's worktrees are under its own profile, with room for them whatever the disk says.
+    let (root, disk): (String, Arc<dyn mighty_platform::DiskSpace>) = match host.smoke {
+        Some(_) => (smoke_root(host).join("worktrees").to_string_lossy().into_owned(), Arc::new(FixedDiskSpace(u64::MAX))),
+        None => (worktree::default_root(&crate::composer::dirs_home().to_string_lossy()), crate::platform::disk_space()),
+    };
+    let switch_host = Arc::downgrade(host);
+    let switch_on: Arc<dyn Fn() -> bool + Send + Sync> =
+        Arc::new(move || switch_host.upgrade().is_some_and(|host| crate::settings::general::delegation_on(&host)));
+    let locale = host.locale;
+    let mut start = DelegationStart::new(
+        store_folder(host),
+        Maker::new(&root, git, disk),
+        DelegationPaths::new(crate::platform::file_ports().handles),
+        switch_on,
+    );
+    start.locale = Arc::new(move || locale);
+    let host = host.clone();
+    tauri::async_runtime::spawn(async move {
+        if !app.start(start).await {
+            host.log.line("delegation: the delegation file could not be read; delegation is off for this launch");
+            return;
+        }
+        crate::agent_io::set_delegation_handler(&host, Some(Arc::new(CurrentCoordinator)));
+        host.log.line("delegation: started");
+        host.panes_changed();
+        host.schedule();
+    });
+}
+
+/// Who answers the runs' delegation calls (C# `local.DelegationHandler = coordinator`): the coordinator delegation has now, so a smoke's
+/// restart (C# `RestartDelegationAsync`, which sets it again) is followed at once; without one, C#'s handler of no coordinator.
+struct CurrentCoordinator;
+
+impl DelegationHandler for CurrentCoordinator {
+    fn handle(&self, request: DelegationRequest, caller: DelegationCaller) -> BoxFuture<'static, DelegationResponse> {
+        match app().and_then(|app| app.coordinator()) {
+            Some(coordinator) => coordinator.handle(request, caller),
+            None => DelegationIoHandler::new(|| false).handle(request, caller),
+        }
+    }
+}
+
+/// The app quits, once every run has ended: the coordinator's pump, the children's closes, the merge retry and the watches stop (C#
+/// `StopDelegation`), and the runs' delegation calls are answered by no coordinator.
 pub fn shutdown(host: &Host) {
-    let _ = host;
+    crate::agent_io::set_delegation_handler(host, None);
+    if let Some(app) = app() {
+        tauri::async_runtime::block_on(async move {
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(3), app.stop()).await;
+        });
+    }
+    if !host.writes() {
+        let own = match host.smoke {
+            Some(_) => smoke_root(host),
+            None => std::env::temp_dir().join(format!("mighty-delegation-read-only-{}", std::process::id())),
+        };
+        let _ = std::fs::remove_dir_all(own);
+    }
 }
 
 /// The run service's hooks (mighty-run `service::DelegationRunHooks`: `DelegationWorktreeRoot`, `DelegationRunBegan`,
 /// `DelegationRunEnded`, the end of `Receive`, `PaneClosed`), read once as runs.rs makes the service: the app's delegation, made here.
 pub fn run_hooks(host: &Arc<Host>) -> Option<Arc<dyn DelegationRunHooks>> {
-    let app = DelegationApp::new(Arc::new(Window { host: Arc::downgrade(host) }));
+    let app = DelegationApp::new(tauri::async_runtime::handle().inner().clone(), Arc::new(Window { host: Arc::downgrade(host) }));
     *lock(&APP) = Some(app.clone());
     Some(app)
 }
 
-/// Each run event before the pane takes it, from runs.rs's pump. The offers and merges C# makes after `Receive` (DesktopService.cs:
-/// 271-275) are the service hook's ([`DelegationRunHooks::received`]); here the window's own part (a child's ending run redraws its
-/// composer).
+/// Each run event before the pane takes it, from runs.rs's pump: a running pane learns again whether its folder can host a child
+/// worktree (C# `ReceiveQueueRunEvent`'s `RefreshWorktreeReadiness`). The offers and merges C# makes after `Receive`
+/// (DesktopService.cs:271-275) are the service hook's ([`DelegationRunHooks::received`]).
 pub fn on_run_event(host: &Arc<Host>, event: &RunEvent) {
-    let _ = (host, event);
+    if event.kind != "status" || event.status.as_deref() != Some("running") {
+        return;
+    }
+    let Some(app) = app() else { return };
+    let pane = app.service().and_then(|service| service.snapshot().session(&event.session_id).cloned());
+    if let Some(pane) = pane {
+        app.refresh_worktree_readiness(&pane);
+    }
+    let _ = host;
 }
 
 /// The sidebar's delegated children (C# `DelegationSidebar.Rows` with the card notes and busy cards), read by the frame model with the
-/// state locked: it reads delegation's own state and `snapshot`, never `host.view()`.
+/// state locked: it reads delegation's own state, never `host.view()`.
 pub fn sidebar_rows(host: &Host, snapshot: &AppSnapshot) -> Vec<SidebarChild> {
     let _ = (host, snapshot);
-    vec![]
+    app().map(|app| app.sidebar_children()).unwrap_or_default()
 }
 
 /// What the composer reads of delegation for one pane (`WindowRules`' `SecondSend`, `WorktreeMenuOnly`, `HeldItems`, `EndingRun`).
@@ -169,39 +345,79 @@ pub struct WindowInputs {
 }
 
 /// The pane's composer inputs (C# `owner.SecondSend(pane)`, `WorktreeMenuOnly`, `HeldItems`, `Delegation.EndingRuns.Contains`), read
-/// with the state locked as [`sidebar_rows`]. At rest: Ctrl+Enter queues, no menu, nothing held, no run ending.
+/// with the state locked as [`sidebar_rows`]. A style's plan-first launch is the style engine's (W9): none starts in plan mode yet.
 pub fn window_inputs(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) -> WindowInputs {
-    let _ = (host, snapshot, pane);
-    WindowInputs { second_send: ComposerSecondSend::Queue, worktree_menu_only: false, held_items: vec![], ending_run: false }
+    let _ = host;
+    let Some(app) = app() else {
+        return WindowInputs { second_send: ComposerSecondSend::Queue, worktree_menu_only: false, held_items: vec![], ending_run: false };
+    };
+    WindowInputs {
+        second_send: app.second_send(snapshot, pane),
+        worktree_menu_only: app.worktree_menu_only(snapshot, pane, false),
+        held_items: app.held_items(pane.id()).into_iter().map(|item| HeldItem { id: item.id, text: item.text }).collect(),
+        ending_run: app.ending_run(pane.id()),
+    }
 }
 
 /// C# `delegation?.EndingRuns.Contains(pane.Id)`: a delegated child still recording its last run's end (the manual updates' block,
 /// updates.rs). Read with the state locked.
 pub fn ending_run(host: &Host, pane: &str) -> bool {
-    let _ = (host, pane);
-    false
+    let _ = host;
+    app().is_some_and(|app| app.ending_run(pane))
 }
 
-/// What closing a pane does first (C# `ClosePane`: the parent-close question `delegation-parent-close-<id>`, a child's close cleanup).
+/// What closing a pane does first (C# `ClosePane`: the parent-close question `delegation-parent-close-<id>`).
 pub enum CloseDecision {
-    /// Close it (after whatever cleanup ran).
+    /// Close it (a delegated child's close cleanup follows through the run service's `PaneClosed`).
     Close,
     /// The user kept it open.
-    #[allow(dead_code, reason = "asked once the coordinator's open children are read (C# `ParentCloseQuestion`, W7 phase 2)")]
     Keep,
 }
 
-/// Asked by frame.rs's `closeSession` before the pane's run stops.
+/// Asked by frame.rs's `closeSession` before the pane's run stops: a parent pane with open children asks first (C#
+/// MainWindow.Navigation.cs:377, `ConfirmParentClose`); confirmed, only the parent closes and its children stay under a 'parent
+/// closed' node.
 pub async fn before_close(host: &Arc<Host>, pane: &str) -> CloseDecision {
-    let _ = (host, pane);
-    CloseDecision::Close
+    let Some(question) = app().and_then(|app| app.parent_close_question(pane)) else { return CloseDecision::Close };
+    let locale = host.locale;
+    let confirmed = confirm(
+        host,
+        json!({
+            "type": "confirm", "title": locale.get("delegation.parentClose.title"),
+            "message": text::parent_close_message(&question, &locale),
+            "primary": locale.get("delegation.parentClose.confirm"), "close": locale.get("resume.cancel"),
+            "defaultPrimary": false, "destructive": false,
+        }),
+    )
+    .await;
+    if confirmed && !host.closing() { CloseDecision::Close } else { CloseDecision::Keep }
 }
 
 /// C# `WorkspaceRemovalRefusal`: `delegation.workspace.hasChildren` while an open child or a kept worktree is in the workspace; None
 /// lets frame.rs's `removeWorkspace` ask.
 pub fn removal_refusal(host: &Host, workspace: &str) -> Option<String> {
-    let _ = (host, workspace);
-    None
+    let reason = app()?.workspace_removal_refusal(workspace)?;
+    Some(host.locale.get_with("delegation.workspace.hasChildren", &[("code", reason.name())]))
+}
+
+/// C# `SendAsync` (the composer's send and the queue's start): with items held for the pane they go first, all of them, in the one run
+/// the human's words start; otherwise the request starts as the run service starts it. None when no run started.
+pub async fn send(runs: &crate::runs::Runs, request: StartRunRequest) -> Result<Option<()>, mighty_run::RunError> {
+    match app() {
+        Some(app) => Ok(match app.send(request).await? {
+            DelegationRelease::NotStarted => None,
+            DelegationRelease::NothingHeld | DelegationRelease::Released { .. } => Some(()),
+        }),
+        None => runs.service.start(request).await,
+    }
+}
+
+/// A confirmation in the page (C# `ShowDelegationDialog` over `WebDialog`): true when the human chose its primary button. None is asked
+/// while another sheet is up.
+async fn confirm(host: &Arc<Host>, dialog: Value) -> bool {
+    let Some(_sheet) = crate::frame::Sheet::begin(host) else { return false };
+    let (_, answer) = crate::dialogs::of(host).open(crate::dialogs::without_nulls(dialog));
+    answer.await.unwrap_or(Value::Null) == Value::Bool(true)
 }
 
 /// C# `RunInNewWorktree` (MainWindow.Delegation.cs:396-425): the composer's second send on the busy pane `pane`, the worktree menu's pick
@@ -218,16 +434,60 @@ pub fn run_in_new_worktree(
     agent: Option<String>,
     queued: Option<QueuedComposerInput>,
 ) {
-    let provider = host.view().snapshot.session(pane).map(|p| p.provider().to_string()).unwrap_or_default();
+    let (provider, plan_first) = {
+        let view = host.view();
+        let provider = view.snapshot.session(pane).map(|p| p.provider().to_string()).unwrap_or_default();
+        let launches = view.panes.get(pane).is_some_and(|ui| ui.view.launches_in_plan_mode);
+        (provider, queued.as_ref().map_or(launches, |row| row.permission_mode_override.as_deref() == Some("plan")))
+    };
     let to_composer = queue::returns_to_composer(agent.as_deref(), &provider);
     let (host, parent) = (host.clone(), pane.to_string());
+    let back = Arc::new(Mutex::new(Some((queued, text.clone(), files.clone()))));
+    // A pane that went away meanwhile has no composer to fall back to: the text is the child's failed task on its card.
+    let fall_back = {
+        let (host, parent, back) = (host.clone(), parent.clone(), back.clone());
+        move |reason: String| {
+            let Some((queued, text, files)) = lock(&back).take() else { return };
+            match queued {
+                Some(row) => put_back_queued_row(&host, &parent, row, &reason),
+                None if to_composer => return_to_composer(&host, &parent, text, files, &reason),
+                None => run_after_no_worktree(&host, &parent, text, files, &reason),
+            }
+            host.schedule();
+        }
+    };
+    let fall_back = Arc::new(fall_back);
     tauri::async_runtime::spawn(async move {
-        let reason = host.locale.get("delegation.human.error.switchedOff");
-        // A pane that went away meanwhile has no composer to fall back to.
-        match queued {
-            Some(row) => put_back_queued_row(&host, &parent, row, &reason),
-            None if to_composer => return_to_composer(&host, &parent, text, files, &reason),
-            None => run_after_no_worktree(&host, &parent, text, files, &reason),
+        let Some(app) = app() else {
+            fall_back(host.locale.get("delegation.human.error.switchedOff"));
+            return;
+        };
+        // Delegation acts only with `--allow-state-write` or in a smoke, and git only in a repository it may touch (W7 plan section 4).
+        let folder = {
+            let view = host.view();
+            view.snapshot.session(&parent).map(|p| {
+                p.working_folder
+                    .clone()
+                    .unwrap_or_else(|| view.snapshot.workspace(p.workspace_id()).map(|w| w.path().to_string()).unwrap_or_default())
+            })
+        };
+        if !host.delegation_live() || !folder.is_some_and(|folder| may_touch(&host, Path::new(&folder))) {
+            fall_back(crate::setup::verification_mode());
+            return;
+        }
+        let failed_back = fall_back.clone();
+        let failed: Arc<dyn Fn(String) -> BoxFuture<'static, ()> + Send + Sync> = Arc::new(move |_child: String| {
+            let failed_back = failed_back.clone();
+            Box::pin(async move { failed_back(mighty_run::strings::get("delegation.human.error.startFailed")) })
+        });
+        let answer = app.start_human_child(&parent, &text, files, plan_first, failed, agent.as_deref(), false).await;
+        let reason = match answer {
+            HumanChildStart::Refused(reason) => Some(text::reason(reason, &host.locale)),
+            HumanChildStart::Failed(message) => Some(message),
+            HumanChildStart::Started(_) => None,
+        };
+        if let Some(reason) = reason {
+            fall_back(reason);
         }
         host.schedule();
     });
@@ -336,26 +596,194 @@ pub fn release_held_now(host: &Arc<Host>, id: &str) {
         host.view().error = Some(blocked);
         return;
     }
-    crate::composer::drain_queue(host.clone(), id.to_string());
+    let (host, id) = (host.clone(), id.to_string());
+    tauri::async_runtime::spawn(async move {
+        let release = match app() {
+            Some(app) => app.run_next(&id).await,
+            None => DelegationRelease::NothingHeld,
+        };
+        match release {
+            DelegationRelease::NotStarted => host.view().error = Some(mighty_run::strings::get("remote.error.startFailed")),
+            // Taken meanwhile by another run: the first queued row runs now, as run next did.
+            DelegationRelease::NothingHeld => crate::composer::drain_queue(host.clone(), id.clone()),
+            DelegationRelease::Released { .. } => {}
+        }
+        if let Some(ui) = host.view().panes.get_mut(&id) {
+            ui.dirty = true;
+        }
+        host.schedule();
+    });
 }
 
 /// C# `OffersWorktreeMenu`: whether the worktree button, and its menu, shows on the busy pane (its second send opens a worktree, or
 /// only another agent's child could). Read with the state locked.
 pub fn offers_worktree_menu(host: &Host, snapshot: &AppSnapshot, pane: &str) -> bool {
-    let Some(pane) = snapshot.session(pane) else { return false };
-    let inputs = window_inputs(host, snapshot, pane);
-    inputs.second_send == ComposerSecondSend::Worktree || inputs.worktree_menu_only
+    let _ = host;
+    let (Some(app), Some(pane)) = (app(), snapshot.session(pane)) else { return false };
+    app.offers_worktree_menu(snapshot, pane, false)
 }
 
-/// `queueRunNowMenu`'s rows (`[{agent, text, enabled}]`, C# `OffersWorktreeMenu`): none at rest.
+/// `queueRunNowMenu`'s rows (C# `WebRunNowChoices`): each agent of the worktree menu, its row's words and whether it can run now; none
+/// while the menu is not on offer.
 pub fn run_now_menu(host: &Host, pane: &str) -> Value {
-    let _ = (host, pane);
-    json!([])
+    let snapshot = host.view().snapshot.clone();
+    let (Some(app), Some(session)) = (app(), snapshot.session(pane)) else { return json!([]) };
+    if !app.offers_worktree_menu(&snapshot, session, false) {
+        return json!([]);
+    }
+    let rows: Vec<Value> = app
+        .worktree_child_choices(session, false)
+        .into_iter()
+        .map(|choice| {
+            let title = choice_title(&host.locale, &choice);
+            json!({
+                "agent": choice.agent,
+                "text": mighty_composer::runtime::beta_label(&choice.agent, &title, &host.locale),
+                "enabled": choice.blocked.is_none(),
+            })
+        })
+        .collect();
+    Value::Array(rows)
+}
+
+/// C# `WorktreeChoiceTitle(choice, parent, marksShortcut: false)`: the agent and the mode its child starts in, or why it cannot run it.
+fn choice_title(locale: &mighty_core::locale::Locale, choice: &DelegationChildChoice) -> String {
+    let agent = mighty_composer::runtime::provider_label(&choice.agent);
+    let Some(blocked) = choice.blocked else {
+        let mode = mighty_composer::runtime::permission_label(&choice.agent, choice.mode.as_deref().unwrap_or(""), locale);
+        return locale.get_with("composer.worktreeMenu.agent", &[("agent", agent), ("mode", &mode)]);
+    };
+    let reason = locale.get(match blocked {
+        DelegationChildBlock::NotInstalled => "composer.worktreeMenu.notInstalled",
+        DelegationChildBlock::SignedOut => "composer.worktreeMenu.signedOut",
+        DelegationChildBlock::NoMode => "composer.worktreeMenu.noMode",
+        DelegationChildBlock::Cap => "composer.worktreeMenu.cap",
+    });
+    locale.get_with("composer.worktreeMenu.blocked", &[("agent", agent), ("reason", &reason)])
 }
 
 /// `childAction{id, action: "merge"|"undo"|"discard"}` (C# MainWindow.WebShell.Shell.cs:89-94, MainWindow.Delegation.cs:165-225):
 /// ignored while the card is busy or a dialog is open; merge with its merged-discard offer, undo, discard with its confirm. Answers null.
+/// Without `--allow-state-write` (and outside a smoke) it only says why it did nothing (W7 plan D2); git goes only where it may.
 pub async fn child_action(host: Arc<Host>, args: Value) -> Reply {
-    let _ = (host, args);
+    let Some(id) = args.get("id").and_then(Value::as_str).map(str::to_string) else { return Ok(Value::Null) };
+    let action = match args.get("action").and_then(Value::as_str).map(str::to_ascii_lowercase).as_deref() {
+        Some("merge") => DelegationCardAction::Merge,
+        Some("undo") => DelegationCardAction::Undo,
+        Some("discard") => DelegationCardAction::Discard,
+        _ => return Ok(Value::Null),
+    };
+    let Some(app) = app() else { return Ok(Value::Null) };
+    if app.is_card_busy(&id) || host.view().dialog_open {
+        return Ok(Value::Null);
+    }
+    if !host.delegation_live() || !child_may_be_touched(&host, &app, &id) {
+        host.view().error = Some(crate::setup::verification_mode());
+        host.schedule();
+        return Ok(Value::Null);
+    }
+    match action {
+        DelegationCardAction::Merge => {
+            let note = app.merge_child(&id).await;
+            if note.is_some_and(|note| note.result == DelegationCardResult::Done) {
+                offer_discard_after_merge(&host, &app, &id).await;
+            }
+        }
+        DelegationCardAction::Undo => {
+            app.undo_child_merge(&id).await;
+        }
+        DelegationCardAction::Discard => discard_child(&host, &app, &id).await,
+    }
+    host.schedule();
     Ok(Value::Null)
+}
+
+/// Every folder a card's git may change for the child — its worktree and its parent's checkout — is one delegation may touch
+/// ([`may_touch`]: any with `--allow-state-write`, only the smoke's own fixture in a smoke).
+fn child_may_be_touched(host: &Host, app: &DelegationApp, id: &str) -> bool {
+    let Some(coordinator) = app.coordinator() else { return false };
+    let file = coordinator.file();
+    let Some(child) = file.children.iter().find(|child| child.id == id) else { return false };
+    may_touch(host, Path::new(&child.worktree_path))
+        && child.parent_checkout.as_deref().is_none_or(|checkout| may_touch(host, Path::new(checkout)))
+}
+
+/// C# `DiscardChild`: the confirmation names the worktrees nested in the child's that go with it; when more are nested by the time it
+/// runs, nothing is removed and it asks again naming them all.
+async fn discard_child(host: &Arc<Host>, app: &DelegationApp, id: &str) {
+    if host.view().dialog_open {
+        return;
+    }
+    let Some(mut pending) = app.ask_to_discard_child(id).await else { return };
+    while confirm_discard(host, &pending).await {
+        match app.discard_child(&pending).await.map(|note| note.result) {
+            Some(DelegationCardResult::Reconfirm(nested)) => pending.nested = Some(nested),
+            _ => break,
+        }
+    }
+}
+
+/// C# `ConfirmDiscard`: true when the human confirmed a discard it offered (none is offered when the nested worktrees could not be
+/// listed).
+async fn confirm_discard(host: &Arc<Host>, pending: &PendingChildDiscard) -> bool {
+    let locale = host.locale;
+    let offered = pending.nested.is_some();
+    let dialog = json!({
+        "type": "confirm", "title": text::discard_title(pending, &locale), "message": text::discard_message(pending, &locale),
+        "primary": offered.then(|| locale.get("delegation.discard.confirm")),
+        "close": if offered { locale.get("resume.cancel") } else { locale.get("common.close") },
+        "defaultPrimary": false, "destructive": false,
+    });
+    confirm(host, dialog).await && offered && !host.closing()
+}
+
+/// C# `OfferDiscardAfterMerge`: once a merge from the child's card went through, the offer to discard the child right away.
+async fn offer_discard_after_merge(host: &Arc<Host>, app: &DelegationApp, id: &str) {
+    if host.view().dialog_open {
+        return;
+    }
+    let Some(mut pending) = app.merged_discard_offer(id).await else { return };
+    let locale = host.locale;
+    let dialog = json!({
+        "type": "confirm", "title": locale.get("delegation.mergedDiscard.title"),
+        "message": text::merged_discard_message(&pending, &locale),
+        "primary": locale.get("delegation.mergedDiscard.confirm"), "close": locale.get("delegation.mergedDiscard.later"),
+        "defaultPrimary": false, "destructive": false,
+    });
+    if !confirm(host, dialog).await || host.closing() {
+        return;
+    }
+    while let Some(DelegationCardResult::Reconfirm(nested)) = app.discard_child(&pending).await.map(|note| note.result) {
+        pending.nested = Some(nested);
+        if !confirm_discard(host, &pending).await {
+            break;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// W7 review M3 (C# DelegationAppVerification.cs:480-490): the delegation's git hooks folder is `<profile>\git-no-hooks` when the
+    /// app may write its profile, this machine's own folder for the profile when it may not, and never under the install folder.
+    #[test]
+    fn the_hooks_folder_is_the_profiles_or_the_machines_never_the_install_folders() {
+        use mighty_platform::Paths;
+        let paths = mighty_platform::AppPaths::rooted(&std::env::temp_dir().join("mighty-hooks-check"));
+        // The machine's folder start() hands over: the work map's, as main.rs configures it.
+        let machine = crate::workmap::Folders::new(&paths, false).hooks;
+        let writing = hooks_folder(paths.data_dir(), Some(&machine), true);
+        let reading = hooks_folder(paths.data_dir(), Some(&machine), false);
+        assert_eq!(writing, paths.data_dir().join("git-no-hooks"), "the profile's when it may be written");
+        assert!(
+            reading == machine && (!cfg!(windows) || reading.starts_with(paths.local_dir())),
+            "the machine's own when the profile may not be written"
+        );
+        assert_eq!(hooks_folder(paths.data_dir(), None, false), paths.data_dir().join("git-no-hooks"), "without it, the profile's");
+        let install = std::env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        for hooks in [writing, reading] {
+            assert!(hooks.is_absolute() && !hooks.starts_with(&install), "{hooks:?} is absolute and not under the install folder");
+        }
+    }
 }

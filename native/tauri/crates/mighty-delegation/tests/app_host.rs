@@ -1,6 +1,6 @@
 //! The panes' side of delegation (app_host.rs), C#'s checks under their names: DelegationVerification "delegation: child panes, the
 //! run ledger and the pane's snapshot keys" (L648) and the panes' half of DelegationHumanChildVerification "delegation: records and
-//! panes carry the human's mark and the parent's agent" (L683).
+//! panes carry the human's mark and the parent's agent" (L683), and DelegationCrossAgentVerification L698.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -11,7 +11,9 @@ use mighty_core::json::Wire;
 use mighty_core::model::{AppSnapshot, LogEntry, RunSession, RunSettings, Workspace};
 use mighty_core::normalize;
 use mighty_delegation::app_host::{self, ChildRunEnd, DelegationRunEvent, DelegationRunEventPump, DelegationRunLedger};
+use mighty_delegation::delivery::{AutomaticDelivery, automatic};
 use mighty_delegation::host::{DelegationChildPane, DelegationPaneActivity, DelegationPaneState};
+use mighty_delegation::model::DeliveryRoute;
 use mighty_delegation::request::DelegationReasonCode;
 use serde_json::json;
 
@@ -126,6 +128,11 @@ async fn child_panes_the_run_ledger_and_the_panes_snapshot_keys() {
                 == DelegationPaneActivity::Running
             && app_host::pane_state(&child, &workspace, None, DelegationPaneActivity::Idle, true).activity == DelegationPaneActivity::Idle,
         "only a finished pane the app would refuse reads as idle"
+    );
+    let refused = app_host::pane_state(&child, &workspace, Some("run-1"), DelegationPaneActivity::Finished, true);
+    assert!(
+        automatic(Some(&refused)) == AutomaticDelivery::Hold && automatic(Some(&state)) == AutomaticDelivery::Route(DeliveryRoute::Queue),
+        "delivery holds what comes for a pane that cannot start a run"
     );
 
     // Run ids and normal finishes since launch are tracked per pane.
@@ -462,5 +469,82 @@ fn a_child_joins_its_parents_tab_group_beside_it() {
     assert!(
         app_host::adding_child(&full, &child_pane("c4", "p0", "plan", &temp(), false, "claude"), None, false).is_none(),
         "the app is at its pane cap"
+    );
+}
+
+/// DelegationCrossAgentVerification "delegation: the human's child of another agent takes that agent's last-used model and effort"
+/// (L698).
+#[test]
+fn a_child_of_another_agent_takes_that_agents_defaults() {
+    let parent = RunSession {
+        provider: Some("claude".into()),
+        model: Some("opus".into()),
+        settings: settings("high", "auto"),
+        agent_view_mode: Some("mighty".into()),
+        graph_view_mode: Some("timeline".into()),
+        mighty_style: Some("claude-plan".into()),
+        mighty_style_hash: Some("h1".into()),
+        ..pane("parent", "ws")
+    };
+    let codex_pane = RunSession {
+        provider: Some("codex".into()),
+        model: Some("gpt-5.6-sol".into()),
+        settings: settings("low", "fullAccess"),
+        ..pane("codex-pane", "ws")
+    };
+    for human in [true, false] {
+        let child = child_pane("c1", "parent", "onRequest", "/w/c1", human, "codex");
+        let made = app_host::child_session(&child, "ws", "Fix it", Some(&parent), Some(&codex_pane));
+        let settings = made.settings.clone().unwrap();
+        assert!(made.provider() == "codex" && settings.permission_mode == "onRequest", "human {human}: a Codex child in its starting mode");
+        // The human's child takes what a new Codex pane would; one the parent's delegate made, plain defaults.
+        assert!(
+            if human {
+                made.model() == "gpt-5.6-sol" && settings.effort == "low"
+            } else {
+                made.model() == "default" && settings.effort == "default"
+            },
+            "human {human}: model and effort"
+        );
+        assert!(
+            made.agent_view_mode.as_deref() == Some("mighty")
+                && made.graph_view_mode.as_deref() == Some("timeline")
+                && made.mighty_style.is_none()
+                && made.mighty_style_hash.is_none(),
+            "human {human}: the parent's view, no style"
+        );
+        // With no pane of the agent yet, a new pane's defaults.
+        let fresh = app_host::child_session(&child, "ws", "Fix it", Some(&parent), None);
+        assert!(fresh.model() == "default" && fresh.settings.unwrap().effort == "default", "human {human}: no pane of the agent yet");
+    }
+    // A Claude child of a Codex parent the human started: Claude's last-used model and effort, not the Codex model.
+    let claude = app_host::child_session(
+        &child_pane("c2", "codex-pane", "fullAccess", "/w/c2", true, "claude"),
+        "ws",
+        "t",
+        Some(&codex_pane),
+        Some(&parent),
+    );
+    assert!(
+        claude.provider() == "claude"
+            && claude.model() == "opus"
+            && claude.mighty_style.is_none()
+            && claude.settings.unwrap().effort == "high",
+        "a Claude child of a Codex pane"
+    );
+    // The app finds that agent's last-used top-level pane itself.
+    let state = AppSnapshot {
+        workspaces: Some(vec![Workspace { id: Some("ws".into()), path: Some(temp()), ..Workspace::default() }]),
+        sessions: Some(vec![Arc::new(parent), Arc::new(codex_pane)]),
+        active_workspace_id: Some("ws".into()),
+        active_session_id: Some("parent".into()),
+        ..AppSnapshot::default()
+    };
+    let next = app_host::adding_child(&state, &child_pane("c3", "parent", "acceptEdits", &temp(), true, "codex"), Some("Try it"), false)
+        .expect("a child pane");
+    let made = next.session("c3").unwrap();
+    assert!(
+        made.provider() == "codex" && made.model() == "gpt-5.6-sol" && made.settings == settings("low", "acceptEdits"),
+        "the Codex template's model and effort, its own mode"
     );
 }

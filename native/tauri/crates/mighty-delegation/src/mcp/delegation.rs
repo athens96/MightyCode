@@ -21,82 +21,14 @@ pub const SERVER_NAME: &str = "mighty-delegation";
 /// `DelegationMcp.HeadlessArgument`.
 pub const HEADLESS_ARGUMENT: &str = crate::modes::DELEGATION_MCP_ARGUMENT;
 
-/// `DelegationToolManifest.Argument(Name, Description, Required = true)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ToolArgument {
-    pub name: &'static str,
-    pub description: &'static str,
-    pub required: bool,
-}
+/// `DelegationToolManifest`: the delegation core's six tools (W7-A's [`crate::tools`]), the one copy of their words.
+pub use crate::tools::{Argument as ToolArgument, Tool};
 
-/// `DelegationToolManifest.Tool(Name, Description, Arguments)`: every argument a string.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Tool {
-    pub name: &'static str,
-    pub description: &'static str,
-    pub arguments: &'static [ToolArgument],
-}
-
-const CHILD: ToolArgument =
-    ToolArgument { name: "child", description: "The child's id, as delegate or list_children gave it.", required: true };
-
-/// `DelegationToolManifest.All`: exactly these six, in this order. The words are the Mac's (M/DelegationCoordinator.swift:3-81).
-pub const MANIFEST: [Tool; 6] = [
-    Tool {
-        name: "delegate",
-        description: "Start a child pane that works on a task in its own git worktree, on the flat branch mighty/<child id> made from your current branch head. It runs your own agent CLI unless agent names another: claude, codex or antigravity, each only if installed and signed in on this PC. Use it only when the user asks for parallel or delegated work, or when the task clearly splits into independent parts that can run at the same time; never fan out speculatively, and do the work yourself otherwise. The child starts in the permission mode you ask for, which must be one of the child agent's modes and one in which it can change files. For your own agent it must be no wider than your own mode (Claude: plan < manual < acceptEdits < auto < fullAccess; Codex: manual < acceptEdits < onRequest < fullAccess). For another agent, the child's mode may do nothing yours may not: edit files without asking only if yours does (Claude acceptEdits and auto, Codex onRequest and acceptEdits, Antigravity acceptEdits, any fullAccess), edit after asking only if yours edits at all, run shell commands without asking only if yours does (Claude auto, Codex manual and acceptEdits, any fullAccess), and have full access only from your fullAccess. So from Claude acceptEdits a Codex child gets onRequest, not acceptEdits (which runs commands without asking), and from Claude plan or manual no Codex or Antigravity child can start. Answers as soon as the child exists; its run goes on in the background. The child writes its result to REPORT.md, and you get one notice per report. At most 3 open children per pane, of all agents together, and a child cannot delegate. The same call twice in one of your runs returns the same child.",
-        arguments: &[
-            ToolArgument { name: "task", description: "What the child should do. It is saved as the child's TASK.md.", required: true },
-            ToolArgument {
-                name: "mode",
-                description: "The child's starting permission mode, one of the child agent's in which it can change files, no wider than yours: plan, manual, acceptEdits, auto or fullAccess for a Claude child; acceptEdits, onRequest or fullAccess for a Codex child; acceptEdits or fullAccess for an Antigravity child.",
-                required: true,
-            },
-            ToolArgument {
-                name: "agent",
-                description: "Optional: the agent CLI the child runs, claude, codex or antigravity. Leave it out for your own agent.",
-                required: false,
-            },
-        ],
-    },
-    Tool {
-        name: "list_children",
-        description: "List your children with their id, agent, state and current report revision.",
-        arguments: &[],
-    },
-    Tool {
-        name: "child_status",
-        description: "Read one of your children: its agent, its state, its head and the body of its latest REPORT.md.",
-        arguments: &[CHILD],
-    },
-    Tool {
-        name: "merge",
-        description: "Fast-forward your recorded branch to a reported child's head. Refused, changing nothing, unless the child has reported at exactly expected_head with no tracked changes, your recorded branch is checked out with no tracked changes and it can fast-forward. Follows your permission mode; a Codex pane may merge only when its run started in fullAccess and is otherwise refused with merge_human_only, so the human merges from the child's card.",
-        arguments: &[
-            CHILD,
-            ToolArgument {
-                name: "expected_head",
-                description: "The child's reported head commit, as child_status gave it.",
-                required: true,
-            },
-        ],
-    },
-    Tool {
-        name: "follow_up",
-        description: "Send one of your children a follow-up instruction, at most 2 per child. It reaches the child exactly once, as its next run, and clears its reported state.",
-        arguments: &[CHILD, ToolArgument { name: "text", description: "The instruction for the child.", required: true }],
-    },
-    Tool {
-        name: "discard",
-        description: "Discarding a child is for the human only, from the child's card in the app. This tool always refuses with discard_human_only and changes nothing.",
-        arguments: &[CHILD],
-    },
-];
+/// `DelegationToolManifest.All`: exactly these six, in this order.
+pub const MANIFEST: [&Tool; 6] = crate::tools::ALL;
 
 /// `DelegationToolManifest.Named`.
-pub fn named(name: &str) -> Option<&'static Tool> {
-    MANIFEST.iter().find(|tool| tool.name == name)
-}
+pub use crate::tools::named;
 
 /// The server's transport: one well-formed call forwarded to the app on the pane's token (`AgentIOPipe.CallDelegation`, which never
 /// throws: a call it could not make is answered as a failed one).
@@ -197,7 +129,7 @@ impl DelegationServer {
                 )
             }
             "ping" => reply(&id, "result", &json!({})),
-            "tools/list" => reply(&id, "result", &json!({"tools": MANIFEST.iter().map(definition).collect::<Vec<_>>()})),
+            "tools/list" => reply(&id, "result", &json!({"tools": MANIFEST.iter().copied().map(definition).collect::<Vec<_>>()})),
             "tools/call" => {
                 document.keys(parameters)?;
                 let name = match document.text(parameters.get("name"))? {

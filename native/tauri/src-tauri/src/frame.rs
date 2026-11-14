@@ -359,7 +359,7 @@ async fn pick_resumed_session(
 
 /// C# `CloseSession` / `ClosePane` / `CloseSessionAsync`: the pane's run stopped and ended (at most ten seconds), then the pane gone.
 /// Delegation's parent-close question and a child's close cleanup come first (delegation.rs, W7-D).
-async fn close_session(host: &Arc<Host>, id: &str) -> Result<(), String> {
+pub(crate) async fn close_session(host: &Arc<Host>, id: &str) -> Result<(), String> {
     if let crate::delegation::CloseDecision::Keep = crate::delegation::before_close(host, id).await {
         return Ok(());
     }
