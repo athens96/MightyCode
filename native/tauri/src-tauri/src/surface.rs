@@ -556,7 +556,7 @@ fn browser_pane(host: &Host, pane: &str) -> Result<(String, bool), String> {
     let session = view
         .snapshot
         .session(pane)
-        .filter(|s| matches!(s.kind(), "browser" | "agentBrowser"))
+        .filter(|s| matches!(s.kind(), "browser" | "agent-browser"))
         .ok_or_else(|| "Session not found.".to_string())?;
     Ok((profile_key(session.workspace_profile_key.as_deref(), session.workspace_id()), view.snapshot.browser_engine_enabled))
 }
