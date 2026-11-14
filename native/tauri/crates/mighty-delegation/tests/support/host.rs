@@ -402,7 +402,7 @@ pub fn locale() -> mighty_core::locale::Locale {
 /// `new DelegationCoordinator(store, host, maker, isSwitchOn)` with C#'s 45 s answer and the checks' language.
 pub fn coordinator(
     store: DelegationFileStore,
-    host: Arc<TestHost>,
+    host: Arc<dyn DelegationHost>,
     maker: mighty_delegation::git::worktree::Maker,
     switch_on: impl Fn() -> bool + Send + Sync + 'static,
 ) -> Result<mighty_delegation::coordinator::Coordinator, mighty_delegation::store::DelegationFileError> {
