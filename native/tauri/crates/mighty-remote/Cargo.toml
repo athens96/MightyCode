@@ -56,6 +56,8 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 mighty-platform.workspace = true
+# The direct path's checks read and write the upgraded sockets (W8-C; already in the lock through tokio-tungstenite).
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread", "macros", "io-util", "net", "test-util"] }
 
 [target.'cfg(windows)'.dev-dependencies]

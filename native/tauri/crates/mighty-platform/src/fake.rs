@@ -654,39 +654,113 @@ impl Notifier for RecordingNotifier {
     }
 }
 
-/// A rule that `apply` changes; `decline` makes the next elevation answer no.
+/// netsh as the checks and the smoke record it (C#'s recorders in place of `Process.Start`): nothing starts. Every launch is kept in
+/// order. Each start answers the next queued exit code ([`RecordingNetsh::answer`], C#'s `Answer(...)`); with none queued it plays the
+/// smoke's rule: an elevated change answers 0 and leaves the rule there (gone after a delete), the query answers 0 while it is there and
+/// 1 while it is not, or the code [`RecordingNetsh::query_answers`] set. [`RecordingNetsh::fail_elevated`] and
+/// [`RecordingNetsh::fail_query`] make the starts fail instead.
+#[derive(Debug, Default)]
+pub struct RecordingNetsh {
+    launched: Mutex<Vec<crate::firewall::netsh::NetshLaunch>>,
+    answers: Mutex<VecDeque<i32>>,
+    present: Mutex<bool>,
+    query_answer: Mutex<Option<i32>>,
+    elevated_failure: Mutex<Option<crate::firewall::NetshFailure>>,
+    query_failure: Mutex<Option<crate::firewall::NetshFailure>>,
+}
+
+impl RecordingNetsh {
+    /// Every launch so far, oldest first.
+    pub fn launched(&self) -> Vec<crate::firewall::netsh::NetshLaunch> {
+        lock(&self.launched).clone()
+    }
+    /// The launches forgotten and these exit codes queued for the next starts (C# `Answer(codes)`).
+    pub fn answer(&self, codes: &[i32]) {
+        lock(&self.launched).clear();
+        *lock(&self.answers) = codes.iter().copied().collect();
+    }
+    /// The query answers `code` until set back to none (C#'s smoke `queryAnswers`).
+    pub fn query_answers(&self, code: Option<i32>) {
+        *lock(&self.query_answer) = code;
+    }
+    pub fn fail_elevated(&self, failure: Option<crate::firewall::NetshFailure>) {
+        *lock(&self.elevated_failure) = failure;
+    }
+    pub fn fail_query(&self, failure: Option<crate::firewall::NetshFailure>) {
+        *lock(&self.query_failure) = failure;
+    }
+}
+
+impl crate::firewall::NetshRun for RecordingNetsh {
+    fn run(
+        &self,
+        launch: crate::firewall::netsh::NetshLaunch,
+    ) -> BoxFuture<'_, std::result::Result<crate::firewall::NetshExit, crate::firewall::NetshFailure>> {
+        let elevated = launch.elevated;
+        let deletes = launch.command_line.starts_with("advfirewall firewall delete rule ");
+        lock(&self.launched).push(launch);
+        let failure = if elevated { lock(&self.elevated_failure).clone() } else { lock(&self.query_failure).clone() };
+        let outcome = match failure {
+            Some(failure) => Err(failure),
+            None => {
+                let code = match lock(&self.answers).pop_front() {
+                    Some(code) => code,
+                    None if elevated => {
+                        *lock(&self.present) = !deletes;
+                        0
+                    }
+                    None => lock(&self.query_answer).unwrap_or(if *lock(&self.present) { 0 } else { 1 }),
+                };
+                Ok(crate::firewall::NetshExit { code, output: String::new() })
+            }
+        };
+        Box::pin(async move { outcome })
+    }
+}
+
+/// The firewall rule over a [`RecordingNetsh`]: C#'s runner (`firewall::NetshRunner`) from a fixed system folder for a fixed program
+/// (`C:\Windows\System32`, `C:\Program Files\Mighty Code\MightyCode.exe`), so every command it would run is recorded and nothing
+/// elevates.
 pub struct FakeFirewall {
-    rule: Mutex<FirewallRule>,
-    decline: Mutex<bool>,
+    runner: crate::firewall::NetshRunner,
+    netsh: Arc<RecordingNetsh>,
+}
+
+impl FakeFirewall {
+    pub const SYSTEM_DIRECTORY: &'static str = r"C:\Windows\System32";
+    pub const PROGRAM: &'static str = r"C:\Program Files\Mighty Code\MightyCode.exe";
+
+    /// The recorder behind it.
+    pub fn netsh(&self) -> &Arc<RecordingNetsh> {
+        &self.netsh
+    }
 }
 
 impl Default for FakeFirewall {
     fn default() -> FakeFirewall {
-        FakeFirewall { rule: Mutex::new(FirewallRule::Missing), decline: Mutex::new(false) }
-    }
-}
-
-impl FakeFirewall {
-    pub fn decline_next(&self) {
-        *lock(&self.decline) = true;
+        let netsh = Arc::new(RecordingNetsh::default());
+        let runner = crate::firewall::NetshRunner::new(
+            netsh.clone(),
+            Some(FakeFirewall::SYSTEM_DIRECTORY.into()),
+            Some(FakeFirewall::PROGRAM.into()),
+            None,
+        );
+        FakeFirewall { runner, netsh }
     }
 }
 
 impl Firewall for FakeFirewall {
     fn read(&self) -> BoxFuture<'_, Result<FirewallRule>> {
-        Box::pin(async move { Ok(lock(&self.rule).clone()) })
+        self.runner.read()
     }
     fn apply(&self, ports: Vec<u16>) -> BoxFuture<'_, Result<FirewallChange>> {
-        Box::pin(async move {
-            if ports.iter().any(|port| *port < 1024) {
-                return Err(PlatformError::Invalid("firewall ports are 1024-65535".into()));
-            }
-            if std::mem::take(&mut *lock(&self.decline)) {
-                return Ok(FirewallChange::Declined);
-            }
-            *lock(&self.rule) = if ports.is_empty() { FirewallRule::Missing } else { FirewallRule::Present { ports } };
-            Ok(FirewallChange::Applied)
-        })
+        self.runner.apply(ports)
+    }
+    fn add(&self, ports: Vec<u16>) -> BoxFuture<'_, Result<FirewallChange>> {
+        self.runner.add(ports)
+    }
+    fn remove(&self) -> BoxFuture<'_, Result<FirewallChange>> {
+        self.runner.remove()
     }
 }
 

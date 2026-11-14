@@ -163,12 +163,16 @@ async fn a_notification_click_names_its_pane() {
 async fn the_firewall_rule_follows_apply() {
     let firewall = fake::FakeFirewall::default();
     assert_eq!(firewall.read().await.unwrap(), FirewallRule::Missing);
-    assert_eq!(firewall.apply(vec![43137]).await.unwrap(), FirewallChange::Applied);
-    assert_eq!(firewall.read().await.unwrap(), FirewallRule::Present { ports: vec![43137] });
-    firewall.decline_next();
+    let applied = firewall.apply(vec![43137]).await.unwrap();
+    assert!(matches!(applied, FirewallChange::Applied(Some(spec)) if spec.ports == "43137"));
+    assert_eq!(firewall.read().await.unwrap(), FirewallRule::Present { ports: None }, "a recorder prints nothing: the ports are unknown");
+    firewall.netsh().fail_elevated(Some(mighty_platform::firewall::NetshFailure::Cancelled));
     assert_eq!(firewall.apply(vec![]).await.unwrap(), FirewallChange::Declined);
-    assert_eq!(firewall.apply(vec![]).await.unwrap(), FirewallChange::Applied);
-    assert!(firewall.apply(vec![80]).await.is_err());
+    firewall.netsh().fail_elevated(None);
+    assert_eq!(firewall.apply(vec![]).await.unwrap(), FirewallChange::Applied(None));
+    assert_eq!(firewall.read().await.unwrap(), FirewallRule::Missing);
+    assert_eq!(firewall.apply(vec![80]).await.unwrap(), FirewallChange::Refused("badPorts".into()));
+    assert_eq!(firewall.add(vec![]).await.unwrap(), FirewallChange::Refused("noPorts".into()));
 }
 
 #[tokio::test]
