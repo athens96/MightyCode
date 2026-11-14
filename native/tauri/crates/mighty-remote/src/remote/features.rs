@@ -3,7 +3,7 @@
 //! is mighty-core's `add_pane`), `AllowsLocalOnly`, and the firewall rule's ports (the direct port while the remote and direct are on,
 //! plus the sharing port while sharing; W8-C's firewall rows). Owner: W8-D.
 //!
-//! At rest (W8 Step 0): nothing is blocked and no port is asked for.
+//! At rest (W8 Step 0): nothing is blocked. `firewall_ports` is written (W8-C's firewall rows need it).
 
 use mighty_core::model::{RunSession, Workspace};
 
@@ -18,6 +18,8 @@ pub fn blocked_reason(workspace: Option<&Workspace>, pane: &RunSession, connecti
 
 /// `RemoteWorkspaceFeatures.FirewallPorts(directPort, sharingPort)`: the ports the Tailscale rule must allow, sorted and distinct.
 pub fn firewall_ports(direct_port: Option<u16>, sharing_port: Option<u16>) -> Vec<u16> {
-    let _ = (direct_port, sharing_port);
-    vec![]
+    let mut ports: Vec<u16> = [direct_port, sharing_port].into_iter().flatten().filter(|port| *port >= 1024).collect();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
 }

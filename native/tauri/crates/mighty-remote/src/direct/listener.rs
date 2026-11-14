@@ -44,10 +44,13 @@ pub trait DirectSink: Send + Sync {
     /// as the relay's; a refused auth says only [`wire::GENERIC_REFUSAL`] and counts as a failure of `peer`). The future runs the
     /// connection to its end; dropping it ends the connection (the path drops it when the switch or the remote is turned off, or the app
     /// quits), and must leave the host's table as if it had ended.
-    fn accept(&self, socket: WebSocketStream<TcpStream>, peer: SocketAddr) -> BoxFuture<'static, ()>;
+    fn accept(&self, socket: DirectSocket, peer: SocketAddr) -> BoxFuture<'static, ()>;
     /// An admitted peer's reservation given back: its upgrade did not happen (no phone's upgrade, the connection ended, the deadline).
     fn refused(&self, peer: IpAddr);
 }
+
+/// An upgraded direct socket, as [`DirectSink::accept`] gets it.
+pub type DirectSocket = WebSocketStream<TcpStream>;
 
 /// What the path logs (the OS's own words for a bind or read failure; never shown).
 pub type DirectLog = Arc<dyn Fn(&str) + Send + Sync>;

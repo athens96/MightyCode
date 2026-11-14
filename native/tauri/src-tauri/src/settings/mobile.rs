@@ -81,7 +81,7 @@ pub fn mobile_remote(host: &Arc<Host>, ui: &mut Ui) -> El {
     ));
 
     // The direct path's rows (mobile_direct.rs, W8-C).
-    rows.add(super::mobile_direct::rows(ui, &saved));
+    rows.add(super::mobile_direct::rows(host, ui, &saved));
 
     // The pairing rows (title, QR, host id, key, copy and regenerate) and the devices' title: hidden without a host.
     rows.add(heading(ui, locale.get("windows.mobile.pairingTitle"))).visible = false;
