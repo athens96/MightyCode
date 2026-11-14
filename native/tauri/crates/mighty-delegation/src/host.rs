@@ -61,6 +61,9 @@ pub enum DelegationAgentAvailability {
 /// `IDelegationHost`: the desktop service in the app, a fake in tests. The coordinator reaches panes only through this, and calls it
 /// from a task of its own, never from inside its locked section. A host that cannot take a call answers false or None (C#: "a host that
 /// throws is a host that did not take the call").
+///
+/// `pane_state`, `note` and `stop_run` are called while the coordinator holds a merge's or a run event's turn: they must never await a
+/// coordinator call that takes one (a run event, a merge, an undo, a discard), or the two wait on each other for ever.
 pub trait DelegationHost: Send + Sync {
     /// Opens the child's pane of `pane.provider` in `pane.mode`, working in `pane.folder` and linked to its parent. False when no pane
     /// could be made.

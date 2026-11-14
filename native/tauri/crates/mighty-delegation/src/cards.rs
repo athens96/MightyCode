@@ -190,7 +190,7 @@ impl Coordinator {
     /// was made, else the parent pane's folder. It takes its turn with the tool's merges, and while it runs delivery starts no run in the
     /// parent's pane or the child's. A refusal carries one reason code and changes nothing; with no parent checkout known it is
     /// branch_not_checked_out. A merge writes its MergeRecord and moves the child to merged.
-    pub async fn merge_from_card(&self, id: &str) -> ChildMergeOutcome {
+    pub(crate) async fn merge_from_card_now(&self, id: &str) -> ChildMergeOutcome {
         let outcome = {
             let _turn = self.inner.merge_turns.lock().await;
             let _panes = CardPanes(self);
@@ -206,10 +206,10 @@ impl Coordinator {
             return ChildMergeOutcome::Failed(locale.get("delegation.card.error.noChild"));
         };
         {
-            let mut state = self.lock();
-            state.card_panes.clear();
-            state.card_panes.insert(child.parent_session_id.clone());
-            state.card_panes.insert(child.id.clone());
+            let mut flags = self.flags();
+            flags.card_panes.clear();
+            flags.card_panes.insert(child.parent_session_id.clone());
+            flags.card_panes.insert(child.id.clone());
         }
         let Some(checkout) = self.parent_checkout(&child).await else {
             return ChildMergeOutcome::Refused(DelegationReasonCode::BranchNotCheckedOut);
@@ -223,7 +223,7 @@ impl Coordinator {
         let context = self.prune_context().await;
         // The merge stands and stays on record in memory; the human hears that the file could not be saved, and the next save writes it.
         let mut state = self.lock();
-        let file = state.file.clone();
+        let file = DelegationFile::clone(&state.file);
         if let Err(error) = self.commit(&mut state, file, &context) {
             return ChildMergeOutcome::MergedUnsaved(record.clone(), unsaved_reason(&error, &locale));
         }
@@ -233,19 +233,19 @@ impl Coordinator {
     /// `ConflictResolution`: the request for the child `id` to resolve its conflict with the parent branch, after its card's merge was
     /// refused with merge_conflict — once per report, so None when the child is not reported or was already asked at this report.
     pub fn conflict_resolution(&self, id: &str) -> Option<String> {
-        let mut state = self.lock();
-        let child = state.file.child(id).filter(|child| child.state == ChildState::Reported)?.clone();
-        if state.conflict_asked.get(id) == Some(&child.report_revision) {
+        let child = self.file().child(id).filter(|child| child.state == ChildState::Reported)?.clone();
+        let mut flags = self.flags();
+        if flags.conflict_asked.get(id) == Some(&child.report_revision) {
             return None;
         }
-        state.conflict_asked.insert(id.to_string(), child.report_revision);
+        flags.conflict_asked.insert(id.to_string(), child.report_revision);
         Some(merge::conflict_prompt(&child.git()))
     }
 
     /// `ConflictResolutionNotStarted`: the child's pane did not start that request, so the next merge that conflicts at this report asks
     /// again.
     pub fn conflict_resolution_not_started(&self, id: &str) {
-        self.lock().conflict_asked.remove(id);
+        self.flags().conflict_asked.remove(id);
     }
 
     /// `FollowParentBranch`: the child `id` as it is once its recorded parent branch follows `checkout` — when another branch checked out
@@ -274,7 +274,7 @@ impl Coordinator {
         let next = match state.file.recording_merge(record) {
             Some(next) => next,
             None if state.file.child(&record.child_id).is_some() => {
-                let mut next = state.file.clone();
+                let mut next = DelegationFile::clone(&state.file);
                 next.merges.push(record.clone());
                 next
             }
@@ -287,7 +287,7 @@ impl Coordinator {
     /// activity decides parent_busy (a closed parent pane counts as idle); while the undo runs, delivery starts no run in the parent's
     /// pane. A refusal carries one reason code and changes nothing. An undo takes the merge record out of the file: a merged child is
     /// reported again, a closed one stays closed with its branch made again at its recorded head.
-    pub async fn undo_merge_from_card(&self, id: &str) -> ChildUndoOutcome {
+    pub(crate) async fn undo_merge_from_card_now(&self, id: &str) -> ChildUndoOutcome {
         let outcome = {
             let _turn = self.inner.merge_turns.lock().await;
             let _panes = CardPanes(self);
@@ -301,10 +301,11 @@ impl Coordinator {
         let locale = self.locale();
         let no_merge = || ChildUndoOutcome::Failed(locale.get("delegation.card.error.noMergeToUndo"));
         let child = {
-            let mut state = self.lock();
-            let Some(child) = state.file.child(id).filter(|_| state.file.undoable_merge(id).is_some()).cloned() else { return no_merge() };
-            state.card_panes.clear();
-            state.card_panes.insert(child.parent_session_id.clone());
+            let file = self.file();
+            let Some(child) = file.child(id).filter(|_| file.undoable_merge(id).is_some()).cloned() else { return no_merge() };
+            let mut flags = self.flags();
+            flags.card_panes.clear();
+            flags.card_panes.insert(child.parent_session_id.clone());
             child
         };
         let Some(checkout) = self.parent_checkout(&child).await else {
@@ -325,7 +326,7 @@ impl Coordinator {
             // Undone on disk, so its record goes whatever the child did meanwhile.
             let mut state = self.lock();
             let next = state.file.recording_undo(undone).unwrap_or_else(|| {
-                let mut next = state.file.clone();
+                let mut next = DelegationFile::clone(&state.file);
                 if let Some(index) = next.merges.iter().rposition(|merge| merge == undone) {
                     next.merges.remove(index);
                 }
@@ -335,7 +336,7 @@ impl Coordinator {
         }
         let context = self.prune_context().await;
         let mut state = self.lock();
-        let file = state.file.clone();
+        let file = DelegationFile::clone(&state.file);
         if let Err(error) = self.commit(&mut state, file, &context) {
             return ChildUndoOutcome::UndoneUnsaved {
                 record: undone.clone(),
@@ -351,7 +352,7 @@ impl Coordinator {
     /// or removed); then the child's run is stopped and they are listed again: one there that the confirmation did not name stops the
     /// discard, naming them all to ask again. Otherwise [`Coordinator::discard_child`] removes the child's worktree, those nested in it
     /// and its branch by force, in its turn with the merges and undos.
-    pub async fn discard_from_card(&self, id: &str, confirmed_nested: Option<&[String]>) -> ChildCardDiscardOutcome {
+    pub(crate) async fn discard_from_card_now(&self, id: &str, confirmed_nested: Option<Vec<String>>) -> ChildCardDiscardOutcome {
         let locale = self.locale();
         let failed = |key: &str| ChildCardDiscardOutcome::Failed(locale.get(key));
         {
@@ -359,7 +360,7 @@ impl Coordinator {
             if !state.file.children.iter().any(|child| child.id == id && child.state != ChildState::Discarded) {
                 return failed("delegation.card.error.cannotDiscard");
             }
-            if state.starting.contains(id) {
+            if self.flags().starting.contains(id) {
                 return failed("delegation.card.error.stillStarting");
             }
         }
@@ -406,7 +407,7 @@ impl Coordinator {
     /// worktree and branch cleaned up, when every rule of W7-B's cleanup holds. Otherwise nothing on disk changes. The merge record
     /// stays, so the merge can still be undone. `still_running`: the host could not end the child's run before its pane went, so the
     /// child counts as busy whatever its pane reads.
-    pub async fn close_child(&self, id: &str, still_running: bool) -> ChildCleanupOutcome {
+    pub(crate) async fn close_child_now(&self, id: &str, still_running: bool) -> ChildCleanupOutcome {
         let Some(found) = self.file().child(id).cloned() else { return ChildCleanupOutcome::Failed("No child has this id.".into()) };
         let activity =
             if still_running { Some(DelegationPaneActivity::Running) } else { self.host_pane_state(id).await.map(|pane| pane.activity) };
@@ -427,7 +428,7 @@ impl Coordinator {
             let merge_record = (child.state == ChildState::Merged)
                 .then(|| state.file.merges.iter().rev().find(|merge| merge.child_id == id).cloned())
                 .flatten();
-            let mut next = state.file.clone();
+            let mut next = DelegationFile::clone(&state.file);
             if merge_record.is_some() {
                 let copies = [
                     (DelegationCopyKind::Report, report_file_in(&child.worktree_path), i64::from(child.report_revision)),
@@ -464,7 +465,8 @@ impl Coordinator {
     /// going the discard is refused with nothing changed. The child is discarded once its worktree and branch are gone; until then it
     /// keeps its state and card, and a discard may be tried again.
     pub async fn discard_child(&self, id: &str) -> ChildDiscardOutcome {
-        Box::pin(self.discard_child_now(id)).await
+        let id = id.to_string();
+        self.isolated(move |coordinator| async move { coordinator.discard_child_now(&id).await }).await
     }
 
     async fn discard_child_now(&self, id: &str) -> ChildDiscardOutcome {
@@ -476,7 +478,7 @@ impl Coordinator {
                 Some(found) if found.state != ChildState::Discarded => {}
                 _ => return failed("delegation.card.error.cannotDiscard"),
             }
-            if state.starting.contains(id) {
+            if self.flags().starting.contains(id) {
                 return failed("delegation.card.error.stillStarting");
             }
         }
@@ -490,7 +492,7 @@ impl Coordinator {
                 return failed("delegation.card.error.cannotDiscard");
             };
             let child = state.file.children[index].clone();
-            let mut next = state.file.clone();
+            let mut next = DelegationFile::clone(&state.file);
             let report = report_file_in(&child.worktree_path);
             if let Some(copy) =
                 DelegationCopy::try_read(id, DelegationCopyKind::Report, i64::from(child.report_revision), std::path::Path::new(&report))
@@ -546,6 +548,6 @@ struct CardPanes<'a>(&'a Coordinator);
 
 impl Drop for CardPanes<'_> {
     fn drop(&mut self) {
-        self.0.lock().card_panes.clear();
+        self.0.flags().card_panes.clear();
     }
 }

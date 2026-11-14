@@ -130,7 +130,7 @@ impl Fixture {
     }
 
     fn text_of(&self, follow_up_id: &str) -> String {
-        let follow_up = self.coordinator.file().follow_ups.into_iter().find(|f| f.id == follow_up_id).unwrap();
+        let follow_up = self.coordinator.file().follow_ups.iter().find(|f| f.id == follow_up_id).cloned().unwrap();
         follow_up_text(&follow_up, &report_file_in(&self.base.join("worktrees").join("c1").to_string_lossy()), "claude")
     }
 
@@ -252,7 +252,7 @@ async fn notices_are_steered_start_the_next_run_or_are_held() {
     assert!(
         saved.lane == DeliveryLane::Delivered
             && saved.receipt.as_ref().is_some_and(|r| r.route == DeliveryRoute::Steer && r.run_id == "p-run" && !r.time.is_empty())
-            && fixture.coordinator.file() == fixture.loaded(),
+            && *fixture.coordinator.file() == fixture.loaded(),
         "saved delivered with its receipt"
     );
     assert!(fixture.coordinator.child_run_ended("c1", "r-c1", ChildRunEnd::Finished).await.is_none(), "the same end again sends nothing");
@@ -653,7 +653,7 @@ async fn launch_holds_what_was_pending_and_a_closed_parents_notices_stay_on_the_
             && restored.notices.iter().map(|n| n.lane).eq([DeliveryLane::Held, DeliveryLane::Delivered])
             && restored.notices[1].receipt == Some(receipt)
             && restored.follow_ups[0].lane == DeliveryLane::Held
-            && coordinator.file() == restored,
+            && *coordinator.file() == restored,
         "what was pending at launch is held, on disk too"
     );
     assert!(
@@ -785,7 +785,7 @@ async fn follow_ups_reach_their_child_exactly_once_across_launches() {
         released("run-1", &[&to_stopped.id]),
         "the human's next send in the child releases it"
     );
-    let follow_up = fixture.coordinator.file().follow_ups.into_iter().find(|f| f.id == to_stopped.id).unwrap();
+    let follow_up = fixture.coordinator.file().follow_ups.iter().find(|f| f.id == to_stopped.id).cloned().unwrap();
     let run = fixture.host.all_handed().pop().unwrap();
     let report = report_file_in(&fixture.base.join("worktrees").join("c2").to_string_lossy());
     assert!(
@@ -837,7 +837,7 @@ async fn follow_ups_reach_their_child_exactly_once_across_launches() {
             && child.awaited_run_id.as_deref() == Some("launch1-run-1")
             && child.report_revision == 1
             && child.follow_up_count == 1
-            && fixture.coordinator.file() == fixture.loaded()
+            && *fixture.coordinator.file() == fixture.loaded()
             && fixture.loaded().follow_ups[0]
                 .receipt
                 .as_ref()
@@ -885,7 +885,7 @@ async fn follow_ups_reach_their_child_exactly_once_across_launches() {
     let second_host = fixture.host.clone();
     fixture.host.set_claude("parent", Running, Some("p-run-2"));
     assert!(
-        fixture.coordinator.file() == fixture.loaded()
+        *fixture.coordinator.file() == fixture.loaded()
             && fixture.coordinator.file().follow_ups.iter().all(|f| f.lane == DeliveryLane::Held)
             && fixture.held_ids("c1") == [first.id.clone(), second.id.clone()]
             && fixture.coordinator.held_items("c1").iter().all(|i| i.kind == DelegationDeliveryKind::FollowUp),
@@ -1040,4 +1040,44 @@ async fn follow_ups_reach_their_child_exactly_once_across_launches() {
     );
     // The app's start takes that run's input: at most 100,000 characters (`StartRunRequest.Validate`, the queue's buffer).
     assert!(run[0].input.encode_utf16().count() <= 100_000, "the run's input fits the app's start");
+}
+
+/// The rows' watchers: a new receiver has the current rows waiting (C#'s channel holds the list at load), and a watcher that holds a
+/// row's borrow never holds the coordinator up — the rows are published after the state is let go.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_rows_wait_for_a_new_watcher_and_a_watcher_never_holds_the_coordinator_up() {
+    let _lane = lane::enter().await;
+    let made = |base: &Path| {
+        let child = ChildRecord { report_revision: 1, report_head: Some(COMMIT.into()), ..child_in(base, "c1", ChildState::Reported) };
+        DelegationFile::of(vec![child], vec![], vec![], vec![], vec![])
+    };
+    let fixture = Fixture::new(Some(Running), Some(&made));
+    let (rows, held_rows) = (fixture.coordinator.child_rows(), fixture.coordinator.held_rows());
+    assert!(rows.has_changed().unwrap() && held_rows.has_changed().unwrap(), "a new receiver has the current rows waiting");
+    assert_eq!(rows.borrow().iter().map(|r| r.state).collect::<Vec<_>>(), [ChildState::Reported]);
+
+    // A run starts while a watcher holds the rows' borrow: its change is saved and readable at once, and its publication waits for the
+    // borrow alone; another call that needs the coordinator's state goes through meanwhile.
+    let borrowed = rows.borrow();
+    let coordinator = fixture.coordinator.clone();
+    let started = tokio::spawn(async move { coordinator.child_run_started("c1", "r-2").await });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while fixture.coordinator.file().children[0].state != ChildState::Running {
+        assert!(std::time::Instant::now() < deadline, "the run's start is recorded");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let other = fixture.coordinator.clone();
+    let through = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async { tokio::time::timeout(std::time::Duration::from_secs(10), other.deliver_pending()).await.is_ok() })
+    });
+    assert!(through.join().unwrap(), "a call that needs the state goes through while the publication waits");
+    assert!(fixture.loaded().children[0].state == ChildState::Running, "the start is on disk");
+    drop(borrowed);
+    started.await.unwrap();
+    let mut rows = rows;
+    assert!(
+        rows.has_changed().unwrap() && rows.borrow_and_update()[0].state == ChildState::Running,
+        "the watcher gets the change once it lets go"
+    );
 }

@@ -67,7 +67,7 @@ pub fn may_end(child: &ChildRecord, run_id: &str) -> bool {
 impl Coordinator {
     /// `ChildRunStarted`: a run `run_id` started in the child `id`'s pane — the child is running it, which clears reported, so a merge
     /// waits for the next report. A run already recorded, or a child that takes no runs, changes nothing.
-    pub async fn child_run_started(&self, id: &str, run_id: &str) {
+    pub(crate) async fn child_run_started_now(&self, id: &str, run_id: &str) {
         let _turn = self.inner.run_turns.lock().await;
         match self.file().child(id) {
             Some(found) if found.run_id.as_deref() != Some(run_id) => {}
@@ -97,7 +97,7 @@ impl Coordinator {
     ///
     /// A child the human started is recorded the same way but never notifies its parent. Only the run going now (or the child's first
     /// run) is recorded. The notice sent, if any; once recorded the child is no longer marked ending, and what waited for it is offered.
-    pub async fn child_run_ended(&self, id: &str, run_id: &str, end: ChildRunEnd) -> Option<Notice> {
+    pub(crate) async fn child_run_ended_now(&self, id: &str, run_id: &str, end: ChildRunEnd) -> Option<Notice> {
         // The end is no longer marked ending however its record went, so the child's queue and delivery are never held for ever.
         let finish = FinishEnding { coordinator: self, id };
         let notice = Box::pin(self.record_run_end(id, run_id, end)).await;
@@ -149,7 +149,7 @@ impl Coordinator {
         let notice = {
             // Nothing below suspends until the end is saved, so the same end reported twice finds it recorded.
             let mut state = self.lock();
-            let mut next = state.file.clone();
+            let mut next = crate::store::DelegationFile::clone(&state.file);
             let index = next.child_index(id)?;
             if !may_end(&next.children[index], run_id) || next.children[index].report_digest != found.report_digest {
                 return None;
@@ -235,7 +235,7 @@ impl Coordinator {
     /// new report sends the parent one ended_without_report notice; when the host has reported that end already, the notice is sent
     /// now. A follow-up that started a new run in the child's idle pane has the child running it at once, which clears reported. The
     /// notice sent, if any, which delivery then offers to the parent's pane.
-    pub async fn await_run(&self, run_id: &str, id: &str) -> Option<Notice> {
+    pub(crate) async fn await_run_now(&self, run_id: &str, id: &str) -> Option<Notice> {
         let notice = self.record_await(run_id, id).await;
         if notice.is_some() {
             self.deliver_pending().await;
@@ -252,7 +252,7 @@ impl Coordinator {
         let context = self.prune_context().await;
         // Nothing below suspends until the await is saved.
         let mut state = self.lock();
-        let mut next = state.file.clone();
+        let mut next = crate::store::DelegationFile::clone(&state.file);
         let index = next.child_index(id)?;
         if next.children[index].awaited_run_id.as_deref() == Some(run_id) {
             return None;
@@ -278,11 +278,11 @@ impl Coordinator {
 
     /// `InterruptRunsKilledByQuit`: at launch, before any pane runs again, every child still running or waiting had its run killed when
     /// the app quit. Each becomes interrupted, with no notice, and comes back stopped. The ids of those children.
-    pub async fn interrupt_runs_killed_by_quit(&self) -> Vec<String> {
+    pub(crate) async fn interrupt_runs_killed_by_quit_now(&self) -> Vec<String> {
         let _turn = self.inner.run_turns.lock().await;
         let context = self.prune_context().await;
         let mut state = self.lock();
-        let mut next = state.file.clone();
+        let mut next = crate::store::DelegationFile::clone(&state.file);
         let mut ids = vec![];
         for child in next.children.iter_mut() {
             if !matches!(child.state, ChildState::Running | ChildState::Waiting) {

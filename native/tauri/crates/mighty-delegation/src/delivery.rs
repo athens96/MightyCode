@@ -16,7 +16,6 @@
 //! the pane's newer items wait behind it. What is still pending at launch is held. Owner: W7-A.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use indexmap::IndexMap;
 
@@ -68,10 +67,8 @@ pub fn remove_refusal(item_id: &str, held: &[DelegationDeliveryItem]) -> Option<
     held.iter().any(|item| item.id == item_id).then_some(DelegationReasonCode::HeldNotRemovable)
 }
 
-/// `ChildWorktree.ReportFileIn`: `<worktree>/.mighty-delegation/REPORT.md`, where a child writes its report.
-pub fn report_file_in(worktree_path: &str) -> String {
-    Path::new(worktree_path).join(".mighty-delegation").join("REPORT.md").display().to_string()
-}
+/// `ChildWorktree.ReportFileIn` (W7-B's): `<worktree>/.mighty-delegation/REPORT.md`, where a child writes its report.
+pub use crate::git::worktree::report_file_in;
 
 impl DelegationFile {
     /// `HoldingPending`: this file with every notice and follow-up still pending held, or None when none was. At launch nothing is
@@ -257,23 +254,25 @@ impl Coordinator {
     /// first and ahead of `text`, in the one run the host starts — or `start` when given: the app's send starts the run with the
     /// human's attachments too, gets the run's whole input and answers the new run's id, or None when none started. Otherwise nothing
     /// changes and the caller sends `text` as it would anyway.
-    pub async fn send(&self, text: &str, session_id: &str, start: Option<crate::coordinator::RunStarter>) -> DelegationRelease {
+    pub(crate) async fn send_now(&self, text: &str, session_id: &str, start: Option<crate::coordinator::RunStarter>) -> DelegationRelease {
         self.release(session_id, Some(text), start).await
     }
 
     /// `RunNext`: run next in the pane `session_id`. When items are held for it, all of them and nothing else go to the pane, oldest
     /// first, in one run: steered into its running Claude run, or as its next run. Otherwise nothing changes and the caller runs its
     /// next queued row.
-    pub async fn run_next(&self, session_id: &str) -> DelegationRelease {
+    pub(crate) async fn run_next_now(&self, session_id: &str) -> DelegationRelease {
         self.release(session_id, None, None).await
     }
 
     /// `DeliverPending`: offers every pending item to its pane, oldest first. The app calls it whenever one of its panes' runs starts
     /// or ends. A call while a pass is going asks that pass for one more and returns at once. An item its pane still did not take keeps
     /// the pane's newer items waiting behind it for the rest of the pass; the next pass offers them again, oldest first.
-    pub async fn deliver_pending(&self) {
-        // On the heap: it is awaited from most of the coordinator, and its offers nest the host's and the run turns' futures.
-        Box::pin(self.deliver_pending_now()).await;
+    ///
+    /// A named future, not an `async fn`: the pass awaits run events that call it again, and a boxed type ends that cycle.
+    pub fn deliver_pending(&self) -> mighty_platform::BoxFuture<'static, ()> {
+        let coordinator = self.clone();
+        Box::pin(async move { coordinator.isolated(|coordinator| async move { coordinator.deliver_pending_now().await }).await })
     }
 
     async fn deliver_pending_now(&self) {
@@ -342,7 +341,7 @@ impl Coordinator {
                     }
                 };
                 // A card's merge or undo is changing the pane's checkout: no run starts there now, and the item is offered again later.
-                if route == DeliveryRoute::Queue && state.card_panes.contains(&item.session_id) {
+                if route == DeliveryRoute::Queue && self.flags().card_panes.contains(&item.session_id) {
                     return;
                 }
                 let run = if route == DeliveryRoute::Steer {

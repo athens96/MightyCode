@@ -43,7 +43,7 @@ impl Coordinator {
                 self.keep_merge(&record);
                 let context = self.prune_context().await;
                 let mut state = self.lock();
-                let file = state.file.clone();
+                let file = crate::store::DelegationFile::clone(&state.file);
                 if let Err(error) = self.commit(&mut state, file, &context) {
                     return DelegationResponse::failure(format!(
                         "The child is merged: {} now points at {}, and the app keeps the merge on record, but the delegation file could not be saved ({}). Mighty Code saves it again by itself; nothing is needed from you. Do not merge this child again.",
@@ -99,7 +99,7 @@ impl Coordinator {
                 return DelegationResponse::refusal(DelegationReasonCode::FollowUpLimit);
             }
             let follow_up = FollowUp::new(&mighty_core::wire::new_id(), id, text, DeliveryLane::Pending);
-            let mut next = state.file.clone();
+            let mut next = crate::store::DelegationFile::clone(&state.file);
             next.children[index].follow_up_count = count;
             next.follow_ups.push(follow_up.clone());
             match self.commit(&mut state, next, &context) {
