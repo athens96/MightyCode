@@ -98,19 +98,29 @@ mod imp {
     }
 
     /// C# `Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })`: an http(s) or mailto address handed to the user's
-    /// default handler through `ShellExecuteW` (the handler is never the app's child, so it outlives the app).
+    /// default handler through `ShellExecuteW` (the handler is never the app's child, so it outlives the app). The calling thread is in
+    /// a single-threaded apartment for the call, as the shell wants (one already in another apartment stays as it is). It may wait on
+    /// the shell: an async caller runs it on a blocking thread.
     pub fn open_url(url: &str) -> std::result::Result<(), String> {
         use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
         use windows_sys::Win32::UI::Shell::ShellExecuteW;
         use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
         let wide = |text: &str| std::ffi::OsStr::new(text).encode_wide().chain(std::iter::once(0)).collect::<Vec<u16>>();
         let (verb, target) = (wide("open"), wide(url));
+        // SAFETY: this thread's apartment, left again below when it was entered here.
+        let initialized = unsafe { CoInitializeEx(std::ptr::null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32) } >= 0;
         // SAFETY: two NUL-terminated strings that live across the call; the other pointers are null as documented.
         let done = unsafe {
             ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL)
         };
+        let error = std::io::Error::last_os_error();
+        if initialized {
+            // SAFETY: paired with the CoInitializeEx above on this thread.
+            unsafe { CoUninitialize() };
+        }
         // ShellExecute's result is greater than 32 when it succeeded.
-        if done as isize > 32 { Ok(()) } else { Err(std::io::Error::last_os_error().to_string()) }
+        if done as isize > 32 { Ok(()) } else { Err(error.to_string()) }
     }
 
     /// C# `ShowWorkspaceInExplorer` (MainWindow.Navigation.cs:330, `explorer.exe <folder>`): the folder handed to the shell's

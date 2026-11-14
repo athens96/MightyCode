@@ -332,11 +332,29 @@ pub type DelegationLink = Arc<dyn Fn() -> (Option<Arc<dyn DelegationHandler>>, b
 /// override, else its settings'). A remote workspace's run gets none (its tools would work in this PC's processes), nor does one the
 /// registry refuses (an id that is not one, a path that is not full).
 pub fn binding_factory(io: Arc<AgentIo>, executable: String, delegation: DelegationLink) -> mighty_run::manager::BindingFactory {
+    logged_binding_factory(io, executable, delegation, Arc::new(|_: &str| {}))
+}
+
+/// [`binding_factory`] that says in `log` why a run got no binding when the registry refused it (the pane's id and the reason; never
+/// a token or a path).
+pub fn logged_binding_factory(
+    io: Arc<AgentIo>,
+    executable: String,
+    delegation: DelegationLink,
+    log: Arc<dyn Fn(&str) + Send + Sync>,
+) -> mighty_run::manager::BindingFactory {
     Arc::new(move |request: &mighty_run::model::StartRunRequest, workspace: &mighty_core::model::Workspace| {
         if workspace.remote.is_some() || workspace.path().is_empty() || !matches!(request.provider.as_str(), "claude" | "codex") {
             return None;
         }
-        let binding = io.bind(&request.session_id, workspace.id(), workspace.path(), &request.provider, &executable).ok()?;
+        let binding = match io.bind(&request.session_id, workspace.id(), workspace.path(), &request.provider, &executable) {
+            Ok(binding) => binding,
+            Err(refused) => {
+                let pane: String = request.session_id.chars().take(128).collect();
+                log(&format!("agent io: the run of pane {pane:?} gets no pane tools: {refused}"));
+                return None;
+            }
+        };
         let (handler, enabled) = delegation();
         let settings = request.settings();
         let attached = super::binding::attaches_delegation(&request.kind, &request.provider, &settings.permission_mode) && enabled;

@@ -408,6 +408,13 @@ impl SurfaceManager {
         Ok(Value::Null)
     }
 
+    /// Whether the pane's browser view is open now (C# `browser.Ready` completed with a `CoreWebView2`): only then does
+    /// [`SurfaceManager::browser_navigate`] navigate rather than keep the address for the view's start.
+    pub async fn browser_view_open(&self, pane: &str) -> bool {
+        let slots = self.slots.lock().await;
+        slots.get(&(pane.to_string(), SurfaceKind::Browser)).is_some_and(|slot| matches!(slot.view, Some(View::Browser(_))))
+    }
+
     /// `browserBack`, `browserForward` (the engine goes there, the history with it, the state pushed), `browserReload`.
     pub async fn browser_command(&self, pane: &str, command: &str) -> Reply {
         let slots = self.slots.lock().await;
@@ -711,6 +718,20 @@ mod tests {
         h.manager.bounds("p", SurfaceKind::Browser, shown(moved)).await.unwrap();
         assert_eq!(h.surfaces.events(), [SurfaceEvent::Placed { pane: "p".into(), rect: moved }]);
         assert_eq!(h.manager.inspect("p", SurfaceKind::Browser).await.unwrap().bounds, moved);
+    }
+
+    /// An agent's open_url waits for this before it says the page opened in the app: the view exists only once the pane started and
+    /// its slot could show.
+    #[tokio::test]
+    async fn a_browser_view_is_open_only_once_it_opened() {
+        let h = harness(false);
+        assert!(!h.manager.browser_view_open("p").await);
+        h.manager.browser_navigate("p", "https://example.com").await.unwrap();
+        assert!(!h.manager.browser_view_open("p").await, "an address kept for the start opens nothing");
+        h.open("p").await;
+        assert!(!h.manager.browser_view_open("p").await, "started, but its slot has not shown");
+        h.manager.bounds("p", SurfaceKind::Browser, shown(RECT)).await.unwrap();
+        assert!(h.manager.browser_view_open("p").await);
     }
 
     #[tokio::test]
