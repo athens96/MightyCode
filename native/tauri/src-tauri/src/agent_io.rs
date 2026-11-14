@@ -67,24 +67,38 @@ pub fn io(host: &Host) -> Option<Arc<AgentIo>> {
     lock(&state(host).io).clone()
 }
 
-/// The app's listener, started with the app (C# `InitializeAgentIO`); not in a smoke, nor without the exe's own path.
+/// The app's listener, started with the app (C# `InitializeAgentIO`); not in a smoke.
 pub fn start(host: &Arc<Host>) {
-    if host.smoke.is_some() || std::env::current_exe().is_err() {
-        return;
+    if host.smoke.is_none() {
+        listen(host);
     }
+}
+
+/// The listener, started now unless it runs (its exe's own path is needed for the runs' configs); None when it could not start.
+/// [`start`] calls it outside a smoke; W7-D's delegation smoke calls it itself for its Rust-only `delegateTool` step, whose fake
+/// Claude reaches the delegation server through the real exe mode and the real pipe.
+pub fn listen(host: &Arc<Host>) -> Option<Arc<AgentIo>> {
     let state = state(host);
-    if lock(&state.io).is_some() {
-        return;
+    let mut current = lock(&state.io);
+    if let Some(io) = current.as_ref() {
+        return Some(io.clone());
     }
+    std::env::current_exe().ok()?;
     let tools: Arc<dyn TerminalHandler> = Arc::new(WindowTools { host: Arc::downgrade(host) });
     let listener = crate::platform::agent_io_listener();
-    // The listener's tasks run on the app's runtime.
-    match tauri::async_runtime::block_on(async move { AgentIo::start(listener, tools) }) {
+    // The listener's tasks run on the app's runtime, whether this is called from it or from the setup's thread.
+    let runtime = tauri::async_runtime::handle();
+    let _entered = runtime.inner().enter();
+    match AgentIo::start(listener, tools) {
         Ok(io) => {
             host.log.line("agent io: listening");
-            *lock(&state.io) = Some(io);
+            *current = Some(io.clone());
+            Some(io)
         }
-        Err(error) => host.log.line(&format!("agent io: not started: {error}")),
+        Err(error) => {
+            host.log.line(&format!("agent io: not started: {error}"));
+            None
+        }
     }
 }
 

@@ -967,7 +967,7 @@ mod tests {
     fn a_working_folder_is_a_full_path() {
         assert!(is_working_folder(if cfg!(windows) { "C:\\work\\child" } else { "/work/child" }));
         assert!(!is_working_folder("relative\\child") && !is_working_folder("a\0b") && !is_working_folder(&"x".repeat(4097)));
-        assert_eq!(PENDING.len(), 3, "the history dialog is drawn now (show_history)");
+        assert_eq!(PENDING, [Pending::RunTerminalCommand, Pending::Mobile], "the agents' tools are served now (agent_io.rs, W7-C)");
     }
 
     /// D14 against C#'s capture (`mighty-native/tests/golden/terminal-history.json`, plan W6 §1.8): C#'s web smoke's shell pane

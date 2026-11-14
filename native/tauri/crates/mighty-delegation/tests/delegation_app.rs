@@ -6,7 +6,7 @@ mod delegation_io;
 
 use std::sync::Arc;
 
-use delegation_io::{Canned, IoHandler, executable, temp};
+use delegation_io::{IoHandler, executable, temp};
 use mighty_core::json::JsonOut;
 use mighty_delegation::agent_io::binding::{AgentIoBindings, SERVER_NAME, TOKEN_KEY};
 use mighty_delegation::mcp::delegation::{DelegationServer, HEADLESS_ARGUMENT, MANIFEST, SERVER_NAME as DELEGATION_SERVER};
@@ -194,6 +194,7 @@ async fn the_headless_server_lists_the_six_tools_and_forwards_over_the_pipe() {
     use std::io::{BufRead, BufReader, Write};
     use std::time::Duration;
 
+    use delegation_io::Canned;
     use mighty_delegation::agent_io::server::{AgentIo, TerminalCall, TerminalHandler};
     use mighty_delegation::agent_io::tools::ALL;
     use mighty_platform::BoxFuture;
