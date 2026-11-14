@@ -257,8 +257,10 @@ impl DelegationPlace {
         for who in ["GIT_AUTHOR", "GIT_COMMITTER"] {
             request = request.env(format!("{who}_NAME"), "Fixture").env(format!("{who}_EMAIL"), "fixture@example.invalid");
         }
-        // Generous: the first git launch on a cold CI runner can take seconds.
-        let captured = mighty_platform::capture(processes().as_ref(), request, None, Duration::from_secs(120), 64 << 20)
+        // Generous: the first git launch on a cold CI runner can take seconds. Boxed: a check awaits many of these, and a debug
+        // build's future keeps room for each.
+        let processes = processes();
+        let captured = Box::pin(mighty_platform::capture(processes.as_ref(), request, None, Duration::from_secs(120), 64 << 20))
             .await
             .unwrap_or_else(|e| panic!("git {}: {e}", arguments.join(" ")));
         let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).trim().replace("\r\n", "\n");

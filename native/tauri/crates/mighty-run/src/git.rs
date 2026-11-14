@@ -194,14 +194,15 @@ impl Git {
     /// The work map's run: None when git is missing, could not start, wrote more than 1 MiB, did not finish in time, or the hooks
     /// folder is not empty.
     pub async fn run(&self, arguments: &[&str], directory: &Path, timeout: f64) -> Option<GitResult> {
-        self.execute(Settings::WorkMap, arguments, directory, timeout, None).await.ok()
+        Box::pin(self.execute(Settings::WorkMap, arguments, directory, timeout, None)).await.ok()
     }
 
     /// `DelegationGit.RunDetailed`: runs git with delegation's settings and says why it gave no result. `input` is written to git's
     /// standard input while its output is read, within the same deadline, and then closed. `timeout` is in seconds (C#'s default is
     /// 10).
     pub async fn run_detailed(&self, arguments: &[&str], directory: &Path, timeout: f64, input: Option<&str>) -> GitRun {
-        self.execute(Settings::Delegation, arguments, directory, timeout, input).await
+        // Boxed: the run holds both outputs' reads and its input at once, and every step of a merge or a cleanup awaits one.
+        Box::pin(self.execute(Settings::Delegation, arguments, directory, timeout, input)).await
     }
 
     async fn execute(&self, settings: Settings, arguments: &[&str], directory: &Path, timeout: f64, input: Option<&str>) -> GitRun {
@@ -284,8 +285,10 @@ impl Git {
 async fn write(stdin: Option<ChildWriter>, input: Option<Vec<u8>>, broken_pipe: Arc<AtomicBool>) {
     let Some(mut pipe) = stdin else { return };
     let given = input.is_some();
+    // A Windows pipe takes a write whole and says only at the next write that git never read it: the empty write waits for the one
+    // before to end, and fails as it did (a pipe elsewhere writes nothing for it).
     if let Some(input) = input
-        && (pipe.write_all(&input).await.is_err() || pipe.flush().await.is_err())
+        && (pipe.write_all(&input).await.is_err() || pipe.flush().await.is_err() || pipe.write(&[]).await.is_err())
     {
         broken_pipe.store(true, Ordering::SeqCst);
     }
@@ -304,7 +307,7 @@ async fn read(
 ) -> Option<Vec<u8>> {
     let mut kept = vec![];
     let Some(mut reader) = reader else { return Some(kept) };
-    let mut buffer = [0u8; 8192];
+    let mut buffer = vec![0u8; 8192];
     loop {
         let read = reader.read(&mut buffer).await.ok()?;
         if read == 0 {
@@ -316,5 +319,50 @@ async fn read(
             return Some(kept);
         }
         kept.extend_from_slice(&buffer[..read]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `RunDetailed`'s settings, byte for byte as the fix branch's DelegationWorktree.cs:256 lists them.
+    #[test]
+    fn delegations_settings_are_the_hardened_runners() {
+        let hooks = Path::new("H");
+        let mut expected: Vec<String> = [
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=H",
+            "-c",
+            "gc.auto=0",
+            "-c",
+            "log.showSignature=false",
+            "-c",
+            "gpg.program=H",
+            "-c",
+            "gpg.ssh.program=H",
+            "-c",
+            "gpg.x509.program=H",
+        ]
+        .map(String::from)
+        .to_vec();
+        if crate::os::windows() {
+            expected.extend(["-c".to_string(), "core.longpaths=true".to_string()]);
+        }
+        expected.extend(["-C".to_string(), "D".to_string()]);
+        assert_eq!(delegation_settings(hooks, Path::new("D")), expected);
+        assert!(
+            is_object_name(&"a".repeat(40))
+                && is_object_name(&"F".repeat(64))
+                && !is_object_name(&"a".repeat(39))
+                && !is_object_name("HEAD")
+        );
+        let run = GitRun {
+            result: Some(GitResult { exit_code: 0, stdout: String::new(), stderr: String::new() }),
+            failure: GitFailure::BrokenPipe,
+        };
+        assert!(run.ok().is_none() && GitRun::failed(GitFailure::TimedOut).result.is_none());
     }
 }

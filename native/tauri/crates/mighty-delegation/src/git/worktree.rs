@@ -279,4 +279,14 @@ mod tests {
             assert!(is_safe_session_id(&id), "{id}");
         }
     }
+
+    /// The app's root is under the user's profile folder, and the notes sit in the worktree's own `.mighty-delegation`.
+    #[test]
+    fn the_root_and_the_notes_are_where_the_app_keeps_them() {
+        let sep = if os::windows() { '\\' } else { '/' };
+        let home = if os::windows() { r"C:\Users\someone" } else { "/Users/someone" };
+        assert_eq!(default_root(home), format!("{home}{sep}.mightycode{sep}worktrees"));
+        assert_eq!(task_file_in("W"), format!("W{sep}.mighty-delegation{sep}TASK.md"));
+        assert_eq!(report_file_in("W"), format!("W{sep}.mighty-delegation{sep}REPORT.md"));
+    }
 }
