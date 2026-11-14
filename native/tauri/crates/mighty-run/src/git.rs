@@ -12,8 +12,8 @@
 //! Owner from W7 Step 0: W7-B.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use mighty_platform::process::{ChildControl, ChildReader, ChildWriter};
@@ -145,7 +145,9 @@ enum Settings {
 pub struct Git {
     processes: Arc<dyn ProcessHost>,
     hooks: PathBuf,
-    program: Option<PathBuf>,
+    /// `DelegationGit.found`: git on the PATH once it has been found; looked for again at each use until then (C# `found ??=`).
+    found: Arc<OnceLock<PathBuf>>,
+    /// Checks only: the global config file every git reads ([`Git::with_global_config`]).
     global_config: Option<PathBuf>,
 }
 
@@ -154,11 +156,13 @@ impl Git {
     /// on Windows git reads a device name such as `NUL` as a relative path, so a real folder is named; `/dev/null` on the Mac). Checked
     /// empty before each run.
     pub fn new(processes: Arc<dyn ProcessHost>, hooks: PathBuf) -> Git {
-        Git { processes, hooks, program: executable(), global_config: None }
+        Git { processes, hooks, found: Arc::new(OnceLock::new()), global_config: None }
     }
 
     /// For checks only: every git this runs reads `file` as its global config and no system config (`GIT_CONFIG_GLOBAL`,
-    /// `GIT_CONFIG_NOSYSTEM=1`, laid over after the inherited `GIT_*` variables are taken out), so a check never reads the user's own.
+    /// `GIT_CONFIG_NOSYSTEM=1`, laid over after the inherited `GIT_*` variables are taken out), so a check never reads the user's own;
+    /// and git never looks for a repository above the folder holding `file`, the check's own (`GIT_CEILING_DIRECTORIES` is that
+    /// folder's parent), so a folder there that is no repository never climbs into one around it.
     pub fn with_global_config(mut self, file: PathBuf) -> Git {
         self.global_config = Some(file);
         self
@@ -166,12 +170,17 @@ impl Git {
 
     /// Whether git was found.
     pub fn available(&self) -> bool {
-        self.program.is_some()
+        self.program().is_some()
     }
 
-    /// The git executable found on the PATH.
+    /// The git executable on the PATH, looked for until it is found once.
     pub fn program(&self) -> Option<&Path> {
-        self.program.as_deref()
+        if self.found.get().is_none()
+            && let Some(found) = executable()
+        {
+            let _ = self.found.set(found);
+        }
+        self.found.get().map(PathBuf::as_path)
     }
 
     /// The hooks folder (`DelegationGit.NoHooks`).
@@ -179,7 +188,8 @@ impl Git {
         &self.hooks
     }
 
-    /// `HooksEmpty`: the hooks folder is a plain, empty folder, made when it is missing. Git does not run while it is not.
+    /// `HooksEmpty`: the hooks folder is a plain, empty folder (no link, junction or other reparse point), made when it is missing.
+    /// Git does not run while it is not.
     fn hooks_empty(&self) -> bool {
         if !crate::os::windows() && self.hooks == Path::new("/dev/null") {
             return true;
@@ -187,7 +197,7 @@ impl Git {
         if std::fs::create_dir_all(&self.hooks).is_err() {
             return false;
         }
-        let plain = std::fs::symlink_metadata(&self.hooks).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink());
+        let plain = std::fs::symlink_metadata(&self.hooks).is_ok_and(|m| m.is_dir() && !reparse_point(&m));
         plain && std::fs::read_dir(&self.hooks).is_ok_and(|mut entries| entries.next().is_none())
     }
 
@@ -198,15 +208,16 @@ impl Git {
     }
 
     /// `DelegationGit.RunDetailed`: runs git with delegation's settings and says why it gave no result. `input` is written to git's
-    /// standard input while its output is read, within the same deadline, and then closed. `timeout` is in seconds (C#'s default is
-    /// 10).
+    /// standard input while its output is read, within the same deadline, and then closed; it is for a git that reads its standard
+    /// input to its end (`--pathspec-from-file=-`, `--stdin`): one that exits first is [`GitFailure::BrokenPipe`]. `timeout` is in
+    /// seconds (C#'s default is 10). Dropping the future before it ends kills git with everything it started.
     pub async fn run_detailed(&self, arguments: &[&str], directory: &Path, timeout: f64, input: Option<&str>) -> GitRun {
         // Boxed: the run holds both outputs' reads and its input at once, and every step of a merge or a cleanup awaits one.
         Box::pin(self.execute(Settings::Delegation, arguments, directory, timeout, input)).await
     }
 
     async fn execute(&self, settings: Settings, arguments: &[&str], directory: &Path, timeout: f64, input: Option<&str>) -> GitRun {
-        let Some(program) = self.program.clone() else { return GitRun::failed(GitFailure::NotStarted) };
+        let Some(program) = self.program().map(Path::to_path_buf) else { return GitRun::failed(GitFailure::NotStarted) };
         if !self.hooks_empty() {
             return GitRun::failed(GitFailure::NotStarted);
         }
@@ -239,9 +250,14 @@ impl Git {
         }
         if let Some(file) = &self.global_config {
             request = request.env("GIT_CONFIG_GLOBAL", file.to_string_lossy()).env("GIT_CONFIG_NOSYSTEM", "1");
+            if let Some(ceiling) = file.parent().and_then(Path::parent) {
+                request = request.env("GIT_CEILING_DIRECTORIES", ceiling.to_string_lossy());
+            }
         }
         let Ok(mut child) = self.processes.spawn(request).await else { return GitRun::failed(GitFailure::NotStarted) };
         let control = child.control();
+        // A caller that drops this future before it ends still ends git and everything it started.
+        let guard = CloseOnDrop(Some(control.clone()));
         let (stdin, stdout, stderr) = (child.stdin.take(), child.stdout.take(), child.stderr.take());
         let total = Arc::new(AtomicUsize::new(0));
         let over = Arc::new(AtomicBool::new(false));
@@ -264,8 +280,7 @@ impl Git {
         })
         .await;
         // Ending the job here is the app's own clean-up, not a timeout.
-        control.kill();
-        let _ = control.close().await;
+        guard.close().await;
         let Ok((exit, out, err)) = outcome else { return GitRun::failed(GitFailure::TimedOut) };
         if over.load(Ordering::SeqCst) {
             return GitRun::failed(GitFailure::TooMuchOutput);
@@ -281,12 +296,53 @@ impl Git {
     }
 }
 
+/// Kills the child and closes it in a task of its own when dropped armed (a run's future dropped before it ended); [`CloseOnDrop::close`]
+/// does it in place on the way out.
+struct CloseOnDrop(Option<Arc<dyn ChildControl>>);
+
+impl CloseOnDrop {
+    async fn close(mut self) {
+        if let Some(control) = self.0.take() {
+            control.kill();
+            let _ = control.close().await;
+        }
+    }
+}
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        if let Some(control) = self.0.take() {
+            control.kill();
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move {
+                    let _ = control.close().await;
+                });
+            }
+        }
+    }
+}
+
+/// `FileAttributes.ReparsePoint` of what `symlink_metadata` read (a link elsewhere).
+fn reparse_point(meta: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        meta.file_type().is_symlink()
+    }
+}
+
 /// Writes `input` (when there is one) and closes git's standard input; a pipe git closed first marks `broken_pipe`.
 async fn write(stdin: Option<ChildWriter>, input: Option<Vec<u8>>, broken_pipe: Arc<AtomicBool>) {
     let Some(mut pipe) = stdin else { return };
     let given = input.is_some();
     // A Windows pipe takes a write whole and says only at the next write that git never read it: the empty write waits for the one
-    // before to end, and fails as it did (a pipe elsewhere writes nothing for it).
+    // before to end and fails as it did; on the Mac an empty write to a pipe git has closed fails too. Git has not seen the end of its
+    // input yet (that comes with the shutdown below), so a git that reads to the end is still reading here.
     if let Some(input) = input
         && (pipe.write_all(&input).await.is_err() || pipe.flush().await.is_err() || pipe.write(&[]).await.is_err())
     {

@@ -36,6 +36,12 @@ pub fn standardized(path: &str) -> String {
     joined.to_string_lossy().into_owned()
 }
 
+/// Whether `path` itself is a symbolic link, a junction or another link (read without following it): a worktree folder git must
+/// never be pointed through.
+pub fn is_link(path: &str) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
 /// `DelegationPaths.Same`: equal, ignoring case on Windows.
 pub fn same(first: &str, second: &str) -> bool {
     if os::windows() { ordinal_ignore_case(first, second) == Ordering::Equal } else { first == second }
@@ -95,6 +101,20 @@ impl DelegationPaths {
             }
             missing.push(name.to_os_string());
             existing = parent.to_path_buf();
+        }
+    }
+
+    /// Where `path` itself lies: its parent folder [`DelegationPaths::canonical`] and its own last name as written, never resolved, so a
+    /// worktree folder replaced by a link or junction is still named as the link, not as what it points to (beyond C#, whose
+    /// `Canonical` follows it). A root is [`DelegationPaths::canonical`] itself.
+    pub fn canonical_place(&self, path: &str) -> String {
+        let standard = standardized(path);
+        let place = Path::new(&standard);
+        match (place.parent(), place.file_name()) {
+            (Some(parent), Some(name)) if !parent.as_os_str().is_empty() => {
+                os::combine(&self.canonical(&parent.to_string_lossy()), &name.to_string_lossy())
+            }
+            _ => self.canonical(&standard),
         }
     }
 
