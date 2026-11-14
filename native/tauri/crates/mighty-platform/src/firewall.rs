@@ -2,6 +2,8 @@
 //! one rule named for the app, allowing this executable on the given TCP ports. The Mac has no such step
 //! ([`crate::PlatformProfile::direct_connection_firewall`] is false) and answers `Unsupported`.
 
+pub mod netsh;
+
 use crate::{BoxFuture, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

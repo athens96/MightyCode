@@ -143,9 +143,9 @@ impl FontCatalog for Unsupported {
     }
 }
 
-impl HttpsGet for Unsupported {
+impl HttpsSend for Unsupported {
     fn get(&self, _request: HttpsRequest, _max_body: usize) -> BoxFuture<'_, Result<HttpsResponse>> {
-        Box::pin(async { no("HttpsGet", "get") })
+        Box::pin(async { no("HttpsSend", "get") })
     }
 }
 
@@ -172,6 +172,44 @@ impl DiskSpace for Unsupported {
     }
 }
 
+/// No adapter, no listener, no notification until the OS's stage (W8-C on Windows, the Mac stage).
+impl Network for Unsupported {
+    fn adapters(&self) -> Result<Adapters> {
+        no("Network", "adapters")
+    }
+    fn bind_exclusive(&self, _address: std::net::SocketAddr, _backlog: u32) -> Result<std::net::TcpListener> {
+        no("Network", "bind_exclusive")
+    }
+    fn on_change(&self, _callback: NetworkCallback) -> Result<Subscription> {
+        no("Network", "on_change")
+    }
+    fn on_resume(&self, _callback: NetworkCallback) -> Result<Subscription> {
+        no("Network", "on_resume")
+    }
+}
+
+impl ProxyResolver for Unsupported {
+    fn resolve(&self, _url: &str) -> BoxFuture<'_, Result<Proxy>> {
+        Box::pin(async { no("ProxyResolver", "resolve") })
+    }
+}
+
+/// Screen share is paused on every OS (W8-F, D11).
+impl ScreenCapture for Unsupported {
+    fn displays(&self) -> Result<Vec<screen::ScreenDisplay>> {
+        no("ScreenCapture", "displays")
+    }
+    fn capture(&self, _display: &str) -> BoxFuture<'_, Result<screen::ScreenFrame>> {
+        Box::pin(async { no("ScreenCapture", "capture") })
+    }
+}
+
+impl RemoteInput for Unsupported {
+    fn send(&self, _display: &str, _event: screen::RemoteInputEvent) -> Result<()> {
+        no("RemoteInput", "send")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,7 +220,13 @@ mod tests {
         assert!(TerminalLauncher::open(&port, TerminalLaunch::default()).err().is_some_and(|e| e.is_unsupported()));
         assert!(port.families().unwrap_err().is_unsupported());
         let request = HttpsRequest { url: "https://api.anthropic.com/".into(), headers: vec![], timeout: std::time::Duration::ZERO };
-        assert!(HttpsGet::get(&port, request, 0).await.unwrap_err().is_unsupported());
+        assert!(HttpsSend::get(&port, request.clone(), 0).await.unwrap_err().is_unsupported());
+        assert!(HttpsSend::post(&port, request, b"{}".to_vec(), 0).await.unwrap_err().is_unsupported());
+        assert!(port.adapters().unwrap_err().is_unsupported());
+        assert!(port.bind_exclusive("127.0.0.1:0".parse().unwrap(), 1).unwrap_err().is_unsupported());
+        assert!(port.on_change(NetworkCallback::new(|| {})).err().is_some_and(|e| e.is_unsupported()));
+        assert!(ProxyResolver::resolve(&port, "https://example.invalid/").await.unwrap_err().is_unsupported());
+        assert!(port.displays().unwrap_err().is_unsupported());
         assert!(SecretVault::save(&port, "id", "x").unwrap_err().is_unsupported());
         assert_eq!(SecretVault::load(&port, "id"), None);
         assert!(PrefsStore::get(&port, "k").unwrap_err().is_unsupported());

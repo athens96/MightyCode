@@ -24,13 +24,17 @@ pub mod files;
 pub mod firewall;
 pub mod fonts;
 pub mod http;
+pub mod net;
 pub mod notify;
 pub mod pairing;
 pub mod paths;
+pub mod pet;
 pub mod prefs;
 pub mod process;
 pub mod profile;
+pub mod proxy;
 pub mod pty;
+pub mod screen;
 pub mod secrets;
 pub mod setup;
 pub mod surface;
@@ -46,21 +50,25 @@ pub use error::{PlatformError, Result};
 pub use files::{ClipboardImage, Desktop, FileHandles, FilePorts, PathProbe, PdfPage, PdfRaster, SaveDialog, SaveRequest};
 pub use firewall::{Firewall, FirewallChange, FirewallRule};
 pub use fonts::{FontCatalog, FontFamily};
-pub use http::{HttpsGet, HttpsRequest, HttpsResponse};
+pub use http::{HttpsRequest, HttpsResponse, HttpsSend};
+pub use net::{Adapter, Adapters, Network, NetworkCallback, Subscription};
 pub use notify::{ActivationHandler, Notification, Notifier};
 pub use pairing::{PairedDevice, PairingIdentity, PairingStore, PushRegistration};
 pub use paths::{AppPaths, Paths};
+pub use pet::PetScene;
 pub use prefs::{PrefValue, PrefsStore};
 pub use process::{Captured, Child, ChildControl, ProcessHost, SpawnRequest, capture};
 pub use profile::{
     AgentSignIn, CliUpdater, McpTransport, Os, PairingLayout, PathStyle, PlatformProfile, PluginListWhileReading, SettingsStore,
 };
+pub use proxy::{Proxy, ProxyResolver};
 pub use pty::{PtyControl, PtyHost, PtyRequest, PtySession, PtySize, TerminalInput};
+pub use screen::{RemoteInput, ScreenCapture};
 pub use secrets::SecretVault;
 pub use setup::SetupFiles;
 pub use surface::{
-    BrowserEvent, BrowserListener, BrowserOptions, BrowserSurface, DeviceRect, Drawing, LogicalRect, NativeSurface, PetWindow,
-    SurfaceFactory, SurfaceKind, SurfaceState, TerminalOptions, TerminalSurface,
+    BrowserEvent, BrowserListener, BrowserOptions, BrowserSurface, DeviceRect, Drawing, LogicalPoint, LogicalRect, NativeSurface, PetEvent,
+    PetPointer, PetWindow, SurfaceFactory, SurfaceKind, SurfaceState, TerminalOptions, TerminalSurface,
 };
 pub use update::{StagedUpdate, UpdateInstaller};
 
@@ -82,6 +90,12 @@ pub struct Platform {
     pub notifier: Arc<dyn Notifier>,
     pub firewall: Arc<dyn Firewall>,
     pub updates: Arc<dyn UpdateInstaller>,
+    /// W8: the network's adapters, an exclusive listener, address changes and resume (the direct path's and remote sharing's).
+    pub network: Arc<dyn Network>,
+    /// W8: the system's proxy for a URL (the relay's WebSocket and push; remote v2 uses none).
+    pub proxy: Arc<dyn ProxyResolver>,
+    /// W8: HTTPS GET and POST (push; the account usage keeps its own guarded transport, src-tauri platform.rs `Ports`).
+    pub https: Arc<dyn HttpsSend>,
 }
 
 impl std::fmt::Debug for Platform {

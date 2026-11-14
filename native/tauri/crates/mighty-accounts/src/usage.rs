@@ -6,7 +6,7 @@
 //!
 //! Secrets: the Claude sign-in exists only inside one [`ClaudeAccountProbe::read`] call, in the `Authorization` header of a request
 //! to `api.anthropic.com` ([`guard`]: HTTPS, that host, four paths, nothing else); a redirect is refused, never followed. No
-//! snapshot, row, error, log line or `Debug` text carries it. The HTTPS GET is a port this crate defines ([`HttpsGet`]) until W6-A's
+//! snapshot, row, error, log line or `Debug` text carries it. The HTTPS GET is a port this crate defines ([`HttpsSend`]) until W6-A's
 //! `mighty_platform::http` lands; the Windows one is WinHTTP with redirects off.
 
 mod presentation;
@@ -213,7 +213,7 @@ impl From<AccountUsageFailure> for UsageError {
 
 // ── the HTTPS GET over mighty-platform's port ────────────────────────────────────────────────────────────────────────────
 
-pub use mighty_platform::http::{HttpsGet, HttpsRequest, HttpsResponse};
+pub use mighty_platform::http::{HttpsRequest, HttpsResponse, HttpsSend};
 
 /// `AccountUsageHttpRequest`: the port's GET (always a GET: the port has no other method, so no POST can exist on this surface).
 pub type AccountUsageHttpRequest = HttpsRequest;
@@ -239,17 +239,17 @@ pub enum HttpFailure {
 }
 
 /// One GET through the port: the URL guarded first ([`guard`]: refused before it leaves), then sent with the 1 MiB body cap.
-pub async fn send(http: &dyn HttpsGet, request: HttpsRequest) -> Result<HttpsResponse, HttpFailure> {
+pub async fn send(http: &dyn HttpsSend, request: HttpsRequest) -> Result<HttpsResponse, HttpFailure> {
     let refused = || HttpFailure::Refused(AccountUsageFailure::refresh_failed(AccountUsageFailureKind::Network));
     let url = Url::parse(&request.url).map_err(|_| refused())?;
     guard(&url).map_err(HttpFailure::Refused)?;
     http.get(request, MAXIMUM_BODY_BYTES).await.map_err(|error| HttpFailure::Transport(error.to_string()))
 }
 
-/// A synchronous handler as an [`HttpsGet`] (the checks' recording transports, the reset smoke's fake): it never reaches a network.
+/// A synchronous handler as an [`HttpsSend`] (the checks' recording transports, the reset smoke's fake): it never reaches a network.
 pub struct HttpFn<F>(pub F);
 
-impl<F> HttpsGet for HttpFn<F>
+impl<F> HttpsSend for HttpFn<F>
 where
     F: Fn(&HttpsRequest) -> mighty_platform::Result<HttpsResponse> + Send + Sync,
 {
@@ -261,9 +261,9 @@ where
 
 /// `ClaudeAccountProbe.Guarded`: the guard runs before the transport, so a URL it refuses never reaches the network (refused with
 /// the guard's copy, never a header value).
-pub struct Guarded(pub Arc<dyn HttpsGet>);
+pub struct Guarded(pub Arc<dyn HttpsSend>);
 
-impl HttpsGet for Guarded {
+impl HttpsSend for Guarded {
     fn get(&self, request: HttpsRequest, max_body: usize) -> BoxFuture<'_, mighty_platform::Result<HttpsResponse>> {
         let allowed = Url::parse(&request.url).ok().is_some_and(|url| guard(&url).is_ok());
         if !allowed {

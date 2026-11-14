@@ -247,7 +247,8 @@ impl Runs {
             RunServiceOptions {
                 plugin_directory: plugin_directory(),
                 permission_card: true,
-                remote: None,
+                // A remote workspace's panes run on their host (remote.rs, W8-D's client).
+                remote: crate::remote::runner(host),
                 configure: Some(configure),
                 admitting: None,
                 // A Claude or Codex run's MCP servers (agent_io.rs, W7-C) and delegation's run ledger and worktrees (delegation.rs, W7-D).

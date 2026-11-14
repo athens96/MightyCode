@@ -11,10 +11,12 @@ mod antigravity;
 mod args;
 mod ask;
 mod cards;
+mod companion;
 mod composer;
 mod delegation;
 mod delta;
 mod dialogs;
+mod direct;
 mod files;
 mod frame;
 mod history;
@@ -22,22 +24,29 @@ mod host;
 mod logfile;
 mod methods;
 mod mighty;
+mod mobile;
 mod models;
 mod native;
 mod notifications;
 mod panes;
+mod phone;
 mod platform;
 mod plugins;
+mod remote;
 mod runs;
 mod settings;
 mod setup;
 mod smoke;
 mod smoke_accounts;
 mod smoke_acp;
+mod smoke_companion;
 mod smoke_delegation;
+mod smoke_direct;
 mod smoke_files;
 mod smoke_frame;
 mod smoke_history;
+mod smoke_phone;
+mod smoke_remote;
 mod smoke_runs;
 mod smoke_settings;
 mod smoke_setup;
@@ -341,6 +350,11 @@ fn main() {
             // Delegation over the run service (delegation.rs, W7-D) and the agents' MCP listener (agent_io.rs, W7-C; not in a smoke).
             delegation::start(&host);
             agent_io::start(&host);
+            // W8: the phone remote (mobile.rs, W8-A), the direct path (direct.rs, W8-C) and remote workspaces (remote.rs, W8-D); each acts
+            // only where the host allows it (`Host::may_reach_relay`, `Host::may_listen`). The companion starts with the window, below.
+            mobile::start(&host, &platform);
+            direct::start(&host, &platform);
+            remote::start(&host, &platform);
             host.start_clocks();
             let (inbound, mut calls) = tokio::sync::mpsc::unbounded_channel::<Value>();
             app.manage(Inbound(inbound));
@@ -432,6 +446,8 @@ fn main() {
             let window = window.build()?;
             // The native views over the page (browser panes; the Mac's terminal later), in the OS's implementation.
             let factory = platform::surfaces(window.as_ref().window());
+            // The companion pet (companion.rs, W8-E): its window is one of the main window's native views.
+            companion::start(&host, &platform, factory.clone());
             let browser_data = platform.paths.browser_dir();
             host.log.line(&format!("browser data {}", browser_data.display()));
             let push = surface::page_push(app.handle().clone());
@@ -458,6 +474,11 @@ fn main() {
                 updates::shutdown(&host);
                 // The agents' bindings revoked and their listener closed (agent_io.rs, W7-C), delegation's retries stopped (W7-D).
                 agent_io::shutdown(&host);
+                // W8: the pet closed, the phone's relay and direct listeners and remote sharing ended before the runs are disposed.
+                companion::shutdown(&host);
+                mobile::shutdown(&host);
+                direct::shutdown(&host);
+                remote::shutdown(&host);
                 // Every run stopped and ended before delegation stops (C# DisposeAsync: `local.DisposeAsync`, then `StopDelegation`), so a
                 // child killed by quitting is recorded with its quit end; `host.close` below then makes the last save.
                 host.begin_closing();

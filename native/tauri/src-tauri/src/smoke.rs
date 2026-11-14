@@ -81,6 +81,11 @@ enum Stage {
     Accounts,
     /// The plugin browser and the updates (smoke_updates.rs, W6-D).
     Updates,
+    /// W8's remote step, in parts ([`REMOTE_PARTS`]): the direct path (smoke_direct.rs, W8-C), remote workspaces (smoke_remote.rs, W8-D)
+    /// and the phone's round trip (smoke_phone.rs, W8-B), each on loopback inside this process.
+    Remote,
+    /// The companion's own test overlay and its page controls (smoke_companion.rs, W8-E).
+    Companion,
     /// An opencode run's question card answered from the page (smoke_acp.rs), with the stand-in CLI.
     Acp,
     /// Delegation on its fixture repository under the smoke's profile (smoke_delegation.rs, W7-D).
@@ -89,7 +94,7 @@ enum Stage {
 }
 
 /// The steps after the first probe, in their order: each one that can start does (`Smoke::start`), the run steps last.
-const STEPS: [Stage; 14] = [
+const STEPS: [Stage; 16] = [
     Stage::Frame,
     Stage::Browser,
     Stage::Terminal,
@@ -101,9 +106,19 @@ const STEPS: [Stage; 14] = [
     Stage::Setup,
     Stage::Accounts,
     Stage::Updates,
+    Stage::Remote,
+    Stage::Companion,
     Stage::Acp,
     Stage::Delegation,
     Stage::Runs,
+];
+
+/// The remote step's parts in their order (W8 plan, Step 0): each that can start does, reports its part through `Smoke::probed`, and
+/// the next part starts; the step ends after the last. A part's report is kept under its key in the stage's report.
+const REMOTE_PARTS: [(&str, StepStart, StepChecks); 3] = [
+    ("mobileDirect", crate::smoke_direct::start, crate::smoke_direct::checks),
+    ("remoteWorkspaces", crate::smoke_remote::start, crate::smoke_remote::checks),
+    ("phone", crate::smoke_phone::start, crate::smoke_phone::checks),
 ];
 
 const PROBE: &str = r#"(async () => {
@@ -260,6 +275,11 @@ struct Progress {
     acp: Option<Value>,
     /// The delegation step's report (W7-D).
     delegation: Option<Value>,
+    /// The remote step's report: each part's under its key (W8), and the part that runs now.
+    remote: Option<Value>,
+    remote_part: usize,
+    /// The companion step's report (W8-E).
+    companion: Option<Value>,
     /// The reload step's page is loading again: its `ready` brings the probe.
     reload_waiting: bool,
     reload_ready: bool,
@@ -285,6 +305,9 @@ impl Progress {
             Stage::Setup => Some(&mut self.setup),
             Stage::Accounts => Some(&mut self.accounts),
             Stage::Updates => Some(&mut self.updates),
+            // Each part's report goes under its key (`Smoke::probed`).
+            Stage::Remote => None,
+            Stage::Companion => Some(&mut self.companion),
             Stage::Acp => Some(&mut self.acp),
             Stage::Delegation => Some(&mut self.delegation),
             Stage::Runs => None,
@@ -316,10 +339,10 @@ impl Smoke {
     fn timeout(&self) -> Duration {
         Duration::from_secs(match self.mode {
             // The frame, browser, gitCreate and reload steps add up to two minutes, the terminal and history steps a minute each.
-            // The W6 steps a minute more.
-            Mode::Page => 390,
-            Mode::FakeClaude => 540,
-            Mode::RealClaude => 420,
+            // The W6 steps a minute more, and the W8 steps (remote, companion) another.
+            Mode::Page => 450,
+            Mode::FakeClaude => 600,
+            Mode::RealClaude => 480,
         })
     }
 
@@ -400,8 +423,18 @@ impl Smoke {
             if let Some(report) = progress.report(stage) {
                 *report = Some(probe.clone());
             }
+            if stage == Stage::Remote {
+                let key = REMOTE_PARTS[progress.remote_part.min(REMOTE_PARTS.len() - 1)].0;
+                let remote = progress.remote.get_or_insert_with(|| json!({}));
+                remote[key] = probe.clone();
+            }
             stage
         };
+        // The remote step's next part, if one starts; else the step ends here.
+        let next_part = self.progress().remote_part + 1;
+        if stage == Stage::Remote && self.start_remote_part(host, next_part) {
+            return;
+        }
         if stage == Stage::Main {
             let active = host.view().snapshot.active_session_id.clone();
             self.progress().main_active = active;
@@ -443,10 +476,25 @@ impl Smoke {
             Stage::Setup => page_steps && shared(host).is_some_and(|host| crate::smoke_setup::start(&host)),
             Stage::Accounts => page_steps && shared(host).is_some_and(|host| crate::smoke_accounts::start(&host)),
             Stage::Updates => page_steps && shared(host).is_some_and(|host| crate::smoke_updates::start(&host)),
+            // W8's steps, each its parts' (smoke_direct.rs, smoke_remote.rs, smoke_phone.rs; smoke_companion.rs).
+            Stage::Remote => page_steps && self.start_remote_part(host, 0),
+            Stage::Companion => page_steps && shared(host).is_some_and(|host| crate::smoke_companion::start(&host)),
             Stage::Acp => self.mode == Mode::FakeClaude && crate::smoke_acp::start(host),
             Stage::Delegation => page_steps && shared(host).is_some_and(|host| crate::smoke_delegation::start(&host)),
             Stage::Runs => self.start_runs(host),
         }
+    }
+
+    /// Starts the first part of the remote step from `from` on that can start ([`REMOTE_PARTS`]); false when none does.
+    fn start_remote_part(&self, host: &Host, from: usize) -> bool {
+        let Some(shared) = shared(host) else { return false };
+        for (at, (_, start, _)) in REMOTE_PARTS.iter().enumerate().skip(from) {
+            if start(&shared) {
+                self.progress().remote_part = at;
+                return true;
+            }
+        }
+        false
     }
 
     /// Makes the gitCreate step's bare repository, points the sheets' location at a temporary folder and runs its probe (smoke_frame.rs);
@@ -730,6 +778,21 @@ impl Smoke {
             for (name, passed) in crate::smoke_delegation::checks(delegation.as_ref().unwrap_or(&missing)) {
                 checks[name] = json!(passed && delegation.is_some());
             }
+            // W8's steps: each remote part's checks from its report under its key, then the companion's (a part or step that did not
+            // report fails every one of its checks).
+            let remote = self.progress().remote.clone();
+            for (key, _, part) in REMOTE_PARTS {
+                let report = remote.as_ref().and_then(|r| r.get(key)).filter(|r| !r.is_null()).cloned();
+                let missing = json!({"error": format!("the remote step's {key} part did not report")});
+                for (name, passed) in part(report.as_ref().unwrap_or(&missing)) {
+                    checks[name] = json!(passed && report.is_some());
+                }
+            }
+            let companion = self.progress().companion.clone();
+            let missing = json!({"error": "the companion step did not report"});
+            for (name, passed) in crate::smoke_companion::checks(companion.as_ref().unwrap_or(&missing)) {
+                checks[name] = json!(passed && companion.is_some());
+            }
         }
         match self.mode {
             Mode::Page => {}
@@ -818,6 +881,8 @@ impl Smoke {
             "localeKeyLeakScan": leak_scan.flatten(),
             "acp": self.progress().acp.clone(),
             "delegation": self.progress().delegation.clone(),
+            "remote": self.progress().remote.clone(),
+            "companion": self.progress().companion.clone(),
             "runs": runs,
             "mode": format!("{:?}", self.mode),
             "host": {"workspaces": workspaces, "panes": panes, "theme": theme, "activeSessionId": active, "language": host.locale.language()},
@@ -862,8 +927,11 @@ impl Smoke {
     }
 }
 
-/// A W6 step's checks from its report.
+/// A step's checks from its report (W6's, W8's remote parts).
 type StepChecks = fn(&Value) -> Vec<(&'static str, bool)>;
+
+/// A step's start (W8's remote parts): false when it does not run.
+type StepStart = fn(&Arc<Host>) -> bool;
 
 /// The host as the steps that outlive the call share it.
 fn shared(host: &Host) -> Option<Arc<Host>> {

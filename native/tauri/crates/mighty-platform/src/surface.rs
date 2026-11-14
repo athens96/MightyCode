@@ -177,13 +177,65 @@ pub trait TerminalSurface: NativeSurface {
     fn set_theme(&self, light: bool) -> Result<()>;
 }
 
-/// The companion pet: a window of its own over every app, never activated, clicks passing through where it draws nothing
-/// (Windows: a layered tool HWND; the Mac: a non-activating NSPanel).
+/// A point in DIPs (screen points on the Mac, device-independent pixels on Windows).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct LogicalPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+/// Where the pointer was: in the pet window (DIPs from its top left) and on the screen (DIPs of the virtual desktop), so a drag
+/// follows the screen while the window moves under it.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PetPointer {
+    pub window: LogicalPoint,
+    pub screen: LogicalPoint,
+}
+
+/// What the pet window tells its owner (C# `CompanionOverlay`'s pointer, wheel, DPI and display handlers), in order, from the window's
+/// own thread through [`PetWindow::events`]. Only presses where the drawn alpha is not 0 reach the window (clicks pass through
+/// elsewhere); the owner decides what a press means (a drag after 4 px, a resize strip, a button, the menu).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PetEvent {
+    /// The left button went down.
+    Pressed(PetPointer),
+    /// The pointer moved while over the window or while the left button is held (captured).
+    Moved(PetPointer),
+    /// The left button went up.
+    Released(PetPointer),
+    DoubleClicked(PetPointer),
+    /// The right button went up (the self-drawn menu).
+    RightClicked(PetPointer),
+    /// The wheel turned: `delta` in Windows' units (120 a notch; the bubble pages each 120).
+    Wheel {
+        pointer: PetPointer,
+        delta: i32,
+    },
+    /// A press ended without a release (capture lost, Esc, the window hidden).
+    Cancelled,
+    /// The window's monitor scale changed (Windows `WM_DPICHANGED`, clamped to 1–4): the owner lays the scene out again.
+    DpiChanged {
+        scale: f64,
+    },
+    /// A display came, went or moved (the work area may have changed: the owner keeps the window on screen).
+    DisplayChanged,
+}
+
+/// The companion pet (W8-E, D8): a window of its own over every app, never activated, clicks passing through where it draws nothing
+/// (Windows: a `WS_EX_NOACTIVATE|WS_EX_LAYERED|WS_EX_TOOLWINDOW` popup updated with `UpdateLayeredWindow`; the Mac: a non-activating
+/// NSPanel). The shared logic lays out a [`crate::PetScene`]; the platform draws it.
+///
+/// Contract: `show` draws `scene` first and only then shows the window (C#: the first frame before Show, so no frame passes clicks
+/// through everywhere), without taking the focus; `draw` replaces the picture (the window's size is the scene's); `place` moves the
+/// window's top left to `at` (screen DIPs) without activating it; `work_area` is the work area of the monitor nearest `near`; `events`
+/// hands over the window's [`PetEvent`]s and may be taken once (a second call is an error); after `close` the window is gone and every
+/// call is an error. Every call returns without waiting for the window's thread to draw.
 pub trait PetWindow: Send + Sync {
-    /// Shows the window at `frame` in screen points.
-    fn show_at(&self, frame: LogicalRect) -> Result<()>;
-    fn hide(&self) -> Result<()>;
-    fn set_click_through(&self, on: bool) -> Result<()>;
+    fn show(&self, scene: &crate::PetScene) -> Result<()>;
+    fn draw(&self, scene: &crate::PetScene) -> Result<()>;
+    fn place(&self, at: LogicalPoint) -> Result<()>;
+    fn work_area(&self, near: LogicalPoint) -> Result<LogicalRect>;
+    fn events(&self) -> Result<tokio::sync::mpsc::UnboundedReceiver<PetEvent>>;
     fn close(&self) -> Result<()>;
 }
 

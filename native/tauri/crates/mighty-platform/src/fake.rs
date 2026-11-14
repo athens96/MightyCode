@@ -33,6 +33,9 @@ pub fn platform(root: &Path, os: Os) -> Platform {
         notifier: Arc::new(RecordingNotifier::default()),
         firewall: Arc::new(FakeFirewall::default()),
         updates: Arc::new(FakeUpdateInstaller::default()),
+        network: Arc::new(FakeNetwork::default()),
+        proxy: Arc::new(FakeProxy::default()),
+        https: Arc::new(RecordingHttps::default()),
     }
 }
 
@@ -479,11 +482,12 @@ impl FontCatalog for FakeFonts {
     }
 }
 
-/// An HTTPS GET that reaches no network: it records each request with its body limit and answers the next scripted response (none
-/// left: a refusal).
+/// HTTPS that reaches no network: it records each request with its body limit (and a POST's body) and answers the next scripted
+/// response, GET and POST alike (none left: a refusal).
 #[derive(Default)]
 pub struct RecordingHttps {
     requests: Mutex<Vec<(HttpsRequest, usize)>>,
+    posts: Mutex<Vec<(HttpsRequest, Vec<u8>)>>,
     responses: Mutex<VecDeque<HttpsResponse>>,
 }
 
@@ -491,16 +495,130 @@ impl RecordingHttps {
     pub fn answer(&self, response: HttpsResponse) {
         lock(&self.responses).push_back(response);
     }
+    /// Every request, GETs and POSTs, in order.
     pub fn requests(&self) -> Vec<(HttpsRequest, usize)> {
         lock(&self.requests).clone()
     }
-}
-
-impl HttpsGet for RecordingHttps {
-    fn get(&self, request: HttpsRequest, max_body: usize) -> BoxFuture<'_, Result<HttpsResponse>> {
-        lock(&self.requests).push((request, max_body));
+    /// The POSTs with their bodies, in order.
+    pub fn posts(&self) -> Vec<(HttpsRequest, Vec<u8>)> {
+        lock(&self.posts).clone()
+    }
+    fn next(&self) -> BoxFuture<'_, Result<HttpsResponse>> {
         let next = lock(&self.responses).pop_front();
         Box::pin(async move { next.ok_or_else(|| PlatformError::Refused("no scripted response".into())) })
+    }
+}
+
+impl HttpsSend for RecordingHttps {
+    fn get(&self, request: HttpsRequest, max_body: usize) -> BoxFuture<'_, Result<HttpsResponse>> {
+        lock(&self.requests).push((request, max_body));
+        self.next()
+    }
+    fn post(&self, request: HttpsRequest, body: Vec<u8>, max_body: usize) -> BoxFuture<'_, Result<HttpsResponse>> {
+        lock(&self.requests).push((request.clone(), max_body));
+        lock(&self.posts).push((request, body));
+        self.next()
+    }
+}
+
+// ---- network (W8) ----------------------------------------------------------------------------------------------------------
+
+#[derive(Default)]
+struct FakeNetworkInner {
+    adapters: Mutex<Option<Adapters>>,
+    binds: Mutex<Vec<(std::net::SocketAddr, u32)>>,
+    change: Mutex<Vec<(u64, NetworkCallback)>>,
+    resume: Mutex<Vec<(u64, NetworkCallback)>>,
+    next: std::sync::atomic::AtomicU64,
+    failing: std::sync::atomic::AtomicBool,
+}
+
+impl FakeNetworkInner {
+    fn callbacks(&self, resume: bool) -> &Mutex<Vec<(u64, NetworkCallback)>> {
+        if resume { &self.resume } else { &self.change }
+    }
+}
+
+/// The network in memory (W8-C's and W8-A's tests): the adapters a test sets (none set: an empty, readable list; [`FakeNetwork::fail`]:
+/// the whole read refused), a `bind_exclusive` that binds loopback only (any other address is refused, so no test ever listens on a
+/// real interface or a wildcard), and address changes and resumes a test triggers by hand.
+#[derive(Clone, Default)]
+pub struct FakeNetwork(Arc<FakeNetworkInner>);
+
+impl FakeNetwork {
+    pub fn set_adapters(&self, adapters: Adapters) {
+        *lock(&self.0.adapters) = Some(adapters);
+    }
+    /// The next reads are refused as a whole (`on`), or read again (`!on`).
+    pub fn fail(&self, on: bool) {
+        self.0.failing.store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+    /// Every address and backlog `bind_exclusive` was asked for, in order.
+    pub fn binds(&self) -> Vec<(std::net::SocketAddr, u32)> {
+        lock(&self.0.binds).clone()
+    }
+    /// Calls every `on_change` callback, as an address change would.
+    pub fn trigger_change(&self) {
+        let callbacks: Vec<NetworkCallback> = lock(&self.0.change).iter().map(|(_, c)| c.clone()).collect();
+        callbacks.iter().for_each(NetworkCallback::call);
+    }
+    /// Calls every `on_resume` callback, as a wake from sleep would.
+    pub fn trigger_resume(&self) {
+        let callbacks: Vec<NetworkCallback> = lock(&self.0.resume).iter().map(|(_, c)| c.clone()).collect();
+        callbacks.iter().for_each(NetworkCallback::call);
+    }
+    fn subscribe(&self, resume: bool, callback: NetworkCallback) -> Subscription {
+        let id = self.0.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        lock(self.0.callbacks(resume)).push((id, callback));
+        let inner = self.0.clone();
+        Subscription::new(move || lock(inner.callbacks(resume)).retain(|(kept, _)| *kept != id))
+    }
+}
+
+impl Network for FakeNetwork {
+    fn adapters(&self) -> Result<Adapters> {
+        if self.0.failing.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(PlatformError::Refused("the fake network was told to fail".into()));
+        }
+        Ok(lock(&self.0.adapters).clone().unwrap_or_default())
+    }
+    fn bind_exclusive(&self, address: std::net::SocketAddr, backlog: u32) -> Result<std::net::TcpListener> {
+        lock(&self.0.binds).push((address, backlog));
+        if !address.ip().is_loopback() {
+            return Err(PlatformError::Refused(format!("the fake network binds loopback only, not {}", address.ip())));
+        }
+        Ok(std::net::TcpListener::bind(address)?)
+    }
+    fn on_change(&self, callback: NetworkCallback) -> Result<Subscription> {
+        Ok(self.subscribe(false, callback))
+    }
+    fn on_resume(&self, callback: NetworkCallback) -> Result<Subscription> {
+        Ok(self.subscribe(true, callback))
+    }
+}
+
+/// The system proxy in memory: answers the proxy a test set (default: direct) and counts the questions (never keeping a URL, which
+/// may carry a token).
+#[derive(Debug, Default)]
+pub struct FakeProxy {
+    answer: Mutex<Option<Proxy>>,
+    asked: std::sync::atomic::AtomicUsize,
+}
+
+impl FakeProxy {
+    pub fn set(&self, proxy: Proxy) {
+        *lock(&self.answer) = Some(proxy);
+    }
+    pub fn asked(&self) -> usize {
+        self.asked.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl ProxyResolver for FakeProxy {
+    fn resolve(&self, _url: &str) -> BoxFuture<'_, Result<Proxy>> {
+        self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let answer = lock(&self.answer).clone().unwrap_or(Proxy::Direct);
+        Box::pin(async move { Ok(answer) })
     }
 }
 
@@ -623,6 +741,8 @@ pub struct FakeSurfaces {
     listeners: Mutex<std::collections::HashMap<String, BrowserListener>>,
     /// While set, every view's snapshot waits for a permit of it (as an engine's capture takes its time).
     snapshot_gate: Arc<Mutex<Option<Arc<tokio::sync::Semaphore>>>>,
+    /// Every pet window opened, oldest first (W8-E).
+    pets: Mutex<Vec<FakePet>>,
 }
 
 impl FakeSurfaces {
@@ -633,7 +753,13 @@ impl FakeSurfaces {
             fail_opens: Mutex::new(0),
             listeners: Mutex::default(),
             snapshot_gate: Arc::default(),
+            pets: Mutex::default(),
         }
+    }
+
+    /// Every pet window [`SurfaceFactory::open_pet`] opened, oldest first: each records what was asked of it and takes events.
+    pub fn pets(&self) -> Vec<FakePet> {
+        lock(&self.pets).clone()
     }
 
     /// Makes every snapshot wait until the returned gate gives it a permit (`add_permits`).
@@ -835,7 +961,97 @@ impl SurfaceFactory for FakeSurfaces {
         })
     }
     fn open_pet(&self) -> BoxFuture<'_, Result<Box<dyn PetWindow>>> {
-        Box::pin(async { Err(PlatformError::unsupported("SurfaceFactory", "open_pet")) })
+        Box::pin(async move {
+            if self.failing() {
+                return Err(PlatformError::Refused("the fake was told to fail".into()));
+            }
+            let pet = FakePet::default();
+            lock(&self.pets).push(pet.clone());
+            Ok(Box::new(pet) as Box<dyn PetWindow>)
+        })
+    }
+}
+
+/// What a fake pet window was asked, in order (W8-E's tests and the companion smoke's headless half).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PetCall {
+    /// Shown with this scene drawn first.
+    Shown(PetScene),
+    Drawn(PetScene),
+    Placed(LogicalPoint),
+    Closed,
+}
+
+/// A fake pet's event channel: the sender the window keeps, the receiver until `events` hands it over.
+type PetEvents = (mpsc::UnboundedSender<PetEvent>, Option<mpsc::UnboundedReceiver<PetEvent>>);
+
+#[derive(Default)]
+struct FakePetInner {
+    calls: Mutex<Vec<PetCall>>,
+    closed: Mutex<bool>,
+    events: Mutex<Option<PetEvents>>,
+    work_area: Mutex<Option<LogicalRect>>,
+}
+
+/// A pet window in memory: it records each call ([`PetCall`]), answers a work area (1920×1040 at the origin unless set), hands its
+/// events once, takes events a test sends ([`FakePet::emit`]), and refuses every call once closed (the port's contract).
+#[derive(Clone, Default)]
+pub struct FakePet(Arc<FakePetInner>);
+
+impl FakePet {
+    pub fn calls(&self) -> Vec<PetCall> {
+        lock(&self.0.calls).clone()
+    }
+    pub fn set_work_area(&self, area: LogicalRect) {
+        *lock(&self.0.work_area) = Some(area);
+    }
+    /// Sends `event` as the window would (dropped when nobody took the events, or after close).
+    pub fn emit(&self, event: PetEvent) {
+        if let Some((sender, _)) = lock(&self.0.events).as_mut() {
+            let _ = sender.send(event);
+        }
+    }
+    fn record(&self, call: PetCall) -> Result<()> {
+        if *lock(&self.0.closed) {
+            return Err(PlatformError::Refused("the pet window is closed".into()));
+        }
+        lock(&self.0.calls).push(call);
+        Ok(())
+    }
+}
+
+impl PetWindow for FakePet {
+    fn show(&self, scene: &PetScene) -> Result<()> {
+        self.record(PetCall::Shown(scene.clone()))
+    }
+    fn draw(&self, scene: &PetScene) -> Result<()> {
+        self.record(PetCall::Drawn(scene.clone()))
+    }
+    fn place(&self, at: LogicalPoint) -> Result<()> {
+        self.record(PetCall::Placed(at))
+    }
+    fn work_area(&self, _near: LogicalPoint) -> Result<LogicalRect> {
+        if *lock(&self.0.closed) {
+            return Err(PlatformError::Refused("the pet window is closed".into()));
+        }
+        Ok(lock(&self.0.work_area).unwrap_or(LogicalRect { x: 0.0, y: 0.0, width: 1920.0, height: 1040.0 }))
+    }
+    fn events(&self) -> Result<mpsc::UnboundedReceiver<PetEvent>> {
+        if *lock(&self.0.closed) {
+            return Err(PlatformError::Refused("the pet window is closed".into()));
+        }
+        let mut events = lock(&self.0.events);
+        let (_, receiver) = events.get_or_insert_with(|| {
+            let (sender, receiver) = mpsc::unbounded_channel();
+            (sender, Some(receiver))
+        });
+        receiver.take().ok_or_else(|| PlatformError::Invalid("the pet window's events were taken already".into()))
+    }
+    fn close(&self) -> Result<()> {
+        self.record(PetCall::Closed)?;
+        *lock(&self.0.closed) = true;
+        *lock(&self.0.events) = None;
+        Ok(())
     }
 }
 

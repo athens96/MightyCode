@@ -1,0 +1,21 @@
+[package]
+name = "mighty-companion"
+version = "0.1.0"
+description = "Mighty Code's companion pet (C# Core/Companion*.cs and the pure half of WinUI/CompanionOverlay.cs): preferences, the pet catalog and atlas checks, animation, the bubble and its layout, and the PetScene the platform draws. No Tauri, no OS code."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mighty-core.workspace = true
+# The pet's window and its display list (`PetScene`, `PetWindow`): the platform crates draw what this crate lays out.
+mighty-platform.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The pets' atlases (PNG or WebP, decoded once; C# reads them with Win2D).
+image = { version = "0.25", default-features = false, features = ["png", "webp"] }
+
+# W8 Step 0 lists the part's dependencies before its code uses them; this table goes once every one is used.
+[lints.cargo]
+unused_dependencies = "allow"

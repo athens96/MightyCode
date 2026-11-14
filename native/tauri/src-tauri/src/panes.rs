@@ -138,6 +138,8 @@ fn window_rules(host: &Host, snapshot: &AppSnapshot, pane: &RunSession, pending:
         status_line_enabled: snapshot.status_line_enabled,
         ask_targets: crate::ask::targets_for(host, snapshot, pane),
         ask_notice: crate::ask::notice(host, pane.id()),
+        // A remote pane's block (remote.rs, W8-D: `RemoteWorkspaceFeatures.BlockedReason`).
+        remote_block: crate::remote::blocked_reason(host, snapshot, pane),
         ..WindowRules::default()
     }
 }

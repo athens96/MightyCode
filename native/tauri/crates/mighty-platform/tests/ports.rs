@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mighty_platform::fake::{self, FakeProcessHost, FakePtyHost, FakeScript, FakeSurfaces, MemoryVault, RecordingNotifier, SurfaceEvent};
+use mighty_platform::fake::{
+    self, FakeProcessHost, FakePtyHost, FakeScript, FakeSurfaces, MemoryVault, PetCall, RecordingNotifier, SurfaceEvent,
+};
 use mighty_platform::*;
 
 fn absolute(name: &str) -> PathBuf {
@@ -182,7 +184,16 @@ async fn a_closed_surface_refuses_every_call() {
     view.close().unwrap();
     assert!(view.place(rect).is_err());
     assert_eq!(surfaces.events().last(), Some(&SurfaceEvent::Closed { pane: "p".into() }));
-    assert!(surfaces.open_pet().await.err().is_some_and(|error| error.is_unsupported()));
+    // W8: the fake's pet window records what it was asked and refuses every call once closed.
+    let pet = surfaces.open_pet().await.unwrap();
+    let scene = PetScene { width: 258.0, height: 330.0, ..PetScene::default() };
+    pet.show(&scene).unwrap();
+    pet.place(LogicalPoint { x: 10.0, y: 20.0 }).unwrap();
+    assert!(pet.events().is_ok() && pet.events().is_err(), "the events are handed over once");
+    pet.close().unwrap();
+    assert!(pet.draw(&scene).is_err());
+    let calls = surfaces.pets()[0].calls();
+    assert_eq!(calls, vec![PetCall::Shown(scene), PetCall::Placed(LogicalPoint { x: 10.0, y: 20.0 }), PetCall::Closed]);
 }
 
 #[test]

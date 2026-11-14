@@ -5,7 +5,7 @@
 //! caller's timeout for each phase, and a body read only for a 2xx, refused past the cap. There is no retry. Which hosts and paths may
 //! be asked is the caller's guard (`mighty_accounts::usage::guard`); no message here carries a header value.
 //!
-//! [`WinHttpGet`] is mighty-platform's `HttpsGet` port over it (lib.rs `https_get`): an `https://host/path` URL on HTTPS's own port
+//! [`WinHttpGet`] is mighty-platform's `HttpsSend` port over it (lib.rs `https_get`): an `https://host/path` URL on HTTPS's own port
 //! only, anything else refused before WinHTTP is opened.
 
 use std::ffi::c_void;
@@ -226,16 +226,27 @@ fn split(url: &str) -> Result<(String, String)> {
     Ok((host, path))
 }
 
-/// mighty-platform's `HttpsGet` on Windows: [`get`] for an `https://` URL on port 443.
+/// mighty-platform's `HttpsSend` on Windows: [`get`] for an `https://` URL on port 443; `post` is W8-A's (push).
 #[derive(Debug, Default)]
 pub struct WinHttpGet;
 
-impl mighty_platform::HttpsGet for WinHttpGet {
+impl mighty_platform::HttpsSend for WinHttpGet {
     fn get(&self, request: mighty_platform::http::HttpsRequest, max_body: usize) -> BoxFuture<'_, Result<HttpsResponse>> {
         Box::pin(async move {
             let (host, path_and_query) = split(&request.url)?;
             get(HttpsRequest { host, path_and_query, headers: request.headers, timeout: request.timeout }, max_body).await
         })
+    }
+
+    /// The push's POST over WinHTTP (C# `MobilePushTransport`: 15 s, no redirect, no cookies, the system proxy). At rest (W8 Step 0):
+    /// `Unsupported`; W8-A writes it.
+    fn post(
+        &self,
+        _request: mighty_platform::http::HttpsRequest,
+        _body: Vec<u8>,
+        _max_body: usize,
+    ) -> BoxFuture<'_, Result<HttpsResponse>> {
+        Box::pin(async { Err(mighty_platform::PlatformError::unsupported("HttpsSend", "post")) })
     }
 }
 

@@ -114,6 +114,16 @@ pub struct PlatformProfile {
     pub auto_update_keys: bool,
     /// A files pane is saved with the state (Windows; the Mac never saves one).
     pub saves_files_pane: bool,
+    /// W8: an adapter counts as Tailscale's only when it is named `utun…` (the Mac; Windows never reads names: the
+    /// tailscale-addresses fixture's `darwin` and `win32` columns).
+    pub tailscale_needs_utun: bool,
+    /// W8: the direct path also advertises the MagicDNS name the Tailscale CLI gives (the Mac; Windows advertises none).
+    pub direct_advertises_magic_dns: bool,
+    /// W8: a remote workspace host answers `x-mighty-remote-graph: run` with `graph_run` events (Windows; the Mac ignores it).
+    pub remote_graph_runs: bool,
+    /// W8: a remote workspace host confines Codex and Antigravity runs (the Mac's Seatbelt); without it (Windows) it refuses them
+    /// unless full access is switched on.
+    pub remote_confines_agents: bool,
 }
 
 impl PlatformProfile {
@@ -136,6 +146,10 @@ impl PlatformProfile {
             update_rechecks_sha256: true,
             auto_update_keys: false,
             saves_files_pane: true,
+            tailscale_needs_utun: false,
+            direct_advertises_magic_dns: false,
+            remote_graph_runs: true,
+            remote_confines_agents: false,
         }
     }
 
@@ -158,6 +172,10 @@ impl PlatformProfile {
             update_rechecks_sha256: false,
             auto_update_keys: true,
             saves_files_pane: false,
+            tailscale_needs_utun: true,
+            direct_advertises_magic_dns: true,
+            remote_graph_runs: false,
+            remote_confines_agents: true,
         }
     }
 
@@ -185,6 +203,10 @@ mod tests {
         assert!(windows.direct_connection_firewall && !mac.direct_connection_firewall);
         assert!(!windows.remote_decodes_request_paths && mac.remote_decodes_request_paths);
         assert!(mac.auto_update_keys && !windows.auto_update_keys);
+        assert!(mac.tailscale_needs_utun && !windows.tailscale_needs_utun);
+        assert!(mac.direct_advertises_magic_dns && !windows.direct_advertises_magic_dns);
+        assert!(windows.remote_graph_runs && !mac.remote_graph_runs);
+        assert!(mac.remote_confines_agents && !windows.remote_confines_agents);
         assert_eq!(PlatformProfile::for_os(Os::Macos), mac);
         assert_eq!(Os::Windows.name(), "windows");
     }

@@ -192,6 +192,10 @@ pub fn registry() -> Registry {
     crate::frame::register(&mut methods);
     // A delegated child's card actions (delegation.rs, W7-D).
     methods.add("childAction", crate::delegation::child_action);
+    // W8: the connect buttons (remote.rs, W8-D) and the status bar's companion controls (companion.rs, W8-E).
+    methods.add("connectRemote", crate::remote::connect_remote);
+    methods.add("companionStatus", crate::companion::status);
+    methods.add("companionToggle", crate::companion::toggle);
     // W6: the native forms (native.rs) and Settings with the guide (settings/mod.rs).
     crate::native::register(&mut methods);
     crate::settings::register(&mut methods);

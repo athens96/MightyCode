@@ -13,7 +13,7 @@
 //! The OS reaches this crate only through ports: children through `mighty_platform::ProcessHost` (and [`accounts::HostRunner`]),
 //! the hidden sign-in through `mighty_platform::PtyHost`, and two ports W6-A's `mighty_platform` does not have yet, defined here as
 //! the least this crate needs: the terminal window that outlives the app ([`terminal::TerminalLauncher`]) and the HTTPS GET
-//! ([`usage::HttpsGet`]). Anything that changes the machine or the user's CLI configuration (a sign-in, a sign-out, the Bedrock
+//! ([`usage::HttpsSend`]). Anything that changes the machine or the user's CLI configuration (a sign-in, a sign-out, the Bedrock
 //! reset) is a call the host makes, so the host gates it (`--allow-state-write`).
 
 pub mod accounts;
