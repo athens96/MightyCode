@@ -25,8 +25,10 @@ fn secrets_stay_out_of_debug() {
     assert_eq!(AuthRefusal::DeviceLimit.reason(), "device-limit");
 }
 
+/// W8-A: no identity is made in verification mode (the app may not write), and the store is left empty.
 #[test]
 fn no_identity_is_made_at_rest() {
     let pairing: Arc<dyn mighty_platform::PairingStore> = Arc::new(fake::MemoryPairing::default());
-    assert!(Identity::load_or_create(pairing, true).err().is_some_and(|e| e.is_unsupported()));
+    assert!(Identity::load_or_create(pairing.clone(), false).is_err());
+    assert!(pairing.load().unwrap().is_none());
 }

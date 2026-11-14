@@ -46,6 +46,9 @@ zeroize = "1"
 # CONNECT tunnel through the system's proxy before TLS (W8-A); the direct listener's server side wraps an upgraded socket (W8-C).
 tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
 tokio-native-tls = "0.3"
+# The WebSocket's Stream and Sink (W8-A's relay connection reads and writes a `WebSocketStream` from its own tasks); already in the lock
+# through tokio-tungstenite.
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 native-tls = "0.2"
 # The pairing QR (D13): ECC M, drawn to a PNG with image (W8-A's settings box).
 qrcode = { version = "0.14", default-features = false }
