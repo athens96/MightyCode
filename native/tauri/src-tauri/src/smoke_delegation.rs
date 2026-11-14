@@ -172,8 +172,8 @@ async fn cleaned(app: &DelegationApp, runner: &Git, repo: &Path, id: &str) -> Re
 /// fills `r`; the page hands `r` back through the bridge's `log` method, which this step reads from the host's log (the step goes on,
 /// where the smoke's own probe would end it).
 async fn page_probe(host: &Host, body: &str) -> Result<Value, String> {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let mark = format!("smoke-delegation-dom-{}", NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+    // This process's own and new, so a line an earlier smoke left in the log is never read for it.
+    let mark = format!("smoke-delegation-dom-{}-{}", std::process::id(), wire::new_id());
     let script = format!(
         "(async () => {{ const until = async (test, ms) => {{ const end = performance.now() + ms; while (performance.now() < end) {{ const v = await test(); if (v) return v; await new Promise((r) => setTimeout(r, 100)); }} return test(); }}; const r = {{}}; try {{ {body} }} catch (error) {{ r.error = String(error); }} await window.__TAURI_INTERNALS__.invoke('host_post', {{ message: {{ kind: 'call', id: 990000 + Math.floor(Math.random() * 9999), method: 'log', args: {{ level: 'info', message: '{mark} ' + JSON.stringify(r) }} }} }}); }})()"
     );
@@ -367,7 +367,7 @@ async fn steps(
     let tree_probe = page_probe(
         host,
         &format!(
-            "const ids = {ids_json}; r.cards = !!(await until(() => ids.every((id) => document.querySelector('[data-testid=\"child-card-' + id + '\"]')), 15000)); r.rows = ids.every((id) => document.querySelector('.sidebar-child [data-session-id=\"' + id + '\"]')); const slot = () => document.querySelector('.pane-slot:not(.hidden)[data-pane-id=\"{parent}\"]'); const first = await until(() => slot()?.querySelector('.composer-queue-item'), 15000); r.held = first?.dataset.queueHeld ?? null;"
+            "const ids = {ids_json}; r.cards = !!(await until(() => ids.every((id) => document.querySelector('[data-testid=\"child-card-' + id + '\"]')), 15000)); r.rows = ids.every((id) => {{ const row = document.querySelector('.sidebar-child [data-session-id=\"' + id + '\"]')?.closest('.sidebar-child'); return !!row && parseFloat(row.style.paddingLeft) === 38; }}); const slot = () => document.querySelector('.pane-slot:not(.hidden)[data-pane-id=\"{parent}\"]'); const first = await until(() => slot()?.querySelector('.composer-queue-item'), 15000); r.held = first?.dataset.queueHeld ?? null;"
         ),
     )
     .await?;
@@ -713,6 +713,10 @@ async fn steps(
     while Instant::now() < settle && app.coordinator().is_some_and(|c| c.is_starting(&delegated.id)) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    let delegated = app
+        .coordinator()
+        .and_then(|coordinator| coordinator.file().children.iter().find(|child| child.id == delegated.id).cloned())
+        .ok_or("the delegate tool's child is gone")?;
     require(delegated.state != ChildState::Failed, "the delegate tool's child failed to start")?;
     checks.insert("delegateTool".into(), json!({"child": delegated.id, "state": delegated.state.name()}));
     crate::delegation::set_smoke_agent_ready("claude", false);

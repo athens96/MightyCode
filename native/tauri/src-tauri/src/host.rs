@@ -230,6 +230,9 @@ pub struct Host {
     /// A flush is waiting on its 16 ms timer.
     flush_pending: AtomicBool,
     closed: AtomicBool,
+    /// Quit began: the runs are being disposed before delegation stops and the last save (main.rs), C#'s `closing = true` at the start
+    /// of `DisposeAsync`.
+    quitting: AtomicBool,
 }
 
 pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -319,6 +322,7 @@ impl Host {
             panics: Mutex::new(BTreeSet::new()),
             flush_pending: AtomicBool::new(false),
             closed: AtomicBool::new(false),
+            quitting: AtomicBool::new(false),
         })
     }
 
@@ -387,7 +391,13 @@ impl Host {
 
     /// C# `owner.closing`: quit began ([`Host::close`]).
     pub fn closing(&self) -> bool {
-        self.closed.load(Ordering::SeqCst)
+        self.closed.load(Ordering::SeqCst) || self.quitting.load(Ordering::SeqCst)
+    }
+
+    /// Quit began (main.rs, before the runs are disposed): [`Host::closing`] reads true from here on; [`Host::close`] still makes the
+    /// last save.
+    pub fn begin_closing(&self) {
+        self.quitting.store(true, Ordering::SeqCst);
     }
 
     /// Every pane view's composer and cards are looked at again on the next tick (a runtime read, a setting).

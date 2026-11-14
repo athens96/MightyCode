@@ -328,7 +328,7 @@ fn copy_folder(from: &Path, to: &Path) {
         if entry.file_type().unwrap().is_dir() {
             copy_folder(&entry.path(), &target);
         } else {
-            std::fs::copy(entry.path(), target).unwrap();
+            std::fs::copy(entry.path(), &target).unwrap_or_else(|error| panic!("{} was not copied: {error}", entry.path().display()));
         }
     }
 }
@@ -410,7 +410,7 @@ async fn s2() {
                 && notice1.report_revision == 1
                 && receipt.route == DeliveryRoute::Queue
                 && receipt.run_id == notice_run
-                && s.input(PARENT, &notice_run) == Some(notice_text(&notice1)),
+                && s.input(PARENT, &notice_run).await == Some(notice_text(&notice1)),
             "the notice alone was the parent's next run"
         );
 
@@ -482,7 +482,7 @@ async fn s2() {
             };
             assert_eq!(item_ids, held_ids, "the send released both");
             assert_eq!(
-                s.input(PARENT, &run_id),
+                s.input(PARENT, &run_id).await,
                 Some(format!("{}\n\n{}\n\n{after}", held_texts[0], held_texts[1])),
                 "oldest first, ahead of the human's text, in one run"
             );
@@ -496,13 +496,13 @@ async fn s2() {
                 panic!("run next released nothing")
             };
             assert_eq!(item_ids, held_ids, "run next released both");
-            assert_eq!(s.input(PARENT, &run_id), Some(held_texts.join("\n\n")), "run next carries them alone");
+            assert_eq!(s.input(PARENT, &run_id).await, Some(held_texts.join("\n\n")), "run next carries them alone");
             assert_eq!(s.ended(PARENT, &run_id).await, "completed", "the release run");
             assert_eq!(s.app.run_next(PARENT).await, DelegationRelease::NothingHeld, "then nothing is held");
             s.script(&place.repo(), vec![vec![steps::say("Tests pass.")]]);
             s.service.start(s.request(after, PARENT)).await.unwrap();
             let row_run = awaited("the queued row's run", || s.runs(PARENT).get(1).cloned()).await;
-            assert_eq!(s.input(PARENT, &row_run).as_deref(), Some(after), "the queued human row runs next");
+            assert_eq!(s.input(PARENT, &row_run).await.as_deref(), Some(after), "the queued human row runs next");
             assert_eq!(s.ended(PARENT, &row_run).await, "completed", "the row's run");
             (run_id, after)
         };
@@ -726,7 +726,7 @@ async fn s3() {
         panic!("B's send released nothing")
     };
     assert_eq!(item_ids, follow_up_ids, "the send released both");
-    assert_eq!(s.input(&b.id, &run_b2), Some(format!("{}\n\nGo ahead.", held_texts.join("\n\n"))), "oldest first, ahead of the text");
+    assert_eq!(s.input(&b.id, &run_b2).await, Some(format!("{}\n\nGo ahead.", held_texts.join("\n\n"))), "oldest first, ahead of the text");
     assert_eq!(s.ended(&b.id, &run_b2).await, "completed", "B's run");
     let revised = awaited("B's revision 2", || {
         let child = s.file().children.into_iter().find(|child| child.id == b.id)?;
@@ -780,7 +780,7 @@ async fn s3() {
         panic!("the parent's send released nothing")
     };
     assert_eq!(item_ids, std::slice::from_ref(&notice2.id), "the send released the notice");
-    assert_eq!(s.input(PARENT, &merge_run), Some(format!("{}\n\n{text}", notice_text(&notice2))), "the notice ahead of the text");
+    assert_eq!(s.input(PARENT, &merge_run).await, Some(format!("{}\n\n{text}", notice_text(&notice2))), "the notice ahead of the text");
     assert_eq!(s.ended(PARENT, &merge_run).await, "completed", "the merge run");
     assert_eq!(place.git_in(&repo, &["rev-parse", "refs/heads/main"]).await, head_b2, "main is at B's revision 2 head");
 

@@ -6,80 +6,96 @@
 mod support;
 
 use std::path::Path;
+#[cfg(windows)]
 use std::sync::Arc;
 
+#[cfg(windows)]
 use mighty_delegation::app_host::ChildRunEnd;
+#[cfg(windows)]
 use mighty_delegation::git::merge::conflict_prompt;
+#[cfg(windows)]
 use mighty_delegation::git::worktree::report_file_in;
+#[cfg(windows)]
 use mighty_delegation::host::{DelegationPaneActivity, DelegationPaneState};
+#[cfg(windows)]
 use mighty_delegation::model::ChildState;
+#[cfg(windows)]
 use mighty_delegation::store::{DelegationFile, DelegationFileStore};
+#[cfg(windows)]
 use mighty_delegation::tools::delegate::{HumanChildFirstRun, HumanChildStart, HumanChildStarter};
+#[cfg(windows)]
 use support::host::{self, TestHost, eventually};
+#[cfg(windows)]
 use support::{lane, place::DelegationPlace};
 
-/// L687.
-#[tokio::test]
-async fn a_card_merge_that_conflicts_asks_the_child_once_per_report() {
-    Box::pin(conflict_once()).await;
-}
+/// The git half: the process host that runs git is Windows' until the Mac stage.
+#[cfg(windows)]
+mod git {
+    use super::*;
 
-async fn conflict_once() {
-    let _lane = lane::enter().await;
-    let place = DelegationPlace::new();
-    let store = DelegationFileStore::new(place.profile());
-    store.save(&DelegationFile::default()).unwrap();
-    let test_host = TestHost::new(Some(place.profile().into()), "run");
-    test_host.set_makes_panes(true);
-    place.repository(1, "", "false").await;
-    test_host.set(DelegationPaneState {
-        session_id: "parent".into(),
-        permission_mode: "fullAccess".into(),
-        folder: place.repo(),
-        kind: "claude".into(),
-        provider: "claude".into(),
-        parent_session_id: None,
-        run_id: Some("run-1".into()),
-        activity: DelegationPaneActivity::Running,
-    });
-    let coordinator =
-        host::coordinator(DelegationFileStore::new(place.profile()), test_host.clone(), host::maker(&place, 50_000_000_000), || true)
-            .expect("the file loads");
-    let starter = HumanChildStarter {
-        start: Arc::new(|id: String, _run: HumanChildFirstRun| Box::pin(async move { Some(format!("send-run-of-{id}")) })),
-        failed: Arc::new(|_id: String| Box::pin(async {})),
-    };
-    let HumanChildStart::Started(child) = coordinator.start_human_child("Change file-0.", "parent", starter, false, None).await else {
-        panic!("the send made no child")
-    };
-    let running = eventually(60_000, || {
-        coordinator.file().children.iter().any(|c| c.id == child.id && c.state == ChildState::Running)
-            && !coordinator.is_starting(&child.id)
-    })
-    .await;
-    assert!(running, "the child runs");
-    assert!(coordinator.conflict_resolution(&child.id).is_none(), "a child that has not reported is not asked");
-    std::fs::write(Path::new(&child.worktree_path).join("file-0.txt"), "ours\n").unwrap();
-    place.git_in(&child.worktree_path, &["commit", "-q", "-am", "ours"]).await;
-    std::fs::write(report_file_in(&child.worktree_path), "# Report\n").unwrap();
-    coordinator.child_run_ended(&child.id, &format!("send-run-of-{}", child.id), ChildRunEnd::Finished).await;
-    let reported = coordinator.file().children.iter().find(|c| c.id == child.id).cloned().unwrap();
-    let prompt = conflict_prompt(&reported.git());
-    assert!(
-        reported.state == ChildState::Reported
-            && coordinator.conflict_resolution(&child.id).as_deref() == Some(prompt.as_str())
-            && coordinator.conflict_resolution(&child.id).is_none(),
-        "asked once per report"
-    );
-    assert!(
-        prompt.starts_with(&format!(
-            "[Mighty Code] Merging your branch {} into main from the app was refused: the two conflict.",
-            reported.branch
-        )) && prompt.contains(&report_file_in(&reported.worktree_path)),
-        "the request names the branches and the report"
-    );
-    coordinator.conflict_resolution_not_started(&child.id);
-    assert!(coordinator.conflict_resolution(&child.id).is_some(), "a request that did not start is asked again");
+    /// L687.
+    #[tokio::test]
+    async fn a_card_merge_that_conflicts_asks_the_child_once_per_report() {
+        Box::pin(conflict_once()).await;
+    }
+
+    async fn conflict_once() {
+        let _lane = lane::enter().await;
+        let place = DelegationPlace::new();
+        let store = DelegationFileStore::new(place.profile());
+        store.save(&DelegationFile::default()).unwrap();
+        let test_host = TestHost::new(Some(place.profile().into()), "run");
+        test_host.set_makes_panes(true);
+        place.repository(1, "", "false").await;
+        test_host.set(DelegationPaneState {
+            session_id: "parent".into(),
+            permission_mode: "fullAccess".into(),
+            folder: place.repo(),
+            kind: "claude".into(),
+            provider: "claude".into(),
+            parent_session_id: None,
+            run_id: Some("run-1".into()),
+            activity: DelegationPaneActivity::Running,
+        });
+        let coordinator =
+            host::coordinator(DelegationFileStore::new(place.profile()), test_host.clone(), host::maker(&place, 50_000_000_000), || true)
+                .expect("the file loads");
+        let starter = HumanChildStarter {
+            start: Arc::new(|id: String, _run: HumanChildFirstRun| Box::pin(async move { Some(format!("send-run-of-{id}")) })),
+            failed: Arc::new(|_id: String| Box::pin(async {})),
+        };
+        let HumanChildStart::Started(child) = coordinator.start_human_child("Change file-0.", "parent", starter, false, None).await else {
+            panic!("the send made no child")
+        };
+        let running = eventually(60_000, || {
+            coordinator.file().children.iter().any(|c| c.id == child.id && c.state == ChildState::Running)
+                && !coordinator.is_starting(&child.id)
+        })
+        .await;
+        assert!(running, "the child runs");
+        assert!(coordinator.conflict_resolution(&child.id).is_none(), "a child that has not reported is not asked");
+        std::fs::write(Path::new(&child.worktree_path).join("file-0.txt"), "ours\n").unwrap();
+        place.git_in(&child.worktree_path, &["commit", "-q", "-am", "ours"]).await;
+        std::fs::write(report_file_in(&child.worktree_path), "# Report\n").unwrap();
+        coordinator.child_run_ended(&child.id, &format!("send-run-of-{}", child.id), ChildRunEnd::Finished).await;
+        let reported = coordinator.file().children.iter().find(|c| c.id == child.id).cloned().unwrap();
+        let prompt = conflict_prompt(&reported.git());
+        assert!(
+            reported.state == ChildState::Reported
+                && coordinator.conflict_resolution(&child.id).as_deref() == Some(prompt.as_str())
+                && coordinator.conflict_resolution(&child.id).is_none(),
+            "asked once per report"
+        );
+        assert!(
+            prompt.starts_with(&format!(
+                "[Mighty Code] Merging your branch {} into main from the app was refused: the two conflict.",
+                reported.branch
+            )) && prompt.contains(&report_file_in(&reported.worktree_path)),
+            "the request names the branches and the report"
+        );
+        coordinator.conflict_resolution_not_started(&child.id);
+        assert!(coordinator.conflict_resolution(&child.id).is_some(), "a request that did not start is asked again");
+    }
 }
 
 /// L693: a human's child whose start fails outside its pane's start (its worktree, the file's save, a notice's delivery) still gives

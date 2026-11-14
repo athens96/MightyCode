@@ -630,6 +630,12 @@ fn give_back_to_composer(host: &Host, view: &mut View, id: &str, text: String, f
 /// coordinator loaded nothing is held (C# `RunNextAsync` answers `NothingHeld`): the first queued row runs now, as run next did. A
 /// refused start says why in the error banner.
 pub fn release_held_now(host: &Arc<Host>, id: &str) {
+    // A read-only launch (W7 plan D2) hands nothing held to a run: it says so, as a card action does.
+    if !host.delegation_live() {
+        host.view().error = Some(crate::setup::verification_mode());
+        host.schedule();
+        return;
+    }
     let blocked = {
         let view = host.view();
         let Some(pane) = view.snapshot.session(id).cloned() else { return };

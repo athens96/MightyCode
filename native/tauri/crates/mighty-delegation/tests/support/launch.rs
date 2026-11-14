@@ -74,7 +74,7 @@ pub struct DelegationLaunch {
     tokens: Arc<Mutex<HashMap<String, String>>>,
     store: Arc<Mutex<Store>>,
     record: Arc<Mutex<Record>>,
-    _pump: tokio::task::JoinHandle<()>,
+    pump: Mutex<Option<tokio::task::JoinHandle<()>>>,
     disposed: AtomicBool,
 }
 
@@ -229,7 +229,7 @@ impl DelegationLaunch {
             tokens,
             store,
             record,
-            _pump: pump,
+            pump: Mutex::new(Some(pump)),
             disposed: AtomicBool::new(false),
         }
     }
@@ -312,8 +312,11 @@ impl DelegationLaunch {
         self.record.lock().unwrap().runs.get(pane).cloned().unwrap_or_default()
     }
 
-    pub fn input(&self, pane: &str, run: &str) -> Option<String> {
-        self.record.lock().unwrap().inputs.get(&format!("{pane}/{run}")).cloned()
+    /// What run `run` of the pane was given. The launch records it from the service's `RequestStarting` event, which reaches the
+    /// recorder through the service's channel after the start returned (C#'s event is raised inside `Launch`): this waits for it.
+    pub async fn input(&self, pane: &str, run: &str) -> Option<String> {
+        let (record, key) = (self.record.clone(), format!("{pane}/{run}"));
+        Some(awaited(&format!("the input of run {run} in {pane}"), || record.lock().unwrap().inputs.get(&key).cloned()).await)
     }
 
     pub fn inputs(&self, pane: &str) -> Vec<String> {
@@ -426,6 +429,13 @@ impl DelegationLaunch {
         }
         self.service.dispose().await;
         self.app.stop().await;
+        // The recorder stops first (it saves on the service's save events), so the last save below is the last write to the profile
+        // and nothing writes it once this returned (C#'s DisposeAsync awaits its saves).
+        let pump = self.pump.lock().unwrap().take();
+        if let Some(pump) = pump {
+            pump.abort();
+            let _ = pump.await;
+        }
         let _ = self.store.lock().unwrap().save(&self.service.snapshot());
         let _ = tokio::time::timeout(Duration::from_secs(5), self.io.close()).await;
     }

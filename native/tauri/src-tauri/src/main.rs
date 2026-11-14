@@ -460,6 +460,7 @@ fn main() {
                 agent_io::shutdown(&host);
                 // Every run stopped and ended before delegation stops (C# DisposeAsync: `local.DisposeAsync`, then `StopDelegation`), so a
                 // child killed by quitting is recorded with its quit end; `host.close` below then makes the last save.
+                host.begin_closing();
                 if let Some(runs) = host.runs() {
                     tauri::async_runtime::block_on(runs.service.dispose());
                 }

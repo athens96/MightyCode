@@ -51,6 +51,9 @@ fn the_fake_plays_its_script_over_stream_json() {
     let root = folder("play");
     let work = root.join("work");
     std::fs::create_dir_all(&work).unwrap();
+    // The folder as the fake's own current folder names it (macOS's temp folder is /var, a link to /private/var); Windows' canonical
+    // form would add `\\?\`, which the process's current folder never has.
+    let work = if cfg!(windows) { work } else { work.canonicalize().unwrap() };
     let script = json!({"turns": [[
         {"permission": "Edit", "input": {"file_path": "a.txt"}},
         {"write": "notes/a.txt", "text": "한글"},
