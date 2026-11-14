@@ -236,7 +236,7 @@ impl Coordinator {
                 Err(SaveError::File(DelegationFileError::Full)) => return DelegationResponse::refusal(DelegationReasonCode::StoreFull),
                 Err(_) => return DelegationResponse::failure("The delegation file could not be saved, so no child was made."),
             }
-            state.starting.insert(id);
+            self.flags().starting.insert(id);
             child
         };
         self.spawn_start(child.id.clone(), start, task.to_string(), parent.provider.clone(), None);
@@ -303,7 +303,7 @@ impl Coordinator {
                 // With no run, the human's text has not gone anywhere.
                 None => StartEnd::Gone,
                 Some(index) => {
-                    let mut next = state.file.clone();
+                    let mut next = crate::store::DelegationFile::clone(&state.file);
                     let moved = match &run_id {
                         // Once the host has reported this run's start, or even its end, the record is past creating.
                         Some(run) => next.children[index]
@@ -356,7 +356,7 @@ impl Coordinator {
     ///
     /// Otherwise the child's record is saved in creating and the answer names it, while its worktree, pane and first run follow in the
     /// background through `starter`.
-    pub async fn start_human_child(
+    pub(crate) async fn start_human_child_now(
         &self,
         text: &str,
         parent_id: &str,
@@ -443,7 +443,7 @@ impl Coordinator {
                 Err(SaveError::File(DelegationFileError::Full)) => return HumanChildStart::Refused(DelegationReasonCode::StoreFull),
                 Err(_) => return HumanChildStart::Failed(locale.get("delegation.human.error.notSaved")),
             }
-            state.starting.insert(id);
+            self.flags().starting.insert(id);
             child
         };
         self.spawn_start(child.id.clone(), start, text.to_string(), parent.provider.clone(), Some(starter));
@@ -469,7 +469,7 @@ struct StartingGuard<'a> {
 
 impl Drop for StartingGuard<'_> {
     fn drop(&mut self) {
-        self.coordinator.lock().starting.remove(self.id);
+        self.coordinator.flags().starting.remove(self.id);
     }
 }
 

@@ -218,7 +218,9 @@ impl DelegationFileStore {
         }
         std::fs::create_dir_all(&self.folder)?;
         let path = self.file_path();
-        let temporary = PathBuf::from(format!("{}.{}.tmp", path.display(), mighty_core::wire::new_id()));
+        let mut temporary = path.clone().into_os_string();
+        temporary.push(format!(".{}.tmp", mighty_core::wire::new_id()));
+        let temporary = PathBuf::from(temporary);
         let result = (|| -> std::io::Result<()> {
             std::fs::write(&temporary, &data)?;
             #[cfg(unix)]
@@ -290,18 +292,11 @@ fn read_regular(path: &Path) -> Result<Option<Vec<u8>>, ReadFailure> {
     }
 }
 
-/// `FileInfo.LinkTarget is not null`: a symbolic link, or on Windows any name-surrogate reparse point (a junction as well).
+/// `FileInfo.LinkTarget is not null`: a symbolic link, or on Windows a junction — the name-surrogate reparse points, which std's
+/// `is_symlink` reads from the reparse tag there. Any other reparse point (a cloud placeholder, a deduplicated file) is read as a file,
+/// as .NET reads it.
 fn is_link(meta: &std::fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        meta.file_type().is_symlink() || meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    }
-    #[cfg(not(windows))]
-    {
-        meta.file_type().is_symlink()
-    }
+    meta.file_type().is_symlink()
 }
 
 // ── reading the file as C#'s serializer reads it ────────────────────────────────────────────────────────────────────────
@@ -330,7 +325,9 @@ impl<'a> Fields<'a> {
         value.as_object().map(Fields)
     }
 
-    /// The member's value; None when it is missing. A JSON null is Some(Null).
+    /// The member's value; None when it is missing. A JSON null is Some(Null). Names match as C#'s serializer matches them here: every
+    /// name is ASCII, and only an ASCII letter's case is ignored (no non-ASCII letter that upper-cases to one, `ſ` or `ı`, stands in for
+    /// it — the parity corpus holds `verſion`); of two that match the last wins.
     fn member(&self, name: &str) -> Option<&'a Value> {
         self.0.iter().rev().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, value)| value)
     }

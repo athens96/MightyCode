@@ -83,7 +83,7 @@ mod windows {
             DelegationFileStore::with_attempts(self.place.profile(), self.attempts)
         }
         fn file(&self) -> DelegationFile {
-            self.coordinator.file()
+            DelegationFile::clone(&self.coordinator.file())
         }
         fn child(&self, id: &str) -> ChildRecord {
             self.file().child(id).cloned().unwrap()
@@ -1543,7 +1543,7 @@ mod windows {
             );
             let relaunched = fixture.relaunch();
             assert!(
-                relaunched.file() == file
+                *relaunched.file() == file
                     && relaunched
                         .handle_call(
                             request("follow_up", &[("child", "c1"), ("text", "Again.")]),
@@ -2025,7 +2025,7 @@ mod windows {
             let saved = store.load().unwrap();
             let closed = &saved.children[0];
             assert!(
-                coordinator.file() == saved
+                *coordinator.file() == saved
                     && closed.state == ChildState::Closed
                     && closed.closed_head.as_deref() == Some(merge.child_head.as_str())
                     && saved
@@ -2200,7 +2200,7 @@ mod windows {
             );
             let saved = store.load().unwrap();
             assert!(
-                coordinator.file() == saved
+                *coordinator.file() == saved
                     && saved.children[0].state == ChildState::Discarded
                     && saved.copy("c1", DelegationCopyKind::Report).map(|c| c.text.as_str()) == Some("# Report\nHalf done.\n"),
                 "a copy of its report is kept"
@@ -2327,7 +2327,7 @@ mod windows {
             );
             fixture.store().save(&file).unwrap();
             let coordinator = fixture.relaunch();
-            assert!(coordinator.file() == file && fixture.bytes().len() <= MAXIMUM_FILE_BYTES, "a relaunch reads a nearly full file back");
+            assert!(*coordinator.file() == file && fixture.bytes().len() <= MAXIMUM_FILE_BYTES, "a relaunch reads a nearly full file back");
             host::maker(&fixture.place, 50_000_000_000).create("mine", &fixture.place.repo(), "Task\n").await;
             let report = "보고서의 한 줄 \"quoted\" \\ and / more\n".repeat(4_000);
             write_report(&coordinator.file().child("mine").cloned().unwrap(), &report);
@@ -2339,7 +2339,7 @@ mod windows {
                     && copy_of_mine.truncated
                     && copy_of_mine.revision == 1
                     && copy_of_mine.original_bytes == report.len() as i64
-                    && fixture.loaded() == coordinator.file()
+                    && fixture.loaded() == *coordinator.file()
                     && fixture.bytes().len() <= MAXIMUM_FILE_BYTES,
                 "a long report is recorded and saved near the cap"
             );
@@ -2387,7 +2387,7 @@ mod windows {
             )
             .unwrap();
             assert!(
-                empty.file() == DelegationFile::empty() && !store.file_path().exists() && !Path::new(&place.profile()).exists(),
+                *empty.file() == DelegationFile::empty() && !store.file_path().exists() && !Path::new(&place.profile()).exists(),
                 "a launch with no delegation file writes nothing"
             );
             std::fs::create_dir_all(place.profile()).unwrap();
@@ -2593,6 +2593,43 @@ mod windows {
                     && fixture.file().children[0].parent_branch == "main"
                     && fixture.loaded().children[0].parent_branch == "main",
                 "the tool's merge went into main"
+            );
+        })
+        .await;
+    }
+
+    /// C#'s `Isolated`: a caller that drops its call mid-merge cuts nothing short — the merge made in git goes on record all the same.
+    #[tokio::test]
+    async fn a_dropped_card_merge_still_goes_on_record() {
+        let _lane = lane::enter().await;
+        Box::pin(async {
+            // Without a recorded checkout the card asks the host for the parent's folder, and the check holds that answer back.
+            let (fixture, _, head) = card(false, 40).await;
+            let gate = Gate::new();
+            let asked = Arc::new(AtomicUsize::new(0));
+            let (waiting, counted) = (gate.clone(), asked.clone());
+            fixture.host.set_state_gate(Some(move |_: String| -> mighty_platform::BoxFuture<'static, ()> {
+                let first = counted.fetch_add(1, Ordering::SeqCst) == 0;
+                let waiting = waiting.clone();
+                Box::pin(async move {
+                    if first {
+                        waiting.wait().await;
+                    }
+                })
+            }));
+            let merging = fixture.coordinator.merge_from_card("c1");
+            tokio::select! {
+                _ = merging => panic!("the merge finished while the host held its answer"),
+                _ = async { while asked.load(Ordering::SeqCst) == 0 { tokio::time::sleep(std::time::Duration::from_millis(10)).await } } => {}
+            }
+            // The caller's future is gone; the host answers now.
+            gate.open();
+            assert!(
+                eventually_async(60_000, || async { fixture.file().merges.len() == 1 }).await
+                    && fixture.file().children[0].state == ChildState::Merged
+                    && fixture.place.fixture_git(&["rev-parse", "HEAD"]).await == head
+                    && fixture.loaded().merges.len() == 1,
+                "the merge is made and on record, on disk too"
             );
         })
         .await;

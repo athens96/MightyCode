@@ -156,11 +156,28 @@ async fn rust_run(work: &Path) -> (RunSession, Vec<Value>) {
     (session, answers.lines().filter(|l| !l.is_empty()).map(common::json).collect())
 }
 
+/// Whether a .NET 10 SDK is installed (`dotnet --list-sdks` lists a `10.x` one): the parity tool's own build needs it. Without it the
+/// check says so and passes, or fails under `MIGHTY_PARITY=require`; with it a build that fails is the check's failure.
+#[allow(clippy::disallowed_methods, reason = "the check's own .NET probe, no child of the app")]
+fn dotnet_10() -> bool {
+    let listed = std::process::Command::new("dotnet").arg("--list-sdks").output();
+    let found = matches!(&listed, Ok(output) if output.status.success() && String::from_utf8_lossy(&output.stdout).lines().any(|line| line.starts_with("10.")));
+    if !found {
+        let why = "no .NET 10 SDK (dotnet --list-sdks)";
+        assert!(std::env::var("MIGHTY_PARITY").as_deref() != Ok("require"), "{why}");
+        eprintln!("skipped: {why}");
+    }
+    found
+}
+
 /// The C# run (`tools/parity run-replay`), or None without the .NET SDK.
 #[allow(clippy::disallowed_methods, reason = "the check's own .NET build and tool, no child of the app")]
 fn csharp_run(work: &Path) -> Option<(Value, Vec<Value>)> {
     let tauri = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let tool = tauri.join("target/parity-cs");
+    if !dotnet_10() {
+        return None;
+    }
     let built = std::process::Command::new("dotnet")
         .arg("build")
         .arg(tauri.join("tools/parity/Parity.csproj"))
@@ -168,12 +185,7 @@ fn csharp_run(work: &Path) -> Option<(Value, Vec<Value>)> {
         .arg(&tool)
         .args(["--nologo", "-v", "quiet"])
         .status();
-    if !matches!(built, Ok(status) if status.success()) {
-        let why = format!("the C# parity tool did not build ({built:?})");
-        assert!(std::env::var("MIGHTY_PARITY").as_deref() != Ok("require"), "{why}");
-        eprintln!("skipped the C# comparison: {why}");
-        return None;
-    }
+    assert!(matches!(built, Ok(status) if status.success()), "the C# parity tool did not build ({built:?})");
     let out = work.join("out");
     let ran = std::process::Command::new("dotnet")
         .arg(tool.join("parity.dll"))

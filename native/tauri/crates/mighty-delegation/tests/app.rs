@@ -295,3 +295,54 @@ mod windows {
         .await;
     }
 }
+
+/// The readers never wait on a save: while a save retries a replace another program refuses (40 tries 50 ms apart), the file, its rows,
+/// the pending work and the starts are read at once.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_readers_never_wait_on_a_save() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::time::{Duration, Instant};
+
+    use mighty_delegation::store::DelegationFileStore;
+
+    let _lane = support::lane::enter().await;
+    let folder = support::place::temp("readers");
+    let profile = folder.join("profile");
+    let child = ChildRecord::make_with(
+        "c1",
+        "parent",
+        "/w/c1",
+        "main",
+        COMMIT,
+        "plan",
+        "k",
+        ChildRecordOptions { state: Some(ChildState::Running), ..Default::default() },
+    );
+    DelegationFileStore::new(&profile).save(&DelegationFile::of(vec![child], vec![], vec![], vec![], vec![])).unwrap();
+    let place = support::place::DelegationPlace::new();
+    let host = support::host::TestHost::new(None, "run");
+    let coordinator =
+        support::host::coordinator(DelegationFileStore::new(&profile), host, support::host::maker(&place, 50_000_000_000), || true)
+            .unwrap();
+    // Another program reads the file with no delete share: the save's replace is refused until it lets go.
+    let held = std::fs::OpenOptions::new().read(true).share_mode(1).open(profile.join(mighty_delegation::store::FILE_NAME)).unwrap();
+    let saving = tokio::spawn({
+        let coordinator = coordinator.clone();
+        async move { coordinator.save().await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!saving.is_finished(), "the save is still retrying");
+    let clock = Instant::now();
+    let read = (
+        coordinator.file().children.len(),
+        coordinator.rows().len(),
+        coordinator.pending_work(),
+        coordinator.is_starting("c1"),
+        coordinator.held_items("parent").len(),
+    );
+    assert!(clock.elapsed() < Duration::from_millis(200) && read == (1, 1, 0, false, 0), "read at once: {read:?} in {:?}", clock.elapsed());
+    drop(held);
+    assert!(saving.await.unwrap().is_ok(), "the save goes through once the reader lets go");
+    support::place::remove_folder(&folder);
+}

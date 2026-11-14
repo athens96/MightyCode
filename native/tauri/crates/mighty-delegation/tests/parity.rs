@@ -16,10 +16,27 @@ use mighty_delegation::request::DelegationName;
 use mighty_delegation::sidebar;
 use mighty_delegation::store::{self, DelegationFile};
 
+/// Whether a .NET 10 SDK is installed (`dotnet --list-sdks` lists a `10.x` one): the parity tool's own build needs it. Without it the
+/// check says so and passes, or fails under `MIGHTY_PARITY=require`; with it a build that fails is the check's failure.
+#[allow(clippy::disallowed_methods, reason = "the check's own .NET probe, no child of the app")]
+fn dotnet_10() -> bool {
+    let listed = std::process::Command::new("dotnet").arg("--list-sdks").output();
+    let found = matches!(&listed, Ok(output) if output.status.success() && String::from_utf8_lossy(&output.stdout).lines().any(|line| line.starts_with("10.")));
+    if !found {
+        let why = "no .NET 10 SDK (dotnet --list-sdks)";
+        assert!(std::env::var("MIGHTY_PARITY").as_deref() != Ok("require"), "{why}");
+        eprintln!("skipped: {why}");
+    }
+    found
+}
+
 #[allow(clippy::disallowed_methods, reason = "the check's own .NET build and run, no child of the app")]
 fn csharp(input: &Path, output: &Path) -> bool {
     let tauri = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let out = tauri.join("target/parity-cs-delegation");
+    if !dotnet_10() {
+        return false;
+    }
     let built = Command::new("dotnet")
         .arg("build")
         .arg(tauri.join("tools/parity/Parity.csproj"))
@@ -27,12 +44,7 @@ fn csharp(input: &Path, output: &Path) -> bool {
         .arg(&out)
         .args(["--nologo", "-v", "quiet"])
         .status();
-    if !matches!(built, Ok(status) if status.success()) {
-        let why = format!("the C# parity tool did not build ({built:?})");
-        assert!(std::env::var("MIGHTY_PARITY").as_deref() != Ok("require"), "{why}");
-        eprintln!("skipped: {why}");
-        return false;
-    }
+    assert!(matches!(built, Ok(status) if status.success()), "the C# parity tool did not build ({built:?})");
     let ran = Command::new("dotnet").arg(out.join("parity.dll")).arg("delegation").arg(input).arg(output).status().unwrap();
     assert!(ran.success(), "the C# parity tool failed");
     true
@@ -196,6 +208,11 @@ fn delegation_matches_csharp() {
         br#"{"version":1,"children":[],"notices":[],"followUps":[],"merges":[],"copies":[],"Version":1}"#,
         br#"{"VERSION":"1","CHILDREN":[],"notices":[],"followUps":[],"merges":[],"copies":[]}"#,
         b"\xEF\xBB\xBF{\"version\":1,\"children\":[],\"notices\":[],\"followUps\":[],\"merges\":[],\"copies\":[]}",
+        // Names match without regard to an ASCII letter's case, and of two that match the last wins; U+017F (the long s, whose upper
+        // case is S) matches nothing.
+        "{\"ver\u{17F}ion\":1,\"children\":[],\"notices\":[],\"followUps\":[],\"merges\":[],\"copies\":[]}".as_bytes(),
+        br#"{"version":1,"children":[],"notices":[],"followUps":[],"merges":[],"copies":[],"VERSION":2}"#,
+        br#"{"version":2,"children":[],"notices":[],"followUps":[],"merges":[],"copies":[],"Version":1}"#,
     ] {
         lines.push(format!("roundtrip\t{}", hex(damaged)));
     }

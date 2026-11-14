@@ -162,18 +162,57 @@ pub struct CoordinatorOptions {
     pub locale: Arc<dyn Fn() -> Locale + Send + Sync>,
 }
 
-/// What the coordinator holds that changes, read and changed only under its lock.
+/// What the coordinator holds that changes, read and changed only under its lock (held across a save's disk writes, as C#'s turn is).
 pub(crate) struct State {
-    pub(crate) file: DelegationFile,
+    pub(crate) file: Arc<DelegationFile>,
+    /// Whether a delivery pass is offering pending items, and whether another pass was asked for meanwhile.
+    pub(crate) is_delivering: bool,
+    pub(crate) wants_delivery: bool,
+    /// The file changed under this hold: the rows are published once the lock is let go.
+    changed: bool,
+}
+
+/// What the coordinator keeps beside its file that readers ask for without waiting on a save (C#'s `PendingWork` reads them outside the
+/// turn); its lock is only ever taken alone or inside the state's, and held for no IO.
+#[derive(Default)]
+pub(crate) struct Flags {
     /// The report revision at which each child was last asked to resolve its conflict with the parent branch.
     pub(crate) conflict_asked: HashMap<String, i32>,
     /// Children whose start is still going: delegate saved their record and their start has not finished. A discard waits for it.
     pub(crate) starting: HashSet<String>,
     /// The panes whose checkout a card's merge or undo is changing: delivery starts no run in them until it is over.
     pub(crate) card_panes: HashSet<String>,
-    /// Whether a delivery pass is offering pending items, and whether another pass was asked for meanwhile.
-    pub(crate) is_delivering: bool,
-    pub(crate) wants_delivery: bool,
+}
+
+/// The state's lock: what the hold changed in the file is published to the rows' watchers after the lock is let go, so a watcher that
+/// holds a row's borrow never holds the coordinator up.
+pub(crate) struct StateGuard<'a> {
+    guard: Option<MutexGuard<'a, State>>,
+    coordinator: &'a Coordinator,
+}
+
+impl std::ops::Deref for StateGuard<'_> {
+    type Target = State;
+    fn deref(&self) -> &State {
+        self.guard.as_ref().expect("the state is held")
+    }
+}
+
+impl std::ops::DerefMut for StateGuard<'_> {
+    fn deref_mut(&mut self) -> &mut State {
+        self.guard.as_mut().expect("the state is held")
+    }
+}
+
+impl Drop for StateGuard<'_> {
+    fn drop(&mut self) {
+        let Some(mut guard) = self.guard.take() else { return };
+        let changed = std::mem::take(&mut guard.changed);
+        drop(guard);
+        if changed {
+            self.coordinator.publish();
+        }
+    }
 }
 
 pub(crate) struct Inner {
@@ -185,6 +224,11 @@ pub(crate) struct Inner {
     pub(crate) answer_seconds: f64,
     pub(crate) locale: Arc<dyn Fn() -> Locale + Send + Sync>,
     pub(crate) state: Mutex<State>,
+    pub(crate) flags: Mutex<Flags>,
+    /// The file as last set, for the readers that must not wait on a save.
+    snapshot: Mutex<Arc<DelegationFile>>,
+    /// One publication of the rows at a time, each from the newest file.
+    publishing: Mutex<()>,
     pub(crate) ending_runs: ChildRunsEnding,
     /// A merge (the tool's or a card's) or a card's undo or discard: they take turns, so two never run git in a parent's checkout at
     /// once.
@@ -233,6 +277,7 @@ impl Coordinator {
         }
         let (rows, _) = watch::channel(sidebar::rows(&file));
         let (held_rows, _) = watch::channel(file.held_items_by_pane());
+        let file = Arc::new(file);
         Ok(Coordinator {
             inner: Arc::new(Inner {
                 store,
@@ -242,14 +287,10 @@ impl Coordinator {
                 switch_on: options.switch_on,
                 answer_seconds: options.answer_seconds.min(ANSWER_SECONDS),
                 locale: options.locale,
-                state: Mutex::new(State {
-                    file,
-                    conflict_asked: HashMap::new(),
-                    starting: HashSet::new(),
-                    card_panes: HashSet::new(),
-                    is_delivering: false,
-                    wants_delivery: false,
-                }),
+                state: Mutex::new(State { file: file.clone(), is_delivering: false, wants_delivery: false, changed: false }),
+                flags: Mutex::new(Flags::default()),
+                snapshot: Mutex::new(file),
+                publishing: Mutex::new(()),
                 ending_runs: ChildRunsEnding::default(),
                 merge_turns: tokio::sync::Mutex::new(()),
                 run_turns: tokio::sync::Mutex::new(()),
@@ -275,67 +316,98 @@ impl Coordinator {
 
     /// `File`: the delegation file as last loaded or saved — or a start, merge or undo the disk refused to save, held until the next
     /// save writes it.
-    pub fn file(&self) -> DelegationFile {
-        self.lock().file.clone()
+    /// Read without waiting on a save that is going (the snapshot is swapped whole), and shared, not copied.
+    pub fn file(&self) -> Arc<DelegationFile> {
+        self.inner.snapshot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
     }
 
     /// The children as the sidebar lists them now ([`sidebar::rows`]).
     pub fn rows(&self) -> Vec<DelegationChildRow> {
-        sidebar::rows(&self.lock().file)
+        sidebar::rows(&self.file())
     }
 
-    /// `ChildRows`: the rows at load, then after each change to them; only the newest waits.
+    /// `ChildRows`: the rows at load, then after each change to them; only the newest waits. A new receiver has the current rows waiting
+    /// (C#'s channel holds the list at load for its reader).
     pub fn child_rows(&self) -> watch::Receiver<Vec<DelegationChildRow>> {
-        self.inner.rows.subscribe()
+        let mut receiver = self.inner.rows.subscribe();
+        receiver.mark_changed();
+        receiver
     }
 
-    /// `HeldRows`: the items held for each pane, oldest first, at load and after each change; only the newest waits.
+    /// `HeldRows`: the items held for each pane, oldest first, at load and after each change; only the newest waits. A new receiver has
+    /// the current map waiting.
     pub fn held_rows(&self) -> watch::Receiver<IndexMap<String, Vec<DelegationDeliveryItem>>> {
-        self.inner.held_rows.subscribe()
+        let mut receiver = self.inner.held_rows.subscribe();
+        receiver.mark_changed();
+        receiver
     }
 
     /// `PendingWork`: delegation work a restart would cut short — notices and follow-ups waiting to be offered, children still starting,
     /// the panes a card's merge or undo is changing, and a merge, undo or discard going. The automatic app update waits while it is
     /// above zero.
+    /// Read without waiting on a save: the counts may be one change behind, which the next idle tick reads again (as in C#).
     pub fn pending_work(&self) -> usize {
-        let state = self.lock();
-        let pending = state.file.notices.iter().filter(|n| n.lane == DeliveryLane::Pending).count()
-            + state.file.follow_ups.iter().filter(|f| f.lane == DeliveryLane::Pending).count();
-        pending + state.starting.len() + state.card_panes.len() + usize::from(self.inner.merge_turns.try_lock().is_err())
+        let file = self.file();
+        let pending = file.notices.iter().filter(|n| n.lane == DeliveryLane::Pending).count()
+            + file.follow_ups.iter().filter(|f| f.lane == DeliveryLane::Pending).count();
+        let flags = self.flags();
+        pending + flags.starting.len() + flags.card_panes.len() + usize::from(self.inner.merge_turns.try_lock().is_err())
     }
 
     /// `IsStarting`: the child's start is still going (delegate answered; its worktree, pane and first run are not all settled yet).
     pub fn is_starting(&self, id: &str) -> bool {
-        self.lock().starting.contains(id)
+        self.flags().starting.contains(id)
     }
 
-    pub(crate) fn lock(&self) -> MutexGuard<'_, State> {
-        self.inner.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    pub(crate) fn lock(&self) -> StateGuard<'_> {
+        StateGuard { guard: Some(self.inner.state.lock().unwrap_or_else(|poisoned| poisoned.into_inner())), coordinator: self }
+    }
+
+    pub(crate) fn flags(&self) -> MutexGuard<'_, Flags> {
+        self.inner.flags.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Publishes the rows and held rows of the newest file, each only when it differs from what the watchers have. Called with the state
+    /// let go; publications take turns, each reading the file anew, so an older one never lands after a newer one.
+    fn publish(&self) {
+        let differ = |file: &DelegationFile| {
+            *self.inner.rows.borrow() != sidebar::rows(file) || *self.inner.held_rows.borrow() != file.held_items_by_pane()
+        };
+        if !differ(&self.file()) {
+            return;
+        }
+        let _turn = self.inner.publishing.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let file = self.file();
+        let rows = sidebar::rows(&file);
+        if *self.inner.rows.borrow() != rows {
+            self.inner.rows.send_replace(rows);
+        }
+        let held = file.held_items_by_pane();
+        if *self.inner.held_rows.borrow() != held {
+            self.inner.held_rows.send_replace(held);
+        }
     }
 
     pub(crate) fn locale(&self) -> Locale {
         (self.inner.locale)()
     }
 
-    /// The file changed: the published rows follow when they differ.
+    /// The file changed: readers see it at once, and the rows follow once the state is let go.
     fn set_file(&self, state: &mut State, file: DelegationFile) {
-        state.file = file;
-        let rows = sidebar::rows(&state.file);
-        self.inner.rows.send_if_modified(|published| {
-            let changed = *published != rows;
-            if changed {
-                *published = rows;
-            }
-            changed
-        });
-        let held = state.file.held_items_by_pane();
-        self.inner.held_rows.send_if_modified(|published| {
-            let changed = *published != held;
-            if changed {
-                *published = held;
-            }
-            changed
-        });
+        let file = Arc::new(file);
+        state.file = file.clone();
+        state.changed = true;
+        *self.inner.snapshot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = file;
+    }
+
+    /// The store's save, off tokio's async workers when it may wait on the disk (40 tries 50 ms apart): on a multi-threaded runtime the
+    /// worker hands its other tasks on while this one blocks (a current-thread runtime, as the checks run, blocks as C#'s turn does).
+    fn save_blocking(&self, next: &DelegationFile, context: &DelegationPruneContext) -> Result<DelegationFile, SaveError> {
+        let save = || self.inner.store.save_pruned(next, context);
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(save),
+            _ => save(),
+        }
     }
 
     /// `File = next` without a save (a change the disk refused, held until the next save).
@@ -346,14 +418,14 @@ impl Coordinator {
     /// `Commit`: saves `next`, pruning first when it nears the cap, and holds what was written; an error, holding the file as it was,
     /// when it cannot be saved.
     pub(crate) fn commit(&self, state: &mut State, next: DelegationFile, context: &DelegationPruneContext) -> Result<(), SaveError> {
-        let written = self.inner.store.save_pruned(&next, context)?;
+        let written = self.save_blocking(&next, context)?;
         self.set_file(state, written);
         Ok(())
     }
 
     /// `SaveOrKeep`: saves `next`; should the disk refuse it, the app goes on with it and the next save writes it.
     pub(crate) fn save_or_keep(&self, state: &mut State, next: DelegationFile, context: &DelegationPruneContext) {
-        match self.inner.store.save_pruned(&next, context) {
+        match self.save_blocking(&next, context) {
             Ok(written) => self.set_file(state, written),
             Err(_) => self.set_file(state, next),
         }
@@ -361,19 +433,38 @@ impl Coordinator {
 
     /// `Save`: saves the file as the coordinator holds it now — what a save the disk refused earlier left unwritten is written.
     pub async fn save(&self) -> Result<(), SaveError> {
-        let context = self.prune_context().await;
-        let mut state = self.lock();
-        let file = state.file.clone();
-        self.commit(&mut state, file, &context)
+        self.isolated(|coordinator| async move {
+            let context = coordinator.prune_context().await;
+            let mut state = coordinator.lock();
+            let file = DelegationFile::clone(&state.file);
+            coordinator.commit(&mut state, file, &context)
+        })
+        .await
+    }
+
+    /// C#'s `Isolated`: a mutating call runs to its end on a task of its own, whatever happens to the caller's future (a dropped call
+    /// never leaves a merge made in git but not on record). A panic in it is the caller's.
+    pub(crate) async fn isolated<T, F>(&self, work: impl FnOnce(Coordinator) -> F) -> T
+    where
+        T: Send + 'static,
+        F: Future<Output = T> + Send + 'static,
+    {
+        match tokio::spawn(work(self.clone())).await {
+            Ok(value) => value,
+            Err(error) => match error.try_into_panic() {
+                Ok(panic) => std::panic::resume_unwind(panic),
+                Err(error) => panic!("the coordinator's task did not finish: {error}"),
+            },
+        }
     }
 
     /// `PruneContext`: what pruning may assume now — which of the file's parents still have an open pane, and that any merge of a child
     /// not discarded may still be undone, so no save here ever drops one.
     pub(crate) async fn prune_context(&self) -> DelegationPruneContext {
         let parents: Vec<String> = {
-            let state = self.lock();
+            let file = self.file();
             let mut parents: Vec<String> = vec![];
-            for child in &state.file.children {
+            for child in &file.children {
                 if !parents.contains(&child.parent_session_id) {
                     parents.push(child.parent_session_id.clone());
                 }
@@ -387,7 +478,7 @@ impl Coordinator {
             }
         }
         let discarded: HashSet<String> =
-            self.lock().file.children.iter().filter(|c| c.state == ChildState::Discarded).map(|c| c.id.clone()).collect();
+            self.file().children.iter().filter(|c| c.state == ChildState::Discarded).map(|c| c.id.clone()).collect();
         DelegationPruneContext::new(open, move |merge| !discarded.contains(&merge.child_id))
     }
 
@@ -464,6 +555,87 @@ impl Coordinator {
             // discard, which the call already refused: only a human discards.
             _ => DelegationResponse::refusal(DelegationReasonCode::DiscardHumanOnly),
         }
+    }
+}
+
+/// The public mutating seams: each runs to its end on a task of its own ([`Coordinator::isolated`], C#'s `Isolated`), so a caller that
+/// drops its future never cuts a merge, a save or a run event short. Run events (`child_run_started`, `child_run_ended`, `await_run`)
+/// take their FIFO turn when their task first runs, not when they are called: a caller that needs them recorded in order awaits each
+/// before sending the next, as the app's event pump does.
+impl Coordinator {
+    /// `MergeFromCard` ([`crate::cards`]).
+    pub async fn merge_from_card(&self, id: &str) -> crate::git::merge::ChildMergeOutcome {
+        let id = id.to_string();
+        self.isolated(move |coordinator| async move { coordinator.merge_from_card_now(&id).await }).await
+    }
+
+    /// `UndoMergeFromCard` ([`crate::cards`]).
+    pub async fn undo_merge_from_card(&self, id: &str) -> crate::git::merge::ChildUndoOutcome {
+        let id = id.to_string();
+        self.isolated(move |coordinator| async move { coordinator.undo_merge_from_card_now(&id).await }).await
+    }
+
+    /// `DiscardFromCard` ([`crate::cards`]).
+    pub async fn discard_from_card(&self, id: &str, confirmed_nested: Option<&[String]>) -> crate::cards::ChildCardDiscardOutcome {
+        let (id, confirmed) = (id.to_string(), confirmed_nested.map(<[String]>::to_vec));
+        self.isolated(move |coordinator| async move { coordinator.discard_from_card_now(&id, confirmed).await }).await
+    }
+
+    /// `CloseChild` ([`crate::cards`]).
+    pub async fn close_child(&self, id: &str, still_running: bool) -> crate::git::cleanup::ChildCleanupOutcome {
+        let id = id.to_string();
+        self.isolated(move |coordinator| async move { coordinator.close_child_now(&id, still_running).await }).await
+    }
+
+    /// `ChildRunStarted` ([`crate::reports`]).
+    pub async fn child_run_started(&self, id: &str, run_id: &str) {
+        let (id, run_id) = (id.to_string(), run_id.to_string());
+        self.isolated(move |coordinator| async move { coordinator.child_run_started_now(&id, &run_id).await }).await
+    }
+
+    /// `ChildRunEnded` ([`crate::reports`]).
+    pub async fn child_run_ended(&self, id: &str, run_id: &str, end: crate::reports::ChildRunEnd) -> Option<crate::model::Notice> {
+        let (id, run_id) = (id.to_string(), run_id.to_string());
+        self.isolated(move |coordinator| async move { coordinator.child_run_ended_now(&id, &run_id, end).await }).await
+    }
+
+    /// `AwaitRun` ([`crate::reports`]).
+    pub async fn await_run(&self, run_id: &str, id: &str) -> Option<crate::model::Notice> {
+        let (run_id, id) = (run_id.to_string(), id.to_string());
+        self.isolated(move |coordinator| async move { coordinator.await_run_now(&run_id, &id).await }).await
+    }
+
+    /// `InterruptRunsKilledByQuit` ([`crate::reports`]).
+    pub async fn interrupt_runs_killed_by_quit(&self) -> Vec<String> {
+        self.isolated(|coordinator| async move { coordinator.interrupt_runs_killed_by_quit_now().await }).await
+    }
+
+    /// `Send` ([`crate::delivery`]).
+    pub async fn send(&self, text: &str, session_id: &str, start: Option<RunStarter>) -> crate::delivery::DelegationRelease {
+        let (text, session_id) = (text.to_string(), session_id.to_string());
+        self.isolated(move |coordinator| async move { coordinator.send_now(&text, &session_id, start).await }).await
+    }
+
+    /// `RunNext` ([`crate::delivery`]).
+    pub async fn run_next(&self, session_id: &str) -> crate::delivery::DelegationRelease {
+        let session_id = session_id.to_string();
+        self.isolated(move |coordinator| async move { coordinator.run_next_now(&session_id).await }).await
+    }
+
+    /// `StartHumanChild` ([`crate::tools::delegate`]).
+    pub async fn start_human_child(
+        &self,
+        text: &str,
+        parent_id: &str,
+        starter: crate::tools::delegate::HumanChildStarter,
+        plan_first: bool,
+        agent: Option<&str>,
+    ) -> crate::tools::delegate::HumanChildStart {
+        let (text, parent_id, agent) = (text.to_string(), parent_id.to_string(), agent.map(str::to_string));
+        self.isolated(move |coordinator| async move {
+            coordinator.start_human_child_now(&text, &parent_id, starter, plan_first, agent.as_deref()).await
+        })
+        .await
     }
 }
 
