@@ -972,6 +972,8 @@ impl SurfaceFactory for FakeSurfaces {
     }
 }
 
+use crate::surface::{PetCursor, PetFocus, PetInput, PetPoll};
+
 /// What a fake pet window was asked, in order (W8-E's tests and the companion smoke's headless half).
 #[derive(Debug, Clone, PartialEq)]
 pub enum PetCall {
@@ -991,10 +993,15 @@ struct FakePetInner {
     closed: Mutex<bool>,
     events: Mutex<Option<PetEvents>>,
     work_area: Mutex<Option<LogicalRect>>,
+    scale: Mutex<Option<f64>>,
+    poll: Mutex<PetPoll>,
+    cursor: Mutex<PetCursor>,
 }
 
-/// A pet window in memory: it records each call ([`PetCall`]), answers a work area (1920×1040 at the origin unless set), hands its
-/// events once, takes events a test sends ([`FakePet::emit`]), and refuses every call once closed (the port's contract).
+/// A pet window in memory: it records each call ([`PetCall`]), answers a work area (1920×1040 at the origin unless set) and a scale (1
+/// unless set), hands its events once, takes events a test sends ([`FakePet::emit`], or [`PetWindow::send`] as the window's own procedure
+/// would turn input into events), and refuses every call once closed (the port's contract). It draws nothing: `capture` is unsupported,
+/// and it never takes the focus.
 #[derive(Clone, Default)]
 pub struct FakePet(Arc<FakePetInner>);
 
@@ -1005,6 +1012,24 @@ impl FakePet {
     pub fn set_work_area(&self, area: LogicalRect) {
         *lock(&self.0.work_area) = Some(area);
     }
+    pub fn set_scale(&self, scale: f64) {
+        *lock(&self.0.scale) = Some(scale);
+    }
+    /// What the next `poll` answers (it answers it once; then nothing pressed again).
+    pub fn set_poll(&self, poll: PetPoll) {
+        *lock(&self.0.poll) = poll;
+    }
+    /// The pointer's shape last asked for.
+    pub fn cursor(&self) -> PetCursor {
+        *lock(&self.0.cursor)
+    }
+    /// The scene last shown or drawn.
+    pub fn last_scene(&self) -> Option<PetScene> {
+        lock(&self.0.calls).iter().rev().find_map(|call| match call {
+            PetCall::Shown(scene) | PetCall::Drawn(scene) => Some(scene.clone()),
+            _ => None,
+        })
+    }
     /// Sends `event` as the window would (dropped when nobody took the events, or after close).
     pub fn emit(&self, event: PetEvent) {
         if let Some((sender, _)) = lock(&self.0.events).as_mut() {
@@ -1012,11 +1037,22 @@ impl FakePet {
         }
     }
     fn record(&self, call: PetCall) -> Result<()> {
+        self.open()?;
+        lock(&self.0.calls).push(call);
+        Ok(())
+    }
+    fn open(&self) -> Result<()> {
         if *lock(&self.0.closed) {
             return Err(PlatformError::Refused("the pet window is closed".into()));
         }
-        lock(&self.0.calls).push(call);
         Ok(())
+    }
+    /// A point of the window as the pointer reports it: in the window and on the screen (the last scene's origin and scale).
+    fn pointer(&self, at: LogicalPoint) -> PetPointer {
+        let (origin, scale) =
+            self.last_scene().map_or((LogicalPoint::default(), 1.0), |s| (LogicalPoint { x: s.origin.x, y: s.origin.y }, s.scale));
+        let scale = if scale > 0.0 { scale } else { 1.0 };
+        PetPointer { window: at, screen: LogicalPoint { x: origin.x + (at.x * scale).trunc(), y: origin.y + (at.y * scale).trunc() } }
     }
 }
 
@@ -1031,15 +1067,11 @@ impl PetWindow for FakePet {
         self.record(PetCall::Placed(at))
     }
     fn work_area(&self, _near: LogicalPoint) -> Result<LogicalRect> {
-        if *lock(&self.0.closed) {
-            return Err(PlatformError::Refused("the pet window is closed".into()));
-        }
+        self.open()?;
         Ok(lock(&self.0.work_area).unwrap_or(LogicalRect { x: 0.0, y: 0.0, width: 1920.0, height: 1040.0 }))
     }
     fn events(&self) -> Result<mpsc::UnboundedReceiver<PetEvent>> {
-        if *lock(&self.0.closed) {
-            return Err(PlatformError::Refused("the pet window is closed".into()));
-        }
+        self.open()?;
         let mut events = lock(&self.0.events);
         let (_, receiver) = events.get_or_insert_with(|| {
             let (sender, receiver) = mpsc::unbounded_channel();
@@ -1053,9 +1085,47 @@ impl PetWindow for FakePet {
         *lock(&self.0.events) = None;
         Ok(())
     }
+    fn scale_at(&self, _near: LogicalPoint) -> Result<f64> {
+        self.open()?;
+        Ok(lock(&self.0.scale).unwrap_or(1.0))
+    }
+    fn poll(&self) -> Result<PetPoll> {
+        self.open()?;
+        let mut poll = lock(&self.0.poll);
+        let answer = *poll;
+        poll.pressed = false;
+        poll.escape = false;
+        Ok(answer)
+    }
+    fn set_cursor(&self, cursor: PetCursor) -> Result<()> {
+        self.open()?;
+        *lock(&self.0.cursor) = cursor;
+        Ok(())
+    }
+    fn focus(&self) -> Result<PetFocus> {
+        self.open()?;
+        Ok(PetFocus { non_activating: true, foreground: 0, own: 1, took_thread: false })
+    }
+    fn send(&self, input: PetInput) -> Result<()> {
+        self.open()?;
+        match input {
+            PetInput::Click(at) => {
+                self.emit(PetEvent::Pressed(self.pointer(at)));
+                self.emit(PetEvent::Released(self.pointer(at)));
+            }
+            PetInput::Press(at) => self.emit(PetEvent::Pressed(self.pointer(at))),
+            PetInput::Drag(at) => self.emit(PetEvent::Moved(self.pointer(at))),
+            PetInput::Release(at) => self.emit(PetEvent::Released(self.pointer(at))),
+            PetInput::DoubleClick(at) => self.emit(PetEvent::DoubleClicked(self.pointer(at))),
+            PetInput::RightClick(at) => self.emit(PetEvent::RightClicked(self.pointer(at))),
+            PetInput::Wheel { at, delta } => self.emit(PetEvent::Wheel { pointer: self.pointer(at), delta }),
+            PetInput::Dpi(dpi) => self.emit(PetEvent::DpiChanged { scale: (f64::from(dpi) / 96.0).clamp(1.0, 4.0) }),
+        }
+        Ok(())
+    }
 }
 
-/// The Agent IO transport in memory (W7-C's tests and the framing's): one value is both the app's listener and the servers' connector.
+// The Agent IO transport in memory (W7-C's tests and the framing's): one value is both the app's listener and the servers' connector.
 /// `connect` to the bound name hands `accept` the other end of an in-memory duplex; a connection to another name, to a closed
 /// listener, or while [`FakeAgentIo::set_foreign`] says the listener is another user's, is refused (what the Windows client's owner
 /// check refuses).

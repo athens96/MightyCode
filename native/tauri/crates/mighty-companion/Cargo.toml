@@ -11,11 +11,21 @@ rust-version.workspace = true
 mighty-core.workspace = true
 # The pet's window and its display list (`PetScene`, `PetWindow`): the platform crates draw what this crate lays out.
 mighty-platform.workspace = true
+# The bubble answers a question as the pane's card does (`UserQuestionnaire`, `QuestionnaireProgress`) in the app's words
+# (`strings`, `ToolPermissionStrings`).
+mighty-run.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+indexmap.workspace = true
+# The plan's Markdown blocks (C#'s four line patterns).
+regex.workspace = true
+# The temporary file of the settings and an imported pet's folder (C# `Guid.NewGuid().ToString("N")`).
+uuid.workspace = true
+# The card key's guard: SHA-256 of the request's tool and input (C# `CompanionCardKey`).
+sha2.workspace = true
 # The pets' atlases (PNG or WebP, decoded once; C# reads them with Win2D).
 image = { version = "0.25", default-features = false, features = ["png", "webp"] }
 
-# W8 Step 0 lists the part's dependencies before its code uses them; this table goes once every one is used.
-[lints.cargo]
-unused_dependencies = "allow"
+[dev-dependencies]
+# The fake pet window's events (`PetWindow::events` hands over a tokio receiver).
+tokio = { workspace = true, features = ["sync"] }

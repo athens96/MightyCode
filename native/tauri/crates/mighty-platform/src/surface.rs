@@ -184,8 +184,8 @@ pub struct LogicalPoint {
     pub y: f64,
 }
 
-/// Where the pointer was: in the pet window (DIPs from its top left) and on the screen (DIPs of the virtual desktop), so a drag
-/// follows the screen while the window moves under it.
+/// Where the pointer was: in the pet window (DIPs from its top left, at the scale of the scene last drawn) and on the screen (the
+/// desktop's own units: physical pixels on Windows, points on the Mac), so a drag follows the screen while the window moves under it.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct PetPointer {
     pub window: LogicalPoint,
@@ -197,7 +197,7 @@ pub struct PetPointer {
 /// elsewhere); the owner decides what a press means (a drag after 4 px, a resize strip, a button, the menu).
 #[derive(Debug, Clone, PartialEq)]
 pub enum PetEvent {
-    /// The left button went down.
+    /// The left button went down (the window holds the pointer until it goes up).
     Pressed(PetPointer),
     /// The pointer moved while over the window or while the left button is held (captured).
     Moved(PetPointer),
@@ -219,6 +219,93 @@ pub enum PetEvent {
     },
     /// A display came, went or moved (the work area may have changed: the owner keeps the window on screen).
     DisplayChanged,
+    /// The system kept refusing the window's frames (C#: 36 in a row, three seconds' worth): the owner ends the pet.
+    Failed {
+        message: String,
+    },
+}
+
+/// The pointer's shape over the pet window (C#'s `WM_SETCURSOR`: the arrow, or a resize strip's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PetCursor {
+    #[default]
+    Arrow,
+    /// A side strip (`IDC_SIZEWE`).
+    SizeWestEast,
+    /// The top strip (`IDC_SIZENS`).
+    SizeNorthSouth,
+    /// The top-left corner (`IDC_SIZENWSE`).
+    SizeNorthWestSouthEast,
+    /// The top-right corner (`IDC_SIZENESW`).
+    SizeNorthEastSouthWest,
+}
+
+/// What the desktop's pointer and keyboard did since the last look (C#'s `GetCursorPos` and `GetAsyncKeyState` in `Draw`): the window
+/// never holds the keyboard or the pointer, so it looks to learn of a press elsewhere that puts its menu away.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PetPoll {
+    /// The pointer, in the desktop's own units.
+    pub cursor: LogicalPoint,
+    /// A mouse button is down now, or was pressed and let go since the last look.
+    pub pressed: bool,
+    /// Esc is down now, or was since the last look.
+    pub escape: bool,
+}
+
+/// The window's last picture as it drew it (C# `CaptureForSmoke`: its own buffer, never the desktop): premultiplied BGRA rows.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct PetCapture {
+    pub width: u32,
+    pub height: u32,
+    pub bgra: Vec<u8>,
+    /// How many frames the window has drawn (a caller waits for its draw to have been made).
+    pub frames: u64,
+}
+
+impl std::fmt::Debug for PetCapture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PetCapture")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("frames", &self.frames)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Whether the pet window took the focus (C#'s smoke: `NonActivating`, `ForegroundWindow`, `TookThread`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PetFocus {
+    /// The window has the no-activate style (`WS_EX_NOACTIVATE`).
+    pub non_activating: bool,
+    /// The desktop's front window now (an opaque handle, compared around each step).
+    pub foreground: u64,
+    /// The pet window's own handle.
+    pub own: u64,
+    /// The window's thread made it active or gave it the keyboard (`GetActiveWindow`/`GetFocus` of that thread).
+    pub took_thread: bool,
+}
+
+/// Input as a pointer or a display would send it, through the window's own procedure (C#'s smoke `SendMessage`s): the points are in the
+/// window's DIPs at the scale of the scene last drawn.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PetInput {
+    /// The left button down and up at one point (`WM_LBUTTONDOWN`, `WM_LBUTTONUP`).
+    Click(LogicalPoint),
+    Press(LogicalPoint),
+    /// The pointer moved, the left button held, to a point of the window.
+    Drag(LogicalPoint),
+    Release(LogicalPoint),
+    /// `WM_LBUTTONDBLCLK`.
+    DoubleClick(LogicalPoint),
+    /// `WM_RBUTTONUP`.
+    RightClick(LogicalPoint),
+    /// `WM_MOUSEWHEEL` of `delta` (120 a notch) at a point.
+    Wheel {
+        at: LogicalPoint,
+        delta: i32,
+    },
+    /// `WM_DPICHANGED` to this many dots an inch.
+    Dpi(u32),
 }
 
 /// The companion pet (W8-E, D8): a window of its own over every app, never activated, clicks passing through where it draws nothing
@@ -226,10 +313,11 @@ pub enum PetEvent {
 /// NSPanel). The shared logic lays out a [`crate::PetScene`]; the platform draws it.
 ///
 /// Contract: `show` draws `scene` first and only then shows the window (C#: the first frame before Show, so no frame passes clicks
-/// through everywhere), without taking the focus; `draw` replaces the picture (the window's size is the scene's); `place` moves the
-/// window's top left to `at` (screen DIPs) without activating it; `work_area` is the work area of the monitor nearest `near`; `events`
-/// hands over the window's [`PetEvent`]s and may be taken once (a second call is an error); after `close` the window is gone and every
-/// call is an error. Every call returns without waiting for the window's thread to draw.
+/// through everywhere), without taking the focus; `draw` replaces the picture, the window's size and its place together (the scene's
+/// size, scale and origin); `place` moves the window's top left to `at` (the desktop's own units) without activating it (a carry);
+/// `work_area` is the work area of the monitor nearest `near` and `scale_at` that monitor's scale (1 to 4), in the desktop's own units;
+/// `events` hands over the window's [`PetEvent`]s and may be taken once (a second call is an error); after `close` the window is gone and
+/// every call is an error. Every call but `send` returns without waiting for the window's thread to draw.
 pub trait PetWindow: Send + Sync {
     fn show(&self, scene: &crate::PetScene) -> Result<()>;
     fn draw(&self, scene: &crate::PetScene) -> Result<()>;
@@ -237,6 +325,37 @@ pub trait PetWindow: Send + Sync {
     fn work_area(&self, near: LogicalPoint) -> Result<LogicalRect>;
     fn events(&self) -> Result<tokio::sync::mpsc::UnboundedReceiver<PetEvent>>;
     fn close(&self) -> Result<()>;
+    /// The scale of the monitor nearest `near` (C#: `GetDpiForWindow` of the window made where it was left), clamped to 1–4.
+    fn scale_at(&self, near: LogicalPoint) -> Result<f64> {
+        let _ = near;
+        Ok(1.0)
+    }
+    /// The words measured as this window draws them.
+    fn measure(&self) -> Arc<dyn crate::pet::PetMeasure> {
+        Arc::new(crate::pet::ApproximateMeasure)
+    }
+    /// What the pointer and the keyboard did since the last look.
+    fn poll(&self) -> Result<PetPoll> {
+        Ok(PetPoll::default())
+    }
+    /// The pointer's shape while it is over the window.
+    fn set_cursor(&self, cursor: PetCursor) -> Result<()> {
+        let _ = cursor;
+        Ok(())
+    }
+    /// The window's last picture (the smoke's capture).
+    fn capture(&self) -> Result<PetCapture> {
+        Err(crate::PlatformError::unsupported("PetWindow", "capture"))
+    }
+    /// Whether the window took the focus (the smoke's checks around each step).
+    fn focus(&self) -> Result<PetFocus> {
+        Err(crate::PlatformError::unsupported("PetWindow", "focus"))
+    }
+    /// Input sent through the window's own procedure (the smoke), returning once the window handled it.
+    fn send(&self, input: PetInput) -> Result<()> {
+        let _ = input;
+        Err(crate::PlatformError::unsupported("PetWindow", "send"))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -28,6 +28,9 @@ getrandom = "0.3"
 tauri = { workspace = true, features = ["unstable"] }
 tokio = { workspace = true, features = ["sync", "net", "rt", "time", "io-util", "macros"] }
 webview2-com = "0.38"
+# The Direct2D calls' points and transforms (`Vector2`, `Matrix3x2`; already in the lock as a dependency of `windows`): the pet (pet.rs,
+# W8-E).
+windows-numerics = "0.2"
 # W8-C: SO_EXCLUSIVEADDRUSE on the direct and sharing listeners through socket2's raw setsockopt (net.rs).
 socket2 = { version = "0.6", features = ["all"] }
 # Data_Pdf, Foundation, Storage_Streams, Win32_System_WinRT: a PDF's first page (files.rs, W4). Data_Xml_Dom, UI_Notifications: the

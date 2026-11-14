@@ -2126,10 +2126,16 @@ name = "mighty-companion"
 version = "0.1.0"
 dependencies = [
  "image",
+ "indexmap 2.14.2",
  "mighty-core",
  "mighty-platform",
+ "mighty-run",
+ "regex",
  "serde",
  "serde_json",
+ "sha2",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -2288,6 +2294,7 @@ dependencies = [
  "tokio",
  "webview2-com",
  "windows",
+ "windows-numerics",
  "windows-sys 0.61.2",
 ]
 

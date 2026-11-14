@@ -17,7 +17,10 @@ fn the_companion_at_rest_draws_nothing() {
 #[test]
 fn a_scene_snapshot_names_the_atlas_without_its_pixels() {
     let atlas = PetBitmap { key: "mighty-raccoon@1".into(), width: 2, height: 1, bgra: Arc::new(vec![1, 2, 3, 4, 5, 6, 7, 8]) };
-    let scene = PetScene { width: 258.0, height: 330.0, items: vec![], atlas: Some(atlas) };
+    let scene = PetScene { width: 258.0, height: 330.0, items: vec![], atlas: Some(atlas), ..PetScene::default() };
     let json = serde_json::to_string(&scene).unwrap();
-    assert_eq!(json, r#"{"width":258.0,"height":330.0,"items":[],"atlas":{"key":"mighty-raccoon@1","width":2,"height":1}}"#);
+    assert_eq!(
+        json,
+        r#"{"width":258.0,"height":330.0,"scale":0.0,"origin":{"x":0.0,"y":0.0},"items":[],"atlas":{"key":"mighty-raccoon@1","width":2,"height":1}}"#
+    );
 }
