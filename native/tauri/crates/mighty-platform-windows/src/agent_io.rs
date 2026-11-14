@@ -4,8 +4,9 @@
 //! .NET's `PipeOptions.CurrentUserOnly`, both ends:
 //! - Each server instance is made with a security descriptor whose owner is the process token's owner (`WindowsIdentity.Owner`: the
 //!   user, or the Administrators group for an elevated token, so the account *and* the elevation must match) and whose access list
-//!   has one entry, full control (`PipeAccessRights.FullControl`, 0x1F019F) for that owner. Remote clients are refused, and the first
-//!   instance is made with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so a name another process already holds is never served.
+//!   has one entry, full control (`PipeAccessRights.FullControl`, 0x1F019F) for that owner. Remote clients are refused. The first
+//!   instance is made by `bind` itself with `FILE_FLAG_FIRST_PIPE_INSTANCE` and kept for the first `accept`, so a name another process
+//!   already holds is never served (`bind` picks another name) and none can slip in between the name's choice and its first instance.
 //! - The client opens with `SECURITY_IDENTIFICATION` (the server can identify it but never act as it), retries a busy or missing
 //!   pipe until its deadline (`ConnectAsync`), then checks that the pipe's owner is its own token's owner and refuses it otherwise
 //!   (`ValidateRemotePipeUser`).
@@ -20,7 +21,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use mighty_platform::{AgentIoConnection, AgentIoConnector, AgentIoListener, BoxFuture, PlatformError, Result};
-use tokio::net::windows::named_pipe::{ClientOptions, PipeMode, ServerOptions};
+use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, PipeMode, ServerOptions};
 use tokio::sync::Notify;
 use windows_sys::Win32::Foundation::{CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, HANDLE, HLOCAL, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
@@ -166,11 +167,14 @@ impl Drop for Descriptor {
     }
 }
 
+/// How many random names `bind` tries before it gives up (another process holding one is already a sign of trouble).
+const NAME_ATTEMPTS: usize = 8;
+
 #[derive(Default)]
 struct State {
     name: Option<String>,
-    /// The first instance was made (only it asks for `FILE_FLAG_FIRST_PIPE_INSTANCE`).
-    first_made: bool,
+    /// The first instance, made by `bind` with `FILE_FLAG_FIRST_PIPE_INSTANCE`, until the first `accept` takes it.
+    first: Option<NamedPipeServer>,
 }
 
 /// The app's listener (one per app).
@@ -206,7 +210,7 @@ impl NamedPipeListener {
     }
 
     /// One server instance of `name`, with the owner-only descriptor (made and freed here, before any await).
-    fn create(name: &str, first: bool) -> Result<tokio::net::windows::named_pipe::NamedPipeServer> {
+    fn create(name: &str, first: bool) -> Result<NamedPipeServer> {
         let descriptor = Descriptor::owner_only(&token_owner()?)?;
         let mut attributes =
             SECURITY_ATTRIBUTES { nLength: size_of::<SECURITY_ATTRIBUTES>() as u32, lpSecurityDescriptor: descriptor.0, bInheritHandle: 0 };
@@ -223,18 +227,40 @@ impl NamedPipeListener {
         Ok(server)
     }
 
+    /// `bind` with the names `next` gives: the first one whose first instance this process could make (none other holds it).
+    fn bind_with(&self, mut next: impl FnMut() -> Result<String>) -> Result<String> {
+        let mut state = lock(&self.state);
+        if let Some(name) = &state.name {
+            return Ok(name.clone());
+        }
+        let mut last = refused("no Agent IO pipe name was free");
+        for _ in 0..NAME_ATTEMPTS {
+            let name = next()?;
+            match Self::create(&name, true) {
+                Ok(first) => {
+                    state.first = Some(first);
+                    state.name = Some(name.clone());
+                    return Ok(name);
+                }
+                Err(error) => last = error,
+            }
+        }
+        Err(last)
+    }
+
     async fn accept_one(&self) -> Result<AgentIoConnection> {
         let (name, first) = {
             let mut state = lock(&self.state);
             let name = state.name.clone().ok_or_else(|| PlatformError::Invalid("the listener is not bound".into()))?;
-            let first = !state.first_made;
-            state.first_made = true;
-            (name, first)
+            (name, state.first.take())
         };
         if self.closed.load(Ordering::SeqCst) {
             return Err(PlatformError::Io(std::io::ErrorKind::BrokenPipe.into()));
         }
-        let server = Self::create(&name, first)?;
+        let server = match first {
+            Some(server) => server,
+            None => Self::create(&name, false)?,
+        };
         tokio::select! {
             connected = server.connect() => connected?,
             _ = self.closed() => return Err(PlatformError::Io(std::io::ErrorKind::BrokenPipe.into())),
@@ -244,16 +270,13 @@ impl NamedPipeListener {
 }
 
 impl AgentIoListener for NamedPipeListener {
+    /// A random name and its first instance (inside a tokio runtime: the instance is registered with it).
     fn bind(&self) -> Result<String> {
-        let mut state = lock(&self.state);
-        if let Some(name) = &state.name {
-            return Ok(name.clone());
-        }
-        let mut bytes = [0u8; 16];
-        getrandom::fill(&mut bytes).map_err(|_| refused("no random numbers"))?;
-        let name = format!("{PREFIX}{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>());
-        state.name = Some(name.clone());
-        Ok(name)
+        self.bind_with(|| {
+            let mut bytes = [0u8; 16];
+            getrandom::fill(&mut bytes).map_err(|_| refused("no random numbers"))?;
+            Ok(format!("{PREFIX}{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+        })
     }
 
     fn accept(&self) -> BoxFuture<'_, Result<AgentIoConnection>> {
@@ -262,6 +285,7 @@ impl AgentIoListener for NamedPipeListener {
 
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
+        lock(&self.state).first.take();
         self.close.notify_waiters();
     }
 }
@@ -346,10 +370,19 @@ mod tests {
         listener.close();
         assert!(listener.accept().await.is_err(), "a closed listener takes no one");
 
-        // Squatting: a name another instance already holds is refused by the first instance's FILE_FLAG_FIRST_PIPE_INSTANCE.
-        let squatted = NamedPipeListener::new();
-        let name = squatted.bind().unwrap();
-        let _squatter = ServerOptions::new().create(path(&name)).unwrap();
-        assert!(squatted.accept().await.is_err(), "a name another process holds is never served");
+        // Squatting: a name another instance already holds is never joined; bind takes the next name, whose first instance it made.
+        let held = format!("{PREFIX}{}", "a1".repeat(16));
+        let free = format!("{PREFIX}{}", "b2".repeat(16));
+        let squatter = ServerOptions::new().create(path(&held)).unwrap();
+        let mut names = vec![free.clone(), held.clone()];
+        let listener = NamedPipeListener::new();
+        assert_eq!(listener.bind_with(|| Ok(names.pop().unwrap())).unwrap(), free, "the held name is passed over");
+        let (accepted, client) = tokio::join!(listener.accept(), NamedPipeConnector.connect(&free, Duration::from_secs(5)));
+        assert!(accepted.is_ok() && client.is_ok(), "the free name is served");
+        let (squatted, joined) = tokio::join!(squatter.connect(), async { ClientOptions::new().open(path(&held)) });
+        assert!(squatted.is_ok() && joined.is_ok(), "a client of the held name reaches the squatter, never this listener");
+        let all_held = NamedPipeListener::new();
+        let _taken = ServerOptions::new().create(path(&free)).unwrap();
+        assert!(all_held.bind_with(|| Ok(free.clone())).is_err() && all_held.accept().await.is_err(), "no free name, no listener");
     }
 }

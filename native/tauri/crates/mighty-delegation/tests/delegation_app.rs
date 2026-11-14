@@ -325,5 +325,18 @@ async fn the_binding_factory_binds_local_runs_and_connects_delegation() {
     let mut pi = claude.clone();
     pi.provider = "pi".into();
     assert!(factory(&pi, &workspace).is_none());
+    // A run the registry refuses (a pane id that is not one) gets nothing, and the logged factory says why.
+    let said = Arc::new(std::sync::Mutex::new(vec![]));
+    let sink = said.clone();
+    let logged = mighty_delegation::agent_io::server::logged_binding_factory(
+        pipe.clone(),
+        executable(),
+        Arc::new(|| (None, false)),
+        Arc::new(move |line: &str| sink.lock().unwrap().push(line.to_string())),
+    );
+    let bad = StartRunRequest::new("bad pane", "ws", "claude", "hi");
+    assert!(logged(&bad, &workspace).is_none());
+    assert_eq!(*said.lock().unwrap(), [r#"agent io: the run of pane "bad pane" gets no pane tools: Invalid pane binding."#]);
+    assert!(logged(&claude, &workspace).is_some() && said.lock().unwrap().len() == 1, "a bound run logs nothing");
     pipe.close().await;
 }
