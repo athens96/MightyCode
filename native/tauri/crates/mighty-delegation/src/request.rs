@@ -323,6 +323,27 @@ pub trait DelegationHandler: Send + Sync {
     fn handle(&self, request: DelegationRequest, caller: DelegationCaller) -> BoxFuture<'static, DelegationResponse>;
 }
 
+/// `DelegationIOHandler`: the app's side of the delegation server with no coordinator behind it (M/Delegation.swift:160-195). Each
+/// call is answered by the first rule that applies, and none changes anything: the gates ([`crate::providers::gate`]), and otherwise
+/// "Unknown delegation tool", since there is no tool by any name without a coordinator.
+pub struct DelegationIoHandler {
+    switch_on: Box<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl DelegationIoHandler {
+    pub fn new(switch_on: impl Fn() -> bool + Send + Sync + 'static) -> DelegationIoHandler {
+        DelegationIoHandler { switch_on: Box::new(switch_on) }
+    }
+}
+
+impl DelegationHandler for DelegationIoHandler {
+    fn handle(&self, request: DelegationRequest, caller: DelegationCaller) -> BoxFuture<'static, DelegationResponse> {
+        let answer = crate::providers::gate(&caller, (self.switch_on)())
+            .unwrap_or_else(|| DelegationResponse::failure(unknown_tool_message(&request.tool)));
+        Box::pin(async move { answer })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
