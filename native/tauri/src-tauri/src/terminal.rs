@@ -44,8 +44,6 @@ use crate::methods::text;
 /// What a later stage gives the terminals; until then each stays at rest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pending {
-    /// The agent's `run_in_terminal` / `read_latest_output` / `stop` (Agent IO MCP, W7): its terminals are [`Terminals::agent`]'s.
-    AgentIoTools,
     /// A command the app types into a new shell pane (C# `RunTerminalCommandAsync`: style installs, sign-ins; W6/W9): the pane is
     /// frame.rs's `add_pane`, and [`TerminalPane::write`] with `TerminalInput::apply` is its typing.
     RunTerminalCommand,
@@ -53,7 +51,7 @@ pub enum Pending {
     Mobile,
 }
 
-pub const PENDING: [Pending; 3] = [Pending::AgentIoTools, Pending::RunTerminalCommand, Pending::Mobile];
+pub const PENDING: [Pending; 2] = [Pending::RunTerminalCommand, Pending::Mobile];
 
 /// C# `ShowTerminalHistory` (MainWindow.WorkflowParity.cs:10-23, dialog D14): the pane's saved entries in the panel `terminalHistory`
 /// (its help dimmed over the entries, 11pt code, selectable, at most 360 high), closed with its ✕; the window holds its dialog
@@ -262,8 +260,9 @@ fn update_block_record(
     }
 }
 
-/// `AgentIOPaneKind.Terminal`.
-const AGENT_TERMINAL: &str = "agent-terminal";
+/// `AgentIOPaneKind.Terminal`, `AgentIOPaneKind.Browser`.
+pub(crate) const AGENT_TERMINAL: &str = "agent-terminal";
+pub(crate) const AGENT_BROWSER: &str = "agent-browser";
 
 /// C# `WithAgentIOPane`: the state with the agent pane's terminal (or browser) pane to its right, titled as on the Mac; unchanged
 /// while that pane is already open.
@@ -311,7 +310,7 @@ fn with_agent_io_pane(
 }
 
 /// [`with_agent_io_pane`] as a change of the state.
-fn show_agent_io_pane(host: &Host, agent: &str, workspace: &str, kind: &str) -> Result<(), String> {
+pub(crate) fn show_agent_io_pane(host: &Host, agent: &str, workspace: &str, kind: &str) -> Result<(), String> {
     let mut view = host.view();
     let mut defaults = view.layout_defaults.clone();
     let mut failure = None;
@@ -458,6 +457,20 @@ impl Terminals {
             .clone()
     }
 
+    /// The agent pane's terminal, if it has one (C# `agentTerminals.TryGetValue`).
+    pub fn existing_agent(&self, pane: &str) -> Option<Arc<AgentTerminal>> {
+        lock(&self.agents).get(pane).cloned()
+    }
+
+    /// C# `EndAgentTerminal`'s terminal half: the agent pane's terminal and everything it started end, and this returns once they
+    /// have (a delegated child's discard and close cleanup look for links in its worktree only then).
+    pub async fn end_agent(&self, pane: &str) {
+        let terminal = lock(&self.agents).remove(pane);
+        if let Some(terminal) = terminal {
+            let _ = tokio::time::timeout(QUIT_WAIT, terminal.dispose()).await;
+        }
+    }
+
     /// A pane's terminal goes once the pane leaves the state, an agent's terminal once its agent pane does (C# `CloseTerminal`,
     /// `ReconcileAgentIO`); each close on its own task.
     fn reconcile(&self) {
@@ -512,7 +525,7 @@ impl Terminals {
 
     /// Starts following the agent terminals for prompts, unless it already does; it ends by itself once no agent terminal runs a
     /// command for eight looks.
-    fn watch_prompts(self: &Arc<Self>) {
+    pub(crate) fn watch_prompts(self: &Arc<Self>) {
         {
             let mut prompts = lock(&self.prompts);
             if prompts.watching || self.closing.load(Ordering::SeqCst) {
@@ -954,7 +967,7 @@ mod tests {
     fn a_working_folder_is_a_full_path() {
         assert!(is_working_folder(if cfg!(windows) { "C:\\work\\child" } else { "/work/child" }));
         assert!(!is_working_folder("relative\\child") && !is_working_folder("a\0b") && !is_working_folder(&"x".repeat(4097)));
-        assert_eq!(PENDING.len(), 3, "the history dialog is drawn now (show_history)");
+        assert_eq!(PENDING, [Pending::RunTerminalCommand, Pending::Mobile], "the agents' tools are served now (agent_io.rs, W7-C)");
     }
 
     /// D14 against C#'s capture (`mighty-native/tests/golden/terminal-history.json`, plan W6 §1.8): C#'s web smoke's shell pane

@@ -192,7 +192,7 @@ mod imp {
 
     /// The Agent IO listener (one per app, W7-C): the named pipe.
     pub fn agent_io_listener() -> Arc<dyn mighty_platform::AgentIoListener> {
-        Arc::new(NamedPipeListener)
+        Arc::new(NamedPipeListener::new())
     }
 
     /// The Agent IO client of the exe's MCP modes (`--agent-io-mcp`, `--agent-delegation-mcp`, W7-C): the named pipe.

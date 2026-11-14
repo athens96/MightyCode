@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::{BoxFuture, Result};
+use crate::{BoxFuture, McpTransport, Result};
 
 /// One connection's two directions, as the OS opened it.
 pub trait AgentIoStream: AsyncRead + AsyncWrite + Send + Unpin {}
@@ -30,6 +30,11 @@ pub trait AgentIoListener: Send + Sync {
     fn accept(&self) -> BoxFuture<'_, Result<AgentIoConnection>>;
     /// Stops listening: every waiting `accept` fails, the name is free.
     fn close(&self);
+    /// How a message is framed on this transport and which environment key carries the name: the named pipe's unless the transport
+    /// says otherwise (the Mac's socket, its stage).
+    fn transport(&self) -> McpTransport {
+        McpTransport::NamedPipe
+    }
 }
 
 /// The MCP server's side (`--agent-io-mcp`, `--agent-delegation-mcp`): opens a connection to the app's listener.
@@ -37,4 +42,8 @@ pub trait AgentIoConnector: Send + Sync {
     /// Connects to `name` within `timeout`. Windows opens with `SECURITY_IDENTIFICATION` and checks that the pipe's owner is the
     /// current user (what .NET's `CurrentUserOnly` client does); a name the transport does not take is `Invalid`.
     fn connect(&self, name: &str, timeout: Duration) -> BoxFuture<'_, Result<AgentIoConnection>>;
+    /// The transport the listener this connects to speaks ([`AgentIoListener::transport`]).
+    fn transport(&self) -> McpTransport {
+        McpTransport::NamedPipe
+    }
 }

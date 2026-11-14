@@ -22,8 +22,6 @@ pub enum Pending {
     BackgroundRows,
     /// A terminal prompt (`terminalPrompts`, W4).
     TerminalPrompt,
-    /// `agentUrlPrompts.ForPane` (agent web prompts, W4).
-    WebOpen,
     /// `loginRetries`, `loginJobs`, `loginFailures`, `loginNotes`, `accountLoginWaits` (login recovery, W6).
     Login,
     /// What `RenderStatusLine` last drew (status line, W6).
@@ -32,15 +30,8 @@ pub enum Pending {
     Style,
 }
 
-pub const PENDING: [Pending; 7] = [
-    Pending::Requests,
-    Pending::BackgroundRows,
-    Pending::TerminalPrompt,
-    Pending::WebOpen,
-    Pending::Login,
-    Pending::StatusLine,
-    Pending::Style,
-];
+pub const PENDING: [Pending; 6] =
+    [Pending::Requests, Pending::BackgroundRows, Pending::TerminalPrompt, Pending::Login, Pending::StatusLine, Pending::Style];
 
 /// C# `ToolPermissionRequest` (ToolPermissions.cs:12): the run engine's request, one definition in mighty-core.
 pub use mighty_core::permission::ToolPermissionRequest as PermissionRequest;
