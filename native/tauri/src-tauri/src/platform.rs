@@ -31,6 +31,28 @@ pub fn clipboard() -> Arc<dyn mighty_platform::Clipboard> {
     os::clipboard()
 }
 
+/// The agents' MCP listener (one per app, W7-C's agent_io.rs): Windows' named pipe; the Mac's socket is its stage's.
+#[allow(dead_code, reason = "agent_io.rs (W7-C) starts it")]
+pub fn agent_io_listener() -> Arc<dyn mighty_platform::AgentIoListener> {
+    os::agent_io_listener()
+}
+
+/// The exe's MCP modes' client of that listener (`--agent-io-mcp`, `--agent-delegation-mcp`, main.rs).
+pub fn agent_io_connector() -> Arc<dyn mighty_platform::AgentIoConnector> {
+    os::agent_io_connector()
+}
+
+/// A volume's free space (delegation's worktree check, W7-B; the smoke gives unlimited space instead).
+#[allow(dead_code, reason = "delegation.rs (W7-D) hands it to mighty-delegation's worktree maker")]
+pub fn disk_space() -> Arc<dyn mighty_platform::DiskSpace> {
+    os::disk_space()
+}
+
+/// The process host alone, for the exe's `--fake-claude` mode, which serves before any profile is read (main.rs).
+pub fn process_host() -> Arc<dyn mighty_platform::ProcessHost> {
+    os::process_host()
+}
+
 /// W6's ports, managed by the app (`host.app.state::<Ports>()`): a terminal window that outlives the app (sign-ins, the setup
 /// screen's install), the installed font families (Settings › 글자) and the account usage's HTTPS GET. A smoke gets the recording
 /// fakes for the two that reach outside the app (no window opens, no request leaves), and the real font list, which only reads.

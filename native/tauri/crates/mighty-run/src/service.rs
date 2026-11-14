@@ -31,7 +31,7 @@ use tokio::sync::mpsc;
 use crate::antigravity::AntigravityRuleLeases;
 use crate::apply;
 use crate::attachments;
-use crate::manager::{RunManager, RunManagerOptions};
+use crate::manager::{BindingFactory, RunManager, RunManagerOptions};
 use crate::model::{RunEvent, StartRunRequest};
 use crate::permissions::ToolPermissionRequest;
 use crate::phase_models;
@@ -120,6 +120,8 @@ struct Shared {
     /// True once the leftovers a crash left in agy's settings are out (C# `InitializeAsync` awaits `RemoveLeftovers`): no agy run starts
     /// before (C2).
     leftovers_removed: tokio::sync::watch::Receiver<bool>,
+    /// Delegation's hooks ([`RunServiceOptions::delegation`]).
+    delegation: Option<Arc<dyn DelegationRunHooks>>,
 }
 
 impl Shared {
@@ -206,6 +208,27 @@ pub struct RunServiceOptions {
     /// Called with the pane's id once its route is marked started, just before the runner admits the request, under the service's
     /// lock (a stop asked for meanwhile waits for the admission). The checks' gate on that window; None in the app.
     pub admitting: Option<Admitting>,
+    /// A pane's Agent IO and delegation binding (C# `AgentIOBinding`, W7-C: src-tauri agent_io.rs `factory`), put into the runner's
+    /// options before [`RunServiceOptions::configure`] runs.
+    pub binding: Option<BindingFactory>,
+    /// Delegation's run ledger and child worktrees (C# DesktopService.Delegation.cs, W7-D: src-tauri delegation.rs `run_hooks`). None:
+    /// no pane is a delegated child's and no run is recorded.
+    pub delegation: Option<Arc<dyn DelegationRunHooks>>,
+}
+
+/// What delegation hears of the runs the service starts and ends (C# DesktopService.cs:261-273, 346-351;
+/// DesktopService.Delegation.cs:196-218, 369-371). Each is called under the service's lock, so none may take it again or wait.
+/// Owner from W7 Step 0: W7-D, which also places the calls of [`DelegationRunHooks::began`] and [`DelegationRunHooks::ended`]
+/// (C#: after the route is added, and where a status event ends the route).
+pub trait DelegationRunHooks: Send + Sync {
+    /// C# `DelegationWorktreeRoot(pane)`: the child's worktree as delegation made it (a Codex or Antigravity child working in a folder
+    /// inside it), never what the caller says; None for every other pane.
+    fn worktree_root(&self, pane: &RunSession) -> Option<String>;
+    /// C# `DelegationRunBegan(pane)`: a run starts in the pane; the run's id in delegation's ledger (`"run-" + guid`).
+    fn began(&self, pane: &RunSession) -> String;
+    /// C# `DelegationRunEnded(sessionId, status)`: a run of the pane ended with `status` (`closing`: the app quits); false when no run of
+    /// this launch was going there.
+    fn ended(&self, session_id: &str, status: &str, closing: bool) -> bool;
 }
 
 pub type Configure = Box<dyn FnOnce(&mut RunManagerOptions) + Send>;
@@ -227,6 +250,7 @@ impl RunService {
             antigravity: Mutex::new(antigravity::Desk::default()),
             antigravity_rules: OnceLock::new(),
             leftovers_removed,
+            delegation: options.delegation,
         });
         let resolver = shared.clone();
         let resolve: crate::manager::ResolveWorkspace = Arc::new(move |id: String| {
@@ -240,6 +264,7 @@ impl RunService {
             let permissions = shared.clone();
             manager_options.permission_requested = Some(Arc::new(move |value| permissions.tool_permission(value)));
         }
+        manager_options.binding = options.binding;
         if let Some(configure) = options.configure {
             configure(&mut manager_options);
         }
@@ -413,9 +438,8 @@ impl RunService {
             request.phase_models = phase_models::normalized(state.snapshot.phase_models.as_ref());
             request.todo_progress = if request.resume_id.is_none() { None } else { pane.todo_progress.clone() };
             request.working_folder = pane.working_folder.clone();
-            // C# `DelegationWorktreeRoot(pane)`: the child's worktree as delegation made it, never what the caller says; delegation
-            // (W7) keeps no worktree here yet, so none.
-            request.delegation_worktree_root = None;
+            // C# `DelegationWorktreeRoot(pane)`: the child's worktree as delegation made it, never what the caller says.
+            request.delegation_worktree_root = self.shared.delegation.as_ref().and_then(|hooks| hooks.worktree_root(&pane));
             if state.routes.contains_key(&request.session_id) {
                 return Err(RunError::State(strings::get("run.error.alreadyRunning")));
             }

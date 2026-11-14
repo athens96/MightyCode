@@ -83,11 +83,13 @@ enum Stage {
     Updates,
     /// An opencode run's question card answered from the page (smoke_acp.rs), with the stand-in CLI.
     Acp,
+    /// Delegation on its fixture repository under the smoke's profile (smoke_delegation.rs, W7-D).
+    Delegation,
     Runs,
 }
 
 /// The steps after the first probe, in their order: each one that can start does (`Smoke::start`), the run steps last.
-const STEPS: [Stage; 13] = [
+const STEPS: [Stage; 14] = [
     Stage::Frame,
     Stage::Browser,
     Stage::Terminal,
@@ -100,6 +102,7 @@ const STEPS: [Stage; 13] = [
     Stage::Accounts,
     Stage::Updates,
     Stage::Acp,
+    Stage::Delegation,
     Stage::Runs,
 ];
 
@@ -255,6 +258,8 @@ struct Progress {
     accounts: Option<Value>,
     updates: Option<Value>,
     acp: Option<Value>,
+    /// The delegation step's report (W7-D).
+    delegation: Option<Value>,
     /// The reload step's page is loading again: its `ready` brings the probe.
     reload_waiting: bool,
     reload_ready: bool,
@@ -281,6 +286,7 @@ impl Progress {
             Stage::Accounts => Some(&mut self.accounts),
             Stage::Updates => Some(&mut self.updates),
             Stage::Acp => Some(&mut self.acp),
+            Stage::Delegation => Some(&mut self.delegation),
             Stage::Runs => None,
         }
     }
@@ -438,6 +444,7 @@ impl Smoke {
             Stage::Accounts => page_steps && shared(host).is_some_and(|host| crate::smoke_accounts::start(&host)),
             Stage::Updates => page_steps && shared(host).is_some_and(|host| crate::smoke_updates::start(&host)),
             Stage::Acp => self.mode == Mode::FakeClaude && crate::smoke_acp::start(host),
+            Stage::Delegation => page_steps && shared(host).is_some_and(|host| crate::smoke_delegation::start(&host)),
             Stage::Runs => self.start_runs(host),
         }
     }
@@ -717,6 +724,12 @@ impl Smoke {
                     checks[name] = json!(passed && report.is_some());
                 }
             }
+            // The delegation step (W7-D): its checks, from its report or from the error that it did not report.
+            let delegation = self.progress().delegation.clone();
+            let missing = json!({"error": "the delegation step did not report"});
+            for (name, passed) in crate::smoke_delegation::checks(delegation.as_ref().unwrap_or(&missing)) {
+                checks[name] = json!(passed && delegation.is_some());
+            }
         }
         match self.mode {
             Mode::Page => {}
@@ -804,6 +817,7 @@ impl Smoke {
             "updates": w6.3,
             "localeKeyLeakScan": leak_scan.flatten(),
             "acp": self.progress().acp.clone(),
+            "delegation": self.progress().delegation.clone(),
             "runs": runs,
             "mode": format!("{:?}", self.mode),
             "host": {"workspaces": workspaces, "panes": panes, "theme": theme, "activeSessionId": active, "language": host.locale.language()},

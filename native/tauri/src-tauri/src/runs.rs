@@ -250,6 +250,9 @@ impl Runs {
                 remote: None,
                 configure: Some(configure),
                 admitting: None,
+                // A Claude or Codex run's MCP servers (agent_io.rs, W7-C) and delegation's run ledger and worktrees (delegation.rs, W7-D).
+                binding: crate::agent_io::factory(host),
+                delegation: crate::delegation::run_hooks(host),
             },
         );
         let runs = Arc::new(Runs { service: Arc::new(service), catalog, images, runtime: Mutex::new(HashMap::new()) });
@@ -267,6 +270,8 @@ impl Runs {
                 if let ServiceEvent::Run { event: run, .. } = &event {
                     crate::updates::on_run_event(&pump, run);
                     crate::accounts::on_run_event(&pump, run);
+                    // Delegation's offers and queued merges on a run's start or end (C# DesktopService.cs:261-273; delegation.rs, W7-D).
+                    crate::delegation::on_run_event(&pump, run);
                     if run.kind == "status" {
                         status = Some((run.session_id.clone(), run.status.clone()));
                     }

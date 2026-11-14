@@ -190,6 +190,8 @@ pub fn registry() -> Registry {
     crate::files::register(&mut methods);
     crate::history::register(&mut methods);
     crate::frame::register(&mut methods);
+    // A delegated child's card actions (delegation.rs, W7-D).
+    methods.add("childAction", crate::delegation::child_action);
     // W6: the native forms (native.rs) and Settings with the guide (settings/mod.rs).
     crate::native::register(&mut methods);
     crate::settings::register(&mut methods);

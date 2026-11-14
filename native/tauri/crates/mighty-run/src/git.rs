@@ -1,7 +1,11 @@
-//! Git as the work map runs it (C# `DelegationGit.Run`, DelegationWorktree.cs:188-291): git from the PATH through the platform's
+//! Git as the app runs it (C# `DelegationGit.Run`, DelegationWorktree.cs:188-291): git from the PATH through the platform's
 //! `ProcessHost`, the user's own settings but no hooks, fsmonitor or auto gc, no program a repository's config names ([`no_programs`]:
-//! no signature check, no transport), no inherited `GIT_*` variable, no prompt, at most 1 MiB of output and a deadline. The work map's
-//! commands only read.
+//! no signature check, no transport), no inherited `GIT_*` variable, no prompt, at most 1 MiB of output and a deadline.
+//!
+//! One runner for the work map (mighty-workmap re-exports this module as `mighty_workmap::git`, its commands only read) and delegation
+//! (mighty-delegation's worktrees, merges, cleanup and auto-commit). Owner from W7 Step 0: W7-B, which adds `run_detailed` (stdin
+//! input, the failure kinds, a per-step timeout; the hardened C# runner of `fix/csharp-from-tauri-review`, DelegationWorktree.cs:256
+//! there) with [`Git::run`] as its wrapper and the work map's behaviour unchanged.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,7 +35,7 @@ pub fn line(output: &str) -> &str {
 /// `DelegationGit.Executable`: git on the PATH (a relative PATH entry names no place, so the folder a command runs in never decides).
 pub fn executable() -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
-    let name = if mighty_run::os::windows() { "git.exe" } else { "git" };
+    let name = if crate::os::windows() { "git.exe" } else { "git" };
     std::env::split_paths(&path)
         .map(|folder| PathBuf::from(folder.to_string_lossy().trim().trim_matches('"')))
         .filter(|folder| mighty_core::normalize::fully_qualified(&folder.to_string_lossy()))
@@ -76,7 +80,7 @@ impl Git {
 
     /// `HooksEmpty`: the hooks folder is a plain, empty folder, made when it is missing. Git does not run while it is not.
     fn hooks_empty(&self) -> bool {
-        if !mighty_run::os::windows() && self.hooks == Path::new("/dev/null") {
+        if !crate::os::windows() && self.hooks == Path::new("/dev/null") {
             return true;
         }
         if std::fs::create_dir_all(&self.hooks).is_err() {
@@ -96,7 +100,7 @@ impl Git {
         let hooks = format!("core.hooksPath={}", self.hooks.display());
         let folder = directory.to_string_lossy().into_owned();
         let mut args: Vec<String> = ["-c", "core.fsmonitor=false", "-c", &hooks, "-c", "gc.auto=0"].iter().map(|s| s.to_string()).collect();
-        if mighty_run::os::windows() {
+        if crate::os::windows() {
             args.extend(["-c".to_string(), "core.longpaths=true".to_string()]);
         }
         args.extend(no_programs(&program));

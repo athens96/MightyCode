@@ -839,9 +839,121 @@ impl SurfaceFactory for FakeSurfaces {
     }
 }
 
+/// The Agent IO transport in memory (W7-C's tests and the framing's): one value is both the app's listener and the servers' connector.
+/// `connect` to the bound name hands `accept` the other end of an in-memory duplex; a connection to another name, to a closed
+/// listener, or while [`FakeAgentIo::set_foreign`] says the listener is another user's, is refused (what the Windows client's owner
+/// check refuses).
+#[derive(Clone)]
+pub struct FakeAgentIo {
+    inner: Arc<FakeAgentIoInner>,
+}
+
+struct FakeAgentIoInner {
+    name: Mutex<Option<String>>,
+    sender: Mutex<Option<mpsc::UnboundedSender<tokio::io::DuplexStream>>>,
+    receiver: tokio::sync::Mutex<mpsc::UnboundedReceiver<tokio::io::DuplexStream>>,
+    foreign: std::sync::atomic::AtomicBool,
+}
+
+impl Default for FakeAgentIo {
+    fn default() -> Self {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        FakeAgentIo {
+            inner: Arc::new(FakeAgentIoInner {
+                name: Mutex::new(None),
+                sender: Mutex::new(Some(sender)),
+                receiver: tokio::sync::Mutex::new(receiver),
+                foreign: std::sync::atomic::AtomicBool::new(false),
+            }),
+        }
+    }
+}
+
+impl FakeAgentIo {
+    /// Each connection's buffer: a whole packet of the transport's largest (1 MiB and its header) fits.
+    pub const BUFFER: usize = 2 * 1_048_576;
+
+    /// The listener belongs to another user from now on (`true`): every `connect` is refused.
+    pub fn set_foreign(&self, foreign: bool) {
+        self.inner.foreign.store(foreign, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl AgentIoListener for FakeAgentIo {
+    fn bind(&self) -> Result<String> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let mut name = lock(&self.inner.name);
+        let bound = name.get_or_insert_with(|| format!("mighty-agent-io-{:032x}", NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+        Ok(bound.clone())
+    }
+    fn accept(&self) -> BoxFuture<'_, Result<AgentIoConnection>> {
+        Box::pin(async move {
+            let next = self.inner.receiver.lock().await.recv().await;
+            next.map(|stream| Box::new(stream) as AgentIoConnection)
+                .ok_or_else(|| PlatformError::Io(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the listener is closed")))
+        })
+    }
+    fn close(&self) {
+        lock(&self.inner.sender).take();
+    }
+}
+
+impl AgentIoConnector for FakeAgentIo {
+    fn connect(&self, name: &str, _timeout: std::time::Duration) -> BoxFuture<'_, Result<AgentIoConnection>> {
+        let name = name.to_string();
+        Box::pin(async move {
+            if self.inner.foreign.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(PlatformError::Refused("the listener belongs to another user".into()));
+            }
+            if lock(&self.inner.name).as_deref() != Some(name.as_str()) {
+                return Err(PlatformError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "no listener by that name")));
+            }
+            let (client, server) = tokio::io::duplex(Self::BUFFER);
+            let sender = lock(&self.inner.sender).clone();
+            match sender {
+                Some(sender) if sender.send(server).is_ok() => Ok(Box::new(client) as AgentIoConnection),
+                _ => Err(PlatformError::Io(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "the listener is closed"))),
+            }
+        })
+    }
+}
+
+/// A volume with this many bytes free, whatever the path (C# `DelegationPlace`'s maker: 50 GB).
+#[derive(Debug, Clone, Copy)]
+pub struct FixedDiskSpace(pub u64);
+
+impl DiskSpace for FixedDiskSpace {
+    fn available_bytes(&self, _path: &Path) -> Result<u64> {
+        Ok(self.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The in-memory transport carries bytes both ways, refuses another name, another user's listener and a closed one.
+    #[tokio::test]
+    async fn the_agent_io_fake_connects_only_to_its_own_listener() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let io = FakeAgentIo::default();
+        let name = io.bind().unwrap();
+        assert!(name.starts_with("mighty-agent-io-") && name.len() == 16 + 32 && io.bind().unwrap() == name);
+        let mut client = io.connect(&name, std::time::Duration::from_secs(1)).await.unwrap();
+        let mut server = io.accept().await.unwrap();
+        client.write_all(b"ping").await.unwrap();
+        let mut read = [0u8; 4];
+        server.read_exact(&mut read).await.unwrap();
+        assert_eq!(&read, b"ping");
+        assert!(io.connect("mighty-agent-io-0", std::time::Duration::ZERO).await.is_err());
+        io.set_foreign(true);
+        assert!(matches!(io.connect(&name, std::time::Duration::ZERO).await, Err(PlatformError::Refused(_))));
+        io.set_foreign(false);
+        io.close();
+        assert!(io.connect(&name, std::time::Duration::ZERO).await.is_err());
+        assert!(io.accept().await.is_err());
+        assert_eq!(FixedDiskSpace(7).available_bytes(Path::new("x")).unwrap(), 7);
+    }
 
     /// The W6 fakes keep their ports' contracts: an empty command opens nothing; a launch is recorded, never run; an HTTPS GET answers
     /// its script and then refuses, every request recorded.

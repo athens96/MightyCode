@@ -7,7 +7,8 @@
 //! Also the rest of C# `WorkDashboard` (`dashboard`): the counts the shell model does not already take from mighty-core.
 
 pub mod dashboard;
-pub mod git;
+/// The app's one git runner, mighty-run's since W7 (delegation runs it too): `mighty_workmap::git` stays its name here.
+pub use mighty_run::git;
 pub mod originals;
 pub mod service;
 pub mod summary;

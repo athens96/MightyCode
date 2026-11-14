@@ -344,6 +344,30 @@ impl Host {
         self.writes() && self.smoke.is_none()
     }
 
+    /// W7 (plan D2, section 4): whether a git step that writes may touch the repository or worktree folder at `path` — branches,
+    /// commits, merges, worktrees made and removed. With `--allow-state-write` outside a smoke (as [`Host::may_change_machine`]); in a
+    /// smoke only under the smoke's own profile (its fixture repository and worktree root), never a user's repository or
+    /// `%USERPROFILE%\.mightycode`. Compared as written: an absolute path with no `..` that starts with the profile's folder (W7-D may
+    /// tighten it with mighty-delegation's canonical paths, W7-B).
+    #[allow(dead_code, reason = "a seam W7-D (every git step of delegation.rs and the smoke) calls")]
+    pub fn may_touch_repo(&self, path: &std::path::Path) -> bool {
+        if self.may_change_machine() {
+            return true;
+        }
+        self.smoke.is_some()
+            && path.is_absolute()
+            && !path.components().any(|part| matches!(part, std::path::Component::ParentDir))
+            && path.starts_with(&self.data_dir)
+    }
+
+    /// W7 (plan section 4): whether delegation acts — attaches its server to a run, makes a worktree on the second send, merges, undoes,
+    /// discards, cleans up a closed child — rather than only showing the file's tree: with `--allow-state-write`, or in a smoke (on its
+    /// fixture only, [`Host::may_touch_repo`]).
+    #[allow(dead_code, reason = "a seam W7-C (the binding's delegation server) and W7-D (every live action) call")]
+    pub fn delegation_live(&self) -> bool {
+        self.writes() || self.smoke.is_some()
+    }
+
     /// The run service takes the state from here on (runs.rs).
     pub fn attach(&self, runs: Arc<Runs>) {
         let mut view = self.view();
@@ -476,6 +500,8 @@ impl Host {
         let setup = crate::setup::shell_flags(self, snapshot);
         // The account usage's chips, popover and dashboard bars (usage.rs, W6-C), read with the state locked.
         let usage = crate::usage::shell(self, snapshot);
+        // The delegated children under their parents (delegation.rs, W7-D), read with the state locked.
+        let children = crate::delegation::sidebar_rows(self, snapshot);
         let context = ShellContext {
             locale: self.locale,
             version: &self.version,
@@ -487,7 +513,7 @@ impl Host {
             attention: &empty_attention,
             git: active_git,
             dashboard_git: &empty_git,
-            children: &[],
+            children: &children,
             // No runtime check yet (shell::Pending::Runtime): the machine at rest.
             runtime: Runtime::Known,
             setup_badge: setup.badge,
@@ -571,6 +597,8 @@ impl Host {
                             host.refresh_git(ticks.is_multiple_of(100));
                         }
                     });
+                    // An agent pane that left the state loses its Agent IO binding (C# `ReconcileAgentIO`; agent_io.rs, W7-C).
+                    host.pass("agent-io", || crate::agent_io::reconcile(&host));
                 }
             })
             .expect("the bridge poll");
@@ -1010,6 +1038,8 @@ mod tests {
             remote: None,
             configure: None,
             admitting: None,
+            binding: None,
+            delegation: None,
         };
         let (service, _events) = RunService::new(AppSnapshot::default(), catalog, options);
         let service = Arc::new(service);

@@ -5,8 +5,11 @@
 //! `DpapiRemoteKeyVault` format), the browser surface ([`WebviewSurfaces`], a WebView2 child webview of the main window), and the
 //! process layer (W1-C, the C# `ChildProcess`, `WindowsCommand`, `CliRunner`, `CliDiscovery`, `CliEnvironment`,
 //! `WindowsShellEnvironment`, `UserEnvironment`, `PseudoTerminal` and `ShellActivity`): [`WindowsProcessHost`],
-//! [`WindowsPtyHost`], [`WindowsShellEnvironment`]. Every other port is `mighty_platform::unsupported::Unsupported` until its stage.
+//! [`WindowsPtyHost`], [`WindowsShellEnvironment`]. W7's Agent IO pipe ([`agent_io`], W7-C) and free space ([`disk_space`], W7-B) are
+//! stubs until their parts fill them. Every other port is `mighty_platform::unsupported::Unsupported` until its stage.
 
+#[cfg(windows)]
+pub mod agent_io;
 #[cfg(windows)]
 mod browser;
 #[cfg(windows)]
@@ -19,6 +22,8 @@ pub mod command;
 pub mod console;
 #[cfg(windows)]
 pub mod discovery;
+#[cfg(windows)]
+pub mod disk_space;
 #[cfg(windows)]
 mod dpapi;
 #[cfg(windows)]
@@ -65,10 +70,12 @@ mod imp {
     use mighty_platform::unsupported::Unsupported;
     use mighty_platform::{AppPaths, Paths, Platform, PlatformProfile, Result, SurfaceFactory};
 
+    pub use crate::agent_io::{NamedPipeConnector, NamedPipeListener};
     pub use crate::browser::{WebviewSurfaces, runtime_version as browser_runtime};
     pub use crate::cli::{CliRunResult, CliRunner};
     pub use crate::clipboard::WindowsClipboard;
     pub use crate::console::WindowsTerminalLauncher;
+    pub use crate::disk_space::WindowsDiskSpace;
     pub use crate::dpapi::{DpapiVault, FOLDER as REMOTE_KEYS_FOLDER, file_name as remote_key_file_name};
     pub use crate::environment::{CliEnvironmentSnapshot, WindowsShellEnvironment};
     pub use crate::files::{
@@ -181,6 +188,26 @@ mod imp {
     /// The user's clipboard (a terminal's copy and paste).
     pub fn clipboard() -> Arc<dyn mighty_platform::Clipboard> {
         Arc::new(WindowsClipboard)
+    }
+
+    /// The Agent IO listener (one per app, W7-C): the named pipe.
+    pub fn agent_io_listener() -> Arc<dyn mighty_platform::AgentIoListener> {
+        Arc::new(NamedPipeListener)
+    }
+
+    /// The Agent IO client of the exe's MCP modes (`--agent-io-mcp`, `--agent-delegation-mcp`, W7-C): the named pipe.
+    pub fn agent_io_connector() -> Arc<dyn mighty_platform::AgentIoConnector> {
+        Arc::new(NamedPipeConnector)
+    }
+
+    /// A volume's free space (delegation's worktree check, W7-B).
+    pub fn disk_space() -> Arc<dyn mighty_platform::DiskSpace> {
+        Arc::new(WindowsDiskSpace)
+    }
+
+    /// The process host alone, for the exe's `--fake-claude` mode, which starts before any profile is read (W7-C).
+    pub fn process_host() -> Arc<dyn mighty_platform::ProcessHost> {
+        Arc::new(WindowsProcessHost::new())
     }
 
     /// A command in a terminal window of its own that outlives the app (C# `CliAccountTerminal`): Windows Terminal, else the console

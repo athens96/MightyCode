@@ -108,7 +108,15 @@ async fn rust_run(work: &Path) -> (RunSession, Vec<Value>) {
     let (service, mut events) = RunService::new(
         AppSnapshot::default(),
         catalog,
-        RunServiceOptions { plugin_directory: plugin, permission_card: true, remote: None, configure: Some(configure), admitting: None },
+        RunServiceOptions {
+            plugin_directory: plugin,
+            permission_card: true,
+            remote: None,
+            configure: Some(configure),
+            admitting: None,
+            binding: None,
+            delegation: None,
+        },
     );
     let service = Arc::new(service);
     let workspace = Workspace { name: Some("workspace".into()), path: Some(folder.to_string_lossy().into_owned()), ..Workspace::default() };

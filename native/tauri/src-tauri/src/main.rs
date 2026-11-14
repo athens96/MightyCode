@@ -6,11 +6,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod accounts;
+mod agent_io;
 mod antigravity;
 mod args;
 mod ask;
 mod cards;
 mod composer;
+mod delegation;
 mod delta;
 mod dialogs;
 mod files;
@@ -32,6 +34,7 @@ mod setup;
 mod smoke;
 mod smoke_accounts;
 mod smoke_acp;
+mod smoke_delegation;
 mod smoke_files;
 mod smoke_frame;
 mod smoke_history;
@@ -120,8 +123,29 @@ fn source_name(source: &LoadSource) -> String {
     }
 }
 
+/// The exe's other modes (C# Program.cs:142-151), served before anything else: before the arguments are parsed (which refuses these),
+/// before Tauri, WebView2, the profile, the log or any mutex, so nothing but their protocol reaches stdout. An agent CLI starts
+/// `--agent-io-mcp` and `--agent-delegation-mcp` from a run's MCP configuration; the delegation smoke and its checks start
+/// `--fake-claude <absolute root> …` in the CLI's place (mighty-delegation `modes`, `fake_claude`, W7-C). `--help-demo-cli` is W9's.
+/// The release build's GUI subsystem still reads the stdio handles a CLI hands it.
+fn exe_mode(args: &[String]) -> Option<i32> {
+    use mighty_delegation::{fake_claude, modes};
+    match args {
+        [only] if only == modes::AGENT_IO_MCP_ARGUMENT => Some(modes::agent_io_mcp(platform::agent_io_connector())),
+        [only] if only == modes::DELEGATION_MCP_ARGUMENT => Some(modes::delegation_mcp(platform::agent_io_connector())),
+        [first, root, rest @ ..] if first == fake_claude::ARGUMENT && mighty_core::normalize::fully_qualified(root) => {
+            Some(fake_claude::run(Path::new(root), rest, platform::process_host()))
+        }
+        _ => None,
+    }
+}
+
 fn main() {
-    let options = match args::parse(std::env::args().skip(1)) {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(code) = exe_mode(&raw) {
+        std::process::exit(code);
+    }
+    let options = match args::parse(raw) {
         Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
@@ -314,6 +338,9 @@ fn main() {
             );
             // Terminal panes, the agents' terminals, terminal prompts and shell block runs (terminal.rs).
             terminal::Terminals::start(&host, &platform);
+            // Delegation over the run service (delegation.rs, W7-D) and the agents' MCP listener (agent_io.rs, W7-C; not in a smoke).
+            delegation::start(&host);
+            agent_io::start(&host);
             host.start_clocks();
             let (inbound, mut calls) = tokio::sync::mpsc::unbounded_channel::<Value>();
             app.manage(Inbound(inbound));
@@ -429,6 +456,9 @@ fn main() {
                 terminal::close_all(app);
                 // The CLI updates and plugin operations cancelled, the wait bounded (updates.rs, W6-D).
                 updates::shutdown(&host);
+                // The agents' bindings revoked and their listener closed (agent_io.rs, W7-C), delegation's retries stopped (W7-D).
+                agent_io::shutdown(&host);
+                delegation::shutdown(&host);
                 // The last save (C# DesktopService.DisposeAsync), written only with --allow-state-write.
                 host.close();
                 host.write_unimplemented();

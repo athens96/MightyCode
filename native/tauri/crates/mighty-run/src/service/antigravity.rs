@@ -352,6 +352,7 @@ mod tests {
             antigravity: Mutex::new(Desk::default()),
             antigravity_rules: OnceLock::from(rules),
             leftovers_removed,
+            delegation: None,
         });
         (shared, done)
     }

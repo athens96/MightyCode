@@ -765,6 +765,8 @@ async fn persistence_and_local_start_snapshot() {
             remote: None,
             configure: None,
             admitting: None,
+            binding: None,
+            delegation: None,
         },
     );
     let mut request = StartRunRequest::new("phase-pane", workspace.id.as_deref().unwrap(), "claude", "hello");

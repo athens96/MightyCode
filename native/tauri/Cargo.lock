@@ -1998,6 +1998,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "mighty-delegation"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "indexmap 2.14.2",
+ "mighty-composer",
+ "mighty-core",
+ "mighty-platform",
+ "mighty-platform-windows",
+ "mighty-run",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "unicode-segmentation",
+ "uuid",
+]
+
+[[package]]
 name = "mighty-files"
 version = "0.1.0"
 dependencies = [
@@ -2090,6 +2109,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "dirs",
+ "getrandom 0.3.4",
  "mighty-platform",
  "serde",
  "serde_json",
@@ -2209,6 +2229,7 @@ dependencies = [
  "mighty-accounts",
  "mighty-composer",
  "mighty-core",
+ "mighty-delegation",
  "mighty-files",
  "mighty-graph",
  "mighty-history",

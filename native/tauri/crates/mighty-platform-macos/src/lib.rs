@@ -147,6 +147,26 @@ mod imp {
         Arc::new(Unsupported)
     }
 
+    /// The Agent IO listener: the Unix socket is the Mac stage's (W7 plan D4).
+    pub fn agent_io_listener() -> Arc<dyn mighty_platform::AgentIoListener> {
+        Arc::new(Unsupported)
+    }
+
+    /// The Agent IO client of the exe's MCP modes: the Mac stage's.
+    pub fn agent_io_connector() -> Arc<dyn mighty_platform::AgentIoConnector> {
+        Arc::new(Unsupported)
+    }
+
+    /// A volume's free space: the Mac stage's (`volumeAvailableCapacityForImportantUsage`).
+    pub fn disk_space() -> Arc<dyn mighty_platform::DiskSpace> {
+        Arc::new(Unsupported)
+    }
+
+    /// The process host alone, for the exe's `--fake-claude` mode: the Mac stage's.
+    pub fn process_host() -> Arc<dyn mighty_platform::ProcessHost> {
+        Arc::new(Unsupported)
+    }
+
     /// A command in a terminal window of its own: not yet on the Mac, which signs in in its own terminal pane (W6).
     pub fn terminal_launcher() -> Arc<dyn mighty_platform::TerminalLauncher> {
         Arc::new(Unsupported)

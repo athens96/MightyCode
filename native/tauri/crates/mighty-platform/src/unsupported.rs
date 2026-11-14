@@ -149,6 +149,29 @@ impl HttpsGet for Unsupported {
     }
 }
 
+/// The Mac's Unix socket until its stage (W7 plan D4).
+impl AgentIoListener for Unsupported {
+    fn bind(&self) -> Result<String> {
+        no("AgentIoListener", "bind")
+    }
+    fn accept(&self) -> BoxFuture<'_, Result<AgentIoConnection>> {
+        Box::pin(async { no("AgentIoListener", "accept") })
+    }
+    fn close(&self) {}
+}
+
+impl AgentIoConnector for Unsupported {
+    fn connect(&self, _name: &str, _timeout: std::time::Duration) -> BoxFuture<'_, Result<AgentIoConnection>> {
+        Box::pin(async { no("AgentIoConnector", "connect") })
+    }
+}
+
+impl DiskSpace for Unsupported {
+    fn available_bytes(&self, _path: &Path) -> Result<u64> {
+        no("DiskSpace", "available_bytes")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,6 +189,10 @@ mod tests {
         assert!(Firewall::read(&port).await.unwrap_err().is_unsupported());
         assert_eq!(ShellEnvironment::resolve(&port, None, false).await.source, EnvironmentSource::ProcessFallback);
         assert!(port.read_text().unwrap_err().is_unsupported() && port.write_text("x").unwrap_err().is_unsupported());
+        assert!(port.bind().unwrap_err().is_unsupported());
+        assert!(port.accept().await.err().is_some_and(|e| e.is_unsupported()));
+        assert!(port.connect("x", std::time::Duration::ZERO).await.err().is_some_and(|e| e.is_unsupported()));
+        assert!(port.available_bytes(Path::new("x")).unwrap_err().is_unsupported());
         assert!(
             port.open_browser(BrowserOptions {
                 pane_id: "p".into(),

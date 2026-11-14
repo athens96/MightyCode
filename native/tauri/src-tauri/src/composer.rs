@@ -907,15 +907,15 @@ pub fn register(methods: &mut Registry) {
                     ui.dirty = true;
                 }
             }
-            // Worktrees and held items are delegation's (W7); the waits do nothing.
-            _ => {}
+            // Worktrees and held items are delegation's (delegation.rs, W7-D); the waits do nothing.
+            other => crate::delegation::run_now(&host, &id, &item, other).await,
         }
         Ok(Value::Null)
     });
-    // The worktree menu's agents are delegation's (W7): no pane offers it yet (`OffersWorktreeMenu`).
+    // The worktree menu's agents are delegation's (delegation.rs, W7-D: `OffersWorktreeMenu`).
     methods.add("queueRunNowMenu", |host: Arc<Host>, args| async move {
-        ensure(&mut host.view(), pane_id(&args))?;
-        Ok(json!([]))
+        let id = ensure(&mut host.view(), pane_id(&args))?;
+        Ok(crate::delegation::run_now_menu(&host, &id))
     });
     // C# `installCli`: the setup screen on the item that installs the pane's missing CLI (setup.rs, W6-B).
     methods.add("installCli", |host: Arc<Host>, args| async move {
