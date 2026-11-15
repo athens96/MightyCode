@@ -60,6 +60,8 @@ mod proxy;
 #[cfg(windows)]
 pub mod pty;
 #[cfg(windows)]
+pub mod registry;
+#[cfg(windows)]
 pub mod session;
 #[cfg(windows)]
 pub mod setup_files;
@@ -120,10 +122,13 @@ mod imp {
     pub use crate::variables::Variables;
     pub use crate::webview2_install::{download_bootstrapper, is_microsoft_signed, run_installer};
 
-    /// The folders of the app before its rename, under `%APPDATA%` (C# `Program.cs`, `RenameMigration`).
+    /// The folders of the app before its rename whose state a default profile without one takes, under `%APPDATA%` (C# `MainWindow`'s
+    /// constructor, `MainWindow.cs:64`: the first holding a `workspace-state.json`, copied in by the store). C#'s other rename,
+    /// `MightyClaudeNative` (moved whole with `.mightyclaude` and the HKCU key), is mighty-core's `rename_migration`, which startup.rs
+    /// runs before the store reads anything; C# runs both, so both stay (W9-F).
     pub const LEGACY_FOLDERS: [&str; 2] = ["MightyClaude", "mighty-claude"];
 
-    /// `%APPDATA%\MightyCode` (or `profile`), the pre-rename folders, and `%LOCALAPPDATA%\<identifier>`.
+    /// `%APPDATA%\MightyCode` (or `profile`), the pre-rename folders whose state is copied once, and `%LOCALAPPDATA%\<identifier>`.
     pub fn paths(profile: Option<PathBuf>, identifier: &str) -> Result<AppPaths> {
         AppPaths::resolve(profile, dirs::config_dir(), &LEGACY_FOLDERS, dirs::data_local_dir(), identifier)
     }
@@ -351,10 +356,11 @@ mod imp {
 
         #[test]
         fn the_default_profile_is_appdata_mightycode() {
-            let paths = paths(None, "dev.mightycode.tauri").unwrap();
+            let paths = paths(None, "dev.mightycode.native").unwrap();
             assert_eq!(paths.data_dir(), dirs::config_dir().unwrap().join("MightyCode"));
-            assert_eq!(paths.legacy_data_dirs().len(), 2);
-            assert_eq!(paths.local_dir(), dirs::data_local_dir().unwrap().join("dev.mightycode.tauri"));
+            let roaming = dirs::config_dir().unwrap();
+            assert_eq!(paths.legacy_data_dirs(), [roaming.join("MightyClaude"), roaming.join("mighty-claude")], "C# MainWindow's");
+            assert_eq!(paths.local_dir(), dirs::data_local_dir().unwrap().join("dev.mightycode.native"));
         }
     }
 }

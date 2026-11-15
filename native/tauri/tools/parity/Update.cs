@@ -10,7 +10,11 @@
 //   update install-log <result json> <fixed time> <out>  the helper's install.log line (WinUI\Program.cs:253-270)
 //   update rewrite <text> <old> <new> <out>  RenameMigration's path rewrite (plain and JSON-escaped, before a separator; W9-F)
 //
-// W9 Step 0: every mode answers "not written yet" (exit 2); W9-A (and W9-F for rewrite) writes them.
+// W9 Step 0: every mode answers "not written yet" (exit 2); W9-A writes them. W9-F wrote `rewrite`: <text> is a UTF-8 file holding the
+// text, <old> and <new> the folder paths as given, <out> the rewritten text (UTF-8, no mark; mighty-core tests/rename_migration.rs).
+using System.Text;
+using MightyCode.Core;
+
 namespace MightyCode.Parity;
 
 internal static class UpdateParity
@@ -18,7 +22,16 @@ internal static class UpdateParity
     public static int Run(string[] args)
     {
         var mode = args.Length > 0 ? args[0] : "";
+        if (mode == "rewrite") return Rewrite(args[1..]);
         Console.Error.WriteLine($"update {mode}: not written yet (W9-A)");
         return 2;
+    }
+
+    private static int Rewrite(string[] args)
+    {
+        if (args.Length != 4) { Console.Error.WriteLine("update rewrite <text> <old> <new> <out>"); return 2; }
+        var utf8 = new UTF8Encoding(false);
+        File.WriteAllText(args[3], RenameMigration.Rewritten(File.ReadAllText(args[0], utf8), args[1], args[2]), utf8);
+        return 0;
     }
 }
