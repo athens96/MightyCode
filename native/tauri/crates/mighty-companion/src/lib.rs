@@ -17,6 +17,8 @@
 //! | [`follow`] | `RefreshCompanion`'s choice of agent, its bubble and its row (MainWindow.Companion.cs) | W8-E |
 //! | [`scene`] | `CompanionOverlay`'s drawing as a display list | W8-E |
 //! | [`Companion`] | `CompanionOverlay`'s state: its size and place, the card, the press, drag and resize, the menu, the plan's scroll | W8-E |
+// A guard kept through a match or if-let body has called out while held: bind first.
+#![deny(clippy::significant_drop_in_scrutinee)]
 
 pub mod animation;
 pub mod bubble;

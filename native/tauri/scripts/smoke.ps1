@@ -136,7 +136,7 @@ function RemotePlaces {
             }
         }
     }
-    $values['firewall rule Mighty Code (Tailscale)'] = Probe { ((& netsh.exe advfirewall firewall show rule 'name=Mighty Code (Tailscale)' verbose 2>&1) | Out-String).Trim() }
+    $values['firewall rule Mighty Code (Tailscale)'] = Probe { ((& (Join-Path $env:SystemRoot 'System32\netsh.exe') advfirewall firewall show rule 'name=Mighty Code (Tailscale)' verbose 2>&1) | Out-String).Trim() }
     $values
 }
 # The names whose value differs between two probes (added and removed ones included).

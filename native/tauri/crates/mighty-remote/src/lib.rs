@@ -26,6 +26,8 @@
 //! the host token, the pairing key, device tokens, push handles, token hashes, remote keys) never reach a log, an error or `Debug`, and
 //! no URL is ever logged (the relay's carries the host token).
 #![deny(clippy::await_holding_lock)]
+// A guard kept through a match or if-let body has called out while held: bind first.
+#![deny(clippy::significant_drop_in_scrutinee)]
 
 pub mod direct;
 pub mod identity;

@@ -69,7 +69,3 @@ tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread",
 
 [target.'cfg(windows)'.dev-dependencies]
 mighty-platform-windows.workspace = true
-
-# W8 Step 0 lists the parts' dependencies before their code uses them; this table goes once every one is used.
-[lints.cargo]
-unused_dependencies = "allow"

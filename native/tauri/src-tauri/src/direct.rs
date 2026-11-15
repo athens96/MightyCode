@@ -6,7 +6,8 @@
 //! - The path exists only when the app may listen ([`Host::may_listen`]: `--allow-state-write`, never in a smoke) and listens only once
 //!   the relay host is attached as its sink ([`attach`], W8-A's `mobile.rs`) and the remote and direct switches are on: Tailscale's
 //!   addresses only, never a wildcard, each exclusively. Its endpoints feed `/m1/info` and the pairing URL ([`endpoints`]).
-//! - The firewall rule (D4): read unelevated whenever Settings opens; changed only on the user's click and only when the app may change
+//! - The firewall rule (D4): read unelevated whenever Settings opens, and only with `--allow-state-write` (C-L5: without it the row
+//!   reads unknown, where C# reads it in any run); changed only on the user's click and only when the app may change
 //!   the machine — never in a smoke, whose step puts a recorder in ([`smoke_use_firewall`], C#'s `firewallRunner`) and never otherwise
 //!   reads or changes this PC's firewall. Its ports are the direct port (remote and direct on) and remote sharing's
 //!   (`remote::sharing_port`, W8-D). Only Core's words reach the row (`direct::strings::firewall_outcome`).

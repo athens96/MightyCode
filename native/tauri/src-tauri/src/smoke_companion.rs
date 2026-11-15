@@ -176,8 +176,13 @@ impl Pet {
     /// event: a count is one behind when an earlier input's event came late, and the step would then draw at the old scale).
     async fn scale_to(&self, dpi: u32) -> Result<(), String> {
         let wanted = (f64::from(dpi) / 96.0).clamp(1.0, 4.0);
+        let before = self.handled.load(Ordering::SeqCst);
         self.window.send(PetInput::Dpi(dpi)).map_err(|e| e.to_string())?;
-        wait("the pet's scale changed", 10, || (lock(&self.overlay).scale() == wanted).then_some(())).await
+        // Its own event handled too, so a later step never meets this change's event late.
+        wait("the pet's scale changed", 10, || {
+            (lock(&self.overlay).scale() == wanted && self.handled.load(Ordering::SeqCst) > before).then_some(())
+        })
+        .await
     }
 
     /// C# `SmokeClick(id)`: a press and release at the middle of the target; false when the frame has no such target.
