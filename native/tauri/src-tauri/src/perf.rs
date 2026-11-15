@@ -55,34 +55,6 @@ try { new PerformanceObserver(list => { for (const e of list.getEntries()) p.lon
 const PAGE_LONG_TASKS: &str = "JSON.stringify((() => { const d = window.__perf?.longTasks ?? []; const r = x => Math.round(x * 10) / 10; \
 return { observed: !!window.__perf?.observing, count: d.length, sumMs: r(d.reduce((a, b) => a + b, 0)), maxMs: r(Math.max(0, ...d)), over100: d.filter(x => x > 100).length, over250: d.filter(x => x > 250).length }; })())";
 
-#[cfg(test)]
-/// The keys of `perf-result.json` in C#'s order (a run without `MIGHTY_PERF_STATE` writes all but the three `imported*`).
-pub const RESULT_KEYS: [&str; 19] = [
-    "completed",
-    "startedAt",
-    "uiMode",
-    "aiRequestSent",
-    "phases",
-    "errors",
-    "importedFrom",
-    "importedWorkspaces",
-    "importedPanes",
-    "synthesizedPanes",
-    "paneCount",
-    "tabCount",
-    "totalLogEntries",
-    "activePaneLogEntries",
-    "graphRuns",
-    "windowSize",
-    "perfLog",
-    "perfLogSteps",
-    "finishedAt",
-];
-
-#[cfg(test)]
-/// The phases in their order (C#'s).
-pub const PHASES: [&str; 4] = ["switchTabsMighty", "addPane", "streamMighty", "sendBlockMighty"];
-
 /// Called by the smoke once the page is up (smoke.rs) in a `--perf-scenario` run: the scenario takes over from the smoke's probe.
 pub fn begin(host: &Host) -> bool {
     let Some(shared) = host.app.try_state::<Arc<Host>>().map(|h| h.inner().clone()) else { return false };
@@ -296,6 +268,107 @@ async fn settled(host: &Host) {
     tokio::time::sleep(Duration::from_millis(16)).await;
 }
 
+// ── the result (each part built here, in C#'s key order; the checks build one the same way and compare it with C#'s) ──
+
+/// C# `RunPerfScenario`'s first keys.
+fn result_skeleton(started_at: &str) -> Map<String, Value> {
+    let mut result = Map::new();
+    result.insert("completed".into(), json!(false));
+    result.insert("startedAt".into(), json!(started_at));
+    result.insert("uiMode".into(), json!("web"));
+    result.insert("aiRequestSent".into(), json!(false));
+    result.insert("phases".into(), json!({}));
+    result.insert("errors".into(), json!([]));
+    result
+}
+
+/// C# `SeedPerfScenario`'s facts: what came from `MIGHTY_PERF_STATE` (its folder, workspaces and panes) and the panes made up.
+fn seed_facts(imported: Option<(&str, usize, usize)>, synthesized: usize) -> Map<String, Value> {
+    let mut facts = Map::new();
+    if let Some((source, workspaces, panes)) = imported {
+        facts.insert("importedFrom".into(), json!(source));
+        facts.insert("importedWorkspaces".into(), json!(workspaces));
+        facts.insert("importedPanes".into(), json!(panes));
+    }
+    facts.insert("synthesizedPanes".into(), json!(synthesized));
+    facts
+}
+
+/// What the page drew for the scenario, before the first phase.
+struct PageFacts {
+    panes: usize,
+    tabs: usize,
+    entries: usize,
+    active_entries: usize,
+    graph_runs: usize,
+    window: String,
+}
+
+fn add_page_facts(result: &mut Map<String, Value>, facts: &PageFacts) {
+    result.insert("paneCount".into(), json!(facts.panes));
+    result.insert("tabCount".into(), json!(facts.tabs));
+    result.insert("totalLogEntries".into(), json!(facts.entries));
+    result.insert("activePaneLogEntries".into(), json!(facts.active_entries));
+    result.insert("graphRuns".into(), json!(facts.graph_runs));
+    result.insert("windowSize".into(), json!(facts.window));
+}
+
+/// C#'s `Phase` result: the ops ranked, the wall time, the stalls, what the body added, the page's long tasks and the host's paths.
+fn phase_json(ops: &[f64], wall_ms: f64, stall: &Stalls, body: Map<String, Value>, long_tasks: Value) -> Value {
+    let mut sorted = ops.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let mut phase = Map::new();
+    phase.insert("ops".into(), json!(ops));
+    phase.insert("opMedian".into(), json!(rank(&sorted, 0.5)));
+    phase.insert("opP95".into(), json!(rank(&sorted, 0.95)));
+    phase.insert("opMax".into(), json!(sorted.last().copied().unwrap_or(0.0)));
+    phase.insert("wallMs".into(), json!(wall_ms.round()));
+    phase.insert("stall".into(), stall.json());
+    phase.extend(body);
+    phase.insert("pageLongTasks".into(), long_tasks);
+    // Which paths the phase took: the page draws every layout, so the host rebuilds none in place or whole.
+    phase.insert("fullRenders".into(), json!(0));
+    phase.insert("tabSwitchesInPlace".into(), json!(0));
+    phase.insert("paneAddsInPlace".into(), json!(0));
+    phase.insert("capped".into(), json!(ops.iter().filter(|ms| **ms >= SETTLE_CAP_MS - 50.0).count()));
+    // No garbage collector: nothing allocated through one, no collection, no pause.
+    phase.insert("gc".into(), json!({"allocatedMB": 0.0, "gen0": 0, "gen1": 0, "gen2": 0, "pauseMs": 0.0}));
+    Value::Object(phase)
+}
+
+/// What the addPane phase adds: the closes' times and how many panes it added.
+fn add_pane_extra(closes: &[f64], added: usize) -> Map<String, Value> {
+    let mut extra = Map::new();
+    extra.insert("closeOps".into(), json!(closes));
+    extra.insert("added".into(), json!(added));
+    extra
+}
+
+/// What the stream phase adds: the events sent, those later than one gap, and the stream's length.
+fn stream_extra(events: u64, late: u64, stream_ms: f64) -> Map<String, Value> {
+    let mut extra = Map::new();
+    extra.insert("events".into(), json!(events));
+    extra.insert("eventsLateOverOneGap".into(), json!(late));
+    extra.insert("streamMs".into(), json!(stream_ms.round()));
+    extra
+}
+
+/// What the send phase adds: how many sends and the target.
+fn send_extra() -> Map<String, Value> {
+    let mut extra = Map::new();
+    extra.insert("sends".into(), json!(SENDS));
+    extra.insert("targetMs".into(), json!(50));
+    extra
+}
+
+/// The last keys, once every phase ran.
+fn finish_result(result: &mut Map<String, Value>, log_path: &Path, log: &str, finished_at: &str) {
+    result.insert("perfLog".into(), json!(log_path.to_string_lossy()));
+    result.insert("perfLogSteps".into(), Value::Object(log_steps(log)));
+    result.insert("completed".into(), json!(true));
+    result.insert("finishedAt".into(), json!(finished_at));
+}
+
 // ── the scenario ──
 
 /// The scenario's state while it runs.
@@ -373,25 +446,8 @@ impl Scenario {
         self.log.mark("perf idle");
         outcome?;
         let long_tasks: String = serde_json::from_str(&js(&self.host, PAGE_LONG_TASKS).await?).unwrap_or_else(|_| "{}".into());
-        extra.insert("pageLongTasks".into(), serde_json::from_str(&long_tasks).unwrap_or_else(|_| json!({})));
-        // Which paths the phase took: the page draws every layout, so the host rebuilds none in place or whole.
-        extra.insert("fullRenders".into(), json!(0));
-        extra.insert("tabSwitchesInPlace".into(), json!(0));
-        extra.insert("paneAddsInPlace".into(), json!(0));
-        extra.insert("capped".into(), json!(ops.iter().filter(|ms| **ms >= SETTLE_CAP_MS - 50.0).count()));
-        // No garbage collector: nothing allocated through one, no collection, no pause.
-        extra.insert("gc".into(), json!({"allocatedMB": 0.0, "gen0": 0, "gen1": 0, "gen2": 0, "pauseMs": 0.0}));
-        let mut sorted = ops.clone();
-        sorted.sort_by(f64::total_cmp);
-        let mut phase = Map::new();
-        phase.insert("ops".into(), json!(ops));
-        phase.insert("opMedian".into(), json!(rank(&sorted, 0.5)));
-        phase.insert("opP95".into(), json!(rank(&sorted, 0.95)));
-        phase.insert("opMax".into(), json!(sorted.last().copied().unwrap_or(0.0)));
-        phase.insert("wallMs".into(), json!((watch.elapsed().as_secs_f64() * 1000.0).round()));
-        phase.insert("stall".into(), stall.json());
-        phase.extend(extra);
-        Ok(Value::Object(phase))
+        let long_tasks = serde_json::from_str(&long_tasks).unwrap_or_else(|_| json!({}));
+        Ok(phase_json(&ops, watch.elapsed().as_secs_f64() * 1000.0, &stall, extra, long_tasks))
     }
 }
 
@@ -442,13 +498,7 @@ async fn run(host: Arc<Host>) {
     log.mark("app started");
     trace(&directory, "perf scenario: the page is up");
     let errors: Arc<Mutex<Vec<String>>> = Arc::default();
-    let mut result = Map::new();
-    result.insert("completed".into(), json!(false));
-    result.insert("startedAt".into(), json!(local_o()));
-    result.insert("uiMode".into(), json!("web"));
-    result.insert("aiRequestSent".into(), json!(false));
-    result.insert("phases".into(), json!({}));
-    result.insert("errors".into(), json!([]));
+    let mut result = result_skeleton(&local_o());
     let scenario = Scenario { host: host.clone(), log, probe: Probe::start(&host), errors: errors.clone() };
     let outcome = scenario_steps(&scenario, &mut result, &result_path).await;
     drop(scenario);
@@ -523,12 +573,15 @@ async fn scenario_steps(scenario: &Scenario, result: &mut Map<String, Value>, re
     host.log.line("perf scenario: the page drew the scenario's tabs");
     js(host, PAGE_HELPER).await?;
     let agents = state.sessions().iter().filter(|s| s.workspace_id() == workspace && s.kind() == "claude").count();
-    result.insert("paneCount".into(), json!(agents));
-    result.insert("tabCount".into(), json!(tabs.len()));
-    result.insert("totalLogEntries".into(), json!(state.sessions().iter().map(|s| s.logs().len()).sum::<usize>()));
-    result.insert("activePaneLogEntries".into(), json!(state.session(&active).map_or(0, |s| s.logs().len())));
-    result.insert("graphRuns".into(), json!(state.sessions().iter().map(|s| s.graph_runs().len()).sum::<usize>()));
-    result.insert("windowSize".into(), json!(window_size(host)));
+    let facts = PageFacts {
+        panes: agents,
+        tabs: tabs.len(),
+        entries: state.sessions().iter().map(|s| s.logs().len()).sum(),
+        active_entries: state.session(&active).map_or(0, |s| s.logs().len()),
+        graph_runs: state.sessions().iter().map(|s| s.graph_runs().len()).sum(),
+        window: window_size(host),
+    };
+    add_page_facts(result, &facts);
     write_now(result);
 
     let phase = scenario
@@ -559,8 +612,7 @@ async fn scenario_steps(scenario: &Scenario, result: &mut Map<String, Value>, re
             for id in &added {
                 s.page_op(&mut closes, &close_tab(id)).await?;
             }
-            extra.insert("closeOps".into(), json!(closes));
-            extra.insert("added".into(), json!(added.len()));
+            extra.extend(add_pane_extra(&closes, added.len()));
             s.page_op(&mut vec![], &click_tab(&active)).await?;
             settled(&s.host).await;
             Ok(())
@@ -603,18 +655,14 @@ async fn scenario_steps(scenario: &Scenario, result: &mut Map<String, Value>, re
                 crate::help_capture::wait(30.0, move || host.current().session(&id).is_some_and(|p| p.status() != "running")).await;
                 settled(&s.host).await;
             }
-            extra.insert("sends".into(), json!(SENDS));
-            extra.insert("targetMs".into(), json!(50));
+            extra.extend(send_extra());
             Ok(())
         })
         .await;
     engine.catalog.set_override("claude", None);
     set_phase(result, name, phase?);
     let log_path = host.data_dir.join("perf.log");
-    result.insert("perfLog".into(), json!(log_path.to_string_lossy()));
-    result.insert("perfLogSteps".into(), Value::Object(log_steps(&std::fs::read_to_string(&log_path).unwrap_or_default())));
-    result.insert("completed".into(), json!(true));
-    result.insert("finishedAt".into(), json!(local_o()));
+    finish_result(result, &log_path, &std::fs::read_to_string(&log_path).unwrap_or_default(), &local_o());
     write_now(result);
     Ok(())
 }
@@ -671,7 +719,7 @@ async fn stream_answer(s: &Scenario, session: &str, name: &str, extra: &mut Map<
     let engine = s.host.engine()?;
     let receive = |event: RunEvent| {
         let started = Instant::now();
-        engine.service.receive(event);
+        engine.service.receive_for_perf(event);
         s.log.step("perf receive", started);
     };
     let run_id = format!("perf-{name}");
@@ -739,9 +787,7 @@ async fn stream_answer(s: &Scenario, session: &str, name: &str, extra: &mut Map<
     let ((), typed) = tokio::join!(stream, typing);
     typed?;
     receive(RunEvent::state(session, "completed", None));
-    extra.insert("events".into(), json!(sent));
-    extra.insert("eventsLateOverOneGap".into(), json!(late_sends));
-    extra.insert("streamMs".into(), json!(elapsed().round()));
+    extra.extend(stream_extra(sent, late_sends, elapsed()));
     settled(&s.host).await;
     // The request is put down as finished, so the next phase's diagram has nothing running.
     update_pane(&s.host, session, |pane| {
@@ -790,7 +836,7 @@ fn update_pane(host: &Host, id: &str, edit: impl Fn(&RunSession) -> RunSession) 
 async fn seed(host: &Arc<Host>) -> Result<(String, Map<String, Value>), String> {
     let directory = host.data_dir.clone();
     let folders = directory.join("perf-workspaces");
-    let mut facts = Map::new();
+    let mut from: Option<(String, usize)> = None;
     let mut imported: Vec<RunSession> = vec![];
     if let Some(source) = std::env::var("MIGHTY_PERF_STATE").ok().filter(|v| !v.is_empty()) {
         // Read from a copy, so the scenario never opens the given folder's state for writing; every workspace becomes a folder in the
@@ -840,9 +886,7 @@ async fn seed(host: &Arc<Host>) -> Result<(String, Map<String, Value>), String> 
             .collect();
         let added = imported.clone();
         change(host, |view| view.update(|state| state.sessions_mut().extend(added.into_iter().map(Arc::new))))?;
-        facts.insert("importedFrom".into(), json!(source));
-        facts.insert("importedWorkspaces".into(), json!(ids.len()));
-        facts.insert("importedPanes".into(), json!(imported.len()));
+        from = Some((source, ids.len()));
     }
     let busiest = {
         let mut counts: Vec<(String, usize)> = vec![];
@@ -874,7 +918,7 @@ async fn seed(host: &Arc<Host>) -> Result<(String, Map<String, Value>), String> 
     if !made.is_empty() {
         change(host, |view| view.update(|state| state.sessions_mut().extend(made.into_iter().map(Arc::new))))?;
     }
-    facts.insert("synthesizedPanes".into(), json!(count));
+    let facts = seed_facts(from.as_ref().map(|(source, workspaces)| (source.as_str(), *workspaces, imported.len())), count);
     // The busiest conversation is the one every phase works on.
     let active = {
         let state = host.current();
@@ -1048,14 +1092,66 @@ mod tests {
         assert!(pane.graph_runs().iter().all(|r| r.status.as_deref() == Some("completed")));
     }
 
-    /// The result's keys are C#'s (`RunPerfScenario`, `SeedPerfScenario`), each once, the phases C#'s; the send script answers each send.
+    /// A JSON value's object keys, and each object member's own, as paths in document order (arrays' items by their first item).
+    fn key_paths(value: &Value, prefix: &str, out: &mut Vec<String>) {
+        match value {
+            Value::Object(map) => {
+                for (key, member) in map {
+                    let path = format!("{prefix}/{key}");
+                    out.push(path.clone());
+                    // perfLogSteps' buckets and steps are the log's own names, not keys of the format.
+                    if key != "perfLogSteps" {
+                        key_paths(member, &path, out);
+                    }
+                }
+            }
+            Value::Array(items) => {
+                if let Some(first) = items.first() {
+                    key_paths(first, &format!("{prefix}[]"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The result's keys are C#'s (review M2): a result built by the scenario's own builders, the phases in its order with each
+    /// phase's own additions, has exactly the keys, in the order, of a C# 0.4.59 run's `perf-result.json`
+    /// (`native/contracts/fixtures/perf-result-csharp-0.4.59.json`, a made-up run without `MIGHTY_PERF_STATE`, the one shape C# writes
+    /// here), down to every phase's `stall`, `pageLongTasks` and `gc`.
     #[test]
-    fn the_result_keys_and_phases_are_csharps() {
-        let mut keys = RESULT_KEYS.to_vec();
-        keys.sort_unstable();
-        keys.dedup();
-        assert_eq!(keys.len(), RESULT_KEYS.len());
-        assert_eq!(PHASES, ["switchTabsMighty", "addPane", "streamMighty", "sendBlockMighty"]);
+    fn the_result_has_csharps_keys_in_csharps_order() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../../../contracts/fixtures/perf-result-csharp-0.4.59.json")).expect("the C# result reads");
+        let mut result = result_skeleton(&local_o());
+        result.extend(seed_facts(None, 4));
+        let page = PageFacts { panes: 4, tabs: 4, entries: 1200, active_entries: 300, graph_runs: 60, window: "1440x920 @ 1.00".into() };
+        add_page_facts(&mut result, &page);
+        let mut stall = Stalls::default();
+        stall.add(20.0);
+        let long_tasks = json!({"observed": true, "count": 0, "sumMs": 0.0, "maxMs": 0.0, "over100": 0, "over250": 0});
+        let bodies = [
+            ("switchTabsMighty", Map::new()),
+            ("addPane", add_pane_extra(&[12.0], 1)),
+            ("streamMighty", stream_extra(200, 0, 8000.0)),
+            ("sendBlockMighty", send_extra()),
+        ];
+        for (name, body) in bodies {
+            let phase = phase_json(&[10.0, 20.0], 1000.0, &stall, body, long_tasks.clone());
+            result["phases"].as_object_mut().unwrap().insert(name.into(), phase);
+        }
+        finish_result(&mut result, Path::new("perf.log"), "10:00:00.000     20.0 ms perf seed\n", &local_o());
+        let (mut ours, mut theirs) = (vec![], vec![]);
+        key_paths(&Value::Object(result), "", &mut ours);
+        key_paths(&fixture, "", &mut theirs);
+        assert_eq!(ours, theirs);
+        // With MIGHTY_PERF_STATE, C#'s three facts come before synthesizedPanes.
+        let imported: Vec<String> = seed_facts(Some(("C:\\state", 2, 9)), 0).keys().cloned().collect();
+        assert_eq!(imported, ["importedFrom", "importedWorkspaces", "importedPanes", "synthesizedPanes"]);
+    }
+
+    /// The send script answers each send.
+    #[test]
+    fn the_send_script_answers_each_send() {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         let dir = std::env::temp_dir().join(format!("mighty-perf-send-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();

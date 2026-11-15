@@ -4,8 +4,11 @@
 //!
 //! The two shots are shots.json's `sidebar-collapsed` and `dashboard` (what `MIGHTY_HELP_SHOTS=sidebar-collapsed,dashboard` would take):
 //! whole-page shots at 1440 × 900 whose screens need no demo seeding, so the smoke's own state stays as the later steps expect it. Each is
-//! taken once, in the page's theme, into `<profile>\help-shots\<language>\<id>-<theme>.png` beside a `manifest.json` in the capture's
-//! shape. The window's size, the sidebar and the dashboard are put back afterwards. Checks: `helpShotsTaken` (both pictures written),
+//! taken once, in the page's theme (dark when none is saved, as the store reads it), into `help-shots\<language>\<id>-<theme>.png` beside
+//! a `manifest.json` in the capture's shape: under the profile where the app may write it, else beside the smoke's result, so a
+//! read-only smoke of a real profile (`smoke.ps1 -Profile`) leaves it as it was. The window's size, position and maximized state, the
+//! sidebar and the dashboard are put back afterwards. The pictures need WebView2: elsewhere the step reports itself not applicable, and
+//! its checks hold. Checks: `helpShotsTaken` (both pictures written),
 //! `helpShotSize` (each picture is the window's content, and that content is the shot's size wherever the screen holds it) and
 //! `helpManifest` (the manifest lists both, ok).
 
@@ -17,6 +20,9 @@ use serde_json::{Map, Value, json};
 
 use crate::help_capture;
 use crate::host::{Host, WINDOW};
+
+/// Why the step takes no picture off Windows.
+const NOT_APPLICABLE: &str = "the help capture pictures the page through WebView2 (Windows only)";
 
 /// The step's shots (shots.json ids).
 pub const SHOTS: [&str; 2] = ["sidebar-collapsed", "dashboard"];
@@ -31,7 +37,7 @@ pub fn start(host: &Arc<Host>) -> bool {
     host.log.line("smoke: help capture step (two shots)");
     let host = host.clone();
     tauri::async_runtime::spawn(async move {
-        let report = match run(&host).await {
+        let report = match if cfg!(windows) { run(&host).await } else { Ok(json!({"notApplicable": NOT_APPLICABLE})) } {
             Ok(report) => report,
             Err(error) => {
                 host.log.line(&format!("smoke: help capture step failed: {error}"));
@@ -53,6 +59,61 @@ fn window_now(host: &Host) -> Option<(f64, f64, f64)> {
     Some((size.width, size.height, scale))
 }
 
+/// What the step changes of the window and puts back: its maximized state, position and content size, the sidebar and the dashboard.
+struct Window {
+    maximized: bool,
+    position: Option<tauri::PhysicalPosition<i32>>,
+    size: Option<(f64, f64, f64)>,
+    sidebar_collapsed: bool,
+    shows_dashboard: bool,
+}
+
+impl Window {
+    fn now(host: &Host) -> Window {
+        let window = tauri::Manager::get_window(&host.app, WINDOW);
+        let (sidebar_collapsed, shows_dashboard) = {
+            let view = host.view();
+            (view.snapshot.sidebar_collapsed, view.shows_dashboard)
+        };
+        Window {
+            maximized: window.as_ref().is_some_and(|w| w.is_maximized().unwrap_or(false)),
+            position: window.as_ref().and_then(|w| w.outer_position().ok()),
+            size: window_now(host),
+            sidebar_collapsed,
+            shows_dashboard,
+        }
+    }
+
+    fn put_back(&self, host: &Host) {
+        if let Some((width, height, _)) = self.size {
+            help_capture::resize(host, width, height);
+        }
+        if let Some(window) = tauri::Manager::get_window(&host.app, WINDOW) {
+            if let Some(position) = self.position {
+                let _ = window.set_position(position);
+            }
+            if self.maximized {
+                let _ = window.maximize();
+            }
+        }
+        let collapsed = self.sidebar_collapsed;
+        if host.current().sidebar_collapsed != collapsed {
+            let _ = set_sidebar(host, collapsed);
+        }
+        host.view().shows_dashboard = self.shows_dashboard;
+        host.flush();
+    }
+}
+
+/// Where the step's pictures go: the profile's `help-shots` where the app may write it, else beside the smoke's result (review M1).
+fn output_folder(host: &Host, language: &str) -> std::path::PathBuf {
+    let base = match (&host.smoke, host.writes()) {
+        (Some(smoke), false) => smoke.out().parent().map_or_else(std::env::temp_dir, Path::to_path_buf),
+        _ => host.data_dir.clone(),
+    };
+    base.join("help-shots").join(language)
+}
+
 /// The screen's size in device pixels where the window is.
 fn screen_now(host: &Host) -> Option<(u32, u32)> {
     let window = tauri::Manager::get_window(&host.app, WINDOW)?;
@@ -65,10 +126,11 @@ async fn run(host: &Arc<Host>) -> Result<Value, String> {
         .and_then(|v| v.get("shots").and_then(Value::as_array).cloned())
         .ok_or("shots.json lists no shots")?;
     let language = host.locale.language().to_string();
-    let output = host.data_dir.join("help-shots").join(&language);
+    let output = output_folder(host, &language);
     std::fs::create_dir_all(&output).map_err(|e| e.to_string())?;
-    let before = window_now(host);
-    let theme = host.current().theme().to_string();
+    let before = Window::now(host);
+    // No saved theme reads as dark (store's saved theme, main.rs's window colour).
+    let theme = if host.current().theme() == "light" { "light" } else { "dark" }.to_string();
     let mut shots = vec![];
     let mut sizes = vec![];
     for id in SHOTS {
@@ -90,9 +152,7 @@ async fn run(host: &Arc<Host>) -> Result<Value, String> {
         }
         shots.push(entry);
     }
-    if let Some((width, height, _)) = before {
-        help_capture::resize(host, width, height);
-    }
+    before.put_back(host);
     let failed = shots.iter().filter(|s| s.get("status").and_then(Value::as_str) == Some("failed")).count();
     let mut manifest = Map::new();
     manifest.insert("language".into(), json!(language));
@@ -196,6 +256,9 @@ fn sized(size: &Value) -> bool {
 
 /// The step's checks from its report.
 pub fn checks(report: &Value) -> Vec<(&'static str, bool)> {
+    if report.get("notApplicable").is_some() {
+        return vec![("helpShotsTaken", true), ("helpShotSize", true), ("helpManifest", true)];
+    }
     let shots = report.get("shots").and_then(Value::as_array).cloned().unwrap_or_default();
     let ok = |shot: &Value| shot.get("status").and_then(Value::as_str) == Some("ok");
     let files = report.get("files").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -237,6 +300,12 @@ mod tests {
             "a smaller screen keeps the window smaller"
         );
         assert!(!sized(&size((1440.0, 900.0), 1.0, (0, 0), None, (0, 0))));
+    }
+
+    /// Off Windows the step takes no picture and says why; its checks hold.
+    #[test]
+    fn a_step_not_applicable_here_passes() {
+        assert!(checks(&json!({"notApplicable": NOT_APPLICABLE})).iter().all(|(_, passed)| *passed));
     }
 
     #[test]

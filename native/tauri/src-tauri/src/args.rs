@@ -5,7 +5,8 @@
 //! `--smoke-exit`                 quit when the smoke has its result, exit code 0 when it passed, else 1
 //! `--smoke-out <file>`           where the smoke writes its result (default `<profile>\smoke-result.json`)
 //! `--log-dir <folder>`           the host's logs (default `<profile>\tauri-logs`)
-//! `--remote-debugging-port <n>`  opens WebView2's DevTools protocol on that port (screenshots, inspection)
+//! `--remote-debugging-port <n>`  opens WebView2's DevTools protocol on that port (screenshots, inspection); only in a development
+//!                                build or with `--smoke-test` (any local process could drive the page and the app's IPC through it)
 //! `--allow-state-write`          lets the host write the profile's state (saves, the damaged-file recovery, the legacy copy) as
 //!                                C# does; without it nothing in the profile is written but the logs and the smoke's result
 //! `--read-only`                  W9: writes nothing, whatever the build (startup.rs's write policy; wins over `--allow-state-write`)
@@ -62,6 +63,11 @@ fn absolute(flag: &str, value: Option<String>) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// Whether the DevTools port may open (W9 review L9): a development build, or a smoke run in its own profile; never a user's release app.
+fn debugging_port_allowed(debug_build: bool, smoke_test: bool) -> bool {
+    debug_build || smoke_test
+}
+
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     let mut options = Options::default();
     let mut args = args.into_iter();
@@ -114,6 +120,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     if options.smoke_fake_cli.is_some() && options.smoke_real_claude {
         return Err("--smoke-fake-cli and --smoke-real-claude go one at a time.".into());
     }
+    if options.remote_debugging_port.is_some() && !debugging_port_allowed(cfg!(debug_assertions), options.smoke_test) {
+        return Err("--remote-debugging-port works only in a development build or with --smoke-test.".into());
+    }
     if options.smoke_test && options.profile.is_none() {
         return Err("--smoke-test needs --profile.".into());
     }
@@ -122,8 +131,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     }
     // C#'s "a smoke needs an empty profile", for the two runs that seed their own (W9-H): the help capture's welcome shot is the empty
     // profile's first window, and the perf scenario measures only what it made.
+    // A folder that is there but cannot be listed is not known to be empty, so it is refused too.
     if (options.help_capture || options.perf_scenario)
-        && options.profile.as_ref().is_some_and(|p| std::fs::read_dir(p).is_ok_and(|mut entries| entries.next().is_some()))
+        && options.profile.as_ref().is_some_and(|p| p.exists() && std::fs::read_dir(p).map_or(true, |mut entries| entries.next().is_some()))
     {
         return Err("The smoke profile must be a new or empty folder.".into());
     }
@@ -188,6 +198,14 @@ mod tests {
         assert!(parsed(&["----AppNotificationActivated:sessionId=abc"]).is_ok());
         assert!(parsed(&["-embedding"]).is_err(), "COM's switch as COM writes it");
         assert!(parsed(&["--update-helper", "--staged", root]).is_err());
+    }
+
+    /// W9 review L9: the DevTools port opens only in a development build or a smoke run.
+    #[test]
+    fn the_debugging_port_is_a_development_or_smoke_switch() {
+        assert!(debugging_port_allowed(true, false));
+        assert!(debugging_port_allowed(false, true));
+        assert!(!debugging_port_allowed(false, false), "a release app opens no DevTools port");
     }
 
     /// W9-H: the help capture and the perf scenario seed their own profile, so it must be new or empty (C# Program.cs:49-50); a plain

@@ -341,6 +341,8 @@ struct Progress {
     reload_injected: bool,
     /// The name the reload step's rename sheet opened with.
     reload_name: Option<String>,
+    /// A help capture or perf scenario took the page over (W9-H).
+    special_begun: bool,
     finished: bool,
 }
 
@@ -509,6 +511,7 @@ impl Smoke {
             Special::Perf => crate::perf::begin(host),
         };
         if taken {
+            self.progress().special_begun = true;
             return;
         }
         host.log.line("smoke: the page is up; probing");
@@ -1043,11 +1046,22 @@ impl Smoke {
         }
     }
 
-    /// Fails the smoke when it has no result in time. A help capture or perf scenario has no such limit (C#'s has none either; its
-    /// script stops a run that outlasts 30 minutes).
+    /// Fails the smoke when it has no result in time. A help capture or perf scenario has no limit once it took the page over (C#'s has
+    /// none either; its script stops a run that outlasts 30 minutes), but fails when the page never came up for it ([`SPECIAL_PAGE`]).
     pub fn watch(host: Arc<Host>) {
         std::thread::spawn(move || {
-            let Some(timeout) = host.smoke.as_ref().filter(|smoke| !smoke.is_special()).map(Smoke::timeout) else { return };
+            if let Some(smoke) = host.smoke.as_ref().filter(|smoke| smoke.is_special()) {
+                std::thread::sleep(SPECIAL_PAGE);
+                if !smoke.progress().special_begun {
+                    let error = format!("the page did not come up within {} s", SPECIAL_PAGE.as_secs());
+                    host.log.line(&format!("smoke: {error}"));
+                    let failure = json!({"passed": false, "phase": "startup", "error": error, "aiRequestSent": false});
+                    let _ = std::fs::write(&smoke.out, serde_json::to_vec_pretty(&failure).unwrap_or_default());
+                    smoke.end(&host, false);
+                }
+                return;
+            }
+            let Some(timeout) = host.smoke.as_ref().map(Smoke::timeout) else { return };
             std::thread::sleep(timeout);
             if let Some(smoke) = &host.smoke {
                 let error = json!({"error": format!("no result after {} s", timeout.as_secs())});
@@ -1064,6 +1078,9 @@ impl Smoke {
         });
     }
 }
+
+/// How long a help capture or perf scenario waits for the page to come up before it fails (W9-H).
+const SPECIAL_PAGE: Duration = Duration::from_secs(180);
 
 /// A step's checks from its report (W6's, W8's remote parts).
 type StepChecks = fn(&Value) -> Vec<(&'static str, bool)>;

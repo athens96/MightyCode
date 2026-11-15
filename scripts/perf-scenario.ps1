@@ -30,6 +30,16 @@ for ($n = 1; $n -le $Runs; $n++) {
     Write-Host "Run $n/$Runs ($mode): $dir"
     $process = Start-Process -FilePath $Executable -ArgumentList @('--smoke-test', '--perf-scenario', '--smoke-exit', '--profile', "`"$dir`"") -PassThru
     if (-not $process.WaitForExit(1800000)) { $process.Kill(); Write-Warning "Run $n did not end within 30 minutes and was stopped." }
+    if ($Engine -eq 'tauri') {
+        # What the Tauri app keeps for a profile outside it (its WebView2 data and local stores, as smoke.ps1 removes them) and its
+        # read-only run's delegation folder go with the run.
+        $name = $dir -replace '[^A-Za-z0-9-]', '_'
+        if ($name.Length -gt 80) { $name = $name.Substring($name.Length - 80) }
+        foreach ($kind in 'webview', 'browser', 'image-cache', 'file-originals', 'provider-catalog') {
+            Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "dev.mightycode.tauri\$kind\$name") -ErrorAction SilentlyContinue
+        }
+        Remove-Item -Recurse -Force (Join-Path ([System.IO.Path]::GetTempPath()) ("mighty-delegation-smoke-" + $process.Id)) -ErrorAction SilentlyContinue
+    }
     $out = Join-Path $repo ("release\perf\{0}-{1}-{2}" -f $stamp, $mode, $n)
     New-Item -ItemType Directory -Force -Path $out | Out-Null
     foreach ($name in @('perf-result.json', 'perf.log', 'smoke-result.json', 'startup.log')) {

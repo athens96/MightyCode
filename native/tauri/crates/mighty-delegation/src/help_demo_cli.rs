@@ -72,7 +72,8 @@ impl Bridge {
     }
 }
 
-/// A POST of `body` (JSON) to the loopback `http` address `url`, the bearer `token` with it; the response is read and let go.
+/// A POST of `body` (JSON) to the loopback `http` address `url` (refused unless it resolves to loopback), the bearer `token` with it; the
+/// response's head is read and let go.
 fn post(url: &str, token: &str, body: &str) -> std::io::Result<()> {
     let invalid = |why: &str| std::io::Error::new(std::io::ErrorKind::InvalidInput, why.to_string());
     let address = url::Url::parse(url).map_err(|_| invalid("not an address"))?;
@@ -82,6 +83,10 @@ fn post(url: &str, token: &str, body: &str) -> std::io::Result<()> {
     let host = address.host_str().ok_or_else(|| invalid("no host"))?;
     let port = address.port_or_known_default().ok_or_else(|| invalid("no port"))?;
     let target = std::net::ToSocketAddrs::to_socket_addrs(&(host, port))?.next().ok_or_else(|| invalid("no address"))?;
+    // The run's mod bridge listens on loopback only; nothing else is ever sent the token.
+    if !target.ip().is_loopback() {
+        return Err(invalid("the bridge is not on loopback"));
+    }
     let mut stream = std::net::TcpStream::connect_timeout(&target, BRIDGE_TIMEOUT)?;
     stream.set_read_timeout(Some(BRIDGE_TIMEOUT))?;
     stream.set_write_timeout(Some(BRIDGE_TIMEOUT))?;
@@ -94,8 +99,15 @@ fn post(url: &str, token: &str, body: &str) -> std::io::Result<()> {
         body.len()
     );
     stream.write_all(request.as_bytes())?;
+    // The status line and headers only (at most 8 KiB): the bridge answers 204 with no body.
     let mut answer = Vec::new();
-    let _ = stream.read_to_end(&mut answer);
+    let mut buffer = [0u8; 1024];
+    while answer.len() < 8192 && !answer.windows(4).any(|w| w == b"\r\n\r\n") {
+        match stream.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => answer.extend_from_slice(&buffer[..read]),
+        }
+    }
     Ok(())
 }
 
@@ -333,5 +345,13 @@ mod tests {
         let body: Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
         assert_eq!(body, json!({"version": 1, "runId": "run-1", "claudeSessionId": "s-9", "event": "session.start"}));
         assert!(!format!("{bridge:?}").contains("tttt"), "the token never shows in Debug");
+    }
+
+    /// The token goes to loopback only: an address elsewhere is refused before anything connects.
+    #[test]
+    fn the_bridge_is_reached_on_loopback_only() {
+        let refused = post("http://192.0.2.1:9/events", "secret", "{}").unwrap_err();
+        assert_eq!(refused.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(post("https://127.0.0.1:9/events", "secret", "{}").is_err(), "plain http only");
     }
 }
