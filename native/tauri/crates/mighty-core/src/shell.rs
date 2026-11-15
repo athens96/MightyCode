@@ -30,28 +30,16 @@ pub enum Pending {
     Runtime,
     /// `appUpdate` (W9): no update badge, staged badge or countdown.
     AppUpdate,
-    /// `WebCompanionControls` (companion, W8).
-    Companion,
     /// `SetupNeedsAttention` and the setup badge (setup catalogue, W6).
     Setup,
     /// `resourceBanner` (`CheckResources`, ResourceHealth, W1-A's platform layer).
     ResourceBanner,
-    /// `RemoteConnection(workspace)` (remote client, W8): a remote workspace reads "not connected" with an unknown OS.
-    RemoteConnections,
     /// `PaneRuntime(provider).ModelCatalog`: the dashboard's model names come from the fallback catalogue until the CLI's list is read.
     ModelCatalog,
 }
 
-pub const PENDING: [Pending; 8] = [
-    Pending::Attention,
-    Pending::Runtime,
-    Pending::AppUpdate,
-    Pending::Companion,
-    Pending::Setup,
-    Pending::ResourceBanner,
-    Pending::RemoteConnections,
-    Pending::ModelCatalog,
-];
+pub const PENDING: [Pending; 6] =
+    [Pending::Attention, Pending::Runtime, Pending::AppUpdate, Pending::Setup, Pending::ResourceBanner, Pending::ModelCatalog];
 
 // ── tones and counts (StatusGlyph, WorkDashboard) ───────────────────────────────────────────────────────────────────────
 
