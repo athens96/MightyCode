@@ -334,7 +334,8 @@ pub fn open_slim_pane(view: &mut View, locale: &Locale, workspace_id: Option<&st
     if state.session(&pane_id).is_some() {
         return crate::frame::select_session(view, &pane_id);
     }
-    if !pane::has_room(state.sessions().len()) {
+    // The remote mirror's panes are the host's and never count (W9-J).
+    if !pane::has_room(state.own_session_count()) {
         return Err(locale.get("files.error.noRoom"));
     }
     let current = if state.active_workspace_id.as_deref() == Some(workspace.as_str()) {

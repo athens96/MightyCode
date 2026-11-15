@@ -187,6 +187,10 @@ pub(crate) async fn submit_own(host: &Arc<Host>, id: &str) -> Result<SubmitRecei
 }
 
 async fn send(host: &Arc<Host>, id: &str, second: bool, wraps_ask: bool) -> Result<SubmitReceipt, String> {
+    // Another computer's pane (the remote mirror, W9-J): the text is its next request there, queued there while it runs.
+    if let Some(sent) = crate::mirror::submit(host, id).await {
+        return sent;
+    }
     // A saved "send to" choice not yet known to stand waits briefly for the pane's catalogue and the PATH read (ask.rs).
     if wraps_ask {
         crate::ask::await_targets(host, id).await;

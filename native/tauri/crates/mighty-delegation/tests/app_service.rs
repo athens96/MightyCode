@@ -96,6 +96,7 @@ fn place(name: &str) -> Place {
             workspace_id: Some("x".into()),
             host_name: Some("Far".into()),
             version: 1,
+            mirror: false,
         }),
         ..Workspace::default()
     };

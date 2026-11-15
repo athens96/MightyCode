@@ -285,6 +285,7 @@ fn the_shared_check_never_reads_a_remote_workspaces_folder() {
             workspace_id: Some("ws-1".into()),
             host_name: Some("studio-pc".into()),
             version: 2,
+            mirror: false,
         }),
         ..Workspace::default()
     };
@@ -326,6 +327,7 @@ fn remote_panes_keep_to_the_hosts_features() {
             workspace_id: Some("ws-1".into()),
             host_name: Some("studio-pc".into()),
             version: 2,
+            mirror: false,
         }),
         ..Workspace::default()
     };
@@ -414,6 +416,7 @@ fn a_closed_parents_child_is_never_placed_in_a_remote_workspace() {
         workspace_id: Some(ws.into()),
         host_name: Some("studio-pc".into()),
         version: 2,
+        mirror: false,
     };
     let workspace = |id: &str, path: &std::path::Path, remote: Option<RemoteWorkspaceReference>| Workspace {
         id: Some(id.into()),
