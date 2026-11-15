@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use mighty_platform::{FontCatalog, HttpsGet, Platform, Result, SurfaceFactory, TerminalLauncher};
+use mighty_platform::{FontCatalog, HttpsSend, Platform, Result, SurfaceFactory, TerminalLauncher};
 
 #[cfg(windows)]
 use mighty_platform_windows as os;
@@ -60,7 +60,7 @@ pub fn process_host() -> Arc<dyn mighty_platform::ProcessHost> {
 pub struct Ports {
     pub terminals: Arc<dyn TerminalLauncher>,
     pub fonts: Arc<dyn FontCatalog>,
-    pub https: Arc<dyn HttpsGet>,
+    pub https: Arc<dyn HttpsSend>,
     /// The completion notification (a smoke's records them: no toast shows).
     pub notifier: Arc<dyn mighty_platform::Notifier>,
 }
@@ -76,6 +76,51 @@ pub fn ports(smoke: bool) -> Ports {
     } else {
         Ports { terminals: os::terminal_launcher(), fonts: os::font_catalog(), https: os::https_get(), notifier: os::notifier() }
     }
+}
+
+/// W8's ports as the remote parts get them (mobile.rs, direct.rs, remote.rs): the platform's own, except in a smoke, which gets the
+/// fakes for every one that reaches outside the process — a network that binds loopback only and never calls back, a firewall that
+/// records (nothing elevates), HTTPS that records (no push leaves) and a direct proxy. The pairing store is the platform's (the profile's
+/// own file; the smoke's profile in a smoke).
+#[allow(dead_code, reason = "W8-A, W8-C and W8-D read them")]
+pub struct RemotePorts {
+    pub network: Arc<dyn mighty_platform::Network>,
+    pub firewall: Arc<dyn mighty_platform::Firewall>,
+    pub https: Arc<dyn HttpsSend>,
+    pub proxy: Arc<dyn mighty_platform::ProxyResolver>,
+    pub pairing: Arc<dyn mighty_platform::PairingStore>,
+}
+
+#[allow(dead_code, reason = "W8-A, W8-C and W8-D read them")]
+pub fn remote_ports(platform: &Platform, smoke: bool) -> RemotePorts {
+    if smoke {
+        RemotePorts {
+            network: Arc::new(mighty_platform::fake::FakeNetwork::default()),
+            firewall: Arc::new(mighty_platform::fake::FakeFirewall::default()),
+            https: Arc::new(mighty_platform::fake::RecordingHttps::default()),
+            proxy: Arc::new(mighty_platform::fake::FakeProxy::default()),
+            pairing: platform.pairing.clone(),
+        }
+    } else {
+        RemotePorts {
+            network: platform.network.clone(),
+            firewall: platform.firewall.clone(),
+            https: platform.https.clone(),
+            proxy: platform.proxy.clone(),
+            pairing: platform.pairing.clone(),
+        }
+    }
+}
+
+/// Screen share's capture and input (W8-F, D11): paused on every OS, so neither OS crate has them yet (after 0.5).
+#[allow(dead_code, reason = "W8-F's screen share reads them once its switch is on")]
+pub fn screen_capture() -> Arc<dyn mighty_platform::ScreenCapture> {
+    Arc::new(mighty_platform::unsupported::Unsupported)
+}
+
+#[allow(dead_code, reason = "W8-F's screen share reads them once its switch is on")]
+pub fn remote_input() -> Arc<dyn mighty_platform::RemoteInput> {
+    Arc::new(mighty_platform::unsupported::Unsupported)
 }
 
 /// C# `DateTimeOffset.TryParse(updatedAt) … ToLocalTime().ToString("T", CurrentCulture)`: a reported time in the user's long time

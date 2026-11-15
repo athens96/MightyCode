@@ -30,28 +30,16 @@ pub enum Pending {
     Runtime,
     /// `appUpdate` (W9): no update badge, staged badge or countdown.
     AppUpdate,
-    /// `WebCompanionControls` (companion, W8).
-    Companion,
     /// `SetupNeedsAttention` and the setup badge (setup catalogue, W6).
     Setup,
     /// `resourceBanner` (`CheckResources`, ResourceHealth, W1-A's platform layer).
     ResourceBanner,
-    /// `RemoteConnection(workspace)` (remote client, W8): a remote workspace reads "not connected" with an unknown OS.
-    RemoteConnections,
     /// `PaneRuntime(provider).ModelCatalog`: the dashboard's model names come from the fallback catalogue until the CLI's list is read.
     ModelCatalog,
 }
 
-pub const PENDING: [Pending; 8] = [
-    Pending::Attention,
-    Pending::Runtime,
-    Pending::AppUpdate,
-    Pending::Companion,
-    Pending::Setup,
-    Pending::ResourceBanner,
-    Pending::RemoteConnections,
-    Pending::ModelCatalog,
-];
+pub const PENDING: [Pending; 6] =
+    [Pending::Attention, Pending::Runtime, Pending::AppUpdate, Pending::Setup, Pending::ResourceBanner, Pending::ModelCatalog];
 
 // ── tones and counts (StatusGlyph, WorkDashboard) ───────────────────────────────────────────────────────────────────────
 
@@ -1109,6 +1097,24 @@ pub struct ShellModel {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<UsageDetails>,
     pub setup_needed: bool,
+    /// The status bar's paw and capsule (C# `WebCompanionControls`), when the companion is there (W8-E); absent, the page draws neither.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub companion: Option<CompanionFrame>,
+}
+
+/// The status bar's companion controls (C# `WebCompanionControls`, MainWindow.WebShell.Settings.cs:331-336; the page's
+/// `shell.companion`, web\shell\Chrome.tsx:171-181): the paw's switch and the capsule's busy mark, count and words.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanionFrame {
+    pub pet_on: bool,
+    pub pet_label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pet_help: Option<String>,
+    pub busy: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<String>,
+    pub status_label: String,
 }
 
 /// What a remote workspace's connection says (`RemoteConnectionInfo`): connected, and the host's OS from its last answer.
@@ -1151,6 +1157,8 @@ pub struct ShellContext<'a> {
     pub remote: &'a HashMap<String, RemoteConnection>,
     /// The account usage's chips, popover and bars (the host's `AccountUsageStatus`), when it is there.
     pub usage: Option<&'a UsageModel>,
+    /// The companion's status bar controls (the host's companion, W8-E), when it is there.
+    pub companion: Option<&'a CompanionFrame>,
 }
 
 /// C# `WorkspaceDisclosure.Expanded`: the saved list, or the active workspace when none was saved.
@@ -1378,6 +1386,7 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
         },
         usage: context.usage.map(|u| u.details.clone()),
         setup_needed: context.setup_needed,
+        companion: context.companion.cloned(),
     }
 }
 

@@ -114,6 +114,31 @@ function DelegationPlaces {
     } finally { $env:GIT_OPTIONAL_LOCKS = $previous }
     $values
 }
+# What the phone, remote workspaces, the pet and screen share keep, which a read-only run must leave alone (W8 plan section 4): the
+# profile's companion-settings.json, remote-connections.json and screen-devices.json (their hashes), its mobile-remote folder (the pairing
+# identity and uploads) and remote-keys folder (the DPAPI-sealed connection keys), each file by bytes, time and hash, and the Windows
+# Firewall rule the direct path and sharing share (netsh's unelevated read, which changes nothing).
+function RemotePlaces {
+    $values = [ordered]@{}
+    foreach ($name in 'companion-settings.json', 'remote-connections.json', 'screen-devices.json') {
+        $file = Join-Path $Profile $name
+        $values[$file] = Probe { if (Test-Path -LiteralPath $file) { $info = Get-Item -LiteralPath $file; "$($info.Length) $($info.LastWriteTimeUtc.ToString('o')) $((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash)" } else { $null } }
+    }
+    foreach ($name in 'mobile-remote', 'remote-keys') {
+        $folder = Join-Path $Profile $name
+        $values[$folder] = Probe {
+            if (-not (Test-Path -LiteralPath $folder)) { $null } else {
+                $root = (Get-Item -LiteralPath $folder).FullName.TrimEnd('\')
+                @(Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction Stop | Sort-Object FullName | ForEach-Object {
+                    $relative = $_.FullName.Substring($root.Length + 1)
+                    if ($_.PSIsContainer) { "$relative\" } else { "$relative $($_.Length) $($_.LastWriteTimeUtc.ToString('o')) $((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)" }
+                }) -join '|'
+            }
+        }
+    }
+    $values['firewall rule Mighty Code (Tailscale)'] = Probe { ((& (Join-Path $env:SystemRoot 'System32\netsh.exe') advfirewall firewall show rule 'name=Mighty Code (Tailscale)' verbose 2>&1) | Out-String).Trim() }
+    $values
+}
 # The names whose value differs between two probes (added and removed ones included).
 function Changed($Before, $After) {
     @(@($Before.Keys) + @($After.Keys) | Sort-Object -Unique | Where-Object { $Before[$_] -ne $After[$_] })
@@ -121,6 +146,7 @@ function Changed($Before, $After) {
 
 $treeBefore = if ($readOnly) { ProfileTree } else { $null }; $userBefore = UserConfig
 $placesBefore = if ($readOnly) { DelegationPlaces } else { $null }
+$remoteBefore = if ($readOnly) { RemotePlaces } else { $null }
 $arguments = @('--smoke-test', '--smoke-exit', '--profile', $Profile, '--smoke-out', $result)
 if ($RealClaude) {
     $arguments += '--smoke-real-claude'
@@ -139,6 +165,7 @@ $process = Start-Process -FilePath $Exe -ArgumentList $arguments -PassThru -Wait
 $watch.Stop()
 $treeAfter = if ($readOnly) { ProfileTree } else { $null }; $userAfter = UserConfig
 $placesAfter = if ($readOnly) { DelegationPlaces } else { $null }
+$remoteAfter = if ($readOnly) { RemotePlaces } else { $null }
 $userChanged = Changed $userBefore $userAfter
 $exitCode = $process.ExitCode
 
@@ -161,6 +188,14 @@ if ($readOnly) {
         $exitCode = 1
     } else {
         Write-Output "delegation places unchanged: $($placesBefore.Count) probes (~\.mightycode\worktrees, delegation-state.json, git worktree list)"
+    }
+    $remoteChanged = Changed $remoteBefore $remoteAfter
+    if ($remoteChanged.Count -gt 0) {
+        Write-Output "REMOTE PLACES CHANGED (a read-only run must leave the pet's, the phone's, the remote workspaces' and screen share's files and the firewall rule alone):"
+        foreach ($name in $remoteChanged) { Write-Output "  $name`: $($remoteBefore[$name]) -> $($remoteAfter[$name])" }
+        $exitCode = 1
+    } else {
+        Write-Output "remote places unchanged: $($remoteBefore.Count) probes (companion-settings.json, remote-connections.json, screen-devices.json, mobile-remote, remote-keys, the firewall rule)"
     }
 }
 if ($userChanged.Count -gt 0) {

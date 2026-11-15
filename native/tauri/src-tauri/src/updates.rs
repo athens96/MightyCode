@@ -246,7 +246,7 @@ pub fn on_run_event(host: &Arc<Host>, event: &RunEvent) {
     }
 }
 
-/// C# `ReadyForAutomaticUpdate`'s inputs for `provider`: its runs here (and another computer's on this PC, W8: none yet), a sign-in,
+/// C# `ReadyForAutomaticUpdate`'s inputs for `provider`: its runs here (and another computer's on this PC, remote.rs), a sign-in,
 /// sign-out or terminal wait of it (W6-C's `accounts::busy`: C# `loginBusy`, `accountChanges`, `accountLoginWaits`), its panes
 /// starting or holding queued input, its last activity. Locks the state: never call it with the state locked ([`provider_use_in`]).
 pub fn provider_use(host: &Host, provider: &str) -> ProviderUse {
@@ -266,7 +266,9 @@ pub fn provider_use_in(host: &Host, view: &View, provider: &str) -> ProviderUse 
     let starting = panes.iter().any(|(_, ui)| ui.view.starting || ui.view.queue_starting);
     let queued = panes.iter().any(|(pane, ui)| pane.status() != "error" && !ui.queue.items().is_empty());
     let last_active = of(host).and_then(|updates| updates.state().last_active.get(provider).copied());
-    ProviderUse { running: active || starting, account_change: crate::accounts::busy(host, provider), queued, last_active }
+    // Another computer's runs on this PC (`remoteHostRuns > 0`) hold every CLI's update and every plugin change.
+    let host_runs = crate::remote::host_runs(host) > 0;
+    ProviderUse { running: active || starting || host_runs, account_change: crate::accounts::busy(host, provider), queued, last_active }
 }
 
 /// How soon a pane's queue is asked to drain again (the drain itself waits for the pane to be free).
@@ -296,9 +298,11 @@ fn draining(view: &View, activity: &UpdateActivity) -> Vec<String> {
 }
 
 /// C# `NotifyAutomaticUpdates`: every pane's composer looked at again — each `BackgroundUpdateChanged`: a pane with queued requests
-/// that nothing holds any more drains them —, the CLI 업데이트 box drawn again (the phone's notice is W8).
+/// that nothing holds any more drains them —, the CLI 업데이트 box drawn again, and the phone told the panes moved
+/// (`mobileRouter?.Changed()`).
 pub fn notify(host: &Arc<Host>) {
     crate::panes::mark_all(host);
+    crate::phone::changed(host);
     if let Some(updates) = of(host)
         && !host.closing()
     {

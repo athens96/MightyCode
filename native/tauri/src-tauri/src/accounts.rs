@@ -208,6 +208,11 @@ pub fn busy(host: &Host, provider: &str) -> bool {
     accounts.is_busy(provider) || accounts.is_changing(provider) || accounts.is_waiting(provider)
 }
 
+/// `claudeModelReset`: Claude's models are being reloaded (a sharing host refuses another computer's Claude run meanwhile, remote.rs).
+pub fn claude_model_resetting(host: &Host) -> bool {
+    of(host).model_reset.load(Ordering::SeqCst)
+}
+
 /// `accounts::start_sign_in`: C# `StartCliSignIn(provider, option)` — the CLI's own sign-in in a terminal window, then its status
 /// polled until it reads signed in. `option`: `console`, `bedrock`, else the account.
 #[allow(dead_code, reason = "a seam for the panes; the setup screen awaits start_cli_sign_in to say its refusal")]

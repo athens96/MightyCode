@@ -28,8 +28,15 @@ getrandom = "0.3"
 tauri = { workspace = true, features = ["unstable"] }
 tokio = { workspace = true, features = ["sync", "net", "rt", "time", "io-util", "macros"] }
 webview2-com = "0.38"
+# The Direct2D calls' points and transforms (`Vector2`, `Matrix3x2`; already in the lock as a dependency of `windows`): the pet (pet.rs,
+# W8-E).
+windows-numerics = "0.2"
+# W8-C: SO_EXCLUSIVEADDRUSE on the direct and sharing listeners through socket2's raw setsockopt (net.rs).
+socket2 = { version = "0.6", features = ["all"] }
 # Data_Pdf, Foundation, Storage_Streams, Win32_System_WinRT: a PDF's first page (files.rs, W4). Data_Xml_Dom, UI_Notifications: the
-# completion toast (notify.rs, W6); Win32_Graphics_DirectWrite: the installed font families (fonts.rs, W6).
+# completion toast (notify.rs, W6); Win32_Graphics_DirectWrite: the installed font families (fonts.rs, W6). Win32_Graphics_Direct2D,
+# Win32_Graphics_Direct2D_Common, Win32_Graphics_Dxgi_Common, Win32_Graphics_Imaging, Win32_UI_HiDpi: the companion pet drawn with
+# Direct2D and DirectWrite onto its layered window (pet.rs, W8-E).
 windows = { version = "0.61", features = [
     "Data_Pdf",
     "Data_Xml_Dom",
@@ -37,20 +44,31 @@ windows = { version = "0.61", features = [
     "Storage_Streams",
     "UI_Notifications",
     "Win32_Foundation",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
     "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_Imaging",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_WinRT",
+    "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
 ] }
 # Win32_Networking_WinHttp: the HTTPS GET (http.rs, W6). Win32_System_Pipes, Win32_Security, Win32_Security_Authorization: the Agent IO
-# pipe's DACL and owner check (agent_io.rs, W7-C); Win32_Storage_FileSystem: GetDiskFreeSpaceExW (disk_space.rs, W7-B).
+# pipe's DACL and owner check (agent_io.rs, W7-C); Win32_Storage_FileSystem: GetDiskFreeSpaceExW (disk_space.rs, W7-B). W8:
+# Win32_NetworkManagement_IpHelper, Win32_NetworkManagement_Ndis, Win32_Networking_WinSock, Win32_System_Power: the adapters, address
+# changes, resumes and the exclusive listener (net.rs, W8-C); Win32_UI_Input_KeyboardAndMouse, Win32_UI_HiDpi: the pet window's
+# capture, keys and per-monitor DPI (pet.rs, W8-E).
 windows-sys = { version = "0.61", features = [
     "Wdk_System_Threading",
     "Win32_Foundation",
     "Win32_Globalization",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
     "Win32_Networking_WinHttp",
+    "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Security_Cryptography",
@@ -69,10 +87,13 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Memory",
     "Win32_System_Ole",
     "Win32_System_Pipes",
+    "Win32_System_Power",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Time",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",

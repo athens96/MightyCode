@@ -31,15 +31,25 @@ pub mod environment;
 #[cfg(windows)]
 pub mod files;
 #[cfg(windows)]
+mod firewall;
+#[cfg(windows)]
 pub mod fonts;
 #[cfg(windows)]
 pub mod http;
 #[cfg(windows)]
+mod net;
+#[cfg(windows)]
 pub mod notify;
+#[cfg(windows)]
+mod pairing;
+#[cfg(windows)]
+mod pet;
 #[cfg(windows)]
 mod prefs;
 #[cfg(windows)]
 mod process;
+#[cfg(windows)]
+mod proxy;
 #[cfg(windows)]
 pub mod pty;
 #[cfg(windows)]
@@ -81,9 +91,13 @@ mod imp {
     pub use crate::files::{
         WindowsDesktop, WindowsFileHandles, WindowsPathProbe, WindowsPdf, decimal_separator, file_ports, path_probe, short_date_time,
     };
+    pub use crate::firewall::WindowsFirewall;
     pub use crate::fonts::{DirectWriteFonts, font_catalog};
+    pub use crate::net::WindowsNetwork;
+    pub use crate::pairing::WindowsPairing;
     pub use crate::prefs::RegistryPrefs;
     pub use crate::process::{KILLED_EXIT_CODE, WindowsProcessHost};
+    pub use crate::proxy::WinHttpProxy;
     pub use crate::pty::WindowsPtyHost;
     pub use crate::setup_files::WindowsSetupFiles;
     pub use crate::variables::Variables;
@@ -171,22 +185,28 @@ mod imp {
         Some(sizes)
     }
 
-    /// Every port for this run.
+    /// Every port for this run. W8's (the pairing file, the firewall rule, the network, the proxy, the push's POST) are stubs that
+    /// answer `Unsupported` until their parts fill them (W8 Step 0), as the pairing and firewall ports did before.
     pub fn platform(profile: Option<PathBuf>, identifier: &str) -> Result<Platform> {
         let paths = paths(profile, identifier)?;
         let vault = DpapiVault::new(paths.data_dir().to_path_buf());
+        let pairing = WindowsPairing::new(paths.data_dir().join(mighty_platform::pairing::identity_file::FOLDER));
+        let processes: Arc<dyn mighty_platform::ProcessHost> = Arc::new(WindowsProcessHost::new());
         Ok(Platform {
             profile: PlatformProfile::windows(),
             paths: Arc::new(paths),
-            processes: Arc::new(WindowsProcessHost::new()),
+            processes: processes.clone(),
             ptys: Arc::new(WindowsPtyHost::new()),
             environment: Arc::new(WindowsShellEnvironment::new()),
             secrets: Arc::new(vault),
             prefs: Arc::new(RegistryPrefs::app()),
-            pairing: Arc::new(Unsupported),
+            pairing: Arc::new(pairing),
             notifier: Arc::new(Unsupported),
-            firewall: Arc::new(Unsupported),
+            firewall: Arc::new(WindowsFirewall::new(processes)),
             updates: Arc::new(Unsupported),
+            network: Arc::new(WindowsNetwork),
+            proxy: Arc::new(WinHttpProxy),
+            https: Arc::new(crate::http::WinHttpGet),
         })
     }
 
@@ -259,9 +279,9 @@ mod imp {
         crate::notify::register().map_err(|e| e.to_string())
     }
 
-    /// The account usage's HTTPS GET (`mighty_platform::HttpsGet`): WinHTTP (http.rs: system proxy, redirects, cookies and automatic
+    /// The account usage's HTTPS GET (`mighty_platform::HttpsSend`): WinHTTP (http.rs: system proxy, redirects, cookies and automatic
     /// logon off, the body only for a 2xx). Which URLs may be asked is the caller's guard (mighty-accounts' `usage::guard`).
-    pub fn https_get() -> Arc<dyn mighty_platform::HttpsGet> {
+    pub fn https_get() -> Arc<dyn mighty_platform::HttpsSend> {
         Arc::new(crate::http::WinHttpGet)
     }
 

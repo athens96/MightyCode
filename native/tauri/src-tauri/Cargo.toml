@@ -32,6 +32,10 @@ mighty-accounts.workspace = true
 mighty-updates.workspace = true
 # W7: delegation, the Agent IO MCP servers and the exe's modes (delegation.rs, agent_io.rs, main.rs).
 mighty-delegation.workspace = true
+# W8: the phone (relay, direct, m1, push), remote workspaces v2 and screen share (mobile.rs, phone.rs, direct.rs, remote.rs), and the
+# companion pet (companion.rs).
+mighty-remote.workspace = true
+mighty-companion.workspace = true
 indexmap.workspace = true
 base64 = "0.22"
 # pickAttachments: the OS's file picker (C# FileOpenPicker), Rust-side only (no page permission).

@@ -255,8 +255,9 @@ impl SurfaceFactory for WebviewSurfaces {
         Box::pin(async { Err(PlatformError::unsupported("SurfaceFactory", "open_terminal")) })
     }
 
+    /// The companion's window (pet.rs, W8-E).
     fn open_pet(&self) -> BoxFuture<'_, Result<Box<dyn PetWindow>>> {
-        Box::pin(async { Err(PlatformError::unsupported("SurfaceFactory", "open_pet")) })
+        Box::pin(async { crate::pet::open() })
     }
 }
 

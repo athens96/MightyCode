@@ -62,7 +62,8 @@ impl Dialogs {
 
     /// `CloseWebDialog`: its flow's answer is null and the page takes it away.
     pub fn close(&self, id: u64) {
-        if let Some(open) = self.state().open.shift_remove(&id) {
+        let open = self.state().open.shift_remove(&id);
+        if let Some(open) = open {
             let _ = open.answer.send(Value::Null);
         }
         (self.push)("dialogClose", json!({"kind": "dialogClose", "id": id}));
@@ -78,7 +79,8 @@ impl Dialogs {
 
     /// `dialogAnswer{id, answer}`: the flow waiting on it goes on; an id no flow waits on is nothing.
     pub fn answer(&self, id: u64, answer: Value) {
-        if let Some(open) = self.state().open.shift_remove(&id) {
+        let open = self.state().open.shift_remove(&id);
+        if let Some(open) = open {
             let _ = open.answer.send(answer);
         }
     }

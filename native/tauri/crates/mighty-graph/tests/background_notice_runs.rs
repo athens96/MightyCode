@@ -2,9 +2,9 @@
 //! pane keeps it flagged with its own lines, views draw background blocks only there, and it never takes the newest request's place.
 //!
 //! The tracker and the run rules, and what the views draw of them: the diagram's layout, camera and blocks, 기록, the pipeline and the
-//! phone's pipeline (MobileStructure). The phone's runs and digest (MobileMightySupport), the background strip (PlanCardSupport) and the
-//! pane's own `Apply` of a run event (its transcript routing) are the phone's and the run engine's (crates/mighty-graph/DEFERRED.md). The
-//! pane is fed here as the run pipeline feeds it, the tracker's runs by id.
+//! phone's pipeline (MobileStructure), the phone's runs and digest (MobileMightySupport, `view::mobile`) and the background strip
+//! (PlanCardSupport). The pane's own `Apply` of a run event (its transcript routing) is the run engine's (crates/mighty-graph/DEFERRED.md).
+//! The pane is fed here as the run pipeline feeds it, the tracker's runs by id.
 
 mod common;
 
@@ -20,6 +20,7 @@ use mighty_core::wire;
 use mighty_graph::structure::board::{self, Navigation};
 use mighty_graph::structure::{self, Inputs, mobile, tone};
 use mighty_graph::tracker::ExecutionGraphTracker;
+use mighty_graph::view::mobile as phone;
 use mighty_graph::view_model::{self, MightyGraphBlock, result_title};
 use mighty_graph::{ExecutionGraphNode, activity, follow, layout, node, notice, support, timeline};
 use serde_json::{Value, json};
@@ -389,6 +390,31 @@ fn the_run_rules_and_the_views() {
     opening.notice_run = Some(true);
     support::refresh_result(&mut opening);
     check(!support::has_result(&opening) && opening.result_entries().is_empty(), "a first notice turn still waiting has no card");
+    // C# :163-179, the phone's digest (MobileMightySupport.Digest): a phone that draws the role view draws a request's background blocks
+    // as compact rows, so their steps wake its long poll, as the notice run's do.
+    let mut digested = runs(true, "completed").remove(0);
+    let before = phone::digest_runs(std::slice::from_ref(&digested));
+    agents_mut(&mut digested)[1].entries.get_or_insert_with(Vec::new).push(said("b1", "compiling"));
+    check(phone::digest_runs(std::slice::from_ref(&digested)) != before, "a request's background block's step moves the digest");
+    let before = phone::digest_runs(std::slice::from_ref(&digested));
+    agents_mut(&mut digested)[1].status = Some("completed".into());
+    let ended = phone::digest_runs(std::slice::from_ref(&digested));
+    check(ended != before, "the end of the request's background work moves the digest");
+    agents_mut(&mut digested).push(graph_agent("fg2", "Grep", "running"));
+    check(phone::digest_runs(std::slice::from_ref(&digested)) != ended, "a new block the request draws moves the digest");
+    let mut notice_run = runs(true, "completed").remove(2);
+    let notice_before = phone::digest_runs(std::slice::from_ref(&notice_run));
+    agents_mut(&mut notice_run)[0].entries.get_or_insert_with(Vec::new).push(said("c1", "done"));
+    check(phone::digest_runs(std::slice::from_ref(&notice_run)) != notice_before, "a notice run's background block moves the digest");
+}
+
+/// A reply line of a block, as C#'s `new LogEntry(id, "assistant", text, "2026-10-28T00:00:00Z", "claude")`.
+fn said(id: &str, text: &str) -> mighty_core::model::LogEntry {
+    mighty_core::model::LogEntry::new(id.into(), "assistant", text.into(), "2026-10-28T00:00:00Z".into(), Some("claude".into()))
+}
+
+fn wire_now() -> String {
+    mighty_core::time::now_o()
 }
 
 /// The tracker's half of C# ThePaneKeepsTheNoticeRunApart: the request's run and the notice run as the tracker builds them. The notice
@@ -453,6 +479,143 @@ fn the_pane_keeps_the_notice_run_apart() {
         "the copy is the block as it ended",
     );
     check(support::newest_request_run(&pane_runs).map(|r| r.id()) == Some("proc-1"), "the notice run never takes the request's place");
+    // C# :214-221, the phone: the notice run travels flagged, titled after the work in its title and its main block, with its reply; the
+    // request keeps its number and its result, and waits on nothing any more.
+    use phone::MobileOut as _;
+    let mobile = phone::runs(&pane_runs, &phone::RunsInputs::default(), &ko);
+    check(
+        mobile[0].notice_run.is_none()
+            && mobile[1].notice_run == Some(true)
+            && Some(&mobile[1].blocks[0].title) == notice.notice_title.as_ref()
+            && mobile[1].title == notice.notice_title,
+        "the phone's notice run",
+    );
+    check(mobile[0].background_waiting.is_none() && mobile[1].background_waiting.is_none(), "nothing waits once the build ended");
+    check(mobile[0].blocks.len() == 1 && mobile[1].blocks.len() == 2, "the request's background block travels only in the notice run");
+    check(
+        mobile[0].result.as_deref() == Some("Building.") && mobile[1].result.as_deref() == Some("The build passed."),
+        "the newest request and the notice run after it carry their results",
+    );
+    check(mobile.to_json().contains(r#""noticeRun":true"#), "the flag reaches the wire");
+    // C# :222-234, the strip and the phone's backgroundWork: a running task meets its block, with its command and output lines, never
+    // its path.
+    let task = |id: &str, kind: &str, description: &str, status: &str, tool: Option<&str>| mighty_core::model::BackgroundTask {
+        id: Some(id.into()),
+        kind: Some(kind.into()),
+        description: Some(description.into()),
+        started_at: Some(wire_now()),
+        status: Some(status.into()),
+        tool_use_id: tool.map(str::to_string),
+        summary: None,
+        ended_at: None,
+    };
+    let work = mighty_core::model::BackgroundWork {
+        tasks: Some(vec![task("b2", "shell", "Lint", "running", Some("lint")), task("o1", "other", "Something", "running", None)]),
+        turn_ended: true,
+    };
+    let mut linted = graph_run("proc-2", "running");
+    linted.source_run_id = Some("proc-2".into());
+    let mut block = graph_agent(&node::agent_node_id("proc-2", "lint"), "Lint", "running");
+    block.input = Some("npm run lint".into());
+    block.kind = Some("task".into());
+    block.background = Some(true);
+    block.output_file = Some("/tmp/b2.output".into());
+    linted.agents = Some(vec![block]);
+    let output: phone::OutputTails = [(linted.agents()[0].id().to_string(), (1..=7).map(|i| i.to_string()).collect())].into();
+    let rows = phone::background_strip_rows(Some(&work), Some(&linted), Some(&output), &ko);
+    let row = rows.iter().find(|r| r.id.as_deref() == Some("b2")).expect("the lint row");
+    check(
+        row.run == Some(true)
+            && row.command.as_deref() == Some("npm run lint")
+            && row.opens()
+            && row.tail_lines == ["2", "3", "4", "5", "6", "7"]
+            && row.tail.as_deref() == Some("7"),
+        "a strip row opens to its command and last six lines",
+    );
+    let mobile_work = phone::mobile_background_work(Some(&work), Some(&linted), Some(&output), &ko).expect("running work");
+    check(
+        mobile_work.len() == 1
+            && mobile_work[0].id == "b2"
+            && mobile_work[0].run
+            && mobile_work[0].command.as_deref() == Some("npm run lint")
+            && mobile_work[0].output_tail.as_ref().is_some_and(|t| t.len() == 6),
+        "the phone gets the running command, its lines, and no other kind",
+    );
+    check(!format!("{mobile_work:?}").contains("/tmp/"), "no path travels");
+    let done = mighty_core::model::BackgroundWork { tasks: Some(vec![task("b3", "shell", "Done", "completed", None)]), turn_ended: true };
+    check(phone::mobile_background_work(Some(&done), Some(&linted), None, &ko).is_none(), "nothing running: no backgroundWork");
+    check(
+        phone::mobile_background_done(Some(&work)) == Some(0) && phone::mobile_background_done(Some(&done)) == Some(1),
+        "the phone's backgroundDone: 0 while all runs, the finished count once some ended",
+    );
+}
+
+/// C# ARequestAwaitingNoticesIsTheAwaitingNoticeBlock, the phone's runs and digest (:293-297, 304, 308-314, 329-333, 343-344).
+#[test]
+fn a_request_awaiting_notices_is_the_awaiting_notice_block_on_the_phone() {
+    use phone::MobileOut as _;
+    let ko = ko();
+    let plain = phone::RunsInputs::default();
+    let mut all = runs(false, "completed");
+    let mobile = phone::runs(&all, &plain, &ko);
+    check(
+        mobile[0].awaiting_notice.as_ref().is_some_and(|w| {
+            w.delivered == 0 && w.total == 1 && w.tasks == [phone::MobileAwaitedTask { title: "Build".into(), status: "running".into() }]
+        }) && mobile[0].background_waiting == Some(1)
+            && mobile[1].awaiting_notice.is_none()
+            && mobile[1].background_waiting == Some(1)
+            && mobile[2].awaiting_notice.is_none(),
+        "the phone gets the 알림 대기 block, and a finished notice run the request's count",
+    );
+    check(
+        mobile[0].to_json().contains(r#""awaitingNotice":{"delivered":0,"total":1,"tasks":[{"title":"Build","status":"running"}]}"#)
+            && !mobile[1].to_json().contains("awaitingNotice"),
+        &format!("the wire form: {}", mobile[0].to_json()),
+    );
+    let digest = phone::digest_runs(&all);
+    agents_mut(&mut all[0])[1].status = Some("completed".into());
+    let delivered = phone::runs(&all, &plain, &ko).remove(0);
+    check(
+        delivered.background_waiting.is_none()
+            && delivered.awaiting_notice.as_ref().is_some_and(|a| a.delivered == 1)
+            && phone::digest_runs(&all) != digest,
+        "the phone sees the notice delivered",
+    );
+    let digest = phone::digest_runs(&all);
+    all[2].status = Some("completed".into());
+    all[2].final_output = Some("The build passed.".into());
+    check(
+        phone::runs(&all, &plain, &ko)[0].awaiting_notice.is_none() && phone::digest_runs(&all) != digest,
+        "the phone's block goes and its digest moves",
+    );
+    let mut titled = graph_run("r:notice:1", "running");
+    titled.notice_run = Some(true);
+    let untitled = phone::digest_runs(std::slice::from_ref(&titled));
+    titled.notice_title = Some("하위 에이전트 메시지 · scout".into());
+    check(phone::digest_runs(std::slice::from_ref(&titled)) != untitled, "a notice run's title moves the digest");
+    let mut named = runs(true, "completed");
+    let old = phone::runs(&named, &plain, &ko);
+    let generic = notice::generic_title(&ko);
+    check(old[1].title.as_deref() == Some(generic.as_str()) && old[1].blocks[0].title == generic, "an untitled notice run on the phone");
+    named[2].notice_title = Some("백그라운드 작업 완료 · npm run build".into());
+    let titled_runs = phone::runs(&named, &plain, &ko);
+    check(
+        titled_runs[2].title.as_deref() == Some("백그라운드 작업 완료 · npm run build")
+            && titled_runs[2].blocks[0].title == "백그라운드 작업 완료 · npm run build",
+        "a titled notice run on the phone",
+    );
+    let legacy = RunSession {
+        id: Some("legacy".into()),
+        kind: Some("claude".into()),
+        provider: Some("claude".into()),
+        status: Some("idle".into()),
+        logs: Some(vec![
+            mighty_core::model::LogEntry::new("u1".into(), "user", "hi".into(), wire_now(), Some("claude".into())),
+            mighty_core::model::LogEntry::new("a1".into(), "assistant", "hello".into(), wire_now(), Some("claude".into())),
+        ]),
+        ..RunSession::default()
+    };
+    same(phone::digest(&legacy), phone::digest_runs(&phone::legacy_runs(&legacy)), "the legacy digest hashes what the run digest does");
 }
 
 /// The tracker's half of C# AbsorbedAndEndedNoticeRunsLeaveTheRequestItsPlace (the lines it routes are the pane's `Apply`).
@@ -838,6 +1001,51 @@ fn a_notice_run_reads_the_requests_waiting_count() {
     agents_mut(&mut all[0])[2].status = Some("stopped".into());
     check(counts(&all) == vec![0, 0, 0, 1], "none left: the final result");
     same(result_title("completed", 0, false, &ko), "최종 결과".to_string(), "the final title");
+}
+
+/// C# ANoticeRunReadsTheRequestsWaitingCount, the phone's counts and digest (:444-448).
+#[test]
+fn a_notice_run_reads_the_requests_waiting_count_on_the_phone() {
+    let ko = ko();
+    let task = |id: &str, status: &str| {
+        let mut agent = graph_agent(id, "Job", status);
+        agent.kind = Some("task".into());
+        agent.background = Some(true);
+        agent
+    };
+    let survey = |id: &str, status: &str, source: Option<&str>| {
+        let mut agent = graph_agent(id, "Survey", status);
+        agent.background = Some(true);
+        agent.source_block_id = source.map(Into::into);
+        agent
+    };
+    let mut request = graph_run("r", "completed");
+    request.final_output = Some("Started.".into());
+    request.agents =
+        Some(vec![survey("a1", "completed", None), survey("a2", "running", None), survey("a3", "running", None), task("t1", "running")]);
+    let mut first = graph_run("r:notice:1", "completed");
+    first.notice_run = Some(true);
+    first.final_output = Some("First done.".into());
+    first.agents = Some(vec![survey("r:notice:1:a1", "completed", Some("a1"))]);
+    let mut second = graph_run("r:notice:2", "completed");
+    second.notice_run = Some(true);
+    second.final_output = Some("Task step.".into());
+    second.agents = Some(vec![task("r:notice:2:t0", "completed")]);
+    let mut next = graph_run("n", "completed");
+    next.final_output = Some("Done.".into());
+    next.agents = Some(vec![task("n-t", "running")]);
+    let mut all = vec![request, first, second, next];
+    for run in &mut all {
+        support::refresh_result(run);
+    }
+    let counts = |all: &[MightyGraphRun]| {
+        phone::runs(all, &phone::RunsInputs::default(), &ko).iter().map(|r| r.background_waiting).collect::<Vec<_>>()
+    };
+    check(counts(&all) == [Some(3), Some(3), Some(3), Some(1)], "the phone's counts");
+    let digest = phone::digest_runs(&all);
+    agents_mut(&mut all[0])[1].status = Some("completed".into());
+    agents_mut(&mut all[0])[3].status = Some("completed".into());
+    check(counts(&all) == [Some(1), Some(1), Some(1), Some(1)] && phone::digest_runs(&all) != digest, "one left");
 }
 
 #[test]

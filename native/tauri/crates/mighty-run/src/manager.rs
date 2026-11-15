@@ -19,7 +19,7 @@
 //! `session/cancel` a second before a stop ends it. What Hermes's `state.db` says of a session to continue comes from the host
 //! ([`HermesSessionReader`]: mighty-history reads it, which this crate cannot name).
 //!
-//! Until their stages: a sharing host's PowerShell commands are W8. The Agent IO / delegation binding (W7) plugs in through
+//! A sharing host's commands run in Windows PowerShell (`powershell_commands`, W8-D). The Agent IO / delegation binding (W7) plugs in through
 //! [`RunBinding`]; the file originals (W4) through [`FileOriginals`].
 
 use std::collections::{BTreeMap, HashMap};
@@ -49,6 +49,7 @@ use crate::lines::{Lines, Next};
 use crate::meta;
 use crate::model::{RunEvent, StartRunRequest};
 use crate::mods::{Connection, ModBridge, ModMetadata};
+use crate::os;
 use crate::parser::{ImageStore, OutputParser, ParserHooks, maximum_line_bytes};
 use crate::permissions::{ChannelHooks, ClaudePermissionChannel, ProviderInput, ToolPermissionRequest};
 use crate::phase_models;
@@ -60,6 +61,10 @@ use crate::questionnaire::UserQuestionAnswer;
 use crate::stream;
 use crate::strings;
 use crate::{Result, RunError, lock};
+
+/// How long a run admitted right after the pane's last one waits for that one's task to end (its process tree, pumps and Mods connection;
+/// as long as a stop waits for a run's end).
+const PREVIOUS_WAIT: Duration = Duration::from_secs(10);
 
 pub type Emit = Arc<dyn Fn(RunEvent) + Send + Sync>;
 pub type PermissionSink = Arc<dyn Fn(ToolPermissionRequest) + Send + Sync>;
@@ -116,6 +121,10 @@ pub struct RunManagerOptions {
     /// Hermes's session facts (None: nothing is read, as for a record that cannot be read: a pane that asks starts a new session, a
     /// full-access one continues it as asked).
     pub hermes_session: Option<HermesSessionReader>,
+    /// A sharing host's command panes (C# `PowerShellCommands`, W8-D): on Windows each command runs as Windows PowerShell from this
+    /// system folder, `-NoProfile -NonInteractive -Command <text>`, with `NoDefaultCurrentDirectoryInExePath=1` (C#
+    /// `RemoteCommandShell.Launch`); None (and off Windows) the shell as for a local pane.
+    pub powershell_commands: Option<String>,
 }
 
 impl RunManagerOptions {
@@ -135,6 +144,7 @@ impl RunManagerOptions {
             antigravity_rules: None,
             antigravity_home: None,
             hermes_session: None,
+            powershell_commands: None,
         }
     }
 }
@@ -247,6 +257,10 @@ struct Run {
     /// Antigravity cards the parser made and the stdout pump has not judged and sent yet (S-H1: their file rules are asked of the disk
     /// off the parser's thread, [`Exec::publish_antigravity_cards`]).
     antigravity_cards: Mutex<Vec<crate::antigravity::PermissionRequest>>,
+    /// The pane's run this one was admitted after: its last status was out but its task still closing (its process tree, pumps, Mods
+    /// connection). This run starts only once that one's end is told ([`Exec::run`]), so two runs of one pane never overlap, as C#'s
+    /// never do; let go then.
+    previous: Mutex<Option<Arc<Run>>>,
 }
 
 impl Run {
@@ -401,7 +415,12 @@ impl RunManager {
             if runs.len() >= 16 {
                 return Err(RunError::State(strings::get("run.error.tooManyConcurrent")));
             }
-            if runs.contains_key(&request.session_id) {
+            // A run whose last status is out is over for everyone outside its task: the service ended its route and told delegation on
+            // that status, while the task still closes (its RunEnd takes it off the list a moment later). A send in that moment
+            // (delegation's next item for the pane, a phone's send) is admitted instead of refused, but its run starts only once the
+            // older one's end is told (`previous`); the older run's end leaves this newer entry in place (RunEnd removes only its own).
+            let previous = runs.get(&request.session_id).cloned();
+            if previous.as_ref().is_some_and(|run| !run.finished.load(Ordering::SeqCst)) {
                 return Err(RunError::State(strings::get("run.error.alreadyRunning")));
             }
             let waits = awaited || request.attachment_list().is_some();
@@ -442,6 +461,7 @@ impl RunManager {
                 node_gate: Mutex::new(()),
                 done: watch::channel(false).0,
                 antigravity_cards: Mutex::new(vec![]),
+                previous: Mutex::new(previous),
             });
             runs.insert(request.session_id.clone(), run.clone());
             let inner = self.inner.clone();
@@ -609,12 +629,18 @@ impl RunManager {
 
     /// `DisposeAsync`: every run stopped, the Mods bridge closed.
     pub async fn dispose(&self) {
-        let active: Vec<String> = {
+        let (active, previous): (Vec<String>, Vec<Arc<Run>>) = {
             *lock(&self.inner.disposed) = true;
-            lock(&self.inner.runs).keys().cloned().collect()
+            let runs = lock(&self.inner.runs);
+            (runs.keys().cloned().collect(), runs.values().filter_map(|run| lock(&run.previous).clone()).collect())
         };
         for id in active {
             let _ = self.stop(&id).await;
+        }
+        // A run replaced while its task still closed is off the list: its end is awaited too (bounded, as a stop's).
+        for run in previous {
+            let mut done = run.done.subscribe();
+            let _ = tokio::time::timeout(PREVIOUS_WAIT, done.wait_for(|done| *done)).await;
         }
         self.inner.bridge.dispose().await;
     }
@@ -991,7 +1017,9 @@ impl Exec {
             return;
         }
         if let Some(nodes) = &inner.options.graph_nodes {
-            nodes(&run.request.session_id, node);
+            // A host callback that fails loses its node, never the run's last status (C#'s catch around it).
+            let id = &run.request.session_id;
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| nodes(id, node)));
         }
     }
 
@@ -999,6 +1027,9 @@ impl Exec {
     /// run off the list, answers its start and tells a waiting stop.
     async fn run(inner: Arc<Inner>, run: Arc<Run>) {
         let mut end = RunEnd { inner: inner.clone(), run: run.clone(), start_failure: None };
+        // Admitted right after the pane's last run's status: nothing of this one starts before that one's task has ended (bounded; a
+        // stop meanwhile is the body's first cancel check).
+        Self::after_previous(&run).await;
         match tokio::spawn(Self::run_body(inner.clone(), run.clone())).await {
             Ok(start_failure) => end.start_failure = start_failure,
             Err(failed) => {
@@ -1014,6 +1045,16 @@ impl Exec {
                 end.start_failure = Some(RunError::State(text));
             }
         }
+    }
+
+    /// Waits (at most [`PREVIOUS_WAIT`]) until the run this one was admitted after has ended, then lets go of it.
+    async fn after_previous(run: &Run) {
+        let previous = lock(&run.previous).clone();
+        if let Some(previous) = previous {
+            let mut done = previous.done.subscribe();
+            let _ = tokio::time::timeout(PREVIOUS_WAIT, done.wait_for(|done| *done)).await;
+        }
+        *lock(&run.previous) = None;
     }
 
     /// The run's body panicked (C#'s catch of an unexpected exception): the pane is told why and that the run ended in an error, its
@@ -1625,7 +1666,18 @@ impl Exec {
         let mut acp_launch: Option<StartRunRequest> = None;
         let mut hermes_notice: Option<String> = None;
         let mut hermes_questions = QuestionTool::default();
-        let launch: mighty_platform::SpawnRequest = if request.kind == "shell" {
+        // Read once: the launch below must quote the arguments PowerShell was given, never hand its text to cmd /s /c.
+        let power_shell = inner.options.powershell_commands.as_deref().filter(|_| request.kind == "shell" && os::windows());
+        let launch: mighty_platform::SpawnRequest = if let Some(system) = power_shell {
+            let (binary, arguments) = power_shell_launch(&request.input, system).map_err(Failure::Error)?;
+            // The command runs in the shared folder: nothing there may stand in for a program it names.
+            let mut shell_environment = environment.clone();
+            shell_environment.insert("NoDefaultCurrentDirectoryInExePath".into(), "1".into());
+            providers
+                .processes()
+                .cli_request(Path::new(&binary), &arguments, Path::new(&workspace_path), &shell_environment)
+                .map_err(|e| Failure::Error(e.to_string()))?
+        } else if request.kind == "shell" {
             providers.processes().shell_request(&request.input, Path::new(&workspace_path), &environment)
         } else {
             let command = tokio::select! {
@@ -2207,6 +2259,24 @@ impl From<Failure> for RunError {
             Failure::Error(message) => RunError::State(message),
         }
     }
+}
+
+/// C# `RemoteCommandShell.Launch(command, systemFolder)`: Windows PowerShell from the system folder Windows reports, the text the one
+/// argument after `-Command`; Err when the folder is not a full drive path (an empty, relative or drive-relative one would resolve
+/// against the current folder).
+pub fn power_shell_launch(command: &str, system_folder: &str) -> std::result::Result<(String, Vec<String>), String> {
+    let b = system_folder.as_bytes();
+    let full = b.len() >= 3
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && matches!(b[2], b'\\' | b'/')
+        && !system_folder.contains(['"', '\0'])
+        && !system_folder.split(['\\', '/']).any(|part| part == "." || part == "..");
+    if !full {
+        return Err("The system folder must be a full path.".into());
+    }
+    let binary = format!("{}\\WindowsPowerShell\\v1.0\\powershell.exe", system_folder.trim_end_matches(['\\', '/']));
+    Ok((binary, vec!["-NoProfile".into(), "-NonInteractive".into(), "-Command".into(), command.into()]))
 }
 
 #[cfg(test)]

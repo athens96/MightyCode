@@ -88,7 +88,8 @@ struct Panel {
 impl Panel {
     /// C# `RenderPlugins` after work done outside an input: the dialog read again now.
     fn touch(&self) {
-        if let Some(id) = self.id.lock().unwrap_or_else(|p| p.into_inner()).clone() {
+        let id = self.id.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(id) = id {
             crate::native::touch(&self.host, &id);
         }
     }

@@ -2,6 +2,8 @@
 //! the pairing key, the relay secret key and the paired phones. The shapes are the m1 protocol's; only the files differ by OS
 //! ([`crate::PairingLayout`]).
 
+pub mod identity_file;
+
 use std::fmt;
 
 use crate::Result;

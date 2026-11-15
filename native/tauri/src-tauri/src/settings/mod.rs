@@ -12,9 +12,14 @@ pub mod about;
 pub mod app_update;
 pub mod cli_accounts;
 pub mod cli_update;
+pub mod companion;
 pub mod general;
 pub mod later;
+pub mod mobile;
+pub mod mobile_direct;
 pub mod models;
+pub mod remote;
+pub mod screen;
 pub mod tools;
 
 use std::sync::Arc;
@@ -65,11 +70,11 @@ pub fn groups(locale: &Locale, category: &str) -> Vec<Group> {
             slot(sections::CLI_UPDATE, cli_update::cli_update),
         ],
         "mobile" => vec![
-            slot(sections::MOBILE_REMOTE, later::mobile_remote),
-            titled("settings.screenShare.sectionTitle", later::screen_share, true),
+            slot(sections::MOBILE_REMOTE, mobile::mobile_remote),
+            titled("settings.screenShare.sectionTitle", screen::screen_share, true),
         ],
-        "remote" => vec![slot(sections::REMOTE_WORKSPACES, later::remote_workspaces)],
-        "companion" => vec![slot(sections::COMPANION, later::companion)],
+        "remote" => vec![slot(sections::REMOTE_WORKSPACES, remote::remote_workspaces)],
+        "companion" => vec![slot(sections::COMPANION, companion::companion)],
         "about" => vec![slot(sections::APP_UPDATE, about::app_update), slot(sections::APP_INFO, about::app_info)],
         _ => vec![],
     }

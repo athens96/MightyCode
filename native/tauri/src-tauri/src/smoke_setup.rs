@@ -587,7 +587,8 @@ async fn install_cli_pane(host: &Arc<Host>) -> Result<Value, String> {
 
 /// Antigravity's runtime as it was read.
 fn install_cli_end(host: &Arc<Host>) {
-    if let (Some(held), Some(runs)) = (fixtures().agy_runtime.take(), host.runs()) {
+    let held = fixtures().agy_runtime.take();
+    if let (Some(held), Some(runs)) = (held, host.runs()) {
         runs.keep(held);
         host.panes_changed();
     }
@@ -598,7 +599,8 @@ fn reset(host: &Arc<Host>) -> Result<(), String> {
     install_cli_end(host);
     fix(host, None);
     crate::native::close(host, mighty_tools::view::SETUP_SURFACE);
-    if let Some(folder) = fixtures().components.take() {
+    let components = fixtures().components.take();
+    if let Some(folder) = components {
         crate::settings::tools::toolkit_of(host).replace_store(None);
         crate::settings::close(host);
         let _ = std::fs::remove_dir_all(folder);
@@ -625,7 +627,8 @@ pub async fn smoke_setup(action: String, args: Value, host: tauri::State<'_, Arc
         "blockedPane" => Ok(blocked_pane(&host).await),
         "components" => components(&host).await,
         "componentsEnd" => {
-            if let Some(folder) = fixtures().components.take() {
+            let components = fixtures().components.take();
+            if let Some(folder) = components {
                 crate::settings::tools::toolkit_of(&host).replace_store(None);
                 let _ = std::fs::remove_dir_all(folder);
             }

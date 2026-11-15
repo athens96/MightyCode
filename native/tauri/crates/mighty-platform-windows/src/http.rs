@@ -5,8 +5,10 @@
 //! caller's timeout for each phase, and a body read only for a 2xx, refused past the cap. There is no retry. Which hosts and paths may
 //! be asked is the caller's guard (`mighty_accounts::usage::guard`); no message here carries a header value.
 //!
-//! [`WinHttpGet`] is mighty-platform's `HttpsGet` port over it (lib.rs `https_get`): an `https://host/path` URL on HTTPS's own port
-//! only, anything else refused before WinHTTP is opened.
+//! [`WinHttpGet`] is mighty-platform's `HttpsSend` port over it (lib.rs `https_get`): a GET to an `https://host/path` URL on HTTPS's own
+//! port only, anything else refused before WinHTTP is opened. Its POST is the phone push's (W8-A, C# `MobilePushTransport` over .NET's
+//! `HttpClient`): the relay's push route as the user set it, `https://` or `http://` (a relay on a LAN or loopback), on its own port,
+//! the body sent whole, under the same rules (no redirect, no cookies, no stored credentials, the system's proxy).
 
 use std::ffi::c_void;
 use std::time::Duration;
@@ -96,7 +98,9 @@ fn header(request: *mut c_void, level: u32) -> Result<Option<String>> {
 
 fn validate(request: &HttpsRequest) -> Result<()> {
     let bad = |text: &str| text.chars().any(|c| c.is_control());
-    if request.host.is_empty() || bad(&request.host) || request.host.contains(['/', ':', '@']) {
+    // An IPv6 address (a relay's push route, review L5) is the one host with colons; WinHTTP takes it without brackets.
+    let ipv6 = request.host.parse::<std::net::Ipv6Addr>().is_ok();
+    if request.host.is_empty() || bad(&request.host) || request.host.contains(['/', '@']) || (request.host.contains(':') && !ipv6) {
         return Err(PlatformError::Invalid("an HTTPS GET needs a host name".into()));
     }
     if !request.path_and_query.starts_with('/') || bad(&request.path_and_query) {
@@ -108,7 +112,17 @@ fn validate(request: &HttpsRequest) -> Result<()> {
     Ok(())
 }
 
-fn send(request: &HttpsRequest, max_body: usize) -> Result<HttpsResponse> {
+/// How one request goes out: the verb, TLS or not, the port, and a POST's body.
+struct Target<'a> {
+    verb: &'static str,
+    secure: bool,
+    port: u16,
+    body: &'a [u8],
+}
+
+const GET: Target<'static> = Target { verb: "GET", secure: true, port: INTERNET_DEFAULT_HTTPS_PORT, body: &[] };
+
+fn send(request: &HttpsRequest, target: &Target<'_>, max_body: usize) -> Result<HttpsResponse> {
     let mut handles = Handles(vec![]);
     let agent = wide("MightyCode");
     // SAFETY: `agent` is a NUL-terminated wide string; no proxy names are given, so the system's (WPAD, PAC, settings) are used.
@@ -119,10 +133,10 @@ fn send(request: &HttpsRequest, max_body: usize) -> Result<HttpsResponse> {
     // SAFETY: a session handle this call owns.
     check(unsafe { WinHttpSetTimeouts(session, milliseconds, milliseconds, milliseconds, milliseconds) })?;
     let host = wide(&request.host);
-    // SAFETY: `host` is NUL-terminated; HTTPS's own port only.
-    let connection = opened(&mut handles, unsafe { WinHttpConnect(session, host.as_ptr(), INTERNET_DEFAULT_HTTPS_PORT, 0) })?;
-    let (verb, path) = (wide("GET"), wide(&request.path_and_query));
-    // SAFETY: NUL-terminated strings; default version, no referrer, any accept type; TLS required.
+    // SAFETY: `host` is NUL-terminated; the target's port (HTTPS's own for a GET).
+    let connection = opened(&mut handles, unsafe { WinHttpConnect(session, host.as_ptr(), target.port, 0) })?;
+    let (verb, path) = (wide(target.verb), wide(&request.path_and_query));
+    // SAFETY: NUL-terminated strings; default version, no referrer, any accept type; TLS unless the target is plain HTTP.
     let handle = opened(&mut handles, unsafe {
         WinHttpOpenRequest(
             connection,
@@ -131,7 +145,7 @@ fn send(request: &HttpsRequest, max_body: usize) -> Result<HttpsResponse> {
             std::ptr::null(),
             std::ptr::null(),
             std::ptr::null(),
-            WINHTTP_FLAG_SECURE,
+            if target.secure { WINHTTP_FLAG_SECURE } else { 0 },
         )
     })?;
     option(handle, WINHTTP_OPTION_REDIRECT_POLICY, WINHTTP_OPTION_REDIRECT_POLICY_NEVER)?;
@@ -142,8 +156,9 @@ fn send(request: &HttpsRequest, max_body: usize) -> Result<HttpsResponse> {
         // SAFETY: `line` is NUL-terminated (length -1 tells WinHTTP to find its end).
         check(unsafe { WinHttpAddRequestHeaders(handle, line.as_ptr(), u32::MAX, WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE) })?;
     }
-    // SAFETY: no extra headers and no body.
-    check(unsafe { WinHttpSendRequest(handle, std::ptr::null(), 0, std::ptr::null(), 0, 0, 0) })?;
+    let length = u32::try_from(target.body.len()).map_err(|_| PlatformError::TooLarge(u32::MAX as usize))?;
+    // SAFETY: no extra headers; the body (none for a GET) is `length` readable bytes, sent whole with this call.
+    check(unsafe { WinHttpSendRequest(handle, std::ptr::null(), 0, target.body.as_ptr().cast(), length, length, 0) })?;
     // SAFETY: the request was sent on this handle.
     check(unsafe { WinHttpReceiveResponse(handle, std::ptr::null_mut()) })?;
     let mut status = 0u32;
@@ -166,7 +181,9 @@ fn send(request: &HttpsRequest, max_body: usize) -> Result<HttpsResponse> {
         .transpose()?
         .map(|location| location.filter(|l| !l.is_empty()).unwrap_or_else(|| "refused".into()));
     let mut body = Vec::new();
-    if (200..300).contains(&status) {
+    // A POST's answer is its status and headers only (the push reads no body, review L6: a large 2xx body is still Sent, never a
+    // retry that would push twice).
+    if (200..300).contains(&status) && target.verb == "GET" {
         loop {
             let mut available = 0u32;
             // SAFETY: `available` is writable.
@@ -196,7 +213,14 @@ fn send(request: &HttpsRequest, max_body: usize) -> Result<HttpsResponse> {
 pub async fn get(request: HttpsRequest, max_body: usize) -> Result<HttpsResponse> {
     validate(&request)?;
     let timeout = request.timeout;
-    within(timeout, move || send(&request, max_body)).await
+    within(timeout, move || send(&request, &GET, max_body)).await
+}
+
+/// One POST of `body` to `request`'s host on `port`, over TLS when `secure`, on a blocking thread, within the request's timeout.
+pub async fn post(request: HttpsRequest, secure: bool, port: u16, body: Vec<u8>, max_body: usize) -> Result<HttpsResponse> {
+    validate(&request)?;
+    let timeout = request.timeout;
+    within(timeout, move || send(&request, &Target { verb: "POST", secure, port, body: &body }, max_body)).await
 }
 
 /// `work` on a blocking thread, its answer given up on once `timeout` passes (the thread itself ends with WinHTTP's phase timeouts).
@@ -226,15 +250,68 @@ fn split(url: &str) -> Result<(String, String)> {
     Ok((host, path))
 }
 
-/// mighty-platform's `HttpsGet` on Windows: [`get`] for an `https://` URL on port 443.
+/// A push route's URL (`https://` or `http://`, a host name or an IP address, an optional port, a path) as TLS or not, its host, its
+/// port and its path and query; user info, a fragment or any other scheme refused.
+fn split_post(url: &str) -> Result<(bool, String, u16, String)> {
+    let refused = || PlatformError::Invalid("only an http(s)://host[:port]/path address is posted to".into());
+    let (secure, rest) = match (url.strip_prefix("https://"), url.strip_prefix("http://")) {
+        (Some(rest), _) => (true, rest),
+        (None, Some(rest)) => (false, rest),
+        _ => return Err(refused()),
+    };
+    let end = rest.find(['/', '?']).unwrap_or(rest.len());
+    let (authority, path) = (&rest[..end], &rest[end..]);
+    let path = if path.is_empty() {
+        "/".to_string()
+    } else if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+    if authority.contains('@') || path.contains('#') {
+        return Err(refused());
+    }
+    let (host, port) = if let Some(inside) = authority.strip_prefix('[') {
+        let (address, after) = inside.split_once(']').ok_or_else(refused)?;
+        address.parse::<std::net::Ipv6Addr>().map_err(|_| refused())?;
+        (address.to_string(), after.strip_prefix(':'))
+    } else {
+        match authority.rsplit_once(':') {
+            Some((host, port)) => (host.to_ascii_lowercase(), Some(port)),
+            None => (authority.to_ascii_lowercase(), None),
+        }
+    };
+    let named = !host.is_empty() && host.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':'));
+    if !named {
+        return Err(refused());
+    }
+    let port = match port {
+        Some(port) => port.parse::<u16>().ok().filter(|p| *p != 0).ok_or_else(refused)?,
+        None if secure => INTERNET_DEFAULT_HTTPS_PORT,
+        None => 80,
+    };
+    Ok((secure, host, port, path))
+}
+
+/// mighty-platform's `HttpsSend` on Windows: [`get`] for an `https://` URL on port 443; [`post`] for the push's relay route.
 #[derive(Debug, Default)]
 pub struct WinHttpGet;
 
-impl mighty_platform::HttpsGet for WinHttpGet {
+impl mighty_platform::HttpsSend for WinHttpGet {
     fn get(&self, request: mighty_platform::http::HttpsRequest, max_body: usize) -> BoxFuture<'_, Result<HttpsResponse>> {
         Box::pin(async move {
             let (host, path_and_query) = split(&request.url)?;
             get(HttpsRequest { host, path_and_query, headers: request.headers, timeout: request.timeout }, max_body).await
+        })
+    }
+
+    /// The push's POST over WinHTTP (C# `MobilePushTransport`: 15 s, no redirect, no cookies, the system proxy): the status and
+    /// `Retry-After` of any answer, a 3xx never followed.
+    fn post(&self, request: mighty_platform::http::HttpsRequest, body: Vec<u8>, max_body: usize) -> BoxFuture<'_, Result<HttpsResponse>> {
+        Box::pin(async move {
+            let (secure, host, port, path_and_query) = split_post(&request.url)?;
+            let request = HttpsRequest { host, path_and_query, headers: request.headers, timeout: request.timeout };
+            post(request, secure, port, body, max_body).await
         })
     }
 }
@@ -298,6 +375,24 @@ mod tests {
             assert!(split(bad).is_err(), "{bad}");
         }
         assert_eq!(split("https://xn--bcher-kva.example/x").unwrap().0, "xn--bcher-kva.example", "a punycode name is a name");
+    }
+
+    /// The push's route: `https://` or `http://`, any port, a name or an address; nothing that could carry credentials or a fragment.
+    #[test]
+    fn a_push_route_is_split_as_posted() {
+        let split = |url: &str| split_post(url).unwrap();
+        assert_eq!(
+            split("https://relay.example.invalid/push/v1/send"),
+            (true, "relay.example.invalid".into(), 443, "/push/v1/send".into())
+        );
+        assert_eq!(split("http://127.0.0.1:8787/push/v1/send"), (false, "127.0.0.1".into(), 8787, "/push/v1/send".into()));
+        assert_eq!(split("http://[::1]:9/x"), (false, "::1".into(), 9, "/x".into()));
+        for bad in ["ftp://x/y", "https://user@x/y", "https://x/y#z", "https://x:0/y", "https://x:99999/y", "https:///y", "https://a b/y"] {
+            assert!(split_post(bad).is_err(), "{bad}");
+        }
+        // Review L5: an IPv6 relay's route passes the request's checks; any other host with a colon does not.
+        assert!(validate(&request("::1", "/push/v1/send", &[])).is_ok() && validate(&request("fd7a:115c:a1e0::1", "/x", &[])).is_ok());
+        assert!(validate(&request("x:1", "/x", &[])).is_err());
     }
 
     /// Review C11: the whole request is given up on once its timeout passes, however long the blocking side would take.

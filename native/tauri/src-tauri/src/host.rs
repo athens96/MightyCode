@@ -335,6 +335,19 @@ impl Host {
         lock(&self.store).approve_local(path)
     }
 
+    /// C# `StateStore.ApproveRemote`: a workspace another computer shares, as one a save may write (W8-D, remote.rs); None when its
+    /// names are not ones the store keeps.
+    pub fn approve_remote(
+        &self,
+        connection_id: &str,
+        workspace_id: &str,
+        name: &str,
+        path: &str,
+        host_name: &str,
+    ) -> Option<mighty_core::model::Workspace> {
+        lock(&self.store).approve_remote(connection_id, workspace_id, name, path, host_name)
+    }
+
     /// Whether the app may write its profile (`--allow-state-write`, as main.rs parsed it into the store).
     pub fn writes(&self) -> bool {
         lock(&self.store).writes()
@@ -362,6 +375,23 @@ impl Host {
             && path.is_absolute()
             && !path.components().any(|part| matches!(part, std::path::Component::ParentDir))
             && path.starts_with(&self.data_dir)
+    }
+
+    /// W8 (plan §4, D3): whether the app may open a listener — the phone's direct path (43139) and remote sharing (43137), on
+    /// Tailscale addresses only — and change the firewall rule on the user's click. With `--allow-state-write` outside a smoke (as
+    /// [`Host::may_change_machine`]); a smoke binds loopback port 0 inside the process only, through the fake network.
+    #[allow(dead_code, reason = "a seam W8-C (the direct listener, the firewall) and W8-D (remote sharing's Start) call")]
+    pub fn may_listen(&self) -> bool {
+        self.may_change_machine()
+    }
+
+    /// W8 (plan §4, D2, R1): whether the app may reach the phone relay — its control and data sockets, push — and write the pairing
+    /// identity (the first identity, `Touch`, push registrations, rotation). With `--allow-state-write` outside a smoke (as
+    /// [`Host::may_change_machine`]): the profile's host token would supersede the C# app's relay socket. A smoke uses the in-process
+    /// fake relay on loopback only, never a real relay or push server.
+    #[allow(dead_code, reason = "a seam W8-A (the relay link, push, identity writes) calls")]
+    pub fn may_reach_relay(&self) -> bool {
+        self.may_change_machine()
     }
 
     /// W7 (plan section 4): whether delegation acts — attaches its server to a run, makes a worktree on the second send, merges, undoes,
@@ -409,6 +439,8 @@ impl Host {
 
     /// One event of the run service (C# `RunEventReceived`, `ToolPermissionChanged`, the save queue).
     pub fn service_event(self: &Arc<Self>, event: ServiceEvent) {
+        // What the phone's push hub follows (mobile.rs, W8-A), read before the event is consumed.
+        let push = crate::mobile::push_note(&event);
         match event {
             ServiceEvent::Run { event, .. } => {
                 let drain = {
@@ -458,6 +490,9 @@ impl Host {
                 }
             }
         }
+        // Something a phone may show moved (phone.rs, W8-B: the router's `Changed`; mobile.rs, W8-A: the push hub), outside the view's lock.
+        crate::mobile::noted(self, push);
+        crate::phone::changed(self);
     }
 
     /// Posts a message whatever the page's state (a call's result).
@@ -502,7 +537,9 @@ impl Host {
     pub fn shell_model(&self, view: &mut View) -> ShellModel {
         let empty_attention: HashMap<String, Attention> = HashMap::new();
         let empty_git: HashMap<String, WorkspaceGitInfo> = HashMap::new();
-        let empty_remote: HashMap<String, RemoteConnection> = HashMap::new();
+        // The remote workspaces' connections (remote.rs, W8-D) and the companion's controls (companion.rs, W8-E), read with the state locked.
+        let remote: HashMap<String, RemoteConnection> = crate::remote::connections(self);
+        let companion = crate::companion::frame_model(self);
         let View { snapshot, layout_defaults, shows_dashboard, dialog_open, error, git, .. } = view;
         let active_git =
             active_git_key(snapshot).and_then(|key| git.as_ref().filter(|(k, _)| *k == key).and_then(|(_, info)| info.as_ref()));
@@ -528,8 +565,9 @@ impl Host {
             runtime: Runtime::Known,
             setup_badge: setup.badge,
             setup_needed: setup.needed,
-            remote: &empty_remote,
+            remote: &remote,
             usage: usage.as_ref(),
+            companion: companion.as_ref(),
         };
         shell_model(snapshot, &context, layout_defaults)
     }

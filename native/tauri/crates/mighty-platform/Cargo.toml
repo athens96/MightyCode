@@ -9,6 +9,16 @@ rust-version.workspace = true
 
 [dependencies]
 tokio = { workspace = true, features = ["sync", "io-util", "time", "macros"] }
+# W8: the pet's display list is serialized for its snapshots (pet.rs, W8-E); the phone identity's codec reads and writes JSON and the
+# relay secret's base64 (pairing/identity_file.rs, W8-A).
+serde.workspace = true
+serde_json.workspace = true
+base64 = "0.22"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["sync", "io-util", "time", "rt", "macros"] }
+
+# W8 Step 0 lists the parts' dependencies (serde_json and base64 for W8-A's identity codec) before their code uses them; this table goes
+# once every one is used.
+[lints.cargo]
+unused_dependencies = "allow"

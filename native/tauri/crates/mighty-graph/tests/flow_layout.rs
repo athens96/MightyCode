@@ -531,7 +531,7 @@ fn the_camera_follows_the_return_node_and_then_the_result() {
 }
 
 /// "flow fan-out: a shown run carries what only the flow draws, and every other view reads what it read" (AShownRunCarriesWhatOnlyTheFlowDraws).
-/// Its last check reads the phone's blocks (`MobileMightySupport.Blocks`), the phone's (crates/mighty-graph/DEFERRED.md).
+/// Its last check reads the phone's blocks (`MobileMightySupport.Blocks`, `view::mobile`).
 #[test]
 fn a_shown_run_carries_what_only_the_flow_draws() {
     let ko = ko();
@@ -595,6 +595,7 @@ fn a_shown_run_carries_what_only_the_flow_draws() {
     check(notice::awaiting_notice(&runs[0], &runs, &ko).is_some(), "awaiting its notice");
     same(timeline::groups(std::slice::from_ref(&status), &ko)[0].rows.len(), 2, "the timeline leaves the block out");
     same(structure::clusters(&status, &ko).len(), 0, "so does the pipeline");
+    same(mighty_graph::view::mobile::blocks(&status, 1, None, None, None, &[], &ko).len(), 1, "and the phone");
 }
 
 /// "flow fan-out: the row holds cards and blocks in launch order" (TheFanOutRowHoldsCardsAndBlocks).

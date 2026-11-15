@@ -12,7 +12,7 @@
 //! takes out when it ends, the card back with the reason when the continuation cannot start.
 //!
 //! Delegation (W7) hears every run's start and end and every closed pane through [`DelegationRunHooks`]; its ledger, merges and
-//! notices are mighty-delegation's. Until their stages: a remote workspace's runs go through a [`RemoteRunner`] (W8); the file
+//! notices are mighty-delegation's. A remote workspace's runs go through a [`RemoteRunner`] (C# DesktopService.Remote.cs, W8-D); the file
 //! originals' pruning (W4), the style's own tool permissions (W6) and the known-session list (W4: [`ServiceEvent::RememberSession`]
 //! hands the id to the host) are not here.
 
@@ -75,9 +75,23 @@ pub enum PaneSave {
     Later,
 }
 
-/// Another computer's runs, for a remote workspace's panes (C# `RemoteClientService`, W8).
+/// Where a remote runner hands its runs' events and tool requests (C# `AttachRemote`'s `Receive` and `ToolPermissionChanged`): they arrive
+/// as a local run's do. Called from the runner's tasks while it applies a poll: each takes the service's lock briefly and never waits.
+#[derive(Clone)]
+pub struct RemoteSinks {
+    pub event: Arc<dyn Fn(RunEvent) + Send + Sync>,
+    pub permission: Arc<dyn Fn(ToolPermissionRequest) + Send + Sync>,
+}
+
+/// Another computer's runs, for a remote workspace's panes (C# `RemoteClientService`, W8-D's `RemoteClient`).
 pub trait RemoteRunner: Send + Sync {
-    fn start(&self, request: StartRunRequest, workspace: Workspace) -> BoxFuture<'_, Result<bool>>;
+    /// Called once, as the service is made, with where the runs' events and tool requests go.
+    fn attach(&self, sinks: RemoteSinks);
+    /// C# `EnsureConnectedAsync` and `StartRemoteAsync`'s check: connected now (reconnecting first when it is not; the first send after
+    /// launch reads the key from the vault), on a connection that still shares the workspace (else `remote.workspace.error.notShared`).
+    fn connect(&self, workspace: Workspace) -> BoxFuture<'_, Result<()>>;
+    /// C# `StartAsync(request, workspace)`: the host took the run (Ok), or it was stopped before (`RunError::Cancelled`).
+    fn start(&self, request: StartRunRequest, workspace: Workspace) -> BoxFuture<'_, Result<()>>;
     fn stop(&self, session_id: String) -> BoxFuture<'_, Result<()>>;
     fn respond_to_tool_permission(&self, session_id: String, request_id: String, allow: bool) -> BoxFuture<'_, Result<()>>;
     fn answer_questions(
@@ -88,6 +102,8 @@ pub trait RemoteRunner: Send + Sync {
     ) -> BoxFuture<'_, Result<()>>;
     fn answer_plan(&self, session_id: String, request_id: String, decision: PlanDecision) -> BoxFuture<'_, Result<()>>;
     fn is_running(&self, session_id: &str) -> bool;
+    /// C# `DisposeAsync`: the app quits; every run stops, on the host too.
+    fn dispose(&self) -> BoxFuture<'_, ()>;
 }
 
 /// What `Receive` learnt under the lock, for what follows it outside.
@@ -302,6 +318,14 @@ impl RunService {
             manager_options.permission_requested = Some(Arc::new(move |value| permissions.tool_permission(value)));
         }
         manager_options.binding = options.binding;
+        // C# `AttachRemote`: the client's events and tool requests arrive as a local run's do.
+        if let Some(remote) = &options.remote {
+            let (events, permissions) = (shared.clone(), shared.clone());
+            remote.attach(RemoteSinks {
+                event: Arc::new(move |value| events.receive(value)),
+                permission: Arc::new(move |value| permissions.tool_permission(value)),
+            });
+        }
         if let Some(configure) = options.configure {
             configure(&mut manager_options);
         }
@@ -426,10 +450,19 @@ impl RunService {
         lock(&self.shared.pending).get(session_id).map(|p| p.values().cloned().collect()).unwrap_or_default()
     }
 
+    /// C# `RemotePane`: the pane's run goes through the client: it runs there now, or its workspace is a remote one.
     fn remote_pane(&self, session_id: &str) -> bool {
+        if self.remote.as_ref().is_some_and(|r| r.is_running(session_id)) {
+            return true;
+        }
         let state = lock(&self.shared.state);
         let snapshot = &state.snapshot;
         snapshot.session(session_id).and_then(|s| snapshot.workspace(s.workspace_id())).is_some_and(|w| w.remote.is_some())
+    }
+
+    /// C# `ResolveSharedAsync` (a sharing host's `ResolveLocal`): a registered local workspace whose folder exists, or why not.
+    pub fn resolve_shared(&self, id: &str) -> std::result::Result<Workspace, String> {
+        resolve_local(&self.shared, id).map_err(|e| e.to_string())
     }
 
     /// Whether a pane of this computer runs `provider`'s CLI now (`HasActiveProvider`).
@@ -467,6 +500,7 @@ impl RunService {
         let workspace;
         let remote;
         let run_id;
+        let holder;
         {
             let mut state = lock(&self.shared.state);
             if state.closing {
@@ -499,7 +533,8 @@ impl RunService {
             if state.routes.contains_key(&request.session_id) {
                 return Err(RunError::State(strings::get("run.error.alreadyRunning")));
             }
-            state.routes.insert(request.session_id.clone(), Route { holder: antigravity::next_holder(), ..Route::default() });
+            holder = antigravity::next_holder();
+            state.routes.insert(request.session_id.clone(), Route { holder, ..Route::default() });
             // After the route is added, as C# `DelegationRunBegan(pane)`: a child's run is recorded running before anything else of it.
             run_id = match &self.shared.delegation {
                 Some(hooks) => hooks.began(&pane),
@@ -576,10 +611,8 @@ impl RunService {
                         Ok(admitted) => admitted.reached().await.map(Some),
                         Err(error) => Err(error),
                     },
-                    None => match &self.remote {
-                        Some(runner) => runner.start(request.clone(), workspace).await.map(|reached| reached.then_some(())),
-                        None => Err(RunError::State(strings::get("run.error.approvedWorkspaceOnly"))),
-                    },
+                    // A remote workspace's run goes to its host through the client, never to this PC's runner, and never under the lock.
+                    None => return self.launch_remote(request, workspace, run_id, holder).await,
                 }
             }
         };
@@ -602,6 +635,106 @@ impl RunService {
         }
     }
 
+    /// The rest of `Launch` for a remote pane: its last word is said only while the route is still its own (a stop already ended it, and
+    /// a newer send's route is never ended here).
+    async fn launch_remote(&self, request: StartRunRequest, workspace: Workspace, run_id: String, holder: u64) -> Result<Option<String>> {
+        let session_id = request.session_id.clone();
+        match self.start_remote(&request, workspace, holder).await {
+            Ok(true) => Ok(Some(run_id)),
+            // Stopped before the host took it; the client's stop may already have ended it, and a newer send may have begun.
+            Ok(false) => {
+                self.say_if_owned(&session_id, holder, vec![RunEvent::state(&session_id, "stopped", None)]);
+                Ok(None)
+            }
+            Err(RunError::Cancelled(message)) => {
+                self.say_if_owned(&session_id, holder, vec![RunEvent::state(&session_id, "stopped", None)]);
+                Err(RunError::Cancelled(message))
+            }
+            Err(error) => {
+                self.say_if_owned(
+                    &session_id,
+                    holder,
+                    vec![RunEvent::log(&session_id, "error", error.message(), None), RunEvent::state(&session_id, "error", None)],
+                );
+                self.shared.continuation_failed(&request, error.message());
+                Err(error)
+            }
+        }
+    }
+
+    /// C# `StartRemoteAsync`: connected first, on a connection that still shares the workspace, unless stopped meanwhile. False when a
+    /// stop came before the host took it; with attachments that is a cancellation instead, as a local start's is, so the caller keeps them.
+    async fn start_remote(&self, request: &StartRunRequest, workspace: Workspace, holder: u64) -> Result<bool> {
+        let Some(client) = &self.remote else { return Err(RunError::State(strings::get("remote.run.error.notConnected"))) };
+        client.connect(workspace.clone()).await?;
+        let cancelled =
+            |state: &State| state.closing || state.routes.get(&request.session_id).is_none_or(|r| r.holder != holder || r.cancelled);
+        let started = if cancelled(&lock(&self.shared.state)) {
+            Err(RunError::Cancelled(String::new()))
+        } else {
+            client.start(request.clone(), workspace).await
+        };
+        match started {
+            Ok(()) => {}
+            Err(RunError::Cancelled(_)) => {
+                if request.attachment_list().is_some() {
+                    return Err(RunError::Cancelled(strings::get("run.error.attachmentSendCancelled")));
+                }
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        }
+        // A stop that came after the check above but before the client listed the run found nothing to stop there: it is stopped now.
+        if cancelled(&lock(&self.shared.state)) {
+            let _ = client.stop(request.session_id.clone()).await;
+        }
+        Ok(true)
+    }
+
+    /// C# `SayIfOwned`: `events` applied only while route `holder` is still the pane's, checked and applied under one lock.
+    fn say_if_owned(&self, session_id: &str, holder: u64, events: Vec<RunEvent>) {
+        let mut received = vec![];
+        {
+            let mut state = lock(&self.shared.state);
+            if state.routes.get(session_id).is_none_or(|r| r.holder != holder) {
+                return;
+            }
+            for value in events {
+                let applied = self.shared.receive_locked(&mut state, &value);
+                received.push((value, applied));
+            }
+        }
+        for (value, applied) in received {
+            self.shared.after_receive(value, applied);
+        }
+    }
+
+    /// C# `AnswerRemote`: an answer to a remote pane's request goes out without holding the caller. Only an answer that failed is said,
+    /// in the pane, and only while the run it was sent for is still the pane's.
+    fn answer_remote(
+        &self,
+        session_id: &str,
+        answer: impl FnOnce(Arc<dyn RemoteRunner>) -> BoxFuture<'static, Result<()>> + Send + 'static,
+    ) {
+        let Some(client) = self.remote.clone() else { return };
+        let holder = lock(&self.shared.state).routes.get(session_id).map(|r| r.holder);
+        let shared = self.shared.clone();
+        let session_id = session_id.to_string();
+        tokio::spawn(async move {
+            if let (Err(error), Some(holder)) = (answer(client).await, holder) {
+                let event = RunEvent::log(&session_id, "error", error.message(), None);
+                let received = {
+                    let mut state = lock(&shared.state);
+                    if state.routes.get(&session_id).is_none_or(|r| r.holder != holder) {
+                        return;
+                    }
+                    shared.receive_locked(&mut state, &event)
+                };
+                shared.after_receive(event, received);
+            }
+        });
+    }
+
     /// `StopAsync`: a route not started yet is marked, so its start stops; a started one is stopped by its runner.
     pub async fn stop(&self, id: &str) -> Result<()> {
         {
@@ -622,10 +755,12 @@ impl RunService {
 
     /// `RespondToToolPermission`: 이번만 허용 / 거부, the only way a request is ever answered.
     pub async fn respond_to_tool_permission(&self, session_id: &str, request_id: &str, allow: bool) -> Result<()> {
-        if self.remote_pane(session_id)
-            && let Some(remote) = &self.remote
-        {
-            return remote.respond_to_tool_permission(session_id.into(), request_id.into(), allow).await;
+        if self.remote_pane(session_id) && self.remote.is_some() {
+            let (session, request) = (session_id.to_string(), request_id.to_string());
+            self.answer_remote(session_id, move |client| {
+                Box::pin(async move { client.respond_to_tool_permission(session, request, allow).await })
+            });
+            return Ok(());
         }
         self.manager.respond_to_tool_permission(session_id, request_id, allow)
     }
@@ -637,20 +772,19 @@ impl RunService {
         request_id: &str,
         answers: &IndexMap<String, UserQuestionAnswer>,
     ) -> Result<()> {
-        if self.remote_pane(session_id)
-            && let Some(remote) = &self.remote
-        {
-            return remote.answer_questions(session_id.into(), request_id.into(), answers.clone()).await;
+        if self.remote_pane(session_id) && self.remote.is_some() {
+            let (session, request, answers) = (session_id.to_string(), request_id.to_string(), answers.clone());
+            self.answer_remote(session_id, move |client| Box::pin(async move { client.answer_questions(session, request, answers).await }));
+            return Ok(());
         }
         self.manager.answer_questionnaire(session_id, request_id, answers)
     }
 
     /// `AnswerPlan`: None for a remote pane (its record comes back as the host's event).
     pub async fn answer_plan(&self, session_id: &str, request_id: &str, decision: &PlanDecision) -> Result<Option<PlanRecord>> {
-        if self.remote_pane(session_id)
-            && let Some(remote) = &self.remote
-        {
-            remote.answer_plan(session_id.into(), request_id.into(), decision.clone()).await?;
+        if self.remote_pane(session_id) && self.remote.is_some() {
+            let (session, request, decision) = (session_id.to_string(), request_id.to_string(), decision.clone());
+            self.answer_remote(session_id, move |client| Box::pin(async move { client.answer_plan(session, request, decision).await }));
             return Ok(None);
         }
         self.manager.answer_plan(session_id, request_id, decision).map(Some)
@@ -668,6 +802,10 @@ impl RunService {
     /// `DisposeAsync`'s run part: every run stopped, then one more save.
     pub async fn dispose(&self) {
         lock(&self.shared.state).closing = true;
+        // The client's runs stop first (C#: and whatever that does never keeps this PC's runs from shutting down).
+        if let Some(remote) = &self.remote {
+            remote.dispose().await;
+        }
         self.manager.dispose().await;
         self.release_antigravity_rules().await;
         self.shared.send(ServiceEvent::SaveNow);

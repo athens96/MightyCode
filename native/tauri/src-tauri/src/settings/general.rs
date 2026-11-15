@@ -61,7 +61,8 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// (a missing value is on).
 pub fn delegation_on(host: &Host) -> bool {
     let now = Instant::now();
-    if let Some(on) = lock(&DELEGATION).known(now) {
+    let known = lock(&DELEGATION).known(now);
+    if let Some(on) = known {
         return on;
     }
     if host.smoke.is_some() {

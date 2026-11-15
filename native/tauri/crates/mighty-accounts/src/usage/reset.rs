@@ -336,7 +336,7 @@ impl ClaudeResetEntitlements {
     /// failure here never changes the base usage. A transport failure ends the whole read, as C#'s exception does.
     pub async fn read(
         request: impl Fn(&str) -> Result<AccountUsageHttpRequest, AccountUsageFailure>,
-        http: &dyn super::HttpsGet,
+        http: &dyn super::HttpsSend,
         clock: &(dyn Fn() -> DateTime<Utc> + Send + Sync),
         deadline: Option<&ResetReadDeadlineBox>,
         shape_log: Option<&AccountUsageShapeLog>,

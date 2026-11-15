@@ -46,19 +46,23 @@ Still left (each needs more than the two crates' public rules, or a fixture the 
 | AgentNoticeVerification.cs:308 `ARecordedHandBackTurnSettlesTheAgentAsLive` (whole, with :280-296 `Replay`) | mighty-history tests/agent_notices.rs `agent_notices_a_recorded_hand_back_turn_settles_the_agent_as_live` |
 | AgentNoticeVerification.cs:338 `AQueuedHandBackSettlesTheAgentByItsName` (whole) | mighty-history tests/agent_notices.rs `agent_notices_a_queued_hand_back_settles_the_agent_by_its_name` |
 
-## The phone (W8)
+## The phone (W8) — ported in W8-B (2026-11-15)
 
-- `MobileMightySupport.Digest`: BackgroundNoticeRunsVerification.cs:163-179 (`TheRunRulesAndTheViews`), :304, 308, 310, 314, 329-333,
-  343-344 (`ARequestAwaitingNoticesIsTheAwaitingNoticeBlock`), :446-448 (`ANoticeRunReadsTheRequestsWaitingCount`).
-- `MobileMightySupport.Runs`: BackgroundNoticeRunsVerification.cs:214-221 (`ThePaneKeepsTheNoticeRunApart`), :293-297, 308, 314, 335-339
-  (`ARequestAwaitingNoticesIsTheAwaitingNoticeBlock`), :444 (`ANoticeRunReadsTheRequestsWaitingCount`).
-- `MobileMightySupport.Blocks`: FlowLayoutVerification.cs:259 (`AShownRunCarriesWhatOnlyTheFlowDraws`; its timeline and pipeline checks
-  are ported in tests/flow_layout.rs).
-- `PlanCardSupport.BackgroundStripRows`, `MobileBackgroundWork`, `MobileBackgroundDone`, `BackgroundStatus`, `BackgroundCounts`,
-  `ShowsBackgroundStrip`: BackgroundNoticeRunsVerification.cs:222-234, ResumedAgentVerification.cs:82, 88-91, 104.
-- `MobileDesktopRouter`: MobileStructureVerification.cs:158-203 `RouteSendsTheStructureOnlyWhenAskedAndChanged` (whole). The phone's
-  pipeline itself (`MobileStructure.Make`) is ported: tests/mobile_structure.rs, and its awaiting and title checks in
-  tests/background_notice_runs.rs.
+`view::mobile` holds C#'s `MobileMightySupport` (blocks, runs, both digests), the role view (`MobileFlow`) and the background strip's rows
+(`PlanCardSupport.BackgroundStripRows`, `MobileBackgroundWork`, `MobileBackgroundDone`); the m1 router is mighty-remote's `phone`.
+
+| C# check | Rust |
+|---|---|
+| BackgroundNoticeRunsVerification.cs:163-179 (`TheRunRulesAndTheViews`, the digest) | tests/background_notice_runs.rs `the_run_rules_and_the_views` (now whole) |
+| BackgroundNoticeRunsVerification.cs:214-234 (`ThePaneKeepsTheNoticeRunApart`, the phone's runs, the strip and backgroundWork) | tests/background_notice_runs.rs `the_pane_keeps_the_notice_run_apart` (now whole) |
+| BackgroundNoticeRunsVerification.cs:293-297, 304, 308-314, 329-344 (`ARequestAwaitingNoticesIsTheAwaitingNoticeBlock`, the phone's runs and digest) | tests/background_notice_runs.rs `a_request_awaiting_notices_is_the_awaiting_notice_block_on_the_phone` |
+| BackgroundNoticeRunsVerification.cs:444-448 (`ANoticeRunReadsTheRequestsWaitingCount`, the phone's counts) | tests/background_notice_runs.rs `a_notice_run_reads_the_requests_waiting_count_on_the_phone` |
+| FlowLayoutVerification.cs:259 (`AShownRunCarriesWhatOnlyTheFlowDraws`, the phone's blocks) | tests/flow_layout.rs `a_shown_run_carries_what_only_the_flow_draws` (now whole) |
+| MobileStructureVerification.cs:158-203 `RouteSendsTheStructureOnlyWhenAskedAndChanged` | mighty-remote tests/phone.rs `mobile_structure_sent_only_when_asked_and_changed_shed_first` |
+
+Still left: ResumedAgentVerification.cs:82, 88-91, 104 — the strip's rows (`background_strip_rows`, ported) and the queue policy's answers on
+the replayed pane: the replay of the recorded resumed agent is mighty-run's (tests/stream_parser.rs:540), which this crate's tests cannot
+feed the tracker from without that replay's harness; the check goes with the item "the queue policy's answers" above.
 
 ## The host (`src-tauri`, wired at the integration)
 

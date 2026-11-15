@@ -41,6 +41,10 @@ mod imp {
             notifier: Arc::new(Unsupported),
             firewall: Arc::new(Unsupported),
             updates: Arc::new(Unsupported),
+            // W8: the network (NWPathMonitor, getifaddrs, the utun listener), the proxy and the push's POST are the Mac stage's.
+            network: Arc::new(Unsupported),
+            proxy: Arc::new(Unsupported),
+            https: Arc::new(Unsupported),
         })
     }
 
@@ -193,7 +197,7 @@ mod imp {
     }
 
     /// The HTTPS GET of the account usage's direct lookup: not yet on the Mac (W6).
-    pub fn https_get() -> Arc<dyn mighty_platform::HttpsGet> {
+    pub fn https_get() -> Arc<dyn mighty_platform::HttpsSend> {
         Arc::new(Unsupported)
     }
 

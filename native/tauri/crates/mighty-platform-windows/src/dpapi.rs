@@ -213,11 +213,11 @@ fn transform(value: &[u8], entropy: &[u8], direction: Direction) -> Result<Vec<u
     bytes.ok_or(PlatformError::Refused("DPAPI output size".into()))
 }
 
-/// A copy of a SID.
-struct Sid(Vec<u8>);
+/// A copy of a SID (pairing.rs secures its folder with it too).
+pub(crate) struct Sid(Vec<u8>);
 
 impl Sid {
-    fn current_user() -> Result<Sid> {
+    pub(crate) fn current_user() -> Result<Sid> {
         let mut token: HANDLE = null_mut();
         // SAFETY: the token handle is closed below; the buffer is u64-aligned for TOKEN_USER and sized by the first call.
         unsafe {
@@ -252,7 +252,7 @@ fn win32(code: u32, what: &str) -> Result<()> {
 }
 
 /// Owner this user, the access list this user alone with full control, protected from inheritance (C# `UserOnly`).
-fn user_only(folder: &Path, user: &Sid) -> Result<()> {
+pub(crate) fn user_only(folder: &Path, user: &Sid) -> Result<()> {
     let access = EXPLICIT_ACCESS_W {
         grfAccessPermissions: FULL_CONTROL,
         grfAccessMode: SET_ACCESS,
@@ -284,7 +284,7 @@ fn user_only(folder: &Path, user: &Sid) -> Result<()> {
     }
 }
 
-fn owned_by(folder: &Path, user: &Sid) -> Result<bool> {
+pub(crate) fn owned_by(folder: &Path, user: &Sid) -> Result<bool> {
     let path = wide(folder);
     let mut owner: PSID = null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();

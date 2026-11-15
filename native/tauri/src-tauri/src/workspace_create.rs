@@ -153,7 +153,8 @@ impl GitTool {
     /// C# `SshCommandAsync`: `git config --get core.sshCommand` from home (no workspace's repository read); only a look-up that
     /// finished (set, or exit 1: not set) is kept.
     async fn ssh_command(&self) -> Option<String> {
-        if let Some(known) = self.ssh_command.lock().unwrap_or_else(|p| p.into_inner()).clone() {
+        let known = self.ssh_command.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(known) = known {
             return known;
         }
         let git = self.git.clone()?;
@@ -668,7 +669,8 @@ pub fn register(methods: &mut Registry) {
         // One check at a time: a newer address stops the older one, whose call answers `cancelled`.
         let state = create(&host);
         let cancel = Cancel::new();
-        if let Some(older) = state.probe.lock().unwrap_or_else(|p| p.into_inner()).replace(cancel.clone()) {
+        let older = state.probe.lock().unwrap_or_else(|p| p.into_inner()).replace(cancel.clone());
+        if let Some(older) = older {
             older.cancel();
         }
         let found = git(&host).probe(text(&args, "url").unwrap_or(""), &cancel, &host.locale).await;

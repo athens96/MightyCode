@@ -17,8 +17,8 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufR
 use super::reset::SHARED_DEADLINE;
 use super::{
     AccountUsageFailure, AccountUsageFailureKind, AccountUsageHttpResponse, AccountUsageShapeLog, AccountUsageSnapshot, AccountUsageWindow,
-    ClaudeQuotaCredential, ClaudeResetEntitlements, Guarded, HttpFailure, HttpsGet, HttpsRequest, MAXIMUM_BODY_BYTES, ResetReadDeadlineBox,
-    UsageError, UsageProbe, copy, credential_file, endpoint, number, reset, retry_interval, send, text,
+    ClaudeQuotaCredential, ClaudeResetEntitlements, Guarded, HttpFailure, HttpsRequest, HttpsSend, MAXIMUM_BODY_BYTES,
+    ResetReadDeadlineBox, UsageError, UsageProbe, copy, credential_file, endpoint, number, reset, retry_interval, send, text,
 };
 
 fn failure(kind: AccountUsageFailureKind, detail: String) -> UsageError {
@@ -131,7 +131,7 @@ impl ClaudeAccountProbe {
     pub async fn read(
         environment: &BTreeMap<String, String>,
         load: impl FnOnce() -> Option<ClaudeQuotaCredential>,
-        http: &dyn HttpsGet,
+        http: &dyn HttpsSend,
         clock: &(dyn Fn() -> DateTime<Utc> + Send + Sync),
         reset_deadline: Option<&ResetReadDeadlineBox>,
         shape_log: Option<&AccountUsageShapeLog>,
@@ -573,7 +573,7 @@ pub struct RuntimeProbe {
     pub home: Arc<dyn Fn() -> String + Send + Sync>,
     pub working_directory: PathBuf,
     pub processes: Arc<dyn ProcessHost>,
-    pub http: Arc<dyn HttpsGet>,
+    pub http: Arc<dyn HttpsSend>,
 }
 
 /// [`RuntimeProbe`] as the service's probe.

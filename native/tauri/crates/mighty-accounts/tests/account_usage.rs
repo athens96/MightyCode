@@ -15,7 +15,7 @@ use mighty_accounts::usage::{
     self, AccountResetEntitlement, AccountUsageFailure, AccountUsageFailureKind, AccountUsageHttpRequest, AccountUsageHttpResponse,
     AccountUsageService, AccountUsageShapeLog, AccountUsageSmokeOutcome, AccountUsageSnapshot, AccountUsageStatus, AccountUsageStdio,
     AccountUsageWindow, AntigravityAccountProbe, ClaudeAccountProbe, ClaudeQuotaCredential, ClaudeResetEntitlements, Clock,
-    CodexAccountProbe, Guarded, HttpFn, HttpsGet, ResetProgram, ResetReadDeadlineBox, ResetState, RuntimeProbe, UsageError, UsageProbe,
+    CodexAccountProbe, Guarded, HttpFn, HttpsSend, ResetProgram, ResetReadDeadlineBox, ResetState, RuntimeProbe, UsageError, UsageProbe,
     claude_reset_smoke, copy, credential_file, header, response,
 };
 use mighty_core::json::Wire;
@@ -83,7 +83,7 @@ fn answers(
 fn read_claude<'a>(
     environment: &'a std::collections::BTreeMap<String, String>,
     load: impl FnOnce() -> Option<ClaudeQuotaCredential> + Send + 'a,
-    http: &'a dyn HttpsGet,
+    http: &'a dyn HttpsSend,
     at: DateTime<Utc>,
     deadline: &'a ResetReadDeadlineBox,
     log: Option<&'a AccountUsageShapeLog>,
@@ -820,7 +820,7 @@ fn scenarios() -> Vec<Scenario> {
     ]
 }
 
-fn scenario_http(scenario: &Scenario, posts: Arc<AtomicUsize>) -> impl HttpsGet + use<> {
+fn scenario_http(scenario: &Scenario, posts: Arc<AtomicUsize>) -> impl HttpsSend + use<> {
     let (cedar, juniper) = (scenario.cedar.clone(), scenario.juniper.clone());
     HttpFn(move |request: &AccountUsageHttpRequest| {
         guarded(request)?;

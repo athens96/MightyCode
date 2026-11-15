@@ -9,6 +9,7 @@
 //! the pictures, the background executions, the background output tails, the custom agents' definitions, the model catalogue) as plain
 //! inputs ([`Sources`]).
 
+pub mod mobile;
 mod project;
 
 use std::collections::{HashMap, HashSet};

@@ -67,6 +67,33 @@ pub fn remove_refusal(item_id: &str, held: &[DelegationDeliveryItem]) -> Option<
     held.iter().any(|item| item.id == item_id).then_some(DelegationReasonCode::HeldNotRemovable)
 }
 
+/// One row of the phone's `queued` array (C# `MobileQueuedItem(Id, Text, RunNow?, RunNowReason?)`; mighty-remote's
+/// `phone::desk::MobileQueuedItem` is the wire record): `run_now` and `run_now_reason` from `QueueRunNow.Wire`, both None when the row
+/// has no button.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MobileQueuedRow {
+    pub id: String,
+    pub text: String,
+    pub run_now: Option<&'static str>,
+    pub run_now_reason: Option<&'static str>,
+}
+
+/// `DelegationQueueRows.MobileItems` (M/DelegationDelivery.swift:31-52): the pane's rows in the phone's `queued` array, the items held
+/// for it first (oldest first, as they run first), then the human's queued requests. `run_now`: what 바로 실행 does on the row with that
+/// id; without it, or for `Hidden`, the row carries no `runNow`.
+pub fn mobile_items(
+    held: &[DelegationDeliveryItem],
+    queued: &[mighty_composer::queue::QueuedComposerInput],
+    run_now: Option<&dyn Fn(&str) -> mighty_composer::queue::QueueRunNowPath>,
+) -> Vec<MobileQueuedRow> {
+    let item = |id: &str, text: &str| {
+        let path = run_now.map_or(mighty_composer::queue::QueueRunNowPath::Hidden, |f| f(id));
+        let wire = path.wire();
+        MobileQueuedRow { id: id.into(), text: text.into(), run_now: wire.map(|w| w.0), run_now_reason: wire.and_then(|w| w.1) }
+    };
+    held.iter().map(|h| item(&h.id, &h.text)).chain(queued.iter().map(|q| item(&q.id, &q.text))).collect()
+}
+
 /// `ChildWorktree.ReportFileIn` (W7-B's): `<worktree>/.mighty-delegation/REPORT.md`, where a child writes its report.
 pub use crate::git::worktree::report_file_in;
 

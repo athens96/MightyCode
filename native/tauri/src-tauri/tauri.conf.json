@@ -16,6 +16,7 @@
   },
   "bundle": {
     "active": false,
+    "resources": { "../../../assets/pets/": "pets/" },
     "icon": ["../../../assets/icons/MightyCode.ico", "../../../assets/icons/mightycode.png", "../../../assets/icons/MightyCode.icns"]
   }
 }

@@ -67,7 +67,7 @@ fn probe(host: &Host) -> usage::UsageProbe {
 /// the usage. None yet: refused, so nothing leaves.
 struct AppHttps(tauri::AppHandle);
 
-impl mighty_platform::HttpsGet for AppHttps {
+impl mighty_platform::HttpsSend for AppHttps {
     fn get(
         &self,
         request: mighty_platform::http::HttpsRequest,

@@ -46,6 +46,7 @@ impl Window {
             setup_needed: false,
             remote: &self.remote,
             usage: None,
+            companion: None,
         }
     }
 }

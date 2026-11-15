@@ -19,6 +19,8 @@
 //                        Writes the pane as Wire.Json saves it, and the answers the CLI received (mighty-run tests/service.rs).
 //   delegation <in> <out>  W7-A's (Delegation.cs)
 //   agent-io <in> <out>    W7-C's (AgentIo.cs)
+//   push <in> <out>, pairing-url <in> <out>, routes <profile> <requests> <out>  W8-A's and W8-B's (Phone.cs)
+//   remote <in> <out>      W8-D's (Remote.cs)
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -57,6 +59,10 @@ internal static class Program
             case "composer": return ComposerParity.Run(args[1], args[2]);
             case "delegation": return DelegationParity.Run(args[1], args[2]);
             case "agent-io": return AgentIoParity.Run(args[1], args[2]);
+            case "push": return PhoneParity.Push(args[1], args[2]);
+            case "pairing-url": return PhoneParity.PairingUrl(args[1], args[2]);
+            case "routes": return PhoneParity.Routes(args[1], args[2], args[3]);
+            case "remote": return RemoteParity.Run(args[1], args[2]);
             case "run-replay": return await RunReplay(args[1], args[2], args[3], args[4]);
             default: Console.Error.WriteLine("unknown command " + args[0]); return 2;
         }
