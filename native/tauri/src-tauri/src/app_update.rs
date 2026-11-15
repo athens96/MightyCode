@@ -677,11 +677,25 @@ pub fn launch_helper(processes: &dyn ProcessHost, locale: &Locale, plan: &Instal
             environment: DetachedEnvironment::Exactly(environment),
             hidden: true,
         })
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| match error {
+            // A refusal says why (W9-B: a job that forbids breakaway refuses rather than start a helper the job would kill).
+            mighty_platform::PlatformError::Refused(reason) => sentence(&reason),
+            other => other.to_string(),
+        })?;
     if plan.relaunch {
         quit();
     }
     Ok(())
+}
+
+/// A platform's reason as a sentence: its first letter upper case, a full stop at its end.
+fn sentence(reason: &str) -> String {
+    let mut chars = reason.trim().chars();
+    let mut words: String = chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default();
+    if !words.ends_with('.') {
+        words.push('.');
+    }
+    words
 }
 
 /// The install folder: the exe's own (C# `AppContext.BaseDirectory`).

@@ -196,22 +196,31 @@ async fn the_loop_checks_when_due_then_waits_six_hours_and_stops_with_the_switch
 
 /// The loop runs only where the build may change the machine and verifies manifests it knows the address of (plan §4): a read-only
 /// or development launch, a build without the key or no address never checks, and the box's press does nothing where the build may not
-/// change the machine.
+/// change the machine; with `appUpdateAutoCheck` off nothing checks or installs on its own (the rehearsal relies on it).
 #[tokio::test(start_paused = true)]
 async fn nothing_checks_where_the_build_may_not_or_cannot() {
     local(async {
-        for (allowed, key, url) in [(false, true, true), (true, false, true), (true, true, false)] {
+        for (allowed, key, url, automatic) in
+            [(false, true, true, true), (true, false, true, true), (true, true, false, true), (true, true, true, false)]
+        {
             let rig = rig(allowed, key);
             rig.set(|s| {
-                s.automatic = true;
+                s.automatic = automatic;
                 s.url = url.then(|| MANIFEST.into());
             });
             rig.send(|core| core.begin());
             settle().await;
             pass(auto::CHECK_INTERVAL).await;
+            assert_eq!(rig.asks(MANIFEST), 0, "allowed {allowed}, key {key}, address {url}, automatic {automatic}");
+            if !automatic {
+                // `appUpdateAutoCheck` off (C#): no loop, no check, no install on quit; the phone still reads the state.
+                assert!(rig.core.next_tick().is_none() && rig.core.phone_read().is_some());
+                rig.core.coordinator.show_for_smoke(rig.ready());
+                assert!(!rig.core.quit(false) && lock(&rig.launches).is_empty());
+                continue;
+            }
             assert!(!rig.core.can_run_automatically());
             assert!(rig.core.phone_read().is_none(), "the phone's 409 stays");
-            assert_eq!(rig.asks(MANIFEST), 0, "allowed {allowed}, key {key}, address {url}");
             if !allowed {
                 rig.core.clone().press().await;
                 assert_eq!(rig.asks(MANIFEST), 0, "the press waits for a build that may change the machine");
@@ -469,7 +478,11 @@ fn the_helper_starts_detached_from_the_stage_with_only_system_root() {
     assert_eq!(launch_helper(&processes, &locale, &plan, &quit), Ok(()));
     assert_eq!(quits.load(Ordering::SeqCst), 1, "an install on quit is already quitting");
     processes.refuse_detached(true);
-    assert!(launch_helper(&processes, &locale, &plan, &quit).is_err_and(|words| !words.is_empty()));
+    assert_eq!(
+        launch_helper(&processes, &locale, &plan, &quit),
+        Err("The job does not allow breakaway.".to_string()),
+        "the refusal says why"
+    );
 
     let staged = folder.join("staged");
     assert!(inside_stage(&staged.join("MightyCode.exe"), &staged));
