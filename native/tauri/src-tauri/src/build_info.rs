@@ -11,18 +11,18 @@ const PUBLIC_KEY_TEXT: &str = env!("MIGHTY_BUILD_UPDATE_PUBLIC_KEY");
 /// The stamped manifest address (an https address with a host; build.rs checked it), empty without one.
 const MANIFEST_URL_TEXT: &str = env!("MIGHTY_BUILD_UPDATE_URL");
 
-/// The update's public key (C# `AppUpdateBuild.PublicKey`), None in a build without one.
+/// The update's public key (C# `AppUpdateBuild.PublicKey`), None in a build without one: the stamp read by mighty-updates'
+/// `build::public_key` (C#'s `Decode`), the same reading the coordinator and the "no public key" box use, so they never differ.
 #[allow(dead_code, reason = "app_update.rs (W9-C) hands it to mighty-updates' coordinator")]
 pub fn public_key() -> Option<[u8; 32]> {
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(PUBLIC_KEY_TEXT).ok()?;
-    bytes.try_into().ok()
+    mighty_updates::app_update::build::public_key(Some(PUBLIC_KEY_TEXT))
 }
 
-/// The built-in manifest address (C# `AppUpdateBuild.ManifestUrl`), None in a build without one.
+/// The built-in manifest address (C# `AppUpdateBuild.ManifestUrl`), None in a build without one: the stamp as mighty-updates'
+/// `build::manifest_url` accepts it.
 #[allow(dead_code, reason = "app_update.rs (W9-C) hands it to mighty-updates' coordinator")]
 pub fn manifest_url() -> Option<&'static str> {
-    (!MANIFEST_URL_TEXT.is_empty()).then_some(MANIFEST_URL_TEXT)
+    mighty_updates::app_update::build::manifest_url(Some(MANIFEST_URL_TEXT)).map(|_| MANIFEST_URL_TEXT)
 }
 
 #[cfg(test)]
