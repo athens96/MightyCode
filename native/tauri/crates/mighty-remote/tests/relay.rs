@@ -765,3 +765,34 @@ async fn the_fake_relay_refuses_a_bad_query_as_the_relay_does() {
     assert_eq!(relay.refused(), vec![4400, 4401]);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
+
+/// Review M1: the network port calls back on the OS's own threads, which have no runtime: a wake reported from a plain thread still
+/// redials once the path settles, and an address change that leaves no network still takes the link offline.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mobile_host_a_wake_from_an_os_thread_still_redials() {
+    let _lane = support::lane::enter().await;
+    let directory = temp("os-thread");
+    let relay = FakeRelay::start(Arc::new(|_, socket| Box::pin(fake_relay::listen(socket))), Arc::new(|_, _| Box::pin(async {}))).await;
+    let network = fake::FakeNetwork::default();
+    let wifi = mighty_platform::Adapters {
+        adapters: vec![mighty_platform::Adapter { name: "wifi".into(), addresses: vec!["192.168.0.20".parse().unwrap()] }],
+        unreadable: 0,
+    };
+    network.set_adapters(wifi);
+    let mut platform = fake::platform(&directory, Os::Windows);
+    platform.network = Arc::new(network.clone());
+    let options = RelayOptions { host_name: "Fixture".into(), path_settle: Duration::from_millis(60), ..RelayOptions::default() };
+    let host = RelayHost::with_options(identity_in(&directory), MobileRemoteSettings::default(), Arc::new(Answer), platform, options);
+    host.apply(on(&relay.address)).await.unwrap();
+    until(Duration::from_secs(10), || host.status().connected && relay.controls() == 1).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let resume = network.clone();
+    std::thread::spawn(move || resume.trigger_resume()).join().unwrap();
+    until(Duration::from_secs(10), || relay.controls() == 2 && host.status().connected).await;
+    network.set_adapters(mighty_platform::Adapters::default());
+    let change = network.clone();
+    std::thread::spawn(move || change.trigger_change()).join().unwrap();
+    until(Duration::from_secs(10), || host.status().detail == "offline").await;
+    host.dispose().await;
+    let _ = std::fs::remove_dir_all(&directory);
+}

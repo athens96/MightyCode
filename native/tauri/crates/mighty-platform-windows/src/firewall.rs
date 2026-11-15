@@ -179,7 +179,7 @@ mod tests {
     /// caller's (a runtime worker in the multi-threaded apartment or none).
     #[tokio::test]
     async fn the_elevation_runs_in_a_single_threaded_apartment() {
-        use windows_sys::Win32::System::Com::{APTTYPE_STA, CoGetApartmentType};
+        use windows_sys::Win32::System::Com::{APTTYPE_MAINSTA, APTTYPE_STA, CoGetApartmentType};
         let caller = std::thread::current().id();
         let (kind, thread) = in_apartment(move || {
             let (mut kind, mut qualifier) = (-1, 0);
@@ -189,7 +189,8 @@ mod tests {
         })
         .await
         .expect("the apartment thread ran");
-        assert_eq!(kind, Some(APTTYPE_STA), "a single-threaded apartment");
+        // The first single-threaded apartment of a process is its main one (APTTYPE_MAINSTA); either is single-threaded.
+        assert!(matches!(kind, Some(APTTYPE_STA | APTTYPE_MAINSTA)), "a single-threaded apartment: {kind:?}");
         assert_ne!(thread, caller, "a thread of its own");
         assert!(in_apartment(|| -> u8 { panic!("a failing start") }).await.is_none(), "a panic is no outcome, not a crash");
     }

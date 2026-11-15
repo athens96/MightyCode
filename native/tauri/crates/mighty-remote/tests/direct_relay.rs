@@ -72,6 +72,10 @@ struct Fixture {
 
 impl Fixture {
     async fn new(name: &str, capabilities: &[&str]) -> Fixture {
+        Fixture::with_handler(name, capabilities, Arc::new(Paths)).await
+    }
+
+    async fn with_handler(name: &str, capabilities: &[&str], handler: Arc<dyn RequestHandler>) -> Fixture {
         let directory = temp(name);
         let identity = Arc::new(Identity::load_or_create(Arc::new(FileStore(directory.clone())), true).unwrap());
         let path = DirectPath::new(
@@ -86,10 +90,12 @@ impl Fixture {
             watches_network: false,
             capabilities: capabilities.iter().map(|c| c.to_string()).collect(),
             direct_endpoints: Some(Arc::new(move || endpoints.endpoints())),
+            // Loopback stands in for Tailscale (C#'s address seam).
+            any_direct_peer: true,
             ..RelayOptions::default()
         };
         let platform = fake::platform(&directory, Os::Windows);
-        let host = Arc::new(RelayHost::with_options(identity, MobileRemoteSettings::default(), Arc::new(Paths), platform, options));
+        let host = Arc::new(RelayHost::with_options(identity, MobileRemoteSettings::default(), handler, platform, options));
         path.set_sink(Some(host.direct_sink()));
         path.set_address_source(Some(Arc::new(|| Ok(vec!["127.0.0.1".to_string()]))), 0).await;
         Fixture { host, path, directory }
@@ -379,5 +385,123 @@ async fn mobile_direct_a_relay_auth_frame_that_is_no_json_is_answered_malformed(
         "a relay phone's auth frame that is no JSON is answered malformed"
     );
     assert_eq!(tries.load(Ordering::SeqCst), 1);
+    fixture.done().await;
+}
+
+/// Review L4 (with W8-C's reservation ids): a hand-back of a reservation the host does not hold is ignored, so it cannot drop a newer
+/// one of the same address; an `accept` with an unknown reservation is dropped unread; the real reservation's hand-back frees its slot.
+/// And review L3: without the checks' seam only Tailscale's addresses are admitted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mobile_direct_a_reservation_is_given_back_exactly_once() {
+    use mighty_remote::direct::listener::DirectReservation;
+    let _lane = support::lane::enter().await;
+    let fixture = Fixture::new("reservations", &[]).await;
+    fixture.apply(settings("ws://127.0.0.1:9", true)).await;
+    let sink = fixture.host.direct_sink();
+    let peer: std::net::IpAddr = "100.101.102.103".parse().unwrap();
+    let first = sink.admit(peer).expect("a first handshake is admitted");
+    sink.refused(DirectReservation::new(first.id() + 1000));
+    assert_eq!(fixture.host.direct_reservations(), 1, "an unknown hand-back changes nothing");
+    let second = sink.admit(peer).expect("a second handshake from the address is admitted");
+    assert!(sink.admit(peer).is_none(), "the address's two slots are still both held");
+    // An accept with a reservation the host never gave: the socket is dropped unread and nothing joins the table.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let client = tokio::spawn(async move {
+        let tcp = tokio::net::TcpStream::connect(address).await.unwrap();
+        tokio_tungstenite::client_async(format!("ws://{address}/ws"), tcp).await.ok()
+    });
+    let (tcp, remote) = listener.accept().await.unwrap();
+    let socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let ended = tokio::time::timeout(Duration::from_secs(5), sink.accept(DirectReservation::new(9_999), socket, remote, deadline)).await;
+    assert!(ended.is_ok() && fixture.host.connection_ids().is_empty(), "an unknown reservation's socket is not run");
+    let _ = client.await;
+    assert_eq!(fixture.host.direct_reservations(), 2, "and the held ones stay");
+    sink.refused(first);
+    sink.refused(second);
+    assert_eq!(fixture.host.direct_reservations(), 0, "each real hand-back frees its own slot");
+    fixture.done().await;
+
+    // Without the seam a peer outside Tailscale's ranges is refused by the host too.
+    let directory = temp("tailnet-only");
+    let identity = Arc::new(Identity::load_or_create(Arc::new(FileStore(directory.clone())), true).unwrap());
+    let options = RelayOptions { watches_network: false, ..RelayOptions::default() };
+    let platform = fake::platform(&directory, Os::Windows);
+    let host = RelayHost::with_options(identity, MobileRemoteSettings::default(), Arc::new(Paths), platform, options);
+    host.apply(settings("ws://127.0.0.1:9", true)).await.unwrap();
+    let sink = host.direct_sink();
+    assert!(sink.admit("127.0.0.1".parse().unwrap()).is_none(), "loopback is no Tailscale peer");
+    assert!(sink.admit("100.101.102.103".parse().unwrap()).is_some(), "a Tailscale peer is");
+    host.dispose().await;
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// A route whose reply has an after-send (an app update's restart) that marks when it ran to its end.
+struct AfterSend(Arc<std::sync::atomic::AtomicBool>);
+
+impl RequestHandler for AfterSend {
+    fn handle(
+        &self,
+        _: MobileDevice,
+        _: String,
+        _: String,
+        _: Option<Box<serde_json::value::RawValue>>,
+    ) -> BoxFuture<'static, MobileReply> {
+        let done = self.0.clone();
+        Box::pin(async move {
+            let mut reply = MobileReply::new(200, r#"{"protocol":1}"#.into());
+            reply.after_send = Some(Box::new(move || {
+                Box::pin(async move {
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                    done.store(true, Ordering::SeqCst);
+                })
+            }));
+            reply
+        })
+    }
+}
+
+/// Review M2: a reply's after-send runs to its end even when the phone goes right after the reply (C# awaits it whatever happens next).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mobile_direct_an_after_send_survives_the_phone_leaving() {
+    let _lane = support::lane::enter().await;
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fixture = Fixture::with_handler("after-send", &[], Arc::new(AfterSend(done.clone()))).await;
+    fixture.apply(settings("ws://127.0.0.1:9", true)).await;
+    let pairing = fixture.host.pairing_url();
+    let mut phone = direct_phone(&fixture.endpoint(), &pairing).await;
+    assert_eq!(exchange(&mut phone, auth(&pairing, "abcdefghijklmnopqrstuv")).await["type"], "auth_ok");
+    assert_eq!(exchange(&mut phone, json!({"id":"update","method":"POST","path":"/m1/app-update"})).await["status"], 200);
+    drop(phone);
+    until(Duration::from_secs(10), || fixture.host.connection_ids().is_empty()).await;
+    assert!(!done.load(Ordering::SeqCst), "the connection ended before the after-send did");
+    until(Duration::from_secs(5), || done.load(Ordering::SeqCst)).await;
+    fixture.done().await;
+}
+
+/// Review L2: a phone that reads nothing holds its senders back: the host's queue for it is bounded, so a stream of notifications stops
+/// being taken once the socket and the queue are full, instead of growing in memory.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mobile_direct_a_phone_that_reads_nothing_holds_its_senders_back() {
+    let _lane = support::lane::enter().await;
+    let fixture = Fixture::new("backpressure", &[]).await;
+    fixture.apply(settings("ws://127.0.0.1:9", true)).await;
+    let pairing = fixture.host.pairing_url();
+    let mut phone = direct_phone(&fixture.endpoint(), &pairing).await;
+    assert_eq!(exchange(&mut phone, auth(&pairing, "abcdefghijklmnopqrstuv")).await["type"], "auth_ok");
+    // The phone stops reading. Each notification is about 64 KiB, so the socket's buffers fill after a few hundred.
+    let scope = format!("session:{}", "s".repeat(64 * 1024));
+    let mut taken = 0;
+    let mut held = false;
+    for revision in 0..20_000 {
+        if tokio::time::timeout(Duration::from_millis(500), fixture.host.notify(&scope, revision)).await.is_err() {
+            held = true;
+            break;
+        }
+        taken += 1;
+    }
+    assert!(held, "the notifications were held back after {taken}");
+    drop(phone);
     fixture.done().await;
 }

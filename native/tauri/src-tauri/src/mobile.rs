@@ -140,6 +140,8 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
             let weak = Arc::downgrade(host);
             Arc::new(move || weak.upgrade().map(|host| crate::direct::endpoints(&host)).unwrap_or_default())
         }),
+        // The app's runtime: the network port's callbacks come on Windows' own threads.
+        runtime: Some(tauri::async_runtime::handle().inner().clone()),
         ..RelayOptions::default()
     };
     let mut relay_platform = platform.clone();
@@ -205,27 +207,32 @@ async fn tick(host: Arc<Host>, relay: Arc<RelayHost>, push: Arc<PushHub>) {
 }
 
 /// The panes as the push planner sees them (C#'s `MobilePushPane.Project` over `service.Snapshot`): the run service's pending requests
-/// and Antigravity cards. A confirmed lost sign-in is the login recovery's (none is tracked by this app yet).
+/// and Antigravity cards; a confirmed lost sign-in is the login recovery's remembered request (C# `loginRetries.Requests`).
 struct Panes(Arc<Host>);
+
+/// The panes of `service` as the push planner sees them, `sign_in_lost` telling which pane's sign-in was confirmed lost.
+fn project(service: &mighty_run::service::RunService, sign_in_lost: &dyn Fn(&str) -> bool) -> Vec<PushPane> {
+    let snapshot = service.snapshot();
+    let sessions: Vec<&mighty_core::model::RunSession> = snapshot.sessions().iter().map(|s| s.as_ref()).collect();
+    let workspaces = snapshot.workspaces.clone().unwrap_or_default();
+    planner::project(
+        &sessions,
+        &workspaces,
+        &|id| service.pending_permissions(id),
+        &|_, _| false,
+        &|id| service.antigravity_card(id),
+        sign_in_lost,
+    )
+}
 
 impl PushSource for Panes {
     fn panes(&self) -> Vec<PushPane> {
         let Some(runs) = self.0.runs().cloned() else { return vec![] };
-        let snapshot = runs.service.snapshot();
-        let sessions: Vec<&mighty_core::model::RunSession> = snapshot.sessions().iter().map(|s| s.as_ref()).collect();
-        let workspaces = snapshot.workspaces.clone().unwrap_or_default();
-        planner::project(
-            &sessions,
-            &workspaces,
-            &|id| runs.service.pending_permissions(id),
-            &|_, _| false,
-            &|id| runs.service.antigravity_card(id),
-            &|_| false,
-        )
+        project(&runs.service, &|id| crate::accounts::has_retry(&self.0, id))
     }
 
-    fn sign_in_lost(&self, _session_id: &str) -> bool {
-        false
+    fn sign_in_lost(&self, session_id: &str) -> bool {
+        crate::accounts::has_retry(&self.0, session_id)
     }
 }
 
@@ -322,5 +329,53 @@ pub fn shutdown(host: &Host) {
         tauri::async_runtime::block_on(async move {
             let _ = tokio::time::timeout(Duration::from_secs(3), relay.dispose()).await;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use mighty_core::model::{AppSnapshot, RunSession, Workspace};
+    use mighty_run::service::{RunService, RunServiceOptions};
+
+    /// Review M4: a pane whose sign-in the login recovery holds is pushed as a lost sign-in (C#'s `SignInLost = loginRetries.Requests`).
+    #[test]
+    fn a_pane_the_login_recovery_holds_reads_as_a_lost_sign_in() {
+        let environment = Arc::new(mighty_platform::fake::FakeShellEnvironment::new(Default::default()));
+        let catalog = Arc::new(mighty_run::providers::ProviderCatalog::new(
+            Arc::new(mighty_platform::fake::FakeProcessHost::default()),
+            environment,
+            None,
+        ));
+        let options = RunServiceOptions {
+            plugin_directory: String::new(),
+            permission_card: false,
+            remote: None,
+            configure: None,
+            admitting: None,
+            binding: None,
+            delegation: None,
+        };
+        let pane = |id: &str| Arc::new(RunSession { id: Some(id.into()), workspace_id: Some("ws".into()), ..RunSession::default() });
+        let snapshot = AppSnapshot {
+            workspaces: Some(vec![Workspace {
+                id: Some("ws".into()),
+                path: Some(std::env::temp_dir().to_string_lossy().into_owned()),
+                ..Workspace::default()
+            }]),
+            ..AppSnapshot::default()
+        };
+        let (service, _events) = RunService::new(snapshot, catalog, options);
+        service
+            .update(|state| {
+                let mut next = state.clone();
+                next.sessions_mut().extend([pane("held"), pane("free")]);
+                next
+            })
+            .unwrap();
+        let panes = super::project(&service, &|id| id == "held");
+        let lost: Vec<(&str, bool)> = panes.iter().map(|p| (p.session_id.as_str(), p.sign_in_lost)).collect();
+        assert_eq!(lost, vec![("held", true), ("free", false)]);
     }
 }

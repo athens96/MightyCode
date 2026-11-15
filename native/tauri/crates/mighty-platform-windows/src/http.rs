@@ -98,7 +98,9 @@ fn header(request: *mut c_void, level: u32) -> Result<Option<String>> {
 
 fn validate(request: &HttpsRequest) -> Result<()> {
     let bad = |text: &str| text.chars().any(|c| c.is_control());
-    if request.host.is_empty() || bad(&request.host) || request.host.contains(['/', ':', '@']) {
+    // An IPv6 address (a relay's push route, review L5) is the one host with colons; WinHTTP takes it without brackets.
+    let ipv6 = request.host.parse::<std::net::Ipv6Addr>().is_ok();
+    if request.host.is_empty() || bad(&request.host) || request.host.contains(['/', '@']) || (request.host.contains(':') && !ipv6) {
         return Err(PlatformError::Invalid("an HTTPS GET needs a host name".into()));
     }
     if !request.path_and_query.starts_with('/') || bad(&request.path_and_query) {
@@ -179,7 +181,9 @@ fn send(request: &HttpsRequest, target: &Target<'_>, max_body: usize) -> Result<
         .transpose()?
         .map(|location| location.filter(|l| !l.is_empty()).unwrap_or_else(|| "refused".into()));
     let mut body = Vec::new();
-    if (200..300).contains(&status) {
+    // A POST's answer is its status and headers only (the push reads no body, review L6: a large 2xx body is still Sent, never a
+    // retry that would push twice).
+    if (200..300).contains(&status) && target.verb == "GET" {
         loop {
             let mut available = 0u32;
             // SAFETY: `available` is writable.
@@ -386,6 +390,9 @@ mod tests {
         for bad in ["ftp://x/y", "https://user@x/y", "https://x/y#z", "https://x:0/y", "https://x:99999/y", "https:///y", "https://a b/y"] {
             assert!(split_post(bad).is_err(), "{bad}");
         }
+        // Review L5: an IPv6 relay's route passes the request's checks; any other host with a colon does not.
+        assert!(validate(&request("::1", "/push/v1/send", &[])).is_ok() && validate(&request("fd7a:115c:a1e0::1", "/x", &[])).is_ok());
+        assert!(validate(&request("x:1", "/x", &[])).is_err());
     }
 
     /// Review C11: the whole request is given up on once its timeout passes, however long the blocking side would take.

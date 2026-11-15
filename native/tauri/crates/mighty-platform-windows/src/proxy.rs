@@ -57,8 +57,8 @@ impl Drop for Owned {
     }
 }
 
-/// Whether `url` is TLS, its host (lower case, no brackets), and the URL with the scheme a PAC script knows (`ws` as `http`, `wss` as
-/// `https`).
+/// Whether `url` is TLS, its host (lower case, no brackets), and what a PAC script is asked about: `http(s)://host[:port]/` only, the
+/// scheme it knows (`ws` as `http`, `wss` as `https`) and never the path or query (the relay's carries the host token; review L1).
 fn target(url: &str) -> Option<(bool, String, String)> {
     let (scheme, rest) = url.split_once("://")?;
     let secure = match scheme.to_ascii_lowercase().as_str() {
@@ -72,7 +72,7 @@ fn target(url: &str) -> Option<(bool, String, String)> {
         Some(inside) => inside.split_once(']')?.0,
         None => authority.rsplit_once(':').map_or(authority, |(host, _)| host),
     };
-    (!host.is_empty()).then(|| (secure, host.to_ascii_lowercase(), format!("{}://{rest}", if secure { "https" } else { "http" })))
+    (!host.is_empty()).then(|| (secure, host.to_ascii_lowercase(), format!("{}://{authority}/", if secure { "https" } else { "http" })))
 }
 
 fn resolve(url: &str) -> Result<Proxy> {
@@ -196,7 +196,9 @@ mod tests {
             target("wss://mighty-relay.example/ws?hostToken=x").map(|t| (t.0, t.1)),
             Some((true, "mighty-relay.example".to_string()))
         );
-        assert!(target("ws://127.0.0.1:8787/ws").is_some_and(|t| !t.0 && t.2.starts_with("http://")));
+        assert!(target("ws://127.0.0.1:8787/ws").is_some_and(|t| !t.0 && t.2 == "http://127.0.0.1:8787/"));
+        let asked = target("wss://relay.example:444/ws?serverId=a&hostToken=SECRET").unwrap().2;
+        assert_eq!(asked, "https://relay.example:444/", "the PAC never sees the path or the token");
         assert_eq!(resolve("ws://127.0.0.1:9/ws").unwrap(), Proxy::Direct);
         assert_eq!(resolve("wss://localhost/ws").unwrap(), Proxy::Direct);
     }

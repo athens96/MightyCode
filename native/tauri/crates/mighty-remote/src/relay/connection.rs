@@ -134,7 +134,7 @@ pub(crate) struct Connection {
     device: Mutex<Option<MobileDevice>>,
     cancel: watch::Sender<bool>,
     done: watch::Sender<bool>,
-    outbox: Mutex<Option<mpsc::UnboundedSender<Outgoing>>>,
+    outbox: Mutex<Option<mpsc::Sender<Outgoing>>>,
     inflight: Mutex<HashSet<String>>,
 }
 
@@ -190,19 +190,23 @@ impl Connection {
         self.done.send_replace(true);
     }
 
-    /// `Send`: a JSON frame for the phone, sealed by the writer in order. Dropped silently before the handshake ended or after the
+    /// `Send`: a JSON frame for the phone, sealed by the writer in order; it waits while [`OUTBOX`] frames are queued (C#'s one writer
+    /// lock: a phone that reads nothing holds its senders back rather than the host's memory). Dropped silently before the handshake
+    /// ended or after the
     /// connection did.
-    pub fn send(&self, plaintext: Vec<u8>) {
-        if let Some(outbox) = lock(&self.outbox).as_ref() {
-            let _ = outbox.send(Outgoing { plaintext, sent: None });
+    pub async fn send(&self, plaintext: Vec<u8>) {
+        let outbox = lock(&self.outbox).clone();
+        if let Some(outbox) = outbox {
+            let _ = outbox.send(Outgoing { plaintext, sent: None }).await;
         }
     }
 
     /// [`Connection::send`], answering once the frame was written (true) or the connection ended first (false).
     async fn send_and_wait(&self, plaintext: Vec<u8>) -> bool {
         let (sent, written) = oneshot::channel();
-        let queued = lock(&self.outbox).as_ref().is_some_and(|outbox| outbox.send(Outgoing { plaintext, sent: Some(sent) }).is_ok());
-        queued && written.await.unwrap_or(false)
+        let outbox = lock(&self.outbox).clone();
+        let Some(outbox) = outbox else { return false };
+        outbox.send(Outgoing { plaintext, sent: Some(sent) }).await.is_ok() && written.await.unwrap_or(false)
     }
 
     /// `Run`: the whole connection, from opening its socket (inside the handshake deadline) to its end; the caller (the host's `Serve`)
@@ -299,7 +303,7 @@ impl Connection {
         let decision = host.identity().authorize(&request, host.allow_legacy()).map_err(|_| Ended)?;
 
         // From here every frame is sealed by the one writer.
-        let (outbox, inbox) = mpsc::unbounded_channel();
+        let (outbox, inbox) = mpsc::channel(OUTBOX);
         *lock(&self.outbox) = Some(outbox);
         tasks.spawn(writer(sink, cipher.clone(), inbox, self.clone()));
 
@@ -333,7 +337,7 @@ impl Connection {
                 out.prop_strings("direct", Some(&host.direct_endpoints()));
                 out.prop_str("deviceToken", device_token.as_deref());
                 out.end_object();
-                self.send(out.finish().into_bytes());
+                self.send(out.finish().into_bytes()).await;
                 device_id
             }
         };
@@ -350,7 +354,7 @@ impl Connection {
             let root: IndexMap<String, Box<RawValue>> = serde_json::from_slice(&plain).map_err(|_| Ended)?;
             let text = |name: &str| root.get(name).and_then(|raw| serde_json::from_str::<String>(raw.get()).ok());
             if text("type").as_deref() == Some("ping") {
-                self.send(br#"{"type":"pong"}"#.to_vec());
+                self.send(br#"{"type":"pong"}"#.to_vec()).await;
                 continue;
             }
             // Screen share's signals (`screen-*`) are dropped while it is off (`screen::ENABLED`), and any other typed frame ignored.
@@ -362,18 +366,21 @@ impl Connection {
                 continue;
             }
             if path.len() > MAXIMUM_PATH_BYTES {
-                self.send(reply_frame(&id, &MobileReply::error(414, "Path exceeds limit.", Some("badPath"))));
+                self.send(reply_frame(&id, &MobileReply::error(414, "Path exceeds limit.", Some("badPath")))).await;
                 continue;
             }
-            {
+            // Inserted before the request can complete and remove itself; the lock never held across the await below.
+            let admitted = {
                 let mut inflight = lock(&self.inflight);
-                if inflight.contains(&id) || inflight.len() >= MAXIMUM_IN_FLIGHT {
-                    drop(inflight);
-                    self.send(reply_frame(&id, &MobileReply::error(429, "Too many pending requests.", None)));
-                    continue;
+                let free = !inflight.contains(&id) && inflight.len() < MAXIMUM_IN_FLIGHT;
+                if free {
+                    inflight.insert(id.clone());
                 }
-                // Inserted before the request can complete and remove itself.
-                inflight.insert(id.clone());
+                free
+            };
+            if !admitted {
+                self.send(reply_frame(&id, &MobileReply::error(429, "Too many pending requests.", None))).await;
+                continue;
             }
             let body = root.get("body").cloned();
             requests.spawn(handle(self.clone(), host.clone(), device_id.clone(), id, method, path, body));
@@ -419,21 +426,23 @@ async fn handle<H: ConnectionHost>(
         Ok(reply) => reply,
         Err(error) if error.is_cancelled() => return,
         Err(_) => {
-            connection.send(reply_frame(&id, &MobileReply::error(500, "The mobile request failed.", None)));
+            connection.send(reply_frame(&id, &MobileReply::error(500, "The mobile request failed.", None))).await;
             return;
         }
     };
     let frame = reply_frame(&id, &reply);
     // A reply the relay would close the connection for is refused instead, so the phone is told and keeps its tunnel.
     if frame.len() > MAXIMUM_PLAINTEXT {
-        connection.send(reply_frame(&id, &MobileReply::error(413, "Response exceeds the mobile display limit.", None)));
+        connection.send(reply_frame(&id, &MobileReply::error(413, "Response exceeds the mobile display limit.", None))).await;
         return;
     }
     match reply.after_send {
-        None => connection.send(frame),
+        None => connection.send(frame).await,
         Some(after) => {
             if connection.send_and_wait(frame).await && !connection.cancelled() {
-                after().await;
+                // Once started it runs to its end on a task of its own (C# awaits it whatever the connection does next): the
+                // connection ending aborts this request, never the after-send (an app update's restart).
+                let _ = tokio::spawn(after()).await;
             }
         }
     }
@@ -456,7 +465,7 @@ pub fn reply_frame(id: &str, reply: &MobileReply) -> Vec<u8> {
 async fn writer<S>(
     mut sink: futures_util::stream::SplitSink<WebSocketStream<S>, Message>,
     cipher: Arc<RelayCipher>,
-    mut inbox: mpsc::UnboundedReceiver<Outgoing>,
+    mut inbox: mpsc::Receiver<Outgoing>,
     connection: Arc<Connection>,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -479,11 +488,14 @@ async fn writer<S>(
     let _ = sink.close().await;
 }
 
+/// How many frames may wait for the writer before a sender waits too.
+pub const OUTBOX: usize = 16;
+
 /// The host's encrypted ping every 20 s.
 async fn heartbeat(connection: Arc<Connection>) {
     loop {
         tokio::time::sleep(HEARTBEAT).await;
-        connection.send(br#"{"type":"ping"}"#.to_vec());
+        connection.send(br#"{"type":"ping"}"#.to_vec()).await;
     }
 }
 
