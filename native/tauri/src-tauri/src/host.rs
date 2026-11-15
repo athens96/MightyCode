@@ -335,6 +335,19 @@ impl Host {
         lock(&self.store).approve_local(path)
     }
 
+    /// C# `StateStore.ApproveRemote`: a workspace another computer shares, as one a save may write (W8-D, remote.rs); None when its
+    /// names are not ones the store keeps.
+    pub fn approve_remote(
+        &self,
+        connection_id: &str,
+        workspace_id: &str,
+        name: &str,
+        path: &str,
+        host_name: &str,
+    ) -> Option<mighty_core::model::Workspace> {
+        lock(&self.store).approve_remote(connection_id, workspace_id, name, path, host_name)
+    }
+
     /// Whether the app may write its profile (`--allow-state-write`, as main.rs parsed it into the store).
     pub fn writes(&self) -> bool {
         lock(&self.store).writes()

@@ -71,6 +71,38 @@ impl Applying {
         }
         Applied { lock: self, _thread: std::marker::PhantomData }
     }
+
+    /// Taken at once when it is free or already this thread's; None while another thread holds it.
+    fn try_enter(&self) -> Option<Applied<'_>> {
+        let me = std::thread::current().id();
+        let mut owner = lock(&self.owner);
+        match owner.0 {
+            None => *owner = (Some(me), 1),
+            Some(holder) if holder == me => owner.1 += 1,
+            Some(_) => return None,
+        }
+        Some(Applied { lock: self, _thread: std::marker::PhantomData })
+    }
+}
+
+/// `work` under the run's applying lock from async code: at once when the lock is free (or this thread's), else on a blocking thread, so
+/// a poll being applied on another thread never parks a runtime worker (nor the timers it drives) while it waits. None when the runtime
+/// is shutting down and the work never ran; a panic in it goes on as the caller's.
+async fn under_applying<R: Send + 'static>(run: &Arc<Run>, work: impl FnOnce() -> R + Send + 'static) -> Option<R> {
+    if let Some(_held) = run.applying.try_enter() {
+        return Some(work());
+    }
+    let run = run.clone();
+    match tokio::task::spawn_blocking(move || {
+        let _held = run.applying.enter();
+        work()
+    })
+    .await
+    {
+        Ok(value) => Some(value),
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(_) => None,
+    }
 }
 
 impl Drop for Applied<'_> {
@@ -465,19 +497,23 @@ impl RemoteClient {
 
     /// `EndAsync`: this run alone ends as lost, unless it already ended or is stopping.
     async fn end(&self, pane_id: &str, run: &Arc<Run>, words: &str) {
-        {
-            let _applying = run.applying.enter();
+        let (client, pane, held, words) = (self.clone(), pane_id.to_string(), run.clone(), words.to_string());
+        let ended = under_applying(run, move || {
             {
-                let mut gate = lock(&self.0.gate);
-                if !Self::listed(&gate, pane_id, run) || lock(&run.state).stopping {
-                    return;
+                let mut gate = lock(&client.0.gate);
+                if !Self::listed(&gate, &pane, &held) || lock(&held.state).stopping {
+                    return false;
                 }
-                gate.runs.remove(pane_id);
+                gate.runs.remove(&pane);
             }
             // A callback that fails here too is only let go: the run is no longer listed either way.
-            let _ = self.say_lost(pane_id, words);
+            let _ = client.say_lost(&pane, &words);
+            true
+        })
+        .await;
+        if ended == Some(true) {
+            self.stop_on_host(run).await;
         }
-        self.stop_on_host(run).await;
     }
 
     /// `SayLost`: the reason, cut as the Mac cuts it, then the error. Under the run's applying lock.
@@ -503,16 +539,19 @@ impl RemoteClient {
         };
         run.cancel.cancel();
         self.stop_on_host(&run).await;
-        let _applying = run.applying.enter();
-        {
-            let mut gate = lock(&self.0.gate);
-            if !Self::listed(&gate, pane_id, &run) {
-                return;
+        let (client, pane, held) = (self.clone(), pane_id.to_string(), run.clone());
+        under_applying(&run, move || {
+            {
+                let mut gate = lock(&client.0.gate);
+                if !Self::listed(&gate, &pane, &held) {
+                    return;
+                }
+                gate.runs.remove(&pane);
             }
-            gate.runs.remove(pane_id);
-        }
-        self.0.pending.forget(pane_id);
-        let _ = self.emit(RunEvent::state(pane_id, "stopped", None));
+            client.0.pending.forget(&pane);
+            let _ = client.emit(RunEvent::state(&pane, "stopped", None));
+        })
+        .await;
     }
 
     /// `StopOnHostAsync`: the route checked, then the host's stop with `{}` (a failure is let go: the host stops a run nobody polls within

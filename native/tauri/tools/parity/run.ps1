@@ -70,5 +70,11 @@ foreach ($kind in 'doubles', 'strings', 'times') {
     & $rs compare-lines (Join-Path $vectors "$kind.cs.txt") (Join-Path $vectors "$kind.rs.txt")
     if ($LASTEXITCODE -ne 0) { $failed = $true }
 }
+# W8-D (D18): C#'s RemoteHttpListener over the head corpus, against the answers kept for mighty-remote's tests/remote_parity.rs.
+$heads = Join-Path $repo 'native\contracts\fixtures\remote-v2'
+$headsOut = Join-Path $Work 'heads-csharp.txt'
+dotnet $cs remote (Join-Path $heads 'heads.jsonl') $headsOut
+& $rs compare-lines (Join-Path $heads 'heads-csharp.txt') $headsOut
+if ($LASTEXITCODE -ne 0) { $failed = $true }
 if ($failed) { Write-Host 'parity: DIFFERENCES' -ForegroundColor Red; exit 1 }
 Write-Host 'parity: 0 differences' -ForegroundColor Green

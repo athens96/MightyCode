@@ -738,3 +738,24 @@ fn spawn_blocking(work: impl FnOnce() + Send + 'static) {
         Err(_) => work(),
     }
 }
+
+/// C# `DesktopService.CreateRemoteRunner(sinks)`: the runner a sharing host's client runs go through: this PC's CLIs, looking workspaces
+/// up only through the host's shared check, its tool requests to the host, Windows PowerShell for commands (from `system_folder`), its
+/// graph nodes to the host, and no pane MCP (no agent I/O binding), no delegation and no picture cache.
+pub fn host_runner(
+    catalog: Arc<mighty_run::providers::ProviderCatalog>,
+    plugin_directory: &str,
+    sinks: RunnerSinks,
+    system_folder: Option<String>,
+) -> Arc<dyn HostRunner> {
+    let event = sinks.event.clone();
+    let mut options =
+        mighty_run::manager::RunManagerOptions::new(plugin_directory, sinks.workspace.clone(), Arc::new(move |value| event(value)));
+    let permission = sinks.permission.clone();
+    options.permission_requested = Some(Arc::new(move |value| permission(value)));
+    options.graph = Some(Arc::new(mighty_graph::TrackerFactory::default()));
+    let graph = sinks.graph_node.clone();
+    options.graph_nodes = Some(Arc::new(move |id: &str, node| graph(id, node)));
+    options.powershell_commands = system_folder;
+    Arc::new(RunManager::new(catalog, options))
+}

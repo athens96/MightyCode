@@ -31,7 +31,7 @@ use crate::remote::text;
 use crate::remote::validation;
 use crate::remote::wire::{RemoteHostState, RemoteSharedWorkspace, RemoteWireError, RemoteWireInfo, protocol};
 
-pub use runs::{Cancel, HostRunner, RunnerSinks};
+pub use runs::{Cancel, HostRunner, RunnerSinks, host_runner};
 
 /// Time on the host's clock: since an origin the clock picks (C# `Func<DateTimeOffset>`; the checks move it by hand).
 pub type Clock = Arc<dyn Fn() -> Duration + Send + Sync>;
@@ -684,4 +684,94 @@ pub(crate) fn reply(status: u16, value: &Value) -> HttpResponse {
 /// `Failure(status, message)`: `{protocol, error}` with the message cut at 1000 characters.
 pub(crate) fn failure_response(status: u16, message: &str) -> HttpResponse {
     reply(status, &RemoteWireError { protocol: Some(protocol::VERSION), error: text::cut(message, 1000) }.to_value())
+}
+
+type Reader = Arc<dyn Fn() -> BoxFuture<'static, Result<RuntimeInfo, String>> + Send + Sync>;
+
+/// One reading of this PC's CLIs as [`HostRuntime::read`] hands it out: every caller of the same reading waits for the same answer.
+pub struct Reading {
+    answer: tokio::sync::watch::Receiver<Option<Result<RuntimeInfo, String>>>,
+}
+
+impl Reading {
+    /// The reading's answer, once it has one.
+    pub async fn wait(&self) -> Result<RuntimeInfo, String> {
+        let mut answer = self.answer.clone();
+        match answer.wait_for(Option::is_some).await {
+            Ok(value) => value.clone().unwrap_or_else(|| Err("the reading ended".into())),
+            Err(_) => Err("the reading ended".into()),
+        }
+    }
+
+    fn done(&self) -> bool {
+        self.answer.borrow().is_some()
+    }
+}
+
+#[derive(Default)]
+struct Readings {
+    current: Option<Arc<Reading>>,
+    /// When the current reading finished well; None while it reads or after it failed.
+    read_at: Option<std::time::Instant>,
+    /// Moves on each new reading and each forget, so a reading that finishes after either never stamps itself fresh.
+    generation: u64,
+}
+
+/// C# `DesktopService.HostRuntimeAsync`, `ForgetHostRuntime`, `HostRuntimeFresh` and `HostRuntimeReader`: this PC's CLIs as a sharing
+/// host reports them. Every /info and every client agent start asks; one reading is shared by all who ask while it goes, and kept for
+/// the fresh time after it finished; one that failed is read again by the next caller.
+pub struct HostRuntime {
+    reader: Reader,
+    app_version: String,
+    fresh: Mutex<Duration>,
+    readings: Arc<Mutex<Readings>>,
+}
+
+impl HostRuntime {
+    /// `reader` reads this PC's CLIs (C#: `Providers.GetRuntimeAsync()`); each answer carries `app_version`.
+    pub fn new(reader: Reader, app_version: &str) -> HostRuntime {
+        HostRuntime { reader, app_version: app_version.into(), fresh: Mutex::new(Duration::from_secs(30)), readings: Arc::default() }
+    }
+
+    /// `HostRuntimeFresh`: how long one reading, from the moment it finished, answers every caller (checks shorten it).
+    pub fn set_fresh(&self, fresh: Duration) {
+        *lock(&self.fresh) = fresh;
+    }
+
+    /// `HostRuntimeAsync(appVersion)`: the reading going on or kept, else a new one.
+    pub fn read(&self) -> Arc<Reading> {
+        let fresh = *lock(&self.fresh);
+        let mut readings = lock(&self.readings);
+        if let Some(known) = &readings.current
+            && (!known.done() || readings.read_at.is_some_and(|at| at.elapsed() < fresh))
+        {
+            return known.clone();
+        }
+        readings.generation += 1;
+        readings.read_at = None;
+        let generation = readings.generation;
+        let (answer, receiver) = tokio::sync::watch::channel(None);
+        let reading = Arc::new(Reading { answer: receiver });
+        readings.current = Some(reading.clone());
+        let (reader, version, shared) = (self.reader.clone(), self.app_version.clone(), self.readings.clone());
+        tokio::spawn(async move {
+            let value = reader().await.map(|runtime| RuntimeInfo { app_version: version, ..runtime });
+            {
+                let mut readings = lock(&shared);
+                if value.is_ok() && readings.generation == generation {
+                    readings.read_at = Some(std::time::Instant::now());
+                }
+            }
+            let _ = answer.send(Some(value));
+        });
+        reading
+    }
+
+    /// `ForgetHostRuntime`: a CLI was updated, installed or signed in: the next caller reads them again.
+    pub fn forget(&self) {
+        let mut readings = lock(&self.readings);
+        readings.generation += 1;
+        readings.current = None;
+        readings.read_at = None;
+    }
 }

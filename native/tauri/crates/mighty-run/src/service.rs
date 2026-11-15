@@ -460,6 +460,11 @@ impl RunService {
         snapshot.session(session_id).and_then(|s| snapshot.workspace(s.workspace_id())).is_some_and(|w| w.remote.is_some())
     }
 
+    /// C# `ResolveSharedAsync` (a sharing host's `ResolveLocal`): a registered local workspace whose folder exists, or why not.
+    pub fn resolve_shared(&self, id: &str) -> std::result::Result<Workspace, String> {
+        resolve_local(&self.shared, id).map_err(|e| e.to_string())
+    }
+
     /// Whether a pane of this computer runs `provider`'s CLI now (`HasActiveProvider`).
     pub fn has_active_provider(&self, provider: &str) -> bool {
         let state = lock(&self.shared.state);

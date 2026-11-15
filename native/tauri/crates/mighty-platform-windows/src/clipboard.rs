@@ -6,7 +6,7 @@ use std::time::Duration;
 use mighty_platform::{Clipboard, PlatformError, Result};
 use windows_sys::Win32::Foundation::GlobalFree;
 use windows_sys::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock};
 
@@ -75,30 +75,68 @@ impl Clipboard for WindowsClipboard {
     fn write_text(&self, text: &str) -> Result<()> {
         let units: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
         let _open = Opened::open()?;
-        // SAFETY: the clipboard is open; a movable block the size of the text and its NUL, filled under its lock. Once
-        // SetClipboardData takes it the system owns it; until then it is freed here on failure.
-        unsafe {
-            if EmptyClipboard() == 0 {
-                return Err(PlatformError::Io(std::io::Error::last_os_error()));
-            }
-            let block = GlobalAlloc(GMEM_MOVEABLE, units.len() * 2);
-            if block.is_null() {
-                return Err(PlatformError::Io(std::io::Error::last_os_error()));
-            }
-            let data = GlobalLock(block) as *mut u16;
-            if data.is_null() {
-                let error = std::io::Error::last_os_error();
-                GlobalFree(block);
-                return Err(PlatformError::Io(error));
-            }
-            std::ptr::copy_nonoverlapping(units.as_ptr(), data, units.len());
-            GlobalUnlock(block);
-            if SetClipboardData(CF_UNICODETEXT, block).is_null() {
-                let error = std::io::Error::last_os_error();
-                GlobalFree(block);
-                return Err(PlatformError::Io(error));
-            }
+        // SAFETY: the clipboard is open.
+        if unsafe { EmptyClipboard() } == 0 {
+            return Err(PlatformError::Io(std::io::Error::last_os_error()));
         }
-        Ok(())
+        put(CF_UNICODETEXT, &units)
     }
+
+    /// C# `CopyRemoteKeyAsync`'s data package: the text with `ExcludeClipboardContentFromMonitorProcessing` (any data),
+    /// `CanIncludeInClipboardHistory` and `CanUploadToCloudClipboard` (a DWORD 0 each) beside it, all in one open.
+    fn write_secret(&self, text: &str) -> Result<()> {
+        let units: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let formats = [
+            ("ExcludeClipboardContentFromMonitorProcessing", 0u32),
+            ("CanIncludeInClipboardHistory", 0u32),
+            ("CanUploadToCloudClipboard", 0u32),
+        ]
+        .map(|(name, value)| (register(name), value));
+        if formats.iter().any(|(format, _)| *format == 0) {
+            return Err(PlatformError::Io(std::io::Error::last_os_error()));
+        }
+        let _open = Opened::open()?;
+        // SAFETY: the clipboard is open.
+        if unsafe { EmptyClipboard() } == 0 {
+            return Err(PlatformError::Io(std::io::Error::last_os_error()));
+        }
+        for (format, value) in formats {
+            put(format, &[value])?;
+        }
+        put(CF_UNICODETEXT, &units)
+    }
+}
+
+/// A registered clipboard format's id (0 when Windows refused it).
+fn register(name: &str) -> u32 {
+    let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: a NUL-terminated UTF-16 name that outlives the call.
+    unsafe { RegisterClipboardFormatW(wide.as_ptr()) }
+}
+
+/// `data` put on the open clipboard in `format`: a movable block of its size, filled under its lock. Once SetClipboardData takes it the
+/// system owns it; until then it is freed here on failure.
+fn put<T: Copy>(format: u32, data: &[T]) -> Result<()> {
+    let bytes = std::mem::size_of_val(data);
+    // SAFETY: the caller holds the clipboard open; the block is the data's size and only written under its lock.
+    unsafe {
+        let block = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if block.is_null() {
+            return Err(PlatformError::Io(std::io::Error::last_os_error()));
+        }
+        let target = GlobalLock(block) as *mut u8;
+        if target.is_null() {
+            let error = std::io::Error::last_os_error();
+            GlobalFree(block);
+            return Err(PlatformError::Io(error));
+        }
+        std::ptr::copy_nonoverlapping(data.as_ptr() as *const u8, target, bytes);
+        GlobalUnlock(block);
+        if SetClipboardData(format, block).is_null() {
+            let error = std::io::Error::last_os_error();
+            GlobalFree(block);
+            return Err(PlatformError::Io(error));
+        }
+    }
+    Ok(())
 }

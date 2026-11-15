@@ -5,7 +5,7 @@
 mod support;
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -494,7 +494,7 @@ async fn a_connections_file_held_open_is_read_later_and_never_written_over() {
     let path = directory.join(saved::FILE_NAME);
     let before = std::fs::read(&path).unwrap();
     let client = client_with(&store, &directory, Arc::new(MemoryVault::default()), &seen, ClientOptions::default());
-    let changed = Arc::new(AtomicUsize::new(0));
+    let changed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counter = changed.clone();
     client.on_changed(Arc::new(move || {
         counter.fetch_add(1, Ordering::SeqCst);
@@ -1508,10 +1508,18 @@ async fn a_stop_waits_for_the_poll_being_applied_and_is_the_panes_last_word() {
     *c.seen.hold.lock().unwrap() = Some(Arc::new(|e| e.entry.as_ref().and_then(|l| l.text.as_deref()) == Some("first")));
     c.client.start(shell("pane-1", &c.workspace), &c.workspace).await.unwrap();
     until(|| c.seen.held.load(Ordering::SeqCst), 10_000, "held").await;
+    let since = std::time::Instant::now();
     let stopping = c.client.clone();
     let stop = tokio::spawn(async move { stopping.stop("pane-1").await });
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(!stop.is_finished(), "the stop waits while the poll is being applied");
+    if stop.is_finished() {
+        let ended = stop.await;
+        panic!(
+            "the stop waits while the poll is being applied: it ended {ended:?} {:?} after the hold, the pane heard {:?}",
+            since.elapsed(),
+            c.seen.words(None)
+        );
+    }
     c.seen.release();
     tokio::time::timeout(Duration::from_secs(10), stop).await.unwrap().unwrap();
     assert_eq!(c.seen.words(None), ["first", "second", "third", "stopped"], "the poll's events, then the stop");
