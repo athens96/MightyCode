@@ -5,14 +5,41 @@
 //! most) on their own tasks, two submit slots, two file reads, the push routes, the screen-share routes 503 while F's switch is off.
 //! It implements [`crate::relay::connection::RequestHandler`] for the relay and direct connections. Owner: W8-B.
 //!
-//! At rest (W8 Step 0): every route answers 404 and nothing is ever notified.
+//! Every body is written with `mighty_core::json::JsonOut` (C#'s `Wire.Json`: non-ASCII as `\uXXXX`, nulls left out), in C#'s property
+//! order. The router learns of changes only through [`Router::changed`] (the host's change hook) and reads the waiting permissions from
+//! the desk; the panes are read again at the next [`Router::observe`] (the 250 ms tick and every long poll).
 
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use base64::Engine as _;
+use mighty_composer::pending::SubmitReceipt;
+use mighty_composer::slash::{self, SlashArgument, SlashCommandAction};
+use mighty_core::json::{JsonOut, Wire};
+use mighty_core::locale::Locale;
+use mighty_core::model::{AppSnapshot, RunSession, Workspace};
+use mighty_core::permission::ToolPermissionRequest;
+use mighty_core::wire;
+use mighty_delegation::request::DelegationName;
 use mighty_platform::BoxFuture;
+use mighty_run::model::ModelCatalog;
+use mighty_run::plan_mode::{self, PlanDecision};
+use mighty_terminal::prompt::TerminalPromptAnswer;
+use mighty_workmap::WorkMapStart;
 use serde_json::value::RawValue;
+use serde_json::{Map, Value, json};
+use tokio::sync::Semaphore;
 
-use crate::phone::desk::PhoneDesk;
+use crate::phone::app_update::{self, MobileAppUpdate};
+use crate::phone::desk::{ActionAnswer, MobileDesktopAction, MobileError, MobilePaneDigest, MobilePaneExtras, PhoneDesk};
+use crate::phone::files::{self, MobileFilePreview, PreviewSlot};
+use crate::phone::mighty::{self, MobileOut, MobilePermission};
+use crate::phone::revisions::{MobileRevisions, Reading};
+use crate::phone::uploads::{CHUNK_SIZE, MobileUploads};
+use crate::push::hub::PushHub;
+use crate::push::recipients;
 use crate::relay::connection::{MobileDevice, MobileReply, RequestHandler};
 
 /// `MobileDesktopRouter.Capabilities` (`:37`).
@@ -41,19 +68,279 @@ pub const CAPABILITIES: [&str; 21] = [
 ];
 
 /// `MobileWire.MaximumReplyBytes`: 1 MiB − 32 KiB.
-pub const MAXIMUM_REPLY_BYTES: usize = 1024 * 1024 - 32 * 1024;
+pub const MAXIMUM_REPLY_BYTES: usize = mighty::MAXIMUM_REPLY_BYTES;
+/// `ScreenShareAvailability.Capability`.
+pub const SCREEN_SHARE: &str = "screenShare";
+/// How often a long poll looks again.
+pub const POLL_STEP: Duration = Duration::from_millis(100);
+/// A request body's cap, and an upload chunk's.
+pub const MAXIMUM_BODY: usize = 65_536;
+pub const MAXIMUM_CHUNK_BODY: usize = 300 * 1_024;
+
+/// `ScreenShareAvailability.Extra`: the extra capabilities a host advertises, `screenShare` left out while screen share is off.
+pub fn extra_capabilities(extra: Option<Vec<String>>, available: bool) -> Vec<String> {
+    match extra {
+        None => vec![],
+        Some(values) if available => values,
+        Some(values) => values.into_iter().filter(|v| v != SCREEN_SHARE).collect(),
+    }
+}
+
+/// Where the push routes reach the push hub (W8-A's, made after the router: src-tauri `phone.rs` looks it up at each request).
+pub type PushLookup = Arc<dyn Fn() -> Option<Arc<PushHub>> + Send + Sync>;
+
+/// How a router is made (C#'s constructor arguments and init-only properties that are not the desk's).
+pub struct RouterOptions {
+    /// `<directory>/uploads` (C#: `Path.Combine(directory, "uploads")`).
+    pub uploads: PathBuf,
+    /// `/m1/info`'s `platform` (`PlatformProfile::m1_platform`).
+    pub platform: &'static str,
+    /// `ScreenShareAvailable` (`screen::ENABLED` by default).
+    pub screen_share: bool,
+    /// `Push`: None answers `/m1/push/*` as unknown routes.
+    pub push: Option<PushLookup>,
+}
+
+impl RouterOptions {
+    pub fn new(uploads: PathBuf, platform: &'static str) -> RouterOptions {
+        RouterOptions { uploads, platform, screen_share: crate::screen::ENABLED, push: None }
+    }
+}
+
+#[derive(Default)]
+struct Notes {
+    revisions: MobileRevisions,
+    notifications: Vec<(String, i64)>,
+}
+
+struct Inner {
+    desk: Arc<dyn PhoneDesk>,
+    options: RouterOptions,
+    uploads: MobileUploads,
+    sync: Mutex<Notes>,
+    moved: AtomicBool,
+    submit_slots: Semaphore,
+    file_slots: Semaphore,
+    previews: PreviewSlot,
+}
 
 /// The m1 router over a desk.
+#[derive(Clone)]
 pub struct Router {
-    desk: Arc<dyn PhoneDesk>,
+    inner: Arc<Inner>,
+}
+
+impl std::fmt::Debug for Router {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Router").field("state", &self.state_revision()).finish()
+    }
+}
+
+type Routed = Result<MobileReply, MobileError>;
+
+fn locale() -> Locale {
+    mighty_run::strings::locale()
+}
+
+fn request(status: u16, message: impl Into<String>) -> MobileError {
+    MobileError::request(status, message, None)
+}
+
+fn not_found() -> MobileError {
+    request(404, "Mobile route not found.")
+}
+
+/// `Error(status, text, code)` as the reply C#'s catch blocks make.
+fn error_reply(error: MobileError) -> MobileReply {
+    match error {
+        MobileError::Request { status, message, code } => MobileReply::error(status, &message, code.as_deref()),
+        MobileError::Invalid => MobileReply::error(400, "Invalid mobile request.", None),
+        MobileError::Changed => MobileReply::error(409, "The pane changed; refresh and try again.", None),
+        MobileError::Unavailable => MobileReply::error(403, "The requested file is unavailable.", None),
+        MobileError::Failed(_) => MobileReply::error(500, "Desktop request failed.", None),
+    }
+}
+
+/// `Reply(body, status)`: a body over the limit is refused whole.
+fn reply(status: u16, body: String) -> MobileReply {
+    if body.len() <= MAXIMUM_REPLY_BYTES {
+        MobileReply::new(status, body)
+    } else {
+        MobileReply::error(413, "Response exceeds the mobile display limit.", None)
+    }
+}
+
+fn object(write: impl FnOnce(&mut JsonOut)) -> String {
+    let mut out = JsonOut::new();
+    out.begin_object();
+    out.prop_int("protocol", 1);
+    write(&mut out);
+    out.end_object();
+    out.finish()
+}
+
+/// `OK()`.
+fn ok() -> MobileReply {
+    reply(200, object(|o| o.prop_bool("ok", true)))
+}
+
+/// A value written as `Wire.Json` writes an `object?` member: a null left out.
+fn prop_value(out: &mut JsonOut, name: &str, value: Option<&Value>) {
+    if let Some(value) = value.filter(|v| !v.is_null()) {
+        out.name(name);
+        out.value(value);
+    }
+}
+
+/// `SubmitReply(result)`: a receipt answers with its outcome word in `accepted` and `outcome` and its ids; any other answer as before.
+pub fn submit_reply(result: &ActionAnswer) -> String {
+    match result {
+        ActionAnswer::Receipt(receipt) => mobile_submit_reply(receipt),
+        ActionAnswer::Value(value) => object(|o| prop_value(o, "accepted", Some(value))),
+    }
+}
+
+/// `SubmitReceipt.MobileReply()` (`MobileSubmitReply(Protocol, Accepted, Outcome, EntryId, RunId)`).
+pub fn mobile_submit_reply(receipt: &SubmitReceipt) -> String {
+    object(|o| {
+        o.prop_str("accepted", Some(&receipt.outcome));
+        o.prop_str("outcome", Some(&receipt.outcome));
+        o.prop_str("entryId", receipt.entry_id.as_deref());
+        o.prop_str("runId", receipt.run_id.as_deref());
+    })
+}
+
+fn answer_value(answer: &ActionAnswer) -> Value {
+    match answer {
+        ActionAnswer::Value(value) => value.clone(),
+        ActionAnswer::Receipt(receipt) => Value::String(receipt.outcome.clone()),
+    }
+}
+
+/// `Uri.UnescapeDataString`: `%XX` sequences that form UTF-8 decoded, anything else kept as it is.
+fn unescape(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' {
+            let hex = |b: u8| (b as char).to_digit(16);
+            if let (Some(Some(h)), Some(Some(l))) = (bytes.get(at + 1).map(|b| hex(*b)), bytes.get(at + 2).map(|b| hex(*b))) {
+                out.push((h * 16 + l) as u8);
+                at += 3;
+                continue;
+            }
+        }
+        out.push(bytes[at]);
+        at += 1;
+    }
+    match String::from_utf8(out) {
+        Ok(decoded) => decoded,
+        Err(_) => text.to_string(),
+    }
+}
+
+/// `long.TryParse` (`NumberStyles.Integer`: white space around, a leading sign).
+fn parse_long(text: &str) -> Option<i64> {
+    let trimmed = text.trim_matches([' ', '\t', '\n', '\u{0B}', '\u{0C}', '\r']);
+    let digits = trimmed.strip_prefix('+').unwrap_or(trimmed);
+    if digits.starts_with('+') || digits.is_empty() {
+        return None;
+    }
+    digits.parse::<i64>().ok()
+}
+
+type Query = Vec<(String, String)>;
+
+fn query_get<'a>(query: &'a Query, key: &str) -> Option<&'a str> {
+    query.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+}
+
+/// `Number(query, key, minimum, maximum, fallback)`.
+fn number(query: &Query, key: &str, minimum: i64, maximum: i64, fallback: i64) -> Result<i64, MobileError> {
+    match query_get(query, key) {
+        None => Ok(fallback),
+        Some(text) => parse_long(text).filter(|n| (minimum..=maximum).contains(n)).ok_or_else(|| request(400, format!("Invalid {key}."))),
+    }
+}
+
+/// `Object(body, maximum)`: the request's body, an object of at most `maximum` UTF-8 bytes as the phone sent it.
+fn body_object(body: Option<&RawValue>, maximum: usize) -> Result<Map<String, Value>, MobileError> {
+    let invalid = || request(400, "Invalid request body.");
+    let raw = body.ok_or_else(invalid)?;
+    if raw.get().len() > maximum {
+        return Err(invalid());
+    }
+    match serde_json::from_str::<Value>(raw.get()) {
+        Ok(Value::Object(map)) => Ok(map),
+        _ => Err(invalid()),
+    }
+}
+
+fn text<'a>(body: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+    body.get(key).and_then(Value::as_str)
+}
+
+/// `Required(body, key)`.
+fn required<'a>(body: &'a Map<String, Value>, key: &str) -> Result<&'a str, MobileError> {
+    text(body, key).ok_or_else(|| request(400, format!("Missing {key}.")))
+}
+
+/// `RequestText(body, allowEmpty)`.
+fn request_text(body: &Map<String, Value>, allow_empty: bool) -> Result<String, MobileError> {
+    let text = required(body, "text")?;
+    if (!allow_empty && text.chars().all(char::is_whitespace)) || text.len() > 32_768 || text.contains('\0') {
+        return Err(request(400, "Invalid request text."));
+    }
+    Ok(text.to_string())
+}
+
+/// `RemoteWorkspacePhone.Workspaces`: this PC's workspaces only.
+fn local_workspaces(snapshot: &AppSnapshot) -> Vec<&Workspace> {
+    snapshot.workspaces().iter().filter(|w| w.remote.is_none()).collect()
+}
+
+/// `RemoteWorkspacePhone.Sessions` without the files and work map panes: the panes the phone is told of.
+fn phone_panes(snapshot: &AppSnapshot) -> Vec<Arc<RunSession>> {
+    let local: std::collections::HashSet<&str> = local_workspaces(snapshot).iter().map(|w| w.id()).collect();
+    snapshot.sessions().iter().filter(|s| local.contains(s.workspace_id()) && !matches!(s.kind(), "files" | "workmap")).cloned().collect()
+}
+
+/// `ModelLabel.Resolution(model, catalog, hint)`.
+fn resolution(model: &str, catalog: &ModelCatalog, hint: Option<&str>) -> Option<String> {
+    if let Some(resolved) = catalog.models.iter().find(|m| m.value == model).and_then(|m| m.resolved_model.clone()) {
+        return Some(resolved);
+    }
+    let mut alias = model.trim().to_lowercase();
+    if alias.ends_with("[1m]") {
+        alias.truncate(alias.len() - 4);
+    }
+    if ["opus", "sonnet", "haiku", "fable"].contains(&alias.as_str()) { hint.map(str::to_string) } else { None }
+}
+
+/// The user's home folder (the slash catalogue's `~/.claude`).
+fn home() -> PathBuf {
+    std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default()
 }
 
 impl Router {
-    pub fn new(desk: Arc<dyn PhoneDesk>) -> Router {
-        Router { desk }
+    pub fn new(desk: Arc<dyn PhoneDesk>, options: RouterOptions) -> Router {
+        let uploads = MobileUploads::new(&options.uploads);
+        Router {
+            inner: Arc::new(Inner {
+                desk,
+                options,
+                uploads,
+                sync: Mutex::new(Notes::default()),
+                moved: AtomicBool::new(true),
+                submit_slots: Semaphore::new(2),
+                file_slots: Semaphore::new(2),
+                previews: PreviewSlot::new(),
+            }),
+        }
     }
 
-    /// `RouteAsync(method, path, body, device)`.
+    /// `RouteAsync(method, path, body, device)`: the reply of one request (never an error: a failure is its reply).
     pub fn route(
         &self,
         device: MobileDevice,
@@ -61,26 +348,1156 @@ impl Router {
         path: String,
         body: Option<Box<RawValue>>,
     ) -> BoxFuture<'static, MobileReply> {
-        let _ = (device, method, path, body, &self.desk);
-        Box::pin(async { MobileReply::error(404, "Mobile route not found.", None) })
+        let inner = self.inner.clone();
+        Box::pin(async move {
+            match inner.route(&device.client_id, &method, &path, body.as_deref()).await {
+                Ok(reply) => reply,
+                Err(error) => error_reply(error),
+            }
+        })
     }
 
     /// `Changed`: something a phone may show moved (a run event, a permission, delegation, an Antigravity card); the panes are read again
     /// at the next [`Router::observe`]. Cheap: the host calls it from its change hook.
-    pub fn changed(&self) {}
+    pub fn changed(&self) {
+        self.inner.moved.store(true, Ordering::SeqCst);
+    }
 
-    /// `Observe`: the panes read again when something moved, the revisions of what changed moved.
-    pub fn observe(&self) {}
+    /// `Observe`: the panes read again when something moved, the revisions of what changed moved. A pass that fails (a desk that
+    /// panicked) is made again at the next call.
+    pub fn observe(&self) {
+        let _ = self.inner.observe();
+    }
 
     /// `TakeNotifications`: the scopes whose revision moved since the last call, `state` before the sessions, each with its newest
     /// revision.
     pub fn take_notifications(&self) -> Vec<(String, i64)> {
-        vec![]
+        std::mem::take(&mut self.inner.notes().notifications)
+    }
+
+    /// `StateRevision`.
+    pub fn state_revision(&self) -> i64 {
+        self.inner.notes().revisions.state()
+    }
+
+    /// `SessionRevision(id)`.
+    pub fn session_revision(&self, id: &str) -> i64 {
+        self.inner.notes().revisions.session(id)
+    }
+
+    /// `OpenUploadCount`: files the phone is uploading or has uploaded and not yet sent.
+    pub fn open_upload_count(&self) -> usize {
+        self.inner.uploads.count()
+    }
+
+    /// `ResetUploads`.
+    pub fn reset_uploads(&self) {
+        self.inner.uploads.clear();
     }
 }
 
 impl RequestHandler for Router {
     fn handle(&self, device: MobileDevice, method: String, path: String, body: Option<Box<RawValue>>) -> BoxFuture<'static, MobileReply> {
         self.route(device, method, path, body)
+    }
+}
+
+impl Inner {
+    fn notes(&self) -> std::sync::MutexGuard<'_, Notes> {
+        self.sync.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn changed(&self) {
+        self.moved.store(true, Ordering::SeqCst);
+    }
+
+    /// `Observe`: Err when the pass failed (it is made again at the next call).
+    fn observe(&self) -> Result<(), MobileError> {
+        if !self.moved.swap(false, Ordering::SeqCst) {
+            return Ok(());
+        }
+        let pass = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let snapshot = self.desk.snapshot();
+            let panes = phone_panes(&snapshot);
+            let summaries: Vec<(MobilePaneDigest, String, String)> = panes
+                .iter()
+                .map(|pane| {
+                    let digest = self.desk.digest(pane).unwrap_or_else(|| unread(pane));
+                    let held = self.desk.held_items(pane.id()).iter().map(|i| i.id.clone()).collect::<Vec<_>>().join("\n");
+                    (digest, self.summary(pane, 0, &snapshot), held)
+                })
+                .collect();
+            let readings: Vec<Reading> = panes
+                .iter()
+                .zip(summaries)
+                .map(|(pane, (digest, summary, held))| Reading {
+                    pane,
+                    editable: digest.editable,
+                    options: digest.options,
+                    mighty: digest.mighty,
+                    summary,
+                    held,
+                })
+                .collect();
+            let update = self.app_update_phone(&snapshot).map(|u| u.to_json()).unwrap_or_else(|| "null".into());
+            let mut notes = self.notes();
+            let moved = notes.revisions.observe(local_workspaces(&snapshot), &readings, &update);
+            for note in moved {
+                notes.notifications.retain(|(scope, _)| *scope != note.0);
+                notes.notifications.push(note);
+            }
+        }));
+        if pass.is_err() {
+            self.changed();
+            return Err(MobileError::Changed);
+        }
+        Ok(())
+    }
+
+    /// The app update as the phone sees it, with the requests running now; None when there is none.
+    fn app_update_phone(&self, snapshot: &AppSnapshot) -> Option<MobileAppUpdate> {
+        let state = self.desk.app_update_read()?;
+        let running =
+            phone_panes(snapshot).iter().filter(|s| s.status() == "running" || self.desk.is_session_running(s.id())).count() as i32;
+        app_update::map(state.as_ref(), &self.desk.app_version(), running)
+    }
+
+    /// `Pending(id)`: the pane's waiting tool permissions (never a remote pane's).
+    fn pending(&self, id: &str) -> Vec<ToolPermissionRequest> {
+        if self.desk.is_remote_session(id) {
+            return vec![];
+        }
+        self.desk.pending_permissions(id).into_iter().filter(|p| p.state == "pending" && p.run_id == id).collect()
+    }
+
+    /// `Session(id)`.
+    fn session(&self, id: &str) -> Result<Arc<RunSession>, MobileError> {
+        let snapshot = self.desk.snapshot();
+        phone_panes(&snapshot).into_iter().find(|p| p.id() == id).ok_or_else(|| request(404, "Session not found."))
+    }
+
+    fn revision(&self, id: &str) -> i64 {
+        self.notes().revisions.session(id)
+    }
+
+    /// `Summary(pane, revision)`: one pane as the phone's list shows it.
+    fn summary(&self, pane: &RunSession, revision: i64, snapshot: &AppSnapshot) -> String {
+        let _ = snapshot;
+        let l = locale();
+        let pending = self.pending(pane.id());
+        let tail = pane.logs().iter().rev().find(|e| matches!(e.kind(), "assistant" | "user" | "error" | "output"));
+        let agent = pane.kind() == "claude";
+        let style = if agent { self.desk.active_style(pane) } else { None };
+        let antigravity = self.desk.antigravity_card(pane.id()).is_some() as i64;
+        let queued = match self.desk.queue_count(pane.id()) {
+            Some(count) => count as i64 + self.desk.held_items(pane.id()).len() as i64,
+            None => self.desk.extras(pane).queued.len() as i64,
+        };
+        let catalog = self.desk.catalog(pane).unwrap_or_else(|| mighty_run::providers::fallback(pane.provider()));
+        let resolved =
+            (pane.kind() != "shell").then(|| resolution(pane.model(), &catalog, mighty_core::model_label::reported_model(pane))).flatten();
+        let _ = l;
+        let mut out = JsonOut::new();
+        out.begin_object();
+        out.prop_str("id", Some(pane.id()));
+        out.prop_str("workspaceId", Some(pane.workspace_id()));
+        out.prop_str("title", Some(pane.title()));
+        out.prop_str("kind", Some(pane.kind()));
+        out.prop_str("provider", Some(pane.provider()));
+        out.prop_str("model", Some(pane.model()));
+        out.prop_str("status", Some(pane.status()));
+        out.prop_int("revision", revision);
+        let updated = pane.logs().last().and_then(|e| e.timestamp.clone()).or_else(|| pane.created_at.clone());
+        out.prop_str("updatedAt", Some(updated.as_deref().unwrap_or("")));
+        if let Some(tail) = tail {
+            out.name("preview");
+            out.begin_object();
+            out.prop_str("kind", Some(tail.kind()));
+            out.prop_str("text", Some(&wire::clean(tail.text(), 200)));
+            out.end_object();
+        }
+        out.prop_int("pendingPermissions", pending.iter().filter(|p| !p.can_answer_questions).count() as i64 + antigravity);
+        out.prop_int("pendingQuestions", pending.iter().filter(|p| p.can_answer_questions).count() as i64);
+        out.prop_int("queued", queued);
+        out.prop_str("resumeId", pane.resume_id.as_deref());
+        out.prop_bool("terminal", !agent);
+        if agent {
+            out.prop_str("agentViewMode", Some(mighty::view_mode(pane.agent_view_mode.as_deref())));
+            out.prop_str("mightyStyle", Some(mighty::style(style.as_deref())));
+            out.prop_str("styleId", Some(style.as_deref().unwrap_or(mighty::CLI_STYLE)));
+        }
+        out.prop_str("titleMode", Some(pane.title_mode.as_deref().unwrap_or("auto")));
+        out.prop_str("resolvedModel", resolved.as_deref());
+        out.prop_bool("canSteer", false);
+        out.end_object();
+        out.finish()
+    }
+
+    /// `State()`: the phone's list.
+    fn state(&self) -> String {
+        let snapshot = self.desk.snapshot();
+        let revision = self.notes().revisions.state();
+        let host_name = self.desk.host_name();
+        let mut out = JsonOut::new();
+        out.begin_object();
+        out.prop_int("protocol", 1);
+        out.prop_int("revision", revision);
+        out.prop_str("hostName", Some(&host_name));
+        out.name("workspaces");
+        out.begin_array();
+        for w in local_workspaces(&snapshot) {
+            out.begin_object();
+            out.prop_str("id", Some(w.id()));
+            out.prop_str("name", Some(w.name()));
+            out.prop_str("path", Some(w.path()));
+            out.end_object();
+        }
+        out.end_array();
+        out.name("sessions");
+        out.begin_array();
+        for pane in phone_panes(&snapshot) {
+            let summary = self.summary(&pane, self.revision(pane.id()), &snapshot);
+            out.raw(&summary);
+        }
+        out.end_array();
+        if let Some(update) = self.app_update_phone(&snapshot) {
+            out.name("appUpdate");
+            update.write(&mut out);
+        }
+        out.end_object();
+        out.finish()
+    }
+
+    /// `SessionReply(pane, asked, roles)`: the structure travels only to a phone that asked (`asked`: the tag it holds) and only when it
+    /// differs; a detail over the limit sheds the structure first, keeping the tag.
+    fn session_reply(&self, pane: &RunSession, asked: Option<i64>, roles: bool) -> MobileReply {
+        let detail = if roles { self.desk.role_extras(pane).unwrap_or_else(|| self.desk.extras(pane)) } else { self.desk.extras(pane) };
+        let built = if asked.is_none() || detail.mighty.is_none() { None } else { self.desk.structure(pane) };
+        let structure = built.as_ref().filter(|b| Some(b.tag) != asked).and_then(|b| b.value.as_ref()).map(|s| s.to_json());
+        let tag = built.as_ref().map(|b| b.tag);
+        let first = reply(200, self.detail(pane, &detail, structure.as_deref(), tag));
+        if first.status == 413 && structure.is_some() { reply(200, self.detail(pane, &detail, None, tag)) } else { first }
+    }
+
+    /// `Detail(pane, detail, structure, tag)`.
+    fn detail(&self, pane: &RunSession, detail: &MobilePaneExtras, structure: Option<&str>, structure_tag: Option<i64>) -> String {
+        let l = locale();
+        let snapshot = self.desk.snapshot();
+        let revision = self.revision(pane.id());
+        let usage = pane.session_usage.as_ref();
+        let logs = pane.logs();
+        let mut out = JsonOut::new();
+        out.begin_object();
+        out.prop_int("protocol", 1);
+        out.prop_int("revision", revision);
+        out.name("session");
+        out.raw(&self.summary(pane, revision, &snapshot));
+        out.name("entries");
+        out.list(&mighty::phone_entries(&logs[logs.len().saturating_sub(mighty::MAXIMUM_ENTRIES)..]));
+        out.prop_bool("hasOlder", logs.len() > mighty::MAXIMUM_ENTRIES);
+        let mut permissions: Vec<MobilePermission> = self.pending(pane.id()).iter().map(|p| MobilePermission::from(p, &l)).collect();
+        if let Some(card) = self.desk.antigravity_card(pane.id()) {
+            permissions.push(MobilePermission::from_antigravity(&card, &l));
+        }
+        out.name("permissions");
+        permissions.write(&mut out);
+        out.name("queued");
+        write_queued(&mut out, &detail.queued);
+        if let Some(usage) = usage {
+            out.name("usage");
+            out.begin_object();
+            out.prop_str("model", usage.model.as_deref());
+            out.prop_opt_int("contextUsedTokens", usage.context_used_tokens);
+            out.prop_opt_int("contextWindowTokens", usage.context_window_tokens);
+            let percent = match (usage.context_used_tokens, usage.context_window_tokens) {
+                (Some(used), Some(window)) if used >= 0 && window > 0 => Some((used as f64 / window as f64 * 100.0).clamp(0.0, 100.0)),
+                _ => None,
+            };
+            out.prop_opt_float("contextPercent", percent);
+            out.prop_opt_int("totalTokens", usage.total_tokens);
+            out.prop_opt_float("costUSD", usage.cost_usd);
+            out.end_object();
+        }
+        out.prop_opt_float("elapsedSeconds", pane.run_timing.as_ref().map(|t| mighty_run::timing::elapsed(t, None)));
+        prop_value(&mut out, "settings", detail.settings.as_ref());
+        prop_value(&mut out, "mighty", with_structure(detail.mighty.as_ref(), structure, structure_tag).as_ref());
+        prop_value(&mut out, "statusLine", detail.status_line.as_ref());
+        if let Some(limits) = mighty::rate_limits(usage.and_then(|u| u.rate_limits.as_deref()), &l) {
+            out.name("rateLimits");
+            limits.write(&mut out);
+        }
+        if let Some(targets) = detail.ask_targets.as_ref().filter(|t| !t.is_empty()) {
+            out.name("askTargets");
+            out.begin_array();
+            for t in targets {
+                out.begin_object();
+                out.prop_str("id", Some(&t.id));
+                out.prop_str("label", Some(&t.label));
+                out.end_object();
+            }
+            out.end_array();
+            out.prop_str("askTarget", detail.ask_target.as_deref());
+        }
+        if let Some(work) = detail.background_work.as_ref().filter(|w| !w.is_empty()) {
+            out.name("backgroundWork");
+            out.begin_array();
+            for w in work {
+                out.begin_object();
+                out.prop_str("id", Some(&w.id));
+                out.prop_str("kind", Some(&w.kind));
+                out.prop_str("title", Some(&w.title));
+                out.prop_str("status", Some(&w.status));
+                out.prop_str("startedAt", Some(&w.started_at));
+                out.prop_str("command", w.command.as_deref());
+                out.prop_strings("outputTail", w.output_tail.as_ref());
+                out.end_object();
+            }
+            out.end_array();
+        }
+        out.prop_opt_int("backgroundDone", detail.background_done.map(i64::from));
+        if let Some(prompt) = &detail.terminal_prompt {
+            out.name("terminalPrompt");
+            out.begin_object();
+            out.prop_str("id", Some(&prompt.id));
+            out.prop_str("handle", Some(&prompt.handle));
+            out.prop_str("text", Some(&prompt.text));
+            out.name("options");
+            out.strings(&prompt.options);
+            out.prop_str("kind", Some(prompt.kind));
+            out.prop_opt_bool("defaultYes", prompt.default_yes);
+            out.end_object();
+        }
+        out.end_object();
+        out.finish()
+    }
+
+    async fn route(self: &Arc<Self>, device: &str, method: &str, path: &str, body: Option<&RawValue>) -> Routed {
+        let l = locale();
+        if !path.starts_with("/m1/") || path.contains('#') || path.contains('\\') {
+            return Err(not_found());
+        }
+        let Ok(url) = url::Url::parse(&format!("http://mobile.invalid{path}")) else { return Err(not_found()) };
+        if url.host_str() != Some("mobile.invalid") {
+            return Err(not_found());
+        }
+        let route: Vec<String> = url.path().split('/').filter(|s| !s.is_empty()).map(unescape).collect();
+        let route: Vec<&str> = route.iter().map(String::as_str).collect();
+        let mut query: Query = vec![];
+        for item in url.query().unwrap_or("").split('&').filter(|s| !s.is_empty()) {
+            let (key, value) = item.split_once('=').unwrap_or((item, ""));
+            let (key, value) = (unescape(key), unescape(value));
+            if query.iter().any(|(k, _)| *k == key) {
+                return Err(request(400, "Repeated query argument."));
+            }
+            query.push((key, value));
+        }
+        if method == "POST" && !query.is_empty() {
+            return Err(request(400, "Unexpected query argument."));
+        }
+        // Always the authenticated device, never a body field (M/MobileRemoteService.swift push routes).
+        if method == "POST"
+            && route.len() == 3
+            && route[1] == "push"
+            && let Some(push) = self.options.push.as_ref().and_then(|lookup| lookup())
+            && let Some(answer) = self.push_route(&push, route[2], device, body, &l)?
+        {
+            return Ok(answer);
+        }
+        if method == "GET" && route == ["m1", "info"] {
+            return Ok(self.info());
+        }
+        if method == "GET" && (route == ["m1", "state"] || route.len() == 3 && route[1] == "sessions") {
+            return self.poll(&route, &query).await;
+        }
+        if method == "POST" && route == ["m1", "app-update"] && query.is_empty() {
+            return self.app_update(body, &l).await;
+        }
+        if route.len() == 3 && route[1] == "screen-share" {
+            return Err(request(503, "Screen sharing is not available on this host."));
+        }
+        if matches!(route.len(), 4 | 5)
+            && route[1] == "workspaces"
+            && route[3] == "workmap"
+            && let Some(answer) = self.work_map(method, &route, &query, body, &l).await?
+        {
+            return Ok(answer);
+        }
+        if route.len() == 4
+            && route[1] == "workspaces"
+            && let Some(answer) = self.workspace(method, &route, &query, body, device, &l).await?
+        {
+            return Ok(answer);
+        }
+        if route.len() >= 4
+            && route[1] == "uploads"
+            && method == "POST"
+            && let Some(answer) = self.upload(&route, body, device)?
+        {
+            return Ok(answer);
+        }
+        if route.len() >= 4 && route[1] == "sessions" {
+            return self.pane_route(method, &route, &query, body, device, &l).await;
+        }
+        Err(not_found())
+    }
+
+    fn push_route(
+        &self,
+        push: &PushHub,
+        kind: &str,
+        device: &str,
+        body: Option<&RawValue>,
+        l: &Locale,
+    ) -> Result<Option<MobileReply>, MobileError> {
+        use crate::identity::PushRegistrationResult;
+        match kind {
+            "register" => {
+                let value = body_object(body, MAXIMUM_BODY)?;
+                let handle = required(&value, "handle")?;
+                if !recipients::valid_handle(handle) {
+                    return Err(request(400, l.get("remote.error.badPushHandle")));
+                }
+                let Some(Value::Array(list)) = value.get("kinds") else { return Err(request(400, l.get("remote.error.badBody"))) };
+                let names: Vec<&str> = list.iter().filter_map(Value::as_str).collect();
+                let kinds = recipients::kinds(&names);
+                match push.register(device, handle, &kinds) {
+                    PushRegistrationResult::Saved => Ok(Some(ok())),
+                    PushRegistrationResult::NeedsToken => Err(request(409, l.get("remote.error.pushNeedsToken"))),
+                    PushRegistrationResult::Unsaved => Err(request(503, l.get("mobileRemote.device.saveFailed"))),
+                }
+            }
+            "unregister" => {
+                if !push.unregister(device) {
+                    return Err(request(503, l.get("mobileRemote.device.saveFailed")));
+                }
+                Ok(Some(ok()))
+            }
+            "viewing" => {
+                // No body, no sessionId and sessionId: null all clear the view.
+                let empty = body.is_none_or(|raw| raw.get().trim() == "null");
+                if empty {
+                    push.viewing(device, None);
+                } else {
+                    let value = body_object(body, MAXIMUM_BODY)?;
+                    match value.get("sessionId") {
+                        None | Some(Value::Null) => push.viewing(device, None),
+                        Some(Value::String(shown)) if wire::identifier(shown) => push.viewing(device, Some(shown.clone())),
+                        _ => return Err(request(404, l.get("remote.error.paneNotFound"))),
+                    }
+                }
+                Ok(Some(ok()))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    fn info(&self) -> MobileReply {
+        let mut capabilities: Vec<String> = CAPABILITIES.iter().map(|c| c.to_string()).collect();
+        for extra in extra_capabilities(Some(self.desk.extra_capabilities()), self.options.screen_share) {
+            if !capabilities.contains(&extra) {
+                capabilities.push(extra);
+            }
+        }
+        let direct = self.desk.direct_endpoints();
+        reply(
+            200,
+            object(|o| {
+                o.prop_str("hostId", Some(&self.desk.host_id()));
+                o.prop_str("hostName", Some(&self.desk.host_name()));
+                o.prop_str("appVersion", Some(&self.desk.app_version()));
+                o.prop_str("platform", Some(self.options.platform));
+                o.name("capabilities");
+                o.strings(&capabilities);
+                o.name("direct");
+                o.strings(&direct);
+            }),
+        )
+    }
+
+    /// `GET /m1/state` and `GET /m1/sessions/{id}`: each scope waits on its own revision, 100 ms at a time, at most `wait` seconds.
+    async fn poll(self: &Arc<Self>, route: &[&str], query: &Query) -> Routed {
+        let detail = route[1] == "sessions";
+        if query.iter().any(|(k, _)| !matches!(k.as_str(), "since" | "wait") && !(detail && matches!(k.as_str(), "structure" | "roles"))) {
+            return Err(request(400, "Unexpected poll argument."));
+        }
+        let since = number(query, "since", 0, i64::MAX, 0)?;
+        let wait = number(query, "wait", 0, 10, 0)?;
+        let asked = if query_get(query, "structure").is_some() { Some(number(query, "structure", 0, 999_999_999_999, 0)?) } else { None };
+        let roles = query_get(query, "roles").is_some() && number(query, "roles", 0, 999_999_999_999, 0)? > 0;
+        let id = detail.then(|| route[2].to_string());
+        if let Some(id) = &id {
+            self.session(id)?;
+        }
+        let current = |inner: &Inner| -> Result<i64, MobileError> {
+            inner.observe()?;
+            let notes = inner.notes();
+            Ok(match &id {
+                None => notes.revisions.state(),
+                Some(id) => notes.revisions.session(id),
+            })
+        };
+        if current(self)? <= since && wait > 0 {
+            let until = Instant::now() + Duration::from_secs(wait as u64);
+            while current(self)? <= since && Instant::now() < until {
+                tokio::time::sleep(POLL_STEP).await;
+            }
+        }
+        match id {
+            None => Ok(reply(200, self.state())),
+            Some(id) => {
+                let pane = self.session(&id)?;
+                Ok(self.session_reply(&pane, asked, roles))
+            }
+        }
+    }
+
+    async fn app_update(&self, body: Option<&RawValue>, l: &Locale) -> Routed {
+        let value = body_object(body, MAXIMUM_BODY)?;
+        let install = text(&value, "action") == Some("install");
+        if !install && text(&value, "action") != Some("check") {
+            return Err(request(400, l.get("appUpdate.mobile.badAction")));
+        }
+        let snapshot = self.desk.snapshot();
+        let Some(state) = self.app_update_phone(&snapshot) else { return Err(request(409, l.get("appUpdate.mobile.unavailable"))) };
+        if install && state.running > 0 && value.get("confirm") != Some(&Value::Bool(true)) {
+            return Err(request(409, l.get_with("appUpdate.mobile.runningRequests", &[("count", &state.running.to_string())])));
+        }
+        self.desk.app_update_act(install).await?;
+        let after = self.app_update_phone(&self.desk.snapshot()).unwrap_or(state);
+        Ok(reply(200, after.to_json()))
+    }
+
+    async fn work_map(
+        &self,
+        method: &str,
+        route: &[&str],
+        query: &Query,
+        body: Option<&RawValue>,
+        l: &Locale,
+    ) -> Result<Option<MobileReply>, MobileError> {
+        // Only this PC's workspaces: a remote one's history is on its host.
+        let snapshot = self.desk.snapshot();
+        let Some(mapped) = local_workspaces(&snapshot).into_iter().find(|w| w.id() == route[2]).cloned() else {
+            return Err(request(404, "Workspace not found."));
+        };
+        if method == "GET" && route.len() == 4 && query.is_empty() {
+            let Some(read) = self.desk.work_map_read(&mapped) else { return Err(request(404, "Workspace not found.")) };
+            let model = read.await?;
+            return Ok(Some(reply(200, phone_work_map(&model))));
+        }
+        if method == "POST" && route.len() == 5 && route[4] == "summarize" {
+            let value = body_object(body, MAXIMUM_BODY)?;
+            let key = required(&value, "key")?.to_string();
+            let Some(start) = self.desk.work_map_summarize(&mapped, &key) else { return Err(request(404, "Workspace not found.")) };
+            return match start.await? {
+                WorkMapStart::Started => Ok(Some(reply(202, object(|o| o.prop_bool("ok", true))))),
+                WorkMapStart::Busy => Err(request(409, l.get("workMap.error.busy"))),
+                WorkMapStart::UnknownKey => Err(request(400, "Unknown version.")),
+                WorkMapStart::Unavailable => Err(request(404, "Workspace not found.")),
+            };
+        }
+        if self.desk.work_map_read(&mapped).is_none() {
+            return Err(request(404, "Workspace not found."));
+        }
+        Ok(None)
+    }
+
+    async fn workspace(
+        &self,
+        method: &str,
+        route: &[&str],
+        query: &Query,
+        body: Option<&RawValue>,
+        device: &str,
+        l: &Locale,
+    ) -> Result<Option<MobileReply>, MobileError> {
+        let listing = method == "GET" && route[3] == "files";
+        let files = method == "GET" && matches!(route[3], "files" | "file");
+        let snapshot = self.desk.snapshot();
+        let Some(workspace) = local_workspaces(&snapshot).into_iter().find(|w| w.id() == route[2]).cloned() else {
+            return Err(if files { files::workspace_not_found(l) } else { request(404, "Workspace not found.") });
+        };
+        if method == "POST" && route[3] == "sessions" {
+            let value = body_object(body, MAXIMUM_BODY)?;
+            if required(&value, "kind")? != "claude" {
+                return Err(request(409, "Create terminal panes on the desktop."));
+            }
+            let provider = text(&value, "provider").unwrap_or("claude");
+            if !wire::PROVIDERS.contains(&provider) {
+                return Err(request(400, "Unknown provider."));
+            }
+            let created = self
+                .desk
+                .action(MobileDesktopAction {
+                    session_id: workspace.id().into(),
+                    action: "create".into(),
+                    body: Value::Object(value.clone()),
+                    attachments: None,
+                })
+                .await?;
+            self.changed();
+            let created = answer_value(&created);
+            return Ok(Some(reply(201, object(|o| prop_value(o, "sessionId", Some(&created))))));
+        }
+        if !files {
+            return Ok(None);
+        }
+        // "fileChanges": the preview's changes=1, with the pane and run whose originals count, each optional.
+        let unexpected = || request(400, "Unexpected file argument.");
+        let changes = match (route[3] == "file", query_get(query, "changes")) {
+            (true, Some("1")) => true,
+            (true, Some(_)) => return Err(unexpected()),
+            _ => false,
+        };
+        if query.iter().any(|(k, _)| k != "path" && !(changes && matches!(k.as_str(), "changes" | "session" | "run"))) {
+            return Err(unexpected());
+        }
+        let session = query_get(query, "session");
+        let run = query_get(query, "run");
+        if session.is_some_and(|s| !wire::identifier(s)) || run.is_some_and(|r| !wire::identifier(r)) {
+            return Err(unexpected());
+        }
+        let relative = files::validated_path(query_get(query, "path"), listing, l)?;
+        let changes = changes.then(|| (session.map(str::to_string), run.map(str::to_string)));
+        self.files(&workspace, relative, listing, device, changes, l).await.map(Some)
+    }
+
+    /// The read-only file routes: the folder and the file are read off the caller's thread two at a time; only an image's decode waits
+    /// for the preview slot, one at a time, a newer preview from the same phone taking an older one's place.
+    async fn files(
+        &self,
+        workspace: &Workspace,
+        relative: String,
+        listing: bool,
+        device: &str,
+        changes: Option<(Option<String>, Option<String>)>,
+        l: &Locale,
+    ) -> Routed {
+        let root = PathBuf::from(workspace.path());
+        let id = workspace.id().to_string();
+        let stage = {
+            let _slot = self.file_slots.acquire().await.map_err(|_| MobileError::Failed("closed".into()))?;
+            if listing {
+                let (id, relative, root, locale) = (id.clone(), relative.clone(), root.clone(), *l);
+                let found = tokio::task::spawn_blocking(move || files::listing(&id, &relative, &root, &locale))
+                    .await
+                    .map_err(|_| MobileError::Failed("listing".into()))??;
+                return Ok(reply(200, files::fitted_listing(found).to_json()));
+            }
+            // A pane of another workspace never lends this one its originals; a delegated child's file and its originals are read in
+            // its worktree folder, where they were captured.
+            let snapshot = self.desk.snapshot();
+            let pane = changes
+                .as_ref()
+                .and_then(|(session, _)| session.clone())
+                .filter(|session| snapshot.sessions().iter().any(|s| s.id() == session && s.workspace_id() == id));
+            let folder = pane.as_ref().and_then(|p| self.desk.run_folder(p)).map(PathBuf::from).unwrap_or_else(|| root.clone());
+            let (stage_id, stage_relative, stage_folder, locale) = (id.clone(), relative.clone(), folder.clone(), *l);
+            let mut stage = tokio::task::spawn_blocking(move || {
+                files::prepare(&stage_id, &stage_relative, &stage_folder, mighty_composer::files::file_handles().as_ref(), &locale)
+            })
+            .await
+            .map_err(|_| MobileError::Failed("preview".into()))??;
+            // Only text has changes, worked out in the same two slots.
+            if let Some((_, run)) = &changes
+                && stage.image.is_none()
+                && matches!(stage.preview.kind.as_str(), "source" | "markdown")
+            {
+                let originals = pane.as_ref().and_then(|p| self.desk.originals_run(p, run.as_deref()));
+                let found =
+                    self.desk.file_changes(folder.to_string_lossy().into_owned(), relative.clone(), pane.clone(), originals).await?;
+                stage.preview.changes = found;
+            }
+            stage
+        };
+        let preview = stage.preview;
+        let Some(mut file) = stage.image else { return Ok(reply(200, files::fitted_preview(preview).to_json())) };
+        if !self.previews.acquire(device).await {
+            return Err(files::superseded(l));
+        }
+        let held = Held(self.previews.clone());
+        let locale = *l;
+        let bytes = tokio::task::spawn_blocking(move || files::image_bytes(&mut file, &locale))
+            .await
+            .map_err(|_| MobileError::Failed("image".into()))??;
+        let answer = self.image(preview, bytes).await;
+        drop(held);
+        Ok(answer)
+    }
+
+    async fn image(&self, preview: MobileFilePreview, bytes: Option<Vec<u8>>) -> MobileReply {
+        let Some(bytes) = bytes else { return reply(200, MobileFilePreview { reason: Some("tooLarge".into()), ..preview }.to_json()) };
+        // An svg that would load something besides itself is never drawn.
+        if mighty_files::classify::file_extension(&preview.name) == "svg" && mighty_composer::svg::svg_loads_external_content(&bytes) {
+            return reply(200, MobileFilePreview { reason: Some("undecodable".into()), ..preview }.to_json());
+        }
+        let drawn = self.desk.image_preview(preview.name.clone(), bytes).await;
+        match drawn.image {
+            // A picture sent as it is (no sizes: C#'s router without a decoder) or its thumbnail with both sizes.
+            Some(image) => {
+                let sized = image.width > 0 || image.height > 0;
+                reply(
+                    200,
+                    MobileFilePreview {
+                        kind: "image".into(),
+                        mime: Some(image.mime),
+                        width: sized.then_some(image.width),
+                        height: sized.then_some(image.height),
+                        thumbnail_width: sized.then_some(image.thumbnail_width),
+                        thumbnail_height: sized.then_some(image.thumbnail_height),
+                        data: Some(image.data),
+                        ..preview
+                    }
+                    .to_json(),
+                )
+            }
+            None => {
+                reply(200, MobileFilePreview { reason: Some(drawn.reason.unwrap_or_else(|| "undecodable".into())), ..preview }.to_json())
+            }
+        }
+    }
+
+    fn upload(&self, route: &[&str], body: Option<&RawValue>, device: &str) -> Result<Option<MobileReply>, MobileError> {
+        if route.len() == 5
+            && route[3] == "chunks"
+            && let Some(index) = parse_long(route[4]).filter(|i| i32::try_from(*i).is_ok())
+        {
+            let value = body_object(body, MAXIMUM_CHUNK_BODY)?;
+            let encoded: String = required(&value, "dataBase64")?.chars().filter(|c| !matches!(c, ' ' | '\t' | '\r' | '\n')).collect();
+            let data = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| MobileError::Invalid)?;
+            if data.len() > CHUNK_SIZE {
+                return Err(request(413, "Chunk exceeds limit."));
+            }
+            let received = self.uploads.append(route[2], device, index, &data)?;
+            return Ok(Some(reply(
+                200,
+                object(|o| {
+                    o.prop_bool("ok", true);
+                    o.prop_int("received", received as i64);
+                }),
+            )));
+        }
+        if route.len() == 4 && route[3] == "complete" {
+            let attachment = self.uploads.complete(route[2], device)?;
+            return Ok(Some(reply(
+                200,
+                object(|o| {
+                    o.name("attachment");
+                    attachment.write(o);
+                }),
+            )));
+        }
+        if route.len() == 4 && route[3] == "cancel" {
+            self.uploads.cancel(route[2], device)?;
+            return Ok(Some(ok()));
+        }
+        Ok(None)
+    }
+
+    async fn act(&self, session: &str, action: &str, body: Value) -> Result<ActionAnswer, MobileError> {
+        self.desk.action(MobileDesktopAction { session_id: session.into(), action: action.into(), body, attachments: None }).await
+    }
+
+    async fn pane_route(&self, method: &str, route: &[&str], query: &Query, body: Option<&RawValue>, device: &str, l: &Locale) -> Routed {
+        let pane = self.session(route[2])?;
+        let id = pane.id().to_string();
+        if method == "GET" && route.len() == 4 && route[3] == "entries" {
+            if query.iter().any(|(k, _)| !matches!(k.as_str(), "before" | "limit")) {
+                return Err(request(400, "Unexpected history argument."));
+            }
+            let limit = number(query, "limit", 1, mighty::MAXIMUM_PAGE_LIMIT, mighty::DEFAULT_PAGE_LIMIT)? as usize;
+            let entries = pane.logs();
+            let (page, more) = match query_get(query, "before") {
+                Some(before) => mighty::page(entries, before, limit),
+                None => (entries[entries.len().saturating_sub(limit)..].to_vec(), entries.len() > limit),
+            };
+            return Ok(reply(
+                200,
+                object(|o| {
+                    o.name("entries");
+                    o.list(&mighty::phone_entries(&page));
+                    o.prop_bool("hasMore", more);
+                }),
+            ));
+        }
+        if pane.kind() != "claude" {
+            return Err(request(409, "Use the desktop for this pane."));
+        }
+        if method == "GET" && route.len() == 4 && route[3] == "commands" && query.is_empty() {
+            return self.commands(&pane, l);
+        }
+        if method == "POST" && route.len() == 4 {
+            let operation = route[3];
+            if operation == "permission" {
+                // An Antigravity card is answered here too: allow alone is once, with always always; always never comes without allow.
+                let value = body_object(body, MAXIMUM_BODY)?;
+                let request_id = required(&value, "requestId")?.to_string();
+                let run_id = required(&value, "runId")?.to_string();
+                if !wire::identifier(&request_id) || !wire::identifier(&run_id) {
+                    return Err(request(400, l.get("remote.error.badPermissionId")));
+                }
+                let Some(Value::Bool(allow)) = value.get("allow").cloned() else { return Err(request(400, "Missing permission choice.")) };
+                let always = match value.get("always") {
+                    None | Some(Value::Bool(false)) | Some(Value::Null) => false,
+                    Some(Value::Bool(true)) => true,
+                    _ => return Err(request(400, "Invalid permission choice.")),
+                };
+                if always && !allow {
+                    return Err(request(400, l.get("remote.error.alwaysNeedsAllow")));
+                }
+                if self.desk.pending_antigravity_card(&id, &request_id, &run_id).is_some() {
+                    let decision = match mighty_run::antigravity::permissions::decision(allow, always) {
+                        mighty_run::antigravity::permissions::PermissionDecision::Once => "once",
+                        mighty_run::antigravity::permissions::PermissionDecision::Always => "always",
+                        mighty_run::antigravity::permissions::PermissionDecision::Deny => "deny",
+                    };
+                    let answer = json!({"requestId": request_id, "runId": run_id, "decision": decision});
+                    if let ActionAnswer::Value(Value::String(failure)) = self.act(&id, "antigravityPermission", answer).await? {
+                        return Err(request(409, failure));
+                    }
+                    self.changed();
+                    return Ok(ok());
+                }
+                if always {
+                    return Err(request(409, l.get("remote.error.notAntigravityPermission")));
+                }
+            }
+            if matches!(operation, "permission" | "answers") {
+                let value = body_object(body, MAXIMUM_BODY)?;
+                let request_id = required(&value, "requestId")?;
+                let run_id = required(&value, "runId")?;
+                let pending = self.pending(&id).into_iter().find(|p| p.id == request_id && p.run_id == run_id);
+                if pending.is_none() || !self.desk.is_session_running(&id) {
+                    return Err(request(409, "Request is no longer pending."));
+                }
+                if operation == "permission" {
+                    let Some(Value::Bool(allow)) = value.get("allow") else { return Err(request(400, "Missing permission choice.")) };
+                    self.desk.respond_to_tool_permission(&id, request_id, *allow).await?;
+                } else {
+                    let invalid = || request(400, "Invalid answers.");
+                    let Some(Value::Object(answers)) = value.get("answers") else { return Err(invalid()) };
+                    if answers.len() > 16 {
+                        return Err(invalid());
+                    }
+                    let parsed = mighty::answers(answers).ok_or_else(invalid)?;
+                    self.desk.answer_questionnaire(&id, request_id, parsed).await?;
+                }
+                self.changed();
+                return Ok(ok());
+            }
+            if operation == "plan" {
+                // One of the plan card's four answers (macOS MobilePlanAnswer).
+                let value = body_object(body, MAXIMUM_BODY)?;
+                let request_id = required(&value, "requestId")?;
+                let run_id = required(&value, "runId")?;
+                if !wire::identifier(request_id) || !wire::identifier(run_id) {
+                    return Err(request(400, l.get("plan.error.invalidRequest")));
+                }
+                let feedback = text(&value, "feedback");
+                let decision = match text(&value, "decision") {
+                    Some("approveAutoEdit") => PlanDecision::approve_auto_edit(),
+                    Some("approveConfirmEach") => PlanDecision::approve_confirm_each(),
+                    Some("revise") => PlanDecision::revise(feedback.unwrap_or("")),
+                    Some("cancel") => PlanDecision::cancel(),
+                    _ => return Err(request(400, l.get("plan.error.invalidDecision"))),
+                };
+                if decision.kind == "revise" {
+                    plan_mode::validated_feedback(feedback).map_err(|e| request(400, e.message()))?;
+                }
+                let pending = self.pending(&id).into_iter().find(|p| p.id == request_id && p.run_id == run_id);
+                let Some(pending) = pending.filter(|_| self.desk.is_session_running(&id)) else {
+                    return Err(request(409, "Request is no longer pending."));
+                };
+                if !pending.can_answer_plan {
+                    return Err(request(409, l.get("plan.error.notPlan")));
+                }
+                self.desk.answer_plan(&id, request_id, decision).await?;
+                self.changed();
+                return Ok(ok());
+            }
+            if operation == "terminal-prompt" {
+                // The answer to the card of a command waiting for input; the text of a secret is passed on and never kept.
+                let value = body_object(body, MAXIMUM_BODY)?;
+                let typed = TerminalPromptAnswer::from_phone(text(&value, "promptId"), text(&value, "answer"), text(&value, "text"))
+                    .ok_or_else(|| request(400, l.get("terminalPrompt.error.badAnswer")))?;
+                let forwarded = json!({"promptId": text(&value, "promptId"), "answer": typed.name, "text": typed.line});
+                if !matches!(self.act(&id, operation, forwarded).await?, ActionAnswer::Value(Value::Bool(true))) {
+                    return Err(request(409, l.get("terminalPrompt.error.gone")));
+                }
+                self.changed();
+                return Ok(ok());
+            }
+            if operation == "uploads" {
+                let value = body_object(body, MAXIMUM_BODY)?;
+                let size = value.get("size").and_then(Value::as_i64).filter(|s| i32::try_from(*s).is_ok());
+                let Some(size) = size.filter(|_| value.get("size").is_some_and(|v| v.is_i64() || v.is_u64())) else {
+                    return Err(request(400, "Invalid size."));
+                };
+                let ticket = self.uploads.begin(&id, device, required(&value, "name")?, size)?;
+                return Ok(reply(201, ticket.to_json()));
+            }
+            if operation == "submit" {
+                let value = body_object(body, MAXIMUM_BODY)?;
+                let ids: Vec<String> = match value.get("attachments") {
+                    None | Some(Value::Null) => vec![],
+                    Some(Value::Array(list)) => {
+                        list.iter().map(|v| v.as_str().map(str::to_string)).collect::<Option<_>>().ok_or(MobileError::Invalid)?
+                    }
+                    Some(_) => return Err(MobileError::Invalid),
+                };
+                request_text(&value, !ids.is_empty())?;
+                if let Some(mode) = text(&value, "mode")
+                    && !matches!(mode, "queue" | "steer")
+                {
+                    return Err(request(400, "Unknown submit mode."));
+                }
+                let _slot = self.submit_slots.acquire().await.map_err(|_| MobileError::Failed("closed".into()))?;
+                let claim = self.uploads.claim(&ids, &id, device)?;
+                let spent = Spent { uploads: &self.uploads, claim: &claim, accepted: false };
+                let result = self
+                    .desk
+                    .action(MobileDesktopAction {
+                        session_id: id.clone(),
+                        action: "submit".into(),
+                        body: Value::Object(value),
+                        attachments: Some(claim.attachments.clone()),
+                    })
+                    .await;
+                let mut spent = spent;
+                let result = result?;
+                spent.accepted = true;
+                drop(spent);
+                self.changed();
+                return Ok(reply(202, submit_reply(&result)));
+            }
+            if operation == "setAskTarget" {
+                // The pane's "send to" choice: a target id it offers, or null for Claude. Which ids it offers is the desktop's.
+                let value = body_object(body, MAXIMUM_BODY)?;
+                if value.get("target").is_some_and(|t| !(t.is_string() || t.is_null())) {
+                    return Err(request(400, l.get("remote.error.badBody")));
+                }
+                self.act(&id, operation, Value::Object(value)).await?;
+                self.changed();
+                return Ok(ok());
+            }
+            if matches!(operation, "stop" | "rename" | "close" | "settings" | "command" | "guided") {
+                let value = if matches!(operation, "stop" | "close") { Map::new() } else { body_object(body, MAXIMUM_BODY)? };
+                if operation == "rename" && text(&value, "titleMode") != Some("auto") {
+                    let title = text(&value, "title").map(|t| t.trim());
+                    let ok = title.is_some_and(|t| (1..=80).contains(&t.encode_utf16().count()) && !t.chars().any(char::is_control));
+                    if !ok {
+                        return Err(request(400, "Invalid pane title."));
+                    }
+                }
+                if operation == "command" && !matches!(text(&value, "action"), Some("clear" | "usage" | "help")) {
+                    return Err(request(400, "Unknown command."));
+                }
+                if operation == "guided" {
+                    mighty::guided_request(&value, l)?;
+                }
+                let result = self.act(&id, operation, Value::Object(value)).await?;
+                self.changed();
+                if operation == "close" {
+                    self.uploads.discard_session(&id);
+                }
+                let value = answer_value(&result);
+                return Ok(match operation {
+                    "stop" => reply(200, object(|o| prop_value(o, "stopped", Some(&value)))),
+                    "guided" => reply(202, submit_reply(&result)),
+                    "command" => reply(
+                        200,
+                        object(|o| {
+                            o.prop_bool("ok", true);
+                            prop_value(o, "message", Some(&value));
+                        }),
+                    ),
+                    _ => ok(),
+                });
+            }
+        }
+        if method == "POST" && route.len() == 5 && route[3] == "queue" && route[4] == "run-next" {
+            self.act(&id, "queue-next", json!({})).await?;
+            self.changed();
+            return Ok(ok());
+        }
+        // 바로 실행 on one row: "worktree" or "here" in ran; 404 for a row no longer queued, 409 for one that cannot run now.
+        if method == "POST" && route.len() == 6 && route[3] == "queue" && route[5] == "run-now" {
+            if !wire::identifier(route[4]) {
+                return Err(request(404, l.get("remote.error.queueItemNotFound")));
+            }
+            let ran = self.act(&id, "queue-run-now", json!({"id": route[4]})).await?;
+            self.changed();
+            let ran = answer_value(&ran);
+            return Ok(reply(
+                200,
+                object(|o| {
+                    o.prop_bool("ok", true);
+                    prop_value(o, "ran", Some(&ran));
+                }),
+            ));
+        }
+        if method == "POST" && route.len() == 6 && route[3] == "queue" && route[5] == "remove" {
+            // A row held for the pane is refused, and nothing changes.
+            if let Some(refusal) = mighty_delegation::delivery::remove_refusal(route[4], &self.desk.held_items(&id)) {
+                return Err(MobileError::request(409, l.get("queue.heldNotRemovable"), Some(refusal.name())));
+            }
+            self.act(&id, "queue-remove", json!({"id": route[4]})).await?;
+            self.changed();
+            return Ok(ok());
+        }
+        Err(not_found())
+    }
+
+    /// `GET /m1/sessions/{id}/commands`: the pane's slash commands but the ones the phone cannot use.
+    fn commands(&self, pane: &RunSession, l: &Locale) -> Routed {
+        let snapshot = self.desk.snapshot();
+        let workspace = snapshot.workspace(pane.workspace_id()).cloned().ok_or(MobileError::Changed)?;
+        let found = slash::commands(pane.provider(), Some(std::path::Path::new(workspace.path())), &home(), &slash::DiskFiles, l);
+        let mut out = JsonOut::new();
+        out.begin_object();
+        out.prop_int("protocol", 1);
+        out.name("commands");
+        out.begin_array();
+        for c in found.iter().filter(|c| {
+            !matches!(
+                c.action,
+                Some(
+                    SlashCommandAction::OpenPlugins
+                        | SlashCommandAction::OpenSettings
+                        | SlashCommandAction::SetModel
+                        | SlashCommandAction::SetPermission
+                )
+            )
+        }) {
+            out.begin_object();
+            out.prop_str("name", Some(&c.invocation));
+            out.prop_str("description", Some(&c.description));
+            out.prop_str("source", Some(&c.origin.name().to_lowercase()));
+            out.prop_str("argumentHint", mighty::argument_hint(c.argument, l).as_deref());
+            let action = match c.action {
+                Some(SlashCommandAction::NewConversation) => Some("clear"),
+                Some(SlashCommandAction::ShowUsage) => Some("usage"),
+                Some(SlashCommandAction::Help) => Some("help"),
+                Some(SlashCommandAction::Rename) => Some("rename"),
+                _ => c.argument.map(|a| match a {
+                    SlashArgument::Model => "model",
+                    SlashArgument::Permission => "permission",
+                }),
+            };
+            out.prop_str("action", action);
+            out.end_object();
+        }
+        out.end_array();
+        out.end_object();
+        Ok(reply(200, out.finish()))
+    }
+}
+
+/// A submit's claim, spent only once the desktop accepted the request (`finally { uploads.Finish(claim, accepted) }`).
+struct Spent<'a> {
+    uploads: &'a MobileUploads,
+    claim: &'a crate::phone::uploads::MobileUploadClaim,
+    accepted: bool,
+}
+
+impl Drop for Spent<'_> {
+    fn drop(&mut self) {
+        self.uploads.finish(self.claim, self.accepted);
+    }
+}
+
+/// The preview slot, released however the decode ended.
+struct Held(PreviewSlot);
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+/// `Unread(pane)`: a pane's digest from its record alone.
+fn unread(pane: &RunSession) -> MobilePaneDigest {
+    MobilePaneDigest {
+        editable: pane.status() != "running",
+        options: 0,
+        mighty: if pane.kind() == "claude" { mighty::digest(pane) } else { 0 },
+    }
+}
+
+/// The phone's `queued` rows (`MobileQueuedItem`: `runNow` and `runNowReason` only when the row has a button).
+fn write_queued(out: &mut JsonOut, rows: &[crate::phone::desk::MobileQueuedItem]) {
+    out.begin_array();
+    for row in rows {
+        out.begin_object();
+        out.prop_str("id", Some(&row.id));
+        out.prop_str("text", Some(&row.text));
+        out.prop_str("runNow", row.run_now.as_deref());
+        out.prop_str("runNowReason", row.run_now_reason.as_deref());
+        out.end_object();
+    }
+    out.end_array();
+}
+
+/// `Mighty(mighty, structure, tag)`: the payload with the structure fields a phone asked for — the tag always, the value when it travels.
+fn with_structure(mighty: Option<&Value>, structure: Option<&str>, tag: Option<i64>) -> Option<Value> {
+    let mighty = mighty?;
+    let Some(tag) = tag else { return Some(mighty.clone()) };
+    let mut value = match mighty {
+        Value::Object(map) => map.clone(),
+        other => return Some(other.clone()),
+    };
+    if let Some(structure) = structure.and_then(|s| serde_json::from_str::<Value>(s).ok()) {
+        value.insert("structure".into(), structure);
+    }
+    value.insert("structureTag".into(), json!(tag));
+    Some(Value::Object(value))
+}
+
+/// `PhoneWorkMap`: the model without each commit's file list (its count stays), with `protocol`.
+pub fn phone_work_map(model: &mighty_workmap::WorkMapModel) -> String {
+    let mut node = model.to_value();
+    if let Some(versions) = node.get_mut("versions").and_then(Value::as_array_mut) {
+        for version in versions {
+            if let Some(commits) = version.get_mut("commits").and_then(Value::as_array_mut) {
+                for commit in commits {
+                    if let Some(commit) = commit.as_object_mut() {
+                        commit.shift_remove("files");
+                    }
+                }
+            }
+        }
+    }
+    if let Some(map) = node.as_object_mut() {
+        map.insert("protocol".into(), json!(1));
+    }
+    let mut out = JsonOut::new();
+    out.value(&node);
+    out.finish()
+}
+
+/// The phone's queued rows from delegation's (`DelegationQueueRows.MobileItems`).
+impl From<mighty_delegation::delivery::MobileQueuedRow> for crate::phone::desk::MobileQueuedItem {
+    fn from(row: mighty_delegation::delivery::MobileQueuedRow) -> Self {
+        crate::phone::desk::MobileQueuedItem {
+            id: row.id,
+            text: row.text,
+            run_now: row.run_now.map(str::to_string),
+            run_now_reason: row.run_now_reason.map(str::to_string),
+        }
+    }
+}
+
+/// The phone's background row from the strip's (`PlanCardSupport.MobileBackgroundWork`).
+impl From<mighty_graph::view::mobile::MobileBackgroundRow> for crate::phone::desk::MobileBackgroundWork {
+    fn from(row: mighty_graph::view::mobile::MobileBackgroundRow) -> Self {
+        crate::phone::desk::MobileBackgroundWork {
+            id: row.id,
+            kind: if row.run { "run" } else { "agent" }.into(),
+            title: row.title,
+            status: "running".into(),
+            started_at: row.started_at,
+            command: row.command,
+            output_tail: row.output_tail,
+        }
     }
 }

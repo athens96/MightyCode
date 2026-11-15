@@ -10,7 +10,6 @@
 //   routes <profile> <requests> <out>  W8-B: MobileDesktopRouter over a DesktopService loaded from <profile> with no runs, answering each
 //                                      GET of <requests>.jsonl (/m1/info, /m1/state, /m1/sessions/{id}, entries, commands, files); the
 //                                      Rust headless desk answers the same, compared as JSON values, then as bytes.
-// routes is W8-B's.
 using System.Text;
 using System.Text.Json;
 using MightyCode.Core;
@@ -74,9 +73,33 @@ internal static class PhoneParity
         finally { Directory.Delete(work, true); }
     }
 
-    public static int Routes(string profile, string requests, string output)
+    public static int Routes(string profile, string requests, string output) => RoutesAsync(profile, requests, output).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// The router over a copy of the profile folder (its <c>workspace-state.json</c>), no runs, no window: <c>action</c> answers null and
+    /// <c>extra</c> is empty, the host is "Parity", id "host-parity", version 0.0.0 — what the Rust check's headless desk answers with.
+    /// Each line of <paramref name="requests"/> is a GET path; each line written is <c>status	body</c> (the body as <c>Wire.Json</c> writes it).
+    /// </summary>
+    private static async Task<int> RoutesAsync(string profile, string requests, string output)
     {
-        Console.Error.WriteLine($"routes parity is not written yet (W8-B): {profile} {requests} -> {output}");
-        return 2;
+        var work = Path.Combine(Path.GetTempPath(), "mighty-routes-parity-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(work);
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(profile)) File.Copy(file, Path.Combine(work, Path.GetFileName(file)));
+            await using var service = new DesktopService(work, null, work);
+            await service.InitializeAsync();
+            using var router = new MobileDesktopRouter(service, Path.Combine(work, "mobile"), "Parity", (_, _) => Task.FromResult<object?>(null), _ => new([]))
+            { AppVersion = "0.0.0", HostId = "host-parity", ScreenShareAvailable = false };
+            var lines = new List<string>();
+            foreach (var path in File.ReadAllLines(requests).Where(line => line.Length > 0))
+            {
+                var reply = await router.RouteAsync("GET", path, null, "phone", CancellationToken.None);
+                lines.Add(reply.Status + "\t" + JsonSerializer.Serialize(reply.Body, Wire.Json));
+            }
+            File.WriteAllText(output, string.Join("\n", lines) + "\n", Utf8);
+            return 0;
+        }
+        finally { try { Directory.Delete(work, true); } catch (IOException) { } }
     }
 }
