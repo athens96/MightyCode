@@ -93,7 +93,7 @@ fn with_menu_inputs<T>(host: &Host, view: &View, pane: &RunSession, read: impl F
         efforts: &efforts,
         remote_session: workspace.as_ref().is_some_and(|w| w.remote.is_some()),
         refreshing_models: false,
-        style_rows: None,
+        style_rows: crate::styles::menu_rows(host, &view.snapshot, pane),
     };
     read(&inputs)
 }
@@ -132,6 +132,8 @@ pub(crate) async fn start_run(
         }
         request
     };
+    // C# `PrepareStyleRunRequest`: a styled pane's grants and plan-mode launch, its approval read again (styles.rs).
+    let request = crate::styles::prepare_run(host, id, request).await?;
     // C# `SendAsync`: the items delegation holds for the pane go with it, ahead of its words, in one run (delegation.rs).
     match crate::delegation::send(&engine, request).await {
         Ok(Some(())) => {
@@ -171,8 +173,19 @@ pub(crate) fn reset_unavailable_agy_model(host: &Host, id: &str) -> Result<(), S
 /// delegation offers one (`SecondSend` is `Worktree`), and otherwise queues them as Enter does (the menu-only state too: the page has
 /// no worktree-agent menu, W7 plan D7).
 async fn submit(host: &Arc<Host>, id: &str, second: bool) -> Result<SubmitReceipt, String> {
+    send(host, id, second, true).await
+}
+
+/// C# `Send(wrapsAsk: false)`: a style's own prompt (styles.rs's guided action), never asked of another CLI.
+pub(crate) async fn submit_own(host: &Arc<Host>, id: &str) -> Result<SubmitReceipt, String> {
+    send(host, id, false, false).await
+}
+
+async fn send(host: &Arc<Host>, id: &str, second: bool, wraps_ask: bool) -> Result<SubmitReceipt, String> {
     // A saved "send to" choice not yet known to stand waits briefly for the pane's catalogue and the PATH read (ask.rs).
-    crate::ask::await_targets(host, id).await;
+    if wraps_ask {
+        crate::ask::await_targets(host, id).await;
+    }
     // Asking another CLI carries the words alone, wrapped once here: staged files stay in the composer.
     let asked = {
         let view = host.view();
@@ -180,7 +193,7 @@ async fn submit(host: &Arc<Host>, id: &str, second: bool) -> Result<SubmitReceip
             return Ok(SubmitReceipt::new("none"));
         }
         let pane = session(&view, id)?;
-        crate::ask::send_target(host, &view.snapshot, &pane)
+        if wraps_ask { crate::ask::send_target(host, &view.snapshot, &pane) } else { None }
     };
     // DeferBusyComposer: a busy pane (running, starting) always queues the draft as its next request.
     let taken = {
@@ -263,7 +276,15 @@ async fn submit(host: &Arc<Host>, id: &str, second: bool) -> Result<SubmitReceip
         let view = host.view();
         !panes::alive(&view, id) || view.panes.get(id).is_none_or(|u| u.submission != submission)
     };
-    let outcome = if moot { None } else { Some(start_run(host, id, &submitted, files.clone(), None, None).await) };
+    // C# `PrepareStyleSubmission`: a styled pane's bare first draft goes as its style's command (styles.rs).
+    let outcome = if moot {
+        None
+    } else {
+        Some(match crate::styles::prepare_submission(host, id, &submitted, !files.is_empty()).await {
+            Ok(text) => start_run(host, id, &text, files.clone(), None, None).await,
+            Err(error) => Err(error),
+        })
+    };
     let mut view = host.view();
     let alive = panes::alive(&view, id);
     let started = matches!(outcome, Some(Ok(Some(_))));
@@ -716,8 +737,10 @@ fn run_menu_action(host: &Arc<Host>, view: &mut View, id: &str, action: MenuActi
             let (host, provider) = (host.clone(), provider.clone());
             tauri::async_runtime::spawn(async move { crate::plugins::open(&host, &provider).await });
         }
-        // The page draws the run settings itself; rename and styles are later stages' (README).
-        MenuAction::RunSettings | MenuAction::Rename | MenuAction::Style(_) => {}
+        // A style chosen from the style menu (styles.rs, C# `ChooseStyle`).
+        MenuAction::Style(style) => crate::styles::choose(host, id, &style),
+        // The page draws the run settings itself; rename is a later stage's (README).
+        MenuAction::RunSettings | MenuAction::Rename => {}
     }
     Ok(())
 }

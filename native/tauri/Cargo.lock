@@ -2457,6 +2457,7 @@ dependencies = [
  "mighty-platform",
  "mighty-platform-windows",
  "mighty-run",
+ "mighty-styles",
  "mighty-terminal",
  "mighty-workmap",
  "native-tls",

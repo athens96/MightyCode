@@ -373,7 +373,7 @@ pub struct WindowInputs {
 }
 
 /// The pane's composer inputs (C# `owner.SecondSend(pane)`, `WorktreeMenuOnly`, `HeldItems`, `Delegation.EndingRuns.Contains`), read
-/// with the state locked as [`sidebar_rows`]. A style's plan-first launch is the style engine's (W9): none starts in plan mode yet.
+/// with the state locked as [`sidebar_rows`]. A style's plan-first launch is the pane's `launches_in_plan_mode`, which styles.rs sets from its style.
 pub fn window_inputs(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) -> WindowInputs {
     let _ = host;
     let Some(app) = app() else {

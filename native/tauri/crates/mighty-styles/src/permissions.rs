@@ -133,4 +133,9 @@ impl StyleAllowing {
         }
         true
     }
+
+    /// An allowance that did not go through: its mark taken away; true when it was still there (nothing settled it).
+    pub fn release(&self, run_id: &str, id: &str) -> bool {
+        self.keys.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&format!("{run_id}|{id}"))
+    }
 }

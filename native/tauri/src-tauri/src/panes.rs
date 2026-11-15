@@ -158,7 +158,9 @@ pub fn composer_state(host: &Host, view: &mut View, id: &str) -> Option<Composer
     let runs = host.runs();
     let runtime = runs.and_then(|r| r.composer_runtime(pane.provider()));
     let efforts = runs.map(|r| r.efforts(&pane, workspace.as_ref(), &view.snapshot)).unwrap_or_default();
-    let window = window_rules(host, &view.snapshot, &pane, requests(host, id).iter().filter(|r| r.state == "pending").count());
+    let mut window = window_rules(host, &view.snapshot, &pane, requests(host, id).iter().filter(|r| r.state == "pending").count());
+    // The style row and the guide panel (styles.rs, W9-D: C# `RefreshStyles`, `RenderGuidedStyle`).
+    (window.style, window.guided) = crate::styles::window(host, view, &pane);
     let ui = view.panes.get_mut(id)?;
     ui.forget_unqueued();
     ui.view.queue = ui.queue.items().to_vec();
@@ -264,8 +266,8 @@ pub fn cards_of(host: &Host, view: &mut View, id: &str) -> Option<(Vec<Card>, bo
         utc_offset_minutes: utc_offset_minutes(),
         pane: &pane,
         busy,
-        styled: false,
-        style_draws_tasks: false,
+        styled: crate::styles::card_flags(&pane).0,
+        style_draws_tasks: crate::styles::card_flags(&pane).1,
         diagram_draws_plan,
         requests: &requests,
         plan_draft: ui.plan_draft.as_ref(),

@@ -11,7 +11,8 @@
 //! - A terminal goes with its pane (looked at every quarter second) and every terminal closes when the app quits, each close on its
 //!   own thread and the quit waiting at most a few seconds for them.
 //!
-//! What later stages give stays at rest ([`Pending`]).
+//! A command the app types into a new shell pane (C# `RunTerminalCommandAsync`) is styles.rs's `run_terminal_command` over
+//! frame.rs's `add_pane` and [`TerminalPane::write`].
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -40,16 +41,6 @@ use tauri::Manager;
 use crate::frame::{activate_pane, select_session};
 use crate::host::{Host, Registry};
 use crate::methods::text;
-
-/// What a later stage gives the terminals; until then each stays at rest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Pending {
-    /// A command the app types into a new shell pane (C# `RunTerminalCommandAsync`: style installs, sign-ins; W6/W9): the pane is
-    /// frame.rs's `add_pane`, and [`TerminalPane::write`] with `TerminalInput::apply` is its typing.
-    RunTerminalCommand,
-}
-
-pub const PENDING: [Pending; 1] = [Pending::RunTerminalCommand];
 
 /// C# `ShowTerminalHistory` (MainWindow.WorkflowParity.cs:10-23, dialog D14): the pane's saved entries in the panel `terminalHistory`
 /// (its help dimmed over the entries, 11pt code, selectable, at most 360 high), closed with its ✕; the window holds its dialog
@@ -377,7 +368,7 @@ impl Terminals {
             closing: AtomicBool::new(false),
         });
         host.app.manage(terminals.clone());
-        host.log.line(&format!("terminals: {} engine; at rest until their stages: {PENDING:?}", terminals.ports.engine));
+        host.log.line(&format!("terminals: {} engine", terminals.ports.engine));
         let clock = Arc::downgrade(&terminals);
         std::thread::Builder::new()
             .name("terminal-clock".into())
@@ -997,11 +988,6 @@ mod tests {
     fn a_working_folder_is_a_full_path() {
         assert!(is_working_folder(if cfg!(windows) { "C:\\work\\child" } else { "/work/child" }));
         assert!(!is_working_folder("relative\\child") && !is_working_folder("a\0b") && !is_working_folder(&"x".repeat(4097)));
-        assert_eq!(
-            PENDING,
-            [Pending::RunTerminalCommand],
-            "the agents' tools are served (agent_io.rs, W7-C) and the phone reads a shell's status and prompt (W8-B)"
-        );
     }
 
     /// D14 against C#'s capture (`mighty-native/tests/golden/terminal-history.json`, plan W6 §1.8): C#'s web smoke's shell pane

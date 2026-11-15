@@ -193,7 +193,7 @@ pub fn select_workspace(view: &mut View, id: &str) -> Result<(), String> {
 
 /// C# `AddPane`: a shell or agent pane (`kind` "shell", "browser", "claude") in the active workspace, in `group` or the active
 /// pane's, made the active one; a 129th pane is refused with the Mac's sentence. True when it was added.
-fn add_pane(
+pub(crate) fn add_pane(
     host: &Arc<Host>,
     kind: &str,
     provider: &str,
