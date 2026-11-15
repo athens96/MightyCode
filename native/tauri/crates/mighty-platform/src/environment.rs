@@ -35,8 +35,9 @@ impl fmt::Debug for CliEnvironment {
 ///
 /// Contract: a resolve never fails — a prompt, a broken profile or a malformed capture falls back to the process environment after
 /// a bounded wait (4 s); a result is reused for 10 s per workspace unless `force`; a forced resolve that fails discards the previous
-/// capture rather than let it outlive a changed profile; neither output stream of the capture is logged. The capture runs in the
-/// user's home (never an untrusted project folder) and puts no value in its arguments.
+/// capture rather than let it outlive a changed profile; neither output stream of the capture is logged. The capture puts no value in
+/// its arguments. Windows captures in the user's home (never an untrusted project folder, C#'s rule); the Mac captures in the
+/// workspace's folder, as Swift's `CLIEnvironmentResolver` does, so a per-project shell setup reaches that workspace's CLIs (M-A).
 pub trait ShellEnvironment: Send + Sync {
     fn resolve(&self, workspace: Option<&Path>, force: bool) -> BoxFuture<'_, CliEnvironment>;
     /// The last resolved environment without waiting (synchronous callers such as a terminal starting), else the process's.
