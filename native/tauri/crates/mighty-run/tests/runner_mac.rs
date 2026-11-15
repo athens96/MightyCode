@@ -86,13 +86,11 @@ async fn test_shell_runner_runs_stops_and_keeps_events_isolated() {
     let has = |session: &str, test: &dyn Fn(&RunEvent) -> bool| events.lock().unwrap().iter().any(|e| e.session_id == session && test(e));
     let text = |e: &RunEvent| e.entry.as_ref().and_then(|l| l.text.clone()).unwrap_or_default();
     manager.start(StartRunRequest::new("first", &id, "shell", "printf '첫 번째'")).await.unwrap();
-    manager.start(StartRunRequest::new("second", &id, "shell", "printf READY; sleep 30")).await.unwrap();
-    common::until(
-        || has("first", &|e| e.status.as_deref() == Some("completed")) && has("second", &|e| text(e) == "READY"),
-        20_000,
-        "the first completes and the second says READY",
-    )
-    .await;
+    // The run engine (C#'s) hands a shell's output on by lines, so the second's marker ends its line (`echo`; Swift's `printf READY`
+    // was handed on as it came).
+    manager.start(StartRunRequest::new("second", &id, "shell", "echo READY; sleep 30")).await.unwrap();
+    common::until(|| has("first", &|e| e.status.as_deref() == Some("completed")), 20_000, "the first completes").await;
+    common::until(|| has("second", &|e| text(e) == "READY"), 20_000, "the second says READY").await;
     manager.stop("second").await.unwrap();
     assert!(has("second", &|e| e.status.as_deref() == Some("stopped")));
     assert!(has("first", &|e| text(e) == "첫 번째"));

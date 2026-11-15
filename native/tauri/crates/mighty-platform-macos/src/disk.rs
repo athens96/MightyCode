@@ -5,7 +5,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use mighty_platform::{DiskSpace, PlatformError, Result};
-use objc2_foundation::{NSArray, NSNumber, NSString, NSURL, NSURLVolumeAvailableCapacityForImportantUsageKey};
+use objc2_foundation::{
+    NSArray, NSNumber, NSString, NSURL, NSURLVolumeAvailableCapacityForImportantUsageKey, NSURLVolumeAvailableCapacityKey,
+};
 
 /// The Mac's `DiskSpace`.
 pub fn disk_space() -> Arc<dyn DiskSpace> {
@@ -16,20 +18,27 @@ pub fn disk_space() -> Arc<dyn DiskSpace> {
 pub struct MacDiskSpace;
 
 impl DiskSpace for MacDiskSpace {
-    /// The volume's capacity for important usage (what the system would free for the user, purgeable space included, as Swift
-    /// reads it) for `path`, or its nearest existing parent folder.
+    /// The volume's capacity for important usage (what the system would free for the user, purgeable space included, as Swift reads
+    /// it) for `path`, or its nearest existing parent folder. When the volume answers 0 or nothing for it (seen on a CI runner's volume
+    /// between two reads), its plain available capacity (`volumeAvailableCapacity`) answers instead, so a volume with room is never
+    /// called full.
     fn available_bytes(&self, path: &Path) -> Result<u64> {
         let folder =
             path.ancestors().find(|folder| folder.is_dir()).ok_or_else(|| PlatformError::Invalid("no folder on the way exists".into()))?;
         let url = NSURL::fileURLWithPath(&NSString::from_str(&folder.to_string_lossy()));
-        // SAFETY: a Foundation constant, valid for the process's life.
-        let key = unsafe { NSURLVolumeAvailableCapacityForImportantUsageKey };
+        // SAFETY: Foundation constants, valid for the process's life.
+        let (important, plain) = unsafe { (NSURLVolumeAvailableCapacityForImportantUsageKey, NSURLVolumeAvailableCapacityKey) };
         let values = url
-            .resourceValuesForKeys_error(&NSArray::from_slice(&[key]))
+            .resourceValuesForKeys_error(&NSArray::from_slice(&[important, plain]))
             .map_err(|error| PlatformError::Refused(error.localizedDescription().to_string()))?;
-        let value = values.objectForKey(key).ok_or_else(|| PlatformError::Refused("the volume did not say its free space".into()))?;
-        let number = value.downcast::<NSNumber>().map_err(|_| PlatformError::Refused("the volume's free space is not a number".into()))?;
-        u64::try_from(number.longLongValue()).map_err(|_| PlatformError::Refused("the volume's free space is negative".into()))
+        let read = |key| {
+            values
+                .objectForKey(key)
+                .and_then(|value| value.downcast::<NSNumber>().ok())
+                .and_then(|number| u64::try_from(number.longLongValue()).ok())
+                .filter(|bytes| *bytes > 0)
+        };
+        read(important).or_else(|| read(plain)).ok_or_else(|| PlatformError::Refused("the volume did not say its free space".into()))
     }
 }
 
