@@ -3,6 +3,10 @@
 ; because the app updates itself there afterwards: the update helper renames the install folder aside and copies the new one
 ; in (docs/windows-app-update.md), which needs a folder this user can write and no administrator.
 ;
+; From 0.5 the folder is the Rust + Tauri app's, made by scripts/build-tauri-windows.ps1 -Installer: MightyCode.exe beside
+; claude-mods, Agents, pets, LICENSE.txt and build-info.json. Only /DSourceDir differs; AppId, the exe's name and the install folder
+; stay, so a 0.4.x install and its in-app update land in the same place (W9 plan D10). /DAppVersion is then major.minor.patch.
+;
 ;   ISCC.exe /DAppVersion=0.4.34 /DArch=x64 /DSourceDir=<publish folder> /DOutputDir=<release folder> MightyCode.iss
 
 #ifndef AppVersion

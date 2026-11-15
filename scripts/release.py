@@ -533,6 +533,27 @@ def step_check(state, a):
         raise ReleaseError("확인하지 못한 항목이 있습니다")
 
 
+def write_tauri_version(version):
+    """The Rust + Tauri app's version follows VERSION (W9 plan D12): src-tauri/Cargo.toml's [package] version and the `mightycode`
+    entry of Cargo.lock, each only when the file exists (from the 0.5 merge on), line endings kept. The paths changed."""
+    changed = []
+    for name, pattern in (("native/tauri/src-tauri/Cargo.toml", rb'(?m)^(version = )"[^"]*"'),
+                          ("native/tauri/Cargo.lock", rb'(?m)^(name = "mightycode"\r?\nversion = )"[^"]*"')):
+        path = os.path.join(ROOT, *name.split("/"))
+        if not os.path.exists(path):
+            continue
+        with open(path, "rb") as f:
+            data = f.read()
+        updated, count = re.subn(pattern, lambda m: m.group(1) + b'"' + version.encode("ascii") + b'"', data, count=1)
+        if count != 1:
+            raise ReleaseError(f"{name}에서 버전 줄을 찾지 못했습니다")
+        if updated != data:
+            with open(path, "wb") as f:
+                f.write(updated)
+            changed.append(name)
+    return changed
+
+
 def step_version(state, a):
     version = state["version"]
     if sh(["git", "rev-parse", "--abbrev-ref", "HEAD"]) != "main":
@@ -550,8 +571,9 @@ def step_version(state, a):
             newline = "\r\n" if f.read().endswith(b"\r\n") else "\n"
         with open(path, "w", encoding="utf-8", newline="") as f:
             f.write(version + newline)
+        tauri = write_tauri_version(version)
         message = ["-m", f"(release) {version}: {a.summary}"] + (["-m", f"Co-Authored-By: {a.co_author}"] if a.co_author else [])
-        sh(["git", "add", "VERSION"])
+        sh(["git", "add", "VERSION"] + tauri)
         sh(["git", "commit", "--quiet"] + message)
         say(f"릴리스 커밋을 만들었습니다: (release) {version}: {a.summary}")
     state["data"]["commit"] = sh(["git", "rev-parse", "HEAD"])

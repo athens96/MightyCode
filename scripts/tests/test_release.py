@@ -790,6 +790,51 @@ class DmgTests(unittest.TestCase):
         self.assertEqual(release.unfinished_notes(without), [])
 
 
+class TauriVersionTests(unittest.TestCase):
+    """step_version also bumps the Rust + Tauri app's Cargo.toml and Cargo.lock when they exist (W9 plan D12)."""
+    CARGO = 'name = "mightycode"\r\n# The version\r\nversion = "0.4.59"\r\nedition.workspace = true\r\n[dependencies]\r\nserde = { version = "1" }\r\n'
+    LOCK = '[[package]]\nname = "mighty-core"\nversion = "0.1.0"\n\n[[package]]\nname = "mightycode"\nversion = "0.4.59"\ndependencies = []\n'
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        for name, value in (("ROOT", self.temp.name), ("RELEASE_ROOT", os.path.join(self.temp.name, "release"))):
+            patcher = patch.object(release, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        Path(self.temp.name, "VERSION").write_bytes(b"0.4.61\n")
+        self.cargo = Path(self.temp.name, "native", "tauri", "src-tauri", "Cargo.toml")
+        self.lock = Path(self.temp.name, "native", "tauri", "Cargo.lock")
+
+    def git_add_of_step_version(self):
+        calls = []
+
+        def sh(args, **_):
+            calls.append(args)
+            return {"rev-parse": "main", "log": "(release) 0.4.61: before", "status": ""}.get(args[1], "")
+        with patch.object(release, "sh", side_effect=sh):
+            release.step_version(release.load_state("0.5.0"), argparse.Namespace(summary="the Rust app", co_author=None))
+        return [c for c in calls if c[:2] == ["git", "add"]]
+
+    def test_the_cargo_files_follow_version_with_their_line_endings(self):
+        self.cargo.parent.mkdir(parents=True)
+        self.cargo.write_bytes(self.CARGO.encode())
+        self.lock.write_bytes(self.LOCK.encode())
+        self.assertEqual(self.git_add_of_step_version(), [["git", "add", "VERSION", "native/tauri/src-tauri/Cargo.toml", "native/tauri/Cargo.lock"]])
+        self.assertEqual(Path(self.temp.name, "VERSION").read_bytes(), b"0.5.0\n")
+        self.assertEqual(self.cargo.read_bytes(), self.CARGO.replace('"0.4.59"', '"0.5.0"').encode())
+        self.assertEqual(self.lock.read_bytes(), self.LOCK.replace('version = "0.4.59"', 'version = "0.5.0"').encode())
+
+    def test_without_the_cargo_files_only_version_changes(self):
+        self.assertEqual(self.git_add_of_step_version(), [["git", "add", "VERSION"]])
+
+    def test_a_cargo_file_without_its_version_line_stops(self):
+        self.cargo.parent.mkdir(parents=True)
+        self.cargo.write_bytes(b'name = "mightycode"\n')
+        with self.assertRaisesRegex(release.ReleaseError, "Cargo.toml"):
+            release.write_tauri_version("0.5.0")
+
+
 
 if __name__ == "__main__":
     unittest.main()
