@@ -1,7 +1,8 @@
 //! The head parser's parity with C# (W8 plan D18): every raw request of native/contracts/fixtures/remote-heads/heads.jsonl sent on its own
 //! loopback connection to the strict server, whose handler answers 200 with "len:<body bytes>", answered exactly as C#'s
 //! RemoteHttpListener answered it (heads-csharp.txt, written by `tools/parity` `remote heads.jsonl heads-csharp.txt`): the status line,
-//! or "closed" / "pending" (nothing within 3 s), and the body's bytes.
+//! or "closed" / "pending" (nothing within 3 s), and the body's bytes. A case with "limit": "host" goes to a listener with the sharing
+//! host's own body limit (none without the key, the larger one for a run).
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
@@ -9,9 +10,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mighty_platform::fake::FakeNetwork;
-use mighty_remote::remote::http_server::{Handler, HttpListener, HttpResponse, ListenerOptions};
+use mighty_remote::remote::host::body_limit;
+use mighty_remote::remote::http_server::{BodyLimit, Handler, HttpListener, HttpRequest, HttpResponse, ListenerOptions};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+/// The key the host-limit cases present (tools/parity/Remote.cs's Key).
+const KEY: &str = "parity-remote-key-0123456789abcdefghijklmnop";
 
 fn folder() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../contracts/fixtures/remote-heads")
@@ -55,18 +60,30 @@ async fn the_strict_server_answers_every_head_as_csharps_listener_does() {
     let handler: Handler = Arc::new(|request| {
         Box::pin(async move { Ok(HttpResponse { status: 200, body: format!("len:{}", request.body.len()).into_bytes(), headers: vec![] }) })
     });
-    let listener =
-        HttpListener::new(Arc::new(FakeNetwork::default()), IpAddr::V4(Ipv4Addr::LOCALHOST), 0, handler, ListenerOptions::default());
+    let network = Arc::new(FakeNetwork::default());
+    let listener = HttpListener::new(network.clone(), IpAddr::V4(Ipv4Addr::LOCALHOST), 0, handler.clone(), ListenerOptions::default());
+    // The host-limit cases: the sharing host's own body limit with KEY, loopback allowed (C#'s RemoteHostService.BodyLimit).
+    let limit: BodyLimit = Arc::new(|head: &HttpRequest| Ok(body_limit(head, KEY, true)));
+    let hosted = HttpListener::new(
+        network,
+        IpAddr::V4(Ipv4Addr::LOCALHOST),
+        0,
+        handler,
+        ListenerOptions { body_limit: Some(limit), ..ListenerOptions::default() },
+    );
     let port = listener.start().unwrap();
+    let host_port = hosted.start().unwrap();
     let corpus = std::fs::read_to_string(folder().join("heads.jsonl")).unwrap();
     let expected = std::fs::read_to_string(folder().join("heads-csharp.txt")).unwrap();
     let mut answers = vec![];
     for line in corpus.lines().filter(|l| !l.is_empty()) {
         let case: Value = serde_json::from_str(line).unwrap();
         let name = case["name"].as_str().unwrap();
-        answers.push(format!("{name}\t{}", exchange(port, &unhex(case["hex"].as_str().unwrap())).await));
+        let target = if case["limit"].as_str() == Some("host") { host_port } else { port };
+        answers.push(format!("{name}\t{}", exchange(target, &unhex(case["hex"].as_str().unwrap())).await));
     }
     listener.dispose().await;
+    hosted.dispose().await;
     let expected: Vec<&str> = expected.lines().collect();
     assert_eq!(answers.len(), expected.len(), "one answer a case");
     let differing: Vec<String> = answers

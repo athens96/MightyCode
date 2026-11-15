@@ -17,4 +17,8 @@ pub trait Clipboard: Send + Sync {
         let _ = text;
         Err(crate::PlatformError::Unsupported { port: "Clipboard", operation: "write_secret" })
     }
+    /// Empties the clipboard (C# `Clipboard.Clear()`): nothing on it afterwards, not even empty text.
+    fn clear(&self) -> Result<()> {
+        Err(crate::PlatformError::Unsupported { port: "Clipboard", operation: "clear" })
+    }
 }

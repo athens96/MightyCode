@@ -268,6 +268,52 @@ async fn the_sharing_host_runs_only_in_shared_folders_with_no_pane_tools() {
     let _ = std::fs::remove_dir_all(&plugin);
 }
 
+/// The sharing host's look-up (`RunService::resolve_shared`, C# `ResolveSharedAsync`) by behaviour, for L922's Rust form: a remote
+/// workspace is refused even when its host's path is a folder here, an unregistered one and a gone folder are refused, a local folder
+/// that is there is found.
+#[test]
+fn the_shared_check_never_reads_a_remote_workspaces_folder() {
+    set_language("en");
+    let here = temp("shared-check");
+    let local = Workspace { id: Some("near".into()), path: Some(here.to_string_lossy().into_owned()), ..Workspace::default() };
+    let gone = Workspace { id: Some("gone".into()), path: Some(here.join("gone").to_string_lossy().into_owned()), ..Workspace::default() };
+    let far = Workspace {
+        id: Some("far".into()),
+        path: Some(here.to_string_lossy().into_owned()),
+        remote: Some(RemoteWorkspaceReference {
+            connection_id: Some("conn-1".into()),
+            workspace_id: Some("ws-1".into()),
+            host_name: Some("studio-pc".into()),
+            version: 2,
+        }),
+        ..Workspace::default()
+    };
+    let snapshot = AppSnapshot { workspaces: Some(vec![local, gone, far]), ..AppSnapshot::default() };
+    let options = RunServiceOptions {
+        plugin_directory: String::new(),
+        permission_card: false,
+        remote: None,
+        configure: None,
+        admitting: None,
+        binding: None,
+        delegation: None,
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        let (service, _events) = RunService::new(snapshot, absent(), options);
+        assert_eq!(
+            service.resolve_shared("far").unwrap_err(),
+            get("run.error.approvedWorkspaceOnly"),
+            "a remote workspace's path is not read"
+        );
+        assert_eq!(service.resolve_shared("other").unwrap_err(), get("run.error.localWorkspaceNotRegistered"));
+        assert_eq!(service.resolve_shared("gone").unwrap_err(), get("store.error.workspaceFolderNotFound"));
+        assert_eq!(service.resolve_shared("near").unwrap().id(), "near");
+        service.dispose().await;
+    });
+    let _ = std::fs::remove_dir_all(&here);
+}
+
 /// "remote desktop: remote panes keep to the host's features".
 #[test]
 fn remote_panes_keep_to_the_hosts_features() {

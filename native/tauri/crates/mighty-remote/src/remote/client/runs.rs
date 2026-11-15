@@ -345,11 +345,16 @@ impl RemoteClient {
     }
 
     async fn follow(&self, pane_id: String, run: Arc<Run>) {
-        match self.poll(&pane_id, &run).await {
+        // The poll loop in a task of its own: one that panics (a hostile answer this side did not foresee) still ends its run.
+        let (client, pane, polled) = (self.clone(), pane_id.clone(), run.clone());
+        let polled = tokio::spawn(async move { client.poll(&pane, &polled).await }).await;
+        match polled {
             // Polling ends once the run ended, stopped, or its connection changed under it: only the last is still listed, and ends here.
-            Ok(()) => self.end(&pane_id, &run, &get("remote.connect.error.changed")).await,
+            Ok(Ok(())) => self.end(&pane_id, &run, &get("remote.connect.error.changed")).await,
             // A callback that failed: the run ends, never leaving the pane running with nobody polling.
-            Err(failure) => self.end(&pane_id, &run, &failure).await,
+            Ok(Err(failure)) => self.end(&pane_id, &run, &failure).await,
+            Err(error) if error.is_panic() => self.end(&pane_id, &run, &panic_text(error.into_panic())).await,
+            Err(_) => self.end(&pane_id, &run, &get("common.appClosing")).await,
         }
         let mut gate = lock(&self.0.gate);
         gate.followers.retain(|r| !Arc::ptr_eq(r, &run));
@@ -637,15 +642,20 @@ impl RemoteClient {
         for (pane, run) in taken {
             run.cancel.cancel();
             let _applying = run.applying.enter();
-            let _ = match words {
-                Some(words) => self.say_lost(pane, words),
-                None => {
-                    self.0.pending.forget(pane);
-                    self.emit(RunEvent::state(pane, "stopped", None))
-                }
-            };
+            self.say_last(pane, words);
         }
         taken.iter().map(|(_, run)| run.clone()).collect()
+    }
+
+    /// A taken run's last word (stopped, or lost with `words`). Under the run's applying lock; a callback that fails is let go.
+    fn say_last(&self, pane: &str, words: Option<&str>) {
+        let _ = match words {
+            Some(words) => self.say_lost(pane, words),
+            None => {
+                self.0.pending.forget(pane);
+                self.emit(RunEvent::state(pane, "stopped", None))
+            }
+        };
     }
 
     /// The host stops a run it no longer hears from anyway; this is only sooner.
@@ -658,8 +668,13 @@ impl RemoteClient {
 
     /// `EndRunsAsync(taken, message)`: taken runs end (replaced or disconnected as stopped, lost with its reason as an error).
     pub(crate) async fn end_runs(&self, taken: Vec<(String, Arc<Run>)>, words: Option<&str>) {
-        let runs = self.say_ended(&taken, words);
-        self.stop_all_on_host(runs).await;
+        // As `say_ended`, without parking a runtime worker while a poll of one of them is being applied on another thread.
+        for (pane, run) in &taken {
+            run.cancel.cancel();
+            let (client, pane, words) = (self.clone(), pane.clone(), words.map(str::to_string));
+            under_applying(run, move || client.say_last(&pane, words.as_deref())).await;
+        }
+        self.stop_all_on_host(taken.into_iter().map(|(_, run)| run).collect()).await;
     }
 
     /// `DisposeAsync`: the app is closing: nothing starts any more, and every run stops, on the host too.

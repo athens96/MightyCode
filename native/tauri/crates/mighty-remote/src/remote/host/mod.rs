@@ -572,9 +572,17 @@ impl RemoteHost {
     }
 
     async fn serve(&self, request: HttpRequest, revision: u64) -> HttpResponse {
-        match self.route(&request, revision).await {
-            Ok(response) => response,
-            Err(failure) => failure_response(failure.status, &failure.message),
+        // In a task of its own, so any other failure (a panic) is still answered, as C#'s last catch answers 500 with what it said.
+        let host = self.clone();
+        match tokio::spawn(async move { host.route(&request, revision).await }).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(failure)) => failure_response(failure.status, &failure.message),
+            Err(error) if error.is_panic() => {
+                let payload = error.into_panic();
+                let words = payload.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| payload.downcast_ref::<String>().cloned());
+                failure_response(500, &words.unwrap_or_default())
+            }
+            Err(_) => failure_response(503, &get("remote.host.error.stopped")),
         }
     }
 

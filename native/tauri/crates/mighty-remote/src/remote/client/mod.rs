@@ -149,9 +149,23 @@ pub(crate) struct Gate {
     /// The saved file could not be read yet: read again from this moment on, and written by nobody until read.
     pub load_retry_at: Option<Instant>,
     pub load_failed: bool,
+    /// A caller is reading the saved file now (with the gate free).
+    pub loading: bool,
     pub runs: HashMap<String, Arc<runs::Run>>,
     /// Runs whose follow loop has not ended yet.
     pub followers: Vec<Arc<runs::Run>>,
+}
+
+/// An address being connected to (`connecting`), given back when the connect ends however it ends: done, failed, dropped or panicked.
+struct Connecting {
+    client: RemoteClient,
+    address: String,
+}
+
+impl Drop for Connecting {
+    fn drop(&mut self) {
+        lock(&self.client.0.gate).connecting.remove(&self.address);
+    }
 }
 
 pub(crate) struct ClientInner {
@@ -253,9 +267,8 @@ impl RemoteClient {
             }
             existing
         };
-        let result = self.connect_reached(label, trimmed, &parsed, existing).await;
-        lock(&self.0.gate).connecting.remove(&display);
-        result
+        let _connecting = Connecting { client: self.clone(), address: display };
+        self.connect_reached(label, trimmed, &parsed, existing).await
     }
 
     async fn connect_reached(
@@ -379,6 +392,7 @@ impl RemoteClient {
             self.tell_changed();
             return Err(message(get("remote.connect.error.keyMissing")));
         };
+        let _connecting = Connecting { client: self.clone(), address: address.clone() };
         let result = async {
             let parsed = RemoteAddress::parse(&address).map_err(message)?;
             let (target, info) = self.reach(&parsed, &key).await?;
@@ -406,7 +420,6 @@ impl RemoteClient {
         if let Err(error) = &result {
             self.fail(id, &error.message(), Some((serial, revision))).await;
         }
-        lock(&self.0.gate).connecting.remove(&address);
         result
     }
 
@@ -603,12 +616,20 @@ impl RemoteClient {
     /// `LoadSaved`: the saved connections, read once on first use; a file that is there but cannot be read now is read again a second
     /// later rather than taken as empty, and once it is read late the window is told.
     pub(crate) fn load_saved(&self) {
-        let late = {
+        // The file is read with the gate free (the window's redraws read the list under it), by one caller at a time: another caller
+        // meanwhile goes on with the list as it is.
+        {
             let mut gate = lock(&self.0.gate);
-            if gate.loaded || gate.load_retry_at.is_some_and(|at| Instant::now() < at) {
+            if gate.loaded || gate.loading || gate.load_retry_at.is_some_and(|at| Instant::now() < at) {
                 return;
             }
-            let items = match saved::try_read(&self.0.data_directory) {
+            gate.loading = true;
+        }
+        let read = saved::try_read(&self.0.data_directory);
+        let late = {
+            let mut gate = lock(&self.0.gate);
+            gate.loading = false;
+            let items = match read {
                 Ok(items) => items,
                 Err(_) => {
                     gate.load_failed = true;

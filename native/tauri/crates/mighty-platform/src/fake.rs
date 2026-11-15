@@ -438,6 +438,14 @@ impl Clipboard for MemoryClipboard {
         *lock(&self.secret) = true;
         Ok(())
     }
+    fn clear(&self) -> Result<()> {
+        if *lock(&self.busy) {
+            return Err(PlatformError::Refused("the clipboard is in use".into()));
+        }
+        *lock(&self.text) = None;
+        *lock(&self.secret) = false;
+        Ok(())
+    }
 }
 
 // ---- terminal windows, fonts, https ----------------------------------------------------------------------------------------

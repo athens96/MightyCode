@@ -24,13 +24,13 @@ use crate::host::{Host, lock};
 const MASKED_KEY: &str = "••••••••••••••••";
 
 /// A local workspace as the page lists it: its id, name and folder (`LocalPath`).
-struct Shown {
-    id: String,
-    name: String,
-    path: String,
+pub(crate) struct Shown {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) path: String,
 }
 
-fn locals_of(workspaces: &[Workspace]) -> Vec<Shown> {
+pub(crate) fn locals_of(workspaces: &[Workspace]) -> Vec<Shown> {
     workspaces
         .iter()
         .filter_map(|w| {

@@ -434,7 +434,12 @@ impl RemoteHost {
         let shared = self.shared_workspaces().into_iter().find(|w| w.id() == id).ok_or_else(not_shared)?;
         let folder = (self.0.options.resolve_local)(id.to_string()).await.map_err(Resolve::Refused)?;
         let path = std::path::Path::new(folder.path());
-        if folder.id() != id || folder.remote.is_some() || !path.is_absolute() || !path.is_dir() || folder.path() != shared.path() {
+        if folder.id() != id || folder.remote.is_some() || !path.is_absolute() || folder.path() != shared.path() {
+            return Err(not_shared());
+        }
+        // The disk is asked off the runtime's workers (a slow or gone network folder never parks one).
+        let probe = folder.path().to_string();
+        if !tokio::task::spawn_blocking(move || std::path::Path::new(&probe).is_dir()).await.unwrap_or(false) {
             return Err(not_shared());
         }
         Ok(folder)

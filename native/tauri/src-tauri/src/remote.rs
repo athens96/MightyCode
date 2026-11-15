@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use mighty_core::model::{AppSnapshot, RunSession, Workspace};
 use mighty_core::shell::RemoteConnection;
 use mighty_platform::fake::MemoryVault;
-use mighty_platform::{Network, Platform, SecretVault};
+use mighty_platform::{Clipboard, Network, Platform, SecretVault};
 use mighty_remote::remote::client::{ClientOptions, LocalAddresses, RemoteClient, RouteCheck};
 use mighty_remote::remote::features;
 use mighty_remote::remote::host::{Addresses, HostOptions, HostRuntime, RemoteHost, host_runner};
@@ -86,6 +86,8 @@ pub struct RemoteApp {
     host_runs: AtomicUsize,
     smoke: bool,
     pub page: Mutex<Page>,
+    /// The key last copied while it may still be on the clipboard (emptied at quit if it is). Never logged.
+    copied: Arc<Mutex<Option<String>>>,
 }
 
 static APP: Mutex<Option<Arc<RemoteApp>>> = Mutex::new(None);
@@ -130,6 +132,7 @@ pub fn app(host: &Arc<Host>) -> Arc<RemoteApp> {
             host_runs: AtomicUsize::new(0),
             smoke,
             page: Mutex::new(Page::default()),
+            copied: Arc::default(),
         }
     });
     *app = Some(made.clone());
@@ -296,11 +299,13 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
     let options = HostOptions {
         workspaces: Arc::new(move || workspaces.upgrade().map(|h| h.view().snapshot.workspaces().to_vec()).unwrap_or_default()),
         resolve_local: Arc::new(move |id: String| {
-            let found = match resolving.upgrade().as_ref().and_then(|h| h.runs().cloned()) {
-                Some(runs) => runs.service.resolve_shared(&id),
-                None => Err(mighty_run::strings::get("common.appClosing")),
-            };
-            Box::pin(async move { found })
+            let runs = resolving.upgrade().as_ref().and_then(|h| h.runs().cloned());
+            Box::pin(async move {
+                let closing = || mighty_run::strings::get("common.appClosing");
+                let Some(runs) = runs else { return Err(closing()) };
+                // The check asks the disk whether the folder is there: off the runtime's workers.
+                tokio::task::spawn_blocking(move || runs.service.resolve_shared(&id)).await.unwrap_or_else(|_| Err(closing()))
+            })
         }),
         runtime: Arc::new(move || {
             let reading = runtime.read();
@@ -359,11 +364,17 @@ pub fn forget_host_runtime(host: &Host) {
 }
 
 /// `ShutdownRemoteWorkspacesAsync`: sharing ends with the app (every remote run here stops and the key is gone); the client's runs end
-/// with the run service, which disposes it.
+/// with the run service, which disposes it. A copied key still on the clipboard goes with the app too.
 pub fn shutdown(host: &Host) {
-    let _ = host;
-    if let Some(sharing) = existing().and_then(|app| app.host.get().cloned()) {
+    let Some(app) = existing() else { return };
+    if let Some(sharing) = app.host.get().cloned() {
         tauri::async_runtime::block_on(sharing.dispose());
+    }
+    let copied = lock(&app.copied).take();
+    if let Some(key) = copied
+        && host.smoke.is_none()
+    {
+        clear_if_holding(crate::platform::clipboard().as_ref(), &key);
     }
 }
 
@@ -449,6 +460,7 @@ pub fn open_workspace(host: &Arc<Host>, connection_id: &str, host_workspace_id: 
 }
 
 /// `RemoteAction(operation)`: one remote action at a time; its error shows on the page, and the page reads both sides again after it.
+/// The operation runs in a task of its own, so one that panics still ends the action: the page never stays busy.
 pub fn action<F>(host: &Arc<Host>, operation: F)
 where
     F: std::future::Future<Output = Result<(), String>> + Send + 'static,
@@ -465,7 +477,10 @@ where
     crate::native::touch(host, crate::settings::SURFACE);
     let host = host.clone();
     tauri::async_runtime::spawn(async move {
-        let outcome = operation.await;
+        let outcome = match tokio::spawn(operation).await {
+            Ok(outcome) => outcome,
+            Err(error) => Err(failure_words(error)),
+        };
         {
             let mut page = lock(&app.page);
             if let Err(error) = outcome {
@@ -479,30 +494,56 @@ where
     });
 }
 
+/// What a task that did not finish said: a panic's words, else that it was cancelled.
+fn failure_words(error: tokio::task::JoinError) -> String {
+    if !error.is_panic() {
+        return error.to_string();
+    }
+    let payload = error.into_panic();
+    payload.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_default()
+}
+
 /// `CopyRemoteKeyAsync(key, copied)`: the key on the clipboard in its secret form (out of clipboard history and the cloud clipboard,
-/// skipped by clipboard monitors), cleared after a minute if the clipboard still holds it. `copied` is told whether it reached the
-/// clipboard. A smoke never calls it: it must not touch the real clipboard.
+/// skipped by clipboard monitors), cleared after a minute if the clipboard still holds it, and at quit if it still does then.
+/// `copied` is told whether it reached the clipboard. A smoke never calls it: it must not touch the real clipboard.
 pub fn copy_key(host: &Arc<Host>, key: String, copied: impl Fn(bool) + Send + Sync + 'static) {
     if host.smoke.is_some() {
         return;
     }
-    let clipboard = crate::platform::clipboard();
-    tauri::async_runtime::spawn(async move {
-        let writer = clipboard.clone();
-        let secret = key.clone();
-        let set = tokio::task::spawn_blocking(move || writer.write_secret(&secret).is_ok()).await.unwrap_or(false);
-        copied(set);
-        if !set {
-            return;
-        }
-        tokio::time::sleep(features::KEY_COPY.clear_after).await;
-        let _ = tokio::task::spawn_blocking(move || {
-            if features::should_clear(clipboard.read_text().ok().flatten().as_deref(), &key) {
-                let _ = clipboard.write_text("");
-            }
-        })
-        .await;
-    });
+    let held = app(host).copied.clone();
+    tauri::async_runtime::spawn(copy_secret(crate::platform::clipboard(), key, features::KEY_COPY.clear_after, held, copied));
+}
+
+/// The copy over `clipboard`: written in its secret form and kept in `held` (for the clear at quit), `copied` told, then after
+/// `clear_after` the clipboard emptied if it still holds exactly the key; `held` forgets it either way (unless a newer copy replaced it).
+async fn copy_secret(
+    clipboard: Arc<dyn Clipboard>,
+    key: String,
+    clear_after: Duration,
+    held: Arc<Mutex<Option<String>>>,
+    copied: impl Fn(bool) + Send + Sync + 'static,
+) {
+    let (writer, secret) = (clipboard.clone(), key.clone());
+    let set = tokio::task::spawn_blocking(move || writer.write_secret(&secret).is_ok()).await.unwrap_or(false);
+    if set {
+        *lock(&held) = Some(key.clone());
+    }
+    copied(set);
+    if !set {
+        return;
+    }
+    tokio::time::sleep(clear_after).await;
+    let checked = key.clone();
+    let _ = tokio::task::spawn_blocking(move || clear_if_holding(clipboard.as_ref(), &checked)).await;
+    let mut held = lock(&held);
+    if held.as_deref() == Some(key.as_str()) {
+        *held = None;
+    }
+}
+
+/// `RemoteSecretCopy.ShouldClear` then `Clipboard.Clear()`: emptied only while it holds exactly `key`. True when it was emptied.
+fn clear_if_holding(clipboard: &dyn Clipboard, key: &str) -> bool {
+    features::should_clear(clipboard.read_text().ok().flatten().as_deref(), key) && clipboard.clear().is_ok()
 }
 
 /// `Copy(value)` (an address): plain text, as the page's other copies.
@@ -518,10 +559,29 @@ pub fn copy_text(host: &Arc<Host>, value: String) {
 
 #[cfg(test)]
 mod tests {
+    use mighty_composer::composer::{ComposerInputs, PaneViewState, WindowRules, refresh};
+    use mighty_platform::fake::MemoryClipboard;
+    use mighty_updates::cli_update::holds::{ProviderUse, UpdateActivity, ready_for_automatic_update};
+
     use super::*;
 
     fn source(file: &str) -> String {
         std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file)).unwrap()
+    }
+
+    fn remote(path: &str) -> Workspace {
+        Workspace {
+            id: Some("far".into()),
+            name: Some("far".into()),
+            path: Some(path.into()),
+            remote: Some(mighty_core::model::RemoteWorkspaceReference {
+                connection_id: Some("conn-1".into()),
+                workspace_id: Some("ws-1".into()),
+                host_name: Some("studio-pc".into()),
+                version: 2,
+            }),
+            ..Workspace::default()
+        }
     }
 
     /// The app's version as the host reports it: C#'s `AppVersion.Normalized`.
@@ -536,74 +596,127 @@ mod tests {
     }
 
     /// "remote desktop: the window reads a workspace's folder only through LocalPath" (C# scans the WinUI sources; W8 plan D17: the Rust
-    /// form). The shared rule is `RemoteWorkspaceFeatures.LocalPath` (a remote workspace has none); the page lists a local workspace's
-    /// folder through it, and the only folders this file hands on are the sharing host's, through the run service's shared check, which
-    /// refuses a remote workspace first.
+    /// form, by behaviour): `RemoteWorkspaceFeatures.LocalPath` gives a remote workspace no folder, and the remote page lists only local
+    /// workspaces, each with its LocalPath. The sharing host's folders come from the run service's shared check, which refuses a remote
+    /// workspace before any disk read (mighty-remote's remote_desktop `the_shared_check_never_reads_a_remote_workspaces_folder`).
     #[test]
     fn the_window_reads_a_workspaces_folder_only_through_local_path() {
-        let local = Workspace { path: Some("C:\\work".into()), ..Workspace::default() };
-        let remote = Workspace {
-            path: Some("\\\\server\\share".into()),
-            remote: Some(mighty_core::model::RemoteWorkspaceReference {
-                connection_id: Some("conn-1".into()),
-                workspace_id: Some("ws-1".into()),
-                host_name: Some("studio-pc".into()),
-                version: 2,
-            }),
-            ..Workspace::default()
-        };
+        let local = Workspace { id: Some("near".into()), name: Some("near".into()), path: Some("C:\\work".into()), ..Workspace::default() };
+        let far = remote("\\\\server\\share");
         assert_eq!(features::local_path(Some(&local)), Some("C:\\work"));
-        assert_eq!(features::local_path(Some(&remote)), None, "a host's path never reaches this PC's disk");
-        let page = source("settings/remote.rs");
-        assert!(
-            !page.contains(".path()") && page.contains("features::local_path("),
-            "the page reads a local folder only through LocalPath"
-        );
-        let mine = source("remote.rs");
-        let code: Vec<&str> = mine.split("#[cfg(test)]").next().unwrap().lines().filter(|l| !l.trim_start().starts_with("//")).collect();
-        assert!(!code.iter().any(|l| l.contains(".path()")), "remote.rs reads no workspace's folder itself");
-        assert!(code.iter().any(|l| l.contains("runs.service.resolve_shared(")), "the sharing host's folders come from the shared check");
+        assert_eq!(features::local_path(Some(&far)), None, "a host's path never reaches this PC's disk");
+        let listed = crate::settings::remote::locals_of(&[far.clone(), local.clone()]);
+        assert_eq!(listed.iter().map(|l| (l.id.as_str(), l.path.as_str())).collect::<Vec<_>>(), [("near", "C:\\work")]);
     }
 
-    /// "remote desktop: the remote page copies the key secretly and host runs hold updates" (W8 plan D17: the Rust form): the copy button
-    /// goes through `copy_key` alone, which writes the clipboard's secret form and clears it after `RemoteSecretCopy.Key.ClearAfter`;
-    /// another computer's runs here make every provider busy for the automatic and manual updates and the plugin changes, which all read
-    /// `provider_use_in`.
-    #[test]
-    fn the_remote_page_copies_the_key_secretly_and_host_runs_hold_updates() {
-        let page = source("settings/remote.rs");
-        assert_eq!(page.matches("crate::remote::copy_key(").count(), 1, "only the key button copies the key");
-        assert!(!page.contains("write_text("), "the page never copies the key in plain form");
-        let copy = source("remote.rs");
-        assert!(
-            copy.contains("writer.write_secret(&secret)")
-                && copy.contains("features::KEY_COPY.clear_after")
-                && copy.contains("features::should_clear(")
+    /// Whether a copy said it reached the clipboard, once it says.
+    async fn told(slot: &Arc<Mutex<Option<bool>>>) -> bool {
+        for _ in 0..400 {
+            if let Some(set) = *lock(slot) {
+                return set;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("the copy never said whether it reached the clipboard")
+    }
+
+    /// A copy of "key-1" over `clipboard`, emptied after 300 ms: the task and where it says whether it was copied.
+    fn copy(
+        clipboard: &Arc<MemoryClipboard>,
+        held: &Arc<Mutex<Option<String>>>,
+    ) -> (tokio::task::JoinHandle<()>, Arc<Mutex<Option<bool>>>) {
+        let said: Arc<Mutex<Option<bool>>> = Arc::default();
+        let into = said.clone();
+        let task =
+            copy_secret(clipboard.clone(), "key-1".into(), Duration::from_millis(300), held.clone(), move |set| *lock(&into) = Some(set));
+        (tokio::spawn(task), said)
+    }
+
+    /// "remote desktop: the remote page copies the key secretly and host runs hold updates" (W8 plan D17: the Rust form, by behaviour):
+    /// the copy writes the clipboard's secret form, empties the clipboard after the wait only while it still holds the key (and at quit),
+    /// says when the clipboard refused it; a provider in use (which another computer's runs make every provider, `provider_use_in`)
+    /// refuses the manual update and the plugin change and holds the automatic one.
+    #[tokio::test]
+    async fn the_remote_page_copies_the_key_secretly_and_host_runs_hold_updates() {
+        assert_eq!(
+            features::KEY_COPY,
+            features::SecretCopy { allowed_in_history: false, roamable: false, clear_after: Duration::from_secs(60) }
         );
-        assert!(
-            !features::KEY_COPY.allowed_in_history
-                && !features::KEY_COPY.roamable
-                && features::KEY_COPY.clear_after == Duration::from_secs(60)
-        );
+        // Copied secretly, then emptied after the wait.
+        let (clipboard, held) = (Arc::new(MemoryClipboard::default()), Arc::default());
+        let (running, said) = copy(&clipboard, &held);
+        assert!(told(&said).await, "it reached the clipboard");
+        assert!(clipboard.secret() && clipboard.text().as_deref() == Some("key-1") && lock(&held).as_deref() == Some("key-1"));
+        running.await.unwrap();
+        assert_eq!(clipboard.text(), None, "emptied, not overwritten with empty text");
+        assert_eq!(*lock(&held), None);
+        // Something else copied meanwhile stays.
+        let (running, said) = copy(&clipboard, &held);
+        assert!(told(&said).await);
+        clipboard.write_text("mine").unwrap();
+        running.await.unwrap();
+        assert_eq!(clipboard.text().as_deref(), Some("mine"), "only the key itself is cleared");
+        // A clipboard another program holds: not copied, nothing kept.
+        let busy = Arc::new(MemoryClipboard::default());
+        busy.set_busy(true);
+        let (running, said) = copy(&busy, &held);
+        assert!(!told(&said).await, "the page says it was not copied");
+        running.await.unwrap();
+        assert_eq!(*lock(&held), None);
+        // At quit: emptied only while it holds the key.
+        let quitting = MemoryClipboard::with_text("key-1");
+        assert!(clear_if_holding(&quitting, "key-1") && quitting.text().is_none());
+        let other = MemoryClipboard::with_text("mine");
+        assert!(!clear_if_holding(&other, "key-1") && other.text().as_deref() == Some("mine"));
+        // A provider in use holds every update.
+        let in_use = ProviderUse { running: true, account_change: false, queued: false, last_active: None };
+        let activity = UpdateActivity::default();
+        assert!(activity.manual_update_refusal("claude", &in_use).is_some(), "a manual update waits");
+        assert!(activity.plugin_mutation_block_reason("claude", true, true, &in_use).is_some(), "a plugin change waits");
+        assert!(!ready_for_automatic_update(&in_use, chrono::Utc::now()), "an automatic update waits");
+        // What makes it in use needs the window (a Host): another computer's runs count as running there.
         let updates = source("updates.rs");
         let provider_use = updates.split("pub fn provider_use_in(").nth(1).unwrap().split("\n}\n").next().unwrap();
-        assert!(provider_use.contains("crate::remote::host_runs(host) > 0"), "another computer's runs here hold this PC's CLI updates");
-        assert!(provider_use.contains("running: active || starting || host_runs"), "the hold is the provider's use");
-        assert!(updates.matches("provider_use_in(&host, &view, &provider)").count() >= 1, "a manual update reads it");
-        assert!(source("plugins.rs").contains("crate::updates::provider_use_in("), "a plugin change reads it");
+        assert!(
+            provider_use.contains("crate::remote::host_runs(host) > 0")
+                && provider_use.contains("running: active || starting || host_runs")
+        );
     }
 
-    /// "remote desktop: the window names a remote host and keeps its panes to it" (W8 plan D17: the Rust form): the pane notes say
-    /// "host · OS" from the connection's last answer; a remote pane takes its block from its host (the composer's run-now rows honour
-    /// `remote_block` as panes.rs does), the add menu keeps a remote workspace to Claude and command panes and its connect entry opens
-    /// the remote page, and the shell model names each remote workspace's connection.
+    /// "remote desktop: the window names a remote host and keeps its panes to it" (W8 plan D17: the Rust form, by behaviour): "host · OS"
+    /// from the connection's last answer, the pane notes name the host, a removed connection blocks the pane, and a composer whose
+    /// window rules carry the host's block cannot send (its reason the block) while the same pane without it can. The add menu's
+    /// limits are mighty-remote's remote_desktop `remote_panes_keep_to_the_hosts_features`.
     #[test]
     fn the_window_names_a_remote_host_and_keeps_its_panes_to_it() {
         assert_eq!(strings::host_with_os("studio-pc", Some("darwin")), format!("studio-pc · {}", strings::host_os(Some("darwin"))));
-        assert!(source("composer.rs").contains("remote_block: crate::remote::blocked_reason(host, &view.snapshot, &pane)"));
-        assert!(source("panes.rs").contains("remote_block"), "the pane's composer reads its host's block");
-        let frame = source("frame.rs");
-        assert!(frame.contains("remote.windows.workspace.paneUnavailable") && frame.contains("crate::remote::open_settings(host)"));
-        assert!(source("host.rs").contains("crate::remote::connections("), "the shell model names each remote workspace's connection");
+        let far = remote("C:\\far");
+        let shell = RunSession {
+            id: Some("cmd".into()),
+            workspace_id: Some("far".into()),
+            kind: Some("shell".into()),
+            provider: Some("claude".into()),
+            ..RunSession::default()
+        };
+        assert!(features::pane_note(&shell, &far, None).contains("studio-pc"), "the pane says where it runs");
+        let block = features::blocked_reason(Some(&far), &shell, None);
+        assert!(block.as_deref().is_some_and(|b| b.contains("studio-pc")), "a removed connection blocks the pane: {block:?}");
+        let view = PaneViewState { draft: "dir".into(), ..PaneViewState::default() };
+        let locale = mighty_core::locale::Locale::new("en");
+        let composed = |window: &WindowRules| {
+            refresh(&ComposerInputs {
+                locale,
+                now: mighty_core::time::DateTimeOffset::now(),
+                pane: &shell,
+                workspace: Some(&far),
+                runtime: None,
+                efforts: &[],
+                view: &view,
+                window,
+            })
+        };
+        let free = composed(&WindowRules::default());
+        let held = composed(&WindowRules { remote_block: block.clone(), ..WindowRules::default() });
+        assert!(free.can_send && !held.can_send && Some(held.reason) == block, "the host's block holds the composer");
     }
 }

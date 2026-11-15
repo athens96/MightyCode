@@ -3,7 +3,8 @@
 // to a listener whose handler answers 200 with "len:<body bytes>". Writes one line a case: its name, the answer's status line (or
 // "closed" with nothing answered, "pending" when nothing came in 3 s) and its body in lower-case hex, tab-separated. The answers are kept
 // as native/contracts/fixtures/remote-heads/heads-csharp.txt, which mighty-remote's tests/remote_parity.rs checks Rust's strict server
-// against (run.ps1 makes them again and compares).
+// against (run.ps1 makes them again and compares). A case with "limit": "host" goes to a second listener whose body limit is the sharing
+// host's own (RemoteHostService.BodyLimit with the key below, loopback allowed): none without the key, the larger one for a run.
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -14,13 +15,19 @@ namespace MightyCode.Parity;
 
 internal static class RemoteParity
 {
+    /// <summary>The key the host-limit cases present (tests/remote_parity.rs's KEY).</summary>
+    private const string Key = "parity-remote-key-0123456789abcdefghijklmnop";
+
     public static int Run(string input, string output)
     {
         var lines = File.ReadAllLines(input).Where(l => l.Length > 0).ToList();
         var answers = new List<string>();
-        var listener = new RemoteHttpListener(IPAddress.Loopback, 0,
-            request => Task.FromResult(new RemoteHttpResponse(200, Encoding.UTF8.GetBytes("len:" + request.Body.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)))));
+        static Task<RemoteHttpResponse> Handler(RemoteHttpRequest request) =>
+            Task.FromResult(new RemoteHttpResponse(200, Encoding.UTF8.GetBytes("len:" + request.Body.Length.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+        var listener = new RemoteHttpListener(IPAddress.Loopback, 0, Handler);
+        var hosted = new RemoteHttpListener(IPAddress.Loopback, 0, Handler, head => RemoteHostService.BodyLimit(head, Key, true));
         var port = listener.Start();
+        var hostPort = hosted.Start();
         try
         {
             foreach (var line in lines)
@@ -28,10 +35,15 @@ internal static class RemoteParity
                 var node = JsonNode.Parse(line)!;
                 var name = (string)node["name"]!;
                 var raw = Convert.FromHexString((string)node["hex"]!);
-                answers.Add(name + "\t" + Exchange(port, raw).GetAwaiter().GetResult());
+                var target = (string?)node["limit"] == "host" ? hostPort : port;
+                answers.Add(name + "\t" + Exchange(target, raw).GetAwaiter().GetResult());
             }
         }
-        finally { listener.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+        finally
+        {
+            listener.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            hosted.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
         File.WriteAllText(output, string.Join("\n", answers) + "\n", new UTF8Encoding(false));
         return 0;
     }

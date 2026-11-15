@@ -46,3 +46,16 @@ content-type-text	HTTP/1.1 200 OK	6c656e3a32
 mixed-case-header	HTTP/1.1 200 OK	6c656e3a30
 lf-only	pending	
 bare-cr	HTTP/1.1 400 Bad Request	7b226572726f72223a22ec9e98ebaabbeb909c20ed97a4eb8d94227d
+pipelined	HTTP/1.1 400 Bad Request	7b226572726f72223a22ed9598eb8298ec9d9820ec97b0eab2b0ec9790eb8a9420ed9598eb8298ec9d9820ec9a94ecb2adeba78c20ed9788ec9aa9ed95a9eb8b88eb8ba42e227d
+body-shorter-than-length	pending	
+body-longer-than-length	HTTP/1.1 400 Bad Request	7b226572726f72223a22ed9598eb8298ec9d9820ec97b0eab2b0ec9790eb8a9420ed9598eb8298ec9d9820ec9a94ecb2adeba78c20ed9788ec9aa9ed95a9eb8b88eb8ba42e227d
+head-8192	HTTP/1.1 200 OK	6c656e3a30
+head-8193	HTTP/1.1 200 OK	6c656e3a30
+host-auth-post-runs	HTTP/1.1 200 OK	6c656e3a35
+host-auth-get-body	HTTP/1.1 200 OK	6c656e3a33
+host-no-key-post	HTTP/1.1 200 OK	6c656e3a30
+host-wrong-key-post	HTTP/1.1 200 OK	6c656e3a30
+host-no-version-post	HTTP/1.1 200 OK	6c656e3a30
+host-origin-post	HTTP/1.1 200 OK	6c656e3a30
+host-auth-get-over-limit	HTTP/1.1 413 Payload Too Large	7b226572726f72223a22ec9a94ecb2ad20ed81aceab8b0eab08020ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+host-auth-runs-large-length	pending	

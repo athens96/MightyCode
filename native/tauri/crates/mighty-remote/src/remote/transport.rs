@@ -296,34 +296,75 @@ async fn read_answer(stream: &mut TcpStream, maximum: usize) -> Result<(u16, Vec
     }
 }
 
+/// The longest chunk-size line taken (its size, extensions and CRLF): a line past it is no answer of a Mighty host.
+const MAXIMUM_CHUNK_LINE: usize = 1024;
+
+fn bad_chunk() -> TransportError {
+    TransportError::Network("a bad chunk".into())
+}
+
+/// More of the answer into `raw`: the connection's end before the answer's is a failure, and `raw` never holds more than the largest
+/// body, one chunk line and what one read brings.
+async fn more(stream: &mut TcpStream, raw: &mut Vec<u8>, chunk: &mut [u8], maximum: usize) -> Result<(), TransportError> {
+    let read = stream.read(chunk).await.map_err(network)?;
+    if read == 0 {
+        return Err(TransportError::Network("the answer ended early".into()));
+    }
+    raw.extend_from_slice(&chunk[..read]);
+    if raw.len() > maximum.saturating_add(MAXIMUM_CHUNK_LINE + 4).saturating_add(chunk.len()) {
+        return Err(TransportError::InvalidData(get("remote.connect.error.responseTooLarge")));
+    }
+    Ok(())
+}
+
+/// A chunk-size line's size: hex digits only (at most 16, an extension after `;` let go), else a bad chunk.
+fn chunk_size(line: &[u8]) -> Result<usize, TransportError> {
+    let text = std::str::from_utf8(line).map_err(|_| bad_chunk())?;
+    let digits = text.split(';').next().unwrap_or_default().trim_matches([' ', '\t']);
+    if digits.is_empty() || digits.len() > 16 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(bad_chunk());
+    }
+    usize::from_str_radix(digits, 16).map_err(|_| bad_chunk())
+}
+
+/// A chunked body: each size line bounded, each chunk's data and its CRLF checked, every sum checked, the body at most `maximum`.
 async fn read_chunked(stream: &mut TcpStream, mut raw: Vec<u8>, maximum: usize) -> Result<Vec<u8>, TransportError> {
     let mut body = vec![];
     let mut chunk = vec![0u8; 16 * 1024];
     loop {
-        let Some(line_end) = raw.windows(2).position(|w| w == b"\r\n") else {
-            let read = stream.read(&mut chunk).await.map_err(network)?;
-            if read == 0 {
-                return Err(TransportError::Network("the answer ended early".into()));
+        // The size line, looked for only in what came since the last look (a long line is never scanned again and again).
+        let mut scanned: usize = 0;
+        let line_end = loop {
+            let from = scanned.saturating_sub(1);
+            if let Some(at) = raw[from..].windows(2).position(|w| w == b"\r\n") {
+                break from + at;
             }
-            raw.extend_from_slice(&chunk[..read]);
-            continue;
+            if raw.len() > MAXIMUM_CHUNK_LINE {
+                return Err(bad_chunk());
+            }
+            scanned = raw.len();
+            more(stream, &mut raw, &mut chunk, maximum).await?;
         };
-        let size_text = String::from_utf8_lossy(&raw[..line_end]).split(';').next().unwrap_or_default().trim().to_string();
-        let size = usize::from_str_radix(&size_text, 16).map_err(|_| TransportError::Network("a bad chunk".into()))?;
+        if line_end + 2 > MAXIMUM_CHUNK_LINE {
+            return Err(bad_chunk());
+        }
+        let size = chunk_size(&raw[..line_end])?;
         if size == 0 {
             return Ok(body);
         }
-        if body.len() + size > maximum {
+        if body.len().checked_add(size).is_none_or(|total| total > maximum) {
             return Err(TransportError::InvalidData(get("remote.connect.error.responseTooLarge")));
         }
-        while raw.len() < line_end + 2 + size + 2 {
-            let read = stream.read(&mut chunk).await.map_err(network)?;
-            if read == 0 {
-                return Err(TransportError::Network("the answer ended early".into()));
-            }
-            raw.extend_from_slice(&chunk[..read]);
+        // size <= maximum here, so the sum cannot overflow; checked anyway.
+        let data_end = (line_end + 2).checked_add(size).ok_or_else(bad_chunk)?;
+        let next = data_end.checked_add(2).ok_or_else(bad_chunk)?;
+        while raw.len() < next {
+            more(stream, &mut raw, &mut chunk, maximum).await?;
         }
-        body.extend_from_slice(&raw[line_end + 2..line_end + 2 + size]);
-        raw.drain(..line_end + 2 + size + 2);
+        if &raw[data_end..next] != b"\r\n" {
+            return Err(bad_chunk());
+        }
+        body.extend_from_slice(&raw[line_end + 2..data_end]);
+        raw.drain(..next);
     }
 }

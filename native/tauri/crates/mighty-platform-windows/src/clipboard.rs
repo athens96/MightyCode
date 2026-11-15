@@ -105,6 +105,16 @@ impl Clipboard for WindowsClipboard {
         }
         put(CF_UNICODETEXT, &units)
     }
+
+    /// `Clipboard.Clear()`: opened and emptied, nothing put back.
+    fn clear(&self) -> Result<()> {
+        let _open = Opened::open()?;
+        // SAFETY: the clipboard is open.
+        if unsafe { EmptyClipboard() } == 0 {
+            return Err(PlatformError::Io(std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
 }
 
 /// A registered clipboard format's id (0 when Windows refused it).
