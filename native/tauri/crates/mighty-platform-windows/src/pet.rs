@@ -51,7 +51,7 @@ use windows::Win32::Graphics::Gdi::{
     SelectObject,
 };
 use windows::Win32::UI::HiDpi::{
-    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI, SetThreadDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI, SetThreadDpiAwarenessContext,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GUITHREADINFO, GWL_EXSTYLE, GetCursorPos,
@@ -349,7 +349,8 @@ thread_local! {
     static WINDOW: RefCell<Option<Window>> = const { RefCell::new(None) };
     /// Inside a draw a change of display can arrive (C#'s `scaling` guard): it is noted and the scale asked once the draw is done.
     static DRAWING: Cell<bool> = const { Cell::new(false) };
-    static MISSED_DPI: Cell<bool> = const { Cell::new(false) };
+    /// The DPI a `WM_DPICHANGED` that arrived while the window was busy carried (its `wparam`, as the free path reads it), 0 for none.
+    static MISSED_DPI: Cell<u32> = const { Cell::new(0) };
 }
 
 fn instance() -> HINSTANCE {
@@ -598,12 +599,12 @@ impl Window {
         self.missed_dpi();
     }
 
-    /// A change of display noted while the window was busy (inside a draw or a move): the display it stands on now is asked once,
-    /// and reported when its scale is not the one drawn at.
+    /// A change of display noted while the window was busy (inside a draw or a move): the DPI the message said, reported once when its
+    /// scale is not the one drawn at. Asking `GetDpiForWindow` instead would lose a change the window's own display does not show yet
+    /// (a `WM_DPICHANGED` sent ahead of the move, the smoke's 150% and 200%).
     fn missed_dpi(&self) {
-        if MISSED_DPI.with(|m| m.replace(false)) {
-            // SAFETY: this thread's own window.
-            let dpi = unsafe { GetDpiForWindow(self.hwnd) };
+        let dpi = MISSED_DPI.with(|m| m.replace(0));
+        if dpi != 0 {
             let standing = (f64::from(dpi) / 96.0).clamp(1.0, 4.0);
             if (standing - self.shared.scale()).abs() > f64::EPSILON {
                 self.shared.emit(PetEvent::DpiChanged { scale: standing });
@@ -785,7 +786,7 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, wparam: WPARAM, lp
                 // The window is busy (a draw, a move, its destruction): a change of display is noted for after it, never handled
                 // inside it (review M2), and a destruction still ends the loop (review H1).
                 if message == WM_DPICHANGED {
-                    MISSED_DPI.with(|m| m.set(true));
+                    MISSED_DPI.with(|m| m.set((wparam.0 & 0xFFFF) as u32));
                     return Some(LRESULT(0));
                 }
                 if message == WM_DESTROY {

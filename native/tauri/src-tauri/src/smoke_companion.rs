@@ -172,6 +172,14 @@ impl Pet {
         wait("the pet's events handled", 10, || (self.handled.load(Ordering::SeqCst) >= before + events).then_some(())).await
     }
 
+    /// A change of display to `dpi` through the window's own procedure, waited for until the overlay takes its scale (not for one more
+    /// event: a count is one behind when an earlier input's event came late, and the step would then draw at the old scale).
+    async fn scale_to(&self, dpi: u32) -> Result<(), String> {
+        let wanted = (f64::from(dpi) / 96.0).clamp(1.0, 4.0);
+        self.window.send(PetInput::Dpi(dpi)).map_err(|e| e.to_string())?;
+        wait("the pet's scale changed", 10, || (lock(&self.overlay).scale() == wanted).then_some(())).await
+    }
+
     /// C# `SmokeClick(id)`: a press and release at the middle of the target; false when the frame has no such target.
     async fn click(&self, id: &str) -> Result<bool, String> {
         let Some(at) = lock(&self.overlay).target(id) else { return Ok(false) };
@@ -456,7 +464,9 @@ async fn run(host: &Arc<Host>, checks: &mut Map<String, Value>) -> Result<(), St
     checks.insert("planBubbleAndWindow".into(), json!(true));
     // On a display at 150% and at 200% the same card is the same points: only the pixels under them grow.
     for dpi in [144u32, 192] {
-        pet.send(PetInput::Dpi(dpi), 1).await?;
+        // Waited for until the overlay takes the scale, not for one more event: a count is one behind when an earlier input's event
+        // came late, and the step would then draw at the old scale.
+        pet.scale_to(dpi).await?;
         pet.set_card(CompanionCard { light: false, ..card(&format!("smoke-scale-{dpi}"), &agent, "waiting", None, 0, 0, false) }, true);
         let frame = pet.draw(7, 0).await?;
         require(
@@ -467,7 +477,7 @@ async fn run(host: &Arc<Host>, checks: &mut Map<String, Value>) -> Result<(), St
         capture(host, &frame, &format!("smoke-companion-overlay-dark-{}.png", dpi * 100 / 96))?;
         check_bubble(&pet, &frame, &agent, &workspace, false)?;
     }
-    pet.send(PetInput::Dpi((96.0 * scale).round() as u32), 1).await?;
+    pet.scale_to((96.0 * scale).round() as u32).await?;
     let mut captures = vec![];
     for light in [false, true] {
         pet.set_card(CompanionCard { light, ..card(&format!("smoke-design-{light}"), &agent, "waiting", None, 0, 0, false) }, true);
