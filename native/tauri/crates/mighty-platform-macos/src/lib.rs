@@ -151,7 +151,7 @@ mod imp {
         None
     }
 
-    pub fn surfaces(_window: tauri::Window) -> Arc<dyn SurfaceFactory> {
+    pub fn surfaces(_window: tauri::Window, _csharp_web_data: bool) -> Arc<dyn SurfaceFactory> {
         Arc::new(MacSurfaces)
     }
 

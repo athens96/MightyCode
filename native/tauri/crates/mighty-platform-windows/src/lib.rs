@@ -249,9 +249,10 @@ mod imp {
         Arc::new(WindowsUpdates)
     }
 
-    /// The native views of `window`: browsers are WebView2 child webviews; the terminal is the page's (xterm.js).
-    pub fn surfaces(window: tauri::Window) -> Arc<dyn SurfaceFactory> {
-        Arc::new(WebviewSurfaces::new(window))
+    /// The native views of `window`: browsers are WebView2 child webviews (with C#'s environment options in C#'s own data folder,
+    /// `csharp_web_data`); the terminal is the page's (xterm.js).
+    pub fn surfaces(window: tauri::Window, csharp_web_data: bool) -> Arc<dyn SurfaceFactory> {
+        Arc::new(WebviewSurfaces::new(window, csharp_web_data))
     }
 
     /// The user's clipboard (a terminal's copy and paste).

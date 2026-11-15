@@ -76,5 +76,8 @@ $headsOut = Join-Path $Work 'heads-csharp.txt'
 dotnet $cs remote (Join-Path $heads 'heads.jsonl') $headsOut
 & $rs compare-lines (Join-Path $heads 'heads-csharp.txt') $headsOut
 if ($LASTEXITCODE -ne 0) { $failed = $true }
+# W9-D (R9): the styles' golden cases and conformance codes, C#'s projection against mighty-styles' (styles.ps1, its own exit code).
+& (Join-Path $PSScriptRoot 'styles.ps1') -Work (Join-Path $Work 'styles')
+if ($LASTEXITCODE -ne 0) { $failed = $true }
 if ($failed) { Write-Host 'parity: DIFFERENCES' -ForegroundColor Red; exit 1 }
 Write-Host 'parity: 0 differences' -ForegroundColor Green

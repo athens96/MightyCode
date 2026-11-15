@@ -85,9 +85,21 @@ function RegistryTree([string]$Root, $Into) {
 # and hashes).
 function UserConfig {
     $values = [ordered]@{}
-    foreach ($key in 'HKCU:\Software\MightyCode', 'HKCU:\Software\Classes\AppUserModelId\dev.mightycode.native') {
+    foreach ($key in 'HKCU:\Software\MightyCode', 'HKCU:\Software\Classes\AppUserModelId\dev.mightycode.native', 'HKCU:\Software\Classes\CLSID\{E9E66915-2599-4971-9584-4825CAC5DEEE}',
+            'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{F2F99AEF-FB35-4476-A3EE-49453FA0527F}_is1') {
         try { RegistryTree $key $values } catch { $values[$key] = "probe failed: $($_.Exception.Message)" }
     }
+    # The installed app (W9 plan §4): its folder's top level and exe untouched, and no MightyCode.backup-* or MightyCode.update-new beside it.
+    $programs = Join-Path $env:LOCALAPPDATA 'Programs'
+    $values["$programs\MightyCode*"] = Probe { @(Get-ChildItem -LiteralPath $programs -Filter 'MightyCode*' -Force -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object Name) -join '|' }
+    $install = Join-Path $programs 'MightyCode'
+    $values[$install] = Probe {
+        if (-not (Test-Path -LiteralPath $install)) { $null } else {
+            @(Get-ChildItem -LiteralPath $install -Force -ErrorAction Stop | Sort-Object Name | ForEach-Object { "$($_.Name) $($_.LastWriteTimeUtc.ToString('o'))" }) -join '|'
+        }
+    }
+    $exe = Join-Path $install 'MightyCode.exe'
+    $values[$exe] = Probe { if (Test-Path -LiteralPath $exe) { (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash } else { $null } }
     foreach ($file in (Join-Path $env:USERPROFILE '.claude\settings.json'), (Join-Path $env:USERPROFILE '.config\claude-omc\config.jsonc'), (Join-Path $env:USERPROFILE '.ouroboros\config.yaml')) {
         $values[$file] = Probe { if (Test-Path $file) { $info = Get-Item $file; "$($info.LastWriteTimeUtc.ToString('o')) $((Get-FileHash $file -Algorithm SHA256).Hash)" } else { $null } }
     }
@@ -226,7 +238,7 @@ if ($userChanged.Count -gt 0) {
     foreach ($name in $userChanged) { Write-Output "  $name`: $($userBefore[$name]) -> $($userAfter[$name])" }
     $exitCode = 1
 } else {
-    Write-Output 'user settings unchanged: HKCU Software\MightyCode and its subkeys, the toast registration, ~\.claude\settings.json, omc and Ouroboros configs'
+    Write-Output 'user settings unchanged: HKCU Software\MightyCode and its subkeys, the toast registration (AppUserModelId and CLSID), the uninstall entry, the installed app folder, ~\.claude\settings.json, omc and Ouroboros configs'
 }
 if (Test-Path $result) { Get-Content $result -Raw -Encoding utf8 } else { Write-Output 'no smoke-result.json' }
 if (-not $readOnly) {

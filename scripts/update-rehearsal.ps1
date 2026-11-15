@@ -118,6 +118,16 @@ function Get-LastLine([string]$path) {
     if (-not (Test-Path -LiteralPath $path)) { return '' }
     "$(Get-Content -LiteralPath $path -Encoding utf8 | Where-Object { $_ } | Select-Object -Last 1)"
 }
+# The text a running app's log holds from byte `$offset` on: opened sharing read, write and delete, as the app keeps it open for writing
+# (File.ReadAllText shares read only, which a file open for writing refuses with a sharing violation).
+function Read-Shared([string]$path, [long]$offset = 0) {
+    $stream = [IO.FileStream]::new($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+    try {
+        [void]$stream.Seek([Math]::Min($offset, $stream.Length), [IO.SeekOrigin]::Begin)
+        $reader = [IO.StreamReader]::new($stream, [Text.UTF8Encoding]::new($false))
+        $reader.ReadToEnd()
+    } finally { $stream.Dispose() }
+}
 function Get-Beside { @(Get-ChildItem -LiteralPath (Split-Path $installDirectory) -Directory -Force | Where-Object { $_.Name -like 'MightyCode.backup-*' -or $_.Name -eq 'MightyCode.update-new' } | ForEach-Object Name) }
 function Install-Setup([string]$setup, [string]$log) {
     $process = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`"" -Wait -PassThru
@@ -324,9 +334,9 @@ try {
     try {
         Wait-Until "the relaunched app's host.log" 120 {
             (Test-Path $defaultLog) -and (Get-Item $defaultLog).Length -gt $logLength -and
-            ([IO.File]::ReadAllText($defaultLog).Substring($logLength) -match "start $([regex]::Escape($rustVersion)) ")
+            ((Read-Shared $defaultLog $logLength) -match "start $([regex]::Escape($rustVersion)) ")
         }
-        $started = [IO.File]::ReadAllText($defaultLog).Substring($logLength).Split("`n") | Where-Object { $_ -match ' start ' } | Select-Object -First 1
+        $started = (Read-Shared $defaultLog $logLength).Split("`n") | Where-Object { $_ -match ' start ' } | Select-Object -First 1
     } catch { Write-Host "  $($_.Exception.Message)" }
     Write-Host "  host.log: $started"
     Check 'the relaunched Rust app started on the default profile' ([bool]$started -and $started -match [regex]::Escape("profile $default ")) "$started"

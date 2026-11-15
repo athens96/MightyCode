@@ -144,6 +144,9 @@ try {
     Get-ChildItem -LiteralPath (Join-Path $root 'native\macos\Sources\MightyCore\Resources\Agents') -File | Copy-Item -Destination $agents
     # The bundled pets (tauri.conf.json's resource, C#'s Assets\pets).
     Copy-Item -LiteralPath (Join-Path $root 'assets\pets') -Destination (Join-Path $OutputDirectory 'pets') -Recurse
+    # The app's icon where C#'s layout keeps it (Assets\MightyCode.ico): the toast registration names it as its IconUri (activator.rs).
+    New-Item -ItemType Directory -Force (Join-Path $OutputDirectory 'Assets') | Out-Null
+    Copy-Item -LiteralPath (Join-Path $root 'assets\icons\MightyCode.ico') -Destination (Join-Path $OutputDirectory 'Assets\MightyCode.ico')
     Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $OutputDirectory 'LICENSE.txt')
     $rustc = (& rustc --version) -join ' '
     $info = [ordered]@{
@@ -155,7 +158,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $OutputDirectory 'build-info.json'), ($info | ConvertTo-Json) + "`n", $utf8)
 
     foreach ($required in @('MightyCode.exe', 'LICENSE.txt', 'build-info.json', 'claude-mods\.claude-plugin\plugin.json', 'Agents\pi-ask-user.js',
-            'Agents\opencode-questions.md', 'pets\mighty-raccoon\pet.json', 'pets\mighty-raccoon\spritesheet.webp')) {
+            'Agents\opencode-questions.md', 'pets\mighty-raccoon\pet.json', 'pets\mighty-raccoon\spritesheet.webp', 'Assets\MightyCode.ico')) {
         if (-not (Test-Path (Join-Path $OutputDirectory $required) -PathType Leaf)) { throw "the package lacks $required" }
     }
     # What the 0.4.x stager refuses (AppUpdateService.Stage): a second MightyCode.exe anywhere, or a link.

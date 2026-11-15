@@ -5,6 +5,8 @@
 #   .\native\tauri\tools\parity\styles.ps1 [-Work <folder>]
 param([string]$Work = (Join-Path $env:TEMP 'mighty-parity-styles'))
 $ErrorActionPreference = 'Stop'
+# A relative -Work is taken from where the script was called (the script moves to the workspace for cargo).
+$Work = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Work)
 $tauri = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $repo = (Resolve-Path (Join-Path $tauri '..\..')).Path
 . (Join-Path $tauri 'scripts\env.ps1')
@@ -58,3 +60,4 @@ foreach ($m in $manifests) {
 }
 Write-Host "styles parity: $compared compared, $failed different"
 if ($failed -gt 0) { exit 1 }
+exit 0

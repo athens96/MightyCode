@@ -21,9 +21,10 @@ pub fn platform(profile: Option<PathBuf>, identifier: &str) -> Result<Platform> 
     os::platform(profile, identifier)
 }
 
-/// The native views over `window`'s page.
-pub fn surfaces(window: tauri::Window) -> Arc<dyn SurfaceFactory> {
-    os::surfaces(window)
+/// The native views over `window`'s page; `csharp_web_data` when the browser panes' data is C#'s own folder (W9-F's adopted folder,
+/// `paths::web_folders`), whose views open with C#'s environment options.
+pub fn surfaces(window: tauri::Window, csharp_web_data: bool) -> Arc<dyn SurfaceFactory> {
+    os::surfaces(window, csharp_web_data)
 }
 
 /// W9-C: the main window whose session messages `Platform::session` reports (Windows subclasses it; call on the window's thread). The
