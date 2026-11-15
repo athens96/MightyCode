@@ -109,40 +109,92 @@ pub struct RestartDecision {
     pub action: RestartAction,
 }
 
-/// C# `CheckDue(enabled, hasKey, lastCheck, lastAttempt, now)` (a time later than `now` ignored). Step 0 stub (W9-A writes it): never due.
+fn span(duration: Duration) -> chrono::Duration {
+    chrono::Duration::from_std(duration).unwrap_or(chrono::TimeDelta::MAX)
+}
+
+/// C# `CheckDue(enabled, hasKey, lastCheck, lastAttempt, now)`: due [`CHECK_INTERVAL`] after the later of the last check and the last
+/// attempt; never with the switch off or without a key. A time later than `now` (the clock was set back) is ignored, so a future last
+/// check alone does not stop checks, while a past attempt still holds the next try back.
 pub fn check_due(
-    _enabled: bool,
-    _has_key: bool,
-    _last_check: Option<DateTime<Utc>>,
-    _last_attempt: Option<DateTime<Utc>>,
-    _now: DateTime<Utc>,
+    enabled: bool,
+    has_key: bool,
+    last_check: Option<DateTime<Utc>>,
+    last_attempt: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
 ) -> bool {
-    false
+    if !enabled || !has_key {
+        return false;
+    }
+    match [last_check, last_attempt].into_iter().flatten().filter(|date| *date <= now).max() {
+        None => true,
+        Some(latest) => now - latest >= span(CHECK_INTERVAL),
+    }
 }
 
-/// C# `IdleBlockers(facts, now)`: every reason the app is not idle, in [`IdleBlocker`] order. Step 0 stub (W9-A writes it): every
-/// blocker, so nothing ever counts as idle.
-pub fn idle_blockers(_facts: &IdleFacts, _now: DateTime<Utc>) -> Vec<IdleBlocker> {
-    IdleBlocker::ALL.to_vec()
+/// C# `IdleBlockers(facts, now)`: every reason the app is not idle, in [`IdleBlocker`] order; empty when it may restart. A time in the
+/// future (the clock set back) counts as just now.
+pub fn idle_blockers(facts: &IdleFacts, now: DateTime<Utc>) -> Vec<IdleBlocker> {
+    let recent = |date: Option<DateTime<Utc>>, delay: Duration| date.is_some_and(|date| now - date < span(delay));
+    IdleBlocker::ALL
+        .into_iter()
+        .filter(|blocker| match blocker {
+            IdleBlocker::AgentRun => facts.agent_runs > 0,
+            IdleBlocker::PendingCard => facts.pending_cards > 0,
+            IdleBlocker::QueuedInput => facts.queued_inputs > 0,
+            IdleBlocker::Draft => facts.drafts > 0,
+            IdleBlocker::Terminal => facts.terminals > 0,
+            IdleBlocker::CliWork => facts.cli_work,
+            IdleBlocker::Remote => {
+                facts.screen_sharing || facts.phone_uploads > 0 || facts.remote_host_runs > 0 || facts.sharing_workspaces
+            }
+            IdleBlocker::Modal => facts.blocking_modal,
+            IdleBlocker::UserActive => recent(facts.last_user_input, USER_IDLE_DELAY),
+            IdleBlocker::RecentAgentActivity => recent(facts.last_agent_activity, AGENT_IDLE_DELAY),
+        })
+        .collect()
 }
 
-/// C# `RestartOffer(state, ready, automatic, blockers, now)`. Step 0 stub (W9-A writes it): idle, nothing done.
-pub fn restart_offer(
-    _state: RestartState,
-    _ready: bool,
-    _automatic: bool,
-    _blockers: &[IdleBlocker],
-    _now: DateTime<Utc>,
-) -> RestartDecision {
-    RestartDecision { state: RestartState::Idle, action: RestartAction::None }
+/// C# `IsIdle(facts, now)`.
+pub fn is_idle(facts: &IdleFacts, now: DateTime<Utc>) -> bool {
+    idle_blockers(facts, now).is_empty()
+}
+
+/// C# `RestartOffer(state, ready, automatic, blockers, now)`: one step of the idle-restart offer, on every tick (every
+/// [`COUNTDOWN_TICK`] while counting down). A ready, automatic app with no blocker starts a [`COUNTDOWN`]; the countdown restarts the
+/// app when it runs out and is cancelled quietly as soon as any blocker other than `UserActive` appears, the switch goes off or the
+/// update is no longer ready (input alone does not cancel it, so the pointer can reach the banner's buttons); one found more than
+/// [`COUNTDOWN_GRACE`] past its end (the computer slept through it) is cancelled, never acted on; a snooze holds until it ends.
+pub fn restart_offer(state: RestartState, ready: bool, automatic: bool, blockers: &[IdleBlocker], now: DateTime<Utc>) -> RestartDecision {
+    let decision = |state, action| RestartDecision { state, action };
+    match state {
+        RestartState::CountingDown(until) => {
+            if !ready
+                || !automatic
+                || blockers.iter().any(|blocker| *blocker != IdleBlocker::UserActive)
+                || now - until > span(COUNTDOWN_GRACE)
+            {
+                decision(RestartState::Idle, RestartAction::Cancel)
+            } else if now >= until {
+                decision(RestartState::Idle, RestartAction::Restart)
+            } else {
+                decision(state, RestartAction::None)
+            }
+        }
+        RestartState::Snoozed(until) if now < until => decision(state, RestartAction::None),
+        _ if !ready || !automatic || !blockers.is_empty() => decision(RestartState::Idle, RestartAction::None),
+        _ => decision(RestartState::CountingDown(now + span(COUNTDOWN)), RestartAction::StartCountdown),
+    }
 }
 
 /// C# `Later(now)`: snoozed for [`SNOOZE`].
 pub fn later(now: DateTime<Utc>) -> RestartState {
-    RestartState::Snoozed(now + chrono::Duration::from_std(SNOOZE).unwrap_or_default())
+    RestartState::Snoozed(now + span(SNOOZE))
 }
 
-/// C# `InstallsOnQuit(ready, automatic, hasKey, poweringOff)`. Step 0 stub (W9-A writes it): quitting never installs.
-pub fn installs_on_quit(_ready: bool, _automatic: bool, _has_key: bool, _powering_off: bool) -> bool {
-    false
+/// C# `InstallsOnQuit(ready, automatic, hasKey, poweringOff)`: quitting installs the staged update (the helper with `--relaunch 0`).
+/// `ready`: staged, no install under way; `has_key`: the build verifies updates and this is not a smoke; `powering_off`: Windows signs
+/// out, restarts or shuts down, and the swap could be cut off half way, so the update waits for the next quit.
+pub fn installs_on_quit(ready: bool, automatic: bool, has_key: bool, powering_off: bool) -> bool {
+    ready && automatic && has_key && !powering_off
 }
