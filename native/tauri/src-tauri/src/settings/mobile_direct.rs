@@ -117,8 +117,8 @@ pub fn rows(host: &Arc<Host>, ui: &mut Ui, saved: &MobileRemoteSettings) -> El {
         .aid("settings-mobile-firewall-button")
         // With no port to open and no rule to remove there is nothing to press, so the button is not shown at all.
         .visible(firewall.rule != FirewallRule::Missing || !ports.is_empty())
-        // Adding or removing elevates: only with --allow-state-write (D4); reading again never does.
-        .enabled(free && (unknown || firewall.may_change));
+        // Adding, removing and even reading the rule run netsh: only with --allow-state-write (D4).
+        .enabled(free && firewall.may_change);
     let to = host.clone();
     let update = small(ui, locale.get("remote.windows.firewall.update"), Box::new(move || direct::firewall_update_pressed(&to)))
         .aid("settings-mobile-firewall-update")

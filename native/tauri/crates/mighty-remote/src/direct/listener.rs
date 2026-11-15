@@ -22,7 +22,7 @@ use std::time::Duration;
 use mighty_platform::{BoxFuture, Network, NetworkCallback, Subscription};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime::Handle;
-use tokio::task::AbortHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 use tokio_tungstenite::WebSocketStream;
 
 use crate::direct::status::{self, DirectState, MobileDirectStatus};
@@ -31,22 +31,47 @@ use crate::tailscale;
 
 /// Where admitted, upgraded sockets go (W8-A's relay host).
 ///
-/// The listener has already refused a peer outside Tailscale's ranges (any peer only through the checks' address seam), so `admit`
-/// judges the counts: C#'s `MobileDirect.Admit` as one check-and-insert under the host's lock — room in the phone table (relay and
-/// direct), fewer than 4 direct handshakes and 2 from `peer`, fewer than 5 failed auths from it in 60 s
-/// (`direct::admit::{admit, DirectAuthFailures}`; call `admit(Some(&canonical(peer)), true, …)`). True reserves an unauthenticated
-/// slot for `peer`; the reservation is handed over exactly once — to `accept` with the upgraded socket, or back through `refused` when
-/// the upgrade failed, ran out of time or the path stopped first.
+/// The listener has already refused a peer outside Tailscale's ranges (a loopback peer only through the checks' address seam), so
+/// `admit` judges the counts: C#'s `MobileDirect.Admit` as one check-and-insert under the host's lock — room in the phone table (relay
+/// and direct), fewer than 4 direct handshakes and 2 from `peer`, fewer than 5 failed auths from it in 60 s
+/// (`direct::admit::{admit, DirectAuthFailures}`; call `admit(Some(&canonical(peer)), true, …)`). An admission is a reservation of an
+/// unauthenticated slot with an id of the sink's own ([`DirectReservation`]); it is handed over exactly once — to `accept` with the
+/// upgraded socket, or back through `refused` when the upgrade failed, ran out of time or the path stopped first — so a late `refused`
+/// can only ever give back its own reservation, never a newer one of the same address.
 pub trait DirectSink: Send + Sync {
-    /// `MobileDirect.Admit` for a socket just accepted from `peer` (canonical: an IPv4-mapped address as its IPv4).
-    fn admit(&self, peer: IpAddr) -> bool;
+    /// `MobileDirect.Admit` for a socket just accepted from `peer` (canonical: an IPv4-mapped address as its IPv4): its reservation, or
+    /// none when it is refused (the socket is then reset unread).
+    fn admit(&self, peer: IpAddr) -> Option<DirectReservation>;
     /// The upgraded socket of an admitted peer, run as a direct connection (id `direct-…`, the same handshake, auth and request limits
-    /// as the relay's; a refused auth says only [`wire::GENERIC_REFUSAL`] and counts as a failure of `peer`). The future runs the
-    /// connection to its end; dropping it ends the connection (the path drops it when the switch or the remote is turned off, or the app
-    /// quits), and must leave the host's table as if it had ended.
-    fn accept(&self, socket: DirectSocket, peer: SocketAddr) -> BoxFuture<'static, ()>;
+    /// as the relay's; a refused auth says only [`wire::GENERIC_REFUSAL`] and counts as a failure of `peer`). One deadline covers the
+    /// socket, the upgrade, hello and auth (C#'s 10 s from the accept to auth_ok): `deadline` was taken when the socket was accepted, and
+    /// the connection must be authenticated by then (`tokio::time::timeout_at(deadline, …)`) or ended. The future runs the connection to
+    /// its end; dropping it ends the connection (the path drops it when the switch, the remote or the sink goes, or the app quits), and
+    /// must leave the host's table as if it had ended.
+    fn accept(
+        &self,
+        reservation: DirectReservation,
+        socket: DirectSocket,
+        peer: SocketAddr,
+        deadline: tokio::time::Instant,
+    ) -> BoxFuture<'static, ()>;
     /// An admitted peer's reservation given back: its upgrade did not happen (no phone's upgrade, the connection ended, the deadline).
-    fn refused(&self, peer: IpAddr);
+    fn refused(&self, reservation: DirectReservation);
+}
+
+/// One admission's reservation (C#'s pending entry in the phone table), identified by an id the sink chose. It is not `Clone`: it is
+/// handed back exactly once, to [`DirectSink::accept`] or [`DirectSink::refused`].
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct DirectReservation(u64);
+
+impl DirectReservation {
+    pub fn new(id: u64) -> DirectReservation {
+        DirectReservation(id)
+    }
+
+    pub fn id(&self) -> u64 {
+        self.0
+    }
 }
 
 /// An upgraded direct socket, as [`DirectSink::accept`] gets it.
@@ -107,7 +132,35 @@ impl DirectIncoming {
 struct Entry {
     host: String,
     port: u16,
-    accept: AbortHandle,
+    accept: JoinHandle<()>,
+}
+
+/// Accept loops just aborted, by `address|port`: an abort ends the loop (and closes its socket) on a worker a moment later, so a bind
+/// of the same address and port waits for it first instead of failing as in use.
+static CLOSING: Mutex<Vec<(String, JoinHandle<()>)>> = Mutex::new(Vec::new());
+
+/// Aborts an accept loop and keeps its handle until it has ended.
+fn close(key: String, accept: JoinHandle<()>) {
+    accept.abort();
+    let mut closing = lock(&CLOSING);
+    closing.retain(|(_, handle)| !handle.is_finished());
+    closing.push((key, accept));
+}
+
+/// Waits (at most a second) for the accept loops of `key` that were just aborted to end, so their socket is closed.
+fn wait_closed(key: &str) {
+    let started = std::time::Instant::now();
+    loop {
+        let open = {
+            let mut closing = lock(&CLOSING);
+            closing.retain(|(_, handle)| !handle.is_finished());
+            closing.iter().any(|(closing, _)| closing == key)
+        };
+        if !open || started.elapsed() > Duration::from_secs(1) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 #[derive(Default)]
@@ -167,13 +220,12 @@ impl DirectListener {
             return (vec![], None);
         }
         let wanted: std::collections::HashSet<String> = addresses.iter().map(|address| key(address, port)).collect();
-        state.listeners.retain(|key, entry| {
-            let keep = wanted.contains(key);
-            if !keep {
-                entry.accept.abort();
+        let gone: Vec<String> = state.listeners.keys().filter(|key| !wanted.contains(*key)).cloned().collect();
+        for key in gone {
+            if let Some(entry) = state.listeners.remove(&key) {
+                close(key, entry.accept);
             }
-            keep
-        });
+        }
         let mut error = None;
         for address in addresses {
             let key = key(address, port);
@@ -184,6 +236,9 @@ impl DirectListener {
                 error = error.or(Some(status::BIND_FAILED));
                 continue;
             };
+            if port != 0 {
+                wait_closed(&key);
+            }
             let bound = inner.network.bind_exclusive(SocketAddr::new(ip, port), BACKLOG).and_then(|listener| {
                 listener.set_nonblocking(true)?;
                 let _entered = inner.runtime.enter();
@@ -198,7 +253,7 @@ impl DirectListener {
                 }
             };
             let bound_port = listener.local_addr().map(|a| a.port()).unwrap_or(port);
-            let accept = inner.runtime.spawn(accept_loop(Arc::downgrade(inner), listener)).abort_handle();
+            let accept = inner.runtime.spawn(accept_loop(Arc::downgrade(inner), listener));
             state.listeners.insert(key, Entry { host: address.clone(), port: bound_port, accept });
         }
         let bound = addresses
@@ -212,8 +267,8 @@ impl DirectListener {
     pub fn stop(&self) {
         let mut state = lock(&self.inner.state);
         state.stopped = true;
-        for (_, entry) in state.listeners.drain() {
-            entry.accept.abort();
+        for (key, entry) in state.listeners.drain() {
+            close(key, entry.accept);
         }
     }
 }
@@ -255,7 +310,8 @@ fn deliver(inner: &Arc<ListenerInner>, socket: TcpStream, remote: Option<SocketA
 }
 
 /// Where the path reads its addresses instead of this PC's Tailscale adapters (C#'s internal `SetDirectAddressSource` seam: loopback in
-/// the checks and the smoke, never in the app): `Err` stands for adapters that cannot be read.
+/// the checks and the smoke, never in the app): `Err` stands for adapters that cannot be read. Only loopback addresses are taken from
+/// it ([`DirectPath::set_address_source`]).
 pub type AddressSource = Arc<dyn Fn() -> Result<Vec<String>, String> + Send + Sync>;
 
 /// What the path is told of the saved settings (C# `MobileRemoteSettings`' direct half).
@@ -273,7 +329,7 @@ impl Default for DirectSettings {
 }
 
 impl DirectSettings {
-    fn wanted(&self) -> bool {
+    fn on(&self) -> bool {
         self.enabled && self.direct_enabled
     }
 }
@@ -316,6 +372,14 @@ struct PathState {
     connections: Vec<AbortHandle>,
 }
 
+impl PathState {
+    /// Whether the path listens: the remote and its direct switch on, and a relay host to run what it admits (none: nothing listens,
+    /// nothing is advertised).
+    fn wanted(&self) -> bool {
+        !self.disposed && self.settings.on() && self.sink.is_some()
+    }
+}
+
 struct PathInner {
     network: Arc<dyn Network>,
     runtime: Handle,
@@ -325,6 +389,8 @@ struct PathInner {
     published: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     sources: AtomicU64,
     passes: AtomicUsize,
+    /// One pass (a read and its apply) at a time, so an older read never lands over a newer one.
+    pass: tokio::sync::Mutex<()>,
 }
 
 /// What one pass read, outside the lock (C# `DirectRead`): the source it read from and the addresses, or why they could not be read.
@@ -353,6 +419,7 @@ impl DirectPath {
                 published: Mutex::new(None),
                 sources: AtomicU64::new(1),
                 passes: AtomicUsize::new(0),
+                pass: tokio::sync::Mutex::new(()),
             }),
         }
     }
@@ -382,29 +449,45 @@ impl DirectPath {
         self.inner.passes.load(Ordering::SeqCst)
     }
 
-    /// The relay host that runs admitted sockets (none: nothing is admitted, every socket is reset).
+    /// The relay host that runs admitted sockets, kept at once (the caller then runs a forced [`DirectPath::refresh`]). Without one the
+    /// path does not listen: no endpoint, status off, every direct phone ended.
     pub fn set_sink(&self, sink: Option<Arc<dyn DirectSink>>) {
         lock(&self.inner.state).sink = sink;
     }
 
-    /// C#'s `SetDirectAddressSource(source, port)`: the checks' and the smoke's seam (loopback, port 0 picks any), then a forced pass.
-    /// Through it any peer is admitted and any host advertised. The app never sets it: it binds only Tailscale's addresses.
+    /// C#'s `SetDirectAddressSource(source, port)`: the checks' and the smoke's seam (port 0 picks any), then a forced pass. Only its
+    /// loopback addresses are taken (anything else is dropped and logged), so the seam can never open a real interface or a wildcard; a
+    /// loopback peer is admitted and a loopback host advertised through it. The app never sets it: it binds only Tailscale's addresses.
+    #[doc(hidden)]
     pub async fn set_address_source(&self, source: Option<AddressSource>, port: u16) {
-        {
-            let mut state = lock(&self.inner.state);
-            state.source = source.map(|read| Source { id: self.inner.sources.fetch_add(1, Ordering::SeqCst), read, port });
-        }
+        let source = source.map(|read| {
+            let log = self.inner.log.clone();
+            let loopback: AddressSource = Arc::new(move || {
+                let (kept, dropped): (Vec<String>, Vec<String>) =
+                    read()?.into_iter().partition(|address| address.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()));
+                if !dropped.is_empty() {
+                    log(&format!("mobile direct: the address seam takes loopback only; {} other dropped", dropped.len()));
+                }
+                Ok(kept)
+            });
+            Source { id: self.inner.sources.fetch_add(1, Ordering::SeqCst), read: loopback, port }
+        });
+        lock(&self.inner.state).source = source;
         self.refresh(true).await;
     }
 
-    /// `ApplyAsync`'s direct half: the saved settings, then a pass (forced when the switch, the remote or the port changed); the
+    /// The saved settings, kept at once (so writes land in the order they were made, whatever order their passes finish); answers
+    /// whether the next pass must be forced (the switch, the remote or the port changed).
+    pub fn store_settings(&self, settings: DirectSettings) -> bool {
+        let mut state = lock(&self.inner.state);
+        let before = std::mem::replace(&mut state.settings, settings);
+        before.enabled != settings.enabled || before.direct_enabled != settings.direct_enabled || before.port != settings.port
+    }
+
+    /// `ApplyAsync`'s direct half: the saved settings kept, then a pass (forced when the switch, the remote or the port changed); the
     /// adapters are read off the caller and outside the lock.
     pub async fn apply(&self, settings: DirectSettings) -> bool {
-        let force = {
-            let mut state = lock(&self.inner.state);
-            let before = std::mem::replace(&mut state.settings, settings);
-            before.enabled != settings.enabled || before.direct_enabled != settings.direct_enabled || before.port != settings.port
-        };
+        let force = self.store_settings(settings);
         self.refresh(force).await
     }
 
@@ -412,8 +495,10 @@ impl DirectPath {
     /// switch off, stops and ends the direct phones. `force` rebinds even when nothing seems changed. Answers whether the status
     /// changed (then it is published).
     pub async fn refresh(&self, force: bool) -> bool {
+        let pass = self.inner.pass.lock().await;
         let read = self.read().await;
         let changed = self.apply_read(force, read);
+        drop(pass);
         self.inner.passes.fetch_add(1, Ordering::SeqCst);
         if changed {
             let published = lock(&self.inner.published).clone();
@@ -429,7 +514,7 @@ impl DirectPath {
     async fn read(&self) -> Read {
         let (wanted, source) = {
             let state = lock(&self.inner.state);
-            (!state.disposed && state.settings.wanted(), state.source.clone())
+            (state.wanted(), state.source.clone())
         };
         let id = source.as_ref().map(|s| s.id);
         if !wanted {
@@ -451,7 +536,7 @@ impl DirectPath {
             let mut state = lock(&self.inner.state);
             let before = state.status.clone();
             let settings = state.settings;
-            if state.disposed || !settings.wanted() {
+            if !state.wanted() {
                 dropped = self.stop_direct(&mut state);
             } else {
                 self.start_watch(&mut state);
@@ -542,7 +627,7 @@ impl DirectPath {
         state.bound_addresses = None;
         state.bound_port = None;
         state.endpoints.clear();
-        let disabled = !state.disposed && state.settings.enabled && !state.settings.direct_enabled;
+        let disabled = !state.disposed && state.sink.is_some() && state.settings.enabled && !state.settings.direct_enabled;
         state.status = if disabled { MobileDirectStatus::new(DirectState::Disabled, vec![], None) } else { MobileDirectStatus::off() };
         std::mem::take(&mut state.connections)
     }
@@ -616,14 +701,13 @@ fn read_tailscale(network: &dyn Network, needs_utun: bool) -> Result<Vec<String>
 /// A reservation the sink gave; handed back through `refused` unless it was handed over with the socket.
 struct Reservation {
     sink: Arc<dyn DirectSink>,
-    peer: IpAddr,
-    held: bool,
+    held: Option<DirectReservation>,
 }
 
 impl Drop for Reservation {
     fn drop(&mut self) {
-        if self.held {
-            self.sink.refused(self.peer);
+        if let Some(reservation) = self.held.take() {
+            self.sink.refused(reservation);
         }
     }
 }
@@ -632,9 +716,11 @@ impl Drop for Reservation {
 /// the seam), a path that is off or has no sink, or a peer the sink does not admit is reset unread; an admitted one is upgraded within
 /// the handshake deadline and handed to the sink, its listener slot held until the connection ends.
 fn accept_direct(inner: &Arc<PathInner>, incoming: DirectIncoming) {
-    let (sink, allow_any) = {
+    // One deadline from the accept to auth_ok: the upgrade takes its share, the sink's hello and auth the rest.
+    let deadline = tokio::time::Instant::now() + inner.options.handshake_deadline;
+    let (sink, seam) = {
         let state = lock(&inner.state);
-        if state.disposed || state.listener.is_none() || !state.settings.wanted() {
+        if state.listener.is_none() || !state.wanted() {
             drop(state);
             incoming.refuse();
             return;
@@ -645,25 +731,29 @@ fn accept_direct(inner: &Arc<PathInner>, incoming: DirectIncoming) {
         incoming.refuse();
         return;
     };
-    if !(allow_any || tailscale::is_tailscale(peer)) || !sink.admit(peer) {
+    if !(tailscale::is_tailscale(peer) || (seam && peer.is_loopback())) {
         incoming.refuse();
         return;
     }
-    let mut reservation = Reservation { sink: sink.clone(), peer, held: true };
-    let deadline = inner.options.handshake_deadline;
+    let Some(admitted) = sink.admit(peer) else {
+        incoming.refuse();
+        return;
+    };
+    let mut reservation = Reservation { sink: sink.clone(), held: Some(admitted) };
     let (stream, slot) = incoming.into_parts();
     let task = inner.runtime.spawn(async move {
-        let upgraded = tokio::time::timeout(deadline, crate::direct::upgrade::accept_web_socket(stream)).await.ok().flatten();
-        if let Some(socket) = upgraded {
-            reservation.held = false;
-            sink.accept(socket, remote).await;
+        let upgraded = tokio::time::timeout_at(deadline, crate::direct::upgrade::accept_web_socket(stream)).await.ok().flatten();
+        if let Some(socket) = upgraded
+            && let Some(admitted) = reservation.held.take()
+        {
+            sink.accept(admitted, socket, remote, deadline).await;
         }
         drop(reservation);
         drop(slot);
     });
     let mut state = lock(&inner.state);
     state.connections.retain(|connection| !connection.is_finished());
-    if state.disposed || !state.settings.wanted() {
+    if !state.wanted() {
         drop(state);
         task.abort();
     } else {
