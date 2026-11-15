@@ -63,7 +63,11 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
 /// `SetWindowSubclass` cannot subclass a window across threads. Once is enough; a later call does nothing.
 pub fn watch_window(window: &tauri::Window) -> Result<()> {
     let hwnd = window.hwnd().map_err(|error| PlatformError::Refused(format!("the main window's handle: {error}")))?;
-    let hwnd = hwnd.0 as HWND;
+    watch_hwnd(hwnd.0 as HWND)
+}
+
+/// [`watch_window`] on a window handle (on the window's thread).
+fn watch_hwnd(hwnd: HWND) -> Result<()> {
     let mut watchers = watchers();
     if watchers.window.is_some() {
         return Ok(());
@@ -117,12 +121,18 @@ impl SessionWatch for WindowsSession {
 mod tests {
     use std::sync::Arc;
 
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, SendMessageW, WS_OVERLAPPED};
+
     use super::*;
+
+    /// The watchers are the process's: one test at a time.
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
     /// The last input is within the tick count's 49.7-day wrap (or refused: a session with no desktop input), and the subscribers hear
     /// each message until their subscription goes.
     #[test]
     fn the_last_input_is_read_and_messages_reach_live_subscribers_only() {
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         match WindowsSession.since_last_input() {
             Ok(since) => assert!(since <= Duration::from_millis(u64::from(u32::MAX))),
             Err(error) => assert_eq!(error.to_string(), PlatformError::Refused("GetLastInputInfo failed".into()).to_string()),
@@ -136,5 +146,45 @@ mod tests {
         drop(subscription);
         deliver(SessionEnding::End { ending: true });
         assert_eq!(*heard.lock().unwrap(), vec![SessionEnding::Query, SessionEnding::End { ending: false }]);
+    }
+
+    /// C#'s subclass on a real (hidden) window: `WM_QUERYENDSESSION` and `WM_ENDSESSION(0)` reach the subscribers as the session's
+    /// messages, every message still reaches the window, and the window's end removes the subclass.
+    #[test]
+    fn the_subclass_reports_the_sessions_messages_and_goes_with_its_window() {
+        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+        // SAFETY: a hidden top-level window of the stock STATIC class, made, messaged and destroyed on this thread.
+        let hwnd = unsafe {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                WS_OVERLAPPED,
+                0,
+                0,
+                10,
+                10,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            )
+        };
+        assert!(!hwnd.is_null(), "a hidden window");
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let into = heard.clone();
+        let _subscription = WindowsSession.on_ending(Arc::new(move |event| into.lock().unwrap().push(event))).unwrap();
+        watch_hwnd(hwnd).expect("subclassed");
+        assert_eq!(watchers().window, Some(hwnd as isize));
+        // SAFETY: messages sent to the window made above, on its thread.
+        unsafe {
+            SendMessageW(hwnd, WM_QUERYENDSESSION, 0, 0);
+            SendMessageW(hwnd, WM_ENDSESSION, 0, 0);
+        }
+        assert_eq!(*heard.lock().unwrap(), vec![SessionEnding::Query, SessionEnding::End { ending: false }]);
+        // SAFETY: the window made above, destroyed on its thread.
+        assert!(unsafe { DestroyWindow(hwnd) } != 0);
+        assert_eq!(watchers().window, None, "WM_NCDESTROY removed the subclass");
     }
 }

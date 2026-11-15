@@ -26,6 +26,22 @@ pub const TOGGLE_ID: &str = "app-update-automatic";
 pub const ADDRESS_ID: &str = "app-update-url";
 pub const RETRY_ID: &str = "app-update-retry";
 
+/// C#'s `MaxLines` of the release notes and of the kept error.
+const NOTES_LINES: usize = 8;
+const KEPT_ERROR_LINES: usize = 3;
+
+/// C#'s `MaxLines` with `CharacterEllipsis`, as far as the page can follow it (it has no line clamp): the first `lines` lines of the
+/// text, "…" after them when more followed. A long line the box wraps counts once here, where C# counts each wrapped line.
+fn first_lines(text: &str, lines: usize) -> String {
+    let mut all = text.lines();
+    let kept: Vec<&str> = all.by_ref().take(lines).collect();
+    let mut shown = kept.join("\n");
+    if all.next().is_some() {
+        shown.push('…');
+    }
+    shown
+}
+
 pub fn section(host: &Arc<Host>, ui: &mut Ui) -> El {
     let locale = ui.locale();
     let update = crate::app_update::of(host);
@@ -37,7 +53,10 @@ pub fn section(host: &Arc<Host>, ui: &mut Ui) -> El {
         // Before the app update exists (never once main.rs started it): a build that cannot check.
         None => (describe(&locale, &State::default(), false, None, |at| at.format("%H:%M").to_string(), true), Phase::Idle, 0.0, false),
     };
-    let snapshot = host.view().snapshot.clone();
+    let (typed_url, automatic) = {
+        let view = host.view();
+        (view.snapshot.app_update_manifest_url_override.clone(), view.snapshot.app_update_auto_check)
+    };
     let mut rows = ui.settings_rows();
     let version = locale.get_with("settings.appUpdate.betaVersionTemplate", &[("version", &crate::settings::about::version_text(host))]);
     let label = ui.settings_text(text(&locale, "CurrentVersionLabel"), TextStyle::default());
@@ -46,7 +65,7 @@ pub fn section(host: &Arc<Host>, ui: &mut Ui) -> El {
     // The typed address, saved as it is typed (C#'s TextChanged), with its hint or the build's address line under it.
     let to = host.clone();
     let address = ui
-        .settings_field(El::text_box(snapshot.app_update_manifest_url_override.clone().unwrap_or_default()), 12.0)
+        .settings_field(El::text_box(typed_url.unwrap_or_default()), 12.0)
         .placeholder(text(&locale, "ManifestUrlPlaceholder"))
         .aid(ADDRESS_ID)
         .enabled(view.address_field_enabled && view.section_enabled)
@@ -73,7 +92,7 @@ pub fn section(host: &Arc<Host>, ui: &mut Ui) -> El {
     // The automatic switch, what it does under its label.
     let toggle_label = text(&locale, "AutoUpdateToggle");
     let to = host.clone();
-    let switch = ui.settings_switch(&toggle_label, snapshot.app_update_auto_check, Some(TOGGLE_ID), move |on| {
+    let switch = ui.settings_switch(&toggle_label, automatic, Some(TOGGLE_ID), move |on| {
         let host = to.clone();
         crate::native::act(&to, async move { crate::app_update::set_automatic(&host, on) });
     });
@@ -122,7 +141,7 @@ pub fn section(host: &Arc<Host>, ui: &mut Ui) -> El {
     // A failed check shows only here: the error beside a staged update, which stays ready, and the promise to try again.
     let mut failure = vec![];
     if let Some(kept) = &view.kept_error {
-        failure.push(ui.settings_text(kept.clone(), TextStyle::size(11.0).ink(Token::WaitText).selectable()));
+        failure.push(ui.settings_text(first_lines(kept, KEPT_ERROR_LINES), TextStyle::size(11.0).ink(Token::WaitText).selectable()));
     }
     if let Some(retry) = &view.retry_notice {
         failure.push(ui.settings_text(retry.clone(), TextStyle::size(10.0).ink(Token::Ink2)));
@@ -130,7 +149,22 @@ pub fn section(host: &Arc<Host>, ui: &mut Ui) -> El {
     let shown = view.section_enabled && !failure.is_empty();
     rows.add(El::stack(false, metrics::SPACING_XS, failure).aid(RETRY_ID)).visible = shown;
 
-    let notes = view.notes.clone().unwrap_or_default();
+    let notes = view.notes.as_deref().map(|notes| first_lines(notes, NOTES_LINES)).unwrap_or_default();
     rows.add(ui.settings_text(notes, TextStyle::size(11.0).ink(Token::Ink2).selectable())).visible = view.notes.is_some();
     rows.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// C#'s 8 and 3 lines: what is longer is cut after its last kept line with "…"; what fits is left as it is.
+    #[test]
+    fn the_notes_and_the_kept_error_keep_csharps_line_counts() {
+        assert_eq!(first_lines("a\nb\nc", KEPT_ERROR_LINES), "a\nb\nc");
+        assert_eq!(first_lines("a\nb\nc\nd", KEPT_ERROR_LINES), "a\nb\nc…");
+        let notes: Vec<String> = (1..=10).map(|n| format!("line {n}")).collect();
+        assert_eq!(first_lines(&notes.join("\n"), NOTES_LINES), format!("{}…", notes[..8].join("\n")));
+        assert_eq!(first_lines("one long line", NOTES_LINES), "one long line");
+    }
 }

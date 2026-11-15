@@ -70,6 +70,11 @@ static RIGS: AtomicUsize = AtomicUsize::new(0);
 /// A core over a live coordinator (version 0.4.59), its driver running on the current `LocalSet`. `allowed`: the build may change the
 /// machine; `key`: it carries the fixture key.
 fn rig(allowed: bool, key: bool) -> Rig {
+    rig_in(allowed, key, false)
+}
+
+/// [`rig`] in a smoke run or not.
+fn rig_in(allowed: bool, key: bool, smoke: bool) -> Rig {
     let folder =
         std::env::temp_dir().join(format!("mighty-app-update-host-{}-{}", std::process::id(), RIGS.fetch_add(1, Ordering::SeqCst)));
     let _ = std::fs::remove_dir_all(&folder);
@@ -95,7 +100,7 @@ fn rig(allowed: bool, key: bool) -> Rig {
     let start = Instant::now();
     let base = Utc::now();
     let clock: Clock = Arc::new(move || base + chrono::Duration::from_std(Instant::now() - start).unwrap_or_default());
-    let core = Core::new(coordinator.clone(), seams.clone(), clock, allowed, false);
+    let core = Core::new(coordinator.clone(), seams.clone(), clock, allowed, smoke);
     let (commands, received) = mpsc::unbounded_channel::<Command>();
     wire(&coordinator, &commands);
     tokio::task::spawn_local(drive(core.clone(), received));
@@ -478,6 +483,10 @@ fn the_helper_starts_detached_from_the_stage_with_only_system_root() {
     assert_eq!(launch_helper(&processes, &locale, &plan, &quit), Ok(()));
     assert_eq!(quits.load(Ordering::SeqCst), 1, "an install on quit is already quitting");
     processes.refuse_detached(true);
+    plan.relaunch = true;
+    assert!(launch_helper(&processes, &locale, &plan, &quit).is_err());
+    assert_eq!(quits.load(Ordering::SeqCst), 1, "a refused start with a relaunch leaves the app running");
+    plan.relaunch = false;
     assert_eq!(
         launch_helper(&processes, &locale, &plan, &quit),
         Err("The job does not allow breakaway.".to_string()),
@@ -489,4 +498,27 @@ fn the_helper_starts_detached_from_the_stage_with_only_system_root() {
     assert!(!inside_stage(&folder.join("other").join("MightyCode.exe"), &staged));
     assert!(!inside_stage(&staged.join("..").join("MightyCode.exe"), &staged));
     assert!(!inside_stage(&folder.join("staged-not").join("MightyCode.exe"), &staged), "a sibling with the same start");
+}
+
+/// A smoke never starts the loop, never checks, and its quit installs nothing, whatever the switch, the key and the address say.
+#[tokio::test(start_paused = true)]
+async fn in_a_smoke_begin_the_loop_and_the_quit_do_nothing() {
+    local(async {
+        let rig = rig_in(true, true, true);
+        rig.set(|s| {
+            s.automatic = true;
+            s.url = Some(MANIFEST.into());
+        });
+        rig.send(|core| core.begin());
+        rig.send(|core| core.automatic_changed(true));
+        settle().await;
+        pass(auto::CHECK_INTERVAL).await;
+        assert!(rig.core.next_tick().is_none(), "no loop");
+        assert_eq!(rig.asks(MANIFEST), 0, "no check");
+        assert!(!rig.core.can_run_automatically() && rig.core.phone_read().is_none());
+        rig.core.coordinator.show_for_smoke(rig.ready());
+        assert!(!rig.core.quit(false), "the quit installs nothing");
+        assert!(lock(&rig.launches).is_empty());
+    })
+    .await;
 }

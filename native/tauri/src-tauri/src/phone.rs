@@ -114,6 +114,11 @@ pub fn changed(host: &Host) {
     }
 }
 
+/// The phone's uploads still open (the app update's idle facts): the router's, 0 while none was made (never made here).
+pub fn open_upload_count(host: &Host) -> usize {
+    state(host).map_or(0, |state| state.router.open_upload_count())
+}
+
 /// The m1 router as a connection's handler (W8-A's relay host and direct connections).
 pub fn handler(host: &Arc<Host>) -> Option<Arc<dyn RequestHandler>> {
     Some(Arc::new(router(host)))

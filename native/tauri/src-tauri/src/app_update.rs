@@ -511,10 +511,19 @@ impl Core {
         }
         let powering_off = powering_off || self.powering_off.load(Ordering::SeqCst);
         let started = !self.smoke && self.coordinator.state().phase != Phase::Installing && self.coordinator.install_on_quit(powering_off);
-        self.state().closing = true;
+        self.close();
+        started
+    }
+
+    /// The quit without its install (a quit hook that stopped waiting): the loop stopped, nothing starts after it.
+    pub fn close(&self) {
+        {
+            let mut state = self.state();
+            state.timer.next = None;
+            state.closing = true;
+        }
         self.coordinator.shutdown();
         self.wake.notify_one();
-        started
     }
 }
 
@@ -734,7 +743,11 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
     let running = installer.clone();
     options.running_from = Arc::new(move |folder| running.running_from(folder, true).map_err(std::io::Error::other));
     let (processes, locale, app) = (platform.processes.clone(), host.locale, host.app.clone());
-    options.launch_helper = Some(Arc::new(move |plan| launch_helper(processes.as_ref(), &locale, plan, &|| app.exit(0))));
+    // The real launcher only where the build may change the machine (never in a smoke or a read-only launch): elsewhere "restart now"
+    // and quitting fail with `noInstallPlan` or install nothing.
+    if host.may_change_machine() {
+        options.launch_helper = Some(Arc::new(move |plan| launch_helper(processes.as_ref(), &locale, plan, &|| app.exit(0))));
+    }
     let coordinator = Arc::new(Coordinator::new(service, options));
     let seams = Arc::new(HostSeams { host: host.clone(), session: platform.session.clone(), automatic });
     let core = Core::new(coordinator.clone(), seams, Arc::new(Utc::now), host.may_change_machine(), host.smoke.is_some());
@@ -803,15 +816,36 @@ pub fn watch_window(host: &Host, window: &tauri::Window) {
 /// `--relaunch 0` unless Windows is ending the session (`powering_off` or the session watch); then the coordinator shuts down. Waits
 /// at most 5 s for the driver.
 pub fn quit_hook(host: &Arc<Host>, powering_off: bool) {
+    use std::sync::atomic::AtomicU8;
+    const PENDING: u8 = 0;
+    const TAKEN: u8 = 1;
+    const ABANDONED: u8 = 2;
     let Some(update) = of(host) else { return };
+    // Who has the quit: the driver once it starts it, or this hook once it stops waiting (then the driver only closes, never installs
+    // after the app's teardown went on without it).
+    let claim = Arc::new(AtomicU8::new(PENDING));
     let (done, finished) = std::sync::mpsc::channel();
+    let taken = claim.clone();
     update.send(move |core| {
-        let _ = done.send(core.quit(powering_off));
+        if taken.compare_exchange(PENDING, TAKEN, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            let _ = done.send(core.quit(powering_off));
+        } else {
+            core.close();
+        }
     });
-    match finished.recv_timeout(Duration::from_secs(5)) {
-        Ok(true) => host.log.line("app update: the update installs once the app has quit"),
-        Ok(false) => {}
-        Err(_) => host.log.line("app update: the quit's install was not answered"),
+    let answer = match finished.recv_timeout(Duration::from_secs(5)) {
+        Ok(started) => Some(started),
+        Err(_) if claim.compare_exchange(PENDING, ABANDONED, Ordering::SeqCst, Ordering::SeqCst).is_ok() => None,
+        // The driver took it just as the wait ended: its answer follows at once.
+        Err(_) => finished.recv_timeout(Duration::from_secs(5)).ok(),
+    };
+    match answer {
+        Some(true) => host.log.line("app update: the update installs once the app has quit"),
+        Some(false) => {}
+        None => {
+            host.log.line("app update: the quit's install was not answered; it will not run");
+            update.core.close();
+        }
     }
 }
 
@@ -869,12 +903,14 @@ fn collect_idle_facts(host: &Arc<Host>, session: &dyn mighty_platform::SessionWa
     let delegation = crate::delegation::app();
     let mut facts = IdleFacts::default();
     let terminals = crate::terminal::terminals(host).ok();
+    let (resends, sign_ins) = crate::accounts::idle_holds(host);
     {
         let view = host.view();
         let sessions = view.snapshot.sessions();
-        // Agent sessions running (remote ones too), panes starting a run, delegation runs ending, its own work under way and children
-        // still being made. (C#'s sign-in resends held for a CLI update have no count in accounts.rs.)
-        let agent_runs = sessions.iter().filter(|s| s.kind() != "shell" && (s.status() == "running" || running(s.id()))).count()
+        // Agent sessions running (remote ones too), panes starting a run, sign-in resends held for a CLI update, delegation runs
+        // ending, its own work under way and children still being made.
+        let agent_runs = resends
+            + sessions.iter().filter(|s| s.kind() != "shell" && (s.status() == "running" || running(s.id()))).count()
             + view.panes.values().filter(|ui| ui.view.starting || ui.view.queue_starting).count()
             + sessions.iter().filter(|s| crate::delegation::ending_run(host, s.id())).count()
             + delegation.as_ref().and_then(|app| app.coordinator()).map_or(0, |coordinator| coordinator.pending_work())
@@ -892,13 +928,12 @@ fn collect_idle_facts(host: &Arc<Host>, session: &dyn mighty_platform::SessionWa
         // Only what the person queued: delegation holds live in their own store and survive a restart.
         facts.queued_inputs = count(view.panes.values().map(|ui| ui.queue.items().len()).sum());
         facts.drafts = count(view.panes.values().filter(|ui| ui.has_content() || ui.view.attachments_loading).count());
-        // A shell running a command, agent terminals at work, setup, sign-ins (accounts.rs answers per provider).
+        // A shell running a command, agent terminals at work, setup, sign-ins and their open windows.
         let shells = sessions.iter().filter(|s| s.kind() == "shell" && s.status() == "running").count();
         let agents = terminals.as_ref().map_or(0, |terminals| {
             sessions.iter().filter(|s| terminals.existing_agent(s.id()).is_some_and(|agent| agent.is_running())).count()
         });
         let setup = usize::from(lock(&crate::setup::of(host).screen).running());
-        let sign_ins = mighty_core::wire::PROVIDERS.iter().filter(|provider| crate::accounts::busy(host, provider)).count();
         facts.terminals = count(shells + agents + setup + sign_ins);
         facts.last_agent_activity = mighty_core::wire::PROVIDERS
             .iter()
@@ -913,7 +948,7 @@ fn collect_idle_facts(host: &Arc<Host>, session: &dyn mighty_platform::SessionWa
         || lock(&crate::settings::tools::toolkit_of(host).model).running;
     // Windows has no screen share yet (settings/screen.rs): never sharing.
     facts.screen_sharing = false;
-    facts.phone_uploads = count(crate::phone::router(host).open_upload_count());
+    facts.phone_uploads = count(crate::phone::open_upload_count(host));
     let remote = crate::remote::host_state(host);
     facts.remote_host_runs = count(crate::remote::host_runs(host).max(remote.active_runs));
     facts.sharing_workspaces = remote.enabled;
