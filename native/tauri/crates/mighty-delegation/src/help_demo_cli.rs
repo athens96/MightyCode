@@ -253,7 +253,10 @@ mod tests {
         ]
         .join("\n");
         let mut out = Vec::new();
-        assert_eq!(run(&script(&dir), &arguments(&["-p", "--output-format", "stream-json"]), input.as_bytes(), &mut out, &Bridge::default()), 0);
+        assert_eq!(
+            run(&script(&dir), &arguments(&["-p", "--output-format", "stream-json"]), input.as_bytes(), &mut out, &Bridge::default()),
+            0
+        );
         let printed = lines(&out);
         assert_eq!(
             printed[0],
