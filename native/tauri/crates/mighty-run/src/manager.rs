@@ -1631,6 +1631,12 @@ impl Exec {
             _ = run.cancel.cancelled() => return Err(Failure::Cancelled),
         }
         let mut environment = providers.quiet_environment();
+        // A pane worktree's own values (its PORT and folders), so two panes' dev servers do not collide (C# `PaneWorktree.Environment`).
+        for (key, value) in request.pane_environment.iter().flatten() {
+            if crate::model::PANE_ENVIRONMENT_KEYS.contains(&key.as_str()) && !value.contains(' ') {
+                environment.insert(key.clone(), value.clone());
+            }
+        }
         {
             let mut children = lock(&self.children);
             if request.kind != "shell" {

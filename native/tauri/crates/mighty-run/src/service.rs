@@ -527,9 +527,14 @@ impl RunService {
             }
             request.phase_models = phase_models::normalized(state.snapshot.phase_models.as_ref());
             request.todo_progress = if request.resume_id.is_none() { None } else { pane.todo_progress.clone() };
-            request.working_folder = pane.working_folder.clone();
+            // A terminal pane keeps a folder too (a pane worktree's terminal), but only an agent pane's run works in it.
+            request.working_folder = if pane.kind() == "claude" { pane.working_folder.clone() } else { None };
             // C# `DelegationWorktreeRoot(pane)`: the child's worktree as delegation made it, never what the caller says.
             request.delegation_worktree_root = self.shared.delegation.as_ref().and_then(|hooks| hooks.worktree_root(&pane));
+            // A pane worktree's own PORT and folders (C# `PaneWorktree.Environment`), never for a remote workspace's pane.
+            request.pane_environment = (pane.kind() == "claude" && !remote)
+                .then(|| pane.pane_worktree.as_ref().map(|worktree| worktree.environment(workspace.path()).into_iter().collect()))
+                .flatten();
             if state.routes.contains_key(&request.session_id) {
                 return Err(RunError::State(strings::get("run.error.alreadyRunning")));
             }
@@ -562,6 +567,23 @@ impl RunService {
             }
             let named = (request.kind == "claude").then_some(request.provider.as_str());
             let asked = RunEvent::log(&request.session_id, "user", &history, named);
+            // A pane worktree's agent is told once, with its first request that is no slash command, where it works and that it commits
+            // its work (C# `PaneWorktreeNote`). The transcript keeps the request as sent; only the CLI gets the note.
+            if !remote
+                && request.kind == "claude"
+                && let Some(worktree) = pane.pane_worktree.as_ref().filter(|worktree| worktree.note_applies(&request.input))
+            {
+                request.input = worktree.with_note(&request.input);
+                for session in state.snapshot.sessions_mut().iter_mut() {
+                    if session.id() == request.session_id && session.pane_worktree.is_some() {
+                        let mut next = RunSession::clone(session);
+                        if let Some(held) = next.pane_worktree.as_mut() {
+                            held.note_given = Some(true);
+                        }
+                        *session = Arc::new(next);
+                    }
+                }
+            }
             // The run's diagram block is named here, so a send can answer with it before the runner's first event.
             request.graph_run_id =
                 (!remote && request.kind != "shell" && GRAPH_PROVIDERS.contains(&request.provider.as_str())).then(wire::new_id);

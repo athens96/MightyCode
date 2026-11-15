@@ -504,6 +504,7 @@ impl Store {
                 host_name: Some(host),
                 version: 2,
             }),
+            ..Workspace::default()
         };
         self.approved.insert(item.id().to_string(), item.clone());
         Some(item)

@@ -27,9 +27,9 @@ use crate::json::{R, ReadError, escaped_len};
 use crate::layout;
 use crate::locale::{self, Locale};
 use crate::model::{
-    AgentActivity, AgentImageRef, AgentRunTiming, AppSnapshot, BackgroundTask, BackgroundWork, LogEntry, MOBILE_DIRECT_PORT,
-    MobileRemoteSettings, PaneLayoutNode, PhaseModelsSnapshot, PlanRecord, RunSession, RunSettings, SessionUsage, ShellBlockRun, TodoItem,
-    TodoProgress, Workspace,
+    AgentActivity, AgentImageRef, AgentRunTiming, AppSnapshot, BackgroundTask, BackgroundWork, KeptPaneWorktree, LogEntry,
+    MOBILE_DIRECT_PORT, MobileRemoteSettings, PaneLayoutNode, PaneWorktree, PhaseModelsSnapshot, PlanRecord, RunSession, RunSettings,
+    SessionUsage, ShellBlockRun, TodoItem, TodoProgress, Workspace,
 };
 use crate::time;
 use crate::wire::{self, EFFORTS, PROVIDERS, is_identifier, is_model, new_id};
@@ -103,6 +103,192 @@ pub fn valid_workspace(w: &Workspace) -> bool {
 /// C# `DelegationPanes.IsWorkingFolder`.
 pub fn is_working_folder(path: Option<&str>) -> bool {
     path.is_some_and(|p| wire::utf16_len(p) <= 4096 && !p.contains('\0') && fully_qualified(p))
+}
+
+// ── pane worktrees (C# Core/PaneWorktree.cs: the saved records' rules) ──────────────────────────────────────────────────────
+
+/// `PaneWorktreePorts.Lowest` and `Highest`: the PORTs pane worktrees get.
+pub const PANE_WORKTREE_LOWEST_PORT: i32 = 4100;
+pub const PANE_WORKTREE_HIGHEST_PORT: i32 = 4899;
+
+/// `PaneWorktreePorts.Contains`.
+pub fn pane_worktree_port(port: i32) -> bool {
+    (PANE_WORKTREE_LOWEST_PORT..=PANE_WORKTREE_HIGHEST_PORT).contains(&port)
+}
+
+/// `PaneWorktreeMode.Ask`, `Further`, `Every`.
+pub const PANE_WORKTREE_ASK: &str = "ask";
+pub const PANE_WORKTREE_FURTHER: &str = "further";
+pub const PANE_WORKTREE_EVERY: &str = "every";
+
+/// `PaneWorktreeMode.Of`: a word this build does not know reads as ask.
+pub fn pane_worktree_mode(saved: Option<&str>) -> &'static str {
+    match saved {
+        Some(PANE_WORKTREE_FURTHER) => PANE_WORKTREE_FURTHER,
+        Some(PANE_WORKTREE_EVERY) => PANE_WORKTREE_EVERY,
+        _ => PANE_WORKTREE_ASK,
+    }
+}
+
+/// `PaneWorktreeMode.Saved`: the value saved on the workspace, None for the default.
+pub fn saved_pane_worktree_mode(mode: Option<&str>) -> Option<String> {
+    let mode = pane_worktree_mode(mode);
+    (mode != PANE_WORKTREE_ASK).then(|| mode.to_string())
+}
+
+/// `PaneWorktreeSetup.NormalizedCommand`: one line, at most 1,000 UTF-16 units; empty is none.
+pub fn worktree_setup_command(raw: Option<&str>) -> Option<String> {
+    let line = raw?.replace(['\r', '\n'], " ");
+    let line = line.trim();
+    if line.is_empty() || line.contains('\0') {
+        return None;
+    }
+    Some(if wire::utf16_len(line) > 1000 { utf16_prefix(line, 1000) } else { line.to_string() })
+}
+
+/// `PaneWorktreeCopy.MaximumEntries`.
+pub const WORKTREE_COPY_MAXIMUM_ENTRIES: usize = 32;
+
+/// `PaneWorktreeCopy.NormalizedPaths`: the list as saved: relative paths without `..`, a leading separator, `~`, `:` or `.git`, each
+/// once, at most 32; None when none is left.
+pub fn worktree_copy_paths<'a>(raw: impl IntoIterator<Item = Option<&'a str>>) -> Option<Vec<String>> {
+    let mut seen = HashSet::new();
+    let mut paths = vec![];
+    for entry in raw {
+        let mut path = entry.unwrap_or("").trim().replace('\\', "/");
+        while let Some(rest) = path.strip_prefix("./") {
+            path = rest.to_string();
+        }
+        let path = path.trim_end_matches('/').to_string();
+        let length = wire::utf16_len(&path);
+        if length == 0
+            || length > 512
+            || path.starts_with('/')
+            || path.starts_with('~')
+            || path.contains('\0')
+            || path.contains(':')
+            || path.split('/').any(|part| matches!(part, ".." | "." | ".git" | ""))
+            || !seen.insert(path.clone())
+        {
+            continue;
+        }
+        paths.push(path);
+        if paths.len() == WORKTREE_COPY_MAXIMUM_ENTRIES {
+            break;
+        }
+    }
+    (!paths.is_empty()).then_some(paths)
+}
+
+/// `DelegationGit.IsObjectName`: a full SHA-1 or SHA-256 object name.
+pub fn is_object_name(value: &str) -> bool {
+    matches!(value.len(), 40 | 64) && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// `DelegationPaths.Same`: equal, ignoring case where paths are Windows'.
+fn same_path(first: &str, second: &str) -> bool {
+    if windows_paths() { ordinal_ignore_case(first, second) == std::cmp::Ordering::Equal } else { first == second }
+}
+
+/// `DelegationPaths.IsInside`: `path` lies below `folder` (not beside it, not itself).
+fn inside_path(path: &str, folder: &str) -> bool {
+    let separator = if windows_paths() { '\\' } else { '/' };
+    let ends = folder.ends_with(separator) || windows_paths() && folder.ends_with('/');
+    let start = if ends { folder.to_string() } else { format!("{folder}{separator}") };
+    let count = start.chars().count();
+    let head: String = path.chars().take(count).collect();
+    head.chars().count() == count && same_path(&head, &start)
+}
+
+/// `PaneWorktree.Normalized`: a saved record, or None when it is not one this app made for `session_id`. A setup still running when
+/// the app quit reads as failed (`restoring`).
+pub fn pane_worktree(pane: &PaneWorktree, session_id: &str, restoring: bool) -> Option<PaneWorktree> {
+    let absolute = |path: Option<&str>| {
+        path.is_some_and(|path| (1..=4096).contains(&wire::utf16_len(path)) && !path.contains('\0') && fully_qualified(path))
+    };
+    let base = pane.base_branch.as_deref();
+    if !absolute(pane.worktree_path.as_deref())
+        || !absolute(pane.checkout.as_deref())
+        || pane.branch.as_deref() != Some(format!("mighty/{session_id}").as_str())
+        || base.is_none_or(|base| base.is_empty() || base.contains('\0'))
+        || !pane_worktree_port(pane.port)
+    {
+        return None;
+    }
+    let mut copy = PaneWorktree { setup_command: worktree_setup_command(pane.setup_command.as_deref()), ..pane.clone() };
+    if copy.setup_command.is_none() {
+        copy.setup_status = None;
+        copy.setup_exit_code = None;
+    } else if !matches!(copy.setup_status.as_deref(), Some(PaneWorktree::RUNNING | PaneWorktree::DONE | PaneWorktree::FAILED)) {
+        copy.setup_status = None;
+    }
+    if restoring && copy.setup_status.as_deref() == Some(PaneWorktree::RUNNING) {
+        copy.setup_status = Some(PaneWorktree::FAILED.into());
+    }
+    if pane.merged_commit.as_deref().is_some_and(|merged| !is_object_name(merged)) {
+        copy.merged_commit = None;
+    }
+    if pane.pre_merge_commit.as_deref().is_some_and(|pre| copy.merged_commit.is_none() || !is_object_name(pre)) {
+        copy.pre_merge_commit = None;
+    }
+    if let Some(folder) = pane.working_folder.as_deref() {
+        let worktree = pane.worktree_path();
+        if !absolute(Some(folder)) || !(same_path(folder, worktree) || inside_path(folder, worktree)) {
+            copy.working_folder = None;
+        }
+    }
+    if copy.note_given != Some(true) {
+        copy.note_given = None;
+    }
+    Some(copy)
+}
+
+/// `KeptPaneWorktree.Normalized`: the records worth keeping from a saved list: valid ids and worktrees, one per session (the last),
+/// the newest 50; None when none is left.
+pub fn kept_pane_worktrees(list: Option<&Vec<KeptPaneWorktree>>, restoring: bool) -> Option<Vec<KeptPaneWorktree>> {
+    let list = list?;
+    let mut seen = HashSet::new();
+    let mut kept: Vec<KeptPaneWorktree> = list
+        .iter()
+        .rev()
+        .filter_map(|record| {
+            let id = record.session_id.as_deref();
+            if !is_identifier(id) || !seen.insert(record.session_id().to_string()) {
+                return None;
+            }
+            let worktree = pane_worktree(record.worktree.as_ref()?, record.session_id(), restoring)?;
+            let title = record.title.as_deref().unwrap_or("");
+            Some(KeptPaneWorktree {
+                worktree: Some(worktree),
+                title: Some(if wire::utf16_len(title) > 200 { utf16_prefix(title, 200) } else { title.to_string() }),
+                provider: Some(if PROVIDERS.contains(&record.provider()) { record.provider().to_string() } else { "claude".into() }),
+                ..record.clone()
+            })
+        })
+        .take(50)
+        .collect();
+    kept.reverse();
+    (!kept.is_empty()).then_some(kept)
+}
+
+/// The pane worktree settings of a workspace (`StateStore.Normalize`): a remote workspace drops them all (they are a local folder's).
+fn workspace_worktree_settings(w: Workspace, restoring: bool) -> Workspace {
+    if w.remote.is_some() {
+        return Workspace {
+            pane_worktree_mode: None,
+            worktree_setup_command: None,
+            worktree_copy_paths: None,
+            kept_pane_worktrees: None,
+            ..w
+        };
+    }
+    Workspace {
+        pane_worktree_mode: saved_pane_worktree_mode(w.pane_worktree_mode.as_deref()),
+        worktree_setup_command: worktree_setup_command(w.worktree_setup_command.as_deref()),
+        worktree_copy_paths: w.worktree_copy_paths.as_ref().and_then(|paths| worktree_copy_paths(paths.iter().map(|p| Some(p.as_str())))),
+        kept_pane_worktrees: kept_pane_worktrees(w.kept_pane_worktrees.as_ref(), restoring),
+        ..w
+    }
 }
 
 // ── text ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1369,6 +1555,7 @@ fn normalize_session(s: &RunSession, restoring: bool, remote_ids: &HashSet<Strin
             owner_session_id: s.owner_session_id.clone().filter(|o| wire::identifier(o)),
             parent_session_id: None,
             working_folder: None,
+            pane_worktree: None,
             ask_target: None,
             ..s.clone()
         });
@@ -1444,7 +1631,22 @@ fn normalize_session(s: &RunSession, restoring: bool, remote_ids: &HashSet<Strin
         todo_progress: if plan_mode || kind == "claude" && provider == "codex" { todo_progress(s.todo_progress.as_ref()) } else { None },
         background_work: if plan_mode { background_work(s.background_work.as_ref(), restoring || s.status() != "running") } else { None },
         parent_session_id: s.parent_session_id.clone().filter(|p| kind == "claude" && wire::identifier(p) && Some(p) != s.id.as_ref()),
-        working_folder: s.working_folder.clone().filter(|_| kind == "claude" && is_working_folder(s.working_folder.as_deref())),
+        // A terminal pane keeps its folder too: "open a terminal in this worktree" (PaneWorktree.cs).
+        working_folder: s
+            .working_folder
+            .clone()
+            .filter(|_| matches!(kind, "claude" | "shell") && is_working_folder(s.working_folder.as_deref())),
+        // A pane worktree belongs to a top-level agent pane that works in its folder; never a child's, never a remote workspace's.
+        pane_worktree: s
+            .pane_worktree
+            .as_ref()
+            .filter(|_| {
+                kind == "claude"
+                    && !remote_ids.contains(s.workspace_id())
+                    && s.parent_session_id.is_none()
+                    && is_working_folder(s.working_folder.as_deref())
+            })
+            .and_then(|pane| pane_worktree(pane, s.id(), restoring)),
         ask_target: if plan_mode && !remote_ids.contains(s.workspace_id()) { s.ask_target.clone() } else { None },
         shell_block_runs: if kind == "claude" { shell_block_runs(s.shell_block_runs.as_ref(), restoring) } else { None },
         provider: Some(provider),
@@ -1474,6 +1676,7 @@ pub fn normalize(value: &AppSnapshot, restoring: bool) -> R<AppSnapshot> {
             }),
             ..w.clone()
         })
+        .map(|w| workspace_worktree_settings(w, restoring))
         .collect();
     let ids: HashSet<String> = workspaces.iter().map(|w| w.id().to_string()).collect();
     let remote_ids: HashSet<String> = workspaces.iter().filter(|w| w.remote.is_some()).map(|w| w.id().to_string()).collect();

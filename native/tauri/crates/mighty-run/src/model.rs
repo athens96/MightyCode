@@ -17,6 +17,9 @@ use crate::plan_mode::outcome;
 use crate::strings;
 use crate::{Result, RunError};
 
+/// C# `StartRunRequest.PaneEnvironmentKeys`: the only keys a pane worktree's environment may set.
+pub const PANE_ENVIRONMENT_KEYS: [&str; 3] = ["PORT", "MIGHTY_WORKSPACE_FOLDER", "MIGHTY_WORKTREE"];
+
 /// The ids a start made (C# `RunStartReceipt`): the user entry the transcript shows and the graph run whose block appears at once.
 #[derive(Debug, Default)]
 pub struct RunStartReceipt {
@@ -49,6 +52,10 @@ pub struct StartRunRequest {
     /// A delegated child pane's worktree folder.
     pub working_folder: Option<String>,
     pub delegation_worktree_root: Option<String>,
+    /// A pane worktree's own run environment (C# `PaneEnvironment`, `PaneWorktree.Environment`): only the keys
+    /// [`PANE_ENVIRONMENT_KEYS`] names reach the process. Taken from the pane's saved record when the run is accepted; never saved,
+    /// never read from a remote's JSON.
+    pub pane_environment: Option<Vec<(String, String)>>,
     /// An allowed Antigravity card's rules (`AntigravityGrant`): put in place before the run starts (the desktop service holds them
     /// while it runs, or keeps them for good). Never saved with the request.
     pub antigravity_grant: Option<AllowGrant>,
@@ -79,6 +86,7 @@ impl StartRunRequest {
             todo_progress: None,
             working_folder: None,
             delegation_worktree_root: None,
+            pane_environment: None,
             antigravity_grant: None,
             antigravity_card: None,
             graph_run_id: None,

@@ -72,7 +72,11 @@ pub struct RunnerSinks {
 impl HostRunner for RunManager {
     fn start(&self, request: StartRunRequest) -> BoxFuture<'_, mighty_run::Result<()>> {
         Box::pin(async move {
-            if request.working_folder.is_some() || request.delegation_worktree_root.is_some() || request.style_auto_allow.is_some() {
+            if request.working_folder.is_some()
+                || request.delegation_worktree_root.is_some()
+                || request.style_auto_allow.is_some()
+                || request.pane_environment.is_some()
+            {
                 return Err(RunError::Invalid(get("wire.startRun.invalidFormat")));
             }
             RunManager::start(self, request).await
