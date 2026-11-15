@@ -4,7 +4,8 @@
 //! panes stay as last shown, sends wait for a new connect), one removed takes its mirror away.
 //!
 //! The app's state is reached through [`MirrorStage`] (src-tauri mirror.rs over the run service; the checks over an in-memory state).
-//! Locks: the desk's own book is never held while the stage is called, so the stage's lock and the book's never nest.
+//! Locks: the desk's own book is never held while the stage is called. The stage's change closure may take the book briefly (the state's
+//! lock, then the book: [`MirrorDesk::apply_state`]), never the other way round.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -501,7 +502,7 @@ impl MirrorDesk {
         }
         *failing_since = None;
         if !state.unchanged {
-            self.apply_state(id, &state);
+            self.apply_state(id, serial, &state);
         }
         let moved = self
             .with_poll(id, serial, |poll| {
@@ -542,13 +543,19 @@ impl MirrorDesk {
         }
     }
 
-    /// `ApplyMirrorState(id, state)`: the host's list laid over this PC's. Never saved.
-    pub fn apply_state(&self, id: &str, state: &MirrorState) {
-        if self.book().closing {
-            return;
-        }
+    /// `ApplyMirrorState(id, state)`: the host's list read by poll `serial` laid over this PC's. Never saved. Nothing is laid over once
+    /// that poll is no longer the connection's or was stopped (the connection removed or disconnected while the list was read): checked
+    /// under the book inside the state's change, so a removal's taking away is never undone by a read that was under way.
+    pub fn apply_state(&self, id: &str, serial: u64, state: &MirrorState) {
         let (mut gone, mut listed) = (vec![], vec![]);
         let changed = self.0.stage.change(&mut |snapshot| {
+            {
+                let book = self.book();
+                let current = book.polls.get(id).is_some_and(|p| p.serial == serial && !p.stop.is_set());
+                if book.closing || !current {
+                    return None;
+                }
+            }
             let (next, g, l) = state_applied(snapshot, id, state);
             gone = g;
             listed = l;

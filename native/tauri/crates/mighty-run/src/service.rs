@@ -372,10 +372,13 @@ impl RunService {
         let _ = self.mirror.set(mirror);
     }
 
-    /// C# `MirrorReference(id) is not null`: the pane mirrors another computer's pane, and the mirror is attached.
-    fn mirror_of(&self, session_id: &str) -> Option<Arc<dyn MirrorRunner>> {
-        let mirror = self.mirror.get()?;
-        lock(&self.shared.state).snapshot.session(session_id).is_some_and(|s| s.mirror.is_some()).then(|| mirror.clone())
+    /// C# `MirrorReference(id) is not null`: None when the pane is no mirrored pane; else the mirror it goes through, or the refusal when
+    /// none is attached: a mirrored pane never falls through to a run of this PC or the client's runs.
+    fn mirror_of(&self, session_id: &str) -> Option<Result<Arc<dyn MirrorRunner>>> {
+        if !lock(&self.shared.state).snapshot.session(session_id).is_some_and(|s| s.mirror.is_some()) {
+            return None;
+        }
+        Some(self.mirror.get().cloned().ok_or_else(|| RunError::State(strings::get("remote.mirror.error.unavailable"))))
     }
 
     /// C# `ToolPermissionChanged` raised by the remote mirror: a mirrored pane's waiting request (its run id the pane's) shown as a card,
@@ -570,6 +573,7 @@ impl RunService {
     pub async fn launch(&self, value: StartRunRequest, title_from: Option<&str>, reach: bool) -> Result<Option<String>> {
         // A mirrored pane's request is the host pane's next one, as the phone's send: nothing runs or changes here.
         if let Some(mirror) = self.mirror_of(&value.session_id) {
+            let mirror = mirror?;
             let attachments = value.attachment_list().map(|list| list.to_vec()).unwrap_or_default();
             mirror.submit(value.session_id.clone(), value.input.clone(), attachments).await?;
             return Ok(None);
@@ -817,6 +821,7 @@ impl RunService {
     pub async fn stop(&self, id: &str) -> Result<()> {
         // A mirrored pane runs on its host: the stop goes there.
         if let Some(mirror) = self.mirror_of(id) {
+            let mirror = mirror?;
             return mirror.stop(id.to_string()).await;
         }
         {
@@ -839,7 +844,7 @@ impl RunService {
     pub async fn respond_to_tool_permission(&self, session_id: &str, request_id: &str, allow: bool) -> Result<()> {
         // A mirrored pane's request is its host's: the answer goes there.
         if let Some(mirror) = self.mirror_of(session_id) {
-            mirror.respond_to_tool_permission(session_id.into(), request_id.into(), allow);
+            mirror?.respond_to_tool_permission(session_id.into(), request_id.into(), allow);
             return Ok(());
         }
         if self.remote_pane(session_id) && self.remote.is_some() {
@@ -860,7 +865,7 @@ impl RunService {
         answers: &IndexMap<String, UserQuestionAnswer>,
     ) -> Result<()> {
         if let Some(mirror) = self.mirror_of(session_id) {
-            mirror.answer_questions(session_id.into(), request_id.into(), answers.clone());
+            mirror?.answer_questions(session_id.into(), request_id.into(), answers.clone());
             return Ok(());
         }
         if self.remote_pane(session_id) && self.remote.is_some() {
@@ -874,7 +879,7 @@ impl RunService {
     /// `AnswerPlan`: None for a remote pane (its record comes back as the host's event).
     pub async fn answer_plan(&self, session_id: &str, request_id: &str, decision: &PlanDecision) -> Result<Option<PlanRecord>> {
         if let Some(mirror) = self.mirror_of(session_id) {
-            mirror.answer_plan(session_id.into(), request_id.into(), decision.clone());
+            mirror?.answer_plan(session_id.into(), request_id.into(), decision.clone());
             return Ok(None);
         }
         if self.remote_pane(session_id) && self.remote.is_some() {

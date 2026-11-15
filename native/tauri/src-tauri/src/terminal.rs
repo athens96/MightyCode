@@ -295,7 +295,8 @@ fn with_agent_io_pane(
     if state.session(&pane_id).is_some() {
         return Ok(());
     }
-    if state.sessions().len() >= layout::MAXIMUM_SESSIONS {
+    // The remote mirror's panes are the host's and never count (`PaneLayout.HasRoom`).
+    if !mighty_core::add_pane::has_room(state) {
         return Err("Close a pane before opening another.".into());
     }
     let before = effective_layout(state, workspace, defaults);
@@ -950,6 +951,43 @@ mod tests {
         assert_eq!(
             with_agent_io_pane(&mut snapshot, &mut defaults, "gone", "w", AGENT_TERMINAL, Locale::new("en")),
             Err("Agent pane closed.".into())
+        );
+    }
+
+    /// W9-J review L1: the remote mirror's panes are the host's and never count toward this PC's 128 (`PaneLayout.HasRoom`); this PC's
+    /// own 128th pane still refuses the agent's terminal.
+    #[test]
+    fn mirrored_panes_never_count_toward_the_agents_terminal_room() {
+        let mut snapshot = state();
+        let mirror = mighty_core::model::MirrorReference {
+            connection_id: "conn".into(),
+            host_session_id: "host".into(),
+            host_workspace_id: "ws".into(),
+            host_name: "studio-pc".into(),
+        };
+        for i in 0..layout::MAXIMUM_SESSIONS {
+            snapshot.sessions_mut().push(Arc::new(RunSession {
+                id: Some(format!("far-{i}")),
+                workspace_id: Some("w".into()),
+                mirror: Some(mirror.clone()),
+                ..RunSession::default()
+            }));
+        }
+        let mut defaults = HashMap::new();
+        with_agent_io_pane(&mut snapshot, &mut defaults, "agent", "w", AGENT_TERMINAL, Locale::new("en")).unwrap();
+        assert!(snapshot.session("agent-terminal:agent").is_some(), "the mirrored panes leave room");
+        let mut full = state();
+        for i in 0..layout::MAXIMUM_SESSIONS - 2 {
+            full.sessions_mut().push(Arc::new(RunSession {
+                id: Some(format!("own-{i}")),
+                workspace_id: Some("w".into()),
+                ..RunSession::default()
+            }));
+        }
+        assert_eq!(
+            with_agent_io_pane(&mut full, &mut defaults, "agent", "w", AGENT_TERMINAL, Locale::new("en")),
+            Err("Close a pane before opening another.".into()),
+            "this PC's 128 panes leave none"
         );
     }
 

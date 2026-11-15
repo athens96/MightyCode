@@ -296,7 +296,8 @@ pub fn read_state(bytes: &[u8], locale: &Locale) -> Result<AppSnapshot, StateErr
 
 /// The bytes C# `SaveAsync` writes for a state: normalized, approved, without files panes, at most 8 MiB.
 pub fn encode_for_save(snapshot: &AppSnapshot) -> Result<(AppSnapshot, Vec<u8>), StateError> {
-    let normalized = normalize::normalize(snapshot, false).map_err(state_error)?;
+    // The remote mirror's workspaces and panes are never written, whoever encodes the state.
+    let normalized = normalize::normalize(&snapshot.without_mirrors(), false).map_err(state_error)?;
     let mut out = JsonOut::new();
     normalize::stored(&normalized).write(&mut out);
     let encoded = out.finish().into_bytes();

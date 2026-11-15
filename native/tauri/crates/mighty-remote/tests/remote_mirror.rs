@@ -1169,6 +1169,68 @@ async fn a_windows_client_mirrors_a_windows_host() {
     sharing_host.dispose().await;
 }
 
+/// W9-J review L2: a mirrored pane whose mirror is not attached is refused (`remote.mirror.error.unavailable`): its start, stop and
+/// answers never fall through to a run of this PC or the client's runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_mirrored_pane_never_runs_here_without_its_mirror() {
+    let mut far = support::desk::workspace("far", std::path::Path::new("/Users/example/far"));
+    far.remote = Some(RemoteWorkspaceReference {
+        connection_id: Some("conn".into()),
+        workspace_id: Some("ws-far".into()),
+        host_name: Some("studio-mac".into()),
+        version: 2,
+        mirror: true,
+    });
+    let pane = RunSession {
+        mirror: Some(MirrorReference {
+            connection_id: "conn".into(),
+            host_session_id: "pane-far".into(),
+            host_workspace_id: "ws-far".into(),
+            host_name: "studio-mac".into(),
+        }),
+        ..support::desk::pane("mirrored", "far")
+    };
+    let state = AppSnapshot { workspaces: Some(vec![far]), sessions: Some(vec![Arc::new(pane)]), ..AppSnapshot::default() };
+    let world = World::over(Temp::new("unattached"), mighty_core::normalize::normalize(&state, false).unwrap(), "c", "c", |_| {});
+    let service = world.desk.service.clone();
+    assert!(service.snapshot().session("mirrored").is_some_and(|s| s.mirror.is_some()));
+    let unavailable = get("remote.mirror.error.unavailable");
+    let started = service.start(mighty_run::model::StartRunRequest::new("mirrored", "far", "claude", "hi")).await;
+    assert_eq!(started.map_err(|e| e.message().to_string()), Err(unavailable.clone()), "a start is refused");
+    assert!(!service.is_session_running("mirrored"), "nothing runs here");
+    assert_eq!(service.stop("mirrored").await.map_err(|e| e.message().to_string()), Err(unavailable.clone()), "a stop is refused");
+    let answered = service.respond_to_tool_permission("mirrored", "perm-1", true).await;
+    assert_eq!(answered.map_err(|e| e.message().to_string()), Err(unavailable.clone()), "an answer is refused");
+    let planned = service.answer_plan("mirrored", "perm-2", &PlanDecision::cancel()).await;
+    assert_eq!(planned.map_err(|e| e.message().to_string()), Err(unavailable), "a plan answer is refused");
+    assert!(!service.try_steer("mirrored", "note"), "no steer");
+}
+
+/// W9-J review L3: a list read by a poll that is no longer the connection's (the connection removed, or disconnected, while the list was
+/// read) is never laid over the state: a removal's taking away stays.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_list_read_after_its_connection_left_changes_nothing() {
+    let (store, directory) = client_store();
+    let world = World::over(Temp::new("stale-poll"), AppSnapshot::default(), "c", "c", |_| {});
+    let service = world.desk.service.clone();
+    let seen = Arc::new(Collected::default());
+    let client = client_with(&store, &directory, Arc::new(MemoryVault::default()), &seen, loopback_options());
+    let stage = Arc::new(Stage { service: service.clone(), permissions: Mutex::new(vec![]), failures: Mutex::new(vec![]) });
+    let desk = MirrorDesk::new(client, stage, spawn());
+    let state = mighty_remote::remote::mirror::MirrorState {
+        host_name: "studio-mac".into(),
+        revision: "r".into(),
+        unchanged: false,
+        workspaces: vec![RemoteSharedWorkspace { id: "ws-far".into(), name: "far".into(), path: "/Users/example/far".into() }],
+        sessions: vec![],
+    };
+    for serial in [0, 1, u64::MAX] {
+        desk.apply_state("conn", serial, &state);
+    }
+    assert!(service.snapshot().workspaces().is_empty(), "no poll of the connection: nothing is laid over");
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// "remote mirror: an older host stops the mirror only": a host that answers the mirror's list 404 (an older Mighty Code) leaves the
 /// connection up, stops the mirror and says so; the button falls back to 열기.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
