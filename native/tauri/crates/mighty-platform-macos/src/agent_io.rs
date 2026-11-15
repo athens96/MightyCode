@@ -188,10 +188,18 @@ impl AgentIoListener for UnixSocketListener {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(PlatformError::Io(error)),
         }
-        let bound = std::os::unix::net::UnixListener::bind(&path)?;
-        let ready = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).and_then(|()| bound.set_nonblocking(true));
+        // Bound, made 0600 and listening under a name of its own in the private folder, then renamed into place: a client finds the
+        // socket only once it is listening and private (never bound but not yet listening, or still with the umask's mode).
+        let staging = folder.join(format!(".{}", std::process::id()));
+        let staging = if fits(&staging.to_string_lossy()) { staging } else { path.clone() };
+        let _ = std::fs::remove_file(&staging);
+        let bound = std::os::unix::net::UnixListener::bind(&staging)?;
+        let ready = std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o600))
+            .and_then(|()| bound.set_nonblocking(true))
+            .and_then(|()| if staging == path { Ok(()) } else { std::fs::rename(&staging, &path) });
         if let Err(error) = ready {
             drop(bound);
+            let _ = std::fs::remove_file(&staging);
             let _ = std::fs::remove_file(&path);
             return Err(PlatformError::Io(error));
         }
@@ -424,7 +432,8 @@ mod tests {
                 listener.accept().await.map(|_| ())
             })
         };
-        assert!(UnixSocketConnector.connect(&name, Duration::from_secs(5)).await.is_ok(), "a listener that comes late is reached");
+        let reached = UnixSocketConnector.connect(&name, Duration::from_secs(5)).await;
+        assert!(reached.is_ok(), "a listener that comes late is reached: {:?}", reached.err());
         assert!(late.await.unwrap().is_ok());
         listener.close();
 
