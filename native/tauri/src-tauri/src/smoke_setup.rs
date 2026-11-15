@@ -105,7 +105,8 @@ const PROBE: &str = r#"(async () => {
     report.deniedNotRun = report.denyCleared && !denied.rows.some((r) => r.includes(edited.workspace)) && ![...(card()?.querySelectorAll('.status-row') ?? [])].some((r) => r.textContent.includes(edited.workspace));
     // installCli: the Antigravity pane read as missing offers its install; the composer's button opens the screen on Antigravity.
     const blocked = await host('installCliPane');
-    const offer = await until(() => [...document.querySelectorAll('.composer-text-button')].find((b) => b.textContent.trim() === blocked.label), 15000);
+    // That pane's own button: on a PC with no agent CLI (an installed release smoked with -NoRuns) every agent pane offers an install.
+    const offer = await until(() => [...document.querySelectorAll('section.pane[data-session-id="' + blocked.pane + '"] .composer-text-button')].find((b) => b.textContent.trim() === blocked.label), 15000);
     report.installOffered = !!offer;
     offer?.click();
     report.installOpened = !!(await until(async () => { const s = await host('state'); return s.setupOpen && s.focus === 'agy' && setup(); }, 10000));

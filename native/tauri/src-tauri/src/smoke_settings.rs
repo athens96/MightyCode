@@ -62,11 +62,16 @@ const PROBE: &str = r#"(async () => {
     await until(() => form()?.category === 'general', 10000);
     const before = (await host('state')).theme === 'light' ? 'light' : 'dark';
     const other = before === 'light' ? 'dark' : 'light';
-    const pick = (theme) => { const b = [...document.querySelectorAll('[data-native-view=settings] [data-aid=settings-theme] button[role=radio]')]; const target = b[theme === 'dark' ? 0 : 1]; if (!target) return false; target.click(); return true; };
+    const segment = (theme) => [...document.querySelectorAll('[data-native-view=settings] [data-aid=settings-theme] button[role=radio]')][theme === 'dark' ? 0 : 1];
+    // A segment the page still draws as on ignores its press (NativeNode's segmented): pressed only once the picker draws it off. The
+    // picker is drawn again a shell tick (250 ms) after the theme itself reached the page, which a loaded machine stretches.
+    const pick = (theme) => { const target = segment(theme); if (!target || target.getAttribute('aria-checked') !== 'false') return false; target.click(); return true; };
+    // Switched once the state, the page and the picker itself show it.
+    const shows = async (theme) => ((await host('state')).theme === 'light' ? 'light' : 'dark') === theme && document.documentElement.dataset.theme === theme && segment(theme)?.getAttribute('aria-checked') === 'true';
     const clicked = !!(await until(() => pick(other), 10000));
-    report.themeSwitched = clicked && !!(await until(async () => (await host('state')).theme === other && document.documentElement.dataset.theme === other, 10000));
-    await until(() => pick(before), 10000);
-    report.themeRestored = !!(await until(async () => ((await host('state')).theme === 'light' ? 'light' : 'dark') === before && document.documentElement.dataset.theme === before, 10000));
+    report.themeSwitched = clicked && !!(await until(() => shows(other), 15000));
+    const restoreClicked = !!(await until(() => pick(before), 10000));
+    report.themeRestored = restoreClicked && !!(await until(() => shows(before), 15000));
     document.querySelector('[data-native-view=settings] [data-testid=settings-close]')?.click();
     report.closed = !!(await until(async () => { const s = await host('state'); return !s.settingsOpen && !s.dialogOpen && !document.querySelector('[data-native-view=settings]'); }, 15000));
     const top = () => [...document.querySelectorAll('[data-native-view^=dialog-]')].pop();

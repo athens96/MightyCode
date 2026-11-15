@@ -335,6 +335,11 @@ mod tests {
         folder.join(".gemini").join("antigravity-cli").join("settings.json")
     }
 
+    /// The settings file reads `expected` now (a read while it is being replaced is not yet).
+    fn settings_are(folder: &Path, expected: &str) -> bool {
+        std::fs::read_to_string(settings_of(folder)).is_ok_and(|text| text == expected)
+    }
+
     fn rules(folder: &Path, replace: leases::Replace) -> AntigravityRuleLeases {
         let probe: Arc<dyn mighty_platform::PathProbe> = Arc::new(mighty_platform::unsupported::Unsupported);
         let ledger = folder.join("app").join("antigravity-temporary-rules.json");
@@ -424,10 +429,10 @@ mod tests {
         // Its own run ends.
         lock(&shared.state).routes.remove("pane");
         shared.receive_antigravity(&RunEvent::state("pane", "completed", None));
-        until(|| rules.held().is_empty(), "the rules released").await;
+        // The count goes under the lock and the file is written after it, on the release's own thread: waited for until both.
+        until(|| rules.held().is_empty() && settings_are(&folder, SETTINGS), "the rules released and out of the settings").await;
         rules.settled();
         assert!(!lock(&shared.antigravity).leases.contains_key("pane"), "and the lease gone");
-        assert_eq!(std::fs::read_to_string(settings_of(&folder)).unwrap(), SETTINGS);
         let _ = std::fs::remove_dir_all(&folder);
     }
 
@@ -458,9 +463,8 @@ mod tests {
         // Released as any: by its run's end.
         lock(&shared.state).routes.remove("pane");
         shared.receive_antigravity(&RunEvent::state("pane", "stopped", None));
-        until(|| rules.held().is_empty(), "released").await;
+        until(|| rules.held().is_empty() && settings_are(&folder, SETTINGS), "released and out of the settings").await;
         rules.settled();
-        assert_eq!(std::fs::read_to_string(settings_of(&folder)).unwrap(), SETTINGS);
         let _ = std::fs::remove_dir_all(&folder);
     }
 }

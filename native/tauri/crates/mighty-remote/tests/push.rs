@@ -476,7 +476,15 @@ async fn mobile_push_a_relay_redirect_is_a_failure_and_is_never_followed() {
         let (mut client, _) = redirecting.accept().await.unwrap();
         let mut read = Vec::new();
         let mut buffer = [0u8; 16_384];
-        while !read.windows(4).any(|w| w == b"\r\n\r\n") {
+        // The whole request, its body too: a socket closed with bytes it never read is reset, and the reset can reach the client before
+        // the reply does (it then reads an error, not the 307).
+        let complete = |read: &[u8]| {
+            let Some(end) = read.windows(4).position(|w| w == b"\r\n\r\n") else { return false };
+            let head = String::from_utf8_lossy(&read[..end]).to_ascii_lowercase();
+            let length = head.lines().find_map(|line| line.strip_prefix("content-length:")).and_then(|v| v.trim().parse().ok());
+            read.len() >= end + 4 + length.unwrap_or(0)
+        };
+        while !complete(&read) {
             let count = client.read(&mut buffer).await.unwrap();
             if count == 0 {
                 break;
@@ -487,6 +495,11 @@ async fn mobile_push_a_relay_redirect_is_a_failure_and_is_never_followed() {
             "HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:{elsewhere_port}/push/v1/send\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         );
         client.write_all(reply.as_bytes()).await.unwrap();
+        // Closed gracefully: the client reads the reply to its end before the connection goes.
+        let _ = client.shutdown().await;
+        let _ =
+            tokio::time::timeout(Duration::from_secs(5), async { while client.read(&mut buffer).await.is_ok_and(|count| count > 0) {} })
+                .await;
         String::from_utf8_lossy(&read).into_owned()
     });
     let sender = transport::HttpPushTransport::new(Arc::new(mighty_platform_windows::http::WinHttpGet));

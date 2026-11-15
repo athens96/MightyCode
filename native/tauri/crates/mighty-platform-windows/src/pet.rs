@@ -368,9 +368,9 @@ fn class_name() -> String {
 pub fn open() -> Result<Box<dyn PetWindow>> {
     let text = Arc::new(Text::new()?);
     let (ready, made) = std::sync::mpsc::channel::<Result<Arc<Shared>>>();
-    std::thread::Builder::new().name("mighty-pet".into()).spawn(move || run(text, ready)).map_err(PlatformError::Io)?;
+    let thread = std::thread::Builder::new().name("mighty-pet".into()).spawn(move || run(text, ready)).map_err(PlatformError::Io)?;
     let shared = made.recv().map_err(|_| PlatformError::Refused("the pet window's thread ended".into()))??;
-    Ok(Box::new(WindowsPet { shared }))
+    Ok(Box::new(WindowsPet { shared, thread: Some(thread) }))
 }
 
 fn run(text: Arc<Text>, ready: std::sync::mpsc::Sender<Result<Arc<Shared>>>) {
@@ -468,7 +468,9 @@ fn run(text: Arc<Text>, ready: std::sync::mpsc::Sender<Result<Arc<Shared>>>) {
 }
 
 impl Window {
-    fn release(self) {
+    fn release(mut self) {
+        // Direct2D's target, bound to the memory DC, goes before the DC and its DIB.
+        self.renderer = None;
         // SAFETY: the GDI objects this window made, each released once.
         unsafe {
             if !self.bitmap.is_invalid() {
@@ -549,6 +551,9 @@ impl Window {
             // A device lost or a target that would not bind: made afresh on the next frame.
             self.renderer = None;
         }
+        // The count and the kept pixels change under one lock, which a capture reads under too: it never pairs this frame's count with
+        // the last frame's pixels (a smoke waiting for the next frame read the old one, drawn at the old size, under load).
+        let mut kept = lock(&self.shared.capture);
         let frames = self.shared.frames.fetch_add(1, Ordering::SeqCst) + 1;
         if self.shared.capture_wanted.load(Ordering::SeqCst) && !self.bits.is_null() && width == self.width && height == self.height {
             // SAFETY: the DIB `allocate` made for exactly `width × height` (checked above, its product checked there) is selected and
@@ -556,9 +561,10 @@ impl Window {
             unsafe {
                 let _ = GdiFlush();
                 let pixels = std::slice::from_raw_parts(self.bits, width as usize * height as usize * 4).to_vec();
-                *lock(&self.shared.capture) = PetCapture { width: width as u32, height: height as u32, bgra: pixels, frames };
+                *kept = PetCapture { width: width as u32, height: height as u32, bgra: pixels, frames };
             }
         }
+        drop(kept);
         let destination = POINT { x: left, y: top };
         let size = SIZE { cx: width, cy: height };
         let source = POINT::default();
@@ -1158,6 +1164,9 @@ impl Renderer {
 
 struct WindowsPet {
     shared: Arc<Shared>,
+    /// The window thread, waited for on drop: since a close ends it (the W8 H1 fix), its teardown (the DIB, the Direct2D device and
+    /// the driver's thread detach, the class) must never be cut off by the process ending under it, which crashed a test process.
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 fn work_area_at(near: LogicalPoint) -> LogicalRect {
@@ -1250,8 +1259,10 @@ impl PetWindow for WindowsPet {
     fn capture(&self) -> Result<PetCapture> {
         self.shared.open()?;
         self.shared.capture_wanted.store(true, Ordering::SeqCst);
-        let mut capture = lock(&self.shared.capture).clone();
+        let kept = lock(&self.shared.capture);
+        let mut capture = kept.clone();
         capture.frames = self.shared.frames.load(Ordering::SeqCst);
+        drop(kept);
         Ok(capture)
     }
     fn animations(&self) -> bool {
@@ -1321,6 +1332,17 @@ impl Drop for WindowsPet {
     fn drop(&mut self) {
         if !self.shared.closed.load(Ordering::SeqCst) {
             let _ = self.close();
+        }
+        // Bounded: a window thread that never got its close is left rather than waited on for ever. The window has no owner and its
+        // thread waits on no other, so this wait cannot hold it up.
+        if let Some(thread) = self.thread.take().filter(|thread| thread.thread().id() != std::thread::current().id()) {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while !thread.is_finished() && std::time::Instant::now() < end {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            if thread.is_finished() {
+                let _ = thread.join();
+            }
         }
     }
 }

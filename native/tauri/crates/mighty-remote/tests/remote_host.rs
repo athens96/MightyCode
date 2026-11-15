@@ -962,11 +962,15 @@ async fn a_stop_while_a_start_makes_its_runner_disposes_that_runner() {
     let keep = made.clone();
     let factory: RunnerFactory = Arc::new(move |host: &RemoteHost, sinks| {
         let host = host.clone();
-        tokio::spawn(async move { host.stop().await });
+        // The stop runs before the start goes on, as C#'s `_ = f.Host.StopAsync()` runs to its first wait at once: polled once here (its
+        // part under the gate, a new generation, is done), the rest on a task. A task alone, however long waited for, may not have run
+        // yet on a loaded machine.
+        let mut stop = Box::pin(async move { host.stop().await });
+        if stop.as_mut().poll(&mut std::task::Context::from_waker(std::task::Waker::noop())).is_pending() {
+            tokio::spawn(stop);
+        }
         let runner = FakeRunner::new(sinks);
         *keep.lock().unwrap() = Some(runner.clone());
-        // The stop runs before the start goes on (C#'s `_ = f.Host.StopAsync()` runs to its first wait at once).
-        std::thread::sleep(Duration::from_millis(200));
         runner
     });
     let fixture = make_host(MakeHost { runner: Some(factory), ..MakeHost::default() }).await;

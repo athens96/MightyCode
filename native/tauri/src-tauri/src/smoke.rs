@@ -212,24 +212,26 @@ const BROWSER_PROBE: &str = r#"(async () => {
     const slotNow = () => ofPane('[data-testid=browser-slot]');
     const slot = await until(slotNow, 15000);
     report.slot = !!slot;
-    const address = await until(() => { const field = ofPane('[data-testid=browser-address]'); return field && !field.disabled ? field : null; }, 10000);
+    // Enabled once the host's view opened (status `ready`): a WebView2 in a profile of its own, which a loaded machine can take well over
+    // 10 s to start. Waited for that long; without it the step stops with its reason instead of typing into nothing.
+    const address = await until(() => { const field = ofPane('[data-testid=browser-address]'); return field && !field.disabled ? field : null; }, 60000);
     report.addressField = !!address;
+    if (!address) throw new Error('the browser view never became ready: ' + (ofPane('[data-testid=browser-notice]')?.textContent || 'still starting'));
     // Typed as a person would: the field's value, its input event, then Enter (BrowserView's keyDown sends browserNavigate).
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(address, fixture);
     address.dispatchEvent(new Event('input', { bubbles: true }));
     address.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    const loaded = await until(async () => { const s = await surface(); return s && s.visible && (s.url || '').startsWith(fixture) ? s : null; }, 15000);
+    const loaded = await until(async () => { const s = await surface(); return s && s.visible && (s.url || '').startsWith(fixture) ? s : null; }, 30000);
     report.loaded = !!loaded;
     report.url = loaded?.url ?? null;
-    // The slot in device pixels as the page reports it (src/slot/bounds.ts), against the view's own bounds from the OS.
-    await new Promise((r) => setTimeout(r, 300));
-    const box = (slotNow() ?? slot).getBoundingClientRect(), ratio = window.devicePixelRatio || 1;
-    const x = Math.round(box.left * ratio), y = Math.round(box.top * ratio);
-    report.expected = { x, y, width: Math.round((box.left + box.width) * ratio) - x, height: Math.round((box.top + box.height) * ratio) - y };
-    const placed = await surface();
+    // The slot in device pixels as the page reports it (src/slot/bounds.ts), against the view's own bounds from the OS: both read again
+    // until they agree (the page may still be laying the slot out, the host still placing the view).
+    const ratio = window.devicePixelRatio || 1;
+    const expected = () => { const box = (slotNow() ?? slot).getBoundingClientRect(); const x = Math.round(box.left * ratio), y = Math.round(box.top * ratio); return { x, y, width: Math.round((box.left + box.width) * ratio) - x, height: Math.round((box.top + box.height) * ratio) - y }; };
+    let placed = null;
+    report.boundsMatch = !!(await until(async () => { report.expected = expected(); placed = await surface(); return !!placed && ['x', 'y', 'width', 'height'].every((k) => Math.abs(placed.bounds[k] - report.expected[k]) <= 1); }, 10000));
     report.actual = placed?.bounds ?? null;
     report.ratio = ratio;
-    report.boundsMatch = !!placed && ['x', 'y', 'width', 'height'].every((k) => Math.abs(placed.bounds[k] - report.expected[k]) <= 1);
     await invoke('smoke_surface', { paneId, action: 'dialog' });
     report.dialogShown = !!(await until(() => document.querySelector('[data-testid=dialog]'), 5000));
     report.hiddenUnderDialog = !!(await until(async () => { const s = await surface(); return s && !s.visible; }, 5000));
@@ -258,7 +260,7 @@ const BROWSER_PROBE: &str = r#"(async () => {
     // A page menu over the slot (the tab's menu at a point inside it): the view steps aside, and comes back once the menu closes.
     const box2 = (slotNow() ?? slot).getBoundingClientRect();
     report.menuAt = { x: Math.round(box2.left + 20), y: Math.round(box2.top + 20) };
-    const handle = document.querySelector('[data-testid=tab][data-tab-id="' + paneId + '"] .tab-handle');
+    const handle = await until(() => document.querySelector('[data-testid=tab][data-tab-id="' + paneId + '"] .tab-handle'), 5000);
     handle?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: box2.left + 20, clientY: box2.top + 20 }));
     report.menuOpened = !!handle && !!(await until(() => document.querySelector('[data-testid=menu]'), 5000));
     report.steppedAside = report.menuOpened && !!(await until(async () => { const s = await surface(); return s && !s.visible; }, 5000));

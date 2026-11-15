@@ -141,15 +141,18 @@ async fn refresh_rotation_and_unset() {
 async fn cancellation_timeout_and_freshness() {
     let baseline = variables(&[("PATH", "base-path")]);
     let never: environment::Capture = Arc::new(|_, _| Box::pin(std::future::pending()));
-    let hanging = WindowsShellEnvironment::with_capture(never, Some(Duration::from_millis(30)), None);
+    let hanging = WindowsShellEnvironment::with_capture(never.clone(), Some(Duration::from_millis(30)), None);
     let timeout = hanging.resolve_with(&baseline, false).await;
     assert!(
         !timeout.from_profile && timeout.values.get("PATH") == Some("base-path"),
         "Slow interactive profiles fall back without leaking output."
     );
-    let cancelled = tokio::time::timeout(Duration::from_millis(1), hanging.resolve_with(&baseline, true)).await;
+    // The caller gives up long before the resolver's own limit, so only the caller's can end it (with the 30 ms limit above, a stalled
+    // runtime woke both timers at once and the resolver's fallback won).
+    let patient = WindowsShellEnvironment::with_capture(never, Some(Duration::from_secs(600)), None);
+    let cancelled = tokio::time::timeout(Duration::from_millis(50), patient.resolve_with(&baseline, true)).await;
     assert!(cancelled.is_err(), "a resolve whose caller gives up does not complete");
-    assert_eq!(hanging.current_with(&baseline).get("PATH"), Some("base-path"), "and changes nothing");
+    assert_eq!(patient.current_with(&baseline).get("PATH"), Some("base-path"), "and changes nothing");
 
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
