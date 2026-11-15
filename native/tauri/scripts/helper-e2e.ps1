@@ -82,7 +82,7 @@ function Invoke-Helper($layout, [string]$sha256) {
 function Get-LastLogLine($layout) {
     $log = Join-Path $layout.Version 'install.log'
     if (-not (Test-Path $log)) { return '' }
-    (Get-Content -LiteralPath $log | Select-Object -Last 1)
+    (Get-Content -Encoding UTF8 -LiteralPath $log | Select-Object -Last 1)
 }
 
 function Get-Beside($layout) {
