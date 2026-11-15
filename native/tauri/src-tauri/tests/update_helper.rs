@@ -2,8 +2,8 @@
 //! arguments, only `SystemRoot=C:\Windows` in its environment, its working folder a temporary one, no window — against a temporary
 //! install folder and a temporary staged package, never the real install folder, `%APPDATA%` or HKCU. It proves the swap and the
 //! relaunch (with the user's own environment), the rollback when the new app cannot start (the old one started again), the untouched
-//! install after a tampered package, the second helper's skip on the same mutex, and the real exe installing itself from the staged
-//! folder alone (the install on quit).
+//! install after a tampered package, a folder rename Windows refuses (a file held open in it) undone with the old app started, the
+//! second helper's skip on the same mutex, and the real exe installing itself from the staged folder alone (the install on quit).
 //!
 //! The "app" the helper starts is this test program copied in as `MightyCode.exe`: started with no argument, as the helper starts the
 //! app, the test harness runs every test here, and [`a_started_app_records_itself`] writes the started copy's path and environment to
@@ -355,5 +355,39 @@ fn the_real_exe_installs_itself_from_the_staged_folder() {
     assert!(layout.beside().is_empty(), "{:?}", layout.beside());
     let line = log.lines().last().unwrap_or_default();
     assert!(line.contains(" replaced=True rolledBack=False relaunch=False skipped=False started=False backupRemoved=True "), "{line}");
+    layout.remove();
+}
+
+/// Review M1, C# "app update helper retries a rename …" with a real refusal: a file in the install folder held open without
+/// `FILE_SHARE_DELETE` (an editor, a scanner) keeps Windows from renaming the folder. The helper tries each rename 10 times, then puts
+/// everything back: exit 1, the old tree whole, the old app started again, no copy or backup left, and C#'s line (`replaced=False`,
+/// `started=True`; `rolledBack=True` only when the first rename went through and the second was refused).
+#[test]
+fn a_rename_windows_refuses_is_undone_and_the_old_app_started() {
+    use std::os::windows::fs::OpenOptionsExt;
+    if is_started_copy() {
+        return;
+    }
+    let layout = Layout::new("held");
+    layout.old_app();
+    layout.new_app(&std::fs::read(std::env::current_exe().unwrap()).unwrap());
+    // FILE_SHARE_READ alone: no share-delete, so neither the file nor the folder holding it can be renamed while it is open.
+    let held = std::fs::OpenOptions::new().read(true).share_mode(0x0000_0001).open(layout.install.join("old.txt")).unwrap();
+    let started = Instant::now();
+    let code = run_helper(Path::new(HELPER), &layout.arguments(None, exited_pid(), true), &layout.root);
+    let took = started.elapsed();
+    drop(held);
+    let log = layout.log();
+    assert_eq!(code, 1, "{log}");
+    assert!(took >= Duration::from_millis(2500), "each rename was tried again for about 3 s: {took:?}");
+    assert!(layout.install.join("old.txt").exists() && !layout.install.join("new.txt").exists(), "the old tree is whole");
+    assert!(layout.install.join("MightyCode.exe").exists());
+    assert!(appears(&layout.install.join(STARTED)), "the old app was started again");
+    let (exe, _) = read_start(&layout.install.join(STARTED));
+    assert!(same_path(&exe, &layout.install.join("MightyCode.exe")), "{}", exe.display());
+    assert!(layout.beside().is_empty(), "no backup or copy left: {:?}", layout.beside());
+    let line = log.lines().last().unwrap_or_default();
+    assert!(line.contains(" replaced=False rolledBack="), "{line}");
+    assert!(line.contains(" relaunch=True skipped=False started=True backupRemoved=False "), "C#'s line: {line}");
     layout.remove();
 }

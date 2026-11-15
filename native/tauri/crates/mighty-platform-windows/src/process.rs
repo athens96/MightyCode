@@ -319,7 +319,9 @@ fn text(path: &Path) -> String {
 
 /// A process that outlives the app (the port's `start_detached`; C# `Process.Start` with `UseShellExecute = false`): `CreateProcessW`
 /// with no handle inherited (`bInheritHandles = FALSE`, no standard handles given), `CREATE_UNICODE_ENVIRONMENT |
-/// CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP`, plus `CREATE_NO_WINDOW` when hidden (C#'s `CreateNoWindow`); the environment
+/// CREATE_BREAKAWAY_FROM_JOB`, plus `CREATE_NO_WINDOW` when hidden (C#'s `CreateNoWindow`); never `CREATE_NEW_PROCESS_GROUP`, which
+/// sets the child's "ignore Ctrl+C" (its `ConsoleFlags` bit 0) for it and every process it starts — after an update the app's terminal
+/// panes would no longer stop on Ctrl+C (C#'s `Process.Start` passes no group flag either); the environment
 /// exactly as given (names compared ignoring case, the block sorted as C#'s) or this process's own; the working folder given. It joins
 /// no job of the app's, and when this process sits in a job that does not let a child break away, it fails (`Refused`) rather than start
 /// a process that job would end — unless `stay_in_job`, when it starts the child in that job without breaking away (C#'s
@@ -328,9 +330,7 @@ fn start_detached(request: &mighty_platform::DetachedRequest, stay_in_job: bool)
     use mighty_platform::DetachedEnvironment;
     use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
     use windows_sys::Win32::System::JobObjects::IsProcessInJob;
-    use windows_sys::Win32::System::Threading::{
-        CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, GetCurrentProcess, STARTUPINFOW,
-    };
+    use windows_sys::Win32::System::Threading::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, GetCurrentProcess, STARTUPINFOW};
 
     if !request.program.is_absolute() || !request.cwd.is_absolute() {
         return Err(PlatformError::Invalid("the program and the working folder need absolute paths".into()));
@@ -352,7 +352,7 @@ fn start_detached(request: &mighty_platform::DetachedRequest, stay_in_job: bool)
     };
     let mut command = wide(command_line(&text(&request.program), &request.args, None));
     let (application, directory) = (wide(&request.program), wide(&request.cwd));
-    let mut flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP;
+    let mut flags = CREATE_UNICODE_ENVIRONMENT;
     if request.hidden {
         flags |= CREATE_NO_WINDOW;
     }

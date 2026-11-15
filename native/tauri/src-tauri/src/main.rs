@@ -173,7 +173,9 @@ fn exe_mode(args: &[String]) -> Option<i32> {
 }
 
 fn main() {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    // Lossy, never `std::env::args()`, which panics on an argument that is not valid UTF-16: the update helper must reach its
+    // `install.log` whatever it was given (W9-B review L1); the parser then refuses what it cannot read.
+    let raw: Vec<String> = std::env::args_os().skip(1).map(|argument| argument.to_string_lossy().into_owned()).collect();
     if let Some(code) = exe_mode(&raw) {
         std::process::exit(code);
     }

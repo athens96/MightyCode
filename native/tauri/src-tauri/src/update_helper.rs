@@ -14,7 +14,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use mighty_core::locale::Locale;
-use mighty_platform::{DetachedEnvironment, DetachedRequest, ProcessHost, UpdateInstaller};
+use mighty_platform::{DetachedEnvironment, DetachedRequest, HelperMutex, ProcessHost, UpdateInstaller};
 use mighty_updates::app_update::plan::InstallPlan;
 use mighty_updates::app_update::replacement::{self, ReplacementResult, Seams};
 use mighty_updates::app_update::{guard, installer_entry, log, plan};
@@ -26,17 +26,33 @@ pub fn version() -> String {
 }
 
 /// The helper when `args` are its arguments, with the exit code; None otherwise (the arguments then go to the parser, which refuses
-/// `--update-helper`, as C#'s does).
+/// `--update-helper`, as C#'s does). Every step from reading the plan to the log is inside `catch_unwind`: a panic while the plan is
+/// read ends the helper with 1 (there is no plan to log beside, as C#'s throwing `TryParse` would end it); one later is logged.
 pub fn try_run(args: &[String]) -> Option<i32> {
-    let plan = plan::try_parse(args)?;
-    let locale = Locale::new(crate::methods::chosen_language("system"));
-    let installer = crate::platform::update_installer();
-    let processes = crate::platform::process_host();
-    let seams = MachineSeams::new(&*installer, &*processes);
-    Some(run(&plan, &*installer, &seams, &locale, &|| chrono::Utc::now()))
+    if args.first().map(String::as_str) != Some(plan::HELPER_FLAG) {
+        return None;
+    }
+    let plan = match catch_unwind(|| plan::try_parse(args)) {
+        Ok(plan) => plan?,
+        Err(_) => return Some(1),
+    };
+    let now = || chrono::Utc::now();
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        let locale = Locale::new(crate::methods::chosen_language("system"));
+        let installer = crate::platform::update_installer();
+        let processes = crate::platform::process_host();
+        let seams = MachineSeams::new(&*installer, &*processes);
+        run(&plan, &*installer, &seams, &locale, &now)
+    }));
+    Some(outcome.unwrap_or_else(|panic| {
+        let result = log::unexpected("Panic", &panic_text(&*panic));
+        write_log(&plan, &result, &now);
+        exit_code(&result)
+    }))
 }
 
-/// C# `RunUpdateHelper(plan)` over `installer` and `seams`: the outcome logged, the exit code answered.
+/// C# `RunUpdateHelper(plan)` over `installer` and `seams`: the outcome logged, the exit code answered. A panic anywhere from the
+/// mutex to the replacement is logged as C#'s unexpected failure; the mutex is held until the line is written.
 pub fn run(
     plan: &InstallPlan,
     installer: &dyn UpdateInstaller,
@@ -44,32 +60,41 @@ pub fn run(
     locale: &Locale,
     now: &dyn Fn() -> chrono::DateTime<chrono::Utc>,
 ) -> i32 {
-    // One helper per install folder: a second one leaves at once, moving and starting nothing (AppUpdateHelperGuard). The mutex is held
-    // until the line is written, as C#'s `using` holds it.
-    let mutex = installer.helper_mutex(&guard::mutex_name(&plan.install_directory));
-    let result = match &mutex {
-        Ok(held) => {
-            let acquired = held.is_some();
-            catch_unwind(AssertUnwindSafe(|| match guard::refusal(acquired) {
-                Some(refused) => refused,
-                None => {
-                    let result = replacement::run(plan, seams, locale);
-                    if result.replaced {
-                        // C# `InstallerRegistration.SyncDisplayVersion` never throws: a refusal leaves the entry as it was.
-                        let _ = installer.sync_display_version(&plan.install_directory, &version());
-                    }
-                    result
+    // One helper per install folder: a second one leaves at once, moving and starting nothing (AppUpdateHelperGuard). Held outside the
+    // `catch_unwind`, so it is released after the line is written whatever happened, as C#'s `using` holds it.
+    let mut mutex: Option<HelperMutex> = None;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let acquired = match installer.helper_mutex(&guard::mutex_name(&plan.install_directory)) {
+            Ok(held) => {
+                let acquired = held.is_some();
+                mutex = held;
+                acquired
+            }
+            // C#'s `new Mutex` would have thrown out of the helper; here the reason is logged like any other unexpected one.
+            Err(error) => return log::unexpected("MutexError", &error.to_string()),
+        };
+        match guard::refusal(acquired) {
+            Some(refused) => refused,
+            None => {
+                let result = replacement::run(plan, seams, locale);
+                if result.replaced {
+                    // C# `InstallerRegistration.SyncDisplayVersion` never throws: a refusal leaves the entry as it was.
+                    let _ = installer.sync_display_version(&plan.install_directory, &version());
                 }
-            }))
-            .unwrap_or_else(|panic| log::unexpected("Panic", &panic_text(&*panic)))
+                result
+            }
         }
-        // C#'s `new Mutex` would have thrown out of the helper; here the reason is logged like any other unexpected one.
-        Err(error) => log::unexpected("MutexError", &error.to_string()),
-    };
-    // Appended, so a second helper's line and the first one's outcome are both kept; the outcome never depends on the log.
-    let _ = log::append(&log::path(plan, &std::env::temp_dir()), &log::line(&result, Some(plan), now()));
+    }))
+    .unwrap_or_else(|panic| log::unexpected("Panic", &panic_text(&*panic)));
+    write_log(plan, &result, now);
     drop(mutex);
     exit_code(&result)
+}
+
+/// The one `install.log` line, appended (a second helper's line and the first one's outcome are both kept); the outcome never depends on
+/// the log, not even on a panic while it is written.
+fn write_log(plan: &InstallPlan, result: &ReplacementResult, now: &dyn Fn() -> chrono::DateTime<chrono::Utc>) {
+    let _ = catch_unwind(AssertUnwindSafe(|| log::append(&log::path(plan, &std::env::temp_dir()), &log::line(result, Some(plan), now()))));
 }
 
 fn panic_text(panic: &(dyn std::any::Any + Send)) -> String {
@@ -289,7 +314,7 @@ mod tests {
         let slash = format!(r"{INSTALL}\");
         let upper = INSTALL.to_uppercase();
         let longer = format!("{INSTALL}Old");
-        let cases: [(Option<&str>, Option<&str>, &str, &str); 9] = [
+        let cases: [(Option<&str>, Option<&str>, &str, &str); 13] = [
             (Some(&slash), Some("0.4.34"), INSTALL, "0.4.35"),
             (Some(&upper), Some("0.4.34"), &slash, "0.4.35"),
             (Some(&slash), Some("0.4.35"), INSTALL, "0.4.35"),
@@ -299,6 +324,11 @@ mod tests {
             (Some(&slash), None, INSTALL, "0.4.35"),
             (Some("  "), Some("0.4.34"), INSTALL, "0.4.35"),
             (Some(&slash), Some("0.4.34"), INSTALL, " "),
+            // Review L7: folders beyond ASCII, compared as .NET's OrdinalIgnoreCase does (simple case mapping: Ä is ä, ß only ß).
+            (Some(r"C:\Users\Jürgen\Ä\MightyCode\"), Some("0.4.34"), r"C:\USERS\JÜRGEN\ä\MightyCode", "0.4.35"),
+            (Some(r"C:\Users\Straße\MightyCode"), Some("0.4.34"), r"C:\Users\STRASSE\MightyCode", "0.4.35"),
+            (Some(r"C:\Users\Straße\MightyCode"), Some("0.4.34"), r"C:\Users\straße\MIGHTYCODE\", "0.4.35"),
+            (Some(r"C:\Users\Ärger\MightyCode"), Some("0.4.34"), r"C:\Users\Arger\MightyCode", "0.4.35"),
         ];
         for (location, shown, folder, version) in cases {
             assert_eq!(
@@ -307,6 +337,65 @@ mod tests {
                 "{location:?} {shown:?} {folder} {version}"
             );
         }
+        let jurgen = mighty_platform_windows::update::version_to_write(
+            Some(r"C:\Users\Jürgen\Ä\MightyCode\"),
+            Some("0.4.34"),
+            r"C:\USERS\JÜRGEN\ä\MightyCode",
+            "0.4.35",
+        );
+        assert_eq!(jurgen.as_deref(), Some("0.4.35"), "Ä and ä, ü and Ü are one letter");
+        let strasse = mighty_platform_windows::update::version_to_write(
+            Some(r"C:\Users\Straße\MightyCode"),
+            None,
+            r"C:\Users\STRASSE\MightyCode",
+            "1",
+        );
+        assert_eq!(strasse, None, "ß is not SS");
+    }
+
+    /// Review L1: a panic while the install's mutex is taken (outside the replacement) is still logged as C#'s unexpected failure, exit
+    /// 1; arguments that are not the helper's are not the helper's.
+    #[test]
+    fn a_panic_while_the_mutex_is_taken_is_logged_too() {
+        struct Breaking;
+        impl UpdateInstaller for Breaking {
+            fn install_location(&self) -> Option<PathBuf> {
+                None
+            }
+            fn hand_off(&self, _update: &mighty_platform::StagedUpdate, _relaunch: bool) -> mighty_platform::Result<()> {
+                Ok(())
+            }
+            fn helper_mutex(&self, _name: &str) -> mighty_platform::Result<Option<HelperMutex>> {
+                panic!("the mutex broke")
+            }
+            fn wait_for_exit(&self, _pid: u32, _timeout: Duration) -> mighty_platform::Result<bool> {
+                Ok(true)
+            }
+            fn running_from(&self, _folder: &Path, _except_self: bool) -> mighty_platform::Result<bool> {
+                Ok(false)
+            }
+            fn fresh_environment(&self) -> Option<BTreeMap<String, String>> {
+                None
+            }
+            fn sync_display_version(&self, _app_directory: &Path, _version: &str) -> mighty_platform::Result<bool> {
+                Ok(false)
+            }
+            fn refresh_renamed_install(&self, _app_directory: &Path) -> mighty_platform::Result<()> {
+                Ok(())
+            }
+        }
+        let root = temp("mutex-panic");
+        let plan = plan_in(&root, true);
+        std::fs::create_dir_all(plan.package_path.parent().unwrap()).unwrap();
+        let processes = FakeProcessHost::default();
+        let seams = MachineSeams::new(&Breaking, &processes);
+        assert_eq!(run(&plan, &Breaking, &seams, &Locale::new("en"), &|| chrono::Utc::now()), 1);
+        let log = std::fs::read_to_string(log::path(&plan, &std::env::temp_dir())).unwrap();
+        assert!(log.contains("replaced=False") && log.contains("Panic: the mutex broke"), "{log}");
+        assert!(processes.detached().is_empty(), "nothing started");
+        assert_eq!(try_run(&["--staged".into(), "x".into()]), None);
+        assert_eq!(try_run(&[]), None);
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// A panic inside the replacement becomes C#'s unexpected-exception line: nothing replaced, exit 1.
