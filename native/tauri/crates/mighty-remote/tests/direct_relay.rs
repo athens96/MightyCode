@@ -348,8 +348,11 @@ async fn mobile_direct_a_direct_frame_over_one_mib_is_refused() {
     phone.send_bytes(&padded).await;
     let info = exchange(&mut phone, json!({"id":"after-full-frame","method":"GET","path":"/m1/info"})).await;
     assert_eq!(info["id"], "after-full-frame", "a frame of exactly 1 MiB is read and the connection goes on");
-    phone.send_frame(vec![0u8; wire::MAXIMUM_FRAME_BYTES + 1]).await;
-    assert!(phone.ended().await, "a frame one byte over 1 MiB ends the connection");
+    // Bounded: the host refuses on the frame's length and drops the connection, so the rest of the write may fail or wait (a Mac's small
+    // loopback buffers); either way the phone then reads the end.
+    let _ = tokio::time::timeout(Duration::from_secs(20), phone.send_frame(vec![0u8; wire::MAXIMUM_FRAME_BYTES + 1])).await;
+    let ended = tokio::time::timeout(Duration::from_secs(20), phone.ended()).await;
+    assert!(ended.unwrap_or(false), "a frame one byte over 1 MiB ends the connection");
     until(Duration::from_secs(10), || fixture.host.connection_ids().is_empty()).await;
     assert!(fixture.path.status().listening(), "the listener stays up for the next phone");
     fixture.done().await;

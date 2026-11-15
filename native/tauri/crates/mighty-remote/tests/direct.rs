@@ -77,6 +77,11 @@ async fn refused(endpoint: impl tokio::net::ToSocketAddrs, ms: u64) -> bool {
     }
 }
 
+/// The host's next frame, never waited for longer than 20 s (a test that would hang fails instead).
+async fn bounded_next(server: &mut WebSocketStream<TcpStream>) -> Option<Result<Message, tokio_tungstenite::tungstenite::Error>> {
+    tokio::time::timeout(Duration::from_secs(20), server.next()).await.expect("the host's read never hangs")
+}
+
 /// A phone's WebSocket to `endpoint`.
 async fn phone(endpoint: &str) -> Result<WebSocketStream<TcpStream>, String> {
     let tcp = TcpStream::connect(endpoint).await.map_err(|e| e.to_string())?;
@@ -852,15 +857,33 @@ async fn mobile_direct_a_direct_frame_over_1_mib_is_refused() {
     let (stream, _slot) = next(&delivered).await.into_parts();
     let mut server = accept_web_socket(stream).await.unwrap();
     let mut client = connecting.await.unwrap().unwrap();
-    client.send(Message::binary(vec![b'a'; wire::MAXIMUM_FRAME_BYTES])).await.unwrap();
+    // The phone writes on a task of its own while the host reads: a 1 MiB frame is more than a loopback socket holds on some systems
+    // (the Mac's), so a write waits for the reader. Every step is bounded: a refusal never shows as a hang.
+    let (full_sent, text_sent) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+    let writer = tokio::spawn({
+        let (full_sent, text_sent) = (full_sent.clone(), text_sent.clone());
+        async move {
+            client.send(Message::binary(vec![b'a'; wire::MAXIMUM_FRAME_BYTES])).await.unwrap();
+            full_sent.store(true, Ordering::SeqCst);
+            client.send(Message::text("after-full-frame")).await.unwrap();
+            text_sent.store(true, Ordering::SeqCst);
+            // Refused part-way: the write fails once the host is gone, or completes into the buffers.
+            let _ = client.send(Message::binary(vec![0u8; wire::MAXIMUM_FRAME_BYTES + 1])).await;
+        }
+    });
     assert!(
-        matches!(server.next().await, Some(Ok(Message::Binary(b))) if b.len() == wire::MAXIMUM_FRAME_BYTES),
+        matches!(bounded_next(&mut server).await, Some(Ok(Message::Binary(b))) if b.len() == wire::MAXIMUM_FRAME_BYTES),
         "a frame of exactly 1 MiB is read"
     );
-    client.send(Message::text("after-full-frame")).await.unwrap();
-    assert!(matches!(server.next().await, Some(Ok(Message::Text(t))) if t.as_str() == "after-full-frame"), "the connection goes on");
-    let _ = client.send(Message::binary(vec![0u8; wire::MAXIMUM_FRAME_BYTES + 1])).await;
-    assert!(matches!(server.next().await, Some(Err(_)) | None), "a frame one byte over 1 MiB ends the connection");
+    assert!(
+        matches!(bounded_next(&mut server).await, Some(Ok(Message::Text(t))) if t.as_str() == "after-full-frame"),
+        "the connection goes on"
+    );
+    assert!(full_sent.load(Ordering::SeqCst) && text_sent.load(Ordering::SeqCst));
+    assert!(matches!(bounded_next(&mut server).await, Some(Err(_)) | None), "a frame one byte over 1 MiB ends the connection");
+    // The host's side goes, as the relay host drops a connection that failed: the phone's write ends with it.
+    drop(server);
+    tokio::time::timeout(Duration::from_secs(20), writer).await.expect("the phone's write ends once the host is gone").unwrap();
     listener.stop();
 }
 

@@ -57,6 +57,8 @@ async fn exchange(port: u16, raw: &[u8]) -> String {
 /// "remote parity: the strict server answers every head as C#'s RemoteHttpListener does".
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_strict_server_answers_every_head_as_csharps_listener_does() {
+    // C#'s answers were recorded in Korean (heads-csharp.txt): the words of a 400 are the locale's, whatever this machine's language.
+    mighty_run::strings::set_language("ko");
     let handler: Handler = Arc::new(|request| {
         Box::pin(async move { Ok(HttpResponse { status: 200, body: format!("len:{}", request.body.len()).into_bytes(), headers: vec![] }) })
     });
