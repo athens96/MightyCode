@@ -402,53 +402,15 @@ impl RemoteClient {
                 return Ok(());
             };
             let count = poll.items.len();
-            let more = {
-                let _applying = run.applying.enter();
-                if !self.current(pane_id, run) {
-                    return Ok(());
-                }
-                if poll.gap {
-                    self.emit(RunEvent::log(pane_id, "system", &get("remote.run.notice.gap"), None))?;
-                }
-                let mut terminal = false;
-                let mut skipped = false;
-                for incoming in poll.items {
-                    // Ended from inside a callback on this thread: nothing more of this run reaches the pane.
-                    if !Self::listed(&lock(&self.0.gate), pane_id, run) {
-                        return Ok(());
-                    }
-                    // One event this app cannot use is left out, and said so once; one it reads but does not draw is left out silently.
-                    let Some(incoming) = incoming.filter(Incoming::usable) else {
-                        skipped = true;
-                        continue;
-                    };
-                    if let Some(permission) = incoming.permission {
-                        self.receive(run, permission, incoming.host_run_id.unwrap_or_default())?;
-                        continue;
-                    }
-                    let Some(value) = incoming.event else { continue };
-                    let ends = value.kind == "status" && matches!(value.status.as_deref(), Some("completed" | "error" | "stopped"));
-                    self.emit(value)?;
-                    terminal |= ends;
-                }
-                if skipped {
-                    self.emit(RunEvent::log(pane_id, "system", &get("remote.run.notice.skipped"), None))?;
-                }
-                lock(&run.state).cursor = poll.cursor;
-                if poll.done {
-                    {
-                        let mut gate = lock(&self.0.gate);
-                        if Self::listed(&gate, pane_id, run) {
-                            gate.runs.remove(pane_id);
-                        }
-                    }
-                    self.0.pending.forget(pane_id);
-                    if !terminal {
-                        self.emit(RunEvent::state(pane_id, "error", None))?;
-                    }
-                    return Ok(());
-                }
-                poll.last_cursor > poll.cursor
+            // Applied on a blocking thread, never a runtime worker: a pane callback that takes its time (or waits on the window) parks
+            // only that thread, never the worker and the tasks queued behind it there (C# applies on a pool thread).
+            let (client, pane, applying) = (self.clone(), pane_id.to_string(), run.clone());
+            let more = match tokio::task::spawn_blocking(move || client.apply(&pane, &applying, poll)).await {
+                Ok(Ok(Some(more))) => more,
+                Ok(Ok(None)) => return Ok(()),
+                Ok(Err(failure)) => return Err(failure),
+                Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+                Err(_) => return Ok(()),
             };
             // More waits on the host: read it soon (at most ten polls a second per run). Otherwise wait longer while nothing comes.
             if more {
@@ -464,6 +426,57 @@ impl RemoteClient {
             }
         }
         Ok(())
+    }
+
+    /// One poll's events applied to the pane under the run's applying lock: Some(whether more waits on the host), None once the run is
+    /// no longer this one, ended or done; Err with what a pane callback that failed said.
+    fn apply(&self, pane_id: &str, run: &Arc<Run>, poll: Poll) -> Result<Option<bool>, String> {
+        let _applying = run.applying.enter();
+        if !self.current(pane_id, run) {
+            return Ok(None);
+        }
+        if poll.gap {
+            self.emit(RunEvent::log(pane_id, "system", &get("remote.run.notice.gap"), None))?;
+        }
+        let mut terminal = false;
+        let mut skipped = false;
+        for incoming in poll.items {
+            // Ended from inside a callback on this thread: nothing more of this run reaches the pane.
+            if !Self::listed(&lock(&self.0.gate), pane_id, run) {
+                return Ok(None);
+            }
+            // One event this app cannot use is left out, and said so once; one it reads but does not draw is left out silently.
+            let Some(incoming) = incoming.filter(Incoming::usable) else {
+                skipped = true;
+                continue;
+            };
+            if let Some(permission) = incoming.permission {
+                self.receive(run, permission, incoming.host_run_id.unwrap_or_default())?;
+                continue;
+            }
+            let Some(value) = incoming.event else { continue };
+            let ends = value.kind == "status" && matches!(value.status.as_deref(), Some("completed" | "error" | "stopped"));
+            self.emit(value)?;
+            terminal |= ends;
+        }
+        if skipped {
+            self.emit(RunEvent::log(pane_id, "system", &get("remote.run.notice.skipped"), None))?;
+        }
+        lock(&run.state).cursor = poll.cursor;
+        if poll.done {
+            {
+                let mut gate = lock(&self.0.gate);
+                if Self::listed(&gate, pane_id, run) {
+                    gate.runs.remove(pane_id);
+                }
+            }
+            self.0.pending.forget(pane_id);
+            if !terminal {
+                self.emit(RunEvent::state(pane_id, "error", None))?;
+            }
+            return Ok(None);
+        }
+        Ok(Some(poll.last_cursor > poll.cursor))
     }
 
     /// `Receive(run, permission, hostRunId)`: a tool request reaches the pane, which keeps the newest 32 waiting; older ones are withdrawn.
