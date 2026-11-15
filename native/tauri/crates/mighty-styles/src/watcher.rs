@@ -36,10 +36,11 @@ fn look(root: &Path) -> Option<Snapshot> {
             if seen.len() >= MAXIMUM_ENTRIES {
                 return Some(seen);
             }
-            let Ok(meta) = entry.metadata() else { continue };
             let path = entry.path();
-            // A link is not followed: its own change is what counts.
-            let link = entry.file_type().is_ok_and(|t| t.is_symlink());
+            let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+            // A link or a junction is not followed: its own change is what counts.
+            let link =
+                entry.file_type().is_ok_and(|t| t.is_symlink()) || matches!(mighty_core::workspace_files::link_target(&path), Ok(Some(_)));
             if meta.is_dir() && !link && depth < MAXIMUM_DEPTH {
                 stack.push((path.clone(), depth + 1));
             }

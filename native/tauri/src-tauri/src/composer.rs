@@ -108,6 +108,7 @@ pub(crate) async fn start_run(
     text: &str,
     files: Vec<RunAttachment>,
     permission_override: Option<String>,
+    queued: bool,
     continuation: Option<(mighty_run::antigravity::AllowGrant, mighty_run::antigravity::PermissionRequest)>,
 ) -> Result<Option<(Option<String>, Option<String>)>, String> {
     let engine = host.engine()?;
@@ -124,7 +125,7 @@ pub(crate) async fn start_run(
         request.settings = pane.settings.clone();
         request.resume_id = pane.resume_id.clone();
         request.attachments = (!files.is_empty()).then_some(files);
-        request.permission_mode_override = permission_override;
+        request.permission_mode_override = permission_override.clone();
         request.receipt = Some(receipt.clone());
         if let Some((grant, card)) = continuation {
             request.antigravity_grant = Some(grant);
@@ -133,7 +134,11 @@ pub(crate) async fn start_run(
         request
     };
     // C# `PrepareStyleRunRequest`: a styled pane's grants and plan-mode launch, its approval read again (styles.rs).
-    let request = crate::styles::prepare_run(host, id, request).await?;
+    let mut request = crate::styles::prepare_run(host, id, request).await?;
+    // A queued item keeps the launch decision made when it was queued (C# QueuedComposer.cs:461).
+    if queued {
+        request.permission_mode_override = permission_override;
+    }
     // C# `SendAsync`: the items delegation holds for the pane go with it, ahead of its words, in one run (delegation.rs).
     match crate::delegation::send(&engine, request).await {
         Ok(Some(())) => {
@@ -281,7 +286,7 @@ async fn send(host: &Arc<Host>, id: &str, second: bool, wraps_ask: bool) -> Resu
         None
     } else {
         Some(match crate::styles::prepare_submission(host, id, &submitted, !files.is_empty()).await {
-            Ok(text) => start_run(host, id, &text, files.clone(), None, None).await,
+            Ok(text) => start_run(host, id, &text, files.clone(), None, false, None).await,
             Err(error) => Err(error),
         })
     };
@@ -453,8 +458,18 @@ pub fn drain_queue(host: Arc<Host>, id: String) {
                 still_queued(view.panes.get_mut(&id), alive, &next)
             };
             let Some((next, continuation)) = taken else { return };
-            let outcome =
-                start_run(&host, &id, &next.text, next.attachments.clone(), next.permission_mode_override.clone(), continuation).await;
+            // C# `StartNextQueuedInput`: an item queued unprepared goes as its style's command (`PrepareStyleSubmission`).
+            let text = if next.prepared {
+                Ok(next.text.clone())
+            } else {
+                crate::styles::prepare_submission(&host, &id, &next.text, !next.attachments.is_empty()).await
+            };
+            let outcome = match text {
+                Ok(text) => {
+                    start_run(&host, &id, &text, next.attachments.clone(), next.permission_mode_override.clone(), true, continuation).await
+                }
+                Err(error) => Err(error),
+            };
             let failed_card = {
                 let mut view = host.view();
                 let mut failed_card = None;

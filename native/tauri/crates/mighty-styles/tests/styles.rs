@@ -512,8 +512,8 @@ fn styles_which_file_changes_make_a_pane_read_its_style_again() {
     );
 }
 
-/// L722 "styles: the change watcher reports file changes, a folder made later and one taken away" (Windows, as C#).
-#[cfg(windows)]
+/// L722 "styles: the change watcher reports file changes, a folder made later and one taken away". C# runs it on Windows only
+/// (FileSystemWatcher); this watcher is plain std polling, so it runs on every OS.
 #[test]
 fn styles_the_change_watcher_reports_file_changes_a_folder_made_later_and_one_taken_away() {
     use std::time::{Duration, Instant};
@@ -604,4 +604,37 @@ fn styles_state_boundaries() {
     assert!(files::read(&root.0, "large.md", decoder::MAXIMUM_BYTES).is_none(), "oversize state refused");
     let (state_of, widget) = state::parse("{\"value\":10,\"total\":4}", "json", "progressBar", &locale);
     assert!(widget.value == 4 && !state_of.all_checked, "json clamps and never means allChecked");
+}
+
+/// L1 (W9-D review): a decision holds `write.lock` through the host's exclusive lock, as C#'s `FileShare.None` does: while another
+/// holds it the decision fails and nothing is written.
+#[test]
+fn styles_a_decision_fails_while_another_process_holds_the_write_lock() {
+    /// The host's lock as another process holding it answers.
+    struct Held(std::sync::atomic::AtomicBool);
+    impl mighty_styles::TrustAccess for Held {
+        fn private(&self, path: &Path, directory: bool) -> bool {
+            mighty_styles::PlainAccess.private(path, directory)
+        }
+        fn restrict(&self, _: &Path, _: bool) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn lock(&self, _: &Path) -> std::io::Result<Box<dyn std::any::Any + Send>> {
+            if self.0.load(std::sync::atomic::Ordering::SeqCst) { Err(std::io::Error::other("held")) } else { Ok(Box::new(())) }
+        }
+    }
+    let root = Temp::new();
+    let workspace = root.join("workspace");
+    let profile = root.join("profile");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    std::fs::create_dir_all(profile.join("styles")).expect("styles");
+    std::fs::write(profile.join("styles").join("corpus-min.json"), fixture("conformance/valid/minimal.json")).expect("write");
+    let style = single(&profile, &workspace, "corpus-min");
+    let held = Arc::new(Held(std::sync::atomic::AtomicBool::new(true)));
+    let store = StyleTrustStore::new(&profile.join("style-trust"), held.clone(), korean());
+    assert!(store.decide(&style, "approved").is_err(), "the decision waits for no one: it fails");
+    assert!(!profile.join("style-trust").join("approvals.json").exists(), "nothing was written");
+    held.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    store.decide(&style, "approved").expect("approved once the lock is free");
+    assert!(single(&profile, &workspace, "corpus-min").runnable());
 }

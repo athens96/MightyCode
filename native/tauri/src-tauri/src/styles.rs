@@ -27,8 +27,8 @@ use mighty_styles::manifest::StylePhase;
 use mighty_styles::permissions::StyleAllowing;
 use mighty_styles::watcher::StyleChangeWatcher;
 use mighty_styles::{
-    PlainAccess, RegisteredStyle, StylePrerequisiteResult, StyleRegistry, StyleTrustStore, TrustAccess, decoder, permissions,
-    prerequisites, presentation, state,
+    RegisteredStyle, StylePrerequisiteResult, StyleRegistry, StyleTrustStore, TrustAccess, decoder, permissions, prerequisites,
+    presentation, state,
 };
 use serde_json::{Value, json};
 
@@ -36,31 +36,77 @@ use crate::host::{Host, Registry, View};
 
 // ── access ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/// The trust store's folder checks on Windows (C# `Private`/`Restrict`): a real folder, never a junction or link, put back to this
-/// user's protected list on every write (the setup screen's `prepare_folder`); the file inherits the folder's list. Reading a foreign
-/// access list without writing one has no port, so `private` checks the links and the folder's kind.
+/// The trust store's checks on Windows (C# `Private`/`Restrict`, StyleRegistry.cs:65-96): not a reparse point, this user the owner, no
+/// other account than LocalSystem or the Administrators able to write it (read only, mighty-platform-windows `setup_files::private`);
+/// written with a protected list of this user alone.
 #[cfg(windows)]
-struct HostAccess(Arc<dyn mighty_platform::SetupFiles>);
+pub struct WindowsAccess;
 
 #[cfg(windows)]
-impl TrustAccess for HostAccess {
+impl TrustAccess for WindowsAccess {
     fn private(&self, path: &Path, directory: bool) -> bool {
-        PlainAccess.private(path, directory) && (!directory || self.0.is_plain_folder(path))
+        mighty_platform_windows::setup_files::private(path) && path.is_dir() == directory
     }
     fn restrict(&self, path: &Path, directory: bool) -> std::io::Result<()> {
-        if directory { self.0.prepare_folder(path).map_err(|e| std::io::Error::other(e.to_string())) } else { Ok(()) }
+        mighty_platform_windows::setup_files::restrict(path, directory).map_err(|e| std::io::Error::other(e.to_string()))
+    }
+    /// C#'s `FileShare.None`: no other open of the file while it is held.
+    fn lock(&self, path: &Path) -> std::io::Result<Box<dyn std::any::Any + Send>> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).share_mode(0).open(path)?;
+        Ok(Box::new(file))
     }
 }
 
-/// The trust store's access checks for this OS.
+/// The trust store's checks off Windows (C# `Private`/`Restrict` on Unix): not a link, owned by this process's user, writable by no
+/// group or other (`mode & 0o022 == 0`); written 0700 (the folder) or 0600 (the file).
+#[cfg(unix)]
+pub struct UnixAccess;
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn geteuid() -> u32;
+    fn flock(fd: i32, operation: i32) -> i32;
+}
+
+#[cfg(unix)]
+impl TrustAccess for UnixAccess {
+    fn private(&self, path: &Path, directory: bool) -> bool {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid takes nothing and cannot fail.
+        let user = unsafe { geteuid() };
+        std::fs::symlink_metadata(path)
+            .is_ok_and(|m| !m.file_type().is_symlink() && m.is_dir() == directory && m.uid() == user && m.mode() & 0o022 == 0)
+    }
+    fn restrict(&self, path: &Path, directory: bool) -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(if directory { 0o700 } else { 0o600 }))
+    }
+    /// An exclusive `flock`, never waited for (LOCK_EX | LOCK_NB); released when the file closes.
+    fn lock(&self, path: &Path) -> std::io::Result<Box<dyn std::any::Any + Send>> {
+        use std::os::fd::AsRawFd;
+        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)?;
+        // SAFETY: a descriptor this function owns, alive across the call.
+        if unsafe { flock(file.as_raw_fd(), 2 | 4) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Box::new(file))
+    }
+}
+
+/// The trust store's checks for this OS.
 pub fn access() -> Arc<dyn TrustAccess> {
     #[cfg(windows)]
     {
-        Arc::new(HostAccess(crate::platform::setup_files()))
+        Arc::new(WindowsAccess)
     }
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
-        Arc::new(PlainAccess)
+        Arc::new(UnixAccess)
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        Arc::new(mighty_styles::PlainAccess)
     }
 }
 
@@ -94,6 +140,9 @@ struct PaneStyle {
     loading: bool,
     again: bool,
     loaded_key: Option<String>,
+    /// When the style was last read, and the pane's status then: a pane whose transcript grows reads again at most once a second.
+    loaded_at: Option<std::time::Instant>,
+    loaded_status: String,
     workspace: Option<PathBuf>,
 }
 
@@ -188,7 +237,11 @@ fn ensure(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) {
         return;
     }
     let wanted = key(pane);
-    let stale = panes().get(&id).is_none_or(|e| e.loaded_key.as_deref() != Some(&wanted) && !e.loading);
+    let stale = panes().get(&id).is_none_or(|e| {
+        e.loaded_key.as_deref() != Some(&wanted)
+            && !e.loading
+            && (e.loaded_status != pane.status() || e.loaded_at.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)))
+    });
     if stale && let Some(host) = shared(host) {
         tauri::async_runtime::spawn(async move { reload(&host, &id, false) });
     }
@@ -249,6 +302,8 @@ pub fn reload(host: &Arc<Host>, id: &str, quiet: bool) {
                     entry.reading = reading;
                     entry.prerequisites = prerequisites;
                     entry.loaded_key = Some(wanted);
+                    entry.loaded_at = Some(std::time::Instant::now());
+                    entry.loaded_status = pane.status().to_string();
                     entry.workspace = Some(workspace);
                 }
                 _ => {
@@ -264,6 +319,7 @@ pub fn reload(host: &Arc<Host>, id: &str, quiet: bool) {
             ui.view.launches_in_plan_mode = launches.unwrap_or(false);
         }
         mark(&host, &id);
+        prune(&host);
         watch(&host);
         if again {
             reload(&host, &id, quiet);
@@ -481,6 +537,21 @@ pub fn card_flags(pane: &RunSession) -> (bool, bool) {
         Some(style) if pane.agent_view_mode.as_deref() == Some("mighty") => (true, style.evaluator().draws_tasks()),
         _ => (false, false),
     }
+}
+
+/// The pane's new requests start in plan mode (its style's `launch.permissionMode`): only while it shows its style rows.
+pub fn launches_in_plan(snapshot: &AppSnapshot, pane: &RunSession) -> bool {
+    available(snapshot, pane)
+        && panes()
+            .get(pane.id())
+            .and_then(|e| e.active.as_ref())
+            .is_some_and(|s| Some(s.id()) == pane.mighty_style.as_deref() && s.evaluator().launch_permission_mode() == Some("plan"))
+}
+
+/// C# `PruneStyleWatchers` with the panes: a closed pane's style goes, and with it the watch on a workspace no pane needs.
+fn prune(host: &Host) {
+    let ids: std::collections::HashSet<String> = host.view().snapshot.sessions().iter().map(|p| p.id().to_string()).collect();
+    panes().retain(|id, _| ids.contains(id));
 }
 
 /// The style menu (C# `stylePicker.Flyout`): CLI, then every style this pane may see — its name, its source unless built in and, while
@@ -992,34 +1063,64 @@ pub async fn prepare_run(host: &Arc<Host>, id: &str, request: StartRunRequest) -
 
 /// C# `DesktopService.ReceiveToolPermission`'s style half: true when the pane is shown `request`; a request its style allows by itself
 /// is answered allowed here, once, and its settling is no news.
+///
+/// The judgement reads the registry, the trust store and the file again (`StyleRunPermissions.AutoAllows`), so it runs off the service's
+/// event pump: a request that may be the style's is held (not shown, not counted as waiting) while it is judged, then answered allowed
+/// or handed back to the pane ([`ServiceEvent::ToolPermission`](mighty_run::service::ServiceEvent) again, shown at once). Only a local
+/// pane's style allows: a remote or mirrored pane's request is always the user's.
 pub fn tool_permission(host: &Arc<Host>, request: &ToolPermissionRequest) -> bool {
-    ALLOWING.receive(
-        request,
-        || {
-            let (pane, workspace) = {
-                let view = host.view();
-                let pane = view.snapshot.session(&request.run_id).cloned();
-                let workspace = pane.as_ref().and_then(|p| view.snapshot.workspace(p.workspace_id())).map(|w| PathBuf::from(w.path()));
-                (pane, workspace)
+    if request.state != "pending" {
+        return !ALLOWING.release(&request.run_id, &request.id);
+    }
+    if lock_judged().remove(&format!("{}|{}", request.run_id, request.id)) {
+        return true;
+    }
+    let (pane, workspace) = {
+        let view = host.view();
+        let pane = view.snapshot.session(&request.run_id).cloned();
+        let workspace = pane.as_ref().and_then(|p| local_workspace(&view.snapshot, p));
+        (pane, workspace)
+    };
+    let (Some(pane), Some(workspace)) = (pane, workspace) else { return true };
+    // Nothing to read from disk when the pane's style cannot be the one asked about.
+    let listed =
+        panes().get(pane.id()).and_then(|e| e.active.as_ref()).is_some_and(|s| s.manifest.auto_allow().contains(&request.tool_name));
+    if !listed || !request.can_allow || !permissions::valid_wire_name(&request.tool_name) || !permissions::styled(&pane) {
+        return true;
+    }
+    ALLOWING.hold(&request.run_id, &request.id);
+    let (host, request) = (host.clone(), request.clone());
+    tauri::async_runtime::spawn(async move {
+        let (judge, asked) = (host.clone(), request.clone());
+        let allowed = tauri::async_runtime::spawn_blocking(move || {
+            permissions::auto_allows(&asked, Some(&pane), &judge.data_dir, &workspace, access(), judge.locale)
+        })
+        .await
+        .unwrap_or(false);
+        let answered = allowed
+            && match host.runs() {
+                Some(runs) => runs.service.respond_to_tool_permission(&request.run_id, &request.id, true).await.is_ok(),
+                None => false,
             };
-            let Some(workspace) = workspace else { return false };
-            permissions::auto_allows(request, pane.as_deref(), &host.data_dir, &workspace, access(), host.locale)
-        },
-        || {
-            let (answer, run, id) = (host.clone(), request.run_id.clone(), request.id.clone());
-            tauri::async_runtime::spawn(async move {
-                let failed = match answer.runs() {
-                    Some(runs) => runs.service.respond_to_tool_permission(&run, &id, true).await.is_err(),
-                    None => true,
-                };
-                // Nothing settled it: it waits for the user like any other.
-                if failed && ALLOWING.release(&run, &id) {
-                    mark(&answer, &run);
-                }
-            });
-            true
-        },
-    )
+        // Not the style's, or its answer did not go through: it waits for the user like any other.
+        if !answered && ALLOWING.release(&request.run_id, &request.id) {
+            lock_judged().insert(format!("{}|{}", request.run_id, request.id));
+            host.service_event(mighty_run::service::ServiceEvent::ToolPermission(Box::new(request)));
+        }
+    });
+    false
+}
+
+/// Requests the style judged not its own, shown when they come back to [`tool_permission`].
+static JUDGED: LazyLock<Mutex<std::collections::HashSet<String>>> = LazyLock::new(|| Mutex::new(std::collections::HashSet::new()));
+
+fn lock_judged() -> MutexGuard<'static, std::collections::HashSet<String>> {
+    JUDGED.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Whether the pane is shown `request` as waiting: not while its style answers or judges it.
+pub fn shows(request: &ToolPermissionRequest) -> bool {
+    !ALLOWING.holds(&request.run_id, &request.id)
 }
 
 // ── the Mighty view and the phone ───────────────────────────────────────────────────────────────────────────────────────────
@@ -1074,11 +1175,16 @@ pub fn offered(host: &Host, snapshot: &AppSnapshot, pane: &RunSession, view_mode
     if !mighty_remote::phone::mighty::guided_styles_available(pane.kind(), pane.provider(), view_mode) {
         return Vec::new();
     }
-    let cached = panes().get(pane.id()).and_then(|e| e.registry.clone());
-    if let Some(registry) = cached {
-        return registry.styles.clone();
-    }
-    load_registry(host, &workspace).styles
+    let _ = workspace;
+    // Read off the handler (C# `MobileRunningStyle`'s background read): none until the pane's first read lands.
+    ensure(host, snapshot, pane);
+    panes().get(pane.id()).and_then(|e| e.registry.clone()).map(|r| r.styles.clone()).unwrap_or_default()
+}
+
+/// The registry read off the async handlers (`spawn_blocking`).
+async fn registry_of(host: &Host, workspace: PathBuf) -> StyleRegistry {
+    let (profile, locale) = (host.data_dir.clone(), host.locale);
+    tauri::async_runtime::spawn_blocking(move || StyleRegistry::load(&profile, &workspace, access(), locale)).await.unwrap_or_default()
 }
 
 /// The phone's `panel`, `ouroboros` and the mighty digest's style part (C# `MobileStylePanel`, `MobileLegacyStyleAdapter.Payload`).
@@ -1126,7 +1232,7 @@ pub type PhoneChoice = (Option<String>, Option<String>, bool);
 
 /// C# `MobileSettings`' style half: the style the pane ends up with, its hash and whether it changed (`StyleAfter`), refused with
 /// `remote.error.unknownStyle` (400) or "Style changed." (409).
-pub fn phone_choice(
+pub async fn phone_choice(
     host: &Host,
     snapshot: &AppSnapshot,
     pane: &RunSession,
@@ -1136,7 +1242,12 @@ pub fn phone_choice(
     let text = |k: &str| body.get(k).and_then(Value::as_str);
     let shown = active_style(host, pane).unwrap_or_else(|| mighty_remote::phone::mighty::CLI_STYLE.to_string());
     let requested = text("styleId").or_else(|| text("mightyStyle"));
-    let styles = offered(host, snapshot, pane, "mighty");
+    let available = mighty_remote::phone::mighty::guided_styles_available(pane.kind(), pane.provider(), "mighty");
+    let registry = match local_workspace(snapshot, pane).filter(|_| available) {
+        Some(workspace) => Some(registry_of(host, workspace).await),
+        None => None,
+    };
+    let styles = registry.as_ref().map(|r| r.styles.clone()).unwrap_or_default();
     if let Some(requested) = requested {
         let known = if text("styleId").is_some() {
             mighty_remote::phone::legacy_style::style_options(&styles).iter().any(|s| s.id == requested)
@@ -1153,8 +1264,7 @@ pub fn phone_choice(
     if changes {
         hash = None;
         if let Some(style) = &style {
-            let workspace = local_workspace(snapshot, pane).ok_or_else(|| (400, l.get("remote.error.unknownStyle")))?;
-            let registry = load_registry(host, &workspace);
+            let registry = registry.as_ref().ok_or_else(|| (400, l.get("remote.error.unknownStyle")))?;
             let selected =
                 registry.runnable(Some(style), None).or_else(|| registry.styles.iter().find(|s| s.id() == style && s.runnable()));
             let selected = selected.ok_or_else(|| (400, l.get("remote.error.unknownStyle")))?;
@@ -1168,15 +1278,18 @@ pub fn phone_choice(
 }
 
 /// C# `MobileGuided`'s checks: the prompt the phone's guided press sends, refused with the router's statuses and words.
-pub fn phone_guided(
+pub async fn phone_guided(
     host: &Host,
     pane: &RunSession,
     request: &mighty_remote::phone::mighty::MobileGuidedRequest,
 ) -> Result<String, (u16, String)> {
     let l = host.locale;
-    let snapshot = host.view().snapshot.clone();
-    let workspace = local_workspace(&snapshot, pane).ok_or_else(|| (400, l.get("remote.error.unknownStyle")))?;
-    let registry = load_registry(host, &workspace);
+    let workspace = {
+        let view = host.view();
+        local_workspace(&view.snapshot, pane)
+    };
+    let workspace = workspace.ok_or_else(|| (400, l.get("remote.error.unknownStyle")))?;
+    let registry = registry_of(host, workspace).await;
     if pane.provider() != "claude" || !registry.styles.iter().any(|s| s.id() == request.style && s.runnable()) {
         return Err((400, l.get("remote.error.unknownStyle")));
     }
@@ -1426,4 +1539,77 @@ pub fn loaded(id: &str) -> (bool, Option<String>, usize) {
         entry.and_then(|e| e.active.as_ref()).map(|s| s.id().to_string()),
         entry.and_then(|e| e.registry.as_ref()).map_or(0, |r| r.styles.len()),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mighty_core::model::{RemoteWorkspaceReference, Workspace};
+
+    fn temp(tag: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("mighty-styles-host-{tag}-{}", mighty_core::wire::new_id()));
+        std::fs::create_dir_all(&path).expect("temp");
+        path
+    }
+
+    /// L2 (W9-D review): only a local pane's style judges its requests; a remote or mirrored pane's request is the user's.
+    #[test]
+    fn a_remote_panes_style_allows_nothing_by_itself() {
+        let local = Workspace { id: Some("local".into()), path: Some(r"C:\work".into()), ..Workspace::default() };
+        let remote = Workspace {
+            id: Some("remote".into()),
+            path: Some(r"C:\elsewhere".into()),
+            remote: Some(RemoteWorkspaceReference {
+                connection_id: Some("c".into()),
+                workspace_id: Some("w".into()),
+                host_name: None,
+                version: 2,
+            }),
+            ..Workspace::default()
+        };
+        let mut snapshot = AppSnapshot::default();
+        *snapshot.workspaces_mut() = vec![local, remote];
+        let pane = |workspace: &str| RunSession {
+            workspace_id: Some(workspace.into()),
+            kind: Some("claude".into()),
+            provider: Some("claude".into()),
+            agent_view_mode: Some("mighty".into()),
+            mighty_style: Some("claude-plan".into()),
+            ..RunSession::default()
+        };
+        assert!(local_workspace(&snapshot, &pane("local")).is_some() && available(&snapshot, &pane("local")));
+        assert!(local_workspace(&snapshot, &pane("remote")).is_none() && !available(&snapshot, &pane("remote")));
+        assert!(local_workspace(&snapshot, &pane("gone")).is_none(), "a pane whose workspace went is no local pane");
+    }
+
+    /// M1 (W9-D review): the production trust-store checks (C# `Private`/`Restrict`): what the store writes is private; a folder or a
+    /// file another account could write is not, nor a link.
+    #[test]
+    fn the_trust_stores_checks_refuse_what_another_account_could_write() {
+        let access = access();
+        let folder = temp("trust");
+        let file = folder.join("approvals.json");
+        std::fs::write(&file, "{}").expect("file");
+        access.restrict(&folder, true).expect("the folder is restricted");
+        access.restrict(&file, false).expect("the file is restricted");
+        assert!(access.private(&folder, true) && access.private(&file, false), "what the store writes is private");
+        assert!(!access.private(&file, true) && !access.private(&folder.join("missing.json"), false), "the wrong kind, or nothing");
+        // L1: write.lock is held exclusively; a second holder is refused until the first lets go.
+        let lock = folder.join("write.lock");
+        let held = access.lock(&lock).expect("the first holder");
+        assert!(access.lock(&lock).is_err(), "a second holder is refused");
+        drop(held);
+        drop(access.lock(&lock).expect("free again"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o666)).expect("widened");
+            assert!(!access.private(&file, false), "a file others may write is not private");
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o775)).expect("widened");
+            assert!(!access.private(&folder, true), "a folder the group may write is not private");
+            std::os::unix::fs::symlink(&file, folder.join("link.json")).expect("link");
+            assert!(!access.private(&folder.join("link.json"), false), "a link is not private");
+        }
+        let _ = std::fs::remove_dir_all(&folder);
+    }
 }

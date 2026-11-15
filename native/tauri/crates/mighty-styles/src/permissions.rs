@@ -134,6 +134,16 @@ impl StyleAllowing {
         true
     }
 
+    /// Whether `request` is one the style is answering (or judging): never shown as waiting meanwhile.
+    pub fn holds(&self, run_id: &str, id: &str) -> bool {
+        self.keys.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(&format!("{run_id}|{id}"))
+    }
+
+    /// Marks `request` as the style's to judge or answer (its settling is then no news).
+    pub fn hold(&self, run_id: &str, id: &str) {
+        self.keys.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(format!("{run_id}|{id}"));
+    }
+
     /// An allowance that did not go through: its mark taken away; true when it was still there (nothing settled it).
     pub fn release(&self, run_id: &str, id: &str) -> bool {
         self.keys.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&format!("{run_id}|{id}"))

@@ -451,7 +451,7 @@ async fn submit(
         ui.dirty = true;
         ui.submission
     };
-    let outcome = start(host, id, &text, files, queue_id, submission).await;
+    let outcome = start(host, id, &text, files, prepared, queue_id, submission).await;
     if let Some(ui) = host.view().panes.get_mut(id) {
         ui.view.starting = false;
         ui.dirty = true;
@@ -466,12 +466,22 @@ async fn start(
     id: &str,
     text: &str,
     files: Vec<RunAttachment>,
+    prepared: bool,
     queue_id: Option<&str>,
     submission: u64,
 ) -> Result<SubmitReceipt, MobileError> {
     let l = host.locale;
     // The model list as the CLI has it now comes first; the request takes the pane's model and effort after it.
     crate::models::prepare(host, id).await;
+    // C# `MobileSubmit`: a styled pane's own words go as its style's command (`PrepareStyleSubmission`) unless already prepared.
+    let queued_prepared =
+        queue_id.is_some_and(|item| host.view().panes.get(id).is_some_and(|u| u.queue.items().iter().any(|q| q.id == item && q.prepared)));
+    let text = if prepared || queued_prepared {
+        text.to_string()
+    } else {
+        crate::styles::prepare_submission(host, id, text, !files.is_empty()).await.map_err(|e| request(409, e))?
+    };
+    let text = text.as_str();
     // A queued item keeps the launch decision made when it was queued; an Antigravity card's continuation carries its rules and card.
     let (override_mode, continuation) = {
         let view = host.view();
@@ -489,7 +499,7 @@ async fn start(
         }
     };
     let card = continuation.as_ref().map(|(_, card)| card.clone());
-    let started = start_request(host, id, text, files, override_mode, continuation).await;
+    let started = start_request(host, id, text, files, override_mode, queue_id.is_some(), continuation).await;
     let (answer, revoke) = answer_start(started, card.is_some(), &l);
     // A continuation that could not start leaves the queue with its rules, as the desktop's drain drops it (S-L3).
     if let (Some(reason), Some(card), Some(item)) = (revoke, card, queue_id) {
@@ -546,6 +556,7 @@ async fn start_request(
     text: &str,
     files: Vec<RunAttachment>,
     permission_override: Option<String>,
+    queued: bool,
     continuation: Option<(mighty_run::antigravity::AllowGrant, PermissionRequest)>,
 ) -> Started {
     let Ok(engine) = host.engine() else { return Started::Failed("the run engine is not ready".into()) };
@@ -564,7 +575,7 @@ async fn start_request(
         request.settings = pane.settings.clone();
         request.resume_id = pane.resume_id.clone();
         request.attachments = (!files.is_empty()).then_some(files);
-        request.permission_mode_override = permission_override;
+        request.permission_mode_override = permission_override.clone();
         request.receipt = Some(receipt.clone());
         if let Some((grant, card)) = continuation {
             request.antigravity_grant = Some(grant);
@@ -572,6 +583,15 @@ async fn start_request(
         }
         request
     };
+    // C# `PrepareStyleRunRequest`: the style's grants and plan-mode launch, its approval read again (styles.rs); a queued item keeps
+    // the launch decision made when it was queued.
+    let mut request = match crate::styles::prepare_run(host, id, request).await {
+        Ok(request) => request,
+        Err(error) => return Started::Failed(error),
+    };
+    if queued {
+        request.permission_mode_override = permission_override;
+    }
     let ids = || {
         let made = lock(&receipt);
         Started::Now(made.entry_id.clone(), made.graph_run_id.clone())
@@ -773,7 +793,7 @@ fn stop_queue(host: &Host, id: &str) {
 
 /// `MobileSettings(body)`: the pane's model, permission mode and effort as the phone picked them, checked against what the composer
 /// offers; the view is the Mighty view; the style one the pane may pick (styles.rs: 400 unknown, 409 "Style changed.").
-fn settings(host: &Host, id: &str, body: &serde_json::Map<String, Value>) -> Result<(), MobileError> {
+async fn settings(host: &Host, id: &str, body: &serde_json::Map<String, Value>) -> Result<(), MobileError> {
     let l = host.locale;
     if busy(host, id) {
         return Err(request(409, "Stop the session before changing settings."));
@@ -789,7 +809,7 @@ fn settings(host: &Host, id: &str, body: &serde_json::Map<String, Value>) -> Res
     let efforts = |model: &str| mighty_run::providers::efforts(pane.provider(), model, &catalog, Some(&registered));
     let (model, mode, effort) = settings_choice(body, pane.model(), &current, &models, &caps.permission_modes, &efforts, &l)?;
     let (style, hash, changes) =
-        crate::styles::phone_choice(host, &snapshot, &pane, body).map_err(|(status, message)| request(status, message))?;
+        crate::styles::phone_choice(host, &snapshot, &pane, body).await.map_err(|(status, message)| request(status, message))?;
     let mut view = host.view();
     let now = view.snapshot.session(id).cloned().ok_or_else(not_found_session)?;
     if busy_locked(host, &view, id)
@@ -1001,7 +1021,7 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
             ActionAnswer::Value(Value::Null)
         }
         "settings" => {
-            settings(&host, &id, &body)?;
+            settings(&host, &id, &body).await?;
             ActionAnswer::Value(Value::Null)
         }
         // The phone's 보낼 대상 switch: a target the pane offers, or null for Claude.
@@ -1015,7 +1035,7 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
         // A style's button (C# `MobileGuided`): the action's prompt sent as the app's own, checked against the pane's style (styles.rs).
         "guided" => {
             let guided = mighty::guided_request(&body, &l)?;
-            let prompt = crate::styles::phone_guided(&host, &pane, &guided).map_err(|(status, message)| request(status, message))?;
+            let prompt = crate::styles::phone_guided(&host, &pane, &guided).await.map_err(|(status, message)| request(status, message))?;
             ActionAnswer::Receipt(submit(&host, &id, &prompt, vec![], true, None).await?)
         }
         // The answer to the pane's waiting terminal command, typed as its card types it; whether it was.
@@ -1094,7 +1114,13 @@ impl PhoneDesk for Desk {
         self.host().is_ok_and(|h| running(&h, session_id))
     }
     fn pending_permissions(&self, session_id: &str) -> Vec<ToolPermissionRequest> {
-        self.host().ok().and_then(|h| h.runs().map(|r| r.service.pending_permissions(session_id))).unwrap_or_default()
+        self.host()
+            .ok()
+            .and_then(|h| h.runs().map(|r| r.service.pending_permissions(session_id)))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(crate::styles::shows)
+            .collect()
     }
     fn held_items(&self, session_id: &str) -> Vec<DelegationDeliveryItem> {
         held(session_id)

@@ -96,14 +96,22 @@ impl DelegationWindow for Window {
             if host.closing() {
                 return request;
             }
-            let view = host.view();
-            if let Some(pane) = view.snapshot.session(&request.session_id).filter(|pane| pane.kind() == "claude") {
-                let workspace = view.snapshot.workspace(pane.workspace_id()).cloned();
-                request.model = pane.model().to_string();
-                request.settings = pane.settings.clone();
-                request.registered_models = crate::runs::registered_models_for(pane.provider(), workspace.as_ref(), &view.snapshot);
+            {
+                let view = host.view();
+                if let Some(pane) = view.snapshot.session(&request.session_id).filter(|pane| pane.kind() == "claude") {
+                    let workspace = view.snapshot.workspace(pane.workspace_id()).cloned();
+                    request.model = pane.model().to_string();
+                    request.settings = pane.settings.clone();
+                    request.registered_models = crate::runs::registered_models_for(pane.provider(), workspace.as_ref(), &view.snapshot);
+                }
             }
-            request
+            // C# `PrepareStyleRunRequest`: a styled pane's grants and plan-mode launch (styles.rs). C# throws when the style needs a
+            // yes again; this seam cannot refuse, so the request goes without the style's grants then.
+            let id = request.session_id.clone();
+            match crate::styles::prepare_run(&host, &id, request.clone()).await {
+                Ok(prepared) => prepared,
+                Err(_) => StartRunRequest { style_auto_allow: None, ..request },
+            }
         })
     }
 

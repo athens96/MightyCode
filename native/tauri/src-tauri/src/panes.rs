@@ -113,7 +113,8 @@ pub fn alive(view: &View, id: &str) -> bool {
 
 /// The pane's waiting tool-permission requests as the run service holds them (C# `toolPermissions`).
 pub fn requests(host: &Host, id: &str) -> Vec<ToolPermissionRequest> {
-    host.runs().map(|r| r.service.pending_permissions(id)).unwrap_or_default()
+    // A request the pane's style is answering by itself never shows as waiting (styles.rs, W9-D).
+    host.runs().map(|r| r.service.pending_permissions(id).into_iter().filter(crate::styles::shows).collect()).unwrap_or_default()
 }
 
 /// What the window knows of the pane that the composer reads (C# `owner.*` members); the later stages' stay at rest. A Claude pane
@@ -161,7 +162,9 @@ pub fn composer_state(host: &Host, view: &mut View, id: &str) -> Option<Composer
     let mut window = window_rules(host, &view.snapshot, &pane, requests(host, id).iter().filter(|r| r.state == "pending").count());
     // The style row and the guide panel (styles.rs, W9-D: C# `RefreshStyles`, `RenderGuidedStyle`).
     (window.style, window.guided) = crate::styles::window(host, view, &pane);
+    let launches = crate::styles::launches_in_plan(&view.snapshot, &pane);
     let ui = view.panes.get_mut(id)?;
+    ui.view.launches_in_plan_mode = launches;
     ui.forget_unqueued();
     ui.view.queue = ui.queue.items().to_vec();
     let inputs = ComposerInputs {

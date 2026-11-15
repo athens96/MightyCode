@@ -19,6 +19,12 @@ pub trait TrustAccess: Send + Sync {
     fn private(&self, path: &Path, directory: bool) -> bool;
     /// Makes it this user's alone (the folder is created first by the store).
     fn restrict(&self, path: &Path, directory: bool) -> std::io::Result<()>;
+    /// `write.lock` opened (made when missing) and held exclusively until the answer is dropped, as C#'s `FileShare.None` holds it;
+    /// an error when another holds it. The default opens it without excluding anyone (the OS's own exclusion is the host's).
+    fn lock(&self, path: &Path) -> std::io::Result<Box<dyn std::any::Any + Send>> {
+        let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)?;
+        Ok(Box::new(file))
+    }
 }
 
 /// Refuses a link or junction (C#'s reparse-point check); writes no access list. The tests', and the fallback where the OS gives none.
@@ -226,13 +232,8 @@ impl StyleTrustStore {
         let io = |e: std::io::Error| TrustError(e.to_string());
         std::fs::create_dir_all(&self.directory).map_err(io)?;
         self.access.restrict(&self.directory, true).map_err(io)?;
-        let _exclusive = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(self.directory.join("write.lock"))
-            .map_err(io)?;
+        // Held for the whole decision, as C#'s `FileShare.None` holds it: another process's decision fails while this one runs.
+        let _exclusive = self.access.lock(&self.directory.join("write.lock")).map_err(io)?;
         let mut records = self.load()?;
         if state == "approved" && records.iter().any(|r| same_place(r, style) && r.state == "revoked") {
             return Err(TrustError(self.locale.get("settings.styles.unblockButton")));

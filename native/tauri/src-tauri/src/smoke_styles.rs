@@ -1,6 +1,7 @@
 //! The smoke's styles step (Rust-only; plan W9-D): the bundled styles registered (read, never written: a smoke saves no style file and
 //! no approval), the approval card's sections, the bundled Ouroboros style chosen on a Claude pane in the Mighty view, its guide panel
-//! drawn, `guidedAction{what:'action'}` sending the style's own command, a rescan, and the pane put back as it was. Owner: W9-D.
+//! drawn, `guidedAction{what:'action'}` sending the style's own command, a phone send on the pane in `claude-plan` launching Claude in
+//! plan mode, a rescan, and the pane put back as it was. Owner: W9-D.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,7 +11,8 @@ use serde_json::{Map, Value, json};
 
 use crate::host::Host;
 
-const KEYS: [&str; 7] = ["registered", "approvalCard", "styleChosen", "guidedPanel", "guidedAction", "rescanned", "restored"];
+const KEYS: [&str; 8] =
+    ["registered", "approvalCard", "styleChosen", "guidedPanel", "guidedAction", "phonePlanMode", "rescanned", "restored"];
 
 /// Starts the step after the settings step (smoke.rs `Stage::Styles`): true when it started; it reports once through `Smoke::probed`.
 pub fn start(host: &Arc<Host>) -> bool {
@@ -138,6 +140,10 @@ async fn run(host: &Arc<Host>, report: &mut Map<String, Value>) -> Result<(), St
     }
     let settled = until(|| host.view().snapshot.session(&id).is_none_or(|p| p.status() != "running"), 30).await;
     report.insert("runSettled".into(), json!(settled));
+    // H1: a phone send on a pane in the plan-first style launches Claude in plan mode (C# MobileSubmit's PrepareStyleRunRequest); the
+    // stand-in CLI writes the arguments it was started with beside its record.
+    let phone_plan = if stand_in { phone_plan_mode(host, &id, report).await } else { true };
+    report.insert("phonePlanMode".into(), json!(phone_plan));
     crate::styles::guided_action(host, &id, "recheck", None).await?;
     let rescanned = until(|| crate::styles::loaded(&id).0 && crate::styles::loaded(&id).2 >= 2, 15).await;
     report.insert("rescanned".into(), json!(rescanned));
@@ -161,14 +167,56 @@ async fn run(host: &Arc<Host>, report: &mut Map<String, Value>) -> Result<(), St
     Ok(())
 }
 
+/// The pane in `claude-plan`, then a phone send: true when the stand-in CLI was started with `--permission-mode plan`.
+async fn phone_plan_mode(host: &Arc<Host>, id: &str, report: &mut Map<String, Value>) -> bool {
+    let Some(record) = host.smoke.as_ref().and_then(|s| s.fake_record().cloned()) else { return false };
+    let args_file = std::path::PathBuf::from(format!("{}.args", record.display()));
+    let before = std::fs::read_to_string(&args_file).unwrap_or_default();
+    {
+        let mut view = host.view();
+        let changed = crate::composer::change(&mut view, id, |p| RunSession {
+            mighty_style: Some("claude-plan".into()),
+            mighty_style_hash: None,
+            mighty_style_since: None,
+            ..p.clone()
+        });
+        if changed.is_err() {
+            return false;
+        }
+    }
+    crate::styles::reload(host, id, false);
+    if !until(|| crate::styles::loaded(id).1.as_deref() == Some("claude-plan"), 15).await {
+        report.insert("phonePlanError".into(), json!("claude-plan did not load"));
+        return false;
+    }
+    let reply = crate::phone::route(host, "POST", &format!("/m1/sessions/{id}/submit"), Some(json!({"text": "plan the smoke"}))).await;
+    report.insert("phonePlanReply".into(), json!(reply.status));
+    let launched = until(
+        || {
+            let now = std::fs::read_to_string(&args_file).unwrap_or_default();
+            now != before
+                && serde_json::from_str::<Vec<String>>(&now)
+                    .is_ok_and(|args| args.windows(2).any(|pair| pair[0] == "--permission-mode" && pair[1] == "plan"))
+        },
+        15,
+    )
+    .await;
+    if let Some(runs) = host.runs() {
+        let _ = runs.service.stop(id).await;
+    }
+    until(|| host.view().snapshot.session(id).is_none_or(|p| p.status() != "running"), 30).await;
+    launched
+}
+
 /// The step's checks from its report.
 pub fn checks(report: &Value) -> Vec<(&'static str, bool)> {
-    const NAMES: [&str; 7] = [
+    const NAMES: [&str; 8] = [
         "stylesRegistered",
         "stylesApprovalCard",
         "stylesChosen",
         "stylesGuidedPanel",
         "stylesGuidedAction",
+        "stylesPhonePlanMode",
         "stylesRescanned",
         "stylesRestored",
     ];
