@@ -170,7 +170,7 @@ impl Layout {
 }
 
 fn sha256_of(path: &Path) -> String {
-    mighty_composer::images::sha256(&std::fs::read(path).unwrap())
+    mighty_updates::app_update::service::sha256(path).unwrap()
 }
 
 /// Starts `helper` as the 0.4.x app starts it (MainWindow.AppUpdate.cs:65-84): its arguments, an environment of `SystemRoot=C:\Windows`

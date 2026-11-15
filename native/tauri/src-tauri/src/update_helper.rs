@@ -9,21 +9,21 @@
 //! `install.log` line beside the package, the mutex released, exit 0 when replaced or skipped, else 1; all inside `catch_unwind`, the
 //! sentences in the OS's language, no Tauri, no profile, no other log. Never elevated, never a window.
 
-use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use mighty_core::locale::Locale;
 use mighty_platform::{DetachedEnvironment, DetachedRequest, ProcessHost, UpdateInstaller};
 use mighty_updates::app_update::plan::InstallPlan;
 use mighty_updates::app_update::replacement::{self, ReplacementResult, Seams};
-use mighty_updates::app_update::{guard, log, plan};
+use mighty_updates::app_update::{guard, installer_entry, log, plan};
 
 /// The helper's own version, the new version's (C# `typeof(Program).Assembly.GetName().Version.ToString(3)`): what the uninstall
 /// entry's `DisplayVersion` becomes.
-pub const VERSION: &str =
-    concat!(env!("CARGO_PKG_VERSION_MAJOR"), ".", env!("CARGO_PKG_VERSION_MINOR"), ".", env!("CARGO_PKG_VERSION_PATCH"));
+pub fn version() -> String {
+    installer_entry::display_version(env!("CARGO_PKG_VERSION_MAJOR"), env!("CARGO_PKG_VERSION_MINOR"), env!("CARGO_PKG_VERSION_PATCH"))
+}
 
 /// The helper when `args` are its arguments, with the exit code; None otherwise (the arguments then go to the parser, which refuses
 /// `--update-helper`, as C#'s does).
@@ -56,25 +56,20 @@ pub fn run(
                     let result = replacement::run(plan, seams, locale);
                     if result.replaced {
                         // C# `InstallerRegistration.SyncDisplayVersion` never throws: a refusal leaves the entry as it was.
-                        let _ = installer.sync_display_version(&plan.install_directory, VERSION);
+                        let _ = installer.sync_display_version(&plan.install_directory, &version());
                     }
                     result
                 }
             }))
-            .unwrap_or_else(|panic| unexpected("Panic", &panic_text(&*panic)))
+            .unwrap_or_else(|panic| log::unexpected("Panic", &panic_text(&*panic)))
         }
         // C#'s `new Mutex` would have thrown out of the helper; here the reason is logged like any other unexpected one.
-        Err(error) => unexpected("MutexError", &error.to_string()),
+        Err(error) => log::unexpected("MutexError", &error.to_string()),
     };
     // Appended, so a second helper's line and the first one's outcome are both kept; the outcome never depends on the log.
-    let _ = append(&log_path(plan), &log::line(&result, Some(plan), now()));
+    let _ = log::append(&log::path(plan, &std::env::temp_dir()), &log::line(&result, Some(plan), now()));
     drop(mutex);
     exit_code(&result)
-}
-
-/// C#'s `catch (Exception error)`: `"<TypeName>: <message>"`, nothing replaced or rolled back.
-fn unexpected(kind: &str, message: &str) -> ReplacementResult {
-    ReplacementResult { error: Some(format!("{kind}: {message}")), ..ReplacementResult::default() }
 }
 
 fn panic_text(panic: &(dyn std::any::Any + Send)) -> String {
@@ -88,19 +83,6 @@ fn panic_text(panic: &(dyn std::any::Any + Send)) -> String {
 /// `0` when replaced or skipped, else `1` (C# `result.Replaced || result.Skipped ? 0 : 1`).
 pub fn exit_code(result: &ReplacementResult) -> i32 {
     if result.replaced || result.skipped { 0 } else { 1 }
-}
-
-/// `<folder of --package>\install.log`, or the temporary folder's when the package path has none (C#
-/// `Path.Combine(Path.GetDirectoryName(plan.PackagePath) ?? Path.GetTempPath(), "install.log")`).
-pub fn log_path(plan: &InstallPlan) -> PathBuf {
-    match plan.package_path.parent() {
-        Some(folder) => folder.join(log::INSTALL_LOG),
-        None => std::env::temp_dir().join(log::INSTALL_LOG),
-    }
-}
-
-fn append(path: &Path, line: &str) -> std::io::Result<()> {
-    std::fs::OpenOptions::new().create(true).append(true).open(path)?.write_all(line.as_bytes())
 }
 
 /// The replacement's machine seams (C# `RunUpdateHelper`'s `waitForExit`, `startApp` and `runningAgain`): the platform's process wait,
@@ -169,6 +151,8 @@ mod tests {
 
     use mighty_platform::fake::{FakeProcessHost, FakeUpdateInstaller};
 
+    use std::path::PathBuf;
+
     use super::*;
 
     fn temp(name: &str) -> PathBuf {
@@ -200,9 +184,10 @@ mod tests {
     /// The helper's version is the exe's own `major.minor.patch` (C# `Version.ToString(3)`), what `DisplayVersion` becomes.
     #[test]
     fn the_version_is_three_numbers() {
-        assert_eq!(VERSION.split('.').count(), 3);
-        assert!(VERSION.split('.').all(|part| part.parse::<u32>().is_ok()), "{VERSION}");
-        assert!(env!("CARGO_PKG_VERSION").starts_with(VERSION));
+        let version = version();
+        assert_eq!(version.split('.').count(), 3);
+        assert!(version.split('.').all(|part| part.parse::<u32>().is_ok()), "{version}");
+        assert!(env!("CARGO_PKG_VERSION").starts_with(&version));
     }
 
     /// C#'s exit code and log place: 0 when replaced or skipped, else 1; `install.log` beside the package, the temporary folder's when
@@ -215,9 +200,9 @@ mod tests {
         assert_eq!(exit_code(&ReplacementResult::default()), 1);
         let root = temp("log");
         let plan = plan_in(&root, true);
-        assert_eq!(log_path(&plan), root.join("updates").join("0.5.0").join("install.log"));
+        assert_eq!(log::path(&plan, &std::env::temp_dir()), root.join("updates").join("0.5.0").join("install.log"));
         let rootless = InstallPlan { package_path: PathBuf::from(std::path::MAIN_SEPARATOR_STR), ..plan.clone() };
-        assert_eq!(log_path(&rootless), std::env::temp_dir().join("install.log"));
+        assert_eq!(log::path(&rootless, &std::env::temp_dir()), std::env::temp_dir().join("install.log"));
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -228,7 +213,7 @@ mod tests {
         let root = temp("second");
         let plan = plan_in(&root, true);
         std::fs::create_dir_all(plan.package_path.parent().unwrap()).unwrap();
-        std::fs::write(log_path(&plan), "earlier line\n").unwrap();
+        std::fs::write(log::path(&plan, &std::env::temp_dir()), "earlier line\n").unwrap();
         let installer = FakeUpdateInstaller::default();
         let processes = FakeProcessHost::default();
         let first = installer.helper_mutex(&guard::mutex_name(&plan.install_directory)).unwrap().expect("the first helper's");
@@ -238,7 +223,7 @@ mod tests {
         let code = run(&plan, &installer, &seams, &locale, &|| chrono::Utc::now());
         assert_eq!(code, 0, "skipped is a success");
         assert!(processes.detached().is_empty() && installer.synced().is_empty(), "nothing started, nothing synced");
-        let log = std::fs::read_to_string(log_path(&plan)).unwrap();
+        let log = std::fs::read_to_string(log::path(&plan, &std::env::temp_dir())).unwrap();
         assert!(log.starts_with("earlier line\n"), "appended: {log}");
         assert!(log.contains("skipped=True") && log.contains(guard::ALREADY_RUNNING), "{log}");
         drop(first);
@@ -347,7 +332,7 @@ mod tests {
         let installer = FakeUpdateInstaller::default();
         let code = run(&plan, &installer, &Panicking, &Locale::new("en"), &|| chrono::Utc::now());
         assert_eq!(code, 1);
-        let log = std::fs::read_to_string(log_path(&plan)).unwrap();
+        let log = std::fs::read_to_string(log::path(&plan, &std::env::temp_dir())).unwrap();
         assert!(log.contains("replaced=False rolledBack=False") && log.contains("Panic: the wait broke"), "{log}");
         assert!(installer.held().is_empty(), "the mutex is released after a panic too");
         std::fs::remove_dir_all(&root).ok();
