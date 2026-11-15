@@ -1,13 +1,17 @@
-﻿# Runs the Windows app's timing scenario (MainWindow.PerfScenario.cs) in fresh profiles and keeps each run's
-# perf-result.json and perf.log under release/perf/<timestamp>-page-<n>/. Windows PowerShell 5.1.
+﻿# Runs the Windows app's timing scenario (MainWindow.PerfScenario.cs; the Rust + Tauri app's perf.rs with -Engine tauri) in fresh
+# profiles and keeps each run's perf-result.json and perf.log under release/perf/<timestamp>-page-<n>/ (…-tauri-page-<n>/ for the
+# Tauri app). Windows PowerShell 5.1.
 # The run measures the web shell: the page drives every op, and each phase adds pageLongTasks.
 # The app opens its window for the run: leave the PC alone while it runs, as input and other programs change the numbers.
 # sendBlockBasic / sendBlockMighty time Enter in the composer until the page draws the sent request (natural submit B1);
 # their target is one frame, 50 ms or less, and the table's Target column says whether the run's p95 met it.
+# -Engine tauri runs the Rust + Tauri app's MightyCode.exe (native/tauri's build) with the same switches; its perf-result.json has the
+# same keys (its host has no WinUI renders or garbage collector: fullRenders, the in-place counts and gc read 0).
 param(
     [Parameter(Mandatory = $true)][string]$Executable,
     [string]$State,
-    [int]$Runs = 1
+    [int]$Runs = 1,
+    [ValidateSet('csharp', 'tauri')][string]$Engine = 'csharp'
 )
 $ErrorActionPreference = 'Stop'
 $Executable = (Resolve-Path $Executable).Path
@@ -16,7 +20,7 @@ if ($State) {
     if (-not (Test-Path (Join-Path $State 'workspace-state.json'))) { throw "No workspace-state.json in $State" }
 }
 $repo = Split-Path -Parent $PSScriptRoot
-$mode = 'page'
+$mode = if ($Engine -eq 'tauri') { 'tauri-page' } else { 'page' }
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $rows = @()
 for ($n = 1; $n -le $Runs; $n++) {

@@ -385,6 +385,12 @@ impl RunService {
     }
 
     /// C# `closing`: the service began to close ([`RunService::dispose`]).
+    /// C#'s private `Receive` as the perf scenario reaches it by reflection (MainWindow.PerfScenario.cs `PerfReceive`): one run event
+    /// applied through the service's own path, as a run's reader hands it in. Only the timing scenario calls it (src-tauri perf.rs, W9-H).
+    pub fn receive(&self, value: RunEvent) {
+        self.shared.receive(value);
+    }
+
     pub fn closing(&self) -> bool {
         lock(&self.shared.state).closing
     }
