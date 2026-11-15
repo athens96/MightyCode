@@ -83,8 +83,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'cargo clippy failed' }
       - name: Rust — tests
         working-directory: native/tauri
+        # Every test target runs even after one fails, so one red run names every failure (a failing target used to hide the
+        # helper e2e of src-tauri that comes after it).
         run: |
-          cargo test --workspace
+          cargo test --workspace --no-fail-fast
           if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
       - name: Build the Tauri app (debug)
         working-directory: native/tauri
