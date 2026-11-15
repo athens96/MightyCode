@@ -1,0 +1,392 @@
+{
+  "about": "Packages and the architecture asked; 'csharp' is what C#'s AppUpdateService.Stage answered, each staged beside a copy in a fresh temporary folder (tools/parity/Update.cs stage). Read on Windows.",
+  "cases": [
+    {
+      "name": "ok-root",
+      "zip": "ok-root.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": ".",
+        "files": [
+          "MightyCode.exe",
+          "claude-mods/a.txt",
+          "pets/p.png"
+        ]
+      }
+    },
+    {
+      "name": "ok-nested",
+      "zip": "ok-nested.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": "app",
+        "files": [
+          "app/Assets/i.png",
+          "app/MightyCode.exe"
+        ]
+      }
+    },
+    {
+      "name": "ok-arm64",
+      "zip": "ok-arm64.zip",
+      "arch": "arm64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": ".",
+        "files": [
+          "MightyCode.exe"
+        ]
+      }
+    },
+    {
+      "name": "ok-arch-upper",
+      "zip": "ok-arch-upper.zip",
+      "arch": "X64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": ".",
+        "files": [
+          "MightyCode.exe"
+        ]
+      }
+    },
+    {
+      "name": "wrong-arch",
+      "zip": "wrong-arch.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.architecture",
+        "message": "패키지의 아키텍처가 x64와 다릅니다 (machine=0xAA64)."
+      }
+    },
+    {
+      "name": "wrong-arch-arm64",
+      "zip": "wrong-arch-arm64.zip",
+      "arch": "arm64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.architecture",
+        "message": "패키지의 아키텍처가 arm64와 다릅니다 (machine=0x8664)."
+      }
+    },
+    {
+      "name": "unknown-arch",
+      "zip": "unknown-arch.zip",
+      "arch": "ia32",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.architecture",
+        "message": "패키지의 아키텍처가 ia32와 다릅니다 (machine=0x8664)."
+      }
+    },
+    {
+      "name": "dotdot",
+      "zip": "dotdot.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.entryParent",
+        "message": "패키지에 상위 폴더로 나가는 항목이 있어 설치하지 않습니다."
+      }
+    },
+    {
+      "name": "dotdot-inner",
+      "zip": "dotdot-inner.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.entryParent",
+        "message": "패키지에 상위 폴더로 나가는 항목이 있어 설치하지 않습니다."
+      }
+    },
+    {
+      "name": "dotdot-backslash",
+      "zip": "dotdot-backslash.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.entryParent",
+        "message": "패키지에 상위 폴더로 나가는 항목이 있어 설치하지 않습니다."
+      }
+    },
+    {
+      "name": "absolute-slash",
+      "zip": "absolute-slash.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.entryAbsolute",
+        "message": "패키지에 절대 경로 항목이 있어 설치하지 않습니다."
+      }
+    },
+    {
+      "name": "absolute-backslash",
+      "zip": "absolute-backslash.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.entryAbsolute",
+        "message": "패키지에 절대 경로 항목이 있어 설치하지 않습니다."
+      }
+    },
+    {
+      "name": "drive-letter",
+      "zip": "drive-letter.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.entryAbsolute",
+        "message": "패키지에 절대 경로 항목이 있어 설치하지 않습니다."
+      }
+    },
+    {
+      "name": "link-unix",
+      "zip": "link-unix.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.entryLink",
+        "message": "패키지에 링크 항목이 있어 설치하지 않습니다."
+      }
+    },
+    {
+      "name": "link-dos-host",
+      "zip": "link-dos-host.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.entryLink",
+        "message": "패키지에 링크 항목이 있어 설치하지 않습니다."
+      }
+    },
+    {
+      "name": "unix-regular-mode",
+      "zip": "unix-regular-mode.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": ".",
+        "files": [
+          "MightyCode.exe",
+          "dir/f.txt"
+        ]
+      }
+    },
+    {
+      "name": "two-exes",
+      "zip": "two-exes.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.executableCount",
+        "message": "패키지 안에 MightyCode.exe가 하나 있어야 합니다 (2개)."
+      }
+    },
+    {
+      "name": "two-exes-case",
+      "zip": "two-exes-case.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.executableCount",
+        "message": "패키지 안에 MightyCode.exe가 하나 있어야 합니다 (2개)."
+      }
+    },
+    {
+      "name": "exe-lower-case",
+      "zip": "exe-lower-case.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": ".",
+        "files": [
+          "mightycode.exe"
+        ]
+      }
+    },
+    {
+      "name": "exe-two-down",
+      "zip": "exe-two-down.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.executableLocation",
+        "message": "MightyCode.exe가 패키지의 예상 위치에 없습니다."
+      }
+    },
+    {
+      "name": "exe-root-and-nested-other",
+      "zip": "exe-root-and-nested-other.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": "app",
+        "files": [
+          "app/MightyCode.exe",
+          "other/readme.txt"
+        ]
+      }
+    },
+    {
+      "name": "legacy-only",
+      "zip": "legacy-only.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.executableCount",
+        "message": "패키지 안에 MightyCode.exe가 하나 있어야 합니다 (0개)."
+      }
+    },
+    {
+      "name": "legacy-and-new",
+      "zip": "legacy-and-new.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": ".",
+        "files": [
+          "MightyClaude.exe",
+          "MightyCode.exe"
+        ]
+      }
+    },
+    {
+      "name": "no-exe",
+      "zip": "no-exe.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.executableCount",
+        "message": "패키지 안에 MightyCode.exe가 하나 있어야 합니다 (0개)."
+      }
+    },
+    {
+      "name": "empty",
+      "zip": "empty.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.executableCount",
+        "message": "패키지 안에 MightyCode.exe가 하나 있어야 합니다 (0개)."
+      }
+    },
+    {
+      "name": "dir-entries",
+      "zip": "dir-entries.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": "app",
+        "files": [
+          "app/MightyCode.exe"
+        ]
+      }
+    },
+    {
+      "name": "dot-segment",
+      "zip": "dot-segment.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": ".",
+        "files": [
+          "MightyCode.exe"
+        ]
+      }
+    },
+    {
+      "name": "duplicate-entry",
+      "zip": "duplicate-entry.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": ".",
+        "files": [
+          "MightyCode.exe"
+        ]
+      }
+    },
+    {
+      "name": "damaged-short",
+      "zip": "damaged-short.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.executableDamaged",
+        "message": "패키지의 실행 파일이 손상되었습니다."
+      }
+    },
+    {
+      "name": "damaged-offset",
+      "zip": "damaged-offset.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.executableDamaged",
+        "message": "패키지의 실행 파일이 손상되었습니다."
+      }
+    },
+    {
+      "name": "damaged-negative-offset",
+      "zip": "damaged-negative-offset.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "key",
+        "key": "appUpdate.error.executableDamaged",
+        "message": "패키지의 실행 파일이 손상되었습니다."
+      }
+    },
+    {
+      "name": "offset-at-edge",
+      "zip": "offset-at-edge.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": ".",
+        "files": [
+          "MightyCode.exe"
+        ]
+      }
+    },
+    {
+      "name": "utf8-name-flagged",
+      "zip": "utf8-name-flagged.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": "앱",
+        "files": [
+          "앱/MightyCode.exe"
+        ]
+      }
+    },
+    {
+      "name": "utf8-name-unflagged",
+      "zip": "utf8-name-unflagged.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": "앱",
+        "files": [
+          "앱/MightyCode.exe"
+        ]
+      }
+    },
+    {
+      "name": "nested-exe-dir-named-exe",
+      "zip": "nested-exe-dir-named-exe.zip",
+      "arch": "x64",
+      "csharp": {
+        "verdict": "ok",
+        "folder": "app",
+        "files": [
+          "MightyCode.exe/readme.txt",
+          "app/MightyCode.exe"
+        ]
+      }
+    }
+  ]
+}

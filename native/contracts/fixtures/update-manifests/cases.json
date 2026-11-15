@@ -1,0 +1,1199 @@
+{
+  "about": "Envelopes signed with the fixture key (seed i*7+3), each read by C#'s AppUpdateManifest.Parse with the key named in 'with'; 'csharp' is what C# answered (tools/parity/Update.cs manifest). Where C# fails with a JsonException (whose text names a line and a byte), 'rust' is the locale key the port answers instead.",
+  "fixture": "dVxMuSVsp83ErP3Gz+7ahJAX5bn5UU6ZGRvWfgsNQnY=",
+  "other": "ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ=",
+  "cases": [
+    {
+      "name": "valid",
+      "file": "valid.json",
+      "with": "fixture"
+    },
+    {
+      "name": "valid-aliases",
+      "file": "valid-aliases.json",
+      "with": "fixture"
+    },
+    {
+      "name": "valid-latest-version",
+      "file": "valid-latest-version.json",
+      "with": "fixture"
+    },
+    {
+      "name": "other-key",
+      "file": "other-key.json",
+      "with": "other"
+    },
+    {
+      "name": "signed-by-other-seed",
+      "file": "signed-by-other-seed.json",
+      "with": "fixture"
+    },
+    {
+      "name": "wrong-format",
+      "file": "wrong-format.json",
+      "with": "fixture"
+    },
+    {
+      "name": "format-missing",
+      "file": "format-missing.json",
+      "with": "fixture"
+    },
+    {
+      "name": "format-null",
+      "file": "format-null.json",
+      "with": "fixture"
+    },
+    {
+      "name": "format-number",
+      "file": "format-number.json",
+      "with": "fixture"
+    },
+    {
+      "name": "unsigned",
+      "file": "unsigned.json",
+      "with": "fixture"
+    },
+    {
+      "name": "no-signature",
+      "file": "no-signature.json",
+      "with": "fixture"
+    },
+    {
+      "name": "no-payload",
+      "file": "no-payload.json",
+      "with": "fixture"
+    },
+    {
+      "name": "payload-null",
+      "file": "payload-null.json",
+      "with": "fixture"
+    },
+    {
+      "name": "payload-number",
+      "file": "payload-number.json",
+      "with": "fixture"
+    },
+    {
+      "name": "payload-object",
+      "file": "payload-object.json",
+      "with": "fixture"
+    },
+    {
+      "name": "signature-null",
+      "file": "signature-null.json",
+      "with": "fixture"
+    },
+    {
+      "name": "signature-number",
+      "file": "signature-number.json",
+      "with": "fixture"
+    },
+    {
+      "name": "signature-array",
+      "file": "signature-array.json",
+      "with": "fixture"
+    },
+    {
+      "name": "payload-not-base64",
+      "file": "payload-not-base64.json",
+      "with": "fixture"
+    },
+    {
+      "name": "signature-not-base64",
+      "file": "signature-not-base64.json",
+      "with": "fixture"
+    },
+    {
+      "name": "signature-bad-padding",
+      "file": "signature-bad-padding.json",
+      "with": "fixture"
+    },
+    {
+      "name": "payload-unpadded",
+      "file": "payload-unpadded.json",
+      "with": "fixture"
+    },
+    {
+      "name": "base64-wrapped",
+      "file": "base64-wrapped.json",
+      "with": "fixture"
+    },
+    {
+      "name": "base64-form-feed",
+      "file": "base64-form-feed.json",
+      "with": "fixture"
+    },
+    {
+      "name": "base64-vertical-tab",
+      "file": "base64-vertical-tab.json",
+      "with": "fixture"
+    },
+    {
+      "name": "signature-trailing-bits",
+      "file": "signature-trailing-bits.json",
+      "with": "fixture"
+    },
+    {
+      "name": "payload-trailing-bits",
+      "file": "payload-trailing-bits.json",
+      "with": "fixture"
+    },
+    {
+      "name": "tampered",
+      "file": "tampered.json",
+      "with": "fixture"
+    },
+    {
+      "name": "not-object",
+      "file": "not-object.json",
+      "with": "fixture"
+    },
+    {
+      "name": "not-json",
+      "file": "not-json.json",
+      "with": "fixture",
+      "rust": "appUpdate.error.manifestFileNotJSON"
+    },
+    {
+      "name": "empty-file",
+      "file": "empty-file.json",
+      "with": "fixture",
+      "rust": "appUpdate.error.manifestFileNotJSON"
+    },
+    {
+      "name": "trailing-comma",
+      "file": "trailing-comma.json",
+      "with": "fixture",
+      "rust": "appUpdate.error.manifestFileNotJSON"
+    },
+    {
+      "name": "comment",
+      "file": "comment.json",
+      "with": "fixture",
+      "rust": "appUpdate.error.manifestFileNotJSON"
+    },
+    {
+      "name": "bom",
+      "file": "bom.json",
+      "with": "fixture",
+      "rust": "appUpdate.error.manifestFileNotJSON"
+    },
+    {
+      "name": "trailing-garbage",
+      "file": "trailing-garbage.json",
+      "with": "fixture",
+      "rust": "appUpdate.error.manifestFileNotJSON"
+    },
+    {
+      "name": "too-large",
+      "file": "too-large.json",
+      "with": "fixture"
+    },
+    {
+      "name": "exactly-256-kib",
+      "file": "exactly-256-kib.json",
+      "with": "fixture"
+    },
+    {
+      "name": "deep-64",
+      "file": "deep-64.json",
+      "with": "fixture"
+    },
+    {
+      "name": "deep-65",
+      "file": "deep-65.json",
+      "with": "fixture",
+      "rust": "appUpdate.error.manifestFileNotJSON"
+    },
+    {
+      "name": "duplicate-format",
+      "file": "duplicate-format.json",
+      "with": "fixture"
+    },
+    {
+      "name": "duplicate-format-reversed",
+      "file": "duplicate-format-reversed.json",
+      "with": "fixture"
+    },
+    {
+      "name": "duplicate-payload-keys",
+      "file": "duplicate-payload-keys.json",
+      "with": "fixture"
+    },
+    {
+      "name": "payload-not-object",
+      "file": "payload-not-object.json",
+      "with": "fixture"
+    },
+    {
+      "name": "payload-not-json",
+      "file": "payload-not-json.json",
+      "with": "fixture",
+      "rust": "appUpdate.error.manifestNotJSON"
+    },
+    {
+      "name": "payload-empty",
+      "file": "payload-empty.json",
+      "with": "fixture",
+      "rust": "appUpdate.error.manifestNotJSON"
+    },
+    {
+      "name": "payload-blank-base64",
+      "file": "payload-blank-base64.json",
+      "with": "fixture",
+      "rust": "appUpdate.error.manifestNotJSON"
+    },
+    {
+      "name": "payload-comment",
+      "file": "payload-comment.json",
+      "with": "fixture",
+      "rust": "appUpdate.error.manifestNotJSON"
+    },
+    {
+      "name": "payload-deep-65",
+      "file": "payload-deep-65.json",
+      "with": "fixture",
+      "rust": "appUpdate.error.manifestNotJSON"
+    },
+    {
+      "name": "payload-bom",
+      "file": "payload-bom.json",
+      "with": "fixture",
+      "rust": "appUpdate.error.manifestNotJSON"
+    },
+    {
+      "name": "no-version",
+      "file": "no-version.json",
+      "with": "fixture"
+    },
+    {
+      "name": "bad-version-string",
+      "file": "bad-version-string.json",
+      "with": "fixture"
+    },
+    {
+      "name": "version-number-latest-string",
+      "file": "version-number-latest-string.json",
+      "with": "fixture"
+    },
+    {
+      "name": "version-too-long",
+      "file": "version-too-long.json",
+      "with": "fixture"
+    },
+    {
+      "name": "version-five-parts",
+      "file": "version-five-parts.json",
+      "with": "fixture"
+    },
+    {
+      "name": "version-padded",
+      "file": "version-padded.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-no-sha",
+      "file": "asset-no-sha.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-empty-sha",
+      "file": "asset-empty-sha.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-short-sha",
+      "file": "asset-short-sha.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-non-hex-sha",
+      "file": "asset-non-hex-sha.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-sha-number",
+      "file": "asset-sha-number.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-no-size",
+      "file": "asset-no-size.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-zero-size",
+      "file": "asset-zero-size.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-negative-size",
+      "file": "asset-negative-size.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-float-size",
+      "file": "asset-float-size.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-exponent-size",
+      "file": "asset-exponent-size.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-huge-size",
+      "file": "asset-huge-size.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-size-string",
+      "file": "asset-size-string.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-size-null",
+      "file": "asset-size-null.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-size-string-no-sha",
+      "file": "asset-size-string-no-sha.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-http",
+      "file": "asset-http.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-no-host",
+      "file": "asset-no-host.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-url-number-download-string",
+      "file": "asset-url-number-download-string.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-url-http-download-https",
+      "file": "asset-url-http-download-https.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-not-object",
+      "file": "asset-not-object.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-unknown-architecture",
+      "file": "asset-unknown-architecture.json",
+      "with": "fixture"
+    },
+    {
+      "name": "asset-architecture-case",
+      "file": "asset-architecture-case.json",
+      "with": "fixture"
+    },
+    {
+      "name": "windows-not-object",
+      "file": "windows-not-object.json",
+      "with": "fixture"
+    },
+    {
+      "name": "build-string",
+      "file": "build-string.json",
+      "with": "fixture"
+    },
+    {
+      "name": "build-negative-number-fallback",
+      "file": "build-negative-number-fallback.json",
+      "with": "fixture"
+    },
+    {
+      "name": "build-float",
+      "file": "build-float.json",
+      "with": "fixture"
+    },
+    {
+      "name": "build-negative-zero",
+      "file": "build-negative-zero.json",
+      "with": "fixture"
+    },
+    {
+      "name": "build-too-big",
+      "file": "build-too-big.json",
+      "with": "fixture"
+    },
+    {
+      "name": "build-valid-number-string-fallback-ignored",
+      "file": "build-valid-number-string-fallback-ignored.json",
+      "with": "fixture"
+    },
+    {
+      "name": "build-number-string",
+      "file": "build-number-string.json",
+      "with": "fixture"
+    },
+    {
+      "name": "notes-number-release-notes",
+      "file": "notes-number-release-notes.json",
+      "with": "fixture"
+    },
+    {
+      "name": "unknown-fields",
+      "file": "unknown-fields.json",
+      "with": "fixture"
+    },
+    {
+      "name": "escaped-strings",
+      "file": "escaped-strings.json",
+      "with": "fixture"
+    }
+  ],
+  "csharp": [
+    {
+      "name": "valid",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": 7,
+      "notes": "픽스처 릴리스 노트",
+      "publishedAt": "2026-11-15T00:00:00Z",
+      "windows": {
+        "arm64": {
+          "url": "https://updates.example/9.9.9/MightyCode-windows-arm64.zip",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "size": 4096
+        },
+        "x64": {
+          "url": "https://updates.example/9.9.9/MightyCode-windows-x64.zip",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 4096
+        }
+      }
+    },
+    {
+      "name": "valid-aliases",
+      "verdict": "ok",
+      "version": "10.1.2-rc.1+build.5",
+      "build": 12,
+      "notes": "notes",
+      "publishedAt": "2026-11-15",
+      "windows": {
+        "arm64": {
+          "url": "https://updates.example/arm64.zip",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "size": 11
+        },
+        "x64": {
+          "url": "https://updates.example/x64.zip",
+          "sha256": "abababababababababababababababababababababababababababababababab",
+          "size": 10
+        }
+      }
+    },
+    {
+      "name": "valid-latest-version",
+      "verdict": "ok",
+      "version": "1.2",
+      "build": null,
+      "notes": "c",
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "other-key",
+      "verdict": "key",
+      "key": "appUpdate.error.signatureMismatch",
+      "message": "업데이트 정보의 서명이 이 앱의 공개 키와 맞지 않습니다."
+    },
+    {
+      "name": "signed-by-other-seed",
+      "verdict": "key",
+      "key": "appUpdate.error.signatureMismatch",
+      "message": "업데이트 정보의 서명이 이 앱의 공개 키와 맞지 않습니다."
+    },
+    {
+      "name": "wrong-format",
+      "verdict": "key",
+      "key": "appUpdate.error.signatureFormat",
+      "message": "업데이트 정보의 서명 형식을 알 수 없습니다."
+    },
+    {
+      "name": "format-missing",
+      "verdict": "key",
+      "key": "appUpdate.error.signatureFormat",
+      "message": "업데이트 정보의 서명 형식을 알 수 없습니다."
+    },
+    {
+      "name": "format-null",
+      "verdict": "key",
+      "key": "appUpdate.error.signatureFormat",
+      "message": "업데이트 정보의 서명 형식을 알 수 없습니다."
+    },
+    {
+      "name": "format-number",
+      "verdict": "exception",
+      "type": "InvalidOperationException",
+      "message": "The requested operation requires an element of type 'String', but the target element has type 'Number'."
+    },
+    {
+      "name": "unsigned",
+      "verdict": "key",
+      "key": "appUpdate.error.unsigned",
+      "message": "서명되지 않은 업데이트 정보입니다. 이 앱은 서명된 정보만 받습니다."
+    },
+    {
+      "name": "no-signature",
+      "verdict": "key",
+      "key": "appUpdate.error.unsigned",
+      "message": "서명되지 않은 업데이트 정보입니다. 이 앱은 서명된 정보만 받습니다."
+    },
+    {
+      "name": "no-payload",
+      "verdict": "key",
+      "key": "appUpdate.error.unsigned",
+      "message": "서명되지 않은 업데이트 정보입니다. 이 앱은 서명된 정보만 받습니다."
+    },
+    {
+      "name": "payload-null",
+      "verdict": "key",
+      "key": "appUpdate.error.signatureEncoding",
+      "message": "업데이트 정보의 서명 인코딩이 잘못되었습니다."
+    },
+    {
+      "name": "payload-number",
+      "verdict": "exception",
+      "type": "InvalidOperationException",
+      "message": "The requested operation requires an element of type 'String', but the target element has type 'Number'."
+    },
+    {
+      "name": "payload-object",
+      "verdict": "exception",
+      "type": "InvalidOperationException",
+      "message": "The requested operation requires an element of type 'String', but the target element has type 'Object'."
+    },
+    {
+      "name": "signature-null",
+      "verdict": "key",
+      "key": "appUpdate.error.signatureEncoding",
+      "message": "업데이트 정보의 서명 인코딩이 잘못되었습니다."
+    },
+    {
+      "name": "signature-number",
+      "verdict": "exception",
+      "type": "InvalidOperationException",
+      "message": "The requested operation requires an element of type 'String', but the target element has type 'Number'."
+    },
+    {
+      "name": "signature-array",
+      "verdict": "exception",
+      "type": "InvalidOperationException",
+      "message": "The requested operation requires an element of type 'String', but the target element has type 'Array'."
+    },
+    {
+      "name": "payload-not-base64",
+      "verdict": "key",
+      "key": "appUpdate.error.signatureEncoding",
+      "message": "업데이트 정보의 서명 인코딩이 잘못되었습니다."
+    },
+    {
+      "name": "signature-not-base64",
+      "verdict": "exception",
+      "type": "FormatException",
+      "message": "The input is not a valid Base-64 string as it contains a non-base 64 character, more than two padding characters, or an illegal character among the padding characters."
+    },
+    {
+      "name": "signature-bad-padding",
+      "verdict": "exception",
+      "type": "FormatException",
+      "message": "The input is not a valid Base-64 string as it contains a non-base 64 character, more than two padding characters, or an illegal character among the padding characters."
+    },
+    {
+      "name": "payload-unpadded",
+      "verdict": "key",
+      "key": "appUpdate.error.signatureEncoding",
+      "message": "업데이트 정보의 서명 인코딩이 잘못되었습니다."
+    },
+    {
+      "name": "base64-wrapped",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": 7,
+      "notes": "픽스처 릴리스 노트",
+      "publishedAt": "2026-11-15T00:00:00Z",
+      "windows": {
+        "arm64": {
+          "url": "https://updates.example/9.9.9/MightyCode-windows-arm64.zip",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "size": 4096
+        },
+        "x64": {
+          "url": "https://updates.example/9.9.9/MightyCode-windows-x64.zip",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 4096
+        }
+      }
+    },
+    {
+      "name": "base64-form-feed",
+      "verdict": "key",
+      "key": "appUpdate.error.signatureEncoding",
+      "message": "업데이트 정보의 서명 인코딩이 잘못되었습니다."
+    },
+    {
+      "name": "base64-vertical-tab",
+      "verdict": "exception",
+      "type": "FormatException",
+      "message": "The input is not a valid Base-64 string as it contains a non-base 64 character, more than two padding characters, or an illegal character among the padding characters."
+    },
+    {
+      "name": "signature-trailing-bits",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": 7,
+      "notes": "픽스처 릴리스 노트",
+      "publishedAt": "2026-11-15T00:00:00Z",
+      "windows": {
+        "arm64": {
+          "url": "https://updates.example/9.9.9/MightyCode-windows-arm64.zip",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "size": 4096
+        },
+        "x64": {
+          "url": "https://updates.example/9.9.9/MightyCode-windows-x64.zip",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 4096
+        }
+      }
+    },
+    {
+      "name": "payload-trailing-bits",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": 7,
+      "notes": "픽스처 릴리스 노트",
+      "publishedAt": "2026-11-15T00:00:00Z",
+      "windows": {
+        "arm64": {
+          "url": "https://updates.example/9.9.9/MightyCode-windows-arm64.zip",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "size": 4096
+        },
+        "x64": {
+          "url": "https://updates.example/9.9.9/MightyCode-windows-x64.zip",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 4096
+        }
+      }
+    },
+    {
+      "name": "tampered",
+      "verdict": "key",
+      "key": "appUpdate.error.signatureMismatch",
+      "message": "업데이트 정보의 서명이 이 앱의 공개 키와 맞지 않습니다."
+    },
+    {
+      "name": "not-object",
+      "verdict": "key",
+      "key": "appUpdate.error.manifestFileNotJSON",
+      "message": "업데이트 정보 파일을 JSON 객체로 읽지 못했습니다."
+    },
+    {
+      "name": "not-json",
+      "verdict": "exception",
+      "type": "JsonReaderException",
+      "message": "'o' is an invalid start of a property name. Expected a '\"'. LineNumber: 0 | BytePositionInLine: 1."
+    },
+    {
+      "name": "empty-file",
+      "verdict": "exception",
+      "type": "JsonReaderException",
+      "message": "The input does not contain any JSON tokens. Expected the input to start with a valid JSON token, when isFinalBlock is true. LineNumber: 0 | BytePositionInLine: 0."
+    },
+    {
+      "name": "trailing-comma",
+      "verdict": "exception",
+      "type": "JsonReaderException",
+      "message": "The JSON object contains a trailing comma at the end which is not supported in this mode. Change the reader options. LineNumber: 0 | BytePositionInLine: 785."
+    },
+    {
+      "name": "comment",
+      "verdict": "exception",
+      "type": "JsonReaderException",
+      "message": "'/' is invalid after a value. Expected either ',', '}', or ']'. LineNumber: 0 | BytePositionInLine: 784."
+    },
+    {
+      "name": "bom",
+      "verdict": "exception",
+      "type": "JsonReaderException",
+      "message": "'0xEF' is an invalid start of a value. LineNumber: 0 | BytePositionInLine: 0."
+    },
+    {
+      "name": "trailing-garbage",
+      "verdict": "exception",
+      "type": "JsonReaderException",
+      "message": "'x' is invalid after a single JSON value. Expected end of data. LineNumber: 0 | BytePositionInLine: 786."
+    },
+    {
+      "name": "too-large",
+      "verdict": "key",
+      "key": "appUpdate.error.manifestFileTooLarge",
+      "message": "업데이트 정보 파일이 너무 큽니다."
+    },
+    {
+      "name": "exactly-256-kib",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": 7,
+      "notes": "픽스처 릴리스 노트",
+      "publishedAt": "2026-11-15T00:00:00Z",
+      "windows": {
+        "arm64": {
+          "url": "https://updates.example/9.9.9/MightyCode-windows-arm64.zip",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "size": 4096
+        },
+        "x64": {
+          "url": "https://updates.example/9.9.9/MightyCode-windows-x64.zip",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 4096
+        }
+      }
+    },
+    {
+      "name": "deep-64",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": 7,
+      "notes": "픽스처 릴리스 노트",
+      "publishedAt": "2026-11-15T00:00:00Z",
+      "windows": {
+        "arm64": {
+          "url": "https://updates.example/9.9.9/MightyCode-windows-arm64.zip",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "size": 4096
+        },
+        "x64": {
+          "url": "https://updates.example/9.9.9/MightyCode-windows-x64.zip",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 4096
+        }
+      }
+    },
+    {
+      "name": "deep-65",
+      "verdict": "exception",
+      "type": "JsonReaderException",
+      "message": "The maximum configured depth of 64 has been exceeded. Cannot read next JSON array. LineNumber: 0 | BytePositionInLine: 855."
+    },
+    {
+      "name": "duplicate-format",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": 7,
+      "notes": "픽스처 릴리스 노트",
+      "publishedAt": "2026-11-15T00:00:00Z",
+      "windows": {
+        "arm64": {
+          "url": "https://updates.example/9.9.9/MightyCode-windows-arm64.zip",
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "size": 4096
+        },
+        "x64": {
+          "url": "https://updates.example/9.9.9/MightyCode-windows-x64.zip",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 4096
+        }
+      }
+    },
+    {
+      "name": "duplicate-format-reversed",
+      "verdict": "key",
+      "key": "appUpdate.error.signatureFormat",
+      "message": "업데이트 정보의 서명 형식을 알 수 없습니다."
+    },
+    {
+      "name": "duplicate-payload-keys",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {
+        "x64": {
+          "url": "https://updates.example/a.zip",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 4096
+        }
+      }
+    },
+    {
+      "name": "payload-not-object",
+      "verdict": "key",
+      "key": "appUpdate.error.manifestNotJSON",
+      "message": "업데이트 정보를 JSON 객체로 읽지 못했습니다."
+    },
+    {
+      "name": "payload-not-json",
+      "verdict": "exception",
+      "type": "JsonReaderException",
+      "message": "'o' is an invalid start of a property name. Expected a '\"'. LineNumber: 0 | BytePositionInLine: 1."
+    },
+    {
+      "name": "payload-empty",
+      "verdict": "exception",
+      "type": "JsonReaderException",
+      "message": "The input does not contain any JSON tokens. Expected the input to start with a valid JSON token, when isFinalBlock is true. LineNumber: 0 | BytePositionInLine: 0."
+    },
+    {
+      "name": "payload-blank-base64",
+      "verdict": "exception",
+      "type": "JsonReaderException",
+      "message": "The input does not contain any JSON tokens. Expected the input to start with a valid JSON token, when isFinalBlock is true. LineNumber: 0 | BytePositionInLine: 0."
+    },
+    {
+      "name": "payload-comment",
+      "verdict": "exception",
+      "type": "JsonReaderException",
+      "message": "'/' is invalid after a value. Expected either ',', '}', or ']'. LineNumber: 0 | BytePositionInLine: 19."
+    },
+    {
+      "name": "payload-deep-65",
+      "verdict": "exception",
+      "type": "JsonReaderException",
+      "message": "The maximum configured depth of 64 has been exceeded. Cannot read next JSON array. LineNumber: 0 | BytePositionInLine: 86."
+    },
+    {
+      "name": "payload-bom",
+      "verdict": "exception",
+      "type": "JsonReaderException",
+      "message": "'0xEF' is an invalid start of a value. LineNumber: 0 | BytePositionInLine: 0."
+    },
+    {
+      "name": "no-version",
+      "verdict": "key",
+      "key": "appUpdate.error.noVersion",
+      "message": "업데이트 정보에 유효한 version이 없습니다."
+    },
+    {
+      "name": "bad-version-string",
+      "verdict": "key",
+      "key": "appUpdate.error.noVersion",
+      "message": "업데이트 정보에 유효한 version이 없습니다."
+    },
+    {
+      "name": "version-number-latest-string",
+      "verdict": "ok",
+      "version": "2.0.0",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "version-too-long",
+      "verdict": "key",
+      "key": "appUpdate.error.noVersion",
+      "message": "업데이트 정보에 유효한 version이 없습니다."
+    },
+    {
+      "name": "version-five-parts",
+      "verdict": "key",
+      "key": "appUpdate.error.noVersion",
+      "message": "업데이트 정보에 유효한 version이 없습니다."
+    },
+    {
+      "name": "version-padded",
+      "verdict": "ok",
+      "version": "1.2.3",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-no-sha",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-empty-sha",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-short-sha",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-non-hex-sha",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-sha-number",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-no-size",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-zero-size",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-negative-size",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-float-size",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-exponent-size",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-huge-size",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-size-string",
+      "verdict": "exception",
+      "type": "InvalidOperationException",
+      "message": "The requested operation requires an element of type 'Number', but the target element has type 'String'."
+    },
+    {
+      "name": "asset-size-null",
+      "verdict": "exception",
+      "type": "InvalidOperationException",
+      "message": "The requested operation requires an element of type 'Number', but the target element has type 'Null'."
+    },
+    {
+      "name": "asset-size-string-no-sha",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-http",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-no-host",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-url-number-download-string",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {
+        "x64": {
+          "url": "https://updates.example/a.zip",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "size": 1
+        }
+      }
+    },
+    {
+      "name": "asset-url-http-download-https",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-not-object",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-unknown-architecture",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "asset-architecture-case",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "windows-not-object",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "build-string",
+      "verdict": "exception",
+      "type": "InvalidOperationException",
+      "message": "The requested operation requires an element of type 'Number', but the target element has type 'String'."
+    },
+    {
+      "name": "build-negative-number-fallback",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": 3,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "build-float",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": 2,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "build-negative-zero",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": 0,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "build-too-big",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "build-valid-number-string-fallback-ignored",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": 1,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "build-number-string",
+      "verdict": "exception",
+      "type": "InvalidOperationException",
+      "message": "The requested operation requires an element of type 'Number', but the target element has type 'String'."
+    },
+    {
+      "name": "notes-number-release-notes",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": "r",
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "unknown-fields",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": null,
+      "publishedAt": null,
+      "windows": {}
+    },
+    {
+      "name": "escaped-strings",
+      "verdict": "ok",
+      "version": "9.9.9",
+      "build": null,
+      "notes": "line\nnext é 😀 \"q\"",
+      "publishedAt": null,
+      "windows": {}
+    }
+  ]
+}

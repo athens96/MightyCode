@@ -1,0 +1,82 @@
+{
+  "about": "The helper's install.log line (WinUI\\Program.cs) for each result at a fixed time in .NET ticks; 'csharp' is C#'s line (tools/parity/Update.cs install-log).",
+  "cases": [
+    {
+      "replaced": true,
+      "rolledBack": false,
+      "relaunch": true,
+      "skipped": false,
+      "started": true,
+      "backupRemoved": true,
+      "error": null,
+      "ticks": 639000000000000000,
+      "csharp": "2025-11-29T08:00:00.0000000+00:00 replaced=True rolledBack=False relaunch=True skipped=False started=True backupRemoved=True \n"
+    },
+    {
+      "replaced": true,
+      "rolledBack": false,
+      "relaunch": false,
+      "skipped": false,
+      "started": false,
+      "backupRemoved": true,
+      "error": null,
+      "ticks": 639000000001234567,
+      "csharp": "2025-11-29T08:00:00.1234567+00:00 replaced=True rolledBack=False relaunch=False skipped=False started=False backupRemoved=True \n"
+    },
+    {
+      "replaced": false,
+      "rolledBack": true,
+      "relaunch": true,
+      "skipped": false,
+      "started": true,
+      "backupRemoved": false,
+      "error": "롤백했습니다: 이름을 바꾸지 못했습니다.",
+      "ticks": 639000000000000001,
+      "csharp": "2025-11-29T08:00:00.0000001+00:00 replaced=False rolledBack=True relaunch=True skipped=False started=True backupRemoved=False 롤백했습니다: 이름을 바꾸지 못했습니다.\n"
+    },
+    {
+      "replaced": false,
+      "rolledBack": false,
+      "relaunch": false,
+      "skipped": true,
+      "started": false,
+      "backupRemoved": false,
+      "error": "another update helper is already running for this install",
+      "ticks": 621355968000000000,
+      "csharp": "1970-01-01T00:00:00.0000000+00:00 replaced=False rolledBack=False relaunch=False skipped=True started=False backupRemoved=False another update helper is already running for this install\n"
+    },
+    {
+      "replaced": false,
+      "rolledBack": false,
+      "relaunch": true,
+      "skipped": false,
+      "started": false,
+      "backupRemoved": false,
+      "error": "IOException: The process cannot access the file.",
+      "ticks": 639012345678901234,
+      "csharp": "2025-12-13T14:56:07.8901234+00:00 replaced=False rolledBack=False relaunch=True skipped=False started=False backupRemoved=False IOException: The process cannot access the file.\n"
+    },
+    {
+      "replaced": false,
+      "rolledBack": false,
+      "relaunch": false,
+      "skipped": true,
+      "started": false,
+      "backupRemoved": false,
+      "error": null,
+      "ticks": 639000000009999999,
+      "csharp": "2025-11-29T08:00:00.9999999+00:00 replaced=False rolledBack=False relaunch=False skipped=True started=False backupRemoved=False \n"
+    },
+    {
+      "replaced": false,
+      "rolledBack": false,
+      "relaunch": true,
+      "skipped": false,
+      "started": false,
+      "backupRemoved": false,
+      "error": "",
+      "ticks": 639000000000100000,
+      "csharp": "2025-11-29T08:00:00.0100000+00:00 replaced=False rolledBack=False relaunch=True skipped=False started=False backupRemoved=False \n"
+    }
+  ]
+}

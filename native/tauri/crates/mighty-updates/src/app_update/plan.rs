@@ -2,11 +2,15 @@
 //!
 //! The argument grammar is the 0.4.x app's, which starts this exe from its staged folder: `--update-helper`, then pairs whose keys start
 //! with `--` (a key without makes the plan None), a later duplicate overwriting, an odd trailing argument ignored; required `--staged`,
-//! `--install`, `--backup`, `--package`, `--sha256` (lower-cased), `--size` (> 0), `--wait-pid` (> 0); `--relaunch` optional (absent =
-//! `1`, else `1` or `0`). `is_valid`: non-empty paths, 64 lower-case hex, size and pid positive, and the backup not inside the install
-//! folder (full paths, ordinal, with a trailing separator).
+//! `--install`, `--backup`, `--package`, `--sha256` (lower-cased), `--size` (> 0), `--wait-pid` (> 0), the numbers read as .NET's
+//! `long.TryParse`/`int.TryParse` read them; `--relaunch` optional (absent = `1`, else `1` or `0`). `is_valid`: non-empty paths, 64
+//! lower-case hex, size and pid positive, and the backup not inside the install folder (full paths, ordinal, with a trailing
+//! separator). Checked against C# by `native/contracts/fixtures/update-plan.json`.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+use super::dotnet;
 
 /// The first argument of the helper mode (C# `HelperFlag`).
 pub const HELPER_FLAG: &str = "--update-helper";
@@ -35,8 +39,8 @@ pub struct InstallPlan {
 }
 
 impl InstallPlan {
-    /// C# `AppUpdateInstallPlan.Create`: the backup beside the install as `<name>.backup-<yyyyMMddTHHmmssfff>` (UTC `now`) unless given.
-    /// Step 0 stub (W9-A writes it): the paths as given, the backup `backup` or the install's own path.
+    /// C# `AppUpdateInstallPlan.Create`: the backup beside the install as `<name>.backup-<yyyyMMddTHHmmssfff>` (UTC `now`) unless given
+    /// (beside the system's temporary folder when the install has no parent, as C#'s `?? Path.GetTempPath()`). Relaunches.
     #[allow(clippy::too_many_arguments)]
     pub fn create(
         staged: &Path,
@@ -46,9 +50,13 @@ impl InstallPlan {
         size: i64,
         app_process_id: i32,
         backup: Option<&Path>,
-        _now: chrono::DateTime<chrono::Utc>,
+        now: chrono::DateTime<chrono::Utc>,
     ) -> InstallPlan {
-        let backup = backup.unwrap_or(install).to_path_buf();
+        let backup = backup.map(Path::to_path_buf).unwrap_or_else(|| {
+            let trimmed = dotnet::trim_separator(install);
+            let parent = trimmed.parent().map(Path::to_path_buf).unwrap_or_else(std::env::temp_dir);
+            parent.join(format!("{}.backup-{}", dotnet::file_name(&trimmed), now.format("%Y%m%dT%H%M%S%3f")))
+        });
         InstallPlan {
             staged_directory: staged.to_path_buf(),
             install_directory: install.to_path_buf(),
@@ -87,28 +95,80 @@ impl InstallPlan {
         ]
     }
 
-    /// C# `StagedHelperExecutable`: the staged version's own exe, which the running app starts as the helper. Step 0 stub (W9-A writes
-    /// it): `staged\MightyCode.exe`.
+    /// C# `StagedHelperExecutable`: the staged version's own exe, which the running app starts as the helper (C# looks for each
+    /// accepted name, of which there is one, and falls back to the same path).
     pub fn staged_helper_executable(&self) -> PathBuf {
         self.staged_directory.join(super::EXECUTABLE_NAME)
     }
 
-    /// C# `NewDirectory`: `<full install path>.update-new`, beside the install. Step 0 stub (W9-A writes it): the install's path as given
-    /// with the suffix.
+    /// C# `NewDirectory`: `Path.GetFullPath(install.TrimEnd(separator)) + ".update-new"`, beside the install. (Where .NET's
+    /// `GetFullPath` would throw, the trimmed path as given.)
     pub fn new_directory(&self) -> PathBuf {
-        let mut name = self.install_directory.as_os_str().to_owned();
-        name.push(".update-new");
-        PathBuf::from(name)
+        let trimmed = dotnet::trim_separator(&self.install_directory);
+        dotnet::with_suffix(&dotnet::full_path(&trimmed).unwrap_or(trimmed), ".update-new")
     }
 
-    /// C# `IsValid`. Step 0 stub (W9-A writes it): no plan is valid.
+    /// C# `IsValid`.
     pub fn is_valid(&self) -> bool {
-        false
+        let empty = |p: &Path| p.as_os_str().is_empty();
+        if empty(&self.staged_directory) || empty(&self.install_directory) || empty(&self.backup_directory) || empty(&self.package_path) {
+            return false;
+        }
+        let hex = self.sha256.len() == 64 && self.sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        if !hex || self.size <= 0 || self.app_process_id <= 0 {
+            return false;
+        }
+        // The backup must not sit inside the folder that is about to be moved.
+        let (Ok(backup), Ok(install)) = (dotnet::full_path(&self.backup_directory), dotnet::full_path(&self.install_directory)) else {
+            return false;
+        };
+        let mut prefix = dotnet::trim_separator(&install).into_os_string();
+        prefix.push(dotnet::SEPARATOR.to_string());
+        !backup.as_os_str().as_encoded_bytes().starts_with(prefix.as_encoded_bytes())
     }
 }
 
 /// C# `AppUpdateInstallPlan.TryParse(arguments)`: the plan, or None (the arguments then go to the normal parser, which refuses
-/// `--update-helper`, as C#'s does). Step 0 stub (W9-A writes it): None, so the exe behaves as before W9.
-pub fn try_parse(_arguments: &[String]) -> Option<InstallPlan> {
-    None
+/// `--update-helper`, as C#'s does).
+pub fn try_parse(arguments: &[String]) -> Option<InstallPlan> {
+    if arguments.first().map(String::as_str) != Some(HELPER_FLAG) {
+        return None;
+    }
+    let mut values: HashMap<&str, &str> = HashMap::new();
+    let mut index = 1;
+    while index + 1 < arguments.len() {
+        if !arguments[index].starts_with("--") {
+            return None;
+        }
+        values.insert(&arguments[index], &arguments[index + 1]);
+        index += 2;
+    }
+    let staged = values.get("--staged")?;
+    let install = values.get("--install")?;
+    let backup = values.get("--backup")?;
+    let package = values.get("--package")?;
+    let sha256 = values.get("--sha256")?;
+    let size = values.get("--size").and_then(|text| dotnet::parse_i64(text)).filter(|size| *size > 0)?;
+    let pid = values.get("--wait-pid").and_then(|text| dotnet::parse_i32(text)).filter(|pid| *pid > 0)?;
+    let relaunch = match values.get(RELAUNCH_FLAG) {
+        None => true,
+        Some(&"1") => true,
+        Some(&"0") => false,
+        Some(_) => return None,
+    };
+    let (install, backup) = (PathBuf::from(install), PathBuf::from(backup));
+    let plan = InstallPlan {
+        staged_directory: PathBuf::from(staged),
+        new_executable: install.join(super::EXECUTABLE_NAME),
+        previous_executable: backup.join(super::EXECUTABLE_NAME),
+        install_directory: install,
+        backup_directory: backup,
+        package_path: PathBuf::from(package),
+        // `ToLowerInvariant`: only an all-ASCII hex text makes a valid plan, and no other character lowers to a hex digit.
+        sha256: sha256.to_ascii_lowercase(),
+        size,
+        app_process_id: pid,
+        relaunch,
+    };
+    plan.is_valid().then_some(plan)
 }
