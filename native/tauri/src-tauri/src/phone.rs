@@ -1256,13 +1256,18 @@ impl PhoneDesk for Desk {
         None
     }
     fn app_update_read(&self) -> Option<Option<app_update_view::State>> {
-        // `PhoneAppUpdateRead`: null while this build cannot update itself (no update key before W9).
-        Some(None)
+        // `PhoneAppUpdateRead`: null while this build cannot update itself (app_update.rs: no key, no address, a smoke, or a build that
+        // may not change the machine), and the route then answers 409 `appUpdate.mobile.unavailable`.
+        Some(self.host().ok().and_then(|host| crate::app_update::phone_read(&host)))
     }
-    fn app_update_act(&self, _install: bool) -> BoxFuture<'_, Result<(), MobileError>> {
-        // No update until W9: the route answers as C#'s does for a build that cannot update itself.
-        let refusal = mighty_run::strings::get("appUpdate.mobile.unavailable");
-        Box::pin(async move { Err(request(409, refusal)) })
+    fn app_update_act(&self, install: bool) -> BoxFuture<'_, Result<(), MobileError>> {
+        // `PhoneAppUpdateActAsync`, on the app update's driver (app_update.rs), awaited as C# awaits its check.
+        Box::pin(async move {
+            if let Ok(host) = self.host() {
+                crate::app_update::phone_act(&host, install).await;
+            }
+            Ok(())
+        })
     }
     fn queue_count(&self, session_id: &str) -> Option<i32> {
         let host = self.host().ok()?;

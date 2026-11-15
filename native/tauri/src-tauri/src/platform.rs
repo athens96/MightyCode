@@ -26,6 +26,18 @@ pub fn surfaces(window: tauri::Window) -> Arc<dyn SurfaceFactory> {
     os::surfaces(window)
 }
 
+/// W9-C: the main window whose session messages `Platform::session` reports (Windows subclasses it; call on the window's thread). The
+/// Mac's session port answers `Unsupported` until its stage, so there is nothing to hand it.
+pub fn watch_session(window: &tauri::Window) -> Result<()> {
+    #[cfg(windows)]
+    return os::session::watch_window(window);
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        Ok(())
+    }
+}
+
 /// The system clipboard's text (a terminal's copy and paste).
 pub fn clipboard() -> Arc<dyn mighty_platform::Clipboard> {
     os::clipboard()

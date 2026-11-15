@@ -28,8 +28,6 @@ pub enum Pending {
     Attention,
     /// `runtime` and `runtimeChecks` (`ProviderCatalog.GetRuntimeAsync`, W2): the machine words say "checking" until it is known.
     Runtime,
-    /// `appUpdate` (W9): no update badge, staged badge or countdown.
-    AppUpdate,
     /// `SetupNeedsAttention` and the setup badge (setup catalogue, W6).
     Setup,
     /// `resourceBanner` (`CheckResources`, ResourceHealth, W1-A's platform layer).
@@ -38,8 +36,7 @@ pub enum Pending {
     ModelCatalog,
 }
 
-pub const PENDING: [Pending; 6] =
-    [Pending::Attention, Pending::Runtime, Pending::AppUpdate, Pending::Setup, Pending::ResourceBanner, Pending::ModelCatalog];
+pub const PENDING: [Pending; 5] = [Pending::Attention, Pending::Runtime, Pending::Setup, Pending::ResourceBanner, Pending::ModelCatalog];
 
 // ── tones and counts (StatusGlyph, WorkDashboard) ───────────────────────────────────────────────────────────────────────
 
@@ -1067,7 +1064,16 @@ pub struct Status {
     pub remote: Option<bool>,
     pub panes: String,
     pub running: String,
+    /// The badge's words while a newer version is available or ready and not staged to install on quit (C# `updateBadgeText`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update: Option<String>,
     pub update_help: String,
+    /// "installs at the next launch" while a ready update installs on quit (C# `updateStagedText`), beside the page's "restart now".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staged: Option<String>,
+    /// The newer version the update knows of (C# `stagedVersion`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub staged_version: Option<String>,
     pub setup: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chips: Option<Vec<UsageChip>>,
@@ -1093,6 +1099,9 @@ pub struct ShellModel {
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
+    /// The restart countdown's message while it runs (C# `countdown`, the banner's words; W9-C).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub countdown: Option<String>,
     pub status: Status,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<UsageDetails>,
@@ -1159,6 +1168,22 @@ pub struct ShellContext<'a> {
     pub usage: Option<&'a UsageModel>,
     /// The companion's status bar controls (the host's companion, W8-E), when it is there.
     pub companion: Option<&'a CompanionFrame>,
+    /// The app update's banner and status bar words (the host's app update, W9-C), when it is there.
+    pub app_update: Option<&'a AppUpdateFrame>,
+}
+
+/// What the app update shows in the frame (C# `RefreshStatusBar`'s update rows and `RenderAppUpdateCountdown`, W9-C): each already in
+/// the language, or none while it is hidden.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppUpdateFrame {
+    /// The countdown banner's message (`appUpdate.countdown.message`) while the restart counts down.
+    pub countdown: Option<String>,
+    /// The badge (`window.status.updateBadge`): a newer version available or ready, not staged to install on quit.
+    pub update: Option<String>,
+    /// `window.status.updateStaged`: ready, with the automatic switch on.
+    pub staged: Option<String>,
+    /// The newer version the update knows of.
+    pub staged_version: Option<String>,
 }
 
 /// C# `WorkspaceDisclosure.Expanded`: the saved list, or the active workspace when none was saved.
@@ -1373,12 +1398,16 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
         layout,
         error: context.error.clone().filter(|e| !e.is_empty()),
         resource: context.resource.clone().filter(|r| !r.is_empty()),
+        countdown: context.app_update.and_then(|u| u.countdown.clone()),
         status: Status {
             machine,
             remote: active.and_then(|w| w.remote.as_ref().map(|_| connection(w).is_some_and(|c| c.connected))),
             panes: locale.get_with("window.status.paneCount", &[("count", &in_active.to_string())]),
             running: locale.get_with("window.status.runningCount", &[("count", &running.to_string())]),
+            update: context.app_update.and_then(|u| u.update.clone()),
             update_help: locale.get("window.status.updateBadgeHelp"),
+            staged: context.app_update.and_then(|u| u.staged.clone()),
+            staged_version: context.app_update.and_then(|u| u.staged_version.clone()),
             setup: context.setup_badge,
             chips: context.usage.and_then(|u| u.chips.clone()),
             chips_title: locale.get("windows.accountUsage.title"),

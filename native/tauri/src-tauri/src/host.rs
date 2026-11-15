@@ -542,6 +542,8 @@ impl Host {
         // The remote workspaces' connections (remote.rs, W8-D) and the companion's controls (companion.rs, W8-E), read with the state locked.
         let remote: HashMap<String, RemoteConnection> = crate::remote::connections(self);
         let companion = crate::companion::frame_model(self);
+        // The app update's banner and status bar words (app_update.rs, W9-C), read with the state locked.
+        let app_update = crate::app_update::frame(self);
         let View { snapshot, layout_defaults, shows_dashboard, dialog_open, error, git, .. } = view;
         let active_git =
             active_git_key(snapshot).and_then(|key| git.as_ref().filter(|(k, _)| *k == key).and_then(|(_, info)| info.as_ref()));
@@ -570,6 +572,7 @@ impl Host {
             remote: &remote,
             usage: usage.as_ref(),
             companion: companion.as_ref(),
+            app_update: app_update.as_ref(),
         };
         shell_model(snapshot, &context, layout_defaults)
     }

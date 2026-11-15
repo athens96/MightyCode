@@ -47,6 +47,7 @@ impl Window {
             remote: &self.remote,
             usage: None,
             companion: None,
+            app_update: None,
         }
     }
 }
@@ -133,4 +134,40 @@ fn the_frame_speaks_the_chosen_language() {
     let model = shell_model(&snapshot, &window.context("ko", None, false), &mut HashMap::new());
     assert_eq!(model.status.panes, Locale::new("ko").get_with("window.status.paneCount", &[("count", "4")]));
     assert_ne!(model.status.panes, "4 panes");
+}
+
+/// C# `WebShellModel`'s update rows (W9-C): the banner's `countdown` after `resource`, the status bar's `update` before `updateHelp`
+/// and `staged`, `stagedVersion` after it; each left out while the app update hides it.
+#[test]
+fn the_app_update_rows_sit_where_csharp_writes_them_and_go_while_hidden() {
+    let snapshot = demo_snapshot("en");
+    let window = Window::new();
+    let mut defaults = HashMap::new();
+    let quiet = serde_json::to_value(shell_model(&snapshot, &window.context("en", None, false), &mut defaults)).unwrap();
+    for absent in ["/countdown", "/status/update", "/status/staged", "/status/stagedVersion"] {
+        assert!(quiet.pointer(absent).is_none(), "{absent} is left out with no app update");
+    }
+    let frame = mighty_core::shell::AppUpdateFrame {
+        countdown: Some("Restarting in 60 s".into()),
+        update: None,
+        staged: Some("Installs 9.9.9 at the next launch".into()),
+        staged_version: Some("9.9.9".into()),
+    };
+    let mut context = window.context("en", None, false);
+    context.app_update = Some(&frame);
+    let model = shell_model(&snapshot, &context, &mut defaults);
+    let text = serde_json::to_string(&model).unwrap();
+    let at = |key: &str| text.find(key).unwrap_or_else(|| panic!("{key} is written"));
+    assert!(text.contains("\"countdown\":\"Restarting in 60 s\"") && at("\"countdown\"") < at("\"status\""));
+    assert!(
+        at("\"running\"") < at("\"updateHelp\"") && at("\"updateHelp\"") < at("\"staged\"") && at("\"staged\"") < at("\"stagedVersion\"")
+    );
+    assert!(at("\"stagedVersion\"") < at("\"setup\""));
+    assert_eq!(model.status.update, None);
+    assert_eq!(model.status.staged.as_deref(), Some("Installs 9.9.9 at the next launch"));
+    let badge = mighty_core::shell::AppUpdateFrame { update: Some("New 9.9.9".into()), ..Default::default() };
+    context.app_update = Some(&badge);
+    let value = serde_json::to_value(shell_model(&snapshot, &context, &mut defaults)).unwrap();
+    assert_eq!(value.pointer("/status/update").and_then(|v| v.as_str()), Some("New 9.9.9"));
+    assert!(value.pointer("/status/staged").is_none() && value.pointer("/countdown").is_none());
 }

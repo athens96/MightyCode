@@ -492,6 +492,8 @@ fn main() {
                 ));
             }
             let window = window.build()?;
+            // W9-C: the session-ending watch on the main window, from its own thread (an install on quit waits while Windows ends it).
+            app_update::watch_window(&host, &window.as_ref().window());
             // The native views over the page (browser panes; the Mac's terminal later), in the OS's implementation.
             let factory = platform::surfaces(window.as_ref().window());
             // The companion pet (companion.rs, W8-E): its window is one of the main window's native views.

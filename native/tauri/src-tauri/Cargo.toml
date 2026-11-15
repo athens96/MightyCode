@@ -60,7 +60,7 @@ mighty-platform-windows.workspace = true
 mighty-platform-macos.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+tokio = { workspace = true, features = ["sync", "rt", "macros", "test-util"] }
 
 # W6 Step 0 lists mighty-native, mighty-tools, mighty-accounts and mighty-updates before any code uses them, W9 Step 0 mighty-styles;
 # this table goes once the app's code uses them all.
