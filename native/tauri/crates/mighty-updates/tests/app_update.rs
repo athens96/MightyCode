@@ -2226,3 +2226,54 @@ fn an_app_started_from_a_bare_environment_takes_the_users_own_variables_back() {
     assert!(!has("SystemRoot"), "a variable the process already has keeps its value");
     assert!(!has("EMPTY"), "an empty fresh value adds nothing");
 }
+
+// — Beyond C#'s checks: the port's own seams —
+
+/// A shutdown while a check waits for the network cancels it as C#'s `ShutdownAsync` does: back to Idle without an error, and nothing
+/// starts afterwards.
+#[tokio::test]
+async fn a_shutdown_cancels_a_check_under_way() {
+    let root = Temp::new();
+    let fake = Arc::new(FakeUpdateTransport::default());
+    fake.route(MANIFEST_URL, FakeRoute::ok(envelope(&Plain::default().text())));
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let gated = Arc::new(Gated { inner: fake.clone(), gate: Mutex::new(Some(gate)) });
+    let coordinator = Coordinator::new(Arc::new(Service::new(gated, root.path(), Some(fixture_key()))), options("x64", None));
+    let running = coordinator.check(None);
+    tokio::pin!(running);
+    tokio::select! {
+        biased;
+        () = &mut running => panic!("the check must wait at the gate"),
+        () = tokio::task::yield_now() => {}
+    }
+    assert_eq!(coordinator.state().phase, Phase::Checking, "the check is under way");
+    coordinator.shutdown();
+    running.await;
+    let state = coordinator.state();
+    assert!(
+        state.phase == Phase::Idle && state.error_message.is_none() && state.last_error.is_none(),
+        "a cancelled check goes back quietly: {state:?}"
+    );
+    coordinator.check(None).await;
+    assert_eq!(coordinator.state().phase, Phase::Idle, "nothing starts after the shutdown");
+}
+
+/// install.log goes beside the package, a second helper's line after the first.
+#[test]
+fn the_install_log_is_appended_beside_the_package() {
+    let root = Temp::new();
+    let (_, package, plan) = swap_fixture(root.path(), false);
+    let path = mighty_updates::app_update::log::path(&plan, Path::new("unused"));
+    assert_eq!(path, package.parent().unwrap().join("install.log"));
+    let now = Utc.with_ymd_and_hms(2026, 11, 15, 3, 4, 5).unwrap();
+    let first = mighty_updates::app_update::log::line(&guard::refusal(false).unwrap(), Some(&plan), now);
+    let second =
+        mighty_updates::app_update::log::line(&mighty_updates::app_update::log::unexpected("IOException", "denied"), Some(&plan), now);
+    mighty_updates::app_update::log::append(&path, &first).unwrap();
+    mighty_updates::app_update::log::append(&path, &second).unwrap();
+    assert_eq!(
+        read(&path),
+        "2026-11-15T03:04:05.0000000+00:00 replaced=False rolledBack=False relaunch=False skipped=True started=False backupRemoved=False another update helper is already running for this install\n\
+         2026-11-15T03:04:05.0000000+00:00 replaced=False rolledBack=False relaunch=False skipped=False started=False backupRemoved=False IOException: denied\n"
+    );
+}
