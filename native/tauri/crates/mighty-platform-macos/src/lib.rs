@@ -45,7 +45,16 @@ mod imp {
             network: Arc::new(Unsupported),
             proxy: Arc::new(Unsupported),
             https: Arc::new(Unsupported),
+            // W9: the update's HTTPS, the session and the toast activator are the Mac stage's (plan §10).
+            update_transport: Arc::new(Unsupported),
+            session: Arc::new(Unsupported),
+            activator: Arc::new(Unsupported),
         })
+    }
+
+    /// The update installer alone, for the exe's `--update-helper` mode: the Mac's swap (`install.sh`) is its stage's.
+    pub fn update_installer() -> Arc<dyn mighty_platform::UpdateInstaller> {
+        Arc::new(Unsupported)
     }
 
     /// The Mac's native views: both kinds are native (Ghostty; CEF or WKWebView by `browser.engineEnabled`), none written yet.

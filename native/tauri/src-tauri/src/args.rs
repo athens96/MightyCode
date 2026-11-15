@@ -8,13 +8,28 @@
 //! `--remote-debugging-port <n>`  opens WebView2's DevTools protocol on that port (screenshots, inspection)
 //! `--allow-state-write`          lets the host write the profile's state (saves, the damaged-file recovery, the legacy copy) as
 //!                                C# does; without it nothing in the profile is written but the logs and the smoke's result
+//! `--read-only`                  W9: writes nothing, whatever the build (startup.rs's write policy; wins over `--allow-state-write`)
 //! `--smoke-fake-cli <exe>`       the smoke's Claude is mighty-run's stand-in CLI (`mighty-fake-cli --replay-cli`), every other
 //!                                provider missing; the smoke then runs its composer, cards and Mighty steps against it
 //! `--smoke-real-claude`          the smoke sends one real request with the installed `claude` CLI and waits for its answer
 //! `--native-dump <file>`         every `native` and `text` push written to the file as sent, one per line (native.rs; the parity
 //!                                capture's Rust side, plan W6 §1.8)
+//! `--help-capture`               W9-H: the help site's pictures in the smoke's place (a smoke run: needs `--profile`)
+//! `-language ko|en|zh|ja`        W9-H: the help capture's language (only with `--help-capture`; default `ko`)
+//! `--perf-scenario`              W9-H: the timing scenario in the smoke's place (needs `--smoke-test`, not with `--help-capture`)
+//! `-Embedding`                   W9-F: COM started the app for a toast's activation (the app starts as usual; COM calls it)
+//! `----AppNotificationActivated:…`  W9-F: a toast left by C#'s Windows App SDK registration; accepted and ignored
+//!
+//! C#'s other rule, a smoke's profile must be empty, is not taken over: `scripts/smoke.ps1` runs the smoke on a seeded demo profile and
+//! `-Profile` on a copy of a real one (W9-H may require it for `--help-capture` and `--perf-scenario`, whose profiles C# seeds itself).
 
 use std::path::PathBuf;
+
+/// C#'s `Locale.Languages`, the help capture's languages.
+const HELP_LANGUAGES: [&str; 4] = ["ko", "en", "zh", "ja"];
+
+/// The argument a toast registered through C#'s Windows App SDK starts the exe with (its prefix; the rest is the toast's).
+const APP_SDK_ACTIVATION: &str = "----AppNotificationActivated:";
 
 #[derive(Debug, Default, Clone)]
 pub struct Options {
@@ -28,6 +43,15 @@ pub struct Options {
     pub smoke_fake_cli: Option<PathBuf>,
     pub smoke_real_claude: bool,
     pub native_dump: Option<PathBuf>,
+    /// W9: writing off whatever the build (startup.rs).
+    pub read_only: bool,
+    /// W9-H: `--help-capture` (also sets `smoke_test`, as C#'s does) and its language (`ko` unless `-language` said).
+    pub help_capture: bool,
+    pub help_language: Option<String>,
+    /// W9-H: `--perf-scenario`.
+    pub perf_scenario: bool,
+    /// W9-F: started by COM for a toast's activation (`-Embedding`).
+    pub embedding: bool,
 }
 
 fn absolute(flag: &str, value: Option<String>) -> Result<PathBuf, String> {
@@ -47,6 +71,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             "--smoke-test" => options.smoke_test = true,
             "--smoke-exit" => options.smoke_exit = true,
             "--allow-state-write" => options.allow_state_write = true,
+            "--read-only" => options.read_only = true,
             "--smoke-fake-cli" => options.smoke_fake_cli = Some(absolute("--smoke-fake-cli", args.next())?),
             "--smoke-real-claude" => options.smoke_real_claude = true,
             "--smoke-out" => options.smoke_out = Some(absolute("--smoke-out", args.next())?),
@@ -56,11 +81,32 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
                 let port = args.next().and_then(|p| p.parse().ok()).ok_or("--remote-debugging-port needs a port number.")?;
                 options.remote_debugging_port = Some(port);
             }
+            // Developer switches, never shown to a user: their refusals are not translated (C# Program.cs:33-38).
+            "--help-capture" => {
+                options.help_capture = true;
+                options.smoke_test = true;
+            }
+            "--perf-scenario" => options.perf_scenario = true,
+            "-language" => {
+                let language = args.next().filter(|l| HELP_LANGUAGES.contains(&l.as_str())).ok_or("-language needs ko, en, zh or ja.")?;
+                options.help_language = Some(language);
+            }
+            "-Embedding" => options.embedding = true,
+            other if other.starts_with(APP_SDK_ACTIVATION) => {}
             other => return Err(format!("Unsupported argument: {other}")),
         }
     }
     if options.smoke_exit && !options.smoke_test {
         return Err("--smoke-exit needs --smoke-test.".into());
+    }
+    if options.perf_scenario && !options.smoke_test {
+        return Err("--perf-scenario needs --smoke-test.".into());
+    }
+    if options.help_language.is_some() && !options.help_capture {
+        return Err("-language goes with --help-capture.".into());
+    }
+    if options.help_capture && options.perf_scenario {
+        return Err("--help-capture and --perf-scenario do not go together.".into());
     }
     if (options.smoke_fake_cli.is_some() || options.smoke_real_claude) && !options.smoke_test {
         return Err("--smoke-fake-cli and --smoke-real-claude need --smoke-test.".into());
@@ -73,6 +119,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     }
     if options.profile.as_ref().is_some_and(|p| p.is_file()) {
         return Err("--profile names a file, not a folder.".into());
+    }
+    if options.help_capture && options.help_language.is_none() {
+        options.help_language = Some("ko".into());
     }
     Ok(options)
 }
@@ -104,5 +153,33 @@ mod tests {
         let dump = if cfg!(windows) { "C:\\d\\native.jsonl" } else { "/d/native.jsonl" };
         assert!(parsed(&["--native-dump", dump]).unwrap().native_dump.is_some());
         assert!(parsed(&["--native-dump", "native.jsonl"]).is_err(), "the dump's path is absolute");
+    }
+
+    /// W9 Step 0: C#'s developer switches and their combination rules (Program.cs:34-46), `--read-only`, and the two ways COM or a
+    /// leftover Windows App SDK toast starts the exe; anything else is still refused, `--update-helper` included (main.rs serves the
+    /// helper before the parser, as C#'s `TryParse` does).
+    #[test]
+    fn the_w9_switches_follow_csharps_rules() {
+        let root = if cfg!(windows) { "C:\\p" } else { "/p" };
+        let help = parsed(&["--help-capture", "--profile", root]).unwrap();
+        assert!(help.help_capture && help.smoke_test, "the help capture is a smoke run");
+        assert_eq!(help.help_language.as_deref(), Some("ko"));
+        assert_eq!(parsed(&["--help-capture", "--profile", root, "-language", "ja"]).unwrap().help_language.as_deref(), Some("ja"));
+        assert_eq!(parsed(&["--help-capture", "--profile", root, "-language", "fr"]).unwrap_err(), "-language needs ko, en, zh or ja.");
+        assert_eq!(parsed(&["-language", "en"]).unwrap_err(), "-language goes with --help-capture.");
+        assert_eq!(parsed(&["--help-capture"]).unwrap_err(), "--smoke-test needs --profile.");
+        assert!(parsed(&["--help-capture", "--smoke-exit", "--profile", root]).is_ok());
+        assert_eq!(parsed(&["--perf-scenario", "--profile", root]).unwrap_err(), "--perf-scenario needs --smoke-test.");
+        assert!(parsed(&["--smoke-test", "--perf-scenario", "--profile", root]).unwrap().perf_scenario);
+        assert_eq!(
+            parsed(&["--help-capture", "--perf-scenario", "--profile", root]).unwrap_err(),
+            "--help-capture and --perf-scenario do not go together."
+        );
+        assert!(parsed(&["--read-only"]).unwrap().read_only);
+        assert!(parsed(&["-Embedding"]).unwrap().embedding);
+        assert!(parsed(&["----AppNotificationActivated:", "-Embedding"]).is_ok());
+        assert!(parsed(&["----AppNotificationActivated:sessionId=abc"]).is_ok());
+        assert!(parsed(&["-embedding"]).is_err(), "COM's switch as COM writes it");
+        assert!(parsed(&["--update-helper", "--staged", root]).is_err());
     }
 }

@@ -348,14 +348,16 @@ impl Host {
         lock(&self.store).approve_remote(connection_id, workspace_id, name, path, host_name)
     }
 
-    /// Whether the app may write its profile (`--allow-state-write`, as main.rs parsed it into the store).
+    /// Whether the app may write its profile: the write policy main.rs gave the store (startup.rs `write_policy`; W9: a release build by
+    /// default, a development build only with `--allow-state-write`, never with `--read-only`).
     pub fn writes(&self) -> bool {
         lock(&self.store).writes()
     }
 
-    /// W6's default until W9 (docs/tauri-conversion.md §8): whether the app may change the machine or the user's settings outside the
-    /// profile — sign in or out, update a CLI or a plugin, install, start an automatic update or auto-login, write HKCU
-    /// `Software\MightyCode`, `~/.claude/settings.json` or another tool's config — only with `--allow-state-write`, never in a smoke.
+    /// Whether the app may change the machine or the user's settings outside the profile — sign in or out, update a CLI or a plugin,
+    /// install, start an automatic update or auto-login, update itself, write HKCU (`Software\MightyCode`, the uninstall entry, the toast
+    /// registration), `~/.claude/settings.json` or another tool's config: where the write policy writes ([`Host::writes`]; W6's default
+    /// was `--allow-state-write` alone, W9's adds a release build's default and `--read-only`), never in a smoke.
     #[allow(dead_code, reason = "a seam W6-B, W6-C and W6-D (every machine-changing press, update and sign-in) calls")]
     pub fn may_change_machine(&self) -> bool {
         self.writes() && self.smoke.is_none()

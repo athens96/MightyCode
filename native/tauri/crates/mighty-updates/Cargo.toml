@@ -26,6 +26,14 @@ chrono.workspace = true
 regex.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "io-util"] }
 tokio-util = "0.7"
+# W9-A, the app's update (app_update): the manifest's signature as C#'s Ed25519Verify decides it (`verify`, never `verify_strict`;
+# version 2 shares curve25519-dalek 4 with W8's x25519-dalek), the package's SHA-256, the envelope's base64 and the staged zip. The zip
+# crate reads and writes deflate only, through flate2's pure-Rust miniz_oxide backend (zip asks flate2 for no backend of its own).
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+sha2.workspace = true
+base64 = "0.22"
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [dev-dependencies]
 mighty-composer.workspace = true
@@ -33,3 +41,8 @@ tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread",
 
 [target.'cfg(windows)'.dev-dependencies]
 mighty-platform-windows.workspace = true
+
+# W9 Step 0 lists W9-A's dependencies (ed25519-dalek, base64, zip, flate2) before its code uses them; this table goes once every one is
+# used.
+[lints.cargo]
+unused_dependencies = "allow"

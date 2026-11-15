@@ -24,10 +24,16 @@
 //! with `--smoke-real-claude` one real request to the installed
 //! `claude` CLI follows the first probe instead of the page's steps.
 //!
-//! The host adds whether its own state took the click, the calls it saw and the methods it answered "unimplemented", and writes
-//! `smoke-result.json`; with `--smoke-exit` the app then quits, 0 when the smoke passed, else 1. A smoke that has no result in time
-//! (390 s, 540 s with the stand-in CLI, 420 s with the real one) fails.
+//! W9's steps ([`W9_STEPS`]: styles after Settings, the app update after the updates, the mirror after the remote step, the help
+//! capture after the companion, per-pane worktrees after delegation) each start where their part has written them (Step 0: none does).
+//! `--help-capture` and `--perf-scenario` runs are smokes whose page probe their part takes over ([`Special`], W9-H).
+//!
+//! The host adds whether its own state took the click, the calls it saw and the methods it answered "unimplemented" (only those of
+//! [`ALLOWED_UNIMPLEMENTED`] pass, `unimplementedAllowed`), and writes `smoke-result.json`; with `--smoke-exit` the app then quits, 0
+//! when the smoke passed, else 1. A smoke that has no result in time (495 s, 645 s with the stand-in CLI, 525 s with the real one)
+//! fails.
 
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -90,11 +96,18 @@ enum Stage {
     Acp,
     /// Delegation on its fixture repository under the smoke's profile (smoke_delegation.rs, W7-D).
     Delegation,
+    /// W9's steps ([`W9_STEPS`]): styles (smoke_styles.rs, W9-D), the app update box (smoke_app_update.rs, W9-C), the remote mirror
+    /// (mirror.rs, W9-J), the help capture (smoke_help.rs, W9-H) and per-pane worktrees (pane_worktree.rs, W9-I).
+    Styles,
+    AppUpdate,
+    Mirror,
+    Help,
+    PaneWorktree,
     Runs,
 }
 
 /// The steps after the first probe, in their order: each one that can start does (`Smoke::start`), the run steps last.
-const STEPS: [Stage; 16] = [
+const STEPS: [Stage; 21] = [
     Stage::Frame,
     Stage::Browser,
     Stage::Terminal,
@@ -103,15 +116,55 @@ const STEPS: [Stage; 16] = [
     Stage::Create,
     Stage::Reload,
     Stage::Settings,
+    Stage::Styles,
     Stage::Setup,
     Stage::Accounts,
     Stage::Updates,
+    Stage::AppUpdate,
     Stage::Remote,
+    Stage::Mirror,
     Stage::Companion,
+    Stage::Help,
     Stage::Acp,
     Stage::Delegation,
+    Stage::PaneWorktree,
     Stage::Runs,
 ];
+
+/// W9's steps (Step 0): each its stage, the key its report is kept under in the result, its part's start (false: it does not run;
+/// every one at rest) and its checks (a step that did not report fails every one of them).
+const W9_STEPS: [(Stage, &str, StepStart, StepChecks); 5] = [
+    (Stage::Styles, "styles", crate::smoke_styles::start, crate::smoke_styles::checks),
+    (Stage::AppUpdate, "appUpdate", crate::smoke_app_update::start, crate::smoke_app_update::checks),
+    (Stage::Mirror, "mirror", crate::mirror::smoke_start, crate::mirror::smoke_checks),
+    (Stage::Help, "help", crate::smoke_help::start, crate::smoke_help::checks),
+    (Stage::PaneWorktree, "paneWorktree", crate::pane_worktree::smoke_start, crate::pane_worktree::smoke_checks),
+];
+
+/// The page methods a smoke may meet unanswered while W9 is under way (plan D20; README's unimplemented table): the three W9 ones and
+/// those `main`'s 0.4.61 page added for W9-I and W9-J. Each part takes its own out as it answers them; the integrator empties the list.
+pub const ALLOWED_UNIMPLEMENTED: [&str; 9] = [
+    "guidedAction",
+    "postponeUpdate",
+    "restartForUpdate",
+    "paneWorktreeStatus",
+    "paneWorktreeAction",
+    "paneWorktreeDiff",
+    "workspaceWorktree",
+    "serverConnect",
+    "serverDisconnect",
+];
+
+/// A run that is a smoke but whose page probe another part takes over (W9-H; main.rs from `--help-capture` and `--perf-scenario`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Special {
+    #[default]
+    None,
+    /// `--help-capture` in this language (help_capture.rs).
+    HelpCapture { language: String },
+    /// `--perf-scenario` (perf.rs).
+    Perf,
+}
 
 /// The remote step's parts in their order (W8 plan, Step 0): each that can start does, reports its part through `Smoke::probed`, and
 /// the next part starts; the step ends after the last. A part's report is kept under its key in the stage's report.
@@ -280,6 +333,8 @@ struct Progress {
     remote_part: usize,
     /// The companion step's report (W8-E).
     companion: Option<Value>,
+    /// W9's steps' reports, each under its key ([`W9_STEPS`]).
+    w9: BTreeMap<&'static str, Option<Value>>,
     /// The reload step's page is loading again: its `ready` brings the probe.
     reload_waiting: bool,
     reload_ready: bool,
@@ -310,9 +365,18 @@ impl Progress {
             Stage::Companion => Some(&mut self.companion),
             Stage::Acp => Some(&mut self.acp),
             Stage::Delegation => Some(&mut self.delegation),
+            Stage::Styles | Stage::AppUpdate | Stage::Mirror | Stage::Help | Stage::PaneWorktree => {
+                let key = w9_step(stage).1;
+                Some(self.w9.entry(key).or_default())
+            }
             Stage::Runs => None,
         }
     }
+}
+
+/// `stage`'s row of [`W9_STEPS`].
+fn w9_step(stage: Stage) -> (Stage, &'static str, StepStart, StepChecks) {
+    W9_STEPS.iter().copied().find(|(each, ..)| *each == stage).expect("a W9 stage has its row")
 }
 
 pub struct Smoke {
@@ -324,12 +388,29 @@ pub struct Smoke {
     mode: Mode,
     /// Where the stand-in CLI records what it was sent (`<record>.answers` …).
     fake_record: Option<PathBuf>,
+    /// A help capture or perf scenario run (W9-H).
+    special: Special,
     progress: Mutex<Progress>,
 }
 
 impl Smoke {
     pub fn new(out: PathBuf, exit: bool, load: Value, mode: Mode, fake_record: Option<PathBuf>) -> Smoke {
-        Smoke { out, exit, started: Instant::now(), load, mode, fake_record, progress: Mutex::new(Progress::default()) }
+        Smoke {
+            out,
+            exit,
+            started: Instant::now(),
+            load,
+            mode,
+            fake_record,
+            special: Special::None,
+            progress: Mutex::new(Progress::default()),
+        }
+    }
+
+    /// This smoke as a help capture or perf scenario run (W9-H).
+    pub fn special(mut self, special: Special) -> Smoke {
+        self.special = special;
+        self
     }
 
     pub fn fake_record(&self) -> Option<&PathBuf> {
@@ -339,10 +420,10 @@ impl Smoke {
     fn timeout(&self) -> Duration {
         Duration::from_secs(match self.mode {
             // The frame, browser, gitCreate and reload steps add up to two minutes, the terminal and history steps a minute each.
-            // The W6 steps a minute more, and the W8 steps (remote, companion) another.
-            Mode::Page => 450,
-            Mode::FakeClaude => 600,
-            Mode::RealClaude => 480,
+            // The W6 steps a minute more, the W8 steps (remote, companion) another, and W9's (plan R13) 45 s.
+            Mode::Page => 495,
+            Mode::FakeClaude => 645,
+            Mode::RealClaude => 525,
         })
     }
 
@@ -395,6 +476,15 @@ impl Smoke {
                 return;
             }
             progress.injected = true;
+        }
+        // A help capture or perf scenario run: its part takes over here once it is written (W9-H); until then the run is a plain smoke.
+        let taken = match &self.special {
+            Special::None => false,
+            Special::HelpCapture { language } => crate::help_capture::begin(host, language),
+            Special::Perf => crate::perf::begin(host),
+        };
+        if taken {
+            return;
         }
         host.log.line("smoke: the page is up; probing");
         self.eval(host, PROBE);
@@ -481,6 +571,11 @@ impl Smoke {
             Stage::Companion => page_steps && shared(host).is_some_and(|host| crate::smoke_companion::start(&host)),
             Stage::Acp => self.mode == Mode::FakeClaude && crate::smoke_acp::start(host),
             Stage::Delegation => page_steps && shared(host).is_some_and(|host| crate::smoke_delegation::start(&host)),
+            // W9's steps, each its part's ([`W9_STEPS`]).
+            Stage::Styles | Stage::AppUpdate | Stage::Mirror | Stage::Help | Stage::PaneWorktree => {
+                let start = w9_step(step).2;
+                page_steps && shared(host).is_some_and(|host| start(&host))
+            }
             Stage::Runs => self.start_runs(host),
         }
     }
@@ -793,7 +888,19 @@ impl Smoke {
             for (name, passed) in crate::smoke_companion::checks(companion.as_ref().unwrap_or(&missing)) {
                 checks[name] = json!(passed && companion.is_some());
             }
+            // W9's steps: each one's checks from its report under its key (a step that did not report fails every one of them).
+            let w9 = self.progress().w9.clone();
+            for (_, key, _, part) in W9_STEPS {
+                let report = w9.get(key).cloned().flatten();
+                let missing = json!({"error": format!("the {key} step did not report")});
+                for (name, passed) in part(report.as_ref().unwrap_or(&missing)) {
+                    checks[name] = json!(passed && report.is_some());
+                }
+            }
         }
+        // While W9 is under way, the page may meet only the methods its parts have not answered yet (plan D20; README's table).
+        let unimplemented = host.unimplemented_methods();
+        checks["unimplementedAllowed"] = json!(unimplemented.iter().all(|method| ALLOWED_UNIMPLEMENTED.contains(&method.as_str())));
         match self.mode {
             Mode::Page => {}
             Mode::FakeClaude => {
@@ -861,7 +968,7 @@ impl Smoke {
             checks["localeKeyLeakScan"] = json!(scan.as_ref().is_some_and(crate::smoke_settings::leak_scan_passed));
         }
         let passed = checks.as_object().is_some_and(|c| c.values().all(|v| v == &Value::Bool(true)));
-        let result = json!({
+        let mut result = json!({
             "passed": passed,
             "checks": checks,
             "probe": probe,
@@ -888,11 +995,16 @@ impl Smoke {
             "host": {"workspaces": workspaces, "panes": panes, "theme": theme, "activeSessionId": active, "language": host.locale.language()},
             "load": self.load,
             "calls": calls,
-            "unimplemented": host.unimplemented_methods(),
+            "unimplemented": unimplemented,
             "elapsedMs": self.started.elapsed().as_millis() as u64,
             "dataDir": host.data_dir,
             "version": host.version,
         });
+        // W9's steps' reports, each under its key (null when it did not run).
+        let w9 = self.progress().w9.clone();
+        for (_, key, _, _) in W9_STEPS {
+            result[key] = w9.get(key).cloned().flatten().unwrap_or(Value::Null);
+        }
         if let Some(parent) = self.out.parent() {
             let _ = std::fs::create_dir_all(parent);
         }

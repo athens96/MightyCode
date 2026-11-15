@@ -73,6 +73,45 @@ impl fmt::Debug for SpawnRequest {
     }
 }
 
+/// A process that outlives the app (W9: the update helper, the app relaunched after an update; [`ProcessHost::start_detached`]).
+#[derive(Clone, PartialEq, Eq)]
+pub struct DetachedRequest {
+    /// A full path.
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    /// An existing absolute folder (the helper's: the app's `%TEMP%`; the relaunched app's: its own folder).
+    pub cwd: PathBuf,
+    pub environment: DetachedEnvironment,
+    /// No window (Windows: `CREATE_NO_WINDOW`), as the helper starts.
+    pub hidden: bool,
+}
+
+/// The detached process's whole environment.
+#[derive(Clone, PartialEq, Eq)]
+pub enum DetachedEnvironment {
+    /// This process's own, as it is.
+    Inherit,
+    /// Exactly these variables and nothing else (the helper's `SystemRoot=C:\Windows`; the relaunched app's fresh user environment).
+    Exactly(BTreeMap<String, String>),
+}
+
+/// The environment's names only: values can be credentials.
+impl fmt::Debug for DetachedRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let environment: Option<Vec<&String>> = match &self.environment {
+            DetachedEnvironment::Inherit => None,
+            DetachedEnvironment::Exactly(values) => Some(values.keys().collect()),
+        };
+        f.debug_struct("DetachedRequest")
+            .field("program", &self.program)
+            .field("args", &self.args.len())
+            .field("cwd", &self.cwd)
+            .field("environment", &environment)
+            .field("hidden", &self.hidden)
+            .finish()
+    }
+}
+
 /// A started child: its three pipes (each taken once) and its control. Dropping the pipes closes them; dropping the child does not
 /// end it — call [`Child::close`].
 pub struct Child {
@@ -140,6 +179,15 @@ pub trait ChildControl: Send + Sync {
 /// - `env_remove` names are gone from the child's environment before `env` is laid over it.
 pub trait ProcessHost: Send + Sync {
     fn spawn(&self, request: SpawnRequest) -> BoxFuture<'_, Result<Child>>;
+
+    /// W9 (plan D6, owner W9-B): starts `request` so it outlives this process and answers its process id once it runs. Unlike
+    /// [`ProcessHost::spawn`]: no job object (Windows: `CREATE_BREAKAWAY_FROM_JOB`, failing loudly rather than starting inside the
+    /// job when breakaway is not allowed), no pipes and no inherited handle, a new process group, the environment exactly as given (no
+    /// `NO_COLOR`), the window hidden only when asked; every handle closed at once. Only the update modules call it (a CI grep, as for
+    /// the elevation verb). The default answers `Unsupported` (the Mac's until its stage).
+    fn start_detached(&self, _request: DetachedRequest) -> Result<u32> {
+        Err(PlatformError::unsupported("ProcessHost", "start_detached"))
+    }
 
     /// How a CLI found at `program` starts with `args` (C# `ProviderCatalog.StartCli`): `env` laid over this process's environment,
     /// then `NO_COLOR=1`. Here the program runs directly; Windows runs a `.cmd`/`.bat` shim (npm's `pi.cmd`) through

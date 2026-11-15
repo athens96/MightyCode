@@ -74,6 +74,13 @@ impl ProcessHost for WindowsProcessHost {
         Box::pin(async move { start(&request) })
     }
 
+    /// W9-B writes it (plan §W9-B: `CreateProcessW` with `bInheritHandles = FALSE`, `CREATE_UNICODE_ENVIRONMENT |
+    /// CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP`, `CREATE_NO_WINDOW` when hidden, the exact environment block when given, the
+    /// handles closed at once; a job that forbids breakaway fails loudly). Step 0 stub: `Unsupported`, as before W9.
+    fn start_detached(&self, _request: mighty_platform::DetachedRequest) -> Result<u32> {
+        Err(PlatformError::unsupported("ProcessHost", "start_detached"))
+    }
+
     /// C# `ProviderCatalog.StartCli` (ProviderCatalog.cs:117-126): a batch file (npm's `pi.cmd`) through cmd.exe with every argument
     /// quoted and the working folder never searched ([`crate::command::launch`]); anything else directly, as `ChildProcess.StartInfo`
     /// builds it (the caller's environment, then `NO_COLOR=1`).

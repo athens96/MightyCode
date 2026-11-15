@@ -20,6 +20,7 @@ pub mod labels;
 pub mod layout;
 pub mod node;
 pub mod notice;
+pub mod ouroboros_execution;
 pub mod result_files;
 pub mod run;
 pub mod structure;

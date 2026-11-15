@@ -13,6 +13,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+pub mod activator;
 pub mod agent_io;
 pub mod clipboard;
 pub mod console;
@@ -36,11 +37,14 @@ pub mod proxy;
 pub mod pty;
 pub mod screen;
 pub mod secrets;
+pub mod session;
 pub mod setup;
 pub mod surface;
 pub mod unsupported;
 pub mod update;
+pub mod update_transport;
 
+pub use activator::{ToastActivation, ToastActivator};
 pub use agent_io::{AgentIoConnection, AgentIoConnector, AgentIoListener, AgentIoStream};
 pub use clipboard::Clipboard;
 pub use console::{TerminalLaunch, TerminalLauncher, TerminalWindow};
@@ -54,10 +58,10 @@ pub use http::{HttpsRequest, HttpsResponse, HttpsSend};
 pub use net::{Adapter, Adapters, Network, NetworkCallback, Subscription};
 pub use notify::{ActivationHandler, Notification, Notifier};
 pub use pairing::{PairedDevice, PairingIdentity, PairingStore, PushRegistration};
-pub use paths::{AppPaths, Paths};
+pub use paths::{AppPaths, Paths, WebFolders};
 pub use pet::PetScene;
 pub use prefs::{PrefValue, PrefsStore};
-pub use process::{Captured, Child, ChildControl, ProcessHost, SpawnRequest, capture};
+pub use process::{Captured, Child, ChildControl, DetachedEnvironment, DetachedRequest, ProcessHost, SpawnRequest, capture};
 pub use profile::{
     AgentSignIn, CliUpdater, McpTransport, Os, PairingLayout, PathStyle, PlatformProfile, PluginListWhileReading, SettingsStore,
 };
@@ -65,12 +69,14 @@ pub use proxy::{Proxy, ProxyResolver};
 pub use pty::{PtyControl, PtyHost, PtyRequest, PtySession, PtySize, TerminalInput};
 pub use screen::{RemoteInput, ScreenCapture};
 pub use secrets::SecretVault;
+pub use session::{SessionCallback, SessionEnding, SessionWatch};
 pub use setup::SetupFiles;
 pub use surface::{
     BrowserEvent, BrowserListener, BrowserOptions, BrowserSurface, DeviceRect, Drawing, LogicalPoint, LogicalRect, NativeSurface, PetEvent,
     PetPointer, PetWindow, SurfaceFactory, SurfaceKind, SurfaceState, TerminalOptions, TerminalSurface,
 };
-pub use update::{StagedUpdate, UpdateInstaller};
+pub use update::{HelperMutex, StagedUpdate, UpdateInstaller};
+pub use update_transport::{DownloadProgress, DownloadRequest, Downloaded, UpdateResponse, UpdateTransport};
 
 /// A boxed future, so the ports stay usable as trait objects (`Arc<dyn ProcessHost>`).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -96,6 +102,12 @@ pub struct Platform {
     pub proxy: Arc<dyn ProxyResolver>,
     /// W8: HTTPS GET and POST (push; the account usage keeps its own guarded transport, src-tauri platform.rs `Ports`).
     pub https: Arc<dyn HttpsSend>,
+    /// W9: the app update's HTTPS (no proxy, redirects handed back, a capped manifest read and a streamed download; W9-B).
+    pub update_transport: Arc<dyn UpdateTransport>,
+    /// W9: the session ending and the user's last input (the automatic update's; W9-C).
+    pub session: Arc<dyn SessionWatch>,
+    /// W9: the toast activator (AUMID, CLSID, `CoRegisterClassObject`; W9-F).
+    pub activator: Arc<dyn ToastActivator>,
 }
 
 impl std::fmt::Debug for Platform {

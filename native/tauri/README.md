@@ -302,12 +302,19 @@ are not kept, and the temporary file is not flushed before it replaces the confi
 
 ### Unimplemented page methods
 
-What the page calls that the host answers `unimplemented` (the page's `bridge.call`s against `implemented`; a full smoke meets none:
-`unimplemented: []`):
+What the page calls that the host answers `unimplemented` (the page's `bridge.call`s against `implemented`). While W9 is under way a
+smoke may meet exactly these (smoke.rs `ALLOWED_UNIMPLEMENTED`, the check `unimplementedAllowed`; plan D20); each part takes its own
+out as it answers them, and at W9's end a full smoke meets none (`unimplemented: []`):
 
 | Methods | Stage |
 |---|---|
-| `guidedAction`, `postponeUpdate`, `restartForUpdate` | W9 |
+| `guidedAction` | W9-D |
+| `postponeUpdate`, `restartForUpdate` | W9-C |
+| `paneWorktreeStatus`, `paneWorktreeAction`, `paneWorktreeDiff`, `workspaceWorktree` (`main`'s 0.4.60–0.4.61 page) | W9-I |
+| `serverConnect`, `serverDisconnect` (`main`'s 0.4.61 page) | W9-J |
+
+W9's C# baseline is `origin/main` 90bf8ace (0.4.61), merged into W9's base in c4cd19db: its page builds the C# `dist/` byte for byte
+as `main` does, and the methods it added are the W9-I and W9-J rows above.
 
 W7's `webOpenChoose` was missing from this list before W7: a card method whose card never appeared is not called, so the smoke's list could not show it (W7 plan D11).
 

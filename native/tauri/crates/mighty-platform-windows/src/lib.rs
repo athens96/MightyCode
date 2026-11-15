@@ -7,7 +7,14 @@
 //! `WindowsShellEnvironment`, `UserEnvironment`, `PseudoTerminal` and `ShellActivity`): [`WindowsProcessHost`],
 //! [`WindowsPtyHost`], [`WindowsShellEnvironment`]. W7's Agent IO pipe ([`agent_io`], W7-C) and free space ([`disk_space`], W7-B) are
 //! stubs until their parts fill them. Every other port is `mighty_platform::unsupported::Unsupported` until its stage.
+//!
+//! W9 Step 0 added stubs that answer `Unsupported` until their parts fill them: [`update`] (the helper's mutex, wait, process list,
+//! fresh environment, uninstall entry and renamed shortcuts; W9-B), [`update_transport`] (WinHTTP without a proxy; W9-B),
+//! `WindowsProcessHost::start_detached` (W9-B), [`session`] (the session ending and the last input; W9-C) and [`activator`] (the COM
+//! toast activator; W9-F).
 
+#[cfg(windows)]
+pub mod activator;
 #[cfg(windows)]
 pub mod agent_io;
 #[cfg(windows)]
@@ -53,6 +60,8 @@ mod proxy;
 #[cfg(windows)]
 pub mod pty;
 #[cfg(windows)]
+pub mod session;
+#[cfg(windows)]
 pub mod setup_files;
 #[cfg(windows)]
 pub mod setup_probe;
@@ -60,6 +69,10 @@ pub mod setup_probe;
 pub mod shell_activity;
 #[cfg(windows)]
 mod text;
+#[cfg(windows)]
+pub mod update;
+#[cfg(windows)]
+pub mod update_transport;
 #[cfg(windows)]
 pub mod user_environment;
 #[cfg(windows)]
@@ -80,6 +93,7 @@ mod imp {
     use mighty_platform::unsupported::Unsupported;
     use mighty_platform::{AppPaths, Paths, Platform, PlatformProfile, Result, SurfaceFactory};
 
+    pub use crate::activator::ComActivator;
     pub use crate::agent_io::{NamedPipeConnector, NamedPipeListener};
     pub use crate::browser::{WebviewSurfaces, runtime_version as browser_runtime};
     pub use crate::cli::{CliRunResult, CliRunner};
@@ -99,7 +113,10 @@ mod imp {
     pub use crate::process::{KILLED_EXIT_CODE, WindowsProcessHost};
     pub use crate::proxy::WinHttpProxy;
     pub use crate::pty::WindowsPtyHost;
+    pub use crate::session::WindowsSession;
     pub use crate::setup_files::WindowsSetupFiles;
+    pub use crate::update::WindowsUpdates;
+    pub use crate::update_transport::WinHttpUpdates;
     pub use crate::variables::Variables;
     pub use crate::webview2_install::{download_bootstrapper, is_microsoft_signed, run_installer};
 
@@ -203,11 +220,20 @@ mod imp {
             pairing: Arc::new(pairing),
             notifier: Arc::new(Unsupported),
             firewall: Arc::new(WindowsFirewall::new(processes)),
-            updates: Arc::new(Unsupported),
+            updates: Arc::new(WindowsUpdates),
             network: Arc::new(WindowsNetwork),
             proxy: Arc::new(WinHttpProxy),
             https: Arc::new(crate::http::WinHttpGet),
+            // W9's (Step 0 stubs that answer `Unsupported`, as the update port did before): W9-B, W9-C, W9-F.
+            update_transport: Arc::new(WinHttpUpdates),
+            session: Arc::new(WindowsSession),
+            activator: Arc::new(ComActivator),
         })
+    }
+
+    /// The update installer alone, for the exe's `--update-helper` mode, which runs before any profile is read (W9-B).
+    pub fn update_installer() -> Arc<dyn mighty_platform::UpdateInstaller> {
+        Arc::new(WindowsUpdates)
     }
 
     /// The native views of `window`: browsers are WebView2 child webviews; the terminal is the page's (xterm.js).

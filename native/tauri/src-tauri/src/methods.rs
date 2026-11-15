@@ -196,6 +196,14 @@ pub fn registry() -> Registry {
     methods.add("connectRemote", crate::remote::connect_remote);
     methods.add("companionStatus", crate::companion::status);
     methods.add("companionToggle", crate::companion::toggle);
+    // W9: each part registers its own page methods (Step 0: none yet, so the page's calls stay on the unimplemented list, README's
+    // table and the smoke's `ALLOWED_UNIMPLEMENTED`, until each part answers them): `postponeUpdate`, `restartForUpdate` (app_update.rs,
+    // W9-C), `guidedAction` (styles.rs, W9-D), `paneWorktreeStatus`, `paneWorktreeAction`, `paneWorktreeDiff`, `workspaceWorktree`
+    // (pane_worktree.rs, W9-I), `serverConnect`, `serverDisconnect` (mirror.rs, W9-J).
+    crate::app_update::register(&mut methods);
+    crate::styles::register(&mut methods);
+    crate::pane_worktree::register(&mut methods);
+    crate::mirror::register(&mut methods);
     // W6: the native forms (native.rs) and Settings with the guide (settings/mod.rs).
     crate::native::register(&mut methods);
     crate::settings::register(&mut methods);

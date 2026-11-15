@@ -4,7 +4,11 @@
 //!
 //! The automatic updates (CLI and plugin) are a mutation of the user's machine a C# app on the same PC may be running too: the host
 //! keeps them off until W9 unless `--allow-state-write` is given, and always in a smoke ([`cli_update::holds::AutomaticUpdatePolicy`]).
+//!
+//! W9: the app's own update ([`app_update`]: the signed manifest, the download and staging over mighty-platform's `UpdateTransport`, the
+//! coordinator, the automatic policy and the `--update-helper` hand-off's pure half), W9-A's.
 
+pub mod app_update;
 pub mod cli_update;
 pub mod paths;
 pub mod plugins;

@@ -53,6 +53,13 @@ pub fn process_host() -> Arc<dyn mighty_platform::ProcessHost> {
     os::process_host()
 }
 
+/// The update installer alone (the mutex, the process wait, the fresh environment, the uninstall entry), for the exe's
+/// `--update-helper` mode, which runs before any profile is read (update_helper.rs, W9-B; with [`process_host`]'s `start_detached`).
+#[allow(dead_code, reason = "update_helper.rs (W9-B) runs the helper with it")]
+pub fn update_installer() -> Arc<dyn mighty_platform::UpdateInstaller> {
+    os::update_installer()
+}
+
 /// W6's ports, managed by the app (`host.app.state::<Ports>()`): a terminal window that outlives the app (sign-ins, the setup
 /// screen's install), the installed font families (Settings › 글자) and the account usage's HTTPS GET. A smoke gets the recording
 /// fakes for the two that reach outside the app (no window opens, no request leaves), and the real font list, which only reads.

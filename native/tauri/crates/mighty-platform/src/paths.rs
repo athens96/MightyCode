@@ -52,6 +52,22 @@ pub trait Paths: Send + Sync {
     fn browser_dir(&self) -> PathBuf {
         self.local_dir().join("browser").join(self.profile_key())
     }
+    /// W9 (plan §1.5, D5; owner W9-F): the page's and the browser panes' web data folders. A release build on the default profile
+    /// (`release_default_profile`) takes C#'s own, `<data>\web-profile` (C# `WebShell.cs:69`) and `<data>\browser-profiles`
+    /// (`MainWindow.Browser.cs:71-77`), so sign-ins in browser panes survive the update; any other run keeps this machine's local
+    /// folders ([`Paths::webview_dir`], [`Paths::browser_dir`]). Step 0: the local folders in every run (F fills the release branch).
+    fn web_folders(&self, _release_default_profile: bool) -> WebFolders {
+        WebFolders { page: self.webview_dir(), browser: self.browser_dir() }
+    }
+}
+
+/// Where the web data goes ([`Paths::web_folders`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebFolders {
+    /// The page's WebView2 / WKWebView data.
+    pub page: PathBuf,
+    /// The browser panes' (one profile per workspace under it).
+    pub browser: PathBuf,
 }
 
 /// The paths every OS crate builds from its roots, and the fake's.

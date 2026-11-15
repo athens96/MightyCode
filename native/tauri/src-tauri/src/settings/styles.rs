@@ -1,5 +1,6 @@
-//! The styles box, host-absent as in C# (MainWindow.Styles.cs) until W9. Owner: W6-A. (W8 Step 0 moved the other later-stage boxes to
-//! a file each: `mobile.rs`, `mobile_direct.rs`, `remote.rs`, `companion.rs`, `screen.rs`.)
+//! The styles box, host-absent as in C# (MainWindow.Styles.cs) until W9-D fills it (the rows, register, rescan, the lock banner, the
+//! rejected rows). Owner: W9-D. (W9 Step 0 moved it here as it was from `later.rs`, the last of the later-stage boxes; W8 Step 0 had
+//! moved the others to a file each: `mobile.rs`, `mobile_direct.rs`, `remote.rs`, `companion.rs`, `screen.rs`.)
 
 use std::sync::Arc;
 
