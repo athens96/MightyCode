@@ -69,6 +69,8 @@ pub struct FakeProcessHost {
     /// W9: the detached starts, in order; nothing runs.
     detached: Mutex<Vec<DetachedRequest>>,
     refuse_detached: Mutex<bool>,
+    /// W9-E: the waitable detached starts' processes, in order.
+    waitables: Mutex<Vec<Arc<FakeDetachedChild>>>,
 }
 
 impl FakeProcessHost {
@@ -77,6 +79,10 @@ impl FakeProcessHost {
     }
     pub fn spawned(&self) -> Vec<SpawnRequest> {
         lock(&self.spawned).clone()
+    }
+    /// Whether the `index`th waitable detached start (0 the first) was ended with [`DetachedChild::terminate`].
+    pub fn detached_terminated(&self, index: usize) -> bool {
+        lock(&self.waitables).get(index).is_some_and(|child| child.terminated.load(std::sync::atomic::Ordering::SeqCst))
     }
     /// Every detached start so far (W9: the helper, the relaunched app).
     pub fn detached(&self) -> Vec<DetachedRequest> {
@@ -207,6 +213,51 @@ impl ProcessHost for FakeProcessHost {
         let mut next = lock(&self.next_id);
         *next += 1;
         Ok(1000 + *next)
+    }
+
+    /// Records the request with the detached starts and plays the next script's exit code (or hangs) as the process; a job without
+    /// breakaway ([`FakeProcessHost::refuse_detached`]) does not refuse it (it would start in the job).
+    fn start_detached_waitable(&self, request: DetachedRequest) -> Result<Box<dyn DetachedChild>> {
+        if !request.cwd.is_absolute() || !request.program.is_absolute() {
+            return Err(PlatformError::Invalid("the program and the working folder need absolute paths".into()));
+        }
+        let script = lock(&self.scripts).pop_front().unwrap_or_default();
+        lock(&self.detached).push(request);
+        let id = {
+            let mut next = lock(&self.next_id);
+            *next += 1;
+            1000 + *next
+        };
+        let child = Arc::new(FakeDetachedChild {
+            id,
+            exit: Exit::new((!script.hang).then_some(script.exit_code)),
+            terminated: std::sync::atomic::AtomicBool::new(false),
+        });
+        lock(&self.waitables).push(child.clone());
+        Ok(Box::new(SharedDetached(child)))
+    }
+}
+
+struct FakeDetachedChild {
+    id: u32,
+    exit: Exit,
+    terminated: std::sync::atomic::AtomicBool,
+}
+
+struct SharedDetached(Arc<FakeDetachedChild>);
+
+impl DetachedChild for SharedDetached {
+    fn id(&self) -> u32 {
+        self.0.id
+    }
+    fn wait(&self) -> BoxFuture<'_, Result<i32>> {
+        Box::pin(async move { Ok(self.0.exit.wait().await) })
+    }
+    fn terminate(&self) {
+        if !self.0.exit.ended() {
+            self.0.terminated.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.0.exit.end(KILLED);
     }
 }
 

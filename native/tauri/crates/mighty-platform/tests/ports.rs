@@ -234,6 +234,32 @@ fn a_detached_start_is_recorded_with_its_exact_environment() {
     assert!(matches!(host.start_detached(request), Err(PlatformError::Refused(_))));
 }
 
+/// W9-E: a waitable detached start is recorded with the detached starts, plays its script's exit code, and ends alone when terminated;
+/// a job without breakaway does not refuse it (the child would start in that job).
+#[tokio::test]
+async fn a_waitable_detached_start_is_waited_for_and_ended_alone() {
+    let host = FakeProcessHost::default();
+    let request = DetachedRequest {
+        program: absolute("tools/python.exe"),
+        args: vec!["-I".into()],
+        cwd: absolute("system"),
+        environment: DetachedEnvironment::Exactly(BTreeMap::from([("HOME".to_string(), "h".to_string())])),
+        hidden: true,
+    };
+    host.refuse_detached(true);
+    host.push(FakeScript { exit_code: 3, ..FakeScript::default() });
+    let child = host.start_detached_waitable(request.clone()).unwrap();
+    assert!(child.id() > 0 && child.wait().await.unwrap() == 3, "the exit code is read");
+    child.terminate();
+    assert!(!host.detached_terminated(0), "ending one that exited ends nothing");
+    host.push(FakeScript { hang: true, ..FakeScript::default() });
+    let hung = host.start_detached_waitable(request.clone()).unwrap();
+    hung.terminate();
+    assert!(host.detached_terminated(1) && hung.wait().await.unwrap() == fake::KILLED, "a running one is ended");
+    assert_eq!(host.detached(), vec![request.clone(), request], "both recorded as detached starts");
+    assert!(host.spawned().is_empty(), "neither is a child of the app");
+}
+
 /// W9 (Step 0): one holder per helper mutex name until its guard drops.
 #[test]
 fn a_helper_mutex_has_one_holder_at_a_time() {

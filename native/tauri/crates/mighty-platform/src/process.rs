@@ -165,6 +165,17 @@ pub trait ChildControl: Send + Sync {
     fn close(&self) -> BoxFuture<'_, Result<()>>;
 }
 
+/// A detached process the app waits on ([`ProcessHost::start_detached_waitable`]): it outlives the app, but the app can still read its
+/// exit code and end it.
+pub trait DetachedChild: Send + Sync {
+    fn id(&self) -> u32;
+    /// The exit code, once the process has exited (Windows: the DWORD as a signed number, as C# reads it).
+    fn wait(&self) -> BoxFuture<'_, Result<i32>>;
+    /// Ends this process only, never what it started (C#'s `Kill(entireProcessTree: false)`). Calling it again, or after the exit,
+    /// does nothing.
+    fn terminate(&self);
+}
+
 /// Starts child processes.
 ///
 /// Contract:
@@ -187,6 +198,16 @@ pub trait ProcessHost: Send + Sync {
     /// the elevation verb). The default answers `Unsupported` (the Mac's until its stage).
     fn start_detached(&self, _request: DetachedRequest) -> Result<u32> {
         Err(PlatformError::unsupported("ProcessHost", "start_detached"))
+    }
+
+    /// W9-E: a process that outlives this one, as [`ProcessHost::start_detached`] starts it (no job, no pipes, no inherited handle, the
+    /// environment exactly as given, never a new process group), whose exit the app still waits for and which it can end alone (C#'s
+    /// `Process.Start` then `WaitForExitAsync` / `Kill(entireProcessTree: false)`). When this process sits in a job that lets no child
+    /// break away, the child starts in that job (Windows; C#'s `Process.Start` never breaks away). For the Ouroboros dashboard daemon's
+    /// start, which C# leaves running: the start exits once its daemon is up, and the daemon must not die with the app. The default
+    /// answers `Unsupported` (the Mac's until its stage).
+    fn start_detached_waitable(&self, _request: DetachedRequest) -> Result<Box<dyn DetachedChild>> {
+        Err(PlatformError::unsupported("ProcessHost", "start_detached_waitable"))
     }
 
     /// How a CLI found at `program` starts with `args` (C# `ProviderCatalog.StartCli`): `env` laid over this process's environment,

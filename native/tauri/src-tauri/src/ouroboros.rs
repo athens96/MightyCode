@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,8 +24,8 @@ use mighty_core::locale::Locale;
 use mighty_graph::ouroboros_execution::{
     self as ox, Board, DaemonStarts, Dashboard, DashboardUrl, Endpoint, Link, Poll, RunSummary, Snapshot, Source,
 };
-use mighty_platform::{BoxFuture, ProcessHost, SpawnRequest};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use mighty_platform::{BoxFuture, DetachedEnvironment, DetachedRequest, ProcessHost};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
@@ -149,7 +150,8 @@ async fn exchange(
     let opening = events.map_or(limit, |(_, first)| (started + first).min(limit));
     let endpoint = &target.endpoint;
     let host = endpoint.host.trim_start_matches('[').trim_end_matches(']');
-    let connect = tokio::net::TcpStream::connect((host, endpoint.port));
+    let addresses = loopback_addresses(host, endpoint.port)?;
+    let connect = tokio::net::TcpStream::connect(&addresses[..]);
     let mut stream = tokio::time::timeout_at(opening.min(started + CONNECT_TIMEOUT), connect).await.ok()?.ok()?;
     let authority = if host.contains(':') { format!("[{host}]:{}", endpoint.port) } else { format!("{host}:{}", endpoint.port) };
     let request = format!("GET {} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n", target.target());
@@ -219,6 +221,16 @@ async fn exchange(
         return None;
     }
     Some((status, body))
+}
+
+/// The addresses a dashboard host is connected at: loopback literals only, never a name looked up (`localhost` is 127.0.0.1, then ::1),
+/// so no resolver can send the read anywhere else.
+fn loopback_addresses(host: &str, port: u16) -> Option<Vec<SocketAddr>> {
+    if host.eq_ignore_ascii_case("localhost") {
+        return Some(vec![SocketAddr::from((Ipv4Addr::LOCALHOST, port)), SocketAddr::from((Ipv6Addr::LOCALHOST, port))]);
+    }
+    let address: IpAddr = host.parse().ok()?;
+    address.is_loopback().then(|| vec![SocketAddr::new(address, port)])
 }
 
 fn ends_event(fresh: &[u8]) -> bool {
@@ -464,46 +476,36 @@ impl Client {
     }
 }
 
-/// The daemon's start through the app's process host: nothing is read from it (its pipes are drained, so a daemon that inherits them
-/// never fails a write), its environment is exactly the one given, and a start that has not exited in 20 s is ended.
+/// `Capture`: the daemon's start as C# makes it — a process outside the app's job (the daemon it leaves behind must outlive the app, as
+/// C#'s does), nothing piped (a daemon that inherited a pipe would fail its writes once nothing read it), no window, the environment
+/// exactly the one given, no shell; a start that has not exited in [`ox::DAEMON_START_TIMEOUT`] is ended alone (C#'s
+/// `Kill(entireProcessTree: false)`: a daemon it already started keeps running).
 pub fn process_launcher(processes: Arc<dyn ProcessHost>) -> Launcher {
+    launcher_with(processes, ox::DAEMON_START_TIMEOUT)
+}
+
+fn launcher_with(processes: Arc<dyn ProcessHost>, timeout: Duration) -> Launcher {
     Arc::new(move |launch: Launch| {
         let processes = processes.clone();
         Box::pin(async move {
-            let request = SpawnRequest {
+            let request = DetachedRequest {
                 program: launch.executable,
                 args: launch.arguments,
                 cwd: launch.working_directory,
-                env: launch.environment,
-                // Nothing of the app's own environment but what is given back.
-                env_remove: std::env::vars_os().map(|(k, _)| k.to_string_lossy().into_owned()).collect(),
-                shell_command: None,
+                environment: DetachedEnvironment::Exactly(launch.environment),
+                hidden: true,
             };
-            let Ok(mut child) = processes.spawn(request).await else { return false };
-            drop(child.stdin.take());
-            for reader in [child.stdout.take(), child.stderr.take()].into_iter().flatten() {
-                tokio::spawn(drain(reader));
-            }
-            let control = child.control();
-            match tokio::time::timeout(ox::DAEMON_START_TIMEOUT, control.wait()).await {
+            let Ok(child) = processes.start_detached_waitable(request) else { return false };
+            match tokio::time::timeout(timeout, child.wait()).await {
                 Ok(Ok(code)) => code == 0,
                 Ok(Err(_)) => false,
                 Err(_) => {
-                    control.kill();
+                    child.terminate();
                     false
                 }
             }
         })
     })
-}
-
-async fn drain(mut reader: impl AsyncRead + Unpin) {
-    let mut sink = [0u8; 4096];
-    while let Ok(count) = reader.read(&mut sink).await {
-        if count == 0 {
-            break;
-        }
-    }
 }
 
 // ── the pane's executions ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -712,7 +714,7 @@ impl Monitor {
 /// `OpenDashboardAsync`: the "open dashboard" click. It may start the daemon even for history (the user asked for it), but never for one
 /// that answered. One click at a time per block: false when another is still being handled. `began` runs once the click is taken; `open`
 /// says whether anything showed.
-pub async fn open_dashboard<F, Fut>(monitor: &Mutex<Monitor>, link: &Link, began: impl FnOnce(), open: F) -> bool
+pub async fn open_dashboard<F, Fut>(monitor: &Mutex<Monitor>, link: &Link, cancel: &Cancel, began: impl FnOnce(), open: F) -> bool
 where
     F: FnOnce(DashboardUrl) -> Fut,
     Fut: Future<Output = bool>,
@@ -727,16 +729,16 @@ where
         held.client.clone()
     };
     began();
-    let cancel = Cancel::default();
     let mut endpoint = client.endpoint(link.dashboard_url.as_ref());
-    if !client.summaries(endpoint.as_ref(), &cancel).await.answered && client.ensure_daemon(link.execution_id.as_deref(), &cancel).await {
+    if !client.summaries(endpoint.as_ref(), cancel).await.answered && client.ensure_daemon(link.execution_id.as_deref(), cancel).await {
         endpoint = client.endpoint(link.dashboard_url.as_ref());
     }
     let url = match &endpoint {
         None => link.dashboard_url.clone(),
         Some(endpoint) => Some(ox::page_url(endpoint, link.execution_id.as_deref())),
     };
-    let opened = match url {
+    // A click quit ended on its way shows nothing.
+    let opened = match url.filter(|_| !cancel.is_cancelled()) {
         Some(url) => open(url).await,
         None => false,
     };
@@ -758,6 +760,8 @@ struct Pane {
     /// The page shows the pane's Mighty view in the diagram presentation: its blocks are read.
     watching: bool,
     reading: bool,
+    /// Which read `reading` is for, so only that read's end clears it.
+    read_serial: u64,
     cancel: Option<Arc<Cancel>>,
 }
 
@@ -769,6 +773,7 @@ impl Pane {
             lists: HashSet::new(),
             watching: false,
             reading: false,
+            read_serial: 0,
             cancel: None,
         }
     }
@@ -782,10 +787,26 @@ impl Pane {
     }
 }
 
+/// A pane's read on its way: its end — finished, cancelled, or a task that panicked — lets the pane read again.
+struct Reading {
+    pane: String,
+    serial: u64,
+}
+
+impl Drop for Reading {
+    fn drop(&mut self) {
+        if let Some(pane) = lock(&STATE).as_mut().and_then(|s| s.panes.get_mut(&self.pane)).filter(|p| p.read_serial == self.serial) {
+            pane.reading = false;
+        }
+    }
+}
+
 struct State {
     client: Arc<Client>,
     panes: HashMap<String, Pane>,
     stopped: bool,
+    /// The "open dashboard" clicks on their way, cancelled at quit.
+    opening: Arc<Cancel>,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -797,7 +818,7 @@ pub fn start(host: &Arc<Host>) {
     }
     let home = PathBuf::from(crate::accounts::home());
     let client = Arc::new(Client::new(Arc::new(LoopbackTransport), &home, process_launcher(host.processes.clone()), None));
-    *lock(&STATE) = Some(State { client, panes: HashMap::new(), stopped: false });
+    *lock(&STATE) = Some(State { client, panes: HashMap::new(), stopped: false, opening: Arc::default() });
     let host = host.clone();
     let _ = std::thread::Builder::new().name("ouroboros-dashboard".into()).spawn(move || {
         loop {
@@ -810,10 +831,11 @@ pub fn start(host: &Arc<Host>) {
     });
 }
 
-/// At quit (main.rs), before the runs are disposed: the reads stopped, the ones on their way cancelled.
+/// At quit (main.rs), before the runs are disposed: the reads stopped, the ones and the clicks on their way cancelled.
 pub fn shutdown(_host: &Arc<Host>) {
     if let Some(state) = lock(&STATE).as_mut() {
         state.stopped = true;
+        state.opening.cancel();
         for pane in state.panes.values_mut() {
             pane.stop();
         }
@@ -851,6 +873,10 @@ pub fn hidden(pane: &str) {
 /// `ReadOuroboros` for every watched pane whose blocks are due: the reads run off this thread and are given to the blocks when they come
 /// back; a pane that closed goes with its reads.
 fn due(host: &Arc<Host>) {
+    // Nothing watched: nothing to read, and the view is not locked for it.
+    if !lock(&STATE).as_ref().is_some_and(|s| !s.stopped && s.panes.values().any(|p| p.watching)) {
+        return;
+    }
     let alive: HashSet<String> = host.view().snapshot.sessions().iter().map(|s| s.id().to_string()).collect();
     let mut guard = lock(&STATE);
     let Some(state) = guard.as_mut().filter(|s| !s.stopped) else { return };
@@ -875,17 +901,19 @@ fn due(host: &Arc<Host>) {
             monitor.begin(due, &pane.lists)
         };
         pane.reading = true;
+        pane.read_serial += 1;
+        let reading = Reading { pane: id.clone(), serial: pane.read_serial };
         let cancel = pane.cancel.get_or_insert_with(Default::default).clone();
         let (host, id) = (host.clone(), id.clone());
         tauri::async_runtime::spawn(async move {
             let mut job = job;
             job.run(&Utc::now, &cancel).await;
             let changed = {
-                let mut guard = lock(&STATE);
-                let Some(pane) = guard.as_mut().and_then(|s| s.panes.get_mut(&id)) else { return };
-                pane.reading = false;
+                let guard = lock(&STATE);
+                let Some(pane) = guard.as_ref().and_then(|s| s.panes.get(&id)) else { return };
                 !cancel.is_cancelled() && lock(&pane.monitor).apply(&job, Utc::now())
             };
+            drop(reading);
             if changed {
                 host.view().mighty.dirty(&id);
             }
@@ -896,19 +924,20 @@ fn due(host: &Arc<Host>) {
 /// `WebOpenDashboard(key)`: the run's page on the loopback dashboard, started first when nothing answers, shown in the system's browser.
 /// Never in a smoke run.
 pub async fn open(host: &Arc<Host>, pane: &str, key: &str) {
-    if host.smoke.is_some() {
+    if host.smoke.is_some() || host.closing() {
         return;
     }
-    let (monitor, link) = {
+    let (monitor, link, cancel) = {
         let mut guard = lock(&STATE);
         let Some(state) = guard.as_mut().filter(|s| !s.stopped) else { return };
         let client = state.client.clone();
+        let cancel = state.opening.clone();
         let entry = state.panes.entry(pane.to_string()).or_insert_with(|| Pane::new(client));
         let Some(link) = entry.links.iter().find(|l| l.key() == key).cloned() else { return };
-        (entry.monitor.clone(), link)
+        (entry.monitor.clone(), link, cancel)
     };
     let refresh = || host.view().mighty.dirty(pane);
-    open_dashboard(&monitor, &link, refresh, |url| async move {
+    open_dashboard(&monitor, &link, &cancel, refresh, |url| async move {
         if ox::dashboard_url(&url.original).is_none() {
             return false;
         }
@@ -1168,7 +1197,6 @@ mod tests {
     }
 
     /// A dashboard on loopback answering each request with what `respond` gives: a delay, a status and a body, then closing.
-    #[cfg(windows)]
     async fn serve(respond: fn(&str) -> (Duration, u16, String)) -> (u16, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1195,8 +1223,8 @@ mod tests {
         (port, served)
     }
 
-    /// `TheLoopbackTransportReadsOnlyLoopbackWithinItsLimits` (L338). Real sockets: Windows only (CI's Mac runs the rest).
-    #[cfg(windows)]
+    /// `TheLoopbackTransportReadsOnlyLoopbackWithinItsLimits` (L338), over real loopback sockets on every OS (the transport is
+    /// platform-neutral).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_loopback_transport_reads_only_loopback_within_its_limits() {
         let home = home("loopback");
@@ -1462,9 +1490,11 @@ mod tests {
         let shared = Arc::new(Mutex::new(monitor));
         let shown = Arc::new(StdMutex::new(vec![]));
         let (watched, seen) = (shared.clone(), shown.clone());
+        let clicks = Cancel::default();
         let taken = open_dashboard(
             &shared,
             &exec,
+            &clicks,
             || {},
             |url| async move {
                 assert!(lock(&watched).opening("exec_1"), "the click is being handled");
@@ -1481,10 +1511,10 @@ mod tests {
             "the dashboard page opens: {:?}",
             shown.lock().unwrap()
         );
-        open_dashboard(&shared, &exec, || {}, |_| async { false }).await;
+        open_dashboard(&shared, &exec, &clicks, || {}, |_| async { false }).await;
         assert!(lock(&shared).open_failed("exec_1"), "a click that showed nothing says so");
         assert!(
-            open_dashboard(&shared, &job_only, || {}, |_| async { true }).await
+            open_dashboard(&shared, &job_only, &clicks, || {}, |_| async { true }).await
                 && lock(&shared).open_failed("job-job_2")
                 && lock(&shared).open_failed("exec_1"),
             "with no address there is nothing to open"
@@ -1534,7 +1564,70 @@ mod tests {
             "a cancelled read ends at once and leaves its block due: {:?}",
             started.elapsed()
         );
+        // Quit cancelled the clicks on their way: nothing is shown.
+        clicks.cancel();
+        let shown_after = Arc::new(StdMutex::new(false));
+        let seen = shown_after.clone();
+        open_dashboard(
+            &shared,
+            &exec,
+            &clicks,
+            || {},
+            |_| async move {
+                *seen.lock().unwrap() = true;
+                true
+            },
+        )
+        .await;
+        assert!(!*shown_after.lock().unwrap() && lock(&shared).open_failed("exec_1"), "a click quit cancelled shows nothing");
         std::fs::remove_dir_all(home).unwrap();
+    }
+
+    /// `Capture` through the process host: the daemon's start is a waitable detached process (outside the app's job, nothing piped, no
+    /// shell, no window) with exactly the environment given; a start that exits 0 is a start, another code is not, and one still running
+    /// at the timeout is ended alone.
+    #[tokio::test]
+    async fn the_daemons_start_is_detached_with_its_exact_environment_and_ended_alone_at_its_timeout() {
+        use mighty_platform::fake::{FakeProcessHost, FakeScript};
+        let processes = Arc::new(FakeProcessHost::default());
+        let launcher = launcher_with(processes.clone(), Duration::from_millis(200));
+        let environment = BTreeMap::from([("HOME".to_string(), "/home/u".to_string()), ("PYTHONSAFEPATH".to_string(), "1".to_string())]);
+        let launch = Launch {
+            executable: std::env::temp_dir().join("python"),
+            arguments: vec!["-I".into(), "-m".into(), "ouroboros.dashboard_web".into()],
+            environment: environment.clone(),
+            working_directory: std::env::temp_dir(),
+        };
+        assert!(launcher(launch.clone()).await, "a start that exits 0");
+        let started = processes.detached();
+        assert!(
+            started.len() == 1
+                && started[0].program == launch.executable
+                && started[0].args == launch.arguments
+                && started[0].cwd == launch.working_directory
+                && started[0].environment == DetachedEnvironment::Exactly(environment)
+                && started[0].hidden,
+            "detached, hidden, no shell, exactly its environment: {:?}",
+            started[0]
+        );
+        assert!(processes.spawned().is_empty(), "never a child in the app's job");
+        processes.push(FakeScript { exit_code: 2, ..FakeScript::default() });
+        assert!(!launcher(launch.clone()).await, "another exit code is no start");
+        processes.push(FakeScript { hang: true, ..FakeScript::default() });
+        assert!(!launcher(launch).await && processes.detached_terminated(2), "a start still running at its timeout is ended alone");
+        assert!(!processes.detached_terminated(0) && !processes.detached_terminated(1), "one that exited is not");
+    }
+
+    /// The loopback rule at the connection: literals only, `localhost` as 127.0.0.1 then ::1, nothing else.
+    #[test]
+    fn only_loopback_literals_are_connected_to() {
+        assert_eq!(
+            loopback_addresses("LocalHost", 9),
+            Some(vec![SocketAddr::from((Ipv4Addr::LOCALHOST, 9)), SocketAddr::from((Ipv6Addr::LOCALHOST, 9))])
+        );
+        assert_eq!(loopback_addresses("::1", 9), Some(vec![SocketAddr::from((Ipv6Addr::LOCALHOST, 9))]));
+        assert_eq!(loopback_addresses("127.0.0.1", 9), Some(vec![SocketAddr::from((Ipv4Addr::LOCALHOST, 9))]));
+        assert!(loopback_addresses("10.0.0.5", 9).is_none() && loopback_addresses("example.com", 9).is_none(), "anything else is refused");
     }
 
     /// The block's card as the page reads it (C# `WebExecutionCard`): the words for each state, the AC list while open, the open click.

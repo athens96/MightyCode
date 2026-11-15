@@ -106,6 +106,8 @@ pub struct Poller {
     /// A block a read hung on, by the batch it hung in: skipped until that batch answers.
     hung: HashMap<u64, String>,
     reading: bool,
+    /// When the batch on its way was handed out.
+    batch_at: Duration,
     batch: u64,
     shape: Option<u64>,
     progress: Option<Arc<Progress>>,
@@ -134,13 +136,17 @@ impl Poller {
         let mut tick = Tick::default();
         if self.reading {
             // Only one file read for the whole timeout is given up on; a batch that is merely slow, moving from file to file, is waited for.
-            let Some((stuck, since)) = self.progress.as_ref().and_then(|p| p.current()) else { return tick };
+            // A batch whose reads never began (its thread could not start) is given up on after the same time, with no block to skip.
+            let current = self.progress.as_ref().and_then(|p| p.current());
+            let since = current.as_ref().map_or(self.batch_at, |(_, since)| *since);
             if now.saturating_sub(since) <= READ_TIMEOUT {
                 return tick;
             }
             // That block is skipped until its batch answers, under that batch's id; the batch id moves on so the answer reads as stale,
             // and later batches read on a thread of their own rather than wait behind it.
-            self.hung.insert(self.batch, stuck);
+            if let Some((stuck, _)) = current {
+                self.hung.insert(self.batch, stuck);
+            }
             self.batch += 1;
             tick.gave_up = true;
             self.reading = false;
@@ -196,6 +202,7 @@ impl Poller {
         let progress = Arc::new(Progress::default());
         self.progress = Some(progress.clone());
         self.reading = true;
+        self.batch_at = now;
         tick.batch = Some(Batch { id: self.batch, reads, progress });
         tick
     }
@@ -320,21 +327,19 @@ impl Poller {
 }
 
 /// `ReadBackgroundOutput`: the file's last lines, or none. Only a regular file on this computer is opened (a pipe or a device would block
-/// or answer forever, a share is another computer's); a link is followed first, so where it points is what is judged.
+/// or answer forever, a share is another computer's). Every link on the way is replaced by its target on paper first
+/// (`workspace_files::real_path`: a link is read, never opened through, and one that leads to a share or a device is refused), so where
+/// it points is judged before anything there is touched.
 pub fn read_output(path: &str) -> Option<Vec<String>> {
     if !local_file_path(path) || device_name(path) {
         return None;
     }
-    let full = std::path::absolute(path).ok()?;
-    if !local_file_path(&full.to_string_lossy()) {
+    let real = mighty_core::workspace_files::real_path(std::path::Path::new(path))?;
+    let target = real.to_string_lossy().into_owned();
+    if !local_file_path(&target) || device_name(&target) {
         return None;
     }
-    let target = std::fs::canonicalize(&full).ok()?;
-    let target = target.to_string_lossy().into_owned();
-    if !local_file_path(&target) {
-        return None;
-    }
-    let meta = std::fs::metadata(&target).ok()?;
+    let meta = std::fs::metadata(&real).ok()?;
     if !meta.is_file() || is_device(&meta) {
         return None;
     }
@@ -502,18 +507,22 @@ fn tick(host: &Arc<Host>) {
         if let Some(batch) = tick.batch {
             let host = host.clone();
             // A thread of its own, never the shared pool: a read stalled on a dead share holds that one thread, not one the app needs.
+            // Whatever happens to the reads, the batch answers (a panic answers with nothing), so the poller never waits on it for good.
             state.reader.post(Box::new(move || {
-                let results: Vec<(String, String, Option<Vec<String>>)> = batch
-                    .reads
-                    .into_iter()
-                    .map(|read| {
-                        batch.progress.start(&read.id, clock());
-                        let lines = read_output(&read.path);
-                        (read.id, read.pane, lines)
-                    })
-                    .collect();
-                batch.progress.finish();
-                apply(&host, results, batch.id);
+                let Batch { id, reads, progress } = batch;
+                let read_all = AssertUnwindSafe(|| {
+                    reads
+                        .into_iter()
+                        .map(|read| {
+                            progress.start(&read.id, clock());
+                            let lines = read_output(&read.path);
+                            (read.id, read.pane, lines)
+                        })
+                        .collect::<Vec<(String, String, Option<Vec<String>>)>>()
+                });
+                let results = catch_unwind(read_all).unwrap_or_default();
+                progress.finish();
+                apply(&host, results, id);
             }));
         }
         tick.changed
@@ -720,6 +729,81 @@ mod tests {
         assert!(!poller.lines_of("pane").contains_key("stuck"), "its lines are not taken");
         let third = poller.tick(&["pane"], &panes, Duration::from_secs(13)).batch.expect("the next batch");
         assert!(third.reads.iter().any(|r| r.id == "stuck"), "the block is read again once its batch answered");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A batch whose reads never began (the reader thread could not start, or a read panicked before it answered) is given up on after
+    /// 10 s like a hung one, with no block to skip.
+    #[test]
+    fn a_batch_that_never_answers_is_given_up_on() {
+        let root = temp("silent");
+        let file = root.join("x.output");
+        std::fs::write(&file, "line\n").unwrap();
+        let runs = runs(vec![task("x", "running", &file.to_string_lossy())]);
+        let panes = [PaneRuns { id: "pane", readable: true, lists: vec![&runs] }];
+        let mut poller = Poller::default();
+        assert!(poller.tick(&["pane"], &panes, Duration::ZERO).batch.is_some(), "a batch is handed out");
+        assert!(poller.tick(&["pane"], &panes, READ_TIMEOUT).batch.is_none(), "waited for up to 10 s");
+        let tick = poller.tick(&["pane"], &panes, READ_TIMEOUT + Duration::from_secs(1));
+        assert!(tick.gave_up, "then given up on");
+        assert!(tick.batch.is_some_and(|b| b.reads.iter().any(|r| r.id == "x")), "and its block read again at once, never skipped");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Makes a file link; false where this account may not (Windows without the symbolic-link privilege or developer mode). CI's runners
+    /// may, so there it must work.
+    fn file_link(link: &std::path::Path, target: &std::path::Path) -> bool {
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(target, link);
+        #[cfg(not(windows))]
+        let made = std::os::unix::fs::symlink(target, link);
+        match made {
+            Ok(()) => true,
+            Err(error) => {
+                assert!(std::env::var_os("CI").is_none(), "CI makes file links: {error}");
+                eprintln!("skipped: no file link could be made here ({error})");
+                false
+            }
+        }
+    }
+
+    /// M2: links are judged on paper before anything is opened through them — a link to a local file reads that file, a link to a share
+    /// gives nothing and never connects to it.
+    #[test]
+    fn a_link_is_judged_before_its_target_is_opened() {
+        let root = temp("link");
+        let target = root.join("real.output");
+        std::fs::write(&target, "through the link\n").unwrap();
+        let local = root.join("local.output");
+        let share = root.join("share.output");
+        let share_target =
+            if cfg!(windows) { r"\\mighty-test-server.invalid\share\x.output" } else { "//mighty-test-server.invalid/share/x.output" };
+        if file_link(&local, &target) && file_link(&share, std::path::Path::new(share_target)) {
+            assert_eq!(read_output(&local.to_string_lossy()), Some(vec!["through the link".to_string()]), "a link to a local file");
+            let started = std::time::Instant::now();
+            assert!(read_output(&share.to_string_lossy()).is_none(), "a link to a share");
+            assert!(started.elapsed() < Duration::from_secs(2), "refused without reaching for the share: {:?}", started.elapsed());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A junction (which any account may make on Windows) to a local folder is followed, and the file behind it read.
+    #[cfg(windows)]
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "the test's own mklink, no child of the app")]
+    fn a_junction_to_a_local_folder_is_followed() {
+        let root = temp("junction");
+        let folder = root.join("tasks");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("x.output"), "behind the junction\n").unwrap();
+        let link = root.join("linked");
+        let made = std::process::Command::new("cmd").arg("/c").arg("mklink").arg("/J").arg(&link).arg(&folder).output();
+        assert!(made.is_ok_and(|o| o.status.success()), "a junction is made");
+        assert_eq!(
+            read_output(&link.join("x.output").to_string_lossy()),
+            Some(vec!["behind the junction".to_string()]),
+            "the file behind a junction"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

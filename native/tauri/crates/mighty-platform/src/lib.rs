@@ -61,7 +61,7 @@ pub use pairing::{PairedDevice, PairingIdentity, PairingStore, PushRegistration}
 pub use paths::{AppPaths, Paths, WebFolders};
 pub use pet::PetScene;
 pub use prefs::{PrefValue, PrefsStore};
-pub use process::{Captured, Child, ChildControl, DetachedEnvironment, DetachedRequest, ProcessHost, SpawnRequest, capture};
+pub use process::{Captured, Child, ChildControl, DetachedChild, DetachedEnvironment, DetachedRequest, ProcessHost, SpawnRequest, capture};
 pub use profile::{
     AgentSignIn, CliUpdater, McpTransport, Os, PairingLayout, PathStyle, PlatformProfile, PluginListWhileReading, SettingsStore,
 };
