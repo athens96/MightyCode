@@ -52,10 +52,12 @@ pub fn start_engine(enabled: bool, root_cache: &Path, temporary_stores: bool) {
 }
 
 /// Shuts CEF down before the app exits (Swift `CefBrowserRuntime.shutDown` on `willTerminate`: open panes closed, CEF's shutdown
-/// within about 5 s), and empties a smoke's WKWebView stores. On the main thread (`RunEvent::Exit`).
-pub fn stop_engine() {
-    cef::stop();
+/// within about 5 s), and empties a smoke's WKWebView stores. On the main thread (`RunEvent::Exit`). What CEF's shutdown did, for the
+/// log; None when CEF was not running.
+pub fn stop_engine() -> Option<String> {
+    let stopped = cef::stop();
     webkit::clear_temporary_stores();
+    stopped
 }
 
 /// A new pane's status on the Mac (mighty-platform `SurfaceFactory::browser_status`): pages show with the setting off (WKWebView,

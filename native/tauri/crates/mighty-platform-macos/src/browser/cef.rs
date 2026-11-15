@@ -205,10 +205,10 @@ pub(super) fn start(root_cache: &Path) -> std::result::Result<(), String> {
 }
 
 /// Closes what is left and shuts CEF down (Swift `CefBrowserRuntime.shutDown`; the bridge pumps until every browser let go, 5 s at
-/// most, and leaves CEF loaded if one never does). On the main thread, as the app ends.
-pub(super) fn stop() {
+/// most, and leaves CEF loaded if one never does). On the main thread, as the app ends; what happened, for the log.
+pub(super) fn stop() -> Option<String> {
     if !RUNNING.swap(false, Ordering::SeqCst) {
-        return;
+        return None;
     }
     STOPPING.store(true, Ordering::SeqCst);
     TIMER.with(|kept| {
@@ -217,10 +217,22 @@ pub(super) fn stop() {
             unsafe { CFRunLoopTimerInvalidate(timer.as_concrete_TypeRef()) };
         }
     });
-    let Some(bridge) = ENGINE.get() else { return };
+    let bridge = ENGINE.get()?;
+    let open = PANES.lock().unwrap_or_else(|p| p.into_inner()).iter().filter(|pane| !pane.lock().closing).count();
+    for pane in PANES.lock().unwrap_or_else(|p| p.into_inner()).iter() {
+        pane.lock().closing = true;
+    }
+    let started = Instant::now();
     // SAFETY: the bridge's shutdown on the main thread.
     unsafe { (bridge.shutdown)() };
+    let took = started.elapsed().as_millis();
     release_closed(bridge);
+    // SAFETY: the bridge's query on the main thread.
+    Some(if unsafe { (bridge.is_initialized)() } == 0 {
+        format!("CEF shut down in {took} ms ({open} panes open)")
+    } else {
+        format!("CEF kept a browser past its shutdown's {took} ms ({open} panes open): left loaded until the process ends")
+    })
 }
 
 extern "C" fn pump(_timer: CFRunLoopTimerRef, _info: *mut c_void) {

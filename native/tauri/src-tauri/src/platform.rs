@@ -304,10 +304,13 @@ pub fn start_browser_engine(enabled: bool, profiles: &std::path::Path, temporary
     let _ = (enabled, profiles, temporary_stores);
 }
 
-/// Shuts the browser engine down as the app exits (`RunEvent::Exit`, the main thread): the Mac's CEF, before the process ends.
-pub fn stop_browser_engine() {
+/// Shuts the browser engine down as the app exits (`RunEvent::Exit`, the main thread): the Mac's CEF, before the process ends; what
+/// its shutdown did, for the log (None where no engine ran: Windows, the Mac's WKWebView).
+pub fn stop_browser_engine() -> Option<String> {
     #[cfg(target_os = "macos")]
-    os::browser::stop_engine();
+    return os::browser::stop_engine();
+    #[cfg(windows)]
+    return None;
 }
 
 /// The engine the Mac's browser panes use in this launch (`webkit` or `cef`, the smoke's report); None on Windows (WebView2 only).

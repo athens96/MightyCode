@@ -144,6 +144,10 @@ jobs:
             if ($result.browser.browserEngine -ne $run.engine) { throw "the $($run.engine) run's browser panes used $($result.browser.browserEngine)" }
             if ($failed.Count -gt 0) { throw "the $($run.engine) run's browser step failed: $($failed -join ', ')" }
           }
+          # Quitting with a live CEF pane shuts CEF down before the process ends (plan M-E's "done when").
+          $shutdown = Select-String -Path "$env:RUNNER_TEMP/tauri-smoke/cef/tauri-logs/host.log" -Pattern 'browser engine: CEF shut down in'
+          if (-not $shutdown) { throw 'the CEF run never logged its shutdown' }
+          $shutdown.Line
       - name: The frozen style files are read in place, never written (mighty-styles, the smoke)
         # scripts/check-style-freeze.sh's frozen paths: the tests and the smoke above leave them as checked out.
         run: |

@@ -589,10 +589,12 @@ fn main() {
                 // The last save (C# DesktopService.DisposeAsync), written only with --allow-state-write.
                 host.close();
                 host.write_unimplemented();
+                // The Mac's CEF shut down before the process ends (M-E).
+                if let Some(engine) = platform::stop_browser_engine() {
+                    host.log.line(&format!("browser engine: {engine}"));
+                }
                 host.log.line("exit");
             }
-            // The Mac's CEF shut down before the process ends (M-E).
-            platform::stop_browser_engine();
             if exit_code != 0 {
                 app.cleanup_before_exit();
                 std::process::exit(exit_code);
