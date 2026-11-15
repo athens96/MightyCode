@@ -886,8 +886,8 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
     let id = request_.session_id.clone();
     if request_.action == "create" {
         let provider = text("provider").unwrap_or_else(|| "claude".into());
-        let made = {
-            let mut view = host.view();
+        let (created, workspace) = {
+            let view = host.view();
             let template = RunSession {
                 id: Some(wire::new_id()),
                 workspace_id: Some(id.clone()),
@@ -898,6 +898,18 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
                 ..RunSession::default()
             };
             let created = mighty_core::add_pane::inherit(template, view.snapshot.sessions());
+            let workspace = view.snapshot.workspaces().iter().find(|w| w.id() == id && w.remote.is_none()).cloned();
+            (created, workspace)
+        };
+        // The phone cannot be asked: the workspace's mode alone decides whether the pane gets its own worktree (W9-I, C#
+        // `PaneWorktreePolicy.DecideWithoutAsking`).
+        let (worktree, fell_back) = match &workspace {
+            Some(workspace) => crate::pane_worktree::worktree_without_asking(&host, workspace, created.id()).await,
+            None => (None, None),
+        };
+        let created = crate::pane_worktree::with_worktree(created, worktree.as_ref(), fell_back.as_deref(), &host);
+        let made = {
+            let mut view = host.view();
             if !view.snapshot.workspaces().iter().any(|w| w.id() == id && w.remote.is_none()) {
                 return Err(request(404, "Workspace not found."));
             }
@@ -909,6 +921,9 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
             pane.id().to_string()
         };
         host.schedule();
+        if let (Some(worktree), Some(workspace)) = (worktree, workspace) {
+            crate::pane_worktree::prepare(&host, &made, &workspace, worktree);
+        }
         return Ok(ActionAnswer::Value(json!(made)));
     }
     let pane = mobile_pane(&host, &id)?;

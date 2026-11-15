@@ -591,7 +591,7 @@ pub async fn show(host: &Arc<Host>, kind: &str) -> Result<(), String> {
     if host.view().snapshot.last_create_location.as_deref() != Some(location) {
         host.view().update(|state| state.last_create_location = Some(location.to_string()))?;
     }
-    frame::open_workspace_folder(host, Path::new(path))?;
+    frame::open_workspace_folder(host, Path::new(path)).await?;
     if notice.is_some() {
         host.view().error = notice;
     }

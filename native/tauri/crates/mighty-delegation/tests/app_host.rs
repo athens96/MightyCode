@@ -269,7 +269,7 @@ async fn child_panes_the_run_ledger_and_the_panes_snapshot_keys() {
         "saving writes both keys back for a child and neither for any other pane"
     );
 
-    // Normalize keeps well-formed links, even for a closed parent, and drops the rest.
+    // Normalize keeps well-formed links, even for a closed parent, and drops the rest; a terminal keeps only its folder (a pane worktree's terminal).
     let linked = |id: &str, parent: Option<&str>, folder: Option<&str>, kind: &str, provider: &str| RunSession {
         kind: Some(kind.into()),
         provider: Some(provider.into()),
@@ -317,7 +317,7 @@ async fn child_panes_the_run_ledger_and_the_panes_snapshot_keys() {
                 && links("bad") == (None, None)
                 && links("long") == (some("p"), None)
                 && links("rooted") == (some("p"), None)
-                && links("shell") == (None, None)
+                && links("shell") == (None, some(&shell))
                 && links("browser") == (None, None)
                 && links("plain") == (None, None),
             "well-formed links stay and malformed ones go, restoring {restoring}"

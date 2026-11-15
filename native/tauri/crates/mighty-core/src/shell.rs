@@ -408,6 +408,9 @@ pub struct PaneInfo {
     pub activity_error: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dash_wait: Option<String>,
+    /// The branch marker's words when the pane works in its own worktree (`paneWorktree.marker`, C# PaneWorktree.cs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
 }
 
 /// C# `MainWindow.WebPaneInfo`.
@@ -444,6 +447,11 @@ pub fn pane_info(locale: &Locale, s: &RunSession, attention: Attention, now: Dat
         activity: if s.status() == "running" { card.last_activity.clone() } else { None },
         activity_error: card.activity_is_error,
         dash_wait: (attention.total() > 0).then(|| attention_word(locale, attention)),
+        // A pane in its own worktree carries the branch marker on its row and tab.
+        worktree: s
+            .pane_worktree
+            .as_ref()
+            .map(|pane| locale.get_with("paneWorktree.marker", &[("branch", pane.branch()), ("base", pane.base_branch())])),
     }
 }
 
