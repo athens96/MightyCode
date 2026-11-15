@@ -231,7 +231,10 @@ fn a_detached_start_is_recorded_with_its_exact_environment() {
     assert!(host.spawned().is_empty(), "a detached start is not a child");
     assert!(!format!("{request:?}").contains("C:\\Windows"), "the environment's values stay out of Debug");
     host.refuse_detached(true);
-    assert!(matches!(host.start_detached(request), Err(PlatformError::Refused(_))));
+    assert!(matches!(host.start_detached(request.clone()), Err(PlatformError::Refused(_))));
+    // W9-B: the relaunched app's start stays in such a job rather than fail.
+    assert!(host.start_detached_or_in_job(request.clone()).unwrap() > 0);
+    assert_eq!(host.detached().len(), 2);
 }
 
 /// W9 (Step 0): one holder per helper mutex name until its guard drops.

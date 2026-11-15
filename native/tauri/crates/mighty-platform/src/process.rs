@@ -189,6 +189,15 @@ pub trait ProcessHost: Send + Sync {
         Err(PlatformError::unsupported("ProcessHost", "start_detached"))
     }
 
+    /// W9-B: [`ProcessHost::start_detached`], except that when this process sits in a job that lets no child break away, the child
+    /// starts in that job instead of failing (Windows; C#'s `Process.Start`, which never breaks away). For the app an update helper
+    /// starts again: the helper's own job would hold the app C#'s helper started just the same, and refusing there would roll back a
+    /// swap already done. The helper's own start keeps [`ProcessHost::start_detached`]'s refusal (such a job could end it half-way).
+    /// The default is `start_detached` (an OS without jobs has nothing to stay in).
+    fn start_detached_or_in_job(&self, request: DetachedRequest) -> Result<u32> {
+        self.start_detached(request)
+    }
+
     /// How a CLI found at `program` starts with `args` (C# `ProviderCatalog.StartCli`): `env` laid over this process's environment,
     /// then `NO_COLOR=1`. Here the program runs directly; Windows runs a `.cmd`/`.bat` shim (npm's `pi.cmd`) through
     /// `cmd.exe /d /s /c` with every argument quoted, and stops cmd.exe looking in the working folder (C# `WindowsCommand.Launch`).
