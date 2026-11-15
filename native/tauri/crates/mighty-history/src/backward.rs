@@ -139,7 +139,11 @@ mod tests {
     use super::*;
 
     fn file(text: &[u8]) -> (std::path::PathBuf, File) {
-        let path = std::env::temp_dir().join(format!("mighty-backward-{}-{}", std::process::id(), rand_name()));
+        // One name per call: the clock alone repeats between tests running at once (Windows' clock moves in 100 ns steps at best), and
+        // two tests writing one file read each other's lines.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let next = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("mighty-backward-{}-{}-{next}", std::process::id(), rand_name()));
         std::fs::File::create(&path).unwrap().write_all(text).unwrap();
         let file = File::open(&path).unwrap();
         (path, file)
