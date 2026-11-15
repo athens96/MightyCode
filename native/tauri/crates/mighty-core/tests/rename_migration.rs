@@ -57,19 +57,25 @@ impl RegistryStore for FakeRegistry {
     fn key_exists(&self, path: &str) -> bool {
         self.has(path)
     }
-    fn sub_key_names(&self, path: &str) -> Vec<String> {
+    fn sub_key_names(&self, path: &str) -> io::Result<Vec<String>> {
         let prefix = format!("{}\\", path.to_lowercase());
-        self.keys
+        Ok(self
+            .keys
             .borrow()
             .iter()
             .filter(|(key, _)| key.starts_with(&prefix) && !key[prefix.len()..].contains('\\'))
             .map(|(_, (written, _))| written[prefix.len()..].to_string())
-            .collect()
+            .collect())
     }
-    fn values(&self, path: &str) -> Vec<RegistryValue> {
-        self.keys.borrow().get(&path.to_lowercase()).map_or_else(Vec::new, |(_, values)| {
+    fn values(&self, path: &str) -> io::Result<Vec<RegistryValue>> {
+        Ok(self.keys.borrow().get(&path.to_lowercase()).map_or_else(Vec::new, |(_, values)| {
             values.iter().map(|(name, (kind, data))| RegistryValue { name: name.clone(), kind: *kind, data: data.clone() }).collect()
-        })
+        }))
+    }
+    fn delete_tree(&self, path: &str) -> io::Result<()> {
+        let (key, prefix) = (path.to_lowercase(), format!("{}\\", path.to_lowercase()));
+        self.keys.borrow_mut().retain(|name, _| *name != key && !name.starts_with(&prefix));
+        Ok(())
     }
     fn create_key(&self, path: &str) -> io::Result<()> {
         let parts: Vec<&str> = path.split('\\').collect();
@@ -241,32 +247,57 @@ fn a_record_is_written_only_when_it_changes() {
     assert!(!root.0.join("missing.json").exists());
 }
 
-/// A registry that fails part way: the copy reports nothing copied (C#'s caught exception), and what it wrote stays.
+/// A registry that fails part way (a value refused, or a subkey that does not read): the copy reports nothing copied (C#'s caught
+/// exception), and what it made is taken back so the next start copies again (W9 review L4); the old key is left as it was.
 #[test]
-fn a_registry_copy_that_fails_reports_nothing_copied() {
-    struct Failing(FakeRegistry);
+fn a_registry_copy_that_fails_reports_nothing_copied_and_leaves_nothing() {
+    struct Failing {
+        inner: FakeRegistry,
+        refuse_values: bool,
+    }
     impl RegistryStore for Failing {
         fn key_exists(&self, path: &str) -> bool {
-            self.0.key_exists(path)
+            self.inner.key_exists(path)
         }
-        fn sub_key_names(&self, path: &str) -> Vec<String> {
-            self.0.sub_key_names(path)
+        fn sub_key_names(&self, path: &str) -> io::Result<Vec<String>> {
+            if path.ends_with("Child") {
+                return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+            }
+            self.inner.sub_key_names(path)
         }
-        fn values(&self, path: &str) -> Vec<RegistryValue> {
-            self.0.values(path)
+        fn values(&self, path: &str) -> io::Result<Vec<RegistryValue>> {
+            self.inner.values(path)
         }
         fn create_key(&self, path: &str) -> io::Result<()> {
-            self.0.create_key(path)
+            self.inner.create_key(path)
         }
-        fn set_value(&self, _path: &str, _value: &RegistryValue) -> io::Result<()> {
-            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        fn set_value(&self, path: &str, value: &RegistryValue) -> io::Result<()> {
+            if self.refuse_values {
+                return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+            }
+            self.inner.set_value(path, value)
+        }
+        fn delete_tree(&self, path: &str) -> io::Result<()> {
+            self.inner.delete_tree(path)
         }
     }
     let root = Temp::new("failing");
-    let registry = Failing(FakeRegistry::default());
-    registry.0.put(r"Software\MightyClaudeNative", "x", 4, &[1, 0, 0, 0]);
-    let report = rename_migration::run(&root.0.join("AppData"), &root.0.join("home"), &root.0.join("claude"), &registry);
-    assert!(!report.copied_registry && registry.0.has(r"Software\MightyCode"), "the key was made, its value refused: not copied");
+    for refuse_values in [true, false] {
+        let registry = Failing { inner: FakeRegistry::default(), refuse_values };
+        registry.inner.put(r"Software\MightyClaudeNative", "x", 4, &[1, 0, 0, 0]);
+        registry.inner.put(r"Software\MightyClaudeNative\Child\Deep", "y", 4, &[2, 0, 0, 0]);
+        let before = registry.inner.count();
+        let report = rename_migration::run(&root.0.join("AppData"), &root.0.join("home"), &root.0.join("claude"), &registry);
+        assert!(!report.copied_registry, "refused values {refuse_values}: not copied");
+        assert!(!registry.inner.has(r"Software\MightyCode"), "refused values {refuse_values}: the half-made key is taken back");
+        assert_eq!(registry.inner.count(), before, "the old key is left as it was");
+    }
+}
+
+/// The migration's home is an absolute folder, or none.
+#[test]
+fn the_home_is_absolute_or_none() {
+    assert!(rename_migration::home().is_none_or(|home| home.is_absolute()));
 }
 
 // ---- parity with C# (`update rewrite`) ---------------------------------------------------------------------------------------------

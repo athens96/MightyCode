@@ -9,7 +9,7 @@
 use std::sync::{Arc, Mutex};
 
 use mighty_platform::notify::ActivationHandler;
-use mighty_platform::{BoxFuture, Notification, Notifier, PlatformError, Result, ToastActivator};
+use mighty_platform::{BoxFuture, Notification, Notifier, PlatformError, Result};
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::Foundation::TypedEventHandler;
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
@@ -18,11 +18,14 @@ use windows::core::HSTRING;
 /// The app's AppUserModelID: its real identity (tauri.conf.json `identifier`; W9-F, plan D4).
 pub const AUMID: &str = mighty_platform::activator::AUMID;
 
-/// Registers the AUMID for the user so its toasts show, with the toast activator that takes their clicks after the app quit (this
-/// exe started with `-Embedding`; activator.rs). The caller decides whether it may write.
+/// Registers the AUMID for the user so its toasts show (the key's `DisplayName`), without the toast activator: a writing run that is
+/// not the installed release (a development build with the flag, `--profile`) names no exe of its own in the machine's registry (W9
+/// review L1; the installed release registers the activator, activator.rs). The caller decides whether it may write.
 pub fn register() -> Result<()> {
-    let exe = std::env::current_exe().map_err(|error| PlatformError::Refused(format!("the app's executable: {error}")))?;
-    crate::activator::ComActivator.register(AUMID, mighty_platform::activator::CLSID, &exe)
+    let identity = format!(r"{}\AppUserModelId\{AUMID}", crate::activator::CLASSES);
+    crate::registry::CurrentUserRegistry::new()
+        .set_text(&identity, "DisplayName", crate::activator::DISPLAY_NAME)
+        .map_err(|error| PlatformError::Refused(format!("registry: {error}")))
 }
 
 fn escape(text: &str) -> String {

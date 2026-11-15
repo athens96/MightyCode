@@ -133,6 +133,12 @@ mod imp {
         AppPaths::resolve(profile, dirs::config_dir(), &LEGACY_FOLDERS, dirs::data_local_dir(), identifier)
     }
 
+    /// The folder the setup program installs into (`MightyCode.iss` `DefaultDirName={userpf}\MightyCode`): `Programs\MightyCode` under
+    /// the LocalAppData known folder (W9-F: a release build writes by default only when it runs from here, startup.rs).
+    pub fn install_folder() -> Option<PathBuf> {
+        dirs::data_local_dir().map(|local| local.join("Programs").join("MightyCode"))
+    }
+
     /// C# `Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })`: an http(s) or mailto address handed to the user's
     /// default handler through `ShellExecuteW` (the handler is never the app's child, so it outlives the app). The calling thread is in
     /// a single-threaded apartment for the call, as the shell wants (one already in another apartment stays as it is). It may wait on

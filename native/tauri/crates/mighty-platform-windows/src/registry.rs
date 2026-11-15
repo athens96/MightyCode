@@ -7,15 +7,18 @@ use std::ffi::c_void;
 use std::io;
 use std::os::windows::ffi::OsStrExt;
 
-use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
 use windows_sys::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_OPTION_NON_VOLATILE, RegCloseKey, RegCreateKeyExW, RegEnumKeyExW, RegEnumValueW,
-    RegOpenKeyExW, RegQueryInfoKeyW, RegSetKeyValueW,
+    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_OPTION_NON_VOLATILE, RegCloseKey, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW,
+    RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryInfoKeyW, RegSetKeyValueW,
 };
 
 fn wide(text: &str) -> Vec<u16> {
     std::ffi::OsStr::new(text).encode_wide().chain(std::iter::once(0)).collect()
 }
+
+/// The longest key or value name the registry allows (255 characters for a key, 16,383 for a value), in UTF-16 units.
+const MAX_NAME: u32 = 16_384;
 
 fn failed(status: u32) -> io::Error {
     io::Error::from_raw_os_error(status as i32)
@@ -99,12 +102,14 @@ impl CurrentUserRegistry {
         Key::open(&self.path(path)).is_some()
     }
 
-    /// C# `GetSubKeyNames()`, none for a missing key.
-    pub fn sub_key_names(&self, path: &str) -> Vec<String> {
-        let Some(key) = Key::open(&self.path(path)) else { return Vec::new() };
-        let Ok((longest, _, _)) = key.sizes() else { return Vec::new() };
+    /// C# `GetSubKeyNames()`, none for a missing key. A key that cannot be read, or an enumeration that fails other than at its end, is
+    /// an error (a copy must not stop part way and look whole); a name longer than the key said is read again with room for it.
+    pub fn sub_key_names(&self, path: &str) -> io::Result<Vec<String>> {
+        let Some(key) = Key::open(&self.path(path)) else { return Ok(Vec::new()) };
+        let (mut longest, _, _) = key.sizes()?;
         let mut names = Vec::new();
-        for index in 0.. {
+        let mut index = 0;
+        loop {
             let mut buffer = vec![0u16; longest as usize + 1];
             let mut length = buffer.len() as u32;
             let null = std::ptr::null_mut();
@@ -112,20 +117,27 @@ impl CurrentUserRegistry {
             let status = unsafe {
                 RegEnumKeyExW(key.0, index, buffer.as_mut_ptr(), &mut length, null, std::ptr::null_mut(), null, std::ptr::null_mut())
             };
-            if status != ERROR_SUCCESS {
-                break;
+            match status {
+                ERROR_SUCCESS => names.push(String::from_utf16_lossy(&buffer[..length as usize])),
+                ERROR_NO_MORE_ITEMS => return Ok(names),
+                ERROR_MORE_DATA if longest < MAX_NAME => {
+                    longest = (longest * 2).clamp(256, MAX_NAME);
+                    continue;
+                }
+                code => return Err(failed(code)),
             }
-            names.push(String::from_utf16_lossy(&buffer[..length as usize]));
+            index += 1;
         }
-        names
     }
 
-    /// C# `GetValueNames()` with each value's data and kind, unexpanded; none for a missing key.
-    pub fn values(&self, path: &str) -> Vec<RawValue> {
-        let Some(key) = Key::open(&self.path(path)) else { return Vec::new() };
-        let Ok((_, longest_name, longest_data)) = key.sizes() else { return Vec::new() };
+    /// C# `GetValueNames()` with each value's data and kind, unexpanded; none for a missing key. As [`Self::sub_key_names`], a failure is
+    /// an error, and a value that grew while it was read is read again with room for it.
+    pub fn values(&self, path: &str) -> io::Result<Vec<RawValue>> {
+        let Some(key) = Key::open(&self.path(path)) else { return Ok(Vec::new()) };
+        let (_, mut longest_name, mut longest_data) = key.sizes()?;
         let mut values = Vec::new();
-        for index in 0.. {
+        let mut index = 0;
+        loop {
             let mut name = vec![0u16; longest_name as usize + 1];
             let mut name_length = name.len() as u32;
             let mut data = vec![0u8; longest_data as usize];
@@ -149,11 +161,35 @@ impl CurrentUserRegistry {
                     data.truncate(data_length as usize);
                     values.push(RawValue { name: String::from_utf16_lossy(&name[..name_length as usize]), kind, data });
                 }
-                // The end (ERROR_NO_MORE_ITEMS), or a value that grew while it was read: the enumeration stops there.
-                _ => break,
+                ERROR_NO_MORE_ITEMS => return Ok(values),
+                ERROR_MORE_DATA => {
+                    // The value grew, or its name: the key's sizes asked again, and at least twice the room.
+                    let (_, name_now, data_now) = key.sizes()?;
+                    longest_name = name_now.max(longest_name.saturating_mul(2)).clamp(256, MAX_NAME);
+                    longest_data = data_now.max(longest_data.saturating_mul(2)).max(256);
+                    continue;
+                }
+                code => return Err(failed(code)),
             }
+            index += 1;
         }
-        values
+    }
+
+    /// The key and everything under it removed (`RegDeleteTreeW` then the key itself); a missing key is no error.
+    pub fn delete_tree(&self, path: &str) -> io::Result<()> {
+        let path = wide(&self.path(path));
+        // SAFETY: a NUL-terminated name under HKCU.
+        let status = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, path.as_ptr()) };
+        match status {
+            ERROR_SUCCESS | ERROR_FILE_NOT_FOUND => {}
+            code => return Err(failed(code)),
+        }
+        // SAFETY: as above (RegDeleteTreeW leaves the key itself when it is given a subkey name).
+        let status = unsafe { RegDeleteKeyW(HKEY_CURRENT_USER, path.as_ptr()) };
+        match status {
+            ERROR_SUCCESS | ERROR_FILE_NOT_FOUND => Ok(()),
+            code => Err(failed(code)),
+        }
     }
 
     /// C# `CreateSubKey(path).Dispose()`: the key and its parents made when missing.
@@ -193,7 +229,13 @@ impl CurrentUserRegistry {
 
     /// A text value (`REG_SZ`), as C#'s `SetValue(name, string)` writes it.
     pub fn set_text(&self, path: &str, name: &str, text: &str) -> io::Result<()> {
-        let bytes: Vec<u8> = text.encode_utf16().chain(std::iter::once(0)).flat_map(u16::to_le_bytes).collect();
+        self.set_os_text(path, name, std::ffi::OsStr::new(text))
+    }
+
+    /// A text value (`REG_SZ`) from the OS's own string, unit for unit (a path that is not valid Unicode is written as it is, never
+    /// replaced through a lossy `String`).
+    pub fn set_os_text(&self, path: &str, name: &str, text: &std::ffi::OsStr) -> io::Result<()> {
+        let bytes: Vec<u8> = text.encode_wide().chain(std::iter::once(0)).flat_map(u16::to_le_bytes).collect();
         self.set_value(path, name, windows_sys::Win32::System::Registry::REG_SZ, &bytes)
     }
 }
@@ -201,7 +243,7 @@ impl CurrentUserRegistry {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use windows_sys::Win32::System::Registry::{REG_BINARY, REG_DWORD, REG_EXPAND_SZ, REG_MULTI_SZ, REG_QWORD, REG_SZ, RegDeleteTreeW};
+    use windows_sys::Win32::System::Registry::{REG_BINARY, REG_DWORD, REG_EXPAND_SZ, REG_MULTI_SZ, REG_QWORD, REG_SZ};
 
     /// A key of the test's own under HKCU (never the app's, `Software\Classes` or the uninstall entry), removed however the test ends.
     pub(crate) struct TestKey(pub String);
@@ -231,7 +273,9 @@ pub(crate) mod tests {
     fn a_tree_reads_back_as_written() {
         let key = TestKey::new("tree");
         let registry = CurrentUserRegistry::under(&key.0);
-        assert!(!registry.key_exists("Old") && registry.values("Old").is_empty() && registry.sub_key_names("Old").is_empty());
+        assert!(
+            !registry.key_exists("Old") && registry.values("Old").unwrap().is_empty() && registry.sub_key_names("Old").unwrap().is_empty()
+        );
         let written = [
             ("", REG_SZ, utf16("default")),
             ("text", REG_SZ, utf16("한국어 text")),
@@ -247,16 +291,29 @@ pub(crate) mod tests {
         registry.create_key(r"Old\Child\Deep").unwrap();
         registry.create_key(r"Old\Empty").unwrap();
         assert!(registry.key_exists("Old") && registry.key_exists(r"Old\Child\Deep"));
-        let mut values = registry.values("Old");
+        let mut values = registry.values("Old").unwrap();
         values.sort_by(|a, b| a.name.cmp(&b.name));
         let mut expected: Vec<RawValue> =
             written.iter().map(|(name, kind, data)| RawValue { name: name.to_string(), kind: *kind, data: data.clone() }).collect();
         expected.sort_by(|a, b| a.name.cmp(&b.name));
         assert_eq!(values, expected);
-        let mut children = registry.sub_key_names("Old");
+        let mut children = registry.sub_key_names("Old").unwrap();
         children.sort();
         assert_eq!(children, ["Child", "Empty"]);
         registry.set_text("Old", "text", "again").unwrap();
-        assert!(registry.values("Old").iter().any(|value| value.name == "text" && value.data == utf16("again")));
+        assert!(registry.values("Old").unwrap().iter().any(|value| value.name == "text" && value.data == utf16("again")));
+        // A path that is no valid Unicode (a lone surrogate) is written unit for unit.
+        use std::os::windows::ffi::OsStringExt;
+        let lone = std::ffi::OsString::from_wide(&[0x43, 0xD800, 0x78]);
+        registry.set_os_text("Old", "lone", &lone).unwrap();
+        let written = registry.values("Old").unwrap().into_iter().find(|value| value.name == "lone").unwrap().data;
+        assert_eq!(written, [0x43u16, 0xD800, 0x78, 0].iter().flat_map(|unit| unit.to_le_bytes()).collect::<Vec<u8>>());
+        // A value longer than the first room given (the key's size read before it grew) is read whole.
+        let long = vec![7u8; 70_000];
+        registry.set_value(r"Old\Child", "long", REG_BINARY, &long).unwrap();
+        assert_eq!(registry.values(r"Old\Child").unwrap()[0].data, long);
+        registry.delete_tree("Old").unwrap();
+        assert!(!registry.key_exists("Old") && !registry.key_exists(r"Old\Child\Deep"), "the tree is gone, the key with it");
+        registry.delete_tree("Old").unwrap();
     }
 }

@@ -54,23 +54,28 @@ struct Activated {
     errors: Vec<String>,
 }
 
-/// The activator's part of C#'s `AppNotificationManager.Register`: only where the app may change the machine, the AUMID and its class
-/// registered (`exe -Embedding`) and the class served, each activation's `sessionId` handed to `focus`. Without the right: nothing
-/// registered or served, the verification mode. A failed registration needs the user's permission; a class that is not served only
-/// loses the clicks from Action Center after a quit.
+/// The activator's part of C#'s `AppNotificationManager.Register`: only where the app may change the machine, the AUMID registered and
+/// the class served, each activation's `sessionId` handed to `focus`. Only the installed release on the default profile (`owns`,
+/// `startup::owns_registrations`) registers the activator itself (the class and its `"<exe>" -Embedding`); any other writing run
+/// registers the AUMID's name alone (`register_name`, so its toasts show) and names no exe of its own in the machine's registry (W9
+/// review L1). Without the right: nothing registered or served, the verification mode. A failed registration needs the user's
+/// permission; a class that is not served only loses the clicks from Action Center after a quit.
 fn activate(
     activator: &dyn ToastActivator,
     may_change_machine: bool,
+    owns: bool,
     exe: Option<&Path>,
+    register_name: impl FnOnce() -> Result<(), String>,
     focus: Arc<dyn Fn(String) + Send + Sync>,
 ) -> Activated {
     if !may_change_machine {
         return Activated { permission: NotificationPermission::Verification, served: None, errors: Vec::new() };
     }
     let mut errors = Vec::new();
-    let registered = match exe {
-        Some(exe) => activator.register(AUMID, CLSID, exe).map_err(|error| error.to_string()),
-        None => Err("the app's own executable is not known".to_string()),
+    let registered = match (owns, exe) {
+        (true, Some(exe)) => activator.register(AUMID, CLSID, exe).map_err(|error| error.to_string()),
+        (true, None) => Err("the app's own executable is not known".to_string()),
+        (false, _) => register_name(),
     };
     let permission = match registered {
         Ok(()) => NotificationPermission::Allowed,
@@ -105,7 +110,14 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
         }
     });
     let exe = std::env::current_exe().ok();
-    let activated = activate(platform.activator.as_ref(), host.may_change_machine(), exe.as_deref(), focus_pane);
+    let activated = activate(
+        platform.activator.as_ref(),
+        host.may_change_machine(),
+        crate::startup::owns_registrations(),
+        exe.as_deref(),
+        crate::platform::register_notifications,
+        focus_pane,
+    );
     for error in &activated.errors {
         host.log.line(&format!("notifications: {error}"));
     }
@@ -225,27 +237,32 @@ mod tests {
         (focused, Arc::new(move |pane: String| into.lock().unwrap().push(pane)))
     }
 
+    fn named() -> Result<(), String> {
+        Ok(())
+    }
+
     /// Where the app may not change the machine (a development build without the flag, `--read-only`, a smoke), nothing is registered
     /// or served: the verification mode.
     #[test]
     fn without_the_right_nothing_is_registered_or_served() {
         let activator = RecordingActivator::default();
         let (focused, focus) = recording();
-        let activated = activate(&activator, false, Some(Path::new(r"C:\app\MightyCode.exe")), focus);
+        let activated = activate(&activator, false, true, Some(Path::new(r"C:\app\MightyCode.exe")), || panic!("no name"), focus);
         assert_eq!(activated.permission, NotificationPermission::Verification);
         assert!(activated.served.is_none() && activator.registered().is_empty());
         activator.activate(AUMID, "sessionId=x");
         assert!(focused.lock().unwrap().is_empty(), "nothing served, nothing focused");
     }
 
-    /// Where it may: the AUMID registered with the activator class started from this exe, the class served, and an activation that
-    /// names `sessionId=%2F…` focuses the decoded pane; once the subscription drops, a click reaches nothing.
+    /// The installed release on the default profile: the AUMID registered with the activator class started from this exe, the class
+    /// served, and an activation that names `sessionId=%2F…` focuses the decoded pane; once the subscription drops, a click reaches
+    /// nothing.
     #[test]
     fn an_activation_focuses_the_decoded_session() {
         let activator = RecordingActivator::default();
         let (focused, focus) = recording();
         let exe = Path::new(r"C:\Users\me\AppData\Local\Programs\MightyCode\MightyCode.exe");
-        let activated = activate(&activator, true, Some(exe), focus);
+        let activated = activate(&activator, true, true, Some(exe), || panic!("the activator registers the name too"), focus);
         assert_eq!(activated.permission, NotificationPermission::Allowed);
         assert!(activated.errors.is_empty());
         assert_eq!(activator.registered(), [(AUMID.to_string(), CLSID.to_string(), exe.to_path_buf())]);
@@ -257,15 +274,42 @@ mod tests {
         assert_eq!(focused.lock().unwrap().len(), 1);
     }
 
+    /// Review L1: any other writing run (a development build with the flag, `--profile`, a release candidate run with the flag from
+    /// elsewhere) registers the AUMID's name alone, never the activator's exe, and may still serve the class while it runs.
+    #[test]
+    fn another_writing_run_registers_the_name_but_never_the_activator() {
+        let activator = RecordingActivator::default();
+        let (focused, focus) = recording();
+        let mut asked = false;
+        let activated = activate(
+            &activator,
+            true,
+            false,
+            Some(Path::new(r"C:\Users\me\Downloads\MightyCode.exe")),
+            || {
+                asked = true;
+                Ok(())
+            },
+            focus,
+        );
+        assert!(asked && activator.registered().is_empty(), "the name only");
+        assert_eq!(activated.permission, NotificationPermission::Allowed);
+        activator.activate(AUMID, "sessionId=p");
+        assert_eq!(*focused.lock().unwrap(), ["p"], "served while it runs");
+        let (_, focus) = recording();
+        let refused = activate(&activator, true, false, None, || Err("registry: denied".into()), focus);
+        assert_eq!(refused.permission, NotificationPermission::NeedPermission);
+    }
+
     /// A registration the OS refuses needs the user's permission (and says why); the class is still served for a click.
     #[test]
     fn a_refused_registration_needs_permission() {
         let (_, focus) = recording();
         let exe = Path::new(r"C:\app\MightyCode.exe");
-        let activated = activate(&mighty_platform::unsupported::Unsupported, true, Some(exe), focus.clone());
+        let activated = activate(&mighty_platform::unsupported::Unsupported, true, true, Some(exe), named, focus.clone());
         assert_eq!(activated.permission, NotificationPermission::NeedPermission);
         assert_eq!(activated.errors.len(), 2, "{:?}", activated.errors);
-        let activated = activate(&RecordingActivator::default(), true, None, focus);
+        let activated = activate(&RecordingActivator::default(), true, true, None, named, focus);
         assert_eq!(activated.permission, NotificationPermission::NeedPermission, "no exe to start: not registered");
         assert!(activated.served.is_some());
     }

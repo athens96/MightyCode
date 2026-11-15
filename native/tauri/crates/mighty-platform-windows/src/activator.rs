@@ -64,11 +64,15 @@ pub fn register_under(classes: &str, aumid: &str, clsid: &str, exe: &Path) -> Re
     let registry = CurrentUserRegistry::new();
     let refused = |error: std::io::Error| PlatformError::Refused(format!("registry: {error}"));
     let server = format!(r"{classes}\CLSID\{clsid}\LocalServer32");
-    registry.set_text(&server, "", &format!("\"{}\" -Embedding", exe.display())).map_err(refused)?;
+    // The exe's path unit for unit (W9 review L5): a path that is not valid Unicode is never replaced through a lossy `String`.
+    let mut command = std::ffi::OsString::from("\"");
+    command.push(exe.as_os_str());
+    command.push("\" -Embedding");
+    registry.set_os_text(&server, "", &command).map_err(refused)?;
     let identity = format!(r"{classes}\AppUserModelId\{aumid}");
     registry.set_text(&identity, "DisplayName", DISPLAY_NAME).map_err(refused)?;
     if let Some(icon) = icon(exe) {
-        registry.set_text(&identity, "IconUri", &icon.to_string_lossy()).map_err(refused)?;
+        registry.set_os_text(&identity, "IconUri", icon.as_os_str()).map_err(refused)?;
     }
     registry.set_text(&identity, "CustomActivator", clsid).map_err(refused)?;
     Ok(())
@@ -192,7 +196,8 @@ mod tests {
         register_under(&classes, mighty_platform::activator::AUMID, mighty_platform::activator::CLSID, &exe).unwrap();
         let registry = CurrentUserRegistry::under(&classes);
         let utf16 = |text: &str| text.encode_utf16().chain([0]).flat_map(u16::to_le_bytes).collect::<Vec<u8>>();
-        let value = |path: &str, name: &str| registry.values(path).into_iter().find(|value| value.name == name).map(|value| value.data);
+        let value =
+            |path: &str, name: &str| registry.values(path).unwrap().into_iter().find(|value| value.name == name).map(|value| value.data);
         let identity = format!(r"AppUserModelId\{}", mighty_platform::activator::AUMID);
         assert_eq!(value(&identity, "DisplayName"), Some(utf16("Mighty Code")));
         assert_eq!(value(&identity, "CustomActivator"), Some(utf16(mighty_platform::activator::CLSID)));

@@ -45,13 +45,16 @@ pub struct RegistryValue {
 }
 
 /// C# `IRegistryStore`: the registry under HKEY_CURRENT_USER as the migration reads and writes it. Paths are `\`-separated key names
-/// below HKCU (`Software\MightyCode`).
+/// below HKCU (`Software\MightyCode`). A missing key reads as no subkeys and no values; a key that cannot be read is an error, so a copy
+/// never stops part way and looks whole.
 pub trait RegistryStore {
     fn key_exists(&self, path: &str) -> bool;
-    fn sub_key_names(&self, path: &str) -> Vec<String>;
-    fn values(&self, path: &str) -> Vec<RegistryValue>;
+    fn sub_key_names(&self, path: &str) -> io::Result<Vec<String>>;
+    fn values(&self, path: &str) -> io::Result<Vec<RegistryValue>>;
     fn create_key(&self, path: &str) -> io::Result<()>;
     fn set_value(&self, path: &str, value: &RegistryValue) -> io::Result<()>;
+    /// The key and everything under it removed (a copy that failed part way takes back what it made, so the next start tries again).
+    fn delete_tree(&self, path: &str) -> io::Result<()>;
 }
 
 /// A registry with no keys (C#'s `CurrentUserRegistry` off Windows): nothing to copy, nothing written.
@@ -62,16 +65,19 @@ impl RegistryStore for NoRegistry {
     fn key_exists(&self, _path: &str) -> bool {
         false
     }
-    fn sub_key_names(&self, _path: &str) -> Vec<String> {
-        Vec::new()
+    fn sub_key_names(&self, _path: &str) -> io::Result<Vec<String>> {
+        Ok(Vec::new())
     }
-    fn values(&self, _path: &str) -> Vec<RegistryValue> {
-        Vec::new()
+    fn values(&self, _path: &str) -> io::Result<Vec<RegistryValue>> {
+        Ok(Vec::new())
     }
     fn create_key(&self, _path: &str) -> io::Result<()> {
         Ok(())
     }
     fn set_value(&self, _path: &str, _value: &RegistryValue) -> io::Result<()> {
+        Ok(())
+    }
+    fn delete_tree(&self, _path: &str) -> io::Result<()> {
         Ok(())
     }
 }
@@ -126,24 +132,35 @@ pub fn move_once(old: &Path, target: &Path) -> bool {
 }
 
 /// C# `RenameMigration.CopyRegistry`: copies a key, its values and subkeys, when `old` exists and `target` does not. The old key stays.
-/// Whether it copied; an error part way is the caller's (C# lets the exception reach `Run`, which reports nothing copied).
+/// Whether it copied; an error part way is the caller's (C# lets the exception reach `Run`, which reports nothing copied). Beyond C#
+/// (W9 review L4): what a failed copy made is taken away again, so a half-copied key never passes for the whole one and the next start
+/// copies it again.
 pub fn copy_registry(registry: &dyn RegistryStore, old: &str, target: &str) -> io::Result<bool> {
     if !registry.key_exists(old) || registry.key_exists(target) {
         return Ok(false);
     }
-    copy(registry, old, target)?;
+    if let Err(error) = copy(registry, old, target) {
+        let _ = registry.delete_tree(target);
+        return Err(error);
+    }
     Ok(true)
 }
 
 fn copy(registry: &dyn RegistryStore, from: &str, to: &str) -> io::Result<()> {
     registry.create_key(to)?;
-    for value in registry.values(from) {
+    for value in registry.values(from)? {
         registry.set_value(to, &value)?;
     }
-    for child in registry.sub_key_names(from) {
+    for child in registry.sub_key_names(from)? {
         copy(registry, &format!(r"{from}\{child}"), &format!(r"{to}\{child}"))?;
     }
     Ok(())
+}
+
+/// The user's home folder for the migration (C# `SpecialFolder.UserProfile`): the OS's own record of it (on Windows the Profile known
+/// folder, never an environment variable a bare start may lack or a caller may have set), None unless it is an absolute path.
+pub fn home() -> Option<PathBuf> {
+    dirs::home_dir().filter(|home| home.is_absolute())
 }
 
 /// C# `RenameMigration.RewritePaths`: replaces the folder path `old` with `target` in a JSON file, written plainly or JSON-escaped
