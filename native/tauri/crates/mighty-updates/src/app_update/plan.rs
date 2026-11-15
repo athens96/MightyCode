@@ -22,7 +22,7 @@ pub const RELAUNCH_FLAG: &str = "--relaunch";
 pub const HELPER_ENVIRONMENT: [(&str, &str); 1] = [("SystemRoot", "C:\\Windows")];
 
 /// Everything the helper needs, from its arguments alone (C# `AppUpdateInstallPlan`). `relaunch` false is the install on quit.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct InstallPlan {
     pub staged_directory: PathBuf,
     pub install_directory: PathBuf,
@@ -36,6 +36,18 @@ pub struct InstallPlan {
     /// `backup\MightyCode.exe`.
     pub previous_executable: PathBuf,
     pub relaunch: bool,
+}
+
+/// No folder: the paths name the user.
+impl std::fmt::Debug for InstallPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InstallPlan")
+            .field("sha256", &self.sha256)
+            .field("size", &self.size)
+            .field("app_process_id", &self.app_process_id)
+            .field("relaunch", &self.relaunch)
+            .finish_non_exhaustive()
+    }
 }
 
 impl InstallPlan {

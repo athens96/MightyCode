@@ -2277,3 +2277,268 @@ fn the_install_log_is_appended_beside_the_package() {
          2026-11-15T03:04:05.0000000+00:00 replaced=False rolledBack=False relaunch=False skipped=False started=False backupRemoved=False IOException: denied\n"
     );
 }
+
+// — The review's fixes (w9-review-fixes.md A) —
+
+/// A transport whose package never sends a byte until its cancel flag is set; it records that the flag was set.
+struct Stalled {
+    inner: Arc<FakeUpdateTransport>,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl UpdateTransport for Stalled {
+    fn get_capped(&self, url: &str, cap: usize, timeout: Duration) -> BoxFuture<'_, mighty_platform::Result<UpdateResponse>> {
+        self.inner.get_capped(url, cap, timeout)
+    }
+    fn download(&self, request: DownloadRequest) -> BoxFuture<'_, mighty_platform::Result<Downloaded>> {
+        let cancelled = self.cancelled.clone();
+        Box::pin(async move {
+            std::fs::File::create(&request.destination)?;
+            while !request.cancel.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            cancelled.store(true, Ordering::SeqCst);
+            Err(mighty_platform::PlatformError::Refused("cancelled".into()))
+        })
+    }
+}
+
+/// M1: two presses on Available from two threads at once download once — the download is claimed in the lock that tested the phase,
+/// and the host's staging check (slow here) runs outside it. Two checks at once ask for the manifest once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_presses_at_once_download_once() {
+    let root = Temp::new();
+    let install = root.path().join("MightyCode");
+    make_install(&install, "old");
+    let package_path = make_zip(root.path(), "MightyCode-windows-x64.zip", &[Entry::File("MightyCode.exe", &fake_executable("x64"))]);
+    let package = std::fs::read(&package_path).unwrap();
+    let fake = Arc::new(FakeUpdateTransport::default());
+    fake.route(MANIFEST_URL, FakeRoute::ok(envelope(&windows_manifest("9.9.9", &package, &["x64"]))));
+    fake.route("https://updates.example/9.9.9/MightyCode-windows-x64.zip", FakeRoute::ok(package));
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let gated = Arc::new(Gated { inner: fake.clone(), gate: Mutex::new(Some(gate.clone())) });
+    // Asked once as a download starts and once before it unpacks; a second download would ask again. The first caller waits a
+    // moment for a second one, so two downloads that both got past the phase test would be inside it together.
+    let arrivals = Arc::new((Mutex::new(0u32), std::sync::Condvar::new()));
+    let slow_staging_check: Arc<dyn Fn() -> bool + Send + Sync> = {
+        let arrivals = arrivals.clone();
+        Arc::new(move || {
+            let (count, arrived) = &*arrivals;
+            let mut count = count.lock().unwrap();
+            *count += 1;
+            arrived.notify_all();
+            let _ = arrived.wait_timeout_while(count, Duration::from_millis(200), |count| *count < 2).unwrap();
+            false
+        })
+    };
+    let coordinator = Arc::new(Coordinator::new(
+        Arc::new(Service::new(gated.clone(), &root.path().join("state"), Some(fixture_key()))),
+        Options { staging_busy: Some(slow_staging_check), ..options("x64", Some(&install)) },
+    ));
+
+    let checks: Vec<_> = (0..2)
+        .map(|_| {
+            let coordinator = coordinator.clone();
+            tokio::spawn(async move { coordinator.check(None).await })
+        })
+        .collect();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    gate.notify_waiters();
+    for check in checks {
+        check.await.unwrap();
+    }
+    assert_eq!(fake.asked().iter().filter(|url| url.as_str() == MANIFEST_URL).count(), 1, "two checks at once ask once");
+    assert_eq!(coordinator.state().phase, Phase::Available, "{:?}", coordinator.state());
+    *gated.gate.lock().unwrap() = None;
+
+    // Two presses on two threads of their own.
+    let runtime = tokio::runtime::Handle::current();
+    let presses: Vec<_> = (0..2)
+        .map(|_| {
+            let (coordinator, runtime) = (coordinator.clone(), runtime.clone());
+            std::thread::spawn(move || runtime.block_on(coordinator.press(None)))
+        })
+        .collect();
+    for press in presses {
+        tokio::task::spawn_blocking(move || press.join().unwrap()).await.unwrap();
+    }
+    assert_eq!(downloads(&fake), 1, "exactly one download");
+    assert_eq!(*arrivals.0.lock().unwrap(), 2, "one download ran: its start and its unpacking asked whether staging must wait");
+    assert_eq!(coordinator.state().phase, Phase::Ready, "{:?}", coordinator.state());
+}
+
+/// L1: a download or a check whose future is dropped half way stops its transfer, deletes its version folder, gives its claim back and
+/// puts its phase back, so the next press works.
+#[tokio::test]
+async fn a_dropped_download_or_check_leaves_nothing_stuck() {
+    let root = Temp::new();
+    let fake = Arc::new(FakeUpdateTransport::default());
+    fake.route(MANIFEST_URL, FakeRoute::ok(envelope(&Plain::default().text())));
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let detached = Arc::new(Detached { inner: fake.clone(), cancelled: cancelled.clone() });
+    let service = Arc::new(Service::new(detached, root.path(), Some(fixture_key())));
+    let coordinator = Coordinator::new(service.clone(), options("x64", None));
+    coordinator.check(None).await;
+    assert_eq!(coordinator.state().phase, Phase::Available);
+
+    tokio::select! {
+        () = coordinator.download() => panic!("the stalled download must not end"),
+        () = tokio::time::sleep(Duration::from_millis(100)) => {}
+    }
+    let state = coordinator.state();
+    assert!(state.phase == Phase::Available && state.download_fraction == 0.0, "a dropped download goes back to Available: {state:?}");
+    assert!(eventually(&cancelled), "the transfer was told to stop");
+    assert!(!service.updates_directory().join("9.9.9").exists(), "its version folder is gone");
+
+    // The claim was given back: the next download starts, reaches the transport and is stopped again when dropped.
+    cancelled.store(false, Ordering::SeqCst);
+    tokio::select! {
+        () = coordinator.download() => panic!("the stalled download must not end"),
+        () = tokio::time::sleep(Duration::from_millis(50)) => {}
+    }
+    assert!(eventually(&cancelled) && coordinator.state().phase == Phase::Available, "a second download ran and was stopped");
+
+    // A dropped check goes back to Idle and lets the next check run.
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let gated = Arc::new(Gated { inner: fake.clone(), gate: Mutex::new(Some(gate)) });
+    let checker =
+        Coordinator::new(Arc::new(Service::new(gated.clone(), &root.path().join("other"), Some(fixture_key()))), options("x64", None));
+    tokio::select! {
+        () = checker.check(None) => panic!("the check must wait at the gate"),
+        () = tokio::time::sleep(Duration::from_millis(20)) => {}
+    }
+    assert_eq!(checker.state().phase, Phase::Idle, "a dropped check goes back to Idle");
+    *gated.gate.lock().unwrap() = None;
+    checker.check(None).await;
+    assert_eq!(checker.state().phase, Phase::Available, "the next check runs");
+}
+
+/// A transport that, like one copying on a thread of its own, keeps transferring after its future is gone until its cancel flag is
+/// set; it records that the flag was set.
+struct Detached {
+    inner: Arc<FakeUpdateTransport>,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl UpdateTransport for Detached {
+    fn get_capped(&self, url: &str, cap: usize, timeout: Duration) -> BoxFuture<'_, mighty_platform::Result<UpdateResponse>> {
+        self.inner.get_capped(url, cap, timeout)
+    }
+    fn download(&self, request: DownloadRequest) -> BoxFuture<'_, mighty_platform::Result<Downloaded>> {
+        let cancelled = self.cancelled.clone();
+        std::thread::spawn(move || {
+            while !request.cancel.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            cancelled.store(true, Ordering::SeqCst);
+        });
+        Box::pin(std::future::pending())
+    }
+}
+
+fn eventually(flag: &std::sync::atomic::AtomicBool) -> bool {
+    (0..500).any(|_| {
+        std::thread::sleep(Duration::from_millis(2));
+        flag.load(Ordering::SeqCst)
+    })
+}
+
+/// L1: dropping the service's download future mid-transfer tells the transfer to stop and deletes the version folder.
+#[tokio::test]
+async fn a_dropped_service_download_stops_its_transfer() {
+    let root = Temp::new();
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let service = Service::new(
+        Arc::new(Detached { inner: Arc::new(FakeUpdateTransport::default()), cancelled: cancelled.clone() }),
+        root.path(),
+        Some(fixture_key()),
+    );
+    let asset = Asset { url: "https://updates.example/9.9.9/MightyCode-windows-x64.zip".into(), sha256: "a".repeat(64), size: 10 };
+    let never = CancellationToken::new();
+    tokio::select! {
+        _ = service.download(&asset, "9.9.9", Arc::new(|_| {}), &never) => panic!("the transfer must not end"),
+        () = tokio::time::sleep(Duration::from_millis(30)) => {}
+    }
+    assert!(eventually(&cancelled), "the transfer was told to stop");
+    assert!(!service.updates_directory().join("9.9.9").exists(), "the version folder is gone");
+}
+
+/// L2 (stricter than C#): a signed manifest older than the staged version, or than the kept one on its check, is a failed check that
+/// keeps the newer update.
+#[tokio::test]
+async fn an_older_manifest_never_replaces_a_newer_update() {
+    let root = Temp::new();
+    let install = root.path().join("MightyCode");
+    make_install(&install, "old");
+    let package_path = make_zip(root.path(), "MightyCode-windows-x64.zip", &[Entry::File("MightyCode.exe", &fake_executable("x64"))]);
+    let package = std::fs::read(&package_path).unwrap();
+    let fake = Arc::new(FakeUpdateTransport::default());
+    for version in ["9.9.9", "10.0.1"] {
+        fake.route(&format!("https://updates.example/{version}/MightyCode-windows-x64.zip"), FakeRoute::ok(package.clone()));
+    }
+    fake.route(MANIFEST_URL, FakeRoute::ok(envelope(&windows_manifest("10.0.1", &package, &["x64"]))));
+    let service = service(&fake, &root.path().join("state"), Some(fixture_key()));
+    let with = || Options {
+        launch_helper: Some(Arc::new(|_: &InstallPlan| Ok(()))),
+        automatic: flag(true),
+        staging_busy: Some(flag(false)),
+        ..options("x64", Some(&install))
+    };
+    let coordinator = Coordinator::new(service.clone(), with());
+    coordinator.check(None).await;
+    assert_eq!(coordinator.state().phase, Phase::Ready, "{:?}", coordinator.state());
+    let plan = coordinator.state().install_plan;
+
+    // The old 9.9.9 manifest is served again.
+    fake.route(MANIFEST_URL, FakeRoute::ok(envelope(&windows_manifest("9.9.9", &package, &["x64"]))));
+    coordinator.check(None).await;
+    let state = coordinator.state();
+    assert!(
+        state.phase == Phase::Ready && state.install_plan == plan && state.availability.as_ref().unwrap().manifest.version == "10.0.1",
+        "the staged update stays"
+    );
+    assert_eq!(state.last_error.as_deref(), Some("업데이트 확인 중 오류가 발생했습니다."), "the check failed");
+    assert_eq!(downloads(&fake), 1, "nothing older is downloaded");
+
+    // A later start finds 10.0.1 kept; an older manifest on its check is refused and the kept update stays on disk.
+    let next = Coordinator::new(service.clone(), with());
+    assert_eq!(next.check_kept_update(None, Utc::now()).await, KeptCheck::Checked);
+    assert_eq!(next.state().phase, Phase::Failed, "the kept update's check failed: {:?}", next.state());
+    assert_eq!(service.kept_version("0.1.0").as_deref(), Some("10.0.1"), "the kept update is still there");
+    assert_eq!(downloads(&fake), 1, "nothing older is downloaded");
+}
+
+/// L3: a package download with no byte for the stall time stops with the size it reached and leaves nothing behind.
+#[tokio::test]
+async fn a_stalled_download_stops_with_what_arrived() {
+    let root = Temp::new();
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stalled = Arc::new(Stalled { inner: Arc::new(FakeUpdateTransport::default()), cancelled: cancelled.clone() });
+    let service = Service::new(stalled, root.path(), Some(fixture_key())).with_stall_timeout(Duration::from_millis(100));
+    let asset = Asset { url: "https://updates.example/9.9.9/MightyCode-windows-x64.zip".into(), sha256: "a".repeat(64), size: 10 };
+    let refused = service.download(&asset, "9.9.9", Arc::new(|_| {}), &CancellationToken::new()).await;
+    let Err(ServiceError::Refused(error)) = refused else { panic!("a stall is refused, not cancelled: {refused:?}") };
+    assert_eq!(error.message(&ko()), "패키지 크기가 업데이트 정보와 다릅니다 (0 ≠ 10).");
+    assert!(cancelled.load(Ordering::SeqCst), "the transfer was told to stop");
+    assert!(!service.updates_directory().join("9.9.9").exists(), "its folder is gone");
+}
+
+/// L4: no address or folder reaches Debug output.
+#[test]
+fn debug_output_leaves_addresses_and_folders_out() {
+    let asset = Asset { url: "https://updates.example/x.zip?token=secret".into(), sha256: "a".repeat(64), size: 1 };
+    assert!(!format!("{asset:?}").contains("updates.example"), "{asset:?}");
+    let plan = create_plan(
+        Path::new("C:/Users/name/staged"),
+        Path::new("C:/Users/name/MightyCode"),
+        Path::new("C:/Users/name/p.zip"),
+        &"a".repeat(64),
+        1,
+        1,
+    );
+    assert!(!format!("{plan:?}").contains("name"), "{plan:?}");
+    let state = UpdateState { install_plan: Some(plan), package_path: Some("C:/Users/name/p.zip".into()), ..UpdateState::default() };
+    assert!(!format!("{state:?}").contains("name"), "{state:?}");
+    let service = Service::new(Arc::new(FakeUpdateTransport::default()), Path::new("C:/Users/name/state"), None);
+    assert!(!format!("{service:?}").contains("name"), "{service:?}");
+}

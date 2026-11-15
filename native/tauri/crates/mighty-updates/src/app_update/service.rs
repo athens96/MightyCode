@@ -6,17 +6,18 @@
 //! version folder under `<data>\updates`, reuses `updates\<v>\MightyCode-windows.zip` when its size and SHA-256 match, else writes it
 //! counting (over the asset's size or the cap: `packageTooLarge`), reports progress once per whole percent (at most 0.99 until done),
 //! checks the size (`packageSize`) and the SHA-256 (`packageDigest`), and deletes the version folder on any failure or cancel (also when
-//! the download's future is dropped half way); 30 minutes at most. Tests use `mighty_platform::fake::FakeUpdateTransport`, never the
-//! real update address.
+//! the download's future is dropped half way, which also stops the transfer). The manifest request has C#'s 30 minutes; a package
+//! download is stopped only when no byte has come for [`DOWNLOAD_STALL`] (C# does not bound the body at all). Tests use
+//! `mighty_platform::fake::FakeUpdateTransport`, never the real update address.
 //!
-//! A transport that runs out of time is a cancel, as C#'s `HttpClient` timeout is (`TaskCanceledException`, an
+//! A manifest request that runs out of time is a cancel, as C#'s `HttpClient` timeout is (`TaskCanceledException`, an
 //! `OperationCanceledException`): the coordinator goes back without an error.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mighty_platform::{PlatformError, UpdateTransport};
 use sha2::{Digest, Sha256};
@@ -40,8 +41,17 @@ pub const STAGED_FOLDER: &str = "staged";
 /// Redirects followed at most (C# `MaxRedirects`).
 pub const MAX_REDIRECTS: usize = 5;
 
-/// A download's whole time (C#: 30 minutes, `HttpClient.Timeout`, which also bounds the check).
+/// The manifest request's time (C#: 30 minutes, `HttpClient.Timeout`). Running out of it is a cancel, as C#'s timeout is.
 pub const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// A package download stops when no byte has arrived for this long (`packageSize`, the bytes received so far). C# reads the body
+/// with `ResponseHeadersRead`, which `HttpClient.Timeout` does not bound, so a stalled body would wait for ever there; a slow but
+/// moving download is never cut off.
+pub const DOWNLOAD_STALL: Duration = Duration::from_secs(60);
+
+/// The bound the transport is given for a whole package download: long enough for any connection that keeps moving (the stall above
+/// is what stops a dead one).
+pub const PACKAGE_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Why a check or a download did not end with an answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,20 +132,42 @@ impl Drop for VersionFolderGuard {
     }
 }
 
+/// Sets the transport's cancel flag when the download's future is dropped before the transfer answered, so the transfer stops too.
+struct CancelOnDrop {
+    flag: Arc<AtomicBool>,
+    armed: bool,
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            self.flag.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+/// Empties the service's slot for the download under way however the download ends (a dropped future included).
+struct ClearSlot<'a>(&'a Mutex<Option<CancellationToken>>);
+
+impl Drop for ClearSlot<'_> {
+    fn drop(&mut self) {
+        *self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    }
+}
+
 /// The check, the download and the staging of one profile's updates (C# `AppUpdateService`).
 pub struct Service {
     transport: Arc<dyn UpdateTransport>,
     updates_directory: PathBuf,
     public_key: Option<[u8; 32]>,
     downloading: Mutex<Option<CancellationToken>>,
+    stall: Duration,
 }
 
+/// No folder: the profile's path names the user.
 impl std::fmt::Debug for Service {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Service")
-            .field("updates_directory", &self.updates_directory)
-            .field("verifies_signatures", &self.verifies_signatures())
-            .finish_non_exhaustive()
+        f.debug_struct("Service").field("verifies_signatures", &self.verifies_signatures()).finish_non_exhaustive()
     }
 }
 
@@ -143,7 +175,19 @@ impl Service {
     /// The service for the profile whose data folder is `data_directory`, with the build's key (Windows rule 1: without one it never
     /// checks).
     pub fn new(transport: Arc<dyn UpdateTransport>, data_directory: &Path, public_key: Option<[u8; 32]>) -> Service {
-        Service { transport, updates_directory: data_directory.join(UPDATES_FOLDER), public_key, downloading: Mutex::new(None) }
+        Service {
+            transport,
+            updates_directory: data_directory.join(UPDATES_FOLDER),
+            public_key,
+            downloading: Mutex::new(None),
+            stall: DOWNLOAD_STALL,
+        }
+    }
+
+    /// The same service with another stall time ([`DOWNLOAD_STALL`]; tests use a short one).
+    pub fn with_stall_timeout(mut self, stall: Duration) -> Service {
+        self.stall = stall;
+        self
     }
 
     /// `<data>\updates` (C# `UpdatesDirectory`).
@@ -234,8 +278,9 @@ impl Service {
         let mut guard = VersionFolderGuard { folder: version_directory, armed: true };
         let owned = cancel.child_token();
         *self.downloading.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(owned.clone());
+        let slot = ClearSlot(&self.downloading);
         let written = self.write_to_disk(url, &destination, asset.size, progress.clone(), &owned).await;
-        *self.downloading.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        drop(slot);
         written?;
 
         let received = std::fs::metadata(&destination).map_err(plain)?.len();
@@ -263,7 +308,7 @@ impl Service {
     }
 
     /// C#'s `WriteToDiskAsync`: the package's bytes to `destination`, following https redirects, refusing past the asset's size or
-    /// the cap, with C#'s progress steps.
+    /// the cap, with C#'s progress steps; a transfer with no byte for the stall time is stopped (`packageSize` with what arrived).
     async fn write_to_disk(
         &self,
         mut url: String,
@@ -273,9 +318,15 @@ impl Service {
         cancel: &CancellationToken,
     ) -> Result<(), ServiceError> {
         let reported = Arc::new(Mutex::new(-1i64));
+        let started = Instant::now();
+        // The last time bytes arrived (milliseconds after `started`) and how many have.
+        let active = Arc::new(AtomicU64::new(0));
+        let received = Arc::new(AtomicU64::new(0));
         let on_bytes: mighty_platform::DownloadProgress = {
-            let reported = reported.clone();
+            let (reported, active, received) = (reported.clone(), active.clone(), received.clone());
             Arc::new(move |written: u64| {
+                active.store(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX), Ordering::SeqCst);
+                received.store(written, Ordering::SeqCst);
                 if expected == 0 {
                     return;
                 }
@@ -299,20 +350,38 @@ impl Service {
                 url: url.clone(),
                 destination: destination.to_path_buf(),
                 limit: expected.min(MAX_PACKAGE_BYTES),
-                timeout: DOWNLOAD_TIMEOUT,
+                timeout: PACKAGE_TIMEOUT,
                 progress: on_bytes.clone(),
                 cancel: flag.clone(),
             };
+            active.store(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX), Ordering::SeqCst);
+            let mut on_drop = CancelOnDrop { flag: flag.clone(), armed: true };
             let mut transfer = self.transport.download(request);
-            // A cancel sets the transport's own flag and lets it end on its own, so its file is closed before the folder goes.
-            let answer = tokio::select! {
-                answer = &mut transfer => answer,
-                () = cancel.cancelled() => {
-                    flag.store(true, Ordering::SeqCst);
-                    let _ = transfer.await;
-                    return Err(ServiceError::Cancelled);
+            let mut watch = tokio::time::interval((self.stall / 4).clamp(Duration::from_millis(5), Duration::from_secs(1)));
+            // A cancel or a stall sets the transport's own flag and lets it end on its own, so its file is closed before the folder goes.
+            let answer = loop {
+                tokio::select! {
+                    answer = &mut transfer => break answer,
+                    () = cancel.cancelled() => {
+                        flag.store(true, Ordering::SeqCst);
+                        let _ = transfer.await;
+                        return Err(ServiceError::Cancelled);
+                    }
+                    _ = watch.tick() => {
+                        let since = Duration::from_millis(active.load(Ordering::SeqCst));
+                        if started.elapsed().saturating_sub(since) >= self.stall {
+                            flag.store(true, Ordering::SeqCst);
+                            let _ = transfer.await;
+                            return Err(UpdateError::Key {
+                                key: "appUpdate.error.packageSize",
+                                args: vec![("received", received.load(Ordering::SeqCst).to_string()), ("expected", expected.to_string())],
+                            }
+                            .into());
+                        }
+                    }
                 }
             };
+            on_drop.armed = false;
             let answer = answer.map_err(|error| transport_error(error, "appUpdate.error.packageTooLarge"))?;
             match answer.location.as_deref().filter(|_| is_redirect(answer.status)) {
                 Some(location) if hop < MAX_REDIRECTS => {
