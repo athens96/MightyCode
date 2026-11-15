@@ -23,6 +23,13 @@ pub trait FileHandles: Send + Sync {
     fn final_path(&self, file: &File) -> Option<PathBuf>;
     /// The final path of a folder (opened with backup semantics, so a folder handle exists); None when it cannot be opened.
     fn final_directory_path(&self, path: &Path) -> Option<PathBuf>;
+    /// The handle is a regular file with one name (C# `StyleFiles.SingleLink`: Windows `nNumberOfLinks == 1`, the Mac `st_nlink == 1`
+    /// and `S_IFREG`), so a file hard-linked from elsewhere is not read as the profile's own (W8-E, review L1). An OS that cannot ask
+    /// says false (C#: unsupported hosts fail closed); a caller asks only where [`FileHandles::asks_handles`] is true.
+    fn single_link(&self, file: &File) -> bool {
+        let _ = file;
+        false
+    }
 }
 
 /// What the Antigravity rule safety asks the disk about a path agy named (C# `AntigravityRuleSafety.ResolvedPath`, its
