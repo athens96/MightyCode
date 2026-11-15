@@ -124,14 +124,22 @@ jobs:
       - name: Detached starts only in the update modules; no verify_strict; "runas" only for the firewall rule
         run: |
           # Each rule: a pattern on code lines (comments left out) and the files allowed to match it, with why.
+          # The port itself (its default, the fake, the Windows implementation) and its contract tests.
+          $port = @('crates/mighty-platform/src/process.rs', 'crates/mighty-platform/src/unsupported.rs', 'crates/mighty-platform/src/fake.rs',
+            'crates/mighty-platform-windows/src/process.rs', 'crates/mighty-platform/tests/ports.rs')
           $rules = @(
             @{ what = 'ProcessHost::start_detached / start_detached_or_in_job called'; pattern = '\bstart_detached(_or_in_job)?\s*\('; skip = '\bfn\s+start_detached'
                allowed = @(
                  # The only callers (W9 plan D6): the helper's relaunch, the app's helper launch, the Windows update seams.
                  'src-tauri/src/update_helper.rs', 'src-tauri/src/app_update.rs', 'crates/mighty-platform-windows/src/update.rs',
-                 # The port itself (its default, the fake, the Windows implementation) and its contract tests.
-                 'crates/mighty-platform/src/process.rs', 'crates/mighty-platform/src/unsupported.rs', 'crates/mighty-platform/src/fake.rs',
-                 'crates/mighty-platform-windows/src/process.rs', 'crates/mighty-platform/tests/ports.rs', 'crates/mighty-platform-windows/tests/update_helper.rs') },
+                 'crates/mighty-platform-windows/tests/update_helper.rs') + $port },
+            @{ what = 'ProcessHost::start_detached_waitable called'; pattern = '\bstart_detached_waitable\s*\('; skip = '\bfn\s+start_detached_waitable'
+               allowed = @(
+                 # The Ouroboros dashboard daemon, which C# leaves running (W9-E).
+                 'src-tauri/src/ouroboros.rs') + $port },
+            # Any other detached start the port grows is named in this guard, with its callers, before anything calls it.
+            @{ what = 'another ProcessHost::start_detached_* called'; pattern = '\bstart_detached_(?!or_in_job\b|waitable\b)\w+\s*\('; skip = '\bfn\s+start_detached_'
+               allowed = $port },
             # ed25519-dalek's verify_strict refuses small-order points C#'s Ed25519Verify accepts (plan D6, R4): never, anywhere.
             @{ what = 'verify_strict used'; pattern = 'verify_strict'; skip = $null; allowed = @() },
             @{ what = 'the "runas" verb'; pattern = '(?i)"runas"'; skip = $null
