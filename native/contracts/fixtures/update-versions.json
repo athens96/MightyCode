@@ -1,0 +1,341 @@
+{
+  "about": "AppVersion.Normalized, the sign of AppVersion.Compare and AppUpdateManifest.Allowed for each input; 'csharp' is C#'s answer (tools/parity/Update.cs version).",
+  "normalize": [
+    {
+      "text": "1.2.3",
+      "csharp": "1.2.3"
+    },
+    {
+      "text": "v1.2.3",
+      "csharp": "1.2.3"
+    },
+    {
+      "text": "V1.2.3",
+      "csharp": "1.2.3"
+    },
+    {
+      "text": "vv1.2.3",
+      "csharp": null
+    },
+    {
+      "text": " 1.2.3 ",
+      "csharp": "1.2.3"
+    },
+    {
+      "text": "\t1.2.3\n",
+      "csharp": "1.2.3"
+    },
+    {
+      "text": "\u00A01.2.3\u3000",
+      "csharp": "1.2.3"
+    },
+    {
+      "text": "1",
+      "csharp": "1"
+    },
+    {
+      "text": "1.2.3.4",
+      "csharp": "1.2.3.4"
+    },
+    {
+      "text": "1.2.3.4.5",
+      "csharp": null
+    },
+    {
+      "text": "1.2.3-beta.1",
+      "csharp": "1.2.3-beta.1"
+    },
+    {
+      "text": "1.2.3-beta-2",
+      "csharp": "1.2.3-beta-2"
+    },
+    {
+      "text": "1.2.3+build.7",
+      "csharp": "1.2.3+build.7"
+    },
+    {
+      "text": "1.2.3-rc.1+build",
+      "csharp": "1.2.3-rc.1+build"
+    },
+    {
+      "text": "1.2.3-",
+      "csharp": null
+    },
+    {
+      "text": "1.2.3+",
+      "csharp": null
+    },
+    {
+      "text": "1..2",
+      "csharp": null
+    },
+    {
+      "text": ".1",
+      "csharp": null
+    },
+    {
+      "text": "1.",
+      "csharp": null
+    },
+    {
+      "text": "-1",
+      "csharp": null
+    },
+    {
+      "text": "1.2.3-β",
+      "csharp": null
+    },
+    {
+      "text": "١.٢.٣",
+      "csharp": null
+    },
+    {
+      "text": "1.2.3\n",
+      "csharp": "1.2.3"
+    },
+    {
+      "text": "1.2.3 x",
+      "csharp": null
+    },
+    {
+      "text": "",
+      "csharp": null
+    },
+    {
+      "text": " ",
+      "csharp": null
+    },
+    {
+      "text": "v",
+      "csharp": null
+    },
+    {
+      "text": "9999999999999999999999999999999999999999999999999999999999999999",
+      "csharp": "9999999999999999999999999999999999999999999999999999999999999999"
+    },
+    {
+      "text": "99999999999999999999999999999999999999999999999999999999999999999",
+      "csharp": null
+    },
+    {
+      "text": "v9999999999999999999999999999999999999999999999999999999999999999",
+      "csharp": "9999999999999999999999999999999999999999999999999999999999999999"
+    },
+    {
+      "text": "01.002.0003",
+      "csharp": "01.002.0003"
+    },
+    {
+      "text": "1.2.3-_",
+      "csharp": null
+    },
+    {
+      "text": "1.2.3-a.b-c.D",
+      "csharp": "1.2.3-a.b-c.D"
+    }
+  ],
+  "compare": [
+    {
+      "left": "1.2.0",
+      "right": "1.2.0-beta.2",
+      "csharp": 1
+    },
+    {
+      "left": "1.2.0-beta.2",
+      "right": "1.1.9",
+      "csharp": 1
+    },
+    {
+      "left": "1.2",
+      "right": "1.1.9",
+      "csharp": 1
+    },
+    {
+      "left": "1.2.0",
+      "right": "1.2",
+      "csharp": 0
+    },
+    {
+      "left": "1.2",
+      "right": "1.2.0.0",
+      "csharp": 0
+    },
+    {
+      "left": "1.10",
+      "right": "1.9",
+      "csharp": 1
+    },
+    {
+      "left": "1.2.0-beta.10",
+      "right": "1.2.0-beta.9",
+      "csharp": -1
+    },
+    {
+      "left": "1.2.0-BETA",
+      "right": "1.2.0-beta",
+      "csharp": 0
+    },
+    {
+      "left": "1.2.0-alpha",
+      "right": "1.2.0-beta",
+      "csharp": -1
+    },
+    {
+      "left": "1.2.0-a-b",
+      "right": "1.2.0-a",
+      "csharp": 1
+    },
+    {
+      "left": "1.2.0+5",
+      "right": "1.2.0+6",
+      "csharp": 0
+    },
+    {
+      "left": "1.2.0-rc+1",
+      "right": "1.2.0-rc",
+      "csharp": 0
+    },
+    {
+      "left": "banana",
+      "right": "1.0",
+      "csharp": 0
+    },
+    {
+      "left": "1.0",
+      "right": "banana",
+      "csharp": 0
+    },
+    {
+      "left": "v2",
+      "right": "1.9.9",
+      "csharp": 1
+    },
+    {
+      "left": "99999999999.0",
+      "right": "1.0",
+      "csharp": -1
+    },
+    {
+      "left": "2147483647",
+      "right": "2147483648",
+      "csharp": 1
+    },
+    {
+      "left": "0.4.61",
+      "right": "0.5.0-rc.1",
+      "csharp": -1
+    },
+    {
+      "left": "0.5.0-rc.1",
+      "right": "0.5.0",
+      "csharp": -1
+    },
+    {
+      "left": "0.5.0-rc.1",
+      "right": "0.5.0-rc.2",
+      "csharp": -1
+    },
+    {
+      "left": "1.0.0-1",
+      "right": "1.0.0-a",
+      "csharp": -1
+    },
+    {
+      "left": "1.0.0-.",
+      "right": "1.0.0--",
+      "csharp": 1
+    },
+    {
+      "left": "1.0.0-Z",
+      "right": "1.0.0-a",
+      "csharp": 1
+    },
+    {
+      "left": "01.2",
+      "right": "1.2",
+      "csharp": 0
+    }
+  ],
+  "allowed": [
+    {
+      "url": "https://updates.example/latest.json",
+      "csharp": true
+    },
+    {
+      "url": "HTTPS://updates.example/latest.json",
+      "csharp": true
+    },
+    {
+      "url": "https://updates.example",
+      "csharp": true
+    },
+    {
+      "url": "https://updates.example:8443/x?y=1#z",
+      "csharp": true
+    },
+    {
+      "url": "https://user:pw@updates.example/x",
+      "csharp": true
+    },
+    {
+      "url": "https://[::1]/latest.json",
+      "csharp": true
+    },
+    {
+      "url": "https://127.0.0.1/x",
+      "csharp": true
+    },
+    {
+      "url": "http://updates.example/latest.json",
+      "csharp": false
+    },
+    {
+      "url": "file:///tmp/latest.json",
+      "csharp": false
+    },
+    {
+      "url": "https:///latest.json",
+      "csharp": false
+    },
+    {
+      "url": "https://",
+      "csharp": false
+    },
+    {
+      "url": "ftp://updates.example/x",
+      "csharp": false
+    },
+    {
+      "url": "updates.example/latest.json",
+      "csharp": false
+    },
+    {
+      "url": "",
+      "csharp": false
+    },
+    {
+      "url": "https://updates.example:99999/x",
+      "csharp": false
+    },
+    {
+      "url": "https://updates.example:abc/x",
+      "csharp": false
+    },
+    {
+      "url": "https://pub-0123456789abcdef.r2.dev/latest.json",
+      "csharp": true
+    },
+    {
+      "url": "https://example.invalid/MightyCode-windows-x64.zip",
+      "csharp": true
+    },
+    {
+      "url": "https://bücher.example/x",
+      "csharp": true
+    },
+    {
+      "url": "https://updates.example/a b",
+      "csharp": true
+    }
+  ]
+}

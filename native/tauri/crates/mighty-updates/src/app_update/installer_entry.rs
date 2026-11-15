@@ -11,12 +11,27 @@ use std::path::Path;
 pub const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{F2F99AEF-FB35-4476-A3EE-49453FA0527F}_is1";
 
 /// C# `VersionToWrite(installLocation, displayVersion, appDirectory, version)`: the version to write, or None (no entry, another
-/// folder, the same version). Step 0 stub (W9-A writes it): nothing to write.
+/// folder, the same version). Folders compare without case and without a trailing `\` or `/` (both, on every OS: the Mac runs these
+/// checks on Windows paths too).
 pub fn version_to_write(
-    _install_location: Option<&str>,
-    _display_version: Option<&str>,
-    _app_directory: &Path,
-    _version: &str,
+    install_location: Option<&str>,
+    display_version: Option<&str>,
+    app_directory: &Path,
+    version: &str,
 ) -> Option<String> {
-    None
+    let install_location = install_location.filter(|location| !location.trim().is_empty())?;
+    if version.trim().is_empty() {
+        return None;
+    }
+    let folder = |path: &str| path.trim().trim_end_matches(['\\', '/']).to_string();
+    if !super::dotnet::eq_ignore_case(&folder(install_location), &folder(&app_directory.to_string_lossy())) {
+        return None;
+    }
+    (display_version != Some(version)).then(|| version.to_string())
+}
+
+/// The helper's own version as C#'s `Assembly.GetName().Version.ToString(3)` writes it, from Cargo's parts (`0.5.0-rc.1` →
+/// `0.5.0`): pass `env!("CARGO_PKG_VERSION_MAJOR")`, `…_MINOR`, `…_PATCH`.
+pub fn display_version(major: &str, minor: &str, patch: &str) -> String {
+    format!("{major}.{minor}.{patch}")
 }

@@ -23,18 +23,24 @@
 //! | `InstallerRegistration.cs:14-28` (`UninstallKey`, `VersionToWrite`) | [`installer_entry`] | A |
 //! | `UserEnvironment.cs:14-41` (`IsBare`, `Missing`, `Parse`) | [`environment`] | A |
 //! | `WinUI\Program.cs:253-270` (the `install.log` line) | [`log`] | A |
+//! | `AppUpdateManifest.Allowed`, `AppUpdateService.RequireHttps`, the redirect's `new Uri(current, Location)` | [`address`] | A |
+//! | `JsonDocument.Parse` with its defaults, as the manifest reads it | [`json`] | A |
+//! | .NET's base64, invariant casing, integer parsing, `Path.GetFullPath`, `ToString("O")` | [`dotnet`] | A |
 //!
-//! W9 Step 0 wrote the public types whole and every function as a stub at rest (nothing parses, checks, downloads or replaces until
-//! A fills it). The Windows halves (the mutex, the process wait, the detached start, WinHTTP, the registry) are W9-B's
-//! (mighty-platform's `UpdateInstaller`, `UpdateTransport` and `ProcessHost::start_detached`); the app's host is W9-C's.
+//! The Windows halves (the mutex, the process wait, the detached start, WinHTTP, the registry) are W9-B's (mighty-platform's
+//! `UpdateInstaller`, `UpdateTransport` and `ProcessHost::start_detached`); the app's host is W9-C's. C#'s verdicts are kept in
+//! `native/contracts/fixtures/update-*` (written by `tools/parity/Update.cs`), which `tests/app_update_parity.rs` reads.
 
+pub mod address;
 pub mod auto;
 pub mod build;
 pub mod coordinator;
+pub mod dotnet;
 pub mod environment;
 pub mod guard;
 pub mod housekeeping;
 pub mod installer_entry;
+pub mod json;
 pub mod log;
 pub mod manifest;
 pub mod plan;

@@ -18,14 +18,21 @@ impl Build {
     }
 }
 
-/// C# `AppUpdateBuild.Decode`: a 32-byte raw Ed25519 key in base64 (trimmed); anything else None. Step 0 stub (W9-A writes it): no key.
-pub fn public_key(_text: Option<&str>) -> Option<[u8; 32]> {
-    None
+/// C# `AppUpdateBuild.Decode`: a 32-byte raw Ed25519 key in base64 (trimmed, read as .NET reads base64 into its 64-byte buffer);
+/// anything else None.
+pub fn public_key(text: Option<&str>) -> Option<[u8; 32]> {
+    let text = text?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    // `TryFromBase64String` into 64 bytes: a longer key does not fit and is refused like any other malformed one.
+    let bytes = super::dotnet::base64(text).filter(|bytes| bytes.len() <= 64)?;
+    <[u8; 32]>::try_from(bytes.as_slice()).ok()
 }
 
-/// C# `AppUpdateBuild.ManifestUrl`: a non-empty allowed address, else None. Step 0 stub (W9-A writes it): no address.
-pub fn manifest_url(_text: Option<&str>) -> Option<String> {
-    None
+/// C# `AppUpdateBuild.ManifestUrl`: a non-empty allowed address, else None.
+pub fn manifest_url(text: Option<&str>) -> Option<String> {
+    text.filter(|value| !value.is_empty() && super::manifest::allowed(value)).map(String::from)
 }
 
 /// The package this machine needs (C# `AppUpdateBuild.Architecture`): `arm64` on an arm64 process, else `x64`.

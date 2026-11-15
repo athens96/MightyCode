@@ -1,0 +1,149 @@
+{
+  "about": "AppUpdateHelperGuard.MutexName for each folder; 'csharp' is C#'s answer (tools/parity/Update.cs mutex-name). Windows paths: read on Windows.",
+  "paths": [
+    {
+      "path": "C:\\Users\\me\\AppData\\Local\\Programs\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-4d5997dbcb3fa42815183c1ab70c163d"
+    },
+    {
+      "path": "C:\\Users\\me\\AppData\\Local\\Programs\\MightyCode\\",
+      "csharp": "Local\\MightyCode-update-helper-4d5997dbcb3fa42815183c1ab70c163d"
+    },
+    {
+      "path": "C:\\Users\\me\\AppData\\Local\\Programs\\MightyCode/",
+      "csharp": "Local\\MightyCode-update-helper-4d5997dbcb3fa42815183c1ab70c163d"
+    },
+    {
+      "path": "C:\\Users\\me\\AppData\\Local\\Programs\\MightyCode\\\\",
+      "csharp": "Local\\MightyCode-update-helper-4d5997dbcb3fa42815183c1ab70c163d"
+    },
+    {
+      "path": "c:\\users\\me\\appdata\\local\\programs\\mightycode",
+      "csharp": "Local\\MightyCode-update-helper-4d5997dbcb3fa42815183c1ab70c163d"
+    },
+    {
+      "path": "C:\\USERS\\ME\\APPDATA\\LOCAL\\PROGRAMS\\MIGHTYCODE",
+      "csharp": "Local\\MightyCode-update-helper-4d5997dbcb3fa42815183c1ab70c163d"
+    },
+    {
+      "path": "C:/Users/me/AppData/Local/Programs/MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-4d5997dbcb3fa42815183c1ab70c163d"
+    },
+    {
+      "path": "C:\\Users\\me\\AppData\\Local\\Programs\\..\\Programs\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-4d5997dbcb3fa42815183c1ab70c163d"
+    },
+    {
+      "path": "C:\\Users\\me\\AppData\\Local\\Programs\\.\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-4d5997dbcb3fa42815183c1ab70c163d"
+    },
+    {
+      "path": "C:\\Users\\me\\AppData\\Local\\Programs\\\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-4d5997dbcb3fa42815183c1ab70c163d"
+    },
+    {
+      "path": "C:\\Users\\me\\AppData\\Local\\Programs\\MightyCode-other",
+      "csharp": "Local\\MightyCode-update-helper-ca8ed45c6d7c0677ce5dc06c50f24630"
+    },
+    {
+      "path": "C:\\Users\\Straße\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-69231a07185fafe81eba121d9bfe80db"
+    },
+    {
+      "path": "C:\\Users\\STRASSE\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-12269f56822b9d42ec294c625ead78ac"
+    },
+    {
+      "path": "C:\\Users\\ımaj\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-cabd9fd87827abf0be69d3ca860d35ef"
+    },
+    {
+      "path": "C:\\Users\\İstanbul\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-c5ae498d84840217fa4eb3b3963d88dd"
+    },
+    {
+      "path": "C:\\Users\\istanbul\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-9dd5cbed0f17a85042ab7467c30b098f"
+    },
+    {
+      "path": "C:\\Users\\ᾀ\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-a89a0eb799676dbfe6e8f5179120b05e"
+    },
+    {
+      "path": "C:\\Users\\ﬀ\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-153eed8a920ef1f90ec46d56685d7180"
+    },
+    {
+      "path": "C:\\Users\\\uD801\uDC28\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-6bd2fd10ef1d57a862a2e613550f03c5"
+    },
+    {
+      "path": "C:\\Users\\ǅ\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-a5cd903fbdd6141e0d20234a6f9260c9"
+    },
+    {
+      "path": "C:\\Users\\ẞ\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-dc972ab08b1bcee7dcbc5da2926d5e5c"
+    },
+    {
+      "path": "C:\\Users\\жёлтый\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-02e173ca8b9c37ca4c59e93efaef577b"
+    },
+    {
+      "path": "C:\\Users\\և\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-fae4ad55faad97eaef4d3c54d6a74f50"
+    },
+    {
+      "path": "C:\\Users\\ŉ\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-2c6c965402f9e194983da7d2ed3f1476"
+    },
+    {
+      "path": "C:\\Users\\ſ\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-2aa126f27c76f1b97a9a9fa75e5da31e"
+    },
+    {
+      "path": "C:\\Users\\ǰ\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-0b7fc027a14c5c1797bc267e9028fd83"
+    },
+    {
+      "path": "C:\\Users\\µ\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-c828d4f2009fe34acb31506c96ee57f2"
+    },
+    {
+      "path": "C:\\Users\\ÿ\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-18d7bd2ae4f0a69280b4982cba76e5dc"
+    },
+    {
+      "path": "C:\\Users\\김철수\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-25675f263f39e38b2e566732b8634499"
+    },
+    {
+      "path": "C:\\Users\\ⓐ\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-c1bcd9bdcf5455f6ebf537e1690dbf8c"
+    },
+    {
+      "path": "C:\\Users\\ｍｅ\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-2d00928d313c3b2c160d87751313ebc7"
+    },
+    {
+      "path": "C:\\Users\\me\\AppData\\Local\\Programs\\MightyCode.",
+      "csharp": "Local\\MightyCode-update-helper-4d5997dbcb3fa42815183c1ab70c163d"
+    },
+    {
+      "path": "C:\\Users\\me\\AppData\\Local\\Programs\\MightyCode ",
+      "csharp": "Local\\MightyCode-update-helper-4d5997dbcb3fa42815183c1ab70c163d"
+    },
+    {
+      "path": "\\\\server\\share\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-15820e198c64e7f80abc36cad0ce59d9"
+    },
+    {
+      "path": "D:\\Tools\\MightyCode",
+      "csharp": "Local\\MightyCode-update-helper-1d2b8b2d88f2e0e22eb37e5a59fd69d9"
+    },
+    {
+      "path": "c:\\users\\me\\appdata\\local\\programs\\mightycode",
+      "csharp": "Local\\MightyCode-update-helper-4d5997dbcb3fa42815183c1ab70c163d"
+    }
+  ]
+}
