@@ -126,6 +126,13 @@ fn fake_cli(provider: &str, record: &str, args: &[String]) {
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
     let _ = std::fs::write(format!("{record}.prompt"), &input);
+    // A pane worktree's values as the run got them (W9-I's checks): each named one, null when it is not set.
+    if has("--record-env") {
+        let names = ["PORT", "MIGHTY_WORKSPACE_FOLDER", "MIGHTY_WORKTREE", "MIGHTY_NOT_A_PANE_KEY"];
+        let values: serde_json::Map<String, Value> =
+            names.iter().map(|name| (name.to_string(), std::env::var(name).map_or(Value::Null, Value::String))).collect();
+        let _ = std::fs::write(format!("{record}.env"), Value::Object(values).to_string());
+    }
     if has("--verify-attachments") {
         let flag = if provider == "codex" { "--image" } else { "--add-dir" };
         let Some(index) = args.iter().position(|a| a == flag).filter(|i| i + 1 < args.len()) else {

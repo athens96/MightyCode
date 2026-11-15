@@ -946,8 +946,8 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
     let id = request_.session_id.clone();
     if request_.action == "create" {
         let provider = text("provider").unwrap_or_else(|| "claude".into());
-        let made = {
-            let mut view = host.view();
+        let created = {
+            let view = host.view();
             let template = RunSession {
                 id: Some(wire::new_id()),
                 workspace_id: Some(id.clone()),
@@ -957,18 +957,16 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
                 created_at: Some(time::now_o()),
                 ..RunSession::default()
             };
-            let created = mighty_core::add_pane::inherit(template, view.snapshot.sessions());
-            if !view.snapshot.workspaces().iter().any(|w| w.id() == id && w.remote.is_none()) {
-                return Err(request(404, "Workspace not found."));
-            }
-            if !mighty_core::add_pane::has_room(&view.snapshot) {
-                return Err(request(409, l.get("workspace.paneLimit")));
-            }
-            let pane = Arc::new(created);
-            view.update(|state| state.sessions_mut().push(pane.clone())).map_err(|e| request(409, e))?;
-            pane.id().to_string()
+            mighty_core::add_pane::inherit(template, view.snapshot.sessions())
         };
-        host.schedule();
+        // The phone cannot be asked: the workspace's mode alone decides whether the pane gets its own worktree (W9-I, C#
+        // `PaneWorktreePolicy.DecideWithoutAsking`). On a task of its own, so a dropped request never leaves a worktree without its pane.
+        let making = tauri::async_runtime::spawn(crate::pane_worktree::phone_create(host.clone(), id.clone(), created));
+        let made = match making.await {
+            Ok(Ok(made)) => made,
+            Ok(Err((status, message))) => return Err(request(status, message)),
+            Err(error) => return Err(MobileError::Failed(error.to_string())),
+        };
         return Ok(ActionAnswer::Value(json!(made)));
     }
     let pane = mobile_pane(&host, &id)?;
@@ -1035,8 +1033,11 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
             {
                 return Err(MobileError::Failed(error.to_string()));
             }
+            let closed = host.view().snapshot.session(&id).cloned();
             host.view().update(|state| state.sessions_mut().retain(|p| p.id() != id)).map_err(|e| request(409, e))?;
             host.schedule();
+            // C# `ClosePane`'s tail, as the window's close (W9-I): a worktree pane's worktree goes with it or is kept on the workspace.
+            crate::pane_worktree::after_close(&host, &id, closed).await;
             ActionAnswer::Value(Value::Null)
         }
         "settings" => {

@@ -438,7 +438,13 @@ impl Terminals {
             let session = view.snapshot.session(id).filter(|s| matches!(s.kind(), "shell" | AGENT_TERMINAL)).ok_or_else(not_found)?;
             let kind =
                 if session.kind() == "shell" { PaneKind::Shell } else { PaneKind::Agent { owner: session.owner_session_id.clone() } };
-            (kind, local_folder(&view.snapshot, session.workspace_id()))
+            // A terminal opened "in this worktree" starts in the pane's folder (W9-I, C# PaneWorktree.cs); one whose folder is gone
+            // starts in the workspace.
+            let folder = match session.working_folder.as_deref() {
+                Some(path) if kind == PaneKind::Shell && is_working_folder(path) && Path::new(path).is_dir() => Some(PathBuf::from(path)),
+                _ => local_folder(&view.snapshot, session.workspace_id()),
+            };
+            (kind, folder)
         };
         let mut panes = lock(&self.panes);
         if let Some(pane) = panes.get(id).filter(|pane| *pane.kind() == kind) {

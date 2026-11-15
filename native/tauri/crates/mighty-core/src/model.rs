@@ -127,6 +127,14 @@ fn lenient_string(value: Option<&Value>) -> Option<String> {
     value.and_then(Value::as_str).map(str::to_string)
 }
 
+/// `LenientListConverter<string>.Read`: an array's strings (a null or any other element left out); anything else is null.
+fn lenient_strings(value: Option<&Value>) -> Option<Vec<String>> {
+    match value {
+        Some(Value::Array(items)) => Some(items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect()),
+        _ => None,
+    }
+}
+
 /// `LenientNullableDoubleConverter.Write`: a number when finite, else a null literal (a null is never handed to it).
 fn write_lenient_double(out: &mut JsonOut, name: &str, value: Option<f64>) {
     if let Some(number) = value {
@@ -305,6 +313,15 @@ pub struct Workspace {
     pub model_defaults: Option<ModelDefaultsConfig>,
     /// Set when the folder is on another computer.
     pub remote: Option<RemoteWorkspaceReference>,
+    /// Where the workspace's agent panes work (`PaneWorktree.cs`): ask (None, older saves), `further` or `every`. Lenient: anything but
+    /// a string reads as None.
+    pub pane_worktree_mode: Option<String>,
+    /// Run once in each new pane worktree right after it is made (`npm ci`, …); None is none. Lenient.
+    pub worktree_setup_command: Option<String>,
+    /// Files the workspace folder has but git leaves out of a worktree (`.env`, …), copied into each new pane worktree. Lenient list.
+    pub worktree_copy_paths: Option<Vec<String>>,
+    /// Pane worktrees kept after their pane closed with work in them; damage drops that record only.
+    pub kept_pane_worktrees: Option<Vec<KeptPaneWorktree>>,
 }
 
 impl Default for Workspace {
@@ -317,6 +334,10 @@ impl Default for Workspace {
             created_at: Some(time::now_o()),
             model_defaults: None,
             remote: None,
+            pane_worktree_mode: None,
+            worktree_setup_command: None,
+            worktree_copy_paths: None,
+            kept_pane_worktrees: None,
         }
     }
 }
@@ -331,6 +352,10 @@ impl Wire for Workspace {
             created_at: json::string(o.get("createdAt"), || Some(time::now_o()))?,
             model_defaults: json::record(o.get("modelDefaults"))?,
             remote: json::record(o.get("remote"))?,
+            pane_worktree_mode: lenient_string(o.get("paneWorktreeMode")),
+            worktree_setup_command: lenient_string(o.get("worktreeSetupCommand")),
+            worktree_copy_paths: lenient_strings(o.get("worktreeCopyPaths")),
+            kept_pane_worktrees: lenient_list(o.get("keptPaneWorktrees")),
         })
     }
 
@@ -342,6 +367,228 @@ impl Wire for Workspace {
         out.prop_str("createdAt", self.created_at.as_deref());
         out.prop("modelDefaults", self.model_defaults.as_ref());
         out.prop("remote", self.remote.as_ref());
+        out.prop_str("paneWorktreeMode", self.pane_worktree_mode.as_deref());
+        out.prop_str("worktreeSetupCommand", self.worktree_setup_command.as_deref());
+        out.prop_strings("worktreeCopyPaths", self.worktree_copy_paths.as_ref());
+        out.prop_list("keptPaneWorktrees", self.kept_pane_worktrees.as_ref());
+        out.end_object();
+    }
+}
+
+// ── PaneWorktree ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/// C# `PaneWorktree` (Core/PaneWorktree.cs): a workspace's agent pane that works in its own git worktree, branch `mighty/<session id>`
+/// at the workspace branch's head, in the same place as a delegated child's. Its rules (normalize, environment) are in `normalize.rs`
+/// and mighty-delegation's `pane_worktree`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PaneWorktree {
+    /// The worktree's top folder, `<root>\<session id>`.
+    pub worktree_path: Option<String>,
+    pub branch: Option<String>,
+    /// The workspace folder's branch and head when the worktree was made: the branch a merge goes into.
+    pub base_branch: Option<String>,
+    pub base_commit: Option<String>,
+    /// The top folder of the workspace's checkout, where the branch lives and where merge and discard run git.
+    pub checkout: Option<String>,
+    /// The `PORT` every run of the pane gets.
+    pub port: i32,
+    pub setup_command: Option<String>,
+    /// `running`, `done` or `failed`; None without a setup command.
+    pub setup_status: Option<String>,
+    pub setup_exit_code: Option<i32>,
+    /// The commit the workspace branch moved to by the last merge from the pane; None before one.
+    pub merged_commit: Option<String>,
+    /// The workspace branch's head before that merge: where an undo puts it back.
+    pub pre_merge_commit: Option<String>,
+    /// The folder the pane's runs work in: the worktree, or the folder in it that matches a workspace that is a subfolder of its
+    /// repository.
+    pub working_folder: Option<String>,
+    /// Whether the pane's agent was told it works in this worktree (`PaneWorktreeNote`); only true is kept.
+    pub note_given: Option<bool>,
+}
+
+impl Default for PaneWorktree {
+    /// `new PaneWorktree()`: empty paths and names, port 0.
+    fn default() -> Self {
+        PaneWorktree {
+            worktree_path: Some(String::new()),
+            branch: Some(String::new()),
+            base_branch: Some(String::new()),
+            base_commit: Some(String::new()),
+            checkout: Some(String::new()),
+            port: 0,
+            setup_command: None,
+            setup_status: None,
+            setup_exit_code: None,
+            merged_commit: None,
+            pre_merge_commit: None,
+            working_folder: None,
+            note_given: None,
+        }
+    }
+}
+
+impl PaneWorktree {
+    /// `PaneWorktree.Running`, `Done`, `Failed`.
+    pub const RUNNING: &'static str = "running";
+    pub const DONE: &'static str = "done";
+    pub const FAILED: &'static str = "failed";
+
+    pub fn worktree_path(&self) -> &str {
+        self.worktree_path.as_deref().unwrap_or("")
+    }
+    pub fn branch(&self) -> &str {
+        self.branch.as_deref().unwrap_or("")
+    }
+    pub fn base_branch(&self) -> &str {
+        self.base_branch.as_deref().unwrap_or("")
+    }
+    pub fn base_commit(&self) -> &str {
+        self.base_commit.as_deref().unwrap_or("")
+    }
+    pub fn checkout(&self) -> &str {
+        self.checkout.as_deref().unwrap_or("")
+    }
+
+    /// `RunFolder`: the folder the pane's runs work in.
+    pub fn run_folder(&self) -> &str {
+        self.working_folder.as_deref().unwrap_or(self.worktree_path())
+    }
+
+    /// `Environment(workspaceFolder)`: the values every run of the pane (and its setup command) gets: its PORT, the workspace folder it
+    /// was made from and its own worktree, in C#'s order.
+    pub fn environment(&self, workspace_folder: &str) -> IndexMap<String, String> {
+        IndexMap::from([
+            ("PORT".to_string(), self.port.to_string()),
+            ("MIGHTY_WORKSPACE_FOLDER".to_string(), workspace_folder.to_string()),
+            ("MIGHTY_WORKTREE".to_string(), self.run_folder().to_string()),
+        ])
+    }
+
+    /// `PaneWorktreeNote.Text`: what the pane's agent is told once, with its first request (rule 3).
+    pub fn note(&self) -> String {
+        let (folder, branch, base, port) = (self.run_folder(), self.branch(), self.base_branch(), self.port);
+        format!(
+            "[Mighty Code] This pane works in its own git worktree ({folder}) on the branch {branch}, made from {base} so that the other panes of this workspace keep working undisturbed. Dev servers you start here use PORT={port} (already set in the environment); start them on that port. When you are done, commit your work on {branch}, leaving no uncommitted changes and no new files outside a commit. The person who sent this merges your branch into {base} from the app. Do not merge, push, rebase or switch branches."
+        )
+    }
+
+    /// `PaneWorktreeNote.Applies`: whether a request carries the note: the first one that is no slash command.
+    pub fn note_applies(&self, input: &str) -> bool {
+        self.note_given != Some(true) && !input.trim_start().starts_with('/')
+    }
+
+    /// `PaneWorktreeNote.Attach`.
+    pub fn with_note(&self, input: &str) -> String {
+        format!("{input}\n\n{}", self.note())
+    }
+
+    /// `PaneWorktreeNote.ConflictPrompt`: the request asking the pane's agent to bring its base in and resolve the conflict the merge
+    /// refused.
+    pub fn conflict_prompt(&self) -> String {
+        let (branch, base) = (self.branch(), self.base_branch());
+        format!(
+            "[Mighty Code] Merging your branch {branch} into {base} from the app was refused: the two conflict. In this worktree, bring {base} into your branch with `git merge {base}`, resolve every conflict so that the changes on both sides are kept (ask when a choice is unclear), run the checks that apply, and commit the merge on {branch}, leaving no uncommitted changes. The person merges your branch from the app again afterwards. Do not push, rebase or switch branches."
+        )
+    }
+}
+
+impl Wire for PaneWorktree {
+    fn read(value: &Value) -> R<Self> {
+        let o = Obj::of(value, "a pane worktree")?;
+        Ok(PaneWorktree {
+            worktree_path: json::string(o.get("worktreePath"), some(""))?,
+            branch: json::string(o.get("branch"), some(""))?,
+            base_branch: json::string(o.get("baseBranch"), some(""))?,
+            base_commit: json::string(o.get("baseCommit"), some(""))?,
+            checkout: json::string(o.get("checkout"), some(""))?,
+            port: json::int32(o.get("port"), 0)?,
+            setup_command: json::opt_string(o.get("setupCommand"))?,
+            setup_status: json::opt_string(o.get("setupStatus"))?,
+            setup_exit_code: json::opt_int32(o.get("setupExitCode"))?,
+            merged_commit: json::opt_string(o.get("mergedCommit"))?,
+            pre_merge_commit: json::opt_string(o.get("preMergeCommit"))?,
+            working_folder: json::opt_string(o.get("workingFolder"))?,
+            note_given: json::opt_boolean(o.get("noteGiven"))?,
+        })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_str("worktreePath", self.worktree_path.as_deref());
+        out.prop_str("branch", self.branch.as_deref());
+        out.prop_str("baseBranch", self.base_branch.as_deref());
+        out.prop_str("baseCommit", self.base_commit.as_deref());
+        out.prop_str("checkout", self.checkout.as_deref());
+        out.prop_int("port", self.port as i64);
+        out.prop_str("setupCommand", self.setup_command.as_deref());
+        out.prop_str("setupStatus", self.setup_status.as_deref());
+        out.prop_opt_int("setupExitCode", self.setup_exit_code.map(i64::from));
+        out.prop_str("mergedCommit", self.merged_commit.as_deref());
+        out.prop_str("preMergeCommit", self.pre_merge_commit.as_deref());
+        out.prop_str("workingFolder", self.working_folder.as_deref());
+        out.prop_opt_bool("noteGiven", self.note_given);
+        out.end_object();
+    }
+}
+
+/// C# `KeptPaneWorktree`: a pane worktree kept after its pane closed with work still unmerged (or children still on its branch).
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeptPaneWorktree {
+    pub session_id: Option<String>,
+    pub title: Option<String>,
+    pub provider: Option<String>,
+    pub worktree: Option<PaneWorktree>,
+    pub kept_at: Option<String>,
+}
+
+impl Default for KeptPaneWorktree {
+    /// `new KeptPaneWorktree()`: the time now, Claude, an empty worktree.
+    fn default() -> Self {
+        KeptPaneWorktree {
+            session_id: Some(String::new()),
+            title: Some(String::new()),
+            provider: Some("claude".into()),
+            worktree: Some(PaneWorktree::default()),
+            kept_at: Some(time::now_o()),
+        }
+    }
+}
+
+impl KeptPaneWorktree {
+    pub fn session_id(&self) -> &str {
+        self.session_id.as_deref().unwrap_or("")
+    }
+    pub fn title(&self) -> &str {
+        self.title.as_deref().unwrap_or("")
+    }
+    pub fn provider(&self) -> &str {
+        self.provider.as_deref().unwrap_or("")
+    }
+}
+
+impl Wire for KeptPaneWorktree {
+    fn read(value: &Value) -> R<Self> {
+        let o = Obj::of(value, "a kept pane worktree")?;
+        Ok(KeptPaneWorktree {
+            session_id: json::string(o.get("sessionId"), some(""))?,
+            title: json::string(o.get("title"), some(""))?,
+            provider: json::string(o.get("provider"), some("claude"))?,
+            worktree: match o.get("worktree") {
+                None => Some(PaneWorktree::default()),
+                value => json::record(value)?,
+            },
+            kept_at: json::string(o.get("keptAt"), || Some(time::now_o()))?,
+        })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_str("sessionId", self.session_id.as_deref());
+        out.prop_str("title", self.title.as_deref());
+        out.prop_str("provider", self.provider.as_deref());
+        out.prop("worktree", self.worktree.as_ref());
+        out.prop_str("keptAt", self.kept_at.as_deref());
         out.end_object();
     }
 }
@@ -646,6 +893,8 @@ pub struct RunSession {
     pub background_work: Option<BackgroundWork>,
     pub parent_session_id: Option<String>,
     pub working_folder: Option<String>,
+    /// Present only on a workspace's agent pane that works in its own worktree (`PaneWorktree.cs`). Lenient: damage loads as None.
+    pub pane_worktree: Option<PaneWorktree>,
     pub ask_target: Option<String>,
     /// `shellRuns` on the wire.
     pub shell_block_runs: Option<Vec<ShellBlockRun>>,
@@ -689,6 +938,7 @@ impl Default for RunSession {
             background_work: None,
             parent_session_id: None,
             working_folder: None,
+            pane_worktree: None,
             ask_target: None,
             shell_block_runs: None,
         }
@@ -769,6 +1019,7 @@ impl Wire for RunSession {
             background_work: lenient_record(o.get("backgroundWork")),
             parent_session_id: lenient_string(o.get("parentSessionId")),
             working_folder: lenient_string(o.get("workingFolder")),
+            pane_worktree: lenient_record(o.get("paneWorktree")),
             ask_target: lenient_string(o.get("askTarget")),
             shell_block_runs: lenient_list(o.get("shellRuns")),
         })
@@ -847,6 +1098,7 @@ impl RunSession {
         out.prop("backgroundWork", self.background_work.as_ref());
         out.prop_str("parentSessionId", self.parent_session_id.as_deref());
         out.prop_str("workingFolder", self.working_folder.as_deref());
+        out.prop("paneWorktree", self.pane_worktree.as_ref());
         out.prop_str("askTarget", self.ask_target.as_deref());
         out.prop_list("shellRuns", self.shell_block_runs.as_ref());
         out.end_object();

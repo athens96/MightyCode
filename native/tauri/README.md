@@ -92,7 +92,7 @@ porting checklist.
 Each is the C# handler's rule (named beside it). A change is C#'s `UpdateAsync` (normalized, then queued for saving); an action is C#'s
 `Act` (the banner cleared first, what it fails with shown there, the call answering null). The layout actions (`SelectLayoutSession`,
 `ActivatePane`, `SelectWorkspace`, `ApplyLayoutPreset`) live once, in `frame.rs`, and the layout saves in mighty-core's `add_pane`; every
-module uses those. The host answers 141 methods (`tauri-logs/unimplemented.json`'s `implemented` lists them).
+module uses those. The host answers 145 methods (`tauri-logs/unimplemented.json`'s `implemented` lists them).
 
 - **The phone** (W8-A/B/C: `mobile.rs`, `phone.rs`, `direct.rs`, `settings/mobile.rs`, `settings/mobile_direct.rs`; C# MainWindow.MobileRemote.cs, MainWindow.MobileDirect.cs, MobileRelayHost, MobileDesktopRouter): with `--allow-state-write` the relay link (the profile's `mobile-identity.json`, made at first use; the same host token and push key the C# app keeps, so a phone paired there reconnects without pairing again), pairing by QR, the paired devices with revoke, rotate; every `/m1/` route answered by the desk over the run service, delegation's send, the composer's queue, `ask.rs`'s targets, terminal prompts, Antigravity cards, the files and work map panes (a busy pane queues, an idle one starts, `NotStarted` is 409 `remote.error.dropped`, the S-L3 continuation revoke); push for a finished run, a waiting card, a lost sign-in and a shell that began, suppressed while that phone views the pane; the Tailscale direct path on this PC's Tailscale addresses only (exclusive binds, never a wildcard) with the shared firewall rule's row (add, update, remove, re-check through one UAC prompt). Without the flag nothing is loaded, written, dialled or bound and the box says verification mode (D2, D3).
 - **Remote workspaces** (W8-D: `remote.rs`, `settings/remote.rs`; C# DesktopService.Remote.cs, MainWindow.RemoteWorkspaces.cs): `connectRemote` (and the add menu's connect) opens Settings › 원격 연결: sharing this PC (Start shares the picked workspaces on its Tailscale addresses, a new key each start, masked with show and a secret copy cleared after 60 s, full access, stop), the firewall rows (the phone's rule, both ports), the connect form, the connected computers with refresh, disconnect, remove and their workspaces to open. A remote workspace's pane runs on its host through the client (`RemoteRunner`), its composer held by `remote_block`; keys only in the DPAPI vault with `--allow-state-write`, in memory otherwise.
@@ -310,7 +310,6 @@ out as it answers them, and at W9's end a full smoke meets none (`unimplemented:
 |---|---|
 | `guidedAction` | W9-D |
 | `postponeUpdate`, `restartForUpdate` | W9-C |
-| `paneWorktreeStatus`, `paneWorktreeAction`, `paneWorktreeDiff`, `workspaceWorktree` (`main`'s 0.4.60–0.4.61 page) | W9-I |
 | `serverConnect`, `serverDisconnect` (`main`'s 0.4.61 page) | W9-J |
 
 W9's C# baseline is `origin/main` 90bf8ace (0.4.61), merged into W9's base in c4cd19db: its page builds the C# `dist/` byte for byte

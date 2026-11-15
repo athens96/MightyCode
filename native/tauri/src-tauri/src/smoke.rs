@@ -143,17 +143,7 @@ const W9_STEPS: [(Stage, &str, StepStart, StepChecks); 5] = [
 
 /// The page methods a smoke may meet unanswered while W9 is under way (plan D20; README's unimplemented table): the three W9 ones and
 /// those `main`'s 0.4.61 page added for W9-I and W9-J. Each part takes its own out as it answers them; the integrator empties the list.
-pub const ALLOWED_UNIMPLEMENTED: [&str; 9] = [
-    "guidedAction",
-    "postponeUpdate",
-    "restartForUpdate",
-    "paneWorktreeStatus",
-    "paneWorktreeAction",
-    "paneWorktreeDiff",
-    "workspaceWorktree",
-    "serverConnect",
-    "serverDisconnect",
-];
+pub const ALLOWED_UNIMPLEMENTED: [&str; 5] = ["guidedAction", "postponeUpdate", "restartForUpdate", "serverConnect", "serverDisconnect"];
 
 /// A run that is a smoke but whose page probe another part takes over (W9-H; main.rs from `--help-capture` and `--perf-scenario`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
