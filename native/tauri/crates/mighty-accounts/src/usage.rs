@@ -512,6 +512,51 @@ pub mod credential_file {
     }
 }
 
+/// What a read of the Claude CLI's sign-in found (Swift `ClaudeQuotaCredentials.read`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaudeSignIn {
+    Found(ClaudeQuotaCredential),
+    /// The Keychain would have asked (a read that may not ask) and the CLI's file has none: Swift's `keychainPermission`, which stays
+    /// silent until the user asks for an interactive read.
+    Permission,
+    Missing,
+}
+
+/// Swift `ClaudeQuotaCredentials.read(environment:interactive:)` (AccountUsageService.swift:407-441), Mac stage M-B: the CLI's item in
+/// the Keychain first when `keychain` is given (the Mac, while `usage.claudeKeychain` allows it: the caller's), then its file
+/// ([`credential_file::read`]); a Keychain that would have asked, with no file to fall back on, is [`ClaudeSignIn::Permission`]. A
+/// `CLAUDE_CONFIG_DIR` that is not an absolute path is no sign-in there (a custom profile never borrows the default account's). Without
+/// a Keychain (Windows) this is the file alone, as before.
+pub fn claude_credential(
+    home: &str,
+    environment: &std::collections::BTreeMap<String, String>,
+    now: DateTime<Utc>,
+    keychain: Option<&dyn mighty_platform::ClaudeCredentials>,
+    interactive: bool,
+) -> ClaudeSignIn {
+    let mut denied = false;
+    if let Some(store) = keychain {
+        let config = crate::env_get(environment, "CLAUDE_CONFIG_DIR");
+        if config.is_some_and(|dir| !dir.starts_with('/') || dir.contains('\0')) {
+            return ClaudeSignIn::Missing;
+        }
+        match store.read(config.map(std::path::Path::new), interactive) {
+            Ok(Some(text)) => {
+                if let Some(found) = credential_file::parse(&text, now) {
+                    return ClaudeSignIn::Found(found);
+                }
+            }
+            Err(mighty_platform::PlatformError::Refused(_)) => denied = true,
+            Ok(None) | Err(_) => {}
+        }
+    }
+    match credential_file::read(home, environment, now) {
+        Some(found) => ClaudeSignIn::Found(found),
+        None if denied => ClaudeSignIn::Permission,
+        None => ClaudeSignIn::Missing,
+    }
+}
+
 // ── the service ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// What reads a provider's usage (the app's: [`runtime_probe`]).

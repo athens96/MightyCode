@@ -5,9 +5,9 @@
 //!
 //! On the Mac the CLI keeps it in the login Keychain: a generic password of service `Claude Code-credentials`, or
 //! `Claude Code-credentials-<the first 8 hex digits of SHA-256(CLAUDE_CONFIG_DIR)>` for another config folder; account
-//! `NSUserName()`, else any. A read that may not show UI (`kSecUseAuthenticationUIFail`, interaction off) answers None where the
-//! Keychain would have to ask; the CLI's fallback file `<config>/.credentials.json` (256 KB at most) is read after it. Swift reads the
-//! Keychain only while the defaults key `usage.claudeKeychain` allows it.
+//! `NSUserName()`, else any. A read that may not show UI (`kSecUseAuthenticationUIFail`, interaction off) is refused where the
+//! Keychain would have to ask; the CLI's fallback file `<config>/.credentials.json` (256 KB at most) is read after it
+//! (mighty-accounts `usage::claude_credential`). Swift reads the Keychain only while the defaults key `usage.claudeKeychain` allows it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -16,12 +16,15 @@ use crate::Result;
 
 /// The Claude CLI's stored OAuth credential (its JSON, as the CLI wrote it).
 pub trait ClaudeCredentials: Send + Sync {
-    /// The credential for `config_dir` (`CLAUDE_CONFIG_DIR`; None: the default `~/.claude`), or None when there is none or it cannot
-    /// be read without asking (`interactive` false). The text is a secret: it never reaches a log, an error or `Debug`.
+    /// The credential for `config_dir` (`CLAUDE_CONFIG_DIR`; None: the default `~/.claude`), or None when there is none. A read that
+    /// may not ask (`interactive` false) where the store would have to ask is `Err(PlatformError::Refused)`, Swift's
+    /// `keychainPermission` (the caller still reads the CLI's file, and asks only when the user asks). The text is a secret: it never
+    /// reaches a log, an error or `Debug`.
     fn read(&self, config_dir: Option<&Path>, interactive: bool) -> Result<Option<String>>;
 }
 
-/// A test's stored credential: answers `stored` (to an interactive read only when `needs_interaction`) and records every read.
+/// A test's stored credential: answers `stored` (to an interactive read only when `needs_interaction`; a silent one is refused) and
+/// records every read.
 #[derive(Default)]
 pub struct FakeClaudeCredentials {
     stored: Mutex<Option<String>>,
@@ -55,7 +58,7 @@ impl ClaudeCredentials for FakeClaudeCredentials {
         self.reads.lock().unwrap_or_else(|p| p.into_inner()).push((config_dir.map(Path::to_path_buf), interactive));
         let needs_interaction = *self.needs_interaction.lock().unwrap_or_else(|p| p.into_inner());
         if needs_interaction && !interactive {
-            return Ok(None);
+            return Err(crate::PlatformError::Refused("the Keychain would ask".into()));
         }
         Ok(self.stored.lock().unwrap_or_else(|p| p.into_inner()).clone())
     }
@@ -71,7 +74,7 @@ mod tests {
     fn a_silent_read_gets_nothing_where_the_store_would_ask() {
         let store = FakeClaudeCredentials::with("{\"claudeAiOauth\":{\"accessToken\":\"sk-secret\"}}", true);
         let port: &dyn ClaudeCredentials = &store;
-        assert_eq!(port.read(None, false).unwrap(), None);
+        assert!(matches!(port.read(None, false), Err(crate::PlatformError::Refused(_))));
         assert!(port.read(Some(Path::new("/c")), true).unwrap().is_some_and(|text| text.contains("accessToken")));
         assert_eq!(store.reads(), vec![(None, false), (Some(PathBuf::from("/c")), true)]);
         assert!(!format!("{store:?}").contains("sk-secret"));

@@ -96,7 +96,10 @@ impl PrefsStore for RegistryPrefs {
             },
             PrefValue::Bool(on) => (REG_DWORD, u32::from(on).to_le_bytes().to_vec()),
             PrefValue::Text(text) => (REG_SZ, text.encode_utf16().chain(std::iter::once(0)).flat_map(u16::to_le_bytes).collect()),
-            PrefValue::Other => return Err(PlatformError::Invalid("a value of no settable kind".into())),
+            // The Mac's kinds (UserDefaults: a double, a date, an array, a dictionary) have no registry form the app writes.
+            PrefValue::Float(_) | PrefValue::Date(_) | PrefValue::List(_) | PrefValue::Map(_) | PrefValue::Other => {
+                return Err(PlatformError::Invalid("a value of no settable kind".into()));
+            }
         };
         let (path, name) = (wide(&self.key), wide(key));
         // SAFETY: NUL-terminated strings and a byte buffer of the given length.

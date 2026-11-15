@@ -167,7 +167,8 @@ private func fullCase(local: String, worktree: String, remote: Workspace) -> [St
     tree["workingFolder"] = worktree; tree["noteGiven"] = true
     c["paneWorktree"] = tree
     c["askTarget"] = "codex"
-    var run: [String: Any] = ["key": "block-1", "command": "ls -la", "state": "completed", "exitCode": 0, "output": "a\nb"]
+    // `ShellBlockRun.key(entryId:index:)`: the reply entry's id and the block's number.
+    var run: [String: Any] = ["key": "pane-claude-1-reply#1", "command": "ls -la", "state": "completed", "exitCode": 0, "output": "a\nb"]
     run["startedAt"] = fine; run["endedAt"] = later
     c["shellRuns"] = [run]
     let claude = session("pane-claude-1", workspace: w1, kind: "claude", provider: "claude", extra: c)
@@ -182,7 +183,7 @@ private func fullCase(local: String, worktree: String, remote: Workspace) -> [St
     let noLogs: [Any] = []
     let shell = session("pane-shell-3", workspace: w1, kind: "shell", provider: "claude", extra: ["workingFolder": worktree, "status": "idle", "logs": noLogs])
     let browser = session("pane-browser-4", workspace: w1, kind: "browser", provider: "claude",
-                          extra: ["workspaceProfileKey": "profile-ws-local-1", "ownerSessionId": "pane-claude-1", "logs": noLogs])
+                          extra: ["workspaceProfileKey": "profile-ws-local-1", "ownerSessionId": "pane-claude-1", "logs": noLogs, "status": "idle"])
     let remotePane = session("pane-remote-6", workspace: remote.id, kind: "claude", provider: "claude", extra: [:])
 
     let none: [Any] = []
@@ -208,7 +209,7 @@ private func fullCase(local: String, worktree: String, remote: Workspace) -> [St
     let remote1: [String: Any] = ["id": remote.id, "name": remote.name, "path": remote.path, "createdAt": remote.createdAt, "remote": reference]
 
     var s: [String: Any] = ["version": 1, "workspaces": [local1, remote1], "sessions": [claude, child, codex, shell, browser, remotePane]]
-    s["activeWorkspaceId"] = w1; s["activeSessionId"] = "pane-claude-1"; s["layout"] = "custom"; s["theme"] = "light"; s["sidebarWidth"] = 300
+    s["activeWorkspaceId"] = w1; s["activeSessionId"] = "pane-claude-1"; s["layout"] = "grid"; s["theme"] = "light"; s["sidebarWidth"] = 300
     s["paneLayouts"] = [w1: root]; s["paneLayoutModes"] = [w1: "custom"]; s["paneLayoutActiveSessionIds"] = [w1: "pane-claude-1"]
     s["autoUpdateCLIs"] = false; s["autoUpdatePlugins"] = false; s["expandedWorkspaceIds"] = [w1, remote.id]
     let mobile: [String: Any] = ["enabled": true, "relayURL": "wss://relay.example.com", "allowLegacyPhones": false, "directEnabled": false, "directPort": 43140]
@@ -285,8 +286,13 @@ func stateCorpus(_ out: URL) async {
         exit(1)
     }
     // Never saved by design: a mirror lives only while connected; the graph run's `shown*` are views, not stored.
-    let unsaved: Set<String> = ["RunSession.mirror", "RemoteWorkspaceReference.mirror"]
-    emit(["cases": report, "refused": refused, "unset": coverage.unset.filter { !unsaved.contains($0) }] as [String: Any])
+    let unsaved: Set<String> = ["RunSession.mirror", "RemoteWorkspaceReference.mirror", "MightyGraphRun.requestBackgroundWaiting",
+                                "MightyGraphRun.shownAwaiting", "MightyGraphRun.shownBackgroundWaiting", "MightyGraphRun.shownFanOut",
+                                "MightyGraphRun.shownFlowOrder"]
+    let unset = coverage.unset.filter { !unsaved.contains($0) }
+    emit(["cases": report, "refused": refused, "unset": unset] as [String: Any])
+    // A field Swift saves that no case sets (a new one) or a value of this tool's Swift refused: the corpus no longer covers the state.
+    if !unset.isEmpty || !refused.isEmpty { exit(3) }
 }
 
 // MARK: - The state check
@@ -309,6 +315,10 @@ private func leaves(_ value: Any, _ path: String, into result: inout [String: An
     }
 }
 
+private func withoutControls(_ text: String) -> String {
+    String(String.UnicodeScalarView(text.unicodeScalars.filter { $0.value >= 0x20 || [0x09, 0x0A, 0x0D].contains($0.value) }))
+}
+
 private func short(_ value: Any?) -> String {
     guard let value else { return "(missing)" }
     let text = "\(value)"
@@ -327,14 +337,22 @@ func stateCheck(_ folder: URL) {
             let swift = try readBack(Data(contentsOf: original)), rust = try readBack(Data(contentsOf: folder.appendingPathComponent(name)))
             var a: [String: Any] = [:], b: [String: Any] = [:]
             leaves(swift, "", into: &a); leaves(rust, "", into: &b)
-            var lost: [String] = [], changed: [String] = []
+            var lost: [String] = [], changed: [String] = [], cleaned: [String] = []
             for (path, value) in a.sorted(by: { $0.key < $1.key }) {
                 guard let other = b[path] else { lost.append(path); continue }
-                if !(value as AnyObject).isEqual(other) { changed.append("\(path): swift \(short(value)) rust \(short(other))") }
+                if (value as AnyObject).isEqual(other) { continue }
+                // The one difference allowed, and reported: C#'s normalize (`Wire.Clean`), which Rust keeps on both OSes, takes the C0
+                // control characters other than tab, line feed and return out of a transcript's text and a workspace's name.
+                if let text = value as? String, let rust = other as? String, withoutControls(text) == rust {
+                    cleaned.append(path)
+                } else {
+                    changed.append("\(path): swift \(short(value)) rust \(short(other))")
+                }
             }
             let added = b.keys.filter { a[$0] == nil }.sorted()
             if !lost.isEmpty || !changed.isEmpty { failed = true }
-            cases.append(["case": name, "values": a.count, "lost": lost, "changed": changed, "addedCount": added.count, "added": Array(added.prefix(40))])
+            cases.append(["case": name, "values": a.count, "lost": lost, "changed": changed, "cleanedOfControls": cleaned,
+                          "addedCount": added.count, "added": Array(added.prefix(40))])
         } catch {
             failed = true
             cases.append(["case": name, "error": describe(error)])

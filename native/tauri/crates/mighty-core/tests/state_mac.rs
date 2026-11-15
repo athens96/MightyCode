@@ -92,11 +92,15 @@ fn the_swift_state_corpus_round_trips_with_no_field_lost() {
         std::fs::write(&rust_file, &saved).unwrap();
         let again = round_trip(&rust_file, &work.join(format!("{stem}-again")));
         assert_eq!(String::from_utf8_lossy(&again), String::from_utf8_lossy(&saved), "{stem}: a second load and save changed the bytes");
-        let swift: Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
-        let rust: Value = serde_json::from_slice(&saved).unwrap();
-        let mut gone = Vec::new();
-        missing(&swift, &rust, "", &mut gone);
-        lost.extend(gone.into_iter().map(|path| format!("{stem}: {path}")));
+        // Every key of what Swift's StateRepository saved (`<case>.saved.json`: the file users have) is still there. The
+        // unnormalized `<case>.encoded.json` holds values both normalizes drop, so its values are judged by `parity-mac state-check`.
+        if stem.ends_with(".saved") {
+            let swift: Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+            let rust: Value = serde_json::from_slice(&saved).unwrap();
+            let mut gone = Vec::new();
+            missing(&swift, &rust, "", &mut gone);
+            lost.extend(gone.into_iter().map(|path| format!("{stem}: {path}")));
+        }
     }
     let _ = std::fs::remove_dir_all(&work);
     assert!(lost.is_empty(), "keys Swift wrote that Rust's save dropped:\n{}", lost.join("\n"));
