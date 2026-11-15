@@ -84,17 +84,17 @@ impl DelegationWindow for Window {
     }
 
     /// C# `FinishDelegatedRequest`: after the pane's model list, with the pane's model and settings and the registered models.
-    fn run_request(&self, request: StartRunRequest) -> BoxFuture<'static, StartRunRequest> {
+    fn run_request(&self, request: StartRunRequest) -> BoxFuture<'static, Result<StartRunRequest, String>> {
         let host = self.host.clone();
         Box::pin(async move {
             let mut request = request;
-            let Some(host) = host.upgrade() else { return request };
+            let Some(host) = host.upgrade() else { return Ok(request) };
             if host.closing() {
-                return request;
+                return Ok(request);
             }
             crate::models::prepare(&host, &request.session_id).await;
             if host.closing() {
-                return request;
+                return Ok(request);
             }
             {
                 let view = host.view();
@@ -105,13 +105,12 @@ impl DelegationWindow for Window {
                     request.registered_models = crate::runs::registered_models_for(pane.provider(), workspace.as_ref(), &view.snapshot);
                 }
             }
-            // C# `PrepareStyleRunRequest`: a styled pane's grants and plan-mode launch (styles.rs). C# throws when the style needs a
-            // yes again; this seam cannot refuse, so the request goes without the style's grants then.
+            // C# `PrepareStyleRunRequest`: a styled pane's grants and plan-mode launch (styles.rs). When the style needs a yes again it
+            // throws and the delegated run does not start (never without its style, so never out of its plan mode).
             let id = request.session_id.clone();
-            match crate::styles::prepare_run(&host, &id, request.clone()).await {
-                Ok(prepared) => prepared,
-                Err(_) => StartRunRequest { style_auto_allow: None, ..request },
-            }
+            crate::styles::prepare_run(&host, &id, request).await.inspect_err(|reason| {
+                host.log.line(&format!("delegated run in {id} not started: {reason}"));
+            })
         })
     }
 

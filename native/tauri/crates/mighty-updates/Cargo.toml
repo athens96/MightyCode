@@ -41,8 +41,3 @@ tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread",
 
 [target.'cfg(windows)'.dev-dependencies]
 mighty-platform-windows.workspace = true
-
-# W9 Step 0 lists W9-A's dependencies (ed25519-dalek, base64, zip, flate2) before its code uses them; this table goes once every one is
-# used.
-[lints.cargo]
-unused_dependencies = "allow"

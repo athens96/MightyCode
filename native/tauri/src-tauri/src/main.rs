@@ -1,9 +1,10 @@
-//! Mighty Code's Rust + Tauri 2 host (skeleton): one window drawing the page of native/windows/web, answering it through
-//! `host.rs`. It reads the saved state and never writes it.
+//! Mighty Code's Rust + Tauri 2 host: one window drawing the page of native/windows/web, answering it through `host.rs`. What it
+//! may write follows the write policy (startup.rs): a release build installed in its folder writes, any other run only with
+//! `--allow-state-write`, never with `--read-only`.
 //!
-//! Identity: tauri.conf.json's `identifier` is `dev.mightycode.tauri`, a development identity so this app never shares a
-//! registration, a WebView2 folder or local data with the installed C# app. It must become the real one before this ships (W9-F:
-//! `dev.mightycode.native`).
+//! Identity: tauri.conf.json's `identifier` is `dev.mightycode.native` (W9-F), the toast registration's AppUserModelId and the root of
+//! this machine's local folders (`%LOCALAPPDATA%\dev.mightycode.native\…`); a release build on the default profile takes C#'s own
+//! WebView2 folders (`paths::web_folders`).
 //!
 //! W9 Step 0 fixed the order `main` runs in (plan §1.1): the exe's other modes (the Agent IO and delegation MCP servers, the fake Claude,
 //! the help capture's demo CLI, then the update helper), the environment taken back after a bare start, the arguments, the write
@@ -537,6 +538,8 @@ fn main() {
         RunEvent::ExitRequested { code: Some(code), .. } => exit_code = code,
         RunEvent::Exit => {
             if let Some(host) = app.try_state::<Arc<Host>>() {
+                // Quit began (C# QuitAsync sets `closing` first): no run, sign-in, retry or read starts during the teardown below.
+                host.begin_closing();
                 // W9-C: a ready update installs on quit (`--relaunch 0`) before anything shuts down, as C#'s quit path starts it.
                 app_update::quit_hook(&host, false);
                 // The model lists read and reconcile nothing more (C# `modelRefreshes?.Shutdown()`, before the last save).
@@ -562,7 +565,6 @@ fn main() {
                 ouroboros::shutdown(&host);
                 // Every run stopped and ended before delegation stops (C# DisposeAsync: `local.DisposeAsync`, then `StopDelegation`), so a
                 // child killed by quitting is recorded with its quit end; `host.close` below then makes the last save.
-                host.begin_closing();
                 if let Some(runs) = host.runs() {
                     tauri::async_runtime::block_on(runs.service.dispose());
                 }

@@ -36,7 +36,7 @@ for ($n = 1; $n -le $Runs; $n++) {
         $name = $dir -replace '[^A-Za-z0-9-]', '_'
         if ($name.Length -gt 80) { $name = $name.Substring($name.Length - 80) }
         foreach ($kind in 'webview', 'browser', 'image-cache', 'file-originals', 'provider-catalog') {
-            Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "dev.mightycode.tauri\$kind\$name") -ErrorAction SilentlyContinue
+            Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "dev.mightycode.native\$kind\$name") -ErrorAction SilentlyContinue
         }
         Remove-Item -Recurse -Force (Join-Path ([System.IO.Path]::GetTempPath()) ("mighty-delegation-smoke-" + $process.Id)) -ErrorAction SilentlyContinue
     }

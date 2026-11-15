@@ -54,5 +54,5 @@ Get-Content (Join-Path $logs 'host.log') | Select-Object -First 3
 # The copy's WebView2 data (Paths::webview_dir and browser_dir) goes with it.
 $name = $profile -replace '[^A-Za-z0-9-]', '_'
 if ($name.Length -gt 80) { $name = $name.Substring($name.Length - 80) }
-foreach ($kind in 'webview', 'browser') { Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "dev.mightycode.tauri\$kind\$name") -ErrorAction SilentlyContinue }
+foreach ($kind in 'webview', 'browser') { Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "dev.mightycode.native\$kind\$name") -ErrorAction SilentlyContinue }
 if (-not ($same -and $changed)) { exit 1 }

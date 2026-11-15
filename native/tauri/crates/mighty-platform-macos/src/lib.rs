@@ -236,7 +236,7 @@ mod imp {
 
         #[test]
         fn the_default_profile_is_application_support_mightycode() {
-            let paths = paths(None, "dev.mightycode.tauri").unwrap();
+            let paths = paths(None, "dev.mightycode.native").unwrap();
             assert!(paths.data_dir().ends_with("Library/Application Support/MightyCode"));
             assert!(paths.legacy_data_dirs()[0].ends_with("Library/Application Support/mighty-claude"));
             assert_eq!(MacSurfaces.drawing(SurfaceKind::Terminal), Drawing::Native);

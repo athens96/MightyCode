@@ -22,6 +22,8 @@ struct Window {
     read_only: std::sync::atomic::AtomicBool,
     heard: Mutex<Vec<String>>,
     blocked: Mutex<Option<String>>,
+    /// `DelegatedRunRequest` throwing (C#: a style that needs a yes again).
+    refused: Mutex<Option<String>>,
 }
 
 impl Window {
@@ -36,6 +38,13 @@ impl DelegationWindow for Window {
     }
     fn run_blocked(&self, _pane: &RunSession) -> Option<String> {
         self.blocked.lock().unwrap().clone()
+    }
+    fn run_request(
+        &self,
+        request: mighty_run::model::StartRunRequest,
+    ) -> mighty_platform::BoxFuture<'static, Result<mighty_run::model::StartRunRequest, String>> {
+        let refused = self.refused.lock().unwrap().clone();
+        Box::pin(async move { refused.map_or(Ok(request), Err) })
     }
     fn agent_availability(&self, provider: &str) -> DelegationAgentAvailability {
         if provider == "codex" { DelegationAgentAvailability::SignedOut } else { DelegationAgentAvailability::Ready }
@@ -224,6 +233,12 @@ async fn the_host_reads_panes_and_starts_runs_only_where_they_can_run() {
     assert!(place.app.start_run("other".into(), "notice".into()).await.is_none(), "the window's refusal starts nothing");
     assert_eq!(place.app.run_id("other").as_deref(), Some(run.as_str()), "and asks the service for no run");
     *place.window.blocked.lock().unwrap() = None;
+    // The request's finishing refuses (C# FinishDelegatedRequest throws when the pane's style needs a yes again): no run either.
+    *place.window.refused.lock().unwrap() = Some("approve the style again".into());
+    assert!(place.app.start_run("other".into(), "notice".into()).await.is_none(), "a refused request starts nothing");
+    assert!(place.app.deliver("notice".into(), "other".into(), DeliveryRoute::Queue).await.is_none(), "nor a queued delivery");
+    assert_eq!(place.app.run_id("other").as_deref(), Some(run.as_str()), "the service was asked for no run");
+    *place.window.refused.lock().unwrap() = None;
 
     // A child without its worktree reads as idle after a finish and never runs (worktree_missing).
     let worktree = temp("state-worktree");

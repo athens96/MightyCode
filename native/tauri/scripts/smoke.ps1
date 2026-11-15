@@ -85,7 +85,7 @@ function RegistryTree([string]$Root, $Into) {
 # and hashes).
 function UserConfig {
     $values = [ordered]@{}
-    foreach ($key in 'HKCU:\Software\MightyCode', 'HKCU:\Software\Classes\AppUserModelId\dev.mightycode.tauri') {
+    foreach ($key in 'HKCU:\Software\MightyCode', 'HKCU:\Software\Classes\AppUserModelId\dev.mightycode.native') {
         try { RegistryTree $key $values } catch { $values[$key] = "probe failed: $($_.Exception.Message)" }
     }
     foreach ($file in (Join-Path $env:USERPROFILE '.claude\settings.json'), (Join-Path $env:USERPROFILE '.config\claude-omc\config.jsonc'), (Join-Path $env:USERPROFILE '.ouroboros\config.yaml')) {
@@ -235,7 +235,7 @@ if (-not $readOnly) {
     $name = $Profile -replace '[^A-Za-z0-9-]', '_'
     if ($name.Length -gt 80) { $name = $name.Substring($name.Length - 80) }
     foreach ($kind in 'webview', 'browser', 'image-cache', 'file-originals', 'provider-catalog') {
-        Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "dev.mightycode.tauri\$kind\$name") -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "dev.mightycode.native\$kind\$name") -ErrorAction SilentlyContinue
     }
 }
 # A run that may not write its profile keeps delegation's fixture under %TEMP% (delegation.rs smoke_root): it goes too.

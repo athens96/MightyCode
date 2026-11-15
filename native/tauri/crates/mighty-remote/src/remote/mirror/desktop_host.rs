@@ -81,7 +81,7 @@ impl DeskMirrorHost {
             .map(|session| {
                 let permissions = self.pending(session.id());
                 let waiting = (self.queued)(session.id());
-                // The pane's own worktree branch arrives with W9-I's pane worktrees; none until then.
+                // The pane's own worktree branch (W9-I), none in the workspace's folder.
                 let (branch, base) = pane_worktree(session);
                 MirrorSummary {
                     id: session.id().into(),
@@ -119,11 +119,13 @@ impl DeskMirrorHost {
     }
 }
 
-/// The branch and base of the pane's own worktree. Per-pane worktrees are W9-I's (`RunSession.paneWorktree`); until they land a pane works
-/// in none.
+/// The branch and base of the pane's own worktree (C# `session.PaneWorktree?.Branch`, `?.BaseBranch`; W9-I's `RunSession.paneWorktree`),
+/// none for a pane in the workspace's folder.
 fn pane_worktree(session: &RunSession) -> (Option<String>, Option<String>) {
-    let _ = session;
-    (None, None)
+    match &session.pane_worktree {
+        Some(worktree) => (worktree.branch.clone(), worktree.base_branch.clone()),
+        None => (None, None),
+    }
 }
 
 impl MirrorHost for DeskMirrorHost {
@@ -241,5 +243,54 @@ impl MirrorHost for DeskMirrorHost {
                 _ => Err(start_failed()),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mighty_core::model::{PaneWorktree, Workspace};
+
+    /// J L4 (W9 integration): a host pane in its own worktree hands its branch to the summary and moves the revision with its branch and
+    /// base (C# `session.PaneWorktree?.Branch`, `?.BaseBranch`); a pane in the workspace's folder hands none.
+    #[test]
+    fn a_pane_in_its_own_worktree_hands_its_branch_to_the_mirror() {
+        let plain = RunSession {
+            id: Some("pane-1".into()),
+            workspace_id: Some("ws".into()),
+            kind: Some("claude".into()),
+            provider: Some("claude".into()),
+            ..RunSession::default()
+        };
+        let worktree = RunSession {
+            id: Some("pane-2".into()),
+            pane_worktree: Some(PaneWorktree {
+                branch: Some("mighty/pane-2".into()),
+                base_branch: Some("main".into()),
+                ..PaneWorktree::default()
+            }),
+            ..plain.clone()
+        };
+        let state = AppSnapshot {
+            workspaces: Some(vec![Workspace { id: Some("ws".into()), path: Some(r"C:\work".into()), ..Workspace::default() }]),
+            sessions: Some(vec![Arc::new(plain.clone()), Arc::new(worktree.clone())]),
+            ..AppSnapshot::default()
+        };
+        assert_eq!(pane_worktree(&plain), (None, None));
+        assert_eq!(pane_worktree(&worktree), (Some("mighty/pane-2".into()), Some("main".into())));
+        let host = DeskMirrorHost::new(Arc::new(move || state.clone()), Arc::new(|| None), Arc::new(|_| Vec::new()), Arc::new(|_| false));
+        let summaries = host.summaries_now(&HashSet::from(["ws".to_string()]));
+        let branches: Vec<_> = summaries.iter().map(|s| (s.id.as_str(), s.branch.as_deref())).collect();
+        assert_eq!(branches, [("pane-1", None), ("pane-2", Some("mighty/pane-2"))]);
+        let rebased = RunSession {
+            pane_worktree: Some(PaneWorktree { base_branch: Some("develop".into()), ..worktree.pane_worktree.clone().unwrap() }),
+            ..worktree.clone()
+        };
+        let (branch, base) = pane_worktree(&rebased);
+        assert_ne!(
+            support::revision(&worktree, &[], &[], Some("mighty/pane-2"), Some("main")),
+            support::revision(&rebased, &[], &[], branch.as_deref(), base.as_deref()),
+            "the revision moves with the base branch"
+        );
     }
 }

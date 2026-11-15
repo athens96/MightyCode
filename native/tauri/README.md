@@ -199,7 +199,7 @@ module uses those. The host answers 145 methods (`tauri-logs/unimplemented.json`
   `referenceSize`, `htmlFrame` (the file's folder served under `h<random>.html.mighty.invalid` through the `mightyhtml` protocol, at most
   eight folders, for the page's frame sandboxed to scripts) and `imageAction` (copy, save, reveal, open with the default app; a diagram
   tile of an older run too). A Claude run's Edit, Write and MultiEdit results keep the files' originals (`FileOriginalStore`: the
-  profile's `file-originals` with `--allow-state-write`, else `%LOCALAPPDATA%\dev.mightycode.tauri\file-originals\<profile>`; the work map
+  profile's `file-originals` with `--allow-state-write`, else `%LOCALAPPDATA%\dev.mightycode.native\file-originals\<profile>`; the work map
   reads the same folder), pruned at the start to what the state names, a closed pane's dropped and a run's when its graph lets it go.
 - **The work map** (`workmap.rs`, C# MainWindow.WorkMap.cs): `openWorkMap` (the workspace's `workmap:<id>` pane, placed as the files
   pane is, never saved), `workMapState` (the model, nulls kept), `workMapSummarize` (one at a time per workspace; the model is pushed
@@ -227,7 +227,7 @@ One `RunService` (mighty-run) owns the state once the host has started it (`runs
 `RunService::update` (normalized under the service's lock, then saved), and each `ServiceEvent` takes the page's copy from the service
 again. Its runner makes each request's graph with mighty-graph's tracker (`TrackerFactory`: the graph run published every second and at
 the end, with the notice runs) and keeps tool pictures in the picture cache (the profile's `image-cache` with `--allow-state-write`, else
-`%LOCALAPPDATA%\dev.mightycode.tauri\image-cache\<profile>`). Claude runs load the mighty-bridge plugin (`claude-mods` beside the exe, else
+`%LOCALAPPDATA%\dev.mightycode.native\image-cache\<profile>`). Claude runs load the mighty-bridge plugin (`claude-mods` beside the exe, else
 the repository's `mods/mighty-bridge`). A Codex pane in `onRequest` runs Codex's `app-server` through `CodexApprovalChannel`: each
 approval is the pane's `permission` card, a turn not started in 15 s or a protocol failure ends the run in an error, a stop cancels the
 waiting cards. A Codex run's sub-agents are read from its session files under `$CODEX_HOME` (else `~/.codex`) every second and at its end
@@ -238,7 +238,7 @@ was refused (`antigravityPermission`, then the run service's board), and have th
 (`~/.gemini/antigravity-cli/brain`, read-only). The rules an allowed card puts in agy's own settings
 (`%USERPROFILE%\.gemini\antigravity-cli\settings.json`, `permissions.allow`, written only when the user presses 이번만 허용 or 항상 허용) are
 recorded in the ledger `antigravity-temporary-rules.json` — the profile's with `--allow-state-write`, else
-`%LOCALAPPDATA%\dev.mightycode.tauri\antigravity\<profile>` — and what a crash left in either place is taken out as the run service
+`%LOCALAPPDATA%\dev.mightycode.native\antigravity\<profile>` — and what a crash left in either place is taken out as the run service
 starts, before any agy run may start (the other place's ledger pruned too, the profile's never written without the flag). With the flag
 the ledger is the same file the C# app keeps in the profile; the local one is this port's alone and the C# app never reads it, so the
 C# app's own leftovers are its own launch's to take out. A file rule names only a plain local path (`X:\…` or `X:/…` on a fixed drive,
@@ -258,7 +258,7 @@ checks the models; a queued request removed, stopped or closed meanwhile does no
 an idle pane whose model or effort the list no longer has takes the default with a line in its transcript
 (`ModelSelectionSupport.Adjusted`). At quit nothing is read or reconciled any more before the last save. The last list each CLI gave is
 kept (`KeptModelLists`: `model-lists.json` in the profile with `--allow-state-write`, else in
-`%LOCALAPPDATA%\dev.mightycode.tauri\provider-catalog\<profile>`), so a read that fails, now or after a restart, shows that list, and the
+`%LOCALAPPDATA%\dev.mightycode.native\provider-catalog\<profile>`), so a read that fails, now or after a restart, shows that list, and the
 model menu says which list it is (`ModelListNotices.Notice`: the built-in one, or the kept one and its age). A smoke reads and reconciles
 nothing, as C#'s.
 
@@ -271,7 +271,7 @@ it may (read-only through mighty-history's `acp`, `runs.rs` `hermes_session`); t
 permission cards (`permissionAnswer`), their `elicitation/create` forms and Hermes's clarify the question card (`questionnaireAnswer`; the
 card's Cancel declines the form), and a lost sign-in ends the run with the `authentication` reason. The picker a Hermes session offered is
 Hermes's model list from then on (`HermesAgent.CachedCatalog`: `hermes-models.json` in the catalogue's storage folder, the profile with
-`--allow-state-write`, else `%LOCALAPPDATA%\dev.mightycode.tauri\provider-catalog\<profile>`), read again when a Hermes pane's run ends (C#
+`--allow-state-write`, else `%LOCALAPPDATA%\dev.mightycode.native\provider-catalog\<profile>`), read again when a Hermes pane's run ends (C#
 `RefreshModelsAfterHermesRun`). The two agents' sign-in states (`mighty_run::acp::accounts`: `opencode_status` over `opencode auth list`,
 `hermes_probe` and `hermes_status`, as `CliAccountStatus`) are ready for the accounts section and the sign-in card (W6), which do not ask
 them yet.
@@ -357,7 +357,7 @@ Native views over the page (docs/tauri-architecture.md §3): when the page calls
 each native slot with `surfaceBounds{paneId, surface, rect (device px), visible, occluded}` and the `SurfaceManager` opens, places,
 shows and hides the platform's view there; a page reload hides every view until it is reported again, and a pane that leaves the
 state closes its view. On Windows a browser pane is a Tauri child webview of the main window (`unstable` multi-webview) with its
-workspace's own WebView2 data (`%LOCALAPPDATA%\dev.mightycode.tauri\browser\<profile>\browser-profiles\<key>`; C# keeps the same
+workspace's own WebView2 data (`%LOCALAPPDATA%\dev.mightycode.native\browser\<profile>\browser-profiles\<key>`; C# keeps the same
 folders under the profile, which a running C# app holds, so this one never shares them), placed in physical pixels as the slot reports
 them; the child webview never reaches the host (`host_post` only listens to the `main` webview, and Tauri refuses app commands from
 remote origins). Its engine's navigations, refused popups and downloads and its focus come back through a `BrowserListener`
@@ -466,11 +466,11 @@ spelling wins here, the last of all in C#).
 
 ## Identity and WebView2
 
-- `identifier` is `dev.mightycode.tauri`, a development identity so this app never collides with the installed C# app. It must
+- `identifier` is `dev.mightycode.native`, a development identity so this app never collides with the installed C# app. It must
   become the real one before shipping.
 - Product name "Mighty Code", main binary `MightyCode.exe` (the 0.4.x updater replaces that name), window 1440×920 with a
   940×650 minimum, as the C# window.
-- WebView2 data: `%LOCALAPPDATA%\dev.mightycode.tauri\webview\<default | the profile path as a folder name>` — never the C# app's
+- WebView2 data: `%LOCALAPPDATA%\dev.mightycode.native\webview\<default | the profile path as a folder name>` — never the C# app's
   `<profile>\web-profile`, and never inside a profile.
 - CSP: the page's build-time meta policy (`vite.config.ts`). `vite build --mode tauri` adds `connect-src 'self' ipc:
   http://ipc.localhost` so Tauri's IPC is not blocked (WebView2 reaches it at `http://ipc.localhost`); the C# build's policy is
