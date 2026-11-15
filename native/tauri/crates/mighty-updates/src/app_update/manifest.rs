@@ -31,11 +31,18 @@ pub const BASE64_FORMAT_ERROR: &str = "The input is not a valid Base-64 string a
 pub const ARCHITECTURES: [&str; 2] = ["x64", "arm64"];
 
 /// One Windows package: an https address, its SHA-256 (64 lower-case hex) and its size, all three required (Windows rule 2).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Asset {
     pub url: String,
     pub sha256: String,
     pub size: u64,
+}
+
+/// The address is left out: it may carry a token.
+impl std::fmt::Debug for Asset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Asset").field("url", &"<redacted>").field("sha256", &self.sha256).field("size", &self.size).finish()
+    }
 }
 
 /// A verified manifest (C# `AppUpdateManifest`): the normalized version, the build number, the notes, the publication date and the

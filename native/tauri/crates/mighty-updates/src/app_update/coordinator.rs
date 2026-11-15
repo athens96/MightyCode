@@ -7,13 +7,17 @@
 //! [`UpdateState::view`].
 //!
 //! Every operation takes `&self`: the state sits behind a lock that is never held across an `.await`, so a press (say "restart now")
-//! can land while a check is still waiting for the network, as on C#'s dispatcher. Drive every call from one task (C# runs them on
-//! one dispatcher; `tokio::join!`/`select!` or a `LocalSet` interleave them only at their awaits). Await an operation to its end
-//! rather than dropping it: a dropped download deletes its version folder, but its phase stays where it was. The change callback
+//! can land while a check is still waiting for the network, as on C#'s dispatcher. A check and a download are each claimed in the
+//! same lock that tested the state, so callers on several tasks or threads (the box, the phone, the loop, the quit hook) never run two
+//! at once; host callbacks (`automatic`, `staging_busy`) are never called with the lock held. A dropped check or download gives its
+//! claim back, cancels its transfer, deletes its version folder and puts its phase back (an unpacking already under way keeps the
+//! download claimed until it ends). Stricter than C#: a signed manifest older than the staged (or kept) version is a failed check,
+//! never a downgrade. The change callback
 //! ([`Coordinator::set_on_change`], C#'s `StateChanged`) runs after each change with no lock held, on the thread that made the change
 //! (a download's progress arrives on the transport's).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
@@ -38,7 +42,7 @@ pub enum KeptCheck {
 }
 
 /// What the app update box shows now (C# `AppUpdateState`); not saved.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Clone, PartialEq, Default)]
 pub struct UpdateState {
     pub phase: Phase,
     pub download_fraction: f64,
@@ -50,6 +54,22 @@ pub struct UpdateState {
     pub checked_at: Option<DateTime<Utc>>,
     /// The last failure, kept beside Ready so a failed background check never takes a staged update away.
     pub last_error: Option<String>,
+}
+
+/// No address or folder: the version, the phase and the words only.
+impl std::fmt::Debug for UpdateState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpdateState")
+            .field("phase", &self.phase)
+            .field("download_fraction", &self.download_fraction)
+            .field("version", &self.availability.as_ref().map(|a| a.manifest.version.as_str()))
+            .field("staged", &self.staged_directory.is_some())
+            .field("install_plan", &self.install_plan.is_some())
+            .field("error_message", &self.error_message)
+            .field("checked_at", &self.checked_at)
+            .field("last_error", &self.last_error)
+            .finish_non_exhaustive()
+    }
 }
 
 impl UpdateState {
@@ -127,7 +147,10 @@ struct Inner {
     work: Option<(u64, CancellationToken)>,
     works: u64,
     closing: bool,
+    /// A check is claimed (C#'s `checking`), set in the lock that tested it.
     checking: bool,
+    /// A download is claimed, from the test of its phase until its unpacking has ended.
+    claimed: bool,
     last_attempt: Option<DateTime<Utc>>,
     staging_deferred: bool,
 }
@@ -142,6 +165,79 @@ impl Inner {
 
     fn busy(&self) -> bool {
         matches!(self.state.phase, Phase::Checking | Phase::Downloading | Phase::Staging | Phase::Installing)
+    }
+
+    /// C#'s `Busy || checking`, with a claimed download too: nothing new may start.
+    fn occupied(&self) -> bool {
+        self.busy() || self.checking || self.claimed
+    }
+}
+
+/// What [`Coordinator::begin_check`] found.
+enum CheckStart {
+    Skip,
+    Fail(UpdateError),
+    Go(Claim, CancellationToken, String),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ClaimKind {
+    Check,
+    Download,
+}
+
+/// A claimed check or download. Dropping it — the operation ended, or its future was dropped — gives the claim back and clears its
+/// work; one not finished puts its phase back (Checking to Idle; Downloading or Staging to Available), so a dropped future never
+/// leaves the box stuck.
+struct Claim {
+    shared: Arc<Shared>,
+    kind: ClaimKind,
+    work: u64,
+    finished: AtomicBool,
+}
+
+impl Claim {
+    fn new(shared: &Arc<Shared>, kind: ClaimKind, work: u64) -> Claim {
+        Claim { shared: shared.clone(), kind, work, finished: AtomicBool::new(false) }
+    }
+
+    /// The operation ran to its end and set its own phase.
+    fn finish(&self) {
+        self.finished.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        let restored = {
+            let mut inner = self.shared.lock();
+            match self.kind {
+                ClaimKind::Check => inner.checking = false,
+                ClaimKind::Download => inner.claimed = false,
+            }
+            if inner.work.as_ref().is_some_and(|(work, _)| *work == self.work) {
+                inner.work = None;
+            }
+            let restore = !self.finished.load(Ordering::SeqCst)
+                && match self.kind {
+                    ClaimKind::Check => inner.state.phase == Phase::Checking,
+                    ClaimKind::Download => matches!(inner.state.phase, Phase::Downloading | Phase::Staging),
+                };
+            if restore {
+                let state = &mut inner.state;
+                if self.kind == ClaimKind::Check {
+                    state.phase = Phase::Idle;
+                } else {
+                    state.phase = Phase::Available;
+                    state.download_fraction = 0.0;
+                    state.package_path = None;
+                }
+            }
+            restore
+        };
+        if restored {
+            self.shared.notify();
+        }
     }
 }
 
@@ -167,6 +263,11 @@ impl Shared {
                 inner.staging_deferred = false;
             }
         }
+        self.notify();
+    }
+
+    /// The change callback, with no lock held.
+    fn notify(&self) {
         let callback = self.on_change.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         if let Some(callback) = callback {
             callback();
@@ -313,6 +414,38 @@ impl Coordinator {
         }
     }
 
+    /// The first half of C# `CheckAsync`, its test and its claim in one lock (two callers — the button, the phone, the loop — never
+    /// both pass): Skip when closed or something runs (or `before` says no; it may note the attempt), Fail without a key or an
+    /// address, else the check is claimed (`checking`, the work, the Checking phase unless Ready).
+    fn begin_check(&self, user_url: Option<&str>, before: impl FnOnce(&mut Inner) -> bool) -> CheckStart {
+        let has_key = self.has_public_key();
+        let url = self.effective_manifest_url(user_url);
+        let (start, changed) = {
+            let mut inner = self.shared.lock();
+            if inner.closing || inner.occupied() || !before(&mut inner) {
+                return CheckStart::Skip;
+            }
+            if !has_key {
+                return CheckStart::Fail(UpdateError::key("settings.appUpdate.noPublicKeyNoticeWindows"));
+            }
+            let Some(url) = url else { return CheckStart::Fail(UpdateError::key("settings.appUpdate.errorNoManifestURL")) };
+            inner.checking = true;
+            let (work, token) = inner.start_work();
+            // A staged update stays ready (and installable) while the check runs.
+            let changed = inner.state.phase != Phase::Ready;
+            if changed {
+                inner.state.phase = Phase::Checking;
+                inner.state.error_message = None;
+                inner.staging_deferred = false;
+            }
+            (CheckStart::Go(Claim::new(&self.shared, ClaimKind::Check, work), token, url), changed)
+        };
+        if changed {
+            self.shared.notify();
+        }
+        start
+    }
+
     /// C# `CheckAutomaticallyIfDueAsync`: checks when due and remembers the attempt; true when it checked.
     pub async fn check_automatically_if_due(
         &self,
@@ -321,42 +454,54 @@ impl Coordinator {
         last_checked: Option<DateTime<Utc>>,
         now: DateTime<Utc>,
     ) -> bool {
-        {
-            let mut inner = self.shared.lock();
-            if inner.closing || inner.busy() || inner.checking {
-                return false;
+        let has_key = self.has_public_key();
+        let start = self.begin_check(user_url, |inner| {
+            let due = Self::is_due(enabled, has_key, last_checked, now, inner.last_attempt);
+            if due {
+                inner.last_attempt = Some(now);
             }
-            if !Self::is_due(enabled, self.has_public_key(), last_checked, now, inner.last_attempt) {
-                return false;
+            due
+        });
+        match start {
+            CheckStart::Skip => false,
+            CheckStart::Fail(error) => {
+                self.fail_check(self.words(&error));
+                true
             }
-            inner.last_attempt = Some(now);
+            CheckStart::Go(claim, token, url) => {
+                self.run_check(claim, token, url, None).await;
+                true
+            }
         }
-        self.check(user_url).await;
-        true
     }
 
     /// C# `CheckKeptUpdateAsync`: an update an install on quit kept is checked against the signed manifest at once and, while it is
     /// the newest for this machine and the switch is on, staged again from the package on disk. While staging is busy, or a check or
-    /// download runs, it waits: nothing changes, no attempt counts.
+    /// download runs, it waits: nothing changes, no attempt counts. A manifest older than the kept version is refused (stricter than
+    /// C#: a replayed older manifest would otherwise delete the kept update).
     pub async fn check_kept_update(&self, user_url: Option<&str>, now: DateTime<Utc>) -> KeptCheck {
         if self.shared.lock().closing || !self.automatic() || !self.has_public_key() {
             return KeptCheck::None;
         }
-        if self.service.kept_version(&self.options.current_version).is_none() {
-            return KeptCheck::None;
-        }
-        {
-            let inner = self.shared.lock();
-            if inner.busy() || inner.checking {
-                return KeptCheck::Waiting;
-            }
-        }
-        if self.staging_must_wait() {
+        let Some(kept) = self.service.kept_version(&self.options.current_version) else { return KeptCheck::None };
+        if self.shared.lock().occupied() || self.staging_must_wait() {
             return KeptCheck::Waiting;
         }
-        self.shared.lock().last_attempt = Some(now);
-        self.check(user_url).await;
-        KeptCheck::Checked
+        let start = self.begin_check(user_url, |inner| {
+            inner.last_attempt = Some(now);
+            true
+        });
+        match start {
+            CheckStart::Skip => KeptCheck::Waiting,
+            CheckStart::Fail(error) => {
+                self.fail_check(self.words(&error));
+                KeptCheck::Checked
+            }
+            CheckStart::Go(claim, token, url) => {
+                self.run_check(claim, token, url, Some(kept)).await;
+                KeptCheck::Checked
+            }
+        }
     }
 
     /// C# `RetryDeferredStagingAsync`: on the loop's ticks, with the switch on, a deferred download is tried again.
@@ -372,51 +517,31 @@ impl Coordinator {
 
     /// C# `CheckAsync(userUrl)`.
     pub async fn check(&self, user_url: Option<&str>) {
-        {
-            let inner = self.shared.lock();
-            if inner.closing || inner.busy() || inner.checking {
-                return;
-            }
+        match self.begin_check(user_url, |_| true) {
+            CheckStart::Skip => {}
+            CheckStart::Fail(error) => self.fail_check(self.words(&error)),
+            CheckStart::Go(claim, token, url) => self.run_check(claim, token, url, None).await,
         }
-        if !self.has_public_key() {
-            self.fail_check(self.words(&UpdateError::key("settings.appUpdate.noPublicKeyNoticeWindows")));
-            return;
-        }
-        let Some(url) = self.effective_manifest_url(user_url) else {
-            self.fail_check(self.words(&UpdateError::key("settings.appUpdate.errorNoManifestURL")));
-            return;
-        };
-        // A staged update stays ready (and installable) while the check runs.
-        if self.shared.lock().state.phase != Phase::Ready {
-            self.shared.mutate(|s| {
-                s.phase = Phase::Checking;
-                s.error_message = None;
-            });
-        }
-        let (id, token) = {
-            let mut inner = self.shared.lock();
-            inner.checking = true;
-            inner.start_work()
-        };
+    }
+
+    /// The rest of C# `CheckAsync` once claimed: the answer (or a cancel), the decisions, the claim given back, then the download a
+    /// newer version starts. A future dropped half way gives the claim back too and puts Checking back to Idle.
+    async fn run_check(&self, claim: Claim, token: CancellationToken, url: String, kept: Option<String>) {
         let answer = tokio::select! {
             answer = self.service.check(Some(&url), &self.options.current_version) => answer,
             () = token.cancelled() => Err(ServiceError::Cancelled),
         };
-        let download = self.after_check(answer);
-        {
-            let mut inner = self.shared.lock();
-            inner.checking = false;
-            if inner.work.as_ref().is_some_and(|(work, _)| *work == id) {
-                inner.work = None;
-            }
-        }
+        let download = self.after_check(answer, kept.as_deref());
+        claim.finish();
+        drop(claim);
         if download {
             self.download().await;
         }
     }
 
-    /// The decisions after a check's answer (C# `CheckAsync`'s try and catches); true when a download follows.
-    fn after_check(&self, answer: Result<Availability, ServiceError>) -> bool {
+    /// The decisions after a check's answer (C# `CheckAsync`'s try and catches); true when a download follows. `kept`: the version an
+    /// install on quit kept, when this is its check.
+    fn after_check(&self, answer: Result<Availability, ServiceError>, kept: Option<&str>) -> bool {
         let phase = self.shared.lock().state.phase;
         match answer {
             Ok(availability) => {
@@ -428,6 +553,15 @@ impl Coordinator {
                 let staged = (phase == Phase::Ready).then(|| state.availability.as_ref().map(|a| a.manifest.version.clone())).flatten();
                 let architecture = &self.options.architecture;
                 let new_version = &availability.manifest.version;
+                // Stricter than C#: a signed manifest older than the staged or kept version (an old latest.json served again) is a
+                // failed check, never a reason to drop the newer update.
+                let older = |floor: &str| {
+                    super::version::normalized(floor).is_some() && super::version::compare(new_version, floor) == std::cmp::Ordering::Less
+                };
+                if staged.as_deref().is_some_and(older) || kept.is_some_and(older) {
+                    self.fail_check(self.words(&UpdateError::key("appUpdate.error.checkFailed")));
+                    return false;
+                }
                 let same_as_staged = staged.as_deref().is_some_and(|staged| {
                     super::version::normalized(staged).is_some()
                         && super::version::normalized(new_version).is_some()
@@ -492,16 +626,19 @@ impl Coordinator {
 
     /// C# `DownloadAsync`: the package for this machine's architecture downloaded, verified and unpacked; a manifest with no asset for
     /// it is refused. While staging is busy nothing under `updates` is touched: the update stays Available, with no error, and waits.
+    /// The download is claimed in the same lock that tested the phase, so two callers never both download; the claim is held until
+    /// the unpacking has ended, even when this future is dropped (which puts Downloading or Staging back to Available).
     pub async fn download(&self) {
-        let manifest = {
-            let inner = self.shared.lock();
-            if inner.closing || inner.checking || inner.state.phase != Phase::Available {
+        let (manifest, claim, token) = {
+            let mut inner = self.shared.lock();
+            if inner.closing || inner.checking || inner.claimed || inner.state.phase != Phase::Available {
                 return;
             }
-            match &inner.state.availability {
-                Some(availability) => availability.manifest.clone(),
-                None => return,
-            }
+            let Some(availability) = &inner.state.availability else { return };
+            let manifest = availability.manifest.clone();
+            inner.claimed = true;
+            let (work, token) = inner.start_work();
+            (manifest, Arc::new(Claim::new(&self.shared, ClaimKind::Download, work)), token)
         };
         let architecture = self.options.architecture.clone();
         let Some(asset) = manifest.asset(&architecture).cloned() else {
@@ -523,14 +660,13 @@ impl Coordinator {
             s.download_fraction = 0.0;
             s.error_message = None;
         });
-        let (_, token) = self.shared.lock().start_work();
         let progress: Arc<dyn Fn(f64) + Send + Sync> = {
             let shared = self.shared.clone();
             Arc::new(move |fraction| shared.mutate(|s| s.download_fraction = fraction))
         };
         let downloaded = self.service.download(&asset, &manifest.version, progress, &token).await;
         match downloaded {
-            Ok(package) => self.stage(package, &asset, &architecture).await,
+            Ok(package) => self.stage(package, &asset, &architecture, &claim).await,
             Err(ServiceError::Cancelled) => self.shared.mutate(|s| {
                 s.phase = Phase::Available;
                 s.download_fraction = 0.0;
@@ -538,12 +674,12 @@ impl Coordinator {
             }),
             Err(ServiceError::Refused(error)) => self.fail(self.words(&error)),
         }
-        self.shared.lock().work = None;
+        claim.finish();
     }
 
     /// The rest of C#'s `DownloadAsync` once the package is on disk: asked again whether staging must wait, then unpacked (off this
-    /// thread) and the install plan made.
-    async fn stage(&self, package: PathBuf, asset: &super::manifest::Asset, architecture: &str) {
+    /// thread, the claim held by the unpacking too) and the install plan made.
+    async fn stage(&self, package: PathBuf, asset: &super::manifest::Asset, architecture: &str, claim: &Arc<Claim>) {
         if self.staging_must_wait() {
             self.shared.lock().staging_deferred = true;
             self.shared.mutate(|s| {
@@ -559,10 +695,14 @@ impl Coordinator {
         });
         let destination = package.parent().map(|folder| folder.join(STAGED_FOLDER)).unwrap_or_else(|| PathBuf::from(STAGED_FOLDER));
         let staged = {
-            let (package, architecture) = (package.clone(), architecture.to_string());
-            tokio::task::spawn_blocking(move || super::stage::stage(&package, &destination, &architecture))
-                .await
-                .unwrap_or_else(|join| Err(UpdateError::Plain(join.to_string())))
+            let (package, architecture, held) = (package.clone(), architecture.to_string(), claim.clone());
+            tokio::task::spawn_blocking(move || {
+                let staged = super::stage::stage(&package, &destination, &architecture);
+                drop(held);
+                staged
+            })
+            .await
+            .unwrap_or_else(|join| Err(UpdateError::Plain(join.to_string())))
         };
         match staged {
             Ok(staged) => {
