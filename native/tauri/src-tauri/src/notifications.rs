@@ -2,15 +2,22 @@
 //! `FocusSession`; `RunCompletionNotificationSmoke`), over mighty-core's `notifications`. Owner: W6-A.
 //!
 //! A run seen running that completes, with the setting on, shows one toast (`Ports::notifier`): the localized title over "{title} has
-//! finished.". Registering with the OS writes the user's registry, so it happens only with `--allow-state-write` and never in a smoke;
-//! without it the permission row reads "verification mode" and no toast shows. A click on a toast brings the window forward, pushes
-//! `select{paneId}` and selects the pane.
+//! finished.". Registering with the OS writes the user's registry, so it happens only where the app may change the machine (the write
+//! policy, startup.rs: a release build, or `--allow-state-write`) and never in a smoke; otherwise the permission row reads "verification
+//! mode" and no toast shows. A click on a toast brings the window forward, pushes `select{paneId}` and selects the pane.
+//!
+//! W9-F (plan §1.8, D10; W6 review M3): the registration is the toast activator's (`mighty_platform::ToastActivator`: the AUMID
+//! `dev.mightycode.native` with its `CustomActivator` class, started as `"<exe>" -Embedding`), and the running app serves that class for
+//! its life, so a click on a toast left in Action Center after the app quit starts the app (`-Embedding`, args.rs) and reaches
+//! [`focus`] through COM, as a click on a live toast does through the notifier.
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use mighty_core::locale::Locale;
 use mighty_core::notifications::{self, Decision, SmokeOutcome};
-use mighty_platform::Notification;
+use mighty_platform::activator::{AUMID, CLSID, session_id};
+use mighty_platform::{Notification, Subscription, ToastActivator};
 use tauri::Manager;
 
 use crate::host::Host;
@@ -29,6 +36,8 @@ pub enum NotificationPermission {
 struct State {
     decision: Decision,
     permission: NotificationPermission,
+    /// The activator's class served for the app's life (dropped: revoked).
+    served: Option<Subscription>,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -38,21 +47,72 @@ fn with<T>(f: impl FnOnce(&mut State) -> T) -> T {
     f(state.get_or_insert_with(State::default))
 }
 
-/// C# `InitNotifierAsync` (never in a smoke): registered with the OS when the app may write the user's settings, and a click on a
-/// toast focuses its pane.
-pub fn start(host: &Arc<Host>) {
-    let permission = if host.may_change_machine() {
-        match crate::platform::register_notifications() {
-            Ok(()) => NotificationPermission::Allowed,
-            Err(error) => {
-                host.log.line(&format!("notifications: not registered: {error}"));
-                NotificationPermission::NeedPermission
-            }
-        }
-    } else {
-        NotificationPermission::Verification
+/// What the toast activator gave [`start`]: the permission it implies, the class served, and why either failed (for the log).
+struct Activated {
+    permission: NotificationPermission,
+    served: Option<Subscription>,
+    errors: Vec<String>,
+}
+
+/// The activator's part of C#'s `AppNotificationManager.Register`: only where the app may change the machine, the AUMID and its class
+/// registered (`exe -Embedding`) and the class served, each activation's `sessionId` handed to `focus`. Without the right: nothing
+/// registered or served, the verification mode. A failed registration needs the user's permission; a class that is not served only
+/// loses the clicks from Action Center after a quit.
+fn activate(
+    activator: &dyn ToastActivator,
+    may_change_machine: bool,
+    exe: Option<&Path>,
+    focus: Arc<dyn Fn(String) + Send + Sync>,
+) -> Activated {
+    if !may_change_machine {
+        return Activated { permission: NotificationPermission::Verification, served: None, errors: Vec::new() };
+    }
+    let mut errors = Vec::new();
+    let registered = match exe {
+        Some(exe) => activator.register(AUMID, CLSID, exe).map_err(|error| error.to_string()),
+        None => Err("the app's own executable is not known".to_string()),
     };
-    with(|state| state.permission = permission);
+    let permission = match registered {
+        Ok(()) => NotificationPermission::Allowed,
+        Err(error) => {
+            errors.push(format!("not registered: {error}"));
+            NotificationPermission::NeedPermission
+        }
+    };
+    let callback: mighty_platform::ToastActivation = Arc::new(move |_aumid: &str, arguments: &str| {
+        if let Some(pane) = session_id(arguments) {
+            focus(pane);
+        }
+    });
+    let served = match activator.serve(CLSID, callback) {
+        Ok(served) => Some(served),
+        Err(error) => {
+            errors.push(format!("the activator is not served: {error}"));
+            None
+        }
+    };
+    Activated { permission, served, errors }
+}
+
+/// C# `InitNotifierAsync` (never in a smoke): registered with the OS (the toast activator, W9-F) where the app may change the machine,
+/// and a click on a toast — a live one through the notifier, one left in Action Center through the activator — focuses its pane.
+pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
+    let weak = Arc::downgrade(host);
+    let focus_pane: Arc<dyn Fn(String) + Send + Sync> = Arc::new(move |pane: String| {
+        if let Some(host) = weak.upgrade() {
+            // Off COM's thread, which waits for the call to return.
+            tauri::async_runtime::spawn_blocking(move || focus(&host, &pane));
+        }
+    });
+    let exe = std::env::current_exe().ok();
+    let activated = activate(platform.activator.as_ref(), host.may_change_machine(), exe.as_deref(), focus_pane);
+    for error in &activated.errors {
+        host.log.line(&format!("notifications: {error}"));
+    }
+    with(|state| {
+        state.permission = activated.permission;
+        state.served = activated.served;
+    });
     if let Some(ports) = host.app.try_state::<crate::platform::Ports>() {
         let to = host.clone();
         ports.notifier.on_activated(Arc::new(move |pane| {
@@ -154,6 +214,61 @@ pub async fn smoke(host: &Arc<Host>) -> Result<SmokeOutcome, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use mighty_platform::fake::RecordingActivator;
+
+    type Focused = Arc<Mutex<Vec<String>>>;
+
+    fn recording() -> (Focused, Arc<dyn Fn(String) + Send + Sync>) {
+        let focused: Focused = Arc::default();
+        let into = focused.clone();
+        (focused, Arc::new(move |pane: String| into.lock().unwrap().push(pane)))
+    }
+
+    /// Where the app may not change the machine (a development build without the flag, `--read-only`, a smoke), nothing is registered
+    /// or served: the verification mode.
+    #[test]
+    fn without_the_right_nothing_is_registered_or_served() {
+        let activator = RecordingActivator::default();
+        let (focused, focus) = recording();
+        let activated = activate(&activator, false, Some(Path::new(r"C:\app\MightyCode.exe")), focus);
+        assert_eq!(activated.permission, NotificationPermission::Verification);
+        assert!(activated.served.is_none() && activator.registered().is_empty());
+        activator.activate(AUMID, "sessionId=x");
+        assert!(focused.lock().unwrap().is_empty(), "nothing served, nothing focused");
+    }
+
+    /// Where it may: the AUMID registered with the activator class started from this exe, the class served, and an activation that
+    /// names `sessionId=%2F…` focuses the decoded pane; once the subscription drops, a click reaches nothing.
+    #[test]
+    fn an_activation_focuses_the_decoded_session() {
+        let activator = RecordingActivator::default();
+        let (focused, focus) = recording();
+        let exe = Path::new(r"C:\Users\me\AppData\Local\Programs\MightyCode\MightyCode.exe");
+        let activated = activate(&activator, true, Some(exe), focus);
+        assert_eq!(activated.permission, NotificationPermission::Allowed);
+        assert!(activated.errors.is_empty());
+        assert_eq!(activator.registered(), [(AUMID.to_string(), CLSID.to_string(), exe.to_path_buf())]);
+        activator.activate(AUMID, "sessionId=%2Fpane+1");
+        activator.activate(AUMID, "launch=other");
+        assert_eq!(*focused.lock().unwrap(), ["/pane 1"], "the decoded pane; arguments without a session focus nothing");
+        drop(activated.served);
+        activator.activate(AUMID, "sessionId=after");
+        assert_eq!(focused.lock().unwrap().len(), 1);
+    }
+
+    /// A registration the OS refuses needs the user's permission (and says why); the class is still served for a click.
+    #[test]
+    fn a_refused_registration_needs_permission() {
+        let (_, focus) = recording();
+        let exe = Path::new(r"C:\app\MightyCode.exe");
+        let activated = activate(&mighty_platform::unsupported::Unsupported, true, Some(exe), focus.clone());
+        assert_eq!(activated.permission, NotificationPermission::NeedPermission);
+        assert_eq!(activated.errors.len(), 2, "{:?}", activated.errors);
+        let activated = activate(&RecordingActivator::default(), true, None, focus);
+        assert_eq!(activated.permission, NotificationPermission::NeedPermission, "no exe to start: not registered");
+        assert!(activated.served.is_some());
+    }
 
     #[test]
     fn the_permission_row_reads_each_state() {

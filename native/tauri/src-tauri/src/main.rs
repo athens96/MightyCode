@@ -417,9 +417,10 @@ fn main() {
             app.manage(platform.ptys.clone());
             // The app's folders, for the toolkit's store (settings/tools.rs, W6-B).
             app.manage(platform.paths.clone());
-            // Completion notifications: registered with the OS only with --allow-state-write, never in a smoke (notifications.rs).
+            // Completion notifications and the toast activator: registered with the OS only where the app may change the machine,
+            // never in a smoke (notifications.rs).
             if host.smoke.is_none() {
-                notifications::start(&host);
+                notifications::start(&host, &platform);
             }
             let dispatcher = host.clone();
             tauri::async_runtime::spawn(async move {

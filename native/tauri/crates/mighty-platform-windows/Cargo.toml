@@ -31,6 +31,9 @@ webview2-com = "0.38"
 # The Direct2D calls' points and transforms (`Vector2`, `Matrix3x2`; already in the lock as a dependency of `windows`): the pet (pet.rs,
 # W8-E).
 windows-numerics = "0.2"
+# The toast activator's COM objects (`#[implement]` of `IClassFactory` and `INotificationActivationCallback`, activator.rs, W9-F): the
+# macro names `windows_core` itself, so it is a direct dependency (the version `windows` 0.61 already brings, in the lock).
+windows-core = "0.61"
 # W8-C: SO_EXCLUSIVEADDRUSE on the direct and sharing listeners through socket2's raw setsockopt (net.rs).
 socket2 = { version = "0.6", features = ["all"] }
 # Data_Pdf, Foundation, Storage_Streams, Win32_System_WinRT: a PDF's first page (files.rs, W4). Data_Xml_Dom, UI_Notifications: the
