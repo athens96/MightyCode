@@ -134,7 +134,17 @@ struct Table {
     clients: HashMap<String, Arc<Connection>>,
     /// Direct sockets admitted and not yet handed over (their upgrade under way), each with when it was admitted: W8-C's path hands
     /// each back exactly once, with its socket ([`DirectSink::accept`]) or without ([`DirectSink::refused`]).
-    reserved: Vec<(IpAddr, Instant)>,
+    reserved: Vec<Reservation>,
+    next_reservation: u64,
+}
+
+/// One admitted direct socket's slot: its id (so a late hand-back cannot drop a newer reservation of the same address), its peer and
+/// when it was admitted (the start of its one deadline to `auth_ok`).
+#[derive(Debug, Clone, Copy)]
+pub struct Reservation {
+    pub id: u64,
+    pub peer: IpAddr,
+    pub admitted: Instant,
 }
 
 struct Lifecycle {
@@ -223,7 +233,7 @@ impl RelayHost {
                 settings: RwLock::new(MobileRemoteSettings { enabled: false, ..MobileRemoteSettings::default() }),
                 generation: AtomicU64::new(0),
                 disposed: AtomicBool::new(false),
-                table: Mutex::new(Table { clients: HashMap::new(), reserved: vec![] }),
+                table: Mutex::new(Table { clients: HashMap::new(), reserved: vec![], next_reservation: 1 }),
                 failures: crate::direct::admit::DirectAuthFailures::default(),
                 status: Mutex::new(MobileRelayStatus::disabled()),
                 listeners: Mutex::new(vec![]),
@@ -328,7 +338,7 @@ impl RelayHost {
         let (connection, admitted) = {
             let mut table = lock(&shared.table);
             let ip = canonical(peer.ip());
-            let admitted = table.reserved.iter().position(|(reserved, _)| *reserved == ip).map(|at| table.reserved.remove(at).1);
+            let admitted = table.reserved.iter().position(|r| r.peer == ip).map(|at| table.reserved.remove(at).admitted);
             let settings = shared.settings();
             if shared.disposed.load(Ordering::SeqCst) || !settings.enabled || !settings.direct_enabled {
                 return;
@@ -835,11 +845,13 @@ impl Shared {
             .filter(|c| c.direct && !c.authenticated())
             .map(|c| c.peer.map(crate::tailscale::canonical).unwrap_or_default())
             .collect();
-        pending.extend(table.reserved.iter().map(|(ip, _)| crate::tailscale::canonical(*ip)));
+        pending.extend(table.reserved.iter().map(|r| crate::tailscale::canonical(r.peer)));
         let clients = table.clients.len() + table.reserved.len();
         let admitted = crate::direct::admit::admit(Some(&text), true, clients, &pending, failures);
         if admitted {
-            table.reserved.push((peer, now));
+            let id = table.next_reservation;
+            table.next_reservation += 1;
+            table.reserved.push(Reservation { id, peer, admitted: now });
         }
         admitted
     }
@@ -848,7 +860,7 @@ impl Shared {
     fn refused_direct(&self, peer: IpAddr) {
         let peer = canonical(peer);
         let mut table = lock(&self.table);
-        if let Some(at) = table.reserved.iter().position(|(reserved, _)| *reserved == peer) {
+        if let Some(at) = table.reserved.iter().position(|r| r.peer == peer) {
             table.reserved.remove(at);
         }
     }

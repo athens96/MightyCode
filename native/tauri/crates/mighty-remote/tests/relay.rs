@@ -512,7 +512,7 @@ fn mobile_host_the_link_policy_decides_when_to_redial() {
     // Only adapters that can carry the socket out make the path: one with a default gateway, loopback and tunnels aside.
     let ip = |text: &str| -> std::net::IpAddr { text.parse().unwrap() };
     let wifi_gateways = [ip("192.168.0.1"), ip("fe80::1")];
-    let docker = [ip("0.0.0.0")];
+    let docker = [std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)];
     let teredo = [ip("2001::1")];
     let loopback = [ip("127.0.0.1")];
     let vpn_gateway = [ip("10.8.0.1")];
