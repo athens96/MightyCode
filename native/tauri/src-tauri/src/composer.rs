@@ -145,7 +145,7 @@ pub(crate) async fn start_run(
 
 /// C# `PrepareStyleRunRequest`'s Antigravity part (MainWindow.Styles.cs:571, M/AppStore.swift:981-988): agy refuses a model its live
 /// list lacks, so the run starts on its default instead, the pane's model set back with a note.
-fn reset_unavailable_agy_model(host: &Host, id: &str) -> Result<(), String> {
+pub(crate) fn reset_unavailable_agy_model(host: &Host, id: &str) -> Result<(), String> {
     let mut view = host.view();
     let pane = session(&view, id)?;
     if pane.kind() != "claude" || pane.provider() != "gemini" {

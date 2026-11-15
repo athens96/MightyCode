@@ -79,6 +79,16 @@ fn state(host: &Host) -> Option<Arc<PhoneState>> {
     host.app.try_state::<Arc<PhoneState>>().map(|s| s.inner().clone())
 }
 
+/// Where the phone's uploads are staged: `<profile>/mobile-remote/uploads` when the app may write its profile, else (a read-only launch, any
+/// smoke) a folder of this process's own, so nothing is made in the profile. The store makes it only when an upload begins.
+fn uploads_folder(host: &Host) -> std::path::PathBuf {
+    if host.smoke.is_some() || !host.writes() {
+        std::env::temp_dir().join(format!("mighty-phone-uploads-{}", std::process::id()))
+    } else {
+        host.data_dir.join("mobile-remote").join("uploads")
+    }
+}
+
 /// The router, made the first time it is asked for.
 pub fn router(host: &Arc<Host>) -> Router {
     if let Some(state) = state(host) {
@@ -86,7 +96,7 @@ pub fn router(host: &Arc<Host>) -> Router {
     }
     let kept = Arc::new(Mutex::new(Kept::default()));
     let desk = Arc::new(Desk { app: host.app.clone(), kept });
-    let mut options = RouterOptions::new(host.data_dir.join("mobile-remote").join("uploads"), m1_platform());
+    let mut options = RouterOptions::new(uploads_folder(host), m1_platform());
     let app = host.app.clone();
     options.push = Some(Arc::new(move || app.try_state::<Arc<Host>>().and_then(|h| crate::mobile::push(h.inner()))));
     let made = Arc::new(PhoneState { router: Router::new(desk, options) });
@@ -459,33 +469,114 @@ async fn start(
             None => (None, None),
         }
     };
-    // Only a request that started at once carries its ids: one that went out with the items delegation held answers without them.
-    let releases = !held(id).is_empty();
     let card = continuation.as_ref().map(|(_, card)| card.clone());
-    let outcome = crate::composer::start_run(host, id, text, files, override_mode, continuation).await;
+    let started = start_request(host, id, text, files, override_mode, continuation).await;
+    let (answer, revoke) = answer_start(started, card.is_some(), &l);
     // A continuation that could not start leaves the queue with its rules, as the desktop's drain drops it (S-L3).
-    let revoke = |reason: &str| {
-        if let (Some(card), Some(item)) = (card.clone(), queue_id) {
-            if let Some(ui) = host.view().panes.get_mut(id) {
-                ui.queue.remove(item);
-                ui.continuations.remove(item);
-                ui.dirty = true;
-            }
-            crate::antigravity::continuation_failed(host, id, card, reason);
+    if let (Some(reason), Some(card), Some(item)) = (revoke, card, queue_id) {
+        if let Some(ui) = host.view().panes.get_mut(id) {
+            revoke_queued(ui, item);
         }
-    };
-    match outcome {
-        Err(error) => {
-            revoke(&error);
-            Err(request(409, error))
-        }
-        Ok(None) => {
-            revoke(&l.get("remote.error.startFailed"));
-            Err(request(409, l.get("remote.error.dropped")))
-        }
-        Ok(Some(_)) if releases => Ok(SubmitReceipt::new("started")),
-        Ok(Some((entry, run))) => Ok(SubmitReceipt::with_ids("started", entry.as_deref(), run.as_deref())),
+        crate::antigravity::continuation_failed(host, id, card, &reason);
     }
+    answer
+}
+
+/// What a start of the pane's request did, as the phone's answer reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names, reason = "NotStarted is delegation's word")]
+enum Started {
+    /// The start failed with this reason.
+    Failed(String),
+    /// No run started (delegation's `NotStarted`, or stopped before it started).
+    NotStarted,
+    /// The request went out with the items delegation held, in one run.
+    Released,
+    /// It started at once: its user entry and graph run.
+    Now(Option<String>, Option<String>),
+}
+
+/// The phone's answer to a start, and the reason a queued continuation that took it loses its grant (S-L3): only a request that started
+/// at once carries its ids (natural submit B5), one that went out with held items answers without them; `NotStarted` is 409
+/// `remote.error.dropped`.
+fn answer_start(
+    started: Started,
+    continuation: bool,
+    l: &mighty_core::locale::Locale,
+) -> (Result<SubmitReceipt, MobileError>, Option<String>) {
+    match started {
+        Started::Failed(error) => (Err(request(409, error.clone())), continuation.then_some(error)),
+        Started::NotStarted => (Err(request(409, l.get("remote.error.dropped"))), continuation.then(|| l.get("remote.error.startFailed"))),
+        Started::Released => (Ok(SubmitReceipt::new("started")), None),
+        Started::Now(entry, run) => (Ok(SubmitReceipt::with_ids("started", entry.as_deref(), run.as_deref())), None),
+    }
+}
+
+/// S-L3: the queued continuation `item` leaves the queue with its rules (its grant and card go with it).
+fn revoke_queued(ui: &mut panes::PaneUi, item: &str) {
+    ui.queue.remove(item);
+    ui.continuations.remove(item);
+    ui.dirty = true;
+}
+
+/// C# `StartFromComposer` for the phone: the pane's request through delegation's send (held items first, in one run), the release it
+/// answered telling whether the run was the request's own.
+async fn start_request(
+    host: &Arc<Host>,
+    id: &str,
+    text: &str,
+    files: Vec<RunAttachment>,
+    permission_override: Option<String>,
+    continuation: Option<(mighty_run::antigravity::AllowGrant, PermissionRequest)>,
+) -> Started {
+    let Ok(engine) = host.engine() else { return Started::Failed("the run engine is not ready".into()) };
+    if let Err(error) = crate::composer::reset_unavailable_agy_model(host, id) {
+        return Started::Failed(error);
+    }
+    let receipt = Arc::new(Mutex::new(mighty_run::model::RunStartReceipt::default()));
+    let request = {
+        let view = host.view();
+        let Some(pane) = view.snapshot.session(id).cloned() else { return Started::Failed("Session not found.".into()) };
+        let workspace = view.snapshot.workspace(pane.workspace_id()).cloned();
+        let mut request = StartRunRequest::new(pane.id(), pane.workspace_id(), pane.kind(), text);
+        request.registered_models = crate::runs::registered_models_for(pane.provider(), workspace.as_ref(), &view.snapshot);
+        request.model = pane.model().to_string();
+        request.provider = pane.provider().to_string();
+        request.settings = pane.settings.clone();
+        request.resume_id = pane.resume_id.clone();
+        request.attachments = (!files.is_empty()).then_some(files);
+        request.permission_mode_override = permission_override;
+        request.receipt = Some(receipt.clone());
+        if let Some((grant, card)) = continuation {
+            request.antigravity_grant = Some(grant);
+            request.antigravity_card = Some(card);
+        }
+        request
+    };
+    let ids = || {
+        let made = lock(&receipt);
+        Started::Now(made.entry_id.clone(), made.graph_run_id.clone())
+    };
+    match crate::delegation::app() {
+        Some(app) => match app.send(request).await {
+            Ok(DelegationRelease::NotStarted) => Started::NotStarted,
+            Ok(DelegationRelease::Released { .. }) => Started::Released,
+            Ok(DelegationRelease::NothingHeld) => ids(),
+            Err(error) => Started::Failed(error.message().to_string()),
+        },
+        None => match engine.service.start(request).await {
+            Ok(Some(())) => ids(),
+            Ok(None) => Started::NotStarted,
+            Err(error) => Started::Failed(error.message().to_string()),
+        },
+    }
+}
+
+/// C# `DelegatedRunBlockReason(pane)`: why a delegated pane may not run now, if it may not.
+fn block_reason(host: &Host, id: &str) -> Option<String> {
+    let view = host.view();
+    let pane = view.snapshot.session(id).cloned()?;
+    crate::delegation::run_block_reason(host, &view.snapshot, &pane)
 }
 
 /// `SteerQueuedInput(row)`: into a run that only waits on background work, the row (or the first) as a new turn.
@@ -538,6 +629,9 @@ async fn run_next(host: &Arc<Host>, id: &str) -> Result<ActionAnswer, MobileErro
         if !host.delegation_live() {
             return Err(request(409, crate::setup::verification_mode()));
         }
+        if let Some(blocked) = block_reason(host, id) {
+            return Err(request(409, blocked));
+        }
         match app.run_next(id).await {
             DelegationRelease::NotStarted => return Err(request(409, l.get("remote.error.startFailed"))),
             DelegationRelease::Released { .. } => {
@@ -583,6 +677,12 @@ async fn run_queued_now(host: &Arc<Host>, id: &str, item: &str) -> Result<Action
     };
     let refused = || request(409, l.get("queue.runNowRefused"));
     let Some((wire_word, _)) = path.wire().filter(|_| path != QueueRunNowPath::AgentMenu && path.runs()) else { return Err(refused()) };
+    // Settling a blocked pane throws the whole queue away with only a log line (C# `DelegatedRunBlockReason`).
+    if matches!(path, QueueRunNowPath::Here | QueueRunNowPath::Held)
+        && let Some(blocked) = block_reason(host, id)
+    {
+        return Err(request(409, blocked));
+    }
     match path {
         QueueRunNowPath::Here => {
             let row = host.view().panes.get(id).and_then(|u| u.queue.items().iter().find(|q| q.id == item).cloned()).ok_or_else(refused)?;
@@ -659,39 +759,16 @@ fn settings(host: &Host, id: &str, body: &serde_json::Map<String, Value>) -> Res
     if busy(host, id) {
         return Err(request(409, "Stop the session before changing settings."));
     }
-    if body.is_empty()
-        || body.iter().any(|(k, v)| {
-            !matches!(k.as_str(), "model" | "permissionMode" | "effort" | "agentViewMode" | "mightyStyle" | "styleId") || !v.is_string()
-        })
-    {
-        return Err(request(400, "Unknown setting."));
-    }
-    let text = |k: &str| body.get(k).and_then(Value::as_str);
     let snapshot = Desk::snapshot_of(host);
     let pane = snapshot.session(id).cloned().ok_or_else(not_found_session)?;
     let current = pane.settings.clone().unwrap_or_default();
-    let model = text("model").unwrap_or(pane.model()).to_string();
-    let mode = text("permissionMode").unwrap_or(&current.permission_mode).to_string();
-    let effort = text("effort").unwrap_or(&current.effort).to_string();
     let catalog = catalog(host, pane.provider());
     let caps = capabilities(host, pane.provider());
     let registered = crate::runs::registered_models_for(pane.provider(), snapshot.workspace(pane.workspace_id()), &snapshot);
-    let efforts = mighty_run::providers::efforts(pane.provider(), &model, &catalog, Some(&registered));
-    let models = mighty_composer::menus::picker_options(&pane, &picker_catalog(host, pane.provider()), &l);
-    if !models.iter().any(|m| m.value == model)
-        || !caps.permission_modes.contains(&mode)
-        || (effort != "default" && !efforts.contains(&effort))
-    {
-        return Err(request(400, "Unsupported model, permission, or effort."));
-    }
-    if !matches!(text("agentViewMode"), None | Some("plain" | "mighty")) {
-        return Err(request(400, "Unsupported view."));
-    }
-    // What this sender was last told is the CLI (no style runs before W9): a style other than it is unknown here.
-    let requested = text("styleId").or_else(|| text("mightyStyle"));
-    if requested.is_some_and(|r| r != mighty::CLI_STYLE) {
-        return Err(request(400, l.get("remote.error.unknownStyle")));
-    }
+    let models: Vec<String> =
+        mighty_composer::menus::picker_options(&pane, &picker_catalog(host, pane.provider()), &l).into_iter().map(|m| m.value).collect();
+    let efforts = |model: &str| mighty_run::providers::efforts(pane.provider(), model, &catalog, Some(&registered));
+    let (model, mode, effort) = settings_choice(body, pane.model(), &current, &models, &caps.permission_modes, &efforts, &l)?;
     let mut view = host.view();
     let now = view.snapshot.session(id).cloned().ok_or_else(not_found_session)?;
     if busy_locked(host, &view, id)
@@ -725,6 +802,50 @@ fn busy_locked(host: &Host, view: &crate::host::View, id: &str) -> bool {
         || pane.status() == "running"
         || running(host, id)
         || crate::updates::holds(host, &view.snapshot, pane)
+}
+
+/// What a phone's settings request asks for, checked as C#'s `MobileSettings` checks it: only the six keys, each a string; a model the
+/// picker offers, a permission mode the provider has, an effort the model takes (or default); the plain or the Mighty view; and no style
+/// but the CLI (none other runs before W9). The model, permission mode and effort the pane takes.
+fn settings_choice(
+    body: &serde_json::Map<String, Value>,
+    model_now: &str,
+    settings_now: &RunSettings,
+    models: &[String],
+    modes: &[String],
+    efforts: &dyn Fn(&str) -> Vec<String>,
+    l: &mighty_core::locale::Locale,
+) -> Result<(String, String, String), MobileError> {
+    if body.is_empty()
+        || body.iter().any(|(k, v)| {
+            !matches!(k.as_str(), "model" | "permissionMode" | "effort" | "agentViewMode" | "mightyStyle" | "styleId") || !v.is_string()
+        })
+    {
+        return Err(request(400, "Unknown setting."));
+    }
+    let text = |k: &str| body.get(k).and_then(Value::as_str);
+    let model = text("model").unwrap_or(model_now).to_string();
+    let mode = text("permissionMode").unwrap_or(&settings_now.permission_mode).to_string();
+    let effort = text("effort").unwrap_or(&settings_now.effort).to_string();
+    if !models.contains(&model) || !modes.contains(&mode) || (effort != "default" && !efforts(&model).contains(&effort)) {
+        return Err(request(400, "Unsupported model, permission, or effort."));
+    }
+    if !matches!(text("agentViewMode"), None | Some("plain" | "mighty")) {
+        return Err(request(400, "Unsupported view."));
+    }
+    // What this sender was last told is the CLI (no style runs before W9): a style other than it is unknown here.
+    if text("styleId").or_else(|| text("mightyStyle")).is_some_and(|r| r != mighty::CLI_STYLE) {
+        return Err(request(400, l.get("remote.error.unknownStyle")));
+    }
+    Ok((model, mode, effort))
+}
+
+/// The phone's 보낼 대상 choice: a target the pane offers, or None for Claude; anything else is `remote.error.badBody`.
+fn ask_target_choice(target: Option<&str>, offered: &[&str], l: &mighty_core::locale::Locale) -> Result<Option<String>, MobileError> {
+    match target {
+        Some(target) if !offered.contains(&target) => Err(request(400, l.get("remote.error.badBody"))),
+        target => Ok(target.map(str::to_string)),
+    }
 }
 
 /// `MobileUsage`: the session's model, context, tokens, cost and elapsed time, one per line.
@@ -864,13 +985,9 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
         }
         // The phone's 보낼 대상 switch: a target the pane offers, or null for Claude.
         "setAskTarget" => {
-            let target = text("target");
-            if let Some(target) = &target {
-                let snapshot = Desk::snapshot_of(&host);
-                if !crate::ask::targets_for(&host, &snapshot, &pane).iter().any(|t| t.id == target) {
-                    return Err(request(400, l.get("remote.error.badBody")));
-                }
-            }
+            let snapshot = Desk::snapshot_of(&host);
+            let offered: Vec<&str> = crate::ask::targets_for(&host, &snapshot, &pane).iter().map(|t| t.id).collect();
+            let target = ask_target_choice(text("target").as_deref(), &offered, &l)?;
             crate::ask::set_target(&host, &id, target).map_err(|e| request(400, e))?;
             ActionAnswer::Value(Value::Null)
         }
@@ -1143,7 +1260,9 @@ impl PhoneDesk for Desk {
         Some(None)
     }
     fn app_update_act(&self, _install: bool) -> BoxFuture<'_, Result<(), MobileError>> {
-        Box::pin(async { Ok(()) })
+        // No update until W9: the route answers as C#'s does for a build that cannot update itself.
+        let refusal = mighty_run::strings::get("appUpdate.mobile.unavailable");
+        Box::pin(async move { Err(request(409, refusal)) })
     }
     fn queue_count(&self, session_id: &str) -> Option<i32> {
         let host = self.host().ok()?;
@@ -1177,6 +1296,95 @@ impl PhoneDesk for Desk {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn en() -> mighty_core::locale::Locale {
+        mighty_core::locale::Locale::new("en")
+    }
+
+    fn status_of(result: &Result<SubmitReceipt, MobileError>) -> Option<(u16, String)> {
+        match result {
+            Err(MobileError::Request { status, message, .. }) => Some((*status, message.clone())),
+            _ => None,
+        }
+    }
+
+    /// C# `MobileSubmit`'s answers: a start that went out with held items says started without ids, one that started at once carries
+    /// them, `NotStarted` is 409 `remote.error.dropped`, a failure its own reason; a queued continuation that did not start loses its
+    /// grant (S-L3) with the start's failure, or `remote.error.startFailed` when no run started.
+    #[test]
+    fn a_phone_submit_answers_as_its_start_went() {
+        let l = en();
+        let (answer, revoke) = answer_start(Started::Now(Some("e".into()), Some("r".into())), true, &l);
+        assert_eq!(answer.unwrap(), SubmitReceipt::with_ids("started", Some("e"), Some("r")));
+        assert!(revoke.is_none(), "a start revokes nothing");
+        let (answer, revoke) = answer_start(Started::Released, false, &l);
+        assert!(answer.unwrap() == SubmitReceipt::new("started") && revoke.is_none(), "held items went first: no ids");
+        let (answer, revoke) = answer_start(Started::NotStarted, false, &l);
+        assert_eq!(status_of(&answer), Some((409, l.get("remote.error.dropped"))));
+        assert!(revoke.is_none(), "a plain send has no grant to revoke");
+        let (answer, revoke) = answer_start(Started::NotStarted, true, &l);
+        assert_eq!(status_of(&answer), Some((409, l.get("remote.error.dropped"))));
+        assert_eq!(revoke, Some(l.get("remote.error.startFailed")), "a continuation that did not start loses its grant");
+        let (answer, revoke) = answer_start(Started::Failed("agy refused".into()), true, &l);
+        assert_eq!(status_of(&answer), Some((409, "agy refused".into())));
+        assert_eq!(revoke.as_deref(), Some("agy refused"), "with the start's own reason");
+    }
+
+    /// S-L3: the revoked continuation leaves the queue with its grant and card; the row behind it stays.
+    #[test]
+    fn a_revoked_continuation_leaves_the_queue_with_its_rules() {
+        let l = en();
+        let mut ui = panes::PaneUi::default();
+        let first = ui.queue.add("go on", vec![], None, false, true, &l).unwrap().id;
+        let second = ui.queue.add("then this", vec![], None, false, false, &l).unwrap().id;
+        let grant =
+            mighty_run::antigravity::AllowGrant { request_id: "agy-1".into(), rules: vec!["command(echo hi)".into()], temporary: true };
+        let card = PermissionRequest { id: "agy-1".into(), run_id: "run-1".into(), actions: vec![], received_at: None };
+        ui.continuations.insert(first.clone(), (grant, card));
+        ui.dirty = false;
+        revoke_queued(&mut ui, &first);
+        assert!(ui.continuations.is_empty() && ui.dirty, "the grant and card went");
+        assert_eq!(ui.queue.items().iter().map(|q| q.id.as_str()).collect::<Vec<_>>(), [second.as_str()], "the next row stays");
+    }
+
+    /// C# `MobileSettings`' checks.
+    #[test]
+    fn a_settings_request_is_checked_against_what_the_pane_offers() {
+        let l = en();
+        let models = vec!["default".to_string(), "opus".to_string()];
+        let modes = vec!["manual".to_string(), "acceptEdits".to_string()];
+        let efforts = |model: &str| if model == "opus" { vec!["low".to_string(), "high".to_string()] } else { vec![] };
+        let current = RunSettings::default();
+        let check = |body: Value| settings_choice(body.as_object().unwrap(), "default", &current, &models, &modes, &efforts, &l);
+        assert_eq!(check(json!({"model": "opus", "effort": "high"})).unwrap(), ("opus".into(), "manual".into(), "high".into()));
+        assert_eq!(check(json!({"permissionMode": "acceptEdits"})).unwrap(), ("default".into(), "acceptEdits".into(), "default".into()));
+        let refused = |body: Value| match check(body) {
+            Err(MobileError::Request { status, message, .. }) => (status, message),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(refused(json!({})), (400, "Unknown setting.".into()));
+        assert_eq!(refused(json!({"model": 3})), (400, "Unknown setting.".into()));
+        assert_eq!(refused(json!({"fast": "yes"})), (400, "Unknown setting.".into()));
+        assert_eq!(refused(json!({"model": "sonnet"})), (400, "Unsupported model, permission, or effort.".into()));
+        assert_eq!(refused(json!({"permissionMode": "fullAccess"})), (400, "Unsupported model, permission, or effort.".into()));
+        assert_eq!(
+            refused(json!({"effort": "high"})),
+            (400, "Unsupported model, permission, or effort.".into()),
+            "default takes no effort"
+        );
+        assert_eq!(refused(json!({"agentViewMode": "graph"})), (400, "Unsupported view.".into()));
+        assert_eq!(refused(json!({"styleId": "ouroboros"})), (400, l.get("remote.error.unknownStyle")));
+        assert!(check(json!({"agentViewMode": "plain", "styleId": "cli"})).is_ok(), "an older phone's plain view and the CLI are heard");
+    }
+
+    /// The phone's 보낼 대상: a target the pane offers, or null for Claude.
+    #[test]
+    fn a_send_to_choice_must_be_offered() {
+        let l = en();
+        assert_eq!(ask_target_choice(Some("codex"), &["codex"], &l).unwrap().as_deref(), Some("codex"));
+        assert_eq!(ask_target_choice(None, &["codex"], &l).unwrap(), None);
+        assert!(matches!(ask_target_choice(Some("gemini"), &["codex"], &l), Err(MobileError::Request { status: 400, .. })));
+    }
 
     /// `/m1/info` names this OS as the phone app knows it.
     #[test]

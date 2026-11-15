@@ -120,6 +120,40 @@ fn guid(stem: &str) -> bool {
 pub struct MobileUploads {
     directory: PathBuf,
     uploads: Mutex<HashMap<String, Upload>>,
+    /// The folder was made and its stale files swept.
+    ready: std::sync::atomic::AtomicBool,
+}
+
+/// Whether `folder` is a real folder: not a link, a junction or any other reparse point.
+fn plain_folder(folder: &Path) -> bool {
+    let Ok(meta) = std::fs::symlink_metadata(folder) else { return false };
+    let plain = meta.is_dir() && !meta.file_type().is_symlink();
+    #[cfg(windows)]
+    let plain = plain && {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+    };
+    plain
+}
+
+/// An upload's staging file, made new: on Windows shared with nobody and deleted when its handle closes (C#'s `FileShare.None`,
+/// `FileOptions.DeleteOnClose`), elsewhere readable and writable by its owner alone (0600).
+fn staging_file(path: &Path) -> std::io::Result<File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
+        options.share_mode(0).custom_flags(FILE_FLAG_DELETE_ON_CLOSE);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 impl std::fmt::Debug for MobileUploads {
@@ -129,10 +163,32 @@ impl std::fmt::Debug for MobileUploads {
 }
 
 impl MobileUploads {
-    /// The store in `directory` (made when missing); the `.part` files an earlier run left there are deleted (at most 1,024).
+    /// The store in `directory`. Nothing is made or read until the first upload begins ([`MobileUploads::begin`]): a router that never
+    /// takes an upload (a read-only launch, a smoke) leaves its folder alone.
     pub fn new(directory: &Path) -> MobileUploads {
-        let _ = std::fs::create_dir_all(directory);
-        if let Ok(entries) = std::fs::read_dir(directory) {
+        MobileUploads {
+            directory: directory.to_path_buf(),
+            uploads: Mutex::new(HashMap::new()),
+            ready: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// The folder made on first use, owner-only where the OS says so (Unix 0700), and the `.part` files an earlier run left there deleted
+    /// (at most 1,024). A folder that is a link, a junction or another reparse point is refused: no upload is written through it.
+    fn prepare(&self) -> Result<(), MobileError> {
+        if self.ready.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+        std::fs::create_dir_all(&self.directory).map_err(io)?;
+        if !plain_folder(&self.directory) {
+            return Err(MobileError::Unavailable);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let _ = std::fs::set_permissions(&self.directory, std::fs::Permissions::from_mode(0o700));
+        }
+        if let Ok(entries) = std::fs::read_dir(&self.directory) {
             for entry in entries.flatten().take(1_024) {
                 let path = entry.path();
                 let stale = path.extension().is_some_and(|e| e == "part")
@@ -143,7 +199,8 @@ impl MobileUploads {
                 }
             }
         }
-        MobileUploads { directory: directory.to_path_buf(), uploads: Mutex::new(HashMap::new()) }
+        self.ready.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Upload>> {
@@ -167,6 +224,7 @@ impl MobileUploads {
 
     /// `Begin(session, device, rawName, size)`.
     pub fn begin(&self, session: &str, device: &str, raw_name: &str, size: i64) -> Result<MobileUploadTicket, MobileError> {
+        self.prepare()?;
         let mut uploads = self.lock();
         Self::sweep(&mut uploads);
         let replaced = raw_name.replace('\\', "/");
@@ -185,7 +243,7 @@ impl MobileUploads {
         }
         let id = mighty_core::wire::new_id();
         let path = self.directory.join(format!("{id}.part"));
-        let file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(&path).map_err(io)?;
+        let file = staging_file(&path).map_err(io)?;
         uploads.insert(
             id.clone(),
             Upload {

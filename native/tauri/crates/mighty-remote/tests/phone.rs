@@ -1346,3 +1346,75 @@ async fn mobile_remote_uploads_through_the_routes() {
     let _ = MobilePaneDigest { editable: true, options: 0, mighty: 0 };
     let _ = SessionRateLimit { kind: String::new(), percent_used: None, resets_at: None };
 }
+
+/// Review B items 1, 5 (L5) and 9 (L6): the uploads' folder is made only when an upload begins (a router that only reads leaves it
+/// alone); a size that is no number is C#'s `InvalidOperationException` (409, the pane changed); a desk that panics answers the host's
+/// 500 and the next request is served.
+#[tokio::test]
+async fn mobile_remote_uploads_folder_waits_for_an_upload_and_failures_answer_as_csharp() {
+    let world = World::new("mobile-lazy");
+    world.desk.set_sessions(vec![pane("pane", "w")]);
+    let folder = world.temp.path().join("mobile").join("uploads");
+    std::fs::create_dir_all(world.temp.path().join("mobile")).unwrap();
+    std::fs::write(world.temp.path().join("mobile").join("keep.txt"), "x").unwrap();
+    for path in ["/m1/info", "/m1/state", "/m1/sessions/pane", "/m1/workspaces/w/files"] {
+        assert_eq!(world.route("GET", path, None).await.0, 200, "{path}");
+    }
+    assert_eq!(world.router.open_upload_count(), 0);
+    assert!(!folder.exists(), "reading made no uploads folder");
+    let (status, body) = world.route("POST", "/m1/sessions/pane/uploads", Some(json!({"name": "a.txt", "size": "4"}))).await;
+    assert!(status == 409 && body["error"] == "The pane changed; refresh and try again.", "a size that is no number: {status} {body}");
+    assert!(!folder.exists(), "a refused upload made nothing");
+    assert_eq!(world.route("POST", "/m1/sessions/pane/uploads", Some(json!({"name": "a.txt", "size": 4}))).await.0, 201);
+    assert!(folder.is_dir(), "the first upload makes the folder");
+    world.desk.calls().action = Some(Arc::new(|_| panic!("the window went away")));
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let (status, body) = world.route("POST", "/m1/sessions/pane/stop", None).await;
+    std::panic::set_hook(hook);
+    assert!(status == 500 && body["error"] == "Desktop request failed.", "a panicking desk: {status} {body}");
+    assert_eq!(world.route("GET", "/m1/info", None).await.0, 200, "the next request is served");
+}
+
+/// Review B item 2 (M1) and 6 (L3): a submit whose request is dropped still runs to its end on its own task, so its claim is spent
+/// once the desk accepted it and the slot is given back only then.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mobile_remote_a_dropped_submit_still_spends_its_claim() {
+    let world = Arc::new(World::new("mobile-dropped"));
+    world.desk.set_sessions(vec![pane("pane", "w")]);
+    let (_, ticket) = world.route("POST", "/m1/sessions/pane/uploads", Some(json!({"name": "a.txt", "size": 4}))).await;
+    let id = ticket["uploadId"].as_str().unwrap().to_string();
+    world.route("POST", &format!("/m1/uploads/{id}/chunks/0"), Some(json!({"dataBase64": support::desk::base64_of(b"ABCD")}))).await;
+    world.route("POST", &format!("/m1/uploads/{id}/complete"), None).await;
+    let gate = Arc::new(std::sync::Barrier::new(2));
+    {
+        let gate = gate.clone();
+        world.desk.calls().action = Some(Arc::new(move |_| {
+            gate.wait();
+            Ok(ActionAnswer::Receipt(SubmitReceipt::new("queued")))
+        }));
+    }
+    let body = json!({"text": "", "attachments": [id]});
+    let submitting = tokio::spawn({
+        let world = world.clone();
+        let body = body.clone();
+        async move { world.route("POST", "/m1/sessions/pane/submit", Some(body)).await }
+    });
+    // The desk holds the action; the phone's request goes away meanwhile.
+    while world.desk.actions().is_empty() {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    submitting.abort();
+    let opened = tokio::task::spawn_blocking({
+        let gate = gate.clone();
+        move || gate.wait()
+    });
+    opened.await.unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while world.router.open_upload_count() != 0 && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(world.router.open_upload_count(), 0, "the accepted submit spent its upload though its request was dropped");
+    world.desk.calls().action = Some(Arc::new(|_| Ok(ActionAnswer::Value(Value::Null))));
+    assert_eq!(world.route("POST", "/m1/sessions/pane/submit", Some(json!({"text": "next"}))).await.0, 202, "the slot came back");
+}

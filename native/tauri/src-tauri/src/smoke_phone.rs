@@ -5,7 +5,8 @@
 //! with the role view and the structure tag), `entries`, `files` (the workspace's listing), `unknownRoute` (404 in C#'s words),
 //! `notified` (the router tells what moved, the list among it), `created` (a pane made from the phone), `submitted` (a request sent to
 //! it started at once, with its entry id), `entries` (its words in the transcript the phone pages), `stopped` (the phone's stop answers
-//! that it ran, and the run ends), `closed` (the phone's close, which never asks). Owner: W8-B.
+//! that it ran, and the run ends), `closed` (the phone's close, which never asks). Without the stand-in CLI (`-NoRuns`, a real Claude)
+//! only the reading keys run (`runs: false`): no pane is made in the profile and no CLI starts. Owner: W8-B.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -13,6 +14,9 @@ use std::time::{Duration, Instant};
 use serde_json::{Map, Value, json};
 
 use crate::host::Host;
+
+/// The keys of a smoke that reads only (no stand-in CLI): nothing is made in the profile and no CLI starts.
+const READ_KEYS: [&str; 6] = ["info", "state", "session", "files", "unknownRoute", "notified"];
 
 const KEYS: [&str; 11] =
     ["info", "state", "session", "entries", "files", "unknownRoute", "notified", "created", "submitted", "stopped", "closed"];
@@ -29,7 +33,8 @@ pub fn start(host: &Arc<Host>) -> bool {
         let mut checks = Map::new();
         let outcome = run(&host, &mut checks).await;
         let mut report = Value::Object(checks);
-        report["passed"] = json!(outcome.is_ok() && KEYS.iter().all(|key| report.get(*key) == Some(&Value::Bool(true))));
+        let keys: &[&str] = if report.get("runs") == Some(&Value::Bool(false)) { &READ_KEYS } else { &KEYS };
+        report["passed"] = json!(outcome.is_ok() && keys.iter().all(|key| report.get(*key) == Some(&Value::Bool(true))));
         if let Err(error) = outcome {
             host.log.line(&format!("smoke: phone part failed: {error}"));
             report["error"] = json!(error);
@@ -41,9 +46,21 @@ pub fn start(host: &Arc<Host>) -> bool {
     true
 }
 
-/// The phone part's checks from its report; each fails when the report is missing.
+/// The phone part's checks from its report; each fails when the report is missing. A smoke without the stand-in CLI (`-NoRuns`, a real
+/// Claude) reads only: its report says `runs: false` and has no pane made, sent to, stopped or closed.
 pub fn checks(report: &Value) -> Vec<(&'static str, bool)> {
     let yes = |key: &str| report.get(key) == Some(&Value::Bool(true));
+    if report.get("runs") == Some(&Value::Bool(false)) {
+        return vec![
+            ("phoneInfo", yes("info")),
+            ("phoneState", yes("state")),
+            ("phoneSession", yes("session")),
+            ("phoneFiles", yes("files")),
+            ("phoneUnknownRoute", yes("unknownRoute")),
+            ("phoneNotified", yes("notified")),
+            ("phonePassed", yes("passed") && report.get("error").is_none()),
+        ];
+    }
     vec![
         ("phoneInfo", yes("info")),
         ("phoneState", yes("state")),
@@ -105,6 +122,26 @@ async fn run(host: &Arc<Host>, checks: &mut Map<String, Value>) -> Result<(), St
                 && state["workspaces"].is_array()
         ),
     );
+    // Without the stand-in CLI (`-NoRuns`, a real Claude) the phone only reads: no pane is made in the profile and no CLI starts.
+    let fake = host.smoke.as_ref().is_some_and(|smoke| smoke.fake_record().is_some());
+    if !fake {
+        checks.insert("runs".into(), json!(false));
+        let session = match &pane {
+            Some(id) => {
+                let detail = get(host, &format!("/m1/sessions/{id}?since=0&wait=0&roles=1&structure=0")).await?;
+                detail["session"]["id"] == id.as_str() && detail["session"]["styleId"] == "cli"
+            }
+            None => true,
+        };
+        checks.insert("session".into(), json!(session));
+        let files = get(host, &format!("/m1/workspaces/{workspace}/files")).await?;
+        checks.insert("files".into(), json!(files["workspaceId"] == workspace.as_str() && files["entries"].is_array()));
+        let unknown = crate::phone::route(host, "GET", "/m1/nothing", None).await;
+        checks.insert("unknownRoute".into(), json!(unknown.status == 404));
+        let notified = crate::phone::take_notifications(host);
+        checks.insert("notified".into(), json!(notified.iter().any(|(scope, _)| scope == "state")));
+        return Ok(());
+    }
     // A pane made from the phone: the create route, then its detail.
     let created = crate::phone::route(host, "POST", &format!("/m1/workspaces/{workspace}/sessions"), Some(json!({"kind": "claude"}))).await;
     let made: Value = serde_json::from_str(&created.body).unwrap_or(Value::Null);

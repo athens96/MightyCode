@@ -77,9 +77,24 @@ internal static class PhoneParity
 
     /// <summary>
     /// The router over a copy of the profile folder (its <c>workspace-state.json</c>), no runs, no window: <c>action</c> answers null and
-    /// <c>extra</c> is empty, the host is "Parity", id "host-parity", version 0.0.0 — what the Rust check's headless desk answers with.
+    /// <c>extra</c> is <see cref="Extras"/>, the host is "Parity", id "host-parity", version 0.0.0 — what the Rust check's headless desk answers with.
     /// Each line of <paramref name="requests"/> is a GET path; each line written is <c>status	body</c> (the body as <c>Wire.Json</c> writes it).
     /// </summary>
+    /// <summary>
+    /// The window's extras as a fixed function of the pane, the Rust check's desk giving the same: two queued rows (one with its 바로 실행,
+    /// one unavailable), the settings record, the Mighty payload with the pane's runs (<see cref="MobileMightySupport.Runs"/> over its saved
+    /// or transcript runs), a status line, one ask target, and the background work and done count of its record.
+    /// </summary>
+    private static MobilePaneExtras Extras(RunSession pane) => new(
+        [new MobileQueuedItem("q-1", "Next request", "here"), new MobileQueuedItem("q-2", "Later 한글", "unavailable", "turn")],
+        Settings: new MobileSettings(true, pane.Model, pane.Settings.PermissionMode, null, "mighty", "cli", "cli",
+            new([new("default", "Default")], [new("manual", "Manual")], null, [new("cli", "CLI")], [new("cli", "cli")])),
+        Mighty: new { style = "cli", styleId = "cli", runs = MobileMightySupport.Runs(MobileMightySupport.SavedRuns(pane)) },
+        StatusLine: new { lines = new[] { new[] { new { text = "main <branch>", fg = "#FFAA00", bold = true } } } },
+        AskTargets: [new MobileAskTarget("codex", "Codex")], AskTarget: "codex",
+        BackgroundWork: PlanCardSupport.MobileBackgroundWork(pane.BackgroundWork, MightyGraphSupport.NewestRequestRun(pane.GraphRuns)),
+        BackgroundDone: PlanCardSupport.MobileBackgroundDone(pane.BackgroundWork));
+
     private static async Task<int> RoutesAsync(string profile, string requests, string output)
     {
         var work = Path.Combine(Path.GetTempPath(), "mighty-routes-parity-" + Guid.NewGuid().ToString("N"));
@@ -89,7 +104,7 @@ internal static class PhoneParity
             foreach (var file in Directory.EnumerateFiles(profile)) File.Copy(file, Path.Combine(work, Path.GetFileName(file)));
             await using var service = new DesktopService(work, null, work);
             await service.InitializeAsync();
-            using var router = new MobileDesktopRouter(service, Path.Combine(work, "mobile"), "Parity", (_, _) => Task.FromResult<object?>(null), _ => new([]))
+            using var router = new MobileDesktopRouter(service, Path.Combine(work, "mobile"), "Parity", (_, _) => Task.FromResult<object?>(null), Extras)
             { AppVersion = "0.0.0", HostId = "host-parity", ScreenShareAvailable = false };
             var lines = new List<string>();
             foreach (var path in File.ReadAllLines(requests).Where(line => line.Length > 0))

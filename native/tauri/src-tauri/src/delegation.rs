@@ -177,7 +177,7 @@ impl DelegationWindow for Window {
 /// C# `DelegatedRunBlockReason`: why the window refuses a run delegation starts in the pane now (the app closing, a manual update or
 /// plugin change refusing the pane's sends, an automatic update of its CLI holding them); None when one may start. Read with the state
 /// locked: it reads the updates' own state and `snapshot`, never `host.view()`.
-fn run_block_reason(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) -> Option<String> {
+pub(crate) fn run_block_reason(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) -> Option<String> {
     if host.closing() {
         return Some(mighty_run::strings::get("remote.error.startFailed"));
     }

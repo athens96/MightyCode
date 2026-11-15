@@ -77,6 +77,11 @@ pub const POLL_STEP: Duration = Duration::from_millis(100);
 pub const MAXIMUM_BODY: usize = 65_536;
 pub const MAXIMUM_CHUNK_BODY: usize = 300 * 1_024;
 
+/// `work` on a blocking thread, its panic the host's 500.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T, MobileError> + Send + 'static) -> Result<T, MobileError> {
+    tokio::task::spawn_blocking(work).await.map_err(|_| MobileError::Failed("the desk's reading stopped".into()))?
+}
+
 /// `ScreenShareAvailability.Extra`: the extra capabilities a host advertises, `screenShare` left out while screen share is off.
 pub fn extra_capabilities(extra: Option<Vec<String>>, available: bool) -> Vec<String> {
     match extra {
@@ -116,11 +121,12 @@ struct Notes {
 struct Inner {
     desk: Arc<dyn PhoneDesk>,
     options: RouterOptions,
-    uploads: MobileUploads,
+    uploads: Arc<MobileUploads>,
+    observing: Mutex<()>,
     sync: Mutex<Notes>,
     moved: AtomicBool,
-    submit_slots: Semaphore,
-    file_slots: Semaphore,
+    submit_slots: Arc<Semaphore>,
+    file_slots: Arc<Semaphore>,
     previews: PreviewSlot,
 }
 
@@ -325,7 +331,7 @@ fn home() -> PathBuf {
 
 impl Router {
     pub fn new(desk: Arc<dyn PhoneDesk>, options: RouterOptions) -> Router {
-        let uploads = MobileUploads::new(&options.uploads);
+        let uploads = Arc::new(MobileUploads::new(&options.uploads));
         Router {
             inner: Arc::new(Inner {
                 desk,
@@ -333,8 +339,9 @@ impl Router {
                 uploads,
                 sync: Mutex::new(Notes::default()),
                 moved: AtomicBool::new(true),
-                submit_slots: Semaphore::new(2),
-                file_slots: Semaphore::new(2),
+                observing: Mutex::new(()),
+                submit_slots: Arc::new(Semaphore::new(2)),
+                file_slots: Arc::new(Semaphore::new(2)),
                 previews: PreviewSlot::new(),
             }),
         }
@@ -349,12 +356,13 @@ impl Router {
         body: Option<Box<RawValue>>,
     ) -> BoxFuture<'static, MobileReply> {
         let inner = self.inner.clone();
-        Box::pin(async move {
+        // A route that panics answers the host's 500 ("Desktop request failed."), as an exception C# does not map does.
+        Box::pin(Unwinding(Box::pin(async move {
             match inner.route(&device.client_id, &method, &path, body.as_deref()).await {
                 Ok(reply) => reply,
                 Err(error) => error_reply(error),
             }
-        })
+        })))
     }
 
     /// `Changed`: something a phone may show moved (a run event, a permission, delegation, an Antigravity card); the panes are read again
@@ -396,6 +404,20 @@ impl Router {
     }
 }
 
+/// A future whose panic becomes [`MobileError::Failed`]'s reply.
+struct Unwinding(BoxFuture<'static, MobileReply>);
+
+impl std::future::Future for Unwinding {
+    type Output = MobileReply;
+
+    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<MobileReply> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.0.as_mut().poll(cx))) {
+            Ok(poll) => poll,
+            Err(_) => std::task::Poll::Ready(error_reply(MobileError::Failed("the route panicked".into()))),
+        }
+    }
+}
+
 impl RequestHandler for Router {
     fn handle(&self, device: MobileDevice, method: String, path: String, body: Option<Box<RawValue>>) -> BoxFuture<'static, MobileReply> {
         self.route(device, method, path, body)
@@ -413,6 +435,11 @@ impl Inner {
 
     /// `Observe`: Err when the pass failed (it is made again at the next call).
     fn observe(&self) -> Result<(), MobileError> {
+        // One pass at a time: a pass asked for while another runs leaves `moved` set for the next call (the running pass may have read
+        // the panes before what moved).
+        let Ok(_pass) = self.observing.try_lock() else {
+            return Ok(());
+        };
         if !self.moved.swap(false, Ordering::SeqCst) {
             return Ok(());
         }
@@ -731,7 +758,7 @@ impl Inner {
         if route.len() >= 4
             && route[1] == "uploads"
             && method == "POST"
-            && let Some(answer) = self.upload(&route, body, device)?
+            && let Some(answer) = self.upload(&route, body, device).await?
         {
             return Ok(answer);
         }
@@ -828,27 +855,33 @@ impl Inner {
         if let Some(id) = &id {
             self.session(id)?;
         }
-        let current = |inner: &Inner| -> Result<i64, MobileError> {
-            inner.observe()?;
-            let notes = inner.notes();
-            Ok(match &id {
-                None => notes.revisions.state(),
-                Some(id) => notes.revisions.session(id),
+        // Each reading of the desk is off the caller's thread (the desk may take the app's locks and read the disk).
+        let current = |inner: Arc<Inner>, id: Option<String>| async move {
+            blocking(move || {
+                inner.observe()?;
+                let notes = inner.notes();
+                Ok(match &id {
+                    None => notes.revisions.state(),
+                    Some(id) => notes.revisions.session(id),
+                })
             })
+            .await
         };
-        if current(self)? <= since && wait > 0 {
+        if current(self.clone(), id.clone()).await? <= since && wait > 0 {
             let until = Instant::now() + Duration::from_secs(wait as u64);
-            while current(self)? <= since && Instant::now() < until {
+            while current(self.clone(), id.clone()).await? <= since && Instant::now() < until {
                 tokio::time::sleep(POLL_STEP).await;
             }
         }
-        match id {
-            None => Ok(reply(200, self.state())),
+        let inner = self.clone();
+        blocking(move || match id {
+            None => Ok(reply(200, inner.state())),
             Some(id) => {
-                let pane = self.session(&id)?;
-                Ok(self.session_reply(&pane, asked, roles))
+                let pane = inner.session(&id)?;
+                Ok(inner.session_reply(&pane, asked, roles))
             }
-        }
+        })
+        .await
     }
 
     async fn app_update(&self, body: Option<&RawValue>, l: &Locale) -> Routed {
@@ -903,7 +936,7 @@ impl Inner {
     }
 
     async fn workspace(
-        &self,
+        self: &Arc<Self>,
         method: &str,
         route: &[&str],
         query: &Query,
@@ -963,9 +996,10 @@ impl Inner {
     }
 
     /// The read-only file routes: the folder and the file are read off the caller's thread two at a time; only an image's decode waits
-    /// for the preview slot, one at a time, a newer preview from the same phone taking an older one's place.
+    /// for the preview slot, one at a time, a newer preview from the same phone taking an older one's place. The work runs on a task of
+    /// its own holding its slots until it ends: a phone that drops the request frees no slot while its reads or its decode still run.
     async fn files(
-        &self,
+        self: &Arc<Self>,
         workspace: &Workspace,
         relative: String,
         listing: bool,
@@ -973,53 +1007,66 @@ impl Inner {
         changes: Option<(Option<String>, Option<String>)>,
         l: &Locale,
     ) -> Routed {
+        let permit = self.file_slots.clone().acquire_owned().await.map_err(|_| MobileError::Failed("closed".into()))?;
+        let (inner, workspace, device, locale) = (self.clone(), workspace.clone(), device.to_string(), *l);
+        tokio::spawn(async move { inner.file_work(permit, workspace, relative, listing, device, changes, locale).await })
+            .await
+            .map_err(|_| MobileError::Failed("the file route stopped".into()))?
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn file_work(
+        self: Arc<Self>,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        workspace: Workspace,
+        relative: String,
+        listing: bool,
+        device: String,
+        changes: Option<(Option<String>, Option<String>)>,
+        locale: Locale,
+    ) -> Routed {
         let root = PathBuf::from(workspace.path());
         let id = workspace.id().to_string();
-        let stage = {
-            let _slot = self.file_slots.acquire().await.map_err(|_| MobileError::Failed("closed".into()))?;
-            if listing {
-                let (id, relative, root, locale) = (id.clone(), relative.clone(), root.clone(), *l);
-                let found = tokio::task::spawn_blocking(move || files::listing(&id, &relative, &root, &locale))
-                    .await
-                    .map_err(|_| MobileError::Failed("listing".into()))??;
-                return Ok(reply(200, files::fitted_listing(found).to_json()));
-            }
-            // A pane of another workspace never lends this one its originals; a delegated child's file and its originals are read in
-            // its worktree folder, where they were captured.
-            let snapshot = self.desk.snapshot();
-            let pane = changes
+        if listing {
+            let found = blocking(move || {
+                let _slot = permit;
+                files::listing(&id, &relative, &root, &locale)
+            })
+            .await?;
+            return Ok(reply(200, files::fitted_listing(found).to_json()));
+        }
+        // A pane of another workspace never lends this one its originals; a delegated child's file and its originals are read in its
+        // worktree folder, where they were captured.
+        let desk = self.desk.clone();
+        let (stage_id, stage_relative, scope) = (id.clone(), relative.clone(), changes.clone());
+        let (mut stage, pane, folder) = blocking(move || {
+            let snapshot = desk.snapshot();
+            let pane = scope
                 .as_ref()
                 .and_then(|(session, _)| session.clone())
-                .filter(|session| snapshot.sessions().iter().any(|s| s.id() == session && s.workspace_id() == id));
-            let folder = pane.as_ref().and_then(|p| self.desk.run_folder(p)).map(PathBuf::from).unwrap_or_else(|| root.clone());
-            let (stage_id, stage_relative, stage_folder, locale) = (id.clone(), relative.clone(), folder.clone(), *l);
-            let mut stage = tokio::task::spawn_blocking(move || {
-                files::prepare(&stage_id, &stage_relative, &stage_folder, mighty_composer::files::file_handles().as_ref(), &locale)
-            })
-            .await
-            .map_err(|_| MobileError::Failed("preview".into()))??;
-            // Only text has changes, worked out in the same two slots.
-            if let Some((_, run)) = &changes
-                && stage.image.is_none()
-                && matches!(stage.preview.kind.as_str(), "source" | "markdown")
-            {
-                let originals = pane.as_ref().and_then(|p| self.desk.originals_run(p, run.as_deref()));
-                let found =
-                    self.desk.file_changes(folder.to_string_lossy().into_owned(), relative.clone(), pane.clone(), originals).await?;
-                stage.preview.changes = found;
-            }
-            stage
-        };
+                .filter(|session| snapshot.sessions().iter().any(|s| s.id() == session && s.workspace_id() == stage_id));
+            let folder = pane.as_ref().and_then(|p| desk.run_folder(p)).map(PathBuf::from).unwrap_or(root);
+            let stage = files::prepare(&stage_id, &stage_relative, &folder, mighty_composer::files::file_handles().as_ref(), &locale)?;
+            Ok((stage, pane, folder))
+        })
+        .await?;
+        // Only text has changes, worked out in the same two slots.
+        if let Some((_, run)) = &changes
+            && stage.image.is_none()
+            && matches!(stage.preview.kind.as_str(), "source" | "markdown")
+        {
+            let originals = pane.as_ref().and_then(|p| self.desk.originals_run(p, run.as_deref()));
+            stage.preview.changes =
+                self.desk.file_changes(folder.to_string_lossy().into_owned(), relative.clone(), pane.clone(), originals).await?;
+        }
+        drop(permit);
         let preview = stage.preview;
         let Some(mut file) = stage.image else { return Ok(reply(200, files::fitted_preview(preview).to_json())) };
-        if !self.previews.acquire(device).await {
-            return Err(files::superseded(l));
+        if !self.previews.acquire(&device).await {
+            return Err(files::superseded(&locale));
         }
         let held = Held(self.previews.clone());
-        let locale = *l;
-        let bytes = tokio::task::spawn_blocking(move || files::image_bytes(&mut file, &locale))
-            .await
-            .map_err(|_| MobileError::Failed("image".into()))??;
+        let bytes = blocking(move || files::image_bytes(&mut file, &locale)).await?;
         let answer = self.image(preview, bytes).await;
         drop(held);
         Ok(answer)
@@ -1057,7 +1104,7 @@ impl Inner {
         }
     }
 
-    fn upload(&self, route: &[&str], body: Option<&RawValue>, device: &str) -> Result<Option<MobileReply>, MobileError> {
+    async fn upload(&self, route: &[&str], body: Option<&RawValue>, device: &str) -> Result<Option<MobileReply>, MobileError> {
         if route.len() == 5
             && route[3] == "chunks"
             && let Some(index) = parse_long(route[4]).filter(|i| i32::try_from(*i).is_ok())
@@ -1068,7 +1115,8 @@ impl Inner {
             if data.len() > CHUNK_SIZE {
                 return Err(request(413, "Chunk exceeds limit."));
             }
-            let received = self.uploads.append(route[2], device, index, &data)?;
+            let (uploads, upload, owner) = (self.uploads.clone(), route[2].to_string(), device.to_string());
+            let received = blocking(move || uploads.append(&upload, &owner, index, &data)).await?;
             return Ok(Some(reply(
                 200,
                 object(|o| {
@@ -1098,7 +1146,15 @@ impl Inner {
         self.desk.action(MobileDesktopAction { session_id: session.into(), action: action.into(), body, attachments: None }).await
     }
 
-    async fn pane_route(&self, method: &str, route: &[&str], query: &Query, body: Option<&RawValue>, device: &str, l: &Locale) -> Routed {
+    async fn pane_route(
+        self: &Arc<Self>,
+        method: &str,
+        route: &[&str],
+        query: &Query,
+        body: Option<&RawValue>,
+        device: &str,
+        l: &Locale,
+    ) -> Routed {
         let pane = self.session(route[2])?;
         let id = pane.id().to_string();
         if method == "GET" && route.len() == 4 && route[3] == "entries" {
@@ -1124,7 +1180,8 @@ impl Inner {
             return Err(request(409, "Use the desktop for this pane."));
         }
         if method == "GET" && route.len() == 4 && route[3] == "commands" && query.is_empty() {
-            return self.commands(&pane, l);
+            let (inner, locale) = (self.clone(), *l);
+            return blocking(move || inner.commands(&pane, &locale)).await;
         }
         if method == "POST" && route.len() == 4 {
             let operation = route[3];
@@ -1229,11 +1286,18 @@ impl Inner {
             }
             if operation == "uploads" {
                 let value = body_object(body, MAXIMUM_BODY)?;
-                let size = value.get("size").and_then(Value::as_i64).filter(|s| i32::try_from(*s).is_ok());
-                let Some(size) = size.filter(|_| value.get("size").is_some_and(|v| v.is_i64() || v.is_u64())) else {
-                    return Err(request(400, "Invalid size."));
+                // C#'s `TryGetInt32`: no size, or a number that is no 32-bit integer, is 400; a size that is no number throws
+                // (`InvalidOperationException`: 409, the pane changed).
+                let size = match value.get("size") {
+                    None => return Err(request(400, "Invalid size.")),
+                    Some(Value::Number(n)) => {
+                        n.as_i64().filter(|s| i32::try_from(*s).is_ok()).ok_or_else(|| request(400, "Invalid size."))?
+                    }
+                    Some(_) => return Err(MobileError::Changed),
                 };
-                let ticket = self.uploads.begin(&id, device, required(&value, "name")?, size)?;
+                let name = required(&value, "name")?.to_string();
+                let (uploads, session, device) = (self.uploads.clone(), id.clone(), device.to_string());
+                let ticket = blocking(move || uploads.begin(&session, &device, &name, size)).await?;
                 return Ok(reply(201, ticket.to_json()));
             }
             if operation == "submit" {
@@ -1251,23 +1315,31 @@ impl Inner {
                 {
                     return Err(request(400, "Unknown submit mode."));
                 }
-                let _slot = self.submit_slots.acquire().await.map_err(|_| MobileError::Failed("closed".into()))?;
-                let claim = self.uploads.claim(&ids, &id, device)?;
-                let spent = Spent { uploads: &self.uploads, claim: &claim, accepted: false };
-                let result = self
-                    .desk
-                    .action(MobileDesktopAction {
-                        session_id: id.clone(),
-                        action: "submit".into(),
-                        body: Value::Object(value),
-                        attachments: Some(claim.attachments.clone()),
-                    })
-                    .await;
-                let mut spent = spent;
-                let result = result?;
-                spent.accepted = true;
-                drop(spent);
-                self.changed();
+                // The slot, the claim and the action on a task of their own: a phone that drops the request neither frees the slot
+                // nor leaves the claim's uploads claimable while the action still runs; the claim is spent only once it was accepted.
+                let permit = self.submit_slots.clone().acquire_owned().await.map_err(|_| MobileError::Failed("closed".into()))?;
+                let (inner, device) = (self.clone(), device.to_string());
+                let result = tokio::spawn(async move {
+                    let _slot = permit;
+                    let (uploads, session, owner) = (inner.uploads.clone(), id.clone(), device);
+                    let claim = blocking(move || uploads.claim(&ids, &session, &owner)).await?;
+                    let result = inner
+                        .desk
+                        .action(MobileDesktopAction {
+                            session_id: id,
+                            action: "submit".into(),
+                            body: Value::Object(value),
+                            attachments: Some(claim.attachments.clone()),
+                        })
+                        .await;
+                    inner.uploads.finish(&claim, result.is_ok());
+                    if result.is_ok() {
+                        inner.changed();
+                    }
+                    result
+                })
+                .await
+                .map_err(|_| MobileError::Failed("the submit stopped".into()))??;
                 return Ok(reply(202, submit_reply(&result)));
             }
             if operation == "setAskTarget" {
@@ -1390,19 +1462,6 @@ impl Inner {
         out.end_array();
         out.end_object();
         Ok(reply(200, out.finish()))
-    }
-}
-
-/// A submit's claim, spent only once the desktop accepted the request (`finally { uploads.Finish(claim, accepted) }`).
-struct Spent<'a> {
-    uploads: &'a MobileUploads,
-    claim: &'a crate::phone::uploads::MobileUploadClaim,
-    accepted: bool,
-}
-
-impl Drop for Spent<'_> {
-    fn drop(&mut self) {
-        self.uploads.finish(self.claim, self.accepted);
     }
 }
 

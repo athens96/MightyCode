@@ -503,6 +503,23 @@ impl PreviewSlot {
 pub const MAXIMUM_DECODE_PIXELS: u64 = 64_000_000;
 pub const MAXIMUM_DECODE_SIDE: u32 = 32_768;
 
+/// The most memory one picture's decode may take (`image::Limits::max_alloc`): a 64-megapixel RGBA picture is about 256 MiB.
+pub const MAXIMUM_DECODE_ALLOC: u64 = 300 * 1024 * 1024;
+
+/// mighty-files' `raster::decode` (the picture turned upright) with the decode's memory capped at [`MAXIMUM_DECODE_ALLOC`].
+fn decode_capped(bytes: &[u8]) -> Option<image::DynamicImage> {
+    use image::ImageDecoder as _;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(MAXIMUM_DECODE_ALLOC);
+    reader.limits(limits);
+    let mut decoder = reader.into_decoder().ok()?;
+    let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut picture = image::DynamicImage::from_decoder(decoder).ok()?;
+    picture.apply_orientation(orientation);
+    Some(picture)
+}
+
 fn undecodable() -> crate::phone::desk::MobileImageResult {
     crate::phone::desk::MobileImageResult { image: None, reason: Some("undecodable".into()) }
 }
@@ -548,7 +565,7 @@ pub fn thumbnail(name: &str, bytes: &[u8], pdf: &dyn PdfRaster) -> crate::phone:
     if (width as u64) * (height as u64) > MAXIMUM_DECODE_PIXELS || width > MAXIMUM_DECODE_SIDE || height > MAXIMUM_DECODE_SIDE {
         return crate::phone::desk::MobileImageResult { image: None, reason: Some("tooLarge".into()) };
     }
-    let Some(picture) = mighty_files::raster::decode(&drawn) else { return undecodable() };
+    let Some(picture) = decode_capped(&drawn) else { return undecodable() };
     let rgba = picture.to_rgba8();
     let opaque = rgba.pixels().all(|p| p.0[3] == 255);
     for edge in THUMBNAIL_LADDER {
