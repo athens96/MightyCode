@@ -9,6 +9,8 @@
 //! - `--print-args <file> [args…]`: writes the arguments it received, NUL-separated, to the file (the `.cmd` argv checks).
 //! - `--print-env <file>`: writes its environment, `NAME=value` entries NUL-separated, to the file.
 //! - `--echo`: copies stdin to stdout.
+//! - no argument at all (W9-B: the app an update helper starts, as `MightyCode.exe` in a test's install folder): writes its own path,
+//!   then its environment, `NAME=value` entries, NUL-separated, to `started.env` beside itself (`.part`, then renamed).
 
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
@@ -18,6 +20,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
+        [] => started_app(),
         ["--long-child", pid_file] => long_child(pid_file),
         ["--fail-child", text] => {
             eprintln!("{text}");
@@ -77,6 +80,16 @@ fn main() {
             std::process::exit(64);
         }
     }
+}
+
+fn started_app() {
+    let own = std::env::current_exe().expect("own path");
+    let mut entries = vec![own.to_string_lossy().into_owned()];
+    entries.extend(std::env::vars_os().map(|(name, value)| format!("{}={}", name.to_string_lossy(), value.to_string_lossy())));
+    let file = own.with_file_name("started.env");
+    let part = own.with_file_name("started.env.part");
+    std::fs::write(&part, entries.join("\0")).expect("started file");
+    std::fs::rename(&part, &file).expect("started file rename");
 }
 
 fn long_child(pid_file: &str) {

@@ -38,7 +38,8 @@ socket2 = { version = "0.6", features = ["all"] }
 # Win32_Graphics_Direct2D_Common, Win32_Graphics_Dxgi_Common, Win32_Graphics_Imaging, Win32_UI_HiDpi: the companion pet drawn with
 # Direct2D and DirectWrite onto its layered window (pet.rs, W8-E). W9 Step 0: Win32_UI_Shell, Win32_UI_Shell_PropertiesSystem: the
 # renamed install's shortcuts (`IShellLinkW`, `IPersistFile`, update.rs, W9-B); Win32_UI_Notifications: the toast activator's
-# `INotificationActivationCallback` (activator.rs, W9-F).
+# `INotificationActivationCallback` (activator.rs, W9-F). W9-B: Win32_Storage_FileSystem, which `IShellLinkW::GetPath` needs (a
+# shortcut's target, update.rs).
 windows = { version = "0.61", features = [
     "Data_Pdf",
     "Data_Xml_Dom",
@@ -52,6 +53,7 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Imaging",
+    "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_WinRT",

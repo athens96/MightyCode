@@ -22,9 +22,23 @@ pub fn write_policy(options: &Options) -> WritePolicy {
 
 /// C# `UserEnvironment.RepairCurrentProcess` (Program.cs:161): an app started from a bare environment (only `SystemRoot`, as an update
 /// helper from before the fix started it) takes the user's own variables back before anything runs — every missing or empty one from
-/// `CreateEnvironmentBlock`, none present overridden — through `std::env::set_var` while no other thread exists yet (it runs first in
-/// `main`, after the exe's other modes). Step 0 stub (W9-B writes it): nothing changes.
-pub fn repair_environment() {}
+/// `CreateEnvironmentBlock` (the platform's `UpdateInstaller::fresh_environment`; none on the Mac), none present overridden (the
+/// decisions are mighty-updates' `app_update::environment`). Returns how many it added.
+pub fn repair_environment() -> usize {
+    use mighty_updates::app_update::environment;
+    let current = |name: &str| std::env::var_os(name).map(|value| value.to_string_lossy().into_owned());
+    if !environment::is_bare(&current) {
+        return 0;
+    }
+    let Some(fresh) = crate::platform::update_installer().fresh_environment() else { return 0 };
+    let missing = environment::missing(&current, &fresh);
+    for (name, value) in &missing {
+        // SAFETY: main.rs calls this first thing after the exe's other modes, before Tauri, the runtime, the log or any port has started
+        // a thread, so nothing else reads or writes the environment while it changes (what `std::env::set_var` asks of its caller).
+        unsafe { std::env::set_var(name, value) };
+    }
+    missing.len()
+}
 
 /// What runs after the arguments and the platform, before the store reads the profile (C# Program.cs:169 `MigrateRenamedIdentifiers`):
 /// RenameMigration for the default profile outside a smoke where the policy writes, the worktree repair handed to a task after start.

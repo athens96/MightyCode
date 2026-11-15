@@ -203,6 +203,21 @@ impl ProcessHost for FakeProcessHost {
         if *lock(&self.refuse_detached) {
             return Err(PlatformError::Refused("the job does not allow breakaway".into()));
         }
+        self.record_detached(request)
+    }
+
+    /// As [`FakeProcessHost::start_detached`], recorded the same, but a job without breakaway ([`FakeProcessHost::refuse_detached`])
+    /// does not refuse it.
+    fn start_detached_or_in_job(&self, request: DetachedRequest) -> Result<u32> {
+        if !request.cwd.is_absolute() || !request.program.is_absolute() {
+            return Err(PlatformError::Invalid("the program and the working folder need absolute paths".into()));
+        }
+        self.record_detached(request)
+    }
+}
+
+impl FakeProcessHost {
+    fn record_detached(&self, request: DetachedRequest) -> Result<u32> {
         lock(&self.detached).push(request);
         let mut next = lock(&self.next_id);
         *next += 1;

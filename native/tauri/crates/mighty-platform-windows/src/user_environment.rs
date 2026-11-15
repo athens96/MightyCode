@@ -3,6 +3,10 @@
 //! only `SystemRoot`; without this the app it starts again — and every CLI, shell and tool the app then runs — would inherit that
 //! bare environment, and tools that need a home folder (Antigravity's `%userprofile% is not defined`, gh, Python installers,
 //! Unreal) fail.
+//!
+//! The Win32 half (W9-B): the block and its parse. The decisions (C# `IsBare`, `Missing`) are mighty-updates'
+//! `app_update::environment`; the app's start repairs itself with them (`src-tauri` `startup::repair_environment`) and the helper
+//! hands the block to the app it starts (`UpdateInstaller::fresh_environment`).
 
 use std::ffi::c_void;
 
@@ -13,24 +17,6 @@ use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken}
 
 use crate::Variables;
 use crate::win::owned;
-
-/// The variables whose absence marks a bare environment (UserEnvironment.cs:15).
-pub const MARKERS: [&str; 3] = ["USERPROFILE", "APPDATA", "LOCALAPPDATA"];
-
-/// True when any marker is missing or empty in `current` (UserEnvironment.cs:18).
-pub fn is_bare(current: impl Fn(&str) -> Option<String>) -> bool {
-    MARKERS.iter().any(|name| current(name).is_none_or(|value| value.is_empty()))
-}
-
-/// What to add to `current` from `fresh` (UserEnvironment.cs:24-25): each fresh variable that is missing or empty now. A variable
-/// the process already has keeps its value, so a launch with its own settings is never overridden.
-pub fn missing(current: impl Fn(&str) -> Option<String>, fresh: &Variables) -> Vec<(String, String)> {
-    fresh
-        .iter()
-        .filter(|(name, value)| !name.is_empty() && !value.is_empty() && current(name).is_none_or(|value| value.is_empty()))
-        .map(|(name, value)| (name.to_string(), value.to_string()))
-        .collect()
-}
 
 /// A `CreateEnvironmentBlock` block (`NAME=value\0…\0\0`) as a case-blind map (UserEnvironment.cs:31-41). Entries without a name
 /// (the drive-letter `=C:=C:\` ones begin with `=`) are left out; a later duplicate wins.
@@ -79,24 +65,4 @@ pub fn fresh() -> Option<Variables> {
     }
     let values = parse(&text);
     (!values.is_empty()).then_some(values)
-}
-
-/// At startup: a process started with a bare environment (by an update helper that predates this fix, or any other launcher that
-/// cleared it) takes the user's missing variables, so what it runs inherits a whole environment (UserEnvironment.cs:76-82).
-/// Returns how many variables were added.
-///
-/// # Safety
-/// It sets this process's environment: call it before any other thread runs (the start of `main`), as `std::env::set_var` needs.
-pub unsafe fn repair_current_process() -> usize {
-    let current = |name: &str| std::env::var(name).ok();
-    if !is_bare(current) {
-        return 0;
-    }
-    let Some(fresh) = fresh() else { return 0 };
-    let missing = missing(current, &fresh);
-    for (name, value) in &missing {
-        // SAFETY: the caller guarantees no other thread reads or writes the environment now.
-        unsafe { std::env::set_var(name, value) };
-    }
-    missing.len()
 }
