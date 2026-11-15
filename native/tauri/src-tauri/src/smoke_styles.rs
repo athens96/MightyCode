@@ -132,7 +132,12 @@ async fn run(host: &Arc<Host>, report: &mut Map<String, Value>) -> Result<(), St
         )
         .await;
     report.insert("sentStyleCommand".into(), json!(sent));
-    until(|| host.view().snapshot.session(&id).is_none_or(|p| p.status() != "running"), 30).await;
+    // The style's run is stopped once its command was seen, so the steps after this one find no Claude run going.
+    if stand_in && let Some(runs) = host.runs() {
+        let _ = runs.service.stop(&id).await;
+    }
+    let settled = until(|| host.view().snapshot.session(&id).is_none_or(|p| p.status() != "running"), 30).await;
+    report.insert("runSettled".into(), json!(settled));
     crate::styles::guided_action(host, &id, "recheck", None).await?;
     let rescanned = until(|| crate::styles::loaded(&id).0 && crate::styles::loaded(&id).2 >= 2, 15).await;
     report.insert("rescanned".into(), json!(rescanned));
