@@ -636,6 +636,10 @@ internal static class Verification
         else { skipped++; Console.WriteLine("SKIP Agent IO real ConPTY process (requires Windows)"); }
         // Agent delegation (Core half): docs/help/content/ko/delegation.md, ported from the Mac's Delegation*Tests.
         await Test("state: a save starts at most every 1.5 s and is never pushed back for ever", StateSaveVerification.TheScheduleKeepsTheDebounceAndTheGapAndNeverWaitsForEver);
+        // Per-pane worktrees (PaneWorktree.cs, docs/devtool-features.md §12).
+        await Test("pane worktree: the decision, the PORT, the note and saved records", PaneWorktreeVerification.PolicyPortsNoteAndRecords);
+        await Test("pane worktree: the copy rules, the list and the pull request page", PaneWorktreeVerification.CopyListAndPullRequest);
+        await Test("pane worktree: merge, commit and merge, undo, status and discard with real git", PaneWorktreeVerification.GitMergeCommitUndoStatusAndDiscard);
         await Test("delegation: child states, events and the only moves between them", DelegationVerification.StatesAndMoves);
         await Test("delegation: reason codes, records on the wire and the request key", DelegationVerification.NamesRecordsAndRequestKey);
         await Test("delegation: the file saves, restores, refuses at 4 MiB and waits out a reader", DelegationVerification.FileStoreSavesRestoresAndRefuses);
@@ -853,6 +857,15 @@ internal static class Verification
         await Test("remote wire: every wire event reads and writes back", RemoteWireFixtureVerification.EveryWireEventReadsAndWritesBack);
         await Test("remote wire: each wire event is refused alone, as the Mac refuses it", RemoteWireFixtureVerification.EachWireEventIsRefusedAloneAsTheMacRefusesIt);
         await Test("remote wire: timestamps, images and pending requests are bounded", RemoteWireFixtureVerification.TimestampsImagesAndPendingRequestsAreBounded);
+        await Test("remote mirror: the index names every route and every file is accounted for", RemoteMirrorVerification.TheIndexNamesEveryRouteAndEveryFileIsAccountedFor);
+        await Test("remote mirror: the samples decode, validate and round-trip", RemoteMirrorVerification.TheSamplesDecodeValidateAndRoundTrip);
+        await Test("remote mirror: a client refuses lists outside the rules", RemoteMirrorVerification.AClientRefusesListsOutsideTheRules);
+        await Test("remote mirror: client ids are the Mac's and stable per connection", RemoteMirrorVerification.ClientIdsAreTheMacsAndStablePerConnection);
+        await Test("remote mirror: details are bounded and revisions move with them", RemoteMirrorVerification.DetailsAreBoundedAndRevisionsMoveWithThem);
+        await Test("remote mirror: mirrors are never saved and only this PC's panes count", RemoteMirrorVerification.MirrorsAreNeverSavedAndOnlyThisPCsPanesCount);
+        await Test("remote mirror: the host serves only shared agent panes", RemoteMirrorVerification.TheHostServesOnlySharedAgentPanes);
+        await Test("remote mirror: a Windows client mirrors a Windows host", RemoteMirrorVerification.AWindowsClientMirrorsAWindowsHost);
+        await Test("remote mirror: an older host stops the mirror only", RemoteMirrorVerification.AnOlderHostStopsTheMirrorOnly);
         await Test("remote client: saved connections keep no key", RemoteClientVerification.SavedConnectionsKeepNoKey);
         await Test("remote client: keys stay in the vault", RemoteClientVerification.KeysStayInTheVault);
         await Test("remote client: addresses parse with the default port", RemoteClientVerification.AddressesParseWithTheDefaultPort);

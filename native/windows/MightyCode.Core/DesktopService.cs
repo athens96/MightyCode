@@ -96,6 +96,8 @@ public sealed partial class DesktopService : IAsyncDisposable
     /// <summary>이번만 허용 / 거부 — the only way a request is ever answered, one request at a time.</summary>
     public void RespondToToolPermission(string sessionId, string requestId, bool allow)
     {
+        // A mirrored pane's request is its host's: the answer goes there (DesktopService.Mirror.cs).
+        if (MirrorReference(sessionId) is { } mirror) { AnswerMirror(sessionId, mirror, requestId, (client, run) => client.MirrorPermissionAsync(mirror.ConnectionId, mirror.HostSessionId, requestId, run, allow)); return; }
         if (RemotePane(sessionId)) { AnswerRemote(sessionId, client => client.RespondToPermissionAsync(sessionId, requestId, allow)); return; }
         local.RespondToToolPermission(sessionId, requestId, allow);
     }
@@ -112,6 +114,7 @@ public sealed partial class DesktopService : IAsyncDisposable
     }
     public void AnswerQuestionnaire(string sessionId, string requestId, IReadOnlyDictionary<string, UserQuestionAnswer> answers)
     {
+        if (MirrorReference(sessionId) is { } mirror) { AnswerMirror(sessionId, mirror, requestId, (client, run) => client.MirrorAnswersAsync(mirror.ConnectionId, mirror.HostSessionId, requestId, run, answers)); return; }
         if (RemotePane(sessionId)) { AnswerRemote(sessionId, client => client.AnswerQuestionsAsync(sessionId, requestId, answers)); return; }
         local.AnswerQuestionnaire(sessionId, requestId, answers);
     }
@@ -121,6 +124,7 @@ public sealed partial class DesktopService : IAsyncDisposable
     /// </summary>
     public PlanRecord? AnswerPlan(string sessionId, string requestId, PlanDecision decision)
     {
+        if (MirrorReference(sessionId) is { } mirror) { AnswerMirror(sessionId, mirror, requestId, (client, run) => client.MirrorPlanAsync(mirror.ConnectionId, mirror.HostSessionId, requestId, run, decision)); return null; }
         if (RemotePane(sessionId)) { AnswerRemote(sessionId, client => client.AnswerPlanAsync(sessionId, requestId, decision)); return null; }
         return local.AnswerPlan(sessionId, requestId, decision);
     }
@@ -151,6 +155,8 @@ public sealed partial class DesktopService : IAsyncDisposable
     public Task RememberCreateLocationAsync(string path) => Snapshot.LastCreateLocation == path ? Task.CompletedTask : UpdateAsync(s => s with { LastCreateLocation = path });
     public async Task RemoveWorkspaceAsync(string id)
     {
+        // A mirror's workspace is its host's, listed while connected: it leaves when the host stops sharing it or the connection goes.
+        if (IsMirrorWorkspace(id)) return;
         // Refused, changing nothing, while delegation has open children or child worktrees not cleaned up there (M/AppStore.swift:627-642).
         if (WorkspaceRemovalRefusal(id) is { } reason) throw new InvalidOperationException(Locale.Get("delegation.workspace.hasChildren", new Dictionary<string, string> { ["code"] = DelegationNames.Of(reason) }));
         foreach (var pane in Snapshot.Sessions.Where(s => s.WorkspaceId == id)) await StopAsync(pane.Id);
@@ -172,19 +178,24 @@ public sealed partial class DesktopService : IAsyncDisposable
             return true;
         }
     }
-    public Task RenameWorkspaceAsync(string id, string name) => UpdateAsync(s => RenameSupport.RenameWorkspace(s, id, name));
-    public Task RenameSessionAsync(string id, string name) => UpdateAsync(s => RenameSupport.RenameSession(s, id, name));
+    // A mirror's workspace and panes carry their host's names: renaming them here changes nothing.
+    public Task RenameWorkspaceAsync(string id, string name) => IsMirrorWorkspace(id) ? Task.CompletedTask : UpdateAsync(s => RenameSupport.RenameWorkspace(s, id, name));
+    public Task RenameSessionAsync(string id, string name) => MirrorReference(id) is not null ? Task.CompletedTask : UpdateAsync(s => RenameSupport.RenameSession(s, id, name));
     public Task SetSessionAutoTitleAsync(string id) => UpdateAsync(s => PaneTitle.SetAutomatic(s, id));
     /// <summary>Applies <paramref name="update"/> under <c>sync</c>: it must never call into RemoteClientService synchronously.</summary>
     public Task UpdateAsync(Func<AppSnapshot, AppSnapshot> update)
     {
-        List<RunSession> closed; Task save;
+        List<RunSession> closed; Task save; string? looking = null;
         lock (sync)
         {
             ObjectDisposedException.ThrowIf(closing, this);
             var next = StateStore.Normalize(update(snapshot), false); var open = next.Sessions.Select(s => s.Id).ToHashSet();
-            closed = snapshot.Sessions.Where(s => !open.Contains(s.Id)).ToList(); snapshot = next; save = QueueSave();
+            closed = snapshot.Sessions.Where(s => !open.Contains(s.Id)).ToList();
+            if (next.ActiveWorkspaceId != snapshot.ActiveWorkspaceId || next.ActiveSessionId != snapshot.ActiveSessionId) looking = next.ActiveWorkspaceId;
+            snapshot = next; save = QueueSave();
         }
+        // Looking at a mirror workspace or one of its panes reads its host at once (M/AppStore+RemoteMirror.swift wakeMirror).
+        if (looking is not null) WakeMirrorFor(looking);
         // A closed pane's file originals go off the caller's (the UI) thread: deleting its folders can take a while.
         foreach (var pane in closed) { ForgetAntigravity(pane.Id); PaneClosed(pane); var id = pane.Id; _ = Task.Run(() => FileOriginals.Forget(id)); }
         return save;
@@ -333,6 +344,8 @@ public sealed partial class DesktopService : IAsyncDisposable
     /// </summary>
     private async Task<string?> Launch(StartRunRequest value, string? titleFrom, bool reach)
     {
+        // A mirrored pane's request is the host pane's next one, as the phone's send (DesktopService.Mirror.cs): nothing runs or changes here.
+        if (MirrorReference(value.SessionId) is not null) { await MirrorSubmitAsync(value.SessionId, value.Input, value.Attachments ?? []); return null; }
         var request = value.Validate(); Route route; string runId; Workspace workspace; var remote = false;
         lock (sync)
         {
@@ -345,13 +358,21 @@ public sealed partial class DesktopService : IAsyncDisposable
             // A delegated child runs only in its own worktree, never in its parent's checkout (M/AppStore.swift:490-491).
             if (DelegationPanes.RunRefusal(pane) is not null) throw new InvalidOperationException(Locale.Get("run.blocked.worktreeMissing"));
             // A resumed conversation continues its checklist (task tools keep their ids).
-            request = request with { PhaseModels = PhaseModelPreferences.Normalize(snapshot.PhaseModels), TodoProgress = request.ResumeId is null ? null : pane.TodoProgress, WorkingFolder = pane.WorkingFolder, DelegationWorktreeRoot = DelegationWorktreeRoot(pane) };
+            request = request with { PhaseModels = PhaseModelPreferences.Normalize(snapshot.PhaseModels), TodoProgress = request.ResumeId is null ? null : pane.TodoProgress, WorkingFolder = pane.Kind == "claude" ? pane.WorkingFolder : null, DelegationWorktreeRoot = DelegationWorktreeRoot(pane),
+                PaneEnvironment = pane.Kind == "claude" && !remote ? pane.PaneWorktree?.Environment(workspace.Path) : null };
             route = new();
             if (!routes.TryAdd(request.SessionId, route)) throw new InvalidOperationException(Locale.Get("run.error.alreadyRunning"));
             runId = DelegationRunBegan(pane);
             snapshot = snapshot with { Sessions = snapshot.Sessions.Select(s => s.Id == request.SessionId ? PaneTitle.Requested(s, request.AntigravityGrant is not null ? "" : titleFrom ?? request.Input) with { SessionUsage = request.ResumeId is null || s.Provider != request.Provider ? null : s.SessionUsage, Provider = request.Provider, CurrentActivity = null, RunTiming = request.Kind == "shell" ? null : AgentRunTiming.Begin() } : s).ToList() };
             var history = request.Input + (request.Attachments is { Count: > 0 } ? "\n\n" + AttachmentSupport.Summary(request.Attachments) : "");
             var asked = RunEvent.Log(request.SessionId, "user", history, request.Kind == "claude" ? request.Provider : null);
+            // A pane worktree's agent is told once, with its first request that is no slash command, where it works and that it
+            // commits its work (PaneWorktreeNote). The transcript keeps the request as sent; only the CLI gets the note.
+            if (!remote && request.Kind == "claude" && pane.PaneWorktree is { } worktreePane && PaneWorktreeNote.Applies(worktreePane, request.Input))
+            {
+                request = request with { Input = PaneWorktreeNote.Attach(worktreePane, request.Input) };
+                snapshot = snapshot with { Sessions = snapshot.Sessions.Select(s => s.Id == request.SessionId && s.PaneWorktree is { } held ? s with { PaneWorktree = held with { NoteGiven = true } } : s).ToList() };
+            }
             // The run's diagram block is named here, so the send can answer with it before the runner's first event (natural submit B5);
             // a remote pane's block is its host's, under the host's own id.
             request = request with { GraphRunId = !remote && request.Kind != "shell" && MightyGraphSupport.Providers.Contains(request.Provider) ? Wire.Id() : null };
@@ -411,6 +432,8 @@ public sealed partial class DesktopService : IAsyncDisposable
     }
     public Task StopAsync(string id)
     {
+        // A mirrored pane runs on its host: the stop goes there.
+        if (MirrorReference(id) is { } mirror) return MirrorStopAsync(mirror);
         Route route; lock (sync) { if (!routes.TryGetValue(id, out route!)) return Task.CompletedTask; route.Cancelled = true; if (!route.Started) return Task.CompletedTask; }
         return RemotePane(id) && Remote is { } client ? client.StopAsync(id) : local.StopAsync(id);
     }
@@ -433,6 +456,7 @@ public sealed partial class DesktopService : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         lock (sync) { if (closing) return; closing = true; }
+        StopMirrorPolls();
         // The client's runs stop first, and whatever that throws never keeps this PC's runs and delegation from shutting down.
         if (Remote is { } client)
             try { await client.DisposeAsync(); } catch (Exception ex) when (ex is not OutOfMemoryException) { System.Diagnostics.Trace.TraceWarning("remote client shutdown: " + ex.GetType().Name); }
