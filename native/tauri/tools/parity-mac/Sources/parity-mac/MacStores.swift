@@ -210,7 +210,8 @@ private func fullCase(local: String, worktree: String, remote: Workspace) -> [St
 
     var s: [String: Any] = ["version": 1, "workspaces": [local1, remote1], "sessions": [claude, child, codex, shell, browser, remotePane]]
     s["activeWorkspaceId"] = w1; s["activeSessionId"] = "pane-claude-1"; s["layout"] = "grid"; s["theme"] = "light"; s["sidebarWidth"] = 300
-    s["paneLayouts"] = [w1: root]; s["paneLayoutModes"] = [w1: "custom"]; s["paneLayoutActiveSessionIds"] = [w1: "pane-claude-1"]
+    s["paneLayouts"] = [w1: root]; // Every workspace's mode, as Swift's normalize always writes them (a workspace left out takes each normalize's own default).
+    s["paneLayoutModes"] = [w1: "custom", remote.id: "tabs"]; s["paneLayoutActiveSessionIds"] = [w1: "pane-claude-1"]
     s["autoUpdateCLIs"] = false; s["autoUpdatePlugins"] = false; s["expandedWorkspaceIds"] = [w1, remote.id]
     let mobile: [String: Any] = ["enabled": true, "relayURL": "wss://relay.example.com", "allowLegacyPhones": false, "directEnabled": false, "directPort": 43140]
     s["mobileRemote"] = mobile

@@ -9,7 +9,8 @@
 //                                                   Owner M-H.
 //   parity-mac state-corpus <out folder>            M-B: snapshots with every field set, as StateRepository saves them
 //                                                   (`<case>.saved.json`) and as JSONEncoder writes them unnormalized
-//                                                   (`<case>.encoded.json`), with the fields no case sets (MacStores.swift).
+//                                                   (`<case>.encoded.json`), with the fields no case sets (MacStores.swift);
+//                                                   exit 3 when one is left unset (a field Swift added) or a value was refused.
 //   parity-mac state-check <folder>                 M-B: each `<case>.rust.json` (what Rust's load and save made of `<case>.json`)
 //                                                   against its original, both read back by StateRepository: every value Swift
 //                                                   reads from the original must read the same from Rust's (exit 1 otherwise).
