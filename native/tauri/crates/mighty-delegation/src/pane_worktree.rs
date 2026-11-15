@@ -780,19 +780,20 @@ impl CopyResult {
 
 /// `IsLink`: a symbolic link, a junction or any other reparse point.
 fn is_link(meta: &std::fs::Metadata) -> bool {
-    if meta.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt as _;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
+    meta.file_type().is_symlink() || reparse_point(meta)
+}
+
+/// `FileAttributes.ReparsePoint` (Windows' junctions, cloud placeholders and the rest); a symbolic link elsewhere is all there is.
+#[cfg(windows)]
+fn reparse_point(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn reparse_point(_meta: &std::fs::Metadata) -> bool {
+    false
 }
 
 /// `Path.Combine(folder, path)` with the entry's `/` the platform's separator.
