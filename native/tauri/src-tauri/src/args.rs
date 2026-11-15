@@ -5,7 +5,8 @@
 //! `--smoke-exit`                 quit when the smoke has its result, exit code 0 when it passed, else 1
 //! `--smoke-out <file>`           where the smoke writes its result (default `<profile>\smoke-result.json`)
 //! `--log-dir <folder>`           the host's logs (default `<profile>\tauri-logs`)
-//! `--remote-debugging-port <n>`  opens WebView2's DevTools protocol on that port (screenshots, inspection)
+//! `--remote-debugging-port <n>`  opens WebView2's DevTools protocol on that port (screenshots, inspection); only in a development
+//!                                build or with `--smoke-test` (any local process could drive the page and the app's IPC through it)
 //! `--allow-state-write`          lets the host write the profile's state (saves, the damaged-file recovery, the legacy copy) as
 //!                                C# does; without it nothing in the profile is written but the logs and the smoke's result
 //! `--read-only`                  W9: writes nothing, whatever the build (startup.rs's write policy; wins over `--allow-state-write`)
@@ -20,8 +21,8 @@
 //! `-Embedding`                   W9-F: COM started the app for a toast's activation (the app starts as usual; COM calls it)
 //! `----AppNotificationActivated:…`  W9-F: a toast left by C#'s Windows App SDK registration; accepted and ignored
 //!
-//! C#'s other rule, a smoke's profile must be empty, is not taken over: `scripts/smoke.ps1` runs the smoke on a seeded demo profile and
-//! `-Profile` on a copy of a real one (W9-H may require it for `--help-capture` and `--perf-scenario`, whose profiles C# seeds itself).
+//! C#'s other rule, a smoke's profile must be empty, holds only for `--help-capture` and `--perf-scenario`, which seed their own (W9-H):
+//! `scripts/smoke.ps1` runs the plain smoke on a seeded demo profile and `-Profile` on a copy of a real one.
 
 use std::path::PathBuf;
 
@@ -60,6 +61,11 @@ fn absolute(flag: &str, value: Option<String>) -> Result<PathBuf, String> {
         return Err(format!("{flag} needs an absolute path."));
     }
     Ok(path)
+}
+
+/// Whether the DevTools port may open (W9 review L9): a development build, or a smoke run in its own profile; never a user's release app.
+fn debugging_port_allowed(debug_build: bool, smoke_test: bool) -> bool {
+    debug_build || smoke_test
 }
 
 pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
@@ -114,11 +120,22 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     if options.smoke_fake_cli.is_some() && options.smoke_real_claude {
         return Err("--smoke-fake-cli and --smoke-real-claude go one at a time.".into());
     }
+    if options.remote_debugging_port.is_some() && !debugging_port_allowed(cfg!(debug_assertions), options.smoke_test) {
+        return Err("--remote-debugging-port works only in a development build or with --smoke-test.".into());
+    }
     if options.smoke_test && options.profile.is_none() {
         return Err("--smoke-test needs --profile.".into());
     }
     if options.profile.as_ref().is_some_and(|p| p.is_file()) {
         return Err("--profile names a file, not a folder.".into());
+    }
+    // C#'s "a smoke needs an empty profile", for the two runs that seed their own (W9-H): the help capture's welcome shot is the empty
+    // profile's first window, and the perf scenario measures only what it made.
+    // A folder that is there but cannot be listed is not known to be empty, so it is refused too.
+    if (options.help_capture || options.perf_scenario)
+        && options.profile.as_ref().is_some_and(|p| p.exists() && std::fs::read_dir(p).map_or(true, |mut entries| entries.next().is_some()))
+    {
+        return Err("The smoke profile must be a new or empty folder.".into());
     }
     if options.help_capture && options.help_language.is_none() {
         options.help_language = Some("ko".into());
@@ -181,5 +198,37 @@ mod tests {
         assert!(parsed(&["----AppNotificationActivated:sessionId=abc"]).is_ok());
         assert!(parsed(&["-embedding"]).is_err(), "COM's switch as COM writes it");
         assert!(parsed(&["--update-helper", "--staged", root]).is_err());
+    }
+
+    /// W9 review L9: the DevTools port opens only in a development build or a smoke run.
+    #[test]
+    fn the_debugging_port_is_a_development_or_smoke_switch() {
+        assert!(debugging_port_allowed(true, false));
+        assert!(debugging_port_allowed(false, true));
+        assert!(!debugging_port_allowed(false, false), "a release app opens no DevTools port");
+    }
+
+    /// W9-H: the help capture and the perf scenario seed their own profile, so it must be new or empty (C# Program.cs:49-50); a plain
+    /// smoke still runs on a seeded one (smoke.ps1).
+    #[test]
+    fn the_help_capture_and_the_perf_scenario_need_an_empty_profile() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("mighty-args-empty-{}-{nanos}", std::process::id()));
+        let missing = root.join("new");
+        let empty = root.join("empty");
+        let seeded = root.join("seeded");
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::create_dir_all(&seeded).unwrap();
+        std::fs::write(seeded.join("workspace-state.json"), "{}").unwrap();
+        let text = |path: &std::path::Path| path.to_string_lossy().into_owned();
+        for folder in [&missing, &empty] {
+            assert!(parsed(&["--help-capture", "--profile", &text(folder)]).is_ok());
+            assert!(parsed(&["--smoke-test", "--perf-scenario", "--profile", &text(folder)]).is_ok());
+        }
+        let refusal = "The smoke profile must be a new or empty folder.";
+        assert_eq!(parsed(&["--help-capture", "--profile", &text(&seeded)]).unwrap_err(), refusal);
+        assert_eq!(parsed(&["--smoke-test", "--perf-scenario", "--profile", &text(&seeded)]).unwrap_err(), refusal);
+        assert!(parsed(&["--smoke-test", "--profile", &text(&seeded)]).is_ok(), "a plain smoke keeps its seeded profile");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

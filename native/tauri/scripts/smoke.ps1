@@ -161,13 +161,36 @@ if ($readOnly) { $arguments += @('--log-dir', (Join-Path $Out 'tauri-logs')) }
 if ($RemoteDebuggingPort -gt 0) { $arguments += @('--remote-debugging-port', "$RemoteDebuggingPort") }
 if ($NativeDump) { $arguments += @('--native-dump', [IO.Path]::GetFullPath($NativeDump)) }
 $watch = [Diagnostics.Stopwatch]::StartNew()
-$process = Start-Process -FilePath $Exe -ArgumentList $arguments -PassThru -Wait -WindowStyle Normal
+# Waits for the app alone (Start-Process -Wait would also wait for every process it left behind, such as a detached git daemon), then
+# lists what of its process tree is still running: anything but its console host fails the run, and is stopped so nothing outlives it.
+$process = Start-Process -FilePath $Exe -ArgumentList $arguments -PassThru -WindowStyle Normal
+$null = $process.Handle  # keeps the exit code readable once it ended
+$process.WaitForExit()
 $watch.Stop()
+function Descendants([int]$parent) {
+    foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$parent" -ErrorAction SilentlyContinue)) {
+        $child
+        Descendants $child.ProcessId
+    }
+}
+Start-Sleep -Seconds 2
+$leftovers = @(Descendants $process.Id | Where-Object { $_.Name -ne 'conhost.exe' })
 $treeAfter = if ($readOnly) { ProfileTree } else { $null }; $userAfter = UserConfig
 $placesAfter = if ($readOnly) { DelegationPlaces } else { $null }
 $remoteAfter = if ($readOnly) { RemotePlaces } else { $null }
 $userChanged = Changed $userBefore $userAfter
 $exitCode = $process.ExitCode
+if ($leftovers.Count -gt 0) {
+    Write-Output "LEFTOVER PROCESSES (the app ended, these of its process tree did not; stopped now):"
+    foreach ($left in $leftovers) {
+        Write-Output ("  {0} {1}: {2}" -f $left.ProcessId, $left.Name, $left.CommandLine)
+        Stop-Process -Id $left.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+    $exitCode = 1
+} else {
+    Write-Output 'leftover processes: none'
+}
+foreach ($console in @(Descendants $process.Id)) { Stop-Process -Id $console.ProcessId -Force -ErrorAction SilentlyContinue }
 
 Write-Output "profile:  $Profile"
 Write-Output "result:   $result"
@@ -215,4 +238,6 @@ if (-not $readOnly) {
         Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "dev.mightycode.tauri\$kind\$name") -ErrorAction SilentlyContinue
     }
 }
+# A run that may not write its profile keeps delegation's fixture under %TEMP% (delegation.rs smoke_root): it goes too.
+Remove-Item -Recurse -Force (Join-Path $env:TEMP ("mighty-delegation-smoke-" + $process.Id)) -ErrorAction SilentlyContinue
 exit $exitCode

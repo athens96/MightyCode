@@ -1,0 +1,531 @@
+{
+  "completed": true,
+  "startedAt": "2026-11-15T19:54:53.0301224+09:00",
+  "uiMode": "web",
+  "aiRequestSent": false,
+  "phases": {
+    "switchTabsMighty": {
+      "ops": [
+        32.6,
+        39.7,
+        40.4,
+        27.2,
+        29.6,
+        16.9,
+        26.3,
+        16,
+        20.1,
+        38.3,
+        17.4,
+        26,
+        18.8,
+        15.1,
+        28,
+        16.5,
+        21.5,
+        24.5,
+        15.1,
+        30.3
+      ],
+      "opMedian": 24.5,
+      "opP95": 39.7,
+      "opMax": 40.4,
+      "wallMs": 9759,
+      "stall": {
+        "ticks": 332,
+        "lateBeyond33SumMs": 537.1,
+        "maxLateMs": 159.2,
+        "over100": 5,
+        "over250": 0
+      },
+      "pageLongTasks": {
+        "observed": true,
+        "count": 0,
+        "sumMs": 0,
+        "maxMs": 0,
+        "over100": 0,
+        "over250": 0
+      },
+      "fullRenders": 21,
+      "tabSwitchesInPlace": 0,
+      "paneAddsInPlace": 0,
+      "capped": 0,
+      "gc": {
+        "allocatedMB": 71.1,
+        "gen0": 8,
+        "gen1": 6,
+        "gen2": 5,
+        "pauseMs": 358.3
+      }
+    },
+    "addPane": {
+      "ops": [
+        118.5,
+        75.6,
+        60.5,
+        58.3,
+        58.1
+      ],
+      "opMedian": 60.5,
+      "opP95": 118.5,
+      "opMax": 118.5,
+      "wallMs": 6344,
+      "stall": {
+        "ticks": 204,
+        "lateBeyond33SumMs": 577.7,
+        "maxLateMs": 188.5,
+        "over100": 4,
+        "over250": 0
+      },
+      "closeOps": [
+        250.3,
+        221.4,
+        125.9,
+        53.1,
+        29.3
+      ],
+      "added": 5,
+      "pageLongTasks": {
+        "observed": true,
+        "count": 0,
+        "sumMs": 0,
+        "maxMs": 0,
+        "over100": 0,
+        "over250": 0
+      },
+      "fullRenders": 11,
+      "tabSwitchesInPlace": 0,
+      "paneAddsInPlace": 0,
+      "capped": 0,
+      "gc": {
+        "allocatedMB": 45.9,
+        "gen0": 6,
+        "gen1": 5,
+        "gen2": 4,
+        "pauseMs": 440.2
+      }
+    },
+    "streamMighty": {
+      "ops": [
+        5.7,
+        1.1,
+        1.3,
+        4.3,
+        1.3,
+        1.4,
+        3.2,
+        2,
+        3.5,
+        5.2,
+        4.8,
+        4.5,
+        2.9,
+        1,
+        4.6
+      ],
+      "opMedian": 3.2,
+      "opP95": 5.7,
+      "opMax": 5.7,
+      "wallMs": 8127,
+      "stall": {
+        "ticks": 291,
+        "lateBeyond33SumMs": 106.8,
+        "maxLateMs": 109.1,
+        "over100": 1,
+        "over250": 0
+      },
+      "events": 200,
+      "eventsLateOverOneGap": 1,
+      "streamMs": 7982,
+      "pageLongTasks": {
+        "observed": true,
+        "count": 0,
+        "sumMs": 0,
+        "maxMs": 0,
+        "over100": 0,
+        "over250": 0
+      },
+      "fullRenders": 0,
+      "tabSwitchesInPlace": 0,
+      "paneAddsInPlace": 0,
+      "capped": 0,
+      "gc": {
+        "allocatedMB": 93.2,
+        "gen0": 6,
+        "gen1": 3,
+        "gen2": 1,
+        "pauseMs": 264.6
+      }
+    },
+    "sendBlockMighty": {
+      "ops": [
+        13.9,
+        16.5,
+        16.8,
+        30000,
+        11.3,
+        18.2,
+        10.9,
+        11.6,
+        22.3,
+        14.4
+      ],
+      "opMedian": 14.4,
+      "opP95": 30000,
+      "opMax": 30000,
+      "wallMs": 30616,
+      "stall": {
+        "ticks": 1118,
+        "lateBeyond33SumMs": 80.6,
+        "maxLateMs": 99.3,
+        "over100": 0,
+        "over250": 0
+      },
+      "sends": 10,
+      "targetMs": 50,
+      "pageLongTasks": {
+        "observed": true,
+        "count": 0,
+        "sumMs": 0,
+        "maxMs": 0,
+        "over100": 0,
+        "over250": 0
+      },
+      "fullRenders": 0,
+      "tabSwitchesInPlace": 0,
+      "paneAddsInPlace": 0,
+      "capped": 1,
+      "gc": {
+        "allocatedMB": 96.2,
+        "gen0": 7,
+        "gen1": 3,
+        "gen2": 1,
+        "pauseMs": 229.7
+      }
+    }
+  },
+  "errors": [
+    "page: capped"
+  ],
+  "synthesizedPanes": 4,
+  "paneCount": 4,
+  "tabCount": 4,
+  "totalLogEntries": 1200,
+  "activePaneLogEntries": 300,
+  "graphRuns": 60,
+  "windowSize": "1424x881 @ 1.00",
+  "perfLog": "C:\\Users\\example\\AppData\\Local\\Temp\\mighty-perf-0\\perf.log",
+  "perfLogSteps": {
+    "setup": {
+      "pane refresh [alloc 0.6 MB]": {
+        "count": 1,
+        "totalMs": 828.5,
+        "maxMs": 828.5
+      },
+      "web mighty [alloc 1.8 MB]": {
+        "count": 1,
+        "totalMs": 171.1,
+        "maxMs": 171.1
+      },
+      "render (every pane) [alloc 1.8 MB]": {
+        "count": 1,
+        "totalMs": 121.1,
+        "maxMs": 121.1
+      },
+      "render (every pane) [alloc 0.0 MB]": {
+        "count": 1,
+        "totalMs": 29.5,
+        "maxMs": 29.5
+      },
+      "web mighty [alloc 0.3 MB]": {
+        "count": 1,
+        "totalMs": 23,
+        "maxMs": 23
+      },
+      "web snapshot [alloc 1.9 MB]": {
+        "count": 1,
+        "totalMs": 20.1,
+        "maxMs": 20.1
+      }
+    },
+    "all": {
+      "pane refresh [alloc 0.6 MB]": {
+        "count": 3,
+        "totalMs": 921.6,
+        "maxMs": 828.5
+      },
+      "render (every pane) [alloc 1.6 MB]": {
+        "count": 9,
+        "totalMs": 415.9,
+        "maxMs": 113.3
+      },
+      "render (every pane) [alloc 1.5 MB]": {
+        "count": 10,
+        "totalMs": 322,
+        "maxMs": 173.2
+      },
+      "web mighty [alloc 1.8 MB]": {
+        "count": 1,
+        "totalMs": 171.1,
+        "maxMs": 171.1
+      },
+      "render (every pane) [alloc 1.8 MB]": {
+        "count": 2,
+        "totalMs": 135.8,
+        "maxMs": 121.1
+      },
+      "pane refresh [alloc 0.2 MB]": {
+        "count": 1,
+        "totalMs": 104,
+        "maxMs": 104
+      },
+      "render (every pane) [alloc 2.1 MB]": {
+        "count": 1,
+        "totalMs": 99.6,
+        "maxMs": 99.6
+      },
+      "render (every pane) [alloc 2.0 MB]": {
+        "count": 2,
+        "totalMs": 78.5,
+        "maxMs": 39.5
+      },
+      "render (every pane) [alloc 1.7 MB]": {
+        "count": 3,
+        "totalMs": 59.8,
+        "maxMs": 24
+      },
+      "pane refresh [alloc 0.5 MB]": {
+        "count": 1,
+        "totalMs": 54,
+        "maxMs": 54
+      },
+      "add pane claude (wall) [alloc 2.1 MB]": {
+        "count": 1,
+        "totalMs": 40.3,
+        "maxMs": 40.3
+      },
+      "render (every pane) [alloc 1.9 MB]": {
+        "count": 2,
+        "totalMs": 34.3,
+        "maxMs": 17.8
+      },
+      "run event status [alloc 0.4 MB]": {
+        "count": 1,
+        "totalMs": 32.1,
+        "maxMs": 32.1
+      },
+      "add pane claude (wall) [alloc 1.8 MB]": {
+        "count": 1,
+        "totalMs": 30.9,
+        "maxMs": 30.9
+      },
+      "render (every pane) [alloc 0.0 MB]": {
+        "count": 1,
+        "totalMs": 29.5,
+        "maxMs": 29.5
+      },
+      "add pane claude (wall) [alloc 2.5 MB]": {
+        "count": 1,
+        "totalMs": 26,
+        "maxMs": 26
+      },
+      "render (every pane) [alloc 2.5 MB]": {
+        "count": 1,
+        "totalMs": 24.6,
+        "maxMs": 24.6
+      },
+      "web mighty [alloc 0.3 MB]": {
+        "count": 1,
+        "totalMs": 23,
+        "maxMs": 23
+      },
+      "add pane claude (wall) [alloc 2.3 MB]": {
+        "count": 1,
+        "totalMs": 22.2,
+        "maxMs": 22.2
+      },
+      "render (every pane) [alloc 2.3 MB]": {
+        "count": 1,
+        "totalMs": 21.1,
+        "maxMs": 21.1
+      },
+      "add pane claude (wall) [alloc 2.4 MB]": {
+        "count": 1,
+        "totalMs": 20.6,
+        "maxMs": 20.6
+      },
+      "web snapshot [alloc 1.9 MB]": {
+        "count": 1,
+        "totalMs": 20.1,
+        "maxMs": 20.1
+      },
+      "render (every pane) [alloc 2.2 MB]": {
+        "count": 1,
+        "totalMs": 19.7,
+        "maxMs": 19.7
+      },
+      "render (every pane) [alloc 2.4 MB]": {
+        "count": 1,
+        "totalMs": 19.3,
+        "maxMs": 19.3
+      },
+      "run event log [alloc 0.0 MB]": {
+        "count": 1,
+        "totalMs": 19.2,
+        "maxMs": 19.2
+      },
+      "pane refresh [alloc 0.3 MB]": {
+        "count": 1,
+        "totalMs": 16.9,
+        "maxMs": 16.9
+      },
+      "pane refresh [alloc 0.8 MB]": {
+        "count": 1,
+        "totalMs": 16.6,
+        "maxMs": 16.6
+      }
+    },
+    "switchTabsMighty": {
+      "render (every pane) [alloc 1.6 MB]": {
+        "count": 9,
+        "totalMs": 415.9,
+        "maxMs": 113.3
+      },
+      "render (every pane) [alloc 1.5 MB]": {
+        "count": 8,
+        "totalMs": 132.3,
+        "maxMs": 21.6
+      },
+      "render (every pane) [alloc 2.1 MB]": {
+        "count": 1,
+        "totalMs": 99.6,
+        "maxMs": 99.6
+      },
+      "pane refresh [alloc 0.6 MB]": {
+        "count": 1,
+        "totalMs": 72.2,
+        "maxMs": 72.2
+      },
+      "pane refresh [alloc 0.5 MB]": {
+        "count": 1,
+        "totalMs": 54,
+        "maxMs": 54
+      },
+      "render (every pane) [alloc 1.7 MB]": {
+        "count": 1,
+        "totalMs": 24,
+        "maxMs": 24
+      },
+      "render (every pane) [alloc 1.9 MB]": {
+        "count": 1,
+        "totalMs": 16.5,
+        "maxMs": 16.5
+      },
+      "render (every pane) [alloc 1.8 MB]": {
+        "count": 1,
+        "totalMs": 14.7,
+        "maxMs": 14.7
+      }
+    },
+    "addPane": {
+      "render (every pane) [alloc 1.5 MB]": {
+        "count": 2,
+        "totalMs": 189.7,
+        "maxMs": 173.2
+      },
+      "render (every pane) [alloc 2.0 MB]": {
+        "count": 2,
+        "totalMs": 78.5,
+        "maxMs": 39.5
+      },
+      "add pane claude (wall) [alloc 2.1 MB]": {
+        "count": 1,
+        "totalMs": 40.3,
+        "maxMs": 40.3
+      },
+      "render (every pane) [alloc 1.7 MB]": {
+        "count": 2,
+        "totalMs": 35.8,
+        "maxMs": 18.7
+      },
+      "add pane claude (wall) [alloc 1.8 MB]": {
+        "count": 1,
+        "totalMs": 30.9,
+        "maxMs": 30.9
+      },
+      "add pane claude (wall) [alloc 2.5 MB]": {
+        "count": 1,
+        "totalMs": 26,
+        "maxMs": 26
+      },
+      "render (every pane) [alloc 2.5 MB]": {
+        "count": 1,
+        "totalMs": 24.6,
+        "maxMs": 24.6
+      },
+      "add pane claude (wall) [alloc 2.3 MB]": {
+        "count": 1,
+        "totalMs": 22.2,
+        "maxMs": 22.2
+      },
+      "render (every pane) [alloc 2.3 MB]": {
+        "count": 1,
+        "totalMs": 21.1,
+        "maxMs": 21.1
+      },
+      "pane refresh [alloc 0.6 MB]": {
+        "count": 1,
+        "totalMs": 20.9,
+        "maxMs": 20.9
+      },
+      "add pane claude (wall) [alloc 2.4 MB]": {
+        "count": 1,
+        "totalMs": 20.6,
+        "maxMs": 20.6
+      },
+      "render (every pane) [alloc 2.2 MB]": {
+        "count": 1,
+        "totalMs": 19.7,
+        "maxMs": 19.7
+      },
+      "render (every pane) [alloc 2.4 MB]": {
+        "count": 1,
+        "totalMs": 19.3,
+        "maxMs": 19.3
+      },
+      "render (every pane) [alloc 1.9 MB]": {
+        "count": 1,
+        "totalMs": 17.8,
+        "maxMs": 17.8
+      },
+      "pane refresh [alloc 0.8 MB]": {
+        "count": 1,
+        "totalMs": 16.6,
+        "maxMs": 16.6
+      }
+    },
+    "streamMighty": {
+      "pane refresh [alloc 0.2 MB]": {
+        "count": 1,
+        "totalMs": 104,
+        "maxMs": 104
+      },
+      "run event status [alloc 0.4 MB]": {
+        "count": 1,
+        "totalMs": 32.1,
+        "maxMs": 32.1
+      },
+      "run event log [alloc 0.0 MB]": {
+        "count": 1,
+        "totalMs": 19.2,
+        "maxMs": 19.2
+      },
+      "pane refresh [alloc 0.3 MB]": {
+        "count": 1,
+        "totalMs": 16.9,
+        "maxMs": 16.9
+      }
+    }
+  },
+  "finishedAt": "2026-11-15T19:55:59.1743928+09:00"
+}
