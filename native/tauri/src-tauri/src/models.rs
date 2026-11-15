@@ -143,6 +143,8 @@ pub async fn reload_runtime(host: &Host) -> bool {
         remember_selections(host, key);
     }
     let next = runs.catalog.get_runtime(true, path.as_deref()).await;
+    // The CLIs were looked for again (after an update, a sign-in or a reset): a sharing host reads them again too.
+    crate::remote::forget_host_runtime(host);
     if host.closing() || RELOAD_REVISION.load(Ordering::SeqCst) != revision || host.view().snapshot.active_workspace_id != workspace_id {
         return false;
     }

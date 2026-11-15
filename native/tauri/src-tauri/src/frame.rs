@@ -402,6 +402,32 @@ pub fn open_workspace_folder(host: &Arc<Host>, path: &Path) -> Result<(), String
     Ok(())
 }
 
+/// C# `DesktopService.OpenRemoteWorkspaceAsync` and the remote page's Open (remote.rs): the host's shared workspace listed (the entry
+/// the store approved now replacing the one it had) with its disclosure open and made active, the dashboard hidden; one with no pane yet
+/// gets a Claude pane.
+pub fn open_remote_workspace(host: &Arc<Host>, workspace: mighty_core::model::Workspace) -> Result<(), String> {
+    let has_panes = {
+        let mut view = host.view();
+        let id = workspace.id().to_string();
+        view.update(|state| {
+            match state.workspaces_mut().iter_mut().find(|w| w.id() == id) {
+                Some(listed) => *listed = workspace.clone(),
+                None => state.workspaces_mut().push(workspace.clone()),
+            }
+            if let Some(expanded) = open_disclosure(state, &id) {
+                state.expanded_workspace_ids = Some(expanded);
+            }
+            state.active_workspace_id = Some(id.clone());
+        })?;
+        view.shows_dashboard = false;
+        view.snapshot.sessions().iter().any(|s| s.workspace_id() == id)
+    };
+    if !has_panes {
+        add_pane(host, "claude", "claude", None, |pane| pane)?;
+    }
+    Ok(())
+}
+
 /// The OS's folder picker, owned by the main window (C# `FolderPicker` initialized with the window); none when nothing was picked.
 pub async fn pick_folder_path(host: &Arc<Host>) -> Option<std::path::PathBuf> {
     use tauri_plugin_dialog::DialogExt;
@@ -582,7 +608,8 @@ async fn add_entry_here(host: &Arc<Host>, entry: &str, group: Option<String>, wo
 async fn add_pane_entry(host: &Arc<Host>, entry: &str, group: Option<String>, workspace: Option<String>) -> Result<(), String> {
     let active = host.view().snapshot.active_workspace_id.clone();
     if entry == "connect" {
-        // Settings › Remote connection is W6/W8's: nothing to open yet.
+        // C# `OpenRemoteSettings`: Settings on its 원격 연결 page (remote.rs).
+        crate::remote::open_settings(host);
         return Ok(());
     }
     if entry == add_pane::OPEN_PROJECT {

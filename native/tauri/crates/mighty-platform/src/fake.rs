@@ -398,11 +398,17 @@ impl PairingStore for MemoryPairing {
 pub struct MemoryClipboard {
     text: Mutex<Option<String>>,
     busy: Mutex<bool>,
+    /// The text now on it went there through `write_secret`.
+    secret: Mutex<bool>,
 }
 
 impl MemoryClipboard {
     pub fn with_text(text: &str) -> MemoryClipboard {
-        MemoryClipboard { text: Mutex::new(Some(text.to_string())), busy: Mutex::new(false) }
+        MemoryClipboard { text: Mutex::new(Some(text.to_string())), busy: Mutex::new(false), secret: Mutex::new(false) }
+    }
+    /// Whether the text now on it was written as a secret.
+    pub fn secret(&self) -> bool {
+        *lock(&self.secret)
     }
     pub fn text(&self) -> Option<String> {
         lock(&self.text).clone()
@@ -424,6 +430,20 @@ impl Clipboard for MemoryClipboard {
             return Err(PlatformError::Refused("the clipboard is in use".into()));
         }
         *lock(&self.text) = Some(text.to_string());
+        *lock(&self.secret) = false;
+        Ok(())
+    }
+    fn write_secret(&self, text: &str) -> Result<()> {
+        self.write_text(text)?;
+        *lock(&self.secret) = true;
+        Ok(())
+    }
+    fn clear(&self) -> Result<()> {
+        if *lock(&self.busy) {
+            return Err(PlatformError::Refused("the clipboard is in use".into()));
+        }
+        *lock(&self.text) = None;
+        *lock(&self.secret) = false;
         Ok(())
     }
 }

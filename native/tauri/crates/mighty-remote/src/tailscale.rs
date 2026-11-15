@@ -74,7 +74,7 @@ fn trim_brackets(address: &str) -> &str {
 }
 
 /// `TailscaleAddresses.IPv4`: four dotted decimal parts, 0-255, no leading zeros (the strict form).
-fn ipv4(value: &str) -> Option<[u8; 4]> {
+pub(crate) fn ipv4(value: &str) -> Option<[u8; 4]> {
     let parts: Vec<&str> = value.split('.').collect();
     if parts.len() != 4 {
         return None;

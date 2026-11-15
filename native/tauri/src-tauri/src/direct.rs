@@ -357,6 +357,30 @@ pub fn firewall_update_pressed(host: &Arc<Host>) {
     });
 }
 
+/// 원격 연결's add button (C# MainWindow.RemoteWorkspaces.cs:277): the unelevated query again while the rule could not be read, else
+/// the rule added or updated in place for the ports in use now.
+pub fn firewall_add_pressed(host: &Arc<Host>) {
+    let host = host.clone();
+    crate::native::act(&host.clone(), async move {
+        let unknown = direct().rule == FirewallRule::Unreadable;
+        if unknown {
+            recheck_firewall_rule(&host).await;
+        } else {
+            change_firewall_rule(&host, true).await;
+        }
+        Ok(())
+    });
+}
+
+/// 원격 연결's remove button: the rule taken away (it closes the phone's direct port and the sharing port both).
+pub fn firewall_remove_pressed(host: &Arc<Host>) {
+    let host = host.clone();
+    crate::native::act(&host.clone(), async move {
+        change_firewall_rule(&host, false).await;
+        Ok(())
+    });
+}
+
 /// The smoke's seams (C# `RunMobileDirectSmoke` sets `firewallRunner` and `mobileDirectStatusOverride`, and puts both back in its
 /// `finally`): a recorder for the rule, a fixed status; `None` puts each back and forgets the rule's state.
 pub fn smoke_use_firewall(firewall: Option<Arc<dyn Firewall>>, status: Option<MobileDirectStatus>) {

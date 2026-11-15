@@ -36,21 +36,12 @@ pub enum Pending {
     Setup,
     /// `BackgroundNoticeRuns.AwaitsNotice` (graph tracker, W3).
     AwaitsNotice,
-    /// `RemoteWorkspaceFeatures.BlockedReason` for a remote workspace's pane (W8).
-    RemoteBlock,
     /// `RefreshStyles`/`WebGuided`: the style row and the guide panel (style engine, frozen, W9).
     Style,
 }
 
-pub const PENDING: [Pending; 7] = [
-    Pending::Runtime,
-    Pending::Attention,
-    Pending::CliMaintenance,
-    Pending::Setup,
-    Pending::AwaitsNotice,
-    Pending::RemoteBlock,
-    Pending::Style,
-];
+pub const PENDING: [Pending; 6] =
+    [Pending::Runtime, Pending::Attention, Pending::CliMaintenance, Pending::Setup, Pending::AwaitsNotice, Pending::Style];
 
 /// An item delegation holds for the pane (C# `DelegationDeliveryItem` as the composer shows it).
 #[derive(Debug, Clone, PartialEq, Eq)]

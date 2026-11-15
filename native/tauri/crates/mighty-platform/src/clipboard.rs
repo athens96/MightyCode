@@ -10,4 +10,15 @@ pub trait Clipboard: Send + Sync {
     fn read_text(&self) -> Result<Option<String>>;
     /// Replaces the clipboard's content with `text`.
     fn write_text(&self, text: &str) -> Result<()>;
+    /// Replaces the clipboard's content with a secret `text` (a remote workspace's connection key, W8): kept out of clipboard history
+    /// and the cloud clipboard and hidden from clipboard monitors (Windows' `ExcludeClipboardContentFromMonitorProcessing`,
+    /// `CanIncludeInClipboardHistory=0`, `CanUploadToCloudClipboard=0`). Where the OS has no such form it is refused, never written plain.
+    fn write_secret(&self, text: &str) -> Result<()> {
+        let _ = text;
+        Err(crate::PlatformError::Unsupported { port: "Clipboard", operation: "write_secret" })
+    }
+    /// Empties the clipboard (C# `Clipboard.Clear()`): nothing on it afterwards, not even empty text.
+    fn clear(&self) -> Result<()> {
+        Err(crate::PlatformError::Unsupported { port: "Clipboard", operation: "clear" })
+    }
 }

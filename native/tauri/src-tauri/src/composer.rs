@@ -1222,6 +1222,8 @@ pub(crate) fn run_now_rows(host: &Host, view: &mut View, id: &str) -> Vec<(Strin
         ending_run: delegation.ending_run,
         background_update_holds: crate::updates::holds(host, &view.snapshot, &pane),
         manual_update_reason: crate::updates::manual_update(host, &view.snapshot, &pane),
+        // The host's word on a remote pane (C# `RunBlockReason`), as panes.rs reads it: the queue's run-now waits on it too.
+        remote_block: crate::remote::blocked_reason(host, &view.snapshot, &pane),
         ..mighty_composer::composer::WindowRules::default()
     };
     let Some(ui) = view.panes.get_mut(id) else { return vec![] };
