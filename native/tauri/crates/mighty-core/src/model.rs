@@ -292,6 +292,54 @@ impl AppSnapshot {
     pub fn workspaces_mut(&mut self) -> &mut Vec<Workspace> {
         self.workspaces.get_or_insert_with(Vec::new)
     }
+
+    /// Whether the state holds anything of the remote mirror (a mirror workspace or a mirrored pane).
+    pub fn has_mirrors(&self) -> bool {
+        self.workspaces().iter().any(|w| w.remote.as_ref().is_some_and(|r| r.mirror)) || self.sessions().iter().any(|s| s.mirror.is_some())
+    }
+
+    /// C# `RemoteMirrorSnapshots.WithoutMirrors`: the snapshot as it is saved, without the remote mirror's workspaces, their panes and
+    /// what refers to them (they live only while connected; the host's transcripts never land in this app's state file). A snapshot
+    /// without mirrors comes back as it is.
+    pub fn without_mirrors(&self) -> AppSnapshot {
+        if !self.has_mirrors() {
+            return self.clone();
+        }
+        let mirrored: std::collections::HashSet<&str> =
+            self.workspaces().iter().filter(|w| w.remote.as_ref().is_some_and(|r| r.mirror)).map(Workspace::id).collect();
+        let gone: std::collections::HashSet<&str> =
+            self.sessions().iter().filter(|s| s.mirror.is_some() || mirrored.contains(s.workspace_id())).map(|s| s.id()).collect();
+        let workspaces: Vec<Workspace> = self.workspaces().iter().filter(|w| !mirrored.contains(w.id())).cloned().collect();
+        fn without<T: Clone>(map: Option<&IndexMap<String, T>>, mirrored: &std::collections::HashSet<&str>) -> Option<IndexMap<String, T>> {
+            map.map(|m| m.iter().filter(|(k, _)| !mirrored.contains(k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect())
+        }
+        AppSnapshot {
+            sessions: Some(self.sessions().iter().filter(|s| !gone.contains(s.id())).cloned().collect()),
+            pane_layouts: without(self.pane_layouts.as_ref(), &mirrored),
+            pane_layout_modes: without(self.pane_layout_modes.as_ref(), &mirrored),
+            pane_layout_active_session_ids: without(self.pane_layout_active_session_ids.as_ref(), &mirrored),
+            expanded_workspace_ids: self
+                .expanded_workspace_ids
+                .as_ref()
+                .map(|ids| ids.iter().filter(|id| !mirrored.contains(id.as_str())).cloned().collect()),
+            active_workspace_id: match &self.active_workspace_id {
+                Some(active) if mirrored.contains(active.as_str()) => workspaces.first().map(|w| w.id().to_string()),
+                other => other.clone(),
+            },
+            active_session_id: match &self.active_session_id {
+                Some(pane) if gone.contains(pane.as_str()) => None,
+                other => other.clone(),
+            },
+            workspaces: Some(workspaces),
+            ..self.clone()
+        }
+    }
+
+    /// C# `RemoteMirrorSnapshots.OwnSessionCount`: this PC's own panes, the ones the 128-pane limit (and the state file) counts; mirrored
+    /// panes are the host's.
+    pub fn own_session_count(&self) -> usize {
+        self.sessions().iter().filter(|s| s.mirror.is_none()).count()
+    }
 }
 
 // ── Workspace ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -368,6 +416,10 @@ pub struct RemoteWorkspaceReference {
     pub workspace_id: Option<String>,
     pub host_name: Option<String>,
     pub version: i32,
+    /// `[JsonIgnore] Mirror`: a workspace the remote mirror shows (docs/remote-workspaces.md "그 컴퓨터의 창 그대로"): its panes are the
+    /// host's own, read from its list. Never read or written: such a workspace lives only while the app runs
+    /// ([`AppSnapshot::without_mirrors`]).
+    pub mirror: bool,
 }
 
 impl Wire for RemoteWorkspaceReference {
@@ -378,6 +430,7 @@ impl Wire for RemoteWorkspaceReference {
             workspace_id: json::opt_string(o.get("workspaceId"))?,
             host_name: json::opt_string(o.get("hostName"))?,
             version: json::int32(o.get("version"), 2)?,
+            mirror: false,
         })
     }
 
@@ -649,6 +702,18 @@ pub struct RunSession {
     pub ask_target: Option<String>,
     /// `shellRuns` on the wire.
     pub shell_block_runs: Option<Vec<ShellBlockRun>>,
+    /// `[JsonIgnore] Mirror`: the host pane a remote mirror pane shows (C# `RemoteMirrorReference`, W9-J): never read, written or saved.
+    pub mirror: Option<MirrorReference>,
+}
+
+/// C# `RemoteMirrorReference(ConnectionId, HostSessionId, HostWorkspaceId, HostName)`: what ties a client pane to the host pane it
+/// mirrors. Never saved: mirrored panes live only while the app runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirrorReference {
+    pub connection_id: String,
+    pub host_session_id: String,
+    pub host_workspace_id: String,
+    pub host_name: String,
 }
 
 impl Default for RunSession {
@@ -691,6 +756,7 @@ impl Default for RunSession {
             working_folder: None,
             ask_target: None,
             shell_block_runs: None,
+            mirror: None,
         }
     }
 }
@@ -771,6 +837,7 @@ impl Wire for RunSession {
             working_folder: lenient_string(o.get("workingFolder")),
             ask_target: lenient_string(o.get("askTarget")),
             shell_block_runs: lenient_list(o.get("shellRuns")),
+            mirror: None,
         })
     }
 

@@ -785,6 +785,7 @@ mod real {
                 workspace_id: Some("w".into()),
                 host_name: Some("host".into()),
                 version: 2,
+                mirror: false,
             }),
             ..Workspace::default()
         };

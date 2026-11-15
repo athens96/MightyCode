@@ -165,6 +165,8 @@ pub(crate) struct Gate {
     pub jobs: HashMap<String, runs::Job>,
     /// The Antigravity cards this host's runs reported, by card id, with when (for a day, the newest 128).
     pub reported_rules: HashMap<String, (HashSet<String>, Duration)>,
+    /// The app's panes for the remote mirror (W9-J, `remote::mirror::host`); None answers its routes 404.
+    pub mirror: Option<Arc<dyn crate::remote::mirror::host::MirrorHost>>,
 }
 
 pub(crate) struct HostInner {
@@ -219,6 +221,7 @@ impl RemoteHost {
                 servers: vec![],
                 jobs: HashMap::new(),
                 reported_rules: HashMap::new(),
+                mirror: None,
             }),
             announcing: Mutex::new(()),
             host_id: wire::new_id(),
@@ -601,6 +604,10 @@ impl RemoteHost {
         if request.method == "GET" && route == ["info"] && query.is_empty() {
             return self.info(revision).await;
         }
+        // The remote mirror's routes (W9-J, `remote::mirror::host`).
+        if route[0] == "mirror" {
+            return self.serve_mirror(request, &route[1..], query, revision).await;
+        }
         self.serve_runs(request, &route, query, revision).await
     }
 
@@ -663,7 +670,7 @@ enum StartFailure {
 }
 
 /// `BodyLimit(head, key, allowLoopback)`: how much body is read, decided from the head before any of it: none without the key (the
-/// head alone gets its 401), the larger attachment body only for an authenticated run request.
+/// head alone gets its 401), the larger attachment body only for an authenticated run request or mirror send.
 pub fn body_limit(head: &HttpRequest, key: &str, allow_loopback: bool) -> usize {
     if head.headers.contains_key("origin")
         || !peer_allowed(&head.remote_address, allow_loopback)
@@ -672,7 +679,10 @@ pub fn body_limit(head: &HttpRequest, key: &str, allow_loopback: bool) -> usize 
     {
         return 0;
     }
-    if head.method == "POST" && head.target == format!("{}runs", protocol::PATH_PREFIX) {
+    // A run's start and the mirror's send (`mirror::routes::is_submit`) may bring attachments.
+    if head.method == "POST"
+        && (head.target == format!("{}runs", protocol::PATH_PREFIX) || crate::remote::mirror::routes::is_submit(&head.target))
+    {
         mighty_run::attachments::MAXIMUM_REQUEST_BYTES
     } else {
         protocol::MAXIMUM_REQUEST_BYTES

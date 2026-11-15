@@ -766,6 +766,7 @@ fn mobile_push_the_panes_are_projected_as_the_mac_projects_them() {
             workspace_id: Some("w".into()),
             host_name: Some("other PC".into()),
             version: 2,
+            mirror: false,
         }),
         ..Workspace::default()
     };

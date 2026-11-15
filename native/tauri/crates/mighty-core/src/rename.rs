@@ -69,6 +69,10 @@ pub fn messages(value: &str, locale: &Locale) -> Vec<String> {
 pub fn rename_workspace(snapshot: &AppSnapshot, workspace_id: &str, name: &str, locale: &Locale) -> Result<AppSnapshot, String> {
     let name = display_name(name).ok_or_else(|| locale.get(strings::ERROR_TOO_LONG))?;
     let at = snapshot.workspaces().iter().position(|w| w.id() == workspace_id).ok_or_else(|| locale.get(strings::ERROR_NOT_FOUND))?;
+    // A mirror's workspace carries its host's name: renaming it here changes nothing (W9-J).
+    if snapshot.workspaces()[at].remote.as_ref().is_some_and(|r| r.mirror) {
+        return Ok(snapshot.clone());
+    }
     let mut next = snapshot.clone();
     next.workspaces_mut()[at].name = Some(name);
     Ok(next)
@@ -78,6 +82,10 @@ pub fn rename_workspace(snapshot: &AppSnapshot, workspace_id: &str, name: &str, 
 pub fn rename_session(snapshot: &AppSnapshot, session_id: &str, name: &str, locale: &Locale) -> Result<AppSnapshot, String> {
     let name = display_name(name).ok_or_else(|| locale.get(strings::ERROR_TOO_LONG))?;
     let at = snapshot.sessions().iter().position(|s| s.id() == session_id).ok_or_else(|| locale.get(strings::ERROR_NOT_FOUND))?;
+    // A mirrored pane carries its host's name: renaming it here changes nothing (W9-J).
+    if snapshot.sessions()[at].mirror.is_some() {
+        return Ok(snapshot.clone());
+    }
     let mut next = snapshot.clone();
     let pane = &mut next.sessions_mut()[at];
     *pane = Arc::new(RunSession { title: Some(name), title_mode: Some(FIXED.into()), ..(**pane).clone() });

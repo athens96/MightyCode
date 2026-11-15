@@ -408,6 +408,45 @@ pub struct PaneInfo {
     pub activity_error: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dash_wait: Option<String>,
+    /// Another computer's pane (the remote mirror, W9-J): its strip's words (C# `WebMirrorStrip`); the host fills it
+    /// (src-tauri mirror.rs), None for any other pane.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mirror: Option<MirrorStrip>,
+}
+
+/// C# `WebMirrorStrip` (M/RemoteMirrorViews.swift `MirrorPaneBanner`): the strip over a mirrored pane, "원격 창 · ● {host}에서 실행 중 ·
+/// {state}", the host pane's branch and its queue.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MirrorStrip {
+    pub badge: String,
+    pub state: String,
+    pub tone: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queued: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub queued_help: Option<String>,
+    pub help: String,
+}
+
+/// C# `WebRemoteServers`' rows (M/AppStore+RemoteMirror.swift `remoteServerGroups`): one server the sidebar lists under this PC's own
+/// workspaces, a saved connection or one a remote workspace still names.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteServer {
+    pub id: String,
+    /// "원격 · {name}".
+    pub title: String,
+    /// "{address} · {state}".
+    pub line: String,
+    pub state: String,
+    pub tone: &'static str,
+    pub connected: bool,
+    /// A saved connection (one that can be connected or disconnected from here).
+    pub known: bool,
+    pub help: String,
 }
 
 /// C# `MainWindow.WebPaneInfo`.
@@ -444,6 +483,7 @@ pub fn pane_info(locale: &Locale, s: &RunSession, attention: Attention, now: Dat
         activity: if s.status() == "running" { card.last_activity.clone() } else { None },
         activity_error: card.activity_is_error,
         dash_wait: (attention.total() > 0).then(|| attention_word(locale, attention)),
+        mirror: None,
     }
 }
 
@@ -892,6 +932,11 @@ pub struct SidebarWorkspace {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote_host: Option<String>,
     pub local: bool,
+    /// The connection a remote workspace runs through: it is listed under that server's header (W9-J).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    /// A remote mirror's workspace: the host's own, named and shared there (W9-J).
+    pub mirror: bool,
     pub counts: Counts,
     pub expanded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1065,6 +1110,9 @@ pub struct Status {
     pub machine: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote: Option<bool>,
+    /// While a mirror workspace is shown: "원격 · {host}에서 실행 중 · {state}" (W9-J; the host fills it, src-tauri mirror.rs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mirror: Option<String>,
     pub panes: String,
     pub running: String,
     pub update_help: String,
@@ -1085,6 +1133,9 @@ pub struct ShellModel {
     pub panes: Vec<PaneInfo>,
     pub entry: Counts,
     pub workspaces: Vec<SidebarWorkspace>,
+    /// The servers whose workspaces the sidebar lists under this PC's own (C# `WebRemoteServers`, W9-J; the host fills them, src-tauri
+    /// mirror.rs).
+    pub servers: Vec<RemoteServer>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub header: Option<Header>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1309,8 +1360,11 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
                 id: w.id().into(),
                 name: w.name().into(),
                 path: w.path().into(),
-                remote_host: w.remote.as_ref().map(|r| r.host_name.clone().unwrap_or_default()),
+                // A mirror workspace sits under its server's header and carries no host line of its own.
+                remote_host: w.remote.as_ref().filter(|r| !r.mirror).map(|r| r.host_name.clone().unwrap_or_default()),
                 local: w.remote.is_none(),
+                server: w.remote.as_ref().and_then(|r| r.connection_id.clone()),
+                mirror: w.remote.as_ref().is_some_and(|r| r.mirror),
                 counts: badges(sessions.iter().copied().filter(|s| s.workspace_id() == w.id()), &attention),
                 expanded: is_open,
                 items: is_open.then(|| sidebar_items(locale, state, w.id(), context.children, &attention)),
@@ -1369,6 +1423,7 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
         panes: sessions.iter().map(|s| pane_info(locale, s, attention(s.id()), now)).collect(),
         entry: badges(sessions.iter().copied(), &attention),
         workspaces,
+        servers: vec![],
         header,
         layout,
         error: context.error.clone().filter(|e| !e.is_empty()),
@@ -1376,6 +1431,7 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
         status: Status {
             machine,
             remote: active.and_then(|w| w.remote.as_ref().map(|_| connection(w).is_some_and(|c| c.connected))),
+            mirror: None,
             panes: locale.get_with("window.status.paneCount", &[("count", &in_active.to_string())]),
             running: locale.get_with("window.status.runningCount", &[("count", &running.to_string())]),
             update_help: locale.get("window.status.updateBadgeHelp"),

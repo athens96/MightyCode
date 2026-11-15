@@ -503,6 +503,7 @@ impl Store {
                 workspace_id: Some(host_workspace_id.into()),
                 host_name: Some(host),
                 version: 2,
+                mirror: false,
             }),
         };
         self.approved.insert(item.id().to_string(), item.clone());
@@ -515,7 +516,8 @@ impl Store {
             return Err(StateError::NotLoaded);
         }
         let (normalized, encoded) = {
-            let normalized = normalize::normalize(snapshot, false).map_err(state_error)?;
+            // The remote mirror's workspaces and panes are another computer's, held while connected: never written.
+            let normalized = normalize::normalize(&snapshot.without_mirrors(), false).map_err(state_error)?;
             for workspace in normalized.workspaces() {
                 match self.approved.get(workspace.id()) {
                     Some(original) if original.path == workspace.path && original.remote == workspace.remote => {}

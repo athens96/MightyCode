@@ -13,7 +13,7 @@
 //! What C# keeps in a `ConditionalWeakTable` (a pane normalized before is taken as it is) is a cache of a result this computes
 //! again: normalizing a normalized pane with at least the budget it was made with gives the same pane.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -1291,6 +1291,10 @@ const LAYOUTS: [&str; 5] = ["grid", "columns", "focus", "tabs", "custom"];
 const SETTINGS_PANES: [&str; 9] = ["general", "models", "styles", "tools", "cli", "mobile", "remote", "companion", "about"];
 /// `TranscriptRetention.MaximumEntries`.
 pub const MAXIMUM_ENTRIES: usize = 400;
+/// The remote mirror's workspaces held at most (C# `RemoteProtocol.MaximumConnections * RemoteProtocol.MaximumSharedWorkspaces`).
+pub const MAXIMUM_MIRROR_WORKSPACES: usize = 16 * 64;
+/// The remote mirror's panes held at most (C# `RemoteProtocol.MaximumConnections * RemoteMirrorProtocol.MaximumSessions`).
+pub const MAXIMUM_MIRROR_SESSIONS: usize = 16 * 128;
 
 /// `FilePaneKind.IsFilePane`, `WorkMapPaneKind.IsWorkMap`, `AgentIOPaneKind.IsAgentIO`.
 pub fn is_files(kind: &str) -> bool {
@@ -1460,12 +1464,22 @@ pub fn normalize(value: &AppSnapshot, restoring: bool) -> R<AppSnapshot> {
     }
     let phase = phase_models(value.phase_models.as_ref());
     let mut seen = HashSet::new();
+    // The remote mirror's workspaces (W9-J) are held beside this PC's 64, as many as its connections may share (16 × 64).
+    let (mut own_workspaces, mut mirror_workspaces) = (0usize, 0usize);
     let workspaces: Vec<Workspace> = value
         .workspaces()
         .iter()
         .filter(|w| valid_workspace(w))
         .filter(|w| seen.insert(w.id().to_string()))
-        .take(64)
+        .filter(|w| {
+            if w.remote.as_ref().is_some_and(|r| r.mirror) {
+                mirror_workspaces += 1;
+                mirror_workspaces <= MAXIMUM_MIRROR_WORKSPACES
+            } else {
+                own_workspaces += 1;
+                own_workspaces <= 64
+            }
+        })
         .map(|w| Workspace {
             name: Some(wire::clean(w.name.as_deref().unwrap_or(""), 120)),
             remote: w.remote.as_ref().map(|r| crate::model::RemoteWorkspaceReference {
@@ -1480,7 +1494,7 @@ pub fn normalize(value: &AppSnapshot, restoring: bool) -> R<AppSnapshot> {
     let mut budget = Budget { text: 2 * 1024 * 1024 };
     let all = value.sessions();
     let mut seen = HashSet::new();
-    let mut sessions: Vec<Arc<RunSession>> = vec![];
+    let mut listed: Vec<&Arc<RunSession>> = vec![];
     for s in all {
         let kind = s.kind();
         let keep = is_identifier(s.id.as_deref())
@@ -1500,11 +1514,24 @@ pub fn normalize(value: &AppSnapshot, restoring: bool) -> R<AppSnapshot> {
         if !keep || !seen.insert(s.id().to_string()) {
             continue;
         }
-        if sessions.len() == layout::MAXIMUM_SESSIONS {
-            break;
-        }
-        sessions.push(Arc::new(normalize_session(s, restoring, &remote_ids, &mut budget)?));
+        listed.push(s);
     }
+    // This PC's 128 panes take the text budget first; the remote mirror's panes (the host's, bounded there) are held beside them with a
+    // budget of their own, so a connected host's transcripts never cut this PC's. Only a mirror pane of a mirror workspace is one.
+    let mirror_ids: HashSet<&str> = workspaces.iter().filter(|w| w.remote.as_ref().is_some_and(|r| r.mirror)).map(|w| w.id()).collect();
+    let mut normalized: HashMap<String, Arc<RunSession>> = HashMap::new();
+    for s in listed.iter().filter(|s| s.mirror.is_none() && !mirror_ids.contains(s.workspace_id())).take(layout::MAXIMUM_SESSIONS) {
+        normalized.insert(s.id().to_string(), Arc::new(normalize_session(s, restoring, &remote_ids, &mut budget)?));
+    }
+    let mut mirror_budget = Budget { text: 16 * 1024 * 1024 };
+    for s in listed
+        .iter()
+        .filter(|s| s.mirror.is_some() && mirror_ids.contains(s.workspace_id()) && s.kind() == "claude")
+        .take(MAXIMUM_MIRROR_SESSIONS)
+    {
+        normalized.insert(s.id().to_string(), Arc::new(normalize_session(s, restoring, &remote_ids, &mut mirror_budget)?));
+    }
+    let sessions: Vec<Arc<RunSession>> = listed.iter().filter_map(|s| normalized.remove(s.id())).collect();
     let workspace_id = match &value.active_workspace_id {
         Some(id) if ids.contains(id) => Some(id.clone()),
         _ => workspaces.first().map(|w| w.id().to_string()),

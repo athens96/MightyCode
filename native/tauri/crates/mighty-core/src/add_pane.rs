@@ -49,11 +49,16 @@ pub fn is_local_only(provider: &str) -> bool {
 /// `RemoteWorkspaceFeatures.AddPaneEntries`: a remote workspace's menu offers its agents, a remote command and the three ways to add
 /// a workspace.
 pub fn entries_for(workspace: Option<&Workspace>) -> Vec<String> {
-    if workspace.is_none_or(|w| w.remote.is_none()) {
+    let Some(remote) = workspace.and_then(|w| w.remote.as_ref()) else {
         return entries();
-    }
+    };
     let mut entries: Vec<String> = wire::PROVIDERS.iter().filter(|p| !is_local_only(p)).map(|p| format!("{AGENT_PREFIX}{p}")).collect();
-    entries.extend([SEPARATOR, SHELL, SEPARATOR, OPEN_PROJECT, NEW_FOLDER, FROM_GIT].map(str::to_string));
+    if remote.mirror {
+        // A mirror workspace's new pane is an agent pane made on its host: no command pane there (W9-J).
+        entries.extend([SEPARATOR, OPEN_PROJECT, NEW_FOLDER, FROM_GIT].map(str::to_string));
+    } else {
+        entries.extend([SEPARATOR, SHELL, SEPARATOR, OPEN_PROJECT, NEW_FOLDER, FROM_GIT].map(str::to_string));
+    }
     entries
 }
 
@@ -113,9 +118,10 @@ pub fn shortcut(entry: &str) -> Option<&'static str> {
     }
 }
 
-/// `PaneLayout.HasRoom`: the app holds at most 128 panes, every workspace together.
+/// `PaneLayout.HasRoom`: the app holds at most 128 panes of this PC, every workspace together; the remote mirror's panes are the
+/// host's and never count (`OwnSessionCount`).
 pub fn has_room(state: &AppSnapshot) -> bool {
-    state.sessions().len() < MAXIMUM_SESSIONS
+    state.own_session_count() < MAXIMUM_SESSIONS
 }
 
 /// `SessionTemplate.LastUsed`: the newest log entry's time, else when the pane was made.
@@ -294,6 +300,7 @@ mod tests {
             workspace_id: Some("w".into()),
             host_name: Some("host".into()),
             version: 2,
+            mirror: false,
         };
         let remote = Workspace { remote: Some(reference), ..Workspace::default() };
         let entries = entries_for(Some(&remote));

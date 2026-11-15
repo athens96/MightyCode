@@ -150,6 +150,7 @@ async fn a_local_workspace_is_never_written_or_read_as_remote() {
         workspace_id: Some("ws".into()),
         host_name: Some("x".into()),
         version: 2,
+        mirror: false,
     };
     let as_remote = AppSnapshot {
         workspaces: Some(vec![Workspace { remote: Some(forged), ..local.clone() }, remote.clone(), twin.clone()]),
