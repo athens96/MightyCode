@@ -262,7 +262,8 @@ async fn handle_tool(host: &Arc<Host>, call: &TerminalCall) -> Result<Value, Str
 }
 
 /// C# `OpenAgentUrl`: the workspace's saved choice, else the user's from the card; in the app (the agent's browser pane) while the
-/// browser engine is on and present, else the OS's handler.
+/// browser panes show pages (the engine on and present; on the Mac WKWebView, or the CEF asked for once it started), else the OS's
+/// handler.
 async fn open_url(host: &Arc<Host>, call: &TerminalCall) -> Result<Value, String> {
     let binding = &call.binding;
     let saved = host.view().snapshot.agent_web_open_choices.as_ref().and_then(|choices| choices.get(&call.workspace_id).cloned().flatten());
@@ -292,7 +293,7 @@ async fn open_url(host: &Arc<Host>, call: &TerminalCall) -> Result<Value, String
     if destination == "inApp" {
         let surfaces = host.app.try_state::<Arc<crate::surface::SurfaceManager>>().map(|s| s.inner().clone());
         let engine = host.view().snapshot.browser_engine_enabled;
-        if let Some(surfaces) = surfaces.filter(|s| s.latch_engine(engine) && crate::platform::browser_runtime().is_some()) {
+        if let Some(surfaces) = surfaces.filter(|s| s.agent_opens_in_app(&destination, engine)) {
             show_agent_io_pane(host, &call.pane_id, &call.workspace_id, AGENT_BROWSER)?;
             host.view().shows_dashboard = false;
             host.schedule();

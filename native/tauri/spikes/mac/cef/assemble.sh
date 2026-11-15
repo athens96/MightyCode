@@ -1,13 +1,16 @@
 #!/bin/bash
 # Puts the CEF spike's binary in an app bundle with CEF, the Swift app's C bridge and the four helper apps, as scripts/build-macos.sh
 # does for the Swift app (its lines 111-178, with the same names, which cef_bridge.m expects), and signs it ad hoc inside out
-# (scripts/sign-macos.sh). Needs a warm engine cache (scripts/fetch-browser-engine.sh).
+# (scripts/sign-macos.sh). Needs a warm engine cache (scripts/fetch-browser-engine.sh). M-E's CI also puts the debug app in such a
+# bundle for its smoke with CEF (native-tauri.yml): the executable's name and the bundle id are then its own.
 #
-#   assemble.sh <cef-spike binary> <CefSpike.app to make>
+#   assemble.sh <binary> <App.app to make> [executable name, cef-spike] [bundle id, dev.mightycode.spike.cef]
 set -euo pipefail
 
 BINARY="${1:?binary}"
 APP="${2:?app}"
+EXE_NAME="${3:-cef-spike}"
+BUNDLE_ID="${4:-dev.mightycode.spike.cef}"
 ROOT="$(cd "$(dirname "$0")/../../../../.." && pwd)"
 LOCK_FILE="$ROOT/native/macos/BrowserEngine.lock"
 CEF_URL="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['cef']['url'])" "$LOCK_FILE")"
@@ -18,13 +21,13 @@ CEF_ARCHIVE="$ENGINE_CACHE/$(basename "$CEF_URL")"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
-cp "$BINARY" "$APP/Contents/MacOS/cef-spike"
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cp "$BINARY" "$APP/Contents/MacOS/$EXE_NAME"
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>dev.mightycode.spike.cef</string>
-<key>CFBundleExecutable</key><string>cef-spike</string>
+<key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
+<key>CFBundleExecutable</key><string>$EXE_NAME</string>
 <key>CFBundleName</key><string>CefSpike</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
@@ -63,9 +66,9 @@ make_helper() {
 </dict></plist>
 PLIST
 }
-make_helper "MightyCode Helper" "dev.mightycode.spike.cef.helper"
-make_helper "MightyCode Helper (GPU)" "dev.mightycode.spike.cef.helper.gpu"
-make_helper "MightyCode Helper (Renderer)" "dev.mightycode.spike.cef.helper.renderer"
-make_helper "MightyCode Helper (Plugin)" "dev.mightycode.spike.cef.helper.plugin"
+make_helper "MightyCode Helper" "$BUNDLE_ID.helper"
+make_helper "MightyCode Helper (GPU)" "$BUNDLE_ID.helper.gpu"
+make_helper "MightyCode Helper (Renderer)" "$BUNDLE_ID.helper.renderer"
+make_helper "MightyCode Helper (Plugin)" "$BUNDLE_ID.helper.plugin"
 bash "$ROOT/scripts/sign-macos.sh" "$APP" -
 du -sh "$APP"

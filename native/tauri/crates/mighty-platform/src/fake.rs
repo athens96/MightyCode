@@ -1161,6 +1161,8 @@ pub struct FakeSurfaces {
     snapshot_gate: Arc<Mutex<Option<Arc<tokio::sync::Semaphore>>>>,
     /// Every pet window opened, oldest first (W8-E).
     pets: Mutex<Vec<FakePet>>,
+    /// What [`SurfaceFactory::browser_status`] answers (None: the shared rule, as Windows).
+    browser_status: Mutex<Option<&'static str>>,
 }
 
 impl FakeSurfaces {
@@ -1172,7 +1174,13 @@ impl FakeSurfaces {
             listeners: Mutex::default(),
             snapshot_gate: Arc::default(),
             pets: Mutex::default(),
+            browser_status: Mutex::new(None),
         }
+    }
+
+    /// Makes [`SurfaceFactory::browser_status`] answer `status` whatever the setting, as a platform that decides it does (the Mac).
+    pub fn set_browser_status(&self, status: Option<&'static str>) {
+        *lock(&self.browser_status) = status;
     }
 
     /// Every pet window [`SurfaceFactory::open_pet`] opened, oldest first: each records what was asked of it and takes events.
@@ -1377,6 +1385,9 @@ impl SurfaceFactory for FakeSurfaces {
             }
             Ok(Box::new(self.view(&options.pane_id, SurfaceKind::Terminal, options.bounds, None)) as Box<dyn TerminalSurface>)
         })
+    }
+    fn browser_status(&self, _enabled: bool) -> Option<&'static str> {
+        *lock(&self.browser_status)
     }
     fn open_pet(&self) -> BoxFuture<'_, Result<Box<dyn PetWindow>>> {
         Box::pin(async move {

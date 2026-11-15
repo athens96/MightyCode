@@ -261,6 +261,9 @@ const BROWSER_PROBE: &str = r#"(async () => {
   const surface = () => invoke('smoke_surface', { paneId, action: 'inspect' });
   const report = { paneId, fixture };
   try {
+    // The Mac's engine of the launch (webkit or cef; none on Windows).
+    const engine = (await invoke('smoke_surface', { paneId, action: 'popups' })).engine;
+    if (engine) report.browserEngine = engine;
     // This pane's slot, looked up again whenever it is measured (the page may draw it anew).
     const ofPane = (selector) => document.querySelector('.pane-slot[data-pane-id="' + paneId + '"] ' + selector);
     const slotNow = () => ofPane('[data-testid=browser-slot]');
@@ -307,7 +310,10 @@ const BROWSER_PROBE: &str = r#"(async () => {
     const before = await invoke('smoke_surface', { paneId, action: 'popups' });
     go(popup);
     report.popupPage = !!(await until(() => field() === popup, 10000));
-    const after = await until(async () => { const p = await invoke('smoke_surface', { paneId, action: 'popups' }); return p.refused > before.refused ? p : null; }, 10000);
+    // CEF's bridge cancels the popup without a word: its page is given the time to ask, then nothing may have opened.
+    const counted = engine !== 'cef';
+    if (!counted) await new Promise((r) => setTimeout(r, 1500));
+    const after = await until(async () => { const p = await invoke('smoke_surface', { paneId, action: 'popups' }); return !counted || p.refused > before.refused ? p : null; }, 10000);
     const stayed = await surface();
     report.popups = after;
     report.popupBlocked = !!after && after.webviews === before.webviews && (stayed?.url || '') === popup;
@@ -1274,8 +1280,15 @@ pub async fn smoke_surface(pane_id: String, action: String, host: tauri::State<'
             push(json!({"kind": "dialogClose", "id": DIALOG}));
             Ok(Value::Null)
         }
-        // The popups the pane's page asked for (all refused) and the webviews the app holds (none more for a popup).
-        "popups" => Ok(json!({"refused": surfaces.popups_refused(&pane_id), "webviews": host.app.webviews().len()})),
+        // The popups the pane's page asked for (all refused) and the webviews the app holds (none more for a popup); on the Mac the
+        // engine of the launch too (CEF's bridge cancels a popup without saying so: none is counted there).
+        "popups" => {
+            let mut popups = json!({"refused": surfaces.popups_refused(&pane_id), "webviews": host.app.webviews().len()});
+            if let Some(engine) = crate::platform::browser_engine() {
+                popups["engine"] = json!(engine);
+            }
+            Ok(popups)
+        }
         // The frame step's view of the host's state (smoke_frame.rs).
         "state" => Ok(crate::smoke_frame::state(&host)),
         // The dialogs whose flows still wait (the reload step's: none once the redrawn sheet was answered).

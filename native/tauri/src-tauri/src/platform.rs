@@ -293,6 +293,31 @@ pub fn browser_runtime() -> Option<String> {
     os::browser_runtime()
 }
 
+/// Starts the browser engine the setting asks for, between building the app and running its event loop (main.rs): the Mac's CEF
+/// must initialize there (M-E; `profiles` its root cache, [`crate::surface::profiles_root`]), else its panes are WKWebView;
+/// `temporary_stores` empties the WKWebView data stores the run opens when it ends (the smoke). Windows' WebView2 starts with each
+/// pane: nothing to do.
+pub fn start_browser_engine(enabled: bool, profiles: &std::path::Path, temporary_stores: bool) {
+    #[cfg(target_os = "macos")]
+    os::browser::start_engine(enabled, profiles, temporary_stores);
+    #[cfg(windows)]
+    let _ = (enabled, profiles, temporary_stores);
+}
+
+/// Shuts the browser engine down as the app exits (`RunEvent::Exit`, the main thread): the Mac's CEF, before the process ends.
+pub fn stop_browser_engine() {
+    #[cfg(target_os = "macos")]
+    os::browser::stop_engine();
+}
+
+/// The engine the Mac's browser panes use in this launch (`webkit` or `cef`, the smoke's report); None on Windows (WebView2 only).
+pub fn browser_engine() -> Option<&'static str> {
+    #[cfg(target_os = "macos")]
+    return Some(os::browser::engine_name());
+    #[cfg(windows)]
+    return None;
+}
+
 /// The browser engine's installer (C# `WebView2BootstrapperInstaller`), for mighty-core's `browser::install`.
 pub struct BrowserInstaller;
 

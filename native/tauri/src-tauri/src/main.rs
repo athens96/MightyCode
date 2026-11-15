@@ -330,6 +330,8 @@ fn main() {
     // Only a run that writes adopts them (review M1): never beside a C# app that may still hold them.
     let adopted = startup::adopts_csharp_web_data(&options, policy);
     let web_folders = platform.paths.web_folders(adopted);
+    // The browser engine the setting asks for (read once per launch), started below between building the app and running it (M-E).
+    let browser_engine = (snapshot.browser_engine_enabled, surface::profiles_root(&web_folders.browser), options.smoke_test);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -541,6 +543,8 @@ fn main() {
         })
         .build(context)
         .expect("the Tauri app");
+    // The Mac's CEF must initialize here, after tao's NSApplication exists and before its run loop starts (M-E).
+    platform::start_browser_engine(browser_engine.0, &browser_engine.1, browser_engine.2);
     // Tauri's event loop ends with 0 whatever `exit(code)` asked (tauri-runtime-wry's RequestExit sets ControlFlow::Exit): the
     // code is kept here and given to the process at the end, so a failed `--smoke-exit` run exits 1.
     let mut exit_code = 0;
@@ -587,6 +591,8 @@ fn main() {
                 host.write_unimplemented();
                 host.log.line("exit");
             }
+            // The Mac's CEF shut down before the process ends (M-E).
+            platform::stop_browser_engine();
             if exit_code != 0 {
                 app.cleanup_before_exit();
                 std::process::exit(exit_code);

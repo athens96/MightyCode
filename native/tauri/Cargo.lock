@@ -2412,6 +2412,7 @@ dependencies = [
 name = "mighty-platform-macos"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "block2",
  "core-foundation",
  "core-graphics",
@@ -2429,6 +2430,8 @@ dependencies = [
  "objc2-user-notifications",
  "objc2-web-kit",
  "security-framework",
+ "serde_json",
+ "sha1",
  "tauri",
  "tokio",
  "tokio-native-tls",

@@ -107,6 +107,43 @@ jobs:
         # The smoke's own limit (645 s with the stand-in CLI), the seed and the stand-in's build.
         timeout-minutes: 18
         run: ./native/tauri/scripts/smoke.ps1 -Out "$env:RUNNER_TEMP/tauri-smoke"
+      # M-E: the browser pane with CEF (plan D3): the debug app in a bundle with CEF 152, the Swift app's C bridge and the four helpers
+      # (spikes/mac/cef/assemble.sh), against a seeded profile with the browser engine on, read-only, without the run steps.
+      - name: Restore the browser engine (CEF, native/macos/BrowserEngine.lock)
+        if: matrix.os == 'macos'
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/MightyCode/browser-engine
+          key: tauri-browser-engine-${{ hashFiles('native/macos/BrowserEngine.lock') }}
+      - name: Smoke on the Mac with CEF (the browser engine on; the steps of smoke.rs' MAC_PENDING_STEPS may fail)
+        if: matrix.os == 'macos'
+        timeout-minutes: 18
+        run: |
+          bash scripts/fetch-browser-engine.sh
+          if ($LASTEXITCODE -ne 0) { throw 'fetching CEF failed' }
+          $app = Join-Path $env:RUNNER_TEMP 'MightyCode.app'
+          bash native/tauri/spikes/mac/cef/assemble.sh native/tauri/target/debug/MightyCode $app MightyCode dev.mightycode.tests.cef
+          if ($LASTEXITCODE -ne 0) { throw 'assembling the CEF bundle failed' }
+          $seeded = Join-Path $env:RUNNER_TEMP 'tauri-smoke-cef-profile'
+          Push-Location native/tauri
+          cargo run -q -p mighty-core --example seed_demo -- $seeded en
+          if ($LASTEXITCODE -ne 0) { throw 'seed_demo failed' }
+          Pop-Location
+          python3 -c "import json,sys; p=sys.argv[1]; s=json.load(open(p)); s['browserEngineEnabled']=True; json.dump(s, open(p,'w'))" (Join-Path $seeded 'workspace-state.json')
+          if ($LASTEXITCODE -ne 0) { throw 'turning the browser engine on failed' }
+          ./native/tauri/scripts/smoke.ps1 -Exe "$app/Contents/MacOS/MightyCode" -Profile $seeded -Out "$env:RUNNER_TEMP/tauri-smoke/cef" -NoRuns
+      - name: The browser step passed on the Mac with WebKit and with CEF (M-E)
+        if: matrix.os == 'macos'
+        run: |
+          foreach ($run in @(@{ path = "$env:RUNNER_TEMP/tauri-smoke/smoke-result.json"; engine = 'webkit' },
+                             @{ path = "$env:RUNNER_TEMP/tauri-smoke/cef/smoke-result.json"; engine = 'cef' })) {
+            $result = Get-Content -Raw $run.path | ConvertFrom-Json
+            $names = @('browserSurface', 'browserNavigated', 'browserBack', 'browserPopupBlocked', 'browserMenuOver')
+            $failed = @($names | Where-Object { $result.checks.$_ -ne $true })
+            "$($run.engine): engine $($result.browser.browserEngine), failed: $($failed -join ', ')"
+            if ($result.browser.browserEngine -ne $run.engine) { throw "the $($run.engine) run's browser panes used $($result.browser.browserEngine)" }
+            if ($failed.Count -gt 0) { throw "the $($run.engine) run's browser step failed: $($failed -join ', ')" }
+          }
       - name: The frozen style files are read in place, never written (mighty-styles, the smoke)
         # scripts/check-style-freeze.sh's frozen paths: the tests and the smoke above leave them as checked out.
         run: |
