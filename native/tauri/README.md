@@ -317,7 +317,7 @@ W8's deviations from C#:
 - A-L7: a relay that answers 4409 (another host holds the token) is dialled again and in turn supersedes it, the two hosts trading the socket with no backoff, as C#'s do; kept for parity.
 - Screen share's zstd frames are written and read by ruzstd (pure Rust, MIT, with twox-hash, MIT) instead of the plan's zstd, whose C build cannot cross-compile for the Mac check; each frame declares its content size (the phone's reader requires it) and a declared size must match what it decoded to, as ZstdSharp checks.
 - The firewall rule needs an update when it names another program than this exe (compared without case), which C#'s `WindowsFirewallRule` does not check yet (a C# item).
-- A send right after a run's end starts a run of its own: the run manager no longer refuses a pane whose run's last status is out while its task still closes (C#'s `RunManager` keeps the run listed until its `finally`, so delegation's next item could meet `alreadyRunning` there too).
+- A send right after a run's end is admitted: the run manager no longer refuses a pane whose run's last status is out while its task still closes, but the new run starts only once that task has ended (at most 10 s), so two runs of one pane never overlap (C#'s `RunManager` keeps the run listed until its `finally` and refuses the send with `alreadyRunning` there).
 
 Left after W8:
 - Screen share's native half (D11): capture (`ScreenCapture`), input (`RemoteInput`), the WebRTC transport, the tap marker, the reference scene's window and the live settings box; `ENABLED` stays false and the smoke keys `screenCapture`, `screenTransport` and `screenTapMarkerNoFocus` wait with it.

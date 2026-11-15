@@ -62,6 +62,10 @@ use crate::stream;
 use crate::strings;
 use crate::{Result, RunError, lock};
 
+/// How long a run admitted right after the pane's last one waits for that one's task to end (its process tree, pumps and Mods connection;
+/// as long as a stop waits for a run's end).
+const PREVIOUS_WAIT: Duration = Duration::from_secs(10);
+
 pub type Emit = Arc<dyn Fn(RunEvent) + Send + Sync>;
 pub type PermissionSink = Arc<dyn Fn(ToolPermissionRequest) + Send + Sync>;
 pub type ResolveWorkspace = Arc<dyn Fn(String) -> BoxFuture<'static, Result<Workspace>> + Send + Sync>;
@@ -253,6 +257,10 @@ struct Run {
     /// Antigravity cards the parser made and the stdout pump has not judged and sent yet (S-H1: their file rules are asked of the disk
     /// off the parser's thread, [`Exec::publish_antigravity_cards`]).
     antigravity_cards: Mutex<Vec<crate::antigravity::PermissionRequest>>,
+    /// The pane's run this one was admitted after: its last status was out but its task still closing (its process tree, pumps, Mods
+    /// connection). This run starts only once that one's end is told ([`Exec::run`]), so two runs of one pane never overlap, as C#'s
+    /// never do; let go then.
+    previous: Mutex<Option<Arc<Run>>>,
 }
 
 impl Run {
@@ -409,9 +417,10 @@ impl RunManager {
             }
             // A run whose last status is out is over for everyone outside its task: the service ended its route and told delegation on
             // that status, while the task still closes (its RunEnd takes it off the list a moment later). A send in that moment
-            // (delegation's next item for the pane, a phone's send) starts a run of its own instead of being refused; the older run's
-            // end leaves this newer entry in place (RunEnd removes only its own run).
-            if runs.get(&request.session_id).is_some_and(|run| !run.finished.load(Ordering::SeqCst)) {
+            // (delegation's next item for the pane, a phone's send) is admitted instead of refused, but its run starts only once the
+            // older one's end is told (`previous`); the older run's end leaves this newer entry in place (RunEnd removes only its own).
+            let previous = runs.get(&request.session_id).cloned();
+            if previous.as_ref().is_some_and(|run| !run.finished.load(Ordering::SeqCst)) {
                 return Err(RunError::State(strings::get("run.error.alreadyRunning")));
             }
             let waits = awaited || request.attachment_list().is_some();
@@ -452,6 +461,7 @@ impl RunManager {
                 node_gate: Mutex::new(()),
                 done: watch::channel(false).0,
                 antigravity_cards: Mutex::new(vec![]),
+                previous: Mutex::new(previous),
             });
             runs.insert(request.session_id.clone(), run.clone());
             let inner = self.inner.clone();
@@ -619,12 +629,18 @@ impl RunManager {
 
     /// `DisposeAsync`: every run stopped, the Mods bridge closed.
     pub async fn dispose(&self) {
-        let active: Vec<String> = {
+        let (active, previous): (Vec<String>, Vec<Arc<Run>>) = {
             *lock(&self.inner.disposed) = true;
-            lock(&self.inner.runs).keys().cloned().collect()
+            let runs = lock(&self.inner.runs);
+            (runs.keys().cloned().collect(), runs.values().filter_map(|run| lock(&run.previous).clone()).collect())
         };
         for id in active {
             let _ = self.stop(&id).await;
+        }
+        // A run replaced while its task still closed is off the list: its end is awaited too (bounded, as a stop's).
+        for run in previous {
+            let mut done = run.done.subscribe();
+            let _ = tokio::time::timeout(PREVIOUS_WAIT, done.wait_for(|done| *done)).await;
         }
         self.inner.bridge.dispose().await;
     }
@@ -1011,6 +1027,9 @@ impl Exec {
     /// run off the list, answers its start and tells a waiting stop.
     async fn run(inner: Arc<Inner>, run: Arc<Run>) {
         let mut end = RunEnd { inner: inner.clone(), run: run.clone(), start_failure: None };
+        // Admitted right after the pane's last run's status: nothing of this one starts before that one's task has ended (bounded; a
+        // stop meanwhile is the body's first cancel check).
+        Self::after_previous(&run).await;
         match tokio::spawn(Self::run_body(inner.clone(), run.clone())).await {
             Ok(start_failure) => end.start_failure = start_failure,
             Err(failed) => {
@@ -1026,6 +1045,16 @@ impl Exec {
                 end.start_failure = Some(RunError::State(text));
             }
         }
+    }
+
+    /// Waits (at most [`PREVIOUS_WAIT`]) until the run this one was admitted after has ended, then lets go of it.
+    async fn after_previous(run: &Run) {
+        let previous = lock(&run.previous).clone();
+        if let Some(previous) = previous {
+            let mut done = previous.done.subscribe();
+            let _ = tokio::time::timeout(PREVIOUS_WAIT, done.wait_for(|done| *done)).await;
+        }
+        *lock(&run.previous) = None;
     }
 
     /// The run's body panicked (C#'s catch of an unexpected exception): the pane is told why and that the run ended in an error, its
