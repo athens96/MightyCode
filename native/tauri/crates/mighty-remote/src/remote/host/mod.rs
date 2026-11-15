@@ -25,12 +25,12 @@ use serde_json::Value;
 use tokio::sync::watch;
 
 use crate::remote::address::{RemoteAddress, peer_allowed, peer_ip_allowed};
-use crate::tailscale::canonical_text as canonical;
 use crate::remote::http_server::{Failed, HttpListener, HttpRequest, HttpResponse, ListenerOptions};
 use crate::remote::strings;
 use crate::remote::text;
 use crate::remote::validation;
 use crate::remote::wire::{RemoteHostState, RemoteSharedWorkspace, RemoteWireError, RemoteWireInfo, protocol};
+use crate::tailscale::canonical_text as canonical;
 
 pub use runs::{Cancel, HostRunner, RunnerSinks, host_runner};
 

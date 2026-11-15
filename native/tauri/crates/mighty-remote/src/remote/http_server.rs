@@ -22,8 +22,8 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, timeout_at};
 
-use crate::tailscale::{canonical_text as canonical, peer as unmapped};
 use crate::remote::wire::{protocol, to_bytes};
+use crate::tailscale::{canonical_text as canonical, peer as unmapped};
 
 /// `HeaderLimit`: the head may be this many bytes before its blank line.
 pub const MAXIMUM_HEAD_BYTES: usize = 8192;

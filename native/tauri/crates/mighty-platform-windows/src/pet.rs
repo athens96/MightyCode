@@ -679,7 +679,8 @@ impl Window {
         match message {
             WM_MOUSEACTIVATE => Some(LRESULT(MA_NOACTIVATE as isize)),
             WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
-                let shape = match *lock(&self.shared.cursor) {
+                let cursor = *lock(&self.shared.cursor);
+                let shape = match cursor {
                     PetCursor::Arrow => IDC_ARROW,
                     PetCursor::SizeWestEast => IDC_SIZEWE,
                     PetCursor::SizeNorthSouth => IDC_SIZENS,

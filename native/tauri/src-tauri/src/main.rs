@@ -4,6 +4,8 @@
 //! Identity: tauri.conf.json's `identifier` is `dev.mightycode.tauri`, a development identity so this app never shares a
 //! registration, a WebView2 folder or local data with the installed C# app. It must become the real one before this ships.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// A guard kept through a match or if-let body has called out (host.view(), a redraw, Tauri's main thread) while held: bind first.
+#![deny(clippy::significant_drop_in_scrutinee)]
 
 mod accounts;
 mod agent_io;

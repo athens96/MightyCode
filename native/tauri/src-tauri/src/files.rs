@@ -846,7 +846,9 @@ pub async fn open_file_in_pane(host: &Arc<Host>, workspace_id: &str, path: &str)
         tree.preview_path = Some(path.clone());
         tree.expanded.iter().filter(|p| path.starts_with(&format!("{p}/"))).cloned().collect::<Vec<_>>()
     });
-    if let Err(message) = open_files_pane(&mut host.view(), &host.locale, Some(workspace_id)) {
+    // The view's guard ends with the statement: `banner` takes the view again.
+    let opened = open_files_pane(&mut host.view(), &host.locale, Some(workspace_id));
+    if let Err(message) = opened {
         banner(host, message);
     }
     folders.sort_by_key(|p| p.len());

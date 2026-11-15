@@ -7,8 +7,6 @@
 //! `--allow-state-write`, and in a smoke) the last row says verification mode; an import, which writes a pet into the profile, is off
 //! there too.
 
-#![deny(clippy::significant_drop_in_scrutinee)]
-
 use std::path::PathBuf;
 use std::sync::Arc;
 

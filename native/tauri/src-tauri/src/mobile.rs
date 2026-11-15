@@ -314,14 +314,17 @@ pub fn touch(host: &Host) {
 /// The app quits: nothing is planned, sent or tried again; the relay host disposed (every connection ended, nothing redials).
 pub fn shutdown(host: &Host) {
     let mobile = state(host);
-    if let Some(tick) = lock(&mobile.tick).take() {
+    let tick = lock(&mobile.tick).take();
+    if let Some(tick) = tick {
         tick.abort();
     }
     lock(&mobile.status).take();
-    if lock(&mobile.relay).is_some() {
+    let attached = lock(&mobile.relay).is_some();
+    if attached {
         crate::direct::detach(host);
     }
-    if let Some(push) = lock(&mobile.push).take() {
+    let push = lock(&mobile.push).take();
+    if let Some(push) = push {
         push.dispose();
     }
     let relay = lock(&mobile.relay).take();

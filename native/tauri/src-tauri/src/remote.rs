@@ -611,7 +611,8 @@ mod tests {
     /// Whether a copy said it reached the clipboard, once it says.
     async fn told(slot: &Arc<Mutex<Option<bool>>>) -> bool {
         for _ in 0..400 {
-            if let Some(set) = *lock(slot) {
+            let set = *lock(slot);
+            if let Some(set) = set {
                 return set;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;

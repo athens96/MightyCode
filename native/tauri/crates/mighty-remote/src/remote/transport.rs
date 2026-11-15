@@ -12,11 +12,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use crate::remote::address::{RemoteAddress, peer_allowed};
-use crate::tailscale::{canonical_text as canonical, peer as unmapped};
 use crate::remote::strings;
 use crate::remote::text;
 use crate::remote::validation;
 use crate::remote::wire::{RemoteHttpFailure, protocol};
+use crate::tailscale::{canonical_text as canonical, peer as unmapped};
 
 /// C# `RemoteTarget`: where a connection's requests go, the address checked once and the one IP every request uses, with the loopback
 /// flag it was resolved with (so every request re-checks its IP by the same rule).

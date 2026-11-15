@@ -18,8 +18,6 @@
 //! Locks: the companion's state lock is never held while the view's is taken (the shell model reads [`frame_model`] with the view
 //! locked), and the overlay's lock is taken before the state's.
 
-#![deny(clippy::significant_drop_in_scrutinee)]
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
