@@ -46,6 +46,8 @@ const PROBE: &str = r#"(async () => {
     banner()?.querySelectorAll('button')[0]?.click();
     page.bannerHidden = !!(await until(() => !banner(), 10000));
     page.stagedAfterLater = !!staged();
+    // The host sees the snooze (it polls every 50 ms) before "restart now" clears it.
+    await new Promise((r) => setTimeout(r, 1000));
     staged()?.querySelector('.link-button')?.click();
     report.after = (await until(() => window.__mightyAppUpdateHost, 25000)) ?? null;
     page.restored = !!(await until(() => !banner() && !staged(), 10000));
@@ -112,12 +114,13 @@ impl Eyes {
         all.into_iter().find(|n| n.get("aid").and_then(Value::as_str) == Some(aid)).cloned()
     }
 
-    /// The words shown under `aid` ("" when it is not shown).
+    /// The words shown under `aid` ("" when it is not shown): its texts and its buttons' labels.
     fn words(&self, aid: &str) -> String {
         let Some(node) = self.node(aid) else { return String::new() };
         let mut all = vec![];
         objects(&node, &mut all);
-        all.iter().filter_map(|n| n.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join(" ")
+        // A text's words, a button's label.
+        all.iter().filter_map(|n| n.get("text").or_else(|| n.get("label")).and_then(Value::as_str)).collect::<Vec<_>>().join(" ")
     }
 
     fn enabled(&self, aid: &str) -> bool {
@@ -179,6 +182,11 @@ fn host_half(host: &Arc<Host>, update: &Arc<AppUpdate>) -> Value {
         statuses.push(eyes.words(STATUS_ID));
         buttons.push(eyes.words(BUTTON_ID));
     }
+    // The switch is named for its label, and the label stands beside it (read while the box draws as a signed build: a key-less one
+    // hides the row, which the page then never gets; C# reads its collapsed control).
+    let label = text(&locale, "AutoUpdateToggle");
+    let named = eyes.node(TOGGLE_ID).is_some_and(|node| node.get("name").and_then(Value::as_str) == Some(label.as_str()));
+    let switch_named = named && eyes.texts().contains(&label);
     core.set_smoke_signed_build(false);
     core.coordinator.show_for_smoke(before.clone());
 
@@ -194,10 +202,7 @@ fn host_half(host: &Arc<Host>, update: &Arc<AppUpdate>) -> Value {
     };
     // The idle facts read once (no helper, no countdown): a composer draft holds the restart.
     section["draftHoldsRestart"] = json!(draft_holds_restart(host, update));
-    // The switch is named for its label, and the label stands beside it.
-    let label = text(&locale, "AutoUpdateToggle");
-    let named = eyes.node(TOGGLE_ID).is_some_and(|node| node.get("name").and_then(Value::as_str) == Some(label.as_str()));
-    section["switchNamed"] = json!(named && eyes.texts().contains(&label));
+    section["switchNamed"] = json!(switch_named);
     json!({"section": section, "staged": staged})
 }
 
