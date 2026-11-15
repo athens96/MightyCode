@@ -1,14 +1,73 @@
-//! M-B: the phone's pairing identity in Swift's four files under `<data>/mobile-remote/` (`mighty_platform::pairing::four_files`,
-//! shared pure code chosen by `PlatformProfile::pairing_layout`). Swift `MobileRemoteService.swift:308-466`,
-//! `MobileDeviceRegistry.swift`, `RelayChannel.swift:86-104`; contract `mighty_platform::pairing` (`PairingStore`). Swift-written
-//! fixtures read here, and what this writes read back by Swift (`tools/parity-mac pairing`).
+//! M-B: the phone's pairing identity in the Swift app's files under `<data>/mobile-remote/` (`mighty_platform::pairing::four_files`,
+//! shared code chosen by `PlatformProfile::pairing_layout`), with Swift's modes: the folder 0700, every file 0600 from its creation
+//! (`createFile(atPath:contents:attributes: [.posixPermissions: 0o600])`). Swift `MobileRemoteService.swift:349-442`,
+//! `MobileDeviceRegistry.swift:428-486`, `RelayChannel.swift:86-104`; contract `mighty_platform::pairing` (`PairingStore`).
+//! Swift-written files read here, and what this writes reads back in Swift (`tools/parity-mac pairing`).
 
+use std::fs;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::Path;
 use std::sync::Arc;
 
-use mighty_platform::unsupported::Unsupported;
+use mighty_platform::pairing::four_files::{FOLDER, FourFiles, PrivateFiles};
 use mighty_platform::{PairingStore, Paths};
 
-/// The Mac's `PairingStore` over the profile's data folder (Unsupported until M-B).
-pub fn pairing_store(_paths: &dyn Paths) -> Arc<dyn PairingStore> {
-    Arc::new(Unsupported)
+/// The folder 0700 and each file 0600.
+pub struct OwnerOnly;
+
+impl PrivateFiles for OwnerOnly {
+    fn private_folder(&self, folder: &Path) -> std::io::Result<()> {
+        fs::create_dir_all(folder)?;
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o700))
+    }
+    fn private_file(&self, path: &Path) -> std::io::Result<fs::File> {
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+    }
+}
+
+/// The Mac's `PairingStore` over the profile's data folder.
+pub fn pairing_store(paths: &dyn Paths) -> Arc<dyn PairingStore> {
+    Arc::new(FourFiles::new(paths.data_dir().join(FOLDER), Box::new(OwnerOnly)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mighty_platform::pairing::four_files::{DEVICES, PAIRING_KEY};
+    use mighty_platform::{PairedDevice, PairingIdentity};
+
+    fn mode(path: &Path) -> u32 {
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    /// `MobileRemoteExtensionTests.swift:1148 "aDeviceTokenIsIssuedOnceAndOnlyItsHashIsKept"` (its file half; the token logic is
+    /// mighty-remote's `Identity`, tests/four_files.rs): the list is 0600 in a 0700 folder and holds the hash, never a token.
+    #[test]
+    fn the_files_are_owner_only_in_an_owner_only_folder() {
+        let root = std::env::temp_dir().join(format!("mighty-mac-pairing-{}-{}", std::process::id(), line!()));
+        let folder = root.join(FOLDER);
+        let store = FourFiles::new(folder.clone(), Box::new(OwnerOnly));
+        store
+            .save(&PairingIdentity {
+                host_id: "4e0c0a3f-8a59-4a0f-9a57-0a3c1b2d3e4f".into(),
+                host_token: "ab".repeat(32),
+                pairing_key: "A".repeat(43),
+                secret_key: [3; 32],
+                devices: vec![PairedDevice {
+                    id: "Zm9vYmFyYmF6cXV4MDA".into(),
+                    name: "iPhone".into(),
+                    token_hash: Some("5723c1b7256eba050781d42f7d4fd96201c4b75d7673b1a82ffbcba6dc2e1c23".into()),
+                    first_seen: "2026-10-23T01:02:03.000Z".into(),
+                    last_seen: "2026-10-23T01:02:03.000Z".into(),
+                    push: None,
+                }],
+            })
+            .unwrap();
+        assert_eq!(mode(&folder), 0o700);
+        for entry in fs::read_dir(&folder).unwrap() {
+            assert_eq!(mode(&entry.unwrap().path()), 0o600);
+        }
+        assert!(folder.join(PAIRING_KEY).exists() && folder.join(DEVICES).exists());
+        let _ = fs::remove_dir_all(&root);
+    }
 }
