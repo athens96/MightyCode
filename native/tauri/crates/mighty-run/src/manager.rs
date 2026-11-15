@@ -1633,7 +1633,7 @@ impl Exec {
         let mut environment = providers.quiet_environment();
         // A pane worktree's own values (its PORT and folders), so two panes' dev servers do not collide (C# `PaneWorktree.Environment`).
         for (key, value) in request.pane_environment.iter().flatten() {
-            if crate::model::PANE_ENVIRONMENT_KEYS.contains(&key.as_str()) && !value.contains(' ') {
+            if crate::model::PANE_ENVIRONMENT_KEYS.contains(&key.as_str()) && !value.contains('\0') {
                 environment.insert(key.clone(), value.clone());
             }
         }
