@@ -407,7 +407,11 @@ impl RunManager {
             if runs.len() >= 16 {
                 return Err(RunError::State(strings::get("run.error.tooManyConcurrent")));
             }
-            if runs.contains_key(&request.session_id) {
+            // A run whose last status is out is over for everyone outside its task: the service ended its route and told delegation on
+            // that status, while the task still closes (its RunEnd takes it off the list a moment later). A send in that moment
+            // (delegation's next item for the pane, a phone's send) starts a run of its own instead of being refused; the older run's
+            // end leaves this newer entry in place (RunEnd removes only its own run).
+            if runs.get(&request.session_id).is_some_and(|run| !run.finished.load(Ordering::SeqCst)) {
                 return Err(RunError::State(strings::get("run.error.alreadyRunning")));
             }
             let waits = awaited || request.attachment_list().is_some();
