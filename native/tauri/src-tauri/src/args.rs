@@ -159,7 +159,10 @@ mod tests {
         assert!(parsed(&["--smoke-test"]).is_err());
         assert!(parsed(&["--profile", "relative"]).is_err());
         assert!(parsed(&["--bogus"]).is_err());
-        assert_eq!(parsed(&["--remote-debugging-port", "9222"]).unwrap().remote_debugging_port, Some(9222));
+        // With --smoke-test the port is allowed in any build (a release build refuses it alone, W9-H L9).
+        let port = parsed(&["--smoke-test", "--profile", root, "--remote-debugging-port", "9222"]);
+        assert_eq!(port.unwrap().remote_debugging_port, Some(9222));
+        assert_eq!(parsed(&["--remote-debugging-port", "9222"]).is_ok(), cfg!(debug_assertions), "alone only in a development build");
         assert!(!parsed(&[]).unwrap().allow_state_write, "writing is off unless asked for");
         assert!(parsed(&["--allow-state-write"]).unwrap().allow_state_write);
         let fake = if cfg!(windows) { "C:\\f.exe" } else { "/f" };

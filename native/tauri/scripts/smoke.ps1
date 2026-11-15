@@ -177,16 +177,31 @@ $watch = [Diagnostics.Stopwatch]::StartNew()
 # lists what of its process tree is still running: anything but its console host fails the run, and is stopped so nothing outlives it.
 $process = Start-Process -FilePath $Exe -ArgumentList $arguments -PassThru -WindowStyle Normal
 $null = $process.Handle  # keeps the exit code readable once it ended
+$appStart = $process.StartTime
 $process.WaitForExit()
 $watch.Stop()
-function Descendants([int]$parent) {
+# The app's process tree by parent ids. A process id is reused once its process ended, so a process counts as a child only when it was
+# made after its parent started (the app's start, then each child's own), and each id is visited once (no loop through a reused id).
+function Descendants([int]$parent, [datetime]$since, $seen) {
     foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$parent" -ErrorAction SilentlyContinue)) {
+        if ($child.CreationDate -lt $since -or -not $seen.Add([int]$child.ProcessId)) { continue }
         $child
-        Descendants $child.ProcessId
+        Descendants $child.ProcessId $child.CreationDate $seen
     }
 }
-Start-Sleep -Seconds 2
-$leftovers = @(Descendants $process.Id | Where-Object { $_.Name -ne 'conhost.exe' })
+function AppTree { Descendants $process.Id $appStart (New-Object 'System.Collections.Generic.HashSet[int]') }
+# Stopped only while the id still names the process found (its creation time unchanged).
+function StopFound($found) {
+    $now = Get-CimInstance Win32_Process -Filter "ProcessId=$($found.ProcessId)" -ErrorAction SilentlyContinue
+    if ($now -and $now.CreationDate -eq $found.CreationDate) { Stop-Process -Id $found.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+# What the app started may still be ending (a run's CLI, git) on a loaded machine: given up to 15 s before it counts as left over.
+$deadline = (Get-Date).AddSeconds(15)
+do {
+    $leftovers = @(AppTree | Where-Object { $_.Name -ne 'conhost.exe' })
+    if ($leftovers.Count -eq 0) { break }
+    Start-Sleep -Milliseconds 500
+} while ((Get-Date) -lt $deadline)
 $treeAfter = if ($readOnly) { ProfileTree } else { $null }; $userAfter = UserConfig
 $placesAfter = if ($readOnly) { DelegationPlaces } else { $null }
 $remoteAfter = if ($readOnly) { RemotePlaces } else { $null }
@@ -196,13 +211,13 @@ if ($leftovers.Count -gt 0) {
     Write-Output "LEFTOVER PROCESSES (the app ended, these of its process tree did not; stopped now):"
     foreach ($left in $leftovers) {
         Write-Output ("  {0} {1}: {2}" -f $left.ProcessId, $left.Name, $left.CommandLine)
-        Stop-Process -Id $left.ProcessId -Force -ErrorAction SilentlyContinue
+        StopFound $left
     }
     $exitCode = 1
 } else {
     Write-Output 'leftover processes: none'
 }
-foreach ($console in @(Descendants $process.Id)) { Stop-Process -Id $console.ProcessId -Force -ErrorAction SilentlyContinue }
+foreach ($console in @(AppTree)) { StopFound $console }
 
 Write-Output "profile:  $Profile"
 Write-Output "result:   $result"

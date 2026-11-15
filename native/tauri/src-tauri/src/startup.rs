@@ -14,10 +14,8 @@
 //! data, and the page's retry while another process still holds that data with other options.
 
 use std::collections::HashMap;
-use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 
 use mighty_core::rename_migration::{self, RegistryStore};
 use mighty_platform::Paths;
@@ -108,47 +106,9 @@ fn adopts(release: bool, options: &Options, policy: WritePolicy) -> bool {
 /// WebView2 left there opens with the same options.
 pub const CSHARP_BROWSER_ARGUMENTS: &str = "";
 
-/// The waits between attempts to make the page while its WebView2 data is held by another process with other options (about 10 s).
-pub const WEBVIEW_IN_USE_WAITS: [Duration; 6] = [
-    Duration::from_millis(500),
-    Duration::from_millis(1000),
-    Duration::from_millis(1500),
-    Duration::from_millis(2000),
-    Duration::from_millis(2500),
-    Duration::from_millis(2500),
-];
-
-/// WebView2's `HRESULT_FROM_WIN32(ERROR_INVALID_STATE)` (0x8007139F): a browser process of another app (C#'s, right after the update
-/// swap) still holds the data folder with other environment options.
-fn webview_in_use(error: &str) -> bool {
-    let error = error.to_ascii_uppercase();
-    error.contains("8007139F") || error.contains("-2147019873")
-}
-
-/// Makes the page, again after each of [`WEBVIEW_IN_USE_WAITS`] while its data folder is held (W9 review M1); any other error, or the
-/// last, is returned. `sleep` waits (the real one blocks the setup, before the event loop runs).
-pub fn retry_while_held<T, E: fmt::Display + fmt::Debug>(
-    mut attempt: impl FnMut() -> Result<T, E>,
-    mut sleep: impl FnMut(Duration),
-    log: impl Fn(&str),
-) -> Result<T, E> {
-    let mut waits = WEBVIEW_IN_USE_WAITS.iter();
-    loop {
-        match attempt() {
-            Ok(made) => return Ok(made),
-            Err(error) => {
-                let held = webview_in_use(&format!("{error} {error:?}"));
-                match waits.next() {
-                    Some(wait) if held => {
-                        log(&format!("webview: the data folder is held by another process ({error}); again in {} ms", wait.as_millis()));
-                        sleep(*wait);
-                    }
-                    _ => return Err(error),
-                }
-            }
-        }
-    }
-}
+/// The page made again while its WebView2 data is held by another process (W9 review M1): mighty-platform's, shared with the browser
+/// panes in C#'s adopted folder.
+pub use mighty_platform::paths::retry_while_held;
 
 /// C# `UserEnvironment.RepairCurrentProcess` (Program.cs:161): an app started from a bare environment (only `SystemRoot`, as an update
 /// helper from before the fix started it) takes the user's own variables back before anything runs — every missing or empty one from
@@ -254,6 +214,8 @@ impl RegistryStore for CurrentUser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mighty_platform::paths::WEBVIEW_IN_USE_WAITS;
+    use std::time::Duration;
 
     /// Step 0's table in a development build: the flag writes, `--read-only` never does, nothing writes by default; and this build's
     /// policy is the rule over its own stamp and place.

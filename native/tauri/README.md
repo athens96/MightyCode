@@ -359,6 +359,13 @@ Left after W9:
 - Screen share's native half (D11); the Mac stage (its process host, update installer and transport, session and activator are
   `Unsupported`); Authenticode signing; a first-good-start rollback.
 - RenameMigration's finishing of an interrupted migration (W9-F L6, beyond parity).
+- A deviation seen by the smoke: a settings form is drawn again on the next 250 ms shell tick after a change it caused, so a second
+  press on the theme picker within that tick lands on the segment still drawn as on and is ignored (the page's segmented control acts
+  only on a segment drawn off); whether C#'s form answers the second press at once is not checked.
+- The load flake `mighty-delegation` `the_merge_tool_takes_turns_and_follow_ups_stop_at_two` (a fixture `git rev-parse` exiting
+  non-zero with empty stderr under ~35 parallel rustc) has no fix: 50 runs under load passed, the cause looks like the machine's.
+- CI watch: `a_link_is_judged_before_its_target_is_opened` (the tails, W9-E) skips locally without the symlink privilege and asserts
+  only on CI (`CI` set).
 - A stray `%SystemDrive%\ProgramData\{Microsoft\Windows\Caches,NVIDIA Corporation\umdlogs}` folder appears under the working folder
   of some local runs since W8: a process that loads DirectWrite or the GPU driver started without `SystemDrive`; not found yet.
 

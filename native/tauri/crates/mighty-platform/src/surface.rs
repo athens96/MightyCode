@@ -258,7 +258,7 @@ pub struct PetCapture {
     pub width: u32,
     pub height: u32,
     pub bgra: Vec<u8>,
-    /// How many frames the window has drawn (a caller waits for its draw to have been made).
+    /// The number of the frame these pixels are, counting every frame the window drew (a caller waits for its draw to have been made).
     pub frames: u64,
 }
 

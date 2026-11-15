@@ -70,6 +70,9 @@ pub fn set_smoke_agent_ready(provider: &str, ready: bool) {
     }
 }
 
+/// Why a delegated run's request is refused while the app quits.
+const CLOSING: &str = "the app is closing";
+
 /// The window's part of delegation (C# MainWindow.Delegation.cs `InitializeDelegation`), over the host it does not keep alive.
 struct Window {
     host: Weak<Host>,
@@ -88,13 +91,15 @@ impl DelegationWindow for Window {
         let host = self.host.clone();
         Box::pin(async move {
             let mut request = request;
-            let Some(host) = host.upgrade() else { return Ok(request) };
+            // Quitting (or the window gone): no delegated run starts, as none would start from the composer. Handing the request on
+            // unfinished would launch it without its style, so out of a plan mode the style asks for, until the quit's dispose ends it.
+            let Some(host) = host.upgrade() else { return Err(CLOSING.into()) };
             if host.closing() {
-                return Ok(request);
+                return Err(CLOSING.into());
             }
             crate::models::prepare(&host, &request.session_id).await;
             if host.closing() {
-                return Ok(request);
+                return Err(CLOSING.into());
             }
             {
                 let view = host.view();
@@ -826,6 +831,15 @@ async fn offer_discard_after_merge(host: &Arc<Host>, app: &DelegationApp, id: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W9 integration review M1: a delegated run whose window is gone or quitting is refused, never handed on without its style.
+    #[test]
+    fn a_delegated_request_is_refused_once_the_window_is_gone() {
+        let window = Window { host: Weak::new() };
+        let request = StartRunRequest::new("pane", "ws", "claude", "go on");
+        let answer = tauri::async_runtime::block_on(window.run_request(request));
+        assert_eq!(answer.map(|r| r.session_id), Err(CLOSING.to_string()));
+    }
 
     /// W7 review M3 (C# DelegationAppVerification.cs:480-490): the delegation's git hooks folder is `<profile>\git-no-hooks` when the
     /// app may write its profile, this machine's own folder for the profile when it may not, and never under the install folder.

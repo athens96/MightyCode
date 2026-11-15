@@ -202,45 +202,55 @@ impl SurfaceFactory for WebviewSurfaces {
         Box::pin(async move {
             let url = Url::parse(&options.url).map_err(|error| PlatformError::Invalid(format!("address: {error}")))?;
             let label = label(&options.pane_id, self.next.fetch_add(1, Ordering::Relaxed));
-            let (window, arguments) = (self.window.clone(), self.browser_arguments());
+            let (window, arguments, adopted) = (self.window.clone(), self.browser_arguments(), self.csharp_web_data);
             let BrowserOptions { data_dir, bounds, listener, .. } = options;
-            let (popups, downloads) = (listener.clone(), listener.clone());
             // A dev build's page comes from the dev server, which a pane never loads either.
             let dev_server = if tauri::is_dev() { window.config().build.dev_url.clone() } else { None };
             if app_address(&url, dev_server.as_ref()) {
                 return Err(PlatformError::Invalid("address: the app's own".into()));
             }
+            let events = listener.clone();
             // add_child waits for the UI thread: never on the UI thread itself, never on an async worker.
             let webview = tauri::async_runtime::spawn_blocking(move || {
+                let mut attempt = 0u32;
                 // Its own WebView2 data: never the page's (whose environment options differ); C#'s own only where a release build
                 // adopted it, then with C#'s arguments. No remote debugging port, the engine's arguments set (SmartScreen kept), files
                 // dropped on it the page's own (a drop handler would swallow them), never the app's own addresses; a new window or a
                 // download is refused and the host hears of it.
-                let builder = WebviewBuilder::new(label, WebviewUrl::External(Url::parse(BLANK).expect("about:blank")))
-                    .data_directory(data_dir)
-                    .additional_browser_args(arguments)
-                    .disable_drag_drop_handler()
-                    .focused(false)
-                    .on_navigation(move |url| !app_address(url, dev_server.as_ref()))
-                    .on_new_window(move |_, _| {
-                        if let Some(listener) = &popups {
-                            listener.send(BrowserEvent::PopupRefused);
-                        }
-                        NewWindowResponse::Deny
-                    })
-                    .on_download(move |_, event| {
-                        if matches!(event, DownloadEvent::Requested { .. })
-                            && let Some(listener) = &downloads
-                        {
-                            listener.send(BrowserEvent::DownloadRefused);
-                        }
-                        false
-                    });
-                window.add_child(
-                    builder,
-                    PhysicalPosition::new(bounds.x, bounds.y),
-                    PhysicalSize::new(bounds.width.max(1), bounds.height.max(1)),
-                )
+                let mut make = || {
+                    // A label of its own each time: an attempt that failed may still hold its own.
+                    let name = if attempt == 0 { label.clone() } else { format!("{label}-r{attempt}") };
+                    attempt += 1;
+                    let (popups, downloads, dev_server) = (events.clone(), events.clone(), dev_server.clone());
+                    let builder = WebviewBuilder::new(name, WebviewUrl::External(Url::parse(BLANK).expect("about:blank")))
+                        .data_directory(data_dir.clone())
+                        .additional_browser_args(arguments)
+                        .disable_drag_drop_handler()
+                        .focused(false)
+                        .on_navigation(move |url| !app_address(url, dev_server.as_ref()))
+                        .on_new_window(move |_, _| {
+                            if let Some(listener) = &popups {
+                                listener.send(BrowserEvent::PopupRefused);
+                            }
+                            NewWindowResponse::Deny
+                        })
+                        .on_download(move |_, event| {
+                            if matches!(event, DownloadEvent::Requested { .. })
+                                && let Some(listener) = &downloads
+                            {
+                                listener.send(BrowserEvent::DownloadRefused);
+                            }
+                            false
+                        });
+                    window.add_child(
+                        builder,
+                        PhysicalPosition::new(bounds.x, bounds.y),
+                        PhysicalSize::new(bounds.width.max(1), bounds.height.max(1)),
+                    )
+                };
+                // In C#'s folder, C#'s WebView2 may still hold it right after the update swap (0x8007139F): made again for about 10 s,
+                // as the page is (mighty-platform's `retry_while_held`).
+                if adopted { mighty_platform::paths::retry_while_held(make, std::thread::sleep, |_| {}) } else { make() }
             })
             .await
             .map_err(|error| refused("the browser view", error))?

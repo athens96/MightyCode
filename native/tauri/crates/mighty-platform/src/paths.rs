@@ -79,6 +79,49 @@ pub struct WebFolders {
     pub browser: PathBuf,
 }
 
+/// The waits between attempts to make the page while its WebView2 data is held by another process with other options (about 10 s).
+pub const WEBVIEW_IN_USE_WAITS: [std::time::Duration; 6] = [
+    std::time::Duration::from_millis(500),
+    std::time::Duration::from_millis(1000),
+    std::time::Duration::from_millis(1500),
+    std::time::Duration::from_millis(2000),
+    std::time::Duration::from_millis(2500),
+    std::time::Duration::from_millis(2500),
+];
+
+/// WebView2's `HRESULT_FROM_WIN32(ERROR_INVALID_STATE)` (0x8007139F): a browser process of another app (C#'s, right after the update
+/// swap) still holds the data folder with other environment options.
+pub fn webview_in_use(error: &str) -> bool {
+    let error = error.to_ascii_uppercase();
+    error.contains("8007139F") || error.contains("-2147019873")
+}
+
+/// Makes a webview (the page; a browser pane in C#'s adopted folder), again after each of [`WEBVIEW_IN_USE_WAITS`] while its data folder
+/// is held (W9 review M1); any other error, or the last, is returned. `sleep` waits (the page's blocks the setup, before the event loop
+/// runs; a pane's a blocking task).
+pub fn retry_while_held<T, E: std::fmt::Display + std::fmt::Debug>(
+    mut attempt: impl FnMut() -> std::result::Result<T, E>,
+    mut sleep: impl FnMut(std::time::Duration),
+    log: impl Fn(&str),
+) -> std::result::Result<T, E> {
+    let mut waits = WEBVIEW_IN_USE_WAITS.iter();
+    loop {
+        match attempt() {
+            Ok(made) => return Ok(made),
+            Err(error) => {
+                let held = webview_in_use(&format!("{error} {error:?}"));
+                match waits.next() {
+                    Some(wait) if held => {
+                        log(&format!("webview: the data folder is held by another process ({error}); again in {} ms", wait.as_millis()));
+                        sleep(*wait);
+                    }
+                    _ => return Err(error),
+                }
+            }
+        }
+    }
+}
+
 /// The paths every OS crate builds from its roots, and the fake's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPaths {
