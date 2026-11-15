@@ -118,13 +118,15 @@ pub fn no_signature_programs(hooks: &Path) -> Vec<String> {
     .collect()
 }
 
-/// `RunDetailed`'s settings before the command: `-c core.fsmonitor=false -c core.hooksPath=<hooks> -c gc.auto=0`, the
+/// `RunDetailed`'s settings before the command: `-c core.fsmonitor=false -c core.hooksPath=<hooks> -c gc.auto=0
+/// -c maintenance.auto=false`, the
 /// [`no_signature_programs`], `-c core.longpaths=true` on Windows (a child's worktree sits deeper than its parent's checkout may), then
 /// `-C <directory>`.
 pub fn delegation_settings(hooks: &Path, directory: &Path) -> Vec<String> {
     let mut settings: Vec<String> =
         vec!["-c".into(), "core.fsmonitor=false".into(), "-c".into(), format!("core.hooksPath={}", hooks.display())];
-    settings.extend(["-c".into(), "gc.auto=0".into()]);
+    // No automatic maintenance either: a detached `git maintenance` would outlive the run (W9 review M3).
+    settings.extend(["-c".into(), "gc.auto=0".into(), "-c".into(), "maintenance.auto=false".into()]);
     settings.extend(no_signature_programs(hooks));
     if crate::os::windows() {
         settings.extend(["-c".into(), "core.longpaths=true".into()]);
@@ -382,7 +384,8 @@ async fn read(
 mod tests {
     use super::*;
 
-    /// `RunDetailed`'s settings, byte for byte as the fix branch's DelegationWorktree.cs:256 lists them.
+    /// `RunDetailed`'s settings, byte for byte as the fix branch's DelegationWorktree.cs:256 lists them, with automatic maintenance off
+    /// (W9 review M3).
     #[test]
     fn delegations_settings_are_the_hardened_runners() {
         let hooks = Path::new("H");
@@ -393,6 +396,8 @@ mod tests {
             "core.hooksPath=H",
             "-c",
             "gc.auto=0",
+            "-c",
+            "maintenance.auto=false",
             "-c",
             "log.showSignature=false",
             "-c",

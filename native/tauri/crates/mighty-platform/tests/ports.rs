@@ -214,3 +214,106 @@ fn a_fake_platform_has_every_port() {
     assert!(platform.pairing.load().unwrap().is_none());
     assert!(platform.updates.install_location().is_none());
 }
+
+/// W9 (Step 0): the detached start records what it was asked and never starts anything; a job without breakaway refuses it.
+#[test]
+fn a_detached_start_is_recorded_with_its_exact_environment() {
+    let host = FakeProcessHost::default();
+    let request = DetachedRequest {
+        program: absolute("install\\MightyCode.exe"),
+        args: vec!["--update-helper".into()],
+        cwd: absolute("temp"),
+        environment: DetachedEnvironment::Exactly(BTreeMap::from([("SystemRoot".to_string(), "C:\\Windows".to_string())])),
+        hidden: true,
+    };
+    assert!(host.start_detached(request.clone()).unwrap() > 0);
+    assert_eq!(host.detached(), std::slice::from_ref(&request));
+    assert!(host.spawned().is_empty(), "a detached start is not a child");
+    assert!(!format!("{request:?}").contains("C:\\Windows"), "the environment's values stay out of Debug");
+    host.refuse_detached(true);
+    assert!(matches!(host.start_detached(request.clone()), Err(PlatformError::Refused(_))));
+    // W9-B: the relaunched app's start stays in such a job rather than fail.
+    assert!(host.start_detached_or_in_job(request.clone()).unwrap() > 0);
+    assert_eq!(host.detached().len(), 2);
+}
+
+/// W9-E: a waitable detached start is recorded with the detached starts, plays its script's exit code, and ends alone when terminated;
+/// a job without breakaway does not refuse it (the child would start in that job).
+#[tokio::test]
+async fn a_waitable_detached_start_is_waited_for_and_ended_alone() {
+    let host = FakeProcessHost::default();
+    let request = DetachedRequest {
+        program: absolute("tools/python.exe"),
+        args: vec!["-I".into()],
+        cwd: absolute("system"),
+        environment: DetachedEnvironment::Exactly(BTreeMap::from([("HOME".to_string(), "h".to_string())])),
+        hidden: true,
+    };
+    host.refuse_detached(true);
+    host.push(FakeScript { exit_code: 3, ..FakeScript::default() });
+    let child = host.start_detached_waitable(request.clone()).unwrap();
+    assert!(child.id() > 0 && child.wait().await.unwrap() == 3, "the exit code is read");
+    child.terminate();
+    assert!(!host.detached_terminated(0), "ending one that exited ends nothing");
+    host.push(FakeScript { hang: true, ..FakeScript::default() });
+    let hung = host.start_detached_waitable(request.clone()).unwrap();
+    hung.terminate();
+    assert!(host.detached_terminated(1) && hung.wait().await.unwrap() == fake::KILLED, "a running one is ended");
+    assert_eq!(host.detached(), vec![request.clone(), request], "both recorded as detached starts");
+    assert!(host.spawned().is_empty(), "neither is a child of the app");
+}
+
+/// W9 (Step 0): one holder per helper mutex name until its guard drops.
+#[test]
+fn a_helper_mutex_has_one_holder_at_a_time() {
+    let installer = fake::FakeUpdateInstaller::default();
+    let first = installer.helper_mutex("Local\\MightyCode-update-helper-0").unwrap();
+    assert!(first.is_some());
+    assert!(installer.helper_mutex("Local\\MightyCode-update-helper-0").unwrap().is_none(), "a second helper is refused");
+    assert!(installer.helper_mutex("Local\\MightyCode-update-helper-1").unwrap().is_some(), "another folder, another mutex");
+    drop(first);
+    assert!(installer.helper_mutex("Local\\MightyCode-update-helper-0").unwrap().is_some(), "released when dropped");
+}
+
+/// W9 (Step 0): the update transport takes https only, hands redirects back, caps a read, and a download writes the body counting.
+#[tokio::test]
+async fn the_update_transport_hands_redirects_back_and_caps_what_it_reads() {
+    let transport = fake::FakeUpdateTransport::default();
+    transport.route("https://example.invalid/latest.json", fake::FakeRoute::redirect(302, "http://example.invalid/latest.json"));
+    transport.route("https://example.invalid/big.json", fake::FakeRoute::ok(vec![b'x'; 10]));
+    let hop = transport.get_capped("https://example.invalid/latest.json", 1024, Duration::from_secs(1)).await.unwrap();
+    assert_eq!((hop.status, hop.location.as_deref()), (302, Some("http://example.invalid/latest.json")));
+    assert!(matches!(
+        transport.get_capped("http://example.invalid/latest.json", 1024, Duration::ZERO).await,
+        Err(PlatformError::Invalid(_))
+    ));
+    assert!(matches!(transport.get_capped("https://example.invalid/big.json", 9, Duration::ZERO).await, Err(PlatformError::TooLarge(9))));
+    assert_eq!(transport.asked().len(), 2, "the http address never reached a route");
+
+    let folder = std::env::temp_dir().join(format!("mighty-update-transport-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let progress = seen.clone();
+    let request = DownloadRequest {
+        url: "https://example.invalid/big.json".into(),
+        destination: folder.join("package.zip"),
+        limit: 10,
+        timeout: Duration::from_secs(1),
+        progress: Arc::new(move |written| progress.lock().unwrap().push(written)),
+        cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    };
+    let done = transport.download(request.clone()).await.unwrap();
+    assert_eq!((done.status, done.written), (200, 10));
+    assert_eq!(std::fs::read(folder.join("package.zip")).unwrap(), vec![b'x'; 10]);
+    assert_eq!(*seen.lock().unwrap(), [10]);
+    let small = DownloadRequest { limit: 9, ..request };
+    assert!(matches!(transport.download(small).await, Err(PlatformError::TooLarge(9))));
+    std::fs::remove_dir_all(&folder).unwrap();
+    // Review L3: a redirect's address (it may carry a token) never shows in Debug.
+    let secret = "https://example.invalid/next?token=SECRET";
+    let answers = (
+        format!("{:?}", mighty_platform::UpdateResponse { status: 302, location: Some(secret.into()), body: vec![1, 2] }),
+        format!("{:?}", mighty_platform::Downloaded { status: 302, location: Some(secret.into()), written: 0 }),
+    );
+    assert!(!answers.0.contains("SECRET") && !answers.1.contains("SECRET") && answers.0.contains("302"), "{answers:?}");
+}

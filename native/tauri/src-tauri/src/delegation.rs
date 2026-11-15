@@ -70,6 +70,9 @@ pub fn set_smoke_agent_ready(provider: &str, ready: bool) {
     }
 }
 
+/// Why a delegated run's request is refused while the app quits.
+const CLOSING: &str = "the app is closing";
+
 /// The window's part of delegation (C# MainWindow.Delegation.cs `InitializeDelegation`), over the host it does not keep alive.
 struct Window {
     host: Weak<Host>,
@@ -84,26 +87,35 @@ impl DelegationWindow for Window {
     }
 
     /// C# `FinishDelegatedRequest`: after the pane's model list, with the pane's model and settings and the registered models.
-    fn run_request(&self, request: StartRunRequest) -> BoxFuture<'static, StartRunRequest> {
+    fn run_request(&self, request: StartRunRequest) -> BoxFuture<'static, Result<StartRunRequest, String>> {
         let host = self.host.clone();
         Box::pin(async move {
             let mut request = request;
-            let Some(host) = host.upgrade() else { return request };
+            // Quitting (or the window gone): no delegated run starts, as none would start from the composer. Handing the request on
+            // unfinished would launch it without its style, so out of a plan mode the style asks for, until the quit's dispose ends it.
+            let Some(host) = host.upgrade() else { return Err(CLOSING.into()) };
             if host.closing() {
-                return request;
+                return Err(CLOSING.into());
             }
             crate::models::prepare(&host, &request.session_id).await;
             if host.closing() {
-                return request;
+                return Err(CLOSING.into());
             }
-            let view = host.view();
-            if let Some(pane) = view.snapshot.session(&request.session_id).filter(|pane| pane.kind() == "claude") {
-                let workspace = view.snapshot.workspace(pane.workspace_id()).cloned();
-                request.model = pane.model().to_string();
-                request.settings = pane.settings.clone();
-                request.registered_models = crate::runs::registered_models_for(pane.provider(), workspace.as_ref(), &view.snapshot);
+            {
+                let view = host.view();
+                if let Some(pane) = view.snapshot.session(&request.session_id).filter(|pane| pane.kind() == "claude") {
+                    let workspace = view.snapshot.workspace(pane.workspace_id()).cloned();
+                    request.model = pane.model().to_string();
+                    request.settings = pane.settings.clone();
+                    request.registered_models = crate::runs::registered_models_for(pane.provider(), workspace.as_ref(), &view.snapshot);
+                }
             }
-            request
+            // C# `PrepareStyleRunRequest`: a styled pane's grants and plan-mode launch (styles.rs). When the style needs a yes again it
+            // throws and the delegated run does not start (never without its style, so never out of its plan mode).
+            let id = request.session_id.clone();
+            crate::styles::prepare_run(&host, &id, request).await.inspect_err(|reason| {
+                host.log.line(&format!("delegated run in {id} not started: {reason}"));
+            })
         })
     }
 
@@ -373,7 +385,7 @@ pub struct WindowInputs {
 }
 
 /// The pane's composer inputs (C# `owner.SecondSend(pane)`, `WorktreeMenuOnly`, `HeldItems`, `Delegation.EndingRuns.Contains`), read
-/// with the state locked as [`sidebar_rows`]. A style's plan-first launch is the style engine's (W9): none starts in plan mode yet.
+/// with the state locked as [`sidebar_rows`]. A style's plan-first launch is the pane's `launches_in_plan_mode`, which styles.rs sets from its style.
 pub fn window_inputs(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) -> WindowInputs {
     let _ = host;
     let Some(app) = app() else {
@@ -819,6 +831,15 @@ async fn offer_discard_after_merge(host: &Arc<Host>, app: &DelegationApp, id: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W9 integration review M1: a delegated run whose window is gone or quitting is refused, never handed on without its style.
+    #[test]
+    fn a_delegated_request_is_refused_once_the_window_is_gone() {
+        let window = Window { host: Weak::new() };
+        let request = StartRunRequest::new("pane", "ws", "claude", "go on");
+        let answer = tauri::async_runtime::block_on(window.run_request(request));
+        assert_eq!(answer.map(|r| r.session_id), Err(CLOSING.to_string()));
+    }
 
     /// W7 review M3 (C# DelegationAppVerification.cs:480-490): the delegation's git hooks folder is `<profile>\git-no-hooks` when the
     /// app may write its profile, this machine's own folder for the profile when it may not, and never under the install folder.

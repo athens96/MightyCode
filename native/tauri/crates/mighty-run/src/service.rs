@@ -106,6 +106,29 @@ pub trait RemoteRunner: Send + Sync {
     fn dispose(&self) -> BoxFuture<'_, ()>;
 }
 
+/// The remote mirror's panes (C# DesktopService.Mirror.cs, W9-J: mighty-remote's `remote::mirror::desk`): a pane that shows another
+/// computer's pane (its `mirror` reference set). Its requests, stops and answers go to that computer; nothing of it runs here.
+pub trait MirrorRunner: Send + Sync {
+    /// C# `MirrorSubmitAsync`: the text and files as the host pane's next request; the host's word for what it did (`started`,
+    /// `steered`, `queued`). A pane whose computer is not connected is refused before anything goes.
+    fn submit(
+        &self,
+        session_id: String,
+        text: String,
+        attachments: Vec<mighty_core::attachment::RunAttachment>,
+    ) -> BoxFuture<'_, Result<String>>;
+    /// C# `MirrorStopAsync`.
+    fn stop(&self, session_id: String) -> BoxFuture<'_, Result<()>>;
+    /// C# `AnswerMirror` with `MirrorPermissionAsync`: sent without holding the caller; a failure is said by the mirror itself.
+    fn respond_to_tool_permission(&self, session_id: String, request_id: String, allow: bool);
+    /// C# `AnswerMirror` with `MirrorAnswersAsync`.
+    fn answer_questions(&self, session_id: String, request_id: String, answers: IndexMap<String, UserQuestionAnswer>);
+    /// C# `AnswerMirror` with `MirrorPlanAsync`.
+    fn answer_plan(&self, session_id: String, request_id: String, decision: PlanDecision);
+    /// C# `WakeMirrorFor`: the user looks at another workspace or pane (`UpdateAsync` moved the active ids). Never waits.
+    fn looking_at(&self, workspace_id: &str);
+}
+
 /// What `Receive` learnt under the lock, for what follows it outside.
 #[derive(Debug, Clone, Copy)]
 struct Received {
@@ -235,6 +258,8 @@ pub struct RunService {
     manager: RunManager,
     remote: Option<Arc<dyn RemoteRunner>>,
     admitting: Option<Admitting>,
+    /// The remote mirror's panes (W9-J), set once by the app ([`RunService::set_mirror`]).
+    mirror: OnceLock<Arc<dyn MirrorRunner>>,
 }
 
 /// How the service is made.
@@ -335,11 +360,49 @@ impl RunService {
         manager_options.antigravity_rules = Some(rules.clone());
         antigravity::remove_leftovers(rules, leftovers_done);
         let manager = RunManager::new(providers, manager_options);
-        (RunService { shared, manager, remote: options.remote, admitting: options.admitting }, receiver)
+        (RunService { shared, manager, remote: options.remote, admitting: options.admitting, mirror: OnceLock::new() }, receiver)
     }
 
     pub fn manager(&self) -> &RunManager {
         &self.manager
+    }
+
+    /// The remote mirror's panes go through `mirror` from now on (W9-J; set once, a later call changes nothing).
+    pub fn set_mirror(&self, mirror: Arc<dyn MirrorRunner>) {
+        let _ = self.mirror.set(mirror);
+    }
+
+    /// C# `MirrorReference(id) is not null`: None when the pane is no mirrored pane; else the mirror it goes through, or the refusal when
+    /// none is attached: a mirrored pane never falls through to a run of this PC or the client's runs.
+    fn mirror_of(&self, session_id: &str) -> Option<Result<Arc<dyn MirrorRunner>>> {
+        if !lock(&self.shared.state).snapshot.session(session_id).is_some_and(|s| s.mirror.is_some()) {
+            return None;
+        }
+        Some(self.mirror.get().cloned().ok_or_else(|| RunError::State(strings::get("remote.mirror.error.unavailable"))))
+    }
+
+    /// C# `ToolPermissionChanged` raised by the remote mirror: a mirrored pane's waiting request (its run id the pane's) shown as a card,
+    /// or withdrawn (any state but `pending`).
+    pub fn mirror_permission(&self, value: ToolPermissionRequest) {
+        self.shared.tool_permission(value);
+    }
+
+    /// The remote mirror's own change to the state (C# `snapshot = StateStore.Normalize(next, false)` under the lock, without a save:
+    /// the mirror's workspaces and panes are never saved). `change` gives None to leave the state as it is. False when it did not change
+    /// (or the service is closing).
+    pub fn mirror_update(&self, change: impl FnOnce(&AppSnapshot) -> Option<AppSnapshot>) -> bool {
+        let mut state = lock(&self.shared.state);
+        if state.closing {
+            return false;
+        }
+        let Some(changed) = change(&state.snapshot) else { return false };
+        match normalize::normalize(&changed, false) {
+            Ok(next) => {
+                state.snapshot = next;
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     /// The state as the service has it now.
@@ -361,7 +424,7 @@ impl RunService {
     /// `snapshot = StateStore.Normalize(next, false); QueueSave()` after a check under the lock, as delegation's `CreatePane` and `Note`
     /// do). True when it changed.
     pub fn try_update(&self, change: impl FnOnce(&AppSnapshot) -> Option<AppSnapshot>) -> Result<bool> {
-        let closed: Vec<Arc<RunSession>> = {
+        let (closed, looking): (Vec<Arc<RunSession>>, Option<String>) = {
             let mut state = lock(&self.shared.state);
             if state.closing {
                 return Err(RunError::State("the service is closing".into()));
@@ -369,9 +432,16 @@ impl RunService {
             let Some(changed) = change(&state.snapshot) else { return Ok(false) };
             let next = normalize::normalize(&changed, false).map_err(|e| RunError::Invalid(e.to_string()))?;
             let closed = state.snapshot.sessions().iter().filter(|before| next.session(before.id()).is_none()).cloned().collect();
+            let moved = next.active_workspace_id != state.snapshot.active_workspace_id
+                || next.active_session_id != state.snapshot.active_session_id;
+            let looking = if moved { next.active_workspace_id.clone() } else { None };
             state.snapshot = next;
-            closed
+            (closed, looking)
         };
+        // Looking at a mirror workspace or one of its panes reads its host at once (C# `WakeMirrorFor`).
+        if let (Some(workspace), Some(mirror)) = (looking, self.mirror.get()) {
+            mirror.looking_at(&workspace);
+        }
         // A closed pane's Antigravity card and reason go with it (C# `ForgetAntigravity`).
         // A delegated child's close reaches delegation (C# `PaneClosed`).
         for pane in closed {
@@ -382,6 +452,14 @@ impl RunService {
         }
         self.shared.send(ServiceEvent::SaveNow);
         Ok(true)
+    }
+
+    /// C#'s private `Receive` as the perf scenario reaches it by reflection (MainWindow.PerfScenario.cs `PerfReceive`): one run event
+    /// applied through the service's own path, as a run's reader hands it in. Only the timing scenario calls it (src-tauri perf.rs, W9-H);
+    /// hidden from the docs, as C#'s is private.
+    #[doc(hidden)]
+    pub fn receive_for_perf(&self, value: RunEvent) {
+        self.shared.receive(value);
     }
 
     /// C# `closing`: the service began to close ([`RunService::dispose`]).
@@ -457,7 +535,12 @@ impl RunService {
         }
         let state = lock(&self.shared.state);
         let snapshot = &state.snapshot;
-        snapshot.session(session_id).and_then(|s| snapshot.workspace(s.workspace_id())).is_some_and(|w| w.remote.is_some())
+        // A mirror workspace's panes are their host's own, driven through the mirror ([`MirrorRunner`]), never the client's runs.
+        snapshot
+            .session(session_id)
+            .and_then(|s| snapshot.workspace(s.workspace_id()))
+            .and_then(|w| w.remote.as_ref())
+            .is_some_and(|r| !r.mirror)
     }
 
     /// C# `ResolveSharedAsync` (a sharing host's `ResolveLocal`): a registered local workspace whose folder exists, or why not.
@@ -496,6 +579,13 @@ impl RunService {
     /// stopped before it started. `title_from`: what an automatic title follows when it is not the input (`Some("")` for a run
     /// delegation starts on its own: none).
     pub async fn launch(&self, value: StartRunRequest, title_from: Option<&str>, reach: bool) -> Result<Option<String>> {
+        // A mirrored pane's request is the host pane's next one, as the phone's send: nothing runs or changes here.
+        if let Some(mirror) = self.mirror_of(&value.session_id) {
+            let mirror = mirror?;
+            let attachments = value.attachment_list().map(|list| list.to_vec()).unwrap_or_default();
+            mirror.submit(value.session_id.clone(), value.input.clone(), attachments).await?;
+            return Ok(None);
+        }
         let mut request = value.validate()?;
         let workspace;
         let remote;
@@ -527,9 +617,14 @@ impl RunService {
             }
             request.phase_models = phase_models::normalized(state.snapshot.phase_models.as_ref());
             request.todo_progress = if request.resume_id.is_none() { None } else { pane.todo_progress.clone() };
-            request.working_folder = pane.working_folder.clone();
+            // A terminal pane keeps a folder too (a pane worktree's terminal), but only an agent pane's run works in it.
+            request.working_folder = if pane.kind() == "claude" { pane.working_folder.clone() } else { None };
             // C# `DelegationWorktreeRoot(pane)`: the child's worktree as delegation made it, never what the caller says.
             request.delegation_worktree_root = self.shared.delegation.as_ref().and_then(|hooks| hooks.worktree_root(&pane));
+            // A pane worktree's own PORT and folders (C# `PaneWorktree.Environment`), never for a remote workspace's pane.
+            request.pane_environment = (pane.kind() == "claude" && !remote)
+                .then(|| pane.pane_worktree.as_ref().map(|worktree| worktree.environment(workspace.path()).into_iter().collect()))
+                .flatten();
             if state.routes.contains_key(&request.session_id) {
                 return Err(RunError::State(strings::get("run.error.alreadyRunning")));
             }
@@ -562,6 +657,23 @@ impl RunService {
             }
             let named = (request.kind == "claude").then_some(request.provider.as_str());
             let asked = RunEvent::log(&request.session_id, "user", &history, named);
+            // A pane worktree's agent is told once, with its first request that is no slash command, where it works and that it commits
+            // its work (C# `PaneWorktreeNote`). The transcript keeps the request as sent; only the CLI gets the note.
+            if !remote
+                && request.kind == "claude"
+                && let Some(worktree) = pane.pane_worktree.as_ref().filter(|worktree| worktree.note_applies(&request.input))
+            {
+                request.input = worktree.with_note(&request.input);
+                for session in state.snapshot.sessions_mut().iter_mut() {
+                    if session.id() == request.session_id && session.pane_worktree.is_some() {
+                        let mut next = RunSession::clone(session);
+                        if let Some(held) = next.pane_worktree.as_mut() {
+                            held.note_given = Some(true);
+                        }
+                        *session = Arc::new(next);
+                    }
+                }
+            }
             // The run's diagram block is named here, so a send can answer with it before the runner's first event.
             request.graph_run_id =
                 (!remote && request.kind != "shell" && GRAPH_PROVIDERS.contains(&request.provider.as_str())).then(wire::new_id);
@@ -737,6 +849,11 @@ impl RunService {
 
     /// `StopAsync`: a route not started yet is marked, so its start stops; a started one is stopped by its runner.
     pub async fn stop(&self, id: &str) -> Result<()> {
+        // A mirrored pane runs on its host: the stop goes there.
+        if let Some(mirror) = self.mirror_of(id) {
+            let mirror = mirror?;
+            return mirror.stop(id.to_string()).await;
+        }
         {
             let mut state = lock(&self.shared.state);
             let Some(route) = state.routes.get_mut(id) else { return Ok(()) };
@@ -755,6 +872,11 @@ impl RunService {
 
     /// `RespondToToolPermission`: 이번만 허용 / 거부, the only way a request is ever answered.
     pub async fn respond_to_tool_permission(&self, session_id: &str, request_id: &str, allow: bool) -> Result<()> {
+        // A mirrored pane's request is its host's: the answer goes there.
+        if let Some(mirror) = self.mirror_of(session_id) {
+            mirror?.respond_to_tool_permission(session_id.into(), request_id.into(), allow);
+            return Ok(());
+        }
         if self.remote_pane(session_id) && self.remote.is_some() {
             let (session, request) = (session_id.to_string(), request_id.to_string());
             self.answer_remote(session_id, move |client| {
@@ -772,6 +894,10 @@ impl RunService {
         request_id: &str,
         answers: &IndexMap<String, UserQuestionAnswer>,
     ) -> Result<()> {
+        if let Some(mirror) = self.mirror_of(session_id) {
+            mirror?.answer_questions(session_id.into(), request_id.into(), answers.clone());
+            return Ok(());
+        }
         if self.remote_pane(session_id) && self.remote.is_some() {
             let (session, request, answers) = (session_id.to_string(), request_id.to_string(), answers.clone());
             self.answer_remote(session_id, move |client| Box::pin(async move { client.answer_questions(session, request, answers).await }));
@@ -782,6 +908,10 @@ impl RunService {
 
     /// `AnswerPlan`: None for a remote pane (its record comes back as the host's event).
     pub async fn answer_plan(&self, session_id: &str, request_id: &str, decision: &PlanDecision) -> Result<Option<PlanRecord>> {
+        if let Some(mirror) = self.mirror_of(session_id) {
+            mirror?.answer_plan(session_id.into(), request_id.into(), decision.clone());
+            return Ok(None);
+        }
         if self.remote_pane(session_id) && self.remote.is_some() {
             let (session, request, decision) = (session_id.to_string(), request_id.to_string(), decision.clone());
             self.answer_remote(session_id, move |client| Box::pin(async move { client.answer_plan(session, request, decision).await }));
@@ -792,7 +922,7 @@ impl RunService {
 
     /// `TrySteerAsync`: a notice handed to the pane's running local Claude turn, recorded as the user's line.
     pub fn try_steer(&self, session_id: &str, text: &str) -> bool {
-        if self.remote_pane(session_id) || !self.manager.try_steer(session_id, text) {
+        if self.mirror_of(session_id).is_some() || self.remote_pane(session_id) || !self.manager.try_steer(session_id, text) {
             return false;
         }
         self.shared.receive(RunEvent::log(session_id, "user", text, Some("claude")));

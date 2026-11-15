@@ -218,7 +218,7 @@ fn project(service: &mighty_run::service::RunService, sign_in_lost: &dyn Fn(&str
     planner::project(
         &sessions,
         &workspaces,
-        &|id| service.pending_permissions(id),
+        &|id| service.pending_permissions(id).into_iter().filter(crate::styles::shows).collect(),
         &|_, _| false,
         &|id| service.antigravity_card(id),
         sign_in_lost,

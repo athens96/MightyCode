@@ -25,6 +25,8 @@ mighty-delegation.workspace = true
 mighty-files.workspace = true
 mighty-workmap.workspace = true
 mighty-terminal.workspace = true
+# The style engine (W9-D): the phone's style options, panel and older phones' Ouroboros payload.
+mighty-styles.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 indexmap = { workspace = true, features = ["serde"] }

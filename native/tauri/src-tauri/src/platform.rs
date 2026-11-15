@@ -21,9 +21,22 @@ pub fn platform(profile: Option<PathBuf>, identifier: &str) -> Result<Platform> 
     os::platform(profile, identifier)
 }
 
-/// The native views over `window`'s page.
-pub fn surfaces(window: tauri::Window) -> Arc<dyn SurfaceFactory> {
-    os::surfaces(window)
+/// The native views over `window`'s page; `csharp_web_data` when the browser panes' data is C#'s own folder (W9-F's adopted folder,
+/// `paths::web_folders`), whose views open with C#'s environment options.
+pub fn surfaces(window: tauri::Window, csharp_web_data: bool) -> Arc<dyn SurfaceFactory> {
+    os::surfaces(window, csharp_web_data)
+}
+
+/// W9-C: the main window whose session messages `Platform::session` reports (Windows subclasses it; call on the window's thread). The
+/// Mac's session port answers `Unsupported` until its stage, so there is nothing to hand it.
+pub fn watch_session(window: &tauri::Window) -> Result<()> {
+    #[cfg(windows)]
+    return os::session::watch_window(window);
+    #[cfg(not(windows))]
+    {
+        let _ = window;
+        Ok(())
+    }
 }
 
 /// The system clipboard's text (a terminal's copy and paste).
@@ -51,6 +64,13 @@ pub fn disk_space() -> Arc<dyn mighty_platform::DiskSpace> {
 /// The process host alone, for the exe's `--fake-claude` mode, which serves before any profile is read (main.rs).
 pub fn process_host() -> Arc<dyn mighty_platform::ProcessHost> {
     os::process_host()
+}
+
+/// The update installer alone (the mutex, the process wait, the fresh environment, the uninstall entry), for the exe's
+/// `--update-helper` mode, which runs before any profile is read (update_helper.rs, W9-B; with [`process_host`]'s `start_detached`).
+#[allow(dead_code, reason = "update_helper.rs (W9-B) runs the helper with it")]
+pub fn update_installer() -> Arc<dyn mighty_platform::UpdateInstaller> {
+    os::update_installer()
 }
 
 /// W6's ports, managed by the app (`host.app.state::<Ports>()`): a terminal window that outlives the app (sign-ins, the setup

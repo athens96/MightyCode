@@ -49,11 +49,16 @@ pub fn is_local_only(provider: &str) -> bool {
 /// `RemoteWorkspaceFeatures.AddPaneEntries`: a remote workspace's menu offers its agents, a remote command and the three ways to add
 /// a workspace.
 pub fn entries_for(workspace: Option<&Workspace>) -> Vec<String> {
-    if workspace.is_none_or(|w| w.remote.is_none()) {
+    let Some(remote) = workspace.and_then(|w| w.remote.as_ref()) else {
         return entries();
-    }
+    };
     let mut entries: Vec<String> = wire::PROVIDERS.iter().filter(|p| !is_local_only(p)).map(|p| format!("{AGENT_PREFIX}{p}")).collect();
-    entries.extend([SEPARATOR, SHELL, SEPARATOR, OPEN_PROJECT, NEW_FOLDER, FROM_GIT].map(str::to_string));
+    if remote.mirror {
+        // A mirror workspace's new pane is an agent pane made on its host: no command pane there (W9-J).
+        entries.extend([SEPARATOR, OPEN_PROJECT, NEW_FOLDER, FROM_GIT].map(str::to_string));
+    } else {
+        entries.extend([SEPARATOR, SHELL, SEPARATOR, OPEN_PROJECT, NEW_FOLDER, FROM_GIT].map(str::to_string));
+    }
     entries
 }
 
@@ -113,9 +118,10 @@ pub fn shortcut(entry: &str) -> Option<&'static str> {
     }
 }
 
-/// `PaneLayout.HasRoom`: the app holds at most 128 panes, every workspace together.
+/// `PaneLayout.HasRoom`: the app holds at most 128 panes of this PC, every workspace together; the remote mirror's panes are the
+/// host's and never count (`OwnSessionCount`).
 pub fn has_room(state: &AppSnapshot) -> bool {
-    state.sessions().len() < MAXIMUM_SESSIONS
+    state.own_session_count() < MAXIMUM_SESSIONS
 }
 
 /// `SessionTemplate.LastUsed`: the newest log entry's time, else when the pane was made.
@@ -129,8 +135,8 @@ fn last_used(session: &RunSession) -> i64 {
         .map_or(i64::MIN, |t| t.utc_ticks())
 }
 
-/// `SessionTemplate.Find`: the agent pane of the same kind and provider used last (never a delegated child), whose choices a new one
-/// takes.
+/// `SessionTemplate.Find`: the agent pane of the same kind and provider used last (never a delegated child, never a remote mirror's pane:
+/// another computer's settings, full access among them, never reach a pane of this PC), whose choices a new one takes.
 pub fn template<'a>(target: &RunSession, sessions: &'a [Arc<RunSession>]) -> Option<&'a RunSession> {
     if target.kind() != "claude" {
         return None;
@@ -139,6 +145,7 @@ pub fn template<'a>(target: &RunSession, sessions: &'a [Arc<RunSession>]) -> Opt
     for session in sessions.iter().map(Arc::as_ref) {
         if session.id() == target.id()
             || session.parent_session_id.is_some()
+            || session.mirror.is_some()
             || session.kind() != target.kind()
             || session.provider() != target.provider()
         {
@@ -282,6 +289,40 @@ mod tests {
 
     /// `AddPaneMenuVerification.OnlyClaudeAndCodexFromTheMenuMayAskToResume`'s Ctrl+N part (the rest is mighty-history's
     /// resumable_sessions.rs).
+    /// W9-J review M1: a new pane of this PC never takes a remote mirror's pane (another computer's settings, full access among them)
+    /// as its template, however recently it was used; this PC's own panes still are.
+    #[test]
+    fn a_mirrored_pane_is_never_a_new_panes_template() {
+        let settings = |mode: &str| crate::model::RunSettings { permission_mode: mode.into(), ..crate::model::RunSettings::default() };
+        let own = RunSession {
+            id: Some("own".into()),
+            model: Some("opus".into()),
+            settings: Some(settings("acceptEdits")),
+            created_at: Some("2026-11-01T00:00:00.0000000+00:00".into()),
+            ..RunSession::default()
+        };
+        let far = RunSession {
+            id: Some("far".into()),
+            model: Some("sonnet".into()),
+            settings: Some(settings("fullAccess")),
+            created_at: Some("2026-11-13T00:00:00.0000000+00:00".into()),
+            mirror: Some(crate::model::MirrorReference {
+                connection_id: "conn".into(),
+                host_session_id: "host".into(),
+                host_workspace_id: "ws".into(),
+                host_name: "studio-pc".into(),
+            }),
+            ..RunSession::default()
+        };
+        let target = RunSession { id: Some("new".into()), ..RunSession::default() };
+        let made = inherit(target.clone(), &[Arc::new(own.clone()), Arc::new(far.clone())]);
+        assert_eq!(made.settings.as_ref().map(|s| s.permission_mode.as_str()), Some("acceptEdits"), "this PC's pane, not the host's");
+        assert_eq!(made.model.as_deref(), Some("opus"));
+        let alone = inherit(target, &[Arc::new(far)]);
+        assert_eq!(alone.settings.as_ref().map(|s| s.permission_mode.as_str()), Some("manual"), "with only a mirrored pane, the defaults");
+        assert_eq!(alone.model.as_deref(), Some("default"));
+    }
+
     #[test]
     fn ctrl_n_adds_a_claude_pane() {
         assert_eq!(NEW_PANE_SHORTCUT_PROVIDER, "claude");
@@ -294,6 +335,7 @@ mod tests {
             workspace_id: Some("w".into()),
             host_name: Some("host".into()),
             version: 2,
+            mirror: false,
         };
         let remote = Workspace { remote: Some(reference), ..Workspace::default() };
         let entries = entries_for(Some(&remote));

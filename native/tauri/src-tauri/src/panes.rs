@@ -113,7 +113,8 @@ pub fn alive(view: &View, id: &str) -> bool {
 
 /// The pane's waiting tool-permission requests as the run service holds them (C# `toolPermissions`).
 pub fn requests(host: &Host, id: &str) -> Vec<ToolPermissionRequest> {
-    host.runs().map(|r| r.service.pending_permissions(id)).unwrap_or_default()
+    // A request the pane's style is answering by itself never shows as waiting (styles.rs, W9-D).
+    host.runs().map(|r| r.service.pending_permissions(id).into_iter().filter(crate::styles::shows).collect()).unwrap_or_default()
 }
 
 /// What the window knows of the pane that the composer reads (C# `owner.*` members); the later stages' stay at rest. A Claude pane
@@ -158,8 +159,12 @@ pub fn composer_state(host: &Host, view: &mut View, id: &str) -> Option<Composer
     let runs = host.runs();
     let runtime = runs.and_then(|r| r.composer_runtime(pane.provider()));
     let efforts = runs.map(|r| r.efforts(&pane, workspace.as_ref(), &view.snapshot)).unwrap_or_default();
-    let window = window_rules(host, &view.snapshot, &pane, requests(host, id).iter().filter(|r| r.state == "pending").count());
+    let mut window = window_rules(host, &view.snapshot, &pane, requests(host, id).iter().filter(|r| r.state == "pending").count());
+    // The style row and the guide panel (styles.rs, W9-D: C# `RefreshStyles`, `RenderGuidedStyle`).
+    (window.style, window.guided) = crate::styles::window(host, view, &pane);
+    let launches = crate::styles::launches_in_plan(&view.snapshot, &pane);
     let ui = view.panes.get_mut(id)?;
+    ui.view.launches_in_plan_mode = launches;
     ui.forget_unqueued();
     ui.view.queue = ui.queue.items().to_vec();
     let inputs = ComposerInputs {
@@ -235,14 +240,15 @@ pub fn cards_of(host: &Host, view: &mut View, id: &str) -> Option<(Vec<Card>, bo
     let antigravity = crate::antigravity::card_input(host, id);
     // The agents' open_url prompts (agent_io.rs, W7-C).
     let web_open = crate::agent_io::web_open_cards(host, id);
-    // The background strip's rows (C# `PlanCardSupport.BackgroundStripRows`, mighty-graph's `view::mobile`), read only while it is open;
-    // the background output tails are W9's (none read yet).
+    // The background strip's rows (C# `PlanCardSupport.BackgroundStripRows`, mighty-graph's `view::mobile`), read only while it is open,
+    // with the background runs' last output lines (tails.rs, `BackgroundOutputFor`).
     let now = mighty_core::time::DateTimeOffset::now();
     let background_rows: Vec<cards::BackgroundTask> = if background_open {
+        let tails = crate::tails::output_for(id);
         mighty_graph::view::mobile::background_strip_rows(
             pane.background_work.as_ref(),
             mighty_graph::support::newest_request_run(pane.graph_runs()),
-            None,
+            Some(&tails),
             &host.locale,
         )
         .into_iter()
@@ -264,8 +270,8 @@ pub fn cards_of(host: &Host, view: &mut View, id: &str) -> Option<(Vec<Card>, bo
         utc_offset_minutes: utc_offset_minutes(),
         pane: &pane,
         busy,
-        styled: false,
-        style_draws_tasks: false,
+        styled: crate::styles::card_flags(&pane).0,
+        style_draws_tasks: crate::styles::card_flags(&pane).1,
         diagram_draws_plan,
         requests: &requests,
         plan_draft: ui.plan_draft.as_ref(),

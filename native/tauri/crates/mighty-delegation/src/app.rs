@@ -66,9 +66,10 @@ pub trait DelegationWindow: Send + Sync {
         let _ = pane;
         None
     }
-    /// C# `DelegatedRunRequest`: the request of a run delegation starts on its own, finished the way the window finishes its own sends.
-    fn run_request(&self, request: StartRunRequest) -> BoxFuture<'static, StartRunRequest> {
-        Box::pin(async move { request })
+    /// C# `DelegatedRunRequest`: the request of a run delegation starts on its own, finished the way the window finishes its own sends;
+    /// an error (C#'s throw: a style that needs a yes again) starts no run, and what it carried is held.
+    fn run_request(&self, request: StartRunRequest) -> BoxFuture<'static, Result<StartRunRequest, String>> {
+        Box::pin(async move { Ok(request) })
     }
     /// C# `EndAgentTerminal`: ends the pane's agent terminal and everything it started, and returns once they have exited.
     fn end_agent_terminal(&self, session_id: String) -> BoxFuture<'static, ()> {
@@ -450,7 +451,8 @@ impl DelegationApp {
         request.settings = pane.settings.clone();
         request.resume_id = pane.resume_id.clone();
         request.attachments = attachments.filter(|files| !files.is_empty());
-        let request = self.window.run_request(request).await;
+        // C# catches what `DelegatedRunRequest` throws and answers null: no run, what it carried is not lost.
+        let request = self.window.run_request(request).await.ok()?;
         service.launch(request, Some(""), true).await.ok().flatten()
     }
 

@@ -110,6 +110,52 @@ impl UpdateInstaller for Unsupported {
     fn hand_off(&self, _update: &StagedUpdate, _relaunch: bool) -> Result<()> {
         no("UpdateInstaller", "hand_off")
     }
+    fn helper_mutex(&self, _name: &str) -> Result<Option<HelperMutex>> {
+        no("UpdateInstaller", "helper_mutex")
+    }
+    fn wait_for_exit(&self, _pid: u32, _timeout: std::time::Duration) -> Result<bool> {
+        no("UpdateInstaller", "wait_for_exit")
+    }
+    fn running_from(&self, _folder: &Path, _except_self: bool) -> Result<bool> {
+        no("UpdateInstaller", "running_from")
+    }
+    /// None: no environment is built.
+    fn fresh_environment(&self) -> Option<std::collections::BTreeMap<String, String>> {
+        None
+    }
+    fn sync_display_version(&self, _app_directory: &Path, _version: &str) -> Result<bool> {
+        no("UpdateInstaller", "sync_display_version")
+    }
+    fn refresh_renamed_install(&self, _app_directory: &Path) -> Result<()> {
+        no("UpdateInstaller", "refresh_renamed_install")
+    }
+}
+
+impl UpdateTransport for Unsupported {
+    fn get_capped(&self, _url: &str, _cap: usize, _timeout: std::time::Duration) -> BoxFuture<'_, Result<UpdateResponse>> {
+        Box::pin(async { no("UpdateTransport", "get_capped") })
+    }
+    fn download(&self, _request: DownloadRequest) -> BoxFuture<'_, Result<Downloaded>> {
+        Box::pin(async { no("UpdateTransport", "download") })
+    }
+}
+
+impl SessionWatch for Unsupported {
+    fn on_ending(&self, _callback: SessionCallback) -> Result<Subscription> {
+        no("SessionWatch", "on_ending")
+    }
+    fn since_last_input(&self) -> Result<std::time::Duration> {
+        no("SessionWatch", "since_last_input")
+    }
+}
+
+impl ToastActivator for Unsupported {
+    fn register(&self, _aumid: &str, _clsid: &str, _exe: &Path) -> Result<()> {
+        no("ToastActivator", "register")
+    }
+    fn serve(&self, _clsid: &str, _callback: ToastActivation) -> Result<Subscription> {
+        no("ToastActivator", "serve")
+    }
 }
 
 /// Opens nothing; says the page draws the terminal and the platform the browser (so the page reserves the slot).
@@ -237,6 +283,26 @@ mod tests {
         assert!(port.accept().await.err().is_some_and(|e| e.is_unsupported()));
         assert!(port.connect("x", std::time::Duration::ZERO).await.err().is_some_and(|e| e.is_unsupported()));
         assert!(port.available_bytes(Path::new("x")).unwrap_err().is_unsupported());
+        // W9's ports and the detached start (Step 0): every one a typed refusal on an OS that has not written it.
+        let detached = DetachedRequest {
+            program: PathBuf::from("x"),
+            args: vec![],
+            cwd: PathBuf::from("y"),
+            environment: DetachedEnvironment::Inherit,
+            hidden: true,
+        };
+        assert!(port.start_detached(detached).unwrap_err().is_unsupported());
+        assert!(port.helper_mutex("Local\\x").unwrap_err().is_unsupported());
+        assert!(port.wait_for_exit(1, std::time::Duration::ZERO).unwrap_err().is_unsupported());
+        assert!(port.running_from(Path::new("x"), true).unwrap_err().is_unsupported());
+        assert_eq!(port.fresh_environment(), None);
+        assert!(port.sync_display_version(Path::new("x"), "0.5.0").unwrap_err().is_unsupported());
+        assert!(port.refresh_renamed_install(Path::new("x")).unwrap_err().is_unsupported());
+        assert!(port.get_capped("https://example.invalid/latest.json", 1, std::time::Duration::ZERO).await.unwrap_err().is_unsupported());
+        assert!(port.since_last_input().unwrap_err().is_unsupported());
+        assert!(port.on_ending(std::sync::Arc::new(|_| {})).err().is_some_and(|e| e.is_unsupported()));
+        assert!(port.register("dev.mightycode.native", "{0}", Path::new("x")).unwrap_err().is_unsupported());
+        assert!(port.serve("{0}", std::sync::Arc::new(|_, _| {})).err().is_some_and(|e| e.is_unsupported()));
         assert!(
             port.open_browser(BrowserOptions {
                 pane_id: "p".into(),

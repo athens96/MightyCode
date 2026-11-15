@@ -31,12 +31,18 @@ webview2-com = "0.38"
 # The Direct2D calls' points and transforms (`Vector2`, `Matrix3x2`; already in the lock as a dependency of `windows`): the pet (pet.rs,
 # W8-E).
 windows-numerics = "0.2"
+# The toast activator's COM objects (`#[implement]` of `IClassFactory` and `INotificationActivationCallback`, activator.rs, W9-F): the
+# macro names `windows_core` itself, so it is a direct dependency (the version `windows` 0.61 already brings, in the lock).
+windows-core = "0.61"
 # W8-C: SO_EXCLUSIVEADDRUSE on the direct and sharing listeners through socket2's raw setsockopt (net.rs).
 socket2 = { version = "0.6", features = ["all"] }
 # Data_Pdf, Foundation, Storage_Streams, Win32_System_WinRT: a PDF's first page (files.rs, W4). Data_Xml_Dom, UI_Notifications: the
 # completion toast (notify.rs, W6); Win32_Graphics_DirectWrite: the installed font families (fonts.rs, W6). Win32_Graphics_Direct2D,
 # Win32_Graphics_Direct2D_Common, Win32_Graphics_Dxgi_Common, Win32_Graphics_Imaging, Win32_UI_HiDpi: the companion pet drawn with
-# Direct2D and DirectWrite onto its layered window (pet.rs, W8-E).
+# Direct2D and DirectWrite onto its layered window (pet.rs, W8-E). W9 Step 0: Win32_UI_Shell, Win32_UI_Shell_PropertiesSystem: the
+# renamed install's shortcuts (`IShellLinkW`, `IPersistFile`, update.rs, W9-B); Win32_UI_Notifications: the toast activator's
+# `INotificationActivationCallback` (activator.rs, W9-F). W9-B: Win32_Storage_FileSystem, which `IShellLinkW::GetPath` needs (a
+# shortcut's target, update.rs).
 windows = { version = "0.61", features = [
     "Data_Pdf",
     "Data_Xml_Dom",
@@ -50,17 +56,26 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Imaging",
+    "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_WinRT",
     "Win32_UI_HiDpi",
+    "Win32_UI_Notifications",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ] }
 # Win32_Networking_WinHttp: the HTTPS GET (http.rs, W6). Win32_System_Pipes, Win32_Security, Win32_Security_Authorization: the Agent IO
 # pipe's DACL and owner check (agent_io.rs, W7-C); Win32_Storage_FileSystem: GetDiskFreeSpaceExW (disk_space.rs, W7-B). W8:
 # Win32_NetworkManagement_IpHelper, Win32_NetworkManagement_Ndis, Win32_Networking_WinSock, Win32_System_Power: the adapters, address
 # changes, resumes and the exclusive listener (net.rs, W8-C); Win32_UI_Input_KeyboardAndMouse, Win32_UI_HiDpi: the pet window's
-# capture, keys and per-monitor DPI (pet.rs, W8-E).
+# capture, keys and per-monitor DPI (pet.rs, W8-E). W9 Step 0: Win32_System_Diagnostics_ToolHelp, Win32_System_ProcessStatus: the
+# processes running from the install folder (`CreateToolhelp32Snapshot`, `QueryFullProcessImageNameW`, update.rs, W9-B);
+# Win32_UI_Shell_PropertiesSystem: the shortcuts' properties (update.rs, W9-B). Already on: Win32_System_Environment
+# (`CreateEnvironmentBlock`), Win32_System_Threading (`CreateMutexW`, `CreateProcessW` detached), Win32_System_Com,
+# Win32_UI_Input_KeyboardAndMouse (`GetLastInputInfo`, session.rs, W9-C), Win32_UI_Shell, Win32_Networking_WinHttp
+# (update_transport.rs, W9-B).
 windows-sys = { version = "0.61", features = [
     "Wdk_System_Threading",
     "Win32_Foundation",
@@ -80,6 +95,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Com_Urlmon",
     "Win32_System_Console",
     "Win32_System_DataExchange",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Environment",
     "Win32_System_IO",
     "Win32_System_JobObjects",
@@ -88,6 +104,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Ole",
     "Win32_System_Pipes",
     "Win32_System_Power",
+    "Win32_System_ProcessStatus",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
@@ -96,6 +113,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
+    "Win32_UI_Shell_PropertiesSystem",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

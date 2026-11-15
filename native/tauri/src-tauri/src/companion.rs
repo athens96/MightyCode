@@ -19,7 +19,7 @@
 //! locked), and the overlay's lock is taken before the state's.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -138,7 +138,7 @@ pub fn bundled_pets(host: &Host) -> PathBuf {
     let beside = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("pets")));
     let resources = host.app.path().resource_dir().ok().map(|dir| dir.join("pets"));
     #[cfg(debug_assertions)]
-    let repository = Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("..").join("assets").join("pets"));
+    let repository = Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("..").join("assets").join("pets"));
     #[cfg(not(debug_assertions))]
     let repository: Option<PathBuf> = None;
     [beside, resources, repository]

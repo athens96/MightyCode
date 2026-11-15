@@ -193,8 +193,21 @@ pub fn select_workspace(view: &mut View, id: &str) -> Result<(), String> {
 
 /// C# `AddPane`: a shell or agent pane (`kind` "shell", "browser", "claude") in the active workspace, in `group` or the active
 /// pane's, made the active one; a 129th pane is refused with the Mac's sentence. True when it was added.
-fn add_pane(
+pub(crate) fn add_pane(
     host: &Arc<Host>,
+    kind: &str,
+    provider: &str,
+    group: Option<&str>,
+    shape: impl FnOnce(RunSession) -> RunSession,
+) -> Result<bool, String> {
+    add_pane_to(host, None, kind, provider, group, shape)
+}
+
+/// [`add_pane`] into `workspace` when one is named (a pane worktree's, made while another workspace may have become the active one,
+/// W9-I), else into the active workspace.
+pub(crate) fn add_pane_to(
+    host: &Arc<Host>,
+    workspace: Option<&str>,
     kind: &str,
     provider: &str,
     group: Option<&str>,
@@ -202,7 +215,18 @@ fn add_pane(
 ) -> Result<bool, String> {
     let locale = host.locale;
     let mut view = host.view();
-    let workspace = view.snapshot.active_workspace_id.clone().ok_or_else(|| locale.get("window.error.addWorkspaceFirst"))?;
+    let workspace = match workspace {
+        Some(named) => Some(named.to_string()).filter(|id| view.snapshot.workspace(id).is_some()),
+        None => view.snapshot.active_workspace_id.clone(),
+    }
+    .ok_or_else(|| locale.get("window.error.addWorkspaceFirst"))?;
+    // A mirror workspace's new agent pane is made on its computer and shows here at the next read (W9-J, mirror.rs).
+    if crate::mirror::is_mirror_workspace(&view.snapshot, &workspace) {
+        view.shows_dashboard = false;
+        drop(view);
+        crate::mirror::create_pane(host, workspace, kind.to_string(), provider.to_string());
+        return Ok(false);
+    }
     let remote = view.snapshot.workspace(&workspace).is_some_and(|w| w.remote.is_some());
     if !matches!(kind, "claude" | "shell") && remote {
         return Err(locale.get("remote.windows.workspace.paneUnavailable"));
@@ -257,12 +281,13 @@ async fn add_agent_pane(host: &Arc<Host>, provider: &str, group: Option<String>)
         view.snapshot.active_workspace_id.as_deref().and_then(|id| view.snapshot.workspace(id)).cloned()
     };
     let source = RESUME.get().cloned();
+    // A new agent pane works where the workspace's pane worktree mode says (W9-I, C# `AddNewAgentPane`).
     let (Some(workspace), Some(source)) = (workspace.filter(|w| w.remote.is_none()), source) else {
-        add_pane(host, "claude", provider, group.as_deref(), |pane| pane)?;
+        crate::pane_worktree::add_new_agent_pane(host, provider, group.as_deref()).await?;
         return Ok(());
     };
     if !resumable::may_ask_resume(provider, true) {
-        add_pane(host, "claude", provider, group.as_deref(), |pane| pane)?;
+        crate::pane_worktree::add_new_agent_pane(host, provider, group.as_deref()).await?;
         return Ok(());
     }
     let state = frame(host);
@@ -273,7 +298,7 @@ async fn add_agent_pane(host: &Arc<Host>, provider: &str, group: Option<String>)
     state.looking_up.store(false, Ordering::SeqCst);
     match picked.as_deref() {
         Some("new") => {
-            add_pane(host, "claude", provider, group.as_deref(), |pane| pane)?;
+            crate::pane_worktree::add_new_agent_pane(host, provider, group.as_deref()).await?;
         }
         Some("resume") => pick_resumed_session(host, provider, &workspace, group.as_deref(), source).await?,
         _ => {}
@@ -360,6 +385,10 @@ async fn pick_resumed_session(
 /// C# `CloseSession` / `ClosePane` / `CloseSessionAsync`: the pane's run stopped and ended (at most ten seconds), then the pane gone.
 /// Delegation's parent-close question and a child's close cleanup come first (delegation.rs, W7-D).
 pub(crate) async fn close_session(host: &Arc<Host>, id: &str) -> Result<(), String> {
+    // A mirrored pane is closed on its computer, as the phone's close does, and leaves here at once (W9-J, mirror.rs).
+    if crate::mirror::close_pane(host, id).await? {
+        return Ok(());
+    }
     if let crate::delegation::CloseDecision::Keep = crate::delegation::before_close(host, id).await {
         return Ok(());
     }
@@ -369,14 +398,18 @@ pub(crate) async fn close_session(host: &Arc<Host>, id: &str) -> Result<(), Stri
     {
         return Err(error.to_string());
     }
-    host.view().update(|state| state.sessions_mut().retain(|pane| pane.id() != id))
+    let closed = host.view().snapshot.session(id).cloned();
+    host.view().update(|state| state.sessions_mut().retain(|pane| pane.id() != id))?;
+    // A worktree pane's worktree goes with it, or is kept on the workspace when work or children are left (W9-I, C# `ClosePane`).
+    crate::pane_worktree::after_close(host, id, closed).await;
+    Ok(())
 }
 
 // ── workspaces ──
 
 /// C# `DesktopService.AddWorkspaceAsync` and `OpenWorkspaceFolder`: the folder listed as a workspace (approved for saving) and selected;
 /// one with no pane yet gets a Claude pane at once, as Ctrl+N adds one.
-pub fn open_workspace_folder(host: &Arc<Host>, path: &Path) -> Result<(), String> {
+pub async fn open_workspace_folder(host: &Arc<Host>, path: &Path) -> Result<(), String> {
     let workspace = host.approve_local(path).map_err(|error| {
         let text = error.to_string();
         if text.starts_with("store.error.") { host.locale.get(&text) } else { text }
@@ -397,7 +430,8 @@ pub fn open_workspace_folder(host: &Arc<Host>, path: &Path) -> Result<(), String
         view.snapshot.sessions().iter().any(|s| s.workspace_id() == id)
     };
     if !has_panes {
-        add_pane(host, "claude", add_pane::NEW_PANE_SHORTCUT_PROVIDER, None, |pane| pane)?;
+        // C# `OpenWorkspaceFolder`: `AddNewAgentPane` (W9-I).
+        crate::pane_worktree::add_new_agent_pane(host, add_pane::NEW_PANE_SHORTCUT_PROVIDER, None).await?;
     }
     Ok(())
 }
@@ -447,6 +481,10 @@ pub async fn pick_folder_path(host: &Arc<Host>) -> Option<std::path::PathBuf> {
 /// other sheets stay off while its runs stop (nothing is added to a workspace on its way out).
 pub(crate) async fn remove_workspace(host: &Arc<Host>, id: &str) -> Result<(), String> {
     let Some(name) = host.view().snapshot.workspace(id).map(|w| w.name().to_string()) else { return Ok(()) };
+    // A mirror's workspace is its host's, listed while connected: it leaves when the host stops sharing it or the connection goes (W9-J).
+    if crate::mirror::is_mirror_workspace(&host.view().snapshot, id) {
+        return Ok(());
+    }
     // An open delegated child or a kept worktree refuses it before anything is asked (C# `WorkspaceRemovalRefusal`, delegation.rs, W7-D).
     if let Some(refusal) = crate::delegation::removal_refusal(host, id) {
         return Err(refusal);
@@ -616,7 +654,7 @@ async fn add_pane_entry(host: &Arc<Host>, entry: &str, group: Option<String>, wo
         if !host.view().dialog_open
             && let Some(folder) = pick_folder_path(host).await
         {
-            open_workspace_folder(host, &folder)?;
+            open_workspace_folder(host, &folder).await?;
         }
         return Ok(());
     }
@@ -778,7 +816,7 @@ pub fn register(methods: &mut Registry) {
         }
         act(&host, async {
             match pick_folder_path(&host).await {
-                Some(folder) => open_workspace_folder(&host, &folder),
+                Some(folder) => open_workspace_folder(&host, &folder).await,
                 None => Ok(()),
             }
         })
@@ -798,9 +836,15 @@ pub fn register(methods: &mut Registry) {
         if closed {
             return Ok(Value::Null);
         }
-        let (kind, provider) =
-            if text(&args, "kind") == Some("shell") { ("shell", "claude") } else { ("claude", add_pane::NEW_PANE_SHORTCUT_PROVIDER) };
-        act(&host, async { add_pane(&host, kind, provider, None, |pane| pane).map(|_| ()) }).await
+        // C# `AddPaneFromShortcut`: a new agent pane through `AddNewAgentPane` (W9-I).
+        if text(&args, "kind") == Some("shell") {
+            act(&host, async { add_pane(&host, "shell", "claude", None, |pane| pane).map(|_| ()) }).await
+        } else {
+            act(&host, async {
+                crate::pane_worktree::add_new_agent_pane(&host, add_pane::NEW_PANE_SHORTCUT_PROVIDER, None).await.map(|_| ())
+            })
+            .await
+        }
     });
 }
 

@@ -49,6 +49,17 @@ const PROBE: &str = r#"(async () => {
   const choose = (select, index) => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(select, String(index)); select.dispatchEvent(new Event('change', { bubbles: true })); };
   const type = (input, text) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, text); input.dispatchEvent(new Event('input', { bubbles: true })); };
   const panel = () => host('panel');
+  const filterNow = (p) => q(p, 'marketplace-filter')?.querySelector('select');
+  // A filter chosen again on the select drawn now, by the option's words read now, until the host holds the choice (its handler compares
+  // first): a change dispatched on a select the page has since drawn anew, or before the option was there, is not mistaken for a slow
+  // redraw (the list then still showed every row).
+  const pickFilter = (p, words, value) => settled(async (s) => {
+    if (s.filter === value) return true;
+    const f = filterNow(p);
+    const index = !f ? -1 : typeof words === 'number' ? words : [...f.options].map((o) => o.textContent).indexOf(words);
+    if (index >= 0) choose(f, index);
+    return false;
+  });
   const settled = async (test) => until(async () => { const s = await panel(); return s.open && !s.loading && rows(s.provider) === s.rows && (await test(s)); }, 10000);
   const loaded = async (p) => until(async () => { const s = await panel(); return view() && s.open && s.provider === p && s.reads >= 1 && !s.loading && rows(p) === s.rows; }, 15000);
   const close = async () => { view()?.querySelector('[data-testid=native-close]')?.click(); return !!(await until(async () => !view() && !(await panel()).open, 10000)); };
@@ -74,10 +85,9 @@ const PROBE: &str = r#"(async () => {
     press('claude', 'tab-marketplace');
     await settled(async (s) => s.tab === 'marketplace');
     c.availableRows = rows('claude');
-    const filter = q('claude', 'marketplace-filter')?.querySelector('select');
+    c.filterSettled = !!(await pickFilter('claude', 'other', 'other'));
+    const filter = filterNow('claude');
     c.filterOptions = filter ? [...filter.options].map((o) => o.textContent) : [];
-    if (filter) choose(filter, c.filterOptions.indexOf('other'));
-    await settled(async (s) => s.filter === 'other');
     c.filteredRows = rows('claude');
     const search = q('claude', 'search')?.querySelector('input');
     c.placeholder = search?.placeholder ?? '';
@@ -85,7 +95,7 @@ const PROBE: &str = r#"(async () => {
     await settled(async (s) => s.search === 'no-such-plugin-zz');
     c.searchedRows = rows('claude');
     if (search) type(search, '');
-    if (filter) choose(filter, 0);
+    await pickFilter('claude', 0, '');
     await settled(async (s) => s.search === '' && s.filter === '');
     c.aids = aids();
     c.dialogButtons = view()?.querySelectorAll('[data-testid^=native-button-]').length ?? -1;
@@ -112,16 +122,14 @@ const PROBE: &str = r#"(async () => {
     press('codex', 'tab-marketplace');
     await settled(async (s) => s.tab === 'marketplace');
     x.availableRows = rows('codex');
-    const codexFilter = q('codex', 'marketplace-filter')?.querySelector('select');
-    if (codexFilter) choose(codexFilter, [...codexFilter.options].map((o) => o.textContent).indexOf('sample'));
-    await settled(async (s) => s.filter === 'sample');
+    x.filterSettled = !!(await pickFilter('codex', 'sample', 'sample'));
     x.filteredRows = rows('codex');
     const codexSearch = q('codex', 'search')?.querySelector('input');
     if (codexSearch) type(codexSearch, 'no-such-plugin-zz');
     await settled(async (s) => s.search === 'no-such-plugin-zz');
     x.searchedRows = rows('codex');
     if (codexSearch) type(codexSearch, '');
-    if (codexFilter) choose(codexFilter, 0);
+    await pickFilter('codex', 0, '');
     await settled(async (s) => s.search === '' && s.filter === '');
     x.aids = aids();
     x.dialogButtons = view()?.querySelectorAll('[data-testid^=native-button-]').length ?? -1;

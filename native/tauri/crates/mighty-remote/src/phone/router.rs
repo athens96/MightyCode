@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use mighty_composer::pending::SubmitReceipt;
 use mighty_composer::slash::{self, SlashArgument, SlashCommandAction};
+use mighty_core::attachment::RunAttachment;
 use mighty_core::json::{JsonOut, Wire};
 use mighty_core::locale::Locale;
 use mighty_core::model::{AppSnapshot, RunSession, Workspace};
@@ -401,6 +402,46 @@ impl Router {
     /// `ResetUploads`.
     pub fn reset_uploads(&self) {
         self.inner.uploads.clear();
+    }
+
+    /// `PendingRequests(id)` (W9-J): the pane's tool, question and plan requests waiting for an answer, as the phone sees them, oldest
+    /// first (the remote mirror reads them too, `remote::mirror::desktop_host`).
+    pub fn pending_requests(&self, id: &str) -> Vec<ToolPermissionRequest> {
+        let mut pending = self.inner.pending(id);
+        pending.sort_by(|a, b| a.received_at.as_deref().unwrap_or("").cmp(b.received_at.as_deref().unwrap_or("")));
+        pending
+    }
+
+    /// `SubmitInlineAsync(sessionId, text, attachments)` (W9-J): a send into one of this PC's agent panes with its files already here
+    /// (the remote mirror's `submit`): the phone's submit after its uploads, through the same desktop action and slots. The desktop's
+    /// answer (a receipt). A pane the phone does not see is 404, a pane that is no agent's 409, as the phone's.
+    pub async fn submit_inline(&self, session_id: &str, text: &str, attachments: Vec<RunAttachment>) -> Result<ActionAnswer, MobileError> {
+        let pane = self.inner.session(session_id)?;
+        if pane.kind() != "claude" {
+            return Err(request(409, "Use the desktop for this pane."));
+        }
+        let mut body = Map::new();
+        body.insert("text".into(), Value::String(text.to_string()));
+        let permit = self.inner.submit_slots.clone().acquire_owned().await.map_err(|_| MobileError::Failed("closed".into()))?;
+        let inner = self.inner.clone();
+        let id = pane.id().to_string();
+        // On a task of its own, as the phone's submit: a caller that goes away neither frees the slot nor stops the action midway.
+        tokio::spawn(async move {
+            let _slot = permit;
+            let result = inner
+                .desk
+                .action(MobileDesktopAction {
+                    session_id: id,
+                    action: "submit".into(),
+                    body: Value::Object(body),
+                    attachments: (!attachments.is_empty()).then_some(attachments),
+                })
+                .await;
+            inner.changed();
+            result
+        })
+        .await
+        .map_err(|_| MobileError::Failed("the submit stopped".into()))?
     }
 }
 

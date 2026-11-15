@@ -594,7 +594,21 @@ async fn without_a_run_original_gits_head_is_the_base() {
         let (processes, handles, originals) = (processes.clone(), handles.clone(), &originals);
         async move { changes::read(Some(originals), processes.as_ref(), handles.as_ref(), &folder, path, session, run).await }
     };
-    let head = changes_of("tracked.txt", Some("pane"), None, root_text.clone()).await.unwrap();
+    // A read that has a diff, asked again while it answers none: each git command has C#'s 2 s, which a loaded machine can run out of
+    // (the read then answers none, as C#'s does).
+    let some_changes_of = |path: &'static str, session: Option<&'static str>, run: Option<&'static str>, folder: String| {
+        let changes_of = &changes_of;
+        async move {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            loop {
+                if let Some(found) = changes_of(path, session, run, folder.clone()).await {
+                    return found;
+                }
+                assert!(std::time::Instant::now() < end, "{path}: no diff read");
+            }
+        }
+    };
+    let head = some_changes_of("tracked.txt", Some("pane"), None, root_text.clone()).await;
     assert!(
         head.base == "head"
             && head.added == 1
@@ -603,7 +617,7 @@ async fn without_a_run_original_gits_head_is_the_base() {
             && head.head_sha.as_ref().is_some_and(|s| s.len() == 7)
     );
     assert_eq!(head.hunks[0].lines.iter().map(|l| format!("{}{}", l.op, l.text)).collect::<Vec<_>>(), [" one", "-two", "+TWO", " three"]);
-    let other_case = changes_of("TRACKED.txt", None, None, root_text.clone()).await.unwrap();
+    let other_case = some_changes_of("TRACKED.txt", None, None, root_text.clone()).await;
     assert!(
         other_case.base == "head" && other_case.created.is_none() && other_case.added == 1,
         "another case reads HEAD's file by the disk's spelling"
@@ -616,7 +630,7 @@ async fn without_a_run_original_gits_head_is_the_base() {
         !changes::not_in_head("fatal: not a valid object name") && !changes::not_in_head(""),
         "only git's not-in-HEAD words make a file untracked"
     );
-    let untracked = changes_of("untracked.txt", None, None, root_text.clone()).await.unwrap();
+    let untracked = some_changes_of("untracked.txt", None, None, root_text.clone()).await;
     assert!(
         untracked.base == "head" && untracked.created == Some(true) && untracked.added == 2 && untracked.removed == 0,
         "an untracked file reads as all added"
@@ -628,10 +642,10 @@ async fn without_a_run_original_gits_head_is_the_base() {
     );
     // A run's original wins over HEAD, and a named run that captured nothing falls back to HEAD.
     originals.capture("pane", "run-1", &root_text, &root.join("tracked.txt").to_string_lossy(), &FileEdit::text(Some("one\nthree\n")));
-    let run = changes_of("tracked.txt", Some("pane"), None, root_text.clone()).await.unwrap();
+    let run = some_changes_of("tracked.txt", Some("pane"), None, root_text.clone()).await;
     assert!(run.base == "run" && run.added == 1 && run.removed == 0, "the run's original wins over HEAD");
     assert_eq!(
-        changes_of("tracked.txt", Some("pane"), Some("run-2"), root_text.clone()).await.unwrap().base,
+        some_changes_of("tracked.txt", Some("pane"), Some("run-2"), root_text.clone()).await.base,
         "head",
         "a run that captured nothing"
     );
@@ -639,7 +653,7 @@ async fn without_a_run_original_gits_head_is_the_base() {
     std::fs::create_dir_all(&unborn).unwrap();
     git(&unborn, &["init", "-q"]);
     read(&unborn.join("a.txt"), "x\n");
-    let fresh = changes_of("a.txt", None, None, unborn.to_string_lossy().into_owned()).await.unwrap();
+    let fresh = some_changes_of("a.txt", None, None, unborn.to_string_lossy().into_owned()).await;
     assert!(
         fresh.base == "head" && fresh.head_sha.is_none() && fresh.created == Some(true) && fresh.added == 1,
         "no commit yet reads as all added"

@@ -572,10 +572,57 @@ fn mobile_host_a_pane_travels_as_its_provider_runs_its_options() {
     assert!(mighty::effort_options(false, &["low", "high"], &l()).is_none(), "an Antigravity pane offers no effort");
 }
 
-/// MobileHostVerification.cs:358 `SettingsOfferWhatThePaneCanPick` (L476), but the registered styles' options (W9's styles).
+/// The bundled styles as the registry loads them from an empty profile (C# `MobileHostVerification.Bundled`).
+fn bundled_styles() -> Vec<mighty_styles::RegisteredStyle> {
+    let root = Temp::new("styles");
+    let profile = root.path().join("profile");
+    mighty_styles::StyleRegistry::load(&profile, &root.path().join("workspace"), std::sync::Arc::new(mighty_styles::PlainAccess), l())
+        .styles
+}
+
+/// MobileHostVerification.cs:358 `SettingsOfferWhatThePaneCanPick` (L476).
 #[test]
 fn mobile_host_settings_offer_what_the_pane_can_pick() {
+    use mighty_remote::phone::legacy_style::{legacy_style_options, style_options};
     let l = l();
+    let styles = bundled_styles();
+    let offered = style_options(&styles);
+    let runnable: Vec<&str> = styles.iter().filter(|s| s.runnable()).map(|s| s.id()).collect();
+    assert!(
+        offered[0] == mighty::MobileStyleOption { id: "cli".into(), label: "cli".into(), source: None }
+            && offered.iter().skip(1).map(|s| s.id.as_str()).eq(runnable.iter().copied())
+            && offered.iter().skip(1).all(|s| s.source.as_deref() == Some("bundled") && !s.label.is_empty()),
+        "styles are the CLI, then every style that can run, each with its source"
+    );
+    assert!(!offered[0].to_json().contains("source"), "cli belongs to no source");
+    assert!(
+        style_options(&[]).len() == 1 && legacy_style_options(&[]) == [mighty::MobileOption::new("cli", "CLI")],
+        "a pane outside the Mighty view is offered the CLI alone"
+    );
+    assert!(
+        legacy_style_options(&styles).iter().map(|s| s.id.as_str()).eq(["cli", "ouroboros"]),
+        "the old field offers its fixed two, when they can run"
+    );
+    let flow = styles.iter().find(|s| s.id() == "ouroboros").expect("ouroboros");
+    let mut node: Value = serde_json::from_slice(&flow.bytes).expect("ouroboros json");
+    node["id"] = json!("paperthin");
+    let reserved = serde_json::to_vec(&node).expect("bytes");
+    let stranger = mighty_styles::RegisteredStyle::decoded(
+        mighty_styles::decoder::decode(&reserved, "bundled", None).expect("bundled decode"),
+        "bundled",
+        "paperthin.json",
+        None,
+        "preApproved",
+        &reserved,
+    );
+    let mut with_stranger = styles.clone();
+    with_stranger.push(stranger.clone());
+    assert!(stranger.id() == "paperthin" && !legacy_style_options(&with_stranger).iter().any(|s| s.id == "paperthin"));
+    assert_eq!(
+        mighty_styles::decoder::decode(&reserved, "user", None).map(|_| ()).unwrap_err().code,
+        "E_RESERVED_ID",
+        "paperthin stays a reserved id"
+    );
     assert!(
         mighty::MIGHTY_STYLES == ["cli", "ouroboros"]
             && mighty::style(Some("paperthin")) == "cli"
@@ -1141,5 +1188,68 @@ fn queue_run_now_each_phone_row_carries_its_run_now() {
         out.finish(),
         r#"{"id":"q-1","text":"Human row","runNow":"unavailable","runNowReason":"held"}"#,
         "an unavailable row says why"
+    );
+}
+
+/// MobileHostVerification.cs:399 `OlderPhonesStillGetTheOuroborosPayload` (L477).
+#[test]
+fn mobile_host_older_phones_still_get_the_ouroboros_payload() {
+    use mighty_remote::phone::legacy_style::payload;
+    let styles = bundled_styles();
+    let flow = styles.iter().find(|s| s.id() == "ouroboros").expect("ouroboros");
+    let phase = |id: &str| flow.manifest.phase(id);
+    let seeded = payload(flow, phase("seed"), false).expect("ouroboros payload");
+    assert!(seeded.phase == "seed" && !seeded.ready && seeded.next.iter().map(|s| s.skill.as_str()).eq(["run", "evaluate", "status"]));
+    assert!(
+        seeded.all.iter().map(|s| s.skill.as_str()).eq([
+            "interview",
+            "auto",
+            "seed",
+            "run",
+            "evaluate",
+            "evolve",
+            "ralph",
+            "status",
+            "unstuck",
+            "cancel"
+        ]) && seeded.takes_text == ["interview", "auto", "unstuck"],
+        "the whole catalogue, and which skills take text"
+    );
+    let seed = seeded.all.iter().find(|s| s.skill == "seed").expect("seed");
+    assert!(!seed.title.is_empty() && !seed.help.is_empty(), "a skill carries its title and help");
+    let mut phases: Vec<_> = flow.manifest.phases.iter().collect();
+    phases.sort_by_key(|p| p.order);
+    let ids: Vec<&str> = phases.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(ids, ["goal", "interview", "seed", "run", "evaluate", "evolve"]);
+    assert!(ids.iter().all(|id| payload(flow, phase(id), true).expect("payload").phase == *id), "every phase reports itself");
+    let start = payload(flow, None, true).expect("payload");
+    assert!(start.phase == "goal" && start.next.is_empty() && payload(flow, phase("goal"), true).expect("payload").next.is_empty());
+    let deck_bytes =
+        std::fs::read(std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../styles/fixtures/deck.json")).expect("deck");
+    let vocabulary = mighty_styles::manifest::Vocabulary::from([(
+        "acme.thing".to_string(),
+        vec!["absent".to_string(), "open".to_string(), "complete".to_string()],
+    )]);
+    let deck = mighty_styles::RegisteredStyle::decoded(
+        mighty_styles::decoder::decode(&deck_bytes, "user", Some(&vocabulary)).expect("deck"),
+        "user",
+        "/tmp/deck.json",
+        None,
+        "approved",
+        &deck_bytes,
+    );
+    assert!(styles.iter().any(|s| s.id() == "claude-plan"));
+    assert!(
+        styles.iter().filter(|s| s.id() != "ouroboros").chain(std::iter::once(&deck)).all(|s| payload(s, None, true).is_none()),
+        "any other style sends none"
+    );
+    let plan = styles.iter().find(|s| s.id() == "claude-plan").expect("plan");
+    let mut wire = serde_json::Map::new();
+    if let Some(legacy) = payload(plan, None, true) {
+        wire.insert("ouroboros".into(), legacy.to_value());
+    }
+    assert!(
+        !wire.contains_key("ouroboros") && seeded.to_value().get("takesText").is_some(),
+        "the payload a style does not have is absent from the wire"
     );
 }

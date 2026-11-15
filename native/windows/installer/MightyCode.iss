@@ -3,6 +3,10 @@
 ; because the app updates itself there afterwards: the update helper renames the install folder aside and copies the new one
 ; in (docs/windows-app-update.md), which needs a folder this user can write and no administrator.
 ;
+; From 0.5 the folder is the Rust + Tauri app's, made by scripts/build-tauri-windows.ps1 -Installer: MightyCode.exe beside
+; claude-mods, Agents, pets, LICENSE.txt and build-info.json. Only /DSourceDir differs; AppId, the exe's name and the install folder
+; stay, so a 0.4.x install and its in-app update land in the same place (W9 plan D10). /DAppVersion is then major.minor.patch.
+;
 ;   ISCC.exe /DAppVersion=0.4.34 /DArch=x64 /DSourceDir=<publish folder> /DOutputDir=<release folder> MightyCode.iss
 
 #ifndef AppVersion
@@ -105,6 +109,10 @@ Name: "{autodesktop}\Mighty Code"; Filename: "{app}\MightyCode.exe"; Check: HadO
 
 [Run]
 Filename: "{app}\MightyCode.exe"; Description: "{cm:LaunchProgram,Mighty Code}"; Flags: nowait postinstall skipifsilent
+
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{E9E66915-2599-4971-9584-4825CAC5DEEE}"; Flags: uninsdeletekey dontcreatekey
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\dev.mightycode.native"; Flags: uninsdeletekey dontcreatekey
 
 [UninstallDelete]
 ; The app replaces its own files when it updates, so the uninstall log no longer lists them all: remove the folder whole,

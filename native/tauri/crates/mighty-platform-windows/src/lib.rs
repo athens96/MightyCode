@@ -7,7 +7,14 @@
 //! `WindowsShellEnvironment`, `UserEnvironment`, `PseudoTerminal` and `ShellActivity`): [`WindowsProcessHost`],
 //! [`WindowsPtyHost`], [`WindowsShellEnvironment`]. W7's Agent IO pipe ([`agent_io`], W7-C) and free space ([`disk_space`], W7-B) are
 //! stubs until their parts fill them. Every other port is `mighty_platform::unsupported::Unsupported` until its stage.
+//!
+//! W9 Step 0 added stubs that answer `Unsupported` until their parts fill them: [`update`] (the helper's mutex, wait, process list,
+//! fresh environment, uninstall entry and renamed shortcuts; W9-B), [`update_transport`] (WinHTTP without a proxy; W9-B),
+//! `WindowsProcessHost::start_detached` (W9-B), [`session`] (the session ending and the last input; W9-C) and [`activator`] (the COM
+//! toast activator; W9-F).
 
+#[cfg(windows)]
+pub mod activator;
 #[cfg(windows)]
 pub mod agent_io;
 #[cfg(windows)]
@@ -41,6 +48,8 @@ mod net;
 #[cfg(windows)]
 pub mod notify;
 #[cfg(windows)]
+pub mod page;
+#[cfg(windows)]
 mod pairing;
 #[cfg(windows)]
 mod pet;
@@ -53,6 +62,10 @@ mod proxy;
 #[cfg(windows)]
 pub mod pty;
 #[cfg(windows)]
+pub mod registry;
+#[cfg(windows)]
+pub mod session;
+#[cfg(windows)]
 pub mod setup_files;
 #[cfg(windows)]
 pub mod setup_probe;
@@ -60,6 +73,10 @@ pub mod setup_probe;
 pub mod shell_activity;
 #[cfg(windows)]
 mod text;
+#[cfg(windows)]
+pub mod update;
+#[cfg(windows)]
+pub mod update_transport;
 #[cfg(windows)]
 pub mod user_environment;
 #[cfg(windows)]
@@ -80,6 +97,7 @@ mod imp {
     use mighty_platform::unsupported::Unsupported;
     use mighty_platform::{AppPaths, Paths, Platform, PlatformProfile, Result, SurfaceFactory};
 
+    pub use crate::activator::ComActivator;
     pub use crate::agent_io::{NamedPipeConnector, NamedPipeListener};
     pub use crate::browser::{WebviewSurfaces, runtime_version as browser_runtime};
     pub use crate::cli::{CliRunResult, CliRunner};
@@ -99,16 +117,28 @@ mod imp {
     pub use crate::process::{KILLED_EXIT_CODE, WindowsProcessHost};
     pub use crate::proxy::WinHttpProxy;
     pub use crate::pty::WindowsPtyHost;
+    pub use crate::session::WindowsSession;
     pub use crate::setup_files::WindowsSetupFiles;
+    pub use crate::update::WindowsUpdates;
+    pub use crate::update_transport::WinHttpUpdates;
     pub use crate::variables::Variables;
     pub use crate::webview2_install::{download_bootstrapper, is_microsoft_signed, run_installer};
 
-    /// The folders of the app before its rename, under `%APPDATA%` (C# `Program.cs`, `RenameMigration`).
+    /// The folders of the app before its rename whose state a default profile without one takes, under `%APPDATA%` (C# `MainWindow`'s
+    /// constructor, `MainWindow.cs:64`: the first holding a `workspace-state.json`, copied in by the store). C#'s other rename,
+    /// `MightyClaudeNative` (moved whole with `.mightyclaude` and the HKCU key), is mighty-core's `rename_migration`, which startup.rs
+    /// runs before the store reads anything; C# runs both, so both stay (W9-F).
     pub const LEGACY_FOLDERS: [&str; 2] = ["MightyClaude", "mighty-claude"];
 
-    /// `%APPDATA%\MightyCode` (or `profile`), the pre-rename folders, and `%LOCALAPPDATA%\<identifier>`.
+    /// `%APPDATA%\MightyCode` (or `profile`), the pre-rename folders whose state is copied once, and `%LOCALAPPDATA%\<identifier>`.
     pub fn paths(profile: Option<PathBuf>, identifier: &str) -> Result<AppPaths> {
         AppPaths::resolve(profile, dirs::config_dir(), &LEGACY_FOLDERS, dirs::data_local_dir(), identifier)
+    }
+
+    /// The folder the setup program installs into (`MightyCode.iss` `DefaultDirName={userpf}\MightyCode`): `Programs\MightyCode` under
+    /// the LocalAppData known folder (W9-F: a release build writes by default only when it runs from here, startup.rs).
+    pub fn install_folder() -> Option<PathBuf> {
+        dirs::data_local_dir().map(|local| local.join("Programs").join("MightyCode"))
     }
 
     /// C# `Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })`: an http(s) or mailto address handed to the user's
@@ -203,16 +233,26 @@ mod imp {
             pairing: Arc::new(pairing),
             notifier: Arc::new(Unsupported),
             firewall: Arc::new(WindowsFirewall::new(processes)),
-            updates: Arc::new(Unsupported),
+            updates: Arc::new(WindowsUpdates),
             network: Arc::new(WindowsNetwork),
             proxy: Arc::new(WinHttpProxy),
             https: Arc::new(crate::http::WinHttpGet),
+            // W9's (Step 0 stubs that answer `Unsupported`, as the update port did before): W9-B, W9-C, W9-F.
+            update_transport: Arc::new(WinHttpUpdates),
+            session: Arc::new(WindowsSession),
+            activator: Arc::new(ComActivator),
         })
     }
 
-    /// The native views of `window`: browsers are WebView2 child webviews; the terminal is the page's (xterm.js).
-    pub fn surfaces(window: tauri::Window) -> Arc<dyn SurfaceFactory> {
-        Arc::new(WebviewSurfaces::new(window))
+    /// The update installer alone, for the exe's `--update-helper` mode, which runs before any profile is read (W9-B).
+    pub fn update_installer() -> Arc<dyn mighty_platform::UpdateInstaller> {
+        Arc::new(WindowsUpdates)
+    }
+
+    /// The native views of `window`: browsers are WebView2 child webviews (with C#'s environment options in C#'s own data folder,
+    /// `csharp_web_data`); the terminal is the page's (xterm.js).
+    pub fn surfaces(window: tauri::Window, csharp_web_data: bool) -> Arc<dyn SurfaceFactory> {
+        Arc::new(WebviewSurfaces::new(window, csharp_web_data))
     }
 
     /// The user's clipboard (a terminal's copy and paste).
@@ -325,10 +365,11 @@ mod imp {
 
         #[test]
         fn the_default_profile_is_appdata_mightycode() {
-            let paths = paths(None, "dev.mightycode.tauri").unwrap();
+            let paths = paths(None, "dev.mightycode.native").unwrap();
             assert_eq!(paths.data_dir(), dirs::config_dir().unwrap().join("MightyCode"));
-            assert_eq!(paths.legacy_data_dirs().len(), 2);
-            assert_eq!(paths.local_dir(), dirs::data_local_dir().unwrap().join("dev.mightycode.tauri"));
+            let roaming = dirs::config_dir().unwrap();
+            assert_eq!(paths.legacy_data_dirs(), [roaming.join("MightyClaude"), roaming.join("mighty-claude")], "C# MainWindow's");
+            assert_eq!(paths.local_dir(), dirs::data_local_dir().unwrap().join("dev.mightycode.native"));
         }
     }
 }

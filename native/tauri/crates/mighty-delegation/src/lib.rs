@@ -25,6 +25,8 @@
 //! | `DelegationFakeClaude.cs` | [`fake_claude`] | C |
 //! | `DelegationAppHost.cs` | [`app_host`] | D |
 //! | `DesktopService.Delegation.cs` | [`app`] | D |
+//! | W9: `WinUI\HelpDemoCli.cs` (the help capture's canned CLI) | [`help_demo_cli`] | W9-H |
+//! | W9: `PaneWorktree.cs` (per-pane worktrees, `main` 0.4.60-0.4.61) | [`pane_worktree`] | W9-I |
 
 // "Nothing below suspends until saved" (C#'s exclusive scheduler, W7 plan §1.9): a lock held across an await deadlocks against the 45 s
 // answer race.
@@ -39,11 +41,13 @@ pub mod copy;
 pub mod delivery;
 pub mod fake_claude;
 pub mod git;
+pub mod help_demo_cli;
 pub mod host;
 pub mod json;
 pub mod mcp;
 pub mod model;
 pub mod modes;
+pub mod pane_worktree;
 pub mod providers;
 pub mod pruning;
 pub mod reports;

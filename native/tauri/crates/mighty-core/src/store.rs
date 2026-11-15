@@ -296,7 +296,8 @@ pub fn read_state(bytes: &[u8], locale: &Locale) -> Result<AppSnapshot, StateErr
 
 /// The bytes C# `SaveAsync` writes for a state: normalized, approved, without files panes, at most 8 MiB.
 pub fn encode_for_save(snapshot: &AppSnapshot) -> Result<(AppSnapshot, Vec<u8>), StateError> {
-    let normalized = normalize::normalize(snapshot, false).map_err(state_error)?;
+    // The remote mirror's workspaces and panes are never written, whoever encodes the state.
+    let normalized = normalize::normalize(&snapshot.without_mirrors(), false).map_err(state_error)?;
     let mut out = JsonOut::new();
     normalize::stored(&normalized).write(&mut out);
     let encoded = out.finish().into_bytes();
@@ -503,7 +504,9 @@ impl Store {
                 workspace_id: Some(host_workspace_id.into()),
                 host_name: Some(host),
                 version: 2,
+                mirror: false,
             }),
+            ..Workspace::default()
         };
         self.approved.insert(item.id().to_string(), item.clone());
         Some(item)
@@ -515,7 +518,8 @@ impl Store {
             return Err(StateError::NotLoaded);
         }
         let (normalized, encoded) = {
-            let normalized = normalize::normalize(snapshot, false).map_err(state_error)?;
+            // The remote mirror's workspaces and panes are another computer's, held while connected: never written.
+            let normalized = normalize::normalize(&snapshot.without_mirrors(), false).map_err(state_error)?;
             for workspace in normalized.workspaces() {
                 match self.approved.get(workspace.id()) {
                     Some(original) if original.path == workspace.path && original.remote == workspace.remote => {}

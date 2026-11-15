@@ -85,9 +85,21 @@ function RegistryTree([string]$Root, $Into) {
 # and hashes).
 function UserConfig {
     $values = [ordered]@{}
-    foreach ($key in 'HKCU:\Software\MightyCode', 'HKCU:\Software\Classes\AppUserModelId\dev.mightycode.tauri') {
+    foreach ($key in 'HKCU:\Software\MightyCode', 'HKCU:\Software\Classes\AppUserModelId\dev.mightycode.native', 'HKCU:\Software\Classes\CLSID\{E9E66915-2599-4971-9584-4825CAC5DEEE}',
+            'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{F2F99AEF-FB35-4476-A3EE-49453FA0527F}_is1') {
         try { RegistryTree $key $values } catch { $values[$key] = "probe failed: $($_.Exception.Message)" }
     }
+    # The installed app (W9 plan §4): its folder's top level and exe untouched, and no MightyCode.backup-* or MightyCode.update-new beside it.
+    $programs = Join-Path $env:LOCALAPPDATA 'Programs'
+    $values["$programs\MightyCode*"] = Probe { @(Get-ChildItem -LiteralPath $programs -Filter 'MightyCode*' -Force -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object Name) -join '|' }
+    $install = Join-Path $programs 'MightyCode'
+    $values[$install] = Probe {
+        if (-not (Test-Path -LiteralPath $install)) { $null } else {
+            @(Get-ChildItem -LiteralPath $install -Force -ErrorAction Stop | Sort-Object Name | ForEach-Object { "$($_.Name) $($_.LastWriteTimeUtc.ToString('o'))" }) -join '|'
+        }
+    }
+    $exe = Join-Path $install 'MightyCode.exe'
+    $values[$exe] = Probe { if (Test-Path -LiteralPath $exe) { (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash } else { $null } }
     foreach ($file in (Join-Path $env:USERPROFILE '.claude\settings.json'), (Join-Path $env:USERPROFILE '.config\claude-omc\config.jsonc'), (Join-Path $env:USERPROFILE '.ouroboros\config.yaml')) {
         $values[$file] = Probe { if (Test-Path $file) { $info = Get-Item $file; "$($info.LastWriteTimeUtc.ToString('o')) $((Get-FileHash $file -Algorithm SHA256).Hash)" } else { $null } }
     }
@@ -161,13 +173,51 @@ if ($readOnly) { $arguments += @('--log-dir', (Join-Path $Out 'tauri-logs')) }
 if ($RemoteDebuggingPort -gt 0) { $arguments += @('--remote-debugging-port', "$RemoteDebuggingPort") }
 if ($NativeDump) { $arguments += @('--native-dump', [IO.Path]::GetFullPath($NativeDump)) }
 $watch = [Diagnostics.Stopwatch]::StartNew()
-$process = Start-Process -FilePath $Exe -ArgumentList $arguments -PassThru -Wait -WindowStyle Normal
+# Waits for the app alone (Start-Process -Wait would also wait for every process it left behind, such as a detached git daemon), then
+# lists what of its process tree is still running: anything but its console host fails the run, and is stopped so nothing outlives it.
+$process = Start-Process -FilePath $Exe -ArgumentList $arguments -PassThru -WindowStyle Normal
+$null = $process.Handle  # keeps the exit code readable once it ended
+$appStart = $process.StartTime
+$process.WaitForExit()
 $watch.Stop()
+# The app's process tree by parent ids. A process id is reused once its process ended, so a process counts as a child only when it was
+# made after its parent started (the app's start, then each child's own), and each id is visited once (no loop through a reused id).
+function Descendants([int]$parent, [datetime]$since, $seen) {
+    foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$parent" -ErrorAction SilentlyContinue)) {
+        if ($child.CreationDate -lt $since -or -not $seen.Add([int]$child.ProcessId)) { continue }
+        $child
+        Descendants $child.ProcessId $child.CreationDate $seen
+    }
+}
+function AppTree { Descendants $process.Id $appStart (New-Object 'System.Collections.Generic.HashSet[int]') }
+# Stopped only while the id still names the process found (its creation time unchanged).
+function StopFound($found) {
+    $now = Get-CimInstance Win32_Process -Filter "ProcessId=$($found.ProcessId)" -ErrorAction SilentlyContinue
+    if ($now -and $now.CreationDate -eq $found.CreationDate) { Stop-Process -Id $found.ProcessId -Force -ErrorAction SilentlyContinue }
+}
+# What the app started may still be ending (a run's CLI, git) on a loaded machine: given up to 15 s before it counts as left over.
+$deadline = (Get-Date).AddSeconds(15)
+do {
+    $leftovers = @(AppTree | Where-Object { $_.Name -ne 'conhost.exe' })
+    if ($leftovers.Count -eq 0) { break }
+    Start-Sleep -Milliseconds 500
+} while ((Get-Date) -lt $deadline)
 $treeAfter = if ($readOnly) { ProfileTree } else { $null }; $userAfter = UserConfig
 $placesAfter = if ($readOnly) { DelegationPlaces } else { $null }
 $remoteAfter = if ($readOnly) { RemotePlaces } else { $null }
 $userChanged = Changed $userBefore $userAfter
 $exitCode = $process.ExitCode
+if ($leftovers.Count -gt 0) {
+    Write-Output "LEFTOVER PROCESSES (the app ended, these of its process tree did not; stopped now):"
+    foreach ($left in $leftovers) {
+        Write-Output ("  {0} {1}: {2}" -f $left.ProcessId, $left.Name, $left.CommandLine)
+        StopFound $left
+    }
+    $exitCode = 1
+} else {
+    Write-Output 'leftover processes: none'
+}
+foreach ($console in @(AppTree)) { StopFound $console }
 
 Write-Output "profile:  $Profile"
 Write-Output "result:   $result"
@@ -203,7 +253,7 @@ if ($userChanged.Count -gt 0) {
     foreach ($name in $userChanged) { Write-Output "  $name`: $($userBefore[$name]) -> $($userAfter[$name])" }
     $exitCode = 1
 } else {
-    Write-Output 'user settings unchanged: HKCU Software\MightyCode and its subkeys, the toast registration, ~\.claude\settings.json, omc and Ouroboros configs'
+    Write-Output 'user settings unchanged: HKCU Software\MightyCode and its subkeys, the toast registration (AppUserModelId and CLSID), the uninstall entry, the installed app folder, ~\.claude\settings.json, omc and Ouroboros configs'
 }
 if (Test-Path $result) { Get-Content $result -Raw -Encoding utf8 } else { Write-Output 'no smoke-result.json' }
 if (-not $readOnly) {
@@ -212,7 +262,9 @@ if (-not $readOnly) {
     $name = $Profile -replace '[^A-Za-z0-9-]', '_'
     if ($name.Length -gt 80) { $name = $name.Substring($name.Length - 80) }
     foreach ($kind in 'webview', 'browser', 'image-cache', 'file-originals', 'provider-catalog') {
-        Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "dev.mightycode.tauri\$kind\$name") -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA "dev.mightycode.native\$kind\$name") -ErrorAction SilentlyContinue
     }
 }
+# A run that may not write its profile keeps delegation's fixture under %TEMP% (delegation.rs smoke_root): it goes too.
+Remove-Item -Recurse -Force (Join-Path $env:TEMP ("mighty-delegation-smoke-" + $process.Id)) -ErrorAction SilentlyContinue
 exit $exitCode

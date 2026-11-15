@@ -22,6 +22,7 @@ pub mod normalize;
 pub mod notifications;
 pub mod permission;
 pub mod rename;
+pub mod rename_migration;
 pub mod settings_sections;
 pub mod shell;
 pub mod store;

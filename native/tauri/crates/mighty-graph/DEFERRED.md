@@ -71,7 +71,7 @@ every eighth whole), the page methods marking the pane (`dirty`), the result fil
 (`take_result_file_lookups` → `result_files::files_in` → `found_result_files`), `mightyImages`' tiles as data URLs. The run steps of
 `--smoke-test` (smoke_runs.rs) draw a real run's request, sub-agents and result and the progress panel against the page. The session
 record's older requests and the history block's words (`GraphHistoryRuns`, `SessionHistoryState`) come from `src-tauri/src/history.rs`
-over mighty-history since W4-C (`mightyLoadOlder` reads the next chunk). What the projection still gets empty (`Sources`), each its stage's:
-
-- the Ouroboros dashboard (`ExecutionDashboard`: `NoDashboard`, `mightyOpenDashboard` opens nothing) and `OuroborosExecutionLinks.Extract`;
-- the background output tails (`BackgroundOutputFor`), the custom agents' definitions (`FlowDefinitions`) and the guided style (W9).
+over mighty-history since W4-C (`mightyLoadOlder` reads the next chunk). Since W9-E the background Ouroboros executions
+(`OuroborosExecutionLinks.Extract`, `src/ouroboros_execution.rs`, read through `src-tauri/src/ouroboros.rs`, `mightyOpenDashboard`), the
+background output tails (`BackgroundOutputFor`, `src-tauri/src/tails.rs`) and the custom agents' definitions (`FlowDefinitions`) come in
+too. What the projection still gets empty (`Sources`): the guided style (W9-D).

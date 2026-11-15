@@ -324,6 +324,7 @@ mod tests {
                 workspace_id: Some("host-ws".into()),
                 host_name: Some("Host".into()),
                 version: 2,
+                mirror: false,
             }),
             ..Workspace::default()
         };

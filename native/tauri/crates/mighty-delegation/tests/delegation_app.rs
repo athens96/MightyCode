@@ -318,6 +318,7 @@ async fn the_binding_factory_binds_local_runs_and_connects_delegation() {
             workspace_id: Some("w".into()),
             host_name: None,
             version: 1,
+            mirror: false,
         }),
         ..workspace.clone()
     };

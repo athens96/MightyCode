@@ -73,6 +73,45 @@ impl fmt::Debug for SpawnRequest {
     }
 }
 
+/// A process that outlives the app (W9: the update helper, the app relaunched after an update; [`ProcessHost::start_detached`]).
+#[derive(Clone, PartialEq, Eq)]
+pub struct DetachedRequest {
+    /// A full path.
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    /// An existing absolute folder (the helper's: the app's `%TEMP%`; the relaunched app's: its own folder).
+    pub cwd: PathBuf,
+    pub environment: DetachedEnvironment,
+    /// No window (Windows: `CREATE_NO_WINDOW`), as the helper starts.
+    pub hidden: bool,
+}
+
+/// The detached process's whole environment.
+#[derive(Clone, PartialEq, Eq)]
+pub enum DetachedEnvironment {
+    /// This process's own, as it is.
+    Inherit,
+    /// Exactly these variables and nothing else (the helper's `SystemRoot=C:\Windows`; the relaunched app's fresh user environment).
+    Exactly(BTreeMap<String, String>),
+}
+
+/// The environment's names only: values can be credentials.
+impl fmt::Debug for DetachedRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let environment: Option<Vec<&String>> = match &self.environment {
+            DetachedEnvironment::Inherit => None,
+            DetachedEnvironment::Exactly(values) => Some(values.keys().collect()),
+        };
+        f.debug_struct("DetachedRequest")
+            .field("program", &self.program)
+            .field("args", &self.args.len())
+            .field("cwd", &self.cwd)
+            .field("environment", &environment)
+            .field("hidden", &self.hidden)
+            .finish()
+    }
+}
+
 /// A started child: its three pipes (each taken once) and its control. Dropping the pipes closes them; dropping the child does not
 /// end it — call [`Child::close`].
 pub struct Child {
@@ -126,6 +165,17 @@ pub trait ChildControl: Send + Sync {
     fn close(&self) -> BoxFuture<'_, Result<()>>;
 }
 
+/// A detached process the app waits on ([`ProcessHost::start_detached_waitable`]): it outlives the app, but the app can still read its
+/// exit code and end it.
+pub trait DetachedChild: Send + Sync {
+    fn id(&self) -> u32;
+    /// The exit code, once the process has exited (Windows: the DWORD as a signed number, as C# reads it).
+    fn wait(&self) -> BoxFuture<'_, Result<i32>>;
+    /// Ends this process only, never what it started (C#'s `Kill(entireProcessTree: false)`). Calling it again, or after the exit,
+    /// does nothing.
+    fn terminate(&self);
+}
+
 /// Starts child processes.
 ///
 /// Contract:
@@ -140,6 +190,35 @@ pub trait ChildControl: Send + Sync {
 /// - `env_remove` names are gone from the child's environment before `env` is laid over it.
 pub trait ProcessHost: Send + Sync {
     fn spawn(&self, request: SpawnRequest) -> BoxFuture<'_, Result<Child>>;
+
+    /// W9 (plan D6, owner W9-B): starts `request` so it outlives this process and answers its process id once it runs. Unlike
+    /// [`ProcessHost::spawn`]: no job object (Windows: `CREATE_BREAKAWAY_FROM_JOB`, failing loudly rather than starting inside the
+    /// job when breakaway is not allowed), no pipes and no inherited handle, the environment exactly as given (no `NO_COLOR`), the
+    /// window hidden only when asked, and never a new process group (Windows' `CREATE_NEW_PROCESS_GROUP` would make the child and all it
+    /// starts ignore Ctrl+C, as C#'s `Process.Start` does not); every handle closed at once. Only the update modules call it (a CI grep, as for
+    /// the elevation verb). The default answers `Unsupported` (the Mac's until its stage).
+    fn start_detached(&self, _request: DetachedRequest) -> Result<u32> {
+        Err(PlatformError::unsupported("ProcessHost", "start_detached"))
+    }
+
+    /// W9-B: [`ProcessHost::start_detached`], except that when this process sits in a job that lets no child break away, the child
+    /// starts in that job instead of failing (Windows; C#'s `Process.Start`, which never breaks away). For the app an update helper
+    /// starts again: the helper's own job would hold the app C#'s helper started just the same, and refusing there would roll back a
+    /// swap already done. The helper's own start keeps [`ProcessHost::start_detached`]'s refusal (such a job could end it half-way).
+    /// The default is `start_detached` (an OS without jobs has nothing to stay in).
+    fn start_detached_or_in_job(&self, request: DetachedRequest) -> Result<u32> {
+        self.start_detached(request)
+    }
+
+    /// W9-E: a process that outlives this one, as [`ProcessHost::start_detached`] starts it (no job, no pipes, no inherited handle, the
+    /// environment exactly as given, never a new process group), whose exit the app still waits for and which it can end alone (C#'s
+    /// `Process.Start` then `WaitForExitAsync` / `Kill(entireProcessTree: false)`). When this process sits in a job that lets no child
+    /// break away, the child starts in that job (Windows; C#'s `Process.Start` never breaks away). For the Ouroboros dashboard daemon's
+    /// start, which C# leaves running: the start exits once its daemon is up, and the daemon must not die with the app. The default
+    /// answers `Unsupported` (the Mac's until its stage).
+    fn start_detached_waitable(&self, _request: DetachedRequest) -> Result<Box<dyn DetachedChild>> {
+        Err(PlatformError::unsupported("ProcessHost", "start_detached_waitable"))
+    }
 
     /// How a CLI found at `program` starts with `args` (C# `ProviderCatalog.StartCli`): `env` laid over this process's environment,
     /// then `NO_COLOR=1`. Here the program runs directly; Windows runs a `.cmd`/`.bat` shim (npm's `pi.cmd`) through

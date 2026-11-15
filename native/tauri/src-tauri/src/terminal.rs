@@ -11,7 +11,8 @@
 //! - A terminal goes with its pane (looked at every quarter second) and every terminal closes when the app quits, each close on its
 //!   own thread and the quit waiting at most a few seconds for them.
 //!
-//! What later stages give stays at rest ([`Pending`]).
+//! A command the app types into a new shell pane (C# `RunTerminalCommandAsync`) is styles.rs's `run_terminal_command` over
+//! frame.rs's `add_pane` and [`TerminalPane::write`].
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -40,16 +41,6 @@ use tauri::Manager;
 use crate::frame::{activate_pane, select_session};
 use crate::host::{Host, Registry};
 use crate::methods::text;
-
-/// What a later stage gives the terminals; until then each stays at rest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Pending {
-    /// A command the app types into a new shell pane (C# `RunTerminalCommandAsync`: style installs, sign-ins; W6/W9): the pane is
-    /// frame.rs's `add_pane`, and [`TerminalPane::write`] with `TerminalInput::apply` is its typing.
-    RunTerminalCommand,
-}
-
-pub const PENDING: [Pending; 1] = [Pending::RunTerminalCommand];
 
 /// C# `ShowTerminalHistory` (MainWindow.WorkflowParity.cs:10-23, dialog D14): the pane's saved entries in the panel `terminalHistory`
 /// (its help dimmed over the entries, 11pt code, selectable, at most 360 high), closed with its ✕; the window holds its dialog
@@ -295,7 +286,8 @@ fn with_agent_io_pane(
     if state.session(&pane_id).is_some() {
         return Ok(());
     }
-    if state.sessions().len() >= layout::MAXIMUM_SESSIONS {
+    // The remote mirror's panes are the host's and never count (`PaneLayout.HasRoom`).
+    if !mighty_core::add_pane::has_room(state) {
         return Err("Close a pane before opening another.".into());
     }
     let before = effective_layout(state, workspace, defaults);
@@ -377,7 +369,7 @@ impl Terminals {
             closing: AtomicBool::new(false),
         });
         host.app.manage(terminals.clone());
-        host.log.line(&format!("terminals: {} engine; at rest until their stages: {PENDING:?}", terminals.ports.engine));
+        host.log.line(&format!("terminals: {} engine", terminals.ports.engine));
         let clock = Arc::downgrade(&terminals);
         std::thread::Builder::new()
             .name("terminal-clock".into())
@@ -447,7 +439,13 @@ impl Terminals {
             let session = view.snapshot.session(id).filter(|s| matches!(s.kind(), "shell" | AGENT_TERMINAL)).ok_or_else(not_found)?;
             let kind =
                 if session.kind() == "shell" { PaneKind::Shell } else { PaneKind::Agent { owner: session.owner_session_id.clone() } };
-            (kind, local_folder(&view.snapshot, session.workspace_id()))
+            // A terminal opened "in this worktree" starts in the pane's folder (W9-I, C# PaneWorktree.cs); one whose folder is gone
+            // starts in the workspace.
+            let folder = match session.working_folder.as_deref() {
+                Some(path) if kind == PaneKind::Shell && is_working_folder(path) && Path::new(path).is_dir() => Some(PathBuf::from(path)),
+                _ => local_folder(&view.snapshot, session.workspace_id()),
+            };
+            (kind, folder)
         };
         let mut panes = lock(&self.panes);
         if let Some(pane) = panes.get(id).filter(|pane| *pane.kind() == kind) {
@@ -953,6 +951,43 @@ mod tests {
         );
     }
 
+    /// W9-J review L1: the remote mirror's panes are the host's and never count toward this PC's 128 (`PaneLayout.HasRoom`); this PC's
+    /// own 128th pane still refuses the agent's terminal.
+    #[test]
+    fn mirrored_panes_never_count_toward_the_agents_terminal_room() {
+        let mut snapshot = state();
+        let mirror = mighty_core::model::MirrorReference {
+            connection_id: "conn".into(),
+            host_session_id: "host".into(),
+            host_workspace_id: "ws".into(),
+            host_name: "studio-pc".into(),
+        };
+        for i in 0..layout::MAXIMUM_SESSIONS {
+            snapshot.sessions_mut().push(Arc::new(RunSession {
+                id: Some(format!("far-{i}")),
+                workspace_id: Some("w".into()),
+                mirror: Some(mirror.clone()),
+                ..RunSession::default()
+            }));
+        }
+        let mut defaults = HashMap::new();
+        with_agent_io_pane(&mut snapshot, &mut defaults, "agent", "w", AGENT_TERMINAL, Locale::new("en")).unwrap();
+        assert!(snapshot.session("agent-terminal:agent").is_some(), "the mirrored panes leave room");
+        let mut full = state();
+        for i in 0..layout::MAXIMUM_SESSIONS - 2 {
+            full.sessions_mut().push(Arc::new(RunSession {
+                id: Some(format!("own-{i}")),
+                workspace_id: Some("w".into()),
+                ..RunSession::default()
+            }));
+        }
+        assert_eq!(
+            with_agent_io_pane(&mut full, &mut defaults, "agent", "w", AGENT_TERMINAL, Locale::new("en")),
+            Err("Close a pane before opening another.".into()),
+            "this PC's 128 panes leave none"
+        );
+    }
+
     fn prompt(handle: &str, length: usize) -> TerminalPrompt {
         TerminalPrompt {
             id: format!("{handle}:{length}"),
@@ -997,11 +1032,6 @@ mod tests {
     fn a_working_folder_is_a_full_path() {
         assert!(is_working_folder(if cfg!(windows) { "C:\\work\\child" } else { "/work/child" }));
         assert!(!is_working_folder("relative\\child") && !is_working_folder("a\0b") && !is_working_folder(&"x".repeat(4097)));
-        assert_eq!(
-            PENDING,
-            [Pending::RunTerminalCommand],
-            "the agents' tools are served (agent_io.rs, W7-C) and the phone reads a shell's status and prompt (W8-B)"
-        );
     }
 
     /// D14 against C#'s capture (`mighty-native/tests/golden/terminal-history.json`, plan W6 §1.8): C#'s web smoke's shell pane

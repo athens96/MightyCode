@@ -208,6 +208,17 @@ pub fn busy(host: &Host, provider: &str) -> bool {
     accounts.is_busy(provider) || accounts.is_changing(provider) || accounts.is_waiting(provider)
 }
 
+/// The app update's idle holds (W9-C, C# `CollectIdleFacts`): the sign-in resends held for a CLI update
+/// (`loginResendsAwaitingUpdate.Count`, an agent run) and the sign-ins at work (`loginBusy.Count + accountLoginWaits.Count +
+/// accountChanges.Count` plus the sign-in windows still open, terminals). The accounts' own state only, never `host.view()`.
+pub fn idle_holds(host: &Host) -> (usize, usize) {
+    let accounts = of(host);
+    let resends = lock(&accounts.awaiting_update).len();
+    let windows = lock(&accounts.windows).values().filter(|window| window.open()).count();
+    let terminals = lock(&accounts.busy).len() + lock(&accounts.waits).len() + lock(&accounts.changes).len() + windows;
+    (resends, terminals)
+}
+
 /// `claudeModelReset`: Claude's models are being reloaded (a sharing host refuses another computer's Claude run meanwhile, remote.rs).
 pub fn claude_model_resetting(host: &Host) -> bool {
     of(host).model_reset.load(Ordering::SeqCst)
@@ -766,6 +777,8 @@ async fn start_again(host: &Arc<Host>, id: &str, retry: &CliLoginRetry) -> Resul
         request.attachments = retry.request.attachments.clone();
         request
     };
+    // C# LoginRecovery.cs:411 `PrepareStyleRunRequest`: the style's grants and plan-mode launch, its approval read again (styles.rs).
+    let request = crate::styles::prepare_run(host, id, request).await.map_err(Some)?;
     if !accounts.is_current(retry) {
         return Err(None);
     }

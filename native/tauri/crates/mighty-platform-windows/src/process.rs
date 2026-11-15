@@ -74,6 +74,17 @@ impl ProcessHost for WindowsProcessHost {
         Box::pin(async move { start(&request) })
     }
 
+    /// The update helper's start and the relaunched app's (C# `Process.Start` with `UseShellExecute = false`, MainWindow.AppUpdate.cs:73-82,
+    /// Program.cs:236-249): see [`start_detached`].
+    fn start_detached(&self, request: mighty_platform::DetachedRequest) -> Result<u32> {
+        start_detached(&request, false)
+    }
+
+    /// The relaunched app's start: [`start_detached`] staying in a job that lets no child break away.
+    fn start_detached_or_in_job(&self, request: mighty_platform::DetachedRequest) -> Result<u32> {
+        start_detached(&request, true)
+    }
+
     /// C# `ProviderCatalog.StartCli` (ProviderCatalog.cs:117-126): a batch file (npm's `pi.cmd`) through cmd.exe with every argument
     /// quoted and the working folder never searched ([`crate::command::launch`]); anything else directly, as `ChildProcess.StartInfo`
     /// builds it (the caller's environment, then `NO_COLOR=1`).
@@ -103,6 +114,12 @@ impl ProcessHost for WindowsProcessHost {
         set_ignoring_case(&mut request.env, "NO_COLOR", "1");
         request.shell_command = Some(command.to_string());
         request
+    }
+
+    /// W9-E: the Ouroboros dashboard daemon's start (C# `OuroborosDashboardClient.Capture`: `Process.Start`, `WaitForExitAsync`,
+    /// `Kill(entireProcessTree: false)`): see [`start_waitable`].
+    fn start_detached_waitable(&self, request: mighty_platform::DetachedRequest) -> Result<Box<dyn mighty_platform::DetachedChild>> {
+        start_waitable(&request)
     }
 }
 
@@ -304,6 +321,102 @@ fn validate(request: &SpawnRequest) -> Result<()> {
 
 fn text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+/// A process that outlives the app (the port's `start_detached`; C# `Process.Start` with `UseShellExecute = false`), started by
+/// [`create_detached`]; both handles are closed at once and the answer is the process id. When this process sits in a job that does not
+/// let a child break away, it fails (`Refused`) rather than start a process that job would end — unless `stay_in_job`, when it starts
+/// the child in that job without breaking away (C#'s `Process.Start`).
+fn start_detached(request: &mighty_platform::DetachedRequest, stay_in_job: bool) -> Result<u32> {
+    let (process, id) = create_detached(request, stay_in_job)?;
+    drop(process);
+    Ok(id)
+}
+
+/// The one `CreateProcessW` of every detached start ([`start_detached`], [`start_waitable`]): no handle inherited (`bInheritHandles =
+/// FALSE`, no standard handles given), `CREATE_UNICODE_ENVIRONMENT | CREATE_BREAKAWAY_FROM_JOB`, plus `CREATE_NO_WINDOW` when hidden
+/// (C#'s `CreateNoWindow`); never `CREATE_NEW_PROCESS_GROUP`, which sets the child's "ignore Ctrl+C" (its `ConsoleFlags` bit 0) for it
+/// and every process it starts — after an update the app's terminal panes would no longer stop on Ctrl+C (C#'s `Process.Start` passes
+/// no group flag either); the environment exactly as given (names compared ignoring case, the block sorted as C#'s) or this process's
+/// own; the working folder given. It joins no job of the app's. When this process sits in a job that lets no child break away, the start
+/// is refused (`Refused`), or with `stay_in_job` made again in that job without breaking away. The thread handle is closed at once; the
+/// process handle and id are the answer.
+fn create_detached(request: &mighty_platform::DetachedRequest, stay_in_job: bool) -> Result<(OwnedHandle, u32)> {
+    use mighty_platform::DetachedEnvironment;
+    use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
+    use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+    use windows_sys::Win32::System::Threading::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW, GetCurrentProcess, STARTUPINFOW};
+
+    if !request.program.is_absolute() || !request.cwd.is_absolute() {
+        return Err(PlatformError::Invalid("the program and the working folder need absolute paths".into()));
+    }
+    if request.args.iter().any(|argument| argument.contains('\0')) {
+        return Err(PlatformError::Invalid("an argument holds a NUL".into()));
+    }
+    let environment = match &request.environment {
+        DetachedEnvironment::Inherit => None,
+        DetachedEnvironment::Exactly(values) => {
+            let invalid = |name: &str, value: &str| {
+                name.is_empty() || name.chars().skip(1).any(|c| c == '=') || name.contains('\0') || value.contains('\0')
+            };
+            if values.iter().any(|(name, value)| invalid(name, value)) {
+                return Err(PlatformError::Invalid("invalid child environment".into()));
+            }
+            Some(environment_block(Variables::from(values).iter()))
+        }
+    };
+    let mut command = wide(command_line(&text(&request.program), &request.args, None));
+    let (application, directory) = (wide(&request.program), wide(&request.cwd));
+    let mut flags = CREATE_UNICODE_ENVIRONMENT;
+    if request.hidden {
+        flags |= CREATE_NO_WINDOW;
+    }
+    let block = environment.as_ref().map_or(std::ptr::null(), |block| block.as_ptr().cast::<c_void>());
+    let create = |flags: u32, command: &mut Vec<u16>| -> std::result::Result<(OwnedHandle, u32), io::Error> {
+        // SAFETY: a zeroed plain-data struct; only its size is set (no standard handles, no window settings).
+        let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
+        startup.cb = size_of::<STARTUPINFOW>() as u32;
+        // SAFETY: a zeroed plain-data struct CreateProcessW fills.
+        let mut started: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: NUL-terminated strings, a mutable command line, a double-NUL UTF-16 environment block or null (this process's own),
+        // a valid startup struct; nothing is inherited.
+        let ok = unsafe {
+            CreateProcessW(
+                application.as_ptr(),
+                command.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                flags,
+                block,
+                directory.as_ptr(),
+                &startup,
+                &mut started,
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the two handles CreateProcessW just returned, owned here; the thread's is closed at once.
+        let (process, thread) = unsafe { (OwnedHandle::from_raw_handle(started.hProcess), OwnedHandle::from_raw_handle(started.hThread)) };
+        drop(thread);
+        Ok((process, started.dwProcessId))
+    };
+    match create(flags | CREATE_BREAKAWAY_FROM_JOB, &mut command) {
+        Ok(started) => Ok(started),
+        Err(error) => {
+            let mut in_job = 0;
+            // SAFETY: this process's pseudo handle; a null job asks about any job.
+            let jobbed = unsafe { IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut in_job) } != 0 && in_job != 0;
+            if error.raw_os_error() != Some(ERROR_ACCESS_DENIED as i32) || !jobbed {
+                return Err(PlatformError::Io(error));
+            }
+            if !stay_in_job {
+                return Err(PlatformError::Refused("this process's job does not let a process break away from it".into()));
+            }
+            create(flags, &mut command).map_err(PlatformError::Io)
+        }
+    }
 }
 
 /// C# `ChildProcess.StartWindows` (ChildProcess.cs:133-167).
@@ -549,6 +662,42 @@ impl Drop for CloseOnDrop {
                     let _ = control.close().await;
                 });
             }
+        }
+    }
+}
+
+/// A process that outlives the app, still waited for (the port's `start_detached_waitable`; C# `Process.Start` with
+/// `UseShellExecute = false`), started by [`create_detached`]: it joins no job of the app's; when this process sits in a job that lets
+/// no child break away, the child starts in that job (C#'s `Process.Start` never breaks away). The process handle is kept, to wait on
+/// and to end this one process.
+fn start_waitable(request: &mighty_platform::DetachedRequest) -> Result<Box<dyn mighty_platform::DetachedChild>> {
+    let (process, id) = create_detached(request, true)?;
+    let waited = process.try_clone().map_err(PlatformError::Io)?;
+    let (exit, _thread) = watch_exit(waited, "detached-exit").map_err(PlatformError::Io)?;
+    Ok(Box::new(WaitableChild { id, process, exit }))
+}
+
+/// A waitable detached process: its handle (to end it alone) and its exit code, read on a thread of its own.
+struct WaitableChild {
+    id: u32,
+    process: OwnedHandle,
+    exit: ExitWatch,
+}
+
+impl mighty_platform::DetachedChild for WaitableChild {
+    fn id(&self) -> u32 {
+        self.id
+    }
+
+    fn wait(&self) -> BoxFuture<'_, Result<i32>> {
+        Box::pin(exited(&self.exit))
+    }
+
+    /// `TerminateProcess` on this process alone (C#'s `Kill(entireProcessTree: false)`): what it started keeps running.
+    fn terminate(&self) {
+        if self.exit.borrow().is_none() {
+            // SAFETY: a process handle this child owns.
+            unsafe { TerminateProcess(raw(&self.process), KILLED_EXIT_CODE as u32) };
         }
     }
 }

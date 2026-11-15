@@ -1,8 +1,14 @@
-//! Mighty Code's Rust + Tauri 2 host (skeleton): one window drawing the page of native/windows/web, answering it through
-//! `host.rs`. It reads the saved state and never writes it.
+//! Mighty Code's Rust + Tauri 2 host: one window drawing the page of native/windows/web, answering it through `host.rs`. What it
+//! may write follows the write policy (startup.rs): a release build installed in its folder writes, any other run only with
+//! `--allow-state-write`, never with `--read-only`.
 //!
-//! Identity: tauri.conf.json's `identifier` is `dev.mightycode.tauri`, a development identity so this app never shares a
-//! registration, a WebView2 folder or local data with the installed C# app. It must become the real one before this ships.
+//! Identity: tauri.conf.json's `identifier` is `dev.mightycode.native` (W9-F), the toast registration's AppUserModelId and the root of
+//! this machine's local folders (`%LOCALAPPDATA%\dev.mightycode.native\…`); a release build on the default profile takes C#'s own
+//! WebView2 folders (`paths::web_folders`).
+//!
+//! W9 Step 0 fixed the order `main` runs in (plan §1.1): the exe's other modes (the Agent IO and delegation MCP servers, the fake Claude,
+//! the help capture's demo CLI, then the update helper), the environment taken back after a bare start, the arguments, the write
+//! policy (startup.rs), the platform, the pre-UI migration, then the store and Tauri.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 // A guard kept through a match or if-let body has called out (host.view(), a redraw, Tauri's main thread) while held: bind first.
 #![deny(clippy::significant_drop_in_scrutinee)]
@@ -10,8 +16,10 @@
 mod accounts;
 mod agent_io;
 mod antigravity;
+mod app_update;
 mod args;
 mod ask;
+mod build_info;
 mod cards;
 mod companion;
 mod composer;
@@ -21,16 +29,21 @@ mod dialogs;
 mod direct;
 mod files;
 mod frame;
+mod help_capture;
 mod history;
 mod host;
 mod logfile;
 mod methods;
 mod mighty;
+mod mirror;
 mod mobile;
 mod models;
 mod native;
 mod notifications;
+mod ouroboros;
+mod pane_worktree;
 mod panes;
+mod perf;
 mod phone;
 mod platform;
 mod plugins;
@@ -41,22 +54,29 @@ mod setup;
 mod smoke;
 mod smoke_accounts;
 mod smoke_acp;
+mod smoke_app_update;
 mod smoke_companion;
 mod smoke_delegation;
 mod smoke_direct;
 mod smoke_files;
 mod smoke_frame;
+mod smoke_help;
 mod smoke_history;
 mod smoke_phone;
 mod smoke_remote;
 mod smoke_runs;
 mod smoke_settings;
 mod smoke_setup;
+mod smoke_styles;
 mod smoke_terminal;
 mod smoke_updates;
+mod startup;
 mod status_line;
+mod styles;
 mod surface;
+mod tails;
 mod terminal;
+mod update_helper;
 mod updates;
 mod usage;
 mod workmap;
@@ -137,25 +157,31 @@ fn source_name(source: &LoadSource) -> String {
 /// The exe's other modes (C# Program.cs:142-151), served before anything else: before the arguments are parsed (which refuses these),
 /// before Tauri, WebView2, the profile, the log or any mutex, so nothing but their protocol reaches stdout. An agent CLI starts
 /// `--agent-io-mcp` and `--agent-delegation-mcp` from a run's MCP configuration; the delegation smoke and its checks start
-/// `--fake-claude <absolute root> …` in the CLI's place (mighty-delegation `modes`, `fake_claude`, W7-C). `--help-demo-cli` is W9's.
+/// `--fake-claude <absolute root> …` in the CLI's place (mighty-delegation `modes`, `fake_claude`, W7-C). W9, in C#'s order after
+/// them: the help capture's canned CLI `--help-demo-cli <absolute root> …` (mighty-delegation `help_demo_cli`, W9-H), then the update
+/// helper `--update-helper …` (update_helper.rs, W9-B), which the 0.4.x app starts from its staged folder with only `SystemRoot` set.
 /// The release build's GUI subsystem still reads the stdio handles a CLI hands it.
 fn exe_mode(args: &[String]) -> Option<i32> {
-    use mighty_delegation::{fake_claude, modes};
+    use mighty_delegation::{fake_claude, help_demo_cli, modes};
     match args {
         [only] if only == modes::AGENT_IO_MCP_ARGUMENT => Some(modes::agent_io_mcp(platform::agent_io_connector())),
         [only] if only == modes::DELEGATION_MCP_ARGUMENT => Some(modes::delegation_mcp(platform::agent_io_connector())),
         [first, root, rest @ ..] if first == fake_claude::ARGUMENT && mighty_core::normalize::fully_qualified(root) => {
             Some(fake_claude::run(Path::new(root), rest, platform::process_host()))
         }
-        _ => None,
+        _ => help_demo_cli::try_run(args).or_else(|| update_helper::try_run(args)),
     }
 }
 
 fn main() {
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    // Lossy, never `std::env::args()`, which panics on an argument that is not valid UTF-16: the update helper must reach its
+    // `install.log` whatever it was given (W9-B review L1); the parser then refuses what it cannot read.
+    let raw: Vec<String> = std::env::args_os().skip(1).map(|argument| argument.to_string_lossy().into_owned()).collect();
     if let Some(code) = exe_mode(&raw) {
         std::process::exit(code);
     }
+    // C# `UserEnvironment.RepairCurrentProcess`: the user's own variables back after a bare start, before any thread (W9-B).
+    startup::repair_environment();
     let options = match args::parse(raw) {
         Ok(options) => options,
         Err(error) => {
@@ -163,6 +189,8 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // What this run may write (W9: a release build's default, `--allow-state-write`, `--read-only`; startup.rs, W9-F).
+    let policy = startup::write_policy(&options);
     let context = tauri::generate_context!();
     // The OS's ports (platform.rs). Their paths are the data folder (`--profile` or %APPDATA%\MightyCode) and, for the default
     // profile only, the folders from before the rename (C# Program.cs).
@@ -173,19 +201,28 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // C# `MigrateRenamedIdentifiers`: the data from before the rename moved before anything reads it (W9-F).
+    startup::before_ui(&options, &platform, policy);
     let data_dir = platform.paths.data_dir().to_path_buf();
     let legacy = platform.paths.legacy_data_dirs().to_vec();
-    let log = LogFile::new(options.log_dir.clone().unwrap_or_else(|| data_dir.join("tauri-logs")));
-    // C# StateStore: the state loaded (and, only with --allow-state-write, the damaged file put aside and the legacy one copied);
+    // The log: the profile's `tauri-logs` only where the run writes or is a smoke, else this machine's own (startup.rs, W9-F).
+    let log_dir = startup::log_dir(&options, platform.paths.as_ref(), policy);
+    let log = LogFile::new(log_dir.clone());
+    // C# StateStore: the state loaded (and, only where the write policy writes, the damaged file put aside and the legacy one copied);
     // its notes in the OS's language, as C# loads before the saved preference is applied. A file that does not read stops every
     // save: the app starts empty in memory and says why.
     let legacy = legacy.into_iter().find(|dir| dir.join(store::STATE_FILE).exists());
-    let mut state = store::Store::new(data_dir.clone(), legacy, options.allow_state_write);
+    let mut state = store::Store::new(data_dir.clone(), legacy, policy.writes);
     let loaded = state.load(&Locale::new(methods::chosen_language("system")));
-    let (snapshot, failure) = match loaded {
+    let (mut snapshot, failure) = match loaded {
         Ok(snapshot) => (snapshot, None),
         Err(error) => (mighty_core::AppSnapshot::default(), Some(error)),
     };
+    // A help capture reads the page in its own language (C# `UpdateAsync(LanguagePreference = helpLanguage)` after the load; W9-H).
+    if let Some(language) = options.help_language.clone().filter(|_| options.help_capture) {
+        snapshot.language_preference = Some(language.clone());
+        state.snapshot.language_preference = Some(language);
+    }
     let locale = Locale::new(methods::chosen_language(snapshot.language_preference()));
     let banner = match (&state.load_notice, &failure) {
         (Some(notice), _) => Some(notice.clone()),
@@ -199,7 +236,7 @@ fn main() {
         "notice": state.load_notice,
         "movedAsideTo": state.aside,
         "error": failure.as_ref().map(|e| e.to_string()),
-        "writes": options.allow_state_write,
+        "writes": policy.writes,
         "workspaces": snapshot.workspaces().len(),
         "panes": snapshot.sessions().len(),
     });
@@ -211,7 +248,7 @@ fn main() {
         snapshot.workspaces().len(),
         snapshot.sessions().len(),
         locale.language(),
-        if options.allow_state_write { "on" } else { "off" }
+        if policy.writes { "on" } else { "off" }
     ));
     if let Some(error) = &failure {
         log.line(&format!("load: {error}"));
@@ -229,7 +266,13 @@ fn main() {
             (None, true) => smoke::Mode::RealClaude,
             (None, false) => smoke::Mode::Page,
         };
-        let record = options.log_dir.clone().unwrap_or_else(|| data_dir.join("tauri-logs")).join("fake-claude").join("replay");
+        let record = log_dir.join("fake-claude").join("replay");
+        // The help capture and the perf scenario run in the smoke's place (W9-H, smoke.rs `Special`).
+        let special = match (&options.help_language, options.perf_scenario) {
+            (Some(language), _) if options.help_capture => smoke::Special::HelpCapture { language: language.clone() },
+            (_, true) => smoke::Special::Perf,
+            _ => smoke::Special::None,
+        };
         Smoke::new(
             options.smoke_out.clone().unwrap_or_else(|| data_dir.join("smoke-result.json")),
             options.smoke_exit,
@@ -237,6 +280,7 @@ fn main() {
             mode,
             options.smoke_fake_cli.is_some().then_some(record),
         )
+        .special(special)
     });
     let theme = snapshot.theme().to_string();
     let mut parts = Some((state, banner, log, smoke));
@@ -246,10 +290,11 @@ fn main() {
     let fake_claude = options.smoke_fake_cli.clone().map(|binary| runs::FakeClaude {
         binary,
         recording: smoke::RECORDING.into(),
-        record: options.log_dir.clone().unwrap_or_else(|| data_dir.join("tauri-logs")).join("fake-claude").join("replay"),
+        record: log_dir.join("fake-claude").join("replay"),
     });
     // The picture cache: the profile's own when the app may write it, else this machine's local folder for the profile.
-    let image_dir = if options.allow_state_write {
+    // These stores follow the write policy (W9: `policy.writes` replaced the flag here; a release build writes the profile's own).
+    let image_dir = if policy.writes {
         platform.paths.image_cache_dir()
     } else {
         platform.paths.local_dir().join("image-cache").join(platform.paths.profile_key())
@@ -257,24 +302,28 @@ fn main() {
     // The CLIs' catalogue's storage (C# ProviderCatalog's storageDirectory: the last list each CLI gave, `model-lists.json`, and beside
     // it the picker the last Hermes session offered, `hermes-models.json`) likewise: the profile folder, else this machine's local folder
     // for the profile.
-    let catalog_dir = if options.allow_state_write {
+    let catalog_dir = if policy.writes {
         data_dir.clone()
     } else {
         platform.paths.local_dir().join("provider-catalog").join(platform.paths.profile_key())
     };
     // The work map's summaries likewise, and its git's empty hooks folder this machine's own (workmap.rs).
-    let workmap_folders = workmap::Folders::new(platform.paths.as_ref(), options.allow_state_write);
+    let workmap_folders = workmap::Folders::new(platform.paths.as_ref(), policy.writes);
     // The Antigravity rules' ledger (antigravity.rs, C# `AntigravityRuleLeases`) likewise.
-    let antigravity_ledger =
-        antigravity::ledger_path(&data_dir, platform.paths.local_dir(), platform.paths.profile_key(), options.allow_state_write);
+    let antigravity_ledger = antigravity::ledger_path(&data_dir, platform.paths.local_dir(), platform.paths.profile_key(), policy.writes);
     let (local_dir, profile_key, allow_state_write) =
-        (platform.paths.local_dir().to_path_buf(), platform.paths.profile_key().to_string(), options.allow_state_write);
+        (platform.paths.local_dir().to_path_buf(), platform.paths.profile_key().to_string(), policy.writes);
     // The file originals (files.rs, C# `FileOriginalStore`) likewise: the profile's `file-originals`, else this machine's own.
-    let originals_dir = if options.allow_state_write {
+    let originals_dir = if policy.writes {
         platform.paths.file_originals_dir()
     } else {
         platform.paths.local_dir().join("file-originals").join(platform.paths.profile_key())
     };
+    // The page's and the browser panes' web data (paths.rs `web_folders`, W9-F: C#'s own folders in a release build on the default
+    // profile, so browser sign-ins survive the update; this machine's local ones otherwise, as before W9).
+    // Only a run that writes adopts them (review M1): never beside a C# app that may still hold them.
+    let adopted = startup::adopts_csharp_web_data(&options, policy);
+    let web_folders = platform.paths.web_folders(adopted);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -357,6 +406,15 @@ fn main() {
             mobile::start(&host, &platform);
             direct::start(&host, &platform);
             remote::start(&host, &platform);
+            // W9 (Step 0 stubs that start nothing until their parts fill them): the remote mirror (W9-J), per-pane worktrees (W9-I),
+            // styles (W9-D), background output tails and the Ouroboros dashboard (W9-E), the app update's housekeeping and loop
+            // (W9-C, never in a smoke).
+            mirror::start(&host, &platform);
+            pane_worktree::start(&host);
+            styles::start(&host, &platform);
+            tails::start(&host);
+            ouroboros::start(&host);
+            app_update::start(&host, &platform);
             host.start_clocks();
             let (inbound, mut calls) = tokio::sync::mpsc::unbounded_channel::<Value>();
             app.manage(Inbound(inbound));
@@ -371,9 +429,10 @@ fn main() {
             app.manage(platform.ptys.clone());
             // The app's folders, for the toolkit's store (settings/tools.rs, W6-B).
             app.manage(platform.paths.clone());
-            // Completion notifications: registered with the OS only with --allow-state-write, never in a smoke (notifications.rs).
+            // Completion notifications and the toast activator: registered with the OS only where the app may change the machine,
+            // never in a smoke (notifications.rs).
             if host.smoke.is_none() {
-                notifications::start(&host);
+                notifications::start(&host, &platform);
             }
             let dispatcher = host.clone();
             tauri::async_runtime::spawn(async move {
@@ -409,48 +468,62 @@ fn main() {
             }
 
             // Its own WebView2 data, never the C# app's (<profile>\web-profile): under this identity's local data folder, one
-            // folder per profile (Paths::webview_dir).
-            let webview_data = platform.paths.webview_dir();
+            // folder per profile (Paths::webview_dir); W9-F: C#'s own in a release build on the default profile (`web_folders`).
+            let webview_data = web_folders.page.clone();
             host.log.line(&format!("webview data {}", webview_data.display()));
             let (r, g, b) = if theme == "light" { (0xEC, 0xEE, 0xF3) } else { (0x0B, 0x0F, 0x19) };
-            let page = host.clone();
             let origin = AppOrigin::new(app.config());
-            let navigation = AppOrigin(origin.0.clone());
+            let origin_url = origin.0.clone();
             app.manage(origin);
-            let mut window = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("index.html".into()))
-                .title("Mighty Code")
-                .inner_size(1440.0, 920.0)
-                .min_inner_size(940.0, 650.0)
-                .background_color(tauri::window::Color(r, g, b, 255))
-                .data_directory(webview_data)
-                // The page takes dropped files itself (HTML5 drop → addAttachments), as C#'s WebView2 does; Tauri's own handler
-                // would swallow the drop on Windows.
-                .disable_drag_drop_handler()
-                // C# WebShell: the page never leaves the app's own origin (a stray drop or link would navigate it away), and it
-                // opens no window of its own.
-                .on_navigation(move |url| navigation.trusts(url))
-                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
-                .on_page_load(move |_, payload| {
-                    if payload.event() == PageLoadEvent::Started {
-                        page.page_started();
-                        // On the UI thread: the views hide from a task, never here (a view may be waiting for this thread).
-                        if let Some(surfaces) = surfaces(&page.app) {
-                            tauri::async_runtime::spawn(async move { surfaces.page_started().await });
-                        }
+            // Made again while another process still holds the data folder with other options (C#'s WebView2 right after the update
+            // swap; startup.rs, review M1), at most about 10 s; the setup runs before the event loop, so the wait blocks nothing else.
+            let window = startup::retry_while_held(
+                || {
+                    let page = host.clone();
+                    let navigation = AppOrigin(origin_url.clone());
+                    let mut window = WebviewWindowBuilder::new(app.handle(), WINDOW, WebviewUrl::App("index.html".into()))
+                        .title("Mighty Code")
+                        .inner_size(1440.0, 920.0)
+                        .min_inner_size(940.0, 650.0)
+                        .background_color(tauri::window::Color(r, g, b, 255))
+                        .data_directory(webview_data.clone())
+                        // The page takes dropped files itself (HTML5 drop → addAttachments), as C#'s WebView2 does; Tauri's own handler
+                        // would swallow the drop on Windows.
+                        .disable_drag_drop_handler()
+                        // C# WebShell: the page never leaves the app's own origin (a stray drop or link would navigate it away), and it
+                        // opens no window of its own.
+                        .on_navigation(move |url| navigation.trusts(url))
+                        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+                        .on_page_load(move |_, payload| {
+                            if payload.event() == PageLoadEvent::Started {
+                                page.page_started();
+                                // On the UI thread: the views hide from a task, never here (a view may be waiting for this thread).
+                                if let Some(surfaces) = surfaces(&page.app) {
+                                    tauri::async_runtime::spawn(async move { surfaces.page_started().await });
+                                }
+                            }
+                        });
+                    if let Some(port) = debugging_port {
+                        // These replace wry's own arguments, which are kept.
+                        window = window.additional_browser_args(&format!(
+                            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"
+                        ));
+                    } else if adopted {
+                        // C#'s folder opens with C#'s options: no browser arguments (review M1).
+                        window = window.additional_browser_args(startup::CSHARP_BROWSER_ARGUMENTS);
                     }
-                });
-            if let Some(port) = debugging_port {
-                // These replace wry's own arguments, which are kept.
-                window = window.additional_browser_args(&format!(
-                    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"
-                ));
-            }
-            let window = window.build()?;
+                    window.build()
+                },
+                std::thread::sleep,
+                |line| host.log.line(line),
+            )?;
+            // W9-C: the session-ending watch on the main window, from its own thread (an install on quit waits while Windows ends it).
+            app_update::watch_window(&host, &window.as_ref().window());
             // The native views over the page (browser panes; the Mac's terminal later), in the OS's implementation.
-            let factory = platform::surfaces(window.as_ref().window());
+            let factory = platform::surfaces(window.as_ref().window(), adopted);
             // The companion pet (companion.rs, W8-E): its window is one of the main window's native views.
             companion::start(&host, &platform, factory.clone());
-            let browser_data = platform.paths.browser_dir();
+            let browser_data = web_folders.browser.clone();
             host.log.line(&format!("browser data {}", browser_data.display()));
             let push = surface::page_push(app.handle().clone());
             app.manage(Arc::new(SurfaceManager::new(factory, platform.profile.os, browser_data, push)));
@@ -465,6 +538,10 @@ fn main() {
         RunEvent::ExitRequested { code: Some(code), .. } => exit_code = code,
         RunEvent::Exit => {
             if let Some(host) = app.try_state::<Arc<Host>>() {
+                // Quit began (C# QuitAsync sets `closing` first): no run, sign-in, retry or read starts during the teardown below.
+                host.begin_closing();
+                // W9-C: a ready update installs on quit (`--relaunch 0`) before anything shuts down, as C#'s quit path starts it.
+                app_update::quit_hook(&host, false);
                 // The model lists read and reconcile nothing more (C# `modelRefreshes?.Shutdown()`, before the last save).
                 models::shutdown(&host);
                 // The accounts' sign-ins and reads let go, and the account usage's pending reads cancelled (accounts.rs, usage.rs, W6-C).
@@ -481,9 +558,13 @@ fn main() {
                 mobile::shutdown(&host);
                 direct::shutdown(&host);
                 remote::shutdown(&host);
+                // W9: the mirror (W9-J), the style watcher (W9-D), the tails poller and the dashboard's polling (W9-E).
+                mirror::shutdown(&host);
+                styles::shutdown(&host);
+                tails::shutdown(&host);
+                ouroboros::shutdown(&host);
                 // Every run stopped and ended before delegation stops (C# DisposeAsync: `local.DisposeAsync`, then `StopDelegation`), so a
                 // child killed by quitting is recorded with its quit end; `host.close` below then makes the last save.
-                host.begin_closing();
                 if let Some(runs) = host.runs() {
                     tauri::async_runtime::block_on(runs.service.dispose());
                 }
@@ -533,5 +614,47 @@ mod tests {
         let dev = AppOrigin(url("http://localhost:5173"));
         assert!(dev.trusts(&url("http://localhost:5173/src/main.tsx")));
         assert!(!dev.trusts(&url("http://localhost:5174/")));
+    }
+
+    /// The DLLs a PE image imports (its import directory's names), read from the file: enough of the format for the check below.
+    #[cfg(windows)]
+    fn imported_dlls(image: &[u8]) -> Vec<String> {
+        let u16_at = |at: usize| u16::from_le_bytes([image[at], image[at + 1]]) as usize;
+        let u32_at = |at: usize| u32::from_le_bytes([image[at], image[at + 1], image[at + 2], image[at + 3]]) as usize;
+        let pe = u32_at(0x3C);
+        assert_eq!(&image[pe..pe + 4], b"PE\0\0", "a PE image");
+        let (sections, optional) = (u16_at(pe + 6), pe + 24);
+        assert_eq!(u16_at(optional), 0x20B, "a PE32+ image");
+        let imports = u32_at(optional + 120);
+        let table = optional + u16_at(pe + 20);
+        let offset = |rva: usize| {
+            (0..sections).map(|index| table + index * 40).find_map(|section| {
+                let (size, address, raw) = (u32_at(section + 8).max(u32_at(section + 16)), u32_at(section + 12), u32_at(section + 20));
+                (address..address + size).contains(&rva).then(|| rva - address + raw)
+            })
+        };
+        let mut names = Vec::new();
+        let mut descriptor = offset(imports).expect("the import directory lies in a section");
+        while u32_at(descriptor + 12) != 0 {
+            let name = offset(u32_at(descriptor + 12)).expect("an import's name lies in a section");
+            let end = image[name..].iter().position(|byte| *byte == 0).expect("a NUL-terminated name");
+            names.push(String::from_utf8_lossy(&image[name..name + end]).to_ascii_lowercase());
+            descriptor += 20;
+        }
+        names
+    }
+
+    /// W9 (plan fact 8, D7): `.cargo/config.toml` links the C runtime statically, so no binary of this workspace needs the VC++
+    /// redistributable — the update helper must start on a machine without it. This test's own exe is built with the same flags as
+    /// MightyCode.exe; `scripts/check-imports.ps1` checks a built MightyCode.exe the same way.
+    #[cfg(windows)]
+    #[test]
+    fn the_exe_imports_no_c_runtime_dll() {
+        let image = std::fs::read(std::env::current_exe().unwrap()).unwrap();
+        let dlls = imported_dlls(&image);
+        assert!(dlls.iter().any(|dll| dll == "kernel32.dll"), "the import table read: {dlls:?}");
+        let runtime: Vec<&String> =
+            dlls.iter().filter(|dll| ["vcruntime", "msvcp", "api-ms-win-crt-"].iter().any(|prefix| dll.starts_with(prefix))).collect();
+        assert!(runtime.is_empty(), "the C runtime is linked statically, yet the exe imports {runtime:?}");
     }
 }

@@ -36,6 +36,9 @@ pub fn platform(root: &Path, os: Os) -> Platform {
         network: Arc::new(FakeNetwork::default()),
         proxy: Arc::new(FakeProxy::default()),
         https: Arc::new(RecordingHttps::default()),
+        update_transport: Arc::new(FakeUpdateTransport::default()),
+        session: Arc::new(FakeSession::default()),
+        activator: Arc::new(RecordingActivator::default()),
     }
 }
 
@@ -63,6 +66,11 @@ pub struct FakeProcessHost {
     inputs: Mutex<Vec<Arc<Mutex<Vec<u8>>>>>,
     children: Mutex<Vec<Arc<FakeChild>>>,
     next_id: Mutex<u32>,
+    /// W9: the detached starts, in order; nothing runs.
+    detached: Mutex<Vec<DetachedRequest>>,
+    refuse_detached: Mutex<bool>,
+    /// W9-E: the waitable detached starts' processes, in order.
+    waitables: Mutex<Vec<Arc<FakeDetachedChild>>>,
 }
 
 impl FakeProcessHost {
@@ -71,6 +79,18 @@ impl FakeProcessHost {
     }
     pub fn spawned(&self) -> Vec<SpawnRequest> {
         lock(&self.spawned).clone()
+    }
+    /// Whether the `index`th waitable detached start (0 the first) was ended with [`DetachedChild::terminate`].
+    pub fn detached_terminated(&self, index: usize) -> bool {
+        lock(&self.waitables).get(index).is_some_and(|child| child.terminated.load(std::sync::atomic::Ordering::SeqCst))
+    }
+    /// Every detached start so far (W9: the helper, the relaunched app).
+    pub fn detached(&self) -> Vec<DetachedRequest> {
+        lock(&self.detached).clone()
+    }
+    /// Makes every later detached start fail as a job that forbids breakaway would (`Refused`).
+    pub fn refuse_detached(&self, refuse: bool) {
+        *lock(&self.refuse_detached) = refuse;
     }
     /// What the `index`th child received on stdin.
     pub fn input(&self, index: usize) -> Vec<u8> {
@@ -179,6 +199,75 @@ impl ProcessHost for FakeProcessHost {
                 control,
             ))
         })
+    }
+
+    /// Records the request (absolute program and folder, as the Windows host checks) and answers a process id; nothing starts.
+    fn start_detached(&self, request: DetachedRequest) -> Result<u32> {
+        if !request.cwd.is_absolute() || !request.program.is_absolute() {
+            return Err(PlatformError::Invalid("the program and the working folder need absolute paths".into()));
+        }
+        if *lock(&self.refuse_detached) {
+            return Err(PlatformError::Refused("the job does not allow breakaway".into()));
+        }
+        self.record_detached(request)
+    }
+
+    /// As [`FakeProcessHost::start_detached`], recorded the same, but a job without breakaway ([`FakeProcessHost::refuse_detached`])
+    /// does not refuse it.
+    fn start_detached_or_in_job(&self, request: DetachedRequest) -> Result<u32> {
+        if !request.cwd.is_absolute() || !request.program.is_absolute() {
+            return Err(PlatformError::Invalid("the program and the working folder need absolute paths".into()));
+        }
+        self.record_detached(request)
+    }
+
+    /// Records the request with the detached starts and plays the next script's exit code (or hangs) as the process; a job without
+    /// breakaway ([`FakeProcessHost::refuse_detached`]) does not refuse it (it would start in the job).
+    fn start_detached_waitable(&self, request: DetachedRequest) -> Result<Box<dyn DetachedChild>> {
+        if !request.cwd.is_absolute() || !request.program.is_absolute() {
+            return Err(PlatformError::Invalid("the program and the working folder need absolute paths".into()));
+        }
+        let script = lock(&self.scripts).pop_front().unwrap_or_default();
+        let id = self.record_detached(request)?;
+        let child = Arc::new(FakeDetachedChild {
+            id,
+            exit: Exit::new((!script.hang).then_some(script.exit_code)),
+            terminated: std::sync::atomic::AtomicBool::new(false),
+        });
+        lock(&self.waitables).push(child.clone());
+        Ok(Box::new(SharedDetached(child)))
+    }
+}
+
+impl FakeProcessHost {
+    fn record_detached(&self, request: DetachedRequest) -> Result<u32> {
+        lock(&self.detached).push(request);
+        let mut next = lock(&self.next_id);
+        *next += 1;
+        Ok(1000 + *next)
+    }
+}
+
+struct FakeDetachedChild {
+    id: u32,
+    exit: Exit,
+    terminated: std::sync::atomic::AtomicBool,
+}
+
+struct SharedDetached(Arc<FakeDetachedChild>);
+
+impl DetachedChild for SharedDetached {
+    fn id(&self) -> u32 {
+        self.0.id
+    }
+    fn wait(&self) -> BoxFuture<'_, Result<i32>> {
+        Box::pin(async move { Ok(self.0.exit.wait().await) })
+    }
+    fn terminate(&self) {
+        if !self.0.exit.ended() {
+            self.0.terminated.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.0.exit.end(KILLED);
     }
 }
 
@@ -784,15 +873,63 @@ impl Firewall for FakeFirewall {
     }
 }
 
+/// The update's machine half in memory (W9): hand-offs recorded; named mutexes held per name until their guard drops (a second taker
+/// gets None); the wait answers [`FakeUpdateInstaller::set_exited`] (default: exited); `running_from` answers
+/// [`FakeUpdateInstaller::set_running`] (default: nothing runs; [`FakeUpdateInstaller::fail_running`] makes it fail); the fresh
+/// environment is the one set; the uninstall entry's syncs and the renamed-install refreshes are recorded, never written.
 #[derive(Debug, Default)]
 pub struct FakeUpdateInstaller {
     pub location: Option<PathBuf>,
     handed: Mutex<Vec<(StagedUpdate, bool)>>,
+    held: Arc<Mutex<std::collections::BTreeSet<String>>>,
+    still_running: Mutex<bool>,
+    running: Mutex<bool>,
+    running_fails: Mutex<bool>,
+    fresh: Mutex<Option<BTreeMap<String, String>>>,
+    synced: Mutex<Vec<(PathBuf, String)>>,
+    refreshed: Mutex<Vec<PathBuf>>,
 }
 
 impl FakeUpdateInstaller {
     pub fn handed_off(&self) -> Vec<(StagedUpdate, bool)> {
         lock(&self.handed).clone()
+    }
+    /// Whether the waited-for process has exited (false: the wait times out).
+    pub fn set_exited(&self, exited: bool) {
+        *lock(&self.still_running) = !exited;
+    }
+    pub fn set_running(&self, running: bool) {
+        *lock(&self.running) = running;
+    }
+    pub fn fail_running(&self, fails: bool) {
+        *lock(&self.running_fails) = fails;
+    }
+    pub fn set_fresh_environment(&self, values: Option<BTreeMap<String, String>>) {
+        *lock(&self.fresh) = values;
+    }
+    /// Every `sync_display_version` asked, in order.
+    pub fn synced(&self) -> Vec<(PathBuf, String)> {
+        lock(&self.synced).clone()
+    }
+    /// Every `refresh_renamed_install` asked, in order.
+    pub fn refreshed(&self) -> Vec<PathBuf> {
+        lock(&self.refreshed).clone()
+    }
+    /// The mutex names held now.
+    pub fn held(&self) -> Vec<String> {
+        lock(&self.held).iter().cloned().collect()
+    }
+}
+
+/// A held fake mutex: its name leaves the set when dropped.
+struct FakeMutexHold {
+    held: Arc<Mutex<std::collections::BTreeSet<String>>>,
+    name: String,
+}
+
+impl Drop for FakeMutexHold {
+    fn drop(&mut self) {
+        lock(&self.held).remove(&self.name);
     }
 }
 
@@ -806,6 +943,192 @@ impl UpdateInstaller for FakeUpdateInstaller {
         }
         lock(&self.handed).push((update.clone(), relaunch));
         Ok(())
+    }
+    fn helper_mutex(&self, name: &str) -> Result<Option<HelperMutex>> {
+        if !lock(&self.held).insert(name.to_string()) {
+            return Ok(None);
+        }
+        Ok(Some(HelperMutex::new(FakeMutexHold { held: self.held.clone(), name: name.to_string() })))
+    }
+    fn wait_for_exit(&self, _pid: u32, _timeout: std::time::Duration) -> Result<bool> {
+        Ok(!*lock(&self.still_running))
+    }
+    fn running_from(&self, _folder: &Path, _except_self: bool) -> Result<bool> {
+        if *lock(&self.running_fails) {
+            return Err(PlatformError::Refused("the process list could not be read".into()));
+        }
+        Ok(*lock(&self.running))
+    }
+    fn fresh_environment(&self) -> Option<BTreeMap<String, String>> {
+        lock(&self.fresh).clone()
+    }
+    fn sync_display_version(&self, app_directory: &Path, version: &str) -> Result<bool> {
+        lock(&self.synced).push((app_directory.to_path_buf(), version.to_string()));
+        Ok(true)
+    }
+    fn refresh_renamed_install(&self, app_directory: &Path) -> Result<()> {
+        lock(&self.refreshed).push(app_directory.to_path_buf());
+        Ok(())
+    }
+}
+
+/// One scripted answer of [`FakeUpdateTransport`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FakeRoute {
+    pub status: u16,
+    pub location: Option<String>,
+    pub body: Vec<u8>,
+}
+
+impl FakeRoute {
+    pub fn ok(body: impl Into<Vec<u8>>) -> FakeRoute {
+        FakeRoute { status: 200, location: None, body: body.into() }
+    }
+    pub fn redirect(status: u16, location: &str) -> FakeRoute {
+        FakeRoute { status, location: Some(location.to_string()), body: Vec::new() }
+    }
+}
+
+/// The app update's HTTPS in memory (W9-A's tests, never the real update address): each address answers its route (none: refused);
+/// anything but `https://` is refused before a route is looked at, as the port's contract says; a body over the cap is `TooLarge`; a
+/// download writes a 2xx body to its file in 64 KiB pieces, calling the progress after each, stopping past the limit (`TooLarge`) or
+/// when cancelled (`Refused("cancelled")`). Every address asked is recorded, in order.
+#[derive(Debug, Default)]
+pub struct FakeUpdateTransport {
+    routes: Mutex<HashMap<String, FakeRoute>>,
+    asked: Mutex<Vec<String>>,
+}
+
+impl FakeUpdateTransport {
+    pub fn route(&self, url: &str, route: FakeRoute) {
+        lock(&self.routes).insert(url.to_string(), route);
+    }
+    pub fn asked(&self) -> Vec<String> {
+        lock(&self.asked).clone()
+    }
+    fn answer(&self, url: &str) -> Result<FakeRoute> {
+        if !url.starts_with("https://") {
+            return Err(PlatformError::Invalid("not an https address".into()));
+        }
+        lock(&self.asked).push(url.to_string());
+        lock(&self.routes).get(url).cloned().ok_or_else(|| PlatformError::Refused("no route".into()))
+    }
+}
+
+impl UpdateTransport for FakeUpdateTransport {
+    fn get_capped(&self, url: &str, cap: usize, _timeout: std::time::Duration) -> BoxFuture<'_, Result<UpdateResponse>> {
+        let answer = self.answer(url);
+        Box::pin(async move {
+            let route = answer?;
+            if route.body.len() > cap {
+                return Err(PlatformError::TooLarge(cap));
+            }
+            Ok(UpdateResponse { status: route.status, location: route.location, body: route.body })
+        })
+    }
+
+    fn download(&self, request: DownloadRequest) -> BoxFuture<'_, Result<Downloaded>> {
+        let answer = self.answer(&request.url);
+        Box::pin(async move {
+            let route = answer?;
+            if !(200..300).contains(&route.status) {
+                return Ok(Downloaded { status: route.status, location: route.location, written: 0 });
+            }
+            let mut file = std::fs::File::create(&request.destination)?;
+            let mut written = 0u64;
+            for piece in route.body.chunks(64 * 1024) {
+                if request.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err(PlatformError::Refused("cancelled".into()));
+                }
+                if written + piece.len() as u64 > request.limit {
+                    return Err(PlatformError::TooLarge(usize::try_from(request.limit).unwrap_or(usize::MAX)));
+                }
+                std::io::Write::write_all(&mut file, piece)?;
+                written += piece.len() as u64;
+                (request.progress)(written);
+            }
+            Ok(Downloaded { status: route.status, location: None, written })
+        })
+    }
+}
+
+/// The session in memory (W9-C's tests): the time since the last input a test sets (default: an hour), and session messages a test
+/// sends by hand to every subscriber.
+pub struct FakeSession {
+    since: Mutex<std::time::Duration>,
+    callbacks: Arc<Mutex<Vec<(u64, SessionCallback)>>>,
+    next: Mutex<u64>,
+}
+
+impl Default for FakeSession {
+    fn default() -> FakeSession {
+        FakeSession {
+            since: Mutex::new(std::time::Duration::from_secs(3600)),
+            callbacks: Arc::new(Mutex::new(Vec::new())),
+            next: Mutex::new(0),
+        }
+    }
+}
+
+impl FakeSession {
+    pub fn set_since_last_input(&self, since: std::time::Duration) {
+        *lock(&self.since) = since;
+    }
+    /// Sends `event` to every live subscriber.
+    pub fn send(&self, event: SessionEnding) {
+        let callbacks: Vec<SessionCallback> = lock(&self.callbacks).iter().map(|(_, callback)| callback.clone()).collect();
+        for callback in callbacks {
+            callback(event);
+        }
+    }
+}
+
+impl SessionWatch for FakeSession {
+    fn on_ending(&self, callback: SessionCallback) -> Result<Subscription> {
+        let id = {
+            let mut next = lock(&self.next);
+            *next += 1;
+            *next
+        };
+        lock(&self.callbacks).push((id, callback));
+        let callbacks = self.callbacks.clone();
+        Ok(Subscription::new(move || lock(&callbacks).retain(|(each, _)| *each != id)))
+    }
+    fn since_last_input(&self) -> Result<std::time::Duration> {
+        Ok(*lock(&self.since))
+    }
+}
+
+/// The toast activator in memory (W9-F's tests): registrations recorded (nothing reaches the registry), the callback served last
+/// called by [`RecordingActivator::activate`] as COM would.
+#[derive(Default)]
+pub struct RecordingActivator {
+    registered: Mutex<Vec<(String, String, PathBuf)>>,
+    callback: Arc<Mutex<Option<ToastActivation>>>,
+}
+
+impl RecordingActivator {
+    pub fn registered(&self) -> Vec<(String, String, PathBuf)> {
+        lock(&self.registered).clone()
+    }
+    /// A click on a toast: the served callback (if any) gets `aumid` and `arguments`.
+    pub fn activate(&self, aumid: &str, arguments: &str) {
+        let callback = lock(&self.callback).clone();
+        if let Some(callback) = callback {
+            callback(aumid, arguments);
+        }
+    }
+}
+
+impl ToastActivator for RecordingActivator {
+    fn register(&self, aumid: &str, clsid: &str, exe: &Path) -> Result<()> {
+        lock(&self.registered).push((aumid.to_string(), clsid.to_string(), exe.to_path_buf()));
+        Ok(())
+    }
+    fn serve(&self, _clsid: &str, callback: ToastActivation) -> Result<Subscription> {
+        *lock(&self.callback) = Some(callback);
+        let served = self.callback.clone();
+        Ok(Subscription::new(move || *lock(&served) = None))
     }
 }
 

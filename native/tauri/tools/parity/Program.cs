@@ -21,6 +21,8 @@
 //   agent-io <in> <out>    W7-C's (AgentIo.cs)
 //   push <in> <out>, pairing-url <in> <out>, routes <profile> <requests> <out>  W8-A's and W8-B's (Phone.cs)
 //   remote <in> <out>      W8-D's (Remote.cs)
+//   update <mode> ...      W9-A's (Update.cs: ed25519, manifest, version, plan-args, mutex-name, stage, install-log, rewrite)
+//   styles <mode> ...      W9-D's (Styles.cs: project)
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -63,6 +65,8 @@ internal static class Program
             case "pairing-url": return PhoneParity.PairingUrl(args[1], args[2]);
             case "routes": return PhoneParity.Routes(args[1], args[2], args[3]);
             case "remote": return RemoteParity.Run(args[1], args[2]);
+            case "update": return UpdateParity.Run(args[1..]);
+            case "styles": return StylesParity.Run(args[1..]);
             case "run-replay": return await RunReplay(args[1], args[2], args[3], args[4]);
             default: Console.Error.WriteLine("unknown command " + args[0]); return 2;
         }

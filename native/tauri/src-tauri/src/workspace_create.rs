@@ -184,7 +184,9 @@ impl GitTool {
     /// `cancel` fires) git and everything it started are killed.
     pub async fn run(&self, arguments: &[&str], folder: &Path, seconds: u64, cancel: Option<&Cancel>) -> Result<GitResult, GitFailure> {
         let git = self.git.clone().ok_or_else(|| GitFailure::Start("git is missing".into()))?;
-        let request = self.environment(SpawnRequest::new(git, arguments.iter().copied(), folder)).await;
+        // No fsmonitor daemon, automatic gc or maintenance: a detached one would outlive the command and the app (W9 review M3).
+        let settings = ["-c", "core.fsmonitor=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false"];
+        let request = self.environment(SpawnRequest::new(git, settings.into_iter().chain(arguments.iter().copied()), folder)).await;
         if cancel.is_some_and(Cancel::is_cancelled) {
             return Err(GitFailure::Cancelled);
         }
@@ -591,7 +593,7 @@ pub async fn show(host: &Arc<Host>, kind: &str) -> Result<(), String> {
     if host.view().snapshot.last_create_location.as_deref() != Some(location) {
         host.view().update(|state| state.last_create_location = Some(location.to_string()))?;
     }
-    frame::open_workspace_folder(host, Path::new(path))?;
+    frame::open_workspace_folder(host, Path::new(path)).await?;
     if notice.is_some() {
         host.view().error = notice;
     }

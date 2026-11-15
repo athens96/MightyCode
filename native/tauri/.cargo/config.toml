@@ -1,0 +1,10 @@
+# W9 (plan fact 8, D7): the C runtime linked statically on Windows, so MightyCode.exe imports no VCRUNTIME140.dll, MSVCP*.dll or
+# api-ms-win-crt-*.dll and starts on a machine without the VC++ redistributable — the update helper too, which the 0.4.x app starts
+# from its staged folder after it quits (if it could not start, nothing would replace the app). Every target of the workspace is built
+# this way (tests included: src-tauri's `the_exe_imports_no_c_runtime_dll` reads its own import table); scripts/check-imports.ps1 checks
+# a built exe.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

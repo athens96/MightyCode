@@ -14,12 +14,12 @@ pub mod cli_accounts;
 pub mod cli_update;
 pub mod companion;
 pub mod general;
-pub mod later;
 pub mod mobile;
 pub mod mobile_direct;
 pub mod models;
 pub mod remote;
 pub mod screen;
+pub mod styles;
 pub mod tools;
 
 use std::sync::Arc;
@@ -61,7 +61,7 @@ pub fn groups(locale: &Locale, category: &str) -> Vec<Group> {
             titled("agentTerminal.urlOpen.settingTitle", general::agent_links, false),
         ],
         "models" => vec![slot(sections::PHASE_MODELS, models::phase_models)],
-        "styles" => vec![slot(sections::STYLES, later::styles)],
+        "styles" => vec![slot(sections::STYLES, styles::styles)],
         "tools" => vec![slot(sections::COMPONENTS, tools::components), titled("settings.toolkit.sectionTitle", tools::toolkit, false)],
         "cli" => vec![
             slot(sections::PROVIDERS, cli_accounts::providers),

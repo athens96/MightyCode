@@ -45,7 +45,16 @@ mod imp {
             network: Arc::new(Unsupported),
             proxy: Arc::new(Unsupported),
             https: Arc::new(Unsupported),
+            // W9: the update's HTTPS, the session and the toast activator are the Mac stage's (plan §10).
+            update_transport: Arc::new(Unsupported),
+            session: Arc::new(Unsupported),
+            activator: Arc::new(Unsupported),
         })
+    }
+
+    /// The update installer alone, for the exe's `--update-helper` mode: the Mac's swap (`install.sh`) is its stage's.
+    pub fn update_installer() -> Arc<dyn mighty_platform::UpdateInstaller> {
+        Arc::new(Unsupported)
     }
 
     /// The Mac's native views: both kinds are native (Ghostty; CEF or WKWebView by `browser.engineEnabled`), none written yet.
@@ -142,7 +151,7 @@ mod imp {
         None
     }
 
-    pub fn surfaces(_window: tauri::Window) -> Arc<dyn SurfaceFactory> {
+    pub fn surfaces(_window: tauri::Window, _csharp_web_data: bool) -> Arc<dyn SurfaceFactory> {
         Arc::new(MacSurfaces)
     }
 
@@ -227,7 +236,7 @@ mod imp {
 
         #[test]
         fn the_default_profile_is_application_support_mightycode() {
-            let paths = paths(None, "dev.mightycode.tauri").unwrap();
+            let paths = paths(None, "dev.mightycode.native").unwrap();
             assert!(paths.data_dir().ends_with("Library/Application Support/MightyCode"));
             assert!(paths.legacy_data_dirs()[0].ends_with("Library/Application Support/mighty-claude"));
             assert_eq!(MacSurfaces.drawing(SurfaceKind::Terminal), Drawing::Native);

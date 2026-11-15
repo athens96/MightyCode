@@ -154,6 +154,105 @@ fn owned_by(path: &Path, user: &User) -> Result<bool> {
     }
 }
 
+/// The rights C# `StyleTrustStore.Private` refuses another account: `FileSystemRights.Write` (write data, append, write the extended
+/// attributes and the attributes), `Delete`, `ChangePermissions` and `TakeOwnership`.
+const FOREIGN_WRITE: u32 = 0x0116 | 0x0001_0000 | 0x0004_0000 | 0x0008_0000;
+
+/// C# `StyleTrustStore.Private` on Windows (StyleRegistry.cs:65-81; W9-D, the style trust store): not a link or other reparse point,
+/// owned by this user, and no allowing entry of the access list (inherited ones included) gives another account than this user,
+/// LocalSystem or the Administrators group a write-type right. False when anything cannot be read. Reads only.
+pub fn private(path: &Path) -> bool {
+    use windows_sys::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL_SIZE_INFORMATION, AclSizeInformation, GetAce, GetAclInformation, IsWellKnownSid,
+        WinLocalSystemSid,
+    };
+    if attributes(path).is_none_or(|found| found & FILE_ATTRIBUTE_REPARSE_POINT != 0) {
+        return false;
+    }
+    let Ok(user) = User::current() else { return false };
+    let name = wide(path);
+    let mut owner: PSID = null_mut();
+    let mut dacl: *mut ACL = null_mut();
+    let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+    // SAFETY: `owner` and `dacl` point into `descriptor`, which is freed once they were read; each ACE is read within the list's size.
+    unsafe {
+        if GetNamedSecurityInfoW(
+            name.as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner,
+            null_mut(),
+            &mut dacl,
+            null_mut(),
+            &mut descriptor,
+        ) != 0
+        {
+            return false;
+        }
+        let mut private = !owner.is_null() && EqualSid(owner, user.psid()) != 0 && !dacl.is_null();
+        if private {
+            let mut size = ACL_SIZE_INFORMATION { AceCount: 0, AclBytesInUse: 0, AclBytesFree: 0 };
+            private =
+                GetAclInformation(dacl, &mut size as *mut _ as *mut c_void, size_of::<ACL_SIZE_INFORMATION>() as u32, AclSizeInformation)
+                    != 0;
+            for index in 0..size.AceCount {
+                if !private {
+                    break;
+                }
+                let mut ace: *mut c_void = null_mut();
+                if GetAce(dacl, index, &mut ace) == 0 {
+                    private = false;
+                    break;
+                }
+                let header = &*(ace as *const ACE_HEADER);
+                // ACCESS_ALLOWED_ACE_TYPE; denying entries take nothing away from this user.
+                if header.AceType != 0 {
+                    continue;
+                }
+                let allowed = &*(ace as *const ACCESS_ALLOWED_ACE);
+                let sid = &allowed.SidStart as *const u32 as PSID;
+                if allowed.Mask & FOREIGN_WRITE != 0
+                    && EqualSid(sid, user.psid()) == 0
+                    && IsWellKnownSid(sid, WinLocalSystemSid) == 0
+                    && IsWellKnownSid(sid, WinBuiltinAdministratorsSid) == 0
+                {
+                    private = false;
+                }
+            }
+        }
+        LocalFree(descriptor as HLOCAL);
+        private
+    }
+}
+
+/// C# `StyleTrustStore.Restrict` on Windows: this user the owner, a protected list of one entry, full control for this user —
+/// inherited by folders and files for a folder, none for a file.
+pub fn restrict(path: &Path, directory: bool) -> Result<()> {
+    let user = User::current()?;
+    let sddl = wide(if directory { format!("O:{0}D:P(A;OICI;FA;;;{0})", user.text) } else { format!("O:{0}D:P(A;;FA;;;{0})", user.text) });
+    let mut made: PSECURITY_DESCRIPTOR = null_mut();
+    // SAFETY: a NUL-terminated SDDL string; the descriptor is freed by the Descriptor's drop.
+    if unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), SDDL_REVISION_1, &mut made, null_mut()) } == 0 {
+        return Err(refused("the access list"));
+    }
+    let descriptor = Descriptor(made);
+    let dacl = descriptor.dacl()?;
+    let name = wide(path);
+    // SAFETY: the SID and the list live across the call.
+    let set = unsafe {
+        SetNamedSecurityInfoW(
+            name.as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            user.psid(),
+            null_mut(),
+            dacl,
+            null(),
+        )
+    };
+    win32(set, "the access list")
+}
+
 impl SetupFiles for WindowsSetupFiles {
     /// C# `PrepareDirectory`: the parent made, the folder created with the user-only descriptor when nothing is there, then a real
     /// folder this user owns, its owner and protected list written again.
@@ -333,6 +432,47 @@ mod tests {
             LocalFree(descriptor as HLOCAL);
             canonical
         }
+    }
+
+    /// The style trust store's check (C# `StyleTrustStore.Private`): a file and a folder made this user's alone are private; one whose
+    /// list lets Everyone write is not, nor one that is missing.
+    #[test]
+    fn a_path_is_private_only_when_no_other_account_may_write_it() {
+        let root = std::env::temp_dir().join(format!("mighty-platform-windows-private-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("root");
+        let file = root.join("approvals.json");
+        std::fs::write(&file, "{}").expect("file");
+        restrict(&root, true).expect("the folder is restricted");
+        restrict(&file, false).expect("the file is restricted");
+        assert!(private(&root) && private(&file), "this user's alone");
+        let user = User::current().expect("user");
+        let open = wide(format!("O:{0}D:P(A;;FA;;;{0})(A;;FA;;;WD)", user.text));
+        let mut made: PSECURITY_DESCRIPTOR = null_mut();
+        // SAFETY: a NUL-terminated SDDL string; freed by the Descriptor.
+        assert_ne!(
+            unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(open.as_ptr(), SDDL_REVISION_1, &mut made, null_mut()) },
+            0
+        );
+        let descriptor = Descriptor(made);
+        let name = wide(&file);
+        // SAFETY: the list lives across the call.
+        let set = unsafe {
+            SetNamedSecurityInfoW(
+                name.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                null_mut(),
+                null_mut(),
+                descriptor.dacl().expect("dacl"),
+                null(),
+            )
+        };
+        assert_eq!(set, 0);
+        assert!(!private(&file), "Everyone may write it");
+        assert!(!private(&root.join("missing.json")), "a missing file is not private");
+        restrict(&file, false).expect("restricted again");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// C# `PrepareDirectory`'s folder read back from Windows: this user its owner, a protected list (nothing inherited) of one entry,

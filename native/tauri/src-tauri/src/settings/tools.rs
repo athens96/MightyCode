@@ -59,7 +59,7 @@ fn store_folder(host: &Host) -> PathBuf {
         Some(paths) => toolkit::store_folder(paths.inner().as_ref(), host.writes()),
         None if host.writes() => host.data_dir.clone(),
         // No local folder known: never the profile's without the flag.
-        None => std::env::temp_dir().join("dev.mightycode.tauri").join("toolkit"),
+        None => std::env::temp_dir().join("dev.mightycode.native").join("toolkit"),
     }
 }
 

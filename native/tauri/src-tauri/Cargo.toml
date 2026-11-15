@@ -15,6 +15,8 @@ path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# W9: build.rs checks the release stamp's update key (32 bytes of standard base64).
+base64 = "0.22"
 
 [dependencies]
 mighty-core.workspace = true
@@ -36,6 +38,8 @@ mighty-delegation.workspace = true
 # companion pet (companion.rs).
 mighty-remote.workspace = true
 mighty-companion.workspace = true
+# W9-D: the style engine (styles.rs, settings/styles.rs, the phone's style parts).
+mighty-styles.workspace = true
 indexmap.workspace = true
 base64 = "0.22"
 # pickAttachments: the OS's file picker (C# FileOpenPicker), Rust-side only (no page permission).
@@ -56,9 +60,9 @@ mighty-platform-windows.workspace = true
 mighty-platform-macos.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+tokio = { workspace = true, features = ["sync", "rt", "macros", "test-util"] }
 
-# W6 Step 0 lists mighty-native, mighty-tools, mighty-accounts and mighty-updates before any code uses them; this table goes once
-# the app's code uses all four.
+# W6 Step 0 lists mighty-native, mighty-tools, mighty-accounts and mighty-updates before any code uses them, W9 Step 0 mighty-styles;
+# this table goes once the app's code uses them all.
 [lints.cargo]
 unused_dependencies = "allow"

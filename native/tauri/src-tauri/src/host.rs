@@ -348,14 +348,16 @@ impl Host {
         lock(&self.store).approve_remote(connection_id, workspace_id, name, path, host_name)
     }
 
-    /// Whether the app may write its profile (`--allow-state-write`, as main.rs parsed it into the store).
+    /// Whether the app may write its profile: the write policy main.rs gave the store (startup.rs `write_policy`; W9: a release build by
+    /// default, a development build only with `--allow-state-write`, never with `--read-only`).
     pub fn writes(&self) -> bool {
         lock(&self.store).writes()
     }
 
-    /// W6's default until W9 (docs/tauri-conversion.md §8): whether the app may change the machine or the user's settings outside the
-    /// profile — sign in or out, update a CLI or a plugin, install, start an automatic update or auto-login, write HKCU
-    /// `Software\MightyCode`, `~/.claude/settings.json` or another tool's config — only with `--allow-state-write`, never in a smoke.
+    /// Whether the app may change the machine or the user's settings outside the profile — sign in or out, update a CLI or a plugin,
+    /// install, start an automatic update or auto-login, update itself, write HKCU (`Software\MightyCode`, the uninstall entry, the toast
+    /// registration), `~/.claude/settings.json` or another tool's config: where the write policy writes ([`Host::writes`]; W6's default
+    /// was `--allow-state-write` alone, W9's adds a release build's default and `--read-only`), never in a smoke.
     #[allow(dead_code, reason = "a seam W6-B, W6-C and W6-D (every machine-changing press, update and sign-in) calls")]
     pub fn may_change_machine(&self) -> bool {
         self.writes() && self.smoke.is_none()
@@ -467,13 +469,16 @@ impl Host {
                     crate::composer::drain_queue(self.clone(), event.session_id.clone());
                 }
             }
+            // A request the pane's style allows by itself is answered here and never reaches the pane (styles.rs, W9-D).
             ServiceEvent::ToolPermission(request) => {
-                let mut view = self.view();
-                self.push(&view, "permission", format!("{{\"kind\":\"permission\",\"request\":{}}}", request.to_json()));
-                if let Some(pane) = view.panes.get_mut(&request.run_id) {
-                    pane.dirty = true;
+                if crate::styles::tool_permission(self, &request) {
+                    let mut view = self.view();
+                    self.push(&view, "permission", format!("{{\"kind\":\"permission\",\"request\":{}}}", request.to_json()));
+                    if let Some(pane) = view.panes.get_mut(&request.run_id) {
+                        pane.dirty = true;
+                    }
+                    view.mighty.dirty(&request.run_id);
                 }
-                view.mighty.dirty(&request.run_id);
             }
             // The service's own state: the page's copy may not have taken the event this save is for yet (a run's end is saved
             // before its status event comes through).
@@ -540,6 +545,8 @@ impl Host {
         // The remote workspaces' connections (remote.rs, W8-D) and the companion's controls (companion.rs, W8-E), read with the state locked.
         let remote: HashMap<String, RemoteConnection> = crate::remote::connections(self);
         let companion = crate::companion::frame_model(self);
+        // The app update's banner and status bar words (app_update.rs, W9-C), read with the state locked.
+        let app_update = crate::app_update::frame(self);
         let View { snapshot, layout_defaults, shows_dashboard, dialog_open, error, git, .. } = view;
         let active_git =
             active_git_key(snapshot).and_then(|key| git.as_ref().filter(|(k, _)| *k == key).and_then(|(_, info)| info.as_ref()));
@@ -568,8 +575,12 @@ impl Host {
             remote: &remote,
             usage: usage.as_ref(),
             companion: companion.as_ref(),
+            app_update: app_update.as_ref(),
         };
-        shell_model(snapshot, &context, layout_defaults)
+        let mut model = shell_model(snapshot, &context, layout_defaults);
+        // The remote mirror's servers, strips and status words (mirror.rs, W9-J), read with the state locked.
+        crate::mirror::frame(self, snapshot, &mut model);
+        model
     }
 
     /// The frame model, pushed when its JSON changed (`PushWebShellModel`).

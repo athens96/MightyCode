@@ -45,6 +45,11 @@ const BLANK: &str = "about:blank";
 /// no arguments), and only the mini menu and the PDF toolbar's pop-out stay off.
 const BROWSER_ARGUMENTS: &str = "--disable-features=msWebOOUI,msPdfOOUI";
 
+/// The arguments in C#'s own browser data (`<data>\browser-profiles\<key>`, which a release build on the default profile adopts, W9-F):
+/// C#'s `new CoreWebView2EnvironmentOptions()` carries none. The same folder opened with other arguments while C#'s WebView2 still
+/// holds it (right after the update swap) would not start (0x8007139F).
+const CSHARP_BROWSER_ARGUMENTS: &str = "";
+
 /// The custom protocols every webview of the app answers (the app's page `tauri`, its `ipc`, the frames' `mightyhtml`; on Windows a
 /// view without `use_https_scheme`, as a pane's is, answers them at `http://<name>.<anything>`).
 const APP_PROTOCOLS: [&str; 4] = ["tauri", "ipc", "mightyhtml", "asset"];
@@ -75,11 +80,17 @@ pub struct WebviewSurfaces {
     window: Window,
     /// Makes each webview's label unique, also for a pane that opens again before its old view is gone.
     next: AtomicU64,
+    /// The browser panes' data is C#'s own folder: their views open with C#'s arguments ([`CSHARP_BROWSER_ARGUMENTS`]).
+    csharp_web_data: bool,
 }
 
 impl WebviewSurfaces {
-    pub fn new(window: Window) -> WebviewSurfaces {
-        WebviewSurfaces { window, next: AtomicU64::new(1) }
+    pub fn new(window: Window, csharp_web_data: bool) -> WebviewSurfaces {
+        WebviewSurfaces { window, next: AtomicU64::new(1), csharp_web_data }
+    }
+
+    fn browser_arguments(&self) -> &'static str {
+        if self.csharp_web_data { CSHARP_BROWSER_ARGUMENTS } else { BROWSER_ARGUMENTS }
     }
 }
 
@@ -191,44 +202,55 @@ impl SurfaceFactory for WebviewSurfaces {
         Box::pin(async move {
             let url = Url::parse(&options.url).map_err(|error| PlatformError::Invalid(format!("address: {error}")))?;
             let label = label(&options.pane_id, self.next.fetch_add(1, Ordering::Relaxed));
-            let window = self.window.clone();
+            let (window, arguments, adopted) = (self.window.clone(), self.browser_arguments(), self.csharp_web_data);
             let BrowserOptions { data_dir, bounds, listener, .. } = options;
-            let (popups, downloads) = (listener.clone(), listener.clone());
             // A dev build's page comes from the dev server, which a pane never loads either.
             let dev_server = if tauri::is_dev() { window.config().build.dev_url.clone() } else { None };
             if app_address(&url, dev_server.as_ref()) {
                 return Err(PlatformError::Invalid("address: the app's own".into()));
             }
+            let events = listener.clone();
             // add_child waits for the UI thread: never on the UI thread itself, never on an async worker.
             let webview = tauri::async_runtime::spawn_blocking(move || {
-                // Its own WebView2 data: never the page's (whose environment options differ) and never the C# app's. No remote
-                // debugging port, the engine's arguments set (SmartScreen kept), files dropped on it the page's own (a drop handler
-                // would swallow them), never the app's own addresses; a new window or a download is refused and the host hears of it.
-                let builder = WebviewBuilder::new(label, WebviewUrl::External(Url::parse(BLANK).expect("about:blank")))
-                    .data_directory(data_dir)
-                    .additional_browser_args(BROWSER_ARGUMENTS)
-                    .disable_drag_drop_handler()
-                    .focused(false)
-                    .on_navigation(move |url| !app_address(url, dev_server.as_ref()))
-                    .on_new_window(move |_, _| {
-                        if let Some(listener) = &popups {
-                            listener.send(BrowserEvent::PopupRefused);
-                        }
-                        NewWindowResponse::Deny
-                    })
-                    .on_download(move |_, event| {
-                        if matches!(event, DownloadEvent::Requested { .. })
-                            && let Some(listener) = &downloads
-                        {
-                            listener.send(BrowserEvent::DownloadRefused);
-                        }
-                        false
-                    });
-                window.add_child(
-                    builder,
-                    PhysicalPosition::new(bounds.x, bounds.y),
-                    PhysicalSize::new(bounds.width.max(1), bounds.height.max(1)),
-                )
+                let mut attempt = 0u32;
+                // Its own WebView2 data: never the page's (whose environment options differ); C#'s own only where a release build
+                // adopted it, then with C#'s arguments. No remote debugging port, the engine's arguments set (SmartScreen kept), files
+                // dropped on it the page's own (a drop handler would swallow them), never the app's own addresses; a new window or a
+                // download is refused and the host hears of it.
+                let mut make = || {
+                    // A label of its own each time: an attempt that failed may still hold its own.
+                    let name = if attempt == 0 { label.clone() } else { format!("{label}-r{attempt}") };
+                    attempt += 1;
+                    let (popups, downloads, dev_server) = (events.clone(), events.clone(), dev_server.clone());
+                    let builder = WebviewBuilder::new(name, WebviewUrl::External(Url::parse(BLANK).expect("about:blank")))
+                        .data_directory(data_dir.clone())
+                        .additional_browser_args(arguments)
+                        .disable_drag_drop_handler()
+                        .focused(false)
+                        .on_navigation(move |url| !app_address(url, dev_server.as_ref()))
+                        .on_new_window(move |_, _| {
+                            if let Some(listener) = &popups {
+                                listener.send(BrowserEvent::PopupRefused);
+                            }
+                            NewWindowResponse::Deny
+                        })
+                        .on_download(move |_, event| {
+                            if matches!(event, DownloadEvent::Requested { .. })
+                                && let Some(listener) = &downloads
+                            {
+                                listener.send(BrowserEvent::DownloadRefused);
+                            }
+                            false
+                        });
+                    window.add_child(
+                        builder,
+                        PhysicalPosition::new(bounds.x, bounds.y),
+                        PhysicalSize::new(bounds.width.max(1), bounds.height.max(1)),
+                    )
+                };
+                // In C#'s folder, C#'s WebView2 may still hold it right after the update swap (0x8007139F): made again for about 10 s,
+                // as the page is (mighty-platform's `retry_while_held`).
+                if adopted { mighty_platform::paths::retry_while_held(make, std::thread::sleep, |_| {}) } else { make() }
             })
             .await
             .map_err(|error| refused("the browser view", error))?
@@ -425,6 +447,13 @@ mod tests {
     fn browser_panes_keep_smartscreen() {
         assert!(!BROWSER_ARGUMENTS.contains("SmartScreen"), "{BROWSER_ARGUMENTS}");
         assert_eq!(BROWSER_ARGUMENTS, "--disable-features=msWebOOUI,msPdfOOUI");
+    }
+
+    /// W9 integration (the W9-F review's browser half): in C#'s own data folder a pane opens with C#'s options, no arguments, as the
+    /// page does there (startup.rs `CSHARP_BROWSER_ARGUMENTS`), so C#'s WebView2 still holding the folder does not refuse it.
+    #[test]
+    fn panes_in_csharps_folder_take_csharps_options() {
+        assert_eq!(CSHARP_BROWSER_ARGUMENTS, "");
     }
 
     /// The app's own addresses (its page, its IPC, the frames' protocol, the dev server) are never a pane's; the web is.

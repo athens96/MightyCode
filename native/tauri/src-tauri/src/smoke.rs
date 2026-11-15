@@ -24,10 +24,16 @@
 //! with `--smoke-real-claude` one real request to the installed
 //! `claude` CLI follows the first probe instead of the page's steps.
 //!
-//! The host adds whether its own state took the click, the calls it saw and the methods it answered "unimplemented", and writes
-//! `smoke-result.json`; with `--smoke-exit` the app then quits, 0 when the smoke passed, else 1. A smoke that has no result in time
-//! (390 s, 540 s with the stand-in CLI, 420 s with the real one) fails.
+//! W9's steps ([`W9_STEPS`]: styles after Settings, the app update after the updates, the mirror after the remote step, the help
+//! capture after the companion, per-pane worktrees after delegation) each start where their part has written them (Step 0: none does).
+//! `--help-capture` and `--perf-scenario` runs are smokes whose page probe their part takes over ([`Special`], W9-H).
+//!
+//! The host adds whether its own state took the click, the calls it saw and the methods it answered "unimplemented" (only those of
+//! [`ALLOWED_UNIMPLEMENTED`] pass, `unimplementedAllowed`), and writes `smoke-result.json`; with `--smoke-exit` the app then quits, 0
+//! when the smoke passed, else 1. A smoke that has no result in time (495 s, 645 s with the stand-in CLI, 525 s with the real one)
+//! fails.
 
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -90,11 +96,18 @@ enum Stage {
     Acp,
     /// Delegation on its fixture repository under the smoke's profile (smoke_delegation.rs, W7-D).
     Delegation,
+    /// W9's steps ([`W9_STEPS`]): styles (smoke_styles.rs, W9-D), the app update box (smoke_app_update.rs, W9-C), the remote mirror
+    /// (mirror.rs, W9-J), the help capture (smoke_help.rs, W9-H) and per-pane worktrees (pane_worktree.rs, W9-I).
+    Styles,
+    AppUpdate,
+    Mirror,
+    Help,
+    PaneWorktree,
     Runs,
 }
 
 /// The steps after the first probe, in their order: each one that can start does (`Smoke::start`), the run steps last.
-const STEPS: [Stage; 16] = [
+const STEPS: [Stage; 21] = [
     Stage::Frame,
     Stage::Browser,
     Stage::Terminal,
@@ -103,15 +116,45 @@ const STEPS: [Stage; 16] = [
     Stage::Create,
     Stage::Reload,
     Stage::Settings,
+    Stage::Styles,
     Stage::Setup,
     Stage::Accounts,
     Stage::Updates,
+    Stage::AppUpdate,
     Stage::Remote,
+    Stage::Mirror,
     Stage::Companion,
+    Stage::Help,
     Stage::Acp,
     Stage::Delegation,
+    Stage::PaneWorktree,
     Stage::Runs,
 ];
+
+/// W9's steps (Step 0): each its stage, the key its report is kept under in the result, its part's start (false: it does not run;
+/// every one at rest) and its checks (a step that did not report fails every one of them).
+const W9_STEPS: [(Stage, &str, StepStart, StepChecks); 5] = [
+    (Stage::Styles, "styles", crate::smoke_styles::start, crate::smoke_styles::checks),
+    (Stage::AppUpdate, "appUpdate", crate::smoke_app_update::start, crate::smoke_app_update::checks),
+    (Stage::Mirror, "mirror", crate::mirror::smoke_start, crate::mirror::smoke_checks),
+    (Stage::Help, "help", crate::smoke_help::start, crate::smoke_help::checks),
+    (Stage::PaneWorktree, "paneWorktree", crate::pane_worktree::smoke_start, crate::pane_worktree::smoke_checks),
+];
+
+/// The page methods a smoke may meet unanswered (plan D20; README's unimplemented table): none since W9's integration, every method
+/// the 0.4.61 page calls is answered.
+pub const ALLOWED_UNIMPLEMENTED: [&str; 0] = [];
+
+/// A run that is a smoke but whose page probe another part takes over (W9-H; main.rs from `--help-capture` and `--perf-scenario`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Special {
+    #[default]
+    None,
+    /// `--help-capture` in this language (help_capture.rs).
+    HelpCapture { language: String },
+    /// `--perf-scenario` (perf.rs).
+    Perf,
+}
 
 /// The remote step's parts in their order (W8 plan, Step 0): each that can start does, reports its part through `Smoke::probed`, and
 /// the next part starts; the step ends after the last. A part's report is kept under its key in the stage's report.
@@ -169,24 +212,26 @@ const BROWSER_PROBE: &str = r#"(async () => {
     const slotNow = () => ofPane('[data-testid=browser-slot]');
     const slot = await until(slotNow, 15000);
     report.slot = !!slot;
-    const address = await until(() => { const field = ofPane('[data-testid=browser-address]'); return field && !field.disabled ? field : null; }, 10000);
+    // Enabled once the host's view opened (status `ready`): a WebView2 in a profile of its own, which a loaded machine can take well over
+    // 10 s to start. Waited for that long; without it the step stops with its reason instead of typing into nothing.
+    const address = await until(() => { const field = ofPane('[data-testid=browser-address]'); return field && !field.disabled ? field : null; }, 60000);
     report.addressField = !!address;
+    if (!address) throw new Error('the browser view never became ready: ' + (ofPane('[data-testid=browser-notice]')?.textContent || 'still starting'));
     // Typed as a person would: the field's value, its input event, then Enter (BrowserView's keyDown sends browserNavigate).
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(address, fixture);
     address.dispatchEvent(new Event('input', { bubbles: true }));
     address.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    const loaded = await until(async () => { const s = await surface(); return s && s.visible && (s.url || '').startsWith(fixture) ? s : null; }, 15000);
+    const loaded = await until(async () => { const s = await surface(); return s && s.visible && (s.url || '').startsWith(fixture) ? s : null; }, 30000);
     report.loaded = !!loaded;
     report.url = loaded?.url ?? null;
-    // The slot in device pixels as the page reports it (src/slot/bounds.ts), against the view's own bounds from the OS.
-    await new Promise((r) => setTimeout(r, 300));
-    const box = (slotNow() ?? slot).getBoundingClientRect(), ratio = window.devicePixelRatio || 1;
-    const x = Math.round(box.left * ratio), y = Math.round(box.top * ratio);
-    report.expected = { x, y, width: Math.round((box.left + box.width) * ratio) - x, height: Math.round((box.top + box.height) * ratio) - y };
-    const placed = await surface();
+    // The slot in device pixels as the page reports it (src/slot/bounds.ts), against the view's own bounds from the OS: both read again
+    // until they agree (the page may still be laying the slot out, the host still placing the view).
+    const ratio = window.devicePixelRatio || 1;
+    const expected = () => { const box = (slotNow() ?? slot).getBoundingClientRect(); const x = Math.round(box.left * ratio), y = Math.round(box.top * ratio); return { x, y, width: Math.round((box.left + box.width) * ratio) - x, height: Math.round((box.top + box.height) * ratio) - y }; };
+    let placed = null;
+    report.boundsMatch = !!(await until(async () => { report.expected = expected(); placed = await surface(); return !!placed && ['x', 'y', 'width', 'height'].every((k) => Math.abs(placed.bounds[k] - report.expected[k]) <= 1); }, 10000));
     report.actual = placed?.bounds ?? null;
     report.ratio = ratio;
-    report.boundsMatch = !!placed && ['x', 'y', 'width', 'height'].every((k) => Math.abs(placed.bounds[k] - report.expected[k]) <= 1);
     await invoke('smoke_surface', { paneId, action: 'dialog' });
     report.dialogShown = !!(await until(() => document.querySelector('[data-testid=dialog]'), 5000));
     report.hiddenUnderDialog = !!(await until(async () => { const s = await surface(); return s && !s.visible; }, 5000));
@@ -215,7 +260,7 @@ const BROWSER_PROBE: &str = r#"(async () => {
     // A page menu over the slot (the tab's menu at a point inside it): the view steps aside, and comes back once the menu closes.
     const box2 = (slotNow() ?? slot).getBoundingClientRect();
     report.menuAt = { x: Math.round(box2.left + 20), y: Math.round(box2.top + 20) };
-    const handle = document.querySelector('[data-testid=tab][data-tab-id="' + paneId + '"] .tab-handle');
+    const handle = await until(() => document.querySelector('[data-testid=tab][data-tab-id="' + paneId + '"] .tab-handle'), 5000);
     handle?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: box2.left + 20, clientY: box2.top + 20 }));
     report.menuOpened = !!handle && !!(await until(() => document.querySelector('[data-testid=menu]'), 5000));
     report.steppedAside = report.menuOpened && !!(await until(async () => { const s = await surface(); return s && !s.visible; }, 5000));
@@ -280,12 +325,16 @@ struct Progress {
     remote_part: usize,
     /// The companion step's report (W8-E).
     companion: Option<Value>,
+    /// W9's steps' reports, each under its key ([`W9_STEPS`]).
+    w9: BTreeMap<&'static str, Option<Value>>,
     /// The reload step's page is loading again: its `ready` brings the probe.
     reload_waiting: bool,
     reload_ready: bool,
     reload_injected: bool,
     /// The name the reload step's rename sheet opened with.
     reload_name: Option<String>,
+    /// A help capture or perf scenario took the page over (W9-H).
+    special_begun: bool,
     finished: bool,
 }
 
@@ -310,9 +359,18 @@ impl Progress {
             Stage::Companion => Some(&mut self.companion),
             Stage::Acp => Some(&mut self.acp),
             Stage::Delegation => Some(&mut self.delegation),
+            Stage::Styles | Stage::AppUpdate | Stage::Mirror | Stage::Help | Stage::PaneWorktree => {
+                let key = w9_step(stage).1;
+                Some(self.w9.entry(key).or_default())
+            }
             Stage::Runs => None,
         }
     }
+}
+
+/// `stage`'s row of [`W9_STEPS`].
+fn w9_step(stage: Stage) -> (Stage, &'static str, StepStart, StepChecks) {
+    W9_STEPS.iter().copied().find(|(each, ..)| *each == stage).expect("a W9 stage has its row")
 }
 
 pub struct Smoke {
@@ -324,25 +382,67 @@ pub struct Smoke {
     mode: Mode,
     /// Where the stand-in CLI records what it was sent (`<record>.answers` …).
     fake_record: Option<PathBuf>,
+    /// A help capture or perf scenario run (W9-H).
+    special: Special,
     progress: Mutex<Progress>,
 }
 
 impl Smoke {
     pub fn new(out: PathBuf, exit: bool, load: Value, mode: Mode, fake_record: Option<PathBuf>) -> Smoke {
-        Smoke { out, exit, started: Instant::now(), load, mode, fake_record, progress: Mutex::new(Progress::default()) }
+        Smoke {
+            out,
+            exit,
+            started: Instant::now(),
+            load,
+            mode,
+            fake_record,
+            special: Special::None,
+            progress: Mutex::new(Progress::default()),
+        }
+    }
+
+    /// This smoke as a help capture or perf scenario run (W9-H).
+    pub fn special(mut self, special: Special) -> Smoke {
+        self.special = special;
+        self
     }
 
     pub fn fake_record(&self) -> Option<&PathBuf> {
         self.fake_record.as_ref()
     }
 
+    /// A help capture or perf scenario run (W9-H): its part writes its own result and no CLI is found for it (runs.rs).
+    pub fn is_special(&self) -> bool {
+        self.special != Special::None
+    }
+
+    /// Where the smoke's result goes (`--smoke-out`, else `<profile>\smoke-result.json`).
+    pub fn out(&self) -> &std::path::Path {
+        &self.out
+    }
+
+    /// A help capture or perf scenario run ended (C# `FinishSmoke(passed)`, W9-H): its part wrote its own result; nothing more is written
+    /// here, and with `--smoke-exit` the app quits, 0 when it passed, else 1.
+    pub fn end(&self, host: &Host, passed: bool) {
+        {
+            let mut progress = self.progress();
+            if progress.finished {
+                return;
+            }
+            progress.finished = true;
+        }
+        if self.exit {
+            host.app.exit(if passed { 0 } else { 1 });
+        }
+    }
+
     fn timeout(&self) -> Duration {
         Duration::from_secs(match self.mode {
             // The frame, browser, gitCreate and reload steps add up to two minutes, the terminal and history steps a minute each.
-            // The W6 steps a minute more, and the W8 steps (remote, companion) another.
-            Mode::Page => 450,
-            Mode::FakeClaude => 600,
-            Mode::RealClaude => 480,
+            // The W6 steps a minute more, the W8 steps (remote, companion) another, and W9's (plan R13) 45 s.
+            Mode::Page => 495,
+            Mode::FakeClaude => 645,
+            Mode::RealClaude => 525,
         })
     }
 
@@ -395,6 +495,16 @@ impl Smoke {
                 return;
             }
             progress.injected = true;
+        }
+        // A help capture or perf scenario run: its part takes over here once it is written (W9-H); until then the run is a plain smoke.
+        let taken = match &self.special {
+            Special::None => false,
+            Special::HelpCapture { language } => crate::help_capture::begin(host, language),
+            Special::Perf => crate::perf::begin(host),
+        };
+        if taken {
+            self.progress().special_begun = true;
+            return;
         }
         host.log.line("smoke: the page is up; probing");
         self.eval(host, PROBE);
@@ -481,6 +591,11 @@ impl Smoke {
             Stage::Companion => page_steps && shared(host).is_some_and(|host| crate::smoke_companion::start(&host)),
             Stage::Acp => self.mode == Mode::FakeClaude && crate::smoke_acp::start(host),
             Stage::Delegation => page_steps && shared(host).is_some_and(|host| crate::smoke_delegation::start(&host)),
+            // W9's steps, each its part's ([`W9_STEPS`]).
+            Stage::Styles | Stage::AppUpdate | Stage::Mirror | Stage::Help | Stage::PaneWorktree => {
+                let start = w9_step(step).2;
+                page_steps && shared(host).is_some_and(|host| start(&host))
+            }
             Stage::Runs => self.start_runs(host),
         }
     }
@@ -793,7 +908,19 @@ impl Smoke {
             for (name, passed) in crate::smoke_companion::checks(companion.as_ref().unwrap_or(&missing)) {
                 checks[name] = json!(passed && companion.is_some());
             }
+            // W9's steps: each one's checks from its report under its key (a step that did not report fails every one of them).
+            let w9 = self.progress().w9.clone();
+            for (_, key, _, part) in W9_STEPS {
+                let report = w9.get(key).cloned().flatten();
+                let missing = json!({"error": format!("the {key} step did not report")});
+                for (name, passed) in part(report.as_ref().unwrap_or(&missing)) {
+                    checks[name] = json!(passed && report.is_some());
+                }
+            }
         }
+        // While W9 is under way, the page may meet only the methods its parts have not answered yet (plan D20; README's table).
+        let unimplemented = host.unimplemented_methods();
+        checks["unimplementedAllowed"] = json!(unimplemented.iter().all(|method| ALLOWED_UNIMPLEMENTED.contains(&method.as_str())));
         match self.mode {
             Mode::Page => {}
             Mode::FakeClaude => {
@@ -861,7 +988,7 @@ impl Smoke {
             checks["localeKeyLeakScan"] = json!(scan.as_ref().is_some_and(crate::smoke_settings::leak_scan_passed));
         }
         let passed = checks.as_object().is_some_and(|c| c.values().all(|v| v == &Value::Bool(true)));
-        let result = json!({
+        let mut result = json!({
             "passed": passed,
             "checks": checks,
             "probe": probe,
@@ -888,11 +1015,16 @@ impl Smoke {
             "host": {"workspaces": workspaces, "panes": panes, "theme": theme, "activeSessionId": active, "language": host.locale.language()},
             "load": self.load,
             "calls": calls,
-            "unimplemented": host.unimplemented_methods(),
+            "unimplemented": unimplemented,
             "elapsedMs": self.started.elapsed().as_millis() as u64,
             "dataDir": host.data_dir,
             "version": host.version,
         });
+        // W9's steps' reports, each under its key (null when it did not run).
+        let w9 = self.progress().w9.clone();
+        for (_, key, _, _) in W9_STEPS {
+            result[key] = w9.get(key).cloned().flatten().unwrap_or(Value::Null);
+        }
         if let Some(parent) = self.out.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -906,9 +1038,21 @@ impl Smoke {
         }
     }
 
-    /// Fails the smoke when it has no result in time.
+    /// Fails the smoke when it has no result in time. A help capture or perf scenario has no limit once it took the page over (C#'s has
+    /// none either; its script stops a run that outlasts 30 minutes), but fails when the page never came up for it ([`SPECIAL_PAGE`]).
     pub fn watch(host: Arc<Host>) {
         std::thread::spawn(move || {
+            if let Some(smoke) = host.smoke.as_ref().filter(|smoke| smoke.is_special()) {
+                std::thread::sleep(SPECIAL_PAGE);
+                if !smoke.progress().special_begun {
+                    let error = format!("the page did not come up within {} s", SPECIAL_PAGE.as_secs());
+                    host.log.line(&format!("smoke: {error}"));
+                    let failure = json!({"passed": false, "phase": "startup", "error": error, "aiRequestSent": false});
+                    let _ = std::fs::write(&smoke.out, serde_json::to_vec_pretty(&failure).unwrap_or_default());
+                    smoke.end(&host, false);
+                }
+                return;
+            }
             let Some(timeout) = host.smoke.as_ref().map(Smoke::timeout) else { return };
             std::thread::sleep(timeout);
             if let Some(smoke) = &host.smoke {
@@ -926,6 +1070,9 @@ impl Smoke {
         });
     }
 }
+
+/// How long a help capture or perf scenario waits for the page to come up before it fails (W9-H).
+const SPECIAL_PAGE: Duration = Duration::from_secs(180);
 
 /// A step's checks from its report (W6's, W8's remote parts).
 type StepChecks = fn(&Value) -> Vec<(&'static str, bool)>;

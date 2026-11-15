@@ -1,15 +1,16 @@
-# Mighty Code — Rust + Tauri 2 host (skeleton)
+# Mighty Code — Rust + Tauri 2 host
 
-The start of the Rust rewrite of the desktop app, Windows first. It opens one window, draws the same React page the C# app draws
-(`native/windows/web`), loads the saved state and answers the page's first calls. It saves the state byte for byte as the C# app
-does, but **only when started with `--allow-state-write`**; without it every change stays in memory. The C# app
-(`native/windows/MightyCode.*`) is untouched and still the shipping app.
+The Rust rewrite of the desktop app, Windows first. It opens one window, draws the same React page the C# app draws
+(`native/windows/web`), loads the saved state and answers every call the page makes. It saves the state byte for byte as the C# app
+does, under the write policy (W9, `startup.rs`): a release build installed in its folder writes, any other run **only with
+`--allow-state-write`**, and no run with `--read-only`; without writing every change stays in memory. The C# app
+(`native/windows/MightyCode.*`) is untouched and ships until 0.5, which the C# 0.4.x updater installs over it (W9: the hand-off).
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `Cargo.toml` | The workspace: `crates/mighty-core`, `crates/mighty-composer`, `crates/mighty-delegation`, `crates/mighty-files`, `crates/mighty-graph`, `crates/mighty-history`, `crates/mighty-native`, `crates/mighty-tools`, `crates/mighty-accounts`, `crates/mighty-updates`, `crates/mighty-remote`, `crates/mighty-companion`, `crates/mighty-platform`, `crates/mighty-platform-windows`, `crates/mighty-platform-macos`, `crates/mighty-run`, `crates/mighty-terminal`, `crates/mighty-workmap`, `src-tauri`. |
+| `Cargo.toml` | The workspace: `crates/mighty-core`, `crates/mighty-composer`, `crates/mighty-delegation`, `crates/mighty-files`, `crates/mighty-graph`, `crates/mighty-history`, `crates/mighty-native`, `crates/mighty-tools`, `crates/mighty-accounts`, `crates/mighty-updates`, `crates/mighty-remote`, `crates/mighty-companion`, `crates/mighty-platform`, `crates/mighty-platform-windows`, `crates/mighty-platform-macos`, `crates/mighty-run`, `crates/mighty-terminal`, `crates/mighty-workmap`, `crates/mighty-styles`, `src-tauri`. |
 | `crates/mighty-core` | No Tauri, no OS code. JSON exactly as C# `Wire.Json` reads and writes it (`json.rs`), .NET's times (`time.rs`), the state models (`model.rs`, `graph.rs`: C# `Models.cs`, `MightyGraph.cs`, `ExecutionGraph.cs` and the records they hold), `StateStore.Normalize` with every rule it calls (`normalize.rs`), loading, saving and the save timing (`store.rs`, C# `StateStore.cs`, `SaveSchedule`, `DesktopService`'s save queue), the locale catalogues and `LocaleKeyLeak` (`locale.rs`), the pane layout rules (`layout.rs`, C# `PaneLayout.cs`), model labels (`model_label.rs`), the frame model (`shell.rs`, C# `MainWindow.WebShell.Shell.cs`), the demo state (`demo.rs`), the add-pane menu and a pane's place (`add_pane.rs`, C# `AddPaneMenu`, `SessionTemplate`, `AddToLayout`), renames and pane titles (`rename.rs`, `RenameSupport`, `PaneTitle`), the workspace create rules (`workspace_create.rs`, `WorkspaceCreate`), the browser pane's rules (`browser.rs`, `BrowserHistory`, `BrowserProfile`, `BrowserEngineService`), the text setting (`text_appearance.rs`). |
 | `crates/mighty-composer` | No Tauri, no OS-specific code: the composer's C# Core classes and what the WinUI host builds from them for the page (W2-B). `slash` (`SlashCommands.cs`, `SlashCommandStrings.cs`; the scan reads files through `SlashFiles`), `next_actions`, `ask_targets` (`AskTargets`), `custom_model` (the custom model dialog's data, `PaneView.CustomModel`; W6 draws it), `queue` (the second send, 바로 실행, `QueuedInputBuffer`, `RunBlock`, `BackgroundQueuePolicy`), `pending` (`PendingDisplay`, `SubmitResponse`, `SubmitReceipt`, `SubmitScroll`), `attachments` (`AttachmentSupport`; staging is the run engine's), `images` (`AgentImages.cs`: header sniffing with TIFF, the SHA-256 cache, the path rule, Markdown pictures, the RTF picture), `svg` (`SafeSvgDocument`, the SVG rules of `FilePreviewClassifier`), `html` (`LocalHtmlDocument`), `text` and `files` (the decoding and path rules they read). Then the page's models as pure functions: `composer::composer_state` (`WebComposerState`), `menus::composer_menu`/`menu_action`/`run_settings_info`/`run_settings_from`/`slash_catalog`, `cards::cards` (`WebCards`) with `presentation` (`ToolPermissionPresentation`, `UserQuestionnaire`, `PlanCardSupport`). What later stages give them is typed (`composer::WindowRules`, `cards::CardInputs`) and listed (`composer::PENDING`, `cards::PENDING`). Its tests port the C# checks, read the shared fixtures, check the page's field names against `src/composer/*.ts` and `src/cards/types.ts`, and compare 35,597 vectors with C# itself (`tools/parity` `composer`). |
 | `crates/mighty-files` | No Tauri, no OS-specific code (the OS through mighty-platform's files ports): the files pane, its previews and the 변경사항 view (W4-B). `listing` (C# `WorkspaceFiles.List`, `Sorted`, `NaturalComparer`), `classify` (`FilePreviewClassifier`, `TextEncodings`; the decoding and SVG rules are mighty-composer's), `source` (`SourceLines`, `SourceHighlighter`, `SourceFind`), `tree` (`FilePaneTree`, `FilePaneDrawing`), `preview` (`FilePreviewLoader`), `diff` (`FileDiff`, Myers), `patch` (`FilePatch`, `FileEdit` and the parser's `EditedOriginal` reading of a `tool_use_result`), `changes` (`FileOriginalStore`, `GitHeadFile` through `ProcessHost`, `FileChanges`), `reference` (`ReferencePreview`), `pane` (`FilePaneKind`), `frames` (the HTML frames' folders and what they serve), `raster` (an SVG drawn to PNG with resvg, as C#'s `NativeSvgRaster`; a bitmap measured and fitted with the image crate, as C#'s WIC decode) and `model` (the page's `FilesModel` and `FilePreview`: `WebFilesModel`, `WebFilePreview`, `WebFileImage`). Its tests port the C# checks under their names and read `file-diff.json` and `source-highlight.json`. |
@@ -25,6 +26,7 @@ does, but **only when started with `--allow-state-write`**; without it every cha
 | `crates/mighty-remote` | No Tauri, no `cfg(target_os)` (W8, `.omc/research/tauri/w8-plan.md`; C# `Remote\*.cs`): the phone, remote workspaces v2 and screen share's protocol. `relay` (C# `RelayCrypto`, `RelayLink`, `MobileRelayHost`: the X25519/HKDF/ChaCha20-Poly1305 frames, the link's policy and backoff, a connection's hello, auth and requests over tokio-tungstenite with native-tls through the system proxy's CONNECT tunnel, the 20 s/10 s keepalive), `identity` (`MobileIdentity`: the host id and token, paired devices, the pairing URL and its QR, push registrations; `mobile-identity.json` through mighty-platform's `pairing::identity_file`), `push` (`MobilePush`, `MobilePushHub`: what changed, who gets it, the sealed message, the HTTPS POST), `phone` (`MobileDesktopRouter` over the `PhoneDesk` trait: every `/m1/` route with C#'s statuses, codes and JsonOut bodies, the long polls, uploads, file previews, the app update's 409), `direct` (`MobileDirect*`: the Tailscale-only listener, admission and upgrade, its status and words) and `tailscale` (`TailscaleAddresses`), `remote` (`Remote*.cs`: the wire's strict JSON, the events both ways, validation, the strict HTTP/1.1 server and client transport, the sharing host, the client as the run service's `RemoteRunner`, `remote-connections.json`, the features a remote workspace lacks), `screen` (`ScreenShare*`: policy, wire, the clipboard's zstd frames through ruzstd, the hub over a `ScreenSharePlatform`, the reference scene; `ENABLED` is false and the app builds no hub). Its tests port the C# checks by name over an in-process fake relay (`tests/support/fake_relay.rs`), a headless desk over a real `RunService` (`tests/support/desk.rs`) and a fake sharing host (`tests/support/fake_host.rs`), all on loopback port 0, and compare with C# (`tools/parity` `push`, `pairing-url`, `routes`, `remote`). |
 | `crates/mighty-companion` | No Tauri (W8-E; C# `Companion*.cs`, `CompanionOverlay.cs`): the companion pet. `prefs` (`companion-settings.json` byte for byte), `pet` (the catalog, manifests, the install and the atlas decode), `animation`, `carousel`, `card` and `bubble` (the bubble's buttons and question stepping), `plan` (the plan's Markdown blocks), `layout`, `follow` (the most pressing Claude pane, a paged one, a finished run's six seconds, the SHA-256 card key) and `Companion` (`lib.rs`: CompanionOverlay's state, its presses, carry, swipe, wheel, resize, double-click and DPI handling), drawn as a `PetScene` (`scene`, mighty-platform's display list that the Windows pet window draws with Direct2D and DirectWrite). Its tests port C#'s six companion checks by name, the overlay's measurements over the fake window and a golden scene of each row and card kind. |
 | `crates/mighty-workmap` | No Tauri: the work map (W4-C, docs/work-map.md). `lib` (C# `WorkMap`: subjects to platform lanes, release tags, VERSION, release state, dot sizes, the git log by version, the user's requests attached to the commits that followed them; the model JSON keeps its nulls), `git` (re-exports `mighty_run::git`, C#'s `DelegationGit.Run` through the platform's `ProcessHost`, shared with delegation), `summary` (`WorkMapSummary`: the prompt, the answer's reading, one headless Claude run; `WorkMapSummaryStore`), `service` (`WorkMapService`: one summary at a time per workspace), `originals` (what it reads of the file originals), `dashboard` (the rest of `WorkDashboard`). Its tests read `work-map.json`, run real git and a scripted Claude (`mighty-workmap-fake`, C#'s `--workmap-fake`) through the Windows `ProcessHost`. |
+| `crates/mighty-styles` | No Tauri, no `cfg(target_os)` (W9-D; C# `Core\Styles\*`, docs/mighty-styles.md): the style engine — `manifest`, `decoder` (the raw-key prescan as `Utf8JsonReader` meets it), `validator`, `registry`, `trust` (the approvals store with C#'s owner and permission checks), `evaluator`, `state` (the plan stage), `files` (workspace files read through the checked paths), `projection`, `presentation`, `prerequisites`, `permissions`, `watcher`; `bundled` holds the frozen style files by `include_bytes!`, which it reads in place and never writes (`scripts/check-style-freeze.sh`). Its tests read `styles/golden`, `styles/conformance` and `styles/fixtures`; `tools/parity/styles.ps1` compares its projection with C#'s. |
 | `crates/mighty-platform-macos` | The Mac ports in Rust, everything behind `cfg(target_os = "macos")`: `Paths`, `cli_copies` (a command along the PATH); the surfaces say terminal and browser are native (Ghostty, CEF/WKWebView) but open nothing yet. |
 | `src-tauri` | The app. `main.rs` (window, startup), `host.rs` (the bridge, the state's changes and saves, the run service's events), `delta.rs` (C# `WebBridge.Flush` and `WebDelta`), `methods.rs` (the page methods), `runs.rs` (the run engine: one `RunService` with mighty-graph's tracker and the picture cache, the CLIs' runtime), `models.rs` (the model lists kept right: C# MainWindow.ModelRefresh.cs), `ask.rs` (the composer's "send to" switch: C# MainWindow.AskTargets.cs), `panes.rs` (the never-shown pane views: composer and cards models and pushes), `composer.rs`, `cards.rs`, `mighty.rs` (their page methods; `mighty.rs` also the `mighty` push), `terminal.rs` (terminal panes, agent terminals, terminal prompts, shell block runs), `files.rs` (the files pane, the reference bubble, HTML frames and the picture viewer's actions, the file originals), `history.rs` (session history and the resume list's data), `antigravity.rs` (the Antigravity card's words and answer, agy's settings and the ledger for the run service), `workmap.rs` (the work map's methods, pushes and pane), `frame.rs` (the frame's remaining methods: close, focus, rename, remove, the add menu, panes, the folder picker, Explorer, the text size, the resume flow), `dialogs.rs` (the page-drawn dialogs), `workspace_create.rs` (the create sheets, git through `ProcessHost`), `platform.rs` (the one place the OS crate is chosen), `surface.rs` (`SurfaceManager`, the NativeSlot protocol and the browser pane), `mobile.rs` (the phone's relay host, identity, push hub and their 250 ms tick), `phone.rs` (the phone's desk under the m1 router), `direct.rs` (the Tailscale direct path and the shared firewall rule), `remote.rs` (remote workspaces: the client and the sharing host), `companion.rs` (the pet), `smoke.rs`, `smoke_frame.rs`, `smoke_terminal.rs`, `smoke_files.rs`, `smoke_history.rs`, `smoke_acp.rs`, `smoke_runs.rs`, `smoke_direct.rs`, `smoke_remote.rs`, `smoke_phone.rs` and `smoke_companion.rs` (`--smoke-test`), `args.rs`, `logfile.rs`. |
 | `scripts/env.ps1` | Loads the MSVC environment and `~/.cargo/bin` into the PowerShell session (dot-source it before any cargo or tauri command). |
@@ -63,6 +65,11 @@ The VS 2022 Build Tools on the development PC are not registered with vswhere, s
 | `--allow-state-write` | Lets the host write the profile's state as C# does: every change saved, the damaged-file recovery, the legacy copy. Off by default. |
 | `--smoke-fake-cli <exe>` | The smoke's run steps against mighty-run's stand-in CLI (`mighty-fake-cli --replay-cli claude-stream-subagents` for Claude, `--fake-cli pi … --pi-fixture pi-rpc-question.jsonl --pi-dialogs` for pi, `--fake-cli gemini … --agy-denied` for agy), and its ACP step's opencode (`--fake-acp` replaying `opencode-acp-question`); every other provider reads as missing. Needs `--smoke-test`. |
 | `--smoke-real-claude` | The smoke sends one real request with the installed `claude` CLI instead (below). Needs `--smoke-test`. |
+| `--read-only` | W9: nothing is written, whatever the build (wins over `--allow-state-write` and the installed release's default). |
+| `--help-capture`, `-language ko\|en\|zh\|ja` | W9-H: the help site's pictures (C#'s `--help-capture`), a smoke run on an empty profile; `-language` defaults to `ko`. |
+| `--perf-scenario` | W9-H: C#'s timing scenario (`scripts/perf-scenario.ps1 -Engine tauri`); needs `--smoke-test` and an empty profile. |
+| `-Embedding`, `----AppNotificationActivated:…` | W9-F: Action Center's activation of the toast's COM class; the run serves it. |
+| `--update-helper …` | W9-B: the update helper in C#'s grammar (`--staged`, `--install`, `--package`, `--sha256`, `--size`, `--pid`, `--backup`, `--relaunch`), served before any profile, log or window. |
 
 ## The bridge
 
@@ -92,8 +99,9 @@ porting checklist.
 Each is the C# handler's rule (named beside it). A change is C#'s `UpdateAsync` (normalized, then queued for saving); an action is C#'s
 `Act` (the banner cleared first, what it fails with shown there, the call answering null). The layout actions (`SelectLayoutSession`,
 `ActivatePane`, `SelectWorkspace`, `ApplyLayoutPreset`) live once, in `frame.rs`, and the layout saves in mighty-core's `add_pane`; every
-module uses those. The host answers 141 methods (`tauri-logs/unimplemented.json`'s `implemented` lists them).
+module uses those. The host answers 150 methods (`tauri-logs/unimplemented.json`'s `implemented` lists them).
 
+- **W9** (`.omc/research/tauri/w9-plan.md`): the app update (`app_update.rs`, `settings/app_update.rs`, the phone's `/m1/app-update`; `postponeUpdate`, `restartForUpdate`: C# MainWindow.AppUpdate.cs over mighty-updates' `app_update`), styles (`styles.rs`, `settings/styles.rs`, the phone's style parts; `guidedAction`: C# MainWindow.Styles.cs over mighty-styles), per-pane worktrees (`pane_worktree.rs`; `paneWorktreeStatus`, `paneWorktreeAction`, `paneWorktreeDiff`, `workspaceWorktree`: C# MainWindow.PaneWorktree.cs), the remote mirror (`mirror.rs`; `serverConnect`, `serverDisconnect`: C# MainWindow.RemoteMirror.cs), the background output tails, custom agents' definitions and Ouroboros executions (`tails.rs`, `ouroboros.rs`), the help capture and perf scenario (`help_capture.rs`, `perf.rs`) and the toast activator (`notifications.rs`).
 - **The phone** (W8-A/B/C: `mobile.rs`, `phone.rs`, `direct.rs`, `settings/mobile.rs`, `settings/mobile_direct.rs`; C# MainWindow.MobileRemote.cs, MainWindow.MobileDirect.cs, MobileRelayHost, MobileDesktopRouter): with `--allow-state-write` the relay link (the profile's `mobile-identity.json`, made at first use; the same host token and push key the C# app keeps, so a phone paired there reconnects without pairing again), pairing by QR, the paired devices with revoke, rotate; every `/m1/` route answered by the desk over the run service, delegation's send, the composer's queue, `ask.rs`'s targets, terminal prompts, Antigravity cards, the files and work map panes (a busy pane queues, an idle one starts, `NotStarted` is 409 `remote.error.dropped`, the S-L3 continuation revoke); push for a finished run, a waiting card, a lost sign-in and a shell that began, suppressed while that phone views the pane; the Tailscale direct path on this PC's Tailscale addresses only (exclusive binds, never a wildcard) with the shared firewall rule's row (add, update, remove, re-check through one UAC prompt). Without the flag nothing is loaded, written, dialled or bound and the box says verification mode (D2, D3).
 - **Remote workspaces** (W8-D: `remote.rs`, `settings/remote.rs`; C# DesktopService.Remote.cs, MainWindow.RemoteWorkspaces.cs): `connectRemote` (and the add menu's connect) opens Settings › 원격 연결: sharing this PC (Start shares the picked workspaces on its Tailscale addresses, a new key each start, masked with show and a secret copy cleared after 60 s, full access, stop), the firewall rows (the phone's rule, both ports), the connect form, the connected computers with refresh, disconnect, remove and their workspaces to open. A remote workspace's pane runs on its host through the client (`RemoteRunner`), its composer held by `remote_block`; keys only in the DPAPI vault with `--allow-state-write`, in memory otherwise.
 - **The companion** (W8-E: `companion.rs`, `settings/companion.rs`): `companionStatus` (the `companion` popover: the agents' cards and the pet switch), `companionToggle` (the pet on or off), the status bar's paw and capsule; the pet window itself (a NOACTIVATE layered window, the bubble's Allow once / Deny, the question's taps, the plan's Cancel and approvals through the run service; review, written answer and plan focus the pane's own card, D10) opens only with `--allow-state-write`; Settings' box (switches, picker with its preview, import, reload, reset) writes `companion-settings.json` only with the flag.
@@ -199,7 +207,7 @@ module uses those. The host answers 141 methods (`tauri-logs/unimplemented.json`
   `referenceSize`, `htmlFrame` (the file's folder served under `h<random>.html.mighty.invalid` through the `mightyhtml` protocol, at most
   eight folders, for the page's frame sandboxed to scripts) and `imageAction` (copy, save, reveal, open with the default app; a diagram
   tile of an older run too). A Claude run's Edit, Write and MultiEdit results keep the files' originals (`FileOriginalStore`: the
-  profile's `file-originals` with `--allow-state-write`, else `%LOCALAPPDATA%\dev.mightycode.tauri\file-originals\<profile>`; the work map
+  profile's `file-originals` with `--allow-state-write`, else `%LOCALAPPDATA%\dev.mightycode.native\file-originals\<profile>`; the work map
   reads the same folder), pruned at the start to what the state names, a closed pane's dropped and a run's when its graph lets it go.
 - **The work map** (`workmap.rs`, C# MainWindow.WorkMap.cs): `openWorkMap` (the workspace's `workmap:<id>` pane, placed as the files
   pane is, never saved), `workMapState` (the model, nulls kept), `workMapSummarize` (one at a time per workspace; the model is pushed
@@ -227,7 +235,7 @@ One `RunService` (mighty-run) owns the state once the host has started it (`runs
 `RunService::update` (normalized under the service's lock, then saved), and each `ServiceEvent` takes the page's copy from the service
 again. Its runner makes each request's graph with mighty-graph's tracker (`TrackerFactory`: the graph run published every second and at
 the end, with the notice runs) and keeps tool pictures in the picture cache (the profile's `image-cache` with `--allow-state-write`, else
-`%LOCALAPPDATA%\dev.mightycode.tauri\image-cache\<profile>`). Claude runs load the mighty-bridge plugin (`claude-mods` beside the exe, else
+`%LOCALAPPDATA%\dev.mightycode.native\image-cache\<profile>`). Claude runs load the mighty-bridge plugin (`claude-mods` beside the exe, else
 the repository's `mods/mighty-bridge`). A Codex pane in `onRequest` runs Codex's `app-server` through `CodexApprovalChannel`: each
 approval is the pane's `permission` card, a turn not started in 15 s or a protocol failure ends the run in an error, a stop cancels the
 waiting cards. A Codex run's sub-agents are read from its session files under `$CODEX_HOME` (else `~/.codex`) every second and at its end
@@ -238,7 +246,7 @@ was refused (`antigravityPermission`, then the run service's board), and have th
 (`~/.gemini/antigravity-cli/brain`, read-only). The rules an allowed card puts in agy's own settings
 (`%USERPROFILE%\.gemini\antigravity-cli\settings.json`, `permissions.allow`, written only when the user presses 이번만 허용 or 항상 허용) are
 recorded in the ledger `antigravity-temporary-rules.json` — the profile's with `--allow-state-write`, else
-`%LOCALAPPDATA%\dev.mightycode.tauri\antigravity\<profile>` — and what a crash left in either place is taken out as the run service
+`%LOCALAPPDATA%\dev.mightycode.native\antigravity\<profile>` — and what a crash left in either place is taken out as the run service
 starts, before any agy run may start (the other place's ledger pruned too, the profile's never written without the flag). With the flag
 the ledger is the same file the C# app keeps in the profile; the local one is this port's alone and the C# app never reads it, so the
 C# app's own leftovers are its own launch's to take out. A file rule names only a plain local path (`X:\…` or `X:/…` on a fixed drive,
@@ -258,7 +266,7 @@ checks the models; a queued request removed, stopped or closed meanwhile does no
 an idle pane whose model or effort the list no longer has takes the default with a line in its transcript
 (`ModelSelectionSupport.Adjusted`). At quit nothing is read or reconciled any more before the last save. The last list each CLI gave is
 kept (`KeptModelLists`: `model-lists.json` in the profile with `--allow-state-write`, else in
-`%LOCALAPPDATA%\dev.mightycode.tauri\provider-catalog\<profile>`), so a read that fails, now or after a restart, shows that list, and the
+`%LOCALAPPDATA%\dev.mightycode.native\provider-catalog\<profile>`), so a read that fails, now or after a restart, shows that list, and the
 model menu says which list it is (`ModelListNotices.Notice`: the built-in one, or the kept one and its age). A smoke reads and reconciles
 nothing, as C#'s.
 
@@ -271,7 +279,7 @@ it may (read-only through mighty-history's `acp`, `runs.rs` `hermes_session`); t
 permission cards (`permissionAnswer`), their `elicitation/create` forms and Hermes's clarify the question card (`questionnaireAnswer`; the
 card's Cancel declines the form), and a lost sign-in ends the run with the `authentication` reason. The picker a Hermes session offered is
 Hermes's model list from then on (`HermesAgent.CachedCatalog`: `hermes-models.json` in the catalogue's storage folder, the profile with
-`--allow-state-write`, else `%LOCALAPPDATA%\dev.mightycode.tauri\provider-catalog\<profile>`), read again when a Hermes pane's run ends (C#
+`--allow-state-write`, else `%LOCALAPPDATA%\dev.mightycode.native\provider-catalog\<profile>`), read again when a Hermes pane's run ends (C#
 `RefreshModelsAfterHermesRun`). The two agents' sign-in states (`mighty_run::acp::accounts`: `opencode_status` over `opencode auth list`,
 `hermes_probe` and `hermes_status`, as `CliAccountStatus`) are ready for the accounts section and the sign-in card (W6), which do not ask
 them yet.
@@ -285,14 +293,9 @@ tick; only the blocks whose copy changed).
 
 ### Pending inputs
 
-What a later stage gives the composer, the cards and the Mighty views stays at its resting value (mighty-composer `composer::PENDING`,
-`cards::PENDING`, mighty-graph `view::Sources`):
-
-| Input | Until then | Stage |
-|---|---|---|
-| The style row, the guide panel, a guided question, a style's prompt and plan mode (`activeStyle`) | no style; typed text goes to the agent as typed | W9 |
-| A command typed into a new shell pane (`RunTerminalCommandAsync`: style installs; a sign-in opens a terminal window of its own; `terminal::Pending`) | nothing typed | W9 |
-| The Ouroboros dashboard, background output tails, custom agents' definitions | empty; `mightyOpenDashboard` only marks the view | W9 |
+None since W9: the style row, the guide panel, guided questions, a style's prompt and plan mode (W9-D), a command typed into a new
+shell pane (`RunTerminalCommandAsync`, W9-D), the Ouroboros dashboard, background output tails and custom agents' definitions (W9-E)
+reach the composer, the cards and the Mighty views.
 
 Settings › 페이즈별 모델's form (W6) checks every model it saves with `wire::model` (the composer's `ChangeModel` rule) before it
 reaches mighty-run's `model_settings` writes, which take what they are given, as C#'s `ModelSettingsFileStore` does: a value with a line
@@ -302,14 +305,69 @@ are not kept, and the temporary file is not flushed before it replaces the confi
 
 ### Unimplemented page methods
 
-What the page calls that the host answers `unimplemented` (the page's `bridge.call`s against `implemented`; a full smoke meets none:
-`unimplemented: []`):
+None. What the page calls that the host would answer `unimplemented` (the page's `bridge.call`s against `implemented`) is empty since
+W9's integration: smoke.rs's `ALLOWED_UNIMPLEMENTED` is `[]`, so a full smoke passes `unimplementedAllowed` only with
+`unimplemented: []` (plan D20).
 
-| Methods | Stage |
-|---|---|
-| `guidedAction`, `postponeUpdate`, `restartForUpdate` | W9 |
+W9's C# baseline is `origin/main` 90bf8ace (0.4.61), merged into W9's base in c4cd19db: its page builds the C# `dist/` byte for byte
+as `main` does; the methods it added (`paneWorktree*`, `workspaceWorktree`, `serverConnect`, `serverDisconnect`) are W9-I's and W9-J's.
 
 W7's `webOpenChoose` was missing from this list before W7: a card method whose card never appeared is not called, so the smoke's list could not show it (W7 plan D11).
+
+### W9: the update hand-off, the release and the write policy
+
+What may change the machine (plan §4; "release" is a build stamped `MIGHTY_RELEASE=1` with the update key and address, as
+`scripts/build-tauri-windows.ps1` makes it; its default applies only when it runs from `%LOCALAPPDATA%\Programs\MightyCode`, compared
+canonically, so a candidate opened from Downloads beside C# 0.4.x writes nothing unless asked):
+
+| Action | Dev, no flag | Dev `--allow-state-write` / installed release | `--read-only` | Smoke |
+|---|---|---|---|---|
+| Save the state and the profile's own files | no | yes | no | its own profile |
+| `may_change_machine`: sign-ins, CLI and plugin updates, installs, HKCU, `~/.claude`, omc/Ouroboros configs, the firewall on click | no | yes | no | never |
+| App update check, download, stage, the helper's start | never (no key) | the release only | no | never; `appUpdateSection` draws fixture phases |
+| Startup housekeeping (restore, prune backups, `DisplayVersion`, renamed shortcuts), RenameMigration (default profile) | no | yes | no | never |
+| Toast AUMID + CLSID registration | no | the installed release on the default profile registers class and exe; other writing runs the AUMID's name | no | never |
+| Relay, push, listeners; the pet | no | per saved switches | no | fake relay, loopback port 0; its own overlay |
+| WebView2 folders | local | release, default profile: C#'s, with C#'s options | as the run would | local |
+
+A run that writes nothing (and is no smoke) logs under `<local>\logs\<profile>`, never creating `%APPDATA%\MightyCode\tauri-logs`
+(a smoke keeps the profile's `tauri-logs`; `--log-dir` wins).
+
+The app update (W9-A/B/C): the manifest is the 0.4.x envelope, Ed25519-verified (never `verify_strict`, as .NET's check), its
+version compared as C#'s; the client refuses a signed manifest older than the staged update, or older than a kept update on its check
+(stricter than C#); a package download stops after 60 s without data (C#'s `HttpClient` bounds the headers, not the body); the zip is
+staged as C#'s stager does (one `MightyCode.exe`, no link, the PE machine checked) and installed by `MightyCode.exe --update-helper`
+with C#'s grammar, mutex, `install.log` line and rollback, started detached outside the app's job with no process group (Ctrl+C keeps
+working in the relaunched app's terminals). Accepted deviations: the release notes and the kept error are cut to C#'s 8 and 3 lines by
+text line (a long wrapped line counts once; C# counts each wrapped line); `DisplayVersion` is the helper's three-part version (C#
+writes the informational version for prereleases). The host's tests are in `src-tauri/src/app_update/tests.rs`.
+
+Packaging and release (W9-G): `scripts/build-tauri-windows.ps1 -Architecture x64|arm64 [-Installer] -Version <v>` makes the stamped
+release build (static C runtime, `RUSTFLAGS` refused), stages the exe with `claude-mods`, `Agents`, `pets`, `Assets\MightyCode.ico`
+(the toast's icon), `LICENSE.txt` and `build-info.json`, refuses what the 0.4.x stager would refuse, checks the imports and writes the
+zip with its `.sha256`, with `-Installer` the Inno Setup program, and the 0.4.x stager's verdict on the zip. `scripts/update-rehearsal.ps1` (a throwaway machine only,
+`MIGHTY_REHEARSAL_DISPOSABLE=1`) installs a C# v0.4.x built with a throwaway key, serves the Rust zip and manifest on `localhost` and
+checks the update end to end. The switch of the 0.4.x release workflow to the Tauri build at the 0.5 merge:
+`git apply native/tauri/release/native-windows.yml.0.5.patch`.
+
+The help capture and perf (W9-H): the smoke's help step (`help`: `helpShotsTaken`, `helpShotSize`, `helpManifest`; Windows only, its
+pictures beside the smoke's result unless the run writes); `--help-capture` and `--perf-scenario` need an empty profile.
+
+Left after W9:
+- The manual checklist (plan §7) on a disposable Windows 11 x64 VM and an arm64 device, among it a real Action Center click
+  relaunching the app with `-Embedding` on a writing build.
+- Screen share's native half (D11); the Mac stage (its process host, update installer and transport, session and activator are
+  `Unsupported`); Authenticode signing; a first-good-start rollback.
+- RenameMigration's finishing of an interrupted migration (W9-F L6, beyond parity).
+- A deviation seen by the smoke: a settings form is drawn again on the next 250 ms shell tick after a change it caused, so a second
+  press on the theme picker within that tick lands on the segment still drawn as on and is ignored (the page's segmented control acts
+  only on a segment drawn off); whether C#'s form answers the second press at once is not checked.
+- The load flake `mighty-delegation` `the_merge_tool_takes_turns_and_follow_ups_stop_at_two` (a fixture `git rev-parse` exiting
+  non-zero with empty stderr under ~35 parallel rustc) has no fix: 50 runs under load passed, the cause looks like the machine's.
+- CI watch: `a_link_is_judged_before_its_target_is_opened` (the tails, W9-E) skips locally without the symlink privilege and asserts
+  only on CI (`CI` set).
+- A stray `%SystemDrive%\ProgramData\{Microsoft\Windows\Caches,NVIDIA Corporation\umdlogs}` folder appears under the working folder
+  of some local runs since W8: a process that loads DirectWrite or the GPU driver started without `SystemDrive`; not found yet.
 
 W8's deviations from C#:
 - D10: the pet's review, written-answer and plan buttons focus the pane and its own card in the main window; C#'s separate approval and plan windows (`ShowCompanionApproval`, `ShowCompanionPlan`) are not ported (the page has no standalone card window).
@@ -351,7 +409,7 @@ Native views over the page (docs/tauri-architecture.md §3): when the page calls
 each native slot with `surfaceBounds{paneId, surface, rect (device px), visible, occluded}` and the `SurfaceManager` opens, places,
 shows and hides the platform's view there; a page reload hides every view until it is reported again, and a pane that leaves the
 state closes its view. On Windows a browser pane is a Tauri child webview of the main window (`unstable` multi-webview) with its
-workspace's own WebView2 data (`%LOCALAPPDATA%\dev.mightycode.tauri\browser\<profile>\browser-profiles\<key>`; C# keeps the same
+workspace's own WebView2 data (`%LOCALAPPDATA%\dev.mightycode.native\browser\<profile>\browser-profiles\<key>`; C# keeps the same
 folders under the profile, which a running C# app holds, so this one never shares them), placed in physical pixels as the slot reports
 them; the child webview never reaches the host (`host_post` only listens to the `main` webview, and Tauri refuses app commands from
 remote origins). Its engine's navigations, refused popups and downloads and its focus come back through a `BrowserListener`
@@ -446,6 +504,11 @@ headlessly in the same state (mighty-accounts `tests/golden.rs`: the CLI tab's p
 `tests/golden.rs`: the setup screen; the app's `terminal.rs` and `smoke_settings.rs`: the history panel and the model-id dialog).
 Capture again whenever the C# side changes.
 
+W9's parity: `run.ps1` ends with `tools/parity/styles.ps1` (every golden case of every style projected by C#'s `MightyCode.Core` and
+by mighty-styles, 642 compared, and the conformance corpus; a relative `-Work` is taken from where it is called); mighty-updates' `tests/app_update_parity.rs`
+and mighty-core's `tests/rename_migration.rs` compare `tools/parity/Update.cs`'s modes (`ed25519`, `manifest`, `version`, `plan-args`,
+`mutex-name`, `stage`, `install-log`, `rewrite`) when the .NET 10 SDK is there.
+
 W8's parity: `run.ps1` also runs C#'s `RemoteHttpListener` head parser over `native/contracts/fixtures/remote-heads` (pipelined
 requests, bodies shorter and longer than their length, 8192- and 8193-byte heads, the sharing host's own body limit) against the answers
 mighty-remote's `tests/remote_parity.rs` keeps (`remote`); `cargo test` compares, when the .NET 10 SDK is there, C#'s push messages and
@@ -460,12 +523,15 @@ spelling wins here, the last of all in C#).
 
 ## Identity and WebView2
 
-- `identifier` is `dev.mightycode.tauri`, a development identity so this app never collides with the installed C# app. It must
-  become the real one before shipping.
+- `identifier` is `dev.mightycode.native` (W9-F): the toast registration's AppUserModelId (with the activator's CLSID
+  `{E9E66915-2599-4971-9584-4825CAC5DEEE}`) and the root of this machine's local folders, `%LOCALAPPDATA%\dev.mightycode.native\…`.
 - Product name "Mighty Code", main binary `MightyCode.exe` (the 0.4.x updater replaces that name), window 1440×920 with a
   940×650 minimum, as the C# window.
-- WebView2 data: `%LOCALAPPDATA%\dev.mightycode.tauri\webview\<default | the profile path as a folder name>` — never the C# app's
-  `<profile>\web-profile`, and never inside a profile.
+- WebView2 data: `%LOCALAPPDATA%\dev.mightycode.native\webview\<default | the profile path as a folder name>`, the browser panes'
+  under `browser\…`; a release build that writes, on the default profile, takes C#'s own `<data>\web-profile` and
+  `<data>\browser-profiles\<key>` (`paths::web_folders`, so sign-ins survive the update) and opens them with C#'s environment options
+  (no browser arguments, the page and the panes alike), making the page again for about 10 s while C#'s WebView2 still holds the folder
+  (0x8007139F, right after the update swap).
 - CSP: the page's build-time meta policy (`vite.config.ts`). `vite build --mode tauri` adds `connect-src 'self' ipc:
   http://ipc.localhost` so Tauri's IPC is not blocked (WebView2 reaches it at `http://ipc.localhost`); the C# build's policy is
   unchanged. `app.security.csp` is null, so Tauri adds no policy of its own. HTML previews' frames come from the `mightyhtml` protocol
@@ -561,7 +627,8 @@ window compared around each step, the bubble measured as C# measures it, `status
 never dials a relay, binds anything but loopback port 0, reads or changes the firewall, writes the pairing identity or opens the real pet.
 
 It writes `smoke-result.json` (`passed`, `checks`, each step's report — `probe`, `frame`, `browser`, `terminal`, `files`, `history`,
-`gitCreate`, `reload`, `settings`, `setup`, `accounts`, `updates`, `localeKeyLeakScan`, `acp`, `delegation`, `runs`, `remote`, `companion` —, the calls it saw, the unimplemented methods) and quits with
+`gitCreate`, `reload`, `settings`, `setup`, `accounts`, `updates`, `localeKeyLeakScan`, `acp`, `delegation`, `runs`, `remote`, `companion`, and W9's
+`styles`, `appUpdate`, `mirror`, `help`, `paneWorktree` —, the calls it saw, the unimplemented methods) and quits with
 0 when it passed, else 1 (Tauri's event loop would end with 0 either way; `main.rs` keeps the code). The demo
 profile is made by `cargo run -p mighty-core --example seed_demo -- <folder> [ko|en|zh|ja]` from
 `native/contracts/fixtures/demo-profile.json`, as the C# help capture seeds it (without playing the runs). With `-Profile`, the
@@ -572,5 +639,7 @@ script compares `workspace-state.json`'s SHA-256 and time before and after and l
 `.github/workflows/native-tauri.yml` runs on pushes to `feat/tauri` and on pull requests touching `native/tauri/**` or the page,
 on `windows-latest` and `macos-latest` (arm64): the page's typecheck and unit tests, `cargo fmt --all --check`,
 `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `npm run tauri build -- --debug`, and on Windows
-the smoke against the seeded demo profile (its result is kept as the `tauri-smoke-windows` artifact). It is independent of the
-0.4.x workflows. The Mac build bundles `assets/icons/mightycode.png` and `MightyCode.icns`, which tauri-codegen needs there.
+the smoke against the seeded demo profile (its result is kept as the `tauri-smoke-windows` artifact). W9-G added the source guards
+(the `start_detached*` callers, no `verify_strict`, the frozen style files), the `package` job (x64 and arm64 release builds with a
+throwaway key, `check-imports.ps1`, the smoke and `helper-e2e.ps1` on the packaged exe) and the `rehearsal` job (the update from
+v0.4.59 and v0.4.61). It is independent of the 0.4.x workflows. The Mac build bundles `assets/icons/mightycode.png` and `MightyCode.icns`, which tauri-codegen needs there.

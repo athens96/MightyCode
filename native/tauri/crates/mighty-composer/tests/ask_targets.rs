@@ -141,6 +141,7 @@ fn the_choice_is_saved_per_pane_and_kept_only_on_a_claude_agent_pane() {
             workspace_id: Some("host-ws".into()),
             host_name: Some("Host".into()),
             version: 2,
+            mirror: false,
         }),
         ..Workspace::default()
     };

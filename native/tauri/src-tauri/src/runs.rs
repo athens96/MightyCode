@@ -216,6 +216,15 @@ impl Runs {
             });
             finder
         });
+        // A help capture or perf scenario (W9-H) starts no CLI: none is found, so the runtime read runs none; the help capture's demo CLIs
+        // are overrides (`ProviderCatalog::set_override`), which come before the finder.
+        let special = host.smoke.as_ref().is_some_and(crate::smoke::Smoke::is_special);
+        let finder = finder.or_else(|| {
+            special.then(|| {
+                let none: Finder = Arc::new(|_provider: String| Box::pin(async { None }));
+                none
+            })
+        });
         // The last list each CLI gave is kept in `catalog_dir` (C#'s storageDirectory, KeptModelLists), so a restart still has it.
         let catalog = Arc::new(ProviderCatalog::new(processes, environment, finder).with_storage(Some(catalog_dir)));
         let images = Arc::new(AgentImageCache::new(image_dir, IMAGE_CACHE_BYTES));
@@ -291,6 +300,11 @@ impl Runs {
                 }
             }
         });
+        // The CLIs read once in the background; never in a help capture or perf scenario (C#'s smoke skips `RefreshRuntime`: the help
+        // capture keeps no runtime, the perf scenario takes the fixture one).
+        if special {
+            return runs;
+        }
         let reader = host.clone();
         let reading = runs.clone();
         tauri::async_runtime::spawn(async move {
@@ -317,6 +331,26 @@ impl Runs {
     /// `PaneRuntime(provider)` as the run engine read it.
     pub fn runtime(&self, provider: &str) -> Option<ProviderRuntime> {
         crate::host::lock(&self.runtime).get(provider).cloned()
+    }
+
+    /// C#'s smoke runtime (`new ProviderRuntime(p, Name(p), true, "fixture", "isolated fixture", Fallback(p), Capabilities(p))` for every
+    /// provider): each one available with its built-in list, read from no CLI (the help capture and the perf scenario, W9-H).
+    pub fn use_fixture_runtime(&self) {
+        let mut runtime = crate::host::lock(&self.runtime);
+        for provider in mighty_core::wire::PROVIDERS {
+            runtime.insert(
+                provider.to_string(),
+                ProviderRuntime {
+                    id: provider.to_string(),
+                    name: providers::name(provider).to_string(),
+                    available: true,
+                    version: Some("fixture".into()),
+                    detail: "isolated fixture".into(),
+                    model_catalog: providers::fallback(provider),
+                    capabilities: providers::capabilities(provider, None),
+                },
+            );
+        }
     }
 
     /// A provider's newer reading taken as its runtime (C# `runtime = ProviderCatalog.With(runtime, refreshed)`, models.rs).
