@@ -220,15 +220,6 @@ impl ProcessHost for FakeProcessHost {
         }
         self.record_detached(request)
     }
-}
-
-impl FakeProcessHost {
-    fn record_detached(&self, request: DetachedRequest) -> Result<u32> {
-        lock(&self.detached).push(request);
-        let mut next = lock(&self.next_id);
-        *next += 1;
-        Ok(1000 + *next)
-    }
 
     /// Records the request with the detached starts and plays the next script's exit code (or hangs) as the process; a job without
     /// breakaway ([`FakeProcessHost::refuse_detached`]) does not refuse it (it would start in the job).
@@ -237,12 +228,7 @@ impl FakeProcessHost {
             return Err(PlatformError::Invalid("the program and the working folder need absolute paths".into()));
         }
         let script = lock(&self.scripts).pop_front().unwrap_or_default();
-        lock(&self.detached).push(request);
-        let id = {
-            let mut next = lock(&self.next_id);
-            *next += 1;
-            1000 + *next
-        };
+        let id = self.record_detached(request)?;
         let child = Arc::new(FakeDetachedChild {
             id,
             exit: Exit::new((!script.hang).then_some(script.exit_code)),
@@ -250,6 +236,15 @@ impl FakeProcessHost {
         });
         lock(&self.waitables).push(child.clone());
         Ok(Box::new(SharedDetached(child)))
+    }
+}
+
+impl FakeProcessHost {
+    fn record_detached(&self, request: DetachedRequest) -> Result<u32> {
+        lock(&self.detached).push(request);
+        let mut next = lock(&self.next_id);
+        *next += 1;
+        Ok(1000 + *next)
     }
 }
 

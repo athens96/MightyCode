@@ -1564,6 +1564,7 @@ mod tests {
                 workspace_id: Some("w".into()),
                 host_name: None,
                 version: 2,
+                mirror: false,
             }),
             ..Workspace::default()
         };

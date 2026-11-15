@@ -318,7 +318,6 @@ impl Desk {
                 lookup: Some(&lookup),
                 result_files: Some(&memo),
                 roles: flow.as_ref(),
-                ..RunsInputs::default()
             },
             &l,
         );

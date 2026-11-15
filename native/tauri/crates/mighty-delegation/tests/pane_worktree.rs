@@ -84,6 +84,7 @@ fn policy_ports_note_and_records() {
             workspace_id: Some("w".into()),
             host_name: Some("h".into()),
             version: 2,
+            mirror: false,
         }),
         pane_worktree_mode: Some("every".into()),
         ..workspace.clone()
@@ -320,6 +321,7 @@ fn a_state_0_4_61_wrote_with_pane_worktrees_saves_back_byte_for_byte() {
         workspace_id: Some("h".into()),
         host_name: Some("Host".into()),
         version: 2,
+        mirror: false,
     };
     changed.workspaces_mut()[0].remote = Some(remote);
     let record = session.pane_worktree.clone();
