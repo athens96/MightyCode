@@ -189,9 +189,8 @@ async fn real_pane_skips_a_character_cut_by_eviction() {
     let _ = std::fs::remove_dir_all(&folder);
 }
 
-/// Swift `LongRunningProcessTests.swift:140 "stopSendsSIGINTAndReturnsAtOnceForACooperativeProcess"` (and `:222
-/// "realPTYCooperativeProcessStopsOnSIGINTQuickly"`): a command that ends on Ctrl+C is done by it (128 + 2), before the 3 s after
-/// which the stop would end its session.
+/// Swift `LongRunningProcessTests.swift:140 "stopSendsSIGINTAndReturnsAtOnceForACooperativeProcess"`: a command that ends on Ctrl+C is
+/// done by it (128 + 2), before the 3 s after which the stop would end its session.
 #[tokio::test(flavor = "multi_thread")]
 async fn stop_sends_sigint_and_returns_at_once_for_a_cooperative_process() {
     let folder = folder("stop-polite");
@@ -207,9 +206,8 @@ async fn stop_sends_sigint_and_returns_at_once_for_a_cooperative_process() {
     let _ = std::fs::remove_dir_all(&folder);
 }
 
-/// Swift `LongRunningProcessTests.swift:187 "realPTYProcessIgnoringSIGINTAndSIGTERMIsStoppedWithinTenSeconds"` (and `:155
-/// "stopEscalatesToSIGTERMAfterThreeSecondsAndSIGKILLAfterFiveMore"`), as the Rust stop escalates: a command that ignores SIGINT and
-/// SIGTERM is ended with its session 3 s after the Ctrl+C, inside Swift's 10 s bound.
+/// Swift `LongRunningProcessTests.swift:187 "realPTYProcessIgnoringSIGINTAndSIGTERMIsStoppedWithinTenSeconds"`, as the Rust stop
+/// escalates: a command that ignores SIGINT and SIGTERM is ended with its session 3 s after the Ctrl+C, inside Swift's 10 s bound.
 #[tokio::test(flavor = "multi_thread")]
 async fn real_pty_process_ignoring_sigint_and_sigterm_is_stopped_within_ten_seconds() {
     let folder = folder("stop-stubborn");
@@ -266,6 +264,41 @@ async fn real_pty_colour_output_reaches_the_agent_plain_and_the_pane_stays_raw()
     assert_eq!(printed(&result), "green\n50%100%");
     let raw = terminal.read_output(&result.handle, 0, 4_096).output;
     assert!(raw.contains("\u{1b}[1;32mgreen\u{1b}[0m\r\n50%\r100%\r\n"), "{raw:?}");
+    terminal.dispose().await;
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// Swift `LongRunningProcessTests.swift:155 "stopEscalatesToSIGTERMAfterThreeSecondsAndSIGKILLAfterFiveMore"`, as the Rust stop (C#'s)
+/// escalates: Ctrl+C first, and 3 s later the command's whole session ended at once (Swift: SIGTERM at 3 s, SIGKILL 5 s later); the
+/// stop reports the command done, killed, within Swift's 10 s.
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_escalates_to_sigterm_after_three_seconds_and_sigkill_after_five_more() {
+    let folder = folder("stop-escalates");
+    let terminal = terminal(&folder);
+    let run = terminal.run("trap '' INT; echo armed; while :; do sleep 1; done").await.unwrap();
+    until(|| terminal.read_output(&run.handle, 0, 64).output.contains("armed"), 30_000, "the trap is in place").await;
+    let began = Instant::now();
+    let stopped = terminal.stop(&run.handle).await.unwrap();
+    let took = began.elapsed();
+    assert!(stopped.status == "done" && stopped.exit_code == Some(128 + 9), "ended by SIGKILL: {stopped:?}");
+    assert!(took >= Duration::from_millis(2_500) && took <= Duration::from_secs(10), "{took:?}");
+    terminal.dispose().await;
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
+/// Swift `LongRunningProcessTests.swift:222 "realPTYCooperativeProcessStopsOnSIGINTQuickly"`: the real terminal delivers the stop's
+/// Ctrl+C and the command ends by SIGINT; the bound only catches a stop that hangs.
+#[tokio::test(flavor = "multi_thread")]
+async fn real_pty_cooperative_process_stops_on_sigint_quickly() {
+    let folder = folder("stop-quick");
+    let terminal = terminal(&folder);
+    let run = terminal.run("sleep 30").await.unwrap();
+    assert_eq!(run.status, "running");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let began = Instant::now();
+    let stopped = terminal.stop(&run.handle).await.unwrap();
+    assert!(stopped.status == "done", "{stopped:?}");
+    assert!(began.elapsed() < Duration::from_secs(25));
     terminal.dispose().await;
     let _ = std::fs::remove_dir_all(&folder);
 }
