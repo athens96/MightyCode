@@ -18,7 +18,7 @@
 //! | `StyleRunPermissions.cs` | [`permissions`] | D |
 //! | `StyleChangeWatcher.cs` | [`watcher`] | D |
 //!
-//! W9 Step 0 wrote the modules empty but [`bundled`] (the frozen manifests, embedded).
+//! Every check reads the frozen files where they are (`tests/`); the panel bytes are compared whole with the goldens.
 
 pub mod bundled;
 pub mod decoder;
@@ -34,3 +34,10 @@ pub mod state;
 pub mod trust;
 pub mod validator;
 pub mod watcher;
+
+pub use evaluator::{StyleEvaluator, StyleFileState, StyleStateReading, StyleStateWidget, StyleTaskItem};
+pub use manifest::{StyleAction, StyleGroup, StyleManifest, StyleManifestError, StylePhase};
+pub use prerequisites::StylePrerequisiteResult;
+pub use projection::StylePanel;
+pub use registry::{RegisteredStyle, StyleRegistry, StyleRejection};
+pub use trust::{PlainAccess, StyleTrustStore, TrustAccess};

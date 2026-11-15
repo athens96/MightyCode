@@ -2507,13 +2507,18 @@ dependencies = [
 name = "mighty-styles"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "indexmap 2.14.2",
+ "mighty-composer",
  "mighty-core",
+ "mighty-graph",
+ "mighty-run",
  "regex",
- "serde",
  "serde_json",
  "sha2",
+ "unicode-normalization",
  "unicode-segmentation",
+ "uuid",
 ]
 
 [[package]]

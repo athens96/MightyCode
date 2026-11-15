@@ -9,13 +9,21 @@ rust-version.workspace = true
 
 [dependencies]
 mighty-core.workspace = true
-serde.workspace = true
+# The files ports (`open_file` with the host's `FileHandles`: the handle a style file is read through).
+mighty-composer.workspace = true
+# `StylePhase`, `StructureStyle` (the Mighty views read a style through it).
+mighty-graph.workspace = true
+# `StartRunRequest` (the run-start binding), the plan-mode checklist and background work.
+mighty-run.workspace = true
 serde_json.workspace = true
 indexmap.workspace = true
 sha2.workspace = true
 regex.workspace = true
 unicode-segmentation.workspace = true
+# `StyleText.Folded` (NFKC), as mighty-history already reads it.
+unicode-normalization = "0.1"
+chrono.workspace = true
+uuid.workspace = true
 
-# W9 Step 0 lists W9-D's dependencies before its code uses them; this table goes once every one is used.
-[lints.cargo]
-unused_dependencies = "allow"
+[dev-dependencies]
+serde_json.workspace = true
