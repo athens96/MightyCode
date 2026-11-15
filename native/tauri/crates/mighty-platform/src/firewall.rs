@@ -21,9 +21,11 @@ use netsh::NetshLaunch;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FirewallRule {
     Missing,
-    /// The ports the rule opens as far as they read as a plain list (`netsh::shown_ports`); none when they could not be read.
+    /// The ports the rule opens as far as they read as a plain list (`netsh::shown_ports`), and the program it names
+    /// (`netsh::shown_program`); each none when it could not be read.
     Present {
         ports: Option<Vec<u16>>,
+        program: Option<String>,
     },
     /// `netsh` could not run or answered something else.
     Unreadable,
@@ -31,11 +33,15 @@ pub enum FirewallRule {
 
 impl FirewallRule {
     /// C# `RemoteWorkspaceFeatures.FirewallNeedsUpdate`: the rule that is there must be updated — it does not open every port in use now
-    /// (`needed`), or its ports could not be read, so it is never said to be current without proof. False with no rule or nothing to open.
-    pub fn needs_update(&self, needed: &[u16]) -> bool {
+    /// (`needed`), it names another program than `program` (this executable; compared without case), or either could not be read, so it
+    /// is never said to be current without proof (a rule of the same name made for another exe never reads current). False with no rule
+    /// or nothing to open.
+    pub fn needs_update(&self, needed: &[u16], program: &str) -> bool {
         match self {
-            FirewallRule::Present { ports } => {
-                !needed.is_empty() && ports.as_ref().is_none_or(|ports| !needed.iter().all(|port| ports.contains(port)))
+            FirewallRule::Present { ports, program: named } => {
+                !needed.is_empty()
+                    && (ports.as_ref().is_none_or(|ports| !needed.iter().all(|port| ports.contains(port)))
+                        || named.as_ref().is_none_or(|named| program.is_empty() || !named.eq_ignore_ascii_case(program)))
             }
             _ => false,
         }
@@ -129,7 +135,9 @@ impl NetshRunner {
     pub async fn read_rule(&self) -> FirewallRule {
         let Some(system) = &self.system_directory else { return FirewallRule::Unreadable };
         match self.run.run(netsh::query_launch(system)).await {
-            Ok(NetshExit { code: 0, output }) => FirewallRule::Present { ports: netsh::shown_ports(Some(&output)) },
+            Ok(NetshExit { code: 0, output }) => {
+                FirewallRule::Present { ports: netsh::shown_ports(Some(&output)), program: netsh::shown_program(Some(&output)) }
+            }
             Ok(NetshExit { code: 1, .. }) => FirewallRule::Missing,
             _ => FirewallRule::Unreadable,
         }

@@ -169,8 +169,12 @@ pub fn delete_arguments() -> Vec<String> {
     head("delete")
 }
 
+/// `show rule name=… verbose`: `verbose` makes netsh print the rule's program, which [`shown_program`] reads (C#'s query, plus
+/// `verbose`: without it netsh leaves the program out, and a rule of the name made for another exe would read current).
 pub fn show_arguments() -> Vec<String> {
-    head("show")
+    let mut arguments = head("show");
+    arguments.push("verbose".into());
+    arguments
 }
 
 /// `WindowsFirewallRule.Arguments`: the add argv for a port set, the delete argv for none; none when the path or a port is refused.
@@ -238,6 +242,28 @@ pub fn elevated_launch(system_directory: &str, arguments: Vec<String>) -> NetshL
         working_directory: system_directory.to_string(),
         elevated: true,
     }
+}
+
+/// The program a shown rule names, from `show rule … verbose`'s output: the value of every "label: value" line that reads as a drive
+/// path to an `.exe` (in any display language: the labels are translated, the values are not). None when there is none, or when more
+/// than one rule has the name and they name different programs.
+pub fn shown_program(output: Option<&str>) -> Option<String> {
+    let output = output.filter(|o| !o.is_empty())?;
+    let mut found: Option<String> = None;
+    for line in output.split('\n') {
+        let Some(colon) = line.find(':') else { continue };
+        let value = line[colon + 1..].trim();
+        let exe = value.len() > 4 && value.get(value.len() - 4..).is_some_and(|tail| tail.eq_ignore_ascii_case(".exe"));
+        if !exe || drive_root(value).is_none() {
+            continue;
+        }
+        match &found {
+            Some(known) if !known.eq_ignore_ascii_case(value) => return None,
+            Some(_) => {}
+            None => found = Some(value.to_string()),
+        }
+    }
+    found
 }
 
 /// `PortListPattern`: digits and commas, 1-5 digits each.

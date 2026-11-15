@@ -165,7 +165,11 @@ async fn the_firewall_rule_follows_apply() {
     assert_eq!(firewall.read().await.unwrap(), FirewallRule::Missing);
     let applied = firewall.apply(vec![43137]).await.unwrap();
     assert!(matches!(applied, FirewallChange::Applied(Some(spec)) if spec.ports == "43137"));
-    assert_eq!(firewall.read().await.unwrap(), FirewallRule::Present { ports: None }, "a recorder prints nothing: the ports are unknown");
+    assert_eq!(
+        firewall.read().await.unwrap(),
+        FirewallRule::Present { ports: None, program: None },
+        "a recorder prints nothing: the ports are unknown"
+    );
     firewall.netsh().fail_elevated(Some(mighty_platform::firewall::NetshFailure::Cancelled));
     assert_eq!(firewall.apply(vec![]).await.unwrap(), FirewallChange::Declined);
     firewall.netsh().fail_elevated(None);

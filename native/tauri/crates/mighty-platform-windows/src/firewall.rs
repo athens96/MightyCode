@@ -47,14 +47,35 @@ impl WindowsNetsh {
         }
     }
 
-    /// The elevated start on a thread of its own (the call waits on the prompt), then the wait for its exit code.
+    /// The elevated start on a thread of its own in a single-threaded apartment (the shell's call wants COM; the call waits on the
+    /// prompt), then the wait for its exit code.
     async fn elevated(&self, launch: NetshLaunch) -> std::result::Result<NetshExit, NetshFailure> {
-        let started = tokio::task::spawn_blocking(move || elevate(&launch)).await;
-        match started {
-            Ok(outcome) => outcome,
-            Err(_) => Err(NetshFailure::Failed("the elevated start did not finish".into())),
+        match in_apartment(move || elevate(&launch)).await {
+            Some(outcome) => outcome,
+            None => Err(NetshFailure::Failed("the elevated start did not finish".into())),
         }
     }
+}
+
+/// Runs `work` on a new thread initialized as a single-threaded apartment (`COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE`, as
+/// `ShellExecuteExW` asks), left again after; none when the thread could not start or panicked.
+async fn in_apartment<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
+    let (done, result) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("netsh elevation".into())
+        .spawn(move || {
+            // SAFETY: this thread's own apartment, left again below.
+            let initialized = unsafe { CoInitializeEx(std::ptr::null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32) } >= 0;
+            let value = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).ok();
+            if initialized {
+                // SAFETY: paired with the CoInitializeEx above on this thread.
+                unsafe { CoUninitialize() };
+            }
+            let _ = done.send(value);
+        })
+        .ok()?;
+    result.await.ok().flatten()
 }
 
 /// `ShellExecuteExW` with the elevation verb, hidden, from the system folder; waits up to [`LIMIT`] for the exit code.
@@ -147,5 +168,29 @@ impl Firewall for WindowsFirewall {
     }
     fn remove(&self) -> BoxFuture<'_, Result<FirewallChange>> {
         self.runner.remove()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::in_apartment;
+
+    /// Review L4: the elevation runs where `ShellExecuteExW` wants it — a thread of its own in a single-threaded apartment, never the
+    /// caller's (a runtime worker in the multi-threaded apartment or none).
+    #[tokio::test]
+    async fn the_elevation_runs_in_a_single_threaded_apartment() {
+        use windows_sys::Win32::System::Com::{APTTYPE_STA, CoGetApartmentType};
+        let caller = std::thread::current().id();
+        let (kind, thread) = in_apartment(move || {
+            let (mut kind, mut qualifier) = (-1, 0);
+            // SAFETY: two out values on this thread.
+            let read = unsafe { CoGetApartmentType(&mut kind, &mut qualifier) };
+            ((read >= 0).then_some(kind), std::thread::current().id())
+        })
+        .await
+        .expect("the apartment thread ran");
+        assert_eq!(kind, Some(APTTYPE_STA), "a single-threaded apartment");
+        assert_ne!(thread, caller, "a thread of its own");
+        assert!(in_apartment(|| -> u8 { panic!("a failing start") }).await.is_none(), "a panic is no outcome, not a crash");
     }
 }

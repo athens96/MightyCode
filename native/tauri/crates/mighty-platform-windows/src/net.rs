@@ -121,11 +121,30 @@ unsafe extern "system" fn address_changed(context: *const c_void, _row: *const M
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| registered.0.call()));
 }
 
+/// A resume subscription's context: the callback in a cell its end empties. The OS does not say that a callback already running has
+/// returned when the registration ends, so the end takes the callback out under the cell's lock (waiting out a call in flight, which
+/// holds it) and leaves only the empty cell (a few bytes) alive for a late call to find empty.
+struct ResumeCell(std::sync::Mutex<Option<NetworkCallback>>);
+
+impl ResumeCell {
+    fn call(&self) {
+        let held = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(callback) = held.as_ref() {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback.call()));
+        }
+    }
+
+    /// Takes the callback out; the cell is never called with one again.
+    fn end(&self) -> Option<NetworkCallback> {
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take()
+    }
+}
+
 unsafe extern "system" fn power_changed(context: *const c_void, kind: u32, _setting: *const c_void) -> u32 {
     if !context.is_null() && (kind == PBT_APMRESUMEAUTOMATIC || kind == PBT_APMRESUMESUSPEND) {
-        // SAFETY: the context is the `Registered` box, alive until the registration is ended.
-        let registered = unsafe { &*(context as *const Registered) };
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| registered.0.call()));
+        // SAFETY: the context is a `ResumeCell` that is never freed (see its notes).
+        let cell = unsafe { &*(context as *const ResumeCell) };
+        cell.call();
     }
     ERROR_SUCCESS
 }
@@ -187,7 +206,7 @@ impl Network for WindowsNetwork {
     }
 
     fn on_resume(&self, callback: NetworkCallback) -> Result<Subscription> {
-        let context = Box::into_raw(Box::new(Registered(callback)));
+        let context = Box::into_raw(Box::new(ResumeCell(std::sync::Mutex::new(Some(callback)))));
         let mut parameters = DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS { Callback: Some(power_changed), Context: context.cast() };
         let mut registration: *mut c_void = std::ptr::null_mut();
         // SAFETY: the parameters live across the call (the OS copies them); the context lives until the registration ends below.
@@ -203,14 +222,15 @@ impl Network for WindowsNetwork {
             drop(unsafe { Box::from_raw(context) });
             return Err(PlatformError::Io(std::io::Error::from_raw_os_error(result as i32)));
         }
-        let registration = Handle(registration as usize);
+        let (registration, cell) = (Handle(registration as usize), Handle(context as usize));
         Ok(Subscription::new(move || {
-            // SAFETY: the registration made above, ended once. The OS does not say that a callback already running has returned when
-            // it does, so the context (a few bytes, one per subscription) is left alive rather than freed under it; the callback it
-            // holds is never called again (the app's own end of it is dropped with the subscription's owner).
+            // SAFETY: the registration made above, ended once.
             unsafe {
                 PowerUnregisterSuspendResumeNotification(registration.0 as isize);
             }
+            // SAFETY: the cell is never freed; ending it waits out a call in flight and drops the callback (and what it holds) now.
+            let callback = unsafe { &*(cell.0 as *const ResumeCell) }.end();
+            drop(callback);
         }))
     }
 }

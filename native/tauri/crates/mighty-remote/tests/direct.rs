@@ -22,7 +22,7 @@ use mighty_platform::fake::FakeNetwork;
 use mighty_platform::{BoxFuture, FirewallChange, FirewallRule, PlatformError};
 use mighty_remote::direct::admit::{self, DirectAuthFailures};
 use mighty_remote::direct::listener::{
-    AddressSource, DirectIncoming, DirectListener, DirectPath, DirectPathOptions, DirectSettings, DirectSink,
+    AddressSource, DirectIncoming, DirectListener, DirectPath, DirectPathOptions, DirectReservation, DirectSettings, DirectSink,
 };
 use mighty_remote::direct::status::{self, DirectState, MobileDirectStatus};
 use mighty_remote::direct::strings;
@@ -92,8 +92,13 @@ async fn ended(socket: &mut WebSocketStream<TcpStream>) -> bool {
 
 #[derive(Default)]
 struct Table {
-    /// Admitted, not yet upgraded.
-    reserved: Vec<String>,
+    /// Admitted, not yet upgraded: each reservation's id and peer.
+    reserved: Vec<(u64, String)>,
+    next: u64,
+    /// Every id admitted, accepted and given back, in order.
+    admitted: Vec<u64>,
+    accepted: Vec<u64>,
+    refused: Vec<u64>,
     /// Upgraded, not yet authenticated.
     pending: Vec<String>,
     authenticated: usize,
@@ -101,7 +106,7 @@ struct Table {
 
 /// The relay host's part as the direct path sees it (C#'s `AcceptDirect` admission and `Connection`'s auth, reduced to one word):
 /// "auth-ok" authenticates and is answered "ok", "auth-bad" counts a failure of the peer and is answered `unauthorized` then closed,
-/// anything else after auth is echoed.
+/// anything else after auth is echoed; a phone not authenticated by the path's deadline is closed then.
 #[derive(Default)]
 struct HostInner {
     table: Mutex<Table>,
@@ -135,32 +140,53 @@ impl Drop for Leaving {
 }
 
 impl DirectSink for Host {
-    fn admit(&self, peer: IpAddr) -> bool {
+    fn admit(&self, peer: IpAddr) -> Option<DirectReservation> {
         let peer = tailscale::canonical(peer);
         let mut table = self.table();
-        let pending: Vec<String> = table.reserved.iter().chain(table.pending.iter()).cloned().collect();
+        let pending: Vec<String> = table.reserved.iter().map(|(_, p)| p.clone()).chain(table.pending.iter().cloned()).collect();
         let clients = table.reserved.len() + table.pending.len() + table.authenticated;
-        let admitted = admit::admit(Some(&peer), true, clients, &pending, self.0.failures.recent(&peer, Instant::now()));
-        if admitted {
-            table.reserved.push(peer);
+        if !admit::admit(Some(&peer), true, clients, &pending, self.0.failures.recent(&peer, Instant::now())) {
+            return None;
         }
-        admitted
+        table.next += 1;
+        let id = table.next;
+        table.reserved.push((id, peer));
+        table.admitted.push(id);
+        Some(DirectReservation::new(id))
     }
 
-    fn accept(&self, mut socket: WebSocketStream<TcpStream>, peer: SocketAddr) -> BoxFuture<'static, ()> {
+    fn accept(
+        &self,
+        reservation: DirectReservation,
+        mut socket: WebSocketStream<TcpStream>,
+        peer: SocketAddr,
+        deadline: tokio::time::Instant,
+    ) -> BoxFuture<'static, ()> {
         let host = self.clone();
         let peer = tailscale::canonical(peer.ip());
         {
             let mut table = host.table();
-            let at = table.reserved.iter().position(|p| *p == peer).expect("a reservation");
-            table.reserved.remove(at);
+            let at = table.reserved.iter().position(|(id, _)| *id == reservation.id()).expect("its own reservation");
+            let (_, reserved) = table.reserved.remove(at);
+            assert_eq!(reserved, peer, "the reservation is the peer's");
+            table.accepted.push(reservation.id());
             table.pending.push(peer.clone());
         }
         let authenticated = Arc::new(AtomicBool::new(false));
         let leaving = Leaving(host.clone(), peer.clone(), authenticated.clone());
         Box::pin(async move {
             let _leaving = leaving;
-            while let Some(Ok(message)) = socket.next().await {
+            loop {
+                // Until auth_ok, the one deadline taken when the socket was accepted (C#'s 10 s from the accept); after, none.
+                let next = if authenticated.load(Ordering::SeqCst) {
+                    socket.next().await
+                } else {
+                    match tokio::time::timeout_at(deadline, socket.next()).await {
+                        Ok(next) => next,
+                        Err(_) => return,
+                    }
+                };
+                let Some(Ok(message)) = next else { return };
                 let Message::Text(text) = message else { continue };
                 if !authenticated.load(Ordering::SeqCst) {
                     if text.as_str() == "auth-ok" {
@@ -186,12 +212,11 @@ impl DirectSink for Host {
         })
     }
 
-    fn refused(&self, peer: IpAddr) {
-        let peer = tailscale::canonical(peer);
+    fn refused(&self, reservation: DirectReservation) {
         let mut table = self.table();
-        if let Some(at) = table.reserved.iter().position(|p| *p == peer) {
-            table.reserved.remove(at);
-        }
+        let at = table.reserved.iter().position(|(id, _)| *id == reservation.id()).expect("its own reservation, given back once");
+        table.reserved.remove(at);
+        table.refused.push(reservation.id());
     }
 }
 
@@ -745,7 +770,7 @@ fn mobile_direct_the_windows_words_are_in_every_language() {
         assert_eq!(distinct.len(), errors.len(), "{language}: each reason says its own words");
     }
     let locale = ko();
-    let present = FirewallRule::Present { ports: None };
+    let present = FirewallRule::Present { ports: None, program: None };
     assert!(
         strings::firewall_state(&locale, &present) == locale.get("mobileRemote.direct.windows.firewall.present")
             && strings::firewall_state(&locale, &FirewallRule::Missing) == locale.get("mobileRemote.direct.windows.firewall.absent")
@@ -879,5 +904,110 @@ async fn mobile_direct_settings_read_the_adapters_off_the_caller_and_outside_the
     assert!(!read_on.lock().unwrap().contains(&caller), "nor is any later read on the caller's thread");
     assert!(path.status().listening() && path.endpoints() == vec![endpoint], "the same listener is kept");
     assert_eq!(exchange(&mut phone, "after-apply").await.as_deref(), Some("after-apply"), "and the phone on it stays");
+    path.dispose();
+}
+
+/// Review M1: one deadline from the accept to auth_ok (C#'s 10 s, here 2 s), shared by the upgrade and the sink's hello and auth: a phone
+/// that takes most of it for its upgrade and then stalls is cut when the deadline taken at the accept runs out, not a fresh one after
+/// the upgrade; a phone that never upgrades gives its reservation back by its own id; every reservation is handed over exactly once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mobile_direct_one_deadline_covers_the_upgrade_and_the_auth() {
+    let network = FakeNetwork::default();
+    let options = DirectPathOptions { handshake_deadline: Duration::from_secs(2), ..DirectPathOptions::default() };
+    let path = path(&network, options);
+    let host = Host::default();
+    path.set_sink(Some(Arc::new(host.clone())));
+    let addresses = Arc::new(Mutex::new(Some(vec!["127.0.0.1".to_string()])));
+    path.set_address_source(Some(source(&addresses)), 0).await;
+    path.apply(on()).await;
+    let endpoint = path.endpoints().pop().expect("listening");
+
+    let connected = Instant::now();
+    let mut slow = TcpStream::connect(&endpoint).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    slow.write_all(REQUEST.as_bytes()).await.unwrap();
+    let mut answer = [0u8; 256];
+    let read = slow.read(&mut answer).await.unwrap();
+    assert!(String::from_utf8_lossy(&answer[..read]).starts_with("HTTP/1.1 101"), "upgraded late in its deadline");
+    // Now it stalls: no hello, no auth.
+    assert!(reads_end(&mut slow, 5000).await, "the stalled phone is cut");
+    let lasted = connected.elapsed();
+    assert!(
+        lasted >= Duration::from_millis(1700) && lasted < Duration::from_millis(2900),
+        "cut at the deadline taken at the accept (2 s), not 2 s after its upgrade: {lasted:?}"
+    );
+
+    let mut silent = TcpStream::connect(&endpoint).await.unwrap();
+    assert!(reads_end(&mut silent, 5000).await, "a phone that never upgrades is cut at the deadline");
+    assert!(until(|| host.connections() == 0).await);
+    let table = host.table();
+    let mut handed: Vec<u64> = table.accepted.iter().chain(table.refused.iter()).copied().collect();
+    handed.sort_unstable();
+    assert!(table.admitted.len() == 2 && handed == table.admitted, "each reservation handed over once, by its own id");
+    assert!(table.accepted.len() == 1 && table.refused.len() == 1 && table.accepted[0] != table.refused[0]);
+    drop(table);
+    path.dispose();
+}
+
+/// Review M2: without a relay host to run what it admits the path never listens — no bind, no endpoint, status off, even with both
+/// switches on; a sink then makes it listen, and taking it away stops it and ends its phones.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mobile_direct_the_path_listens_only_with_a_sink() {
+    let network = FakeNetwork::default();
+    let path = path(&network, DirectPathOptions::default());
+    let addresses = Arc::new(Mutex::new(Some(vec!["127.0.0.1".to_string()])));
+    path.set_address_source(Some(source(&addresses)), 0).await;
+    path.apply(on()).await;
+    assert!(
+        path.status() == MobileDirectStatus::off() && path.endpoints().is_empty() && network.binds().is_empty(),
+        "no sink, no listener"
+    );
+    path.apply(DirectSettings { direct_enabled: false, ..on() }).await;
+    assert_eq!(path.status(), MobileDirectStatus::off(), "nor a switch state of its own");
+    path.apply(on()).await;
+    let host = Host::default();
+    path.set_sink(Some(Arc::new(host.clone())));
+    path.refresh(true).await;
+    let endpoint = path.endpoints().pop().expect("a sink makes it listen");
+    assert!(path.status().listening());
+    let mut phone = phone(&endpoint).await.unwrap();
+    assert_eq!(exchange(&mut phone, "auth-ok").await.as_deref(), Some("ok"));
+    path.set_sink(None);
+    path.refresh(true).await;
+    assert!(path.status() == MobileDirectStatus::off() && path.endpoints().is_empty(), "the sink gone: off");
+    assert!(ended(&mut phone).await, "its phones end");
+    assert!(TcpStream::connect(&endpoint).await.is_err() || until(|| host.connections() == 0).await);
+    // The seam takes loopback alone: anything else it names is dropped before a bind is asked for.
+    path.set_sink(Some(Arc::new(Host::default())));
+    *addresses.lock().unwrap() = Some(vec!["100.101.102.103".into(), "0.0.0.0".into()]);
+    let binds = network.binds().len();
+    path.refresh(true).await;
+    assert!(network.binds().len() == binds && path.status().state == DirectState::NotFound, "no non-loopback bind through the seam");
+    path.dispose();
+}
+
+/// Review L1: settings are kept by the path when they are stored, so passes that finish in any order apply the last one stored.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mobile_direct_settings_land_in_the_order_they_were_stored() {
+    let network = FakeNetwork::default();
+    let path = path(&network, DirectPathOptions::default());
+    path.set_sink(Some(Arc::new(Host::default())));
+    let addresses = Arc::new(Mutex::new(Some(vec!["127.0.0.1".to_string()])));
+    path.set_address_source(Some(source(&addresses)), 0).await;
+    for round in 0..20 {
+        let first = path.store_settings(on());
+        let one = tokio::spawn({
+            let path = path.clone();
+            async move { path.refresh(first).await }
+        });
+        let second = path.store_settings(DirectSettings { direct_enabled: false, ..on() });
+        let two = tokio::spawn({
+            let path = path.clone();
+            async move { path.refresh(second).await }
+        });
+        let _ = tokio::join!(two, one);
+        assert_eq!(path.status().state, DirectState::Disabled, "round {round}: the last stored settings won");
+        assert!(path.endpoints().is_empty());
+    }
     path.dispose();
 }

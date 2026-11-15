@@ -85,7 +85,8 @@ fn windows_firewall_the_rule_is_built_from_constants() {
         "refused like the add"
     );
     assert_eq!(netsh::delete_arguments(), strings(&["advfirewall", "firewall", "delete", "rule", "name=Mighty Code (Tailscale)"]));
-    assert_eq!(netsh::show_arguments(), strings(&["advfirewall", "firewall", "show", "rule", "name=Mighty Code (Tailscale)"]));
+    // C#'s query plus `verbose`, so the rule's program is printed (review L6; a C# item too).
+    assert_eq!(netsh::show_arguments(), strings(&["advfirewall", "firewall", "show", "rule", "name=Mighty Code (Tailscale)", "verbose"]));
     assert!(
         netsh::arguments(&[43139], PROGRAM).unwrap() == add && netsh::arguments(&[], PROGRAM).unwrap() == netsh::delete_arguments(),
         "a port set adds; none deletes"
@@ -176,6 +177,31 @@ fn windows_firewall_the_rule_is_built_from_constants() {
     assert_eq!(netsh::shown_ports(None), None);
 }
 
+/// Review L6: the rule's program is read from `show rule … verbose` (any display language), and a rule naming another program — or
+/// one whose program or ports could not be read — needs an update; this executable's own, with every port in use, does not.
+#[test]
+fn a_rule_naming_another_program_needs_an_update() {
+    let shown = "Rule Name:      Mighty Code (Tailscale)\r\nLocalPort:      43137,43139\r\nProgram:        C:\\Program Files\\Mighty Code\\MightyCode.exe\r\nRemotePort:     Any\r\n";
+    assert_eq!(netsh::shown_program(Some(shown)).as_deref(), Some(PROGRAM));
+    assert_eq!(
+        netsh::shown_program(Some("규칙 이름: x\n프로그램: D:\\Other\\MightyCode.exe\n")).as_deref(),
+        Some(r"D:\Other\MightyCode.exe")
+    );
+    assert_eq!(netsh::shown_program(Some("Program: Any\n")), None, "a rule for every program names none");
+    let two = "Program: C:\\A\\MightyCode.exe\nProgram: C:\\B\\MightyCode.exe\n";
+    assert_eq!(netsh::shown_program(Some(two)), None, "two rules naming different programs: unknown");
+    assert_eq!(netsh::shown_program(None), None);
+    let rule = |ports: Option<Vec<u16>>, program: Option<&str>| FirewallRule::Present { ports, program: program.map(str::to_string) };
+    let current = rule(Some(vec![43137, 43139]), Some(PROGRAM));
+    assert!(!current.needs_update(&[43139], PROGRAM), "this executable's rule with every port in use is current");
+    assert!(!current.needs_update(&[43139], &PROGRAM.to_uppercase()), "the program is compared without case");
+    assert!(rule(Some(vec![43139]), Some(r"D:\Other\MightyCode.exe")).needs_update(&[43139], PROGRAM), "another program");
+    assert!(rule(Some(vec![43139]), None).needs_update(&[43139], PROGRAM), "a program that could not be read");
+    assert!(rule(None, Some(PROGRAM)).needs_update(&[43139], PROGRAM), "ports that could not be read");
+    assert!(current.needs_update(&[43139, 50000], PROGRAM), "a port in use the rule does not open");
+    assert!(!current.needs_update(&[], PROGRAM) && !FirewallRule::Missing.needs_update(&[43139], PROGRAM), "nothing to open, or no rule");
+}
+
 /// "windows firewall: the runner elevates only that command" (L496), over the recorder.
 #[tokio::test]
 async fn windows_firewall_the_runner_elevates_only_that_command() {
@@ -186,7 +212,7 @@ async fn windows_firewall_the_runner_elevates_only_that_command() {
     recorder.answer(&[1]);
     assert_eq!(runner.read_rule().await, FirewallRule::Missing, "exit 1: no such rule");
     recorder.answer(&[0]);
-    assert_eq!(runner.read_rule().await, FirewallRule::Present { ports: None }, "exit 0: a rule by that name is there");
+    assert_eq!(runner.read_rule().await, FirewallRule::Present { ports: None, program: None }, "exit 0: a rule by that name is there");
     recorder.answer(&[2]);
     assert_eq!(runner.read_rule().await, FirewallRule::Unreadable, "any other exit: unknown");
     assert!(recorder.launched().iter().all(|l| !l.elevated), "reading the rule never elevates");

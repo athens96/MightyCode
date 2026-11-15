@@ -113,7 +113,10 @@ pub fn shutdown(host: &Host) {
 pub fn attach(host: &Arc<Host>, sink: Arc<dyn DirectSink>) {
     let Some(path) = direct().path.clone() else { return };
     path.set_sink(Some(sink));
-    apply(host);
+    path.store_settings(settings_of(&saved(host)));
+    tauri::async_runtime::spawn(async move {
+        path.refresh(true).await;
+    });
 }
 
 /// The relay host is gone: nothing more is admitted and the path stops listening (its phones end).
@@ -123,17 +126,18 @@ pub fn detach(host: &Host) {
     let Some(path) = direct().path.clone() else { return };
     path.set_sink(None);
     tauri::async_runtime::spawn(async move {
-        path.apply(DirectSettings::default()).await;
+        path.refresh(true).await;
     });
 }
 
-/// The saved `mobileRemote` settings applied to the path (C# `MobileRelayHost.ApplyAsync`'s direct half), its adapters read off the
-/// caller; W8-A's writes call it after saving, as the direct rows' do.
+/// The saved `mobileRemote` settings applied to the path (C# `MobileRelayHost.ApplyAsync`'s direct half): kept by the path at once, so
+/// writes land in the order they were made, then a pass on a task (its adapters read off the caller); W8-A's writes call it right
+/// after saving, as the direct rows' do.
 pub fn apply(host: &Host) {
     let Some(path) = direct().path.clone() else { return };
-    let settings = settings_of(&saved(host));
+    let force = path.store_settings(settings_of(&saved(host)));
     tauri::async_runtime::spawn(async move {
-        path.apply(settings).await;
+        path.refresh(force).await;
     });
 }
 
@@ -177,24 +181,32 @@ pub fn firewall_view(host: &Host) -> FirewallView {
     FirewallView { rule: state.rule.clone(), message: state.message.clone(), busy: state.busy, may_change }
 }
 
-/// C# `FirewallNeedsUpdateWords`: " · " and the update words when the rule there does not open every port in use now.
+/// This executable's path, the program the rule must name.
+fn program() -> String {
+    std::env::current_exe().map(|exe| exe.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// C# `FirewallNeedsUpdateWords`: " · " and the update words when the rule there does not open every port in use now, or names another
+/// program (or one that could not be read).
 pub fn firewall_needs_update_words(host: &Host) -> String {
     let rule = direct().rule.clone();
-    if rule.needs_update(&firewall_ports(host)) {
+    if rule.needs_update(&firewall_ports(host), &program()) {
         format!(" · {}", host.locale.get("remote.windows.firewall.needsUpdate"))
     } else {
         String::new()
     }
 }
 
-/// The runner a press uses: the smoke's recorder, else the platform's when the app may change the machine; none otherwise (a smoke
-/// with no recorder, a run without `--allow-state-write`).
+/// The runner a press or a read uses: the smoke's recorder, else the platform's when the app may change the machine; none otherwise (a
+/// smoke with no recorder; a run without `--allow-state-write`, which per D4 does not even run the unelevated `netsh show`, so its row
+/// reads as unknown — a deviation from C#, which reads the rule in any run).
 fn runner(host: &Host) -> Option<Arc<dyn Firewall>> {
+    let may_change = host.may_change_machine();
     let state = direct();
     if host.smoke.is_some() {
         return state.smoke_firewall.clone();
     }
-    state.firewall.clone()
+    state.firewall.clone().filter(|_| may_change)
 }
 
 /// C# `RefreshFirewallState`: whether the rule exists and the ports it opens, unelevated; anything unexpected reads as unknown. A smoke
@@ -218,22 +230,27 @@ pub fn settings_opened(host: &Arc<Host>) {
     });
 }
 
-/// Marks a change under way; false when one already is.
-fn begin(host: &Host) -> bool {
+/// A change (or a re-check) under way: the busy mark, cleared when it is dropped — however the change ends, its future dropped included.
+struct Busy<'a>(&'a Host);
+
+impl Drop for Busy<'_> {
+    fn drop(&mut self) {
+        direct().busy = false;
+        redraw(self.0);
+    }
+}
+
+/// Marks a change under way; none when one already is.
+fn begin(host: &Host) -> Option<Busy<'_>> {
     {
         let mut state = direct();
         if state.busy {
-            return false;
+            return None;
         }
         state.busy = true;
     }
     redraw(host);
-    true
-}
-
-fn end(host: &Host) {
-    direct().busy = false;
-    redraw(host);
+    Some(Busy(host))
 }
 
 /// C# `ChangeFirewallRule`: the row's button (and a switch turned off by the user): one netsh command, elevated through Windows' own
@@ -244,25 +261,22 @@ pub async fn change_firewall_rule(host: &Host, add: bool) {
     if host.smoke.is_none() && !host.may_change_machine() {
         return;
     }
-    if !begin(host) {
-        return;
-    }
+    let Some(_busy) = begin(host) else { return };
     let ports = firewall_ports(host);
     let result = if add { firewall.add(ports).await } else { firewall.remove().await };
     let result = result.unwrap_or_else(|_| mighty_platform::FirewallChange::Failed(String::new()));
     direct().message = strings::firewall_outcome(&host.locale, &result);
     refresh_firewall_state(host).await;
-    end(host);
 }
 
 /// C# `RecheckFirewallRule`: the row's button while the rule could not be read — the unelevated query again, busy like a change.
 pub async fn recheck_firewall_rule(host: &Host) {
-    if runner(host).is_none() || !begin(host) {
+    if runner(host).is_none() {
         return;
     }
+    let Some(_busy) = begin(host) else { return };
     direct().message = None;
     refresh_firewall_state(host).await;
-    end(host);
 }
 
 /// C# `RemoveRuleAfterOff` / `RemoveFirewallRuleIfUnneeded`: turning the remote or its direct path off takes the rule away when nothing

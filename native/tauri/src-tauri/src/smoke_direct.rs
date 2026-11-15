@@ -18,7 +18,7 @@ use mighty_platform::fake::{FakeFirewall, FakeNetwork, RecordingNetsh};
 use mighty_platform::firewall::netsh;
 use mighty_platform::firewall::{NetshFailure, NetshRunner};
 use mighty_platform::{BoxFuture, FirewallChange, FirewallRule};
-use mighty_remote::direct::listener::{DirectPath, DirectPathOptions, DirectSettings, DirectSink, DirectSocket};
+use mighty_remote::direct::listener::{DirectPath, DirectPathOptions, DirectReservation, DirectSettings, DirectSink, DirectSocket};
 use mighty_remote::direct::status::{DirectState, MobileDirectStatus};
 use mighty_remote::direct::{strings, wire};
 use serde_json::{Map, Value, json};
@@ -283,15 +283,21 @@ struct SmokeSink {
 }
 
 impl DirectSink for SmokeSink {
-    fn admit(&self, _peer: IpAddr) -> bool {
-        self.admitted.fetch_add(1, Ordering::SeqCst);
-        true
+    fn admit(&self, _peer: IpAddr) -> Option<DirectReservation> {
+        let id = self.admitted.fetch_add(1, Ordering::SeqCst);
+        Some(DirectReservation::new(id as u64))
     }
-    fn accept(&self, socket: DirectSocket, _peer: SocketAddr) -> BoxFuture<'static, ()> {
+    fn accept(
+        &self,
+        _reservation: DirectReservation,
+        socket: DirectSocket,
+        _peer: SocketAddr,
+        _deadline: tokio::time::Instant,
+    ) -> BoxFuture<'static, ()> {
         self.accepted.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move { drop(socket) })
     }
-    fn refused(&self, _peer: IpAddr) {}
+    fn refused(&self, _reservation: DirectReservation) {}
 }
 
 /// The direct path on loopback port 0 through the fake network (which binds loopback alone): it listens and advertises the address
@@ -386,7 +392,7 @@ mod tests {
         assert!(direct.contains("return state.smoke_firewall.clone();"), "a smoke run never reads or changes this PC's firewall");
         assert!(direct.contains("if host.smoke.is_none() && !host.may_change_machine()"), "netsh runs only with --allow-state-write (D4)");
         assert!(
-            direct.contains("state.busy = true;") && direct.contains("direct().busy = false;"),
+            direct.contains("state.busy = true;") && direct.contains("direct().busy = false;") && direct.contains("impl Drop for Busy"),
             "the button is busy while a change waits"
         );
         assert!(rows.contains("!firewall.busy"), "the rows read the busy mark");
