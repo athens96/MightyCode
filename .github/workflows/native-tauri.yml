@@ -1,7 +1,10 @@
 name: Native clients — Tauri (0.5)
 # The Rust + Tauri 2 rewrite (native/tauri, docs/tauri-conversion.md), on Windows and on the Mac: the shared crates' tests run
 # against the ports' fakes on both, so the shared logic gives the same result on each OS (docs/tauri-architecture.md §5). The
-# shipping 0.4.x workflows (native-windows.yml, native-macos.yml) are untouched and independent of this one.
+# shipping 0.4.x workflows (native-windows.yml, native-macos.yml) are untouched and independent of this one. W9: the source guards, the
+# release candidate packaged in the 0.4.x shape for x64 and arm64 (package; Actions artifacts only, nothing published) and the update
+# rehearsal from real 0.4.59 and 0.4.61 installs (rehearsal). The switch of native-windows.yml to this build at the 0.5 merge is prepared
+# as native/tauri/release/native-windows.yml.0.5.patch, not applied.
 on:
   push:
     branches: [feat/tauri]
@@ -80,8 +83,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'cargo clippy failed' }
       - name: Rust — tests
         working-directory: native/tauri
+        # Every test target runs even after one fails, so one red run names every failure (a failing target used to hide the
+        # helper e2e of src-tauri that comes after it).
         run: |
-          cargo test --workspace
+          cargo test --workspace --no-fail-fast
           if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
       - name: Build the Tauri app (debug)
         working-directory: native/tauri
@@ -91,12 +96,245 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'tauri build failed' }
       - name: Smoke against the seeded demo profile
         if: matrix.os == 'windows'
-        timeout-minutes: 5
+        # W9 plan R13: the smoke's own limit grew by 45 s (AppUpdate, Styles, Mirror, Help, PaneWorktree stages).
+        timeout-minutes: 10
         run: ./native/tauri/scripts/smoke.ps1 -Out "$env:RUNNER_TEMP/tauri-smoke"
+      - name: The frozen style files are read in place, never written (mighty-styles, the smoke)
+        # scripts/check-style-freeze.sh's frozen paths: the tests and the smoke above leave them as checked out.
+        run: |
+          $changed = git status --porcelain --untracked-files=all -- styles native/macos/Sources/MightyCore/Styles native/macos/Sources/MightyCore/Resources/Styles mobile/src/lib/styles.ts docs/mighty-styles.md
+          if ($changed) { $changed; throw 'the run changed frozen style files' }
       - name: Keep the smoke's result and logs
         if: always() && matrix.os == 'windows'
         uses: actions/upload-artifact@v4
         with:
           name: tauri-smoke-windows
           path: ${{ runner.temp }}/tauri-smoke
+          if-no-files-found: ignore
+
+  guards:
+    # W9 plan D4, D6, R4, R6: what only certain files may do, read from the source (no build needed).
+    name: Tauri source guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: native/tauri
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detached starts only in the update modules; no verify_strict; "runas" only for the firewall rule
+        run: |
+          # Each rule: a pattern on code lines (comments left out) and the files allowed to match it, with why.
+          # The port itself (its default, the fake, the Windows implementation) and its contract tests.
+          $port = @('crates/mighty-platform/src/process.rs', 'crates/mighty-platform/src/unsupported.rs', 'crates/mighty-platform/src/fake.rs',
+            'crates/mighty-platform-windows/src/process.rs', 'crates/mighty-platform/tests/ports.rs')
+          $rules = @(
+            @{ what = 'ProcessHost::start_detached / start_detached_or_in_job called'; pattern = '\bstart_detached(_or_in_job)?\s*\('; skip = '\bfn\s+start_detached'
+               allowed = @(
+                 # The only callers (W9 plan D6): the helper's relaunch, the app's helper launch, the Windows update seams.
+                 'src-tauri/src/update_helper.rs', 'src-tauri/src/app_update.rs', 'crates/mighty-platform-windows/src/update.rs',
+                 'crates/mighty-platform-windows/tests/update_helper.rs') + $port },
+            @{ what = 'ProcessHost::start_detached_waitable called'; pattern = '\bstart_detached_waitable\s*\('; skip = '\bfn\s+start_detached_waitable'
+               allowed = @(
+                 # The Ouroboros dashboard daemon, which C# leaves running (W9-E).
+                 'src-tauri/src/ouroboros.rs') + $port },
+            # Any other detached start the port grows is named in this guard, with its callers, before anything calls it.
+            @{ what = 'another ProcessHost::start_detached_* called'; pattern = '\bstart_detached_(?!or_in_job\b|waitable\b)\w+\s*\('; skip = '\bfn\s+start_detached_'
+               allowed = $port },
+            # ed25519-dalek's verify_strict refuses small-order points C#'s Ed25519Verify accepts (plan D6, R4): never, anywhere.
+            @{ what = 'verify_strict used'; pattern = 'verify_strict'; skip = $null; allowed = @() },
+            @{ what = 'the "runas" verb'; pattern = '(?i)"runas"'; skip = $null
+               allowed = @(
+                 # The Tailscale firewall rule's change, the one elevation the app asks for (W8).
+                 'crates/mighty-platform-windows/src/firewall.rs',
+                 # Checks that no setup step elevates.
+                 'crates/mighty-tools/tests/setup.rs', 'src-tauri/src/smoke_setup.rs') }
+          )
+          $root = (Get-Location).Path
+          $files = Get-ChildItem -Recurse -File -Filter *.rs | Where-Object { $_.FullName -notmatch '[\\/](target|node_modules)[\\/]' }
+          $bad = @()
+          foreach ($file in $files) {
+            $relative = [IO.Path]::GetRelativePath($root, $file.FullName).Replace('\', '/')
+            $number = 0
+            foreach ($line in [IO.File]::ReadAllLines($file.FullName)) {
+              $number++
+              if ($line.TrimStart().StartsWith('//')) { continue }
+              foreach ($rule in $rules) {
+                if ($line -match $rule.pattern -and -not ($rule.skip -and $line -match $rule.skip) -and $rule.allowed -notcontains $relative) {
+                  $bad += "$($rule.what) outside its files: ${relative}:$number  $($line.Trim())"
+                }
+              }
+            }
+          }
+          if ($bad.Count -gt 0) { $bad; throw "$($bad.Count) guard violation(s)" }
+          "checked $($files.Count) Rust files"
+
+  package:
+    # The release candidate in the 0.4.x shape (W9 plan §1.6, D10, D13, D15): what native-windows.yml builds from the C# app, here from
+    # the Rust one, under the same artifact names. Built and kept as Actions artifacts only; nothing is uploaded anywhere else.
+    name: Package ${{ matrix.architecture }}
+    needs: tauri
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: windows-2025
+          - architecture: arm64
+            runner: windows-11-arm
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+      MIGHTY_TAURI_ENV: '1'
+      # A candidate's version (build-tauri-windows.ps1 -Version): newer than VERSION, so a 0.4.x install takes it as an update.
+      CANDIDATE: 0.5.0-rc.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            native/windows/web/package-lock.json
+            native/tauri/package-lock.json
+      # The 0.4.x stager's verdict on the zip comes from C#'s own code (tools/parity `update stage`).
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/tauri -> target
+          key: package-${{ matrix.architecture }}
+      - name: Install Inno Setup 6 for the setup program
+        # As native-windows.yml: the pinned release, checked by its SHA-256 before it runs.
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3.exe'
+          Invoke-WebRequest https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe -OutFile $setup
+          if ((Get-FileHash $setup -Algorithm SHA256).Hash -ne '9C73C3BAE7ED48D44112A0F48E66742C00090BDB5BEF71D9D3C056C66E97B732') { throw 'Inno Setup download does not match its pinned SHA-256' }
+          $dir = Join-Path $env:RUNNER_TEMP 'innosetup'
+          $process = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=`"$dir`"" -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or -not (Test-Path "$dir/ISCC.exe")) { throw "Inno Setup install failed ($($process.ExitCode))" }
+          "MIGHTY_ISCC=$dir/ISCC.exe" >> $env:GITHUB_ENV
+      - name: Release build, zip, setup program and the 0.4.x stager's verdict
+        # The update address and the public half of the update signing key, as native-windows.yml stamps the C# app; the signing key
+        # itself is never read here.
+        env:
+          MIGHTY_UPDATE_URL: https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/latest.json
+          MIGHTY_UPDATE_PUBLIC_KEY: C02DD3qWG+A5gJdYwpaEnvpzYugo354CLtUtU+oXmZ4=
+        run: ./scripts/build-tauri-windows.ps1 -Architecture ${{ matrix.architecture }} -Installer -Version $env:CANDIDATE
+      - name: The packaged exe imports no C runtime DLL
+        run: ./native/tauri/scripts/check-imports.ps1 -Exe ./release/tauri-windows-${{ matrix.architecture }}/MightyCode.exe
+      - name: The packaged exe as 0.4.x starts its update helper (bare environment, no window)
+        timeout-minutes: 6
+        run: ./native/tauri/scripts/helper-e2e.ps1 -Exe ./release/tauri-windows-${{ matrix.architecture }}/MightyCode.exe
+      - name: Smoke on the packaged app
+        timeout-minutes: 15
+        # A copy of the package's folder, with mighty-run's stand-in CLI beside the exe for the run steps (smoke.ps1 looks for it
+        # there; it is never part of the package).
+        run: |
+          $app = Join-Path $env:RUNNER_TEMP 'packaged-app'
+          Copy-Item -Recurse ./release/tauri-windows-${{ matrix.architecture }} $app
+          Push-Location native/tauri
+          cargo build -q -p mighty-run --bin mighty-fake-cli
+          if ($LASTEXITCODE -ne 0) { throw 'building mighty-fake-cli failed' }
+          Pop-Location
+          Copy-Item native/tauri/target/debug/mighty-fake-cli.exe $app
+          ./native/tauri/scripts/smoke.ps1 -Exe (Join-Path $app 'MightyCode.exe') -Out "$env:RUNNER_TEMP/package-smoke"
+          if ($LASTEXITCODE -ne 0) { throw "the smoke failed ($LASTEXITCODE)" }
+      - name: Install the setup program for this user, check it, and uninstall it
+        timeout-minutes: 6
+        run: ./scripts/test-windows-installer.ps1 -Setup ./release/MightyCode-windows-${{ matrix.architecture }}-setup.exe -Version ($env:CANDIDATE -split '-')[0] -Layout tauri
+      - name: Upload distributable
+        uses: actions/upload-artifact@v4
+        with:
+          name: MightyCode-native-windows-${{ matrix.architecture }}
+          path: |
+            release/MightyCode-windows-${{ matrix.architecture }}.zip
+            release/MightyCode-windows-${{ matrix.architecture }}.zip.sha256
+            release/MightyCode-windows-${{ matrix.architecture }}-setup.exe
+            release/MightyCode-windows-${{ matrix.architecture }}-setup.exe.sha256
+          if-no-files-found: error
+      - name: Keep the packaged smoke's result and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-package-smoke-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/package-smoke
+          if-no-files-found: ignore
+
+  rehearsal:
+    # W9 plan D11: a real 0.4.x install, built from its tag with a throwaway key, updates itself to the x64 package above from a local
+    # HTTPS server; then the relaunch path (scripts/update-rehearsal.ps1). On this throwaway runner only.
+    name: Rehearsal from ${{ matrix.from }}
+    needs: package
+    runs-on: windows-2025
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        from: [v0.4.59, v0.4.61]
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+      MIGHTY_TAURI_ENV: '1'
+      MIGHTY_REHEARSAL_DISPOSABLE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The tags the 0.4.x app is built from.
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python's cryptography (the throwaway key, certificate and manifest signature)
+        run: |
+          python -m pip install --disable-pip-version-check cryptography==50.0.2
+          if ($LASTEXITCODE -ne 0) { throw 'pip install failed' }
+      # The post-update smoke seeds its profile with cargo (mighty-core's seed_demo).
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/tauri -> target
+          key: rehearsal
+      - name: Install Inno Setup 6 for the 0.4.x setup program
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3.exe'
+          Invoke-WebRequest https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe -OutFile $setup
+          if ((Get-FileHash $setup -Algorithm SHA256).Hash -ne '9C73C3BAE7ED48D44112A0F48E66742C00090BDB5BEF71D9D3C056C66E97B732') { throw 'Inno Setup download does not match its pinned SHA-256' }
+          $dir = Join-Path $env:RUNNER_TEMP 'innosetup'
+          $process = Start-Process $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=`"$dir`"" -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or -not (Test-Path "$dir/ISCC.exe")) { throw "Inno Setup install failed ($($process.ExitCode))" }
+          "MIGHTY_ISCC=$dir/ISCC.exe" >> $env:GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: MightyCode-native-windows-x64
+          path: ${{ runner.temp }}/rust-package
+      - name: Rehearse the update from ${{ matrix.from }}
+        run: ./scripts/update-rehearsal.ps1 -From ${{ matrix.from }} -RustZip "$env:RUNNER_TEMP/rust-package/MightyCode-windows-x64.zip" -Work "$env:RUNNER_TEMP/rehearsal"
+      - name: Keep the rehearsal's result and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-rehearsal-${{ matrix.from }}
+          path: |
+            ${{ runner.temp }}/rehearsal/*.json
+            ${{ runner.temp }}/rehearsal/*.log
+            ${{ runner.temp }}/rehearsal/server.*
+            ${{ runner.temp }}/rehearsal/smoke
+            ${{ runner.temp }}/rehearsal/read-only-logs
+            ${{ runner.temp }}/rehearsal/logs
           if-no-files-found: ignore
