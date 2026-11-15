@@ -182,8 +182,9 @@ pub trait ProcessHost: Send + Sync {
 
     /// W9 (plan D6, owner W9-B): starts `request` so it outlives this process and answers its process id once it runs. Unlike
     /// [`ProcessHost::spawn`]: no job object (Windows: `CREATE_BREAKAWAY_FROM_JOB`, failing loudly rather than starting inside the
-    /// job when breakaway is not allowed), no pipes and no inherited handle, a new process group, the environment exactly as given (no
-    /// `NO_COLOR`), the window hidden only when asked; every handle closed at once. Only the update modules call it (a CI grep, as for
+    /// job when breakaway is not allowed), no pipes and no inherited handle, the environment exactly as given (no `NO_COLOR`), the
+    /// window hidden only when asked, and never a new process group (Windows' `CREATE_NEW_PROCESS_GROUP` would make the child and all it
+    /// starts ignore Ctrl+C, as C#'s `Process.Start` does not); every handle closed at once. Only the update modules call it (a CI grep, as for
     /// the elevation verb). The default answers `Unsupported` (the Mac's until its stage).
     fn start_detached(&self, _request: DetachedRequest) -> Result<u32> {
         Err(PlatformError::unsupported("ProcessHost", "start_detached"))

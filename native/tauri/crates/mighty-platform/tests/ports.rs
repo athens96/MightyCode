@@ -283,4 +283,11 @@ async fn the_update_transport_hands_redirects_back_and_caps_what_it_reads() {
     let small = DownloadRequest { limit: 9, ..request };
     assert!(matches!(transport.download(small).await, Err(PlatformError::TooLarge(9))));
     std::fs::remove_dir_all(&folder).unwrap();
+    // Review L3: a redirect's address (it may carry a token) never shows in Debug.
+    let secret = "https://example.invalid/next?token=SECRET";
+    let answers = (
+        format!("{:?}", mighty_platform::UpdateResponse { status: 302, location: Some(secret.into()), body: vec![1, 2] }),
+        format!("{:?}", mighty_platform::Downloaded { status: 302, location: Some(secret.into()), written: 0 }),
+    );
+    assert!(!answers.0.contains("SECRET") && !answers.1.contains("SECRET") && answers.0.contains("302"), "{answers:?}");
 }

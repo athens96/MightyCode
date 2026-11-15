@@ -20,13 +20,24 @@ use std::time::Duration;
 use crate::{BoxFuture, Result};
 
 /// An answer to a GET.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct UpdateResponse {
     pub status: u16,
     /// A 3xx's `Location`, as sent.
     pub location: Option<String>,
     /// A 2xx's body (empty otherwise, or for a download, which writes it to its file).
     pub body: Vec<u8>,
+}
+
+/// Whether there is a `Location` and how long the body is: a redirect's address may carry a token.
+impl std::fmt::Debug for UpdateResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpdateResponse")
+            .field("status", &self.status)
+            .field("location", &self.location.is_some())
+            .field("body", &self.body.len())
+            .finish()
+    }
 }
 
 /// Bytes written so far, called as they arrive (the caller rounds to whole percents).
@@ -56,11 +67,22 @@ impl std::fmt::Debug for DownloadRequest {
 }
 
 /// What a download answered: the status, a 3xx's `Location`, and how many bytes it wrote.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Downloaded {
     pub status: u16,
     pub location: Option<String>,
     pub written: u64,
+}
+
+/// Whether there is a `Location`, not the address (it may carry a token).
+impl std::fmt::Debug for Downloaded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Downloaded")
+            .field("status", &self.status)
+            .field("location", &self.location.is_some())
+            .field("written", &self.written)
+            .finish()
+    }
 }
 
 pub trait UpdateTransport: Send + Sync {

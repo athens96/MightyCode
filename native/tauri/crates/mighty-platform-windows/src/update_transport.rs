@@ -9,7 +9,8 @@
 
 use std::ffi::c_void;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mighty_platform::{BoxFuture, DownloadRequest, Downloaded, PlatformError, Result, UpdateResponse, UpdateTransport};
@@ -23,9 +24,12 @@ use windows_sys::Win32::Networking::WinHttp::{
 
 use crate::win::{check, last_error, wide};
 
-/// The longest a single WinHTTP phase (a connect, one read) may take inside a download, so a stalled connection still sees the cancel
-/// flag and the deadline; the whole request keeps its own timeout.
+/// The longest a single WinHTTP phase (a connect, one read) may take; the whole request keeps its own timeout, and the watchdog ends a
+/// stalled phase at once at a cancel or the deadline.
 const PHASE_LIMIT: Duration = Duration::from_secs(60);
+
+/// How often the watchdog looks at the cancel flag and the clock.
+const WATCH_POLL: Duration = Duration::from_millis(50);
 
 /// What one request goes to: an `https://` address split.
 #[derive(Clone, PartialEq, Eq)]
@@ -114,31 +118,110 @@ fn option(handle: *mut c_void, option: u32, value: u32) -> Result<()> {
     check(unsafe { WinHttpSetOption(handle, option, (&value as *const u32).cast(), 4) })
 }
 
-/// A sent GET whose status line and headers have arrived.
+/// The request handle, shared with the [`Watchdog`] that closes it to end a blocking WinHTTP call at once (a cancel or the deadline:
+/// WinHTTP ends a synchronous call on a handle another thread closes); None once closed. Kept as an address: a raw pointer is not `Send`.
+type Slot = Arc<Mutex<Option<usize>>>;
+
+fn close_slot(slot: &Slot) {
+    if let Some(handle) = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take() {
+        // SAFETY: the request handle WinHttpOpenRequest gave, taken out of the slot so it is closed once.
+        unsafe { WinHttpCloseHandle(handle as *mut c_void) };
+    }
+}
+
+/// The request handle while it is open; an error once the watchdog closed it.
+fn request_of(slot: &Slot) -> Result<*mut c_void> {
+    slot.lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .map(|handle| handle as *mut c_void)
+        .ok_or_else(|| PlatformError::Io(std::io::Error::from(std::io::ErrorKind::Interrupted)))
+}
+
+/// A sent GET whose status line and headers have arrived: the session and connection, and the request in its slot (closed first).
 struct Answer {
-    handles: Handles,
+    /// The session and connection, closed (after the request, in [`Drop`]) when the answer goes; only held.
+    _handles: Handles,
+    slot: Slot,
     status: u16,
     location: Option<String>,
 }
 
-impl Answer {
-    fn request(&self) -> *mut c_void {
-        self.handles.0[2]
+impl Drop for Answer {
+    fn drop(&mut self) {
+        close_slot(&self.slot);
     }
+}
 
+impl Answer {
     /// Reads up to `buffer.len()` bytes of the body; 0 at its end.
     fn read(&self, buffer: &mut [u8]) -> Result<usize> {
         let mut available = 0u32;
         // SAFETY: a request handle whose response has arrived; `available` is writable.
-        check(unsafe { WinHttpQueryDataAvailable(self.request(), &mut available) })?;
+        check(unsafe { WinHttpQueryDataAvailable(request_of(&self.slot)?, &mut available) })?;
         if available == 0 {
             return Ok(0);
         }
         let wanted = (available as usize).min(buffer.len()) as u32;
         let mut read = 0u32;
         // SAFETY: `buffer` holds at least `wanted` writable bytes.
-        check(unsafe { WinHttpReadData(self.request(), buffer.as_mut_ptr().cast(), wanted, &mut read) })?;
+        check(unsafe { WinHttpReadData(request_of(&self.slot)?, buffer.as_mut_ptr().cast(), wanted, &mut read) })?;
         Ok(read as usize)
+    }
+}
+
+/// Why the watchdog closed the request.
+const FIRED_CANCEL: u8 = 1;
+const FIRED_DEADLINE: u8 = 2;
+
+/// Watches one request on a thread of its own: when `cancel` is set or `deadline` passes, it closes the request handle, so a connect,
+/// a send or a read stalled inside WinHTTP ends at once rather than after its phase timeout. Stopped (and joined) when dropped.
+struct Watchdog {
+    done: Arc<AtomicBool>,
+    fired: Arc<AtomicU8>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Watchdog {
+    fn start(slot: Slot, cancel: Arc<AtomicBool>, deadline: Instant) -> Result<Watchdog> {
+        let done = Arc::new(AtomicBool::new(false));
+        let fired = Arc::new(AtomicU8::new(0));
+        let (stop, reason) = (done.clone(), fired.clone());
+        let thread = std::thread::Builder::new().name("mighty-update-watchdog".into()).spawn(move || {
+            while !stop.load(Ordering::SeqCst) {
+                let why = if cancel.load(Ordering::SeqCst) {
+                    FIRED_CANCEL
+                } else if Instant::now() >= deadline {
+                    FIRED_DEADLINE
+                } else {
+                    0
+                };
+                if why != 0 {
+                    reason.store(why, Ordering::SeqCst);
+                    close_slot(&slot);
+                    return;
+                }
+                std::thread::sleep(WATCH_POLL);
+            }
+        })?;
+        Ok(Watchdog { done, fired, thread: Some(thread) })
+    }
+
+    /// A failure as the caller should see it: the cancel or the deadline when the watchdog fired, else the failure itself.
+    fn explain(&self, error: PlatformError) -> PlatformError {
+        match self.fired.load(Ordering::SeqCst) {
+            FIRED_CANCEL => Stop::Cancelled.into(),
+            FIRED_DEADLINE => Stop::TimedOut.into(),
+            _ => error,
+        }
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        self.done.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -160,8 +243,9 @@ fn header(request: *mut c_void, level: u32) -> Result<Option<String>> {
     Ok(Some(String::from_utf16_lossy(&buffer[..length as usize / 2])))
 }
 
-/// Opens a session without a proxy, sends the GET and receives the status and headers, each WinHTTP phase within `phase`.
-fn send(target: &Target, phase: Duration) -> Result<Answer> {
+/// Opens a session without a proxy, sends the GET and receives the status and headers, each WinHTTP phase within `phase`; the request
+/// handle goes into `slot` as soon as it exists, for the watchdog.
+fn send(target: &Target, phase: Duration, slot: Slot) -> Result<Answer> {
     let mut handles = Handles(vec![]);
     // SAFETY: no agent (no User-Agent header, as C#'s HttpClient), no proxy at all.
     let session = opened(&mut handles, unsafe {
@@ -175,7 +259,7 @@ fn send(target: &Target, phase: Duration) -> Result<Answer> {
     let connection = opened(&mut handles, unsafe { WinHttpConnect(session, host.as_ptr(), target.port, 0) })?;
     let (verb, path) = (wide("GET"), wide(&target.path_and_query));
     // SAFETY: NUL-terminated strings; default version, no referrer, any accept type; TLS.
-    let request = opened(&mut handles, unsafe {
+    let request = unsafe {
         WinHttpOpenRequest(
             connection,
             verb.as_ptr(),
@@ -185,7 +269,13 @@ fn send(target: &Target, phase: Duration) -> Result<Answer> {
             std::ptr::null(),
             WINHTTP_FLAG_SECURE,
         )
-    })?;
+    };
+    if request.is_null() {
+        return Err(last_error());
+    }
+    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(request as usize);
+    // From here the answer owns the request: dropped on any failure below, it closes the request before the connection and session.
+    let mut answer = Answer { _handles: handles, slot, status: 0, location: None };
     option(request, WINHTTP_OPTION_REDIRECT_POLICY, WINHTTP_OPTION_REDIRECT_POLICY_NEVER)?;
     option(request, WINHTTP_OPTION_DISABLE_FEATURE, WINHTTP_DISABLE_COOKIES | WINHTTP_DISABLE_REDIRECTS)?;
     option(request, WINHTTP_OPTION_AUTOLOGON_POLICY, WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH)?;
@@ -206,8 +296,9 @@ fn send(target: &Target, phase: Duration) -> Result<Answer> {
             std::ptr::null_mut(),
         )
     })?;
-    let location = if (300..400).contains(&status) { header(request, WINHTTP_QUERY_LOCATION)?.filter(|l| !l.is_empty()) } else { None };
-    Ok(Answer { handles, status: status as u16, location })
+    answer.status = status as u16;
+    answer.location = if (300..400).contains(&status) { header(request, WINHTTP_QUERY_LOCATION)?.filter(|l| !l.is_empty()) } else { None };
+    Ok(answer)
 }
 
 /// Why a body stopped being taken.
@@ -266,36 +357,40 @@ fn take_body(
 fn get_capped_now(url: &str, cap: usize, timeout: Duration) -> Result<UpdateResponse> {
     let target = split(url)?;
     let deadline = Instant::now() + timeout;
-    let answer = send(&target, timeout)?;
+    let slot = Slot::default();
+    let never = Arc::new(AtomicBool::new(false));
+    let watchdog = Watchdog::start(slot.clone(), never.clone(), deadline)?;
+    let answer = send(&target, timeout.min(PHASE_LIMIT), slot).map_err(|error| watchdog.explain(error))?;
     let mut body = Vec::new();
     if (200..300).contains(&answer.status) {
-        let never = AtomicBool::new(false);
-        take_body(|buffer| answer.read(buffer), &mut body, cap as u64, &|_| {}, &never, deadline).map_err(PlatformError::from)?;
+        take_body(|buffer| answer.read(buffer), &mut body, cap as u64, &|_| {}, &never, deadline)
+            .map_err(|stop| watchdog.explain(stop.into()))?;
     }
-    Ok(UpdateResponse { status: answer.status, location: answer.location, body })
+    Ok(UpdateResponse { status: answer.status, location: answer.location.clone(), body })
 }
 
 fn download_now(request: &DownloadRequest) -> Result<Downloaded> {
     let target = split(&request.url)?;
-    let started = Instant::now();
-    let deadline = started + request.timeout;
+    let deadline = Instant::now() + request.timeout;
     if request.cancel.load(Ordering::SeqCst) {
         return Err(Stop::Cancelled.into());
     }
-    let answer = send(&target, request.timeout.min(PHASE_LIMIT))?;
+    let slot = Slot::default();
+    let watchdog = Watchdog::start(slot.clone(), request.cancel.clone(), deadline)?;
+    let answer = send(&target, request.timeout.min(PHASE_LIMIT), slot).map_err(|error| watchdog.explain(error))?;
     if !(200..300).contains(&answer.status) {
-        return Ok(Downloaded { status: answer.status, location: answer.location, written: 0 });
+        return Ok(Downloaded { status: answer.status, location: answer.location.clone(), written: 0 });
     }
     let mut file = std::io::BufWriter::new(std::fs::File::create(&request.destination)?);
     let progress = request.progress.clone();
     let written = take_body(|buffer| answer.read(buffer), &mut file, request.limit, &*progress, &request.cancel, deadline)
-        .map_err(PlatformError::from)?;
+        .map_err(|stop| watchdog.explain(stop.into()))?;
     file.flush()?;
     file.into_inner().map_err(|error| PlatformError::Io(error.into_error()))?.sync_all()?;
     Ok(Downloaded { status: answer.status, location: None, written })
 }
 
-/// `work` on a blocking thread, awaited to its end (it bounds itself: its timeout, the cancel flag between reads, each WinHTTP phase),
+/// `work` on a blocking thread, awaited to its end (it bounds itself: the watchdog closes the request at a cancel or the deadline),
 /// so a caller that removes the partial file afterwards finds it closed.
 async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
     match tokio::task::spawn_blocking(work).await {
@@ -422,6 +517,49 @@ mod tests {
 
         let past = Instant::now();
         assert!(matches!(take_body(chunks(vec![1]), &mut Vec::new(), 10, &|_| {}, &never, past), Err(Stop::TimedOut)));
+    }
+
+    /// Review L2: a request stalled inside WinHTTP (a server that takes the connection and never answers the TLS handshake) ends at once
+    /// when the download is cancelled, as `Refused("cancelled")`, and at its deadline as `TimedOut`, not after WinHTTP's phase timeout.
+    #[tokio::test]
+    async fn a_stalled_request_ends_at_the_cancel_and_at_the_deadline() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Accepts and holds every connection, answering nothing, while the test runs.
+        let held = Arc::new(Mutex::new(Vec::new()));
+        let keep = held.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                keep.lock().unwrap().push(stream);
+            }
+        });
+        let folder = std::env::temp_dir().join(format!("mighty-update-transport-{}-{port}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let request = DownloadRequest {
+            url: format!("https://127.0.0.1:{port}/package.zip"),
+            destination: folder.join("package.zip"),
+            limit: 1024,
+            timeout: Duration::from_secs(600),
+            progress: Arc::new(|_| {}),
+            cancel: cancel.clone(),
+        };
+        let flag = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            flag.store(true, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        let answer = WinHttpUpdates.download(request).await;
+        assert!(matches!(&answer, Err(PlatformError::Refused(words)) if words == "cancelled"), "{answer:?}");
+        assert!(started.elapsed() < Duration::from_secs(10), "ended at the cancel: {:?}", started.elapsed());
+
+        let started = Instant::now();
+        let answer = WinHttpUpdates.get_capped(&format!("https://127.0.0.1:{port}/latest.json"), 1024, Duration::from_millis(700)).await;
+        assert!(matches!(answer, Err(PlatformError::TimedOut(_))), "{answer:?}");
+        assert!(started.elapsed() < Duration::from_secs(10), "ended at the deadline: {:?}", started.elapsed());
+        drop(held);
+        std::fs::remove_dir_all(&folder).ok();
     }
 
     /// No proxy: the request goes straight to the address's own host and port (here a loopback listener of the test's own, which
