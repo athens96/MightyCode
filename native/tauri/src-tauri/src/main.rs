@@ -204,7 +204,9 @@ fn main() {
     startup::before_ui(&options, &platform, policy);
     let data_dir = platform.paths.data_dir().to_path_buf();
     let legacy = platform.paths.legacy_data_dirs().to_vec();
-    let log = LogFile::new(options.log_dir.clone().unwrap_or_else(|| data_dir.join("tauri-logs")));
+    // The log: the profile's `tauri-logs` only where the run writes or is a smoke, else this machine's own (startup.rs, W9-F).
+    let log_dir = startup::log_dir(&options, platform.paths.as_ref(), policy);
+    let log = LogFile::new(log_dir.clone());
     // C# StateStore: the state loaded (and, only where the write policy writes, the damaged file put aside and the legacy one copied);
     // its notes in the OS's language, as C# loads before the saved preference is applied. A file that does not read stops every
     // save: the app starts empty in memory and says why.
@@ -258,7 +260,7 @@ fn main() {
             (None, true) => smoke::Mode::RealClaude,
             (None, false) => smoke::Mode::Page,
         };
-        let record = options.log_dir.clone().unwrap_or_else(|| data_dir.join("tauri-logs")).join("fake-claude").join("replay");
+        let record = log_dir.join("fake-claude").join("replay");
         // The help capture and the perf scenario run in the smoke's place (W9-H, smoke.rs `Special`).
         let special = match (&options.help_language, options.perf_scenario) {
             (Some(language), _) if options.help_capture => smoke::Special::HelpCapture { language: language.clone() },
@@ -282,7 +284,7 @@ fn main() {
     let fake_claude = options.smoke_fake_cli.clone().map(|binary| runs::FakeClaude {
         binary,
         recording: smoke::RECORDING.into(),
-        record: options.log_dir.clone().unwrap_or_else(|| data_dir.join("tauri-logs")).join("fake-claude").join("replay"),
+        record: log_dir.join("fake-claude").join("replay"),
     });
     // The picture cache: the profile's own when the app may write it, else this machine's local folder for the profile.
     // These stores follow the write policy (W9: `policy.writes` replaced the flag here; a release build writes the profile's own).
@@ -313,7 +315,9 @@ fn main() {
     };
     // The page's and the browser panes' web data (paths.rs `web_folders`, W9-F: C#'s own folders in a release build on the default
     // profile, so browser sign-ins survive the update; this machine's local ones otherwise, as before W9).
-    let web_folders = platform.paths.web_folders(build_info::RELEASE && options.profile.is_none());
+    // Only a run that writes adopts them (review M1): never beside a C# app that may still hold them.
+    let adopted = startup::adopts_csharp_web_data(&options, policy);
+    let web_folders = platform.paths.web_folders(adopted);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -419,9 +423,10 @@ fn main() {
             app.manage(platform.ptys.clone());
             // The app's folders, for the toolkit's store (settings/tools.rs, W6-B).
             app.manage(platform.paths.clone());
-            // Completion notifications: registered with the OS only with --allow-state-write, never in a smoke (notifications.rs).
+            // Completion notifications and the toast activator: registered with the OS only where the app may change the machine,
+            // never in a smoke (notifications.rs).
             if host.smoke.is_none() {
-                notifications::start(&host);
+                notifications::start(&host, &platform);
             }
             let dispatcher = host.clone();
             tauri::async_runtime::spawn(async move {
@@ -461,39 +466,51 @@ fn main() {
             let webview_data = web_folders.page.clone();
             host.log.line(&format!("webview data {}", webview_data.display()));
             let (r, g, b) = if theme == "light" { (0xEC, 0xEE, 0xF3) } else { (0x0B, 0x0F, 0x19) };
-            let page = host.clone();
             let origin = AppOrigin::new(app.config());
-            let navigation = AppOrigin(origin.0.clone());
+            let origin_url = origin.0.clone();
             app.manage(origin);
-            let mut window = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("index.html".into()))
-                .title("Mighty Code")
-                .inner_size(1440.0, 920.0)
-                .min_inner_size(940.0, 650.0)
-                .background_color(tauri::window::Color(r, g, b, 255))
-                .data_directory(webview_data)
-                // The page takes dropped files itself (HTML5 drop → addAttachments), as C#'s WebView2 does; Tauri's own handler
-                // would swallow the drop on Windows.
-                .disable_drag_drop_handler()
-                // C# WebShell: the page never leaves the app's own origin (a stray drop or link would navigate it away), and it
-                // opens no window of its own.
-                .on_navigation(move |url| navigation.trusts(url))
-                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
-                .on_page_load(move |_, payload| {
-                    if payload.event() == PageLoadEvent::Started {
-                        page.page_started();
-                        // On the UI thread: the views hide from a task, never here (a view may be waiting for this thread).
-                        if let Some(surfaces) = surfaces(&page.app) {
-                            tauri::async_runtime::spawn(async move { surfaces.page_started().await });
-                        }
+            // Made again while another process still holds the data folder with other options (C#'s WebView2 right after the update
+            // swap; startup.rs, review M1), at most about 10 s; the setup runs before the event loop, so the wait blocks nothing else.
+            let window = startup::retry_while_held(
+                || {
+                    let page = host.clone();
+                    let navigation = AppOrigin(origin_url.clone());
+                    let mut window = WebviewWindowBuilder::new(app.handle(), WINDOW, WebviewUrl::App("index.html".into()))
+                        .title("Mighty Code")
+                        .inner_size(1440.0, 920.0)
+                        .min_inner_size(940.0, 650.0)
+                        .background_color(tauri::window::Color(r, g, b, 255))
+                        .data_directory(webview_data.clone())
+                        // The page takes dropped files itself (HTML5 drop → addAttachments), as C#'s WebView2 does; Tauri's own handler
+                        // would swallow the drop on Windows.
+                        .disable_drag_drop_handler()
+                        // C# WebShell: the page never leaves the app's own origin (a stray drop or link would navigate it away), and it
+                        // opens no window of its own.
+                        .on_navigation(move |url| navigation.trusts(url))
+                        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+                        .on_page_load(move |_, payload| {
+                            if payload.event() == PageLoadEvent::Started {
+                                page.page_started();
+                                // On the UI thread: the views hide from a task, never here (a view may be waiting for this thread).
+                                if let Some(surfaces) = surfaces(&page.app) {
+                                    tauri::async_runtime::spawn(async move { surfaces.page_started().await });
+                                }
+                            }
+                        });
+                    if let Some(port) = debugging_port {
+                        // These replace wry's own arguments, which are kept.
+                        window = window.additional_browser_args(&format!(
+                            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"
+                        ));
+                    } else if adopted {
+                        // C#'s folder opens with C#'s options: no browser arguments (review M1).
+                        window = window.additional_browser_args(startup::CSHARP_BROWSER_ARGUMENTS);
                     }
-                });
-            if let Some(port) = debugging_port {
-                // These replace wry's own arguments, which are kept.
-                window = window.additional_browser_args(&format!(
-                    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"
-                ));
-            }
-            let window = window.build()?;
+                    window.build()
+                },
+                std::thread::sleep,
+                |line| host.log.line(line),
+            )?;
             // W9-C: the session-ending watch on the main window, from its own thread (an install on quit waits while Windows ends it).
             app_update::watch_window(&host, &window.as_ref().window());
             // The native views over the page (browser panes; the Mac's terminal later), in the OS's implementation.

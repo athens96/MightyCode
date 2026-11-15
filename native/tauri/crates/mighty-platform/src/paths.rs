@@ -7,7 +7,8 @@
 //! | local (this machine only) | `%LOCALAPPDATA%\<identifier>` | `~/Library/Application Support/<identifier>` |
 //!
 //! `--profile <folder>` replaces the data folder, never reads the pre-rename ones, and gets webview and browser data of its own
-//! under the local folder (named after the profile path), so two profiles never share a WebView2 folder.
+//! under the local folder (named after the profile path), so two profiles never share a WebView2 folder. A release build on the default
+//! profile keeps its web data in the data folder, where C# kept it ([`Paths::web_folders`], W9).
 
 use std::path::{Path, PathBuf};
 
@@ -53,20 +54,28 @@ pub trait Paths: Send + Sync {
         self.local_dir().join("browser").join(self.profile_key())
     }
     /// W9 (plan §1.5, D5; owner W9-F): the page's and the browser panes' web data folders. A release build on the default profile
-    /// (`release_default_profile`) takes C#'s own, `<data>\web-profile` (C# `WebShell.cs:69`) and `<data>\browser-profiles`
-    /// (`MainWindow.Browser.cs:71-77`), so sign-ins in browser panes survive the update; any other run keeps this machine's local
-    /// folders ([`Paths::webview_dir`], [`Paths::browser_dir`]). Step 0: the local folders in every run (F fills the release branch).
-    fn web_folders(&self, _release_default_profile: bool) -> WebFolders {
-        WebFolders { page: self.webview_dir(), browser: self.browser_dir() }
+    /// (`release_default_profile`) takes C#'s own, `<data>\web-profile` (C# `WebShell.cs:69`) and `<data>\browser-profiles\<key>`
+    /// (`MainWindow.Browser.cs:71-77`, `BrowserProfile.ProfileFolder(StateDirectory, key)`), so sign-ins in browser panes survive the
+    /// update; any other run keeps this machine's local folders ([`Paths::webview_dir`], [`Paths::browser_dir`]).
+    fn web_folders(&self, release_default_profile: bool) -> WebFolders {
+        if release_default_profile {
+            WebFolders { page: self.data_dir().join(WEB_PROFILE_FOLDER), browser: self.data_dir().to_path_buf() }
+        } else {
+            WebFolders { page: self.webview_dir(), browser: self.browser_dir() }
+        }
     }
 }
+
+/// C#'s page WebView2 data folder in the data folder (`WebShell.cs:69`).
+pub const WEB_PROFILE_FOLDER: &str = "web-profile";
 
 /// Where the web data goes ([`Paths::web_folders`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebFolders {
     /// The page's WebView2 / WKWebView data.
     pub page: PathBuf,
-    /// The browser panes' (one profile per workspace under it).
+    /// The root of the browser panes' data: each workspace's profile is `<browser>/browser-profiles/<key>` (mighty-core's
+    /// `browser::profile_folder`, C# `BrowserProfile.ProfileFolder`).
     pub browser: PathBuf,
 }
 
@@ -147,14 +156,14 @@ mod tests {
     #[test]
     fn the_default_profile_lives_under_the_roaming_root() {
         let paths =
-            AppPaths::resolve(None, Some(root("roam")), &["MightyClaude", "mighty-claude"], Some(root("local")), "dev.mightycode.tauri")
+            AppPaths::resolve(None, Some(root("roam")), &["MightyClaude", "mighty-claude"], Some(root("local")), "dev.mightycode.native")
                 .unwrap();
         assert_eq!(paths.data_dir(), root("roam").join("MightyCode"));
         assert_eq!(paths.legacy_data_dirs(), [root("roam").join("MightyClaude"), root("roam").join("mighty-claude")]);
         assert_eq!(paths.state_file(), root("roam").join("MightyCode").join("workspace-state.json"));
         assert_eq!(paths.state_backup(), root("roam").join("MightyCode").join("workspace-state.json.bak"));
-        assert_eq!(paths.webview_dir(), root("local").join("dev.mightycode.tauri").join("webview").join("default"));
-        assert_eq!(paths.browser_dir(), root("local").join("dev.mightycode.tauri").join("browser").join("default"));
+        assert_eq!(paths.webview_dir(), root("local").join("dev.mightycode.native").join("webview").join("default"));
+        assert_eq!(paths.browser_dir(), root("local").join("dev.mightycode.native").join("browser").join("default"));
     }
 
     #[test]
@@ -166,6 +175,27 @@ mod tests {
         assert_eq!(paths.profile_key(), folder_name(&profile));
         assert!(paths.webview_dir().ends_with(folder_name(&profile)));
         assert!(AppPaths::resolve(Some(PathBuf::from("relative")), None, &[], Some(root("local")), "id").is_err());
+    }
+
+    /// W9-F: a release build on the default profile keeps its web data where C# kept it (`<data>\web-profile`, browser panes under
+    /// `<data>\browser-profiles\<key>`), so browser sign-ins survive the update; any other run keeps this machine's local folders.
+    #[test]
+    fn a_release_build_on_the_default_profile_takes_the_csharp_web_folders() {
+        let paths = AppPaths::resolve(None, Some(root("roam")), &[], Some(root("local")), "dev.mightycode.native").unwrap();
+        let data = root("roam").join("MightyCode");
+        let release = paths.web_folders(true);
+        assert_eq!(release, WebFolders { page: data.join("web-profile"), browser: data.clone() });
+        assert_eq!(release.browser.join("browser-profiles").join("w1"), data.join("browser-profiles").join("w1"), "C#'s profile folder");
+        let local = paths.web_folders(false);
+        assert_eq!(
+            local,
+            WebFolders {
+                page: root("local").join("dev.mightycode.native").join("webview").join("default"),
+                browser: root("local").join("dev.mightycode.native").join("browser").join("default"),
+            }
+        );
+        let profile = AppPaths::resolve(Some(root("p")), Some(root("roam")), &[], Some(root("local")), "id").unwrap();
+        assert_eq!(profile.web_folders(false), WebFolders { page: profile.webview_dir(), browser: profile.browser_dir() });
     }
 
     #[test]

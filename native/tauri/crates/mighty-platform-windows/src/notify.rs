@@ -3,25 +3,29 @@
 //! A WinRT toast (`ToastNotificationManager`) under the app's AppUserModelID, `launch="sessionId=…"` as C#'s, its two lines the
 //! notification's title and body; a click on it calls the activation handler with the pane's id while the app runs. An unpackaged app
 //! may show toasts only under an AUMID registered for the user ([`register`]: `HKCU\Software\Classes\AppUserModelId\<id>`), which the
-//! host writes only with `--allow-state-write`.
+//! host writes only where it may change the machine (the write policy). W9-F: the AUMID is the app's real identity, registered with the
+//! toast activator (activator.rs), which takes a click on a toast left in Action Center after the app quit.
 
 use std::sync::{Arc, Mutex};
 
 use mighty_platform::notify::ActivationHandler;
-use mighty_platform::{BoxFuture, Notification, Notifier, PlatformError, PrefValue, PrefsStore, Result};
+use mighty_platform::{BoxFuture, Notification, Notifier, PlatformError, Result};
 use windows::Data::Xml::Dom::XmlDocument;
 use windows::Foundation::TypedEventHandler;
 use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
 use windows::core::HSTRING;
 
-use crate::prefs::RegistryPrefs;
+/// The app's AppUserModelID: its real identity (tauri.conf.json `identifier`; W9-F, plan D4).
+pub const AUMID: &str = mighty_platform::activator::AUMID;
 
-/// The app's AppUserModelID: its development identity (tauri.conf.json `identifier`), never the installed C# app's.
-pub const AUMID: &str = "dev.mightycode.tauri";
-
-/// Registers the AUMID for the user so its toasts show (the key's `DisplayName`). The caller decides whether it may write.
+/// Registers the AUMID for the user so its toasts show (the key's `DisplayName`), without the toast activator: a writing run that is
+/// not the installed release (a development build with the flag, `--profile`) names no exe of its own in the machine's registry (W9
+/// review L1; the installed release registers the activator, activator.rs). The caller decides whether it may write.
 pub fn register() -> Result<()> {
-    RegistryPrefs::under(&format!(r"Software\Classes\AppUserModelId\{AUMID}")).set("DisplayName", PrefValue::Text("Mighty Code".into()))
+    let identity = format!(r"{}\AppUserModelId\{AUMID}", crate::activator::CLASSES);
+    crate::registry::CurrentUserRegistry::new()
+        .set_text(&identity, "DisplayName", crate::activator::DISPLAY_NAME)
+        .map_err(|error| PlatformError::Refused(format!("registry: {error}")))
 }
 
 fn escape(text: &str) -> String {

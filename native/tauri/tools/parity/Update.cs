@@ -13,7 +13,8 @@
 //                                      update-stage/), each copied into a fresh temporary folder first
 //   update install-log <in> <out>      the helper's install.log line (WinUI\Program.cs:253-270, its interpolation restated here) at a
 //                                      fixed time given in .NET ticks (update-install-log.json)
-//   update rewrite <text> <old> <new> <out>  RenameMigration's path rewrite (W9-F's; not written yet)
+//   update rewrite <text> <old> <new> <out>  RenameMigration.Rewritten of the UTF-8 text in the file <text> (W9-F; mighty-core's
+//                                      tests/rename_migration.rs), written to <out> as UTF-8 without a mark
 //
 // The refusals are worded in Korean (Locale.LanguagePreference = "ko"), as Core.Tests reads them.
 using System.Text;
@@ -40,11 +41,9 @@ internal static class UpdateParity
             case "mutex-name" when args.Length == 3: return Write(args[2], MutexName(Read(args[1])));
             case "stage" when args.Length == 3: return Write(args[2], Stage(args[1]));
             case "install-log" when args.Length == 3: return Write(args[2], InstallLog(Read(args[1])));
-            case "rewrite":
-                Console.Error.WriteLine("update rewrite: not written yet (W9-F)");
-                return 2;
+            case "rewrite" when args.Length == 5: return Rewrite(args[1..]);
             default:
-                Console.Error.WriteLine("usage: update ed25519|manifest|version|plan-args|mutex-name|stage|install-log <in> <out>");
+                Console.Error.WriteLine("usage: update ed25519|manifest|version|plan-args|mutex-name|stage|install-log <in> <out>, update rewrite <text> <old> <new> <out>");
                 return 2;
         }
     }
@@ -227,5 +226,12 @@ internal static class UpdateParity
                 $"relaunch={relaunch} skipped={skipped} started={started} backupRemoved={backupRemoved} {error}\n";
         }
         return input;
+    }
+
+    private static int Rewrite(string[] args)
+    {
+        var utf8 = new UTF8Encoding(false);
+        File.WriteAllText(args[3], RenameMigration.Rewritten(File.ReadAllText(args[0], utf8), args[1], args[2]), utf8);
+        return 0;
     }
 }

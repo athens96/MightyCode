@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Mighty Code",
   "mainBinaryName": "MightyCode",
-  "identifier": "dev.mightycode.tauri",
+  "identifier": "dev.mightycode.native",
   "build": {
     "devUrl": "http://localhost:5173",
     "frontendDist": "../../windows/web/dist-tauri",

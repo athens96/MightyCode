@@ -365,15 +365,26 @@ async fn request_install(host: &Arc<Host>) -> Result<(), String> {
     Ok(())
 }
 
-/// The script's folder: `--profile`'s `setup` folder (as C#), else, until W9, this machine's local folder of the Tauri build for the
-/// profile — never the installed C# app's `%LOCALAPPDATA%\MightyCode\setup`, whose leftovers (a running install's script among them)
-/// a start would remove.
+/// The script's folder: `--profile`'s `setup` folder (as C#); for the default profile, a release build's is C#'s own,
+/// `%LOCALAPPDATA%\MightyCode\setup` (W9-F, plan §1.5: the installed app it replaced is gone), and a development build's this machine's
+/// local folder of the Tauri build for the profile — never the C# app's, whose leftovers (a running install's script among them) a
+/// start would remove while that app may still run beside it.
 fn script_folder(host: &Host) -> Option<PathBuf> {
     let profile = crate::args::parse(std::env::args().skip(1)).ok().and_then(|options| options.profile);
+    let paths = host.app.try_state::<Arc<dyn Paths>>();
+    folder_for(profile.as_deref(), crate::build_info::RELEASE, paths.as_deref().map(|paths| paths.as_ref()))
+}
+
+/// [`script_folder`]'s rule over its inputs.
+fn folder_for(profile: Option<&Path>, release: bool, paths: Option<&dyn Paths>) -> Option<PathBuf> {
     if let Some(profile) = profile {
-        return Some(mighty_tools::setup::files::folder(Some(&profile), Path::new("")));
+        return Some(mighty_tools::setup::files::folder(Some(profile), Path::new("")));
     }
-    let paths = host.app.try_state::<Arc<dyn Paths>>()?;
+    let paths = paths?;
+    if release {
+        // The local folder is `%LOCALAPPDATA%\<identifier>`: its parent is C#'s `SpecialFolder.LocalApplicationData`.
+        return paths.local_dir().parent().map(|local| mighty_tools::setup::files::folder(None, local));
+    }
     Some(paths.local_dir().join("setup").join(paths.profile_key()))
 }
 
@@ -565,6 +576,25 @@ mod tests {
     use mighty_core::locale::Locale;
     use mighty_core::settings_sections as sections;
     use serde_json::json;
+
+    /// W9-F: the install script's folder — `--profile`'s own in any build; for the default profile C#'s `<LocalAppData>/MightyCode/setup`
+    /// in a release build, this build's local folder for the profile in a development one.
+    #[test]
+    fn the_script_folder_is_csharps_in_a_release_build() {
+        let root = std::env::temp_dir().join("mighty-setup-folder");
+        let paths =
+            mighty_platform::AppPaths::resolve(None, Some(root.join("roam")), &[], Some(root.join("local")), "dev.mightycode.native")
+                .unwrap();
+        let profile = root.join("profile");
+        assert_eq!(super::folder_for(Some(&profile), true, Some(&paths)), Some(profile.join("setup")));
+        assert_eq!(super::folder_for(Some(&profile), false, None), Some(profile.join("setup")));
+        assert_eq!(super::folder_for(None, true, Some(&paths)), Some(root.join("local").join("MightyCode").join("setup")));
+        assert_eq!(
+            super::folder_for(None, false, Some(&paths)),
+            Some(root.join("local").join("dev.mightycode.native").join("setup").join("default"))
+        );
+        assert_eq!(super::folder_for(None, true, None), None);
+    }
 
     /// C# `SetupVerification.TheScreenIsWiredIntoTheApp` (L1560), as the host's registry and the smoke's checks instead of the WinUI
     /// source: the page's `openSetup` and the composer's `installCli` are methods the host answers; the elevated refusal is said in

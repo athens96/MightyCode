@@ -110,6 +110,10 @@ Name: "{autodesktop}\Mighty Code"; Filename: "{app}\MightyCode.exe"; Check: HadO
 [Run]
 Filename: "{app}\MightyCode.exe"; Description: "{cm:LaunchProgram,Mighty Code}"; Flags: nowait postinstall skipifsilent
 
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\CLSID\{{E9E66915-2599-4971-9584-4825CAC5DEEE}"; Flags: uninsdeletekey dontcreatekey
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\dev.mightycode.native"; Flags: uninsdeletekey dontcreatekey
+
 [UninstallDelete]
 ; The app replaces its own files when it updates, so the uninstall log no longer lists them all: remove the folder whole,
 ; and any backup a stopped update left beside it. Settings and conversations live elsewhere and stay.
