@@ -37,6 +37,8 @@ struct Fake {
     halts: Mutex<usize>,
     vanish: Mutex<usize>,
     fail_switch: AtomicBool,
+    /// `safety()` panics this many more times (a probe that breaks).
+    panic_safety: Mutex<usize>,
 }
 
 impl Fake {
@@ -56,6 +58,7 @@ impl Fake {
             halts: Mutex::new(0),
             vanish: Mutex::new(0),
             fail_switch: AtomicBool::new(false),
+            panic_safety: Mutex::new(0),
         })
     }
 
@@ -93,6 +96,13 @@ impl ScreenSharePlatform for Fake {
         self.attached.lock().unwrap().clone()
     }
     fn safety(&self) -> ScreenSafety {
+        let panics = {
+            let mut left = self.panic_safety.lock().unwrap();
+            let panics = *left > 0;
+            *left = left.saturating_sub(1);
+            panics
+        };
+        assert!(!panics, "the fixture's safety probe broke");
         *self.safety.lock().unwrap()
     }
     fn start_peer(&self, session: ScreenLiveSession, _ice: Vec<ScreenIceServer>) -> BoxFuture<'_, Result<()>> {
@@ -351,7 +361,13 @@ async fn screen_sharing_revocation_and_input_safety() {
     let platform = Fake::new();
     let trusted = Arc::new(AtomicBool::new(true));
     let trust = trusted.clone();
-    let hub = hub(&directory, &platform, sends_nothing(), confirms(true), Arc::new(move |_| trust.load(Ordering::SeqCst)));
+    // C# compares with the wall clock; here the hub's clock stands still, so the two-second pause is decided by the test alone.
+    let at = Utc::now();
+    platform.set_safety(|s| s.last_local_input = at - TimeDelta::minutes(1));
+    let trust: TrustedDevice = Arc::new(move |_| trust.load(Ordering::SeqCst));
+    let hub = Arc::new(
+        ScreenShareHub::new(&directory, platform.clone(), sends_nothing(), confirms(true), trust, Some(Arc::new(move || at))).unwrap(),
+    );
     hub.set_grant(PHONE, true, "control").await.unwrap();
     let signature = enrolled_signature(&hub, &key()).await;
     let id = start(&hub, PHONE, "control", Some(&signature)).await;
@@ -359,12 +375,12 @@ async fn screen_sharing_revocation_and_input_safety() {
     let inputs = || platform.inputs.lock().unwrap().len();
     hub.input(&id, &input).await;
     assert!(inputs() == 1, "approved control delivers input");
-    platform.set_safety(|s| s.last_local_input = Utc::now());
+    platform.set_safety(|s| s.last_local_input = at - TimeDelta::milliseconds(1999));
     hub.input(&id, &input).await;
     assert!(inputs() == 1, "physical input pauses remote control");
     hub.input(&id, &json!({ "t": "drag", "phase": "end", "displayId": 1, "x": 0.1, "y": 0.1 }).to_string()).await;
     assert!(platform.released.lock().unwrap().contains(&id), "drag release is honored even during a safety pause");
-    platform.set_safety(|s| s.last_local_input = Utc::now() - TimeDelta::minutes(1));
+    platform.set_safety(|s| s.last_local_input = at - TimeDelta::seconds(2));
     trusted.store(false, Ordering::SeqCst);
     hub.input(&id, &input).await;
     assert!(inputs() == 1, "revoked relay identity immediately blocks input");
@@ -754,4 +770,126 @@ async fn screen_share_reads_and_writes_what_csharp_does() {
     assert!(again.grants().len() == 2 && again.grants()[1].control_key_public.as_deref() == Some(key));
     again.dispose().await;
     std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// The concatenated `data` of one transfer's frames.
+fn payload(frames: &[String]) -> (Vec<u8>, u64, String) {
+    let mut bytes = Vec::new();
+    let (mut declared, mut encoding) = (0, String::new());
+    for frame in frames {
+        let frame: Value = serde_json::from_str(frame).unwrap();
+        bytes.extend(STANDARD.decode(frame["data"].as_str().unwrap()).unwrap());
+        declared = frame["bytes"].as_u64().unwrap();
+        encoding = frame["enc"].as_str().unwrap().to_string();
+    }
+    (bytes, declared, encoding)
+}
+
+/// The phone takes a zstd transfer only when its frame declares exactly `bytes` (clipboard.ts `decodeClipboardPayload`): C#'s frames
+/// do (`28 B5 2F FD A0`: single segment, a 4-byte size) and so do ours (ruzstd's header given the 4-byte size).
+#[test]
+fn the_phone_accepts_our_zstd_frames_as_it_accepts_csharps() {
+    let fixture = fixture();
+    for name in ["frames", "variedFrames"] {
+        let frames: Vec<String> = fixture[name].as_array().unwrap().iter().map(|f| f.as_str().unwrap().to_string()).collect();
+        let (bytes, declared, encoding) = payload(&frames);
+        assert!(encoding == "zstd" && bytes[..5] == [0x28, 0xB5, 0x2F, 0xFD, 0xA0]);
+        assert_eq!(clipboard::frame_content_size(&bytes), Some(declared), "C#'s {name}");
+    }
+    let varied: String = (0..60_000u32).map(|i| char::from(b'a' + (i * 7919 % 26) as u8)).collect();
+    for text in ["한글 👨‍👩‍👧‍👦\n".repeat(4000), varied] {
+        let (bytes, declared, encoding) = payload(&ScreenClipboard::encode(Some(&text)));
+        assert_eq!((encoding.as_str(), declared), ("zstd", text.len() as u64));
+        assert_eq!(clipboard::frame_content_size(&bytes), Some(declared), "our frames declare their size");
+    }
+}
+
+/// A route dropped while the user is asked (the phone's connection closed) leaves no key pending: input resumes, and the next
+/// enrollment asks again.
+#[tokio::test(start_paused = true)]
+async fn dropping_an_enrollment_clears_the_pending_key() {
+    let directory = temp();
+    let platform = Fake::new();
+    let asked = Arc::new(Mutex::new(0usize));
+    let count = asked.clone();
+    let confirm: ConfirmKey = Arc::new(move |_, _| {
+        *count.lock().unwrap() += 1;
+        Box::pin(std::future::pending())
+    });
+    let hub = Arc::new(ScreenShareHub::new(&directory, platform.clone(), sends_nothing(), confirm, trusts_all(), None).unwrap());
+    hub.set_grant(PHONE, true, "control").await.unwrap();
+    let request = json!({ "publicKeyB64": STANDARD.encode(public(&key())) }).to_string();
+    let enrolling = hub.clone();
+    let body = request.clone();
+    let enrollment = tokio::spawn(async move { enrolling.route("POST", "control-key", Some(&body), PHONE).await });
+    while !hub.input_paused() {
+        tokio::task::yield_now().await;
+    }
+    enrollment.abort();
+    let _ = enrollment.await;
+    assert!(!hub.input_paused(), "a dropped enrollment pauses nothing");
+    let again = hub.clone();
+    let second = tokio::spawn(async move { again.route("POST", "control-key", Some(&request), PHONE).await });
+    while *asked.lock().unwrap() < 2 {
+        tokio::task::yield_now().await;
+    }
+    second.abort();
+    let _ = second.await;
+    hub.dispose().await;
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// A watcher tick whose probe panics fails closed (every session killed as `secure-input`), and the watcher goes on: a later lock
+/// still ends the sessions.
+#[tokio::test(start_paused = true)]
+async fn the_privacy_watcher_fails_closed_and_survives_a_panicking_probe() {
+    let directory = temp();
+    let platform = Fake::new();
+    let sent: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let record = sent.clone();
+    let send: DeviceSend = Arc::new(move |_, message| {
+        record.lock().unwrap().push(serde_json::from_str(&message).unwrap());
+        done(())
+    });
+    let hub = hub(&directory, &platform, send, confirms(true), trusts_all());
+    hub.set_grant(PHONE, true, "view").await.unwrap();
+    let first = start(&hub, PHONE, "view", None).await;
+    *platform.panic_safety.lock().unwrap() = 1;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let killed = |reason: &str| sent.lock().unwrap().iter().any(|m| m["type"] == "screen-kill" && m["reason"] == reason);
+    assert!(hub.sessions().is_empty() && platform.stopped(&first) && killed("secure-input"), "a broken probe kills every session");
+    let second = start(&hub, PHONE, "view", None).await;
+    platform.set_safety(|s| s.locked = true);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(hub.sessions().is_empty() && platform.stopped(&second) && killed("lock-screen"), "the watcher still runs after the panic");
+    hub.dispose().await;
+    std::fs::remove_dir_all(&directory).unwrap();
+}
+
+/// The control signature is strict DER, as .NET's `Rfc3279DerSequence` reads it: no trailing byte, no long-form length, no integer
+/// with a needless leading zero.
+#[test]
+fn a_control_signature_is_strict_der() {
+    let key = key();
+    let public_key = public(&key);
+    let challenge = b"screen-control-challenge:fixture";
+    let signature = sign(&key, challenge);
+    assert!(policy::verify(challenge, &signature, &public_key));
+    let trailing = [&signature[..], &[0]].concat();
+    assert!(!policy::verify(challenge, &trailing, &public_key), "a trailing byte is refused");
+    let long_form = [&[0x30, 0x81, signature[1]][..], &signature[2..]].concat();
+    assert!(!policy::verify(challenge, &long_form, &public_key), "a long-form length is refused");
+    // r with a needless 00 in front: a signature whose r starts below 0x80 (and is not zero-led), so the zero is no sign byte.
+    let (challenge, signature) = (0u32..)
+        .map(|i| format!("screen-control-challenge:{i}").into_bytes())
+        .map(|challenge| {
+            let signature = sign(&key, &challenge);
+            (challenge, signature)
+        })
+        .find(|(_, signature)| (1..0x80).contains(&signature[4]))
+        .unwrap();
+    let r_length = usize::from(signature[3]);
+    let padded = [&[0x30, signature[1] + 1, 0x02, signature[3] + 1, 0x00][..], &signature[4..]].concat();
+    assert!(policy::verify(&challenge, &signature, &public_key) && padded.len() == signature.len() + 1 && r_length <= 32);
+    assert!(!policy::verify(&challenge, &padded, &public_key), "a non-minimal integer is refused");
 }

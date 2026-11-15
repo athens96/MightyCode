@@ -48,7 +48,8 @@ pub struct ScreenSafety {
 ///
 /// Contract: `safety` never fails — a probe that cannot tell reports `secure_input` (fail closed); `displays` lists what is attached
 /// now; `set_display` answers false when that display is not attached (any longer); a future may be dropped part way (the hub's
-/// cancellation), and must leave no input held. Nothing here is called while screen share is off.
+/// cancellation), and must leave no input held. The hub calls none of these with its lock held, and survives one that panics (a
+/// panicking watcher probe fails closed). Nothing here is called while screen share is off.
 pub trait ScreenSharePlatform: Send + Sync {
     fn available(&self) -> bool;
     fn displays(&self) -> Vec<ScreenDisplay>;
@@ -75,9 +76,9 @@ pub type DeviceSend = Arc<dyn Fn(String, String) -> BoxFuture<'static, Result<()
 /// C# `confirm`: asks the user whether a device's new control key (its fingerprint) may control this PC. Dropping the future cancels
 /// the question.
 pub type ConfirmKey = Arc<dyn Fn(String, String) -> BoxFuture<'static, bool> + Send + Sync>;
-/// C# `trustedDevice`: whether a device is paired now (`MobileRelayHost.IsTrustedDevice`).
+/// C# `trustedDevice`: whether a device is paired now (`MobileRelayHost.IsTrustedDevice`). Called without the hub's lock.
 pub type TrustedDevice = Arc<dyn Fn(&str) -> bool + Send + Sync>;
-/// C# `now`.
+/// C# `now`. Called with the hub's lock held: it must not call back into the hub.
 pub type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 type Changed = Arc<dyn Fn() + Send + Sync>;
 
@@ -403,6 +404,11 @@ impl Inner {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// `platform.Halt()` in C#'s `try { } catch { }`: a failing or panicking gate never stops a teardown.
+    fn halt(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.platform.halt()));
+    }
+
     fn sessions(&self) -> Vec<ScreenLiveSession> {
         self.lock().sessions.values().map(|s| s.value.clone()).collect()
     }
@@ -451,12 +457,13 @@ impl Inner {
     }
 
     async fn set_grant(self: &Arc<Self>, device: &str, allowed: bool, grant: &str) -> io::Result<()> {
+        let trusted = (self.trusted)(device);
         let stopped: Vec<String> = {
             let mut state = self.lock();
             if state.disposed {
                 return Err(io::Error::other("The screen share hub is disposed."));
             }
-            if !(self.trusted)(device) || !client_id(device) || !matches!(grant, "none" | "view" | "control") {
+            if !trusted || !client_id(device) || !matches!(grant, "none" | "view" | "control") {
                 return Err(io::Error::new(io::ErrorKind::InvalidInput, "Invalid device grant."));
             }
             let prior = state.grants.get(device);
@@ -515,12 +522,12 @@ impl Inner {
         Ok(())
     }
 
-    /// `Require`: the device's grant when it allows `mode`.
-    fn require(&self, state: &State, device: &str, mode: &str) -> std::result::Result<ScreenDeviceGrant, Refusal> {
+    /// `Require`: the device's grant when it allows `mode` (`trusted`: whether the device is paired, read before the hub's lock).
+    fn require(state: &State, device: &str, trusted: bool, mode: &str) -> std::result::Result<ScreenDeviceGrant, Refusal> {
         if device == "legacy" || !client_id(device) {
             return refuse("legacy-client");
         }
-        let Some(grant) = state.grants.get(device).filter(|g| (self.trusted)(device) && g.allowed) else {
+        let Some(grant) = state.grants.get(device).filter(|g| trusted && g.allowed) else {
             return refuse("device-not-allowed");
         };
         if !policy::grant_allows(Some(grant), mode) {
@@ -570,8 +577,9 @@ impl Inner {
     }
 
     fn state_reply(&self, device: &str) -> std::result::Result<MobileReply, Refusal> {
+        let (trusted, displays) = ((self.trusted)(device), self.platform.displays());
         let mut state = self.lock();
-        let grant = if (self.trusted)(device) { state.grants.get(device).cloned() } else { None };
+        let grant = if trusted { state.grants.get(device).cloned() } else { None };
         let key = match grant.as_ref().and_then(|g| g.control_key_public.as_deref()) {
             Some(text) => Some(from_base64(text).map_or_else(bad_request, Ok)?),
             None => None,
@@ -585,7 +593,7 @@ impl Inner {
         out.prop_str("grant", Some(grant.as_ref().map_or("none", |g| g.grant.as_str())));
         out.prop_bool("isBeta", true);
         out.name("displays");
-        wire::write_displays(&mut out, &self.platform.displays());
+        wire::write_displays(&mut out, &displays);
         out.prop_str("controlChallengeB64", challenge.as_deref());
         out.prop_str("controlKeyFingerprint", key.as_deref().map(policy::fingerprint).as_deref());
         out.name("iceServers");
@@ -599,6 +607,7 @@ impl Inner {
     }
 
     fn start_session(self: &Arc<Self>, device: &str, value: &Value) -> std::result::Result<MobileReply, Refusal> {
+        let (trusted, safety, displays) = ((self.trusted)(device), self.platform.safety(), self.platform.displays());
         let live = {
             let mut state = self.lock();
             let mode = json::text(value, "mode").filter(|m| matches!(*m, "view" | "control"));
@@ -606,8 +615,7 @@ impl Inner {
             let (Some(mode), Some(network), Some(display_id)) = (mode, network, int32(value, "displayId")) else {
                 return bad_request();
             };
-            let grant = self.require(&state, device, mode)?;
-            let safety = self.platform.safety();
+            let grant = Self::require(&state, device, trusted, mode)?;
             if safety.locked || safety.secure_input || state.confirming {
                 return refuse(if safety.locked { "lock-screen" } else { "secure-input" });
             }
@@ -628,7 +636,6 @@ impl Inner {
             if !policy::can_join(mode, joined) || state.sessions.values().any(|s| s.value.device_id == device) {
                 return refuse("concurrency-limit");
             }
-            let displays = self.platform.displays();
             let Some(mut display) = policy::display_for(&displays, display_id) else { return refuse("screen-permission") };
             // One capture serves every phone: a phone that joins sees the display already captured (M/MightyCore/Remote/
             // ScreenShareEngine.swift:457).
@@ -710,9 +717,10 @@ impl Inner {
             return bad_request();
         }
         let fingerprint = policy::fingerprint(&key);
+        let trusted = (self.trusted)(device);
         let before = {
             let mut state = self.lock();
-            let before = self.require(&state, device, "control")?;
+            let before = Self::require(&state, device, trusted, "control")?;
             if let Some(prior) = before.control_key_public.as_deref() {
                 let Some(prior) = from_base64(prior) else { return bad_request() };
                 if prior != key {
@@ -733,9 +741,10 @@ impl Inner {
         // `finally { confirming = false; }`, also when the route's future is dropped while the user is asked.
         let confirming = Confirming(self.clone());
         let approved = (self.confirm)(device.to_string(), fingerprint.clone()).await;
+        let trusted = (self.trusted)(device);
         let saved = {
             let mut state = self.lock();
-            match self.require(&state, device, "control") {
+            match Self::require(&state, device, trusted, "control") {
                 Err(refusal) => Err(refusal),
                 Ok(current) if current != before => refuse("control-key-not-confirmed"),
                 Ok(_) if !approved => {
@@ -790,12 +799,12 @@ impl Inner {
     /// `MayControl`: the session is live, is a control session of a paired device whose grant still allows control, no key waits for
     /// the user, the PC is unlocked with no password field focused, and its own input was more than two seconds ago.
     fn may_control(&self, session_id: &str, mode: &str, device: &str) -> bool {
-        let safety = self.platform.safety();
+        let (safety, trusted) = (self.platform.safety(), (self.trusted)(device));
         let state = self.lock();
         state.sessions.contains_key(session_id)
             && mode == "control"
             && policy::grant_allows(state.grants.get(device), "control")
-            && (self.trusted)(device)
+            && trusted
             && !state.confirming
             && !safety.locked
             && !safety.secure_input
@@ -828,9 +837,9 @@ impl Inner {
         }
         if kind == "zoom" || kind == "display" {
             {
-                let safety = self.platform.safety();
+                let (safety, trusted) = (self.platform.safety(), (self.trusted)(device));
                 let state = self.lock();
-                if !(self.trusted)(device)
+                if !trusted
                     || !policy::grant_allows(state.grants.get(device), mode)
                     || state.confirming
                     || safety.locked
@@ -907,13 +916,14 @@ impl Inner {
             session.cancel.cancel();
         }
         // Each peer is closed even when the native gate failed.
-        let _ = self.platform.halt();
+        self.halt();
         let mut each = JoinSet::new();
         for session in stopped {
             let (inner, reason) = (self.clone(), reason.to_string());
             each.spawn(async move { inner.close_session(session.value, &reason, killed).await });
         }
-        each.join_all().await;
+        // One teardown that panics neither cancels the others nor stops this one (`join_all` would do both).
+        while each.join_next().await.is_some() {}
         self.changed();
     }
 
@@ -988,13 +998,17 @@ impl Inner {
     /// told, best effort: a revoked phone may stop reading its relay socket on purpose.
     async fn close_session(&self, session: ScreenLiveSession, reason: &str, killed: bool) {
         let id = session.session_id;
-        let closed = timeout(Duration::from_secs(1), async {
-            let (stopped, released) = tokio::join!(self.platform.stop_peer(id.clone()), self.platform.release_buttons(id.clone()));
+        // On a task of its own: a platform that fails, panics or hangs here halts the pixel gate instead (C#'s faulted teardown).
+        let platform = self.platform.clone();
+        let (peer, buttons) = (id.clone(), id.clone());
+        let mut teardown = tokio::spawn(async move {
+            let (stopped, released) = tokio::join!(platform.stop_peer(peer), platform.release_buttons(buttons));
             stopped.is_ok() && released.is_ok()
-        })
-        .await;
-        if closed != Ok(true) {
-            let _ = self.platform.halt();
+        });
+        let closed = timeout(Duration::from_secs(1), &mut teardown).await;
+        if !matches!(closed, Ok(Ok(true))) {
+            teardown.abort();
+            self.halt();
         }
         let _ = timeout(Duration::from_secs(1), (self.send)(session.device_id, wire::session_end(killed, &id, reason))).await;
     }
@@ -1042,19 +1056,30 @@ impl Inner {
 
     /// `Watch`: every 250 ms, a locked PC or a focused password field kills every session at once; otherwise a session ends 30 s
     /// into the background (`background`), 30 s without its peer connecting (`peer-left`), or idle 600 s (control) or 1800 s (view)
-    /// (`idle-timeout`).
+    /// (`idle-timeout`). A tick that panics (a platform probe, a callback) fails closed, as C#'s catch does: every session is killed
+    /// as `secure-input`, and the watcher goes on.
     async fn watch(self: Arc<Self>) {
         loop {
             tokio::select! {
                 _ = self.lifetime.cancelled() => return,
                 _ = tokio::time::sleep(Duration::from_millis(250)) => {}
             }
+            let tick = tokio::spawn(self.clone().tick()).await;
+            if tick.is_err_and(|error| error.is_panic()) {
+                let inner = self.clone();
+                let _ = tokio::spawn(async move { inner.end_all("secure-input", true).await }).await;
+            }
+        }
+    }
+
+    async fn tick(self: Arc<Self>) {
+        {
             let safety = self.platform.safety();
             if safety.locked || safety.secure_input {
                 if !self.lock().sessions.is_empty() {
                     self.end_all(if safety.locked { "lock-screen" } else { "secure-input" }, true).await;
                 }
-                continue;
+                return;
             }
             let expired: Vec<(String, &'static str)> = {
                 let now = (self.now)();
