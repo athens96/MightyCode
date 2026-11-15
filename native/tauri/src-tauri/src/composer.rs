@@ -102,7 +102,7 @@ fn with_menu_inputs<T>(host: &Host, view: &View, pane: &RunSession, read: impl F
 
 /// C# `StartFromComposer`: the pane's request with `text` and `files` through the run service. Ok(Some(entry id, graph run id)) when
 /// it started, Ok(None) when it was stopped before it started. `continuation`: a queued Antigravity card's rules and card.
-async fn start_run(
+pub(crate) async fn start_run(
     host: &Arc<Host>,
     id: &str,
     text: &str,
@@ -634,7 +634,7 @@ fn switch_provider(host: &Host, pane: &RunSession, provider: &str) -> RunSession
 }
 
 /// C# `ResetConversationAsync` (MainWindow.WorkflowParity.cs:35): a pane at rest forgets its CLI conversation; false otherwise.
-fn reset_conversation(host: &Host, view: &mut View, id: &str) -> Result<bool, String> {
+pub(crate) fn reset_conversation(host: &Host, view: &mut View, id: &str) -> Result<bool, String> {
     if !panes::alive(view, id) {
         return Ok(false);
     }
@@ -1207,7 +1207,7 @@ pub fn register(methods: &mut Registry) {
 }
 
 /// C# `RunNowRows` for a pane with a view.
-fn run_now_rows(host: &Host, view: &mut View, id: &str) -> Vec<(String, QueueRunNowPath)> {
+pub(crate) fn run_now_rows(host: &Host, view: &mut View, id: &str) -> Vec<(String, QueueRunNowPath)> {
     let Some(pane) = view.snapshot.session(id).cloned() else { return vec![] };
     let workspace = view.snapshot.workspace(pane.workspace_id()).cloned();
     let runs = host.runs();

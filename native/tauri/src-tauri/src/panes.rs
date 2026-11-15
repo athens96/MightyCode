@@ -235,6 +235,30 @@ pub fn cards_of(host: &Host, view: &mut View, id: &str) -> Option<(Vec<Card>, bo
     let antigravity = crate::antigravity::card_input(host, id);
     // The agents' open_url prompts (agent_io.rs, W7-C).
     let web_open = crate::agent_io::web_open_cards(host, id);
+    // The background strip's rows (C# `PlanCardSupport.BackgroundStripRows`, mighty-graph's `view::mobile`), read only while it is open;
+    // the background output tails are W9's (none read yet).
+    let now = mighty_core::time::DateTimeOffset::now();
+    let background_rows: Vec<cards::BackgroundTask> = if background_open {
+        mighty_graph::view::mobile::background_strip_rows(
+            pane.background_work.as_ref(),
+            mighty_graph::support::newest_request_run(pane.graph_runs()),
+            None,
+            &host.locale,
+        )
+        .into_iter()
+        .map(|row| cards::BackgroundTask {
+            text: row.task.text.clone(),
+            status: row.task.status.clone(),
+            detail: row.detail(now, &host.locale),
+            tail: row.tail.clone(),
+            id: row.id.clone(),
+            command: row.command.clone(),
+            tail_lines: (!row.tail_lines.is_empty()).then(|| row.tail_lines.clone()),
+        })
+        .collect()
+    } else {
+        vec![]
+    };
     let inputs = CardInputs {
         locale: host.locale,
         utc_offset_minutes: utc_offset_minutes(),
@@ -246,7 +270,7 @@ pub fn cards_of(host: &Host, view: &mut View, id: &str) -> Option<(Vec<Card>, bo
         requests: &requests,
         plan_draft: ui.plan_draft.as_ref(),
         background_open,
-        background_rows: &[],
+        background_rows: &background_rows,
         antigravity: antigravity.as_ref(),
         terminal_prompt: terminal_prompt.as_ref(),
         web_open: &web_open,

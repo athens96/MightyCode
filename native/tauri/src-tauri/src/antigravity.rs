@@ -4,6 +4,10 @@
 //! continuation on the pane's conversation now, or queues it behind a busy pane, with the card's rules put in place while that run goes
 //! (이번만 허용) or for good (항상 허용) — the rules agy's settings get only when the user presses one of them.
 //!
+//! The phone answers the same card (phone.rs, W8-B): it is one of the detail's `permissions` (mighty-remote's
+//! `MobilePermission::from_antigravity`, `MobileAntigravityCard`), and `POST …/permission` with `allow`/`always` reaches [`answer`] as the
+//! pane's own buttons do; what comes back is the phone's reason.
+//!
 //! agy's settings and the app's ledger (`DesktopService.AntigravityRules`) are made here for the run service: the user's own settings,
 //! the ledger in the profile with `--allow-state-write`, else in this machine's local folder for the profile.
 

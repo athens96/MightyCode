@@ -18,8 +18,6 @@ use crate::presentation::{self, ToolPermissionPresentation, UserQuestionnaire, b
 pub enum Pending {
     /// The pane's tool permissions and questions (`toolPermissions`, the run engine's channel, W2).
     Requests,
-    /// The background strip's rows (`PlanCardSupport.BackgroundStripRows`: the style engine's task list and the graph's blocks, W3/W9).
-    BackgroundRows,
     /// A terminal prompt (`terminalPrompts`, W4).
     TerminalPrompt,
     /// `loginRetries`, `loginJobs`, `loginFailures`, `loginNotes`, `accountLoginWaits` (login recovery, W6).
@@ -30,8 +28,7 @@ pub enum Pending {
     Style,
 }
 
-pub const PENDING: [Pending; 6] =
-    [Pending::Requests, Pending::BackgroundRows, Pending::TerminalPrompt, Pending::Login, Pending::StatusLine, Pending::Style];
+pub const PENDING: [Pending; 5] = [Pending::Requests, Pending::TerminalPrompt, Pending::Login, Pending::StatusLine, Pending::Style];
 
 /// C# `ToolPermissionRequest` (ToolPermissions.cs:12): the run engine's request, one definition in mighty-core.
 pub use mighty_core::permission::ToolPermissionRequest as PermissionRequest;
@@ -49,7 +46,8 @@ pub struct PlanDraft {
     pub error: Option<String>,
 }
 
-/// One background strip row as `PlanCardSupport.BackgroundStripRows` gives it (W3/W9), already said: kind · status · elapsed.
+/// One background strip row as `PlanCardSupport.BackgroundStripRows` gives it (mighty-graph `view::mobile::background_strip_rows`, the
+/// host's panes.rs), already said: kind · status · elapsed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundTask {

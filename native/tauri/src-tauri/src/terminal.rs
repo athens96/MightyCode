@@ -47,11 +47,9 @@ pub enum Pending {
     /// A command the app types into a new shell pane (C# `RunTerminalCommandAsync`: style installs, sign-ins; W6/W9): the pane is
     /// frame.rs's `add_pane`, and [`TerminalPane::write`] with `TerminalInput::apply` is its typing.
     RunTerminalCommand,
-    /// The phone's view of a shell's status and of a terminal prompt (C# `mobileRouter.Changed`, `mobilePush`; W8).
-    Mobile,
 }
 
-pub const PENDING: [Pending; 2] = [Pending::RunTerminalCommand, Pending::Mobile];
+pub const PENDING: [Pending; 1] = [Pending::RunTerminalCommand];
 
 /// C# `ShowTerminalHistory` (MainWindow.WorkflowParity.cs:10-23, dialog D14): the pane's saved entries in the panel `terminalHistory`
 /// (its help dimmed over the entries, 11pt code, selectable, at most 360 high), closed with its ✕; the window holds its dialog
@@ -234,12 +232,28 @@ impl PaneEvents for HostEvents {
 /// then the page's copy taken again.
 fn change_shell_status(host: &Arc<Host>, pane: &str, change: impl FnOnce(&RunSession) -> Option<(RunSession, bool)>) {
     let Some(runs) = host.runs() else { return };
-    let changed = runs
-        .service
-        .update_pane(pane, |session| change(session).map(|(next, now)| (next, if now { PaneSave::Now } else { PaneSave::Later })));
+    let mut status = None;
+    let changed = runs.service.update_pane(pane, |session| {
+        change(session).map(|(next, now)| {
+            status = (next.status() != session.status()).then(|| next.status().to_string());
+            (next, if now { PaneSave::Now } else { PaneSave::Later })
+        })
+    });
     if changed {
         host.view().sync();
         host.schedule();
+        // C# `ShellStatusChanged` (MainWindow.Terminal.cs:62): the push hub hears a shell's run begin (`Began`) or move (`Changed`), and
+        // the phone router that the pane moved; a shell's status never comes through the run service's events.
+        crate::mobile::noted(host, Some(shell_push_note(pane, status.as_deref())));
+        crate::phone::changed(host);
+    }
+}
+
+/// What a shell's status change tells the push hub: a run that began, or something that moved.
+fn shell_push_note(pane: &str, status: Option<&str>) -> crate::mobile::PushNote {
+    match status {
+        Some("running") => crate::mobile::PushNote::Began(pane.to_string()),
+        _ => crate::mobile::PushNote::Changed,
     }
 }
 
@@ -571,16 +585,22 @@ impl Terminals {
 
     /// The page redraws the pane's cards.
     fn prompt_changed(&self, pane: &str) {
-        if let Some(host) = self.host.upgrade()
-            && let Some(ui) = host.view().panes.get_mut(pane)
-        {
+        let Some(host) = self.host.upgrade() else { return };
+        if let Some(ui) = host.view().panes.get_mut(pane) {
             ui.dirty = true;
         }
+        // A card that comes, changes or goes moves the pane on the phone (C# `mobileRouter?.Changed()`), outside the view's lock.
+        crate::phone::changed(&host);
+    }
+
+    /// The card of the command waiting for input in `pane`'s terminal (C# `terminalPrompts`), as the phone's detail carries it.
+    pub fn prompt(&self, pane: &str) -> Option<TerminalPrompt> {
+        lock(&self.prompts).current.get(pane).cloned()
     }
 
     /// C# `AnswerTerminalPrompt`: the answer goes to the waiting command, and the card goes until it asks again. A card is taken for
     /// its answer once (a second answer of it, or a poll that found it before, never types again). Whether it was typed.
-    fn answer_prompt(&self, pane: &str, prompt_id: &str, answer: &TerminalPromptAnswer) -> bool {
+    pub fn answer_prompt(&self, pane: &str, prompt_id: &str, answer: &TerminalPromptAnswer) -> bool {
         let Some(terminal) = lock(&self.agents).get(pane).cloned() else { return false };
         let Some(prompt) = lock(&self.prompts).take_answer(pane, prompt_id) else { return false };
         self.prompt_changed(pane);
@@ -963,11 +983,25 @@ mod tests {
         assert!(prompts.commit(HashMap::new(), &HashSet::new()) == ["agent"] && prompts.answered.is_empty(), "a closed pane's go");
     }
 
+    /// C# `ShellStatusChanged` (MainWindow.Terminal.cs:62; "a shell's run between two ticks"): a shell going to running tells the push hub
+    /// it began, so a run that starts and ends between two of its reads still pushes; any other change says only that something moved.
+    #[test]
+    fn a_shells_run_between_two_ticks_reaches_the_push_hub() {
+        assert!(matches!(shell_push_note("shell", Some("running")), crate::mobile::PushNote::Began(id) if id == "shell"));
+        for status in [Some("completed"), Some("error"), Some("idle"), None] {
+            assert!(matches!(shell_push_note("shell", status), crate::mobile::PushNote::Changed), "{status:?}");
+        }
+    }
+
     #[test]
     fn a_working_folder_is_a_full_path() {
         assert!(is_working_folder(if cfg!(windows) { "C:\\work\\child" } else { "/work/child" }));
         assert!(!is_working_folder("relative\\child") && !is_working_folder("a\0b") && !is_working_folder(&"x".repeat(4097)));
-        assert_eq!(PENDING, [Pending::RunTerminalCommand, Pending::Mobile], "the agents' tools are served now (agent_io.rs, W7-C)");
+        assert_eq!(
+            PENDING,
+            [Pending::RunTerminalCommand],
+            "the agents' tools are served (agent_io.rs, W7-C) and the phone reads a shell's status and prompt (W8-B)"
+        );
     }
 
     /// D14 against C#'s capture (`mighty-native/tests/golden/terminal-history.json`, plan W6 §1.8): C#'s web smoke's shell pane

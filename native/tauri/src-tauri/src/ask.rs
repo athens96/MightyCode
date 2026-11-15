@@ -2,7 +2,8 @@
 //! another installed CLI asked through oh-my-claudecode's ask skill (mighty-composer `ask_targets`). Which target executables this
 //! computer has is read off the page's thread with the slash catalogue, at most every 30 s; whether a pane's catalogue has the skill
 //! is noted by each scan (`SlashCatalogCache`). A saved choice that is no longer offered reads as Claude, and the pane says so once.
-//! The phone's side of the switch is W8's.
+//! The phone's side of the switch (phone.rs, W8-B): the detail's `askTargets`/`askTarget` from [`targets_for`], and `setAskTarget`
+//! through [`set_target`] after the target is checked against the ones the pane offers.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};

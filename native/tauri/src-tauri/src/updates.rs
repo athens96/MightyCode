@@ -296,9 +296,11 @@ fn draining(view: &View, activity: &UpdateActivity) -> Vec<String> {
 }
 
 /// C# `NotifyAutomaticUpdates`: every pane's composer looked at again — each `BackgroundUpdateChanged`: a pane with queued requests
-/// that nothing holds any more drains them —, the CLI 업데이트 box drawn again (the phone's notice is W8).
+/// that nothing holds any more drains them —, the CLI 업데이트 box drawn again, and the phone told the panes moved
+/// (`mobileRouter?.Changed()`).
 pub fn notify(host: &Arc<Host>) {
     crate::panes::mark_all(host);
+    crate::phone::changed(host);
     if let Some(updates) = of(host)
         && !host.closing()
     {

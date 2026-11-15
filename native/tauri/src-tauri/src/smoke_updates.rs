@@ -14,7 +14,7 @@
 //!   (`WindowIsARealWinUISurfaceWiredIntoTheApp`), `pluginMarketplaceWired` (`WindowIsWiredIntoTheRunningAppAndTheSmokeRun`),
 //!   `pluginOperationsOwned` (the WinUI half of `TheRunningAppOwnsTheOperationsObject`).
 //! - `automaticUpdates` (`RunAutomaticUpdatesSmoke`), host-side over the live seams and the composer's model: the plugin switch's
-//!   default and its write, an automatic update holding only its provider's local pane (the phone's half is W8), requests queued
+//!   default and its write, an automatic update holding only its provider's local pane (its phone half through the m1 router: a phone send queued under the hold, refused under a manual update or plugin change), requests queued
 //!   under the hold kept and drained in order once it is released, the page's `stop` dropping a held request, a manual update
 //!   blocking only its provider without consuming the draft or the queue, a manual plugin change blocking Claude and Codex. A queue's
 //!   drain is a stand-in that records the pane (C#'s `smokeStart`), so nothing queued here ever starts a CLI.
@@ -469,6 +469,18 @@ fn composer_draft(host: &Host, id: &str) -> String {
     host.view().panes.get(id).map(|ui| ui.view.draft.clone()).unwrap_or_default()
 }
 
+/// A phone's submit to the pane through the m1 router in-process: the status it answered (202 taken, 409 refused), or None when the
+/// route did not reach the pane.
+async fn phone_submit(host: &Arc<Host>, id: &str, text: &str) -> Option<u16> {
+    let reply = crate::phone::route(host, "POST", &format!("/m1/sessions/{id}/submit"), Some(json!({"text": text}))).await;
+    let answer: Value = serde_json::from_str(&reply.body).ok()?;
+    match reply.status {
+        202 => (answer["outcome"] == "queued").then_some(202),
+        409 => Some(409),
+        _ => None,
+    }
+}
+
 fn set_draft(host: &Host, id: &str, draft: &str) {
     if let Some(ui) = host.view().panes.get_mut(id) {
         ui.view.draft = draft.to_string();
@@ -538,7 +550,15 @@ async fn automatic(host: &Arc<Host>) -> Result<Value, String> {
     // idle update; releasing the update drains them, in the order they came (C#: "Releasing an update must schedule queued input
     // draining", "Released local and mobile inputs must retain FIFO order").
     updates.automatic.set_holding(Some("claude"), false);
-    let enqueued = enqueue(host, &id, "local held instruction") && enqueue(host, &id, "mobile held instruction");
+    let local = enqueue(host, &id, "local held instruction");
+    // A phone send to a held pane is queued whatever mode it asked for, and the desktop composer's draft is left as it is (the m1
+    // router in-process, C#'s `MobileSubmit`).
+    let desktop_draft = composer_draft(host, &id);
+    set_draft(host, &id, "desktop draft");
+    let phone = phone_submit(host, &id, "mobile held instruction").await;
+    let draft_kept = composer_draft(host, &id) == "desktop draft";
+    set_draft(host, &id, &desktop_draft);
+    let enqueued = local && phone == Some(202) && draft_kept;
     crate::updates::notify(host);
     let held_drains = drains(&drained);
     let admits =
@@ -598,6 +618,8 @@ async fn automatic(host: &Arc<Host>) -> Result<Value, String> {
         )
     };
     let (_, can_send, _) = composer_of(host, &id);
+    // A blocked phone request is refused before the queue takes it.
+    let phone_refused = phone_submit(host, &id, "keep blocked phone request").await == Some(409) && queued(host, &id).is_empty();
     let held_queue = enqueue(host, &id, "keep blocked queued request");
     crate::updates::notify(host);
     let blocked_drains = drains(&drained);
@@ -616,6 +638,7 @@ async fn automatic(host: &Arc<Host>) -> Result<Value, String> {
             && claude_block.is_some()
             && codex_block.is_none()
             && !can_send
+            && phone_refused
             && held_queue
             && blocked_drains == released_drains
             && kept
@@ -639,12 +662,13 @@ async fn automatic(host: &Arc<Host>) -> Result<Value, String> {
         ["claude", "codex", "gemini"].map(|p| crate::updates::manual_block(host, &view.snapshot, &as_provider(&pane, p)).is_some())
     };
     let (_, plugin_can_send, _) = composer_of(host, &id);
+    let plugin_phone_refused = phone_submit(host, &id, "keep blocked phone request").await == Some(409) && queued(host, &id).is_empty();
     stop.cancel();
     let _ = install.await;
     reader.shutdown();
     crate::updates::notify(host);
     report["manualPluginMutationBlocksBothProviders"] =
-        json!(running && blocks == [true, true, false] && !plugin_can_send && !updates.operations.is_running());
+        json!(running && blocks == [true, true, false] && !plugin_can_send && plugin_phone_refused && !updates.operations.is_running());
 
     clear_queue(host, &id);
     updates.set_drain_hook(None);

@@ -9,8 +9,8 @@
 //! `phoneSendReleasedHeldNotice`, `heldNoticeReceipt`, `secondSendNewWorktree`, `removeRefusedOpenChild`, `windowParentCloseAsks`,
 //! `phoneParentCloseKeepsChild`, `removeRefusedKeptWorktree`, `removedAfterDiscard`, `otherAgentChildStarted`, and the Rust-only
 //! `delegateTool`: the fake Claude parent calls `mcp__mighty-delegation__delegate` through the real exe mode and the real pipe, and the
-//! child appears. The `phone*` keys call what the phone router will call (W7 plan D8: the close without its question, the send that
-//! releases held items). Every git step targets the fixture in the smoke's own folder (its profile, or one of its own in a read-only smoke:
+//! child appears. The `phone*` keys go through the m1 router in-process from the smoke's own device (W8 plan D16, phone.rs `route`):
+//! the close without its question, the submit that releases held items. Every git step targets the fixture in the smoke's own folder (its profile, or one of its own in a read-only smoke:
 //! `delegation::may_touch`); nothing reaches
 //! `%USERPROFILE%\.mightycode`.
 
@@ -22,7 +22,6 @@ use mighty_core::model::{RunSession, RunSettings};
 use mighty_core::wire;
 use mighty_delegation::app::DelegationApp;
 use mighty_delegation::cards::DelegationCardResult;
-use mighty_delegation::delivery::DelegationRelease;
 use mighty_delegation::git::cleanup::{ChildCleanupHold, ChildCleanupOutcome};
 use mighty_delegation::git::worktree::{ChildWorktreeBase, ChildWorktreeCheck, ChildWorktreeOutcome, Maker, report_file_in};
 use mighty_delegation::git::{Git, branch_name};
@@ -157,6 +156,12 @@ fn add_parent(host: &Arc<Host>, folder: &Path, provider: &str, mode: &str, title
 }
 
 /// A merged child closed: its worktree and branch went, its merge record stayed (C# `DelegationSmokeCleaned`).
+/// The phone's close of a pane through the m1 router (W8 plan D16): it never asks, a parent with open children included.
+async fn phone_close(host: &Arc<Host>, pane: &str) -> Result<(), String> {
+    let reply = crate::phone::route(host, "POST", &format!("/m1/sessions/{pane}/close"), None).await;
+    require(reply.status == 200, &format!("the phone's close of {pane} answered {} {}", reply.status, reply.body))
+}
+
 async fn cleaned(app: &DelegationApp, runner: &Git, repo: &Path, id: &str) -> Result<bool, String> {
     let outcome = wait("the merged child's close", 30, || app.child_close(id)).await?;
     let file = app.coordinator().map(|c| c.file()).unwrap_or_default();
@@ -399,18 +404,20 @@ async fn steps(
     host.log.line("smoke: delegation: 2. So is one closed from the phone (its close never asks).");
     // 2. So is one closed from the phone (its close never asks).
     merge(app, &b).await?;
-    app.close_session(&b, || {}).await.map_err(|e| e.to_string())?;
+    phone_close(host, &b).await?;
     checks.insert("phoneCloseMergedChild".into(), json!(cleaned(app, runner, repo, &b).await?));
     require(git(runner, repo, &["rev-parse", "main"]).await? == heads[1], "main is not at child B's head after both merges")?;
 
     host.log.line("smoke: delegation: 3. A phone send to the idle parent releases C's held notice ");
     // 3. A phone send to the idle parent releases C's held notice ahead of its text, in one run.
     let text = "Carry on with what the third child reported.";
-    let mut request = mighty_run::model::StartRunRequest::new(&parent, &workspace, "claude", text);
-    request.provider = "claude".into();
-    request.settings = Some(RunSettings { permission_mode: mode.into(), ..RunSettings::default() });
-    let release = app.send(request).await.map_err(|e| e.to_string())?;
-    require(matches!(release, DelegationRelease::Released { .. }), "the phone send released nothing")?;
+    // Through the m1 router as a phone's submit (W8 plan D16): a send that released held items answers started, without ids.
+    let reply = crate::phone::route(host, "POST", &format!("/m1/sessions/{parent}/submit"), Some(json!({"text": text}))).await;
+    let answer: Value = serde_json::from_str(&reply.body).unwrap_or(Value::Null);
+    require(
+        reply.status == 202 && answer["outcome"] == "started" && answer.get("entryId").is_none(),
+        &format!("the phone send released nothing: {} {}", reply.status, reply.body),
+    )?;
     let delivered = wait("C's notice delivered", 60, || {
         app.coordinator()?
             .file()
@@ -547,7 +554,7 @@ async fn steps(
 
     host.log.line("smoke: delegation: 6. From the phone it closes only the parent at once: C stays");
     // 6. From the phone it closes only the parent at once: C stays open, listed under a 'parent closed' node.
-    app.close_session(&parent, || {}).await.map_err(|e| e.to_string())?;
+    phone_close(host, &parent).await?;
     let snapshot = host.view().snapshot.clone();
     let rows = app.rows();
     let tree = mighty_core::shell::delegation_tree(&workspace, &snapshot, &rows);
