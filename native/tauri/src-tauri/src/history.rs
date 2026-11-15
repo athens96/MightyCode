@@ -455,6 +455,7 @@ mod tests {
                 workspace_id: Some("w".into()),
                 host_name: Some("mac".into()),
                 version: 2,
+                mirror: false,
             }),
             ..local.clone()
         };

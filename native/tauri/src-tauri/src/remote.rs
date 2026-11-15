@@ -144,6 +144,12 @@ fn existing() -> Option<Arc<RemoteApp>> {
     lock(&APP).clone()
 }
 
+/// The app's remote workspaces when they were made (never makes them): the remote mirror's frame parts read the client through this with
+/// the view's lock held (mirror.rs, W9-J).
+pub fn app_if_made() -> Option<Arc<RemoteApp>> {
+    existing()
+}
+
 impl RemoteApp {
     /// `TailscaleAddresses.Current()`: this PC's Tailscale addresses now (empty while Tailscale is off), Err when no adapter could be
     /// read; loopback in a smoke.
@@ -423,6 +429,10 @@ fn connection_of(workspace: &Workspace) -> Option<RemoteConnectionInfo> {
 /// C# `RemoteWorkspaceFeatures.BlockedReason` for a pane's composer (`WindowRules::remote_block`), read with the state locked.
 pub fn blocked_reason(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) -> Option<String> {
     let _ = host;
+    // A mirrored pane waits for its computer's connection (C# `MirrorBlockedReason`, W9-J).
+    if let Some(mirror) = &pane.mirror {
+        return crate::mirror::blocked_reason(mirror);
+    }
     let workspace = snapshot.workspace(pane.workspace_id()).filter(|w| w.remote.is_some())?;
     features::blocked_reason(Some(workspace), pane, connection_of(workspace).as_ref())
 }
@@ -578,6 +588,7 @@ mod tests {
                 workspace_id: Some("ws-1".into()),
                 host_name: Some("studio-pc".into()),
                 version: 2,
+                mirror: false,
             }),
             ..Workspace::default()
         }

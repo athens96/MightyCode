@@ -72,7 +72,8 @@ pub fn remote_workspaces(host: &Arc<Host>, ui: &mut Ui) -> El {
             .workspaces()
             .iter()
             .filter_map(|w| {
-                let remote = w.remote.as_ref()?;
+                // A mirror's workspace (W9-J) is not one this PC opened itself.
+                let remote = w.remote.as_ref().filter(|r| !r.mirror)?;
                 Some((remote.connection_id.clone()?, remote.workspace_id.clone()?))
             })
             .collect();
@@ -609,11 +610,23 @@ fn connection_row(host: &Arc<Host>, ui: &mut Ui, connection: &RemoteConnectionIn
             )
             .cell(0, 1);
             let (to, connection_id, workspace_id) = (host.clone(), connection.id.clone(), hosted.id.clone());
+            // 보기 shows the host's own panes (the remote mirror, W9-J); a host without the mirror (it answered 404) keeps 열기.
+            let mirrored = crate::mirror::supported(&connection.id);
+            let label = if mirrored {
+                locale.get("remote.mirror.view")
+            } else {
+                locale.get(if listed { "settings.remote.openedButton" } else { "settings.remote.openButton" })
+            };
             let open = ui
                 .settings_push(
-                    ui.button(locale.get(if listed { "settings.remote.openedButton" } else { "settings.remote.openButton" }), move || {
+                    ui.button(label, move || {
                         let (host, connection_id, workspace_id) = (to.clone(), connection_id.clone(), workspace_id.clone());
-                        crate::remote::action(&to, async move { crate::remote::open_workspace(&host, &connection_id, &workspace_id) });
+                        crate::remote::action(&to, async move {
+                            if mirrored && crate::mirror::show_workspace(&host, &connection_id, &workspace_id).await {
+                                return Ok(());
+                            }
+                            crate::remote::open_workspace(&host, &connection_id, &workspace_id)
+                        });
                     })
                     .enabled(!busy),
                     ControlSize::Small,

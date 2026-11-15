@@ -203,6 +203,13 @@ fn add_pane(
     let locale = host.locale;
     let mut view = host.view();
     let workspace = view.snapshot.active_workspace_id.clone().ok_or_else(|| locale.get("window.error.addWorkspaceFirst"))?;
+    // A mirror workspace's new agent pane is made on its computer and shows here at the next read (W9-J, mirror.rs).
+    if crate::mirror::is_mirror_workspace(&view.snapshot, &workspace) {
+        view.shows_dashboard = false;
+        drop(view);
+        crate::mirror::create_pane(host, workspace, kind.to_string(), provider.to_string());
+        return Ok(false);
+    }
     let remote = view.snapshot.workspace(&workspace).is_some_and(|w| w.remote.is_some());
     if !matches!(kind, "claude" | "shell") && remote {
         return Err(locale.get("remote.windows.workspace.paneUnavailable"));
@@ -360,6 +367,10 @@ async fn pick_resumed_session(
 /// C# `CloseSession` / `ClosePane` / `CloseSessionAsync`: the pane's run stopped and ended (at most ten seconds), then the pane gone.
 /// Delegation's parent-close question and a child's close cleanup come first (delegation.rs, W7-D).
 pub(crate) async fn close_session(host: &Arc<Host>, id: &str) -> Result<(), String> {
+    // A mirrored pane is closed on its computer, as the phone's close does, and leaves here at once (W9-J, mirror.rs).
+    if crate::mirror::close_pane(host, id).await? {
+        return Ok(());
+    }
     if let crate::delegation::CloseDecision::Keep = crate::delegation::before_close(host, id).await {
         return Ok(());
     }
@@ -447,6 +458,10 @@ pub async fn pick_folder_path(host: &Arc<Host>) -> Option<std::path::PathBuf> {
 /// other sheets stay off while its runs stop (nothing is added to a workspace on its way out).
 pub(crate) async fn remove_workspace(host: &Arc<Host>, id: &str) -> Result<(), String> {
     let Some(name) = host.view().snapshot.workspace(id).map(|w| w.name().to_string()) else { return Ok(()) };
+    // A mirror's workspace is its host's, listed while connected: it leaves when the host stops sharing it or the connection goes (W9-J).
+    if crate::mirror::is_mirror_workspace(&host.view().snapshot, id) {
+        return Ok(());
+    }
     // An open delegated child or a kept worktree refuses it before anything is asked (C# `WorkspaceRemovalRefusal`, delegation.rs, W7-D).
     if let Some(refusal) = crate::delegation::removal_refusal(host, id) {
         return Err(refusal);

@@ -171,6 +171,10 @@ pub(crate) fn reset_unavailable_agy_model(host: &Host, id: &str) -> Result<(), S
 /// delegation offers one (`SecondSend` is `Worktree`), and otherwise queues them as Enter does (the menu-only state too: the page has
 /// no worktree-agent menu, W7 plan D7).
 async fn submit(host: &Arc<Host>, id: &str, second: bool) -> Result<SubmitReceipt, String> {
+    // Another computer's pane (the remote mirror, W9-J): the text is its next request there, queued there while it runs.
+    if let Some(sent) = crate::mirror::submit(host, id).await {
+        return sent;
+    }
     // A saved "send to" choice not yet known to stand waits briefly for the pane's catalogue and the PATH read (ask.rs).
     crate::ask::await_targets(host, id).await;
     // Asking another CLI carries the words alone, wrapped once here: staged files stay in the composer.

@@ -571,7 +571,10 @@ impl Host {
             usage: usage.as_ref(),
             companion: companion.as_ref(),
         };
-        shell_model(snapshot, &context, layout_defaults)
+        let mut model = shell_model(snapshot, &context, layout_defaults);
+        // The remote mirror's servers, strips and status words (mirror.rs, W9-J), read with the state locked.
+        crate::mirror::frame(self, snapshot, &mut model);
+        model
     }
 
     /// The frame model, pushed when its JSON changed (`PushWebShellModel`).
