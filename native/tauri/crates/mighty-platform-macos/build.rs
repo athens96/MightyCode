@@ -20,9 +20,19 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", slice.display());
     println!("cargo:rustc-link-lib=static=ghostty");
     println!("cargo:rustc-link-lib=c++");
-    for framework in
-        ["AppKit", "Carbon", "CoreFoundation", "CoreGraphics", "CoreText", "CoreVideo", "Foundation", "IOSurface", "Metal", "QuartzCore"]
-    {
+    for framework in [
+        "AppKit",
+        "Carbon",
+        "CoreFoundation",
+        "CoreGraphics",
+        "CoreText",
+        "CoreVideo",
+        "Foundation",
+        "IOSurface",
+        "Metal",
+        "QuartzCore",
+        "UniformTypeIdentifiers",
+    ] {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
     println!("cargo:rustc-cfg=mighty_ghostty");

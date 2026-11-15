@@ -11,9 +11,9 @@
 use std::sync::Arc;
 
 use mighty_platform::PtyHost;
-use mighty_platform::unsupported::Unsupported;
 
-/// The Mac's `PtyHost` (Unsupported until M-A).
+/// The Mac's `PtyHost`: until M-A's port lands, M-D's minimal `forkpty` host (`terminal_surface::pty`), so the Ghostty view has a
+/// shell to draw. M-A's `MacPtyHost` replaces this line and that module.
 pub fn pty_host() -> Arc<dyn PtyHost> {
-    Arc::new(Unsupported)
+    crate::terminal_surface::pty::pty_host()
 }

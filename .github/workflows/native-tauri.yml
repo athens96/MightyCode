@@ -61,6 +61,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: native/tauri -> target
+      - name: libghostty for the Mac's terminal (M-D; the Mac crate's build.rs links it with MIGHTY_MAC_NATIVE=1)
+        if: matrix.os == 'macos'
+        shell: bash
+        run: |
+          xcframework="$(bash scripts/fetch-ghosttykit.sh "$RUNNER_TEMP/ghosttykit")"
+          echo "MIGHTY_MAC_NATIVE=1" >> "$GITHUB_ENV"
+          echo "MIGHTY_GHOSTTY_XCFRAMEWORK=$xcframework" >> "$GITHUB_ENV"
       - name: Install the page's and the Tauri CLI's packages
         run: |
           npm ci --no-audit --no-fund --prefix native/windows/web
