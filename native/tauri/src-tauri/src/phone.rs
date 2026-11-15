@@ -16,7 +16,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use indexmap::IndexMap;
 use mighty_composer::ask_targets;
@@ -279,12 +279,23 @@ impl Desk {
                 .clone()
         };
         let saved = mighty::saved_runs(&pane);
-        let flow = roles.then(|| mighty::Roles::new(pane.provider() == "claude"));
-        let fan_out = flow.as_ref().is_some_and(|f| f.fan_out);
+        // The background runs' last output lines (tails.rs, `BackgroundOutputFor`), and for the role view the custom agents the blocks
+        // name (`MobileFlowDefinitions`, read off this thread).
+        let tails = crate::tails::output_for(pane.id());
+        let flow = roles.then(|| {
+            let alive = |id: &str| snapshot.session(id).is_some();
+            let definitions =
+                crate::mighty::definitions_for(&PHONE_DEFINITIONS, &host, pane.id(), &saved, root.as_deref(), alive, |host, _| {
+                    // The pane's digest reads them: the phone is told at the next pass.
+                    changed(host);
+                });
+            mighty::Roles { fan_out: pane.provider() == "claude", definitions: (*definitions).clone() }
+        });
         let lookup = StdFiles { ignores_case: cfg!(windows) };
         let runs = mighty::runs(
             &saved,
             &RunsInputs {
+                output_tails: Some(&tails),
                 workspace_root: root.as_deref(),
                 lookup: Some(&lookup),
                 result_files: Some(&memo),
@@ -297,9 +308,9 @@ impl Desk {
         payload.insert("style".into(), json!(mighty::CLI_STYLE));
         payload.insert("styleId".into(), json!(mighty::CLI_STYLE));
         payload.insert("runs".into(), serde_json::from_str(&runs.to_json()).unwrap_or(Value::Array(vec![])));
-        if fan_out {
+        if let Some(flow) = flow.as_ref().filter(|f| f.fan_out) {
             payload.insert("fanOut".into(), json!(true));
-            if let Some(log) = mighty::flow_log(&saved, &HashMap::new(), &l) {
+            if let Some(log) = mighty::flow_log(&saved, &flow.definitions, &l) {
                 payload.insert("log".into(), serde_json::from_str(&log.to_json()).unwrap_or(Value::Null));
             }
         }
@@ -328,7 +339,7 @@ impl Desk {
         crate::ask::refresh_catalog(&host, &snapshot, &pane, true);
         let (targets, effective) = ask_targets_of(&host, &snapshot, &pane);
         let newest = mighty_graph::support::newest_request_run(pane.graph_runs());
-        let background = mighty::mobile_background_work(pane.background_work.as_ref(), newest, None, &l)
+        let background = mighty::mobile_background_work(pane.background_work.as_ref(), newest, Some(&tails), &l)
             .map(|rows| rows.into_iter().map(MobileBackgroundWork::from).collect());
         let queued = queued_rows(&host, pane.id());
         MobilePaneExtras {
@@ -344,6 +355,9 @@ impl Desk {
         }
     }
 }
+
+/// The custom agents read for the phone's role view (C# `mobileFlowDefinitions`), apart from the page's (mighty.rs).
+static PHONE_DEFINITIONS: LazyLock<crate::mighty::DefinitionsCache> = LazyLock::new(crate::mighty::DefinitionsCache::new);
 
 /// The phone's queued rows: delegation's held items first, then the queue, each with what 바로 실행 does on it (`RunNowRows`).
 fn queued_rows(host: &Host, id: &str) -> Vec<MobileQueuedItem> {
@@ -1200,7 +1214,9 @@ impl PhoneDesk for Desk {
             .collect::<Vec<_>>()
             .join("\n");
         let model = |id: &str| mighty_graph::usage_format::short_name(id, Some(&options), true);
-        let naming = Naming { key: &key, title: None, model: Some(&model), tails: None };
+        // The background runs' last output lines (tails.rs): the same map until they change, so the cache can tell.
+        let tails = crate::tails::output_for(pane.id());
+        let naming = Naming { key: &key, title: None, model: Some(&model), tails: Some(&tails) };
         let mut kept = lock(&self.kept);
         let panes: HashSet<String> = snapshot.sessions().iter().map(|p| p.id().to_string()).collect();
         kept.structures.retain(&panes);
@@ -1249,6 +1265,16 @@ impl PhoneDesk for Desk {
             }
             mighty::mobile_background_done(pane.background_work.as_ref()).hash(h);
             prompt.hash(h);
+            // A background run's output lines live in the host's memory, not in the runs: they move the pane through their revision, which
+            // moves at most once per 3 s a pane (tails.rs).
+            crate::tails::phone_revision_for(pane.id()).hash(h);
+            // The custom agents read for the phone's role view: their colours and models.
+            let definitions = PHONE_DEFINITIONS.peek(pane.id());
+            let mut kinds: Vec<&String> = definitions.keys().collect();
+            kinds.sort_unstable();
+            for kind in kinds {
+                (kind, &definitions[kind].color, &definitions[kind].model).hash(h);
+            }
         });
         Some(MobilePaneDigest { editable: !busy(&host, pane.id()), options, mighty })
     }

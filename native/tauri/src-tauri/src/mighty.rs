@@ -5,25 +5,27 @@
 //! page's thread and handed back (`LookThroughResultFiles`); a step's pictures and a log picture are read from the picture cache, the
 //! workspace or the inline data (`mightyImages`, `imageData`).
 //!
-//! The session record's older requests and the history block's words come from history.rs (`mightyLoadOlder` reads the next chunk).
-//! What lives in later stages comes in empty (`Sources`): the Ouroboros dashboard (`NoDashboard`), the background output tails, the
-//! custom agents' definitions and the guided style (W9).
+//! The session record's older requests and the history block's words come from history.rs (`mightyLoadOlder` reads the next chunk); the
+//! background runs' last output lines from tails.rs (`BackgroundOutputFor`); the background Ouroboros executions' blocks from
+//! ouroboros.rs (`WatchOuroboros`, `mightyOpenDashboard`); the custom agents the blocks name are read off the page's thread
+//! ([`definitions_for`], C# `FlowDefinitions`). The guided style comes in empty (W9-D's).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use mighty_composer::images as pictures;
-use mighty_core::graph::GraphBlockSize;
+use mighty_core::graph::{GraphBlockSize, MightyGraphRun};
 use mighty_core::model::RunSession;
+use mighty_graph::agent_definitions::{self, AgentDefinition, DiskFiles};
 use mighty_graph::images::AgentImageLocation;
 use mighty_graph::result_files::{self, StdFiles};
-use mighty_graph::view::{MightyPane, MightyProjection, NoDashboard, Sources, project};
-use mighty_graph::view_model;
+use mighty_graph::view::{MightyPane, MightyProjection, Sources, project};
+use mighty_graph::{layout, ouroboros_execution, view_model};
 use serde_json::{Value, json};
 
 use crate::composer::{change, session};
-use crate::host::{Host, Registry, View};
+use crate::host::{Host, Registry, View, lock};
 use crate::methods::{flag, number, text};
 use crate::panes::{self, ensure};
 
@@ -54,8 +56,84 @@ fn image_url(data: Option<Vec<u8>>, media_type: &str) -> Option<String> {
     crate::files::web_image_url(data.filter(|d| !d.is_empty() && d.len() <= IMAGE_LIMIT), media_type)
 }
 
+/// The custom agents read for each pane's blocks, kept until their types or folder change (C# `flowDefinitions`, `flowDefinitionsKey`).
+/// The definitions found, by agent type.
+pub type Definitions = Arc<HashMap<String, AgentDefinition>>;
+
+/// By pane: the key the definitions were read for (the folder and the sorted types) and what was found.
+pub struct DefinitionsCache(Mutex<HashMap<String, (String, Definitions)>>);
+
+/// The page's (C# `FlowDefinitions`); the phone keeps its own (phone.rs, `MobileFlowDefinitions`), whose runs may lack the older requests
+/// the page draws: one cache for both would read again on every turn of either.
+pub static PAGE_DEFINITIONS: LazyLock<DefinitionsCache> = LazyLock::new(DefinitionsCache::new);
+
+impl DefinitionsCache {
+    pub fn new() -> DefinitionsCache {
+        DefinitionsCache(Mutex::new(HashMap::new()))
+    }
+
+    /// The pane's definitions as last read, without asking for a read.
+    pub fn peek(&self, pane: &str) -> Definitions {
+        lock(&self.0).get(pane).map(|(_, found)| found.clone()).unwrap_or_default()
+    }
+}
+
+/// `FlowDefinitions(runs, root)`: the custom agents the blocks' types name (the working folder's `.claude/agents`, the user's, a
+/// plugin's; read only, bounded, never through a link out — mighty-graph's `agent_definitions`), read off the caller's thread when the
+/// types or the folder change; until then the last ones read. `loaded` hears when a read for the pane's current key landed; `alive`
+/// keeps only the panes still open. Another computer's agents are not on this one: no root, no definitions.
+pub fn definitions_for(
+    cache: &'static DefinitionsCache,
+    host: &Arc<Host>,
+    pane: &str,
+    runs: &[MightyGraphRun],
+    root: Option<&str>,
+    alive: impl Fn(&str) -> bool,
+    loaded: fn(&Arc<Host>, &str),
+) -> Definitions {
+    let types = mighty_graph::flow::roles::types(runs);
+    let mut sorted: Vec<&str> = types.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    let key = format!("{}\n{}", root.unwrap_or(""), sorted.join("\n"));
+    let mut panes = lock(&cache.0);
+    panes.retain(|id, _| alive(id));
+    // Nothing read yet: no key matches.
+    let entry = panes.entry(pane.to_string()).or_insert_with(|| (String::from("\0"), Arc::default()));
+    if entry.0 == key {
+        return entry.1.clone();
+    }
+    entry.0 = key.clone();
+    let Some(root) = root.filter(|_| !types.is_empty()).map(PathBuf::from) else {
+        entry.1 = Arc::default();
+        return entry.1.clone();
+    };
+    let held = entry.1.clone();
+    drop(panes);
+    let (host, pane) = (host.clone(), pane.to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = PathBuf::from(crate::accounts::home());
+        let config = agent_definitions::config_directory(&home, None);
+        let found = agent_definitions::load(&types, Some(&root), &config, agent_definitions::Cache::shared(), &DiskFiles);
+        {
+            let mut panes = lock(&cache.0);
+            let Some(entry) = panes.get_mut(&pane).filter(|(held, _)| *held == key) else { return };
+            entry.1 = Arc::new(found);
+        }
+        loaded(&host, &pane);
+    });
+    held
+}
+
+/// The pane's run folder on this computer (`LocalPath(DelegationPanes.RunWorkspace(pane, Workspace))`): a delegated child's worktree,
+/// else the workspace's; none for a remote workspace's pane.
+fn run_root_of(view: &View, pane: &RunSession) -> Option<String> {
+    let workspace = view.snapshot.workspace(pane.workspace_id())?;
+    let run = mighty_delegation::app_host::run_workspace(pane, workspace);
+    run.remote.is_none().then(|| run.path().to_string())
+}
+
 /// `WebMightyModel(session)`: the pane's projection with what this host has of its sources.
-fn projection(host: &Host, view: &mut View, pane: &Arc<RunSession>) -> Option<MightyProjection> {
+fn projection(host: &Arc<Host>, view: &mut View, pane: &Arc<RunSession>) -> Option<MightyProjection> {
     let id = pane.id().to_string();
     let root = root_of(view, pane);
     let requests = panes::requests(host, &id);
@@ -63,17 +141,39 @@ fn projection(host: &Host, view: &mut View, pane: &Arc<RunSession>) -> Option<Mi
         mighty_composer::cards::card_requests(&requests, false).first().is_some_and(|r| r.can_answer_plan && r.plan().is_some());
     let catalog: Vec<_> =
         host.runs().map(|r| r.catalog_of(pane.provider()).models.iter().map(|m| m.label_option()).collect()).unwrap_or_default();
-    let tails = HashMap::new();
-    let definitions = HashMap::new();
+    // `owner.BackgroundOutputFor(pane.Id)`: the background runs' last output lines (tails.rs).
+    let tails = crate::tails::output_for(&id);
     let locator = locate;
     // The session record's older requests and the history block's words (history.rs, C# `GraphHistoryRuns`).
     let (older, history) = crate::history::older(host, view, pane);
+    let runs: Vec<MightyGraphRun> = older.iter().chain(pane.graph_runs()).cloned().collect();
+    let shown = mighty_graph::support::shown_runs(&runs, &host.locale);
+    let run_root = run_root_of(view, pane);
+    let alive = |pane: &str| view.snapshot.session(pane).is_some();
+    let definitions = definitions_for(&PAGE_DEFINITIONS, host, &id, &shown, run_root.as_deref(), alive, |host, pane| {
+        host.view().mighty.dirty(pane);
+    });
+    // `OuroborosExecutionLinks.Extract(retained)`: read only in the diagram presentation, the AC lists of the opened blocks (ouroboros.rs).
+    let links = ouroboros_execution::extract(pane.graph_runs());
+    let executions: Vec<(String, String)> = links.iter().map(|l| (l.run_id.clone(), l.key())).collect();
+    let lists: HashSet<String> = match view.panes.get(&id) {
+        Some(ui) => links
+            .iter()
+            .filter(|l| {
+                ui.mighty.expanded.contains(&mighty_core::graph::node_id(&l.run_id, &format!("{}{}", layout::EXECUTION_SUFFIX, l.key())))
+            })
+            .map(|l| l.key())
+            .collect(),
+        None => HashSet::new(),
+    };
+    let diagram = mighty_graph::timeline::mode(pane) == "diagram";
+    let dashboard = crate::ouroboros::watch(host, &id, links, lists, diagram);
     let sources = Sources {
         older: &older,
         history,
         pending_plan,
-        executions: &[],
-        dashboard: &NoDashboard,
+        executions: &executions,
+        dashboard: &dashboard,
         root: root.as_deref(),
         images: &locator,
         tails: &tails,
@@ -138,6 +238,8 @@ pub fn register(methods: &mut Registry) {
             if let Some(ui) = view.panes.get_mut(id) {
                 ui.mighty.set_shown(false);
             }
+            // `WebMightyShown(false)`: the dashboard's reads of its executions stop.
+            crate::ouroboros::hidden(id);
         }
         Ok(Value::Null)
     });
@@ -257,12 +359,19 @@ pub fn register(methods: &mut Registry) {
         dirty(&mut view, &id);
         Ok(Value::Null)
     });
-    // OpenOuroborosDashboard is the dashboard's (not ported): the execution the block names is known, nothing opens yet.
+    // `WebOpenDashboard(key)`: the run's page on the loopback dashboard, started first when nothing answers, in the system's browser
+    // (ouroboros.rs; never in a smoke run).
     methods.add("mightyOpenDashboard", |host: Arc<Host>, args| async move {
-        let mut view = host.view();
-        let id = ensure(&mut view, text(&args, "paneId"))?;
-        let _execution = panes::ui(&mut view, &id)?.mighty.open_dashboard(text(&args, "key").unwrap_or("")).cloned();
-        dirty(&mut view, &id);
+        let (id, key) = {
+            let mut view = host.view();
+            let id = ensure(&mut view, text(&args, "paneId"))?;
+            let key = panes::ui(&mut view, &id)?.mighty.open_dashboard(text(&args, "key").unwrap_or("")).map(|(_, key)| key.clone());
+            dirty(&mut view, &id);
+            (id, key)
+        };
+        if let Some(key) = key {
+            crate::ouroboros::open(&host, &id, &key).await;
+        }
         Ok(Value::Null)
     });
     // A pane's log picture by its hash, as a data URL (C# `imageData`); an SVG drawn to PNG as C# draws it.

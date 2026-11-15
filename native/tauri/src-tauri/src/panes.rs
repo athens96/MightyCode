@@ -235,14 +235,15 @@ pub fn cards_of(host: &Host, view: &mut View, id: &str) -> Option<(Vec<Card>, bo
     let antigravity = crate::antigravity::card_input(host, id);
     // The agents' open_url prompts (agent_io.rs, W7-C).
     let web_open = crate::agent_io::web_open_cards(host, id);
-    // The background strip's rows (C# `PlanCardSupport.BackgroundStripRows`, mighty-graph's `view::mobile`), read only while it is open;
-    // the background output tails are W9's (none read yet).
+    // The background strip's rows (C# `PlanCardSupport.BackgroundStripRows`, mighty-graph's `view::mobile`), read only while it is open,
+    // with the background runs' last output lines (tails.rs, `BackgroundOutputFor`).
     let now = mighty_core::time::DateTimeOffset::now();
     let background_rows: Vec<cards::BackgroundTask> = if background_open {
+        let tails = crate::tails::output_for(id);
         mighty_graph::view::mobile::background_strip_rows(
             pane.background_work.as_ref(),
             mighty_graph::support::newest_request_run(pane.graph_runs()),
-            None,
+            Some(&tails),
             &host.locale,
         )
         .into_iter()
