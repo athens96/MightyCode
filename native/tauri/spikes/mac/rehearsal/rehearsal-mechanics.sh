@@ -60,11 +60,35 @@ else
     exit 1
 fi
 mkdir -p "$WORK/served"
-python3 "$SERVER" serve "$WORK/served" --cert "$WORK/cert/cert.pem" --key "$WORK/cert/key.pem" --port-file "$WORK/port" --log "$WORK/server.log" &
-SERVER_PID=$!
-for _ in $(seq 1 50); do [ -s "$WORK/port" ] && break; sleep 0.2; done
-PORT="$(cat "$WORK/port" 2>/dev/null)"
-[ -n "$PORT" ] || { check "the update server listens" false; exit 1; }
+# The first CI round (cfadcf51) found the server alive but its port file missing after 10 s, with nothing on stderr. The likely cause:
+# http.server's server_bind asks socket.getfqdn("127.0.0.1"), a reverse lookup a macOS runner may answer only after its DNS times out.
+# So: wait up to 60 s, and if it still does not listen, have faulthandler print where it hangs (SIGABRT) and start it again with
+# getfqdn answered locally. Both outcomes are in the report (M-I's rehearsal takes whichever fix this shows).
+serve_with() { # label, then the command that starts the server
+    local label="$1"; shift
+    rm -f "$WORK/port"
+    echo "== server ($label)" >> "$WORK/server.err"
+    PYTHONFAULTHANDLER=1 "$@" "$SERVER" serve "$WORK/served" --cert "$WORK/cert/cert.pem" --key "$WORK/cert/key.pem" --port-file "$WORK/port" --log "$WORK/server.log" >> "$WORK/server.err" 2>&1 &
+    SERVER_PID=$!
+    local started=$SECONDS
+    for _ in $(seq 1 300); do
+        [ -s "$WORK/port" ] && { check "the update server listens ($label)" true "after $((SECONDS - started)) s"; return 0; }
+        kill -0 "$SERVER_PID" 2>/dev/null || break
+        sleep 0.2
+    done
+    kill -ABRT "$SERVER_PID" 2>/dev/null; sleep 1; kill "$SERVER_PID" 2>/dev/null; SERVER_PID=""
+    check "the update server listens ($label)" false "not after $((SECONDS - started)) s: $(tail -c 1500 "$WORK/server.err" | tr '\n' ' ')"
+    return 1
+}
+cat > "$WORK/local-fqdn.py" <<'PYTHON'
+import runpy, socket, sys
+# http.server's bind asks getfqdn for its name; answer it without DNS.
+socket.getfqdn = lambda name="": name or "localhost"
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+PYTHON
+serve_with "as it is" python3 || serve_with "getfqdn answered locally" python3 "$WORK/local-fqdn.py" || exit 1
+PORT="$(cat "$WORK/port")"
 BASE="https://127.0.0.1:$PORT"
 echo ok > "$WORK/served/probe.txt"
 # The Swift networking stack trusts the System keychain; a tiny Swift probe asks the server the way the app will.

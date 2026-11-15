@@ -6,6 +6,7 @@ name: Mac stage spikes (Step 0, throwaway)
 #   ghostty-capi   D1, the user's route: libghostty's C API driven from Rust, drawing into an NSView over the Tauri window's page, Rust
 #                  owning the PTY (forkpty) through the host-managed I/O backend
 #   ghostty-swift  D1's fallback route, for comparison only: the vendored Swift GhosttyTerminal view through a @_cdecl static library
+#                  (not needed: the C-API route passed on CI, run 43759317019; kept runnable for the record)
 #   webkit         D4: Tauri child webviews with data_store_identifier, two stores isolated, one store shared by its panes
 #   cef            D3: CEF in tao's NSApplication through the Swift app's own C bridge, a page loaded in a child NSView, shut down
 #   rehearsal      M-I's mechanics: a v0.4.61 Swift build stamped with a throwaway key and a local address, a trusted throwaway
@@ -205,6 +206,7 @@ jobs:
           path: |
             ${{ runner.temp }}/rehearsal/report.json
             ${{ runner.temp }}/rehearsal/*.log
+            ${{ runner.temp }}/rehearsal/server.err
             ${{ runner.temp }}/rehearsal/served/latest.json
           if-no-files-found: warn
 

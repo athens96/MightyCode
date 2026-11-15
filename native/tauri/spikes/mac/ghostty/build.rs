@@ -82,4 +82,6 @@ fn swift_bridge() {
     for framework in ["SwiftUI", "Combine", "MetalKit", "GameController"] {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
+    // The first CI round built the bridge but never said so to the crate: the binary ran without the route.
+    println!("cargo:rustc-cfg=spike_swift");
 }
