@@ -1,19 +1,224 @@
-//! The smoke's styles step (Rust-only; plan W9-D): the `deck` fixture registered into the smoke's profile and approved, the guide panel
-//! drawn, `guidedAction{what:'action'}` sending the rewritten slash command to the fake Claude, a rescan, the removal. Owner: W9-D.
+//! The smoke's styles step (Rust-only; plan W9-D): the bundled styles registered (read, never written: a smoke saves no style file and
+//! no approval), the approval card's sections, the bundled Ouroboros style chosen on a Claude pane in the Mighty view, its guide panel
+//! drawn, `guidedAction{what:'action'}` sending the style's own command, a phone send on the pane in `claude-plan` launching Claude in
+//! plan mode, a rescan, and the pane put back as it was. Owner: W9-D.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use serde_json::Value;
+use mighty_core::model::RunSession;
+use serde_json::{Map, Value, json};
 
 use crate::host::Host;
 
+const KEYS: [&str; 8] =
+    ["registered", "approvalCard", "styleChosen", "guidedPanel", "guidedAction", "phonePlanMode", "rescanned", "restored"];
+
 /// Starts the step after the settings step (smoke.rs `Stage::Styles`): true when it started; it reports once through `Smoke::probed`.
-/// Step 0 stub (W9-D writes it): it does not start.
-pub fn start(_host: &Arc<Host>) -> bool {
-    false
+pub fn start(host: &Arc<Host>) -> bool {
+    if host.smoke.is_none() {
+        return false;
+    }
+    host.log.line("smoke: styles step (bundled styles, read only)");
+    let host = host.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut report = Map::new();
+        if let Err(error) = run(&host, &mut report).await {
+            host.log.line(&format!("smoke: styles step failed: {error}"));
+            report.insert("error".into(), json!(error));
+        }
+        let passed = KEYS.iter().all(|k| report.get(*k) == Some(&Value::Bool(true)));
+        report.insert("passed".into(), json!(passed));
+        if let Some(smoke) = &host.smoke {
+            smoke.probed(&host, Value::Object(report));
+        }
+    });
+    true
 }
 
-/// The step's checks from its report. Step 0 stub (W9-D writes it): none.
-pub fn checks(_report: &Value) -> Vec<(&'static str, bool)> {
-    Vec::new()
+async fn until(check: impl Fn() -> bool, seconds: u64) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(seconds);
+    while std::time::Instant::now() < deadline {
+        if check() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    check()
+}
+
+async fn run(host: &Arc<Host>, report: &mut Map<String, Value>) -> Result<(), String> {
+    let l = host.locale;
+    let registry = crate::styles::settings_registry(host).await;
+    let bundled: Vec<&str> = registry.styles.iter().filter(|s| s.source == "bundled" && s.runnable()).map(|s| s.id()).collect();
+    report.insert("bundled".into(), json!(bundled));
+    report.insert("registered".into(), json!(bundled.contains(&"ouroboros") && bundled.contains(&"claude-plan")));
+    let ouroboros = registry.styles.iter().find(|s| s.id() == "ouroboros").cloned().ok_or("no bundled ouroboros")?;
+    let sections: Vec<String> = mighty_styles::presentation::approval(&l, &ouroboros).into_iter().map(|s| s.id).collect();
+    report
+        .insert("approvalCard".into(), json!(sections.iter().take(4).map(String::as_str).eq(["origin", "autoAllow", "install", "enter"])));
+    // A local Claude pane that is not running.
+    let original: RunSession = {
+        let view = host.view();
+        let snapshot = &view.snapshot;
+        snapshot
+            .sessions()
+            .iter()
+            .find(|p| {
+                p.kind() == "claude"
+                    && p.provider() == "claude"
+                    && p.status() != "running"
+                    && crate::styles::local_workspace(snapshot, p).is_some()
+            })
+            .map(|p| (**p).clone())
+            .ok_or("no local Claude pane")?
+    };
+    let id = original.id().to_string();
+    {
+        let mut view = host.view();
+        crate::panes::ensure(&mut view, Some(&id))?;
+        crate::composer::change(&mut view, &id, |p| RunSession {
+            agent_view_mode: Some("mighty".into()),
+            mighty_style: Some("ouroboros".into()),
+            mighty_style_hash: None,
+            mighty_style_since: None,
+            ..p.clone()
+        })?;
+    }
+    crate::styles::reload(host, &id, false);
+    let chosen = until(|| crate::styles::loaded(&id).1.as_deref() == Some("ouroboros"), 15).await;
+    report.insert("styleChosen".into(), json!(chosen));
+    let guided = {
+        let view = host.view();
+        let pane = view.snapshot.session(&id).cloned().ok_or("pane gone")?;
+        crate::styles::window(host, &view, &pane).1
+    };
+    let phases = guided.as_ref().and_then(|g| g.get("phases")).and_then(Value::as_array).map_or(0, Vec::len);
+    let actions: Vec<String> = guided
+        .as_ref()
+        .and_then(|g| g.get("actions"))
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter(|x| x["enabled"] == json!(true)).filter_map(|x| x["id"].as_str().map(str::to_string)).collect())
+        .unwrap_or_default();
+    report.insert("phases".into(), json!(phases));
+    report.insert("actions".into(), json!(actions));
+    report.insert("guidedPanel".into(), json!(phases == 6 && !actions.is_empty()));
+    // The press sends a request: only to the stand-in CLI (a page smoke checks the press is answered without sending).
+    let stand_in = host.smoke.as_ref().is_some_and(|s| s.fake_record().is_some());
+    report.insert("standIn".into(), json!(stand_in));
+    let before = host.view().snapshot.session(&id).map_or(0, |p| p.logs.as_ref().map_or(0, Vec::len));
+    let action = actions.first().cloned().unwrap_or_default();
+    let acted = if stand_in {
+        crate::styles::guided_action(host, &id, "action", Some(&action)).await
+    } else {
+        crate::styles::guided_action(host, &id, "group", None).await
+    };
+    report.insert("guidedAction".into(), json!(acted.is_ok()));
+    if let Err(error) = &acted {
+        report.insert("guidedActionError".into(), json!(error));
+    }
+    // With the stand-in CLI the command reaches the pane's transcript as the style's own slash command.
+    let sent = stand_in
+        && until(
+            || {
+                host.view().snapshot.session(&id).is_some_and(|p| {
+                    p.logs
+                        .as_deref()
+                        .unwrap_or(&[])
+                        .iter()
+                        .skip(before)
+                        .any(|l| l.kind.as_deref() == Some("user") && l.text.as_deref().is_some_and(|t| t.starts_with("/ouroboros:")))
+                })
+            },
+            10,
+        )
+        .await;
+    report.insert("sentStyleCommand".into(), json!(sent));
+    // The style's run is stopped once its command was seen, so the steps after this one find no Claude run going.
+    if stand_in && let Some(runs) = host.runs() {
+        let _ = runs.service.stop(&id).await;
+    }
+    let settled = until(|| host.view().snapshot.session(&id).is_none_or(|p| p.status() != "running"), 30).await;
+    report.insert("runSettled".into(), json!(settled));
+    // H1: a phone send on a pane in the plan-first style launches Claude in plan mode (C# MobileSubmit's PrepareStyleRunRequest); the
+    // stand-in CLI writes the arguments it was started with beside its record.
+    let phone_plan = if stand_in { phone_plan_mode(host, &id, report).await } else { true };
+    report.insert("phonePlanMode".into(), json!(phone_plan));
+    crate::styles::guided_action(host, &id, "recheck", None).await?;
+    let rescanned = until(|| crate::styles::loaded(&id).0 && crate::styles::loaded(&id).2 >= 2, 15).await;
+    report.insert("rescanned".into(), json!(rescanned));
+    {
+        let mut view = host.view();
+        crate::composer::change(&mut view, &id, |p| RunSession {
+            agent_view_mode: original.agent_view_mode.clone(),
+            mighty_style: original.mighty_style.clone(),
+            mighty_style_hash: original.mighty_style_hash.clone(),
+            mighty_style_since: original.mighty_style_since.clone(),
+            ..p.clone()
+        })?;
+    }
+    let restored = host
+        .view()
+        .snapshot
+        .session(&id)
+        .is_some_and(|p| p.mighty_style == original.mighty_style && p.agent_view_mode == original.agent_view_mode);
+    report.insert("restored".into(), json!(restored));
+    host.schedule();
+    Ok(())
+}
+
+/// The pane in `claude-plan`, then a phone send: true when the stand-in CLI was started with `--permission-mode plan`.
+async fn phone_plan_mode(host: &Arc<Host>, id: &str, report: &mut Map<String, Value>) -> bool {
+    let Some(record) = host.smoke.as_ref().and_then(|s| s.fake_record().cloned()) else { return false };
+    let args_file = std::path::PathBuf::from(format!("{}.args", record.display()));
+    let before = std::fs::read_to_string(&args_file).unwrap_or_default();
+    {
+        let mut view = host.view();
+        let changed = crate::composer::change(&mut view, id, |p| RunSession {
+            mighty_style: Some("claude-plan".into()),
+            mighty_style_hash: None,
+            mighty_style_since: None,
+            ..p.clone()
+        });
+        if changed.is_err() {
+            return false;
+        }
+    }
+    crate::styles::reload(host, id, false);
+    if !until(|| crate::styles::loaded(id).1.as_deref() == Some("claude-plan"), 15).await {
+        report.insert("phonePlanError".into(), json!("claude-plan did not load"));
+        return false;
+    }
+    let reply = crate::phone::route(host, "POST", &format!("/m1/sessions/{id}/submit"), Some(json!({"text": "plan the smoke"}))).await;
+    report.insert("phonePlanReply".into(), json!(reply.status));
+    let launched = until(
+        || {
+            let now = std::fs::read_to_string(&args_file).unwrap_or_default();
+            now != before
+                && serde_json::from_str::<Vec<String>>(&now)
+                    .is_ok_and(|args| args.windows(2).any(|pair| pair[0] == "--permission-mode" && pair[1] == "plan"))
+        },
+        15,
+    )
+    .await;
+    if let Some(runs) = host.runs() {
+        let _ = runs.service.stop(id).await;
+    }
+    until(|| host.view().snapshot.session(id).is_none_or(|p| p.status() != "running"), 30).await;
+    launched
+}
+
+/// The step's checks from its report.
+pub fn checks(report: &Value) -> Vec<(&'static str, bool)> {
+    const NAMES: [&str; 8] = [
+        "stylesRegistered",
+        "stylesApprovalCard",
+        "stylesChosen",
+        "stylesGuidedPanel",
+        "stylesGuidedAction",
+        "stylesPhonePlanMode",
+        "stylesRescanned",
+        "stylesRestored",
+    ];
+    NAMES.iter().zip(KEYS).map(|(name, key)| (*name, report.get(key) == Some(&Value::Bool(true)))).collect()
 }

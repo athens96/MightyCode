@@ -777,6 +777,8 @@ async fn start_again(host: &Arc<Host>, id: &str, retry: &CliLoginRetry) -> Resul
         request.attachments = retry.request.attachments.clone();
         request
     };
+    // C# LoginRecovery.cs:411 `PrepareStyleRunRequest`: the style's grants and plan-mode launch, its approval read again (styles.rs).
+    let request = crate::styles::prepare_run(host, id, request).await.map_err(Some)?;
     if !accounts.is_current(retry) {
         return Err(None);
     }

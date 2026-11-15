@@ -469,13 +469,16 @@ impl Host {
                     crate::composer::drain_queue(self.clone(), event.session_id.clone());
                 }
             }
+            // A request the pane's style allows by itself is answered here and never reaches the pane (styles.rs, W9-D).
             ServiceEvent::ToolPermission(request) => {
-                let mut view = self.view();
-                self.push(&view, "permission", format!("{{\"kind\":\"permission\",\"request\":{}}}", request.to_json()));
-                if let Some(pane) = view.panes.get_mut(&request.run_id) {
-                    pane.dirty = true;
+                if crate::styles::tool_permission(self, &request) {
+                    let mut view = self.view();
+                    self.push(&view, "permission", format!("{{\"kind\":\"permission\",\"request\":{}}}", request.to_json()));
+                    if let Some(pane) = view.panes.get_mut(&request.run_id) {
+                        pane.dirty = true;
+                    }
+                    view.mighty.dirty(&request.run_id);
                 }
-                view.mighty.dirty(&request.run_id);
             }
             // The service's own state: the page's copy may not have taken the event this save is for yet (a run's end is saved
             // before its status event comes through).

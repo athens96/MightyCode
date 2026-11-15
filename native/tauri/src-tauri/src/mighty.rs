@@ -68,6 +68,16 @@ fn projection(host: &Host, view: &mut View, pane: &Arc<RunSession>) -> Option<Mi
     let locator = locate;
     // The session record's older requests and the history block's words (history.rs, C# `GraphHistoryRuns`).
     let (older, history) = crate::history::older(host, view, pane);
+    // The pane's guided style (styles.rs, W9-D: C# `activeStyle`, `GuidedPhase`, `EffectivePhase`, `RequestPrefix`).
+    let styled = crate::styles::source(host, pane);
+    let prefix = |input: &str| styled.as_ref().and_then(|s| s.request_prefix(input));
+    let style = styled.as_ref().map(|s| mighty_graph::view::StyleSource {
+        name: s.style.manifest.name(),
+        phase_title: s.phase.as_ref().map(|p| p.title.as_str()),
+        structure: &s.style,
+        phase: s.effective.as_ref(),
+        request_prefix: &prefix,
+    });
     let sources = Sources {
         older: &older,
         history,
@@ -79,7 +89,7 @@ fn projection(host: &Host, view: &mut View, pane: &Arc<RunSession>) -> Option<Mi
         tails: &tails,
         definitions: &definitions,
         catalog: Some(&catalog),
-        style: None,
+        style,
         animations: true,
         zone: None,
     };

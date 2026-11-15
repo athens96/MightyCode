@@ -10,8 +10,8 @@
 //!   delegation's send (held items go first, and then the answer carries no ids); `NotStarted` is 409 `remote.error.dropped`; a queued
 //!   Antigravity continuation that could not start loses its grant and its card decides again (S-L3); the phone's close never asks, a
 //!   parent with open children included.
-//! - What later stages own answers as C# does without it: styles (W9) — no style runs, so every pane says `cli`, `guided` is refused as
-//!   an unknown style and `settings` offers the CLI alone; the app update (W9) — this build cannot update itself, so the phone gets no
+//! - Styles (styles.rs, W9-D): the style a pane runs, its panel and older phones' Ouroboros field, `guided` and the style in `settings`.
+//! - What later stages own answers as C# does without it: the app update (W9) — this build cannot update itself, so the phone gets no
 //!   update state and `POST /m1/app-update` answers 409.
 
 use std::collections::{HashMap, HashSet};
@@ -215,9 +215,16 @@ fn catalog(host: &Host, provider: &str) -> ModelCatalog {
     host.runs().map(|r| r.catalog_of(provider)).unwrap_or_else(|| mighty_run::providers::fallback(provider))
 }
 
-/// `MobileOptions(pane, model, viewMode)`: the pickers the phone shows, from the same sources as the composer's menus. Styles are W9's:
-/// the CLI is the one choice.
-fn options(host: &Host, snapshot: &AppSnapshot, pane: &RunSession, model: Option<&str>) -> mighty::MobileSettingsOptions {
+/// `MobileOptions(pane, model, viewMode)`: the pickers the phone shows, from the same sources as the composer's menus; the styles the
+/// pane may pick in that view (styles.rs: the registry, none outside the Mighty view or for a remote pane).
+fn options(
+    host: &Host,
+    snapshot: &AppSnapshot,
+    pane: &RunSession,
+    model: Option<&str>,
+    view_mode: Option<&str>,
+) -> mighty::MobileSettingsOptions {
+    let styles = crate::styles::offered(host, snapshot, pane, view_mode.unwrap_or(pane.agent_view_mode.as_deref().unwrap_or("")));
     let l = host.locale;
     let catalog = catalog(host, pane.provider());
     let caps = capabilities(host, pane.provider());
@@ -235,8 +242,8 @@ fn options(host: &Host, snapshot: &AppSnapshot, pane: &RunSession, model: Option
             .map(|m| mighty::MobileOption::new(m, &mighty_composer::runtime::permission_label(pane.provider(), m, &l)))
             .collect(),
         efforts: mighty::effort_options(caps.effort, &efforts, &l),
-        mighty_styles: vec![mighty::MobileOption::new(mighty::CLI_STYLE, "CLI")],
-        styles: vec![mighty::MobileStyleOption { id: mighty::CLI_STYLE.into(), label: mighty::CLI_STYLE.into(), source: None }],
+        mighty_styles: mighty_remote::phone::legacy_style::legacy_style_options(&styles),
+        styles: mighty_remote::phone::legacy_style::style_options(&styles),
     }
 }
 
@@ -258,15 +265,20 @@ impl Desk {
         let pane = snapshot.session(pane.id()).cloned().unwrap_or_else(|| Arc::new(pane.clone()));
         let l = host.locale;
         let editable = !busy(&host, pane.id());
-        let offered = options(&host, &snapshot, &pane, None);
+        let offered = options(&host, &snapshot, &pane, None, None);
+        // The style the pane really runs (styles.rs, C# `MobileActiveStyle`): its panel, and the old Ouroboros field for older phones.
+        let style_id = crate::styles::active_style(&host, &pane).unwrap_or_else(|| mighty::CLI_STYLE.to_string());
+        let styled = crate::styles::phone(&host, &pane, !editable);
+        let style_names = crate::styles::source(&host, &pane).map(|s| s.registry);
+        let title = |input: &str| style_names.as_ref().and_then(|r| mighty_styles::presentation::request_prefix(&r.styles, input));
         let settings = mighty::MobileSettings {
             editable,
             model: pane.model().into(),
             permission_mode: pane.settings.clone().unwrap_or_default().permission_mode,
             effort: offered.efforts.is_some().then(|| pane.settings.clone().unwrap_or_default().effort),
             agent_view_mode: mighty::view_mode(pane.agent_view_mode.as_deref()).into(),
-            mighty_style: mighty::CLI_STYLE.into(),
-            style_id: mighty::CLI_STYLE.into(),
+            mighty_style: mighty::style(Some(&style_id)).into(),
+            style_id: style_id.clone(),
             options: offered,
         };
         // A run's resultFiles are looked for in the pane's own folder, once per result (the pane's memo).
@@ -290,6 +302,7 @@ impl Desk {
         let runs = mighty::runs(
             &saved,
             &RunsInputs {
+                title: style_names.is_some().then_some(&title as &dyn Fn(&str) -> Option<String>),
                 workspace_root: root.as_deref(),
                 lookup: Some(&lookup),
                 result_files: Some(&memo),
@@ -299,9 +312,15 @@ impl Desk {
             &l,
         );
         let mut payload = serde_json::Map::new();
-        payload.insert("style".into(), json!(mighty::CLI_STYLE));
-        payload.insert("styleId".into(), json!(mighty::CLI_STYLE));
+        payload.insert("style".into(), json!(mighty::style(Some(&style_id))));
+        payload.insert("styleId".into(), json!(style_id));
         payload.insert("runs".into(), serde_json::from_str(&runs.to_json()).unwrap_or(Value::Array(vec![])));
+        if let Some(styled) = &styled {
+            payload.insert("panel".into(), styled.panel.clone());
+            if let Some(legacy) = &styled.ouroboros {
+                payload.insert("ouroboros".into(), legacy.clone());
+            }
+        }
         if fan_out {
             payload.insert("fanOut".into(), json!(true));
             if let Some(log) = mighty::flow_log(&saved, &HashMap::new(), &l) {
@@ -437,7 +456,7 @@ async fn submit(
         ui.dirty = true;
         ui.submission
     };
-    let outcome = start(host, id, &text, files, queue_id, submission).await;
+    let outcome = start(host, id, &text, files, prepared, queue_id, submission).await;
     if let Some(ui) = host.view().panes.get_mut(id) {
         ui.view.starting = false;
         ui.dirty = true;
@@ -452,12 +471,22 @@ async fn start(
     id: &str,
     text: &str,
     files: Vec<RunAttachment>,
+    prepared: bool,
     queue_id: Option<&str>,
     submission: u64,
 ) -> Result<SubmitReceipt, MobileError> {
     let l = host.locale;
     // The model list as the CLI has it now comes first; the request takes the pane's model and effort after it.
     crate::models::prepare(host, id).await;
+    // C# `MobileSubmit`: a styled pane's own words go as its style's command (`PrepareStyleSubmission`) unless already prepared.
+    let queued_prepared =
+        queue_id.is_some_and(|item| host.view().panes.get(id).is_some_and(|u| u.queue.items().iter().any(|q| q.id == item && q.prepared)));
+    let text = if prepared || queued_prepared {
+        text.to_string()
+    } else {
+        crate::styles::prepare_submission(host, id, text, !files.is_empty()).await.map_err(|e| request(409, e))?
+    };
+    let text = text.as_str();
     // A queued item keeps the launch decision made when it was queued; an Antigravity card's continuation carries its rules and card.
     let (override_mode, continuation) = {
         let view = host.view();
@@ -475,7 +504,7 @@ async fn start(
         }
     };
     let card = continuation.as_ref().map(|(_, card)| card.clone());
-    let started = start_request(host, id, text, files, override_mode, continuation).await;
+    let started = start_request(host, id, text, files, override_mode, queue_id.is_some(), continuation).await;
     let (answer, revoke) = answer_start(started, card.is_some(), &l);
     // A continuation that could not start leaves the queue with its rules, as the desktop's drain drops it (S-L3).
     if let (Some(reason), Some(card), Some(item)) = (revoke, card, queue_id) {
@@ -532,6 +561,7 @@ async fn start_request(
     text: &str,
     files: Vec<RunAttachment>,
     permission_override: Option<String>,
+    queued: bool,
     continuation: Option<(mighty_run::antigravity::AllowGrant, PermissionRequest)>,
 ) -> Started {
     let Ok(engine) = host.engine() else { return Started::Failed("the run engine is not ready".into()) };
@@ -550,7 +580,7 @@ async fn start_request(
         request.settings = pane.settings.clone();
         request.resume_id = pane.resume_id.clone();
         request.attachments = (!files.is_empty()).then_some(files);
-        request.permission_mode_override = permission_override;
+        request.permission_mode_override = permission_override.clone();
         request.receipt = Some(receipt.clone());
         if let Some((grant, card)) = continuation {
             request.antigravity_grant = Some(grant);
@@ -558,6 +588,15 @@ async fn start_request(
         }
         request
     };
+    // C# `PrepareStyleRunRequest`: the style's grants and plan-mode launch, its approval read again (styles.rs); a queued item keeps
+    // the launch decision made when it was queued.
+    let mut request = match crate::styles::prepare_run(host, id, request).await {
+        Ok(request) => request,
+        Err(error) => return Started::Failed(error),
+    };
+    if queued {
+        request.permission_mode_override = permission_override;
+    }
     let ids = || {
         let made = lock(&receipt);
         Started::Now(made.entry_id.clone(), made.graph_run_id.clone())
@@ -758,8 +797,8 @@ fn stop_queue(host: &Host, id: &str) {
 }
 
 /// `MobileSettings(body)`: the pane's model, permission mode and effort as the phone picked them, checked against what the composer
-/// offers; the view is the Mighty view; styles are W9's (only the CLI is offered).
-fn settings(host: &Host, id: &str, body: &serde_json::Map<String, Value>) -> Result<(), MobileError> {
+/// offers; the view is the Mighty view; the style one the pane may pick (styles.rs: 400 unknown, 409 "Style changed.").
+async fn settings(host: &Host, id: &str, body: &serde_json::Map<String, Value>) -> Result<(), MobileError> {
     let l = host.locale;
     if busy(host, id) {
         return Err(request(409, "Stop the session before changing settings."));
@@ -774,6 +813,8 @@ fn settings(host: &Host, id: &str, body: &serde_json::Map<String, Value>) -> Res
         mighty_composer::menus::picker_options(&pane, &picker_catalog(host, pane.provider()), &l).into_iter().map(|m| m.value).collect();
     let efforts = |model: &str| mighty_run::providers::efforts(pane.provider(), model, &catalog, Some(&registered));
     let (model, mode, effort) = settings_choice(body, pane.model(), &current, &models, &caps.permission_modes, &efforts, &l)?;
+    let (style, hash, changes) =
+        crate::styles::phone_choice(host, &snapshot, &pane, body).await.map_err(|(status, message)| request(status, message))?;
     let mut view = host.view();
     let now = view.snapshot.session(id).cloned().ok_or_else(not_found_session)?;
     if busy_locked(host, &view, id)
@@ -795,6 +836,9 @@ fn settings(host: &Host, id: &str, body: &serde_json::Map<String, Value>) -> Res
                 ..prior
             }),
             agent_view_mode: Some("mighty".into()),
+            mighty_style: if changes { style.clone() } else { p.mighty_style.clone() },
+            mighty_style_hash: if changes { hash.clone() } else { p.mighty_style_hash.clone() },
+            mighty_style_since: if !changes || p.mighty_style == style { p.mighty_style_since.clone() } else { None },
             ..p.clone()
         }
     })
@@ -810,8 +854,8 @@ fn busy_locked(host: &Host, view: &crate::host::View, id: &str) -> bool {
 }
 
 /// What a phone's settings request asks for, checked as C#'s `MobileSettings` checks it: only the six keys, each a string; a model the
-/// picker offers, a permission mode the provider has, an effort the model takes (or default); the plain or the Mighty view; and no style
-/// but the CLI (none other runs before W9). The model, permission mode and effort the pane takes.
+/// picker offers, a permission mode the provider has, an effort the model takes (or default); the plain or the Mighty view (the style is
+/// styles.rs's `phone_choice`). The model, permission mode and effort the pane takes.
 fn settings_choice(
     body: &serde_json::Map<String, Value>,
     model_now: &str,
@@ -838,10 +882,7 @@ fn settings_choice(
     if !matches!(text("agentViewMode"), None | Some("plain" | "mighty")) {
         return Err(request(400, "Unsupported view."));
     }
-    // What this sender was last told is the CLI (no style runs before W9): a style other than it is unknown here.
-    if text("styleId").or_else(|| text("mightyStyle")).is_some_and(|r| r != mighty::CLI_STYLE) {
-        return Err(request(400, l.get("remote.error.unknownStyle")));
-    }
+    let _ = l;
     Ok((model, mode, effort))
 }
 
@@ -985,7 +1026,7 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
             ActionAnswer::Value(Value::Null)
         }
         "settings" => {
-            settings(&host, &id, &body)?;
+            settings(&host, &id, &body).await?;
             ActionAnswer::Value(Value::Null)
         }
         // The phone's 보낼 대상 switch: a target the pane offers, or null for Claude.
@@ -996,8 +1037,12 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
             crate::ask::set_target(&host, &id, target).map_err(|e| request(400, e))?;
             ActionAnswer::Value(Value::Null)
         }
-        // A style's button (W9's styles): no style is registered in this build, so every one is unknown.
-        "guided" => return Err(request(400, l.get("remote.error.unknownStyle"))),
+        // A style's button (C# `MobileGuided`): the action's prompt sent as the app's own, checked against the pane's style (styles.rs).
+        "guided" => {
+            let guided = mighty::guided_request(&body, &l)?;
+            let prompt = crate::styles::phone_guided(&host, &pane, &guided).await.map_err(|(status, message)| request(status, message))?;
+            ActionAnswer::Receipt(submit(&host, &id, &prompt, vec![], true, None).await?)
+        }
         // The answer to the pane's waiting terminal command, typed as its card types it; whether it was.
         "terminal-prompt" => {
             let typed = TerminalPromptAnswer::from_phone(text("promptId").as_deref(), text("answer").as_deref(), text("text").as_deref());
@@ -1074,7 +1119,13 @@ impl PhoneDesk for Desk {
         self.host().is_ok_and(|h| running(&h, session_id))
     }
     fn pending_permissions(&self, session_id: &str) -> Vec<ToolPermissionRequest> {
-        self.host().ok().and_then(|h| h.runs().map(|r| r.service.pending_permissions(session_id))).unwrap_or_default()
+        self.host()
+            .ok()
+            .and_then(|h| h.runs().map(|r| r.service.pending_permissions(session_id)))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(crate::styles::shows)
+            .collect()
     }
     fn held_items(&self, session_id: &str) -> Vec<DelegationDeliveryItem> {
         held(session_id)
@@ -1192,10 +1243,11 @@ impl PhoneDesk for Desk {
         let has_plan =
             host.runs().is_some_and(|r| r.service.pending_permissions(pane.id()).iter().any(|p| p.can_answer_plan && p.state == "pending"));
         let pending = mighty_graph::view::diagram_plan_run_id(has_plan, true, runs);
+        let styled = crate::styles::source(&host, pane);
         let inputs = mighty_graph::structure::Inputs {
-            style: None,
-            current_phase: None,
-            starting_new: false,
+            style: styled.as_ref().map(|s| &s.style as &dyn mighty_graph::structure::StructureStyle),
+            current_phase: styled.as_ref().and_then(|s| s.phase.as_ref()),
+            starting_new: styled.as_ref().is_some_and(|s| s.starting_new),
             plan_history: pane.plan_history.as_deref(),
             pending_plan_run_id: pending.as_deref(),
         };
@@ -1221,7 +1273,8 @@ impl PhoneDesk for Desk {
             return None;
         }
         let snapshot = Desk::snapshot_of(&host);
-        let offered = options(&host, &snapshot, pane, None);
+        let offered = options(&host, &snapshot, pane, None, None);
+        let styled = crate::styles::phone(&host, pane, busy(&host, pane.id())).map(|s| s.digest);
         let (targets, effective) = ask_targets_of(&host, &snapshot, pane);
         let options = hash_of(|h| {
             for t in &targets {
@@ -1247,6 +1300,7 @@ impl PhoneDesk for Desk {
         let prompt = crate::terminal::terminals(&host).ok().and_then(|t| t.prompt(pane.id())).map(|p| p.id);
         let mighty = hash_of(|h| {
             mighty::digest(pane).hash(h);
+            styled.hash(h);
             pane.plan_history.as_ref().map(Vec::len).hash(h);
             pane.plan_history.as_ref().and_then(|p| p.last()).and_then(|r| r.outcome.clone()).hash(h);
             for task in pane.background_work.as_ref().map(mighty::running_tasks).unwrap_or_default() {
@@ -1257,8 +1311,8 @@ impl PhoneDesk for Desk {
         });
         Some(MobilePaneDigest { editable: !busy(&host, pane.id()), options, mighty })
     }
-    fn active_style(&self, _pane: &RunSession) -> Option<String> {
-        None
+    fn active_style(&self, pane: &RunSession) -> Option<String> {
+        crate::styles::active_style(&*self.host().ok()?, pane)
     }
     fn app_update_read(&self) -> Option<Option<app_update_view::State>> {
         // `PhoneAppUpdateRead`: null while this build cannot update itself (app_update.rs: no key, no address, a smoke, or a build that
@@ -1383,7 +1437,6 @@ mod tests {
             "default takes no effort"
         );
         assert_eq!(refused(json!({"agentViewMode": "graph"})), (400, "Unsupported view.".into()));
-        assert_eq!(refused(json!({"styleId": "ouroboros"})), (400, l.get("remote.error.unknownStyle")));
         assert!(check(json!({"agentViewMode": "plain", "styleId": "cli"})).is_ok(), "an older phone's plain view and the CLI are heard");
     }
 
