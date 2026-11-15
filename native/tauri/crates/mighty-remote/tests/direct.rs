@@ -64,6 +64,19 @@ async fn reads_end(stream: &mut TcpStream, ms: u64) -> bool {
     }
 }
 
+/// A connection the listener refuses unread (reset, linger 0, or closed): either its first read ends, or — where the reset arrives
+/// before the connect is seen to complete, as macOS reports it (ECONNRESET from the connect itself) — the connect fails with the reset.
+/// Any other connect failure is no refusal by this listener.
+async fn refused(endpoint: impl tokio::net::ToSocketAddrs, ms: u64) -> bool {
+    match TcpStream::connect(endpoint).await {
+        Ok(mut stream) => reads_end(&mut stream, ms).await,
+        Err(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::BrokenPipe
+        ),
+    }
+}
+
 /// A phone's WebSocket to `endpoint`.
 async fn phone(endpoint: &str) -> Result<WebSocketStream<TcpStream>, String> {
     let tcp = TcpStream::connect(endpoint).await.map_err(|e| e.to_string())?;
@@ -472,8 +485,7 @@ async fn mobile_direct_the_listener_holds_at_most_36_and_upgrades_a_phone() {
             held.push(TcpStream::connect(&endpoint).await.unwrap());
         }
         assert!(until(|| listener.live_connections() == CONNECTION_LIMIT).await, "36 held");
-        let mut extra = TcpStream::connect(&endpoint).await.unwrap();
-        assert!(reads_end(&mut extra, 3000).await, "the 37th connection is dropped");
+        assert!(refused(&endpoint, 3000).await, "the 37th connection is dropped");
         assert_eq!(listener.live_connections(), CONNECTION_LIMIT, "a dropped connection gives its slot back");
         assert_eq!(delivered.lock().unwrap().len(), CONNECTION_LIMIT, "the 37th connection is never delivered");
         drop(held);
@@ -490,8 +502,7 @@ async fn mobile_direct_the_listener_holds_at_most_36_and_upgrades_a_phone() {
             log(),
         );
         let throwing_port = throwing.update(&["127.0.0.1".into()], 0).0[0].1;
-        let mut dropped = TcpStream::connect(("127.0.0.1", throwing_port)).await.unwrap();
-        assert!(reads_end(&mut dropped, 3000).await, "a handler's failure drops the connection");
+        assert!(refused(("127.0.0.1", throwing_port), 3000).await, "a handler's failure drops the connection");
         assert!(until(|| throwing.live_connections() == 0).await);
         throwing.stop();
     }
@@ -627,9 +638,8 @@ async fn mobile_direct_only_who_may_gets_in_and_relay_redials_leave_them_alone()
         let mut first = TcpStream::connect(&endpoint).await.unwrap();
         let mut second = TcpStream::connect(&endpoint).await.unwrap();
         assert!(until(|| host.connections() == 2).await, "two admitted");
-        let mut third = TcpStream::connect(&endpoint).await.unwrap();
         let started = Instant::now();
-        assert!(reads_end(&mut third, 500).await, "a third handshake from the same address is dropped at once, not at the deadline");
+        assert!(refused(&endpoint, 500).await, "a third handshake from the same address is dropped at once, not at the deadline");
         assert!(started.elapsed() < Duration::from_millis(1500) && host.connections() == 2, "the first two are still held");
         assert!(reads_end(&mut first, 5000).await && reads_end(&mut second, 5000).await, "a stalled handshake is cut at the deadline");
     }

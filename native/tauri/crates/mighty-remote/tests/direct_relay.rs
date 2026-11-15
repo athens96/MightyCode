@@ -224,8 +224,14 @@ async fn mobile_direct_relay_redials_leave_a_direct_phone_alone() {
         drop(stranger);
         until(Duration::from_secs(10), || fixture.host.connection_ids().is_empty()).await;
     }
-    let tcp = tokio::net::TcpStream::connect(&endpoint).await.unwrap();
-    let locked = tokio_tungstenite::client_async(format!("ws://{endpoint}/ws?v=1"), tcp).await.is_err();
+    // Reset at accept: where the reset arrives before the connect is seen to complete (macOS) the connect itself fails with it.
+    let locked = match tokio::net::TcpStream::connect(&endpoint).await {
+        Ok(tcp) => tokio_tungstenite::client_async(format!("ws://{endpoint}/ws?v=1"), tcp).await.is_err(),
+        Err(error) => matches!(
+            error.kind(),
+            std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::BrokenPipe
+        ),
+    };
     assert!(locked, "an address that keeps failing is shut out");
     fixture.done().await;
 }

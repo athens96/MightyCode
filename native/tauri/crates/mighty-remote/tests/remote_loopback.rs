@@ -352,12 +352,12 @@ async fn a_real_command_runs_in_the_shared_folder_and_stops() {
         "ends",
     )
     .await;
-    let shared = p.fixture.shared.path().to_string();
+    // Compared as the file system names them: the folder is made under %TEMP%, which can be an 8.3 name (CI's C:\Users\RUNNER~1),
+    // while PowerShell prints the long one.
+    let shared = std::fs::canonicalize(p.fixture.shared.path()).unwrap();
+    let printed = |text: &str| std::fs::canonicalize(text.trim()).is_ok_and(|path| path == shared);
     assert!(
-        p.seen
-            .events()
-            .iter()
-            .any(|e| e.session_id == "pane-6" && e.entry.as_ref().and_then(|l| l.text.as_deref()).is_some_and(|t| t.trim() == shared)),
+        p.seen.events().iter().any(|e| e.session_id == "pane-6" && e.entry.as_ref().and_then(|l| l.text.as_deref()).is_some_and(printed)),
         "the command ran in the shared folder: {:?}",
         p.seen.words(Some("pane-6"))
     );
