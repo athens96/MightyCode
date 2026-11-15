@@ -67,7 +67,9 @@ fn installed() -> bool {
     }
 }
 
-/// Two folders the file system names the same (both canonical: case, 8.3 names, links); a folder that does not exist is no match.
+/// Two folders the file system names the same (both canonical: case, 8.3 names, links); a folder that does not exist is no match. Only
+/// Windows names an install folder yet ([`installed`]); the checks compare with it on every OS.
+#[cfg(any(windows, test))]
 fn same_folder(one: &Path, other: &Path) -> bool {
     matches!((std::fs::canonicalize(one), std::fs::canonicalize(other)), (Ok(one), Ok(other)) if one == other)
 }

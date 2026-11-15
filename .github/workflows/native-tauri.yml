@@ -137,8 +137,8 @@ jobs:
                  'crates/mighty-platform-windows/tests/update_helper.rs') + $port },
             @{ what = 'ProcessHost::start_detached_waitable called'; pattern = '\bstart_detached_waitable\s*\('; skip = '\bfn\s+start_detached_waitable'
                allowed = @(
-                 # The Ouroboros dashboard daemon, which C# leaves running (W9-E).
-                 'src-tauri/src/ouroboros.rs') + $port },
+                 # The Ouroboros dashboard daemon, which C# leaves running (W9-E), and the Windows implementation's own contract test.
+                 'src-tauri/src/ouroboros.rs', 'crates/mighty-platform-windows/tests/detached_waitable.rs') + $port },
             # Any other detached start the port grows is named in this guard, with its callers, before anything calls it.
             @{ what = 'another ProcessHost::start_detached_* called'; pattern = '\bstart_detached_(?!or_in_job\b|waitable\b)\w+\s*\('; skip = '\bfn\s+start_detached_'
                allowed = $port },
