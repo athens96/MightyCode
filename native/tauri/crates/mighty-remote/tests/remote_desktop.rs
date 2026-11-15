@@ -526,6 +526,23 @@ async fn no_client_code_runs_under_the_services_lock() {
         desk.status("far-agent") == "stopped" && !desk.service.is_session_running("far-agent"),
         "a stop while connecting ends it stopped"
     );
+    // The pane hears its stop through the service's events, which come after the state changed and which the desk records on a task
+    // of its own: wait for the stop, then for a later run's output of the other pane (the events keep their order), so every event
+    // sent before it is recorded and a second stop would be counted too.
+    until(|| desk.stops("far-agent") >= 1, 10_000, "the pane hears the stop").await;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        desk.service.start(StartRunRequest::new("near-cmd", desk.near.id(), "shell", "echo near-flushed")),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let flushed = || {
+        desk.events.lock().unwrap().iter().any(|e| {
+            e.session_id == "near-cmd" && e.entry.as_ref().and_then(|l| l.text.as_deref()).is_some_and(|t| t.contains("near-flushed"))
+        })
+    };
+    until(flushed, 20_000, "the later run's output is recorded").await;
     assert_eq!(desk.stops("far-agent"), 1, "the pane hears one stop");
     assert!(desk.fixture.runner().is_none_or(|r| r.started.lock().unwrap().is_empty()), "it never reaches the host");
     let desk = Arc::try_unwrap(desk).ok().expect("no other holder");
