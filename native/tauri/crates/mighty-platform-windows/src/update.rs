@@ -152,6 +152,17 @@ fn folder_prefix(folder: &Path) -> String {
     format!("{}\\", trim_separators(&long.to_string_lossy()))
 }
 
+/// `path` with its 8.3 parts written out long when it exists, else as given: a process started by its short path reports that short
+/// image path, and a shortcut saved with a short target gives back the long one (CI's `%TEMP%` is `C:\Users\RUNNER~1`).
+fn long_text(path: &str) -> String {
+    long_path(Path::new(path)).map_or_else(|| path.to_string(), |long| long.to_string_lossy().into_owned())
+}
+
+/// Two paths name the same file: equal ignoring case as written (C#'s comparison), or once both are written out long.
+fn same_path(a: &str, b: &str) -> bool {
+    equal_ignore_case(a, b) || equal_ignore_case(&long_text(a), &long_text(b))
+}
+
 /// `GetLongPathNameW`: None when the path does not exist or Windows will not say.
 fn long_path(path: &Path) -> Option<PathBuf> {
     use windows_sys::Win32::Storage::FileSystem::GetLongPathNameW;
@@ -190,12 +201,16 @@ pub fn running_from(folder: &Path, except_self: bool) -> Result<bool> {
     while more {
         let length = entry.szExeFile.iter().position(|unit| *unit == 0).unwrap_or(entry.szExeFile.len());
         let name = String::from_utf16_lossy(&entry.szExeFile[..length]);
-        let ours = INSTALLED_EXECUTABLE_NAMES.iter().any(|known| equal_ignore_case(known, &name));
-        if ours
-            && !(except_self && entry.th32ProcessID == own)
-            && image(entry.th32ProcessID).is_some_and(|image| starts_with_ignore_case(&image, &prefix))
-        {
-            return Ok(true);
+        let ours = |name: &str| INSTALLED_EXECUTABLE_NAMES.iter().any(|known| equal_ignore_case(known, name));
+        // A process started by an 8.3 path reports that short image path (and may carry an 8.3 name, `MIGHTY~1.EXE`): the image is
+        // written out long before it is compared, as the folder was.
+        if (ours(&name) || name.contains('~')) && !(except_self && entry.th32ProcessID == own) {
+            let under = image(entry.th32ProcessID).map(|image| long_text(&image)).is_some_and(|image| {
+                starts_with_ignore_case(&image, &prefix) && Path::new(&image).file_name().is_some_and(|file| ours(&file.to_string_lossy()))
+            });
+            if under {
+                return Ok(true);
+            }
         }
         // SAFETY: as above.
         more = unsafe { Process32NextW(raw(&snapshot), &mut entry) } != 0;
@@ -427,7 +442,7 @@ fn recreate(existing: &Path, target: &Path, old_exe: &str, new_exe: &str, instal
     use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, IPersistFile};
     use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
     use windows::core::{HSTRING, Interface};
-    if !existing.is_file() || !shortcut_target(existing).is_some_and(|path| equal_ignore_case(&path, old_exe)) {
+    if !existing.is_file() || !shortcut_target(existing).is_some_and(|path| same_path(&path, old_exe)) {
         return Ok(());
     }
     // SAFETY: COM calls on a ShellLink object this function created, in this thread's apartment.

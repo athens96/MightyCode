@@ -147,6 +147,104 @@ async fn a_detached_start_gets_exactly_its_environment_and_joins_no_job() {
     remove_when_free(&root).await;
 }
 
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn ReadProcessMemory(
+        process: *mut std::ffi::c_void,
+        base: *const std::ffi::c_void,
+        buffer: *mut std::ffi::c_void,
+        size: usize,
+        read: *mut usize,
+    ) -> i32;
+}
+
+/// `PROCESS_BASIC_INFORMATION` (winternl.h), as `NtQueryInformationProcess(ProcessBasicInformation)` fills it.
+#[repr(C)]
+#[allow(dead_code, reason = "the layout Windows fills; only the PEB's address is read")]
+struct BasicInformation {
+    exit_status: i32,
+    peb: usize,
+    affinity: usize,
+    priority: i32,
+    id: usize,
+    parent: usize,
+}
+
+/// Whether process `pid` ignores Ctrl+C: bit 0 of `RTL_USER_PROCESS_PARAMETERS.ConsoleFlags` (the PEB's `ProcessParameters` at +0x20,
+/// `ConsoleFlags` at +0x18 on 64-bit Windows), which `CREATE_NEW_PROCESS_GROUP` sets and every descendant inherits.
+fn ignores_ctrl_c(pid: u32) -> bool {
+    use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ};
+    // SAFETY: a query-and-read open of a process this test started, closed below; plain-data structs and buffers of the sizes given.
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid);
+        assert!(!process.is_null(), "the child can be opened");
+        let mut basic: BasicInformation = std::mem::zeroed();
+        let status = NtQueryInformationProcess(
+            process,
+            ProcessBasicInformation,
+            (&mut basic as *mut BasicInformation).cast(),
+            size_of::<BasicInformation>() as u32,
+            std::ptr::null_mut(),
+        );
+        assert_eq!(status, 0, "NtQueryInformationProcess");
+        let mut parameters = 0usize;
+        let mut read = 0usize;
+        let peb = basic.peb;
+        assert!(ReadProcessMemory(process, (peb + 0x20) as *const _, (&mut parameters as *mut usize).cast(), 8, &mut read) != 0);
+        let mut flags = 0u32;
+        assert!(ReadProcessMemory(process, (parameters + 0x18) as *const _, (&mut flags as *mut u32).cast(), 4, &mut read) != 0);
+        CloseHandle(process);
+        flags & 1 != 0
+    }
+}
+
+/// Review H1: a detached child (the relaunched app, and so its terminal panes' shells) still stops on Ctrl+C — no
+/// `CREATE_NEW_PROCESS_GROUP`, whose "ignore Ctrl+C" bit every descendant would inherit. The same reading of a child started with that
+/// flag shows the bit set, so the check reads what it claims to.
+#[tokio::test]
+async fn a_detached_child_still_stops_on_ctrl_c() {
+    use std::os::windows::process::CommandExt;
+    // This process must not ignore Ctrl+C itself, or every child would inherit that whatever the flags.
+    // SAFETY: plain call on this process's own console state.
+    unsafe { windows_sys::Win32::System::Console::SetConsoleCtrlHandler(None, 0) };
+    assert!(!ignores_ctrl_c(std::process::id()));
+    let root = temp("ctrl-c");
+    let host = WindowsProcessHost::new();
+    let long = |name: &str| DetachedRequest {
+        program: fake(),
+        args: vec!["--long-child".into(), root.join(name).to_string_lossy().into_owned()],
+        cwd: root.clone(),
+        environment: DetachedEnvironment::Inherit,
+        hidden: true,
+    };
+    let relaunched = host.start_detached_or_in_job(long("relaunched.pid")).unwrap();
+    assert_eq!(pid_from(&root.join("relaunched.pid")).await, relaunched);
+    assert!(!ignores_ctrl_c(relaunched), "the relaunched app does not ignore Ctrl+C");
+    kill(relaunched);
+    match host.start_detached(long("helper.pid")) {
+        Ok(helper) => {
+            assert_eq!(pid_from(&root.join("helper.pid")).await, helper);
+            assert!(!ignores_ctrl_c(helper), "a helper does not ignore Ctrl+C");
+            kill(helper);
+        }
+        Err(PlatformError::Refused(_)) => assert_eq!(in_any_job(std::process::id()), Some(true)),
+        Err(other) => panic!("{other:?}"),
+    }
+    #[allow(clippy::disallowed_methods, reason = "the control: a child started with CREATE_NEW_PROCESS_GROUP, which the port never passes")]
+    let mut grouped = std::process::Command::new(fake())
+        .args(["--long-child", &root.join("grouped.pid").to_string_lossy()])
+        .creation_flags(0x0000_0200 | 0x0800_0000)
+        .spawn()
+        .unwrap();
+    pid_from(&root.join("grouped.pid")).await;
+    assert!(ignores_ctrl_c(grouped.id()), "CREATE_NEW_PROCESS_GROUP sets the bit this check reads");
+    grouped.kill().ok();
+    grouped.wait().ok();
+    remove_when_free(&root).await;
+}
+
 /// C# `UserEnvironment.Fresh` through the port, as the helper hands it to the relaunched app (Program.cs:243-247): the started app has
 /// the user's home and PATHEXT although the helper itself had only `SystemRoot`.
 #[tokio::test]
@@ -171,7 +269,7 @@ async fn the_relaunched_app_gets_the_users_fresh_environment() {
     until(|| started.exists(), 15_000, "the started app's record").await;
     let text = std::fs::read_to_string(&started).unwrap();
     let own = text.split('\0').next().unwrap();
-    assert!(own.eq_ignore_ascii_case(&app.to_string_lossy()), "{own}");
+    assert_eq!(std::fs::canonicalize(own).unwrap(), std::fs::canonicalize(&app).unwrap(), "the app itself started");
     let seen = environment_in(&started);
     assert!(has(&seen, "USERPROFILE") && has(&seen, "APPDATA") && has(&seen, "LOCALAPPDATA") && !has(&seen, "NO_COLOR"));
     remove_when_free(&root).await;
@@ -368,7 +466,8 @@ fn the_renamed_installs_shortcuts_start_the_new_exe() {
 
     std::fs::write(&new_exe, b"new").unwrap();
     assert!(refresh_shortcuts_in(&folders, &install));
-    let same = |a: &str, b: &Path| a.eq_ignore_ascii_case(&b.to_string_lossy());
+    // Canonical on both sides: the test's folders may be written in their 8.3 form (CI's %TEMP%), a shortcut gives back the long one.
+    let same = |a: &str, b: &Path| std::fs::canonicalize(a).ok().is_some_and(|a| Some(a) == std::fs::canonicalize(b).ok());
     assert!(!programs.join("Mighty Claude.lnk").exists(), "the old name is gone");
     assert!(same(&shortcut_target(&programs.join("Mighty Code.lnk")).unwrap(), &new_exe), "Programs starts the new exe");
     assert!(same(&shortcut_target(&desktop.join("Mighty Code.lnk")).unwrap(), &new_exe), "the Desktop's starts the new exe");
