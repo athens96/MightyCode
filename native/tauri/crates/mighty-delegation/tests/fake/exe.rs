@@ -1,6 +1,6 @@
 //! The checks' relaunched exe (C# `Verification.Self`, the test exe started again in a second mode): `--agent-io-mcp`,
 //! `--agent-delegation-mcp` and `--fake-claude <absolute root> …` handed to the library exactly as the app's MightyCode.exe hands them
-//! (src-tauri main.rs), with the real pipe and process host on Windows; elsewhere the ports are `Unsupported` until the Mac stage.
+//! (src-tauri main.rs), with the real pipe and process host on Windows and the Unix socket and process host on the Mac.
 //! Owner: W7-C. Anything else exits 2.
 
 use std::path::Path;
@@ -14,7 +14,14 @@ fn ports() -> (Arc<dyn AgentIoConnector>, Arc<dyn ProcessHost>) {
     (Arc::new(mighty_platform_windows::NamedPipeConnector), Arc::new(mighty_platform_windows::WindowsProcessHost::new()))
 }
 
-#[cfg(not(windows))]
+/// The Mac's Unix socket (M-C) and process host (M-A's; `Unsupported` until it lands, so `--fake-claude` cannot start its MCP server
+/// there yet, while the two MCP modes need only the socket).
+#[cfg(target_os = "macos")]
+fn ports() -> (Arc<dyn AgentIoConnector>, Arc<dyn ProcessHost>) {
+    (mighty_platform_macos::agent_io_connector(), mighty_platform_macos::process_host())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn ports() -> (Arc<dyn AgentIoConnector>, Arc<dyn ProcessHost>) {
     (Arc::new(mighty_platform::unsupported::Unsupported), Arc::new(mighty_platform::unsupported::Unsupported))
 }

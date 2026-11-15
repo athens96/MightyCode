@@ -4,7 +4,7 @@
 //! server's calls back through, Claude as `mighty-delegation-fake --fake-claude <root>` and Codex as `mighty-delegation-fake-cli
 //! --fake-cli codex`. The switch and the worktree root are injected: nothing here reads the registry or touches
 //! `%USERPROFILE%\.mightycode`. It records what the checks judge: each pane's runs in order with how they ended and what they were
-//! given, and every permission card. Windows only while the transport is (W7 plan D4). Owner: W7-D.
+//! given, and every permission card. Windows only until M-A's Mac process host lands (git, the fake Claude and its MCP server); the Mac's transport is in (M-C). Owner: W7-D.
 #![cfg(windows)]
 
 use std::collections::HashMap;

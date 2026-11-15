@@ -222,6 +222,32 @@ async fn tool_requests_are_answered_from_the_client_and_graph_runs_go_only_where
     p.close().await;
 }
 
+/// M-C, `PlatformProfile::remote_graph_runs` false: a Mac host ignores a client's `x-mighty-remote-graph: run` and sends the Mac's
+/// graph events (graph nodes, no `graph_run`); the Windows value is the check above.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mac_host_ignores_the_graph_runs_header() {
+    set_language("en");
+    let fixture = make_host(MakeHost { graph_runs: Some(false), ..MakeHost::default() }).await;
+    let state = fixture.host.start(&[fixture.shared.id().into()], 0).await.unwrap();
+    let (target, key) = (loopback(state.port.unwrap()), state.key.clone().unwrap());
+    let body = serde_json::to_vec(&wire_start(fixture.shared.id(), "claude", "graph", "claude", "manual").to_value()).unwrap();
+    let options = Request { headers: &[(protocol::GRAPH_HEADER, protocol::GRAPH_RUNS)], body: Some(&body), ..Request::default() };
+    let job = RemoteWireJob::decode(&transport::request(&target, &key, Method::Post, "/v2/runs", options).await.unwrap()).unwrap().job_id;
+    let mut poll = String::new();
+    for _ in 0..500 {
+        poll = String::from_utf8(
+            transport::request(&target, &key, Method::Get, &format!("/v2/runs/{job}/events?cursor=0"), Request::default()).await.unwrap(),
+        )
+        .unwrap();
+        if poll.contains("\"done\":true") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(poll.contains("\"type\":\"graph\"") && !poll.contains("graph_run"), "the header is ignored: {poll}");
+    fixture.dispose().await;
+}
+
 fn collect_stamps(value: &Value, out: &mut Vec<String>) {
     match value {
         Value::Object(o) => {

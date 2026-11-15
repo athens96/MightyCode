@@ -932,6 +932,8 @@ fn host_over(world: &World) -> RemoteHost {
         addresses: None,
         clock: host::monotonic(),
         windows_host: true,
+        decodes_paths: false,
+        graph_runs: true,
         antigravity_rules: None,
         system_folder: None,
         network: Arc::new(mighty_platform::fake::FakeNetwork::default()),

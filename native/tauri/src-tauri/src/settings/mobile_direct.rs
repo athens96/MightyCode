@@ -40,6 +40,9 @@ pub fn rows(host: &Arc<Host>, ui: &mut Ui, saved: &MobileRemoteSettings) -> El {
         ui.settings_push(ui.button(title, press), ControlSize::Small, false, false)
     };
 
+    // The Mac (no firewall step, `PlatformProfile::direct_connection_firewall`) says this Mac's own words and shows no firewall row.
+    let has_firewall = direct::has_firewall(host);
+    let description = if has_firewall { strings::description(&locale) } else { locale.get("mobileRemote.direct.description") };
     let direct_label = locale.get("mobileRemote.direct.toggle");
     let to = host.clone();
     let switch = ui
@@ -47,7 +50,7 @@ pub fn rows(host: &Arc<Host>, ui: &mut Ui, saved: &MobileRemoteSettings) -> El {
             direct::switch_pressed(&to, on)
         })
         .enabled(!smoke);
-    let direct_line = ui.settings_labeled(ui.settings_titled(&direct_label, strings::description(&locale)), switch, true);
+    let direct_line = ui.settings_labeled(ui.settings_titled(&direct_label, description), switch, true);
 
     let port_label = locale.get("mobileRemote.direct.portLabel");
     let typed = ui.local("mobile-direct-port", || saved.direct_port.to_string());
@@ -128,6 +131,6 @@ pub fn rows(host: &Arc<Host>, ui: &mut Ui, saved: &MobileRemoteSettings) -> El {
     let firewall_row =
         El::border(Border { child: Some(Box::new(ui.settings_labeled(firewall_words, firewall_buttons, true))), ..Border::default() })
             .margin(indent)
-            .visible(saved.direct_enabled || present);
+            .visible(has_firewall && (saved.direct_enabled || present));
     El::stack(false, metrics::SPACING_SM, vec![direct_line, port_row, status_row, firewall_row])
 }

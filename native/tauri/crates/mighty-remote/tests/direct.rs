@@ -23,6 +23,7 @@ use mighty_platform::{BoxFuture, FirewallChange, FirewallRule, PlatformError};
 use mighty_remote::direct::admit::{self, DirectAuthFailures};
 use mighty_remote::direct::listener::{
     AddressSource, DirectIncoming, DirectListener, DirectPath, DirectPathOptions, DirectReservation, DirectSettings, DirectSink,
+    MagicDnsLookup,
 };
 use mighty_remote::direct::status::{self, DirectState, MobileDirectStatus};
 use mighty_remote::direct::strings;
@@ -603,6 +604,86 @@ async fn mobile_direct_the_upgrade_and_the_peer_are_read_strictly() {
     let zoned = SocketAddrV6::new("fd7a:115c:a1e0:0:0:0:0:1".parse().unwrap(), 1, 0, 7);
     assert_eq!(tailscale::canonical(tailscale::peer(IpAddr::V6(*zoned.ip()))), "fd7a:115c:a1e0::1", "no zone, compressed");
     assert_eq!(peer("100.101.102.103"), "100.101.102.103", "an IPv4 peer stays");
+}
+
+/// `MobileDirectTests.swift:11 "endpointsAreWrittenAndCheckedTheSameWayEverywhere"`, its MagicDNS half (M-C,
+/// `PlatformProfile::direct_advertises_magic_dns`): a MagicDNS name is lower-case labels under `ts.net`; it is advertised after the
+/// bound addresses on the configured port, never alone; loopback only through the seam. The CLI's places and its answer are read as
+/// Swift's `magicDNSName` reads them.
+#[test]
+fn endpoints_are_written_and_checked_the_same_way_everywhere() {
+    assert!(wire::is_tailnet_name("studio.tail1234.ts.net") && !wire::is_tailnet_name("ts.net") && !wire::is_tailnet_name("Studio.ts.net"));
+    assert!(
+        !wire::is_tailnet_name("-a.ts.net")
+            && !wire::is_tailnet_name("a..ts.net")
+            && !wire::is_tailnet_name(&format!("{}.ts.net", "a".repeat(64)))
+    );
+    let bound = |items: &[(&str, u16)]| items.iter().map(|(h, p)| (h.to_string(), *p)).collect::<Vec<_>>();
+    let tailnet = bound(&[("100.101.102.103", 43139), ("fd7a:115c:a1e0::1", 43139)]);
+    assert_eq!(
+        wire::advertised_with_name(&tailnet, Some("studio.tail1234.ts.net"), 43139, false),
+        ["100.101.102.103:43139", "[fd7a:115c:a1e0::1]:43139", "studio.tail1234.ts.net:43139"]
+    );
+    assert!(wire::advertised_with_name(&[], Some("studio.tail1234.ts.net"), 43139, false).is_empty(), "a name alone is not advertised");
+    assert!(wire::advertised_with_name(&bound(&[("127.0.0.1", 5000)]), None, 5000, false).is_empty());
+    assert_eq!(wire::advertised_with_name(&bound(&[("127.0.0.1", 5000)]), None, 5000, true), ["127.0.0.1:5000"]);
+    assert_eq!(wire::advertised_with_name(&tailnet, None, 43139, false), wire::advertised(&tailnet, false), "no name: as Windows");
+    assert_eq!(
+        wire::advertised_with_name(&tailnet, Some("studio.example.com"), 43139, false).len(),
+        2,
+        "a name outside the tailnet is never advertised"
+    );
+    assert_eq!(
+        wire::tailscale_candidates("/usr/bin:relative:/opt/homebrew/bin/:/usr/local/bin"),
+        [
+            "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+            "/opt/homebrew/bin/tailscale",
+            "/usr/local/bin/tailscale",
+            "/usr/bin/tailscale"
+        ],
+        "the known places, then PATH's absolute folders, each once"
+    );
+    assert_eq!(
+        wire::status_dns_name(br#"{"Self":{"DNSName":"Studio.Tail1234.TS.NET.","TailscaleIPs":["100.101.102.103"]}}"#).as_deref(),
+        Some("studio.tail1234.ts.net")
+    );
+    assert_eq!(wire::status_dns_name(br#"{"Self":{"DNSName":""}}"#).as_deref(), Some(""), "MagicDNS off reads as no name");
+    assert!(wire::status_dns_name(b"{}").is_none() && wire::status_dns_name(b"not json").is_none());
+}
+
+/// The direct path asks for the MagicDNS name only where the profile gives it a lookup, only when Tailscale addresses were found and
+/// never through the checks' seam (Swift: no name with an override); a name with nothing bound is not advertised.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_magic_dns_name_is_asked_only_with_tailscale_addresses_and_never_through_the_seam() {
+    let asked = Arc::new(AtomicUsize::new(0));
+    let counted = asked.clone();
+    let lookup = MagicDnsLookup(Arc::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Some("studio.tail1234.ts.net".to_string()) })
+    }));
+    let network = FakeNetwork::default();
+    let options = DirectPathOptions { needs_utun: true, magic_dns: Some(lookup), ..DirectPathOptions::default() };
+    let path = path(&network, options);
+    path.set_sink(Some(Arc::new(Host::default())));
+    let addresses = Arc::new(Mutex::new(Some(vec!["127.0.0.1".to_string()])));
+    path.set_address_source(Some(source(&addresses)), 0).await;
+    path.apply(on()).await;
+    assert!(path.endpoints().iter().all(|e| e.starts_with("127.0.0.1:")) && !path.endpoints().is_empty(), "{:?}", path.endpoints());
+    assert_eq!(asked.load(Ordering::SeqCst), 0, "never through the seam");
+    path.set_address_source(None, 0).await;
+    path.refresh(true).await;
+    assert_eq!(asked.load(Ordering::SeqCst), 0, "no Tailscale adapter, no lookup");
+    network.set_adapters(mighty_platform::Adapters {
+        adapters: vec![mighty_platform::Adapter {
+            name: "utun4".into(),
+            addresses: vec!["100.101.102.103".parse().unwrap(), "fd7a:115c:a1e0::1".parse().unwrap()],
+        }],
+        unreadable: 0,
+    });
+    path.refresh(true).await;
+    assert_eq!(asked.load(Ordering::SeqCst), 1, "Tailscale's addresses found: the name is looked up");
+    assert!(path.endpoints().is_empty(), "the fake binds no Tailscale address, and a name alone is not advertised");
+    path.dispose();
 }
 
 fn path(network: &FakeNetwork, options: DirectPathOptions) -> DirectPath {

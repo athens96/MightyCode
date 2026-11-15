@@ -197,6 +197,9 @@ async fn rows_and_rule(
         "the status line must list the endpoints",
     )?;
     checks.insert("status".into(), json!(true));
+    if !crate::direct::has_firewall(host) {
+        return no_firewall(host, recorder, &shown, checks).await;
+    }
     require(
         words(&shown, "settings-mobile-firewall-state").as_deref()
             == Some(strings::firewall_state(&locale, &FirewallRule::Missing).as_str()),
@@ -271,6 +274,34 @@ async fn rows_and_rule(
     let before = elevated().len();
     crate::direct::recheck_firewall_rule(host).await;
     require(rule() == FirewallRule::Missing && !busy() && elevated().len() == before, "checking again reads the rule without elevating")?;
+    checks.insert("outcomes".into(), json!(true));
+    Ok(())
+}
+
+/// The firewall checks where the platform has no firewall step (the Mac, `PlatformProfile::direct_connection_firewall`; M-C): the box
+/// shows no firewall row nor button, and neither a read, an add nor a remove runs anything.
+async fn no_firewall(
+    host: &Arc<Host>,
+    recorder: &Arc<RecordingNetsh>,
+    shown: &Value,
+    checks: &mut Map<String, Value>,
+) -> Result<(), String> {
+    require(
+        node(shown, "settings-mobile-firewall-state").is_none() && node(shown, "settings-mobile-firewall-button").is_none(),
+        "a platform with no firewall step shows no firewall row",
+    )?;
+    checks.insert("firewallRow".into(), json!(true));
+    crate::direct::change_firewall_rule(host, true).await;
+    require(recorder.launched().is_empty(), "no add runs where there is no firewall step")?;
+    checks.insert("addCommand".into(), json!(true));
+    crate::direct::change_firewall_rule(host, false).await;
+    require(recorder.launched().is_empty(), "no remove runs where there is no firewall step")?;
+    checks.insert("removeCommand".into(), json!(true));
+    crate::direct::recheck_firewall_rule(host).await;
+    require(
+        recorder.launched().is_empty() && crate::direct::firewall_view(host).message.is_none(),
+        "no read runs and no words are left where there is no firewall step",
+    )?;
     checks.insert("outcomes".into(), json!(true));
     Ok(())
 }

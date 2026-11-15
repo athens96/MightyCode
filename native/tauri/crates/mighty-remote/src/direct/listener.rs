@@ -334,18 +334,38 @@ impl DirectSettings {
     }
 }
 
-/// The path's tunables (C#'s `HandshakeDeadline`, `DirectRedetectInterval` init properties; the profile's adapter rule).
-#[derive(Debug, Clone, Copy)]
+/// This node's MagicDNS name, looked up on each pass that found Tailscale addresses (Swift `MobileDirect.magicDNSName`: `tailscale status
+/// --json` through the process host, 5 s at most; src-tauri's direct.rs makes it where `PlatformProfile::direct_advertises_magic_dns`).
+/// None without the CLI, with MagicDNS off, or on any error: the addresses alone are enough.
+#[derive(Clone)]
+pub struct MagicDnsLookup(pub Arc<dyn Fn() -> BoxFuture<'static, Option<String>> + Send + Sync>);
+
+impl std::fmt::Debug for MagicDnsLookup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MagicDnsLookup")
+    }
+}
+
+/// The path's tunables (C#'s `HandshakeDeadline`, `DirectRedetectInterval` init properties; the profile's adapter rule and MagicDNS).
+#[derive(Debug, Clone)]
 pub struct DirectPathOptions {
     /// `PlatformProfile::tailscale_needs_utun`.
     pub needs_utun: bool,
     pub handshake_deadline: Duration,
     pub redetect_interval: Duration,
+    /// `PlatformProfile::direct_advertises_magic_dns` (the Mac): the name advertised after the bound addresses. Never asked through the
+    /// checks' address seam (Swift: no name with an override).
+    pub magic_dns: Option<MagicDnsLookup>,
 }
 
 impl Default for DirectPathOptions {
     fn default() -> DirectPathOptions {
-        DirectPathOptions { needs_utun: false, handshake_deadline: wire::HANDSHAKE_DEADLINE, redetect_interval: wire::REDETECT_INTERVAL }
+        DirectPathOptions {
+            needs_utun: false,
+            handshake_deadline: wire::HANDSHAKE_DEADLINE,
+            redetect_interval: wire::REDETECT_INTERVAL,
+            magic_dns: None,
+        }
     }
 }
 
@@ -365,6 +385,10 @@ struct PathState {
     listener: Option<DirectListener>,
     bound_addresses: Option<Vec<String>>,
     bound_port: Option<u16>,
+    /// What the listeners hold now (host and port), from which the endpoints are made.
+    bound: Vec<(String, u16)>,
+    /// The MagicDNS name the last pass looked up (none where the profile does not advertise one).
+    magic_name: Option<String>,
     endpoints: Vec<String>,
     status: MobileDirectStatus,
     watch: Option<AbortHandle>,
@@ -399,6 +423,8 @@ struct Read {
     wanted: bool,
     source: Option<u64>,
     addresses: Option<Result<Vec<String>, String>>,
+    /// The MagicDNS name, looked up only where the profile says so, outside the seam and with Tailscale addresses found.
+    name: Option<String>,
 }
 
 /// The relay host's direct half (see the module's notes). Cheap to clone; every clone is the same path.
@@ -518,15 +544,21 @@ impl DirectPath {
         };
         let id = source.as_ref().map(|s| s.id);
         if !wanted {
-            return Read { wanted: false, source: id, addresses: None };
+            return Read { wanted: false, source: id, addresses: None, name: None };
         }
+        let seam = source.is_some();
         let (network, needs_utun) = (self.inner.network.clone(), self.inner.options.needs_utun);
         let reading = self.inner.runtime.spawn_blocking(move || match source {
             Some(source) => (source.read)(),
             None => read_tailscale(network.as_ref(), needs_utun),
         });
         let addresses = reading.await.unwrap_or_else(|_| Err("the address read did not finish".into()));
-        Read { wanted: true, source: id, addresses: Some(addresses) }
+        let found = addresses.as_ref().is_ok_and(|addresses| !addresses.is_empty());
+        let name = match &self.inner.options.magic_dns {
+            Some(lookup) if found && !seam => (lookup.0)().await.filter(|name| wire::is_tailnet_name(name)),
+            _ => None,
+        };
+        Read { wanted: true, source: id, addresses: Some(addresses), name }
     }
 
     /// `ApplyDirect`: makes the listeners match what `read` found, under the lock; answers whether the status changed.
@@ -548,8 +580,15 @@ impl DirectPath {
                         Some(Ok(addresses)) => {
                             let seam = state.source.as_ref().map(|s| s.port);
                             let port = seam.unwrap_or(settings.port);
+                            let renamed = state.magic_name != read.name;
+                            state.magic_name = read.name;
                             if force || state.bound_addresses.as_ref() != Some(&addresses) || state.bound_port != Some(port) {
                                 self.bind_direct(&mut state, addresses, port, seam.is_some());
+                            } else if renamed && state.listener.is_some() {
+                                // The same listeners, another MagicDNS name: only what is advertised changes.
+                                state.endpoints =
+                                    wire::advertised_with_name(&state.bound, state.magic_name.as_deref(), port, seam.is_some());
+                                state.status = MobileDirectStatus::new(DirectState::Listening, state.endpoints.clone(), None);
                             }
                         }
                         None => {}
@@ -600,7 +639,8 @@ impl DirectPath {
         }
         let Some(listener) = state.listener.as_ref() else { return };
         let (bound, error) = listener.update(&addresses, port);
-        state.endpoints = wire::advertised(&bound, seam);
+        state.endpoints = wire::advertised_with_name(&bound, state.magic_name.as_deref(), port, seam);
+        state.bound = bound.clone();
         // Anything not bound is tried again on the next pass rather than taken as settled.
         if bound.len() < addresses.len() {
             state.bound_addresses = None;

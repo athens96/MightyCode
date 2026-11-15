@@ -77,6 +77,12 @@ pub struct HostOptions {
     pub clock: Clock,
     /// This PC runs Windows, where Codex and Antigravity are not confined as on a Mac (`full_access_refusal`).
     pub windows_host: bool,
+    /// The request path is percent-decoded before it is routed, as the Mac's `URLComponents.path` gives it
+    /// (`PlatformProfile::remote_decodes_request_paths`; Windows routes it as written).
+    pub decodes_paths: bool,
+    /// A client's `x-mighty-remote-graph: run` gets `graph_run` events (`PlatformProfile::remote_graph_runs`: Windows; a Mac host
+    /// ignores the header and sends graph nodes).
+    pub graph_runs: bool,
     /// agy's settings on this PC, shared with its own panes: an allowed card's continuation puts its rules here. None refuses every grant.
     pub antigravity_rules: Option<AntigravityRuleLeases>,
     /// The system folder Windows reports, where a command's PowerShell comes from (its command line must fit); None: Windows' usual one.
@@ -193,6 +199,29 @@ fn new_key() -> Option<String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).ok()?;
     Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+/// The Mac's `URLComponents(string:).path`: every `%XX` decoded; None when an escape is not two hex digits or the bytes are not UTF-8
+/// (`URLComponents` reads no such target, which the Mac answers as a bad path).
+pub fn percent_decoded(path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' {
+            let hex = bytes.get(at + 1..at + 3)?;
+            let text = std::str::from_utf8(hex).ok()?;
+            if !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
+            out.push(u8::from_str_radix(text, 16).ok()?);
+            at += 3;
+        } else {
+            out.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// A target the Mac's `URLComponents(string:)` reads: URL characters only, no fragment.
@@ -592,14 +621,16 @@ impl RemoteHost {
 
     async fn route(&self, request: &HttpRequest, revision: u64) -> Result<HttpResponse, HostFailure> {
         self.authorize(request, revision)?;
-        // The path is read as written, as the Mac reads it: no dot segment is resolved and no escape decoded.
+        // No dot segment is ever resolved. Windows routes the path as written; the Mac routes `URLComponents.path`, its escapes
+        // decoded (`HostOptions::decodes_paths`). Either way the target itself must be one the Mac's reader takes.
         let (path, query) = match request.target.find('?') {
             Some(mark) => (&request.target[..mark], &request.target[mark..]),
             None => (request.target.as_str(), ""),
         };
-        if !target_text(&request.target) || !path.starts_with(protocol::PATH_PREFIX) {
+        let decoded = if self.0.options.decodes_paths { percent_decoded(path) } else { Some(path.to_string()) };
+        let Some(path) = decoded.filter(|path| target_text(&request.target) && path.starts_with(protocol::PATH_PREFIX)) else {
             return Err(HostFailure::new(400, get("remote.host.error.badPath")));
-        }
+        };
         let route: Vec<&str> = path[protocol::PATH_PREFIX.len()..].split('/').collect();
         if request.method == "GET" && route == ["info"] && query.is_empty() {
             return self.info(revision).await;

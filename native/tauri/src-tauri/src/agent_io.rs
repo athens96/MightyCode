@@ -92,7 +92,7 @@ pub fn listen(host: &Arc<Host>) -> Option<Arc<AgentIo>> {
     }
     std::env::current_exe().ok()?;
     let tools: Arc<dyn TerminalHandler> = Arc::new(WindowTools { host: Arc::downgrade(host) });
-    let listener = crate::platform::agent_io_listener();
+    let listener = crate::platform::agent_io_listener(&host.data_dir);
     // The listener's tasks run on the app's runtime, whether this is called from it or from the setup's thread.
     let runtime = tauri::async_runtime::handle();
     let _entered = runtime.inner().enter();

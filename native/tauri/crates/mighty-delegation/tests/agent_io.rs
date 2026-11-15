@@ -1,7 +1,7 @@
 //! C# AgentIOVerification, AgentIORevocationVerification and AgentWebOpenVerification (Verification.cs L513, L521-L525, L634): the
 //! pane binding and its secret, the tools' argument rules, the stdio contract of mighty-terminal, the authenticated pipe and its
 //! revocation, the agent panes kept out of saved state, the open_url prompts. The pipe checks run over the in-memory transport on
-//! every OS and over the real named pipe on Windows.
+//! every OS, over the real named pipe on Windows and over the real Unix socket on the Mac (M-C, with the Swift socket checks).
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -182,6 +182,120 @@ async fn authenticated_pipe_rejects_revocation_on_the_named_pipe() {
         Arc::new(mighty_platform_windows::NamedPipeConnector),
     )
     .await;
+}
+
+/// "Agent IO AuthenticatedPipeRejectsRevocation", over the Mac's Unix socket (M-C: the socket exists now, so the pipe check runs on it).
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+async fn authenticated_pipe_rejects_revocation_on_the_unix_socket() {
+    let (listener, connector) = mac::transport("revocation");
+    authenticated_pipe_rejects_revocation_over(listener, connector).await;
+}
+
+/// The Mac's socket checks (M-C), each over a profile folder of its own under `/tmp` (Swift's `shortTemporaryDirectory`).
+#[cfg(target_os = "macos")]
+mod mac {
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::PathBuf;
+
+    use mighty_delegation::agent_io::server::{TERMINAL_FAILURE, UNKNOWN_TOKEN_MESSAGE};
+    use mighty_delegation::request::DelegationResponse;
+    use mighty_platform_macos::agent_io::{UnixSocketConnector, UnixSocketListener, socket_path};
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    use super::*;
+
+    pub fn folder(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos();
+        let folder = PathBuf::from(format!("/tmp/mc-io-{name}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        folder
+    }
+
+    pub fn transport(name: &str) -> (Arc<dyn AgentIoListener>, Arc<dyn AgentIoConnector>) {
+        (Arc::new(UnixSocketListener::new(&folder(name))), Arc::new(UnixSocketConnector))
+    }
+
+    fn mode(path: &std::path::Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    async fn read_latest(connector: &dyn AgentIoConnector, socket: &str, token: &str) -> Value {
+        match client::call(connector, socket, token, "read_latest_output", &json!({"handle": "h"})).await {
+            Ok(text) => serde_json::from_str(&text).unwrap(),
+            Err(_) => json!({"failed": true}),
+        }
+    }
+
+    /// `AgentIOMCPServerTests.swift:327 "socketIsPrivateResolvesTokensToTheirPaneAndIsRemovedOnStop"`: the socket's folder is 0700
+    /// and the socket 0600; each pane's token reaches only its own pane, a forged or revoked one none (a terminal call gets C#'s one
+    /// refusal text where Swift's says the unknown-token words; a delegation call gets those words on both); once the server stops
+    /// the socket is gone and a call fails.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn socket_is_private_resolves_tokens_to_their_pane_and_is_removed_on_stop() {
+        let profile = folder("private");
+        let seen = Arc::new(Mutex::new(vec![]));
+        let io = AgentIo::start(Arc::new(UnixSocketListener::new(&profile)), Arc::new(Owner(seen.clone()))).unwrap();
+        let socket = io.name().to_string();
+        assert_eq!(socket, socket_path(&profile, &std::env::temp_dir()).to_string_lossy(), "the profile's socket");
+        assert_eq!(io.transport(), McpTransport::UnixSocket);
+        let path = std::path::Path::new(&socket);
+        assert!(mode(path.parent().unwrap()) == 0o700 && mode(path) == 0o600, "the socket and its folder are the user's alone");
+        let a = io.bind("a", "w", &profile.to_string_lossy(), "claude", &executable("app")).unwrap();
+        let b = io.bind("b", "w", &profile.to_string_lossy(), "codex", &executable("app")).unwrap();
+        let (a_token, b_token) = (a.environment()[TOKEN_KEY].clone(), b.environment()[TOKEN_KEY].clone());
+        assert_eq!(a.environment()["MIGHTY_AGENT_IO_SOCKET"], socket, "the run's environment names the socket");
+        let connector = UnixSocketConnector;
+        assert_eq!(read_latest(&connector, &socket, &a_token).await["result"]["owner"], "a");
+        assert_eq!(read_latest(&connector, &socket, &b_token).await["result"]["owner"], "b");
+        let forged = read_latest(&connector, &socket, &"0".repeat(64)).await;
+        assert!(forged["ok"] == false && forged["error"] == TERMINAL_FAILURE, "a forged token: {forged}");
+        let list = mighty_delegation::request::DelegationRequest { tool: "list_children".into(), arguments: Default::default() };
+        assert_eq!(
+            client::call_delegation(&connector, &socket, "forged", &list).await,
+            DelegationResponse::failure(UNKNOWN_TOKEN_MESSAGE),
+            "a forged token's delegation call"
+        );
+        io.revoke("a");
+        let revoked = read_latest(&connector, &socket, &a_token).await;
+        assert!(revoked["ok"] == false && revoked["error"] == TERMINAL_FAILURE, "a revoked token: {revoked}");
+        assert_eq!(*seen.lock().unwrap(), ["a", "b"], "only live tokens reached a pane");
+        io.close().await;
+        assert!(!path.exists(), "the socket is removed on stop");
+        assert!(connector.connect(&socket, Duration::from_millis(200)).await.is_err(), "nothing answers once stopped");
+        let _ = std::fs::remove_dir_all(&profile);
+    }
+
+    /// `AgentIOMCPServerTests.swift:355 "socketDropsAMessageOverOneMegabyteAndKeepsServing"`: a line over 1 MiB is dropped with its
+    /// connection, unanswered and unhandled, and the next call is served.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn socket_drops_a_message_over_one_megabyte_and_keeps_serving() {
+        let profile = folder("large");
+        let seen = Arc::new(Mutex::new(vec![]));
+        let io = AgentIo::start(Arc::new(UnixSocketListener::new(&profile)), Arc::new(Owner(seen.clone()))).unwrap();
+        let socket = io.name().to_string();
+        let a = io.bind("a", "w", &profile.to_string_lossy(), "claude", &executable("app")).unwrap();
+        let mut raw = tokio::net::UnixStream::connect(&socket).await.unwrap();
+        let writing = tokio::spawn(async move {
+            let _ = raw.write_all(&vec![b'x'; MAXIMUM_BYTES + 4096]).await;
+            let mut answer = Vec::new();
+            let _ = tokio::time::timeout(Duration::from_secs(10), raw.read_to_end(&mut answer)).await;
+            answer
+        });
+        assert!(writing.await.unwrap().is_empty(), "no answer to an oversized line");
+        assert!(seen.lock().unwrap().is_empty(), "nothing reached a pane");
+        let served = read_latest(&UnixSocketConnector, &socket, &a.environment()[TOKEN_KEY]).await;
+        assert_eq!(served["result"]["owner"], "a", "the next call is served");
+        io.close().await;
+        let _ = std::fs::remove_dir_all(&profile);
+    }
+
+    /// "Agent IO revocation cancels queued authenticated calls", over the Mac's Unix socket.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn revocation_cancels_authenticated_queued_request_on_the_unix_socket() {
+        let (listener, connector) = transport("queued");
+        revocation_cancels_queued_over(listener, connector).await;
+    }
 }
 
 /// A handler that waits to be released, then does its effect only if its call is still wanted (C#: `ThrowIfCancellationRequested`).
