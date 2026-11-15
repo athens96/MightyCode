@@ -93,7 +93,10 @@ fn keys_persist_and_status_exposes_the_offer_only_while_connected() {
     let folder = Folder::new("persist");
     let first = folder.identity();
     let again = folder.identity();
-    assert_eq!((first.pairing_key().to_string(), first.server_id(), first.public_key()), (again.pairing_key().to_string(), again.server_id(), again.public_key()));
+    assert_eq!(
+        (first.pairing_key().to_string(), first.server_id(), first.public_key()),
+        (again.pairing_key().to_string(), again.server_id(), again.public_key())
+    );
     assert!(read(&folder.0.join(KEY_PAIR)).starts_with("{\"publicKeyB64\":"), "Swift's key pair file");
     let key = first.pairing_key().to_string();
     token(pair(&first, &key, PHONE, "iPhone").unwrap());
