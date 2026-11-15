@@ -200,9 +200,26 @@ pub(crate) fn add_pane(
     group: Option<&str>,
     shape: impl FnOnce(RunSession) -> RunSession,
 ) -> Result<bool, String> {
+    add_pane_to(host, None, kind, provider, group, shape)
+}
+
+/// [`add_pane`] into `workspace` when one is named (a pane worktree's, made while another workspace may have become the active one,
+/// W9-I), else into the active workspace.
+pub(crate) fn add_pane_to(
+    host: &Arc<Host>,
+    workspace: Option<&str>,
+    kind: &str,
+    provider: &str,
+    group: Option<&str>,
+    shape: impl FnOnce(RunSession) -> RunSession,
+) -> Result<bool, String> {
     let locale = host.locale;
     let mut view = host.view();
-    let workspace = view.snapshot.active_workspace_id.clone().ok_or_else(|| locale.get("window.error.addWorkspaceFirst"))?;
+    let workspace = match workspace {
+        Some(named) => Some(named.to_string()).filter(|id| view.snapshot.workspace(id).is_some()),
+        None => view.snapshot.active_workspace_id.clone(),
+    }
+    .ok_or_else(|| locale.get("window.error.addWorkspaceFirst"))?;
     let remote = view.snapshot.workspace(&workspace).is_some_and(|w| w.remote.is_some());
     if !matches!(kind, "claude" | "shell") && remote {
         return Err(locale.get("remote.windows.workspace.paneUnavailable"));
@@ -373,12 +390,7 @@ pub(crate) async fn close_session(host: &Arc<Host>, id: &str) -> Result<(), Stri
     let closed = host.view().snapshot.session(id).cloned();
     host.view().update(|state| state.sessions_mut().retain(|pane| pane.id() != id))?;
     // A worktree pane's worktree goes with it, or is kept on the workspace when work or children are left (W9-I, C# `ClosePane`).
-    if let Some(closed) = closed.filter(|pane| pane.pane_worktree.is_some())
-        && !host.closing()
-        && host.view().snapshot.session(id).is_none()
-    {
-        crate::pane_worktree::closed(host, &closed).await;
-    }
+    crate::pane_worktree::after_close(host, id, closed).await;
     Ok(())
 }
 

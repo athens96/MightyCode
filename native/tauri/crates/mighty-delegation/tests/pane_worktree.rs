@@ -391,7 +391,10 @@ mod git {
             files.len() == 1 && files[0].path == "feature.txt" && files[0].status == "A",
             "the changed files against the base: {files:?}"
         );
-        assert!(pw::file_diff(&git, &pane, "feature.txt").await.is_some_and(|diff| diff.contains("+feature")), "the file's diff");
+        assert!(
+            pw::file_diff(&git, &place.paths(), &pane, "feature.txt").await.is_some_and(|diff| diff.contains("+feature")),
+            "the file's diff"
+        );
         let before = place.fixture_git(&["rev-parse", "HEAD"]).await;
         let MergeOutcome::Merged { commit, pre_merge } = pw::merge(&git, &pane, &locale).await else { panic!("not merged") };
         assert!(
@@ -472,12 +475,12 @@ mod git {
         assert_eq!(pw::has_unmerged_work(&git, &pane).await, Some(false), "a fresh pane has no work");
         std::fs::write(worktree.join("new.txt"), "one\r\ntwo").unwrap();
         assert_eq!(
-            pw::file_diff(&git, &pane, "new.txt").await.as_deref(),
+            pw::file_diff(&git, &place.paths(), &pane, "new.txt").await.as_deref(),
             Some("+++ b/new.txt\n+one\n+two"),
             "an untracked file is all added"
         );
         for outside in ["../x", "", "/abs", "a/../../b"] {
-            assert!(pw::file_diff(&git, &pane, outside).await.is_none(), "no diff of {outside:?}");
+            assert!(pw::file_diff(&git, &place.paths(), &pane, outside).await.is_none(), "no diff of {outside:?}");
         }
         assert_eq!(pw::has_unmerged_work(&git, &pane).await, Some(true), "a new file is work");
         assert_eq!(pw::commit_all(&git, &pane, &locale).await, CommitOutcome::Committed { left_out: vec![] });
@@ -486,5 +489,88 @@ mod git {
         let files = pw::changed_files(&git, &pane).await.unwrap();
         assert!(files.len() == 1 && files[0].path == "new.txt" && files[0].status == "A");
         assert!(pw::origin(&git, &pane).await.is_none(), "no origin");
+    }
+
+    /// `mklink /J link target`, through cmd.exe and the process host.
+    async fn junction(link: &std::path::Path, target: &std::path::Path) {
+        let comspec = std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
+        let (link, target) = (link.to_string_lossy().into_owned(), target.to_string_lossy().into_owned());
+        let folder = std::path::Path::new(&link).parent().unwrap().to_path_buf();
+        let request = mighty_platform::SpawnRequest::new(comspec, ["/d", "/c", "mklink", "/J", &link, &target], folder);
+        let processes = crate::support::place::processes();
+        let made = mighty_platform::capture(processes.as_ref(), request, None, std::time::Duration::from_secs(30), 1 << 20).await.unwrap();
+        assert!(made.exit_code == 0 && std::fs::read_link(&link).is_ok(), "the junction was made: {link}");
+    }
+
+    /// Beyond C# (review M3, L11): a closed pane's worktree is kept while it holds work, children branch from it, git cannot tell, or
+    /// its own HEAD holds commits on no branch; only a clean one goes.
+    #[tokio::test]
+    async fn a_closed_pane_keeps_its_worktree_with_work_children_or_an_unknown_answer() {
+        let _lane = lane::enter().await;
+        let place = DelegationPlace::new();
+        let git = place.git();
+        let pane = pane_in(&place, "pane-c").await;
+        let worktree = std::path::PathBuf::from(pane.worktree_path());
+        assert!(!pw::kept_on_close(&git, &pane, false).await, "a clean pane's worktree goes");
+        assert!(pw::kept_on_close(&git, &pane, true).await, "children keep it");
+        std::fs::write(worktree.join("new.txt"), "work\n").unwrap();
+        assert!(pw::kept_on_close(&git, &pane, false).await, "a new file is work");
+        std::fs::remove_file(worktree.join("new.txt")).unwrap();
+        let gone = PaneWorktree { checkout: Some(place.join("no-such-checkout")), ..pane.clone() };
+        assert!(pw::kept_on_close(&git, &gone, false).await, "an answer git cannot give keeps it");
+        // A commit on a detached HEAD is on no branch: the branch alone says nothing is unmerged, the worktree's HEAD says otherwise.
+        place.git_in(pane.worktree_path(), &["checkout", "-q", "--detach"]).await;
+        place.commit(pane.worktree_path(), "detached.txt", "detached\n").await;
+        assert!(pw::kept_on_close(&git, &pane, false).await, "a commit on a detached HEAD is work");
+    }
+
+    /// Beyond C# (review M3, L1-L3): the copy never takes a link or what one leads to, nor writes through a link in the worktree; a
+    /// file's diff never reads through one; a worktree that is not its own place, or is a link, is not one the app writes in.
+    #[tokio::test]
+    async fn links_never_lead_a_copy_a_diff_or_a_write_out_of_place() {
+        let _lane = lane::enter().await;
+        let place = DelegationPlace::new();
+        let git = place.git();
+        let paths = place.paths();
+        let pane = pane_in(&place, "pane-d").await;
+        let base = std::path::PathBuf::from(place.base());
+        let (source, outside) = (base.join("ws"), base.join("outside"));
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.env"), "S=1\n").unwrap();
+        junction(&source.join("linked"), &outside).await;
+        let wanted: Vec<String> = ["linked", "linked/secret.env"].iter().map(|s| s.to_string()).collect();
+        let destination = base.join("dest");
+        std::fs::create_dir_all(&destination).unwrap();
+        let copied = pw::copy(&wanted, &source.to_string_lossy(), &destination.to_string_lossy(), &paths);
+        assert!(copied.copied.is_empty(), "nothing a link leads to is copied: {copied:?}");
+        assert_eq!(copied.why("linked"), Some("link"), "the link itself");
+        assert_eq!(copied.why("linked/secret.env"), Some("outside"), "a file through a linked folder");
+        // A folder of the worktree that is a link out of it is never written through.
+        std::fs::create_dir_all(source.join("conf")).unwrap();
+        std::fs::write(source.join("conf").join("x.txt"), "x").unwrap();
+        let elsewhere = base.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        junction(&destination.join("conf"), &elsewhere).await;
+        let through = pw::copy(&["conf/x.txt".to_string()], &source.to_string_lossy(), &destination.to_string_lossy(), &paths);
+        assert!(through.copied.is_empty() && !elsewhere.join("x.txt").exists(), "nothing lands through the link: {through:?}");
+        // A file's diff never reads through a link in the worktree.
+        let worktree = std::path::PathBuf::from(pane.worktree_path());
+        junction(&worktree.join("lnk"), &outside).await;
+        assert!(pw::file_diff(&git, &paths, &pane, "lnk/secret.env").await.is_none(), "no diff through a link");
+        // Its own place only, never a link.
+        assert!(pw::in_own_place(&paths, &pane, &place.root()), "the pane's worktree is its own place");
+        let misplaced = PaneWorktree { worktree_path: Some(place.repo()), ..pane.clone() };
+        assert!(!pw::in_own_place(&paths, &misplaced, &place.root()), "a worktree elsewhere is not");
+        let linked_place = std::path::PathBuf::from(place.root()).join("pane-e");
+        junction(&linked_place, &outside).await;
+        let linked = PaneWorktree {
+            worktree_path: Some(linked_place.to_string_lossy().into_owned()),
+            branch: Some("mighty/pane-e".into()),
+            ..pane.clone()
+        };
+        assert!(!pw::in_own_place(&paths, &linked, &place.root()), "a link at the place is not");
+        std::fs::remove_dir(&linked_place).unwrap();
+        std::fs::remove_dir(worktree.join("lnk")).unwrap();
     }
 }

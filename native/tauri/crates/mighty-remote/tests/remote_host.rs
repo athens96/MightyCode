@@ -667,6 +667,11 @@ async fn commands_run_in_powershell_on_windows() {
     worktree.working_folder = Some(elsewhere.to_string_lossy().into_owned());
     assert!(matches!(remote.start(worktree).await, Err(mighty_run::RunError::Invalid(_))));
     assert!(!runner.is_running("job-c") && !events.lock().unwrap().iter().any(|e| e.session_id == "job-c"), "refused before it starts");
+    // Nor a pane worktree's environment (W9-I, C# `IRemoteRunner.StartAsync` refusing `PaneEnvironment`).
+    let mut environment = StartRunRequest::new("job-g", "ws", "claude", "hello").with_provider("codex");
+    environment.pane_environment = Some(vec![("PORT".into(), "4141".into())]);
+    assert!(matches!(remote.start(environment).await, Err(mighty_run::RunError::Invalid(_))));
+    assert!(!runner.is_running("job-g") && !events.lock().unwrap().iter().any(|e| e.session_id == "job-g"), "never a pane's environment");
     let mut granted = StartRunRequest::new("job-d", "ws", "claude", "hello");
     granted.style_auto_allow = Some(vec!["ToolSearch".into()]);
     assert!(granted.validate().unwrap().style_auto_allow.is_some_and(|g| g.len() == 1), "the grant itself is one a local style may give");

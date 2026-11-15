@@ -114,7 +114,7 @@ pub fn register(methods: &mut Registry) {
     methods.add("paneWorktreeDiff", |host: Arc<Host>, args| async move {
         let (Some(id), Some(path)) = (arg(&args, "id"), arg(&args, "path")) else { return Ok(Value::Null) };
         let (Some(places), Some(pane)) = (places(), pane_record(&host, id)) else { return Ok(Value::Null) };
-        Ok(core::file_diff(&places.git, &pane, path).await.map_or(Value::Null, Value::String))
+        Ok(core::file_diff(&places.git, &places.paths, &pane, path).await.map_or(Value::Null, Value::String))
     });
     methods.add("workspaceWorktree", |host: Arc<Host>, args| async move {
         let (Some(workspace), Some(action)) = (arg(&args, "workspaceId"), arg(&args, "action")) else { return Ok(Value::Null) };
@@ -184,6 +184,17 @@ fn banner(host: &Arc<Host>, text: String) {
 /// The PORTs the open panes hold.
 fn taken_ports(host: &Host) -> HashSet<i32> {
     host.view().snapshot.sessions().iter().filter_map(|s| s.pane_worktree.as_ref().map(|p| p.port)).collect()
+}
+
+/// `PaneWorktreePorts.CanBind` as the PORT's search asks it: a smoke binds nothing but loopback port 0 (the part brief), so every port
+/// reads free there.
+fn port_free(host: &Host, port: i32) -> bool {
+    host.smoke.is_some() || core::can_bind(port)
+}
+
+/// Whether `workspace` is still the active one.
+fn still_active(host: &Host, workspace: &Workspace) -> bool {
+    host.view().snapshot.active_workspace_id.as_deref() == Some(workspace.id())
 }
 
 /// Whether the git steps that write may touch `folders` (the workspace's checkout, a worktree, the root).
@@ -296,7 +307,8 @@ async fn open_in_worktree(
                 if fall_back {
                     let line = locale.get_with("paneWorktree.log.fellBack", &[("reason", &reason)]);
                     let provider_name = provider.to_string();
-                    return frame::add_pane(host, "claude", provider, group, move |pane| {
+                    let group = still_active(host, workspace).then_some(group).flatten();
+                    return frame::add_pane_to(host, Some(workspace.id()), "claude", provider, group, move |pane| {
                         let mut pane = pane;
                         pane.logs.get_or_insert_with(Vec::new).push(system_log(line, Some(provider_name)));
                         pane
@@ -305,15 +317,17 @@ async fn open_in_worktree(
                 banner(host, locale.get_with("paneWorktree.error.cannotMake", &[("reason", &reason)]));
                 return Ok(false);
             };
-            let port = core::port(&id, &taken_ports(host), core::can_bind);
+            let port = core::port(&id, &taken_ports(host), |port| port_free(host, port));
             (core::from_made(&made, &checkout, port, workspace.worktree_setup_command.clone()), None)
         }
     };
+    // The make can take minutes: the pane goes into its own workspace whichever one is active by then, in the group only when it is.
+    let group = still_active(host, workspace).then_some(group).flatten();
     let port = record.port.to_string();
     let words = [("branch", record.branch()), ("base", record.base_branch()), ("port", port.as_str())];
     let line = locale.get_with(if reopened { "paneWorktree.log.reopened" } else { "paneWorktree.log.made" }, &words);
     let (shaped_id, shaped_record, provider_name) = (id.clone(), record.clone(), provider.to_string());
-    let added = frame::add_pane(host, "claude", provider, group, move |pane| {
+    let added = frame::add_pane_to(host, Some(workspace.id()), "claude", provider, group, move |pane| {
         let mut pane = RunSession {
             id: Some(shaped_id),
             title: title.or(pane.title.clone()),
@@ -389,7 +403,7 @@ pub async fn worktree_without_asking(host: &Arc<Host>, workspace: &Workspace, id
     }
     match core::make_pane(&places.maker, id, &start, 300.0).await {
         ChildWorktreeOutcome::Created(made) => {
-            let port = core::port(id, &taken_ports(host), core::can_bind);
+            let port = core::port(id, &taken_ports(host), |port| port_free(host, port));
             (Some(core::from_made(&made, &start.repository, port, workspace.worktree_setup_command.clone())), None)
         }
         ChildWorktreeOutcome::Refused(reason) => (None, fell_back(&text::reason(reason, &locale))),
@@ -414,6 +428,54 @@ pub fn with_worktree(created: RunSession, worktree: Option<&PaneWorktree>, fell_
         created.logs.get_or_insert_with(Vec::new).push(system_log(fell_back.to_string(), provider));
     }
     created
+}
+
+/// The phone's `create` (C# MainWindow.MobileRemote.cs:506-517): `created` (made from the phone's provider) added to the local workspace
+/// `workspace_id`, in its own worktree where the workspace's mode says so ([`worktree_without_asking`]), its files copied and its setup
+/// run after. A missing workspace (404) or a full app (409) refuses before any worktree is made; a worktree made for a pane that then
+/// cannot be added goes again. The pane's id, or the phone's status and words. Run on a task of its own (phone.rs).
+pub async fn phone_create(host: Arc<Host>, workspace_id: String, created: RunSession) -> Result<String, (u16, String)> {
+    let limit = || (409, host.locale.get("workspace.paneLimit"));
+    let refusal = |view: &crate::host::View| {
+        if !view.snapshot.workspaces().iter().any(|w| w.id() == workspace_id && w.remote.is_none()) {
+            return Some((404, "Workspace not found.".to_string()));
+        }
+        (!mighty_core::add_pane::has_room(&view.snapshot)).then(limit)
+    };
+    let workspace = {
+        let view = host.view();
+        if let Some(refused) = refusal(&view) {
+            return Err(refused);
+        }
+        view.snapshot.workspace(&workspace_id).cloned()
+    };
+    let (worktree, fell_back) = match &workspace {
+        Some(workspace) => worktree_without_asking(&host, workspace, created.id()).await,
+        None => (None, None),
+    };
+    let created = with_worktree(created, worktree.as_ref(), fell_back.as_deref(), &host);
+    let id = created.id().to_string();
+    let added = {
+        let mut view = host.view();
+        match refusal(&view) {
+            Some(refused) => Err(refused),
+            None => {
+                let pane = Arc::new(created);
+                view.update(|state| state.sessions_mut().push(pane)).map_err(|error| (409, error))
+            }
+        }
+    };
+    if let Err(refused) = added {
+        if let (Some(worktree), Some(places)) = (&worktree, places()) {
+            core::discard(&places.git, &places.paths, worktree, &id, &places.root, &host.locale).await;
+        }
+        return Err(refused);
+    }
+    host.schedule();
+    if let (Some(worktree), Some(workspace)) = (worktree, workspace) {
+        prepare(&host, &id, &workspace, worktree);
+    }
+    Ok(id)
 }
 
 /// C# `PreparePaneWorktree`: the workspace's files copied into the new worktree (`PaneWorktreeCopy`), then its setup command once, in
@@ -481,17 +543,81 @@ async fn run_setup_command(host: &Host, command: &str, folder: &str, environment
     for (key, value) in environment {
         request = request.env(key.clone(), value.clone());
     }
-    match mighty_platform::capture(host.processes.as_ref(), request, None, Duration::from_secs(30 * 60), 64 << 20).await {
-        Ok(captured) => {
-            let output = format!("{}\n{}", String::from_utf8_lossy(&captured.stdout), String::from_utf8_lossy(&captured.stderr));
-            let lines: Vec<&str> =
-                output.split('\n').map(|line| line.strip_suffix('\r').unwrap_or(line)).filter(|line| !line.is_empty()).collect();
-            let tail = lines[lines.len().saturating_sub(12)..].join("\n");
-            let tail = if tail.encode_utf16().count() > 8000 { utf16_suffix(&tail, 8000) } else { tail };
-            (captured.exit_code, tail)
+    let mut child = match host.processes.spawn(request).await {
+        Ok(child) => child,
+        Err(error) => return (-1, error.to_string()),
+    };
+    let control = child.control();
+    // `process.Input.Close()`.
+    drop(child.stdin.take());
+    let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+    let (mut out, mut err) = (OutputTail::default(), OutputTail::default());
+    let waiting = control.clone();
+    let finished = {
+        let work = async {
+            tokio::join!(out.read(stdout), err.read(stderr));
+            waiting.wait().await
+        };
+        tokio::time::timeout(SETUP_TIMEOUT, work).await
+    };
+    // Past 30 minutes C# kills the process and still says the last lines it wrote, with -1.
+    let code = match finished {
+        Ok(Ok(code)) => code,
+        Ok(Err(_)) => -1,
+        Err(_) => {
+            control.kill();
+            -1
         }
-        Err(error) => (-1, error.to_string()),
+    };
+    let _ = control.close().await;
+    (code, setup_tail(&out.text(), &err.text()))
+}
+
+/// `RunSetupCommand`'s 30 minutes.
+const SETUP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// The end of one of the setup command's outputs: all of it is read (C# lets a verbose setup finish), the last [`OutputTail::KEEP`]
+/// bytes kept, more than the 12 lines of at most 8,000 characters the note shows.
+#[derive(Default)]
+struct OutputTail {
+    bytes: std::collections::VecDeque<u8>,
+    cut: bool,
+}
+
+impl OutputTail {
+    const KEEP: usize = 256 * 1024;
+
+    async fn read(&mut self, reader: Option<mighty_platform::process::ChildReader>) {
+        use tokio::io::AsyncReadExt as _;
+        let Some(mut reader) = reader else { return };
+        let mut buffer = [0u8; 8192];
+        while let Ok(read) = reader.read(&mut buffer).await {
+            if read == 0 {
+                return;
+            }
+            self.bytes.extend(&buffer[..read]);
+            let over = self.bytes.len().saturating_sub(Self::KEEP);
+            if over > 0 {
+                self.bytes.drain(..over);
+                self.cut = true;
+            }
+        }
     }
+
+    /// What was kept as text; a line cut at its start is left out.
+    fn text(&self) -> String {
+        let bytes: Vec<u8> = self.bytes.iter().copied().collect();
+        let start = if self.cut { bytes.iter().position(|b| *b == b'\n').map_or(0, |at| at + 1) } else { 0 };
+        String::from_utf8_lossy(&bytes[start..]).into_owned()
+    }
+}
+
+/// `RunSetupCommand`'s tail: the output, then the errors, as their last 12 lines that are not empty, at most the last 8,000 characters.
+fn setup_tail(output: &str, errors: &str) -> String {
+    let text = format!("{output}\n{errors}").replace("\r\n", "\n");
+    let lines: Vec<&str> = text.split('\n').filter(|line| !line.is_empty()).collect();
+    let tail = lines[lines.len().saturating_sub(12)..].join("\n");
+    if tail.encode_utf16().count() > 8000 { utf16_suffix(&tail, 8000) } else { tail }
 }
 
 // ── the bar ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -501,7 +627,7 @@ async fn run_setup_command(host: &Host, command: &str, folder: &str, environment
 async fn status_model(host: &Arc<Host>, id: &str) -> Value {
     let Some(pane) = pane_record(host, id) else { return Value::Null };
     let status = match places() {
-        Some(places) => core::status(&places.git, &pane).await,
+        Some(places) => own_status(&places, &pane).await,
         None => None,
     };
     let (busy, conflict) = {
@@ -565,22 +691,42 @@ async fn pane_action(host: &Arc<Host>, id: &str, action: &str) {
 }
 
 /// Without the write policy (or outside the smoke's fixture) a git step that writes does nothing and says why (W7 plan D2).
+/// A worktree that is not its own place under the root (or is a link) is never written in either (W7's place rules, beyond C#).
 fn writes_refused(host: &Arc<Host>, pane: &PaneWorktree) -> bool {
-    let refused = !may_write(host, &[pane.checkout(), pane.worktree_path()]);
-    if refused {
+    if !may_write(host, &[pane.checkout(), pane.worktree_path()]) {
         banner(host, crate::setup::verification_mode());
+        return true;
     }
-    refused
+    if !places().is_some_and(|places| core::in_own_place(&places.paths, pane, &places.root)) {
+        banner(host, host.locale.get("delegation.card.error.worktreeMisplaced"));
+        return true;
+    }
+    false
+}
+
+/// `PaneWorktreeGit.Status` of a worktree in its own place; None (unknown) for one that is not.
+async fn own_status(places: &Places, pane: &PaneWorktree) -> Option<Status> {
+    if !core::in_own_place(&places.paths, pane, &places.root) {
+        return None;
+    }
+    core::status(&places.git, pane).await
 }
 
 /// C# `Busy`: one action at a time on a pane; the bar reads it busy meanwhile.
 async fn busy(host: &Arc<Host>, id: &str, work: impl std::future::Future<Output = ()>) {
+    /// C#'s `finally`: the pane is no longer busy however the work ends (a dropped call or a panic included).
+    struct Busy(String);
+    impl Drop for Busy {
+        fn drop(&mut self) {
+            lock(&STATE).busy.remove(&self.0);
+        }
+    }
     if !lock(&STATE).busy.insert(id.to_string()) {
         return;
     }
+    let _busy = Busy(id.to_string());
     host.schedule();
     work.await;
-    lock(&STATE).busy.remove(id);
 }
 
 /// C# `MergePane`: the pane's branch into its base, its changes committed first for Commit and merge.
@@ -750,6 +896,17 @@ async fn discard_pane_worktree(host: &Arc<Host>, session: &RunSession, pane: &Pa
     .await;
 }
 
+/// The tail every close of a pane shares (C# `ClosePane`: the window's close, frame.rs, and the phone's, phone.rs): `closed` is the pane
+/// as it was before it left the state; once it is gone (and the app is not quitting), its worktree goes or is kept ([`closed`]).
+pub async fn after_close(host: &Arc<Host>, id: &str, closed: Option<Arc<RunSession>>) {
+    if let Some(pane) = closed.filter(|pane| pane.pane_worktree.is_some())
+        && !host.closing()
+        && host.view().snapshot.session(id).is_none()
+    {
+        self::closed(host, &pane).await;
+    }
+}
+
 /// C# `PaneWorktreeClosed`: after a worktree pane closed (rule 9), a worktree with nothing unmerged and no child on its branch goes
 /// with it; one with work or children is kept on the workspace's list (`KeptPaneWorktree`), and the app says where. Called by frame.rs's
 /// close once the pane is gone.
@@ -767,9 +924,8 @@ pub async fn closed(host: &Arc<Host>, closed: &RunSession) {
                 )
         });
     if let Some(places) = places()
-        && !children
         && may_write(host, &[pane.checkout(), pane.worktree_path()])
-        && core::has_unmerged_work(&places.git, &pane).await == Some(false)
+        && !core::kept_on_close(&places.git, &pane, children).await
     {
         if let ChildDiscardOutcome::Failed(message) =
             core::discard(&places.git, &places.paths, &pane, closed.id(), &places.root, &locale).await
@@ -955,18 +1111,20 @@ async fn worktree_rows(host: &Arc<Host>, workspace: &Workspace) -> Vec<(Row, Opt
     let on_disk = core::worktrees(&places.git, &places.paths, &checkout, &places.root).await.unwrap_or_default();
     let (children, taken) = {
         let view = host.view();
-        let mut children: HashSet<String> =
-            view.snapshot.sessions().iter().filter(|s| s.parent_session_id.is_some()).map(|s| s.id().to_string()).collect();
+        // Delegated children, and every open pane (beyond C#: another workspace's open pane on the same repository is no "found" row
+        // to reopen or delete from here).
+        let mut children: HashSet<String> = view.snapshot.sessions().iter().map(|s| s.id().to_string()).collect();
         children.extend(delegation_children().into_iter().map(|c| c.id));
         let taken: HashSet<i32> = view.snapshot.sessions().iter().filter_map(|s| s.pane_worktree.as_ref().map(|p| p.port)).collect();
         (children, taken)
     };
     let kept = workspace.kept_pane_worktrees.clone().unwrap_or_default();
-    let rows =
-        core::rows(&open, &kept, &on_disk, &children, &checkout, base_branch.as_deref(), |id| core::port(id, &taken, core::can_bind));
+    let rows = core::rows(&open, &kept, &on_disk, &children, &checkout, base_branch.as_deref(), |id| {
+        core::port(id, &taken, |port| port_free(host, port))
+    });
     let mut result = vec![];
     for row in rows {
-        let status = core::status(&places.git, &row.worktree).await;
+        let status = own_status(&places, &row.worktree).await;
         result.push((row, status));
     }
     result
@@ -1068,7 +1226,7 @@ async fn row_action(host: &Arc<Host>, workspace: &Workspace, row: &Row, action: 
 // ── the smoke's step ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// The keys the step reports (Rust-only: C#'s smoke has no pane worktree step), in the order they are checked.
-const KEYS: [&str; 10] = [
+const KEYS: [&str; 11] = [
     "paneWorktreeMade",
     "paneWorktreeMarker",
     "paneWorktreeSetup",
@@ -1079,14 +1237,18 @@ const KEYS: [&str; 10] = [
     "paneWorktreeList",
     "paneWorktreeDiscard",
     "paneWorktreeClosedClean",
+    "paneWorktreeRefusedOutside",
 ];
 
 /// The smoke's pane-worktree step (smoke.rs `Stage::PaneWorktree`, after delegation): in a fixture repository under the smoke's own
 /// folder (`<folder>\Pane Worktree Smoke\repo`, a workspace in `every` mode copying `.env` and running a setup command), a pane is made
 /// in its own worktree the way Ctrl+N makes one, shows its marker, copies and sets up, reads its status and a file's diff, commits and
 /// merges into main, undoes, is listed, and is discarded through the bar's confirmation; a second pane with nothing of its own closes and
-/// takes its worktree with it. Every git step stays in the smoke's folder ([`crate::delegation::may_touch`]). True when it started; it
-/// reports once through `Smoke::probed`.
+/// takes its worktree with it. Every git step stays in the smoke's folder ([`crate::delegation::may_touch`]). The setup command is
+/// `echo setup-ok` through `%ComSpec% /d /s /c` (`/bin/sh -c` elsewhere), run in the fixture's worktree: deterministic, it changes
+/// nothing outside it. The PORT search binds nothing in a smoke ([`port_free`]). Afterwards the fixture folder goes; the store keeps its
+/// in-memory approval of the folder (it has no forget, and the folder is gone). True when it started; it reports once through
+/// `Smoke::probed`.
 pub fn smoke_start(host: &Arc<Host>) -> bool {
     if host.smoke.is_none() || places().is_none_or(|places| !places.git.available()) {
         return false;
@@ -1236,7 +1398,7 @@ async fn smoke_steps(host: &Arc<Host>, root: &Path, checks: &mut Map<String, Val
     let status = status_model(host, &id).await;
     checks.insert("paneWorktreeStatus".into(), json!(status["known"] == json!(true) && status["changed"] == json!(0)));
     std::fs::write(worktree.join("feature.txt"), "feature\n").map_err(|e| e.to_string())?;
-    let diff = core::file_diff(git, &set_up, "feature.txt").await;
+    let diff = core::file_diff(git, &places.paths, &set_up, "feature.txt").await;
     let changed = status_model(host, &id).await;
     checks.insert("paneWorktreeDiff".into(), json!(diff.is_some_and(|diff| diff.contains("+feature")) && changed["changed"] == json!(1)));
     // Commit and merge: main holds the file; then undo puts main back.
@@ -1291,7 +1453,72 @@ async fn smoke_steps(host: &Arc<Host>, root: &Path, checks: &mut Map<String, Val
         "paneWorktreeClosedClean".into(),
         json!(!Path::new(&second_worktree).exists() && kept.is_empty() && host.view().snapshot.session(second.id()).is_none()),
     );
+    // A pane whose worktree lies outside what the smoke may touch: every action that writes says "verification mode" and git is left as
+    // it was (plan §4, W7 D2).
+    let outside = std::env::temp_dir().join(format!("mighty-pane-worktree-outside-{}", std::process::id()));
+    let refused = refused_outside(host, &outside, &workspace_id).await;
+    let _ = host.view().update(|state| state.sessions_mut().retain(|s| s.id() != "pane-outside"));
+    let removing = outside.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || std::fs::remove_dir_all(removing)).await;
+    checks.insert("paneWorktreeRefusedOutside".into(), json!(refused?));
     Ok(())
+}
+
+/// The refusals' check: a repository and a pane worktree in `outside` (a temporary folder of this process's own, never under the smoke's
+/// folder), the pane in the smoke's workspace with a new file in its worktree; commit-and-merge, merge, undo and discard each refuse
+/// with "verification mode" and leave every ref, the new file and the worktree as they were.
+async fn refused_outside(host: &Arc<Host>, outside: &Path, workspace_id: &str) -> Result<bool, String> {
+    let places = places().ok_or("no places")?;
+    let git = &places.git;
+    let (repo, tree) = (outside.join("repo"), outside.join("pane-outside"));
+    require(!may_write(host, &[&repo.to_string_lossy(), &tree.to_string_lossy()]), "the outside folder is one the smoke may touch")?;
+    let _ = std::fs::remove_dir_all(outside);
+    std::fs::create_dir_all(&repo).map_err(|e| e.to_string())?;
+    smoke_git(git, &repo, &["init", "-q", "-b", "main"]).await?;
+    std::fs::write(repo.join("README.md"), "# outside\n").map_err(|e| e.to_string())?;
+    smoke_git(git, &repo, &["add", "-A"]).await?;
+    smoke_git(git, &repo, &["commit", "-q", "-m", "Start"]).await?;
+    let tree_text = tree.to_string_lossy().into_owned();
+    smoke_git(git, &repo, &["worktree", "add", "-q", "-b", "mighty/pane-outside", &tree_text, "HEAD"]).await?;
+    std::fs::write(tree.join("work.txt"), "work\n").map_err(|e| e.to_string())?;
+    let refs = || async { smoke_git(git, &repo, &["for-each-ref", "--format=%(refname) %(objectname)"]).await };
+    let before = refs().await?;
+    let record = PaneWorktree {
+        worktree_path: Some(tree_text.clone()),
+        branch: Some("mighty/pane-outside".into()),
+        base_branch: Some("main".into()),
+        base_commit: Some(smoke_git(git, &repo, &["rev-parse", "HEAD"]).await?),
+        checkout: Some(repo.to_string_lossy().into_owned()),
+        port: core::PANE_WORKTREE_LOWEST_PORT,
+        merged_commit: Some(smoke_git(git, &repo, &["rev-parse", "HEAD"]).await?),
+        pre_merge_commit: Some(smoke_git(git, &repo, &["rev-parse", "HEAD"]).await?),
+        working_folder: Some(tree_text.clone()),
+        ..PaneWorktree::default()
+    };
+    let pane = RunSession {
+        id: Some("pane-outside".into()),
+        workspace_id: Some(workspace_id.to_string()),
+        working_folder: Some(tree_text),
+        pane_worktree: Some(record),
+        ..RunSession::default()
+    };
+    host.view().update(|state| state.sessions_mut().push(Arc::new(pane)))?;
+    require(pane_record(host, "pane-outside").is_some(), "the outside pane has no record")?;
+    let verification = crate::setup::verification_mode();
+    let mut all = true;
+    for action in ["commitMerge", "merge", "undo", "discard"] {
+        host.view().error = None;
+        pane_action(host, "pane-outside", action).await;
+        let said = host.view().error.clone();
+        all &= said.as_deref() == Some(verification.as_str());
+    }
+    host.view().error = None;
+    let status = smoke_git(git, &tree, &["status", "--porcelain"]).await?;
+    Ok(all
+        && refs().await? == before
+        && status.contains("work.txt")
+        && tree.is_dir()
+        && host.view().snapshot.session("pane-outside").is_some())
 }
 
 /// What the step added goes, whatever happened: the dialog driver, its panes and workspace (their worktrees with the folder), and the
@@ -1331,4 +1558,6 @@ async fn smoke_clean_up(host: &Arc<Host>, root: &Path, before: (Option<String>, 
         }
     });
     host.schedule();
+    let folder = root.to_path_buf();
+    let _ = tauri::async_runtime::spawn_blocking(move || std::fs::remove_dir_all(folder)).await;
 }

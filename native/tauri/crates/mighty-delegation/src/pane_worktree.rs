@@ -375,18 +375,42 @@ pub async fn has_unmerged_work(git: &Git, pane: &PaneWorktree) -> Option<bool> {
     if !status.stdout.is_empty() {
         return Some(true);
     }
+    let base = format!("refs/heads/{}", pane.base_branch());
+    // Beyond C#: the worktree's own head too, so commits made on a detached HEAD (on no branch) count as work and are never discarded.
+    if let Some(own) = head(git, worktree).await {
+        let contained = run(git, &["merge-base", "--is-ancestor", &own, &base], checkout, STEP_TIMEOUT).await?;
+        match contained.exit_code {
+            0 => {}
+            1 => return Some(true),
+            _ => return None,
+        }
+    }
     let verify = format!("refs/heads/{}^{{commit}}", pane.branch());
     let found = run(git, &["rev-parse", "-q", "--verify", &verify], checkout, STEP_TIMEOUT).await?;
     if found.exit_code != 0 {
         return Some(false);
     }
-    let base = format!("refs/heads/{}", pane.base_branch());
     let contained = run(git, &["merge-base", "--is-ancestor", line(&found.stdout), &base], checkout, STEP_TIMEOUT).await?;
     match contained.exit_code {
         0 => Some(false),
         1 => Some(true),
         _ => None,
     }
+}
+
+/// C# `PaneWorktreeClosed`'s question: whether a closed pane's worktree is kept on its workspace rather than discarded: kept while
+/// children branch from it (`children`), or while git says it holds unmerged work or cannot tell (rule 9).
+pub async fn kept_on_close(git: &Git, pane: &PaneWorktree, children: bool) -> bool {
+    children || has_unmerged_work(git, pane).await != Some(false)
+}
+
+/// Beyond C# (W7's place rules for a pane's own worktree): whether `pane`'s worktree is its own place `<root>\<id>` for the id its branch
+/// `mighty/<id>` names, and not itself a link or junction. Git that writes in the worktree (a commit, a merge's reads of it) goes only
+/// where this holds; the discard checks the same ([`remove_own_worktree`]).
+pub fn in_own_place(paths: &DelegationPaths, pane: &PaneWorktree, root: &str) -> bool {
+    let Some(id) = pane.branch().strip_prefix("mighty/").filter(|id| is_safe_session_id(id)) else { return false };
+    let worktree = pane.worktree_path();
+    !crate::git::paths::is_link(worktree) && same(&paths.canonical_place(worktree), &os::combine(&paths.canonical(root), id))
 }
 
 /// `PaneWorktreeGit.Discard`: the worktree, every worktree nested in it, a leftover folder at its place and its branch
@@ -491,7 +515,7 @@ fn read_text(bytes: &[u8]) -> String {
 
 /// `PaneWorktreeGit.FileDiff`: the unified diff of `path` against the commit the pane shares with its base (a new file: all added);
 /// None when git could not tell, or the path leaves the worktree.
-pub async fn file_diff(git: &Git, pane: &PaneWorktree, path: &str) -> Option<String> {
+pub async fn file_diff(git: &Git, paths: &DelegationPaths, pane: &PaneWorktree, path: &str) -> Option<String> {
     if path.is_empty() || path.contains('\0') || rooted(path) || path.split(['/', '\\']).any(|part| part == "..") {
         return None;
     }
@@ -512,6 +536,10 @@ pub async fn file_diff(git: &Git, pane: &PaneWorktree, path: &str) -> Option<Str
     let full = Path::new(worktree).join(path);
     let meta = std::fs::symlink_metadata(&full).ok()?;
     if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 1_000_000 {
+        return None;
+    }
+    // Beyond C#: a folder on the way may be a link out of the worktree; the file read must still lie inside it.
+    if !is_inside(&paths.canonical(&full.to_string_lossy()), &paths.canonical(worktree)) {
         return None;
     }
     let text = read_text(&std::fs::read(&full).ok()?).replace("\r\n", "\n");
@@ -808,6 +836,7 @@ fn under(folder: &str, path: &str) -> String {
 pub fn copy(paths_to_copy: &[String], source: &str, destination: &str, paths: &DelegationPaths) -> CopyResult {
     let mut result = CopyResult::default();
     let source_root = paths.canonical(source);
+    let destination_root = paths.canonical(destination);
     let (mut bytes, mut files) = (0u64, 0usize);
     for path in normalized_copy_paths(paths_to_copy.iter().map(|p| Some(p.as_str()))).unwrap_or_default() {
         let from = under(source, &path);
@@ -870,6 +899,11 @@ pub fn copy(paths_to_copy: &[String], source: &str, destination: &str, paths: &D
             for (item, target) in &items {
                 if let Some(parent) = target.parent() {
                     std::fs::create_dir_all(parent)?;
+                    // Beyond C#: a folder of the worktree on the way may be a link out of it; nothing is written through one.
+                    let place = paths.canonical(&parent.to_string_lossy());
+                    if !same(&place, &destination_root) && !is_inside(&place, &destination_root) {
+                        return Err(std::io::Error::other("a folder on the way leads out of the worktree"));
+                    }
                 }
                 // `File.Copy(overwrite: false)`: never over a file that is there.
                 if std::fs::symlink_metadata(target).is_ok() {
