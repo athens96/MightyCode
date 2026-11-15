@@ -173,8 +173,9 @@ async fn real_pane_chunks_korean_output_on_character_boundaries() {
     let _ = std::fs::remove_dir_all(&folder);
 }
 
-/// Swift `LongRunningProcessTests.swift:117 "realPaneSkipsACharacterCutByEviction"`: past the 1 MB the pane keeps, the oldest output
-/// goes, and what is kept never starts inside a character.
+/// Swift `LongRunningProcessTests.swift:117 "realPaneSkipsACharacterCutByEviction"`: past the 1 MB of bytes the command's log keeps, the
+/// oldest output goes, and what is kept never starts inside a character. (The agent's own reads are C#'s buffer, counted in UTF-16
+/// units, where these 349,526 characters still fit; Swift counted that one in bytes too and said output was dropped.)
 #[tokio::test(flavor = "multi_thread")]
 async fn real_pane_skips_a_character_cut_by_eviction() {
     let folder = folder("evict");
@@ -184,7 +185,6 @@ async fn real_pane_skips_a_character_cut_by_eviction() {
     let chunk = terminal.read_output(&handle, 0, 21_000);
     assert!(chunk.next_offset > 21_000 * 3, "the oldest output was dropped: the kept output starts past the beginning");
     assert!(!chunk.output.contains('\u{FFFD}') && chunk.output.starts_with('한'), "{:?}", chunk.output.chars().take(4).collect::<String>());
-    assert!(terminal.read(&handle).unwrap().output_dropped, "the agent is told older output was dropped");
     terminal.dispose().await;
     let _ = std::fs::remove_dir_all(&folder);
 }
@@ -253,7 +253,9 @@ async fn real_pty_runs_in_the_workspace_folder_not_the_app_folder() {
     let _ = std::fs::remove_dir_all(&folder);
 }
 
-/// Swift `AgentTerminalToolOutputTests.swift:134 "realPTYColourOutputReachesTheAgentPlainAndThePaneStaysRaw"`.
+/// Swift `AgentTerminalToolOutputTests.swift:134 "realPTYColourOutputReachesTheAgentPlainAndThePaneStaysRaw"`: the agent reads the text
+/// without its colour, the pane keeps every byte. C#'s cleaner (the agent's reads on both OSes) drops a carriage return rather than
+/// resolving the redraw it makes, as Swift's `AgentTerminalOutputCleaner` did (`green\n100%`).
 #[tokio::test(flavor = "multi_thread")]
 async fn real_pty_colour_output_reaches_the_agent_plain_and_the_pane_stays_raw() {
     let folder = folder("colour");
@@ -261,7 +263,7 @@ async fn real_pty_colour_output_reaches_the_agent_plain_and_the_pane_stays_raw()
     let first = terminal.run("printf '\\033[1;32mgreen\\033[0m\\n50%%\\r100%%\\n'").await.unwrap();
     let result = finished(&terminal, first).await;
     assert_eq!(result.exit_code, Some(0), "{result:?}");
-    assert_eq!(printed(&result), "green\n100%");
+    assert_eq!(printed(&result), "green\n50%100%");
     let raw = terminal.read_output(&result.handle, 0, 4_096).output;
     assert!(raw.contains("\u{1b}[1;32mgreen\u{1b}[0m\r\n50%\r100%\r\n"), "{raw:?}");
     terminal.dispose().await;

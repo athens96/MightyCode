@@ -68,3 +68,35 @@ exit 0
     manager.dispose().await;
     common::remove_when_free(&directory).await;
 }
+
+/// Swift `CoreTests.swift:255 "testShellRunnerRunsStopsAndKeepsEventsIsolated"`: two shell panes' commands run through `/bin/sh -c`;
+/// the first completes with its Korean output, the second is stopped while it sleeps, and neither's events reach the other.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_shell_runner_runs_stops_and_keeps_events_isolated() {
+    common::korean();
+    let directory = common::temp("shell-isolated");
+    let events: Arc<Mutex<Vec<RunEvent>>> = Arc::default();
+    let sink = events.clone();
+    let workspace = workspace(&directory);
+    let manager = RunManager::new(
+        common::absent_catalog(),
+        RunManagerOptions::new("", resolve(&workspace), Arc::new(move |event| sink.lock().unwrap().push(event))),
+    );
+    let id = workspace.id.clone().unwrap();
+    let has = |session: &str, test: &dyn Fn(&RunEvent) -> bool| events.lock().unwrap().iter().any(|e| e.session_id == session && test(e));
+    let text = |e: &RunEvent| e.entry.as_ref().and_then(|l| l.text.clone()).unwrap_or_default();
+    manager.start(StartRunRequest::new("first", &id, "shell", "printf '첫 번째'")).await.unwrap();
+    manager.start(StartRunRequest::new("second", &id, "shell", "printf READY; sleep 30")).await.unwrap();
+    common::until(
+        || has("first", &|e| e.status.as_deref() == Some("completed")) && has("second", &|e| text(e) == "READY"),
+        20_000,
+        "the first completes and the second says READY",
+    )
+    .await;
+    manager.stop("second").await.unwrap();
+    assert!(has("second", &|e| e.status.as_deref() == Some("stopped")));
+    assert!(has("first", &|e| text(e) == "첫 번째"));
+    assert!(!has("first", &|e| text(e) == "READY") && !has("second", &|e| text(e) == "첫 번째"), "events stay with their pane");
+    manager.dispose().await;
+    common::remove_when_free(&directory).await;
+}

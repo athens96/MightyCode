@@ -37,15 +37,17 @@ impl DiskSpace for MacDiskSpace {
 mod tests {
     use super::*;
 
-    /// Swift `DelegationWorktreeTests.swift:119 "defaultRootAndFreeSpaceReader"` (its reader half): the temporary folder's volume
-    /// says a free space, and a folder not made yet is read through its nearest existing parent.
+    /// Swift `DelegationWorktreeTests.swift:119 "defaultRootAndFreeSpaceReader"`, its reader half (the default root,
+    /// `~/.mightycode/worktrees`, is mighty-delegation's): the temporary folder's volume says a free space, and a folder not made yet is
+    /// read through its nearest existing parent, which is left as it was.
     #[test]
-    fn the_free_space_is_read_through_the_nearest_existing_folder() {
+    fn default_root_and_free_space_reader() {
         let temp = std::env::temp_dir();
         let free = MacDiskSpace.available_bytes(&temp).unwrap();
         assert!(free > 0);
         let missing = temp.join("mighty-disk-not-made").join("child");
         let through_parent = MacDiskSpace.available_bytes(&missing).unwrap();
         assert!(through_parent > 0);
+        assert!(!missing.exists(), "nothing is made");
     }
 }
