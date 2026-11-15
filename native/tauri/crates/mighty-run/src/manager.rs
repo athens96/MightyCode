@@ -19,7 +19,7 @@
 //! `session/cancel` a second before a stop ends it. What Hermes's `state.db` says of a session to continue comes from the host
 //! ([`HermesSessionReader`]: mighty-history reads it, which this crate cannot name).
 //!
-//! Until their stages: a sharing host's PowerShell commands are W8. The Agent IO / delegation binding (W7) plugs in through
+//! A sharing host's commands run in Windows PowerShell (`powershell_commands`, W8-D). The Agent IO / delegation binding (W7) plugs in through
 //! [`RunBinding`]; the file originals (W4) through [`FileOriginals`].
 
 use std::collections::{BTreeMap, HashMap};
@@ -49,6 +49,7 @@ use crate::lines::{Lines, Next};
 use crate::meta;
 use crate::model::{RunEvent, StartRunRequest};
 use crate::mods::{Connection, ModBridge, ModMetadata};
+use crate::os;
 use crate::parser::{ImageStore, OutputParser, ParserHooks, maximum_line_bytes};
 use crate::permissions::{ChannelHooks, ClaudePermissionChannel, ProviderInput, ToolPermissionRequest};
 use crate::phase_models;
@@ -116,6 +117,10 @@ pub struct RunManagerOptions {
     /// Hermes's session facts (None: nothing is read, as for a record that cannot be read: a pane that asks starts a new session, a
     /// full-access one continues it as asked).
     pub hermes_session: Option<HermesSessionReader>,
+    /// A sharing host's command panes (C# `PowerShellCommands`, W8-D): on Windows each command runs as Windows PowerShell from this
+    /// system folder, `-NoProfile -NonInteractive -Command <text>`, with `NoDefaultCurrentDirectoryInExePath=1` (C#
+    /// `RemoteCommandShell.Launch`); None (and off Windows) the shell as for a local pane.
+    pub powershell_commands: Option<String>,
 }
 
 impl RunManagerOptions {
@@ -135,6 +140,7 @@ impl RunManagerOptions {
             antigravity_rules: None,
             antigravity_home: None,
             hermes_session: None,
+            powershell_commands: None,
         }
     }
 }
@@ -991,7 +997,9 @@ impl Exec {
             return;
         }
         if let Some(nodes) = &inner.options.graph_nodes {
-            nodes(&run.request.session_id, node);
+            // A host callback that fails loses its node, never the run's last status (C#'s catch around it).
+            let id = &run.request.session_id;
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| nodes(id, node)));
         }
     }
 
@@ -1625,7 +1633,18 @@ impl Exec {
         let mut acp_launch: Option<StartRunRequest> = None;
         let mut hermes_notice: Option<String> = None;
         let mut hermes_questions = QuestionTool::default();
-        let launch: mighty_platform::SpawnRequest = if request.kind == "shell" {
+        // Read once: the launch below must quote the arguments PowerShell was given, never hand its text to cmd /s /c.
+        let power_shell = inner.options.powershell_commands.as_deref().filter(|_| request.kind == "shell" && os::windows());
+        let launch: mighty_platform::SpawnRequest = if let Some(system) = power_shell {
+            let (binary, arguments) = power_shell_launch(&request.input, system).map_err(Failure::Error)?;
+            // The command runs in the shared folder: nothing there may stand in for a program it names.
+            let mut shell_environment = environment.clone();
+            shell_environment.insert("NoDefaultCurrentDirectoryInExePath".into(), "1".into());
+            providers
+                .processes()
+                .cli_request(Path::new(&binary), &arguments, Path::new(&workspace_path), &shell_environment)
+                .map_err(|e| Failure::Error(e.to_string()))?
+        } else if request.kind == "shell" {
             providers.processes().shell_request(&request.input, Path::new(&workspace_path), &environment)
         } else {
             let command = tokio::select! {
@@ -2207,6 +2226,24 @@ impl From<Failure> for RunError {
             Failure::Error(message) => RunError::State(message),
         }
     }
+}
+
+/// C# `RemoteCommandShell.Launch(command, systemFolder)`: Windows PowerShell from the system folder Windows reports, the text the one
+/// argument after `-Command`; Err when the folder is not a full drive path (an empty, relative or drive-relative one would resolve
+/// against the current folder).
+pub fn power_shell_launch(command: &str, system_folder: &str) -> std::result::Result<(String, Vec<String>), String> {
+    let b = system_folder.as_bytes();
+    let full = b.len() >= 3
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && matches!(b[2], b'\\' | b'/')
+        && !system_folder.contains(['"', '\0'])
+        && !system_folder.split(['\\', '/']).any(|part| part == "." || part == "..");
+    if !full {
+        return Err("The system folder must be a full path.".into());
+    }
+    let binary = format!("{}\\WindowsPowerShell\\v1.0\\powershell.exe", system_folder.trim_end_matches(['\\', '/']));
+    Ok((binary, vec!["-NoProfile".into(), "-NonInteractive".into(), "-Command".into(), command.into()]))
 }
 
 #[cfg(test)]

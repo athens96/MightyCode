@@ -167,7 +167,7 @@ async fn a_local_workspace_is_never_written_or_read_as_remote() {
     let refused = runs.start_reached(StartRunRequest::new("pane-1", twin.id(), "shell", "echo hi")).await.unwrap_err();
     assert_eq!(refused.message(), get("run.error.approvedWorkspaceOnly"), "a runner never starts in a remote workspace");
     runs.dispose().await;
-    // Nor does the service resolve one as a local folder: with no host to send it to, a remote pane's run is refused.
+    // Nor does the service resolve one as a local folder: a remote pane's run goes only to its host (here none is attached).
     let pane =
         RunSession { id: Some("pane-2".into()), workspace_id: Some(twin.id().into()), kind: Some("shell".into()), ..RunSession::default() };
     let state = AppSnapshot { workspaces: Some(vec![local, twin.clone()]), sessions: Some(vec![Arc::new(pane)]), ..AppSnapshot::default() };
@@ -182,7 +182,7 @@ async fn a_local_workspace_is_never_written_or_read_as_remote() {
     };
     let (service, _events) = RunService::new(state, absent(), options);
     let refused = service.start(StartRunRequest::new("pane-2", twin.id(), "shell", "echo hi")).await.unwrap_err();
-    assert_eq!(refused.message(), get("run.error.approvedWorkspaceOnly"), "a remote workspace never resolves as a local folder");
+    assert_eq!(refused.message(), get("remote.run.error.notConnected"), "a remote workspace never resolves as a local folder");
     service.dispose().await;
     let _ = std::fs::remove_dir_all(&directory);
     let _ = std::fs::remove_dir_all(&folder);

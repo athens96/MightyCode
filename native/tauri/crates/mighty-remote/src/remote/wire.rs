@@ -337,6 +337,34 @@ impl<'de> serde::de::Visitor<'de> for UniqueVisitor {
     }
 }
 
+/// A body's top-level members as their JSON text, a member repeated at the top refused (what is inside each is read later, on its own).
+pub(crate) fn parse_members(body: &[u8]) -> Result<IndexMap<String, Box<serde_json::value::RawValue>>, BadBody> {
+    struct Members;
+    impl<'de> serde::de::Visitor<'de> for Members {
+        type Value = IndexMap<String, Box<serde_json::value::RawValue>>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("an object")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut members = IndexMap::new();
+            while let Some(key) = map.next_key::<String>()? {
+                if members.contains_key(&key) {
+                    return Err(serde::de::Error::custom("a repeated member"));
+                }
+                members.insert(key, map.next_value()?);
+            }
+            Ok(members)
+        }
+    }
+    struct Top(IndexMap<String, Box<serde_json::value::RawValue>>);
+    impl<'de> serde::Deserialize<'de> for Top {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            deserializer.deserialize_map(Members).map(Top)
+        }
+    }
+    serde_json::from_slice::<Top>(body).map(|top| top.0).map_err(|_| BadBody)
+}
+
 /// The body as JSON, a key repeated anywhere refused.
 pub fn parse(body: &[u8]) -> Result<Value, BadBody> {
     serde_json::from_slice::<Unique>(body).map(|u| u.0).map_err(|_| BadBody)
