@@ -135,19 +135,20 @@ impl Eyes {
 
 /// Starts the step: its host half now, then the page's probe; it reports once through the probe.
 pub fn start(host: &Arc<Host>) -> bool {
-    let Some(smoke) = &host.smoke else { return false };
+    if host.smoke.is_none() {
+        return false;
+    }
     let Some(update) = crate::app_update::of(host) else {
         host.log.line("smoke: no app update step (the app update was not started)");
         return false;
     };
     host.log.line("smoke: app update steps");
     let host = host.clone();
-    let probe_host = host.clone();
     tauri::async_runtime::spawn(async move {
-        let report = host_half(&host, &update).await;
+        let report = host_half(&host, &update);
         let page = page_phase(&host, &update);
-        if let Some(smoke) = &probe_host.smoke {
-            smoke.eval(&probe_host, &PROBE.replace("__HOST__", &report.to_string()));
+        if let Some(smoke) = &host.smoke {
+            smoke.eval(&host, &PROBE.replace("__HOST__", &report.to_string()));
         }
         let after = page.await;
         let script = format!("window.__mightyAppUpdateHost = {after};");
@@ -155,12 +156,11 @@ pub fn start(host: &Arc<Host>) -> bool {
             let _ = page.eval(&script);
         }
     });
-    let _ = smoke;
     true
 }
 
 /// `RunAppUpdateSectionSmoke` and `RunAppUpdateStagedSmoke`'s host side.
-async fn host_half(host: &Arc<Host>, update: &Arc<AppUpdate>) -> Value {
+fn host_half(host: &Arc<Host>, update: &Arc<AppUpdate>) -> Value {
     let locale = host.locale;
     let core = &update.core;
     let eyes = Eyes::new(host);

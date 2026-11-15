@@ -746,11 +746,8 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             if may_change && let Some(install) = install_directory() {
-                let (log, version, installer) = (
-                    crate::logfile::LogFile::new(host.log.dir().to_path_buf()),
-                    crate::settings::about::version_text(&host),
-                    installer.clone(),
-                );
+                let (log, version, installer) =
+                    (crate::logfile::LogFile::new(host.log.dir().to_path_buf()), crate::update_helper::version(), installer.clone());
                 let _ = tokio::task::spawn_blocking(move || housekeeping_at_start(&install, &version, installer.as_ref(), &log)).await;
             }
             // Without it a quit during a sign-out would still install; the update itself goes on.
