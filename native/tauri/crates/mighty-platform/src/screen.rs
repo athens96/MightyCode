@@ -2,6 +2,9 @@
 //! them. Screen share is switched off in both apps (`ScreenShareAvailability.Enabled` is false: the Cloudflare relay has no TURN), so
 //! these are signatures only: every OS answers `Unsupported` until the native capture (Windows Graphics Capture, ScreenCaptureKit) and
 //! input (`SendInput` and the low-level hooks, CGEvent) are written after 0.5. Owner: W8-F (the shapes, as its pure crate needs them).
+//!
+//! mighty-remote's screen hub drives a `ScreenSharePlatform` (C#'s `IScreenSharePlatform`: capture, input and the WebRTC peer), which
+//! the native screen share will build over these two ports and the transport; until then nothing builds one.
 
 use crate::{BoxFuture, DeviceRect, Result};
 
@@ -81,4 +84,20 @@ impl std::fmt::Debug for RemoteInputEvent {
 /// field has the focus (C#'s UIA probe). Nothing is sent while screen share is off.
 pub trait RemoteInput: Send + Sync {
     fn send(&self, display: &str, event: RemoteInputEvent) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::unsupported::Unsupported;
+
+    /// Every OS refuses: nothing is listed, captured or sent while screen share is paused (D11).
+    #[test]
+    fn the_ports_refuse_until_the_native_screen_share() {
+        assert!(Unsupported.displays().is_err_and(|e| e.is_unsupported()));
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        assert!(runtime.block_on(Unsupported.capture("1")).is_err_and(|e| e.is_unsupported()));
+        assert!(Unsupported.send("1", RemoteInputEvent::Text("SECRET".into())).is_err_and(|e| e.is_unsupported()));
+        assert!(!format!("{:?}", RemoteInputEvent::Text("SECRET".into())).contains("SECRET"), "typed text never reaches Debug");
+    }
 }

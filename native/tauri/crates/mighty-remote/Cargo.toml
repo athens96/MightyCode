@@ -50,6 +50,13 @@ native-tls = "0.2"
 # The pairing QR (D13): ECC M, drawn to a PNG with image (W8-A's settings box).
 qrcode = { version = "0.14", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Screen share's protocol (screen::policy, screen::clipboard, W8-F): the P-256 control key's DER signature over SHA-256, as C#'s
+# ECDsa.VerifyData; the clipboard's zstd frames, decoded with a bounded window, in pure Rust (ruzstd rather than the plan's zstd, whose
+# C build cannot cross-compile for the Mac check on Windows); the hub's clock and its sessions' cancellation.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+ruzstd = "0.9"
+chrono.workspace = true
+tokio-util = "0.7"
 
 [dev-dependencies]
 mighty-platform.workspace = true
