@@ -300,9 +300,12 @@ const BROWSER_PROBE: &str = r#"(async () => {
     report.navigated = !!(await until(() => field() === fixture, 10000));
     // A second page, then the page's back button: the host's history and the engine go back to the first.
     const second = fixture.replace('/fixture', '/second'), popup = fixture.replace('/fixture', '/popup');
-    const go = (url) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(address, url); address.dispatchEvent(new Event('input', { bubbles: true })); address.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); };
+    // Typed into the field the page shows now (it may have drawn the pane anew since the first address).
+    const go = (url) => { const input = ofPane('[data-testid=browser-address]') ?? address; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, url); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); };
+    report.firstFieldKept = address.isConnected;
     go(second);
     report.onSecond = !!(await until(() => field() === second, 10000));
+    if (!report.onSecond) report.secondSeen = { field: field(), view: (await surface())?.url ?? null };
     const back = await until(() => { const b = ofPane('button.browser-nav'); return b && !b.disabled ? b : null; }, 10000);
     back?.click();
     report.wentBack = report.onSecond && !!(await until(async () => { const s = await surface(); return field() === fixture && s && (s.url || '') === fixture; }, 10000));
