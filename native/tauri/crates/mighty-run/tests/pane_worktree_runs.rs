@@ -1,8 +1,8 @@
 //! A pane worktree's runs (W9-I; C# DesktopService.cs `Launch`, RunManager.cs `ExecuteAsync`): the run service tells the pane's agent
 //! once where it works (the CLI gets the note, the transcript keeps the request as sent, `noteGiven` is saved, a slash command never
 //! carries it), and the runner hands the process the pane's PORT, `MIGHTY_WORKSPACE_FOLDER` and `MIGHTY_WORKTREE`, never another key
-//! and never a value holding a NUL. The stand-in CLI records its stdin and those variables. Windows: the real process host runs it.
-#![cfg(windows)]
+//! and never a value holding a NUL. The stand-in CLI records its stdin and those variables. The OS's real process host runs it
+//! (Windows'; the Mac's since M-A).
 
 mod common;
 

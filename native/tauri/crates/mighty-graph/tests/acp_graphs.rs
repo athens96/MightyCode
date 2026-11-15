@@ -5,7 +5,7 @@
 //! Then the graph parts of C# AcpRunVerification, which mighty-run's own tests/acp_run.rs cannot reach (that crate cannot name this
 //! one): opencode and Hermes runs through mighty-run's `RunManager` with this crate's `TrackerFactory`, over a real stand-in agent (this
 //! crate's build of mighty-run's tests/fake/cli.rs, `--fake-acp`) — the request's block with its answer and tokens (Hermes's none), and
-//! the replies and tool rows the pane keeps on it. Windows only: the Mac ProcessHost is W1-D's.
+//! the replies and tool rows the pane keeps on it. Over the OS's real process host (Windows'; the Mac's since M-A).
 
 mod common;
 
@@ -127,7 +127,6 @@ fn every_recording_is_the_macs_graph() {
     }
 }
 
-#[cfg(windows)]
 mod runs {
     use std::path::Path;
     use std::sync::{Arc, Mutex};
@@ -141,6 +140,16 @@ mod runs {
     use mighty_run::model::{CliCommand, RunEvent, StartRunRequest};
     use mighty_run::providers::{Finder, ProviderCatalog};
     use mighty_run::{RunManager, RunManagerOptions};
+
+    /// This OS's real process layer (Windows' `WindowsProcessHost`; the Mac's `MacProcessHost` since M-A).
+    fn processes() -> Arc<dyn mighty_platform::ProcessHost> {
+        #[cfg(windows)]
+        return Arc::new(mighty_platform_windows::WindowsProcessHost::new());
+        #[cfg(target_os = "macos")]
+        return mighty_platform_macos::process_host();
+        #[cfg(not(any(windows, target_os = "macos")))]
+        return Arc::new(mighty_platform::unsupported::Unsupported);
+    }
 
     fn temp(name: &str) -> std::path::PathBuf {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
@@ -169,7 +178,7 @@ mod runs {
             Box::pin(async move { found })
         });
         Arc::new(ProviderCatalog::new(
-            Arc::new(mighty_platform_windows::WindowsProcessHost::new()),
+            processes(),
             Arc::new(mighty_platform::fake::FakeShellEnvironment::new(std::env::vars().collect())),
             Some(finder),
         ))

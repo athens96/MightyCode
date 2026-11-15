@@ -3,7 +3,6 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
-#[cfg(windows)]
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -43,19 +42,22 @@ pub fn remove(path: &Path) {
     let _ = std::fs::remove_dir_all(path);
 }
 
-/// The real Windows process layer (the checks that run git or the scripted Claude are Windows-only, as the run engine's are).
-#[cfg(windows)]
+/// This OS's real process layer (Windows' `WindowsProcessHost`; the Mac's `MacProcessHost` since M-A), which runs git and the
+/// scripted Claude.
 pub fn processes() -> Arc<dyn mighty_platform::ProcessHost> {
-    Arc::new(mighty_platform_windows::WindowsProcessHost::new())
+    #[cfg(windows)]
+    return Arc::new(mighty_platform_windows::WindowsProcessHost::new());
+    #[cfg(target_os = "macos")]
+    return mighty_platform_macos::process_host();
+    #[cfg(not(any(windows, target_os = "macos")))]
+    return Arc::new(mighty_platform::unsupported::Unsupported);
 }
 
-#[cfg(windows)]
 pub fn git(parent: &Path) -> mighty_workmap::Git {
     mighty_workmap::Git::new(processes(), parent.join("git-no-hooks"))
 }
 
 /// C# `Git(folder, arguments)`: a fixture git command that must succeed.
-#[cfg(windows)]
 pub async fn run_git(git: &mighty_workmap::Git, folder: &Path, arguments: &[&str]) {
     let mut all =
         vec!["-c", "user.name=Check", "-c", "user.email=check@example.com", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"];
@@ -65,7 +67,6 @@ pub async fn run_git(git: &mighty_workmap::Git, folder: &Path, arguments: &[&str
 }
 
 /// C# `Commit(folder, file, subject, date)`.
-#[cfg(windows)]
 pub async fn commit(git: &mighty_workmap::Git, folder: &Path, file: &str, subject: &str, date: &str) {
     std::fs::write(folder.join(file), format!("{subject}{}", mighty_core::wire::new_id())).unwrap();
     run_git(git, folder, &["add", "--", file]).await;
@@ -75,7 +76,6 @@ pub async fn commit(git: &mighty_workmap::Git, folder: &Path, file: &str, subjec
 
 /// C# `MakeRepository`: v0.1.0 (one commit), v0.1.1 (two commits and a side branch merged in), a tag that is no release, then one commit
 /// past it with a VERSION file and a release in flight.
-#[cfg(windows)]
 pub async fn make_repository(git: &mighty_workmap::Git, parent: &Path) -> PathBuf {
     let folder = parent.join("repo");
     std::fs::create_dir_all(&folder).unwrap();

@@ -55,6 +55,16 @@ pub fn fixture(name: &str) -> String {
     std::fs::read_to_string(contracts().join("fixtures").join(name)).unwrap_or_else(|e| panic!("fixture {name}: {e}"))
 }
 
+/// This OS's real process layer (Windows' `WindowsProcessHost`; the Mac's `MacProcessHost` since M-A).
+pub fn processes() -> std::sync::Arc<dyn mighty_platform::ProcessHost> {
+    #[cfg(windows)]
+    return std::sync::Arc::new(mighty_platform_windows::WindowsProcessHost::new());
+    #[cfg(target_os = "macos")]
+    return mighty_platform_macos::process_host();
+    #[cfg(not(any(windows, target_os = "macos")))]
+    return std::sync::Arc::new(mighty_platform::unsupported::Unsupported);
+}
+
 /// The stand-in CLI built beside the checks (`mighty-tools-fake`).
 pub fn fake_cli() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_mighty-tools-fake"))

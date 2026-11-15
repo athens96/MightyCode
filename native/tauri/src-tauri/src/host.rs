@@ -1126,8 +1126,8 @@ mod tests {
     }
 
     /// The header's `git status` reads a repository whose config would run a program on a signature check or a fetch, and runs none
-    /// (W4 review C1): the branch is read as before, the script's marker is never written.
-    #[cfg(windows)]
+    /// (W4 review C1): the branch is read as before, the script's marker is never written. Over the OS's process host (Windows'; the
+    /// Mac's since M-A).
     #[tokio::test(flavor = "multi_thread")]
     async fn the_headers_git_status_runs_no_program_of_the_repositorys() {
         if mighty_workmap::git::executable().is_none() {
@@ -1136,12 +1136,24 @@ mod tests {
         let parent = std::env::temp_dir().join(format!("mighty-host-git-{}", std::process::id()));
         let folder = parent.join("repo");
         std::fs::create_dir_all(&folder).unwrap();
-        let processes = mighty_platform_windows::WindowsProcessHost::new();
+        let processes = crate::platform::process_host();
         // The fixture's git commands through the work map's git (the process layer every child starts through).
-        let fixture = mighty_workmap::Git::new(Arc::new(mighty_platform_windows::WindowsProcessHost::new()), parent.join("hooks"));
+        let fixture = mighty_workmap::Git::new(processes.clone(), parent.join("hooks"));
         let marker = parent.join("ran");
-        let script = parent.join("program.bat");
-        std::fs::write(&script, format!("@echo off\r\necho ran> \"{}\"\r\n", marker.display())).unwrap();
+        #[cfg(windows)]
+        let script = {
+            let script = parent.join("program.bat");
+            std::fs::write(&script, format!("@echo off\r\necho ran> \"{}\"\r\n", marker.display())).unwrap();
+            script
+        };
+        #[cfg(not(windows))]
+        let script = {
+            use std::os::unix::fs::PermissionsExt as _;
+            let script = parent.join("program.sh");
+            std::fs::write(&script, format!("#!/bin/sh\necho ran > '{}'\n", marker.display())).unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            script
+        };
         let script = script.to_string_lossy().into_owned();
         let commit = ["-c", "user.name=a", "-c", "user.email=a@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty"];
         let steps: [&[&str]; 5] = [
@@ -1155,7 +1167,7 @@ mod tests {
             let result = fixture.run(step, &folder, 30.0).await;
             assert!(result.as_ref().is_some_and(|r| r.exit_code == 0), "git {step:?}: {result:?}");
         }
-        let info = read_git(&processes, &folder.to_string_lossy()).await.expect("the status is read");
+        let info = read_git(processes.as_ref(), &folder.to_string_lossy()).await.expect("the status is read");
         assert_eq!(info.branch, "main");
         assert!(!marker.exists(), "no program of the repository's ran");
         let _ = std::fs::remove_dir_all(&parent);

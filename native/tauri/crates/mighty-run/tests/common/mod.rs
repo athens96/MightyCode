@@ -144,8 +144,22 @@ pub fn environment() -> std::sync::Arc<dyn mighty_platform::ShellEnvironment> {
     std::sync::Arc::new(mighty_platform::fake::FakeShellEnvironment::new(std::env::vars().collect()))
 }
 
-/// `new ProviderCatalog((provider, _) => …)` over the real Windows process layer: `find` names the command for a provider.
-#[cfg(windows)]
+/// This OS's real process layer: Windows' `WindowsProcessHost`, the Mac's `MacProcessHost` (M-A); elsewhere none.
+pub fn processes() -> std::sync::Arc<dyn mighty_platform::ProcessHost> {
+    #[cfg(windows)]
+    return std::sync::Arc::new(mighty_platform_windows::WindowsProcessHost::new());
+    #[cfg(target_os = "macos")]
+    return mighty_platform_macos::process_host();
+    #[cfg(not(any(windows, target_os = "macos")))]
+    return std::sync::Arc::new(mighty_platform::unsupported::Unsupported);
+}
+
+/// A command that runs about 30 s and can be stopped (a shell pane's): Windows' `ping`, the Mac's `sleep`.
+pub fn long_shell_command() -> &'static str {
+    if cfg!(windows) { "ping -n 30 127.0.0.1" } else { "sleep 30" }
+}
+
+/// `new ProviderCatalog((provider, _) => …)` over the real process layer: `find` names the command for a provider.
 pub fn catalog(
     find: impl Fn(&str) -> Option<mighty_run::model::CliCommand> + Send + Sync + 'static,
 ) -> std::sync::Arc<mighty_run::providers::ProviderCatalog> {
@@ -154,18 +168,34 @@ pub fn catalog(
         let found = find(&provider);
         Box::pin(async move { found })
     });
-    std::sync::Arc::new(mighty_run::providers::ProviderCatalog::new(
-        std::sync::Arc::new(mighty_platform_windows::WindowsProcessHost::new()),
-        environment(),
-        Some(finder),
-    ))
+    std::sync::Arc::new(mighty_run::providers::ProviderCatalog::new(processes(), environment(), Some(finder)))
 }
 
 /// A catalog whose every provider is the fake with `args`.
-#[cfg(windows)]
 pub fn fake_catalog(args: &[&str]) -> std::sync::Arc<mighty_run::providers::ProviderCatalog> {
     let command = fake_command(args);
     catalog(move |_| Some(command.clone()))
+}
+
+/// Whether the process is still running (C# `Alive`): not gone and, on the Mac, not a zombie its parent has yet to reap.
+#[cfg(target_os = "macos")]
+pub fn alive(id: u32) -> bool {
+    // SAFETY: signal 0 only checks.
+    if unsafe { libc::kill(id as libc::pid_t, 0) } != 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::EPERM) {
+        return false;
+    }
+    !zombie(id)
+}
+
+#[cfg(target_os = "macos")]
+fn zombie(id: u32) -> bool {
+    // SAFETY: a plain struct proc_pidinfo fills.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: a buffer of `size` bytes.
+    let read = unsafe { libc::proc_pidinfo(id as libc::c_int, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
+    // SZOMB (sys/proc.h).
+    read == size && info.pbi_status == 5
 }
 
 /// Whether the process is still running (C# `Alive`).
@@ -185,13 +215,9 @@ pub fn alive(id: u32) -> bool {
     }
 }
 
-/// A catalog that finds no CLI (C# `Verification.Absent`). On Windows a command given to it explicitly still runs over the real process
-/// layer; elsewhere (the checks that only need a catalog that finds nothing) it starts nothing.
+/// A catalog that finds no CLI (C# `Verification.Absent`): a command given to it explicitly still runs over the real process layer.
 pub fn absent_catalog() -> std::sync::Arc<mighty_run::providers::ProviderCatalog> {
-    #[cfg(windows)]
-    let host = std::sync::Arc::new(mighty_platform_windows::WindowsProcessHost::new());
-    #[cfg(not(windows))]
-    let host = std::sync::Arc::new(mighty_platform::unsupported::Unsupported);
+    let host = processes();
     let finder: mighty_run::providers::Finder = std::sync::Arc::new(|_provider: String| Box::pin(async { None }));
     std::sync::Arc::new(mighty_run::providers::ProviderCatalog::new(host, environment(), Some(finder)))
 }

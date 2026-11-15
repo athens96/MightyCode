@@ -55,7 +55,7 @@ async fn a_persistent_shell_runs_typed_lines_resizes_and_closes() {
     terminal.resize(PtySize { columns: 91, rows: 23 }).unwrap();
     assert!(terminal.write(b"stty size; tty\r"));
     until(|| text(&output).contains("23 91"), 10_000, "the grid reached the terminal").await;
-    assert!(text(&output).contains("/dev/ttys"));
+    until(|| text(&output).contains("/dev/ttys"), 10_000, "tty named the terminal").await;
     assert!(terminal.write(b"sleep 3\r"));
     until(|| terminal.busy() == Some(true), 10_000, "busy while a command owns the terminal").await;
     until(|| terminal.busy() == Some(false), 20_000, "idle again after it").await;

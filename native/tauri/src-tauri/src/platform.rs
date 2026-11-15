@@ -288,6 +288,15 @@ pub fn cli_copies(name: &str, environment: &std::collections::BTreeMap<String, S
     os::cli_copies(name, environment)
 }
 
+/// How a toolkit step's program is found along the CLI environment's PATH: Windows' C# `WindowsCommand.Find` (PATH x PATHEXT); the
+/// Mac's Swift `ToolkitProcess.resolveExecutable` (PATH only, no extensions; M-A).
+pub fn find_on_path(name: &str, environment: &std::collections::BTreeMap<String, String>) -> Option<String> {
+    #[cfg(windows)]
+    return mighty_tools::toolkit::runner::find_on_path(name, environment, &|path| std::path::Path::new(path).is_file());
+    #[cfg(target_os = "macos")]
+    return os::process::find_executable(name, environment);
+}
+
 /// The browser engine's installed version (C# `WebView2RuntimeLocator`), or none when the pane must offer its install.
 pub fn browser_runtime() -> Option<String> {
     os::browser_runtime()

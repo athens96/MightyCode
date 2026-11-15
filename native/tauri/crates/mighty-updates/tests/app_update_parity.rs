@@ -158,6 +158,7 @@ fn the_update_code_never_uses_the_strict_signature_check() {
     }
 }
 
+/// Windows only: C#'s install plan, guard and stager of the Windows update (the Mac's update is M-H's).
 #[cfg(windows)]
 mod windows {
     use super::*;

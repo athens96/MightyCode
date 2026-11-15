@@ -12,8 +12,8 @@
 //! - every group still alive when the app exits gets SIGKILL from an `atexit` handler (Swift's `LiveRunRegistry.killAll` at quit).
 //!
 //! A pipe a process outside the group still holds (a daemon started with `setsid`, a `set -m` job) is read for one second after the
-//! leader's exit, plus up to 30 s the reader's consumer held it, and at most 16 MB; past either the app's end is closed and the
-//! writer gets EPIPE (Swift's reader, `maximumDrainCredit`, `maximumBytesAfterExit`, `finalDrainBytes`).
+//! leader's exit and at most 16 MB, then looked at once more (64 KB); past that the app's end is closed and the writer gets EPIPE
+//! (Swift's reader, `maximumBytesAfterExit`, `finalDrainBytes`; see `ChildOutput`).
 //!
 //! `start_detached*`: `POSIX_SPAWN_SETSID` (out of the app's session and group), standard streams on `/dev/null`, the environment
 //! exactly as given, no descriptor of the app's; reaped on a thread of its own so it never stays a zombie (only the update modules
@@ -46,8 +46,6 @@ const CLOSE_WAIT: Duration = Duration::from_secs(3);
 const GROUP_GRACE: Duration = Duration::from_millis(150);
 /// A pipe is read this long after the leader's exit (Swift's reader: "more than 1 s after exit").
 const DRAIN_AFTER_EXIT: Duration = Duration::from_secs(1);
-/// Time the reader's consumer held it after the exit counts as idle only past this (Swift `maximumDrainCredit`).
-const MAXIMUM_DRAIN_CREDIT: Duration = Duration::from_secs(30);
 /// At most this much is read from one pipe after the leader's exit (Swift `maximumBytesAfterExit`).
 const MAXIMUM_BYTES_AFTER_EXIT: usize = 16 * 1_048_576;
 /// At most this much is read in the last look at a pipe whose drain ended on time (Swift `finalDrainBytes`).
@@ -100,6 +98,26 @@ impl ProcessHost for MacProcessHost {
             .map_err(PlatformError::Io)?;
         Ok(Box::new(WaitableChild(shared)))
     }
+}
+
+/// Swift `ToolkitProcess.resolveExecutable`: how a step's program is found on the Mac (no PATHEXT, unlike Windows'
+/// `find_on_path`) — a full path as it is when it is an executable file; a bare name in each folder of `environment`'s PATH, the
+/// first executable file of that name; a relative name with a `/` never (the working folder never decides).
+pub fn find_executable(name: &str, environment: &BTreeMap<String, String>) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let runnable = |path: &Path| std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0);
+    if name.starts_with('/') {
+        return runnable(Path::new(name)).then(|| name.to_string());
+    }
+    if name.is_empty() || name.contains('/') || name.contains('\0') {
+        return None;
+    }
+    let path = environment.get("PATH").map(String::as_str).unwrap_or("");
+    path.split(':')
+        .filter(|folder| !folder.is_empty())
+        .map(|folder| Path::new(folder).join(name))
+        .find(|candidate| runnable(candidate))
+        .map(|found| found.to_string_lossy().into_owned())
 }
 
 /// Every process group a child of the app leads and that may still have members: what the `atexit` handler ends.
@@ -437,7 +455,7 @@ fn spawn_detached(request: &DetachedRequest) -> Result<libc::pid_t> {
 struct State {
     /// The leader has been reaped: its pid is no longer the app's to signal.
     reaped: bool,
-    /// The app ended the child (its output's rest is dropped on purpose, so no drain credit).
+    /// The app ended the child while it ran (its output's rest is dropped on purpose: no last look).
     killed: bool,
 }
 
@@ -456,8 +474,8 @@ struct Shared {
 impl Shared {
     fn kill(&self) {
         let mut state = lock(&self.state);
-        state.killed = true;
         if !state.reaped {
+            state.killed = true;
             // SAFETY: a signal to the group of an unreaped child of the app.
             unsafe { libc::kill(-self.pid, libc::SIGKILL) };
         }
@@ -536,8 +554,11 @@ impl AsyncWrite for ClosingWriter {
     }
 }
 
-/// One of the child's outputs, read until its end — or, once the leader has exited, for one more second (plus the time the consumer
-/// held it, up to 30 s) and at most 16 MB, after which the app's end is closed (Swift's reader, ProcessRunner.swift:117-170).
+/// One of the child's outputs, read until its end — or, once the leader has exited, for one more second and at most 16 MB, then a
+/// last look of at most 64 KB without waiting, after which the app's end is closed (Swift's reader, ProcessRunner.swift:117-170). The
+/// group is gone by then, so what the last look finds is the child's own tail (a pipe holds no more than 64 KB): a consumer slowed by a
+/// loaded machine still gets it, and only a writer outside the group loses the rest. Swift also gave a slow consumer up to 30 s more;
+/// the run engine (C#'s) waits 3 s for the pipes after the exit, so the drain here stays within that.
 struct ChildOutput {
     pipe: Option<pipe::Receiver>,
     shared: Arc<Shared>,
@@ -546,25 +567,13 @@ struct ChildOutput {
     /// Wakes the reader when the drain after the exit ends.
     deadline: Option<Pin<Box<tokio::time::Sleep>>>,
     after_exit: usize,
-    /// When bytes were last handed to the consumer: the time until the next read is the consumer's.
-    handed: Option<Instant>,
-    credit: Duration,
     /// The last look's budget, once the drain ended on time.
     last_look: Option<usize>,
 }
 
 impl ChildOutput {
     fn new(pipe: pipe::Receiver, shared: Arc<Shared>) -> ChildOutput {
-        ChildOutput {
-            pipe: Some(pipe),
-            shared,
-            reaped: None,
-            deadline: None,
-            after_exit: 0,
-            handed: None,
-            credit: Duration::ZERO,
-            last_look: None,
-        }
+        ChildOutput { pipe: Some(pipe), shared, reaped: None, deadline: None, after_exit: 0, last_look: None }
     }
 
     /// Reads without waiting during the last look: bytes are handed on; the end of the pipe, nothing more to read or the budget spent
@@ -606,17 +615,13 @@ impl AsyncRead for ChildOutput {
             let now = Instant::now();
             let mut drain_end = None;
             if let Some(at) = reaped {
-                if let Some(handed) = this.handed.take() {
-                    this.credit += now.saturating_duration_since(handed.max(at));
-                }
                 let stopped = lock(&this.shared.state).killed;
-                let credit = if stopped { Duration::ZERO } else { this.credit.min(MAXIMUM_DRAIN_CREDIT) };
-                let end = at + DRAIN_AFTER_EXIT + credit;
+                let end = at + DRAIN_AFTER_EXIT;
                 let over = this.after_exit > MAXIMUM_BYTES_AFTER_EXIT;
                 if over || now >= end {
                     // A stop drops the rest on purpose, and past the byte cap a stray writer is reading's end; otherwise look once more,
                     // so a reader slowed by a loaded machine still hands on the child's own unread tail.
-                    if stopped || over || this.credit > MAXIMUM_DRAIN_CREDIT {
+                    if stopped || over {
                         this.pipe = None;
                         return Poll::Ready(Ok(()));
                     }
@@ -636,7 +641,6 @@ impl AsyncRead for ChildOutput {
                         if reaped.is_some() {
                             this.after_exit += read;
                         }
-                        this.handed = Some(Instant::now());
                     }
                     return Poll::Ready(Ok(()));
                 }

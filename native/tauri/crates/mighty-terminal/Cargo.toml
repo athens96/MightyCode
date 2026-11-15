@@ -25,3 +25,7 @@ mighty-run.workspace = true
 # The checks that run real terminals (C#'s Windows-only AgentIO and PseudoTerminal checks) go through the Windows PtyHost.
 [target.'cfg(windows)'.dev-dependencies]
 mighty-platform-windows.workspace = true
+
+# Swift's real-PTY checks of the agent terminal run over the Mac PtyHost (M-A).
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+mighty-platform-macos.workspace = true

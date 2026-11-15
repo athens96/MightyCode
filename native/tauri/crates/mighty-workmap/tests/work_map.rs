@@ -337,9 +337,8 @@ fn work_map_release_files_are_read_inside_the_folder_and_bounded() {
     remove(&outside);
 }
 
-// ── a real repository, the summary run and the service (Windows: git and the scripted Claude start through WindowsProcessHost) ──
+// ── a real repository, the summary run and the service (git and the scripted Claude start through the OS's process host) ──
 
-#[cfg(windows)]
 mod real {
     use std::collections::HashMap;
 

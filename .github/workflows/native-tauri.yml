@@ -136,7 +136,9 @@ jobs:
           # Each rule: a pattern on code lines (comments left out) and the files allowed to match it, with why.
           # The port itself (its default, the fake, the Windows implementation) and its contract tests.
           $port = @('crates/mighty-platform/src/process.rs', 'crates/mighty-platform/src/unsupported.rs', 'crates/mighty-platform/src/fake.rs',
-            'crates/mighty-platform-windows/src/process.rs', 'crates/mighty-platform/tests/ports.rs')
+            'crates/mighty-platform-windows/src/process.rs', 'crates/mighty-platform/tests/ports.rs',
+            # Mac stage M-A: the Mac implementation and its contract test of both detached starts.
+            'crates/mighty-platform-macos/src/process.rs', 'crates/mighty-platform-macos/tests/detached.rs')
           $rules = @(
             @{ what = 'ProcessHost::start_detached / start_detached_or_in_job called'; pattern = '\bstart_detached(_or_in_job)?\s*\('; skip = '\bfn\s+start_detached'
                allowed = @(
