@@ -168,14 +168,68 @@ pub trait BrowserSurface: NativeSurface {
     fn reload(&self) -> Result<()>;
 }
 
-/// A terminal the platform draws itself (the Mac's Ghostty view, which owns its PTY). Output never crosses the bridge; title,
-/// working folder and the clipboard come back through the host's `terminal` pushes as for the web terminal.
+/// A terminal the platform draws itself (the Mac's Ghostty view). Mac stage D2: the host owns the PTY (`PtyHost`, as on Windows) and
+/// the view only draws it, through libghostty's host-managed backend: the PTY's output is [`TerminalSurface::feed`]ed to the view,
+/// and what the user types, the grid the view settles on, the title and the working folder come back as [`TerminalEvent`]s. Output
+/// never crosses the bridge to the page; title, working folder and the clipboard reach it through the host's `terminal` pushes as for
+/// the web terminal. (M-D refines this contract with its implementation.)
 pub trait TerminalSurface: NativeSurface {
     /// Text as if typed or pasted (the composer's "run in terminal", a paste the page forwards).
     fn send_text(&self, text: &str) -> Result<()>;
     fn set_font(&self, family: &str, size: f64) -> Result<()>;
     fn set_theme(&self, light: bool) -> Result<()>;
+    /// The PTY's output, in order, as it arrived (any thread; the view queues it).
+    fn feed(&self, output: &[u8]) -> Result<()> {
+        let _ = output;
+        Err(crate::PlatformError::unsupported("TerminalSurface", "feed"))
+    }
 }
+
+/// What a terminal view tells the host that owns its PTY (libghostty's `receive_buffer`, `receive_resize` and actions). Sent from the
+/// view's threads: a listener must not block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalEvent {
+    /// Bytes the user typed or pasted, encoded by the terminal: for the PTY.
+    Input(Vec<u8>),
+    /// The grid the view settled on: for the PTY's window size.
+    Resized { columns: u16, rows: u16, width: u32, height: u32 },
+    /// The title the shell set (OSC 0/2).
+    Title(String),
+    /// The working folder the shell reported (OSC 7).
+    WorkingDirectory(String),
+    /// The view took (true) or lost the keyboard.
+    Focused(bool),
+    /// The terminal rang its bell.
+    Bell,
+}
+
+/// Where a terminal view sends its [`TerminalEvent`]s.
+#[derive(Clone)]
+pub struct TerminalListener(Arc<dyn Fn(TerminalEvent) + Send + Sync>);
+
+impl TerminalListener {
+    pub fn new(listener: impl Fn(TerminalEvent) + Send + Sync + 'static) -> TerminalListener {
+        TerminalListener(Arc::new(listener))
+    }
+
+    pub fn send(&self, event: TerminalEvent) {
+        (self.0)(event);
+    }
+}
+
+impl std::fmt::Debug for TerminalListener {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TerminalListener")
+    }
+}
+
+impl PartialEq for TerminalListener {
+    fn eq(&self, other: &TerminalListener) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for TerminalListener {}
 
 /// A point in DIPs (screen points on the Mac, device-independent pixels on Windows).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -385,6 +439,8 @@ pub struct TerminalOptions {
     /// The whole environment (the resolved CLI environment).
     pub env: BTreeMap<String, String>,
     pub bounds: DeviceRect,
+    /// Where the view's events go (D2: the host's PTY takes the input and the grid).
+    pub listener: Option<TerminalListener>,
 }
 
 impl std::fmt::Debug for TerminalOptions {

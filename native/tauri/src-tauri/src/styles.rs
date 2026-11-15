@@ -37,7 +37,7 @@ use crate::host::{Host, Registry, View};
 // ── access ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// The trust store's checks on Windows (C# `Private`/`Restrict`, StyleRegistry.cs:65-96): not a reparse point, this user the owner, no
-/// other account than LocalSystem or the Administrators able to write it (read only, mighty-platform-windows `setup_files::private`);
+/// other account than LocalSystem or the Administrators able to write it (read only, `platform::trust_private`);
 /// written with a protected list of this user alone.
 #[cfg(windows)]
 pub struct WindowsAccess;
@@ -45,10 +45,10 @@ pub struct WindowsAccess;
 #[cfg(windows)]
 impl TrustAccess for WindowsAccess {
     fn private(&self, path: &Path, directory: bool) -> bool {
-        mighty_platform_windows::setup_files::private(path) && path.is_dir() == directory
+        crate::platform::trust_private(path) && path.is_dir() == directory
     }
     fn restrict(&self, path: &Path, directory: bool) -> std::io::Result<()> {
-        mighty_platform_windows::setup_files::restrict(path, directory).map_err(|e| std::io::Error::other(e.to_string()))
+        crate::platform::trust_restrict(path, directory)
     }
     /// C#'s `FileShare.None`: no other open of the file while it is held.
     fn lock(&self, path: &Path) -> std::io::Result<Box<dyn std::any::Any + Send>> {

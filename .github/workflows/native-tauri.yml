@@ -4,10 +4,12 @@ name: Native clients — Tauri (0.5)
 # shipping 0.4.x workflows (native-windows.yml, native-macos.yml) are untouched and independent of this one. W9: the source guards, the
 # release candidate packaged in the 0.4.x shape for x64 and arm64 (package; Actions artifacts only, nothing published) and the update
 # rehearsal from real 0.4.59 and 0.4.61 installs (rehearsal). The switch of native-windows.yml to this build at the 0.5 merge is prepared
-# as native/tauri/release/native-windows.yml.0.5.patch, not applied.
+# as native/tauri/release/native-windows.yml.0.5.patch, not applied. Mac stage Step 0: the Mac leg runs the smoke too (WebKit), its gate
+# every check outside smoke.rs' MAC_PENDING_STEPS (every step at first; each Mac part's merge takes out what passes), kept as
+# tauri-smoke-macos (spike R8: what the page does in WebKit); mac-base, the Mac stage's orchestrator branch, runs it on push.
 on:
   push:
-    branches: [feat/tauri]
+    branches: [feat/tauri, mac-base]
   pull_request:
     paths:
       - 'native/tauri/**'
@@ -25,7 +27,8 @@ jobs:
   tauri:
     name: Tauri ${{ matrix.os }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    # Mac stage Step 0: the Mac leg's smoke (up to its own 645 s limit) made the job longer.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -99,16 +102,21 @@ jobs:
         # W9 plan R13: the smoke's own limit grew by 45 s (AppUpdate, Styles, Mirror, Help, PaneWorktree stages).
         timeout-minutes: 10
         run: ./native/tauri/scripts/smoke.ps1 -Out "$env:RUNNER_TEMP/tauri-smoke"
+      - name: Smoke on the Mac against the seeded demo profile (WebKit; the steps of smoke.rs' MAC_PENDING_STEPS may fail)
+        if: matrix.os == 'macos'
+        # The smoke's own limit (645 s with the stand-in CLI), the seed and the stand-in's build.
+        timeout-minutes: 18
+        run: ./native/tauri/scripts/smoke.ps1 -Out "$env:RUNNER_TEMP/tauri-smoke"
       - name: The frozen style files are read in place, never written (mighty-styles, the smoke)
         # scripts/check-style-freeze.sh's frozen paths: the tests and the smoke above leave them as checked out.
         run: |
           $changed = git status --porcelain --untracked-files=all -- styles native/macos/Sources/MightyCore/Styles native/macos/Sources/MightyCore/Resources/Styles mobile/src/lib/styles.ts docs/mighty-styles.md
           if ($changed) { $changed; throw 'the run changed frozen style files' }
       - name: Keep the smoke's result and logs
-        if: always() && matrix.os == 'windows'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: tauri-smoke-windows
+          name: tauri-smoke-${{ matrix.os }}
           path: ${{ runner.temp }}/tauri-smoke
           if-no-files-found: ignore
 

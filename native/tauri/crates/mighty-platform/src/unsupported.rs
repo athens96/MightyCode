@@ -212,6 +212,13 @@ impl AgentIoConnector for Unsupported {
     }
 }
 
+/// The Mac's reader is M-B's; Windows reads the CLI's file itself.
+impl ClaudeCredentials for Unsupported {
+    fn read(&self, _config_dir: Option<&Path>, _interactive: bool) -> Result<Option<String>> {
+        no("ClaudeCredentials", "read")
+    }
+}
+
 impl DiskSpace for Unsupported {
     fn available_bytes(&self, _path: &Path) -> Result<u64> {
         no("DiskSpace", "available_bytes")

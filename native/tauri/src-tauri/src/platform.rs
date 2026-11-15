@@ -162,7 +162,83 @@ pub fn setup_files() -> Arc<dyn mighty_platform::SetupFiles> {
 #[cfg(target_os = "macos")]
 #[allow(dead_code, reason = "setup.rs's files_port (W6-B) switches to it at integration")]
 pub fn setup_files() -> Arc<dyn mighty_platform::SetupFiles> {
-    Arc::new(mighty_platform::unsupported::Unsupported)
+    os::setup::setup_files()
+}
+
+/// The page's whole picture as PNG bytes (the help capture, W9-H): WebView2's `CapturePreview` on Windows; WKWebView's snapshot on the
+/// Mac (`mighty-platform-macos` `page`, M-G).
+pub async fn page_picture(page: &tauri::Webview) -> std::result::Result<Vec<u8>, String> {
+    #[cfg(windows)]
+    return os::page::capture_preview(page).await.map_err(|e| e.to_string());
+    #[cfg(target_os = "macos")]
+    return os::page::snapshot(page, None).await;
+}
+
+/// A DevTools protocol call on the page (the help capture's clipped pictures and reduced motion, W9-H): Windows' WebView2 only; the
+/// Mac's WKWebView has none (M-G clips its snapshot instead).
+#[cfg(windows)]
+pub async fn page_devtools(page: &tauri::Webview, method: &str, arguments: &str) -> std::result::Result<String, String> {
+    os::page::devtools(page, method, arguments).await.map_err(|e| e.to_string())
+}
+
+/// Where a release build counts as installed (the write policy, startup.rs): the folder the setup program installs into on Windows
+/// (`%LOCALAPPDATA%\Programs\MightyCode`, the known folder's); on the Mac the `.app`s M-H names (plan D7; none before then).
+pub fn install_locations() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    return os::install_folder().into_iter().collect();
+    #[cfg(target_os = "macos")]
+    return os::update::install_locations();
+}
+
+/// The registry RenameMigration reads and writes (C# `CurrentUserRegistry`): HKEY_CURRENT_USER on Windows; a registry without keys
+/// on the Mac, whose half of the migration (folders, the defaults domain) is M-B's seams of `mighty-core`'s `rename_migration`.
+pub fn rename_registry() -> Arc<dyn mighty_core::rename_migration::RegistryStore> {
+    #[cfg(windows)]
+    return Arc::new(CurrentUser(os::registry::CurrentUserRegistry::new()));
+    #[cfg(target_os = "macos")]
+    return Arc::new(mighty_core::rename_migration::NoRegistry);
+}
+
+/// The Windows registry as RenameMigration reads and writes it.
+#[cfg(windows)]
+struct CurrentUser(os::registry::CurrentUserRegistry);
+
+#[cfg(windows)]
+impl mighty_core::rename_migration::RegistryStore for CurrentUser {
+    fn key_exists(&self, path: &str) -> bool {
+        self.0.key_exists(path)
+    }
+    fn sub_key_names(&self, path: &str) -> std::io::Result<Vec<String>> {
+        self.0.sub_key_names(path)
+    }
+    fn values(&self, path: &str) -> std::io::Result<Vec<mighty_core::rename_migration::RegistryValue>> {
+        let values = self.0.values(path)?.into_iter();
+        Ok(values
+            .map(|value| mighty_core::rename_migration::RegistryValue { name: value.name, kind: value.kind, data: value.data })
+            .collect())
+    }
+    fn create_key(&self, path: &str) -> std::io::Result<()> {
+        self.0.create_key(path)
+    }
+    fn set_value(&self, path: &str, value: &mighty_core::rename_migration::RegistryValue) -> std::io::Result<()> {
+        self.0.set_value(path, &value.name, value.kind, &value.data)
+    }
+    fn delete_tree(&self, path: &str) -> std::io::Result<()> {
+        self.0.delete_tree(path)
+    }
+}
+
+/// The style trust store's Windows checks (C# `Private`/`Restrict`, styles.rs `WindowsAccess`): not a reparse point, this user the
+/// owner, no other account than LocalSystem or the Administrators able to write it.
+#[cfg(windows)]
+pub fn trust_private(path: &std::path::Path) -> bool {
+    os::setup_files::private(path)
+}
+
+/// Written with a protected list of this user alone (styles.rs `WindowsAccess`).
+#[cfg(windows)]
+pub fn trust_restrict(path: &std::path::Path, directory: bool) -> std::io::Result<()> {
+    os::setup_files::restrict(path, directory).map_err(|e| std::io::Error::other(e.to_string()))
 }
 
 /// Registers the app for its notifications with the OS (Windows: the AUMID under HKCU); the caller decides whether it may write.

@@ -117,6 +117,35 @@ pub fn checks(report: &Value) -> Vec<(&'static str, bool)> {
     ]
 }
 
+/// M-D: the native variant's checks, where the platform draws the terminal (the Mac's Ghostty fed by the pane's PTY): Windows' five
+/// (`terminalStarted`, `terminalEcho` read from the pane's buffer, `terminalFooter` with engine `Ghostty`, `terminalStatus`,
+/// `terminalClosed`) and Swift's terminal smoke's keys (`--terminal-smoke-test`, native-macos.yml:221-250): the TTY and its grid
+/// (`/usr/bin/tty`, `stty size`), the working folder and title (OSC 7, the title callback), Ctrl+C, a resize, a restart, and a
+/// snapshot that is not blank.
+pub const NATIVE_CHECKS: [&str; 11] = [
+    "terminalStarted",
+    "terminalEcho",
+    "terminalFooter",
+    "terminalStatus",
+    "terminalClosed",
+    "terminalTty",
+    "terminalCwdTitle",
+    "terminalCtrlC",
+    "terminalResize",
+    "terminalRestart",
+    "terminalSnapshot",
+];
+
+/// Starts the native variant (M-D): false until it is written, so its checks fail as not reported (smoke.rs).
+pub fn start_native(_host: &Host) -> bool {
+    false
+}
+
+/// The native variant's checks from its report: each `true` under its own name, and no error.
+pub fn native_checks(report: &Value) -> Vec<(&'static str, bool)> {
+    let clean = report.get("error").is_none();
+    NATIVE_CHECKS.iter().map(|name| (*name, clean && report.get(*name) == Some(&Value::Bool(true)))).collect()
+}
 /// What the probe asks the host (smoke only): `state` of the step's pane, or `close` it (its shell ends; the pane leaves the state).
 #[tauri::command]
 pub async fn smoke_terminal(pane_id: String, action: String, host: tauri::State<'_, Arc<Host>>) -> Result<Value, String> {

@@ -51,25 +51,16 @@ fn policy(installed_release: bool, options: &Options) -> WritePolicy {
     WritePolicy { writes, installed_release }
 }
 
-/// Whether this exe runs from the install folder the setup program makes (`MightyCode.iss` `DefaultDirName={userpf}\MightyCode`:
-/// `%LOCALAPPDATA%\Programs\MightyCode`, the known folder's, never an environment variable), compared canonically. Off Windows no
-/// install folder is named yet (the Mac stage's): never.
+/// Whether this exe runs from where a release build counts as installed (`platform::install_locations`): on Windows the folder the
+/// setup program makes (`MightyCode.iss` `DefaultDirName={userpf}\MightyCode`: `%LOCALAPPDATA%\Programs\MightyCode`, the known
+/// folder's, never an environment variable); on the Mac M-H's `.app` locations (plan D7; none yet, so never). Compared canonically.
 fn installed() -> bool {
-    #[cfg(windows)]
-    {
-        let exe = std::env::current_exe().ok();
-        let folder = mighty_platform_windows::install_folder();
-        matches!((exe.as_deref().and_then(Path::parent), folder), (Some(exe), Some(folder)) if same_folder(exe, &folder))
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
+    let exe = std::env::current_exe().ok();
+    let Some(folder) = exe.as_deref().and_then(Path::parent) else { return false };
+    crate::platform::install_locations().iter().any(|location| same_folder(folder, location))
 }
 
-/// Two folders the file system names the same (both canonical: case, 8.3 names, links); a folder that does not exist is no match. Only
-/// Windows names an install folder yet ([`installed`]); the checks compare with it on every OS.
-#[cfg(any(windows, test))]
+/// Two folders the file system names the same (both canonical: case, 8.3 names, links); a folder that does not exist is no match.
 fn same_folder(one: &Path, other: &Path) -> bool {
     matches!((std::fs::canonicalize(one), std::fs::canonicalize(other)), (Ok(one), Ok(other)) if one == other)
 }
@@ -174,43 +165,9 @@ fn hooks_folder(data_dir: &Path) -> PathBuf {
     if cfg!(windows) { data_dir.join("git-no-hooks") } else { PathBuf::from("/dev/null") }
 }
 
-/// C# `CurrentUserRegistry`: HKEY_CURRENT_USER on Windows, a registry without keys elsewhere.
+/// C# `CurrentUserRegistry`: HKEY_CURRENT_USER on Windows, a registry without keys elsewhere (`platform::rename_registry`).
 fn registry() -> Arc<dyn RegistryStore> {
-    #[cfg(windows)]
-    {
-        Arc::new(CurrentUser(mighty_platform_windows::registry::CurrentUserRegistry::new()))
-    }
-    #[cfg(not(windows))]
-    {
-        Arc::new(rename_migration::NoRegistry)
-    }
-}
-
-/// The Windows registry as RenameMigration reads and writes it.
-#[cfg(windows)]
-struct CurrentUser(mighty_platform_windows::registry::CurrentUserRegistry);
-
-#[cfg(windows)]
-impl RegistryStore for CurrentUser {
-    fn key_exists(&self, path: &str) -> bool {
-        self.0.key_exists(path)
-    }
-    fn sub_key_names(&self, path: &str) -> std::io::Result<Vec<String>> {
-        self.0.sub_key_names(path)
-    }
-    fn values(&self, path: &str) -> std::io::Result<Vec<rename_migration::RegistryValue>> {
-        let values = self.0.values(path)?.into_iter();
-        Ok(values.map(|value| rename_migration::RegistryValue { name: value.name, kind: value.kind, data: value.data }).collect())
-    }
-    fn create_key(&self, path: &str) -> std::io::Result<()> {
-        self.0.create_key(path)
-    }
-    fn set_value(&self, path: &str, value: &rename_migration::RegistryValue) -> std::io::Result<()> {
-        self.0.set_value(path, &value.name, value.kind, &value.data)
-    }
-    fn delete_tree(&self, path: &str) -> std::io::Result<()> {
-        self.0.delete_tree(path)
-    }
+    crate::platform::rename_registry()
 }
 
 #[cfg(test)]
@@ -291,7 +248,7 @@ mod tests {
         assert!(!same_folder(folder, &folder.join("no-such-folder")));
         #[cfg(windows)]
         {
-            let install = mighty_platform_windows::install_folder().expect("the known folder");
+            let install = crate::platform::install_locations().pop().expect("the known folder");
             assert!(install.ends_with(r"Programs\MightyCode"), "{}", install.display());
             assert!(!same_folder(folder, &install));
         }

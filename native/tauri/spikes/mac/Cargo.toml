@@ -1,0 +1,28 @@
+# The Mac stage's Step 0 go/no-go spikes (.omc/research/tauri/mac-plan.md §3 Step 0b; .github/workflows/mac-spike.yml runs them on a
+# macos-latest runner). Throwaway: a workspace of its own, never part of the app's (native/tauri/Cargo.toml), deleted once the parts
+# that need their answers have them. Every binary is macOS-only and prints "macOS only" elsewhere. Built in release (objc2 checks
+# message encodings in debug builds, which these raw `msg_send!`s do not spell out).
+[workspace]
+members = ["common", "ghostty", "webkit", "cef"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+publish = false
+rust-version = "1.88"
+
+[workspace.dependencies]
+spike-common = { path = "common" }
+# The app's versions (native/tauri/Cargo.lock was copied here as the starting lock).
+tauri = { version = "2", features = ["unstable"] }
+tauri-build = "2"
+serde_json = "1"
+libc = "0.2"
+png = "0.18"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSGeometry", "NSString", "NSThread"] }
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSResponder", "NSWindow", "NSGraphics", "NSApplication", "NSRunningApplication"] }
+
+[profile.release]
+debug = "line-tables-only"

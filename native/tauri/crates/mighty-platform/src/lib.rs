@@ -13,6 +13,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+pub mod accounts;
 pub mod activator;
 pub mod agent_io;
 pub mod clipboard;
@@ -44,6 +45,7 @@ pub mod unsupported;
 pub mod update;
 pub mod update_transport;
 
+pub use accounts::ClaudeCredentials;
 pub use activator::{ToastActivation, ToastActivator};
 pub use agent_io::{AgentIoConnection, AgentIoConnector, AgentIoListener, AgentIoStream};
 pub use clipboard::Clipboard;
@@ -73,7 +75,7 @@ pub use session::{SessionCallback, SessionEnding, SessionWatch};
 pub use setup::SetupFiles;
 pub use surface::{
     BrowserEvent, BrowserListener, BrowserOptions, BrowserSurface, DeviceRect, Drawing, LogicalPoint, LogicalRect, NativeSurface, PetEvent,
-    PetPointer, PetWindow, SurfaceFactory, SurfaceKind, SurfaceState, TerminalOptions, TerminalSurface,
+    PetPointer, PetWindow, SurfaceFactory, SurfaceKind, SurfaceState, TerminalEvent, TerminalListener, TerminalOptions, TerminalSurface,
 };
 pub use update::{HelperMutex, StagedUpdate, UpdateInstaller};
 pub use update_transport::{DownloadProgress, DownloadRequest, Downloaded, UpdateResponse, UpdateTransport};

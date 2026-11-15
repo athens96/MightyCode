@@ -20,6 +20,8 @@
 //! `--perf-scenario`              W9-H: the timing scenario in the smoke's place (needs `--smoke-test`, not with `--help-capture`)
 //! `-Embedding`                   W9-F: COM started the app for a toast's activation (the app starts as usual; COM calls it)
 //! `----AppNotificationActivated:…`  W9-F: a toast left by C#'s Windows App SDK registration; accepted and ignored
+//! `-psn_…`                       Mac stage: the process serial number older LaunchServices passed; accepted and ignored on the Mac
+//!                                (a refused argument would quit an app 0.4.x's updater relaunched with `open -n`; plan §1.1)
 //!
 //! C#'s other rule, a smoke's profile must be empty, holds only for `--help-capture` and `--perf-scenario`, which seed their own (W9-H):
 //! `scripts/smoke.ps1` runs the plain smoke on a seeded demo profile and `-Profile` on a copy of a real one.
@@ -63,6 +65,11 @@ fn absolute(flag: &str, value: Option<String>) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// LaunchServices' `-psn_<serial>` (Mac stage, plan §1.1): ignored on the Mac, refused elsewhere as before.
+fn mac_launch_argument(argument: &str) -> bool {
+    cfg!(target_os = "macos") && argument.starts_with("-psn_")
+}
+
 /// Whether the DevTools port may open (W9 review L9): a development build, or a smoke run in its own profile; never a user's release app.
 fn debugging_port_allowed(debug_build: bool, smoke_test: bool) -> bool {
     debug_build || smoke_test
@@ -99,6 +106,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             }
             "-Embedding" => options.embedding = true,
             other if other.starts_with(APP_SDK_ACTIVATION) => {}
+            other if mac_launch_argument(other) => {}
             other => return Err(format!("Unsupported argument: {other}")),
         }
     }
@@ -201,6 +209,14 @@ mod tests {
         assert!(parsed(&["----AppNotificationActivated:sessionId=abc"]).is_ok());
         assert!(parsed(&["-embedding"]).is_err(), "COM's switch as COM writes it");
         assert!(parsed(&["--update-helper", "--staged", root]).is_err());
+    }
+
+    /// Mac stage (plan §1.1): an app the 0.4.x updater relaunched with `open -n` may get LaunchServices' `-psn_…`; the Mac ignores it,
+    /// Windows still refuses it.
+    #[test]
+    fn the_process_serial_number_is_ignored_only_on_the_mac() {
+        assert_eq!(parsed(&["-psn_0_12345"]).is_ok(), cfg!(target_os = "macos"));
+        assert!(parsed(&["-psn"]).is_err());
     }
 
     /// W9 review L9: the DevTools port opens only in a development build or a smoke run.

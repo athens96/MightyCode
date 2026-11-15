@@ -23,6 +23,7 @@ mod build_info;
 mod cards;
 mod companion;
 mod composer;
+mod deep_link;
 mod delegation;
 mod delta;
 mod dialogs;
@@ -33,6 +34,7 @@ mod help_capture;
 mod history;
 mod host;
 mod logfile;
+mod menu;
 mod methods;
 mod mighty;
 mod mirror;
@@ -51,6 +53,7 @@ mod remote;
 mod runs;
 mod settings;
 mod setup;
+mod shell_command;
 mod smoke;
 mod smoke_accounts;
 mod smoke_acp;
@@ -74,11 +77,13 @@ mod startup;
 mod status_line;
 mod styles;
 mod surface;
+mod surface_terminal;
 mod tails;
 mod terminal;
 mod update_helper;
 mod updates;
 mod usage;
+mod verify_resources;
 mod workmap;
 mod workspace_create;
 
@@ -169,7 +174,8 @@ fn exe_mode(args: &[String]) -> Option<i32> {
         [first, root, rest @ ..] if first == fake_claude::ARGUMENT && mighty_core::normalize::fully_qualified(root) => {
             Some(fake_claude::run(Path::new(root), rest, platform::process_host()))
         }
-        _ => help_demo_cli::try_run(args).or_else(|| update_helper::try_run(args)),
+        // Mac stage (Step 0 stub, M-H): --verify-resources, the Mac build's and install scripts' check of the bundle.
+        _ => help_demo_cli::try_run(args).or_else(|| update_helper::try_run(args)).or_else(|| verify_resources::try_run(args)),
     }
 }
 
@@ -416,6 +422,10 @@ fn main() {
             ouroboros::start(&host);
             app_update::start(&host, &platform);
             host.start_clocks();
+            // Mac stage: the menu bar (menu.rs, M-F; nothing on Windows, Tauri's default macOS menu until then).
+            if let Err(error) = menu::install(app.handle()) {
+                host.log.line(&format!("menu: {error}"));
+            }
             let (inbound, mut calls) = tokio::sync::mpsc::unbounded_channel::<Value>();
             app.manage(Inbound(inbound));
             app.manage(host.clone());
@@ -536,6 +546,9 @@ fn main() {
     let mut exit_code = 0;
     app.run(move |app, event| match event {
         RunEvent::ExitRequested { code: Some(code), .. } => exit_code = code,
+        // Mac stage: an address the OS opened the app with (mightycode://, deep_link.rs, M-F).
+        #[cfg(target_os = "macos")]
+        RunEvent::Opened { urls } => deep_link::opened(app, &urls),
         RunEvent::Exit => {
             if let Some(host) = app.try_state::<Arc<Host>>() {
                 // Quit began (C# QuitAsync sets `closing` first): no run, sign-in, retry or read starts during the teardown below.

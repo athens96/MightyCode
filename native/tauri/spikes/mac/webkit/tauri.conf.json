@@ -1,0 +1,8 @@
+{
+  "productName": "webkit spike",
+  "mainBinaryName": "webkit-spike",
+  "identifier": "dev.mightycode.spike.webkit",
+  "build": { "frontendDist": "page" },
+  "app": { "windows": [], "withGlobalTauri": false, "security": { "csp": null } },
+  "bundle": { "active": false, "icon": ["../../../../../assets/icons/mightycode.png", "../../../../../assets/icons/MightyCode.icns"] }
+}

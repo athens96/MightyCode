@@ -145,6 +145,60 @@ const W9_STEPS: [(Stage, &str, StepStart, StepChecks); 5] = [
 /// the 0.4.61 page calls is answered.
 pub const ALLOWED_UNIMPLEMENTED: [&str; 0] = [];
 
+/// Mac stage (plan §3 0c): the steps whose checks may fail on the Mac while its parts are written, by the keys the result groups them
+/// under (`steps`). On the Mac the smoke's exit code says whether every check outside these passed (`passedOutsidePending`); `passed`
+/// stays every check's verdict. Step 0 lists every step; each part's merge takes out what passes on the Mac, and the integrator empties
+/// it at the end (W9's `ALLOWED_UNIMPLEMENTED` pattern). Windows ignores it.
+pub const MAC_PENDING_STEPS: [&str; 24] = [
+    "probe",
+    "frame",
+    "browser",
+    "terminal",
+    "gitCreate",
+    "reload",
+    "files",
+    "history",
+    "settings",
+    "setup",
+    "accounts",
+    "updates",
+    "delegation",
+    "remote",
+    "companion",
+    "styles",
+    "appUpdate",
+    "mirror",
+    "help",
+    "paneWorktree",
+    "unimplemented",
+    "acp",
+    "runs",
+    "localeKeyLeakScan",
+];
+
+/// Which step each check came from, in the order they were added: the checks `checks` gained since the last call are `step`'s.
+fn attribute(checks: &Value, steps: &mut Vec<(String, Vec<String>)>, step: &str) {
+    let known: std::collections::HashSet<&String> = steps.iter().flat_map(|(_, names)| names).collect();
+    let new: Vec<String> = checks.as_object().map(|c| c.keys().filter(|name| !known.contains(name)).cloned().collect()).unwrap_or_default();
+    if !new.is_empty() {
+        steps.push((step.to_string(), new));
+    }
+}
+
+/// The checks that failed outside the `pending` steps (Mac stage): none means the Mac's gate passes.
+fn failed_outside(checks: &Value, steps: &[(String, Vec<String>)], pending: &[&str]) -> Vec<String> {
+    let step_of = |name: &String| steps.iter().find(|(_, names)| names.contains(name)).map(|(step, _)| step.as_str());
+    checks
+        .as_object()
+        .map(|c| {
+            c.iter()
+                .filter(|(name, value)| *value != &Value::Bool(true) && !step_of(name).is_some_and(|step| pending.contains(&step)))
+                .map(|(name, _)| name.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// A run that is a smoke but whose page probe another part takes over (W9-H; main.rs from `--help-capture` and `--perf-scenario`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Special {
@@ -749,9 +803,13 @@ impl Smoke {
         true
     }
 
-    /// Adds the terminal step's shell pane and runs its probe; false where the platform draws terminals natively (the Mac's Ghostty).
+    /// Adds the terminal step's shell pane and runs its probe; where the platform draws terminals natively (the Mac's Ghostty), the
+    /// native variant (smoke_terminal.rs, M-D), which does not start until it is written.
     fn start_terminal(&self, host: &Host) -> bool {
         let Some(surfaces) = host.app.try_state::<Arc<SurfaceManager>>() else { return false };
+        if surfaces.capabilities()["surfaces"]["terminal"] == "native" {
+            return crate::smoke_terminal::start_native(host);
+        }
         if surfaces.capabilities()["surfaces"]["terminal"] != "web" {
             return false;
         }
@@ -827,6 +885,9 @@ impl Smoke {
             "hostSelected": host_selected.unwrap_or(true),
             "noProbeError": probe.get("error").is_none(),
         });
+        // Which step each check came from (the Mac's pending steps are judged by it).
+        let mut steps: Vec<(String, Vec<String>)> = Vec::new();
+        attribute(&checks, &mut steps, "probe");
         let merge = |checks: &mut Value, more: Value| {
             if let (Some(checks), Some(more)) = (checks.as_object_mut(), more.as_object()) {
                 checks.extend(more.clone());
@@ -837,6 +898,7 @@ impl Smoke {
             None if self.mode != Mode::RealClaude => merge(&mut checks, json!({"frameSidebar": false})),
             None => {}
         }
+        attribute(&checks, &mut steps, "frame");
         if let Some(browser) = &browser {
             let yes = |key: &str| browser.get(key) == Some(&Value::Bool(true));
             checks["browserSurface"] = json!(
@@ -852,28 +914,42 @@ impl Smoke {
             checks["browserPopupBlocked"] = json!(yes("popupPage") && yes("popupBlocked"));
             checks["browserMenuOver"] = json!(yes("menuOpened") && yes("steppedAside") && yes("menuClosed"));
         }
+        attribute(&checks, &mut steps, "browser");
         if let Some(create) = &create {
             merge(&mut checks, crate::smoke_frame::create_checks(create, host, create_location.as_deref(), git_progress));
         }
+        attribute(&checks, &mut steps, "gitCreate");
         match &reload {
             Some(reload) => merge(&mut checks, crate::smoke_frame::reload_checks(reload)),
             None if self.mode != Mode::RealClaude => merge(&mut checks, json!({"dialogResentAfterReload": false})),
             None => {}
         }
-        if let Some(terminal) = &terminal {
+        attribute(&checks, &mut steps, "reload");
+        if native_terminal(host) {
+            // The Mac's Ghostty step (smoke_terminal.rs' native variant, M-D): a step that did not report fails every one of its checks.
+            if self.mode != Mode::RealClaude {
+                let missing = json!({"error": "the native terminal step did not report"});
+                for (name, passed) in crate::smoke_terminal::native_checks(terminal.as_ref().unwrap_or(&missing)) {
+                    checks[name] = json!(passed && terminal.is_some());
+                }
+            }
+        } else if let Some(terminal) = &terminal {
             for (name, passed) in crate::smoke_terminal::checks(terminal) {
                 checks[name] = json!(passed);
             }
         }
+        attribute(&checks, &mut steps, "terminal");
         if self.mode != Mode::RealClaude {
             let empty = json!({"error": "the files steps did not report"});
             for (name, passed) in crate::smoke_files::checks(host, files.as_ref().unwrap_or(&empty)) {
                 checks[name] = json!(passed);
             }
+            attribute(&checks, &mut steps, "files");
             let missing = json!({"error": "the history step did not report"});
             for (name, passed) in crate::smoke_history::checks(history.as_ref().unwrap_or(&missing)) {
                 checks[name] = json!(passed);
             }
+            attribute(&checks, &mut steps, "history");
             // The W6 steps: a step that did not start (or did not report) fails every one of its checks (review L7).
             let parts: [(&Option<Value>, StepChecks, &str); 4] = [
                 (&w6.0, crate::smoke_settings::checks, "settings"),
@@ -886,6 +962,7 @@ impl Smoke {
                 for (name, passed) in part(report.as_ref().unwrap_or(&missing)) {
                     checks[name] = json!(passed && report.is_some());
                 }
+                attribute(&checks, &mut steps, step);
             }
             // The delegation step (W7-D): its checks, from its report or from the error that it did not report.
             let delegation = self.progress().delegation.clone();
@@ -893,6 +970,7 @@ impl Smoke {
             for (name, passed) in crate::smoke_delegation::checks(delegation.as_ref().unwrap_or(&missing)) {
                 checks[name] = json!(passed && delegation.is_some());
             }
+            attribute(&checks, &mut steps, "delegation");
             // W8's steps: each remote part's checks from its report under its key, then the companion's (a part or step that did not
             // report fails every one of its checks).
             let remote = self.progress().remote.clone();
@@ -903,11 +981,13 @@ impl Smoke {
                     checks[name] = json!(passed && report.is_some());
                 }
             }
+            attribute(&checks, &mut steps, "remote");
             let companion = self.progress().companion.clone();
             let missing = json!({"error": "the companion step did not report"});
             for (name, passed) in crate::smoke_companion::checks(companion.as_ref().unwrap_or(&missing)) {
                 checks[name] = json!(passed && companion.is_some());
             }
+            attribute(&checks, &mut steps, "companion");
             // W9's steps: each one's checks from its report under its key (a step that did not report fails every one of them).
             let w9 = self.progress().w9.clone();
             for (_, key, _, part) in W9_STEPS {
@@ -916,11 +996,13 @@ impl Smoke {
                 for (name, passed) in part(report.as_ref().unwrap_or(&missing)) {
                     checks[name] = json!(passed && report.is_some());
                 }
+                attribute(&checks, &mut steps, key);
             }
         }
         // While W9 is under way, the page may meet only the methods its parts have not answered yet (plan D20; README's table).
         let unimplemented = host.unimplemented_methods();
         checks["unimplementedAllowed"] = json!(unimplemented.iter().all(|method| ALLOWED_UNIMPLEMENTED.contains(&method.as_str())));
+        attribute(&checks, &mut steps, "unimplemented");
         match self.mode {
             Mode::Page => {}
             Mode::FakeClaude => {
@@ -928,6 +1010,7 @@ impl Smoke {
                 for (name, passed) in crate::smoke_acp::checks(host, &acp) {
                     checks[name] = json!(passed);
                 }
+                attribute(&checks, &mut steps, "acp");
                 let empty = json!({"error": "the run steps did not report"});
                 let r = runs.as_ref().unwrap_or(&empty);
                 let yes = |key: &str| r.get(key) == Some(&Value::Bool(true));
@@ -982,12 +1065,18 @@ impl Smoke {
                 checks["realUsage"] = json!(tokens);
             }
         }
+        attribute(&checks, &mut steps, "runs");
         // localeKeyLeakScan, last (C# `RunWebLiveSmoke`'s last step): every W6 box's words, none a raw locale key.
         let leak_scan = (self.mode != Mode::RealClaude).then(|| shared(host).map(|host| crate::smoke_settings::leak_scan(&host)));
         if let Some(scan) = &leak_scan {
             checks["localeKeyLeakScan"] = json!(scan.as_ref().is_some_and(crate::smoke_settings::leak_scan_passed));
         }
+        attribute(&checks, &mut steps, "localeKeyLeakScan");
         let passed = checks.as_object().is_some_and(|c| c.values().all(|v| v == &Value::Bool(true)));
+        // The Mac's gate while its parts are written: every check outside MAC_PENDING_STEPS passed (Windows: `passed` alone).
+        let failed_outside_pending = failed_outside(&checks, &steps, &MAC_PENDING_STEPS);
+        let mac = cfg!(target_os = "macos");
+        let exit_passed = if mac { failed_outside_pending.is_empty() } else { passed };
         let mut result = json!({
             "passed": passed,
             "checks": checks,
@@ -1025,6 +1114,14 @@ impl Smoke {
         for (_, key, _, _) in W9_STEPS {
             result[key] = w9.get(key).cloned().flatten().unwrap_or(Value::Null);
         }
+        // Mac stage: each step's checks, the steps still pending on the Mac, and what failed outside them (the exit code's verdict there).
+        if mac {
+            result["steps"] =
+                json!(steps.iter().map(|(step, names)| (step.clone(), json!(names))).collect::<serde_json::Map<String, Value>>());
+            result["macPending"] = json!(MAC_PENDING_STEPS);
+            result["failedOutsidePending"] = json!(failed_outside_pending);
+            result["passedOutsidePending"] = json!(exit_passed);
+        }
         if let Some(parent) = self.out.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -1032,9 +1129,12 @@ impl Smoke {
             host.log.line(&format!("smoke: cannot write {}: {error}", self.out.display()));
         }
         host.log.line(&format!("smoke: {} ({})", if passed { "passed" } else { "FAILED" }, self.out.display()));
+        if mac {
+            host.log.line(&format!("smoke: outside the Mac's pending steps {}", if exit_passed { "passed" } else { "FAILED" }));
+        }
         crate::smoke_history::remove_fixtures();
         if self.exit {
-            host.app.exit(if passed { 0 } else { 1 });
+            host.app.exit(if exit_passed { 0 } else { 1 });
         }
     }
 
@@ -1073,6 +1173,11 @@ impl Smoke {
 
 /// How long a help capture or perf scenario waits for the page to come up before it fails (W9-H).
 const SPECIAL_PAGE: Duration = Duration::from_secs(180);
+
+/// Whether the platform draws terminals natively (the Mac's Ghostty): the terminal step is then its native variant.
+fn native_terminal(host: &Host) -> bool {
+    host.app.try_state::<Arc<SurfaceManager>>().is_some_and(|surfaces| surfaces.capabilities()["surfaces"]["terminal"] == "native")
+}
 
 /// A step's checks from its report (W6's, W8's remote parts).
 type StepChecks = fn(&Value) -> Vec<(&'static str, bool)>;
@@ -1176,5 +1281,33 @@ pub async fn smoke_surface(pane_id: String, action: String, host: tauri::State<'
         // The dialogs whose flows still wait (the reload step's: none once the redrawn sheet was answered).
         "dialogs" => Ok(json!({"open": crate::dialogs::of(&host).open_count(), "dialogOpen": host.view().dialog_open})),
         other => Err(format!("unknown smoke action {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Mac stage: the checks are grouped by the step that added them, and the Mac's gate fails only on a check outside the pending
+    /// steps (a pending step's failures are allowed; Windows' exit code stays `passed`).
+    #[test]
+    fn the_mac_gate_fails_only_outside_the_pending_steps() {
+        let mut steps = Vec::new();
+        let mut checks = json!({"getLocaleAndReady": true, "paneTitles": false});
+        attribute(&checks, &mut steps, "probe");
+        checks["frameSidebar"] = json!(false);
+        attribute(&checks, &mut steps, "frame");
+        attribute(&checks, &mut steps, "browser");
+        let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            steps,
+            vec![("probe".to_string(), names(&["getLocaleAndReady", "paneTitles"])), ("frame".to_string(), names(&["frameSidebar"]))],
+            "a step that added nothing has no group"
+        );
+        assert!(failed_outside(&checks, &steps, &["probe", "frame"]).is_empty());
+        assert_eq!(failed_outside(&checks, &steps, &["probe"]), names(&["frameSidebar"]));
+        assert_eq!(failed_outside(&checks, &steps, &[]), names(&["paneTitles", "frameSidebar"]));
+        let unique: std::collections::HashSet<&str> = MAC_PENDING_STEPS.iter().copied().collect();
+        assert_eq!(unique.len(), MAC_PENDING_STEPS.len());
     }
 }

@@ -172,7 +172,7 @@ pub(crate) fn png_size(bytes: &[u8]) -> (u32, u32) {
 async fn picture(host: &Host, clip: Option<&str>) -> Result<Vec<u8>, String> {
     use base64::Engine as _;
     let page = host.app.get_webview(WINDOW).ok_or("no main window")?;
-    let Some(clip) = clip else { return mighty_platform_windows::page::capture_preview(&page).await.map_err(|e| e.to_string()) };
+    let Some(clip) = clip else { return crate::platform::page_picture(&page).await };
     let script = format!(
         "(() => {{ const e = document.querySelector({}); if (!e) return null; const r = e.getBoundingClientRect(); return {{ x: r.left, y: r.top, width: r.width, height: r.height, scale: window.devicePixelRatio }}; }})()",
         literal(clip)
@@ -183,16 +183,19 @@ async fn picture(host: &Host, clip: Option<&str>) -> Result<Vec<u8>, String> {
     }
     let number = |key: &str| r.get(key).and_then(Value::as_f64).unwrap_or(0.0);
     let arguments = json!({"format": "png", "clip": {"x": number("x"), "y": number("y"), "width": number("width"), "height": number("height"), "scale": number("scale")}});
-    let answer = mighty_platform_windows::page::devtools(&page, "Page.captureScreenshot", &arguments.to_string())
-        .await
-        .map_err(|e| e.to_string())?;
+    let answer = crate::platform::page_devtools(&page, "Page.captureScreenshot", &arguments.to_string()).await?;
     let answer: Value = serde_json::from_str(&answer).map_err(|e| e.to_string())?;
     base64::engine::general_purpose::STANDARD.decode(answer.get("data").and_then(Value::as_str).unwrap_or("")).map_err(|e| e.to_string())
 }
 
+/// The Mac's (M-G): the whole page through WKWebView's snapshot (`platform::page_picture`, M-G's); an element's box not yet.
 #[cfg(not(windows))]
-async fn picture(_host: &Host, _clip: Option<&str>) -> Result<Vec<u8>, String> {
-    Err("the help capture pictures the page through WebView2 (Windows only); the help site keeps the Mac's pictures".into())
+async fn picture(host: &Host, clip: Option<&str>) -> Result<Vec<u8>, String> {
+    let page = host.app.get_webview(WINDOW).ok_or("no main window")?;
+    match clip {
+        None => crate::platform::page_picture(&page).await,
+        Some(_) => Err("the help capture's element pictures are the Mac stage's (M-G); the help site keeps the Mac's pictures".into()),
+    }
 }
 
 /// Still pictures, as the Mac's CI capture draws them: the page's reduced-motion rules (C#'s `Emulation.setEmulatedMedia`).
@@ -200,7 +203,7 @@ async fn picture(_host: &Host, _clip: Option<&str>) -> Result<Vec<u8>, String> {
 async fn reduce_motion(host: &Host) -> Result<(), String> {
     let page = host.app.get_webview(WINDOW).ok_or("no main window")?;
     let features = r#"{"features":[{"name":"prefers-reduced-motion","value":"reduce"}]}"#;
-    mighty_platform_windows::page::devtools(&page, "Emulation.setEmulatedMedia", features).await.map(|_| ()).map_err(|e| e.to_string())
+    crate::platform::page_devtools(&page, "Emulation.setEmulatedMedia", features).await.map(|_| ())
 }
 
 #[cfg(not(windows))]

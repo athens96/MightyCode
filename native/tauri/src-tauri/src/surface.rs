@@ -303,8 +303,20 @@ impl SurfaceManager {
         let Some(report) = slot.report else { return Ok(()) };
         let show = report.shows();
         if slot.view.is_none() {
-            if !show || slot.failed.is_some() || kind != SurfaceKind::Browser {
-                // A terminal view is opened by its pane's terminal (the Mac stage), never by a report alone.
+            if kind == SurfaceKind::Terminal {
+                // The Mac's Ghostty view, fed by its pane's PTY (surface_terminal.rs, M-D; none before then, so the slot stays empty).
+                // Windows never gets here: its page draws terminals (`bounds` returns before).
+                if show
+                    && slot.failed.is_none()
+                    && let Some(view) = crate::surface_terminal::open(&self.factory, pane, report.rect).await
+                {
+                    slot.view = Some(View::Terminal(view));
+                    slot.shown = true;
+                    slot.placed = Some(report.rect);
+                }
+                return Ok(());
+            }
+            if !show || slot.failed.is_some() {
                 return Ok(());
             }
             let (Some(url), Some(data_dir)) = (slot.url.clone(), slot.data_dir.clone()) else { return Ok(()) };
