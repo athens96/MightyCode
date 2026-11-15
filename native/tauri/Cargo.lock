@@ -2127,6 +2127,7 @@ version = "0.1.0"
 dependencies = [
  "image",
  "indexmap 2.14.2",
+ "mighty-composer",
  "mighty-core",
  "mighty-platform",
  "mighty-run",

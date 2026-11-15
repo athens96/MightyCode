@@ -8,8 +8,9 @@
 //! strings escaped as `Wire.Json` escapes them ([`mighty_core::json::JsonOut`]). `left` and `top` are the window's top left in the
 //! desktop's physical pixels, as C# saves them, so either app puts the pet where the other left it.
 //!
-//! One check of C#'s read is not here: `StyleFiles.Read` also refuses a file with more than one hard link, which std cannot ask without
-//! OS code (the shared crates have none); the path is still resolved under the profile and a link at its end refused.
+//! Reads go through `WorkspaceFiles.OpenFile` (mighty-composer `open_file`: resolved under the folder, no link at its end, the open
+//! handle's final path checked again where the OS can ask) and, where the OS can ask a handle, refuse a file with more than one hard
+//! link (C# `StyleFiles.SingleLink`, the platform's `FileHandles::single_link`).
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -115,17 +116,16 @@ pub fn read_bounded(root: &Path, relative: &str, maximum: u64) -> Option<Vec<u8>
     if !safe || root.to_string_lossy().starts_with("\\\\") {
         return None;
     }
-    let path = mighty_core::workspace_files::resolve(relative, root)?;
-    if !matches!(mighty_core::workspace_files::link_target(&path), Ok(None)) || path.is_dir() {
+    let handles = mighty_composer::files::file_handles();
+    let opened = mighty_composer::files::open_file(relative, root, handles.as_ref()).ok()?;
+    if handles.asks_handles() && !handles.single_link(&opened.file) {
         return None;
     }
-    let file = std::fs::File::open(&path).ok()?;
-    let meta = file.metadata().ok()?;
-    if !meta.is_file() || meta.len() > maximum {
+    if !opened.file.metadata().ok()?.is_file() || opened.size > maximum {
         return None;
     }
     let mut bytes = Vec::new();
-    file.take(maximum + 1).read_to_end(&mut bytes).ok()?;
+    opened.file.take(maximum + 1).read_to_end(&mut bytes).ok()?;
     (bytes.len() as u64 <= maximum).then_some(bytes)
 }
 

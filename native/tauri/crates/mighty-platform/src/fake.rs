@@ -1125,7 +1125,7 @@ impl PetWindow for FakePet {
     }
 }
 
-// The Agent IO transport in memory (W7-C's tests and the framing's): one value is both the app's listener and the servers' connector.
+/// The Agent IO transport in memory (W7-C's tests and the framing's): one value is both the app's listener and the servers' connector.
 /// `connect` to the bound name hands `accept` the other end of an in-memory duplex; a connection to another name, to a closed
 /// listener, or while [`FakeAgentIo::set_foreign`] says the listener is another user's, is refused (what the Windows client's owner
 /// check refuses).

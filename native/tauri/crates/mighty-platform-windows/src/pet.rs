@@ -57,10 +57,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GUITHREADINFO, GWL_EXSTYLE, GetCursorPos,
     GetForegroundWindow, GetGUIThreadInfo, GetMessageW, GetWindowLongPtrW, GetWindowRect, HCURSOR, HTCLIENT, HWND_TOPMOST, IDC_ARROW,
     IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, KillTimer, LoadCursorW, MA_NOACTIVATE, MSG, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetCursor, SetTimer, SetWindowPos, ShowWindow,
-    TranslateMessage, ULW_ALPHA, UnregisterClassW, UpdateLayeredWindow, WINDOW_EX_STYLE, WM_APP, WM_CANCELMODE, WM_CAPTURECHANGED,
-    WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+    RegisterClassExW, SPI_GETCLIENTAREAANIMATION, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    SendMessageW, SetCursor, SetTimer, SetWindowPos, ShowWindow, SystemParametersInfoW, TranslateMessage, ULW_ALPHA, UnregisterClassW,
+    UpdateLayeredWindow, WINDOW_EX_STYLE, WM_APP, WM_CANCELMODE, WM_CAPTURECHANGED, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER,
+    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{BOOL, HSTRING, Interface, PCWSTR};
 use windows_numerics::{Matrix3x2, Vector2};
@@ -286,6 +287,10 @@ struct Shared {
     events: Mutex<Option<Events>>,
     closed: AtomicBool,
     capture: Mutex<PetCapture>,
+    /// A caller asked for the window's picture (the smoke): from then on each frame is copied for it (review M3).
+    capture_wanted: AtomicBool,
+    /// Frames drawn so far.
+    frames: AtomicU64,
     cursor: Mutex<PetCursor>,
     /// The scale and origin of the scene last drawn (bits of an f64; the origin in pixels).
     scale: AtomicU64,
@@ -336,6 +341,8 @@ struct Window {
     shown: bool,
     pressed: bool,
     refused: u32,
+    /// A show asked for while its frame was refused: shown with the next frame the system takes (review M1).
+    pending_show: bool,
 }
 
 thread_local! {
@@ -416,6 +423,8 @@ fn run(text: Arc<Text>, ready: std::sync::mpsc::Sender<Result<Arc<Shared>>>) {
             })),
             closed: AtomicBool::new(false),
             capture: Mutex::default(),
+            capture_wanted: AtomicBool::new(false),
+            frames: AtomicU64::new(0),
             cursor: Mutex::default(),
             scale: AtomicU64::new(1f64.to_bits()),
             left: AtomicIsize::new(0),
@@ -437,6 +446,7 @@ fn run(text: Arc<Text>, ready: std::sync::mpsc::Sender<Result<Arc<Shared>>>) {
                 shown: false,
                 pressed: false,
                 refused: 0,
+                pending_show: false,
             })
         });
         let _ = ready.send(Ok(shared.clone()));
@@ -470,6 +480,9 @@ impl Window {
 
     /// C# `Allocate`: a DIB section of exactly the window's pixels.
     fn allocate(&mut self, width: i32, height: i32) -> Result<()> {
+        if width <= 0 || height <= 0 || width.checked_mul(height).and_then(|p| p.checked_mul(4)).is_none() {
+            return Err(PlatformError::Invalid("the pet window is too large".into()));
+        }
         if width == self.width && height == self.height && !self.bits.is_null() {
             return Ok(());
         }
@@ -508,8 +521,13 @@ impl Window {
 
     /// Draws `scene` into the DIB and puts it on screen at its place and size, together (C# `Draw`).
     fn draw(&mut self, scene: Box<PetScene>, show: bool) {
+        let show = show || self.pending_show;
+        self.pending_show = show && !self.shown;
         let (width, height) = scene.pixel_size();
-        let (width, height) = (width as i32, height as i32);
+        let (Ok(width), Ok(height)) = (i32::try_from(width), i32::try_from(height)) else {
+            self.refuse("the pet window is too large".into());
+            return;
+        };
         if self.allocate(width, height).is_err() {
             self.refuse("CreateDIBSection".into());
             return;
@@ -530,13 +548,15 @@ impl Window {
             // A device lost or a target that would not bind: made afresh on the next frame.
             self.renderer = None;
         }
-        // SAFETY: the DIB's bits are `width × height × 4` bytes while it stays selected; GDI is flushed first.
-        unsafe {
-            let _ = GdiFlush();
-            let pixels = std::slice::from_raw_parts(self.bits, (width * height * 4) as usize).to_vec();
-            let mut capture = lock(&self.shared.capture);
-            let frames = capture.frames + 1;
-            *capture = PetCapture { width: width as u32, height: height as u32, bgra: pixels, frames };
+        let frames = self.shared.frames.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.shared.capture_wanted.load(Ordering::SeqCst) && !self.bits.is_null() && width == self.width && height == self.height {
+            // SAFETY: the DIB `allocate` made for exactly `width × height` (checked above, its product checked there) is selected and
+            // its bits are that many 4-byte pixels; GDI is flushed first.
+            unsafe {
+                let _ = GdiFlush();
+                let pixels = std::slice::from_raw_parts(self.bits, width as usize * height as usize * 4).to_vec();
+                *lock(&self.shared.capture) = PetCapture { width: width as u32, height: height as u32, bgra: pixels, frames };
+            }
         }
         let destination = POINT { x: left, y: top };
         let size = SIZE { cx: width, cy: height };
@@ -572,14 +592,20 @@ impl Window {
                 self.shown = true;
                 let _ = ShowWindow(self.hwnd, SW_SHOWNA);
             }
+            self.pending_show = false;
             let _ = SetWindowPos(self.hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
-        // A change of display noted while the frame went up: the display the window stands on now is asked once.
+        self.missed_dpi();
+    }
+
+    /// A change of display noted while the window was busy (inside a draw or a move): the display it stands on now is asked once,
+    /// and reported when its scale is not the one drawn at.
+    fn missed_dpi(&self) {
         if MISSED_DPI.with(|m| m.replace(false)) {
             // SAFETY: this thread's own window.
             let dpi = unsafe { GetDpiForWindow(self.hwnd) };
             let standing = (f64::from(dpi) / 96.0).clamp(1.0, 4.0);
-            if (standing - scale).abs() > f64::EPSILON {
+            if (standing - self.shared.scale()).abs() > f64::EPSILON {
                 self.shared.emit(PetEvent::DpiChanged { scale: standing });
             }
         }
@@ -618,9 +644,11 @@ impl Window {
                 }
                 Command::Close => {
                     self.shared.closed.store(true, Ordering::SeqCst);
-                    // SAFETY: this thread's own window; WM_DESTROY ends the loop.
+                    // SAFETY: this thread's own window. Its WM_DESTROY arrives while this window is borrowed (the procedure posts the
+                    // quit there too); the quit posted here ends the loop either way (review H1).
                     unsafe {
                         let _ = DestroyWindow(self.hwnd);
+                        PostQuitMessage(0);
                     }
                     return;
                 }
@@ -629,6 +657,7 @@ impl Window {
         if let Some(scene) = draw {
             self.draw(scene, show);
         }
+        self.missed_dpi();
     }
 
     /// The pointer as the window reports it: in the window's DIPs and on the screen, from the client point of a message.
@@ -752,8 +781,15 @@ unsafe extern "system" fn procedure(hwnd: HWND, message: u32, wparam: WPARAM, lp
         WINDOW.with(|window| match window.try_borrow_mut() {
             Ok(mut window) => window.as_mut().filter(|w| w.hwnd == hwnd).and_then(|w| w.message(message, wparam, lparam)),
             Err(_) => {
-                if message == WM_DPICHANGED && DRAWING.with(Cell::get) {
+                // The window is busy (a draw, a move, its destruction): a change of display is noted for after it, never handled
+                // inside it (review M2), and a destruction still ends the loop (review H1).
+                if message == WM_DPICHANGED {
                     MISSED_DPI.with(|m| m.set(true));
+                    return Some(LRESULT(0));
+                }
+                if message == WM_DESTROY {
+                    // SAFETY: ends this thread's message loop.
+                    unsafe { PostQuitMessage(0) };
                     return Some(LRESULT(0));
                 }
                 None
@@ -865,6 +901,8 @@ impl Renderer {
                     };
                     if let Ok(target) = self.factory.CreateDCRenderTarget(&properties) {
                         self.target = Some((target, D2D1_RENDER_TARGET_TYPE_SOFTWARE));
+                        self.cells.clear();
+                        self.brushes.clear();
                         return self.render(dc, width, height, scene);
                     }
                 }
@@ -920,14 +958,19 @@ impl Renderer {
 
     fn cell(&mut self, target: &ID2D1RenderTarget, atlas: &PetBitmap, cell: &PetRect) -> Option<ID2D1Bitmap> {
         let (x, y, w, h) = (cell.x as u32, cell.y as u32, cell.width as u32, cell.height as u32);
-        if x + w > atlas.width || y + h > atlas.height {
+        if w == 0 || h == 0 || x.checked_add(w)? > atlas.width || y.checked_add(h)? > atlas.height {
+            return None;
+        }
+        let stride = atlas.width.checked_mul(4)? as usize;
+        let last = (y + h - 1) as usize * stride + (x + w) as usize * 4;
+        if atlas.bgra.len() < last || atlas.bgra.len() != stride.checked_mul(atlas.height as usize)? {
             return None;
         }
         if let Some(bitmap) = self.cells.get(&(x, y)) {
             return Some(bitmap.clone());
         }
         let pitch = atlas.width * 4;
-        let offset = (y * pitch + x * 4) as usize;
+        let offset = y as usize * stride + x as usize * 4;
         let properties = D2D1_BITMAP_PROPERTIES {
             pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
             dpiX: 96.0,
@@ -1204,7 +1247,23 @@ impl PetWindow for WindowsPet {
     }
     fn capture(&self) -> Result<PetCapture> {
         self.shared.open()?;
-        Ok(lock(&self.shared.capture).clone())
+        self.shared.capture_wanted.store(true, Ordering::SeqCst);
+        let mut capture = lock(&self.shared.capture).clone();
+        capture.frames = self.shared.frames.load(Ordering::SeqCst);
+        Ok(capture)
+    }
+    fn animations(&self) -> bool {
+        let mut on = BOOL(1);
+        // SAFETY: SPI_GETCLIENTAREAANIMATION writes one BOOL to the pointer it is given.
+        let read = unsafe {
+            SystemParametersInfoW(
+                SPI_GETCLIENTAREAANIMATION,
+                0,
+                Some(&mut on as *mut BOOL as *mut c_void),
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            )
+        };
+        read.is_err() || on.as_bool()
     }
     fn focus(&self) -> Result<PetFocus> {
         self.shared.open()?;
@@ -1341,6 +1400,7 @@ mod tests {
             atlas: None,
         };
         let before = GetForegroundWindowValue();
+        let _ = pet.capture().unwrap();
         pet.show(&scene).unwrap();
         let mut frame = PetCapture::default();
         for _ in 0..100 {
@@ -1377,6 +1437,42 @@ mod tests {
         assert!(!pet.focus().unwrap().took_thread, "a press never activates it");
         pet.close().unwrap();
         assert!(pet.draw(&scene).is_err(), "closed, it refuses");
+        // Review H1: closed, its thread ends and its events with it.
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match events.try_recv() {
+                Err(mpsc::error::TryRecvError::Disconnected) => break,
+                _ if std::time::Instant::now() > end => panic!("the pet window's thread never ended"),
+                _ => std::thread::sleep(std::time::Duration::from_millis(20)),
+            }
+        }
+    }
+
+    /// Review M1: a first frame the window cannot take leaves the show pending, and the next frame it takes shows the window.
+    #[test]
+    fn a_refused_first_frame_still_shows_the_window_with_the_next() {
+        let pet = open().unwrap();
+        let events = pet.events().unwrap();
+        let huge = PetScene { width: 1e12, height: 10.0, scale: 1.0, ..PetScene::default() };
+        pet.show(&huge).unwrap();
+        let fine = PetScene {
+            width: 40.0,
+            height: 40.0,
+            scale: 1.0,
+            origin: PetPoint { x: 10.0, y: 10.0 },
+            items: vec![PetItem::Fill { rect: PetRect::new(0.0, 0.0, 40.0, 40.0), radius: 0.0, color: card() }],
+            atlas: None,
+        };
+        pet.draw(&fine).unwrap();
+        let own = HWND(pet.focus().unwrap().own as *mut c_void);
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // SAFETY: a read of this test's own window's visibility.
+        while !unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(own) }.as_bool() {
+            assert!(std::time::Instant::now() < end, "the window never showed after its refused first frame");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        pet.close().unwrap();
+        drop(events);
     }
 
     #[allow(non_snake_case)]

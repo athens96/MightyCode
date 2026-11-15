@@ -154,14 +154,15 @@ fn companion_catalog_boundaries() {
     assert!(loaded.width == 1536 && loaded.height == 1872 && loaded.name == "한글 펫", "valid manifest metadata");
     for path in ["../outside.png", "/tmp/outside.png", "C:\\outside.png", "\\\\server\\image.png", "sheet.png:stream"] {
         manifest(&source, path, 1);
-        assert!(CompanionPet::load(&source, "test").is_err(), "escaped pet path accepted: {path}");
+        let refused = CompanionPet::load(&source, "test").expect_err(&format!("escaped pet path accepted: {path}"));
+        assert!(refused.starts_with("Invalid Codex pet:"), "{refused}");
     }
     manifest(&source, "sheet.png", 3);
-    assert!(CompanionPet::load(&source, "test").is_err(), "wrong version accepted");
+    assert_eq!(CompanionPet::load(&source, "test").expect_err("wrong version accepted"), pet::invalid("version"));
     manifest(&source, "sheet.png", 1);
     png[25] = 2;
     std::fs::write(source.join("sheet.png"), &png).unwrap();
-    assert!(CompanionPet::load(&source, "test").is_err(), "opaque sheet accepted");
+    assert_eq!(CompanionPet::load(&source, "test").expect_err("opaque sheet accepted"), pet::invalid("dimensions or transparency"));
     let profile = root.join("profile");
     std::fs::create_dir_all(&profile).unwrap();
     let saved = CompanionPreferences {
@@ -182,7 +183,7 @@ fn companion_catalog_boundaries() {
         let linked = root.join("linked");
         std::fs::create_dir_all(&linked).unwrap();
         std::os::unix::fs::symlink(profile.join("pets"), linked.join("pets")).unwrap();
-        assert!(loaded.install(&linked).is_err(), "linked import destination accepted");
+        assert_eq!(loaded.install(&linked).expect_err("linked import destination accepted"), pet::invalid("destination"));
     }
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -231,9 +232,9 @@ fn companion_bubble_answers_questions_tap_back_next_and_send() {
             && bubble::picked("A", &lone_multi, &many),
         "a multi-choice tap only toggles"
     );
+    let sends: Vec<BubbleButton> = bubble::question(&lone_multi, &many).into_iter().filter(|b| b.id == bubble::NEXT).collect();
     assert!(
-        ids(&lone_multi, &many) == "open,questions,question-commit,deny"
-            && bubble::question(&lone_multi, &many).iter().find(|b| b.id == bubble::NEXT).unwrap().label == get("composer.send.name"),
+        ids(&lone_multi, &many) == "open,questions,question-commit,deny" && sends.len() == 1 && sends[0].label == get("composer.send.name"),
         "Send once something is picked"
     );
     let picks = bubble::commit(&lone_multi, &mut many).expect("Send answers");
@@ -270,7 +271,9 @@ fn companion_bubble_answers_questions_tap_back_next_and_send() {
     let multi_first = form(MULTI_FIRST);
     let mut mixed = QuestionnaireProgress::new("mixed");
     bubble::choose("Y", &multi_first, &mut mixed);
-    let next = bubble::question(&multi_first, &mixed).into_iter().find(|b| b.id == bubble::NEXT).unwrap();
+    let nexts: Vec<BubbleButton> = bubble::question(&multi_first, &mixed).into_iter().filter(|b| b.id == bubble::NEXT).collect();
+    assert_eq!(nexts.len(), 1, "one Next");
+    let next = &nexts[0];
     assert!(
         next.prominent && !next.disabled && next.label == get("companion.question.next"),
         "Next under a multi-choice question that is not the last"

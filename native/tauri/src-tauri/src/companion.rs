@@ -18,6 +18,8 @@
 //! Locks: the companion's state lock is never held while the view's is taken (the shell model reads [`frame_model`] with the view
 //! locked), and the overlay's lock is taken before the state's.
 
+#![deny(clippy::significant_drop_in_scrutinee)]
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -65,8 +67,10 @@ pub struct State {
     follower: Follower,
     /// Where the user is in each question the bubble answers itself, by request key, with the input it was made for.
     drafts: HashMap<String, (String, QuestionnaireProgress)>,
-    /// The requests seen waiting at the last refresh.
-    seen: std::collections::HashSet<String>,
+    /// The requests seen waiting, oldest first (C#'s `companionPermissions`).
+    waiting: follow::Waiting,
+    /// Whether the OS animates (Windows' "Animation effects"): off, the pet stands still.
+    system_motion: bool,
     /// What went wrong answering the request the bubble shows, by that request's key.
     request_error: Option<(String, String)>,
     /// The plan whose answer is on its way (its request's key).
@@ -162,7 +166,12 @@ pub fn start(host: &Arc<Host>, platform: &Platform, surfaces: Arc<dyn SurfaceFac
     let _ = platform;
     let preferences = prefs::load(&host.data_dir);
     let companion = Arc::new(CompanionApp {
-        state: Mutex::new(State { follower: Follower::new(preferences.shows_task), prefs: preferences, ..State::default() }),
+        state: Mutex::new(State {
+            follower: Follower::new(preferences.shows_task),
+            prefs: preferences,
+            system_motion: true,
+            ..State::default()
+        }),
         overlay: Mutex::new(None),
         surfaces: Mutex::new(Some(surfaces)),
         generation: AtomicU64::new(0),
@@ -175,6 +184,8 @@ pub fn start(host: &Arc<Host>, platform: &Platform, surfaces: Arc<dyn SurfaceFac
         reload(&host).await;
         // The sprite plays at 12 frames a second; what the bubble says is read once a second.
         let mut clock = tokio::time::interval(Duration::from_secs_f64(1.0 / 12.0));
+        // A late tick is skipped, not made up for in a burst (review L5).
+        clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut ticks = 0u64;
         loop {
             clock.tick().await;
@@ -182,19 +193,30 @@ pub fn start(host: &Arc<Host>, platform: &Platform, surfaces: Arc<dyn SurfaceFac
                 break;
             }
             ticks += 1;
-            let themed = {
+            // A tick that fails takes the pet down with what it holds and says why (C#'s catch in the timer, review L4).
+            guarded(&companion, || {
                 let theme = host.view().snapshot.theme().to_string();
-                let mut state = lock(&companion.state);
-                std::mem::replace(&mut state.theme, theme.clone()) != theme
-            };
-            if ticks.is_multiple_of(12) || themed {
-                refresh(&host);
-            }
-            if lock(&companion.state).prefs.enabled {
-                draw(&host);
-            }
+                let themed = std::mem::replace(&mut lock(&companion.state).theme, theme.clone()) != theme;
+                if ticks.is_multiple_of(12) || themed {
+                    let motion = lock(&companion.overlay).as_ref().is_none_or(|o| o.window.animations());
+                    lock(&companion.state).system_motion = motion;
+                    refresh(&host);
+                }
+                let enabled = lock(&companion.state).prefs.enabled;
+                if enabled {
+                    draw(&host);
+                }
+            });
         }
     });
+}
+
+/// One tick of the clock: a panic in it ends the pet (its window closed) and its words become the box's message.
+fn guarded(companion: &CompanionApp, tick: impl FnOnce()) {
+    if let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(tick)) {
+        lock(&companion.state).error = Some(crate::host::panic_text(panic.as_ref()));
+        close_overlay(companion);
+    }
 }
 
 /// The app quits: the pet window closed and the clock stopped (C# `ShutdownCompanion`).
@@ -206,7 +228,8 @@ pub fn shutdown(host: &Host) {
 }
 
 fn close_overlay(companion: &CompanionApp) {
-    if let Some(overlay) = lock(&companion.overlay).take() {
+    let taken = lock(&companion.overlay).take();
+    if let Some(overlay) = taken {
         let _ = overlay.window.close();
     }
 }
@@ -304,7 +327,8 @@ pub async fn reload(host: &Arc<Host>) {
                         action
                     };
                     if let Some(action) = action {
-                        act(&host, action).await;
+                        let host = host.clone();
+                        tauri::async_runtime::spawn(async move { act(&host, action).await });
                     }
                 }
             });
@@ -331,7 +355,7 @@ fn draw(host: &Host) {
     let Some(companion) = app(host) else { return };
     let (row, still) = {
         let state = lock(&companion.state);
-        (state.row, state.prefs.reduced_motion)
+        (state.row, state.prefs.reduced_motion || !state.system_motion)
     };
     let elapsed = lock(&companion.state).follower.animation_elapsed(companion.now());
     let mut overlay = lock(&companion.overlay);
@@ -377,21 +401,33 @@ pub fn refresh(host: &Host) {
     let none: Vec<ToolPermissionRequest> = vec![];
     let statuses: Vec<String> = agents.iter().map(|s| status_of(s, requests.get(s.id()).unwrap_or(&none))).collect();
     let now = companion.now();
+    let standing = lock(&companion.overlay).is_some();
     let (card, visible) = {
         let mut state = lock(&companion.state);
         state.busy = statuses.iter().filter(|s| busy(s)).count();
         // The drafts and the error of requests seen waiting that wait no longer are let go (C# `ReceiveCompanionPermission`); a draft of
         // a request the companion never saw waiting (the smoke's own) is the caller's to let go.
-        let waiting: std::collections::HashSet<String> =
-            requests.values().flatten().map(|r| follow::permission_key(&r.run_id, &r.id)).collect();
-        let gone: Vec<String> = state.seen.difference(&waiting).cloned().collect();
-        for key in &gone {
-            state.drafts.remove(key);
-            if state.request_error.as_ref().is_some_and(|(k, _)| k == key) {
-                state.request_error = None;
+        // New ones are taken in the panes' order, each pane's oldest first (review M4).
+        let mut listed: Vec<(String, String)> = Vec::new();
+        for session in &agents {
+            for request in requests.get(session.id()).into_iter().flatten() {
+                listed.push((follow::permission_key(&request.run_id, &request.id), request.run_id.clone()));
             }
         }
-        state.seen = waiting;
+        for key in state.waiting.observe(&listed) {
+            state.drafts.remove(&key);
+            if state.request_error.as_ref().is_some_and(|(k, _)| *k == key) {
+                state.request_error = None;
+            }
+            // An answered plan stays marked until it left the panes' requests (review L7: a remote pane's answer takes a round trip).
+            if state.plan_sending.as_deref() == Some(key.as_str()) {
+                state.plan_sending = None;
+            }
+        }
+        // With no pet on the desktop nothing more is decided (C# MainWindow.Companion.cs:145): the count above is the status bar's.
+        if !standing || !state.prefs.enabled {
+            return;
+        }
         let followed_agents: Vec<Agent> = agents
             .iter()
             .zip(&statuses)
@@ -640,6 +676,12 @@ async fn act(host: &Arc<Host>, action: CompanionAction) {
     }
 }
 
+/// The agent shown, read with the state's lock let go before `then` runs.
+fn with_shown(companion: &CompanionApp, then: impl FnOnce(Option<String>)) {
+    let shown = lock(&companion.state).shown.clone();
+    then(shown);
+}
+
 async fn press(host: &Arc<Host>, companion: &Arc<CompanionApp>, key: &str, action: &str) {
     if host.closing() || lock(&companion.state).card_key.as_deref() != Some(key) {
         return;
@@ -668,9 +710,11 @@ async fn press(host: &Arc<Host>, companion: &Arc<CompanionApp>, key: &str, actio
             return;
         }
         "pending" => {
-            let snapshot = host.view().snapshot.clone();
-            let requesting: Vec<String> = requests_of(host, &snapshot).into_keys().collect();
-            lock(&companion.state).follower.pin_pending(&requesting);
+            {
+                let mut state = lock(&companion.state);
+                let requesting = state.waiting.panes();
+                state.follower.pin_pending(&requesting);
+            }
             refresh(host);
             return;
         }
@@ -688,8 +732,9 @@ async fn press(host: &Arc<Host>, companion: &Arc<CompanionApp>, key: &str, actio
             return;
         }
         "open" => {
-            // With no agent to turn to, the menu's open still brings the window forward.
-            match lock(&companion.state).shown.clone() {
+            // With no agent to turn to, the menu's open still brings the window forward. The state's lock is let go before the
+            // window is asked (review H2: focusing takes the view's lock, which the shell clock holds while it reads the state's).
+            with_shown(companion, |shown| match shown {
                 Some(shown) => crate::notifications::focus(host, &shown),
                 None => {
                     if let Some(window) = host.app.get_webview_window(crate::host::WINDOW) {
@@ -697,7 +742,7 @@ async fn press(host: &Arc<Host>, companion: &Arc<CompanionApp>, key: &str, actio
                         let _ = window.set_focus();
                     }
                 }
-            }
+            });
             return;
         }
         _ => {}
@@ -808,13 +853,11 @@ async fn answer_plan(host: &Arc<Host>, companion: &CompanionApp, request: &ToolP
         }
         Err(error) => Err(error),
     };
-    {
+    if let Err(error) = &answered {
         let mut state = lock(&companion.state);
         state.plan_sending = None;
-        if let Err(error) = &answered {
-            state.error = Some(error.clone());
-            state.request_error = Some((key, error.clone()));
-        }
+        state.error = Some(error.clone());
+        state.request_error = Some((key, error.clone()));
     }
     host.view().mighty.dirty(&request.run_id);
     refresh(host);
@@ -1035,5 +1078,82 @@ impl SurfaceModel for StatusPopover {
     fn button(&mut self, which: Option<&str>) -> Next {
         let _ = which;
         Next::Close
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+
+    use mighty_platform::fake::{FakePet, PetCall};
+
+    use super::*;
+
+    fn companion(pet: Option<FakePet>) -> CompanionApp {
+        let overlay = pet.map(|pet| {
+            let window: Arc<dyn PetWindow> = Arc::new(pet);
+            Overlay {
+                companion: Companion::new(window.clone(), &CompanionPreferences::default()),
+                window,
+                last: None,
+                shown: false,
+                generation: 1,
+            }
+        });
+        CompanionApp {
+            state: Mutex::new(State { shown: Some("pane".into()), system_motion: true, ..State::default() }),
+            overlay: Mutex::new(overlay),
+            surfaces: Mutex::new(None),
+            generation: AtomicU64::new(1),
+            clock: Instant::now(),
+            closing: AtomicBool::new(false),
+        }
+    }
+
+    /// Review H2: what the open press does with the agent shown runs with the state's lock let go. The other thread is the shell
+    /// clock: it holds the view's lock while it reads the state's (`frame_model`); the press's focus takes the view's.
+    #[test]
+    fn the_open_press_lets_the_state_go_before_it_focuses() {
+        let companion = Arc::new(companion(None));
+        let view = Arc::new(Mutex::new(()));
+        let (done, finished) = mpsc::channel();
+        let (held, holding) = mpsc::channel();
+        let (clock_companion, clock_view, clock_done) = (companion.clone(), view.clone(), done.clone());
+        let clock = std::thread::spawn(move || {
+            let guard = lock(&clock_view);
+            held.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            let _state = lock(&clock_companion.state);
+            drop(guard);
+            clock_done.send("clock").unwrap();
+        });
+        holding.recv().unwrap();
+        let (press_companion, press_view) = (companion.clone(), view.clone());
+        let press = std::thread::spawn(move || {
+            with_shown(&press_companion, |shown| {
+                assert_eq!(shown.as_deref(), Some("pane"));
+                let _view = lock(&press_view);
+            });
+            done.send("press").unwrap();
+        });
+        for _ in 0..2 {
+            finished.recv_timeout(Duration::from_secs(5)).expect("the press and the clock deadlocked");
+        }
+        clock.join().unwrap();
+        press.join().unwrap();
+    }
+
+    /// Review L4: a tick that panics closes the pet's window and says why; the next tick goes on.
+    #[test]
+    fn a_panicking_tick_takes_the_pet_down_and_says_why() {
+        let pet = FakePet::default();
+        let companion = companion(Some(pet.clone()));
+        guarded(&companion, || panic!("the tick broke"));
+        assert!(lock(&companion.overlay).is_none(), "the window is let go");
+        assert_eq!(pet.calls().last(), Some(&PetCall::Closed));
+        assert_eq!(lock(&companion.state).error.as_deref(), Some("the tick broke"));
+        let mut ran = false;
+        guarded(&companion, || ran = true);
+        assert!(ran);
     }
 }

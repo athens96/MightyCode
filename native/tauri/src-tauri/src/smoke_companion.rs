@@ -14,6 +14,8 @@
 //! The review, written-answer and plan buttons focus the pane's own card (D10): C#'s two extra windows (`ShowCompanionApproval`,
 //! `ShowCompanionPlan`) have no page counterpart, so their checks are not here.
 
+#![deny(clippy::significant_drop_in_scrutinee)]
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

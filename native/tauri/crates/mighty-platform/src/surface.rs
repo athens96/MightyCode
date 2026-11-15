@@ -330,6 +330,11 @@ pub trait PetWindow: Send + Sync {
         let _ = near;
         Ok(1.0)
     }
+    /// Whether the OS animates at all (Windows' "Animation effects", C#'s `UISettings.AnimationsEnabled`): off, the pet stands still,
+    /// as under the Mac's Reduce Motion.
+    fn animations(&self) -> bool {
+        true
+    }
     /// The words measured as this window draws them.
     fn measure(&self) -> Arc<dyn crate::pet::PetMeasure> {
         Arc::new(crate::pet::ApproximateMeasure)

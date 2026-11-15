@@ -149,14 +149,85 @@ pub fn plan_blocks(plan: &str) -> Vec<PlanBlock> {
     blocks
 }
 
-/// .NET's `char.IsLetterOrDigit`.
-fn word(c: char) -> bool {
-    c.is_alphanumeric()
+/// The combining marks (general categories Mn, Mc, Me) of the blocks text in a plan meets: Rust's `is_alphabetic` counts many of them
+/// (Other_Alphabetic), .NET's `IsLetterOrDigit` none.
+fn mark(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x0300..=0x036F
+            | 0x0483..=0x0489
+            | 0x0591..=0x05BD
+            | 0x05BF | 0x05C1 | 0x05C2 | 0x05C4 | 0x05C5 | 0x05C7
+            | 0x0610..=0x061A
+            | 0x064B..=0x065F
+            | 0x0670
+            | 0x06D6..=0x06DC
+            | 0x06DF..=0x06E4
+            | 0x06E7 | 0x06E8
+            | 0x06EA..=0x06ED
+            | 0x0900..=0x0903
+            | 0x093A..=0x094F
+            | 0x0951..=0x0957
+            | 0x0962 | 0x0963
+            | 0x0981..=0x0983
+            | 0x09BC..=0x09D7
+            | 0x0E31 | 0x0E34..=0x0E3A | 0x0E47..=0x0E4E
+            | 0x1AB0..=0x1AFF
+            | 0x1DC0..=0x1DFF
+            | 0x20D0..=0x20FF
+            | 0x302A..=0x302F
+            | 0x3099 | 0x309A
+            | 0xFE00..=0xFE0F
+            | 0xFE20..=0xFE2F
+    )
 }
 
-/// .NET's `char.IsPunctuation(c) | char.IsSymbol(c)`.
+/// Numbers that are no decimal digit (categories Nl and No: Roman numerals, superscripts, fractions, circled numbers): Rust's
+/// `is_numeric` counts them, .NET's `IsLetterOrDigit` does not.
+fn other_number(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x00B2 | 0x00B3 | 0x00B9 | 0x00BC..=0x00BE
+            | 0x09F4..=0x09F9
+            | 0x16EE..=0x16F0
+            | 0x2070 | 0x2074..=0x2079
+            | 0x2080..=0x2089
+            | 0x2150..=0x2189
+            | 0x2460..=0x249B
+            | 0x24EA..=0x24FF
+            | 0x2776..=0x2793
+            | 0x3007
+            | 0x3021..=0x3029
+            | 0x3038..=0x303A
+            | 0x3192..=0x3195
+            | 0x3220..=0x3229
+            | 0x3248..=0x324F
+            | 0x3251..=0x325F
+            | 0x3280..=0x3289
+            | 0x32B1..=0x32BF
+    )
+}
+
+/// Format characters (category Cf): neither letters nor punctuation in .NET.
+fn format(c: char) -> bool {
+    matches!(c as u32, 0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB)
+}
+
+/// .NET's `char.IsLetterOrDigit` (categories Lu, Ll, Lt, Lm, Lo and Nd).
+fn word(c: char) -> bool {
+    if c.is_ascii() {
+        return c.is_ascii_alphanumeric();
+    }
+    c.is_alphanumeric() && !mark(c) && !other_number(c)
+}
+
+/// .NET's `char.IsPunctuation(c) | char.IsSymbol(c)` (categories P* and S*): what is no letter, digit, number, mark, space, control or
+/// format character.
 fn punctuation_or_symbol(c: char) -> bool {
-    if c.is_ascii() { c.is_ascii_punctuation() } else { !c.is_alphanumeric() && !c.is_whitespace() && !c.is_control() }
+    if c.is_ascii() {
+        return c.is_ascii_punctuation();
+    }
+    !c.is_alphanumeric() && !c.is_whitespace() && !c.is_control() && !mark(c) && !format(c) && !other_number(c)
 }
 
 /// A line's words without their marks, and where the bold, italic and code runs lie in them.
@@ -275,11 +346,36 @@ fn closing(source: &[char], from: usize, to: usize, mark: char, marks: usize) ->
         // never a single mark's close.
         if run >= marks && (marks == 2 || run % 2 == 1) {
             let close = at + run - marks;
-            if mark != '_' || close + marks >= source.len() || !source[close + marks].is_alphanumeric() {
+            if mark != '_' || close + marks >= source.len() || !word(source[close + marks]) {
                 return Some(close);
             }
         }
         at += run;
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review L10: the character classes are .NET's, not Rust's wider ones.
+    #[test]
+    fn the_character_classes_are_dotnets() {
+        for c in ['a', 'Z', '7', 'é', '가', 'ß', 'ω'] {
+            assert!(word(c), "{c} is a letter or digit");
+        }
+        for c in ['²', '½', 'Ⅳ', '①', '\u{0301}', '\u{093F}', '_', ' '] {
+            assert!(!word(c), "{c:?} is no letter or digit in .NET");
+        }
+        for c in ['—', '€', '«', '©', '*', '#'] {
+            assert!(punctuation_or_symbol(c), "{c} is punctuation or a symbol");
+        }
+        for c in ['가', '\u{200B}', '\u{0301}', '²', '\u{00A0}'] {
+            assert!(!punctuation_or_symbol(c), "{c:?} is neither");
+        }
+        // An underscore before a letter beyond ASCII still stays inside the word; a superscript after it ends the run.
+        assert_eq!(plan_blocks("a_b_é")[0].text, "a_b_é");
+        assert_eq!(plan_blocks("_x_²")[0].spans.as_ref().map(|s| s[0].style), Some("italic"));
+    }
 }

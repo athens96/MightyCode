@@ -14,6 +14,8 @@ mighty-platform.workspace = true
 # The bubble answers a question as the pane's card does (`UserQuestionnaire`, `QuestionnaireProgress`) in the app's words
 # (`strings`, `ToolPermissionStrings`).
 mighty-run.workspace = true
+# The settings and the pets are read as the user's files are (`WorkspaceFiles.OpenFile`: `open_file` and the platform's handle checks).
+mighty-composer.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 indexmap.workspace = true

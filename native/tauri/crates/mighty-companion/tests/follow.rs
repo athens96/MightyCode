@@ -48,3 +48,19 @@ fn a_request_card_is_keyed_by_its_tool_and_input() {
     assert_eq!(follow::card_key(None, Some("pane")), "pane");
     assert_eq!(follow::card_key(None, None), "idle");
 }
+
+/// Review M4: the pager's raised hand turns to the pane of the oldest request, whatever order a refresh lists them in.
+#[test]
+fn the_raised_hand_turns_to_the_oldest_request() {
+    let pair = |key: &str, pane: &str| (key.to_string(), pane.to_string());
+    let mut waiting = follow::Waiting::default();
+    assert!(waiting.observe(&[pair("a|1", "a")]).is_empty());
+    waiting.observe(&[pair("c|3", "c"), pair("b|2", "b"), pair("a|1", "a")]);
+    assert_eq!(waiting.panes(), ["a", "c", "b"]);
+    assert_eq!(waiting.observe(&[pair("b|2", "b"), pair("c|3", "c")]), ["a|1"]);
+    assert_eq!(waiting.panes(), ["c", "b"]);
+    let mut follower = Follower::new(true);
+    follower.refresh(&[agent("b", "waiting", 9), agent("c", "waiting", 1)], true, 0.0);
+    follower.pin_pending(&waiting.panes());
+    assert_eq!(follower.refresh(&[agent("b", "waiting", 9), agent("c", "waiting", 1)], true, 1.0).shown.as_deref(), Some("c"));
+}

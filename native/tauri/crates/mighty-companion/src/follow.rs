@@ -157,3 +157,36 @@ pub fn card_key(request: Option<(&str, &str, &str, &str)>, shown: Option<&str>) 
         None => shown.unwrap_or("idle").to_string(),
     }
 }
+
+/// The requests waiting on the user in the order they were first seen (C#'s `companionPermissions`, whose insertion order the pager's
+/// raised hand follows): each by its key and its pane.
+#[derive(Debug, Clone, Default)]
+pub struct Waiting {
+    order: Vec<(String, String)>,
+}
+
+impl Waiting {
+    /// The requests waiting now (`(key, pane)`, in the order to add new ones); the keys of those that wait no longer.
+    pub fn observe(&mut self, now: &[(String, String)]) -> Vec<String> {
+        let gone: Vec<String> =
+            self.order.iter().filter(|(key, _)| !now.iter().any(|(k, _)| k == key)).map(|(key, _)| key.clone()).collect();
+        self.order.retain(|(key, _)| now.iter().any(|(k, _)| k == key));
+        for (key, pane) in now {
+            if !self.order.iter().any(|(k, _)| k == key) {
+                self.order.push((key.clone(), pane.clone()));
+            }
+        }
+        gone
+    }
+
+    /// The panes with a request, oldest request first, each once.
+    pub fn panes(&self) -> Vec<String> {
+        let mut panes: Vec<String> = Vec::new();
+        for (_, pane) in &self.order {
+            if !panes.contains(pane) {
+                panes.push(pane.clone());
+            }
+        }
+        panes
+    }
+}

@@ -92,6 +92,15 @@ impl FileHandles for WindowsFileHandles {
         final_path(file.as_raw_handle() as HANDLE)
     }
 
+    /// C# `StyleFiles.SingleLink` on Windows: `GetFileInformationByHandle`'s `nNumberOfLinks` is 1 (W8-E, review L1).
+    fn single_link(&self, file: &File) -> bool {
+        let mut info = windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: the file's own open handle and an out-structure that lives across the call.
+        let read =
+            unsafe { windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &mut info) };
+        read != 0 && info.nNumberOfLinks == 1
+    }
+
     /// C# `FinalDirectoryPath`: the folder opened with backup semantics (so a folder handle exists), no access asked, every share.
     fn final_directory_path(&self, path: &Path) -> Option<PathBuf> {
         let name = wide(&long_path(path));
