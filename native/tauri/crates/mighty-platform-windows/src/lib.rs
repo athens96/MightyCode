@@ -48,6 +48,8 @@ mod net;
 #[cfg(windows)]
 pub mod notify;
 #[cfg(windows)]
+pub mod page;
+#[cfg(windows)]
 mod pairing;
 #[cfg(windows)]
 mod pet;

@@ -20,8 +20,8 @@
 //! `-Embedding`                   W9-F: COM started the app for a toast's activation (the app starts as usual; COM calls it)
 //! `----AppNotificationActivated:…`  W9-F: a toast left by C#'s Windows App SDK registration; accepted and ignored
 //!
-//! C#'s other rule, a smoke's profile must be empty, is not taken over: `scripts/smoke.ps1` runs the smoke on a seeded demo profile and
-//! `-Profile` on a copy of a real one (W9-H may require it for `--help-capture` and `--perf-scenario`, whose profiles C# seeds itself).
+//! C#'s other rule, a smoke's profile must be empty, holds only for `--help-capture` and `--perf-scenario`, which seed their own (W9-H):
+//! `scripts/smoke.ps1` runs the plain smoke on a seeded demo profile and `-Profile` on a copy of a real one.
 
 use std::path::PathBuf;
 
@@ -120,6 +120,13 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     if options.profile.as_ref().is_some_and(|p| p.is_file()) {
         return Err("--profile names a file, not a folder.".into());
     }
+    // C#'s "a smoke needs an empty profile", for the two runs that seed their own (W9-H): the help capture's welcome shot is the empty
+    // profile's first window, and the perf scenario measures only what it made.
+    if (options.help_capture || options.perf_scenario)
+        && options.profile.as_ref().is_some_and(|p| std::fs::read_dir(p).is_ok_and(|mut entries| entries.next().is_some()))
+    {
+        return Err("The smoke profile must be a new or empty folder.".into());
+    }
     if options.help_capture && options.help_language.is_none() {
         options.help_language = Some("ko".into());
     }
@@ -181,5 +188,29 @@ mod tests {
         assert!(parsed(&["----AppNotificationActivated:sessionId=abc"]).is_ok());
         assert!(parsed(&["-embedding"]).is_err(), "COM's switch as COM writes it");
         assert!(parsed(&["--update-helper", "--staged", root]).is_err());
+    }
+
+    /// W9-H: the help capture and the perf scenario seed their own profile, so it must be new or empty (C# Program.cs:49-50); a plain
+    /// smoke still runs on a seeded one (smoke.ps1).
+    #[test]
+    fn the_help_capture_and_the_perf_scenario_need_an_empty_profile() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("mighty-args-empty-{}-{nanos}", std::process::id()));
+        let missing = root.join("new");
+        let empty = root.join("empty");
+        let seeded = root.join("seeded");
+        std::fs::create_dir_all(&empty).unwrap();
+        std::fs::create_dir_all(&seeded).unwrap();
+        std::fs::write(seeded.join("workspace-state.json"), "{}").unwrap();
+        let text = |path: &std::path::Path| path.to_string_lossy().into_owned();
+        for folder in [&missing, &empty] {
+            assert!(parsed(&["--help-capture", "--profile", &text(folder)]).is_ok());
+            assert!(parsed(&["--smoke-test", "--perf-scenario", "--profile", &text(folder)]).is_ok());
+        }
+        let refusal = "The smoke profile must be a new or empty folder.";
+        assert_eq!(parsed(&["--help-capture", "--profile", &text(&seeded)]).unwrap_err(), refusal);
+        assert_eq!(parsed(&["--smoke-test", "--perf-scenario", "--profile", &text(&seeded)]).unwrap_err(), refusal);
+        assert!(parsed(&["--smoke-test", "--profile", &text(&seeded)]).is_ok(), "a plain smoke keeps its seeded profile");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

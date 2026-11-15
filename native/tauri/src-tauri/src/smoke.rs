@@ -417,6 +417,31 @@ impl Smoke {
         self.fake_record.as_ref()
     }
 
+    /// A help capture or perf scenario run (W9-H): its part writes its own result and no CLI is found for it (runs.rs).
+    pub fn is_special(&self) -> bool {
+        self.special != Special::None
+    }
+
+    /// Where the smoke's result goes (`--smoke-out`, else `<profile>\smoke-result.json`).
+    pub fn out(&self) -> &std::path::Path {
+        &self.out
+    }
+
+    /// A help capture or perf scenario run ended (C# `FinishSmoke(passed)`, W9-H): its part wrote its own result; nothing more is written
+    /// here, and with `--smoke-exit` the app quits, 0 when it passed, else 1.
+    pub fn end(&self, host: &Host, passed: bool) {
+        {
+            let mut progress = self.progress();
+            if progress.finished {
+                return;
+            }
+            progress.finished = true;
+        }
+        if self.exit {
+            host.app.exit(if passed { 0 } else { 1 });
+        }
+    }
+
     fn timeout(&self) -> Duration {
         Duration::from_secs(match self.mode {
             // The frame, browser, gitCreate and reload steps add up to two minutes, the terminal and history steps a minute each.
@@ -1018,10 +1043,11 @@ impl Smoke {
         }
     }
 
-    /// Fails the smoke when it has no result in time.
+    /// Fails the smoke when it has no result in time. A help capture or perf scenario has no such limit (C#'s has none either; its
+    /// script stops a run that outlasts 30 minutes).
     pub fn watch(host: Arc<Host>) {
         std::thread::spawn(move || {
-            let Some(timeout) = host.smoke.as_ref().map(Smoke::timeout) else { return };
+            let Some(timeout) = host.smoke.as_ref().filter(|smoke| !smoke.is_special()).map(Smoke::timeout) else { return };
             std::thread::sleep(timeout);
             if let Some(smoke) = &host.smoke {
                 let error = json!({"error": format!("no result after {} s", timeout.as_secs())});

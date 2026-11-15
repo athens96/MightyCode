@@ -209,10 +209,15 @@ fn main() {
     let legacy = legacy.into_iter().find(|dir| dir.join(store::STATE_FILE).exists());
     let mut state = store::Store::new(data_dir.clone(), legacy, policy.writes);
     let loaded = state.load(&Locale::new(methods::chosen_language("system")));
-    let (snapshot, failure) = match loaded {
+    let (mut snapshot, failure) = match loaded {
         Ok(snapshot) => (snapshot, None),
         Err(error) => (mighty_core::AppSnapshot::default(), Some(error)),
     };
+    // A help capture reads the page in its own language (C# `UpdateAsync(LanguagePreference = helpLanguage)` after the load; W9-H).
+    if let Some(language) = options.help_language.clone().filter(|_| options.help_capture) {
+        snapshot.language_preference = Some(language.clone());
+        state.snapshot.language_preference = Some(language);
+    }
     let locale = Locale::new(methods::chosen_language(snapshot.language_preference()));
     let banner = match (&state.load_notice, &failure) {
         (Some(notice), _) => Some(notice.clone()),
