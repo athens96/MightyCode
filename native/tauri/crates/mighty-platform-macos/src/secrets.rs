@@ -270,29 +270,39 @@ impl Drop for Throwaway {
 mod tests {
     use super::*;
 
+    const FIRST: &str = "AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09o";
+    const SECOND: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";
+
     /// New, with no Swift test (none exists for `RemoteKeychain`): a key saved, replaced, read back and deleted, in a throwaway file
-    /// keychain; a delete of a missing key succeeds.
+    /// keychain; a delete of a missing key succeeds; an item that has no key's shape reads as none (`RemoteWorkspaceValidation.key`).
     #[test]
     fn remote_keys_round_trip_in_a_throwaway_keychain() {
         let throwaway = Throwaway::new("remote-keys");
         let vault = KeychainVault::only(throwaway.keychain.clone());
         assert_eq!(vault.load("conn-1"), None);
-        vault.save("conn-1", "first-secret").unwrap();
-        assert_eq!(vault.load("conn-1").as_deref(), Some("first-secret"));
-        vault.save("conn-1", "second-secret").unwrap();
-        assert_eq!(vault.load("conn-1").as_deref(), Some("second-secret"));
+        vault.save("conn-1", FIRST).unwrap();
+        assert_eq!(vault.load("conn-1").as_deref(), Some(FIRST));
+        vault.save("conn-1", SECOND).unwrap();
+        assert_eq!(vault.load("conn-1").as_deref(), Some(SECOND));
         vault.delete("conn-1").unwrap();
         vault.delete("conn-1").unwrap();
         assert_eq!(vault.load("conn-1"), None);
+        throwaway.add(SERVICE, "conn-bad", b"not a key");
+        assert_eq!(vault.load("conn-bad"), None);
     }
 
-    /// New, with no Swift test: a key found only under the pre-rename service is answered and copied to the current one.
+    /// New, with no Swift test: a key found only under the pre-rename service is answered and copied to the current one; one without a
+    /// key's shape is neither answered nor copied.
     #[test]
     fn a_legacy_service_item_is_copied_forward_on_read() {
         let throwaway = Throwaway::new("remote-legacy");
-        throwaway.add(LEGACY_SERVICE, "conn-old", b"old-secret");
+        throwaway.add(LEGACY_SERVICE, "conn-old", FIRST.as_bytes());
+        throwaway.add(LEGACY_SERVICE, "conn-junk", b"junk");
         let vault = KeychainVault::only(throwaway.keychain.clone());
-        assert_eq!(vault.load("conn-old").as_deref(), Some("old-secret"));
-        assert_eq!(vault.read("conn-old", SERVICE).as_deref(), Some("old-secret"), "copied to the current service");
+        assert_eq!(vault.load("conn-old").as_deref(), Some(FIRST));
+        assert_eq!(vault.read("conn-old", SERVICE).as_deref(), Some(FIRST), "copied to the current service");
+        assert_eq!(vault.load("conn-junk"), None);
+        let raw = Query::generic(&throwaway.keychains(), SERVICE, Some("conn-junk")).data(false);
+        assert_eq!(raw, Err(ERR_SEC_ITEM_NOT_FOUND), "nothing copied forward");
     }
 }
