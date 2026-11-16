@@ -23,7 +23,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSObject", "NSProcessInfo", "NSRange", "NSString", "NSThread", "NSURL", "NSUserDefaults", "NSUUID", "NSValue",
 ] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
-    "std", "block2", "objc2-core-foundation", "objc2-quartz-core", "NSApplication", "NSBitmapImageRep", "NSColor", "NSEvent",
+    "std", "block2", "objc2-core-foundation", "objc2-quartz-core", "NSApplication", "NSBitmapImageRep", "NSColor", "NSCursor", "NSEvent",
     "NSFont", "NSFontManager", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSMenu", "NSMenuItem", "NSPanel",
     "NSPasteboard", "NSResponder", "NSRunningApplication", "NSScreen", "NSTextInputClient", "NSTextInputContext", "NSTrackingArea",
     "NSView", "NSWindow", "NSWorkspace",

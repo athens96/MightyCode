@@ -449,6 +449,26 @@ impl TerminalPane {
                 }
                 Ok(())
             }
+            // Input that is not UTF-8 (a native terminal's X10 mouse report), base64: as it was for a shell, as text for an agent's
+            // terminal. Only a native view sends it (the Mac's Ghostty); the page's xterm never does.
+            "inputBytes" => {
+                let agent = {
+                    let mut state = lock(&self.state);
+                    state.inputs += 1;
+                    state.agent.as_ref().map(|(agent, _)| agent.clone())
+                };
+                let bytes = text("data").and_then(|data| base64::engine::general_purpose::STANDARD.decode(data).ok());
+                if let Some(bytes) = bytes.filter(|bytes| utf16_len(&String::from_utf8_lossy(bytes)) <= PASTE_LIMIT) {
+                    let taken = match agent {
+                        Some(agent) => Some(agent.write(&String::from_utf8_lossy(&bytes))),
+                        None => self.control().map(|control| control.write(&bytes)),
+                    };
+                    if taken == Some(false) {
+                        self.events.error(self.ports.locale.get("terminal.inputBusy"));
+                    }
+                }
+                Ok(())
+            }
             "resize" => {
                 let (columns, rows) = (integer(value, "columns")?, integer(value, "rows")?);
                 let agent = {

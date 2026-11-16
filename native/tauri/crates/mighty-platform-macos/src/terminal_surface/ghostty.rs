@@ -40,6 +40,20 @@ pub const GHOSTTY_POINT_COORD_EXACT: c_int = 0;
 
 pub const GHOSTTY_TARGET_SURFACE: c_int = 1;
 
+/// `ghostty_action_mouse_shape_e` values the view shows a cursor for.
+pub const GHOSTTY_MOUSE_SHAPE_DEFAULT: c_int = 0;
+pub const GHOSTTY_MOUSE_SHAPE_POINTER: c_int = 3;
+pub const GHOSTTY_MOUSE_SHAPE_CELL: c_int = 6;
+pub const GHOSTTY_MOUSE_SHAPE_CROSSHAIR: c_int = 7;
+pub const GHOSTTY_MOUSE_SHAPE_TEXT: c_int = 8;
+pub const GHOSTTY_MOUSE_SHAPE_VERTICAL_TEXT: c_int = 9;
+pub const GHOSTTY_MOUSE_SHAPE_NO_DROP: c_int = 13;
+pub const GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED: c_int = 14;
+pub const GHOSTTY_MOUSE_SHAPE_COL_RESIZE: c_int = 18;
+pub const GHOSTTY_MOUSE_SHAPE_ROW_RESIZE: c_int = 19;
+pub const GHOSTTY_MOUSE_SHAPE_EW_RESIZE: c_int = 28;
+pub const GHOSTTY_MOUSE_SHAPE_NS_RESIZE: c_int = 29;
+
 /// `ghostty_action_tag_e` values the view answers.
 pub const ACTION_CELL_SIZE: c_int = 25;
 pub const ACTION_RENDER: c_int = 27;

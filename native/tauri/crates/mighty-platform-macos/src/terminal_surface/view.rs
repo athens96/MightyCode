@@ -12,13 +12,14 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::{CString, c_void};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
-use objc2::{AnyThread, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send};
+use objc2::{AnyThread, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSEvent, NSEventModifierFlags, NSEventType, NSResponder, NSTextInputClient, NSTrackingArea, NSTrackingAreaOptions,
-    NSView,
+    NSApplication, NSCursor, NSEvent, NSEventModifierFlags, NSEventType, NSMenu, NSMenuItem, NSResponder, NSTextInputClient,
+    NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
 use objc2_foundation::{
     NSArray, NSAttributedString, NSObjectProtocol, NSPoint, NSRange, NSRangePointer, NSRect, NSSize, NSString, NSUInteger,
@@ -39,6 +40,8 @@ pub struct Ivars {
     interpreted: Cell<bool>,
     /// The timestamp of the ⌘/⌃ key equivalent let through to the menu once (`keyEcho.lastPerformKeyEvent`).
     last_perform_key: Cell<Option<f64>>,
+    /// A right press over a selection: its release shows the Copy menu instead (`pointer.pendingSelectionMenuPoint`).
+    menu_pending: Cell<bool>,
 }
 
 define_class!(
@@ -135,15 +138,33 @@ define_class!(
             self.mouse_button(event, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT);
         }
 
+        /// Over a selection, a right press opens the Copy menu at its release (Ghostty's AppKit view); else it is Ghostty's.
         #[unsafe(method(rightMouseDown:))]
         fn right_mouse_down(&self, event: &NSEvent) {
             self.take_keyboard();
+            self.mouse_position(event);
+            if self.has_selection() {
+                self.ivars().menu_pending.set(true);
+                return;
+            }
             self.mouse_button(event, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT);
         }
 
         #[unsafe(method(rightMouseUp:))]
         fn right_mouse_up(&self, event: &NSEvent) {
+            if self.ivars().menu_pending.replace(false) {
+                self.mouse_position(event);
+                self.show_copy_menu(event);
+                return;
+            }
             self.mouse_button(event, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT);
+        }
+
+        /// The cursor Ghostty asked for (`ACTION_MOUSE_SHAPE`) over the whole view.
+        #[unsafe(method(resetCursorRects))]
+        fn reset_cursor_rects(&self) {
+            let shape = self.ivars().shared.mouse_shape.load(Ordering::SeqCst);
+            self.addCursorRect_cursor(self.bounds(), &cursor_for(shape));
         }
 
         #[unsafe(method(otherMouseDown:))]
@@ -220,6 +241,10 @@ define_class!(
     unsafe impl NSTextInputClient for TerminalView {
         #[unsafe(method(insertText:replacementRange:))]
         fn insert_text(&self, string: &AnyObject, _replacement: NSRange) {
+            // Only text that came with a key event (Ghostty's AppKit view): the input method replaying a commit on its own types nothing.
+            if NSApplication::sharedApplication(self.mtm()).currentEvent().is_none() {
+                return;
+            }
             let text = text_of(string);
             self.unmark();
             let mut collected = self.ivars().collected.borrow_mut();
@@ -394,11 +419,13 @@ impl TerminalView {
             collected: RefCell::new(None),
             interpreted: Cell::new(false),
             last_perform_key: Cell::new(None),
+            menu_pending: Cell::new(false),
         });
         // SAFETY: NSView's designated initializer.
         let view: Retained<TerminalView> = unsafe { msg_send![super(this), initWithFrame: frame] };
         view.setWantsLayer(true);
         view.add_tracking_area();
+        view.ivars().shared.view.store(Retained::as_ptr(&view) as *mut c_void, Ordering::SeqCst);
         view
     }
 
@@ -509,6 +536,30 @@ impl TerminalView {
         }
     }
 
+    fn has_selection(&self) -> bool {
+        // SAFETY: the live surface on the main thread.
+        self.surface().is_some_and(|surface| unsafe { ghostty_surface_has_selection(surface) })
+    }
+
+    /// The selection's Copy menu at the pointer (`selectionContextMenu`).
+    fn show_copy_menu(&self, event: &NSEvent) {
+        let main = self.mtm();
+        let menu = NSMenu::new(main);
+        // SAFETY: a menu item whose action is this view's `copy:`, targeted at it.
+        let item = unsafe {
+            let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(main),
+                &NSString::from_str("Copy"),
+                Some(sel!(copy:)),
+                &NSString::from_str(""),
+            );
+            item.setTarget(Some(self));
+            item
+        };
+        menu.addItem(&item);
+        NSMenu::popUpContextMenu_withEvent_forView(&menu, event, self);
+    }
+
     fn copy_selection(&self) -> bool {
         match self.selection() {
             Some(text) if !text.is_empty() => runtime::write_clipboard_text(&text),
@@ -587,7 +638,7 @@ impl TerminalView {
             // SAFETY: the live surface on the main thread; the text for the call.
             Some(text) => unsafe { ghostty_surface_preedit(surface, text.as_ptr().cast(), text.len()) },
             // SAFETY: as above, with no text.
-            None if clear => unsafe { ghostty_surface_preedit(surface, std::ptr::null(), 0) },
+            None if clear => unsafe { ghostty_surface_preedit(surface, c"".as_ptr(), 0) },
             None => {}
         }
         runtime::owe();
@@ -688,16 +739,19 @@ impl TerminalView {
             return false;
         }
         let Some(surface) = self.surface() else { return false };
+        // Mighty's `ApplicationCopyRouter`: ⌘C/⌘V first, by the key's characters without modifiers (or its position under a
+        // non-Latin input source), before any character-dependent matching; a copy with nothing selected stays the menu's.
+        let ignoring = event.charactersIgnoringModifiers().map(|c| c.to_string());
+        match keys::clipboard_shortcut(flags(event), ignoring.as_deref(), event.keyCode()) {
+            Some(keys::ClipboardKey::Copy) => return self.copy_selection(),
+            Some(keys::ClipboardKey::Paste) => return self.binding("paste_from_clipboard"),
+            None => {}
+        }
         if self.key_is_binding(event, surface) {
             self.handle_key_down(event);
             return true;
         }
         let characters = event.characters().map(|c| c.to_string());
-        match keys::clipboard_shortcut(flags(event), characters.as_deref(), event.keyCode()) {
-            Some(keys::ClipboardKey::Copy) => return self.copy_selection(),
-            Some(keys::ClipboardKey::Paste) => return self.binding("paste_from_clipboard"),
-            None => {}
-        }
         let modifiers = flags(event);
         let ignoring = event.charactersIgnoringModifiers().map(|c| c.to_string()).unwrap_or_default();
         let equivalent = match ignoring.as_str() {
@@ -794,5 +848,37 @@ impl TerminalView {
     /// Whether `view` is a terminal view (the page's keyboard must go elsewhere when one hides).
     pub fn is_terminal(view: &NSView) -> bool {
         view.isKindOfClass(TerminalView::class())
+    }
+}
+
+/// The cursor for Ghostty's mouse shape (the AppKit cursors there are; anything else is the arrow). The resize cursors are the ones
+/// macOS 14 still has under these names (their newer forms want a direction).
+#[allow(deprecated)]
+fn cursor_for(shape: i32) -> Retained<NSCursor> {
+    match shape {
+        GHOSTTY_MOUSE_SHAPE_TEXT | GHOSTTY_MOUSE_SHAPE_CELL => NSCursor::IBeamCursor(),
+        GHOSTTY_MOUSE_SHAPE_VERTICAL_TEXT => NSCursor::IBeamCursorForVerticalLayout(),
+        GHOSTTY_MOUSE_SHAPE_POINTER => NSCursor::pointingHandCursor(),
+        GHOSTTY_MOUSE_SHAPE_CROSSHAIR => NSCursor::crosshairCursor(),
+        GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED | GHOSTTY_MOUSE_SHAPE_NO_DROP => NSCursor::operationNotAllowedCursor(),
+        GHOSTTY_MOUSE_SHAPE_COL_RESIZE | GHOSTTY_MOUSE_SHAPE_EW_RESIZE => NSCursor::resizeLeftRightCursor(),
+        GHOSTTY_MOUSE_SHAPE_ROW_RESIZE | GHOSTTY_MOUSE_SHAPE_NS_RESIZE => NSCursor::resizeUpDownCursor(),
+        _ => NSCursor::arrowCursor(),
+    }
+}
+
+/// Ghostty asked for another mouse shape: the surface's view (while the surface lives) takes its cursor again. Main thread.
+pub fn mouse_shape_changed(shared: &Shared) {
+    if shared.surface().is_none() {
+        return;
+    }
+    let view = shared.view.load(Ordering::SeqCst);
+    if view.is_null() {
+        return;
+    }
+    // SAFETY: the view the surface draws in, alive while its surface is (the surface pointer is cleared before the view goes).
+    let view: &TerminalView = unsafe { &*(view as *const TerminalView) };
+    if let Some(window) = view.window() {
+        window.invalidateCursorRectsForView(view);
     }
 }

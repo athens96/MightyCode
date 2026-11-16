@@ -14,9 +14,12 @@
 //!   (input, IME, mouse, copy and paste); `surface`: [`mighty_platform::TerminalSurface`] over them. These link libghostty, so they
 //!   build only with `cfg(mighty_ghostty)` (`build.rs`, `MIGHTY_MAC_NATIVE=1` and `MIGHTY_GHOSTTY_XCFRAMEWORK`); without it [`open`]
 //!   answers `Unsupported`, as before M-D.
-//! - [`config`] and [`keys`]: the config text and the keyboard rules, with no AppKit or libghostty in them (tested as they are).
+//! - [`config`], [`keys`] and [`clipboard`]: the config text, the keyboard and the clipboard rules, with no AppKit or libghostty in
+//!   them (tested as they are).
 //! - [`pty`]: a minimal `forkpty` PTY host behind the same port shape, wired in until M-A's `MacPtyHost` lands.
 
+#[cfg_attr(not(mighty_ghostty), allow(dead_code))]
+pub mod clipboard;
 #[cfg_attr(not(mighty_ghostty), allow(dead_code))]
 pub mod config;
 #[cfg(mighty_ghostty)]

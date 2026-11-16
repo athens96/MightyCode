@@ -3,9 +3,10 @@
 //! is the one place that names this module). What it does is the least of plan §1.3, as the Step 0 spike's `pty.rs` proved on CI:
 //! `forkpty` at the request's grid, the child with SIGPIPE and the other signals at their defaults, the request's folder and whole
 //! environment (with `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=ghostty` over it, and a UTF-8 `LANG` when none is
-//! set), the master non-blocking, writes retried for 2 s, `TIOCSWINSZ`, the exit code (128 + signal), `busy` as
-//! `tcgetpgrp(master) != shell`, and a close that ends the shell's process group (SIGHUP, SIGTERM, SIGKILL after 200 ms) and stops
-//! reading once the shell is gone.
+//! set), the master non-blocking and close-on-exec, the child's descriptors above stderr closed, writes retried for 2 s,
+//! `TIOCSWINSZ`, the exit code (128 + signal), `busy` as `tcgetpgrp(master) != shell`, and a close that ends the shell's process
+//! group (SIGHUP, SIGTERM, SIGKILL after 200 ms) while the exited shell still holds the group's id, then reaps it and stops reading
+//! once the shell is gone.
 
 use std::ffi::CString;
 use std::os::fd::RawFd;
@@ -23,6 +24,11 @@ const WRITE_LIMIT: usize = 65_536;
 const WRITE_WAIT: Duration = Duration::from_secs(2);
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
+/// Held while a terminal's child is forked and its master marked close-on-exec.
+static SPAWN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The shell's reaping, held back while it is `Some`.
+type Reap = std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>;
 
 /// The fallback `PtyHost` (see the module comment).
 pub fn pty_host() -> Arc<dyn PtyHost> {
@@ -102,12 +108,24 @@ fn open(request: PtyRequest) -> Result<PtySession> {
     envp.push(std::ptr::null());
     let size = request.size.clamped();
     let mut window = libc::winsize { ws_row: size.rows, ws_col: size.columns, ws_xpixel: 0, ws_ypixel: 0 };
+    // The child closes every descriptor above stderr up to the process's limit (Swift's 3…65536).
+    let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: getrlimit into a valid struct.
+    let highest =
+        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } == 0 { limit.rlim_cur.min(65_536) as libc::c_int } else { 65_536 };
     let mut master: RawFd = -1;
+    // One terminal starts at a time, so no other terminal's child inherits a master before it is marked close-on-exec.
+    let spawning = SPAWN.lock().unwrap_or_else(|p| p.into_inner());
     // SAFETY: forkpty with a valid winsize; the child calls only async-signal-safe functions before execve or _exit.
     let pid = unsafe { libc::forkpty(&mut master, std::ptr::null_mut(), std::ptr::null_mut(), &mut window) };
     if pid < 0 {
         return Err(PlatformError::Io(std::io::Error::last_os_error()));
     }
+    if pid > 0 {
+        // SAFETY: the master forkpty gave: closed on exec from now on.
+        unsafe { libc::fcntl(master, libc::F_SETFD, libc::FD_CLOEXEC) };
+    }
+    drop(spawning);
     if pid == 0 {
         // SAFETY: the child after fork, with what was built before it.
         unsafe {
@@ -117,7 +135,7 @@ fn open(request: PtyRequest) -> Result<PtySession> {
             for signal in [libc::SIGPIPE, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM, libc::SIGHUP, libc::SIGCHLD, libc::SIGTSTP] {
                 libc::signal(signal, libc::SIG_DFL);
             }
-            for fd in 3..1024 {
+            for fd in 3..highest.max(3) {
                 libc::close(fd);
             }
             if libc::chdir(cwd.as_ptr()) != 0 {
@@ -136,16 +154,22 @@ fn open(request: PtyRequest) -> Result<PtySession> {
         }
         let flags = libc::fcntl(master, libc::F_GETFL);
         libc::fcntl(master, libc::F_SETFL, flags | libc::O_NONBLOCK);
-        libc::fcntl(master, libc::F_SETFD, libc::FD_CLOEXEC);
     }
     let (output_sender, output) = mpsc::channel::<Vec<u8>>(256);
     let (exit_sender, exit) = watch::channel::<Option<i32>>(None);
+    let (reap_sender, reap) = std::sync::mpsc::channel::<()>();
     let master = Arc::new(Master(master));
-    let control =
-        Arc::new(ForkPty { master: master.clone(), pid, exit, closed: AtomicBool::new(false), stop: Arc::new(AtomicBool::new(false)) });
+    let control = Arc::new(ForkPty {
+        master: master.clone(),
+        pid,
+        exit,
+        closed: AtomicBool::new(false),
+        stop: Arc::new(AtomicBool::new(false)),
+        reap: std::sync::Mutex::new(Some(reap_sender)),
+    });
     let stop = control.stop.clone();
     std::thread::Builder::new().name("pty-reader".into()).spawn(move || read(master, stop, output_sender)).map_err(PlatformError::Io)?;
-    std::thread::Builder::new().name("pty-wait".into()).spawn(move || wait(pid, exit_sender)).map_err(PlatformError::Io)?;
+    std::thread::Builder::new().name("pty-wait".into()).spawn(move || wait(pid, exit_sender, reap)).map_err(PlatformError::Io)?;
     Ok(PtySession { id: NEXT_ID.fetch_add(1, Ordering::Relaxed), output, control })
 }
 
@@ -191,28 +215,36 @@ fn read(master: Arc<Master>, stop: Arc<AtomicBool>, output: mpsc::Sender<Vec<u8>
     }
 }
 
-/// Waits for the shell and says its exit code (128 + signal when a signal ended it).
-fn wait(pid: libc::pid_t, exit: watch::Sender<Option<i32>>) {
-    let mut status = 0;
+/// Waits for the shell and says its exit code (128 + signal when a signal ended it) without reaping it: the exited shell keeps its
+/// pid, and so its process group's id, until `reap` says the close is done with the group (or the control is gone), so a signal to
+/// the group never reaches a process that reused the number.
+fn wait(pid: libc::pid_t, exit: watch::Sender<Option<i32>>, reap: std::sync::mpsc::Receiver<()>) {
+    // SAFETY: an all-zero siginfo_t is a valid out value.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
     loop {
-        // SAFETY: waiting for our own child.
-        let waited = unsafe { libc::waitpid(pid, &mut status, 0) };
-        if waited == pid {
+        // SAFETY: waiting for our own child, leaving it unreaped.
+        let waited = unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, libc::WEXITED | libc::WNOWAIT) };
+        if waited == 0 {
             break;
         }
-        if waited < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
             exit.send_replace(Some(-1));
             return;
         }
     }
-    let code = if libc::WIFEXITED(status) {
-        libc::WEXITSTATUS(status)
-    } else if libc::WIFSIGNALED(status) {
-        128 + libc::WTERMSIG(status)
-    } else {
-        -1
+    // SAFETY: the fields waitid filled for an exited child.
+    let (code, status) = (info.si_code, unsafe { info.si_status() });
+    let code = match code {
+        libc::CLD_EXITED => status,
+        libc::CLD_KILLED | libc::CLD_DUMPED => 128 + status,
+        _ => -1,
     };
     exit.send_replace(Some(code));
+    // Until the close is done with the group (or every sender is gone).
+    let _ = reap.recv();
+    let mut status = 0;
+    // SAFETY: reaping our own exited child, once.
+    unsafe { libc::waitpid(pid, &mut status, 0) };
 }
 
 struct ForkPty {
@@ -221,6 +253,8 @@ struct ForkPty {
     exit: watch::Receiver<Option<i32>>,
     closed: AtomicBool,
     stop: Arc<AtomicBool>,
+    /// Dropped once the group may no longer be signalled: the shell is then reaped.
+    reap: Reap,
 }
 
 impl ForkPty {
@@ -228,8 +262,13 @@ impl ForkPty {
         self.exit.borrow().is_some()
     }
 
-    /// Signals the shell's process group (its session's leader is the shell).
+    /// Signals the shell's process group (its session's leader is the shell), only while the shell is unreaped (its pid, the group's
+    /// id, cannot have been reused).
     fn signal(&self, signal: libc::c_int) {
+        let reap = self.reap.lock().unwrap_or_else(|p| p.into_inner());
+        if reap.is_none() {
+            return;
+        }
         // SAFETY: a signal to our own child's process group.
         unsafe { libc::kill(-self.pid, signal) };
     }
@@ -306,8 +345,10 @@ impl PtyControl for ForkPty {
             }
             let mut exit = self.exit.clone();
             let _ = exit.wait_for(Option::is_some).await;
-            // What the shell left running in its group goes too, and the reading stops once it found nothing more.
+            // What the shell left running in its group goes too (the exited shell still holds the group's id), then the shell is
+            // reaped, and the reading stops once it found nothing more.
             self.signal(libc::SIGKILL);
+            self.reap.lock().unwrap_or_else(|p| p.into_inner()).take();
             self.stop.store(true, Ordering::SeqCst);
             Ok(())
         })

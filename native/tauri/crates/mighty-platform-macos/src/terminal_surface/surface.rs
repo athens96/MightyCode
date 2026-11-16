@@ -1,11 +1,12 @@
 //! `MacTerminalSurface`: one Ghostty view over the page's NativeSlot (plan §1.4, docs/tauri-architecture.md §3.1). Every call returns
-//! at once; the AppKit and libghostty work runs on the main thread in the order it was asked (`runtime::on_main`), and what has an
-//! answer (the picture, the state, the grid's text) is awaited from there.
+//! at once; the AppKit and libghostty work is queued on the main thread in the order it was asked (`runtime::on_main`), and what has
+//! an answer (the picture, the state, the grid's text) is awaited from there. The PTY's output goes through the surface's own writer
+//! (`runtime::Shared::feed`), never the main thread.
 //!
 //! - Placement: the slot's device pixels divided by the window's backing scale, y counted from the content view's bottom (Tao's
 //!   content view is not flipped); the view is the content view's last subview, over the page's WKWebView.
 //! - Shown only while the slot shows; hidden, Ghostty is told it is occluded (it stops drawing) and, when it had the keyboard, the
-//!   page gets it back.
+//!   page's own webview gets it back.
 //! - The snapshot is AppKit's picture of the view (`cacheDisplayInRect`, which holds Ghostty's frame: Step 0's answer).
 
 use std::ffi::c_void;
@@ -13,8 +14,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use mighty_platform::{BoxFuture, DeviceRect, NativeSurface, PlatformError, Result, SurfaceState, TerminalOptions, TerminalSurface};
-use objc2::MainThreadMarker;
 use objc2::rc::Retained;
+use objc2::{MainThreadMarker, Message};
 use objc2_app_kit::NSView;
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
@@ -37,16 +38,39 @@ async fn ask<R: Send + 'static>(f: impl FnOnce() -> R + Send + 'static) -> Resul
     receiver.await.map_err(|_| PlatformError::Invalid("the main thread did not answer".into()))
 }
 
-/// The content view behind `content` (main thread; the window keeps it alive).
-fn content_view<'a>(content: usize) -> &'a NSView {
-    // SAFETY: Tauri's content view of the window, alive with the window, used on the main thread only.
-    unsafe { &*(content as *const NSView) }
+/// A main-thread object held by an owner other threads share: read on the main thread only, and released there.
+struct OnMain<T: Message + 'static>(Option<Retained<T>>);
+
+// SAFETY: the object is only reached through `get`, which needs the main thread, and released on the main thread (`Drop`).
+unsafe impl<T: Message + 'static> Send for OnMain<T> {}
+// SAFETY: as above.
+unsafe impl<T: Message + 'static> Sync for OnMain<T> {}
+
+/// A retained object carried to the main thread to be released there.
+struct Release<T: Message + 'static>(Retained<T>);
+// SAFETY: carried only, and dropped on the main thread.
+unsafe impl<T: Message + 'static> Send for Release<T> {}
+
+impl<T: Message + 'static> OnMain<T> {
+    fn new(object: Retained<T>) -> OnMain<T> {
+        OnMain(Some(object))
+    }
+
+    fn get(&self, _main: MainThreadMarker) -> Option<&T> {
+        self.0.as_deref()
+    }
 }
 
-/// The view behind `view` (main thread; retained until the surface closes).
-fn terminal_view<'a>(view: usize) -> &'a TerminalView {
-    // SAFETY: the view `Retained::into_raw` kept, released only by `free` on the main thread.
-    unsafe { &*(view as *const TerminalView) }
+impl<T: Message + 'static> Drop for OnMain<T> {
+    fn drop(&mut self) {
+        let Some(object) = self.0.take() else { return };
+        if MainThreadMarker::new().is_some() {
+            drop(object);
+        } else {
+            let release = Release(object);
+            runtime::on_main(move || drop(release));
+        }
+    }
 }
 
 fn scale_of(view: &NSView) -> f64 {
@@ -72,36 +96,59 @@ fn device_rect(content: &NSView, frame: NSRect) -> DeviceRect {
     }
 }
 
-/// Hands the keyboard back to the page (the content view's first subview that is not a terminal: the page's WKWebView).
-fn give_keyboard_to_page(content: &NSView) {
-    let Some(window) = content.window() else { return };
-    let page = content.subviews().iter().find(|view| !TerminalView::is_terminal(view));
-    let _ = window.makeFirstResponder(page.as_deref().map(|view| view.as_ref()));
+/// What a surface keeps: its view, the window's content view and the page's own webview (all retained, main thread only), what it
+/// shares with libghostty, and the userdata libghostty holds (`Arc::into_raw`, released once the surface is freed).
+struct Inner {
+    shared: Arc<Shared>,
+    view: OnMain<TerminalView>,
+    content: OnMain<NSView>,
+    page: Option<OnMain<NSView>>,
+    userdata: usize,
+    closed: AtomicBool,
+}
+
+impl Inner {
+    /// Hands the keyboard back to the page's own webview (else the content view's first view that is not a terminal).
+    fn give_keyboard_to_page(&self, main: MainThreadMarker) {
+        let Some(content) = self.content.get(main) else { return };
+        let Some(window) = content.window() else { return };
+        if let Some(page) = self.page.as_ref().and_then(|page| page.get(main)) {
+            let _ = window.makeFirstResponder(Some(page));
+            return;
+        }
+        let fallback = content.subviews().iter().find(|view| !TerminalView::is_terminal(view));
+        let _ = window.makeFirstResponder(fallback.as_deref().map(|view| view.as_ref()));
+    }
 }
 
 pub struct MacTerminalSurface {
-    shared: Arc<Shared>,
-    /// The `TerminalView`, retained (`Retained::into_raw`).
-    view: usize,
-    /// The `Arc<Shared>` libghostty holds as the surface's userdata (`Arc::into_raw`).
-    userdata: usize,
-    /// The window's content view.
-    content: usize,
-    closed: AtomicBool,
+    inner: Arc<Inner>,
+}
+
+/// The page's own webview (the window's webview of the window's label) as an NSView, retained.
+async fn page_view(window: &tauri::Window) -> Option<Retained<NSView>> {
+    let page = window.webviews().into_iter().find(|webview| webview.label() == window.label())?;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    page.with_webview(move |platform| {
+        let view = platform.inner() as *mut NSView;
+        // SAFETY: the page's WKWebView (an NSView), alive with its window; retained here, on the main thread.
+        let _ = sender.send(unsafe { Retained::retain(view) }.map(Release));
+    })
+    .ok()?;
+    receiver.await.ok().flatten().map(|release| release.0)
 }
 
 /// Opens a view at `options.bounds` over `window`'s page (main thread work, awaited).
 pub async fn open(window: &tauri::Window, options: TerminalOptions) -> Result<Box<dyn TerminalSurface>> {
-    use tauri::Manager as _;
-    let _ = runtime::HANDLE.set(window.app_handle().clone());
     let content = window.ns_view().map_err(|e| PlatformError::Refused(format!("the window has no view: {e}")))? as usize;
-    let surface = ask(move || create(content, options)).await??;
-    Ok(Box::new(surface))
+    let page = page_view(window).await.map(OnMain::new);
+    let inner = ask(move || create(content, page, options)).await??;
+    Ok(Box::new(MacTerminalSurface { inner: Arc::new(inner) }))
 }
 
-/// A surface for `view` with the host-managed backend, so the host's PTY is what it draws; the userdata it holds (`Arc::into_raw`),
-/// released after the surface is freed. Main thread.
-fn make_surface(app: ghostty_app_t, view: &TerminalView, scale: f64, font_size: f64) -> Result<(ghostty_surface_t, *mut c_void)> {
+/// A surface for `view` with the host-managed backend, so the host's PTY is what it draws, its writer started; the userdata it holds
+/// (`Arc::into_raw`), released after the surface is freed. Main thread.
+fn make_surface(app: ghostty_app_t, view: &TerminalView, scale: f64, font_size: f64) -> Result<*mut c_void> {
     let userdata = Arc::into_raw(view.shared().clone()) as *mut c_void;
     // SAFETY: libghostty's surface config, filled as the header lays it out; the view and the userdata outlive the surface.
     let surface = unsafe {
@@ -123,26 +170,32 @@ fn make_surface(app: ghostty_app_t, view: &TerminalView, scale: f64, font_size: 
         drop(unsafe { Arc::from_raw(userdata as *const Shared) });
         return Err(PlatformError::Refused("ghostty_surface_new gave nothing".into()));
     }
-    view.shared().surface.store(surface, Ordering::SeqCst);
+    if let Err(error) = view.shared().attach(surface) {
+        view.shared().close(app);
+        // SAFETY: the surface is freed: its userdata goes.
+        drop(unsafe { Arc::from_raw(userdata as *const Shared) });
+        return Err(PlatformError::Io(error));
+    }
     // SAFETY: the new surface on the main thread.
     unsafe { ghostty_surface_set_occlusion(surface, true) };
     view.sync_size();
     // SAFETY: as above.
     unsafe { ghostty_surface_refresh(surface) };
-    Ok((surface, userdata))
+    Ok(userdata)
 }
 
 /// Makes the view over the page and its surface (main thread).
-fn create(content: usize, options: TerminalOptions) -> Result<MacTerminalSurface> {
-    let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Invalid("not on the main thread".into()))?;
-    let parent = content_view(content);
+fn create(content: usize, page: Option<OnMain<NSView>>, options: TerminalOptions) -> Result<Inner> {
+    let main = MainThreadMarker::new().ok_or_else(|| PlatformError::Invalid("not on the main thread".into()))?;
+    // SAFETY: Tauri's content view of the window, alive with the window; retained here on the main thread.
+    let content = unsafe { Retained::retain(content as *mut NSView) }.ok_or_else(|| PlatformError::Refused("no content view".into()))?;
     let look = runtime::look();
     let app = runtime::app(&look).map_err(PlatformError::Refused)?;
     let shared = Arc::new(Shared::new(options.listener));
-    let view = TerminalView::new(mtm, frame_in(parent, options.bounds), shared.clone());
-    parent.addSubview(&view);
-    let (_, userdata) = match make_surface(app, &view, scale_of(parent), look.size) {
-        Ok(made) => made,
+    let view = TerminalView::new(main, frame_in(&content, options.bounds), shared.clone());
+    content.addSubview(&view);
+    let userdata = match make_surface(app, &view, scale_of(&content), look.size) {
+        Ok(userdata) => userdata,
         Err(error) => {
             view.removeFromSuperview();
             return Err(error);
@@ -150,114 +203,49 @@ fn create(content: usize, options: TerminalOptions) -> Result<MacTerminalSurface
     };
     runtime::register(&shared);
     runtime::owe();
-    Ok(MacTerminalSurface {
+    Ok(Inner {
         shared,
-        view: Retained::into_raw(view) as usize,
+        view: OnMain::new(view),
+        content: OnMain::new(content),
+        page,
         userdata: userdata as usize,
-        content,
         closed: AtomicBool::new(false),
     })
 }
 
-/// What [`headless_round_trip`] saw.
-#[derive(Debug, Default)]
-pub struct Headless {
-    /// The grid read back after the bytes were written.
-    pub text: String,
-    /// What the surface handed back as typed, and the grids it reported.
-    pub input: Vec<u8>,
-    pub grids: Vec<(u16, u16)>,
-}
-
-/// The bridge's ABI without a window (the Mac's `cargo test`, on the main thread, with no Tauri app): the app made from Mighty's
-/// config, a host-managed surface on a view in no window, bytes written in and read back from the grid, text typed coming back
-/// through `receive_buffer`, the grid reported through `receive_resize`, and the surface freed.
-pub fn headless_round_trip(written: &str, typed: &str) -> std::result::Result<Headless, String> {
-    use std::sync::Mutex;
-    use std::time::{Duration, Instant};
-    let mtm = MainThreadMarker::new().ok_or("not on the main thread")?;
-    let app = runtime::app(&runtime::Look::default())?;
-    let seen: Arc<Mutex<Headless>> = Arc::default();
-    let sink = seen.clone();
-    let listener = mighty_platform::TerminalListener::new(move |event| {
-        let mut seen = sink.lock().unwrap_or_else(|p| p.into_inner());
-        match event {
-            mighty_platform::TerminalEvent::Input(bytes) => seen.input.extend(bytes),
-            mighty_platform::TerminalEvent::Resized { columns, rows, .. } => seen.grids.push((columns, rows)),
-            _ => {}
+/// Ends the surface (main thread, once): the keyboard back to the page, the view off the window, the writer stopped and the surface
+/// freed while the app keeps ticking, then the userdata.
+fn free(inner: &Inner, main: MainThreadMarker) {
+    runtime::unregister(&inner.shared);
+    if let Some(view) = inner.view.get(main) {
+        if view.has_keyboard() {
+            inner.give_keyboard_to_page(main);
         }
-    });
-    let view =
-        TerminalView::new(mtm, NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(640.0, 360.0)), Arc::new(Shared::new(Some(listener))));
-    let (surface, userdata) = make_surface(app, &view, 1.0, 13.0).map_err(|e| e.to_string())?;
-    // SAFETY: the live surface on the main thread; libghostty copies the bytes.
-    unsafe { ghostty_surface_write_buffer(surface, written.as_ptr(), written.len()) };
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let wanted: String = written.chars().filter(|c| !c.is_control()).collect();
-    let mut text = String::new();
-    while Instant::now() < deadline {
-        // SAFETY: the live app on the main thread.
-        unsafe { ghostty_app_tick(app) };
-        text = view.viewport_text();
-        if text.contains(wanted.trim()) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
+        view.removeFromSuperview();
     }
-    view.surface_text(typed);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline && !String::from_utf8_lossy(&seen.lock().unwrap_or_else(|p| p.into_inner()).input).contains(typed) {
-        // SAFETY: as above.
-        unsafe { ghostty_app_tick(app) };
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    view.shared().surface.store(std::ptr::null_mut(), Ordering::SeqCst);
-    // SAFETY: the surface freed once, then the userdata it held.
-    unsafe {
-        ghostty_surface_free(surface);
-        drop(Arc::from_raw(userdata as *const Shared));
-    }
-    let mut report = std::mem::take(&mut *seen.lock().unwrap_or_else(|p| p.into_inner()));
-    report.text = text;
-    Ok(report)
-}
-
-/// Frees the surface, then the view and the userdata (main thread, once).
-fn free(shared: Arc<Shared>, view: usize, userdata: usize, content: usize) {
-    runtime::unregister(&shared);
-    let terminal = terminal_view(view);
-    if terminal.has_keyboard() {
-        give_keyboard_to_page(content_view(content));
-    }
-    let surface = shared.surface.swap(std::ptr::null_mut(), Ordering::SeqCst);
-    if !surface.is_null() {
-        // SAFETY: the live surface, freed once on the main thread (its threads end with it).
-        unsafe {
-            ghostty_surface_set_focus(surface, false);
-            ghostty_surface_free(surface);
-        }
-    }
-    terminal.removeFromSuperview();
-    // SAFETY: the view and the userdata kept at the making, released once, after the surface that used them.
-    unsafe {
-        drop(Retained::from_raw(view as *mut TerminalView));
-        drop(Arc::from_raw(userdata as *const Shared));
+    if inner.shared.close(runtime::current_app()) {
+        // SAFETY: the userdata kept at the making, released once, after the surface that used it.
+        drop(unsafe { Arc::from_raw(inner.userdata as *const Shared) });
     }
 }
 
 impl MacTerminalSurface {
     fn live(&self) -> Result<()> {
-        if self.closed.load(Ordering::SeqCst) { Err(closed()) } else { Ok(()) }
+        if self.inner.closed.load(Ordering::SeqCst) { Err(closed()) } else { Ok(()) }
     }
 
-    /// Runs `f` with the view and the content view on the main thread.
+    /// Queues `f` with the view and the content view on the main thread.
     fn on_view(&self, f: impl FnOnce(&TerminalView, &NSView) + Send + 'static) -> Result<()> {
         self.live()?;
-        let (view, content, shared) = (self.view, self.content, self.shared.clone());
+        let inner = self.inner.clone();
         runtime::on_main(move || {
-            // Closed meanwhile: the view is gone.
-            if shared.surface().is_some() {
-                f(terminal_view(view), content_view(content));
+            let Some(main) = MainThreadMarker::new() else { return };
+            // Closed meanwhile: the view is off the window.
+            if inner.shared.surface().is_none() {
+                return;
+            }
+            if let (Some(view), Some(content)) = (inner.view.get(main), inner.content.get(main)) {
+                f(view, content);
             }
         });
         Ok(())
@@ -265,8 +253,14 @@ impl MacTerminalSurface {
 
     async fn ask_view<R: Send + 'static>(&self, f: impl FnOnce(&TerminalView, &NSView) -> R + Send + 'static) -> Result<R> {
         self.live()?;
-        let (view, content, shared) = (self.view, self.content, self.shared.clone());
-        ask(move || shared.surface().map(|_| f(terminal_view(view), content_view(content)))).await?.ok_or_else(closed)
+        let inner = self.inner.clone();
+        ask(move || {
+            let main = MainThreadMarker::new()?;
+            inner.shared.surface()?;
+            Some(f(inner.view.get(main)?, inner.content.get(main)?))
+        })
+        .await?
+        .ok_or_else(closed)
     }
 }
 
@@ -279,10 +273,14 @@ impl NativeSurface for MacTerminalSurface {
     }
 
     fn set_visible(&self, visible: bool) -> Result<()> {
-        self.on_view(move |view, content| {
+        let inner = self.inner.clone();
+        self.on_view(move |view, _| {
             view.shared().visible.store(visible, Ordering::SeqCst);
-            if !visible && view.has_keyboard() {
-                give_keyboard_to_page(content);
+            if !visible
+                && view.has_keyboard()
+                && let Some(main) = MainThreadMarker::new()
+            {
+                inner.give_keyboard_to_page(main);
             }
             view.setHidden(!visible);
             if let Some(surface) = view.shared().surface() {
@@ -311,11 +309,15 @@ impl NativeSurface for MacTerminalSurface {
     }
 
     fn close(&self) -> Result<()> {
-        if self.closed.swap(true, Ordering::SeqCst) {
+        if self.inner.closed.swap(true, Ordering::SeqCst) {
             return Err(closed());
         }
-        let (shared, view, userdata, content) = (self.shared.clone(), self.view, self.userdata, self.content);
-        runtime::on_main(move || free(shared, view, userdata, content));
+        let inner = self.inner.clone();
+        runtime::on_main(move || {
+            if let Some(main) = MainThreadMarker::new() {
+                free(&inner, main);
+            }
+        });
         Ok(())
     }
 }
@@ -347,9 +349,10 @@ impl TerminalSurface for MacTerminalSurface {
         self.on_view(move |_, _| runtime::set_look(|look| look.light = light))
     }
 
+    /// Queued for the surface's writer; waits while its queue is full (backpressure).
     fn feed(&self, output: &[u8]) -> Result<()> {
         self.live()?;
-        self.shared.feed(output);
+        self.inner.shared.feed(output);
         Ok(())
     }
 
@@ -362,4 +365,79 @@ impl Drop for MacTerminalSurface {
     fn drop(&mut self) {
         let _ = self.close();
     }
+}
+
+/// What [`headless_round_trip`] saw.
+#[derive(Debug, Default)]
+pub struct Headless {
+    /// The grid read back after the bytes were written.
+    pub text: String,
+    /// What the surface handed back (typed text, and any reply a program's request got), and the grids it reported.
+    pub input: Vec<u8>,
+    pub grids: Vec<(u16, u16)>,
+    /// Bells rung and titles set while a write full of them went in.
+    pub bells: usize,
+    pub titles: usize,
+    /// Clipboard writes that landed while a program asked for one (OSC 52).
+    pub clipboard_writes: u64,
+    /// Whether the surface was freed (its writer ended in time).
+    pub freed: bool,
+}
+
+/// The bridge's ABI without a window (the Mac's `cargo test`, on the main thread, with no Tauri app): the app made from Mighty's
+/// config, a host-managed surface on a view in no window; `written` fed through the surface's writer and read back from the grid,
+/// then `flood` (one write of many bells and titles: more than libghostty's mailbox holds) fed while the main thread ticks, then a
+/// program's OSC 52 read and write (no reply, no clipboard write), text typed coming back through `receive_buffer`, the grid reported
+/// through `receive_resize`, and the surface closed (writer stopped, surface freed).
+pub fn headless_round_trip(written: &str, flood: &str, typed: &str) -> std::result::Result<Headless, String> {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    let main = MainThreadMarker::new().ok_or("not on the main thread")?;
+    let app = runtime::app(&runtime::Look::default())?;
+    let seen: Arc<Mutex<Headless>> = Arc::default();
+    let sink = seen.clone();
+    let listener = mighty_platform::TerminalListener::new(move |event| {
+        let mut seen = sink.lock().unwrap_or_else(|p| p.into_inner());
+        match event {
+            mighty_platform::TerminalEvent::Input(bytes) => seen.input.extend(bytes),
+            mighty_platform::TerminalEvent::Resized { columns, rows, .. } => seen.grids.push((columns, rows)),
+            mighty_platform::TerminalEvent::Bell => seen.bells += 1,
+            mighty_platform::TerminalEvent::Title(_) => seen.titles += 1,
+            _ => {}
+        }
+    });
+    let shared = Arc::new(Shared::new(Some(listener)));
+    let view = TerminalView::new(main, NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(640.0, 360.0)), shared.clone());
+    let userdata = make_surface(app, &view, 1.0, 13.0).map_err(|e| e.to_string())?;
+    let tick_until = |seconds: u64, done: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(seconds);
+        while Instant::now() < deadline && !done() {
+            // SAFETY: the live app on the main thread.
+            unsafe { ghostty_app_tick(app) };
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    shared.feed(written.as_bytes());
+    let wanted: String = written.chars().filter(|c| !c.is_control()).collect();
+    let marker = wanted.split_whitespace().next().unwrap_or("").to_string();
+    tick_until(10, &|| view.viewport_text().contains(&marker));
+    let text = view.viewport_text();
+    let writes_before = runtime::CLIPBOARD_WRITES.load(Ordering::SeqCst);
+    shared.feed(flood.as_bytes());
+    shared.feed(b"\x1b]52;c;?\x07\x1b]52;c;aGVhZGxlc3M=\x07after-flood\r\n");
+    tick_until(20, &|| view.viewport_text().contains("after-flood"));
+    // A reply or a clipboard write would come through the next ticks.
+    tick_until(1, &|| false);
+    view.surface_text(typed);
+    tick_until(5, &|| String::from_utf8_lossy(&seen.lock().unwrap_or_else(|p| p.into_inner()).input).contains(typed));
+    let freed = shared.close(app);
+    if freed {
+        // SAFETY: the surface is freed: the userdata it held goes.
+        drop(unsafe { Arc::from_raw(userdata as *const Shared) });
+    }
+    let mut report = std::mem::take(&mut *seen.lock().unwrap_or_else(|p| p.into_inner()));
+    report.text = text;
+    report.clipboard_writes = runtime::CLIPBOARD_WRITES.load(Ordering::SeqCst) - writes_before;
+    report.freed = freed;
+    Ok(report)
 }

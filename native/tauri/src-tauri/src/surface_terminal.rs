@@ -13,7 +13,7 @@
 //!   feed"): the output fed to Ghostty, a restart's reset, the theme and the font; the footer still goes to the page, which draws it
 //!   under the slot.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -38,6 +38,8 @@ const RESET: &[u8] = b"\x1bc";
 #[derive(Default)]
 pub struct NativeTerminals {
     views: Mutex<HashMap<String, Arc<dyn TerminalSurface>>>,
+    /// The panes whose view could not open: not tried again until the pane is forgotten (the platform said why once).
+    failed: Mutex<HashSet<String>>,
     to_pane: Mutex<Option<ToPane>>,
 }
 
@@ -55,6 +57,9 @@ impl NativeTerminals {
     /// no view. The view's events wait in order until it is registered, so the pane's first answer (the theme, the font) finds it.
     pub async fn open(&self, factory: &Arc<dyn SurfaceFactory>, pane: &str, rect: DeviceRect) -> Option<Arc<dyn TerminalSurface>> {
         let to_pane = lock(&self.to_pane).clone()?;
+        if lock(&self.failed).contains(pane) {
+            return None;
+        }
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<Value>();
         let ready = AtomicBool::new(false);
         let listener = TerminalListener::new(move |event| {
@@ -71,7 +76,13 @@ impl NativeTerminals {
             bounds: rect,
             listener: Some(listener),
         };
-        let view: Arc<dyn TerminalSurface> = Arc::from(factory.open_terminal(options).await.ok()?);
+        let view: Arc<dyn TerminalSurface> = match factory.open_terminal(options).await {
+            Ok(view) => Arc::from(view),
+            Err(_) => {
+                lock(&self.failed).insert(pane.to_string());
+                return None;
+            }
+        };
         lock(&self.views).insert(pane.to_string(), view.clone());
         let owner = pane.to_string();
         tokio::spawn(async move {
@@ -90,10 +101,12 @@ impl NativeTerminals {
     /// The pane is gone: its view no longer takes what the pane sends (surface.rs closes the view itself).
     pub fn forget(&self, pane: &str) {
         lock(&self.views).remove(pane);
+        lock(&self.failed).remove(pane);
     }
 
     /// A message the pane would push to the page's terminal, given to its view instead; false when the pane has no view (or the
-    /// message is the footer, which the page draws), so it goes to the page as on Windows.
+    /// message is the footer, which the page draws), so it goes to the page as on Windows. The output waits while the view's write
+    /// queue is full (backpressure: the pane's flush, and so its pending output, waits with it).
     pub fn post(&self, pane: &str, message: &TerminalMessage) -> bool {
         if matches!(message, TerminalMessage::Footer { .. }) {
             return false;
@@ -118,7 +131,8 @@ impl NativeTerminals {
 }
 
 /// The `terminalMessage`s one view event is, as the page's xterm would have sent them (none for the bell or a lost keyboard):
-/// `ready` once (`ready` turns true), `resize` after, the input in chunks of at most [`INPUT_CHUNK`] characters.
+/// `ready` once (`ready` turns true), `resize` after, the input in chunks of at most [`INPUT_CHUNK`] characters (bytes that are not
+/// UTF-8 as `inputBytes`, base64, so they reach the PTY as they were).
 pub fn message(ready: &AtomicBool, event: TerminalEvent) -> Vec<Value> {
     match event {
         TerminalEvent::Resized { columns, rows, .. } => {
@@ -126,7 +140,13 @@ pub fn message(ready: &AtomicBool, event: TerminalEvent) -> Vec<Value> {
             vec![json!({"type": kind, "columns": columns, "rows": rows})]
         }
         TerminalEvent::Input(bytes) => {
-            let text = String::from_utf8_lossy(&bytes);
+            // Input that is not UTF-8 (an X10 mouse report) goes as it is, never through a lossy decoding.
+            let Ok(text) = std::str::from_utf8(&bytes) else {
+                return bytes
+                    .chunks(INPUT_CHUNK)
+                    .map(|chunk| json!({"type": "inputBytes", "data": base64::engine::general_purpose::STANDARD.encode(chunk)}))
+                    .collect();
+            };
             let mut messages = Vec::new();
             let mut start = 0;
             for (count, (at, _)) in text.char_indices().enumerate() {
@@ -314,45 +334,163 @@ mod tests {
         assert!(!natives.post("pane", &TerminalMessage::Reset), "a forgotten pane's messages are the page's again");
     }
 
-    /// Swift `TerminalInputPolicyTests.swift:15` "installIsNeverRun": what came from a manifest is put into the native terminal and
-    /// left there; only a command the app wrote itself is followed by Enter (a CR the view types as the Return key).
-    #[tokio::test]
-    async fn install_is_never_run() {
-        let (natives, surfaces, _) = natives_with_log();
-        let factory: Arc<dyn SurfaceFactory> = surfaces.clone();
-        let view = natives.open(&factory, "pane", RECT).await.unwrap();
-        surfaces.clear();
-        let install = bundled_install_commands().into_iter().next().expect("a bundled install command");
-        let typed = |text: &str| view.send_text(text).is_ok();
-        assert_eq!(TerminalInput::apply(&install, false, typed), TerminalInput::Pasted);
-        assert_eq!(surfaces.events(), [SurfaceEvent::Typed { pane: "pane".into(), text: install.clone() }]);
-        surfaces.clear();
-        assert_eq!(TerminalInput::apply("claude login", true, typed), TerminalInput::PastedAndRan);
-        assert_eq!(
-            surfaces.events(),
-            [
-                SurfaceEvent::Typed { pane: "pane".into(), text: "claude login".into() },
-                SurfaceEvent::Typed { pane: "pane".into(), text: "\r".into() }
-            ]
-        );
+    /// A shell pane over a loopback PTY (each write comes back as output) drawn by a native view: the pane, its view's registry
+    /// (connected as terminal.rs connects it) and the PTY host.
+    struct NativePane {
+        natives: Arc<NativeTerminals>,
+        surfaces: Arc<FakeSurfaces>,
+        pane: Arc<mighty_terminal::TerminalPane>,
+        ptys: Arc<mighty_platform::fake::FakePtyHost>,
     }
 
-    /// Swift `TerminalInputPolicyTests.swift:27` "aLineBreakStopsThePasteAltogether": a line break of any kind means nothing reaches the
-    /// native terminal at all, and text it did not take is never followed by Enter.
+    /// terminal.rs' `HostEvents` as far as the view goes: what the pane posts reaches its view.
+    struct ToView(Arc<NativeTerminals>);
+
+    impl mighty_terminal::PaneEvents for ToView {
+        fn post(&self, pane: &str, message: &TerminalMessage) {
+            self.0.post(pane, message);
+        }
+        fn status(&self, _pane: &str, _status: &'static str) {}
+        fn activity(&self, _pane: &str, _busy: bool) {}
+        fn error(&self, _text: String) {}
+        fn pressed(&self, _pane: &str) {}
+        fn light(&self) -> bool {
+            false
+        }
+        fn font(&self) -> mighty_terminal::TerminalFont {
+            mighty_terminal::TerminalFont::default()
+        }
+        fn agent_terminal(&self, _owner: &str) -> Option<Arc<mighty_terminal::AgentTerminal>> {
+            None
+        }
+    }
+
+    impl NativePane {
+        /// The pane with its view open and its shell started at the view's first grid.
+        async fn start() -> NativePane {
+            use mighty_platform::fake::{FakePtyHost, FakeShellEnvironment, MemoryClipboard};
+            let natives = Arc::new(NativeTerminals::default());
+            let surfaces = Arc::new(FakeSurfaces::new(true));
+            let ptys = Arc::new(FakePtyHost::default());
+            let ports = mighty_terminal::Ports {
+                ptys: ptys.clone(),
+                environment: Arc::new(FakeShellEnvironment::new(BTreeMap::new())),
+                clipboard: Arc::new(MemoryClipboard::with_text("")),
+                locale: mighty_core::locale::Locale::new("en"),
+                engine: "Ghostty".into(),
+            };
+            let options = mighty_terminal::PaneOptions {
+                id: "pane".into(),
+                kind: mighty_terminal::PaneKind::Shell,
+                folder: Some(std::env::temp_dir()),
+                enabled: true,
+                no_profile: true,
+            };
+            let pane = mighty_terminal::TerminalPane::new(options, ports, Arc::new(ToView(natives.clone())));
+            let target = pane.clone();
+            natives.connect(Arc::new(move |_pane, message| {
+                let target = target.clone();
+                Box::pin(async move { target.handle_message(&message).await })
+            }));
+            let factory: Arc<dyn SurfaceFactory> = surfaces.clone();
+            natives.open(&factory, "pane", RECT).await.expect("a view");
+            surfaces.emit_terminal("pane", TerminalEvent::Resized { columns: 90, rows: 25, width: 0, height: 0 });
+            until(|| pane.is_running()).await;
+            assert!(pane.is_running(), "the shell started at the view's first grid");
+            assert_eq!(ptys.opened()[0].size, mighty_platform::PtySize { columns: 90, rows: 25 });
+            NativePane { natives, surfaces, pane, ptys }
+        }
+
+        /// What the view was fed, the pane's output flushed first (its 32 ms clock).
+        async fn drawn(&self, wanted: &str) -> String {
+            let fed = || {
+                let bytes: Vec<u8> = self
+                    .surfaces
+                    .events()
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        SurfaceEvent::Fed { output, .. } => Some(output),
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect();
+                String::from_utf8_lossy(&bytes).into_owned()
+            };
+            for _ in 0..200 {
+                self.pane.tick();
+                if fed().contains(wanted) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            fed()
+        }
+    }
+
+    /// Swift `TerminalInputPolicyTests.swift:15` "installIsNeverRun", on the path the app takes (styles.rs' `run_terminal_command`:
+    /// `TerminalInput::apply` over `TerminalPane::write`) with the pane drawn natively: what came from a manifest reaches the shell and
+    /// is drawn, with no Enter after it; only a command the app wrote itself is followed by one.
+    #[tokio::test]
+    async fn install_is_never_run() {
+        let native = NativePane::start().await;
+        let install = bundled_install_commands().into_iter().next().expect("a bundled install command");
+        let typed = |text: &str| native.pane.write(text).unwrap_or(false);
+        assert_eq!(TerminalInput::apply(&install, false, typed), TerminalInput::Pasted);
+        let drawn = native.drawn(&install).await;
+        assert!(drawn.contains(&install) && !drawn.contains('\r'), "put in, left for the user to run: {drawn:?}");
+        assert_eq!(TerminalInput::apply("claude login", true, typed), TerminalInput::PastedAndRan);
+        assert!(native.drawn("claude login\r").await.contains("claude login\r"), "the app's own command runs");
+        assert!(native.natives.view("pane").is_some(), "the view stays the pane's");
+    }
+
+    /// Swift `TerminalInputPolicyTests.swift:27` "aLineBreakStopsThePasteAltogether", on the same path: a line break of any kind means
+    /// nothing reaches the shell or the view at all, and text the terminal did not take (the shell has ended) is never followed by
+    /// Enter.
     #[tokio::test]
     async fn a_line_break_stops_the_paste_altogether() {
-        let (natives, surfaces, _) = natives_with_log();
-        let factory: Arc<dyn SurfaceFactory> = surfaces.clone();
-        let view = natives.open(&factory, "pane", RECT).await.unwrap();
-        surfaces.clear();
+        let native = NativePane::start().await;
         for separator in ["\n", "\r", "\u{2028}", "\u{2029}"] {
             let text = format!("rm -rf /{separator}echo done");
-            assert_eq!(TerminalInput::apply(&text, true, |t| view.send_text(t).is_ok()), TerminalInput::Refused, "{separator:?}");
+            let outcome = TerminalInput::apply(&text, true, |t| native.pane.write(t).unwrap_or(false));
+            assert_eq!(outcome, TerminalInput::Refused, "{separator:?}");
         }
-        assert!(surfaces.events().is_empty(), "nothing typed");
-        view.close().unwrap();
-        assert_eq!(TerminalInput::apply("ls", true, |t| view.send_text(t).is_ok()), TerminalInput::Failed, "a closed view takes nothing");
-        assert!(!surfaces.events().iter().any(|e| matches!(e, SurfaceEvent::Typed { .. })), "and no Enter follows");
+        assert!(!native.drawn("rm -rf").await.contains("rm -rf"), "nothing reached the shell");
+        native.ptys.exit(0, 0);
+        until(|| !native.pane.is_running()).await;
+        let mut writes = 0;
+        let outcome = TerminalInput::apply("ls", true, |t| {
+            writes += 1;
+            native.pane.write(t).unwrap_or(false)
+        });
+        assert!(outcome == TerminalInput::Failed && writes == 1, "an ended shell takes nothing, and no Enter follows");
+    }
+
+    /// Typing that is not UTF-8 (an X10 mouse report) reaches the PTY as the bytes it was, not through a lossy decoding.
+    #[tokio::test]
+    async fn bytes_that_are_not_utf8_reach_the_pty_as_they_were() {
+        let ready = AtomicBool::new(true);
+        let report = vec![0x1b, b'[', b'M', b' ', 0xff, 0xa1];
+        let messages = message(&ready, TerminalEvent::Input(report.clone()));
+        let data = base64::engine::general_purpose::STANDARD.encode(&report);
+        assert_eq!(messages, [json!({"type": "inputBytes", "data": data})]);
+        let native = NativePane::start().await;
+        native.surfaces.emit_terminal("pane", TerminalEvent::Input(report));
+        let drawn = native.drawn("\u{1b}[M ").await;
+        assert!(drawn.contains("\u{1b}[M "), "the report came back through the loopback PTY: {drawn:?}");
+        assert_eq!(native.pane.diagnostics()["inputs"], 1);
+    }
+
+    /// A view the platform could not open is not asked for again until its pane is forgotten.
+    #[tokio::test]
+    async fn a_view_that_failed_is_not_tried_again() {
+        let (natives, surfaces, _) = natives_with_log();
+        let factory: Arc<dyn SurfaceFactory> = surfaces.clone();
+        surfaces.fail_next_open();
+        assert!(natives.open(&factory, "pane", RECT).await.is_none());
+        assert!(natives.open(&factory, "pane", RECT).await.is_none(), "remembered");
+        assert!(surfaces.events().is_empty(), "the platform was asked once");
+        natives.forget("pane");
+        assert!(natives.open(&factory, "pane", RECT).await.is_some(), "a new pane of that id tries again");
     }
 
     /// Every bundled style's install command (mighty-styles' bundled manifests).
