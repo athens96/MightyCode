@@ -1,7 +1,8 @@
 //! The delegation scenarios (C# DelegationScenarioVerification, the Mac's DelegationScenarioS1Tests.swift and S2, S3), headless through
 //! the real run path: the run service, the desktop service's delegation, the named pipe, a scripted fake Claude. Each makes its
 //! repository and profile in a temp folder and is judged from what is on disk, by the rules scripts/delegation-record.py checks.
-//! Windows only while the transport is (W7 plan D4).
+//! Windows only until M-A's Mac process host lands (git, the fake
+//! Claude and its MCP server); the Mac's transport is in (M-C).
 #![cfg(windows)]
 
 mod support;

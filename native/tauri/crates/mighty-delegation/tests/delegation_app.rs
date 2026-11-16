@@ -188,7 +188,9 @@ async fn calls_that_are_not_well_formed_never_reach_the_app() {
 
 /// "delegation: the headless server lists the six tools and forwards over the pipe": the exe's `--agent-delegation-mcp` (the checks'
 /// relaunched exe) with the binding's environment reaches the app's listener on the pane's token; it leaves with 0 once stdin closes.
-#[cfg(windows)]
+/// Over the OS's transport: Windows' named pipe, and the Mac's Unix socket (M-C; the exe's MCP mode needs only the socket, and the
+/// check starts it itself).
+#[cfg(any(windows, target_os = "macos"))]
 #[tokio::test(flavor = "multi_thread")]
 async fn the_headless_server_lists_the_six_tools_and_forwards_over_the_pipe() {
     use std::io::{BufRead, BufReader, Write};
@@ -208,7 +210,7 @@ async fn the_headless_server_lists_the_six_tools_and_forwards_over_the_pipe() {
 
     let canned = Arc::new(Canned::new(Duration::ZERO));
     let calls = canned.calls.clone();
-    let pipe = AgentIo::start(Arc::new(mighty_platform_windows::NamedPipeListener::new()), Arc::new(Refuses)).unwrap();
+    let pipe = AgentIo::start(delegation_io::os_transport().0, Arc::new(Refuses)).unwrap();
     let binding = pipe.bind("parent", "ws", &temp(), "claude", &executable()).unwrap();
     binding.connect_delegation(Some(canned), true, "");
     #[allow(clippy::disallowed_methods, reason = "the check starts the checks' own exe, as C#'s Verification.Self does")]

@@ -388,7 +388,8 @@ impl RemoteHost {
                             stopping: false,
                             finished_at: None,
                             pending: HashSet::new(),
-                            graph_runs: request.headers.get(protocol::GRAPH_HEADER).map(String::as_str) == Some(protocol::GRAPH_RUNS),
+                            graph_runs: self.0.options.graph_runs
+                                && request.headers.get(protocol::GRAPH_HEADER).map(String::as_str) == Some(protocol::GRAPH_RUNS),
                             cancel: Cancel::default(),
                             dropped: HashSet::new(),
                             lease: lease.take(),

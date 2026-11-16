@@ -71,3 +71,7 @@ tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread",
 
 [target.'cfg(windows)'.dev-dependencies]
 mighty-platform-windows.workspace = true
+
+# The Mac's network, HTTPS and proxy under the checks that read this machine (M-C: tailscale.rs, push.rs, mac_network.rs).
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+mighty-platform-macos.workspace = true

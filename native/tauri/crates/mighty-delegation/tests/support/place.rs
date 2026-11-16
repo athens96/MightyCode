@@ -6,8 +6,8 @@
 //! git ([`DelegationPlace::git`]) reads the same empty global config and no system config, so no check ever reads the user's. It never
 //! touches `%USERPROFILE%\.mightycode` or a real repository. Owner: W7-B (published first: W7-A's and W7-D's git checks run in it).
 //!
-//! Git runs through the platform's process host: `WindowsProcessHost` on Windows; elsewhere the host is `Unsupported` until the Mac
-//! stage, so the checks that run git are `#[cfg(windows)]`.
+//! Git runs through the platform's process host: `WindowsProcessHost` on Windows, the Mac's (M-A's, `Unsupported` until it lands) on
+//! the Mac, so the checks that run git stay `#[cfg(windows)]` until M-A's process host is in.
 //!
 //! A child here is [`PlaceChild`], what C#'s `ChildRecord.Make(id, "parent", …)` holds of it for the git layer; W7-A's checks make their
 //! own `ChildRecord` from the [`ChildWorktree`] [`DelegationPlace::made`] returns.
@@ -24,13 +24,17 @@ use mighty_delegation::model::ChildState;
 use mighty_platform::fake::FixedDiskSpace;
 use mighty_platform::{FileHandles, ProcessHost, SpawnRequest};
 
-/// The platform's process host: the real one on Windows, `Unsupported` elsewhere (until the Mac stage).
+/// The platform's process host: Windows' or the Mac's (M-A's), `Unsupported` elsewhere.
 pub fn processes() -> Arc<dyn ProcessHost> {
     #[cfg(windows)]
     {
         Arc::new(mighty_platform_windows::WindowsProcessHost::new())
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        mighty_platform_macos::process_host()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         Arc::new(mighty_platform::unsupported::Unsupported)
     }

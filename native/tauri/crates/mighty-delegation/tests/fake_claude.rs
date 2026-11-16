@@ -108,7 +108,8 @@ fn the_fake_plays_its_script_over_stream_json() {
 }
 
 /// The delegation server of `--mcp-config` is started with the fake's own environment (the pane's token and pipe) and a scripted
-/// call reaches the app's listener; its answer is the tool result.
+/// call reaches the app's listener; its answer is the tool result. Windows only until M-A's Mac process host lands: the fake Claude
+/// starts its MCP server through the process host (the transport is already the OS's).
 #[cfg(windows)]
 #[tokio::test(flavor = "multi_thread")]
 async fn the_fake_calls_the_delegation_server_on_the_panes_token() {
@@ -128,7 +129,7 @@ async fn the_fake_calls_the_delegation_server_on_the_panes_token() {
     let root = folder("call");
     let canned = Arc::new(Canned::new(Duration::ZERO));
     let calls = canned.calls.clone();
-    let pipe = AgentIo::start(Arc::new(mighty_platform_windows::NamedPipeListener::new()), Arc::new(Nothing)).unwrap();
+    let pipe = AgentIo::start(delegation_io::os_transport().0, Arc::new(Nothing)).unwrap();
     let binding = pipe.bind("parent", "ws", &temp(), "claude", &executable()).unwrap();
     binding.connect_delegation(Some(canned), true, "");
     let mut arguments = vec![];

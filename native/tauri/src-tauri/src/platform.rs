@@ -62,10 +62,18 @@ pub fn clipboard() -> Arc<dyn mighty_platform::Clipboard> {
     os::clipboard()
 }
 
-/// The agents' MCP listener (one per app, W7-C's agent_io.rs): Windows' named pipe; the Mac's socket is its stage's.
-#[allow(dead_code, reason = "agent_io.rs (W7-C) starts it")]
-pub fn agent_io_listener() -> Arc<dyn mighty_platform::AgentIoListener> {
-    os::agent_io_listener()
+/// The agents' MCP listener (one per app, W7-C's agent_io.rs): Windows' named pipe (a random name); the Mac's Unix socket, under the
+/// profile's data folder `data_dir` (M-C: `<data>/agent-io/io.sock`, as the Swift app's).
+pub fn agent_io_listener(data_dir: &std::path::Path) -> Arc<dyn mighty_platform::AgentIoListener> {
+    #[cfg(windows)]
+    {
+        let _ = data_dir;
+        os::agent_io_listener()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        os::agent_io_listener(data_dir)
+    }
 }
 
 /// The exe's MCP modes' client of that listener (`--agent-io-mcp`, `--agent-delegation-mcp`, main.rs).

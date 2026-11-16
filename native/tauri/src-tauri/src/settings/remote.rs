@@ -415,7 +415,10 @@ pub fn remote_workspaces(host: &Arc<Host>, ui: &mut Ui) -> El {
         .aid("settings-remote-firewall-remove")
         .visible(present);
     let buttons = El::stack(true, metrics::SPACING_SM, vec![add, remove]);
-    rows.add(ui.settings_labeled(words, buttons, true));
+    // The Mac has no firewall step (`PlatformProfile::direct_connection_firewall`, M-C): no row, and no UAC words.
+    if crate::direct::has_firewall(host) {
+        rows.add(ui.settings_labeled(words, buttons, true));
+    }
 
     // Connect to another computer: the address, the key and a name, each a wide row.
     let field = |ui: &Ui, key: &str, placeholder: &str, aid: &str, text: &Local<String>| {

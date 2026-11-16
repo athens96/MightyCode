@@ -746,6 +746,15 @@ fn only_a_keyed_run_request_gets_the_attachment_body() {
             && host::body_limit(&head("/v2/runs", &[], "127.0.0.1"), &key, false) == 0
     );
     assert_eq!(host::body_limit(&head("/v2/runs", &[], "127.0.0.1"), &key, true), attachments, "loopback only when injected");
+    // M-C: a host that routes the decoded path (the Mac) gives the larger body to the route it reads, decoded by the same rule; one
+    // that routes as written (Windows) does not; a target that does not decode gets the small limit.
+    let encoded = head("/v2/r%75ns", &[], "100.90.1.1");
+    assert_eq!(host::body_limit_for(&encoded, &key, false, true), attachments, "the decoded run route");
+    assert_eq!(host::body_limit_for(&encoded, &key, false, false), protocol::MAXIMUM_REQUEST_BYTES, "as written: not the run route");
+    let submit = head("/v2/mirror/sessions/s1/s%75bmit", &[], "100.90.1.1");
+    assert_eq!(host::body_limit_for(&submit, &key, false, true), attachments, "the decoded mirror send");
+    assert_eq!(host::body_limit_for(&head("/v2/r%zzns", &[], "100.90.1.1"), &key, false, true), protocol::MAXIMUM_REQUEST_BYTES);
+    assert_eq!(host::body_limit_for(&head("/v2/r%75ns?x=1", &[], "100.90.1.1"), &key, false, true), protocol::MAXIMUM_REQUEST_BYTES);
     let shell = StartRunRequest::new("j", "w", "shell", "dir");
     let settings = |mode: &str| mighty_core::model::RunSettings { permission_mode: mode.into(), ..Default::default() };
     let full = StartRunRequest::new("j", "w", "claude", "hi").with_settings(settings("fullAccess"));
@@ -795,6 +804,35 @@ fn only_a_keyed_run_request_gets_the_attachment_body() {
 
 fn get_request(target: &str, key: &str, extra: &str) -> String {
     format!("GET {target} HTTP/1.1\r\nAuthorization: Bearer {key}\r\nx-mighty-remote-version: 2\r\n{extra}\r\n")
+}
+
+/// M-C, `PlatformProfile::remote_decodes_request_paths` over both values: a Mac host routes the path its `URLComponents.path` gives,
+/// escapes decoded (`/v2/%69nfo` is `/v2/info`, `%2F` a separator), and a target with a broken escape is a bad path; a Windows host
+/// routes the path as written. Neither resolves a dot segment.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mac_host_decodes_request_paths_and_a_windows_host_does_not() {
+    set_language("en");
+    assert_eq!(host::percent_decoded("/v2/%69nfo").as_deref(), Some("/v2/info"));
+    assert_eq!(host::percent_decoded("/v2/runs%2Fx%2fstop").as_deref(), Some("/v2/runs/x/stop"));
+    assert_eq!(host::percent_decoded("/v2/%ED%95%9C").as_deref(), Some("/v2/\u{d55c}"));
+    for broken in ["/v2/%", "/v2/%6", "/v2/%zz", "/v2/%ff"] {
+        assert_eq!(host::percent_decoded(broken), None, "{broken}");
+    }
+    for (decodes, encoded_info, bad_escape) in [(true, "HTTP/1.1 200", "HTTP/1.1 400"), (false, "HTTP/1.1 404", "HTTP/1.1 404")] {
+        let fixture = make_host(MakeHost { decodes_paths: Some(decodes), ..MakeHost::default() }).await;
+        let state = fixture.host.start(&[fixture.shared.id().into()], 0).await.unwrap();
+        let (port, key) = (state.port.unwrap(), state.key.clone().unwrap());
+        let answer = raw_text(port, &get_request("/v2/%69nfo", &key, "")).await;
+        assert!(answer.starts_with(encoded_info), "decodes {decodes}: {answer}");
+        let answer = raw_text(port, &get_request("/v2/%zznfo", &key, "")).await;
+        assert!(answer.starts_with(bad_escape), "decodes {decodes}: {answer}");
+        assert!(raw_text(port, &get_request("/v2/info", &key, "")).await.starts_with("HTTP/1.1 200"), "the plain path on both");
+        assert!(
+            raw_text(port, &get_request("/v2/runs/%2E%2E/info", &key, "")).await.starts_with("HTTP/1.1 404"),
+            "a dot segment is never resolved, decoded or not"
+        );
+        fixture.dispose().await;
+    }
 }
 
 /// "remote host: sharing starts with a new key and a stop revokes it".

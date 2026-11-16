@@ -77,6 +77,12 @@ pub struct HostOptions {
     pub clock: Clock,
     /// This PC runs Windows, where Codex and Antigravity are not confined as on a Mac (`full_access_refusal`).
     pub windows_host: bool,
+    /// The request path is percent-decoded before it is routed, as the Mac's `URLComponents.path` gives it
+    /// (`PlatformProfile::remote_decodes_request_paths`; Windows routes it as written).
+    pub decodes_paths: bool,
+    /// A client's `x-mighty-remote-graph: run` gets `graph_run` events (`PlatformProfile::remote_graph_runs`: Windows; a Mac host
+    /// ignores the header and sends graph nodes).
+    pub graph_runs: bool,
     /// agy's settings on this PC, shared with its own panes: an allowed card's continuation puts its rules here. None refuses every grant.
     pub antigravity_rules: Option<AntigravityRuleLeases>,
     /// The system folder Windows reports, where a command's PowerShell comes from (its command line must fit); None: Windows' usual one.
@@ -193,6 +199,29 @@ fn new_key() -> Option<String> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).ok()?;
     Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
+/// The Mac's `URLComponents(string:).path`: every `%XX` decoded; None when an escape is not two hex digits or the bytes are not UTF-8
+/// (`URLComponents` reads no such target, which the Mac answers as a bad path).
+pub fn percent_decoded(path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%' {
+            let hex = bytes.get(at + 1..at + 3)?;
+            let text = std::str::from_utf8(hex).ok()?;
+            if !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return None;
+            }
+            out.push(u8::from_str_radix(text, 16).ok()?);
+            at += 3;
+        } else {
+            out.push(bytes[at]);
+            at += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// A target the Mac's `URLComponents(string:)` reads: URL characters only, no fragment.
@@ -426,7 +455,9 @@ impl RemoteHost {
         });
         let loopback = self.0.options.allow_loopback_for_tests;
         let key = key.to_string();
-        let body_limit: crate::remote::http_server::BodyLimit = Arc::new(move |head: &HttpRequest| Ok(body_limit(head, &key, loopback)));
+        let decodes = self.0.options.decodes_paths;
+        let body_limit: crate::remote::http_server::BodyLimit =
+            Arc::new(move |head: &HttpRequest| Ok(body_limit_for(head, &key, loopback, decodes)));
         let accept_peer: crate::remote::http_server::AcceptPeer = Arc::new(move |peer: IpAddr| Ok(peer_ip_allowed(peer, loopback)));
         let options = ListenerOptions {
             body_limit: Some(body_limit),
@@ -592,14 +623,16 @@ impl RemoteHost {
 
     async fn route(&self, request: &HttpRequest, revision: u64) -> Result<HttpResponse, HostFailure> {
         self.authorize(request, revision)?;
-        // The path is read as written, as the Mac reads it: no dot segment is resolved and no escape decoded.
+        // No dot segment is ever resolved. Windows routes the path as written; the Mac routes `URLComponents.path`, its escapes
+        // decoded (`HostOptions::decodes_paths`). Either way the target itself must be one the Mac's reader takes.
         let (path, query) = match request.target.find('?') {
             Some(mark) => (&request.target[..mark], &request.target[mark..]),
             None => (request.target.as_str(), ""),
         };
-        if !target_text(&request.target) || !path.starts_with(protocol::PATH_PREFIX) {
+        let decoded = if self.0.options.decodes_paths { percent_decoded(path) } else { Some(path.to_string()) };
+        let Some(path) = decoded.filter(|path| target_text(&request.target) && path.starts_with(protocol::PATH_PREFIX)) else {
             return Err(HostFailure::new(400, get("remote.host.error.badPath")));
-        }
+        };
         let route: Vec<&str> = path[protocol::PATH_PREFIX.len()..].split('/').collect();
         if request.method == "GET" && route == ["info"] && query.is_empty() {
             return self.info(revision).await;
@@ -672,6 +705,13 @@ enum StartFailure {
 /// `BodyLimit(head, key, allowLoopback)`: how much body is read, decided from the head before any of it: none without the key (the
 /// head alone gets its 401), the larger attachment body only for an authenticated run request or mirror send.
 pub fn body_limit(head: &HttpRequest, key: &str, allow_loopback: bool) -> usize {
+    body_limit_for(head, key, allow_loopback, false)
+}
+
+/// [`body_limit`] where the host routes the decoded path (`HostOptions::decodes_paths`, the Mac): the larger body goes to exactly the
+/// requests the route then reads as a run's start or a mirror send, decoded by the same rule ([`percent_decoded`]); a target that does
+/// not decode gets the small limit (its route answers 400).
+pub fn body_limit_for(head: &HttpRequest, key: &str, allow_loopback: bool, decodes_paths: bool) -> usize {
     if head.headers.contains_key("origin")
         || !peer_allowed(&head.remote_address, allow_loopback)
         || head.headers.get(protocol::HEADER).map(String::as_str) != Some("2")
@@ -680,8 +720,16 @@ pub fn body_limit(head: &HttpRequest, key: &str, allow_loopback: bool) -> usize 
         return 0;
     }
     // A run's start and the mirror's send (`mirror::routes::is_submit`) may bring attachments.
+    // A query never makes either route; without one, the path the route reads.
+    let routed = if head.target.contains('?') {
+        None
+    } else if decodes_paths {
+        percent_decoded(&head.target)
+    } else {
+        Some(head.target.clone())
+    };
     if head.method == "POST"
-        && (head.target == format!("{}runs", protocol::PATH_PREFIX) || crate::remote::mirror::routes::is_submit(&head.target))
+        && routed.is_some_and(|path| path == format!("{}runs", protocol::PATH_PREFIX) || crate::remote::mirror::routes::is_submit(&path))
     {
         mighty_run::attachments::MAXIMUM_REQUEST_BYTES
     } else {

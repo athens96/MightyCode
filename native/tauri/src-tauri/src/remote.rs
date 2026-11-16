@@ -340,6 +340,8 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
         addresses,
         clock: mighty_remote::remote::host::monotonic(),
         windows_host: !platform.profile.remote_confines_agents,
+        decodes_paths: platform.profile.remote_decodes_request_paths,
+        graph_runs: platform.profile.remote_graph_runs,
         // A client's continuation adds its card's rules to this PC's agy settings, counted with this PC's own panes.
         antigravity_rules: Some(runs.service.antigravity_rules().clone()),
         system_folder: system_folder(platform),

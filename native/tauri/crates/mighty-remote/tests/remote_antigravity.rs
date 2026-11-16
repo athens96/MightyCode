@@ -151,6 +151,8 @@ async fn a_remote_panes_host_puts_the_rules_in_its_own_settings_and_refuses_forg
         addresses: None,
         clock: mighty_remote::remote::host::monotonic(),
         windows_host: true,
+        decodes_paths: false,
+        graph_runs: true,
         antigravity_rules: Some(rules.clone()),
         system_folder: None,
         network: Arc::new(FakeNetwork::default()),

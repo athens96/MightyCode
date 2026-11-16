@@ -1,6 +1,6 @@
 //! C# "delegation: the pipe carries delegation calls and answers as the Mac does" (DelegationAppVerification.cs:98-165, Verification.cs
-//! L672), in a binary of its own: it waits out a 31 s answer. On Windows over the named pipe; elsewhere over the in-memory transport
-//! until the Mac's socket (its stage).
+//! L672), in a binary of its own: it waits out a 31 s answer. Over the OS's own transport: Windows' named pipe, the Mac's Unix socket
+//! (M-C: it runs on the Mac now that the socket is there; its line framing is the Mac's own).
 
 mod delegation_io;
 
@@ -29,11 +29,11 @@ impl TerminalHandler for Owner {
 }
 
 fn transport() -> (Arc<dyn AgentIoListener>, Arc<dyn AgentIoConnector>) {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
-        (Arc::new(mighty_platform_windows::NamedPipeListener::new()), Arc::new(mighty_platform_windows::NamedPipeConnector))
+        delegation_io::os_transport()
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let io = mighty_platform::fake::FakeAgentIo::default();
         (Arc::new(io.clone()), Arc::new(io))
