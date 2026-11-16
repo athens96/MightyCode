@@ -461,8 +461,9 @@ mod tests {
     #[tokio::test]
     async fn the_group_is_ended_while_the_exited_shell_still_holds_its_id() {
         let host = pty_host();
-        // No job control: the background sleep stays in the shell's own process group.
-        let script = "/bin/sleep 30 & print -r -- SHELL=$$ BG=$!; exit 0";
+        // No job control: the background sleep stays in the shell's own process group; it ignores the hangup the terminal sends when
+        // the shell (the session's leader) exits, so only the close's group kill ends it.
+        let script = "(trap '' HUP; exec /bin/sleep 30) & print -r -- SHELL=$$ BG=$!; exit 0";
         let mut session = host.open(request(host.shell_arguments(Path::new("/bin/zsh"), Some(script), true))).await.unwrap();
         let seen = read_until(&mut session.output, "BG=").await;
         let number = |key: &str| -> i32 {
