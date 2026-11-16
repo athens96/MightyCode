@@ -45,6 +45,10 @@ http-body-util = "0.1"
 native-tls = "0.2"
 tokio-native-tls = "0.3"
 
+# M-H: the update transport's checks against a loopback server (the same line as M-A's).
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "io-util"] }
+
 # Step 0 lists the parts' dependencies before their code uses them; this table goes once every one is used.
 [lints.cargo]
 unused_dependencies = "allow"
