@@ -4,10 +4,9 @@
 //! only, 5 at most), a capped manifest read, a package streamed to its file with progress, its limit and cancel, each within its time; no
 //! URL ever in an error or `Debug`.
 //!
-//! HTTP/1.1 runs here over hyper; the connection — TCP, the system proxy's `CONNECT` tunnel, TLS — is a [`Connect`]. **The integrator
-//! backs it with M-C's `http::MacHttps`** (the system proxy through `proxy::MacProxy`, the tunnel, native-tls): a `Connect` impl over
-//! M-C's private `connect(&Target, &Proxy)` after `proxy.resolve(origin)`, so there is one HTTPS stack. Until then
-//! [`update_transport`] uses [`DirectTls`], a temporary straight TCP + native-tls connection without the proxy.
+//! HTTP/1.1 runs here over hyper; the connection — TCP, the system proxy's `CONNECT` tunnel, TLS — is a [`Connect`], M-C's
+//! [`crate::http::MacHttps`] in the app (the system proxy through `proxy::MacProxy`, the tunnel, native-tls at TLS 1.2 or later), so the
+//! Mac has one HTTPS stack.
 
 use std::io::Write as _;
 use std::sync::Arc;
@@ -29,29 +28,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
 /// the system's proxy for `https://host:port/` when it names one.
 pub trait Connect: Send + Sync {
     fn connect<'a>(&'a self, host: &'a str, port: u16) -> BoxFuture<'a, Result<Box<dyn Stream>>>;
-}
-
-/// TEMPORARY (M-H, until the integrator wires M-C's `MacHttps` as the [`Connect`]): straight TCP and native-tls, no proxy.
-#[derive(Debug, Default)]
-pub struct DirectTls;
-
-impl Connect for DirectTls {
-    fn connect<'a>(&'a self, host: &'a str, port: u16) -> BoxFuture<'a, Result<Box<dyn Stream>>> {
-        Box::pin(async move {
-            let stream = tokio::net::TcpStream::connect((host, port)).await?;
-            let _ = stream.set_nodelay(true);
-            // Review M-H 3: TLS 1.2 at the least.
-            let connector = native_tls::TlsConnector::builder()
-                .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
-                .build()
-                .map_err(|_| PlatformError::Refused("TLS is not available".into()))?;
-            let stream = tokio_native_tls::TlsConnector::from(connector)
-                .connect(host, stream)
-                .await
-                .map_err(|_| PlatformError::Refused("the TLS handshake failed".into()))?;
-            Ok(Box::new(stream) as Box<dyn Stream>)
-        })
-    }
 }
 
 /// Where one GET goes.
@@ -260,9 +236,9 @@ impl UpdateTransport for MacUpdateTransport {
     }
 }
 
-/// The Mac's `UpdateTransport` (over [`DirectTls`] until the integrator hands it M-C's connection).
+/// The Mac's `UpdateTransport`, over M-C's HTTPS (the system proxy and TLS).
 pub fn update_transport() -> Arc<dyn UpdateTransport> {
-    Arc::new(MacUpdateTransport::new(Arc::new(DirectTls)))
+    Arc::new(MacUpdateTransport::new(Arc::new(crate::http::MacHttps::new())))
 }
 
 #[cfg(test)]

@@ -26,6 +26,8 @@ use mighty_platform::{BoxFuture, HttpsSend, PlatformError, Proxy, ProxyResolver,
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use tokio::net::TcpStream;
 
+use crate::update_transport::{Connect, Stream};
+
 /// A connection hyper speaks over: plain TCP, or TLS on it.
 trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 
@@ -315,6 +317,19 @@ impl HttpsSend for MacHttps {
     }
 }
 
+/// M-H's update transport speaks HTTP/1.1 over this connection (one HTTPS stack, Mac stage integration): the system's proxy for
+/// `https://host:port/`, its `CONNECT` tunnel when it names one, then TLS 1.2 or later checked against the system's trust.
+impl Connect for MacHttps {
+    fn connect<'a>(&'a self, host: &'a str, port: u16) -> BoxFuture<'a, Result<Box<dyn Stream>>> {
+        Box::pin(async move {
+            let target = Target { post: false, secure: true, host: host.to_ascii_lowercase(), port, path: "/".into() };
+            let route = self.proxy.resolve(&target.origin()).await.unwrap_or(Proxy::Direct);
+            let (stream, _) = connect(&target, &route).await?;
+            Ok(Box::new(stream) as Box<dyn Stream>)
+        })
+    }
+}
+
 /// The Platform's HTTPS (the push's POST, and a GET under the same rules).
 pub fn https() -> Arc<dyn HttpsSend> {
     Arc::new(MacHttps::new())
@@ -526,6 +541,20 @@ mod tests {
         assert!(matches!(error, PlatformError::Refused(_)) && !error.to_string().contains("SECRET"), "{error}");
         let head = asked.lock().unwrap()[0].clone();
         assert!(head.starts_with("CONNECT api.example.invalid:443 HTTP/1.1\r\n") && !head.contains("SECRET"), "{head}");
+    }
+
+    /// The update transport's connection (Mac stage integration: M-H over M-C) asks the system proxy about the update host's origin and
+    /// opens its `CONNECT` tunnel to that host and port before TLS; a proxy that refuses it fails the connection.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_update_transport_tunnels_through_the_system_proxy() {
+        let (refusing, asked) = server("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n").await;
+        let proxy = FakeProxy::default();
+        proxy.set(Proxy::Http { host: "127.0.0.1".into(), port: refusing });
+        let https = MacHttps::with_proxy(Arc::new(proxy));
+        let error = Connect::connect(&https, "Updates.Example.invalid", 8443).await.err().expect("the proxy refused the tunnel");
+        assert!(matches!(error, PlatformError::Refused(_)), "{error}");
+        let head = asked.lock().unwrap()[0].clone();
+        assert!(head.starts_with("CONNECT updates.example.invalid:8443 HTTP/1.1\r\n"), "{head}");
     }
 
     /// A 2xx GET body past the cap is refused; the whole request ends within its timeout.
