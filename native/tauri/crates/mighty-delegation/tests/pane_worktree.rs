@@ -492,7 +492,14 @@ mod git {
         assert!(pw::origin(&git, &pane).await.is_none(), "no origin");
     }
 
+    /// A directory link elsewhere than Windows: a symbolic link.
+    #[cfg(not(windows))]
+    async fn junction(link: &std::path::Path, target: &std::path::Path) {
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
     /// `mklink /J link target`, through cmd.exe and the process host.
+    #[cfg(windows)]
     async fn junction(link: &std::path::Path, target: &std::path::Path) {
         let comspec = std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
         let (link, target) = (link.to_string_lossy().into_owned(), target.to_string_lossy().into_owned());

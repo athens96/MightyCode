@@ -196,6 +196,10 @@ mod checks {
             "a:b",
             "trailing.",
         ] {
+            // Device names are refused on Windows only (`is_safe_session_id`): a folder named so is plain elsewhere.
+            if !cfg!(windows) && ["nul", "CON", "com1.txt", "LPT9"].contains(&unsafe_id) {
+                continue;
+            }
             assert!(
                 !is_safe_session_id(unsafe_id)
                     && matches!(maker.create(unsafe_id, &place.repo(), "t").await, ChildWorktreeOutcome::Failed(_)),
@@ -811,10 +815,14 @@ mod checks {
                     && std::fs::read_to_string(combine(&nested, "side.txt")).unwrap() == "side work\n",
                 "the nested worktree is named, and untouched"
             );
-            // The child's folder written another way is the same worktree.
-            let other_way = format!("{}/", child.worktree_path.to_uppercase().replace('\\', "/"));
+            // The child's folder written another way is the same worktree (in another case only where paths ignore case: Windows).
+            let (other_way, repo) = if cfg!(windows) {
+                (format!("{}/", child.worktree_path.to_uppercase().replace('\\', "/")), place.repo().to_lowercase())
+            } else {
+                (format!("{}/", child.worktree_path), place.repo())
+            };
             assert_eq!(
-                cleanup::nested_worktrees(&place.git(), &place.paths(), &other_way, &place.repo().to_lowercase()).await.map(|n| n.len()),
+                cleanup::nested_worktrees(&place.git(), &place.paths(), &other_way, &repo).await.map(|n| n.len()),
                 Some(1),
                 "paths compare without regard to case or separator"
             );

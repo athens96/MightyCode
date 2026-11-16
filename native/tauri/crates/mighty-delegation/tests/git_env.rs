@@ -16,6 +16,12 @@ async fn inherited_git_variables_are_dropped_and_no_hook_runs() {
     let hooks = Path::new(&place.repo()).join(".git").join("hooks");
     std::fs::create_dir_all(&hooks).unwrap();
     std::fs::write(hooks.join("post-checkout"), "#!/bin/sh\necho ran > \"$(git rev-parse --git-common-dir)/hook-ran\"\n").unwrap();
+    // Git runs a hook only when it may execute it (Windows has no such bit).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(hooks.join("post-checkout"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     // SAFETY: this binary's only check, so no other thread reads the environment meanwhile.
     unsafe {
         std::env::set_var("GIT_DIR", Path::new(&place.base()).join("nowhere"));

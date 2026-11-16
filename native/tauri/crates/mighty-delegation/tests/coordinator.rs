@@ -1831,7 +1831,9 @@ mod checks {
                     && fixture.file().children[0].state == ChildState::Reported,
                 "nested after the confirmation named none: nothing is removed, and the answer names it"
             );
-            let written = canonical.canonical(&nested).to_uppercase().replace('\\', "/");
+            // Written another way: in another case only where paths ignore case (Windows).
+            let written =
+                if cfg!(windows) { canonical.canonical(&nested).to_uppercase().replace('\\', "/") } else { canonical.canonical(&nested) };
             assert!(
                 coordinator.discard_from_card("c1", Some(&[written])).await == ChildCardDiscardOutcome::Discarded
                     && !Path::new(&child.worktree_path).exists()
