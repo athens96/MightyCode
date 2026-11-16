@@ -286,13 +286,14 @@ pub fn update_installer() -> Arc<dyn UpdateInstaller> {
 }
 
 /// R6 (plan §7, mac-step0 "H"): a release Mac build writes by default only once M-B's Swift-state round trip (`tools/parity-mac
-/// state-corpus`) proves a Rust save keeps everything the Swift app wrote. Until the integrator turns this on with that gate green, a
-/// release Mac build writes only with `--allow-state-write`, as at Step 0.
-pub const WRITES_BY_DEFAULT: bool = false;
+/// state-corpus`, native-tauri.yml's parity-mac step) proves a Rust save keeps everything the Swift app wrote. On since the Mac stage's
+/// integration, with that gate in the same CI: a release in `/Applications` or `~/Applications` writes (plan §6), anywhere else only
+/// with `--allow-state-write`.
+pub const WRITES_BY_DEFAULT: bool = true;
 
 /// Where a release build counts as installed, for the write policy (src-tauri `startup::installed` through `platform.rs`; plan D7):
 /// the running exe's `Contents/MacOS` when its `.app` sits directly in `/Applications` or `~/Applications` (compared canonically, so a
-/// translocated copy under `/private/var/folders/…/AppTranslocation` never counts). Empty while [`WRITES_BY_DEFAULT`] is off.
+/// translocated copy under `/private/var/folders/…/AppTranslocation` never counts). Empty when [`WRITES_BY_DEFAULT`] is off.
 pub fn install_locations() -> Vec<PathBuf> {
     if !WRITES_BY_DEFAULT {
         return Vec::new();
@@ -316,8 +317,6 @@ pub fn installed_folder(executable: &Path, home: Option<&Path>) -> Option<PathBu
 mod tests {
     use std::time::{Duration, Instant};
 
-    use mighty_platform::{BoxFuture, Child, SpawnRequest};
-
     use super::*;
 
     /// A fresh temporary folder (canonical: `/var` is `/private/var`), deleted when dropped.
@@ -338,26 +337,6 @@ mod tests {
         }
     }
 
-    /// The checks' own detached start (M-A writes the Mac's process host): the program run with exactly the environment given, no
-    /// handle of the test's, in a session of its own.
-    struct StdDetached;
-
-    impl ProcessHost for StdDetached {
-        fn spawn(&self, _request: SpawnRequest) -> BoxFuture<'_, Result<Child>> {
-            Box::pin(async { Err(PlatformError::unsupported("ProcessHost", "spawn")) })
-        }
-        #[allow(clippy::disallowed_methods, reason = "the checks' stand-in for M-A's process host, which this branch does not have")]
-        fn start_detached(&self, request: DetachedRequest) -> Result<u32> {
-            use std::os::unix::process::CommandExt as _;
-            let DetachedEnvironment::Exactly(environment) = request.environment else { panic!("the script's environment is exact") };
-            let mut command = std::process::Command::new(&request.program);
-            command.args(&request.args).current_dir(&request.cwd).env_clear().envs(environment);
-            command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-            command.process_group(0);
-            Ok(command.spawn()?.id())
-        }
-    }
-
     fn mode(path: &Path) -> u32 {
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
@@ -374,13 +353,13 @@ mod tests {
     }
 
     /// AppUpdate.swift:406-425 `launchInstaller`: install.sh 0700, install.log 0600 and empty, the script run by /bin/sh with exactly
-    /// PATH and HOME, its input empty, its output and errors in the log.
+    /// PATH and HOME, its input empty, its output and errors in the log; through M-A's real process host, as the app starts it.
     #[test]
     fn the_install_script_starts_detached_with_only_path_and_home_into_its_log() {
         let folder = Temp::new("launch");
         std::fs::write(folder.0.join(LOG_NAME), "an older run's lines\n").unwrap();
         let script = "#!/bin/sh\nenv | sort\nread line && echo \"read: $line\"\necho oops >&2\necho done\n";
-        MacUpdateInstaller::new(Arc::new(StdDetached)).start_install_script(script, &folder.0).unwrap();
+        MacUpdateInstaller::new(crate::process::process_host()).start_install_script(script, &folder.0).unwrap();
         assert_eq!(std::fs::read_to_string(folder.0.join(SCRIPT_NAME)).unwrap(), script);
         assert_eq!(mode(&folder.0.join(SCRIPT_NAME)), 0o700);
         assert_eq!(mode(&folder.0.join(LOG_NAME)), 0o600);
@@ -395,7 +374,7 @@ mod tests {
 
     #[test]
     fn this_mac_names_its_version_and_access() {
-        let installer = MacUpdateInstaller::new(Arc::new(StdDetached));
+        let installer = MacUpdateInstaller::new(crate::process::process_host());
         let version = installer.system_version().unwrap();
         assert_eq!(version.split('.').count(), 3, "{version}");
         assert!(version.split('.').next().unwrap().parse::<u32>().unwrap() >= 14, "{version}");
@@ -433,7 +412,7 @@ mod tests {
     /// signed and untouched since, and an ad hoc one never meets a team's requirement.
     #[test]
     fn a_bundles_signature_is_checked_strictly_and_against_a_team() {
-        let installer = MacUpdateInstaller::new(Arc::new(StdDetached));
+        let installer = MacUpdateInstaller::new(crate::process::process_host());
         assert_eq!(installer.running_team().unwrap(), None);
         let root = Temp::new("signature");
         let app = unsigned_bundle(&root.0);
@@ -460,7 +439,7 @@ mod tests {
         let target = folder.0.join("target");
         std::fs::write(&target, "untouched").unwrap();
         std::os::unix::fs::symlink(&target, folder.0.join(format!(".{SCRIPT_NAME}.{}", std::process::id()))).unwrap();
-        MacUpdateInstaller::new(Arc::new(StdDetached)).start_install_script("#!/bin/sh\necho done\n", &folder.0).unwrap();
+        MacUpdateInstaller::new(crate::process::process_host()).start_install_script("#!/bin/sh\necho done\n", &folder.0).unwrap();
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "untouched");
         assert_eq!(std::fs::read_to_string(folder.0.join(SCRIPT_NAME)).unwrap(), "#!/bin/sh\necho done\n");
         wait_for(&folder.0.join(LOG_NAME), "done");
@@ -485,7 +464,7 @@ mod tests {
         let bare = home.0.join("Applications/MightyCode");
         std::fs::write(&bare, "").unwrap();
         assert_eq!(installed_folder(&bare, Some(&home.0)), None);
-        // R6: none while the write default waits for M-B's round trip (the test exe is no bundle either way).
+        // The test exe is no bundle in an Applications folder: it never counts as installed.
         assert!(install_locations().is_empty());
     }
 }
