@@ -26,6 +26,8 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std", "block2", "objc2-core-foundation", "objc2-quartz-core", "NSApplication", "NSBitmapImageRep", "NSColor", "NSEvent",
     "NSFont", "NSFontManager", "NSGraphics", "NSImage", "NSImageRep", "NSMenu", "NSMenuItem", "NSPanel", "NSPasteboard", "NSResponder",
     "NSRunningApplication", "NSScreen", "NSView", "NSWindow", "NSWorkspace",
+    # M-A: a secret written as one pasteboard item with its concealed and transient types (clipboard.rs).
+    "NSPasteboardItem",
 ] }
 objc2-web-kit = { version = "0.3", default-features = false, features = [
     "std", "block2", "objc2-app-kit", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration",

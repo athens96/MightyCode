@@ -178,6 +178,7 @@ pub fn fake_catalog(args: &[&str]) -> std::sync::Arc<mighty_run::providers::Prov
 }
 
 /// Whether the process is still running (C# `Alive`): not gone and, on the Mac, not a zombie its parent has yet to reap.
+// Test code only (the no-cfg rule is the product's): a check's own look at a process, each OS by its own calls.
 #[cfg(target_os = "macos")]
 pub fn alive(id: u32) -> bool {
     // SAFETY: signal 0 only checks.

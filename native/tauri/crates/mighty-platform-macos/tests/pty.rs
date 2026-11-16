@@ -129,12 +129,12 @@ async fn a_shell_holding_a_background_job_has_children_and_a_lone_process_does_n
     remove(&folder);
 }
 
-/// Swift `ShellActivityTests.swift:142 "aPidFileCountsOnlyForAProcessBelowTheApp"`, as the Mac host reads it now: Swift named the
-/// shell through a pid file because Ghostty owned the PTY, and counted it only for a process below the app; the app owns the PTY now,
-/// so the shell is the session it opened, and only that session's processes count — never this process, its parent, launchd or an id
-/// that runs nothing.
+/// What replaces Swift `ShellActivityTests.swift:142 "aPidFileCountsOnlyForAProcessBelowTheApp"` (not ported: the Mac host keeps no
+/// pid file). Swift named the shell through a pid file because Ghostty owned the PTY, and counted it only for a process below the
+/// app; the app owns the PTY now, so the terminal's processes are the session it opened: its shell, and never this process, its
+/// parent, launchd or an id that runs nothing.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_pid_file_counts_only_for_a_process_below_the_app() {
+async fn only_the_opened_sessions_processes_count() {
     use mighty_platform_macos::pty::session_members;
     let folder = temp("below");
     let (session, output) = open("/bin/sh", &["-c", "echo up; exec /bin/sleep 20"], &folder).await;
@@ -147,5 +147,25 @@ async fn a_pid_file_counts_only_for_a_process_below_the_app() {
     }
     assert!(session_members(999_999).is_empty(), "an id that runs nothing has no session");
     session.control.close().await.unwrap();
+    remove(&folder);
+}
+
+/// A process that left the session (its own `setsid`) but keeps writing to the terminal never holds the close: the drain reads on for
+/// a second after the close began, then lets go.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_writer_outside_the_session_never_holds_the_close() {
+    let folder = temp("stray-writer");
+    let script = concat!(
+        r#"/usr/bin/perl -e 'use POSIX qw(setsid); exit 0 if fork; setsid(); open(my $f, ">", "stray.pid"); print $f $$; close($f); "#,
+        r#"$| = 1; while (1) { print "x" x 1000, "\n"; select(undef, undef, undef, 0.005) }'; echo started; exec /bin/sleep 30"#,
+    );
+    let (session, output) = open("/bin/sh", &["-c", script], &folder).await;
+    let pid = pid_from(&folder.join("stray.pid")).await;
+    until(|| text(&output).contains("started"), 20_000, "the shell runs").await;
+    let began = std::time::Instant::now();
+    tokio::time::timeout(Duration::from_secs(15), session.control.close()).await.expect("the close returns").unwrap();
+    assert!(began.elapsed() < Duration::from_secs(10), "{:?}", began.elapsed());
+    // SAFETY: ends the fixture's stray writer, which left the session on purpose.
+    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
     remove(&folder);
 }

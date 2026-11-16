@@ -21,7 +21,11 @@ async fn a_detached_process_has_its_own_session_and_exactly_its_environment() {
     environment.insert("MIGHTY_ONLY".to_string(), "value".to_string());
     let request = DetachedRequest {
         program: "/bin/sh".into(),
-        args: vec!["-c".into(), "/usr/bin/env > env.txt; pwd -P > pwd.txt; echo $$ > done.pid".into()],
+        args: vec![
+            "-c".into(),
+            "/usr/bin/env > env.txt; pwd -P > pwd.txt; /usr/sbin/lsof -a -p $$ -d 0,1,2 -Fn > fds.txt; echo $$ > done.pid; /bin/sleep 3"
+                .into(),
+        ],
         cwd: directory.clone(),
         environment: DetachedEnvironment::Exactly(environment),
         hidden: true,
@@ -29,6 +33,11 @@ async fn a_detached_process_has_its_own_session_and_exactly_its_environment() {
     let pid = host.start_detached(request).unwrap();
     let written = pid_from(&directory.join("done.pid")).await;
     assert_eq!(written, pid);
+    // SAFETY: reads a process's session while it sleeps.
+    assert_eq!(unsafe { libc::getsid(pid as libc::pid_t) }, pid as libc::pid_t, "it leads a session of its own");
+    let fds = std::fs::read_to_string(directory.join("fds.txt")).unwrap();
+    let names: Vec<&str> = fds.lines().filter(|line| line.starts_with('n')).collect();
+    assert_eq!(names, ["n/dev/null"; 3], "its standard streams are /dev/null: {fds:?}");
     let env = std::fs::read_to_string(directory.join("env.txt")).unwrap();
     let names: Vec<&str> = env.lines().filter_map(|line| line.split_once('=').map(|(name, _)| name)).collect();
     assert!(names.iter().all(|name| ["MIGHTY_ONLY", "PWD", "SHLVL", "_", "OLDPWD"].contains(name)), "{names:?}");

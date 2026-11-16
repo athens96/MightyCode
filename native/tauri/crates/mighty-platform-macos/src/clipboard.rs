@@ -9,9 +9,10 @@
 use std::sync::Arc;
 
 use mighty_platform::{Clipboard, PlatformError, Result};
-use objc2::rc::Retained;
-use objc2_app_kit::{NSPasteboard, NSPasteboardContentsOptions, NSPasteboardTypeString};
-use objc2_foundation::NSString;
+use objc2::rc::{Retained, autoreleasepool};
+use objc2::runtime::ProtocolObject;
+use objc2_app_kit::{NSPasteboard, NSPasteboardContentsOptions, NSPasteboardItem, NSPasteboardTypeString, NSPasteboardWriting};
+use objc2_foundation::{NSArray, NSString};
 
 /// What clipboard managers skip (nspasteboard.org).
 const CONCEALED: &str = "org.nspasteboard.ConcealedType";
@@ -59,36 +60,48 @@ fn string_type() -> &'static NSString {
     unsafe { NSPasteboardTypeString }
 }
 
+/// Each call runs in an autorelease pool of its own: the callers are worker threads (tokio's blocking pool) that have none, where the
+/// pasteboard's autoreleased objects would otherwise pile up for the thread's life.
 impl Clipboard for MacClipboard {
     fn read_text(&self) -> Result<Option<String>> {
-        Ok(self.board().stringForType(string_type()).map(|text| text.to_string()))
+        autoreleasepool(|_| Ok(self.board().stringForType(string_type()).map(|text| text.to_string())))
     }
 
     fn write_text(&self, text: &str) -> Result<()> {
-        let board = self.board();
-        board.clearContents();
-        if !board.setString_forType(&NSString::from_str(text), string_type()) {
-            return Err(PlatformError::Refused("the pasteboard did not take the text".into()));
-        }
-        Ok(())
+        autoreleasepool(|_| {
+            let board = self.board();
+            board.clearContents();
+            if !board.setString_forType(&NSString::from_str(text), string_type()) {
+                return Err(PlatformError::Refused("the pasteboard did not take the text".into()));
+            }
+            Ok(())
+        })
     }
 
+    /// One pasteboard item holding the text and both markers, written at once (Swift's `RemoteSettingsView.swift:211-215`), so no
+    /// clipboard watcher ever sees the text without them.
     fn write_secret(&self, text: &str) -> Result<()> {
-        let board = self.board();
-        board.prepareForNewContentsWithOptions(NSPasteboardContentsOptions::CurrentHostOnly);
-        let written = board.setString_forType(&NSString::from_str(text), string_type())
-            && board.setString_forType(&NSString::from_str(""), &NSString::from_str(CONCEALED))
-            && board.setString_forType(&NSString::from_str(""), &NSString::from_str(TRANSIENT));
-        if !written {
-            board.clearContents();
-            return Err(PlatformError::Refused("the pasteboard did not take the text".into()));
-        }
-        Ok(())
+        autoreleasepool(|_| {
+            let board = self.board();
+            board.prepareForNewContentsWithOptions(NSPasteboardContentsOptions::CurrentHostOnly);
+            let item = NSPasteboardItem::new();
+            let prepared = item.setString_forType(&NSString::from_str(text), string_type())
+                && item.setString_forType(&NSString::from_str(""), &NSString::from_str(CONCEALED))
+                && item.setString_forType(&NSString::from_str(""), &NSString::from_str(TRANSIENT));
+            let item: Retained<ProtocolObject<dyn NSPasteboardWriting>> = ProtocolObject::from_retained(item);
+            if !prepared || !board.writeObjects(&NSArray::from_retained_slice(&[item])) {
+                board.clearContents();
+                return Err(PlatformError::Refused("the pasteboard did not take the text".into()));
+            }
+            Ok(())
+        })
     }
 
     fn clear(&self) -> Result<()> {
-        self.board().clearContents();
-        Ok(())
+        autoreleasepool(|_| {
+            self.board().clearContents();
+            Ok(())
+        })
     }
 }
 

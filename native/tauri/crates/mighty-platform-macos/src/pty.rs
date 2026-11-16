@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use mighty_platform::{BoxFuture, PlatformError, PtyControl, PtyHost, PtyRequest, PtySession, PtySize, Result};
 use tokio::sync::{mpsc, watch};
 
-use crate::process::{cstring, forget_group, last_error, lock, pipe_pair, reap, track_group};
+use crate::process::{Exited, FORK, cstring, decode, forget_session, last_error, lock, pipe_pair, reap, track_session, wait_exited};
 
 /// The most input written at once, in UTF-16 units of its text (the port's 65,536, C# `TryWrite`).
 const MAXIMUM_WRITE: usize = 65_536;
@@ -40,6 +40,8 @@ const WRITE_FOR: Duration = Duration::from_secs(2);
 const READY_WAIT: Duration = Duration::from_secs(30);
 /// How long a close waits for the shell's exit after its SIGKILL.
 const CLOSE_WAIT: Duration = Duration::from_secs(3);
+/// How long the output drain reads on after the shell's exit or the close's start.
+const DRAIN_AFTER_END: Duration = Duration::from_secs(1);
 
 /// The Mac's `PtyHost`.
 pub fn pty_host() -> Arc<dyn PtyHost> {
@@ -183,29 +185,43 @@ async fn start(request: PtyRequest) -> Result<PtySession> {
     let (pid, master, ready_read) = fork(&request)?;
     // SAFETY: an open descriptor.
     unsafe {
-        libc::fcntl(master.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
         let flags = libc::fcntl(master.as_raw_fd(), libc::F_GETFL);
         libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
     }
-    track_group(pid);
+    track_session(pid);
     let master = Arc::new(master);
     let exited = Arc::new(AtomicBool::new(false));
     let closing = Arc::new(AtomicBool::new(false));
     let (exit_sender, exit) = watch::channel(None);
+    // Dropped by the close once the session was ended, or with the terminal: until then an exited shell stays a zombie, so the session
+    // and group ids `end_session` signals are never another process's.
+    let (release, released) = std::sync::mpsc::channel::<()>();
     let reaped = exited.clone();
     let reaper = std::thread::Builder::new().name("mighty-pty-reaper".into()).spawn(move || {
-        let code = reap(pid);
-        reaped.store(true, Ordering::SeqCst);
-        forget_group(pid);
-        exit_sender.send_replace(Some(code));
+        let watched = wait_exited(pid);
+        let code = match watched {
+            Exited::Status(status) => {
+                reaped.store(true, Ordering::SeqCst);
+                exit_sender.send_replace(Some(decode(status)));
+                let _ = released.recv();
+                reap(pid);
+                None
+            }
+            // No status before the reap (it exited before the watch began, or could not be watched): reaped now to learn it.
+            Exited::Before | Exited::Unwatched => Some(reap(pid)),
+        };
+        forget_session(pid);
+        if let Some(code) = code {
+            reaped.store(true, Ordering::SeqCst);
+            exit_sender.send_replace(Some(code));
+        }
     });
     let reaper = match reaper {
         Ok(reaper) => reaper,
         Err(error) => {
-            // SAFETY: the session this open made; nothing could wait for it.
-            unsafe { libc::kill(-pid, libc::SIGKILL) };
+            end_session(pid);
             reap(pid);
-            forget_group(pid);
+            forget_session(pid);
             return Err(PlatformError::Io(error));
         }
     };
@@ -264,7 +280,7 @@ async fn start(request: PtyRequest) -> Result<PtySession> {
     let terminal = Terminal {
         pid,
         master,
-        lifecycle: Mutex::new(Lifecycle { writes: Some(writes), threads: Some([reader, writer, reaper]) }),
+        lifecycle: Mutex::new(Lifecycle { writes: Some(writes), release: Some(release), threads: Some([reader, writer, reaper]) }),
         closing,
         exited,
         exit,
@@ -297,6 +313,8 @@ fn fork(request: &PtyRequest) -> Result<(libc::pid_t, OwnedFd, OwnedFd)> {
     // The child closes its copy of `ready` (with every descriptor from 3) once its handlers are reset, just before exec.
     let (ready_read, ready_write) = pipe_pair()?;
     let mut master: RawFd = -1;
+    // No descriptor of this crate is made while the child is forked, and the master is close-on-exec before another fork can run.
+    let forking = FORK.write().unwrap_or_else(|poisoned| poisoned.into_inner());
     // SAFETY: sigset_t values sigfillset/sigemptyset fill in; forkpty with a valid winsize. The child only makes async-signal-safe
     // calls on memory made before the fork, then execs or _exits.
     let (pid, fork_error) = unsafe {
@@ -338,9 +356,13 @@ fn fork(request: &PtyRequest) -> Result<(libc::pid_t, OwnedFd, OwnedFd)> {
             libc::_exit(127);
         }
         let error = io::Error::last_os_error();
+        if pid > 0 {
+            libc::fcntl(master, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
         libc::pthread_sigmask(libc::SIG_SETMASK, &previous, std::ptr::null_mut());
         (pid, error)
     };
+    drop(forking);
     drop(ready_write);
     if pid < 0 {
         return Err(PlatformError::Io(fork_error));
@@ -352,13 +374,22 @@ fn fork(request: &PtyRequest) -> Result<(libc::pid_t, OwnedFd, OwnedFd)> {
 /// The output drain (Swift `drain`): reads the master until every holder of the terminal closed it (end of file or EIO), or — once
 /// the shell has exited — until nothing more is there (Swift's `exited` drains, then closes the master). While the output's 64 chunks
 /// are all taken up it waits, but never once the close has begun: from then a chunk that finds no room is dropped, so a close never
-/// waits on a consumer. When nobody takes the output any more it keeps reading and drops what it reads.
+/// waits on a consumer. When nobody takes the output any more it keeps reading and drops what it reads. From the shell's exit or the
+/// close's start it reads for one more second at most, so a process outside the session that keeps writing to the terminal never
+/// holds the close.
 fn drain(master: RawFd, exited: &AtomicBool, closing: &AtomicBool, output: mpsc::Sender<Vec<u8>>) {
     let mut sender = Some(output);
     let mut buffer = vec![0u8; 16_384];
+    let mut ending: Option<Instant> = None;
     loop {
         // Read before looking again: everything the shell wrote before it exited is in the master by the time its exit is seen.
         let ended = exited.load(Ordering::SeqCst);
+        if ended || closing.load(Ordering::SeqCst) {
+            let since = *ending.get_or_insert_with(Instant::now);
+            if since.elapsed() >= DRAIN_AFTER_END {
+                return;
+            }
+        }
         // SAFETY: a buffer of that length on the open master.
         let read = unsafe { libc::read(master, buffer.as_mut_ptr().cast(), buffer.len()) };
         if read > 0 {
@@ -424,18 +455,39 @@ fn write_all(master: RawFd, mut bytes: &[u8], exited: &AtomicBool) -> bool {
     true
 }
 
-/// SIGKILL to every process of the session and to the shell's group (the kill-on-close job's counterpart).
-fn end_session(session: libc::pid_t) {
-    for pid in session_members(session) {
-        // SAFETY: a signal to a process of the terminal's session.
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+/// Whether `pid` is a zombie (exited, not yet reaped by its parent).
+fn zombie(pid: u32) -> bool {
+    // SAFETY: a plain struct proc_pidinfo fills.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: a buffer of `size` bytes.
+    let read = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDTBSDINFO, 0, (&raw mut info).cast(), size) };
+    // SZOMB (sys/proc.h).
+    read == size && info.pbi_status == 5
+}
+
+/// SIGKILL to every process of the session and to the shell's group (the kill-on-close job's counterpart), in up to three passes, until
+/// no process of the session but a zombie is left (one forked between the listing and the signals is caught by the next pass).
+pub(crate) fn end_session(session: libc::pid_t) {
+    for pass in 0..3 {
+        let members: Vec<u32> = session_members(session).into_iter().filter(|pid| !zombie(*pid)).collect();
+        if members.is_empty() && pass > 0 {
+            return;
+        }
+        for pid in members {
+            // SAFETY: a signal to a process of the terminal's session.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        }
+        // SAFETY: a signal to the group the shell leads.
+        unsafe { libc::kill(-session, libc::SIGKILL) };
+        std::thread::sleep(Duration::from_millis(20));
     }
-    // SAFETY: a signal to the group the shell leads.
-    unsafe { libc::kill(-session, libc::SIGKILL) };
 }
 
 struct Lifecycle {
     writes: Option<SyncSender<Vec<u8>>>,
+    /// Dropped once the session was ended: the reaper may then reap the shell.
+    release: Option<std::sync::mpsc::Sender<()>>,
     /// The output drain, the input writer and the reaper, joined by the close.
     threads: Option<[JoinHandle<()>; 3]>,
 }
@@ -521,6 +573,7 @@ impl PtyControl for Terminal {
             let mut state = lock(&self.lifecycle);
             if !self.closing.swap(true, Ordering::SeqCst) {
                 let writes = state.writes.take();
+                let release = state.release.take();
                 let threads = state.threads.take();
                 let finished = self.done.clone();
                 let (pid, exited) = (self.pid, self.exited.clone());
@@ -530,6 +583,8 @@ impl PtyControl for Terminal {
                     }
                     drop(writes);
                     end_session(pid);
+                    // The session is ended: an exited shell may be reaped now.
+                    drop(release);
                     let began = Instant::now();
                     while !exited.load(Ordering::SeqCst) && began.elapsed() < CLOSE_WAIT {
                         std::thread::sleep(Duration::from_millis(5));

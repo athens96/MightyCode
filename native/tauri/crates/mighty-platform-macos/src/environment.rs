@@ -2,25 +2,29 @@
 //! `mighty_platform::environment` (`ShellEnvironment`: never fails, 4 s, reused 10 s).
 //!
 //! `/bin/zsh -ilc "printf '\0MIGHTY_ENV_<nonce>\0'; /usr/bin/env -0; printf '\0MIGHTY_END_<nonce>\0'"` with the app's environment
-//! exactly (Swift's `ProviderService.runtimeEnvironment`), in the workspace's folder (else the home), within 4 s and 1 MB. As Swift
-//! does, the Mac captures in the workspace's folder, so a per-project shell setup (direnv, a `.nvmrc` hook) is the CLI's there too;
-//! Windows captures once in the home (C#'s rule). Requests of one moment share a capture (a 50 ms coalesce before any credential is
-//! read); a result is reused 10 s per folder, at most 64 folders; a forced resolve joins only a capture that has not started yet. Only
-//! the frame's markers are in the shell's arguments; startup chatter outside the frame is not parsed, and neither stream is logged.
+//! exactly (Swift's `ProviderService.runtimeEnvironment`), in the user's home, within 4 s and 1 MB. **A deliberate difference from
+//! Swift**, whose resolver captured in the workspace's folder: one capture in the home serves every workspace, as on Windows (C#'s
+//! rule) — a login shell started in a cloned repository would run that repository's shell hooks (a `.env` an oh-my-zsh plugin sources,
+//! direnv), and one workspace's capture would become every terminal's `current()`. Requests of one moment share a capture (a 50 ms
+//! coalesce before any credential is read); a result is reused 10 s; a forced resolve joins only a capture that has not started yet,
+//! and a capture superseded or invalidated is ended with its shell. Only the frame's markers are in the shell's arguments; startup
+//! chatter outside the frame is not parsed, and neither stream is logged.
 //! A row without `=`, a name holding one, a repeated name or a missing or empty PATH refuses the capture; a refused, failed or late
 //! capture falls back to the app's environment. The login PATH ends with the installers' folders (`~/.local/bin`,
 //! `~/.npm-global/bin`, `~/.bun/bin`, `/opt/homebrew/bin`, `/usr/local/bin`) for the real environment only.
 
-use std::collections::{BTreeMap, HashMap};
-use std::path::{Component, Path, PathBuf};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use mighty_platform::process::ChildReader;
 use mighty_platform::{BoxFuture, CliEnvironment, EnvironmentSource, ProcessHost, ShellEnvironment, SpawnRequest};
+use tokio::io::AsyncReadExt;
 use tokio::sync::watch;
 
-use crate::process::lock;
+use crate::process::{CloseOnDrop, lock};
 
 /// The capture's bound (Swift's `timeout: 4`).
 pub const TIMEOUT: Duration = Duration::from_secs(4);
@@ -29,9 +33,7 @@ pub const CACHE_FOR: Duration = Duration::from_secs(10);
 /// The most a capture may print.
 pub const MAXIMUM_OUTPUT: usize = 1_048_576;
 /// Requests of one refresh share a capture: it waits this long before it starts.
-const COALESCE: Duration = Duration::from_millis(50);
-/// The most folders kept.
-const MAXIMUM_ENTRIES: usize = 64;
+pub const COALESCE: Duration = Duration::from_millis(50);
 
 /// The Mac's `ShellEnvironment` over the Mac process host.
 pub fn shell_environment() -> Arc<dyn ShellEnvironment> {
@@ -62,9 +64,10 @@ pub fn appending(folders: &[String], path: &str) -> String {
 }
 
 /// Swift `ProviderService.runtimeEnvironment`: this process's environment with the installers' folders and the system's after its
-/// PATH, each once.
+/// PATH, each once. A variable whose name or value is not UTF-8 is left out (`std::env::vars` would panic on it).
 pub fn runtime_environment(home: &Path) -> BTreeMap<String, String> {
-    let mut environment: BTreeMap<String, String> = std::env::vars().collect();
+    let mut environment: BTreeMap<String, String> =
+        std::env::vars_os().filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?))).collect();
     let home = home.to_string_lossy();
     let extra = [
         format!("{home}/.local/bin"),
@@ -122,9 +125,12 @@ pub struct EnvironmentOptions {
     /// The capture's environment and the fallback; None: this process's ([`runtime_environment`]).
     pub base: Option<BTreeMap<String, String>>,
     pub shell: PathBuf,
+    /// The folder every capture runs in.
     pub home: PathBuf,
     pub timeout: Duration,
     pub cache_for: Duration,
+    /// How long requests are gathered before a capture starts ([`COALESCE`]).
+    pub coalesce: Duration,
     /// Folders the login PATH ends with; None: the installers' ([`well_known_folders`]) for the real environment, none for a given one.
     pub appended: Option<Vec<String>>,
 }
@@ -137,12 +143,30 @@ impl Default for EnvironmentOptions {
             home: dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
             timeout: TIMEOUT,
             cache_for: CACHE_FOR,
+            coalesce: COALESCE,
             appended: None,
         }
     }
 }
 
-/// One folder's capture (Swift's `Entry`).
+/// Reads a pipe to its end, None past `limit` bytes.
+async fn read_capped(reader: Option<ChildReader>, limit: usize) -> Option<Vec<u8>> {
+    let mut reader = reader?;
+    let mut out = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let read = reader.read(&mut buffer).await.ok()?;
+        if read == 0 {
+            return Some(out);
+        }
+        if out.len() + read > limit {
+            return None;
+        }
+        out.extend_from_slice(&buffer[..read]);
+    }
+}
+
+/// The capture (Swift's `Entry`).
 struct Entry {
     id: u64,
     created: Instant,
@@ -158,7 +182,7 @@ struct Inner {
     processes: Arc<dyn ProcessHost>,
     options: EnvironmentOptions,
     appended: Vec<String>,
-    entries: Mutex<HashMap<PathBuf, Entry>>,
+    entry: Mutex<Option<Entry>>,
     last: Mutex<Option<CliEnvironment>>,
     next: AtomicU64,
 }
@@ -177,7 +201,7 @@ impl MacShellEnvironment {
                 processes,
                 options,
                 appended,
-                entries: Mutex::new(HashMap::new()),
+                entry: Mutex::new(None),
                 last: Mutex::new(None),
                 next: AtomicU64::new(1),
             }),
@@ -194,18 +218,13 @@ impl Inner {
         CliEnvironment { values: self.base(), source: EnvironmentSource::ProcessFallback }
     }
 
-    /// The folder a resolve captures in and caches by: the workspace's, else the home, without `.` or repeated separators.
-    fn key(&self, workspace: Option<&Path>) -> PathBuf {
-        let folder = workspace.unwrap_or(&self.options.home);
-        folder.components().filter(|component| !matches!(component, Component::CurDir)).collect()
+    fn is_current(&self, id: u64) -> bool {
+        lock(&self.entry).as_ref().is_some_and(|entry| entry.id == id)
     }
 
-    fn is_current(&self, key: &Path, id: u64) -> bool {
-        lock(&self.entries).get(key).is_some_and(|entry| entry.id == id)
-    }
-
-    /// The capture itself: None when the shell failed, was late, exited non-zero or printed no well-framed environment.
-    async fn capture(&self, folder: &Path) -> Option<CliEnvironment> {
+    /// The capture itself, in the home: None when the shell failed, was late, exited non-zero or printed no well-framed environment.
+    /// The shell is ended and closed however the capture ends — a capture dropped half-way (superseded, invalidated) too.
+    async fn capture(&self) -> Option<CliEnvironment> {
         let base = self.base();
         let nonce = nonce();
         let (start, end) = (format!("MIGHTY_ENV_{nonce}"), format!("MIGHTY_END_{nonce}"));
@@ -215,30 +234,43 @@ impl Inner {
         let request = SpawnRequest {
             program: self.options.shell.clone(),
             args: vec!["-ilc".into(), command],
-            cwd: folder.to_path_buf(),
+            cwd: self.options.home.clone(),
             env: base,
             env_remove: removed,
             shell_command: None,
         };
-        let captured =
-            mighty_platform::process::capture(self.processes.as_ref(), request, None, self.options.timeout, MAXIMUM_OUTPUT).await.ok()?;
-        if captured.exit_code != 0 {
+        let mut child = self.processes.spawn(request).await.ok()?;
+        let guard = CloseOnDrop(Some(child.control()));
+        let control = child.control();
+        drop(child.stdin.take());
+        let (stdout, stderr) = (child.stdout.take(), child.stderr.take());
+        let work = async {
+            let (output, _errors, code) =
+                tokio::join!(read_capped(stdout, MAXIMUM_OUTPUT), read_capped(stderr, MAXIMUM_OUTPUT), control.wait());
+            Some((output?, code.ok()?))
+        };
+        let outcome = tokio::time::timeout(self.options.timeout, work).await.ok().flatten();
+        if outcome.is_none() {
+            control.kill();
+        }
+        guard.disarm().close().await.ok()?;
+        let (output, code) = outcome?;
+        if code != 0 {
             return None;
         }
-        let mut values = parse(&captured.stdout, &start, &end)?;
+        let mut values = parse(&output, &start, &end)?;
         let path = values.get("PATH").cloned().unwrap_or_default();
         values.insert("PATH".into(), appending(&self.appended, &path));
         Some(CliEnvironment { values, source: EnvironmentSource::Profile })
     }
 
-    /// Swift `CLIEnvironmentResolver.resolve`.
-    fn resolve(self: &Arc<Self>, workspace: Option<PathBuf>, force: bool) -> BoxFuture<'static, CliEnvironment> {
+    /// Swift `CLIEnvironmentResolver.resolve`, with the one capture in the home.
+    fn resolve(self: &Arc<Self>, force: bool) -> BoxFuture<'static, CliEnvironment> {
         let this = self.clone();
         Box::pin(async move {
-            let key = this.key(workspace.as_deref());
             let (id, mut result) = {
-                let mut entries = lock(&this.entries);
-                let reuse = entries.get(&key).is_some_and(|cached| {
+                let mut entry = lock(&this.entry);
+                let reuse = entry.as_ref().is_some_and(|cached| {
                     if force {
                         cached.in_flight && !cached.started.load(Ordering::SeqCst)
                     } else {
@@ -246,43 +278,35 @@ impl Inner {
                     }
                 });
                 if !reuse {
-                    if let Some(old) = entries.remove(&key) {
-                        old.task.abort();
-                    } else if entries.len() >= MAXIMUM_ENTRIES
-                        && let Some(oldest) = entries.iter().min_by_key(|(_, entry)| entry.created).map(|(key, _)| key.clone())
-                        && let Some(old) = entries.remove(&oldest)
-                    {
+                    if let Some(old) = entry.take() {
                         old.task.abort();
                     }
                     let id = this.next.fetch_add(1, Ordering::SeqCst);
                     let started = Arc::new(AtomicBool::new(false));
                     let (sender, result) = watch::channel(None);
-                    let (worker, folder, flag) = (this.clone(), key.clone(), started.clone());
+                    let (worker, flag) = (this.clone(), started.clone());
                     let task = tokio::spawn(async move {
                         // Requests from one refresh share the capture; once it starts, a forced request supersedes it, so a changed
                         // sign-in never joins stale work.
-                        tokio::time::sleep(COALESCE).await;
-                        let outcome = if worker.is_current(&folder, id) {
+                        tokio::time::sleep(worker.options.coalesce).await;
+                        let outcome = if worker.is_current(id) {
                             flag.store(true, Ordering::SeqCst);
-                            worker.capture(&folder).await
+                            worker.capture().await
                         } else {
                             None
                         };
                         sender.send_replace(Some(outcome.unwrap_or_else(|| worker.fallback())));
                     });
-                    entries.insert(
-                        key.clone(),
-                        Entry { id, created: Instant::now(), result, in_flight: true, started, task: task.abort_handle() },
-                    );
+                    *entry = Some(Entry { id, created: Instant::now(), result, in_flight: true, started, task: task.abort_handle() });
                 }
-                let entry = entries.get(&key).expect("just made or found");
+                let entry = entry.as_ref().expect("just made or found");
                 (entry.id, entry.result.clone())
             };
             let value = match result.wait_for(Option::is_some).await {
                 Ok(value) => value.clone().unwrap_or_else(|| this.fallback()),
                 Err(_) => this.fallback(),
             };
-            let current = match lock(&this.entries).get_mut(&key) {
+            let current = match lock(&this.entry).as_mut() {
                 Some(entry) if entry.id == id => {
                     entry.in_flight = false;
                     true
@@ -291,7 +315,7 @@ impl Inner {
             };
             if !current {
                 // Superseded (a forced refresh replaced it, or it was invalidated): the current capture answers.
-                return this.resolve(workspace, false).await;
+                return this.resolve(false).await;
             }
             *lock(&this.last) = Some(value.clone());
             value
@@ -307,17 +331,18 @@ fn nonce() -> String {
 }
 
 impl ShellEnvironment for MacShellEnvironment {
-    fn resolve(&self, workspace: Option<&Path>, force: bool) -> BoxFuture<'_, CliEnvironment> {
-        self.inner.resolve(workspace.map(Path::to_path_buf), force)
+    /// The one capture in the home, whatever `workspace` (see the module: the Mac never captures in a project's folder).
+    fn resolve(&self, _workspace: Option<&Path>, force: bool) -> BoxFuture<'_, CliEnvironment> {
+        self.inner.resolve(force)
     }
 
     fn current(&self) -> CliEnvironment {
         lock(&self.inner.last).clone().unwrap_or_else(|| self.inner.fallback())
     }
 
-    fn invalidate(&self, workspace: Option<&Path>) {
-        let key = self.inner.key(workspace);
-        if let Some(old) = lock(&self.inner.entries).remove(&key) {
+    /// Forgets the capture (there is one, the home's, whatever `workspace`); one still running is ended with its shell.
+    fn invalidate(&self, _workspace: Option<&Path>) {
+        if let Some(old) = lock(&self.inner.entry).take() {
             old.task.abort();
         }
     }

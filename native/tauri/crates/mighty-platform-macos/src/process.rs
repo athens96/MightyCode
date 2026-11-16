@@ -5,8 +5,9 @@
 //! signal mask, SIGPIPE back to its default, every descriptor of the app's closed but its three pipes (`POSIX_SPAWN_CLOEXEC_DEFAULT`)
 //! and its folder set before `exec` (`posix_spawn_file_actions_addchdir_np`), the pipes moved to fd ≥ 3 first
 //! (`ProcessRunner.swift:62-84`). The group is the Windows job object's counterpart:
-//! - `kill` is SIGKILL to the group, sent only while the leader is unreaped (its pid may belong to another process after);
-//! - once the leader is reaped, what it left in its group is ended (SIGTERM, then SIGKILL 150 ms later: `terminateGroup`), so a
+//! - `kill` is SIGKILL to the group, sent only while the leader has not exited;
+//! - once the leader has exited (seen by kqueue while it is still a zombie, so the group's id cannot pass to another process), what it
+//!   left in its group is ended (SIGTERM, then SIGKILL 150 ms later: `terminateGroup`), then the leader is reaped, so a
 //!   background child holding a pipe never keeps a reader waiting (Swift "testProcessGroupCleansBackgroundChildWhenParentExits");
 //! - a close waits for the exit, then for the group to be empty;
 //! - every group still alive when the app exits gets SIGKILL from an `atexit` handler (Swift's `LiveRunRegistry.killAll` at quit).
@@ -21,12 +22,12 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::ffi::{CString, OsString};
+use std::future::Future as _;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Once};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -86,14 +87,16 @@ impl ProcessHost for MacProcessHost {
     fn start_detached_waitable(&self, request: DetachedRequest) -> Result<Box<dyn DetachedChild>> {
         let pid = spawn_detached(&request)?;
         let (sender, exit) = watch::channel(None);
-        let shared = Arc::new(Waitable { pid, reaped: AtomicBool::new(false), exit });
+        let shared = Arc::new(Waitable { pid, exited: Mutex::new(false), exit });
         let reaper = shared.clone();
         std::thread::Builder::new()
             .name("mighty-detached-exit".into())
             .spawn(move || {
+                // Marked exited while it is still a zombie, so `terminate` never signals a pid handed to another process.
+                let watched = wait_exited(pid);
+                *lock(&reaper.exited) = true;
                 let code = reap(pid);
-                reaper.reaped.store(true, Ordering::SeqCst);
-                sender.send_replace(Some(code));
+                sender.send_replace(Some(watched.status().map(decode).unwrap_or(code)));
             })
             .map_err(PlatformError::Io)?;
         Ok(Box::new(WaitableChild(shared)))
@@ -102,7 +105,8 @@ impl ProcessHost for MacProcessHost {
 
 /// Swift `ToolkitProcess.resolveExecutable`: how a step's program is found on the Mac (no PATHEXT, unlike Windows'
 /// `find_on_path`) — a full path as it is when it is an executable file; a bare name in each folder of `environment`'s PATH, the
-/// first executable file of that name; a relative name with a `/` never (the working folder never decides).
+/// first executable file of that name, full-path folders only; a relative name with a `/`, or a relative PATH folder, never (the
+/// working folder never decides).
 pub fn find_executable(name: &str, environment: &BTreeMap<String, String>) -> Option<String> {
     use std::os::unix::fs::PermissionsExt as _;
     let runnable = |path: &Path| std::fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0);
@@ -114,43 +118,160 @@ pub fn find_executable(name: &str, environment: &BTreeMap<String, String>) -> Op
     }
     let path = environment.get("PATH").map(String::as_str).unwrap_or("");
     path.split(':')
-        .filter(|folder| !folder.is_empty())
+        .filter(|folder| folder.starts_with('/'))
         .map(|folder| Path::new(folder).join(name))
         .find(|candidate| runnable(candidate))
         .map(|found| found.to_string_lossy().into_owned())
 }
 
-/// Every process group a child of the app leads and that may still have members: what the `atexit` handler ends.
-static LIVE_GROUPS: Mutex<Option<HashSet<libc::pid_t>>> = Mutex::new(None);
+/// What the app started that may still have members: the process groups its children lead, and the PTY sessions its shells lead
+/// (whose jobs sit in groups of their own). The `atexit` handler ends them.
+#[derive(Default)]
+struct Live {
+    groups: HashSet<libc::pid_t>,
+    sessions: HashSet<libc::pid_t>,
+}
+
+static LIVE: Mutex<Option<Live>> = Mutex::new(None);
 static AT_EXIT: Once = Once::new();
 
-/// Ends every group still alive as the app exits (Swift `LiveRunRegistry.killAll` at the quit's deadline): a child must not outlive
-/// the app. A lock held by another thread at exit is not waited for.
-extern "C" fn kill_live_groups() {
-    if let Ok(groups) = LIVE_GROUPS.try_lock()
-        && let Some(groups) = groups.as_ref()
-    {
-        for group in groups {
-            // SAFETY: a signal to a process group the app made.
-            unsafe { libc::kill(-group, libc::SIGKILL) };
+/// Ends everything still alive as the app exits (Swift `LiveRunRegistry.killAll` at the quit's deadline): a child must not outlive the
+/// app. A lock another thread holds at exit is tried again for up to 100 ms, never waited on for ever.
+extern "C" fn kill_live() {
+    for _ in 0..10 {
+        if let Ok(live) = LIVE.try_lock() {
+            if let Some(live) = live.as_ref() {
+                for group in &live.groups {
+                    // SAFETY: a signal to a process group the app made.
+                    unsafe { libc::kill(-group, libc::SIGKILL) };
+                }
+                for session in &live.sessions {
+                    crate::pty::end_session(*session);
+                }
+            }
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn live() -> MutexGuard<'static, Option<Live>> {
+    AT_EXIT.call_once(|| {
+        // SAFETY: registers a plain `extern "C"` function.
+        unsafe { libc::atexit(kill_live) };
+    });
+    lock(&LIVE)
+}
+
+/// Counts `group` as alive until [`forget_group`].
+pub(crate) fn track_group(group: libc::pid_t) {
+    live().get_or_insert_with(Live::default).groups.insert(group);
+}
+
+pub(crate) fn forget_group(group: libc::pid_t) {
+    if let Some(live) = live().as_mut() {
+        live.groups.remove(&group);
+    }
+}
+
+/// Counts the PTY session `session` leads as alive until [`forget_session`].
+pub(crate) fn track_session(session: libc::pid_t) {
+    live().get_or_insert_with(Live::default).sessions.insert(session);
+}
+
+pub(crate) fn forget_session(session: libc::pid_t) {
+    if let Some(live) = live().as_mut() {
+        live.sessions.remove(&session);
+    }
+}
+
+/// How a child's exit was seen before it was reaped ([`wait_exited`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Exited {
+    /// It exited and is a zombie until reaped; the kernel gave its wait status.
+    Status(libc::c_int),
+    /// It had exited before the watch began (a zombie until reaped); its status comes with the reap.
+    Before,
+    /// It could not be watched: only the reap says when it ends.
+    Unwatched,
+}
+
+impl Exited {
+    pub(crate) fn status(self) -> Option<libc::c_int> {
+        match self {
+            Exited::Status(status) => Some(status),
+            Exited::Before | Exited::Unwatched => None,
+        }
+    }
+
+    /// Whether the child is a zombie now: its pid is still the app's, so the group and session it leads keep their ids.
+    pub(crate) fn zombie(self) -> bool {
+        self != Exited::Unwatched
+    }
+}
+
+/// Waits until `pid` (a child of this process) has exited, without reaping it: kqueue's `EVFILT_PROC` with `NOTE_EXIT |
+/// NOTE_EXITSTATUS`. Until the reap the pid stays the app's, so the group and session it leads can be signalled with no pid-reuse
+/// window.
+pub(crate) fn wait_exited(pid: libc::pid_t) -> Exited {
+    // SAFETY: a new kqueue, owned below.
+    let queue = unsafe { libc::kqueue() };
+    if queue < 0 {
+        return Exited::Unwatched;
+    }
+    // SAFETY: the descriptor kqueue just made.
+    let queue = unsafe { OwnedFd::from_raw_fd(queue) };
+    // SAFETY: a plain struct, set field by field below.
+    let mut change: libc::kevent = unsafe { std::mem::zeroed() };
+    change.ident = pid as libc::uintptr_t;
+    change.filter = libc::EVFILT_PROC;
+    change.flags = libc::EV_ADD | libc::EV_ONESHOT;
+    change.fflags = libc::NOTE_EXIT | libc::NOTE_EXITSTATUS;
+    loop {
+        // SAFETY: a plain struct kevent fills.
+        let mut event: libc::kevent = unsafe { std::mem::zeroed() };
+        // SAFETY: one change and room for one event on an open kqueue; no timeout.
+        let count = unsafe { libc::kevent(queue.as_raw_fd(), &change, 1, &mut event, 1, std::ptr::null()) };
+        if count == 1 {
+            if event.flags & libc::EV_ERROR != 0 {
+                return if event.data as libc::c_int == libc::ESRCH { Exited::Before } else { Exited::Unwatched };
+            }
+            return Exited::Status(event.data as libc::c_int);
+        }
+        if count < 0 && io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+            continue;
+        }
+        return Exited::Unwatched;
+    }
+}
+
+/// Ends a child and releases it when the task that owned it is dropped half-way (an aborted capture): the kill is immediate, the close
+/// (which waits) runs on the runtime. Windows' `CloseOnDrop`.
+pub(crate) struct CloseOnDrop(pub(crate) Option<Arc<dyn ChildControl>>);
+
+impl CloseOnDrop {
+    pub(crate) fn disarm(mut self) -> Arc<dyn ChildControl> {
+        self.0.take().expect("armed")
+    }
+}
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        if let Some(control) = self.0.take() {
+            control.kill();
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move {
+                    let _ = control.close().await;
+                });
+            }
         }
     }
 }
 
-/// Counts `group` as alive until [`forget_group`] (the PTY host's sessions too).
-pub(crate) fn track_group(group: libc::pid_t) {
-    AT_EXIT.call_once(|| {
-        // SAFETY: registers a plain `extern "C"` function.
-        unsafe { libc::atexit(kill_live_groups) };
-    });
-    lock(&LIVE_GROUPS).get_or_insert_with(HashSet::new).insert(group);
-}
-
-pub(crate) fn forget_group(group: libc::pid_t) {
-    if let Some(groups) = lock(&LIVE_GROUPS).as_mut() {
-        groups.remove(&group);
-    }
-}
+/// Process-wide: a descriptor of this crate is made and marked close-on-exec under the read side, a `fork` (the PTY host's) runs under
+/// the write side, so no fork sees a descriptor not yet marked (macOS has no `pipe2`). `posix_spawn` needs neither side:
+/// `POSIX_SPAWN_CLOEXEC_DEFAULT` hands its child only what its file actions name. A fork by code outside this crate is not covered.
+pub(crate) static FORK: std::sync::RwLock<()> = std::sync::RwLock::new(());
 
 /// Whether any process is still in `group` (signal 0: EPERM still means one is there).
 pub(crate) fn group_alive(group: libc::pid_t) -> bool {
@@ -257,6 +378,7 @@ fn child_environment(request: &SpawnRequest) -> Result<Vec<CString>> {
 
 /// A pipe whose two ends are at fd 3 or above and close on `exec` (Swift `makePipe`): (read, write).
 pub(crate) fn pipe_pair() -> Result<(OwnedFd, OwnedFd)> {
+    let _making = FORK.read().unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut fds: [RawFd; 2] = [-1, -1];
     // SAFETY: an array of two descriptors.
     if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
@@ -399,11 +521,17 @@ fn start(request: &SpawnRequest) -> Result<Child> {
     let shared = Arc::new(Shared { pid, state: Mutex::new(State::default()), reaped, exit, closed: tokio::sync::Mutex::new(false) });
     let reaper = shared.clone();
     let started = std::thread::Builder::new().name("mighty-child-reaper".into()).spawn(move || {
-        let code = reap(pid);
+        // The leader stays a zombie until what it left in its group is ended, so the group's id is never another process's.
+        let watched = wait_exited(pid);
+        let early = if watched.zombie() { None } else { Some(reap(pid)) };
         lock(&reaper.state).reaped = true;
         reaped_sender.send_replace(Some(Instant::now()));
         // The leader can exit while a background child of its group still holds a pipe.
         terminate_group(pid);
+        let code = early.unwrap_or_else(|| {
+            let code = reap(pid);
+            watched.status().map(decode).unwrap_or(code)
+        });
         forget_group(pid);
         exit_sender.send_replace(Some(code));
     });
@@ -453,7 +581,7 @@ fn spawn_detached(request: &DetachedRequest) -> Result<libc::pid_t> {
 
 #[derive(Default)]
 struct State {
-    /// The leader has been reaped: its pid is no longer the app's to signal.
+    /// The leader has exited (set while it is a zombie, before the reap): `kill` signals the group no more.
     reaped: bool,
     /// The app ended the child while it ran (its output's rest is dropped on purpose: no last look).
     killed: bool,
@@ -676,12 +804,11 @@ impl AsyncRead for ChildOutput {
     }
 }
 
-use std::future::Future as _;
-
 /// A detached process the app waits on.
 struct Waitable {
     pid: libc::pid_t,
-    reaped: AtomicBool,
+    /// Set while it is still a zombie, before the reap: `terminate` checks it under this lock.
+    exited: Mutex<bool>,
     exit: watch::Receiver<Option<i32>>,
 }
 
@@ -696,10 +823,11 @@ impl DetachedChild for WaitableChild {
         Box::pin(exited(&self.0.exit))
     }
 
-    /// SIGKILL to this process alone (C#'s `Kill(entireProcessTree: false)`), while it is unreaped: what it started keeps running.
+    /// SIGKILL to this process alone (C#'s `Kill(entireProcessTree: false)`), while it has not exited: what it started keeps running.
     fn terminate(&self) {
-        if !self.0.reaped.load(Ordering::SeqCst) {
-            // SAFETY: a signal to an unreaped child of the app.
+        let exited = lock(&self.0.exited);
+        if !*exited {
+            // SAFETY: a signal to a child of the app that has not exited (the lock keeps the reaper from reaping it meanwhile).
             unsafe { libc::kill(self.0.pid, libc::SIGKILL) };
         }
     }

@@ -106,6 +106,7 @@ async fn provider_discovery_metadata_and_account_commands_use_resolved_shell_env
         home: root.clone(),
         timeout: Duration::from_secs(30),
         cache_for: Duration::from_secs(600),
+        coalesce: Duration::from_millis(50),
         appended: None,
     };
     let processes = mighty_platform_macos::process_host();

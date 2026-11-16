@@ -58,6 +58,8 @@ fn resolver(root: &Path, shell: PathBuf, timeout: Duration) -> Arc<MacShellEnvir
         home: root.to_path_buf(),
         timeout,
         cache_for: Duration::from_secs(600),
+        // Wider than the app's 50 ms, so two requests of one moment share a capture however slowly a busy runner starts them.
+        coalesce: Duration::from_millis(500),
         appended: None,
     };
     Arc::new(MacShellEnvironment::new(Arc::new(MacProcessHost::new()), options))
@@ -67,7 +69,8 @@ fn model(environment: &mighty_platform::CliEnvironment) -> Option<&str> {
     environment.values.get("FIXTURE_MODEL").map(String::as_str)
 }
 
-/// Swift `CLIEnvironmentTests.swift:45 "shellSnapshotReplacesUnsetValuesAndRefreshesPerWorkspace"`.
+/// Swift `CLIEnvironmentTests.swift:45 "shellSnapshotReplacesUnsetValuesAndRefreshesPerWorkspace"`, its workspace half turned round: the
+/// Mac captures in the home only (see mighty-platform-macos' environment.rs).
 #[tokio::test(flavor = "multi_thread")]
 async fn shell_snapshot_replaces_unset_values_and_refreshes_per_workspace() {
     let root = temp("env-snapshot");
@@ -85,7 +88,11 @@ async fn shell_snapshot_replaces_unset_values_and_refreshes_per_workspace() {
     let workspace = root.join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     settings(&workspace, "workspace-model", None);
-    assert_eq!(model(&resolver.resolve(Some(&workspace), false).await), Some("workspace-model"), "captured in the workspace");
+    // A deliberate difference from Swift (which captured in the workspace): the one capture runs in the home, never in a project's
+    // folder, so a clone's shell hooks never run and no workspace's environment becomes another's.
+    let in_workspace = resolver.resolve(Some(&workspace), true).await;
+    assert_eq!(model(&in_workspace), Some("model-two"), "captured in the home, not the workspace");
+    assert!(!workspace.join("shell-calls").exists(), "the shell never ran in the workspace's folder");
     assert_eq!(model(&resolver.resolve(None, false).await), Some("model-two"));
     remove(&root);
 }
@@ -145,6 +152,7 @@ async fn the_login_path_ends_with_the_installers_folders_only_for_the_real_envir
         home: root.clone(),
         timeout: Duration::from_secs(30),
         cache_for: Duration::from_secs(600),
+        coalesce: Duration::from_millis(50),
         appended: Some(vec![local.clone(), "/usr/bin".into()]),
     };
     let appended = MacShellEnvironment::new(Arc::new(MacProcessHost::new()), options).resolve(Some(&root), false).await;
@@ -166,5 +174,23 @@ async fn current_is_the_last_capture_and_invalidate_forgets_one() {
     settings(&root, "model-two", None);
     resolver.invalidate(None);
     assert_eq!(model(&resolver.resolve(None, false).await), Some("model-two"));
+    remove(&root);
+}
+
+/// A capture the resolver gives up on (invalidated, or superseded by a forced refresh) ends its shell: a login shell that hangs never
+/// outlives it.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_abandoned_capture_ends_its_shell() {
+    let root = temp("env-abandoned");
+    let shell = script(&root, "hanging-shell", "echo $$ > \"$PWD/shell.pid\"; exec /bin/sleep 60");
+    // The waiting resolve starts a capture again once its own is gone; this one ends at its 5 s.
+    let resolver = resolver(&root, shell, Duration::from_secs(5));
+    let waiting = resolver.clone();
+    let resolve = tokio::spawn(async move { waiting.resolve(None, false).await });
+    let pid = pid_from(&root.join("shell.pid")).await;
+    assert!(alive(pid));
+    resolver.invalidate(None);
+    until(|| !alive(pid), 10_000, "the abandoned shell is ended").await;
+    resolve.abort();
     remove(&root);
 }

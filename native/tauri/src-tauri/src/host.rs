@@ -1140,6 +1140,7 @@ mod tests {
         // The fixture's git commands through the work map's git (the process layer every child starts through).
         let fixture = mighty_workmap::Git::new(processes.clone(), parent.join("hooks"));
         let marker = parent.join("ran");
+        // Test code only (the no-cfg rule is the product's): the repository's would-be program as each OS's git runs one.
         #[cfg(windows)]
         let script = {
             let script = parent.join("program.bat");
