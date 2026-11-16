@@ -6,9 +6,9 @@
 //! (the process's runtime: load, initialize before the run loop, pump, close, shut down) and `CefBrowserEngine.swift` (a pane: its
 //! host view, its history, its loading state).
 //!
-//! The bridge tells a pane only whether it has a browser and whether it is loading, so, as Swift's pane, this one keeps the history
-//! of the addresses it was given (back, forward and reload load an entry again) and reports a navigation once the load it started
-//! ends; a link followed inside the page is not seen. The bridge loads a popup asked for by a click in the pane itself and cancels any
+//! The bridge tells a pane nothing of where its browser went, so, as Swift's pane (`BrowserHistory.visit` at `loadURL`), this one
+//! keeps the history of the addresses it was given (back, forward and reload load an entry again) and reports each navigation as the
+//! bridge takes it; a link followed inside the page is not seen. The bridge loads a popup asked for by a click in the pane itself and cancels any
 //! other, so no popup is reported. CEF downloads nothing without a download handler, which the bridge gives none.
 
 use std::cell::RefCell;
@@ -16,7 +16,7 @@ use std::ffi::{CString, c_char, c_int, c_void};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use core_foundation::base::TCFType as _;
 use core_foundation::date::CFDate;
@@ -39,9 +39,6 @@ pub const HELPER: &str = "MightyCode Helper.app";
 /// Swift `BrowserEngineLocator.reportMissing()`'s meaning: what a build without the engine says.
 pub const MISSING: &str = "the browser engine (CEF) is not in this build";
 
-/// How long a load the pane started may take to show as loading before its end is reported anyway (a page the engine had at hand).
-const SETTLE: Duration = Duration::from_secs(3);
-
 /// The bridge's exports (`cef_bridge.m`).
 #[derive(Clone, Copy)]
 struct Bridge {
@@ -49,8 +46,6 @@ struct Bridge {
     initialize: unsafe extern "C" fn(*const c_char) -> c_int,
     is_initialized: unsafe extern "C" fn() -> c_int,
     show: unsafe extern "C" fn(*mut c_void, c_int, c_int, *const c_char, *const c_char) -> c_int,
-    has_browser: unsafe extern "C" fn(*mut c_void) -> c_int,
-    is_loading: unsafe extern "C" fn(*mut c_void) -> c_int,
     close: unsafe extern "C" fn(*mut c_void),
     is_browser_closed: unsafe extern "C" fn(*mut c_void) -> c_int,
     work: unsafe extern "C" fn(),
@@ -162,8 +157,6 @@ fn load_bridge(path: &Path) -> std::result::Result<Bridge, String> {
             show: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void, c_int, c_int, *const c_char, *const c_char) -> c_int>(
                 symbol("mighty_cef_show")?,
             ),
-            has_browser: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(symbol("mighty_cef_has_browser")?),
-            is_loading: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(symbol("mighty_cef_is_loading")?),
             close: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void)>(symbol("mighty_cef_close")?),
             is_browser_closed: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(symbol(
                 "mighty_cef_is_browser_closed",
@@ -245,35 +238,13 @@ extern "C" fn pump(_timer: CFRunLoopTimerRef, _info: *mut c_void) {
     tick(bridge);
 }
 
-/// Each pane after a pump (Swift's observers): CEF's own view keeps filling the pane's, a load the pane started is reported once it
-/// ended, and a closed browser's view goes.
+/// Each pane after a pump (Swift's observers): CEF's own view keeps filling the pane's, and a closed browser's view goes.
 fn tick(bridge: &Bridge) {
     let panes: Vec<Arc<Pane>> = PANES.lock().unwrap_or_else(|p| p.into_inner()).clone();
     for pane in panes {
-        let view = pane.view as *mut c_void;
-        let ended = {
-            let mut state = pane.lock();
-            if state.closing {
-                continue;
-            }
+        if !pane.lock().closing {
             // SAFETY: the pane's view is alive (released only once its browser closed), on the main thread.
             fill(unsafe { &*(pane.view as *const NSView) });
-            match state.pending.clone() {
-                // SAFETY: the bridge's queries on the main thread.
-                Some(_) if unsafe { (bridge.is_loading)(view) } == 1 => {
-                    state.seen_loading = true;
-                    None
-                }
-                Some((url, since)) if unsafe { (bridge.has_browser)(view) } == 1 && (state.seen_loading || since.elapsed() > SETTLE) => {
-                    state.pending = None;
-                    state.seen_loading = false;
-                    Some(url)
-                }
-                _ => None,
-            }
-        };
-        if let (Some(url), Some(listener)) = (ended, &pane.listener) {
-            listener.send(BrowserEvent::Navigated { url: Some(url), success: true });
         }
     }
     release_closed(bridge);
@@ -328,9 +299,6 @@ struct PaneState {
     /// The addresses it was given (Swift `BrowserHistory`), and the one shown.
     history: Vec<String>,
     at: usize,
-    /// A load it started and has not seen end, since when.
-    pending: Option<(String, Instant)>,
-    seen_loading: bool,
     closing: bool,
 }
 
@@ -391,11 +359,7 @@ pub async fn open(window: &tauri::Window, options: BrowserOptions) -> Result<Box
             view: Retained::into_raw(view) as usize,
             cache,
             listener: listener.clone(),
-            state: Mutex::new(PaneState {
-                history: if first == BLANK { Vec::new() } else { vec![first.clone()] },
-                pending: Some((first, Instant::now())),
-                ..PaneState::default()
-            }),
+            state: Mutex::new(PaneState { history: if first == BLANK { Vec::new() } else { vec![first.clone()] }, ..PaneState::default() }),
         });
         let raw = pane.view as *mut c_void;
         // SAFETY: the bridge's show on the main thread with a live NSView (points, as `cef_window_info_t` takes them on the Mac).
@@ -409,6 +373,7 @@ pub async fn open(window: &tauri::Window, options: BrowserOptions) -> Result<Box
         }
         PANES.lock().unwrap_or_else(|p| p.into_inner()).push(pane.clone());
         if let Some(listener) = listener {
+            listener.send(BrowserEvent::Navigated { url: Some(first), success: true });
             // SAFETY: the view just made, kept until its browser closed.
             super::watch_focus(unsafe { &*(raw as *const NSView) }, listener, mtm);
         }
@@ -433,13 +398,9 @@ impl CefBrowser {
         if self.pane.lock().closing { Err(PlatformError::Invalid("the view is closed".into())) } else { Ok(()) }
     }
 
-    /// Loads `url` in the pane's browser (the bridge navigates the browser it has, or keeps the address until it is made).
+    /// Loads `url` in the pane's browser (the bridge navigates the browser it has, or keeps the address until it is made), and tells
+    /// the host the pane went there once the bridge took it.
     fn present(&self, url: String) -> Result<()> {
-        {
-            let mut state = self.pane.lock();
-            state.pending = Some((url.clone(), Instant::now()));
-            state.seen_loading = false;
-        }
         let pane = self.pane.clone();
         on_main_later(&self.window, "navigate", move |_| {
             let (Some(bridge), Ok(address)) = (ENGINE.get(), c_text(&url)) else { return };
@@ -448,11 +409,8 @@ impl CefBrowser {
             let shown = unsafe {
                 (bridge.show)(pane.view as *mut c_void, points(size.width), points(size.height), pane.cache.as_ptr(), address.as_ptr())
             };
-            if shown != 1 {
-                pane.lock().pending = None;
-                if let Some(listener) = &pane.listener {
-                    listener.send(BrowserEvent::Navigated { url: Some(url), success: false });
-                }
+            if let Some(listener) = &pane.listener {
+                listener.send(BrowserEvent::Navigated { url: Some(url), success: shown == 1 });
             }
         })
     }

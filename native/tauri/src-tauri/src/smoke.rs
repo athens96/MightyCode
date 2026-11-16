@@ -1216,43 +1216,52 @@ fn serve_fixture() -> std::io::Result<String> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let address = format!("http://127.0.0.1:{}/fixture", listener.local_addr()?.port());
     std::thread::Builder::new().name("smoke-fixture".into()).spawn(move || {
+        // Each connection on a thread of its own: an engine's spare connection that never sends (Chromium preconnects) holds only
+        // its own thread for the read's 5 s, never the requests behind it.
         for mut stream in listener.incoming().flatten() {
-            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-            let mut request = [0u8; 4096];
-            let read = stream.read(&mut request).unwrap_or(0);
-            let line = String::from_utf8_lossy(&request[..read]);
-            // The Mac's profile check (`browser_profiles`): `/set?pane=<p>` sets its cookie and goes on to `/check?pane=<p>` by script;
-            // each such request is recorded with the cookie it sent.
-            let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
-            let mut set_cookie = String::new();
-            let page = if line.starts_with("GET /second") {
-                SECOND.to_string()
-            } else if line.starts_with("GET /popup") {
-                POPUP.to_string()
-            } else if let Some(pane) = path.strip_prefix("/set?pane=").filter(|p| p.chars().all(|c| c.is_ascii_alphanumeric())) {
-                set_cookie = format!("Set-Cookie: {PROFILE_COOKIE}={pane}; Path=/; Max-Age=600\r\n");
-                format!("<!doctype html><html><body>set {pane}<script>setTimeout(() => location.href = '/check?pane={pane}', 200)</script></body></html>")
-            } else if path.starts_with("/check?pane=") {
-                "<!doctype html><html><body>checked</body></html>".to_string()
-            } else {
-                FIXTURE.to_string()
-            };
-            if path.starts_with("/set?") || path.starts_with("/check?") {
-                let cookie = line
-                    .lines()
-                    .find_map(|header| header.strip_prefix("Cookie:").or_else(|| header.strip_prefix("cookie:")))
-                    .map(|cookie| cookie.trim().to_string());
-                PROFILE_REQUESTS.lock().unwrap_or_else(|p| p.into_inner()).push((path, cookie));
-            }
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{set_cookie}Connection: close\r\n\r\n{page}",
-                page.len()
-            );
-            let _ = stream.write_all(response.as_bytes());
+            let _ = std::thread::Builder::new().name("smoke-fixture-connection".into()).spawn(move || serve_one(&mut stream));
         }
     })?;
     let _ = FIXTURE_ADDRESS.set(address.clone());
     Ok(address)
+}
+
+/// One request of the browser fixture.
+fn serve_one(stream: &mut std::net::TcpStream) {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let mut request = [0u8; 4096];
+    let read = stream.read(&mut request).unwrap_or(0);
+    let line = String::from_utf8_lossy(&request[..read]);
+    // The Mac's profile check (`browser_profiles`): `/set?pane=<p>` sets its cookie and goes on to `/check?pane=<p>` by script;
+    // each such request is recorded with the cookie it sent.
+    let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
+    let mut set_cookie = String::new();
+    let page = if line.starts_with("GET /second") {
+        SECOND.to_string()
+    } else if line.starts_with("GET /popup") {
+        POPUP.to_string()
+    } else if let Some(pane) = path.strip_prefix("/set?pane=").filter(|p| p.chars().all(|c| c.is_ascii_alphanumeric())) {
+        set_cookie = format!("Set-Cookie: {PROFILE_COOKIE}={pane}; Path=/; Max-Age=600\r\n");
+        format!(
+            "<!doctype html><html><body>set {pane}<script>setTimeout(() => location.href = '/check?pane={pane}', 200)</script></body></html>"
+        )
+    } else if path.starts_with("/check?pane=") {
+        "<!doctype html><html><body>checked</body></html>".to_string()
+    } else {
+        FIXTURE.to_string()
+    };
+    if path.starts_with("/set?") || path.starts_with("/check?") {
+        let cookie = line
+            .lines()
+            .find_map(|header| header.strip_prefix("Cookie:").or_else(|| header.strip_prefix("cookie:")))
+            .map(|cookie| cookie.trim().to_string());
+        PROFILE_REQUESTS.lock().unwrap_or_else(|p| p.into_inner()).push((path, cookie));
+    }
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{set_cookie}Connection: close\r\n\r\n{page}",
+        page.len()
+    );
+    let _ = stream.write_all(response.as_bytes());
 }
 
 /// The browser fixture's address (`…/fixture`), once served.
