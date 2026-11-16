@@ -91,6 +91,50 @@ jobs:
         run: |
           cargo test --workspace --no-fail-fast
           if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
+      - name: The Mac's stores against the Swift app's own code (tools/parity-mac; the state round trip, the pairing files, the defaults keys)
+        # Mac stage M-B: Swift writes the state corpus and the pairing files with MightyCore's own code; Rust's tests load and save
+        # them (MIGHTY_PARITY_MAC=require) and leave theirs; Swift reads Rust's back and wants every value it read from its own.
+        if: matrix.os == 'macos'
+        working-directory: native/tauri
+        timeout-minutes: 25
+        run: |
+          swift build -c release --package-path tools/parity-mac
+          if ($LASTEXITCODE -ne 0) { throw 'parity-mac build failed' }
+          $tool = (Resolve-Path 'tools/parity-mac/.build/release/parity-mac').Path
+          $work = Join-Path $env:RUNNER_TEMP 'parity-mac'
+          New-Item -ItemType Directory -Force $work | Out-Null
+          & $tool state-corpus (Join-Path $work 'state')
+          if ($LASTEXITCODE -ne 0) { throw 'parity-mac state-corpus failed' }
+          & $tool pairing write (Join-Path $work 'pairing-swift') (Join-Path $work 'pairing-swift.json')
+          if ($LASTEXITCODE -ne 0) { throw 'parity-mac pairing write failed' }
+          & $tool defaults-keys | Set-Content -Encoding utf8 (Join-Path $work 'defaults-keys.json')
+          if ($LASTEXITCODE -ne 0) { throw 'parity-mac defaults-keys failed' }
+          $env:MIGHTY_PARITY_MAC = 'require'
+          $env:MIGHTY_PARITY_MAC_DIR = $work
+          $failed = @()
+          cargo test -p mighty-core --test state_mac -- --nocapture
+          if ($LASTEXITCODE -ne 0) { $failed += 'Rust state round trip' }
+          cargo test -p mighty-platform --test pairing_mac -- --nocapture
+          if ($LASTEXITCODE -ne 0) { $failed += 'Rust pairing files' }
+          cargo test -p mighty-platform-macos --lib defaults_keys -- --nocapture
+          if ($LASTEXITCODE -ne 0) { $failed += 'Rust defaults keys' }
+          if (Test-Path (Join-Path $work 'state')) {
+            & $tool state-check (Join-Path $work 'state')
+            if ($LASTEXITCODE -ne 0) { $failed += 'Swift state check' }
+          }
+          if (Test-Path (Join-Path $work 'pairing-rust.json')) {
+            & $tool pairing read (Join-Path $work 'pairing-rust') (Join-Path $work 'pairing-rust.json')
+            if ($LASTEXITCODE -ne 0) { $failed += 'Swift pairing read' }
+          }
+          if ($failed) { throw ("parity-mac: " + ($failed -join ', ')) }
+      - name: Keep the Mac stores' parity files
+        if: always() && matrix.os == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-parity-mac
+          # The state corpus and what Rust made of it; the pairing files hold only throwaway keys.
+          path: ${{ runner.temp }}/parity-mac
+          if-no-files-found: ignore
       - name: Build the Tauri app (debug)
         working-directory: native/tauri
         # beforeBuildCommand builds the page with --mode tauri into dist-tauri/ (never the dist/ the C# app ships).

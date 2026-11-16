@@ -1,5 +1,5 @@
 //! The data an app from before the rename left under its old names (C# `Core\RenameMigration.cs`, `WinUI\Program.cs:163-205`;
-//! docs/rename-identifiers.md; plan §1.8 "RenameMigration", W9-F). Owner: W9-F.
+//! docs/rename-identifiers.md; plan 짠1.8 "RenameMigration", W9-F). Owner: W9-F.
 //!
 //! For the default profile only, outside a smoke, where the write policy writes, before anything reads the data (src-tauri's
 //! `startup::before_ui` decides): move `%APPDATA%\MightyClaudeNative` to `MightyCode` when the target is absent; move `~\.mightyclaude`
@@ -88,15 +88,95 @@ pub struct Report {
     pub moved_data_folder: bool,
     pub moved_worktrees: bool,
     pub copied_registry: bool,
+    /// The Mac: how many of the old bundle id's settings were copied (Swift `Report.copiedSettings`).
+    pub copied_settings: usize,
     /// The child worktrees now under the new folder, whose git links are repaired after start (`git worktree repair` in each).
     pub worktrees: Vec<PathBuf>,
 }
 
+/// What the migration moves on an OS: C#'s names on Windows, Swift's on the Mac (Mac stage M-B: `RenameMigration.swift`). The caller
+/// picks them with the platform (src-tauri `platform::rename_names`); the steps are the same code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Names {
+    /// The old data folder beside the new one: `MightyClaudeNative` (Windows), `MightyClaude Native` (the Mac's Application Support).
+    pub legacy_data_folder: &'static str,
+    /// Swift moves a Claude project folder whose name holds `--mightyclaude-worktrees-` anywhere; C# one that starts with the old
+    /// worktrees folder's own name.
+    pub projects_by_marker: bool,
+    /// Swift also rewrites a path written with its slashes escaped (`\/`, as `JSONEncoder` writes them).
+    pub slash_escaped_paths: bool,
+    /// C# reads a record that is not UTF-8 with its bad bytes replaced and writes it back so; Swift leaves such a file alone.
+    pub lossy_text: bool,
+}
+
+/// C#'s (Windows).
+pub const WINDOWS_NAMES: Names =
+    Names { legacy_data_folder: LEGACY_DATA_FOLDER, projects_by_marker: false, slash_escaped_paths: false, lossy_text: true };
+/// Swift's (the Mac): `RenameMigration.legacyDataFolder`.
+pub const MAC_NAMES: Names =
+    Names { legacy_data_folder: "MightyClaude Native", projects_by_marker: true, slash_escaped_paths: true, lossy_text: false };
+/// Swift `RenameMigration.legacyBundleIdentifier`: the UserDefaults domain the app's settings were under before the rename.
+pub const LEGACY_BUNDLE_IDENTIFIER: &str = "dev.mightyclaude.native";
+/// Swift `RenameMigration.defaultsMarker`: set once the old settings were copied, so a setting cleared later is not brought back.
+pub const SETTINGS_MARKER: &str = "rename.settingsCopiedFromMightyClaude";
+/// Swift `RenameMigration.moveClaudeProjects`' marker.
+pub const PROJECTS_MARKER: &str = "--mightyclaude-worktrees-";
+
+/// The Mac's settings from before the rename (Swift: the `dev.mightyclaude.native` defaults domain into `dev.mightycode.native`): the
+/// platform's (src-tauri `platform::rename_settings`); [`NoSettings`] on Windows, whose settings are the registry's.
+pub trait LegacySettings {
+    /// The marker is set: the copy was made once already.
+    fn copied(&self) -> bool;
+    /// The old domain's keys (none when there is no old domain).
+    fn legacy_keys(&self) -> Vec<String>;
+    /// The app already sees a value for `key` (Swift `defaults.object(forKey:) != nil`: its own domain's or the global one's).
+    fn has(&self, key: &str) -> bool;
+    /// The old value of `key` set in the new domain, as it was stored.
+    fn copy(&self, key: &str) -> io::Result<()>;
+    /// The marker set.
+    fn mark(&self) -> io::Result<()>;
+}
+
+/// No settings to copy (Windows: the registry step copies them).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoSettings;
+
+impl LegacySettings for NoSettings {
+    fn copied(&self) -> bool {
+        true
+    }
+    fn legacy_keys(&self) -> Vec<String> {
+        Vec::new()
+    }
+    fn has(&self, _key: &str) -> bool {
+        false
+    }
+    fn copy(&self, _key: &str) -> io::Result<()> {
+        Ok(())
+    }
+    fn mark(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 /// C# `RenameMigration.Run`: every step. `claude_config` is Claude's config folder (`~/.claude`, or `CLAUDE_CONFIG_DIR`). Never fails.
 pub fn run(app_data: &Path, home: &Path, claude_config: &Path, registry: &dyn RegistryStore) -> Report {
+    run_with(&WINDOWS_NAMES, app_data, home, claude_config, registry, &NoSettings)
+}
+
+/// [`run`] with an OS's [`Names`] and its settings from before the rename (Swift `RenameMigration.run`: the folders, then the defaults
+/// domain copied once, a setting the new domain already has never overwritten).
+pub fn run_with(
+    names: &Names,
+    app_data: &Path,
+    home: &Path,
+    claude_config: &Path,
+    registry: &dyn RegistryStore,
+    settings: &dyn LegacySettings,
+) -> Report {
     let mut report = Report::default();
     let data = app_data.join(DATA_FOLDER);
-    report.moved_data_folder = move_once(&app_data.join(LEGACY_DATA_FOLDER), &data);
+    report.moved_data_folder = move_once(&app_data.join(names.legacy_data_folder), &data);
 
     let old_home = home.join(LEGACY_HOME_FOLDER);
     let new_home = home.join(HOME_FOLDER);
@@ -104,17 +184,47 @@ pub fn run(app_data: &Path, home: &Path, claude_config: &Path, registry: &dyn Re
         report.moved_worktrees = true;
         // The records name each child's worktree by its full path.
         for name in RECORDS {
-            rewrite_paths(&data.join(name), &old_home.to_string_lossy(), &new_home.to_string_lossy());
+            let (old, target) = (old_home.to_string_lossy(), new_home.to_string_lossy());
+            rewrite_paths_as(&data.join(name), &old, &target, names.lossy_text);
+            if names.slash_escaped_paths && old.contains('/') {
+                rewrite_paths_as(&data.join(name), &old.replace('/', "\\/"), &target.replace('/', "\\/"), names.lossy_text);
+            }
         }
         if let Ok(entries) = fs::read_dir(new_home.join("worktrees")) {
             report.worktrees.extend(entries.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()));
         }
-        move_claude_projects(claude_config, &old_home, &new_home);
+        if names.projects_by_marker {
+            move_marked_claude_projects(claude_config);
+        } else {
+            move_claude_projects(claude_config, &old_home, &new_home);
+        }
     }
 
     // C# catches the registry's security and I/O failures: a copy that fails part way reports nothing copied.
     report.copied_registry = copy_registry(registry, LEGACY_REGISTRY_KEY, REGISTRY_KEY).unwrap_or(false);
+    if !settings.copied() {
+        for key in settings.legacy_keys() {
+            if !settings.has(&key) && settings.copy(&key).is_ok() {
+                report.copied_settings += 1;
+            }
+        }
+        let _ = settings.mark();
+    }
     report
+}
+
+/// Swift `RenameMigration.moveClaudeProjects`: each project folder whose name holds [`PROJECTS_MARKER`] moves to the name with
+/// `--mightycode-worktrees-` in its place (when that is not there yet).
+pub fn move_marked_claude_projects(claude_config: &Path) {
+    let projects = claude_config.join("projects");
+    let Ok(entries) = fs::read_dir(&projects) else { return };
+    let folders: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    for folder in folders {
+        let Some(name) = folder.file_name().map(|name| name.to_string_lossy().into_owned()) else { continue };
+        if name.contains(PROJECTS_MARKER) {
+            move_once(&folder, &projects.join(name.replace(PROJECTS_MARKER, "--mightycode-worktrees-")));
+        }
+    }
 }
 
 /// C# `RenameMigration.Move`: moves `old` to `target` when it is a folder and the target is not there yet (neither a folder nor a
@@ -165,15 +275,44 @@ pub fn home() -> Option<PathBuf> {
 
 /// C# `RenameMigration.RewritePaths`: replaces the folder path `old` with `target` in a JSON file, written plainly or JSON-escaped
 /// ([`rewritten`]). A file that does not read is left alone; one that does not change is not written. Read as C#'s `ReadAllText` reads
-/// it (a UTF-8 byte order mark dropped, bytes that are not UTF-8 replaced) and written as `WriteAllText` writes (UTF-8, no mark).
+/// it (a UTF-8 byte order mark dropped, bytes that are not UTF-8 replaced) and written as `WriteAllText` writes (UTF-8, no mark), but
+/// atomically (a temporary beside it, moved over it), so a crash never leaves half a record.
 pub fn rewrite_paths(file: &Path, old: &str, target: &str) {
+    rewrite_paths_as(file, old, target, true);
+}
+
+/// [`rewrite_paths`]; with `lossy` false as Swift does it (`String(contentsOf:encoding: .utf8)`, `RenameMigration.swift:72-76`): a file
+/// that is not UTF-8 is left alone rather than written back with its bad bytes replaced.
+pub fn rewrite_paths_as(file: &Path, old: &str, target: &str, lossy: bool) {
     let Ok(bytes) = fs::read(file) else { return };
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
-    let text = String::from_utf8_lossy(bytes);
+    let text = match std::str::from_utf8(bytes) {
+        Ok(text) => std::borrow::Cow::Borrowed(text),
+        Err(_) if lossy => String::from_utf8_lossy(bytes),
+        Err(_) => return,
+    };
     let updated = rewritten(&text, old, target);
     if updated != text {
-        let _ = fs::write(file, updated);
+        let _ = write_atomically(file, updated.as_bytes());
     }
+}
+
+/// `bytes` into `file` through `<file>.<id>.tmp` beside it, flushed and moved over it; the temporary removed on failure.
+fn write_atomically(file: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write as _;
+    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let temporary = file.with_file_name(format!("{name}.{}.tmp", crate::wire::new_id()));
+    let written = (|| {
+        let mut out = fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        out.write_all(bytes)?;
+        out.sync_all()?;
+        drop(out);
+        fs::rename(&temporary, file)
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    written
 }
 
 /// C# `RenameMigration.Rewritten`: `old` replaced with `target` where a separator follows (so a folder that merely starts with the old

@@ -199,6 +199,56 @@ pub fn rename_registry() -> Arc<dyn mighty_core::rename_migration::RegistryStore
     return Arc::new(mighty_core::rename_migration::NoRegistry);
 }
 
+/// RenameMigration's names on this OS (mighty-core `rename_migration::Names`): C#'s on Windows, Swift's on the Mac (M-B).
+pub fn rename_names() -> mighty_core::rename_migration::Names {
+    #[cfg(windows)]
+    return mighty_core::rename_migration::WINDOWS_NAMES;
+    #[cfg(target_os = "macos")]
+    return mighty_core::rename_migration::MAC_NAMES;
+}
+
+/// The settings from before the rename RenameMigration copies once: none on Windows (its registry step), the old bundle id's
+/// UserDefaults domain into the app's on the Mac (Swift `RenameMigration.swift:47-53`, M-B).
+pub fn rename_settings() -> Box<dyn mighty_core::rename_migration::LegacySettings> {
+    #[cfg(windows)]
+    return Box::new(mighty_core::rename_migration::NoSettings);
+    #[cfg(target_os = "macos")]
+    return Box::new(MacSettings {
+        current: os::prefs::DefaultsPrefs::app(),
+        legacy: os::prefs::DefaultsPrefs::domain(mighty_core::rename_migration::LEGACY_BUNDLE_IDENTIFIER),
+    });
+}
+
+/// The two defaults domains as RenameMigration copies between them.
+#[cfg(target_os = "macos")]
+struct MacSettings {
+    current: os::prefs::DefaultsPrefs,
+    legacy: os::prefs::DefaultsPrefs,
+}
+
+#[cfg(target_os = "macos")]
+impl mighty_core::rename_migration::LegacySettings for MacSettings {
+    fn copied(&self) -> bool {
+        self.current.stored(mighty_core::rename_migration::SETTINGS_MARKER).is_some()
+    }
+    fn legacy_keys(&self) -> Vec<String> {
+        self.legacy.keys()
+    }
+    /// As Swift's `defaults.object(forKey:) != nil`: the app's own value or the global domain's (RenameMigration.swift:48).
+    fn has(&self, key: &str) -> bool {
+        self.current.visible(key)
+    }
+    fn copy(&self, key: &str) -> std::io::Result<()> {
+        self.current.copy_from(&self.legacy, key).map_err(std::io::Error::other)
+    }
+    fn mark(&self) -> std::io::Result<()> {
+        use mighty_platform::PrefsStore as _;
+        self.current
+            .set(mighty_core::rename_migration::SETTINGS_MARKER, mighty_platform::PrefValue::Bool(true))
+            .map_err(std::io::Error::other)
+    }
+}
+
 /// The Windows registry as RenameMigration reads and writes it.
 #[cfg(windows)]
 struct CurrentUser(os::registry::CurrentUserRegistry);

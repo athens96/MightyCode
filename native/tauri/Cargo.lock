@@ -2405,9 +2405,11 @@ name = "mighty-platform"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "getrandom 0.3.4",
  "serde",
  "serde_json",
  "tokio",
+ "x25519-dalek",
 ]
 
 [[package]]
@@ -2422,6 +2424,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "mighty-core",
  "mighty-platform",
  "native-tls",
  "objc2",
@@ -2432,6 +2435,7 @@ dependencies = [
  "objc2-user-notifications",
  "objc2-web-kit",
  "security-framework",
+ "serde_json",
  "tauri",
  "tokio",
  "tokio-native-tls",

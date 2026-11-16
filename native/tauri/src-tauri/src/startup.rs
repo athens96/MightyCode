@@ -143,7 +143,10 @@ pub fn before_ui(options: &Options, platform: &mighty_platform::Platform, policy
     let Some(home) = rename_migration::home() else { return };
     let environment: HashMap<String, String> = platform.environment.current().values.into_iter().collect();
     let claude = mighty_history::history::claude_config(&home, &environment);
-    let report = rename_migration::run(&app_data, &home, &claude, registry().as_ref());
+    // The OS's names and settings (platform.rs): C#'s and the registry on Windows, Swift's and the defaults domain on the Mac (M-B).
+    let settings = crate::platform::rename_settings();
+    let report =
+        rename_migration::run_with(&crate::platform::rename_names(), &app_data, &home, &claude, registry().as_ref(), settings.as_ref());
     if report.worktrees.is_empty() {
         return;
     }

@@ -52,7 +52,11 @@ http-body-util = "0.1"
 native-tls = "0.2"
 tokio-native-tls = "0.3"
 
+# M-B: the ported Swift checks over UserDefaults read the shared settings rules (text appearance, language, help site) and parity-mac's
+# JSON.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
+mighty-core.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "io-util"] }
 
 # Step 0 lists the parts' dependencies before their code uses them; this table goes once every one is used.

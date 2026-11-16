@@ -7,9 +7,16 @@
 //                                                   replacing?, runningExecutable?, pid, relaunch}: [{name, script}]. Owner M-H.
 //   parity-mac manifest <file> <public key base64>  AppUpdateManifest.parse with the key: the fields Swift read, or its refusal.
 //                                                   Owner M-H.
-//   parity-mac state-corpus <out folder>            M-B: StateRepository-encoded snapshots with every Mac-only field. Not written yet.
-//   parity-mac pairing write|read <folder>          M-B: the four pairing files by Swift's own code. Not written yet.
-//   parity-mac defaults-keys                        M-B: the UserDefaults keys and value types the app reads. Not written yet.
+//   parity-mac state-corpus <out folder>            M-B: snapshots with every field set, as StateRepository saves them
+//                                                   (`<case>.saved.json`) and as JSONEncoder writes them unnormalized
+//                                                   (`<case>.encoded.json`), with the fields no case sets (MacStores.swift);
+//                                                   exit 3 when one is left unset (a field Swift added) or a value was refused.
+//   parity-mac state-check <folder>                 M-B: each `<case>.rust.json` (what Rust's load and save made of `<case>.json`)
+//                                                   against its original, both read back by StateRepository: every value Swift
+//                                                   reads from the original must read the same from Rust's (exit 1 otherwise).
+//   parity-mac pairing write|read <folder> <json>   M-B: the pairing files written by Swift's own code (and what it wrote, in
+//                                                   <json>), or Rust's files read by Swift's own code against <json>.
+//   parity-mac defaults-keys                        M-B: the UserDefaults keys MightyCore names publicly.
 //
 // Exit 0 with a verdict (an "ok" and a refusal alike), 2 for a mode not written yet or a wrong call, 1 when the tool itself failed.
 import Foundation
@@ -91,9 +98,23 @@ case "manifest":
         emit(["verdict": "refused", "error": describe(error)])
     }
 
-case "state-corpus", "pairing", "defaults-keys":
-    emit(["error": "not written yet", "mode": mode, "owner": "M-B"])
-    exit(2)
+case "state-corpus":
+    guard arguments.count == 2 else { fail("usage: parity-mac state-corpus <out folder>", code: 2) }
+    await stateCorpus(URL(fileURLWithPath: arguments[1], isDirectory: true))
+
+case "state-check":
+    guard arguments.count == 2 else { fail("usage: parity-mac state-check <folder>", code: 2) }
+    stateCheck(URL(fileURLWithPath: arguments[1], isDirectory: true))
+
+case "pairing":
+    guard arguments.count == 4, ["write", "read"].contains(arguments[1]) else {
+        fail("usage: parity-mac pairing write|read <folder> <expected.json>", code: 2)
+    }
+    let folder = URL(fileURLWithPath: arguments[2], isDirectory: true), expected = URL(fileURLWithPath: arguments[3])
+    if arguments[1] == "write" { await pairingWrite(folder, expected: expected) } else { await pairingRead(folder, expected: expected) }
+
+case "defaults-keys":
+    defaultsKeys()
 
 default:
     fail("unknown mode \(mode)", code: 2)
