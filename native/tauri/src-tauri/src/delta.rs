@@ -338,15 +338,16 @@ impl Bridge {
     }
 }
 
+/// The checks' lock on the C# parity tool's build (shared with the crates' parity checks).
+#[cfg(test)]
+#[path = "../../tools/parity/build_lock.rs"]
+mod build_lock;
+
 #[cfg(test)]
 mod tests {
     //! The page's side, ported from `native/windows/web/src/store/delta.ts` (`applyListDelta`, `applySessionDelta`) and
     //! `store.ts` (`mergeSessions`, the delta case of `reduce`), on JSON values as the page holds them.
     use super::*;
-
-    // From src-tauri/src/delta/tests/ (an inline module's folder) to native/tauri/tools/parity.
-    #[path = "../../../../tools/parity/build_lock.rs"]
-    mod build_lock;
     use mighty_core::Wire;
     use serde_json::json;
 
@@ -667,7 +668,7 @@ mod tests {
     fn the_deltas_are_the_csharp_bridges() {
         let tauri = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let tool = tauri.join("target/parity-cs/parity.dll");
-        let build = build_lock::hold(&tauri.join("target"));
+        let build = super::build_lock::hold(&tauri.join("target"));
         let built = std::process::Command::new("dotnet")
             .arg("build")
             .arg(tauri.join("tools/parity/Parity.csproj"))
