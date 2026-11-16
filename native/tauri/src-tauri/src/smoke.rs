@@ -297,14 +297,15 @@ const BROWSER_PROBE: &str = r#"(async () => {
     report.shownAfterDialog = !!(await until(async () => { const s = await surface(); return s && s.visible; }, 5000));
     // The address the field shows came back from the host's history as a push.
     const field = () => ofPane('[data-testid=browser-address]')?.value ?? '';
-    report.navigated = !!(await until(() => field() === fixture, 10000));
+    // ...once the host's history has it (the field alone also shows what was typed).
+    report.navigated = !!(await until(async () => field() === fixture && (await surface())?.history === fixture, 10000));
     // A second page, then the page's back button: the host's history and the engine go back to the first.
     const second = fixture.replace('/fixture', '/second'), popup = fixture.replace('/fixture', '/popup');
     // Typed into the field the page shows now (it may have drawn the pane anew since the first address).
     const go = (url) => { const input = ofPane('[data-testid=browser-address]') ?? address; Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, url); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); };
     report.firstFieldKept = address.isConnected;
     go(second);
-    report.onSecond = !!(await until(() => field() === second, 10000));
+    report.onSecond = !!(await until(async () => field() === second && (await surface())?.history === second, 10000));
     if (!report.onSecond) report.secondSeen = { field: field(), view: (await surface())?.url ?? null };
     const back = await until(() => { const b = ofPane('button.browser-nav'); return b && !b.disabled ? b : null; }, 10000);
     back?.click();
@@ -1383,7 +1384,8 @@ pub async fn smoke_surface(pane_id: String, action: String, host: tauri::State<'
     match action.as_str() {
         "inspect" => Ok(surfaces.inspect(&pane_id, SurfaceKind::Browser).await.map_or(Value::Null, |state| {
             let b = state.bounds;
-            json!({"bounds": {"x": b.x, "y": b.y, "width": b.width, "height": b.height}, "visible": state.visible, "url": state.url})
+            json!({"bounds": {"x": b.x, "y": b.y, "width": b.width, "height": b.height}, "visible": state.visible, "url": state.url,
+                "history": surfaces.browser_url(&pane_id)})
         })),
         "dialog" => {
             push(json!({"kind": "dialog", "id": DIALOG, "dialog": {

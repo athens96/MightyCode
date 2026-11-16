@@ -399,6 +399,11 @@ impl SurfaceManager {
         self.browsers.lock().get(pane).cloned().unwrap_or_default().state()
     }
 
+    /// The address a browser pane's history shows now (the smoke waits for the engine's navigation to reach it).
+    pub fn browser_url(&self, pane: &str) -> Option<String> {
+        self.browsers.lock().get(pane).and_then(|browser| browser.history.current().map(str::to_string))
+    }
+
     /// `browserOpen` (C# `WebBrowser` and `StartWebBrowserAsync`): the pane's state; a new pane starts: nothing while the setting is
     /// off (`disabled`), the install offer without the runtime (`missing`), else its view opens over its slot as soon as the slot can
     /// show, in the workspace's web profile.
