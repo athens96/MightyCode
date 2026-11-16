@@ -289,10 +289,15 @@ impl Host {
         }));
         // Saves: the state as it is now when a scheduled one fires; written by the store (which writes nothing unless allowed).
         let (current, writer, failed_view, failed_log) = (view.clone(), store.clone(), view.clone(), LogFile::new(log.dir().to_path_buf()));
+        let settings_app = app.clone();
         let failed_locale = locale;
         let saver = Arc::new(Saver::new(
             move || lock(&current).current(),
-            move |snapshot| lock(&writer).save(snapshot),
+            move |snapshot| {
+                // The Mac's settings in UserDefaults follow each save (settings_place.rs, M-J; nothing on Windows).
+                crate::settings_place::mirror(&settings_app, snapshot);
+                lock(&writer).save(snapshot)
+            },
             move |error| {
                 if matches!(error, mighty_core::store::StateError::WritesOff) {
                     return;

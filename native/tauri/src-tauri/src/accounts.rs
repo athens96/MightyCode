@@ -152,8 +152,13 @@ fn coordinator(host: &Host) -> Option<Arc<CliAccountsCoordinator>> {
         return Some(made.clone());
     }
     let catalog = host.runs()?.catalog.clone();
-    // Made once the ports are managed too, so its sign-ins have their terminal window.
-    let terminals = host.app.try_state::<crate::platform::Ports>()?.terminals.clone();
+    // Made once the ports are managed too, so its sign-ins have their terminal window: the platform's, or on the Mac a pane of the
+    // window (`PlatformProfile::agent_sign_in`, sign_in_pane.rs).
+    let window = host.app.try_state::<crate::platform::Ports>()?.terminals.clone();
+    let app = host.app.clone();
+    let terminals = crate::sign_in_pane::sign_in_launcher(crate::platform::profile().agent_sign_in, host.smoke.is_some(), window, || {
+        Arc::new(crate::sign_in_pane::PaneSignIn { app })
+    });
     let made = CliAccountsCoordinator::new(Arc::new(HostRunner::new(host.processes.clone())), catalog, home()).with_terminal(terminals);
     let _ = accounts.coordinator.set(Arc::new(made));
     accounts.coordinator.get().cloned()

@@ -69,10 +69,9 @@ struct Desk {
     kept: Arc<Mutex<Kept>>,
 }
 
-/// `/m1/info`'s `platform` (`PlatformProfile::m1_platform` of the OS this app runs on).
+/// `/m1/info`'s `platform`: this OS's `PlatformProfile::m1_platform` ("win32", "darwin").
 fn m1_platform() -> &'static str {
-    let os = if cfg!(windows) { mighty_platform::Os::Windows } else { mighty_platform::Os::Macos };
-    mighty_platform::PlatformProfile::for_os(os).m1_platform
+    crate::platform::profile().m1_platform
 }
 
 fn state(host: &Host) -> Option<Arc<PhoneState>> {

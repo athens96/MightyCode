@@ -576,26 +576,51 @@ pub struct RuntimeProbe {
     pub http: Arc<dyn HttpsSend>,
 }
 
+/// Mac stage M-J: the Claude CLI's sign-in in the Keychain, read before its file (Swift `ClaudeQuotaCredentials.read`), and whether
+/// this read may ask the user (once, after the switch was turned on: Swift's `refresh(force: true, interactive: true)`).
+#[derive(Clone)]
+pub struct ClaudeKeychain {
+    pub store: Arc<dyn mighty_platform::ClaudeCredentials>,
+    pub interactive: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
 /// [`RuntimeProbe`] as the service's probe.
 pub fn runtime_probe(parts: RuntimeProbe) -> UsageProbe {
+    runtime_probe_with_keychain(parts, None)
+}
+
+/// [`runtime_probe`] where the Claude CLI may keep its sign-in in the Keychain (the Mac, while `usage.claudeKeychain` is on: the
+/// caller's): the Keychain first, then the CLI's file ([`super::claude_credential`]); a Keychain that would have asked, with no file
+/// to fall back on, says so (`usage.keychain.needed`) instead of reading as signed out. None: the file alone (Windows).
+pub fn runtime_probe_with_keychain(parts: RuntimeProbe, keychain: Option<ClaudeKeychain>) -> UsageProbe {
     let parts = Arc::new(parts);
     Arc::new(move |provider: String| -> BoxFuture<'static, Result<AccountUsageSnapshot, UsageError>> {
-        let parts = parts.clone();
+        let (parts, keychain) = (parts.clone(), keychain.clone());
         Box::pin(async move {
             match provider.as_str() {
                 "claude" => {
                     let environment = (parts.environment)();
                     let home = (parts.home)();
                     let http = Guarded(parts.http.clone());
-                    ClaudeAccountProbe::read(
-                        &environment,
-                        || credential_file::read(&home, &environment, mighty_core::time::clock_now()),
-                        &http,
-                        &mighty_core::time::clock_now,
-                        None,
-                        None,
-                    )
-                    .await
+                    let mut permission = false;
+                    let load = || {
+                        let now = mighty_core::time::clock_now();
+                        let Some(keychain) = &keychain else { return credential_file::read(&home, &environment, now) };
+                        let interactive = (keychain.interactive)();
+                        match super::claude_credential(&home, &environment, now, Some(keychain.store.as_ref()), interactive) {
+                            super::ClaudeSignIn::Found(credential) => Some(credential),
+                            super::ClaudeSignIn::Permission => {
+                                permission = true;
+                                None
+                            }
+                            super::ClaudeSignIn::Missing => None,
+                        }
+                    };
+                    let read = ClaudeAccountProbe::read(&environment, load, &http, &mighty_core::time::clock_now, None, None).await;
+                    if permission {
+                        return Err(failure(AccountUsageFailureKind::Authentication, strings::get("usage.keychain.needed")));
+                    }
+                    read
                 }
                 "codex" => {
                     let Some(command) = (parts.find)("codex".into()).await else {

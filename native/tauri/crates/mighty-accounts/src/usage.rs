@@ -28,7 +28,8 @@ pub use presentation::{
     AccountUsageWindowRow, leading, leading_bars_of, local_providers, session_reported,
 };
 pub use probes::{
-    AccountUsageStdio, AntigravityAccountProbe, ClaudeAccountProbe, CodexAccountProbe, Finder, HostCodexStdio, RuntimeProbe, runtime_probe,
+    AccountUsageStdio, AntigravityAccountProbe, ClaudeAccountProbe, ClaudeKeychain, CodexAccountProbe, Finder, HostCodexStdio,
+    RuntimeProbe, runtime_probe, runtime_probe_with_keychain,
 };
 pub use reset::{
     AccountResetEntitlement, AccountResetRow, AccountResetSmokeResult, AccountUsageShapeLog, ClaudeResetEntitlements, ResetProgram,

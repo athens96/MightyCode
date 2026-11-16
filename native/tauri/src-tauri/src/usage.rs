@@ -53,15 +53,26 @@ fn probe(host: &Host) -> usage::UsageProbe {
                 .unwrap_or_else(|| std::env::vars().collect())
         })
     };
-    usage::runtime_probe(RuntimeProbe {
-        find,
-        environment,
-        home: Arc::new(crate::accounts::home),
-        working_directory: std::env::temp_dir(),
-        processes: host.processes.clone(),
-        http: Arc::new(AppHttps(app)),
-    })
+    // The Mac's Claude sign-in in the Keychain (M-J; never a smoke's, which must not touch the runner's Keychain): asked for
+    // interactively once, after the switch was turned on (`direct`), else silently.
+    let keychain = crate::platform::claude_credentials()
+        .filter(|_| host.smoke.is_none())
+        .map(|store| usage::ClaudeKeychain { store, interactive: Arc::new(|| ASK_KEYCHAIN.swap(false, Ordering::SeqCst)) });
+    usage::runtime_probe_with_keychain(
+        RuntimeProbe {
+            find,
+            environment,
+            home: Arc::new(crate::accounts::home),
+            working_directory: std::env::temp_dir(),
+            processes: host.processes.clone(),
+            http: Arc::new(AppHttps(app)),
+        },
+        keychain,
+    )
 }
+
+/// The next Claude read may ask for the Keychain (Swift turns the switch on with `refresh(force: true, interactive: true)`).
+static ASK_KEYCHAIN: AtomicBool = AtomicBool::new(false);
 
 /// The HTTPS GET port as the app manages it, looked up when a read asks: the ports are managed after the frame's clocks first read
 /// the usage. None yet: refused, so nothing leaves.
@@ -219,6 +230,7 @@ pub async fn direct(host: &Arc<Host>, on: bool) -> Result<(), String> {
     host.view().update(|state| state.claude_direct_usage_lookup_enabled = on)?;
     host.schedule();
     if on {
+        ASK_KEYCHAIN.store(true, Ordering::SeqCst);
         queue(host, &usage, true);
     }
     Ok(())
