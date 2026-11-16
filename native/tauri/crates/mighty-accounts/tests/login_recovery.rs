@@ -405,6 +405,7 @@ async fn antigravity_sign_in_is_its_status_reading_signed_in() {
 
 /// CliLoginRecoveryVerification.cs:147-155, the terminal half: the Antigravity sign-in terminal in the pane's workspace (the plan is
 /// the Windows launcher's own, mighty-platform-windows' `launch_plan`).
+/// Windows only: the sign-in terminal window is Windows' launcher (the Mac signs in in a terminal pane).
 #[cfg(windows)]
 #[test]
 fn the_antigravity_sign_in_terminal_starts_in_the_workspace() {
@@ -542,6 +543,7 @@ fn pi_sign_in_failures_and_the_terminal_table() {
 
 /// CliLoginRecoveryVerification.cs:298-305: pi.cmd by its full path through cmd /c, in Windows Terminal or the console host; the tab
 /// says what to type, and a title Windows Terminal would split is left out.
+/// Windows only: the sign-in terminal window is Windows' launcher (the Mac signs in in a terminal pane).
 #[cfg(windows)]
 #[test]
 fn pis_terminal_runs_its_shim_through_cmd() {

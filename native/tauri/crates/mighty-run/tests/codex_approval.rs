@@ -1,6 +1,6 @@
 //! C# CodexApprovalVerification (MightyCode.Core.Tests/CodexApprovalVerification.cs): Codex's app-server approval channel driven by
 //! its callbacks, and a RunManager run against a stand-in app-server (`mighty-fake-cli --codex-approval-fixture`, C#'s
-//! `--codex-approval-fixture`) over the Windows ProcessHost.
+//! `--codex-approval-fixture`) over the OS's ProcessHost (Windows'; the Mac's since M-A).
 
 mod common;
 
@@ -304,7 +304,6 @@ fn completion_and_legacy_events() {
 }
 
 /// CodexApprovalVerification.cs:139 `ActualRunManagerProtocol`.
-#[cfg(windows)]
 #[tokio::test(flavor = "multi_thread")]
 async fn actual_run_manager_protocol() {
     use std::sync::{OnceLock, Weak};

@@ -1,6 +1,6 @@
 //! C# PiVerification (MightyCode.Core.Tests/PiVerification.cs): the RPC stdin pi reads, attachments in its prompt, and real runs against
 //! a pi that answers from a recording (`mighty-fake-cli --fake-cli pi <record> --pi-fixture <file>`, C#'s `FakeAsync`) through the
-//! Windows ProcessHost; with CliLoginRecoveryVerification's pi sign-in checks. The recordings' replays through the parser and the graph
+//! OS's ProcessHost (Windows'; the Mac's since M-A); with CliLoginRecoveryVerification's pi sign-in checks. The recordings' replays through the parser and the graph
 //! are mighty-graph's tests/pi.rs; the argv's in pi_arguments.rs; the session list mighty-history's.
 
 mod common;
@@ -119,7 +119,6 @@ fn pi_is_beta_reads_its_tool_names_and_draws_a_graph() {
     );
 }
 
-#[cfg(windows)]
 mod runs {
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};

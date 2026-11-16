@@ -281,6 +281,7 @@ fn commands_are_the_clis_own() {
 
 /// CliAccountVerification.cs:125-140, the terminal half of `CommandsAreTheCLIsOwn`: the external sign-in terminal carries the CLI's
 /// own argv as a separate argument list (the plan is mighty-platform-windows' `launch_plan`, the launcher's own).
+/// Windows only: the sign-in terminal window is Windows' launcher (the Mac signs in in a terminal pane).
 #[cfg(windows)]
 #[test]
 fn the_sign_in_terminal_carries_the_clis_own_argv() {
@@ -792,9 +793,8 @@ async fn a_sign_in_opens_the_clis_own_command_in_a_terminal() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
-/// The coordinator over the real Windows process layer: copies of the stand-in CLI named `claude`, `codex` and `agy` on the PATH
+/// The coordinator over the OS's real process layer (Windows'; the Mac's since M-A): copies of the stand-in CLI named `claude`, `codex` and `agy` on the PATH
 /// answer the status commands, `claude auth logout` signs Claude out, and each ran in the home with `NO_COLOR` and `CI`.
-#[cfg(windows)]
 #[tokio::test(flavor = "multi_thread")]
 async fn the_coordinator_reads_real_children_through_the_process_host() {
     common::korean();
@@ -804,9 +804,9 @@ async fn the_coordinator_reads_real_children_through_the_process_host() {
     std::fs::create_dir_all(&bin).unwrap();
     std::fs::create_dir_all(&state).unwrap();
     for name in ["claude", "codex", "agy"] {
-        std::fs::copy(common::fake_cli(), bin.join(format!("{name}.exe"))).unwrap();
+        std::fs::copy(common::fake_cli(), bin.join(format!("{name}{}", std::env::consts::EXE_SUFFIX))).unwrap();
     }
-    let host: Arc<dyn mighty_platform::ProcessHost> = Arc::new(mighty_platform_windows::WindowsProcessHost::new());
+    let host = common::processes();
     let mut values: std::collections::BTreeMap<String, String> = std::env::vars().collect();
     values.retain(|key, _| !key.eq_ignore_ascii_case("PATH"));
     values.insert("PATH".into(), text(&bin));
@@ -828,7 +828,7 @@ async fn the_coordinator_reads_real_children_through_the_process_host() {
         calls.len() == 5
             && calls.iter().all(|c| c["NO_COLOR"] == "1"
                 && c["CI"] == "1"
-                && c["cwd"].as_str().is_some_and(|cwd| cwd.eq_ignore_ascii_case(&text(&home)))),
+                && c["cwd"].as_str().is_some_and(|cwd| common::same_folder(std::path::Path::new(cwd), &home))),
         "{calls:?}"
     );
     common::remove_when_free(&home).await;

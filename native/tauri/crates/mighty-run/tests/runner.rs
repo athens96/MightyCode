@@ -1,13 +1,11 @@
-//! RunManager over real children: the fake CLI (tests/fake/cli.rs, C# `Verification.FakeCliAsync`) started through the Windows
-//! ProcessHost. C# ToolPermissionVerification.RunLaunchesWithHostPromptsAndAnswersOneRequest, ClaudePlanModeVerification's
+//! RunManager over real children: the fake CLI (tests/fake/cli.rs, C# `Verification.FakeCliAsync`) started through the OS's
+//! ProcessHost (Windows'; the Mac's since M-A). C# ToolPermissionVerification.RunLaunchesWithHostPromptsAndAnswersOneRequest, ClaudePlanModeVerification's
 //! RunnerAnswersAPlanAndReportsProgress and StoppingAPaneWaitingOnBackgroundWorkEndsEverything,
 //! ResumedAgentVerification.TheRunnerKeepsTheInputOpenForAResumedAgent, and Verification.cs "provider prompt goes to stdin; shell
 //! output and cancellation execute real children", "fake CLI receives attachment bytes and staging is removed on completion, error
 //! and stop", "pending stop and disposal prevent a late child launch" and "desktop routing retains cancellation before manager
 //! admission", CliLoginRecoveryVerification.ClaudeFakeCliRunKeepsTheReasonWhenTheResultRepeatsTheMarkedFailure and
-//! GeminiFakeCliRunRaisesTheReasonFromStderrOnly, and an Antigravity run read through its stream. Windows only: the
-//! Mac ProcessHost is W1-D's.
-#![cfg(windows)]
+//! GeminiFakeCliRunRaisesTheReasonFromStderrOnly, and an Antigravity run read through its stream.
 
 mod common;
 
@@ -667,7 +665,7 @@ async fn desktop_routing_retains_cancellation_before_manager_admission() {
     // C# hears the running event synchronously, before the runner admits the request, so its stop lands first and the command
     // never runs. Here the host hears it through the service's channel, after `launch` handed the request on: the stop reaches the
     // run itself (a deviation: no host can stop a run between its running event and its admission).
-    let _ = service.start(request(&pane_id, &workspace, "shell", "ping -n 30 127.0.0.1")).await;
+    let _ = service.start(request(&pane_id, &workspace, "shell", common::long_shell_command())).await;
     common::until(|| service.snapshot().sessions.unwrap()[0].status.as_deref() == Some("stopped"), 20000, "the pane stops").await;
     let session = service.snapshot().sessions.unwrap()[0].clone();
     assert_eq!(session.status.as_deref(), Some("stopped"));
@@ -716,7 +714,7 @@ async fn a_stop_right_after_the_send_is_never_lost() {
     );
     let service = Arc::new(service);
     let starting = tokio::spawn({
-        let (service, request) = (service.clone(), request(&pane_id, &workspace, "shell", "ping -n 30 127.0.0.1"));
+        let (service, request) = (service.clone(), request(&pane_id, &workspace, "shell", common::long_shell_command()));
         async move { service.start(request).await }
     });
     tokio::task::spawn_blocking(move || reached.recv_timeout(std::time::Duration::from_secs(20))).await.unwrap().expect("the gate");

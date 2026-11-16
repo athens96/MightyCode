@@ -1,7 +1,7 @@
 //! C# AcpAgentAccountVerification, the parts about what opencode and Hermes report of their sign-ins (OpencodeAccounts, HermesAccounts,
 //! CliAccountStatus, the argv and hints of CliAccountSupport): `OpencodeSignInIsWhatAuthListNamesAndOtherwiseZensFreeModelsOnly`,
 //! `HermesSignInIsTheProviderItsAcpServerNames` and `TheProbeWritesInitializeOnceReadsTheAnswerAndClosesItsInput` (over the stand-in's
-//! `--hermes-acp-cli`, Windows only). Their `CliAuthFailure.SignInCanFix` lines, the coordinator, the CLI updates, the account usage and
+//! `--hermes-acp-cli`, over the OS's process host). Their `CliAuthFailure.SignInCanFix` lines, the coordinator, the CLI updates, the account usage and
 //! the WinUI accounts section are the settings' and sign-in card's stage (W6).
 
 mod common;
@@ -244,7 +244,6 @@ fn hermes_sign_in_is_the_provider_its_acp_server_names() {
     );
 }
 
-#[cfg(windows)]
 #[tokio::test(flavor = "multi_thread")]
 async fn the_probe_writes_initialize_once_reads_the_answer_and_closes_its_input() {
     use std::time::Duration;

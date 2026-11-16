@@ -34,3 +34,7 @@ tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread",
 
 [target.'cfg(windows)'.dev-dependencies]
 mighty-platform-windows.workspace = true
+
+# The ACP runs over the Mac ProcessHost (M-A).
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+mighty-platform-macos.workspace = true

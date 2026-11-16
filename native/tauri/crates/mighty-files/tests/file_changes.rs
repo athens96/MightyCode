@@ -571,7 +571,7 @@ fn inside_repository(folder: &Path) -> bool {
 }
 
 /// Verification.cs:1215 "file changes: without a run original HEAD is the base, untracked all added, no repository no diff" — git runs
-/// through the Windows process host (the Mac's is not written yet).
+/// through the OS's process host. Windows only until M-G: the read opens each file through `FileHandles`, the Mac's is M-G's.
 #[cfg(windows)]
 #[tokio::test(flavor = "multi_thread")]
 async fn without_a_run_original_gits_head_is_the_base() {

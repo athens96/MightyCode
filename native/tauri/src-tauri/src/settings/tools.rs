@@ -233,8 +233,8 @@ async fn install(host: Arc<Host>) -> Result<(), String> {
     let executor = ProcessToolkitExecutor {
         processes: host.processes.clone(),
         environment: runs.catalog.environment(),
-        // C# `CliRunner`: the program along the PATH (× PATHEXT) only.
-        resolve: Arc::new(|name, environment| toolkit::runner::find_on_path(name, environment, &|path| Path::new(path).is_file())),
+        // C# `CliRunner`: the program along the PATH (x PATHEXT on Windows) only.
+        resolve: Arc::new(crate::platform::find_on_path),
         working_directory: std::env::current_dir().unwrap_or_default(),
     };
     let results = tauri::async_runtime::spawn_blocking(move || {
