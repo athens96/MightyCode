@@ -309,6 +309,7 @@ const BROWSER_PROBE: &str = r#"(async () => {
     const back = await until(() => { const b = ofPane('button.browser-nav'); return b && !b.disabled ? b : null; }, 10000);
     back?.click();
     report.wentBack = report.onSecond && !!(await until(async () => { const s = await surface(); return field() === fixture && s && (s.url || '') === fixture; }, 10000));
+    if (!report.wentBack) report.backSeen = { clicked: !!back, field: field(), view: (await surface())?.url ?? null };
     // window.open from a page: refused and counted, no window opens, and the page stays where it is.
     const before = await invoke('smoke_surface', { paneId, action: 'popups' });
     go(popup);
@@ -330,6 +331,8 @@ const BROWSER_PROBE: &str = r#"(async () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     report.menuClosed = report.steppedAside && !!(await until(async () => { const s = await surface(); return !document.querySelector('[data-testid=menu]') && s && s.visible; }, 5000));
+    // The Mac: the engine's own views in two workspace profiles, a close and reopens (smoke.rs `browser_profiles`).
+    if (engine) report.profiles = await invoke('smoke_surface', { paneId, action: 'profiles' });
   } catch (error) {
     report.error = String(error);
   }
@@ -922,6 +925,15 @@ impl Smoke {
             checks["browserBack"] = json!(yes("onSecond") && yes("wentBack"));
             checks["browserPopupBlocked"] = json!(yes("popupPage") && yes("popupBlocked"));
             checks["browserMenuOver"] = json!(yes("menuOpened") && yes("steppedAside") && yes("menuClosed"));
+            // The Mac's engine views in two profiles (the Swift browser smoke's keys; `browser_profiles`).
+            if crate::platform::browser_engine().is_some() {
+                let profiles = browser.get("profiles").cloned().unwrap_or(Value::Null);
+                let yes = |key: &str| profiles.get(key) == Some(&Value::Bool(true));
+                checks["browserTwoPanesRenderJavaScript"] = json!(yes("twoPanesRenderJavaScript"));
+                checks["browserIndependentProfiles"] = json!(yes("independentProfiles"));
+                checks["browserClosingOnePaneKeepsOtherAlive"] = json!(yes("closingOnePaneKeepsOtherAlive"));
+                checks["browserReopenCycles"] = json!(yes("reopenCycles"));
+            }
         }
         attribute(&checks, &mut steps, "browser");
         if let Some(create) = &create {
@@ -1209,21 +1221,112 @@ fn serve_fixture() -> std::io::Result<String> {
             let mut request = [0u8; 4096];
             let read = stream.read(&mut request).unwrap_or(0);
             let line = String::from_utf8_lossy(&request[..read]);
+            // The Mac's profile check (`browser_profiles`): `/set?pane=<p>` sets its cookie and goes on to `/check?pane=<p>` by script;
+            // each such request is recorded with the cookie it sent.
+            let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
+            let mut set_cookie = String::new();
             let page = if line.starts_with("GET /second") {
-                SECOND
+                SECOND.to_string()
             } else if line.starts_with("GET /popup") {
-                POPUP
+                POPUP.to_string()
+            } else if let Some(pane) = path.strip_prefix("/set?pane=").filter(|p| p.chars().all(|c| c.is_ascii_alphanumeric())) {
+                set_cookie = format!("Set-Cookie: {PROFILE_COOKIE}={pane}; Path=/; Max-Age=600\r\n");
+                format!("<!doctype html><html><body>set {pane}<script>setTimeout(() => location.href = '/check?pane={pane}', 200)</script></body></html>")
+            } else if path.starts_with("/check?pane=") {
+                "<!doctype html><html><body>checked</body></html>".to_string()
             } else {
-                FIXTURE
+                FIXTURE.to_string()
             };
+            if path.starts_with("/set?") || path.starts_with("/check?") {
+                let cookie = line
+                    .lines()
+                    .find_map(|header| header.strip_prefix("Cookie:").or_else(|| header.strip_prefix("cookie:")))
+                    .map(|cookie| cookie.trim().to_string());
+                PROFILE_REQUESTS.lock().unwrap_or_else(|p| p.into_inner()).push((path, cookie));
+            }
             let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{page}",
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{set_cookie}Connection: close\r\n\r\n{page}",
                 page.len()
             );
             let _ = stream.write_all(response.as_bytes());
         }
     })?;
+    let _ = FIXTURE_ADDRESS.set(address.clone());
     Ok(address)
+}
+
+/// The browser fixture's address (`…/fixture`), once served.
+static FIXTURE_ADDRESS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+/// The profile check's requests (`/set?…`, `/check?…`) and the cookie each sent.
+static PROFILE_REQUESTS: Mutex<Vec<(String, Option<String>)>> = Mutex::new(Vec::new());
+/// The cookie the profile check's `/set` pages set.
+const PROFILE_COOKIE: &str = "mightyprofile";
+
+/// The Mac's profile check (the Swift browser smoke's `twoPanesRenderJavaScript`, `independentProfiles`,
+/// `closingOnePaneKeepsOtherAlive`, `reopenCycles`), on the launch's engine with views of its own over the window's top left: A in
+/// workspace profile 1 sets a cookie and goes on to the check page by its page's script; B in profile 2 and C in profile 1 ask for the
+/// check page; A and C must send A's cookie and B none. Then A closes and B still loads, and a view opens and closes three times, each
+/// loading. Every view is closed at the end.
+async fn browser_profiles(surfaces: &SurfaceManager) -> Value {
+    let Some(base) = FIXTURE_ADDRESS.get().and_then(|address| address.strip_suffix("/fixture")).map(str::to_string) else {
+        return json!({"error": "no fixture"});
+    };
+    let seen = |path: String| async move {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let found = PROFILE_REQUESTS.lock().unwrap_or_else(|p| p.into_inner()).iter().find(|(p, _)| *p == path).cloned();
+            if let Some((_, cookie)) = found {
+                return Some(cookie.unwrap_or_default());
+            }
+            if Instant::now() > deadline {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    let rect = mighty_platform::DeviceRect { x: 0, y: 0, width: 240, height: 160 };
+    let open = |pane: &'static str, profile: &'static str, path: &str| {
+        let url = format!("{base}{path}");
+        async move { surfaces.open_unowned(pane, profile, &url, rect).await }
+    };
+    let wanted = format!("{PROFILE_COOKIE}=a");
+    let has = |cookie: &Option<String>| cookie.as_deref().is_some_and(|c| c.split(';').any(|part| part.trim() == wanted));
+    let mut report = json!({});
+    let a = open("smoke-profile-a", "smoke-profile-1", "/set?pane=a").await;
+    let a_checked = seen("/check?pane=a".into()).await;
+    let b = open("smoke-profile-b", "smoke-profile-2", "/check?pane=b").await;
+    let b_checked = seen("/check?pane=b".into()).await;
+    let c = open("smoke-profile-c", "smoke-profile-1", "/check?pane=c").await;
+    let c_checked = seen("/check?pane=c".into()).await;
+    report["opened"] = json!([a.is_ok(), b.is_ok(), c.is_ok()]);
+    report["cookies"] = json!({"a": a_checked, "b": b_checked, "c": c_checked});
+    report["twoPanesRenderJavaScript"] = json!(a_checked.is_some() && b_checked.is_some());
+    report["independentProfiles"] =
+        json!(has(&a_checked) && has(&c_checked) && b_checked.as_deref().is_some_and(|c| !c.contains(PROFILE_COOKIE)));
+    // A closes; B still navigates.
+    let closed = a.as_ref().is_ok_and(|view| view.close().is_ok());
+    let b_again = match &b {
+        Ok(view) => view.navigate(&format!("{base}/check?pane=b2")).is_ok() && seen("/check?pane=b2".into()).await.is_some(),
+        Err(_) => false,
+    };
+    report["closingOnePaneKeepsOtherAlive"] = json!(closed && b_again);
+    // A view opened and closed three times, each loading its page.
+    let mut cycles = 0;
+    for (pane, path) in
+        [("smoke-profile-d1", "/check?pane=d1"), ("smoke-profile-d2", "/check?pane=d2"), ("smoke-profile-d3", "/check?pane=d3")]
+    {
+        if let Ok(view) = open(pane, "smoke-profile-2", path).await
+            && seen(path.into()).await.is_some()
+            && view.close().is_ok()
+        {
+            cycles += 1;
+        }
+    }
+    report["reopenCycles"] = json!(cycles == 3);
+    for view in [b, c].into_iter().flatten() {
+        let _ = view.close();
+    }
+    report
 }
 
 /// A browser pane in a workspace of its own, made the active one (a change of the in-memory state; saved only where the app may
@@ -1292,6 +1395,8 @@ pub async fn smoke_surface(pane_id: String, action: String, host: tauri::State<'
             }
             Ok(popups)
         }
+        // The Mac's profile check (`browser_profiles`).
+        "profiles" if crate::platform::browser_engine().is_some() => Ok(browser_profiles(&surfaces).await),
         // The frame step's view of the host's state (smoke_frame.rs).
         "state" => Ok(crate::smoke_frame::state(&host)),
         // The dialogs whose flows still wait (the reload step's: none once the redrawn sheet was answered).

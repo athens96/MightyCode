@@ -520,6 +520,20 @@ impl SurfaceManager {
         Ok(Value::Null)
     }
 
+    /// A browser view of no pane over the window at `rect`, in the workspace profile `profile_key`, on `url` (the Mac smoke's profile
+    /// check, smoke.rs `browser_profiles`, which closes it).
+    pub async fn open_unowned(
+        &self,
+        pane: &str,
+        profile_key: &str,
+        url: &str,
+        rect: DeviceRect,
+    ) -> Result<Box<dyn BrowserSurface>, String> {
+        let data_dir = browser::profile_folder(&self.browser_data, profile_key);
+        let options = BrowserOptions { pane_id: pane.to_string(), url: url.to_string(), data_dir, bounds: rect, listener: None };
+        self.factory.open_browser(options).await.map_err(|error| error.to_string())
+    }
+
     /// The popups a pane's page asked for, all refused (the smoke's check).
     pub fn popups_refused(&self, pane: &str) -> u32 {
         self.browsers.lock().get(pane).map_or(0, |browser| browser.popups_refused)
