@@ -221,6 +221,33 @@ jobs:
           }
           if ($bad.Count -gt 0) { $bad; throw "$($bad.Count) guard violation(s)" }
           "checked $($files.Count) Rust files"
+      - name: Every PlatformProfile field is read where its behaviour is
+        run: |
+          # Mac stage M-J: a deliberate difference between the OSes is a PlatformProfile field (no cfg(target_os) in shared crates), and
+          # a field nothing reads describes a behaviour that is not there. Each field must be read (`.field`) on a code line of a .rs
+          # file outside profile.rs and outside tests/ folders.
+          # Fields wired on another Mac part's branch, read once it merges (the integrator empties this list as it merges them):
+          $pending = @{
+            'remote_decodes_request_paths' = 'M-C (remote.rs)'; 'direct_connection_firewall' = 'M-C (direct.rs)'
+            'direct_advertises_magic_dns' = 'M-C (direct.rs)'; 'remote_graph_runs' = 'M-C (remote.rs)'
+            'update_needs_public_key' = 'M-H'; 'build_update_url_wins' = 'M-H'; 'update_rechecks_sha256' = 'M-H'
+          }
+          $profile = [IO.File]::ReadAllText((Join-Path (Get-Location) 'crates/mighty-platform/src/profile.rs'))
+          $body = [regex]::Match($profile, '(?s)pub struct PlatformProfile \{(.*?)\n\}').Groups[1].Value
+          $fields = [regex]::Matches($body, '(?m)^\s*pub (\w+):') | ForEach-Object { $_.Groups[1].Value }
+          if ($fields.Count -lt 5) { throw "PlatformProfile's fields were not found ($($fields.Count))" }
+          $code = Get-ChildItem -Recurse -File -Filter *.rs | Where-Object {
+            $_.FullName -notmatch '[\\/](target|node_modules|tests|spikes)[\\/]' -and $_.Name -ne 'profile.rs' } |
+            ForEach-Object { [IO.File]::ReadAllLines($_.FullName) | Where-Object { -not $_.TrimStart().StartsWith('//') } }
+          $text = $code -join "`n"
+          $unread = @()
+          foreach ($field in $fields) {
+            $read = $text -match "\.$field\b"
+            if (-not $read -and -not $pending.ContainsKey($field)) { $unread += $field }
+            if ($read -and $pending.ContainsKey($field)) { "$field is read now: take it out of the pending list ($($pending[$field]))" }
+          }
+          if ($unread.Count -gt 0) { "unread PlatformProfile fields: $($unread -join ', ')"; throw "$($unread.Count) unread profile field(s)" }
+          "$($fields.Count) fields, every one read ($($pending.Count) pending on other parts' branches)"
 
   package:
     # The release candidate in the 0.4.x shape (W9 plan §1.6, D10, D13, D15): what native-windows.yml builds from the C# app, here from
