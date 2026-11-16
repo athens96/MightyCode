@@ -448,4 +448,40 @@ mod tests {
         let ended = tokio::time::timeout(Duration::from_secs(5), async { while session.output.recv().await.is_some() {} }).await;
         assert!(ended.is_ok(), "the output ends once the shell is gone");
     }
+
+    /// Whether a process of that id is there now (a zombie still is).
+    fn present(pid: i32) -> bool {
+        // SAFETY: signal 0 only asks whether the process exists.
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    /// Review M-D 3: a shell that exited by itself stays unreaped (its id, its group's id, cannot be reused) until the close has
+    /// ended what it left in its group; then it is reaped. Before, the close signalled `-pid` after the shell was reaped, which could
+    /// reach another process group that reused the number.
+    #[tokio::test]
+    async fn the_group_is_ended_while_the_exited_shell_still_holds_its_id() {
+        let host = pty_host();
+        // No job control: the background sleep stays in the shell's own process group.
+        let script = "/bin/sleep 30 & print -r -- SHELL=$$ BG=$!; exit 0";
+        let mut session = host.open(request(host.shell_arguments(Path::new("/bin/zsh"), Some(script), true))).await.unwrap();
+        let seen = read_until(&mut session.output, "BG=").await;
+        let number = |key: &str| -> i32 {
+            let at = seen.find(key).unwrap_or_else(|| panic!("{key} in {seen:?}")) + key.len();
+            seen[at..].chars().take_while(char::is_ascii_digit).collect::<String>().parse().unwrap()
+        };
+        let (shell, background) = (number("SHELL="), number("BG="));
+        assert_eq!(session.control.wait().await.unwrap(), 0);
+        assert!(present(shell), "the exited shell is not reaped before the close");
+        assert!(present(background), "what it left running is still there");
+        session.control.close().await.unwrap();
+        let mut gone = false;
+        for _ in 0..100 {
+            if !present(shell) && !present(background) {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(gone, "the close ended the group, then the shell was reaped");
+    }
 }
