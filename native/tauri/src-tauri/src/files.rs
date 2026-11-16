@@ -534,11 +534,12 @@ fn frame_origin(scheme: &str, host: &str) -> String {
     if cfg!(windows) { format!("{scheme}://{PROTOCOL}.{host}") } else { format!("{PROTOCOL}://{host}") }
 }
 
-/// The policy a served page carries: sandboxed to scripts (as its frame is, also when it is opened some other way), and frames of
-/// its own only from the frame hosts.
+/// The policy a served page carries: sandboxed to scripts (as its frame is, also when it is opened some other way), frames of its
+/// own only from the frame hosts, and no connection of its own (`connect-src 'none'`, C#'s `LocalHtmlDocument.ContentPolicy`): a
+/// previewed file's script reaches no server, Tauri's IPC included (review M-E 1, with the host's nonce).
 fn frame_policy(scheme: &str) -> String {
     let hosts = if cfg!(windows) { format!("{scheme}://*{}", frames::HOST_SUFFIX) } else { format!("{PROTOCOL}:") };
-    format!("sandbox allow-scripts; frame-src {hosts}")
+    format!("sandbox allow-scripts; frame-src {hosts}; connect-src 'none'")
 }
 
 /// C# `WebHtmlAddress`: the file's address under its folder's host (the folder kept with the root it was resolved under), or None.
@@ -888,11 +889,11 @@ mod tests {
         if cfg!(windows) {
             assert_eq!(frame_origin("http", &host), "http://mightyhtml.h1.html.mighty.invalid");
             assert_eq!(frame_origin("https", &host), "https://mightyhtml.h1.html.mighty.invalid");
-            assert_eq!(frame_policy("http"), "sandbox allow-scripts; frame-src http://*.html.mighty.invalid");
-            assert_eq!(frame_policy("https"), "sandbox allow-scripts; frame-src https://*.html.mighty.invalid");
+            assert_eq!(frame_policy("http"), "sandbox allow-scripts; frame-src http://*.html.mighty.invalid; connect-src 'none'");
+            assert_eq!(frame_policy("https"), "sandbox allow-scripts; frame-src https://*.html.mighty.invalid; connect-src 'none'");
         } else {
             assert_eq!(frame_origin("http", &host), "mightyhtml://h1.html.mighty.invalid");
-            assert_eq!(frame_policy("http"), "sandbox allow-scripts; frame-src mightyhtml:");
+            assert_eq!(frame_policy("http"), "sandbox allow-scripts; frame-src mightyhtml:; connect-src 'none'");
         }
     }
 
