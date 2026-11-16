@@ -56,7 +56,9 @@ const PROBE: &str = r#"(async () => {
     row('smoke-folder/hello.ts')?.click();
     const preview = (path) => slot(filesId)?.querySelector('[data-testid=files-preview][data-preview-path="' + path + '"]');
     report.filesPreview = !!(await until(() => { const p = preview('smoke-folder/hello.ts'); return !!p && (p.querySelector('[data-testid=files-source]')?.textContent ?? '').includes('smokeMarker') && !!p.querySelector('.syntax-keyword') && (p.querySelector('.files-lines')?.textContent ?? '').startsWith('1'); }, 10000));
-    // An HTML file as a page: the sandboxed frame from the host's protocol.
+    // An HTML file as a page: the sandboxed frame from the host's protocol. Its load is recorded from before the click (a load event
+    // reaches the document's capture listeners), so a frame that loads before the wait below starts still counts.
+    document.addEventListener('load', (event) => { const t = event.target; if (t instanceof HTMLIFrameElement && t.dataset.testid === 'files-html') t.dataset.smokeLoaded = '1'; }, true);
     row('page')?.click();
     report.htmlFolderOpened = !!(await until(() => row('page/index.html'), 10000));
     row('page/index.html')?.click();

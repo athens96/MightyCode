@@ -222,7 +222,7 @@ fn exe_mode(args: &[String]) -> Option<i32> {
         [first, root, rest @ ..] if first == fake_claude::ARGUMENT && mighty_core::normalize::fully_qualified(root) => {
             Some(fake_claude::run(Path::new(root), rest, platform::process_host()))
         }
-        // Mac stage (Step 0 stub, M-H): --verify-resources, the Mac build's and install scripts' check of the bundle.
+        // Mac stage M-H: --verify-resources, the Mac build's and install scripts' check of the bundle.
         _ => help_demo_cli::try_run(args).or_else(|| update_helper::try_run(args)).or_else(|| verify_resources::try_run(args)),
     }
 }
