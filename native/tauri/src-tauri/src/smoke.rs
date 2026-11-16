@@ -30,8 +30,8 @@
 //!
 //! The host adds whether its own state took the click, the calls it saw and the methods it answered "unimplemented" (only those of
 //! [`ALLOWED_UNIMPLEMENTED`] pass, `unimplementedAllowed`), and writes `smoke-result.json`; with `--smoke-exit` the app then quits, 0
-//! when the smoke passed, else 1. A smoke that has no result in time (495 s, 645 s with the stand-in CLI, 525 s with the real one)
-//! fails.
+//! when the smoke passed, else 1. A smoke that has no result in time (495 s, 645 s with the stand-in CLI and 900 s on the Mac, 525 s
+//! with the real one) fails.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -148,33 +148,9 @@ pub const ALLOWED_UNIMPLEMENTED: [&str; 0] = [];
 /// Mac stage (plan §3 0c): the steps whose checks may fail on the Mac while its parts are written, by the keys the result groups them
 /// under (`steps`). On the Mac the smoke's exit code says whether every check outside these passed (`passedOutsidePending`); `passed`
 /// stays every check's verdict. Step 0 lists every step; each part's merge takes out what passes on the Mac, and the integrator empties
-/// it at the end (W9's `ALLOWED_UNIMPLEMENTED` pattern). Windows ignores it.
-pub const MAC_PENDING_STEPS: [&str; 24] = [
-    "probe",
-    "frame",
-    "browser",
-    "terminal",
-    "gitCreate",
-    "reload",
-    "files",
-    "history",
-    "settings",
-    "setup",
-    "accounts",
-    "updates",
-    "delegation",
-    "remote",
-    "companion",
-    "styles",
-    "appUpdate",
-    "mirror",
-    "help",
-    "paneWorktree",
-    "unimplemented",
-    "acp",
-    "runs",
-    "localeKeyLeakScan",
-];
+/// it at the end (W9's `ALLOWED_UNIMPLEMENTED` pattern). Windows ignores it. Since the Mac stage's integration only the steps that
+/// waited for every part at once are left, until the integrated CI shows them passing.
+pub const MAC_PENDING_STEPS: [&str; 2] = ["delegation", "paneWorktree"];
 
 /// Which step each check came from, in the order they were added: the checks `checks` gained since the last call are `step`'s.
 fn attribute(checks: &Value, steps: &mut Vec<(String, Vec<String>)>, step: &str) {
@@ -517,6 +493,8 @@ impl Smoke {
             // The frame, browser, gitCreate and reload steps add up to two minutes, the terminal and history steps a minute each.
             // The W6 steps a minute more, the W8 steps (remote, companion) another, and W9's (plan R13) 45 s.
             Mode::Page => 495,
+            // The Mac's run is longer (WebKit, Ghostty, the native panels and its own help capture; plan §4).
+            Mode::FakeClaude if cfg!(target_os = "macos") => 900,
             Mode::FakeClaude => 645,
             Mode::RealClaude => 525,
         })

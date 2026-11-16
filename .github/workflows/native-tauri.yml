@@ -27,8 +27,8 @@ jobs:
   tauri:
     name: Tauri ${{ matrix.os }}
     runs-on: ${{ matrix.runner }}
-    # Mac stage Step 0: the Mac leg's smoke (up to its own 645 s limit) made the job longer.
-    timeout-minutes: 60
+    # Mac stage Step 0: the Mac leg's smoke (up to its own limit, 900 s on the Mac since the integration) made the job longer.
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -160,8 +160,8 @@ jobs:
         run: ./native/tauri/scripts/smoke.ps1 -Out "$env:RUNNER_TEMP/tauri-smoke"
       - name: Smoke on the Mac against the seeded demo profile (WebKit; the steps of smoke.rs' MAC_PENDING_STEPS may fail)
         if: matrix.os == 'macos'
-        # The smoke's own limit (645 s with the stand-in CLI), the seed and the stand-in's build.
-        timeout-minutes: 18
+        # The smoke's own limit on the Mac (900 s with the stand-in CLI, smoke.rs), the seed and the stand-in's build.
+        timeout-minutes: 20
         run: ./native/tauri/scripts/smoke.ps1 -Out "$env:RUNNER_TEMP/tauri-smoke"
       # M-E: the browser pane with CEF (plan D3): the debug app in a bundle with CEF 152, the Swift app's C bridge and the four helpers
       # (spikes/mac/cef/assemble.sh), against a seeded profile with the browser engine on, read-only, without the run steps.
