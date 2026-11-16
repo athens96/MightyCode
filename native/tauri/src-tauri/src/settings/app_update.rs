@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use mighty_core::app_update_view::{Phase, State, describe, text};
+use mighty_core::app_update_view::{Phase, State, describe, text, text_in};
 use mighty_core::design_tokens::{Token, metrics};
 use mighty_native::kit::{ControlSize, TextStyle};
 use mighty_native::ui::{Content, El, Grid, Kind, Track, Ui};
@@ -51,7 +51,11 @@ pub fn section(host: &Arc<Host>, ui: &mut Ui) -> El {
             (update.core.describe(&locale), state.phase, state.download_fraction, update.core.press_allowed())
         }
         // Before the app update exists (never once main.rs started it): a build that cannot check.
-        None => (describe(&locale, &State::default(), false, None, |at| at.format("%H:%M").to_string(), true), Phase::Idle, 0.0, false),
+        None => {
+            let view =
+                describe(&locale, crate::app_update::words(), &State::default(), false, None, |at| at.format("%H:%M").to_string(), true);
+            (view, Phase::Idle, 0.0, false)
+        }
     };
     let (typed_url, automatic) = {
         let view = host.view();
@@ -72,7 +76,7 @@ pub fn section(host: &Arc<Host>, ui: &mut Ui) -> El {
         .on_text(move |typed| {
             let _ = to.view().update(|state| state.app_update_manifest_url_override = (!typed.is_empty()).then_some(typed));
         });
-    let hint = view.built_in_address_line.clone().unwrap_or_else(|| text(&locale, "ManifestUrlHint"));
+    let hint = view.built_in_address_line.clone().unwrap_or_else(|| text_in(&locale, crate::app_update::words(), "ManifestUrlHint"));
     let typed = El::stack(false, metrics::SPACING_SM, vec![address, ui.settings_text(hint, TextStyle::size(11.0).ink(Token::Ink2))]);
     rows.add(typed).visible = view.section_enabled && view.address_field_enabled;
     // The build's own address, under its label (screens/10-settings-about-*.webp).

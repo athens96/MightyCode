@@ -112,6 +112,42 @@ async fn homebrew_uses_actual_cask_or_formula_and_only_named_package() {
     }
 }
 
+/// Mac stage integration: the same Homebrew update through M-A's real process host, with the CLI and `brew` as real scripts: the CLI's
+/// version is read before and after, `brew` gets the one formula and the switches in its environment, and nothing else runs.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn homebrew_updates_through_the_macs_real_process_host() {
+    use std::os::unix::fs::PermissionsExt;
+    korean();
+    let root = temp("brew-real");
+    let prefix = dir(&root, &["brew installation"]);
+    let bin = dir(&prefix, &["Cellar", "claude-code", "1.0.0", "bin"]);
+    let version = root.join("version.txt");
+    let record = root.join("brew-args.txt");
+    std::fs::write(&version, "1.0.0\n").unwrap();
+    let script = |path: &Path, body: String| {
+        std::fs::write(path, body).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    };
+    script(&bin.join("claude"), format!("#!/bin/sh\ncat '{}'\n", version.display()));
+    let switches: String = BREW_SWITCHES.iter().map(|name| format!(" {name}=${name}")).collect();
+    script(
+        &dir(&prefix, &["bin"]).join("brew"),
+        format!("#!/bin/sh\necho \"$@\"{switches} > '{}'\necho 2.0.0 > '{}'\n", record.display(), version.display()),
+    );
+    let host = mighty_platform_macos::process_host();
+    let service = mac(Arc::new(HostCliRunner::new(host)), env(&[&bin, Path::new("/usr/bin"), Path::new("/bin")]), &root);
+    let result = service.update("claude", &none()).await;
+    assert!(result.status == "updated" && result.method == "brew-formula", "{result:?}");
+    assert_eq!((result.before_version.as_deref(), result.after_version.as_deref()), (Some("1.0.0"), Some("2.0.0")));
+    let asked = std::fs::read_to_string(&record).unwrap();
+    assert!(asked.starts_with("upgrade --formula claude-code "), "{asked}");
+    for name in BREW_SWITCHES {
+        assert!(asked.contains(&format!(" {name}=1")), "{name}: {asked}");
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// The Homebrew a Cellar install names but that is not there: recognised, never run.
 #[tokio::test]
 async fn a_missing_homebrew_is_named_and_nothing_runs() {

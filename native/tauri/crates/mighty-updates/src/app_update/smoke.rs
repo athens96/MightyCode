@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Local, Utc};
-use mighty_core::app_update_view::describe;
+use mighty_core::app_update_view::{Words, describe};
 use mighty_core::locale::Locale;
 use serde::Serialize;
 
@@ -75,12 +75,18 @@ fn format(time: &DateTime<Utc>) -> String {
 /// C# `ExpectedStatuses`: the status sentence the box must show for each fixture phase (a signed build, no built-in address, the
 /// switch on), in order.
 pub fn expected_statuses(locale: &Locale) -> Vec<String> {
-    fixture_states(locale).iter().map(|state| describe(locale, &state.view(), true, None, format, true).status_text).collect()
+    fixture_states(locale)
+        .iter()
+        .map(|state| describe(locale, Words::default(), &state.view(), true, None, format, true).status_text)
+        .collect()
 }
 
 /// C# `ExpectedButtons`.
 pub fn expected_buttons(locale: &Locale) -> Vec<String> {
-    fixture_states(locale).iter().map(|state| describe(locale, &state.view(), true, None, format, true).button_label).collect()
+    fixture_states(locale)
+        .iter()
+        .map(|state| describe(locale, Words::default(), &state.view(), true, None, format, true).button_label)
+        .collect()
 }
 
 /// C# `AppUpdateSmoke.RunAsync`: the smoke's decision — the box rendered every fixture phase, a key-less build refused to check, and

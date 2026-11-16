@@ -35,9 +35,28 @@ pub const KEYS: [(&str, &str); 25] = [
     ("NoPublicKeyNotice", "settings.appUpdate.noPublicKeyNoticeWindows"),
 ];
 
-/// The words of one field in a language.
+/// Whose words the box says where the two apps differ: C#'s ([`KEYS`]) or Swift's ([`MAC_KEYS`], AppUpdateSettingsView.swift:12,25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Words {
+    #[default]
+    Windows,
+    Mac,
+}
+
+/// The fields whose words the Mac takes from Swift's keys instead: the address hint without C#'s "leave blank" sentence, and the
+/// notice of a build without a public key.
+pub const MAC_KEYS: [(&str, &str); 2] =
+    [("ManifestUrlHint", "settings.appUpdate.manifestUrlHint"), ("NoPublicKeyNotice", "settings.appUpdate.noPublicKeyNotice")];
+
+/// The words of one field in a language (C#'s).
 pub fn text(locale: &Locale, field: &str) -> String {
-    KEYS.iter().find(|(name, _)| *name == field).map(|(_, key)| locale.get(key)).unwrap_or_default()
+    text_in(locale, Words::Windows, field)
+}
+
+/// The words of one field in a language, in `words`' app's keys.
+pub fn text_in(locale: &Locale, words: Words, field: &str) -> String {
+    let mac = (words == Words::Mac).then(|| MAC_KEYS.iter().find(|(name, _)| *name == field)).flatten();
+    mac.or_else(|| KEYS.iter().find(|(name, _)| *name == field)).map(|(_, key)| locale.get(key)).unwrap_or_default()
 }
 
 /// An update's phase (C# `AppUpdatePhase`).
@@ -86,13 +105,14 @@ pub struct SectionView {
 /// `AppUpdatePresentation.Describe`.
 pub fn describe(
     locale: &Locale,
+    words: Words,
     state: &State,
     has_public_key: bool,
     built_in: Option<&str>,
     format_time: impl Fn(&DateTime<Utc>) -> String,
     automatic: bool,
 ) -> SectionView {
-    let t = |field: &str| text(locale, field);
+    let t = |field: &str| text_in(locale, words, field);
     if !has_public_key {
         return SectionView {
             section_enabled: false,
@@ -219,7 +239,8 @@ mod tests {
     #[test]
     fn a_build_without_the_key_shows_the_notice_and_a_disabled_check() {
         let ko = Locale::new("ko");
-        let view = describe(&ko, &State { phase: Phase::Available, ..State::default() }, false, None, |_| String::new(), true);
+        let view =
+            describe(&ko, Words::Windows, &State { phase: Phase::Available, ..State::default() }, false, None, |_| String::new(), true);
         assert!(!view.section_enabled && !view.button_enabled && !view.address_field_enabled);
         assert_eq!(view.status_text, text(&ko, "NoPublicKeyNotice"));
         assert_eq!(view.signature_notice, text(&ko, "NoPublicKeyNotice"));
@@ -227,32 +248,53 @@ mod tests {
         assert_eq!((view.notes, view.kept_error, view.retry_notice, view.built_in_address_line), (None, None, None, None));
     }
 
+    /// The Mac says Swift's words where the apps differ (AppUpdateSettingsView.swift:12, :25): the notice of a build without a key and
+    /// the address hint; every other field is C#'s, the same keys Swift reads.
+    #[test]
+    fn the_mac_says_swifts_words_where_the_apps_differ() {
+        let en = Locale::new("en");
+        let mac = describe(&en, Words::Mac, &State::default(), false, None, |_| String::new(), true);
+        assert_eq!(mac.status_text, en.get("settings.appUpdate.noPublicKeyNotice"));
+        assert_eq!(mac.signature_notice, en.get("settings.appUpdate.noPublicKeyNotice"));
+        let windows = describe(&en, Words::Windows, &State::default(), false, None, |_| String::new(), true);
+        assert_eq!(windows.status_text, en.get("settings.appUpdate.noPublicKeyNoticeWindows"));
+        assert_ne!(mac.status_text, windows.status_text);
+        assert_eq!(text_in(&en, Words::Mac, "ManifestUrlHint"), en.get("settings.appUpdate.manifestUrlHint"));
+        assert_eq!(text_in(&en, Words::Windows, "ManifestUrlHint"), en.get("settings.appUpdate.manifestUrlHintWindows"));
+        for (field, _) in KEYS.iter().filter(|(field, _)| !MAC_KEYS.iter().any(|(mac, _)| mac == field)) {
+            assert_eq!(text_in(&en, Words::Mac, field), text(&en, field), "{field}");
+        }
+    }
+
     /// `Describe` with the key: each phase's words and button, the notes of an available or ready update, a kept error and the retry.
     #[test]
     fn each_phase_has_its_words_and_button() {
         let en = Locale::new("en");
         let at = |phase| State { phase, version: Some("0.5.0".into()), notes: Some("Notes".into()), ..State::default() };
-        let view = describe(&en, &at(Phase::Available), true, Some("https://x"), |_| String::new(), true);
+        let view = describe(&en, Words::Windows, &at(Phase::Available), true, Some("https://x"), |_| String::new(), true);
         assert_eq!(view.status_text, text(&en, "AvailableTemplate").replace("{version}", "0.5.0"));
         assert_eq!((view.button_label.as_str(), view.button_enabled), (text(&en, "DownloadButton").as_str(), true));
         assert_eq!(view.notes.as_deref(), Some("Notes"));
         assert!(!view.address_field_enabled && view.built_in_address_line.is_some());
         let downloading = State { download_fraction: 0.456, ..at(Phase::Downloading) };
         assert_eq!(
-            describe(&en, &downloading, true, None, |_| String::new(), true).status_text,
+            describe(&en, Words::Windows, &downloading, true, None, |_| String::new(), true).status_text,
             text(&en, "DownloadingTemplate").replace("{percent}", "45")
         );
-        let checking = describe(&en, &at(Phase::Checking), true, None, |_| String::new(), true);
+        let checking = describe(&en, Words::Windows, &at(Phase::Checking), true, None, |_| String::new(), true);
         assert!(!checking.button_enabled && checking.notes.is_none());
         let ready = State { last_error: Some("disk full".into()), ..at(Phase::Ready) };
-        let view = describe(&en, &ready, true, None, |_| String::new(), false);
+        let view = describe(&en, Words::Windows, &ready, true, None, |_| String::new(), false);
         assert_eq!(view.status_text, text(&en, "ReadyTemplate").replace("{version}", "0.5.0"));
         assert_eq!((view.kept_error.as_deref(), view.retry_notice), (Some("disk full"), None));
         let idle = State { checked_at: Some(DateTime::<Utc>::UNIX_EPOCH), ..State::default() };
         assert_eq!(
-            describe(&en, &idle, true, None, |_| "09:30".into(), true).status_text,
+            describe(&en, Words::Windows, &idle, true, None, |_| "09:30".into(), true).status_text,
             text(&en, "LastCheckedTemplate").replace("{time}", "09:30")
         );
-        assert_eq!(describe(&en, &State::default(), true, None, |_| String::new(), true).status_text, text(&en, "NotCheckedYet"));
+        assert_eq!(
+            describe(&en, Words::Windows, &State::default(), true, None, |_| String::new(), true).status_text,
+            text(&en, "NotCheckedYet")
+        );
     }
 }

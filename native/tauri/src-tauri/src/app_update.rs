@@ -125,6 +125,16 @@ pub struct Core {
     wake: Notify,
 }
 
+/// Whose words the box says where C# and Swift differ: the profile's `update_needs_public_key` picks them (true: Windows', whose box
+/// says a keyless build cannot check; false: the Mac's, Swift's notice and address hint).
+pub fn words() -> mighty_core::app_update_view::Words {
+    if crate::platform::profile().update_needs_public_key {
+        mighty_core::app_update_view::Words::Windows
+    } else {
+        mighty_core::app_update_view::Words::Mac
+    }
+}
+
 impl Core {
     pub fn new(coordinator: Arc<Coordinator>, seams: Arc<dyn Seams>, clock: Clock, allowed: bool, smoke: bool) -> Arc<Core> {
         Arc::new(Core {
@@ -430,6 +440,7 @@ impl Core {
         let signed = self.state().smoke_signed_build;
         mighty_core::app_update_view::describe(
             locale,
+            words(),
             &self.coordinator.state().view(),
             signed || self.coordinator.has_public_key(),
             self.coordinator.built_in_manifest_url(),

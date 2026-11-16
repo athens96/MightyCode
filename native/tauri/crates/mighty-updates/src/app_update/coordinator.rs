@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Utc};
-use mighty_core::app_update_view::SectionView;
+use mighty_core::app_update_view::{SectionView, Words};
 use mighty_core::locale::Locale;
 use mighty_platform::profile::UpdatePackage;
 use mighty_platform::{BoxFuture, PlatformProfile};
@@ -399,8 +399,11 @@ impl Coordinator {
 
     /// C# `Describe(formatTime)`: the box for the state now.
     pub fn describe(&self, locale: &Locale, format_time: impl Fn(&DateTime<Utc>) -> String) -> SectionView {
+        // The profile's `update_needs_public_key` picks whose words a keyless build says (Windows': the box's notice; the Mac's: Swift's).
+        let words = if self.options.profile.update_needs_public_key { Words::Windows } else { Words::Mac };
         mighty_core::app_update_view::describe(
             locale,
+            words,
             &self.state().view(),
             self.has_public_key(),
             self.built_in_manifest_url(),

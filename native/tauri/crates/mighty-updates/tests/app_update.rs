@@ -20,7 +20,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::{Signer, SigningKey};
-use mighty_core::app_update_view::{describe, text};
+use mighty_core::app_update_view::{Words, describe, text};
 use mighty_core::locale::Locale;
 use mighty_core::{AppSnapshot, Wire};
 use mighty_platform::fake::{FakeRoute, FakeUpdateTransport};
@@ -870,7 +870,8 @@ async fn app_update_automatic_check_happens_every_six_hours() {
 fn app_update_section_shows_the_macos_copy_for_every_phase() {
     let ko = ko();
     let states = smoke::fixture_states(&ko);
-    let view = |state: &UpdateState, automatic: bool| describe(&ko, &state.view(), true, None, |_| "00:00".into(), automatic);
+    let view =
+        |state: &UpdateState, automatic: bool| describe(&ko, Words::Windows, &state.view(), true, None, |_| "00:00".into(), automatic);
     let statuses: Vec<String> = states.iter().map(|s| view(s, true).status_text).collect();
     let buttons: Vec<String> = states.iter().map(|s| view(s, true).button_label).collect();
     let t = |field: &str| text(&ko, field);
@@ -917,6 +918,7 @@ fn app_update_section_shows_the_macos_copy_for_every_phase() {
     assert_eq!(idle.signature_notice, t("SignatureVerified"), "a build with a key says it verifies signatures");
     let checked = describe(
         &ko,
+        Words::Windows,
         &UpdateState { checked_at: Some(DateTime::UNIX_EPOCH), ..UpdateState::default() }.view(),
         true,
         None,
