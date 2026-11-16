@@ -99,6 +99,27 @@ fn the_old_data_folder_worktrees_conversations_and_settings_move_once() {
     assert!(old_data.is_dir() && !settings.current.borrow().contains_key("theme"));
 }
 
+/// A record is rewritten atomically (nothing left beside it), and on the Mac one that is not UTF-8 is left as it is, as Swift's
+/// `String(contentsOf:encoding: .utf8)` leaves it; Windows (C#) reads it with its bad bytes replaced.
+#[test]
+fn records_are_rewritten_atomically_and_the_mac_leaves_one_that_is_not_utf8() {
+    let root = Root::new("records");
+    let good = root.0.join("good.json");
+    let bad = root.0.join("bad.json");
+    std::fs::write(&good, r#"{"p":"/h/.mightyclaude/worktrees/a"}"#).unwrap();
+    let mut bytes = br#"{"p":"/h/.mightyclaude/worktrees/a","x":""#.to_vec();
+    bytes.extend_from_slice(b"\xff\"}");
+    std::fs::write(&bad, &bytes).unwrap();
+    rename_migration::rewrite_paths_as(&good, "/h/.mightyclaude", "/h/.mightycode", false);
+    rename_migration::rewrite_paths_as(&bad, "/h/.mightyclaude", "/h/.mightycode", false);
+    assert_eq!(std::fs::read_to_string(&good).unwrap(), r#"{"p":"/h/.mightycode/worktrees/a"}"#);
+    assert_eq!(std::fs::read(&bad).unwrap(), bytes, "not UTF-8: left alone");
+    rename_migration::rewrite_paths(&bad, "/h/.mightyclaude", "/h/.mightycode");
+    assert!(String::from_utf8(std::fs::read(&bad).unwrap()).unwrap().contains("/h/.mightycode/worktrees/a"), "C#'s lossy read");
+    let names: Vec<String> = std::fs::read_dir(&root.0).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    assert_eq!(names.len(), 2, "no temporary file left: {names:?}");
+}
+
 /// `RenameMigrationTests.swift:43 "nothingFromBeforeTheRenameIsNothingToDo"`.
 #[test]
 fn nothing_from_before_the_rename_is_nothing_to_do() {

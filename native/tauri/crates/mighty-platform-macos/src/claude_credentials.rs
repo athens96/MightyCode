@@ -55,28 +55,34 @@ fn user_name() -> Option<String> {
     Some(unsafe { std::ffi::CStr::from_ptr(entry.pw_name) }.to_string_lossy().into_owned())
 }
 
-/// The Keychain's user interaction turned off for a read that may not ask, and put back as it was.
-struct Silence(Option<u8>);
+/// The Keychain's user interaction turned off for a read that may not ask, and put back as it was. It holds the process-wide
+/// [`crate::secrets::KEYCHAIN_UI`] lock for its whole life (an interactive read holds it too), so no other Keychain read runs while the
+/// switch is off and two silent reads never interleave their saves and restores.
+struct Silence {
+    previous: Option<u8>,
+    _ui: std::sync::MutexGuard<'static, ()>,
+}
 
 impl Silence {
     fn new(interactive: bool) -> Silence {
+        let ui = crate::secrets::keychain_ui();
         if interactive {
-            return Silence(None);
+            return Silence { previous: None, _ui: ui };
         }
         let mut previous: u8 = 1;
-        // SAFETY: Security's process-wide switch.
+        // SAFETY: Security's process-wide switch, changed only while KEYCHAIN_UI is held.
         unsafe {
             SecKeychainGetUserInteractionAllowed(&mut previous);
             SecKeychainSetUserInteractionAllowed(0);
         }
-        Silence(Some(previous))
+        Silence { previous: Some(previous), _ui: ui }
     }
 }
 
 impl Drop for Silence {
     fn drop(&mut self) {
-        if let Some(previous) = self.0 {
-            // SAFETY: as in `new`.
+        if let Some(previous) = self.previous {
+            // SAFETY: as in `new` (the lock is released after this, with the guard).
             unsafe { SecKeychainSetUserInteractionAllowed(previous) };
         }
     }
@@ -107,10 +113,11 @@ impl ClaudeCredentials for KeychainClaudeCredentials {
         }
         let _silence = Silence::new(interactive);
         let service = service(config_dir);
-        let silent = !interactive;
-        let mut answer = Query::generic(&self.keychains, &service, self.user.as_deref()).data(silent);
+        // Swift adds `kSecUseAuthenticationUIFail` to every read, the interactive one too: an interactive read differs only in the
+        // Keychain's user interaction being left on (the item's application-ACL dialog may show).
+        let mut answer = Query::generic(&self.keychains, &service, self.user.as_deref()).data(true);
         if answer == Err(ERR_SEC_ITEM_NOT_FOUND) {
-            answer = Query::generic(&self.keychains, &service, None).data(silent);
+            answer = Query::generic(&self.keychains, &service, None).data(true);
         }
         match answer {
             Ok(bytes) if bytes.len() <= MAXIMUM_BYTES => Ok(String::from_utf8(bytes).ok()),
@@ -147,6 +154,21 @@ mod tests {
         throwaway.add(&service(Some(work)), "me", b"{\"work\":true}");
         assert_eq!(store.read(Some(work), true).unwrap().as_deref(), Some("{\"work\":true}"));
         assert_eq!(store.read(Some(Path::new("relative")), false).unwrap(), None);
+    }
+
+    /// A Keychain that would ask (here: the throwaway keychain locked) refuses a silent read, without a prompt (the run would hang on
+    /// one), which is Swift's `keychainPermission`.
+    #[test]
+    fn a_locked_keychain_refuses_a_silent_read() {
+        unsafe extern "C" {
+            fn SecKeychainLock(keychain: *const std::ffi::c_void) -> i32;
+        }
+        let throwaway = Throwaway::new("claude-locked");
+        throwaway.add("Claude Code-credentials", "me", ITEM.as_bytes());
+        // SAFETY: the test's own keychain.
+        assert_eq!(unsafe { SecKeychainLock(core_foundation::base::TCFType::as_concrete_TypeRef(&throwaway.keychain) as *const _) }, 0);
+        let store = KeychainClaudeCredentials::only(throwaway.keychains(), "me");
+        assert!(matches!(store.read(None, false), Err(PlatformError::Refused(_))));
     }
 
     /// The service names the CLI uses: the plain one, and SHA-256 of the folder's NFC text.

@@ -207,7 +207,7 @@ fn pairing_again_with_the_key_gives_the_same_row_a_new_token() {
     let identity = folder.identity();
     let key = identity.pairing_key().to_string();
     let first = token(pair(&identity, &key, PHONE, "Young's iPhone").unwrap());
-    let before = identity.devices()[0].first_seen.clone();
+    let before = folder.identity().devices()[0].first_seen.clone();
     let fresh = token(pair(&identity, &key, PHONE, "Young's Galaxy").unwrap());
     assert_ne!(fresh, first);
     let after = folder.identity().devices();

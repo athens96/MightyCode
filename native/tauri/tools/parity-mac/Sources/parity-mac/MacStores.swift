@@ -6,9 +6,13 @@ import MightyCore
 
 // MARK: - The state corpus
 
-/// The properties no instance in the corpus sets (`Type.property`), from the decoded snapshot: what the corpus misses.
+/// The properties no instance in the corpus sets (`Type.property`), from the decoded snapshot: what the corpus misses. A property
+/// that is not optional counts as set only when some instance holds another value than the type's own default (`atDefault`
+/// otherwise): a field written with its default proves nothing about a round trip.
 private final class Coverage {
     var seen = Set<String>(), filled = Set<String>()
+    /// A non-optional property's values, as text, across the instances.
+    var values: [String: Set<String>] = [:]
 
     func walk(_ value: Any) {
         let mirror = Mirror(reflecting: value)
@@ -27,6 +31,7 @@ private final class Coverage {
                 seen.insert(name)
                 let inner = Mirror(reflecting: child.value)
                 if inner.displayStyle == .optional && inner.children.isEmpty { continue }
+                if inner.displayStyle != .optional { values[name, default: []].insert(String(describing: child.value)) }
                 filled.insert(name)
                 walk(child.value)
             }
@@ -36,8 +41,33 @@ private final class Coverage {
     }
 
     var unset: [String] { seen.subtracting(filled).sorted() }
+
+    /// The non-optional properties of the types with a default instance that hold only that default in the corpus.
+    func atDefault(_ defaults: [Any]) -> [String] {
+        var stuck: [String] = []
+        for instance in defaults {
+            let type = String(describing: Swift.type(of: instance))
+            for child in Mirror(reflecting: instance).children {
+                guard let label = child.label, Mirror(reflecting: child.value).displayStyle != .optional else { continue }
+                let name = "\(type).\(label)"
+                if let seen = values[name], seen == [String(describing: child.value)] { stuck.append(name) }
+            }
+        }
+        return stuck.sorted()
+    }
 }
 
+/// The defaults of the stored types whose decoders fill what is missing (a decode of their least JSON) or that have an initializer
+/// with defaults: what a corpus value must differ from.
+private func storedDefaults() -> [Any] {
+    func decoded<T: Decodable>(_ type: T.Type, _ json: String) -> Any? { try? JSONDecoder().decode(type, from: Data(json.utf8)) }
+    let decodedDefaults: [Any?] = [
+        decoded(RunSession.self, #"{"id":"d","workspaceId":"d"}"#), decoded(RunSettings.self, "{}"), decoded(MobileRemoteSettings.self, "{}"),
+        decoded(PaneLayoutNode.self, #"{"id":"d","kind":"tabs"}"#), decoded(ModelDefaultsConfig.self, "{}"),
+        decoded(ProviderModeDefaults.self, "{}"), decoded(RegisteredModelEntry.self, #"{"name":"d"}"#),
+    ]
+    return [AppSnapshot(), PhaseModelHardcodedConfig()] + decodedDefaults.compactMap { $0 }
+}
 private func jsonObject(_ text: String) -> [String: Any]? {
     (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
 }
@@ -209,7 +239,7 @@ private func fullCase(local: String, worktree: String, remote: Workspace) -> [St
     let remote1: [String: Any] = ["id": remote.id, "name": remote.name, "path": remote.path, "createdAt": remote.createdAt, "remote": reference]
 
     var s: [String: Any] = ["version": 1, "workspaces": [local1, remote1], "sessions": [claude, child, codex, shell, browser, remotePane]]
-    s["activeWorkspaceId"] = w1; s["activeSessionId"] = "pane-claude-1"; s["layout"] = "grid"; s["theme"] = "light"; s["sidebarWidth"] = 300
+    s["activeWorkspaceId"] = w1; s["activeSessionId"] = "pane-claude-1"; s["layout"] = "columns"; s["theme"] = "light"; s["sidebarWidth"] = 300
     s["paneLayouts"] = [w1: root]; // Every workspace's mode, as Swift's normalize always writes them (a workspace left out takes each normalize's own default).
     s["paneLayoutModes"] = [w1: "custom", remote.id: "tabs"]; s["paneLayoutActiveSessionIds"] = [w1: "pane-claude-1"]
     s["autoUpdateCLIs"] = false; s["autoUpdatePlugins"] = false; s["expandedWorkspaceIds"] = [w1, remote.id]
@@ -291,9 +321,12 @@ func stateCorpus(_ out: URL) async {
                                 "MightyGraphRun.shownAwaiting", "MightyGraphRun.shownBackgroundWaiting", "MightyGraphRun.shownFanOut",
                                 "MightyGraphRun.shownFlowOrder"]
     let unset = coverage.unset.filter { !unsaved.contains($0) }
-    emit(["cases": report, "refused": refused, "unset": unset] as [String: Any])
-    // A field Swift saves that no case sets (a new one) or a value of this tool's Swift refused: the corpus no longer covers the state.
-    if !unset.isEmpty || !refused.isEmpty { exit(3) }
+    // `version` is 1 in every state file there is.
+    let atDefault = coverage.atDefault(storedDefaults()).filter { $0 != "AppSnapshot.version" }
+    emit(["cases": report, "refused": refused, "unset": unset, "atDefault": atDefault] as [String: Any])
+    // A field Swift saves that no case sets (a new one), one set only to its default, or a value of this tool's Swift refused: the
+    // corpus no longer covers the state.
+    if !unset.isEmpty || !refused.isEmpty || !atDefault.isEmpty { exit(3) }
 }
 
 // MARK: - The state check
@@ -314,6 +347,11 @@ private func leaves(_ value: Any, _ path: String, into result: inout [String: An
     } else {
         result[path] = value
     }
+}
+
+/// Where C#'s `Wire.Clean` runs on a saved state: a transcript entry's text and a workspace's name.
+private func cleanablePath(_ path: String) -> Bool {
+    path.range(of: #"^\.(sessions\[\d+\]\.logs\[\d+\]\.text|workspaces\[\d+\]\.name)$"#, options: .regularExpression) != nil
 }
 
 private func withoutControls(_ text: String) -> String {
@@ -344,7 +382,7 @@ func stateCheck(_ folder: URL) {
                 if (value as AnyObject).isEqual(other) { continue }
                 // The one difference allowed, and reported: C#'s normalize (`Wire.Clean`), which Rust keeps on both OSes, takes the C0
                 // control characters other than tab, line feed and return out of a transcript's text and a workspace's name.
-                if let text = value as? String, let rust = other as? String, withoutControls(text) == rust {
+                if cleanablePath(path), let text = value as? String, let rust = other as? String, withoutControls(text) == rust {
                     cleaned.append(path)
                 } else {
                     changed.append("\(path): swift \(short(value)) rust \(short(other))")
@@ -418,7 +456,14 @@ func pairingRead(_ folder: URL, expected: URL) async {
         if key != want["pairingKey"] as? String { problems.append("the pairing key differs") }
         if status.serverId != sha256(want["hostToken"] as? String ?? "") { problems.append("the server id is not SHA-256 of the host token") }
         if status.publicKeyB64 != want["publicKeyB64"] as? String { problems.append("the public key differs") }
-        let devices = deviceObjects(MobileDeviceRegistry(url: folder.appendingPathComponent("devices.json")).all())
+        let rows = MobileDeviceRegistry(url: folder.appendingPathComponent("devices.json")).all()
+        // A Swift app the user goes back to reads each time Rust wrote (its clock rules: `isNew`, the stale-row eviction, `touch`).
+        for row in rows {
+            for (name, stamp) in [("firstSeen", row.firstSeen), ("lastSeen", row.lastSeen), ("push.updatedAt", row.push?.updatedAt)] {
+                if let stamp, AgentRunTiming.parseTimestamp(stamp) == nil { problems.append("\(row.id).\(name) does not read as a time: \(stamp)") }
+            }
+        }
+        let devices = deviceObjects(rows)
         if !(devices as NSArray).isEqual(to: want["devices"] as? [Any] ?? []) { problems.append("the phones differ: \(short(devices))") }
         let after = pairingFiles.map { FileManager.default.contents(atPath: folder.appendingPathComponent($0).path) }
         for (index, name) in pairingFiles.enumerated() where before[index] != after[index] { problems.append("\(name) changed when Swift read it") }

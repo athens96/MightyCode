@@ -5,7 +5,7 @@
 //! Swift-written files read here, and what this writes reads back in Swift (`tools/parity-mac pairing`).
 
 use std::fs;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -16,12 +16,22 @@ use mighty_platform::{PairingStore, Paths};
 pub struct OwnerOnly;
 
 impl PrivateFiles for OwnerOnly {
+    /// Made 0700 from the start (`DirBuilder` with the mode), and an existing one set to 0700 only after it is known not to be a
+    /// link (`chmod` follows one).
     fn private_folder(&self, folder: &Path) -> std::io::Result<()> {
-        fs::create_dir_all(folder)?;
-        fs::set_permissions(folder, fs::Permissions::from_mode(0o700))
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(folder)?;
+        self.tighten(folder)
     }
     fn private_file(&self, path: &Path) -> std::io::Result<fs::File> {
         fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path)
+    }
+    /// 0700 for a folder, 0600 for a file; a link is refused, never followed.
+    fn tighten(&self, path: &Path) -> std::io::Result<()> {
+        let meta = fs::symlink_metadata(path)?;
+        if meta.file_type().is_symlink() {
+            return Err(std::io::Error::other("a link where a private file or folder should be"));
+        }
+        fs::set_permissions(path, fs::Permissions::from_mode(if meta.is_dir() { 0o700 } else { 0o600 }))
     }
 }
 
@@ -68,6 +78,17 @@ mod tests {
             assert_eq!(mode(&entry.unwrap().path()), 0o600);
         }
         assert!(folder.join(PAIRING_KEY).exists() && folder.join(DEVICES).exists());
+        // A load makes what it reads owner-only again, as Swift does.
+        fs::set_permissions(folder.join(PAIRING_KEY), fs::Permissions::from_mode(0o644)).unwrap();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o755)).unwrap();
+        store.load().unwrap().unwrap();
+        assert_eq!((mode(&folder.join(PAIRING_KEY)), mode(&folder)), (0o600, 0o700));
+        // A corrupt list's bytes are kept aside owner-only too.
+        fs::write(folder.join(DEVICES), "{ not json").unwrap();
+        let read = store.load().unwrap().unwrap();
+        store.save(&read).unwrap();
+        let aside = fs::read_dir(&folder).unwrap().map(|e| e.unwrap().path()).find(|p| p.to_string_lossy().contains(".corrupt-")).unwrap();
+        assert_eq!(mode(&aside), 0o600);
         let _ = fs::remove_dir_all(&root);
     }
 }

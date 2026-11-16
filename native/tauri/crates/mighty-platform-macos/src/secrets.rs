@@ -46,6 +46,15 @@ unsafe extern "C" {
     pub(crate) fn SecKeychainSetUserInteractionAllowed(state: u8) -> i32;
 }
 
+/// `SecKeychainSetUserInteractionAllowed` is process-wide: a silent Claude read turns it off for its whole read
+/// (claude_credentials.rs `Silence`), so every Keychain read that might ask holds this lock, and two silent reads never overlap (the
+/// second would put back the first's "off" for good).
+pub(crate) static KEYCHAIN_UI: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub(crate) fn keychain_ui() -> std::sync::MutexGuard<'static, ()> {
+    KEYCHAIN_UI.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// A Security constant as a CFString.
 fn key(name: CFStringRef) -> CFString {
     // SAFETY: the framework's constant strings live for the process.
@@ -98,12 +107,13 @@ impl Query {
         CFDictionary::from_CFType_pairs(&self.pairs)
     }
 
-    /// `SecItemCopyMatching` for the item's data (`kSecMatchLimitOne`); `silent` adds `kSecUseAuthenticationUIFail`.
-    pub(crate) fn data(self, silent: bool) -> std::result::Result<Vec<u8>, i32> {
+    /// `SecItemCopyMatching` for the item's data (`kSecMatchLimitOne`); `ui_fail` adds `kSecUseAuthenticationUIFail` (the Claude
+    /// item's reads; Swift's `RemoteKeychain` adds nothing).
+    pub(crate) fn data(self, ui_fail: bool) -> std::result::Result<Vec<u8>, i32> {
         let mut query = self
             .with(unsafe { kSecReturnData }, CFBoolean::true_value().as_CFType())
             .with(unsafe { kSecMatchLimit }, key(unsafe { kSecMatchLimitOne }).as_CFType());
-        if silent {
+        if ui_fail {
             query = query.with(unsafe { kSecUseAuthenticationUI }, key(unsafe { kSecUseAuthenticationUIFail }).as_CFType());
         }
         let dictionary = query.dictionary();
@@ -143,9 +153,14 @@ impl KeychainVault {
         KeychainVault { keychains: Keychains { only: Some(keychain) } }
     }
 
+    /// The item's text when it has a key's shape (`RemoteWorkspaceValidation.key`: `^[A-Za-z0-9_-]{43,128}$`, the same rule as the
+    /// pairing key's), read while no silent Claude read has the Keychain's user interaction off ([`KEYCHAIN_UI`]).
     fn read(&self, id: &str, service: &str) -> Option<String> {
-        let bytes = Query::generic(&self.keychains, service, Some(id)).data(false).ok()?;
-        String::from_utf8(bytes).ok()
+        let bytes = {
+            let _ui = keychain_ui();
+            Query::generic(&self.keychains, service, Some(id)).data(false).ok()?
+        };
+        String::from_utf8(bytes).ok().filter(|key| mighty_platform::pairing::four_files::pairing_key(key))
     }
 
     /// `SecItemUpdate`, else `SecItemAdd` with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` (into the confined keychain).

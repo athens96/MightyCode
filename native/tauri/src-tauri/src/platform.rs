@@ -234,8 +234,9 @@ impl mighty_core::rename_migration::LegacySettings for MacSettings {
     fn legacy_keys(&self) -> Vec<String> {
         self.legacy.keys()
     }
+    /// As Swift's `defaults.object(forKey:) != nil`: the app's own value or the global domain's (RenameMigration.swift:48).
     fn has(&self, key: &str) -> bool {
-        self.current.stored(key).is_some()
+        self.current.visible(key)
     }
     fn copy(&self, key: &str) -> std::io::Result<()> {
         self.current.copy_from(&self.legacy, key).map_err(std::io::Error::other)

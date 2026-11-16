@@ -2,14 +2,15 @@
 //! whether this build is the bundled app, whose standard domain it is, or a development build). Swift: every UserDefaults site (the
 //! keys and their types are `mighty_platform::prefs::SWIFT_KEYS`); contract `mighty_platform::prefs` (`PrefsStore`).
 //!
-//! A read is the domain's own value (`persistentDomainForName:`), never the global domain's (`AppleLanguages` there is the system's,
-//! not the app's), handed to the shared readers in their forms (`from_swift`); a write puts the value in the type Swift reads
-//! (`to_swift`) and replaces the domain (`setPersistentDomain:forName:`), so it works from an unbundled build too. Writes only where
-//! the write policy writes (the host's `may_change_machine`; a smoke's are in memory).
+//! A read is the domain's own value (`CFPreferencesCopyValue`, current user, any host), never the global domain's (`AppleLanguages`
+//! there is the system's, not the app's), handed to the shared readers in their forms (`from_swift`); a write puts the value in the type
+//! Swift reads (`to_swift`) under its one key (`CFPreferencesSetValue`, then synchronized), so it works from an unbundled build too and
+//! leaves every other key of the domain (AppKit's own) alone. Writes only where the write policy writes (the host's
+//! `may_change_machine`; a smoke's are in memory).
 //!
 //! Tests use a `dev.mightycode.tests.<uuid>` domain, removed at the end: never the runner user's own.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use mighty_platform::prefs::{from_swift, to_swift};
 use mighty_platform::{PlatformError, PrefValue, PrefsStore, Result};
@@ -24,12 +25,10 @@ pub const DOMAIN: &str = "dev.mightycode.native";
 
 /// One UserDefaults domain.
 pub struct DefaultsPrefs {
-    domain: String,
-    /// A read-modify-write of the domain at a time.
-    lock: Mutex<()>,
+    domain: Retained<NSString>,
 }
 
-// SAFETY: NSUserDefaults is documented thread-safe; the store holds only the domain's name and takes `standardUserDefaults` per call.
+// SAFETY: CFPreferences is documented thread-safe; the store holds only the domain's (immutable) name.
 unsafe impl Send for DefaultsPrefs {}
 unsafe impl Sync for DefaultsPrefs {}
 
@@ -97,6 +96,46 @@ fn object_of(value: &PrefValue) -> Option<Retained<AnyObject>> {
     })
 }
 
+// CoreFoundation's preferences, per key in one domain (`kCFPreferencesCurrentUser`, `kCFPreferencesAnyHost`: what
+// `persistentDomainForName:` and the Swift app's `UserDefaults.standard` writes are), and `CFPreferencesCopyAppValue`, which searches as
+// `UserDefaults.standard.object(forKey:)` does (the app's domain, then the global one). The values are property-list objects,
+// toll-free bridged with Foundation's.
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    static kCFPreferencesCurrentUser: *const std::ffi::c_void;
+    static kCFPreferencesAnyHost: *const std::ffi::c_void;
+    fn CFPreferencesCopyValue(
+        key: *const std::ffi::c_void,
+        app: *const std::ffi::c_void,
+        user: *const std::ffi::c_void,
+        host: *const std::ffi::c_void,
+    ) -> *const std::ffi::c_void;
+    fn CFPreferencesCopyAppValue(key: *const std::ffi::c_void, app: *const std::ffi::c_void) -> *const std::ffi::c_void;
+    fn CFPreferencesSetValue(
+        key: *const std::ffi::c_void,
+        value: *const std::ffi::c_void,
+        app: *const std::ffi::c_void,
+        user: *const std::ffi::c_void,
+        host: *const std::ffi::c_void,
+    );
+    fn CFPreferencesCopyKeyList(
+        app: *const std::ffi::c_void,
+        user: *const std::ffi::c_void,
+        host: *const std::ffi::c_void,
+    ) -> *const std::ffi::c_void;
+    fn CFPreferencesSynchronize(app: *const std::ffi::c_void, user: *const std::ffi::c_void, host: *const std::ffi::c_void) -> u8;
+}
+
+fn ptr<T: Message>(object: &T) -> *const std::ffi::c_void {
+    object as *const T as *const std::ffi::c_void
+}
+
+/// A +1 CF result as an owned object (None for NULL).
+fn owned(result: *const std::ffi::c_void) -> Option<Retained<AnyObject>> {
+    // SAFETY: a Copy function's result is a +1 reference to a property-list object (toll-free bridged), released by the Retained.
+    unsafe { Retained::from_raw(result as *mut AnyObject) }
+}
+
 impl DefaultsPrefs {
     /// The Swift app's domain.
     pub fn app() -> DefaultsPrefs {
@@ -105,65 +144,73 @@ impl DefaultsPrefs {
 
     /// Another domain (tests: `dev.mightycode.tests.<uuid>`).
     pub fn domain(name: &str) -> DefaultsPrefs {
-        DefaultsPrefs { domain: name.to_string(), lock: Mutex::new(()) }
+        DefaultsPrefs { domain: NSString::from_str(name) }
     }
 
-    pub fn name(&self) -> &str {
-        &self.domain
+    pub fn name(&self) -> String {
+        self.domain.to_string()
     }
 
-    /// The domain's own values, in the order UserDefaults gives them.
-    fn entries(&self) -> (Vec<Retained<NSString>>, Vec<Retained<AnyObject>>) {
-        let defaults = NSUserDefaults::standardUserDefaults();
-        match defaults.persistentDomainForName(&NSString::from_str(&self.domain)) {
-            Some(dictionary) => dictionary.to_vecs(),
-            None => (vec![], vec![]),
+    /// The domain's own object for `key` (never the global domain's).
+    fn object(&self, key: &str) -> Option<Retained<AnyObject>> {
+        let key = NSString::from_str(key);
+        // SAFETY: CF strings (bridged NSStrings) and the framework's constants.
+        owned(unsafe { CFPreferencesCopyValue(ptr(&*key), ptr(&*self.domain), kCFPreferencesCurrentUser, kCFPreferencesAnyHost) })
+    }
+
+    /// `key` set to `value` (None removes it) in this domain alone, and written through: one key, so another writer of the domain (the
+    /// other `DefaultsPrefs`, AppKit's own window and panel keys) loses nothing.
+    fn put(&self, key: &str, value: Option<&AnyObject>) {
+        let key = NSString::from_str(key);
+        let value = value.map_or(std::ptr::null(), |v| v as *const AnyObject as *const std::ffi::c_void);
+        // SAFETY: CF strings, a property-list object or NULL (which removes the key), and the framework's constants.
+        unsafe {
+            CFPreferencesSetValue(ptr(&*key), value, ptr(&*self.domain), kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+            CFPreferencesSynchronize(ptr(&*self.domain), kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
         }
     }
 
     /// The value stored under `key`, in Swift's type (no conversion): what the Swift app reads.
     pub fn stored(&self, key: &str) -> Option<PrefValue> {
-        let (keys, objects) = self.entries();
-        keys.iter().position(|k| k.to_string() == key).map(|at| value_of(&objects[at]))
+        self.object(key).map(|object| value_of(&object))
     }
 
-    /// The domain with `key` replaced (or removed).
-    fn replace(&self, key: &str, value: Option<Retained<AnyObject>>) {
-        let _held = self.lock.lock().unwrap_or_else(|p| p.into_inner());
-        let (mut keys, mut objects) = self.entries();
-        if let Some(at) = keys.iter().position(|k| k.to_string() == key) {
-            keys.remove(at);
-            objects.remove(at);
-        }
-        if let Some(object) = value {
-            keys.push(NSString::from_str(key));
-            objects.push(object);
-        }
-        let key_refs: Vec<&NSString> = keys.iter().map(|k| &**k).collect();
-        let dictionary = NSDictionary::from_retained_objects(&key_refs, &objects);
-        // SAFETY: every value is a property-list object (`object_of`, or what the domain already held).
-        unsafe { NSUserDefaults::standardUserDefaults().setPersistentDomain_forName(&dictionary, &NSString::from_str(&self.domain)) };
+    /// Whether `UserDefaults.standard.object(forKey:)` in this domain's app finds `key`: its own value, or the global domain's
+    /// (`AppleLanguages`, the system's). RenameMigration copies only what this misses (`RenameMigration.swift:48`).
+    pub fn visible(&self, key: &str) -> bool {
+        let key = NSString::from_str(key);
+        // SAFETY: CF strings.
+        owned(unsafe { CFPreferencesCopyAppValue(ptr(&*key), ptr(&*self.domain)) }).is_some()
     }
 
     /// The domain's keys.
     pub fn keys(&self) -> Vec<String> {
-        self.entries().0.iter().map(|k| k.to_string()).collect()
+        // SAFETY: a CF string and the framework's constants; the result is a +1 CFArray of CFStrings, or NULL.
+        let Some(list) = owned(unsafe { CFPreferencesCopyKeyList(ptr(&*self.domain), kCFPreferencesCurrentUser, kCFPreferencesAnyHost) })
+        else {
+            return vec![];
+        };
+        // SAFETY: CFPreferencesCopyKeyList answers an array of strings.
+        let list = unsafe { &*(Retained::as_ptr(&list) as *const NSArray<NSString>) };
+        list.to_vec().iter().map(|k| k.to_string()).collect()
     }
 
-    /// `key`'s value in `other` set here as it is stored there (RenameMigration's copy of the old domain); an error when `other` has
-    /// none or it is of no settable kind.
+    /// `key`'s object in `other` set here as it is stored there, whatever its type (data too: RenameMigration's copy of the old
+    /// domain); an error when `other` has none.
     pub fn copy_from(&self, other: &DefaultsPrefs, key: &str) -> Result<()> {
-        let object = other.stored(key).as_ref().and_then(object_of).ok_or_else(|| PlatformError::Invalid("nothing to copy".into()))?;
-        self.replace(key, Some(object));
+        let object = other.object(key).ok_or_else(|| PlatformError::Invalid("nothing to copy".into()))?;
+        self.put(key, Some(&object));
         Ok(())
     }
 
     /// Removes the whole domain (a test's, at its end).
     pub fn remove_domain(&self) {
-        NSUserDefaults::standardUserDefaults().removePersistentDomainForName(&NSString::from_str(&self.domain));
+        for key in self.keys() {
+            self.put(&key, None);
+        }
+        NSUserDefaults::standardUserDefaults().removePersistentDomainForName(&self.domain);
     }
 }
-
 impl PrefsStore for DefaultsPrefs {
     fn get(&self, key: &str) -> Result<Option<PrefValue>> {
         Ok(self.stored(key).map(|value| from_swift(key, value)))
@@ -171,12 +218,12 @@ impl PrefsStore for DefaultsPrefs {
 
     fn set(&self, key: &str, value: PrefValue) -> Result<()> {
         let object = object_of(&to_swift(key, value)).ok_or_else(|| PlatformError::Invalid("a value of no settable kind".into()))?;
-        self.replace(key, Some(object));
+        self.put(key, Some(&object));
         Ok(())
     }
 
     fn remove(&self, key: &str) -> Result<()> {
-        self.replace(key, None);
+        self.put(key, None);
         Ok(())
     }
 }
@@ -239,6 +286,26 @@ mod tests {
         prefs.remove("text").unwrap();
         assert_eq!(prefs.get("text").unwrap(), None);
         assert!(prefs.set("x", PrefValue::Other).is_err());
+    }
+
+    /// Two stores over one domain (the app has `prefs()` and RenameMigration's) and a key another writer set (AppKit's frame autosave)
+    /// all survive each other's writes: every write is of its own key.
+    #[test]
+    fn writes_of_one_key_leave_the_other_keys_alone() {
+        let suite = Suite::new();
+        let other = DefaultsPrefs::domain(&suite.0.name());
+        let appkit = NSString::from_str("NSWindow Frame main");
+        // SAFETY: a CF string value, written as AppKit writes its own key.
+        suite.0.put("NSWindow Frame main", Some(&any(appkit)));
+        suite.0.set("textFontFamily", PrefValue::Text("Avenir".into())).unwrap();
+        other.set("language", PrefValue::Text("ko".into())).unwrap();
+        suite.0.remove("missing").unwrap();
+        assert_eq!(suite.0.stored("textFontFamily"), Some(PrefValue::Text("Avenir".into())));
+        assert_eq!(suite.0.stored("language"), Some(PrefValue::Text("ko".into())));
+        assert_eq!(suite.0.stored("NSWindow Frame main"), Some(PrefValue::Text("NSWindow Frame main".into())));
+        let mut keys = suite.0.keys();
+        keys.sort();
+        assert_eq!(keys, ["NSWindow Frame main", "language", "textFontFamily"]);
     }
 
     /// `DelegationSwitchTests.swift:37 "theSwitchIsOnUntilItsKeyTurnsItOff"`.
@@ -434,16 +501,23 @@ mod tests {
         legacy.0.set("theme", PrefValue::Text("dark".into())).unwrap();
         legacy.0.set("already", PrefValue::Text("old".into())).unwrap();
         legacy.0.set("textScale", PrefValue::Float(1.3)).unwrap();
+        // A value of a type the shared code never writes (data) is copied as it is, and a key the global domain has
+        // (`AppleLanguages`, the system's) is never copied over it, as Swift's `object(forKey:) == nil` finds it.
+        legacy.0.put("blob", Some(&any(objc2_foundation::NSData::with_bytes(b"\x01\x02"))));
+        legacy.0.set("AppleLanguages", PrefValue::List(vec![PrefValue::Text("ja".into())])).unwrap();
+        assert!(current.0.visible("AppleLanguages") && current.0.stored("AppleLanguages").is_none(), "the global domain's");
         let copy = || {
             if current.0.stored(mighty_core::rename_migration::SETTINGS_MARKER).is_some() {
                 return 0;
             }
             let copied =
-                legacy.0.keys().iter().filter(|key| current.0.stored(key).is_none() && current.0.copy_from(&legacy.0, key).is_ok()).count();
+                legacy.0.keys().iter().filter(|key| !current.0.visible(key) && current.0.copy_from(&legacy.0, key).is_ok()).count();
             current.0.set(mighty_core::rename_migration::SETTINGS_MARKER, PrefValue::Bool(true)).unwrap();
             copied
         };
-        assert_eq!(copy(), 2);
+        assert_eq!(copy(), 3);
+        assert_eq!(current.0.stored("blob"), Some(PrefValue::Other), "the data value, copied as it is");
+        assert_eq!(current.0.stored("AppleLanguages"), None);
         assert_eq!(current.0.stored("theme"), Some(PrefValue::Text("dark".into())));
         assert_eq!(current.0.stored("already"), Some(PrefValue::Text("kept".into())));
         assert_eq!(current.0.stored("textScale"), Some(PrefValue::Float(1.3)), "as stored: a Double stays a Double");

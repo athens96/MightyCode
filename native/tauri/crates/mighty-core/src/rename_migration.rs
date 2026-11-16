@@ -1,5 +1,5 @@
 //! The data an app from before the rename left under its old names (C# `Core\RenameMigration.cs`, `WinUI\Program.cs:163-205`;
-//! docs/rename-identifiers.md; plan §1.8 "RenameMigration", W9-F). Owner: W9-F.
+//! docs/rename-identifiers.md; plan 짠1.8 "RenameMigration", W9-F). Owner: W9-F.
 //!
 //! For the default profile only, outside a smoke, where the write policy writes, before anything reads the data (src-tauri's
 //! `startup::before_ui` decides): move `%APPDATA%\MightyClaudeNative` to `MightyCode` when the target is absent; move `~\.mightyclaude`
@@ -105,12 +105,16 @@ pub struct Names {
     pub projects_by_marker: bool,
     /// Swift also rewrites a path written with its slashes escaped (`\/`, as `JSONEncoder` writes them).
     pub slash_escaped_paths: bool,
+    /// C# reads a record that is not UTF-8 with its bad bytes replaced and writes it back so; Swift leaves such a file alone.
+    pub lossy_text: bool,
 }
 
 /// C#'s (Windows).
-pub const WINDOWS_NAMES: Names = Names { legacy_data_folder: LEGACY_DATA_FOLDER, projects_by_marker: false, slash_escaped_paths: false };
+pub const WINDOWS_NAMES: Names =
+    Names { legacy_data_folder: LEGACY_DATA_FOLDER, projects_by_marker: false, slash_escaped_paths: false, lossy_text: true };
 /// Swift's (the Mac): `RenameMigration.legacyDataFolder`.
-pub const MAC_NAMES: Names = Names { legacy_data_folder: "MightyClaude Native", projects_by_marker: true, slash_escaped_paths: true };
+pub const MAC_NAMES: Names =
+    Names { legacy_data_folder: "MightyClaude Native", projects_by_marker: true, slash_escaped_paths: true, lossy_text: false };
 /// Swift `RenameMigration.legacyBundleIdentifier`: the UserDefaults domain the app's settings were under before the rename.
 pub const LEGACY_BUNDLE_IDENTIFIER: &str = "dev.mightyclaude.native";
 /// Swift `RenameMigration.defaultsMarker`: set once the old settings were copied, so a setting cleared later is not brought back.
@@ -125,7 +129,7 @@ pub trait LegacySettings {
     fn copied(&self) -> bool;
     /// The old domain's keys (none when there is no old domain).
     fn legacy_keys(&self) -> Vec<String>;
-    /// The new domain has a value for `key`.
+    /// The app already sees a value for `key` (Swift `defaults.object(forKey:) != nil`: its own domain's or the global one's).
     fn has(&self, key: &str) -> bool;
     /// The old value of `key` set in the new domain, as it was stored.
     fn copy(&self, key: &str) -> io::Result<()>;
@@ -181,9 +185,9 @@ pub fn run_with(
         // The records name each child's worktree by its full path.
         for name in RECORDS {
             let (old, target) = (old_home.to_string_lossy(), new_home.to_string_lossy());
-            rewrite_paths(&data.join(name), &old, &target);
+            rewrite_paths_as(&data.join(name), &old, &target, names.lossy_text);
             if names.slash_escaped_paths && old.contains('/') {
-                rewrite_paths(&data.join(name), &old.replace('/', "\\/"), &target.replace('/', "\\/"));
+                rewrite_paths_as(&data.join(name), &old.replace('/', "\\/"), &target.replace('/', "\\/"), names.lossy_text);
             }
         }
         if let Ok(entries) = fs::read_dir(new_home.join("worktrees")) {
@@ -271,15 +275,44 @@ pub fn home() -> Option<PathBuf> {
 
 /// C# `RenameMigration.RewritePaths`: replaces the folder path `old` with `target` in a JSON file, written plainly or JSON-escaped
 /// ([`rewritten`]). A file that does not read is left alone; one that does not change is not written. Read as C#'s `ReadAllText` reads
-/// it (a UTF-8 byte order mark dropped, bytes that are not UTF-8 replaced) and written as `WriteAllText` writes (UTF-8, no mark).
+/// it (a UTF-8 byte order mark dropped, bytes that are not UTF-8 replaced) and written as `WriteAllText` writes (UTF-8, no mark), but
+/// atomically (a temporary beside it, moved over it), so a crash never leaves half a record.
 pub fn rewrite_paths(file: &Path, old: &str, target: &str) {
+    rewrite_paths_as(file, old, target, true);
+}
+
+/// [`rewrite_paths`]; with `lossy` false as Swift does it (`String(contentsOf:encoding: .utf8)`, `RenameMigration.swift:72-76`): a file
+/// that is not UTF-8 is left alone rather than written back with its bad bytes replaced.
+pub fn rewrite_paths_as(file: &Path, old: &str, target: &str, lossy: bool) {
     let Ok(bytes) = fs::read(file) else { return };
     let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
-    let text = String::from_utf8_lossy(bytes);
+    let text = match std::str::from_utf8(bytes) {
+        Ok(text) => std::borrow::Cow::Borrowed(text),
+        Err(_) if lossy => String::from_utf8_lossy(bytes),
+        Err(_) => return,
+    };
     let updated = rewritten(&text, old, target);
     if updated != text {
-        let _ = fs::write(file, updated);
+        let _ = write_atomically(file, updated.as_bytes());
     }
+}
+
+/// `bytes` into `file` through `<file>.<id>.tmp` beside it, flushed and moved over it; the temporary removed on failure.
+fn write_atomically(file: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write as _;
+    let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let temporary = file.with_file_name(format!("{name}.{}.tmp", crate::wire::new_id()));
+    let written = (|| {
+        let mut out = fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        out.write_all(bytes)?;
+        out.sync_all()?;
+        drop(out);
+        fs::rename(&temporary, file)
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    written
 }
 
 /// C# `RenameMigration.Rewritten`: `old` replaced with `target` where a separator follows (so a folder that merely starts with the old

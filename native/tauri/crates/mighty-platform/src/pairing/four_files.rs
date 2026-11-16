@@ -59,6 +59,11 @@ pub trait PrivateFiles: Send + Sync {
     fn private_folder(&self, folder: &Path) -> std::io::Result<()>;
     /// A new file nobody else may read (it must not exist yet).
     fn private_file(&self, path: &Path) -> std::io::Result<fs::File>;
+    /// An existing folder or file made this user's only again (Swift sets 0600 on each file it reads: `MobileRemoteService.swift:372,
+    /// :396`, `RelayChannel.swift:92`). Never follows a link.
+    fn tighten(&self, _path: &Path) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// No modes: the folder made and files created new, nothing more.
@@ -205,8 +210,38 @@ fn swift_string(out: &mut String, value: &str) {
     out.push('"');
 }
 
+/// A UTC time as the Swift registry writes it (`ISO8601DateFormatter` with fractional seconds: `2026-11-01T05:06:07.123Z`), from the
+/// shared identity's .NET `"O"` text (`2026-11-01T05:06:07.1234567+00:00`), so the Swift app reads it if the user goes back to it. A
+/// text of any other shape (another offset, Swift's own) is kept as it is.
+pub fn swift_timestamp(value: &str) -> String {
+    let b = value.as_bytes();
+    let shaped = b.len() >= 19
+        && b[..19].iter().enumerate().all(|(i, c)| match i {
+            4 | 7 => *c == b'-',
+            10 => *c == b'T',
+            13 | 16 => *c == b':',
+            _ => c.is_ascii_digit(),
+        });
+    if !shaped {
+        return value.to_string();
+    }
+    let rest = &value[19..];
+    let (fraction, zone) = match rest.strip_prefix('.') {
+        Some(after) => {
+            let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+            (&after[..digits], &after[digits..])
+        }
+        None => ("", rest),
+    };
+    if !matches!(zone, "+00:00" | "-00:00" | "Z") || (fraction.is_empty() && zone == "Z") {
+        return value.to_string();
+    }
+    let millis: String = fraction.chars().chain(std::iter::repeat('0')).take(3).collect();
+    format!("{}.{millis}Z", &value[..19])
+}
+
 /// The phone list as `JSONEncoder().encode([MobileDevice])` writes it: compact, each row's keys in their declaration order, a nil
-/// optional left out, Foundation's escaping.
+/// optional left out, Foundation's escaping, the times in the registry's own form ([`swift_timestamp`]).
 pub fn encode_devices(devices: &[PairedDevice]) -> String {
     let mut out = String::from("[");
     for (index, device) in devices.iter().enumerate() {
@@ -222,9 +257,9 @@ pub fn encode_devices(devices: &[PairedDevice]) -> String {
             swift_string(&mut out, hash);
         }
         out.push_str(",\"firstSeen\":");
-        swift_string(&mut out, &device.first_seen);
+        swift_string(&mut out, &swift_timestamp(&device.first_seen));
         out.push_str(",\"lastSeen\":");
-        swift_string(&mut out, &device.last_seen);
+        swift_string(&mut out, &swift_timestamp(&device.last_seen));
         if let Some(push) = &device.push {
             out.push_str(",\"push\":{\"handle\":");
             swift_string(&mut out, &push.handle);
@@ -236,7 +271,7 @@ pub fn encode_devices(devices: &[PairedDevice]) -> String {
                 swift_string(&mut out, kind);
             }
             out.push_str("],\"updatedAt\":");
-            swift_string(&mut out, &push.updated_at);
+            swift_string(&mut out, &swift_timestamp(&push.updated_at));
             out.push('}');
         }
         out.push('}');
@@ -363,22 +398,32 @@ impl FourFiles {
 
     /// The named files written together: each that changes, in order; a failure puts back the ones already written.
     fn write_all(&self, files: &[(&'static str, Vec<u8>)]) -> Result<()> {
+        // A link where the folder should be is refused before anything is made or changed through it.
+        match fs::symlink_metadata(&self.folder) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(PlatformError::Refused("Refusing linked mobile remote directory.".into()));
+            }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error.into()),
+            _ => {}
+        }
         self.files.private_folder(&self.folder)?;
-        if fs::symlink_metadata(&self.folder)?.file_type().is_symlink() {
-            return Err(PlatformError::Refused("Refusing linked mobile remote directory.".into()));
+        // What each file held, read before anything is written: only a missing file is "nothing" (a rollback removes it); a file that
+        // cannot be read stops the save before it writes, so a rollback never removes what it could not keep.
+        let mut before: Vec<Option<Vec<u8>>> = Vec::with_capacity(files.len());
+        for (name, _) in files {
+            match fs::read(self.folder.join(name)) {
+                Ok(bytes) => before.push(Some(bytes)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => before.push(None),
+                Err(error) => return Err(error.into()),
+            }
         }
         let mut done: Vec<(&'static str, Option<Vec<u8>>)> = Vec::new();
-        for (name, bytes) in files {
-            let path = self.folder.join(name);
-            let before = fs::read(&path).ok();
+        for ((name, bytes), before) in files.iter().zip(before) {
             if before.as_deref() == Some(bytes.as_slice()) {
                 continue;
             }
-            if *name == DEVICES
-                && let Some(old) = lock(&self.corrupt).take()
-            {
-                // `backupCorruptFile`: copied aside before the first write over it.
-                let _ = fs::write(self.folder.join(format!("{DEVICES}.corrupt-{}", unix_seconds())), old);
+            if *name == DEVICES {
+                self.keep_corrupt_aside();
             }
             if let Err(error) = self.write_file(name, bytes) {
                 for (name, before) in done.into_iter().rev() {
@@ -393,8 +438,21 @@ impl FourFiles {
         }
         Ok(())
     }
-}
 
+    /// `backupCorruptFile`: the unreadable list's bytes copied aside, private, before the first write over it; kept for the next
+    /// write when the copy fails.
+    fn keep_corrupt_aside(&self) {
+        let mut corrupt = lock(&self.corrupt);
+        let Some(old) = corrupt.as_ref() else { return };
+        let path = self.folder.join(format!("{DEVICES}.corrupt-{}", unix_seconds()));
+        let kept = self.files.private_file(&path).and_then(|mut file| file.write_all(old).and_then(|()| file.sync_all()));
+        if kept.is_ok() {
+            *corrupt = None;
+        } else {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
 impl PairingStore for FourFiles {
     fn load(&self) -> Result<Option<PairingIdentity>> {
         match fs::symlink_metadata(&self.folder) {
@@ -408,6 +466,14 @@ impl PairingStore for FourFiles {
         let key_path = self.folder.join(PAIRING_KEY);
         if read_bounded(&key_path, FILE_MAXIMUM_BYTES)?.is_none() {
             return Ok(None);
+        }
+        // Swift makes each file it reads owner-only again (and the folder, when it writes the key).
+        let _ = self.files.tighten(&self.folder);
+        for name in [HOST_ID, PAIRING_KEY, HOST_TOKEN, KEY_PAIR, DEVICES] {
+            let path = self.folder.join(name);
+            if fs::symlink_metadata(&path).is_ok_and(|meta| meta.is_file()) {
+                let _ = self.files.tighten(&path);
+            }
         }
         let mut mended: Vec<&'static str> = Vec::new();
         let mut devices = match read_bounded(&self.folder.join(DEVICES), DEVICES_MAXIMUM_BYTES)? {
@@ -558,6 +624,17 @@ mod tests {
         let read = decode_devices(text.as_bytes()).unwrap();
         assert_eq!(read.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["first", "L"]);
         assert!(read.iter().all(|d| d.push.is_none()), "a short handle, and any handle on the legacy row, are dropped");
+    }
+
+    /// The shared identity's .NET times are written in the registry's own form; Swift's own and other shapes are kept.
+    #[test]
+    fn times_are_written_as_the_swift_registry_writes_them() {
+        assert_eq!(swift_timestamp("2026-11-01T05:06:07.1234567+00:00"), "2026-11-01T05:06:07.123Z");
+        assert_eq!(swift_timestamp("2026-11-01T05:06:07+00:00"), "2026-11-01T05:06:07.000Z");
+        assert_eq!(swift_timestamp("2026-11-01T05:06:07.1Z"), "2026-11-01T05:06:07.100Z");
+        for kept in ["2026-11-01T05:06:07Z", "2026-11-01T05:06:07.123Z", "2026-11-01T05:06:07.1234567+09:00", "not a time", ""] {
+            assert_eq!(swift_timestamp(kept), kept);
+        }
     }
 
     /// Nothing is made before there is a key; a save writes Swift's files, only those that change, and they read back.

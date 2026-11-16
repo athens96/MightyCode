@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use base64::Engine;
-use mighty_platform::pairing::four_files::{FourFiles, PlainFiles};
+use mighty_platform::pairing::four_files::{FourFiles, PlainFiles, swift_timestamp};
 use mighty_platform::{PairedDevice, PairingIdentity, PairingStore, PushRegistration};
 use serde_json::{Value, json};
 
@@ -34,12 +34,12 @@ fn public_key(secret: &[u8; 32]) -> String {
 
 /// A row as Swift's `JSONEncoder` encodes `MobileDevice` (nil left out).
 fn device_json(device: &PairedDevice) -> Value {
-    let mut row = json!({"id": device.id, "name": device.name, "firstSeen": device.first_seen, "lastSeen": device.last_seen});
+    let mut row = json!({"id": device.id, "name": device.name, "firstSeen": swift_timestamp(&device.first_seen), "lastSeen": swift_timestamp(&device.last_seen)});
     if let Some(hash) = &device.token_hash {
         row["tokenHash"] = json!(hash);
     }
     if let Some(push) = &device.push {
-        row["push"] = json!({"handle": push.handle, "kinds": push.kinds, "updatedAt": push.updated_at});
+        row["push"] = json!({"handle": push.handle, "kinds": push.kinds, "updatedAt": swift_timestamp(&push.updated_at)});
     }
     row
 }
