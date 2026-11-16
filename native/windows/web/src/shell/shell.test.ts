@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { filterWorkspaces } from './filter';
-import { shortcutAction } from './shortcuts';
+import { isMenuPush } from './menu';
+import { macShortcutAction, shortcutAction } from './shortcuts';
 
 const key = (code: string, extra: Partial<{ key: string; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }> = {}) =>
   ({ key: extra.key ?? '', code, ctrlKey: extra.ctrlKey ?? true, shiftKey: extra.shiftKey ?? false, altKey: extra.altKey ?? false, metaKey: false });
@@ -33,5 +34,34 @@ describe('shortcuts (spec section 8)', () => {
     expect(shortcutAction(key('KeyA'))).toBeNull();
     expect(shortcutAction(key('KeyO', { ctrlKey: false }))).toBeNull();
     expect(shortcutAction(key('KeyO', { altKey: true }))).toBeNull();
+  });
+});
+
+describe("the Mac's shortcuts and menu (D9, the Rust host on macOS only)", () => {
+  const mac = (code: string, extra: Partial<{ ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean }> = {}) =>
+    ({ key: '', code, ctrlKey: extra.ctrlKey ?? false, shiftKey: extra.shiftKey ?? false, altKey: extra.altKey ?? false, metaKey: extra.metaKey ?? true });
+  it('maps the menu bar keys with ⌘', () => {
+    expect(macShortcutAction(mac('KeyO'))).toBe('openFolder');
+    expect(macShortcutAction(mac('KeyN'))).toBe('newPane');
+    expect(macShortcutAction(mac('KeyK'))).toBe('search');
+    expect(macShortcutAction(mac('KeyT'))).toBe('newShell');
+    expect(macShortcutAction(mac('Comma'))).toBe('settings');
+    expect(macShortcutAction(mac('KeyE', { shiftKey: true }))).toBe('files');
+    expect(macShortcutAction(mac('Slash', { shiftKey: true }))).toBe('help');
+    expect(macShortcutAction(mac('KeyS', { ctrlKey: true }))).toBe('toggleSidebar');
+    expect(macShortcutAction(mac('Equal'))).toBe('textLarger');
+    expect(macShortcutAction(mac('Minus'))).toBe('textSmaller');
+    expect(macShortcutAction(mac('Digit0'))).toBe('textReset');
+  });
+  it('leaves Ctrl keys to the text fields and ⌘ keys of its own to the system', () => {
+    expect(macShortcutAction(mac('KeyK', { metaKey: false, ctrlKey: true }))).toBeNull();
+    expect(macShortcutAction(mac('KeyB'))).toBeNull();
+    expect(macShortcutAction(mac('KeyC'))).toBeNull();
+    expect(macShortcutAction(mac('KeyO', { altKey: true }))).toBeNull();
+  });
+  it("takes only the menu's actions from the host", () => {
+    expect(isMenuPush({ kind: 'menu', action: 'workMap' } as { kind: string })).toBe(true);
+    expect(isMenuPush({ kind: 'menu', action: 'quit' } as { kind: string })).toBe(false);
+    expect(isMenuPush({ kind: 'host' })).toBe(false);
   });
 });
