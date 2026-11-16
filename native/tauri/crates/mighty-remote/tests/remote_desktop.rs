@@ -202,8 +202,7 @@ async fn a_remote_pane_runs_through_the_client_and_the_phone_never_sees_it() {
 /// folder fails before it starts, one in the shared folder runs, and once sharing stops it finds nothing; the host tells how many client
 /// runs go on. Its options' reading of this PC's CLIs is `HostRuntime` (L921). The runner's lack of pane tools and delegation is
 /// `host_runner`'s construction (no binding, no delegation hooks); its PowerShell is remote_host's `commands_run_in_powershell_on_windows`.
-/// The commands need the Windows process host.
-#[cfg(windows)]
+/// The commands run through the platform's process host.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_sharing_host_runs_only_in_shared_folders_with_no_pane_tools() {
     use mighty_remote::remote::host::{HostRunner, RemoteHost, RunnerSinks, host_runner};
@@ -220,8 +219,7 @@ async fn the_sharing_host_runs_only_in_shared_folders_with_no_pane_tools() {
     let factory: RunnerFactory = Arc::new(move |_host: &RemoteHost, sinks: RunnerSinks| {
         let finder: Finder = Arc::new(|_| Box::pin(async { None }));
         let environment = Arc::new(mighty_platform::fake::FakeShellEnvironment::new(std::env::vars().collect()));
-        let catalog =
-            Arc::new(ProviderCatalog::new(Arc::new(mighty_platform_windows::WindowsProcessHost::new()), environment, Some(finder)));
+        let catalog = Arc::new(ProviderCatalog::new(support::processes(), environment, Some(finder)));
         let (into, event) = (seen.clone(), sinks.event.clone());
         let recorded = RunnerSinks {
             event: Arc::new(move |value: RunEvent| {
@@ -469,9 +467,8 @@ fn the_firewall_rows_say_when_the_rule_lacks_a_port_in_use() {
 }
 
 /// "remote desktop: no client code runs under the service's lock, and a stop while connecting ends the run once": a route check that
-/// blocks leaves the service's state free and this PC's other pane runs (its command needs the Windows process host); a stop while
+/// blocks leaves the service's state free and this PC's other pane runs (its command through the platform's process host); a stop while
 /// connecting ends the run stopped, once, and never reaches the host.
-#[cfg(windows)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn no_client_code_runs_under_the_services_lock() {
     set_language("en");
@@ -492,7 +489,7 @@ async fn no_client_code_runs_under_the_services_lock() {
     };
     let finder: Finder = Arc::new(|_| Box::pin(async { None }));
     let environment = Arc::new(mighty_platform::fake::FakeShellEnvironment::new(std::env::vars().collect()));
-    let catalog = Arc::new(ProviderCatalog::new(Arc::new(mighty_platform_windows::WindowsProcessHost::new()), environment, Some(finder)));
+    let catalog = Arc::new(ProviderCatalog::new(support::processes(), environment, Some(finder)));
     let desk = Arc::new(Desk::new(MakeHost::default(), false, options, catalog).await);
     let far = desk.open(desk.fixture.shared.id());
     desk.panes(vec![pane("far-agent", far.id(), "claude", "claude"), pane("near-cmd", desk.near.id(), "shell", "claude")]);

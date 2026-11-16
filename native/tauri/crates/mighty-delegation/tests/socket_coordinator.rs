@@ -2,8 +2,8 @@
 //! DelegationCoordinatorTests name "over the real socket"), each under its Swift name: the delegation MCP server, in process, calls the
 //! app's listener on the parent's token, and the coordinator behind it answers. Windows' named pipe and the Mac's Unix socket.
 //!
-//! The status check needs no git and runs on both. The two that run git (a child's merge, delegate's worktree) go through the
-//! platform's process host, the Mac's being M-A's: they stay `#[cfg(windows)]` until it lands, when their gate becomes the file's.
+//! The status check needs no git; the two that run git (a child's merge, delegate's worktree) go through the platform's process host
+//! (Windows', or M-A's on the Mac).
 #![cfg(any(windows, target_os = "macos"))]
 
 mod delegation_io;
@@ -38,10 +38,8 @@ impl TerminalHandler for NoTerminalCalls {
 /// A coordinator over `file` in the place's profile, its pane "parent" a Claude pane running in the repository; the listener it
 /// answers behind; and the parent's binding with the delegation server attached.
 struct Fixture {
-    #[cfg_attr(not(windows), allow(dead_code, reason = "read by the git checks, Windows-only until M-A's Mac process host"))]
     place: DelegationPlace,
     host: Arc<TestHost>,
-    #[cfg_attr(not(windows), allow(dead_code, reason = "read by the git checks, Windows-only until M-A's Mac process host"))]
     coordinator: Arc<Coordinator>,
     io: Arc<AgentIo>,
     server: DelegationServer,
@@ -114,8 +112,7 @@ async fn over_the_real_socket_the_delegation_server_hands_back_the_list_and_the_
 
 /// `DelegationActionToolTests.swift:434 "overTheRealSocketMergeAndFollowUpComeBackAsToolData"`: a reported child's merge over the
 /// real transport fast-forwards the parent and comes back as tool data; the same merge again is refused `not_reported`; a follow-up is
-/// recorded with one more left. Git runs through the process host: Windows until M-A's Mac host lands.
-#[cfg(windows)]
+/// recorded with one more left. Git runs through the platform's process host.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn over_the_real_socket_merge_and_follow_up_come_back_as_tool_data() {
     let _lane = lane::enter().await;
@@ -146,8 +143,7 @@ async fn over_the_real_socket_merge_and_follow_up_come_back_as_tool_data() {
 /// `DelegationCoordinatorTests.swift:119 "withTheSwitchOnEachToolAnswersWithinTheSocketLimit"`: the coordinator's answer time is
 /// below the transport's 60 s limit, and with the switch on each of the six tools is answered over the real transport within it — by
 /// its tool (a refusal, an error or its data), never by the transport giving up, an unknown-tool answer, the detached gate or the
-/// Claude-only gate. delegate makes a worktree (git): Windows until M-A's Mac process host lands.
-#[cfg(windows)]
+/// Claude-only gate. delegate makes a worktree (git) through the platform's process host.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn with_the_switch_on_each_tool_answers_within_the_socket_limit() {
     use mighty_delegation::agent_io::client::DELEGATION_SECONDS;

@@ -6,8 +6,8 @@
 //! git ([`DelegationPlace::git`]) reads the same empty global config and no system config, so no check ever reads the user's. It never
 //! touches `%USERPROFILE%\.mightycode` or a real repository. Owner: W7-B (published first: W7-A's and W7-D's git checks run in it).
 //!
-//! Git runs through the platform's process host: `WindowsProcessHost` on Windows, the Mac's (M-A's, `Unsupported` until it lands) on
-//! the Mac, so the checks that run git stay `#[cfg(windows)]` until M-A's process host is in.
+//! Git runs through the platform's process host: `WindowsProcessHost` on Windows, M-A's `MacProcessHost` on the Mac; a folder's final
+//! name comes from the platform's file handles (M-G's `MacFileHandles` on the Mac, `/var` read as `/private/var`).
 //!
 //! A child here is [`PlaceChild`], what C#'s `ChildRecord.Make(id, "parent", …)` holds of it for the git layer; W7-A's checks make their
 //! own `ChildRecord` from the [`ChildWorktree`] [`DelegationPlace::made`] returns.
@@ -46,7 +46,11 @@ pub fn handles() -> Arc<dyn FileHandles> {
     {
         Arc::new(mighty_platform_windows::files::WindowsFileHandles)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        Arc::new(mighty_platform_macos::files::MacFileHandles)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         Arc::new(mighty_platform::unsupported::Unsupported)
     }

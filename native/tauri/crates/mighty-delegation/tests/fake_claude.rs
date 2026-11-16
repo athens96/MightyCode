@@ -108,9 +108,8 @@ fn the_fake_plays_its_script_over_stream_json() {
 }
 
 /// The delegation server of `--mcp-config` is started with the fake's own environment (the pane's token and pipe) and a scripted
-/// call reaches the app's listener; its answer is the tool result. Windows only until M-A's Mac process host lands: the fake Claude
-/// starts its MCP server through the process host (the transport is already the OS's).
-#[cfg(windows)]
+/// call reaches the app's listener; its answer is the tool result. The fake Claude starts its MCP server through the platform's process
+/// host, over the OS's transport.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_fake_calls_the_delegation_server_on_the_panes_token() {
     use std::sync::Arc;

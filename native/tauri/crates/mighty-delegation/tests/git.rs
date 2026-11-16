@@ -4,15 +4,17 @@
 //! DelegationHumanChildVerification (the app's commit, git's failure kinds) and DelegationAppVerification (junctions, the deadline,
 //! REPORT.md read the Windows way). Each check is named by its C# name.
 //!
-//! Git runs through the Windows process host, so these are `#[cfg(windows)]` until the Mac stage gives the Mac one. What the checks
+//! Git runs through the platform's process host (Windows', or M-A's on the Mac); the checks of Windows' own paths, junctions and file
+//! sharing stay `#[cfg(windows)]`, each with its reason. What the checks
 //! assert of W7-A's delegation file (`RecordingMerge`, `RecordingUndo`, the store's round trip, `FirstInput`, the copies, the pane's
 //! notes) is W7-A's to check over its `ChildRecord`; here a child is the git layer's view of one ([`support::place::PlaceChild`]). The
 //! check that sets `GIT_DIR` process-wide is in its own binary (tests/git_env.rs).
 
 mod support;
 
-#[cfg(windows)]
-mod windows {
+mod checks {
+    #![cfg_attr(not(windows), allow(unused_imports, dead_code, reason = "what only the Windows checks (junctions, share modes) use"))]
+
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
@@ -100,6 +102,7 @@ mod windows {
     }
 
     /// `mklink /J link target`, through cmd.exe and the process host.
+    #[cfg(windows)]
     async fn junction(link: &str, target: &str) {
         let comspec = std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
         let folder = Path::new(link).parent().unwrap().to_path_buf();
@@ -1002,6 +1005,7 @@ mod windows {
     }
 
     /// "delegation: Windows paths, line endings, long paths and folders held open" (its process-wide GIT_DIR half: tests/git_env.rs)
+    #[cfg(windows)] // Windows' paths, junctions, 8.3 names, MAX_PATH and share modes.
     #[tokio::test]
     async fn windows_paths_line_endings_long_paths_and_folders_held_open() {
         let _lane = lane::enter().await;
@@ -1446,6 +1450,7 @@ mod windows {
     // ---- DelegationAppVerification ----
 
     /// "delegation: a junction in a child worktree never reaches what it points to"
+    #[cfg(windows)] // Junctions are Windows' (`mklink /J`).
     #[tokio::test]
     async fn a_junction_in_a_child_worktree_never_reaches_what_it_points_to() {
         let _lane = lane::enter().await;
@@ -1519,6 +1524,7 @@ mod windows {
     /// Beyond C# (W7 review M1): a child's worktree folder replaced by a junction to another registered worktree. The cleanup keeps
     /// everything, the app's commit refuses it, and the discard unlinks the junction alone: the other worktree, its files, its
     /// registration and its branch stay, and the child's own registration and branch go.
+    #[cfg(windows)] // Junctions are Windows' (`mklink /J`).
     #[tokio::test]
     async fn a_worktree_folder_replaced_by_a_junction_never_reaches_what_it_points_to() {
         let _lane = lane::enter().await;
@@ -1581,6 +1587,7 @@ mod windows {
 
     /// "delegation: git ends on its deadline, and reports and the file read the Windows way" (the delegation file's half, read again
     /// while another program holds it, is W7-A's store check)
+    #[cfg(windows)] // A junction as the hooks folder and Windows' free-space reader.
     #[tokio::test]
     async fn git_ends_on_its_deadline_and_reports_and_the_file_read_the_windows_way() {
         let _lane = lane::enter().await;

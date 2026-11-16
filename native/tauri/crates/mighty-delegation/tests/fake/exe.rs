@@ -14,8 +14,7 @@ fn ports() -> (Arc<dyn AgentIoConnector>, Arc<dyn ProcessHost>) {
     (Arc::new(mighty_platform_windows::NamedPipeConnector), Arc::new(mighty_platform_windows::WindowsProcessHost::new()))
 }
 
-/// The Mac's Unix socket (M-C) and process host (M-A's; `Unsupported` until it lands, so `--fake-claude` cannot start its MCP server
-/// there yet, while the two MCP modes need only the socket).
+/// The Mac's Unix socket (M-C) and process host (M-A).
 #[cfg(target_os = "macos")]
 fn ports() -> (Arc<dyn AgentIoConnector>, Arc<dyn ProcessHost>) {
     (mighty_platform_macos::agent_io_connector(), mighty_platform_macos::process_host())

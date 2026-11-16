@@ -191,8 +191,7 @@ fn the_delegation_file_is_read_again_while_another_program_holds_it() {
     support::place::remove_folder(&folder);
 }
 
-#[cfg(windows)]
-mod windows {
+mod coordinator {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

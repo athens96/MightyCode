@@ -349,8 +349,8 @@ async fn a_run_nobody_polls_is_stopped_and_a_stopped_host_ends_the_clients_runs(
     p.close().await;
 }
 
-/// "remote loopback: a real command runs in the shared folder and stops" (the Windows process host and PowerShell).
-#[cfg(windows)]
+/// "remote loopback: a real command runs in the shared folder and stops" (the platform's process host; PowerShell on Windows, the
+/// login shell on the Mac).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_real_command_runs_in_the_shared_folder_and_stops() {
     use mighty_run::manager::{RunManager, RunManagerOptions};
@@ -361,17 +361,25 @@ async fn a_real_command_runs_in_the_shared_folder_and_stops() {
     let factory: RunnerFactory = Arc::new(move |_host: &RemoteHost, sinks: RunnerSinks| {
         let finder: Finder = Arc::new(|_| Box::pin(async { None }));
         let environment = Arc::new(mighty_platform::fake::FakeShellEnvironment::new(std::env::vars().collect()));
-        let catalog =
-            Arc::new(ProviderCatalog::new(Arc::new(mighty_platform_windows::WindowsProcessHost::new()), environment, Some(finder)));
+        let catalog = Arc::new(ProviderCatalog::new(support::processes(), environment, Some(finder)));
         let mut options = RunManagerOptions::new(&plugin_text, sinks.workspace.clone(), sinks.event.clone());
         options.permission_requested = Some(sinks.permission.clone());
         options.graph_nodes = Some(sinks.graph_node.clone());
-        options.powershell_commands = Some(format!("{}\\System32", std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())));
+        if cfg!(windows) {
+            options.powershell_commands =
+                Some(format!("{}\\System32", std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())));
+        }
         Arc::new(RunManager::new(catalog, options))
     });
     let p = pair(MakeHost { runner: Some(factory), ..MakeHost::default() }).await;
     p.fixture.host.set_allows_full_access(true);
-    p.client.start(StartRunRequest::new("pane-6", p.workspace.id(), "shell", "(Get-Location).Path"), &p.workspace).await.unwrap();
+    p.client
+        .start(
+            StartRunRequest::new("pane-6", p.workspace.id(), "shell", if cfg!(windows) { "(Get-Location).Path" } else { "pwd -P" }),
+            &p.workspace,
+        )
+        .await
+        .unwrap();
     until(
         || p.seen.events().iter().any(|e| e.session_id == "pane-6" && matches!(e.status.as_deref(), Some("completed" | "error"))),
         20_000,
@@ -387,7 +395,13 @@ async fn a_real_command_runs_in_the_shared_folder_and_stops() {
         "the command ran in the shared folder: {:?}",
         p.seen.words(Some("pane-6"))
     );
-    p.client.start(StartRunRequest::new("pane-7", p.workspace.id(), "shell", "Start-Sleep 30"), &p.workspace).await.unwrap();
+    p.client
+        .start(
+            StartRunRequest::new("pane-7", p.workspace.id(), "shell", if cfg!(windows) { "Start-Sleep 30" } else { "sleep 30" }),
+            &p.workspace,
+        )
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
     p.client.stop("pane-7").await;
     assert_eq!(p.seen.events().iter().rev().find(|e| e.session_id == "pane-7").and_then(|e| e.status.clone()).as_deref(), Some("stopped"));

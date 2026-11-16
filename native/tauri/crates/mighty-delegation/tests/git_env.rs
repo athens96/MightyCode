@@ -4,7 +4,6 @@
 
 mod support;
 
-#[cfg(windows)]
 #[tokio::test]
 async fn inherited_git_variables_are_dropped_and_no_hook_runs() {
     use std::path::Path;
