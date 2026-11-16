@@ -27,14 +27,22 @@ unsafe extern "C-unwind" fn set_handling_send_event(_this: *mut AnyObject, _cmd:
     HANDLING.store(handling.as_bool(), Ordering::SeqCst);
 }
 
+/// Puts the flag back as it was however `sendEvent:` ends (an exception unwinding through it too).
+struct Handling(bool);
+
+impl Drop for Handling {
+    fn drop(&mut self) {
+        HANDLING.store(self.0, Ordering::SeqCst);
+    }
+}
+
 unsafe extern "C-unwind" fn send_event(this: *mut AnyObject, cmd: Sel, event: *mut AnyObject) {
-    let previous = HANDLING.swap(true, Ordering::SeqCst);
+    let _restore = Handling(HANDLING.swap(true, Ordering::SeqCst));
     if let Some(original) = ORIGINAL_SEND_EVENT.get() {
         // SAFETY: the class's own `sendEvent:` implementation, called as AppKit calls it.
         let original = unsafe { std::mem::transmute::<Imp, unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject)>(*original) };
         unsafe { original(this, cmd, event) };
     }
-    HANDLING.store(previous, Ordering::SeqCst);
 }
 
 fn types(text: String) -> Result<CString> {
@@ -47,7 +55,10 @@ pub fn add_cef_methods() -> Result<()> {
     let app = NSApplication::sharedApplication(mtm);
     let object: &AnyObject = &app;
     let class: &AnyClass = object.class();
-    if ORIGINAL_SEND_EVENT.get().is_some() {
+    // Added once; and a class that already answers both (an NSApplication subclass that is CEF's own) is left as it is.
+    if ORIGINAL_SEND_EVENT.get().is_some()
+        || (class.instance_method(sel!(isHandlingSendEvent)).is_some() && class.instance_method(sel!(setHandlingSendEvent:)).is_some())
+    {
         return Ok(());
     }
     let original = class

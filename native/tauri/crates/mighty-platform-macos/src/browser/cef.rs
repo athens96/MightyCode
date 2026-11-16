@@ -10,6 +10,11 @@
 //! keeps the history of the addresses it was given (back, forward and reload load an entry again) and reports each navigation as the
 //! bridge takes it; a link followed inside the page is not seen. The bridge loads a popup asked for by a click in the pane itself and cancels any
 //! other, so no popup is reported. CEF downloads nothing without a download handler, which the bridge gives none.
+//!
+//! Deviations from WebView2 and WKWebView the bridge keeps (it is the Swift app's, not edited here; the review of M-E records them for
+//! the user): CEF's renderers run without a sandbox (`no_sandbox`); the address field shows the history the pane was given, not CEF's
+//! own address after a redirect or a followed link (a bridge export of `OnAddressChange` would fix it); a popup asked for by a click
+//! loads into the pane's top frame, whatever its scheme or frame.
 
 use std::cell::RefCell;
 use std::ffi::{CString, c_char, c_int, c_void};
@@ -263,6 +268,7 @@ fn release_closed(bridge: &Bridge) {
     };
     for pane in closed {
         // SAFETY: the reference `make` kept, given back once.
+        super::forget_focus(pane.view);
         if let Some(view) = unsafe { Retained::from_raw(pane.view as *mut NSView) } {
             view.removeFromSuperview();
         }

@@ -37,6 +37,9 @@ pub(super) fn set_temporary(temporary: bool) {
 }
 
 pub async fn open(window: &tauri::Window, options: BrowserOptions) -> Result<Box<dyn BrowserSurface>> {
+    if !supported() {
+        return Err(PlatformError::unsupported("SurfaceFactory", "open_browser (WebKit's data stores need macOS 14)"));
+    }
     let url = super::first_address(window, &options.url)?;
     let label = super::label(&options.pane_id, NEXT.fetch_add(1, Ordering::Relaxed));
     let store = super::store_identifier(&options.data_dir);
@@ -86,26 +89,59 @@ pub async fn open(window: &tauri::Window, options: BrowserOptions) -> Result<Box
     .map_err(|error| refused("the browser view", error))?;
     // From here a failure closes the view it made: no shown view is left without its pane's surface.
     let started = async {
-        on_view(&webview, "the browser view", move |view, mtm| {
-            // A page's `window.open` reaches the refusal (and the host's count) even without a click, as WebView2's NewWindowRequested
-            // does; WebKit's own blocker would drop it unseen. (The preferences are the view's own, shared by its configuration's copy.)
-            // SAFETY: the live view's preferences, on the main thread.
-            unsafe { view.configuration().preferences().setJavaScriptCanOpenWindowsAutomatically(true) };
+        let view = on_view(&webview, "the browser view", move |view, mtm| {
+            // SAFETY: the live view's configuration (its preferences and its user content controller are the view's own, shared by the
+            // configuration's copy), on the main thread, before its first real address.
+            unsafe {
+                let configuration = view.configuration();
+                // Nothing of the app's in a page from the web (review M-E 1): Tauri's scripts (its IPC and invoke key) and its message
+                // handlers, which every Tauri webview gets, go before the first address loads.
+                let content = configuration.userContentController();
+                content.removeAllUserScripts();
+                content.removeAllScriptMessageHandlers();
+                // A page's `window.open` reaches the refusal (and the host's count) even without a click, as WebView2's
+                // NewWindowRequested does; WebKit's own blocker would drop it unseen.
+                configuration.preferences().setJavaScriptCanOpenWindowsAutomatically(true);
+            }
             if let Some(listener) = listener {
                 super::watch_focus(view, listener, mtm);
             }
+            view as *const WKWebView as usize
         })
         .await?;
         if url.as_str() != BLANK {
             webview.navigate(url).map_err(|error| refused("navigate", error))?;
         }
-        Ok(())
+        Ok(view)
     };
-    if let Err(error) = started.await {
-        let _ = webview.close();
-        return Err(error);
+    match started.await {
+        Ok(view) => Ok(Box::new(WebKitBrowser { webview, view }) as Box<dyn BrowserSurface>),
+        Err(error) => {
+            // Its presses forgotten before it goes (the monitor would otherwise ask a view that is gone).
+            let _ = webview.with_webview(|platform| {
+                super::forget_focus(platform.inner() as usize);
+            });
+            let _ = webview.close();
+            Err(error)
+        }
     }
-    Ok(Box::new(WebKitBrowser { webview }) as Box<dyn BrowserSurface>)
+}
+
+/// Whether WebKit gives each workspace its own data store here (macOS 14's `dataStoreForIdentifier:`; below it wry would share the
+/// default store between workspaces).
+pub fn supported() -> bool {
+    objc2_foundation::NSProcessInfo::processInfo().operatingSystemVersion().majorVersion >= 14
+}
+
+thread_local! {
+    /// A closing view's navigation delegate and focus listeners, kept until its close is known to have happened (main thread only).
+    static CLOSING: std::cell::RefCell<Vec<Closing>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+struct Closing {
+    view: usize,
+    delegate: Option<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_web_kit::WKNavigationDelegate>>>,
+    listeners: Vec<mighty_platform::BrowserListener>,
 }
 
 /// Runs `work` with the view's WKWebView on the main thread and waits for its answer.
@@ -126,21 +162,31 @@ async fn on_view<T: Send + 'static>(
     answer.await.map_err(|error| refused(what, error))
 }
 
-/// Empties the stores a temporary run opened (WebKit's own data of every type), waiting up to 3 s for WebKit. On the main thread,
-/// as the app ends.
-pub(super) fn clear_temporary_stores() {
+/// Empties the stores a temporary run opened (WebKit's own data of every type), then removes them (macOS 14's
+/// `removeDataStoreForIdentifier:`, which refuses a store a view still uses), waiting up to 3 s for WebKit each time. On the main
+/// thread, as the app ends; what became of them, for the log.
+pub(super) fn clear_temporary_stores() -> Option<String> {
     let stores = std::mem::take(&mut *STORES.lock().unwrap_or_else(|p| p.into_inner()));
-    let Some(mtm) = MainThreadMarker::new() else { return };
+    let mtm = MainThreadMarker::new()?;
     if stores.is_empty() {
-        return;
+        return None;
     }
+    let count = stores.len();
     let left = Arc::new(AtomicUsize::new(stores.len()));
+    let removed = Arc::new(AtomicUsize::new(0));
+    let wait = |left: &AtomicUsize| {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while left.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
+            // SAFETY: CoreFoundation's own mode constant.
+            CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, Duration::from_millis(10), true);
+        }
+    };
     // SAFETY: WebKit's class methods on the main thread; each completion block only counts down.
     unsafe {
         let types = WKWebsiteDataStore::allWebsiteDataTypes(mtm);
         let since = NSDate::distantPast();
-        for id in stores {
-            let store = WKWebsiteDataStore::dataStoreForIdentifier(&NSUUID::from_bytes(id), mtm);
+        for id in &stores {
+            let store = WKWebsiteDataStore::dataStoreForIdentifier(&NSUUID::from_bytes(*id), mtm);
             let left = left.clone();
             let done = RcBlock::new(move || {
                 left.fetch_sub(1, Ordering::SeqCst);
@@ -148,15 +194,31 @@ pub(super) fn clear_temporary_stores() {
             store.removeDataOfTypes_modifiedSince_completionHandler(&types, &since, &done);
         }
     }
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while left.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
-        // SAFETY: CoreFoundation's own mode constant.
-        CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, Duration::from_millis(10), true);
+    wait(&left);
+    let emptied = count - left.load(Ordering::SeqCst);
+    left.store(count, Ordering::SeqCst);
+    for id in &stores {
+        let (left, removed) = (left.clone(), removed.clone());
+        let done = RcBlock::new(move |error: *mut NSError| {
+            if error.is_null() {
+                removed.fetch_add(1, Ordering::SeqCst);
+            }
+            left.fetch_sub(1, Ordering::SeqCst);
+        });
+        // SAFETY: WebKit's class method on the main thread; the block only counts.
+        unsafe { WKWebsiteDataStore::removeDataStoreForIdentifier_completionHandler(&NSUUID::from_bytes(*id), &done, mtm) };
     }
+    wait(&left);
+    Some(format!(
+        "WebKit stores of this run: {emptied} of {count} emptied, {} removed (a store a view still holds stays, empty)",
+        removed.load(Ordering::SeqCst)
+    ))
 }
 
 struct WebKitBrowser {
     webview: Webview,
+    /// Its WKWebView's address (the focus monitor's and the close's key).
+    view: usize,
 }
 
 impl NativeSurface for WebKitBrowser {
@@ -217,17 +279,42 @@ impl NativeSurface for WebKitBrowser {
     fn close(&self) -> Result<()> {
         // On the main thread before the close reaches it (both go through its queue, in order): its presses forgotten, and its load
         // stopped with no navigation callback left (wry's page-load handler unwraps the address, which a view torn down mid-load has
-        // none of).
-        let _ = self.webview.with_webview(|platform| {
-            super::forget_focus(platform.inner() as usize);
-            // SAFETY: wry's WKWebView on the main thread; its navigation delegate is a weak property.
+        // none of). Both are kept until the close is known: a close that fails gives them back.
+        let view = self.view;
+        let _ = self.webview.with_webview(move |platform| {
+            // SAFETY: wry's WKWebView on the main thread; its navigation delegate is a weak property (wry keeps its own reference).
             unsafe {
-                let view = &*(platform.inner() as *const WKWebView);
-                view.stopLoading();
-                view.setNavigationDelegate(None);
+                let web_view = &*(platform.inner() as *const WKWebView);
+                let delegate = web_view.navigationDelegate();
+                web_view.stopLoading();
+                web_view.setNavigationDelegate(None);
+                let listeners = super::forget_focus(view);
+                CLOSING.with(|closing| closing.borrow_mut().push(Closing { view, delegate, listeners }));
             }
         });
-        self.webview.close().map_err(|error| refused("close", error))
+        let take = move || {
+            CLOSING.with(|closing| {
+                let mut closing = closing.borrow_mut();
+                closing.iter().position(|entry| entry.view == view).map(|at| closing.remove(at))
+            })
+        };
+        match self.webview.close() {
+            Ok(()) => {
+                // Let go of what was kept, once the close went through.
+                let _ = self.webview.window().run_on_main_thread(move || drop(take()));
+                Ok(())
+            }
+            Err(error) => {
+                let _ = self.webview.with_webview(move |platform| {
+                    if let Some(entry) = take() {
+                        // SAFETY: wry's WKWebView, still open, on the main thread: its own delegate given back.
+                        unsafe { (*(platform.inner() as *const WKWebView)).setNavigationDelegate(entry.delegate.as_deref()) };
+                        super::rewatch_focus(view, entry.listeners);
+                    }
+                });
+                Err(refused("close", error))
+            }
+        }
     }
 }
 

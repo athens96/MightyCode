@@ -29,7 +29,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSRunningApplication", "NSScreen", "NSView", "NSWindow", "NSWorkspace",
 ] }
 objc2-web-kit = { version = "0.3", default-features = false, features = [
-    "std", "block2", "objc2-app-kit", "WKNavigation", "WKNavigationDelegate", "WKPreferences", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration",
+    "std", "block2", "objc2-app-kit", "WKNavigation", "WKNavigationDelegate", "WKPreferences", "WKUserContentController", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration",
 ] }
 objc2-user-notifications = { version = "0.3", default-features = false, features = [
     "std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse",

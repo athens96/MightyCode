@@ -52,19 +52,24 @@ pub fn start_engine(enabled: bool, root_cache: &Path, temporary_stores: bool) {
 }
 
 /// Shuts CEF down before the app exits (Swift `CefBrowserRuntime.shutDown` on `willTerminate`: open panes closed, CEF's shutdown
-/// within about 5 s), and empties a smoke's WKWebView stores. On the main thread (`RunEvent::Exit`). What CEF's shutdown did, for the
-/// log; None when CEF was not running.
-pub fn stop_engine() -> Option<String> {
-    let stopped = cef::stop();
-    webkit::clear_temporary_stores();
-    stopped
+/// within about 5 s), and empties and removes a smoke's WKWebView stores. On the main thread (`RunEvent::Exit`). What happened, for
+/// the log (nothing when CEF was not running and the run kept its stores).
+pub fn stop_engine() -> Vec<String> {
+    cef::stop().into_iter().chain(webkit::clear_temporary_stores()).collect()
 }
 
 /// A new pane's status on the Mac (mighty-platform `SurfaceFactory::browser_status`): pages show with the setting off (WKWebView,
 /// plan D4, where Swift said "disabled"); with CEF asked for at launch, `ready` once it started, else `failed` (no install to offer:
 /// Windows' `missing` is its WebView2 installer's). The setting the host latches later changes nothing until a restart, as CEF cannot.
+/// Below macOS 14 WebKit has no data store per workspace (wry would share the default one): `failed` there too.
 pub fn status(_enabled: bool) -> &'static str {
-    if cef::asked() && !cef::running() { "failed" } else { "ready" }
+    if (cef::asked() && !cef::running()) || (!cef::running() && !webkit::supported()) { "failed" } else { "ready" }
+}
+
+/// The app's windows AppKit knows of (Tauri's and any other: a popup an engine opened would be one more). On the main thread.
+pub fn window_count() -> Option<usize> {
+    let mtm = MainThreadMarker::new()?;
+    Some(objc2_app_kit::NSApplication::sharedApplication(mtm).windows().count())
 }
 
 /// The engine browser panes use in this launch (the smoke's report).
@@ -190,9 +195,19 @@ pub(crate) fn watch_focus(view: &NSView, listener: BrowserListener, _mtm: MainTh
     });
 }
 
-/// Stops reporting presses inside the view at `view` (its address). On the main thread.
-pub(crate) fn forget_focus(view: usize) {
-    FOCUS.with(|focus| focus.borrow_mut().retain(|(watched, _)| *watched != view));
+/// Stops reporting presses inside the view at `view` (its address), handing back where they went. On the main thread.
+pub(crate) fn forget_focus(view: usize) -> Vec<BrowserListener> {
+    FOCUS.with(|focus| {
+        let mut focus = focus.borrow_mut();
+        let forgotten = focus.iter().filter(|(watched, _)| *watched == view).map(|(_, listener)| listener.clone()).collect();
+        focus.retain(|(watched, _)| *watched != view);
+        forgotten
+    })
+}
+
+/// Reports presses inside the view at `view` again (a close that did not happen). On the main thread.
+pub(crate) fn rewatch_focus(view: usize, listeners: Vec<BrowserListener>) {
+    FOCUS.with(|focus| focus.borrow_mut().extend(listeners.into_iter().map(|listener| (view, listener))));
 }
 
 /// A mouse press in one of the app's windows: the pane whose view holds the view under it hears of it.
@@ -220,12 +235,13 @@ fn pressed(event: &NSEvent) {
 
 /// The website data store of the panes whose profile folder is `data_dir` (macOS 14's `WKWebsiteDataStore(forIdentifier:)`): a
 /// version-5 UUID of the folder's path, so a workspace's panes share theirs (the Windows profile keys, mighty-core's
-/// `browser::profile_folder`), two workspaces never do, and a profile of its own (`--profile`, a smoke's) has stores of its own.
+/// `browser::profile_folder`), two workspaces never do, and a profile of its own (`--profile`, a smoke's) has stores of its own. The
+/// path is lowercased first: APFS does not tell `Work` from `work`, so neither do the stores.
 pub(crate) fn store_identifier(data_dir: &Path) -> [u8; 16] {
     use sha1::Digest as _;
     let mut hash = sha1::Sha1::new();
     hash.update(STORE_NAMESPACE);
-    hash.update(data_dir.to_string_lossy().as_bytes());
+    hash.update(data_dir.to_string_lossy().to_lowercase().as_bytes());
     let digest = hash.finalize();
     let mut id = [0u8; 16];
     id.copy_from_slice(&digest[..16]);
@@ -267,6 +283,7 @@ mod tests {
         assert_eq!(a, store_identifier(Path::new("/p/browser-profiles/ws-a")));
         assert_ne!(a, store_identifier(Path::new("/p/browser-profiles/ws-b")));
         assert_ne!(a, store_identifier(Path::new("/q/browser-profiles/ws-a")));
+        assert_eq!(a, store_identifier(Path::new("/P/Browser-Profiles/WS-A")), "one folder on APFS, one store");
         assert_eq!(a[6] >> 4, 5);
         assert_eq!(a[8] & 0xC0, 0x80);
     }

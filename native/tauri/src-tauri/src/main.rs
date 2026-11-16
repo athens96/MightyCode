@@ -103,11 +103,40 @@ use crate::surface::SurfaceManager;
 
 /// Page → host: one message (`{kind:"call", ...}`), queued for the dispatcher; the answer comes back on `host-message`. Only the
 /// page's own webview showing the app's own page is heard (C# `WebShell.Trusted(args.Source)`): a browser pane's child webview, or
-/// the page's webview somewhere else, never reaches the host.
+/// the page's webview somewhere else, never reaches the host. And only with this run's nonce, which only the page's main frame is
+/// given ([`HostNonce`]): a frame inside the page (an HTML preview) that reaches Tauri's IPC is refused too.
 #[tauri::command]
-fn host_post(message: Value, webview: tauri::Webview, inbound: tauri::State<'_, Inbound>, origin: tauri::State<'_, AppOrigin>) {
-    if webview.label() == WINDOW && webview.url().is_ok_and(|url| origin.trusts(&url)) {
+fn host_post(
+    message: Value,
+    nonce: Option<String>,
+    webview: tauri::Webview,
+    inbound: tauri::State<'_, Inbound>,
+    origin: tauri::State<'_, AppOrigin>,
+    expected: tauri::State<'_, HostNonce>,
+) {
+    if webview.label() == WINDOW && webview.url().is_ok_and(|url| origin.trusts(&url)) && expected.accepts(nonce.as_deref()) {
         let _ = inbound.0.send(message);
+    }
+}
+
+/// A secret of this run that only the page's main frame learns (an initialization script for the main frame only sets
+/// `window.__MIGHTY_HOST_NONCE__`; the page sends it with every `host_post`): an iframe's code, another origin's, never reads it.
+struct HostNonce(String);
+
+impl HostNonce {
+    fn new() -> HostNonce {
+        HostNonce(format!("{}{}", mighty_core::wire::new_id(), mighty_core::wire::new_id()).replace('-', ""))
+    }
+
+    /// The main frame's script (a value it cannot change, set before the page's own scripts run).
+    fn script(&self) -> String {
+        format!("Object.defineProperty(window, '__MIGHTY_HOST_NONCE__', {{ value: '{}', writable: false, configurable: false }});", self.0)
+    }
+
+    /// Whether a post carries this run's nonce (compared in full, whatever its length).
+    fn accepts(&self, nonce: Option<&str>) -> bool {
+        let Some(nonce) = nonce else { return false };
+        nonce.len() == self.0.len() && nonce.bytes().zip(self.0.bytes()).fold(0u8, |differ, (a, b)| differ | (a ^ b)) == 0
     }
 }
 
@@ -487,6 +516,9 @@ fn main() {
             let origin = AppOrigin::new(app.config());
             let origin_url = origin.0.clone();
             app.manage(origin);
+            let nonce = HostNonce::new();
+            let nonce_script = nonce.script();
+            app.manage(nonce);
             // Made again while another process still holds the data folder with other options (C#'s WebView2 right after the update
             // swap; startup.rs, review M1), at most about 10 s; the setup runs before the event loop, so the wait blocks nothing else.
             let window = startup::retry_while_held(
@@ -494,6 +526,8 @@ fn main() {
                     let page = host.clone();
                     let navigation = AppOrigin(origin_url.clone());
                     let mut window = WebviewWindowBuilder::new(app.handle(), WINDOW, WebviewUrl::App("index.html".into()))
+                        // The host's nonce, for the main frame only (Tauri's `initialization_script`).
+                        .initialization_script(nonce_script.clone())
                         .title("Mighty Code")
                         .inner_size(1440.0, 920.0)
                         .min_inner_size(940.0, 650.0)
@@ -590,7 +624,7 @@ fn main() {
                 host.close();
                 host.write_unimplemented();
                 // The Mac's CEF shut down before the process ends (M-E).
-                if let Some(engine) = platform::stop_browser_engine() {
+                for engine in platform::stop_browser_engine() {
                     host.log.line(&format!("browser engine: {engine}"));
                 }
                 host.log.line("exit");
@@ -607,6 +641,20 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review M-E 1(b): `host_post` hears only this run's nonce, which the main frame's script holds; none, another or a part of it is
+    /// refused.
+    #[test]
+    fn only_the_runs_nonce_reaches_the_host() {
+        let nonce = HostNonce::new();
+        assert_eq!(nonce.0.len(), 64);
+        assert!(nonce.accepts(Some(&nonce.0.clone())));
+        assert!(!nonce.accepts(None));
+        assert!(!nonce.accepts(Some("")));
+        assert!(!nonce.accepts(Some(&nonce.0[..63])));
+        assert!(!nonce.accepts(Some(&HostNonce::new().0)), "each run has its own");
+        assert!(nonce.script().contains(&nonce.0) && nonce.script().contains("__MIGHTY_HOST_NONCE__"));
+    }
 
     fn url(text: &str) -> tauri::Url {
         tauri::Url::parse(text).unwrap()

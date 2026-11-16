@@ -6,6 +6,11 @@ import type { HostPort } from './bridge';
 export const HOST_POST = 'host_post';
 export const HOST_MESSAGE = 'host-message';
 
+/** This run's nonce, which the host gives the page's main frame only and wants with every post (main.rs `HostNonce`). */
+export function hostNonce(): unknown {
+  return (globalThis as { __MIGHTY_HOST_NONCE__?: unknown }).__MIGHTY_HOST_NONCE__;
+}
+
 /** The two Tauri calls the port makes; a test hands in its own. */
 export interface TauriApi {
   invoke(command: string, args: Record<string, unknown>): Promise<unknown>;
@@ -24,7 +29,7 @@ const tauri: TauriApi = {
  * request of its own, which could otherwise overtake another). A post that cannot be delivered answers its call with a failed
  * result, so the call rejects instead of waiting for ever.
  */
-export function tauriPort(api: TauriApi = tauri): HostPort {
+export function tauriPort(api: TauriApi = tauri, nonce: () => unknown = hostNonce): HostPort {
   const listeners: ((event: { data: unknown }) => void)[] = [];
   const deliver = (data: unknown) => listeners.forEach((listener) => listener({ data }));
   let broken: unknown = null;
@@ -48,7 +53,7 @@ export function tauriPort(api: TauriApi = tauri): HostPort {
   return {
     postMessage(message) {
       tail = tail
-        .then(() => (broken === null ? api.invoke(HOST_POST, { message }) : Promise.reject(broken)))
+        .then(() => (broken === null ? api.invoke(HOST_POST, { message, nonce: nonce() }) : Promise.reject(broken)))
         .then(
           () => undefined,
           (error: unknown) => fail(message, error),

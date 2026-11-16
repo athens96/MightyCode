@@ -304,11 +304,20 @@ pub fn start_browser_engine(enabled: bool, profiles: &std::path::Path, temporary
     let _ = (enabled, profiles, temporary_stores);
 }
 
-/// Shuts the browser engine down as the app exits (`RunEvent::Exit`, the main thread): the Mac's CEF, before the process ends; what
-/// its shutdown did, for the log (None where no engine ran: Windows, the Mac's WKWebView).
-pub fn stop_browser_engine() -> Option<String> {
+/// Shuts the browser engine down as the app exits (`RunEvent::Exit`, the main thread): the Mac's CEF, before the process ends, and
+/// a smoke's WKWebView stores; what happened, for the log (nothing on Windows).
+pub fn stop_browser_engine() -> Vec<String> {
     #[cfg(target_os = "macos")]
     return os::browser::stop_engine();
+    #[cfg(windows)]
+    return Vec::new();
+}
+
+/// The Mac's windows AppKit knows of (a popup an engine opened would be one more; the smoke's popup check), on the main thread; None
+/// on Windows, whose panes open no window but Tauri's.
+pub fn native_window_count() -> Option<usize> {
+    #[cfg(target_os = "macos")]
+    return os::browser::window_count();
     #[cfg(windows)]
     return None;
 }

@@ -180,7 +180,7 @@ async fn page_probe(host: &Host, body: &str) -> Result<Value, String> {
     // This process's own and new, so a line an earlier smoke left in the log is never read for it.
     let mark = format!("smoke-delegation-dom-{}-{}", std::process::id(), wire::new_id());
     let script = format!(
-        "(async () => {{ const until = async (test, ms) => {{ const end = performance.now() + ms; while (performance.now() < end) {{ const v = await test(); if (v) return v; await new Promise((r) => setTimeout(r, 100)); }} return test(); }}; const r = {{}}; try {{ {body} }} catch (error) {{ r.error = String(error); }} await window.__TAURI_INTERNALS__.invoke('host_post', {{ message: {{ kind: 'call', id: 990000 + Math.floor(Math.random() * 9999), method: 'log', args: {{ level: 'info', message: '{mark} ' + JSON.stringify(r) }} }} }}); }})()"
+        "(async () => {{ const until = async (test, ms) => {{ const end = performance.now() + ms; while (performance.now() < end) {{ const v = await test(); if (v) return v; await new Promise((r) => setTimeout(r, 100)); }} return test(); }}; const r = {{}}; try {{ {body} }} catch (error) {{ r.error = String(error); }} await window.__TAURI_INTERNALS__.invoke('host_post', {{ nonce: window.__MIGHTY_HOST_NONCE__, message: {{ kind: 'call', id: 990000 + Math.floor(Math.random() * 9999), method: 'log', args: {{ level: 'info', message: '{mark} ' + JSON.stringify(r) }} }} }}); }})()"
     );
     let page = host.app.get_webview(crate::host::WINDOW).ok_or("no main window")?;
     page.eval(&script).map_err(|e| e.to_string())?;

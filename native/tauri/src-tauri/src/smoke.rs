@@ -308,8 +308,11 @@ const BROWSER_PROBE: &str = r#"(async () => {
     report.onSecond = !!(await until(async () => field() === second && (await surface())?.history === second, 10000));
     if (!report.onSecond) report.secondSeen = { field: field(), view: (await surface())?.url ?? null };
     const back = await until(() => { const b = ofPane('button.browser-nav'); return b && !b.disabled ? b : null; }, 10000);
+    const loadsBefore = await invoke('smoke_surface', { paneId, action: 'loads' });
     back?.click();
-    report.wentBack = report.onSecond && !!(await until(async () => { const s = await surface(); return field() === fixture && s && (s.url || '') === fixture; }, 10000));
+    // CEF's back loads the first page again: the fixture server must see it (its own history alone would say it went back).
+    const reloaded = async () => engine !== 'cef' || (await invoke('smoke_surface', { paneId, action: 'loads' })).fixture > loadsBefore.fixture;
+    report.wentBack = report.onSecond && !!(await until(async () => { const s = await surface(); return field() === fixture && s && (s.url || '') === fixture && (await reloaded()); }, 10000));
     if (!report.wentBack) report.backSeen = { clicked: !!back, field: field(), view: (await surface())?.url ?? null };
     // window.open from a page: refused and counted, no window opens, and the page stays where it is.
     const before = await invoke('smoke_surface', { paneId, action: 'popups' });
@@ -321,7 +324,9 @@ const BROWSER_PROBE: &str = r#"(async () => {
     const after = await until(async () => { const p = await invoke('smoke_surface', { paneId, action: 'popups' }); return !counted || p.refused > before.refused ? p : null; }, 10000);
     const stayed = await surface();
     report.popups = after;
-    report.popupBlocked = !!after && after.webviews === before.webviews && (stayed?.url || '') === popup;
+    // Never loaded (the fixture server saw no request for the popup's address) and no window more (Tauri's, and on the Mac AppKit's).
+    report.popupBlocked = !!after && after.webviews === before.webviews && (stayed?.url || '') === popup && !after.targetRequested
+      && (after.windows === undefined || after.windows === before.windows);
     // A page menu over the slot (the tab's menu at a point inside it): the view steps aside, and comes back once the menu closes.
     const box2 = (slotNow() ?? slot).getBoundingClientRect();
     report.menuAt = { x: Math.round(box2.left + 20), y: Math.round(box2.top + 20) };
@@ -334,6 +339,8 @@ const BROWSER_PROBE: &str = r#"(async () => {
     report.menuClosed = report.steppedAside && !!(await until(async () => { const s = await surface(); return !document.querySelector('[data-testid=menu]') && s && s.visible; }, 5000));
     // The Mac: the engine's own views in two workspace profiles, a close and reopens (smoke.rs `browser_profiles`).
     if (engine) report.profiles = await invoke('smoke_surface', { paneId, action: 'profiles' });
+    // What the fixture page found of the app in the pane (`/globals?…`, each time it loaded).
+    if (engine) report.globals = (await invoke('smoke_surface', { paneId, action: 'loads' })).globals;
   } catch (error) {
     report.error = String(error);
   }
@@ -341,15 +348,17 @@ const BROWSER_PROBE: &str = r#"(async () => {
 })();"#;
 
 /// The fixture page the browser pane loads.
+/// It tells the fixture server what it finds of the app's IPC in the pane (review M-E 1: on the Mac, nothing).
 const FIXTURE: &str = "<!doctype html><html><head><meta charset=utf-8><title>Mighty smoke fixture</title></head>\
-<body style=\"margin:0;background:#1f7a52;color:#fff;font:28px system-ui\"><p style=\"padding:24px\">Mighty Code browser surface fixture</p></body></html>";
+<body style=\"margin:0;background:#1f7a52;color:#fff;font:28px system-ui\"><p style=\"padding:24px\">Mighty Code browser surface fixture</p>\
+<script>fetch('/globals?tauri=' + typeof window.__TAURI_INTERNALS__ + '&ipc=' + typeof window.ipc + '&handler=' + typeof window.webkit?.messageHandlers?.ipc);</script></body></html>";
 /// The second page (`/second`), for back.
 const SECOND: &str = "<!doctype html><html><head><meta charset=utf-8><title>Mighty smoke second</title></head>\
 <body style=\"margin:0;background:#20508f;color:#fff;font:28px system-ui\"><p style=\"padding:24px\">Second page</p></body></html>";
-/// A page that asks for a new window as it loads (`/popup`): the host refuses it.
+/// A page that asks for a new window as it loads (`/popup`): the host refuses it, and its address (`/popup-target`) is never asked for.
 const POPUP: &str = "<!doctype html><html><head><meta charset=utf-8><title>Mighty smoke popup</title></head>\
 <body style=\"margin:0;background:#7a1f52;color:#fff;font:28px system-ui\"><p style=\"padding:24px\">Popup page</p>\
-<script>window.open('/second', '_blank');</script></body></html>";
+<script>window.open('/popup-target', '_blank');</script></body></html>";
 
 /// The ids of the pane and workspace the step adds (UUID-shaped, as the state's ids are).
 const PANE: &str = "5a0e0b0b-0000-4000-8000-00000000b10b";
@@ -934,6 +943,12 @@ impl Smoke {
                 checks["browserIndependentProfiles"] = json!(yes("independentProfiles"));
                 checks["browserClosingOnePaneKeepsOtherAlive"] = json!(yes("closingOnePaneKeepsOtherAlive"));
                 checks["browserReopenCycles"] = json!(yes("reopenCycles"));
+                // Review M-E 1: a page from the web in a pane finds nothing of the app's IPC (Tauri's scripts and handlers removed).
+                let globals: Vec<&str> =
+                    browser.get("globals").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+                checks["browserPaneWithoutAppIpc"] = json!(
+                    !globals.is_empty() && globals.iter().all(|seen| *seen == "/globals?tauri=undefined&ipc=undefined&handler=undefined")
+                );
             }
         }
         attribute(&checks, &mut steps, "browser");
@@ -1237,8 +1252,10 @@ fn serve_one(stream: &mut std::net::TcpStream) {
     // each such request is recorded with the cookie it sent.
     let path = line.split_whitespace().nth(1).unwrap_or("").to_string();
     let mut set_cookie = String::new();
-    let page = if line.starts_with("GET /second") {
+    let page = if line.starts_with("GET /second") || line.starts_with("GET /popup-target") {
         SECOND.to_string()
+    } else if line.starts_with("GET /globals") {
+        String::new()
     } else if line.starts_with("GET /popup") {
         POPUP.to_string()
     } else if let Some(pane) = path.strip_prefix("/set?pane=").filter(|p| p.chars().all(|c| c.is_ascii_alphanumeric())) {
@@ -1251,13 +1268,11 @@ fn serve_one(stream: &mut std::net::TcpStream) {
     } else {
         FIXTURE.to_string()
     };
-    if path.starts_with("/set?") || path.starts_with("/check?") {
-        let cookie = line
-            .lines()
-            .find_map(|header| header.strip_prefix("Cookie:").or_else(|| header.strip_prefix("cookie:")))
-            .map(|cookie| cookie.trim().to_string());
-        PROFILE_REQUESTS.lock().unwrap_or_else(|p| p.into_inner()).push((path, cookie));
-    }
+    let cookie = line
+        .lines()
+        .find_map(|header| header.strip_prefix("Cookie:").or_else(|| header.strip_prefix("cookie:")))
+        .map(|cookie| cookie.trim().to_string());
+    FIXTURE_REQUESTS.lock().unwrap_or_else(|p| p.into_inner()).push((path, cookie));
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{set_cookie}Connection: close\r\n\r\n{page}",
         page.len()
@@ -1267,8 +1282,13 @@ fn serve_one(stream: &mut std::net::TcpStream) {
 
 /// The browser fixture's address (`…/fixture`), once served.
 static FIXTURE_ADDRESS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-/// The profile check's requests (`/set?…`, `/check?…`) and the cookie each sent.
-static PROFILE_REQUESTS: Mutex<Vec<(String, Option<String>)>> = Mutex::new(Vec::new());
+/// Every request the browser fixture was asked (its path and query) and the cookie it sent.
+static FIXTURE_REQUESTS: Mutex<Vec<(String, Option<String>)>> = Mutex::new(Vec::new());
+
+/// The fixture's requests whose path and query `matches`.
+fn fixture_requests(matches: impl Fn(&str) -> bool) -> Vec<String> {
+    FIXTURE_REQUESTS.lock().unwrap_or_else(|p| p.into_inner()).iter().map(|(path, _)| path).filter(|path| matches(path)).cloned().collect()
+}
 /// The cookie the profile check's `/set` pages set.
 const PROFILE_COOKIE: &str = "mightyprofile";
 
@@ -1281,10 +1301,12 @@ async fn browser_profiles(surfaces: &SurfaceManager) -> Value {
     let Some(base) = FIXTURE_ADDRESS.get().and_then(|address| address.strip_suffix("/fixture")).map(str::to_string) else {
         return json!({"error": "no fixture"});
     };
+    // Every wait of the check together ends within 45 s (each at most 15 s), however many fail.
+    let all = Instant::now() + Duration::from_secs(45);
     let seen = |path: String| async move {
-        let deadline = Instant::now() + Duration::from_secs(20);
+        let deadline = (Instant::now() + Duration::from_secs(15)).min(all);
         loop {
-            let found = PROFILE_REQUESTS.lock().unwrap_or_else(|p| p.into_inner()).iter().find(|(p, _)| *p == path).cloned();
+            let found = FIXTURE_REQUESTS.lock().unwrap_or_else(|p| p.into_inner()).iter().find(|(p, _)| *p == path).cloned();
             if let Some((_, cookie)) = found {
                 return Some(cookie.unwrap_or_default());
             }
@@ -1400,12 +1422,25 @@ pub async fn smoke_surface(pane_id: String, action: String, host: tauri::State<'
         // The popups the pane's page asked for (all refused) and the webviews the app holds (none more for a popup); on the Mac the
         // engine of the launch too (CEF's bridge cancels a popup without saying so: none is counted there).
         "popups" => {
-            let mut popups = json!({"refused": surfaces.popups_refused(&pane_id), "webviews": host.app.webviews().len()});
+            let mut popups = json!({"refused": surfaces.popups_refused(&pane_id), "webviews": host.app.webviews().len(),
+                "targetRequested": !fixture_requests(|path| path.starts_with("/popup-target")).is_empty()});
             if let Some(engine) = crate::platform::browser_engine() {
                 popups["engine"] = json!(engine);
+                // AppKit's windows, counted on the main thread.
+                let (sender, answer) = tokio::sync::oneshot::channel();
+                host.app
+                    .run_on_main_thread(move || {
+                        let _ = sender.send(crate::platform::native_window_count());
+                    })
+                    .map_err(|e| e.to_string())?;
+                popups["windows"] = json!(answer.await.ok().flatten());
             }
             Ok(popups)
         }
+        // The fixture's loads (CEF's back) and what its page found of the app's IPC.
+        "loads" => Ok(
+            json!({"fixture": fixture_requests(|path| path == "/fixture").len(), "globals": fixture_requests(|path| path.starts_with("/globals?"))}),
+        ),
         // The Mac's profile check (`browser_profiles`).
         "profiles" if crate::platform::browser_engine().is_some() => Ok(browser_profiles(&surfaces).await),
         // The frame step's view of the host's state (smoke_frame.rs).

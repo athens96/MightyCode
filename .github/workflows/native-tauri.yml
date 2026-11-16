@@ -142,7 +142,7 @@ jobs:
                              @{ path = "$env:RUNNER_TEMP/tauri-smoke/cef/smoke-result.json"; engine = 'cef' })) {
             $result = Get-Content -Raw $run.path | ConvertFrom-Json
             $names = @('browserSurface', 'browserNavigated', 'browserBack', 'browserPopupBlocked', 'browserMenuOver', 'browserTwoPanesRenderJavaScript',
-              'browserIndependentProfiles', 'browserClosingOnePaneKeepsOtherAlive', 'browserReopenCycles')
+              'browserIndependentProfiles', 'browserClosingOnePaneKeepsOtherAlive', 'browserReopenCycles', 'browserPaneWithoutAppIpc')
             $failed = @($names | Where-Object { $result.checks.$_ -ne $true })
             "$($run.engine): engine $($result.browser.browserEngine), failed: $($failed -join ', ')"
             if ($result.browser.browserEngine -ne $run.engine) { throw "the $($run.engine) run's browser panes used $($result.browser.browserEngine)" }
