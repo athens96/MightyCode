@@ -115,9 +115,12 @@ mod tests {
             use std::os::unix::fs::PermissionsExt as _;
             assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o755);
         }
-        let bin = format!("/usr/bin:{}/.local/bin/", home.display());
-        assert!(on_path(Some(&bin), &folder(&home)));
-        assert!(!on_path(Some("/usr/bin"), &folder(&home)));
+        // The PATH check is the Mac's (POSIX paths, compared standardized), whatever OS runs the test.
+        let mac_folder = Path::new("/Users/me/.local/bin");
+        assert!(on_path(Some("/usr/bin:/Users/me/.local/bin/"), mac_folder));
+        assert!(on_path(Some("/usr/bin:/Users/me/./.local/bin"), mac_folder));
+        assert!(!on_path(Some("/usr/bin"), mac_folder));
+        assert!(!on_path(None, mac_folder));
         // Installed again: replaced in place, nothing left beside it.
         install(&home).unwrap();
         assert_eq!(std::fs::read_dir(folder(&home)).unwrap().count(), 1);

@@ -190,8 +190,9 @@ pub fn persist(info: &Map<String, Value>, directory: &Path, now: SystemTime) -> 
     let stamp = iso8601(now).replace(':', "");
     let id: String = objc2_foundation::NSUUID::new().UUIDString().to_string().chars().take(8).collect();
     let file = directory.join(format!("ime-{stamp}-{id}.json"));
-    // serde_json's map keeps its keys sorted (JSONSerialization's `.sortedKeys`).
-    let text = serde_json::to_string_pretty(&Value::Object(info.clone())).map_err(std::io::Error::other)?;
+    // Sorted keys (JSONSerialization's `.sortedKeys`): the workspace's serde_json keeps a map's insertion order.
+    let sorted: std::collections::BTreeMap<&String, &Value> = info.iter().collect();
+    let text = serde_json::to_string_pretty(&sorted).map_err(std::io::Error::other)?;
     let mut out = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&file)?;
     out.write_all(text.as_bytes())?;
     Ok(file)
