@@ -45,13 +45,16 @@ pub enum CliUpdater {
 /// Where the app's own settings live (beside the state file's fields).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsStore {
-    /// The Mac: UserDefaults `dev.mightycode.native` (`appUpdate.*`, `delegation.enabled`, `setup.neverShow`, ...).
+    /// The Mac: UserDefaults `dev.mightycode.native` (`appUpdate.*`, `delegation.enabled`, `setup.neverShow`, ...): the settings the
+    /// Swift app keeps there are read from it and written back to it, not to the state file (src-tauri `settings_place`).
     UserDefaults,
     /// Windows: `HKCU\Software\MightyCode` values for some, snapshot fields for others (`AppUpdateAutoCheck`, `AppUpdateLastCheckedAt`).
     RegistryAndSnapshot,
 }
 
-/// How the phone pairing identity is kept on disk.
+/// How the phone pairing identity is kept on disk. Not a profile value: each OS crate's `PairingStore` is the one layout it keeps
+/// (Windows `mobile-identity.json` under its protected folder, the Mac `pairing::four_files` with owner-only modes), as the transport is
+/// the Agent IO listener's own ([`McpTransport`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PairingLayout {
     /// Windows: `mobile-identity.json`, the key, tokens and devices together.
@@ -69,7 +72,8 @@ pub enum AgentSignIn {
     ConsoleWindow,
 }
 
-/// What `--agent-io-mcp` listens on.
+/// What `--agent-io-mcp` listens on: the listener's and the connector's own answer (`AgentIoListener::transport`), so no profile
+/// value repeats it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpTransport {
     UnixSocket,
@@ -87,7 +91,11 @@ impl McpTransport {
     }
 }
 
-/// The deliberate differences, one value per behaviour.
+/// The deliberate differences, one value per behaviour. Every value is read where its behaviour is (the guards job of
+/// native-tauri.yml fails on a field nothing reads). Mac stage M-J took out four that described no difference any more: the pairing
+/// layout and the Agent IO transport (each the OS port's own), the snapshot's `autoUpdateCLIs`/`autoUpdatePlugins` (C#'s `AppSnapshot`
+/// carries both too, Models.cs:387-388) and the files pane's save (neither app saves one: C# `FilePaneKind.Stored`, Swift
+/// `SessionKind.stored`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlatformProfile {
     pub os: Os,
@@ -95,9 +103,7 @@ pub struct PlatformProfile {
     pub plugin_list_while_reading: PluginListWhileReading,
     pub cli_updater: CliUpdater,
     pub settings_store: SettingsStore,
-    pub pairing_layout: PairingLayout,
     pub agent_sign_in: AgentSignIn,
-    pub mcp_transport: McpTransport,
     /// The `platform` field of the phone protocol's `/m1/info` ("win32" on Windows, "darwin" on the Mac).
     pub m1_platform: &'static str,
     /// The remote workspace host percent-decodes request paths (the Mac does, Windows does not).
@@ -110,10 +116,6 @@ pub struct PlatformProfile {
     pub build_update_url_wins: bool,
     /// The staged package's SHA-256 is checked again just before the swap (Windows' `--update-helper`).
     pub update_rechecks_sha256: bool,
-    /// The snapshot carries `autoUpdateCLIs` and `autoUpdatePlugins` (the Mac only).
-    pub auto_update_keys: bool,
-    /// A files pane is saved with the state (Windows; the Mac never saves one).
-    pub saves_files_pane: bool,
     /// W8: an adapter counts as Tailscale's only when it is named `utun…` (the Mac; Windows never reads names: the
     /// tailscale-addresses fixture's `darwin` and `win32` columns).
     pub tailscale_needs_utun: bool,
@@ -135,17 +137,13 @@ impl PlatformProfile {
             plugin_list_while_reading: PluginListWhileReading::Join,
             cli_updater: CliUpdater::Winget,
             settings_store: SettingsStore::RegistryAndSnapshot,
-            pairing_layout: PairingLayout::IdentityFile,
             agent_sign_in: AgentSignIn::ConsoleWindow,
-            mcp_transport: McpTransport::NamedPipe,
             m1_platform: "win32",
             remote_decodes_request_paths: false,
             direct_connection_firewall: true,
             update_needs_public_key: true,
             build_update_url_wins: true,
             update_rechecks_sha256: true,
-            auto_update_keys: false,
-            saves_files_pane: true,
             tailscale_needs_utun: false,
             direct_advertises_magic_dns: false,
             remote_graph_runs: true,
@@ -161,17 +159,13 @@ impl PlatformProfile {
             plugin_list_while_reading: PluginListWhileReading::Busy,
             cli_updater: CliUpdater::Homebrew,
             settings_store: SettingsStore::UserDefaults,
-            pairing_layout: PairingLayout::FourFiles,
             agent_sign_in: AgentSignIn::TerminalPane,
-            mcp_transport: McpTransport::UnixSocket,
             m1_platform: "darwin",
             remote_decodes_request_paths: true,
             direct_connection_firewall: false,
             update_needs_public_key: false,
             build_update_url_wins: false,
             update_rechecks_sha256: false,
-            auto_update_keys: true,
-            saves_files_pane: false,
             tailscale_needs_utun: true,
             direct_advertises_magic_dns: true,
             remote_graph_runs: false,
@@ -202,7 +196,6 @@ mod tests {
         assert_eq!((windows.m1_platform, mac.m1_platform), ("win32", "darwin"));
         assert!(windows.direct_connection_firewall && !mac.direct_connection_firewall);
         assert!(!windows.remote_decodes_request_paths && mac.remote_decodes_request_paths);
-        assert!(mac.auto_update_keys && !windows.auto_update_keys);
         assert!(mac.tailscale_needs_utun && !windows.tailscale_needs_utun);
         assert!(mac.direct_advertises_magic_dns && !windows.direct_advertises_magic_dns);
         assert!(windows.remote_graph_runs && !mac.remote_graph_runs);

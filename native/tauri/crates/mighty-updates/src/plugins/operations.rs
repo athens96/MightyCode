@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use mighty_core::model::Workspace;
-use mighty_platform::{ProcessHost, ShellEnvironment};
+use mighty_platform::{PluginListWhileReading, ProcessHost, ShellEnvironment};
 use serde_json::Value;
 
 use super::browser::ClaudePluginBrowser;
@@ -101,6 +101,8 @@ pub struct PluginOperations {
     /// The CLI environment the app's readers are built with (C# `CliEnvironment`); None for a check's instance.
     environment: Option<Arc<dyn ShellEnvironment>>,
     running: Arc<AtomicBool>,
+    /// What the readers it makes answer a list asked for while one is read (`PlatformProfile::plugin_list_while_reading`).
+    while_reading: PluginListWhileReading,
 }
 
 /// The app-wide gate held for one operation ([`PluginOperations::reserve`]): released when the operation ends or the reservation is
@@ -118,12 +120,28 @@ impl PluginOperations {
     /// CLI environment the readers are given. Making it starts no process.
     pub fn installed(host: Arc<dyn ProcessHost>, environment: Arc<dyn ShellEnvironment>) -> PluginOperations {
         let runner = HostCliRunner::new(host).with_output_cap(support::MAXIMUM_LISTING_BYTES);
-        PluginOperations { runner: Arc::new(runner), environment: Some(environment), running: Arc::new(AtomicBool::new(false)) }
+        PluginOperations {
+            runner: Arc::new(runner),
+            environment: Some(environment),
+            running: Arc::new(AtomicBool::new(false)),
+            while_reading: PluginListWhileReading::Join,
+        }
     }
 
     /// A check's instance: any runner, nothing installed is ever started.
     pub fn new(runner: Arc<dyn CliRunner>) -> PluginOperations {
-        PluginOperations { runner, environment: None, running: Arc::new(AtomicBool::new(false)) }
+        PluginOperations {
+            runner,
+            environment: None,
+            running: Arc::new(AtomicBool::new(false)),
+            while_reading: PluginListWhileReading::Join,
+        }
+    }
+
+    /// The platform's rule for a list asked for while one is read (`Join` until set: C#'s).
+    pub fn with_while_reading(mut self, rule: PluginListWhileReading) -> PluginOperations {
+        self.while_reading = rule;
+        self
     }
 
     /// The one shared runner.
@@ -149,9 +167,9 @@ impl PluginOperations {
 
     fn reader_with(&self, provider: &str, environment: BTreeMap<String, String>) -> ProviderReader {
         if provider == ClaudePluginBrowser::CODEX_PROVIDER {
-            ProviderReader::Codex(CodexPluginReader::new(self.runner.clone(), environment))
+            ProviderReader::Codex(CodexPluginReader::new(self.runner.clone(), environment).while_reading(self.while_reading))
         } else {
-            ProviderReader::Claude(ClaudePluginReader::new(self.runner.clone(), environment))
+            ProviderReader::Claude(ClaudePluginReader::new(self.runner.clone(), environment).while_reading(self.while_reading))
         }
     }
 

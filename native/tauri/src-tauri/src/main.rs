@@ -52,8 +52,10 @@ mod plugins;
 mod remote;
 mod runs;
 mod settings;
+mod settings_place;
 mod setup;
 mod shell_command;
+mod sign_in_pane;
 mod smoke;
 mod smoke_accounts;
 mod smoke_acp;
@@ -224,6 +226,12 @@ fn main() {
         Ok(snapshot) => (snapshot, None),
         Err(error) => (mighty_core::AppSnapshot::default(), Some(error)),
     };
+    // Mac stage M-J: the settings the Swift app keeps in UserDefaults (the language, the app update's, the web-open choices, ...) read
+    // from there, as 0.4.x left them (settings_place.rs, by `PlatformProfile::settings_store`; nothing on Windows or in a smoke).
+    settings_place::load(&platform.profile, platform.prefs.as_ref(), &mut snapshot, options.smoke_test);
+    if failure.is_none() && platform.profile.settings_store == mighty_platform::SettingsStore::UserDefaults {
+        state.snapshot = snapshot.clone();
+    }
     // A help capture reads the page in its own language (C# `UpdateAsync(LanguagePreference = helpLanguage)` after the load; W9-H).
     if let Some(language) = options.help_language.clone().filter(|_| options.help_capture) {
         snapshot.language_preference = Some(language.clone());

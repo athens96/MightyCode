@@ -21,6 +21,15 @@ pub fn platform(profile: Option<PathBuf>, identifier: &str) -> Result<Platform> 
     os::platform(profile, identifier)
 }
 
+/// This OS's deliberate differences (the same value `platform()` puts in `Platform::profile`), for code that runs before or without
+/// the platform (M-C: the firewall rows read `direct_connection_firewall` from the first draw).
+pub fn profile() -> mighty_platform::PlatformProfile {
+    #[cfg(windows)]
+    return mighty_platform::PlatformProfile::windows();
+    #[cfg(target_os = "macos")]
+    return mighty_platform::PlatformProfile::macos();
+}
+
 /// The native views over `window`'s page; `csharp_web_data` when the browser panes' data is C#'s own folder (W9-F's adopted folder,
 /// `paths::web_folders`), whose views open with C#'s environment options.
 pub fn surfaces(window: tauri::Window, csharp_web_data: bool) -> Arc<dyn SurfaceFactory> {
@@ -37,6 +46,15 @@ pub fn watch_session(window: &tauri::Window) -> Result<()> {
         let _ = window;
         Ok(())
     }
+}
+
+/// Where the Claude CLI keeps its sign-in besides its file (the account usage's Claude read, M-J): none on Windows, the Keychain on the
+/// Mac (M-B's reader).
+pub fn claude_credentials() -> Option<Arc<dyn mighty_platform::ClaudeCredentials>> {
+    #[cfg(windows)]
+    return None;
+    #[cfg(target_os = "macos")]
+    return Some(os::claude_credentials::claude_credentials());
 }
 
 /// The system clipboard's text (a terminal's copy and paste).

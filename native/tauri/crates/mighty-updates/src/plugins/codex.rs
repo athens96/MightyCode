@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use mighty_core::model::Workspace;
 use mighty_core::wire;
-use mighty_platform::BoxFuture;
+use mighty_platform::{BoxFuture, PluginListWhileReading};
 use serde_json::Value;
 
 use super::claude::{Core, Operating, Probe, Step, Stop, cancelled, default_probes};
@@ -62,6 +62,13 @@ impl CodexPluginReader {
         directory_exists: Probe,
     ) -> CodexPluginReader {
         CodexPluginReader { core: Arc::new(Core::new(runner, Self::environment(environment), Vec::new(), is_executable, directory_exists)) }
+    }
+
+    /// What a list asked for while a read (or, on the Mac, an operation) runs gets: `Join` the running read's answer (Windows, C#),
+    /// `Busy` at once (the Mac, Swift) — `PlatformProfile::plugin_list_while_reading`.
+    pub fn while_reading(self, rule: PluginListWhileReading) -> CodexPluginReader {
+        self.core.set_while_reading(rule);
+        self
     }
 
     /// The one switch macOS sets: git never stops and asks for a password while a read runs. The user's own `CODEX_HOME` still

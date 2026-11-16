@@ -643,3 +643,61 @@ the smoke against the seeded demo profile (its result is kept as the `tauri-smok
 (the `start_detached*` callers, no `verify_strict`, the frozen style files), the `package` job (x64 and arm64 release builds with a
 throwaway key, `check-imports.ps1`, the smoke and `helper-e2e.ps1` on the packaged exe) and the `rehearsal` job (the update from
 v0.4.59 and v0.4.61). It is independent of the 0.4.x workflows. The Mac build bundles `assets/icons/mightycode.png` and `MightyCode.icns`, which tauri-codegen needs there.
+
+## Mac deviations
+
+What the 0.5 Mac app (this host on macOS) does differently from Windows on purpose, and what it does not do that the 0.4.x Swift app
+did. Mac stage M-J; the integrator folds this into the update notes (D12 is the user's sign-off).
+
+### The profile (`mighty_platform::PlatformProfile`)
+
+Every field is read where its behaviour is; the guards job of native-tauri.yml fails on a field nothing reads (its pending list names
+the fields wired on another Mac part's branch until that part merges).
+
+| Field | Windows | Mac | Read at |
+|---|---|---|---|
+| `plugin_list_while_reading` | a list asked for during a read joins it (C#) | answered `busy` at once (Swift) | `PluginOperations::with_while_reading` (updates.rs) → the plugin readers' gate |
+| `cli_updater` | winget, npm, native Claude, agy in `%LOCALAPPDATA%\agy\bin` | Homebrew (`<prefix>/bin/brew upgrade --cask/--formula <package>`, cleanup and dependents off), npm with the Node beside npm, native Claude, agy in `~/.local/bin` (Swift `CLIUpdateService`) | `CliUpdateService::with_updater` (updates.rs) |
+| `settings_store` | the state file (and HKCU for the text and delegation switches) | UserDefaults `dev.mightycode.native` under Swift's keys and types: `language` (and `AppleLanguages`), `appUpdate.automatic/lastCheck/manifestURL`, `agentTerminal.webOpenChoices`, `settingsPane`, `statusLine.enabled/trusted`, `browser.engineEnabled`, `usage.claudeKeychain`, `mighty.referenceBubble.width/height` — read at start, written back on save where the app may change the machine | `settings_place.rs` (main.rs, the host's saver) |
+| `agent_sign_in` | a console window (`TerminalLauncher`) | a shell pane of a local workspace with the login command typed and run (Swift `startCLILogin`) | `sign_in_pane.rs` (accounts.rs' coordinator) |
+| `m1_platform` | `win32` | `darwin` | phone.rs, remote.rs |
+
+Taken out of the profile (they described no difference): `pairing_layout` and `mcp_transport` (each the OS port's own: the pairing
+store's files, the Agent IO listener's `transport()`), `auto_update_keys` (C#'s snapshot carries `autoUpdateCLIs`/`autoUpdatePlugins`
+too) and `saves_files_pane` (neither app saves a files pane).
+
+Also on the Mac: the Claude usage read takes the Claude CLI's sign-in from the Keychain first (`usage.claudeKeychain` on; never in a
+smoke), then its file, on a blocking thread. Only a read the user asks for (turning the switch on, the popover's refresh) may show the
+Keychain's dialog; an automatic read stays silent (bounded to 5 s: a locked keychain waits for its unlock) and, where the Keychain
+would have asked, the card says `permission` ("Keychain access needed…", `usage.keychain.accessNeeded`) and is not read again for an
+hour unless the user refreshes (Swift's `keychainPermission`). The number, date and time formats come from CoreFoundation's current
+locale (`formats.rs`).
+
+### Swift-only features the 0.5 Mac app does not have (D12)
+
+Audited from the Swift report's (a′) list; the page or the Rust host already has `PaneHero` (the pane's header figures),
+`ProviderBeta`, `PhaseModelMacReplaced` (the phase models) and the reset link; `TranscriptCopy` is the WebView's own selection and
+Edit menu.
+
+- **GitWorkbench**: no Commit & PR sheet (commit chosen files, push, see or open a GitHub PR / GitLab MR, its CI checks, "ask to fix").
+- **CompareRun**: no compare runs (one request run by several agents in separate worktrees, compared side by side, one merged).
+- **ReviewNotes**: no notes on diff lines sent back as a follow-up request.
+- **TrustTools**: no secret scan before a commit, no "What this request did" list, no Help › Export diagnostics.
+- **CompanionProgress**: no progress card above the pet's bubble (the progress panel stays in the pane).
+- **Completion webhook** (`notifications.webhookURL`): finished requests are not posted to Slack/Discord; a URL set in 0.4 is ignored.
+- **Usage report and daily budget** (`usage.dailyBudgetUSD`): no usage report and no budget notification.
+- **ResourceWarning**: the missing-resources banner is drawn by the page but never fed, and `--verify-resources` is M-H's.
+- **StateBudget** (partial): saved transcript space is first come, first served across panes (C#'s rule), not Swift's fair share.
+- **LocaleFill** (partial): placeholders are filled one name after another (C#'s and the page's rule), not in one pass, so a value
+  that itself looks like `{name}` can be filled again.
+- **ComposerCaret** (unchecked): Swift's caret fix after a Korean IME composition is not ported; whether WKWebView needs it is the
+  §9 manual checklist's.
+- **"Allow Keychain access and check"**: Swift's popover has this button on a `permission` card; here the popover's refresh button
+  does the same (an interactive read), as the card's sentence says. The button itself would be a page change (D9, M-F's).
+- **The sign-in pane**: opened as Swift opens it (Settings and the setup screen close, the active local workspace or the first local
+  one, refused past 128 panes), but when no local workspace exists the setup screen's own sign-in terminal window (Swift
+  `signInFromSetup`) is not there: the sign-in is refused with "Open a project folder first".
+- **Dialog sizes** (`dialog.size.<id>.*`): the page keeps its own panel sizes; sizes saved by 0.4 are not carried over.
+- **The login-shell fallback note**: when the login shell's environment cannot be read, Swift adds "the app's launch environment is
+  used" to the CLI statuses and skips the Bedrock settings conflict check (CLIAccounts.swift:216-264, BedrockAuthDiagnosticsTests.swift
+  :139); the shared Rust accounts code (C#'s) does neither, on both OSes.
