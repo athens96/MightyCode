@@ -288,12 +288,8 @@ jobs:
           # a field nothing reads describes a behaviour that is not there. Each field must be read as `profile.<field>` or
           # `profile().<field>` in product code: profile.rs itself, tests/ folders, each file's `#[cfg(test)] mod` (to the file's end)
           # and comments do not count.
-          # Fields wired on another Mac part's branch, read once it merges (the integrator empties this list as it merges them):
-          $pending = @{
-            'remote_decodes_request_paths' = 'M-C (remote.rs)'; 'direct_connection_firewall' = 'M-C (direct.rs)'
-            'direct_advertises_magic_dns' = 'M-C (direct.rs)'; 'remote_graph_runs' = 'M-C (remote.rs)'
-            'update_needs_public_key' = 'M-H'; 'build_update_url_wins' = 'M-H'; 'update_rechecks_sha256' = 'M-H'
-          }
+          # Fields wired on a Mac part's branch not merged yet (empty since the Mac stage's integration: every part is in):
+          $pending = @{}
           $definition = 'crates/mighty-platform/src/profile.rs'
           $profile = [IO.File]::ReadAllText((Join-Path (Get-Location) $definition))
           $body = [regex]::Match($profile, '(?s)pub struct PlatformProfile \{(.*?)\n\}').Groups[1].Value
