@@ -13,14 +13,15 @@ rust-version.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 mighty-platform.workspace = true
 dirs.workspace = true
-tauri.workspace = true
+# M-E: browser panes are child webviews (Window::add_child, Tauri's multi-webview), as on Windows.
+tauri = { workspace = true, features = ["unstable"] }
 tokio = { workspace = true, features = ["rt", "sync", "time", "net", "io-util"] }
 libc = "0.2"
 block2 = "0.6"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std", "block2", "NSArray", "NSAttributedString", "NSData", "NSDate", "NSDictionary", "NSError", "NSGeometry", "NSNotification",
-    "NSObject", "NSOperation", "NSProcessInfo", "NSRange", "NSString", "NSThread", "NSURL", "NSUserDefaults", "NSUUID", "NSValue",
+    "NSObject", "NSOperation", "NSProcessInfo", "NSRange", "NSSet", "NSString", "NSThread", "NSURL", "NSUserDefaults", "NSUUID", "NSValue",
 ] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std", "block2", "objc2-core-foundation", "objc2-quartz-core", "NSApplication", "NSBitmapImageRep", "NSColor", "NSCursor", "NSEvent",
@@ -31,7 +32,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSPasteboardItem",
 ] }
 objc2-web-kit = { version = "0.3", default-features = false, features = [
-    "std", "block2", "objc2-app-kit", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration",
+    "std", "block2", "objc2-app-kit", "WKNavigation", "WKNavigationDelegate", "WKPreferences", "WKUserContentController", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration",
 ] }
 objc2-user-notifications = { version = "0.3", default-features = false, features = [
     "std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse",
@@ -46,6 +47,10 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
 core-foundation = "0.10"
 core-graphics = "0.25"
 security-framework = "3"
+# M-E: the pane picture's data: URL, the website data stores' version-5 UUIDs, BrowserEngine.lock.
+base64 = "0.22"
+sha1 = "0.10"
+serde_json.workspace = true
 # M-C's push POST and M-H's update download over the system proxy (plan D17): the stack mighty-remote's relay already uses.
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }

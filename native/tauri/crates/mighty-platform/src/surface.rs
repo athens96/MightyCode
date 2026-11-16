@@ -471,6 +471,14 @@ pub trait SurfaceFactory: Send + Sync {
     fn open_browser(&self, options: BrowserOptions) -> BoxFuture<'_, Result<Box<dyn BrowserSurface>>>;
     fn open_terminal(&self, options: TerminalOptions) -> BoxFuture<'_, Result<Box<dyn TerminalSurface>>>;
     fn open_pet(&self) -> BoxFuture<'_, Result<Box<dyn PetWindow>>>;
+    /// A new browser pane's status (`ready`, `disabled`, `missing`, `failed`) with the browser setting `enabled` (latched for the
+    /// launch), where this platform decides it itself; None for the shared rule (C# `StartWebBrowserAsync`: `disabled` while the setting
+    /// is off, `missing` without the engine's runtime, else `ready`). The Mac's (M-E, plan D4): WKWebView shows pages with the setting
+    /// off, and the CEF the setting asked for at launch is `ready` once it started, else `failed`.
+    fn browser_status(&self, enabled: bool) -> Option<&'static str> {
+        let _ = enabled;
+        None
+    }
 }
 
 #[cfg(test)]

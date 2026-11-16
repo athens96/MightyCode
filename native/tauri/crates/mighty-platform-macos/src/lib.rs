@@ -121,6 +121,9 @@ impl SurfaceFactory for MacSurfaces {
     fn open_pet(&self) -> BoxFuture<'_, Result<Box<dyn PetWindow>>> {
         Box::pin(pet::open(&self.window))
     }
+    fn browser_status(&self, enabled: bool) -> Option<&'static str> {
+        Some(browser::status(enabled))
+    }
 }
 
 /// The native views over `window`'s page (its NSView hosts Ghostty and the browser panes).
