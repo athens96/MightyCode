@@ -12,6 +12,12 @@
 //! `InvalidOperationException` text, a signature that is not base64 .NET's `FormatException` text. A document .NET cannot parse
 //! (`JsonException`, whose text names a line and byte) reads `manifestFileNotJSON` for the envelope and `manifestNotJSON` for the
 //! payload. The parity corpus `native/contracts/fixtures/update-manifests` holds C#'s verdict for each case.
+//!
+//! M-H: the Mac's two fields, which C# never reads, as Swift's `AppUpdateManifest.parsePlain` (AppUpdate.swift:66-96) reads them, so
+//! the Windows result is unchanged: the `macos` asset (the first of `macos`, `mac`, `darwin` present, in the first of `platforms`,
+//! `downloads`, `assets` that is an object, else at the top level), never an error (an asset Swift cannot read is none), and
+//! `minimumSystemVersion` (else `minOS`; the first present, a string, normalized). Checked against Swift's own parse by
+//! `tools/parity-mac manifest` (tests/app_update_mac_parity.rs).
 
 use std::collections::BTreeMap;
 
@@ -46,7 +52,7 @@ impl std::fmt::Debug for Asset {
 }
 
 /// A verified manifest (C# `AppUpdateManifest`): the normalized version, the build number, the notes, the publication date and the
-/// Windows assets by architecture (`x64`, `arm64`).
+/// Windows assets by architecture (`x64`, `arm64`); and the Mac's package and the lowest macOS it runs on (Swift's, M-H).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Manifest {
     pub version: String,
@@ -54,6 +60,10 @@ pub struct Manifest {
     pub notes: Option<String>,
     pub published_at: Option<String>,
     pub windows: BTreeMap<String, Asset>,
+    /// Swift's `macos`.
+    pub macos: Option<Asset>,
+    /// Swift's `minimumSystemVersion`, normalized.
+    pub minimum_system_version: Option<String>,
 }
 
 impl Manifest {
@@ -150,7 +160,31 @@ pub fn parse_plain(payload: &[u8]) -> Result<Manifest, UpdateError> {
         notes: root.string("notes").or_else(|| root.string("releaseNotes")).or_else(|| root.string("changelog")).map(String::from),
         published_at: root.string("publishedAt").or_else(|| root.string("date")).map(String::from),
         windows,
+        macos: mac_asset(&root),
+        minimum_system_version: first_present(&root, &["minimumSystemVersion", "minOS"])
+            .and_then(|value| value.get_string().ok().flatten())
+            .and_then(super::version::normalized),
     })
+}
+
+/// Swift's `a ?? b ?? c` over a dictionary: the first of `names` that is there, whatever it holds (a JSON null too).
+fn first_present<'a>(object: &'a Json, names: &[&str]) -> Option<&'a Json> {
+    names.iter().find_map(|name| object.get(name))
+}
+
+/// Swift's `asset(assets["macos"] ?? assets["mac"] ?? assets["darwin"])`: the table the assets sit in (the first of `platforms`,
+/// `downloads`, `assets` present when it is an object, else the top level), then the asset as `parse_asset` reads it, except that
+/// nothing here is an error (a `size` that is not a whole number is no asset, as Swift's `as? Int` makes it).
+fn mac_asset(root: &Json) -> Option<Asset> {
+    let assets = first_present(root, &["platforms", "downloads", "assets"]).filter(|table| table.is_object()).unwrap_or(root);
+    let asset = first_present(assets, &["macos", "mac", "darwin"]).filter(|asset| asset.is_object())?;
+    let url = first_present(asset, &["url", "download", "downloadUrl", "href"])?.get_string().ok().flatten()?;
+    if !allowed(url) {
+        return None;
+    }
+    let sha256 = asset.string("sha256").and_then(clean_sha256)?;
+    let size = asset.get("size")?.try_i64().ok().flatten().filter(|size| *size > 0)?;
+    Some(Asset { url: url.to_string(), sha256, size: size.unsigned_abs() })
 }
 
 /// C#'s `ParseAsset` (Windows rule 2): an https address, a SHA-256 and a size > 0, or None; Err with .NET's text when `size` is

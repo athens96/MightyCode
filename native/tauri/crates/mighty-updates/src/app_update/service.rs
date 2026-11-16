@@ -12,6 +12,9 @@
 //!
 //! A manifest request that runs out of time is a cancel, as C#'s `HttpClient` timeout is (`TaskCanceledException`, an
 //! `OperationCanceledException`): the coordinator goes back without an error.
+//!
+//! M-H: [`Service::with_profile`] gives the Mac's rules (Swift `AppUpdateService`): the package is `updates/<v>/MightyCode-macos.zip`, a
+//! kept update's staged folder holds exactly one `.app`, and a build without a key refuses with `appUpdate.error.noPublicKey`.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -19,7 +22,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use mighty_platform::{PlatformError, UpdateTransport};
+use mighty_platform::profile::UpdatePackage;
+use mighty_platform::{PlatformError, PlatformProfile, UpdateTransport};
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
@@ -31,6 +35,23 @@ pub const MAX_PACKAGE_BYTES: u64 = 512 * 1024 * 1024;
 
 /// The downloaded package's name in its version folder (C# `PackageName`).
 pub const PACKAGE_NAME: &str = "MightyCode-windows.zip";
+
+/// The Mac's (Swift `AppUpdateService.packageName`).
+pub const MAC_PACKAGE_NAME: &str = "MightyCode-macos.zip";
+
+/// The package's name for `package`.
+pub fn package_name(package: UpdatePackage) -> &'static str {
+    match package {
+        UpdatePackage::WindowsZip => PACKAGE_NAME,
+        UpdatePackage::MacBundle => MAC_PACKAGE_NAME,
+    }
+}
+
+/// What a build without a key says (the profile's `update_needs_public_key`): Windows' notice that the check is off, or the Mac's
+/// refusal.
+pub fn no_public_key(needs_public_key: bool) -> UpdateError {
+    UpdateError::key(if needs_public_key { "settings.appUpdate.noPublicKeyNoticeWindows" } else { "appUpdate.error.noPublicKey" })
+}
 
 /// The folder under the data folder that holds the version folders (C# `UpdatesDirectory`).
 pub const UPDATES_FOLDER: &str = "updates";
@@ -162,6 +183,8 @@ pub struct Service {
     public_key: Option<[u8; 32]>,
     downloading: Mutex<Option<CancellationToken>>,
     stall: Duration,
+    package: UpdatePackage,
+    needs_public_key: bool,
 }
 
 /// No folder: the profile's path names the user.
@@ -181,7 +204,21 @@ impl Service {
             public_key,
             downloading: Mutex::new(None),
             stall: DOWNLOAD_STALL,
+            package: UpdatePackage::WindowsZip,
+            needs_public_key: true,
         }
+    }
+
+    /// The same service with `profile`'s update rules (the package, the words without a key); [`Service::new`] has Windows'.
+    pub fn with_profile(mut self, profile: &PlatformProfile) -> Service {
+        self.package = profile.update_package;
+        self.needs_public_key = profile.update_needs_public_key;
+        self
+    }
+
+    /// The package's name in its version folder.
+    pub fn package_name(&self) -> &'static str {
+        package_name(self.package)
     }
 
     /// The same service with another stall time ([`DOWNLOAD_STALL`]; tests use a short one).
@@ -208,7 +245,7 @@ impl Service {
     /// C# `CheckAsync(manifestUrl, currentVersion)`: the signed manifest beside this build's version.
     pub async fn check(&self, manifest_url: Option<&str>, current_version: &str) -> Result<Availability, ServiceError> {
         let Some(public_key) = self.public_key else {
-            return Err(UpdateError::key("settings.appUpdate.noPublicKeyNoticeWindows").into());
+            return Err(no_public_key(self.needs_public_key).into());
         };
         let mut url = require_https(manifest_url, "appUpdate.error.manifestNotHTTPS")?;
         let mut hop = 0;
@@ -265,7 +302,7 @@ impl Service {
         }
 
         let version_directory = self.updates_directory.join(&name);
-        let destination = version_directory.join(PACKAGE_NAME);
+        let destination = version_directory.join(self.package_name());
         if matches(&destination, asset).await {
             progress(1.0);
             return Ok(destination);
@@ -403,7 +440,8 @@ impl Service {
     }
 
     /// C# `KeptVersion(currentVersion)`: the newest folder version above `current_version` whose package and staged tree (exactly one
-    /// `MightyCode.exe`) an earlier run left under `updates`; None when there is none or the folder cannot be read.
+    /// `MightyCode.exe`; on the Mac exactly one `.app` at its top) an earlier run left under `updates`; None when there is none or the
+    /// folder cannot be read.
     pub fn kept_version(&self, current_version: &str) -> Option<String> {
         let entries = std::fs::read_dir(&self.updates_directory).ok()?;
         let mut kept: Vec<String> = Vec::new();
@@ -415,13 +453,16 @@ impl Service {
             }
             let Some(version) = super::version::normalized(&entry.file_name().to_string_lossy()) else { continue };
             if super::version::compare(&version, current_version) != std::cmp::Ordering::Greater
-                || !folder.join(PACKAGE_NAME).is_file()
+                || !folder.join(self.package_name()).is_file()
                 || !folder.join(STAGED_FOLDER).is_dir()
             {
                 continue;
             }
-            let executables = count_named(&folder.join(STAGED_FOLDER), super::EXECUTABLE_NAME).ok()?;
-            if executables == 1 {
+            let whole = match self.package {
+                UpdatePackage::WindowsZip => count_named(&folder.join(STAGED_FOLDER), super::EXECUTABLE_NAME).ok()?,
+                UpdatePackage::MacBundle => super::stage_mac::bundles(&folder.join(STAGED_FOLDER)).len(),
+            };
+            if whole == 1 {
                 kept.push(version);
             }
         }

@@ -26,6 +26,13 @@
 //! | `AppUpdateManifest.Allowed`, `AppUpdateService.RequireHttps`, the redirect's `new Uri(current, Location)` | [`address`] | A |
 //! | `JsonDocument.Parse` with its defaults, as the manifest reads it | [`json`] | A |
 //! | .NET's base64, invariant casing, integer parsing, `Path.GetFullPath`, `ToString("O")` | [`dotnet`] | A |
+//! | Swift `AppUpdateService.stage`, `validate`, `accepts` (AppUpdate.swift:252-296) | [`stage_mac`] | M-H |
+//! | Swift `AppUpdateService.installScript`, `AppStore.prepareAppUpdateInstall` (AppUpdate.swift:298-404, AppStore+AppUpdate.swift:408-447) | [`install_script`] | M-H |
+//!
+//! M-H (the Mac stage): what differs on the Mac is the profile's (`update_package`, `build_update_url_wins`, `update_needs_public_key`,
+//! `update_rechecks_sha256`), read by [`coordinator`] and [`service`]: the manifest's `macos` asset with `minimumSystemVersion`
+//! ([`manifest`]), `MightyCode-macos.zip`, the unpacking by `ditto` through the coordinator's stager, and `install.sh` started by the
+//! platform; Swift's verdicts are `tools/parity-mac`'s (tests/app_update_mac_parity.rs).
 //!
 //! The Windows halves (the mutex, the process wait, the detached start, WinHTTP, the registry) are W9-B's (mighty-platform's
 //! `UpdateInstaller`, `UpdateTransport` and `ProcessHost::start_detached`); the app's host is W9-C's. C#'s verdicts are kept in
@@ -39,6 +46,7 @@ pub mod dotnet;
 pub mod environment;
 pub mod guard;
 pub mod housekeeping;
+pub mod install_script;
 pub mod installer_entry;
 pub mod json;
 pub mod log;
@@ -49,6 +57,7 @@ pub mod service;
 pub mod signature;
 pub mod smoke;
 pub mod stage;
+pub mod stage_mac;
 pub mod version;
 
 pub use mighty_core::app_update_view::{Phase, State};

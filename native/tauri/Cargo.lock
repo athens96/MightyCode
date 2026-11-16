@@ -2609,12 +2609,14 @@ dependencies = [
  "mighty-platform-macos",
  "mighty-platform-windows",
  "mighty-run",
+ "plist",
  "regex",
  "serde",
  "serde_json",
  "sha2",
  "tokio",
  "tokio-util",
+ "unicode-normalization",
  "zip",
 ]
 

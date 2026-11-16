@@ -98,9 +98,11 @@ jobs:
         run: |
           cargo test --workspace --no-fail-fast
           if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
-      - name: The Mac's stores against the Swift app's own code (tools/parity-mac; the state round trip, the pairing files, the defaults keys)
+      - name: The Mac's stores and update against the Swift app's own code (tools/parity-mac)
         # Mac stage M-B: Swift writes the state corpus and the pairing files with MightyCore's own code; Rust's tests load and save
         # them (MIGHTY_PARITY_MAC=require) and leave theirs; Swift reads Rust's back and wants every value it read from its own.
+        # M-H: Rust's install.sh text equals Swift's installScript byte for byte, and its manifest parse reads the Mac's fields as
+        # Swift's does (crates/mighty-updates/tests/app_update_mac_parity.rs). One build of the tool serves both.
         if: matrix.os == 'macos'
         working-directory: native/tauri
         timeout-minutes: 25
@@ -118,6 +120,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'parity-mac defaults-keys failed' }
           $env:MIGHTY_PARITY_MAC = 'require'
           $env:MIGHTY_PARITY_MAC_DIR = $work
+          $env:MIGHTY_PARITY_MAC_TOOL = $tool
           $failed = @()
           cargo test -p mighty-core --test state_mac -- --nocapture
           if ($LASTEXITCODE -ne 0) { $failed += 'Rust state round trip' }
@@ -125,6 +128,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { $failed += 'Rust pairing files' }
           cargo test -p mighty-platform-macos --lib defaults_keys -- --nocapture
           if ($LASTEXITCODE -ne 0) { $failed += 'Rust defaults keys' }
+          cargo test -p mighty-updates --test app_update_mac_parity -- --nocapture
+          if ($LASTEXITCODE -ne 0) { $failed += 'the Mac update parity' }
           if (Test-Path (Join-Path $work 'state')) {
             & $tool state-check (Join-Path $work 'state')
             if ($LASTEXITCODE -ne 0) { $failed += 'Swift state check' }
@@ -240,7 +245,9 @@ jobs:
                allowed = @(
                  # The only callers (W9 plan D6): the helper's relaunch, the app's helper launch, the Windows update seams.
                  'src-tauri/src/update_helper.rs', 'src-tauri/src/app_update.rs', 'crates/mighty-platform-windows/src/update.rs',
-                 'crates/mighty-platform-windows/tests/update_helper.rs') + $port },
+                 'crates/mighty-platform-windows/tests/update_helper.rs',
+                 # Mac stage M-H: the Mac's install.sh started by its update installer (and that file's own check).
+                 'crates/mighty-platform-macos/src/update.rs') + $port },
             @{ what = 'ProcessHost::start_detached_waitable called'; pattern = '\bstart_detached_waitable\s*\('; skip = '\bfn\s+start_detached_waitable'
                allowed = @(
                  # The Ouroboros dashboard daemon, which C# leaves running (W9-E), and the Windows implementation's own contract test.
@@ -311,6 +318,15 @@ jobs:
           }
           if ($unread.Count -gt 0) { "unread PlatformProfile fields: $($unread -join ', ')"; throw "$($unread.Count) unread profile field(s)" }
           "$($fields.Count) fields, every one read ($($pending.Count) pending on other parts' branches)"
+      - name: The Mac update's temporary direct TLS is gone once M-C's HTTPS backs it
+        # Mac stage review M-H 3: update_transport.rs's DirectTls (no system proxy) only until the integrator implements its Connect for
+        # M-C's MacHttps; from then on no file may name it.
+        run: |
+          $files = Get-ChildItem -Recurse -File -Filter *.rs | Where-Object { $_.FullName -notmatch '[\\/](target|node_modules)[\\/]' }
+          $wired = $files | Select-String -Pattern 'impl\s+(\S+::)*Connect\s+for\s+MacHttps' -List
+          $left = $files | Select-String -Pattern '\bDirectTls\b' -List
+          if ($wired -and $left) { $left | ForEach-Object { "$($_.Path):$($_.LineNumber)" }; throw 'DirectTls is still named after MacHttps backs the update transport' }
+          if ($wired) { 'MacHttps backs the update transport; DirectTls is gone' } else { 'MacHttps not wired yet: DirectTls stays (temporary)' }
 
   package:
     # The release candidate in the 0.4.x shape (W9 plan §1.6, D10, D13, D15): what native-windows.yml builds from the C# app, here from

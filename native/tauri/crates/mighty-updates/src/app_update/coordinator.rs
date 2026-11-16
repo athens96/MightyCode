@@ -15,6 +15,12 @@
 //! never a downgrade. The change callback
 //! ([`Coordinator::set_on_change`], C#'s `StateChanged`) runs after each change with no lock held, on the thread that made the change
 //! (a download's progress arrives on the transport's).
+//!
+//! M-H: the profile in [`Options::profile`] decides what differs on the Mac (Swift `AppUpdateAuto.afterCheck`, AppUpdateAutoSteps.swift):
+//! the package is the manifest's `macos` one; a newer version whose `minimumSystemVersion` is above this Mac's ([`Options::system_version`])
+//! is blocked (`appUpdate.blocked.systemTooOld`, the reason shown, nothing downloaded) unless an update is staged, which then stays; a
+//! newer version with no Mac package is up to date; the unpacking is [`Options::stage`]'s (`ditto`). Whether the stamped address wins
+//! and the words without a key are the profile's too, on both OSes.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,6 +29,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use chrono::{DateTime, Utc};
 use mighty_core::app_update_view::SectionView;
 use mighty_core::locale::Locale;
+use mighty_platform::profile::UpdatePackage;
+use mighty_platform::{BoxFuture, PlatformProfile};
 use tokio_util::sync::CancellationToken;
 
 use super::manifest::Availability;
@@ -97,6 +105,10 @@ pub type Flag = Arc<dyn Fn() -> bool + Send + Sync>;
 /// true)`); an error reads as busy.
 pub type RunningFrom = Arc<dyn Fn(&Path) -> std::io::Result<bool> + Send + Sync>;
 
+/// Unpacks a downloaded package into a staging folder and answers the app inside (`package`, `destination`): the Mac's `ditto` and
+/// bundle check (`stage_mac::stage`), which the host runs over the platform's processes.
+pub type Stager = Arc<dyn Fn(PathBuf, PathBuf) -> BoxFuture<'static, Result<PathBuf, UpdateError>> + Send + Sync>;
+
 /// How the coordinator is built (C#'s constructor arguments, the defaults C#'s).
 #[derive(Clone)]
 pub struct Options {
@@ -120,6 +132,13 @@ pub struct Options {
     pub process_id: i32,
     /// The language a refusal is worded in (C# words it when it throws); [`Coordinator::set_locale`] changes it.
     pub locale: Locale,
+    /// M-H: the OS's update rules (`update_package`, `build_update_url_wins`, `update_needs_public_key`); Windows' by default.
+    pub profile: PlatformProfile,
+    /// M-H: this Mac's macOS version (`major.minor.patch`, Swift `AppVersion.systemVersion`), which a manifest's `minimumSystemVersion`
+    /// is compared with; None never blocks.
+    pub system_version: Option<String>,
+    /// M-H: the package's unpacking; None unpacks the Windows zip here ([`super::stage::stage`] for `architecture`).
+    pub stage: Option<Stager>,
 }
 
 impl Options {
@@ -136,6 +155,9 @@ impl Options {
             running_from: Arc::new(|_| Ok(false)),
             process_id: i32::try_from(std::process::id()).unwrap_or(i32::MAX),
             locale: Locale::new("en"),
+            profile: PlatformProfile::windows(),
+            system_version: None,
+            stage: None,
         }
     }
 }
@@ -353,12 +375,15 @@ impl Coordinator {
         self.shared.lock().staging_deferred
     }
 
-    /// C# `EffectiveManifestUrl` (Windows rule 3): the build's address when it has one, else a typed allowed address (trimmed).
+    /// C# `EffectiveManifestUrl` (Windows rule 3, the Mac's too: the profile's `build_update_url_wins`): the build's address when it has
+    /// one, else a typed allowed address (trimmed). Without the rule the typed address comes first and the build's is the fallback.
     pub fn effective_manifest_url(&self, user_url: Option<&str>) -> Option<String> {
-        if let Some(url) = &self.built_in_manifest_url {
-            return Some(url.clone());
+        let typed = user_url.map(str::trim).filter(|url| super::manifest::allowed(url)).map(String::from);
+        if self.options.profile.build_update_url_wins {
+            self.built_in_manifest_url.clone().or(typed)
+        } else {
+            typed.or_else(|| self.built_in_manifest_url.clone())
         }
-        user_url.map(str::trim).filter(|url| super::manifest::allowed(url)).map(String::from)
     }
 
     /// C# `IsDue`: [`super::auto::check_due`].
@@ -426,7 +451,7 @@ impl Coordinator {
                 return CheckStart::Skip;
             }
             if !has_key {
-                return CheckStart::Fail(UpdateError::key("settings.appUpdate.noPublicKeyNoticeWindows"));
+                return CheckStart::Fail(super::service::no_public_key(self.options.profile.update_needs_public_key));
             }
             let Some(url) = url else { return CheckStart::Fail(UpdateError::key("settings.appUpdate.errorNoManifestURL")) };
             inner.checking = true;
@@ -551,7 +576,6 @@ impl Coordinator {
                 }
                 let state = self.state();
                 let staged = (phase == Phase::Ready).then(|| state.availability.as_ref().map(|a| a.manifest.version.clone())).flatten();
-                let architecture = &self.options.architecture;
                 let new_version = &availability.manifest.version;
                 // Stricter than C#: a signed manifest older than the staged or kept version (an old latest.json served again) is a
                 // failed check, never a reason to drop the newer update.
@@ -567,7 +591,11 @@ impl Coordinator {
                         && super::version::normalized(new_version).is_some()
                         && super::version::compare(staged, new_version) == std::cmp::Ordering::Equal
                 });
-                let newer_but_not_for_this_machine = availability.is_newer() && availability.manifest.asset(architecture).is_none();
+                // A newer version this machine cannot install: Windows' architecture without a package, the Mac's macOS below the
+                // manifest's minimum (Swift `AppUpdateAvailability.blockedReason`). The Mac's newer version without a Mac package is up
+                // to date instead (Swift `afterCheck`).
+                let blocked = self.blocked_reason(&availability);
+                let newer_but_not_for_this_machine = blocked.is_some();
                 if staged.is_some() && (same_as_staged || newer_but_not_for_this_machine) {
                     // The version the manifest names is the one staged, or a newer one this machine cannot install: the staged update
                     // stays ready and nothing is downloaded again (M/AppUpdateAutoSteps.swift afterCheck).
@@ -577,13 +605,10 @@ impl Coordinator {
                     });
                     return false;
                 }
-                if newer_but_not_for_this_machine {
+                if let Some(reason) = blocked {
                     // Nothing staged and the newer version cannot run here: the Mac's "blocked" outcome — the reason is the status,
                     // nothing is downloaded, and it is no failure to retry.
-                    let reason = self.words(&UpdateError::Key {
-                        key: "appUpdate.error.noPackageForArchitecture",
-                        args: vec![("architecture", architecture.clone())],
-                    });
+                    let reason = self.words(&reason);
                     self.shared.mutate(|s| {
                         s.phase = Phase::Failed;
                         s.availability = Some(availability);
@@ -596,7 +621,7 @@ impl Coordinator {
                     });
                     return false;
                 }
-                let newer = availability.is_newer();
+                let newer = availability.is_newer() && self.package_of(&availability.manifest).is_some();
                 self.shared.mutate(|s| {
                     s.phase = if newer { Phase::Available } else { Phase::UpToDate };
                     s.availability = Some(availability);
@@ -624,6 +649,35 @@ impl Coordinator {
         }
     }
 
+    /// Why a newer version cannot be installed here, or None (also when it is not newer).
+    fn blocked_reason(&self, availability: &Availability) -> Option<UpdateError> {
+        if !availability.is_newer() {
+            return None;
+        }
+        let manifest = &availability.manifest;
+        match self.options.profile.update_package {
+            UpdatePackage::WindowsZip => manifest.asset(&self.options.architecture).is_none().then(|| UpdateError::Key {
+                key: "appUpdate.error.noPackageForArchitecture",
+                args: vec![("architecture", self.options.architecture.clone())],
+            }),
+            UpdatePackage::MacBundle => {
+                let (minimum, system) = (manifest.minimum_system_version.as_ref()?, self.options.system_version.as_ref()?);
+                super::version::is_newer(minimum, system).then(|| UpdateError::Key {
+                    key: "appUpdate.blocked.systemTooOld",
+                    args: vec![("version", manifest.version.clone()), ("minimum", minimum.clone()), ("system", system.clone())],
+                })
+            }
+        }
+    }
+
+    /// The package this machine takes from `manifest`: Windows' for its architecture, the Mac's `macos`.
+    fn package_of<'a>(&self, manifest: &'a super::manifest::Manifest) -> Option<&'a super::manifest::Asset> {
+        match self.options.profile.update_package {
+            UpdatePackage::WindowsZip => manifest.asset(&self.options.architecture),
+            UpdatePackage::MacBundle => manifest.macos.as_ref(),
+        }
+    }
+
     /// C# `DownloadAsync`: the package for this machine's architecture downloaded, verified and unpacked; a manifest with no asset for
     /// it is refused. While staging is busy nothing under `updates` is touched: the update stays Available, with no error, and waits.
     /// The download is claimed in the same lock that tested the phase, so two callers never both download; the claim is held until
@@ -641,13 +695,13 @@ impl Coordinator {
             (manifest, Arc::new(Claim::new(&self.shared, ClaimKind::Download, work)), token)
         };
         let architecture = self.options.architecture.clone();
-        let Some(asset) = manifest.asset(&architecture).cloned() else {
-            self.fail(
-                self.words(&UpdateError::Key {
-                    key: "appUpdate.error.noPackageForArchitecture",
-                    args: vec![("architecture", architecture)],
-                }),
-            );
+        let Some(asset) = self.package_of(&manifest).cloned() else {
+            self.fail(self.words(&match self.options.profile.update_package {
+                UpdatePackage::WindowsZip => {
+                    UpdateError::Key { key: "appUpdate.error.noPackageForArchitecture", args: vec![("architecture", architecture)] }
+                }
+                UpdatePackage::MacBundle => UpdateError::key("settings.appUpdate.errorNoPackage"),
+            }));
             return;
         };
         if self.staging_must_wait() {
@@ -694,7 +748,17 @@ impl Coordinator {
             s.package_path = Some(package.clone());
         });
         let destination = package.parent().map(|folder| folder.join(STAGED_FOLDER)).unwrap_or_else(|| PathBuf::from(STAGED_FOLDER));
-        let staged = {
+        let staged = if let Some(stager) = &self.options.stage {
+            // The platform's unpacking runs as a task of its own holding the claim, so a dropped download still waits for it.
+            let (unpacking, held) = (stager(package.clone(), destination), claim.clone());
+            tokio::spawn(async move {
+                let staged = unpacking.await;
+                drop(held);
+                staged
+            })
+            .await
+            .unwrap_or_else(|join| Err(UpdateError::Plain(join.to_string())))
+        } else {
             let (package, architecture, held) = (package.clone(), architecture.to_string(), claim.clone());
             tokio::task::spawn_blocking(move || {
                 let staged = super::stage::stage(&package, &destination, &architecture);
