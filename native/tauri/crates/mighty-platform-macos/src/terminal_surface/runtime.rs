@@ -80,8 +80,9 @@ pub fn owe() {
     WAKE.1.notify_all();
 }
 
-/// Runs a callback's body, a panic answering `fallback` instead of unwinding into libghostty.
-fn guarded<R>(fallback: R, body: impl FnOnce() -> R) -> R {
+/// Runs a callback's body, a panic answering `fallback` instead of unwinding into libghostty or AppKit (the C callbacks here and the
+/// view's Objective-C methods, review M-D 16).
+pub(super) fn guarded<R>(fallback: R, body: impl FnOnce() -> R) -> R {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)).unwrap_or(fallback)
 }
 

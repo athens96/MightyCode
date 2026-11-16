@@ -59,261 +59,327 @@ define_class!(
 
         #[unsafe(method(becomeFirstResponder))]
         fn become_first_responder(&self) -> bool {
-            // SAFETY: NSResponder's own answer first.
-            let taken: bool = unsafe { msg_send![super(self), becomeFirstResponder] };
-            self.focus_changed(true);
-            taken
+            runtime::guarded(false, || {
+                // SAFETY: NSResponder's own answer first.
+                let taken: bool = unsafe { msg_send![super(self), becomeFirstResponder] };
+                self.focus_changed(true);
+                taken
+            })
         }
 
         #[unsafe(method(resignFirstResponder))]
         fn resign_first_responder(&self) -> bool {
-            // SAFETY: NSResponder's own answer first.
-            let given: bool = unsafe { msg_send![super(self), resignFirstResponder] };
-            self.focus_changed(false);
-            given
+            runtime::guarded(false, || {
+                // SAFETY: NSResponder's own answer first.
+                let given: bool = unsafe { msg_send![super(self), resignFirstResponder] };
+                self.focus_changed(false);
+                given
+            })
         }
 
         #[unsafe(method(setFrameSize:))]
         fn set_frame_size(&self, size: NSSize) {
-            // SAFETY: NSView's own resize first.
-            let () = unsafe { msg_send![super(self), setFrameSize: size] };
-            self.sync_size();
+            runtime::guarded((), || {
+                // SAFETY: NSView's own resize first.
+                let () = unsafe { msg_send![super(self), setFrameSize: size] };
+                self.sync_size();
+            })
         }
 
         #[unsafe(method(viewDidChangeBackingProperties))]
         fn view_did_change_backing_properties(&self) {
-            // SAFETY: NSView's own handling first.
-            let () = unsafe { msg_send![super(self), viewDidChangeBackingProperties] };
-            self.sync_size();
+            runtime::guarded((), || {
+                // SAFETY: NSView's own handling first.
+                let () = unsafe { msg_send![super(self), viewDidChangeBackingProperties] };
+                self.sync_size();
+            })
         }
 
         #[unsafe(method(updateTrackingAreas))]
         fn update_tracking_areas(&self) {
-            // SAFETY: NSView's own handling first.
-            let () = unsafe { msg_send![super(self), updateTrackingAreas] };
-            for area in self.trackingAreas().iter() {
-                self.removeTrackingArea(&area);
-            }
-            self.add_tracking_area();
+            runtime::guarded((), || {
+                // SAFETY: NSView's own handling first.
+                let () = unsafe { msg_send![super(self), updateTrackingAreas] };
+                for area in self.trackingAreas().iter() {
+                    self.removeTrackingArea(&area);
+                }
+                self.add_tracking_area();
+            })
         }
 
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
-            self.handle_key_down(event);
+            runtime::guarded((), || {
+                self.handle_key_down(event);
+            })
         }
 
         #[unsafe(method(keyUp:))]
         fn key_up(&self, event: &NSEvent) {
-            let Some(surface) = self.surface() else { return };
-            let input = build_key_input(event, GHOSTTY_ACTION_RELEASE, None);
-            // SAFETY: the live surface on the main thread.
-            unsafe { ghostty_surface_key(surface, input) };
+            runtime::guarded((), || {
+                let Some(surface) = self.surface() else { return };
+                let input = build_key_input(event, GHOSTTY_ACTION_RELEASE, None);
+                // SAFETY: the live surface on the main thread.
+                unsafe { ghostty_surface_key(surface, input) };
+            })
         }
 
         #[unsafe(method(flagsChanged:))]
         fn flags_changed(&self, event: &NSEvent) {
-            let Some(surface) = self.surface() else { return };
-            if self.ivars().marked.borrow().has_marked_text() {
-                return;
-            }
-            let Some(pressed) = keys::modifier_pressed(event.keyCode(), event.modifierFlags().0 as u64) else { return };
-            let input = build_key_input(event, if pressed { GHOSTTY_ACTION_PRESS } else { GHOSTTY_ACTION_RELEASE }, None);
-            // SAFETY: the live surface on the main thread.
-            unsafe { ghostty_surface_key(surface, input) };
+            runtime::guarded((), || {
+                let Some(surface) = self.surface() else { return };
+                if self.ivars().marked.borrow().has_marked_text() {
+                    return;
+                }
+                let Some(pressed) = keys::modifier_pressed(event.keyCode(), event.modifierFlags().0 as u64) else { return };
+                let input = build_key_input(event, if pressed { GHOSTTY_ACTION_PRESS } else { GHOSTTY_ACTION_RELEASE }, None);
+                // SAFETY: the live surface on the main thread.
+                unsafe { ghostty_surface_key(surface, input) };
+            })
         }
 
         #[unsafe(method(performKeyEquivalent:))]
         fn perform_key_equivalent(&self, event: &NSEvent) -> bool {
-            self.handle_key_equivalent(event)
+            runtime::guarded(false, || {
+                self.handle_key_equivalent(event)
+            })
         }
 
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
-            self.take_keyboard();
-            self.mouse_button(event, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT);
+            runtime::guarded((), || {
+                self.take_keyboard();
+                self.mouse_button(event, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT);
+            })
         }
 
         #[unsafe(method(mouseUp:))]
         fn mouse_up(&self, event: &NSEvent) {
-            self.mouse_button(event, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT);
+            runtime::guarded((), || {
+                self.mouse_button(event, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT);
+            })
         }
 
         /// Over a selection, a right press opens the Copy menu at its release (Ghostty's AppKit view); else it is Ghostty's.
         #[unsafe(method(rightMouseDown:))]
         fn right_mouse_down(&self, event: &NSEvent) {
-            self.take_keyboard();
-            self.mouse_position(event);
-            if self.has_selection() {
-                self.ivars().menu_pending.set(true);
-                return;
-            }
-            self.mouse_button(event, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT);
+            runtime::guarded((), || {
+                self.take_keyboard();
+                self.mouse_position(event);
+                if self.has_selection() {
+                    self.ivars().menu_pending.set(true);
+                    return;
+                }
+                self.mouse_button(event, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT);
+            })
         }
 
         #[unsafe(method(rightMouseUp:))]
         fn right_mouse_up(&self, event: &NSEvent) {
-            if self.ivars().menu_pending.replace(false) {
-                self.mouse_position(event);
-                self.show_copy_menu(event);
-                return;
-            }
-            self.mouse_button(event, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT);
+            runtime::guarded((), || {
+                if self.ivars().menu_pending.replace(false) {
+                    self.mouse_position(event);
+                    self.show_copy_menu(event);
+                    return;
+                }
+                self.mouse_button(event, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT);
+            })
         }
 
         /// The cursor Ghostty asked for (`ACTION_MOUSE_SHAPE`) over the whole view.
         #[unsafe(method(resetCursorRects))]
         fn reset_cursor_rects(&self) {
-            let shape = self.ivars().shared.mouse_shape.load(Ordering::SeqCst);
-            self.addCursorRect_cursor(self.bounds(), &cursor_for(shape));
+            runtime::guarded((), || {
+                let shape = self.ivars().shared.mouse_shape.load(Ordering::SeqCst);
+                self.addCursorRect_cursor(self.bounds(), &cursor_for(shape));
+            })
         }
 
         #[unsafe(method(otherMouseDown:))]
         fn other_mouse_down(&self, event: &NSEvent) {
-            self.take_keyboard();
-            self.mouse_button(event, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_MIDDLE);
+            runtime::guarded((), || {
+                self.take_keyboard();
+                self.mouse_button(event, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_MIDDLE);
+            })
         }
 
         #[unsafe(method(otherMouseUp:))]
         fn other_mouse_up(&self, event: &NSEvent) {
-            self.mouse_button(event, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_MIDDLE);
+            runtime::guarded((), || {
+                self.mouse_button(event, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_MIDDLE);
+            })
         }
 
         #[unsafe(method(mouseMoved:))]
         fn mouse_moved(&self, event: &NSEvent) {
-            self.mouse_position(event);
+            runtime::guarded((), || {
+                self.mouse_position(event);
+            })
         }
 
         #[unsafe(method(mouseDragged:))]
         fn mouse_dragged(&self, event: &NSEvent) {
-            self.mouse_position(event);
+            runtime::guarded((), || {
+                self.mouse_position(event);
+            })
         }
 
         #[unsafe(method(rightMouseDragged:))]
         fn right_mouse_dragged(&self, event: &NSEvent) {
-            self.mouse_position(event);
+            runtime::guarded((), || {
+                self.mouse_position(event);
+            })
         }
 
         #[unsafe(method(otherMouseDragged:))]
         fn other_mouse_dragged(&self, event: &NSEvent) {
-            self.mouse_position(event);
+            runtime::guarded((), || {
+                self.mouse_position(event);
+            })
         }
 
         /// Ghostty clears a link's hover only for a position outside the view; skipped during a drag.
         #[unsafe(method(mouseExited:))]
         fn mouse_exited(&self, event: &NSEvent) {
-            if NSEvent::pressedMouseButtons() != 0 {
-                return;
-            }
-            if let Some(surface) = self.surface() {
-                let mods = keys::ghostty_mods(event.modifierFlags().0 as u64);
-                // SAFETY: the live surface on the main thread.
-                unsafe { ghostty_surface_mouse_pos(surface, -1.0, -1.0, mods) };
-            }
+            runtime::guarded((), || {
+                if NSEvent::pressedMouseButtons() != 0 {
+                    return;
+                }
+                if let Some(surface) = self.surface() {
+                    let mods = keys::ghostty_mods(event.modifierFlags().0 as u64);
+                    // SAFETY: the live surface on the main thread.
+                    unsafe { ghostty_surface_mouse_pos(surface, -1.0, -1.0, mods) };
+                }
+            })
         }
 
         #[unsafe(method(scrollWheel:))]
         fn scroll_wheel(&self, event: &NSEvent) {
-            let Some(surface) = self.surface() else { return };
-            let mods = keys::scroll_mods(event.hasPreciseScrollingDeltas(), event.momentumPhase().0 as u64);
-            // SAFETY: the live surface on the main thread.
-            unsafe { ghostty_surface_mouse_scroll(surface, event.scrollingDeltaX(), event.scrollingDeltaY(), mods) };
-            runtime::owe();
+            runtime::guarded((), || {
+                let Some(surface) = self.surface() else { return };
+                let mods = keys::scroll_mods(event.hasPreciseScrollingDeltas(), event.momentumPhase().0 as u64);
+                // SAFETY: the live surface on the main thread.
+                unsafe { ghostty_surface_mouse_scroll(surface, event.scrollingDeltaX(), event.scrollingDeltaY(), mods) };
+                runtime::owe();
+            })
         }
 
         /// The user's own copy: the selection straight to the clipboard (Mighty's `HostTerminalView`), never through OSC 52's
         /// confirmation.
         #[unsafe(method(copy:))]
         fn copy(&self, _sender: Option<&AnyObject>) {
-            self.copy_selection();
+            runtime::guarded((), || {
+                self.copy_selection();
+            })
         }
 
         #[unsafe(method(paste:))]
         fn paste(&self, _sender: Option<&AnyObject>) {
-            self.binding("paste_from_clipboard");
+            runtime::guarded((), || {
+                self.binding("paste_from_clipboard");
+            })
         }
 
         #[unsafe(method(selectAll:))]
         fn select_all(&self, _sender: Option<&AnyObject>) {
-            self.binding("select_all");
+            runtime::guarded((), || {
+                self.binding("select_all");
+            })
         }
     }
 
     unsafe impl NSTextInputClient for TerminalView {
         #[unsafe(method(insertText:replacementRange:))]
         fn insert_text(&self, string: &AnyObject, _replacement: NSRange) {
-            // Only text that came with a key event (Ghostty's AppKit view): the input method replaying a commit on its own types nothing.
-            if NSApplication::sharedApplication(self.mtm()).currentEvent().is_none() {
-                return;
-            }
-            let text = text_of(string);
-            self.unmark();
-            let mut collected = self.ivars().collected.borrow_mut();
-            match collected.as_mut() {
-                Some(texts) => texts.push(text),
-                None => {
-                    drop(collected);
-                    self.surface_text(&text);
+            runtime::guarded((), || {
+                // Only text that came with a key event (Ghostty's AppKit view): the input method replaying a commit on its own types nothing.
+                if NSApplication::sharedApplication(self.mtm()).currentEvent().is_none() {
+                    return;
                 }
-            }
+                let text = text_of(string);
+                self.unmark();
+                let mut collected = self.ivars().collected.borrow_mut();
+                match collected.as_mut() {
+                    Some(texts) => texts.push(text),
+                    None => {
+                        drop(collected);
+                        self.surface_text(&text);
+                    }
+                }
+            })
         }
 
         #[unsafe(method(doCommandBySelector:))]
         fn do_command_by_selector(&self, _selector: Sel) {
-            // A ⌘/⌃ key equivalent the menu passed on: sent again, now as a key (`keyEcho`).
-            if let Some(last) = self.ivars().last_perform_key.get() {
-                let app = NSApplication::sharedApplication(self.mtm());
-                if let Some(current) = app.currentEvent()
-                    && current.timestamp() == last
-                {
-                    app.sendEvent(&current);
-                    return;
+            runtime::guarded((), || {
+                // A ⌘/⌃ key equivalent the menu passed on: sent again, now as a key (`keyEcho`).
+                if let Some(last) = self.ivars().last_perform_key.get() {
+                    let app = NSApplication::sharedApplication(self.mtm());
+                    if let Some(current) = app.currentEvent()
+                        && current.timestamp() == last
+                    {
+                        app.sendEvent(&current);
+                        return;
+                    }
                 }
-            }
-            self.ivars().interpreted.set(true);
+                self.ivars().interpreted.set(true);
+            })
         }
 
         #[unsafe(method(setMarkedText:selectedRange:replacementRange:))]
         fn set_marked_text(&self, string: &AnyObject, selected: NSRange, _replacement: NSRange) {
-            self.ivars().marked.borrow_mut().set(&text_of(string), (selected.location, selected.length));
-            if self.ivars().collected.borrow().is_none() {
-                self.sync_preedit(true);
-            }
+            runtime::guarded((), || {
+                self.ivars().marked.borrow_mut().set(&text_of(string), (selected.location, selected.length));
+                if self.ivars().collected.borrow().is_none() {
+                    self.sync_preedit(true);
+                }
+            })
         }
 
         #[unsafe(method(unmarkText))]
         fn unmark_text(&self) {
-            self.unmark();
+            runtime::guarded((), || {
+                self.unmark();
+            })
         }
 
         #[unsafe(method(selectedRange))]
         fn selected_range(&self) -> NSRange {
-            let (location, length) = self.ivars().marked.borrow().selected_range();
-            NSRange::new(location, length)
+            runtime::guarded(NSRange::new(keys::NOT_FOUND as NSUInteger, 0), || {
+                let (location, length) = self.ivars().marked.borrow().selected_range();
+                NSRange::new(location, length)
+            })
         }
 
         #[unsafe(method(markedRange))]
         fn marked_range(&self) -> NSRange {
-            let (location, length) = self.ivars().marked.borrow().marked_range();
-            NSRange::new(location, length)
+            runtime::guarded(NSRange::new(keys::NOT_FOUND as NSUInteger, 0), || {
+                let (location, length) = self.ivars().marked.borrow().marked_range();
+                NSRange::new(location, length)
+            })
         }
 
         #[unsafe(method(hasMarkedText))]
         fn has_marked_text(&self) -> bool {
-            self.ivars().marked.borrow().has_marked_text()
+            runtime::guarded(false, || {
+                self.ivars().marked.borrow().has_marked_text()
+            })
         }
 
         #[unsafe(method_id(attributedSubstringForProposedRange:actualRange:))]
         fn attributed_substring(&self, range: NSRange, actual: NSRangePointer) -> Option<Retained<NSAttributedString>> {
-            // A closure: the method's own body may not use `?` (the macro converts its return value).
-            let substring = || {
-                let (text, (location, length)) = self.ivars().marked.borrow().substring((range.location, range.length))?;
-                if !actual.is_null() {
-                    // SAFETY: AppKit's out pointer for the range.
-                    unsafe { *actual = NSRange::new(location, length) };
-                }
-                Some(NSAttributedString::initWithString(NSAttributedString::alloc(), &NSString::from_str(&text)))
-            };
-            substring()
+            runtime::guarded(None, || {
+                // A closure: the method's own body may not use `?` (the macro converts its return value).
+                let substring = || {
+                    let (text, (location, length)) = self.ivars().marked.borrow().substring((range.location, range.length))?;
+                    if !actual.is_null() {
+                        // SAFETY: AppKit's out pointer for the range.
+                        unsafe { *actual = NSRange::new(location, length) };
+                    }
+                    Some(NSAttributedString::initWithString(NSAttributedString::alloc(), &NSString::from_str(&text)))
+                };
+                substring()
+            })
         }
 
         #[unsafe(method_id(validAttributesForMarkedText))]
@@ -324,13 +390,15 @@ define_class!(
         /// Where the IME's candidate window goes: Ghostty's cursor cell, whose y is already the cell's bottom edge.
         #[unsafe(method(firstRectForCharacterRange:actualRange:))]
         fn first_rect(&self, _range: NSRange, _actual: NSRangePointer) -> NSRect {
-            let Some(surface) = self.surface() else { return NSRect::ZERO };
-            let (mut x, mut y, mut width, mut height) = (0.0, 0.0, 0.0, 0.0);
-            // SAFETY: the live surface on the main thread and four out values.
-            unsafe { ghostty_surface_ime_point(surface, &mut x, &mut y, &mut width, &mut height) };
-            let local = NSRect::new(NSPoint::new(x, self.bounds().size.height - y), NSSize::new(width, height));
-            let Some(window) = self.window() else { return local };
-            window.convertRectToScreen(self.convertRect_toView(local, None))
+            runtime::guarded(NSRect::ZERO, || {
+                let Some(surface) = self.surface() else { return NSRect::ZERO };
+                let (mut x, mut y, mut width, mut height) = (0.0, 0.0, 0.0, 0.0);
+                // SAFETY: the live surface on the main thread and four out values.
+                unsafe { ghostty_surface_ime_point(surface, &mut x, &mut y, &mut width, &mut height) };
+                let local = NSRect::new(NSPoint::new(x, self.bounds().size.height - y), NSSize::new(width, height));
+                let Some(window) = self.window() else { return local };
+                window.convertRectToScreen(self.convertRect_toView(local, None))
+            })
         }
 
         #[unsafe(method(characterIndexForPoint:))]
