@@ -429,7 +429,10 @@ mod tests {
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 listener.bind().unwrap();
-                listener.accept().await.map(|_| ())
+                // The accepted end is kept until the client has checked its peer: a peer already gone has no credentials to read.
+                let accepted = listener.accept().await;
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                accepted.map(|_| ())
             })
         };
         let reached = UnixSocketConnector.connect(&name, Duration::from_secs(5)).await;
