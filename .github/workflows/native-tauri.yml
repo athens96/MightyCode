@@ -91,6 +91,19 @@ jobs:
         run: |
           cargo test --workspace --no-fail-fast
           if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
+      - name: The Mac update against the Swift app's own code (tools/parity-mac install-script and manifest)
+        # Mac stage M-H: Rust's install.sh text equals Swift's installScript byte for byte, and its manifest parse reads the Mac's fields as
+        # Swift's does (crates/mighty-updates/tests/app_update_mac_parity.rs).
+        if: matrix.os == 'macos'
+        working-directory: native/tauri
+        timeout-minutes: 25
+        run: |
+          swift build -c release --package-path tools/parity-mac
+          if ($LASTEXITCODE -ne 0) { throw 'parity-mac build failed' }
+          $env:MIGHTY_PARITY_MAC = 'require'
+          $env:MIGHTY_PARITY_MAC_TOOL = (Resolve-Path 'tools/parity-mac/.build/release/parity-mac').Path
+          cargo test -p mighty-updates --test app_update_mac_parity -- --nocapture
+          if ($LASTEXITCODE -ne 0) { throw 'the Mac update parity failed' }
       - name: Build the Tauri app (debug)
         working-directory: native/tauri
         # beforeBuildCommand builds the page with --mode tauri into dist-tauri/ (never the dist/ the C# app ships).
@@ -142,7 +155,9 @@ jobs:
                allowed = @(
                  # The only callers (W9 plan D6): the helper's relaunch, the app's helper launch, the Windows update seams.
                  'src-tauri/src/update_helper.rs', 'src-tauri/src/app_update.rs', 'crates/mighty-platform-windows/src/update.rs',
-                 'crates/mighty-platform-windows/tests/update_helper.rs') + $port },
+                 'crates/mighty-platform-windows/tests/update_helper.rs',
+                 # Mac stage M-H: the Mac's install.sh started by its update installer (and that file's own check).
+                 'crates/mighty-platform-macos/src/update.rs') + $port },
             @{ what = 'ProcessHost::start_detached_waitable called'; pattern = '\bstart_detached_waitable\s*\('; skip = '\bfn\s+start_detached_waitable'
                allowed = @(
                  # The Ouroboros dashboard daemon, which C# leaves running (W9-E), and the Windows implementation's own contract test.
