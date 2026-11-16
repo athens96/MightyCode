@@ -5,6 +5,11 @@
 //! W9 (plan §0d, owner W9-B): the port grows to the helper's seams, the machine half of C#'s `AppUpdateReplacement`,
 //! `InstallerRegistration`, `UserEnvironment` and `RenamedInstall`; mighty-updates' `app_update` holds the decisions. Windows writes
 //! them (`mighty-platform-windows` `update.rs`); the Mac answers `Unsupported` until its stage.
+//!
+//! M-H (the Mac stage) refines the contract with four defaulted methods the Mac's update needs and Windows never calls
+//! ([`UpdateInstaller::system_version`], [`UpdateInstaller::may_write`], [`UpdateInstaller::may_execute`],
+//! [`UpdateInstaller::start_install_script`]): the Mac's swap is Swift's `install.sh`, whose text and checks are mighty-updates'
+//! (`app_update::install_script`); the platform only says what the OS knows and starts the script.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -70,4 +75,30 @@ pub trait UpdateInstaller: Send + Sync {
     /// C# `RenamedInstall.Refresh`: the Programs and Desktop shortcuts that start `MightyClaude.exe` re-pointed to `MightyCode.exe`, and
     /// the uninstall entry's icon and name when they still name the old exe.
     fn refresh_renamed_install(&self, app_directory: &Path) -> Result<()>;
+
+    /// M-H, the Mac: the OS's version as `major.minor.patch` (Swift `AppVersion.systemVersion`), which a manifest's
+    /// `minimumSystemVersion` is compared with. None by default (Windows' package names no minimum).
+    fn system_version(&self) -> Option<String> {
+        None
+    }
+
+    /// M-H, the Mac: whether this user may write into `folder` (`access(2)` with `W_OK`, Swift's `isWritableFile`): the installed app's
+    /// folder must be, or the swap cannot happen. False by default.
+    fn may_write(&self, _folder: &Path) -> bool {
+        false
+    }
+
+    /// M-H, the Mac: whether this user may run `file` (`access(2)` with `X_OK`, Swift's `isExecutableFile`): a staged bundle's
+    /// executable must be. False by default.
+    fn may_execute(&self, _file: &Path) -> bool {
+        false
+    }
+
+    /// M-H, the Mac's hand-off (Swift `AppUpdateService.launchInstaller`, AppUpdate.swift:406-425): `script` written to
+    /// `folder/install.sh` (replaced whole, mode 0700), `folder/install.log` made empty with mode 0600, then `/bin/sh install.sh`
+    /// started detached (it outlives the app) with exactly `PATH=/usr/bin:/bin` and `HOME`, its standard input empty and its output into
+    /// `install.log`. Returns once it runs; the caller then quits (with a relaunch) or goes on quitting. `Unsupported` by default.
+    fn start_install_script(&self, _script: &str, _folder: &Path) -> Result<()> {
+        Err(crate::PlatformError::unsupported("UpdateInstaller", "start_install_script"))
+    }
 }

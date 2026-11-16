@@ -2591,6 +2591,7 @@ dependencies = [
  "mighty-platform",
  "mighty-platform-windows",
  "mighty-run",
+ "plist",
  "regex",
  "serde",
  "serde_json",

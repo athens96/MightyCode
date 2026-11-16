@@ -87,6 +87,18 @@ impl McpTransport {
     }
 }
 
+/// What the app update downloads, unpacks and hands to whom (M-H): the manifest's asset, the package's name, the staging and the
+/// helper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdatePackage {
+    /// Windows (C# `AppUpdateService`): the manifest's `windows.<x64|arm64>`, `MightyCode-windows.zip`, unpacked here into a folder with
+    /// one `MightyCode.exe`, swapped by the staged exe's `--update-helper`.
+    WindowsZip,
+    /// The Mac (Swift `AppUpdate.swift`): the manifest's `macos` (`mac`, `darwin`) with `minimumSystemVersion`, `MightyCode-macos.zip`,
+    /// unpacked by `/usr/bin/ditto` into one `.app`, swapped by `install.sh` (Swift's `installScript`, ported).
+    MacBundle,
+}
+
 /// The deliberate differences, one value per behaviour.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlatformProfile {
@@ -104,12 +116,18 @@ pub struct PlatformProfile {
     pub remote_decodes_request_paths: bool,
     /// A Tailscale direct connection needs an inbound firewall rule first (Windows: `netsh` with elevation; the Mac has no step).
     pub direct_connection_firewall: bool,
-    /// The app update check is off when the build carries no public key (Windows; the Mac checks and refuses at verification).
+    /// M-H: what a build without a public key says when asked to check. Neither OS ever checks without one (C# rule 1; Swift
+    /// `AppUpdateService.check`, AppUpdate.swift:197, and docs/app-update.md "서명"): true, Windows', the box's notice that the check is
+    /// off (`settings.appUpdate.noPublicKeyNoticeWindows`); false, the Mac's, the check's own refusal (`appUpdate.error.noPublicKey`).
     pub update_needs_public_key: bool,
-    /// A manifest address stamped into the build wins over one the user set (Windows).
+    /// A manifest address stamped into the build wins over one the user set (C#'s rule 3; Swift's "Rule 3: the stamped address wins",
+    /// AppStore+AppUpdate.swift:50-53: both OSes). False would try the user's address first and the build's only without one.
     pub build_update_url_wins: bool,
-    /// The staged package's SHA-256 is checked again just before the swap (Windows' `--update-helper`).
+    /// The staged package's size and SHA-256 are checked again just before the swap: in Windows' `--update-helper`, and on the Mac in
+    /// the app right before it starts `install.sh` (Swift's "Rule 4", AppStore+AppUpdate.swift:430-433, off the main thread). Both OSes.
     pub update_rechecks_sha256: bool,
+    /// M-H: the package the app update takes and how it installs it.
+    pub update_package: UpdatePackage,
     /// The snapshot carries `autoUpdateCLIs` and `autoUpdatePlugins` (the Mac only).
     pub auto_update_keys: bool,
     /// A files pane is saved with the state (Windows; the Mac never saves one).
@@ -144,6 +162,7 @@ impl PlatformProfile {
             update_needs_public_key: true,
             build_update_url_wins: true,
             update_rechecks_sha256: true,
+            update_package: UpdatePackage::WindowsZip,
             auto_update_keys: false,
             saves_files_pane: true,
             tailscale_needs_utun: false,
@@ -168,8 +187,9 @@ impl PlatformProfile {
             remote_decodes_request_paths: true,
             direct_connection_firewall: false,
             update_needs_public_key: false,
-            build_update_url_wins: false,
-            update_rechecks_sha256: false,
+            build_update_url_wins: true,
+            update_rechecks_sha256: true,
+            update_package: UpdatePackage::MacBundle,
             auto_update_keys: true,
             saves_files_pane: false,
             tailscale_needs_utun: true,
@@ -207,6 +227,12 @@ mod tests {
         assert!(mac.direct_advertises_magic_dns && !windows.direct_advertises_magic_dns);
         assert!(windows.remote_graph_runs && !mac.remote_graph_runs);
         assert!(mac.remote_confines_agents && !windows.remote_confines_agents);
+        // M-H (plan fact 6, D16): the stamped address wins and the package is checked again before the swap on both OSes, as the
+        // Swift app does; only the words without a key and the package differ.
+        assert!(windows.build_update_url_wins && mac.build_update_url_wins);
+        assert!(windows.update_rechecks_sha256 && mac.update_rechecks_sha256);
+        assert!(windows.update_needs_public_key && !mac.update_needs_public_key);
+        assert_eq!((windows.update_package, mac.update_package), (UpdatePackage::WindowsZip, UpdatePackage::MacBundle));
         assert_eq!(PlatformProfile::for_os(Os::Macos), mac);
         assert_eq!(Os::Windows.name(), "windows");
     }

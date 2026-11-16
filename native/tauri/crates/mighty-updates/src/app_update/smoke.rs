@@ -42,6 +42,8 @@ fn fixture_availability() -> Availability {
             notes: None,
             published_at: None,
             windows: BTreeMap::from([("x64".to_string(), asset("x64", 'a')), ("arm64".to_string(), asset("arm64", 'b'))]),
+            macos: None,
+            minimum_system_version: None,
         },
     }
 }
