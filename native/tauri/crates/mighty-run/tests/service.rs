@@ -11,6 +11,8 @@
 //! Without the .NET 10 SDK the comparison says so and passes (`MIGHTY_PARITY=require` makes it fail), as mighty-core's parity
 //! check does; the Rust run's own checks hold either way.
 
+#[path = "../../../tools/parity/build_lock.rs"]
+mod build_lock;
 mod common;
 
 use std::collections::HashSet;
@@ -177,6 +179,7 @@ fn csharp_run(work: &Path) -> Option<(Value, Vec<Value>)> {
     if !dotnet_10() {
         return None;
     }
+    let build = build_lock::hold(&tauri.join("target"));
     let built = std::process::Command::new("dotnet")
         .arg("build")
         .arg(tauri.join("tools/parity/Parity.csproj"))
@@ -184,6 +187,7 @@ fn csharp_run(work: &Path) -> Option<(Value, Vec<Value>)> {
         .arg(&tool)
         .args(["--nologo", "-v", "quiet"])
         .status();
+    drop(build);
     assert!(matches!(built, Ok(status) if status.success()), "the C# parity tool did not build ({built:?})");
     let out = work.join("out");
     let ran = std::process::Command::new("dotnet")

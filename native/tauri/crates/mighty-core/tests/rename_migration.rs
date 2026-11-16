@@ -2,6 +2,8 @@
 //! temporary folders and an in-memory registry shaped as C#'s `FakeRegistry`; then `rewritten` against C# itself (`tools/parity`,
 //! `update rewrite`). Never the real `%APPDATA%`, home, `~/.claude` or HKCU.
 
+#[path = "../../../tools/parity/build_lock.rs"]
+mod build_lock;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
@@ -326,6 +328,7 @@ fn rewritten_matches_csharp() {
     }
     let tauri = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let out = tauri.join("target/parity-cs-rename");
+    let build = build_lock::hold(&tauri.join("target"));
     let built = std::process::Command::new("dotnet")
         .arg("build")
         .arg(tauri.join("tools/parity/Parity.csproj"))
@@ -333,6 +336,7 @@ fn rewritten_matches_csharp() {
         .arg(&out)
         .args(["--nologo", "-v", "quiet"])
         .status();
+    drop(build);
     assert!(matches!(built, Ok(status) if status.success()), "the C# parity tool did not build ({built:?})");
     let root = Temp::new("parity");
     let cases: [(&str, &str, &str); 8] = [

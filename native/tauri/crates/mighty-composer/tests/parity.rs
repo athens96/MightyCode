@@ -2,6 +2,8 @@
 //! frontmatter) run through MightyCode.Core by `tools/parity` (`composer`, Composer.cs) and through this crate, compared line by
 //! line. Without the .NET 10 SDK the test says so and passes; `MIGHTY_PARITY=require` makes it fail instead.
 
+#[path = "../../../tools/parity/build_lock.rs"]
+mod build_lock;
 mod common;
 
 use std::fmt::Write as _;
@@ -34,6 +36,7 @@ fn csharp_tool() -> Option<PathBuf> {
     if !dotnet_10() {
         return None;
     }
+    let build = build_lock::hold(&tauri.join("target"));
     let built = Command::new("dotnet")
         .arg("build")
         .arg(tauri.join("tools/parity/Parity.csproj"))
@@ -41,6 +44,7 @@ fn csharp_tool() -> Option<PathBuf> {
         .arg(&out)
         .args(["--nologo", "-v", "quiet"])
         .status();
+    drop(build);
     assert!(matches!(built, Ok(status) if status.success()), "the C# parity tool did not build ({built:?})");
     Some(out.join("parity.dll"))
 }

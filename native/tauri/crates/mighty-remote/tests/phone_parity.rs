@@ -5,6 +5,8 @@
 //! `scripts/fixtures/delegation-record/*/profile` states, their `@{root}` placed in a folder of the check's own. Without the .NET 10 SDK
 //! the check says so and passes; `MIGHTY_PARITY=require` makes it fail instead.
 
+#[path = "../../../tools/parity/build_lock.rs"]
+mod build_lock;
 mod support;
 
 use std::path::Path;
@@ -33,6 +35,7 @@ fn csharp(profile: &Path, requests: &Path, output: &Path) {
     static BUILT: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
     let mut built = BUILT.lock().unwrap_or_else(|p| p.into_inner());
     if !*built {
+        let build = build_lock::hold(&tauri.join("target"));
         let status = Command::new("dotnet")
             .arg("build")
             .arg(tauri.join("tools/parity/Parity.csproj"))
@@ -40,6 +43,7 @@ fn csharp(profile: &Path, requests: &Path, output: &Path) {
             .arg(&out)
             .args(["--nologo", "-v", "quiet"])
             .status();
+        drop(build);
         assert!(matches!(status, Ok(status) if status.success()), "the C# parity tool did not build ({status:?})");
         *built = true;
     }
