@@ -119,14 +119,19 @@ impl ClaudeCredentials for KeychainClaudeCredentials {
         if answer == Err(ERR_SEC_ITEM_NOT_FOUND) {
             answer = Query::generic(&self.keychains, &service, None).data(true);
         }
-        match answer {
-            Ok(bytes) if bytes.len() <= MAXIMUM_BYTES => Ok(String::from_utf8(bytes).ok()),
-            Ok(_) => Ok(None),
-            Err(ERR_SEC_INTERACTION_NOT_ALLOWED | ERR_SEC_AUTH_FAILED | ERR_SEC_USER_CANCELED) => {
-                Err(PlatformError::Refused("the Keychain would ask for the Claude CLI's item".into()))
-            }
-            Err(_) => Ok(None),
+        answer_of(answer)
+    }
+}
+
+/// A read's answer: the item's text (256 KB at most), a refusal where the Keychain would have asked, else no credential.
+fn answer_of(answer: std::result::Result<Vec<u8>, i32>) -> Result<Option<String>> {
+    match answer {
+        Ok(bytes) if bytes.len() <= MAXIMUM_BYTES => Ok(String::from_utf8(bytes).ok()),
+        Ok(_) => Ok(None),
+        Err(ERR_SEC_INTERACTION_NOT_ALLOWED | ERR_SEC_AUTH_FAILED | ERR_SEC_USER_CANCELED) => {
+            Err(PlatformError::Refused("the Keychain would ask for the Claude CLI's item".into()))
         }
+        Err(_) => Ok(None),
     }
 }
 
@@ -156,21 +161,18 @@ mod tests {
         assert_eq!(store.read(Some(Path::new("relative")), false).unwrap(), None);
     }
 
-    /// A Keychain that would ask (here: the throwaway keychain locked) refuses a silent read, without a prompt (the run would hang on
-    /// one), which is Swift's `keychainPermission`.
+    /// What a read answers for each status: the three a Keychain that would ask gives are a refusal (Swift's `keychainPermission`),
+    /// anything else no credential. (A locked keychain cannot stand in for one that would ask: on the runner a silent read of a locked
+    /// file keychain waits on its unlock and never returns, interaction off or not; the Swift app makes the same calls.)
     #[test]
-    fn a_locked_keychain_refuses_a_silent_read() {
-        unsafe extern "C" {
-            fn SecKeychainLock(keychain: *const std::ffi::c_void) -> i32;
+    fn a_keychain_that_would_ask_is_a_refusal() {
+        for status in [ERR_SEC_INTERACTION_NOT_ALLOWED, ERR_SEC_AUTH_FAILED, ERR_SEC_USER_CANCELED] {
+            assert!(matches!(answer_of(Err(status)), Err(PlatformError::Refused(_))), "{status}");
         }
-        let throwaway = Throwaway::new("claude-locked");
-        throwaway.add("Claude Code-credentials", "me", ITEM.as_bytes());
-        // SAFETY: the test's own keychain.
-        assert_eq!(unsafe { SecKeychainLock(core_foundation::base::TCFType::as_concrete_TypeRef(&throwaway.keychain) as *const _) }, 0);
-        let store = KeychainClaudeCredentials::only(throwaway.keychains(), "me");
-        assert!(matches!(store.read(None, false), Err(PlatformError::Refused(_))));
+        assert_eq!(answer_of(Err(ERR_SEC_ITEM_NOT_FOUND)).unwrap(), None);
+        assert_eq!(answer_of(Ok(b"{}".to_vec())).unwrap().as_deref(), Some("{}"));
+        assert_eq!(answer_of(Ok(vec![b' '; MAXIMUM_BYTES + 1])).unwrap(), None);
     }
-
     /// The service names the CLI uses: the plain one, and SHA-256 of the folder's NFC text.
     #[test]
     fn the_service_names_follow_the_cli() {
