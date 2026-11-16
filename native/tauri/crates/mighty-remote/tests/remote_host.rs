@@ -746,6 +746,15 @@ fn only_a_keyed_run_request_gets_the_attachment_body() {
             && host::body_limit(&head("/v2/runs", &[], "127.0.0.1"), &key, false) == 0
     );
     assert_eq!(host::body_limit(&head("/v2/runs", &[], "127.0.0.1"), &key, true), attachments, "loopback only when injected");
+    // M-C: a host that routes the decoded path (the Mac) gives the larger body to the route it reads, decoded by the same rule; one
+    // that routes as written (Windows) does not; a target that does not decode gets the small limit.
+    let encoded = head("/v2/r%75ns", &[], "100.90.1.1");
+    assert_eq!(host::body_limit_for(&encoded, &key, false, true), attachments, "the decoded run route");
+    assert_eq!(host::body_limit_for(&encoded, &key, false, false), protocol::MAXIMUM_REQUEST_BYTES, "as written: not the run route");
+    let submit = head("/v2/mirror/sessions/s1/s%75bmit", &[], "100.90.1.1");
+    assert_eq!(host::body_limit_for(&submit, &key, false, true), attachments, "the decoded mirror send");
+    assert_eq!(host::body_limit_for(&head("/v2/r%zzns", &[], "100.90.1.1"), &key, false, true), protocol::MAXIMUM_REQUEST_BYTES);
+    assert_eq!(host::body_limit_for(&head("/v2/r%75ns?x=1", &[], "100.90.1.1"), &key, false, true), protocol::MAXIMUM_REQUEST_BYTES);
     let shell = StartRunRequest::new("j", "w", "shell", "dir");
     let settings = |mode: &str| mighty_core::model::RunSettings { permission_mode: mode.into(), ..Default::default() };
     let full = StartRunRequest::new("j", "w", "claude", "hi").with_settings(settings("fullAccess"));

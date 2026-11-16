@@ -21,6 +21,15 @@ pub fn platform(profile: Option<PathBuf>, identifier: &str) -> Result<Platform> 
     os::platform(profile, identifier)
 }
 
+/// This OS's deliberate differences (the same value `platform()` puts in `Platform::profile`), for code that runs before or without
+/// the platform (M-C: the firewall rows read `direct_connection_firewall` from the first draw).
+pub fn profile() -> mighty_platform::PlatformProfile {
+    #[cfg(windows)]
+    return mighty_platform::PlatformProfile::windows();
+    #[cfg(target_os = "macos")]
+    return mighty_platform::PlatformProfile::macos();
+}
+
 /// The native views over `window`'s page; `csharp_web_data` when the browser panes' data is C#'s own folder (W9-F's adopted folder,
 /// `paths::web_folders`), whose views open with C#'s environment options.
 pub fn surfaces(window: tauri::Window, csharp_web_data: bool) -> Arc<dyn SurfaceFactory> {

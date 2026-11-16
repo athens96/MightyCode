@@ -10,6 +10,9 @@
 //! - the system's proxy for the URL ([`crate::proxy`]): a `CONNECT` tunnel before TLS for `https://`, the absolute form for `http://`;
 //! - the body read only for a 2xx GET, refused past `max_body`; a POST's answer is its status and headers (the push reads no body);
 //! - no header value, body or URL path ever reaches an error.
+//!
+//! Deviation from URLSession: a proxy asking for credentials (`407` to the `CONNECT`) fails the request, where URLSession would answer
+//! with the proxy password stored in the Keychain; this client sends no proxy credentials (it fails closed). TLS is 1.2 at least.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -154,9 +157,28 @@ async fn tunnel(stream: &mut TcpStream, target: &Target) -> Result<()> {
         }
         head.push(byte[0]);
     }
-    let line = String::from_utf8_lossy(&head);
-    let status = line.split_whitespace().nth(1).and_then(|s| s.parse::<u16>().ok()).unwrap_or(0);
+    let status = connect_status(&head).unwrap_or(0);
+    // A 407 (the proxy wants credentials) fails here: URLSession would answer it with the Keychain's proxy password, this client sends
+    // none: it fails closed (a deviation listed in the module's notes, for the README's Mac deviations).
     if (200..300).contains(&status) { Ok(()) } else { Err(PlatformError::Refused(format!("the proxy refused the tunnel ({status})"))) }
+}
+
+/// The status of a proxy's answer to `CONNECT`, read from its first line only: `HTTP/1.x`, a space, exactly three digits, then a space
+/// or the line's end; None for anything else.
+fn connect_status(head: &[u8]) -> Option<u16> {
+    let end = head.windows(2).position(|pair| pair == b"\r\n")?;
+    let line = std::str::from_utf8(&head[..end]).ok()?;
+    let rest = line.strip_prefix("HTTP/1.")?;
+    let (version, rest) = rest.split_at_checked(1)?;
+    if !version.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let rest = rest.strip_prefix(' ')?;
+    let (code, after) = rest.split_at_checked(3)?;
+    if !code.bytes().all(|b| b.is_ascii_digit()) || !(after.is_empty() || after.starts_with(' ')) {
+        return None;
+    }
+    code.parse().ok()
 }
 
 /// The connection to `target` (straight, or through `route`), TLS on it for `https://`; and whether the request goes in the absolute
@@ -177,7 +199,11 @@ async fn connect(target: &Target, route: &Proxy) -> Result<(Box<dyn Io>, bool)> 
     if !target.secure {
         return Ok((Box::new(stream), absolute));
     }
-    let connector = native_tls::TlsConnector::new().map_err(|_| PlatformError::Refused("TLS is not available".into()))?;
+    // TLS 1.2 at least (URLSession's floor; Security.framework would otherwise still offer 1.0 and 1.1).
+    let connector = native_tls::TlsConnector::builder()
+        .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
+        .build()
+        .map_err(|_| PlatformError::Refused("TLS is not available".into()))?;
     let stream = tokio_native_tls::TlsConnector::from(connector)
         .connect(&target.host, stream)
         .await
@@ -371,6 +397,25 @@ mod tests {
         let v6 = split_post("http://[::1]:9/x").unwrap();
         assert_eq!((v6.authority(), v6.origin()), ("[::1]:9".to_string(), "http://[::1]:9/".to_string()));
         assert_eq!(split_post("https://relay.example/x").unwrap().authority(), "relay.example", "the scheme's own port is left out");
+    }
+
+    /// The proxy's `CONNECT` answer is read from its first line only, strictly.
+    #[test]
+    fn a_connect_answer_is_read_strictly() {
+        assert_eq!(connect_status(b"HTTP/1.1 200 Connection established\r\n\r\n"), Some(200));
+        assert_eq!(connect_status(b"HTTP/1.0 200\r\n\r\n"), Some(200));
+        assert_eq!(connect_status(b"HTTP/1.1 407 Proxy Authentication Required\r\nX: 200\r\n\r\n"), Some(407));
+        for bad in [
+            &b"HTTP/2 200 OK\r\n\r\n"[..],
+            b"HTTP/1.1  200 OK\r\n\r\n",
+            b"HTTP/1.1 2000 OK\r\n\r\n",
+            b"HTTP/1.1 20 OK\r\n\r\n",
+            b"XHTTP/1.1 200 OK\r\n\r\n",
+            b"FOO 200 OK\r\n\r\n",
+            b"HTTP/1.1 200",
+        ] {
+            assert_eq!(connect_status(bad), None, "{}", String::from_utf8_lossy(bad));
+        }
     }
 
     /// A request that could carry a second request is refused before anything is sent, and Debug names the headers only.

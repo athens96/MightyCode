@@ -38,9 +38,6 @@ struct Direct {
     busy: bool,
     /// C# `mobileDirectStatusOverride`: the smoke's fixed status, never this PC's.
     status_override: Option<MobileDirectStatus>,
-    /// `PlatformProfile::direct_connection_firewall`: the direct path needs an inbound rule first (Windows). The Mac has no such step:
-    /// no firewall row, nothing read or changed (M-C).
-    has_firewall: bool,
 }
 
 static DIRECT: Mutex<Direct> = Mutex::new(Direct {
@@ -51,7 +48,6 @@ static DIRECT: Mutex<Direct> = Mutex::new(Direct {
     message: None,
     busy: false,
     status_override: None,
-    has_firewall: true,
 });
 
 /// The direct switch's and the port's writes, one after another (C#'s `writing`: a press made while one applies is applied next).
@@ -104,7 +100,6 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
     });
     let mut state = direct();
     state.firewall = Some(ports.firewall);
-    state.has_firewall = platform.profile.direct_connection_firewall;
     state.path = path;
 }
 
@@ -112,33 +107,14 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
 /// the Mac shows no firewall row, M-C).
 pub fn has_firewall(host: &Host) -> bool {
     let _ = host;
-    direct().has_firewall
+    crate::platform::profile().direct_connection_firewall
 }
 
-/// Swift `MobileDirect.magicDNSName` (`PlatformProfile::direct_advertises_magic_dns`, the Mac; M-C): `tailscale status --json` from the
-/// first of the CLI's places that answers (`wire::tailscale_candidates` over this process's PATH), through the process host, 5 s and
-/// 4 MiB at most; its own node's `DNSName` when that is a MagicDNS name. A candidate that is missing, fails or names none gives way to
-/// the next; none at all is no name (the addresses alone are advertised).
+/// The MagicDNS lookup where `PlatformProfile::direct_advertises_magic_dns` (the Mac; M-C): the Tailscale CLI from its places and this
+/// process's PATH, run through the process host (mighty-remote's `MagicDnsLookup::tailscale`).
 fn magic_dns(processes: Arc<dyn mighty_platform::ProcessHost>) -> MagicDnsLookup {
-    use mighty_remote::direct::wire;
-    MagicDnsLookup(Arc::new(move || {
-        let processes = processes.clone();
-        Box::pin(async move {
-            for candidate in wire::tailscale_candidates(&std::env::var("PATH").unwrap_or_default()) {
-                if !std::path::Path::new(&candidate).is_file() {
-                    continue;
-                }
-                let request = mighty_platform::SpawnRequest::new(&candidate, ["status", "--json"], std::env::temp_dir());
-                let captured =
-                    mighty_platform::process::capture(processes.as_ref(), request, None, std::time::Duration::from_secs(5), 4 << 20).await;
-                let Some(name) = captured.ok().filter(|c| c.exit_code == 0).and_then(|c| wire::status_dns_name(&c.stdout)) else {
-                    continue;
-                };
-                return wire::is_tailnet_name(&name).then_some(name);
-            }
-            None
-        })
-    }))
+    let candidates = mighty_remote::direct::wire::tailscale_candidates(&std::env::var("PATH").unwrap_or_default());
+    MagicDnsLookup::tailscale(processes, candidates)
 }
 
 /// The app quits: every direct listener closed and every direct phone ended.
@@ -245,10 +221,10 @@ pub fn firewall_needs_update_words(host: &Host) -> String {
 /// reads as unknown — a deviation from C#, which reads the rule in any run).
 fn runner(host: &Host) -> Option<Arc<dyn Firewall>> {
     let may_change = host.may_change_machine();
-    let state = direct();
-    if !state.has_firewall {
+    if !has_firewall(host) {
         return None;
     }
+    let state = direct();
     if host.smoke.is_some() {
         return state.smoke_firewall.clone();
     }

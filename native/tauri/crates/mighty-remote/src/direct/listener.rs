@@ -340,6 +340,31 @@ impl DirectSettings {
 #[derive(Clone)]
 pub struct MagicDnsLookup(pub Arc<dyn Fn() -> BoxFuture<'static, Option<String>> + Send + Sync>);
 
+impl MagicDnsLookup {
+    /// Swift `MobileDirect.magicDNSName`: `tailscale status --json` from the first of `candidates` (`wire::tailscale_candidates` of
+    /// the PATH) that is a file and answers, through `processes`, 5 s and 4 MiB at most; its own node's `DNSName` when that is a
+    /// MagicDNS name. A candidate that is missing, fails or names none gives way to the next; none at all is no name.
+    pub fn tailscale(processes: Arc<dyn mighty_platform::ProcessHost>, candidates: Vec<String>) -> MagicDnsLookup {
+        MagicDnsLookup(Arc::new(move || {
+            let (processes, candidates) = (processes.clone(), candidates.clone());
+            Box::pin(async move {
+                for candidate in candidates {
+                    if !std::path::Path::new(&candidate).is_file() {
+                        continue;
+                    }
+                    let request = mighty_platform::SpawnRequest::new(&candidate, ["status", "--json"], std::env::temp_dir());
+                    let captured = mighty_platform::capture(processes.as_ref(), request, None, Duration::from_secs(5), 4 << 20).await;
+                    let Some(name) = captured.ok().filter(|c| c.exit_code == 0).and_then(|c| wire::status_dns_name(&c.stdout)) else {
+                        continue;
+                    };
+                    return wire::is_tailnet_name(&name).then_some(name);
+                }
+                None
+            })
+        }))
+    }
+}
+
 impl std::fmt::Debug for MagicDnsLookup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("MagicDnsLookup")

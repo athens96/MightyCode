@@ -75,6 +75,8 @@ struct State {
     /// Bound by `bind`, registered with tokio at the first `accept` (which runs on a runtime; `bind` may not).
     bound: Option<std::os::unix::net::UnixListener>,
     listener: Option<Arc<UnixListener>>,
+    /// The socket file this listener put in place (device, inode): `close` removes the path only while it is still that file.
+    file: Option<(u64, u64)>,
 }
 
 /// The app's listener (one per app and profile).
@@ -181,9 +183,13 @@ impl AgentIoListener for UnixSocketListener {
         }
         let folder = path.parent().ok_or_else(|| PlatformError::Invalid("the agent IO socket has no folder".into()))?;
         private_folder(folder)?;
-        // An old socket (a previous run that ended without closing) is replaced; a folder in its place is not.
+        // An old socket (a previous run that ended without closing: nothing answers it) is replaced; one another instance still
+        // serves is never taken over, and a folder in its place is not removed.
         match std::fs::symlink_metadata(&path) {
             Ok(meta) if meta.is_dir() => return Err(PlatformError::Refused("a folder holds the agent IO socket's name".into())),
+            Ok(_) if std::os::unix::net::UnixStream::connect(&path).is_ok() => {
+                return Err(PlatformError::Refused("another instance serves this profile's agent IO socket".into()));
+            }
             Ok(_) => std::fs::remove_file(&path)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(PlatformError::Io(error)),
@@ -200,9 +206,9 @@ impl AgentIoListener for UnixSocketListener {
         if let Err(error) = ready {
             drop(bound);
             let _ = std::fs::remove_file(&staging);
-            let _ = std::fs::remove_file(&path);
             return Err(PlatformError::Io(error));
         }
+        state.file = std::fs::symlink_metadata(&path).ok().map(|meta| (meta.dev(), meta.ino()));
         state.bound = Some(bound);
         state.path = Some(path);
         Ok(text)
@@ -215,14 +221,17 @@ impl AgentIoListener for UnixSocketListener {
     /// Every waiting `accept` fails and the socket file is removed (Swift `stop`).
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
-        let (path, bound, listener) = {
+        let (path, file, bound, listener) = {
             let mut state = lock(&self.state);
-            (state.path.clone(), state.bound.take(), state.listener.take())
+            (state.path.clone(), state.file.take(), state.bound.take(), state.listener.take())
         };
         drop(bound);
         drop(listener);
         self.close.notify_waiters();
-        if let Some(path) = path {
+        // Only the file this listener put there: a socket another instance has since bound under the name stays.
+        if let (Some(path), Some(file)) = (path, file)
+            && std::fs::symlink_metadata(&path).is_ok_and(|meta| (meta.dev(), meta.ino()) == file)
+        {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -394,6 +403,28 @@ mod tests {
             matches!(UnixSocketConnector.connect(&name, Duration::from_millis(150)).await, Err(PlatformError::TimedOut(_))),
             "nothing answers once it is closed"
         );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// A socket another listener still serves is never taken over, and a listener's close leaves a socket file it no longer owns.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_live_socket_is_never_taken_over_and_close_removes_only_its_own_file() {
+        let folder = short_folder("live");
+        let first = UnixSocketListener::new(&folder);
+        let name = first.bind().unwrap();
+        let second = UnixSocketListener::new(&folder);
+        assert!(matches!(second.bind(), Err(PlatformError::Refused(_))), "the first one still serves it");
+        assert!(Path::new(&name).exists(), "the live socket stays");
+        drop(second);
+        assert!(Path::new(&name).exists(), "a listener that never bound removes nothing");
+        // The name replaced under the first listener (a later instance after a stale socket): the first one's close leaves it.
+        std::fs::remove_file(&name).unwrap();
+        let third = UnixSocketListener::new(&folder);
+        assert_eq!(third.bind().unwrap(), name);
+        first.close();
+        assert!(Path::new(&name).exists(), "the newer socket is not the first listener's to remove");
+        third.close();
+        assert!(!Path::new(&name).exists());
         let _ = std::fs::remove_dir_all(&folder);
     }
 

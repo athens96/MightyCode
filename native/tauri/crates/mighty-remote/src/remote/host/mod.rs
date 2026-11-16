@@ -455,7 +455,9 @@ impl RemoteHost {
         });
         let loopback = self.0.options.allow_loopback_for_tests;
         let key = key.to_string();
-        let body_limit: crate::remote::http_server::BodyLimit = Arc::new(move |head: &HttpRequest| Ok(body_limit(head, &key, loopback)));
+        let decodes = self.0.options.decodes_paths;
+        let body_limit: crate::remote::http_server::BodyLimit =
+            Arc::new(move |head: &HttpRequest| Ok(body_limit_for(head, &key, loopback, decodes)));
         let accept_peer: crate::remote::http_server::AcceptPeer = Arc::new(move |peer: IpAddr| Ok(peer_ip_allowed(peer, loopback)));
         let options = ListenerOptions {
             body_limit: Some(body_limit),
@@ -703,6 +705,13 @@ enum StartFailure {
 /// `BodyLimit(head, key, allowLoopback)`: how much body is read, decided from the head before any of it: none without the key (the
 /// head alone gets its 401), the larger attachment body only for an authenticated run request or mirror send.
 pub fn body_limit(head: &HttpRequest, key: &str, allow_loopback: bool) -> usize {
+    body_limit_for(head, key, allow_loopback, false)
+}
+
+/// [`body_limit`] where the host routes the decoded path (`HostOptions::decodes_paths`, the Mac): the larger body goes to exactly the
+/// requests the route then reads as a run's start or a mirror send, decoded by the same rule ([`percent_decoded`]); a target that does
+/// not decode gets the small limit (its route answers 400).
+pub fn body_limit_for(head: &HttpRequest, key: &str, allow_loopback: bool, decodes_paths: bool) -> usize {
     if head.headers.contains_key("origin")
         || !peer_allowed(&head.remote_address, allow_loopback)
         || head.headers.get(protocol::HEADER).map(String::as_str) != Some("2")
@@ -711,8 +720,16 @@ pub fn body_limit(head: &HttpRequest, key: &str, allow_loopback: bool) -> usize 
         return 0;
     }
     // A run's start and the mirror's send (`mirror::routes::is_submit`) may bring attachments.
+    // A query never makes either route; without one, the path the route reads.
+    let routed = if head.target.contains('?') {
+        None
+    } else if decodes_paths {
+        percent_decoded(&head.target)
+    } else {
+        Some(head.target.clone())
+    };
     if head.method == "POST"
-        && (head.target == format!("{}runs", protocol::PATH_PREFIX) || crate::remote::mirror::routes::is_submit(&head.target))
+        && routed.is_some_and(|path| path == format!("{}runs", protocol::PATH_PREFIX) || crate::remote::mirror::routes::is_submit(&path))
     {
         mighty_run::attachments::MAXIMUM_REQUEST_BYTES
     } else {

@@ -140,15 +140,21 @@ fn an_on_demand_vpn_counts_as_a_network() {
     assert_eq!(policy::action(Some(&tunnel), Some(&offline), false, false), LinkAction::Offline);
 }
 
-/// This Mac's path read twice through its network port is the same, and leaves loopback and link-local addresses out.
+/// This Mac's path read twice through its network port names the same interfaces, and leaves loopback and link-local addresses out.
 #[cfg(target_os = "macos")]
 #[test]
 fn this_macs_path_reads_the_same_twice_without_loopback() {
     use mighty_platform::Network as _;
     let network = mighty_platform_macos::net::MacNetwork;
-    let first = NetworkPath::from_adapters(&network.adapters().unwrap());
-    let second = NetworkPath::from_adapters(&network.adapters().unwrap());
-    assert_eq!(first, second);
+    // Interfaces and whether there is a network are stable between two reads; addresses may not be (an IPv6 temporary address can
+    // rotate between them), so the gateways (this port's addresses) are compared only when a third read agrees with one of the two.
+    let read = || NetworkPath::from_adapters(&network.adapters().unwrap());
+    let (first, second) = (read(), read());
+    assert!(first.satisfied == second.satisfied && first.interfaces == second.interfaces, "{first:?} {second:?}");
+    if first.gateways != second.gateways {
+        let third = read();
+        assert!(third.gateways == second.gateways || third.gateways == first.gateways, "{first:?} {second:?} {third:?}");
+    }
     assert!(!first.interfaces.iter().any(|name| name == "lo0"), "{first:?}");
     assert!(first.gateways.iter().all(|g| g.parse::<IpAddr>().is_ok_and(|ip| !ip.is_loopback())), "{first:?}");
 }

@@ -651,6 +651,38 @@ fn endpoints_are_written_and_checked_the_same_way_everywhere() {
     assert!(wire::status_dns_name(b"{}").is_none() && wire::status_dns_name(b"not json").is_none());
 }
 
+/// M-C review: the MagicDNS lookup itself over a fake process host (the Mac's real one is M-A's): the first candidate that is a file
+/// runs `status --json` from the temporary folder; a failing or nameless answer gives way to the next; a name outside the tailnet, or no
+/// candidate at all, is no name.
+#[tokio::test]
+async fn the_magic_dns_lookup_runs_tailscale_status_through_the_process_host() {
+    use mighty_platform::fake::{FakeProcessHost, FakeScript};
+    let folder = std::env::temp_dir().join(format!("mighty-magicdns-{}-{}", std::process::id(), line!()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let (broken, good) = (folder.join("broken-tailscale"), folder.join("tailscale"));
+    std::fs::write(&broken, b"").unwrap();
+    std::fs::write(&good, b"").unwrap();
+    let text = |path: &std::path::Path| path.to_string_lossy().into_owned();
+    let missing = text(&folder.join("missing"));
+    let host = Arc::new(FakeProcessHost::default());
+    host.push(FakeScript { stdout: b"not json".to_vec(), exit_code: 0, ..FakeScript::default() });
+    host.push(FakeScript {
+        stdout: br#"{"Self":{"DNSName":"Studio.tail1234.ts.net.","TailscaleIPs":["100.101.102.103"]}}"#.to_vec(),
+        ..FakeScript::default()
+    });
+    let lookup = MagicDnsLookup::tailscale(host.clone(), vec![missing.clone(), text(&broken), text(&good)]);
+    assert_eq!((lookup.0)().await.as_deref(), Some("studio.tail1234.ts.net"));
+    let spawned = host.spawned();
+    assert_eq!(spawned.iter().map(|r| r.program.clone()).collect::<Vec<_>>(), [broken.clone(), good.clone()], "the missing one is skipped");
+    assert!(spawned.iter().all(|r| r.args == ["status", "--json"] && r.cwd == std::env::temp_dir()));
+    host.push(FakeScript { stdout: br#"{"Self":{"DNSName":"studio.example.com."}}"#.to_vec(), ..FakeScript::default() });
+    assert_eq!((MagicDnsLookup::tailscale(host.clone(), vec![text(&good)]).0)().await, None, "not a MagicDNS name");
+    host.push(FakeScript { stdout: br#"{"Self":{"DNSName":"a.ts.net"}}"#.to_vec(), exit_code: 1, ..FakeScript::default() });
+    assert_eq!((MagicDnsLookup::tailscale(host.clone(), vec![text(&good)]).0)().await, None, "a failed status is no answer");
+    assert_eq!((MagicDnsLookup::tailscale(host.clone(), vec![missing]).0)().await, None, "no CLI, no name");
+    let _ = std::fs::remove_dir_all(&folder);
+}
+
 /// The direct path asks for the MagicDNS name only where the profile gives it a lookup, only when Tailscale addresses were found and
 /// never through the checks' seam (Swift: no name with an override); a name with nothing bound is not advertised.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

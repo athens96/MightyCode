@@ -275,19 +275,55 @@ impl Watcher {
     }
 }
 
-/// A wake observer's callback, taken out under its lock when the subscription ends (waiting out a call in flight), so none follows.
-struct ResumeCell(Mutex<Option<NetworkCallback>>);
+/// A wake observer's callback, taken out under its lock when the subscription ends (waiting out a call in flight on another thread),
+/// so none follows. A callback that ends its own subscription (on the thread running it) does not wait for itself: the cell is marked
+/// ended and the call in flight takes the callback out as it returns.
+struct ResumeCell {
+    callback: Mutex<Option<NetworkCallback>>,
+    ended: std::sync::atomic::AtomicBool,
+}
+
+thread_local! {
+    /// The cell whose callback this thread is running now (its address), 0 for none.
+    static CALLING: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 impl ResumeCell {
+    fn new(callback: NetworkCallback) -> ResumeCell {
+        ResumeCell { callback: Mutex::new(Some(callback)), ended: std::sync::atomic::AtomicBool::new(false) }
+    }
+
+    fn address(&self) -> usize {
+        self as *const ResumeCell as usize
+    }
+
     fn call(&self) {
-        let held = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        use std::sync::atomic::Ordering;
+        if self.ended.load(Ordering::SeqCst) {
+            return;
+        }
+        let mut held = self.callback.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if self.ended.load(Ordering::SeqCst) {
+            held.take();
+            return;
+        }
         if let Some(callback) = held.as_ref() {
+            let outer = CALLING.with(|calling| calling.replace(self.address()));
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback.call()));
+            CALLING.with(|calling| calling.set(outer));
+        }
+        if self.ended.load(Ordering::SeqCst) {
+            held.take();
         }
     }
 
+    /// Ends the cell: no call starts after this returns. From the callback itself, the callback is dropped as that call returns.
     fn end(&self) -> Option<NetworkCallback> {
-        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take()
+        self.ended.store(true, std::sync::atomic::Ordering::SeqCst);
+        if CALLING.with(|calling| calling.get()) == self.address() {
+            return None;
+        }
+        self.callback.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take()
     }
 }
 
@@ -339,7 +375,7 @@ impl Network for MacNetwork {
     }
 
     fn on_resume(&self, callback: NetworkCallback) -> Result<Subscription> {
-        Ok(observe_wake(Arc::new(ResumeCell(Mutex::new(Some(callback))))))
+        Ok(observe_wake(Arc::new(ResumeCell::new(callback))))
     }
 }
 
@@ -452,6 +488,32 @@ mod tests {
         let after = calls.load(Ordering::SeqCst);
         std::thread::sleep(std::time::Duration::from_millis(50));
         assert_eq!(calls.load(Ordering::SeqCst), after, "no call once the drop returned");
+    }
+
+    /// A wake callback that ends its own subscription returns (no deadlock on its own cell), and no call follows.
+    #[test]
+    fn a_wake_callback_may_end_its_own_subscription() {
+        use objc2_app_kit::{NSWorkspace, NSWorkspaceDidWakeNotification};
+        let held: Arc<Mutex<Option<Subscription>>> = Arc::new(Mutex::new(None));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (inner, counted) = (held.clone(), calls.clone());
+        let subscription = MacNetwork
+            .on_resume(NetworkCallback::new(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let taken = inner.lock().unwrap().take();
+                drop(taken);
+            }))
+            .unwrap();
+        *held.lock().unwrap() = Some(subscription);
+        let post = || {
+            let center = NSWorkspace::sharedWorkspace().notificationCenter();
+            // SAFETY: AppKit's own notification name, no object.
+            unsafe { center.postNotificationName_object(NSWorkspaceDidWakeNotification, None) };
+        };
+        post();
+        post();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "it returned and ended itself");
+        assert!(held.lock().unwrap().is_none());
     }
 
     /// The wake observer calls back when the workspace posts `NSWorkspaceDidWakeNotification` (posted here by the test, on its own
