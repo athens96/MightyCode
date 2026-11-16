@@ -6,7 +6,8 @@
 //! `InstallerRegistration`, `UserEnvironment` and `RenamedInstall`; mighty-updates' `app_update` holds the decisions. Windows writes
 //! them (`mighty-platform-windows` `update.rs`); the Mac answers `Unsupported` until its stage.
 //!
-//! M-H (the Mac stage) refines the contract with four defaulted methods the Mac's update needs and Windows never calls
+//! M-H (the Mac stage) refines the contract with defaulted methods (the four below, and after the review the code signature's two and
+//! `make_private`) the Mac's update needs and Windows never calls
 //! ([`UpdateInstaller::system_version`], [`UpdateInstaller::may_write`], [`UpdateInstaller::may_execute`],
 //! [`UpdateInstaller::start_install_script`]): the Mac's swap is Swift's `install.sh`, whose text and checks are mighty-updates'
 //! (`app_update::install_script`); the platform only says what the OS knows and starts the script.
@@ -100,5 +101,23 @@ pub trait UpdateInstaller: Send + Sync {
     /// `install.log`. Returns once it runs; the caller then quits (with a relaunch) or goes on quitting. `Unsupported` by default.
     fn start_install_script(&self, _script: &str, _folder: &Path) -> Result<()> {
         Err(crate::PlatformError::unsupported("UpdateInstaller", "start_install_script"))
+    }
+
+    /// M-H review, the Mac: the running app's code signing team (`SecCodeCopySelf`, the signing information's
+    /// `kSecCodeInfoTeamIdentifier`), or None when it is signed ad hoc or not at all (a development or CI build). `Unsupported` by default.
+    fn running_team(&self) -> Result<Option<String>> {
+        Err(crate::PlatformError::unsupported("UpdateInstaller", "running_team"))
+    }
+
+    /// M-H review, the Mac: whether `bundle`'s code signature is valid by `SecStaticCodeCheckValidity` with strict validation, every
+    /// architecture and the nested code, against `requirement` (code requirement language) when one is given. Through the Security
+    /// framework, no process. `Unsupported` by default.
+    fn code_signature_valid(&self, _bundle: &Path, _requirement: Option<&str>) -> Result<bool> {
+        Err(crate::PlatformError::unsupported("UpdateInstaller", "code_signature_valid"))
+    }
+
+    /// M-H review, the Mac: `folder` made private to this user (mode 0700), as Swift creates the updates folders. Nothing by default.
+    fn make_private(&self, _folder: &Path) -> Result<()> {
+        Ok(())
     }
 }

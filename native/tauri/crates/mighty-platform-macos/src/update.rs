@@ -118,12 +118,27 @@ impl UpdateInstaller for MacUpdateInstaller {
         access(file, libc::X_OK)
     }
 
+    fn running_team(&self) -> Result<Option<String>> {
+        signing::running_team()
+    }
+
+    fn code_signature_valid(&self, bundle: &Path, requirement: Option<&str>) -> Result<bool> {
+        signing::valid(bundle, requirement)
+    }
+
+    fn make_private(&self, folder: &Path) -> Result<()> {
+        Ok(std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700))?)
+    }
+
     fn start_install_script(&self, script: &str, folder: &Path) -> Result<()> {
         // `Data.write(options: .atomic)` then mode 0700.
         let path = folder.join(SCRIPT_NAME);
         let partial = folder.join(format!(".{SCRIPT_NAME}.{}", std::process::id()));
+        // Review M-H 6: a stale partial (a link one planted included) goes first, and the new one is made afresh, never through a link.
+        let _ = std::fs::remove_file(&partial);
         let written = (|| {
-            let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o700).open(&partial)?;
+            let mut file =
+                std::fs::OpenOptions::new().write(true).create_new(true).mode(0o700).custom_flags(libc::O_NOFOLLOW).open(&partial)?;
             file.write_all(script.as_bytes())?;
             file.sync_all()?;
             std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o700))?;
@@ -140,6 +155,7 @@ impl UpdateInstaller for MacUpdateInstaller {
             .write(true)
             .create_new(true)
             .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
             .open(&log)
             .map_err(|_| PlatformError::Refused("the install log could not be created".into()))?;
         let home = std::env::var_os("HOME").map(PathBuf::from).or_else(dirs::home_dir).unwrap_or_else(|| PathBuf::from("/"));
@@ -153,6 +169,114 @@ impl UpdateInstaller for MacUpdateInstaller {
             hidden: true,
         };
         self.processes.start_detached(request).map(|_| ())
+    }
+}
+
+/// Code signatures through the Security framework (review M-H 1; no process: `codesign` would be a child): the running app's team from
+/// its own signing information, and a bundle's static code checked strictly (`kSecCSStrictValidate | kSecCSCheckAllArchitectures |
+/// kSecCSCheckNestedCode`) against a requirement when one is given.
+mod signing {
+    use std::ffi::c_void;
+    use std::path::Path;
+
+    use core_foundation::base::{CFRelease, OSStatus, TCFType as _};
+    use core_foundation::dictionary::{CFDictionaryGetValue, CFDictionaryRef};
+    use core_foundation::string::{CFString, CFStringRef};
+    use core_foundation::url::{CFURL, CFURLRef};
+    use mighty_platform::{PlatformError, Result};
+
+    type Code = *const c_void;
+
+    /// `kSecCSSigningInformation`.
+    const SIGNING_INFORMATION: u32 = 1 << 1;
+    /// `kSecCSCheckAllArchitectures | kSecCSCheckNestedCode | kSecCSStrictValidate`.
+    const STRICT: u32 = (1 << 0) | (1 << 3) | (1 << 4);
+
+    #[link(name = "Security", kind = "framework")]
+    unsafe extern "C" {
+        static kSecCodeInfoTeamIdentifier: CFStringRef;
+        fn SecCodeCopySelf(flags: u32, code: *mut Code) -> OSStatus;
+        fn SecCodeCopyStaticCode(code: Code, flags: u32, static_code: *mut Code) -> OSStatus;
+        fn SecCodeCopySigningInformation(code: Code, flags: u32, information: *mut CFDictionaryRef) -> OSStatus;
+        fn SecStaticCodeCreateWithPath(path: CFURLRef, flags: u32, static_code: *mut Code) -> OSStatus;
+        fn SecRequirementCreateWithString(text: CFStringRef, flags: u32, requirement: *mut Code) -> OSStatus;
+        fn SecStaticCodeCheckValidity(static_code: Code, flags: u32, requirement: Code) -> OSStatus;
+    }
+
+    /// A Core Foundation object this module owns, released when dropped.
+    struct Owned(Code);
+
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: a +1 reference a Copy/Create call handed this module, released once.
+                unsafe { CFRelease(self.0) };
+            }
+        }
+    }
+
+    fn failed(what: &str, status: OSStatus) -> PlatformError {
+        PlatformError::Refused(format!("{what} failed ({status})"))
+    }
+
+    /// The running app's team identifier, None when it is signed ad hoc or not at all.
+    pub fn running_team() -> Result<Option<String>> {
+        let mut code: Code = std::ptr::null();
+        // SAFETY: an out pointer to a local; the reference it gets is owned below.
+        let status = unsafe { SecCodeCopySelf(0, &mut code) };
+        let code = Owned(code);
+        if status != 0 || code.0.is_null() {
+            return Err(failed("SecCodeCopySelf", status));
+        }
+        let mut static_code: Code = std::ptr::null();
+        // SAFETY: `code` is a live SecCodeRef; the out pointer is a local.
+        let status = unsafe { SecCodeCopyStaticCode(code.0, 0, &mut static_code) };
+        let static_code = Owned(static_code);
+        if status != 0 || static_code.0.is_null() {
+            return Err(failed("SecCodeCopyStaticCode", status));
+        }
+        let mut information: CFDictionaryRef = std::ptr::null();
+        // SAFETY: `static_code` is a live SecStaticCodeRef; the out pointer is a local.
+        let status = unsafe { SecCodeCopySigningInformation(static_code.0, SIGNING_INFORMATION, &mut information) };
+        let information = Owned(information.cast());
+        if status != 0 || information.0.is_null() {
+            return Err(failed("SecCodeCopySigningInformation", status));
+        }
+        // SAFETY: the dictionary is live; the key is the framework's constant; a value is borrowed under the get rule.
+        let team = unsafe {
+            let value = CFDictionaryGetValue(information.0.cast(), kSecCodeInfoTeamIdentifier.cast());
+            (!value.is_null()).then(|| CFString::wrap_under_get_rule(value.cast()).to_string())
+        };
+        Ok(team.filter(|team| !team.is_empty()))
+    }
+
+    /// Whether `bundle`'s signature is strictly valid (and meets `requirement` when given); a bundle with no static code is not.
+    pub fn valid(bundle: &Path, requirement: Option<&str>) -> Result<bool> {
+        let url = CFURL::from_path(bundle, true).ok_or_else(|| PlatformError::Invalid("the bundle's path".into()))?;
+        let mut static_code: Code = std::ptr::null();
+        // SAFETY: `url` is a live CFURL; the out pointer is a local.
+        let status = unsafe { SecStaticCodeCreateWithPath(url.as_concrete_TypeRef(), 0, &mut static_code) };
+        let static_code = Owned(static_code);
+        if status != 0 || static_code.0.is_null() {
+            return Ok(false);
+        }
+        let requirement = match requirement {
+            Some(text) => {
+                let text = CFString::new(text);
+                let mut parsed: Code = std::ptr::null();
+                // SAFETY: `text` is a live CFString; the out pointer is a local.
+                let status = unsafe { SecRequirementCreateWithString(text.as_concrete_TypeRef(), 0, &mut parsed) };
+                let parsed = Owned(parsed);
+                if status != 0 || parsed.0.is_null() {
+                    return Err(failed("SecRequirementCreateWithString", status));
+                }
+                parsed
+            }
+            None => Owned(std::ptr::null()),
+        };
+        // SAFETY: both references are live (the requirement may be null: none asked).
+        let status = unsafe { SecStaticCodeCheckValidity(static_code.0, STRICT, requirement.0) };
+        Ok(status == 0)
     }
 }
 
@@ -282,6 +406,64 @@ mod tests {
         std::fs::write(&plain, "x").unwrap();
         assert!(!installer.may_execute(&plain));
         assert!(!installer.may_write(Path::new("/System")));
+    }
+
+    #[allow(clippy::disallowed_methods, reason = "the check's own codesign, which signs and strips the fake bundle")]
+    fn codesign(args: &[&str]) {
+        let out = std::process::Command::new("/usr/bin/codesign").args(args).output().unwrap();
+        assert!(out.status.success(), "codesign {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// A bundle around a copy of /usr/bin/true, its own signature stripped.
+    fn unsigned_bundle(root: &Path) -> PathBuf {
+        let app = root.join("MightyCode.app");
+        std::fs::create_dir_all(app.join("Contents/MacOS")).unwrap();
+        std::fs::write(
+            app.join("Contents/Info.plist"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict><key>CFBundleIdentifier</key><string>dev.mightycode.native</string><key>CFBundleExecutable</key><string>MightyCode</string></dict></plist>\n",
+        )
+        .unwrap();
+        let binary = app.join("Contents/MacOS/MightyCode");
+        std::fs::copy("/usr/bin/true", &binary).unwrap();
+        codesign(&["--remove-signature", binary.to_str().unwrap()]);
+        app
+    }
+
+    /// Review M-H 1, the Security framework half: this test binary (signed ad hoc by the linker) has no team; a bundle is valid only once
+    /// signed and untouched since, and an ad hoc one never meets a team's requirement.
+    #[test]
+    fn a_bundles_signature_is_checked_strictly_and_against_a_team() {
+        let installer = MacUpdateInstaller::new(Arc::new(StdDetached));
+        assert_eq!(installer.running_team().unwrap(), None);
+        let root = Temp::new("signature");
+        let app = unsigned_bundle(&root.0);
+        assert!(!installer.code_signature_valid(&app, None).unwrap(), "unsigned");
+        codesign(&["-f", "-s", "-", app.to_str().unwrap()]);
+        assert!(installer.code_signature_valid(&app, None).unwrap(), "signed ad hoc");
+        let team = "anchor apple generic and certificate leaf[subject.OU] = \"ABCDE12345\"";
+        assert!(!installer.code_signature_valid(&app, Some(team)).unwrap(), "ad hoc meets no team");
+        let info = app.join("Contents/Info.plist");
+        let text = std::fs::read_to_string(&info).unwrap();
+        std::fs::write(&info, text.replace("dev.mightycode.native", "dev.mightycode.nativf")).unwrap();
+        assert!(!installer.code_signature_valid(&app, None).unwrap(), "changed after signing");
+        assert!(installer.code_signature_valid(&root.0.join("missing.app"), None).is_ok_and(|valid| !valid));
+        let private = root.0.join("updates");
+        std::fs::create_dir_all(&private).unwrap();
+        installer.make_private(&private).unwrap();
+        assert_eq!(mode(&private), 0o700);
+    }
+
+    /// Review M-H 6: a link planted where the partial script goes is replaced, never written through.
+    #[test]
+    fn a_planted_link_is_never_written_through() {
+        let folder = Temp::new("link");
+        let target = folder.0.join("target");
+        std::fs::write(&target, "untouched").unwrap();
+        std::os::unix::fs::symlink(&target, folder.0.join(format!(".{SCRIPT_NAME}.{}", std::process::id()))).unwrap();
+        MacUpdateInstaller::new(Arc::new(StdDetached)).start_install_script("#!/bin/sh\necho done\n", &folder.0).unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "untouched");
+        assert_eq!(std::fs::read_to_string(folder.0.join(SCRIPT_NAME)).unwrap(), "#!/bin/sh\necho done\n");
+        wait_for(&folder.0.join(LOG_NAME), "done");
     }
 
     /// Plan D7: only a bundle directly in /Applications or ~/Applications counts, compared canonically.

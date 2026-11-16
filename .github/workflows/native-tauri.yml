@@ -192,6 +192,15 @@ jobs:
           }
           if ($bad.Count -gt 0) { $bad; throw "$($bad.Count) guard violation(s)" }
           "checked $($files.Count) Rust files"
+      - name: The Mac update's temporary direct TLS is gone once M-C's HTTPS backs it
+        # Mac stage review M-H 3: update_transport.rs's DirectTls (no system proxy) only until the integrator implements its Connect for
+        # M-C's MacHttps; from then on no file may name it.
+        run: |
+          $files = Get-ChildItem -Recurse -File -Filter *.rs | Where-Object { $_.FullName -notmatch '[\\/](target|node_modules)[\\/]' }
+          $wired = $files | Select-String -Pattern 'impl\s+(\S+::)*Connect\s+for\s+MacHttps' -List
+          $left = $files | Select-String -Pattern '\bDirectTls\b' -List
+          if ($wired -and $left) { $left | ForEach-Object { "$($_.Path):$($_.LineNumber)" }; throw 'DirectTls is still named after MacHttps backs the update transport' }
+          if ($wired) { 'MacHttps backs the update transport; DirectTls is gone' } else { 'MacHttps not wired yet: DirectTls stays (temporary)' }
 
   package:
     # The release candidate in the 0.4.x shape (W9 plan §1.6, D10, D13, D15): what native-windows.yml builds from the C# app, here from

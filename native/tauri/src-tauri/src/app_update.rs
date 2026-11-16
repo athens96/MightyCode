@@ -21,7 +21,8 @@
 //!
 //! **The Mac (M-H).** The platform's profile (`update_package`) chooses the Mac's rules, no `cfg`: the install is the running `.app`, the
 //! manifest's `macos` package is checked against this Mac's version, staging is `/usr/bin/ditto` through the process host and Swift's
-//! bundle check ([`mac_stager`]), staging never waits for another process (Swift has no such wait), and the hand-off is Swift's
+//! bundle check, then (stricter than Swift, review M-H 1-2) the staged bundle's code signature for this app and its tree's digest
+//! ([`mac_stager`]), staging never waits for another process (Swift has no such wait), and the hand-off is Swift's
 //! `install.sh` ([`launch_mac`]: mighty-updates' `install_script::prepare`, then the platform's `start_install_script`); after "restart
 //! now" a watchdog ends the process [`QUIT_WATCHDOG`] after the quit began (Swift `quitForAppUpdate`). The housekeeping at start is
 //! Swift's `discardStaleAppUpdates`.
@@ -737,20 +738,21 @@ pub fn launch_mac(
     locale: &Locale,
     plan: &InstallPlan,
     recheck: bool,
+    staged_trees: &StagedTrees,
     quit: &dyn Fn(),
 ) -> Result<(), String> {
     let exe = std::env::current_exe().ok();
     let running =
         exe.as_deref().and_then(Path::file_name).map_or_else(|| "MightyCode".to_string(), |name| name.to_string_lossy().into_owned());
-    let prepared = install_script::prepare(
-        plan,
-        &running,
-        plan.app_process_id,
-        recheck,
-        &|folder| installer.may_write(folder),
-        &|file| installer.may_execute(file),
-        locale,
-    )?;
+    let tree = lock(staged_trees).get(&plan.staged_directory).cloned();
+    let signature = |bundle: &Path| signed_for_this_app(installer, bundle);
+    let seams = install_script::MacSeams {
+        may_write: &|folder| installer.may_write(folder),
+        may_execute: &|file| installer.may_execute(file),
+        signature: &signature,
+        staged_tree: tree.as_deref(),
+    };
+    let prepared = install_script::prepare(plan, &running, plan.app_process_id, recheck, &seams, locale)?;
     installer
         .start_install_script(&prepared.script, &prepared.folder)
         .map_err(|error| locale.get_with("settings.appUpdate.errorInstall", &[("error", &error.to_string())]))?;
@@ -758,6 +760,19 @@ pub fn launch_mac(
         quit();
     }
     Ok(())
+}
+
+/// The staged trees' digests staging recorded, by staged bundle (review M-H 2): what the install checks the tree against.
+pub type StagedTrees = Mutex<std::collections::HashMap<PathBuf, String>>;
+
+/// Review M-H 1: `bundle`'s code signature for this app, through the platform's Security framework calls: the running app's team, if
+/// any, then `stage_mac::check_code_signature`. A running app whose signature cannot be read refuses (fail closed).
+fn signed_for_this_app(installer: &dyn UpdateInstaller, bundle: &Path) -> Result<(), mighty_updates::app_update::UpdateError> {
+    let refused = || mighty_updates::app_update::UpdateError::key("appUpdate.error.bundleIdentity");
+    let team = installer.running_team().map_err(|_| refused())?;
+    stage_mac::check_code_signature(bundle, team.as_deref(), &|bundle, requirement| {
+        installer.code_signature_valid(bundle, requirement).unwrap_or(false)
+    })
 }
 
 /// Swift `AppUpdateService.run("/usr/bin/ditto", ["-x", "-k", package, folder])`: `PATH=/usr/bin:/bin`, in the temporary folder, 300 s;
@@ -772,14 +787,30 @@ async fn ditto(processes: &dyn ProcessHost, package: &Path, folder: &Path) -> Re
     if captured.exit_code == 0 { Ok(()) } else { Err(String::from_utf8_lossy(&captured.stderr).into_owned()) }
 }
 
-/// The Mac's unpacking (Swift `AppUpdateService.stage`): `ditto` through `processes`, then the one bundle checked, its executable asked
-/// of `installer`.
-pub fn mac_stager(processes: Arc<dyn ProcessHost>, installer: Arc<dyn UpdateInstaller>) -> Stager {
+/// The Mac's unpacking (Swift `AppUpdateService.stage`): the updates folders made private, `ditto` through `processes`, the one bundle
+/// checked (its executable asked of `installer`), then (review M-H 1, 2) its code signature for this app and its tree's digest kept in
+/// `trees` for the install.
+pub fn mac_stager(processes: Arc<dyn ProcessHost>, installer: Arc<dyn UpdateInstaller>, trees: Arc<StagedTrees>) -> Stager {
     Arc::new(move |package: PathBuf, destination: PathBuf| {
-        let (processes, installer) = (processes.clone(), installer.clone());
+        let (processes, installer, trees) = (processes.clone(), installer.clone(), trees.clone());
         Box::pin(async move {
+            for folder in package.parent().into_iter().chain(package.parent().and_then(Path::parent)) {
+                let _ = installer.make_private(folder);
+            }
             let unzip = |package: PathBuf, folder: PathBuf| async move { ditto(processes.as_ref(), &package, &folder).await };
-            stage_mac::stage(&package, &destination, stage_mac::BUNDLE_IDENTIFIER, |file: &Path| installer.may_execute(file), unzip).await
+            let may_execute = |file: &Path| installer.may_execute(file);
+            let app = stage_mac::stage(&package, &destination, stage_mac::BUNDLE_IDENTIFIER, may_execute, unzip).await?;
+            let checked = installer.clone();
+            let (bundle, tree) = (app.clone(), app.clone());
+            let digest = tokio::task::spawn_blocking(move || {
+                signed_for_this_app(checked.as_ref(), &bundle)?;
+                stage_mac::tree_digest(&tree, &|file| checked.may_execute(file))
+                    .map_err(|error| mighty_updates::app_update::UpdateError::Plain(error.to_string()))
+            })
+            .await
+            .unwrap_or_else(|join| Err(mighty_updates::app_update::UpdateError::Plain(join.to_string())))?;
+            lock(&trees).insert(app.clone(), digest);
+            Ok(app)
         })
     })
 }
@@ -819,10 +850,11 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
     let installer: Arc<dyn UpdateInstaller> = platform.updates.clone();
     let running = installer.clone();
     options.running_from = Arc::new(move |folder| running.running_from(folder, true).map_err(std::io::Error::other));
+    let staged_trees: Arc<StagedTrees> = Arc::default();
     if package == UpdatePackage::MacBundle {
         options.system_version = installer.system_version();
         options.staging_busy = Some(Arc::new(|| false));
-        options.stage = Some(mac_stager(platform.processes.clone(), installer.clone()));
+        options.stage = Some(mac_stager(platform.processes.clone(), installer.clone(), staged_trees.clone()));
     }
     let (processes, locale, app) = (platform.processes.clone(), host.locale, host.app.clone());
     // The real launcher only where the build may change the machine (never in a smoke or a read-only launch): elsewhere "restart now"
@@ -831,7 +863,7 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
         let launch: LaunchHelper = match package {
             UpdatePackage::WindowsZip => Arc::new(move |plan| launch_helper(processes.as_ref(), &locale, plan, &|| app.exit(0))),
             UpdatePackage::MacBundle => {
-                let (installer, recheck) = (installer.clone(), profile.update_rechecks_sha256);
+                let (installer, recheck, trees) = (installer.clone(), profile.update_rechecks_sha256, staged_trees.clone());
                 Arc::new(move |plan| {
                     let quit = || {
                         app.exit(0);
@@ -840,7 +872,7 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
                             std::process::exit(0);
                         });
                     };
-                    launch_mac(installer.as_ref(), &locale, plan, recheck, &quit)
+                    launch_mac(installer.as_ref(), &locale, plan, recheck, &trees, &quit)
                 })
             }
         };

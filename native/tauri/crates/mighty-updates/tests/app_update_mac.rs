@@ -479,8 +479,11 @@ fn a_mac_install_is_refused_where_the_swift_app_refuses_it() {
     let installed = fake_app(&root.path().join("Applications"), "MightyCode.app", "MightyCode", "dev.mightycode.native", "0.5.0");
     let locale = en();
     let yes = |_: &Path| true;
+    let signed = |_: &Path| Ok(());
+    let tree = stage_mac::tree_digest(&staged, &present).unwrap();
     let prepare = |plan: &InstallPlan, recheck: bool, writable: &dyn Fn(&Path) -> bool| {
-        install_script::prepare(plan, "MightyCode", plan.app_process_id, recheck, writable, &present, &locale)
+        let seams = install_script::MacSeams { may_write: writable, may_execute: &present, signature: &signed, staged_tree: Some(&tree) };
+        install_script::prepare(plan, "MightyCode", plan.app_process_id, recheck, &seams, &locale)
     };
 
     let plan = plan_for(&staged, &installed, &package, true);
@@ -508,7 +511,94 @@ fn a_mac_install_is_refused_where_the_swift_app_refuses_it() {
     assert!(prepare(&digest, true, &yes).unwrap_err().contains("SHA-256 does not match"));
     // Without the profile's re-check the package on disk is not read again.
     assert!(prepare(&digest, false, &yes).is_ok() && prepare(&changed, false, &yes).is_ok());
+
+    // Review M-H 2: the staged tree must be the one staging unpacked (a file changed, or no digest recorded, refuses).
+    std::fs::write(staged.join("Contents").join("MacOS").join("MightyCode"), "#!/bin/sh\necho changed\n").unwrap();
+    assert!(prepare(&plan, true, &yes).unwrap_err().contains("SHA-256 does not match"));
+    assert!(prepare(&plan, false, &yes).is_ok());
+    let unrecorded = install_script::MacSeams { may_write: &yes, may_execute: &present, signature: &signed, staged_tree: None };
+    assert!(install_script::prepare(&plan, "MightyCode", 1, true, &unrecorded, &locale).is_err());
+
+    // Review M-H 1: a signature the platform refuses stops the install before any script.
+    let unsigned = |_: &Path| Err(UpdateError::key("appUpdate.error.bundleIdentity"));
+    let refusing = install_script::MacSeams { may_write: &yes, may_execute: &present, signature: &unsigned, staged_tree: None };
+    let refused = install_script::prepare(&plan, "MightyCode", 1, false, &refusing, &locale).unwrap_err();
+    assert!(refused.starts_with("The check right before installing failed: The package's app bundle isn't Mighty Code"), "{refused}");
+
+    // Review M-H 4: only a bundle named as the app is staged; a renamed install is replaced in place, never beside it.
+    let odd = fake_app(&updates.join(STAGED_FOLDER), "Other.app", "MightyCode", "dev.mightycode.native", "0.5.1");
+    assert!(prepare(&plan_for(&odd, &installed, &package, false), false, &yes).unwrap_err().contains("isn't Mighty Code"));
+    let renamed = fake_app(&root.path().join("Applications"), "Mighty Code Old.app", "MightyCode", "dev.mightycode.native", "0.5.0");
+    let in_place = prepare(&plan_for(&staged, &renamed, &package, false), false, &yes).unwrap();
+    assert_eq!(in_place.script, install_script(&staged, &renamed, Some(&renamed), "MightyCode", 4242, false));
+    let old_name = fake_app(&root.path().join("Applications"), "MightyClaude.app", "MightyClaude", "dev.mightyclaude.native", "0.4.0");
+    let beside = prepare(&plan_for(&staged, &old_name, &package, false), false, &yes).unwrap();
+    let landing = root.path().join("Applications").join("MightyCode.app");
+    assert_eq!(beside.script, install_script(&staged, &landing, Some(&old_name), "MightyCode", 4242, false));
     assert!(PlatformProfile::macos().update_rechecks_sha256 && PlatformProfile::macos().update_package == UpdatePackage::MacBundle);
+}
+
+/// Review M-H 1 (stricter than Swift, Sparkle's rule): a team-signed app asks the same team of the staged bundle; an ad hoc or unsigned
+/// one (development, CI) asks for the strict validity alone.
+#[test]
+fn a_staged_bundle_must_be_signed_by_the_running_apps_team() {
+    let bundle = Path::new("/tmp/updates/0.5.1/staged/MightyCode.app");
+    let asked = Mutex::new(Vec::new());
+    let team_signed = |signed_by: Option<&'static str>| {
+        move |_: &Path, requirement: Option<&str>| {
+            // The platform's answer for a bundle signed by `signed_by`: valid, and meeting a team requirement only for that team.
+            requirement.is_none_or(|requirement| signed_by.is_some_and(|team| requirement == stage_mac::team_requirement(team)))
+        }
+    };
+    let record = |requirement: Option<&str>| asked.lock().unwrap().push(requirement.map(String::from));
+    // The same team.
+    let same = team_signed(Some("ABCDE12345"));
+    assert_eq!(
+        stage_mac::check_code_signature(bundle, Some("ABCDE12345"), &|b, r| {
+            record(r);
+            same(b, r)
+        }),
+        Ok(())
+    );
+    assert_eq!(
+        asked.lock().unwrap().last().cloned().flatten().as_deref(),
+        Some("anchor apple generic and certificate leaf[subject.OU] = \"ABCDE12345\"")
+    );
+    // Another team, or ad hoc, under a team-signed app.
+    for signed_by in [Some("ZZZZZ99999"), None] {
+        let other = team_signed(signed_by);
+        assert_eq!(
+            stage_mac::check_code_signature(bundle, Some("ABCDE12345"), &other),
+            Err(UpdateError::key("appUpdate.error.bundleIdentity"))
+        );
+    }
+    // An ad hoc running app: strict validity only, no team asked.
+    let adhoc = team_signed(None);
+    assert_eq!(
+        stage_mac::check_code_signature(bundle, None, &|b, r| {
+            record(r);
+            adhoc(b, r)
+        }),
+        Ok(())
+    );
+    assert_eq!(asked.lock().unwrap().last().cloned(), Some(None));
+    assert_eq!(stage_mac::check_code_signature(bundle, None, &|_, _| false), Err(UpdateError::key("appUpdate.error.bundleIdentity")));
+    assert!(!stage_mac::team_requirement("A\"B").contains("A\"B"), "a team id never closes the requirement's quotes");
+}
+
+/// Review M-H 2: the tree digest changes with a file's contents, its executable bit, a new entry or a link's target.
+#[test]
+fn the_staged_trees_digest_follows_its_contents() {
+    let root = Temp::new();
+    let app = fake_app(root.path(), "MightyCode.app", "MightyCode", "dev.mightycode.native", "0.5.1");
+    let first = stage_mac::tree_digest(&app, &present).unwrap();
+    assert_eq!(stage_mac::tree_digest(&app, &present).unwrap(), first);
+    assert_ne!(stage_mac::tree_digest(&app, &|_| false).unwrap(), first, "the executable bit counts");
+    std::fs::write(app.join("Contents").join("extra"), "x").unwrap();
+    let second = stage_mac::tree_digest(&app, &present).unwrap();
+    assert_ne!(second, first);
+    std::fs::write(app.join("Contents").join("extra"), "y").unwrap();
+    assert_ne!(stage_mac::tree_digest(&app, &present).unwrap(), second);
 }
 
 /// Swift `validate` on everything but the executable bit (the platform's): the id or its successor, no `/` in the executable's name, the
@@ -559,6 +649,12 @@ async fn staging_wants_exactly_one_app_from_the_unzip() {
     assert!(!destination.join("leftover").exists(), "the folder is made afresh");
     let none = stage_mac::stage(&package, &destination, stage_mac::BUNDLE_IDENTIFIER, present, |_, _| async { Ok(()) }).await;
     assert_eq!(none, Err(UpdateError::Key { key: "appUpdate.error.bundleCount", args: vec![("count", "0".into())] }));
+    let odd = stage_mac::stage(&package, &destination, stage_mac::BUNDLE_IDENTIFIER, present, |_, folder: PathBuf| async move {
+        fake_app(&folder, "Other.app", "MightyCode", "dev.mightycode.native", "0.5.1");
+        Ok(())
+    })
+    .await;
+    assert_eq!(odd, Err(UpdateError::key("appUpdate.error.bundleIdentity")), "review M-H 4: only the app's own names");
     let one = stage_mac::stage(&package, &destination, stage_mac::BUNDLE_IDENTIFIER, present, |_, folder: PathBuf| async move {
         fake_app(&folder, "MightyCode.app", "MightyCode", "dev.mightycode.native", "0.5.1");
         Ok(())

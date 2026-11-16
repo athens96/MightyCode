@@ -208,40 +208,65 @@ impl std::fmt::Debug for MacInstall {
     }
 }
 
+/// What [`prepare`] asks of the platform and of staging.
+pub struct MacSeams<'a> {
+    /// Whether this user may write a folder (`access(2)`).
+    pub may_write: &'a dyn Fn(&Path) -> bool,
+    /// Whether this user may run a file (`access(2)`).
+    pub may_execute: &'a dyn Fn(&Path) -> bool,
+    /// The staged bundle's code signature for this app ([`super::stage_mac::check_code_signature`] with the running app's team; review
+    /// M-H 1).
+    pub signature: &'a dyn Fn(&Path) -> Result<(), super::UpdateError>,
+    /// The staged tree's digest staging recorded ([`super::stage_mac::tree_digest`]; review M-H 2): a re-checked install whose tree has
+    /// none, or another, is refused.
+    pub staged_tree: Option<&'a str>,
+}
+
 /// The Mac's checks before the helper starts (Swift `prepareAppUpdateInstall` then `verify`), in Swift's order and words: `plan`'s
-/// install folder is the running `.app` and its folder is writable (`may_write`); the staged bundle passes
-/// [`super::stage_mac::validate`] within the package's folder (`may_execute` asks for the executable); the script for this process
-/// (`pid`, its executable's name `running_executable`, `plan.relaunch`); then, with `recheck`, the package's size and SHA-256 on disk
-/// (read here: call it off any thread that must stay responsive).
+/// install folder is the running `.app` and its folder is writable; the staged bundle is named as a Mighty Code bundle
+/// ([`super::stage_mac::STAGED_NAMES`]), passes [`super::stage_mac::validate`] within the package's folder and its code signature
+/// (`seams.signature`); the script for this process (`pid`, its executable's name `running_executable`, `plan.relaunch`), landing beside
+/// the installed app under the staged name when the installed one is named as the app ([`super::stage_mac::REPLACED_NAMES`]), else in
+/// its place; then, with `recheck`, the package's size and SHA-256 on disk and the staged tree's digest (read here: call it off any
+/// thread that must stay responsive). Stricter than Swift: the names, the signature and the tree (review M-H 1, 2, 4).
 pub fn prepare(
     plan: &InstallPlan,
     running_executable: &str,
     pid: i32,
     recheck: bool,
-    may_write: &dyn Fn(&Path) -> bool,
-    may_execute: &dyn Fn(&Path) -> bool,
+    seams: &MacSeams<'_>,
     locale: &Locale,
 ) -> Result<MacInstall, String> {
+    use super::stage_mac;
     let installed = &plan.install_directory;
     let parent = installed.parent().unwrap_or(Path::new("/"));
-    if installed.extension().and_then(|e| e.to_str()) != Some("app") || !may_write(parent) {
+    if installed.extension().and_then(|e| e.to_str()) != Some("app") || !(seams.may_write)(parent) {
         return Err(locale.get_with("settings.appUpdate.errorNotWritable", &[("path", &url_path(installed))]));
     }
     let staged = &plan.staged_directory;
     let folder = plan.package_path.parent().map(Path::to_path_buf).unwrap_or_default();
-    if let Err(error) = super::stage_mac::validate(staged, Some(&folder), super::stage_mac::BUNDLE_IDENTIFIER, may_execute) {
-        return Err(locale.get_with("settings.appUpdate.errorPreflight", &[("error", &error.message(locale))]));
+    let preflight = |error: super::UpdateError| locale.get_with("settings.appUpdate.errorPreflight", &[("error", &error.message(locale))]);
+    if !stage_mac::named_one_of(staged, &stage_mac::STAGED_NAMES) {
+        return Err(preflight(super::UpdateError::key("appUpdate.error.bundleIdentity")));
     }
-    let script = install_script(staged, &destination(installed, staged), Some(installed), running_executable, pid, plan.relaunch);
+    stage_mac::validate(staged, Some(&folder), stage_mac::BUNDLE_IDENTIFIER, seams.may_execute).map_err(preflight)?;
+    (seams.signature)(staged).map_err(preflight)?;
+    let landing =
+        if stage_mac::named_one_of(installed, &stage_mac::REPLACED_NAMES) { destination(installed, staged) } else { installed.clone() };
+    let script = install_script(staged, &landing, Some(installed), running_executable, pid, plan.relaunch);
     if recheck {
         let refused = |key: &str| locale.get_with("settings.appUpdate.errorInstall", &[("error", &locale.get(key))]);
+        let failed = |error: std::io::Error| locale.get_with("settings.appUpdate.errorInstall", &[("error", &error.to_string())]);
         let size = std::fs::metadata(&plan.package_path).map(|m| i64::try_from(m.len()).unwrap_or(i64::MAX)).unwrap_or(-1);
         if size != plan.size {
             return Err(refused("settings.appUpdate.errorSizeMismatch"));
         }
-        let digest = super::service::sha256(&plan.package_path)
-            .map_err(|error| locale.get_with("settings.appUpdate.errorInstall", &[("error", &error.to_string())]))?;
+        let digest = super::service::sha256(&plan.package_path).map_err(failed)?;
         if !digest.eq_ignore_ascii_case(&plan.sha256) {
+            return Err(refused("settings.appUpdate.errorDigestMismatch"));
+        }
+        let tree = stage_mac::tree_digest(staged, seams.may_execute).map_err(failed)?;
+        if seams.staged_tree != Some(tree.as_str()) {
             return Err(refused("settings.appUpdate.errorDigestMismatch"));
         }
     }

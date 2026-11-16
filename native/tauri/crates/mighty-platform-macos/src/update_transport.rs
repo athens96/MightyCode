@@ -40,7 +40,11 @@ impl Connect for DirectTls {
         Box::pin(async move {
             let stream = tokio::net::TcpStream::connect((host, port)).await?;
             let _ = stream.set_nodelay(true);
-            let connector = native_tls::TlsConnector::new().map_err(|_| PlatformError::Refused("TLS is not available".into()))?;
+            // Review M-H 3: TLS 1.2 at the least.
+            let connector = native_tls::TlsConnector::builder()
+                .min_protocol_version(Some(native_tls::Protocol::Tlsv12))
+                .build()
+                .map_err(|_| PlatformError::Refused("TLS is not available".into()))?;
             let stream = tokio_native_tls::TlsConnector::from(connector)
                 .connect(host, stream)
                 .await
