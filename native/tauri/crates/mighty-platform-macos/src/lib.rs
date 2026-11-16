@@ -11,7 +11,7 @@
 //! | [`agent_io`], [`net`], [`proxy`], [`http`] | M-C | `AgentIOSocketServer`, `RelayLink`, `RemoteWorkspace` |
 //! | [`terminal_surface`] | M-D | `LocalTerminalSession`, `HostTerminalView`, vendored `GhosttyTerminal` (behaviour reference) |
 //! | [`browser`] | M-E | `CefBrowserEngine`, `CefBrowserRuntime`, `BrowserPaneView`, `BrowserBridge/cef_bridge.m` |
-//! | [`notify`], [`pet`], [`session`], [`input_method`] | M-F | `AgentCompanion`, `AgentCompanionViews`, `InputMethodDiagnostics` |
+//! | [`notify`], [`pet`], [`session`], [`input_method`], [`menu`] | M-F | `AgentCompanion`, `AgentCompanionViews`, `InputMethodDiagnostics` |
 //! | [`files`], [`setup`], [`page`] | M-G | (Windows' files ports), `HelpCaptureDiagnostics` |
 //! | [`update`], [`update_transport`] | M-H | `AppUpdate`, `AppStore+AppUpdate` |
 //! | [`formats`] | M-J | `NSLocale` uses |
@@ -32,6 +32,8 @@ pub mod fonts;
 pub mod formats;
 pub mod http;
 pub mod input_method;
+/// M-F: the menu bar read back and a key equivalent pressed through it (the smoke).
+pub mod menu;
 pub mod net;
 pub mod notify;
 pub mod page;

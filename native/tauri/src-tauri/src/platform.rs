@@ -429,3 +429,113 @@ impl mighty_core::browser::BrowserInstaller for BrowserInstaller {
         os::run_installer(path)
     }
 }
+
+// ── M-F: the Mac's menu bar, input method and pet panel (menu.rs, smoke_companion.rs). Windows has none of them. ──
+
+/// Whether the app has a menu bar of its own (the Mac; Windows' window has none).
+pub fn has_menu_bar() -> bool {
+    cfg!(target_os = "macos")
+}
+
+/// AppKit told which menus are the Window and Help menus (its window list and its help search go there).
+pub fn name_standard_menus(window: &tauri::menu::Submenu<tauri::Wry>, help: &tauri::menu::Submenu<tauri::Wry>) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        window.set_as_windows_menu_for_nsapp()?;
+        help.set_as_help_menu_for_nsapp()
+    }
+    #[cfg(windows)]
+    {
+        let _ = (window, help);
+        Ok(())
+    }
+}
+
+/// The menu bar as AppKit holds it (main thread): each item's menu, title, key equivalent and modifier bits (`os::menu`).
+pub fn menu_entries() -> Option<Vec<(String, String, String, u64)>> {
+    #[cfg(target_os = "macos")]
+    return os::menu::entries().map(|items| items.into_iter().map(|i| (i.menu, i.title, i.key, i.modifiers)).collect());
+    #[cfg(windows)]
+    None
+}
+
+/// A key equivalent pressed through the menu bar (main thread): whether an item took it.
+pub fn press_menu_key(key: &str, code: u16, modifiers: u64) -> Option<bool> {
+    #[cfg(target_os = "macos")]
+    return os::menu::press(key, code, modifiers);
+    #[cfg(windows)]
+    {
+        let _ = (key, code, modifiers);
+        None
+    }
+}
+
+/// "Reconnect Input Method": the page's webview takes the keyboard back; the locale key of how it ended.
+pub async fn reconnect_input_method(page: &tauri::Webview) -> std::result::Result<&'static str, String> {
+    #[cfg(target_os = "macos")]
+    return os::input_method::reconnect(page).await.map(|done| done.key()).map_err(|e| e.to_string());
+    #[cfg(windows)]
+    {
+        let _ = page;
+        Err("not on this platform".into())
+    }
+}
+
+/// "Save Input Method Diagnostics": the snapshot written under `<data>/diagnostics`; its path.
+pub async fn save_input_diagnostics(page: &tauri::Webview, data_dir: &std::path::Path) -> std::result::Result<PathBuf, String> {
+    #[cfg(target_os = "macos")]
+    return os::input_method::save_diagnostics(page, data_dir).await.map_err(|e| e.to_string());
+    #[cfg(windows)]
+    {
+        let _ = (page, data_dir);
+        Err("not on this platform".into())
+    }
+}
+
+/// The last pet panel's facts as the smoke reads them back (main thread): what Swift's `CompanionPanel` sets, each true when it
+/// holds. None where the pet is no panel (Windows: its window's own `focus` says what it can).
+pub fn pet_panel_facts() -> Option<Vec<(&'static str, bool)>> {
+    #[cfg(target_os = "macos")]
+    return os::pet::panel_facts();
+    #[cfg(windows)]
+    None
+}
+
+/// A new file at `path` (never through an existing file or link) holding `bytes`, executable from the start (0755 on the Mac); removed
+/// again if the write fails (shell_command.rs).
+pub fn write_new_executable(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(target_os = "macos")]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o755);
+    let mut file = options.open(path)?;
+    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Whether the OS lets the app notify, where the OS keeps its own answer (the Mac's notification settings): Some(Some(true)) allowed,
+/// Some(Some(false)) denied, Some(None) not asked yet; None where the registration is the answer (Windows) or the OS cannot say.
+pub async fn notification_authorization() -> Option<Option<bool>> {
+    #[cfg(target_os = "macos")]
+    return os::notify::authorized().await;
+    #[cfg(windows)]
+    None
+}
+
+/// A menu item (by its title) given a ⌘ character key equivalent, on the main thread after the menu is in (menu.rs).
+pub fn set_menu_character_key(app: &tauri::AppHandle, title: &str, key: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let (title, key) = (title.to_string(), key.to_string());
+        let _ = app.run_on_main_thread(move || {
+            os::menu::set_command_key(&title, &key);
+        });
+    }
+    #[cfg(windows)]
+    let _ = (app, title, key);
+}

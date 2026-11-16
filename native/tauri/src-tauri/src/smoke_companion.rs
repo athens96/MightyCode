@@ -11,6 +11,9 @@
 //! buttons, a long plan's scroll, the paw, and the window at 150% and 200%. The status bar's popover is opened in the page and closed
 //! with Esc (C#'s dialogs smoke, `checks["companion"]`).
 //!
+//! On the Mac (M-F) the step also reads back the NSPanel and the front app, and checks the menu bar, a deep link and the completion
+//! notification (`MAC_KEYS`, under the report's `mac`); Windows' report and checks do not change.
+//!
 //! The review, written-answer and plan buttons focus the pane's own card (D10): C#'s two extra windows (`ShowCompanionApproval`,
 //! `ShowCompanionPlan`) have no page counterpart, so their checks are not here.
 
@@ -50,6 +53,274 @@ const KEYS: [&str; 9] = [
     "renderedOverlaySnapshots",
 ];
 
+/// Mac stage (M-F, plan §3 M-F's smoke keys): the menu bar read back through `NSApp.mainMenu` (every item of the app's own with its
+/// words and ⌘ keys, the Workspace menu, the Edit menu's copy and paste), ⌘K, ⌘T, ⌘, and ⌘= pressed through it as AppKit sends a key
+/// equivalent no view took (`performKeyEquivalent:`) reaching their items, a `mightycode://open` link delivered in process (the draft
+/// set, nothing sent, the window left where it was), the completion notification as the smoke's notifier gets it (its click names the
+/// pane), the pet's NSPanel read back as Swift's `CompanionPanel` sets it, and the front app unchanged across the step.
+const MAC_KEYS: [&str; 6] =
+    ["menuInstalled", "menuKeyEquivalents", "deepLinkOpened", "notificationRequested", "companionPanel", "frontAppUnchanged"];
+
+/// The Mac's keys where the app has a menu bar (the Mac), none elsewhere.
+fn mac_keys() -> &'static [&'static str] {
+    if crate::platform::has_menu_bar() { &MAC_KEYS } else { &[] }
+}
+
+/// The report's `mac` object, made on first use.
+fn mac_report(checks: &mut Map<String, Value>) -> &mut Map<String, Value> {
+    let entry = checks.entry("mac").or_insert_with(|| json!({}));
+    if !entry.is_object() {
+        *entry = json!({});
+    }
+    entry.as_object_mut().expect("made an object above")
+}
+
+/// Runs `work` on the main thread (AppKit's) and waits for it, at most 5 s.
+async fn on_main<T: Send + 'static>(host: &Host, work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    host.app
+        .run_on_main_thread(move || {
+            let _ = answer.send(work());
+        })
+        .ok()?;
+    tokio::time::timeout(Duration::from_secs(5), answered).await.ok()?.ok()
+}
+
+/// The menu, the deep link and the notification (the pet's panel and the front app are read in [`run`], while the pet is open).
+/// Each part bounded and the whole within [`MAC_LIMIT`] (review item 4: the Mac smoke runs near its own limit).
+async fn mac_checks(host: &Arc<Host>, checks: &mut Map<String, Value>) {
+    let bounded = async {
+        let menu = bound(MENU_LIMIT, "the menu bar", menu_installed(host)).await;
+        let keys = bound(MENU_LIMIT, "the menu's keys", menu_keys(host)).await;
+        let link = bound(LINK_LIMIT, "the deep link", deep_link(host)).await;
+        let notification = notification_requested(host, link.as_ref().ok().and_then(|p| p.as_deref())).await;
+        (menu, keys, link, notification)
+    };
+    let (menu, keys, link, notification) = match tokio::time::timeout(MAC_LIMIT, bounded).await {
+        Ok(outcomes) => outcomes,
+        Err(_) => {
+            let late = || Err::<bool, String>(format!("the Mac checks took over {} s", MAC_LIMIT.as_secs()));
+            crate::menu::set_recorder(None);
+            (late(), late(), Err(format!("the Mac checks took over {} s", MAC_LIMIT.as_secs())), late())
+        }
+    };
+    let report = mac_report(checks);
+    let outcomes = [
+        ("menuInstalled", menu),
+        ("menuKeyEquivalents", keys),
+        ("deepLinkOpened", link.map(|pane| pane.is_some())),
+        ("notificationRequested", notification),
+    ];
+    for (key, outcome) in outcomes {
+        match outcome {
+            Ok(held) => {
+                report.insert(key.into(), json!(held));
+            }
+            Err(why) => {
+                report.insert(key.into(), json!(false));
+                report.insert(format!("{key}Error"), json!(why));
+            }
+        }
+    }
+}
+
+/// The Mac checks' bounds: the whole, the menu's two, the deep link's (its page wait included).
+const MAC_LIMIT: Duration = Duration::from_secs(20);
+const MENU_LIMIT: Duration = Duration::from_secs(5);
+const LINK_LIMIT: Duration = Duration::from_secs(8);
+
+async fn bound<T>(limit: Duration, what: &str, work: impl std::future::Future<Output = Result<T, String>>) -> Result<T, String> {
+    tokio::time::timeout(limit, work).await.unwrap_or_else(|_| Err(format!("{what} took over {} s", limit.as_secs())))
+}
+
+/// `menu.rs`'s accelerator as AppKit keeps it: the key and the modifier bits (⇧ 1<<17, ⌃ 1<<18, ⌥ 1<<19, ⌘ 1<<20).
+fn equivalent(accelerator: &str) -> (String, u64) {
+    let mut modifiers = 0u64;
+    let mut key = String::new();
+    for part in accelerator.split('+') {
+        match part {
+            "Cmd" => modifiers |= 1 << 20,
+            "Shift" => modifiers |= 1 << 17,
+            "Ctrl" => modifiers |= 1 << 18,
+            "Alt" => modifiers |= 1 << 19,
+            other => key = other.to_lowercase(),
+        }
+    }
+    (key, modifiers)
+}
+
+/// An AppKit item's key equivalent the same way (an upper-case letter is its lower case with ⇧).
+fn normalized(key: &str, modifiers: u64) -> (String, u64) {
+    let shifted = key.chars().count() == 1 && key.chars().all(char::is_uppercase);
+    let modifiers = modifiers & ((1 << 17) | (1 << 18) | (1 << 19) | (1 << 20));
+    (key.to_lowercase(), if shifted { modifiers | (1 << 17) } else { modifiers })
+}
+
+async fn menu_installed(host: &Arc<Host>) -> Result<bool, String> {
+    // The menu is made once the host is managed: given a moment at most.
+    let (settings, help) = (host.locale.get("menu.settings"), host.locale.get("menu.help"));
+    let mut entries = Vec::new();
+    // One deadline for the whole wait (each read is a main-thread round trip).
+    let end = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < end {
+        entries = on_main(host, crate::platform::menu_entries).await.flatten().unwrap_or_default();
+        // Its ⌘? is set just after the menu is in (menu.rs `character_key`).
+        if entries.iter().any(|(_, title, _, _)| *title == settings)
+            && entries.iter().any(|(_, title, key, _)| *title == help && !key.is_empty())
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let workspace = host.locale.get("menu.workspace");
+    require(entries.iter().any(|(menu, _, _, _)| *menu == workspace), "the menu bar has no Workspace menu")?;
+    for item in crate::menu::items() {
+        let title = host.locale.get(item.key);
+        let found = entries.iter().find(|(_, t, _, _)| *t == title).ok_or_else(|| format!("the menu bar has no item {title:?}"))?;
+        if let Some(accelerator) = item.accelerator {
+            require(
+                normalized(&found.2, found.3) == equivalent(accelerator),
+                &format!("the item {title:?} has the key {:?} {:#x}, not {accelerator}", found.2, found.3),
+            )?;
+        }
+    }
+    for (key, what) in [("c", "copy"), ("v", "paste")] {
+        let command = (key.to_string(), 1u64 << 20);
+        require(entries.iter().any(|(_, _, k, m)| normalized(k, *m) == command), &format!("the Edit menu has no {what}"))?;
+    }
+    Ok(true)
+}
+
+async fn menu_keys(host: &Arc<Host>) -> Result<bool, String> {
+    let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+    let recorded = seen.clone();
+    crate::menu::set_recorder(Some(Arc::new(move |id: &str| lock(&recorded).push(id.to_string()))));
+    let mut taken = Vec::new();
+    // ⌘K, ⌘T, ⌘, and ⌘= (their virtual keys on a US layout).
+    for (key, code) in [("k", 40u16), ("t", 17), (",", 43), ("=", 24)] {
+        taken.push(on_main(host, move || crate::platform::press_menu_key(key, code, 1 << 20)).await.flatten() == Some(true));
+    }
+    let expected = ["search", "newShell", "settings", "textLarger"];
+    let reached = wait("the menu's items chosen", 3, || (lock(&seen).len() >= expected.len()).then_some(())).await;
+    crate::menu::set_recorder(None);
+    let seen = lock(&seen).clone();
+    reached.map_err(|why| format!("{why}: {seen:?}, taken {taken:?}"))?;
+    require(taken.iter().all(|t| *t), &format!("the menu bar did not take every key: {taken:?}"))?;
+    require(seen == expected, &format!("the keys reached {seen:?}"))?;
+    Ok(true)
+}
+
+/// A link to a local workspace with a folder and its one agent pane of a provider (so nothing is added), delivered in process: the
+/// draft gets the words, nothing runs, and everything is put back after. The pane the words went to.
+async fn deep_link(host: &Arc<Host>) -> Result<Option<String>, String> {
+    let (folder, pane, provider, active, selected) = {
+        let view = host.view();
+        let snapshot = &view.snapshot;
+        let agents = |workspace: &str| -> Vec<(String, String)> {
+            snapshot
+                .sessions()
+                .iter()
+                .filter(|s| s.workspace_id() == workspace && s.kind() == "claude" && s.parent_session_id.is_none())
+                .map(|s| (s.id().to_string(), s.provider().to_string()))
+                .collect()
+        };
+        let target = snapshot
+            .workspaces()
+            .iter()
+            .filter(|w| w.remote.is_none() && std::path::Path::new(w.path()).is_dir())
+            .find_map(|w| {
+                let panes = agents(w.id());
+                let only = panes.iter().find(|(_, provider)| panes.iter().filter(|(_, p)| p == provider).count() == 1)?.clone();
+                Some((w.path().to_string(), only.0, only.1))
+            })
+            .ok_or("the smoke's profile has no local workspace with a folder and an agent pane")?;
+        (target.0, target.1, target.2, snapshot.active_workspace_id.clone(), snapshot.active_session_id.clone())
+    };
+    // The pane's draft emptied for the link (a draft with words would ask first, review item 1) and put back after.
+    let before = {
+        let mut view = host.view();
+        view.panes.get_mut(&pane).map(|ui| std::mem::take(&mut ui.view.draft)).unwrap_or_default()
+    };
+    let words = format!("smoke deep link {}", mighty_core::wire::new_id());
+    let link = format!("{}&agent={provider}", crate::deep_link::url(&folder, Some(&words)));
+    // Put back whatever happens, a bound cut short included: the draft, then the workspace and the pane that were in front.
+    let _restore = Restore { host: host.clone(), pane: pane.clone(), draft: before, active, selected };
+    let parsed = crate::deep_link::parse(&link).ok_or("the smoke's link did not parse")?;
+    let opened = crate::deep_link::open(host, &parsed, false).await;
+    let (draft, running) = {
+        let view = host.view();
+        (view.panes.get(&pane).map(|ui| ui.view.draft.clone()), host.runs().is_some_and(|r| r.service.is_session_running(&pane)))
+    };
+    let opened = opened?;
+    require(
+        opened.as_deref() == Some(pane.as_str()),
+        &format!("the link's words went to {opened:?}, not the workspace's {provider} pane"),
+    )?;
+    require(draft.as_deref().is_some_and(|d| d.ends_with(&words)), "the link's words are not in the pane's draft")?;
+    require(!running, "the link started a run")?;
+    Ok(opened)
+}
+
+/// What the deep link's check changed, put back when it ends (or is cut short).
+struct Restore {
+    host: Arc<Host>,
+    pane: String,
+    draft: String,
+    active: Option<String>,
+    selected: Option<String>,
+}
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        let mut view = self.host.view();
+        if let Some(ui) = view.panes.get_mut(&self.pane) {
+            ui.view.draft = self.draft.clone();
+            ui.dirty = true;
+        }
+        if let Some(runs) = self.host.runs() {
+            let _ = runs.service.update_draft(&self.pane, &self.draft);
+        }
+        if let Some(active) = &self.active {
+            let _ = crate::frame::select_workspace(&mut view, active);
+        }
+        if let Some(selected) = &self.selected {
+            let _ = crate::frame::select_session(&mut view, selected);
+        }
+    }
+}
+
+/// The completion notification the app makes for the pane (`notifications::completion`, what `on_status` sends), sent and awaited
+/// through a recording notifier (a smoke never notifies for real, review item 3): its title, its body naming the pane's title and none
+/// of its folder or draft, its pane id, and a click that names the pane.
+async fn notification_requested(host: &Arc<Host>, pane: Option<&str>) -> Result<bool, String> {
+    use mighty_platform::Notifier as _;
+    let pane = pane.ok_or("no pane to notify about (the deep link failed)")?;
+    let (title, folder) = {
+        let view = host.view();
+        let session = view.snapshot.session(pane).ok_or("the pane is gone")?;
+        let folder = view.snapshot.workspace(session.workspace_id()).map(|w| w.path().to_string()).unwrap_or_default();
+        (session.title().to_string(), folder)
+    };
+    let notifier = mighty_platform::fake::RecordingNotifier::default();
+    let clicked: Arc<Mutex<Option<String>>> = Arc::default();
+    let recorded = clicked.clone();
+    notifier.on_activated(Arc::new(move |pane| *lock(&recorded) = pane));
+    let made = crate::notifications::completion(&host.locale, pane, &title);
+    notifier.notify(made.clone()).await.map_err(|e| e.to_string())?;
+    notifier.click(0);
+    let shown = notifier.shown();
+    require(shown == [made.clone()], "the notification was not sent as made")?;
+    require(
+        made.title == mighty_core::notifications::text(&host.locale, "NotificationTitle")
+            && made.body.contains(&title)
+            && (folder.is_empty() || !made.body.contains(&folder))
+            && made.pane_id.as_deref() == Some(pane),
+        &format!("the completion notification is not the pane's: {made:?}"),
+    )?;
+    require(lock(&clicked).as_deref() == Some(pane), "the notification's click does not name its pane")?;
+    Ok(true)
+}
+
 /// Starts the step; false when it does not run (no companion, or no native views to open its window with).
 pub fn start(host: &Arc<Host>) -> bool {
     if host.smoke.is_none() || crate::companion::app(host).and_then(|c| c.surfaces()).is_none() {
@@ -60,12 +331,17 @@ pub fn start(host: &Arc<Host>) -> bool {
     tauri::async_runtime::spawn(async move {
         let mut checks = Map::new();
         let outcome = run(&host, &mut checks).await;
+        // Mac stage (M-F): the menu bar, a deep link and the completion notification, checked whatever the pet did.
+        if crate::platform::has_menu_bar() {
+            mac_checks(&host, &mut checks).await;
+        }
         let mut report = Value::Object(checks);
         report["physicalInputTested"] = json!(false);
         report["passed"] = json!(
             outcome.is_ok()
                 && KEYS.iter().all(|key| report.get(*key) == Some(&Value::Bool(true)))
                 && report.get("statusPopover") == Some(&Value::Bool(true))
+                && mac_keys().iter().all(|key| report["mac"].get(*key) == Some(&Value::Bool(true)))
         );
         if let Err(error) = outcome {
             host.log.line(&format!("smoke: companion step failed: {error}"));
@@ -82,6 +358,8 @@ pub fn start(host: &Arc<Host>) -> bool {
 pub fn checks(report: &Value) -> Vec<(&'static str, bool)> {
     let mut checks: Vec<(&'static str, bool)> = KEYS.iter().map(|key| (*key, report.get(*key) == Some(&Value::Bool(true)))).collect();
     checks.push(("companionStatusPopover", report.get("statusPopover") == Some(&Value::Bool(true))));
+    // The Mac's own (none on Windows, whose checks do not change).
+    checks.extend(mac_keys().iter().map(|key| (*key, report["mac"].get(*key) == Some(&Value::Bool(true)))));
     checks.push(("companionPassed", report.get("passed") == Some(&Value::Bool(true))));
     checks
 }
@@ -303,6 +581,8 @@ async fn run(host: &Arc<Host>, checks: &mut Map<String, Value>) -> Result<(), St
     checks.insert("selectedPetPreview".into(), json!(true));
     let (agent, workspace) = agent(host)?;
     let pet = Pet::open(host, Some(atlas.clone())).await?;
+    // The app in front when the pet opened (the high half of `foreground` on the Mac): the same at the end.
+    let front_app = pet.focus().foreground >> 32;
     // The pet's window is never the one in front, and nothing it is told to do moves the front window: compared around each step.
     let mut foreground: u64;
     let kept = |pet: &Pet, foreground: u64| pet.focus().foreground == foreground && pet.aside();
@@ -335,6 +615,14 @@ async fn run(host: &Arc<Host>, checks: &mut Map<String, Value>) -> Result<(), St
     pet.window.show(&scene).map_err(|e| e.to_string())?;
     pet.draw(7, 0).await?;
     require(kept(&pet, foreground), "Companion stole foreground focus.")?;
+    if crate::platform::has_menu_bar() {
+        // The NSPanel as Swift's `CompanionPanel` sets it, read back on the main thread once it is on screen.
+        let facts = on_main(host, crate::platform::pet_panel_facts).await.flatten().unwrap_or_default();
+        let held = !facts.is_empty() && facts.iter().all(|(_, holds)| *holds);
+        let report = mac_report(checks);
+        report.insert("companionPanel".into(), json!(held));
+        report.insert("companionPanelFacts".into(), json!(facts.iter().map(|(k, v)| (k.to_string(), json!(v))).collect::<Map<_, _>>()));
+    }
     tokio::time::sleep(Duration::from_millis(120)).await;
     require(pet.aside(), "Companion stole foreground focus.")?;
     checks.insert("nonActivatingWindow".into(), json!(true));
@@ -495,6 +783,10 @@ async fn run(host: &Arc<Host>, checks: &mut Map<String, Value>) -> Result<(), St
     checks.insert("renderedOverlaySnapshots".into(), json!(captures.len() == 2));
     screenshots.extend(captures);
     checks.insert("screenshots".into(), json!(screenshots));
+    if crate::platform::has_menu_bar() {
+        let unchanged = pet.focus().foreground >> 32 == front_app;
+        mac_report(checks).insert("frontAppUnchanged".into(), json!(unchanged));
+    }
     drop(pet);
     checks.insert("statusPopover".into(), json!(status_popover(host).await?));
     Ok(())
