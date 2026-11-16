@@ -467,6 +467,11 @@ impl Store {
         Ok(workspace)
     }
 
+    /// Whether a save may write `workspace` as it is: the load or the user approved it with this path (and remote reference).
+    pub fn approves(&self, workspace: &Workspace) -> bool {
+        self.approved.get(workspace.id()).is_some_and(|original| original.path == workspace.path && original.remote == workspace.remote)
+    }
+
     /// C# `ApproveRemote`: a workspace another computer shares.
     pub fn approve_remote(
         &mut self,
@@ -521,9 +526,8 @@ impl Store {
             // The remote mirror's workspaces and panes are another computer's, held while connected: never written.
             let normalized = normalize::normalize(&snapshot.without_mirrors(), false).map_err(state_error)?;
             for workspace in normalized.workspaces() {
-                match self.approved.get(workspace.id()) {
-                    Some(original) if original.path == workspace.path && original.remote == workspace.remote => {}
-                    _ => return Err(StateError::PathNotApproved),
+                if !self.approves(workspace) {
+                    return Err(StateError::PathNotApproved);
                 }
             }
             let mut out = JsonOut::new();

@@ -117,23 +117,28 @@ fn screen_now(host: &Host) -> Option<(u32, u32)> {
     window.current_monitor().ok().flatten().map(|m| (m.size().width, m.size().height))
 }
 
-/// The browser and history steps' workspaces live in memory only, never approved by a folder selection, so every save since they were
-/// added failed on them and the shots showed "Save failed: Only paths approved via folder selection may be saved." (both OSes; the
-/// Mac's help shot showed it first). Both steps are done before this one: their workspaces and panes leave, and the banner with them.
+/// The earlier steps' workspaces (the browser, terminal, files and history steps') live in memory only, never approved by a folder
+/// selection, so every save since they were added failed on them and the shots showed "Save failed: Only paths approved via folder
+/// selection may be saved." (both OSes; the Mac's help shot showed it first). Those steps are done before this one: every workspace the
+/// store never approved leaves with its panes, and the banner with them.
 fn leave_finished_steps(host: &Arc<Host>) -> Result<(), String> {
-    let finished = [crate::smoke::WORKSPACE, crate::smoke_history::WORKSPACE];
+    let finished: Vec<String> = host.current().workspaces().iter().filter(|w| !host.approves(w)).map(|w| w.id().to_string()).collect();
+    if finished.is_empty() {
+        host.view().error = None;
+        return Ok(());
+    }
+    let gone = |id: &str| finished.iter().any(|f| f == id);
     host.view().update(|state| {
-        let left: Vec<String> =
-            state.sessions().iter().filter(|p| finished.contains(&p.workspace_id())).map(|p| p.id().to_string()).collect();
-        state.workspaces_mut().retain(|w| !finished.contains(&w.id()));
-        state.sessions_mut().retain(|p| !finished.contains(&p.workspace_id()));
+        let left: Vec<String> = state.sessions().iter().filter(|p| gone(p.workspace_id())).map(|p| p.id().to_string()).collect();
+        state.workspaces_mut().retain(|w| !gone(w.id()));
+        state.sessions_mut().retain(|p| !gone(p.workspace_id()));
         if state.active_session_id.as_ref().is_some_and(|id| left.contains(id)) {
             state.active_session_id = None;
         }
         if let Some(expanded) = state.expanded_workspace_ids.as_mut() {
-            expanded.retain(|id| !finished.contains(&id.as_str()));
+            expanded.retain(|id| !gone(id));
         }
-        if state.active_workspace_id.as_deref().is_some_and(|id| finished.contains(&id)) {
+        if state.active_workspace_id.as_deref().is_some_and(gone) {
             state.active_workspace_id = None;
         }
     })?;

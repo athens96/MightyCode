@@ -336,6 +336,11 @@ impl Host {
     }
 
     /// C# `StateStore.ApproveLocal`: a folder the user picked, as a workspace a save may write (the one listed for it, if any).
+    /// Whether a save may write `workspace` as it is (the store approved it).
+    pub fn approves(&self, workspace: &mighty_core::model::Workspace) -> bool {
+        lock(&self.store).approves(workspace)
+    }
+
     pub fn approve_local(&self, path: &std::path::Path) -> std::io::Result<mighty_core::model::Workspace> {
         lock(&self.store).approve_local(path)
     }
