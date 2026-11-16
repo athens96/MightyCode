@@ -37,6 +37,8 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # M-H, the Mac update (app_update::stage_mac): the staged bundle's Info.plist, XML or binary, as PropertyListSerialization reads it (the
 # crate Tauri already brings).
 plist = "1"
+# M-H: a path in the install script as Foundation's file system representation writes it (HFS+'s decomposition).
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 mighty-composer.workspace = true

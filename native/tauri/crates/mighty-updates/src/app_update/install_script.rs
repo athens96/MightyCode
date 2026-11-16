@@ -49,11 +49,32 @@ fn literal_pattern(value: &str) -> String {
     out
 }
 
-/// A file URL's `path` as Swift prints it: the text given, its trailing `/` dropped (the root stays `/`).
+/// A file URL's `path` as Swift prints it: the text in the file system's representation ([`file_system_representation`]), its
+/// trailing `/` dropped (the root stays `/`).
 fn url_path(path: &Path) -> String {
-    let text = path.to_string_lossy();
+    let text = file_system_representation(&path.to_string_lossy());
     let trimmed = text.trim_end_matches('/');
     if trimmed.is_empty() && text.starts_with('/') { "/".to_string() } else { trimmed.to_string() }
+}
+
+/// HFS+'s decomposition, which Foundation applies to a file URL's `path` (CI's parity: `Mïghty` comes back with U+0308 after the `i`):
+/// canonical decomposition (NFD) of everything outside U+2000–U+2FFF, U+F900–U+FAFF and U+2F800–U+2FAFF, which stay as they are.
+pub fn file_system_representation(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization as _;
+    let kept = |c: char| matches!(c as u32, 0x2000..=0x2FFF | 0xF900..=0xFAFF | 0x2F800..=0x2FAFF);
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    for c in text.chars() {
+        if kept(c) {
+            out.extend(run.nfd());
+            run.clear();
+            out.push(c);
+        } else {
+            run.push(c);
+        }
+    }
+    out.extend(run.nfd());
+    out
 }
 
 /// `standardizedFileURL.path`: `.` dropped and `..` taken back, without asking the disk (links stay as written).
@@ -68,7 +89,7 @@ fn standardized(path: &Path) -> String {
                     parts.push("..".into());
                 }
             }
-            Component::Normal(name) => parts.push(name.to_string_lossy().into_owned()),
+            Component::Normal(name) => parts.push(file_system_representation(&name.to_string_lossy())),
         }
     }
     let joined = parts.join("/");
@@ -239,5 +260,7 @@ mod tests {
         assert_eq!(standardized(Path::new("/../a")), "/a");
         assert_eq!(literal_pattern("/A (1) [b].app/x$^|"), "/A \\(1\\) \\[b\\]\\.app/x\\$\\^\\|");
         assert_eq!(quote("it's"), "'it'\\''s'");
+        assert_eq!(url_path(Path::new("/M\u{ef}ghty \u{c571}.app/")), "/Mi\u{308}ghty \u{110b}\u{1162}\u{11b8}.app");
+        assert_eq!(file_system_representation("\u{2126}\u{f900}"), "\u{2126}\u{f900}", "HFS+ leaves these ranges alone");
     }
 }
