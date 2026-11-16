@@ -19,13 +19,14 @@ libc = "0.2"
 block2 = "0.6"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = [
-    "std", "block2", "NSArray", "NSData", "NSDate", "NSDictionary", "NSError", "NSGeometry", "NSNotification", "NSObject",
-    "NSOperation", "NSProcessInfo", "NSString", "NSThread", "NSURL", "NSUserDefaults", "NSUUID", "NSValue",
+    "std", "block2", "NSArray", "NSAttributedString", "NSData", "NSDate", "NSDictionary", "NSError", "NSGeometry", "NSNotification",
+    "NSObject", "NSOperation", "NSProcessInfo", "NSRange", "NSString", "NSThread", "NSURL", "NSUserDefaults", "NSUUID", "NSValue",
 ] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
-    "std", "block2", "objc2-core-foundation", "objc2-quartz-core", "NSApplication", "NSBitmapImageRep", "NSColor", "NSEvent",
-    "NSFont", "NSFontManager", "NSGraphics", "NSImage", "NSImageRep", "NSMenu", "NSMenuItem", "NSPanel", "NSPasteboard", "NSResponder",
-    "NSRunningApplication", "NSScreen", "NSView", "NSWindow", "NSWorkspace",
+    "std", "block2", "objc2-core-foundation", "objc2-quartz-core", "NSApplication", "NSBitmapImageRep", "NSColor", "NSCursor", "NSEvent",
+    "NSFont", "NSFontManager", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSMenu", "NSMenuItem", "NSPanel",
+    "NSPasteboard", "NSResponder", "NSRunningApplication", "NSScreen", "NSTextInputClient", "NSTextInputContext", "NSTrackingArea",
+    "NSView", "NSWindow", "NSWorkspace",
     # M-A: a secret written as one pasteboard item with its concealed and transient types (clipboard.rs).
     "NSPasteboardItem",
 ] }
@@ -58,6 +59,11 @@ tokio-native-tls = "0.3"
 mighty-core.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "io-util"] }
+
+# M-D: libghostty and AppKit want the main thread, which only a harness-less test binary gives.
+[[test]]
+name = "ghostty_headless"
+harness = false
 
 # Step 0 lists the parts' dependencies before their code uses them; this table goes once every one is used.
 [lints.cargo]
