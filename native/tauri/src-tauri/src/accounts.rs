@@ -914,7 +914,11 @@ pub(crate) async fn start_cli_sign_in(host: &Arc<Host>, provider: &str, option: 
         Err(error) => {
             lock(&accounts.changes).remove(provider);
             refresh_cli_accounts(host).await;
-            return Err(error.to_string());
+            // The Mac's sign-in pane refuses with a sentence for the user (no local workspace, too many panes: sign_in_pane.rs).
+            return Err(match error {
+                mighty_platform::PlatformError::Refused(sentence) => sentence,
+                other => other.to_string(),
+            });
         }
     };
     if option == CliLoginOption::Bedrock {

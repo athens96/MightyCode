@@ -228,35 +228,62 @@ fn values(snapshot: &AppSnapshot) -> Vec<Option<PrefValue>> {
     ENTRIES.iter().map(|entry| (entry.stored)(snapshot)).collect()
 }
 
-/// On the Mac, each setting that differs between `before` and `after` written to UserDefaults (removed when it went back to no
-/// value), and the system interface's language following a new choice (Swift `AppLanguage.applyToSystemInterface`). The keys that
-/// did not take, with why. Windows: nothing.
-pub fn write_changes(profile: &PlatformProfile, prefs: &dyn PrefsStore, before: &AppSnapshot, after: &AppSnapshot) -> Vec<String> {
-    if !in_prefs(profile) {
+/// `statusLine.trusted` as it will be written: the snapshot's entries, and those already stored that the state file's rule leaves
+/// out (not a workspace id, a fingerprint of another length, not text), kept as Swift wrote them.
+fn with_unrecognised(prefs: &dyn PrefsStore, value: Option<PrefValue>) -> Option<PrefValue> {
+    let mut entries = match value {
+        Some(PrefValue::Map(entries)) => entries,
+        _ => Vec::new(),
+    };
+    if let Ok(Some(PrefValue::Map(stored))) = prefs.get("statusLine.trusted") {
+        for (key, kept) in stored {
+            let recognised = kept.text().is_some_and(|fingerprint| trusted(&key, fingerprint));
+            if !recognised && !entries.iter().any(|(known, _)| *known == key) {
+                entries.push((key, kept));
+            }
+        }
+    }
+    (!entries.is_empty()).then_some(PrefValue::Map(entries))
+}
+
+/// On the Mac, where the app may change the machine, each setting whose value differs from what `written` says UserDefaults holds is
+/// written there (removed when it went back to no value), the system interface's language following a new choice (Swift
+/// `AppLanguage.applyToSystemInterface`); `written` then holds each value that took, and the old one for a key that did not, so the
+/// next save tries it again. The keys that did not take, with why. Windows, or a run that may not change the machine: nothing.
+pub fn sync(
+    profile: &PlatformProfile,
+    may_change_machine: bool,
+    prefs: &dyn PrefsStore,
+    written: &mut [Option<PrefValue>],
+    snapshot: &AppSnapshot,
+) -> Vec<String> {
+    if !in_prefs(profile) || !may_change_machine {
         return Vec::new();
     }
     let mut failures = Vec::new();
-    for ((entry, old), new) in ENTRIES.iter().zip(values(before)).zip(values(after)) {
-        if old == new {
+    for ((entry, held), new) in ENTRIES.iter().zip(written.iter_mut()).zip(values(snapshot)) {
+        if *held == new {
             continue;
         }
-        let written = match new {
+        let stored = if entry.key == "statusLine.trusted" { with_unrecognised(prefs, new.clone()) } else { new.clone() };
+        let result = match stored {
             Some(value) => prefs.set(entry.key, value),
             None => prefs.remove(entry.key),
         };
-        let written =
-            written.and_then(|()| if entry.key == "language" { mighty_platform::prefs::apply_to_system_interface(prefs) } else { Ok(()) });
-        if let Err(error) = written {
-            failures.push(format!("{}: {error}", entry.key));
+        let result =
+            result.and_then(|()| if entry.key == "language" { mighty_platform::prefs::apply_to_system_interface(prefs) } else { Ok(()) });
+        match result {
+            Ok(()) => *held = new,
+            Err(error) => failures.push(format!("{}: {error}", entry.key)),
         }
     }
     failures
 }
 
-/// The settings as UserDefaults last had them from this app (what [`mirror`] compares a save with).
-static WRITTEN: Mutex<Option<AppSnapshot>> = Mutex::new(None);
+/// The settings as UserDefaults last had them from this app, key by key (what [`mirror`] compares a save with).
+static WRITTEN: Mutex<Option<Vec<Option<PrefValue>>>> = Mutex::new(None);
 
-fn written() -> std::sync::MutexGuard<'static, Option<AppSnapshot>> {
+fn written() -> std::sync::MutexGuard<'static, Option<Vec<Option<PrefValue>>>> {
     WRITTEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
@@ -266,11 +293,10 @@ pub fn load(profile: &PlatformProfile, prefs: &dyn PrefsStore, snapshot: &mut Ap
     if !smoke {
         read_into(profile, prefs, snapshot);
     }
-    *written() = Some(snapshot.clone());
+    *written() = Some(values(snapshot));
 }
 
-/// The host's saver, with each state it saves: on the Mac, the settings that changed since the last write go to UserDefaults, only
-/// where the app may change the machine (never a smoke, never a read-only or development run without `--allow-state-write`).
+/// The host's saver, with each state it saves: [`sync`] with the app's settings store and write policy.
 pub fn mirror(app: &tauri::AppHandle, snapshot: &AppSnapshot) {
     let profile = crate::platform::profile();
     if !in_prefs(&profile) {
@@ -278,15 +304,11 @@ pub fn mirror(app: &tauri::AppHandle, snapshot: &AppSnapshot) {
     }
     let Some(host) = app.try_state::<Arc<crate::host::Host>>() else { return };
     let Some(prefs) = app.try_state::<Arc<dyn PrefsStore>>() else { return };
-    if !host.may_change_machine() {
-        return;
-    }
     let mut last = written();
-    let Some(before) = last.as_ref() else { return };
-    for failure in write_changes(&profile, prefs.as_ref(), before, snapshot) {
+    let Some(held) = last.as_mut() else { return };
+    for failure in sync(&profile, host.may_change_machine(), prefs.as_ref(), held, snapshot) {
         host.log.line(&format!("setting not saved: {failure}"));
     }
-    *last = Some(snapshot.clone());
 }
 
 #[cfg(test)]
@@ -371,11 +393,13 @@ mod tests {
         let before = AppSnapshot::default();
         let after = chosen();
         let windows = MemoryPrefs::default();
-        assert!(write_changes(&PlatformProfile::windows(), &windows, &before, &after).is_empty());
+        assert!(sync(&PlatformProfile::windows(), true, &windows, &mut values(&before), &after).is_empty());
         assert!(keys().iter().all(|key| windows.get(key).unwrap().is_none()), "Windows keeps them in the state file");
 
         let prefs = MemoryPrefs::default();
-        assert!(write_changes(&PlatformProfile::macos(), &prefs, &before, &after).is_empty());
+        let mut held = values(&before);
+        assert!(sync(&PlatformProfile::macos(), true, &prefs, &mut held, &after).is_empty());
+        assert_eq!(held, values(&after), "what UserDefaults holds now");
         assert_eq!(prefs.get("language").unwrap(), Some(PrefValue::Text("ja".into())));
         assert_eq!(prefs.get("AppleLanguages").unwrap(), Some(PrefValue::List(vec![PrefValue::Text("ja".into())])));
         assert_eq!(prefs.get("appUpdate.automatic").unwrap(), Some(PrefValue::Bool(false)));
@@ -394,8 +418,68 @@ mod tests {
         // Back to no value: the key goes; an unchanged setting is not touched.
         prefs.set("statusLine.enabled", PrefValue::Text("left alone".into())).unwrap();
         let cleared = AppSnapshot { app_update_manifest_url_override: None, ..after.clone() };
-        assert!(write_changes(&PlatformProfile::macos(), &prefs, &after, &cleared).is_empty());
+        assert!(sync(&PlatformProfile::macos(), true, &prefs, &mut held, &cleared).is_empty());
         assert_eq!(prefs.get("appUpdate.manifestURL").unwrap(), None);
         assert_eq!(prefs.get("statusLine.enabled").unwrap(), Some(PrefValue::Text("left alone".into())));
+    }
+
+    /// A run that may not change the machine writes nothing and keeps what UserDefaults holds, so the change is written once it may.
+    #[test]
+    fn nothing_is_written_where_the_machine_may_not_change() {
+        let prefs = MemoryPrefs::default();
+        let mut held = values(&AppSnapshot::default());
+        assert!(sync(&PlatformProfile::macos(), false, &prefs, &mut held, &chosen()).is_empty());
+        assert!(keys().iter().all(|key| prefs.get(key).unwrap().is_none()));
+        assert_eq!(held, values(&AppSnapshot::default()));
+        assert!(sync(&PlatformProfile::macos(), true, &prefs, &mut held, &chosen()).is_empty());
+        assert_eq!(prefs.get("settingsPane").unwrap(), Some(PrefValue::Text("remote".into())));
+    }
+
+    /// A store that refuses one key: the others are written, the refused one is named and tried again at the next save.
+    struct Refusing(MemoryPrefs, std::sync::atomic::AtomicBool);
+
+    impl PrefsStore for Refusing {
+        fn get(&self, key: &str) -> mighty_platform::Result<Option<PrefValue>> {
+            self.0.get(key)
+        }
+        fn set(&self, key: &str, value: PrefValue) -> mighty_platform::Result<()> {
+            if key == "settingsPane" && self.1.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(mighty_platform::PlatformError::Refused("denied".into()));
+            }
+            self.0.set(key, value)
+        }
+        fn remove(&self, key: &str) -> mighty_platform::Result<()> {
+            self.0.remove(key)
+        }
+    }
+
+    #[test]
+    fn a_refused_write_is_tried_again() {
+        let prefs = Refusing(MemoryPrefs::default(), std::sync::atomic::AtomicBool::new(true));
+        let mut held = values(&AppSnapshot::default());
+        let failures = sync(&PlatformProfile::macos(), true, &prefs, &mut held, &chosen());
+        assert_eq!(failures.len(), 1, "{failures:?}");
+        assert!(failures[0].starts_with("settingsPane: "));
+        assert_eq!(prefs.get("language").unwrap(), Some(PrefValue::Text("ja".into())));
+        prefs.1.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(sync(&PlatformProfile::macos(), true, &prefs, &mut held, &chosen()).is_empty());
+        assert_eq!(prefs.get("settingsPane").unwrap(), Some(PrefValue::Text("remote".into())));
+    }
+
+    /// Trusted status lines Swift stored that the state file's rule leaves out stay in UserDefaults when the setting is written.
+    #[test]
+    fn unrecognised_trusted_lines_are_kept() {
+        let prefs = MemoryPrefs::default();
+        prefs
+            .set(
+                "statusLine.trusted",
+                PrefValue::Map(vec![("bad key".into(), PrefValue::Text("feed".into())), ("w9".into(), PrefValue::Text("x".repeat(70)))]),
+            )
+            .unwrap();
+        let mut held = values(&AppSnapshot::default());
+        assert!(sync(&PlatformProfile::macos(), true, &prefs, &mut held, &chosen()).is_empty());
+        let Some(PrefValue::Map(stored)) = prefs.get("statusLine.trusted").unwrap() else { panic!("a dictionary") };
+        let keys: Vec<&str> = stored.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["w1", "bad key", "w9"]);
     }
 }

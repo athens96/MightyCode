@@ -576,25 +576,62 @@ pub struct RuntimeProbe {
     pub http: Arc<dyn HttpsSend>,
 }
 
-/// Mac stage M-J: the Claude CLI's sign-in in the Keychain, read before its file (Swift `ClaudeQuotaCredentials.read`), and whether
-/// this read may ask the user (once, after the switch was turned on: Swift's `refresh(force: true, interactive: true)`).
+/// Mac stage M-J: where the Claude CLI may keep its sign-in besides its file (the Mac's Keychain, Swift `ClaudeQuotaCredentials.read`).
 #[derive(Clone)]
 pub struct ClaudeKeychain {
     pub store: Arc<dyn mighty_platform::ClaudeCredentials>,
-    pub interactive: Arc<dyn Fn() -> bool + Send + Sync>,
+    /// How long a read that may not ask waits for the Keychain (a locked one waits for its unlock); past it the read is treated as
+    /// one that would have asked.
+    pub silent_timeout: Duration,
+}
+
+impl ClaudeKeychain {
+    /// A silent read waits at most 5 s.
+    pub fn new(store: Arc<dyn mighty_platform::ClaudeCredentials>) -> ClaudeKeychain {
+        ClaudeKeychain { store, silent_timeout: Duration::from_secs(5) }
+    }
 }
 
 /// [`RuntimeProbe`] as the service's probe.
 pub fn runtime_probe(parts: RuntimeProbe) -> UsageProbe {
-    runtime_probe_with_keychain(parts, None)
+    let probe = runtime_probe_with_keychain(parts, None);
+    Arc::new(move |provider| probe(provider, false))
 }
 
-/// [`runtime_probe`] where the Claude CLI may keep its sign-in in the Keychain (the Mac, while `usage.claudeKeychain` is on: the
-/// caller's): the Keychain first, then the CLI's file ([`super::claude_credential`]); a Keychain that would have asked, with no file
-/// to fall back on, says so (`usage.keychain.needed`) instead of reading as signed out. None: the file alone (Windows).
-pub fn runtime_probe_with_keychain(parts: RuntimeProbe, keychain: Option<ClaudeKeychain>) -> UsageProbe {
+/// The Claude CLI's sign-in (the Keychain first when there is one, then its file), read on a blocking thread: a Keychain read is a
+/// Security framework call that may wait on the user's dialog (`interactive`) or on a locked keychain (bounded when silent).
+async fn claude_sign_in(
+    home: String,
+    environment: BTreeMap<String, String>,
+    keychain: Option<ClaudeKeychain>,
+    interactive: bool,
+) -> super::ClaudeSignIn {
+    let Some(keychain) = keychain else {
+        let found = credential_file::read(&home, &environment, mighty_core::time::clock_now());
+        return found.map(super::ClaudeSignIn::Found).unwrap_or(super::ClaudeSignIn::Missing);
+    };
+    let timeout = keychain.silent_timeout;
+    let read = tokio::task::spawn_blocking(move || {
+        let now = mighty_core::time::clock_now();
+        super::claude_credential(&home, &environment, now, Some(keychain.store.as_ref()), interactive)
+    });
+    if interactive {
+        return read.await.unwrap_or(super::ClaudeSignIn::Missing);
+    }
+    match tokio::time::timeout(timeout, read).await {
+        Ok(Ok(found)) => found,
+        Ok(Err(_)) => super::ClaudeSignIn::Missing,
+        Err(_) => super::ClaudeSignIn::Permission,
+    }
+}
+
+/// [`runtime_probe`] told which reads the user asked for, where the Claude CLI may keep its sign-in in the Keychain (the Mac, while
+/// `usage.claudeKeychain` is on: the caller's): the Keychain first, then the CLI's file ([`super::claude_credential`]); a Keychain
+/// that would have asked, with no file to fall back on, is [`AccountUsageFailureKind::KeychainPermission`] (status `permission`)
+/// instead of reading as signed out. None: the file alone (Windows).
+pub fn runtime_probe_with_keychain(parts: RuntimeProbe, keychain: Option<ClaudeKeychain>) -> super::InteractiveProbe {
     let parts = Arc::new(parts);
-    Arc::new(move |provider: String| -> BoxFuture<'static, Result<AccountUsageSnapshot, UsageError>> {
+    Arc::new(move |provider: String, interactive: bool| -> BoxFuture<'static, Result<AccountUsageSnapshot, UsageError>> {
         let (parts, keychain) = (parts.clone(), keychain.clone());
         Box::pin(async move {
             match provider.as_str() {
@@ -602,23 +639,21 @@ pub fn runtime_probe_with_keychain(parts: RuntimeProbe, keychain: Option<ClaudeK
                     let environment = (parts.environment)();
                     let home = (parts.home)();
                     let http = Guarded(parts.http.clone());
-                    let mut permission = false;
-                    let load = || {
-                        let now = mighty_core::time::clock_now();
-                        let Some(keychain) = &keychain else { return credential_file::read(&home, &environment, now) };
-                        let interactive = (keychain.interactive)();
-                        match super::claude_credential(&home, &environment, now, Some(keychain.store.as_ref()), interactive) {
-                            super::ClaudeSignIn::Found(credential) => Some(credential),
-                            super::ClaudeSignIn::Permission => {
-                                permission = true;
-                                None
-                            }
-                            super::ClaudeSignIn::Missing => None,
-                        }
+                    // A custom sign-in is refused before any credential is read (the probe's own first step).
+                    let sign_in = if ClaudeAccountProbe::custom_authentication(&environment) {
+                        super::ClaudeSignIn::Missing
+                    } else {
+                        claude_sign_in(home, environment.clone(), keychain, interactive).await
                     };
-                    let read = ClaudeAccountProbe::read(&environment, load, &http, &mighty_core::time::clock_now, None, None).await;
-                    if permission {
-                        return Err(failure(AccountUsageFailureKind::Authentication, strings::get("usage.keychain.needed")));
+                    let (credential, permission) = match sign_in {
+                        super::ClaudeSignIn::Found(credential) => (Some(credential), false),
+                        super::ClaudeSignIn::Permission => (None, true),
+                        super::ClaudeSignIn::Missing => (None, false),
+                    };
+                    let read =
+                        ClaudeAccountProbe::read(&environment, || credential, &http, &mighty_core::time::clock_now, None, None).await;
+                    if permission && read.is_err() {
+                        return Err(failure(AccountUsageFailureKind::KeychainPermission, strings::get("usage.keychain.accessNeeded")));
                     }
                     read
                 }

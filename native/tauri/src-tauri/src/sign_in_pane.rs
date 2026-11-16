@@ -26,7 +26,10 @@ pub fn sign_in_launcher(
 
 /// A word as a POSIX shell reads it back unchanged: as it is when it is plain, else in single quotes.
 fn quoted(word: &str) -> String {
-    let plain = !word.is_empty() && word.chars().all(|c| c.is_ascii_alphanumeric() || "_./:@%+=,-".contains(c));
+    // `=`, `%` and `~` are plain inside a word only: first, they would make an assignment, a job or a home folder of it.
+    let plain = !word.is_empty()
+        && !word.starts_with(['=', '%', '~'])
+        && word.chars().all(|c| c.is_ascii_alphanumeric() || "_./:@%+=,-~".contains(c));
     if plain { word.to_string() } else { format!("'{}'", word.replace('\'', r"'\''")) }
 }
 
@@ -78,30 +81,50 @@ impl TerminalWindow for Opened {
     }
 }
 
+/// Where the sign-in pane goes: the active workspace when it is on this computer, else the first that is (Swift `startCLILogin`);
+/// None when there is none.
+pub fn local_workspace(snapshot: &mighty_core::AppSnapshot) -> Option<String> {
+    let local = |id: &str| snapshot.workspace(id).is_some_and(|w| w.remote.is_none());
+    let active = snapshot.active_workspace_id.clone().filter(|id| local(id));
+    active.or_else(|| snapshot.workspaces().iter().find(|w| w.remote.is_none()).map(|w| w.id().to_string()))
+}
+
 impl TerminalLauncher for PaneSignIn {
-    /// A local workspace is made the active one (the active workspace when it is local, else the first local one); the pane is added
-    /// and the command typed into it once its shell is up (styles.rs `run_terminal_command`, C#'s and Swift's `autoRun`).
+    /// Settings and the setup screen close (Swift closes its sheet so the pane can be added); the chosen local workspace becomes the
+    /// active one and gets the shell pane now, so a refusal (no local workspace, the 128-pane limit) is the caller's error; then the
+    /// command is typed into it once its shell is up (styles.rs `type_into_pane`, Swift's `autoRun`).
     fn open(&self, launch: TerminalLaunch) -> mighty_platform::Result<Box<dyn TerminalWindow>> {
         let Some(host) = self.app.try_state::<Arc<Host>>().map(|host| host.inner().clone()) else {
             return Err(PlatformError::unsupported("terminal pane", "open"));
         };
         let command = command_line(&launch).ok_or_else(|| PlatformError::Invalid("no command".into()))?;
-        {
+        let refused = |key: &str| PlatformError::Refused(host.locale.get(key));
+        let workspace = {
             let mut view = host.view();
-            let local = |id: &str| view.snapshot.workspace(id).is_some_and(|w| w.remote.is_none());
-            let active = view.snapshot.active_workspace_id.clone().filter(|id| local(id));
-            let chosen = active.or_else(|| view.snapshot.workspaces().iter().find(|w| w.remote.is_none()).map(|w| w.id().to_string()));
-            let Some(workspace) = chosen else {
-                return Err(PlatformError::Refused(host.locale.get("settings.cliAccounts.noWorkspace")));
-            };
+            let workspace = local_workspace(&view.snapshot).ok_or_else(|| refused("settings.cliAccounts.noWorkspace"))?;
+            if !mighty_core::add_pane::has_room(&view.snapshot) {
+                return Err(refused("settings.cliAccounts.tooManyPanes"));
+            }
             if view.snapshot.active_workspace_id.as_deref() != Some(workspace.as_str()) {
                 crate::frame::select_workspace(&mut view, &workspace).map_err(PlatformError::Refused)?;
             }
+            workspace
+        };
+        crate::settings::close(&host);
+        crate::native::close(&host, mighty_tools::view::SETUP_SURFACE);
+        let pane_id = mighty_core::wire::new_id();
+        let (made, named) = (pane_id.clone(), title(&launch, &host.locale));
+        let added = crate::frame::add_pane_to(&host, Some(&workspace), "shell", "claude", None, move |pane| {
+            mighty_core::model::RunSession { id: Some(made), title: Some(named), ..pane }
+        });
+        match added {
+            Ok(true) => {}
+            Ok(false) => return Err(refused("settings.cliAccounts.terminalFailed")),
+            Err(error) => return Err(PlatformError::Refused(error)),
         }
         host.schedule();
-        let title = title(&launch, &host.locale);
         tauri::async_runtime::spawn(async move {
-            if let Err(error) = crate::styles::run_terminal_command(&host, &command, &title, true).await {
+            if let Err(error) = crate::styles::type_into_pane(&host, &pane_id, &command, true).await {
                 host.log.line(&format!("sign-in pane: {error}"));
             }
         });
@@ -140,9 +163,36 @@ mod tests {
             Some("CLAUDE_CODE_USE_BEDROCK=1 /Users/me/.local/bin/claude /setup-bedrock")
         );
         assert_eq!(command_line(&launch(&["/Users/me/my tools/agy", "it's"], &[])).as_deref(), Some(r"'/Users/me/my tools/agy' 'it'\''s'"));
+        assert_eq!(command_line(&launch(&["agy", "~x", "=y", "%1", "a=b"], &[])).as_deref(), Some("agy '~x' '=y' '%1' a=b"));
         assert_eq!(command_line(&launch(&[], &[])), None);
         let l = mighty_core::locale::Locale::new("en");
         assert_eq!(title(&launch(&["/opt/bin/agy"], &[]), &l), "Antigravity sign-in");
         assert_eq!(title(&launch(&["claude", "/setup-bedrock"], &[]), &l), "Claude Bedrock setup");
+    }
+
+    /// The pane goes to the active workspace when it is local, else the first local one; none when every workspace is remote.
+    #[test]
+    fn the_pane_goes_to_a_local_workspace() {
+        use mighty_core::model::{RemoteWorkspaceReference, Workspace};
+        let remote = |id: &str| Workspace {
+            id: Some(id.into()),
+            remote: Some(RemoteWorkspaceReference {
+                connection_id: Some("c".into()),
+                workspace_id: Some("w".into()),
+                host_name: None,
+                version: 2,
+                mirror: false,
+            }),
+            ..Workspace::default()
+        };
+        let local = |id: &str| Workspace { id: Some(id.into()), path: Some(format!("/w/{id}")), ..Workspace::default() };
+        let state = |workspaces: Vec<Workspace>, active: &str| mighty_core::AppSnapshot {
+            workspaces: Some(workspaces),
+            active_workspace_id: Some(active.into()),
+            ..mighty_core::AppSnapshot::default()
+        };
+        assert_eq!(local_workspace(&state(vec![local("a"), local("b")], "b")).as_deref(), Some("b"));
+        assert_eq!(local_workspace(&state(vec![remote("r"), local("b")], "r")).as_deref(), Some("b"));
+        assert_eq!(local_workspace(&state(vec![remote("r")], "r")), None);
     }
 }

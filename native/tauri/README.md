@@ -666,9 +666,12 @@ Taken out of the profile (they described no difference): `pairing_layout` and `m
 store's files, the Agent IO listener's `transport()`), `auto_update_keys` (C#'s snapshot carries `autoUpdateCLIs`/`autoUpdatePlugins`
 too) and `saves_files_pane` (neither app saves a files pane).
 
-Also on the Mac: the Claude usage read takes the Claude CLI's sign-in from the Keychain first (`usage.claudeKeychain` on; asked
-interactively once when the switch is turned on, silently after; never in a smoke), then its file; the number, date and time formats
-come from CoreFoundation's current locale (`formats.rs`).
+Also on the Mac: the Claude usage read takes the Claude CLI's sign-in from the Keychain first (`usage.claudeKeychain` on; never in a
+smoke), then its file, on a blocking thread. Only a read the user asks for (turning the switch on, the popover's refresh) may show the
+Keychain's dialog; an automatic read stays silent (bounded to 5 s: a locked keychain waits for its unlock) and, where the Keychain
+would have asked, the card says `permission` ("Keychain access needed…", `usage.keychain.accessNeeded`) and is not read again for an
+hour unless the user refreshes (Swift's `keychainPermission`). The number, date and time formats come from CoreFoundation's current
+locale (`formats.rs`).
 
 ### Swift-only features the 0.5 Mac app does not have (D12)
 
@@ -689,6 +692,11 @@ Edit menu.
   that itself looks like `{name}` can be filled again.
 - **ComposerCaret** (unchecked): Swift's caret fix after a Korean IME composition is not ported; whether WKWebView needs it is the
   §9 manual checklist's.
+- **"Allow Keychain access and check"**: Swift's popover has this button on a `permission` card; here the popover's refresh button
+  does the same (an interactive read), as the card's sentence says. The button itself would be a page change (D9, M-F's).
+- **The sign-in pane**: opened as Swift opens it (Settings and the setup screen close, the active local workspace or the first local
+  one, refused past 128 panes), but when no local workspace exists the setup screen's own sign-in terminal window (Swift
+  `signInFromSetup`) is not there: the sign-in is refused with "Open a project folder first".
 - **Dialog sizes** (`dialog.size.<id>.*`): the page keeps its own panel sizes; sizes saved by 0.4 are not carried over.
 - **The login-shell fallback note**: when the login shell's environment cannot be read, Swift adds "the app's launch environment is
   used" to the CLI statuses and skips the Bedrock settings conflict check (CLIAccounts.swift:216-264, BedrockAuthDiagnosticsTests.swift

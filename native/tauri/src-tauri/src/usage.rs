@@ -31,7 +31,7 @@ pub struct Usage {
 
 /// The app's probe (C# `AccountUsageRuntime.Probe`): the CLIs found through the run engine's catalog, its CLI environment, the user's
 /// home, the temporary folder, the host's processes and the HTTPS GET port, each looked up when a read starts.
-fn probe(host: &Host) -> usage::UsageProbe {
+fn probe(host: &Host) -> usage::InteractiveProbe {
     let app = host.app.clone();
     let find: Finder = {
         let app = app.clone();
@@ -53,11 +53,9 @@ fn probe(host: &Host) -> usage::UsageProbe {
                 .unwrap_or_else(|| std::env::vars().collect())
         })
     };
-    // The Mac's Claude sign-in in the Keychain (M-J; never a smoke's, which must not touch the runner's Keychain): asked for
-    // interactively once, after the switch was turned on (`direct`), else silently.
-    let keychain = crate::platform::claude_credentials()
-        .filter(|_| host.smoke.is_none())
-        .map(|store| usage::ClaudeKeychain { store, interactive: Arc::new(|| ASK_KEYCHAIN.swap(false, Ordering::SeqCst)) });
+    // The Mac's Claude sign-in in the Keychain (M-J; never a smoke's, which must not touch the runner's Keychain): the Keychain may
+    // ask only in a read the user asked for (`queue`'s `interactive`).
+    let keychain = crate::platform::claude_credentials().filter(|_| host.smoke.is_none()).map(usage::ClaudeKeychain::new);
     usage::runtime_probe_with_keychain(
         RuntimeProbe {
             find,
@@ -70,9 +68,6 @@ fn probe(host: &Host) -> usage::UsageProbe {
         keychain,
     )
 }
-
-/// The next Claude read may ask for the Keychain (Swift turns the switch on with `refresh(force: true, interactive: true)`).
-static ASK_KEYCHAIN: AtomicBool = AtomicBool::new(false);
 
 /// The HTTPS GET port as the app manages it, looked up when a read asks: the ports are managed after the frame's clocks first read
 /// the usage. None yet: refused, so nothing leaves.
@@ -100,7 +95,7 @@ pub fn of(host: &Host) -> Arc<Usage> {
         return usage.inner().clone();
     }
     let clock = usage::system_clock();
-    let service = AccountUsageService::new(probe(host), clock.clone());
+    let service = AccountUsageService::with_interactive_probe(probe(host), clock.clone());
     // Managed once: a second maker (two passes at once) leaves the first one's in place.
     host.app.manage(Arc::new(Usage { status: AccountUsageStatus::new(service, clock), queued: AtomicBool::new(false) }));
     host.app.state::<Arc<Usage>>().inner().clone()
@@ -128,7 +123,7 @@ pub fn shell(host: &Host, snapshot: &AppSnapshot) -> Option<UsageModel> {
     crate::accounts::prune(host, snapshot);
     let usage = of(host);
     if usage.status.update(snapshot) {
-        queue(host, &usage, false);
+        queue(host, &usage, false, false);
     }
     let status = &usage.status;
     let providers_shown = status.providers();
@@ -203,20 +198,22 @@ pub fn shell(host: &Host, snapshot: &AppSnapshot) -> Option<UsageModel> {
 
 /// `QueueAccountUsageRefresh`: one read of every target at a time, off the state's lock; none in a smoke, while one is queued, or
 /// with nothing to ask (Claude is among the targets only once the direct lookup is on).
-fn queue(host: &Host, usage: &Arc<Usage>, force: bool) {
+fn queue(host: &Host, usage: &Arc<Usage>, force: bool, interactive: bool) {
     if host.smoke.is_some() || host.closing() || usage.status.targets().is_empty() || usage.queued.swap(true, Ordering::SeqCst) {
         return;
     }
     let usage = usage.clone();
     tauri::async_runtime::spawn(async move {
-        usage.status.refresh(force).await;
+        usage.status.refresh_as(force, interactive).await;
         usage.queued.store(false, Ordering::SeqCst);
     });
 }
 
 /// `usageRefresh{force}`: C# `QueueAccountUsageRefresh(force)` (the popover opening, its refresh button).
+/// A forced refresh is the user's (the popover's refresh button): it may show the Keychain's dialog and lifts a `permission`
+/// back-off (Swift `refresh(force: true, interactive: true)`; on Windows nothing asks).
 pub fn refresh(host: &Arc<Host>, force: bool) {
-    queue(host, &of(host), force);
+    queue(host, &of(host), force, force);
 }
 
 /// `usageDirect{on}`: C# `SetUsageDirectLookup(on)` — the direct HTTPS lookup switched: the status told, the state saved (written only
@@ -230,8 +227,7 @@ pub async fn direct(host: &Arc<Host>, on: bool) -> Result<(), String> {
     host.view().update(|state| state.claude_direct_usage_lookup_enabled = on)?;
     host.schedule();
     if on {
-        ASK_KEYCHAIN.store(true, Ordering::SeqCst);
-        queue(host, &usage, true);
+        queue(host, &usage, true, true);
     }
     Ok(())
 }

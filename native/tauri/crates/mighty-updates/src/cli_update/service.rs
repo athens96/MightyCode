@@ -372,7 +372,7 @@ impl CliUpdateService {
         }
         let Some((path, version)) = self.installed_command(machine, provider, token).await? else {
             let (on, name) = (machine.clone(), mighty_run::providers::executable(provider).to_string());
-            let present = blocking(move || on.candidates(&name).iter().any(|c| is_file(c))).await;
+            let present = blocking(move || on.candidates(&name).iter().any(|c| on.runnable(c))).await;
             let installation = CliUpdateInstallation::new(provider);
             return Ok((
                 if present {
@@ -396,7 +396,7 @@ impl CliUpdateService {
         }
         let executable = mighty_run::providers::executable(provider);
         let (on, name) = (machine.clone(), executable.to_string());
-        let existing: Vec<String> = blocking(move || on.candidates(&name).into_iter().filter(|c| is_file(c)).collect()).await;
+        let existing: Vec<String> = blocking(move || on.candidates(&name).into_iter().filter(|c| on.runnable(c)).collect()).await;
         for path in existing {
             cancelled(token)?;
             let run = match self.runner.run(CliCall::new(&path, ["--version"], self.metadata_timeout), token.clone()).await {
@@ -570,11 +570,23 @@ impl Machine {
         roots.iter().any(|root| paths::same(parent.as_deref(), Some(root)) || paths::same(grandparent.as_deref(), Some(root)))
     }
 
-    /// Swift `executableCandidates`: the first 64 PATH entries that are full paths without a NUL, each once (as written).
+    /// Swift `executableCandidates`: the first 64 non-empty PATH entries (Swift's `split` drops empty ones) that are full paths
+    /// without a NUL, each once (as written).
+    /// A candidate that may run: a file for Windows' planner (C#'s `File.Exists`), an executable one for the Mac's (Swift
+    /// `isExecutableFile`).
+    fn runnable(&self, path: &str) -> bool {
+        if self.updater == CliUpdater::Homebrew { executable(path) } else { is_file(path) }
+    }
+
     fn path_entries(&self) -> Vec<String> {
         let mut seen: Vec<String> = Vec::new();
-        for entry in paths::variable(&self.environment, "PATH").unwrap_or("").split(mighty_run::os::path_separator()).take(64) {
-            if !entry.is_empty() && !entry.contains('\0') && paths::rooted(entry) && !seen.iter().any(|known| known == entry) {
+        for entry in paths::variable(&self.environment, "PATH")
+            .unwrap_or("")
+            .split(mighty_run::os::path_separator())
+            .filter(|e| !e.is_empty())
+            .take(64)
+        {
+            if !entry.contains('\0') && paths::rooted(entry) && !seen.iter().any(|known| known == entry) {
                 seen.push(entry.to_string());
             }
         }
@@ -584,7 +596,7 @@ impl Machine {
     /// The Mac's plan (Swift `CLIUpdateService.plan`, in its order): Antigravity only where its installer puts it, pi, opencode and
     /// Hermes by their own commands, a Homebrew cask or formula through the Homebrew that installed it, native Claude, then npm.
     fn analyze_mac(&self, provider: &str, path: String, version: String) -> (CliUpdateInstallation, Option<Invocation>) {
-        let resolved = paths::resolve(&path);
+        let resolved = real_path(&path);
         let installation = CliUpdateInstallation {
             version: Some(version.clone()),
             executable_path: Some(path.clone()),
@@ -597,7 +609,7 @@ impl Machine {
             // Antigravity's installer (`curl … install.sh | bash`) puts one binary in ~/.local/bin, which `agy update` replaces; a copy
             // anywhere else is left alone.
             "gemini" => {
-                let official = paths::resolve(&paths::join(&self.home, &[".local", "bin", "agy"]));
+                let official = real_path(&paths::join(&self.home, &[".local", "bin", "agy"]));
                 if !same_file(&resolved, &official) {
                     let detail = mighty_run::strings::get_with(
                         "settings.cliUpdate.detailAntigravityElsewhere",
@@ -637,7 +649,7 @@ impl Machine {
         }
         if let Some(brew) = brew_installation(&resolved, provider) {
             let installation = installation.method(if brew.cask { "brew-cask" } else { "brew-formula" });
-            if !is_file(&brew.executable) {
+            if !self.runnable(&brew.executable) {
                 return (installation.detail(get("settings.cliUpdate.detailBrewRuntimeMissing")), None);
             }
             // Refreshing Homebrew's metadata is allowed; cleaning up or upgrading unrelated installed dependents is not, and nothing
@@ -662,7 +674,7 @@ impl Machine {
                 roots.push(paths::join(data, &["claude", "versions"]));
             }
             let parent = paths::parent(&resolved).unwrap_or_default();
-            if roots.iter().any(|root| same_file(&parent, &paths::resolve(root))) {
+            if roots.iter().any(|root| same_file(&parent, &real_path(root))) {
                 return (
                     installation.method("native").updatable().detail(strings::detail_native_claude()),
                     Invocation::with_environment(&path, &["update"], environment),
@@ -700,15 +712,15 @@ impl Machine {
     fn mac_npm_runtime(&self, prefix: &str) -> Option<(String, String)> {
         let mut launchers = vec![paths::join(prefix, &["bin", "npm"])];
         launchers.extend(self.candidates("npm"));
-        for launcher in launchers.into_iter().filter(|l| is_file(l)) {
-            let script = paths::resolve(&launcher);
+        for launcher in launchers.into_iter().filter(|l| self.runnable(l)) {
+            let script = real_path(&launcher);
             let mut root = paths::parent(&script);
             for _ in 0..7 {
                 let Some(folder) = root else { break };
                 if official_package(&folder, "npm", "npm", &script) {
                     let mut nodes = vec![paths::join(&paths::parent(&launcher).unwrap_or_default(), &["node"])];
                     nodes.extend(self.candidates("node"));
-                    if let Some(node) = nodes.into_iter().find(|n| is_file(n)) {
+                    if let Some(node) = nodes.into_iter().find(|n| self.runnable(n)) {
                         return Some((node, script));
                     }
                 }
@@ -762,6 +774,38 @@ fn cancelled(token: &CancellationToken) -> Step<()> {
 
 fn is_file(path: &str) -> bool {
     std::path::Path::new(path).is_file()
+}
+
+/// Swift `FileManager.isExecutableFile`: a file with an execute bit (where files have no such bits: any file).
+fn executable(path: &str) -> bool {
+    let Ok(info) = std::fs::metadata(path) else { return false };
+    info.is_file() && execute_bit(&info)
+}
+
+#[cfg(unix)]
+fn execute_bit(info: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    info.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn execute_bit(_info: &std::fs::Metadata) -> bool {
+    true
+}
+
+/// Swift `resolvingSymlinksInPath().standardizedFileURL`: every link on the way resolved, folders too (the canonical path), with
+/// the `/private` Swift takes off the front taken off; the lexical resolve when the path does not exist.
+fn real_path(path: &str) -> String {
+    let Ok(real) = std::fs::canonicalize(path) else { return paths::resolve(path) };
+    let text = real.to_string_lossy().into_owned();
+    let text = match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
+        _ => text,
+    };
+    match text.strip_prefix("/private/") {
+        Some(rest) => format!("/{rest}"),
+        None => text,
+    }
 }
 
 /// `CliAccountSupport.InstallerCopies`: where an installer leaves a CLI that reaches PATH for new sessions only — opencode's npm
@@ -988,8 +1032,8 @@ fn official_package(root: &str, name: &str, binary: &str, executable: &str) -> b
         _ => None,
     };
     let Some(bin) = bin.filter(|b| !b.starts_with('/') && !b.contains('\0')) else { return false };
-    let target = paths::resolve(&paths::join(root, &bin.split('/').collect::<Vec<_>>()));
-    let package_root = paths::resolve(root);
+    let target = real_path(&paths::join(root, &bin.split('/').collect::<Vec<_>>()));
+    let package_root = real_path(root);
     std::path::Path::new(&target).starts_with(&package_root) && target != package_root && same_file(&target, executable)
 }
 

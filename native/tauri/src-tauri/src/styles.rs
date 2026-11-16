@@ -966,6 +966,15 @@ pub async fn run_terminal_command(host: &Arc<Host>, command: &str, title: &str, 
         return Ok(());
     }
     host.schedule();
+    type_into_pane(host, &pane_id, command, auto_run).await
+}
+
+/// The second half of [`run_terminal_command`]: `command` typed into the shell pane `pane_id` once its shell is up (run when
+/// `auto_run`); `terminal.failed` when the pane went or no shell came within 20 s. (M-J's sign-in pane adds its pane itself.)
+pub async fn type_into_pane(host: &Arc<Host>, pane_id: &str, command: &str, auto_run: bool) -> Result<(), String> {
+    use mighty_platform::pty::TerminalInput;
+    let l = host.locale;
+    let pane_id = pane_id.to_string();
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
     while std::time::Instant::now() < deadline {
         if host.view().snapshot.session(&pane_id).is_none() {

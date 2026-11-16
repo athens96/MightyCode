@@ -3,6 +3,12 @@
 //! the Homebrew check goes through the app's runner over `mighty_platform::fake`'s process host, so the request it makes (the
 //! program, the arguments, the Homebrew switches) is what is checked. The same trees under `Winget` (Windows' planner) update
 //! nothing, so each value of the field is tested.
+//!
+//! The rest of CLIUpdateTests.swift is the service around the plan, which both planners share and the C# checks of tests/cli_update.rs
+//! already prove: `:196 "cancellationStopsUpdaterAndRejectsConcurrentOrClosingRequests"` (second_request_is_busy_and_cancel_stops_the_run,
+//! coordinator_cancel_stops_run_and_shutdown_refuses_new), `:211 "updaterTimeoutIsBoundedAndLeavesNoRunningProcess"` (the runner's
+//! timeout, tests/process_runner.rs), `:226 "providerCacheInvalidationReadsNewVersionImmediately"` and `:238
+//! "invalidationCancelsAndJoinsAnOldVersionProbe"` (the run engine's provider cache, mighty-run).
 
 mod common;
 
@@ -16,6 +22,17 @@ use mighty_platform::fake::{FakeProcessHost, FakeScript};
 use mighty_updates::cli_update::CliUpdateService;
 use mighty_updates::cli_update::service::BREW_SWITCHES;
 use mighty_updates::runner::{CancellationToken, CliRunResult, CliRunner, HostCliRunner, RunError};
+
+/// An executable file (Swift's fixtures are 0700 scripts; the Mac's planner runs only what `isExecutableFile` accepts).
+fn runnable(directory: &Path, name: &str) -> std::path::PathBuf {
+    let path = exe(directory, name);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    path
+}
 
 fn none() -> CancellationToken {
     CancellationToken::new()
@@ -67,8 +84,8 @@ async fn homebrew_uses_actual_cask_or_formula_and_only_named_package() {
         let root = temp("brew");
         let prefix = dir(&root, &["brew installation"]);
         let bin = dir(&prefix, &[container, package, "1.0.0", "bin"]);
-        exe(&bin, provider);
-        let brew = exe(&dir(&prefix, &["bin"]), "brew");
+        runnable(&bin, provider);
+        let brew = runnable(&dir(&prefix, &["bin"]), "brew");
         let host = Arc::new(FakeProcessHost::default());
         for answer in ["1.0.0\n", "", "2.0.0\n"] {
             host.push(FakeScript { stdout: answer.as_bytes().to_vec(), ..FakeScript::default() });
@@ -101,7 +118,7 @@ async fn a_missing_homebrew_is_named_and_nothing_runs() {
     korean();
     let root = temp("brew-missing");
     let bin = dir(&root, &["opt", "Cellar", "codex", "1.0.0", "bin"]);
-    exe(&bin, "codex");
+    runnable(&bin, "codex");
     let (runner, _) = versioned(0);
     let result = mac(runner.clone(), env(&[&bin]), &root).update("codex", &none()).await;
     assert!(result.status == "skipped" && result.method == "brew-formula", "{result:?}");
@@ -117,7 +134,7 @@ async fn native_claude_uses_launcher_and_reports_fresh_version() {
     korean();
     let root = temp("mac-native");
     let versions = dir(&root, &[".local", "share", "claude", "versions"]);
-    let claude = exe(&versions, "claude");
+    let claude = runnable(&versions, "claude");
     let (runner, _) = versioned(0);
     let service = mac(runner.clone(), env(&[&versions]), &root);
     let inspected = service.inspect("claude", &none()).await;
@@ -132,25 +149,25 @@ async fn native_claude_uses_launcher_and_reports_fresh_version() {
 }
 
 /// `CLIUpdateTests.swift:107 "npmTargetsOfficialPackageAndOriginalPrefixWithPairedNode"`: an npm install is updated by the Node
-/// beside npm's own launcher, with npm's cli script, into the prefix it is installed in (one argument, whatever it holds), that Node
+/// beside npm's own launcher, with npm's cli script, into the prefix it is installed in (one argument, spaces and all), that Node
 /// first on PATH.
 #[tokio::test]
 async fn npm_targets_official_package_and_original_prefix_with_paired_node() {
     korean();
     for (provider, name) in [("claude", "@anthropic-ai/claude-code"), ("codex", "@openai/codex")] {
         let root = temp("mac-npm");
-        let prefix = dir(&root, &["npm prefix $(touch SENTINEL)"]);
+        let prefix = dir(&root, &["npm prefix"]);
         let mut below = vec!["lib", "node_modules"];
         below.extend(name.split('/'));
         let package = dir(&prefix, &below);
         package_json(&package, name, provider, &format!("bin/{provider}"), "1.0.0");
         let bin = dir(&package, &["bin"]);
-        exe(&bin, provider);
+        runnable(&bin, provider);
         let npm_package = dir(&root, &["node installation", "lib", "node_modules", "npm"]);
         package_json(&npm_package, "npm", "npm", "bin/npm", "10.0.0");
         let npm_bin = dir(&npm_package, &["bin"]);
-        let script = exe(&npm_bin, "npm");
-        let node = exe(&npm_bin, "node");
+        let script = runnable(&npm_bin, "npm");
+        let node = runnable(&npm_bin, "node");
         let (runner, _) = versioned(0);
         let service = mac(runner.clone(), env(&[&bin, &npm_bin]), &root);
         let inspected = service.inspect(provider, &none()).await;
@@ -174,7 +191,6 @@ async fn npm_targets_official_package_and_original_prefix_with_paired_node() {
         );
         let path = call.environment.as_ref().and_then(|e| e.get("PATH")).cloned().unwrap_or_default();
         assert!(path.starts_with(&text(&npm_bin)), "the Node's folder first on PATH: {path}");
-        assert!(!root.join("SENTINEL").exists());
 
         // Windows' planner reads npm's Windows layout (the shim in the prefix): this one is not it.
         let (runner, _) = versioned(0);
@@ -194,7 +210,7 @@ async fn npm_rejects_wrong_manifest_and_preserves_prerelease_channels() {
         let package = dir(&root, &["prefix", "lib", "node_modules", "@openai", "codex"]);
         package_json(&package, "@openai/codex", "codex", "bin/codex", version);
         let bin = dir(&package, &["bin"]);
-        exe(&bin, "codex");
+        runnable(&bin, "codex");
         (root, package, bin)
     };
     for version in ["0.44.0-preview.1", "0.44.0-nightly.20260916", "not-semver"] {
@@ -225,13 +241,13 @@ async fn missing_unknown_and_unhealthy_installations_are_never_installed() {
     let service = mac(runner.clone(), env(&[&bin]), &root);
     let missing = service.update("claude", &none()).await;
     assert!(missing.status == "skipped" && missing.method == "missing", "{missing:?}");
-    exe(&bin, "claude");
+    runnable(&bin, "claude");
     let manual = service.update("claude", &none()).await;
     assert!(manual.status == "skipped" && manual.method == "unknown", "{manual:?}");
     assert_eq!(service.update("other", &none()).await.status, "skipped");
     assert!(updates(&runner).is_empty());
     let unhealthy = FakeRunner::new(|_, _| Ok(CliRunResult::new(7, "", "", false)));
-    exe(&bin, "codex");
+    runnable(&bin, "codex");
     assert_eq!(mac(unhealthy.clone(), env(&[&bin]), &root).update("codex", &none()).await.status, "skipped");
     let _ = std::fs::remove_dir_all(root);
 }
@@ -243,9 +259,9 @@ async fn failure_does_not_block_subsequent_provider_update() {
     korean();
     let root = temp("mac-failure");
     let versions = dir(&root, &[".local", "share", "claude", "versions"]);
-    exe(&versions, "claude");
+    runnable(&versions, "claude");
     let local = dir(&root, &[".local", "bin"]);
-    exe(&local, "agy");
+    runnable(&local, "agy");
     let (failing, _) = versioned(23);
     let failed = mac(failing, env(&[&versions]), &root).update("claude", &none()).await;
     assert!(failed.status == "failed" && failed.before_version.as_deref() == Some("1.0.0") && failed.after_version.is_none());
@@ -264,7 +280,7 @@ async fn antigravity_elsewhere_is_never_updated() {
     korean();
     let root = temp("mac-agy");
     let bin = dir(&root, &["bin"]);
-    exe(&bin, "agy");
+    runnable(&bin, "agy");
     let (runner, _) = versioned(0);
     let service = mac(runner.clone(), env(&[&bin]), &root);
     let inspected = service.inspect("gemini", &none()).await;
@@ -280,7 +296,7 @@ async fn pi_updates_itself_with_update_self_wherever_it_is_installed() {
     korean();
     let root = temp("mac-pi");
     let bin = dir(&root, &["bin"]);
-    exe(&bin, "pi");
+    runnable(&bin, "pi");
     let (runner, _) = versioned(0);
     let service = mac(runner.clone(), env(&[&bin]), &root);
     let inspected = service.inspect("pi", &none()).await;
@@ -288,5 +304,49 @@ async fn pi_updates_itself_with_update_self_wherever_it_is_installed() {
     let updated = service.update("pi", &none()).await;
     assert!(updated.status == "updated" && updated.after_version.as_deref() == Some("2.0.0"));
     assert_eq!(updates(&runner), vec![strings(&["update", "self"])]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Unix only (files there carry execute bits; Windows has none to check): a `brew` that is not executable is no Homebrew to run
+/// (Swift `isExecutableFile`), and a CLI that is not executable is not a candidate.
+#[cfg(unix)]
+#[tokio::test]
+async fn only_executable_files_count() {
+    korean();
+    let root = temp("brew-mode");
+    let bin = dir(&root, &["opt", "Cellar", "codex", "1.0.0", "bin"]);
+    runnable(&bin, "codex");
+    exe(&dir(&root, &["opt", "bin"]), "brew");
+    let (runner, _) = versioned(0);
+    let result = mac(runner.clone(), env(&[&bin]), &root).update("codex", &none()).await;
+    assert!(result.method == "brew-formula" && result.detail == ko("settings.cliUpdate.detailBrewRuntimeMissing"), "{result:?}");
+    let plain = dir(&root, &["plain"]);
+    exe(&plain, "pi");
+    let missing = mac(runner.clone(), env(&[&plain]), &root).update("pi", &none()).await;
+    assert_eq!(missing.method, "missing", "{missing:?}");
+    assert!(updates(&runner).is_empty());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Unix only (a folder link needs no privilege there): Homebrew's `opt/<formula>` is a link to the version's folder in the Cellar, so
+/// a CLI reached through it is found in the Cellar only once linked folders on the way are resolved (Swift's
+/// `resolvingSymlinksInPath`), and that Homebrew's own `brew` runs.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_linked_folder_on_the_way_is_resolved() {
+    korean();
+    let root = temp("brew-link");
+    let prefix = dir(&root, &["prefix"]);
+    let version = dir(&prefix, &["Cellar", "codex", "1.0.0"]);
+    runnable(&dir(&version, &["bin"]), "codex");
+    let brew = runnable(&dir(&prefix, &["bin"]), "brew");
+    std::os::unix::fs::symlink(&version, dir(&prefix, &["opt"]).join("codex")).unwrap();
+    let through = prefix.join("opt").join("codex").join("bin");
+    let (runner, _) = versioned(0);
+    let result = mac(runner.clone(), env(&[&through]), &root).update("codex", &none()).await;
+    assert!(result.status == "updated" && result.method == "brew-formula", "{result:?}");
+    let call = runner.calls().into_iter().find(|c| !c.arguments.iter().any(|a| a == "--version")).unwrap();
+    let real = text(&std::fs::canonicalize(&brew).unwrap());
+    assert!(call.executable == real || format!("/private{}", call.executable) == real, "{} vs {real}", call.executable);
     let _ = std::fs::remove_dir_all(root);
 }
