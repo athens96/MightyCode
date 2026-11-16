@@ -163,6 +163,23 @@ impl AppOrigin {
             && url.host_str() == self.0.host_str()
             && url.port_or_known_default() == self.0.port_or_known_default()
     }
+
+    /// Where the page's webview may navigate (its `on_navigation`): the app's own origin, and off Windows an HTML frame's page on a
+    /// frame host (`mightyhtml://h….html.mighty.invalid/…`, files.rs). WebKit asks this for every frame, so on the Mac it is also what
+    /// keeps a frame on the frame hosts (C#'s `FrameNavigationStarting`); it cannot tell a frame from the top page, so the page's own
+    /// load start sends a top page that got there back home ([`AppOrigin::home`]). WebView2 asks it for the top page only: Windows
+    /// keeps the app's origin alone. A frame host is never trusted to post to the host ([`AppOrigin::trusts`]).
+    fn may_navigate(&self, url: &tauri::Url) -> bool {
+        self.trusts(url)
+            || !cfg!(windows)
+                && url.scheme() == files::PROTOCOL
+                && url.host_str().is_some_and(|host| host.to_ascii_lowercase().ends_with(mighty_files::frames::HOST_SUFFIX))
+    }
+
+    /// The app's own page, where a top page found elsewhere is sent back (the Mac; the window opens `index.html`).
+    fn home(&self) -> Option<tauri::Url> {
+        self.0.join("index.html").ok()
+    }
 }
 
 /// The smoke's probe script hands what it read of the page here (smoke.rs).
@@ -533,6 +550,7 @@ fn main() {
                 || {
                     let page = host.clone();
                     let navigation = AppOrigin(origin_url.clone());
+                    let loaded = AppOrigin(origin_url.clone());
                     let mut window = WebviewWindowBuilder::new(app.handle(), WINDOW, WebviewUrl::App("index.html".into()))
                         // The host's nonce, for the main frame only (Tauri's `initialization_script`).
                         .initialization_script(nonce_script.clone())
@@ -546,10 +564,19 @@ fn main() {
                         .disable_drag_drop_handler()
                         // C# WebShell: the page never leaves the app's own origin (a stray drop or link would navigate it away), and it
                         // opens no window of its own.
-                        .on_navigation(move |url| navigation.trusts(url))
+                        .on_navigation(move |url| navigation.may_navigate(url))
                         .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
-                        .on_page_load(move |_, payload| {
+                        .on_page_load(move |webview, payload| {
                             if payload.event() == PageLoadEvent::Started {
+                                // Off Windows a frame host may be navigated to (`may_navigate`): the top page itself never stays there.
+                                if !cfg!(windows) && !loaded.trusts(payload.url()) {
+                                    if let Some(home) = loaded.home() {
+                                        tauri::async_runtime::spawn(async move {
+                                            let _ = webview.navigate(home);
+                                        });
+                                    }
+                                    return;
+                                }
                                 page.page_started();
                                 // On the UI thread: the views hide from a task, never here (a view may be waiting for this thread).
                                 if let Some(surfaces) = surfaces(&page.app) {
@@ -691,6 +718,30 @@ mod tests {
         let dev = AppOrigin(url("http://localhost:5173"));
         assert!(dev.trusts(&url("http://localhost:5173/src/main.tsx")));
         assert!(!dev.trusts(&url("http://localhost:5174/")));
+    }
+
+    /// The page's webview may show an HTML frame's page from a frame host (WebKit asks for frames too), but nothing else outside the
+    /// app's origin, and a frame host never counts as the app's own page.
+    #[test]
+    fn a_frame_host_may_be_navigated_to_but_is_never_trusted() {
+        let frame = url("mightyhtml://h9d5aa952066d4c308a02be2c3ef27854.html.mighty.invalid/index.html");
+        for origin in [AppOrigin(url("tauri://localhost")), AppOrigin(url("http://tauri.localhost"))] {
+            // Windows' WebView2 asks for the top page only, which never goes to a frame host.
+            assert_eq!(origin.may_navigate(&frame), !cfg!(windows));
+            assert!(!origin.trusts(&frame));
+            assert_eq!(origin.may_navigate(&url("mightyhtml://H1.HTML.MIGHTY.INVALID/a.html")), !cfg!(windows));
+            assert!(origin.may_navigate(&origin.0));
+            assert!(origin.home().is_some_and(|home| origin.trusts(&home) && home.path() == "/index.html"));
+            for elsewhere in [
+                "mightyhtml://example.com/index.html",
+                "mightyhtml://h1.html.mighty.invalid.example.com/",
+                "https://h1.html.mighty.invalid/",
+                "https://example.com/",
+                "file:///Users/me/page.html",
+            ] {
+                assert!(!origin.may_navigate(&url(elsewhere)), "{elsewhere}");
+            }
+        }
     }
 
     /// The DLLs a PE image imports (its import directory's names), read from the file: enough of the format for the check below.

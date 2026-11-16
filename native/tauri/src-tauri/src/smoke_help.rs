@@ -7,8 +7,8 @@
 //! taken once, in the page's theme (dark when none is saved, as the store reads it), into `help-shots\<language>\<id>-<theme>.png` beside
 //! a `manifest.json` in the capture's shape: under the profile where the app may write it, else beside the smoke's result, so a
 //! read-only smoke of a real profile (`smoke.ps1 -Profile`) leaves it as it was. The window's size, position and maximized state, the
-//! sidebar and the dashboard are put back afterwards. The pictures need WebView2: elsewhere the step reports itself not applicable, and
-//! its checks hold. Checks: `helpShotsTaken` (both pictures written),
+//! sidebar and the dashboard are put back afterwards. The pictures are WebView2's on Windows and WKWebView's snapshot on the Mac (M-G).
+//! Checks: `helpShotsTaken` (both pictures written),
 //! `helpShotSize` (each picture is the window's content, and that content is the shot's size wherever the screen holds it) and
 //! `helpManifest` (the manifest lists both, ok).
 
@@ -20,9 +20,6 @@ use serde_json::{Map, Value, json};
 
 use crate::help_capture;
 use crate::host::{Host, WINDOW};
-
-/// Why the step takes no picture off Windows.
-const NOT_APPLICABLE: &str = "the help capture pictures the page through WebView2 (Windows only)";
 
 /// The step's shots (shots.json ids).
 pub const SHOTS: [&str; 2] = ["sidebar-collapsed", "dashboard"];
@@ -37,7 +34,7 @@ pub fn start(host: &Arc<Host>) -> bool {
     host.log.line("smoke: help capture step (two shots)");
     let host = host.clone();
     tauri::async_runtime::spawn(async move {
-        let report = match if cfg!(windows) { run(&host).await } else { Ok(json!({"notApplicable": NOT_APPLICABLE})) } {
+        let report = match run(&host).await {
             Ok(report) => report,
             Err(error) => {
                 host.log.line(&format!("smoke: help capture step failed: {error}"));
@@ -256,9 +253,6 @@ fn sized(size: &Value) -> bool {
 
 /// The step's checks from its report.
 pub fn checks(report: &Value) -> Vec<(&'static str, bool)> {
-    if report.get("notApplicable").is_some() {
-        return vec![("helpShotsTaken", true), ("helpShotSize", true), ("helpManifest", true)];
-    }
     let shots = report.get("shots").and_then(Value::as_array).cloned().unwrap_or_default();
     let ok = |shot: &Value| shot.get("status").and_then(Value::as_str) == Some("ok");
     let files = report.get("files").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -300,12 +294,6 @@ mod tests {
             "a smaller screen keeps the window smaller"
         );
         assert!(!sized(&size((1440.0, 900.0), 1.0, (0, 0), None, (0, 0))));
-    }
-
-    /// Off Windows the step takes no picture and says why; its checks hold.
-    #[test]
-    fn a_step_not_applicable_here_passes() {
-        assert!(checks(&json!({"notApplicable": NOT_APPLICABLE})).iter().all(|(_, passed)| *passed));
     }
 
     #[test]

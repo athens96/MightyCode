@@ -33,7 +33,8 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSPasteboardItem",
 ] }
 objc2-web-kit = { version = "0.3", default-features = false, features = [
-    "std", "block2", "objc2-app-kit", "WKNavigation", "WKNavigationDelegate", "WKPreferences", "WKUserContentController", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration",
+    "std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKNavigation", "WKNavigationDelegate", "WKPreferences",
+    "WKUserContentController", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration",
 ] }
 objc2-user-notifications = { version = "0.3", default-features = false, features = [
     "std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse",

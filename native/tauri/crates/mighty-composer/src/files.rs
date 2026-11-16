@@ -64,8 +64,9 @@ pub fn open_file(relative: &str, root: &Path, handles: &dyn FileHandles) -> Resu
     if path.is_dir() {
         return Err(OpenError::NotRegularFile);
     }
-    // std opens with FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE on Windows, as C#'s FileShare does.
-    let file = std::fs::File::open(&path).map_err(|e| match e.kind() {
+    // std opens with FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE on Windows, as C#'s FileShare does; the Mac's port opens
+    // without blocking, so a FIFO is refused below rather than waited on.
+    let file = handles.open_read(&path).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => OpenError::Missing,
         _ => OpenError::Unreadable,
     })?;

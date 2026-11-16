@@ -178,7 +178,7 @@ pub fn long_time(at: &str) -> Option<String> {
 }
 
 /// The setup screen's files port (setup.rs, W6-B): the script folder and its ACL, and whether the app runs elevated (Windows'
-/// `WindowsSetupFiles`; the Mac `Unsupported`).
+/// `WindowsSetupFiles`; the Mac's `MacSetupFiles`, M-G).
 #[cfg(windows)]
 #[allow(dead_code, reason = "setup.rs's files_port (W6-B) switches to it at integration")]
 pub fn setup_files() -> Arc<dyn mighty_platform::SetupFiles> {
@@ -198,6 +198,13 @@ pub async fn page_picture(page: &tauri::Webview) -> std::result::Result<Vec<u8>,
     return os::page::capture_preview(page).await.map_err(|e| e.to_string());
     #[cfg(target_os = "macos")]
     return os::page::snapshot(page, None).await;
+}
+
+/// The picture of a box of the page (x, y, width, height in CSS pixels) as PNG bytes (the help capture's popovers): WKWebView's snapshot
+/// of that rectangle (M-G); Windows clips through the DevTools protocol instead ([`page_devtools`]).
+#[cfg(target_os = "macos")]
+pub async fn page_picture_of(page: &tauri::Webview, clip: (f64, f64, f64, f64)) -> std::result::Result<Vec<u8>, String> {
+    os::page::snapshot(page, Some(clip)).await
 }
 
 /// A DevTools protocol call on the page (the help capture's clipped pictures and reduced motion, W9-H): Windows' WebView2 only; the

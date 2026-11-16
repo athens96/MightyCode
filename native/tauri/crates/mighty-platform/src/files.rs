@@ -16,6 +16,13 @@ use crate::{BoxFuture, PlatformError, Result};
 pub trait FileHandles: Send + Sync {
     /// Whether this OS asks a handle where it is; when false the other methods are not called.
     fn asks_handles(&self) -> bool;
+    /// Opens the file at `path` for reading, as the shared reader does before it asks the handle. By default `File::open` (Windows:
+    /// sharing read, write and delete, as C#'s `FileShare` does). The Mac opens without blocking and without following a last link
+    /// (`O_NONBLOCK | O_NOFOLLOW`, then blocking again), so a FIFO a name opened cannot hang the reader before [`FileHandles::is_disk`]
+    /// refuses it.
+    fn open_read(&self, path: &Path) -> std::io::Result<File> {
+        File::open(path)
+    }
     /// The handle is a file on a disk (`GetFileType` is `FILE_TYPE_DISK`), not a pipe, a console or another device a name opened.
     fn is_disk(&self, file: &File) -> bool;
     /// The path the handle really points at (`GetFinalPathNameByHandleW` with `\\?\` taken off and `\\?\UNC\` written `\\`);
