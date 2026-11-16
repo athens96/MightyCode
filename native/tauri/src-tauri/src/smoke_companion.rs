@@ -158,13 +158,16 @@ fn normalized(key: &str, modifiers: u64) -> (String, u64) {
 
 async fn menu_installed(host: &Arc<Host>) -> Result<bool, String> {
     // The menu is made once the host is managed: given a moment at most.
-    let settings = host.locale.get("menu.settings");
+    let (settings, help) = (host.locale.get("menu.settings"), host.locale.get("menu.help"));
     let mut entries = Vec::new();
     // One deadline for the whole wait (each read is a main-thread round trip).
     let end = Instant::now() + Duration::from_secs(3);
     while Instant::now() < end {
         entries = on_main(host, crate::platform::menu_entries).await.flatten().unwrap_or_default();
-        if entries.iter().any(|(_, title, _, _)| *title == settings) {
+        // Its ⌘? is set just after the menu is in (menu.rs `character_key`).
+        if entries.iter().any(|(_, title, _, _)| *title == settings)
+            && entries.iter().any(|(_, title, key, _)| *title == help && !key.is_empty())
+        {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;

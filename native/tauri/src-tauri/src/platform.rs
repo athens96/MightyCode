@@ -404,3 +404,16 @@ pub async fn notification_authorization() -> Option<Option<bool>> {
     #[cfg(windows)]
     None
 }
+
+/// A menu item (by its title) given a ⌘ character key equivalent, on the main thread after the menu is in (menu.rs).
+pub fn set_menu_character_key(app: &tauri::AppHandle, title: &str, key: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let (title, key) = (title.to_string(), key.to_string());
+        let _ = app.run_on_main_thread(move || {
+            os::menu::set_command_key(&title, &key);
+        });
+    }
+    #[cfg(windows)]
+    let _ = (app, title, key);
+}

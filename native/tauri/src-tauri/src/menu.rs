@@ -245,7 +245,14 @@ pub fn install(app: &tauri::AppHandle) -> tauri::Result<()> {
         for _ in 0..200 {
             if let Some(host) = app.try_state::<Arc<Host>>().map(|h| h.inner().clone()) {
                 match build(&app, &host.locale).and_then(|menu| app.set_menu(menu)) {
-                    Ok(_) => host.log.line("menu: installed"),
+                    Ok(_) => {
+                        host.log.line("menu: installed");
+                        for item in items() {
+                            if let Some(key) = item.accelerator.and_then(character_key) {
+                                crate::platform::set_menu_character_key(&app, &host.locale.get(item.key), key);
+                            }
+                        }
+                    }
                     Err(error) => host.log.line(&format!("menu: {error}")),
                 }
                 return;
@@ -254,6 +261,12 @@ pub fn install(app: &tauri::AppHandle) -> tauri::Result<()> {
         }
     });
     Ok(())
+}
+
+/// The character of a ⌘ key that names a character, not a key code (`Cmd+?`: the `?` wherever the layout puts it), which Tauri's
+/// accelerators cannot take (review item 14).
+pub fn character_key(accelerator: &str) -> Option<&str> {
+    accelerator.strip_prefix("Cmd+").filter(|key| *key == "?")
 }
 
 /// The menu bar in the app's language.
@@ -266,7 +279,8 @@ pub fn build(app: &tauri::AppHandle, locale: &Locale) -> tauri::Result<Menu<taur
                 built.separator()
             } else {
                 let mut entry = MenuItemBuilder::with_id(item.id, locale.get(item.key));
-                if let Some(accelerator) = item.accelerator {
+                // Tauri's accelerators name key codes; a character key (⌘?) is set on the item by the platform after the menu is in.
+                if let Some(accelerator) = item.accelerator.filter(|a| character_key(a).is_none()) {
                     entry = entry.accelerator(accelerator);
                 }
                 built.item(&entry.build(app)?)
@@ -405,6 +419,8 @@ mod tests {
             ]
         );
         assert_eq!(items().filter(|i| i.act == Act::Host).count(), 3);
+        assert_eq!(character_key("Cmd+?"), Some("?"));
+        assert_eq!(character_key("Cmd+K"), None);
         for language in mighty_core::locale::LANGUAGES {
             assert!(!standard(language).edit.is_empty());
         }

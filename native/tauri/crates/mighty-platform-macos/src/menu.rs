@@ -70,3 +70,19 @@ pub fn press(key: &str, code: u16, modifiers: u64) -> Option<bool> {
     )?;
     Some(main.performKeyEquivalent(&event))
 }
+
+/// The item titled `title` given the key equivalent ⌘`key` (a character, as Swift's `keyboardShortcut("?")`); whether it was found.
+pub fn set_command_key(title: &str, key: &str) -> Option<bool> {
+    let mtm = MainThreadMarker::new()?;
+    let main = NSApplication::sharedApplication(mtm).mainMenu()?;
+    fn find(menu: &NSMenu, title: &str) -> Option<objc2::rc::Retained<objc2_app_kit::NSMenuItem>> {
+        menu.itemArray().iter().find_map(|item| match item.submenu() {
+            Some(submenu) => find(&submenu, title),
+            None => (item.title().to_string() == title).then_some(item),
+        })
+    }
+    let item = find(&main, title)?;
+    item.setKeyEquivalent(&NSString::from_str(key));
+    item.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
+    Some(true)
+}
