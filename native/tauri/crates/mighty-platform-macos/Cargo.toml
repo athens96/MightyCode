@@ -13,7 +13,8 @@ rust-version.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 mighty-platform.workspace = true
 dirs.workspace = true
-tauri.workspace = true
+# M-E: browser panes are child webviews (Window::add_child, Tauri's multi-webview), as on Windows.
+tauri = { workspace = true, features = ["unstable"] }
 tokio = { workspace = true, features = ["rt", "sync", "time", "net", "io-util"] }
 libc = "0.2"
 block2 = "0.6"
@@ -28,7 +29,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSRunningApplication", "NSScreen", "NSView", "NSWindow", "NSWorkspace",
 ] }
 objc2-web-kit = { version = "0.3", default-features = false, features = [
-    "std", "block2", "objc2-app-kit", "WKNavigation", "WKPreferences", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration",
+    "std", "block2", "objc2-app-kit", "WKNavigation", "WKNavigationDelegate", "WKPreferences", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration",
 ] }
 objc2-user-notifications = { version = "0.3", default-features = false, features = [
     "std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse",

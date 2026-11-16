@@ -200,17 +200,33 @@ impl NativeSurface for WebKitBrowser {
         })
     }
 
-    /// What AppKit says, not what was last asked: the WKWebView's frame in the window's content view, in device pixels.
+    /// What AppKit says, not what was last asked: the WKWebView's frame in the window's content view, in device pixels, and the
+    /// address it shows (read here: wry's own getter unwraps a view that has none yet).
     fn inspect(&self) -> BoxFuture<'_, Result<SurfaceState>> {
         Box::pin(async move {
-            let (bounds, visible) = on_view(&self.webview, "inspect", |view, _| super::device_state(view)).await?;
-            Ok(SurfaceState { bounds, visible, url: self.webview.url().ok().map(String::from) })
+            let ((bounds, visible), url) = on_view(&self.webview, "inspect", |view, _| {
+                // SAFETY: the live view's address, on the main thread.
+                let url = unsafe { view.URL() }.and_then(|url| url.absoluteString()).map(|text| text.to_string());
+                (super::device_state(view), url)
+            })
+            .await?;
+            Ok(SurfaceState { bounds, visible, url })
         })
     }
 
     fn close(&self) -> Result<()> {
-        // Forgotten on the main thread before the close reaches it (both go through its queue, in order).
-        let _ = self.webview.with_webview(|platform| super::forget_focus(platform.inner() as usize));
+        // On the main thread before the close reaches it (both go through its queue, in order): its presses forgotten, and its load
+        // stopped with no navigation callback left (wry's page-load handler unwraps the address, which a view torn down mid-load has
+        // none of).
+        let _ = self.webview.with_webview(|platform| {
+            super::forget_focus(platform.inner() as usize);
+            // SAFETY: wry's WKWebView on the main thread; its navigation delegate is a weak property.
+            unsafe {
+                let view = &*(platform.inner() as *const WKWebView);
+                view.stopLoading();
+                view.setNavigationDelegate(None);
+            }
+        });
         self.webview.close().map_err(|error| refused("close", error))
     }
 }
