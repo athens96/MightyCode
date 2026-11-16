@@ -54,12 +54,11 @@ objc2-core-graphics = { version = "0.3", default-features = false, features = [
 objc2-core-foundation = { version = "0.3", default-features = false, features = [
     "std", "CFArray", "CFAttributedString", "CFBase", "CFCGTypes", "CFCharacterSet", "CFData", "CFDictionary", "CFNumber", "CFString",
 ] }
-# M-F: the input method diagnostics file (input_method.rs).
-serde_json.workspace = true
 core-foundation = "0.10"
 core-graphics = "0.25"
 security-framework = "3"
-# M-E: the pane picture's data: URL, the website data stores' version-5 UUIDs, BrowserEngine.lock.
+# M-E: the pane picture's data: URL, the website data stores' version-5 UUIDs, BrowserEngine.lock; M-F: the input method diagnostics
+# file (input_method.rs).
 base64 = "0.22"
 sha1 = "0.10"
 serde_json.workspace = true
@@ -74,7 +73,6 @@ tokio-native-tls = "0.3"
 # JSON; M-A's and M-H's checks (the update transport against a loopback server) run on tokio's runtime.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 mighty-core.workspace = true
-serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "io-util"] }
 
 # M-D: libghostty and AppKit want the main thread, which only a harness-less test binary gives.
