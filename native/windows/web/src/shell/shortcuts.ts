@@ -38,16 +38,17 @@ export function shortcutAction(event: ShortcutKey): ShortcutAction | null {
 
 /**
  * The Mac's shortcuts in the Rust host's build (plan D9; `import.meta.env.MODE === 'tauri'` and the host's `macos` only): ⌘ is the
- * modifier where Windows has Ctrl (M/MightyCodeApp.swift's menu keys: ⌘O ⌘N ⌘K ⌘T ⇧⌘E ⌘, ⌘= ⌘- ⌘0, ⌃⌘S for the sidebar, ⌘? for help),
+ * modifier where Windows has Ctrl (M/MightyCodeApp.swift's menu keys: ⌘O ⌘N ⌘K ⌘T ⇧⌘E ⌘, ⌘= ⌘- ⌘0, ⌃⌘S for the sidebar, ⌘? for help by its character),
  * and a Ctrl key is left to the text fields (⌃K, ⌃T edit text on a Mac). The menu bar has the same keys: what the page takes here
  * the menu does not see, and what it leaves the menu runs.
  */
 export function macShortcutAction(event: ShortcutKey): ShortcutAction | null {
   if (!event.metaKey || event.altKey) return null;
   if (event.ctrlKey) return !event.shiftKey && event.code === 'KeyS' ? 'toggleSidebar' : null;
+  // ⌘? is the `?` character wherever the layout has it (Swift's `keyboardShortcut("?")`).
+  if (event.key === '?') return 'help';
   if (event.shiftKey) {
     if (event.code === 'KeyE') return 'files';
-    if (event.code === 'Slash') return 'help';
     return event.code === 'Equal' ? 'textLarger' : null;
   }
   switch (event.code) {

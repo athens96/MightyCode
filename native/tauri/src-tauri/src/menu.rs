@@ -83,8 +83,8 @@ pub const WORKSPACE: [Item; 11] = [
     page("settings", "menu.settings", Some("Cmd+,")),
 ];
 
-/// Help (Swift's `CommandGroup(replacing: .help)`, the standard ⌘?).
-pub const HELP: [Item; 1] = [page("help", "menu.help", Some("Shift+Cmd+/"))];
+/// Help (Swift's `CommandGroup(replacing: .help)`, the standard ⌘?: the `?` character, so it works on any layout).
+pub const HELP: [Item; 1] = [page("help", "menu.help", Some("Cmd+?"))];
 
 /// Every item of the app's own.
 pub fn items() -> impl Iterator<Item = &'static Item> {
@@ -401,7 +401,7 @@ mod tests {
                 ("newShell", "Cmd+T"),
                 ("files", "Shift+Cmd+E"),
                 ("settings", "Cmd+,"),
-                ("help", "Shift+Cmd+/"),
+                ("help", "Cmd+?"),
             ]
         );
         assert_eq!(items().filter(|i| i.act == Act::Host).count(), 3);

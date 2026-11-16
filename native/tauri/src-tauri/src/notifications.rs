@@ -23,13 +23,30 @@ use tauri::Manager;
 use crate::host::Host;
 
 /// Whether the OS lets the app notify (C# `NotificationPermission`): `Verification` while the app may not register with the OS
-/// (without `--allow-state-write`, and in a smoke), else allowed or needing the user's permission.
+/// (without `--allow-state-write`, and in a smoke), else allowed or needing the user's permission; on the Mac also refused in System
+/// Settings (Swift `refreshNotificationStatus`: `.denied`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NotificationPermission {
     #[default]
     Verification,
     Allowed,
     NeedPermission,
+    Denied,
+}
+
+/// Swift `refreshNotificationStatus` (AgentCompanion.swift:389): authorized is allowed, denied is denied, not yet asked needs the
+/// person's permission.
+pub fn permission_for(authorized: Option<bool>) -> NotificationPermission {
+    match authorized {
+        Some(true) => NotificationPermission::Allowed,
+        Some(false) => NotificationPermission::Denied,
+        None => NotificationPermission::NeedPermission,
+    }
+}
+
+/// The OS's own answer replaces what the registration implied, except in the verification mode (nothing was asked of the OS).
+fn apply_status(current: NotificationPermission, authorized: Option<bool>) -> NotificationPermission {
+    if current == NotificationPermission::Verification { current } else { permission_for(authorized) }
 }
 
 #[derive(Default)]
@@ -38,6 +55,8 @@ struct State {
     permission: NotificationPermission,
     /// The activator's class served for the app's life (dropped: revoked).
     served: Option<Subscription>,
+    /// When the OS's notification settings were last asked for (the Mac), so a row drawn often asks at most every 2 s.
+    asked: Option<std::time::Instant>,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -73,7 +92,12 @@ fn activate(
     }
     let mut errors = Vec::new();
     let registered = match (owns, exe) {
-        (true, Some(exe)) => activator.register(AUMID, CLSID, exe).map_err(|error| error.to_string()),
+        // A platform with no toast activator (the Mac: its notifications' clicks come back through the notifier) registers the
+        // name its own way (`register_notifications`: the Mac asks for authorization), even for the installed release (review item 2).
+        (true, Some(exe)) => match activator.register(AUMID, CLSID, exe) {
+            Err(error) if error.is_unsupported() => register_name(),
+            registered => registered.map_err(|error| error.to_string()),
+        },
         (true, None) => Err("the app's own executable is not known".to_string()),
         (false, _) => register_name(),
     };
@@ -91,6 +115,8 @@ fn activate(
     });
     let served = match activator.serve(CLSID, callback) {
         Ok(served) => Some(served),
+        // Nothing to serve where there is no activator.
+        Err(error) if error.is_unsupported() => None,
         Err(error) => {
             errors.push(format!("the activator is not served: {error}"));
             None
@@ -124,7 +150,9 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
     with(|state| {
         state.permission = activated.permission;
         state.served = activated.served;
+        state.asked = None;
     });
+    refresh();
     if let Some(ports) = host.app.try_state::<crate::platform::Ports>() {
         let to = host.clone();
         ports.notifier.on_activated(Arc::new(move |pane| {
@@ -135,9 +163,31 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
     }
 }
 
-/// `notifications::permission`: what the companion box's permission row says.
+/// `notifications::permission`: what the companion box's permission row says. Where the OS keeps its own answer (the Mac), it is
+/// asked again in the background (at most every 2 s) and the next read has it.
 pub fn permission(_host: &Host) -> NotificationPermission {
+    refresh();
     with(|state| state.permission)
+}
+
+/// The OS's notification settings read again (the Mac's `getNotificationSettings`; nothing on Windows, whose answer is the
+/// registration's).
+fn refresh() {
+    let due = with(|state| {
+        let due = state.permission != NotificationPermission::Verification
+            && state.asked.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(2));
+        if due {
+            state.asked = Some(std::time::Instant::now());
+        }
+        due
+    });
+    if due {
+        tauri::async_runtime::spawn(async {
+            if let Some(authorized) = crate::platform::notification_authorization().await {
+                with(|state| state.permission = apply_status(state.permission, authorized));
+            }
+        });
+    }
 }
 
 /// The permission row's words (C# `BuildCompanionSection`).
@@ -147,6 +197,7 @@ pub fn permission_text(locale: &Locale, permission: NotificationPermission) -> S
         match permission {
             NotificationPermission::Allowed => "StatusAllowed",
             NotificationPermission::NeedPermission => "StatusNeedPermission",
+            NotificationPermission::Denied => "StatusDenied",
             NotificationPermission::Verification => "StatusVerificationMode",
         },
     )
@@ -170,17 +221,23 @@ pub fn on_status(host: &Arc<Host>, session_id: &str, status: Option<&str>) {
     }
     let Some(ports) = host.app.try_state::<crate::platform::Ports>() else { return };
     let notifier = ports.notifier.clone();
-    let notification = Notification {
-        title: notifications::text(&host.locale, "NotificationTitle"),
-        body: notifications::body(&host.locale, &run_title),
-        pane_id: Some(session_id.to_string()),
-    };
+    let notification = completion(&host.locale, session_id, &run_title);
     let log = host.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(error) = notifier.notify(notification).await {
             log.log.line(&format!("notifications: not shown: {error}"));
         }
     });
+}
+
+/// The completion notification of a pane (C# `HandleRunEventForNotification`'s toast): the localized title over "{title} has
+/// finished.", the pane's id for its click, nothing of its prompt or folder.
+pub fn completion(locale: &Locale, session_id: &str, run_title: &str) -> Notification {
+    Notification {
+        title: notifications::text(locale, "NotificationTitle"),
+        body: notifications::body(locale, run_title),
+        pane_id: Some(session_id.to_string()),
+    }
 }
 
 /// C# `FocusSession`: the pane's window forward, `select{paneId}` pushed, the pane selected.
@@ -239,6 +296,18 @@ mod tests {
 
     fn named() -> Result<(), String> {
         Ok(())
+    }
+
+    /// An activator the OS refuses (Windows' registry denied, the class not served).
+    struct Refusing;
+
+    impl ToastActivator for Refusing {
+        fn register(&self, _aumid: &str, _clsid: &str, _exe: &Path) -> mighty_platform::Result<()> {
+            Err(mighty_platform::PlatformError::Refused("registry: denied".into()))
+        }
+        fn serve(&self, _clsid: &str, _callback: mighty_platform::ToastActivation) -> mighty_platform::Result<Subscription> {
+            Err(mighty_platform::PlatformError::Refused("CoRegisterClassObject: denied".into()))
+        }
     }
 
     /// Where the app may not change the machine (a development build without the flag, `--read-only`, a smoke), nothing is registered
@@ -306,12 +375,41 @@ mod tests {
     fn a_refused_registration_needs_permission() {
         let (_, focus) = recording();
         let exe = Path::new(r"C:\app\MightyCode.exe");
-        let activated = activate(&mighty_platform::unsupported::Unsupported, true, true, Some(exe), named, focus.clone());
+        let activated = activate(&Refusing, true, true, Some(exe), named, focus.clone());
         assert_eq!(activated.permission, NotificationPermission::NeedPermission);
         assert_eq!(activated.errors.len(), 2, "{:?}", activated.errors);
         let activated = activate(&RecordingActivator::default(), true, true, None, named, focus);
         assert_eq!(activated.permission, NotificationPermission::NeedPermission, "no exe to start: not registered");
         assert!(activated.served.is_some());
+    }
+
+    /// Review item 2: where the platform has no toast activator (the Mac), even the installed release registers its notifications its
+    /// own way (`register_notifications`, the authorization request) and serves nothing, with no error; and the OS's answer then names
+    /// the row (Swift: authorized, denied, or not asked yet), never in the verification mode.
+    #[test]
+    fn without_an_activator_the_installed_release_asks_the_os() {
+        let (_, focus) = recording();
+        let mut asked = false;
+        let activated = activate(
+            &mighty_platform::unsupported::Unsupported,
+            true,
+            true,
+            Some(Path::new("/Applications/MightyCode.app/Contents/MacOS/MightyCode")),
+            || {
+                asked = true;
+                Ok(())
+            },
+            focus.clone(),
+        );
+        assert!(asked, "the name registered the platform's way");
+        assert!(activated.errors.is_empty() && activated.served.is_none(), "{:?}", activated.errors);
+        assert_eq!(activated.permission, NotificationPermission::Allowed);
+        let refused = activate(&mighty_platform::unsupported::Unsupported, true, true, Some(Path::new("/x")), || Err("no".into()), focus);
+        assert_eq!(refused.permission, NotificationPermission::NeedPermission);
+        assert_eq!(apply_status(NotificationPermission::Allowed, Some(false)), NotificationPermission::Denied);
+        assert_eq!(apply_status(NotificationPermission::Allowed, None), NotificationPermission::NeedPermission);
+        assert_eq!(apply_status(NotificationPermission::NeedPermission, Some(true)), NotificationPermission::Allowed);
+        assert_eq!(apply_status(NotificationPermission::Verification, Some(true)), NotificationPermission::Verification);
     }
 
     #[test]
@@ -320,5 +418,6 @@ mod tests {
         assert_eq!(permission_text(&ko, NotificationPermission::Verification), "검증 모드");
         assert_eq!(permission_text(&ko, NotificationPermission::Allowed), "허용됨");
         assert_eq!(permission_text(&ko, NotificationPermission::NeedPermission), "권한 필요");
+        assert_eq!(permission_text(&Locale::new("en"), NotificationPermission::Denied), "Allow notifications in system settings");
     }
 }

@@ -38,8 +38,8 @@ describe('shortcuts (spec section 8)', () => {
 });
 
 describe("the Mac's shortcuts and menu (D9, the Rust host on macOS only)", () => {
-  const mac = (code: string, extra: Partial<{ ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean }> = {}) =>
-    ({ key: '', code, ctrlKey: extra.ctrlKey ?? false, shiftKey: extra.shiftKey ?? false, altKey: extra.altKey ?? false, metaKey: extra.metaKey ?? true });
+  const mac = (code: string, extra: Partial<{ key: string; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean }> = {}) =>
+    ({ key: extra.key ?? '', code, ctrlKey: extra.ctrlKey ?? false, shiftKey: extra.shiftKey ?? false, altKey: extra.altKey ?? false, metaKey: extra.metaKey ?? true });
   it('maps the menu bar keys with ⌘', () => {
     expect(macShortcutAction(mac('KeyO'))).toBe('openFolder');
     expect(macShortcutAction(mac('KeyN'))).toBe('newPane');
@@ -47,7 +47,10 @@ describe("the Mac's shortcuts and menu (D9, the Rust host on macOS only)", () =>
     expect(macShortcutAction(mac('KeyT'))).toBe('newShell');
     expect(macShortcutAction(mac('Comma'))).toBe('settings');
     expect(macShortcutAction(mac('KeyE', { shiftKey: true }))).toBe('files');
-    expect(macShortcutAction(mac('Slash', { shiftKey: true }))).toBe('help');
+    expect(macShortcutAction(mac('Slash', { key: '?', shiftKey: true }))).toBe('help');
+    // A layout whose ? is elsewhere (French: ⇧, on the M key's place) still reaches help.
+    expect(macShortcutAction(mac('KeyM', { key: '?', shiftKey: true }))).toBe('help');
+    expect(macShortcutAction(mac('Slash', { key: '/', shiftKey: false }))).toBeNull();
     expect(macShortcutAction(mac('KeyS', { ctrlKey: true }))).toBe('toggleSidebar');
     expect(macShortcutAction(mac('Equal'))).toBe('textLarger');
     expect(macShortcutAction(mac('Minus'))).toBe('textSmaller');

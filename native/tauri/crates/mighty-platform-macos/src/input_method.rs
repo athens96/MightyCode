@@ -235,6 +235,7 @@ unsafe extern "C" {
 }
 
 /// `currentInputSourceID` / `currentLayoutSourceID`: the TIS input source's id (`com.apple.inputmethod.Korean.2SetKorean`, …).
+/// Main thread only (TIS is HIToolbox's): called from [`snapshot`], which runs there.
 fn input_source(which: InputSource) -> Option<String> {
     // SAFETY: TIS's copy functions return a retained source or null; the property is a CFString the source owns (get rule), copied
     // into a Rust string before the source is released.
@@ -293,12 +294,13 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// The TIS reads answer on any Mac (the runner's ABC layout at least) and never fail the snapshot.
+    /// Each way a reconnection ends names the words the person is told. (The TIS reads are the main thread's, as the snapshot makes
+    /// them there: a test thread does not call them, review item 13.)
     #[test]
-    fn the_input_sources_are_read() {
-        let layout = input_source(InputSource::Layout);
-        assert!(layout.as_deref().is_none_or(|id| id.starts_with("com.apple.")), "{layout:?}");
-        let _ = secure_event_input();
+    fn each_reconnection_end_names_its_words() {
+        assert_eq!(Reconnect::Reconnected.key(), "inputRecovery.reconnected");
+        assert_eq!(Reconnect::ActivationUnavailable.key(), "inputRecovery.activationUnavailable");
         assert_eq!(Reconnect::WindowUnavailable.key(), "inputRecovery.windowUnavailable");
+        assert_eq!(Reconnect::ResponderRejected.key(), "inputRecovery.responderRejected");
     }
 }

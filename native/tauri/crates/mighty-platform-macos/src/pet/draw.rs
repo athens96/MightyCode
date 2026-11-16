@@ -75,8 +75,9 @@ impl Renderer {
         Some(Renderer { text, space: CGColorSpace::new_device_rgb()?, atlas: None, symbols: HashMap::new() })
     }
 
-    /// The scene drawn at its scale into a bitmap of exactly its pixels.
-    pub fn render(&mut self, scene: &PetScene) -> Option<Frame> {
+    /// The scene drawn at its scale into a bitmap of exactly its pixels; the pixels copied out only when `pixels` (a capture wants them,
+    /// review item 10).
+    pub fn render(&mut self, scene: &PetScene, pixels: bool) -> Option<Frame> {
         let (width, height) = scene.pixel_size();
         let scale = if scene.scale.is_finite() && scene.scale > 0.0 { scene.scale } else { 1.0 };
         let stride = width as usize * 4;
@@ -95,12 +96,16 @@ impl Renderer {
             self.atlas = scene.atlas.as_ref().and_then(|atlas| self.atlas_image(atlas).map(|image| (atlas.key.clone(), image)));
         }
         self.items(&context, &scene.items, scale);
-        let data = CGBitmapContextGetData(Some(&context)) as *const u8;
-        if data.is_null() {
-            return None;
-        }
-        // SAFETY: the context's own buffer of `stride × height` bytes, read after its drawing is done.
-        let bgra = unsafe { std::slice::from_raw_parts(data, stride * height as usize) }.to_vec();
+        let bgra = if pixels {
+            let data = CGBitmapContextGetData(Some(&context)) as *const u8;
+            if data.is_null() {
+                return None;
+            }
+            // SAFETY: the context's own buffer of `stride × height` bytes, read after its drawing is done.
+            unsafe { std::slice::from_raw_parts(data, stride * height as usize) }.to_vec()
+        } else {
+            Vec::new()
+        };
         let image = CGBitmapContextCreateImage(Some(&context))?;
         Some(Frame { width, height, bgra, image })
     }
@@ -359,7 +364,14 @@ impl Renderer {
             PetGlyphSize::Ink(tall) | PetGlyphSize::Font(tall) => tall,
         };
         let key = (name.to_string(), tall.to_bits(), (scale * 1000.0) as u64 + u64::from(weight) * 1_000_000);
-        let made = self.symbols.entry(key).or_insert_with(|| mask(name, tall, weight, scale)).as_ref();
+        let text = self.text.clone();
+        let name_owned = name.to_string();
+        // NSImage's symbols are made on the main thread (review item 12); the CGImage they give is used here.
+        let made = self
+            .symbols
+            .entry(key)
+            .or_insert_with(|| text.on_main(move || mask(&name_owned, tall, weight, scale).map(Sendable)).flatten().map(|m| m.0))
+            .as_ref();
         let Some((image, aspect)) = made else { return };
         let (height, width) = (tall, tall * aspect);
         let c = Some(context);
@@ -374,6 +386,11 @@ impl Renderer {
         CGContext::restore_g_state(c);
     }
 }
+
+/// A CGImage handed from the main thread (immutable, and CoreGraphics' images may be used from any thread).
+struct Sendable(Mask);
+// SAFETY: as above; the f64 is plain data.
+unsafe impl Send for Sendable {}
 
 /// The symbol's template image at `tall` points, rendered at `scale` pixels a point, and its width over its height.
 fn mask(name: &str, tall: f64, weight: u16, scale: f64) -> Option<Mask> {
@@ -444,8 +461,9 @@ mod tests {
             ..PetScene::default()
         };
         let mut renderer = Renderer::new(std::sync::Arc::new(Text::default())).unwrap();
-        let frame = renderer.render(&scene).unwrap();
+        let frame = renderer.render(&scene, true).unwrap();
         assert_eq!((frame.width, frame.height), (248, 160));
+        assert!(renderer.render(&scene, false).unwrap().bgra.is_empty(), "no pixels copied unless asked");
         assert_eq!(at(&frame, 2 * 17, 2 * 40), [card.b, card.g, card.r, 255]);
         assert_eq!(at(&frame, 2 * 13, 2 * 11)[3], 0, "a corner of radius 18 is clear");
         assert_eq!(at(&frame, 2 * 60, 2 * 72)[3], 0, "nothing below the bubble");
@@ -489,7 +507,7 @@ mod tests {
                     atlas: Some(atlas.clone()),
                     ..PetScene::default()
                 };
-                let frame = renderer.render(&scene).unwrap();
+                let frame = renderer.render(&scene, true).unwrap();
                 assert_eq!((frame.width, frame.height), (cell_w, cell_h));
                 assert_eq!(at(&frame, 100, 100), [*b, *g, *r, 255], "row {row} column {column}");
                 let mark = at(&frame, 2, 3);

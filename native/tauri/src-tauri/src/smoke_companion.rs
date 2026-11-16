@@ -87,11 +87,23 @@ async fn on_main<T: Send + 'static>(host: &Host, work: impl FnOnce() -> T + Send
 }
 
 /// The menu, the deep link and the notification (the pet's panel and the front app are read in [`run`], while the pet is open).
+/// Each part bounded and the whole within [`MAC_LIMIT`] (review item 4: the Mac smoke runs near its own limit).
 async fn mac_checks(host: &Arc<Host>, checks: &mut Map<String, Value>) {
-    let menu = menu_installed(host).await;
-    let keys = menu_keys(host).await;
-    let link = deep_link(host).await;
-    let notification = notification_requested(host, link.as_ref().ok().and_then(|p| p.as_deref()));
+    let bounded = async {
+        let menu = bound(MENU_LIMIT, "the menu bar", menu_installed(host)).await;
+        let keys = bound(MENU_LIMIT, "the menu's keys", menu_keys(host)).await;
+        let link = bound(LINK_LIMIT, "the deep link", deep_link(host)).await;
+        let notification = notification_requested(host, link.as_ref().ok().and_then(|p| p.as_deref())).await;
+        (menu, keys, link, notification)
+    };
+    let (menu, keys, link, notification) = match tokio::time::timeout(MAC_LIMIT, bounded).await {
+        Ok(outcomes) => outcomes,
+        Err(_) => {
+            let late = || Err::<bool, String>(format!("the Mac checks took over {} s", MAC_LIMIT.as_secs()));
+            crate::menu::set_recorder(None);
+            (late(), late(), Err(format!("the Mac checks took over {} s", MAC_LIMIT.as_secs())), late())
+        }
+    };
     let report = mac_report(checks);
     let outcomes = [
         ("menuInstalled", menu),
@@ -110,6 +122,15 @@ async fn mac_checks(host: &Arc<Host>, checks: &mut Map<String, Value>) {
             }
         }
     }
+}
+
+/// The Mac checks' bounds: the whole, the menu's two, the deep link's (its page wait included).
+const MAC_LIMIT: Duration = Duration::from_secs(20);
+const MENU_LIMIT: Duration = Duration::from_secs(5);
+const LINK_LIMIT: Duration = Duration::from_secs(8);
+
+async fn bound<T>(limit: Duration, what: &str, work: impl std::future::Future<Output = Result<T, String>>) -> Result<T, String> {
+    tokio::time::timeout(limit, work).await.unwrap_or_else(|_| Err(format!("{what} took over {} s", limit.as_secs())))
 }
 
 /// `menu.rs`'s accelerator as AppKit keeps it: the key and the modifier bits (⇧ 1<<17, ⌃ 1<<18, ⌥ 1<<19, ⌘ 1<<20).
@@ -139,7 +160,9 @@ async fn menu_installed(host: &Arc<Host>) -> Result<bool, String> {
     // The menu is made once the host is managed: given a moment at most.
     let settings = host.locale.get("menu.settings");
     let mut entries = Vec::new();
-    for _ in 0..50 {
+    // One deadline for the whole wait (each read is a main-thread round trip).
+    let end = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < end {
         entries = on_main(host, crate::platform::menu_entries).await.flatten().unwrap_or_default();
         if entries.iter().any(|(_, title, _, _)| *title == settings) {
             break;
@@ -210,32 +233,21 @@ async fn deep_link(host: &Arc<Host>) -> Result<Option<String>, String> {
             .ok_or("the smoke's profile has no local workspace with a folder and an agent pane")?;
         (target.0, target.1, target.2, snapshot.active_workspace_id.clone(), snapshot.active_session_id.clone())
     };
-    let before = host.view().panes.get(&pane).map(|ui| ui.view.draft.clone()).unwrap_or_default();
+    // The pane's draft emptied for the link (a draft with words would ask first, review item 1) and put back after.
+    let before = {
+        let mut view = host.view();
+        view.panes.get_mut(&pane).map(|ui| std::mem::take(&mut ui.view.draft)).unwrap_or_default()
+    };
     let words = format!("smoke deep link {}", mighty_core::wire::new_id());
     let link = format!("{}&agent={provider}", crate::deep_link::url(&folder, Some(&words)));
+    // Put back whatever happens, a bound cut short included: the draft, then the workspace and the pane that were in front.
+    let _restore = Restore { host: host.clone(), pane: pane.clone(), draft: before, active, selected };
     let parsed = crate::deep_link::parse(&link).ok_or("the smoke's link did not parse")?;
     let opened = crate::deep_link::open(host, &parsed, false).await;
     let (draft, running) = {
         let view = host.view();
         (view.panes.get(&pane).map(|ui| ui.view.draft.clone()), host.runs().is_some_and(|r| r.service.is_session_running(&pane)))
     };
-    // Put back: the draft, then the workspace and the pane that were in front.
-    {
-        let mut view = host.view();
-        if let Some(ui) = view.panes.get_mut(&pane) {
-            ui.view.draft = before.clone();
-            ui.dirty = true;
-        }
-        if let Some(runs) = host.runs() {
-            let _ = runs.service.update_draft(&pane, &before);
-        }
-        if let Some(active) = &active {
-            let _ = crate::frame::select_workspace(&mut view, active);
-        }
-        if let Some(selected) = &selected {
-            let _ = crate::frame::select_session(&mut view, selected);
-        }
-    }
     let opened = opened?;
     require(
         opened.as_deref() == Some(pane.as_str()),
@@ -246,24 +258,62 @@ async fn deep_link(host: &Arc<Host>) -> Result<Option<String>, String> {
     Ok(opened)
 }
 
-/// The completion notification as `notifications::on_status` makes it, sent through a recording notifier (a smoke never notifies for
-/// real): its title, its body over the pane's title alone, the pane's id, and a click that names the pane.
-fn notification_requested(host: &Arc<Host>, pane: Option<&str>) -> Result<bool, String> {
+/// What the deep link's check changed, put back when it ends (or is cut short).
+struct Restore {
+    host: Arc<Host>,
+    pane: String,
+    draft: String,
+    active: Option<String>,
+    selected: Option<String>,
+}
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        let mut view = self.host.view();
+        if let Some(ui) = view.panes.get_mut(&self.pane) {
+            ui.view.draft = self.draft.clone();
+            ui.dirty = true;
+        }
+        if let Some(runs) = self.host.runs() {
+            let _ = runs.service.update_draft(&self.pane, &self.draft);
+        }
+        if let Some(active) = &self.active {
+            let _ = crate::frame::select_workspace(&mut view, active);
+        }
+        if let Some(selected) = &self.selected {
+            let _ = crate::frame::select_session(&mut view, selected);
+        }
+    }
+}
+
+/// The completion notification the app makes for the pane (`notifications::completion`, what `on_status` sends), sent and awaited
+/// through a recording notifier (a smoke never notifies for real, review item 3): its title, its body naming the pane's title and none
+/// of its folder or draft, its pane id, and a click that names the pane.
+async fn notification_requested(host: &Arc<Host>, pane: Option<&str>) -> Result<bool, String> {
     use mighty_platform::Notifier as _;
     let pane = pane.ok_or("no pane to notify about (the deep link failed)")?;
-    let title = host.view().snapshot.session(pane).map(|s| s.title().to_string()).ok_or("the pane is gone")?;
+    let (title, folder) = {
+        let view = host.view();
+        let session = view.snapshot.session(pane).ok_or("the pane is gone")?;
+        let folder = view.snapshot.workspace(session.workspace_id()).map(|w| w.path().to_string()).unwrap_or_default();
+        (session.title().to_string(), folder)
+    };
     let notifier = mighty_platform::fake::RecordingNotifier::default();
     let clicked: Arc<Mutex<Option<String>>> = Arc::default();
     let recorded = clicked.clone();
     notifier.on_activated(Arc::new(move |pane| *lock(&recorded) = pane));
-    let expected = mighty_platform::Notification {
-        title: mighty_core::notifications::text(&host.locale, "NotificationTitle"),
-        body: mighty_core::notifications::body(&host.locale, &title),
-        pane_id: Some(pane.to_string()),
-    };
-    drop(notifier.notify(expected.clone()));
+    let made = crate::notifications::completion(&host.locale, pane, &title);
+    notifier.notify(made.clone()).await.map_err(|e| e.to_string())?;
     notifier.click(0);
-    require(notifier.shown() == [expected], "the notification is not the completion's")?;
+    let shown = notifier.shown();
+    require(shown == [made.clone()], "the notification was not sent as made")?;
+    require(
+        made.title == mighty_core::notifications::text(&host.locale, "NotificationTitle")
+            && made.body.contains(&title)
+            && (folder.is_empty() || !made.body.contains(&folder))
+            && made.pane_id.as_deref() == Some(pane),
+        &format!("the completion notification is not the pane's: {made:?}"),
+    )?;
     require(lock(&clicked).as_deref() == Some(pane), "the notification's click does not name its pane")?;
     Ok(true)
 }

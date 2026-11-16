@@ -19,7 +19,9 @@
 //!   with `orderFrontRegardless`, and the frame autosave of Swift is left out: the overlay keeps the place in `companion-settings.json`
 //!   (written only where the write policy writes), so the panel never writes the user's defaults.
 //! - **Clicks** pass through where the picture is clear: the window server does not deliver a press on a transparent pixel of a
-//!   non-opaque window (`ignoresMouseEvents` is never set, which would turn that off).
+//!   non-opaque window (`ignoresMouseEvents` is never set, which would turn that off). Plan §1.6 has it toggled per hit as on Windows;
+//!   the window server's own rule is kept instead, and a click through the pet's clear corners onto the app under it is on the user's
+//!   §9 checklist (review item 15: CI's synthetic input reaches the view directly and cannot judge it).
 
 mod draw;
 mod text;
@@ -423,7 +425,7 @@ pub async fn open(window: &tauri::Window) -> Result<Box<dyn PetWindow>> {
         hovering: AtomicBool::new(false),
         wheel: Mutex::new(0.0),
         presses: Mutex::new(presses()),
-        text: Arc::default(),
+        text: Arc::new(text::Text::on(window.clone())),
     });
     let (made, opened) = tokio::sync::oneshot::channel::<Result<MainOnly<Panel>>>();
     let on_main = shared.clone();
@@ -575,18 +577,33 @@ fn render(
                     });
                 }
                 Command::Close => {
-                    let closing = panel.clone();
-                    let _ = window.run_on_main_thread(move || {
-                        if let Some(mut panel) = lock(&closing).take() {
-                            panel.0.close();
-                        }
-                    });
+                    close_on_main(&window, &panel);
                     return;
                 }
             }
         }
         if let Some((scene, show)) = draw {
             frame(&shared, &window, &panel, renderer.as_mut(), &scene, show);
+        }
+    }
+    // The port went without a close: the panel still goes on the main thread.
+    close_on_main(&window, &panel);
+}
+
+/// The panel closed on the main thread. AppKit's objects never end on this thread: if the main thread cannot take the close (the app is
+/// quitting and its loop is gone), the panel is let go of without being released (review item 11).
+fn close_on_main(window: &tauri::Window, panel: &Arc<Mutex<Option<MainOnly<Panel>>>>) {
+    let closing = panel.clone();
+    let posted = window.run_on_main_thread(move || {
+        let taken = lock(&closing).take();
+        if let Some(mut panel) = taken {
+            panel.0.close();
+        }
+    });
+    if posted.is_err() {
+        let taken = lock(panel).take();
+        if let Some(panel) = taken {
+            std::mem::forget(panel);
         }
     }
 }
@@ -604,7 +621,8 @@ fn frame(
     shared.scale.store(scale.to_bits(), Ordering::SeqCst);
     shared.left.store(scene.origin.x.to_bits(), Ordering::SeqCst);
     shared.top.store(scene.origin.y.to_bits(), Ordering::SeqCst);
-    let Some(drawn) = renderer.and_then(|r| r.render(scene)) else {
+    let wanted = shared.capture_wanted.load(Ordering::SeqCst);
+    let Some(drawn) = renderer.and_then(|r| r.render(scene, wanted)) else {
         shared.emit(PetEvent::Failed { message: "CoreGraphics could not draw the pet".into() });
         return;
     };
@@ -612,7 +630,7 @@ fn frame(
         // The number is kept with the pixels it numbers (a smoke waiting for its frame never reads the last one's).
         let mut kept = lock(&shared.capture);
         let frames = shared.frames.fetch_add(1, Ordering::SeqCst) + 1;
-        if shared.capture_wanted.load(Ordering::SeqCst) {
+        if wanted {
             *kept = PetCapture { width: drawn.width, height: drawn.height, bgra: drawn.bgra, frames };
         }
     }

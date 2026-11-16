@@ -32,30 +32,40 @@ pub fn folder(home: &Path) -> PathBuf {
     home.join(".local").join("bin")
 }
 
-/// Writes the command under `home` (atomically, then executable); its path.
-pub fn install(home: &Path) -> Result<PathBuf, String> {
+/// What [`install`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Installed {
+    /// The command is written there.
+    Written(PathBuf),
+    /// Something that is not the app's command is there (another program's `mighty`, a link): left alone until the person says.
+    Foreign(PathBuf),
+}
+
+/// Whether `path` is the app's own command: a plain file (not a link) that starts as [`SCRIPT`] does.
+pub fn ours(path: &Path) -> bool {
+    let plain = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file());
+    let head: String = SCRIPT.lines().take(2).collect::<Vec<_>>().join("\n");
+    plain && std::fs::read(path).is_ok_and(|bytes| bytes.starts_with(head.as_bytes()))
+}
+
+/// Writes the command under `home`: staged in a file of its own made new (never through a link) and executable from the start, then
+/// moved in place; the staged file removed if anything fails (review item 8). A file there that is not the app's is replaced only with
+/// `replace`.
+pub fn install(home: &Path, replace: bool) -> Result<Installed, String> {
     let folder = folder(home);
     std::fs::create_dir_all(&folder).map_err(|e| e.to_string())?;
     let path = folder.join(NAME);
-    let staged = folder.join(format!(".{NAME}.{}.tmp", std::process::id()));
-    std::fs::write(&staged, format!("{SCRIPT}\n")).map_err(|e| e.to_string())?;
-    executable(&staged).map_err(|e| e.to_string())?;
-    std::fs::rename(&staged, &path).map_err(|e| {
+    if !replace && std::fs::symlink_metadata(&path).is_ok() && !ours(&path) {
+        return Ok(Installed::Foreign(path));
+    }
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let staged = folder.join(format!(".{NAME}.{}.{stamp}.tmp", std::process::id()));
+    crate::platform::write_new_executable(&staged, format!("{SCRIPT}\n").as_bytes()).map_err(|e| e.to_string())?;
+    if let Err(error) = std::fs::rename(&staged, &path) {
         let _ = std::fs::remove_file(&staged);
-        e.to_string()
-    })?;
-    Ok(path)
-}
-
-#[cfg(unix)]
-fn executable(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-}
-
-#[cfg(not(unix))]
-fn executable(_path: &Path) -> std::io::Result<()> {
-    Ok(())
+        return Err(error.to_string());
+    }
+    Ok(Installed::Written(path))
 }
 
 /// Swift `ShellCommand.onPath`: whether `folder` is one of `path`'s entries, compared standardized.
@@ -64,17 +74,66 @@ pub fn on_path(path: Option<&str>, folder: &Path) -> bool {
     path.unwrap_or("").split(':').any(|entry| entry.starts_with('/') && crate::deep_link::standardized(entry) == wanted)
 }
 
-/// The menu item (Swift `installShellCommand`): the command written, and the page told where and whether the shell finds it.
+/// The words the app has no catalogue key for yet (the locale files are the C# page's too, whose build must not change): why this run
+/// may not install, and the question before replacing someone else's `mighty`, its message and its button.
+pub fn words(language: &str) -> (&'static str, &'static str, &'static str, &'static str) {
+    match language {
+        "ko" => (
+            "이 실행은 이 Mac을 바꿀 수 없어서 'mighty' 명령을 설치하지 않았습니다. 설치된 앱이나 --allow-state-write로 실행하세요.",
+            "'mighty'를 바꿀까요?",
+            "{path}는 Mighty Code의 명령이 아닙니다. Mighty Code의 명령으로 바꿀까요?",
+            "바꾸기",
+        ),
+        "ja" => (
+            "この実行はこの Mac を変更できないため、'mighty' コマンドをインストールしませんでした。インストール済みのアプリか --allow-state-write で実行してください。",
+            "'mighty' を置き換えますか?",
+            "{path} は Mighty Code のコマンドではありません。Mighty Code のコマンドに置き換えますか?",
+            "置き換える",
+        ),
+        "zh" => (
+            "此次运行不能更改这台 Mac,因此没有安装 'mighty' 命令。请使用已安装的应用或 --allow-state-write 运行。",
+            "要替换 'mighty' 吗?",
+            "{path} 不是 Mighty Code 的命令。要替换为 Mighty Code 的命令吗?",
+            "替换",
+        ),
+        _ => (
+            "The 'mighty' command was not installed: this run may not change this Mac. Use the installed app, or run with --allow-state-write.",
+            "Replace 'mighty'?",
+            "{path} is not Mighty Code's command. Replace it with Mighty Code's?",
+            "Replace",
+        ),
+    }
+}
+
+/// The menu item (Swift `installShellCommand`): the command written, and the page told where and whether the shell finds it. Nothing
+/// is written while a sheet is up (review item 9) or where the run may not change the machine.
 pub async fn install_from_menu(host: &Arc<Host>) {
     let l = &host.locale;
+    let (refused, question, replace_message, replace) = words(l.language());
     if !host.may_change_machine() {
-        host.log.line("shell command: not installed (this run may not change the machine: --allow-state-write)");
-        host.view().error = Some(l.get("windows.notifications.statusVerificationMode"));
+        host.log.line("shell command: not installed (this run may not change the machine)");
+        host.view().error = Some(refused.to_string());
         return;
     }
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
-    let path = match install(&home) {
-        Ok(path) => path,
+    let Some(_sheet) = crate::frame::Sheet::begin(host) else { return };
+    let path = match install(&home, false) {
+        Ok(Installed::Written(path)) => path,
+        Ok(Installed::Foreign(path)) => {
+            let message = replace_message.replace("{path}", &path.display().to_string());
+            let (_, answer) = crate::dialogs::of(host).open(crate::deep_link::confirmation(l, question, &message, replace));
+            if answer.await.ok() != Some(serde_json::Value::Bool(true)) {
+                return;
+            }
+            match install(&home, true) {
+                Ok(Installed::Written(path)) => path,
+                Ok(Installed::Foreign(_)) => return,
+                Err(error) => {
+                    host.view().error = Some(error);
+                    return;
+                }
+            }
+        }
         Err(error) => {
             host.view().error = Some(error);
             return;
@@ -91,7 +150,6 @@ pub async fn install_from_menu(host: &Arc<Host>) {
     } else {
         l.get_with("shellCommand.installed.addPath", &[("path", &path_text), ("folder", &folder_text)])
     };
-    let Some(_sheet) = crate::frame::Sheet::begin(host) else { return };
     let (_, answer) = crate::dialogs::of(host).open(json!({
         "type": "confirm", "title": l.get("shellCommand.installed.title"), "message": message, "close": l.get("common.close"),
     }));
@@ -106,7 +164,7 @@ mod tests {
     #[test]
     fn the_shell_command_installs_executable() {
         let home = std::env::temp_dir().join(format!("mighty-home-{}-{}", std::process::id(), mighty_core::wire::new_id()));
-        let path = install(&home).unwrap();
+        let Installed::Written(path) = install(&home, false).unwrap() else { panic!("written") };
         assert!(path.ends_with(".local/bin/mighty"));
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.starts_with("#!/bin/sh") && text.ends_with("exec open \"$url\"\n"));
@@ -121,9 +179,21 @@ mod tests {
         assert!(on_path(Some("/usr/bin:/Users/me/./.local/bin"), mac_folder));
         assert!(!on_path(Some("/usr/bin"), mac_folder));
         assert!(!on_path(None, mac_folder));
-        // Installed again: replaced in place, nothing left beside it.
-        install(&home).unwrap();
+        // Installed again: its own command replaced in place, nothing left beside it.
+        assert!(ours(&path));
+        assert_eq!(install(&home, false).unwrap(), Installed::Written(path.clone()));
         assert_eq!(std::fs::read_dir(folder(&home)).unwrap().count(), 1);
+        // Review item 8: someone else's `mighty` is left alone until the person says, then replaced.
+        std::fs::write(&path, "#!/bin/sh\necho another tool\n").unwrap();
+        assert!(!ours(&path));
+        assert_eq!(install(&home, false).unwrap(), Installed::Foreign(path.clone()));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "#!/bin/sh\necho another tool\n");
+        assert_eq!(install(&home, true).unwrap(), Installed::Written(path.clone()));
+        assert!(ours(&path));
+        assert_eq!(std::fs::read_dir(folder(&home)).unwrap().count(), 1, "no staged file left");
         std::fs::remove_dir_all(&home).unwrap();
+        for language in mighty_core::locale::LANGUAGES {
+            assert!(words(language).2.contains("{path}"));
+        }
     }
 }

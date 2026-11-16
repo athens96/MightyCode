@@ -40,6 +40,20 @@ pub fn register_notifications() -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// The notification settings' answer (Swift `refreshNotificationStatus`): Some(true) authorized (or provisional), Some(false) denied,
+/// None not asked yet; the outer None where there is no notification centre (outside an app bundle) or it did not answer.
+pub async fn authorized() -> Option<Option<bool>> {
+    let asked = authorization(&*center().ok()?);
+    let status = asked.await.ok()?;
+    Some(if status == UNAuthorizationStatus::Authorized || status == UNAuthorizationStatus::Provisional {
+        Some(true)
+    } else if status == UNAuthorizationStatus::Denied {
+        Some(false)
+    } else {
+        None
+    })
+}
+
 /// Whether this process is an app bundle the notification centre can serve (see the module comment).
 fn bundled() -> bool {
     let bundle = NSBundle::mainBundle();
@@ -192,12 +206,14 @@ define_class!(
         ) {
             let pane = pane_of(&response.notification().request().content().userInfo());
             let handler = lock(handlers()).clone();
+            // The framework is told at once; the focus runs on a thread of its own, so a slow or failing handler never holds or
+            // unwinds through AppKit's delegate call (review item 5).
+            completion.call(());
             if let Some(handler) = handler
                 && pane.is_some()
             {
-                handler(pane);
+                let _ = std::thread::Builder::new().name("mighty-notification-click".into()).spawn(move || handler(pane));
             }
-            completion.call(());
         }
     }
 );

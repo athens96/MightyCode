@@ -61,10 +61,12 @@ struct FontKey {
     tabular: bool,
 }
 
-/// The system faces the pet draws in, made once each.
+/// The system faces the pet draws in, made once each, on the main thread (AppKit's NSFont and NSImage are made there, review item
+/// 12): `window` reaches it; without one (the tests) they are made where they are asked for.
 #[derive(Default)]
 pub struct Text {
     fonts: Mutex<HashMap<FontKey, Font>>,
+    window: Option<tauri::Window>,
 }
 
 /// One text laid out: its lines, the height of each, the first line's ascent, whether one line was cut.
@@ -89,22 +91,60 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Text {
+    /// The faces of a pet window, made on `window`'s main thread.
+    pub fn on(window: tauri::Window) -> Text {
+        Text { fonts: Mutex::default(), window: Some(window) }
+    }
+
+    /// `work` run on the main thread (inline when called there, or with no window), waited for; None only when the main thread took
+    /// it and failed. A main thread that does not take it within 2 s (busy, or quitting) leaves it to run here.
+    pub fn on_main<T: Send + 'static>(&self, work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+        let Some(window) = self.window.as_ref().filter(|_| objc2::MainThreadMarker::new().is_none()) else { return Some(work()) };
+        let slot = std::sync::Arc::new(Mutex::new(Some(work)));
+        let (answer, answered) = std::sync::mpsc::channel();
+        let taken = slot.clone();
+        let posted = window.run_on_main_thread(move || {
+            let work = lock(&taken).take();
+            if let Some(work) = work {
+                let _ = answer.send(work());
+            }
+        });
+        if posted.is_ok()
+            && let Ok(value) = answered.recv_timeout(std::time::Duration::from_secs(2))
+        {
+            return Some(value);
+        }
+        let left = lock(&slot).take();
+        match left {
+            Some(work) => Some(work()),
+            // The main thread has it: its answer comes.
+            None => answered.recv().ok(),
+        }
+    }
+
     /// The system face of the stack (`mono`: the code stack), at a size, weight and slant, its figures tabular when asked.
     pub fn font(&self, mono: bool, size: f64, weight: u16, italic: bool, tabular: bool) -> Font {
         let key = FontKey { mono, size: size.to_bits(), weight, italic, tabular };
         if let Some(found) = lock(&self.fonts).get(&key) {
             return found.clone();
         }
-        let weight = ns_weight(weight);
-        let made: Retained<NSFont> = if mono {
-            NSFont::monospacedSystemFontOfSize_weight(size, weight)
-        } else if tabular {
-            NSFont::monospacedDigitSystemFontOfSize_weight(size, weight)
-        } else {
-            NSFont::systemFontOfSize_weight(size, weight)
+        let make = move || {
+            let weight = ns_weight(weight);
+            let made: Retained<NSFont> = if mono {
+                NSFont::monospacedSystemFontOfSize_weight(size, weight)
+            } else if tabular {
+                NSFont::monospacedDigitSystemFontOfSize_weight(size, weight)
+            } else {
+                NSFont::systemFontOfSize_weight(size, weight)
+            };
+            // SAFETY: NSFont is toll-free bridged with CTFont; the pointer is a live font, retained here as a CTFont.
+            Font(unsafe { CFRetained::retain(NonNull::new_unchecked(Retained::as_ptr(&made) as *mut CTFont)) })
         };
-        // SAFETY: NSFont is toll-free bridged with CTFont; the pointer is a live font, retained here as a CTFont.
-        let mut font = unsafe { CFRetained::retain(NonNull::new_unchecked(Retained::as_ptr(&made) as *mut CTFont)) };
+        let made = match self.on_main(make) {
+            Some(font) => font,
+            None => make(),
+        };
+        let mut font = made.0;
         if italic {
             // SAFETY: a copy of a live font with the italic trait; no matrix.
             if let Some(slanted) = unsafe {

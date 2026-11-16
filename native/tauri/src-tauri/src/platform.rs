@@ -378,3 +378,29 @@ pub fn pet_panel_facts() -> Option<Vec<(&'static str, bool)>> {
     #[cfg(windows)]
     None
 }
+
+/// A new file at `path` (never through an existing file or link) holding `bytes`, executable from the start (0755 on the Mac); removed
+/// again if the write fails (shell_command.rs).
+pub fn write_new_executable(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(target_os = "macos")]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o755);
+    let mut file = options.open(path)?;
+    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Whether the OS lets the app notify, where the OS keeps its own answer (the Mac's notification settings): Some(Some(true)) allowed,
+/// Some(Some(false)) denied, Some(None) not asked yet; None where the registration is the answer (Windows) or the OS cannot say.
+pub async fn notification_authorization() -> Option<Option<bool>> {
+    #[cfg(target_os = "macos")]
+    return os::notify::authorized().await;
+    #[cfg(windows)]
+    None
+}
