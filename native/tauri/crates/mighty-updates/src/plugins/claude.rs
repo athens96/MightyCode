@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use mighty_core::model::Workspace;
-use mighty_platform::BoxFuture;
+use mighty_platform::{BoxFuture, PluginListWhileReading};
 use serde_json::Value;
 use tokio::sync::watch;
 
@@ -88,6 +88,9 @@ struct Gate {
     running: Option<watch::Receiver<Option<Arc<ClaudePluginSnapshot>>>>,
     closed: bool,
     operating: bool,
+    /// `PlatformProfile::plugin_list_while_reading` is `Busy` (the Mac): a list asked for while a read or an operation runs is
+    /// answered `busy` at once (Swift `ClaudePluginService.snapshot`'s `guard active == nil`), never joined.
+    busy_while_reading: bool,
 }
 
 /// What both readers share: the runner, the environment every call gets, the two probes and the gate.
@@ -129,6 +132,10 @@ impl Core {
         self.lock().closed = true;
     }
 
+    pub(crate) fn set_while_reading(&self, rule: PluginListWhileReading) {
+        self.lock().busy_while_reading = rule == PluginListWhileReading::Busy;
+    }
+
     /// One read at a time: a second request while a read runs is answered from that read instead of starting a second CLI. The read
     /// starts at once on a task of its own (call it inside a Tokio runtime).
     pub(crate) fn snapshot(
@@ -140,6 +147,11 @@ impl Core {
             if gate.closed {
                 let closed = Arc::new(ClaudePluginSnapshot::of(status::CANCELLED, strings::detail_cancelled()));
                 return Box::pin(async move { closed });
+            }
+            let reading = gate.running.as_ref().is_some_and(|running| running.borrow().is_none());
+            if gate.busy_while_reading && (reading || gate.operating) {
+                let busy = Arc::new(ClaudePluginSnapshot::of(status::BUSY, strings::operation_busy()));
+                return Box::pin(async move { busy });
             }
             match &gate.running {
                 Some(running) if running.borrow().is_none() => running.clone(),
@@ -319,6 +331,13 @@ impl ClaudePluginReader {
         let core =
             Core::new(runner, Self::environment(environment), vec!["FORCE_AUTOUPDATE_PLUGINS".into()], is_executable, directory_exists);
         ClaudePluginReader { core: Arc::new(core) }
+    }
+
+    /// What a list asked for while a read (or, on the Mac, an operation) runs gets: `Join` the running read's answer (Windows, C#),
+    /// `Busy` at once (the Mac, Swift) — `PlatformProfile::plugin_list_while_reading`.
+    pub fn while_reading(self, rule: PluginListWhileReading) -> ClaudePluginReader {
+        self.core.set_while_reading(rule);
+        self
     }
 
     /// The switches macOS sets: no auto-update, no telemetry, no background work, no implicit marketplace install, no git credential

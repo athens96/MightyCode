@@ -342,6 +342,43 @@ async fn second_request_joins_the_running_read() {
     );
 }
 
+/// Mac stage M-J, `PlatformProfile::plugin_list_while_reading` = `Busy`: the Mac answers a list asked for while one is read with
+/// `busy` at once (Swift `ClaudePluginService.snapshot`'s `guard active == nil`, ClaudePluginTests.swift:221), where Windows joins the
+/// running read ([`second_request_joins_the_running_read`]); the read itself still answers, and a later list reads again.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_mac_answers_busy_while_a_read_runs() {
+    korean();
+    let folder = text(&temp("claude-busy"));
+    let (started, release) = (Signal::new(), Signal::new());
+    let runner = healthy_default(&folder);
+    let body = listing(&folder, None);
+    let (started_in, release_in) = (started.clone(), release.clone());
+    runner.set_async(move |call, _| {
+        let (started, release, body) = (started_in.clone(), release_in.clone(), body.clone());
+        Box::pin(async move {
+            if call.arguments.iter().any(|a| a == "--version") {
+                return ok("2.1.271");
+            }
+            if call.arguments.iter().any(|a| a == "marketplace") {
+                return ok(MARKETS);
+            }
+            started.set();
+            release.wait().await;
+            ok(&body)
+        })
+    });
+    let (reader, _, _) = fixture(&runner, true);
+    let reader = reader.while_reading(mighty_platform::PluginListWhileReading::Busy);
+    let ws = workspace(&folder);
+    let first = reader.snapshot(&ws, none());
+    tokio::time::timeout(std::time::Duration::from_secs(5), started.wait()).await.expect("the read started");
+    let second = reader.snapshot(&ws, none()).await;
+    assert!(second.status == status::BUSY && second.detail == strings::operation_busy(), "{second:?}");
+    release.set();
+    assert_eq!(first.await.status, status::READY, "the running read still answers");
+    assert_eq!(reader.snapshot(&ws, none()).await.status, status::READY, "a list asked for afterwards reads again");
+}
+
 /// The window: tabs with counts, the marketplace filter with 전체, the search box, the composed row subtitles and the empty copy.
 #[tokio::test]
 async fn browser_tabs_filter_search_and_rows_match_macos() {
