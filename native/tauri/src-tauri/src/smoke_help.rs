@@ -117,6 +117,30 @@ fn screen_now(host: &Host) -> Option<(u32, u32)> {
     window.current_monitor().ok().flatten().map(|m| (m.size().width, m.size().height))
 }
 
+/// The browser and history steps' workspaces live in memory only, never approved by a folder selection, so every save since they were
+/// added failed on them and the shots showed "Save failed: Only paths approved via folder selection may be saved." (both OSes; the
+/// Mac's help shot showed it first). Both steps are done before this one: their workspaces and panes leave, and the banner with them.
+fn leave_finished_steps(host: &Arc<Host>) -> Result<(), String> {
+    let finished = [crate::smoke::WORKSPACE, crate::smoke_history::WORKSPACE];
+    host.view().update(|state| {
+        let left: Vec<String> =
+            state.sessions().iter().filter(|p| finished.contains(&p.workspace_id())).map(|p| p.id().to_string()).collect();
+        state.workspaces_mut().retain(|w| !finished.contains(&w.id()));
+        state.sessions_mut().retain(|p| !finished.contains(&p.workspace_id()));
+        if state.active_session_id.as_ref().is_some_and(|id| left.contains(id)) {
+            state.active_session_id = None;
+        }
+        if let Some(expanded) = state.expanded_workspace_ids.as_mut() {
+            expanded.retain(|id| !finished.contains(&id.as_str()));
+        }
+        if state.active_workspace_id.as_deref().is_some_and(|id| finished.contains(&id)) {
+            state.active_workspace_id = None;
+        }
+    })?;
+    host.view().error = None;
+    Ok(())
+}
+
 async fn run(host: &Arc<Host>) -> Result<Value, String> {
     let list: Vec<Value> = serde_json::from_str::<Value>(help_capture::SHOTS)
         .ok()
@@ -125,6 +149,7 @@ async fn run(host: &Arc<Host>) -> Result<Value, String> {
     let language = host.locale.language().to_string();
     let output = output_folder(host, &language);
     std::fs::create_dir_all(&output).map_err(|e| e.to_string())?;
+    leave_finished_steps(host)?;
     let before = Window::now(host);
     // No saved theme reads as dark (store's saved theme, main.rs's window colour).
     let theme = if host.current().theme() == "light" { "light" } else { "dark" }.to_string();

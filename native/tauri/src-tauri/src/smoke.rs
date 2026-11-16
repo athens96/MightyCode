@@ -362,7 +362,7 @@ const POPUP: &str = "<!doctype html><html><head><meta charset=utf-8><title>Might
 
 /// The ids of the pane and workspace the step adds (UUID-shaped, as the state's ids are).
 const PANE: &str = "5a0e0b0b-0000-4000-8000-00000000b10b";
-const WORKSPACE: &str = "5a0e0b0b-0000-4000-8000-00000000a0a0";
+pub const WORKSPACE: &str = "5a0e0b0b-0000-4000-8000-00000000a0a0";
 /// The id of the page dialog the step opens over the browser pane.
 const DIALOG: u64 = 990_001;
 
