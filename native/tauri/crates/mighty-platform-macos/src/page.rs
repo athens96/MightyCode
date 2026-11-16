@@ -25,12 +25,15 @@ pub fn view_rect(clip: (f64, f64, f64, f64), zoom: f64, flipped: bool, view_heig
 
 /// The snapshot as PNG at its own pixels (the backing scale's: a Retina screen's picture is twice the points).
 fn png(image: &NSImage) -> Answer {
-    let tiff = image.TIFFRepresentation().ok_or("the page's picture has no pixels")?;
-    let rep = NSBitmapImageRep::imageRepWithData(&tiff).ok_or("the page's picture does not read")?;
-    let properties = NSDictionary::new();
-    // SAFETY: an empty property dictionary of the right key type.
-    let data = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &properties) };
-    data.map(|data| data.to_vec()).ok_or_else(|| "the page's picture does not write as PNG".into())
+    // A pool of its own: the TIFF and the bitmap of a whole page go as soon as the PNG is copied out.
+    objc2::rc::autoreleasepool(|_| {
+        let tiff = image.TIFFRepresentation().ok_or("the page's picture has no pixels")?;
+        let rep = NSBitmapImageRep::imageRepWithData(&tiff).ok_or("the page's picture does not read")?;
+        let properties = NSDictionary::new();
+        // SAFETY: an empty property dictionary of the right key type.
+        let data = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &properties) };
+        data.map(|data| data.to_vec()).ok_or_else(|| "the page's picture does not write as PNG".into())
+    })
 }
 
 /// Asks WebKit for the picture on the main thread (where `with_webview` runs); the completion handler, also on the main thread,
