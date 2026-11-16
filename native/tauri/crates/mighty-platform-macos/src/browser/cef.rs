@@ -537,7 +537,8 @@ impl NativeSurface for CefBrowser {
         })
     }
 
-    /// Hidden at once; CEF closes its browser asynchronously and the pump releases the view once it did (Swift `close(view:)`).
+    /// Out of the window at once, as Swift's pane left SwiftUI's hierarchy before its engine closed; CEF closes its browser
+    /// asynchronously and the pump releases the view once it did (Swift `close(view:)`, `releaseClosedViews`).
     fn close(&self) -> Result<()> {
         {
             let mut state = self.pane.lock();
@@ -549,8 +550,8 @@ impl NativeSurface for CefBrowser {
         let view = self.pane.view;
         on_main_later(&self.window, "close", move |_| {
             super::forget_focus(view);
-            // SAFETY: as in `place`; the bridge's close on the main thread.
-            unsafe { &*(view as *const NSView) }.setHidden(true);
+            // SAFETY: as in `place` (the pane keeps its own reference until CEF let go); the bridge's close on the main thread.
+            unsafe { &*(view as *const NSView) }.removeFromSuperview();
             if let Some(bridge) = ENGINE.get().filter(|_| running()) {
                 unsafe { (bridge.close)(view as *mut c_void) };
             }

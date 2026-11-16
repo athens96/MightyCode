@@ -118,6 +118,9 @@ jobs:
       - name: Smoke on the Mac with CEF (the browser engine on; the steps of smoke.rs' MAC_PENDING_STEPS may fail)
         if: matrix.os == 'macos'
         timeout-minutes: 18
+        env:
+          # The bridge's own trace of each browser's create and close (cef_bridge.m), on stderr.
+          MIGHTY_CEF_TRACE: '1'
         run: |
           bash scripts/fetch-browser-engine.sh
           if ($LASTEXITCODE -ne 0) { throw 'fetching CEF failed' }
@@ -138,7 +141,8 @@ jobs:
           foreach ($run in @(@{ path = "$env:RUNNER_TEMP/tauri-smoke/smoke-result.json"; engine = 'webkit' },
                              @{ path = "$env:RUNNER_TEMP/tauri-smoke/cef/smoke-result.json"; engine = 'cef' })) {
             $result = Get-Content -Raw $run.path | ConvertFrom-Json
-            $names = @('browserSurface', 'browserNavigated', 'browserBack', 'browserPopupBlocked', 'browserMenuOver')
+            $names = @('browserSurface', 'browserNavigated', 'browserBack', 'browserPopupBlocked', 'browserMenuOver', 'browserTwoPanesRenderJavaScript',
+              'browserIndependentProfiles', 'browserClosingOnePaneKeepsOtherAlive', 'browserReopenCycles')
             $failed = @($names | Where-Object { $result.checks.$_ -ne $true })
             "$($run.engine): engine $($result.browser.browserEngine), failed: $($failed -join ', ')"
             if ($result.browser.browserEngine -ne $run.engine) { throw "the $($run.engine) run's browser panes used $($result.browser.browserEngine)" }
