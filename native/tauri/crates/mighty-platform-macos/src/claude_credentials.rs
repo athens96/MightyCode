@@ -63,11 +63,28 @@ struct Silence {
     _ui: std::sync::MutexGuard<'static, ()>,
 }
 
+/// A silent read in progress (Mac integration review 3): one stuck on a locked keychain never returns, so no other silent read starts
+/// behind it (each would leak another blocked thread); they answer "the Keychain would ask" at once.
+static SILENT_IN_FLIGHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// How long a read waits for the Keychain's UI lock (another read holding it may be stuck on a locked keychain).
+const UI_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 impl Silence {
-    fn new(interactive: bool) -> Silence {
-        let ui = crate::secrets::keychain_ui();
+    /// None when the Keychain is taken by a read that does not finish: a silent read already running, or the lock not free within
+    /// [`UI_WAIT`].
+    fn new(interactive: bool) -> Option<Silence> {
+        if !interactive && SILENT_IN_FLIGHT.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        let Some(ui) = crate::secrets::keychain_ui_within(UI_WAIT) else {
+            if !interactive {
+                SILENT_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+            return None;
+        };
         if interactive {
-            return Silence { previous: None, _ui: ui };
+            return Some(Silence { previous: None, _ui: ui });
         }
         let mut previous: u8 = 1;
         // SAFETY: Security's process-wide switch, changed only while KEYCHAIN_UI is held.
@@ -75,7 +92,7 @@ impl Silence {
             SecKeychainGetUserInteractionAllowed(&mut previous);
             SecKeychainSetUserInteractionAllowed(0);
         }
-        Silence { previous: Some(previous), _ui: ui }
+        Some(Silence { previous: Some(previous), _ui: ui })
     }
 }
 
@@ -84,6 +101,7 @@ impl Drop for Silence {
         if let Some(previous) = self.previous {
             // SAFETY: as in `new` (the lock is released after this, with the guard).
             unsafe { SecKeychainSetUserInteractionAllowed(previous) };
+            SILENT_IN_FLIGHT.store(false, std::sync::atomic::Ordering::SeqCst);
         }
     }
 }
@@ -111,7 +129,9 @@ impl ClaudeCredentials for KeychainClaudeCredentials {
         if config_dir.is_some_and(|dir| !dir.is_absolute() || dir.to_string_lossy().contains('\0')) {
             return Ok(None);
         }
-        let _silence = Silence::new(interactive);
+        let Some(_silence) = Silence::new(interactive) else {
+            return Err(PlatformError::Refused("the Keychain is busy with a read that has not finished".into()));
+        };
         let service = service(config_dir);
         // Swift adds `kSecUseAuthenticationUIFail` to every read, the interactive one too: an interactive read differs only in the
         // Keychain's user interaction being left on (the item's application-ACL dialog may show).

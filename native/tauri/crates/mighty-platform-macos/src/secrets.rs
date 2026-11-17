@@ -51,9 +51,24 @@ unsafe extern "C" {
 /// second would put back the first's "off" for good).
 pub(crate) static KEYCHAIN_UI: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-pub(crate) fn keychain_ui() -> std::sync::MutexGuard<'static, ()> {
-    KEYCHAIN_UI.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+/// [`KEYCHAIN_UI`] within `wait`, else None (Mac integration review 3): a silent read stuck on a locked keychain holds it with no
+/// limit (the Security framework's call does not return until the unlock), and nothing else may wait on it for ever.
+pub(crate) fn keychain_ui_within(wait: std::time::Duration) -> Option<std::sync::MutexGuard<'static, ()>> {
+    let until = std::time::Instant::now() + wait;
+    loop {
+        match KEYCHAIN_UI.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) if std::time::Instant::now() < until => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        }
+    }
 }
+
+/// How long a vault read waits for [`KEYCHAIN_UI`] before it reads as no key.
+const VAULT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// A Security constant as a CFString.
 fn key(name: CFStringRef) -> CFString {
@@ -157,7 +172,12 @@ impl KeychainVault {
     /// pairing key's), read while no silent Claude read has the Keychain's user interaction off ([`KEYCHAIN_UI`]).
     fn read(&self, id: &str, service: &str) -> Option<String> {
         let bytes = {
-            let _ui = keychain_ui();
+            // A Claude read stuck on a locked keychain keeps the lock: past 2 s the remote key reads as missing (the connection
+            // fails and says so) rather than hanging the caller.
+            let Some(_ui) = keychain_ui_within(VAULT_WAIT) else {
+                eprintln!("mighty: the Keychain is busy with another read; a remote key read gave up after 2 s");
+                return None;
+            };
             Query::generic(&self.keychains, service, Some(id)).data(false).ok()?
         };
         String::from_utf8(bytes).ok().filter(|key| mighty_platform::pairing::four_files::pairing_key(key))
@@ -269,6 +289,25 @@ impl Drop for Throwaway {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mac integration review 3: while another read holds the Keychain's lock (one stuck on a locked keychain), a wait for it gives up
+    /// at its bound instead of blocking for ever; once it is let go, the lock is taken.
+    #[test]
+    fn a_wait_for_the_keychain_lock_gives_up_at_its_bound() {
+        let (held, release) = (std::sync::mpsc::channel::<()>(), std::sync::mpsc::channel::<()>());
+        let holder = std::thread::spawn(move || {
+            let _ui = keychain_ui_within(std::time::Duration::from_secs(5)).expect("free");
+            held.0.send(()).unwrap();
+            release.1.recv().unwrap();
+        });
+        held.1.recv().unwrap();
+        let started = std::time::Instant::now();
+        assert!(keychain_ui_within(std::time::Duration::from_millis(200)).is_none(), "taken by the stuck read");
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "it gave up at its bound");
+        release.0.send(()).unwrap();
+        holder.join().unwrap();
+        assert!(keychain_ui_within(std::time::Duration::from_secs(1)).is_some(), "free again");
+    }
 
     const FIRST: &str = "AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09o";
     const SECOND: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc";

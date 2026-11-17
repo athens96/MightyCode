@@ -592,6 +592,9 @@ impl ClaudeKeychain {
     }
 }
 
+/// The longest a read the user asked for waits on the Keychain (its dialog, or a keychain another read holds).
+pub const INTERACTIVE_KEYCHAIN_WAIT: Duration = Duration::from_secs(120);
+
 /// [`RuntimeProbe`] as the service's probe.
 pub fn runtime_probe(parts: RuntimeProbe) -> UsageProbe {
     let probe = runtime_probe_with_keychain(parts, None);
@@ -616,7 +619,12 @@ async fn claude_sign_in(
         super::claude_credential(&home, &environment, now, Some(keychain.store.as_ref()), interactive)
     });
     if interactive {
-        return read.await.unwrap_or(super::ClaudeSignIn::Missing);
+        // The user's own read may wait on the Keychain's dialog, but not for ever (Mac integration review 3): past
+        // INTERACTIVE_KEYCHAIN_WAIT it reads as a Keychain that would ask.
+        return match tokio::time::timeout(INTERACTIVE_KEYCHAIN_WAIT, read).await {
+            Ok(found) => found.unwrap_or(super::ClaudeSignIn::Missing),
+            Err(_) => super::ClaudeSignIn::Permission,
+        };
     }
     match tokio::time::timeout(timeout, read).await {
         Ok(Ok(found)) => found,
