@@ -12,7 +12,7 @@
 //! `ShellProcessProbe.findShellPid` read one because Ghostty owned it).
 //!
 //! The terminal's environment is the request's with `TERM=xterm-256color` and `COLORTERM=truecolor` (Swift's agent pane). An
-//! interactive shell also gets what libghostty's exec backend gave the Swift app's shell panes ([`shell_integration`]):
+//! interactive login shell also gets what libghostty's exec backend gave the Swift app's shell panes ([`shell_integration`]):
 //! `TERM_PROGRAM=ghostty`, `GHOSTTY_RESOURCES_DIR`, `GHOSTTY_SHELL_FEATURES` and, for zsh, `ZDOTDIR` into Ghostty's shell
 //! integration, from the resources the app bundle carries (`Contents/Resources/ghostty`, scripts/build-tauri-macos.sh); a
 //! development build outside a bundle has none and starts its shells without them.
@@ -68,16 +68,15 @@ pub fn ghostty_resources(exe: &Path) -> Option<PathBuf> {
     (ghostty.join("shell-integration").is_dir() && resources.join("terminfo").is_dir()).then_some(ghostty)
 }
 
-/// What libghostty's exec backend adds for the shell it starts (the Swift app's shell panes ran there), for an interactive shell
-/// ([`shell_arguments`]' `-il` or `-i`; never a `-c` command, an agent's, zsh's `-f` or a CLI's own login) when the bundle carries
-/// Ghostty's `resources`:
+/// What libghostty's exec backend adds for the shell it starts (the Swift app's shell panes ran there), for a shell pane's login
+/// shell ([`shell_arguments`]' `-il`; never a `-c` command, an agent's, a shell without its profile, the smoke's, or a CLI's own
+/// login) when the bundle carries Ghostty's `resources`:
 /// `TERM_PROGRAM=ghostty`, `GHOSTTY_RESOURCES_DIR`, `GHOSTTY_SHELL_FEATURES` (Ghostty's default `cursor,title`) and, for zsh,
 /// `ZDOTDIR` pointing into the integration, the user's own `ZDOTDIR` kept in `GHOSTTY_ZSH_ZDOTDIR` (the integration's `.zshenv`
 /// puts it back before anything else reads it, then runs the user's own).
 pub fn shell_integration(environment: &mut BTreeMap<String, String>, program: &Path, args: &[String], resources: Option<&Path>) {
     let Some(resources) = resources else { return };
-    let interactive = args.iter().any(|argument| argument == "-il" || argument == "-i");
-    if !interactive || args.iter().any(|argument| argument == "-c") {
+    if !args.iter().any(|argument| argument == "-il") || args.iter().any(|argument| argument == "-c") {
         return;
     }
     environment.insert("TERM_PROGRAM".into(), "ghostty".into());
@@ -690,9 +689,9 @@ mod tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// libghostty's exec environment for an interactive shell only, zsh's `ZDOTDIR` into the integration with the user's kept.
+    /// libghostty's exec environment for a shell pane's login shell only, zsh's `ZDOTDIR` into the integration with the user's kept.
     #[test]
-    fn an_interactive_shell_gets_ghosttys_shell_integration() {
+    fn a_login_shell_gets_ghosttys_shell_integration() {
         let resources = Path::new("/Applications/MightyCode.app/Contents/Resources/ghostty");
         let zsh = Path::new("/bin/zsh");
         let start = |program: &Path, args: &[&str], resources: Option<&Path>, own: Option<&str>| {
@@ -719,7 +718,7 @@ mod tests {
         assert_eq!(start(zsh, &["-f"], Some(resources), None), untouched, "no startup files");
         assert_eq!(start(zsh, &["-il"], None, None), untouched, "no resources outside a bundle");
         assert_eq!(start(Path::new("/opt/homebrew/bin/claude"), &["setup-token"], Some(resources), None), untouched, "a CLI's login");
-        assert_eq!(start(Path::new("/bin/sh"), &["-i"], Some(resources), None)["TERM_PROGRAM"], "ghostty");
+        assert_eq!(start(Path::new("/bin/bash"), &["--noprofile", "--norc", "-i"], Some(resources), None), untouched, "no profile");
     }
 
     /// Swift `ShellActivityTests.swift:9 "busyOnlyWhileAnotherGroupOwnsTheTerminal"`.
