@@ -79,13 +79,17 @@ pub fn link(at: &Path, target: &Path, directory: bool) -> bool {
     }
 }
 
-/// The files ports of the OS the checks run on: the handle is asked on Windows, the path walked again elsewhere.
+/// The files ports of the OS the checks run on: Windows' handles, the Mac's (M-G's `MacFileHandles`, `F_GETPATH`).
 pub fn handles() -> std::sync::Arc<dyn mighty_platform::FileHandles> {
     #[cfg(windows)]
     {
         std::sync::Arc::new(mighty_platform_windows::WindowsFileHandles)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        std::sync::Arc::new(mighty_platform_macos::files::MacFileHandles)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         std::sync::Arc::new(mighty_platform::unsupported::Unsupported)
     }

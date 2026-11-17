@@ -192,6 +192,24 @@ fn the_open_handle_is_asked_where_it_is() {
     assert!(open_file("a.txt", &root, &FakeFileHandles::default()).is_ok(), "no handle check: the path walked again");
 }
 
+/// Mac integration review 4 (review M-G 4): a FIFO in the workspace is refused through the OS's own handles, never waited on (no
+/// writer ever opens it here: a blocking open would hang the check); a plain file next to it opens, its final path inside the root.
+#[cfg(unix)]
+#[test]
+#[allow(clippy::disallowed_methods, reason = "the check's own mkfifo, no child of the app")]
+fn a_fifo_is_refused_without_waiting() {
+    let parent = Temp::new("fifo");
+    let (root, _) = make_root(&parent);
+    write(&root, "plain.txt", b"plain");
+    let made = std::process::Command::new("/usr/bin/mkfifo").arg(root.join("pipe")).status().expect("mkfifo");
+    assert!(made.success());
+    let handles = common::handles();
+    let started = std::time::Instant::now();
+    assert_eq!(open_file("pipe", &root, handles.as_ref()).unwrap_err(), OpenError::NotRegularFile, "a FIFO is no regular file");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "and it was not waited on");
+    assert!(open_file("plain.txt", &root, handles.as_ref()).is_ok(), "a plain file beside it opens");
+}
+
 /// Verification.cs:1185 "files pane classifies by name then by sniffing the first bytes".
 #[test]
 fn classification_uses_names_then_sniffing() {
