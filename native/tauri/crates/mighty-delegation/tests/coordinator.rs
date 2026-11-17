@@ -1831,14 +1831,11 @@ mod checks {
                     && fixture.file().children[0].state == ChildState::Reported,
                 "nested after the confirmation named none: nothing is removed, and the answer names it"
             );
-            // Written another way: in another case and with `/` on Windows (which ignores case); on the Mac through the `/var` alias of
-            // its canonical `/private/var` temporary folder.
-            let written = if cfg!(windows) {
-                canonical.canonical(&nested).to_uppercase().replace('\\', "/")
-            } else {
-                let real = canonical.canonical(&nested);
-                real.strip_prefix("/private").map(str::to_string).unwrap_or(real)
-            };
+            // Written another way on Windows (another case and `/`: C# compares ignoring case). The Mac names it exactly as listed, as
+            // Swift compares the confirmed names (`Set(nested).isSubset(of: Set(confirmed))`, DelegationCards.swift:252): no alias of the
+            // canonical `/private/var` and no other case is the same name there.
+            let written =
+                if cfg!(windows) { canonical.canonical(&nested).to_uppercase().replace('\\', "/") } else { canonical.canonical(&nested) };
             assert!(
                 coordinator.discard_from_card("c1", Some(&[written])).await == ChildCardDiscardOutcome::Discarded
                     && !Path::new(&child.worktree_path).exists()

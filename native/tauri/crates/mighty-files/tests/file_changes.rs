@@ -618,11 +618,14 @@ async fn without_a_run_original_gits_head_is_the_base() {
             && head.head_sha.as_ref().is_some_and(|s| s.len() == 7)
     );
     assert_eq!(head.hunks[0].lines.iter().map(|l| format!("{}{}", l.op, l.text)).collect::<Vec<_>>(), [" one", "-two", "+TWO", " three"]);
-    let other_case = some_changes_of("TRACKED.txt", None, None, root_text.clone()).await;
-    assert!(
-        other_case.base == "head" && other_case.created.is_none() && other_case.added == 1,
-        "another case reads HEAD's file by the disk's spelling"
-    );
+    // C#'s `OnDiskCase`, Windows only (`changes::on_disk_case`): Swift reads a path as it is given, so the Mac does too.
+    if cfg!(windows) {
+        let other_case = some_changes_of("TRACKED.txt", None, None, root_text.clone()).await;
+        assert!(
+            other_case.base == "head" && other_case.created.is_none() && other_case.added == 1,
+            "another case reads HEAD's file by the disk's spelling"
+        );
+    }
     assert!(
         changes::not_in_head("fatal: path 'app/a.txt' does not exist in 'HEAD'")
             && changes::not_in_head("fatal: path 'a.txt' exists on disk, but not in 'HEAD'")
