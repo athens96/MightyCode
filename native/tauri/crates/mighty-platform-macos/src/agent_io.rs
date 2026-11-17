@@ -77,6 +77,8 @@ struct State {
     listener: Option<Arc<UnixListener>>,
     /// The socket file this listener put in place (device, inode): `close` removes the path only while it is still that file.
     file: Option<(u64, u64)>,
+    /// The socket's folder when this listener made it: `close` removes it again once empty, so a run leaves the profile as it was.
+    made: Option<PathBuf>,
 }
 
 /// The app's listener (one per app and profile).
@@ -182,6 +184,7 @@ impl AgentIoListener for UnixSocketListener {
             return Err(PlatformError::Invalid("the agent IO socket path does not fit sun_path".into()));
         }
         let folder = path.parent().ok_or_else(|| PlatformError::Invalid("the agent IO socket has no folder".into()))?;
+        let made = !folder.exists();
         private_folder(folder)?;
         // An old socket (a previous run that ended without closing: nothing answers it) is replaced; one another instance still
         // serves is never taken over, and a folder in its place is not removed.
@@ -210,6 +213,7 @@ impl AgentIoListener for UnixSocketListener {
         }
         state.file = std::fs::symlink_metadata(&path).ok().map(|meta| (meta.dev(), meta.ino()));
         state.bound = Some(bound);
+        state.made = made.then(|| folder.to_path_buf());
         state.path = Some(path);
         Ok(text)
     }
@@ -221,9 +225,9 @@ impl AgentIoListener for UnixSocketListener {
     /// Every waiting `accept` fails and the socket file is removed (Swift `stop`).
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
-        let (path, file, bound, listener) = {
+        let (path, file, bound, listener, made) = {
             let mut state = lock(&self.state);
-            (state.path.clone(), state.file.take(), state.bound.take(), state.listener.take())
+            (state.path.clone(), state.file.take(), state.bound.take(), state.listener.take(), state.made.take())
         };
         drop(bound);
         drop(listener);
@@ -233,6 +237,10 @@ impl AgentIoListener for UnixSocketListener {
             && std::fs::symlink_metadata(&path).is_ok_and(|meta| (meta.dev(), meta.ino()) == file)
         {
             let _ = std::fs::remove_file(path);
+        }
+        // Only when empty: another instance's socket or anything else put there keeps it.
+        if let Some(folder) = made {
+            let _ = std::fs::remove_dir(folder);
         }
     }
 
@@ -377,6 +385,22 @@ mod tests {
 
         drop(listener);
         assert!(!path.exists(), "the socket is removed once its listener goes");
+        assert!(path.parent().unwrap().exists(), "a folder it found stays");
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// Mac stage integration (the CEF smoke's read-only profile): a socket folder the listener made goes with it once empty, so a run
+    /// leaves the profile as it found it.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_socket_folder_it_made_goes_on_close() {
+        let folder = short_folder("made");
+        let path = socket_path(&folder, &std::env::temp_dir());
+        assert!(!path.parent().unwrap().exists());
+        let listener = UnixSocketListener::new(&folder);
+        listener.bind().unwrap();
+        assert!(path.exists());
+        listener.close();
+        assert!(!path.parent().unwrap().exists(), "the folder it made is gone");
         let _ = std::fs::remove_dir_all(&folder);
     }
 
