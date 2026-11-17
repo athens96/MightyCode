@@ -219,7 +219,7 @@ mod checks {
 
         // A subfolder workspace works in the same subfolder of the worktree.
         let nested = DelegationPlace::new();
-        nested.repository(1, r"app\src", "false").await;
+        nested.repository(1, &combine("app", "src"), "false").await;
         let child = made(nested.maker().create("child-sub", &combine(&combine(&nested.repo(), "app"), "src"), "t").await);
         assert!(
             child.working_folder == combine(&combine(&child.worktree_path, "app"), "src")
@@ -469,7 +469,9 @@ mod checks {
         // The upper-case head a human might paste is the same commit, and the parent's folder may be written any way Windows reads it.
         let (sibling, sibling_head) = place.reported_child("c2", &["s.txt"], None).await;
         std::fs::write(combine(&place.repo(), "scratch.txt"), "scratch\n").unwrap();
-        let checkout = format!("{}/", place.repo().to_uppercase().replace('\\', "/"));
+        // (Windows ignores case and reads either separator; the Mac compares paths as they are, as Swift did.)
+        let checkout =
+            if cfg!(windows) { format!("{}/", place.repo().to_uppercase().replace('\\', "/")) } else { format!("{}/", place.repo()) };
         let record = merged(merge::tool_merge(&git, &child.view(), &format!(" {}\n", head.to_uppercase()), &checkout).await);
         assert!(record.pre_merge_commit == start && record.merged_commit == head, "untracked files on either side do not block the merge");
         assert!(
@@ -853,10 +855,11 @@ mod checks {
             let ChildWorktreeCheck::Ready(first) = maker.check(&place.repo()).await else { panic!("the workspace cannot host a child") };
             assert!(
                 same(&paths.canonical(&first.repository), &paths.canonical(&place.repo()))
-                    && !first.repository.contains('/')
+                    // Git prints its top folder with `/`; it is read in the OS's own separators (`\` on Windows, `/` on the Mac).
+                    && !first.repository.contains(if cfg!(windows) { '/' } else { '\\' })
                     && first.prefix.is_empty()
                     && first.parent_branch == "main",
-                "the repository's top folder is read the Windows way"
+                "the repository's top folder is read the OS's way"
             );
             let failed = |id: &str| {
                 PlaceChild::make(id, &maker.worktree_path(id), "main", &first.base_commit, ChildState::Failed, Some(&place.repo()))
@@ -941,9 +944,12 @@ mod checks {
             remove_folder(Path::new(&combine(&place.root(), "kept")));
             // The child's place written another way is still its place.
             std::fs::create_dir_all(maker.worktree_path("f7")).unwrap();
-            let f7 = PlaceChild { worktree_path: maker.worktree_path("f7").to_uppercase().replace('\\', "/"), ..failed("f7") };
+            // (In another case and with `/` only where paths ignore case: Windows.)
+            let other_way = |path: String| if cfg!(windows) { path.to_uppercase().replace('\\', "/") } else { format!("{path}/") };
+            let f7 = PlaceChild { worktree_path: other_way(maker.worktree_path("f7")), ..failed("f7") };
+            let root_written = if cfg!(windows) { format!("{}\\", place.root()) } else { format!("{}/", place.root()) };
             assert!(
-                discard(&f7, &place.repo(), &format!("{}\\", place.root())).await == ChildDiscardOutcome::Discarded
+                discard(&f7, &place.repo(), &root_written).await == ChildDiscardOutcome::Discarded
                     && !Path::new(&maker.worktree_path("f7")).exists(),
                 "the child's place written another way is still its place"
             );
@@ -954,60 +960,63 @@ mod checks {
             );
         }
 
-        // Removing a workspace: refused while it has an open child or a child worktree not cleaned up.
+        // Removing a workspace: refused while it has an open child or a child worktree not cleaned up. Windows' paths as written there;
+        // elsewhere the same folders under `/` (only Windows reads a folder in another case or with the other separator as the same).
         let paths = paths();
+        let os = |path: &str| if cfg!(windows) { path.to_string() } else { path.trim_start_matches("C:").replace('\\', "/") };
         let removal = |id: &str, parent: &str, state: ChildState, checkout: Option<&str>| PlaceChild {
             parent_session_id: parent.into(),
-            ..PlaceChild::make(id, &format!(r"C:\worktrees\{id}"), "main", &"a".repeat(40), state, checkout)
+            ..PlaceChild::make(id, &os(&format!(r"C:\worktrees\{id}")), "main", &"a".repeat(40), state, checkout)
         };
         let panes = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<HashSet<String>>();
         let refusal = |children: &[PlaceChild], pane_ids: &HashSet<String>, folder: &str, exists: &dyn Fn(&str) -> bool| {
             cleanup::workspace_removal_refusal(children.iter().map(PlaceChild::view), pane_ids, folder, &paths, exists)
         };
         let has_children = Some(DelegationReasonCode::WorkspaceHasChildren);
-        let app = Some(r"C:\work\app");
+        let (work_app, work_app_closed) = (os(r"C:\work\app"), os(r"C:\work\app\"));
+        let sub_written = if cfg!(windows) { "c:/WORK/app/sub".to_string() } else { "/work/app/sub/".to_string() };
+        let app = Some(work_app.as_str());
         let never = |_: &str| false;
         for state in
             ChildState::ALL.iter().copied().filter(|s| !matches!(s, ChildState::Failed | ChildState::Closed | ChildState::Discarded))
         {
             // By the parent's pane, the child's own pane, or the parent's checkout alone.
             assert!(
-                refusal(&[removal("c1", "p1", state, None)], &panes(&["p1"]), r"C:\work\app", &never) == has_children
-                    && refusal(&[removal("c1", "gone", state, None)], &panes(&["c1"]), r"C:\work\app", &never) == has_children
-                    && refusal(&[removal("c1", "gone", state, app)], &panes(&[]), r"C:\work\app", &never) == has_children
-                    && refusal(&[removal("c1", "gone", state, Some("c:/WORK/app/sub"))], &panes(&[]), r"C:\work\app\", &never)
-                        == has_children,
+                refusal(&[removal("c1", "p1", state, None)], &panes(&["p1"]), &work_app, &never) == has_children
+                    && refusal(&[removal("c1", "gone", state, None)], &panes(&["c1"]), &work_app, &never) == has_children
+                    && refusal(&[removal("c1", "gone", state, app)], &panes(&[]), &work_app, &never) == has_children
+                    && refusal(&[removal("c1", "gone", state, Some(&sub_written))], &panes(&[]), &work_app_closed, &never) == has_children,
                 "a workspace with an open child is refused: {state:?}"
             );
         }
-        let on_disk = |path: &str| path == r"C:\worktrees\c1";
+        let worktree_c1 = os(r"C:\worktrees\c1");
+        let on_disk = |path: &str| path == worktree_c1;
         for state in [ChildState::Closed, ChildState::Failed] {
             assert_eq!(
-                refusal(&[removal("c1", "p1", state, app)], &panes(&[]), r"C:\work\app", &on_disk),
+                refusal(&[removal("c1", "p1", state, app)], &panes(&[]), &work_app, &on_disk),
                 has_children,
                 "a child worktree not cleaned up refuses the removal"
             );
         }
         // A discarded child never counts; a cleaned one's worktree is gone.
         assert_eq!(
-            refusal(&[removal("c1", "p1", ChildState::Discarded, app)], &panes(&["p1"]), r"C:\work\app", &on_disk),
+            refusal(&[removal("c1", "p1", ChildState::Discarded, app)], &panes(&["p1"]), &work_app, &on_disk),
             None,
             "a discarded child never counts"
         );
         assert!(
-            refusal(&[removal("c1", "p1", ChildState::Closed, app)], &panes(&["p1"]), r"C:\work\app", &never).is_none()
-                && refusal(&[removal("c1", "p1", ChildState::Failed, app)], &panes(&["p1"]), r"C:\work\app", &never).is_none(),
+            refusal(&[removal("c1", "p1", ChildState::Closed, app)], &panes(&["p1"]), &work_app, &never).is_none()
+                && refusal(&[removal("c1", "p1", ChildState::Failed, app)], &panes(&["p1"]), &work_app, &never).is_none(),
             "a cleaned child's worktree is gone"
         );
         // Another workspace's children never refuse the removal.
-        let others = [
-            removal("c1", "p1", ChildState::Running, Some(r"C:\work\other")),
-            removal("c2", "p2", ChildState::Closed, Some(r"C:\work\apple")),
-        ];
+        let (other, apple) = (os(r"C:\work\other"), os(r"C:\work\apple"));
+        let others =
+            [removal("c1", "p1", ChildState::Running, Some(other.as_str())), removal("c2", "p2", ChildState::Closed, Some(apple.as_str()))];
         let always = |_: &str| true;
         assert!(
-            refusal(&others, &panes(&["p3"]), r"C:\work\app", &always).is_none()
-                && refusal(&others, &panes(&["p2"]), r"C:\work\app", &always) == has_children,
+            refusal(&others, &panes(&["p3"]), &work_app, &always).is_none()
+                && refusal(&others, &panes(&["p2"]), &work_app, &always) == has_children,
             "another workspace's children never refuse the removal"
         );
     }

@@ -492,6 +492,11 @@ mod git {
         assert!(pw::origin(&git, &pane).await.is_none(), "no origin");
     }
 
+    /// Removes a directory link itself: a junction is a folder to Windows, a symbolic link a file elsewhere.
+    fn unlink(link: &std::path::Path) {
+        if cfg!(windows) { std::fs::remove_dir(link) } else { std::fs::remove_file(link) }.unwrap();
+    }
+
     /// A directory link elsewhere than Windows: a symbolic link.
     #[cfg(not(windows))]
     async fn junction(link: &std::path::Path, target: &std::path::Path) {
@@ -578,7 +583,7 @@ mod git {
             ..pane.clone()
         };
         assert!(!pw::in_own_place(&paths, &linked, &place.root()), "a link at the place is not");
-        std::fs::remove_dir(&linked_place).unwrap();
-        std::fs::remove_dir(worktree.join("lnk")).unwrap();
+        unlink(&linked_place);
+        unlink(&worktree.join("lnk"));
     }
 }
