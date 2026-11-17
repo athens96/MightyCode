@@ -11,7 +11,8 @@ name: Native clients — Tauri (0.5)
 # throwaway identity, Swift's own stager; Actions artifacts only) and the update rehearsal from real Swift 0.4.59 and 0.4.61 installs
 # (rehearsal-macos: scripts/update-rehearsal-macos.sh, on its throwaway runner); the switch of native-macos.yml at the 0.5 merge is
 # native/tauri/release/native-macos.yml.0.5.patch (checked against origin/main's file by the guards); the notarization dry run
-# (notarize-dry-run, D20) runs only when the user dispatches it with notarize_dry_run.
+# (notarize-dry-run-build, then notarize-dry-run in environment release, D20) runs only when the user dispatches it on main with
+# notarize_dry_run, and keeps only the verdicts.
 on:
   push:
     branches: [feat/tauri, mac-base]
@@ -25,14 +26,16 @@ on:
   workflow_dispatch:
     inputs:
       notarize_dry_run:
-        description: Also sign the Mac candidate with the real Developer ID, notarize and staple it (environment release; the user only)
+        description: On main only, also sign the Mac candidate with the real Developer ID, notarize and staple it, keeping only the verdicts (environment release; the user only)
         type: boolean
         default: false
 permissions:
   contents: read
 concurrency:
-  group: native-tauri-${{ github.ref }}
-  cancel-in-progress: true
+  # A push cancels the push before it on the same branch; a dispatched run (the notarization dry run among them) is in a group of its
+  # own and is never cancelled by a push (review M-I 3).
+  group: native-tauri-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'automatic' }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 jobs:
   tauri:
     name: Tauri ${{ matrix.os }}
@@ -656,6 +659,7 @@ jobs:
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
           sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$work/cert.pem"
           rm -f "$work/key.pem" "$work/identity.p12"
+          echo "CODESIGN_SHA1=$(/usr/bin/openssl x509 -in "$work/cert.pem" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g')" >> "$GITHUB_ENV"
           security find-identity -v -p codesigning "$keychain"
           app="$work/MightyCode.app"
           ditto release/tauri-macos/MightyCode.app "$app"
@@ -722,12 +726,14 @@ jobs:
       - name: Remove the throwaway identity
         if: always()
         run: |
-          sudo security delete-certificate -c "$CODESIGN_NAME" /Library/Keychains/System.keychain > /dev/null 2>&1 || true
+          # The trust setting and the certificate (by its SHA-1, never by name), then the keychain holding the identity.
+          sudo security remove-trusted-cert -d "$RUNNER_TEMP/hardened/cert.pem" > /dev/null 2>&1 || true
+          [ -z "${CODESIGN_SHA1:-}" ] || sudo security delete-certificate -Z "$CODESIGN_SHA1" /Library/Keychains/System.keychain > /dev/null 2>&1 || true
           security delete-keychain "$RUNNER_TEMP/hardened/throwaway.keychain-db" 2> /dev/null || true
       - name: Upload the candidate
         uses: actions/upload-artifact@v4
         with:
-          name: MightyCode-native-macos
+          name: MightyCode-native-macos-candidate
           path: |
             release/MightyCode-macos.zip
             release/MightyCode-macos.zip.sha256
@@ -789,7 +795,7 @@ jobs:
           key: rehearsal-macos
       - uses: actions/download-artifact@v4
         with:
-          name: MightyCode-native-macos
+          name: MightyCode-native-macos-candidate
           path: ${{ runner.temp }}/rust-package
       - uses: actions/download-artifact@v4
         with:
@@ -817,17 +823,16 @@ jobs:
             ${{ runner.temp }}/rehearsal/relaunch/install.sh
           if-no-files-found: ignore
 
-  notarize-dry-run:
-    # Plan D20: the Mac candidate signed with the real Developer ID, notarized and stapled once before the 0.5 release, to learn that
-    # Apple accepts the Rust bundle. Prepared, never run by an agent: only a workflow_dispatch with notarize_dry_run (the user), in the
-    # environment `release` whose secrets notarize-macos uses. It builds its own candidate with the real update key's public half and
-    # address (as native-macos.yml stamps the Swift app), runs scripts/notarize-macos.sh (sign, --verify-resources, notarize, staple,
-    # stapler validate, spctl --assess; the dmg too) and keeps the result as a short-lived private Actions artifact, uploaded nowhere else.
-    name: Notarization dry run (macOS, Developer ID)
-    if: github.event_name == 'workflow_dispatch' && inputs.notarize_dry_run
-    environment: release
+  notarize-dry-run-build:
+    # Plan D20, its first half (review M-I 1): the candidate built with the real update key's public half and address (as
+    # native-macos.yml stamps the Swift app), signed ad hoc, with no environment and no secret: everything that runs third-party code
+    # (npm, cargo build scripts, the fetch scripts, swift build) runs here, never beside the Developer ID. Only on main, only when the
+    # user dispatches it with notarize_dry_run (the release environment allows main only; it is not opened to feat/tauri, which agents
+    # push to). The unsigned zip lives for a day.
+    name: Notarization dry run — build (macOS, no secrets)
+    if: github.event_name == 'workflow_dispatch' && inputs.notarize_dry_run && github.ref == 'refs/heads/main'
     runs-on: macos-latest
-    timeout-minutes: 150
+    timeout-minutes: 100
     defaults:
       run:
         shell: bash
@@ -835,7 +840,7 @@ jobs:
       CARGO_TERM_COLOR: always
       CANDIDATE: 0.5.0-rc.${{ github.run_number }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - uses: actions/setup-node@v4
@@ -846,11 +851,40 @@ jobs:
           targets: aarch64-apple-darwin
       - name: Fetch the pinned browser engine
         run: bash scripts/fetch-browser-engine.sh
-      - name: Release build of the candidate with the real update key's public half and address (ad hoc first)
+      - name: Release build of the candidate with the real update key's public half and address (ad hoc)
         env:
           MIGHTY_UPDATE_URL: ${{ vars.MIGHTY_UPDATE_URL || 'https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/latest.json' }}
           MIGHTY_UPDATE_PUBLIC_KEY: ${{ vars.MIGHTY_UPDATE_PUBLIC_KEY || 'C02DD3qWG+A5gJdYwpaEnvpzYugo354CLtUtU+oXmZ4=' }}
         run: bash scripts/build-tauri-macos.sh --version "$CANDIDATE" --engine
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MightyCode-macos-notarize-input
+          path: release/MightyCode-macos.zip
+          retention-days: 1
+          if-no-files-found: error
+
+  notarize-dry-run:
+    # Plan D20, its second half: the built candidate signed with the real Developer ID, notarized, stapled and assessed by
+    # scripts/notarize-macos.sh, as main's notarize-macos does, in the environment release (main only). Only SHA-pinned actions and the
+    # repository's own scripts run beside the secrets (review M-I 1). The repository is public, so its Actions artifacts are too: only
+    # the verdicts are kept (notarytool's status and log, stapler validate, spctl --assess), never the signed app or dmg (review M-I 2).
+    name: Notarization dry run (macOS, Developer ID)
+    needs: notarize-dry-run-build
+    if: github.event_name == 'workflow_dispatch' && inputs.notarize_dry_run && github.ref == 'refs/heads/main'
+    environment: release
+    runs-on: macos-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: MightyCode-macos-notarize-input
+          path: ${{ runner.temp }}/unsigned
+      - name: Unpack the built app
+        run: ditto -x -k "$RUNNER_TEMP/unsigned/MightyCode-macos.zip" "$RUNNER_TEMP/app"
       - name: Put the Developer ID certificate in a temporary keychain
         env:
           P12_BASE64: ${{ secrets.MIGHTY_DEVELOPER_ID_P12 }}
@@ -858,6 +892,8 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
+          # The decoded identity never outlives this step, whatever fails (review M-I 9).
+          trap 'rm -f "$RUNNER_TEMP/developer-id.p12"' EXIT
           test -n "$P12_BASE64" && test -n "$P12_PASSWORD"
           keychain="$RUNNER_TEMP/signing.keychain-db"
           password="$(openssl rand -base64 24)"
@@ -891,23 +927,32 @@ jobs:
           MIGHTY_NOTARY_KEY_ID: ${{ secrets.MIGHTY_NOTARY_KEY_ID }}
           MIGHTY_NOTARY_ISSUER_ID: ${{ secrets.MIGHTY_NOTARY_ISSUER_ID }}
         run: |
-          mkdir -p "$RUNNER_TEMP/notarized"
-          ditto release/tauri-macos/MightyCode.app "$RUNNER_TEMP/notarized/MightyCode.app"
-          scripts/notarize-macos.sh "$RUNNER_TEMP/notarized/MightyCode.app" "$RUNNER_TEMP/notarized"
-          xcrun stapler validate "$RUNNER_TEMP/notarized/MightyCode.app"
-          spctl --assess --type execute --verbose=4 "$RUNNER_TEMP/notarized/MightyCode.app"
-          scripts/check-release-size.sh "$RUNNER_TEMP/notarized/MightyCode-macos.zip"
-      - name: Keep the notarized candidate (private, short-lived; never uploaded anywhere public)
+          set -uo pipefail
+          verdicts="$RUNNER_TEMP/verdicts"
+          mkdir -p "$verdicts" "$RUNNER_TEMP/notarized"
+          scripts/notarize-macos.sh "$RUNNER_TEMP/app/MightyCode.app" "$RUNNER_TEMP/notarized" 2>&1 | tee "$verdicts/notarize-macos.log"
+          status=${PIPESTATUS[0]}
+          # notarytool's own log of each submission (its id is in the script's "공증 <file>: <status> (<id>)" lines).
+          for id in $(sed -n 's/^공증 .*(\([0-9a-f-]\{36\}\))$/\1/p' "$verdicts/notarize-macos.log"); do
+            xcrun notarytool log "$id" --key "$MIGHTY_NOTARY_KEY_FILE" --key-id "$MIGHTY_NOTARY_KEY_ID" --issuer "$MIGHTY_NOTARY_ISSUER_ID" \
+              "$verdicts/notarytool-$id.json" > /dev/null 2>&1 || true
+          done
+          { xcrun stapler validate "$RUNNER_TEMP/app/MightyCode.app"; echo "exit $?"; } > "$verdicts/stapler-validate.txt" 2>&1
+          { spctl --assess --type execute --verbose=4 "$RUNNER_TEMP/app/MightyCode.app"; echo "exit $?"; } > "$verdicts/spctl-assess.txt" 2>&1
+          { codesign -dvv "$RUNNER_TEMP/app/MightyCode.app"; } > "$verdicts/codesign.txt" 2>&1
+          [ -f "$RUNNER_TEMP/notarized/MightyCode-macos.zip" ] && { scripts/check-release-size.sh "$RUNNER_TEMP/notarized/MightyCode-macos.zip" > "$verdicts/size-gate.txt" 2>&1 || status=1; }
+          cat "$verdicts"/*.txt
+          exit $status
+      - name: Keep the verdicts only (the repository is public; the signed app and dmg are never uploaded)
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
-          name: MightyCode-macos-notarize-dry-run
-          path: |
-            ${{ runner.temp }}/notarized/MightyCode-macos.zip
-            ${{ runner.temp }}/notarized/MightyCode-macos.dmg
+          name: MightyCode-macos-notarize-dry-run-verdicts
+          path: ${{ runner.temp }}/verdicts
           retention-days: 7
-          if-no-files-found: error
-      - name: Remove the keychain and the key
+          if-no-files-found: ignore
+      - name: Remove the keychain, the key and the signed app
         if: always()
         run: |
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
-          rm -f "$RUNNER_TEMP/notary.p8"
+          rm -rf "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/app" "$RUNNER_TEMP/notarized" "$RUNNER_TEMP/unsigned"

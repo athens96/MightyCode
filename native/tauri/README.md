@@ -649,6 +649,18 @@ the smoke against the seeded demo profile (its result is kept as the `tauri-smok
 throwaway key, `check-imports.ps1`, the smoke and `helper-e2e.ps1` on the packaged exe) and the `rehearsal` job (the update from
 v0.4.59 and v0.4.61). It is independent of the 0.4.x workflows. The Mac build bundles `assets/icons/mightycode.png` and `MightyCode.icns`, which tauri-codegen needs there.
 
+Mac stage M-I added:
+- `package-macos`: `scripts/build-tauri-macos.sh` with a throwaway update key and the rehearsal's loopback address, then the same app
+  under the hardened runtime with a throwaway self-signed identity, its MCP servers and the smoke with WebKit and with CEF. The
+  candidate is the `MightyCode-native-macos-candidate` artifact.
+- `rehearsal-macos`: `scripts/update-rehearsal-macos.sh` from v0.4.59 and v0.4.61, then the relaunch path and a Rust → Rust update.
+- The guards' check that `native/tauri/release/native-macos.yml.0.5.patch` applies to `origin/main`.
+- The notarization dry run (D20): `notarize-dry-run-build` (no secrets), then `notarize-dry-run` (environment `release`, SHA-pinned
+  actions only). It runs only when the user dispatches the workflow **on `main`** with `notarize_dry_run`, which is after the 0.5
+  merge, since the `release` environment allows `main` only. Do not open that environment to `feat/tauri`, which agents push to (or
+  open it for one dispatch and close it again). The repository is public, so only the verdicts are kept (notarytool's status and log,
+  `stapler validate`, `spctl --assess`), never the signed app or dmg. A push never cancels a dispatched run.
+
 ## Mac deviations
 
 What the 0.5 Mac app (this host on macOS) does differently from Windows on purpose, and what it does not do that the 0.4.x Swift app

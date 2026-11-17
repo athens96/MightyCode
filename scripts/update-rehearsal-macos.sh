@@ -70,7 +70,7 @@ EXE="$APP/Contents/MacOS/MightyCode"
 SERVED="$WORK/served"
 DEFAULT_PROFILE="$HOME/Library/Application Support/MightyCode"
 LOCAL_LOGS="$HOME/Library/Application Support/$DOMAIN/logs"
-CERT_NAME="Mighty Code update rehearsal (throwaway)"
+CERT_SHA1=""
 
 CHECKS=()
 FAILED=()
@@ -94,13 +94,20 @@ ready_or_gone() { test -x "$1" || ! kill -0 "$2" 2>/dev/null; }
 # Until <file> holds <text>, or the process <pid> ended.
 written_or_gone() { grep -q "$2" "$1" 2>/dev/null || ! kill -0 "$3" 2>/dev/null; }
 # The apps this rehearsal started (anything run from <work>), by their executables' paths.
-apps_running() { pgrep -f "^$WORK/" 2>/dev/null; }
+apps_running() { pgrep -f "^$(printf '%s' "$WORK/" | sed 's/[][\.*^$+?(){}|]/\\&/g')" 2>/dev/null; }
+# The bundle's own check of its resources, run from a folder outside it.
+verify_resources() { (cd /tmp && "$1" --verify-resources > /dev/null); }
 SERVER_PID=""; WORKTREE=""
 cleanup() {
     step "clean up"
     for pid in $(apps_running); do kill -9 "$pid" 2>/dev/null; done
     [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
-    sudo security delete-certificate -c "$CERT_NAME" /Library/Keychains/System.keychain >/dev/null 2>&1 || true
+    # The throwaway certificate's trust setting and the certificate itself (by its SHA-1, never by name).
+    if [ -n "$CERT_SHA1" ]; then
+        sudo security remove-trusted-cert -d "$WORK/cert/cert.pem" > /dev/null 2>&1 || true
+        sudo security delete-certificate -Z "$CERT_SHA1" /Library/Keychains/System.keychain > /dev/null 2>&1 || true
+    fi
+    rm -f "$WORK/cert/key.pem"
     [ -n "$WORKTREE" ] && git -C "$ROOT" worktree remove --force "$WORKTREE" >/dev/null 2>&1
     # What a failed run is read from (CI keeps <work>/logs): install.log and install.sh, the apps' logs, the Rust app's host logs.
     mkdir -p "$WORK/logs"
@@ -206,8 +213,9 @@ PARITY="$ROOT/native/tauri/tools/parity-mac/.build/release/parity-mac"
 swiftc -O "$WORK/terminate.swift" -o "$WORK/terminate" > "$WORK/terminate-build.log" 2>&1 || abort "the terminate helper builds"
 
 step "the throwaway certificate and the update server on port $PORT"
-python3 "$SERVER" cert "$WORK/cert" > /dev/null || abort "the throwaway certificate"
-sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$WORK/cert/cert.pem" || abort "the throwaway certificate is trusted system-wide"
+CERT_SHA1="$(python3 "$SERVER" cert "$WORK/cert" | tail -n 1)" || abort "the throwaway certificate"
+# Trusted for TLS to 127.0.0.1 only (a leaf, not a CA: update-rehearsal-server.py).
+sudo security add-trusted-cert -d -r trustRoot -p ssl -s 127.0.0.1 -k /Library/Keychains/System.keychain "$WORK/cert/cert.pem"     || abort "the throwaway certificate is trusted for 127.0.0.1"
 # http.server's bind asks getfqdn for its name, a reverse lookup a runner may answer only after its DNS times out (the Step 0 spike's
 # 35 s): answered here without DNS.
 cat > "$WORK/serve.py" <<'PY'
@@ -220,6 +228,8 @@ python3 "$WORK/serve.py" "$SERVER" serve "$SERVED" --cert "$WORK/cert/cert.pem" 
     --log "$WORK/server.log" --port "$PORT" > "$WORK/server.out" 2> "$WORK/server.err" &
 SERVER_PID=$!
 wait_for 60 test -s "$WORK/server.port" || abort "the update server listens" "$(tail -c 600 "$WORK/server.err")"
+# The server holds its key in memory once it listens: the file goes.
+rm -f "$WORK/cert/key.pem"
 cp "$RUST_ZIP" "$SERVED/MightyCode-macos.zip"
 serve_manifest() { # version
     rm -f "$SERVED/latest.json" "$SERVED/latest.unsigned.json"
@@ -260,7 +270,7 @@ sleep 5
 check "the $FROM app quits through terminate() with no consent asked" "$(holds quit "$SWIFT_PID" 60 swift)"
 installed_checks "$RUST_VERSION" "$WORK/profile" "$FROM → $RUST_VERSION"
 check "the server was asked for latest.json and the zip" "$(grep -q 'GET /latest.json' "$WORK/server.log" && grep -q 'GET /MightyCode-macos.zip' "$WORK/server.log"; verdict)"
-check "--verify-resources holds in the installed app" "$(holds bash -c "cd /tmp && '$EXE' --verify-resources > /dev/null")"
+check "--verify-resources holds in the installed app" "$(holds verify_resources "$EXE")"
 
 step "the installed Rust app passes the smoke"
 pwsh -NoProfile -File "$ROOT/native/tauri/scripts/smoke.ps1" -Exe "$EXE" -NoRuns -Out "$WORK/smoke"

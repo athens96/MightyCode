@@ -44,7 +44,11 @@ def cert(folder):
         .subject_name(name).issuer_name(name).public_key(key.public_key()).serial_number(x509.random_serial_number())
         .not_valid_before(now - datetime.timedelta(minutes=5)).not_valid_after(now + datetime.timedelta(days=2))
         .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]), critical=False)
-        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        # A leaf, not a CA (review M-I 4): trusting it lets it vouch for 127.0.0.1 and localhost only, never sign another certificate.
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False, key_encipherment=False, data_encipherment=False,
+                                     key_agreement=False, key_cert_sign=False, crl_sign=False, encipher_only=False, decipher_only=False),
+                       critical=True)
         .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
         .sign(key, hashes.SHA256())
     )

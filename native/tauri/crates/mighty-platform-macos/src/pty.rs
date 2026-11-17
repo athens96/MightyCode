@@ -84,6 +84,8 @@ pub fn shell_integration(environment: &mut BTreeMap<String, String>, program: &P
     environment.insert("GHOSTTY_SHELL_FEATURES".into(), "cursor,title".into());
     if program.file_name().is_some_and(|name| name == "zsh") {
         let zsh = resources.join("shell-integration").join("zsh");
+        // A value inherited from an outer Ghostty shell is not the user's own: only the ZDOTDIR replaced below is kept (review M-I 7).
+        environment.remove("GHOSTTY_ZSH_ZDOTDIR");
         if let Some(own) = environment.insert("ZDOTDIR".into(), zsh.to_string_lossy().into_owned()) {
             environment.insert("GHOSTTY_ZSH_ZDOTDIR".into(), own);
         }
@@ -711,6 +713,9 @@ mod tests {
         assert!(!login.contains_key("GHOSTTY_ZSH_ZDOTDIR"), "no ZDOTDIR of the user's to put back");
         let own = start(zsh, &["-il"], Some(resources), Some("/Users/me/.config/zsh"));
         assert_eq!(own["GHOSTTY_ZSH_ZDOTDIR"], "/Users/me/.config/zsh");
+        let mut stale = BTreeMap::from([("GHOSTTY_ZSH_ZDOTDIR".to_string(), "/elsewhere".to_string())]);
+        shell_integration(&mut stale, zsh, &["-il".to_string()], Some(resources));
+        assert!(!stale.contains_key("GHOSTTY_ZSH_ZDOTDIR"), "a stale value from an outer shell is dropped");
         let bash = start(Path::new("/bin/bash"), &["-il"], Some(resources), None);
         assert_eq!((bash["TERM_PROGRAM"].as_str(), bash.contains_key("ZDOTDIR")), ("ghostty", false), "zsh alone by ZDOTDIR");
         let untouched = BTreeMap::from([("PATH".to_string(), "/usr/bin".to_string())]);

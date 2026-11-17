@@ -114,8 +114,11 @@ fn hermes_run_ended(host: &Host, event: &ServiceEvent) -> Option<String> {
 pub fn plugin_directory() -> String {
     let exe = std::env::current_exe().ok();
     let beside = exe.as_ref().and_then(|exe| exe.parent().map(|dir| dir.join("claude-mods")));
-    let bundled =
-        exe.as_ref().and_then(|exe| exe.parent()?.parent().map(|contents| contents.join("Resources").join("mods").join("mighty-bridge")));
+    // Only an exe inside an `.app` (`<bundle>.app/Contents/MacOS/<exe>`, review M-I 6): elsewhere no folder two levels up is read.
+    let bundled = exe
+        .as_deref()
+        .and_then(mighty_updates::app_update::stage_mac::bundle_of)
+        .map(|bundle| bundle.join("Contents").join("Resources").join("mods").join("mighty-bridge"));
     match [beside, bundled].into_iter().flatten().find(|dir| dir.join(".claude-plugin").is_dir()) {
         Some(dir) => dir.to_string_lossy().into_owned(),
         None => Path::new(env!("CARGO_MANIFEST_DIR"))
