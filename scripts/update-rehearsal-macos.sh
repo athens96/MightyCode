@@ -241,7 +241,23 @@ serve_manifest() { # version
         "$(holds python3 -c 'import json,sys; v=json.loads(sys.argv[1]); sys.exit(0 if v.get("verdict")=="ok" and v.get("version")==sys.argv[2] and v["macos"]["url"]==sys.argv[3] and v.get("signed") else 1)' "$verdict" "$1" "$BASE/MightyCode-macos.zip")" "$verdict"
 }
 serve_manifest "$RUST_VERSION"
-check "the server answers over the trusted certificate" "$(holds curl -fsS -o /dev/null "$BASE/latest.json")"
+# Asked the way the apps ask, through URLSession and the System keychain's trust (for TLS to 127.0.0.1 only, a policy curl does not
+# read): a status of 200 within 20 s.
+cat > "$WORK/probe.swift" <<'SWIFT'
+import Foundation
+let done = DispatchSemaphore(value: 0)
+var status = -1
+URLSession.shared.dataTask(with: URL(string: CommandLine.arguments[1])!) { _, response, error in
+    status = (response as? HTTPURLResponse)?.statusCode ?? -1
+    if let error { FileHandle.standardError.write(Data("\(error)\n".utf8)) }
+    done.signal()
+}.resume()
+_ = done.wait(timeout: .now() + 20)
+FileHandle.standardError.write(Data("status \(status)\n".utf8))
+exit(status == 200 ? 0 : 1)
+SWIFT
+swiftc -O "$WORK/probe.swift" -o "$WORK/probe" > "$WORK/probe-build.log" 2>&1
+check "the server answers URLSession over the trusted certificate" "$(holds "$WORK/probe" "$BASE/latest.json" 2> "$WORK/probe.err")" "$(tr '\n' ' ' < "$WORK/probe.err" 2>/dev/null | cut -c1-300)"
 
 step "the Swift app from $FROM, stamped with the throwaway key and $BASE/latest.json"
 WORKTREE="$WORK/src"

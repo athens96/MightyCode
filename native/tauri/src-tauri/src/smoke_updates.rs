@@ -93,6 +93,8 @@ const PROBE: &str = r#"(async () => {
     c.placeholder = search?.placeholder ?? '';
     if (search) type(search, 'no-such-plugin-zz');
     await settled(async (s) => s.search === 'no-such-plugin-zz');
+    // The host has the search once `settled`; the page may draw the list a frame later (a packaged Mac run read the old row once).
+    await until(() => rows('claude') === 0, 2000);
     c.searchedRows = rows('claude');
     if (search) type(search, '');
     await pickFilter('claude', 0, '');
@@ -127,6 +129,8 @@ const PROBE: &str = r#"(async () => {
     const codexSearch = q('codex', 'search')?.querySelector('input');
     if (codexSearch) type(codexSearch, 'no-such-plugin-zz');
     await settled(async (s) => s.search === 'no-such-plugin-zz');
+    // The host has the search once `settled`; the page may draw the list a frame later (a packaged Mac run read the old row once).
+    await until(() => rows('codex') === 0, 2000);
     x.searchedRows = rows('codex');
     if (codexSearch) type(codexSearch, '');
     await pickFilter('codex', 0, '');
