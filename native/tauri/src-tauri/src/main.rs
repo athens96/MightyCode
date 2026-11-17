@@ -105,8 +105,8 @@ use crate::surface::SurfaceManager;
 
 /// Page → host: one message (`{kind:"call", ...}`), queued for the dispatcher; the answer comes back on `host-message`. Only the
 /// page's own webview showing the app's own page is heard (C# `WebShell.Trusted(args.Source)`): a browser pane's child webview, or
-/// the page's webview somewhere else, never reaches the host. And only with this run's nonce, which only the page's main frame is
-/// given ([`HostNonce`]): a frame inside the page (an HTML preview) that reaches Tauri's IPC is refused too.
+/// the page's webview somewhere else, never reaches the host. And only with this run's nonce, which only the page's top frame on the
+/// app's own origin defines ([`HostNonce`]): a frame inside the page (an HTML preview) that reaches Tauri's IPC is refused too.
 #[tauri::command]
 fn host_post(
     message: Value,
@@ -121,8 +121,9 @@ fn host_post(
     }
 }
 
-/// A secret of this run that only the page's main frame learns (an initialization script for the main frame only sets
-/// `window.__MIGHTY_HOST_NONCE__`; the page sends it with every `host_post`): an iframe's code, another origin's, never reads it.
+/// A secret of this run that only the page's top frame on the app's own origin learns (`window.__MIGHTY_HOST_NONCE__`; the page sends
+/// it with every `host_post`). The script itself checks where it runs: on Windows wry injects initialization scripts into every frame
+/// whatever Tauri's main-frame-only says (review, mac-int), so an iframe's code, another origin's, never defines it.
 struct HostNonce(String);
 
 impl HostNonce {
@@ -130,9 +131,18 @@ impl HostNonce {
         HostNonce(format!("{}{}", mighty_core::wire::new_id(), mighty_core::wire::new_id()).replace('-', ""))
     }
 
-    /// The main frame's script (a value it cannot change, set before the page's own scripts run).
-    fn script(&self) -> String {
-        format!("Object.defineProperty(window, '__MIGHTY_HOST_NONCE__', {{ value: '{}', writable: false, configurable: false }});", self.0)
+    /// The top frame's script on the app's origin `origin` (a value it cannot change, set before the page's own scripts run); in any
+    /// other frame or on any other address it defines nothing. Protocol and host are compared (`tauri://` has no web origin).
+    fn script(&self, origin: &tauri::Url) -> String {
+        let host = match origin.port() {
+            Some(port) => format!("{}:{port}", origin.host_str().unwrap_or("")),
+            None => origin.host_str().unwrap_or("").to_string(),
+        };
+        format!(
+            "if (window.top === window && location.protocol === '{}:' && location.host === '{host}') {{ Object.defineProperty(window, '__MIGHTY_HOST_NONCE__', {{ value: '{}', writable: false, configurable: false }}); }}",
+            origin.scheme(),
+            self.0
+        )
     }
 
     /// Whether a post carries this run's nonce (compared in full, whatever its length).
@@ -244,8 +254,8 @@ fn main() {
         }
     };
     // What this run may write (W9: a release build's default, `--allow-state-write`, `--read-only`; startup.rs, W9-F).
-    let policy = startup::write_policy(&options);
     let context = tauri::generate_context!();
+    let policy = startup::write_policy(&options, &context.config().identifier);
     // The OS's ports (platform.rs). Their paths are the data folder (`--profile` or %APPDATA%\MightyCode) and, for the default
     // profile only, the folders from before the rename (C# Program.cs).
     let platform = match platform::platform(options.profile.clone(), &context.config().identifier) {
@@ -542,7 +552,7 @@ fn main() {
             let origin_url = origin.0.clone();
             app.manage(origin);
             let nonce = HostNonce::new();
-            let nonce_script = nonce.script();
+            let nonce_script = nonce.script(&origin_url);
             app.manage(nonce);
             // Made again while another process still holds the data folder with other options (C#'s WebView2 right after the update
             // swap; startup.rs, review M1), at most about 10 s; the setup runs before the event loop, so the wait blocks nothing else.
@@ -552,7 +562,8 @@ fn main() {
                     let navigation = AppOrigin(origin_url.clone());
                     let loaded = AppOrigin(origin_url.clone());
                     let mut window = WebviewWindowBuilder::new(app.handle(), WINDOW, WebviewUrl::App("index.html".into()))
-                        // The host's nonce, for the main frame only (Tauri's `initialization_script`).
+                        // The host's nonce: the script defines it in the top frame on the app's origin only (wry runs it in every
+                        // frame on Windows).
                         .initialization_script(nonce_script.clone())
                         .title("Mighty Code")
                         .inner_size(1440.0, 920.0)
@@ -688,7 +699,11 @@ mod tests {
         assert!(!nonce.accepts(Some("")));
         assert!(!nonce.accepts(Some(&nonce.0[..63])));
         assert!(!nonce.accepts(Some(&HostNonce::new().0)), "each run has its own");
-        assert!(nonce.script().contains(&nonce.0) && nonce.script().contains("__MIGHTY_HOST_NONCE__"));
+        let script = nonce.script(&url("http://tauri.localhost"));
+        assert!(script.contains(&nonce.0) && script.contains("__MIGHTY_HOST_NONCE__"));
+        assert!(script.starts_with("if (window.top === window && location.protocol === 'http:' && location.host === 'tauri.localhost')"));
+        assert!(nonce.script(&url("tauri://localhost")).contains("location.protocol === 'tauri:' && location.host === 'localhost'"));
+        assert!(nonce.script(&url("http://localhost:5173")).contains("location.host === 'localhost:5173'"), "the dev server's port");
     }
 
     fn url(text: &str) -> tauri::Url {

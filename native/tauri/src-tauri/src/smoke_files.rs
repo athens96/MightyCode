@@ -58,6 +58,7 @@ const PROBE: &str = r#"(async () => {
     report.filesPreview = !!(await until(() => { const p = preview('smoke-folder/hello.ts'); return !!p && (p.querySelector('[data-testid=files-source]')?.textContent ?? '').includes('smokeMarker') && !!p.querySelector('.syntax-keyword') && (p.querySelector('.files-lines')?.textContent ?? '').startsWith('1'); }, 10000));
     // An HTML file as a page: the sandboxed frame from the host's protocol. Its load is recorded from before the click (a load event
     // reaches the document's capture listeners), so a frame that loads before the wait below starts still counts.
+    window.addEventListener('message', (event) => { if (event.data && event.data.smokeFrame) report.htmlFrameSees = { nonce: event.data.nonce, tauri: event.data.tauri }; });
     document.addEventListener('load', (event) => { const t = event.target; if (t instanceof HTMLIFrameElement && t.dataset.testid === 'files-html') t.dataset.smokeLoaded = '1'; }, true);
     row('page')?.click();
     report.htmlFolderOpened = !!(await until(() => row('page/index.html'), 10000));
@@ -65,6 +66,7 @@ const PROBE: &str = r#"(async () => {
     const frame = await until(() => preview('page/index.html')?.querySelector('[data-testid=files-html]'), 10000);
     report.htmlFrame = frame?.getAttribute('src') ?? null;
     report.htmlSandbox = frame?.getAttribute('sandbox') ?? null;
+    await until(() => report.htmlFrameSees, 5000);
     report.htmlLoaded = !!frame && !!(await until(() => new Promise((done) => { if (frame.dataset.smokeLoaded) return done(true); frame.addEventListener('load', () => { frame.dataset.smokeLoaded = '1'; done(true); }, { once: true }); setTimeout(() => done(false), 1500); }), 10000));
     // The reference bubble: the reply's src/a.ts:3 clicked where it is drawn.
     document.querySelector('[data-testid=sidebar-pane][data-session-id="' + referenceId + '"]')?.click();
@@ -115,7 +117,11 @@ fn fixture_folder() -> std::io::Result<PathBuf> {
             "<!doctype html><html><head><meta charset=\"utf-8\"><link rel=\"stylesheet\" href=\"style.css\"><script src=\"app.js\"></script></head><body><h1>Mighty smoke page</h1></body></html>",
         ),
         ("page/style.css", "h1 { color: #1f7a52; }"),
-        ("page/app.js", "document.title = 'smoke page';"),
+        // The page tells its parent what of the host it can see: neither the host's nonce nor Tauri's IPC (review, mac-int 1).
+        (
+            "page/app.js",
+            "document.title = 'smoke page'; parent.postMessage({ smokeFrame: true, nonce: typeof window.__MIGHTY_HOST_NONCE__, tauri: typeof window.__TAURI_INTERNALS__ }, '*');",
+        ),
     ];
     for (relative, text) in files {
         let path = folder.join(relative);
@@ -202,6 +208,14 @@ pub fn checks(host: &Host, report: &Value) -> Vec<(&'static str, bool)> {
                 && frame.ends_with(".html.mighty.invalid/index.html")
                 && report.get("htmlSandbox").and_then(Value::as_str) == Some("allow-scripts")
                 && ["/index.html", "/style.css", "/app.js"].iter().all(|p| served.iter().any(|s| s == p)),
+        ),
+        // The previewed page's own report: the host's nonce never reaches it, so it cannot post to the host; nor does Tauri's IPC where
+        // the webview keeps initialization scripts in the main frame (WKWebView; WebView2 gets them in every frame through wry).
+        (
+            "htmlFrameWithoutHost",
+            report.get("htmlFrameSees").is_some_and(|sees| {
+                sees["nonce"] == "undefined" && (crate::platform::frames_get_init_scripts() || sees["tauri"] == "undefined")
+            }),
         ),
         ("referenceBubble", yes("referenceClicked") && yes("referenceOpened") && yes("referenceClosed")),
         ("pictureViewer", yes("pictureThumbnails") && yes("pictureOpened") && yes("pictureClosed")),
