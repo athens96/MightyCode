@@ -724,12 +724,16 @@ jobs:
           if ($result.browser.browserEngine -ne 'cef') { throw "the browser panes used $($result.browser.browserEngine), not CEF" }
           'CEF under the hardened runtime: the browser step passed'
       - name: Remove the throwaway identity
+        # Never interactive and never failing the job: each call is bounded (perl's alarm) and runs with sudo -n, and stdin is closed.
+        # `security remove-trusted-cert` once waited here for an authorization no runner can give (44112802032): deleting the
+        # certificate from the System keychain by its SHA-1 takes its trust with it, and the runner is thrown away anyway.
         if: always()
+        timeout-minutes: 3
+        continue-on-error: true
         run: |
-          # The trust setting and the certificate (by its SHA-1, never by name), then the keychain holding the identity.
-          sudo security remove-trusted-cert -d "$RUNNER_TEMP/hardened/cert.pem" > /dev/null 2>&1 || true
-          [ -z "${CODESIGN_SHA1:-}" ] || sudo security delete-certificate -Z "$CODESIGN_SHA1" /Library/Keychains/System.keychain > /dev/null 2>&1 || true
-          security delete-keychain "$RUNNER_TEMP/hardened/throwaway.keychain-db" 2> /dev/null || true
+          bounded() { perl -e 'alarm shift; exec @ARGV' 30 "$@" < /dev/null > /dev/null 2>&1 || true; }
+          [ -z "${CODESIGN_SHA1:-}" ] || bounded sudo -n security delete-certificate -Z "$CODESIGN_SHA1" /Library/Keychains/System.keychain
+          bounded security delete-keychain "$RUNNER_TEMP/hardened/throwaway.keychain-db"
       - name: Upload the candidate
         uses: actions/upload-artifact@v4
         with:

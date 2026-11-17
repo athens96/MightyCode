@@ -102,10 +102,10 @@ cleanup() {
     step "clean up"
     for pid in $(apps_running); do kill -9 "$pid" 2>/dev/null; done
     [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
-    # The throwaway certificate's trust setting and the certificate itself (by its SHA-1, never by name).
+    # The throwaway certificate, by its SHA-1 (never by name), which takes its trust setting with it. Bounded and non-interactive:
+    # `security remove-trusted-cert` can wait for an authorization no runner gives (native-tauri.yml 44112802032).
     if [ -n "$CERT_SHA1" ]; then
-        sudo security remove-trusted-cert -d "$WORK/cert/cert.pem" > /dev/null 2>&1 || true
-        sudo security delete-certificate -Z "$CERT_SHA1" /Library/Keychains/System.keychain > /dev/null 2>&1 || true
+        perl -e 'alarm shift; exec @ARGV' 30 sudo -n security delete-certificate -Z "$CERT_SHA1" /Library/Keychains/System.keychain             < /dev/null > /dev/null 2>&1 || true
     fi
     rm -f "$WORK/cert/key.pem"
     [ -n "$WORKTREE" ] && git -C "$ROOT" worktree remove --force "$WORKTREE" >/dev/null 2>&1
