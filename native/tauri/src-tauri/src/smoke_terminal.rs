@@ -195,14 +195,20 @@ pub const NATIVE_PROBE: &str = r#"(async () => {
     report.view = !!(await until(async () => (await native()).view === true, 15000));
     report.started = !!(await until(async () => (await state()).running, 20000));
     report.idle = report.started && await status('idle', 15000);
-    const opened = await native();
-    const box = cell()?.getBoundingClientRect();
-    const scale = window.devicePixelRatio || 1;
-    report.bounds = opened.bounds ?? null;
-    report.slot = box ? [box.left * scale, box.top * scale, box.width * scale, box.height * scale].map(Math.round) : null;
-    report.boundsMatch = !!opened.visible && !!report.slot && !!report.bounds
-      && Math.abs(report.bounds.x - report.slot[0]) <= 2 && Math.abs(report.bounds.y - report.slot[1]) <= 2
-      && Math.abs(report.bounds.width - report.slot[2]) <= 2 && Math.abs(report.bounds.height - report.slot[3]) <= 2;
+    // The page lays the pane out again once the shell runs (the notice goes, the footer comes): the view follows the slot, so the
+    // two are compared once that settles (at most 5 s), as a user would see them.
+    const measure = async () => {
+      const opened = await native();
+      const box = cell()?.getBoundingClientRect();
+      const scale = window.devicePixelRatio || 1;
+      report.bounds = opened.bounds ?? null;
+      report.slot = box ? [box.left * scale, box.top * scale, box.width * scale, box.height * scale].map(Math.round) : null;
+      report.boundsMatch = !!opened.visible && !!report.slot && !!report.bounds
+        && Math.abs(report.bounds.x - report.slot[0]) <= 2 && Math.abs(report.bounds.y - report.slot[1]) <= 2
+        && Math.abs(report.bounds.width - report.slot[2]) <= 2 && Math.abs(report.bounds.height - report.slot[3]) <= 2;
+      return report.boundsMatch;
+    };
+    await until(measure, 5000);
     report.terminalStarted = report.pane && report.view && report.idle && report.boundsMatch;
 
     await type("PS1='mighty-smoke% '; PROMPT='mighty-smoke% '; RPROMPT=''; /usr/bin/tty; [[ -t 0 && -t 1 && -t 2 ]] && printf 'MIGHTY_%s\\n' 'PTY_OK'; printf 'MIGHTY_GRID %s\\n' \"$(/bin/stty size)\"; printf 'MIGHTY_PID %s\\n' \"$$\"");
@@ -213,6 +219,17 @@ pub const NATIVE_PROBE: &str = r#"(async () => {
     const sttyFirst = last(first, /MIGHTY_GRID (\d+) (\d+)/g);
     report.sttyGrid = sttyFirst ? [Number(sttyFirst[1]), Number(sttyFirst[2])] : null;
     report.grid = await gridOf();
+    // A grid that changed after `stty` ran (the view's last resize of the layout above) is asked again, a few times at most: the
+    // terminal follows the view's grid, it does not lead it.
+    for (let again = 0; again < 5 && !same(report.sttyGrid, report.grid); again += 1) {
+      await new Promise((r) => setTimeout(r, 500));
+      await type("printf 'MIGHTY_GRID %s\\n' \"$(/bin/stty size)\"");
+      await seen('MIGHTY_GRID ', 3000);
+      await new Promise((r) => setTimeout(r, 200));
+      const now = last(await screen(), /MIGHTY_GRID (\d+) (\d+)/g);
+      report.sttyGrid = now ? [Number(now[1]), Number(now[2])] : null;
+      report.grid = await gridOf();
+    }
     report.shellPid = last(first, /MIGHTY_PID (\d+)/g)?.[1] ?? null;
     report.terminalTty = report.ptyOk && !!report.tty && same(report.sttyGrid, report.grid);
 
