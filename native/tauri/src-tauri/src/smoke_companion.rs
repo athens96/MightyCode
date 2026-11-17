@@ -558,9 +558,19 @@ fn agent(host: &Host) -> Result<(RunSession, String), String> {
         finished_at: Some(now),
         is_approximate: false,
     });
+    // Its last request is the step's own short one: the pane's own depends on what ran before (a `-NoRuns` smoke, the Mac's CEF run,
+    // keeps the demo's long request, which the bubble rightly cuts).
+    let mut logs = first.logs().to_vec();
+    logs.push(mighty_core::model::LogEntry {
+        id: Some(wire::new_id()),
+        kind: Some("user".into()),
+        text: Some("Run the tests and fix what fails.".into()),
+        ..Default::default()
+    });
     let agent = RunSession {
         title: Some(mighty_run::strings::provider_label(first.provider()).into()),
         run_timing: Some(timing),
+        logs: Some(logs),
         ..(**first).clone()
     };
     Ok((agent, workspace))
