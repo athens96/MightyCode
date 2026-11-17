@@ -24,6 +24,7 @@ pub mod permission;
 pub mod rename;
 pub mod rename_migration;
 pub mod settings_sections;
+pub mod settings_words;
 pub mod shell;
 pub mod store;
 pub mod text_appearance;

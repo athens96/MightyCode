@@ -162,7 +162,10 @@ pub fn display(host: &Arc<Host>, ui: &mut Ui) -> El {
     let label = locale.get("settings.delegation.toggle");
     let to = host.clone();
     let switch = ui.settings_switch(&label, delegation_on(host), Some("settings-delegation"), move |on| set_delegation_on(&to, on));
-    let words = ui.settings_titled(&label, locale.get("settings.delegation.descriptionWindows"));
+    let words = ui.settings_titled(
+        &label,
+        mighty_core::settings_words::text(&locale, crate::platform::words(), "settings.delegation.descriptionWindows").unwrap_or_default(),
+    );
     rows.add(ui.settings_labeled(words, switch, true));
 
     let label = locale.get("settings.display.browserToggle");
@@ -173,7 +176,10 @@ pub fn display(host: &Arc<Host>, ui: &mut Ui) -> El {
             async move { to.view().update(|state| state.browser_engine_enabled = on) }
         })
     });
-    let words = ui.settings_titled(&label, locale.get("windows.settings.browserDescription"));
+    let words = ui.settings_titled(
+        &label,
+        mighty_core::settings_words::text(&locale, crate::platform::words(), "windows.settings.browserDescription").unwrap_or_default(),
+    );
     rows.add(ui.settings_labeled(words, switch, true));
     rows.finish()
 }
@@ -290,7 +296,10 @@ pub fn text(host: &Arc<Host>, ui: &mut Ui) -> El {
         )
         .aid("settings-text-reset")
         .enabled(!current.is_standard());
-    let note = ui.settings_text(locale.get("settings.text.noteWindows"), TextStyle::size(11.0).ink(Token::Ink2));
+    let note = ui.settings_text(
+        mighty_core::settings_words::text(&locale, crate::platform::words(), "settings.text.noteWindows").unwrap_or_default(),
+        TextStyle::size(11.0).ink(Token::Ink2),
+    );
     rows.add(ui.settings_labeled(note, reset, false));
     rows.finish()
 }

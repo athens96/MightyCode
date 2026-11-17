@@ -26,6 +26,18 @@ use objc2_user_notifications::{
 pub const PANE_KEY: &str = "sessionID";
 
 /// The Mac's `Notifier`.
+/// System Settings › Notifications (Swift's "Notification settings" button, AgentCompanionViews.swift:101): a fixed address, never one
+/// a caller gives, so the files' `open_url` (the web and mail only) is not widened for it.
+pub fn open_notification_settings() -> std::result::Result<(), String> {
+    objc2::rc::autoreleasepool(|_| {
+        let address = objc2_foundation::NSURL::URLWithString(&NSString::from_str(
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
+        ))
+        .ok_or("not an address")?;
+        if objc2_app_kit::NSWorkspace::sharedWorkspace().openURL(&address) { Ok(()) } else { Err("System Settings did not open".into()) }
+    })
+}
+
 pub fn notifier() -> Arc<dyn Notifier> {
     Arc::new(MacNotifier)
 }
