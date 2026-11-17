@@ -356,8 +356,8 @@ pictures beside the smoke's result unless the run writes); `--help-capture` and 
 Left after W9:
 - The manual checklist (plan §7) on a disposable Windows 11 x64 VM and an arm64 device, among it a real Action Center click
   relaunching the app with `-Embedding` on a writing build.
-- Screen share's native half (D11); the Mac stage (its process host, update installer and transport, session and activator are
-  `Unsupported`); Authenticode signing; a first-good-start rollback.
+- Screen share's native half; Authenticode signing; a first-good-start rollback. (The Mac stage that was left here is in; see
+  "Mac deviations".)
 - RenameMigration's finishing of an interrupted migration (W9-F L6, beyond parity).
 - A deviation seen by the smoke: a settings form is drawn again on the next 250 ms shell tick after a change it caused, so a second
   press on the theme picker within that tick lands on the segment still drawn as on and is ignored (the page's segmented control acts
@@ -637,7 +637,7 @@ script compares `workspace-state.json`'s SHA-256 and time before and after and l
 On the Mac (`macos-latest`, the stage's CI) the same smoke runs in WKWebView with Ghostty, the native panels and the pet, then a second
 time with CEF in an assembled bundle (`-NoRuns`, the browser engine on). Its exit code is 0 when every check outside smoke.rs'
 `MAC_PENDING_STEPS` passed (`passedOutsidePending`, `failedOutsidePending`; `passed` stays every check's verdict); the Mac's limit is
-900 s with the stand-in CLI (645 s on Windows).
+400 s with the stand-in CLI (645 s on Windows; the Mac's run took 120–150 s at the integration).
 
 ## CI
 
@@ -684,7 +684,8 @@ locale (`formats.rs`).
 
 - **Proxy credentials** (M-C): a system proxy that answers the `CONNECT` with 407 fails the request; URLSession would have answered
   with the proxy password in the Keychain. The Rust HTTPS (the usage read, the push, the app update) sends no proxy credentials: it
-  fails closed. TLS is 1.2 or later.
+  fails closed. A system proxy setting that cannot be read is no proxy: the request goes straight, as URLSession does. TLS is 1.2 or
+  later.
 - **CEF** (M-E, inherited from the Swift app's C bridge, `native/macos/BrowserBridge/cef_bridge.m`, which is not edited): the renderers
   run without CEF's sandbox (`no_sandbox=1`); the address field shows the app's history, not CEF's real address after a redirect or an
   in-page link; a user-gesture popup's target loads in the top frame (`file:` and cross-origin iframe targets included); in-page links
@@ -698,7 +699,8 @@ locale (`formats.rs`).
   lives outside `/Applications`, `/System` or `~/Applications`; the extension and launcher lists are a second layer.
 - **Deep links** (M-F, a deliberate deviation): a `mightycode://` link's text is trimmed, its blank-line runs collapsed and control or
   bidi characters refused; when the pane's draft is not empty the app asks first, showing the link's text; every confirmation a link
-  asks for has Cancel as its default. Swift wrote into the draft without asking.
+  asks for has Cancel as its default. Swift wrote into the draft without asking. The confirmation's words are inline in deep_link.rs in the four
+  languages, not in the locale files shared with C# (whose keys stay as they are).
 - **Update signatures** (M-H, stricter than Swift, Sparkle's rule): a staged bundle must pass `SecStaticCodeCheckValidity` (strict, all
   architectures, nested code) against the running app's team when the app is signed with one, at staging and again just before
   `install.sh` is written; an ad-hoc or unsigned running app (development, CI) checks strict validity only. Swift checked none.
@@ -706,11 +708,39 @@ locale (`formats.rs`).
   (Swift ran `zsh -ilc` in the workspace, which can run a repository's own hooks and leak one workspace's environment into another).
 - **The pet** (M-F): clicks pass through its clear pixels by the window server's alpha test, not by toggling `ignoresMouseEvents` per
   hit as Swift did; checked by hand (plan §9).
-- **The Keychain** (M-B, as Swift): a locked keychain in the search list makes a silent Claude read wait for its unlock with no limit
-  while it holds the process-wide Keychain lock (the usage probe gives up on it after 5 s; the blocked read stays). A bounded vault read
-  would read as "no key", which is worse.
+- **The Keychain** (M-B; bounded at the integration review): a locked keychain in the search list makes a silent Claude read wait for
+  its unlock with no limit inside the Security framework, holding the process-wide Keychain lock. The usage probe gives up on it after
+  5 s, no other silent read starts while it is stuck (each answers "Keychain access needed" at once), a read the user asks for waits
+  at most 5 s for the lock and 120 s in all, and a remote key's read waits 2 s for the lock, then reads as missing (the connection
+  fails and says so).
 - **Writing by default** (R6): a release Mac build in `/Applications` or `~/Applications` writes its state, settings and stores; anywhere
   else (a release candidate opened from `~/Downloads` beside 0.4.x) only with `--allow-state-write`.
+- **Two copies at once** (stricter than Swift, which relied on LaunchServices activating a running copy): the Swift 0.4.x app and this
+  one share the bundle identifier `dev.mightycode.native` and every store, so a run that would write stays read-only while another
+  copy of that identifier runs (`NSRunningApplication`); it says so on stderr. A smoke never asks.
+- **An HTML preview** (both OSes): its frame carries C#'s `LocalHtmlDocument.ContentPolicy` (no connection of its own, no plugins,
+  base or forms) with the frame hosts allowed for its own frames, and the host's nonce is defined in the page's top frame on the app's
+  origin only (wry runs initialization scripts in every frame on Windows; the smoke's files step checks the preview sees no nonce).
+
+- **Quitting for a logout, restart or shutdown** (M-F, `kAEQuitReason`'s replacement): tao owns `applicationShouldTerminate:`, so
+  Swift's `kAEQuitReason` is not read; `NSWorkspaceWillPowerOffNotification` marks the session's end instead (`session.rs`), and a
+  staged update does not install on that quit. Open modal sessions and sheets are not ended before the quit, as Swift ended them; the
+  16 s quit watchdog covers a quit they would hold.
+- **The browser with the engine off** (D4): a WKWebView pane with its own data store per workspace (macOS 14 or later), where Swift
+  said the browser was disabled. A change for the update notes.
+- **`mightyclaude://` links** (D11): accepted beside `mightycode://` (Swift dropped the legacy scheme at run time).
+- **The state's Mac-only fields**: none is lost. Every key Swift's `StateRepository` writes survives a Rust load and save (the
+  `state-corpus` round trip, `crates/mighty-core/tests/state_mac.rs` with `parity-mac state-check`), and Windows' saves stay byte for
+  byte.
+- **Agent IO on the Mac** (M-C's decisions): one JSON message per line on the Unix socket (Swift's and the plan's framing); a
+  follow-up to a busy child waits in C#'s `held` lane, where Swift used `pending`; a forged terminal token gets C#'s one refusal text.
+- **An agent terminal's stop** (Swift `LongRunningProcessTests.swift:173`): the shared `AgentTerminal::stop` waits for the command
+  after closing it without Swift's bound, as on Windows.
+- **Phone client ids**: Swift accepted 16–64 characters, the shared rule (C#'s) 22; the phone app always makes 22, so a phone Swift
+  paired is accepted.
+- **Settings words**: the settings say the Mac's words where Swift did (`mighty-core` `settings_words`: ⌘ keys, the Chromium
+  engine, "Mac notification", "this Mac"); Windows' note on keys and PowerShell is not shown, and the notification button opens
+  System Settings › Notifications.
 
 ### Swift-only features the 0.5 Mac app does not have (D12)
 

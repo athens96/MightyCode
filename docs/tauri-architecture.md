@@ -35,14 +35,14 @@
 1. 공통 crate에는 `#[cfg(target_os)]`가 없다. OS가 다르면 반드시 포트를 하나 만든다.
 2. 포트마다 **가짜 구현**이 있다. 공통 로직의 테스트(공통 기대값 파일, C# 테스트 이전분)는 가짜로 돌아서 Windows와 Mac CI 양쪽에서 똑같이 통과해야 한다.
 3. 어떤 구현을 쓸지는 빌드 대상(`cfg(windows)` / `cfg(target_os = "macos")`)으로 `src-tauri`가 한 곳에서 정한다. 같은 OS 안에서 고를 수 있는 것(예: Mac 브라우저 CEF ↔ WKWebView)은 설정으로 고른다.
-4. Mac 전용 네이티브 모듈도 **Rust로 쓴다**(정함 2026-11-13). AppKit·Foundation은 `objc2` 계열 crate로, Ghostty는 vendored libghostty의 **C API**(`ghostty_app_new`, `ghostty_surface_new`에 NSView를 넘김; `native/macos/Vendor/libghostty-spm`의 라이브러리)를 Rust에서 직접 부르고, CEF는 Rust CEF 바인딩으로 쓴다. 지금 Swift 코드(`LocalTerminalSession`, `HostTerminalView`, `CefBrowserEngine`, `BrowserBridge`, `HangulComposer` 등)는 동작의 기준으로 읽고 같은 동작을 Rust로 옮긴다.
+4. Mac 전용 네이티브 모듈도 **Rust로 쓴다**(정함 2026-11-13). AppKit·Foundation은 `objc2` 계열 crate로, Ghostty는 vendored libghostty의 **C API**(`ghostty_app_new`, `ghostty_surface_new`에 NSView를 넘김; `native/macos/Vendor/libghostty-spm`의 라이브러리)를 Rust에서 직접 부르고, CEF는 Swift 앱이 쓰던 C 브리지(`native/macos/BrowserBridge/cef_bridge.m`, D3)를 그대로 컴파일해 Rust에서 부른다(Mac 단계에서 바뀜: Rust CEF 바인딩이 아님). 지금 Swift 코드(`LocalTerminalSession`, `HostTerminalView`, `CefBrowserEngine`, `BrowserBridge`, `HangulComposer` 등)는 동작의 기준으로 읽고 같은 동작을 Rust로 옮긴다.
 
 ## 2. 플랫폼마다 다른 것 (포트와 구현)
 
 | 포트 | Windows | Mac |
 |---|---|---|
-| **TerminalSurface** (셸 창, 에이전트 터미널) | 웹: 페이지의 xterm.js + Rust ConPTY | **네이티브: Ghostty 뷰**(libghostty, Metal). PTY는 Ghostty가 가진다 |
-| **BrowserSurface** (브라우저 창) | WebView2 자식 웹뷰(작업 공간별 프로필) | **CEF와 WKWebView 둘 다**, 설정 `browser.engineEnabled`로 선택(켜면 CEF, 끄면 WKWebView) |
+| **TerminalSurface** (셸 창, 에이전트 터미널) | 웹: 페이지의 xterm.js + Rust ConPTY | **네이티브: Ghostty 뷰**(libghostty C API, Metal). PTY는 Rust가 가진다(D2, `MacPtyHost`; 출력은 `ghostty_surface_write_buffer`로 넣음) |
+| **BrowserSurface** (브라우저 창) | WebView2 자식 웹뷰(작업 공간별 프로필) | **CEF와 WKWebView 둘 다**, 설정 `browser.engineEnabled`로 선택(켜면 CEF의 C 브리지, 끄면 wry의 WKWebView 자식 웹뷰, D4) |
 | HtmlFrame (HTML 미리보기) | 페이지 iframe + 가상 호스트 | 같음(커스텀 프로토콜) |
 | ProcessHost | CreateProcessW 일시정지 + Job Object, PATHEXT, `.cmd` → `cmd /d /s /c` | posix_spawn, 로그인 셸 `-ilc` 환경 |
 | PtyHost (에이전트 PTY) | ConPTY | forkpty |
@@ -73,18 +73,18 @@
 | `capture()` | `ProcessHost` 위의 공통 함수: stdin을 쓰고 닫고, 두 출력을 한도까지 읽고, 시간 넘으면 죽임(Swift `ProcessCapture.run`) |
 | `PtyHost` | `default_shell`, `shell_arguments(shell, command, no_profile)`, `open(PtyRequest{program, args, cwd, env(전체), size})` → `PtySession{output 채널, control}` |
 | `PtyControl` | `write`(UTF-16 65,536단위 이하 — C# `text.Length`처럼 세므로 한글 30,000자(90,000바이트)도 받음), `resize`(2–1000 × 1–1000), `process_ids`, `busy`(셸이 명령을 실행 중인지 — Windows: Job의 셸 아닌 프로세스가 셸의 콘솔에 붙어 있음, C# `ShellProcessProbe`; 못 읽으면 None, 기본값 None — W4-A), `wait`, `close`(Job·콘솔 닫고 마지막 출력까지 읽음; 아무도 출력을 읽지 않아도 돌아옴) |
-| `Clipboard` (W4-A) | `read_text` → 글자 없으면 None, `write_text`. Windows `CF_UNICODETEXT`(다른 프로그램이 잡고 있으면 잠깐 기다린 뒤 거절), Mac은 아직 `Unsupported`(Ghostty가 스스로 복사·붙여넣기). `Platform`에는 없고 `src-tauri/src/platform.rs`의 `clipboard()`로 받음 |
+| `Clipboard` (W4-A) | `read_text` → 글자 없으면 None, `write_text`. Windows `CF_UNICODETEXT`(다른 프로그램이 잡고 있으면 잠깐 기다린 뒤 거절), Mac은 NSPasteboard(M-A; Ghostty 뷰는 자기 복사·붙여넣기 규칙도 가짐). `Platform`에는 없고 `src-tauri/src/platform.rs`의 `clipboard()`로 받음 |
 | `ShellEnvironment` | CLI가 시작할 환경: `resolve(workspace, force)`(실패 없음, 4초 한도, 10초 재사용), `current`, `invalidate`. 값은 로그·`Debug`에 안 나옴 |
 | `SecretVault` | `load(id)` → 없거나 못 읽으면 None, `save(id, secret)`, `delete(id)`. Windows는 C# `DpapiRemoteKeyVault`와 같은 파일·엔트로피(바이트 단위로 서로 읽힘), Mac은 Keychain `dev.mightycode.native.remote` |
 | `PrefsStore` | `get/set/remove(key)` → `PrefValue{Int, Text, Bool, Other}`; Windows `HKCU\Software\MightyCode`, Mac UserDefaults `dev.mightycode.native`, 이름은 같음(`delegation.enabled`, `setup.neverShow`, `textScale` …) |
 | `PairingStore` | 휴대폰 페어링 신원(`host_id`, `host_token`, `pairing_key`, 비밀 키, 기기 목록)을 `load`/`save`(한 번에 함께 저장) |
 | `Notifier` | `notify(Notification{title, body, pane_id})`, `on_activated(클릭 → pane id)` |
 | `Firewall` | `read` → 규칙 없음/있음(포트)/못 읽음, `apply(ports)`(빈 목록은 삭제, 관리자 확인) — Mac은 `Unsupported` |
-| `UpdateInstaller` | `install_location`, `hand_off(StagedUpdate, relaunch)`(도우미를 띄우고 돌아옴; 0.4.x `--update-helper` 인자 그대로) |
+| `UpdateInstaller` | `install_location`, `hand_off(StagedUpdate, relaunch)`(Windows: 도우미를 띄우고 돌아옴, 0.4.x `--update-helper` 인자 그대로). Mac(M-H): Swift `installScript`를 그대로 옮긴 `install.sh`를 `start_install_script`로 분리 실행, 받은 번들은 Security 프레임워크로 서명 확인(`code_signature_valid`) |
 | `SurfaceFactory` | 창 하나의 네이티브 뷰: `drawing(kind)` → `web`/`native`, `open_browser(BrowserOptions)`, `open_terminal(TerminalOptions)`, `open_pet()` |
 | `NativeSurface` | `place(DeviceRect)`, `set_visible`, `focus`, `snapshot`(PNG `data:` URL 또는 None), `inspect`(OS가 말하는 실제 위치·보임), `close` |
 | `BrowserSurface` | `NativeSurface` + `navigate(url)`, `go_back`, `go_forward`, `reload` |
-| `TerminalSurface` | `NativeSurface` + `send_text`, `set_font`, `set_theme` (Mac Ghostty, PTY는 뷰가 가짐) |
+| `TerminalSurface` | `NativeSurface` + `feed`(PTY 출력), `send_text`, `set_font`, `set_theme` (Mac Ghostty; PTY는 Rust의 `PtyHost`가 가짐) |
 | `PetWindow` | `show_at(LogicalRect)`, `hide`, `set_click_through`, `close` |
 | `PlatformProfile` | 값: `os`, `path_style`, `plugin_list_while_reading`(Busy/Join), `cli_updater`(Homebrew/Winget), `settings_store`, `pairing_layout`, `agent_sign_in`, `mcp_transport`, `m1_platform`("win32"/"darwin"), `remote_decodes_request_paths`, `direct_connection_firewall`, `update_needs_public_key`, `build_update_url_wins`, `update_rechecks_sha256`, `auto_update_keys`, `saves_files_pane` |
 
