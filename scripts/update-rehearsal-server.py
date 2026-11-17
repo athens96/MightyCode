@@ -6,9 +6,10 @@ loopback address, and the HTTPS server the installed 0.4.x app updates from. Not
                                                       make-update-manifest.py --sign-key reads); prints the public key in base64
     update-rehearsal-server.py cert <folder>          a self-signed certificate for localhost and 127.0.0.1, valid for two days:
                                                       cert.pem, key.pem and cert.cer (DER, for the Windows certificate store)
-    update-rehearsal-server.py serve <folder> --cert <pem> --key <pem> --port-file <file> --log <file>
-                                                      serves <folder>'s files over HTTPS on 127.0.0.1 at a free port, written to
-                                                      <port file> once listening; every request is a line in <log file>
+    update-rehearsal-server.py serve <folder> --cert <pem> --key <pem> --port-file <file> --log <file> [--port <n>]
+                                                      serves <folder>'s files over HTTPS on 127.0.0.1 at a free port (or <n>: the
+                                                      Mac rehearsal's builds carry their address), written to <port file> once
+                                                      listening; every request is a line in <log file>
 
 Needs Python's `cryptography` package (keygen, cert).
 """
@@ -56,7 +57,7 @@ def cert(folder):
     print(certificate.fingerprint(hashes.SHA1()).hex().upper())
 
 
-def serve(folder, cert_path, key_path, port_file, log_path):
+def serve(folder, cert_path, key_path, port_file, log_path, port=0):
     lock = threading.Lock()
     log = open(log_path, "a", encoding="utf-8", buffering=1)
 
@@ -72,7 +73,7 @@ def serve(folder, cert_path, key_path, port_file, log_path):
             with lock:
                 log.write("%s %s\n" % (datetime.datetime.now(datetime.timezone.utc).isoformat(), format % args))
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(cert_path, key_path)
@@ -94,13 +95,14 @@ def main():
     serving.add_argument("--key", required=True)
     serving.add_argument("--port-file", required=True)
     serving.add_argument("--log", required=True)
+    serving.add_argument("--port", type=int, default=0)
     a = parser.parse_args()
     if a.command == "keygen":
         keygen(a.key)
     elif a.command == "cert":
         cert(a.folder)
     else:
-        serve(os.path.abspath(a.folder), a.cert, a.key, a.port_file, a.log)
+        serve(os.path.abspath(a.folder), a.cert, a.key, a.port_file, a.log, a.port)
 
 
 if __name__ == "__main__":

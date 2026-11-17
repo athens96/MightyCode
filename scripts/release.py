@@ -683,7 +683,8 @@ MAC_ENGINE = "MightyCode.app/Contents/Frameworks/Chromium Embedded Framework.fra
 
 
 def check_mac_package(path, version):
-    """A Mac zip a release can ship: this version, the update channel's key and address, and the bundled browser engine."""
+    """A Mac zip a release can ship: this version, the update channel's key and address, and the bundled browser engine. Which app it
+    holds is reported too (Info.plist's MightyEngine: `tauri` for the Rust build of 0.5, none for the Swift app)."""
     import plistlib, zipfile
     try:
         with zipfile.ZipFile(path) as z:
@@ -703,7 +704,8 @@ def check_mac_package(path, version):
     if problems:
         raise ReleaseError("Mac zip을 릴리스할 수 없습니다: " + "; ".join(problems)
                            + " — main push의 native-macos.yml 빌드인지 확인하세요")
-    say("  Mac zip: 버전·업데이트 키·주소·브라우저 엔진 확인")
+    say("  Mac zip: 버전·업데이트 키·주소·브라우저 엔진 확인"
+        + f" (앱: {'Rust (MightyEngine ' + info['MightyEngine'] + ')' if info.get('MightyEngine') else 'Swift'})")
 
 
 def step_download(state, a):

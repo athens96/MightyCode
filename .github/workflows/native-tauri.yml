@@ -6,7 +6,12 @@ name: Native clients — Tauri (0.5)
 # rehearsal from real 0.4.59 and 0.4.61 installs (rehearsal). The switch of native-windows.yml to this build at the 0.5 merge is prepared
 # as native/tauri/release/native-windows.yml.0.5.patch, not applied. Mac stage Step 0: the Mac leg runs the smoke too (WebKit), its gate
 # every check outside smoke.rs' MAC_PENDING_STEPS (every step at first; each Mac part's merge takes out what passes), kept as
-# tauri-smoke-macos (spike R8: what the page does in WebKit); mac-base, the Mac stage's orchestrator branch, runs it on push.
+# tauri-smoke-macos (spike R8: what the page does in WebKit); mac-base, the Mac stage's orchestrator branch, runs it on push. Mac stage
+# M-I: the Mac release candidate in the 0.4.x bundle (package-macos: scripts/build-tauri-macos.sh, ad hoc, the hardened runtime under a
+# throwaway identity, Swift's own stager; Actions artifacts only) and the update rehearsal from real Swift 0.4.59 and 0.4.61 installs
+# (rehearsal-macos: scripts/update-rehearsal-macos.sh, on its throwaway runner); the switch of native-macos.yml at the 0.5 merge is
+# native/tauri/release/native-macos.yml.0.5.patch (checked against origin/main's file by the guards); the notarization dry run
+# (notarize-dry-run, D20) runs only when the user dispatches it with notarize_dry_run.
 on:
   push:
     branches: [feat/tauri, mac-base]
@@ -18,6 +23,11 @@ on:
       - 'locales/**'
       - '.github/workflows/native-tauri.yml'
   workflow_dispatch:
+    inputs:
+      notarize_dry_run:
+        description: Also sign the Mac candidate with the real Developer ID, notarize and staple it (environment release; the user only)
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -374,6 +384,16 @@ jobs:
           $left = $files | Select-String -Pattern '\bDirectTls\b' -List
           if ($wired -and $left) { $left | ForEach-Object { "$($_.Path):$($_.LineNumber)" }; throw 'DirectTls is still named after MacHttps backs the update transport' }
           if ($wired) { 'MacHttps backs the update transport; DirectTls is gone' } else { 'MacHttps not wired yet: DirectTls stays (temporary)' }
+      - name: The prepared 0.5 switch of native-macos.yml applies to main's
+        # Mac stage M-I: native/tauri/release/native-macos.yml.0.5.patch is applied at the 0.5 merge; checked here against
+        # origin/main's native-macos.yml in a scratch index (nothing is checked out or changed).
+        shell: bash
+        working-directory: .
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          export GIT_INDEX_FILE="$RUNNER_TEMP/main.index"
+          git read-tree FETCH_HEAD
+          git apply --cached --check --verbose native/tauri/release/native-macos.yml.0.5.patch
 
   package:
     # The release candidate in the 0.4.x shape (W9 plan §1.6, D10, D13, D15): what native-windows.yml builds from the C# app, here from
@@ -543,3 +563,351 @@ jobs:
             ${{ runner.temp }}/rehearsal/read-only-logs
             ${{ runner.temp }}/rehearsal/logs
           if-no-files-found: ignore
+
+  package-macos:
+    # Mac stage M-I: the Mac release candidate in the 0.4.x bundle (scripts/build-tauri-macos.sh: MightyCode.app, dev.mightycode.native,
+    # the browser engine, signed ad hoc, --verify-resources, the size gate and Swift's own stager's verdict), then the same app under the
+    # hardened runtime with a throwaway self-signed identity: codesign's strict check, --verify-resources, the MCP servers and the smoke
+    # with WebKit and with CEF on it. Stamped with a throwaway update key and the rehearsal's loopback address (rehearsal-macos below
+    # serves it), never the real ones; Actions artifacts only.
+    name: Package macOS
+    runs-on: macos-latest
+    timeout-minutes: 100
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      # Newer than VERSION, so a 0.4.x install takes it as an update (build-tauri-macos.sh --version).
+      CANDIDATE: 0.5.0-rc.${{ github.run_number }}
+      # The address the candidate checks: the rehearsal's server listens there (the Mac's stamped address wins over a saved one).
+      REHEARSAL_MANIFEST_URL: https://127.0.0.1:47615/latest.json
+      CODESIGN_NAME: Mighty Code CI throwaway
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # CFBundleVersion is the commit count.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            native/windows/web/package-lock.json
+            native/tauri/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python's cryptography (the throwaway update key)
+        run: python -m pip install --disable-pip-version-check cryptography==50.0.2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/tauri -> target
+          key: package-macos
+      - name: Restore the browser engine (CEF, native/macos/BrowserEngine.lock)
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/MightyCode/browser-engine
+          key: tauri-browser-engine-${{ hashFiles('native/macos/BrowserEngine.lock') }}
+      - name: A throwaway update key for the candidate and its rehearsal
+        run: |
+          mkdir -p "$RUNNER_TEMP/rehearsal-key"
+          public="$(python scripts/update-rehearsal-server.py keygen "$RUNNER_TEMP/rehearsal-key/update.key" | tail -n 1)"
+          echo "$public" > "$RUNNER_TEMP/rehearsal-key/public-key.txt"
+          echo "MIGHTY_UPDATE_PUBLIC_KEY=$public" >> "$GITHUB_ENV"
+      - name: Release build, bundle, ad hoc signature, zip and the 0.4.x stager's verdict
+        env:
+          MIGHTY_UPDATE_URL: ${{ env.REHEARSAL_MANIFEST_URL }}
+        run: |
+          bash scripts/fetch-browser-engine.sh
+          bash scripts/build-tauri-macos.sh --version "$CANDIDATE" --engine
+      - name: What the bundle holds, and its signature
+        run: |
+          app="$PWD/release/tauri-macos/MightyCode.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dvv "$app" 2>&1 | grep -E '^(Identifier|Format|Signature|TeamIdentifier|CodeDirectory)'
+          plutil -p "$app/Contents/Info.plist"
+          find "$app/Contents" -maxdepth 2 -not -path '*/Chromium Embedded Framework.framework/*' | sed "s|^$app/||" | sort
+          du -sh "$app" "$app/Contents/MacOS/MightyCode" "$app/Contents/Frameworks"/* "$app/Contents/Resources"/* | sed "s|$app/||"
+          ls -l release/MightyCode-macos.zip
+          cat release/MightyCode-macos.zip.sha256
+          (cd /tmp && "$app/Contents/MacOS/MightyCode" --verify-resources)
+      - name: The same app under the hardened runtime, signed by a throwaway self-signed identity
+        # What notarization needs (plan R2), with no real credentials: every nested binary signed inside out with its entitlements
+        # (scripts/sign-macos.sh --hardened-runtime), no get-task-allow, the CEF helpers' JIT, then the strict check.
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/hardened"
+          mkdir -p "$work"
+          printf '%s\n' '[req]' 'prompt = no' 'distinguished_name = dn' 'x509_extensions = v3' '[dn]' "CN = $CODESIGN_NAME" '[v3]' \
+            'basicConstraints = critical,CA:false' 'keyUsage = critical,digitalSignature' 'extendedKeyUsage = codeSigning' > "$work/cert.conf"
+          /usr/bin/openssl req -new -x509 -newkey rsa:2048 -nodes -keyout "$work/key.pem" -out "$work/cert.pem" -days 2 -config "$work/cert.conf"
+          /usr/bin/openssl pkcs12 -export -out "$work/identity.p12" -inkey "$work/key.pem" -in "$work/cert.pem" -name "$CODESIGN_NAME" -passout pass:throwaway
+          password="$(openssl rand -hex 16)"
+          keychain="$work/throwaway.keychain-db"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 7200 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$work/identity.p12" -k "$keychain" -P throwaway -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$work/cert.pem"
+          rm -f "$work/key.pem" "$work/identity.p12"
+          security find-identity -v -p codesigning "$keychain"
+          app="$work/MightyCode.app"
+          ditto release/tauri-macos/MightyCode.app "$app"
+          bash scripts/sign-macos.sh "$app" "$CODESIGN_NAME" --hardened-runtime
+          codesign --verify --deep --strict --verbose=2 "$app"
+          for code in "$app" "$app/Contents/Frameworks/"*.app; do
+            codesign -dvv "$code" 2>&1 | grep -q 'flags=0x10000(runtime)' || { echo "::error::not under the hardened runtime: $code"; exit 1; }
+            entitlements="$(codesign -d --entitlements :- "$code" 2>/dev/null)"
+            if grep -q get-task-allow <<<"$entitlements"; then echo "::error::get-task-allow set: $code"; exit 1; fi
+            grep -q com.apple.security.cs.allow-jit <<<"$entitlements" || { echo "::error::no allow-jit: $code"; exit 1; }
+          done
+          echo "the app and its $(ls -d "$app/Contents/Frameworks/"*.app | wc -l | tr -d ' ') helpers run under the hardened runtime with their entitlements"
+          (cd /tmp && "$app/Contents/MacOS/MightyCode" --verify-resources)
+          echo "HARDENED_APP=$app" >> "$GITHUB_ENV"
+      - name: The hardened app's two MCP servers list their tools headlessly
+        timeout-minutes: 2
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          app = os.environ["HARDENED_APP"] + "/Contents/MacOS/MightyCode"
+          env = {k: v for k, v in os.environ.items() if not k.startswith("MIGHTY_")}
+          requests = [
+              {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
+              {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+          ]
+          def ask(mode):
+              run = subprocess.run([app, mode], input="".join(json.dumps(r) + "\n" for r in requests),
+                                   capture_output=True, text=True, timeout=60, env=env)
+              answers = {a.get("id"): a.get("result", {}) for a in map(json.loads, filter(None, run.stdout.splitlines()))}
+              return run.returncode, answers.get(1, {}).get("serverInfo", {}).get("name"), [t.get("name") for t in answers.get(2, {}).get("tools", [])]
+          terminal = ask("--agent-io-mcp")
+          delegation = ask("--agent-delegation-mcp")
+          print(json.dumps({"terminal": terminal, "delegation": delegation}))
+          four = ["run_in_terminal", "read_latest_output", "stop", "open_url"]
+          six = ["delegate", "list_children", "child_status", "merge", "follow_up", "discard"]
+          problems = []
+          if terminal != (0, "mighty-terminal", four):
+              problems.append(f"--agent-io-mcp answered {terminal}")
+          if delegation != (0, "mighty-delegation", six):
+              problems.append(f"--agent-delegation-mcp answered {delegation}")
+          for problem in problems:
+              print(f"::error title=Packaged MCP servers (Mac)::{problem}", flush=True)
+          sys.exit(1 if problems else 0)
+          PY
+      - name: Smoke on the hardened app (WebKit; the seeded demo profile, without the run steps)
+        timeout-minutes: 15
+        shell: pwsh
+        run: ./native/tauri/scripts/smoke.ps1 -Exe "$env:HARDENED_APP/Contents/MacOS/MightyCode" -NoRuns -Out "$env:RUNNER_TEMP/package-smoke"
+      - name: Smoke on the hardened app with CEF (the browser engine on)
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          $seeded = Join-Path $env:RUNNER_TEMP 'package-smoke-cef-profile'
+          Push-Location native/tauri
+          cargo run -q -p mighty-core --example seed_demo -- $seeded en
+          if ($LASTEXITCODE -ne 0) { throw 'seed_demo failed' }
+          Pop-Location
+          python3 -c "import json,sys; p=sys.argv[1]; s=json.load(open(p)); s['browserEngineEnabled']=True; json.dump(s, open(p,'w'))" (Join-Path $seeded 'workspace-state.json')
+          ./native/tauri/scripts/smoke.ps1 -Exe "$env:HARDENED_APP/Contents/MacOS/MightyCode" -Profile $seeded -Out "$env:RUNNER_TEMP/package-smoke/cef" -NoRuns
+          if ($LASTEXITCODE -ne 0) { throw "the CEF smoke failed ($LASTEXITCODE)" }
+          $result = Get-Content -Raw "$env:RUNNER_TEMP/package-smoke/cef/smoke-result.json" | ConvertFrom-Json
+          if ($result.browser.browserEngine -ne 'cef') { throw "the browser panes used $($result.browser.browserEngine), not CEF" }
+          'CEF under the hardened runtime: the browser step passed'
+      - name: Remove the throwaway identity
+        if: always()
+        run: |
+          sudo security delete-certificate -c "$CODESIGN_NAME" /Library/Keychains/System.keychain > /dev/null 2>&1 || true
+          security delete-keychain "$RUNNER_TEMP/hardened/throwaway.keychain-db" 2> /dev/null || true
+      - name: Upload the candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: MightyCode-native-macos
+          path: |
+            release/MightyCode-macos.zip
+            release/MightyCode-macos.zip.sha256
+          if-no-files-found: error
+      - name: Keep the throwaway update key for the rehearsal
+        # A key made for this run only (the candidate checks a loopback address); the real signing key is never on a runner.
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-rehearsal-key-macos
+          path: ${{ runner.temp }}/rehearsal-key
+          retention-days: 3
+          if-no-files-found: error
+      - name: Keep the packaged smokes' results and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-package-smoke-macos
+          path: ${{ runner.temp }}/package-smoke
+          if-no-files-found: ignore
+
+  rehearsal-macos:
+    # Mac stage M-I (plan R1): a real Swift 0.4.x app, built from its tag with the candidate's throwaway key and loopback address,
+    # updates itself to the candidate on quit; then the relaunch path and a Rust → Rust update (scripts/update-rehearsal-macos.sh).
+    # It trusts a throwaway certificate system-wide and writes the runner user's defaults: on this throwaway runner only.
+    name: Rehearsal macOS from ${{ matrix.from }}
+    needs: package-macos
+    runs-on: macos-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        from: [v0.4.59, v0.4.61]
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      MIGHTY_REHEARSAL_DISPOSABLE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The tags the 0.4.x app is built from.
+          fetch-depth: 0
+      - name: Restore SwiftPM downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/macos/Package.resolved', 'native/macos/Vendor/libghostty-spm/Package.swift') }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python's cryptography (the throwaway certificate and the manifest's signature)
+        run: python -m pip install --disable-pip-version-check cryptography==50.0.2
+      # The post-update smoke seeds its profile with cargo (mighty-core's seed_demo).
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/tauri -> target
+          key: rehearsal-macos
+      - uses: actions/download-artifact@v4
+        with:
+          name: MightyCode-native-macos
+          path: ${{ runner.temp }}/rust-package
+      - uses: actions/download-artifact@v4
+        with:
+          name: tauri-rehearsal-key-macos
+          path: ${{ runner.temp }}/rehearsal-key
+      - name: Rehearse the update from ${{ matrix.from }}
+        run: |
+          bash scripts/update-rehearsal-macos.sh --from ${{ matrix.from }} --rust-zip "$RUNNER_TEMP/rust-package/MightyCode-macos.zip" \
+            --key "$RUNNER_TEMP/rehearsal-key/update.key" --work "$RUNNER_TEMP/rehearsal"
+      - name: Keep the rehearsal's result and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-rehearsal-macos-${{ matrix.from }}
+          path: |
+            ${{ runner.temp }}/rehearsal/*.json
+            ${{ runner.temp }}/rehearsal/*.log
+            ${{ runner.temp }}/rehearsal/server.*
+            ${{ runner.temp }}/rehearsal/served/latest*.json
+            ${{ runner.temp }}/rehearsal/logs
+            ${{ runner.temp }}/rehearsal/smoke
+            ${{ runner.temp }}/rehearsal/read-only-logs
+            ${{ runner.temp }}/rehearsal/rust-update-logs
+            ${{ runner.temp }}/rehearsal/relaunch/*.log
+            ${{ runner.temp }}/rehearsal/relaunch/install.sh
+          if-no-files-found: ignore
+
+  notarize-dry-run:
+    # Plan D20: the Mac candidate signed with the real Developer ID, notarized and stapled once before the 0.5 release, to learn that
+    # Apple accepts the Rust bundle. Prepared, never run by an agent: only a workflow_dispatch with notarize_dry_run (the user), in the
+    # environment `release` whose secrets notarize-macos uses. It builds its own candidate with the real update key's public half and
+    # address (as native-macos.yml stamps the Swift app), runs scripts/notarize-macos.sh (sign, --verify-resources, notarize, staple,
+    # stapler validate, spctl --assess; the dmg too) and keeps the result as a short-lived private Actions artifact, uploaded nowhere else.
+    name: Notarization dry run (macOS, Developer ID)
+    if: github.event_name == 'workflow_dispatch' && inputs.notarize_dry_run
+    environment: release
+    runs-on: macos-latest
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      CANDIDATE: 0.5.0-rc.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Fetch the pinned browser engine
+        run: bash scripts/fetch-browser-engine.sh
+      - name: Release build of the candidate with the real update key's public half and address (ad hoc first)
+        env:
+          MIGHTY_UPDATE_URL: ${{ vars.MIGHTY_UPDATE_URL || 'https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/latest.json' }}
+          MIGHTY_UPDATE_PUBLIC_KEY: ${{ vars.MIGHTY_UPDATE_PUBLIC_KEY || 'C02DD3qWG+A5gJdYwpaEnvpzYugo354CLtUtU+oXmZ4=' }}
+        run: bash scripts/build-tauri-macos.sh --version "$CANDIDATE" --engine
+      - name: Put the Developer ID certificate in a temporary keychain
+        env:
+          P12_BASE64: ${{ secrets.MIGHTY_DEVELOPER_ID_P12 }}
+          P12_PASSWORD: ${{ secrets.MIGHTY_DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$P12_BASE64" && test -n "$P12_PASSWORD"
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(openssl rand -base64 24)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$P12_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/developer-id.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity="$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)"
+          test -n "$identity"
+          echo "MIGHTY_CODESIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+      - name: Write the notary API key
+        env:
+          NOTARY_KEY: ${{ secrets.MIGHTY_NOTARY_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$NOTARY_KEY"
+          printf '%s\n' "$NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
+          echo "MIGHTY_NOTARY_KEY_FILE=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
+      - name: Install dmgbuild (hash-pinned) for the dmg's install window
+        run: |
+          python3 -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/python" -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --no-deps -r scripts/dmg/requirements.txt
+          echo "DMGBUILD=$RUNNER_TEMP/dmgbuild/bin/dmgbuild" >> "$GITHUB_ENV"
+      - name: Sign with the Developer ID, notarize, staple and assess (scripts/notarize-macos.sh, as notarize-macos does)
+        env:
+          MIGHTY_NOTARY_KEY_ID: ${{ secrets.MIGHTY_NOTARY_KEY_ID }}
+          MIGHTY_NOTARY_ISSUER_ID: ${{ secrets.MIGHTY_NOTARY_ISSUER_ID }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/notarized"
+          ditto release/tauri-macos/MightyCode.app "$RUNNER_TEMP/notarized/MightyCode.app"
+          scripts/notarize-macos.sh "$RUNNER_TEMP/notarized/MightyCode.app" "$RUNNER_TEMP/notarized"
+          xcrun stapler validate "$RUNNER_TEMP/notarized/MightyCode.app"
+          spctl --assess --type execute --verbose=4 "$RUNNER_TEMP/notarized/MightyCode.app"
+          scripts/check-release-size.sh "$RUNNER_TEMP/notarized/MightyCode-macos.zip"
+      - name: Keep the notarized candidate (private, short-lived; never uploaded anywhere public)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: MightyCode-macos-notarize-dry-run
+          path: |
+            ${{ runner.temp }}/notarized/MightyCode-macos.zip
+            ${{ runner.temp }}/notarized/MightyCode-macos.dmg
+          retention-days: 7
+          if-no-files-found: error
+      - name: Remove the keychain and the key
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/notary.p8"

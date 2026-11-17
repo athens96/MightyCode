@@ -1,0 +1,399 @@
+The switch of native-macos.yml to the Rust + Tauri build, prepared by M-I for the 0.5 merge into main (mac-plan.md M-I, D14) and not
+applied before it: the Swift app keeps releasing 0.4.x from main until then. Apply from the repository root with
+    git apply native/tauri/release/native-macos.yml.0.5.patch
+Only the macos job changes. It builds with scripts/build-tauri-macos.sh (the same MightyCode.app, release/MightyCode-macos.zip and the
+artifact names MightyCode-native-macos / -unsigned; the bundled browser engine on main pushes, as before), which also signs ad hoc,
+runs --verify-resources, applies the size gate and asks Swift's own stager (tools/parity-mac stage); the MCP servers' check, the Tauri
+smoke on the packaged app in place of the Swift app's six smokes, and the help capture (the Rust app's --help-capture) follow. The
+changes and macos-tests jobs and notarize-macos (notarize-macos.sh on the new app, unchanged) stay. native-tauri.yml checks that this
+patch applies to origin/main's native-macos.yml (git apply --check).
+
+diff --git a/.github/workflows/native-macos.yml b/.github/workflows/native-macos.yml
+--- a/.github/workflows/native-macos.yml
++++ b/.github/workflows/native-macos.yml
+@@ -91,9 +91,12 @@ jobs:
+           exit $status
+ 
+   macos:
++    # 0.5: the Mac app is the Rust + Tauri one (native/tauri, scripts/build-tauri-macos.sh) in the 0.4.x bundle, so an installed Swift
++    # 0.4.x app updates itself to it; the artifact names, the size gate, the help capture and the notarize-macos job are kept.
+     needs: changes
+     if: needs.changes.outputs.run == 'true'
+     runs-on: macos-latest
++    timeout-minutes: 90
+     steps:
+       - uses: actions/checkout@v4
+         with:
+@@ -105,6 +108,7 @@ jobs:
+           xcrun --find swift
+           xcrun swift --version
+           xcrun --sdk macosx --show-sdk-path
++      # The 0.4.x stager's verdict on the zip comes from Swift's own code (native/tauri/tools/parity-mac over native/macos).
+       - name: Restore SwiftPM downloads
+         uses: actions/cache@v4
+         with:
+@@ -112,38 +116,47 @@ jobs:
+             ~/Library/Caches/org.swift.swiftpm
+             native/macos/.build/repositories
+           key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/macos/Package.resolved', 'native/macos/Vendor/libghostty-spm/Package.swift') }}
++      - uses: actions/setup-node@v4
++        with:
++          node-version: '22'
++          cache: npm
++          cache-dependency-path: |
++            native/windows/web/package-lock.json
++            native/tauri/package-lock.json
++      - uses: dtolnay/rust-toolchain@stable
++        with:
++          targets: aarch64-apple-darwin
++      - uses: Swatinem/rust-cache@v2
++        with:
++          workspaces: native/tauri -> target
++          key: macos-release
+       # A push to main builds the package a release ships, so it carries the pinned browser engine
+-      # (CEF and Node, BrowserEngine.lock) as the Mac release zips always have; other runs build without it.
++      # (CEF, BrowserEngine.lock) as the Mac release zips always have; other runs build without it.
+       - name: Restore the pinned browser engine (main)
+-        # Like the build step below, also after a failed test step, so the build never lacks the engine.
+-        if: (success() || failure()) && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
++        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+         uses: actions/cache@v4
+         with:
+           path: ~/Library/Caches/MightyCode/browser-engine
+           key: browser-engine-${{ hashFiles('native/macos/BrowserEngine.lock') }}
+       - name: Fetch the pinned browser engine (main)
+-        # Like the build step below, also after a failed test step, so the build never lacks the engine.
+-        if: (success() || failure()) && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
++        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+         run: bash scripts/fetch-browser-engine.sh
+-      - name: Build SwiftUI application
++      - name: Build the Rust app, its bundle and zip, and the 0.4.x stager's verdict
+         id: build-app
+-        # Runs even when the Swift tests failed, so one CI run reports both.
+-        if: success() || failure()
+         env:
+           # The update channel's address and public key, as native-windows.yml stamps them; repository variables override.
+           MIGHTY_UPDATE_URL: ${{ vars.MIGHTY_UPDATE_URL || 'https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/latest.json' }}
+           MIGHTY_UPDATE_PUBLIC_KEY: ${{ vars.MIGHTY_UPDATE_PUBLIC_KEY || 'C02DD3qWG+A5gJdYwpaEnvpzYugo354CLtUtU+oXmZ4=' }}
+-          MIGHTY_BROWSER_ENGINE: ${{ (github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '1' || '' }}
+-        run: bash scripts/build-macos.sh
++          ENGINE: ${{ (github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '--engine' || '' }}
++        run: bash scripts/build-tauri-macos.sh $ENGINE
+       - name: Delegation server lists its six tools headlessly; mighty-terminal keeps its four tools
+-        # The app binary as the two stdio MCP servers a run can launch. Only a Claude
+-        # pane's run with the hidden delegation switch on names the second one.
++        # The app binary as the two stdio MCP servers a run can launch.
+         if: (success() || failure()) && steps.build-app.outcome == 'success'
+         timeout-minutes: 2
+         run: |
+           python3 - <<'PY'
+           import json, os, subprocess, sys
+-          app = "release/native-macos/MightyCode.app/Contents/MacOS/MightyCode"
++          app = "release/tauri-macos/MightyCode.app/Contents/MacOS/MightyCode"
+           env = {k: v for k, v in os.environ.items() if not k.startswith("MIGHTY_")}
+           requests = [
+               {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
+@@ -168,281 +181,35 @@ jobs:
+               print(f"::error title=macOS MCP servers::{problem}", flush=True)
+           sys.exit(1 if problems else 0)
+           PY
+-      - name: Smoke test isolated native profile
+-        if: success() || failure()
+-        timeout-minutes: 3
+-        run: release/native-macos/MightyCode.app/Contents/MacOS/MightyCode --smoke-test --smoke-exit --profile "$RUNNER_TEMP/mighty-native-smoke"
+-      - name: Check smoke result
+-        if: success() || failure()
+-        run: |
+-          python3 - <<'PY'
+-          import json, os, pathlib, sys
+-          profile = pathlib.Path(os.environ["RUNNER_TEMP"]) / "mighty-native-smoke"
+-          result = json.loads((profile / "smoke-result.json").read_text())
+-          print(result)
+-          tree = profile / "composer-accessibility.json"
+-          if not result["passed"]:
+-              if tree.exists():
+-                  print("Composer accessibility diagnostics:")
+-                  print(tree.read_text())
+-              error = str(result.get("error", "unknown"))
+-              exc_type = str(result.get("exceptionType", result.get("exception_type", "")))
+-              passed = result.get("checks", result.get("passedChecks", result.get("passed_checks", [])))
+-              if isinstance(passed, list):
+-                  passed_str = ", ".join(str(c) for c in passed)
+-              else:
+-                  passed_str = str(passed)
+-              msg = f"error={error}; exceptionType={exc_type}; passed=[{passed_str}]"
+-              msg_enc = msg.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')[:1500]
+-              print(f'::error title=macOS GUI smoke::{msg_enc}', flush=True)
+-              # The job log needs a login; annotations are public. Put the smoke's own
+-              # diagnostics and a summary of the accessibility tree there too.
+-              def notice(title, text):
+-                  enc = text.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+-                  for i in range(0, min(len(enc), 6000), 1400):
+-                      print(f'::notice title={title} ({i // 1400 + 1})::{enc[i:i + 1400]}', flush=True)
+-              notice('macOS GUI smoke result', json.dumps({k: v for k, v in result.items() if k not in ('passed',)}, ensure_ascii=False, sort_keys=True))
+-              if tree.exists():
+-                  nodes = json.loads(tree.read_text())
+-                  ids = sorted({n.get('id') for n in nodes if n.get('id')})
+-                  classes = {}
+-                  for n in nodes: classes[n.get('class')] = classes.get(n.get('class'), 0) + 1
+-                  top = sorted(classes.items(), key=lambda kv: -kv[1])[:25]
+-                  notice('macOS GUI smoke accessibility', json.dumps({'nodes': len(nodes), 'maxDepth': max((n.get('depth', 0) for n in nodes), default=0), 'ids': ids[:120], 'classes': top}, ensure_ascii=False))
+-              sys.exit(1)
+-          PY
+-      - name: Upload isolated macOS GUI result and screenshots
++      - name: Smoke on the packaged app against the seeded demo profile
++        # The Tauri smoke (native/tauri/src-tauri/src/smoke.rs: the page, the terminal, the browser, setup, files, updates, …) in
++        # place of the Swift app's GUI, terminal, graph, setup, work map and delegation smokes.
++        if: (success() || failure()) && steps.build-app.outcome == 'success'
++        timeout-minutes: 15
++        shell: pwsh
++        run: ./native/tauri/scripts/smoke.ps1 -Exe release/tauri-macos/MightyCode.app/Contents/MacOS/MightyCode -NoRuns -Out "$env:RUNNER_TEMP/mighty-native-smoke"
++      - name: Upload the smoke's result and logs
+         if: always()
+         uses: actions/upload-artifact@v4
+         with:
+           name: MightyCode-macos-smoke
+           path: ${{ runner.temp }}/mighty-native-smoke/
+           if-no-files-found: warn
+-      - name: Smoke test the Ghostty terminal pane
+-        # A real shell in a disposable profile: PTY, folder, history, Ctrl-C, resize,
+-        # restart, and that the pane is running only while a command runs. Only with an app to run.
+-        if: (success() || failure()) && steps.build-app.outcome == 'success'
+-        timeout-minutes: 5
+-        run: |
+-          set -u
+-          profile="$RUNNER_TEMP/mighty-terminal-smoke"
+-          rm -rf "$profile"
+-          status=0
+-          if ! perl -e 'alarm shift; exec @ARGV' 180 release/native-macos/MightyCode.app/Contents/MacOS/MightyCode \
+-              --terminal-smoke-test --smoke-exit --profile "$profile"; then
+-            echo "::error title=macOS terminal smoke::the app exited non-zero or timed out"
+-            status=1
+-          fi
+-          python3 - <<'PY' || status=1
+-          import json, os, pathlib, sys
+-          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "mighty-terminal-smoke" / "terminal-smoke-result.json"
+-          if not path.exists():
+-              print("::error title=macOS terminal smoke::no terminal-smoke-result.json was written", flush=True)
+-              sys.exit(1)
+-          result = json.loads(path.read_text())
+-          summary = {k: v for k, v in result.items() if k not in ("transcript", "failureTranscript")}
+-          print(json.dumps(summary, ensure_ascii=False, sort_keys=True, indent=2))
+-          if not result.get("passed"):
+-              msg = f'stage={result.get("failedStage", "?")}; error={result.get("error", "unknown")}'
+-              print(f'::error title=macOS terminal smoke::{msg.replace("%", "%25").replace(chr(13), "%0D").replace(chr(10), "%0A")[:1500]}', flush=True)
+-              sys.exit(1)
+-          PY
+-          exit $status
+-      - name: Upload terminal smoke result and screenshots
+-        if: always()
+-        uses: actions/upload-artifact@v4
+-        with:
+-          name: MightyCode-macos-terminal-smoke
+-          path: ${{ runner.temp }}/mighty-terminal-smoke/
+-          if-no-files-found: warn
+-      - name: Smoke test the Mighty diagram
+-        # The diagram in a disposable profile: block layout, resize, the 실행 split, and
+-        # the follow camera (the newest block sits just above the composer; a reader who
+-        # scrolled up is never pulled back when a new block appears). Only with an app to run.
+-        if: (success() || failure()) && steps.build-app.outcome == 'success'
+-        timeout-minutes: 5
+-        run: |
+-          set -u
+-          profile="$RUNNER_TEMP/mighty-graph-smoke"
+-          rm -rf "$profile"
+-          status=0
+-          if ! perl -e 'alarm shift; exec @ARGV' 180 release/native-macos/MightyCode.app/Contents/MacOS/MightyCode \
+-              --graph-smoke-test --smoke-exit --profile "$profile"; then
+-            echo "::error title=macOS graph smoke::the app exited non-zero or timed out"
+-            status=1
+-          fi
+-          python3 - <<'PY' || status=1
+-          import json, os, pathlib, sys
+-          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "mighty-graph-smoke" / "graph-smoke-result.json"
+-          if not path.exists():
+-              print("::error title=macOS graph smoke::no graph-smoke-result.json was written", flush=True)
+-              sys.exit(1)
+-          result = json.loads(path.read_text())
+-          print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2)[:20000])
+-          if not result.get("passed"):
+-              failed = [k for k, v in result.items() if v is False or (isinstance(v, dict) and v.get("passed") is False)]
+-              msg = f'failed={failed}; error={result.get("error", "")}'
+-              print(f'::error title=macOS graph smoke::{msg.replace("%", "%25").replace(chr(13), "%0D").replace(chr(10), "%0A")[:1500]}', flush=True)
+-              sys.exit(1)
+-          PY
+-          exit $status
+-      - name: Upload graph smoke result
+-        if: always()
+-        uses: actions/upload-artifact@v4
+-        with:
+-          name: MightyCode-macos-graph-smoke
+-          path: ${{ runner.temp }}/mighty-graph-smoke/
+-          if-no-files-found: warn
+-      - name: Smoke test the setup screen
+-        # The first-run setup sheet over fixed probe results in a disposable profile (nothing
+-        # on the runner is probed or installed): its rows and states, the out-of-date Claude's
+-        # update, Tailscale's download page, a picked tool pulling in Homebrew, and the
+-        # confirmation's commands in order. The confirmation is cancelled; no script is written.
+-        if: (success() || failure()) && steps.build-app.outcome == 'success'
+-        timeout-minutes: 5
+-        run: |
+-          set -u
+-          profile="$RUNNER_TEMP/mighty-setup-smoke"
+-          rm -rf "$profile"
+-          status=0
+-          if ! perl -e 'alarm shift; exec @ARGV' 180 release/native-macos/MightyCode.app/Contents/MacOS/MightyCode \
+-              --setup-smoke-test --smoke-exit --profile "$profile"; then
+-            echo "::error title=macOS setup smoke::the app exited non-zero or timed out"
+-            status=1
+-          fi
+-          python3 - <<'PY' || status=1
+-          import json, os, pathlib, sys
+-          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "mighty-setup-smoke" / "setup-smoke-result.json"
+-          if not path.exists():
+-              print("::error title=macOS setup smoke::no setup-smoke-result.json was written", flush=True)
+-              sys.exit(1)
+-          result = json.loads(path.read_text())
+-          print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2)[:20000])
+-          if not result.get("passed") or result.get("installRan"):
+-              msg = f'error={result.get("error", "")}'
+-              print(f'::error title=macOS setup smoke::{msg.replace("%", "%25").replace(chr(13), "%0D").replace(chr(10), "%0A")[:1500]}', flush=True)
+-              sys.exit(1)
+-          PY
+-          exit $status
+-      - name: Upload setup smoke result and screenshots
+-        if: always()
+-        uses: actions/upload-artifact@v4
+-        with:
+-          name: MightyCode-macos-setup-smoke
+-          path: ${{ runner.temp }}/mighty-setup-smoke/
+-          if-no-files-found: warn
+-      - name: Smoke test the work map
+-        # The work map over a git repository of three commits and a tag in a disposable profile,
+-        # with a saved summary standing in for the AI's answer: the pane opens as one tab, shows
+-        # the versions and topic cards, and is left out of the phone's pane list. No AI request is sent.
+-        if: (success() || failure()) && steps.build-app.outcome == 'success'
+-        timeout-minutes: 5
+-        run: |
+-          set -u
+-          profile="$RUNNER_TEMP/mighty-workmap-smoke"
+-          rm -rf "$profile"
+-          status=0
+-          if ! perl -e 'alarm shift; exec @ARGV' 180 release/native-macos/MightyCode.app/Contents/MacOS/MightyCode \
+-              --workmap-smoke-test --smoke-exit --profile "$profile"; then
+-            echo "::error title=macOS work map smoke::the app exited non-zero or timed out"
+-            status=1
+-          fi
+-          python3 - <<'PY' || status=1
+-          import json, os, pathlib, sys
+-          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "mighty-workmap-smoke" / "workmap-smoke-result.json"
+-          if not path.exists():
+-              print("::error title=macOS work map smoke::no workmap-smoke-result.json was written", flush=True)
+-              sys.exit(1)
+-          result = json.loads(path.read_text())
+-          print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2)[:20000])
+-          if not result.get("passed") or result.get("aiRequestSent"):
+-              msg = f'error={result.get("error", "")}'
+-              print(f'::error title=macOS work map smoke::{msg.replace("%", "%25").replace(chr(13), "%0D").replace(chr(10), "%0A")[:1500]}', flush=True)
+-              sys.exit(1)
+-          PY
+-          exit $status
+-      - name: Upload work map smoke result and screenshot
+-        if: always()
+-        uses: actions/upload-artifact@v4
+-        with:
+-          name: MightyCode-macos-workmap-smoke
+-          path: ${{ runner.temp }}/mighty-workmap-smoke/
+-          if-no-files-found: warn
+-      - name: Smoke test delegation close paths
+-        # Through the store's actions and the phone's routes, in a disposable profile and
+-        # repository: merged children closed on the Mac and from the phone are cleaned up,
+-        # a phone send releases a held notice, a workspace with children is refused with
+-        # workspace_has_children, and a parent's close asks first on the Mac and closes only
+-        # the parent from the phone, and the store's send for another agent (what a worktree menu
+-        # pick calls; the menu itself is not shown) starts a Claude child of a Codex pane. Every
+-        # Claude run is the scripted FakeClaude the app
+-        # build made beside the app's binary; no model runs. Only with an app to run.
+-        if: (success() || failure()) && steps.build-app.outcome == 'success'
+-        timeout-minutes: 5
+-        run: |
+-          set -u
+-          profile="$RUNNER_TEMP/mighty-delegation-smoke"
+-          rm -rf "$profile"
+-          status=0
+-          fake="$(find native/macos/.build -type f -perm -u+x -name FakeClaude -not -path '*.dSYM/*' | head -n 1)"
+-          if [ -z "$fake" ]; then
+-            swift build --package-path native/macos --product FakeClaude
+-            fake="$(swift build --package-path native/macos --show-bin-path)/FakeClaude"
+-          fi
+-          case "$fake" in /*) ;; *) fake="$PWD/$fake" ;; esac
+-          echo "FakeClaude: $fake"
+-          if ! perl -e 'alarm shift; exec @ARGV' 240 release/native-macos/MightyCode.app/Contents/MacOS/MightyCode \
+-              --delegation-smoke-test --smoke-exit --profile "$profile" --fake-claude "$fake"; then
+-            echo "::error title=macOS delegation smoke::the app exited non-zero or timed out"
+-            status=1
+-          fi
+-          python3 - <<'PY' || status=1
+-          import json, os, pathlib, sys
+-          path = pathlib.Path(os.environ["RUNNER_TEMP"]) / "mighty-delegation-smoke" / "delegation-smoke-result.json"
+-          if not path.exists():
+-              print("::error title=macOS delegation smoke::no delegation-smoke-result.json was written", flush=True)
+-              sys.exit(1)
+-          result = json.loads(path.read_text())
+-          print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
+-          expected = ["childrenListed", "macCloseMergedChild", "phoneCloseMergedChild", "phoneSendReleasedHeldNotice",
+-                      "removeRefusedOpenChild", "macParentCloseAsks", "phoneParentCloseKeepsChild", "removeRefusedKeptWorktree", "removedAfterDiscard",
+-                      "otherAgentChildStarted"]
+-          missing = [name for name in expected if name not in result.get("checks", {})]
+-          if not result.get("passed") or missing:
+-              msg = f'stage={result.get("failedStage", "?")}; error={result.get("error", "unknown")}; missing={missing}'
+-              print(f'::error title=macOS delegation smoke::{msg.replace("%", "%25").replace(chr(13), "%0D").replace(chr(10), "%0A")[:1500]}', flush=True)
+-              sys.exit(1)
+-          PY
+-          exit $status
+-      - name: Upload delegation smoke result
+-        if: always()
+-        uses: actions/upload-artifact@v4
+-        with:
+-          name: MightyCode-macos-delegation-smoke
+-          path: ${{ runner.temp }}/mighty-delegation-smoke/delegation-smoke-result.json
+-          if-no-files-found: warn
+       - name: Capture help screenshots in four languages
+-        # The help site's pictures (docs/help/shots.json) from the bundled demo profile,
+-        # one launch per language in a fresh profile, light and dark. Never run on a
+-        # developer's Mac: a second app instance breaks Korean input there. Only release
+-        # commits and full dispatches take them (ten minutes; the help site is uploaded
+-        # from a release's pictures).
+-        if: (success() || failure()) && needs.changes.outputs.help == 'true'
++        # The help site's pictures (docs/help/shots.json) from the bundled demo profile, one launch per language in a fresh profile,
++        # light and dark (plan D15: from the Mac Tauri capture). Only release commits and full dispatches take them.
++        if: (success() || failure()) && needs.changes.outputs.help == 'true' && steps.build-app.outcome == 'success'
+         timeout-minutes: 30
+         run: |
+           set -u
+-          APP=release/native-macos/MightyCode.app/Contents/MacOS/MightyCode
++          APP=release/tauri-macos/MightyCode.app/Contents/MacOS/MightyCode
+           status=0
+           for lang in ko en zh ja; do
+-            case "$lang" in zh) tag=zh-Hans ;; *) tag="$lang" ;; esac
+             profile="$RUNNER_TEMP/mighty-help-$lang"
+             rm -rf "$profile"
+-            # The demo folders go in the runner's throwaway home, so the pictures show
+-            # ~/Projects/my-app rather than the runner's temp folder.
+             echo "::group::Help capture ($lang)"
+             # perl's alarm bounds one launch, so a stuck language cannot use up the step.
+-            if ! perl -e 'alarm shift; exec @ARGV' 420 "$APP" --help-capture --smoke-exit --profile "$profile" \
+-                --help-workspaces "$HOME/Projects" -language "$lang" -AppleLanguages "($tag)"; then
++            if ! perl -e 'alarm shift; exec @ARGV' 420 "$APP" --help-capture --smoke-exit --profile "$profile" -language "$lang"; then
+               echo "::error title=Help capture ($lang)::the app exited non-zero or timed out"
+               status=1
+             fi
+@@ -484,8 +251,6 @@ jobs:
+           name: MightyCode-macos-help-shots
+           path: ${{ runner.temp }}/mighty-help-*/help-shots/
+           if-no-files-found: warn
+-      - name: Package macOS app with executable modes and hidden resources
+-        run: ditto -c -k --sequesterRsrc --keepParent release/native-macos/MightyCode.app release/MightyCode-macos.zip
+       - name: Gate the release package size before upload
+         run: scripts/check-release-size.sh release/MightyCode-macos.zip
+       # Without notarization (any branch, or main before the repository variable
