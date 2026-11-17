@@ -318,6 +318,20 @@ async fn s1() {
         launches.iter().skip(1).all(|argv| steps::option(argv, "--resume").as_deref() == Some(resumed.as_str())),
         "every later parent run resumed its one session"
     );
+    let fake = Path::new(&place.base()).join("fake");
+    export("s1", Path::new(&place.profile()), Path::new(&place.repo()), &fake.join("claude-config"));
+}
+
+/// With MIGHTY_DELEGATION_RECORD_EXPORT set (the Mac CI), a scenario's record goes to `<export>/<name>` (Swift
+/// `exportDelegationRecord`, DelegationScenarioS1Tests.swift:235): its profile (the app's own saved state and delegation file), its
+/// repository and its Claude config, which scripts/delegation-record.py then judges.
+fn export(name: &str, profile: &Path, repo: &Path, claude: &Path) {
+    let Some(export) = std::env::var_os("MIGHTY_DELEGATION_RECORD_EXPORT").filter(|value| !value.is_empty()) else { return };
+    let target = Path::new(&export).join(name);
+    let _ = std::fs::remove_dir_all(&target);
+    for (from, to) in [(profile, "profile"), (repo, "repo"), (claude, "claude")] {
+        copy_folder(from, &target.join(to));
+    }
 }
 
 fn copy_folder(from: &Path, to: &Path) {
@@ -540,6 +554,9 @@ async fn s2() {
             positions.iter().all(Option::is_some) && positions.windows(2).all(|pair| pair[0] < pair[1]),
             "{route}: the released two oldest first and ahead of the human's text"
         );
+        if route == "send" {
+            export("s2", &folder.join("profile"), Path::new(&place.repo()), &folder.join("claude-config"));
+        }
     }
 }
 
@@ -910,4 +927,5 @@ async fn s3() {
     for f in &saved.follow_ups {
         assert_eq!(prompts_b.iter().filter(|p| p.contains(&f.id)).count(), 1, "each follow-up in exactly one prompt B received");
     }
+    export("s3", &profile, Path::new(&repo), &fake.join("claude-config"));
 }

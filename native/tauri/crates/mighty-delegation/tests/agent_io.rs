@@ -29,7 +29,9 @@ fn executable(name: &str) -> String {
     std::env::temp_dir().join(name).to_string_lossy().into_owned()
 }
 
-/// "Agent IO BindingSecretsAndArgumentBoundaries".
+/// "Agent IO BindingSecretsAndArgumentBoundaries"; on the Mac also Swift `AgentIOMCPServerTests.swift:273`
+/// "aRunGetsTheTokenInItsEnvironmentNotItsArgvAndClosingRevokesIt" (the token in the run's environment, never its arguments; a closed
+/// binding resolves no more).
 #[test]
 fn binding_secrets_and_argument_boundaries() {
     let registry = AgentIoBindings::default();
