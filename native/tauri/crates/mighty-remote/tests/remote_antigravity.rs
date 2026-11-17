@@ -73,8 +73,7 @@ fn the_remote_samples_are_the_macs_own_and_pass_the_clients_checks() {
 /// "antigravity cards: a remote pane's host puts the rules in its own settings and refuses forged ones" (the Mac's
 /// aRemotePanesHostPutsTheRulesInItsOwnSettingsForTheContinuation): the host reports the card, refuses a rule it never reported (403)
 /// and a card it never reported and changes nothing, holds the card's own rule while the continuation runs and takes it out after,
-/// refuses the same grant again, and refuses Always for a once-only rule (409). The fake agy needs the Windows process host.
-#[cfg(windows)]
+/// refuses the same grant again, and refuses Always for a once-only rule (409). The fake agy runs through the platform's process host.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_remote_panes_host_puts_the_rules_in_its_own_settings_and_refuses_forged_ones() {
     use std::sync::Arc;
@@ -111,7 +110,7 @@ async fn a_remote_panes_host_puts_the_rules_in_its_own_settings_and_refuses_forg
         Box::pin(async move { found })
     });
     let environment = Arc::new(mighty_platform::fake::FakeShellEnvironment::new(std::env::vars().collect()));
-    let catalog = Arc::new(ProviderCatalog::new(Arc::new(mighty_platform_windows::WindowsProcessHost::new()), environment, Some(finder)));
+    let catalog = Arc::new(ProviderCatalog::new(support::processes(), environment, Some(finder)));
 
     let mut store = Store::new(root.join("host"), None, true);
     store.load(&Locale::new("en")).unwrap();
@@ -151,6 +150,8 @@ async fn a_remote_panes_host_puts_the_rules_in_its_own_settings_and_refuses_forg
         addresses: None,
         clock: mighty_remote::remote::host::monotonic(),
         windows_host: true,
+        decodes_paths: false,
+        graph_runs: true,
         antigravity_rules: Some(rules.clone()),
         system_folder: None,
         network: Arc::new(FakeNetwork::default()),

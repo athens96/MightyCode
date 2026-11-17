@@ -169,9 +169,17 @@ fn host_half(host: &Arc<Host>, update: &Arc<AppUpdate>) -> Value {
     let eyes = Eyes::new(host);
     // Windows rule 1 first, on the real box: a build with no public key shows the one sentence with the button disabled.
     let has_key = core.coordinator.has_public_key();
-    let notice = text(&locale, "NoPublicKeyNotice");
+    let notice = mighty_core::app_update_view::text_in(&locale, crate::app_update::words(), "NoPublicKeyNotice");
     let refused_shown = has_key || (eyes.words(STATUS_ID) == notice && !eyes.enabled(BUTTON_ID));
-    let refused = mighty_core::app_update_view::describe(&locale, &Default::default(), false, None, |_| "00:00".into(), true);
+    let refused = mighty_core::app_update_view::describe(
+        &locale,
+        crate::app_update::words(),
+        &Default::default(),
+        false,
+        None,
+        |_| "00:00".into(),
+        true,
+    );
     let refused_without_key = !refused.section_enabled && !refused.button_enabled && refused.status_text == notice && refused_shown;
 
     let before = core.coordinator.state();

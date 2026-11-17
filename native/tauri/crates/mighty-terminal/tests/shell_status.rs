@@ -163,3 +163,21 @@ async fn the_service_keeps_the_record_with_the_pane() {
     );
     service.dispose().await;
 }
+
+/// Swift `ShellActivityTests.swift:27 "onlyAReadingThatChangesTheStatusIsReported"`.
+#[test]
+fn only_a_reading_that_changes_the_status_is_reported() {
+    assert_eq!(next_status("idle", Some(true)), Some("running"));
+    assert_eq!(next_status("running", Some(false)), Some("idle"));
+    // No change, no report.
+    assert_eq!(next_status("idle", Some(false)), None);
+    assert_eq!(next_status("running", Some(true)), None);
+    // A reading that could not be taken leaves the status alone.
+    assert_eq!(next_status("running", None), None);
+    assert_eq!(next_status("idle", None), None);
+    // An exited or failed pane keeps that.
+    for status in ["completed", "error"] {
+        assert_eq!(next_status(status, Some(true)), None, "{status}");
+        assert_eq!(next_status(status, Some(false)), None, "{status}");
+    }
+}

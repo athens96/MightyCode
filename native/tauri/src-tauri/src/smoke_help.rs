@@ -7,8 +7,8 @@
 //! taken once, in the page's theme (dark when none is saved, as the store reads it), into `help-shots\<language>\<id>-<theme>.png` beside
 //! a `manifest.json` in the capture's shape: under the profile where the app may write it, else beside the smoke's result, so a
 //! read-only smoke of a real profile (`smoke.ps1 -Profile`) leaves it as it was. The window's size, position and maximized state, the
-//! sidebar and the dashboard are put back afterwards. The pictures need WebView2: elsewhere the step reports itself not applicable, and
-//! its checks hold. Checks: `helpShotsTaken` (both pictures written),
+//! sidebar and the dashboard are put back afterwards. The pictures are WebView2's on Windows and WKWebView's snapshot on the Mac (M-G).
+//! Checks: `helpShotsTaken` (both pictures written),
 //! `helpShotSize` (each picture is the window's content, and that content is the shot's size wherever the screen holds it) and
 //! `helpManifest` (the manifest lists both, ok).
 
@@ -20,9 +20,6 @@ use serde_json::{Map, Value, json};
 
 use crate::help_capture;
 use crate::host::{Host, WINDOW};
-
-/// Why the step takes no picture off Windows.
-const NOT_APPLICABLE: &str = "the help capture pictures the page through WebView2 (Windows only)";
 
 /// The step's shots (shots.json ids).
 pub const SHOTS: [&str; 2] = ["sidebar-collapsed", "dashboard"];
@@ -37,7 +34,7 @@ pub fn start(host: &Arc<Host>) -> bool {
     host.log.line("smoke: help capture step (two shots)");
     let host = host.clone();
     tauri::async_runtime::spawn(async move {
-        let report = match if cfg!(windows) { run(&host).await } else { Ok(json!({"notApplicable": NOT_APPLICABLE})) } {
+        let report = match run(&host).await {
             Ok(report) => report,
             Err(error) => {
                 host.log.line(&format!("smoke: help capture step failed: {error}"));
@@ -120,6 +117,39 @@ fn screen_now(host: &Host) -> Option<(u32, u32)> {
     window.current_monitor().ok().flatten().map(|m| (m.size().width, m.size().height))
 }
 
+/// The earlier steps' workspaces (the browser, terminal, files and history steps') live in memory only, never approved by a folder
+/// selection, so every save since they were added failed on them and the shots showed "Save failed: Only paths approved via folder
+/// selection may be saved." (both OSes; the Mac's help shot showed it first). Those steps are done before this one: every workspace the
+/// store never approved leaves, its panes closed through the app's own close (their runs, terminals and views end), and the banner
+/// with them. A remote mirror's workspace is its host's and stays (frame.rs `remove_workspace`'s rule).
+async fn leave_finished_steps(host: &Arc<Host>) -> Result<(), String> {
+    let finished: Vec<String> = {
+        let snapshot = host.current();
+        snapshot
+            .workspaces()
+            .iter()
+            .filter(|w| !host.approves(w) && !crate::mirror::is_mirror_workspace(&snapshot, w.id()))
+            .map(|w| w.id().to_string())
+            .collect()
+    };
+    let gone = |id: &str| finished.iter().any(|f| f == id);
+    let panes: Vec<String> = host.current().sessions().iter().filter(|p| gone(p.workspace_id())).map(|p| p.id().to_string()).collect();
+    for pane in panes {
+        crate::frame::close_session(host, &pane).await?;
+    }
+    host.view().update(|state| {
+        state.workspaces_mut().retain(|w| !gone(w.id()));
+        if let Some(expanded) = state.expanded_workspace_ids.as_mut() {
+            expanded.retain(|id| !gone(id));
+        }
+        if state.active_workspace_id.as_deref().is_some_and(gone) {
+            state.active_workspace_id = None;
+        }
+    })?;
+    host.view().error = None;
+    Ok(())
+}
+
 async fn run(host: &Arc<Host>) -> Result<Value, String> {
     let list: Vec<Value> = serde_json::from_str::<Value>(help_capture::SHOTS)
         .ok()
@@ -128,6 +158,7 @@ async fn run(host: &Arc<Host>) -> Result<Value, String> {
     let language = host.locale.language().to_string();
     let output = output_folder(host, &language);
     std::fs::create_dir_all(&output).map_err(|e| e.to_string())?;
+    leave_finished_steps(host).await?;
     let before = Window::now(host);
     // No saved theme reads as dark (store's saved theme, main.rs's window colour).
     let theme = if host.current().theme() == "light" { "light" } else { "dark" }.to_string();
@@ -256,9 +287,6 @@ fn sized(size: &Value) -> bool {
 
 /// The step's checks from its report.
 pub fn checks(report: &Value) -> Vec<(&'static str, bool)> {
-    if report.get("notApplicable").is_some() {
-        return vec![("helpShotsTaken", true), ("helpShotSize", true), ("helpManifest", true)];
-    }
     let shots = report.get("shots").and_then(Value::as_array).cloned().unwrap_or_default();
     let ok = |shot: &Value| shot.get("status").and_then(Value::as_str) == Some("ok");
     let files = report.get("files").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -300,12 +328,6 @@ mod tests {
             "a smaller screen keeps the window smaller"
         );
         assert!(!sized(&size((1440.0, 900.0), 1.0, (0, 0), None, (0, 0))));
-    }
-
-    /// Off Windows the step takes no picture and says why; its checks hold.
-    #[test]
-    fn a_step_not_applicable_here_passes() {
-        assert!(checks(&json!({"notApplicable": NOT_APPLICABLE})).iter().all(|(_, passed)| *passed));
     }
 
     #[test]

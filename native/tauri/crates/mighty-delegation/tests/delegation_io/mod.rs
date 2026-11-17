@@ -12,8 +12,26 @@ use mighty_delegation::request::{
     DETACHED_MESSAGE, DelegationCaller, DelegationChildInfo, DelegationChildStatus, DelegationChildSummary, DelegationFollowUpInfo,
     DelegationHandler, DelegationReasonCode, DelegationRequest, DelegationResponse, unknown_tool_message,
 };
-use mighty_platform::BoxFuture;
+use mighty_platform::{AgentIoConnector, AgentIoListener, BoxFuture};
 use tokio::sync::Notify;
+
+/// The OS's own Agent IO transport: Windows' named pipe, the Mac's Unix socket (M-C) in a fresh profile folder of its own.
+#[cfg(windows)]
+pub fn os_transport() -> (Arc<dyn AgentIoListener>, Arc<dyn AgentIoConnector>) {
+    (Arc::new(mighty_platform_windows::NamedPipeListener::new()), Arc::new(mighty_platform_windows::NamedPipeConnector))
+}
+
+/// The OS's own Agent IO transport: Windows' named pipe, the Mac's Unix socket (M-C) in a fresh profile folder of its own.
+#[cfg(target_os = "macos")]
+pub fn os_transport() -> (Arc<dyn AgentIoListener>, Arc<dyn AgentIoConnector>) {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().subsec_nanos();
+    let profile = std::env::temp_dir().join(format!("mighty-io-{}-{nanos}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst)));
+    (
+        Arc::new(mighty_platform_macos::agent_io::UnixSocketListener::new(&profile)),
+        Arc::new(mighty_platform_macos::agent_io::UnixSocketConnector),
+    )
+}
 
 /// `DelegationSupport.Commit`: a commit id.
 pub const COMMIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

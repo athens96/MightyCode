@@ -455,9 +455,9 @@ fn mobile_push_a_relay_redirect_is_a_failure() {
     }
 }
 
-/// L445 "mobile push: a relay redirect is a failure and is never followed": WinHTTP's POST against a loopback relay answering 307 to a
-/// second loopback listener, which is never reached.
-#[cfg(windows)]
+/// L445 "mobile push: a relay redirect is a failure and is never followed": the platform's POST (WinHTTP; the Mac's hyper over the
+/// system proxy, M-C) against a loopback relay answering 307 to a second loopback listener, which is never reached.
+#[cfg(any(windows, target_os = "macos"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mobile_push_a_relay_redirect_is_a_failure_and_is_never_followed() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -502,7 +502,10 @@ async fn mobile_push_a_relay_redirect_is_a_failure_and_is_never_followed() {
                 .await;
         String::from_utf8_lossy(&read).into_owned()
     });
+    #[cfg(windows)]
     let sender = transport::HttpPushTransport::new(Arc::new(mighty_platform_windows::http::WinHttpGet));
+    #[cfg(target_os = "macos")]
+    let sender = transport::HttpPushTransport::new(Arc::new(mighty_platform_macos::http::MacHttps::new()));
     let request = PushSendRequest { server_id: "s".into(), handle: "h".into(), payload: "p".into() };
     let outcome = sender.send(request, format!("http://127.0.0.1:{port}/push/v1/send"), "t".into()).await.unwrap();
     let head = answer.await.unwrap();

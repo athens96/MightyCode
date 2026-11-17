@@ -25,7 +25,10 @@ pub fn app_info(host: &Arc<Host>, ui: &mut Ui) -> El {
     let mut rows = ui.settings_rows();
     let version = ui.settings_text(version_text(host), TextStyle::size(13.0).ink(Token::Ink2).selectable());
     rows.add(ui.settings_labeled(ui.settings_text(locale.get("settings.appInfo.versionLabel"), TextStyle::default()), version, false));
-    rows.add(ui.settings_text(locale.get("settings.appInfo.windowsNote"), TextStyle::size(11.0).ink(Token::Ink2)));
+    // Windows' note on keys and PowerShell; the Mac shows none (Swift's names SwiftUI, which this app is not).
+    if let Some(note) = mighty_core::settings_words::text(&locale, crate::platform::words(), "settings.appInfo.windowsNote") {
+        rows.add(ui.settings_text(note, TextStyle::size(11.0).ink(Token::Ink2)));
+    }
     let to = host.clone();
     let help = ui
         .settings_push(

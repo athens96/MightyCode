@@ -4,3 +4,8 @@
 # The C# parity tool's build (its output goes to target/parity-cs).
 /tools/parity/obj/
 /tools/parity/bin/
+# Mac stage Step 0: the spikes' own workspace (its build and what tauri-build generates) and the Swift parity tool's build.
+/spikes/mac/target/
+/spikes/mac/*/gen/
+/spikes/mac/ghostty/swift/.build/
+/tools/parity-mac/.build/

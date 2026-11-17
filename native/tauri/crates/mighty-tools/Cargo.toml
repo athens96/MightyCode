@@ -40,3 +40,8 @@ tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread",
 # The checks that run the stand-in through Windows' own ProcessHost and the setup folder's ACLs.
 [target.'cfg(windows)'.dev-dependencies]
 mighty-platform-windows.workspace = true
+
+# The checks that run the stand-in and Swift's toolkit fixtures through the Mac ProcessHost (M-A); `libc` checks a process is gone.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+mighty-platform-macos.workspace = true
+libc = "0.2"

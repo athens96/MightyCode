@@ -2,13 +2,12 @@
 //! DelegationCoordinatorVerification.cs, ported from the Mac's DelegationCoordinatorTests, DelegationDelegateToolTests,
 //! DelegationReportTests, DelegationActionToolTests, DelegationStatusToolTests, DelegationCardTests, DelegationStoragePressureTests and
 //! the coordinator half of DelegationCleanupTests), each check under its C# name. The MCP server's rendering of an answer is W7-C's
-//! (tests of `mcp::delegation`), the run-event pump W7-D's (`app_host`). Git runs through the platform's process host, so these are
-//! Windows checks until the Mac stage (W7-B's `place.rs`).
+//! (tests of `mcp::delegation`), the run-event pump W7-D's (`app_host`). Git runs through the platform's process host (W7-B's
+//! `place.rs`: Windows', or M-A's on the Mac).
 
 mod support;
 
-#[cfg(windows)]
-mod windows {
+mod checks {
     use std::collections::HashSet;
     use std::path::Path;
     use std::sync::Arc;
@@ -1832,7 +1831,11 @@ mod windows {
                     && fixture.file().children[0].state == ChildState::Reported,
                 "nested after the confirmation named none: nothing is removed, and the answer names it"
             );
-            let written = canonical.canonical(&nested).to_uppercase().replace('\\', "/");
+            // Written another way on Windows (another case and `/`: C# compares ignoring case). The Mac names it exactly as listed, as
+            // Swift compares the confirmed names (`Set(nested).isSubset(of: Set(confirmed))`, DelegationCards.swift:252): no alias of the
+            // canonical `/private/var` and no other case is the same name there.
+            let written =
+                if cfg!(windows) { canonical.canonical(&nested).to_uppercase().replace('\\', "/") } else { canonical.canonical(&nested) };
             assert!(
                 coordinator.discard_from_card("c1", Some(&[written])).await == ChildCardDiscardOutcome::Discarded
                     && !Path::new(&child.worktree_path).exists()
@@ -2222,6 +2225,8 @@ mod windows {
         })
         .await;
 
+        // Windows' share modes: nothing on the Mac holds a file against its removal.
+        #[cfg(windows)]
         Box::pin(async {
             // Windows: a discard that another program's open file stops is told honestly, the child keeps its state and card, and a second
             // discard finishes.

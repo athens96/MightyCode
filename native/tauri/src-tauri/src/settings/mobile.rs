@@ -54,13 +54,20 @@ fn live(host: &Arc<Host>, ui: &mut Ui, relay: &Arc<RelayHost>) -> El {
     let indent = Thickness::new(MOBILE_INDENT, 0.0, 0.0, 0.0);
 
     // A. The allow switch, and under it how the connection stands and what the host is doing.
-    let allow = locale.get("windows.mobile.allow");
+    let allow = mighty_core::settings_words::text(&locale, crate::platform::words(), "windows.mobile.allow").unwrap_or_default();
     let to = host.clone();
     let switch = ui.settings_switch(&allow, saved.enabled, Some("settings-mobile-toggle"), move |on| {
         let host = to.clone();
         crate::native::act(&to, async move { crate::mobile::write(&host, |saved| MobileRemoteSettings { enabled: on, ..saved }).await });
     });
-    rows.add(ui.settings_labeled(ui.settings_titled(&allow, locale.get("windows.mobile.relayDescription")), switch, true));
+    rows.add(ui.settings_labeled(
+        ui.settings_titled(
+            &allow,
+            mighty_core::settings_words::text(&locale, crate::platform::words(), "windows.mobile.relayDescription").unwrap_or_default(),
+        ),
+        switch,
+        true,
+    ));
     let status = relay.status();
     let dot = if !saved.enabled {
         Token::Ink3

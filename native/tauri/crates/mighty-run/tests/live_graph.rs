@@ -3,8 +3,7 @@
 //! read with each of those publishes and once more at the end, from the CLI's environment). mighty-graph's tracker is not reachable from
 //! here, so a graph standing in for it takes the frames (the watcher and the tracker's merge are mighty-history's tests/codex_sessions.rs).
 //! The read runs without the graph's lock: a slow one holds up neither the run's output nor a card's answer.
-//! Windows only: the Mac ProcessHost is W1-D's.
-#![cfg(windows)]
+//! Over the OS's real process host (Windows'; the Mac's since M-A).
 
 mod common;
 

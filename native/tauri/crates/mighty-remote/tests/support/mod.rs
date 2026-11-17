@@ -8,3 +8,23 @@ pub mod desk;
 pub mod fake_host;
 pub mod fake_relay;
 pub mod lane;
+
+use std::sync::Arc;
+
+use mighty_platform::ProcessHost;
+
+/// The platform's process host (Windows', or M-A's on the Mac) for the checks that run a real command or the fake agy.
+pub fn processes() -> Arc<dyn ProcessHost> {
+    #[cfg(windows)]
+    {
+        Arc::new(mighty_platform_windows::WindowsProcessHost::new())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        mighty_platform_macos::process_host()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        Arc::new(mighty_platform::unsupported::Unsupported)
+    }
+}

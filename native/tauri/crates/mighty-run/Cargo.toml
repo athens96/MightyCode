@@ -8,7 +8,7 @@ publish.workspace = true
 rust-version.workspace = true
 
 # The tests' stand-in agent CLI (C# `Verification.FakeCliAsync`, the test exe relaunched with `--fake-cli`): std and serde_json only,
-# so it builds on every OS, while the checks that run it go through the Windows ProcessHost.
+# so it builds on every OS; the checks that run it go through the OS's ProcessHost (Windows', the Mac's).
 [[bin]]
 name = "mighty-fake-cli"
 path = "tests/fake/cli.rs"
@@ -40,3 +40,8 @@ tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread",
 [target.'cfg(windows)'.dev-dependencies]
 mighty-platform-windows.workspace = true
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
+# The checks that run real children go through the Mac ProcessHost (M-A); `libc` reads whether a process is still alive.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+mighty-platform-macos.workspace = true
+libc = "0.2"

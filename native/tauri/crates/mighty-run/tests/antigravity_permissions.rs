@@ -341,7 +341,7 @@ fn nothing_on_disk_is_asked_for_a_path_that_is_no_plain_local_one() {
 }
 
 /// S-H1: a drive that is not a fixed one (a removable, network or CD drive, or none at all) gets no rule; asking which it is is the only
-/// question.
+/// question. Windows only: the Mac has no drive letters.
 #[cfg(windows)]
 #[test]
 fn a_drive_that_is_not_fixed_gets_no_rule() {
@@ -397,6 +397,7 @@ fn a_protected_folder_is_compared_as_the_file_system_names_it() {
 /// S-H2 / C10 on this computer's disk: agy's folder named in another case, with a trailing dot or trailing spaces (Windows drops them), or
 /// through a junction (which any account may make; C10: a junction's target read as `\\?\C:\…` is still that folder), and the app's data
 /// folder a junction names, are refused as the folder itself; a junction to a folder beside them is fine.
+/// Windows only: junctions, and names Windows reads with trailing dots and spaces.
 #[cfg(windows)]
 #[test]
 #[allow(clippy::disallowed_methods, reason = "the check's own mklink, no child of the app")]
@@ -1402,9 +1403,8 @@ async fn a_service_given_no_settings_refuses_every_grant() {
     assert_eq!(service.check_antigravity_settings().await.unwrap_err().kind, "unreadable", "and the check before it");
 }
 
-// ── runs (the fake agy through the Windows ProcessHost) ─────────────────────────────────────────────────────────────────────────
+// ── runs (the fake agy through the OS's ProcessHost) ─────────────────────────────────────────────────────────────────────────
 
-#[cfg(windows)]
 mod runs {
     use super::*;
     use mighty_core::model::{AppSnapshot, RunSession, Workspace};

@@ -428,8 +428,7 @@ fn a_childs_words_follow_its_agent_and_name_a_claude_parent_as_one() {
     );
 }
 
-#[cfg(windows)]
-mod windows {
+mod git {
     use std::path::Path;
     use std::sync::Arc;
 

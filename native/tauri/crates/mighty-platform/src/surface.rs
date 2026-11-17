@@ -168,14 +168,80 @@ pub trait BrowserSurface: NativeSurface {
     fn reload(&self) -> Result<()>;
 }
 
-/// A terminal the platform draws itself (the Mac's Ghostty view, which owns its PTY). Output never crosses the bridge; title,
-/// working folder and the clipboard come back through the host's `terminal` pushes as for the web terminal.
+/// A terminal the platform draws itself (the Mac's Ghostty view). Mac stage D2: the host owns the PTY (`PtyHost`, as on Windows) and
+/// the view only draws it, through libghostty's host-managed backend: the PTY's output is [`TerminalSurface::feed`]ed to the view,
+/// and what the user types, the grid the view settles on, the title and the working folder come back as [`TerminalEvent`]s. Output
+/// never crosses the bridge to the page; title, working folder and the clipboard reach it through the host's `terminal` pushes as for
+/// the web terminal.
+///
+/// M-D's contract: the view stands where the page's xterm.js stands on Windows. Its first [`TerminalEvent::Resized`] is the pane's
+/// `ready` (the host starts the shell at that grid: no PTY exists before it, and none is needed, since Ghostty reports a size as
+/// soon as its surface has one), each later one a `resize`; [`TerminalEvent::Input`] is what the user typed, already encoded by the
+/// terminal (keys, IME commits, pastes). The copy of a selection the user makes, the paste of the system clipboard and the scrollback
+/// are the view's own (Ghostty's), with no round trip through the host. Every call returns without waiting for the view's thread.
 pub trait TerminalSurface: NativeSurface {
-    /// Text as if typed or pasted (the composer's "run in terminal", a paste the page forwards).
+    /// Text as if typed: runs of text go in as Ghostty's text input, and each control character among them (CR or LF, Tab, Backspace,
+    /// Ctrl+C, Ctrl+D) as the key that types it, so a CR runs the line even where the shell takes pastes bracketed.
     fn send_text(&self, text: &str) -> Result<()>;
+    /// The code family (empty: the standard one) and the size in points, from the text setting.
     fn set_font(&self, family: &str, size: f64) -> Result<()>;
     fn set_theme(&self, light: bool) -> Result<()>;
+    /// The PTY's output, in order, as it arrived (any thread; the view queues it).
+    fn feed(&self, output: &[u8]) -> Result<()> {
+        let _ = output;
+        Err(crate::PlatformError::unsupported("TerminalSurface", "feed"))
+    }
+    /// The text of the grid the view shows now, row by row (the smoke reads what the terminal drew).
+    fn text(&self) -> BoxFuture<'_, Result<String>> {
+        Box::pin(async { Err(crate::PlatformError::unsupported("TerminalSurface", "text")) })
+    }
 }
+
+/// What a terminal view tells the host that owns its PTY (libghostty's `receive_buffer`, `receive_resize` and actions). Sent from the
+/// view's threads: a listener must not block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalEvent {
+    /// Bytes the user typed or pasted, encoded by the terminal: for the PTY.
+    Input(Vec<u8>),
+    /// The grid the view settled on: for the PTY's window size.
+    Resized { columns: u16, rows: u16, width: u32, height: u32 },
+    /// The title the shell set (OSC 0/2).
+    Title(String),
+    /// The working folder the shell reported (OSC 7).
+    WorkingDirectory(String),
+    /// The view took (true) or lost the keyboard.
+    Focused(bool),
+    /// The terminal rang its bell.
+    Bell,
+}
+
+/// Where a terminal view sends its [`TerminalEvent`]s.
+#[derive(Clone)]
+pub struct TerminalListener(Arc<dyn Fn(TerminalEvent) + Send + Sync>);
+
+impl TerminalListener {
+    pub fn new(listener: impl Fn(TerminalEvent) + Send + Sync + 'static) -> TerminalListener {
+        TerminalListener(Arc::new(listener))
+    }
+
+    pub fn send(&self, event: TerminalEvent) {
+        (self.0)(event);
+    }
+}
+
+impl std::fmt::Debug for TerminalListener {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TerminalListener")
+    }
+}
+
+impl PartialEq for TerminalListener {
+    fn eq(&self, other: &TerminalListener) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for TerminalListener {}
 
 /// A point in DIPs (screen points on the Mac, device-independent pixels on Windows).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -385,6 +451,8 @@ pub struct TerminalOptions {
     /// The whole environment (the resolved CLI environment).
     pub env: BTreeMap<String, String>,
     pub bounds: DeviceRect,
+    /// Where the view's events go (D2: the host's PTY takes the input and the grid).
+    pub listener: Option<TerminalListener>,
 }
 
 impl std::fmt::Debug for TerminalOptions {
@@ -403,6 +471,14 @@ pub trait SurfaceFactory: Send + Sync {
     fn open_browser(&self, options: BrowserOptions) -> BoxFuture<'_, Result<Box<dyn BrowserSurface>>>;
     fn open_terminal(&self, options: TerminalOptions) -> BoxFuture<'_, Result<Box<dyn TerminalSurface>>>;
     fn open_pet(&self) -> BoxFuture<'_, Result<Box<dyn PetWindow>>>;
+    /// A new browser pane's status (`ready`, `disabled`, `missing`, `failed`) with the browser setting `enabled` (latched for the
+    /// launch), where this platform decides it itself; None for the shared rule (C# `StartWebBrowserAsync`: `disabled` while the setting
+    /// is off, `missing` without the engine's runtime, else `ready`). The Mac's (M-E, plan D4): WKWebView shows pages with the setting
+    /// off, and the CEF the setting asked for at launch is `ready` once it started, else `failed`.
+    fn browser_status(&self, enabled: bool) -> Option<&'static str> {
+        let _ = enabled;
+        None
+    }
 }
 
 #[cfg(test)]

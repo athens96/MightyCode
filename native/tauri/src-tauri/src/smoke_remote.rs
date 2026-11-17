@@ -253,9 +253,16 @@ async fn checked(
     })?;
     must(page.enabled("settings-remote-connect") == Some(false), || "connect must wait for an address and a key".into())?;
     let (add, remove) = (page.enabled("settings-remote-firewall-add"), page.enabled("settings-remote-firewall-remove"));
-    must(add == Some(false) && remove != Some(true), || {
-        format!("the firewall buttons must be off in a smoke run (no netsh, no UAC prompt); add {add:?}, remove {remove:?}")
-    })?;
+    if crate::direct::has_firewall(host) {
+        must(add == Some(false) && remove != Some(true), || {
+            format!("the firewall buttons must be off in a smoke run (no netsh, no UAC prompt); add {add:?}, remove {remove:?}")
+        })?;
+    } else {
+        // The Mac has no firewall step (`PlatformProfile::direct_connection_firewall`, M-C): the page shows no firewall buttons.
+        must(add.is_none() && remove.is_none(), || {
+            format!("a platform with no firewall step shows no firewall buttons; add {add:?}, remove {remove:?}")
+        })?;
+    }
     checks.insert("settingsPage".into(), json!(true));
 
     // Sharing on the loopback seam, port chosen by the system; commands wait for the full-access switch.

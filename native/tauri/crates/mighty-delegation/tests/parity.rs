@@ -3,6 +3,8 @@
 //! MightyCode.Core by `tools/parity` (`delegation`, Delegation.cs) and through this crate, compared line by line. Without the .NET 10
 //! SDK the check says so and passes; `MIGHTY_PARITY=require` makes it fail instead.
 
+#[path = "../../../tools/parity/build_lock.rs"]
+mod build_lock;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -37,6 +39,7 @@ fn csharp(input: &Path, output: &Path) -> bool {
     if !dotnet_10() {
         return false;
     }
+    let build = build_lock::hold(&tauri.join("target"));
     let built = Command::new("dotnet")
         .arg("build")
         .arg(tauri.join("tools/parity/Parity.csproj"))
@@ -44,6 +47,7 @@ fn csharp(input: &Path, output: &Path) -> bool {
         .arg(&out)
         .args(["--nologo", "-v", "quiet"])
         .status();
+    drop(build);
     assert!(matches!(built, Ok(status) if status.success()), "the C# parity tool did not build ({built:?})");
     let ran = Command::new("dotnet").arg(out.join("parity.dll")).arg("delegation").arg(input).arg(output).status().unwrap();
     assert!(ran.success(), "the C# parity tool failed");

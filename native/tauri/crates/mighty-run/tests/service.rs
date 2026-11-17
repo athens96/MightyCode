@@ -1,4 +1,4 @@
-//! End to end against C#: RunService starts a Claude pane's request through the real Windows ProcessHost; the fake CLI
+//! End to end against C#: RunService starts a Claude pane's request through the OS's real ProcessHost (Windows'; the Mac's since M-A); the fake CLI
 //! (`--replay-cli claude-stream-subagents`) asks one Bash permission, which the host allows, and one plan, which it approves for
 //! auto-edit, then replays the recording. C#'s DesktopService runs the same fake the same way (`tools/parity run-replay`), and the
 //! two panes must be the same state, and the CLI must have been sent the same answers.
@@ -10,8 +10,9 @@
 //!
 //! Without the .NET 10 SDK the comparison says so and passes (`MIGHTY_PARITY=require` makes it fail), as mighty-core's parity
 //! check does; the Rust run's own checks hold either way.
-#![cfg(windows)]
 
+#[path = "../../../tools/parity/build_lock.rs"]
+mod build_lock;
 mod common;
 
 use std::collections::HashSet;
@@ -178,6 +179,7 @@ fn csharp_run(work: &Path) -> Option<(Value, Vec<Value>)> {
     if !dotnet_10() {
         return None;
     }
+    let build = build_lock::hold(&tauri.join("target"));
     let built = std::process::Command::new("dotnet")
         .arg("build")
         .arg(tauri.join("tools/parity/Parity.csproj"))
@@ -185,6 +187,7 @@ fn csharp_run(work: &Path) -> Option<(Value, Vec<Value>)> {
         .arg(&tool)
         .args(["--nologo", "-v", "quiet"])
         .status();
+    drop(build);
     assert!(matches!(built, Ok(status) if status.success()), "the C# parity tool did not build ({built:?})");
     let out = work.join("out");
     let ran = std::process::Command::new("dotnet")

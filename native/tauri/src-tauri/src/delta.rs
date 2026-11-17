@@ -338,6 +338,11 @@ impl Bridge {
     }
 }
 
+/// The checks' lock on the C# parity tool's build (shared with the crates' parity checks).
+#[cfg(test)]
+#[path = "../../tools/parity/build_lock.rs"]
+mod build_lock;
+
 #[cfg(test)]
 mod tests {
     //! The page's side, ported from `native/windows/web/src/store/delta.ts` (`applyListDelta`, `applySessionDelta`) and
@@ -663,6 +668,7 @@ mod tests {
     fn the_deltas_are_the_csharp_bridges() {
         let tauri = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let tool = tauri.join("target/parity-cs/parity.dll");
+        let build = super::build_lock::hold(&tauri.join("target"));
         let built = std::process::Command::new("dotnet")
             .arg("build")
             .arg(tauri.join("tools/parity/Parity.csproj"))
@@ -670,6 +676,7 @@ mod tests {
             .arg(tauri.join("target/parity-cs"))
             .args(["--nologo", "-v", "quiet"])
             .status();
+        drop(build);
         if !matches!(built, Ok(status) if status.success()) {
             assert!(std::env::var("MIGHTY_PARITY").as_deref() != Ok("require"), "the C# parity tool did not build");
             eprintln!("skipped: the C# parity tool did not build");

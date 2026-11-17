@@ -449,6 +449,26 @@ impl TerminalPane {
                 }
                 Ok(())
             }
+            // Input that is not UTF-8 (a native terminal's X10 mouse report), base64: as it was for a shell, as text for an agent's
+            // terminal. Only a native view sends it (the Mac's Ghostty); the page's xterm never does.
+            "inputBytes" => {
+                let agent = {
+                    let mut state = lock(&self.state);
+                    state.inputs += 1;
+                    state.agent.as_ref().map(|(agent, _)| agent.clone())
+                };
+                let bytes = text("data").and_then(|data| base64::engine::general_purpose::STANDARD.decode(data).ok());
+                if let Some(bytes) = bytes.filter(|bytes| utf16_len(&String::from_utf8_lossy(bytes)) <= PASTE_LIMIT) {
+                    let taken = match agent {
+                        Some(agent) => Some(agent.write(&String::from_utf8_lossy(&bytes))),
+                        None => self.control().map(|control| control.write(&bytes)),
+                    };
+                    if taken == Some(false) {
+                        self.events.error(self.ports.locale.get("terminal.inputBusy"));
+                    }
+                }
+                Ok(())
+            }
             "resize" => {
                 let (columns, rows) = (integer(value, "columns")?, integer(value, "rows")?);
                 let agent = {
@@ -585,6 +605,19 @@ impl TerminalPane {
                     let _ = control.close().await;
                 });
                 return Ok(());
+            }
+            // A resize that came while the shell was starting had no terminal to reach: the grid it left is the one to start at
+            // (applied under the lock that makes the terminal reachable, so no later resize is overtaken).
+            let latest = PtySize { columns: state.columns as u16, rows: state.rows as u16 };
+            if latest != size
+                && let Err(error) = control.resize(latest)
+            {
+                // The terminal it opened goes, as the closed path's does: nothing is left running for a pane that failed to start.
+                drop(state);
+                tokio::spawn(async move {
+                    let _ = control.close().await;
+                });
+                return Err(error.to_string());
             }
             state.generation += 1;
             let generation = state.generation;

@@ -789,12 +789,12 @@ mod tests {
         assert_eq!(git_message(&GitResult { exit_code: 1, stderr: "x".repeat(900) }).len(), 500);
     }
 
-    /// C# `WorkspaceCreateVerification.MakeFolderAndCloneWorkOnALocalBareRepository`, through the Windows `ProcessHost`.
-    #[cfg(windows)]
+    /// C# `WorkspaceCreateVerification.MakeFolderAndCloneWorkOnALocalBareRepository`, through the OS's `ProcessHost` (Windows'; the
+    /// Mac's since M-A).
     #[tokio::test(flavor = "multi_thread")]
     async fn make_folder_and_clone_work_on_a_local_bare_repository() {
         let Some(executable) = git_executable() else { return };
-        let processes: Arc<dyn ProcessHost> = Arc::new(mighty_platform_windows::WindowsProcessHost::new());
+        let processes: Arc<dyn ProcessHost> = crate::platform::process_host();
         let root = std::env::temp_dir().join(format!("mighty-create-git-{}", uuid_like()));
         let work = root.join("work");
         std::fs::create_dir_all(&work).unwrap();
@@ -867,7 +867,6 @@ mod tests {
         assert!(!root.exists(), "the clones' read-only objects are removed too");
     }
 
-    #[cfg(windows)]
     fn uuid_like() -> String {
         format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos())
     }

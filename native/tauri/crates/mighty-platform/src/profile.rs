@@ -45,13 +45,16 @@ pub enum CliUpdater {
 /// Where the app's own settings live (beside the state file's fields).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsStore {
-    /// The Mac: UserDefaults `dev.mightycode.native` (`appUpdate.*`, `delegation.enabled`, `setup.neverShow`, ...).
+    /// The Mac: UserDefaults `dev.mightycode.native` (`appUpdate.*`, `delegation.enabled`, `setup.neverShow`, ...): the settings the
+    /// Swift app keeps there are read from it and written back to it, not to the state file (src-tauri `settings_place`).
     UserDefaults,
     /// Windows: `HKCU\Software\MightyCode` values for some, snapshot fields for others (`AppUpdateAutoCheck`, `AppUpdateLastCheckedAt`).
     RegistryAndSnapshot,
 }
 
-/// How the phone pairing identity is kept on disk.
+/// How the phone pairing identity is kept on disk. Not a profile value: each OS crate's `PairingStore` is the one layout it keeps
+/// (Windows `mobile-identity.json` under its protected folder, the Mac `pairing::four_files` with owner-only modes), as the transport is
+/// the Agent IO listener's own ([`McpTransport`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PairingLayout {
     /// Windows: `mobile-identity.json`, the key, tokens and devices together.
@@ -69,7 +72,8 @@ pub enum AgentSignIn {
     ConsoleWindow,
 }
 
-/// What `--agent-io-mcp` listens on.
+/// What `--agent-io-mcp` listens on: the listener's and the connector's own answer (`AgentIoListener::transport`), so no profile
+/// value repeats it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpTransport {
     UnixSocket,
@@ -87,7 +91,23 @@ impl McpTransport {
     }
 }
 
-/// The deliberate differences, one value per behaviour.
+/// What the app update downloads, unpacks and hands to whom (M-H): the manifest's asset, the package's name, the staging and the
+/// helper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdatePackage {
+    /// Windows (C# `AppUpdateService`): the manifest's `windows.<x64|arm64>`, `MightyCode-windows.zip`, unpacked here into a folder with
+    /// one `MightyCode.exe`, swapped by the staged exe's `--update-helper`.
+    WindowsZip,
+    /// The Mac (Swift `AppUpdate.swift`): the manifest's `macos` (`mac`, `darwin`) with `minimumSystemVersion`, `MightyCode-macos.zip`,
+    /// unpacked by `/usr/bin/ditto` into one `.app`, swapped by `install.sh` (Swift's `installScript`, ported).
+    MacBundle,
+}
+
+/// The deliberate differences, one value per behaviour. Every value is read where its behaviour is (the guards job of
+/// native-tauri.yml fails on a field nothing reads). Mac stage M-J took out four that described no difference any more: the pairing
+/// layout and the Agent IO transport (each the OS port's own), the snapshot's `autoUpdateCLIs`/`autoUpdatePlugins` (C#'s `AppSnapshot`
+/// carries both too, Models.cs:387-388) and the files pane's save (neither app saves one: C# `FilePaneKind.Stored`, Swift
+/// `SessionKind.stored`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlatformProfile {
     pub os: Os,
@@ -95,25 +115,25 @@ pub struct PlatformProfile {
     pub plugin_list_while_reading: PluginListWhileReading,
     pub cli_updater: CliUpdater,
     pub settings_store: SettingsStore,
-    pub pairing_layout: PairingLayout,
     pub agent_sign_in: AgentSignIn,
-    pub mcp_transport: McpTransport,
     /// The `platform` field of the phone protocol's `/m1/info` ("win32" on Windows, "darwin" on the Mac).
     pub m1_platform: &'static str,
     /// The remote workspace host percent-decodes request paths (the Mac does, Windows does not).
     pub remote_decodes_request_paths: bool,
     /// A Tailscale direct connection needs an inbound firewall rule first (Windows: `netsh` with elevation; the Mac has no step).
     pub direct_connection_firewall: bool,
-    /// The app update check is off when the build carries no public key (Windows; the Mac checks and refuses at verification).
+    /// M-H: what a build without a public key says when asked to check. Neither OS ever checks without one (C# rule 1; Swift
+    /// `AppUpdateService.check`, AppUpdate.swift:197, and docs/app-update.md "서명"): true, Windows', the box's notice that the check is
+    /// off (`settings.appUpdate.noPublicKeyNoticeWindows`); false, the Mac's, the check's own refusal (`appUpdate.error.noPublicKey`).
     pub update_needs_public_key: bool,
-    /// A manifest address stamped into the build wins over one the user set (Windows).
+    /// A manifest address stamped into the build wins over one the user set (C#'s rule 3; Swift's "Rule 3: the stamped address wins",
+    /// AppStore+AppUpdate.swift:50-53: both OSes). False would try the user's address first and the build's only without one.
     pub build_update_url_wins: bool,
-    /// The staged package's SHA-256 is checked again just before the swap (Windows' `--update-helper`).
+    /// The staged package's size and SHA-256 are checked again just before the swap: in Windows' `--update-helper`, and on the Mac in
+    /// the app right before it starts `install.sh` (Swift's "Rule 4", AppStore+AppUpdate.swift:430-433, off the main thread). Both OSes.
     pub update_rechecks_sha256: bool,
-    /// The snapshot carries `autoUpdateCLIs` and `autoUpdatePlugins` (the Mac only).
-    pub auto_update_keys: bool,
-    /// A files pane is saved with the state (Windows; the Mac never saves one).
-    pub saves_files_pane: bool,
+    /// M-H: the package the app update takes and how it installs it.
+    pub update_package: UpdatePackage,
     /// W8: an adapter counts as Tailscale's only when it is named `utun…` (the Mac; Windows never reads names: the
     /// tailscale-addresses fixture's `darwin` and `win32` columns).
     pub tailscale_needs_utun: bool,
@@ -135,17 +155,14 @@ impl PlatformProfile {
             plugin_list_while_reading: PluginListWhileReading::Join,
             cli_updater: CliUpdater::Winget,
             settings_store: SettingsStore::RegistryAndSnapshot,
-            pairing_layout: PairingLayout::IdentityFile,
             agent_sign_in: AgentSignIn::ConsoleWindow,
-            mcp_transport: McpTransport::NamedPipe,
             m1_platform: "win32",
             remote_decodes_request_paths: false,
             direct_connection_firewall: true,
             update_needs_public_key: true,
             build_update_url_wins: true,
             update_rechecks_sha256: true,
-            auto_update_keys: false,
-            saves_files_pane: true,
+            update_package: UpdatePackage::WindowsZip,
             tailscale_needs_utun: false,
             direct_advertises_magic_dns: false,
             remote_graph_runs: true,
@@ -161,17 +178,14 @@ impl PlatformProfile {
             plugin_list_while_reading: PluginListWhileReading::Busy,
             cli_updater: CliUpdater::Homebrew,
             settings_store: SettingsStore::UserDefaults,
-            pairing_layout: PairingLayout::FourFiles,
             agent_sign_in: AgentSignIn::TerminalPane,
-            mcp_transport: McpTransport::UnixSocket,
             m1_platform: "darwin",
             remote_decodes_request_paths: true,
             direct_connection_firewall: false,
             update_needs_public_key: false,
-            build_update_url_wins: false,
-            update_rechecks_sha256: false,
-            auto_update_keys: true,
-            saves_files_pane: false,
+            build_update_url_wins: true,
+            update_rechecks_sha256: true,
+            update_package: UpdatePackage::MacBundle,
             tailscale_needs_utun: true,
             direct_advertises_magic_dns: true,
             remote_graph_runs: false,
@@ -202,11 +216,16 @@ mod tests {
         assert_eq!((windows.m1_platform, mac.m1_platform), ("win32", "darwin"));
         assert!(windows.direct_connection_firewall && !mac.direct_connection_firewall);
         assert!(!windows.remote_decodes_request_paths && mac.remote_decodes_request_paths);
-        assert!(mac.auto_update_keys && !windows.auto_update_keys);
         assert!(mac.tailscale_needs_utun && !windows.tailscale_needs_utun);
         assert!(mac.direct_advertises_magic_dns && !windows.direct_advertises_magic_dns);
         assert!(windows.remote_graph_runs && !mac.remote_graph_runs);
         assert!(mac.remote_confines_agents && !windows.remote_confines_agents);
+        // M-H (plan fact 6, D16): the stamped address wins and the package is checked again before the swap on both OSes, as the
+        // Swift app does; only the words without a key and the package differ.
+        assert!(windows.build_update_url_wins && mac.build_update_url_wins);
+        assert!(windows.update_rechecks_sha256 && mac.update_rechecks_sha256);
+        assert!(windows.update_needs_public_key && !mac.update_needs_public_key);
+        assert_eq!((windows.update_package, mac.update_package), (UpdatePackage::WindowsZip, UpdatePackage::MacBundle));
         assert_eq!(PlatformProfile::for_os(Os::Macos), mac);
         assert_eq!(Os::Windows.name(), "windows");
     }

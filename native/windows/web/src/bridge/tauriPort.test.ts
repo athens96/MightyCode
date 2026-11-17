@@ -12,6 +12,7 @@ function fakeTauri() {
   const api: TauriApi = {
     invoke: (command, args) => {
       expect(command).toBe(HOST_POST);
+      expect(args.nonce).toBe('run-nonce');
       if (failing) return Promise.reject(new Error('ipc down'));
       invoked.push(args.message);
       return Promise.resolve(null);
@@ -41,7 +42,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 describe('tauriPort', () => {
   it('holds every post until the listener is registered, then sends them in order', async () => {
     const tauri = fakeTauri();
-    const port = tauriPort(tauri.api);
+    const port = tauriPort(tauri.api, () => 'run-nonce');
     port.postMessage({ kind: 'call', id: 1, method: 'getLocale' });
     port.postMessage({ kind: 'call', id: 2, method: 'ready' });
     await settle();
@@ -59,7 +60,7 @@ describe('tauriPort', () => {
 
   it('hands the host-message payloads to the page as message events', async () => {
     const tauri = fakeTauri();
-    const port = tauriPort(tauri.api);
+    const port = tauriPort(tauri.api, () => 'run-nonce');
     const seen: unknown[] = [];
     port.addEventListener('message', (event) => seen.push(event.data));
     tauri.register();
@@ -71,7 +72,7 @@ describe('tauriPort', () => {
 
   it('carries a Bridge call to its result, the push before it first', async () => {
     const tauri = fakeTauri();
-    const bridge = new Bridge(tauriPort(tauri.api));
+    const bridge = new Bridge(tauriPort(tauri.api, () => 'run-nonce'));
     const pushes: unknown[] = [];
     bridge.onPush((message) => pushes.push(message.kind));
     const ready = bridge.call('ready');
@@ -86,7 +87,7 @@ describe('tauriPort', () => {
 
   it('fails a call it cannot deliver instead of leaving it waiting', async () => {
     const tauri = fakeTauri();
-    const bridge = new Bridge(tauriPort(tauri.api));
+    const bridge = new Bridge(tauriPort(tauri.api, () => 'run-nonce'));
     tauri.register();
     await settle();
     tauri.fail();
@@ -95,7 +96,7 @@ describe('tauriPort', () => {
 
   it('keeps posting after a listener throws on a failed result', async () => {
     const tauri = fakeTauri();
-    const port = tauriPort(tauri.api);
+    const port = tauriPort(tauri.api, () => 'run-nonce');
     const seen: unknown[] = [];
     let throwing = true;
     port.addEventListener('message', (event) => {
@@ -117,7 +118,7 @@ describe('tauriPort', () => {
 
   it('fails every call when the listener cannot be registered', async () => {
     const tauri = fakeTauri();
-    const bridge = new Bridge(tauriPort(tauri.api));
+    const bridge = new Bridge(tauriPort(tauri.api, () => 'run-nonce'));
     const first = bridge.call('getLocale');
     tauri.refuse(new Error('no event permission'));
     await expect(first).rejects.toThrow(/no event permission/);

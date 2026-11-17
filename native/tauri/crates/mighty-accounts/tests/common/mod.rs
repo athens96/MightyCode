@@ -140,6 +140,25 @@ pub fn result(exit_code: i32, output: &str, error_output: &str) -> CliRunResult 
     CliRunResult { exit_code, output: output.into(), error_output: error_output.into(), timed_out: false }
 }
 
+/// This OS's real process layer (Windows' `WindowsProcessHost`; the Mac's `MacProcessHost` since M-A).
+pub fn processes() -> std::sync::Arc<dyn mighty_platform::ProcessHost> {
+    #[cfg(windows)]
+    return std::sync::Arc::new(mighty_platform_windows::WindowsProcessHost::new());
+    #[cfg(target_os = "macos")]
+    return mighty_platform_macos::process_host();
+    #[cfg(not(any(windows, target_os = "macos")))]
+    return std::sync::Arc::new(mighty_platform::unsupported::Unsupported);
+}
+
+/// Whether two paths name one folder: compared canonically (the Mac's temporary folder is `/var/…`, a link to `/private/var/…`;
+/// Windows' CI one an 8.3 name), else without regard to case.
+pub fn same_folder(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()),
+    }
+}
+
 /// The stand-in CLI (C# `Verification.Self`).
 pub fn fake_cli() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_mighty-accounts-fake"))

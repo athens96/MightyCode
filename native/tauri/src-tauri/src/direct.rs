@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use mighty_core::model::MobileRemoteSettings;
 use mighty_platform::{Firewall, FirewallRule, Platform};
-use mighty_remote::direct::listener::{DirectPath, DirectPathOptions, DirectSettings, DirectSink};
+use mighty_remote::direct::listener::{DirectPath, DirectPathOptions, DirectSettings, DirectSink, MagicDnsLookup};
 use mighty_remote::direct::status::MobileDirectStatus;
 use mighty_remote::direct::strings;
 
@@ -84,7 +84,11 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
                 }
             })
         };
-        let options = DirectPathOptions { needs_utun: platform.profile.tailscale_needs_utun, ..DirectPathOptions::default() };
+        let options = DirectPathOptions {
+            needs_utun: platform.profile.tailscale_needs_utun,
+            magic_dns: platform.profile.direct_advertises_magic_dns.then(|| magic_dns(platform.processes.clone())),
+            ..DirectPathOptions::default()
+        };
         let path = DirectPath::new(ports.network.clone(), tauri::async_runtime::handle().inner().clone(), options, log);
         let weak = Arc::downgrade(host);
         path.on_published(move || {
@@ -97,6 +101,20 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
     let mut state = direct();
     state.firewall = Some(ports.firewall);
     state.path = path;
+}
+
+/// Whether this platform's direct path has a firewall rule to show and change (`PlatformProfile::direct_connection_firewall`: Windows;
+/// the Mac shows no firewall row, M-C).
+pub fn has_firewall(host: &Host) -> bool {
+    let _ = host;
+    crate::platform::profile().direct_connection_firewall
+}
+
+/// The MagicDNS lookup where `PlatformProfile::direct_advertises_magic_dns` (the Mac; M-C): the Tailscale CLI from its places and this
+/// process's PATH, run through the process host (mighty-remote's `MagicDnsLookup::tailscale`).
+fn magic_dns(processes: Arc<dyn mighty_platform::ProcessHost>) -> MagicDnsLookup {
+    let candidates = mighty_remote::direct::wire::tailscale_candidates(&std::env::var("PATH").unwrap_or_default());
+    MagicDnsLookup::tailscale(processes, candidates)
 }
 
 /// The app quits: every direct listener closed and every direct phone ended.
@@ -203,6 +221,9 @@ pub fn firewall_needs_update_words(host: &Host) -> String {
 /// reads as unknown — a deviation from C#, which reads the rule in any run).
 fn runner(host: &Host) -> Option<Arc<dyn Firewall>> {
     let may_change = host.may_change_machine();
+    if !has_firewall(host) {
+        return None;
+    }
     let state = direct();
     if host.smoke.is_some() {
         return state.smoke_firewall.clone();
@@ -220,8 +241,9 @@ pub async fn refresh_firewall_state(host: &Host) {
 
 /// Settings opened (C#'s Loaded: `if (!firewallBusy) await RefreshFirewallState();`): the rule read again, off the caller.
 pub fn settings_opened(host: &Arc<Host>) {
-    // C#'s Loaded returns at once in a smoke: the box is drawn with its controls off and nothing is read.
-    if host.smoke.is_some() || direct().busy {
+    // C#'s Loaded returns at once in a smoke: the box is drawn with its controls off and nothing is read. A platform with no firewall
+    // step reads nothing either.
+    if host.smoke.is_some() || direct().busy || !has_firewall(host) {
         return;
     }
     let host = host.clone();

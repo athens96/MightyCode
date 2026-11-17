@@ -2,8 +2,10 @@
 //! anything new, never asks for elevation, never writes a configuration file and never upgrades an unrelated package. Every process
 //! goes through the [`CliRunner`], so a check injects a fake and no real claude, codex, agy, npm or winget starts.
 //!
-//! This is the Windows (C#) updater: native Claude, winget, npm, pi, opencode, Hermes and agy. The Mac's Homebrew updater
-//! (`PlatformProfile::cli_updater` = `Homebrew`, M/CLIUpdateService.swift) is not ported here.
+//! Two planners, by `PlatformProfile::cli_updater`: Windows' (C#: native Claude, winget, npm, pi, opencode, Hermes and agy) and the
+//! Mac's (`Homebrew`, Mac stage M-J, Swift `CLIUpdateService.swift`: Antigravity in `~/.local/bin`, pi, opencode, Hermes, a Homebrew
+//! cask or formula through that Homebrew's own `brew upgrade`, native Claude, npm with the Node beside its npm). Everything around a
+//! plan (one update at a time, the version read before and after, the bounded output, cancel and close) is the same code.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -11,6 +13,7 @@ use std::time::Duration;
 
 use mighty_core::model::AppSnapshot;
 use mighty_core::wire;
+use mighty_platform::CliUpdater;
 use regex::Regex;
 use tokio::sync::watch;
 
@@ -116,11 +119,17 @@ impl CliUpdateResult {
 struct Invocation {
     executable: String,
     arguments: Vec<String>,
+    /// Laid over the CLI environment (the Mac's Homebrew switches, npm's Node first on PATH); none on Windows.
+    environment: Option<BTreeMap<String, String>>,
 }
 
 impl Invocation {
     fn new(executable: &str, arguments: &[&str]) -> Option<Invocation> {
-        Some(Invocation { executable: executable.into(), arguments: arguments.iter().map(|a| a.to_string()).collect() })
+        Some(Invocation { executable: executable.into(), arguments: arguments.iter().map(|a| a.to_string()).collect(), environment: None })
+    }
+
+    fn with_environment(executable: &str, arguments: &[&str], environment: BTreeMap<String, String>) -> Option<Invocation> {
+        Some(Invocation { environment: Some(environment), ..Invocation::new(executable, arguments)? })
     }
 }
 
@@ -147,6 +156,7 @@ pub struct CliUpdateService {
     home: String,
     metadata_timeout: Duration,
     update_timeout: Duration,
+    updater: CliUpdater,
     gate: Mutex<Gate>,
 }
 
@@ -179,8 +189,15 @@ impl CliUpdateService {
             home: home.into(),
             metadata_timeout: Duration::from_secs(10),
             update_timeout: Duration::from_secs(5 * 60),
+            updater: CliUpdater::Winget,
             gate: Mutex::new(Gate::default()),
         }
+    }
+
+    /// The platform's planner (`PlatformProfile::cli_updater`; `Winget`, C#'s, until set).
+    pub fn with_updater(mut self, updater: CliUpdater) -> CliUpdateService {
+        self.updater = updater;
+        self
     }
 
     pub fn with_timeouts(mut self, metadata: Duration, update: Duration) -> CliUpdateService {
@@ -304,7 +321,7 @@ impl CliUpdateService {
             let Some(invocation) = invocation else {
                 return Ok(CliUpdateResult::of(&installation, "skipped", installation.detail.clone()));
             };
-            let call = CliCall::new(invocation.executable, invocation.arguments, self.update_timeout);
+            let call = CliCall::new(invocation.executable, invocation.arguments, self.update_timeout).environment(invocation.environment);
             let run = self.runner.run(call, token.clone()).await?;
             cancelled(token)?;
             let output = bounded(&run);
@@ -340,8 +357,8 @@ impl CliUpdateService {
 
     /// What is on this computer for a plan to look at: the environment as read now, on a blocking thread, and the home folder.
     async fn machine(&self) -> Arc<Machine> {
-        let (environment, home) = (self.environment.clone(), self.home.clone());
-        Arc::new(blocking(move || Machine { environment: environment(), home }).await)
+        let (environment, home, updater) = (self.environment.clone(), self.home.clone(), self.updater);
+        Arc::new(blocking(move || Machine { environment: environment(), home, updater }).await)
     }
 
     async fn plan(
@@ -355,7 +372,7 @@ impl CliUpdateService {
         }
         let Some((path, version)) = self.installed_command(machine, provider, token).await? else {
             let (on, name) = (machine.clone(), mighty_run::providers::executable(provider).to_string());
-            let present = blocking(move || on.candidates(&name).iter().any(|c| is_file(c))).await;
+            let present = blocking(move || on.candidates(&name).iter().any(|c| on.runnable(c))).await;
             let installation = CliUpdateInstallation::new(provider);
             return Ok((
                 if present {
@@ -379,7 +396,7 @@ impl CliUpdateService {
         }
         let executable = mighty_run::providers::executable(provider);
         let (on, name) = (machine.clone(), executable.to_string());
-        let existing: Vec<String> = blocking(move || on.candidates(&name).into_iter().filter(|c| is_file(c)).collect()).await;
+        let existing: Vec<String> = blocking(move || on.candidates(&name).into_iter().filter(|c| on.runnable(c)).collect()).await;
         for path in existing {
             cancelled(token)?;
             let run = match self.runner.run(CliCall::new(&path, ["--version"], self.metadata_timeout), token.clone()).await {
@@ -405,11 +422,15 @@ impl CliUpdateService {
 struct Machine {
     environment: BTreeMap<String, String>,
     home: String,
+    updater: CliUpdater,
 }
 
 impl Machine {
     /// How the installation at `path` (answering `version`) is updated, if it is: the sync half of C#'s `PlanAsync`.
     fn analyze(&self, provider: &str, path: String, version: String) -> (CliUpdateInstallation, Option<Invocation>) {
+        if self.updater == CliUpdater::Homebrew {
+            return self.analyze_mac(provider, path, version);
+        }
         let resolved = paths::resolve(&path);
         let installation = CliUpdateInstallation {
             version: Some(version.clone()),
@@ -512,6 +533,9 @@ impl Machine {
     /// The PATH candidates, then Antigravity's installer folder (it reaches PATH for new sessions only), then npm's global folder
     /// (opencode.cmd) and Hermes's own bin folder.
     fn candidates(&self, name: &str) -> Vec<String> {
+        if self.updater == CliUpdater::Homebrew {
+            return self.path_entries().into_iter().map(|entry| paths::join(&entry, &[name])).collect();
+        }
         let mut all = paths::path_candidates(&self.environment, name);
         if name == "agy"
             && let Some(local) = paths::variable(&self.environment, "LOCALAPPDATA")
@@ -544,6 +568,166 @@ impl Machine {
         let parent = paths::parent(executable);
         let grandparent = parent.as_deref().and_then(paths::parent);
         roots.iter().any(|root| paths::same(parent.as_deref(), Some(root)) || paths::same(grandparent.as_deref(), Some(root)))
+    }
+
+    /// Swift `executableCandidates`: the first 64 non-empty PATH entries (Swift's `split` drops empty ones) that are full paths
+    /// without a NUL, each once (as written).
+    /// A candidate that may run: a file for Windows' planner (C#'s `File.Exists`), an executable one for the Mac's (Swift
+    /// `isExecutableFile`).
+    fn runnable(&self, path: &str) -> bool {
+        if self.updater == CliUpdater::Homebrew { executable(path) } else { is_file(path) }
+    }
+
+    fn path_entries(&self) -> Vec<String> {
+        let mut seen: Vec<String> = Vec::new();
+        for entry in paths::variable(&self.environment, "PATH")
+            .unwrap_or("")
+            .split(mighty_run::os::path_separator())
+            .filter(|e| !e.is_empty())
+            .take(64)
+        {
+            if !entry.contains('\0') && paths::rooted(entry) && !seen.iter().any(|known| known == entry) {
+                seen.push(entry.to_string());
+            }
+        }
+        seen
+    }
+
+    /// The Mac's plan (Swift `CLIUpdateService.plan`, in its order): Antigravity only where its installer puts it, pi, opencode and
+    /// Hermes by their own commands, a Homebrew cask or formula through the Homebrew that installed it, native Claude, then npm.
+    fn analyze_mac(&self, provider: &str, path: String, version: String) -> (CliUpdateInstallation, Option<Invocation>) {
+        let resolved = real_path(&path);
+        let installation = CliUpdateInstallation {
+            version: Some(version.clone()),
+            executable_path: Some(path.clone()),
+            detail: strings::detail_unknown_method(),
+            ..CliUpdateInstallation::new(provider)
+        };
+        let get = mighty_run::strings::get;
+        let environment = self.environment.clone();
+        match provider {
+            // Antigravity's installer (`curl … install.sh | bash`) puts one binary in ~/.local/bin, which `agy update` replaces; a copy
+            // anywhere else is left alone.
+            "gemini" => {
+                let official = real_path(&paths::join(&self.home, &[".local", "bin", "agy"]));
+                if !same_file(&resolved, &official) {
+                    let detail = mighty_run::strings::get_with(
+                        "settings.cliUpdate.detailAntigravityElsewhere",
+                        &[("command", MAC_ANTIGRAVITY_INSTALL_COMMAND)],
+                    );
+                    return (installation.detail(detail), None);
+                }
+                return (
+                    installation.method("native").updatable().detail(get("settings.cliUpdate.detailNativeAntigravity")),
+                    Invocation::with_environment(&path, &["update"], environment),
+                );
+            }
+            "pi" => {
+                return (
+                    installation.method("pi").updatable().detail(get("settings.cliUpdate.detailPi")),
+                    Invocation::with_environment(&path, &["update", "self"], environment),
+                );
+            }
+            // OpenCode 1 is replaced from the setup screen (its own upgrade stays on 1).
+            "opencode" if !mighty_run::acp::accounts::opencode_supported(&version) => {
+                return (installation.method("opencode").detail(get("settings.cliUpdate.detailOpencodeV1")), None);
+            }
+            // OpenCode 2 upgrades itself and finds out how it was installed (npm, Homebrew, its script).
+            "opencode" => {
+                return (
+                    installation.method("opencode").updatable().detail(get("settings.cliUpdate.detailOpencode")),
+                    Invocation::with_environment(&path, &["upgrade"], environment),
+                );
+            }
+            "hermes" => {
+                return (
+                    installation.method("hermes").updatable().detail(get("settings.cliUpdate.detailHermes")),
+                    Invocation::with_environment(&path, &["update", "--yes"], environment),
+                );
+            }
+            _ => {}
+        }
+        if let Some(brew) = brew_installation(&resolved, provider) {
+            let installation = installation.method(if brew.cask { "brew-cask" } else { "brew-formula" });
+            if !self.runnable(&brew.executable) {
+                return (installation.detail(get("settings.cliUpdate.detailBrewRuntimeMissing")), None);
+            }
+            // Refreshing Homebrew's metadata is allowed; cleaning up or upgrading unrelated installed dependents is not, and nothing
+            // may stop to ask.
+            let mut environment = environment;
+            for name in BREW_SWITCHES {
+                paths::set_variable(&mut environment, name, "1");
+            }
+            let kind = if brew.cask { "cask" } else { "formula" };
+            return (
+                installation.updatable().detail(mighty_run::strings::get_with("settings.cliUpdate.detailBrewPlan", &[("kind", kind)])),
+                Invocation::with_environment(
+                    &brew.executable,
+                    &["upgrade", if brew.cask { "--cask" } else { "--formula" }, brew.package],
+                    environment,
+                ),
+            );
+        }
+        if provider == "claude" {
+            let mut roots = vec![paths::join(&self.home, &[".local", "share", "claude", "versions"])];
+            if let Some(data) = paths::variable(&self.environment, "XDG_DATA_HOME").filter(|d| paths::rooted(d) && !d.contains('\0')) {
+                roots.push(paths::join(data, &["claude", "versions"]));
+            }
+            let parent = paths::parent(&resolved).unwrap_or_default();
+            if roots.iter().any(|root| same_file(&parent, &real_path(root))) {
+                return (
+                    installation.method("native").updatable().detail(strings::detail_native_claude()),
+                    Invocation::with_environment(&path, &["update"], environment),
+                );
+            }
+        }
+        if let Some(npm) = mac_npm_package(&resolved, provider) {
+            let installation = installation.method("npm");
+            if !release(&npm.version) {
+                return (installation.detail(strings::detail_npm_prerelease()), None);
+            }
+            let Some((node, script)) = self.mac_npm_runtime(&npm.prefix) else {
+                return (installation.detail(strings::detail_npm_runtime_missing()), None);
+            };
+            // npm's lifecycle scripts and the CLI's env-node launcher use the Node that runs npm (version managers included).
+            let mut environment = environment;
+            let path_now = paths::variable(&environment, "PATH").unwrap_or("").to_string();
+            let node_folder = paths::parent(&node).unwrap_or_default();
+            paths::set_variable(&mut environment, "PATH", &format!("{node_folder}{}{path_now}", mighty_run::os::path_separator()));
+            let latest = format!("{}@latest", npm.name);
+            return (
+                installation.updatable().detail(strings::detail_npm_plan()),
+                Invocation::with_environment(
+                    &node,
+                    &[&script, "install", "--global", "--prefix", &npm.prefix, &latest, "--no-audit", "--no-fund"],
+                    environment,
+                ),
+            );
+        }
+        (installation, None)
+    }
+
+    /// Swift `npmRuntime`: `<prefix>/bin/npm`, then each `npm` on PATH, whose link leads to npm's own cli script (an official `npm`
+    /// package at most 7 folders up); the `node` beside that launcher, else the first on PATH.
+    fn mac_npm_runtime(&self, prefix: &str) -> Option<(String, String)> {
+        let mut launchers = vec![paths::join(prefix, &["bin", "npm"])];
+        launchers.extend(self.candidates("npm"));
+        for launcher in launchers.into_iter().filter(|l| self.runnable(l)) {
+            let script = real_path(&launcher);
+            let mut root = paths::parent(&script);
+            for _ in 0..7 {
+                let Some(folder) = root else { break };
+                if official_package(&folder, "npm", "npm", &script) {
+                    let mut nodes = vec![paths::join(&paths::parent(&launcher).unwrap_or_default(), &["node"])];
+                    nodes.extend(self.candidates("node"));
+                    if let Some(node) = nodes.into_iter().find(|n| self.runnable(n)) {
+                        return Some((node, script));
+                    }
+                }
+                root = paths::parent(&folder).filter(|parent| *parent != folder);
+            }
+        }
+        None
     }
 
     /// npm itself is started through Node with npm's own cli script, never through a `.cmd` shim.
@@ -590,6 +774,38 @@ fn cancelled(token: &CancellationToken) -> Step<()> {
 
 fn is_file(path: &str) -> bool {
     std::path::Path::new(path).is_file()
+}
+
+/// Swift `FileManager.isExecutableFile`: a file with an execute bit (where files have no such bits: any file).
+fn executable(path: &str) -> bool {
+    let Ok(info) = std::fs::metadata(path) else { return false };
+    info.is_file() && execute_bit(&info)
+}
+
+#[cfg(unix)]
+fn execute_bit(info: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    info.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn execute_bit(_info: &std::fs::Metadata) -> bool {
+    true
+}
+
+/// Swift `resolvingSymlinksInPath().standardizedFileURL`: every link on the way resolved, folders too (the canonical path), with
+/// the `/private` Swift takes off the front taken off; the lexical resolve when the path does not exist.
+fn real_path(path: &str) -> String {
+    let Ok(real) = std::fs::canonicalize(path) else { return paths::resolve(path) };
+    let text = real.to_string_lossy().into_owned();
+    let text = match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => rest.to_string(),
+        _ => text,
+    };
+    match text.strip_prefix("/private/") {
+        Some(rest) => format!("/{rest}"),
+        None => text,
+    }
 }
 
 /// `CliAccountSupport.InstallerCopies`: where an installer leaves a CLI that reaches PATH for new sessions only — opencode's npm
@@ -703,6 +919,122 @@ fn metadata(package_root: &str) -> Option<PackageJson> {
         _ => Vec::new(),
     };
     Some(PackageJson { name, version, bin })
+}
+
+/// Swift `ComponentCatalog.installCommand("gemini")`: Antigravity's own installer, named when an agy elsewhere is left alone.
+const MAC_ANTIGRAVITY_INSTALL_COMMAND: &str = "curl -fsSL https://antigravity.google/cli/install.sh | bash";
+
+/// What a Homebrew upgrade is run with (Swift `CLIUpdateService.plan`): no clean-up, no upgrade of installed dependents, no
+/// analytics, never a question.
+pub const BREW_SWITCHES: [&str; 5] =
+    ["HOMEBREW_NO_INSTALL_CLEANUP", "HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK", "HOMEBREW_NO_ANALYTICS", "HOMEBREW_NO_ASK", "NONINTERACTIVE"];
+
+/// Two resolved paths name the same file as Swift's standardized URLs compare: exactly, a trailing separator aside.
+fn same_file(left: &str, right: &str) -> bool {
+    let trim = |path: &str| path.trim_end_matches(['/', '\\']).to_string();
+    !left.is_empty() && trim(left) == trim(right)
+}
+
+/// The path's names below its root (Swift `URL.pathComponents` without the leading "/").
+fn components(path: &str) -> Vec<String> {
+    std::path::Path::new(path)
+        .components()
+        .filter_map(|part| match part {
+            std::path::Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `path`'s root and its first `count` names (Swift `NSString.path(withComponents: Array(parts.prefix(index)))`).
+fn prefix_path(path: &str, count: usize) -> String {
+    let mut prefix = std::path::PathBuf::new();
+    let mut taken = 0;
+    for part in std::path::Path::new(path).components() {
+        if let std::path::Component::Normal(_) = part {
+            if taken == count {
+                break;
+            }
+            taken += 1;
+        }
+        prefix.push(part.as_os_str());
+    }
+    prefix.to_string_lossy().into_owned()
+}
+
+/// A Homebrew install of a CLI (Swift `brewInstallation`).
+struct BrewInstallation {
+    executable: String,
+    package: &'static str,
+    cask: bool,
+}
+
+/// Swift `brewInstallation`: the resolved executable under `<prefix>/Caskroom/<package>/<version>/…` or `<prefix>/Cellar/<package>/
+/// <version>/…` (Claude's `claude-code`, Codex's `codex` only); the Homebrew that installed it is `<prefix>/bin/brew`.
+fn brew_installation(resolved: &str, provider: &str) -> Option<BrewInstallation> {
+    let package = match provider {
+        "claude" => "claude-code",
+        "codex" => "codex",
+        _ => return None,
+    };
+    let parts = components(resolved);
+    let index = parts.iter().position(|part| part == "Caskroom" || part == "Cellar")?;
+    // Swift's components start with "/", so its `index > 1` is at least one folder before the container here.
+    if index < 1 || parts.len() <= index + 3 || parts[index + 1] != package {
+        return None;
+    }
+    let prefix = prefix_path(resolved, index);
+    Some(BrewInstallation { executable: paths::join(&prefix, &["bin", "brew"]), package, cask: parts[index] == "Caskroom" })
+}
+
+/// Swift `npmInstallation`: the resolved executable under `<prefix>/lib/node_modules/…`, where `<prefix>/lib/node_modules/<name>` is
+/// the official package whose bin entry for this CLI is that executable.
+fn mac_npm_package(resolved: &str, provider: &str) -> Option<NpmInstallation> {
+    let name = match provider {
+        "claude" => "@anthropic-ai/claude-code",
+        "codex" => "@openai/codex",
+        _ => return None,
+    };
+    let parts = components(resolved);
+    for index in 0..parts.len() {
+        if parts[index] != "lib" || index + 3 >= parts.len() || parts[index + 1] != "node_modules" {
+            continue;
+        }
+        let prefix = prefix_path(resolved, index);
+        let mut below = vec!["lib", "node_modules"];
+        below.extend(name.split('/'));
+        let root = paths::join(&prefix, &below);
+        if official_package(&root, name, provider, resolved) {
+            let version = metadata(&root).map(|json| json.version).unwrap_or_default();
+            return Some(NpmInstallation { prefix, name: name.into(), version });
+        }
+    }
+    None
+}
+
+/// Swift `officialPackage`: `<root>/package.json` (at most 256 KiB) names `name`, and its bin entry for `binary` (or its one bin) is
+/// a relative path that, resolved, stays inside the package and is `executable`.
+fn official_package(root: &str, name: &str, binary: &str, executable: &str) -> bool {
+    let file = paths::join(root, &["package.json"]);
+    let Ok(info) = std::fs::metadata(&file) else { return false };
+    if !info.is_file() || info.len() > 262_144 {
+        return false;
+    }
+    let Some(json) = std::fs::read(&file).ok().and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok()) else {
+        return false;
+    };
+    if json.get("name").and_then(serde_json::Value::as_str) != Some(name) {
+        return false;
+    }
+    let bin = match json.get("bin") {
+        Some(serde_json::Value::Object(entries)) => entries.get(binary).and_then(serde_json::Value::as_str),
+        Some(serde_json::Value::String(only)) => Some(only.as_str()),
+        _ => None,
+    };
+    let Some(bin) = bin.filter(|b| !b.starts_with('/') && !b.contains('\0')) else { return false };
+    let target = real_path(&paths::join(root, &bin.split('/').collect::<Vec<_>>()));
+    let package_root = real_path(root);
+    std::path::Path::new(&target).starts_with(&package_root) && target != package_root && same_file(&target, executable)
 }
 
 /// stdout then stderr, control characters dropped (but LF and tab), the last 8 KiB kept: shown only on request, never saved.

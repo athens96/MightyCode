@@ -28,7 +28,8 @@ pub use presentation::{
     AccountUsageWindowRow, leading, leading_bars_of, local_providers, session_reported,
 };
 pub use probes::{
-    AccountUsageStdio, AntigravityAccountProbe, ClaudeAccountProbe, CodexAccountProbe, Finder, HostCodexStdio, RuntimeProbe, runtime_probe,
+    AccountUsageStdio, AntigravityAccountProbe, ClaudeAccountProbe, ClaudeKeychain, CodexAccountProbe, Finder, HostCodexStdio,
+    RuntimeProbe, runtime_probe, runtime_probe_with_keychain,
 };
 pub use reset::{
     AccountResetEntitlement, AccountResetRow, AccountResetSmokeResult, AccountUsageShapeLog, ClaudeResetEntitlements, ResetProgram,
@@ -168,6 +169,9 @@ pub enum AccountUsageFailureKind {
     Authentication,
     RateLimited,
     Network,
+    /// The Mac: the Keychain would have asked for the Claude CLI's sign-in in a read that may not ask (Swift `keychainPermission`):
+    /// status `permission`, read again in an hour or at the next read the user asks for.
+    KeychainPermission,
 }
 
 /// `AccountUsageFailure`: its detail is copy from [`copy`] only — never a credential, a header value or a response body.
@@ -512,10 +516,58 @@ pub mod credential_file {
     }
 }
 
+/// What a read of the Claude CLI's sign-in found (Swift `ClaudeQuotaCredentials.read`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaudeSignIn {
+    Found(ClaudeQuotaCredential),
+    /// The Keychain would have asked (a read that may not ask) and the CLI's file has none: Swift's `keychainPermission`, which stays
+    /// silent until the user asks for an interactive read.
+    Permission,
+    Missing,
+}
+
+/// Swift `ClaudeQuotaCredentials.read(environment:interactive:)` (AccountUsageService.swift:407-441), Mac stage M-B: the CLI's item in
+/// the Keychain first when `keychain` is given (the Mac, while `usage.claudeKeychain` allows it: the caller's), then its file
+/// ([`credential_file::read`]); a Keychain that would have asked, with no file to fall back on, is [`ClaudeSignIn::Permission`]. A
+/// `CLAUDE_CONFIG_DIR` that is not an absolute path is no sign-in there (a custom profile never borrows the default account's). Without
+/// a Keychain (Windows) this is the file alone, as before.
+pub fn claude_credential(
+    home: &str,
+    environment: &std::collections::BTreeMap<String, String>,
+    now: DateTime<Utc>,
+    keychain: Option<&dyn mighty_platform::ClaudeCredentials>,
+    interactive: bool,
+) -> ClaudeSignIn {
+    let mut denied = false;
+    if let Some(store) = keychain {
+        let config = crate::env_get(environment, "CLAUDE_CONFIG_DIR");
+        if config.is_some_and(|dir| !dir.starts_with('/') || dir.contains('\0')) {
+            return ClaudeSignIn::Missing;
+        }
+        match store.read(config.map(std::path::Path::new), interactive) {
+            Ok(Some(text)) => {
+                if let Some(found) = credential_file::parse(&text, now) {
+                    return ClaudeSignIn::Found(found);
+                }
+            }
+            Err(mighty_platform::PlatformError::Refused(_)) => denied = true,
+            Ok(None) | Err(_) => {}
+        }
+    }
+    match credential_file::read(home, environment, now) {
+        Some(found) => ClaudeSignIn::Found(found),
+        None if denied => ClaudeSignIn::Permission,
+        None => ClaudeSignIn::Missing,
+    }
+}
+
 // ── the service ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// What reads a provider's usage (the app's: [`runtime_probe`]).
 pub type UsageProbe = Arc<dyn Fn(String) -> BoxFuture<'static, Result<AccountUsageSnapshot, UsageError>> + Send + Sync>;
+/// A probe told whether the user asked for this read (Swift's `probe(provider, interactive)`): only then may it show the Keychain's
+/// access dialog.
+pub type InteractiveProbe = Arc<dyn Fn(String, bool) -> BoxFuture<'static, Result<AccountUsageSnapshot, UsageError>> + Send + Sync>;
 /// The clock every comparison reads.
 pub type Clock = Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
 
@@ -533,7 +585,7 @@ struct ServiceState {
 }
 
 struct ServiceInner {
-    probe: UsageProbe,
+    probe: InteractiveProbe,
     clock: Clock,
     state: Mutex<ServiceState>,
     closing: watch::Sender<bool>,
@@ -553,6 +605,11 @@ enum Decision {
 
 impl AccountUsageService {
     pub fn new(probe: UsageProbe, clock: Clock) -> AccountUsageService {
+        Self::with_interactive_probe(Arc::new(move |provider, _| probe(provider)), clock)
+    }
+
+    /// [`AccountUsageService::new`] with a probe that is told which reads the user asked for ([`AccountUsageService::read_as`]).
+    pub fn with_interactive_probe(probe: InteractiveProbe, clock: Clock) -> AccountUsageService {
         AccountUsageService {
             inner: Arc::new(ServiceInner { probe, clock, state: Mutex::new(ServiceState::default()), closing: watch::channel(false).0 }),
         }
@@ -566,11 +623,25 @@ impl AccountUsageService {
     /// `ReadAsync`: the provider's usage. A read already under way is joined; the server's back-off holds even a forced read
     /// back while a value is kept; an unforced read takes a value under a minute old. Must run inside a Tokio runtime.
     pub fn read(&self, provider: &str, force: bool) -> impl std::future::Future<Output = AccountUsageSnapshot> + Send + 'static {
+        self.read_as(provider, force, false)
+    }
+
+    /// [`AccountUsageService::read`], `interactive` when the user asked for it (Swift `read(provider:force:interactive:)`): such a
+    /// read lifts a pending `permission` back-off, and only it may show the Keychain's dialog.
+    pub fn read_as(
+        &self,
+        provider: &str,
+        force: bool,
+        interactive: bool,
+    ) -> impl std::future::Future<Output = AccountUsageSnapshot> + Send + 'static {
         let inner = self.inner.clone();
         let now = (inner.clock)();
         let provider = provider.to_string();
         let decision = {
             let mut state = lock(&inner.state);
+            if interactive && state.cache.get(&provider).is_some_and(|held| held.status == "permission") {
+                state.next_read.remove(&provider);
+            }
             if state.closed || *inner.closing.borrow() {
                 Decision::Ready(AccountUsageSnapshot::cancelled(&provider, copy::detail_shutdown()))
             } else if let Some(running) = state.in_flight.get(&provider) {
@@ -586,7 +657,7 @@ impl AccountUsageService {
             } else {
                 let (sender, receiver) = watch::channel(None);
                 state.in_flight.insert(provider.clone(), receiver.clone());
-                tokio::spawn(run(inner.clone(), provider.clone(), now, sender));
+                tokio::spawn(run(inner.clone(), provider.clone(), now, interactive, sender));
                 Decision::Waiting(receiver)
             }
         };
@@ -638,12 +709,18 @@ impl Drop for InFlight<'_> {
     }
 }
 
-async fn run(inner: Arc<ServiceInner>, provider: String, started: DateTime<Utc>, sender: watch::Sender<Option<AccountUsageSnapshot>>) {
+async fn run(
+    inner: Arc<ServiceInner>,
+    provider: String,
+    started: DateTime<Utc>,
+    interactive: bool,
+    sender: watch::Sender<Option<AccountUsageSnapshot>>,
+) {
     let mut entry = InFlight { inner: &inner, provider: &provider, armed: true };
     tokio::task::yield_now().await;
     let mut closing = inner.closing.subscribe();
     let outcome = tokio::select! {
-        outcome = (inner.probe)(provider.clone()) => outcome,
+        outcome = (inner.probe)(provider.clone(), interactive) => outcome,
         _ = closing.wait_for(|closing| *closing) => Err(UsageError::Cancelled),
     };
     let value = match outcome {
@@ -673,6 +750,7 @@ fn failed(inner: &ServiceInner, provider: &str, error: UsageError) -> AccountUsa
         return AccountUsageSnapshot::cancelled(provider, copy::detail_cancelled());
     }
     let (mut delay, mut detail, mut preserve) = (MINIMUM_BACKOFF_SECONDS, copy::detail_refresh_failed(), true);
+    let mut status = None;
     if let UsageError::Failure(failure) = &error {
         match failure.kind {
             AccountUsageFailureKind::Unavailable => {
@@ -687,6 +765,13 @@ fn failed(inner: &ServiceInner, provider: &str, error: UsageError) -> AccountUsa
                 delay = backoff(failure.retry_after_seconds);
                 detail = copy::detail_rate_limited();
             }
+            // Automatic reads stay silent; the user grants access with a read they ask for (Swift's `failed`).
+            AccountUsageFailureKind::KeychainPermission => {
+                delay = 3600.0;
+                preserve = false;
+                status = Some("permission");
+                detail = mighty_run::strings::get("usage.keychain.accessNeeded");
+            }
             _ => {}
         }
     }
@@ -694,7 +779,7 @@ fn failed(inner: &ServiceInner, provider: &str, error: UsageError) -> AccountUsa
     let empty = held.windows.is_empty();
     let value = AccountUsageSnapshot {
         provider: provider.to_string(),
-        status: if empty { if preserve { "error" } else { "unavailable" } } else { "stale" }.into(),
+        status: status.unwrap_or(if empty { if preserve { "error" } else { "unavailable" } } else { "stale" }).into(),
         detail: if empty { detail } else { format!("{detail}{}", copy::detail_last_known_suffix()) },
         retry_after_seconds: None,
         ..held

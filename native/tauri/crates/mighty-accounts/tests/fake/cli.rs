@@ -55,7 +55,7 @@ fn codex_app_server(state: &Path, args: &[String]) -> i32 {
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         if let Some(file) = seen.as_mut() {
-            let _ = writeln!(file, "{line}");
+            let _ = file.write_all(format!("{line}\n").as_bytes());
         }
         let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
         let answer = match message.get("id").and_then(Value::as_i64) {
@@ -80,8 +80,10 @@ fn account_cli(name: &str, state: &Path, args: &[String]) -> i32 {
         "CI": variable("CI"),
         "cwd": std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(),
     });
+    // One write of the whole line: CLIs started at once append to the same file, and `writeln!` would write it in pieces that
+    // interleave (seen on the Mac).
     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(state.join("calls.jsonl")) {
-        let _ = writeln!(file, "{call}");
+        let _ = file.write_all(format!("{call}\n").as_bytes());
     }
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match (name, words.as_slice()) {

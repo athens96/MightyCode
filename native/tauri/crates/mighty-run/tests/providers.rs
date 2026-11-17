@@ -2,7 +2,7 @@
 //! the kept-lists file itself, the menu line and the refresh queue are model_lists.rs's, the remote wire W8's),
 //! AutoPermissionVerification, and Verification.cs "wire settings include
 //! explicit nullable limits; provider validation" and "Claude/Codex metadata protocol sends no user prompt or model turn". The reads
-//! over a real child run on Windows (the Mac ProcessHost is W1-D's).
+//! over a real child run on the OS's process host (Windows'; the Mac's since M-A).
 
 mod common;
 
@@ -53,8 +53,7 @@ fn catalog_json(catalog: &ModelCatalog) -> String {
     out.finish()
 }
 
-/// Only the Windows-only model-list checks below compare lists this way.
-#[cfg(windows)]
+/// Only the model-list checks over a real child below compare lists this way.
 fn models_json(models: &[ModelOption]) -> String {
     let mut out = JsonOut::new();
     out.begin_array();
@@ -303,9 +302,8 @@ fn wire_settings_include_explicit_nullable_limits_and_provider_validation() {
     assert!(providers::supports_mods(Some("2.1.271 (Claude Code)")));
 }
 
-// ── Reads over a real child (Windows) ───────────────────────────────────────────────────────────────────────────────────
+// ── Reads over a real child (the OS's process host) ───────────────────────────────────────────────────────────────────────────────────
 
-#[cfg(windows)]
 mod reads {
     use super::*;
 
@@ -335,12 +333,8 @@ mod reads {
                 let found = Some(common::fake_command(&["--model-list-cli", &provider, &state]));
                 Box::pin(async move { found })
             });
-            providers::ProviderCatalog::new(
-                std::sync::Arc::new(mighty_platform_windows::WindowsProcessHost::new()),
-                common::environment(),
-                Some(finder),
-            )
-            .with_storage(Some(storage.to_path_buf()))
+            providers::ProviderCatalog::new(common::processes(), common::environment(), Some(finder))
+                .with_storage(Some(storage.to_path_buf()))
         }
         fn recover(&self, provider: &str) {
             let _ = std::fs::remove_file(self.file(provider, "-fail"));
@@ -399,13 +393,18 @@ mod reads {
         let fake = FakeListClis::new();
         let command = fake.command("gemini");
         // What the Mac ran before its fix, answered as the real agy 1.5.5 answers it.
-        let host = mighty_platform_windows::WindowsProcessHost::new();
+        let host = common::processes();
         let mut args = command.prefix.clone();
         args.extend(["models".to_string(), "--standalone".to_string()]);
-        let request =
-            mighty_platform::ProcessHost::cli_request(&host, std::path::Path::new(&command.binary), &args, &fake.state, &BTreeMap::new())
-                .unwrap();
-        let captured = mighty_platform::capture(&host, request, None, std::time::Duration::from_secs(20), 1 << 20).await.unwrap();
+        let request = mighty_platform::ProcessHost::cli_request(
+            host.as_ref(),
+            std::path::Path::new(&command.binary),
+            &args,
+            &fake.state,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let captured = mighty_platform::capture(host.as_ref(), request, None, std::time::Duration::from_secs(20), 1 << 20).await.unwrap();
         let errors = String::from_utf8_lossy(&captured.stderr).into_owned();
         assert!(
             captured.exit_code == 1 && errors.contains("flags provided but not defined: -standalone"),
@@ -524,7 +523,9 @@ mod reads {
     }
 
     /// A kept-lists file that is there but cannot be read (another program holds it) is not taken for "no lists": the list the CLI gave
-    /// is used, nothing is written over the file, and once it reads, the lists it holds stay beside the new one.
+    /// is used, nothing is written over the file, and once it reads, the lists it holds stay beside the new one. Windows only: a file
+    /// held without sharing (`FILE_SHARE_NONE`).
+    #[cfg(windows)]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_kept_lists_file_that_cannot_be_read_is_not_written_over() {
         use std::os::windows::fs::OpenOptionsExt as _;

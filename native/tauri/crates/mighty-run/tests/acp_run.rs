@@ -2,8 +2,7 @@
 //! `--fake-acp`, C#'s `--fake-acp`) that answers the channel's requests with a recorded session — argv, the run's environment, stdin, the
 //! end of a run whose server exits or lingers, a lost sign-in, OpenCode 1, Hermes's yolo, its clarify switch and its stop. The graph
 //! the runner feeds is a recording sink here (mighty-run cannot name mighty-graph's tracker); the blocks it makes of these runs are
-//! mighty-graph's tests/acp_graphs.rs. Windows only: the Mac ProcessHost is W1-D's.
-#![cfg(windows)]
+//! mighty-graph's tests/acp_graphs.rs. Over the OS's real process host (Windows'; the Mac's since M-A).
 
 mod common;
 

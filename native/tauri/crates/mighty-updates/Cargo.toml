@@ -34,6 +34,11 @@ sha2.workspace = true
 base64 = "0.22"
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# M-H, the Mac update (app_update::stage_mac): the staged bundle's Info.plist, XML or binary, as PropertyListSerialization reads it (the
+# crate Tauri already brings).
+plist = "1"
+# M-H: a path in the install script as Foundation's file system representation writes it (HFS+'s decomposition).
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 mighty-composer.workspace = true
@@ -41,3 +46,7 @@ tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread",
 
 [target.'cfg(windows)'.dev-dependencies]
 mighty-platform-windows.workspace = true
+
+# The plugin readers' runs over the Mac ProcessHost (M-A).
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+mighty-platform-macos.workspace = true

@@ -1,0 +1,269 @@
+name: Mac stage spikes (Step 0, throwaway)
+# The Mac stage's go/no-go spikes (.omc/research/tauri/mac-plan.md §3 Step 0b; native/tauri/spikes/mac), each a report.json with the
+# pictures it judged by, kept as the artifacts below. Which spikes run: native/tauri/spikes/mac/SELECT (space-separated names), or the
+# dispatch input. A spike that fails does not stop the others in its job; the job then fails at the end, naming them.
+#
+#   ghostty-capi   D1, the user's route: libghostty's C API driven from Rust, drawing into an NSView over the Tauri window's page, Rust
+#                  owning the PTY (forkpty) through the host-managed I/O backend
+#   ghostty-swift  D1's fallback route, for comparison only: the vendored Swift GhosttyTerminal view through a @_cdecl static library
+#                  (not needed: the C-API route passed on CI, run 43759317019; kept runnable for the record)
+#   webkit         D4: Tauri child webviews with data_store_identifier, two stores isolated, one store shared by its panes
+#   cef            D3: CEF in tao's NSApplication through the Swift app's own C bridge, a page loaded in a child NSView, shut down
+#   rehearsal      M-I's mechanics: a v0.4.61 Swift build stamped with a throwaway key and a local address, a trusted throwaway
+#                  certificate, the app's own check, download and stage, NSRunningApplication.terminate(), install on quit
+#   parity-mac     Step 0e: tools/parity-mac builds against native/macos and gives Swift's verdicts (stage, install-script, manifest)
+#
+# R8 (the page in WebKit) is the Mac leg of native-tauri.yml: its smoke, kept as tauri-smoke-macos.
+on:
+  push:
+    branches: [mac-base, 'mac-spike/**']
+    paths:
+      - 'native/tauri/spikes/mac/**'
+      - 'native/tauri/tools/parity-mac/**'
+      - 'scripts/fetch-ghosttykit.sh'
+      - '.github/workflows/mac-spike.yml'
+  workflow_dispatch:
+    inputs:
+      spikes:
+        description: 'Spikes to run (space-separated; empty: native/tauri/spikes/mac/SELECT)'
+        required: false
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: mac-spike-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  select:
+    name: Which spikes
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      spikes: ${{ steps.pick.outputs.spikes }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pick
+        env:
+          ASKED: ${{ github.event.inputs.spikes }}
+        run: |
+          spikes="${ASKED:-$(cat native/tauri/spikes/mac/SELECT)}"
+          echo "spikes=,$(echo $spikes | tr -s ' ' ','),"  >> "$GITHUB_OUTPUT"
+          echo "running: $spikes"
+
+  spikes:
+    name: Ghostty, WebKit and CEF spikes
+    needs: select
+    if: contains(needs.select.outputs.spikes, ',ghostty-') || contains(needs.select.outputs.spikes, ',webkit,') || contains(needs.select.outputs.spikes, ',cef,')
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      SPIKES: ${{ needs.select.outputs.spikes }}
+      CARGO_TERM_COLOR: always
+      OUT: ${{ github.workspace }}/spike-results
+    defaults:
+      run:
+        shell: bash
+        working-directory: native/tauri/spikes/mac
+    steps:
+      - uses: actions/checkout@v4
+      - name: The selected Apple toolchain
+        run: |
+          sw_vers
+          xcode-select -p
+          xcrun swift --version
+          system_profiler SPDisplaysDataType | sed -n '1,25p' || true
+          mkdir -p "$OUT"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/tauri/spikes/mac -> target
+      - name: Restore GhosttyKit and the browser engine
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/MightyCode/ghosttykit
+            ~/Library/Caches/MightyCode/browser-engine
+          key: mac-spike-engines-${{ hashFiles('native/macos/Vendor/libghostty-spm/Package.swift', 'native/macos/BrowserEngine.lock') }}
+      - name: GhosttyKit.xcframework, listed (D1's first question)
+        id: ghosttykit
+        if: contains(env.SPIKES, ',ghostty-')
+        continue-on-error: true
+        run: |
+          xcf="$(bash ../../../../scripts/fetch-ghosttykit.sh)"
+          echo "MIGHTY_GHOSTTY_XCFRAMEWORK=$xcf" >> "$GITHUB_ENV"
+          {
+            echo "== $xcf"; find "$xcf" -maxdepth 3 | sed "s|$xcf|.|"
+            echo "== lipo"; lipo -info "$xcf/macos-arm64_x86_64/libghostty.a"
+            echo "== module map"; cat "$xcf/macos-arm64_x86_64/Headers/libghostty/module.modulemap"
+            echo "== exported ghostty_ functions"; nm -gU "$xcf/macos-arm64_x86_64/libghostty.a" 2>/dev/null | awk '$2 == "T" && $3 ~ /^_ghostty_/ {print $3}' | sort -u
+          } > "$OUT/ghosttykit.txt" 2>&1
+          head -n 40 "$OUT/ghosttykit.txt"
+          echo "ghostty_ functions: $(grep -c '^_ghostty_' "$OUT/ghosttykit.txt" || true)"
+      - name: Build the WebKit and CEF spikes
+        run: cargo build --release -p webkit-spike -p cef-spike
+      - name: Build the Ghostty spike (C-API route, libghostty linked into the Rust binary)
+        id: ghostty_capi_build
+        if: contains(env.SPIKES, ',ghostty-') && steps.ghosttykit.outcome == 'success'
+        continue-on-error: true
+        run: |
+          cargo build --release -p ghostty-spike 2>&1 | tee "$OUT/ghostty-capi-build.log" | tail -n 80
+          cp target/release/ghostty-spike target/release/ghostty-spike-capi
+      - name: 'Spike D1: Ghostty through the C API (Rust owns the PTY)'
+        id: ghostty_capi
+        if: contains(env.SPIKES, ',ghostty-capi,') && steps.ghostty_capi_build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 4
+        run: perl -e 'alarm shift; exec @ARGV' 150 target/release/ghostty-spike-capi --route capi --out "$OUT/ghostty-capi"
+      - name: Build the Swift-bridge route (fallback comparison)
+        id: ghostty_swift_build
+        if: contains(env.SPIKES, ',ghostty-swift,')
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          MIGHTY_SPIKE_SWIFT=1 cargo build --release -p ghostty-spike 2>&1 | tee "$OUT/ghostty-swift-build.log" | tail -n 60
+          test "${PIPESTATUS[0]}" -eq 0
+          cp target/release/ghostty-spike target/release/ghostty-spike-swift
+      - name: 'Spike D1 fallback: Ghostty through the Swift bridge'
+        id: ghostty_swift
+        if: contains(env.SPIKES, ',ghostty-swift,') && steps.ghostty_swift_build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 4
+        run: perl -e 'alarm shift; exec @ARGV' 150 target/release/ghostty-spike-swift --route swift --out "$OUT/ghostty-swift"
+      - name: 'Spike D4: WKWebView child webviews with their own data stores'
+        id: webkit
+        if: contains(env.SPIKES, ',webkit,')
+        continue-on-error: true
+        timeout-minutes: 3
+        run: perl -e 'alarm shift; exec @ARGV' 120 target/release/webkit-spike --out "$OUT/webkit"
+      - name: 'Spike D3: CEF in tao''s NSApplication'
+        id: cef
+        if: contains(env.SPIKES, ',cef,')
+        continue-on-error: true
+        timeout-minutes: 12
+        run: |
+          bash ../../../../scripts/fetch-browser-engine.sh
+          bash cef/assemble.sh target/release/cef-spike "$RUNNER_TEMP/CefSpike.app"
+          MIGHTY_CEF_TRACE=1 perl -e 'alarm shift; exec @ARGV' 180 "$RUNNER_TEMP/CefSpike.app/Contents/MacOS/cef-spike" --out "$OUT/cef"
+      - name: Verdicts
+        if: always()
+        env:
+          OUTCOMES: >-
+            ghostty-capi-build=${{ steps.ghostty_capi_build.outcome }} ghostty-capi=${{ steps.ghostty_capi.outcome }} ghostty-swift=${{ steps.ghostty_swift.outcome }}
+            ghostty-swift-build=${{ steps.ghostty_swift_build.outcome }} webkit=${{ steps.webkit.outcome }} cef=${{ steps.cef.outcome }}
+        run: |
+          {
+            echo "| spike | step | verdict |"; echo "|---|---|---|"
+            for name in ghostty-capi ghostty-swift webkit cef; do
+              outcome="$(echo "$OUTCOMES" | tr ' ' '\n' | grep "^$name=" | cut -d= -f2)"
+              verdict="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])).get("verdict")))' "$OUT/$name/report.json" 2>/dev/null || echo 'no report')"
+              echo "| $name | ${outcome:-skipped} | \`$verdict\` |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
+          failed=""
+          for pair in $OUTCOMES; do case "$pair" in *=failure) failed="$failed ${pair%%=*}";; esac; done
+          if [ -n "$failed" ]; then echo "::error title=Mac spikes::failed:$failed"; exit 1; fi
+      - name: Keep the reports and pictures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-spikes
+          path: ${{ github.workspace }}/spike-results
+          if-no-files-found: warn
+
+  rehearsal:
+    name: Rehearsal mechanics (v0.4.61, Swift to Swift)
+    needs: select
+    if: contains(needs.select.outputs.spikes, ',rehearsal,')
+    runs-on: macos-latest
+    timeout-minutes: 75
+    env:
+      MIGHTY_REHEARSAL_DISPOSABLE: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python's cryptography (the throwaway key, certificate and manifest signature)
+        run: python -m pip install --disable-pip-version-check cryptography==50.0.2
+      - name: Restore SwiftPM downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: mac-spike-swiftpm-${{ hashFiles('native/macos/Package.resolved') }}
+      - name: Rehearse the mechanics
+        run: bash native/tauri/spikes/mac/rehearsal/rehearsal-mechanics.sh v0.4.61 "$RUNNER_TEMP/rehearsal"
+      - name: Keep the report and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-spike-rehearsal
+          path: |
+            ${{ runner.temp }}/rehearsal/report.json
+            ${{ runner.temp }}/rehearsal/*.log
+            ${{ runner.temp }}/rehearsal/server.err
+            ${{ runner.temp }}/rehearsal/served/latest.json
+          if-no-files-found: warn
+
+  parity-mac:
+    name: The Swift parity tool
+    needs: select
+    if: contains(needs.select.outputs.spikes, ',parity-mac,')
+    runs-on: macos-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Restore SwiftPM downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: mac-spike-swiftpm-${{ hashFiles('native/macos/Package.resolved') }}
+      - name: Build tools/parity-mac
+        run: swift build --package-path native/tauri/tools/parity-mac
+      - name: Swift's verdicts on fixture packages and a signed manifest
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check cryptography==50.0.2
+          tool="$(swift build --package-path native/tauri/tools/parity-mac --show-bin-path)/parity-mac"
+          work="$RUNNER_TEMP/parity-mac"; mkdir -p "$work/ok" "$work/other"
+          make_app() { # folder id
+            local app="$1/MightyCode.app"
+            mkdir -p "$app/Contents/MacOS"; printf '#!/bin/sh\nexit 0\n' > "$app/Contents/MacOS/MightyCode"; chmod +x "$app/Contents/MacOS/MightyCode"
+            /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $2" -c 'Add :CFBundleExecutable string MightyCode' \
+              -c 'Add :CFBundleShortVersionString string 0.5.0' "$app/Contents/Info.plist" >/dev/null
+            (cd "$1" && ditto -c -k --sequesterRsrc --keepParent MightyCode.app MightyCode-macos.zip)
+          }
+          make_app "$work/ok" dev.mightycode.native
+          make_app "$work/other" dev.example.other
+          "$tool" stage "$work/ok/MightyCode-macos.zip" | tee "$work/stage-ok.json"
+          "$tool" stage "$work/other/MightyCode-macos.zip" | tee "$work/stage-other.json"
+          grep -q '"verdict":"ok"' "$work/stage-ok.json"
+          grep -q '"verdict":"refused"' "$work/stage-other.json"
+          printf '{"cases":[{"name":"relaunch","stagedApp":"/tmp/u/staged/MightyCode.app","destination":"/Applications/MightyCode.app","pid":42,"relaunch":true},{"name":"on quit, quotes","stagedApp":"/tmp/it'"'"'s/staged/MightyCode.app","destination":"/Users/me/Applications (x)/MightyCode.app","pid":7,"relaunch":false}]}' > "$work/cases.json"
+          "$tool" install-script "$work/cases.json" > "$work/install-script.json"
+          python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("\n\n".join(c["name"]+":\n"+c["script"] for c in d["cases"]))' "$work/install-script.json"
+          public="$(python3 scripts/update-rehearsal-server.py keygen "$work/key/update.key" | tail -n 1)"
+          MIGHTY_SIGNER=cryptography python3 scripts/make-update-manifest.py --macos "$work/ok/MightyCode-macos.zip" --base-url https://example.invalid/mightycode \
+            --out "$work/latest.json" --sign-key "$work/key/update.key" --version 0.5.0
+          "$tool" manifest "$work/latest.json" "$public" | tee "$work/manifest.json"
+          grep -q '"verdict":"ok"' "$work/manifest.json"
+          set +e; "$tool" state-corpus "$work/corpus"; code=$?; set -e
+          test "$code" -eq 2
+      - name: Keep the verdicts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-spike-parity-mac
+          path: ${{ runner.temp }}/parity-mac/*.json
+          if-no-files-found: warn

@@ -23,6 +23,7 @@ mod build_info;
 mod cards;
 mod companion;
 mod composer;
+mod deep_link;
 mod delegation;
 mod delta;
 mod dialogs;
@@ -33,6 +34,7 @@ mod help_capture;
 mod history;
 mod host;
 mod logfile;
+mod menu;
 mod methods;
 mod mighty;
 mod mirror;
@@ -50,7 +52,10 @@ mod plugins;
 mod remote;
 mod runs;
 mod settings;
+mod settings_place;
 mod setup;
+mod shell_command;
+mod sign_in_pane;
 mod smoke;
 mod smoke_accounts;
 mod smoke_acp;
@@ -74,11 +79,13 @@ mod startup;
 mod status_line;
 mod styles;
 mod surface;
+mod surface_terminal;
 mod tails;
 mod terminal;
 mod update_helper;
 mod updates;
 mod usage;
+mod verify_resources;
 mod workmap;
 mod workspace_create;
 
@@ -98,11 +105,50 @@ use crate::surface::SurfaceManager;
 
 /// Page → host: one message (`{kind:"call", ...}`), queued for the dispatcher; the answer comes back on `host-message`. Only the
 /// page's own webview showing the app's own page is heard (C# `WebShell.Trusted(args.Source)`): a browser pane's child webview, or
-/// the page's webview somewhere else, never reaches the host.
+/// the page's webview somewhere else, never reaches the host. And only with this run's nonce, which only the page's top frame on the
+/// app's own origin defines ([`HostNonce`]): a frame inside the page (an HTML preview) that reaches Tauri's IPC is refused too.
 #[tauri::command]
-fn host_post(message: Value, webview: tauri::Webview, inbound: tauri::State<'_, Inbound>, origin: tauri::State<'_, AppOrigin>) {
-    if webview.label() == WINDOW && webview.url().is_ok_and(|url| origin.trusts(&url)) {
+fn host_post(
+    message: Value,
+    nonce: Option<String>,
+    webview: tauri::Webview,
+    inbound: tauri::State<'_, Inbound>,
+    origin: tauri::State<'_, AppOrigin>,
+    expected: tauri::State<'_, HostNonce>,
+) {
+    if webview.label() == WINDOW && webview.url().is_ok_and(|url| origin.trusts(&url)) && expected.accepts(nonce.as_deref()) {
         let _ = inbound.0.send(message);
+    }
+}
+
+/// A secret of this run that only the page's top frame on the app's own origin learns (`window.__MIGHTY_HOST_NONCE__`; the page sends
+/// it with every `host_post`). The script itself checks where it runs: on Windows wry injects initialization scripts into every frame
+/// whatever Tauri's main-frame-only says (review, mac-int), so an iframe's code, another origin's, never defines it.
+struct HostNonce(String);
+
+impl HostNonce {
+    fn new() -> HostNonce {
+        HostNonce(format!("{}{}", mighty_core::wire::new_id(), mighty_core::wire::new_id()).replace('-', ""))
+    }
+
+    /// The top frame's script on the app's origin `origin` (a value it cannot change, set before the page's own scripts run); in any
+    /// other frame or on any other address it defines nothing. Protocol and host are compared (`tauri://` has no web origin).
+    fn script(&self, origin: &tauri::Url) -> String {
+        let host = match origin.port() {
+            Some(port) => format!("{}:{port}", origin.host_str().unwrap_or("")),
+            None => origin.host_str().unwrap_or("").to_string(),
+        };
+        format!(
+            "if (window.top === window && location.protocol === '{}:' && location.host === '{host}') {{ Object.defineProperty(window, '__MIGHTY_HOST_NONCE__', {{ value: '{}', writable: false, configurable: false }}); }}",
+            origin.scheme(),
+            self.0
+        )
+    }
+
+    /// Whether a post carries this run's nonce (compared in full, whatever its length).
+    fn accepts(&self, nonce: Option<&str>) -> bool {
+        let Some(nonce) = nonce else { return false };
+        nonce.len() == self.0.len() && nonce.bytes().zip(self.0.bytes()).fold(0u8, |differ, (a, b)| differ | (a ^ b)) == 0
     }
 }
 
@@ -126,6 +172,23 @@ impl AppOrigin {
         url.scheme() == self.0.scheme()
             && url.host_str() == self.0.host_str()
             && url.port_or_known_default() == self.0.port_or_known_default()
+    }
+
+    /// Where the page's webview may navigate (its `on_navigation`): the app's own origin, and off Windows an HTML frame's page on a
+    /// frame host (`mightyhtml://h….html.mighty.invalid/…`, files.rs). WebKit asks this for every frame, so on the Mac it is also what
+    /// keeps a frame on the frame hosts (C#'s `FrameNavigationStarting`); it cannot tell a frame from the top page, so the page's own
+    /// load start sends a top page that got there back home ([`AppOrigin::home`]). WebView2 asks it for the top page only: Windows
+    /// keeps the app's origin alone. A frame host is never trusted to post to the host ([`AppOrigin::trusts`]).
+    fn may_navigate(&self, url: &tauri::Url) -> bool {
+        self.trusts(url)
+            || !cfg!(windows)
+                && url.scheme() == files::PROTOCOL
+                && url.host_str().is_some_and(|host| host.to_ascii_lowercase().ends_with(mighty_files::frames::HOST_SUFFIX))
+    }
+
+    /// The app's own page, where a top page found elsewhere is sent back (the Mac; the window opens `index.html`).
+    fn home(&self) -> Option<tauri::Url> {
+        self.0.join("index.html").ok()
     }
 }
 
@@ -169,7 +232,8 @@ fn exe_mode(args: &[String]) -> Option<i32> {
         [first, root, rest @ ..] if first == fake_claude::ARGUMENT && mighty_core::normalize::fully_qualified(root) => {
             Some(fake_claude::run(Path::new(root), rest, platform::process_host()))
         }
-        _ => help_demo_cli::try_run(args).or_else(|| update_helper::try_run(args)),
+        // Mac stage M-H: --verify-resources, the Mac build's and install scripts' check of the bundle.
+        _ => help_demo_cli::try_run(args).or_else(|| update_helper::try_run(args)).or_else(|| verify_resources::try_run(args)),
     }
 }
 
@@ -190,8 +254,8 @@ fn main() {
         }
     };
     // What this run may write (W9: a release build's default, `--allow-state-write`, `--read-only`; startup.rs, W9-F).
-    let policy = startup::write_policy(&options);
     let context = tauri::generate_context!();
+    let policy = startup::write_policy(&options, &context.config().identifier);
     // The OS's ports (platform.rs). Their paths are the data folder (`--profile` or %APPDATA%\MightyCode) and, for the default
     // profile only, the folders from before the rename (C# Program.cs).
     let platform = match platform::platform(options.profile.clone(), &context.config().identifier) {
@@ -218,6 +282,12 @@ fn main() {
         Ok(snapshot) => (snapshot, None),
         Err(error) => (mighty_core::AppSnapshot::default(), Some(error)),
     };
+    // Mac stage M-J: the settings the Swift app keeps in UserDefaults (the language, the app update's, the web-open choices, ...) read
+    // from there, as 0.4.x left them (settings_place.rs, by `PlatformProfile::settings_store`; nothing on Windows or in a smoke).
+    settings_place::load(&platform.profile, platform.prefs.as_ref(), &mut snapshot, options.smoke_test);
+    if failure.is_none() && platform.profile.settings_store == mighty_platform::SettingsStore::UserDefaults {
+        state.snapshot = snapshot.clone();
+    }
     // A help capture reads the page in its own language (C# `UpdateAsync(LanguagePreference = helpLanguage)` after the load; W9-H).
     if let Some(language) = options.help_language.clone().filter(|_| options.help_capture) {
         snapshot.language_preference = Some(language.clone());
@@ -324,6 +394,8 @@ fn main() {
     // Only a run that writes adopts them (review M1): never beside a C# app that may still hold them.
     let adopted = startup::adopts_csharp_web_data(&options, policy);
     let web_folders = platform.paths.web_folders(adopted);
+    // The browser engine the setting asks for (read once per launch), started below between building the app and running it (M-E).
+    let browser_engine = (snapshot.browser_engine_enabled, surface::profiles_root(&web_folders.browser), options.smoke_test);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -416,6 +488,10 @@ fn main() {
             ouroboros::start(&host);
             app_update::start(&host, &platform);
             host.start_clocks();
+            // Mac stage: the menu bar (menu.rs, M-F; nothing on Windows, Tauri's default macOS menu until then).
+            if let Err(error) = menu::install(app.handle()) {
+                host.log.line(&format!("menu: {error}"));
+            }
             let (inbound, mut calls) = tokio::sync::mpsc::unbounded_channel::<Value>();
             app.manage(Inbound(inbound));
             app.manage(host.clone());
@@ -475,13 +551,20 @@ fn main() {
             let origin = AppOrigin::new(app.config());
             let origin_url = origin.0.clone();
             app.manage(origin);
+            let nonce = HostNonce::new();
+            let nonce_script = nonce.script(&origin_url);
+            app.manage(nonce);
             // Made again while another process still holds the data folder with other options (C#'s WebView2 right after the update
             // swap; startup.rs, review M1), at most about 10 s; the setup runs before the event loop, so the wait blocks nothing else.
             let window = startup::retry_while_held(
                 || {
                     let page = host.clone();
                     let navigation = AppOrigin(origin_url.clone());
+                    let loaded = AppOrigin(origin_url.clone());
                     let mut window = WebviewWindowBuilder::new(app.handle(), WINDOW, WebviewUrl::App("index.html".into()))
+                        // The host's nonce: the script defines it in the top frame on the app's origin only (wry runs it in every
+                        // frame on Windows).
+                        .initialization_script(nonce_script.clone())
                         .title("Mighty Code")
                         .inner_size(1440.0, 920.0)
                         .min_inner_size(940.0, 650.0)
@@ -492,10 +575,19 @@ fn main() {
                         .disable_drag_drop_handler()
                         // C# WebShell: the page never leaves the app's own origin (a stray drop or link would navigate it away), and it
                         // opens no window of its own.
-                        .on_navigation(move |url| navigation.trusts(url))
+                        .on_navigation(move |url| navigation.may_navigate(url))
                         .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
-                        .on_page_load(move |_, payload| {
+                        .on_page_load(move |webview, payload| {
                             if payload.event() == PageLoadEvent::Started {
+                                // Off Windows a frame host may be navigated to (`may_navigate`): the top page itself never stays there.
+                                if !cfg!(windows) && !loaded.trusts(payload.url()) {
+                                    if let Some(home) = loaded.home() {
+                                        tauri::async_runtime::spawn(async move {
+                                            let _ = webview.navigate(home);
+                                        });
+                                    }
+                                    return;
+                                }
                                 page.page_started();
                                 // On the UI thread: the views hide from a task, never here (a view may be waiting for this thread).
                                 if let Some(surfaces) = surfaces(&page.app) {
@@ -531,11 +623,16 @@ fn main() {
         })
         .build(context)
         .expect("the Tauri app");
+    // The Mac's CEF must initialize here, after tao's NSApplication exists and before its run loop starts (M-E).
+    platform::start_browser_engine(browser_engine.0, &browser_engine.1, browser_engine.2);
     // Tauri's event loop ends with 0 whatever `exit(code)` asked (tauri-runtime-wry's RequestExit sets ControlFlow::Exit): the
     // code is kept here and given to the process at the end, so a failed `--smoke-exit` run exits 1.
     let mut exit_code = 0;
     app.run(move |app, event| match event {
         RunEvent::ExitRequested { code: Some(code), .. } => exit_code = code,
+        // Mac stage: an address the OS opened the app with (mightycode://, deep_link.rs, M-F).
+        #[cfg(target_os = "macos")]
+        RunEvent::Opened { urls } => deep_link::opened(app, &urls),
         RunEvent::Exit => {
             if let Some(host) = app.try_state::<Arc<Host>>() {
                 // Quit began (C# QuitAsync sets `closing` first): no run, sign-in, retry or read starts during the teardown below.
@@ -572,6 +669,10 @@ fn main() {
                 // The last save (C# DesktopService.DisposeAsync), written only with --allow-state-write.
                 host.close();
                 host.write_unimplemented();
+                // The Mac's CEF shut down before the process ends (M-E).
+                for engine in platform::stop_browser_engine() {
+                    host.log.line(&format!("browser engine: {engine}"));
+                }
                 host.log.line("exit");
             }
             if exit_code != 0 {
@@ -586,6 +687,24 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review M-E 1(b): `host_post` hears only this run's nonce, which the main frame's script holds; none, another or a part of it is
+    /// refused.
+    #[test]
+    fn only_the_runs_nonce_reaches_the_host() {
+        let nonce = HostNonce::new();
+        assert_eq!(nonce.0.len(), 64);
+        assert!(nonce.accepts(Some(&nonce.0.clone())));
+        assert!(!nonce.accepts(None));
+        assert!(!nonce.accepts(Some("")));
+        assert!(!nonce.accepts(Some(&nonce.0[..63])));
+        assert!(!nonce.accepts(Some(&HostNonce::new().0)), "each run has its own");
+        let script = nonce.script(&url("http://tauri.localhost"));
+        assert!(script.contains(&nonce.0) && script.contains("__MIGHTY_HOST_NONCE__"));
+        assert!(script.starts_with("if (window.top === window && location.protocol === 'http:' && location.host === 'tauri.localhost')"));
+        assert!(nonce.script(&url("tauri://localhost")).contains("location.protocol === 'tauri:' && location.host === 'localhost'"));
+        assert!(nonce.script(&url("http://localhost:5173")).contains("location.host === 'localhost:5173'"), "the dev server's port");
+    }
 
     fn url(text: &str) -> tauri::Url {
         tauri::Url::parse(text).unwrap()
@@ -614,6 +733,30 @@ mod tests {
         let dev = AppOrigin(url("http://localhost:5173"));
         assert!(dev.trusts(&url("http://localhost:5173/src/main.tsx")));
         assert!(!dev.trusts(&url("http://localhost:5174/")));
+    }
+
+    /// The page's webview may show an HTML frame's page from a frame host (WebKit asks for frames too), but nothing else outside the
+    /// app's origin, and a frame host never counts as the app's own page.
+    #[test]
+    fn a_frame_host_may_be_navigated_to_but_is_never_trusted() {
+        let frame = url("mightyhtml://h9d5aa952066d4c308a02be2c3ef27854.html.mighty.invalid/index.html");
+        for origin in [AppOrigin(url("tauri://localhost")), AppOrigin(url("http://tauri.localhost"))] {
+            // Windows' WebView2 asks for the top page only, which never goes to a frame host.
+            assert_eq!(origin.may_navigate(&frame), !cfg!(windows));
+            assert!(!origin.trusts(&frame));
+            assert_eq!(origin.may_navigate(&url("mightyhtml://H1.HTML.MIGHTY.INVALID/a.html")), !cfg!(windows));
+            assert!(origin.may_navigate(&origin.0));
+            assert!(origin.home().is_some_and(|home| origin.trusts(&home) && home.path() == "/index.html"));
+            for elsewhere in [
+                "mightyhtml://example.com/index.html",
+                "mightyhtml://h1.html.mighty.invalid.example.com/",
+                "https://h1.html.mighty.invalid/",
+                "https://example.com/",
+                "file:///Users/me/page.html",
+            ] {
+                assert!(!origin.may_navigate(&url(elsewhere)), "{elsewhere}");
+            }
+        }
     }
 
     /// The DLLs a PE image imports (its import directory's names), read from the file: enough of the format for the check below.

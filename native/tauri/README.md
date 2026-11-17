@@ -356,8 +356,8 @@ pictures beside the smoke's result unless the run writes); `--help-capture` and 
 Left after W9:
 - The manual checklist (plan §7) on a disposable Windows 11 x64 VM and an arm64 device, among it a real Action Center click
   relaunching the app with `-Embedding` on a writing build.
-- Screen share's native half (D11); the Mac stage (its process host, update installer and transport, session and activator are
-  `Unsupported`); Authenticode signing; a first-good-start rollback.
+- Screen share's native half; Authenticode signing; a first-good-start rollback. (The Mac stage that was left here is in; see
+  "Mac deviations".)
 - RenameMigration's finishing of an interrupted migration (W9-F L6, beyond parity).
 - A deviation seen by the smoke: a settings form is drawn again on the next 250 ms shell tick after a change it caused, so a second
   press on the theme picker within that tick lands on the segment still drawn as on and is ignored (the page's segmented control acts
@@ -634,6 +634,11 @@ profile is made by `cargo run -p mighty-core --example seed_demo -- <folder> [ko
 `native/contracts/fixtures/demo-profile.json`, as the C# help capture seeds it (without playing the runs). With `-Profile`, the
 script compares `workspace-state.json`'s SHA-256 and time before and after and lists any file added to the profile; it also compares `%USERPROFILE%\.mightycode\worktrees`' listing, the profile's `delegation-state.json` hash and `git worktree list` of each local workspace the profile names (delegation must leave them alone), and W8's places: `companion-settings.json`, `remote-connections.json`, `screen-devices.json`, the `mobile-remote` and `remote-keys` folders and the Windows Firewall rule `Mighty Code (Tailscale)` as netsh reads it unelevated.
 
+On the Mac (`macos-latest`, the stage's CI) the same smoke runs in WKWebView with Ghostty, the native panels and the pet, then a second
+time with CEF in an assembled bundle (`-NoRuns`, the browser engine on). Its exit code is 0 when every check outside smoke.rs'
+`MAC_PENDING_STEPS` passed (`passedOutsidePending`, `failedOutsidePending`; `passed` stays every check's verdict); the Mac's limit is
+400 s with the stand-in CLI (645 s on Windows; the Mac's run took 120–150 s at the integration).
+
 ## CI
 
 `.github/workflows/native-tauri.yml` runs on pushes to `feat/tauri` and on pull requests touching `native/tauri/**` or the page,
@@ -643,3 +648,125 @@ the smoke against the seeded demo profile (its result is kept as the `tauri-smok
 (the `start_detached*` callers, no `verify_strict`, the frozen style files), the `package` job (x64 and arm64 release builds with a
 throwaway key, `check-imports.ps1`, the smoke and `helper-e2e.ps1` on the packaged exe) and the `rehearsal` job (the update from
 v0.4.59 and v0.4.61). It is independent of the 0.4.x workflows. The Mac build bundles `assets/icons/mightycode.png` and `MightyCode.icns`, which tauri-codegen needs there.
+
+## Mac deviations
+
+What the 0.5 Mac app (this host on macOS) does differently from Windows on purpose, and what it does not do that the 0.4.x Swift app
+did. Mac stage M-J; the integrator folds this into the update notes (D12 is the user's sign-off).
+
+### The profile (`mighty_platform::PlatformProfile`)
+
+Every field is read where its behaviour is; the guards job of native-tauri.yml fails on a field nothing reads (its pending list is
+empty since the Mac stage's integration).
+
+| Field | Windows | Mac | Read at |
+|---|---|---|---|
+| `plugin_list_while_reading` | a list asked for during a read joins it (C#) | answered `busy` at once (Swift) | `PluginOperations::with_while_reading` (updates.rs) → the plugin readers' gate |
+| `cli_updater` | winget, npm, native Claude, agy in `%LOCALAPPDATA%\agy\bin` | Homebrew (`<prefix>/bin/brew upgrade --cask/--formula <package>`, cleanup and dependents off), npm with the Node beside npm, native Claude, agy in `~/.local/bin` (Swift `CLIUpdateService`) | `CliUpdateService::with_updater` (updates.rs) |
+| `settings_store` | the state file (and HKCU for the text and delegation switches) | UserDefaults `dev.mightycode.native` under Swift's keys and types: `language` (and `AppleLanguages`), `appUpdate.automatic/lastCheck/manifestURL`, `agentTerminal.webOpenChoices`, `settingsPane`, `statusLine.enabled/trusted`, `browser.engineEnabled`, `usage.claudeKeychain`, `mighty.referenceBubble.width/height` — read at start, written back on save where the app may change the machine | `settings_place.rs` (main.rs, the host's saver) |
+| `agent_sign_in` | a console window (`TerminalLauncher`) | a shell pane of a local workspace with the login command typed and run (Swift `startCLILogin`) | `sign_in_pane.rs` (accounts.rs' coordinator) |
+| `m1_platform` | `win32` | `darwin` | phone.rs, remote.rs |
+| `update_package` | `MightyCode-windows.zip`, swapped by the staged exe's `--update-helper` | the manifest's `macos` package, unpacked by `ditto`, swapped by `install.sh` (Swift's `installScript`) | mighty-updates' coordinator and service |
+| `update_needs_public_key` | a keyless build's box says the check is off (`noPublicKeyNoticeWindows`, the address hint with "leave blank") | Swift's words (`noPublicKeyNotice`, `manifestUrlHint`); the check itself refuses (`appUpdate.error.noPublicKey`) | mighty-updates' service, `app_update::words` |
+
+Taken out of the profile (they described no difference): `pairing_layout` and `mcp_transport` (each the OS port's own: the pairing
+store's files, the Agent IO listener's `transport()`), `auto_update_keys` (C#'s snapshot carries `autoUpdateCLIs`/`autoUpdatePlugins`
+too) and `saves_files_pane` (neither app saves a files pane).
+
+Also on the Mac: the Claude usage read takes the Claude CLI's sign-in from the Keychain first (`usage.claudeKeychain` on; never in a
+smoke), then its file, on a blocking thread. Only a read the user asks for (turning the switch on, the popover's refresh) may show the
+Keychain's dialog; an automatic read stays silent (bounded to 5 s: a locked keychain waits for its unlock) and, where the Keychain
+would have asked, the card says `permission` ("Keychain access needed…", `usage.keychain.accessNeeded`) and is not read again for an
+hour unless the user refreshes (Swift's `keychainPermission`). The number, date and time formats come from CoreFoundation's current
+locale (`formats.rs`).
+
+### Where the Mac differs from Swift on purpose, or cannot do what it did
+
+- **Proxy credentials** (M-C): a system proxy that answers the `CONNECT` with 407 fails the request; URLSession would have answered
+  with the proxy password in the Keychain. The Rust HTTPS (the usage read, the push, the app update) sends no proxy credentials: it
+  fails closed. A system proxy setting that cannot be read is no proxy: the request goes straight, as URLSession does. TLS is 1.2 or
+  later.
+- **CEF** (M-E, inherited from the Swift app's C bridge, `native/macos/BrowserBridge/cef_bridge.m`, which is not edited): the renderers
+  run without CEF's sandbox (`no_sandbox=1`); the address field shows the app's history, not CEF's real address after a redirect or an
+  in-page link; a user-gesture popup's target loads in the top frame (`file:` and cross-origin iframe targets included); in-page links
+  do not enter the history, popups are not counted, and every navigation reports success. To fix after 0.5: `cef_sandbox_initialize`
+  with its entitlements, an `OnAddressChange` export, popups limited to http/https in the main frame. WKWebView panes (the engine off)
+  have none of these limits; a pane needs macOS 14 for its own data store.
+- **Reduced motion** (M-G): the help capture's `reduce_motion` does nothing on the Mac (WKWebView has no media emulation); the shots
+  are taken as the page draws them.
+- **Opening a file with its app** (M-G, stricter than Swift): the files pane opens a file only by what it is — never a Finder alias, a
+  link, a package, an app, an executable, a script, a type that conforms to code (or an unknown type), and never when its default app
+  lives outside `/Applications`, `/System` or `~/Applications`; the extension and launcher lists are a second layer.
+- **Deep links** (M-F, a deliberate deviation): a `mightycode://` link's text is trimmed, its blank-line runs collapsed and control or
+  bidi characters refused; when the pane's draft is not empty the app asks first, showing the link's text; every confirmation a link
+  asks for has Cancel as its default. Swift wrote into the draft without asking. The confirmation's words are inline in deep_link.rs in the four
+  languages, not in the locale files shared with C# (whose keys stay as they are).
+- **Update signatures** (M-H, stricter than Swift, Sparkle's rule): a staged bundle must pass `SecStaticCodeCheckValidity` (strict, all
+  architectures, nested code) against the running app's team when the app is signed with one, at staging and again just before
+  `install.sh` is written; an ad-hoc or unsigned running app (development, CI) checks strict validity only. Swift checked none.
+- **The login shell's environment** (M-A, a deliberate deviation): captured in the home folder, as on Windows, never in the workspace
+  (Swift ran `zsh -ilc` in the workspace, which can run a repository's own hooks and leak one workspace's environment into another).
+- **The pet** (M-F): clicks pass through its clear pixels by the window server's alpha test, not by toggling `ignoresMouseEvents` per
+  hit as Swift did; checked by hand (plan §9).
+- **The Keychain** (M-B; bounded at the integration review): a locked keychain in the search list makes a silent Claude read wait for
+  its unlock with no limit inside the Security framework, holding the process-wide Keychain lock. The usage probe gives up on it after
+  5 s, no other silent read starts while it is stuck (each answers "Keychain access needed" at once), a read the user asks for waits
+  at most 5 s for the lock and 120 s in all, and a remote key's read waits 2 s for the lock, then reads as missing (the connection
+  fails and says so).
+- **Writing by default** (R6): a release Mac build in `/Applications` or `~/Applications` writes its state, settings and stores; anywhere
+  else (a release candidate opened from `~/Downloads` beside 0.4.x) only with `--allow-state-write`.
+- **Two copies at once** (stricter than Swift, which relied on LaunchServices activating a running copy): the Swift 0.4.x app and this
+  one share the bundle identifier `dev.mightycode.native` and every store, so a run that would write stays read-only while another
+  copy of that identifier runs (`NSRunningApplication`); it says so on stderr. A smoke never asks.
+- **An HTML preview** (both OSes): its frame carries C#'s `LocalHtmlDocument.ContentPolicy` (no connection of its own, no plugins,
+  base or forms) with the frame hosts allowed for its own frames, and the host's nonce is defined in the page's top frame on the app's
+  origin only (wry runs initialization scripts in every frame on Windows; the smoke's files step checks the preview sees no nonce).
+
+- **Quitting for a logout, restart or shutdown** (M-F, `kAEQuitReason`'s replacement): tao owns `applicationShouldTerminate:`, so
+  Swift's `kAEQuitReason` is not read; `NSWorkspaceWillPowerOffNotification` marks the session's end instead (`session.rs`), and a
+  staged update does not install on that quit. Open modal sessions and sheets are not ended before the quit, as Swift ended them; the
+  16 s quit watchdog covers a quit they would hold.
+- **The browser with the engine off** (D4): a WKWebView pane with its own data store per workspace (macOS 14 or later), where Swift
+  said the browser was disabled. A change for the update notes.
+- **`mightyclaude://` links** (D11): accepted beside `mightycode://` (Swift dropped the legacy scheme at run time).
+- **The state's Mac-only fields**: none is lost. Every key Swift's `StateRepository` writes survives a Rust load and save (the
+  `state-corpus` round trip, `crates/mighty-core/tests/state_mac.rs` with `parity-mac state-check`), and Windows' saves stay byte for
+  byte.
+- **Agent IO on the Mac** (M-C's decisions): one JSON message per line on the Unix socket (Swift's and the plan's framing); a
+  follow-up to a busy child waits in C#'s `held` lane, where Swift used `pending`; a forged terminal token gets C#'s one refusal text.
+- **An agent terminal's stop** (Swift `LongRunningProcessTests.swift:173`): the shared `AgentTerminal::stop` waits for the command
+  after closing it without Swift's bound, as on Windows.
+- **Phone client ids**: Swift accepted 16–64 characters, the shared rule (C#'s) 22; the phone app always makes 22, so a phone Swift
+  paired is accepted.
+- **Settings words**: the settings say the Mac's words where Swift did (`mighty-core` `settings_words`: ⌘ keys, the Chromium
+  engine, "Mac notification", "this Mac"); Windows' note on keys and PowerShell is not shown, and the notification button opens
+  System Settings › Notifications.
+
+### Swift-only features the 0.5 Mac app does not have (D12)
+
+Audited from the Swift report's (a′) list; the page or the Rust host already has `PaneHero` (the pane's header figures),
+`ProviderBeta`, `PhaseModelMacReplaced` (the phase models) and the reset link; `TranscriptCopy` is the WebView's own selection and
+Edit menu.
+
+- **GitWorkbench**: no Commit & PR sheet (commit chosen files, push, see or open a GitHub PR / GitLab MR, its CI checks, "ask to fix").
+- **CompareRun**: no compare runs (one request run by several agents in separate worktrees, compared side by side, one merged).
+- **ReviewNotes**: no notes on diff lines sent back as a follow-up request.
+- **TrustTools**: no secret scan before a commit, no "What this request did" list, no Help › Export diagnostics.
+- **CompanionProgress**: no progress card above the pet's bubble (the progress panel stays in the pane).
+- **Completion webhook** (`notifications.webhookURL`): finished requests are not posted to Slack/Discord; a URL set in 0.4 is ignored.
+- **Usage report and daily budget** (`usage.dailyBudgetUSD`): no usage report and no budget notification.
+- **ResourceWarning**: the missing-resources banner is drawn by the page but never fed, and `--verify-resources` is M-H's.
+- **StateBudget** (partial): saved transcript space is first come, first served across panes (C#'s rule), not Swift's fair share.
+- **LocaleFill** (partial): placeholders are filled one name after another (C#'s and the page's rule), not in one pass, so a value
+  that itself looks like `{name}` can be filled again.
+- **ComposerCaret** (unchecked): Swift's caret fix after a Korean IME composition is not ported; whether WKWebView needs it is the
+  §9 manual checklist's.
+- **"Allow Keychain access and check"**: Swift's popover has this button on a `permission` card; here the popover's refresh button
+  does the same (an interactive read), as the card's sentence says. The button itself would be a page change (D9, M-F's).
+- **The sign-in pane**: opened as Swift opens it (Settings and the setup screen close, the active local workspace or the first local
+  one, refused past 128 panes), but when no local workspace exists the setup screen's own sign-in terminal window (Swift
+  `signInFromSetup`) is not there: the sign-in is refused with "Open a project folder first".
+- **Dialog sizes** (`dialog.size.<id>.*`): the page keeps its own panel sizes; sizes saved by 0.4 are not carried over.
+- **The login-shell fallback note**: when the login shell's environment cannot be read, Swift adds "the app's launch environment is
+  used" to the CLI statuses and skips the Bedrock settings conflict check (CLIAccounts.swift:216-264, BedrockAuthDiagnosticsTests.swift
+  :139); the shared Rust accounts code (C#'s) does neither, on both OSes.

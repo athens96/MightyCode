@@ -1,14 +1,85 @@
 [package]
 name = "mighty-platform-macos"
 version = "0.1.0"
-description = "Mighty Code's macOS implementation of the mighty-platform ports, in Rust (objc2, libghostty, CEF/WKWebView later); empty on other OSes."
+description = "Mighty Code's macOS implementation of the mighty-platform ports, in Rust (objc2, libghostty's C API, CEF/WKWebView); empty on other OSes."
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 rust-version.workspace = true
 
-# Everything is behind cfg(target_os = "macos"), its dependencies too: elsewhere the crate is empty.
+# Everything is behind cfg(target_os = "macos"), its dependencies too: elsewhere the crate is empty. Mac stage Step 0 lists what the
+# parts M-A … M-J build on (.omc/research/tauri/mac-plan.md §3 0c), each framework crate without its default features (which turn on
+# every class) and with the classes the parts are expected to need; a part that needs another feature adds it and says so.
 [target.'cfg(target_os = "macos")'.dependencies]
 mighty-platform.workspace = true
 dirs.workspace = true
-tauri.workspace = true
+# M-E: browser panes are child webviews (Window::add_child, Tauri's multi-webview), as on Windows.
+tauri = { workspace = true, features = ["unstable"] }
+tokio = { workspace = true, features = ["rt", "sync", "time", "net", "io-util"] }
+libc = "0.2"
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std", "block2", "NSArray", "NSAttributedString", "NSBundle", "NSData", "NSDate", "NSDictionary", "NSError", "NSGeometry",
+    "NSNotification", "NSObject", "NSOperation", "NSProcessInfo", "NSRange", "NSSet", "NSString", "NSThread", "NSURL", "NSUserDefaults",
+    "NSUUID", "NSValue",
+] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std", "block2", "libc", "objc2-core-foundation", "objc2-core-graphics", "objc2-quartz-core", "NSApplication", "NSBitmapImageRep",
+    "NSColor", "NSCursor", "NSEvent", "NSFont", "NSFontDescriptor", "NSFontManager", "NSGraphics", "NSGraphicsContext", "NSImage",
+    "NSImageRep", "NSMenu", "NSMenuItem", "NSPanel", "NSPasteboard", "NSResponder", "NSRunningApplication", "NSScreen",
+    "NSTextInputClient", "NSTextInputContext", "NSTrackingArea", "NSView", "NSWindow", "NSWorkspace",
+    # M-A: a secret written as one pasteboard item with its concealed and transient types (clipboard.rs).
+    "NSPasteboardItem",
+] }
+objc2-web-kit = { version = "0.3", default-features = false, features = [
+    "std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKNavigation", "WKNavigationDelegate", "WKPreferences",
+    "WKUserContentController", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration",
+] }
+objc2-user-notifications = { version = "0.3", default-features = false, features = [
+    "std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse",
+    "UNNotificationSettings", "UNNotificationSound", "UNNotificationTrigger", "UNUserNotificationCenter",
+] }
+# M-A: CTFontManager (the available families) and CTFontTraits (the fixed-pitch trait) for fonts.rs. M-F: CTLine and CTTypesetter lay
+# out and draw the pet's words (pet/text.rs); CoreGraphics draws its picture into a bitmap and reads the session's last input; both
+# crates are already in the lock (through objc2-app-kit and objc2-core-text).
+objc2-core-text = { version = "0.3", default-features = false, features = [
+    "std", "objc2-core-graphics", "CTFont", "CTFontCollection", "CTFontDescriptor", "CTFontManager", "CTFontTraits", "CTLine",
+    "CTStringAttributes", "CTTypesetter",
+] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = [
+    "std", "CGAffineTransform", "CGBitmapContext", "CGColor", "CGColorSpace", "CGContext", "CGDataProvider", "CGEventSource",
+    "CGEventTypes", "CGGeometry", "CGImage", "CGPath", "CGRemoteOperation",
+] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "std", "CFArray", "CFAttributedString", "CFBase", "CFCGTypes", "CFCharacterSet", "CFData", "CFDictionary", "CFNumber", "CFString",
+] }
+core-foundation = "0.10"
+core-graphics = "0.25"
+security-framework = "3"
+# M-E: the pane picture's data: URL, the website data stores' version-5 UUIDs, BrowserEngine.lock; M-F: the input method diagnostics
+# file (input_method.rs).
+base64 = "0.22"
+sha1 = "0.10"
+serde_json.workspace = true
+# M-C's push POST and M-H's update download over the system proxy (plan D17): the stack mighty-remote's relay already uses.
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+native-tls = "0.2"
+tokio-native-tls = "0.3"
+
+# M-B: the ported Swift checks over UserDefaults read the shared settings rules (text appearance, language, help site) and parity-mac's
+# JSON; M-A's and M-H's checks (the update transport against a loopback server) run on tokio's runtime.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+mighty-core.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time", "io-util"] }
+
+# M-D: libghostty and AppKit want the main thread, which only a harness-less test binary gives.
+[[test]]
+name = "ghostty_headless"
+harness = false
+
+# Step 0 lists the parts' dependencies before their code uses them; this table goes once every one is used.
+[lints.cargo]
+unused_dependencies = "allow"

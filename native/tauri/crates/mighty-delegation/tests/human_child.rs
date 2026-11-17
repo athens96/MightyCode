@@ -6,7 +6,6 @@
 
 mod support;
 
-#[cfg(windows)]
 use std::sync::{Arc, Mutex};
 
 use mighty_core::model::RunSettings;
@@ -17,7 +16,6 @@ use mighty_delegation::model::{ChildRecord, ChildRecordOptions, ChildState, Deli
 use mighty_delegation::providers::{self, ComposerSecondSend};
 use mighty_delegation::request::DelegationReasonCode;
 use mighty_delegation::store::{self, DelegationFile};
-#[cfg(windows)]
 use mighty_delegation::tools::delegate::{HumanChildFirstRun, HumanChildStarter};
 use mighty_delegation::tools::delegate::{app_commit_note, first_input, human_first_run, human_note};
 use mighty_run::model::StartRunRequest;
@@ -26,7 +24,6 @@ const COMMIT: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 /// The send's own start of a child's first run, as the window gives it: each run it started, and each child that failed after the
 /// answer.
-#[cfg(windows)]
 #[derive(Default)]
 struct Sends {
     started: Mutex<Vec<(String, HumanChildFirstRun)>>,
@@ -34,7 +31,6 @@ struct Sends {
     run_fails: std::sync::atomic::AtomicBool,
 }
 
-#[cfg(windows)]
 impl Sends {
     fn starter(self: &Arc<Self>) -> HumanChildStarter {
         let (start, fail) = (self.clone(), self.clone());
@@ -342,8 +338,7 @@ fn each_agent_has_its_modes_its_words_and_its_way_to_commit() {
     );
 }
 
-#[cfg(windows)]
-mod windows {
+mod git {
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::Ordering;

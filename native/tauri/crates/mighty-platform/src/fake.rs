@@ -11,6 +11,7 @@ use std::task::{Context, Poll};
 use tokio::io::AsyncWrite;
 use tokio::sync::{mpsc, watch};
 
+pub use crate::accounts::FakeClaudeCredentials;
 pub use crate::files::fake::{DesktopCall, FakeFileHandles, FakePdf, FakeSaveDialog, PathProbeCall, RecordingDesktop, RecordingPathProbe};
 use crate::notify::ActivationHandler;
 use crate::*;
@@ -1137,13 +1138,52 @@ impl ToastActivator for RecordingActivator {
 /// What happened to the fake's views, in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SurfaceEvent {
-    Opened { pane: String, kind: SurfaceKind, bounds: DeviceRect },
-    Placed { pane: String, rect: DeviceRect },
-    Visible { pane: String, visible: bool },
-    Focused { pane: String },
-    Snapshot { pane: String },
-    Navigated { pane: String, url: String },
-    Closed { pane: String },
+    Opened {
+        pane: String,
+        kind: SurfaceKind,
+        bounds: DeviceRect,
+    },
+    Placed {
+        pane: String,
+        rect: DeviceRect,
+    },
+    Visible {
+        pane: String,
+        visible: bool,
+    },
+    Focused {
+        pane: String,
+    },
+    Snapshot {
+        pane: String,
+    },
+    Navigated {
+        pane: String,
+        url: String,
+    },
+    Closed {
+        pane: String,
+    },
+    /// A terminal view was given text as if typed.
+    Typed {
+        pane: String,
+        text: String,
+    },
+    /// A terminal view was fed its PTY's output.
+    Fed {
+        pane: String,
+        output: Vec<u8>,
+    },
+    /// A terminal view took a font (the family, and the size in tenths of a point) or a theme.
+    Font {
+        pane: String,
+        family: String,
+        tenths: i64,
+    },
+    Theme {
+        pane: String,
+        light: bool,
+    },
 }
 
 type Log = Arc<Mutex<Vec<SurfaceEvent>>>;
@@ -1156,10 +1196,14 @@ pub struct FakeSurfaces {
     log: Log,
     fail_opens: Mutex<usize>,
     listeners: Mutex<std::collections::HashMap<String, BrowserListener>>,
+    /// Each terminal view's listener, by pane (the newest view's).
+    terminal_listeners: Mutex<std::collections::HashMap<String, TerminalListener>>,
     /// While set, every view's snapshot waits for a permit of it (as an engine's capture takes its time).
     snapshot_gate: Arc<Mutex<Option<Arc<tokio::sync::Semaphore>>>>,
     /// Every pet window opened, oldest first (W8-E).
     pets: Mutex<Vec<FakePet>>,
+    /// What [`SurfaceFactory::browser_status`] answers (None: the shared rule, as Windows).
+    browser_status: Mutex<Option<&'static str>>,
 }
 
 impl FakeSurfaces {
@@ -1169,9 +1213,16 @@ impl FakeSurfaces {
             log: Arc::default(),
             fail_opens: Mutex::new(0),
             listeners: Mutex::default(),
+            terminal_listeners: Mutex::default(),
             snapshot_gate: Arc::default(),
             pets: Mutex::default(),
+            browser_status: Mutex::new(None),
         }
+    }
+
+    /// Makes [`SurfaceFactory::browser_status`] answer `status` whatever the setting, as a platform that decides it does (the Mac).
+    pub fn set_browser_status(&self, status: Option<&'static str>) {
+        *lock(&self.browser_status) = status;
     }
 
     /// Every pet window [`SurfaceFactory::open_pet`] opened, oldest first: each records what was asked of it and takes events.
@@ -1189,6 +1240,13 @@ impl FakeSurfaces {
     /// Sends `event` to the listener of the pane's browser view, as its engine would (a popup the page asked for, a download).
     pub fn emit(&self, pane: &str, event: BrowserEvent) {
         let listener = lock(&self.listeners).get(pane).cloned();
+        if let Some(listener) = listener {
+            listener.send(event);
+        }
+    }
+    /// Sends `event` to the listener of the pane's terminal view, as the terminal would (typing, its grid, a title).
+    pub fn emit_terminal(&self, pane: &str, event: TerminalEvent) {
+        let listener = lock(&self.terminal_listeners).get(pane).cloned();
         if let Some(listener) = listener {
             listener.send(event);
         }
@@ -1333,15 +1391,33 @@ impl BrowserSurface for FakeView {
     }
 }
 
+/// A terminal view records what it is given; its text is everything it was fed.
 impl TerminalSurface for FakeView {
-    fn send_text(&self, _text: &str) -> Result<()> {
-        Ok(())
+    fn send_text(&self, text: &str) -> Result<()> {
+        self.change(SurfaceEvent::Typed { pane: self.pane.clone(), text: text.to_string() }, |_| {})
     }
-    fn set_font(&self, _family: &str, _size: f64) -> Result<()> {
-        Ok(())
+    fn set_font(&self, family: &str, size: f64) -> Result<()> {
+        let tenths = (size * 10.0).round() as i64;
+        self.change(SurfaceEvent::Font { pane: self.pane.clone(), family: family.to_string(), tenths }, |_| {})
     }
-    fn set_theme(&self, _light: bool) -> Result<()> {
-        Ok(())
+    fn set_theme(&self, light: bool) -> Result<()> {
+        self.change(SurfaceEvent::Theme { pane: self.pane.clone(), light }, |_| {})
+    }
+    fn feed(&self, output: &[u8]) -> Result<()> {
+        self.change(SurfaceEvent::Fed { pane: self.pane.clone(), output: output.to_vec() }, |_| {})
+    }
+    fn text(&self) -> BoxFuture<'_, Result<String>> {
+        Box::pin(async move {
+            let fed: Vec<u8> = lock(&self.log)
+                .iter()
+                .filter_map(|event| match event {
+                    SurfaceEvent::Fed { pane, output } if *pane == self.pane => Some(output.clone()),
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            Ok(String::from_utf8_lossy(&fed).into_owned())
+        })
     }
 }
 
@@ -1374,8 +1450,14 @@ impl SurfaceFactory for FakeSurfaces {
             if self.failing() {
                 return Err(PlatformError::Refused("the fake was told to fail".into()));
             }
+            if let Some(listener) = options.listener {
+                lock(&self.terminal_listeners).insert(options.pane_id.clone(), listener);
+            }
             Ok(Box::new(self.view(&options.pane_id, SurfaceKind::Terminal, options.bounds, None)) as Box<dyn TerminalSurface>)
         })
+    }
+    fn browser_status(&self, _enabled: bool) -> Option<&'static str> {
+        *lock(&self.browser_status)
     }
     fn open_pet(&self) -> BoxFuture<'_, Result<Box<dyn PetWindow>>> {
         Box::pin(async move {

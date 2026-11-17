@@ -3,6 +3,8 @@
 //! vectors, compared byte for byte. Without the .NET 10 SDK the test says so and passes; `MIGHTY_PARITY=require` makes it fail
 //! instead. `tools/parity/run.ps1` runs the same over copies of real profiles too.
 
+#[path = "../../../tools/parity/build_lock.rs"]
+mod build_lock;
 #[path = "../examples/parity.rs"]
 #[allow(dead_code)]
 mod parity;
@@ -35,6 +37,7 @@ fn csharp_tool() -> Option<PathBuf> {
     if !dotnet_10() {
         return None;
     }
+    let build = build_lock::hold(&tauri.join("target"));
     let built = Command::new("dotnet")
         .args(["build"])
         .arg(&project)
@@ -42,6 +45,7 @@ fn csharp_tool() -> Option<PathBuf> {
         .arg(&out)
         .args(["--nologo", "-v", "quiet"])
         .status();
+    drop(build);
     assert!(matches!(built, Ok(status) if status.success()), "the C# parity tool did not build ({built:?})");
     Some(out.join("parity.dll"))
 }

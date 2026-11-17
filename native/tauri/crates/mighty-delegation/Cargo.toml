@@ -42,6 +42,10 @@ url = "2"
 [target.'cfg(windows)'.dependencies]
 mighty-platform-windows.workspace = true
 
+# The same on the Mac (M-C): the fake exe's Unix socket connector and process host; the checks' real socket.
+[target.'cfg(target_os = "macos")'.dependencies]
+mighty-platform-macos.workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread", "macros", "io-util"] }
 

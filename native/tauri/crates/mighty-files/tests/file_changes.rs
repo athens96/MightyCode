@@ -326,13 +326,17 @@ async fn the_parser_keeps_each_files_first_original_of_the_run() {
     );
 }
 
-/// The run engine's process host where git runs (Windows), else a fake that starts nothing.
+/// The OS's process host where git runs (Windows', M-A's on the Mac).
 fn processes() -> Arc<dyn mighty_platform::ProcessHost> {
     #[cfg(windows)]
     {
         Arc::new(mighty_platform_windows::WindowsProcessHost::new())
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        mighty_platform_macos::process_host()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         Arc::new(mighty_platform::unsupported::Unsupported)
     }
@@ -539,7 +543,6 @@ fn find_tmp(folder: &Path, out: &mut Vec<std::path::PathBuf>) {
 }
 
 /// git in a folder, as the C# check runs it (its own author, no signing, no line-end conversion).
-#[cfg(windows)]
 #[allow(clippy::disallowed_methods, reason = "the check's own git, no child of the app")]
 fn git(folder: &Path, arguments: &[&str]) {
     let output = std::process::Command::new("git")
@@ -560,7 +563,6 @@ fn git(folder: &Path, arguments: &[&str]) {
     assert!(output.status.success(), "git {arguments:?}: {}", String::from_utf8_lossy(&output.stderr));
 }
 
-#[cfg(windows)]
 #[allow(clippy::disallowed_methods, reason = "the check's own git, no child of the app")]
 fn inside_repository(folder: &Path) -> bool {
     std::process::Command::new("git")
@@ -571,8 +573,7 @@ fn inside_repository(folder: &Path) -> bool {
 }
 
 /// Verification.cs:1215 "file changes: without a run original HEAD is the base, untracked all added, no repository no diff" — git runs
-/// through the Windows process host (the Mac's is not written yet).
-#[cfg(windows)]
+/// through the OS's process host, and the read opens each file through the OS's `FileHandles`.
 #[tokio::test(flavor = "multi_thread")]
 async fn without_a_run_original_gits_head_is_the_base() {
     let directory = Temp::new("changes-git");
@@ -617,11 +618,14 @@ async fn without_a_run_original_gits_head_is_the_base() {
             && head.head_sha.as_ref().is_some_and(|s| s.len() == 7)
     );
     assert_eq!(head.hunks[0].lines.iter().map(|l| format!("{}{}", l.op, l.text)).collect::<Vec<_>>(), [" one", "-two", "+TWO", " three"]);
-    let other_case = some_changes_of("TRACKED.txt", None, None, root_text.clone()).await;
-    assert!(
-        other_case.base == "head" && other_case.created.is_none() && other_case.added == 1,
-        "another case reads HEAD's file by the disk's spelling"
-    );
+    // C#'s `OnDiskCase`, Windows only (`changes::on_disk_case`): Swift reads a path as it is given, so the Mac does too.
+    if cfg!(windows) {
+        let other_case = some_changes_of("TRACKED.txt", None, None, root_text.clone()).await;
+        assert!(
+            other_case.base == "head" && other_case.created.is_none() && other_case.added == 1,
+            "another case reads HEAD's file by the disk's spelling"
+        );
+    }
     assert!(
         changes::not_in_head("fatal: path 'app/a.txt' does not exist in 'HEAD'")
             && changes::not_in_head("fatal: path 'a.txt' exists on disk, but not in 'HEAD'")

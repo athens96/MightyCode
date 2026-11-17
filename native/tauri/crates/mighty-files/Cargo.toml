@@ -35,3 +35,7 @@ mighty-run.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
 mighty-platform-windows.workspace = true
+
+# Mac integration review 4: the checks over the Mac's real file handles and process host.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+mighty-platform-macos.workspace = true

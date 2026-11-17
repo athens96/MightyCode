@@ -1,8 +1,8 @@
 //! Per-pane worktrees (mighty-delegation `pane_worktree`, mighty-core's saved records), C# MightyCode.Core.Tests/PaneWorktreeVerification.cs
 //! (the Mac's PaneWorktreeTests and PaneWorktreeToolsTests) check by check: the decision, the PORT, the note, saved records, the copy
 //! rules, the list, the pull request URL, and real git for merge, commit-and-merge, undo, status and discard. Git runs only in the
-//! temporary repositories of `support::place` (an empty global config, no system config), through the Windows process host, so that
-//! check is `#[cfg(windows)]` until the Mac stage gives the Mac one. Beyond C#: a 0.4.61-written state with pane worktrees saves back
+//! temporary repositories of `support::place` (an empty global config, no system config), through the platform's process host
+//! (Windows', or M-A's on the Mac). Beyond C#: a 0.4.61-written state with pane worktrees saves back
 //! byte for byte (the "data continues" criterion for 0.4.61 users).
 
 mod support;
@@ -341,7 +341,6 @@ fn a_state_0_4_61_wrote_with_pane_worktrees_saves_back_byte_for_byte() {
     assert!(terminal.working_folder.is_some() && terminal.pane_worktree.is_none(), "a terminal keeps its folder, never a record");
 }
 
-#[cfg(windows)]
 mod git {
     use mighty_delegation::git::cleanup::ChildDiscardOutcome;
     use mighty_delegation::git::worktree::{ChildWorktreeCheck, ChildWorktreeOutcome, NOTES_FOLDER};
@@ -493,7 +492,19 @@ mod git {
         assert!(pw::origin(&git, &pane).await.is_none(), "no origin");
     }
 
+    /// Removes a directory link itself: a junction is a folder to Windows, a symbolic link a file elsewhere.
+    fn unlink(link: &std::path::Path) {
+        if cfg!(windows) { std::fs::remove_dir(link) } else { std::fs::remove_file(link) }.unwrap();
+    }
+
+    /// A directory link elsewhere than Windows: a symbolic link.
+    #[cfg(not(windows))]
+    async fn junction(link: &std::path::Path, target: &std::path::Path) {
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
     /// `mklink /J link target`, through cmd.exe and the process host.
+    #[cfg(windows)]
     async fn junction(link: &std::path::Path, target: &std::path::Path) {
         let comspec = std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
         let (link, target) = (link.to_string_lossy().into_owned(), target.to_string_lossy().into_owned());
@@ -572,7 +583,7 @@ mod git {
             ..pane.clone()
         };
         assert!(!pw::in_own_place(&paths, &linked, &place.root()), "a link at the place is not");
-        std::fs::remove_dir(&linked_place).unwrap();
-        std::fs::remove_dir(worktree.join("lnk")).unwrap();
+        unlink(&linked_place);
+        unlink(&worktree.join("lnk"));
     }
 }

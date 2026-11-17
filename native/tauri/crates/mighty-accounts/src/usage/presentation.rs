@@ -347,6 +347,11 @@ impl AccountUsageStatus {
     /// `RefreshAsync`: one read per provider, one after the other; a value a running session reported is never replaced by an older
     /// read.
     pub async fn refresh(&self, force: bool) {
+        self.refresh_as(force, false).await
+    }
+
+    /// [`AccountUsageStatus::refresh`], `interactive` when the user asked for it (Swift `refresh(force:interactive:)`).
+    pub async fn refresh_as(&self, force: bool, interactive: bool) {
         let targets = self.targets();
         {
             let mut state = lock(&self.state);
@@ -366,7 +371,7 @@ impl AccountUsageStatus {
             if lock(&self.state).stopped {
                 break;
             }
-            let value = self.service.read(&provider, force).await;
+            let value = self.service.read_as(&provider, force, interactive).await;
             let mut state = lock(&self.state);
             if let Some(held) = state.snapshots.get(&provider)
                 && !held.windows.is_empty()

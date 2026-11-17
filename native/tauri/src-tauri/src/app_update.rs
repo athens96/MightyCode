@@ -18,6 +18,14 @@
 //! smoke), verifies manifests and knows where they are ([`Core::can_run_automatically`]); the press in Settings checks only where it
 //! may change the machine. A smoke never starts the loop, the housekeeping or the session watch: its step renders fixture phases
 //! (smoke_app_update.rs).
+//!
+//! **The Mac (M-H).** The platform's profile (`update_package`) chooses the Mac's rules, no `cfg`: the install is the running `.app`, the
+//! manifest's `macos` package is checked against this Mac's version, staging is `/usr/bin/ditto` through the process host and Swift's
+//! bundle check, then (stricter than Swift, review M-H 1-2) the staged bundle's code signature for this app and its tree's digest
+//! ([`mac_stager`]), staging never waits for another process (Swift has no such wait), and the hand-off is Swift's
+//! `install.sh` ([`launch_mac`]: mighty-updates' `install_script::prepare`, then the platform's `start_install_script`); after "restart
+//! now" a watchdog ends the process [`QUIT_WATCHDOG`] after the quit began (Swift `quitForAppUpdate`). The housekeeping at start is
+//! Swift's `discardStaleAppUpdates`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -28,13 +36,14 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use mighty_core::locale::Locale;
 use mighty_core::shell::AppUpdateFrame;
-use mighty_platform::{DetachedEnvironment, DetachedRequest, ProcessHost, SessionEnding, Subscription, UpdateInstaller};
+use mighty_platform::profile::UpdatePackage;
+use mighty_platform::{DetachedEnvironment, DetachedRequest, ProcessHost, SessionEnding, SpawnRequest, Subscription, UpdateInstaller};
 use mighty_remote::phone::app_update::{self as phone_update, PhoneAppUpdateStep};
 use mighty_updates::app_update::auto::{self, IdleBlocker, IdleFacts, RestartAction, RestartState};
-use mighty_updates::app_update::coordinator::{Coordinator, KeptCheck, Options};
+use mighty_updates::app_update::coordinator::{Coordinator, KeptCheck, LaunchHelper, Options, Stager};
 use mighty_updates::app_update::plan::{HELPER_ENVIRONMENT, InstallPlan};
 use mighty_updates::app_update::service::Service;
-use mighty_updates::app_update::{Phase, State, build, dotnet, housekeeping, version};
+use mighty_updates::app_update::{Phase, State, build, dotnet, housekeeping, install_script, stage_mac, version};
 use serde_json::Value;
 use tauri::Manager;
 use tokio::sync::{Notify, mpsc};
@@ -114,6 +123,16 @@ pub struct Core {
     powering_off: AtomicBool,
     /// The driver looks at the timer again.
     wake: Notify,
+}
+
+/// Whose words the box says where C# and Swift differ: the profile's `update_needs_public_key` picks them (true: Windows', whose box
+/// says a keyless build cannot check; false: the Mac's, Swift's notice and address hint).
+pub fn words() -> mighty_core::app_update_view::Words {
+    if crate::platform::profile().update_needs_public_key {
+        mighty_core::app_update_view::Words::Windows
+    } else {
+        mighty_core::app_update_view::Words::Mac
+    }
 }
 
 impl Core {
@@ -421,6 +440,7 @@ impl Core {
         let signed = self.state().smoke_signed_build;
         mighty_core::app_update_view::describe(
             locale,
+            words(),
             &self.coordinator.state().view(),
             signed || self.coordinator.has_public_key(),
             self.coordinator.built_in_manifest_url(),
@@ -707,9 +727,103 @@ fn sentence(reason: &str) -> String {
     words
 }
 
-/// The install folder: the exe's own (C# `AppContext.BaseDirectory`).
-fn install_directory() -> Option<PathBuf> {
-    std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf))
+/// The install folder: the exe's own (C# `AppContext.BaseDirectory`); on the Mac the `.app` it runs from (`Bundle.main.bundleURL`), none
+/// outside one.
+fn install_directory(package: UpdatePackage) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    match package {
+        UpdatePackage::WindowsZip => exe.parent().map(Path::to_path_buf),
+        UpdatePackage::MacBundle => stage_mac::bundle_of(&exe),
+    }
+}
+
+/// How long after "restart now" began the quit the process is ended regardless (Swift `appUpdateQuitWatchdogSeconds`: the quit's 6 s
+/// deadline plus 10 s), so a quit held up by a sheet or a stuck cleanup never leaves the helper waiting.
+pub const QUIT_WATCHDOG: Duration = Duration::from_secs(16);
+
+/// The Mac's hand-off (Swift `prepareAppUpdateInstall`, `verify`, `launchInstaller`): mighty-updates' checks and script for this process
+/// (`recheck`: the profile's `update_rechecks_sha256`), then the platform starts `install.sh`; with a relaunch the app then quits through
+/// `quit`. Each refusal in Swift's words.
+pub fn launch_mac(
+    installer: &dyn UpdateInstaller,
+    locale: &Locale,
+    plan: &InstallPlan,
+    recheck: bool,
+    staged_trees: &StagedTrees,
+    quit: &dyn Fn(),
+) -> Result<(), String> {
+    let exe = std::env::current_exe().ok();
+    let running =
+        exe.as_deref().and_then(Path::file_name).map_or_else(|| "MightyCode".to_string(), |name| name.to_string_lossy().into_owned());
+    let tree = lock(staged_trees).get(&plan.staged_directory).cloned();
+    let signature = |bundle: &Path| signed_for_this_app(installer, bundle);
+    let seams = install_script::MacSeams {
+        may_write: &|folder| installer.may_write(folder),
+        may_execute: &|file| installer.may_execute(file),
+        signature: &signature,
+        staged_tree: tree.as_deref(),
+    };
+    let prepared = install_script::prepare(plan, &running, plan.app_process_id, recheck, &seams, locale)?;
+    installer
+        .start_install_script(&prepared.script, &prepared.folder)
+        .map_err(|error| locale.get_with("settings.appUpdate.errorInstall", &[("error", &error.to_string())]))?;
+    if plan.relaunch {
+        quit();
+    }
+    Ok(())
+}
+
+/// The staged trees' digests staging recorded, by staged bundle (review M-H 2): what the install checks the tree against.
+pub type StagedTrees = Mutex<std::collections::HashMap<PathBuf, String>>;
+
+/// Review M-H 1: `bundle`'s code signature for this app, through the platform's Security framework calls: the running app's team, if
+/// any, then `stage_mac::check_code_signature`. A running app whose signature cannot be read refuses (fail closed).
+fn signed_for_this_app(installer: &dyn UpdateInstaller, bundle: &Path) -> Result<(), mighty_updates::app_update::UpdateError> {
+    let refused = || mighty_updates::app_update::UpdateError::key("appUpdate.error.bundleIdentity");
+    let team = installer.running_team().map_err(|_| refused())?;
+    stage_mac::check_code_signature(bundle, team.as_deref(), &|bundle, requirement| {
+        installer.code_signature_valid(bundle, requirement).unwrap_or(false)
+    })
+}
+
+/// Swift `AppUpdateService.run("/usr/bin/ditto", ["-x", "-k", package, folder])`: `PATH=/usr/bin:/bin`, in the temporary folder, 300 s;
+/// Err with its standard error's text.
+async fn ditto(processes: &dyn ProcessHost, package: &Path, folder: &Path) -> Result<(), String> {
+    let path = |p: &Path| p.to_string_lossy().into_owned();
+    let mut request =
+        SpawnRequest::new("/usr/bin/ditto", ["-x".to_string(), "-k".to_string(), path(package), path(folder)], std::env::temp_dir());
+    request.env.insert("PATH".into(), "/usr/bin:/bin".into());
+    let captured =
+        mighty_platform::capture(processes, request, None, Duration::from_secs(300), 1 << 20).await.map_err(|error| error.to_string())?;
+    if captured.exit_code == 0 { Ok(()) } else { Err(String::from_utf8_lossy(&captured.stderr).into_owned()) }
+}
+
+/// The Mac's unpacking (Swift `AppUpdateService.stage`): the updates folders made private, `ditto` through `processes`, the one bundle
+/// checked (its executable asked of `installer`), then (review M-H 1, 2) its code signature for this app and its tree's digest kept in
+/// `trees` for the install.
+pub fn mac_stager(processes: Arc<dyn ProcessHost>, installer: Arc<dyn UpdateInstaller>, trees: Arc<StagedTrees>) -> Stager {
+    Arc::new(move |package: PathBuf, destination: PathBuf| {
+        let (processes, installer, trees) = (processes.clone(), installer.clone(), trees.clone());
+        Box::pin(async move {
+            for folder in package.parent().into_iter().chain(package.parent().and_then(Path::parent)) {
+                let _ = installer.make_private(folder);
+            }
+            let unzip = |package: PathBuf, folder: PathBuf| async move { ditto(processes.as_ref(), &package, &folder).await };
+            let may_execute = |file: &Path| installer.may_execute(file);
+            let app = stage_mac::stage(&package, &destination, stage_mac::BUNDLE_IDENTIFIER, may_execute, unzip).await?;
+            let checked = installer.clone();
+            let (bundle, tree) = (app.clone(), app.clone());
+            let digest = tokio::task::spawn_blocking(move || {
+                signed_for_this_app(checked.as_ref(), &bundle)?;
+                stage_mac::tree_digest(&tree, &|file| checked.may_execute(file))
+                    .map_err(|error| mighty_updates::app_update::UpdateError::Plain(error.to_string()))
+            })
+            .await
+            .unwrap_or_else(|join| Err(mighty_updates::app_update::UpdateError::Plain(join.to_string())))?;
+            lock(&trees).insert(app.clone(), digest);
+            Ok(app)
+        })
+    })
 }
 
 /// The page methods: `postponeUpdate` (C#: snooze 4 h) and `restartForUpdate` (C#: install now and relaunch).
@@ -732,21 +846,48 @@ pub fn register(methods: &mut Registry) {
 /// host may change the machine), the session watch and the loop (C# `BeginAutomaticAppUpdateCheck`, after the first render).
 pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
     let automatic = Arc::new(AtomicBool::new(host.view().snapshot.app_update_auto_check));
-    let service = Arc::new(Service::new(platform.update_transport.clone(), &host.data_dir, build::public_key(Some(PUBLIC_KEY_TEXT))));
+    let profile = platform.profile.clone();
+    let package = profile.update_package;
+    let service = Arc::new(
+        Service::new(platform.update_transport.clone(), &host.data_dir, build::public_key(Some(PUBLIC_KEY_TEXT))).with_profile(&profile),
+    );
     let mut options = Options::new(&current_version(host));
     options.built_in_manifest_url = build::manifest_url(Some(MANIFEST_URL_TEXT));
-    options.install_directory = install_directory();
+    options.install_directory = install_directory(package);
     options.locale = host.locale;
+    options.profile = profile.clone();
     let reads = automatic.clone();
     options.automatic = Arc::new(move || reads.load(Ordering::SeqCst));
     let installer: Arc<dyn UpdateInstaller> = platform.updates.clone();
     let running = installer.clone();
     options.running_from = Arc::new(move |folder| running.running_from(folder, true).map_err(std::io::Error::other));
+    let staged_trees: Arc<StagedTrees> = Arc::default();
+    if package == UpdatePackage::MacBundle {
+        options.system_version = installer.system_version();
+        options.staging_busy = Some(Arc::new(|| false));
+        options.stage = Some(mac_stager(platform.processes.clone(), installer.clone(), staged_trees.clone()));
+    }
     let (processes, locale, app) = (platform.processes.clone(), host.locale, host.app.clone());
     // The real launcher only where the build may change the machine (never in a smoke or a read-only launch): elsewhere "restart now"
     // and quitting fail with `noInstallPlan` or install nothing.
     if host.may_change_machine() {
-        options.launch_helper = Some(Arc::new(move |plan| launch_helper(processes.as_ref(), &locale, plan, &|| app.exit(0))));
+        let launch: LaunchHelper = match package {
+            UpdatePackage::WindowsZip => Arc::new(move |plan| launch_helper(processes.as_ref(), &locale, plan, &|| app.exit(0))),
+            UpdatePackage::MacBundle => {
+                let (installer, recheck, trees) = (installer.clone(), profile.update_rechecks_sha256, staged_trees.clone());
+                Arc::new(move |plan| {
+                    let quit = || {
+                        app.exit(0);
+                        let _ = std::thread::Builder::new().name("app-update-quit-watchdog".into()).spawn(|| {
+                            std::thread::sleep(QUIT_WATCHDOG);
+                            std::process::exit(0);
+                        });
+                    };
+                    launch_mac(installer.as_ref(), &locale, plan, recheck, &trees, &quit)
+                })
+            }
+        };
+        options.launch_helper = Some(launch);
     }
     let coordinator = Arc::new(Coordinator::new(service, options));
     let seams = Arc::new(HostSeams { host: host.clone(), session: platform.session.clone(), automatic });
@@ -772,7 +913,11 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-            if may_change && let Some(install) = install_directory() {
+            if may_change && package == UpdatePackage::MacBundle {
+                // Swift `discardStaleAppUpdates`: staged copies of this version or older go.
+                let (updates, version) = (core.coordinator.service().updates_directory().to_path_buf(), current_version(&host));
+                let _ = tokio::task::spawn_blocking(move || housekeeping::discard_stale_updates(&updates, &version)).await;
+            } else if may_change && let Some(install) = install_directory(package) {
                 let (log, version, installer) =
                     (crate::logfile::LogFile::new(host.log.dir().to_path_buf()), crate::update_helper::version(), installer.clone());
                 let _ = tokio::task::spawn_blocking(move || housekeeping_at_start(&install, &version, installer.as_ref(), &log)).await;

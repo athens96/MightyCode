@@ -93,13 +93,19 @@ pub fn of(host: &Host) -> Option<Arc<Updates>> {
     let environment = runs.catalog.environment();
     let runner = Arc::new(HostCliRunner::new(host.processes.clone()));
     let read = environment.clone();
-    let service = Arc::new(CliUpdateService::with_environment_source(runner, Arc::new(move || read.current().values), home()));
+    let service = Arc::new(
+        CliUpdateService::with_environment_source(runner, Arc::new(move || read.current().values), home())
+            .with_updater(crate::platform::profile().cli_updater),
+    );
     let app = host.app.clone();
     let updates = Arc::new(Updates {
         service,
         coordinator: CliUpdateCoordinator::new(manual_updater(app.clone())),
         automatic: Arc::new(AutomaticUpdates::new()),
-        operations: Arc::new(PluginOperations::installed(host.processes.clone(), environment)),
+        operations: Arc::new(
+            PluginOperations::installed(host.processes.clone(), environment)
+                .with_while_reading(crate::platform::profile().plugin_list_while_reading),
+        ),
         state: Mutex::new(State::default()),
         closing: CancellationToken::new(),
     });

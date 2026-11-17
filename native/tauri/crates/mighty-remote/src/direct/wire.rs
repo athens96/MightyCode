@@ -40,6 +40,62 @@ pub fn endpoint(host: &str, port: u16) -> String {
     if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") }
 }
 
+/// Swift `MobileDirect.isTailnetName`: a MagicDNS name, lower-case DNS labels under `ts.net` (253 characters at most).
+pub fn is_tailnet_name(text: &str) -> bool {
+    let Some(labels) = text.strip_suffix(".ts.net") else { return false };
+    let label = |label: &str| {
+        let bytes = label.as_bytes();
+        (1..=63).contains(&bytes.len())
+            && bytes.iter().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+            && bytes[0] != b'-'
+            && bytes[bytes.len() - 1] != b'-'
+    };
+    text.len() <= 253 && !labels.is_empty() && labels.split('.').all(label)
+}
+
+/// Where Swift's `MobileDirect.magicDNSName` looks for the Tailscale CLI: the app's and Homebrew's places, then every absolute entry of
+/// `path` (a relative one could run a `tailscale` from the working folder), each once.
+pub fn tailscale_candidates(path: &str) -> Vec<String> {
+    let mut candidates: Vec<String> =
+        ["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+    for folder in path.split(':').filter(|folder| folder.starts_with('/')) {
+        let candidate = format!("{}/tailscale", folder.trim_end_matches('/'));
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    candidates
+}
+
+/// `tailscale status --json`'s own node's `DNSName`, lower case, its dots trimmed; None when the answer holds none (Swift tries the
+/// next candidate then). Whether it is a MagicDNS name is [`is_tailnet_name`]'s.
+pub fn status_dns_name(status_json: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(status_json).ok()?;
+    let raw = value.get("Self")?.get("DNSName")?.as_str()?;
+    Some(raw.to_lowercase().trim_matches('.').to_string())
+}
+
+/// Swift `MobileDirect.advertised(bound:name:port:allowAnyHost:)`: the bound addresses with their ports, then the MagicDNS `name` on
+/// `port` while anything is bound (`PlatformProfile::direct_advertises_magic_dns`; Windows passes none); only Tailscale addresses and
+/// MagicDNS names (any host through the checks' seam), each once, at most eight.
+pub fn advertised_with_name(bound: &[(String, u16)], name: Option<&str>, port: u16, allow_any_host: bool) -> Vec<String> {
+    let mut hosts: Vec<(String, u16)> = bound.to_vec();
+    if let Some(name) = name.filter(|_| !bound.is_empty()) {
+        hosts.push((name.to_string(), port));
+    }
+    let mut seen = std::collections::HashSet::new();
+    hosts
+        .iter()
+        .filter(|(host, _)| allow_any_host || crate::tailscale::contains(host) || is_tailnet_name(host))
+        .map(|(host, port)| endpoint(host, *port))
+        .filter(|endpoint| seen.insert(endpoint.clone()))
+        .take(MAXIMUM_ENDPOINTS)
+        .collect()
+}
+
 /// `MobileDirect.Advertised`: the bound addresses with their ports, Tailscale addresses only (any host through the checks' seam), each
 /// once, at most eight.
 pub fn advertised(bound: &[(String, u16)], allow_any_host: bool) -> Vec<String> {

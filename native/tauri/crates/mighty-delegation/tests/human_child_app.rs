@@ -6,30 +6,19 @@
 mod support;
 
 use std::path::Path;
-#[cfg(windows)]
 use std::sync::Arc;
 
-#[cfg(windows)]
 use mighty_delegation::app_host::ChildRunEnd;
-#[cfg(windows)]
 use mighty_delegation::git::merge::conflict_prompt;
-#[cfg(windows)]
 use mighty_delegation::git::worktree::report_file_in;
-#[cfg(windows)]
 use mighty_delegation::host::{DelegationPaneActivity, DelegationPaneState};
-#[cfg(windows)]
 use mighty_delegation::model::ChildState;
-#[cfg(windows)]
 use mighty_delegation::store::{DelegationFile, DelegationFileStore};
-#[cfg(windows)]
 use mighty_delegation::tools::delegate::{HumanChildFirstRun, HumanChildStart, HumanChildStarter};
-#[cfg(windows)]
 use support::host::{self, TestHost, eventually};
-#[cfg(windows)]
 use support::{lane, place::DelegationPlace};
 
-/// The git half: the process host that runs git is Windows' until the Mac stage.
-#[cfg(windows)]
+/// The git half (the platform's process host runs git).
 mod git {
     use super::*;
 

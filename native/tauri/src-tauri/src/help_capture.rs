@@ -17,7 +17,7 @@
 //! finds none in this run; the demo's `claude` and `codex` are overrides naming this exe) and nothing goes on the network; the workspaces
 //! are folders under the profile and the "continue a session" records live under the profile's own history home. The pet's picture is
 //! one pet window's own buffer (as the companion smoke's test overlay), since a capture, as any smoke, never puts the app's pet on the
-//! desktop. The pictures need WebView2 (Windows); elsewhere every shot fails with that reason. The help site keeps the Mac's pictures.
+//! desktop. The pictures are WebView2's on Windows and WKWebView's snapshot on the Mac (M-G, `platform::page_picture`/`page_picture_of`).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -172,7 +172,7 @@ pub(crate) fn png_size(bytes: &[u8]) -> (u32, u32) {
 async fn picture(host: &Host, clip: Option<&str>) -> Result<Vec<u8>, String> {
     use base64::Engine as _;
     let page = host.app.get_webview(WINDOW).ok_or("no main window")?;
-    let Some(clip) = clip else { return mighty_platform_windows::page::capture_preview(&page).await.map_err(|e| e.to_string()) };
+    let Some(clip) = clip else { return crate::platform::page_picture(&page).await };
     let script = format!(
         "(() => {{ const e = document.querySelector({}); if (!e) return null; const r = e.getBoundingClientRect(); return {{ x: r.left, y: r.top, width: r.width, height: r.height, scale: window.devicePixelRatio }}; }})()",
         literal(clip)
@@ -183,16 +183,27 @@ async fn picture(host: &Host, clip: Option<&str>) -> Result<Vec<u8>, String> {
     }
     let number = |key: &str| r.get(key).and_then(Value::as_f64).unwrap_or(0.0);
     let arguments = json!({"format": "png", "clip": {"x": number("x"), "y": number("y"), "width": number("width"), "height": number("height"), "scale": number("scale")}});
-    let answer = mighty_platform_windows::page::devtools(&page, "Page.captureScreenshot", &arguments.to_string())
-        .await
-        .map_err(|e| e.to_string())?;
+    let answer = crate::platform::page_devtools(&page, "Page.captureScreenshot", &arguments.to_string()).await?;
     let answer: Value = serde_json::from_str(&answer).map_err(|e| e.to_string())?;
     base64::engine::general_purpose::STANDARD.decode(answer.get("data").and_then(Value::as_str).unwrap_or("")).map_err(|e| e.to_string())
 }
 
+/// The Mac's (M-G): WKWebView's snapshot (`platform::page_picture`), of the whole page or of the element's box in CSS pixels (WebKit
+/// draws it at the screen's scale, as the DevTools clip does at the page's).
 #[cfg(not(windows))]
-async fn picture(_host: &Host, _clip: Option<&str>) -> Result<Vec<u8>, String> {
-    Err("the help capture pictures the page through WebView2 (Windows only); the help site keeps the Mac's pictures".into())
+async fn picture(host: &Host, clip: Option<&str>) -> Result<Vec<u8>, String> {
+    let page = host.app.get_webview(WINDOW).ok_or("no main window")?;
+    let Some(clip) = clip else { return crate::platform::page_picture(&page).await };
+    let script = format!(
+        "(() => {{ const e = document.querySelector({}); if (!e) return null; const r = e.getBoundingClientRect(); return {{ x: r.left, y: r.top, width: r.width, height: r.height }}; }})()",
+        literal(clip)
+    );
+    let r: Value = serde_json::from_str(&js(host, &script).await?).map_err(|e| e.to_string())?;
+    if !r.is_object() {
+        return Err("the element to capture is gone".into());
+    }
+    let number = |key: &str| r.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+    crate::platform::page_picture_of(&page, (number("x"), number("y"), number("width"), number("height"))).await
 }
 
 /// Still pictures, as the Mac's CI capture draws them: the page's reduced-motion rules (C#'s `Emulation.setEmulatedMedia`).
@@ -200,9 +211,10 @@ async fn picture(_host: &Host, _clip: Option<&str>) -> Result<Vec<u8>, String> {
 async fn reduce_motion(host: &Host) -> Result<(), String> {
     let page = host.app.get_webview(WINDOW).ok_or("no main window")?;
     let features = r#"{"features":[{"name":"prefers-reduced-motion","value":"reduce"}]}"#;
-    mighty_platform_windows::page::devtools(&page, "Emulation.setEmulatedMedia", features).await.map(|_| ()).map_err(|e| e.to_string())
+    crate::platform::page_devtools(&page, "Emulation.setEmulatedMedia", features).await.map(|_| ())
 }
 
+/// The Mac's WKWebView has no media emulation (M-G): the pictures keep the page's motion, which its settled screens do not show.
 #[cfg(not(windows))]
 async fn reduce_motion(_host: &Host) -> Result<(), String> {
     Ok(())

@@ -74,18 +74,25 @@ fn tailscale_addresses_a_mapped_address_counts_as_its_ipv4() {
 /// addresses come back, each on an adapter that carries an fd7a one; and one spelling per address.
 #[test]
 fn tailscale_addresses_detection_offers_only_tailscale_addresses() {
-    #[cfg(windows)]
+    // This machine's adapters through its own network port: Windows' (any adapter name), the Mac's (M-C: `getifaddrs`, and the
+    // Mac's rule, a `utun` only).
+    #[cfg(any(windows, target_os = "macos"))]
     {
-        let read = mighty_platform_windows::WindowsNetwork.adapters().expect("this PC's adapters");
+        #[cfg(windows)]
+        let (read, needs_utun) = (mighty_platform_windows::WindowsNetwork.adapters().expect("this PC's adapters"), false);
+        #[cfg(target_os = "macos")]
+        let (read, needs_utun) = (mighty_platform_macos::net::MacNetwork.adapters().expect("this Mac's adapters"), true);
         let flat: Vec<(String, String)> =
             read.adapters.iter().flat_map(|a| a.addresses.iter().map(|ip| (a.name.clone(), ip.to_string()))).collect();
-        for (name, address) in tailscale::owned(&flat, false) {
+        for (name, address) in tailscale::owned(&flat, needs_utun) {
             assert!(
-                contains(&address) && flat.iter().any(|(n, a)| *n == name && in_tailscale_ipv6_range(&canonical_text(a))),
+                contains(&address)
+                    && flat.iter().any(|(n, a)| *n == name && in_tailscale_ipv6_range(&canonical_text(a)))
+                    && (!needs_utun || name.starts_with("utun")),
                 "detection offered {address} on {name}"
             );
         }
-        assert!(select(&read, false).addresses.iter().all(|ip| tailscale::is_tailscale(*ip)), "only Tailscale addresses come back");
+        assert!(select(&read, needs_utun).addresses.iter().all(|ip| tailscale::is_tailscale(*ip)), "only Tailscale addresses come back");
     }
     assert!(
         canonical_text("FD7A:115C:A1E0:0::5%12") == "fd7a:115c:a1e0::5"

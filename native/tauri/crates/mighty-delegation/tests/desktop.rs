@@ -2,8 +2,8 @@
 //! under their names: "the real run path attaches the server and runs a child in its worktree" (L674), "the desktop service hosts
 //! delegation and offers the window its entry points" (L675), "a card's merge is queued while the child works or the parent runs, then
 //! goes through by itself" (L676), and DelegationCrossAgentVerification "the service offers the worktree menu and starts another agent's
-//! child" (L706). Windows only while the transport is (W7 plan D4).
-#![cfg(windows)]
+//! child" (L706). Git, the fake Claude and its MCP server run through the platform's process host and transport (Windows' or the
+//! Mac's).
 
 mod support;
 

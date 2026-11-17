@@ -337,9 +337,8 @@ fn work_map_release_files_are_read_inside_the_folder_and_bounded() {
     remove(&outside);
 }
 
-// ── a real repository, the summary run and the service (Windows: git and the scripted Claude start through WindowsProcessHost) ──
+// ── a real repository, the summary run and the service (git and the scripted Claude start through the OS's process host) ──
 
-#[cfg(windows)]
 mod real {
     use std::collections::HashMap;
 
@@ -575,8 +574,20 @@ mod real {
         let written = git.run(&["hash-object", "-t", "commit", "-w", &signed_file], &folder, 30.0).await.unwrap();
         run_git(&git, &folder, &["update-ref", "HEAD", mighty_workmap::git::line(&written.stdout)]).await;
         let marker = parent.join("gpg-ran");
-        let script = parent.join("gpg.bat");
-        std::fs::write(&script, format!("@echo off\r\necho ran> \"{}\"\r\n", marker.display())).unwrap();
+        #[cfg(windows)]
+        let script = {
+            let script = parent.join("gpg.bat");
+            std::fs::write(&script, format!("@echo off\r\necho ran> \"{}\"\r\n", marker.display())).unwrap();
+            script
+        };
+        #[cfg(not(windows))]
+        let script = {
+            use std::os::unix::fs::PermissionsExt as _;
+            let script = parent.join("gpg.sh");
+            std::fs::write(&script, format!("#!/bin/sh\necho ran > '{}'\n", marker.display())).unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            script
+        };
         let script_text = script.to_string_lossy().into_owned();
         for setting in [["log.showSignature", "true"], ["gpg.program", &script_text], ["gpg.ssh.program", &script_text]] {
             run_git(&git, &folder, &["config", setting[0], setting[1]]).await;

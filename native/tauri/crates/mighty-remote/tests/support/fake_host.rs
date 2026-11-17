@@ -364,6 +364,10 @@ pub struct MakeHost {
     pub clock: Option<Clock>,
     pub runs_changed: Option<Arc<dyn Fn(usize) + Send + Sync>>,
     pub windows_host: Option<bool>,
+    /// `HostOptions::decodes_paths` (default: Windows', false).
+    pub decodes_paths: Option<bool>,
+    /// `HostOptions::graph_runs` (default: Windows', true).
+    pub graph_runs: Option<bool>,
     pub runtime: Option<&'static str>,
 }
 
@@ -412,6 +416,8 @@ pub async fn make_host(make: MakeHost) -> HostFixture {
         addresses: make.addresses,
         clock: make.clock.unwrap_or_else(mighty_remote::remote::host::monotonic),
         windows_host: make.windows_host.unwrap_or(cfg!(windows)),
+        decodes_paths: make.decodes_paths.unwrap_or(false),
+        graph_runs: make.graph_runs.unwrap_or(true),
         antigravity_rules: None,
         system_folder: None,
         network: Arc::new(network.clone()),

@@ -534,11 +534,19 @@ fn frame_origin(scheme: &str, host: &str) -> String {
     if cfg!(windows) { format!("{scheme}://{PROTOCOL}.{host}") } else { format!("{PROTOCOL}://{host}") }
 }
 
-/// The policy a served page carries: sandboxed to scripts (as its frame is, also when it is opened some other way), and frames of
-/// its own only from the frame hosts.
+/// The policy a served page carries: sandboxed to scripts (as its frame is, also when it is opened some other way), then C#'s
+/// `LocalHtmlDocument.ContentPolicy` (mighty-composer's `CONTENT_POLICY`: its own files, inline scripts and styles, data and blob
+/// pictures, no connection of its own — Tauri's IPC included, review M-E 1 with the host's nonce — no plugins, base or forms), except
+/// that its own files and frames come from the frame hosts too (`'self'` alone matches nothing in a sandboxed WebKit frame; `frame-src`
+/// where C#'s says `'none'`: a previewed page may show a sibling page).
 fn frame_policy(scheme: &str) -> String {
     let hosts = if cfg!(windows) { format!("{scheme}://*{}", frames::HOST_SUFFIX) } else { format!("{PROTOCOL}:") };
-    format!("sandbox allow-scripts; frame-src {hosts}")
+    // A sandboxed frame's origin is opaque, and WebKit then matches `'self'` to nothing (WebView2 still matches the address's origin):
+    // the frame hosts are named beside it, so the page's own files load on both.
+    let content = mighty_composer::html::CONTENT_POLICY
+        .replace("'self'", &format!("'self' {hosts}"))
+        .replace("frame-src 'none'", &format!("frame-src {hosts}"));
+    format!("sandbox allow-scripts; {content}")
 }
 
 /// C# `WebHtmlAddress`: the file's address under its folder's host (the folder kept with the root it was resolved under), or None.
@@ -888,11 +896,14 @@ mod tests {
         if cfg!(windows) {
             assert_eq!(frame_origin("http", &host), "http://mightyhtml.h1.html.mighty.invalid");
             assert_eq!(frame_origin("https", &host), "https://mightyhtml.h1.html.mighty.invalid");
-            assert_eq!(frame_policy("http"), "sandbox allow-scripts; frame-src http://*.html.mighty.invalid");
-            assert_eq!(frame_policy("https"), "sandbox allow-scripts; frame-src https://*.html.mighty.invalid");
+            assert!(frame_policy("http").starts_with("sandbox allow-scripts; default-src 'none';"));
+            assert!(frame_policy("http").contains("connect-src 'none'; frame-src http://*.html.mighty.invalid; object-src 'none'"));
+            assert!(frame_policy("https").contains("frame-src https://*.html.mighty.invalid;"));
+            assert!(frame_policy("http").contains("script-src 'self' http://*.html.mighty.invalid 'unsafe-inline'"));
         } else {
             assert_eq!(frame_origin("http", &host), "mightyhtml://h1.html.mighty.invalid");
-            assert_eq!(frame_policy("http"), "sandbox allow-scripts; frame-src mightyhtml:");
+            assert!(frame_policy("http").contains("connect-src 'none'; frame-src mightyhtml:; object-src 'none'"));
+            assert!(frame_policy("http").contains("script-src 'self' mightyhtml: 'unsafe-inline'"), "{}", frame_policy("http"));
         }
     }
 

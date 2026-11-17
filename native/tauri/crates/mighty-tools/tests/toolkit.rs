@@ -733,10 +733,9 @@ async fn the_toolkit_executor_fails_a_step_that_cannot_start() {
     assert_eq!(request.env.get("NoDefaultCurrentDirectoryInExePath").map(String::as_str), Some("1"));
     assert_eq!(request.env.get("PATH").map(String::as_str), Some("C:\\tools"), "the CLI environment the PATH was searched in");
     assert_eq!(executor.run(&[]).await, CommandOutput::success(), "an empty argv runs nothing");
-    #[cfg(windows)]
     {
         let real = ProcessToolkitExecutor {
-            processes: Arc::new(mighty_platform_windows::WindowsProcessHost::new()),
+            processes: common::processes(),
             environment: Arc::new(FakeShellEnvironment::new(Default::default())),
             resolve: Arc::new(|_: &str, _: &std::collections::BTreeMap<String, String>| {
                 Some(common::fake_cli().to_string_lossy().into_owned())
@@ -751,16 +750,15 @@ async fn the_toolkit_executor_fails_a_step_that_cannot_start() {
 
 /// A child that never reads its input is killed at the time even when the input fills its pipe: the input is written within the
 /// time (C# `CliRunner` writes it on the timed task), never waited on before it.
-#[cfg(windows)]
 #[tokio::test]
 async fn a_child_that_never_reads_its_input_ends_at_the_time() {
-    use mighty_platform::ProcessHost;
-    let host = mighty_platform_windows::WindowsProcessHost::new();
+    let host = common::processes();
+    let host = host.as_ref();
     let cwd = common::temp("stdin-timeout");
     let request = host.cli_request(&common::fake_cli(), &["--sleep".into(), "60".into()], &cwd, &Default::default()).unwrap();
     let input = vec![b'x'; 8 * 1024 * 1024];
     let started = std::time::Instant::now();
-    let ran = mighty_tools::process::run(&host, request, Some(&input), std::time::Duration::from_secs(1), 1024).await.unwrap();
+    let ran = mighty_tools::process::run(host, request, Some(&input), std::time::Duration::from_secs(1), 1024).await.unwrap();
     assert!(ran.timed_out && ran.exit_code == -1, "{ran:?}");
     assert!(started.elapsed() < std::time::Duration::from_secs(15), "killed at its time, not after its sleep: {:?}", started.elapsed());
     common::remove(&cwd);

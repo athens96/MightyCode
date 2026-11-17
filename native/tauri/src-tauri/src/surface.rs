@@ -91,6 +91,12 @@ pub fn resolve_address(text: &str) -> Option<String> {
     tauri::Url::parse(&address).ok().map(String::from)
 }
 
+/// Where every browser pane's profile folder lies under the panes' web data (mighty-core `browser::profile_folder`'s parent): the
+/// Mac's CEF takes it as its root cache when it starts (`platform::start_browser_engine`).
+pub fn profiles_root(browser_data: &std::path::Path) -> PathBuf {
+    browser_data.join("browser-profiles")
+}
+
 /// The web profile's key of a browser pane (C# `Session.WorkspaceProfileKey ?? Session.WorkspaceId`), used as a folder name: a key
 /// that is no identifier (a state file can hold any text there) falls back to the workspace's id, never a path of its own.
 pub fn profile_key(workspace_profile_key: Option<&str>, workspace_id: &str) -> String {
@@ -288,6 +294,20 @@ impl SurfaceManager {
         runtime()
     }
 
+    /// A new browser pane's status with the setting `setting` (latched at its first read): the platform's answer where it decides
+    /// (the Mac, `SurfaceFactory::browser_status`), else C#'s rule (`disabled` while off, `missing` without the runtime, `ready`).
+    fn engine_status(&self, setting: bool) -> &'static str {
+        let enabled = self.latch_engine(setting);
+        self.factory.browser_status(enabled).unwrap_or_else(|| browser::engine_status(enabled, self.runtime_version().as_deref()))
+    }
+
+    /// Whether an agent's open with the choice `destination` goes to its browser pane (C# `OpenAgentUrl`, Swift `WebOpenService`):
+    /// only an in-app choice while browser panes show pages; else the OS's handler, which says in-app was unavailable when it was
+    /// asked for.
+    pub fn agent_opens_in_app(&self, destination: &str, setting: bool) -> bool {
+        destination == "inApp" && self.engine_status(setting) == "ready"
+    }
+
     pub async fn bounds(&self, pane: &str, kind: SurfaceKind, report: SlotReport) -> Result<(), String> {
         if self.factory.drawing(kind) == Drawing::Web {
             return Ok(());
@@ -303,8 +323,20 @@ impl SurfaceManager {
         let Some(report) = slot.report else { return Ok(()) };
         let show = report.shows();
         if slot.view.is_none() {
-            if !show || slot.failed.is_some() || kind != SurfaceKind::Browser {
-                // A terminal view is opened by its pane's terminal (the Mac stage), never by a report alone.
+            if kind == SurfaceKind::Terminal {
+                // The Mac's Ghostty view, fed by its pane's PTY (surface_terminal.rs, M-D; none before then, so the slot stays empty).
+                // Windows never gets here: its page draws terminals (`bounds` returns before).
+                if show
+                    && slot.failed.is_none()
+                    && let Some(view) = crate::surface_terminal::open(&self.factory, pane, report.rect).await
+                {
+                    slot.view = Some(View::Terminal(view));
+                    slot.shown = true;
+                    slot.placed = Some(report.rect);
+                }
+                return Ok(());
+            }
+            if !show || slot.failed.is_some() {
                 return Ok(());
             }
             let (Some(url), Some(data_dir)) = (slot.url.clone(), slot.data_dir.clone()) else { return Ok(()) };
@@ -367,6 +399,11 @@ impl SurfaceManager {
         self.browsers.lock().get(pane).cloned().unwrap_or_default().state()
     }
 
+    /// The address a browser pane's history shows now (the smoke waits for the engine's navigation to reach it).
+    pub fn browser_url(&self, pane: &str) -> Option<String> {
+        self.browsers.lock().get(pane).and_then(|browser| browser.history.current().map(str::to_string))
+    }
+
     /// `browserOpen` (C# `WebBrowser` and `StartWebBrowserAsync`): the pane's state; a new pane starts: nothing while the setting is
     /// off (`disabled`), the install offer without the runtime (`missing`), else its view opens over its slot as soon as the slot can
     /// show, in the workspace's web profile.
@@ -379,7 +416,7 @@ impl SurfaceManager {
     }
 
     async fn start(&self, pane: &str, profile_key: &str, engine_enabled: bool) {
-        let status = browser::engine_status(self.latch_engine(engine_enabled), self.runtime_version().as_deref());
+        let status = self.engine_status(engine_enabled);
         if status != "ready" {
             self.browsers.change(pane, |browser| browser.status = status);
             return;
@@ -486,6 +523,20 @@ impl SurfaceManager {
             self.start(pane, profile_key, true).await;
         }
         Ok(Value::Null)
+    }
+
+    /// A browser view of no pane over the window at `rect`, in the workspace profile `profile_key`, on `url` (the Mac smoke's profile
+    /// check, smoke.rs `browser_profiles`, which closes it).
+    pub async fn open_unowned(
+        &self,
+        pane: &str,
+        profile_key: &str,
+        url: &str,
+        rect: DeviceRect,
+    ) -> Result<Box<dyn BrowserSurface>, String> {
+        let data_dir = browser::profile_folder(&self.browser_data, profile_key);
+        let options = BrowserOptions { pane_id: pane.to_string(), url: url.to_string(), data_dir, bounds: rect, listener: None };
+        self.factory.open_browser(options).await.map_err(|error| error.to_string())
     }
 
     /// The popups a pane's page asked for, all refused (the smoke's check).
@@ -823,6 +874,70 @@ mod tests {
         let h = harness(false);
         h.manager.force_engine();
         assert_eq!(h.manager.browser_open("p", "w", false).await.unwrap()["status"], "starting", "the smoke's engine is on");
+    }
+
+    /// M-E (plan D4): a platform that decides a pane's status itself (the Mac) is asked, over the shared rule: WKWebView's panes show
+    /// pages with the setting off, and the CEF asked for at launch that did not start says `failed` and opens nothing. Without an
+    /// answer (Windows) the shared rule stays.
+    #[tokio::test]
+    async fn the_platform_may_decide_a_panes_status() {
+        let h = harness(false);
+        h.surfaces.set_browser_status(Some("ready"));
+        assert_eq!(h.manager.browser_open("p", "w", false).await.unwrap()["status"], "starting", "the setting off still shows pages");
+        h.manager.bounds("p", SurfaceKind::Browser, shown(RECT)).await.unwrap();
+        assert!(matches!(h.surfaces.events()[0], SurfaceEvent::Opened { .. }));
+        assert_eq!(h.last_state()["status"], "ready");
+        let h = harness(false);
+        h.surfaces.set_browser_status(Some("failed"));
+        assert_eq!(h.open("p").await["status"], "failed");
+        h.manager.bounds("p", SurfaceKind::Browser, shown(RECT)).await.unwrap();
+        assert!(h.surfaces.events().is_empty(), "no view where the engine did not start");
+        let h = harness(false);
+        assert_eq!(h.manager.browser_open("p", "w", false).await.unwrap()["status"], "disabled", "no answer: the shared rule");
+    }
+
+    /// `OpenURLChoiceWiringTests.swift:238 "externalOpensGoToTheSystemBrowserOpener"`: an agent's open with the external choice goes to
+    /// the OS's handler, whatever the browser panes can do.
+    #[test]
+    fn external_opens_go_to_the_system_browser_opener() {
+        for status in [None, Some("ready"), Some("failed")] {
+            let h = harness(false);
+            h.surfaces.set_browser_status(status);
+            assert!(!h.manager.agent_opens_in_app("external", true), "{status:?}");
+        }
+    }
+
+    /// `OpenURLChoiceWiringTests.swift:248 "inAppWithoutTheBrowserEngineOpensInTheSystemBrowserAndSaysSo"`, as the plan rewords it for
+    /// the Mac: without CEF, in-app is WKWebView (the setting off opens the agent's pane); the open goes to the OS's handler, saying so
+    /// (`inAppUnavailable`, agent_io.rs), only where the engine asked for is not there: CEF that did not start, or (Windows) the
+    /// setting off or no WebView2.
+    #[test]
+    fn in_app_without_the_browser_engine_opens_in_the_system_browser_and_says_so() {
+        let h = harness(false);
+        h.surfaces.set_browser_status(Some("ready"));
+        assert!(h.manager.agent_opens_in_app("inApp", false), "the Mac's WKWebView with the setting off");
+        let h = harness(false);
+        h.surfaces.set_browser_status(Some("failed"));
+        assert!(!h.manager.agent_opens_in_app("inApp", true), "the CEF asked for did not start");
+        let h = harness(false);
+        assert!(!h.manager.agent_opens_in_app("inApp", false), "Windows with the setting off");
+        let h = harness(false);
+        h.manager.set_runtime(Arc::new(|| None));
+        assert!(!h.manager.agent_opens_in_app("inApp", true), "Windows without WebView2");
+        let h = harness(false);
+        assert!(h.manager.agent_opens_in_app("inApp", true), "Windows with the setting on and WebView2");
+    }
+
+    /// `BrowserEngineTests.swift:32 "browserProfilePathIsPerWorkspace"`: each workspace's profile folder is its own, named by its key,
+    /// all under one root (the Mac's CEF root cache, [`profiles_root`]).
+    #[test]
+    fn browser_profile_path_is_per_workspace() {
+        let data = PathBuf::from("browser-data");
+        let (one, two) = (browser::profile_folder(&data, "workspace-abc"), browser::profile_folder(&data, "workspace-xyz"));
+        assert_ne!(one, two);
+        assert!(one.ends_with("workspace-abc") && two.ends_with("workspace-xyz"));
+        assert_eq!(one.parent(), two.parent());
+        assert_eq!(one.parent(), Some(profiles_root(&data).as_path()));
     }
 
     #[tokio::test]

@@ -1358,8 +1358,7 @@ async fn opencode_and_hermes_have_no_account_usage_and_no_cli_is_asked() {
 }
 
 /// AntigravityAccountUsageVerification.cs:76 `TheAppsProbeRunsAgyUsage`: the probe the app gives the service runs agy with exactly the
-/// `/usage` arguments in the temporary folder (the stand-in agy over the real Windows process layer), or says why not.
-#[cfg(windows)]
+/// `/usage` arguments in the temporary folder (the stand-in agy over the OS's real process layer), or says why not.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_apps_probe_runs_agy_usage() {
     common::korean();
@@ -1368,7 +1367,7 @@ async fn the_apps_probe_runs_agy_usage() {
     let marker = std::env::temp_dir().join(format!("mighty-agy-usage-{folder}.marker"));
     std::fs::write(&marker, "").unwrap();
     let agy = mighty_run::model::CliCommand::new(text(&common::fake_cli()), vec!["--agy-usage-cli".into(), text(&state)], None);
-    let processes: Arc<dyn mighty_platform::ProcessHost> = Arc::new(mighty_platform_windows::WindowsProcessHost::new());
+    let processes = common::processes();
     let environment: std::collections::BTreeMap<String, String> = std::env::vars().collect();
     let parts = |find: usage::Finder| RuntimeProbe {
         find,
@@ -1440,20 +1439,18 @@ async fn the_apps_probe_runs_agy_usage() {
     common::remove_when_free(&state).await;
 }
 
-#[cfg(windows)]
 fn snapshot_of_gemini(state: &std::path::Path) -> AppSnapshot {
     snapshot(
         json!({"workspaces": [{"id": "w", "path": text(state)}], "sessions": [{"id": "a", "workspaceId": "w", "kind": "claude", "provider": "gemini"}]}),
     )
 }
 
-/// `AccountUsageRuntime.CodexStdio` over the real Windows process layer: `codex app-server --listen stdio://` (the stand-in) answers the
+/// `AccountUsageRuntime.CodexStdio` over the OS's real process layer: `codex app-server --listen stdio://` (the stand-in) answers the
 /// account read, and the probe gives its windows.
-#[cfg(windows)]
 #[tokio::test(flavor = "multi_thread")]
 async fn the_codex_app_server_is_asked_over_the_process_host() {
     let state = temp("codex-app-server");
-    let processes: Arc<dyn mighty_platform::ProcessHost> = Arc::new(mighty_platform_windows::WindowsProcessHost::new());
+    let processes = common::processes();
     let codex = mighty_run::model::CliCommand::new(text(&common::fake_cli()), vec!["--codex-app-server".into(), text(&state)], None);
     let channel = usage::HostCodexStdio::start(processes.as_ref(), &codex, &state).await.expect("started");
     let snapshot = CodexAccountProbe::read(Box::new(channel), Duration::from_secs(20)).await.expect("read");

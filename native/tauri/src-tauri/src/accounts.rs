@@ -152,8 +152,13 @@ fn coordinator(host: &Host) -> Option<Arc<CliAccountsCoordinator>> {
         return Some(made.clone());
     }
     let catalog = host.runs()?.catalog.clone();
-    // Made once the ports are managed too, so its sign-ins have their terminal window.
-    let terminals = host.app.try_state::<crate::platform::Ports>()?.terminals.clone();
+    // Made once the ports are managed too, so its sign-ins have their terminal window: the platform's, or on the Mac a pane of the
+    // window (`PlatformProfile::agent_sign_in`, sign_in_pane.rs).
+    let window = host.app.try_state::<crate::platform::Ports>()?.terminals.clone();
+    let app = host.app.clone();
+    let terminals = crate::sign_in_pane::sign_in_launcher(crate::platform::profile().agent_sign_in, host.smoke.is_some(), window, || {
+        Arc::new(crate::sign_in_pane::PaneSignIn { app })
+    });
     let made = CliAccountsCoordinator::new(Arc::new(HostRunner::new(host.processes.clone())), catalog, home()).with_terminal(terminals);
     let _ = accounts.coordinator.set(Arc::new(made));
     accounts.coordinator.get().cloned()
@@ -909,7 +914,11 @@ pub(crate) async fn start_cli_sign_in(host: &Arc<Host>, provider: &str, option: 
         Err(error) => {
             lock(&accounts.changes).remove(provider);
             refresh_cli_accounts(host).await;
-            return Err(error.to_string());
+            // The Mac's sign-in pane refuses with a sentence for the user (no local workspace, too many panes: sign_in_pane.rs).
+            return Err(match error {
+                mighty_platform::PlatformError::Refused(sentence) => sentence,
+                other => other.to_string(),
+            });
         }
     };
     if option == CliLoginOption::Bedrock {

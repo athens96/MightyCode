@@ -4,15 +4,17 @@
 //! DelegationHumanChildVerification (the app's commit, git's failure kinds) and DelegationAppVerification (junctions, the deadline,
 //! REPORT.md read the Windows way). Each check is named by its C# name.
 //!
-//! Git runs through the Windows process host, so these are `#[cfg(windows)]` until the Mac stage gives the Mac one. What the checks
+//! Git runs through the platform's process host (Windows', or M-A's on the Mac); the checks of Windows' own paths, junctions and file
+//! sharing stay `#[cfg(windows)]`, each with its reason. What the checks
 //! assert of W7-A's delegation file (`RecordingMerge`, `RecordingUndo`, the store's round trip, `FirstInput`, the copies, the pane's
 //! notes) is W7-A's to check over its `ChildRecord`; here a child is the git layer's view of one ([`support::place::PlaceChild`]). The
 //! check that sets `GIT_DIR` process-wide is in its own binary (tests/git_env.rs).
 
 mod support;
 
-#[cfg(windows)]
-mod windows {
+mod checks {
+    #![cfg_attr(not(windows), allow(unused_imports, dead_code, reason = "what only the Windows checks (junctions, share modes) use"))]
+
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
@@ -100,6 +102,7 @@ mod windows {
     }
 
     /// `mklink /J link target`, through cmd.exe and the process host.
+    #[cfg(windows)]
     async fn junction(link: &str, target: &str) {
         let comspec = std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
         let folder = Path::new(link).parent().unwrap().to_path_buf();
@@ -193,6 +196,11 @@ mod windows {
             "a:b",
             "trailing.",
         ] {
+            // Device names are refused on Windows only (`is_safe_session_id`): a folder named so is plain elsewhere.
+            if !cfg!(windows) && ["nul", "CON", "com1.txt", "LPT9"].contains(&unsafe_id) {
+                assert!(is_safe_session_id(unsafe_id), "{unsafe_id} is a plain name off Windows");
+                continue;
+            }
             assert!(
                 !is_safe_session_id(unsafe_id)
                     && matches!(maker.create(unsafe_id, &place.repo(), "t").await, ChildWorktreeOutcome::Failed(_)),
@@ -212,7 +220,7 @@ mod windows {
 
         // A subfolder workspace works in the same subfolder of the worktree.
         let nested = DelegationPlace::new();
-        nested.repository(1, r"app\src", "false").await;
+        nested.repository(1, &combine("app", "src"), "false").await;
         let child = made(nested.maker().create("child-sub", &combine(&combine(&nested.repo(), "app"), "src"), "t").await);
         assert!(
             child.working_folder == combine(&combine(&child.worktree_path, "app"), "src")
@@ -462,7 +470,9 @@ mod windows {
         // The upper-case head a human might paste is the same commit, and the parent's folder may be written any way Windows reads it.
         let (sibling, sibling_head) = place.reported_child("c2", &["s.txt"], None).await;
         std::fs::write(combine(&place.repo(), "scratch.txt"), "scratch\n").unwrap();
-        let checkout = format!("{}/", place.repo().to_uppercase().replace('\\', "/"));
+        // (Windows ignores case and reads either separator; the Mac compares paths as they are, as Swift did.)
+        let checkout =
+            if cfg!(windows) { format!("{}/", place.repo().to_uppercase().replace('\\', "/")) } else { format!("{}/", place.repo()) };
         let record = merged(merge::tool_merge(&git, &child.view(), &format!(" {}\n", head.to_uppercase()), &checkout).await);
         assert!(record.pre_merge_commit == start && record.merged_commit == head, "untracked files on either side do not block the merge");
         assert!(
@@ -808,10 +818,14 @@ mod windows {
                     && std::fs::read_to_string(combine(&nested, "side.txt")).unwrap() == "side work\n",
                 "the nested worktree is named, and untouched"
             );
-            // The child's folder written another way is the same worktree.
-            let other_way = format!("{}/", child.worktree_path.to_uppercase().replace('\\', "/"));
+            // The child's folder written another way is the same worktree (in another case only where paths ignore case: Windows).
+            let (other_way, repo) = if cfg!(windows) {
+                (format!("{}/", child.worktree_path.to_uppercase().replace('\\', "/")), place.repo().to_lowercase())
+            } else {
+                (format!("{}/", child.worktree_path), place.repo())
+            };
             assert_eq!(
-                cleanup::nested_worktrees(&place.git(), &place.paths(), &other_way, &place.repo().to_lowercase()).await.map(|n| n.len()),
+                cleanup::nested_worktrees(&place.git(), &place.paths(), &other_way, &repo).await.map(|n| n.len()),
                 Some(1),
                 "paths compare without regard to case or separator"
             );
@@ -842,10 +856,11 @@ mod windows {
             let ChildWorktreeCheck::Ready(first) = maker.check(&place.repo()).await else { panic!("the workspace cannot host a child") };
             assert!(
                 same(&paths.canonical(&first.repository), &paths.canonical(&place.repo()))
-                    && !first.repository.contains('/')
+                    // Git prints its top folder with `/`; it is read in the OS's own separators (`\` on Windows, `/` on the Mac).
+                    && !first.repository.contains(if cfg!(windows) { '/' } else { '\\' })
                     && first.prefix.is_empty()
                     && first.parent_branch == "main",
-                "the repository's top folder is read the Windows way"
+                "the repository's top folder is read the OS's way"
             );
             let failed = |id: &str| {
                 PlaceChild::make(id, &maker.worktree_path(id), "main", &first.base_commit, ChildState::Failed, Some(&place.repo()))
@@ -930,9 +945,12 @@ mod windows {
             remove_folder(Path::new(&combine(&place.root(), "kept")));
             // The child's place written another way is still its place.
             std::fs::create_dir_all(maker.worktree_path("f7")).unwrap();
-            let f7 = PlaceChild { worktree_path: maker.worktree_path("f7").to_uppercase().replace('\\', "/"), ..failed("f7") };
+            // (In another case and with `/` only where paths ignore case: Windows.)
+            let other_way = |path: String| if cfg!(windows) { path.to_uppercase().replace('\\', "/") } else { format!("{path}/") };
+            let f7 = PlaceChild { worktree_path: other_way(maker.worktree_path("f7")), ..failed("f7") };
+            let root_written = if cfg!(windows) { format!("{}\\", place.root()) } else { format!("{}/", place.root()) };
             assert!(
-                discard(&f7, &place.repo(), &format!("{}\\", place.root())).await == ChildDiscardOutcome::Discarded
+                discard(&f7, &place.repo(), &root_written).await == ChildDiscardOutcome::Discarded
                     && !Path::new(&maker.worktree_path("f7")).exists(),
                 "the child's place written another way is still its place"
             );
@@ -943,65 +961,69 @@ mod windows {
             );
         }
 
-        // Removing a workspace: refused while it has an open child or a child worktree not cleaned up.
+        // Removing a workspace: refused while it has an open child or a child worktree not cleaned up. Windows' paths as written there;
+        // elsewhere the same folders under `/` (only Windows reads a folder in another case or with the other separator as the same).
         let paths = paths();
+        let os = |path: &str| if cfg!(windows) { path.to_string() } else { path.trim_start_matches("C:").replace('\\', "/") };
         let removal = |id: &str, parent: &str, state: ChildState, checkout: Option<&str>| PlaceChild {
             parent_session_id: parent.into(),
-            ..PlaceChild::make(id, &format!(r"C:\worktrees\{id}"), "main", &"a".repeat(40), state, checkout)
+            ..PlaceChild::make(id, &os(&format!(r"C:\worktrees\{id}")), "main", &"a".repeat(40), state, checkout)
         };
         let panes = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<HashSet<String>>();
         let refusal = |children: &[PlaceChild], pane_ids: &HashSet<String>, folder: &str, exists: &dyn Fn(&str) -> bool| {
             cleanup::workspace_removal_refusal(children.iter().map(PlaceChild::view), pane_ids, folder, &paths, exists)
         };
         let has_children = Some(DelegationReasonCode::WorkspaceHasChildren);
-        let app = Some(r"C:\work\app");
+        let (work_app, work_app_closed) = (os(r"C:\work\app"), os(r"C:\work\app\"));
+        let sub_written = if cfg!(windows) { "c:/WORK/app/sub".to_string() } else { "/work/app/sub/".to_string() };
+        let app = Some(work_app.as_str());
         let never = |_: &str| false;
         for state in
             ChildState::ALL.iter().copied().filter(|s| !matches!(s, ChildState::Failed | ChildState::Closed | ChildState::Discarded))
         {
             // By the parent's pane, the child's own pane, or the parent's checkout alone.
             assert!(
-                refusal(&[removal("c1", "p1", state, None)], &panes(&["p1"]), r"C:\work\app", &never) == has_children
-                    && refusal(&[removal("c1", "gone", state, None)], &panes(&["c1"]), r"C:\work\app", &never) == has_children
-                    && refusal(&[removal("c1", "gone", state, app)], &panes(&[]), r"C:\work\app", &never) == has_children
-                    && refusal(&[removal("c1", "gone", state, Some("c:/WORK/app/sub"))], &panes(&[]), r"C:\work\app\", &never)
-                        == has_children,
+                refusal(&[removal("c1", "p1", state, None)], &panes(&["p1"]), &work_app, &never) == has_children
+                    && refusal(&[removal("c1", "gone", state, None)], &panes(&["c1"]), &work_app, &never) == has_children
+                    && refusal(&[removal("c1", "gone", state, app)], &panes(&[]), &work_app, &never) == has_children
+                    && refusal(&[removal("c1", "gone", state, Some(&sub_written))], &panes(&[]), &work_app_closed, &never) == has_children,
                 "a workspace with an open child is refused: {state:?}"
             );
         }
-        let on_disk = |path: &str| path == r"C:\worktrees\c1";
+        let worktree_c1 = os(r"C:\worktrees\c1");
+        let on_disk = |path: &str| path == worktree_c1;
         for state in [ChildState::Closed, ChildState::Failed] {
             assert_eq!(
-                refusal(&[removal("c1", "p1", state, app)], &panes(&[]), r"C:\work\app", &on_disk),
+                refusal(&[removal("c1", "p1", state, app)], &panes(&[]), &work_app, &on_disk),
                 has_children,
                 "a child worktree not cleaned up refuses the removal"
             );
         }
         // A discarded child never counts; a cleaned one's worktree is gone.
         assert_eq!(
-            refusal(&[removal("c1", "p1", ChildState::Discarded, app)], &panes(&["p1"]), r"C:\work\app", &on_disk),
+            refusal(&[removal("c1", "p1", ChildState::Discarded, app)], &panes(&["p1"]), &work_app, &on_disk),
             None,
             "a discarded child never counts"
         );
         assert!(
-            refusal(&[removal("c1", "p1", ChildState::Closed, app)], &panes(&["p1"]), r"C:\work\app", &never).is_none()
-                && refusal(&[removal("c1", "p1", ChildState::Failed, app)], &panes(&["p1"]), r"C:\work\app", &never).is_none(),
+            refusal(&[removal("c1", "p1", ChildState::Closed, app)], &panes(&["p1"]), &work_app, &never).is_none()
+                && refusal(&[removal("c1", "p1", ChildState::Failed, app)], &panes(&["p1"]), &work_app, &never).is_none(),
             "a cleaned child's worktree is gone"
         );
         // Another workspace's children never refuse the removal.
-        let others = [
-            removal("c1", "p1", ChildState::Running, Some(r"C:\work\other")),
-            removal("c2", "p2", ChildState::Closed, Some(r"C:\work\apple")),
-        ];
+        let (other, apple) = (os(r"C:\work\other"), os(r"C:\work\apple"));
+        let others =
+            [removal("c1", "p1", ChildState::Running, Some(other.as_str())), removal("c2", "p2", ChildState::Closed, Some(apple.as_str()))];
         let always = |_: &str| true;
         assert!(
-            refusal(&others, &panes(&["p3"]), r"C:\work\app", &always).is_none()
-                && refusal(&others, &panes(&["p2"]), r"C:\work\app", &always) == has_children,
+            refusal(&others, &panes(&["p3"]), &work_app, &always).is_none()
+                && refusal(&others, &panes(&["p2"]), &work_app, &always) == has_children,
             "another workspace's children never refuse the removal"
         );
     }
 
     /// "delegation: Windows paths, line endings, long paths and folders held open" (its process-wide GIT_DIR half: tests/git_env.rs)
+    #[cfg(windows)] // Windows' paths, junctions, 8.3 names, MAX_PATH and share modes.
     #[tokio::test]
     async fn windows_paths_line_endings_long_paths_and_folders_held_open() {
         let _lane = lane::enter().await;
@@ -1446,6 +1468,7 @@ mod windows {
     // ---- DelegationAppVerification ----
 
     /// "delegation: a junction in a child worktree never reaches what it points to"
+    #[cfg(windows)] // Junctions are Windows' (`mklink /J`).
     #[tokio::test]
     async fn a_junction_in_a_child_worktree_never_reaches_what_it_points_to() {
         let _lane = lane::enter().await;
@@ -1519,6 +1542,7 @@ mod windows {
     /// Beyond C# (W7 review M1): a child's worktree folder replaced by a junction to another registered worktree. The cleanup keeps
     /// everything, the app's commit refuses it, and the discard unlinks the junction alone: the other worktree, its files, its
     /// registration and its branch stay, and the child's own registration and branch go.
+    #[cfg(windows)] // Junctions are Windows' (`mklink /J`).
     #[tokio::test]
     async fn a_worktree_folder_replaced_by_a_junction_never_reaches_what_it_points_to() {
         let _lane = lane::enter().await;
@@ -1581,6 +1605,7 @@ mod windows {
 
     /// "delegation: git ends on its deadline, and reports and the file read the Windows way" (the delegation file's half, read again
     /// while another program holds it, is W7-A's store check)
+    #[cfg(windows)] // A junction as the hooks folder and Windows' free-space reader.
     #[tokio::test]
     async fn git_ends_on_its_deadline_and_reports_and_the_file_read_the_windows_way() {
         let _lane = lane::enter().await;

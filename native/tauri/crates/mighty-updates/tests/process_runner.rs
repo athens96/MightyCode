@@ -1,7 +1,7 @@
 //! The app's runner (`HostCliRunner`, C# `CliRunner`) over the platform's processes: on every OS against `mighty_platform::fake`'s
 //! `ProcessHost` (the request it makes, the time limit, the cancel, the output cap), and on Windows end to end — the updater and both
 //! plugin readers driving the crate's stand-in CLI (`mighty-updates-fake`, copied in as claude, codex, winget and node) through the
-//! real `WindowsProcessHost`. Nothing real is started and nothing leaves the temp folders.
+//! OS's real process host (the plugin readers on the Mac too, since M-A). Nothing real is started and nothing leaves the temp folders.
 
 mod common;
 
@@ -91,10 +91,10 @@ async fn output_is_kept_to_the_cap_and_never_cut_through_a_character() {
     assert_eq!(HostCliRunner::new(host).with_output_cap(0).output_cap(), HostCliRunner::OUTPUT_CAP_BYTES, "0 is the default cap");
 }
 
-#[cfg(windows)]
-mod windows {
+mod real {
     use std::path::{Path, PathBuf};
 
+    #[cfg(windows)]
     use mighty_updates::cli_update::{CliUpdateService, strings};
     use mighty_updates::plugins::strings::{codex as codex_strings, plugin as plugin_strings};
     use mighty_updates::plugins::{ClaudePluginReader, CodexPluginReader, PluginOperations, PluginReader, status};
@@ -102,13 +102,20 @@ mod windows {
     use super::*;
 
     fn runner() -> Arc<dyn CliRunner> {
-        Arc::new(HostCliRunner::new(Arc::new(mighty_platform_windows::WindowsProcessHost::new())))
+        #[cfg(windows)]
+        let host: Arc<dyn mighty_platform::ProcessHost> = Arc::new(mighty_platform_windows::WindowsProcessHost::new());
+        #[cfg(target_os = "macos")]
+        let host = mighty_platform_macos::process_host();
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let host: Arc<dyn mighty_platform::ProcessHost> = Arc::new(mighty_platform::unsupported::Unsupported);
+        Arc::new(HostCliRunner::new(host))
     }
 
-    /// The stand-in copied in as `name` (`claude.exe`, …).
+    /// The stand-in copied in as `name` (`claude.exe`, …; without `.exe` off Windows).
     fn stand_in(folder: &Path, name: &str) -> PathBuf {
         std::fs::create_dir_all(folder).unwrap();
-        let path = folder.join(name);
+        let stem = name.strip_suffix(".exe").unwrap_or(name);
+        let path = folder.join(format!("{stem}{}", std::env::consts::EXE_SUFFIX));
         std::fs::copy(env!("CARGO_BIN_EXE_mighty-updates-fake"), &path).unwrap();
         path
     }
@@ -122,6 +129,9 @@ mod windows {
         std::fs::read_to_string(home.join("fake-state").join("calls.txt")).unwrap_or_default().lines().map(str::to_string).collect()
     }
 
+    /// Windows only: the installs it finds and updates (a native claude.exe, npm under AppData, winget) are Windows'; the Mac's
+    /// installers (Homebrew) are M-J's.
+    #[cfg(windows)]
     #[tokio::test(flavor = "multi_thread")]
     async fn claude_updates_itself_through_the_real_process_layer() {
         korean();
@@ -173,6 +183,9 @@ mod windows {
         let _ = std::fs::remove_dir_all(home);
     }
 
+    /// Windows only: the installs it finds and updates (a native claude.exe, npm under AppData, winget) are Windows'; the Mac's
+    /// installers (Homebrew) are M-J's.
+    #[cfg(windows)]
     #[tokio::test(flavor = "multi_thread")]
     async fn npm_and_winget_installs_update_through_their_own_installer() {
         korean();

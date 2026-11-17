@@ -21,6 +21,10 @@ fn folder(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("mighty-fake-claude-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).unwrap();
+    // The Mac's temp folder is under `/var`, which the fake's own working folder reads as `/private/var`: its scripts and transcripts
+    // are keyed by that name.
+    #[cfg(unix)]
+    let path = std::fs::canonicalize(&path).unwrap();
     path
 }
 
@@ -108,8 +112,8 @@ fn the_fake_plays_its_script_over_stream_json() {
 }
 
 /// The delegation server of `--mcp-config` is started with the fake's own environment (the pane's token and pipe) and a scripted
-/// call reaches the app's listener; its answer is the tool result.
-#[cfg(windows)]
+/// call reaches the app's listener; its answer is the tool result. The fake Claude starts its MCP server through the platform's process
+/// host, over the OS's transport.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_fake_calls_the_delegation_server_on_the_panes_token() {
     use std::sync::Arc;
@@ -128,7 +132,7 @@ async fn the_fake_calls_the_delegation_server_on_the_panes_token() {
     let root = folder("call");
     let canned = Arc::new(Canned::new(Duration::ZERO));
     let calls = canned.calls.clone();
-    let pipe = AgentIo::start(Arc::new(mighty_platform_windows::NamedPipeListener::new()), Arc::new(Nothing)).unwrap();
+    let pipe = AgentIo::start(delegation_io::os_transport().0, Arc::new(Nothing)).unwrap();
     let binding = pipe.bind("parent", "ws", &temp(), "claude", &executable()).unwrap();
     binding.connect_delegation(Some(canned), true, "");
     let mut arguments = vec![];
@@ -167,7 +171,7 @@ async fn the_fake_calls_the_delegation_server_on_the_panes_token() {
     });
     let (code, messages) = tokio::time::timeout(Duration::from_secs(60), finished).await.unwrap().unwrap();
     assert_eq!(code, Some(0));
-    let init = messages.iter().find(|m| m["subtype"] == "init").unwrap();
+    let init = messages.iter().find(|m| m["subtype"] == "init").unwrap_or_else(|| panic!("no init message: {messages:?}"));
     assert!(init["tools"].as_array().unwrap().iter().any(|t| t == "mcp__mighty-delegation__delegate"), "{init}");
     let result = messages.iter().find(|m| m["type"] == "user").unwrap();
     assert_eq!(result["message"]["content"][0]["is_error"], false, "{result}");

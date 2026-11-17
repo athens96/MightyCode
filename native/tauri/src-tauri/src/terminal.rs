@@ -167,6 +167,11 @@ struct HostEvents {
 
 impl PaneEvents for HostEvents {
     fn post(&self, pane: &str, message: &TerminalMessage) {
+        // The Mac feed (M-D): a pane drawn by a native view (Ghostty) gets its output, reset, theme and font there; Windows never
+        // opens one, so everything goes to the page's xterm as before.
+        if crate::surface_terminal::post(pane, message) {
+            return;
+        }
         let Some(host) = self.host.upgrade() else { return };
         let json = format!(
             "{{\"kind\":\"terminal\",\"paneId\":{},\"message\":{}}}",
@@ -370,6 +375,18 @@ impl Terminals {
         });
         host.app.manage(terminals.clone());
         host.log.line(&format!("terminals: {} engine", terminals.ports.engine));
+        // A native terminal view's events are its pane's `terminalMessage`s, as the page's xterm sends them (M-D).
+        let to_pane = Arc::downgrade(&terminals);
+        crate::surface_terminal::natives().connect(Arc::new(move |pane: String, message: Value| {
+            let terminals = to_pane.clone();
+            Box::pin(async move {
+                let Some(terminals) = terminals.upgrade() else { return };
+                let Some(host) = terminals.host.upgrade() else { return };
+                if let Ok(pane) = terminals.pane(&host, Some(&pane)) {
+                    pane.handle_message(&message).await;
+                }
+            })
+        }));
         let clock = Arc::downgrade(&terminals);
         std::thread::Builder::new()
             .name("terminal-clock".into())
@@ -501,6 +518,7 @@ impl Terminals {
             ids.iter().filter_map(|id| panes.remove(id)).collect()
         };
         for pane in gone {
+            crate::surface_terminal::natives().forget(pane.id());
             self.close_later(async move { pane.dispose().await });
         }
         let ended: Vec<Arc<AgentTerminal>> = {
@@ -781,6 +799,7 @@ impl Terminals {
     /// The smoke's pane closed: its terminal ends at once (as the pane's close would end it); whether it was there.
     pub async fn smoke_close(&self, pane: &str) -> bool {
         let terminal = lock(&self.panes).remove(pane);
+        crate::surface_terminal::natives().forget(pane);
         match terminal {
             Some(terminal) => {
                 let _ = tokio::time::timeout(Duration::from_secs(20), terminal.dispose()).await;

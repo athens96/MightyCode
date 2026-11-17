@@ -578,12 +578,12 @@ async fn status_line_runner_feeds_stdin_captures_output_and_colour() {
     let request = processes.spawned()[0].clone();
     assert_eq!(request.env.get("CLAUDE_CODE_STATUSLINE_HOST").map(String::as_str), Some("mightyclaude"));
     assert!(request.cwd == cwd && processes.closed(0), "the command runs in the pane's folder and is closed");
-    #[cfg(windows)]
     {
-        let host = mighty_platform_windows::WindowsProcessHost::new();
+        let host = common::processes();
+        let host = host.as_ref();
         let fake = common::fake_cli().to_string_lossy().into_owned();
         let real =
-            run::run_command(&host, &fake, &["--status-echo".into()], &cwd, &ctx, run::DEFAULT_TIMEOUT, Cancel::never()).await.unwrap();
+            run::run_command(host, &fake, &["--status-echo".into()], &cwd, &ctx, run::DEFAULT_TIMEOUT, Cancel::never()).await.unwrap();
         assert!(!real.timed_out && real.exit_code == 0, "a short command must not time out: {real:?}");
         let first = &real.lines[0];
         assert!(
@@ -613,13 +613,13 @@ async fn status_line_runner_enforces_timeout() {
         .unwrap();
     assert!(result.timed_out && result.exit_code == -1 && result.error_text == Some(strings::error_timeout()));
     assert!(started.elapsed() < Duration::from_secs(4) && processes.closed(0), "killed and closed well before the command would end");
-    #[cfg(windows)]
     {
-        let host = mighty_platform_windows::WindowsProcessHost::new();
+        let host = common::processes();
+        let host = host.as_ref();
         let fake = common::fake_cli().to_string_lossy().into_owned();
         let started = Instant::now();
         let real = run::run_command(
-            &host,
+            host,
             &fake,
             &["--sleep".into(), "10".into()],
             &cwd,
@@ -966,9 +966,9 @@ async fn status_line_real_process_cancellation_drains_stderr() {
     assert_eq!(tokio::time::timeout(Duration::from_secs(5), run).await.unwrap(), Err(Cancelled), "the cancellation is not ignored");
     assert!(started.elapsed() < Duration::from_secs(5));
     canceller.await.unwrap();
-    #[cfg(windows)]
     {
-        let host = mighty_platform_windows::WindowsProcessHost::new();
+        let host = common::processes();
+        let host = host.as_ref();
         let fake = common::fake_cli().to_string_lossy().into_owned();
         let ctx = sid_context("shutdown-fixture", Some(&cwd.to_string_lossy()));
         let (cancel, fired) = watch::channel(false);
@@ -978,20 +978,13 @@ async fn status_line_real_process_cancellation_drains_stderr() {
         });
         let started = Instant::now();
         let outcome =
-            run::run_command(&host, &fake, &["--sleep".into(), "60".into()], &cwd, &ctx, Duration::from_secs(30), Cancel::new(fired)).await;
+            run::run_command(host, &fake, &["--sleep".into(), "60".into()], &cwd, &ctx, Duration::from_secs(30), Cancel::new(fired)).await;
         assert!(outcome == Err(Cancelled) && started.elapsed() < Duration::from_secs(5), "closing ends the owned process tree promptly");
         canceller.await.unwrap();
-        let noisy = run::run_command(
-            &host,
-            &fake,
-            &["--noisy-stderr".into(), "12000".into()],
-            &cwd,
-            &ctx,
-            Duration::from_secs(10),
-            Cancel::never(),
-        )
-        .await
-        .unwrap();
+        let noisy =
+            run::run_command(host, &fake, &["--noisy-stderr".into(), "12000".into()], &cwd, &ctx, Duration::from_secs(10), Cancel::never())
+                .await
+                .unwrap();
         assert!(!noisy.timed_out && noisy.exit_code == 0, "stderr drains past the pipe's capacity: {noisy:?}");
         assert_eq!(noisy.lines[0][0].text, "done");
     }

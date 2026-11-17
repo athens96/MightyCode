@@ -1,11 +1,11 @@
 //! `DelegationLaunch` (C# MightyCode.Core.Tests/DelegationScenarioVerification.cs:13-147): one launch of the app, headless — a real
 //! `RunService` on a profile in a temp folder (its state saved and loaded by mighty-core's store), the desktop service's delegation
-//! (`app::DelegationApp`) as its hooks, the real pipe listener (`AgentIo` over the Windows named pipe) its runs reach the delegation
+//! (`app::DelegationApp`) as its hooks, the OS's real listener (`AgentIo` over Windows' named pipe or the Mac's Unix socket) its runs reach the delegation
 //! server's calls back through, Claude as `mighty-delegation-fake --fake-claude <root>` and Codex as `mighty-delegation-fake-cli
 //! --fake-cli codex`. The switch and the worktree root are injected: nothing here reads the registry or touches
 //! `%USERPROFILE%\.mightycode`. It records what the checks judge: each pane's runs in order with how they ended and what they were
-//! given, and every permission card. Windows only while the transport is (W7 plan D4). Owner: W7-D.
-#![cfg(windows)]
+//! given, and every permission card. Git, the fake Claude and its MCP server run through the platform's process host (Windows', or
+//! M-A's on the Mac). Owner: W7-D.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -33,6 +33,24 @@ use mighty_run::model::{CliCommand, StartRunRequest};
 use mighty_run::providers::{Finder, ProviderCatalog};
 use mighty_run::service::{RunService, RunServiceOptions};
 use serde_json::{Value, json};
+
+/// The OS's own Agent IO listener: Windows' named pipe, the Mac's Unix socket in the profile (M-C).
+#[cfg(windows)]
+fn listener(_profile: &Path) -> Arc<dyn mighty_platform::AgentIoListener> {
+    Arc::new(mighty_platform_windows::NamedPipeListener::new())
+}
+
+/// The OS's own Agent IO listener: Windows' named pipe, the Mac's Unix socket in the profile (M-C).
+#[cfg(target_os = "macos")]
+fn listener(profile: &Path) -> Arc<dyn mighty_platform::AgentIoListener> {
+    mighty_platform_macos::agent_io::agent_io_listener(profile)
+}
+
+/// No Agent IO transport elsewhere.
+#[cfg(not(any(windows, target_os = "macos")))]
+fn listener(_profile: &Path) -> Arc<dyn mighty_platform::AgentIoListener> {
+    Arc::new(mighty_platform::unsupported::Unsupported)
+}
 
 pub const PARENT: &str = "parent";
 
@@ -143,7 +161,7 @@ impl DelegationLaunch {
             Arc::new(mighty_platform::fake::FakeShellEnvironment::new(std::env::vars().collect())),
             Some(finder),
         ));
-        let io = AgentIo::start(Arc::new(mighty_platform_windows::NamedPipeListener::new()), Arc::new(NoTerminal)).unwrap();
+        let io = AgentIo::start(listener(profile), Arc::new(NoTerminal)).unwrap();
         let switch = Arc::new(AtomicBool::new(switch_on));
         let app = DelegationApp::new(tokio::runtime::Handle::current(), window);
         let (link_app, link_switch) = (Arc::downgrade(&app), switch.clone());

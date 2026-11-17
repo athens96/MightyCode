@@ -259,7 +259,8 @@ pub fn companion(host: &Arc<Host>, ui: &mut Ui) -> El {
         Box::new(move |on| change(&to, move |p| p.reduced_motion = on, false)),
     );
     // One switch for the one setting: the section's own label; it writes the companion's file and the app's setting.
-    let label = locale.get("windows.notifications.toggleLabel");
+    let label =
+        mighty_core::settings_words::text(&locale, crate::platform::words(), "windows.notifications.toggleLabel").unwrap_or_default();
     let on = host.view().snapshot.completion_notifications_enabled;
     let to = host.clone();
     let toggle = ui.settings_switch(&label, on, Some("settings-completion-notifications"), move |on| {
@@ -273,7 +274,7 @@ pub fn companion(host: &Arc<Host>, ui: &mut Ui) -> El {
     let open = ui.settings_push(
         ui.button(locale.get("windows.notifications.settingsButton"), move || {
             if to.smoke.is_none() {
-                let _ = crate::platform::open_url("ms-settings:notifications");
+                let _ = crate::platform::open_notification_settings();
             }
         }),
         ControlSize::Small,

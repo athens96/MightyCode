@@ -198,3 +198,26 @@ pub fn tree_mismatch(expected: &Path, actual: &Path) -> io::Result<Option<String
     }
     Ok(want.iter().find(|(file, size)| have.get(file.as_str()) != Some(size)).map(|(file, _)| format!("size differs for {file}")))
 }
+
+/// Swift `AppUpdateAuto.staleStagedFolders(names, runningVersion:)` (AppUpdateAutoSteps.swift:72, M-H): of the folders under `updates/`,
+/// every version not newer than the running one (installed already by a helper cut off after the swap, or older); names that are not
+/// versions are left alone.
+pub fn stale_staged_folders(names: &[String], running_version: &str) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| super::version::normalized(name).is_some() && !super::version::is_newer(name, running_version))
+        .cloned()
+        .collect()
+}
+
+/// The Mac's housekeeping at start (Swift `discardStaleAppUpdates`): each [`stale_staged_folders`] folder under `updates` deleted, best
+/// effort; how many went.
+pub fn discard_stale_updates(updates: &Path, running_version: &str) -> usize {
+    let names: Vec<String> = std::fs::read_dir(updates)
+        .map(|entries| entries.flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    let stale = stale_staged_folders(&names, running_version);
+    // `FileManager.removeItem`: a folder or a file.
+    let remove = |path: PathBuf| std::fs::remove_dir_all(&path).or_else(|_| std::fs::remove_file(&path)).is_ok();
+    stale.iter().filter(|name| remove(updates.join(name))).count()
+}
