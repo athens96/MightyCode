@@ -27,8 +27,8 @@ jobs:
   tauri:
     name: Tauri ${{ matrix.os }}
     runs-on: ${{ matrix.runner }}
-    # Mac stage Step 0: the Mac leg's smoke (up to its own limit, 900 s on the Mac since the integration) made the job longer.
-    timeout-minutes: 75
+    # Mac stage Step 0: the Mac leg's smoke (up to its own limit, 400 s on the Mac since the integration) made the job longer.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -95,9 +95,26 @@ jobs:
         working-directory: native/tauri
         # Every test target runs even after one fails, so one red run names every failure (a failing target used to hide the
         # helper e2e of src-tauri that comes after it).
+        env:
+          # Mac stage (M-C's done-when): the delegation scenarios S1–S3 leave their records here for the record script below.
+          MIGHTY_DELEGATION_RECORD_EXPORT: ${{ runner.temp }}/delegation-records
         run: |
           cargo test --workspace --no-fail-fast
           if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
+      - name: The delegation record script judges its fixtures and the Rust scenarios' S1–S3 records (Mac)
+        # As native-macos.yml judges Swift's S1 and S2: read-only, passed on each record the Rust scenarios left.
+        if: (success() || failure()) && matrix.os == 'macos'
+        shell: bash
+        run: |
+          python3 scripts/test_delegation_record.py -v
+          status=0
+          for record in s1 s2 s3; do
+            folder="$RUNNER_TEMP/delegation-records/$record"
+            echo "::group::Delegation record $record"
+            python3 scripts/delegation-record.py --profile "$folder/profile" --repo "$folder/repo" --claude-dir "$folder/claude" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
       - name: The Mac's stores and update against the Swift app's own code (tools/parity-mac)
         # Mac stage M-B: Swift writes the state corpus and the pairing files with MightyCore's own code; Rust's tests load and save
         # them (MIGHTY_PARITY_MAC=require) and leave theirs; Swift reads Rust's back and wants every value it read from its own.
@@ -153,6 +170,40 @@ jobs:
         run: |
           npm run tauri build -- --debug
           if ($LASTEXITCODE -ne 0) { throw 'tauri build failed' }
+      - name: The Rust exe's two MCP servers list their tools headlessly (Mac)
+        # native-macos.yml's check of the Swift app, against the Rust exe: --agent-io-mcp is mighty-terminal with its four tools,
+        # --agent-delegation-mcp mighty-delegation with its six.
+        if: matrix.os == 'macos'
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          app = "native/tauri/target/debug/MightyCode"
+          env = {k: v for k, v in os.environ.items() if not k.startswith("MIGHTY_")}
+          requests = [
+              {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
+              {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+          ]
+          def ask(mode):
+              run = subprocess.run([app, mode], input="".join(json.dumps(r) + "\n" for r in requests),
+                                   capture_output=True, text=True, timeout=60, env=env)
+              answers = {a.get("id"): a.get("result", {}) for a in map(json.loads, filter(None, run.stdout.splitlines()))}
+              return run.returncode, answers.get(1, {}).get("serverInfo", {}).get("name"), [t.get("name") for t in answers.get(2, {}).get("tools", [])]
+          terminal = ask("--agent-io-mcp")
+          delegation = ask("--agent-delegation-mcp")
+          print(json.dumps({"terminal": terminal, "delegation": delegation}))
+          four = ["run_in_terminal", "read_latest_output", "stop", "open_url"]
+          six = ["delegate", "list_children", "child_status", "merge", "follow_up", "discard"]
+          problems = []
+          if terminal != (0, "mighty-terminal", four):
+              problems.append(f"--agent-io-mcp answered {terminal}")
+          if delegation != (0, "mighty-delegation", six):
+              problems.append(f"--agent-delegation-mcp answered {delegation}")
+          for problem in problems:
+              print(f"::error title=Rust MCP servers (Mac)::{problem}", flush=True)
+          sys.exit(1 if problems else 0)
+          PY
       - name: Smoke against the seeded demo profile
         if: matrix.os == 'windows'
         # W9 plan R13: the smoke's own limit grew by 45 s (AppUpdate, Styles, Mirror, Help, PaneWorktree stages).
@@ -160,8 +211,8 @@ jobs:
         run: ./native/tauri/scripts/smoke.ps1 -Out "$env:RUNNER_TEMP/tauri-smoke"
       - name: Smoke on the Mac against the seeded demo profile (WebKit; the steps of smoke.rs' MAC_PENDING_STEPS may fail)
         if: matrix.os == 'macos'
-        # The smoke's own limit on the Mac (900 s with the stand-in CLI, smoke.rs), the seed and the stand-in's build.
-        timeout-minutes: 20
+        # The smoke's own limit on the Mac (400 s with the stand-in CLI, platform.rs), the seed and the stand-in's build.
+        timeout-minutes: 12
         run: ./native/tauri/scripts/smoke.ps1 -Out "$env:RUNNER_TEMP/tauri-smoke"
       # M-E: the browser pane with CEF (plan D3): the debug app in a bundle with CEF 152, the Swift app's C bridge and the four helpers
       # (spikes/mac/cef/assemble.sh), against a seeded profile with the browser engine on, read-only, without the run steps.

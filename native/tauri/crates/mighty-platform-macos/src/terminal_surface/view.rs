@@ -16,14 +16,12 @@ use std::sync::atomic::Ordering;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
-use objc2::{AnyThread, ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
+use objc2::{AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSCursor, NSEvent, NSEventModifierFlags, NSEventType, NSMenu, NSMenuItem, NSResponder, NSTextInputClient,
     NSTrackingArea, NSTrackingAreaOptions, NSView,
 };
-use objc2_foundation::{
-    NSArray, NSAttributedString, NSObjectProtocol, NSPoint, NSRange, NSRangePointer, NSRect, NSSize, NSString, NSUInteger,
-};
+use objc2_foundation::{NSArray, NSAttributedString, NSPoint, NSRange, NSRangePointer, NSRect, NSSize, NSString, NSUInteger};
 
 use mighty_platform::TerminalEvent;
 
@@ -911,11 +909,6 @@ impl TerminalView {
             }
             lines.join("\n")
         }
-    }
-
-    /// Whether `view` is a terminal view (the page's keyboard must go elsewhere when one hides).
-    pub fn is_terminal(view: &NSView) -> bool {
-        view.isKindOfClass(TerminalView::class())
     }
 }
 

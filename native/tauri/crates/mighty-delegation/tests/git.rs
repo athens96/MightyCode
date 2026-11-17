@@ -198,6 +198,7 @@ mod checks {
         ] {
             // Device names are refused on Windows only (`is_safe_session_id`): a folder named so is plain elsewhere.
             if !cfg!(windows) && ["nul", "CON", "com1.txt", "LPT9"].contains(&unsafe_id) {
+                assert!(is_safe_session_id(unsafe_id), "{unsafe_id} is a plain name off Windows");
                 continue;
             }
             assert!(

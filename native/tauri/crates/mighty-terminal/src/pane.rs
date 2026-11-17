@@ -609,8 +609,15 @@ impl TerminalPane {
             // A resize that came while the shell was starting had no terminal to reach: the grid it left is the one to start at
             // (applied under the lock that makes the terminal reachable, so no later resize is overtaken).
             let latest = PtySize { columns: state.columns as u16, rows: state.rows as u16 };
-            if latest != size {
-                control.resize(latest).map_err(|error| error.to_string())?;
+            if latest != size
+                && let Err(error) = control.resize(latest)
+            {
+                // The terminal it opened goes, as the closed path's does: nothing is left running for a pane that failed to start.
+                drop(state);
+                tokio::spawn(async move {
+                    let _ = control.close().await;
+                });
+                return Err(error.to_string());
             }
             state.generation += 1;
             let generation = state.generation;

@@ -219,9 +219,12 @@ pub const NATIVE_PROBE: &str = r#"(async () => {
     const sttyFirst = last(first, /MIGHTY_GRID (\d+) (\d+)/g);
     report.sttyGrid = sttyFirst ? [Number(sttyFirst[1]), Number(sttyFirst[2])] : null;
     report.grid = await gridOf();
-    // A grid that changed after `stty` ran (the view's last resize of the layout above) is asked again, a few times at most: the
-    // terminal follows the view's grid, it does not lead it.
+    // A grid that changed after `stty` ran (the view's last resize of the layout above) is asked again: once the layout has settled
+    // one more answer must agree (the terminal follows the view's grid). The count is kept, and more than one re-ask fails the check,
+    // so a terminal that lags the view does not pass by being asked until it catches up.
+    report.sttyRetries = 0;
     for (let again = 0; again < 5 && !same(report.sttyGrid, report.grid); again += 1) {
+      report.sttyRetries = again + 1;
       await new Promise((r) => setTimeout(r, 500));
       await type("printf 'MIGHTY_GRID %s\\n' \"$(/bin/stty size)\"");
       await seen('MIGHTY_GRID ', 3000);
@@ -231,7 +234,7 @@ pub const NATIVE_PROBE: &str = r#"(async () => {
       report.grid = await gridOf();
     }
     report.shellPid = last(first, /MIGHTY_PID (\d+)/g)?.[1] ?? null;
-    report.terminalTty = report.ptyOk && !!report.tty && same(report.sttyGrid, report.grid);
+    report.terminalTty = report.ptyOk && !!report.tty && same(report.sttyGrid, report.grid) && report.sttyRetries <= 1;
 
     await type("printf '%s%s\\n' '" + head + "' '" + tail + "'");
     report.echoed = !!(await until(async () => ((await state()).diagnostics?.tail ?? '').includes(marker), 8000));

@@ -30,7 +30,7 @@
 //!
 //! The host adds whether its own state took the click, the calls it saw and the methods it answered "unimplemented" (only those of
 //! [`ALLOWED_UNIMPLEMENTED`] pass, `unimplementedAllowed`), and writes `smoke-result.json`; with `--smoke-exit` the app then quits, 0
-//! when the smoke passed, else 1. A smoke that has no result in time (495 s, 645 s with the stand-in CLI and 900 s on the Mac, 525 s
+//! when the smoke passed, else 1. A smoke that has no result in time (495 s, 645 s with the stand-in CLI and 400 s on the Mac, 525 s
 //! with the real one) fails.
 
 use std::collections::BTreeMap;
@@ -493,9 +493,7 @@ impl Smoke {
             // The frame, browser, gitCreate and reload steps add up to two minutes, the terminal and history steps a minute each.
             // The W6 steps a minute more, the W8 steps (remote, companion) another, and W9's (plan R13) 45 s.
             Mode::Page => 495,
-            // The Mac's run is longer (WebKit, Ghostty, the native panels and its own help capture; plan §4).
-            Mode::FakeClaude if cfg!(target_os = "macos") => 900,
-            Mode::FakeClaude => 645,
+            Mode::FakeClaude => crate::platform::smoke_fake_claude_seconds(),
             Mode::RealClaude => 525,
         })
     }
@@ -1090,7 +1088,7 @@ impl Smoke {
         let passed = checks.as_object().is_some_and(|c| c.values().all(|v| v == &Value::Bool(true)));
         // The Mac's gate while its parts are written: every check outside MAC_PENDING_STEPS passed (Windows: `passed` alone).
         let failed_outside_pending = failed_outside(&checks, &steps, &MAC_PENDING_STEPS);
-        let mac = cfg!(target_os = "macos");
+        let mac = crate::platform::smoke_gate_skips_pending();
         let exit_passed = if mac { failed_outside_pending.is_empty() } else { passed };
         let mut result = json!({
             "passed": passed,

@@ -37,7 +37,7 @@ pub fn surfaces(window: tauri::Window, csharp_web_data: bool) -> Arc<dyn Surface
 }
 
 /// W9-C: the main window whose session messages `Platform::session` reports (Windows subclasses it; call on the window's thread). The
-/// Mac's session port answers `Unsupported` until its stage, so there is nothing to hand it.
+/// Mac's session port watches `NSWorkspace`'s notifications itself (M-F), so there is nothing to hand it.
 pub fn watch_session(window: &tauri::Window) -> Result<()> {
     #[cfg(windows)]
     return os::session::watch_window(window);
@@ -90,6 +90,12 @@ pub fn disk_space() -> Arc<dyn mighty_platform::DiskSpace> {
 /// The process host alone, for the exe's `--fake-claude` mode, which serves before any profile is read (main.rs).
 pub fn process_host() -> Arc<dyn mighty_platform::ProcessHost> {
     os::process_host()
+}
+
+/// The Mac's PTY host alone, for the checks that type into a real shell (sign_in_pane.rs).
+#[cfg(all(test, target_os = "macos"))]
+pub fn pty_host() -> Arc<dyn mighty_platform::PtyHost> {
+    os::pty::pty_host()
 }
 
 /// The update installer alone (the mutex, the process wait, the fresh environment, the uninstall entry), for the exe's
@@ -334,6 +340,38 @@ pub fn open_url(url: &str) -> std::result::Result<(), String> {
     os::open_url(url)
 }
 
+/// Whether another copy of the app (`identifier`) runs (Mac integration review 17): on the Mac the Swift 0.4.x app and this one share
+/// their bundle identifier and every store, so a run that would write stays read-only while another runs. Windows answers false:
+/// its C# and Rust apps keep their own single-instance rules, unchanged here.
+pub fn another_instance_running(identifier: &str) -> bool {
+    #[cfg(windows)]
+    {
+        let _ = identifier;
+        false
+    }
+    #[cfg(target_os = "macos")]
+    {
+        os::session::another_instance_running(identifier)
+    }
+}
+
+/// The OS's notification settings (the companion settings' button): Windows' Settings › Notifications, the Mac's System Settings ›
+/// Notifications (Swift's address).
+pub fn open_notification_settings() -> std::result::Result<(), String> {
+    #[cfg(windows)]
+    return os::open_url("ms-settings:notifications");
+    #[cfg(target_os = "macos")]
+    return os::notify::open_notification_settings();
+}
+
+/// The settings' words: this OS's app's (C#'s on Windows, Swift's on the Mac; mighty-core `settings_words`).
+pub fn words() -> mighty_core::app_update_view::Words {
+    match profile().os {
+        mighty_platform::Os::Windows => mighty_core::app_update_view::Words::Windows,
+        mighty_platform::Os::Macos => mighty_core::app_update_view::Words::Mac,
+    }
+}
+
 /// The user's number format (C# `CultureInfo.CurrentCulture`'s group separator and sizes), when the OS says.
 pub fn number_grouping() -> Option<(String, Vec<usize>)> {
     os::number_grouping()
@@ -435,6 +473,29 @@ impl mighty_core::browser::BrowserInstaller for BrowserInstaller {
     fn run(&self, path: &std::path::Path) -> std::result::Result<i32, String> {
         os::run_installer(path)
     }
+}
+
+/// The smoke's own limit with the stand-in CLI: the Mac's run (WebKit, Ghostty, the native panels, its own help capture) took about
+/// 120–150 s on the runner at the Mac stage's integration, given room to about 400 s; Windows' 645 s (W9 plan R13).
+pub fn smoke_fake_claude_seconds() -> u64 {
+    if cfg!(target_os = "macos") { 400 } else { 645 }
+}
+
+/// A folder as the processes started in it read their own working folder: the Mac's temporary `/var/…` is `/private/var/…` there
+/// (canonical); Windows' as it is (canonicalizing would add the verbatim prefix).
+pub fn as_processes_see(folder: &std::path::Path) -> std::path::PathBuf {
+    if cfg!(windows) { folder.to_path_buf() } else { std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf()) }
+}
+
+/// Whether the smoke's gate is every check outside smoke.rs' `MAC_PENDING_STEPS` (the Mac) rather than every check (Windows).
+pub fn smoke_gate_skips_pending() -> bool {
+    cfg!(target_os = "macos")
+}
+
+/// Whether the page's webview runs Tauri's initialization scripts in its frames too (WebView2 through wry, whatever "main frame only"
+/// says); WKWebView keeps them in the main frame. Either way the host's nonce is defined only in the top frame (main.rs `HostNonce`).
+pub fn frames_get_init_scripts() -> bool {
+    cfg!(windows)
 }
 
 // ── M-F: the Mac's menu bar, input method and pet panel (menu.rs, smoke_companion.rs). Windows has none of them. ──

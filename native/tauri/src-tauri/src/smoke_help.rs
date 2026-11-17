@@ -120,21 +120,25 @@ fn screen_now(host: &Host) -> Option<(u32, u32)> {
 /// The earlier steps' workspaces (the browser, terminal, files and history steps') live in memory only, never approved by a folder
 /// selection, so every save since they were added failed on them and the shots showed "Save failed: Only paths approved via folder
 /// selection may be saved." (both OSes; the Mac's help shot showed it first). Those steps are done before this one: every workspace the
-/// store never approved leaves with its panes, and the banner with them.
-fn leave_finished_steps(host: &Arc<Host>) -> Result<(), String> {
-    let finished: Vec<String> = host.current().workspaces().iter().filter(|w| !host.approves(w)).map(|w| w.id().to_string()).collect();
-    if finished.is_empty() {
-        host.view().error = None;
-        return Ok(());
-    }
+/// store never approved leaves, its panes closed through the app's own close (their runs, terminals and views end), and the banner
+/// with them. A remote mirror's workspace is its host's and stays (frame.rs `remove_workspace`'s rule).
+async fn leave_finished_steps(host: &Arc<Host>) -> Result<(), String> {
+    let finished: Vec<String> = {
+        let snapshot = host.current();
+        snapshot
+            .workspaces()
+            .iter()
+            .filter(|w| !host.approves(w) && !crate::mirror::is_mirror_workspace(&snapshot, w.id()))
+            .map(|w| w.id().to_string())
+            .collect()
+    };
     let gone = |id: &str| finished.iter().any(|f| f == id);
+    let panes: Vec<String> = host.current().sessions().iter().filter(|p| gone(p.workspace_id())).map(|p| p.id().to_string()).collect();
+    for pane in panes {
+        crate::frame::close_session(host, &pane).await?;
+    }
     host.view().update(|state| {
-        let left: Vec<String> = state.sessions().iter().filter(|p| gone(p.workspace_id())).map(|p| p.id().to_string()).collect();
         state.workspaces_mut().retain(|w| !gone(w.id()));
-        state.sessions_mut().retain(|p| !gone(p.workspace_id()));
-        if state.active_session_id.as_ref().is_some_and(|id| left.contains(id)) {
-            state.active_session_id = None;
-        }
         if let Some(expanded) = state.expanded_workspace_ids.as_mut() {
             expanded.retain(|id| !gone(id));
         }
@@ -154,7 +158,7 @@ async fn run(host: &Arc<Host>) -> Result<Value, String> {
     let language = host.locale.language().to_string();
     let output = output_folder(host, &language);
     std::fs::create_dir_all(&output).map_err(|e| e.to_string())?;
-    leave_finished_steps(host)?;
+    leave_finished_steps(host).await?;
     let before = Window::now(host);
     // No saved theme reads as dark (store's saved theme, main.rs's window colour).
     let theme = if host.current().theme() == "light" { "light" } else { "dark" }.to_string();

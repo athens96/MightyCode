@@ -1831,9 +1831,14 @@ mod checks {
                     && fixture.file().children[0].state == ChildState::Reported,
                 "nested after the confirmation named none: nothing is removed, and the answer names it"
             );
-            // Written another way: in another case only where paths ignore case (Windows).
-            let written =
-                if cfg!(windows) { canonical.canonical(&nested).to_uppercase().replace('\\', "/") } else { canonical.canonical(&nested) };
+            // Written another way: in another case and with `/` on Windows (which ignores case); on the Mac through the `/var` alias of
+            // its canonical `/private/var` temporary folder.
+            let written = if cfg!(windows) {
+                canonical.canonical(&nested).to_uppercase().replace('\\', "/")
+            } else {
+                let real = canonical.canonical(&nested);
+                real.strip_prefix("/private").map(str::to_string).unwrap_or(real)
+            };
             assert!(
                 coordinator.discard_from_card("c1", Some(&[written])).await == ChildCardDiscardOutcome::Discarded
                     && !Path::new(&child.worktree_path).exists()

@@ -4,7 +4,7 @@
 //!
 //! W9 (plan §0d, owner W9-B): the port grows to the helper's seams, the machine half of C#'s `AppUpdateReplacement`,
 //! `InstallerRegistration`, `UserEnvironment` and `RenamedInstall`; mighty-updates' `app_update` holds the decisions. Windows writes
-//! them (`mighty-platform-windows` `update.rs`); the Mac answers `Unsupported` until its stage.
+//! them (`mighty-platform-windows` `update.rs`); the Mac's are M-H's (`mighty-platform-macos` `update.rs`).
 //!
 //! M-H (the Mac stage) refines the contract with defaulted methods (the four below, and after the review the code signature's two and
 //! `make_private`) the Mac's update needs and Windows never calls

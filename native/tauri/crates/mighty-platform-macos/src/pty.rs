@@ -11,8 +11,9 @@
 //! (`tcgetpgrp`, Swift `ShellActivity.isBusy`), which needs no pid file now that the app owns the PTY (Swift's
 //! `ShellProcessProbe.findShellPid` read one because Ghostty owned it).
 //!
-//! The terminal's environment is the request's with `TERM=xterm-256color` and `COLORTERM=truecolor` (Swift's agent pane). M-D adds
-//! what Ghostty's own shell integration needs (`TERM_PROGRAM`, zsh's `ZDOTDIR`) with its resources.
+//! The terminal's environment is the request's with `TERM=xterm-256color` and `COLORTERM=truecolor` (Swift's agent pane). What
+//! Ghostty's own shell integration needs (`TERM_PROGRAM`, zsh's `ZDOTDIR` pointing into its resources) waits for M-I, which bundles
+//! those resources with the app.
 
 use std::ffi::CString;
 use std::io;

@@ -170,6 +170,41 @@ mod tests {
         assert_eq!(title(&launch(&["claude", "/setup-bedrock"], &[]), &l), "Claude Bedrock setup");
     }
 
+    /// Mac integration review 16: the typed line through M-A's real PTY host, as the sign-in pane types it into a zsh pane (Swift
+    /// `startCLILogin` runs its `loginCommand` there): every word arrives as given, the quoted ones included.
+    #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_typed_line_reaches_a_real_shell_word_for_word() {
+        let words = ["it's", "~x", "=y", "%1", "a b", "a=b"];
+        let mut argv = vec!["/usr/bin/printf".to_string(), "[%s]".to_string()];
+        argv.extend(words.iter().map(|w| w.to_string()));
+        let line = command_line(&TerminalLaunch { argv, ..TerminalLaunch::default() }).unwrap();
+        let host = crate::platform::pty_host();
+        let shell = std::path::PathBuf::from("/bin/zsh");
+        let request = mighty_platform::PtyRequest {
+            args: host.shell_arguments(&shell, None, true),
+            program: shell,
+            cwd: std::fs::canonicalize(std::env::temp_dir()).unwrap(),
+            env: BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string()), ("TERM".to_string(), "xterm-256color".to_string())]),
+            size: mighty_platform::PtySize { columns: 200, rows: 24 },
+        };
+        let mut session = host.open(request).await.unwrap();
+        assert!(session.control.write(format!("{line}\r").as_bytes()));
+        let expected: String = words.iter().map(|w| format!("[{w}]")).collect();
+        let mut seen = String::new();
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        // The terminal's echo of the typed line holds the words quoted; only the command's own output holds them bracketed.
+        while !seen.contains(&expected) && std::time::Instant::now() < until {
+            match tokio::time::timeout(std::time::Duration::from_millis(500), session.output.recv()).await {
+                Ok(Some(chunk)) => seen.push_str(&String::from_utf8_lossy(&chunk)),
+                Ok(None) => break,
+                Err(_) => {}
+            }
+        }
+        session.control.close().await.unwrap();
+        assert!(seen.contains(&expected), "every word as given: {seen:?}");
+    }
+
     /// The pane goes to the active workspace when it is local, else the first local one; none when every workspace is remote.
     #[test]
     fn the_pane_goes_to_a_local_workspace() {
