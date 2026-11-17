@@ -315,8 +315,12 @@ const BROWSER_PROBE: &str = r#"(async () => {
     report.menuClosed = report.steppedAside && !!(await until(async () => { const s = await surface(); return !document.querySelector('[data-testid=menu]') && s && s.visible; }, 5000));
     // The Mac: the engine's own views in two workspace profiles, a close and reopens (smoke.rs `browser_profiles`).
     if (engine) report.profiles = await invoke('smoke_surface', { paneId, action: 'profiles' });
-    // What the fixture page found of the app in the pane (`/globals?…`, each time it loaded).
-    if (engine) report.globals = (await invoke('smoke_surface', { paneId, action: 'loads' })).globals;
+    // What the fixture page found of the app in the pane (`/globals?…`, each time it was shown), given 5 s to arrive: once a CEF
+    // pane's only report never came (its fetch went with the page's navigation; feat/tauri 44056575768).
+    if (engine) {
+      const loads = () => invoke('smoke_surface', { paneId, action: 'loads' });
+      report.globals = ((await until(async () => { const seen = await loads(); return seen.globals.length > 0 && seen; }, 5000)) || (await loads())).globals;
+    }
   } catch (error) {
     report.error = String(error);
   }
@@ -324,10 +328,11 @@ const BROWSER_PROBE: &str = r#"(async () => {
 })();"#;
 
 /// The fixture page the browser pane loads.
-/// It tells the fixture server what it finds of the app's IPC in the pane (review M-E 1: on the Mac, nothing).
+/// It tells the fixture server what it finds of the app's IPC in the pane (review M-E 1: on the Mac, nothing), each time the page is
+/// shown (a page back from the back-forward cache runs no script, but is shown), in a request that outlives a navigation.
 const FIXTURE: &str = "<!doctype html><html><head><meta charset=utf-8><title>Mighty smoke fixture</title></head>\
 <body style=\"margin:0;background:#1f7a52;color:#fff;font:28px system-ui\"><p style=\"padding:24px\">Mighty Code browser surface fixture</p>\
-<script>fetch('/globals?tauri=' + typeof window.__TAURI_INTERNALS__ + '&ipc=' + typeof window.ipc + '&handler=' + typeof window.webkit?.messageHandlers?.ipc);</script></body></html>";
+<script>addEventListener('pageshow', () => fetch('/globals?tauri=' + typeof window.__TAURI_INTERNALS__ + '&ipc=' + typeof window.ipc + '&handler=' + typeof window.webkit?.messageHandlers?.ipc, { keepalive: true }));</script></body></html>";
 /// The second page (`/second`), for back.
 const SECOND: &str = "<!doctype html><html><head><meta charset=utf-8><title>Mighty smoke second</title></head>\
 <body style=\"margin:0;background:#20508f;color:#fff;font:28px system-ui\"><p style=\"padding:24px\">Second page</p></body></html>";

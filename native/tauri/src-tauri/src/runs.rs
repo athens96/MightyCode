@@ -109,10 +109,17 @@ fn hermes_run_ended(host: &Host, event: &ServiceEvent) -> Option<String> {
 }
 
 /// The mighty-bridge plugin the Claude runs load (C#: `mods/mighty-bridge` copied next to the app as `claude-mods`): beside the exe
-/// when it was put there, else the repository's own (a development build).
+/// when it was put there, else in the Mac bundle's `Contents/Resources/mods/mighty-bridge` (the Swift app's place,
+/// scripts/build-tauri-macos.sh), else the repository's own (a development build).
 pub fn plugin_directory() -> String {
-    let beside = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("claude-mods")));
-    match beside.filter(|dir| dir.join(".claude-plugin").is_dir()) {
+    let exe = std::env::current_exe().ok();
+    let beside = exe.as_ref().and_then(|exe| exe.parent().map(|dir| dir.join("claude-mods")));
+    // Only an exe inside an `.app` (`<bundle>.app/Contents/MacOS/<exe>`, review M-I 6): elsewhere no folder two levels up is read.
+    let bundled = exe
+        .as_deref()
+        .and_then(mighty_updates::app_update::stage_mac::bundle_of)
+        .map(|bundle| bundle.join("Contents").join("Resources").join("mods").join("mighty-bridge"));
+    match [beside, bundled].into_iter().flatten().find(|dir| dir.join(".claude-plugin").is_dir()) {
         Some(dir) => dir.to_string_lossy().into_owned(),
         None => Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")

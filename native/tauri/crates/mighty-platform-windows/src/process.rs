@@ -27,14 +27,14 @@ use windows_sys::Win32::System::Console::{
     AllocConsole, GetConsoleWindow, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleCP, SetConsoleOutputCP,
     SetStdHandle,
 };
-use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, TerminateJobObject};
+use windows_sys::Win32::System::JobObjects::TerminateJobObject;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows_sys::Win32::System::Pipes::{CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT};
 use windows_sys::Win32::System::Threading::{
     CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
     GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject,
+    PROC_THREAD_ATTRIBUTE_JOB_LIST, PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
 
@@ -462,9 +462,14 @@ fn start(request: &SpawnRequest) -> Result<Child> {
     // handle (a std::process::Command spawn) leaking in. The list keeps the port's contract; the creation flags are C#'s plus
     // EXTENDED_STARTUPINFO_PRESENT, which only says the list is there.
     let inherited: [HANDLE; 3] = [raw(&stdin.child), raw(&stdout.child), raw(&stderr.child)];
-    let mut attributes = AttributeList::new(1)?;
+    let mut attributes = AttributeList::new(2)?;
     // SAFETY: `inherited` outlives CreateProcessW below.
     unsafe { attributes.set(PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited.as_ptr().cast(), size_of_val(&inherited))? };
+    // The child is in the job from its creation (C# assigns it after CreateProcess, ChildProcess.cs:153): an app that ends between
+    // the two would leave a suspended child in no job, which nothing ever ends (a `git status` outlived the smoke that way).
+    let jobs: [HANDLE; 1] = [raw(&job)];
+    // SAFETY: `jobs` and the job outlive CreateProcessW below.
+    unsafe { attributes.set(PROC_THREAD_ATTRIBUTE_JOB_LIST, jobs.as_ptr().cast(), size_of_val(&jobs))? };
     // SAFETY: a zeroed plain-data struct, filled below.
     let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
     startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
@@ -492,9 +497,9 @@ fn start(request: &SpawnRequest) -> Result<Child> {
     })?;
     // SAFETY: the handles CreateProcessW just returned, owned here.
     let (process, thread) = unsafe { (OwnedHandle::from_raw_handle(child.hProcess), OwnedHandle::from_raw_handle(child.hThread)) };
-    // Into the job before its first instruction, so everything it starts is in the job too (ChildProcess.cs:153).
-    // SAFETY: valid job, process and thread handles.
-    let started = unsafe { AssignProcessToJobObject(raw(&job), raw(&process)) != 0 && ResumeThread(raw(&thread)) != u32::MAX };
+    // Already in the job (the attribute above), so everything it starts is in the job too: its first instruction may run.
+    // SAFETY: valid process and thread handles.
+    let started = unsafe { ResumeThread(raw(&thread)) != u32::MAX };
     if !started {
         let error = last_error();
         // SAFETY: the suspended child this launch made.

@@ -29,12 +29,12 @@ LIVE_PAGE = """<body>
 
 
 
-def make_mac_zip(path, version, marker="", key=None, url=None, engine=True):
+def make_mac_zip(path, version, marker="", key=None, url=None, engine=True, app_engine=""):
     """A Mac release zip as far as check_mac_package reads it: Info.plist and, optionally, the engine framework."""
     import plistlib, zipfile
     info = {"CFBundleShortVersionString": version, "MarkerForTests": marker,
             "MightyUpdatePublicKey": release.PUBLIC_KEY if key is None else key,
-            "MightyUpdateManifestURL": f"{release.PUBLIC_BASE}/latest.json" if url is None else url}
+            "MightyUpdateManifestURL": f"{release.PUBLIC_BASE}/latest.json" if url is None else url, "MightyEngine": app_engine}
     info = {k: v for k, v in info.items() if v != ""} | {"MarkerForTests": marker or "-"}
     with zipfile.ZipFile(path, "w") as z:
         z.writestr("MightyCode.app/Contents/Info.plist", plistlib.dumps(info))
@@ -54,6 +54,13 @@ class MacPackageTests(unittest.TestCase):
         make_mac_zip(self.path, "0.4.48")
         with patch.object(release, "say"):
             release.check_mac_package(self.path, "0.4.48")
+
+    def test_which_app_the_zip_holds_is_reported(self):
+        for app_engine, words in [("", "(앱: Swift)"), ("tauri", "(앱: Rust (MightyEngine tauri))")]:
+            make_mac_zip(self.path, "0.4.48", app_engine=app_engine)
+            with patch.object(release, "say") as said:
+                release.check_mac_package(self.path, "0.4.48")
+            self.assertIn(words, said.call_args.args[0])
 
     def test_a_zip_without_engine_key_or_address_is_refused(self):
         for kwargs, words in [({"engine": False}, "브라우저 엔진"), ({"key": ""}, "공개 키"), ({"url": ""}, "업데이트 주소")]:

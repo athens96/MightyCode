@@ -16,11 +16,11 @@ use mighty_platform::{BoxFuture, PlatformError, PtyControl, PtyHost, PtyRequest,
 use tokio::sync::{mpsc, watch};
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::System::Console::{COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole};
-use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, TerminateJobObject};
+use windows_sys::Win32::System::JobObjects::TerminateJobObject;
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, EXTENDED_STARTUPINFO_PRESENT, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-    PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
+    CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW, EXTENDED_STARTUPINFO_PRESENT, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
 };
 
 use crate::command::quote_windows;
@@ -150,10 +150,14 @@ fn start(request: &PtyRequest) -> Result<PtySession> {
     hresult(unsafe { CreatePseudoConsole(coord(request.size), raw(&input_read), raw(&output_write), 0, &mut console) })?;
     pending.console = console;
     pending.pipes.extend([input_read, input_write, output_read, output_write]);
-    let mut attributes = AttributeList::new(1)?;
+    let mut attributes = AttributeList::new(2)?;
     // SAFETY: for this attribute the value is the console handle itself; the console outlives CreateProcessW.
     unsafe { attributes.set(PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, console as *const c_void, size_of::<HPCON>())? };
     let job = kill_on_close_job()?;
+    // In the job from its creation (process.rs `start`): an app ending before an assignment could not leave the shell outside it.
+    let jobs: [HANDLE; 1] = [raw(&job)];
+    // SAFETY: `jobs` and the job outlive CreateProcessW below.
+    unsafe { attributes.set(PROC_THREAD_ATTRIBUTE_JOB_LIST, jobs.as_ptr().cast(), size_of_val(&jobs))? };
     // Explicit null standard handles prevent Windows from duplicating redirected parent streams into this child instead of
     // connecting them to its pseudoconsole (also affects launchers and CI hosts). https://github.com/microsoft/terminal/discussions/15814
     // SAFETY: a zeroed plain-data struct, filled below.
@@ -190,8 +194,8 @@ fn start(request: &PtyRequest) -> Result<PtySession> {
         use std::os::windows::io::FromRawHandle;
         (OwnedHandle::from_raw_handle(child.hProcess), OwnedHandle::from_raw_handle(child.hThread))
     };
-    // SAFETY: valid job, process and thread handles.
-    if unsafe { AssignProcessToJobObject(raw(&job), raw(&process)) == 0 || ResumeThread(raw(&thread)) == u32::MAX } {
+    // SAFETY: valid process and thread handles.
+    if unsafe { ResumeThread(raw(&thread)) == u32::MAX } {
         let error = last_error();
         // SAFETY: the suspended child this launch made.
         unsafe { TerminateProcess(raw(&process), 1) };

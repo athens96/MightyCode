@@ -268,12 +268,21 @@ pub const NATIVE_PROBE: &str = r#"(async () => {
     report.resizedTo = await act('resize', 'grow');
     report.gridChanged = !!(await until(async () => { const now = await gridOf(); return !!now && !same(now, before); }, 8000));
     await sleep(600);
-    await type("printf 'MIGHTY_RESIZED %s\\n' \"$(/bin/stty size)\"");
-    await seen('MIGHTY_RESIZED ', 5000);
-    const resized = last(await screen(), /MIGHTY_RESIZED (\d+) (\d+)/g);
-    report.resizedStty = resized ? [Number(resized[1]), Number(resized[2])] : null;
-    report.resizedGrid = await gridOf();
-    report.terminalResize = report.gridChanged && same(report.resizedStty, report.resizedGrid) && !same(report.resizedStty, report.sttyGrid);
+    // As the tty check above: asked once more when the answer is missing or disagrees (the packaged app's first CI round, 44081587468,
+    // never showed the line typed right after the resize), the count kept and more than one re-ask failing the check.
+    report.resizedRetries = 0;
+    for (let ask = 0; ask < 3; ask += 1) {
+      report.resizedRetries = ask;
+      await type("printf 'MIGHTY_RESIZED%s %s\\n' '" + ask + "' \"$(/bin/stty size)\"");
+      await seen('MIGHTY_RESIZED' + ask + ' ', 5000);
+      const resized = [...(await screen()).matchAll(/MIGHTY_RESIZED(\d) (\d+) (\d+)/g)].filter((m) => m[1] === String(ask)).pop();
+      report.resizedStty = resized ? [Number(resized[2]), Number(resized[3])] : null;
+      report.resizedGrid = await gridOf();
+      if (same(report.resizedStty, report.resizedGrid)) break;
+      await sleep(500);
+    }
+    report.terminalResize = report.gridChanged && same(report.resizedStty, report.resizedGrid) && !same(report.resizedStty, report.sttyGrid)
+      && report.resizedRetries <= 1;
     await act('resize', 'restore');
 
     const url = await act('snapshot');

@@ -11,10 +11,13 @@
 //! (`tcgetpgrp`, Swift `ShellActivity.isBusy`), which needs no pid file now that the app owns the PTY (Swift's
 //! `ShellProcessProbe.findShellPid` read one because Ghostty owned it).
 //!
-//! The terminal's environment is the request's with `TERM=xterm-256color` and `COLORTERM=truecolor` (Swift's agent pane). What
-//! Ghostty's own shell integration needs (`TERM_PROGRAM`, zsh's `ZDOTDIR` pointing into its resources) waits for M-I, which bundles
-//! those resources with the app.
+//! The terminal's environment is the request's with `TERM=xterm-256color` and `COLORTERM=truecolor` (Swift's agent pane). An
+//! interactive login shell also gets what libghostty's exec backend gave the Swift app's shell panes ([`shell_integration`]):
+//! `TERM_PROGRAM=ghostty`, `GHOSTTY_RESOURCES_DIR`, `GHOSTTY_SHELL_FEATURES` and, for zsh, `ZDOTDIR` into Ghostty's shell
+//! integration, from the resources the app bundle carries (`Contents/Resources/ghostty`, scripts/build-tauri-macos.sh); a
+//! development build outside a bundle has none and starts its shells without them.
 
+use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -55,6 +58,38 @@ pub fn default_shell() -> PathBuf {
         .map(PathBuf::from)
         .filter(|shell| shell.is_absolute() && shell.is_file())
         .unwrap_or_else(|| PathBuf::from("/bin/zsh"))
+}
+
+/// Ghostty's runtime resources in the app bundle around `exe` (scripts/build-tauri-macos.sh, Ghostty.app's own layout):
+/// `Contents/Resources/ghostty` holding `shell-integration`, beside `Contents/Resources/terminfo`. None outside a bundle.
+pub fn ghostty_resources(exe: &Path) -> Option<PathBuf> {
+    let resources = exe.parent()?.parent()?.join("Resources");
+    let ghostty = resources.join("ghostty");
+    (ghostty.join("shell-integration").is_dir() && resources.join("terminfo").is_dir()).then_some(ghostty)
+}
+
+/// What libghostty's exec backend adds for the shell it starts (the Swift app's shell panes ran there), for a shell pane's login
+/// shell ([`shell_arguments`]' `-il`; never a `-c` command, an agent's, a shell without its profile, the smoke's, or a CLI's own
+/// login) when the bundle carries Ghostty's `resources`:
+/// `TERM_PROGRAM=ghostty`, `GHOSTTY_RESOURCES_DIR`, `GHOSTTY_SHELL_FEATURES` (Ghostty's default `cursor,title`) and, for zsh,
+/// `ZDOTDIR` pointing into the integration, the user's own `ZDOTDIR` kept in `GHOSTTY_ZSH_ZDOTDIR` (the integration's `.zshenv`
+/// puts it back before anything else reads it, then runs the user's own).
+pub fn shell_integration(environment: &mut BTreeMap<String, String>, program: &Path, args: &[String], resources: Option<&Path>) {
+    let Some(resources) = resources else { return };
+    if !args.iter().any(|argument| argument == "-il") || args.iter().any(|argument| argument == "-c") {
+        return;
+    }
+    environment.insert("TERM_PROGRAM".into(), "ghostty".into());
+    environment.insert("GHOSTTY_RESOURCES_DIR".into(), resources.to_string_lossy().into_owned());
+    environment.insert("GHOSTTY_SHELL_FEATURES".into(), "cursor,title".into());
+    if program.file_name().is_some_and(|name| name == "zsh") {
+        let zsh = resources.join("shell-integration").join("zsh");
+        // A value inherited from an outer Ghostty shell is not the user's own: only the ZDOTDIR replaced below is kept (review M-I 7).
+        environment.remove("GHOSTTY_ZSH_ZDOTDIR");
+        if let Some(own) = environment.insert("ZDOTDIR".into(), zsh.to_string_lossy().into_owned()) {
+            environment.insert("GHOSTTY_ZSH_ZDOTDIR".into(), own);
+        }
+    }
 }
 
 /// The shell's arguments: interactive as a login shell (`-il`, Swift's `/bin/zsh -il`), or without the profile (zsh `-f`, Swift's
@@ -296,6 +331,8 @@ fn fork(request: &PtyRequest) -> Result<(libc::pid_t, OwnedFd, OwnedFd)> {
     let mut environment = request.env.clone();
     environment.insert("TERM".into(), "xterm-256color".into());
     environment.insert("COLORTERM".into(), "truecolor".into());
+    let resources = std::env::current_exe().ok().and_then(|exe| ghostty_resources(&exe));
+    shell_integration(&mut environment, &request.program, &request.args, resources.as_deref());
     let program = cstring(request.program.as_os_str().as_bytes(), "the shell")?;
     let mut args = vec![program.clone()];
     for argument in &request.args {
@@ -637,6 +674,56 @@ mod tests {
         assert_eq!(shell_arguments(bash, Some("ls"), true), ["-c", "ls"]);
         assert_eq!(shell_arguments(Path::new("/opt/homebrew/bin/fish"), None, false), ["-il"]);
         assert_eq!(shell_arguments(Path::new("/bin/sh"), None, true), ["-i"]);
+    }
+
+    /// The bundle's Ghostty resources (Ghostty.app's layout) are found only whole.
+    #[test]
+    fn ghostty_resources_are_the_bundles_ghostty_folder_beside_its_terminfo() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("mighty-ghostty-resources-{}-{nanos}", std::process::id()));
+        let exe = root.join("MightyCode.app").join("Contents").join("MacOS").join("MightyCode");
+        let resources = root.join("MightyCode.app").join("Contents").join("Resources");
+        std::fs::create_dir_all(resources.join("ghostty").join("shell-integration").join("zsh")).unwrap();
+        assert_eq!(ghostty_resources(&exe), None, "terminfo too");
+        std::fs::create_dir_all(resources.join("terminfo")).unwrap();
+        assert_eq!(ghostty_resources(&exe), Some(resources.join("ghostty")));
+        assert_eq!(ghostty_resources(Path::new("/MightyCode")), None, "outside a bundle");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// libghostty's exec environment for a shell pane's login shell only, zsh's `ZDOTDIR` into the integration with the user's kept.
+    #[test]
+    fn a_login_shell_gets_ghosttys_shell_integration() {
+        let resources = Path::new("/Applications/MightyCode.app/Contents/Resources/ghostty");
+        let zsh = Path::new("/bin/zsh");
+        let start = |program: &Path, args: &[&str], resources: Option<&Path>, own: Option<&str>| {
+            let mut environment = BTreeMap::from([("PATH".to_string(), "/usr/bin".to_string())]);
+            if let Some(own) = own {
+                environment.insert("ZDOTDIR".into(), own.into());
+            }
+            let args: Vec<String> = args.iter().map(|argument| argument.to_string()).collect();
+            shell_integration(&mut environment, program, &args, resources);
+            environment
+        };
+        let login = start(zsh, &["-il"], Some(resources), None);
+        assert_eq!(login["TERM_PROGRAM"], "ghostty");
+        assert_eq!(login["GHOSTTY_RESOURCES_DIR"], resources.to_string_lossy());
+        assert_eq!(login["GHOSTTY_SHELL_FEATURES"], "cursor,title");
+        assert_eq!(login["ZDOTDIR"], resources.join("shell-integration").join("zsh").to_string_lossy());
+        assert!(!login.contains_key("GHOSTTY_ZSH_ZDOTDIR"), "no ZDOTDIR of the user's to put back");
+        let own = start(zsh, &["-il"], Some(resources), Some("/Users/me/.config/zsh"));
+        assert_eq!(own["GHOSTTY_ZSH_ZDOTDIR"], "/Users/me/.config/zsh");
+        let mut stale = BTreeMap::from([("GHOSTTY_ZSH_ZDOTDIR".to_string(), "/elsewhere".to_string())]);
+        shell_integration(&mut stale, zsh, &["-il".to_string()], Some(resources));
+        assert!(!stale.contains_key("GHOSTTY_ZSH_ZDOTDIR"), "a stale value from an outer shell is dropped");
+        let bash = start(Path::new("/bin/bash"), &["-il"], Some(resources), None);
+        assert_eq!((bash["TERM_PROGRAM"].as_str(), bash.contains_key("ZDOTDIR")), ("ghostty", false), "zsh alone by ZDOTDIR");
+        let untouched = BTreeMap::from([("PATH".to_string(), "/usr/bin".to_string())]);
+        assert_eq!(start(zsh, &["-c", "ls"], Some(resources), None), untouched, "an agent's command");
+        assert_eq!(start(zsh, &["-f"], Some(resources), None), untouched, "no startup files");
+        assert_eq!(start(zsh, &["-il"], None, None), untouched, "no resources outside a bundle");
+        assert_eq!(start(Path::new("/opt/homebrew/bin/claude"), &["setup-token"], Some(resources), None), untouched, "a CLI's login");
+        assert_eq!(start(Path::new("/bin/bash"), &["--noprofile", "--norc", "-i"], Some(resources), None), untouched, "no profile");
     }
 
     /// Swift `ShellActivityTests.swift:9 "busyOnlyWhileAnotherGroupOwnsTheTerminal"`.
