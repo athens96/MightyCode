@@ -69,6 +69,7 @@ APP="$APPS/MightyCode.app"
 EXE="$APP/Contents/MacOS/MightyCode"
 SERVED="$WORK/served"
 DEFAULT_PROFILE="$HOME/Library/Application Support/MightyCode"
+LOCAL_LOGS="$HOME/Library/Application Support/$DOMAIN/logs"
 CERT_NAME="Mighty Code update rehearsal (throwaway)"
 
 CHECKS=()
@@ -109,6 +110,7 @@ cleanup() {
             while IFS= read -r -d '' file; do mkdir -p "$(dirname "$WORK/logs/$file")"; cp "$WORK/$file" "$WORK/logs/$file"; done
     done
     [ -d "$DEFAULT_PROFILE/tauri-logs" ] && ditto "$DEFAULT_PROFILE/tauri-logs" "$WORK/logs/default-profile-tauri-logs" 2>/dev/null
+    [ -d "$LOCAL_LOGS/default" ] && ditto "$LOCAL_LOGS/default" "$WORK/logs/default-profile-local-logs" 2>/dev/null
     python3 - "$WORK/rehearsal-result.json" "$FROM" "${RUST_VERSION:-}" ${CHECKS[@]+"${CHECKS[@]}"} <<'PY'
 import json, sys
 path, start, to, *rows = sys.argv[1:]
@@ -295,7 +297,9 @@ json.dump({"cases": [{"name": "restart", "stagedApp": staged, "destination": des
 PY
 "$PARITY" install-script "$WORK/relaunch/cases.json" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["cases"][0]["script"])' > "$WORK/relaunch/install.sh"
 chmod 700 "$WORK/relaunch/install.sh"
-DEFAULT_LOG="$DEFAULT_PROFILE/tauri-logs/host.log"
+# Where the relaunched app logs (startup.rs `log_dir`): an app outside /Applications and ~/Applications writes nothing (D7), so its
+# log goes to this machine's local folder for the default profile, not the profile's tauri-logs (which a writing run uses).
+DEFAULT_LOG="$LOCAL_LOGS/default/host.log"
 LOG_LENGTH="$(stat -f%z "$DEFAULT_LOG" 2>/dev/null || echo 0)"
 # As AppUpdateService.launchInstaller runs it: /bin/sh, PATH and HOME only, its output in install.log.
 env -i PATH=/usr/bin:/bin HOME="$HOME" /bin/sh "$WORK/relaunch/install.sh" < /dev/null > "$WORK/relaunch/install.log" 2>&1
@@ -308,7 +312,8 @@ new_start_line() { [ -f "$DEFAULT_LOG" ] && tail -c +$((LOG_LENGTH + 1)) "$DEFAU
 wait_for 120 new_start_line > /dev/null
 STARTED="$(new_start_line)"
 echo "  host.log: $STARTED"
-check "the relaunched Rust app started on the default profile and wrote its host log" "$(holds [ -n "$STARTED" ])" "$STARTED"
+check "the relaunched Rust app started on the default profile and wrote its host log"     "$(holds python3 -c 'import sys; l, p = sys.argv[1:]; sys.exit(0 if f"profile {p} " in l else 1)' "$STARTED" "$DEFAULT_PROFILE")" "$STARTED"
+check "the relaunched app, outside /Applications, writes nothing (D7)" "$(holds python3 -c 'import sys; sys.exit(0 if sys.argv[1].rstrip().endswith("writes off") else 1)' "$STARTED")"
 RELAUNCHED="$(pgrep -f "^$EXE" | head -n 1)"
 check "the relaunched app runs from the install" "$(holds [ -n "$RELAUNCHED" ])"
 [ -n "$RELAUNCHED" ] && quit "$RELAUNCHED" 60 relaunched
