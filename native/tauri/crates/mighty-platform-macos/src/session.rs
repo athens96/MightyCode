@@ -68,6 +68,18 @@ impl SessionWatch for MacSession {
     }
 }
 
+/// Whether another process of the app `identifier` runs on this Mac (the Swift 0.4.x app and this one share
+/// `dev.mightycode.native`): both would write Application Support, UserDefaults and the Keychain under the same names (Mac
+/// integration review 17). Swift had no rule of its own beyond LaunchServices activating a running copy.
+pub fn another_instance_running(identifier: &str) -> bool {
+    let me = std::process::id() as i32;
+    objc2::rc::autoreleasepool(|_| {
+        objc2_app_kit::NSRunningApplication::runningApplicationsWithBundleIdentifier(&objc2_foundation::NSString::from_str(identifier))
+            .iter()
+            .any(|app| app.processIdentifier() != me && !app.isTerminated())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;

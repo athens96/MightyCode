@@ -37,9 +37,14 @@ static RUN: OnceLock<(WritePolicy, bool)> = OnceLock::new();
 
 /// The policy for this run: this build's stamp ([`build_info::RELEASE`]) and where it runs from ([`installed`]) over the options
 /// ([`policy`]). Kept for [`owns_registrations`].
-pub fn write_policy(options: &Options) -> WritePolicy {
+pub fn write_policy(options: &Options, identifier: &str) -> WritePolicy {
     let installed_release = build_info::RELEASE && installed();
-    let policy = policy(installed_release, options);
+    let mut policy = policy(installed_release, options);
+    // Two writers on one profile's stores: while another copy runs (the Mac: the Swift app or another Rust one), this run reads only.
+    if policy.writes && !options.smoke_test && crate::platform::another_instance_running(identifier) {
+        eprintln!("another Mighty Code is running: this run writes nothing");
+        policy.writes = false;
+    }
     let _ = RUN.set((policy, options.profile.is_none()));
     policy
 }
@@ -53,7 +58,8 @@ fn policy(installed_release: bool, options: &Options) -> WritePolicy {
 
 /// Whether this exe runs from where a release build counts as installed (`platform::install_locations`): on Windows the folder the
 /// setup program makes (`MightyCode.iss` `DefaultDirName={userpf}\MightyCode`: `%LOCALAPPDATA%\Programs\MightyCode`, the known
-/// folder's, never an environment variable); on the Mac M-H's `.app` locations (plan D7; none yet, so never). Compared canonically.
+/// folder's, never an environment variable); on the Mac the running exe's `Contents/MacOS` when its `.app` sits directly in `/Applications` or
+/// `~/Applications` (plan D7, M-H). Compared canonically.
 fn installed() -> bool {
     let exe = std::env::current_exe().ok();
     let Some(folder) = exe.as_deref().and_then(Path::parent) else { return false };
@@ -185,7 +191,7 @@ mod tests {
     fn the_flag_writes_and_read_only_never_does() {
         let policy = |allow: bool, read_only: bool| {
             let options = Options { allow_state_write: allow, read_only, ..Options::default() };
-            assert_eq!(write_policy(&options), super::policy(build_info::RELEASE && installed(), &options));
+            assert_eq!(write_policy(&options, "dev.mightycode.tests.nobody"), super::policy(build_info::RELEASE && installed(), &options));
             super::policy(false, &options).writes
         };
         assert!(!policy(false, false), "a development build writes nothing unless asked");
