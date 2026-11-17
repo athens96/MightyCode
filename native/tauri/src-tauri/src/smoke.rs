@@ -148,9 +148,9 @@ pub const ALLOWED_UNIMPLEMENTED: [&str; 0] = [];
 /// Mac stage (plan §3 0c): the steps whose checks may fail on the Mac while its parts are written, by the keys the result groups them
 /// under (`steps`). On the Mac the smoke's exit code says whether every check outside these passed (`passedOutsidePending`); `passed`
 /// stays every check's verdict. Step 0 lists every step; each part's merge takes out what passes on the Mac, and the integrator empties
-/// it at the end (W9's `ALLOWED_UNIMPLEMENTED` pattern). Windows ignores it. Since the Mac stage's integration only the steps that
-/// waited for every part at once are left, until the integrated CI shows them passing.
-pub const MAC_PENDING_STEPS: [&str; 2] = ["delegation", "paneWorktree"];
+/// it at the end (W9's `ALLOWED_UNIMPLEMENTED` pattern). Windows ignores it. Empty since the Mac stage's integration: every step passes
+/// on the Mac.
+pub const MAC_PENDING_STEPS: [&str; 0] = [];
 
 /// Which step each check came from, in the order they were added: the checks `checks` gained since the last call are `step`'s.
 fn attribute(checks: &Value, steps: &mut Vec<(String, Vec<String>)>, step: &str) {

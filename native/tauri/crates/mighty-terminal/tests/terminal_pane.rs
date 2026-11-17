@@ -330,3 +330,53 @@ fn a_working_directory_is_a_file_address_of_this_computer() {
     }
     assert_eq!(TerminalFont::default(), TerminalFont { size: 12.0, family: None });
 }
+
+/// A PTY host whose opens wait until the check lets them go (the Mac's shell takes a moment to start).
+struct SlowOpen {
+    inner: Arc<mighty_platform::fake::FakePtyHost>,
+    release: Arc<tokio::sync::Notify>,
+}
+
+impl mighty_platform::PtyHost for SlowOpen {
+    fn default_shell(&self) -> std::path::PathBuf {
+        self.inner.default_shell()
+    }
+    fn shell_arguments(&self, shell: &std::path::Path, command: Option<&str>, no_profile: bool) -> Vec<String> {
+        self.inner.shell_arguments(shell, command, no_profile)
+    }
+    fn open(
+        &self,
+        request: mighty_platform::PtyRequest,
+    ) -> mighty_platform::BoxFuture<'_, mighty_platform::Result<mighty_platform::PtySession>> {
+        Box::pin(async move {
+            self.release.notified().await;
+            self.inner.open(request).await
+        })
+    }
+}
+
+/// Mac stage integration (the Mac smoke's `terminalTty`): the view's grid settles while the shell is still starting; that resize has
+/// no terminal yet, so the terminal is set to it once it opens, and the shell sees the view's grid.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_resize_while_the_shell_starts_reaches_its_terminal() {
+    let fixture = Fixture::new("slow-open");
+    let release = Arc::new(tokio::sync::Notify::new());
+    let mut ports = fixture.ports();
+    ports.ptys = Arc::new(SlowOpen { inner: fixture.ptys.clone(), release: release.clone() });
+    let options =
+        PaneOptions { id: "pane".into(), kind: PaneKind::Shell, folder: Some(fixture.folder.clone()), enabled: true, no_profile: true };
+    let pane = TerminalPane::new(options, ports, fixture.window.clone());
+    pane.open();
+    let starting = {
+        let pane = pane.clone();
+        tokio::spawn(async move { pane.handle_message(&json!({"type": "ready", "columns": 106, "rows": 27})).await })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    pane.handle_message(&json!({"type": "resize", "columns": 106, "rows": 29})).await;
+    release.notify_one();
+    starting.await.unwrap();
+    let opened = fixture.ptys.opened();
+    assert_eq!((opened.len(), opened[0].size.rows), (1, 27), "opened at the first grid");
+    assert_eq!(fixture.ptys.sizes().last().map(|s| (s.columns, s.rows)), Some((106, 29)), "then set to the grid the view settled on");
+    assert_eq!(pane.footer().grid, "106×29");
+}

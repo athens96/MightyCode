@@ -606,6 +606,12 @@ impl TerminalPane {
                 });
                 return Ok(());
             }
+            // A resize that came while the shell was starting had no terminal to reach: the grid it left is the one to start at
+            // (applied under the lock that makes the terminal reachable, so no later resize is overtaken).
+            let latest = PtySize { columns: state.columns as u16, rows: state.rows as u16 };
+            if latest != size {
+                control.resize(latest).map_err(|error| error.to_string())?;
+            }
             state.generation += 1;
             let generation = state.generation;
             state.running = Some(Running { generation, control: control.clone(), drained: drained.clone(), exited: false });

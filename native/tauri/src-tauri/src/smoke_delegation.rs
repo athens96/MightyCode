@@ -689,7 +689,9 @@ async fn steps(
     repository(runner, &tool_repo, "Delegate tool smoke").await?;
     let (tool_parent, tool_workspace) = add_parent(host, &tool_repo, "claude", "acceptEdits", "Delegating parent")?;
     let task = "Smoke delegate tool: write tool.txt.";
-    let key: String = tool_repo.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    // Keyed by the folder as the fake reads its own working folder: the Mac's temp `/var/…` is `/private/var/…` there.
+    let named = if cfg!(unix) { std::fs::canonicalize(&tool_repo).unwrap_or_else(|_| tool_repo.clone()) } else { tool_repo.clone() };
+    let key: String = named.to_string_lossy().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
     std::fs::create_dir_all(fake.join("scripts")).map_err(|e| e.to_string())?;
     std::fs::write(
         fake.join("scripts").join(format!("{key}.json")),
