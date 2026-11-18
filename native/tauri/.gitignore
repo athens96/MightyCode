@@ -9,3 +9,5 @@
 /spikes/mac/*/gen/
 /spikes/mac/ghostty/swift/.build/
 /tools/parity-mac/.build/
+# Written by its `swift build` (scripts/build-tauri-macos.sh step 9); the oracle pins nothing of its own.
+/tools/parity-mac/Package.resolved
