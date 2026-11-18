@@ -73,35 +73,10 @@ jobs:
       - name: Type-check and test the Claude mod
         working-directory: mods/mighty-bridge/tests
         run: npm ci --no-audit --no-fund && npm run check
-      - name: Test Swift core
-        timeout-minutes: 40
-        env:
-          # Scenarios S1 and S2 leave their records here for the record script.
-          MIGHTY_DELEGATION_RECORD_EXPORT: ${{ runner.temp }}/delegation-records
-        run: bash scripts/test-native-macos.sh
-      - name: Remote workspaces — host and client talk over loopback
-        # One app shares a workspace on loopback (injected in code, as only tests
-        # may) and another connects to it, runs a command and a scripted Claude
-        # turn there, answers its tool request, and is refused a wrong key, an
-        # oversize body, an unshared folder and a redirect; the remote mirror's
-        # routes show and drive only shared panes. The step above runs these too;
-        # this one names them, and runs even when an unrelated test failed.
-        if: success() || failure()
-        run: bash scripts/test-native-macos.sh --filter '\.Remote(Workspace|Mirror)[A-Za-z]*Tests/'
-      - name: Delegation record script judges its fixtures and the S1 and S2 records
-        # Read-only: passed on the S1-like and S2-like fixtures and on both
-        # exported scenario records, failed or invalid on the broken fixtures.
-        if: success() || failure()
-        run: |
-          python3 scripts/test_delegation_record.py -v
-          status=0
-          for record in s1 s2; do
-            folder="$RUNNER_TEMP/delegation-records/$record"
-            echo "::group::Delegation record $record"
-            python3 scripts/delegation-record.py --profile "$folder/profile" --repo "$folder/repo" --claude-dir "$folder/claude" || status=1
-            echo "::endgroup::"
-          done
-          exit $status
+      # 0.5: the Swift app no longer ships, so its own tests (Swift core, the remote loopback, the S1/S2 delegation records it
+      # exported) no longer gate a release. The Rust app's tests, smokes and delegation records (S1-S3 through
+      # delegation-record.py) run in native-tauri.yml; the Swift sources stay in native/macos only as the oracle
+      # tools/parity-mac compiles from.
 
   macos:
     # 0.5: builds and packages the Rust + Tauri app (native/tauri, scripts/build-tauri-macos.sh) in the 0.4.x bundle, so an installed
