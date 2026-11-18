@@ -1,0 +1,349 @@
+{
+  "about": "Ed25519 cases and C#'s verdicts (Ed25519Verify.Verify), written by tools/parity/Update.cs ed25519; the cases were crafted once with integer arithmetic (RFC 8032 vectors, flipped bits, wrong lengths, S >= L, non-canonical and sign-bit encodings, small- and mixed-order points).",
+  "cases": [
+    {
+      "name": "rfc8032-1",
+      "key": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+      "message": "",
+      "signature": "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+      "note": "RFC 8032 section 7.1",
+      "csharp": true
+    },
+    {
+      "name": "rfc8032-2",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+      "note": "RFC 8032 section 7.1",
+      "csharp": true
+    },
+    {
+      "name": "rfc8032-3",
+      "key": "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+      "message": "af82",
+      "signature": "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a",
+      "note": "RFC 8032 section 7.1",
+      "csharp": true
+    },
+    {
+      "name": "rfc8032-4",
+      "key": "ec172b93ad5e563bf4932c70e1245034c35467ef2efd4d64ebf819683467e2bf",
+      "message": "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f",
+      "signature": "dc2a4459e7369633a52b1bf277839a00201009a3efbf3ecb69bea2186c26b58909351fc9ac90b3ecfdfbc7c66431e0303dca179c138ac17ad9bef1177331a704",
+      "note": "RFC 8032 section 7.1",
+      "csharp": true
+    },
+    {
+      "name": "changed-message",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "73",
+      "signature": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "changed-r",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "93a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "changed-s",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e448f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "changed-key",
+      "key": "3c4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "signature-63-bytes",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "signature-65-bytes",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c0000",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "key-31-bytes",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af466",
+      "message": "72",
+      "signature": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "key-33-bytes",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c00",
+      "message": "72",
+      "signature": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "empty-key-and-signature",
+      "key": "",
+      "message": "72",
+      "signature": "",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "s-plus-l",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69daf52db7415978abc61b2c2eb6aeebfca0387b2eaeb4302aeeb00d291612bb0c10",
+      "note": "the same equation with S + L: S >= L refused",
+      "csharp": false
+    },
+    {
+      "name": "s-equals-l",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69daedd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "s-top-bit",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c80",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "s-max",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69daffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "long-message",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "signature": "b16b17c8d88fa293f43bff04e80c1d6882a69703c587b06845c0f0362315245c4c111a7af7db61756979aa2d3e216510314c2d1f6f3103be8b585a46055c7d01",
+      "note": "",
+      "csharp": true
+    },
+    {
+      "name": "r-identity-canonical",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "0100000000000000000000000000000000000000000000000000000000000000675d054595fa17cb6a44e3ada6ca385e55667e41a63fdab0ac22d10000354002",
+      "note": "R = (0, 1): the equation holds",
+      "csharp": true
+    },
+    {
+      "name": "r-identity-non-canonical",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f0a0403c78756704394a791302d07acbdf846e02e6371010b73f9c021313bde01",
+      "note": "R's y = p + 1: C# refuses the encoding",
+      "csharp": false
+    },
+    {
+      "name": "r-identity-sign-bit",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "0100000000000000000000000000000000000000000000000000000000000080bd498620dc071c7bd37de37a8b3208e5475dd11db9151270fb200f690ae0d009",
+      "note": "x = 0 with the sign bit",
+      "csharp": false
+    },
+    {
+      "name": "r-order-two",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7ffa9f7624aca694623f02d86feb1efd98b11f597197bcd2e64573659db7177e0b",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "r-not-on-curve",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "020000000000000000000000000000000000000000000000000000000000000053658a28f629e668d698a55e22537cfde4f4f3e5c920baf3c5146cf2f4af6300",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "a-identity-canonical",
+      "key": "0100000000000000000000000000000000000000000000000000000000000000",
+      "message": "68656c6c6f",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "small-order key: C# accepts (the strict check would not)",
+      "csharp": true
+    },
+    {
+      "name": "a-identity-non-canonical",
+      "key": "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "message": "68656c6c6f",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "key's y = p + 1",
+      "csharp": false
+    },
+    {
+      "name": "a-identity-sign-bit",
+      "key": "0100000000000000000000000000000000000000000000000000000000000080",
+      "message": "68656c6c6f",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "key x = 0 with the sign bit",
+      "csharp": false
+    },
+    {
+      "name": "a-identity-r-identity-s-zero",
+      "key": "0100000000000000000000000000000000000000000000000000000000000000",
+      "message": "616e797468696e67",
+      "signature": "01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "note": "the trivial signature under the identity key",
+      "csharp": true
+    },
+    {
+      "name": "all-zero-signature-identity-key",
+      "key": "0100000000000000000000000000000000000000000000000000000000000000",
+      "message": "616e797468696e67",
+      "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "a-order-two-k-even",
+      "key": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "message": "6d30",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "[k]A is the identity",
+      "csharp": true
+    },
+    {
+      "name": "a-order-two-k-odd",
+      "key": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "message": "6d31",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "a-order-two-sign-bit",
+      "key": "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "message": "6d30",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "x = 0 with the sign bit",
+      "csharp": false
+    },
+    {
+      "name": "a-order-four-k-multiple",
+      "key": "0000000000000000000000000000000000000000000000000000000000000000",
+      "message": "6d30",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "",
+      "csharp": true
+    },
+    {
+      "name": "a-order-four-k-not",
+      "key": "0000000000000000000000000000000000000000000000000000000000000000",
+      "message": "6d31",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "a-order-four-sign-bit",
+      "key": "0000000000000000000000000000000000000000000000000000000000000080",
+      "message": "6d30",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "a-order-four-non-canonical",
+      "key": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "message": "6d30",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "key's y = p (the y = 0 point)",
+      "csharp": false
+    },
+    {
+      "name": "a-all-ff",
+      "key": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "message": "6d30",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "a-order-eight-k-multiple",
+      "key": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+      "message": "6d30",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "",
+      "csharp": true
+    },
+    {
+      "name": "a-order-eight-k-not",
+      "key": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a",
+      "message": "6d32",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "a-mixed-order-k-multiple-of-8",
+      "key": "0169d3c02f3edd121cafbe1dfd45c4cf4aac216a79e36e6326419f2a654d2d46",
+      "message": "7830",
+      "signature": "ef4f62f8479733ad879cfaced3c89a9c39dd4fc795ef2efa1c3eafe4d729a08131713eec24abcfeb44308cab1b614a49121369855c9505fd9bf1d9e56f1cfc05",
+      "note": "cofactorless and cofactored agree",
+      "csharp": true
+    },
+    {
+      "name": "a-mixed-order-k-not-multiple-of-8",
+      "key": "0169d3c02f3edd121cafbe1dfd45c4cf4aac216a79e36e6326419f2a654d2d46",
+      "message": "7831",
+      "signature": "ef4f62f8479733ad879cfaced3c89a9c39dd4fc795ef2efa1c3eafe4d729a081b8aa694875bbe9b766366535e8ec899e265867c7aa71ec855a4a9d75b154040a",
+      "note": "only a cofactored check would accept: C# is cofactorless",
+      "csharp": false
+    },
+    {
+      "name": "r-order-eight",
+      "key": "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+      "message": "72",
+      "signature": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037acca5c0159b890822aa8f6ad74990de9393e3036603fe9591d9850310e8abb105",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "a-not-on-curve",
+      "key": "0200000000000000000000000000000000000000000000000000000000000000",
+      "message": "68656c6c6f",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "",
+      "csharp": false
+    },
+    {
+      "name": "a-non-canonical-y-3-plus-p",
+      "key": "f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "message": "68656c6c6f",
+      "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32ab168de3a00000000000000000000000000000000000000000000000000000000",
+      "note": "",
+      "csharp": false
+    }
+  ]
+}

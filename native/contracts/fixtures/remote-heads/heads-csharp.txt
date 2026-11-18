@@ -1,0 +1,61 @@
+get	HTTP/1.1 200 OK	6c656e3a30
+post-json	HTTP/1.1 200 OK	6c656e3a35
+post-no-length	HTTP/1.1 200 OK	6c656e3a30
+post-zero-length	HTTP/1.1 200 OK	6c656e3a30
+lowercase-method	HTTP/1.1 400 Bad Request	7b226572726f72223a224854545020ec9a94ecb2adec9db420ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+unknown-method	HTTP/1.1 400 Bad Request	7b226572726f72223a224854545020ec9a94ecb2adec9db420ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+http-1-0	HTTP/1.1 400 Bad Request	7b226572726f72223a224854545020ec9a94ecb2adec9db420ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+http-2	HTTP/1.1 400 Bad Request	7b226572726f72223a224854545020ec9a94ecb2adec9db420ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+no-version	HTTP/1.1 400 Bad Request	7b226572726f72223a224854545020ec9a94ecb2adec9db420ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+double-space	HTTP/1.1 400 Bad Request	7b226572726f72223a224854545020ec9a94ecb2adec9db420ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+absolute-target	HTTP/1.1 400 Bad Request	7b226572726f72223a224854545020ec9a94ecb2adec9db420ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+star-target	HTTP/1.1 400 Bad Request	7b226572726f72223a224854545020ec9a94ecb2adec9db420ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+empty-request-line	HTTP/1.1 400 Bad Request	7b226572726f72223a224854545020ec9a94ecb2adec9db420ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+bad-header-name	HTTP/1.1 400 Bad Request	7b226572726f72223a22eca491ebb3b520eb9890eb8a9420ec9e98ebaabbeb909c20ed97a4eb8d94227d
+space-before-colon	HTTP/1.1 400 Bad Request	7b226572726f72223a22eca491ebb3b520eb9890eb8a9420ec9e98ebaabbeb909c20ed97a4eb8d94227d
+no-colon	HTTP/1.1 400 Bad Request	7b226572726f72223a22ec9e98ebaabbeb909c20ed97a4eb8d94227d
+empty-header-name	HTTP/1.1 400 Bad Request	7b226572726f72223a22eca491ebb3b520eb9890eb8a9420ec9e98ebaabbeb909c20ed97a4eb8d94227d
+obs-fold	HTTP/1.1 400 Bad Request	7b226572726f72223a22ec9e98ebaabbeb909c20ed97a4eb8d94227d
+tab-in-value	HTTP/1.1 200 OK	6c656e3a30
+nul-in-value	HTTP/1.1 400 Bad Request	7b226572726f72223a22ec9e98ebaabbeb909c20ed97a4eb8d94227d
+del-in-value	HTTP/1.1 400 Bad Request	7b226572726f72223a22ec9e98ebaabbeb909c20ed97a4eb8d94227d
+non-ascii-value	HTTP/1.1 200 OK	6c656e3a30
+invalid-utf8-target	HTTP/1.1 400 Bad Request	7b226572726f72223a224854545020ed97a4eb8d94eab08020ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+duplicate-length-same	HTTP/1.1 400 Bad Request	7b226572726f72223a22eca491ebb3b520eb9890eb8a9420ec9e98ebaabbeb909c20ed97a4eb8d94227d
+duplicate-length-differ	HTTP/1.1 400 Bad Request	7b226572726f72223a22eca491ebb3b520eb9890eb8a9420ec9e98ebaabbeb909c20ed97a4eb8d94227d
+length-not-number	HTTP/1.1 413 Payload Too Large	7b226572726f72223a22ec9a94ecb2ad20ed81aceab8b0eab08020ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+length-plus	HTTP/1.1 413 Payload Too Large	7b226572726f72223a22ec9a94ecb2ad20ed81aceab8b0eab08020ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+length-negative	HTTP/1.1 413 Payload Too Large	7b226572726f72223a22ec9a94ecb2ad20ed81aceab8b0eab08020ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+length-ten-digits	HTTP/1.1 413 Payload Too Large	7b226572726f72223a22ec9a94ecb2ad20ed81aceab8b0eab08020ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+length-trailing-space	HTTP/1.1 200 OK	6c656e3a32
+length-over-limit	HTTP/1.1 413 Payload Too Large	7b226572726f72223a22ec9a94ecb2ad20ed81aceab8b0eab08020ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+chunked	HTTP/1.1 400 Bad Request	7b226572726f72223a22436f6e74656e742d4c656e677468eab08020ed9584ec9a94ed95a9eb8b88eb8ba42e227d
+chunked-and-length	HTTP/1.1 400 Bad Request	7b226572726f72223a22436f6e74656e742d4c656e677468eab08020ed9584ec9a94ed95a9eb8b88eb8ba42e227d
+expect-continue	HTTP/1.1 200 OK	6c656e3a32
+connection-keep-alive	HTTP/1.1 200 OK	6c656e3a30
+upgrade-websocket	HTTP/1.1 200 OK	6c656e3a30
+no-host	HTTP/1.1 200 OK	6c656e3a30
+two-hosts	HTTP/1.1 400 Bad Request	7b226572726f72223a22eca491ebb3b520eb9890eb8a9420ec9e98ebaabbeb909c20ed97a4eb8d94227d
+thirty-three-headers	HTTP/1.1 200 OK	6c656e3a30
+thirty-four-headers	HTTP/1.1 400 Bad Request	7b226572726f72223a224854545020ec9a94ecb2adec9db420ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+head-over-limit	HTTP/1.1 431 Request Header Fields Too Large	7b226572726f72223a22ed97a4eb8d94eab08020eb8488ebacb420ed81bdeb8b88eb8ba42e227d
+long-target	HTTP/1.1 200 OK	6c656e3a30
+query	HTTP/1.1 200 OK	6c656e3a30
+percent-target	HTTP/1.1 200 OK	6c656e3a30
+content-type-text	HTTP/1.1 200 OK	6c656e3a32
+mixed-case-header	HTTP/1.1 200 OK	6c656e3a30
+lf-only	pending	
+bare-cr	HTTP/1.1 400 Bad Request	7b226572726f72223a22ec9e98ebaabbeb909c20ed97a4eb8d94227d
+pipelined	HTTP/1.1 400 Bad Request	7b226572726f72223a22ed9598eb8298ec9d9820ec97b0eab2b0ec9790eb8a9420ed9598eb8298ec9d9820ec9a94ecb2adeba78c20ed9788ec9aa9ed95a9eb8b88eb8ba42e227d
+body-shorter-than-length	pending	
+body-longer-than-length	HTTP/1.1 400 Bad Request	7b226572726f72223a22ed9598eb8298ec9d9820ec97b0eab2b0ec9790eb8a9420ed9598eb8298ec9d9820ec9a94ecb2adeba78c20ed9788ec9aa9ed95a9eb8b88eb8ba42e227d
+head-8192	HTTP/1.1 200 OK	6c656e3a30
+head-8193	HTTP/1.1 200 OK	6c656e3a30
+host-auth-post-runs	HTTP/1.1 200 OK	6c656e3a35
+host-auth-get-body	HTTP/1.1 200 OK	6c656e3a33
+host-no-key-post	HTTP/1.1 200 OK	6c656e3a30
+host-wrong-key-post	HTTP/1.1 200 OK	6c656e3a30
+host-no-version-post	HTTP/1.1 200 OK	6c656e3a30
+host-origin-post	HTTP/1.1 200 OK	6c656e3a30
+host-auth-get-over-limit	HTTP/1.1 413 Payload Too Large	7b226572726f72223a22ec9a94ecb2ad20ed81aceab8b0eab08020ec98acebb094eba5b4eca78020ec958aec8ab5eb8b88eb8ba42e227d
+host-auth-runs-large-length	pending	

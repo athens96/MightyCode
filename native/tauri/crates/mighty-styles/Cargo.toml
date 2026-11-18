@@ -1,0 +1,29 @@
+[package]
+name = "mighty-styles"
+version = "0.1.0"
+description = "Mighty Code's style engine (W9-D: C# MightyCode.Core Styles\\*, checked against the frozen Swift engine's goldens and corpus read in place), with no Tauri dependency and no OS code."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mighty-core.workspace = true
+# The files ports (`open_file` with the host's `FileHandles`: the handle a style file is read through).
+mighty-composer.workspace = true
+# `StylePhase`, `StructureStyle` (the Mighty views read a style through it).
+mighty-graph.workspace = true
+# `StartRunRequest` (the run-start binding), the plan-mode checklist and background work.
+mighty-run.workspace = true
+serde_json.workspace = true
+indexmap.workspace = true
+sha2.workspace = true
+regex.workspace = true
+unicode-segmentation.workspace = true
+# `StyleText.Folded` (NFKC), as mighty-history already reads it.
+unicode-normalization = "0.1"
+chrono.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -1,0 +1,319 @@
+//! The ports' contracts, against the fakes: what every OS implementation must also do.
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use mighty_platform::fake::{
+    self, FakeProcessHost, FakePtyHost, FakeScript, FakeSurfaces, MemoryVault, PetCall, RecordingNotifier, SurfaceEvent,
+};
+use mighty_platform::*;
+
+fn absolute(name: &str) -> PathBuf {
+    if cfg!(windows) { PathBuf::from(format!("C:\\{name}")) } else { PathBuf::from(format!("/{name}")) }
+}
+
+#[tokio::test]
+async fn a_capture_feeds_stdin_and_collects_both_outputs() {
+    let host = FakeProcessHost::default();
+    host.push(FakeScript { stdout: b"out".to_vec(), stderr: b"err".to_vec(), exit_code: 3, hang: false });
+    let request = SpawnRequest::new(absolute("bin\\tool.exe"), ["--flag"], absolute("work"));
+    let captured = capture(&host, request, Some(b"input".to_vec()), Duration::from_secs(5), 1024).await.unwrap();
+    assert_eq!(captured, Captured { exit_code: 3, stdout: b"out".to_vec(), stderr: b"err".to_vec() });
+    assert_eq!(host.input(0), b"input");
+    let spawned = host.spawned();
+    assert_eq!(spawned[0].env.get("NO_COLOR").map(String::as_str), Some("1"), "C# StartInfo always sets NO_COLOR");
+    assert_eq!(spawned[0].args, ["--flag"]);
+}
+
+#[tokio::test]
+async fn a_capture_kills_a_child_past_its_timeout_or_its_output_limit() {
+    let host = FakeProcessHost::default();
+    host.push(FakeScript { hang: true, ..FakeScript::default() });
+    let request = SpawnRequest::new(absolute("bin\\tool.exe"), Vec::<String>::new(), absolute("work"));
+    let error = capture(&host, request.clone(), None, Duration::from_millis(50), 1024).await.unwrap_err();
+    assert!(matches!(error, PlatformError::TimedOut(_)), "{error}");
+
+    host.push(FakeScript { stdout: vec![b'x'; 2048], ..FakeScript::default() });
+    let error = capture(&host, request, None, Duration::from_secs(5), 1024).await.unwrap_err();
+    assert!(matches!(error, PlatformError::TooLarge(1024)), "{error}");
+}
+
+#[tokio::test]
+async fn a_request_names_what_the_child_does_not_inherit_and_how_a_cli_or_a_shell_starts() {
+    let host = FakeProcessHost::default();
+    let request = SpawnRequest::new(absolute("git"), ["status"], absolute("work")).without("GIT_DIR").env("GIT_TERMINAL_PROMPT", "0");
+    assert_eq!(request.env_remove, ["GIT_DIR"]);
+    assert!(format!("{request:?}").contains("GIT_DIR"), "names, never values, show");
+    host.spawn(request).await.unwrap().close().await.unwrap();
+    assert_eq!(host.spawned()[0].env_remove, ["GIT_DIR"]);
+    assert!(host.spawn(SpawnRequest::new(absolute("git"), Vec::<String>::new(), absolute("w")).without("A=B")).await.is_err());
+    // A leading `=` names a hidden drive folder (`=C:`), which the Windows host takes out too.
+    host.spawn(SpawnRequest::new(absolute("git"), Vec::<String>::new(), absolute("w")).without("=C:"))
+        .await
+        .unwrap()
+        .close()
+        .await
+        .unwrap();
+    assert!(host.spawn(SpawnRequest::new(absolute("git"), Vec::<String>::new(), absolute("w")).without("=C:=")).await.is_err());
+
+    let env = BTreeMap::from([("NO_COLOR".to_string(), "0".to_string()), ("TOKEN".to_string(), "x".to_string())]);
+    let cli = host.cli_request(&absolute("claude"), &["--print".to_string()], &absolute("work"), &env).unwrap();
+    assert_eq!((cli.program, cli.args), (absolute("claude"), vec!["--print".to_string()]));
+    assert_eq!(cli.env.get("NO_COLOR").map(String::as_str), Some("1"), "StartInfo sets NO_COLOR after the caller's environment");
+    assert_eq!(cli.env.get("TOKEN").map(String::as_str), Some("x"));
+    let shell = host.shell_request("echo hi", &absolute("work"), &env);
+    assert_eq!((shell.program, shell.args), (PathBuf::from("/bin/sh"), vec!["-c".to_string(), "echo hi".to_string()]));
+}
+
+#[tokio::test]
+async fn a_killed_child_ends_and_relative_paths_are_refused() {
+    let host = FakeProcessHost::default();
+    host.push(FakeScript { hang: true, ..FakeScript::default() });
+    let child = host.spawn(SpawnRequest::new(absolute("tool"), Vec::<String>::new(), absolute("work"))).await.unwrap();
+    child.kill();
+    assert_eq!(child.wait().await.unwrap(), fake::KILLED);
+    child.close().await.unwrap();
+    assert!(host.spawn(SpawnRequest::new("tool", Vec::<String>::new(), "relative")).await.is_err());
+}
+
+#[tokio::test]
+async fn a_terminal_takes_input_resizes_and_closes() {
+    let host = FakePtyHost::default();
+    let request = PtyRequest {
+        program: host.default_shell(),
+        args: vec![],
+        cwd: absolute("work"),
+        env: BTreeMap::from([("PATH".into(), "x".into())]),
+        size: PtySize { columns: 5000, rows: 0 },
+    };
+    let mut session = host.open(request.clone()).await.unwrap();
+    assert_eq!(host.sizes(), [PtySize { columns: 1000, rows: 1 }], "sizes are clamped as C# clamps them");
+    assert!(session.control.write(b"echo"));
+    assert_eq!(session.output.recv().await.unwrap(), b"echo");
+    assert!(!session.control.write(&vec![0; 65_537]), "more than 65,536 UTF-16 units at once is refused");
+    let korean = "한".repeat(30_000);
+    assert!(session.control.write(korean.as_bytes()), "the limit counts UTF-16 units as C#'s string.Length does, not the 90,000 bytes");
+    assert_eq!(session.output.recv().await.unwrap(), korean.as_bytes());
+    session.control.resize(PtySize { columns: 120, rows: 40 }).unwrap();
+    assert!(session.control.process_ids().is_some());
+    // A close does not wait for the output to be read: this is still unread when it returns, as a real console's output may be.
+    assert!(session.control.write(b"unread"));
+    tokio::time::timeout(Duration::from_secs(10), session.control.close()).await.expect("a close returns with its output unread").unwrap();
+    // What was queued before the close can still be read, then the output ends (a real console adds its final frame first).
+    let rest = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut rest = Vec::new();
+        while let Some(bytes) = session.output.recv().await {
+            rest.extend(bytes);
+        }
+        rest
+    })
+    .await
+    .expect("the output ends with the terminal");
+    assert_eq!(rest, b"unread");
+    assert!(!session.control.write(b"late"));
+    assert!(session.control.process_ids().is_none());
+
+    let bad = PtyRequest { env: BTreeMap::from([("A=B".into(), "x".into())]), ..request };
+    assert!(host.open(bad).await.is_err());
+}
+
+#[test]
+fn a_vault_forgets_nothing_it_kept_and_misses_nothing_it_lacks() {
+    let vault = MemoryVault::default();
+    assert_eq!(vault.load("c1"), None);
+    vault.save("c1", "secret").unwrap();
+    assert_eq!(vault.load("c1").as_deref(), Some("secret"));
+    vault.delete("c1").unwrap();
+    vault.delete("c1").unwrap();
+    assert_eq!(vault.load("c1"), None);
+    assert!(!format!("{vault:?}").contains("secret"));
+}
+
+#[test]
+fn environments_and_pairing_never_print_their_secrets() {
+    let environment = CliEnvironment { values: BTreeMap::from([("TOKEN".into(), "hunter2".into())]), source: EnvironmentSource::Profile };
+    assert!(!format!("{environment:?}").contains("hunter2"));
+    let identity = PairingIdentity {
+        host_id: "h".into(),
+        host_token: "t".repeat(64),
+        pairing_key: "pairing-secret".into(),
+        secret_key: [7; 32],
+        devices: vec![],
+    };
+    let shown = format!("{identity:?}");
+    assert!(!shown.contains("pairing-secret") && !shown.contains(&"t".repeat(64)));
+    let request = SpawnRequest::new(absolute("tool"), Vec::<String>::new(), absolute("w")).env("API_KEY", "sk-123");
+    assert!(!format!("{request:?}").contains("sk-123"));
+}
+
+#[tokio::test]
+async fn a_notification_click_names_its_pane() {
+    let notifier = RecordingNotifier::default();
+    let clicked = Arc::new(Mutex::new(None));
+    let seen = clicked.clone();
+    notifier.on_activated(Arc::new(move |pane| *seen.lock().unwrap() = Some(pane)));
+    notifier.notify(Notification { title: "W · pane".into(), body: "done".into(), pane_id: Some("p1".into()) }).await.unwrap();
+    notifier.click(0);
+    assert_eq!(*clicked.lock().unwrap(), Some(Some("p1".to_string())));
+}
+
+#[tokio::test]
+async fn the_firewall_rule_follows_apply() {
+    let firewall = fake::FakeFirewall::default();
+    assert_eq!(firewall.read().await.unwrap(), FirewallRule::Missing);
+    let applied = firewall.apply(vec![43137]).await.unwrap();
+    assert!(matches!(applied, FirewallChange::Applied(Some(spec)) if spec.ports == "43137"));
+    assert_eq!(
+        firewall.read().await.unwrap(),
+        FirewallRule::Present { ports: None, program: None },
+        "a recorder prints nothing: the ports are unknown"
+    );
+    firewall.netsh().fail_elevated(Some(mighty_platform::firewall::NetshFailure::Cancelled));
+    assert_eq!(firewall.apply(vec![]).await.unwrap(), FirewallChange::Declined);
+    firewall.netsh().fail_elevated(None);
+    assert_eq!(firewall.apply(vec![]).await.unwrap(), FirewallChange::Applied(None));
+    assert_eq!(firewall.read().await.unwrap(), FirewallRule::Missing);
+    assert_eq!(firewall.apply(vec![80]).await.unwrap(), FirewallChange::Refused("badPorts".into()));
+    assert_eq!(firewall.add(vec![]).await.unwrap(), FirewallChange::Refused("noPorts".into()));
+}
+
+#[tokio::test]
+async fn a_closed_surface_refuses_every_call() {
+    let surfaces = FakeSurfaces::default();
+    assert_eq!(surfaces.drawing(SurfaceKind::Browser), Drawing::Native);
+    assert_eq!(surfaces.drawing(SurfaceKind::Terminal), Drawing::Web);
+    let rect = DeviceRect { x: 1, y: 2, width: 30, height: 40 };
+    let options = BrowserOptions { pane_id: "p".into(), url: "about:blank".into(), data_dir: absolute("b"), bounds: rect, listener: None };
+    let view = surfaces.open_browser(options).await.unwrap();
+    view.set_visible(false).unwrap();
+    assert_eq!(view.inspect().await.unwrap(), SurfaceState { bounds: rect, visible: false, url: Some("about:blank".into()) });
+    view.close().unwrap();
+    assert!(view.place(rect).is_err());
+    assert_eq!(surfaces.events().last(), Some(&SurfaceEvent::Closed { pane: "p".into() }));
+    // W8: the fake's pet window records what it was asked and refuses every call once closed.
+    let pet = surfaces.open_pet().await.unwrap();
+    let scene = PetScene { width: 258.0, height: 330.0, ..PetScene::default() };
+    pet.show(&scene).unwrap();
+    pet.place(LogicalPoint { x: 10.0, y: 20.0 }).unwrap();
+    assert!(pet.events().is_ok() && pet.events().is_err(), "the events are handed over once");
+    pet.close().unwrap();
+    assert!(pet.draw(&scene).is_err());
+    let calls = surfaces.pets()[0].calls();
+    assert_eq!(calls, vec![PetCall::Shown(scene), PetCall::Placed(LogicalPoint { x: 10.0, y: 20.0 }), PetCall::Closed]);
+}
+
+#[test]
+fn a_fake_platform_has_every_port() {
+    let root = absolute("fake-root");
+    let platform = fake::platform(&root, Os::Macos);
+    assert_eq!(platform.profile, PlatformProfile::macos());
+    assert_eq!(platform.paths.state_file(), root.join("data").join("workspace-state.json"));
+    assert_eq!(platform.prefs.get("delegation.enabled").unwrap(), None);
+    assert!(platform.pairing.load().unwrap().is_none());
+    assert!(platform.updates.install_location().is_none());
+}
+
+/// W9 (Step 0): the detached start records what it was asked and never starts anything; a job without breakaway refuses it.
+#[test]
+fn a_detached_start_is_recorded_with_its_exact_environment() {
+    let host = FakeProcessHost::default();
+    let request = DetachedRequest {
+        program: absolute("install\\MightyCode.exe"),
+        args: vec!["--update-helper".into()],
+        cwd: absolute("temp"),
+        environment: DetachedEnvironment::Exactly(BTreeMap::from([("SystemRoot".to_string(), "C:\\Windows".to_string())])),
+        hidden: true,
+    };
+    assert!(host.start_detached(request.clone()).unwrap() > 0);
+    assert_eq!(host.detached(), std::slice::from_ref(&request));
+    assert!(host.spawned().is_empty(), "a detached start is not a child");
+    assert!(!format!("{request:?}").contains("C:\\Windows"), "the environment's values stay out of Debug");
+    host.refuse_detached(true);
+    assert!(matches!(host.start_detached(request.clone()), Err(PlatformError::Refused(_))));
+    // W9-B: the relaunched app's start stays in such a job rather than fail.
+    assert!(host.start_detached_or_in_job(request.clone()).unwrap() > 0);
+    assert_eq!(host.detached().len(), 2);
+}
+
+/// W9-E: a waitable detached start is recorded with the detached starts, plays its script's exit code, and ends alone when terminated;
+/// a job without breakaway does not refuse it (the child would start in that job).
+#[tokio::test]
+async fn a_waitable_detached_start_is_waited_for_and_ended_alone() {
+    let host = FakeProcessHost::default();
+    let request = DetachedRequest {
+        program: absolute("tools/python.exe"),
+        args: vec!["-I".into()],
+        cwd: absolute("system"),
+        environment: DetachedEnvironment::Exactly(BTreeMap::from([("HOME".to_string(), "h".to_string())])),
+        hidden: true,
+    };
+    host.refuse_detached(true);
+    host.push(FakeScript { exit_code: 3, ..FakeScript::default() });
+    let child = host.start_detached_waitable(request.clone()).unwrap();
+    assert!(child.id() > 0 && child.wait().await.unwrap() == 3, "the exit code is read");
+    child.terminate();
+    assert!(!host.detached_terminated(0), "ending one that exited ends nothing");
+    host.push(FakeScript { hang: true, ..FakeScript::default() });
+    let hung = host.start_detached_waitable(request.clone()).unwrap();
+    hung.terminate();
+    assert!(host.detached_terminated(1) && hung.wait().await.unwrap() == fake::KILLED, "a running one is ended");
+    assert_eq!(host.detached(), vec![request.clone(), request], "both recorded as detached starts");
+    assert!(host.spawned().is_empty(), "neither is a child of the app");
+}
+
+/// W9 (Step 0): one holder per helper mutex name until its guard drops.
+#[test]
+fn a_helper_mutex_has_one_holder_at_a_time() {
+    let installer = fake::FakeUpdateInstaller::default();
+    let first = installer.helper_mutex("Local\\MightyCode-update-helper-0").unwrap();
+    assert!(first.is_some());
+    assert!(installer.helper_mutex("Local\\MightyCode-update-helper-0").unwrap().is_none(), "a second helper is refused");
+    assert!(installer.helper_mutex("Local\\MightyCode-update-helper-1").unwrap().is_some(), "another folder, another mutex");
+    drop(first);
+    assert!(installer.helper_mutex("Local\\MightyCode-update-helper-0").unwrap().is_some(), "released when dropped");
+}
+
+/// W9 (Step 0): the update transport takes https only, hands redirects back, caps a read, and a download writes the body counting.
+#[tokio::test]
+async fn the_update_transport_hands_redirects_back_and_caps_what_it_reads() {
+    let transport = fake::FakeUpdateTransport::default();
+    transport.route("https://example.invalid/latest.json", fake::FakeRoute::redirect(302, "http://example.invalid/latest.json"));
+    transport.route("https://example.invalid/big.json", fake::FakeRoute::ok(vec![b'x'; 10]));
+    let hop = transport.get_capped("https://example.invalid/latest.json", 1024, Duration::from_secs(1)).await.unwrap();
+    assert_eq!((hop.status, hop.location.as_deref()), (302, Some("http://example.invalid/latest.json")));
+    assert!(matches!(
+        transport.get_capped("http://example.invalid/latest.json", 1024, Duration::ZERO).await,
+        Err(PlatformError::Invalid(_))
+    ));
+    assert!(matches!(transport.get_capped("https://example.invalid/big.json", 9, Duration::ZERO).await, Err(PlatformError::TooLarge(9))));
+    assert_eq!(transport.asked().len(), 2, "the http address never reached a route");
+
+    let folder = std::env::temp_dir().join(format!("mighty-update-transport-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let progress = seen.clone();
+    let request = DownloadRequest {
+        url: "https://example.invalid/big.json".into(),
+        destination: folder.join("package.zip"),
+        limit: 10,
+        timeout: Duration::from_secs(1),
+        progress: Arc::new(move |written| progress.lock().unwrap().push(written)),
+        cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    };
+    let done = transport.download(request.clone()).await.unwrap();
+    assert_eq!((done.status, done.written), (200, 10));
+    assert_eq!(std::fs::read(folder.join("package.zip")).unwrap(), vec![b'x'; 10]);
+    assert_eq!(*seen.lock().unwrap(), [10]);
+    let small = DownloadRequest { limit: 9, ..request };
+    assert!(matches!(transport.download(small).await, Err(PlatformError::TooLarge(9))));
+    std::fs::remove_dir_all(&folder).unwrap();
+    // Review L3: a redirect's address (it may carry a token) never shows in Debug.
+    let secret = "https://example.invalid/next?token=SECRET";
+    let answers = (
+        format!("{:?}", mighty_platform::UpdateResponse { status: 302, location: Some(secret.into()), body: vec![1, 2] }),
+        format!("{:?}", mighty_platform::Downloaded { status: 302, location: Some(secret.into()), written: 0 }),
+    );
+    assert!(!answers.0.contains("SECRET") && !answers.1.contains("SECRET") && answers.0.contains("302"), "{answers:?}");
+}

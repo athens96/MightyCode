@@ -1,0 +1,56 @@
+{"provider": "claude", "mode": "", "attached": false, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "", "attached": true, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "plan", "attached": false, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "plan", "attached": true, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "manual", "attached": false, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "manual", "attached": true, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "acceptEdits", "attached": false, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "acceptEdits", "attached": true, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "onRequest", "attached": false, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "onRequest", "attached": true, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "auto", "attached": false, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "auto", "attached": true, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "fullAccess", "attached": false, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "fullAccess", "attached": true, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "", "attached": false, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "", "attached": true, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "plan", "attached": false, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "plan", "attached": true, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "manual", "attached": false, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "manual", "attached": true, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "acceptEdits", "attached": false, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "acceptEdits", "attached": true, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "onRequest", "attached": false, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "onRequest", "attached": true, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "auto", "attached": false, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "auto", "attached": true, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "fullAccess", "attached": false, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "fullAccess", "attached": true, "executable": "C:\\Program Files\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "", "attached": false, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "", "attached": true, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "plan", "attached": false, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "plan", "attached": true, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "manual", "attached": false, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "manual", "attached": true, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "acceptEdits", "attached": false, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "acceptEdits", "attached": true, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "onRequest", "attached": false, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "onRequest", "attached": true, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "auto", "attached": false, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "auto", "attached": true, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "fullAccess", "attached": false, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "claude", "mode": "fullAccess", "attached": true, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "", "attached": false, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "", "attached": true, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "plan", "attached": false, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "plan", "attached": true, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "manual", "attached": false, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "manual", "attached": true, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "acceptEdits", "attached": false, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "acceptEdits", "attached": true, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "onRequest", "attached": false, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "onRequest", "attached": true, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "auto", "attached": false, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "auto", "attached": true, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "fullAccess", "attached": false, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}
+{"provider": "codex", "mode": "fullAccess", "attached": true, "executable": "C:\\Users\\한글 \"q\" <&>\\Mighty Code\\MightyCode.exe"}

@@ -136,6 +136,15 @@ const CLIENTS = [
     referencesOnly: true,
     skipFile: /\.test\.tsx?$/,
   },
+  {
+    // The Rust + Tauri app embeds the root files (mighty-core's locale.rs, include_str!), so it
+    // has no copy either; like the Windows web window only its key references are checked.
+    label: 'Rust app',
+    roots: ['native/tauri/crates', 'native/tauri/src-tauri/src'],
+    extensions: ['.rs'],
+    copies: [],
+    referencesOnly: true,
+  },
 ];
 
 // Text in style manifests and styles/** is data: it is not moved, so it is not counted.

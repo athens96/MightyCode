@@ -1,9 +1,13 @@
 # Installs a setup program built by build-windows.ps1 -Installer silently for this user, checks what it left, then
 # uninstalls it and checks that nothing of the app is left. Settings and conversations are not touched: the app is
 # never started. Runs in Windows PowerShell 5.1 or PowerShell 7.
+# -Layout tauri checks a setup program built by build-tauri-windows.ps1 -Installer (the Rust + Tauri app's folder: the exe
+# beside claude-mods, Agents and pets; W9 plan §1.6); -Version is then the version's major.minor.patch, as the setup
+# program and the uninstall entry carry it.
 param(
     [Parameter(Mandatory = $true)][string]$Setup,
-    [Parameter(Mandatory = $true)][string]$Version
+    [Parameter(Mandatory = $true)][string]$Version,
+    [ValidateSet('winui', 'tauri')][string]$Layout = 'winui'
 )
 $ErrorActionPreference = 'Stop'
 $installDirectory = Join-Path $env:LOCALAPPDATA 'Programs\MightyCode'
@@ -31,7 +35,12 @@ $oldShortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Mighty Clau
 Set-Content $oldShortcut 'old'
 Invoke-Quiet $Setup @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/LOG=`"$log`"")
 if (Test-Path $oldShortcut) { throw "setup left the shortcut from before the rename: $oldShortcut" }
-foreach ($required in @('MightyCode.exe', 'MightyCode.dll', 'resources.pri', 'Microsoft.UI.Xaml.dll', 'Assets\MightyCode.ico', 'Assets\Web\index.html', 'claude-mods\.claude-plugin\plugin.json')) {
+$requiredFiles = if ($Layout -eq 'tauri') {
+    @('MightyCode.exe', 'build-info.json', 'claude-mods\.claude-plugin\plugin.json', 'Agents\pi-ask-user.js', 'pets\mighty-raccoon\pet.json')
+} else {
+    @('MightyCode.exe', 'MightyCode.dll', 'resources.pri', 'Microsoft.UI.Xaml.dll', 'Assets\MightyCode.ico', 'Assets\Web\index.html', 'claude-mods\.claude-plugin\plugin.json')
+}
+foreach ($required in $requiredFiles) {
     if (-not (Test-Path (Join-Path $installDirectory $required) -PathType Leaf)) { throw "setup did not install $required (log: $log)" }
 }
 $values = Get-ItemProperty $entry

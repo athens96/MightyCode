@@ -1,0 +1,77 @@
+[package]
+name = "mighty-remote"
+version = "0.1.0"
+description = "Mighty Code's phone remote (relay, direct path, the m1 API, push), remote workspaces v2 and screen share's protocol (C# Core/Remote/*.cs). No Tauri, no cfg(target_os): the OS through mighty-platform's ports."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+# The headless desk's runs (tests/support/desk.rs, W8-B): mighty-run's stand-in CLI, as mighty-graph and mighty-delegation build it (a
+# `[[bin]]` is only named by its own package's tests).
+[[bin]]
+name = "mighty-remote-fake-cli"
+path = "../mighty-run/tests/fake/cli.rs"
+test = false
+doc = false
+
+[dependencies]
+mighty-core.workspace = true
+mighty-platform.workspace = true
+mighty-run.workspace = true
+mighty-graph.workspace = true
+mighty-composer.workspace = true
+mighty-delegation.workspace = true
+mighty-files.workspace = true
+mighty-workmap.workspace = true
+mighty-terminal.workspace = true
+# The style engine (W9-D): the phone's style options, panel and older phones' Ouroboros payload.
+mighty-styles.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+indexmap = { workspace = true, features = ["serde"] }
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "io-util", "net"] }
+sha2.workspace = true
+base64 = "0.22"
+getrandom = "0.3"
+uuid.workspace = true
+url = "2"
+unicode-segmentation.workspace = true
+# The relay's crypto (relay::cipher, W8-A; push::seal): X25519 -> HKDF-SHA256 -> ChaCha20-Poly1305, byte for byte as C#'s RelayCrypto
+# and MobilePush; fixed-time compares and secrets wiped after use.
+x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+subtle = "2"
+zeroize = "1"
+# One WebSocket and TLS stack (D5): tokio-tungstenite over native-tls (SChannel on Windows, Security.framework on the Mac), with a
+# CONNECT tunnel through the system's proxy before TLS (W8-A); the direct listener's server side wraps an upgraded socket (W8-C).
+tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
+tokio-native-tls = "0.3"
+# The WebSocket's Stream and Sink (W8-A's relay connection reads and writes a `WebSocketStream` from its own tasks); already in the lock
+# through tokio-tungstenite.
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+native-tls = "0.2"
+# The pairing QR (D13): ECC M, drawn to a PNG with image (W8-A's settings box).
+qrcode = { version = "0.14", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Screen share's protocol (screen::policy, screen::clipboard, W8-F): the P-256 control key's DER signature over SHA-256, as C#'s
+# ECDsa.VerifyData; the clipboard's zstd frames, decoded with a bounded window, in pure Rust (ruzstd rather than the plan's zstd, whose
+# C build cannot cross-compile for the Mac check on Windows); the hub's clock and its sessions' cancellation.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+ruzstd = "0.9"
+chrono.workspace = true
+tokio-util = "0.7"
+
+[dev-dependencies]
+mighty-platform.workspace = true
+# The direct path's checks read and write the upgraded sockets (W8-C; already in the lock through tokio-tungstenite).
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread", "macros", "io-util", "net", "test-util"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+mighty-platform-windows.workspace = true
+
+# The Mac's network, HTTPS and proxy under the checks that read this machine (M-C: tailscale.rs, push.rs, mac_network.rs).
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+mighty-platform-macos.workspace = true

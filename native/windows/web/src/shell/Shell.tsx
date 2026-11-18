@@ -11,7 +11,8 @@ import { PictureViewer } from '../pictures/PictureViewer';
 import { dragSlack, layoutMetrics } from '../layout/geometry';
 import { Banners, StatusBar, WorkspaceHeader } from './Chrome';
 import { MenuHost } from './parts';
-import { shortcutAction } from './shortcuts';
+import { macShortcutAction, shortcutAction } from './shortcuts';
+import { macHost, useMenu } from './menu';
 import { Sidebar, sidebarSearchId } from './Sidebar';
 import type { AppSnapshot } from '../store/models';
 
@@ -65,7 +66,8 @@ function useShortcuts(snapshot: AppSnapshot | null, blocked: boolean) {
   useEffect(() => {
     const call = (method: string, args?: unknown) => void bridge.call(method, args).catch(() => {});
     const key = (event: KeyboardEvent) => {
-      const action = shortcutAction(event);
+      // The Mac in the Rust host (D9): ⌘ is the modifier, and a Ctrl key is the text field's.
+      const action = import.meta.env.MODE === 'tauri' && macHost() ? macShortcutAction(event) : shortcutAction(event);
       if (!action || state.current.blocked || !state.current.snapshot) return;
       event.preventDefault();
       switch (action) {
@@ -109,6 +111,8 @@ export function Shell({ snapshot }: { snapshot: AppSnapshot | null }) {
     document.querySelector('.sidebar [data-session-id="' + selected.paneId + '"]')?.scrollIntoView({ block: 'nearest' });
   }, [selected]);
   useShortcuts(snapshot, state.dialogs.length > 0 || state.natives.length > 0 || state.picture !== undefined || (shell?.dialogOpen ?? false));
+  // The Mac's menu bar (D9): its items that are page UI arrive as `menu` pushes.
+  if (import.meta.env.MODE === 'tauri') useMenu(snapshot, state.dialogs.length > 0 || state.natives.length > 0 || state.picture !== undefined || (shell?.dialogOpen ?? false), closeUsage);
   if (!snapshot || !shell) return <div className="shell-loading" data-testid="loading">{t('launch.preparing')}</div>;
   const collapsed = snapshot.sidebarCollapsed;
   const width = live ?? snapshot.sidebarWidth;

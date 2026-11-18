@@ -1,0 +1,28 @@
+[package]
+name = "mighty-platform"
+version = "0.1.0"
+description = "The ports between Mighty Code's shared logic and the operating system (traits, PlatformProfile) with a fake of each for tests. No OS code."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["sync", "io-util", "time", "macros"] }
+# W8: the pet's display list is serialized for its snapshots (pet.rs, W8-E); the phone identity's codec reads and writes JSON and the
+# relay secret's base64 (pairing/identity_file.rs, W8-A).
+serde.workspace = true
+serde_json.workspace = true
+base64 = "0.22"
+# Mac stage M-B: the Mac's four pairing files (pairing/four_files.rs) make a missing part as Swift does (random bytes) and write the
+# relay key pair's public key (X25519 of the secret), as mighty-remote's relay already does.
+getrandom = "0.3"
+x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "io-util", "time", "rt", "macros"] }
+
+# W8 Step 0 lists the parts' dependencies (serde_json and base64 for W8-A's identity codec) before their code uses them; this table goes
+# once every one is used.
+[lints.cargo]
+unused_dependencies = "allow"
