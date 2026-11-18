@@ -1228,13 +1228,22 @@ fn a_skill_folder_never_escapes_the_skills_folder() {
     for url in ["https://github.com/x/D:evil", "https://github.com/x/C:", "https://github.com/x/..git"] {
         assert_eq!(probe::skill_folder_name(url), None, "{url}");
     }
-    assert!(probe::skill_folder("https://github.com/x/D:evil").is_err() && probe::skill_folder("not a url").is_err());
+    let folder_reason = strings::get_with("toolkit.error.skillFolder", &[("name", "D:evil"), ("url", "https://github.com/x/D:evil")]);
+    assert_eq!(
+        probe::skill_folder("https://github.com/x/D:evil"),
+        Err(folder_reason.clone()),
+        "the app's own words, name and address filled in"
+    );
+    assert!(!folder_reason.contains("{name}") && folder_reason.contains("D:evil"), "{folder_reason}");
+    let address_reason = strings::get_with("toolkit.error.skillAddress", &[("url", "not a url")]);
+    assert_eq!(probe::skill_folder("not a url"), Err(address_reason.clone()));
+    assert!(!address_reason.contains("{url}") && address_reason.contains("not a url"), "{address_reason}");
     let (dir, home) = (common::temp("skill-escape"), common::temp("skill-escape-home"));
     let store = ToolkitStore::new(&dir);
     store.add(&make_entry("evil-skill", skill("https://github.com/x/D:evil"))).unwrap();
     store.approve("evil-skill", None).unwrap();
     let error = ToolkitRunner::new(&store, fake_context(&home)).plan().expect_err("the plan says why");
-    assert!(error.contains("D:evil"), "{error}");
+    assert!(error.contains(&folder_reason), "{error}");
     assert!(runner::install_commands(&make_entry("e", skill("https://github.com/x/D:evil")), None, &fake_context(&home)).is_empty());
     common::remove(&dir);
     common::remove(&home);

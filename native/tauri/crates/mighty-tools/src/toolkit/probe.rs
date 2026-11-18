@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
+use mighty_run::strings;
 use serde_json::Value;
 
 use crate::toolkit::file::{ToolkitApproval, ToolkitFileEntry, ToolkitInstallSpec};
@@ -109,7 +110,7 @@ pub fn skill_folder_name(url: &str) -> Option<String> {
 /// that is no plain folder name — a drive (`D:evil`), a separator, `.` or `..`, or a character Windows refuses — which joined to
 /// `.claude\skills` would name a folder outside it. Ok(None) when the address names no segment.
 pub fn skill_folder(url: &str) -> Result<Option<String>, String> {
-    let parsed = url::Url::parse(url).map_err(|_| format!("Invalid URI: The format of the URI could not be determined. ({url})"))?;
+    let parsed = url::Url::parse(url).map_err(|_| strings::get_with("toolkit.error.skillAddress", &[("url", url)]))?;
     let path = parsed.path();
     let trimmed = path.strip_suffix('/').unwrap_or(path);
     let mut component = trimmed.rsplit('/').next().unwrap_or("").to_string();
@@ -126,7 +127,7 @@ pub fn skill_folder(url: &str) -> Result<Option<String>, String> {
         && component != ".."
         && !component.chars().any(|c| matches!(c, ':' | '\\' | '/' | '<' | '>' | '"' | '|' | '?' | '*') || c.is_control());
     if !plain {
-        return Err(format!("The skill's folder name is not a folder in .claude\\skills: {component} ({url})"));
+        return Err(strings::get_with("toolkit.error.skillFolder", &[("name", &component), ("url", url)]));
     }
     Ok(Some(component))
 }
