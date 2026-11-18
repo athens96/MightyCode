@@ -542,7 +542,8 @@ jobs:
     # secrets of the `release` environment (main only); the build job above never
     # sees them. Actions are pinned to commit SHAs, as in release-manifest.yml.
     # A full dispatch on main (a release build from a commit whose push run skipped the Mac) is signed too.
-    needs: [macos, macos-tests]
+    # Only the build: it signs while the tests and the GUI checks run, and a release still needs the whole run green.
+    needs: macos
     if: vars.MIGHTY_MAC_NOTARIZE == '1' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     environment: release
     runs-on: macos-latest
