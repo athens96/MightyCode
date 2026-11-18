@@ -210,6 +210,9 @@
 .timeline-history .mighty-link { display: inline-flex; align-items: center; gap: var(--space-sm); }
 .timeline-group { display: flex; flex-direction: column; gap: var(--space-sm); flex: none; }
 .timeline-head { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-xxs); width: 100%; border: 0; background: transparent; color: var(--ink); padding: 0 2px; text-align: left; font: inherit; cursor: default; }
+.timeline-head:not(:disabled) { cursor: pointer; }
+.timeline-chevron { border-radius: var(--radius-segment); }
+.timeline-head:hover:not(:disabled) .timeline-chevron { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); }
 .timeline-head-line { display: flex; align-items: center; gap: var(--space-md); min-width: 0; }
 .timeline-chevron { flex: none; width: 11px; display: inline-grid; place-items: center; color: var(--ink2); }
 .timeline-group-title { min-width: 0; font-family: var(--font-heading); font-size: 16px; font-weight: 700; white-space: pre; overflow: hidden; text-overflow: ellipsis; }

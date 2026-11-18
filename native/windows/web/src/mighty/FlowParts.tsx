@@ -177,7 +177,7 @@ export function ProgressPanel({ paneId, progress, onReveal }: { paneId: string; 
         {progress.count && <span className="flow-outline-progress" data-testid="mighty-progress-count">{progress.count}</span>}
         <span className="flow-head-spacer" />
         <button className="mighty-icon" title={label} aria-label={label} aria-expanded={!collapsed} onClick={toggle} data-testid="mighty-progress-fold">
-          <Icon name={collapsed ? 'chevron-down' : 'chevron-up'} size={12} weight={2} />
+          <Icon name={collapsed ? 'chevron-right' : 'chevron-down'} size={12} weight={2} />
         </button>
       </div>
       <button type="button" className="mighty-progress-request" title={progress.requestHelp} data-testid="mighty-progress-request" onClick={() => onReveal(progress.requestNodeId)}>
@@ -245,7 +245,7 @@ export function FlowLogStrip({ paneId, log, squeezed = false, onToggle, onReveal
           {log.status.map((part, index) => <span key={index}>{index > 0 && <span className="flow-dot-sep"> · </span>}<span style={{ color: inkVar(part.ink) }}>{part.text}</span></span>)}
         </span>
         {!squeezed && <button type="button" className="mighty-icon mighty-log-toggle" title={t(open ? 'graph.log.hide' : 'graph.log.show')} aria-label={t(open ? 'graph.log.hide' : 'graph.log.show')}
-          aria-expanded={open} data-testid={'mighty-log-toggle-' + paneId} onClick={onToggle}><Icon name={open ? 'chevron-down' : 'chevron-up'} size={12} weight={2} /></button>}
+          aria-expanded={open} data-testid={'mighty-log-toggle-' + paneId} onClick={onToggle}><Icon name={open ? 'chevron-down' : 'chevron-right'} size={12} weight={2} /></button>}
       </div>
       {open && (
         <div className="mighty-log-rows" style={{ minHeight: `calc(${LogRows} * var(--log-row, 18px))` }}>

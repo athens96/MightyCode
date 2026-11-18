@@ -194,7 +194,7 @@ function NextActions({ paneId, card, call }: { paneId: string; card: NextActions
 function Fold({ open, label, onClick, children }: { open: boolean; label: string; onClick(): void; children: ReactNode }) {
   return (
     <button type="button" className="card-fold" aria-expanded={open} aria-label={label} onClick={onClick}>
-      {children}<Icon name={open ? 'chevron-up' : 'chevron-down'} size={11} weight={2.4} className="card-chevron" />
+      {children}<Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} weight={2.4} className="card-chevron" />
     </button>
   );
 }

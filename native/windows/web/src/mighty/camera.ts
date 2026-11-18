@@ -178,28 +178,18 @@ export class FollowWatch {
     this.gap = viewport.h - (camera.y + maxY(target) * zoom);
   }
 
-  /**
-   * A move of the user's by `dy` (how far the camera went down the screen): one towards the older work stops the following at
-   * once, as a chat's scroll up does, so neither the block growing nor a new block under it brings the view back down; any
-   * other move is judged where it ends (`moved`), and one that ends at the newest follows again.
-   */
-  userMoved(targetID: string | null, target: Rect | null, camera: Point, viewport: Size, zoom: number, dy: number): void {
-    if (dy > 0) { this.stop(); return; }
-    this.moved(targetID, target, camera, viewport, zoom);
-  }
+  /** The block the camera follows now (null while it does not follow): a move of the user's is judged against it. */
+  get followedID(): string | null { return this.following ? this.targetID : null; }
 
   /**
    * After a layout pass: the camera that keeps following, or null. While the user is moving the view themselves (`userMoving`: a
-   * wheel swipe or a drag under way) the camera is theirs: nothing moves it, and the move is judged against the new layout
-   * (the Mac's diagram shows the interaction's own offset until it is committed).
+   * wheel swipe or a drag under way) the camera is theirs: nothing moves it and nothing is judged — their move is judged where
+   * it ends (`moved`, against the block followed until then), and a block that came under it meanwhile is brought into view by
+   * the next pass (the Mac's diagram shows the interaction's own offset until it is committed).
    */
   observe(targetID: string | null, target: Rect | null, camera: Point, viewport: Size, zoom: number, userMoving = false): Point | null {
     if (!this.following || targetID === null || !target || !valid(camera, viewport, zoom)) return null;
-    if (userMoving) {
-      this.judging = false;
-      this.moved(targetID, target, camera, viewport, zoom);
-      return null;
-    }
+    if (userMoving) return null;
     if (this.judging) {
       this.judging = false;
       this.moved(targetID, target, camera, viewport, zoom);

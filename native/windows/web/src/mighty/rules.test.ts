@@ -102,28 +102,28 @@ describe('follow', () => {
     watch.moved('a', target, { x: 0, y: -1000 }, { w: 800, h: 600 }, 1);
     expect(watch.following).toBe(false);
   });
-  it('stops following when the user scrolls up to the older work, and leaves the camera alone while they move it', () => {
+  it('follows on through a small scroll up and brings a block that came under the newest into view after the move', () => {
     const target = { x: 0, y: 0, w: 100, h: 500 }, viewport = { w: 800, h: 600 };
-    // Following with the newest's bottom well inside the view: a scroll up (the camera going down the screen) stops it, though
-    // the newest is still in view, so its growing or a new block under it no longer brings the view back.
     const watch = new FollowWatch();
-    watch.userMoved('a', target, { x: 0, y: -200 }, viewport, 1, 40);
+    // Following 'a' with its bottom 100 above the view's: a small scroll up (still ending in view) keeps following, at the new gap.
+    watch.moved('a', target, { x: 0, y: 0 }, viewport, 1);
+    expect(watch.followedID).toBe('a');
+    watch.moved('a', target, { x: 0, y: 30 }, viewport, 1);
+    expect(watch.following).toBe(true);
+    // A swipe or a drag under way: a layout pass moves nothing and judges nothing, even when a new block 'b' comes far below.
+    const below = { x: 0, y: 560, w: 100, h: 300 };
+    expect(watch.observe('b', below, { x: 0, y: 30 }, viewport, 1, true)).toBeNull();
+    expect(watch.following).toBe(true);
+    expect(watch.followedID).toBe('a');
+    // Once it is over, the pass brings 'b' into view, its bottom FollowMargin above the view's.
+    expect(watch.observe('b', below, { x: 0, y: 30 }, viewport, 1)).toEqual({ x: 0, y: 600 - 16 - 860 });
+    // A scroll that leaves the followed block's bottom out of view ends the following; one back to it follows again.
+    watch.moved('b', below, { x: 0, y: 400 }, viewport, 1);
     expect(watch.following).toBe(false);
-    expect(watch.observe('b', { ...target, h: 900 }, { x: 0, y: -200 }, viewport, 1)).toBeNull();
-    // A scroll back down that ends at the newest follows again, keeping the gap it was left at.
-    watch.userMoved('a', target, { x: 0, y: 0 }, viewport, 1, -40);
+    expect(watch.followedID).toBeNull();
+    expect(watch.observe('b', { ...below, h: 400 }, { x: 0, y: 400 }, viewport, 1)).toBeNull();
+    watch.moved('b', below, { x: 0, y: -276 }, viewport, 1);
     expect(watch.following).toBe(true);
-    expect(watch.observe('a', { ...target, h: 520 }, { x: 0, y: 0 }, viewport, 1)).toEqual({ x: 0, y: -20 });
-    // A sideways move (no way up or down) is judged where it ends, as before.
-    watch.userMoved('a', { ...target, h: 520 }, { x: 30, y: -20 }, viewport, 1, 0);
-    expect(watch.following).toBe(true);
-    // A swipe or a drag under way: a layout pass moves nothing, even for a new block under the newest, and the gap is read anew.
-    expect(watch.observe('b', { ...target, h: 560 }, { x: 30, y: -20 }, viewport, 1, true)).toBeNull();
-    expect(watch.following).toBe(true);
-    expect(watch.observe('b', { ...target, h: 580 }, { x: 30, y: -20 }, viewport, 1)).toEqual({ x: 30, y: -40 });
-    // Under way and no longer at the newest: the following ends there.
-    expect(watch.observe('b', { ...target, h: 580 }, { x: 30, y: 400 }, viewport, 1, true)).toBeNull();
-    expect(watch.following).toBe(false);
   });
   it('reads run-id changes', () => {
     expect(runsChanged(null, [], true)).toBe('first');

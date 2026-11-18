@@ -59,6 +59,8 @@
 .session-info-scope { font-size: var(--type-pill); font-weight: 600; }
 .session-info-foot { font-size: var(--type-small); color: var(--ink3); display: flex; flex-direction: column; gap: var(--space-xxs); }
 .session-info-disclosure { display: inline-flex; align-items: center; gap: var(--space-xs); border: 0; padding: 0; background: transparent; color: var(--ink2); font: inherit; font-size: var(--type-pill); cursor: default; }
+.session-info-disclosure { cursor: pointer; border-radius: var(--radius-segment); }
+.session-info-disclosure:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 8%, transparent); }
 .popover-body { display: flex; flex-direction: column; gap: var(--space-md); padding: 0 var(--dialog-padding) var(--dialog-padding); }
 .popover-body section { display: flex; flex-direction: column; gap: var(--space-sm); padding-bottom: var(--space-md); border-bottom: var(--stroke-line) solid var(--line); }
 .popover-body section:last-child { border-bottom: 0; padding-bottom: 0; }

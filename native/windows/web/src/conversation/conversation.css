@@ -46,6 +46,7 @@
 .tool-state.waiting { color: var(--wait-text); }
 .tool-state.failed { color: var(--err-text); }
 .tool-disclosure { border: 0; background: none; padding: 0; font: inherit; font-size: 10.5px; color: var(--accent); cursor: pointer; }
+.tool-disclosure:hover { text-decoration: underline; }
 .tool-disclosure:focus-visible { outline: var(--stroke-focus) solid var(--accent); }
 .entry-tool > .code-block { margin-top: var(--space-xs); }
 

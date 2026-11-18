@@ -268,7 +268,7 @@ export function ProgressPanel({ progress, onRequest }: { progress: MobileProgres
             onPress={() => setFolded((value) => !value)}
             testID="mighty-progress-fold"
           >
-            <Text style={styles.progressFold}>{folded ? '⌄' : '⌃'}</Text>
+            <Text style={styles.progressFold}>{folded ? '▸' : '▾'}</Text>
           </Pressable>
         ) : null}
       </View>

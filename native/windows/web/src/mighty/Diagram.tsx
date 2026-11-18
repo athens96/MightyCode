@@ -432,13 +432,19 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     applyCamera();
   }, [layout, viewport, zoom, aim, own]);
 
-  /** The user moved the view, the camera going `dy` down the screen (a move up to the older work stops the following). */
-  const userMoved = useCallback((dy = 0) => {
+  /**
+   * The user moved the view: it follows on while the block it followed still ends in view (FollowWatch.moved). That block, not
+   * one that came under it during the move, is what the move is judged against, so a new block below never ends the following;
+   * the pass after the move brings it into view (`settleFollow`).
+   */
+  const userMoved = useCallback(() => {
     pin.current = null;
     held.current = null;
     const l = layoutRef.current;
     const targetID = followTargetID(l, shared.current);
-    watch.current.userMoved(targetID, frameOf(targetID), camera.current, { w: viewportRef.current?.clientWidth ?? 0, h: viewportRef.current?.clientHeight ?? 0 }, zoomRef.current, dy);
+    const followed = watch.current.followedID;
+    const judged = followed !== null && frameOf(followed) ? followed : targetID;
+    watch.current.moved(judged, frameOf(judged), camera.current, { w: viewportRef.current?.clientWidth ?? 0, h: viewportRef.current?.clientHeight ?? 0 }, zoomRef.current);
     // Panning up to the history block reads older requests (LoadOlderAtTop).
     const history = l.nodes.find((n) => n.kind === 'history');
     if (history && inputsRef.current?.history?.acts && loadingOlder.current !== inputsRef.current && showsTop(camera.current.y, zoomRef.current, history.frame.y)) {
@@ -494,6 +500,20 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     applyCamera();
   }, [applyCamera, stopTween]);
 
+  /** Once the user's move is over, a following camera catches up with what came meanwhile (a block under the newest, its growth). */
+  const settleTimer = useRef(0);
+  const settleFollow = useCallback((after: number) => {
+    window.clearTimeout(settleTimer.current);
+    settleTimer.current = window.setTimeout(() => {
+      const vp = viewportRef.current;
+      if (!vp || panning.current) return;
+      const targetID = followTargetID(layoutRef.current, shared.current);
+      const next = watch.current.observe(targetID, frameOf(targetID), camera.current, { w: vp.clientWidth, h: vp.clientHeight }, zoomRef.current);
+      if (next) { camera.current = next; applyCamera(); }
+    }, after);
+  }, [applyCamera]);
+  useEffect(() => () => window.clearTimeout(settleTimer.current), []);
+
   // ── wheel: a selected or attached block under the pointer scrolls its body, anything else pans ──
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
@@ -516,14 +536,15 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
       if (route.inner) return;
       event.preventDefault();
       pan(-dx, -dy);
-      userMoved(-dy);
+      userMoved();
+      settleFollow(WheelGestureGapMs);
     };
     element.addEventListener('wheel', wheel, { passive: false });
     return () => element.removeEventListener('wheel', wheel);
-  }, [pan, userMoved]);
+  }, [pan, userMoved, settleFollow]);
 
   // ── background drag pans and clears the selection; a press on a block selects it ──
-  const panning = useRef<{ x: number; y: number; pointer: number; cameraY: number } | null>(null);
+  const panning = useRef<{ x: number; y: number; pointer: number } | null>(null);
   /** The block and sides a press at the client point would resize: the corner handle, then a band along each border. */
   const resizeAt = (clientX: number, clientY: number) => {
     const vp = viewportRef.current;
@@ -554,7 +575,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
       return;
     }
     setSelected(null);
-    panning.current = { x: event.clientX, y: event.clientY, pointer: event.pointerId, cameraY: camera.current.y };
+    panning.current = { x: event.clientX, y: event.clientY, pointer: event.pointerId };
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
     viewportRef.current?.focus();
   };
@@ -601,7 +622,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
       if (save) void bridge.call('mightySaveSize', { paneId, nodeId: d.id, target: d.target, width: save.width, height: save.height });
       return;
     }
-    if (panning.current) { const from = panning.current.cameraY; panning.current = null; userMoved(camera.current.y - from); }
+    if (panning.current) { panning.current = null; userMoved(); settleFollow(0); }
   };
 
   const actions = useMemo<BlockActions>(() => ({

@@ -53,9 +53,7 @@ export function SessionPanel({
             <Text numberOfLines={1} style={styles.summary}>
               {summary}
             </Text>
-            <View style={expanded ? styles.chevronOpen : undefined}>
-              <Icon name="chevronDown" color={palette.textMuted} size={16} />
-            </View>
+            <Icon name={expanded ? 'chevronDown' : 'chevronRight'} color={palette.textMuted} size={16} />
           </Pressable>
         ) : (
           <View style={styles.spacer} />
@@ -96,6 +94,5 @@ const makeStyles = (palette: Palette) =>
     spacer: { flex: 1 },
     accessory: { width: 44 * 3 + spacing.xs * 2 },
     summary: { color: palette.textMuted, flexShrink: 1, fontSize: 12.5, fontWeight: '600' },
-    chevronOpen: { transform: [{ rotate: '180deg' }] },
     body: { gap: spacing.sm, paddingTop: spacing.sm },
   });
