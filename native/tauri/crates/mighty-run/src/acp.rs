@@ -173,6 +173,9 @@ struct State {
     ready: bool,
     turn_completed: bool,
     failed: bool,
+    /// The turn is being cancelled ([`AcpChannel::cancel_permissions`]): a later `session/request_permission` is answered `cancelled` at
+    /// once and no answer of the user's leaves the channel. A new turn ([`AcpChannel::prompt`]) clears it.
+    turn_cancelled: bool,
 }
 
 /// C# `AcpChannel`.
@@ -497,6 +500,7 @@ impl AcpChannel {
             return;
         }
         state.ready = true;
+        state.turn_cancelled = false;
         let mut blocks = vec![json!({"type": "text", "text": self.request.prompt_text})];
         for (media_type, data) in &self.request.images {
             blocks.push(json!({"type": "image", "data": data, "mimeType": media_type}));
@@ -625,8 +629,13 @@ impl AcpChannel {
             );
             return;
         }
+        // A request that comes once the turn is being cancelled is answered so at once, as the protocol asks of the client.
         let call = match (&state.session_id, parameters.get("toolCall")) {
-            (Some(session), Some(Value::Object(call))) if text(parameters.get("sessionId")) == Some(session.as_str()) => call,
+            (Some(session), Some(Value::Object(call)))
+                if !state.turn_cancelled && text(parameters.get("sessionId")) == Some(session.as_str()) =>
+            {
+                call
+            }
             _ => {
                 self.reply(raw_id, json!({"outcome": {"outcome": "cancelled"}}));
                 return;
@@ -799,7 +808,7 @@ impl AcpChannel {
     pub fn answer_questions(&self, request_id: &str, answers: &IndexMap<String, UserQuestionAnswer>) -> Result<()> {
         self.with(|this, state, effects| {
             let gone = || RunError::State(strings::get("permission.error.questionGone"));
-            if state.closed {
+            if state.closed || state.turn_cancelled {
                 return Err(gone());
             }
             let Some(ask) = state.pending.get(request_id) else { return Err(gone()) };
@@ -836,7 +845,7 @@ impl AcpChannel {
     /// `Respond`: 이번만 허용 / 거부, or a question's Cancel (the form is declined, the clarify approval skipped).
     pub fn respond(&self, request_id: &str, allow: bool) -> Result<()> {
         self.with(|this, state, effects| {
-            if state.closed || !state.pending.contains_key(request_id) {
+            if state.closed || state.turn_cancelled || !state.pending.contains_key(request_id) {
                 return Err(RunError::State(copy::already_settled()));
             }
             if allow && state.pending.get(request_id).is_some_and(|ask| ask.allow_option.is_none()) {
@@ -886,12 +895,14 @@ impl AcpChannel {
     /// The client's half of cancelling a prompt turn, before its `session/cancel` is written (ACP, Prompt Turn › Cancellation: "The
     /// Client MUST respond to all pending session/request_permission requests with the cancelled outcome."): every approval still
     /// waiting — a clarify asked as one among them — is answered `cancelled` and its card settles. A form (`elicitation/create`) is not
-    /// a permission request: it is left to the run's end.
+    /// a permission request: it is left to the run's end. From here until a new turn, a request that comes is answered `cancelled` at once
+    /// with no card, and the user's answers are refused.
     pub fn cancel_permissions(&self) {
         self.with(|this, state, effects| {
-            if state.closed {
+            if state.closed || state.turn_cancelled {
                 return;
             }
+            state.turn_cancelled = true;
             let asked: Vec<String> = state
                 .pending
                 .iter()

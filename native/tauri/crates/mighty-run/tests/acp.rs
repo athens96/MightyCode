@@ -1341,6 +1341,18 @@ fn before_a_cancel_every_waiting_approval_is_answered_cancelled() {
         states.iter().filter(|s| *s == "cancelled").count() == 2 && states.len() == 5 && !run.channel.failed(),
         "their cards settle: {states:?}"
     );
+    // C# `ACancelledTurnAnswersItsWaitingPermissionsCancelled` (521fe379): from here on no answer of the user's leaves, a later
+    // request is answered `cancelled` at once with no card, and cancelling again sends nothing.
+    let form = run.permissions().into_iter().find(|p| p.state == "pending").expect("the form still waits").id;
+    let written = run.writes().len();
+    assert!(run.channel.respond(&form, false).is_err(), "the form's Cancel no longer leaves");
+    assert!(run.channel.answer_questions(&form, &IndexMap::new()).is_err(), "nor its answers");
+    assert_eq!(run.writes().len(), written, "nothing was written for them");
+    run.receive(&approval(7, "call-7"));
+    assert!(cancelled(7) && run.writes().len() == written + 1, "a later request is answered cancelled at once");
+    assert_eq!(run.states().len(), 5, "and shows no card: {:?}", run.states());
+    run.channel.cancel_permissions();
+    assert_eq!(run.writes().len(), written + 1, "cancelling again sends nothing");
 }
 
 /// `Drain`: returns only once every callback is delivered — the one a caller is delivering now and the ones another caller queued
