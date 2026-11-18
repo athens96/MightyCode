@@ -101,6 +101,17 @@ internal static class AntigravityVerification
         var failed = new Recorder(); var error = failed.Parser();
         error.Parse("""{"event":"result","result":{"status":"ERROR","error":{"message":"Quota exceeded"}}}""");
         Check(error.Failed && failed.Logs.Last() == ("error", "Quota exceeded"), "an error result fails the run with its message");
+        // agy's BuildJSONOutput carries a past turn's (or recovered retry's) ERROR_MESSAGE into result even after the final agent_response completed DONE.
+        var recovered = new Recorder(); var stale = recovered.Parser();
+        stale.Parse("""{"event":"step_update","step_update":{"step_index":5,"state":"ACTIVE","step_type":"agent_response","text_delta":"All set"}}""");
+        stale.Parse("""{"event":"step_update","step_update":{"step_index":5,"state":"DONE","step_type":"agent_response","text_delta":"\n"}}""");
+        stale.Parse("""{"event":"result","result":{"status":"ERROR","response":"All set\n","error":"The stream was interrupted. Please continue the task you were working on."}}""");
+        Check(!stale.Failed && recovered.Logs.SequenceEqual([("assistant", "All set")]), "a stale trajectory error after a completed final agent_response does not fail the turn");
+        var broken = new Recorder(); var afterReply = broken.Parser();
+        afterReply.Parse("""{"event":"step_update","step_update":{"step_index":5,"state":"DONE","step_type":"agent_response","text_delta":"Checking...\n"}}""");
+        afterReply.Parse("""{"event":"step_update","step_update":{"step_index":6,"state":"DONE","step_type":"error_message"}}""");
+        afterReply.Parse("""{"event":"result","result":{"status":"ERROR","error":"The stream was interrupted. Please continue the task you were working on."}}""");
+        Check(afterReply.Failed && broken.Logs.Select(l => l.Kind).SequenceEqual(["assistant", "error"]), "an error step after an intermediate reply fails the turn");
         var invalid = new Recorder().Parser(); invalid.Parse("""{"event":"result","result":{"status":"INVALID"}}"""); Check(invalid.Failed, "an invalid result fails");
         // agy ending the turn by itself is a failure; a stop the user asked for is the runner's.
         var ended = new Recorder(); var cancelled = ended.Parser();

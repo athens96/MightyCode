@@ -186,6 +186,9 @@ struct Inner {
     pi: pi::PiState,
     /// Antigravity streamed this turn's text as deltas, so its result's full `response` repeats it.
     antigravity_streamed: bool,
+    /// The latest Antigravity `step_update` was a `DONE` `agent_response` with a non-empty reply: agy's `BuildJSONOutput` still marks
+    /// `result.status` `"ERROR"` when any earlier step in the conversation (a past turn or an internal retry) recorded an error.
+    antigravity_answered: bool,
     new_conversation_noted: bool,
     /// The turn's refused actions, for the pane's card.
     denials: DenialCollector,
@@ -251,6 +254,7 @@ impl OutputParser {
                 other: None,
                 pi: pi::PiState::default(),
                 antigravity_streamed: false,
+                antigravity_answered: false,
                 new_conversation_noted: false,
                 denials: DenialCollector::new(),
                 authentication_failure: false,

@@ -60,6 +60,7 @@ impl OutputParser {
         let name = [("name", strings::provider_label(&self.provider))];
         match kind {
             "init" => {
+                inner.antigravity_answered = false;
                 let conversation = meta::text(root, "conversation_id");
                 if let Some(requested) = &self.hooks.requested_resume
                     && let Some(started) = conversation.filter(|c| !c.is_empty())
@@ -72,6 +73,7 @@ impl OutputParser {
             }
             "step_update" => {
                 let state = payload.and_then(|p| meta::text(p, "state")).unwrap_or("").to_uppercase();
+                inner.antigravity_answered = false;
                 match payload.and_then(|p| meta::text(p, "step_type")) {
                     Some("agent_response") => {
                         // A long answer arrives as ACTIVE deltas before its DONE step.
@@ -84,6 +86,7 @@ impl OutputParser {
                             inner.antigravity_streamed = true;
                         }
                         if state != "ACTIVE" {
+                            inner.antigravity_answered = state == "DONE" && !trailing_trimmed(&inner.pending).is_empty();
                             self.flush_locked(inner);
                         }
                     }
@@ -161,6 +164,7 @@ impl OutputParser {
                 }
             }
             "result" => {
+                let answered = std::mem::replace(&mut inner.antigravity_answered, false);
                 self.flush_locked(inner);
                 self.resume(inner, payload.and_then(|p| meta::text(p, "conversation_id")));
                 // The full text of the turn repeats what the deltas already showed.
@@ -197,19 +201,22 @@ impl OutputParser {
                         self.log("system", &strings::get_with("run.notice.antigravityDenied", &[("actions", &actions)]));
                     }
                 }
-                let status = payload.and_then(|p| meta::text(p, "status")).unwrap_or("").to_uppercase();
-                if matches!(status.as_str(), "ERROR" | "INVALID") || STOPPED_STATES.contains(&status.as_str()) {
+                let raw_status = payload.and_then(|p| meta::text(p, "status")).unwrap_or("").to_uppercase();
+                // agy's BuildJSONOutput walks the whole conversation for LastStepError, so an ERROR_MESSAGE step from an earlier turn (or one
+                // an internal retry already recovered from) still marks the closing result ERROR after the final agent_response finished DONE.
+                let status = if raw_status == "ERROR" && answered { "SUCCESS" } else { raw_status.as_str() };
+                if matches!(status, "ERROR" | "INVALID") || STOPPED_STATES.contains(&status) {
                     // A stop the user asked for ends the run as stopped in the runner; agy ending the turn by itself is a failure.
                     inner.failed = true;
-                    let fallback = if matches!(status.as_str(), "ERROR" | "INVALID") {
+                    let fallback = if matches!(status, "ERROR" | "INVALID") {
                         strings::get_with("run.error.providerRunFailed", &name)
                     } else {
-                        strings::get_with("run.error.antigravityEnded", &[("status", &status)])
+                        strings::get_with("run.error.antigravityEnded", &[("status", status)])
                     };
                     self.log("error", &Self::error_text(payload.and_then(|p| meta::prop(p, "error")), &fallback));
                 } else if status != "SUCCESS" {
                     // WAITING, RUNNING or a status this app does not know yet.
-                    let shown = activity::clean(Some(if status.is_empty() { "?" } else { &status }), 64, true);
+                    let shown = activity::clean(Some(if status.is_empty() { "?" } else { status }), 64, true);
                     self.log("system", &strings::get_with("run.notice.antigravityStatus", &[("status", &shown)]));
                 }
                 self.turn(inner, &strings::get_with("run.turn.finishing", &name));

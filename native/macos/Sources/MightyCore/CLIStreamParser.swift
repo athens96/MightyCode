@@ -32,6 +32,8 @@ public final class CLIStreamParser {
     /// Antigravity streamed this turn's text as deltas, so its result's full
     /// `response` repeats it.
     private var antigravityStreamed = false
+    /// The latest Antigravity `step_update` was a `DONE` `agent_response` with a non-empty reply.
+    private var antigravityAnswered = false
     /// The conversation an Antigravity run was asked to continue; agy starts a
     /// new one when it cannot find it, and says so once.
     private let requestedResume: String?
@@ -805,10 +807,12 @@ public final class CLIStreamParser {
         let name = ProviderOptions.label(provider)
         switch event {
         case "init":
+            antigravityAnswered = false
             if let requestedResume, let id = value["conversation_id"] as? String, !id.isEmpty, id != requestedResume { noteNewConversation() }
             resumeIfValid(value["conversation_id"]); turn(L("run.turn.generating", ["name": name]))
         case "step_update":
             let state = (payload["state"] as? String ?? "").uppercased()
+            antigravityAnswered = false
             switch payload["step_type"] as? String {
             case "agent_response":
                 // A long answer arrives as ACTIVE deltas before its DONE step.
@@ -818,7 +822,7 @@ public final class CLIStreamParser {
                     pendingText += ActivitySupport.prefixUTF8(text, maximumBytes: remaining)
                     antigravityStreamed = true
                 }
-                if state != "ACTIVE" { flushText() }
+                if state != "ACTIVE" { antigravityAnswered = state == "DONE" && !Self.trailingTrimmed(pendingText).isEmpty; flushText() }
             case "tool":
                 flushText()
                 guard let index = payload["step_index"] as? Int else { return }
@@ -849,6 +853,7 @@ public final class CLIStreamParser {
             default: break
             }
         case "result":
+            let answered = antigravityAnswered; antigravityAnswered = false
             flushText()
             resumeIfValid(payload["conversation_id"])
             // The full text of the turn repeats what the deltas already showed.
@@ -867,7 +872,10 @@ public final class CLIStreamParser {
                 let denied = (payload["denied_actions"] as? [[String: Any]] ?? []).prefix(16).compactMap { ($0["display_name"] ?? $0["action"]) as? String }
                 if !denied.isEmpty { log("system", L("run.notice.antigravityDenied", ["actions": ActivitySupport.clean(denied.joined(separator: ", "), maximumBytes: 512, singleLine: true)])) }
             }
-            let status = (payload["status"] as? String ?? "").uppercased()
+            let rawStatus = (payload["status"] as? String ?? "").uppercased()
+            // agy's BuildJSONOutput walks the whole conversation for LastStepError, so an ERROR_MESSAGE step from an earlier turn (or one
+            // an internal retry already recovered from) still marks the closing result ERROR after the final agent_response finished DONE.
+            let status = rawStatus == "ERROR" && answered ? "SUCCESS" : rawStatus
             switch status {
             case "SUCCESS": authFailure = false
             case "ERROR", "INVALID", "CANCELED", "CANCELLED", "INTERRUPTED":

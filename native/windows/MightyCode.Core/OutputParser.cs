@@ -30,6 +30,8 @@ public sealed partial class OutputParser
     private bool assistantSeen, pendingTruncated, closed;
     /// <summary>Antigravity streamed this turn's text as deltas, so its result's full <c>response</c> repeats it.</summary>
     private bool antigravityStreamed;
+    /// <summary>The latest Antigravity <c>step_update</c> was a <c>DONE</c> <c>agent_response</c> with a non-empty reply.</summary>
+    private bool antigravityAnswered;
     /// <summary>The conversation an Antigravity run was asked to continue; agy starts a new one when it cannot find it, and says so once.</summary>
     private readonly string? requestedResume;
     private bool newConversationNoted;
@@ -415,11 +417,13 @@ public sealed partial class OutputParser
         switch (kind)
         {
             case "init":
+                antigravityAnswered = false;
                 if (requestedResume is not null && root.Text("conversation_id") is { Length: > 0 } conversation && conversation != requestedResume) NoteNewConversation();
                 Resume(root.Text("conversation_id")); Turn(Locale.Get("run.turn.generating", name));
                 break;
             case "step_update":
                 var state = (payload.Text("state") ?? "").ToUpperInvariant();
+                antigravityAnswered = false;
                 switch (payload.Text("step_type"))
                 {
                     case "agent_response":
@@ -430,7 +434,7 @@ public sealed partial class OutputParser
                             if (Encoding.UTF8.GetByteCount(text) > remaining) pendingTruncated = true;
                             pending.Append(ActivitySupport.PrefixUtf8(text, remaining)); antigravityStreamed = true;
                         }
-                        if (state != "ACTIVE") Flush();
+                        if (state != "ACTIVE") { antigravityAnswered = state == "DONE" && TrailingTrimmed(pending.ToString()).Length > 0; Flush(); }
                         break;
                     case "tool":
                     {
@@ -470,6 +474,7 @@ public sealed partial class OutputParser
                 break;
             case "result":
             {
+                var answered = antigravityAnswered; antigravityAnswered = false;
                 Flush();
                 Resume(payload.Text("conversation_id"));
                 // The full text of the turn repeats what the deltas already showed.
@@ -490,7 +495,10 @@ public sealed partial class OutputParser
                     var denied = deniedRows.ValueKind == JsonValueKind.Array ? deniedRows.EnumerateArray().Take(16).Select(row => row.Text("display_name") ?? row.Text("action")).OfType<string>().ToList() : [];
                     if (denied.Count > 0) log("system", Locale.Get("run.notice.antigravityDenied", new Dictionary<string, string> { ["actions"] = ActivitySupport.Clean(string.Join(", ", denied), 512, true) }));
                 }
-                var status = (payload.Text("status") ?? "").ToUpperInvariant();
+                var rawStatus = (payload.Text("status") ?? "").ToUpperInvariant();
+                // agy's BuildJSONOutput walks the whole conversation for LastStepError, so an ERROR_MESSAGE step from an earlier turn (or one
+                // an internal retry already recovered from) still marks the closing result ERROR after the final agent_response finished DONE.
+                var status = rawStatus == "ERROR" && answered ? "SUCCESS" : rawStatus;
                 if (status is "ERROR" or "INVALID" || StoppedStates.Contains(status))
                 {
                     // A stop the user asked for ends the run as stopped in the runner; agy ending the turn by itself is a failure.

@@ -195,6 +195,28 @@ fn results_denied_actions_failures_and_notices() {
         error.failed() && failed.logs().last() == Some(&("error".into(), "Quota exceeded".into())),
         "an error result fails the run with its message"
     );
+    // agy's BuildJSONOutput carries a past turn's (or recovered retry's) ERROR_MESSAGE into result even after the final agent_response completed DONE.
+    let recovered = Recorder::default();
+    let stale = recovered.parser(true, None);
+    stale.parse(r#"{"event":"step_update","step_update":{"step_index":5,"state":"ACTIVE","step_type":"agent_response","text_delta":"All set"}}"#);
+    stale.parse(r#"{"event":"step_update","step_update":{"step_index":5,"state":"DONE","step_type":"agent_response","text_delta":"\n"}}"#);
+    stale.parse(r#"{"event":"result","result":{"status":"ERROR","response":"All set\n","error":"The stream was interrupted. Please continue the task you were working on."}}"#);
+    assert!(
+        !stale.failed() && recovered.logs() == [("assistant".to_string(), "All set".to_string())],
+        "a stale trajectory error after a completed final agent_response does not fail the turn: {:?}",
+        recovered.logs()
+    );
+    // An error step after an earlier agent_response still fails the turn.
+    let broken = Recorder::default();
+    let after_reply = broken.parser(true, None);
+    after_reply.parse(r#"{"event":"step_update","step_update":{"step_index":5,"state":"DONE","step_type":"agent_response","text_delta":"Checking...\n"}}"#);
+    after_reply.parse(r#"{"event":"step_update","step_update":{"step_index":6,"state":"DONE","step_type":"error_message"}}"#);
+    after_reply.parse(r#"{"event":"result","result":{"status":"ERROR","error":"The stream was interrupted. Please continue the task you were working on."}}"#);
+    assert!(
+        after_reply.failed() && broken.kinds() == ["assistant", "error"],
+        "an error step after an intermediate reply fails the turn: {:?}",
+        broken.logs()
+    );
     let invalid = Recorder::default().parser(true, None);
     invalid.parse(r#"{"event":"result","result":{"status":"INVALID"}}"#);
     assert!(invalid.failed(), "an invalid result fails");
