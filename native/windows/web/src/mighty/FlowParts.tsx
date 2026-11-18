@@ -1,11 +1,11 @@
 // The role view's own nodes on the page (macOS MightyGraphAgentCard, MightyGraphDelegateLine, MightyGraphProgressPanel, MightyGraphLogStrip): a
 // block folded to its card (a sub-agent, a background command, the 실행 block, a step), the delegate line, a request's plan column and the session
 // log under the flow. Their words are the host's (Core FlowCopy); what reads the clock or the drawn height is here (flow.ts).
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Icon, type IconName } from '../icons/Icon';
 import { useServices } from '../app/context';
 import { kebab } from '../theme/tokens';
-import { dashForCard, dashOffset } from './camera';
+import { MarchingEdge } from './Marching';
 import { cardTime, elapsed, LogRows } from './flow';
 import type { FlowCardCopy, FlowLineCopy, FlowLogCopy, FlowMarkCopy, FlowProgressCopy, FlowProgressRowCopy } from './types';
 
@@ -21,18 +21,6 @@ const tone = (card: FlowCardCopy) => {
   const status = card.status;
   return status === 'completed' ? 'done' : status === 'error' ? 'err' : status === 'stopped' ? 'stop' : status === 'waiting' ? 'wait' : 'run';
 };
-
-/** The running edge over a fixed node: the blocks' marching dashes (Block.tsx Outline). */
-function Marching({ w, h, radius = 11 }: { w: number; h: number; radius?: number }) {
-  if (w <= 2 || h <= 2) return null;
-  const dash = dashForCard(w, h);
-  const period = -dashOffset(1, dash);
-  return (
-    <svg className="mighty-outline outline-marching" width={w} height={h} aria-hidden="true" data-outline="marching">
-      <rect x={1} y={1} width={w - 2} height={h - 2} rx={radius} ry={radius} style={{ strokeDasharray: dash.join(' '), '--march': `${-period}` } as React.CSSProperties} />
-    </svg>
-  );
-}
 
 /** The clock a running card's time reads, once a second while it runs; any other card reads it once. */
 function useNow(running: boolean): number {
@@ -80,7 +68,7 @@ export const FlowCardNode = memo(function FlowCardNode({ id, kind = 'agent', ico
   // What the main session said reads as text in the card's own ink; a command is code, quieter; a step not begun says so.
   const activity = card.activity ?? (card.pending ? card.stateWord : undefined);
   return (
-    <div className={'mighty-flow-card tone-' + shade + (card.pending ? ' pending' : '')} data-block-id={id} data-kind={kind} data-fixed="1" data-testid={'mighty-node-' + id}
+    <div className={'mighty-flow-card tone-' + shade + (card.pending ? ' pending' : '')} data-live={card.running ? '1' : undefined} data-block-id={id} data-kind={kind} data-fixed="1" data-testid={'mighty-node-' + id}
       role="button" tabIndex={-1} data-pending={card.pending ? '1' : undefined}
       style={{ left: x, top: y, width: w, height: h }} title={card.summary ? card.summary + '\n' + card.activateHelp : card.activateHelp}
       aria-label={[card.title, card.stateWord, card.identity, card.activity].filter(Boolean).join(', ')}
@@ -105,7 +93,7 @@ export const FlowCardNode = memo(function FlowCardNode({ id, kind = 'agent', ico
         <div className={'flow-card-activity' + (card.prose || card.activity === undefined ? ' prose' : '')} title={card.activity} data-testid={'mighty-card-activity-' + id}>{activity ?? ' '}</div>
         <CardFigures card={card} nodeId={id} />
       </div>
-      {outline && !card.pending && <Marching w={w} h={h} />}
+      {outline && !card.pending && <MarchingEdge w={w} h={h} />}
     </div>
   );
 });
@@ -143,11 +131,24 @@ const statusTone = (status: string) => (status === 'running' ? 'run' : status ==
 const progressFolded = new Set<string>();
 
 /**
+ * Scrolls `list` so that `row` shows in it, a third of the way down when it has to move: only the list's own scroll changes (scrollIntoView would
+ * move the panel and the page around it too). Nothing happens while the row already shows.
+ */
+export function scrollRowIntoView(list: HTMLElement | null, row: HTMLElement | null) {
+  if (!list || !row) return;
+  const top = row.offsetTop - list.offsetTop;
+  const bottom = top + row.offsetHeight;
+  if (top >= list.scrollTop && bottom <= list.scrollTop + list.clientHeight) return;
+  list.scrollTop = Math.max(0, top - Math.floor(list.clientHeight / 3));
+}
+
+/**
  * The role view's progress panel (macOS MightyGraphProgressPanel, Core FlowSteps.Progress), over the diagram's top-left corner where it stays while
  * the diagram scrolls under it: the request in view ("요청 27" and its first line) with its state, then its plan — every step with its mark (done, the
  * one in progress with its time running, not begun) and the time each took, then the background work it started (commands and sub-agents, running
  * ones first, with their time). The request line leads to the request; a step that began leads to its card. Folded, it keeps its header and the
- * request line. A press or a wheel in it never pans the diagram.
+ * request line. A press or a wheel in it never pans the diagram. The steps and the background work each scroll in a room of their own, so every
+ * one of them can be seen; when the step in progress changes, the steps scroll it into view (only that list moves, never the page).
  */
 export function ProgressPanel({ paneId, progress, onReveal }: { paneId: string; progress: FlowProgressCopy; onReveal: (nodeId: string) => void }) {
   const { t } = useServices();
@@ -160,6 +161,13 @@ export function ProgressPanel({ paneId, progress, onReveal }: { paneId: string; 
   const label = t(collapsed ? 'graph.steps.expand' : 'graph.steps.collapse');
   const background = progress.background ?? [];
   const backgroundHidden = progress.backgroundHidden ?? 0;
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const focus = progress.rows.find((row) => row.state === 'current') ?? [...progress.rows].reverse().find((row) => row.state === 'done');
+  const focusIndex = focus?.index;
+  useEffect(() => {
+    if (collapsed || focusIndex === undefined) return;
+    scrollRowIntoView(rowsRef.current, rowsRef.current?.querySelector<HTMLElement>(`[data-testid="mighty-progress-row-${focusIndex}"]`) ?? null);
+  }, [collapsed, focusIndex, paneId, progress.heading]);
   return (
     <section className="mighty-progress" data-testid="mighty-progress" data-collapsed={collapsed ? '' : undefined} aria-label={progress.title + ' ' + progress.heading}
       onPointerDown={(event) => event.stopPropagation()}>
@@ -180,7 +188,7 @@ export function ProgressPanel({ paneId, progress, onReveal }: { paneId: string; 
         {progress.request !== '' && <span className="mighty-progress-text">{progress.request}</span>}
       </button>
       {!collapsed && progress.rows.length > 0 && (
-        <div className="flow-outline-rows mighty-progress-rows">
+        <div className="flow-outline-rows mighty-progress-rows" ref={rowsRef} data-testid="mighty-progress-rows">
           {progress.rows.map((row) => (
             <button key={row.index} type="button" className={'flow-outline-row state-' + row.state} title={row.text} disabled={row.nodeId === undefined}
               data-testid={'mighty-progress-row-' + row.index} onClick={() => { if (row.nodeId) onReveal(row.nodeId); }}>
@@ -201,16 +209,18 @@ export function ProgressPanel({ paneId, progress, onReveal }: { paneId: string; 
               {background.filter((item) => item.state === 'current').length + '/' + (background.length + backgroundHidden)}
             </span>
           </div>
-          {background.map((item) => (
-            <div key={item.id} className={'flow-outline-row state-' + item.state} title={item.text} data-testid={'mighty-progress-background-' + item.id}>
-              <span className={'flow-outline-mark state-' + item.state} aria-hidden="true"><Icon name={progressMark[item.state]} size={12} weight={2} /></span>
-              <span className="mighty-progress-background-kind" aria-hidden="true"><Icon name={item.agent ? 'square-user-round' : 'terminal'} size={11} weight={1.75} /></span>
-              <span className="flow-outline-text">{item.text}</span>
-              <span className="flow-head-spacer" />
-              <ProgressTime startedAt={item.startedAt} endedAt={item.endedAt} ticking={item.state === 'current'} />
-            </div>
-          ))}
-          {backgroundHidden > 0 && <div className="flow-outline-more" data-testid="mighty-progress-background-more">{t('graph.progress.more', { count: backgroundHidden })}</div>}
+          <div className="mighty-progress-background-rows" data-testid="mighty-progress-background-rows">
+            {background.map((item) => (
+              <div key={item.id} className={'flow-outline-row state-' + item.state} title={item.text} data-testid={'mighty-progress-background-' + item.id}>
+                <span className={'flow-outline-mark state-' + item.state} aria-hidden="true"><Icon name={progressMark[item.state]} size={12} weight={2} /></span>
+                <span className="mighty-progress-background-kind" aria-hidden="true"><Icon name={item.agent ? 'square-user-round' : 'terminal'} size={11} weight={1.75} /></span>
+                <span className="flow-outline-text">{item.text}</span>
+                <span className="flow-head-spacer" />
+                <ProgressTime startedAt={item.startedAt} endedAt={item.endedAt} ticking={item.state === 'current'} />
+              </div>
+            ))}
+            {backgroundHidden > 0 && <div className="flow-outline-more" data-testid="mighty-progress-background-more">{t('graph.progress.more', { count: backgroundHidden })}</div>}
+          </div>
         </div>
       )}
     </section>

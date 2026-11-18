@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import ko from '@locales/ko.json';
 import { ServicesContext, type AppServices } from '../app/context';
 import { translator } from '../i18n/locale';
-import { ProgressPanel } from './FlowParts';
+import { ProgressPanel, scrollRowIntoView } from './FlowParts';
 import type { FlowProgressCopy } from './types';
 
 const t = translator([ko as Record<string, string>]);
@@ -52,5 +52,37 @@ describe('the progress panel lists the background work', () => {
     const html = render(progress({ background, backgroundHidden: 0 }));
     expect(html).toContain('>1/3<');
     expect(html).not.toContain('mighty-progress-background-more');
+  });
+});
+
+describe('the progress panel shows every step and background line, scrolling', () => {
+  it('draws all thirty steps in their own scrolling list, with no count line', () => {
+    const rows = Array.from({ length: 30 }, (_, index) => ({
+      index, nodeId: 'n' + index, text: `${index + 1}. 단계`, state: index < 20 ? 'done' : index === 20 ? 'current' : 'pending', startedAt: 0,
+    })) as FlowProgressCopy['rows'];
+    const html = render(progress({ rows, count: '20/30' }));
+    expect(html).toContain('data-testid="mighty-progress-rows"');
+    for (const index of [0, 20, 29]) expect(html).toContain(`data-testid="mighty-progress-row-${index}"`);
+    expect(html).not.toContain('mighty-progress-more');
+  });
+
+  it('puts every background line in its own scrolling list under the heading', () => {
+    const background = Array.from({ length: 9 }, (_, index) => ({ id: 't' + index, text: 'task ' + index, agent: false, state: 'current' as const, startedAt: 0 }));
+    const html = render(progress({ background }));
+    expect(html.indexOf('mighty-progress-background-count')).toBeLessThan(html.indexOf('mighty-progress-background-rows'));
+    expect(html).toContain('data-testid="mighty-progress-background-t8"');
+    expect(html).toContain('>9/9<');
+  });
+
+  it('scrolls only the list, and only when the row is out of sight', () => {
+    const list = { offsetTop: 100, scrollTop: 0, clientHeight: 120 } as HTMLElement;
+    const row = (index: number) => ({ offsetTop: 100 + index * 24, offsetHeight: 24 }) as HTMLElement;
+    scrollRowIntoView(list, row(2));
+    expect(list.scrollTop).toBe(0);
+    scrollRowIntoView(list, row(20));
+    expect(list.scrollTop).toBe(20 * 24 - 40);
+    scrollRowIntoView(list, row(1));
+    expect(list.scrollTop).toBe(0);
+    scrollRowIntoView(null, row(1));
   });
 });

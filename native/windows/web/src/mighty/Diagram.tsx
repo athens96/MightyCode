@@ -4,8 +4,8 @@ import { useServices, useStoreState } from '../app/context';
 import type { GraphBlockSize, MightyGraphRun, RunSession } from '../store/models';
 import { Block, type BlockActions, type BlockExtra } from './Block';
 import {
-  FollowWatch, aimLanding, cameraOffset, cameraTween, centredX, dotFirst, dotRadius, dotStep, dotsShown, followTargetID, runsChanged, showsTop, trimAnchor,
-  wheelScrollTarget, zoomAnchored, zoomIn, zoomLabel, zoomOut, ZoomDefault, ZoomMax, ZoomMin, type Point,
+  FollowWatch, aimLanding, cameraOffset, cameraTween, centredX, dotRadius, dotStep, dotsShift, dotsShown, followTargetID, runsChanged, scrollsBy, showsTop, trimAnchor,
+  wheelRoute, wheelScrollTarget, WheelGestureGapMs, zoomAnchored, zoomIn, zoomLabel, zoomOut, ZoomDefault, ZoomMax, ZoomMin, type Point,
 } from './camera';
 import {
   finished, isAuxiliaryKind, isFixed, isResizable, latestResultID, makeLayout, MaximumHeight, MaximumWidth, minimumBlockSize, normalizedSizeFor,
@@ -58,9 +58,29 @@ const HeldCorner = { x: 0, y: 0 };
 
 interface Drag { id: string; edges: Edges; start: Size; origin: { x: number; y: number }; layout: Layout; target: 'result' | 'plan' | 'block' }
 
+/** The step the edges' SVG box grows by (Diagram). */
+const EdgesBoxStep = 1024;
+
+/** Whether a scroll box from `target` up to its `block` can move by the wheel's deltas (the wheel handler, once per gesture). */
+function scrollsInside(target: Element | null, block: HTMLElement | null, dx: number, dy: number): boolean {
+  for (let element = target; element && block?.contains(element); element = element.parentElement) {
+    if (element.scrollHeight <= element.clientHeight + 1 && element.scrollWidth <= element.clientWidth + 1) continue;
+    const style = getComputedStyle(element);
+    const scrolls = (overflow: string) => overflow === 'auto' || overflow === 'scroll';
+    if (scrolls(style.overflowY) && scrollsBy(element.scrollTop, element.clientHeight, element.scrollHeight, dy)) return true;
+    if (scrolls(style.overflowX) && scrollsBy(element.scrollLeft, element.clientWidth, element.scrollWidth, dx)) return true;
+  }
+  return false;
+}
+
+/** Sets an attribute only when its value changes (Diagram's applyCamera). */
+function setChanged(element: Element, name: string, value: string): void {
+  if (element.getAttribute(name) !== value) element.setAttribute(name, value);
+}
 
 /** The points of an edge (macOS MightyGraphLayout.route): bottom-centre out, one turn 26 from the joining end, top-centre in; a side edge out of the
  * spine block's trailing edge at its card's middle, along a lane in the gap, into the leading edge of the block it launched. */
+
 export function edgeRoute(from: { x: number; y: number; w: number; h: number }, to: { x: number; y: number; w: number; h: number }, joins: boolean, side = false): { x: number; y: number }[] {
   if (side) {
     const start = { x: from.x + from.w, y: from.y + Math.min(from.h / 2, CardHeight / 2) };
@@ -139,7 +159,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   const rootRef = useRef<HTMLDivElement>(null);
   const [room, setRoom] = useState(0);
   const worldRef = useRef<HTMLDivElement>(null);
-  const edgesRef = useRef<SVGGElement>(null);
+  const dotsLayer = useRef<SVGSVGElement>(null);
   const dotsRef = useRef<SVGPatternElement>(null);
   const dotRef = useRef<SVGCircleElement>(null);
   const dotsRect = useRef<SVGRectElement>(null);
@@ -245,6 +265,12 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   // The role view's own nodes in motion: a delegate line that leads to a running block (flow.ts liveFlowIds).
   const liveIds = useMemo(() => (fanOut ? liveFlowIds(layout, running) : running), [fanOut, layout, running]);
   const edges = useMemo(() => edgePaths(layout, liveIds), [layout, liveIds]);
+  // The edges' box: the layout's extent from its origin, in steps of EdgesBoxStep so a block growing a line at a time does not
+  // resize the SVG (a resize paints all of it again).
+  const edgesX = Math.floor(layout.originX / EdgesBoxStep) * EdgesBoxStep, edgesY = Math.floor(layout.originY / EdgesBoxStep) * EdgesBoxStep;
+  const edgesW = Math.ceil((layout.originX + layout.size.w + 1 - edgesX) / EdgesBoxStep) * EdgesBoxStep || EdgesBoxStep;
+  const edgesH = Math.ceil((layout.originY + layout.size.h + 1 - edgesY) / EdgesBoxStep) * EdgesBoxStep || EdgesBoxStep;
+  const edgesBox = useMemo(() => ({ x: edgesX, y: edgesY, w: edgesW, h: edgesH }), [edgesX, edgesY, edgesW, edgesH]);
 
   // ── the camera: transforms set directly, the visible set recomputed only when it changes ──
   const frame = useRef(0);
@@ -265,16 +291,22 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   }, []);
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
+  // The camera moves layers, it does not redraw them: the world (its blocks and their edges) and the dots each sit on a layer
+  // of their own and only their CSS transform changes, which WebKit applies without painting. The dots' pattern is redrawn
+  // only when the zoom changes its step; each value is written only when it differs, since WebKit repaints a pattern's whole
+  // area on any write to it and this runs on every layout pass while a request grows its block.
   const applyCamera = useCallback(() => {
     const cam = camera.current, z = zoomRef.current;
-    if (worldRef.current) worldRef.current.style.transform = `translate(${cam.x}px, ${cam.y}px) scale(${z})`;
-    if (edgesRef.current) edgesRef.current.setAttribute('transform', `translate(${cam.x} ${cam.y}) scale(${z})`);
+    const world = worldRef.current, transform = `translate(${cam.x}px, ${cam.y}px) scale(${z})`;
+    if (world && world.style.transform !== transform) world.style.transform = transform;
     const step = dotStep(z);
-    if (dotsRef.current && dotRef.current) {
-      dotsRef.current.setAttribute('width', String(step)); dotsRef.current.setAttribute('height', String(step));
-      dotsRef.current.setAttribute('x', String(dotFirst(cam.x, step) - step / 2)); dotsRef.current.setAttribute('y', String(dotFirst(cam.y, step) - step / 2));
-      dotRef.current.setAttribute('cx', String(step / 2)); dotRef.current.setAttribute('cy', String(step / 2)); dotRef.current.setAttribute('r', String(dotRadius(z)));
-      dotsRect.current?.setAttribute('visibility', dotsShown(z) ? 'visible' : 'hidden');
+    const layer = dotsLayer.current, dots = dotsRef.current, dot = dotRef.current;
+    if (layer && dots && dot) {
+      setChanged(dots, 'width', String(step)); setChanged(dots, 'height', String(step));
+      setChanged(dot, 'cx', String(step / 2)); setChanged(dot, 'cy', String(step / 2)); setChanged(dot, 'r', String(dotRadius(z)));
+      if (dotsRect.current) setChanged(dotsRect.current, 'visibility', dotsShown(z) ? 'visible' : 'hidden');
+      const shift = `translate(${dotsShift(cam.x, step)}px, ${dotsShift(cam.y, step)}px)`;
+      if (layer.style.transform !== shift) layer.style.transform = shift;
     }
     if (!frame.current) frame.current = requestAnimationFrame(updateVisible);
   }, [updateVisible]);
@@ -346,7 +378,10 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
       if (anchor.kind === 'reaim' && target) camera.current = cameraOffset(target, viewport, zoom, anchor.alignTop);
     }
     const targetID = followTargetID(layout, runs);
-    const next = watch.current.observe(targetID, frameOf(targetID), camera.current, viewport, zoom);
+    // The user's own swipe or drag under way: the camera is theirs until it ends.
+    const swipe = wheelGesture.current;
+    const userMoving = panning.current !== null || (swipe !== null && !swipe.inner && performance.now() - swipe.at < WheelGestureGapMs);
+    const next = watch.current.observe(targetID, frameOf(targetID), camera.current, viewport, zoom, userMoving);
     if (next) camera.current = next;
     if (sendTop.current !== null) {
       const newest = newestRequestRun(runs);
@@ -397,12 +432,13 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     applyCamera();
   }, [layout, viewport, zoom, aim, own]);
 
-  const userMoved = useCallback(() => {
+  /** The user moved the view, the camera going `dy` down the screen (a move up to the older work stops the following). */
+  const userMoved = useCallback((dy = 0) => {
     pin.current = null;
     held.current = null;
     const l = layoutRef.current;
     const targetID = followTargetID(l, shared.current);
-    watch.current.moved(targetID, frameOf(targetID), camera.current, { w: viewportRef.current?.clientWidth ?? 0, h: viewportRef.current?.clientHeight ?? 0 }, zoomRef.current);
+    watch.current.userMoved(targetID, frameOf(targetID), camera.current, { w: viewportRef.current?.clientWidth ?? 0, h: viewportRef.current?.clientHeight ?? 0 }, zoomRef.current, dy);
     // Panning up to the history block reads older requests (LoadOlderAtTop).
     const history = l.nodes.find((n) => n.kind === 'history');
     if (history && inputsRef.current?.history?.acts && loadingOlder.current !== inputsRef.current && showsTop(camera.current.y, zoomRef.current, history.frame.y)) {
@@ -461,6 +497,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   // ── wheel: a selected or attached block under the pointer scrolls its body, anything else pans ──
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+  const wheelGesture = useRef<{ at: number; inner: boolean } | null>(null);
   useEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
@@ -470,19 +507,23 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
       const hovered = (event.target as Element).closest?.('[data-block-id]') as HTMLElement | null;
       const id = hovered?.dataset.blockId ?? null;
       const kind = hovered?.dataset.kind ?? '';
-      if (wheelScrollTarget(selectedRef.current, id, isAuxiliaryKind(kind)) !== null) return;
-      event.preventDefault();
       const dx = event.deltaX !== 0 ? event.deltaX : event.shiftKey ? event.deltaY : 0;
       const dy = event.shiftKey && event.deltaX === 0 ? 0 : event.deltaY;
+      // A gesture keeps its route; a new one goes into the block only where something in it scrolls that way.
+      const route = wheelRoute(wheelGesture.current, event.timeStamp, wheelScrollTarget(selectedRef.current, id, isAuxiliaryKind(kind)) !== null,
+        () => scrollsInside(event.target as Element, hovered, dx, dy));
+      wheelGesture.current = route;
+      if (route.inner) return;
+      event.preventDefault();
       pan(-dx, -dy);
-      userMoved();
+      userMoved(-dy);
     };
     element.addEventListener('wheel', wheel, { passive: false });
     return () => element.removeEventListener('wheel', wheel);
   }, [pan, userMoved]);
 
   // ── background drag pans and clears the selection; a press on a block selects it ──
-  const panning = useRef<{ x: number; y: number; pointer: number } | null>(null);
+  const panning = useRef<{ x: number; y: number; pointer: number; cameraY: number } | null>(null);
   /** The block and sides a press at the client point would resize: the corner handle, then a band along each border. */
   const resizeAt = (clientX: number, clientY: number) => {
     const vp = viewportRef.current;
@@ -513,7 +554,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
       return;
     }
     setSelected(null);
-    panning.current = { x: event.clientX, y: event.clientY, pointer: event.pointerId };
+    panning.current = { x: event.clientX, y: event.clientY, pointer: event.pointerId, cameraY: camera.current.y };
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
     viewportRef.current?.focus();
   };
@@ -560,7 +601,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
       if (save) void bridge.call('mightySaveSize', { paneId, nodeId: d.id, target: d.target, width: save.width, height: save.height });
       return;
     }
-    if (panning.current) { panning.current = null; userMoved(); }
+    if (panning.current) { const from = panning.current.cameraY; panning.current = null; userMoved(camera.current.y - from); }
   };
 
   const actions = useMemo<BlockActions>(() => ({
@@ -658,21 +699,23 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
       <div className="mighty-viewport" ref={viewportRef} tabIndex={0} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerLeave={() => { if (!drag.current) showResizeCursor(''); }}
         onPointerUp={(e) => endDrag(e, false)} onPointerCancel={() => endDrag(null, true)} onLostPointerCapture={() => { if (drag.current || panning.current) endDrag(null, !!drag.current); }}
         onKeyDown={onKeyDown}>
-        <svg className="mighty-layer" aria-hidden="true">
+        <svg className="mighty-dots-layer" ref={dotsLayer} aria-hidden="true">
           <defs>
             <pattern id={'mighty-dots-' + paneId} ref={dotsRef} patternUnits="userSpaceOnUse" width={18} height={18}>
               <circle ref={dotRef} cx={9} cy={9} r={1} className="mighty-dot" />
             </pattern>
           </defs>
           <rect ref={dotsRect} className="mighty-dots" width="100%" height="100%" fill={`url(#mighty-dots-${paneId})`} />
-          <g ref={edgesRef} data-testid="mighty-edges">
-            <path className="mighty-edges-quiet" d={edges.quiet} />
-            <path className="mighty-edges-live" d={edges.live} />
-          </g>
         </svg>
         {steps && <StepsPanel key={paneId} paneId={paneId} model={steps} t={t} />}
         {progress && <ProgressPanel key={paneId} paneId={paneId} progress={progress} onReveal={revealFlow} />}
         <div className="mighty-world" ref={worldRef} onClick={onReferenceClick}>
+          {/* The edges, under the blocks and in their coordinates (the layout's extent from its origin): the world's transform moves them. */}
+          <svg className="mighty-edges" style={{ left: edgesBox.x, top: edgesBox.y }} width={edgesBox.w} height={edgesBox.h} viewBox={`${edgesBox.x} ${edgesBox.y} ${edgesBox.w} ${edgesBox.h}`}
+            aria-hidden="true" data-testid="mighty-edges">
+            <path className="mighty-edges-quiet" d={edges.quiet} />
+            <path className="mighty-edges-live" d={edges.live} />
+          </svg>
           {layout.nodes.map((node) => {
             const copy = mighty.blocks[node.id] ?? copies?.get(node.id);
             const { x, y, w, h } = node.frame;

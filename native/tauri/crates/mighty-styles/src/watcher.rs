@@ -2,7 +2,7 @@
 //! read are read again on a file change. Changes are gathered for [`StyleChangeWatcher::latency`] (500 ms unless told otherwise; the
 //! host gives a workspace's folders 2 s) and handed over together on the watcher's thread. A folder that is not there yet is waited
 //! for, and one taken away is reported. C# listens to `FileSystemWatcher`; this crate has no OS code, so the folder is looked at
-//! (plain std::fs, bounded) a few times per latency instead — the host watches only the folders a style can be moved by
+//! (plain std::fs, bounded) a few times per latency instead (once per latency while the folder is not there) — the host watches only the folders a style can be moved by
 //! (`.claude\mighty-styles` and the active style's source folders), never a whole workspace. More than 256 paths in one report is an
 //! empty report: read everything again. Off in a smoke (the host's rule). Owner: W9-D.
 
@@ -98,7 +98,9 @@ impl StyleChangeWatcher {
                 let mut pending: BTreeSet<PathBuf> = BTreeSet::new();
                 let mut since: Option<Instant> = None;
                 while !flag.load(Ordering::Acquire) {
-                    std::thread::sleep(poll);
+                    // A folder that is not there (most workspaces have no style folder) is looked for once per latency, not
+                    // four times: nothing in it can change, and its appearing is still reported within two latencies.
+                    std::thread::sleep(if last.is_none() && pending.is_empty() { latency.max(poll) } else { poll });
                     if flag.load(Ordering::Acquire) {
                         return;
                     }

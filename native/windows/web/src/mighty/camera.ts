@@ -178,8 +178,28 @@ export class FollowWatch {
     this.gap = viewport.h - (camera.y + maxY(target) * zoom);
   }
 
-  observe(targetID: string | null, target: Rect | null, camera: Point, viewport: Size, zoom: number): Point | null {
+  /**
+   * A move of the user's by `dy` (how far the camera went down the screen): one towards the older work stops the following at
+   * once, as a chat's scroll up does, so neither the block growing nor a new block under it brings the view back down; any
+   * other move is judged where it ends (`moved`), and one that ends at the newest follows again.
+   */
+  userMoved(targetID: string | null, target: Rect | null, camera: Point, viewport: Size, zoom: number, dy: number): void {
+    if (dy > 0) { this.stop(); return; }
+    this.moved(targetID, target, camera, viewport, zoom);
+  }
+
+  /**
+   * After a layout pass: the camera that keeps following, or null. While the user is moving the view themselves (`userMoving`: a
+   * wheel swipe or a drag under way) the camera is theirs: nothing moves it, and the move is judged against the new layout
+   * (the Mac's diagram shows the interaction's own offset until it is committed).
+   */
+  observe(targetID: string | null, target: Rect | null, camera: Point, viewport: Size, zoom: number, userMoving = false): Point | null {
     if (!this.following || targetID === null || !target || !valid(camera, viewport, zoom)) return null;
+    if (userMoving) {
+      this.judging = false;
+      this.moved(targetID, target, camera, viewport, zoom);
+      return null;
+    }
     if (this.judging) {
       this.judging = false;
       this.moved(targetID, target, camera, viewport, zoom);
@@ -212,6 +232,27 @@ export function zoomAnchored(pan: Point, viewport: Size, previous: number, zoom:
 export const wheelScrollTarget = (selected: string | null, hovered: string | null, hoveredIsAuxiliary: boolean) =>
   hovered !== null && (hovered === selected || hoveredIsAuxiliary) ? hovered : null;
 
+/** Wheel events closer together than this are one gesture (a swipe and its glide): it keeps the route its first event took. */
+export const WheelGestureGapMs = 180;
+
+/**
+ * Where a wheel event goes: into the block under the pointer (`inner`) or to the diagram's pan. A gesture keeps its first
+ * event's route, as the Mac's diagram does (M/MightyGraphInteraction.swift gestureRoute): a pan begun on the canvas goes on
+ * when a selected block slides under the pointer, and a block's text that reaches its end does not start moving the diagram
+ * in mid swipe. A new gesture goes inside only where the block can scroll that way (`canScrollInner`, asked once per gesture);
+ * at its end, or over a block with nothing to scroll, it pans.
+ */
+export function wheelRoute(previous: { at: number; inner: boolean } | null, at: number, wantsInner: boolean, canScrollInner: () => boolean): { at: number; inner: boolean } {
+  if (previous && at - previous.at >= 0 && at - previous.at < WheelGestureGapMs) return { at, inner: previous.inner };
+  return { at, inner: wantsInner && canScrollInner() };
+}
+
+/** Whether a box scrolled to `position` of `extent` in a `room` wide view can move by `delta` (a pixel's slack for rounding). */
+export function scrollsBy(position: number, room: number, extent: number, delta: number): boolean {
+  if (!(extent > room + 1) || delta === 0) return false;
+  return delta < 0 ? position > 0.5 : position + room < extent - 1;
+}
+
 /** How far one wheel event pans: a tilt pans −delta x, Shift with the wheel +delta x, else +delta y (WinUI wheel delta sign). */
 export function wheelPan(delta: number, horizontalWheel: boolean, shift: boolean): Point {
   if (horizontalWheel) return { x: -delta, y: 0 };
@@ -228,6 +269,17 @@ export function dotFirst(offset: number, step: number): number {
   if (!(step > 0) || !Number.isFinite(offset)) return 0;
   const first = offset % step;
   return first < 0 ? first + step : first;
+}
+
+/** How far the dots' layer reaches past the viewport on each side (Diagram.tsx): more than the widest step, 18 × ZoomMax. */
+export const DotsMargin = 32;
+/**
+ * The dots' layer's shift for a camera offset: the layer starts `DotsMargin` before the viewport with a dot at each half step,
+ * so this (0 up to a step, on whole device pixels) puts its dots where the world's are and keeps the viewport covered.
+ */
+export function dotsShift(offset: number, step: number, pixelRatio = typeof devicePixelRatio === 'number' && devicePixelRatio > 0 ? devicePixelRatio : 1): number {
+  const shift = dotFirst(offset - step / 2 + DotsMargin, step);
+  return Math.round(shift * pixelRatio) / pixelRatio;
 }
 
 // ── activity outline ──

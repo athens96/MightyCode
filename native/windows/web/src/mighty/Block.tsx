@@ -3,14 +3,14 @@ import { Icon, type IconName } from '../icons/Icon';
 import { providerLabel } from '../conversation/format';
 import { useServices } from '../app/context';
 import { Entry } from '../conversation/Entry';
-import { HeightCache, estimateHeight, layout, nearBottom, visibleRange } from '../conversation/virtual';
+import { HeightCache, estimateHeight, followsAfterScroll, layout, visibleRange, type ScrollPlace } from '../conversation/virtual';
 import { Markdown } from '../conversation/MarkdownView';
 import { ProviderMark } from '../conversation/ProviderMark';
 import type { LogEntry, PlanRecord } from '../store/models';
 import { PlanDocument, PlanRecordDetails } from '../cards/PlanDocument';
 import { planRecordPresentation } from '../cards/plan';
 import { backgroundLabel, shownTail } from './background';
-import { dashForCard, dashOffset } from './camera';
+import { MarchingEdge } from './Marching';
 import { isResizable, runOf, terminal, visibleImages } from './layout';
 import type { MightyBlockCopy, MightyExecutionCard, MightyFile } from './types';
 import type { PlanRecord as PresentedPlanRecord } from '../cards/types';
@@ -90,6 +90,7 @@ const Transcript = memo(function Transcript({ entries, paneId, provider, running
   const [heights] = useState(() => new HeightCache());
   const width = useRef(0);
   const following = useRef(true);
+  const place = useRef<ScrollPlace | null>(null);
   const frame = useRef(0);
   const [view, setView] = useState({ top: Number.MAX_SAFE_INTEGER, height: 400, width: 0 });
   const [version, setVersion] = useState(0);
@@ -121,7 +122,9 @@ const Transcript = memo(function Transcript({ entries, paneId, provider, running
     if (!body || !element) return undefined;
     // The transcript's own top inside the body (a request band may stand over it).
     const read = () => {
-      following.current = nearBottom(body.scrollHeight, body.scrollTop, body.clientHeight);
+      // A scroll up of the reader's own ends the following at once (virtual.ts followsAfterScroll).
+      following.current = followsAfterScroll(place.current, body.scrollHeight, body.scrollTop, body.clientHeight);
+      place.current = { top: body.scrollTop, height: body.scrollHeight };
       const next = { top: body.scrollTop - element.offsetTop, height: body.clientHeight, width: Math.round(element.clientWidth) };
       if (next.width !== width.current) width.current = next.width;
       setView((current) => (current.top === next.top && current.height === next.height && current.width === next.width ? current : next));
@@ -191,15 +194,13 @@ function blockSymbol(kind: string, tone: string): IconName {
   }
 }
 
-/** The running or waiting edge over a card (MightyGraphActivity): dashes fitted to its outline, marching once per period. */
+/** The running or waiting edge over a card (MightyGraphActivity): a running one marches (Marching.tsx), a waiting or still one is a plain line. */
 function Outline({ outline, w, h }: { outline: string; w: number; h: number }) {
   if (outline === 'none' || w <= 2 || h <= 2) return null;
-  const dash = dashForCard(w, h);
-  const period = -dashOffset(1, dash);
+  if (outline === 'marching') return <MarchingEdge w={w} h={h} />;
   return (
     <svg className={'mighty-outline outline-' + outline} width={w} height={h} aria-hidden="true" data-outline={outline}>
-      <rect x={1} y={1} width={w - 2} height={h - 2} rx={11} ry={11}
-        style={outline === 'marching' ? ({ strokeDasharray: dash.join(' '), '--march': `${-period}` } as React.CSSProperties) : undefined} />
+      <rect x={1} y={1} width={w - 2} height={h - 2} rx={11} ry={11} />
     </svg>
   );
 }
@@ -415,7 +416,7 @@ export const Block = memo(function Block(props: BlockProps) {
   const fit = role ? headerFit(w, copy?.title ?? '', showsPill ? copy?.state ?? null : null, copy?.capsule ?? null, buttons, role) : null;
   return (
     <div className={`mighty-block kind-${shownKind} tone-${tone}${copy?.soFar ? ' so-far' : ''}${selected ? ' selected' : ''}${copy?.outline === 'marching' || copy?.outline === 'solid' ? ' halo' : ''}`}
-      data-block-id={id} data-kind={shownKind} data-renders={renders.current} data-changed={changed} data-visible={props.visible ? '1' : '0'}
+      data-block-id={id} data-kind={shownKind} data-renders={renders.current} data-changed={changed} data-visible={props.visible ? '1' : '0'} data-live={props.running ? '1' : undefined}
       data-pending-request={extra.pending ? id : undefined}
       style={{ left: x, top: y, width: w, height: h }} title={copy?.fromRecord ? t('graph.history.tag') : undefined}>
       <div className={'mighty-head' + (role ? ' with-role' : '')}>

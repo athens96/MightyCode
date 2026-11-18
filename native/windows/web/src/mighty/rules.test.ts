@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
 import type { MightyGraphRun } from '../store/models';
 import { PendingNodeID, imagesHeight, makeLayout, nodeId, resultCap, resultDrag, resultFitSize, resultSize, resultViewportLimit, runOf, suffixOf } from './layout';
 import {
-  FollowWatch, activityPhase, barHeight, cameraTween, dashFitting, dashForCard, dotFirst, dotRadius, dotsShown, followTargetID, isAtNewest, outlineOf,
-  perimeter, runsChanged, wheelPan, wheelScrollTarget, zoomAnchored, zoomIn, zoomLabel, zoomOut,
+  DotsMargin, FollowWatch, WheelGestureGapMs, ZoomMax, activityPhase, barHeight, cameraTween, dashFitting, dashForCard, dotFirst, dotRadius, dotStep, dotsShift, dotsShown, followTargetID, isAtNewest, outlineOf,
+  perimeter, runsChanged, scrollsBy, wheelPan, wheelRoute, wheelScrollTarget, zoomAnchored, zoomIn, zoomLabel, zoomOut,
 } from './camera';
 import { normalizeForRuns, setBlockSize, splittingExecution } from './prefs';
 
@@ -102,6 +102,29 @@ describe('follow', () => {
     watch.moved('a', target, { x: 0, y: -1000 }, { w: 800, h: 600 }, 1);
     expect(watch.following).toBe(false);
   });
+  it('stops following when the user scrolls up to the older work, and leaves the camera alone while they move it', () => {
+    const target = { x: 0, y: 0, w: 100, h: 500 }, viewport = { w: 800, h: 600 };
+    // Following with the newest's bottom well inside the view: a scroll up (the camera going down the screen) stops it, though
+    // the newest is still in view, so its growing or a new block under it no longer brings the view back.
+    const watch = new FollowWatch();
+    watch.userMoved('a', target, { x: 0, y: -200 }, viewport, 1, 40);
+    expect(watch.following).toBe(false);
+    expect(watch.observe('b', { ...target, h: 900 }, { x: 0, y: -200 }, viewport, 1)).toBeNull();
+    // A scroll back down that ends at the newest follows again, keeping the gap it was left at.
+    watch.userMoved('a', target, { x: 0, y: 0 }, viewport, 1, -40);
+    expect(watch.following).toBe(true);
+    expect(watch.observe('a', { ...target, h: 520 }, { x: 0, y: 0 }, viewport, 1)).toEqual({ x: 0, y: -20 });
+    // A sideways move (no way up or down) is judged where it ends, as before.
+    watch.userMoved('a', { ...target, h: 520 }, { x: 30, y: -20 }, viewport, 1, 0);
+    expect(watch.following).toBe(true);
+    // A swipe or a drag under way: a layout pass moves nothing, even for a new block under the newest, and the gap is read anew.
+    expect(watch.observe('b', { ...target, h: 560 }, { x: 30, y: -20 }, viewport, 1, true)).toBeNull();
+    expect(watch.following).toBe(true);
+    expect(watch.observe('b', { ...target, h: 580 }, { x: 30, y: -20 }, viewport, 1)).toEqual({ x: 30, y: -40 });
+    // Under way and no longer at the newest: the following ends there.
+    expect(watch.observe('b', { ...target, h: 580 }, { x: 30, y: 400 }, viewport, 1, true)).toBeNull();
+    expect(watch.following).toBe(false);
+  });
   it('reads run-id changes', () => {
     expect(runsChanged(null, [], true)).toBe('first');
     expect(runsChanged(['a'], ['a', 'b'], false)).toBe('follow');
@@ -126,11 +149,48 @@ describe('zoom, wheel, dots, activity', () => {
     expect(wheelScrollTarget('a', 'b', false)).toBeNull();
     expect(wheelScrollTarget(null, 'b', true)).toBe('b');
   });
+  it('keeps a wheel gesture on its first route and lets a new one into a block only where it scrolls', () => {
+    const yes = () => true, no = () => false;
+    // A new gesture over the selected block goes inside when it can scroll that way, else it pans.
+    expect(wheelRoute(null, 1000, true, yes)).toEqual({ at: 1000, inner: true });
+    expect(wheelRoute(null, 1000, true, no)).toEqual({ at: 1000, inner: false });
+    expect(wheelRoute(null, 1000, false, yes)).toEqual({ at: 1000, inner: false });
+    // The gesture's later events (and its glide) keep the route, whatever is under the pointer now, without asking again.
+    const asked = () => { throw new Error('asked in mid gesture'); };
+    expect(wheelRoute({ at: 1000, inner: false }, 1016, true, asked)).toEqual({ at: 1016, inner: false });
+    expect(wheelRoute({ at: 1000, inner: true }, 1000 + WheelGestureGapMs - 1, false, asked)).toEqual({ at: 1000 + WheelGestureGapMs - 1, inner: true });
+    // After a pause it is a new gesture: a block scrolled to its end lets the diagram pan.
+    expect(wheelRoute({ at: 1000, inner: true }, 1000 + WheelGestureGapMs, true, no)).toEqual({ at: 1000 + WheelGestureGapMs, inner: false });
+    // Up at the top and down at the bottom do not scroll; a box that fits never does.
+    expect(scrollsBy(0, 200, 800, -30)).toBe(false);
+    expect(scrollsBy(0, 200, 800, 30)).toBe(true);
+    expect(scrollsBy(600, 200, 800, 30)).toBe(false);
+    expect(scrollsBy(600, 200, 800, -30)).toBe(true);
+    expect(scrollsBy(0, 200, 200.5, 30)).toBe(false);
+    expect(scrollsBy(10, 200, 800, 0)).toBe(false);
+  });
   it('lays the dot grid', () => {
     expect(dotsShown(0.3)).toBe(false);
     expect(dotsShown(0.5)).toBe(true);
     expect(dotRadius(0.5)).toBe(0.6);
     expect(dotFirst(-5, 18)).toBe(13);
+  });
+  it('shifts the dots layer to where the camera puts the dots, by less than a step', () => {
+    for (const zoom of [0.5, 1, 1.5]) {
+      const step = dotStep(zoom);
+      for (const offset of [0, 7, -5, 123.4, -9876.5]) {
+        const shift = dotsShift(offset, step, 1000);
+        expect(shift).toBeGreaterThanOrEqual(0);
+        expect(shift).toBeLessThanOrEqual(step);
+        // A dot of the layer (it starts DotsMargin before the viewport, a dot at each half step) lands on the world's dots: offset + k × step.
+        const dot = -DotsMargin + shift + step / 2;
+        const off = dotFirst(dot - offset, step);
+        expect(Math.min(off, step - off)).toBeLessThan(0.01);
+      }
+    }
+    expect(dotStep(ZoomMax)).toBeLessThanOrEqual(DotsMargin);
+    // Whole device pixels, so the layer is never drawn between two.
+    expect(dotsShift(0.3, 18, 2) * 2 % 1).toBe(0);
   });
   it('fits the marching dashes to the card', () => {
     expect(outlineOf('running', true)).toBe('marching');

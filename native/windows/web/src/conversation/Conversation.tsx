@@ -5,7 +5,7 @@ import { Entry, type EntryProps } from './Entry';
 import { providerIsBeta, providerLabel } from './format';
 import { ProviderMark } from './ProviderMark';
 import { ReferenceContext, clickedAt, linkAt, type Clicked } from './referenceClick';
-import { HeightCache, estimateHeight, layout, nearBottom, visibleRange } from './virtual';
+import { HeightCache, estimateHeight, followsAfterScroll, layout, visibleRange, type ScrollPlace } from './virtual';
 import { usePageOverlay } from '../shell/overlay';
 import { Pending, PendingBars } from '../pending/Pending';
 import { heldInConversation, requestState, shownInConversation, type PendingRequest } from '../pending/requests';
@@ -75,6 +75,7 @@ export function Conversation({ session }: { session: RunSession }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [heights] = useState(() => new HeightCache());
   const following = useRef(true);
+  const place = useRef<ScrollPlace | null>(null);
   const width = useRef(0);
   const frame = useRef(0);
   // Starts at the end: a pane opens on its newest entries.
@@ -165,7 +166,9 @@ export function Conversation({ session }: { session: RunSession }) {
   const onScroll = useCallback(() => {
     const element = scroller.current;
     if (!element) return;
-    following.current = nearBottom(element.scrollHeight, element.scrollTop, element.clientHeight);
+    // A scroll up of the reader's own ends the following at once (virtual.ts followsAfterScroll).
+    following.current = followsAfterScroll(place.current, element.scrollHeight, element.scrollTop, element.clientHeight);
+    place.current = { top: element.scrollTop, height: element.scrollHeight };
     setView((current) => (current.top === element.scrollTop ? current : { ...current, top: element.scrollTop }));
     setMenu(null);
   }, []);

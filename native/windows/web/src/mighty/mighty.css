@@ -23,8 +23,15 @@
 .mighty-diagram-zoom { position: absolute; top: 0; right: var(--inset-graph-bar-h); height: 32px; display: flex; align-items: center; z-index: 2; }
 .mighty-zoom { display: inline-flex; align-items: center; gap: 2px; }
 .mighty-zoom-label { width: 44px; height: 22px; border: 0; background: transparent; color: var(--ink2); font-variant-numeric: tabular-nums; font-size: var(--type-body); cursor: default; }
-.mighty-viewport { position: relative; flex: 1; min-height: 0; overflow: hidden; outline: none; cursor: default; touch-action: none; }
-.mighty-layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+/* touch-action: none only where a touch screen is: on WebKit (the Mac) it makes every block of the diagram part of the
+   touch-region bookkeeping, which is redone on each repaint and kept the page busy while a request ran. */
+.mighty-viewport { position: relative; flex: 1; min-height: 0; overflow: hidden; outline: none; cursor: default; }
+@media (any-pointer: coarse) { .mighty-viewport { touch-action: none; } }
+/* The dots on a layer of their own, DotsMargin (camera.ts) wider than the viewport on each side: the camera shifts it by less
+   than a step (a transform, no repaint) and it is redrawn only when the zoom changes the step. */
+.mighty-dots-layer { position: absolute; left: -32px; top: -32px; width: calc(100% + 64px); height: calc(100% + 64px); pointer-events: none; transform-origin: 0 0; will-change: transform; }
+/* The edges are the world's first child, under its blocks, and move with its transform. */
+.mighty-edges { position: absolute; overflow: visible; pointer-events: none; }
 .mighty-dot { fill: var(--line); }
 .mighty-edges-quiet { fill: none; stroke: color-mix(in srgb, var(--ink2) 45%, transparent); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .mighty-edges-live { fill: none; stroke: var(--run); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -42,11 +49,15 @@
 .mighty-step-mark { flex: none; box-sizing: border-box; width: var(--space-lg); height: var(--space-lg); margin-top: var(--space-xxs); border-radius: 50%; display: grid; place-items: center; }
 .mighty-step.completed .mighty-step-mark { background: var(--done); color: var(--on-status); }
 .mighty-step.inProgress .mighty-step-mark { background: var(--accent); }
-.mighty-step.inProgress .mighty-step-mark.live { animation: timeline-pulse 1.6s ease-in-out infinite; }
+/* will-change keeps the mark on a layer, so its pulse is the compositor's and nothing is painted again. */
+.mighty-step.inProgress .mighty-step-mark.live { will-change: opacity; animation: timeline-pulse 1.6s ease-in-out infinite; }
 .mighty-step.pending .mighty-step-mark { border: var(--stroke-active) solid var(--ink3); }
 .mighty-step.completed .mighty-step-mark .icon { width: var(--space-md); height: var(--space-md); }
 
 .mighty-block { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; border-radius: var(--radius-block); border: var(--stroke-line) solid var(--line); background: var(--card); color: var(--ink); contain: layout paint style; }
+/* A block of a run still going (its text grows, its clock ticks) sits on a layer of its own: WebKit works out a layer's whole
+   event region again on each repaint in it, and on the world's layer that is every block of the session. */
+.mighty-block[data-live], .mighty-flow-card[data-live] { will-change: transform; }
 .mighty-block.halo { box-shadow: 0 0 0 4px var(--run-soft); }
 .mighty-block.selected { outline: 2px solid var(--accent); outline-offset: -1px; }
 /* A block's header (transcriptCard): Layout.blockHead high, its symbol in the kind's tint, the title in 12 bold; a result's header is a strip in its outcome's fill with white words. */
@@ -111,11 +122,27 @@
 .mighty-draft-outline rect { fill: none; stroke: color-mix(in srgb, var(--accent) 60%, transparent); stroke-width: 1.5; stroke-dasharray: 5 4; }
 .mighty-block.kind-draft { border-color: transparent; }
 
-.mighty-outline { position: absolute; left: -1px; top: -1px; pointer-events: none; overflow: visible; }
+/* The edge sits on its own layer (will-change). A running card's dashes are Marching.tsx's pieces; one too small for them
+   steps this rectangle's dash offset (ten a second, a unit each), which repaints only this layer. */
+.mighty-outline { position: absolute; left: -1px; top: -1px; pointer-events: none; overflow: visible; will-change: transform; }
 .mighty-outline rect { fill: none; stroke: var(--run); stroke-width: 2; }
 .mighty-outline.outline-waiting rect { stroke: var(--wait); }
-.mighty-outline.outline-marching rect { animation: mighty-march 1.6s linear infinite; }
+.mighty-outline.outline-marching rect { animation: mighty-march 1.6s steps(16) infinite; }
 @keyframes mighty-march { from { stroke-dashoffset: 0; } to { stroke-dashoffset: var(--march); } }
+/* The marching edge as pieces (marchEdge.ts, Marching.tsx): each a clip over a dashed line or circle that slides or turns by one
+   dash period. Only transforms move, each on its own layer, so the compositor marches them and the page paints nothing. */
+.mighty-march { position: absolute; left: -1px; top: -1px; pointer-events: none; }
+.mighty-march-clip { position: absolute; overflow: hidden; }
+/* Each names its whole animation: the build's minifier makes a shorthand without a name `animation: none`. */
+.mighty-march-move { position: absolute; will-change: transform; }
+.mighty-march-move.move-x { animation: mighty-march-x 1.6s linear infinite; }
+.mighty-march-move.move-y { animation: mighty-march-y 1.6s linear infinite; }
+.mighty-march-move.move-turn { animation: mighty-march-turn 1.6s linear infinite; }
+.mighty-march-move svg { display: block; overflow: visible; }
+.mighty-march-move path { fill: none; stroke: var(--run); stroke-width: 2; }
+@keyframes mighty-march-x { to { transform: translateX(var(--by)); } }
+@keyframes mighty-march-y { to { transform: translateY(var(--by)); } }
+@keyframes mighty-march-turn { to { transform: rotate(var(--by)); } }
 .mighty-bars { display: inline-flex; align-items: center; gap: 2px; width: 18px; height: 14px; }
 .mighty-bars span { width: 3px; height: 12px; border-radius: 1.5px; background: var(--run); transform: scaleY(0.33); animation: mighty-bar 1.6s ease-in-out infinite; }
 @keyframes mighty-bar { 0%, 100% { transform: scaleY(0.33); } 50% { transform: scaleY(1); } }
@@ -125,6 +152,8 @@
 .mighty-glyph.tone-wait { color: var(--wait-text); }
 @media (prefers-reduced-motion: reduce) {
   .mighty-outline.outline-marching rect { animation: none; stroke-dasharray: none !important; }
+  .mighty-march-move { animation: none; }
+  .mighty-march-move path { stroke-dasharray: none; }
   .mighty-bars span, .timeline-node.ring::after, .timeline-pulse, .mighty-step-mark.live { animation: none; }
   .mighty-bars { display: none; }
   .mighty-bolt-still { display: inline-grid; }
@@ -231,7 +260,7 @@
 .timeline-kind.tint-question { color: var(--question-text); }
 .timeline-latest { display: flex; align-items: center; gap: 6px; padding-top: 2px; font-family: var(--font-mono); font-size: 10.8px; color: var(--ink2); white-space: nowrap; overflow: hidden; }
 .timeline-latest > span:last-child { overflow: hidden; text-overflow: ellipsis; }
-.timeline-pulse { flex: none; width: 7px; height: 7px; border-radius: 4px; background: var(--run); animation: timeline-pulse 1.6s ease-in-out infinite; }
+.timeline-pulse { flex: none; width: 7px; height: 7px; border-radius: 4px; background: var(--run); will-change: opacity; animation: timeline-pulse 1.6s ease-in-out infinite; }
 @keyframes timeline-pulse { 50% { opacity: 0.3; } }
 .timeline-body { border-top: var(--stroke-line) solid var(--line); }
 .timeline-transcript { height: 260px; overflow: auto; }
@@ -419,13 +448,17 @@
 .mighty-progress-heading { display: flex; align-items: center; gap: var(--space-xs); }
 .mighty-progress-ordinal { font-size: var(--type-pill); font-weight: 700; }
 .mighty-progress-text { font-size: var(--type-pill); color: var(--ink2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.mighty-progress-rows { padding: 4px 0; }
+/* The steps scroll in a room of their own, about twelve lines (the panel scrolls them to the step in progress); in a short diagram they give up
+   room down to two lines before the panel itself scrolls. */
+.mighty-progress-rows { padding: 4px 0; flex: 0 1 auto; min-height: calc(2 * 24px + 8px); max-height: calc(12 * 24px + 8px); overflow-y: auto; overscroll-behavior: contain; }
 /* The background work the request started (macOS MightyGraphProgressPanel backgroundSection): under the steps, its own heading with running/total,
    a line per command or sub-agent; its lines lead nowhere, so they keep the plain cursor and no hover. */
 .mighty-progress-background { padding: 0 0 4px; border-top: var(--stroke-line) solid var(--line); }
 .mighty-progress-background-head { flex: none; height: 20px; display: flex; align-items: center; gap: var(--space-xs); padding: 0 var(--inset-graph-block-body-h); color: var(--ink2); font-size: 10px; }
 .mighty-progress-background-title { font-weight: 600; }
 .mighty-progress-background-count { font-variant-numeric: tabular-nums; }
+/* Its lines scroll under its heading, about six at a time, running ones first. */
+.mighty-progress-background-rows { display: flex; flex-direction: column; max-height: calc(6 * 24px); overflow-y: auto; overscroll-behavior: contain; }
 .mighty-progress-background .flow-outline-row { cursor: default; }
 .mighty-progress .mighty-progress-background .flow-outline-row:hover { background: transparent; }
 .mighty-progress .mighty-progress-background .flow-outline-row.state-current, .mighty-progress .mighty-progress-background .flow-outline-row.state-current:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }

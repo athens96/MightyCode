@@ -73,3 +73,19 @@ export function visibleRange(offsets: Float64Array, scrollTop: number, viewport:
 export function nearBottom(scrollHeight: number, scrollTop: number, clientHeight: number): boolean {
   return scrollHeight - scrollTop - clientHeight <= followSlackPx;
 }
+
+/** Where a scroller stood when the follow rule last looked. */
+export interface ScrollPlace { top: number; height: number }
+
+/**
+ * Whether a list that keeps to its end goes on doing so after a scroll. A move up that leaves it short of the end, while its
+ * content did not shrink, is the reader's own and ends the following at once — inside the slack too, or the next line that
+ * comes puts the list back at its end under their fingers, again and again until they have gone further than the slack in
+ * one go. Otherwise it follows while it stands within the slack of the end. (A bounce back from past the end, and a content
+ * that shrank, are not the reader's move up.)
+ */
+export function followsAfterScroll(before: ScrollPlace | null, scrollHeight: number, scrollTop: number, clientHeight: number): boolean {
+  const short = scrollHeight - scrollTop - clientHeight > 0.5;
+  if (before && short && scrollTop < before.top - 0.5 && scrollHeight >= before.height - 0.5) return false;
+  return nearBottom(scrollHeight, scrollTop, clientHeight);
+}

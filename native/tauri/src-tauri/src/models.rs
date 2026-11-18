@@ -182,19 +182,20 @@ async fn read_again(refresh: &ModelCatalogRefresh, key: &ModelContext) -> Option
 /// at by the pane clock (panes.rs).
 pub fn follow_selection(host: &Host) {
     let Some(models) = models(host) else { return };
-    let (selected, key) = {
+    // The pane clock asks every 30 ms: the selection is compared first, and its folder and provider are worked out only when
+    // it changed.
+    let key = {
         let view = host.view();
-        let selected = view.snapshot.active_session_id.clone();
-        let key = selected.as_deref().and_then(|id| context_of(&view.snapshot, id));
-        (selected, key)
-    };
-    {
-        let mut seen = lock(&models.selected);
-        if *seen == selected {
-            return;
+        let selected = &view.snapshot.active_session_id;
+        {
+            let mut seen = lock(&models.selected);
+            if *seen == *selected {
+                return;
+            }
+            seen.clone_from(selected);
         }
-        seen.clone_from(&selected);
-    }
+        selected.as_deref().and_then(|id| context_of(&view.snapshot, id))
+    };
     if let Some(key) = key {
         drop(models.refresh.request(&key, true, false));
     }

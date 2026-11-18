@@ -45,14 +45,15 @@ button { font: inherit; color: inherit; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .status-glyph { flex: none; display: inline-grid; place-items: center; }
-.status-glyph.tone-run { color: var(--glyph-run); }
-.status-glyph.tone-run .glyph-spark { transform-origin: 8px 8px; animation: spin 3.2s linear infinite; }
+/* The whole glyph turns, on a layer of its own: a transform on the SVG element is the compositor's work, where one on a shape
+   inside it is laid out and painted again on every frame. */
+.status-glyph.tone-run { color: var(--glyph-run); will-change: transform; animation: spin 3.2s linear infinite; }
 .status-glyph.tone-wait { color: var(--glyph-wait); }
 .status-glyph.tone-done { color: var(--glyph-done); }
 .status-glyph.tone-err { color: var(--glyph-err); }
 .status-glyph.tone-stop { color: var(--glyph-stop); }
 .status-glyph.tone-idle { color: var(--glyph-idle); }
-@media (prefers-reduced-motion: reduce) { .status-glyph .glyph-spark { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .status-glyph.tone-run { animation: none; } }
 
 .status-counts { display: inline-flex; align-items: center; gap: var(--space-sm); flex: none; }
 .status-count { display: inline-flex; align-items: center; gap: 3px; font-size: var(--type-pill); }
