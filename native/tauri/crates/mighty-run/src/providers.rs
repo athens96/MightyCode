@@ -984,8 +984,13 @@ impl ProviderCatalog {
         let mut seen = HashSet::new();
         let mut directories: Vec<String> = directories.into_iter().filter(|d| !d.trim().is_empty() && seen.insert(d.clone())).collect();
         if provider == "gemini" && windows {
-            let local = environment.get("LOCALAPPDATA").cloned().or_else(|| std::env::var("LOCALAPPDATA").ok()).unwrap_or_default();
+            let local = env_var(&environment, "LOCALAPPDATA", windows).or_else(|| std::env::var("LOCALAPPDATA").ok()).unwrap_or_default();
             directories.push(os::combine(&os::combine(&local, "agy"), "bin"));
+        }
+        if provider == "hermes" && windows
+            && let Some(hermes) = hermes_install_folder(&environment)
+        {
+            directories.push(hermes);
         }
         let mut candidates: Vec<CliCommand> =
             cli_files(provider, &directories, windows).into_iter().map(|p| CliCommand::new(p, vec![], None)).collect();
@@ -1409,6 +1414,26 @@ impl ProviderCatalog {
 
 /// `CliDiscovery.Files`: the files tried for `provider` along `directories` (Windows: opencode's binary, npm's copy of it, its shim;
 /// Hermes's exe and cmd; pi's `pi.cmd`; any other `<name>.exe`). Each file once.
+fn env_var(environment: &BTreeMap<String, String>, name: &str, windows: bool) -> Option<String> {
+    environment.iter().rev().find(|(k, _)| if windows { k.eq_ignore_ascii_case(name) } else { *k == name }).map(|(_, v)| v.clone())
+}
+
+fn whole_path(path: Option<&str>) -> Option<&str> {
+    let path = path.filter(|p| !p.is_empty() && !p.contains('\0'))?;
+    let bytes = path.as_bytes();
+    let drive = bytes.len() >= 3 && bytes[1] == b':' && bytes[2] == b'\\';
+    (Path::new(path).is_absolute() || drive).then_some(path)
+}
+
+/// `CliDiscovery.HermesInstallFolder`: `$HERMES_HOME\bin` when `HERMES_HOME` is a whole path, else `%LOCALAPPDATA%\hermes\bin`.
+pub fn hermes_install_folder(environment: &BTreeMap<String, String>) -> Option<String> {
+    if let Some(home) = whole_path(env_var(environment, "HERMES_HOME", true).as_deref()) {
+        return Some(os::combine(home, "bin"));
+    }
+    let local = env_var(environment, "LOCALAPPDATA", true).or_else(|| std::env::var("LOCALAPPDATA").ok());
+    whole_path(local.as_deref()).map(|local| os::combine(&os::combine(local, "hermes"), "bin"))
+}
+
 pub fn cli_files(provider: &str, directories: &[String], windows: bool) -> Vec<String> {
     let name = executable(provider);
     let mut seen = HashSet::new();
@@ -1456,5 +1481,9 @@ mod tests {
         assert!(!supports_mods(None));
         assert!(supports_codex_approvals(Some("codex-cli 0.167.0")));
         assert!(!supports_codex_approvals(Some("codex-cli 0.153.3")));
+        let env = BTreeMap::from([("LocalAppData".to_string(), r"C:\Users\me\AppData\Local".to_string())]);
+        assert_eq!(hermes_install_folder(&env).as_deref(), Some(r"C:\Users\me\AppData\Local\hermes\bin"));
+        let custom = BTreeMap::from([("hermes_home".to_string(), r"D:\hermes".to_string())]);
+        assert_eq!(hermes_install_folder(&custom).as_deref(), Some(r"D:\hermes\bin"));
     }
 }
