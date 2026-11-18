@@ -7,6 +7,7 @@ use chrono::DateTime;
 use regex::Regex;
 use serde_json::Value;
 
+use super::notices::MONITOR_EVENT;
 use super::{
     ExecutionGraphTracker, Owner, SentMessage, agent_tool, content_text, is_notification_result, is_true, key, objects, prop,
     question_summary, text,
@@ -16,11 +17,15 @@ use crate::node::{self, ExecutionGraphNode, MAXIMUM_NODES};
 use crate::notice::Opener;
 use crate::support;
 
-static TASK_LAUNCH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"background with ID: (?<task>[A-Za-z0-9_-]+)").expect("regex"));
+/// A backgrounded command's launch ("…running in background with ID: b1") or a Monitor's ("Monitor started (task b2, expires…").
+static TASK_LAUNCH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?:background with ID: |Monitor started \(task )(?<task>[A-Za-z0-9_-]+)").expect("regex"));
 static AGENT_LAUNCH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"agentId: (?<agent>[A-Za-z0-9_-]+)").expect("regex"));
 /// Where a background run writes its output: the rest of the line, as a path may hold spaces.
 static OUTPUT_LAUNCH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"Output is being written to: (?<path>[^\r\n]+)").expect("regex"));
 const ASYNC_LAUNCH_TEXT: &str = "Async agent launched successfully.";
+/// Claude Code's tool that runs a command in the background and notifies the turn of its events, then of its end.
+const MONITOR_TOOL: &str = "Monitor";
 
 impl ExecutionGraphTracker {
     /// `Steer(id, text)`: a message the user sent while the turn ran. Claude reads it between tool calls; the block under main shows it
@@ -223,8 +228,11 @@ impl ExecutionGraphTracker {
                         input: Some(body),
                         ..node
                     });
-                } else if background && let Some(task) = self.ensure_node(&tool_id, "task", self.locale.get("graph.block.task")) {
+                } else if (background || tool_name == Some(MONITOR_TOOL))
+                    && let Some(task) = self.ensure_node(&tool_id, "task", self.locale.get("graph.block.task"))
+                {
                     // A backgrounded command outlives its tool result: its own child block, settled by the engine's task notification.
+                    // A Monitor is one too: it watches in the background until its source ends or it expires.
                     self.set_parent(&task, &owner);
                     self.background_tools.insert(tool_id.clone());
                     self.update(&task, |mut node| {
@@ -333,7 +341,13 @@ impl ExecutionGraphTracker {
             if let Some(file) = file.filter(|f| !f.is_empty()) {
                 body.push_str(&format!("<output-file>{file}</output-file>"));
             }
-            body.push_str(&format!("<status>{}</status>", text(frame, "status").unwrap_or("completed")));
+            // A Monitor's event carries no status: its watch goes on.
+            let event = text(frame, "status").is_none() && summary.is_some_and(|s| s.starts_with(MONITOR_EVENT));
+            if !event {
+                body.push_str(&format!("<status>{}</status>", text(frame, "status").unwrap_or("completed")));
+            } else if let Some(said) = text(frame, "event").filter(|e| !e.is_empty()) {
+                body.push_str(&format!("<event>{said}</event>"));
+            }
             if let Some(summary) = summary.filter(|s| !s.is_empty()) {
                 body.push_str(&format!("<summary>{summary}</summary>"));
             }

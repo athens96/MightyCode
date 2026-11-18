@@ -19,6 +19,11 @@ use mighty_core::wire;
 /// A background command's exit code in its notification's summary.
 static EXIT_CODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"exit code (?<code>-?[0-9]{1,10})").expect("regex"));
 
+/// How a Monitor's event notification's summary starts ("Monitor event: \"watch the deploy\"").
+pub(super) const MONITOR_EVENT: &str = "Monitor event";
+/// How the event a Monitor sends when its time ran out starts: its watch ended.
+const MONITOR_EXPIRED: &str = "[Monitor expired";
+
 /// `Tag(body, name)`: the trimmed text between `<name>` and `</name>`, none when absent or empty.
 fn tag(body: &str, name: &str) -> Option<String> {
     let open = format!("<{name}>");
@@ -149,6 +154,19 @@ impl ExecutionGraphTracker {
             let Some(end) = remaining[start + OPEN.len()..].find(CLOSE).map(|at| at + start + OPEN.len()) else { break };
             let body = remaining[start + OPEN.len()..end].to_string();
             remaining = &remaining[end + CLOSE.len()..];
+            // A Monitor's event (no status, an <event>) does not end its watch, unless it says the watch expired: the turn it opens is
+            // a notice turn of its own, as for work this run never started.
+            let event = tag(&body, "event");
+            let summary = tag(&body, "summary");
+            if tag(&body, "status").is_none()
+                && (event.is_some() || summary.as_deref().is_some_and(|s| s.starts_with(MONITOR_EVENT)))
+                && !event.as_deref().is_some_and(|e| e.starts_with(MONITOR_EXPIRED))
+            {
+                if notice {
+                    self.join_turn(Opener::Work, None, summary.as_deref(), None);
+                }
+                continue;
+            }
             let by_tool = tag(&body, "tool-use-id").map(|t| node::agent_node_id(&self.run_id, &t)).filter(|n| self.nodes.contains_key(n));
             // The tool use's block while it is open; once it ended, the task id's.
             let aliased = tag(&body, "task-id").and_then(|t| self.task_aliases.get(&t).cloned());

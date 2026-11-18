@@ -95,11 +95,13 @@ pub fn steps(run: &MightyGraphRun) -> &[FlowStep] {
 
 // ── the progress panel ──
 
-/// `ProgressWidth`, `ProgressRowHeight`, `ProgressVisibleRows`, `ProgressBackgroundRows`.
+/// `ProgressWidth`, `ProgressRowHeight`.
 pub const PROGRESS_WIDTH: f64 = 280.0;
 pub const PROGRESS_ROW_HEIGHT: f64 = 24.0;
-pub const PROGRESS_VISIBLE_ROWS: usize = 12;
-pub const PROGRESS_BACKGROUND_ROWS: usize = 4;
+/// The most steps and background lines the panel is sent. The panel scrolls through every one of them; these caps only guard against a
+/// runaway plan, far above any real one, with a "외 N개" line for the rest.
+pub const PROGRESS_VISIBLE_ROWS: usize = 200;
+pub const PROGRESS_BACKGROUND_ROWS: usize = 100;
 
 /// `ProgressState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

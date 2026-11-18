@@ -561,6 +561,22 @@ export interface MobileProgress {
   more?: string;
   /** The activity still goes on: the time of the step in progress runs on the phone's clock. */
   running: boolean;
+  /** The background work the request started (commands and sub-agents), running ones first; absent when there is none and from older hosts. */
+  background?: MobileProgressBackground[];
+  /** Background lines past the host's cap, and counted in the section's total. */
+  backgroundHidden?: number;
+}
+
+/** A background line of the progress panel (`FlowSteps.ProgressBackground`): a command or a sub-agent the request started. */
+export interface MobileProgressBackground {
+  id: string;
+  text: string;
+  /** A sub-agent, not a command. */
+  agent: boolean;
+  state: MobileProgressRow['state'];
+  /** Milliseconds since 1970: when it began and ended. */
+  startedAt?: number;
+  endedAt?: number;
 }
 
 /** The line over the rows a block delegated to (`FlowDelegation`). */

@@ -372,7 +372,17 @@
               "running": false,
               "stateWord": "완료",
               "status": "completed",
-              "title": "진행 상황"
+              "title": "진행 상황",
+              "background": [
+                {
+                  "id": "bg",
+                  "text": "로그인 코드 찾기",
+                  "agent": true,
+                  "state": "done",
+                  "startedAt": 1794304800000,
+                  "endedAt": 1794304890000
+                }
+              ]
             },
             "status": "completed"
           },
@@ -552,7 +562,23 @@
               "running": true,
               "stateWord": "실행 중",
               "status": "running",
-              "title": "진행 상황"
+              "title": "진행 상황",
+              "background": [
+                {
+                  "id": "ci",
+                  "text": "CI 대기",
+                  "agent": false,
+                  "state": "current",
+                  "startedAt": 1794305070000
+                },
+                {
+                  "id": "wt",
+                  "text": "릴리스 노트 쓰기",
+                  "agent": true,
+                  "state": "current",
+                  "startedAt": 1794305100000
+                }
+              ]
             },
             "returning": {
               "text": "병렬 4/4 실행 중 · 보고를 기다리는 중",
@@ -798,7 +824,16 @@
               "running": true,
               "stateWord": "실행 중",
               "status": "running",
-              "title": "진행 상황"
+              "title": "진행 상황",
+              "background": [
+                {
+                  "id": "notes",
+                  "text": "릴리스 노트 쓰기",
+                  "agent": true,
+                  "state": "current",
+                  "startedAt": 1794477612000
+                }
+              ]
             },
             "returning": {
               "text": "하위 에이전트 1/1 실행 중 · 보고를 기다리는 중",

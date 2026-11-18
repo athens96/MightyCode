@@ -337,6 +337,9 @@ pub struct MobileProgress {
     pub hidden: usize,
     pub more: Option<String>,
     pub running: bool,
+    /// The background work the request started (`steps::background_of`), running first; sent only when there is some.
+    pub background: Vec<MobileProgressBackground>,
+    pub background_hidden: usize,
 }
 
 impl MobileOut for MobileProgress {
@@ -353,6 +356,35 @@ impl MobileOut for MobileProgress {
         out.prop_int("hidden", self.hidden as i64);
         out.prop_str("more", self.more.as_deref());
         out.prop_bool("running", self.running);
+        if !self.background.is_empty() {
+            out.name("background");
+            self.background.write(out);
+        }
+        out.prop_opt_int("backgroundHidden", (self.background_hidden > 0).then_some(self.background_hidden as i64));
+        out.end_object();
+    }
+}
+
+/// A background line of the progress panel: a command or a sub-agent the request started, and how it is doing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MobileProgressBackground {
+    pub id: String,
+    pub text: String,
+    pub agent: bool,
+    pub state: String,
+    pub started_at: Option<i64>,
+    pub ended_at: Option<i64>,
+}
+
+impl MobileOut for MobileProgressBackground {
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_str("id", Some(&self.id));
+        out.prop_str("text", Some(&self.text));
+        out.prop_bool("agent", self.agent);
+        out.prop_str("state", Some(&self.state));
+        out.prop_opt_int("startedAt", self.started_at);
+        out.prop_opt_int("endedAt", self.ended_at);
         out.end_object();
     }
 }
@@ -625,6 +657,19 @@ pub fn progress(index: usize, runs: &[MightyGraphRun], ordinal: i32, locale: &Lo
         hidden: value.hidden,
         more,
         running: value.running,
+        background: value
+            .background
+            .iter()
+            .map(|item| MobileProgressBackground {
+                id: item.id.clone(),
+                text: item.text.clone(),
+                agent: item.agent,
+                state: item.state.name().into(),
+                started_at: milliseconds(item.started_at.as_ref()),
+                ended_at: milliseconds(item.ended_at.as_ref()),
+            })
+            .collect(),
+        background_hidden: value.background_hidden,
     })
 }
 

@@ -162,11 +162,20 @@ fn the_progress_panel_lists_the_background_work_the_request_started() {
     );
     let (rows, hidden) = steps::background_of(&many, &ko);
     check(
-        rows.len() == steps::PROGRESS_BACKGROUND_ROWS
-            && hidden == 2
-            && rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>() == ["t0", "t1", "t2", "t3"],
-        "four lines, in launch order, and a count of the rest",
+        hidden == 0 && rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>() == ["t0", "t1", "t2", "t3", "t4", "t5"],
+        "every line, in launch order: the panel scrolls",
     );
+    let runaway = steps::PROGRESS_BACKGROUND_ROWS + 2;
+    let flood = request(
+        "r",
+        "running",
+        vec![],
+        (0..runaway)
+            .map(|i| block(&format!("t{i}"), &format!("task {i}"), "running", Some("task"), Some(true), None, None, None))
+            .collect(),
+    );
+    let (rows, hidden) = steps::background_of(&flood, &ko);
+    check(rows.len() == steps::PROGRESS_BACKGROUND_ROWS && hidden == 2, "a runaway list stops at the cap, with a count of the rest");
 }
 
 fn steps_of(run: &MightyGraphRun) -> &[FlowStep] {
@@ -399,10 +408,31 @@ fn a_step_holds_what_its_span_holds_and_its_card_says_it() {
     );
     let window = steps::progress_of(0, &[long_run], "요청 1", &ko);
     check(
+        window.rows.len() == 30 && window.hidden == 0 && window.rows[20].state == ProgressState::Current,
+        "every step: the panel scrolls to the current one",
+    );
+    let mut runaway = request("r", "running", vec![], vec![]);
+    let total = steps::PROGRESS_VISIBLE_ROWS + 50;
+    runaway.steps = Some(
+        (0..total)
+            .map(|i| {
+                let status = if i < 150 {
+                    "completed"
+                } else if i == 150 {
+                    "in_progress"
+                } else {
+                    "pending"
+                };
+                fstep(&i.to_string(), &format!("단계 {i}"), None, status, (i <= 150).then(|| stamp(i as f64)), None)
+            })
+            .collect(),
+    );
+    let window = steps::progress_of(0, &[runaway], "요청 1", &ko);
+    check(
         window.rows.len() == steps::PROGRESS_VISIBLE_ROWS - 1
             && window.rows.iter().any(|r| r.state == ProgressState::Current)
-            && window.hidden + window.rows.len() == 30,
-        "11 steps and a line for the rest",
+            && window.hidden + window.rows.len() == total,
+        "a runaway plan is cut around the current step, with a line for the rest",
     );
     let plain = steps::progress_of(0, &[request("r", "completed", vec![], vec![])], "요청 2", &ko);
     check(

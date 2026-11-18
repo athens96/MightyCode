@@ -8,6 +8,7 @@ import type {
   MobileFlowLogRow,
   MobileInkedText,
   MobileProgress,
+  MobileProgressBackground,
   MobileProgressRow,
   MobileReturn,
 } from '@/api/types';
@@ -94,7 +95,9 @@ export function parseCard(raw: unknown): MobileBlockCard | undefined {
 }
 
 /** The most plan rows kept from a host (the desktops show twelve). */
-export const MAX_PROGRESS_ROWS = 12;
+export const MAX_PROGRESS_ROWS = 200;
+/** The most background lines the panel takes (the host sends at most 100); the panel scrolls through them. */
+export const MAX_PROGRESS_BACKGROUND = 100;
 const PROGRESS_STATES = ['done', 'current', 'pending', 'stopped', 'failed'] as const;
 
 export function parseProgress(raw: unknown): MobileProgress | undefined {
@@ -134,6 +137,27 @@ export function parseProgress(raw: unknown): MobileProgress | undefined {
   if (countText.length > 0) progress.count = countText;
   const more = inlineText(value.more, MAX_WORD);
   if (more.length > 0 && progress.hidden > 0) progress.more = more;
+  const background = (Array.isArray(value.background) ? value.background : [])
+    .map((item): MobileProgressBackground | undefined => {
+      const line = record(item);
+      const id = inlineText(line?.id, MAX_WORD);
+      const text = inlineText(line?.text, MAX_LINE);
+      const state = inlineText(line?.state, 20);
+      if (!line || id.length === 0 || text.length === 0 || !(PROGRESS_STATES as readonly string[]).includes(state)) return undefined;
+      const parsed: MobileProgressBackground = { id, text, agent: line.agent === true, state: state as MobileProgressBackground['state'] };
+      const startedAt = moment(line.startedAt);
+      if (startedAt !== undefined) parsed.startedAt = startedAt;
+      const endedAt = moment(line.endedAt);
+      if (endedAt !== undefined) parsed.endedAt = endedAt;
+      return parsed;
+    })
+    .filter((line): line is MobileProgressBackground => line !== undefined)
+    .slice(0, MAX_PROGRESS_BACKGROUND);
+  if (background.length > 0) {
+    progress.background = background;
+    const hidden = value.backgroundHidden;
+    if (typeof hidden === 'number' && Number.isInteger(hidden) && hidden > 0) progress.backgroundHidden = Math.min(hidden, 9_999);
+  }
   return progress;
 }
 

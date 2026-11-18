@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { StyleSheet, Text } from 'react-native';
 import TestRenderer, { act, type ReactTestInstance, type ReactTestRenderer } from 'react-test-renderer';
 import type { MobileMighty } from '@/api/types';
-import { FlowLogStrip } from '@/components/flow-roles';
+import { FlowLogStrip, ProgressPanel } from '@/components/flow-roles';
 import { MightyRunList } from '@/components/mighty-blocks';
 import { hasCapability, parseCapabilities } from '@/lib/capabilities';
 import {
@@ -363,3 +363,48 @@ describe('the progress panel', () => {
   });
 });
 
+
+describe('the progress panel scrolls through every step and background line', () => {
+  let renderer: ReactTestRenderer | undefined;
+  afterEach(() => {
+    act(() => renderer?.unmount());
+    renderer = undefined;
+  });
+
+  it('reads thirty steps and the background lines the host sends, with no count line', () => {
+    const progress = parseProgress({
+      heading: '요청 3',
+      title: '진행 상황',
+      rows: Array.from({ length: 30 }, (_, index) => ({ index, text: `${index + 1}. 단계`, state: index < 20 ? 'done' : index === 20 ? 'current' : 'pending' })),
+      hidden: 0,
+      running: true,
+      background: [
+        { id: 'wait', text: 'Wait for the deploy', agent: false, state: 'current', startedAt: 1_000 },
+        { id: 'review', text: 'Review the diff', agent: true, state: 'done', startedAt: 1_000, endedAt: 9_000 },
+        { id: '', text: 'no id', agent: false, state: 'done' },
+      ],
+      backgroundHidden: 2,
+    })!;
+    expect(progress.rows).toHaveLength(30);
+    expect(progress.more).toBeUndefined();
+    expect(progress.background?.map((line) => [line.id, line.agent, line.state])).toEqual([
+      ['wait', false, 'current'],
+      ['review', true, 'done'],
+    ]);
+    expect(progress.backgroundHidden).toBe(2);
+    expect(parseProgress({ heading: '요청 1', rows: [] })!.background).toBeUndefined();
+
+    act(() => {
+      renderer = TestRenderer.create(createElement(ProgressPanel, { progress }));
+    });
+    const rows = byTestID(renderer!, 'mighty-progress-rows');
+    for (const index of [0, 20, 29]) expect(rows.findAll((node) => node.props.testID === `mighty-progress-row-${index}`).length).toBeGreaterThan(0);
+    expect(textOf(byTestID(renderer!, 'mighty-progress-background-count'))).toBe('1/4');
+    expect(textOf(byTestID(renderer!, 'mighty-progress-background'))).toContain('Review the diff');
+    expect(textOf(byTestID(renderer!, 'mighty-progress-background'))).toContain('외 2개');
+    // Folded, neither list shows.
+    press(byTestID(renderer!, 'mighty-progress-fold'));
+    expect(renderer!.root.findAll((node) => node.props.testID === 'mighty-progress-rows')).toHaveLength(0);
+    expect(renderer!.root.findAll((node) => node.props.testID === 'mighty-progress-background')).toHaveLength(0);
+  });
+});

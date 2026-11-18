@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import type { MobileAdvisor, MobileBlock, MobileBlockCard, MobileDelegateLine, MobileFlowLog, MobileProgress, MobileProgressRow, MobileReturn } from '@/api/types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import type { MobileAdvisor, MobileBlock, MobileBlockCard, MobileDelegateLine, MobileFlowLog, MobileProgress, MobileProgressBackground, MobileProgressRow, MobileReturn } from '@/api/types';
 import { useNow } from '@/hooks/use-now';
 import {
   advisorShown,
@@ -211,25 +211,56 @@ const RAIL_COLUMN = 34;
 /** The small node the way back stands on. */
 const RETURN_NODE = 11;
 
+/** The room the steps scroll in: about seven lines, so the list under the panel keeps most of the screen. */
+const PROGRESS_ROWS_HEIGHT = 200;
+/** The room the background lines scroll in: about four lines. */
+const PROGRESS_BACKGROUND_HEIGHT = 116;
+/** A line and the gap under it, kept above the step scrolled to so the one before it shows too. */
+const PROGRESS_ROW_STEP = 28;
+
 /**
  * The progress panel pinned over a session's Mighty view (the desktops' `MightyGraphProgressPanel`): the request it is about ("요청 27", its
  * state and first line; a tap goes to it), then its plan, a line a step with its mark and its time (the step in progress keeps time on the
- * phone's clock), and the line that counts the steps left out. Folded, the header and the request line stay.
+ * phone's clock), then the background work the request started (running ones first, headed 백그라운드 with running/total). The steps and the
+ * background lines each scroll in a room of their own, so every one can be seen; when the step in progress changes, the steps scroll to it. A
+ * line counts what an older host (or a runaway plan past the host's cap) leaves out. Folded, the header and the request line stay.
  */
 export function ProgressPanel({ progress, onRequest }: { progress: MobileProgress; onRequest?: () => void }) {
   const palette = usePalette();
   const styles = useStyles(makeStyles);
   const [folded, setFolded] = useState(false);
-  const ticking = progress.running && progress.rows.some((row) => row.state === 'current' && row.startedAt !== undefined && row.endedAt === undefined);
+  const background = progress.background ?? [];
+  const backgroundHidden = progress.backgroundHidden ?? 0;
+  const ticking =
+    (progress.running && progress.rows.some((row) => row.state === 'current' && row.startedAt !== undefined && row.endedAt === undefined)) ||
+    background.some((line) => line.state === 'current' && line.startedAt !== undefined && line.endedAt === undefined);
   const now = useNow(1000, ticking);
   const tone = toneColors(palette, toneOf(progress.status));
+  const rowsView = useRef<ScrollView>(null);
+  const rowTops = useRef(new Map<number, number>());
+  const scrolledTo = useRef<number | undefined>(undefined);
+  const focusIndex = (progress.rows.find((row) => row.state === 'current') ?? [...progress.rows].reverse().find((row) => row.state === 'done'))?.index;
+  const reveal = useCallback(() => {
+    if (focusIndex === undefined || scrolledTo.current === focusIndex) return;
+    const top = rowTops.current.get(focusIndex);
+    if (top === undefined) return;
+    scrolledTo.current = focusIndex;
+    rowsView.current?.scrollTo({ y: Math.max(0, top - PROGRESS_ROW_STEP), animated: false });
+  }, [focusIndex]);
+  useEffect(reveal, [reveal]);
+  useEffect(() => {
+    // Unfolded again, the list is new: it scrolls to the step once it is laid out.
+    if (!folded) return;
+    scrolledTo.current = undefined;
+    rowTops.current.clear();
+  }, [folded]);
   return (
     <View style={styles.progress} testID="mighty-progress">
       <View style={styles.progressHead}>
         <Text style={styles.progressTitle}>{progress.title}</Text>
         {progress.count ? <Text style={styles.progressCount}>{progress.count}</Text> : null}
         <View style={styles.flex} />
-        {progress.rows.length > 0 ? (
+        {progress.rows.length > 0 || background.length > 0 ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={t(folded ? 'graph.steps.expand' : 'graph.steps.collapse')}
@@ -255,39 +286,76 @@ export function ProgressPanel({ progress, onRequest }: { progress: MobileProgres
         ) : null}
       </Pressable>
       {!folded && progress.rows.length > 0 ? (
-        <View style={styles.progressRows}>
+        <ScrollView ref={rowsView} style={styles.progressRowsRoom} contentContainerStyle={styles.progressRows} nestedScrollEnabled testID="mighty-progress-rows">
           {progress.rows.map((row) => (
-            <ProgressLine key={row.index} row={row} time={progressTime(row, progress.running, now)} />
+            <ProgressLine
+              key={row.index}
+              line={row}
+              time={progressTime(row, progress.running, now)}
+              testID={`mighty-progress-row-${row.index}`}
+              onTop={(top) => {
+                rowTops.current.set(row.index, top);
+                if (row.index === focusIndex) reveal();
+              }}
+            />
           ))}
           {progress.more ? <Text style={styles.progressMore}>{progress.more}</Text> : null}
+        </ScrollView>
+      ) : null}
+      {!folded && background.length > 0 ? (
+        <View style={styles.progressBackground} testID="mighty-progress-background">
+          <View style={styles.progressBackgroundHead}>
+            <Text style={styles.progressBackgroundTitle}>{t('graph.progress.background')}</Text>
+            <Text style={styles.progressBackgroundCount} testID="mighty-progress-background-count">
+              {`${background.filter((line) => line.state === 'current').length}/${background.length + backgroundHidden}`}
+            </Text>
+          </View>
+          <ScrollView style={styles.progressBackgroundRoom} contentContainerStyle={styles.progressRows} nestedScrollEnabled>
+            {background.map((line) => (
+              <ProgressLine key={line.id} line={line} time={progressTime(line, true, now)} testID={`mighty-progress-background-${line.id}`} />
+            ))}
+            {backgroundHidden > 0 ? <Text style={styles.progressMore}>{t('graph.progress.more', { count: backgroundHidden })}</Text> : null}
+          </ScrollView>
         </View>
       ) : null}
     </View>
   );
 }
 
-function ProgressLine({ row, time }: { row: MobileProgressRow; time: string | undefined }) {
+function ProgressLine({
+  line,
+  time,
+  testID,
+  onTop,
+}: {
+  line: Pick<MobileProgressRow, 'text' | 'state'> & Partial<Pick<MobileProgressBackground, 'agent'>>;
+  time: string | undefined;
+  testID: string;
+  onTop?: (top: number) => void;
+}) {
   const palette = usePalette();
   const styles = useStyles(makeStyles);
-  const mark = { done: '✓', current: '●', pending: '○', stopped: '■', failed: '!' }[row.state];
+  const mark = { done: '✓', current: '●', pending: '○', stopped: '■', failed: '!' }[line.state];
   const color = {
     done: toneColors(palette, 'done').fill,
     current: toneColors(palette, 'run').fill,
     pending: palette.textFaint,
     stopped: toneColors(palette, 'stop').fill,
     failed: toneColors(palette, 'err').fill,
-  }[row.state];
+  }[line.state];
   return (
     <View
-      style={[styles.progressRow, row.state === 'current' && { backgroundColor: toneColors(palette, 'run').soft }]}
-      testID={`mighty-progress-row-${row.index}`}
+      style={[styles.progressRow, line.state === 'current' && { backgroundColor: toneColors(palette, 'run').soft }]}
+      testID={testID}
+      onLayout={onTop ? (event) => onTop(event.nativeEvent.layout.y) : undefined}
     >
       <Text style={[styles.progressMark, { color }]}>{mark}</Text>
+      {line.agent !== undefined ? <Text style={styles.progressKind}>{line.agent ? '◆' : '›_'}</Text> : null}
       <Text
         numberOfLines={1}
-        style={[styles.progressText, row.state === 'pending' && styles.progressPending, row.state === 'current' && styles.progressCurrent]}
+        style={[styles.progressText, line.state === 'pending' && styles.progressPending, line.state === 'current' && styles.progressCurrent]}
       >
-        {row.text}
+        {line.text}
       </Text>
       {time ? <Text style={styles.progressTime}>{time}</Text> : null}
     </View>
@@ -315,7 +383,14 @@ const makeStyles = (palette: Palette) =>
     progressPill: { borderRadius: radius.md, paddingHorizontal: spacing.sm, paddingVertical: 1 },
     progressPillText: { fontSize: 11, fontWeight: '700' },
     progressRequest: { color: palette.textMuted, fontSize: 12.5, lineHeight: 17 },
+    progressRowsRoom: { flexGrow: 0, maxHeight: PROGRESS_ROWS_HEIGHT },
     progressRows: { gap: spacing.xs, paddingTop: spacing.xs },
+    progressBackground: { borderTopColor: palette.border, borderTopWidth: StyleSheet.hairlineWidth, gap: spacing.xs, paddingTop: spacing.xs },
+    progressBackgroundHead: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
+    progressBackgroundTitle: { color: palette.textMuted, fontSize: 11, fontWeight: '700' },
+    progressBackgroundCount: { color: palette.textMuted, fontSize: 11, fontVariant: ['tabular-nums'] },
+    progressBackgroundRoom: { flexGrow: 0, maxHeight: PROGRESS_BACKGROUND_HEIGHT },
+    progressKind: { color: palette.textMuted, fontSize: 11, fontWeight: '700' },
     progressRow: { alignItems: 'center', borderRadius: radius.md, flexDirection: 'row', gap: spacing.sm, minHeight: 24, paddingHorizontal: spacing.xs },
     progressMark: { fontSize: 12, fontWeight: '800', textAlign: 'center', width: 14 },
     progressText: { color: palette.text, flex: 1, fontSize: 12.5 },

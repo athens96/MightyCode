@@ -1283,3 +1283,61 @@ fn absorbed_and_ended_notice_runs_leave_the_request_its_place_through_its_events
     );
     check(support::routed_index(later.graph_runs()) == 0, "an ended notice run takes no more lines");
 }
+
+fn monitor(id: &str, description: &str) -> Value {
+    json!({"type": "assistant", "uuid": format!("call-{id}"), "message": {"id": format!("call-{id}"), "content": [{"type": "tool_use", "id": id, "name": "Monitor",
+        "input": {"command": "tail -f deploy.log", "description": description, "timeout_ms": 1_800_000}}]}})
+}
+
+fn monitor_started(tool: &str, task: &str) -> Value {
+    json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": tool,
+        "content": format!("Monitor started (task {task}, expires in 30m unless the source ends first). You will be notified on each event.")}]}})
+}
+
+fn monitor_event(task: &str, description: &str, event: &str) -> Value {
+    json!({"type": "user", "origin": {"kind": "task-notification"}, "message": {"content":
+        format!("<task-notification>\n<task-id>{task}</task-id>\n<summary>Monitor event: \"{description}\"</summary>\n<event>{event}</event>\n</task-notification>")}})
+}
+
+/// A Monitor watches in the background after the turn that started it: the request awaits its notices (not 최종 결과) until it ends; its
+/// events open turns but do not end it.
+#[test]
+fn a_monitor_is_background_work_until_it_ends() {
+    let ko = ko();
+    let mut tracker = new_tracker("proc-1", "deploy it");
+    for value in [monitor("watch", "Watch the deploy"), monitor_started("watch", "bm1"), result("Watching.", false)] {
+        tracker.consume(&value);
+    }
+    let watch = block(&tracker, "watch");
+    same(watch.kind(), Some("task"), "a Monitor is a task block");
+    same(watch.background, Some(true), "in the background");
+    same(watch.status().to_string(), "running".to_string(), "it watches after the turn ends");
+    let request = tracker.build_run(true).expect("a run");
+    check(notice::awaiting_notice(&request, std::slice::from_ref(&request), &ko).is_some(), "the request awaits its notices");
+    same(
+        result_title(request.status(), support::background_waiting(&request), true, &ko),
+        ko.get("graph.block.awaitingNotice"),
+        "its result is not the final one",
+    );
+    // An event opens a turn; the watch goes on.
+    tracker.consume(&monitor_event("bm1", "Watch the deploy", "deploy: 50%"));
+    for value in [text_frame("Half way.", "m2"), result("Half way.", true)] {
+        tracker.consume(&value);
+    }
+    same(block(&tracker, "watch").status().to_string(), "running".to_string(), "an event does not end the watch");
+    // The live stream's form of an event, with no status, neither.
+    tracker.consume(
+        &json!({"type": "system", "subtype": "task_notification", "task_id": "bm1", "summary": "Monitor event: \"Watch the deploy\""}),
+    );
+    same(block(&tracker, "watch").status().to_string(), "running".to_string(), "nor the live stream's event");
+    // Its end settles it, as a command's does.
+    tracker.consume(&notification_of("bm1", "watch", "Monitor \"Watch the deploy\" stream ended"));
+    same(block(&tracker, "watch").status().to_string(), "completed".to_string(), "the end settles the watch");
+    // A watch that expired ended too.
+    let mut expired = new_tracker("proc-1", "watch it");
+    for value in [monitor("watch", "Watch"), monitor_started("watch", "bm2"), result("Watching.", false)] {
+        expired.consume(&value);
+    }
+    expired.consume(&monitor_event("bm2", "Watch", "[Monitor expired after 30m with no events delivered.]"));
+    same(block(&expired, "watch").status().to_string(), "completed".to_string(), "an expired watch ended");
+}
