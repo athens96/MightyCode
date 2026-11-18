@@ -443,7 +443,8 @@ impl AntigravityAccountProbe {
     ) -> Result<AccountUsageSnapshot, UsageError> {
         let mut quiet = environment.clone();
         quiet.insert("NO_COLOR".into(), "1".into());
-        quiet.insert("CI".into(), "1".into()); quiet.insert("AGY_CLI_DISABLE_AUTO_UPDATE".into(), "1".into());
+        quiet.insert("CI".into(), "1".into());
+        quiet.insert("AGY_CLI_DISABLE_AUTO_UPDATE".into(), "1".into());
         let mut args = command.prefix.clone();
         args.extend(Self::ARGUMENTS.iter().map(|a| a.to_string()));
         let request = processes.cli_request(Path::new(&command.binary), &args, &std::env::temp_dir(), &quiet).map_err(|_| network())?;

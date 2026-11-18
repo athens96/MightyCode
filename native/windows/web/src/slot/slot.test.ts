@@ -12,9 +12,11 @@ describe('host push', () => {
   it('keeps what the host draws natively and reads anything else as the page’s', () => {
     expect(isHostPush({ kind: 'host' })).toBe(true);
     expect(isHostPush({ kind: 'shell' })).toBe(false);
-    expect(readCapabilities({ platform: 'macos', surfaces: { terminal: 'native', browser: 'native' } })).toEqual({ platform: 'macos', surfaces: { terminal: 'native', browser: 'native' } });
-    expect(readCapabilities({ platform: 7, surfaces: { terminal: 'ghostty' } })).toEqual({ platform: '', surfaces: { terminal: 'web', browser: 'web' } });
-    expect(readCapabilities({})).toEqual({ platform: '', surfaces: { terminal: 'web', browser: 'web' } });
+    expect(readCapabilities({ platform: 'macos', surfaces: { terminal: 'native' } })).toEqual({ platform: 'macos', surfaces: { terminal: 'native' } });
+    // A kind of view the page no longer has (an older host's browser) is not kept.
+    expect(readCapabilities({ platform: 'macos', surfaces: { terminal: 'native', browser: 'native' } })).toEqual({ platform: 'macos', surfaces: { terminal: 'native' } });
+    expect(readCapabilities({ platform: 7, surfaces: { terminal: 'ghostty' } })).toEqual({ platform: '', surfaces: { terminal: 'web' } });
+    expect(readCapabilities({})).toEqual({ platform: '', surfaces: { terminal: 'web' } });
   });
 
   it('is absent until the Rust host sends it, then tells its listeners', () => {
@@ -22,19 +24,19 @@ describe('host push', () => {
     expect(nativeTerminal()).toBe(false);
     let told = 0;
     const stop = subscribeHost(() => { told += 1; });
-    applyHostPush({ kind: 'host', platform: 'windows', surfaces: { terminal: 'web', browser: 'native' } });
-    expect(hostCapabilities()?.surfaces.browser).toBe('native');
+    applyHostPush({ kind: 'host', platform: 'windows', surfaces: { terminal: 'web' } });
+    expect(hostCapabilities()?.platform).toBe('windows');
     expect(nativeTerminal()).toBe(false);
-    applyHostPush({ kind: 'host', platform: 'macos', surfaces: { terminal: 'native', browser: 'native' } });
+    applyHostPush({ kind: 'host', platform: 'macos', surfaces: { terminal: 'native' } });
     expect(nativeTerminal()).toBe(true);
     stop();
-    applyHostPush({ kind: 'host', platform: 'windows', surfaces: { terminal: 'web', browser: 'native' } });
+    applyHostPush({ kind: 'host', platform: 'windows', surfaces: { terminal: 'web' } });
     expect(told).toBe(2);
   });
 });
 
 describe('slot bounds', () => {
-  it('reports device pixels covering the slot, as the browser pane rounds them', () => {
+  it('reports device pixels covering the slot, hidden when empty or not shown', () => {
     expect(slotReport(box(10.4, 20, 100, 50), 1.5, true, false)).toEqual({ rect: { x: 16, y: 30, width: 150, height: 75 }, visible: true, occluded: false });
     expect(slotReport(box(0, 0, 0, 50), 1, true, false).visible).toBe(false);
     expect(slotReport(box(0, 0, 10, 10), 1, false, false).visible).toBe(false);
@@ -82,7 +84,7 @@ describe('slot reporter', () => {
       if (method === 'surfaceAction') return new Promise((resolve) => { answer = () => resolve(snapshot); });
       return Promise.resolve(null);
     };
-    const reporter = new SlotReporter('p1', 'browser', call, (url) => pictures.push(url));
+    const reporter = new SlotReporter('p1', 'terminal', call, (url) => pictures.push(url));
     return { calls, pictures, reporter, answer: () => answer(snapshot) };
   }
 
@@ -92,8 +94,8 @@ describe('slot reporter', () => {
     reporter.update(shown());
     reporter.update(shown(12));
     expect(calls).toEqual([
-      { method: 'surfaceBounds', args: { paneId: 'p1', surface: 'browser', ...shown() } },
-      { method: 'surfaceBounds', args: { paneId: 'p1', surface: 'browser', ...shown(12) } },
+      { method: 'surfaceBounds', args: { paneId: 'p1', surface: 'terminal', ...shown() } },
+      { method: 'surfaceBounds', args: { paneId: 'p1', surface: 'terminal', ...shown(12) } },
     ]);
   });
 
@@ -102,7 +104,7 @@ describe('slot reporter', () => {
     reporter.update(shown());
     reporter.update({ ...shown(), occluded: true });
     expect(calls.map((c) => c.method)).toEqual(['surfaceBounds', 'surfaceAction', 'surfaceBounds']);
-    expect(calls[1]!.args).toEqual({ paneId: 'p1', surface: 'browser', action: 'snapshot' });
+    expect(calls[1]!.args).toEqual({ paneId: 'p1', surface: 'terminal', action: 'snapshot' });
     expect(calls[2]!.args.occluded).toBe(true);
     answer();
     await Promise.resolve();
@@ -142,7 +144,7 @@ describe('slot reporter', () => {
     const { calls, reporter } = harness();
     reporter.update(shown());
     reporter.release();
-    expect(calls.at(-1)).toEqual({ method: 'surfaceBounds', args: { paneId: 'p1', surface: 'browser', ...goneReport } });
+    expect(calls.at(-1)).toEqual({ method: 'surfaceBounds', args: { paneId: 'p1', surface: 'terminal', ...goneReport } });
     reporter.update(shown());
     expect(calls.at(-1)?.args.visible).toBe(true);
   });

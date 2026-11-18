@@ -1,8 +1,9 @@
 //! The cards over a pane's composer and its status line (`{kind:"cards", paneId, cards}`, page `src/cards/types.ts` `Card`): C#
 //! `PaneView.WebCards` (MainWindow.WebShell.Cards.cs:391) and the `Web*Card` records it makes (:12-60), in the composer's order —
 //! next actions, plan history, background work, the permission host's card (plan, question, permission or Antigravity), the
-//! terminal prompt, web-open prompts, the sign-in card, the status line. Each record's fields are in the C# order with `kind`
-//! last (a record's positional properties come before its body's), a null left out as `Wire.Json` leaves it.
+//! terminal prompt, the sign-in card, the status line (not C#'s web-open prompts: 0.5 opens an agent's page in the default browser).
+//! Each record's fields are in the C# order with `kind` last (a record's positional properties come before its body's), a null left
+//! out as `Wire.Json` leaves it.
 //!
 //! What later stages provide is typed in [`CardInputs`] and listed in [`Pending`].
 
@@ -171,7 +172,6 @@ pub struct CardInputs<'a> {
     pub background_rows: &'a [BackgroundTask],
     pub antigravity: Option<&'a AntigravityInput>,
     pub terminal_prompt: Option<&'a TerminalPromptInput>,
-    pub web_open: &'a [(String, String)],
     pub login: Option<&'a LoginInput>,
     pub status_line: Option<&'a StatusLineInput>,
 }
@@ -258,7 +258,6 @@ pub enum Card {
     Plan(PlanCard),
     Antigravity(AntigravityCard),
     TerminalPrompt(TerminalPromptCard),
-    WebOpen(WebOpenCard),
     Login(LoginCard),
     StatusLine(StatusLineCard),
 }
@@ -275,7 +274,6 @@ impl Card {
             Card::Plan(c) => c.kind,
             Card::Antigravity(c) => c.kind,
             Card::TerminalPrompt(c) => c.kind,
-            Card::WebOpen(c) => c.kind,
             Card::Login(c) => c.kind,
             Card::StatusLine(c) => c.kind,
         }
@@ -388,15 +386,6 @@ pub struct TerminalPromptCard {
     pub input: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_yes: Option<bool>,
-    pub kind: &'static str,
-}
-
-/// `WebOpenCard(RequestId, Url)`.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebOpenCard {
-    pub request_id: String,
-    pub url: String,
     pub kind: &'static str,
 }
 
@@ -760,9 +749,6 @@ pub fn cards(i: &CardInputs) -> (Vec<Card>, bool) {
             default_yes: prompt.default_yes,
             kind: "terminalPrompt",
         }));
-    }
-    for (id, url) in i.web_open {
-        cards.push(Card::WebOpen(WebOpenCard { request_id: id.clone(), url: url.clone(), kind: "webOpen" }));
     }
     if let Some(login) = i.login {
         cards.push(Card::Login(login_card(login, &i.locale)));

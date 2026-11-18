@@ -41,10 +41,10 @@ section: layout
 ![[dashboard]]
 
 ## 添加窗格 {#add-pane}
-窗格可以是 AI 智能体（Claude、Codex、Antigravity、pi、opencode、Hermes）、终端、浏览器或文件中的一种。
+窗格可以是 AI 智能体（Claude、Codex、Antigravity、pi、opencode、Hermes）、终端或文件中的一种。
 
 1. 点击侧边栏中的{{ui:workspace.addPane}}按钮。
-2. 选择要创建的窗格：智能体（Claude、Codex、Antigravity、pi、opencode、Hermes）窗格，{{ui:workspace.newTerminal}}，{{ui:browser.newTab}}。菜单最下方一组是添加工作区的三种方式：{{ui:workspace.add.existing}}、{{ui:workspace.add.newFolder}}和{{ui:workspace.add.fromGit}}（[打开工作区](getting-started.md#open-workspace)）。
+2. 选择要创建的窗格：智能体（Claude、Codex、Antigravity、pi、opencode、Hermes）窗格或{{ui:workspace.newTerminal}}。菜单最下方一组是添加工作区的三种方式：{{ui:workspace.add.existing}}、{{ui:workspace.add.newFolder}}和{{ui:workspace.add.fromGit}}（[打开工作区](getting-started.md#open-workspace)）。
 3. 新的 AI 窗格会沿用同一智能体最近使用过的窗格的模型、思考强度、权限和视图。对话则从头开始。
 
 快捷键：{{ui:menu.newClaudePane}}为{{kbd:⌘N}}，{{ui:menu.addTerminalPane}}为{{kbd:⌘T}}，{{ui:menu.showFiles}}为{{kbd:⇧⌘E}}。

@@ -2440,7 +2440,6 @@ dependencies = [
  "objc2-web-kit",
  "security-framework",
  "serde_json",
- "sha1",
  "tauri",
  "tokio",
  "tokio-native-tls",

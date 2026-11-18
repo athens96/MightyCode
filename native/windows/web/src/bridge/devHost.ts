@@ -56,7 +56,7 @@ export function fixtureEntries(prefix: string): LogEntry[] {
 export function devSnapshot(): AppSnapshot {
   return {
     version: 1, layout: 'grid', theme: 'dark', sidebarWidth: 252, sidebarCollapsed: false, statusLineEnabled: true, completionNotificationsEnabled: true,
-    claudeDirectUsageLookupEnabled: false, appUpdateAutoCheck: true, languagePreference: 'system', settingsPane: 'general', browserEngineEnabled: false,
+    claudeDirectUsageLookupEnabled: false, appUpdateAutoCheck: true, languagePreference: 'system', settingsPane: 'general',
     mobileRemote: { enabled: false, relayURL: '', allowLegacyPhones: true, directEnabled: true, directPort: 0 },
     workspaces: [{ id: 'w1', name: 'Fixture project', path: 'fixture', createdAt: at }],
     sessions: [pane('s1', 'w1', 'Claude', 'completed', 80), pane('s2', 'w1', 'Codex', 'running', 3)],

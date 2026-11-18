@@ -113,7 +113,7 @@ impl Inner {
         let Some(content) = self.content.get(main) else { return };
         let Some(window) = content.window() else { return };
         // Only the page's own webview, found when the view was made: guessing among the content view's subviews could hand the
-        // keyboard to a browser pane's WKWebView (Mac integration review 16). Without it the window keeps its first responder.
+        // keyboard to another native view (Mac integration review 16). Without it the window keeps its first responder.
         if let Some(page) = self.page.as_ref().and_then(|page| page.get(main)) {
             let _ = window.makeFirstResponder(Some(page));
         }
@@ -302,8 +302,7 @@ impl NativeSurface for MacTerminalSurface {
 
     fn inspect(&self) -> BoxFuture<'_, Result<SurfaceState>> {
         Box::pin(async move {
-            self.ask_view(|view, content| SurfaceState { bounds: device_rect(content, view.frame()), visible: !view.isHidden(), url: None })
-                .await
+            self.ask_view(|view, content| SurfaceState { bounds: device_rect(content, view.frame()), visible: !view.isHidden() }).await
         })
     }
 

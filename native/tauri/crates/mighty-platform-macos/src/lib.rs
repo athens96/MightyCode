@@ -1,5 +1,5 @@
 //! The macOS implementation of the `mighty-platform` ports, written in Rust (docs/tauri-architecture.md §1 rule 4: AppKit through
-//! objc2, the terminal through libghostty's C API, the browser through WKWebView or CEF). On any other OS this crate is empty.
+//! objc2, the terminal through libghostty's C API). On any other OS this crate is empty.
 //!
 //! Mac stage Step 0 (.omc/research/tauri/mac-plan.md §3 0c, .omc/research/tauri/mac-step0.md): one module per port, each naming the
 //! Swift it ports and its owner part, each answering `Unsupported` until its owner fills it in; [`platform`] wires them all.
@@ -10,7 +10,6 @@
 //! | [`prefs`], [`secrets`], [`claude_credentials`], [`pairing`] | M-B | UserDefaults sites, `RemoteKeychain`, `AccountUsageService`, `MobileRemoteService` |
 //! | [`agent_io`], [`net`], [`proxy`], [`http`] | M-C | `AgentIOSocketServer`, `RelayLink`, `RemoteWorkspace` |
 //! | [`terminal_surface`] | M-D | `LocalTerminalSession`, `HostTerminalView`, vendored `GhosttyTerminal` (behaviour reference) |
-//! | [`browser`] | M-E | `CefBrowserEngine`, `CefBrowserRuntime`, `BrowserPaneView`, `BrowserBridge/cef_bridge.m` |
 //! | [`notify`], [`pet`], [`session`], [`input_method`], [`menu`] | M-F | `AgentCompanion`, `AgentCompanionViews`, `InputMethodDiagnostics` |
 //! | [`files`], [`setup`], [`page`] | M-G | (Windows' files ports), `HelpCaptureDiagnostics` |
 //! | [`update`], [`update_transport`] | M-H | `AppUpdate`, `AppStore+AppUpdate` |
@@ -18,11 +17,11 @@
 //!
 //! Real already: [`paths`] (`~/Library/Application Support/MightyCode`), [`cli_copies`], [`MacPathProbe`]. No Mac counterpart, by
 //! design: the firewall (Tailscale's direct path needs no rule on the Mac), the toast activator (Windows' COM activation), the
-//! terminal launcher (the Mac signs in in a terminal pane, `PlatformProfile::agent_sign_in`) and the WebView2 bootstrapper.
+//! terminal launcher (the Mac signs in in a terminal pane, `PlatformProfile::agent_sign_in`). Nor is there the Swift app's browser pane
+//! (CEF or WKWebView, M-E): 0.5 opens a web page in the default browser ([`open_url`]).
 #![cfg(target_os = "macos")]
 
 pub mod agent_io;
-pub mod browser;
 pub mod claude_credentials;
 pub mod clipboard;
 pub mod disk;
@@ -55,8 +54,8 @@ use std::sync::Arc;
 
 use mighty_platform::unsupported::Unsupported;
 use mighty_platform::{
-    AppPaths, BoxFuture, BrowserOptions, BrowserSurface, Drawing, PetWindow, Platform, PlatformProfile, Result, SurfaceFactory,
-    SurfaceKind, TerminalOptions, TerminalSurface,
+    AppPaths, BoxFuture, Drawing, PetWindow, Platform, PlatformProfile, Result, SurfaceFactory, SurfaceKind, TerminalOptions,
+    TerminalSurface,
 };
 
 pub use agent_io::{agent_io_connector, agent_io_listener};
@@ -104,8 +103,8 @@ pub fn platform(profile: Option<PathBuf>, identifier: &str) -> Result<Platform> 
     })
 }
 
-/// The Mac's native views of one window: the terminal (Ghostty) and the browser (WKWebView or CEF) are native, and the pet is an
-/// NSPanel. Each opens through its owner's module.
+/// The Mac's native views of one window: the terminal (Ghostty) is native, and the pet is an NSPanel. Each opens through its owner's
+/// module.
 pub struct MacSurfaces {
     window: tauri::Window,
 }
@@ -114,39 +113,17 @@ impl SurfaceFactory for MacSurfaces {
     fn drawing(&self, _kind: SurfaceKind) -> Drawing {
         Drawing::Native
     }
-    fn open_browser(&self, options: BrowserOptions) -> BoxFuture<'_, Result<Box<dyn BrowserSurface>>> {
-        Box::pin(browser::open(&self.window, options))
-    }
     fn open_terminal(&self, options: TerminalOptions) -> BoxFuture<'_, Result<Box<dyn TerminalSurface>>> {
         Box::pin(terminal_surface::open(&self.window, options))
     }
     fn open_pet(&self) -> BoxFuture<'_, Result<Box<dyn PetWindow>>> {
         Box::pin(pet::open(&self.window))
     }
-    fn browser_status(&self, enabled: bool) -> Option<&'static str> {
-        Some(browser::status(enabled))
-    }
 }
 
-/// The native views over `window`'s page (its NSView hosts Ghostty and the browser panes).
-pub fn surfaces(window: tauri::Window, _csharp_web_data: bool) -> Arc<dyn SurfaceFactory> {
+/// The native views over `window`'s page (its NSView hosts Ghostty's).
+pub fn surfaces(window: tauri::Window) -> Arc<dyn SurfaceFactory> {
     Arc::new(MacSurfaces { window })
-}
-
-/// The browser engine on the Mac is the system's (WKWebView) or the bundled CEF: always there.
-pub fn browser_runtime() -> Option<String> {
-    Some("system".into())
-}
-
-/// The Mac has no engine to install: these are Windows' WebView2 bootstrapper steps.
-pub fn download_bootstrapper(_path: &std::path::Path) -> std::result::Result<(), String> {
-    Err("not on this platform".into())
-}
-pub fn is_microsoft_signed(_path: &std::path::Path) -> bool {
-    false
-}
-pub fn run_installer(_path: &std::path::Path) -> std::result::Result<i32, String> {
-    Err("not on this platform".into())
 }
 
 /// What the Antigravity rule safety asks the disk (mighty-platform `PathProbe`, Swift `AntigravityRuleSafety`): a link read
@@ -221,6 +198,5 @@ mod tests {
         let platform = platform(Some(root.clone()), "dev.mightycode.native").unwrap();
         assert_eq!(platform.profile, PlatformProfile::macos());
         assert!(platform.paths.data_dir().starts_with(&root));
-        assert!(browser_runtime().is_some(), "the system's WebKit is always there");
     }
 }

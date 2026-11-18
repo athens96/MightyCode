@@ -83,11 +83,8 @@ describe('countStats', () => {
     expect(countStats(list).waiting).toBe(actionCount(buildAttentionList([{ id: 'h', name: 'h' }], { h: list })));
   });
 
-  it("leaves an agent's own terminal and browser out of running and done", () => {
-    const list = state([
-      session({ id: 'agent-terminal:x', kind: 'agent-terminal', status: 'running' }),
-      session({ id: 'agent-browser:x', kind: 'agent-browser', status: 'completed' }),
-    ]);
+  it("leaves an agent's own terminal out of running and done", () => {
+    const list = state([session({ id: 'agent-terminal:x', kind: 'agent-terminal', status: 'running' })]);
     expect(countStats(list)).toEqual({ running: 0, waiting: 0, done: 0 });
   });
 

@@ -8,7 +8,7 @@
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 페이지 (React, 공통)   native/web  ← 지금의 native/windows/web          │
 │  ├ 웹으로 그리는 창: 흐름, 대화, 작성창, 카드, 설정 폼(NativeNode)…       │
-│  └ NativeSlot: 플랫폼이 네이티브 뷰를 올릴 빈 자리(터미널, 브라우저…)     │
+│  └ NativeSlot: 플랫폼이 네이티브 뷰를 올릴 빈 자리(터미널…)               │
 ├──────────────── host-message / host_post (한 줄로 순서 보장) ────────────┤
 │ 호스트 (Rust, 공통)    native/tauri/src-tauri                           │
 │  브리지·델타·셸/작성창/카드 모델·NativeNode 폼·SurfaceManager·창 관리     │
@@ -19,13 +19,13 @@
 ├──────────────────────────── 포트 (trait) ────────────────────────────┤
 │ mighty-platform: ProcessHost, PtyHost, SecretVault, PrefsStore,          │
 │   Notifier, FilePicker, UpdateInstaller, Firewall, ScreenCapture, …     │
-│   + Surface 종류: TerminalSurface, BrowserSurface, PetWindow, …          │
+│   + Surface 종류: TerminalSurface, PetWindow, …                          │
 ├───────────────────────────────┬──────────────────────────────────────┤
 │ mighty-platform-windows (Rust) │ mighty-platform-macos (Rust)          │
 │  Job Object, ConPTY, DPAPI,    │  posix_spawn/로그인 셸, Keychain,      │
 │  레지스트리, WebView2 자식 뷰,   │  UserDefaults, …                       │
 │  toast, netsh …                │  objc2(AppKit), Ghostty(libghostty C  │
-│                                │  API), CEF·WKWebView 브라우저,          │
+│                                │  API),                                 │
 │                                │  ScreenCaptureKit, 한글 입력 보조 …     │
 │                                │  — 모두 Rust                            │
 └───────────────────────────────┴──────────────────────────────────────┘
@@ -34,15 +34,15 @@
 규칙:
 1. 공통 crate에는 `#[cfg(target_os)]`가 없다. OS가 다르면 반드시 포트를 하나 만든다.
 2. 포트마다 **가짜 구현**이 있다. 공통 로직의 테스트(공통 기대값 파일, C# 테스트 이전분)는 가짜로 돌아서 Windows와 Mac CI 양쪽에서 똑같이 통과해야 한다.
-3. 어떤 구현을 쓸지는 빌드 대상(`cfg(windows)` / `cfg(target_os = "macos")`)으로 `src-tauri`가 한 곳에서 정한다. 같은 OS 안에서 고를 수 있는 것(예: Mac 브라우저 CEF ↔ WKWebView)은 설정으로 고른다.
-4. Mac 전용 네이티브 모듈도 **Rust로 쓴다**(정함 2026-11-13). AppKit·Foundation은 `objc2` 계열 crate로, Ghostty는 vendored libghostty의 **C API**(`ghostty_app_new`, `ghostty_surface_new`에 NSView를 넘김; `native/macos/Vendor/libghostty-spm`의 라이브러리)를 Rust에서 직접 부르고, CEF는 Swift 앱이 쓰던 C 브리지(`native/macos/BrowserBridge/cef_bridge.m`, D3)를 그대로 컴파일해 Rust에서 부른다(Mac 단계에서 바뀜: Rust CEF 바인딩이 아님). 지금 Swift 코드(`LocalTerminalSession`, `HostTerminalView`, `CefBrowserEngine`, `BrowserBridge`, `HangulComposer` 등)는 동작의 기준으로 읽고 같은 동작을 Rust로 옮긴다.
+3. 어떤 구현을 쓸지는 빌드 대상(`cfg(windows)` / `cfg(target_os = "macos")`)으로 `src-tauri`가 한 곳에서 정한다. 같은 OS 안에서 고를 수 있는 것이 생기면 설정으로 고른다.
+4. Mac 전용 네이티브 모듈도 **Rust로 쓴다**(정함 2026-11-13). AppKit·Foundation은 `objc2` 계열 crate로, Ghostty는 vendored libghostty의 **C API**(`ghostty_app_new`, `ghostty_surface_new`에 NSView를 넘김; `native/macos/Vendor/libghostty-spm`의 라이브러리)를 Rust에서 직접 부른다. 지금 Swift 코드(`LocalTerminalSession`, `HostTerminalView`, `HangulComposer` 등)는 동작의 기준으로 읽고 같은 동작을 Rust로 옮긴다.
 
 ## 2. 플랫폼마다 다른 것 (포트와 구현)
 
 | 포트 | Windows | Mac |
 |---|---|---|
 | **TerminalSurface** (셸 창, 에이전트 터미널) | 웹: 페이지의 xterm.js + Rust ConPTY | **네이티브: Ghostty 뷰**(libghostty C API, Metal). PTY는 Rust가 가진다(D2, `MacPtyHost`; 출력은 `ghostty_surface_write_buffer`로 넣음) |
-| **BrowserSurface** (브라우저 창) | WebView2 자식 웹뷰(작업 공간별 프로필) | **CEF와 WKWebView 둘 다**, 설정 `browser.engineEnabled`로 선택(켜면 CEF의 C 브리지, 끄면 wry의 WKWebView 자식 웹뷰, D4) |
+| (브라우저 창) | 없음: 0.5에서 앱 안 브라우저를 뺐다. 웹 페이지(링크, 에이전트의 `open_url`)는 기본 브라우저에서 열린다 | 같음(CEF도 번들하지 않는다) |
 | HtmlFrame (HTML 미리보기) | 페이지 iframe + 가상 호스트 | 같음(커스텀 프로토콜) |
 | ProcessHost | CreateProcessW 일시정지 + Job Object, PATHEXT, `.cmd` → `cmd /d /s /c` | posix_spawn, 로그인 셸 `-ilc` 환경 |
 | PtyHost (에이전트 PTY) | ConPTY | forkpty |
@@ -81,9 +81,8 @@
 | `Notifier` | `notify(Notification{title, body, pane_id})`, `on_activated(클릭 → pane id)` |
 | `Firewall` | `read` → 규칙 없음/있음(포트)/못 읽음, `apply(ports)`(빈 목록은 삭제, 관리자 확인) — Mac은 `Unsupported` |
 | `UpdateInstaller` | `install_location`, `hand_off(StagedUpdate, relaunch)`(Windows: 도우미를 띄우고 돌아옴, 0.4.x `--update-helper` 인자 그대로). Mac(M-H): Swift `installScript`를 그대로 옮긴 `install.sh`를 `start_install_script`로 분리 실행, 받은 번들은 Security 프레임워크로 서명 확인(`code_signature_valid`) |
-| `SurfaceFactory` | 창 하나의 네이티브 뷰: `drawing(kind)` → `web`/`native`, `open_browser(BrowserOptions)`, `open_terminal(TerminalOptions)`, `open_pet()` |
+| `SurfaceFactory` | 창 하나의 네이티브 뷰: `drawing(kind)` → `web`/`native`, `open_terminal(TerminalOptions)`, `open_pet()` |
 | `NativeSurface` | `place(DeviceRect)`, `set_visible`, `focus`, `snapshot`(PNG `data:` URL 또는 None), `inspect`(OS가 말하는 실제 위치·보임), `close` |
-| `BrowserSurface` | `NativeSurface` + `navigate(url)`, `go_back`, `go_forward`, `reload` |
 | `TerminalSurface` | `NativeSurface` + `feed`(PTY 출력), `send_text`, `set_font`, `set_theme` (Mac Ghostty; PTY는 Rust의 `PtyHost`가 가짐) |
 | `PetWindow` | `show_at(LogicalRect)`, `hide`, `set_click_through`, `close` |
 | `PlatformProfile` | 값: `os`, `path_style`, `plugin_list_while_reading`(Busy/Join), `cli_updater`(Homebrew/Winget), `settings_store`, `pairing_layout`, `agent_sign_in`, `mcp_transport`, `m1_platform`("win32"/"darwin"), `remote_decodes_request_paths`, `direct_connection_firewall`, `update_needs_public_key`, `build_update_url_wins`, `update_rechecks_sha256`, `auto_update_keys`, `saves_files_pane` |
@@ -103,31 +102,30 @@ C#이 기준이다. 아래만 일부러 다르게 했고, 각각 코드 주석�
 
 ## 3. NativeSlot: 페이지 위에 네이티브 뷰 올리기
 
-지금 Windows의 브라우저 창이 쓰는 방식(`browserBounds`)을 모든 네이티브 화면으로 넓힌다.
+C# Windows의 브라우저 창이 쓰던 방식(`browserBounds`)을 네이티브 화면으로 넓힌다. 0.5에는 브라우저 창이 없다(웹 페이지는 기본 브라우저에서 열림): 지금 네이티브 화면은 Mac의 Ghostty 터미널뿐이다.
 
-1. **능력 알림:** `ready` 뒤 호스트가 `{kind:'host', surfaces:{terminal:'web'|'native', browser:'native'}, platform:'windows'|'macos'}`를 보낸다. 페이지는 `terminal:'web'`이면 지금처럼 xterm.js를 그리고, `'native'`면 빈 `NativeSlot`을 그린다.
+1. **능력 알림:** `ready` 뒤 호스트가 `{kind:'host', surfaces:{terminal:'web'|'native'}, platform:'windows'|'macos'}`를 보낸다. 페이지는 `terminal:'web'`이면 지금처럼 xterm.js를 그리고, `'native'`면 빈 `NativeSlot`을 그린다.
 2. **자리 알림:** `NativeSlot`은 `surfaceBounds{paneId, surface, rect(기기 픽셀), visible, occluded}`를 보낸다(크기·위치·스크롤·탭 전환 때마다, 한 프레임에 한 번).
 3. **올리기:** 호스트의 `SurfaceManager`가 플랫폼 구현에게 그 자리에 뷰를 만들고·옮기고·숨기게 한다(Mac: 창의 contentView에 NSView를 웹뷰 위로 추가, Windows: 자식 웹뷰나 자식 HWND).
-4. **가림 처리:** 페이지의 대화 상자·메뉴·팝오버가 슬롯을 덮으면 `occluded:true` → 네이티브 뷰를 숨기고, 숨기기 직전 화면을 이미지로 받아 슬롯에 대신 그린다(깜박임 없이 대화 상자가 위에 보이게). 지금 Windows 브라우저 창이 하는 규칙을 그대로 넓힌 것.
+4. **가림 처리:** 페이지의 대화 상자·메뉴·팝오버가 슬롯을 덮으면 `occluded:true` → 네이티브 뷰를 숨기고, 숨기기 직전 화면을 이미지로 받아 슬롯에 대신 그린다(깜박임 없이 대화 상자가 위에 보이게). C# Windows 브라우저 창이 하던 규칙을 그대로 넓힌 것.
 5. **키보드:** 네이티브 뷰가 포커스를 가진 동안 앱 단축키(⌘T, ⌘K, Ctrl+Tab 등)는 호스트가 받아 페이지로 넘긴다. 포커스를 페이지로 돌려주는 신호(Esc 등 기존 규칙)도 같은 경로.
-6. **메시지:** 터미널·브라우저와 주고받는 내용(입력, 제목, 작업 폴더, 복사·붙여넣기, 주소, 뒤로·앞으로)은 지금의 `terminal`/`browser` push와 메서드를 그대로 쓴다. 웹 터미널이든 Ghostty든 위쪽 규약은 같다.
+6. **메시지:** 터미널과 주고받는 내용(입력, 제목, 작업 폴더, 복사·붙여넣기)은 지금의 `terminal` push와 메서드를 그대로 쓴다. 웹 터미널이든 Ghostty든 위쪽 규약은 같다.
 
 ### 3.1 메시지 모양 (W1에 확정)
 
 | 방향 | 메시지 | 모양 |
 |---|---|---|
-| host → page | `host` | `{kind:'host', platform:'windows'\|'macos', surfaces:{terminal:'web'\|'native', browser:'web'\|'native'}}`. 페이지가 `ready`를 부르면 **스냅샷보다 먼저** 보낸다(그래서 창이 그려질 때 이미 안다). 페이지를 다시 읽으면 다시 보낸다. 지금 값: Windows `{terminal:'web', browser:'native'}`, Mac `{terminal:'native', browser:'native'}` |
-| page → host | `surfaceBounds` | `{paneId, surface:'terminal'\|'browser', rect:{x, y, width, height}, visible, occluded}` → `null`. `rect`는 페이지 왼쪽 위 기준 기기 픽셀(CSS 픽셀 × devicePixelRatio, 바깥쪽으로 정수 반올림 — `slotBounds`와 같은 규칙). 바뀐 때만, 한 프레임에 한 번. 슬롯이 사라지면 `{rect:{0,0,0,0}, visible:false, occluded:false}` |
+| host → page | `host` | `{kind:'host', platform:'windows'\|'macos', surfaces:{terminal:'web'\|'native'}}`. 페이지가 `ready`를 부르면 **스냅샷보다 먼저** 보낸다(그래서 창이 그려질 때 이미 안다). 페이지를 다시 읽으면 다시 보낸다. 지금 값: Windows `{terminal:'web'}`, Mac `{terminal:'native'}` |
+| page → host | `surfaceBounds` | `{paneId, surface:'terminal', rect:{x, y, width, height}, visible, occluded}` → `null`. `rect`는 페이지 왼쪽 위 기준 기기 픽셀(CSS 픽셀 × devicePixelRatio, 바깥쪽으로 정수 반올림 — `slotBounds`와 같은 규칙). 바뀐 때만, 한 프레임에 한 번. 슬롯이 사라지면 `{rect:{0,0,0,0}, visible:false, occluded:false}` |
 | page → host | `surfaceAction` | `{paneId, surface, action:'focus'}` → `null`; `{paneId, surface, action:'snapshot'}` → PNG `data:` URL 또는 `null`(그림을 줄 수 없는 플랫폼, 뷰가 아직 없음) |
-| host → page | `browser` | `{kind:'browser', paneId, state:{status:'starting'\|'ready'\|'disabled'\|'missing'\|'failed', url?, canGoBack, canGoForward}}` (C#과 같음) |
 
 규칙:
 - 호스트는 `visible && !occluded && rect`가 비어 있지 않을 때만 뷰를 그 자리에 보이고, 아니면 숨긴다. 같은 자리면 다시 옮기지 않는다(옮긴 뒤에 보인다 — 예전 자리에서 깜박이지 않게).
-- `occluded`는 브라우저 창의 기존 규칙과 같다: 호스트 흐름의 대화 상자, 페이지가 그리는 호스트 화면(설정·시트), 창 자체의 대화 상자가 열려 있으면 모든 슬롯이 가려지고, 페이지의 메뉴·팝오버·창 안 대화 상자(`data-page-overlay`)는 겹치는 슬롯만 가린다(`slot/bounds.ts` `pageCovers`).
+- `occluded`는 C# 브라우저 창의 규칙과 같다: 호스트 흐름의 대화 상자, 페이지가 그리는 호스트 화면(설정·시트), 창 자체의 대화 상자가 열려 있으면 모든 슬롯이 가려지고, 페이지의 메뉴·팝오버·창 안 대화 상자(`data-page-overlay`)는 겹치는 슬롯만 가린다(`slot/bounds.ts` `pageCovers`).
 - 보이던 슬롯이 가려지면 페이지는 `surfaceAction snapshot`을 **먼저** 보내고 `surfaceBounds{occluded:true}`를 보낸다. 호스트는 호출을 순서대로 처리하므로 뷰가 아직 보일 때 그림을 찍고, 그다음 숨긴다. 그림이 오면 슬롯이 가려져 있는 동안만 슬롯 배경으로 그린다(Windows 웹뷰는 W1에서 `null` — W4에서 `CapturePreview`).
-- 뷰는 슬롯이 처음 보일 수 있을 때 열린다(브라우저는 `browserOpen`이 주소를 준 뒤). 페이지를 다시 읽으면 모든 뷰가 숨고 슬롯이 다시 알려질 때 돌아온다. 창(pane)이 상태에서 없어지면 뷰를 닫는다.
+- 뷰는 슬롯이 처음 보일 수 있을 때 열린다. 페이지를 다시 읽으면 모든 뷰가 숨고 슬롯이 다시 알려질 때 돌아온다. 창(pane)이 상태에서 없어지면 뷰를 닫는다.
 - C# 호스트는 `host`를 보내지 않는다. `host`가 없으면 페이지는 지금 규약(`browserBounds{x,y,width,height,visible}`) 그대로다. 새 페이지 코드는 모두 `import.meta.env.MODE === 'tauri'` 뒤에 있어 C# 빌드(`dist/`)는 바이트 단위로 같다.
-- 브라우저 자식 웹뷰(Windows)는 메인 페이지와 다른 WebView2 데이터 폴더(`<local>/browser/<profile>`)를 쓰고, `host_post`는 메인 웹뷰(`main`)에서 온 것만 받는다.
+- `host_post`는 메인 웹뷰(`main`)에서 온 것만 받는다.
 
 ## 4. 폴더
 
@@ -148,6 +146,6 @@ native/
 ```
 
 ## 5. CI
-W1부터 `native/tauri`를 **Windows와 Mac 둘 다**에서 빌드·테스트한다(공통 crate 테스트는 양쪽에서 같은 결과). Mac 구현이 아직 비어 있어도 공통 로직이 Mac에서 깨지지 않게 하기 위해서다. Mac 네이티브 모듈(Ghostty, CEF)은 Mac 단계에서 채우되, 포트와 NativeSlot 규약은 W1에 확정한다.
+W1부터 `native/tauri`를 **Windows와 Mac 둘 다**에서 빌드·테스트한다(공통 crate 테스트는 양쪽에서 같은 결과). Mac 구현이 아직 비어 있어도 공통 로직이 Mac에서 깨지지 않게 하기 위해서다. Mac 네이티브 모듈(Ghostty)은 Mac 단계에서 채우되, 포트와 NativeSlot 규약은 W1에 확정한다.
 
 `.github/workflows/native-tauri.yml`(`feat/tauri` push, `native/tauri`·페이지를 건드리는 PR): `windows-latest`와 `macos-latest`(arm64)에서 페이지 타입 검사·단위 테스트, `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings`, `cargo test --workspace`, Tauri 앱 debug 빌드; Windows는 데모 프로필 smoke(브라우저 화면 단계 포함)까지. 0.4.x 워크플로와 따로 돈다.

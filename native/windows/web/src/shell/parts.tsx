@@ -27,7 +27,6 @@ export function useCall(): (method: string, args?: unknown) => void {
 
 /** The symbol an idle pane that is not an agent's shows in place of the ring (M/DashboardView.swift paneSymbol). */
 function paneSymbol(kind: string): IconName {
-  if (kind === 'browser' || kind === 'agent-browser') return 'globe';
   if (kind === 'files') return 'folder';
   if (kind === 'workmap') return 'map';
   return 'square-terminal';

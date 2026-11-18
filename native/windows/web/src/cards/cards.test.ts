@@ -202,7 +202,7 @@ describe('card keyboard', () => {
 
 describe('cards in the store', () => {
   it('a cards push replaces the pane\'s cards and a fill is kept for the composer', () => {
-    let state = reduce(emptyState, { kind: 'cards', paneId: 'a', cards: [{ kind: 'webOpen', requestId: 'r', url: 'https://example.com/' }] });
+    let state = reduce(emptyState, { kind: 'cards', paneId: 'a', cards: [{ kind: 'nextActions', entryId: 'e', actions: ['go on'] }] });
     expect(state.cards.a).toHaveLength(1);
     state = reduce(state, { kind: 'fill', paneId: 'a', text: 'do it' });
     state = reduce(state, { kind: 'fill', paneId: 'a', text: 'do it' });

@@ -25,7 +25,7 @@ serde_json.workspace = true
 sha2 = "0.10"
 # The Agent IO pipe's name (W7-C: `mighty-agent-io-` + 32 random hex characters, C#'s `Guid.NewGuid().ToString("N")`).
 getrandom = "0.3"
-tauri = { workspace = true, features = ["unstable"] }
+tauri.workspace = true
 tokio = { workspace = true, features = ["sync", "net", "rt", "time", "io-util", "macros"] }
 webview2-com = "0.38"
 # The Direct2D calls' points and transforms (`Vector2`, `Matrix3x2`; already in the lock as a dependency of `windows`): the pet (pet.rs,

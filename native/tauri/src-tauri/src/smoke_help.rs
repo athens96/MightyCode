@@ -117,7 +117,7 @@ fn screen_now(host: &Host) -> Option<(u32, u32)> {
     window.current_monitor().ok().flatten().map(|m| (m.size().width, m.size().height))
 }
 
-/// The earlier steps' workspaces (the browser, terminal, files and history steps') live in memory only, never approved by a folder
+/// The earlier steps' workspaces (the terminal, files and history steps') live in memory only, never approved by a folder
 /// selection, so every save since they were added failed on them and the shots showed "Save failed: Only paths approved via folder
 /// selection may be saved." (both OSes; the Mac's help shot showed it first). Those steps are done before this one: every workspace the
 /// store never approved leaves, its panes closed through the app's own close (their runs, terminals and views end), and the banner

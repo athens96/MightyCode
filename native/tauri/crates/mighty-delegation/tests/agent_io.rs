@@ -1,6 +1,6 @@
-//! C# AgentIOVerification, AgentIORevocationVerification and AgentWebOpenVerification (Verification.cs L513, L521-L525, L634): the
-//! pane binding and its secret, the tools' argument rules, the stdio contract of mighty-terminal, the authenticated pipe and its
-//! revocation, the agent panes kept out of saved state, the open_url prompts. The pipe checks run over the in-memory transport on
+//! C# AgentIOVerification and AgentIORevocationVerification (Verification.cs L513, L521-L525): the pane binding and its secret, the
+//! tools' argument rules, the stdio contract of mighty-terminal, the authenticated pipe and its revocation, the agent panes kept out
+//! of saved state. (0.5 has no open_url prompt, C#'s AgentWebOpenVerification: a page opens in the default browser.) The pipe checks run over the in-memory transport on
 //! every OS, over the real named pipe on Windows and over the real Unix socket on the Mac (M-C, with the Swift socket checks).
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,7 +12,6 @@ use mighty_delegation::agent_io::binding::{AgentIoBindings, REDACTED, TOKEN_KEY}
 use mighty_delegation::agent_io::client;
 use mighty_delegation::agent_io::server::{AgentIo, TerminalCall, TerminalHandler};
 use mighty_delegation::agent_io::tools::validate;
-use mighty_delegation::agent_io::web_open::{AgentWebOpenPrompts, DEFAULT_TIMEOUT, WebOpenAnswer, WebOpenError};
 use mighty_delegation::agent_io::wire::{self, MAXIMUM_BYTES};
 use mighty_delegation::mcp::serve::{self, Output};
 use mighty_delegation::mcp::terminal::TerminalServer;
@@ -392,104 +391,6 @@ fn terminal_cleaner_and_ephemeral_ownership() {
     *orphan.sessions_mut() = vec![Arc::new(terminal)];
     assert!(normalize(&orphan, false).unwrap().sessions().is_empty(), "orphan IO panes disappear with parent");
     assert_eq!(normalize(&snapshot, true).unwrap().sessions().len(), 1, "agent IO never restores without native processes");
-}
-
-fn bind(registry: &AgentIoBindings, pane: &str) -> Arc<mighty_delegation::agent_io::binding::AgentIoBinding> {
-    registry.bind(pane, "workspace", &temp(), "codex", "fixture", &executable("app.exe")).unwrap()
-}
-
-/// "Agent URL independent choices and thirty-second fallback".
-#[tokio::test]
-async fn independent_choices_and_fallback() {
-    let prompts = Arc::new(AgentWebOpenPrompts::default());
-    let registry = AgentIoBindings::default();
-    let (first, second) = (bind(&registry, "first"), bind(&registry, "second"));
-    let ask = |binding: &Arc<_>, url: &'static str, timeout: Option<Duration>| {
-        let (prompts, binding) = (prompts.clone(), Arc::clone(binding));
-        tokio::spawn(async move { prompts.request(&binding, url, timeout).await })
-    };
-    let one = ask(&first, "http://localhost:3000/first", None);
-    let two = ask(&second, "https://example.com/second", None);
-    let extra = ask(&first, "https://example.com/third", None);
-    support_wait(|| prompts.for_pane("first").len() == 2 && prompts.for_pane("second").len() == 1).await;
-    let second_id = prompts.for_pane("second")[0].id.clone();
-    assert!(prompts.choose(&second_id, "external", true), "second pane can answer before first");
-    assert_eq!(two.await.unwrap(), Ok(WebOpenAnswer { destination: "external".into(), remember: true }));
-    assert!(!one.is_finished() && !extra.is_finished(), "answer only completes its own request");
-    assert!(!prompts.choose(&second_id, "inApp", false), "a duplicate answer is ignored");
-    let first_id = prompts.for_pane("first")[0].id.clone();
-    assert!(!prompts.choose(&first_id, "javascript", false), "unknown destination cannot resolve a request");
-    prompts.choose(&first_id, "inApp", false);
-    one.await.unwrap().unwrap();
-    let last = prompts.for_pane("first");
-    assert_eq!(last.len(), 1);
-    prompts.choose(&last[0].id, "external", false);
-    extra.await.unwrap().unwrap();
-    assert_eq!(DEFAULT_TIMEOUT, Duration::from_secs(30), "production fallback matches Mac's thirty seconds");
-    let fallback = ask(&first, "https://example.com/timeout", Some(Duration::from_millis(30)));
-    support_wait(|| prompts.for_pane("first").len() == 1 || fallback.is_finished()).await;
-    let expired_id = prompts.for_pane("first").first().map(|p| p.id.clone()).unwrap_or_default();
-    assert_eq!(
-        fallback.await.unwrap(),
-        Ok(WebOpenAnswer { destination: "inApp".into(), remember: false }),
-        "no response falls back in-app without remembering"
-    );
-    assert!(
-        prompts.for_pane("first").is_empty() && !prompts.choose(&expired_id, "external", true),
-        "timeout removes its card and ignores late remembered choices"
-    );
-}
-
-/// "Agent URL revocation, cancellation and shutdown".
-#[tokio::test]
-async fn revocation_cancellation_and_shutdown() {
-    let prompts = Arc::new(AgentWebOpenPrompts::default());
-    let registry = AgentIoBindings::default();
-    let (first, second) = (bind(&registry, "first"), bind(&registry, "second"));
-    let ask = |binding: &Arc<_>, url: &'static str| {
-        let (prompts, binding) = (prompts.clone(), Arc::clone(binding));
-        tokio::spawn(async move { prompts.request(&binding, url, None).await })
-    };
-    let revoked = ask(&first, "https://example.com/first");
-    support_wait(|| prompts.for_pane("first").len() == 1).await;
-    let stale = prompts.for_pane("first")[0].id.clone();
-    let replacement = bind(&registry, "first");
-    assert_eq!(cancelled(revoked).await, Err(WebOpenError::Cancelled));
-    assert!(
-        prompts.for_pane("first").is_empty() && !prompts.choose(&stale, "external", true),
-        "replaced binding immediately removes card and cannot open or remember"
-    );
-    let cancelled_request = ask(&replacement, "https://example.com/cancel");
-    let independent = ask(&second, "https://example.com/second");
-    support_wait(|| prompts.for_pane("first").len() == 1 && prompts.for_pane("second").len() == 1).await;
-    // A request is cancelled by dropping it (the server's deadline, the caller gone).
-    cancelled_request.abort();
-    let _ = cancelled_request.await;
-    assert!(prompts.for_pane("first").is_empty() && !independent.is_finished(), "request cancellation leaves other panes active");
-    prompts.dispose();
-    assert_eq!(cancelled(independent).await, Err(WebOpenError::Cancelled));
-    assert!(prompts.for_pane("second").is_empty(), "shutdown cancels and removes every pending card");
-    let after = prompts.request(&second, "https://example.com/late", None).await;
-    assert_eq!(after, Err(WebOpenError::Cancelled), "nothing is asked once shut down");
-}
-
-/// The request's end within 2 s (C#'s `Cancelled`: a revoked URL request must cancel instead of opening a browser).
-async fn cancelled(task: tokio::task::JoinHandle<Result<WebOpenAnswer, WebOpenError>>) -> Result<WebOpenAnswer, WebOpenError> {
-    tokio::time::timeout(Duration::from_secs(2), task)
-        .await
-        .expect("Revoked URL request must cancel instead of opening a browser.")
-        .unwrap()
-}
-
-/// Polls `ready` every 5 ms for up to 5 s.
-async fn support_wait(ready: impl Fn() -> bool) {
-    for _ in 0..1000 {
-        if ready() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    panic!("not ready in time");
 }
 
 /// The 1 MiB line limit is the packet limit.

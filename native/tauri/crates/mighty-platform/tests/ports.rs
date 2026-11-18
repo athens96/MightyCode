@@ -181,14 +181,22 @@ async fn the_firewall_rule_follows_apply() {
 
 #[tokio::test]
 async fn a_closed_surface_refuses_every_call() {
-    let surfaces = FakeSurfaces::default();
-    assert_eq!(surfaces.drawing(SurfaceKind::Browser), Drawing::Native);
-    assert_eq!(surfaces.drawing(SurfaceKind::Terminal), Drawing::Web);
+    assert_eq!(FakeSurfaces::default().drawing(SurfaceKind::Terminal), Drawing::Web);
+    let surfaces = FakeSurfaces::new(true);
+    assert_eq!(surfaces.drawing(SurfaceKind::Terminal), Drawing::Native);
     let rect = DeviceRect { x: 1, y: 2, width: 30, height: 40 };
-    let options = BrowserOptions { pane_id: "p".into(), url: "about:blank".into(), data_dir: absolute("b"), bounds: rect, listener: None };
-    let view = surfaces.open_browser(options).await.unwrap();
+    let options = TerminalOptions {
+        pane_id: "p".into(),
+        cwd: absolute("t"),
+        program: None,
+        args: vec![],
+        env: Default::default(),
+        bounds: rect,
+        listener: None,
+    };
+    let view = surfaces.open_terminal(options).await.unwrap();
     view.set_visible(false).unwrap();
-    assert_eq!(view.inspect().await.unwrap(), SurfaceState { bounds: rect, visible: false, url: Some("about:blank".into()) });
+    assert_eq!(view.inspect().await.unwrap(), SurfaceState { bounds: rect, visible: false });
     view.close().unwrap();
     assert!(view.place(rect).is_err());
     assert_eq!(surfaces.events().last(), Some(&SurfaceEvent::Closed { pane: "p".into() }));

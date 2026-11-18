@@ -1,7 +1,6 @@
-// The pushes of the panes that are not a conversation (MainWindow.WebShell.Panes.cs): a terminal's output and notices, a
-// browser's navigation state. They go to the pane that listens for them, not into the store: a terminal's output is a stream
-// the view writes straight into xterm, and a browser's state is only its own toolbar's.
-import type { BrowserState } from './browser/types';
+// The pushes of the panes that are not a conversation (MainWindow.WebShell.Panes.cs): a terminal's output and notices, the
+// work map's state, a file to show. They go to the pane that listens for them, not into the store: a terminal's output is a
+// stream the view writes straight into xterm.
 import type { TerminalMessage } from './terminal/types';
 import type { WorkMapModel } from './workmap/model';
 
@@ -9,12 +8,6 @@ export interface TerminalPush {
   kind: 'terminal';
   paneId: string;
   message: TerminalMessage;
-}
-
-export interface BrowserPush {
-  kind: 'browser';
-  paneId: string;
-  state: BrowserState;
 }
 
 export interface WorkMapPush {
@@ -30,13 +23,13 @@ export interface FilesPush {
   path: string;
 }
 
-export type PanePush = TerminalPush | BrowserPush | WorkMapPush | FilesPush;
+export type PanePush = TerminalPush | WorkMapPush | FilesPush;
 
 type Listener = (message: PanePush) => void;
 const listeners = new Map<string, Set<Listener>>();
 
 export function isPanePush(message: { kind: string }): message is PanePush {
-  return message.kind === 'terminal' || message.kind === 'browser' || message.kind === 'workmap' || message.kind === 'files';
+  return message.kind === 'terminal' || message.kind === 'workmap' || message.kind === 'files';
 }
 
 /** Listens for one pane's pushes of one kind until the returned function is called. */

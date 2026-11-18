@@ -238,8 +238,6 @@ pub fn cards_of(host: &Host, view: &mut View, id: &str) -> Option<(Vec<Card>, bo
     let terminal_prompt = crate::terminal::prompt_input(host, id);
     // The pane's Antigravity card (antigravity.rs, C# `AntigravityCard`/`AntigravityError`/`AntigravityAnswering`).
     let antigravity = crate::antigravity::card_input(host, id);
-    // The agents' open_url prompts (agent_io.rs, W7-C).
-    let web_open = crate::agent_io::web_open_cards(host, id);
     // The background strip's rows (C# `PlanCardSupport.BackgroundStripRows`, mighty-graph's `view::mobile`), read only while it is open,
     // with the background runs' last output lines (tails.rs, `BackgroundOutputFor`).
     let now = mighty_core::time::DateTimeOffset::now();
@@ -279,7 +277,6 @@ pub fn cards_of(host: &Host, view: &mut View, id: &str) -> Option<(Vec<Card>, bo
         background_rows: &background_rows,
         antigravity: antigravity.as_ref(),
         terminal_prompt: terminal_prompt.as_ref(),
-        web_open: &web_open,
         login: login.as_ref(),
         status_line: status_line.as_ref(),
     };

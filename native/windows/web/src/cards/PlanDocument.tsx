@@ -32,7 +32,7 @@ export interface PlanDocumentProps {
  * A pending or answered plan opened over the whole window: its title, when it was received and the plan text only
  * (M/PlanApprovalCard.swift PlanDocumentSheet), outside the graph's transformed/clipped layer: the popup standard's panel
  * (kind C, 860 × 677, its size kept as "plan"), ✕ in the header and no footer. Like the picture viewer it hides overlapping
- * native browser panes, owns Escape/Tab, and returns focus to its Expand button on close.
+ * native views (the Mac's Ghostty terminal), owns Escape/Tab, and returns focus to its Expand button on close.
  */
 export function PlanDocument(props: PlanDocumentProps) {
   return createPortal(<PlanDocumentDialog {...props} />, document.body);

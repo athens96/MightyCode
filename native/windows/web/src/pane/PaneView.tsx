@@ -6,7 +6,7 @@ import { Composer } from '../composer/Composer';
 import { Cards } from '../cards/Cards';
 import { clockLabel } from '../composer/clock';
 import { MightyView, useShownSession } from '../mighty/MightyView';
-import { SlimPane, slimKinds } from '../panes/Panes';
+import { SlimPane, slimKind } from '../panes/Panes';
 import { TerminalView } from '../panes/terminal/TerminalView';
 import { ReferenceContext } from '../conversation/referenceClick';
 import type { ReferenceTarget } from '../conversation/references';
@@ -76,7 +76,7 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
   const room = useRef<HTMLDivElement>(null);
   const showReference = useCallback((target: ReferenceTarget) => setReference({ ...target, seq: ++clicks.current }), []);
   const closeReference = useCallback(() => setReference(null), []);
-  if (slimKinds.has(session.kind)) return <SlimPane session={session} />;
+  if (slimKind(session.kind)) return <SlimPane session={session} />;
   // Under the Mighty bar while the Mighty view shows.
   const bubbleTop = mighty ? room.current?.querySelector<HTMLElement>('.mighty-bar')?.offsetHeight ?? 0 : 0;
   // A shell's terminal stands where the conversation and the composer are; a remote workspace's shell keeps them (its commands go to the host).

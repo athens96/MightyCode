@@ -420,11 +420,9 @@ export interface AppSnapshot {
   appUpdateManifestUrlOverride?: string;
   languagePreference: string;
   settingsPane: string;
-  agentWebOpenChoices?: Record<string, string>;
   mobileRemote: MobileRemoteSettings;
   modelDefaults?: ModelDefaultsConfig;
   phaseModels?: PhaseModelsSnapshot;
-  browserEngineEnabled: boolean;
 }
 
 /** Every AppSnapshot field but the panes: what a delta carries when the rest of the state changed. */

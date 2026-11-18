@@ -116,7 +116,7 @@ function pressTab(event: ReactPointerEvent<HTMLElement>, id: string, workspaceId
 }
 
 /** The moving tab's title beside the pointer, so the drag shows what it carries; dimmed where it cannot land. While it drags,
- *  a page overlay over the dock (shell/overlay.ts) steps the browser panes' native controls aside, so the ghost and the hints
+ *  a page overlay over the dock (shell/overlay.ts) steps the native views (the Mac's Ghostty terminal) aside, so the ghost and the hints
  *  show over them too and the pointer stays the page's. */
 function TabDragGhost() {
   const drag = useSyncExternalStore(subscribeDrag, dragging);

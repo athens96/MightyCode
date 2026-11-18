@@ -41,10 +41,10 @@ Click {{ui:phone.dashboard.title}} under the search field in the sidebar to see 
 ![[dashboard]]
 
 ## Add a pane {#add-pane}
-A pane is an AI agent (Claude, Codex, Antigravity, pi, opencode or Hermes), a terminal, a browser or a files pane.
+A pane is an AI agent (Claude, Codex, Antigravity, pi, opencode or Hermes), a terminal or a files pane.
 
 1. Click {{ui:workspace.addPane}} in the sidebar.
-2. Pick what to add: an agent pane (Claude, Codex, Antigravity, pi, opencode or Hermes), {{ui:workspace.newTerminal}} or {{ui:browser.newTab}}. The bottom group of the menu has the three ways to add a workspace: {{ui:workspace.add.existing}}, {{ui:workspace.add.newFolder}} and {{ui:workspace.add.fromGit}} ([Open a workspace](getting-started.md#open-workspace)).
+2. Pick what to add: an agent pane (Claude, Codex, Antigravity, pi, opencode or Hermes) or {{ui:workspace.newTerminal}}. The bottom group of the menu has the three ways to add a workspace: {{ui:workspace.add.existing}}, {{ui:workspace.add.newFolder}} and {{ui:workspace.add.fromGit}} ([Open a workspace](getting-started.md#open-workspace)).
 3. A new AI pane takes the model, thinking effort, permission and view of the most recently used pane of the same agent. The conversation starts fresh.
 
 Shortcuts: {{ui:menu.newClaudePane}} is {{kbd:⌘N}}, {{ui:menu.addTerminalPane}} is {{kbd:⌘T}} and {{ui:menu.showFiles}} is {{kbd:⇧⌘E}}.

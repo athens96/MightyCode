@@ -7,63 +7,45 @@
 //!   binding, with the delegation server while the switch is on and delegation is live ([`Host::delegation_live`]), answered by the
 //!   handler W7-D's delegation.rs sets ([`set_delegation_handler`]).
 //! - `run_in_terminal`, `read_latest_output`, `stop` run in the agent pane's own terminal (terminal.rs's `Terminals::agent`), its
-//!   `agent-terminal:<pane>` pane opening beside the agent; `open_url` goes where the workspace's saved choice says, else asks with a
-//!   card ([`web_open_cards`], `webOpenChoose`; 30 s, then in the app, unsaved): in the app it opens the `agent-browser:<pane>` pane,
-//!   else the OS's handler.
+//!   `agent-terminal:<pane>` pane opening beside the agent; `open_url` opens the page in the user's default browser at once (the OS's
+//!   handler). C# asked with a card where to open it and could open it in the app's own browser pane; 0.5 has no in-app browser.
 //! - A binding goes when its agent pane leaves the state ([`reconcile`]), when the pane's next run binds it again, when a delegated
 //!   child's terminal ends ([`end_agent_terminal`]) and when the app quits ([`shutdown`]); its calls still waiting are dropped.
 
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
-use std::time::Duration;
 
-use mighty_delegation::agent_io::binding::{AgentIoBinding, Revocation};
+use mighty_delegation::agent_io::binding::AgentIoBinding;
 use mighty_delegation::agent_io::server::{AgentIo, DelegationLink, TerminalCall, TerminalHandler, logged_binding_factory};
 use mighty_delegation::agent_io::tools::absolute_uri;
-use mighty_delegation::agent_io::web_open::AgentWebOpenPrompts;
 use mighty_delegation::request::DelegationHandler;
 use mighty_platform::BoxFuture;
 use mighty_run::manager::BindingFactory;
 use serde_json::{Value, json};
 use tauri::Manager;
 
-use crate::host::{Host, Reply};
-use crate::methods::{flag, text};
-use crate::terminal::{AGENT_BROWSER, AGENT_TERMINAL, show_agent_io_pane, terminals};
+use crate::host::Host;
+use crate::terminal::{AGENT_TERMINAL, show_agent_io_pane, terminals};
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// The window's Agent IO state (C# `agentIO`, `agentUrlPrompts`, `RunManager.DelegationHandler`), managed by the app.
+/// The window's Agent IO state (C# `agentIO`, `RunManager.DelegationHandler`), managed by the app.
 struct AgentIoState {
     io: Mutex<Option<Arc<AgentIo>>>,
-    prompts: Arc<AgentWebOpenPrompts>,
     handler: Mutex<Option<Arc<dyn DelegationHandler>>>,
     /// The agent panes the last reconcile saw (C# `agentBoundPanes`): only a pane seen and then gone is revoked.
     seen: Mutex<HashSet<String>>,
 }
 
-/// The state, made the first time it is asked for. A prompt that comes or goes redraws the panes' cards (C# `RefreshAgentWebPrompts`).
+/// The state, made the first time it is asked for.
 fn state(host: &Host) -> Arc<AgentIoState> {
     if let Some(state) = host.app.try_state::<Arc<AgentIoState>>() {
         return state.inner().clone();
     }
-    let app = host.app.clone();
-    let changed = Box::new(move || {
-        if let Some(host) = app.try_state::<Arc<Host>>() {
-            let host = host.inner().clone();
-            host.panes_changed();
-            host.schedule();
-        }
-    });
-    let state = Arc::new(AgentIoState {
-        io: Mutex::new(None),
-        prompts: Arc::new(AgentWebOpenPrompts::new(changed)),
-        handler: Mutex::new(None),
-        seen: Mutex::new(HashSet::new()),
-    });
+    let state = Arc::new(AgentIoState { io: Mutex::new(None), handler: Mutex::new(None), seen: Mutex::new(HashSet::new()) });
     // Another thread may have managed one meanwhile: that one is the state.
     host.app.manage(state.clone());
     host.app.try_state::<Arc<AgentIoState>>().map(|s| s.inner().clone()).unwrap_or(state)
@@ -109,10 +91,9 @@ pub fn listen(host: &Arc<Host>) -> Option<Arc<AgentIo>> {
     }
 }
 
-/// The app quits: every waiting prompt cancelled, every binding revoked and the listener closed (C# `ShutdownAgentIO`).
+/// The app quits: every binding revoked and the listener closed (C# `ShutdownAgentIO`).
 pub fn shutdown(host: &Host) {
     let state = state(host);
-    state.prompts.dispose();
     let io = lock(&state.io).take();
     if let Some(io) = io {
         tauri::async_runtime::block_on(async move {
@@ -188,22 +169,6 @@ pub async fn end_agent_terminal(host: &Arc<Host>, pane: &str) -> bool {
     true
 }
 
-/// The pane's waiting open_url prompts as the cards read them (`(requestId, url)`, mighty-composer `CardInputs::web_open`), read with
-/// the state locked: only the prompts' own lock is taken.
-pub fn web_open_cards(host: &Host, pane: &str) -> Vec<(String, String)> {
-    let Some(state) = host.app.try_state::<Arc<AgentIoState>>() else { return vec![] };
-    state.prompts.for_pane(pane).into_iter().map(|prompt| (prompt.id, prompt.absolute)).collect()
-}
-
-/// `webOpenChoose{paneId, requestId, destination, remember}` (web/cards/Cards.tsx:647): the prompt answered — any destination but
-/// `external` is the app's —, `remember` saving the workspace's choice (a state write, gated by `--allow-state-write` as every one
-/// is). Answers null.
-pub async fn web_open_choose(host: Arc<Host>, args: Value) -> Reply {
-    let destination = if text(&args, "destination") == Some("external") { "external" } else { "inApp" };
-    state(&host).prompts.choose(text(&args, "requestId").unwrap_or(""), destination, flag(&args, "remember"));
-    Ok(Value::Null)
-}
-
 /// What serves the terminal and web tools (C# `HandleAgentIO`).
 struct WindowTools {
     host: Weak<Host>,
@@ -261,103 +226,19 @@ async fn handle_tool(host: &Arc<Host>, call: &TerminalCall) -> Result<Value, Str
     result.map(|result| serde_json::to_value(result).unwrap_or(Value::Null)).map_err(|error| error.to_string())
 }
 
-/// C# `OpenAgentUrl`: the workspace's saved choice, else the user's from the card; in the app (the agent's browser pane) while the
-/// browser panes show pages (the engine on and present; on the Mac WKWebView, or the CEF asked for once it started), else the OS's
-/// handler.
+/// C# `OpenAgentUrl` without its choice: the page in the user's default browser (the OS's handler), at once. (C# asked with a card,
+/// remembered the workspace's answer and could open the agent's own browser pane; 0.5 has no in-app browser.)
 async fn open_url(host: &Arc<Host>, call: &TerminalCall) -> Result<Value, String> {
-    let binding = &call.binding;
-    let saved = host.view().snapshot.agent_web_open_choices.as_ref().and_then(|choices| choices.get(&call.workspace_id).cloned().flatten());
-    let destination = match saved {
-        Some(destination) => destination,
-        None => {
-            let prompts = state(host).prompts.clone();
-            let answer = prompts.request(binding, &call.value, None).await.map_err(|error| format!("{error:?}"))?;
-            require_active(host, binding)?;
-            if answer.remember {
-                let (workspace, chosen) = (call.workspace_id.clone(), answer.destination.clone());
-                host.view().update(|state| {
-                    let mut choices = state.agent_web_open_choices.clone().unwrap_or_default();
-                    choices.insert(workspace, Some(chosen));
-                    state.agent_web_open_choices = Some(choices);
-                })?;
-            }
-            answer.destination
-        }
-    };
-    require_active(host, binding)?;
-    if !pane_open(host, call) {
-        return Err("Agent pane closed.".into());
-    }
     let url = absolute_uri(&call.value);
-    let mut fallback = false;
-    if destination == "inApp" {
-        let surfaces = host.app.try_state::<Arc<crate::surface::SurfaceManager>>().map(|s| s.inner().clone());
-        let engine = host.view().snapshot.browser_engine_enabled;
-        if let Some(surfaces) = surfaces.filter(|s| s.agent_opens_in_app(&destination, engine)) {
-            show_agent_io_pane(host, &call.pane_id, &call.workspace_id, AGENT_BROWSER)?;
-            host.view().shows_dashboard = false;
-            host.schedule();
-            require_active(host, binding)?;
-            // C# `WebOpenAgentBrowserUrl`: the pane's browser must be up within 20 s (the page opens it once it draws the pane); a
-            // revoked binding never navigates; one that did not come up leaves the external handler time to open the page.
-            let pane = format!("{AGENT_BROWSER}:{}", call.pane_id);
-            match wait_for_browser(|| surfaces.browser_view_open(&pane), binding.revoked(), BROWSER_WAIT).await {
-                InApp::Revoked => return Err("Agent binding was replaced.".into()),
-                InApp::Ready => {
-                    require_active(host, binding)?;
-                    if surfaces.browser_navigate(&pane, &url).await.is_ok() {
-                        return Ok(json!({"destination": "inApp", "url": url}));
-                    }
-                }
-                InApp::TimedOut => {}
-            }
-        }
-        fallback = true;
-    }
-    require_active(host, binding)?;
+    require_active(host, &call.binding)?;
     // ShellExecute on a blocking thread of its own (it may wait on the shell, and wants a single-threaded apartment there).
     let opening = url.clone();
     tauri::async_runtime::spawn_blocking(move || crate::platform::open_url(&opening)).await.map_err(|error| error.to_string())??;
-    Ok(json!({"destination": "external", "url": url, "inAppUnavailable": fallback}))
-}
-
-/// How long open_url waits for the agent's browser view (C# `browser.Ready.WaitAsync(TimeSpan.FromSeconds(20))`), looking this often.
-const BROWSER_WAIT: Duration = Duration::from_secs(20);
-const BROWSER_POLL: Duration = Duration::from_millis(50);
-
-/// How the wait for the agent's browser view ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InApp {
-    Ready,
-    Revoked,
-    TimedOut,
-}
-
-/// Waits until `ready` says the view is open, the binding is revoked (that wins), or `wait` passes.
-async fn wait_for_browser<F, Fut>(ready: F, revoked: &Revocation, wait: Duration) -> InApp
-where
-    F: Fn() -> Fut,
-    Fut: std::future::Future<Output = bool>,
-{
-    let polling = async {
-        loop {
-            if ready().await {
-                return InApp::Ready;
-            }
-            tokio::time::sleep(BROWSER_POLL).await;
-        }
-    };
-    tokio::select! {
-        biased;
-        _ = revoked.cancelled() => InApp::Revoked,
-        done = tokio::time::timeout(wait, polling) => done.unwrap_or(InApp::TimedOut),
-    }
+    Ok(json!({"destination": "external", "url": url}))
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
     use super::*;
 
     /// L2: only a pane seen before and gone now is revoked; a run's pane the page's copy has not taken yet keeps its binding.
@@ -369,39 +250,5 @@ mod tests {
         assert!(retire(&mut seen, set(&["a", "b"])).is_empty());
         assert_eq!(retire(&mut seen, set(&["b"])), ["a"], "a pane seen and then gone is");
         assert!(retire(&mut seen, set(&["b"])).is_empty() && seen == set(&["b"]), "once");
-    }
-
-    /// L3: a revoked binding during the wait never navigates; a view that never comes up falls back (to the external handler).
-    #[tokio::test]
-    async fn the_browser_wait_ends_on_revocation_readiness_or_its_deadline() {
-        let revoked = Revocation::default();
-        let looks = AtomicUsize::new(0);
-        let never = || {
-            looks.fetch_add(1, Ordering::SeqCst);
-            async { false }
-        };
-        assert_eq!(wait_for_browser(never, &revoked, Duration::from_millis(150)).await, InApp::TimedOut);
-        assert!(looks.load(Ordering::SeqCst) >= 2, "it looked again while it waited");
-        let open = AtomicBool::new(false);
-        let ready = || {
-            let now = open.load(Ordering::SeqCst);
-            async move { now }
-        };
-        let waiting = wait_for_browser(ready, &revoked, Duration::from_secs(20));
-        let revoke = async {
-            tokio::time::sleep(Duration::from_millis(60)).await;
-            revoked.cancel();
-            // The view comes up after the revocation: too late, the wait already ended.
-            open.store(true, Ordering::SeqCst);
-        };
-        let (ended, ()) = tokio::join!(waiting, revoke);
-        assert_eq!(ended, InApp::Revoked);
-        let fresh = Revocation::default();
-        assert_eq!(wait_for_browser(|| async { true }, &fresh, Duration::from_secs(20)).await, InApp::Ready);
-        assert_eq!(
-            wait_for_browser(|| async { true }, &revoked, Duration::from_secs(20)).await,
-            InApp::Revoked,
-            "a revoked binding never navigates, even to a view that is up"
-        );
     }
 }

@@ -370,9 +370,7 @@ const statusLabelKeys: Record<SessionStatus, string> = {
 const kindLabelKeys: Record<string, string> = {
   claude: 'dashboard.kind.agent',
   shell: 'dashboard.kind.shell',
-  browser: 'browser.tab.title',
   'agent-terminal': 'dashboard.kind.agentTerminal',
-  'agent-browser': 'dashboard.kind.agentBrowser',
 };
 
 /**

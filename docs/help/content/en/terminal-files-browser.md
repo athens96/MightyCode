@@ -1,9 +1,9 @@
 ---
-title: Terminal, files and browser panes
+title: Terminal and files panes
 order: 7
 section: terminal-files-browser
 ---
-You can keep terminal, files and browser panes open next to your agent panes.
+You can keep terminal and files panes open next to your agent panes.
 
 ## Terminal pane {#terminal}
 A real terminal that opens in the workspace folder.
@@ -34,22 +34,5 @@ Files outside the workspace are not shown. If files changed, click {{ui:files.tr
 
 ![[files-pane]]
 
-## Browser pane {#browser}
-A pane that shows web pages inside the app. It is experimental and off at first.
-1. In {{ui:menu.settings}} → {{ui:settings.nav.general}}, turn on {{ui:settings.display.browserToggle}}.
-2. Reopen the app.
-3. Choose {{ui:workspace.addPane}} → {{ui:browser.newTab}}.
-4. Type an address and use {{ui:browser.back}}, {{ui:browser.forward}} and {{ui:browser.reload}}.
-
-Sign-ins are kept separately for each workspace.
-
-> [!note]
-> The browser engine works only on Apple Silicon Macs. A build without the engine shows a notice in the pane.
-
-### When an agent opens a link {#agent-links}
-When an agent wants to open a web page, an {{ui:agentTerminal.urlOpen.dialogTitle}} card appears in its pane.
-- Choose {{ui:agentTerminal.urlOpen.inAppButton}} or {{ui:agentTerminal.urlOpen.externalButton}}.
-- Turn on {{ui:agentTerminal.urlOpen.rememberToggle}} and you won't be asked again.
-- If you don't choose within 30 seconds, it opens in the app. If browser panes are off, it opens in the system browser.
-
-Change this choice under {{ui:agentTerminal.urlOpen.settingTitle}} on {{ui:settings.nav.general}}: {{ui:agentTerminal.urlOpen.settingAsk}}, {{ui:agentTerminal.urlOpen.settingInApp}} or {{ui:agentTerminal.urlOpen.settingExternal}}.
+## Web links {#web-links}
+A web link in a reply, and a page an agent opens, open in your default browser.

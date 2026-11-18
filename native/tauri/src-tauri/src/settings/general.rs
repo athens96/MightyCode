@@ -111,15 +111,15 @@ fn families() -> (Vec<String>, Vec<String>) {
     FAMILIES.get().cloned().unwrap_or_default()
 }
 
-/// 화면 (C# `BuildDisplaySection`): the theme and language pickers, the language note, then the status line, delegation and browser
-/// switches, each with its explanation under its label.
+/// 화면 (C# `BuildDisplaySection`): the theme and language pickers, the language note, then the status line and delegation switches,
+/// each with its explanation under its label (not C#'s browser switch: 0.5 has no in-app browser).
 pub fn display(host: &Arc<Host>, ui: &mut Ui) -> El {
     let locale = ui.locale();
-    let (theme, preference, status_line, browser) = {
+    let (theme, preference, status_line) = {
         let view = host.view();
         let s = &view.snapshot;
         let theme = if s.theme() == "light" { "light" } else { "dark" };
-        (theme, s.language_preference().to_string(), s.status_line_enabled, s.browser_engine_enabled)
+        (theme, s.language_preference().to_string(), s.status_line_enabled)
     };
     let mut rows = ui.settings_rows();
 
@@ -165,20 +165,6 @@ pub fn display(host: &Arc<Host>, ui: &mut Ui) -> El {
     let words = ui.settings_titled(
         &label,
         mighty_core::settings_words::text(&locale, crate::platform::words(), "settings.delegation.descriptionWindows").unwrap_or_default(),
-    );
-    rows.add(ui.settings_labeled(words, switch, true));
-
-    let label = locale.get("settings.display.browserToggle");
-    let to = host.clone();
-    let switch = ui.settings_switch(&label, browser, Some("settings-browser-engine"), move |on| {
-        crate::native::act(&to, {
-            let to = to.clone();
-            async move { to.view().update(|state| state.browser_engine_enabled = on) }
-        })
-    });
-    let words = ui.settings_titled(
-        &label,
-        mighty_core::settings_words::text(&locale, crate::platform::words(), "windows.settings.browserDescription").unwrap_or_default(),
     );
     rows.add(ui.settings_labeled(words, switch, true));
     rows.finish()
@@ -357,60 +343,6 @@ fn preview(ui: &Ui, text: &TextAppearance, area: Area, size: f64) -> El {
         background: Some(ui.env.theme.subtle()),
         ..Border::default()
     })
-}
-
-/// 에이전트 링크 (C# `BuildAgentLinksSection`): where the active workspace opens the links an agent asks for.
-pub fn agent_links(host: &Arc<Host>, ui: &mut Ui) -> El {
-    let locale = ui.locale();
-    let (workspace, chosen) = {
-        let view = host.view();
-        let workspace = view.snapshot.active_workspace_id.clone();
-        let choice = workspace
-            .as_ref()
-            .and_then(|w| view.snapshot.agent_web_open_choices.as_ref().and_then(|c| c.get(w).cloned().flatten()))
-            .unwrap_or_default();
-        (
-            workspace,
-            match choice.as_str() {
-                "inApp" => "inApp",
-                "external" => "external",
-                _ => "ask",
-            },
-        )
-    };
-    let title = locale.get("agentTerminal.urlOpen.settingTitle");
-    let options = [
-        ("ask".to_string(), locale.get("agentTerminal.urlOpen.settingAsk")),
-        ("inApp".to_string(), locale.get("agentTerminal.urlOpen.settingInApp")),
-        ("external".to_string(), locale.get("agentTerminal.urlOpen.settingExternal")),
-    ];
-    let (to, at) = (host.clone(), workspace.clone());
-    let picker = ui.settings_segmented(
-        &title,
-        "settings-web-open-choice",
-        &options,
-        chosen,
-        move |value| {
-            let Some(workspace) = at.clone() else { return };
-            let host = to.clone();
-            crate::native::act(&to, async move {
-                host.view().update(|state| {
-                    let mut choices = state.agent_web_open_choices.clone().unwrap_or_default();
-                    if value == "ask" {
-                        choices.shift_remove(&workspace);
-                    } else {
-                        choices.insert(workspace, Some(value));
-                    }
-                    state.agent_web_open_choices = Some(choices);
-                })
-            })
-        },
-        false,
-        workspace.is_some(),
-    );
-    let mut rows = ui.settings_rows();
-    rows.add(ui.settings_labeled(ui.settings_text(&title, TextStyle::default()), picker, false));
-    rows.finish()
 }
 
 #[cfg(test)]

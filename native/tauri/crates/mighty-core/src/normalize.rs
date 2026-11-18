@@ -1490,7 +1490,7 @@ pub fn is_work_map(kind: &str) -> bool {
     kind == "workmap"
 }
 pub fn is_agent_io(kind: &str) -> bool {
-    matches!(kind, "agent-terminal" | "agent-browser")
+    kind == "agent-terminal"
 }
 
 /// One normalize's running text budget (`textBudget`, 2 MiB of JSON).
@@ -1533,35 +1533,6 @@ fn normalize_session(s: &RunSession, restoring: bool, remote_ids: &HashSet<Strin
             kind: s.kind.clone(),
             title: Some(clamp_title(s.title.as_deref())),
             ..RunSession::default()
-        });
-    }
-    if matches!(kind, "browser" | "agent-browser") {
-        return Ok(RunSession {
-            title: Some(clamp_title(s.title.as_deref())),
-            status: Some("idle".into()),
-            logs: Some(vec![]),
-            draft: Some(String::new()),
-            run_timing: None,
-            session_usage: None,
-            current_activity: None,
-            agent_view_mode: None,
-            graph_runs: None,
-            graph_result_size: None,
-            graph_plan_size: None,
-            graph_block_sizes: None,
-            graph_view_mode: None,
-            plan_history: None,
-            todo_progress: None,
-            background_work: None,
-            shell_block_runs: None,
-            resume_id: None,
-            workspace_profile_key: Some(wire::clean(s.workspace_profile_key.as_deref().unwrap_or(""), 128)).filter(|k| !k.is_empty()),
-            owner_session_id: s.owner_session_id.clone().filter(|o| wire::identifier(o)),
-            parent_session_id: None,
-            working_folder: None,
-            pane_worktree: None,
-            ask_target: None,
-            ..s.clone()
         });
     }
     let provider = if PROVIDERS.contains(&s.provider()) { s.provider().to_string() } else { "claude".into() };
@@ -1703,7 +1674,9 @@ pub fn normalize(value: &AppSnapshot, restoring: bool) -> R<AppSnapshot> {
         let keep = is_identifier(s.id.as_deref())
             && ids.contains(s.workspace_id())
             && s.workspace_id.is_some()
-            && (matches!(kind, "claude" | "shell" | "browser")
+            // 0.5 has no browser pane: one an older version saved (C# and the Mac restored them) is left out here, and the layout
+            // normalize below drops its tab like any other pane that is gone.
+            && (matches!(kind, "claude" | "shell")
                 || !restoring && is_files(kind) && s.id() == format!("files:{}", s.workspace_id())
                 || !restoring && is_work_map(kind) && s.id() == format!("workmap:{}", s.workspace_id())
                 || !restoring
@@ -1834,13 +1807,6 @@ pub fn normalize(value: &AppSnapshot, restoring: bool) -> R<AppSnapshot> {
             Some(l) if locale::LANGUAGES.contains(&l) => l.to_string(),
             _ => "system".into(),
         }),
-        agent_web_open_choices: value.agent_web_open_choices.as_ref().map(|choices| {
-            choices
-                .iter()
-                .filter(|(k, v)| ids.contains(*k) && matches!(v.as_deref(), Some("inApp" | "external")))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect()
-        }),
         mobile_remote: Some(mobile_remote(value.mobile_remote.as_ref())),
         settings_pane: Some(match value.settings_pane.as_deref() {
             Some(p) if SETTINGS_PANES.contains(&p) => p.to_string(),
@@ -1930,7 +1896,7 @@ pub fn stored(snapshot: &AppSnapshot) -> AppSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::json::Wire;
+    use crate::json::{JsonOut, Wire};
 
     fn state(text: &str) -> AppSnapshot {
         AppSnapshot::read(&serde_json::from_str(text).unwrap()).unwrap()
@@ -1957,6 +1923,39 @@ mod tests {
         assert_eq!(page.active_session_id.as_deref(), Some("s1"));
         assert_eq!(page.pane_layout_modes.as_ref().unwrap()["w1"].as_deref(), Some("grid"));
         assert_eq!(page.sidebar_width, 252.0);
+    }
+
+    /// 0.5 has no browser pane: a state an older version saved with one (and an agent's browser pane, and the browser's settings)
+    /// loads, and the panes, their tabs and the settings are gone, the pane beside them selected instead.
+    #[test]
+    fn an_old_browser_pane_is_dropped_on_load() {
+        let s = state(&format!(
+            r#"{{"version":1,"workspaces":[{{"id":"w1","path":"{}"}}],"sessions":[
+                {{"id":"s1","workspaceId":"w1","title":"Claude"}},
+                {{"id":"b1","workspaceId":"w1","kind":"browser","title":"Web","workspaceProfileKey":"w1"}},
+                {{"id":"agent-browser:s1","workspaceId":"w1","kind":"agent-browser","ownerSessionId":"s1"}}],
+              "activeWorkspaceId":"w1","activeSessionId":"b1","paneLayoutActiveSessionIds":{{"w1":"b1"}},
+              "paneLayouts":{{"w1":{{"id":"root","kind":"split","axis":"horizontal","ratio":0.5,"children":[
+                {{"id":"g1","kind":"tabs","sessionIds":["s1"],"selectedSessionId":"s1"}},
+                {{"id":"g2","kind":"tabs","sessionIds":["b1","agent-browser:s1"],"selectedSessionId":"b1"}}]}}}},
+              "browserEngineEnabled":true,"agentWebOpenChoices":{{"w1":"inApp"}}}}"#,
+            root()
+        ));
+        for restoring in [true, false] {
+            let page = normalize(&s, restoring).unwrap();
+            let ids: Vec<&str> = page.sessions().iter().map(|s| s.id()).collect();
+            assert_eq!(ids, ["s1"], "restoring {restoring}");
+            let layout = page.pane_layouts.as_ref().and_then(|l| l.get("w1").cloned().flatten()).expect("w1 keeps a layout");
+            assert_eq!(layout::sessions(&layout), ["s1"], "the browser tabs are gone");
+            assert_eq!(page.active_session_id.as_deref(), Some("s1"));
+            assert_eq!(page.pane_layout_active_session_ids.as_ref().unwrap()["w1"].as_deref(), Some("s1"));
+            let mut out = JsonOut::new();
+            page.write(&mut out);
+            let text = out.finish();
+            for gone in ["\"b1\"", "agent-browser", "browserEngineEnabled", "agentWebOpenChoices"] {
+                assert!(!text.contains(gone), "{gone} is not written: {text}");
+            }
+        }
     }
 
     #[test]

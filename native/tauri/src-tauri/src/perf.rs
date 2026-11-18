@@ -840,7 +840,7 @@ async fn seed(host: &Arc<Host>) -> Result<(String, Map<String, Value>), String> 
     let mut imported: Vec<RunSession> = vec![];
     if let Some(source) = std::env::var("MIGHTY_PERF_STATE").ok().filter(|v| !v.is_empty()) {
         // Read from a copy, so the scenario never opens the given folder's state for writing; every workspace becomes a folder in the
-        // profile (no project of the user's is read) and only agent panes come over (a terminal or browser pane would start a process).
+        // profile (no project of the user's is read) and only agent panes come over (a terminal pane would start a process).
         let copy = directory.join("perf-import");
         std::fs::create_dir_all(&copy).map_err(|e| e.to_string())?;
         std::fs::copy(Path::new(&source).join(mighty_core::store::STATE_FILE), copy.join(mighty_core::store::STATE_FILE))

@@ -30,10 +30,9 @@ pub fn profile() -> mighty_platform::PlatformProfile {
     return mighty_platform::PlatformProfile::macos();
 }
 
-/// The native views over `window`'s page; `csharp_web_data` when the browser panes' data is C#'s own folder (W9-F's adopted folder,
-/// `paths::web_folders`), whose views open with C#'s environment options.
-pub fn surfaces(window: tauri::Window, csharp_web_data: bool) -> Arc<dyn SurfaceFactory> {
-    os::surfaces(window, csharp_web_data)
+/// The native views over `window`'s page (the Mac's terminal, the companion pet).
+pub fn surfaces(window: tauri::Window) -> Arc<dyn SurfaceFactory> {
+    os::surfaces(window)
 }
 
 /// W9-C: the main window whose session messages `Platform::session` reports (Windows subclasses it; call on the window's thread). The
@@ -416,63 +415,6 @@ pub fn find_on_path(name: &str, environment: &std::collections::BTreeMap<String,
     return mighty_tools::toolkit::runner::find_on_path(name, environment, &|path| std::path::Path::new(path).is_file());
     #[cfg(target_os = "macos")]
     return os::process::find_executable(name, environment);
-}
-
-/// The browser engine's installed version (C# `WebView2RuntimeLocator`), or none when the pane must offer its install.
-pub fn browser_runtime() -> Option<String> {
-    os::browser_runtime()
-}
-
-/// Starts the browser engine the setting asks for, between building the app and running its event loop (main.rs): the Mac's CEF
-/// must initialize there (M-E; `profiles` its root cache, [`crate::surface::profiles_root`]), else its panes are WKWebView;
-/// `temporary_stores` empties the WKWebView data stores the run opens when it ends (the smoke). Windows' WebView2 starts with each
-/// pane: nothing to do.
-pub fn start_browser_engine(enabled: bool, profiles: &std::path::Path, temporary_stores: bool) {
-    #[cfg(target_os = "macos")]
-    os::browser::start_engine(enabled, profiles, temporary_stores);
-    #[cfg(windows)]
-    let _ = (enabled, profiles, temporary_stores);
-}
-
-/// Shuts the browser engine down as the app exits (`RunEvent::Exit`, the main thread): the Mac's CEF, before the process ends, and
-/// a smoke's WKWebView stores; what happened, for the log (nothing on Windows).
-pub fn stop_browser_engine() -> Vec<String> {
-    #[cfg(target_os = "macos")]
-    return os::browser::stop_engine();
-    #[cfg(windows)]
-    return Vec::new();
-}
-
-/// The Mac's windows AppKit knows of (a popup an engine opened would be one more; the smoke's popup check), on the main thread; None
-/// on Windows, whose panes open no window but Tauri's.
-pub fn native_window_count() -> Option<usize> {
-    #[cfg(target_os = "macos")]
-    return os::browser::window_count();
-    #[cfg(windows)]
-    return None;
-}
-
-/// The engine the Mac's browser panes use in this launch (`webkit` or `cef`, the smoke's report); None on Windows (WebView2 only).
-pub fn browser_engine() -> Option<&'static str> {
-    #[cfg(target_os = "macos")]
-    return Some(os::browser::engine_name());
-    #[cfg(windows)]
-    return None;
-}
-
-/// The browser engine's installer (C# `WebView2BootstrapperInstaller`), for mighty-core's `browser::install`.
-pub struct BrowserInstaller;
-
-impl mighty_core::browser::BrowserInstaller for BrowserInstaller {
-    fn download(&self, path: &std::path::Path) -> std::result::Result<(), String> {
-        os::download_bootstrapper(path)
-    }
-    fn verify_microsoft_signature(&self, path: &std::path::Path) -> bool {
-        os::is_microsoft_signed(path)
-    }
-    fn run(&self, path: &std::path::Path) -> std::result::Result<i32, String> {
-        os::run_installer(path)
-    }
 }
 
 /// The smoke's own limit with the stand-in CLI: the Mac's run (WebKit, Ghostty, the native panels, its own help capture) took about

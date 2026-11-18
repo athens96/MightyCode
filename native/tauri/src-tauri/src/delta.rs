@@ -708,10 +708,16 @@ mod tests {
                 let state = read(&serde_json::from_str(line).unwrap());
                 ours.push(if step == 0 { bridge.snapshot(&state, 0) } else { bridge.flush(&state, step as u64).unwrap_or_default() });
             }
-            for (step, (a, b)) in expected.lines().zip(ours.iter()).enumerate() {
+            // C# writes `browserEngineEnabled` in every snapshot; 0.5 has no in-app browser and keeps no such setting (mighty-core
+            // model.rs `AppSnapshot`), which is the bridges' one difference.
+            let expected: Vec<String> = expected
+                .lines()
+                .map(|line| line.replace(r#","browserEngineEnabled":false"#, "").replace(r#","browserEngineEnabled":true"#, ""))
+                .collect();
+            for (step, (a, b)) in expected.iter().zip(ours.iter()).enumerate() {
                 assert_eq!(a, b, "seed {seed} push {step}");
             }
-            assert_eq!(expected.lines().count(), ours.len(), "seed {seed}");
+            assert_eq!(expected.len(), ours.len(), "seed {seed}");
         }
         std::fs::remove_dir_all(work).ok();
     }

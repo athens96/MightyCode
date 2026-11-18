@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { emptyState, reduce } from '../store/store';
 import { overlapsAny } from './overlay';
 
-describe('page overlays over a browser slot (src/shell/overlay.ts)', () => {
+describe('page overlays over a native slot (src/shell/overlay.ts)', () => {
   it('the store counts the overlays open, never below none', () => {
     let state = reduce(emptyState, { kind: 'overlay', open: true });
     state = reduce(state, { kind: 'overlay', open: true });

@@ -19,7 +19,7 @@ export interface DashboardStats {
   running: number;
   /**
    * Pending questions plus pending permission requests on panes the phone can open —
-   * `countAttention` without an agent's own terminal and browser, the same count as the
+   * `countAttention` without an agent's own terminal, the same count as the
    * "알림" tab's badge. It counts requests, not panes.
    */
   waiting: number;
@@ -27,7 +27,7 @@ export interface DashboardStats {
   done: number;
 }
 
-/** A pane the user opened, as opposed to the terminal or browser an agent opened for itself. */
+/** A pane the user opened, as opposed to the terminal an agent opened for itself. */
 function isUserPane(session: MobileSessionSummary): boolean {
   return !isAgentIOPane(session.kind);
 }
@@ -40,7 +40,7 @@ export function countStats(state: MobileState | undefined): DashboardStats {
   const stats: DashboardStats = { running: 0, waiting: 0, done: 0 };
   if (!state) return stats;
   for (const session of state.sessions) {
-    // An agent's own terminal or browser cannot be opened from the phone, so a request
+    // An agent's own terminal cannot be opened from the phone, so a request
     // there is not one the user can answer here — the "알림" badge skips it too.
     if (!isUserPane(session)) continue;
     stats.waiting += attentionOf(session);
@@ -102,7 +102,7 @@ function countFor(session: MobileSessionSummary, reason: AttentionReason): numbe
  * Every pane across the paired hosts that is waiting on the user or has an outcome to
  * look at, most pressing first and newest first within a reason. Only hosts still paired
  * are read, so a host removed a moment ago cannot leave rows behind; an agent's own
- * terminal or browser is left out, since the phone cannot open it.
+ * terminal is left out, since the phone cannot open it.
  */
 export function buildAttentionList(
   hosts: readonly { id: string; name: string }[],

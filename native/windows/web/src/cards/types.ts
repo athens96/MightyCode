@@ -127,12 +127,6 @@ export interface AntigravityCard {
   alwaysTip?: string;
 }
 
-export interface WebOpenCard {
-  kind: 'webOpen';
-  requestId: string;
-  url: string;
-}
-
 export type TerminalPromptInput = 'yesNo' | 'secret' | 'text' | 'choice';
 
 /** A command in the pane's terminal waiting for input (MainWindow.TerminalPrompts.cs). */
@@ -200,6 +194,5 @@ export type Card =
   | PlanCard
   | AntigravityCard
   | TerminalPromptCard
-  | WebOpenCard
   | LoginCard
   | StatusLineCard;

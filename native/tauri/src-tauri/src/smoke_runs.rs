@@ -195,7 +195,7 @@ fn workspace_folder() -> std::io::Result<PathBuf> {
     Ok(folder)
 }
 
-/// An agent pane (Claude, the Mighty diagram) in a workspace of its own, made the active one; in memory as the browser step's is.
+/// An agent pane (Claude, the Mighty diagram) in a workspace of its own, made the active one; in memory only, as the frame steps' are.
 pub fn add_pane(host: &Host) -> Result<String, String> {
     let folder = workspace_folder().map_err(|e| e.to_string())?;
     let mut view = host.view();

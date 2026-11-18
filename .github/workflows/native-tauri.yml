@@ -227,51 +227,6 @@ jobs:
         # The smoke's own limit on the Mac (400 s with the stand-in CLI, platform.rs), the seed and the stand-in's build.
         timeout-minutes: 12
         run: ./native/tauri/scripts/smoke.ps1 -Out "$env:RUNNER_TEMP/tauri-smoke"
-      # M-E: the browser pane with CEF (plan D3): the debug app in a bundle with CEF 152, the Swift app's C bridge and the four helpers
-      # (spikes/mac/cef/assemble.sh), against a seeded profile with the browser engine on, read-only, without the run steps.
-      - name: Restore the browser engine (CEF, native/macos/BrowserEngine.lock)
-        if: matrix.os == 'macos'
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/MightyCode/browser-engine
-          key: tauri-browser-engine-${{ hashFiles('native/macos/BrowserEngine.lock') }}
-      - name: Smoke on the Mac with CEF (the browser engine on; the steps of smoke.rs' MAC_PENDING_STEPS may fail)
-        if: matrix.os == 'macos'
-        timeout-minutes: 18
-        env:
-          # The bridge's own trace of each browser's create and close (cef_bridge.m), on stderr.
-          MIGHTY_CEF_TRACE: '1'
-        run: |
-          bash scripts/fetch-browser-engine.sh
-          if ($LASTEXITCODE -ne 0) { throw 'fetching CEF failed' }
-          $app = Join-Path $env:RUNNER_TEMP 'MightyCode.app'
-          bash native/tauri/spikes/mac/cef/assemble.sh native/tauri/target/debug/MightyCode $app MightyCode dev.mightycode.tests.cef
-          if ($LASTEXITCODE -ne 0) { throw 'assembling the CEF bundle failed' }
-          $seeded = Join-Path $env:RUNNER_TEMP 'tauri-smoke-cef-profile'
-          Push-Location native/tauri
-          cargo run -q -p mighty-core --example seed_demo -- $seeded en
-          if ($LASTEXITCODE -ne 0) { throw 'seed_demo failed' }
-          Pop-Location
-          python3 -c "import json,sys; p=sys.argv[1]; s=json.load(open(p)); s['browserEngineEnabled']=True; json.dump(s, open(p,'w'))" (Join-Path $seeded 'workspace-state.json')
-          if ($LASTEXITCODE -ne 0) { throw 'turning the browser engine on failed' }
-          ./native/tauri/scripts/smoke.ps1 -Exe "$app/Contents/MacOS/MightyCode" -Profile $seeded -Out "$env:RUNNER_TEMP/tauri-smoke/cef" -NoRuns
-      - name: The browser step passed on the Mac with WebKit and with CEF (M-E)
-        if: matrix.os == 'macos'
-        run: |
-          foreach ($run in @(@{ path = "$env:RUNNER_TEMP/tauri-smoke/smoke-result.json"; engine = 'webkit' },
-                             @{ path = "$env:RUNNER_TEMP/tauri-smoke/cef/smoke-result.json"; engine = 'cef' })) {
-            $result = Get-Content -Raw $run.path | ConvertFrom-Json
-            $names = @('browserSurface', 'browserNavigated', 'browserBack', 'browserPopupBlocked', 'browserMenuOver', 'browserTwoPanesRenderJavaScript',
-              'browserIndependentProfiles', 'browserClosingOnePaneKeepsOtherAlive', 'browserReopenCycles', 'browserPaneWithoutAppIpc')
-            $failed = @($names | Where-Object { $result.checks.$_ -ne $true })
-            "$($run.engine): engine $($result.browser.browserEngine), failed: $($failed -join ', ')"
-            if ($result.browser.browserEngine -ne $run.engine) { throw "the $($run.engine) run's browser panes used $($result.browser.browserEngine)" }
-            if ($failed.Count -gt 0) { throw "the $($run.engine) run's browser step failed: $($failed -join ', ')" }
-          }
-          # Quitting with a live CEF pane shuts CEF down before the process ends (plan M-E's "done when").
-          $shutdown = Select-String -Path "$env:RUNNER_TEMP/tauri-smoke/cef/tauri-logs/host.log" -Pattern 'browser engine: CEF shut down in'
-          if (-not $shutdown) { throw 'the CEF run never logged its shutdown' }
-          $shutdown.Line
       - name: The frozen style files are read in place, never written (mighty-styles, the smoke)
         # scripts/check-style-freeze.sh's frozen paths: the tests and the smoke above leave them as checked out.
         run: |
@@ -569,9 +524,9 @@ jobs:
 
   package-macos:
     # Mac stage M-I: the Mac release candidate in the 0.4.x bundle (scripts/build-tauri-macos.sh: MightyCode.app, dev.mightycode.native,
-    # the browser engine, signed ad hoc, --verify-resources, the size gate and Swift's own stager's verdict), then the same app under the
+    # no browser engine, signed ad hoc, --verify-resources, the size gate and Swift's own stager's verdict), then the same app under the
     # hardened runtime with a throwaway self-signed identity: codesign's strict check, --verify-resources, the MCP servers and the smoke
-    # with WebKit and with CEF on it. Stamped with a throwaway update key and the rehearsal's loopback address (rehearsal-macos below
+    # on it. Stamped with a throwaway update key and the rehearsal's loopback address (rehearsal-macos below
     # serves it), never the real ones; Actions artifacts only.
     name: Package macOS
     runs-on: macos-latest
@@ -610,11 +565,6 @@ jobs:
         with:
           workspaces: native/tauri -> target
           key: package-macos
-      - name: Restore the browser engine (CEF, native/macos/BrowserEngine.lock)
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/MightyCode/browser-engine
-          key: tauri-browser-engine-${{ hashFiles('native/macos/BrowserEngine.lock') }}
       - name: A throwaway update key for the candidate and its rehearsal
         run: |
           mkdir -p "$RUNNER_TEMP/rehearsal-key"
@@ -624,23 +574,22 @@ jobs:
       - name: Release build, bundle, ad hoc signature, zip and the 0.4.x stager's verdict
         env:
           MIGHTY_UPDATE_URL: ${{ env.REHEARSAL_MANIFEST_URL }}
-        run: |
-          bash scripts/fetch-browser-engine.sh
-          bash scripts/build-tauri-macos.sh --version "$CANDIDATE" --engine
+        run: bash scripts/build-tauri-macos.sh --version "$CANDIDATE"
       - name: What the bundle holds, and its signature
         run: |
           app="$PWD/release/tauri-macos/MightyCode.app"
           codesign --verify --deep --strict --verbose=2 "$app"
           codesign -dvv "$app" 2>&1 | grep -E '^(Identifier|Format|Signature|TeamIdentifier|CodeDirectory)'
           plutil -p "$app/Contents/Info.plist"
-          find "$app/Contents" -maxdepth 2 -not -path '*/Chromium Embedded Framework.framework/*' | sed "s|^$app/||" | sort
-          du -sh "$app" "$app/Contents/MacOS/MightyCode" "$app/Contents/Frameworks"/* "$app/Contents/Resources"/* | sed "s|$app/||"
+          find "$app/Contents" -maxdepth 2 | sed "s|^$app/||" | sort
+          du -sh "$app" "$app/Contents/MacOS/MightyCode" "$app/Contents/Resources"/* | sed "s|$app/||"
           ls -l release/MightyCode-macos.zip
           cat release/MightyCode-macos.zip.sha256
           (cd /tmp && "$app/Contents/MacOS/MightyCode" --verify-resources)
       - name: The same app under the hardened runtime, signed by a throwaway self-signed identity
         # What notarization needs (plan R2), with no real credentials: every nested binary signed inside out with its entitlements
-        # (scripts/sign-macos.sh --hardened-runtime), no get-task-allow, the CEF helpers' JIT, then the strict check.
+        # (scripts/sign-macos.sh --hardened-runtime), no get-task-allow and no JIT (no browser engine runs in the app's process), then the
+        # strict check.
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/hardened"
@@ -665,13 +614,11 @@ jobs:
           ditto release/tauri-macos/MightyCode.app "$app"
           bash scripts/sign-macos.sh "$app" "$CODESIGN_NAME" --hardened-runtime
           codesign --verify --deep --strict --verbose=2 "$app"
-          for code in "$app" "$app/Contents/Frameworks/"*.app; do
-            codesign -dvv "$code" 2>&1 | grep -q 'flags=0x10000(runtime)' || { echo "::error::not under the hardened runtime: $code"; exit 1; }
-            entitlements="$(codesign -d --entitlements :- "$code" 2>/dev/null)"
-            if grep -q get-task-allow <<<"$entitlements"; then echo "::error::get-task-allow set: $code"; exit 1; fi
-            grep -q com.apple.security.cs.allow-jit <<<"$entitlements" || { echo "::error::no allow-jit: $code"; exit 1; }
-          done
-          echo "the app and its $(ls -d "$app/Contents/Frameworks/"*.app | wc -l | tr -d ' ') helpers run under the hardened runtime with their entitlements"
+          codesign -dvv "$app" 2>&1 | grep -q 'flags=0x10000(runtime)' || { echo "::error::not under the hardened runtime: $app"; exit 1; }
+          entitlements="$(codesign -d --entitlements :- "$app" 2>/dev/null)"
+          if grep -q get-task-allow <<<"$entitlements"; then echo "::error::get-task-allow set: $app"; exit 1; fi
+          if grep -q com.apple.security.cs.allow-jit <<<"$entitlements"; then echo "::error::allow-jit set: $app"; exit 1; fi
+          echo "the app runs under the hardened runtime with its entitlements"
           (cd /tmp && "$app/Contents/MacOS/MightyCode" --verify-resources)
           echo "HARDENED_APP=$app" >> "$GITHUB_ENV"
       - name: The hardened app's two MCP servers list their tools headlessly
@@ -708,21 +655,6 @@ jobs:
         timeout-minutes: 15
         shell: pwsh
         run: ./native/tauri/scripts/smoke.ps1 -Exe "$env:HARDENED_APP/Contents/MacOS/MightyCode" -NoRuns -Out "$env:RUNNER_TEMP/package-smoke"
-      - name: Smoke on the hardened app with CEF (the browser engine on)
-        timeout-minutes: 15
-        shell: pwsh
-        run: |
-          $seeded = Join-Path $env:RUNNER_TEMP 'package-smoke-cef-profile'
-          Push-Location native/tauri
-          cargo run -q -p mighty-core --example seed_demo -- $seeded en
-          if ($LASTEXITCODE -ne 0) { throw 'seed_demo failed' }
-          Pop-Location
-          python3 -c "import json,sys; p=sys.argv[1]; s=json.load(open(p)); s['browserEngineEnabled']=True; json.dump(s, open(p,'w'))" (Join-Path $seeded 'workspace-state.json')
-          ./native/tauri/scripts/smoke.ps1 -Exe "$env:HARDENED_APP/Contents/MacOS/MightyCode" -Profile $seeded -Out "$env:RUNNER_TEMP/package-smoke/cef" -NoRuns
-          if ($LASTEXITCODE -ne 0) { throw "the CEF smoke failed ($LASTEXITCODE)" }
-          $result = Get-Content -Raw "$env:RUNNER_TEMP/package-smoke/cef/smoke-result.json" | ConvertFrom-Json
-          if ($result.browser.browserEngine -ne 'cef') { throw "the browser panes used $($result.browser.browserEngine), not CEF" }
-          'CEF under the hardened runtime: the browser step passed'
       - name: Remove the throwaway identity
         # Never interactive and never failing the job: each call is bounded (perl's alarm) and runs with sudo -n, and stdin is closed.
         # `security remove-trusted-cert` once waited here for an authorization no runner can give (44112802032): deleting the
@@ -853,13 +785,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
-      - name: Fetch the pinned browser engine
-        run: bash scripts/fetch-browser-engine.sh
       - name: Release build of the candidate with the real update key's public half and address (ad hoc)
         env:
           MIGHTY_UPDATE_URL: ${{ vars.MIGHTY_UPDATE_URL || 'https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/latest.json' }}
           MIGHTY_UPDATE_PUBLIC_KEY: ${{ vars.MIGHTY_UPDATE_PUBLIC_KEY || 'C02DD3qWG+A5gJdYwpaEnvpzYugo354CLtUtU+oXmZ4=' }}
-        run: bash scripts/build-tauri-macos.sh --version "$CANDIDATE" --engine
+        run: bash scripts/build-tauri-macos.sh --version "$CANDIDATE"
       - uses: actions/upload-artifact@v4
         with:
           name: MightyCode-macos-notarize-input

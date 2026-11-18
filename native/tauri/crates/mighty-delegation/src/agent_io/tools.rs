@@ -1,5 +1,6 @@
-//! `AgentIOTools` (C# Core/AgentIO/AgentIOBinding.cs:120-139): mighty-terminal's four tools, their verbatim descriptions and
-//! `Guidance`, and `Validate`: exactly one non-empty string argument with no NUL, the byte limits (65,536, 128, 128, 8192),
+//! `AgentIOTools` (C# Core/AgentIO/AgentIOBinding.cs:120-139): mighty-terminal's four tools, their descriptions and `Guidance` (C#'s
+//! verbatim but where they name `open_url`'s browser: 0.5 opens the page in the default browser, where C# let the user choose the
+//! app's own), and `Validate`: exactly one non-empty string argument with no NUL, the byte limits (65,536, 128, 128, 8192),
 //! `open_url`'s absolute http(s) URL with a host and no userinfo or control characters. Owner: W7-C.
 
 use serde_json::Value;
@@ -15,14 +16,14 @@ pub struct AgentIoTool {
 }
 
 /// `AgentIOTools.Guidance`: mighty-terminal's `instructions`, and the start of `run_in_terminal`'s description.
-pub const GUIDANCE: &str = "Use run_in_terminal for user-visible or long-running commands, including sign-ins and interactive prompts so the user can answer in their terminal. Keep short internal file reads and checks in built-in tools. Use open_url for web pages; the user chooses the browser. Do not drive sign-in prompts by sending keystrokes.";
+pub const GUIDANCE: &str = "Use run_in_terminal for user-visible or long-running commands, including sign-ins and interactive prompts so the user can answer in their terminal. Keep short internal file reads and checks in built-in tools. Use open_url for web pages; it opens them in the user's default browser. Do not drive sign-in prompts by sending keystrokes.";
 
 /// `AgentIOTools.All`, in this order.
 pub const ALL: [AgentIoTool; 4] = [
     AgentIoTool {
         name: "run_in_terminal",
         argument: "command",
-        description: "Use run_in_terminal for user-visible or long-running commands, including sign-ins and interactive prompts so the user can answer in their terminal. Keep short internal file reads and checks in built-in tools. Use open_url for web pages; the user chooses the browser. Do not drive sign-in prompts by sending keystrokes. Run a PowerShell command in the workspace. Returns output and exit code within 12 seconds, otherwise a running handle.",
+        description: "Use run_in_terminal for user-visible or long-running commands, including sign-ins and interactive prompts so the user can answer in their terminal. Keep short internal file reads and checks in built-in tools. Use open_url for web pages; it opens them in the user's default browser. Do not drive sign-in prompts by sending keystrokes. Run a PowerShell command in the workspace. Returns output and exit code within 12 seconds, otherwise a running handle.",
     },
     AgentIoTool {
         name: "read_latest_output",
@@ -37,7 +38,7 @@ pub const ALL: [AgentIoTool; 4] = [
     AgentIoTool {
         name: "open_url",
         argument: "url",
-        description: "Open an http/https page (including localhost) in the app or system browser as chosen by the user for this workspace. Other schemes are refused.",
+        description: "Open an http/https page (including localhost) in the user's default browser. Other schemes are refused.",
     },
 ];
 
@@ -131,7 +132,7 @@ pub fn web_address(value: &str) -> bool {
     !matches!(authority.rfind('@'), Some(at) if at > 0)
 }
 
-/// `Uri.AbsoluteUri` of an address [`web_address`] took: its normalized text (what the card shows and the browser is given).
+/// `Uri.AbsoluteUri` of an address [`web_address`] took: its normalized text (what the browser is given).
 pub fn absolute_uri(value: &str) -> String {
     url::Url::parse(value).map(String::from).unwrap_or_else(|_| value.to_string())
 }

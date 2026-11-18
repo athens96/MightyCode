@@ -274,20 +274,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cef-spike"
-version = "0.1.0"
-dependencies = [
- "libc",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "serde_json",
- "spike-common",
- "tauri",
- "tauri-build",
-]
-
-[[package]]
 name = "cesu8"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3809,20 +3795,6 @@ dependencies = [
  "phf_codegen",
  "string_cache",
  "string_cache_codegen",
-]
-
-[[package]]
-name = "webkit-spike"
-version = "0.1.0"
-dependencies = [
- "libc",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "serde_json",
- "spike-common",
- "tauri",
- "tauri-build",
 ]
 
 [[package]]

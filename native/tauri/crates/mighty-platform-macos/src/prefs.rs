@@ -245,7 +245,7 @@ pub fn preferred_languages() -> Vec<String> {
 mod tests {
     use super::*;
     use mighty_core::text_appearance::{self, Stored, TextAppearance};
-    use mighty_platform::prefs::{SWIFT_KEYS, WebOpenChoices, apply_to_system_interface, swift_kind, switch_on};
+    use mighty_platform::prefs::{SWIFT_KEYS, apply_to_system_interface, swift_kind, switch_on};
 
     /// A test's own domain, removed when it ends.
     struct Suite(Arc<DefaultsPrefs>);
@@ -421,60 +421,6 @@ mod tests {
         save(prefs, &text.with_transcript_family(None));
         assert_eq!(suite.0.stored("textTranscriptFontFamily"), None);
         assert_eq!(saved(prefs).resolved_transcript_family(), Some("Avenir Next"));
-    }
-
-    /// `OpenURLChoiceWiringTests.swift:120 "rememberedChoicesSurviveANewStoreInstance"`.
-    #[test]
-    fn remembered_choices_survive_a_new_store_instance() {
-        let suite = Suite::new();
-        let prefs: Arc<dyn PrefsStore> = suite.0.clone();
-        let before = WebOpenChoices::new(Some(prefs.clone()));
-        before.set("ws1", Some("external")).unwrap();
-        before.set("ws2", Some("in_app")).unwrap();
-        let after = WebOpenChoices::new(Some(prefs.clone()));
-        assert_eq!(
-            (after.choice("ws1").as_deref(), after.choice("ws2").as_deref(), after.choice("ws3")),
-            (Some("external"), Some("in_app"), None)
-        );
-        after.set("ws1", None).unwrap();
-        let again = WebOpenChoices::new(Some(prefs));
-        assert_eq!((again.choice("ws1"), again.choice("ws2").as_deref()), (None, Some("in_app")));
-    }
-
-    /// `OpenURLChoiceWiringTests.swift:139 "dialogRememberIsPersisted"`: a remembered dialog answer is in the domain at once.
-    #[test]
-    fn dialog_remember_is_persisted() {
-        let suite = Suite::new();
-        WebOpenChoices::new(Some(suite.0.clone())).set("ws", Some("external")).unwrap();
-        assert_eq!(
-            suite.0.stored("agentTerminal.webOpenChoices"),
-            Some(PrefValue::Map(vec![("ws".into(), PrefValue::Text("external".into()))]))
-        );
-        assert_eq!(WebOpenChoices::new(Some(suite.0.clone())).choice("ws").as_deref(), Some("external"));
-    }
-
-    /// `OpenURLChoiceWiringTests.swift:148 "storedValuesThatAreNotAChoiceAreIgnored"`.
-    #[test]
-    fn stored_values_that_are_not_a_choice_are_ignored() {
-        let suite = Suite::new();
-        suite
-            .0
-            .set(
-                "agentTerminal.webOpenChoices",
-                PrefValue::Map(vec![("ws1".into(), PrefValue::Text("sideways".into())), ("ws2".into(), PrefValue::Text("in_app".into()))]),
-            )
-            .unwrap();
-        let store = WebOpenChoices::new(Some(suite.0.clone()));
-        assert_eq!((store.choice("ws1"), store.choice("ws2").as_deref()), (None, Some("in_app")));
-    }
-
-    /// `OpenURLChoiceWiringTests.swift:156 "aStoreWithoutDefaultsWritesNothing"`.
-    #[test]
-    fn a_store_without_defaults_writes_nothing() {
-        let suite = Suite::new();
-        WebOpenChoices::new(None).set("ws", Some("external")).unwrap();
-        assert_eq!(suite.0.stored("agentTerminal.webOpenChoices"), None);
-        assert_eq!(mighty_platform::prefs::WEB_OPEN_CHOICES_KEY, "agentTerminal.webOpenChoices");
     }
 
     /// `HelpSiteTests.swift:31 "theCurrentGuideFollowsTheDisplayLanguage"`: each language's guide, and "system" read from the domain

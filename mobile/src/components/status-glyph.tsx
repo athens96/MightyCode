@@ -92,27 +92,14 @@ function StillGlyph({ shape, palette, size }: { shape: Exclude<GlyphShape, 'spar
           <Circle {...line} cx={8} cy={8} r={3.6} stroke={palette.textMuted} />
         </Svg>
       );
-    case 'terminal':
-    case 'globe': {
+    case 'terminal': {
       // The pane's own glyph sits a little inside the box, as in the mockup (16 in 18).
       const inner = Math.round(size * 0.9);
       const stroke = { ...line, stroke: palette.textMuted, strokeWidth: 2 };
       return (
         <Svg height={inner} viewBox="0 0 24 24" width={inner}>
-          {shape === 'terminal' ? (
-            <>
-              <Rect {...stroke} height={15} rx={3} width={18} x={3} y={4.5} />
-              <Path {...stroke} d="M7.5 10l3 2.5-3 2.5M12.5 15.5h4" />
-            </>
-          ) : (
-            <>
-              <Circle {...stroke} cx={12} cy={12} r={8.5} />
-              <Path
-                {...stroke}
-                d="M3.5 12h17M12 3.5c2.6 2.6 3.6 5.4 3.6 8.5s-1 5.9-3.6 8.5c-2.6-2.6-3.6-5.4-3.6-8.5s1-5.9 3.6-8.5z"
-              />
-            </>
-          )}
+          <Rect {...stroke} height={15} rx={3} width={18} x={3} y={4.5} />
+          <Path {...stroke} d="M7.5 10l3 2.5-3 2.5M12.5 15.5h4" />
         </Svg>
       );
     }

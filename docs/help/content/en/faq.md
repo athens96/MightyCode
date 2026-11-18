@@ -22,9 +22,6 @@ In the menu bar's {{ui:menu.workspace}} menu, click {{ui:menu.reconnectInputMeth
 > [!warning]
 > Don't overwrite the app's files while it runs, and don't open a second copy of the app. That can break the connection to the macOS input method, so Korean breaks into separate letters. Let the app install a downloaded update when it quits, or use {{ui:settings.appUpdate.restartNowButton}} inside the app ([Updates](getting-started.md#update)).
 
-## The browser pane is empty {#browser-empty}
-Browser panes are off at first. Turn on {{ui:settings.display.browserToggle}} on {{ui:settings.nav.general}} and reopen the app. See [Browser pane](terminal-files-browser.md#browser).
-
 ## Antigravity declines a command or a file write {#antigravity-denied}
 Antigravity cannot ask while it works, so it skips what it would have to ask about and finishes the turn. The pane then shows a card listing what it declined. {{ui:permission.allowOnce}} or {{ui:antigravity.permission.allowAlways}} continues in the same conversation; you do not need to edit the rules file yourself. See [Antigravity's permission card](approvals.md#antigravity-permission).
 

@@ -77,7 +77,7 @@ python scripts/release.py verify
 
 CI는 커밋마다 다 돌지 않는다(`scripts/ci-changes.sh`, 2026-11-13). 도움말 스크린샷은 릴리스 커밋(`(release) …`)과 손으로 시작한 전체 실행에서만 찍고, 다른 플랫폼 파일만 바뀐 푸시는 그 플랫폼의 빌드를 건너뛴다(맥: `native/windows/`만, Windows: `native/macos/`·`relay/`만). 빌드할 커밋의 푸시 실행이 빌드를 건너뛰었으면 `ci`가 그 워크플로의 전체 실행(`workflow_dispatch`, `full=true`)을 main에서 시작해 그 결과를 쓴다. 이 실행은 main의 마지막 커밋을 빌드하므로, 고른 커밋이 main의 마지막 커밋이 아니면 멈추고 그렇게 하라고 알린다. 맥은 테스트(`macos-tests`)와 빌드(`macos`)가 따로 돌고, 앱을 띄우는 화면 시험·도움말 촬영은 빌드한 zip을 받아 GitHub 러너에서 도는 `macos-smoke`가 한다.
 
-**자체 호스팅 맥 러너**(2026-11-18): main 푸시와 손으로 시작한 실행의 `macos-tests`·`macos`는 개발자 맥의 러너(이름·라벨 `mighty-mac`, `~/actions-runner`, 로그인 서비스 `actions.runner.athens96-MightyCode.mighty-mac`)에서 돈다. PR과 다른 브랜치는 GitHub의 `macos-latest`에서 돈다(공개 저장소라 남의 코드가 그 맥에서 돌지 않게). 그 맥에서는 앱을 띄우지 않는다(두 번째 앱이 한글 입력을 깨뜨린다): 화면 시험·도움말 촬영은 `macos-smoke`(GitHub), 공증은 `notarize-macos`(GitHub)다. CI 빌드는 언제나 ad-hoc 서명이라(`MIGHTY_CODESIGN_IDENTITY=-`) 그 맥의 서명 인증서와 키체인을 쓰지 않고, SwiftPM·브라우저 엔진 캐시 복원은 GitHub 러너에서만 한다. 그 맥이 꺼져 있으면 main의 맥 잡은 러너를 기다린다: 손으로 시작하는 실행(`workflow_dispatch`)의 `hosted`를 켜면 GitHub 러너에서 돈다. 러너를 멈추려면 `~/actions-runner/svc.sh stop`, 없애려면 `svc.sh uninstall` 뒤 `config.sh remove --token <저장소 설정의 제거 토큰>`.
+**자체 호스팅 맥 러너**(2026-11-18): main 푸시와 손으로 시작한 실행의 `macos-tests`·`macos`는 개발자 맥의 러너(이름·라벨 `mighty-mac`, `~/actions-runner`, 로그인 서비스 `actions.runner.athens96-MightyCode.mighty-mac`)에서 돈다. PR과 다른 브랜치는 GitHub의 `macos-latest`에서 돈다(공개 저장소라 남의 코드가 그 맥에서 돌지 않게). 그 맥에서는 앱을 띄우지 않는다(두 번째 앱이 한글 입력을 깨뜨린다): 화면 시험·도움말 촬영은 `macos-smoke`(GitHub), 공증은 `notarize-macos`(GitHub)다. CI 빌드는 언제나 ad-hoc 서명이라(`MIGHTY_CODESIGN_IDENTITY=-`) 그 맥의 서명 인증서와 키체인을 쓰지 않고, SwiftPM·Rust 캐시 복원은 GitHub 러너에서만 한다. 그 맥이 꺼져 있으면 main의 맥 잡은 러너를 기다린다: 손으로 시작하는 실행(`workflow_dispatch`)의 `hosted`를 켜면 GitHub 러너에서 돈다. 러너를 멈추려면 `~/actions-runner/svc.sh stop`, 없애려면 `svc.sh uninstall` 뒤 `config.sh remove --token <저장소 설정의 제거 토큰>`.
 
 `ci`는 먼저 `git fetch origin main`을 하고, 고른 커밋이 origin/main에 없으면 바로 멈춘다("먼저 main에 push하세요") — 기능 브랜치 커밋을 태그하거나 오지 않을 CI를 180분 기다리지 않는다. `ci`가 다른 커밋이나 다른 실행을 고르면 `download` 이후 단계가 모두 다시 해야 하는 것으로 돌아간다.
 
@@ -177,7 +177,7 @@ gh workflow run release-manifest.yml --ref main -f version=<버전> \
 | `MIGHTY_NOTARY_ISSUER_ID` | Issuer ID |
 
 - 켜기: 시크릿을 넣은 뒤 `gh variable set MIGHTY_MAC_NOTARIZE --body 1`. 끄려면 변수를 지운다.
-- hardened runtime의 권한: 앱은 브라우저 엔진 때문에 JIT를, 터미널이라서 Apple Events·마이크·카메라를 가진다(창에서 실행한 명령이 요청하면 macOS가 앱에 묻는데, 권한이 없으면 묻지 않고 거부한다). 헬퍼와 내장 Node는 JIT만. Developer ID가 아닌 인증서(`Mighty Claude Dev`, ad-hoc)는 Team ID가 없어 라이브러리 검증을 통과할 수 없으므로 `MIGHTY_HARDENED_RUNTIME=1`로 시험할 때만 `disable-library-validation`이 붙는다.
+- hardened runtime의 권한: 앱은 터미널이라서 Apple Events·마이크·카메라를 가진다(창에서 실행한 명령이 요청하면 macOS가 앱에 묻는데, 권한이 없으면 묻지 않고 거부한다). JIT 권한은 없다: 앱 안 브라우저가 없어(웹 페이지는 기본 브라우저에서 열림) 앱 프로세스에서 도는 브라우저 엔진이 없고, 화면의 WKWebView는 따로 된 프로세스에서 돈다. 헬퍼 앱·내장 Node도 없다. Developer ID가 아닌 인증서(`Mighty Claude Dev`, ad-hoc)는 Team ID가 없어 라이브러리 검증을 통과할 수 없으므로 `MIGHTY_HARDENED_RUNTIME=1`로 시험할 때만 `disable-library-validation`이 붙는다.
 - Developer ID로 서명 주체가 바뀐 첫 버전으로 업데이트하면 키체인 "항상 허용"과 화면 기록·손쉬운 사용 권한을 한 번 다시 줘야 한다. 업데이트 노트에 적는다.
 
 ## 그 밖

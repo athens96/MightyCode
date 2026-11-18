@@ -43,7 +43,7 @@ export interface StoreState {
   selected?: { paneId: string; seq: number };
   /**
    * How many of the page's menus, popovers and in-page dialogs are open (src/shell/overlay.ts); each marks its element with
-   * `data-page-overlay`. A browser pane hides its native control while one of them overlaps its slot.
+   * `data-page-overlay`. A native view (the Mac's Ghostty terminal) steps aside while one of them overlaps its slot.
    */
   overlays: number;
   /** The picture the viewer shows over the window (src/pictures/PictureViewer.tsx); undefined while it is closed. */
@@ -405,7 +405,6 @@ export function reduce(state: StoreState, message: StoreMessage): StoreState {
     case 'choose':
       return message.paneId === state.chosen ? state : settle({ ...state, chosen: message.paneId });
     case 'terminal':
-    case 'browser':
     case 'workmap':
     case 'files':
       return state;
@@ -419,6 +418,9 @@ export function reduce(state: StoreState, message: StoreMessage): StoreState {
       return applyPending(state, message);
     case 'view':
       return applyView(state, message);
+    // A push the page does not know (an older host's browser state) leaves the state as it was.
+    default:
+      return state;
   }
 }
 

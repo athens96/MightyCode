@@ -104,8 +104,8 @@ use crate::smoke::Smoke;
 use crate::surface::SurfaceManager;
 
 /// Page → host: one message (`{kind:"call", ...}`), queued for the dispatcher; the answer comes back on `host-message`. Only the
-/// page's own webview showing the app's own page is heard (C# `WebShell.Trusted(args.Source)`): a browser pane's child webview, or
-/// the page's webview somewhere else, never reaches the host. And only with this run's nonce, which only the page's top frame on the
+/// page's own webview showing the app's own page is heard (C# `WebShell.Trusted(args.Source)`): any other webview, or the page's
+/// webview somewhere else, never reaches the host. And only with this run's nonce, which only the page's top frame on the
 /// app's own origin defines ([`HostNonce`]): a frame inside the page (an HTML preview) that reaches Tauri's IPC is refused too.
 #[tauri::command]
 fn host_post(
@@ -389,13 +389,11 @@ fn main() {
     } else {
         platform.paths.local_dir().join("file-originals").join(platform.paths.profile_key())
     };
-    // The page's and the browser panes' web data (paths.rs `web_folders`, W9-F: C#'s own folders in a release build on the default
-    // profile, so browser sign-ins survive the update; this machine's local ones otherwise, as before W9).
+    // The page's web data (paths.rs `web_folders`, W9-F: C#'s own folder in a release build on the default profile, so the page's
+    // storage survives the update; this machine's local one otherwise, as before W9).
     // Only a run that writes adopts them (review M1): never beside a C# app that may still hold them.
     let adopted = startup::adopts_csharp_web_data(&options, policy);
     let web_folders = platform.paths.web_folders(adopted);
-    // The browser engine the setting asks for (read once per launch), started below between building the app and running it (M-E).
-    let browser_engine = (snapshot.browser_engine_enabled, surface::profiles_root(&web_folders.browser), options.smoke_test);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -611,20 +609,16 @@ fn main() {
             )?;
             // W9-C: the session-ending watch on the main window, from its own thread (an install on quit waits while Windows ends it).
             app_update::watch_window(&host, &window.as_ref().window());
-            // The native views over the page (browser panes; the Mac's terminal later), in the OS's implementation.
-            let factory = platform::surfaces(window.as_ref().window(), adopted);
+            // The native views over the page (the Mac's terminal, the pet), in the OS's implementation.
+            let factory = platform::surfaces(window.as_ref().window());
             // The companion pet (companion.rs, W8-E): its window is one of the main window's native views.
             companion::start(&host, &platform, factory.clone());
-            let browser_data = web_folders.browser.clone();
-            host.log.line(&format!("browser data {}", browser_data.display()));
             let push = surface::page_push(app.handle().clone());
-            app.manage(Arc::new(SurfaceManager::new(factory, platform.profile.os, browser_data, push)));
+            app.manage(Arc::new(SurfaceManager::new(factory, platform.profile.os, push)));
             Ok(())
         })
         .build(context)
         .expect("the Tauri app");
-    // The Mac's CEF must initialize here, after tao's NSApplication exists and before its run loop starts (M-E).
-    platform::start_browser_engine(browser_engine.0, &browser_engine.1, browser_engine.2);
     // Tauri's event loop ends with 0 whatever `exit(code)` asked (tauri-runtime-wry's RequestExit sets ControlFlow::Exit): the
     // code is kept here and given to the process at the end, so a failed `--smoke-exit` run exits 1.
     let mut exit_code = 0;
@@ -669,10 +663,6 @@ fn main() {
                 // The last save (C# DesktopService.DisposeAsync), written only with --allow-state-write.
                 host.close();
                 host.write_unimplemented();
-                // The Mac's CEF shut down before the process ends (M-E).
-                for engine in platform::stop_browser_engine() {
-                    host.log.line(&format!("browser engine: {engine}"));
-                }
                 host.log.line("exit");
             }
             if exit_code != 0 {

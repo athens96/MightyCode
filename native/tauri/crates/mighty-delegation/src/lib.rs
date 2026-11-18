@@ -21,7 +21,7 @@
 //! | `DelegationCards.cs`, `DelegationText.cs`, `DelegationSidebar.cs` | [`cards`], [`text`], [`sidebar`] | A |
 //! | `DelegationWorktree.cs`, `DelegationMerge.cs`, `DelegationCleanup.cs`, `ChildAutoCommit`, `ChildReportFile` | [`git`] | B |
 //! | `DelegationMcp.cs`, `AgentIO/AgentIOMcp.cs` | [`mcp`], [`modes`] | C |
-//! | `AgentIO/AgentIOBinding.cs`, `AgentIOPipe.cs`, `AgentWebOpenPrompts.cs` | [`agent_io`] | C |
+//! | `AgentIO/AgentIOBinding.cs`, `AgentIOPipe.cs` | [`agent_io`] | C |
 //! | `DelegationFakeClaude.cs` | [`fake_claude`] | C |
 //! | `DelegationAppHost.cs` | [`app_host`] | D |
 //! | `DesktopService.Delegation.cs` | [`app`] | D |

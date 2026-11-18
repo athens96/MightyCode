@@ -6,7 +6,7 @@ Written against main's native-macos.yml of 66e42410/b7e7f6f5, whose design it ke
 mighty-mac for main pushes and dispatches, macos-latest for pull requests and branches, the `hosted` dispatch input), the caches on
 GitHub's runners only, ad-hoc CI signing, the artifact names (MAC_ZIP_ARTIFACT: MightyCode-native-macos / -unsigned) and the size gate.
 Only two jobs change:
-- macos builds with scripts/build-tauri-macos.sh (MightyCode.app, release/MightyCode-macos.zip, the browser engine on main pushes).
+- macos builds with scripts/build-tauri-macos.sh (MightyCode.app, release/MightyCode-macos.zip; no browser engine: 0.5 has no in-app browser).
   It never opens the app's window: its only runs of the binary are the headless --verify-resources (as build-macos.sh's) and Swift's
   stager (tools/parity-mac stage) reading the zip. Rust is installed and cached on GitHub's runners only; on mighty-mac the
   developer's own toolchain is used, never changed.
@@ -41,10 +41,16 @@ diff --git a/.github/workflows/native-macos.yml b/.github/workflows/native-macos
        - name: Restore SwiftPM downloads
          # GitHub's runners only: on the self-hosted Mac this is the developer's own cache.
          if: runner.environment == 'github-hosted'
-@@ -128,34 +133,52 @@ jobs:
+@@ -128,34 +133,41 @@ jobs:
              ~/Library/Caches/org.swift.swiftpm
              native/macos/.build/repositories
            key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/macos/Package.resolved', 'native/macos/Vendor/libghostty-spm/Package.swift') }}
+-      # A push to main builds the package a release ships, so it carries the pinned browser engine
+-      # (CEF and Node, BrowserEngine.lock) as the Mac release zips always have; other runs build without it.
+-      - name: Restore the pinned browser engine (main)
+-        # Like the build step below, also after a failed test step, so the build never lacks the engine.
+-        if: (success() || failure()) && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && runner.environment == 'github-hosted'
+-        uses: actions/cache@v4
 +      - uses: actions/setup-node@v4
 +        with:
 +          node-version: '22'
@@ -60,7 +66,14 @@ diff --git a/.github/workflows/native-macos.yml b/.github/workflows/native-macos
 +          targets: aarch64-apple-darwin
 +      - uses: Swatinem/rust-cache@v2
 +        if: runner.environment == 'github-hosted'
-+        with:
+         with:
+-          path: ~/Library/Caches/MightyCode/browser-engine
+-          key: browser-engine-${{ hashFiles('native/macos/BrowserEngine.lock') }}
+-      - name: Fetch the pinned browser engine (main)
+-        # Like the build step below, also after a failed test step, so the build never lacks the engine.
+-        if: (success() || failure()) && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+-        run: bash scripts/fetch-browser-engine.sh
+-      - name: Build SwiftUI application
 +          workspaces: native/tauri -> target
 +          key: macos-release
 +      - name: The self-hosted Mac's Rust toolchain
@@ -68,23 +81,7 @@ diff --git a/.github/workflows/native-macos.yml b/.github/workflows/native-macos
 +        run: |
 +          cargo --version && rustc --version || { echo "::error::no Rust toolchain on this runner (install rustup there, or dispatch with hosted)"; exit 1; }
 +          rustc -vV | grep -qx 'host: aarch64-apple-darwin' || { echo "::error::the self-hosted Mac's Rust is not for arm64"; exit 1; }
-       # A push to main builds the package a release ships, so it carries the pinned browser engine
--      # (CEF and Node, BrowserEngine.lock) as the Mac release zips always have; other runs build without it.
-+      # (CEF, BrowserEngine.lock) as the Mac release zips always have; other runs build without it.
-       - name: Restore the pinned browser engine (main)
--        # Like the build step below, also after a failed test step, so the build never lacks the engine.
--        if: (success() || failure()) && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && runner.environment == 'github-hosted'
-+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && runner.environment == 'github-hosted'
-         uses: actions/cache@v4
-         with:
-           path: ~/Library/Caches/MightyCode/browser-engine
-           key: browser-engine-${{ hashFiles('native/macos/BrowserEngine.lock') }}
-       - name: Fetch the pinned browser engine (main)
--        # Like the build step below, also after a failed test step, so the build never lacks the engine.
--        if: (success() || failure()) && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-         run: bash scripts/fetch-browser-engine.sh
--      - name: Build SwiftUI application
++      # 0.5 bundles no browser engine: there is no in-app browser, web pages open in the default browser.
 +      - name: Build the Rust app, its bundle and zip, and the 0.4.x stager's verdict
          id: build-app
 -        # Runs even when the Swift tests failed, so one CI run reports both.
@@ -94,7 +91,6 @@ diff --git a/.github/workflows/native-macos.yml b/.github/workflows/native-macos
            MIGHTY_UPDATE_URL: ${{ vars.MIGHTY_UPDATE_URL || 'https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/latest.json' }}
            MIGHTY_UPDATE_PUBLIC_KEY: ${{ vars.MIGHTY_UPDATE_PUBLIC_KEY || 'C02DD3qWG+A5gJdYwpaEnvpzYugo354CLtUtU+oXmZ4=' }}
 -          MIGHTY_BROWSER_ENGINE: ${{ (github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '1' || '' }}
-+          ENGINE: ${{ (github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '--engine' || '' }}
            # Ad-hoc, as on GitHub's runners: on the self-hosted Mac the developer's own signing identity (and a
            # keychain prompt) must never come into CI. The notarize job signs with the Developer ID.
            MIGHTY_CODESIGN_IDENTITY: '-'
@@ -102,22 +98,22 @@ diff --git a/.github/workflows/native-macos.yml b/.github/workflows/native-macos
 -      - name: Package macOS app with executable modes and hidden resources
 -        run: ditto -c -k --sequesterRsrc --keepParent release/native-macos/MightyCode.app release/MightyCode-macos.zip
 +        # Packs release/MightyCode-macos.zip and applies the size gate itself.
-+        run: bash scripts/build-tauri-macos.sh $ENGINE
++        run: bash scripts/build-tauri-macos.sh
        - name: Gate the release package size before upload
          run: scripts/check-release-size.sh release/MightyCode-macos.zip
        # Without notarization (any branch, or main before the repository variable
-@@ -171,7 +194,9 @@ jobs:
+@@ -171,7 +183,9 @@ jobs:
    macos-smoke:
      # The app's GUI checks and the help screenshots, on a GitHub runner with the app the build job made: they
      # launch the app (a second instance on a developer's Mac breaks its Korean input) and the help capture puts
 -    # demo folders in the home folder, so they never run on the self-hosted Mac.
 +    # demo folders in the home folder, so they never run on the self-hosted Mac. 0.5: the Tauri smoke
-+    # (native/tauri/src-tauri/src/smoke.rs: the page, the terminal, the browser, setup, files, updates, …) in place of the
++    # (native/tauri/src-tauri/src/smoke.rs: the page, the terminal, setup, files, updates, …) in place of the
 +    # Swift app's GUI, terminal, graph, setup, work map and delegation smokes; the help capture is the Rust app's (plan D15).
      needs: [changes, macos]
      if: needs.changes.outputs.run == 'true'
      runs-on: macos-latest
-@@ -184,18 +209,23 @@ jobs:
+@@ -184,18 +198,23 @@ jobs:
        - name: Unpack the built app
          id: unpack
          run: |
@@ -147,7 +143,7 @@ diff --git a/.github/workflows/native-macos.yml b/.github/workflows/native-macos
            env = {k: v for k, v in os.environ.items() if not k.startswith("MIGHTY_")}
            requests = [
                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18"}},
-@@ -220,281 +250,33 @@ jobs:
+@@ -220,281 +239,33 @@ jobs:
                print(f"::error title=macOS MCP servers::{problem}", flush=True)
            sys.exit(1 if problems else 0)
            PY
@@ -440,7 +436,7 @@ diff --git a/.github/workflows/native-macos.yml b/.github/workflows/native-macos
                echo "::error title=Help capture ($lang)::the app exited non-zero or timed out"
                status=1
              fi
-@@ -536,6 +318,7 @@ jobs:
+@@ -536,6 +307,7 @@ jobs:
            name: MightyCode-macos-help-shots
            path: ${{ runner.temp }}/mighty-help-*/help-shots/
            if-no-files-found: warn

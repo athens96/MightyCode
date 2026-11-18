@@ -29,8 +29,8 @@ LIVE_PAGE = """<body>
 
 
 
-def make_mac_zip(path, version, marker="", key=None, url=None, engine=True, app_engine=""):
-    """A Mac release zip as far as check_mac_package reads it: Info.plist and, optionally, the engine framework."""
+def make_mac_zip(path, version, marker="", key=None, url=None, engine="", app_engine=""):
+    """A Mac release zip as far as check_mac_package reads it: Info.plist and, for a stale build, a browser engine file under it."""
     import plistlib, zipfile
     info = {"CFBundleShortVersionString": version, "MarkerForTests": marker,
             "MightyUpdatePublicKey": release.PUBLIC_KEY if key is None else key,
@@ -39,7 +39,7 @@ def make_mac_zip(path, version, marker="", key=None, url=None, engine=True, app_
     with zipfile.ZipFile(path, "w") as z:
         z.writestr("MightyCode.app/Contents/Info.plist", plistlib.dumps(info))
         if engine:
-            z.writestr(release.MAC_ENGINE + "Chromium Embedded Framework", b"engine")
+            z.writestr(engine, b"engine")
 
 
 class MacPackageTests(unittest.TestCase):
@@ -62,8 +62,9 @@ class MacPackageTests(unittest.TestCase):
                 release.check_mac_package(self.path, "0.4.48")
             self.assertIn(words, said.call_args.args[0])
 
-    def test_a_zip_without_engine_key_or_address_is_refused(self):
-        for kwargs, words in [({"engine": False}, "브라우저 엔진"), ({"key": ""}, "공개 키"), ({"url": ""}, "업데이트 주소")]:
+    def test_a_zip_with_the_browser_engine_or_without_key_or_address_is_refused(self):
+        for kwargs, words in [({"engine": release.MAC_ENGINE[0] + "Chromium Embedded Framework"}, "브라우저 엔진"),
+                              ({"engine": release.MAC_ENGINE[1]}, "브라우저 엔진"), ({"key": ""}, "공개 키"), ({"url": ""}, "업데이트 주소")]:
             make_mac_zip(self.path, "0.4.48", **kwargs)
             with self.assertRaises(release.ReleaseError) as caught:
                 release.check_mac_package(self.path, "0.4.48")

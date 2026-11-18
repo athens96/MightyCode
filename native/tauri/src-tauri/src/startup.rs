@@ -90,7 +90,7 @@ pub fn log_dir(options: &Options, paths: &dyn Paths, policy: WritePolicy) -> Pat
     }
 }
 
-/// Whether the page and the browser panes adopt C#'s web data (`Paths::web_folders`): a release build on the default profile, only when
+/// Whether the page adopts C#'s web data (`Paths::web_folders`): a release build on the default profile, only when
 /// the run writes (W9 review M1: a `--read-only` run, or a release candidate run beside C#, keeps its own folders, never a folder C#'s
 /// WebView2 may still hold).
 pub fn adopts_csharp_web_data(options: &Options, policy: WritePolicy) -> bool {
@@ -105,8 +105,7 @@ fn adopts(release: bool, options: &Options, policy: WritePolicy) -> bool {
 /// WebView2 left there opens with the same options.
 pub const CSHARP_BROWSER_ARGUMENTS: &str = "";
 
-/// The page made again while its WebView2 data is held by another process (W9 review M1): mighty-platform's, shared with the browser
-/// panes in C#'s adopted folder.
+/// The page made again while its WebView2 data is held by another process (W9 review M1): mighty-platform's.
 pub use mighty_platform::paths::retry_while_held;
 
 /// C# `UserEnvironment.RepairCurrentProcess` (Program.cs:161): an app started from a bare environment (only `SystemRoot`, as an update

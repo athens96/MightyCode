@@ -26,7 +26,7 @@ function session(overrides: Partial<MobileSessionSummary>): MobileSessionSummary
   };
 }
 
-/** The pane list the Mac sends for one agent pane that has both IO panes open. */
+/** The pane list the Mac sends for one agent pane with its terminal open, and an older desktop's agent browser beside it. */
 function stateWithAgentIOPanes(): MobileState {
   return {
     protocol: 1,
@@ -43,10 +43,11 @@ function stateWithAgentIOPanes(): MobileState {
         model: 'default',
         terminal: true,
       }),
+      // An older desktop's in-app browser: a kind the phone no longer knows.
       session({
         id: 'agent-browser:agent-1',
         title: '내 에이전트 — 브라우저',
-        kind: 'agent-browser',
+        kind: 'agent-browser' as MobileSessionSummary['kind'],
         model: 'default',
         terminal: true,
       }),
@@ -55,7 +56,7 @@ function stateWithAgentIOPanes(): MobileState {
 }
 
 describe('agent-owned IO panes in the pane list', () => {
-  it('lists the terminal and browser panes alongside the existing panes', () => {
+  it('lists the terminal pane, and a kind it does not know, alongside the existing panes', () => {
     const groups = groupSessionsByWorkspace(stateWithAgentIOPanes());
     expect(groups).toHaveLength(1);
     const group = groups[0];
@@ -79,21 +80,22 @@ describe('agent-owned IO panes in the pane list', () => {
     );
   });
 
-  it('names both kinds in the row meta line', () => {
+  it('names the terminal in the row meta line, and an unknown kind by its own word', () => {
     expect(kindLabel('agent-terminal')).toBe('에이전트 터미널');
-    expect(kindLabel('agent-browser')).toBe('에이전트 브라우저');
+    expect(kindLabel('agent-browser')).toBe('agent-browser');
+    expect(kindLabel('browser')).toBe('browser');
   });
 
   it('marks only the agent-owned panes as agent IO panes', () => {
     expect(isAgentIOPane('agent-terminal')).toBe(true);
-    expect(isAgentIOPane('agent-browser')).toBe(true);
+    expect(isAgentIOPane('agent-browser')).toBe(false);
     expect(isAgentIOPane('shell')).toBe(false);
     expect(isAgentIOPane('claude')).toBe(false);
   });
 
   it('carries them as non-commandable, so the phone only lists them', () => {
     const owned = stateWithAgentIOPanes().sessions.filter((entry) => isAgentIOPane(entry.kind));
-    expect(owned).toHaveLength(2);
+    expect(owned).toHaveLength(1);
     expect(owned.every((entry) => entry.terminal)).toBe(true);
   });
 });

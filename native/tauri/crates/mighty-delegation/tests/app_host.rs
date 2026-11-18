@@ -281,7 +281,7 @@ async fn child_panes_the_run_ledger_and_the_panes_snapshot_keys() {
     let shell = std::path::Path::new(&child_folder).join("shell").to_string_lossy().into_owned();
     let long = format!("C:\\{}", "a".repeat(4096));
     let bad = format!("{child_folder}\0b");
-    let linked = vec![
+    let linked = [
         linked("child", Some("closed-parent"), Some(&child_folder), "claude", "claude"),
         linked("codex", Some("closed-parent"), Some(&child_folder), "claude", "codex"),
         linked("self", Some("self"), Some("relative/folder"), "claude", "claude"),
@@ -289,7 +289,6 @@ async fn child_panes_the_run_ledger_and_the_panes_snapshot_keys() {
         linked("long", Some("p"), Some(&long), "claude", "claude"),
         linked("rooted", Some("p"), Some("\\no\\drive"), "claude", "claude"),
         linked("shell", Some("child"), Some(&shell), "shell", "claude"),
-        linked("browser", Some("child"), Some(&shell), "browser", "claude"),
         pane("plain", "w"),
     ];
     for restoring in [true, false] {
@@ -318,7 +317,6 @@ async fn child_panes_the_run_ledger_and_the_panes_snapshot_keys() {
                 && links("long") == (some("p"), None)
                 && links("rooted") == (some("p"), None)
                 && links("shell") == (None, some(&shell))
-                && links("browser") == (None, None)
                 && links("plain") == (None, None),
             "well-formed links stay and malformed ones go, restoring {restoring}"
         );

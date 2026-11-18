@@ -2,7 +2,7 @@
 //! `cfg(windows)`), so the workspace builds everywhere; `src-tauri/src/platform.rs` picks it on Windows.
 //!
 //! Real so far: [`paths`] (`%APPDATA%\MightyCode`), [`RegistryPrefs`] reads (`HKCU\Software\MightyCode`), [`DpapiVault`] (the C#
-//! `DpapiRemoteKeyVault` format), the browser surface ([`WebviewSurfaces`], a WebView2 child webview of the main window), and the
+//! `DpapiRemoteKeyVault` format), the native views ([`WindowsSurfaces`]: the companion pet; the page draws the terminal), and the
 //! process layer (W1-C, the C# `ChildProcess`, `WindowsCommand`, `CliRunner`, `CliDiscovery`, `CliEnvironment`,
 //! `WindowsShellEnvironment`, `UserEnvironment`, `PseudoTerminal` and `ShellActivity`): [`WindowsProcessHost`],
 //! [`WindowsPtyHost`], [`WindowsShellEnvironment`]. W7's Agent IO pipe ([`agent_io`], W7-C) and free space ([`disk_space`], W7-B) are
@@ -17,8 +17,6 @@
 pub mod activator;
 #[cfg(windows)]
 pub mod agent_io;
-#[cfg(windows)]
-mod browser;
 #[cfg(windows)]
 pub mod cli;
 #[cfg(windows)]
@@ -82,8 +80,6 @@ pub mod user_environment;
 #[cfg(windows)]
 mod variables;
 #[cfg(windows)]
-pub mod webview2_install;
-#[cfg(windows)]
 mod win;
 
 #[cfg(windows)]
@@ -95,11 +91,13 @@ mod imp {
     use std::sync::Arc;
 
     use mighty_platform::unsupported::Unsupported;
-    use mighty_platform::{AppPaths, Paths, Platform, PlatformProfile, Result, SurfaceFactory};
+    use mighty_platform::{
+        AppPaths, BoxFuture, Drawing, Paths, PetWindow, Platform, PlatformError, PlatformProfile, Result, SurfaceFactory, SurfaceKind,
+        TerminalOptions, TerminalSurface,
+    };
 
     pub use crate::activator::ComActivator;
     pub use crate::agent_io::{NamedPipeConnector, NamedPipeListener};
-    pub use crate::browser::{WebviewSurfaces, runtime_version as browser_runtime};
     pub use crate::cli::{CliRunResult, CliRunner};
     pub use crate::clipboard::WindowsClipboard;
     pub use crate::console::WindowsTerminalLauncher;
@@ -122,7 +120,6 @@ mod imp {
     pub use crate::update::WindowsUpdates;
     pub use crate::update_transport::WinHttpUpdates;
     pub use crate::variables::Variables;
-    pub use crate::webview2_install::{download_bootstrapper, is_microsoft_signed, run_installer};
 
     /// The folders of the app before its rename whose state a default profile without one takes, under `%APPDATA%` (C# `MainWindow`'s
     /// constructor, `MainWindow.cs:64`: the first holding a `workspace-state.json`, copied in by the store). C#'s other rename,
@@ -249,10 +246,31 @@ mod imp {
         Arc::new(WindowsUpdates)
     }
 
-    /// The native views of `window`: browsers are WebView2 child webviews (with C#'s environment options in C#'s own data folder,
-    /// `csharp_web_data`); the terminal is the page's (xterm.js).
-    pub fn surfaces(window: tauri::Window, csharp_web_data: bool) -> Arc<dyn SurfaceFactory> {
-        Arc::new(WebviewSurfaces::new(window, csharp_web_data))
+    /// Windows' native views: the companion pet's window only. The terminal is the page's (xterm.js over ConPTY), and 0.5 has no
+    /// browser pane (a web page opens in the default browser, [`open_url`]).
+    pub struct WindowsSurfaces;
+
+    impl SurfaceFactory for WindowsSurfaces {
+        fn drawing(&self, kind: SurfaceKind) -> Drawing {
+            match kind {
+                SurfaceKind::Terminal => Drawing::Web,
+            }
+        }
+
+        fn open_terminal(&self, _options: TerminalOptions) -> BoxFuture<'_, Result<Box<dyn TerminalSurface>>> {
+            Box::pin(async { Err(PlatformError::unsupported("SurfaceFactory", "open_terminal")) })
+        }
+
+        /// The companion's window (pet.rs, W8-E).
+        fn open_pet(&self) -> BoxFuture<'_, Result<Box<dyn PetWindow>>> {
+            Box::pin(async { crate::pet::open() })
+        }
+    }
+
+    /// The native views over the main window's page ([`WindowsSurfaces`]: none of them is a child of `window`).
+    pub fn surfaces(window: tauri::Window) -> Arc<dyn SurfaceFactory> {
+        let _ = window;
+        Arc::new(WindowsSurfaces)
     }
 
     /// The user's clipboard (a terminal's copy and paste).

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fixture from '@tokens/work-map.json';
-import { slimKinds, paneKindWords } from '../Panes';
+import { slimKind, paneKindWords } from '../Panes';
 import {
   chipLanes, dotSize, laneInk, laneShares, largestCount, overviewColumns, pickVersion, shortDate, shortStamp, topicCommits, topicDimmed, topicFiles, topicRequests, versionName, visibleTopics,
   type WorkMapCommit, type WorkMapModel, type WorkMapTopic, type WorkMapVersion,
@@ -95,7 +95,7 @@ describe('versions', () => {
 
 describe('the pane', () => {
   it('is a slim pane that says what it is', () => {
-    expect(slimKinds.has('workmap')).toBe(true);
+    expect(slimKind('workmap')).toBe(true);
     expect(paneKindWords('workmap', (key) => key)).toBe('workMap.title');
   });
 });

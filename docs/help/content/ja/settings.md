@@ -10,9 +10,7 @@ section: settings
 - {{ui:settings.display.themeLabel}}: {{ui:settings.display.themeDarkMac}}または{{ui:settings.display.themeLightMac}}。サイドバー下部のボタンでも切り替えられます。
 - {{ui:settings.display.languageLabel}}: アプリの言語。[言語を変更する](getting-started.md#language)を参照してください。
 - {{ui:settings.display.statusLineToggle}}: Claudeの設定にあるステータスラインのコマンドを実行し、入力欄の下に表示します。
-- {{ui:settings.display.browserToggle}}: ブラウザペインを有効にします。アプリを開き直すと適用されます。
 - {{ui:settings.delegation.toggle}}: 初期状態でオンです。Claudeペインが専用のworktreeで子ペインを開けるようになり、実行中のClaudeペインで{{kbd:⌘Enter}}を押すとリクエストが新しい子ペインで実行されます。[Mightyオーケストレーション](delegation.md#enable)を参照してください。
-- {{ui:agentTerminal.urlOpen.settingTitle}}: エージェントが開いたリンクをどこで開くかを決めます。
 
 ![[settings-general]]
 

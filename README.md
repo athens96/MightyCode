@@ -39,7 +39,7 @@ AI CLI는 앱을 처음 열 때 나오는 **필요한 도구** 화면에서 골�
 
 pi와 opencode는 Node.js가, Mac의 Hermes는 Git이 필요합니다.
 
-> **Windows:** 코드 서명이 없어 Windows(SmartScreen)가 처음 실행을 막을 수 있습니다. 그러면 **추가 정보** → **실행**을 누르세요. Visual C++ 런타임을 찾지 못한다고 하면 [Microsoft Visual C++ 재배포 가능 패키지(v14)](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)를 설치하세요. 앱 화면과 터미널·브라우저 창은 Microsoft Edge WebView2 런타임으로 그립니다(없으면 이전 WinUI 화면으로 열리고 런타임이 없다고 알려 줍니다). .NET 런타임은 설치 프로그램과 zip에 들어 있습니다.
+> **Windows:** 코드 서명이 없어 Windows(SmartScreen)가 처음 실행을 막을 수 있습니다. 그러면 **추가 정보** → **실행**을 누르세요. Visual C++ 런타임을 찾지 못한다고 하면 [Microsoft Visual C++ 재배포 가능 패키지(v14)](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)를 설치하세요. 앱 화면과 터미널 창은 Microsoft Edge WebView2 런타임으로 그립니다(없으면 이전 WinUI 화면으로 열리고 런타임이 없다고 알려 줍니다). .NET 런타임은 설치 프로그램과 zip에 들어 있습니다.
 
 **업데이트:** **새 버전을 자동으로 받아 설치**가 켜져 있으면(처음부터 켜져 있습니다) 앱이 열 때와 6시간마다 새 버전을 확인하고, 받아서 서명을 확인한 뒤 준비해 둡니다. 준비된 업데이트는 앱을 종료할 때 설치되고, 앱이 한동안 쉬고 있으면 1분 알림 뒤 다시 시작하며 설치합니다(열려 있던 워크스페이스와 창은 그대로 돌아옵니다). 직접 하려면 **설정 → 앱 정보 → 앱 업데이트**에서 확인하고 **지금 다시 시작**을 누릅니다. 휴대폰 앱에서도 연결된 컴퓨터의 앱을 업데이트할 수 있습니다. AI CLI 업데이트는 따로 **설정 → CLI → CLI 업데이트**에서 합니다.
 
@@ -64,7 +64,7 @@ pi와 opencode는 Node.js가, Mac의 Hermes는 Git이 필요합니다.
 **화면 구성** — [화면 구성](docs/help/content/ko/layout.md)
 - 사이드바: 워크스페이스 검색(⌘K), **작업 현황**, 워크스페이스·실행 창 목록. 경계선을 끌어 폭을 바꾸고, 두 번 클릭하면 기본 폭, ⌃⌘S로 접고 펼칩니다.
 - **작업 현황**: 모든 워크스페이스의 실행 창을 상태 순으로 모으고, 실행 중·응답 대기·완료 개수와 계정 사용량을 보여 줍니다.
-- 실행 창은 에이전트(Claude, Codex, Antigravity, pi, opencode, Hermes), 터미널, 브라우저, 파일 중 하나입니다. 탭으로 겹치거나 좌우·상하로 나누고, 배치는 워크스페이스마다 저장됩니다. Claude를 뺀 에이전트 창에는 **베타** 표시가 붙습니다.
+- 실행 창은 에이전트(Claude, Codex, Antigravity, pi, opencode, Hermes), 터미널, 파일 중 하나입니다. 웹 링크는 기본 브라우저에서 열립니다. 탭으로 겹치거나 좌우·상하로 나누고, 배치는 워크스페이스마다 저장됩니다. Claude를 뺀 에이전트 창에는 **베타** 표시가 붙습니다.
 - 에이전트 창을 추가할 때 이 폴더의 이전 세션을 골라 이어갈 수 있습니다.
 
 **에이전트 창** — [에이전트 창](docs/help/content/ko/agent-pane.md)
@@ -98,18 +98,17 @@ pi와 opencode는 Node.js가, Mac의 Hermes는 Git이 필요합니다.
 - CLI 로그인이 만료되면 입력창 위의 복구 카드에서 **다시 로그인**하고, 끝나면 실패한 요청을 다시 보냅니다.
 - 턴이 끝났지만 백그라운드 작업이 남아 있으면 입력창 위의 줄에서 끝난 수와 도는 수를 봅니다. 휴대폰에도 같은 카드와 줄이 뜹니다.
 
-**터미널·파일·브라우저 창** — [터미널·파일·브라우저](docs/help/content/ko/terminal-files-browser.md)
+**터미널·파일 창** — [터미널·파일 창](docs/help/content/ko/terminal-files-browser.md)
 - 터미널 창(⌘T)은 워크스페이스 폴더에서 열리는 실제 터미널입니다. 에이전트가 사용자가 봐야 할 명령을 실행하면 전용 에이전트 터미널이 생깁니다.
 - 파일 창(⇧⌘E)은 읽기 전용으로 소스·Markdown·이미지·PDF를 미리 봅니다.
-- 브라우저 창은 실험 기능이라 **설정 → 일반**에서 켜고 앱을 다시 열어야 합니다. Mac에서는 Apple Silicon에서만 동작합니다.
 
 **설정** — [설정](docs/help/content/ko/settings.md)
-- 일반(테마·언어·글자 크기와 글꼴·상태 줄·브라우저·마이티 오케스트레이션), 모델(작업 단계별 모델), 스타일, 구성 요소(필요한 도구, 내 작업 도구 모음), CLI(로그인·업데이트), 모바일 리모트, 원격 연결 (Tailscale), 펫과 알림, 앱 정보(업데이트·데이터 위치) 탭이 있습니다.
+- 일반(테마·언어·글자 크기와 글꼴·상태 줄·마이티 오케스트레이션), 모델(작업 단계별 모델), 스타일, 구성 요소(필요한 도구, 내 작업 도구 모음), CLI(로그인·업데이트), 모바일 리모트, 원격 연결 (Tailscale), 펫과 알림, 앱 정보(업데이트·데이터 위치) 탭이 있습니다.
 
 **원격 연결 (Tailscale)** — [원격 연결](docs/help/content/ko/remote.md)
 - Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 Tailscale로 이어, 한쪽에서 다른 컴퓨터의 워크스페이스를 열고 그 컴퓨터의 CLI·계정으로 Claude·Codex·Antigravity와 명령을 실행합니다. 파일은 복사하지 않습니다.
 - 공유하는 컴퓨터는 **설정 → 원격 연결 (Tailscale) → 이 컴퓨터 공유**에서 워크스페이스를 고르고 주소와 연결 키를 알려 줍니다. 연결하는 컴퓨터는 **다른 컴퓨터 연결**에 그 주소와 키를 넣고 워크스페이스를 엽니다.
-- 원격 창도 마이티 보기와 승인·질문·계획 카드를 그대로 씁니다. 마이티 오케스트레이션, 파일·브라우저 창, 파일을 읽는 스타일, pi·opencode·Hermes 창은 원격 워크스페이스에서 쓸 수 없고, 휴대폰에는 보이지 않습니다. Windows에서 공유하려면 방화벽 규칙 하나를 더합니다(관리자 확인 한 번).
+- 원격 창도 마이티 보기와 승인·질문·계획 카드를 그대로 씁니다. 마이티 오케스트레이션, 파일 창, 파일을 읽는 스타일, pi·opencode·Hermes 창은 원격 워크스페이스에서 쓸 수 없고, 휴대폰에는 보이지 않습니다. Windows에서 공유하려면 방화벽 규칙 하나를 더합니다(관리자 확인 한 번).
 
 **휴대폰 원격** — [휴대폰 원격](docs/help/content/ko/phone.md)
 - 컴퓨터(Mac 또는 Windows)의 **설정 → 모바일 리모트**에서 연결을 허용하고 QR 코드로 휴대폰을 연결합니다. 공유기 포트나 VPN이 필요 없고, 릴레이는 내용을 볼 수 없습니다. 같은 Tailscale 네트워크에 있으면 릴레이 없이 바로 연결합니다(**Tailscale로 직접 연결**, 기본 켜짐).
@@ -120,7 +119,7 @@ pi와 opencode는 Node.js가, Mac의 Hermes는 Git이 필요합니다.
 
 **Windows에서 다른 점** — [Windows](docs/help/content/ko/windows.md)
 - 같은 기능을 같은 이름으로 제공하며, 창 제목에 베타 표시가 붙습니다. ⌘ 대신 Ctrl을 쓰고, 사이드바 접기는 Ctrl+B, 원격 화면 멈추기는 Ctrl+Alt+Esc입니다. 메뉴 막대는 없습니다.
-- CLI 로그인은 별도의 Windows 터미널 창에서, 터미널 창은 Windows PowerShell로, 브라우저 창은 WebView2로 엽니다.
+- CLI 로그인은 별도의 Windows 터미널 창에서, 터미널 창은 Windows PowerShell로 엽니다.
 
 ## 직접 빌드하기
 
@@ -141,7 +140,7 @@ bash scripts/test-native-macos.sh --filter "AppUpdateTests|AttachmentTests"
 
 - 로컬에서는 테스트를 `--filter`로 골라 돌립니다. 전체 테스트는 CI에서 돌고, 로컬에서 꼭 전부 돌리려면 `MIGHTY_FULL_SUITE=1`을 붙입니다.
 - `/Applications`에 설치하거나 갱신할 때는 `bash scripts/install-macos.sh`를 씁니다. 실행 중인 앱이 끝나기를 기다렸다가 백업 후 교체하고 다시 엽니다. 실행 중인 앱의 파일을 직접 덮어쓰면 macOS 입력기 연결이 끊겨 한글이 자모로 풀립니다.
-- 내장 브라우저(Apple Silicon)를 넣으려면 엔진을 받은 뒤 옵션을 켜고 빌드합니다: `bash scripts/fetch-browser-engine.sh` → `MIGHTY_BROWSER_ENGINE=1 bash scripts/build-macos.sh`. 자세한 내용은 [브라우저 문서](docs/browser-pane.md)에 있습니다.
+- 앱 안 브라우저는 없습니다(0.5에서 뺌): 웹 페이지는 기본 브라우저에서 열리고, 빌드에 브라우저 엔진을 넣지 않습니다.
 
 임시 프로필로 앱 시작과 셸 실행을 확인할 수 있습니다. 실제 AI 요청은 보내지 않습니다.
 

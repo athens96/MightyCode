@@ -6,11 +6,9 @@ use crate::app_update_view::Words;
 use crate::locale::Locale;
 
 /// Each Windows key whose Mac row says something else: Swift's key, or None when the Mac shows no such row.
-pub const MAC_KEYS: [(&str, Option<&str>); 7] = [
+pub const MAC_KEYS: [(&str, Option<&str>); 6] = [
     // ⌘Enter, not Ctrl+Enter (SettingsView.swift:375).
     ("settings.delegation.descriptionWindows", Some("settings.delegation.description")),
-    // The engine the switch starts on the Mac is Chromium (CEF), not WebView2 (SettingsView.swift:382).
-    ("windows.settings.browserDescription", Some("settings.display.browserDescription")),
     // ⌘=, ⌘− and ⌘0 in the View menu (SettingsView.swift:313).
     ("settings.text.noteWindows", Some("settings.text.note")),
     // Windows' note names PowerShell and Ctrl keys; Swift's (`runtimeNote`, "SwiftUI · AppKit") names a runtime this app is not.

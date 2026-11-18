@@ -22,9 +22,6 @@ section: faq
 > [!warning]
 > アプリの実行中に、アプリのファイルを上書きしたり、アプリを2つ起動したりしないでください。macOSの入力メソッドとの接続が切れ、ハングルが字母に分解されることがあります。アップデートは、ダウンロード済みのものをアプリが終了時にインストールするのに任せるか、アプリ内の{{ui:settings.appUpdate.restartNowButton}}を使ってください([アップデート](getting-started.md#update))。
 
-## ブラウザペインが空になっている {#browser-empty}
-ブラウザペインは最初はオフになっています。{{ui:settings.nav.general}}で{{ui:settings.display.browserToggle}}をオンにして、アプリを開き直してください。[ブラウザペイン](terminal-files-browser.md#browser)を参照してください。
-
 ## Antigravityがコマンドやファイルの書き込みを拒否する {#antigravity-denied}
 Antigravityは作業の途中で確認できないため、確認が必要な操作を飛ばしてターンを終えます。するとペインに、拒否した操作を並べたカードが表示されます。{{ui:permission.allowOnce}}または{{ui:antigravity.permission.allowAlways}}を押すと、同じ会話で続きが進みます。ルールのファイルを自分で編集する必要はありません。[Antigravityの権限カード](approvals.md#antigravity-permission)を参照してください。
 

@@ -1,5 +1,5 @@
 //! What a remote workspace's panes may do (C# `RemoteWorkspaceFeatures`, `RemoteSecretCopy`, R\RemoteWorkspaceFeatures.cs; plan §1.6):
-//! delegation, the files pane, the browser pane, styles that read files, the local terminal, agent I/O tools, the status line and the
+//! delegation, the files pane, styles that read files, the local terminal, agent I/O tools, the status line and the
 //! git badge all read this PC's disk, network or processes, so a remote workspace has none of them. The add-pane menu is mighty-core's
 //! `add_pane::entries_for`. Owner: W8-D.
 
@@ -19,7 +19,7 @@ pub fn local_path(workspace: Option<&Workspace>) -> Option<&str> {
     workspace.filter(|w| w.remote.is_none()).and_then(|w| w.path.as_deref())
 }
 
-/// `AllowsLocalOnly(workspace)`: delegation, files, browser, file-reading styles, agent I/O, the status line and the git badge.
+/// `AllowsLocalOnly(workspace)`: delegation, files, file-reading styles, agent I/O, the status line and the git badge.
 pub fn allows_local_only(workspace: Option<&Workspace>) -> bool {
     workspace.is_none_or(|w| w.remote.is_none())
 }

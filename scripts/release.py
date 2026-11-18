@@ -679,17 +679,19 @@ def read_sha256_file(path):
         return f.read().split()[0].lower()
 
 
-MAC_ENGINE = "MightyCode.app/Contents/Frameworks/Chromium Embedded Framework.framework/"
+# The browser engine 0.4.x bundled (CEF and its bridge). 0.5 has no in-app browser (web pages open in the default browser), so a zip
+# that still holds one is a stale build.
+MAC_ENGINE = ("MightyCode.app/Contents/Frameworks/Chromium Embedded Framework.framework/", "MightyCode.app/Contents/Frameworks/MightyCEFBridge.dylib")
 
 
 def check_mac_package(path, version):
-    """A Mac zip a release can ship: this version, the update channel's key and address, and the bundled browser engine. Which app it
+    """A Mac zip a release can ship: this version, the update channel's key and address, and no browser engine. Which app it
     holds is reported too (Info.plist's MightyEngine: `tauri` for the Rust build of 0.5, none for the Swift app)."""
     import plistlib, zipfile
     try:
         with zipfile.ZipFile(path) as z:
             info = plistlib.loads(z.read("MightyCode.app/Contents/Info.plist"))
-            engine = any(n.startswith(MAC_ENGINE) for n in z.namelist())
+            engine = any(n.startswith(MAC_ENGINE) for n in z.namelist())  # str.startswith takes the tuple
     except (OSError, KeyError, zipfile.BadZipFile, plistlib.InvalidFileException) as e:
         raise ReleaseError(f"Mac zip을 읽지 못했습니다: {e}")
     problems = []
@@ -699,12 +701,12 @@ def check_mac_package(path, version):
         problems.append("업데이트 공개 키가 없거나 다름 (이 앱은 업데이트를 확인하지 못함)")
     if info.get("MightyUpdateManifestURL") != f"{PUBLIC_BASE}/latest.json":
         problems.append("업데이트 주소가 없거나 다름")
-    if not engine:
-        problems.append("브라우저 엔진(Chromium Embedded Framework)이 들어 있지 않음")
+    if engine:
+        problems.append("브라우저 엔진(Chromium Embedded Framework)이 들어 있음: 0.5에는 앱 안 브라우저가 없으니 예전 빌드")
     if problems:
         raise ReleaseError("Mac zip을 릴리스할 수 없습니다: " + "; ".join(problems)
                            + " — main push의 native-macos.yml 빌드인지 확인하세요")
-    say("  Mac zip: 버전·업데이트 키·주소·브라우저 엔진 확인"
+    say("  Mac zip: 버전·업데이트 키·주소 확인, 브라우저 엔진 없음"
         + f" (앱: {'Rust (MightyEngine ' + info['MightyEngine'] + ')' if info.get('MightyEngine') else 'Swift'})")
 
 

@@ -50,16 +50,12 @@ pub struct Group {
 }
 
 /// `SettingsGroups(category)`: each category's boxes in the Mac's order. A registered slot keeps the heading Core gives it; the boxes
-/// the Mac draws inside a slot's tab (agent links, the toolkit, screen view) take theirs from the catalogue.
+/// the Mac draws inside a slot's tab (the toolkit, screen view) take theirs from the catalogue.
 pub fn groups(locale: &Locale, category: &str) -> Vec<Group> {
     let slot = |id: &str, build: Builder| Group { title: sections::title_of(locale, id).unwrap_or_default(), build, beta: false };
     let titled = |key: &str, build: Builder, beta: bool| Group { title: locale.get(key), build, beta };
     match category {
-        "general" => vec![
-            slot(sections::DISPLAY, general::display),
-            titled("settings.text.sectionTitle", general::text, false),
-            titled("agentTerminal.urlOpen.settingTitle", general::agent_links, false),
-        ],
+        "general" => vec![slot(sections::DISPLAY, general::display), titled("settings.text.sectionTitle", general::text, false)],
         "models" => vec![slot(sections::PHASE_MODELS, models::phase_models)],
         "styles" => vec![slot(sections::STYLES, styles::styles)],
         "tools" => vec![slot(sections::COMPONENTS, tools::components), titled("settings.toolkit.sectionTitle", tools::toolkit, false)],
@@ -269,10 +265,7 @@ mod tests {
             let boxes = groups(&locale, category.id);
             assert!(!boxes.is_empty() && boxes.iter().all(|g| !g.title.is_empty()), "{}", category.id);
         }
-        assert_eq!(
-            titles("general"),
-            vec!["화면".to_string(), locale.get("settings.text.sectionTitle"), locale.get("agentTerminal.urlOpen.settingTitle")]
-        );
+        assert_eq!(titles("general"), vec!["화면".to_string(), locale.get("settings.text.sectionTitle")]);
         assert_eq!(
             titles("cli"),
             vec![

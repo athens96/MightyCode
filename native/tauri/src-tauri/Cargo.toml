@@ -48,7 +48,7 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 sys-locale.workspace = true
-# unstable: child webviews of the main window (the browser panes' native views, src/surface.rs).
+# unstable: the app's webviews found by label (`Manager::get_webview`: the smokes, the help capture, perf, native.rs).
 tauri = { workspace = true, features = ["unstable"] }
 tokio = { workspace = true, features = ["sync", "io-util", "time", "macros"] }
 

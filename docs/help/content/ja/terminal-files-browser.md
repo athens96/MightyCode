@@ -1,9 +1,9 @@
 ---
-title: ターミナル・ファイル・ブラウザのペイン
+title: ターミナル・ファイルのペイン
 order: 7
 section: terminal-files-browser
 ---
-エージェントペインの横に、ターミナル、ファイル、ブラウザのペインを一緒に開いておけます。
+エージェントペインの横に、ターミナルとファイルのペインを一緒に開いておけます。
 
 ## ターミナルペイン {#terminal}
 ワークスペースのフォルダで開く本物のターミナルです。
@@ -34,22 +34,5 @@ ClaudeやCodexがユーザーに見せる必要のあるコマンド(開発サ�
 
 ![[files-pane]]
 
-## ブラウザペイン {#browser}
-アプリ内でWebページを開くペインです。試験運用中の機能のため、最初はオフになっています。
-1. {{ui:menu.settings}} → {{ui:settings.nav.general}}で{{ui:settings.display.browserToggle}}をオンにします。
-2. アプリを開き直します。
-3. {{ui:workspace.addPane}} → {{ui:browser.newTab}}を選びます。
-4. アドレスを入力し、{{ui:browser.back}}、{{ui:browser.forward}}、{{ui:browser.reload}}を使います。
-
-サインインの状態はワークスペースごとに別々に保存されます。
-
-> [!note]
-> ブラウザエンジンはAppleシリコン搭載のMacでのみ動作します。エンジンが含まれていないビルドでは、ペインに案内が表示されます。
-
-### エージェントがリンクを開くとき {#agent-links}
-エージェントがWebページを開こうとすると、ペイン内に{{ui:agentTerminal.urlOpen.dialogTitle}}カードが表示されます。
-- {{ui:agentTerminal.urlOpen.inAppButton}}または{{ui:agentTerminal.urlOpen.externalButton}}ボタンを選びます。
-- {{ui:agentTerminal.urlOpen.rememberToggle}}をオンにすると、次回からは確認しません。
-- 30秒以内に選ばなかった場合は、アプリで開きます。ブラウザペインがオフの場合は、システムのブラウザで開きます。
-
-この選択は、{{ui:settings.nav.general}}の{{ui:agentTerminal.urlOpen.settingTitle}}で変更できます: {{ui:agentTerminal.urlOpen.settingAsk}}、{{ui:agentTerminal.urlOpen.settingInApp}}、{{ui:agentTerminal.urlOpen.settingExternal}}。
+## Webリンク {#web-links}
+返答の中のWebリンクや、エージェントが開くWebページは、既定のブラウザで開きます。

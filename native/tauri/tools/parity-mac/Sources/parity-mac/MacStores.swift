@@ -212,14 +212,13 @@ private func fullCase(local: String, worktree: String, remote: Workspace) -> [St
     let codex = session("pane-codex-5", workspace: w1, kind: "claude", provider: "codex", extra: ["settings": codexSettings, "todoProgress": codexTodos])
     let noLogs: [Any] = []
     let shell = session("pane-shell-3", workspace: w1, kind: "shell", provider: "claude", extra: ["workingFolder": worktree, "status": "idle", "logs": noLogs])
-    let browser = session("pane-browser-4", workspace: w1, kind: "browser", provider: "claude",
-                          extra: ["workspaceProfileKey": "profile-ws-local-1", "ownerSessionId": "pane-claude-1", "logs": noLogs, "status": "idle"])
+    // No browser pane: 0.5 has none and drops one a 0.4 Mac saved (mighty-core normalize.rs `an_old_browser_pane_is_dropped_on_load`).
     let remotePane = session("pane-remote-6", workspace: remote.id, kind: "claude", provider: "claude", extra: [:])
 
     let none: [Any] = []
     var tabs: [String: Any] = ["id": "node-tabs", "kind": "tabs", "sessionIds": ["pane-claude-1", "pane-child-2"], "selectedSessionId": "pane-claude-1"]
     tabs["ratio"] = 0.5; tabs["children"] = none
-    var others: [String: Any] = ["id": "node-others", "kind": "tabs", "sessionIds": ["pane-codex-5", "pane-shell-3", "pane-browser-4"]]
+    var others: [String: Any] = ["id": "node-others", "kind": "tabs", "sessionIds": ["pane-codex-5", "pane-shell-3"]]
     others["ratio"] = 0.5; others["children"] = none
     var root: [String: Any] = ["id": "node-root", "kind": "split", "axis": "horizontal", "ratio": 0.62]
     root["sessionIds"] = none; root["children"] = [tabs, others]
@@ -238,7 +237,7 @@ private func fullCase(local: String, worktree: String, remote: Workspace) -> [St
                                     "hostName": remote.remote?.hostName ?? ""]
     let remote1: [String: Any] = ["id": remote.id, "name": remote.name, "path": remote.path, "createdAt": remote.createdAt, "remote": reference]
 
-    var s: [String: Any] = ["version": 1, "workspaces": [local1, remote1], "sessions": [claude, child, codex, shell, browser, remotePane]]
+    var s: [String: Any] = ["version": 1, "workspaces": [local1, remote1], "sessions": [claude, child, codex, shell, remotePane]]
     s["activeWorkspaceId"] = w1; s["activeSessionId"] = "pane-claude-1"; s["layout"] = "columns"; s["theme"] = "light"; s["sidebarWidth"] = 300
     s["paneLayouts"] = [w1: root]; // Every workspace's mode, as Swift's normalize always writes them (a workspace left out takes each normalize's own default).
     s["paneLayoutModes"] = [w1: "custom", remote.id: "tabs"]; s["paneLayoutActiveSessionIds"] = [w1: "pane-claude-1"]
@@ -476,11 +475,12 @@ func pairingRead(_ folder: URL, expected: URL) async {
 
 // MARK: - The defaults keys
 
-/// The UserDefaults keys MightyCore names publicly (the app target's own are listed in Rust's table from the Swift source).
+/// The UserDefaults keys MightyCore names publicly (the app target's own are listed in Rust's table from the Swift source), but
+/// `WebOpenChoiceStore.defaultsKey`: 0.5 has no in-app browser and leaves that key alone (mighty-platform prefs.rs `SWIFT_KEYS`).
 func defaultsKeys() {
     emit(["keys": [
         DelegationSwitch.defaultsKey: "bool", TextAppearance.scaleKey: "double", TextAppearance.familyKey: "string",
-        TextAppearance.transcriptFamilyKey: "string", TextAppearance.codeFamilyKey: "string", WebOpenChoiceStore.defaultsKey: "dictionary",
+        TextAppearance.transcriptFamilyKey: "string", TextAppearance.codeFamilyKey: "string",
         CompletionWebhook.defaultsKey: "string", AppLanguage.systemInterfaceKey: "array",
     ]])
 }

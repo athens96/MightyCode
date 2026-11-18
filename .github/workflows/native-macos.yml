@@ -131,29 +131,18 @@ jobs:
         run: |
           cargo --version && rustc --version || { echo "::error::no Rust toolchain on this runner (install rustup there, or dispatch with hosted)"; exit 1; }
           rustc -vV | grep -qx 'host: aarch64-apple-darwin' || { echo "::error::the self-hosted Mac's Rust is not for arm64"; exit 1; }
-      # A push to main builds the package a release ships, so it carries the pinned browser engine
-      # (CEF, BrowserEngine.lock) as the Mac release zips always have; other runs build without it.
-      - name: Restore the pinned browser engine (main)
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && runner.environment == 'github-hosted'
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/MightyCode/browser-engine
-          key: browser-engine-${{ hashFiles('native/macos/BrowserEngine.lock') }}
-      - name: Fetch the pinned browser engine (main)
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        run: bash scripts/fetch-browser-engine.sh
+      # 0.5 bundles no browser engine: there is no in-app browser, web pages open in the default browser.
       - name: Build the Rust app, its bundle and zip, and the 0.4.x stager's verdict
         id: build-app
         env:
           # The update channel's address and public key, as native-windows.yml stamps them; repository variables override.
           MIGHTY_UPDATE_URL: ${{ vars.MIGHTY_UPDATE_URL || 'https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/latest.json' }}
           MIGHTY_UPDATE_PUBLIC_KEY: ${{ vars.MIGHTY_UPDATE_PUBLIC_KEY || 'C02DD3qWG+A5gJdYwpaEnvpzYugo354CLtUtU+oXmZ4=' }}
-          ENGINE: ${{ (github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '--engine' || '' }}
           # Ad-hoc, as on GitHub's runners: on the self-hosted Mac the developer's own signing identity (and a
           # keychain prompt) must never come into CI. The notarize job signs with the Developer ID.
           MIGHTY_CODESIGN_IDENTITY: '-'
         # Packs release/MightyCode-macos.zip and applies the size gate itself.
-        run: bash scripts/build-tauri-macos.sh $ENGINE
+        run: bash scripts/build-tauri-macos.sh
       - name: Gate the release package size before upload
         run: scripts/check-release-size.sh release/MightyCode-macos.zip
       # Without notarization (any branch, or main before the repository variable
@@ -170,7 +159,7 @@ jobs:
     # The app's GUI checks and the help screenshots, on a GitHub runner with the app the build job made: they
     # launch the app (a second instance on a developer's Mac breaks its Korean input) and the help capture puts
     # demo folders in the home folder, so they never run on the self-hosted Mac. 0.5: the Tauri smoke
-    # (native/tauri/src-tauri/src/smoke.rs: the page, the terminal, the browser, setup, files, updates, …) in place of the
+    # (native/tauri/src-tauri/src/smoke.rs: the page, the terminal, setup, files, updates, …) in place of the
     # Swift app's GUI, terminal, graph, setup, work map and delegation smokes; the help capture is the Rust app's (plan D15).
     needs: [changes, macos]
     if: needs.changes.outputs.run == 'true'

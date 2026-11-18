@@ -5,7 +5,7 @@ import { toneOf, type Tone } from '@/lib/status-tone';
  * The small mark before a pane's title (concept A, "글리프 행"): a turning spark while it
  * runs, an amber "?" disc while it waits on the user, a check when done, a slashed ring
  * when stopped, a red "!" disc on error. An idle pane wears its own glyph instead — a
- * terminal for a shell, a globe for a browser, a quiet ring for an agent — and so does a
+ * terminal for a shell or an agent's terminal, a quiet ring for an agent — and so does a
  * status word the host adds later, rather than a state colour it did not earn.
  */
 export type GlyphShape =
@@ -15,7 +15,6 @@ export type GlyphShape =
   | 'slashedRing'
   | 'alert'
   | 'terminal'
-  | 'globe'
   | 'ring';
 
 export interface StatusGlyphSpec {
@@ -25,7 +24,6 @@ export interface StatusGlyphSpec {
 
 function idleShape(kind: string | undefined): GlyphShape {
   if (kind === 'shell' || kind === 'agent-terminal') return 'terminal';
-  if (kind === 'browser' || kind === 'agent-browser') return 'globe';
   return 'ring';
 }
 

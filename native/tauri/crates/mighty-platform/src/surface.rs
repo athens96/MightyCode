@@ -5,7 +5,8 @@
 //! | kind | Windows | Mac |
 //! |---|---|---|
 //! | terminal | `web` (xterm.js in the page, ConPTY) | `native` (Ghostty's NSView, libghostty) |
-//! | browser | `native` (a WebView2 child webview) | `native` (CEF or WKWebView, chosen by `browser.engineEnabled`) |
+//!
+//! 0.5 has no in-app browser (a web page opens in the user's default browser), so a terminal is the only kind.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -16,17 +17,15 @@ use crate::{BoxFuture, Result};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SurfaceKind {
     Terminal,
-    Browser,
 }
 
 impl SurfaceKind {
-    pub const ALL: [SurfaceKind; 2] = [SurfaceKind::Terminal, SurfaceKind::Browser];
+    pub const ALL: [SurfaceKind; 1] = [SurfaceKind::Terminal];
 
     /// The name the protocol uses (`surface` of `surfaceBounds`, the keys of the `host` push's `surfaces`).
     pub fn name(self) -> &'static str {
         match self {
             SurfaceKind::Terminal => "terminal",
-            SurfaceKind::Browser => "browser",
         }
     }
 
@@ -94,8 +93,6 @@ pub struct LogicalRect {
 pub struct SurfaceState {
     pub bounds: DeviceRect,
     pub visible: bool,
-    /// A browser's current address.
-    pub url: Option<String>,
 }
 
 /// One native view over the page.
@@ -113,59 +110,6 @@ pub trait NativeSurface: Send + Sync {
     fn snapshot(&self) -> BoxFuture<'_, Result<Option<String>>>;
     fn inspect(&self) -> BoxFuture<'_, Result<SurfaceState>>;
     fn close(&self) -> Result<()>;
-}
-
-/// What a browser view tells its host as it browses (the engine's events C#'s pane follows, MainWindow.WebShell.Panes.cs:385-395).
-/// Sent on the OS's UI thread: a listener must not block.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BrowserEvent {
-    /// A navigation ended: the address the engine reports (else the one it started with) and whether it succeeded. The host's
-    /// history follows these (C# `BrowserHistory.Visit` on `NavigationCompleted`).
-    Navigated { url: Option<String>, success: bool },
-    /// The page asked for a new window (`window.open`, a link to one): refused, nothing opened.
-    PopupRefused,
-    /// A download started: cancelled.
-    DownloadRefused,
-    /// The view took the keyboard (a press in the page): its pane becomes the active one.
-    Focused,
-}
-
-/// Where a browser view sends its [`BrowserEvent`]s.
-#[derive(Clone)]
-pub struct BrowserListener(Arc<dyn Fn(BrowserEvent) + Send + Sync>);
-
-impl BrowserListener {
-    pub fn new(listener: impl Fn(BrowserEvent) + Send + Sync + 'static) -> BrowserListener {
-        BrowserListener(Arc::new(listener))
-    }
-
-    pub fn send(&self, event: BrowserEvent) {
-        (self.0)(event);
-    }
-}
-
-impl std::fmt::Debug for BrowserListener {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("BrowserListener")
-    }
-}
-
-impl PartialEq for BrowserListener {
-    fn eq(&self, other: &BrowserListener) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl Eq for BrowserListener {}
-
-/// A browser pane's view: it refuses popups and downloads, shows no script dialog, and tells its listener where it went.
-pub trait BrowserSurface: NativeSurface {
-    /// Loads `url` (already resolved: C# `BrowserAddress.Resolve`).
-    fn navigate(&self, url: &str) -> Result<()>;
-    /// The engine's own back and forward (C# `CoreWebView2.GoBack`/`GoForward`); the host's history moves with them.
-    fn go_back(&self) -> Result<()>;
-    fn go_forward(&self) -> Result<()>;
-    fn reload(&self) -> Result<()>;
 }
 
 /// A terminal the platform draws itself (the Mac's Ghostty view). Mac stage D2: the host owns the PTY (`PtyHost`, as on Windows) and
@@ -429,19 +373,6 @@ pub trait PetWindow: Send + Sync {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BrowserOptions {
-    pub pane_id: String,
-    /// The first address.
-    pub url: String,
-    /// Where its web data lives (cookies, storage): its workspace's profile (C# `BrowserProfile`), shared by that workspace's panes.
-    pub data_dir: PathBuf,
-    /// The slot it opens over (it opens shown).
-    pub bounds: DeviceRect,
-    /// Where its events go, from before its first address loads.
-    pub listener: Option<BrowserListener>,
-}
-
 #[derive(Clone, PartialEq, Eq)]
 pub struct TerminalOptions {
     pub pane_id: String,
@@ -468,17 +399,8 @@ impl std::fmt::Debug for TerminalOptions {
 /// Makes the native views of one window, and says which kinds the page must draw itself.
 pub trait SurfaceFactory: Send + Sync {
     fn drawing(&self, kind: SurfaceKind) -> Drawing;
-    fn open_browser(&self, options: BrowserOptions) -> BoxFuture<'_, Result<Box<dyn BrowserSurface>>>;
     fn open_terminal(&self, options: TerminalOptions) -> BoxFuture<'_, Result<Box<dyn TerminalSurface>>>;
     fn open_pet(&self) -> BoxFuture<'_, Result<Box<dyn PetWindow>>>;
-    /// A new browser pane's status (`ready`, `disabled`, `missing`, `failed`) with the browser setting `enabled` (latched for the
-    /// launch), where this platform decides it itself; None for the shared rule (C# `StartWebBrowserAsync`: `disabled` while the setting
-    /// is off, `missing` without the engine's runtime, else `ready`). The Mac's (M-E, plan D4): WKWebView shows pages with the setting
-    /// off, and the CEF the setting asked for at launch is `ready` once it started, else `failed`.
-    fn browser_status(&self, enabled: bool) -> Option<&'static str> {
-        let _ = enabled;
-        None
-    }
 }
 
 #[cfg(test)]
@@ -487,7 +409,7 @@ mod tests {
 
     #[test]
     fn kinds_have_the_protocol_names() {
-        assert_eq!(SurfaceKind::parse("browser"), Some(SurfaceKind::Browser));
+        assert_eq!(SurfaceKind::parse("browser"), None, "0.5 has no browser surface");
         assert_eq!(SurfaceKind::parse("terminal"), Some(SurfaceKind::Terminal));
         assert_eq!(SurfaceKind::parse("pet"), None);
         assert_eq!((Drawing::Web.name(), Drawing::Native.name()), ("web", "native"));

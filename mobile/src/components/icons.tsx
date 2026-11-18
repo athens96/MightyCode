@@ -26,7 +26,6 @@ export type IconName =
   | 'close'
   | 'check'
   | 'terminal'
-  | 'globe'
   | 'log'
   | 'flow'
   | 'pipeline'

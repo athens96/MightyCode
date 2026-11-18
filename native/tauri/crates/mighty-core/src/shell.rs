@@ -102,7 +102,7 @@ pub fn display_status(status: &str, pending: usize) -> &str {
 
 /// C# `WorkDashboard.IsCounted`: the panes the counts take in.
 pub fn is_counted(kind: &str) -> bool {
-    !matches!(kind, "files" | "workmap" | "agent-terminal" | "agent-browser")
+    !matches!(kind, "files" | "workmap" | "agent-terminal")
 }
 
 /// C# `ProviderCatalog.IsBeta`.
@@ -318,9 +318,7 @@ pub fn sidebar_detail(locale: &Locale, card: &Card, now: DateTimeOffset) -> Stri
 fn kind_words(locale: &Locale, kind: &str) -> String {
     match kind {
         "shell" => format!("{} · {}", locale.get("dashboard.kind.shell"), locale.get("phone.card.localTerminal")),
-        "browser" => locale.get("browser.tab.title"),
         "agent-terminal" => locale.get("dashboard.kind.agentTerminal"),
-        "agent-browser" => locale.get("dashboard.kind.agentBrowser"),
         "files" => locale.get("files.pane.title"),
         "workmap" => locale.get("workMap.title"),
         "claude" => locale.get("dashboard.kind.agent"),
@@ -334,14 +332,9 @@ fn dashboard_meta(locale: &Locale, card: &Card, now: DateTimeOffset) -> String {
     let s = card.session;
     match s.kind() {
         "shell" => format!("{} ·", locale.get("dashboard.kind.shell")),
-        "browser" => locale.get("browser.tab.title"),
         "files" => locale.get("files.pane.title"),
         "workmap" => locale.get("workMap.title"),
-        kind @ ("agent-terminal" | "agent-browser") => format!(
-            "{} · {}",
-            locale.get(if kind == "agent-terminal" { "dashboard.kind.agentTerminal" } else { "dashboard.kind.agentBrowser" }),
-            provider_label(s.provider())
-        ),
+        "agent-terminal" => format!("{} · {}", locale.get("dashboard.kind.agentTerminal"), provider_label(s.provider())),
         "claude" => {
             let mut parts = vec![];
             if card.model().is_some() {

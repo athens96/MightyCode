@@ -1,6 +1,6 @@
 # Mac stage: type-checks Rust for the Mac on this Windows PC, with no Mac (`cargo clippy --target aarch64-apple-darwin`). The build
 # scripts that compile C or Objective-C for the Mac (objc2-exception-helper, bundled SQLite) get a stand-in compiler (fakecc.rs) that
-# writes empty objects: a check links nothing. Linking, running and tests need the Mac runner (CI: native-tauri.yml, mac-spike.yml).
+# writes empty objects: a check links nothing. Linking, running and tests need the Mac runner (CI: native-tauri.yml).
 #
 #   .\native\tauri\scripts\mac-check.ps1                          the workspace, all targets, -D warnings
 #   .\native\tauri\scripts\mac-check.ps1 -Packages mighty-platform-macos,mightycode

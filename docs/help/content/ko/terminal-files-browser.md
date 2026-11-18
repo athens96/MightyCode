@@ -1,9 +1,9 @@
 ---
-title: 터미널·파일·브라우저 창
+title: 터미널·파일 창
 order: 7
 section: terminal-files-browser
 ---
-에이전트 창 옆에 터미널, 파일, 브라우저 창을 함께 열어 둘 수 있습니다.
+에이전트 창 옆에 터미널과 파일 창을 함께 열어 둘 수 있습니다.
 
 ## 터미널 창 {#terminal}
 워크스페이스 폴더에서 열리는 실제 터미널입니다.
@@ -34,22 +34,5 @@ Claude나 Codex가 사용자가 봐야 하는 명령(개발 서버, 로그인 �
 
 ![[files-pane]]
 
-## 브라우저 창 {#browser}
-앱 안에서 웹 페이지를 여는 창입니다. 실험 기능이라 처음에는 꺼져 있습니다.
-1. {{ui:menu.settings}} → {{ui:settings.nav.general}}에서 {{ui:settings.display.browserToggle}}를 켭니다.
-2. 앱을 다시 엽니다.
-3. {{ui:workspace.addPane}} → {{ui:browser.newTab}}을 고릅니다.
-4. 주소를 입력하고 {{ui:browser.back}}, {{ui:browser.forward}}, {{ui:browser.reload}}을 씁니다.
-
-로그인 상태는 워크스페이스마다 따로 저장됩니다.
-
-> [!note]
-> 브라우저 엔진은 Apple Silicon Mac에서만 동작합니다. 엔진이 들어 있지 않은 빌드에서는 창에 안내가 보입니다.
-
-### 에이전트가 링크를 열 때 {#agent-links}
-에이전트가 웹 페이지를 열려고 하면 창 안에 {{ui:agentTerminal.urlOpen.dialogTitle}} 카드가 뜹니다.
-- {{ui:agentTerminal.urlOpen.inAppButton}} 또는 {{ui:agentTerminal.urlOpen.externalButton}} 단추를 고릅니다.
-- {{ui:agentTerminal.urlOpen.rememberToggle}}을 켜면 다음부터 묻지 않습니다.
-- 30초 안에 고르지 않으면 앱에서 엽니다. 브라우저 창이 꺼져 있으면 시스템 브라우저로 엽니다.
-
-이 선택은 {{ui:settings.nav.general}}의 {{ui:agentTerminal.urlOpen.settingTitle}}에서 바꿉니다: {{ui:agentTerminal.urlOpen.settingAsk}}, {{ui:agentTerminal.urlOpen.settingInApp}}, {{ui:agentTerminal.urlOpen.settingExternal}}.
+## 웹 링크 {#web-links}
+답변 속 웹 링크와 에이전트가 여는 웹 페이지는 기본 브라우저에서 열립니다.

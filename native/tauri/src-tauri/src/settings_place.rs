@@ -50,19 +50,6 @@ fn number(value: Option<PrefValue>) -> Option<f64> {
     .filter(|number: &f64| number.is_finite() && *number > 0.0)
 }
 
-/// A string dictionary (`[workspaceId: value]`), each value mapped (`None` drops the entry).
-fn map(value: Option<PrefValue>, each: impl Fn(&str) -> Option<&'static str>) -> Option<IndexMap<String, Option<String>>> {
-    let Some(PrefValue::Map(entries)) = value else { return None };
-    let kept: IndexMap<String, Option<String>> = entries
-        .into_iter()
-        .filter_map(|(key, value)| match value {
-            PrefValue::Text(text) => each(&text).map(|mapped| (key, Some(mapped.to_string()))),
-            _ => None,
-        })
-        .collect();
-    (!kept.is_empty()).then_some(kept)
-}
-
 fn stored_map(values: Option<&IndexMap<String, Option<String>>>, each: impl Fn(&str) -> Option<String>) -> Option<PrefValue> {
     let entries: Vec<(String, PrefValue)> = values?
         .iter()
@@ -89,23 +76,6 @@ fn check_text(seconds: f64) -> Option<String> {
     Some(mighty_updates::app_update::dotnet::round_trip(at))
 }
 
-/// Swift's `WebOpenDestination` raw values beside the state file's (`in_app` is `inApp`).
-fn web_open_from_swift(value: &str) -> Option<&'static str> {
-    match value {
-        "in_app" => Some("inApp"),
-        "external" => Some("external"),
-        _ => None,
-    }
-}
-
-fn web_open_to_swift(value: &str) -> Option<String> {
-    match value {
-        "inApp" => Some("in_app".into()),
-        "external" => Some("external".into()),
-        _ => None,
-    }
-}
-
 /// Swift's `SettingsPane` raw values (SettingsViews.swift:155-156), the state file's too.
 const SETTINGS_PANES: [&str; 9] = ["general", "models", "styles", "tools", "cli", "mobile", "remote", "companion", "about"];
 
@@ -115,9 +85,11 @@ fn trusted(workspace: &str, fingerprint: &str) -> bool {
 }
 
 /// Every setting the Swift app keeps in UserDefaults that the state file also names (Swift's sites: LocaleBundle.swift:80,
-/// AppStore+AppUpdate.swift:31-33, WebOpenChoice.swift:108, SettingsViews.swift:205, AppStore+StatusLine.swift:20-21,
-/// CefBrowserEngine.swift:49, StatusBarUsage.swift:24, MightyGraphView.swift:118-119).
-const ENTRIES: [Entry; 12] = [
+/// AppStore+AppUpdate.swift:31-33, SettingsViews.swift:205, AppStore+StatusLine.swift:20-21, StatusBarUsage.swift:24,
+/// MightyGraphView.swift:118-119). Not the in-app browser's `agentTerminal.webOpenChoices` (WebOpenChoice.swift:108) and
+/// `browser.engineEnabled` (CefBrowserEngine.swift:49): 0.5 has no in-app browser, so they stay as Swift left them, never read or
+/// written here.
+const ENTRIES: [Entry; 10] = [
     Entry {
         key: "language",
         stored: |s| Some(PrefValue::Text(s.language_preference().to_string())),
@@ -147,11 +119,6 @@ const ENTRIES: [Entry; 12] = [
         restore: |s, v| s.app_update_manifest_url_override = text(v).filter(|u| !u.is_empty()),
     },
     Entry {
-        key: "agentTerminal.webOpenChoices",
-        stored: |s| stored_map(s.agent_web_open_choices.as_ref(), web_open_to_swift),
-        restore: |s, v| s.agent_web_open_choices = map(v, web_open_from_swift),
-    },
-    Entry {
         key: "settingsPane",
         stored: |s| s.settings_pane.clone().map(PrefValue::Text),
         restore: |s, v| {
@@ -178,11 +145,6 @@ const ENTRIES: [Entry; 12] = [
                 _ => None,
             }
         },
-    },
-    Entry {
-        key: "browser.engineEnabled",
-        stored: |s| Some(PrefValue::Bool(s.browser_engine_enabled)),
-        restore: |s, v| s.browser_engine_enabled = switch(v, false),
     },
     Entry {
         key: "usage.claudeKeychain",
@@ -322,11 +284,9 @@ mod tests {
             app_update_auto_check: false,
             app_update_last_checked_at: Some("2026-11-16T03:04:05.5000000+00:00".into()),
             app_update_manifest_url_override: Some("https://example.invalid/latest.json".into()),
-            agent_web_open_choices: Some(IndexMap::from([("w1".into(), Some("inApp".into())), ("w2".into(), Some("external".into()))])),
             settings_pane: Some("remote".into()),
             status_line_enabled: false,
             trusted_status_lines: Some(IndexMap::from([("w1".into(), Some("0123456789abcdef".into()))])),
-            browser_engine_enabled: true,
             claude_direct_usage_lookup_enabled: true,
             reference_bubble_width: Some(420.0),
             reference_bubble_height: Some(300.0),
@@ -334,7 +294,8 @@ mod tests {
         }
     }
 
-    /// Swift's own values in its domain read into the snapshot, in the state file's forms, on the Mac; Windows reads none of them.
+    /// Swift's own values in its domain read into the snapshot, in the state file's forms, on the Mac; Windows reads none of them. The
+    /// in-app browser's keys Swift kept are there too and read as nothing.
     #[test]
     fn the_mac_reads_the_settings_swift_kept_in_user_defaults() {
         let prefs = MemoryPrefs::default();
@@ -366,9 +327,8 @@ mod tests {
         assert!(!mac.app_update_auto_check);
         assert_eq!(mac.app_update_last_checked_at.as_deref(), Some("2023-11-14T22:13:20.2500000+00:00"));
         assert_eq!(mac.app_update_manifest_url_override.as_deref(), Some("https://example.invalid/m.json"));
-        assert_eq!(mac.agent_web_open_choices, Some(IndexMap::from([("w1".into(), Some("inApp".into()))])), "Swift's in_app; no stranger");
         assert_eq!(mac.settings_pane.as_deref(), Some("cli"));
-        assert!(!mac.status_line_enabled && mac.browser_engine_enabled && mac.claude_direct_usage_lookup_enabled);
+        assert!(!mac.status_line_enabled && mac.claude_direct_usage_lookup_enabled);
         assert_eq!(mac.trusted_status_lines, Some(IndexMap::from([("w1".into(), Some("feed".into()))])));
         assert_eq!((mac.reference_bubble_width, mac.reference_bubble_height), (Some(420.0), None));
     }
@@ -380,10 +340,10 @@ mod tests {
         read_into(&PlatformProfile::macos(), &MemoryPrefs::default(), &mut mac);
         assert_eq!(mac.language_preference.as_deref(), Some("system"));
         assert!(mac.app_update_auto_check && mac.status_line_enabled, "on until switched off");
-        assert!(!mac.browser_engine_enabled && !mac.claude_direct_usage_lookup_enabled, "off until switched on");
+        assert!(!mac.claude_direct_usage_lookup_enabled, "off until switched on");
         assert_eq!(mac.settings_pane.as_deref(), Some("general"));
         assert!(mac.app_update_last_checked_at.is_none() && mac.app_update_manifest_url_override.is_none());
-        assert!(mac.agent_web_open_choices.is_none() && mac.trusted_status_lines.is_none() && mac.reference_bubble_width.is_none());
+        assert!(mac.trusted_status_lines.is_none() && mac.reference_bubble_width.is_none());
     }
 
     /// What changed is written in Swift's keys and types, read back the same, and the system interface follows the language; what
@@ -404,10 +364,9 @@ mod tests {
         assert_eq!(prefs.get("AppleLanguages").unwrap(), Some(PrefValue::List(vec![PrefValue::Text("ja".into())])));
         assert_eq!(prefs.get("appUpdate.automatic").unwrap(), Some(PrefValue::Bool(false)));
         assert_eq!(prefs.get("appUpdate.lastCheck").unwrap(), Some(PrefValue::Date(1_794_798_245.5)));
-        assert_eq!(
-            prefs.get("agentTerminal.webOpenChoices").unwrap(),
-            Some(PrefValue::Map(vec![("w1".into(), PrefValue::Text("in_app".into())), ("w2".into(), PrefValue::Text("external".into()))]))
-        );
+        for retired in ["agentTerminal.webOpenChoices", "browser.engineEnabled"] {
+            assert_eq!(prefs.get(retired).unwrap(), None, "{retired} is never written");
+        }
         assert_eq!(prefs.get("mighty.referenceBubble.width").unwrap(), Some(PrefValue::Float(420.0)));
         let mut read = AppSnapshot::default();
         read_into(&PlatformProfile::macos(), &prefs, &mut read);

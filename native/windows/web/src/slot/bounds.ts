@@ -1,6 +1,5 @@
 // The NativeSlot's reports (docs/tauri-architecture.md §3): where the slot is in device pixels, whether it can show, and whether
 // something of the page covers it. Pure, so the rules are tested without a DOM; NativeSlot.tsx feeds them from the element.
-import { slotBounds } from '../panes/browser/types';
 import { overlapsAny, type Box } from '../shell/overlay';
 import type { StoreState } from '../store/store';
 import type { SurfaceKind } from './host';
@@ -36,13 +35,21 @@ export interface SurfaceActionArgs {
 }
 
 /**
- * Whether the page covers a slot: the rule the browser pane applies to its slot (src/panes/browser/BrowserView.tsx), for every
- * native view. A dialog of the host's flows, a host view the page draws (Settings, sheets) or the frame's own dialog covers every
+ * Whether the page covers a slot, for every native view. A dialog of the host's flows, a host view the page draws (Settings, sheets) or the frame's own dialog covers every
  * slot; a page menu, popover or in-page dialog (src/shell/overlay.ts) covers the slots it overlaps.
  */
 export function pageCovers(state: Pick<StoreState, 'dialogs' | 'natives' | 'shell' | 'overlays'>, slot: Box, overlays: () => readonly Box[]): boolean {
   if (state.dialogs.length > 0 || state.natives.length > 0 || (state.shell?.dialogOpen ?? false)) return true;
   return state.overlays > 0 && overlapsAny(slot, overlays());
+}
+
+/** The slot's rectangle in device pixels, whole pixels covering it; hidden (or empty) when it cannot show. */
+function slotBounds(rect: { left: number; top: number; width: number; height: number }, ratio: number, visible: boolean): SlotRect & { visible: boolean } {
+  const x = Math.round(rect.left * ratio);
+  const y = Math.round(rect.top * ratio);
+  const width = Math.max(0, Math.round((rect.left + rect.width) * ratio) - x);
+  const height = Math.max(0, Math.round((rect.top + rect.height) * ratio) - y);
+  return { x, y, width, height, visible: visible && width > 0 && height > 0 };
 }
 
 /** The report for a slot's box (CSS pixels) at `ratio` device pixels per CSS pixel. */

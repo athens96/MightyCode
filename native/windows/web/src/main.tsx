@@ -29,7 +29,7 @@ import './pending/pending.css';
 async function start(bridge: Bridge): Promise<void> {
   installTokens(document);
   const store = new Store();
-  // A terminal's output and a browser's state go to the pane that listens, not through the store (panes/channel.ts). The Rust
+  // A terminal's output and the work map's state go to the pane that listens, not through the store (panes/channel.ts). The Rust
   // host's `host` push (what it draws natively) goes to its own slice (slot/host.ts); the C# build has no such branch.
   // The Mac's menu bar pushes the items that are page UI (shell/menu.ts), in the Rust host's build only.
   bridge.onPush((message) => (import.meta.env.MODE === 'tauri' && isHostPush(message) ? applyHostPush(message)

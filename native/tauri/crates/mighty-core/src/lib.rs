@@ -8,7 +8,6 @@
 pub mod add_pane;
 pub mod app_update_view;
 pub mod attachment;
-pub mod browser;
 pub mod demo;
 pub mod design_tokens;
 pub mod graph;

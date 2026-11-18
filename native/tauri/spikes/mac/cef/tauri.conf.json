@@ -1,8 +1,0 @@
-{
-  "productName": "cef spike",
-  "mainBinaryName": "cef-spike",
-  "identifier": "dev.mightycode.spike.cef",
-  "build": { "frontendDist": "page" },
-  "app": { "windows": [], "withGlobalTauri": false, "security": { "csp": null } },
-  "bundle": { "active": false, "icon": ["../../../../../assets/icons/mightycode.png", "../../../../../assets/icons/MightyCode.icns"] }
-}

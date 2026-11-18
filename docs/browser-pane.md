@@ -1,5 +1,7 @@
 # 브라우저 창 (1단계)
 
+> **0.5에서 뺌 (2026-11-18).** 앱 안 브라우저는 없다: 웹 페이지(링크, 에이전트의 `open_url`)는 기본 브라우저에서 열린다. CEF와 그 빌드 입력(`native/macos/BrowserEngine.lock`, `native/macos/BrowserBridge/`, `scripts/fetch-browser-engine.sh`, `scripts/tests/test-browser-runtime.sh`, `MIGHTY_BROWSER_ENGINE`)은 지웠다. 아래는 Swift 0.4.x 시절의 기록이다.
+
 고정한 CEF(Chromium Embedded Framework) 엔진을 내려받아 검증하고 macOS 앱 번들에 담는 단계, 그리고 사용자가 손으로 여는 브라우저 탭. lock에는 Node 런타임도 고정돼 있지만 앱에 담지 않는다(2026-11-12): 지금 앱에서 Node를 실행하는 곳이 없고, 그것을 쓸 에이전트 제어 단계는 처음 쓸 때 lock의 `url`·`sha256`으로 nodejs.org에서 받아 데이터 폴더에 둔다(Node와 그 안의 OpenSSL·V8·ICU 등을 앱이 재배포하지 않는다). 에이전트 제어(2·3단계)와 CDP 프록시·Playwright MCP는 이 시드 밖이다.
 
 이 단계의 모든 작업은 Command Line Tools만으로 끝난다(Xcode 불필요).

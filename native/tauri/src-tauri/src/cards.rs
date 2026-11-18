@@ -45,8 +45,6 @@ fn questionnaire_answers(
 }
 
 pub fn register(methods: &mut Registry) {
-    // The agents' open_url prompt answered (agent_io.rs, W7-C).
-    methods.add("webOpenChoose", crate::agent_io::web_open_choose);
     methods.add("cards", |host: Arc<Host>, args| async move {
         let mut view = host.view();
         let id = ensure(&mut view, text(&args, "paneId"))?;

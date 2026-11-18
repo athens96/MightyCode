@@ -154,7 +154,7 @@ pub fn apply_layout_preset(view: &mut View, preset: &str) -> Result<(), String> 
     })
 }
 
-/// C# `ActivatePane`: a pane of the active workspace becomes the active one (a press inside it, a browser view taking the keyboard).
+/// C# `ActivatePane`: a pane of the active workspace becomes the active one (a press inside it, a native view taking the keyboard).
 pub fn activate_pane(view: &mut View, id: &str) -> Result<(), String> {
     if view.shows_dashboard || view.snapshot.active_session_id.as_deref() == Some(id) {
         return Ok(());
@@ -191,7 +191,7 @@ pub fn select_workspace(view: &mut View, id: &str) -> Result<(), String> {
 
 // ── panes ──
 
-/// C# `AddPane`: a shell or agent pane (`kind` "shell", "browser", "claude") in the active workspace, in `group` or the active
+/// C# `AddPane`: a shell or agent pane (`kind` "shell", "claude") in the active workspace, in `group` or the active
 /// pane's, made the active one; a 129th pane is refused with the Mac's sentence. True when it was added.
 pub(crate) fn add_pane(
     host: &Arc<Host>,
@@ -252,24 +252,6 @@ pub(crate) fn add_pane_to(
     view.layout_defaults = defaults;
     view.shows_dashboard = false;
     result.map(|()| true)
-}
-
-/// C# `AddBrowserPane`: a browser tab of the active workspace, titled as one, its web profile the workspace's.
-fn add_browser_pane(host: &Arc<Host>, group: Option<&str>) -> Result<(), String> {
-    let remote = {
-        let view = host.view();
-        view.snapshot.active_workspace_id.as_deref().and_then(|id| view.snapshot.workspace(id)).is_some_and(|w| w.remote.is_some())
-    };
-    if remote {
-        return Err(host.locale.get("remote.windows.workspace.paneUnavailable"));
-    }
-    let title = host.locale.get("browser.tab.title");
-    add_pane(host, "browser", "claude", group, |pane| RunSession {
-        title: Some(title),
-        workspace_profile_key: pane.workspace_id.clone(),
-        ..pane
-    })
-    .map(|_| ())
 }
 
 /// C# `WebAddAgentPane` (and `AddAgentPane`): an agent pane from the menu; for an agent whose sessions can be continued, the folder's
@@ -627,7 +609,6 @@ fn add_menu(host: &Host, workspace: Option<&str>) -> Value {
 async fn add_entry_here(host: &Arc<Host>, entry: &str, group: Option<String>, workspace: Option<String>) -> Result<(), String> {
     match entry {
         add_pane::SHELL => add_pane(host, "shell", "claude", group.as_deref(), |pane| pane).map(|_| ()),
-        add_pane::BROWSER => add_browser_pane(host, group.as_deref()),
         add_pane::FILES => {
             host.view().shows_dashboard = false;
             match OPEN_FILES.get() {

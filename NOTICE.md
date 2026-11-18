@@ -32,7 +32,7 @@ Mac 앱은 미리 컴파일된 WebRTC XCFramework를 포함합니다. 이 바이
 
 ### livekit/webrtc-xcframework (macOS 대안 배포)
 
-번들된 CEF와 심볼이 충돌하면 stasel/WebRTC 대신 LK- 접두사가 붙은 이 배포를 사용합니다.
+다른 구성 요소와 심볼이 충돌하면 stasel/WebRTC 대신 LK- 접두사가 붙은 이 배포를 사용합니다.
 
 - 프로젝트: livekit/webrtc-xcframework — https://github.com/livekit/webrtc-xcframework
 - 저작권: Copyright (c) 2021 WebRTC SDKs
@@ -62,10 +62,10 @@ Mac 화면 공유(BETA)의 클립보드는 휴대폰과 같은 zstd 형식으로
 라이선스 전문은 `native/licenses/`에 있고, Mac 앱은 `Contents/Resources/ThirdPartyLicenses/`, Windows 앱은 `ThirdPartyLicenses/`에 함께 들어갑니다.
 
 - **Mac 앱**
-  - Chromium Embedded Framework(브라우저 탭) — BSD 3-Clause, Chromium과 그 구성 요소의 고지는 CEF 배포본의 `CREDITS.html`(`Chromium-CREDITS.html`, 빌드가 복사). 특허가 걸린 코덱을 뺀 표준(minimal) 배포본입니다.
+  - 앱 안 브라우저가 없어 브라우저 엔진(Chromium Embedded Framework)을 담지 않습니다. 웹 페이지는 기본 브라우저에서 열립니다.
   - Ghostty(터미널, `libghostty-spm`·GhosttyKit) — MIT. 그 안에 정적으로 묶인 Oniguruma(BSD 2-Clause), FreeType(FreeType License를 따름; Portions of this software are copyright © 2026 The FreeType Project (www.freetype.org). All rights reserved.), simdutf·Wuffs(MIT를 따름), Highway(BSD 3-Clause를 따름), libpng, zlib — `Ghostty-*-LICENSE`.
   - MSDisplayLink — MIT. bash-preexec — MIT.
-  - Node.js는 앱에 담지 않습니다(`docs/browser-pane.md`).
+  - Node.js는 앱에 담지 않습니다.
 - **Windows 앱**: 자체 포함 .NET·ASP.NET Core 런타임(MIT, `dotnet-*`·`aspnetcore-*`의 라이선스와 THIRD-PARTY-NOTICES), WebView2 SDK(`WebView2-LICENSE.txt`·`WebView2-NOTICE.txt`), Windows App SDK 런타임(Microsoft 소프트웨어 사용 조건과 고지, `WindowsAppSDK-*`), 터미널의 xterm.js·addon-fit(MIT, `Assets/Terminal/`), 아래의 Lucide·Bouncy Castle·QRCoder·ZstdSharp·Win2D.
 - **릴레이와 모바일 앱**: 릴레이 서버(`relay/`)와 모바일 앱(`mobile/`)의 npm 의존성(`ws`, `@noble/curves`, `@noble/hashes`, `@noble/ciphers`, Expo 등)은 각 패키지의 `LICENSE`를 따르며 `package-lock.json`에 버전이 고정되어 있습니다. Cloudflare 릴레이(`relay/cloudflare/`)의 배포 코드에는 외부 패키지가 없습니다.
 - 펫과 앱 아이콘: `assets/`(생성 기록 `generation.md`).
@@ -106,7 +106,7 @@ The Mac app embeds a pre-compiled WebRTC XCFramework. The binary is built from t
 
 ### livekit/webrtc-xcframework (alternative macOS distribution)
 
-Used in place of stasel/WebRTC — with LK-prefixed symbols — if symbols clash with the bundled CEF.
+Used in place of stasel/WebRTC — with LK-prefixed symbols — if symbols clash with another bundled component.
 
 - Project: livekit/webrtc-xcframework — https://github.com/livekit/webrtc-xcframework
 - Copyright (c) 2021 WebRTC SDKs
@@ -135,7 +135,7 @@ The Mac screen-share (BETA) clipboard is compressed with zstd, the same format t
 
 The license texts are in `native/licenses/`; the Mac app carries them in `Contents/Resources/ThirdPartyLicenses/`, the Windows app in `ThirdPartyLicenses/`.
 
-- **Mac app**: Chromium Embedded Framework (the browser tab, BSD 3-Clause; Chromium's notices in the CEF distribution's `CREDITS.html`, copied as `Chromium-CREDITS.html`; the standard minimal build without patent-encumbered codecs). Ghostty (the terminal, MIT) with what is statically linked into it: Oniguruma (BSD 2-Clause), FreeType (under the FreeType License; Portions of this software are copyright © 2026 The FreeType Project (www.freetype.org). All rights reserved.), simdutf and Wuffs (under MIT), Highway (under BSD 3-Clause), libpng and zlib, in `Ghostty-*-LICENSE`. MSDisplayLink (MIT), bash-preexec (MIT). Node.js is not shipped (`docs/browser-pane.md`).
+- **Mac app**: no browser engine (Chromium Embedded Framework is not shipped: there is no in-app browser, web pages open in the default browser). Ghostty (the terminal, MIT) with what is statically linked into it: Oniguruma (BSD 2-Clause), FreeType (under the FreeType License; Portions of this software are copyright © 2026 The FreeType Project (www.freetype.org). All rights reserved.), simdutf and Wuffs (under MIT), Highway (under BSD 3-Clause), libpng and zlib, in `Ghostty-*-LICENSE`. MSDisplayLink (MIT), bash-preexec (MIT). Node.js is not shipped.
 - **Windows app**: the self-contained .NET and ASP.NET Core runtimes (MIT, with their THIRD-PARTY-NOTICES), the WebView2 SDK, the Windows App SDK runtime (Microsoft Software License Terms and notices), xterm.js and addon-fit (MIT, `Assets/Terminal/`), and Lucide, Bouncy Castle, QRCoder, ZstdSharp and Win2D below.
 
 ## Provider marks

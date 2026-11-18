@@ -1063,11 +1063,10 @@ fn collect_idle_facts(host: &Arc<Host>, session: &dyn mighty_platform::SessionWa
                 .as_ref()
                 .map_or(0, |app| app.rows().iter().filter(|row| row.state == mighty_core::shell::ChildState::Creating).count());
         facts.agent_runs = count(agent_runs);
-        // Permission, question and plan cards and Antigravity's card per pane, and requests to open a web page.
+        // Permission, question and plan cards and Antigravity's card per pane.
         let cards = |id: &str| {
             let card = runs.as_ref().is_some_and(|runs| runs.service.antigravity_card(id).is_some());
             mighty_workmap::dashboard::pending_with_card(&crate::panes::requests(host, id), card).total()
-                + crate::agent_io::web_open_cards(host, id).len()
         };
         facts.pending_cards = count(view.panes.keys().map(|id| cards(id)).sum());
         // Only what the person queued: delegation holds live in their own store and survive a restart.

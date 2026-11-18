@@ -74,8 +74,8 @@ pub use secrets::SecretVault;
 pub use session::{SessionCallback, SessionEnding, SessionWatch};
 pub use setup::SetupFiles;
 pub use surface::{
-    BrowserEvent, BrowserListener, BrowserOptions, BrowserSurface, DeviceRect, Drawing, LogicalPoint, LogicalRect, NativeSurface, PetEvent,
-    PetPointer, PetWindow, SurfaceFactory, SurfaceKind, SurfaceState, TerminalEvent, TerminalListener, TerminalOptions, TerminalSurface,
+    DeviceRect, Drawing, LogicalPoint, LogicalRect, NativeSurface, PetEvent, PetPointer, PetWindow, SurfaceFactory, SurfaceKind,
+    SurfaceState, TerminalEvent, TerminalListener, TerminalOptions, TerminalSurface,
 };
 pub use update::{HelperMutex, StagedUpdate, UpdateInstaller};
 pub use update_transport::{DownloadProgress, DownloadRequest, Downloaded, UpdateResponse, UpdateTransport};

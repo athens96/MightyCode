@@ -14,7 +14,7 @@ import { Pending } from '../pending/Pending';
 import { usePendingAction, type ActionResult } from '../pending/usePending';
 import type {
   AntigravityCard, BackgroundCard, Card, LoginCard, NextActionsCard, PermissionCard, PlanCard, PlanHistoryCard, QuestionnaireCard,
-  StatusLineCard, TerminalPromptCard, WebOpenCard,
+  StatusLineCard, TerminalPromptCard,
 } from './types';
 
 type Call = (method: string, args?: Record<string, unknown>) => Promise<unknown>;
@@ -71,7 +71,6 @@ export function Cards({ paneId }: { paneId: string }) {
           case 'planHistory': return <PlanHistory key="history" card={card} />;
           case 'background': return <Background key="background" card={card} call={call} />;
           case 'terminalPrompt': return <TerminalPrompt key={card.promptId} card={card} reply={reply} />;
-          case 'webOpen': return <WebOpen key={'web-' + card.requestId} card={card} reply={reply} />;
           default: return null;
         }
       })}
@@ -636,27 +635,6 @@ function TerminalPrompt({ card, reply }: { card: TerminalPromptCard; reply: Repl
         )}
       </div>
       <span className="card-hint">{t('terminalPrompt.help')}</span>
-    </div>
-  );
-}
-
-function WebOpen({ card, reply }: { card: WebOpenCard; reply: Reply }) {
-  const { t } = useServices();
-  const [remember, setRemember] = useState(false);
-  const { state, running, run } = usePendingAction();
-  const choose = (destination: string) => void run(() => reply('webOpenChoose', { requestId: card.requestId, destination, remember }));
-  return (
-    <div className="web-open" data-card="webOpen">
-      <div className="web-open-title"><span className="web-open-mark" aria-hidden="true">◍</span><strong>{t('agentTerminal.urlOpen.dialogTitle')}</strong></div>
-      <div>{t('agentTerminal.urlOpen.dialogMessage')}</div>
-      <div className="web-open-url" title={card.url}>{card.url}</div>
-      <label className="web-open-remember"><input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />{t('agentTerminal.urlOpen.rememberToggle')}</label>
-      <div className="wait-card-footer">
-        <span className="card-hint">{t('agentTerminal.urlOpen.fallbackHint', { seconds: 30 })}</span>
-        <Pending state={state} showsFailure={false} />
-        <button type="button" className="card-button small" disabled={running} onClick={() => choose('external')}>{t('agentTerminal.urlOpen.externalButton')}</button>
-        <button type="button" className="card-button small accent" disabled={running} onClick={() => choose('inApp')}>{t('agentTerminal.urlOpen.inAppButton')}</button>
-      </div>
     </div>
   );
 }

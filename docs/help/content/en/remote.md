@@ -58,7 +58,7 @@ When you connect to another computer, the workspaces that computer shares appear
 
 These are not available in a remote workspace, because they read this computer's disk or network:
 - [Mighty Orchestration](delegation.md) (child worktrees)
-- The files pane and the browser pane
+- The files pane
 - [Styles](styles.md) that read project files, status lines, and resuming earlier sessions
 
 pi, opencode and Hermes panes cannot be opened in a remote workspace yet. Remote workspaces do not appear on the [phone](phone.md).

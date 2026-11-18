@@ -5,9 +5,7 @@
 //! lists every key the Swift app reads with the type it stores, and [`from_swift`] / [`to_swift`] turn them into the forms the shared
 //! readers take (C#'s registry forms: text for a number the user picks) and back, so a setting written here still reads in the Swift
 //! app. Mac stage M-B; the Swift rules over these keys that the Swift platform checks name are here too ([`switch_on`],
-//! [`apply_to_system_interface`], [`WebOpenChoices`]), pure over a [`PrefsStore`] and tested on both OSes.
-
-use std::sync::{Arc, Mutex};
+//! [`apply_to_system_interface`]), pure over a [`PrefsStore`] and tested on both OSes.
 
 use crate::Result;
 
@@ -26,7 +24,7 @@ pub enum PrefValue {
     Date(f64),
     /// A UserDefaults array (`AppleLanguages`).
     List(Vec<PrefValue>),
-    /// A UserDefaults dictionary with text keys, in the order read (`agentTerminal.webOpenChoices`, `statusLine.trusted`).
+    /// A UserDefaults dictionary with text keys, in the order read (`statusLine.trusted`).
     Map(Vec<(String, PrefValue)>),
     /// A value of a kind the app never writes (binary, multi-string, data): present, but not readable as a setting.
     Other,
@@ -77,8 +75,10 @@ pub enum SwiftKind {
 }
 
 /// Every UserDefaults key the Swift app reads (mac-plan.md §2 B row, each from its Swift site), with the type it stores. `dialog.size.
-/// <id>.*` and `mighty.referenceBubble.*` are prefixes ([`swift_kind`]).
-pub const SWIFT_KEYS: [(&str, SwiftKind); 24] = [
+/// <id>.*` and `mighty.referenceBubble.*` are prefixes ([`swift_kind`]). Not here: the in-app browser's `browser.engineEnabled` and
+/// `agentTerminal.webOpenChoices`, which 0.5 (no in-app browser, an agent's link opens in the default browser) leaves where Swift
+/// stored them and never reads or writes.
+pub const SWIFT_KEYS: [(&str, SwiftKind); 22] = [
     ("appUpdate.manifestURL", SwiftKind::String),
     ("appUpdate.lastCheck", SwiftKind::Date),
     ("appUpdate.automatic", SwiftKind::Bool),
@@ -90,8 +90,6 @@ pub const SWIFT_KEYS: [(&str, SwiftKind); 24] = [
     ("textFontFamily", SwiftKind::String),
     ("textTranscriptFontFamily", SwiftKind::String),
     ("textCodeFontFamily", SwiftKind::String),
-    ("browser.engineEnabled", SwiftKind::Bool),
-    ("agentTerminal.webOpenChoices", SwiftKind::Dictionary),
     ("delegation.enabled", SwiftKind::Bool),
     ("notifications.webhookURL", SwiftKind::String),
     ("usage.dailyBudgetUSD", SwiftKind::Double),
@@ -189,55 +187,6 @@ pub fn apply_to_system_interface(prefs: &dyn PrefsStore) -> Result<()> {
     }
 }
 
-/// Swift `WebOpenChoiceStore.defaultsKey`: `[workspaceId: destination]`.
-pub const WEB_OPEN_CHOICES_KEY: &str = "agentTerminal.webOpenChoices";
-/// `WebOpenDestination`'s raw values.
-pub const WEB_OPEN_DESTINATIONS: [&str; 2] = ["in_app", "external"];
-
-/// Swift `WebOpenChoiceStore`: where a URL an agent opens goes, per workspace, kept in the settings (one dictionary) when the store has
-/// them, in memory otherwise; a stored value that is not a destination is ignored.
-pub struct WebOpenChoices {
-    prefs: Option<Arc<dyn PrefsStore>>,
-    remembered: Mutex<Vec<(String, String)>>,
-}
-
-impl WebOpenChoices {
-    pub fn new(prefs: Option<Arc<dyn PrefsStore>>) -> WebOpenChoices {
-        let saved = match prefs.as_ref().and_then(|p| p.get(WEB_OPEN_CHOICES_KEY).ok().flatten()) {
-            Some(PrefValue::Map(entries)) => entries
-                .into_iter()
-                .filter_map(|(workspace, value)| match value {
-                    PrefValue::Text(text) if WEB_OPEN_DESTINATIONS.contains(&text.as_str()) => Some((workspace, text)),
-                    _ => None,
-                })
-                .collect(),
-            _ => vec![],
-        };
-        WebOpenChoices { prefs, remembered: Mutex::new(saved) }
-    }
-
-    /// The remembered destination, or None (ask).
-    pub fn choice(&self, workspace: &str) -> Option<String> {
-        self.remembered.lock().unwrap_or_else(|p| p.into_inner()).iter().find(|(w, _)| w == workspace).map(|(_, d)| d.clone())
-    }
-
-    /// Records a destination (`setChoice`), or forgets it (`clearChoice`, the setting back to ask); the whole map is written back.
-    pub fn set(&self, workspace: &str, destination: Option<&str>) -> Result<()> {
-        let mut remembered = self.remembered.lock().unwrap_or_else(|p| p.into_inner());
-        remembered.retain(|(w, _)| w != workspace);
-        if let Some(destination) = destination.filter(|d| WEB_OPEN_DESTINATIONS.contains(d)) {
-            remembered.push((workspace.to_string(), destination.to_string()));
-        }
-        match &self.prefs {
-            Some(prefs) => prefs.set(
-                WEB_OPEN_CHOICES_KEY,
-                PrefValue::Map(remembered.iter().map(|(w, d)| (w.clone(), PrefValue::Text(d.clone()))).collect()),
-            ),
-            None => Ok(()),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,20 +231,5 @@ mod tests {
         prefs.set("language", PrefValue::Text("system".into())).unwrap();
         apply_to_system_interface(&prefs).unwrap();
         assert_eq!(own(&prefs), list(&["ja"]));
-    }
-
-    #[test]
-    fn web_open_choices_keep_only_destinations() {
-        let prefs: Arc<dyn PrefsStore> = Arc::new(MemoryPrefs::default());
-        prefs
-            .set(
-                WEB_OPEN_CHOICES_KEY,
-                PrefValue::Map(vec![("ws1".into(), PrefValue::Text("sideways".into())), ("ws2".into(), PrefValue::Text("in_app".into()))]),
-            )
-            .unwrap();
-        let store = WebOpenChoices::new(Some(prefs.clone()));
-        assert_eq!((store.choice("ws1"), store.choice("ws2")), (None, Some("in_app".to_string())));
-        store.set("ws1", Some("external")).unwrap();
-        assert_eq!(WebOpenChoices::new(Some(prefs)).choice("ws1").as_deref(), Some("external"));
     }
 }

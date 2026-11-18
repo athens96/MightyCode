@@ -94,10 +94,11 @@ describe('rowMark', () => {
     expect(rowMark(session({ provider }))).toBe(provider);
   });
 
-  it.each(['shell', 'browser', 'agent-terminal', 'agent-browser'] as const)(
+  // `browser` and `agent-browser`: an older desktop's in-app browser panes.
+  it.each(['shell', 'browser', 'agent-terminal', 'agent-browser'])(
     'gives a %s pane no mark, whatever provider it carries',
     (kind) => {
-      expect(rowMark(session({ kind, provider: 'codex' }))).toBeUndefined();
+      expect(rowMark(session({ kind: kind as MobileSessionSummary['kind'], provider: 'codex' }))).toBeUndefined();
     },
   );
 

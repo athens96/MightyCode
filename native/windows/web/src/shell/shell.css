@@ -257,7 +257,7 @@ button { font: inherit; color: inherit; }
   box-shadow: 0 4px 12px rgba(0, 0, 0, .18);
 }
 .tab-drag-ghost.nowhere { opacity: .55; }
-/* The page overlay a drag counts (shell/overlay.ts): browser panes' native controls step aside under it. */
+/* The page overlay a drag counts (shell/overlay.ts): native views (the Mac's Ghostty terminal) step aside under it. */
 .tab-drag-cover { position: fixed; inset: 0; pointer-events: none; }
 .tab-dragging, .tab-dragging * { cursor: grabbing !important; user-select: none; }
 .tab-body { position: relative; flex: 1; min-height: 0; }

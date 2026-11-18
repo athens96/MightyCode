@@ -12,9 +12,9 @@ use crate::request::{DelegationRequest, DelegationResponse};
 
 /// `AgentIOPipe.DelegationSeconds`: a delegation call's limit at both ends (it covers the coordinator's 45 s).
 pub const DELEGATION_SECONDS: u64 = 60;
-/// A terminal tool call's limit, and `open_url`'s (the user has 30 seconds to choose a browser).
+/// A terminal or web tool call's limit. (C# gave `open_url` 60 s, the user's 30 s to choose where it opened; 0.5 opens it in the
+/// default browser at once.)
 pub const TERMINAL_SECONDS: u64 = 30;
-pub const OPEN_URL_SECONDS: u64 = 60;
 
 /// A terminal or web call that could not be made or answered (C#'s exceptions from `AgentIOPipe.Call`; the server answers them with its
 /// one refusal text).
@@ -42,14 +42,13 @@ pub fn is_pipe_name(name: &str, transport: McpTransport) -> bool {
 }
 
 /// `AgentIOPipe.Call`: one terminal or web tool call; the app's answer packet as its JSON text (a document it could read), or Err when
-/// the name or token is not one, the app is not there, or it did not answer in time (30 s; `open_url` 60 s).
+/// the name or token is not one, the app is not there, or it did not answer in time (30 s).
 pub async fn call(connector: &dyn AgentIoConnector, pipe: &str, token: &str, tool: &str, arguments: &Value) -> Result<String, CallFailed> {
     let transport = connector.transport();
     if !is_pipe_name(pipe, transport) || token.len() != 64 {
         return Err(CallFailed);
     }
-    let seconds = if tool == "open_url" { OPEN_URL_SECONDS } else { TERMINAL_SECONDS };
-    let deadline = Duration::from_secs(seconds);
+    let deadline = Duration::from_secs(TERMINAL_SECONDS);
     let work = async {
         let mut stream = connector.connect(pipe, deadline).await.map_err(|_| CallFailed)?;
         let mut out = JsonOut::new();

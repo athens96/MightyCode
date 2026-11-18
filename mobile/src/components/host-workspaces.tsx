@@ -16,9 +16,9 @@ import { useHostClient } from '@/store/live';
 import { showToast } from '@/store/toast';
 import { cardShadow, headingFontFamily, monoFontFamily, radius, spacing, usePalette, useStyles, type Palette } from '@/theme';
 
-/** Opens a pane, or says why an agent's own terminal or browser stays on the Mac. */
+/** Opens a pane, or says why an agent's own terminal stays on the Mac. */
 export function openSession(hostId: string, session: MobileSessionSummary): void {
-  // An agent's own terminal/browser pane is listed, not opened: its contents live on the
+  // An agent's own terminal pane is listed, not opened: its contents live on the
   // Mac and the host keeps no record to show here.
   if (isAgentIOPane(session.kind)) showToast(t('phone.workspaces.agentPaneOnly'));
   else router.push(`/host/${hostId}/session/${session.id}`);

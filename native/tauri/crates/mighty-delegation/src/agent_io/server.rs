@@ -1,6 +1,6 @@
 //! The app's Agent IO server (C# Core/AgentIO/AgentIOPipe.cs:7-137): one listener per app, 4 waiting and 64 connections, one request
 //! and one answer per connection, the token resolved by a fixed-time compare, 4 delegation calls in flight per token, the deadlines
-//! (terminal 30 s, `open_url` 60 s once authenticated, delegation 60 s), the call dropped when its binding is revoked, the answers'
+//! (terminal and `open_url` 30 s, delegation 60 s once authenticated), the call dropped when its binding is revoked, the answers'
 //! texts. The bytes come from mighty-platform's `AgentIoListener`. Owner: W7-C.
 //!
 //! The seams (W7 plan, "Seams"): `AgentIo::{start(listener), bindings(), bind(...), revoke(pane), clear()}` for src-tauri agent_io.rs and
@@ -21,7 +21,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use super::binding::{AgentIoBinding, AgentIoBindings, InvalidBinding, Revocation};
-use super::client::{DELEGATION_SECONDS, OPEN_URL_SECONDS, TERMINAL_SECONDS, response_bytes};
+use super::client::{DELEGATION_SECONDS, TERMINAL_SECONDS, response_bytes};
 use super::tools::validate_in;
 use super::wire::{self, Lenient};
 use crate::request::{DETACHED_MESSAGE, DelegationCaller, DelegationRequest, DelegationResponse};
@@ -73,7 +73,7 @@ impl fmt::Debug for TerminalCall {
 }
 
 /// What serves the terminal and web tools (C# `MainWindow.HandleAgentIO`; src-tauri agent_io.rs over terminal.rs's `Terminals::agent`
-/// and the open_url prompt). The result is the tool's JSON (`AgentTerminalResult`, `{destination, url, …}`); an `Err` is answered with
+/// and open_url's open in the default browser). The result is the tool's JSON (`AgentTerminalResult`, `{destination, url}`); an `Err` is answered with
 /// the one refusal text and its detail never reaches the agent. The server drops the future at its deadline or when the binding is
 /// revoked, which cancels the call.
 pub trait TerminalHandler: Send + Sync {
@@ -200,8 +200,8 @@ impl AgentIo {
         }
     }
 
-    /// `Serve` and `Answer`: one request and its answer within the deadline (30 s, moved on for an authenticated `open_url` or
-    /// delegation call). Past the deadline, or once the app quits, nothing is written.
+    /// `Serve` and `Answer`: one request and its answer within the deadline (30 s, moved on for an authenticated delegation call).
+    /// Past the deadline, or once the app quits, nothing is written.
     async fn serve(&self, mut connection: AgentIoConnection) {
         let mut deadline = Instant::now() + Duration::from_secs(TERMINAL_SECONDS);
         let read = tokio::select! {
@@ -215,7 +215,7 @@ impl AgentIo {
                 let call = request.get("delegation").cloned().unwrap_or(Value::Null);
                 self.answer_delegation(&document, request, &call, &mut deadline).await.map(|response| response_bytes(&response))
             }
-            request => self.answer_terminal(&document, request, &mut deadline).await,
+            request => self.answer_terminal(&document, request, deadline).await,
         };
         let Some(answer) = answer else { return };
         if Instant::now() >= deadline {
@@ -225,7 +225,7 @@ impl AgentIo {
     }
 
     /// A terminal or web call: `{"ok":true,"result":…}` or the one failure; None once the app quits.
-    async fn answer_terminal(&self, document: &Lenient, request: &Value, deadline: &mut Instant) -> Option<Vec<u8>> {
+    async fn answer_terminal(&self, document: &Lenient, request: &Value, deadline: Instant) -> Option<Vec<u8>> {
         let empty = Map::new();
         let map = request.as_object().unwrap_or(&empty);
         let outcome: Result<Value, ()> = async {
@@ -234,10 +234,6 @@ impl AgentIo {
             let tool = document.text(map.get("tool")).map_err(|_| ())?.unwrap_or("");
             let arguments = request.as_object().and_then(|map| map.get("arguments")).ok_or(())?;
             let value = validate_in(document, tool, arguments).map_err(|_| ())?;
-            // The user has 30 seconds to choose a browser: only an authenticated, validated URL request gets the extra time.
-            if tool == "open_url" {
-                *deadline = Instant::now() + Duration::from_secs(OPEN_URL_SECONDS);
-            }
             if binding.is_revoked() {
                 return Err(());
             }
@@ -252,7 +248,7 @@ impl AgentIo {
             };
             let handled = self.terminal.handle(call);
             tokio::select! {
-                result = tokio::time::timeout_at(*deadline, handled) => result.map_err(|_| ())?.map_err(|_| ()),
+                result = tokio::time::timeout_at(deadline, handled) => result.map_err(|_| ())?.map_err(|_| ()),
                 _ = binding.revoked().cancelled() => Err(()),
             }
         }

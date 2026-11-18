@@ -1,7 +1,7 @@
 [package]
 name = "mighty-platform-macos"
 version = "0.1.0"
-description = "Mighty Code's macOS implementation of the mighty-platform ports, in Rust (objc2, libghostty's C API, CEF/WKWebView); empty on other OSes."
+description = "Mighty Code's macOS implementation of the mighty-platform ports, in Rust (objc2, libghostty's C API); empty on other OSes."
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
@@ -13,8 +13,7 @@ rust-version.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 mighty-platform.workspace = true
 dirs.workspace = true
-# M-E: browser panes are child webviews (Window::add_child, Tauri's multi-webview), as on Windows.
-tauri = { workspace = true, features = ["unstable"] }
+tauri.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time", "net", "io-util"] }
 libc = "0.2"
 block2 = "0.6"
@@ -32,9 +31,9 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     # M-A: a secret written as one pasteboard item with its concealed and transient types (clipboard.rs).
     "NSPasteboardItem",
 ] }
+# The page's own WKWebView: its picture (page.rs) and its input method (input_method.rs).
 objc2-web-kit = { version = "0.3", default-features = false, features = [
-    "std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKNavigation", "WKNavigationDelegate", "WKPreferences",
-    "WKUserContentController", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKSnapshotConfiguration",
+    "std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKWebView", "WKSnapshotConfiguration",
 ] }
 objc2-user-notifications = { version = "0.3", default-features = false, features = [
     "std", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse",
@@ -57,10 +56,8 @@ objc2-core-foundation = { version = "0.3", default-features = false, features = 
 core-foundation = "0.10"
 core-graphics = "0.25"
 security-framework = "3"
-# M-E: the pane picture's data: URL, the website data stores' version-5 UUIDs, BrowserEngine.lock; M-F: the input method diagnostics
-# file (input_method.rs).
+# The terminal view's picture as a data: URL (terminal_surface/view.rs).
 base64 = "0.22"
-sha1 = "0.10"
 serde_json.workspace = true
 # M-C's push POST and M-H's update download over the system proxy (plan D17): the stack mighty-remote's relay already uses.
 hyper = { version = "1", features = ["client", "http1"] }

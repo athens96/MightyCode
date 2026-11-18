@@ -27,6 +27,8 @@ fn some(text: &str) -> impl FnOnce() -> Option<String> + '_ {
 
 // ── AppSnapshot ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/// Two C# properties are left out on purpose, 0.5 having no in-app browser: `agentWebOpenChoices` (where an agent's link opened)
+/// and `browserEngineEnabled`. An older version's file holding them loads as with any unknown field, and a save drops them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppSnapshot {
     pub version: i32,
@@ -62,11 +64,9 @@ pub struct AppSnapshot {
     pub app_update_manifest_url_override: Option<String>,
     pub language_preference: Option<String>,
     pub settings_pane: Option<String>,
-    pub agent_web_open_choices: Option<StringMap>,
     pub mobile_remote: Option<MobileRemoteSettings>,
     pub model_defaults: Option<ModelDefaultsConfig>,
     pub phase_models: Option<PhaseModelsSnapshot>,
-    pub browser_engine_enabled: bool,
 }
 
 impl Default for AppSnapshot {
@@ -103,11 +103,9 @@ impl Default for AppSnapshot {
             app_update_manifest_url_override: None,
             language_preference: Some("system".into()),
             settings_pane: Some("general".into()),
-            agent_web_open_choices: None,
             mobile_remote: Some(MobileRemoteSettings::default()),
             model_defaults: None,
             phase_models: None,
-            browser_engine_enabled: false,
         }
     }
 }
@@ -192,14 +190,12 @@ impl Wire for AppSnapshot {
             app_update_manifest_url_override: json::opt_string(o.get("appUpdateManifestUrlOverride"))?,
             language_preference: json::string(o.get("languagePreference"), some("system"))?,
             settings_pane: json::string(o.get("settingsPane"), some("general"))?,
-            agent_web_open_choices: json::string_map(o.get("agentWebOpenChoices"))?,
             mobile_remote: match o.get("mobileRemote") {
                 None => Some(MobileRemoteSettings::default()),
                 value => json::record(value)?,
             },
             model_defaults: json::record(o.get("modelDefaults"))?,
             phase_models: json::record(o.get("phaseModels"))?,
-            browser_engine_enabled: json::boolean(o.get("browserEngineEnabled"), false)?,
         })
     }
 
@@ -261,11 +257,9 @@ impl AppSnapshot {
         out.prop_str("appUpdateManifestUrlOverride", self.app_update_manifest_url_override.as_deref());
         out.prop_str("languagePreference", self.language_preference.as_deref());
         out.prop_str("settingsPane", self.settings_pane.as_deref());
-        out.prop_string_map("agentWebOpenChoices", self.agent_web_open_choices.as_ref());
         out.prop("mobileRemote", self.mobile_remote.as_ref());
         out.prop("modelDefaults", self.model_defaults.as_ref());
         out.prop("phaseModels", self.phase_models.as_ref());
-        out.prop_bool("browserEngineEnabled", self.browser_engine_enabled);
         out.end_object();
     }
 

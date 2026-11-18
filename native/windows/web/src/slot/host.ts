@@ -1,10 +1,10 @@
 // What the Rust host says it draws natively (docs/tauri-architecture.md §3): its `host` push, sent when the page calls `ready`,
-// before the snapshot. The C# host never sends one, so a page without it keeps the C# protocol (`browserBounds`); every use of
+// before the snapshot. The C# host never sends one, so a page without it draws every pane itself; every use of
 // this module is behind `import.meta.env.MODE === 'tauri'`, so the C# build holds none of it.
 import { useSyncExternalStore } from 'react';
 
 export type Drawing = 'web' | 'native';
-export type SurfaceKind = 'terminal' | 'browser';
+export type SurfaceKind = 'terminal';
 
 export interface HostCapabilities {
   platform: string;
@@ -12,7 +12,7 @@ export interface HostCapabilities {
   surfaces: Record<SurfaceKind, Drawing>;
 }
 
-/** host → page: `{kind:'host', platform, surfaces:{terminal, browser}}`. */
+/** host → page: `{kind:'host', platform, surfaces:{terminal}}`. */
 export interface HostPush extends HostCapabilities {
   kind: 'host';
 }
@@ -25,7 +25,7 @@ export function isHostPush(message: { kind: string }): message is HostPush {
 export function readCapabilities(message: { platform?: unknown; surfaces?: unknown }): HostCapabilities {
   const surfaces = (typeof message.surfaces === 'object' && message.surfaces !== null ? message.surfaces : {}) as Record<string, unknown>;
   const drawing = (kind: SurfaceKind): Drawing => (surfaces[kind] === 'native' ? 'native' : 'web');
-  return { platform: typeof message.platform === 'string' ? message.platform : '', surfaces: { terminal: drawing('terminal'), browser: drawing('browser') } };
+  return { platform: typeof message.platform === 'string' ? message.platform : '', surfaces: { terminal: drawing('terminal') } };
 }
 
 // The capabilities slice: one value for the page's life (a reload starts the page over), listeners told when it changes.

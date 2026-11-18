@@ -1,7 +1,7 @@
-// The page's menus, popovers and in-page dialogs over a browser pane: the browser's WebView2 is a native control laid over the
-// page (MainWindow.WebShell.Panes.cs), so anything the page draws where it stands would be hidden under it. Each overlay counts
-// itself open in the store (`overlays`) and marks its element `data-page-overlay`; a browser pane whose slot one of them
-// overlaps reports the slot hidden, and shown again once none does.
+// The page's menus, popovers and in-page dialogs over a native view: the Mac's Ghostty terminal is a native view laid over the
+// page (src/slot), so anything the page draws where it stands would be hidden under it. Each overlay counts itself open in the
+// store (`overlays`) and marks its element `data-page-overlay`; a slot one of them overlaps reports itself covered
+// (slot/bounds.ts pageCovers), and uncovered again once none does.
 import { useEffect } from 'react';
 import { useServices } from '../app/context';
 

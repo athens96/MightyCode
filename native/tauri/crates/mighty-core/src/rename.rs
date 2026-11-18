@@ -261,7 +261,7 @@ mod tests {
         let renamed = renamed.sessions()[0].as_ref().clone();
         assert_eq!(renamed.title_mode.as_deref(), Some(FIXED));
         assert_eq!(requested(&renamed, "a later request").title(), "내 실행 창");
-        for kind in ["shell", "browser", "files", "workmap"] {
+        for kind in ["shell", "files", "workmap"] {
             let other = RunSession { kind: Some(kind.into()), title: Some("터미널".into()), ..RunSession::default() };
             assert_eq!(requested(&other, "ls -la").title(), "터미널", "{kind} panes keep their titles");
         }

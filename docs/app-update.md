@@ -126,7 +126,7 @@ python3 scripts/make-update-manifest.py --macos release/MightyCode-macos.zip \
 
 ## 크기 게이트
 
-앱은 512 MiB보다 큰 패키지를 아예 받지 않으므로(`AppUpdate.maximumPackageBytes`), 그보다 커진 릴리스는 기존 설치본이 업데이트할 수 없는 죽은 패키지가 된다. 그래서 **패키징 직후, 아무것도 올리기 전에** 480 MiB 게이트를 돌린다. 번들 브라우저 엔진과 WebRTC 프레임워크가 릴리스마다 조금씩 커져도 다음 빌드가 갑자기 설치 불가가 되지 않도록 512 MiB 상한보다 일찍 막는다.
+앱은 512 MiB보다 큰 패키지를 아예 받지 않으므로(`AppUpdate.maximumPackageBytes`), 그보다 커진 릴리스는 기존 설치본이 업데이트할 수 없는 죽은 패키지가 된다. 그래서 **패키징 직후, 아무것도 올리기 전에** 480 MiB 게이트를 돌린다. 릴리스마다 조금씩 커져도 다음 빌드가 갑자기 설치 불가가 되지 않도록 512 MiB 상한보다 일찍 막는다. 0.5에는 브라우저 엔진이 들어 있지 않아(앱 안 브라우저 없음) zip은 게이트보다 훨씬 작다. 게이트는 상한일 뿐 어느 한 부분의 몫이 아니다.
 
 ```bash
 ditto -c -k --sequesterRsrc --keepParent release/native-macos/MightyCode.app release/MightyCode-macos.zip

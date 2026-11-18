@@ -19,15 +19,15 @@ export function waitLabel(session: MobileSessionSummary): string | undefined {
   return undefined;
 }
 
-/** An agent's pane, or a pane an agent owns, names its provider; a shell or browser does not. */
+/** An agent's pane, or a pane an agent owns, names its provider; a shell does not. */
 function showsProvider(session: MobileSessionSummary): boolean {
   return session.kind === 'claude' || isAgentIOPane(session.kind);
 }
 
 /**
  * The provider whose brand mark goes before its name on the meta line: an agent's own
- * pane with a provider we have an outline for. A shell, a browser and an agent's own
- * terminal or browser get none, though the last two name their agent's provider too.
+ * pane with a provider we have an outline for. A shell and an agent's own terminal get
+ * none, though the last names its agent's provider too.
  */
 export function rowMark(session: MobileSessionSummary): Provider | undefined {
   if (session.kind !== 'claude' || providerMarkOutline(session.provider) === undefined) return undefined;

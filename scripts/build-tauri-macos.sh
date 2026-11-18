@@ -3,7 +3,7 @@
 # build-macos.sh, whose bundle (MightyCode.app, dev.mightycode.native, executable MightyCode), Info.plist keys, resources, signing and
 # zip it keeps, so an installed Swift 0.4.x app updates itself to it. Tauri's own bundler stays off (tauri.conf.json bundle.active).
 #
-#   scripts/build-tauri-macos.sh [--version 0.5.0-rc.7] [--engine] [--output <new folder>] [--stager <parity-mac>]
+#   scripts/build-tauri-macos.sh [--version 0.5.0-rc.7] [--output <new folder>] [--stager <parity-mac>]
 #
 # The release stamp comes from the environment, as for build-macos.sh and build-tauri-windows.ps1: MIGHTY_UPDATE_PUBLIC_KEY (32 bytes
 # of standard base64, the public half only) and MIGHTY_UPDATE_URL (https). Both are required: this script makes release builds
@@ -24,8 +24,8 @@
 #     14.0, both URL schemes, the usage strings, NSLocalNetworkUsageDescription and Bonjour's _mightyclaude._tcp, CFBundleVersion the
 #     commit count, the update address and key) without NSPrincipalClass and with MightyEngine=tauri; the *.lproj InfoPlist.strings,
 #     MightyCode.icns, mightycode.png, ThirdPartyLicenses, Ghostty's runtime resources in Ghostty.app's layout (Resources/ghostty with
-#     shell-integration, Resources/terminfo), pets, mods/mighty-bridge (without tests/) and Agents; with --engine CEF, MightyCEFBridge.dylib
-#     and the four helpers as build-macos.sh:111-178 (and CEF's licence notices); no WebRTC.framework;
+#     shell-integration, Resources/terminfo), pets, mods/mighty-bridge (without tests/) and Agents; no Frameworks folder: no browser
+#     engine (there is no in-app browser; web pages open in the default browser) and no WebRTC.framework;
 #  6. signed inside out by scripts/sign-macos.sh: MIGHTY_CODESIGN_IDENTITY (default ad hoc, "-"), under the hardened runtime with a
 #     Developer ID identity or MIGHTY_HARDENED_RUNTIME=1;
 #  7. --verify-resources run by the bundle's own executable (VERIFY_RESOURCES_OK);
@@ -46,11 +46,10 @@ TAURI="$ROOT/native/tauri"
 CARGO_TOML="$TAURI/src-tauri/Cargo.toml"
 CARGO_LOCK="$TAURI/Cargo.lock"
 TRIPLE=aarch64-apple-darwin
-VERSION_ARG=""; ENGINE=0; OUTPUT=""; STAGER=""
+VERSION_ARG=""; OUTPUT=""; STAGER=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --version) VERSION_ARG="${2:?--version needs a version}"; shift 2 ;;
-        --engine) ENGINE=1; shift ;;
         --output) OUTPUT="${2:?--output needs a folder}"; shift 2 ;;
         --stager) STAGER="${2:?--stager needs parity-mac}"; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
@@ -90,11 +89,11 @@ ARCHIVE="$RELEASE_DIR/MightyCode-macos.zip"
 [ ! -e "$ARCHIVE" ] || fail "an earlier zip is never overwritten: $ARCHIVE"
 APP="$OUTPUT/MightyCode.app"
 
-CARGO_TOML_SAVED="$(mktemp)"; CARGO_LOCK_SAVED="$(mktemp)"; WORK="$(mktemp -d)"
+CARGO_TOML_SAVED="$(mktemp)"; CARGO_LOCK_SAVED="$(mktemp)"
 cp "$CARGO_TOML" "$CARGO_TOML_SAVED"; cp "$CARGO_LOCK" "$CARGO_LOCK_SAVED"
 restore() {
     cp "$CARGO_TOML_SAVED" "$CARGO_TOML"; cp "$CARGO_LOCK_SAVED" "$CARGO_LOCK"
-    rm -rf "$CARGO_TOML_SAVED" "$CARGO_LOCK_SAVED" "$WORK"
+    rm -f "$CARGO_TOML_SAVED" "$CARGO_LOCK_SAVED"
 }
 trap restore EXIT
 if [ "$APP_VERSION" != "$CARGO_VERSION" ]; then
@@ -108,7 +107,7 @@ text = open(lock, encoding="utf-8").read()
 open(lock, "w", encoding="utf-8", newline="").write(re.sub(r'(?m)^(name = "mightycode"\r?\nversion = )"[^"]+"', rf'\g<1>"{version}"', text, count=1))
 PY
 fi
-echo "Mighty Code $APP_VERSION (arm64, $TRIPLE): release build$([ "$ENGINE" = 1 ] && echo ', with the browser engine')"
+echo "Mighty Code $APP_VERSION (arm64, $TRIPLE): release build"
 
 export MIGHTY_RELEASE=1 MIGHTY_UPDATE_PUBLIC_KEY="$UPDATE_KEY" MIGHTY_UPDATE_URL="$UPDATE_URL"
 export MIGHTY_MAC_NATIVE=1
@@ -193,53 +192,7 @@ rsync -a --exclude /tests "$ROOT/mods/mighty-bridge/" "$RESOURCES/mods/mighty-br
 mkdir -p "$RESOURCES/Agents"
 find "$ROOT/native/macos/Sources/MightyCore/Resources/Agents" -maxdepth 1 -type f -exec cp {} "$RESOURCES/Agents/" \;
 
-if [ "$ENGINE" = 1 ]; then
-    # The browser engine as build-macos.sh:111-178 bundles it (the names cef_bridge.m expects). Needs a warm engine cache
-    # (scripts/fetch-browser-engine.sh). The pinned Node is not bundled, as there.
-    LOCK_FILE="$ROOT/native/macos/BrowserEngine.lock"
-    CEF_URL="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['cef']['url'])" "$LOCK_FILE")"
-    LOCK_HASH="$(shasum -a 256 "$LOCK_FILE" | awk '{print $1}')"
-    ENGINE_CACHE="${MIGHTY_BROWSER_ENGINE_CACHE:-$HOME/Library/Caches/MightyCode/browser-engine/${LOCK_HASH:0:16}}"
-    CEF_ARCHIVE="$ENGINE_CACHE/$(basename "$CEF_URL")"
-    [ -f "$CEF_ARCHIVE" ] || fail "browser engine not in cache — run scripts/fetch-browser-engine.sh first"
-    FW_DIR="$APP/Contents/Frameworks"
-    mkdir -p "$FW_DIR"
-    CEF_TOP="$(tar -tjf "$CEF_ARCHIVE" | head -1 | cut -d/ -f1)"
-    tar -xjf "$CEF_ARCHIVE" -C "$WORK" 2>/dev/null
-    ditto "$WORK/$CEF_TOP/Release/Chromium Embedded Framework.framework" "$FW_DIR/Chromium Embedded Framework.framework"
-    cp "$WORK/$CEF_TOP/LICENSE.txt" "$RESOURCES/ThirdPartyLicenses/CEF-LICENSE.txt"
-    cp "$WORK/$CEF_TOP/CREDITS.html" "$RESOURCES/ThirdPartyLicenses/Chromium-CREDITS.html"
-    BRIDGE="$ROOT/native/macos/BrowserBridge"
-    xcrun clang -o "$WORK/helper_bin" -arch arm64 -mmacosx-version-min=14.0 -I "$WORK/$CEF_TOP" "$BRIDGE/helper.c"
-    xcrun clang -dynamiclib -o "$FW_DIR/MightyCEFBridge.dylib" -arch arm64 -mmacosx-version-min=14.0 \
-        -I "$WORK/$CEF_TOP" -framework CoreFoundation -framework AppKit -install_name "@rpath/MightyCEFBridge.dylib" "$BRIDGE/cef_bridge.m"
-    make_helper() {
-        local name="$1" bundle_id="$2"
-        local helper="$FW_DIR/${name}.app"
-        mkdir -p "$helper/Contents/MacOS"
-        cp "$WORK/helper_bin" "$helper/Contents/MacOS/$name"
-        cat > "$helper/Contents/Info.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>$bundle_id</string>
-<key>CFBundleExecutable</key><string>$name</string>
-<key>CFBundleName</key><string>$name</string>
-<key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleVersion</key><string>1</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>LSMinimumSystemVersion</key><string>14.0</string>
-</dict></plist>
-PLIST
-    }
-    make_helper "MightyCode Helper" "dev.mightycode.native.helper"
-    make_helper "MightyCode Helper (GPU)" "dev.mightycode.native.helper.gpu"
-    make_helper "MightyCode Helper (Renderer)" "dev.mightycode.native.helper.renderer"
-    make_helper "MightyCode Helper (Plugin)" "dev.mightycode.native.helper.plugin"
-fi
-
-# What the bundle must hold (the 0.4.x stager and --verify-resources check part of it again), and no link anywhere in it (ditto keeps
-# CEF's framework links, which the Swift app's bundle has too, so only those are allowed).
+# What the bundle must hold (the 0.4.x stager and --verify-resources check part of it again), and no link anywhere in it.
 for required in Contents/MacOS/MightyCode Contents/Info.plist Contents/Resources/MightyCode.icns Contents/Resources/ko.lproj/InfoPlist.strings \
     Contents/Resources/ghostty/shell-integration/zsh/.zshenv Contents/Resources/ghostty/shell-integration/bash/ghostty.bash \
     Contents/Resources/terminfo/78/xterm-ghostty Contents/Resources/pets/mighty-raccoon/pet.json \
@@ -248,8 +201,8 @@ for required in Contents/MacOS/MightyCode Contents/Info.plist Contents/Resources
     [ -f "$APP/$required" ] || fail "the bundle lacks $required"
 done
 [ ! -e "$APP/Contents/Resources/mods/mighty-bridge/tests" ] || fail "the mod's tests/ were bundled"
-[ ! -e "$APP/Contents/Frameworks/WebRTC.framework" ] || fail "WebRTC.framework is not bundled (plan D13)"
-LINKS="$(find "$APP" -type l ! -path '*/Chromium Embedded Framework.framework/*' -print)"
+[ ! -e "$APP/Contents/Frameworks" ] || fail "the bundle holds a Frameworks folder: no browser engine (no in-app browser) and no WebRTC.framework (plan D13)"
+LINKS="$(find "$APP" -type l -print)"
 [ -z "$LINKS" ] || fail "the bundle holds links: $LINKS"
 
 # --- 6. signing (nested code first; scripts/sign-macos.sh verifies --deep --strict at its end)

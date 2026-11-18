@@ -397,7 +397,9 @@ pub fn synthetic(corpus: &Path) -> std::io::Result<usize> {
     let mut panes = vec![];
     let mut at = 0;
     for status in ["idle", "running", "completed", "error", "stopped", "waiting", "bogus"] {
-        for kind in ["claude", "shell", "browser", "files", "workmap", "agent-terminal", "agent-browser", "bogus"] {
+        // No "browser": C# restores one, 0.5 drops it (normalize.rs `an_old_browser_pane_is_dropped_on_load`); neither restores an
+        // "agent-browser".
+        for kind in ["claude", "shell", "files", "workmap", "agent-terminal", "agent-browser", "bogus"] {
             at += 1;
             panes.push(
                 pane(&format!("e{at}"), "")
@@ -528,7 +530,7 @@ pub fn synthetic(corpus: &Path) -> std::io::Result<usize> {
     add(
         "file-panes",
         Some(state_text(&format!(
-            r#""sessions":[{},{{"id":"files:w1","workspaceId":"w1","kind":"files","title":"Files"}},{{"id":"workmap:w1","workspaceId":"w1","kind":"workmap"}},{{"id":"agent-terminal:s1","workspaceId":"w1","kind":"agent-terminal","ownerSessionId":"s1"}},{{"id":"b1","workspaceId":"w1","kind":"browser","title":"Web","workspaceProfileKey":"  key \u0001 ","ownerSessionId":"bad id","logs":[{{"id":"l1","kind":"user","text":"x","timestamp":"2026-10-01T00:00:00Z"}}],"resumeId":"r1","draft":"d"}}],"activeSessionId":"files:w1","paneLayoutActiveSessionIds":{{"w1":"files:w1"}}"#,
+            r#""sessions":[{},{{"id":"files:w1","workspaceId":"w1","kind":"files","title":"Files"}},{{"id":"workmap:w1","workspaceId":"w1","kind":"workmap"}},{{"id":"agent-terminal:s1","workspaceId":"w1","kind":"agent-terminal","ownerSessionId":"s1"}}],"activeSessionId":"files:w1","paneLayoutActiveSessionIds":{{"w1":"files:w1"}}"#,
             pane("s1", "")
         ))),
         None,
@@ -792,6 +794,20 @@ fn is_guid_at(b: &[u8], at: usize) -> bool {
     true
 }
 
+/// C#'s saved text without the two settings 0.5 no longer keeps (model.rs `AppSnapshot`): `agentWebOpenChoices` (a map of strings,
+/// so no brace inside) and `browserEngineEnabled`, which C# always writes.
+pub fn without_browser_settings(text: &str) -> String {
+    let mut out = text.to_string();
+    for value in ["true", "false"] {
+        out = out.replace(&format!(r#","browserEngineEnabled":{value}"#), "");
+    }
+    while let Some(at) = out.find(r#","agentWebOpenChoices":{"#) {
+        let Some(end) = out[at..].find('}') else { break };
+        out.replace_range(at..at + end + 1, "");
+    }
+    out
+}
+
 /// The text with every GUID the input does not hold numbered in order (`<id1>`, ...), every `"O"` time of the last ten minutes
 /// made `<now>`, and a damaged file's aside name made `<aside>`.
 pub fn masked(text: &str, input: &str) -> String {
@@ -896,7 +912,8 @@ pub fn compare_corpus(corpus: &Path, cs: &Path, rs: &Path) -> std::io::Result<bo
             problems.push(format!("report differs:\n    C#:   {a}\n    Rust: {b}"));
         }
         for file in ["saved.json", "page.json"] {
-            let x = std::fs::read(cs.join(&name).join(file)).ok();
+            let x =
+                std::fs::read(cs.join(&name).join(file)).ok().map(|x| without_browser_settings(&String::from_utf8_lossy(&x)).into_bytes());
             let y = std::fs::read(rs.join(&name).join(file)).ok();
             match (x, y) {
                 (None, None) => {}

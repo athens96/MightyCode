@@ -270,11 +270,10 @@ fn update_block_record(
     }
 }
 
-/// `AgentIOPaneKind.Terminal`, `AgentIOPaneKind.Browser`.
+/// `AgentIOPaneKind.Terminal` (C#'s `Browser`, `agent-browser`, is gone: 0.5 opens an agent's page in the default browser).
 pub(crate) const AGENT_TERMINAL: &str = "agent-terminal";
-pub(crate) const AGENT_BROWSER: &str = "agent-browser";
 
-/// C# `WithAgentIOPane`: the state with the agent pane's terminal (or browser) pane to its right, titled as on the Mac; unchanged
+/// C# `WithAgentIOPane`: the state with the agent pane's terminal pane to its right, titled as on the Mac; unchanged
 /// while that pane is already open.
 fn with_agent_io_pane(
     state: &mut AppSnapshot,
@@ -299,7 +298,7 @@ fn with_agent_io_pane(
     let target = before
         .as_ref()
         .and_then(|tree| layout::groups(tree).into_iter().find(|g| g.session_ids().any(|id| id == agent)).map(|g| g.id().to_string()));
-    let title = if kind == AGENT_TERMINAL { "agentTerminal.terminalPane.title" } else { "agentTerminal.browserPane.title" };
+    let title = "agentTerminal.terminalPane.title";
     let pane = RunSession {
         id: Some(pane_id.clone()),
         kind: Some(kind.into()),

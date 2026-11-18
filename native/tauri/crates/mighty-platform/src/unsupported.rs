@@ -158,16 +158,12 @@ impl ToastActivator for Unsupported {
     }
 }
 
-/// Opens nothing; says the page draws the terminal and the platform the browser (so the page reserves the slot).
+/// Opens nothing; says the page draws the terminal.
 impl SurfaceFactory for Unsupported {
     fn drawing(&self, kind: SurfaceKind) -> Drawing {
         match kind {
             SurfaceKind::Terminal => Drawing::Web,
-            SurfaceKind::Browser => Drawing::Native,
         }
-    }
-    fn open_browser(&self, _options: BrowserOptions) -> BoxFuture<'_, Result<Box<dyn BrowserSurface>>> {
-        Box::pin(async { no("SurfaceFactory", "open_browser") })
     }
     fn open_terminal(&self, _options: TerminalOptions) -> BoxFuture<'_, Result<Box<dyn TerminalSurface>>> {
         Box::pin(async { no("SurfaceFactory", "open_terminal") })
@@ -310,17 +306,5 @@ mod tests {
         assert!(port.on_ending(std::sync::Arc::new(|_| {})).err().is_some_and(|e| e.is_unsupported()));
         assert!(port.register("dev.mightycode.native", "{0}", Path::new("x")).unwrap_err().is_unsupported());
         assert!(port.serve("{0}", std::sync::Arc::new(|_, _| {})).err().is_some_and(|e| e.is_unsupported()));
-        assert!(
-            port.open_browser(BrowserOptions {
-                pane_id: "p".into(),
-                url: "about:blank".into(),
-                data_dir: PathBuf::new(),
-                bounds: DeviceRect::default(),
-                listener: None,
-            })
-            .await
-            .err()
-            .is_some_and(|e| e.is_unsupported())
-        );
     }
 }

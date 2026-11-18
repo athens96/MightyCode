@@ -198,7 +198,9 @@ fn results_denied_actions_failures_and_notices() {
     // agy's BuildJSONOutput carries a past turn's (or recovered retry's) ERROR_MESSAGE into result even after the final agent_response completed DONE.
     let recovered = Recorder::default();
     let stale = recovered.parser(true, None);
-    stale.parse(r#"{"event":"step_update","step_update":{"step_index":5,"state":"ACTIVE","step_type":"agent_response","text_delta":"All set"}}"#);
+    stale.parse(
+        r#"{"event":"step_update","step_update":{"step_index":5,"state":"ACTIVE","step_type":"agent_response","text_delta":"All set"}}"#,
+    );
     stale.parse(r#"{"event":"step_update","step_update":{"step_index":5,"state":"DONE","step_type":"agent_response","text_delta":"\n"}}"#);
     stale.parse(r#"{"event":"result","result":{"status":"ERROR","response":"All set\n","error":"The stream was interrupted. Please continue the task you were working on."}}"#);
     assert!(

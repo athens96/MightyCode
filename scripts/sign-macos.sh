@@ -31,11 +31,9 @@ if [ "$HARDENED" = "--hardened-runtime" ]; then
         *)
             WORK="$(mktemp -d)"
             trap 'rm -rf "$WORK"' EXIT
-            for name in MightyCode Helper Node; do
-                cp "$ENTITLEMENTS/$name.entitlements" "$WORK/$name.entitlements"
-                # PlistBuddy, not plutil: plutil reads the dots in the key as a path.
-                /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.disable-library-validation bool true" "$WORK/$name.entitlements"
-            done
+            cp "$ENTITLEMENTS/MightyCode.entitlements" "$WORK/MightyCode.entitlements"
+            # PlistBuddy, not plutil: plutil reads the dots in the key as a path.
+            /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.disable-library-validation bool true" "$WORK/MightyCode.entitlements"
             entitlements() { echo "$WORK/$1.entitlements"; }
             ;;
     esac
@@ -52,33 +50,18 @@ sign_with() {
 }
 is_macho() { file -b "$1" | grep -q '^Mach-O'; }
 
-# Loose Mach-O files outside any nested bundle: the bundled Node and any helper
-# tool or dylib shipped as a resource.
+# Loose Mach-O files outside any nested bundle: any helper tool or dylib
+# shipped as a resource.
 while IFS= read -r -d '' file; do
     case "${file#"$APP"/}" in *.app/*|*.framework/*) continue ;; esac
     is_macho "$file" || continue
-    case "$file" in
-        */browser/node/bin/node) sign_with Node "$file" ;;
-        *) sign "$file" ;;
-    esac
+    sign "$file"
 done < <(find "$APP/Contents/Resources" "$APP/Contents/Frameworks" -type f -print0 2>/dev/null)
 
-# The browser engine: its libraries, the framework, then the helper apps.
-CEF_FW="$APP/Contents/Frameworks/Chromium Embedded Framework.framework"
-if [ -d "$CEF_FW" ]; then
-    for dylib in "$CEF_FW/Libraries/"*.dylib; do
-        [ -f "$dylib" ] && sign "$dylib"
-    done
-    sign "$CEF_FW"
-    for helper_app in "$APP/Contents/Frameworks/"*.app; do
-        [ -d "$helper_app" ] && sign_with Helper "$helper_app"
-    done
-fi
-
-# Other nested frameworks (WebRTC), then the app itself.
+# Nested frameworks (the Swift app's WebRTC; the Rust app has none), then the
+# app itself.
 for framework in "$APP/Contents/Frameworks/"*.framework; do
     [ -d "$framework" ] || continue
-    [ "$framework" = "$CEF_FW" ] && continue
     sign "$framework"
 done
 sign_with MightyCode "$APP"

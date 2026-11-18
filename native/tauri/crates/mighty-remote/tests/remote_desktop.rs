@@ -333,11 +333,7 @@ fn remote_panes_keep_to_the_hosts_features() {
     assert_eq!(add_pane::entries_for(Some(&local)), add_pane::entries(), "a local workspace keeps its menu");
     let entries = add_pane::entries_for(Some(&remote));
     let agent = |p: &str| format!("{}{p}", add_pane::AGENT_PREFIX);
-    assert!(
-        entries.contains(&add_pane::SHELL.to_string())
-            && !entries.contains(&add_pane::BROWSER.to_string())
-            && !entries.contains(&add_pane::FILES.to_string())
-    );
+    assert!(entries.contains(&add_pane::SHELL.to_string()) && !entries.contains(&add_pane::FILES.to_string()));
     assert!(mighty_core::wire::PROVIDERS.iter().filter(|p| !providers::is_local_only(p)).all(|p| entries.contains(&agent(p))));
     assert!(["pi", "opencode", "hermes"].iter().all(|p| !entries.contains(&agent(p))), "never the agents that run on this PC only");
     assert_eq!(

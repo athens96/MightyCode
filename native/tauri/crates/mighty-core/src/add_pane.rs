@@ -1,6 +1,6 @@
 //! The "창 추가" menu and the ways a pane joins a workspace (C# `AddPaneMenu`, MightyCode.Core/AddPaneMenu.cs;
 //! `RemoteWorkspaceFeatures.AddPaneEntries`; the window's `AddPaneTitle`, MainWindow.Navigation.cs:242; `SessionTemplate.Inherit`;
-//! `AddToLayout`, MainWindow.Layout.cs:172): the agents, a terminal, a browser tab and the files pane, then the three ways to add a
+//! `AddToLayout`, MainWindow.Layout.cs:172): the agents, a terminal and the files pane, then the three ways to add a
 //! workspace (open a folder, make a new one, create one from a Git address).
 
 use std::collections::HashMap;
@@ -15,7 +15,6 @@ use crate::{AppSnapshot, model_label, shell, time, wire};
 pub const SEPARATOR: &str = "-";
 pub const AGENT_PREFIX: &str = "agent:";
 pub const SHELL: &str = "shell";
-pub const BROWSER: &str = "browser";
 /// `FilePaneKind.Kind`.
 pub const FILES: &str = "files";
 pub const OPEN_PROJECT: &str = "openProject";
@@ -37,7 +36,7 @@ pub const NEW_PANE_SHORTCUT_PROVIDER: &str = "claude";
 /// `AddPaneMenu.Entries`: `agent:<provider>` for each agent, then the others.
 pub fn entries() -> Vec<String> {
     let mut entries: Vec<String> = wire::PROVIDERS.iter().map(|p| format!("{AGENT_PREFIX}{p}")).collect();
-    entries.extend([SEPARATOR, SHELL, SEPARATOR, BROWSER, FILES, SEPARATOR, OPEN_PROJECT, NEW_FOLDER, FROM_GIT].map(str::to_string));
+    entries.extend([SEPARATOR, SHELL, SEPARATOR, FILES, SEPARATOR, OPEN_PROJECT, NEW_FOLDER, FROM_GIT].map(str::to_string));
     entries
 }
 
@@ -90,7 +89,6 @@ pub fn beta_label(provider: &str, text: &str, locale: &Locale) -> String {
 pub fn title(entry: &str, remote: bool, locale: &Locale) -> Option<String> {
     match entry {
         SHELL => Some(locale.get(if remote { "remote.menu.newCommand" } else { "workspace.newTerminal" })),
-        BROWSER => Some(locale.get("browser.newTab")),
         _ => agent_provider(entry).map(|provider| {
             let words = locale.get_with("workspace.newAgentPane", &[("provider", model_label::provider_label(provider))]);
             beta_label(provider, &words, locale)
@@ -247,7 +245,8 @@ mod tests {
         for one in [OPEN_PROJECT, NEW_FOLDER, FROM_GIT] {
             assert_eq!(entries.iter().filter(|e| *e == one).count(), 1, "one entry of {one}");
         }
-        assert!([SHELL, BROWSER, FILES].iter().all(|e| entries.iter().any(|x| x == e)), "terminal, browser and files entries stay");
+        assert!([SHELL, FILES].iter().all(|e| entries.iter().any(|x| x == e)), "terminal and files entries stay");
+        assert!(!entries.iter().any(|e| e == "browser"), "0.5 has no browser pane");
         assert!(
             entries.windows(2).all(|pair| !(pair[0] == SEPARATOR && pair[1] == SEPARATOR)) && entries[0] != SEPARATOR,
             "no empty sections"
@@ -339,7 +338,7 @@ mod tests {
         };
         let remote = Workspace { remote: Some(reference), ..Workspace::default() };
         let entries = entries_for(Some(&remote));
-        assert!(!entries.iter().any(|e| [BROWSER, FILES, "agent:pi", "agent:opencode", "agent:hermes"].contains(&e.as_str())));
+        assert!(!entries.iter().any(|e| ["browser", FILES, "agent:pi", "agent:opencode", "agent:hermes"].contains(&e.as_str())));
         assert!(entries.iter().any(|e| e == SHELL) && entries.ends_with(&[OPEN_PROJECT.into(), NEW_FOLDER.into(), FROM_GIT.into()]));
         let en = Locale::new("en");
         assert_eq!(title(SHELL, true, &en), Some(en.get("remote.menu.newCommand")));

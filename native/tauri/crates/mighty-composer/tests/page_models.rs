@@ -269,7 +269,6 @@ struct CardWorld {
     pane: RunSession,
     requests: Vec<PermissionRequest>,
     rows: Vec<BackgroundTask>,
-    web: Vec<(String, String)>,
     login: Option<LoginInput>,
     status: Option<StatusLineInput>,
     draft: Option<PlanDraft>,
@@ -277,7 +276,7 @@ struct CardWorld {
 
 impl CardWorld {
     fn new(p: RunSession) -> Self {
-        CardWorld { pane: p, requests: vec![], rows: vec![], web: vec![], login: None, status: None, draft: None }
+        CardWorld { pane: p, requests: vec![], rows: vec![], login: None, status: None, draft: None }
     }
     fn inputs(&self, busy: bool, styled: bool, diagram_draws_plan: bool, open: bool) -> CardInputs<'_> {
         CardInputs {
@@ -294,7 +293,6 @@ impl CardWorld {
             background_rows: &self.rows,
             antigravity: None,
             terminal_prompt: None,
-            web_open: &self.web,
             login: self.login.as_ref(),
             status_line: self.status.as_ref(),
         }
@@ -302,8 +300,8 @@ impl CardWorld {
 }
 
 /// MainWindow.WebShell.Cards.cs:391-414 and :463-494: on an idle pane the next actions come first, then the answered plans newest
-/// first, then the first waiting request's card (a Bash permission, counting the other waiting one), the web prompt and the status
-/// line, each record's fields in its order with `kind` last.
+/// first, then the first waiting request's card (a Bash permission, counting the other waiting one) and the status line, each
+/// record's fields in its order with `kind` last.
 #[test]
 fn web_cards_cs391_in_the_composers_order() {
     let l = ko();
@@ -333,7 +331,6 @@ fn web_cards_cs391_in_the_composers_order() {
     );
     bash.blocked_path = Some("C:\\secret".into());
     world.requests = vec![bash, PermissionRequest::new("perm-2", "p1", "tu-2", "Read", r#"{"file_path":"a.txt"}"#, "Read")];
-    world.web = vec![("web-1".into(), "https://example.com/".into())];
     world.status = Some(StatusLineInput {
         config: Some(("Workspace".into(), "status.sh".into())),
         untrusted: None,
@@ -372,7 +369,6 @@ fn web_cards_cs391_in_the_composers_order() {
               "inputJson": r#"{"command":"ls /tmp","description":"List","timeout":5000,"run_in_background":false}"#,
               "rawJson": l.get("styles.approval.raw"), "onceOnly": l.get("permission.bar.thisRequestOnly"),
               "deny": l.get("permission.deny"), "allowOnce": l.get("permission.allowOnce"), "kind": "permission" },
-            { "requestId": "web-1", "url": "https://example.com/", "kind": "webOpen" },
             { "lines": [[
                 { "text": "main", "color": "#ff0000", "dim": false, "bold": true, "italic": false, "underline": false },
                 { "text": " · ", "ink": "ink2", "dim": true, "bold": false, "italic": false, "underline": false },
@@ -746,7 +742,6 @@ fn the_cards_have_the_pages_field_names() {
     request.blocked_path = Some("p".into());
     request.can_allow = false;
     world.requests = vec![request.clone(), request];
-    world.web = vec![("w".into(), "https://x/".into())];
     world.login = Some(LoginInput {
         provider: "claude".into(),
         job: Some(LoginJob { automatic: false, phase: "x".into(), terminal: false, url: Some("u".into()), asks_for_code: false }),
@@ -772,7 +767,6 @@ fn the_cards_have_the_pages_field_names() {
     permission["summary"] = json!("s");
     same_keys(&types, "PermissionCard", &permission);
     same_keys(&types, "PermissionField", &permission["fields"][0]);
-    same_keys(&types, "WebOpenCard", &card("webOpen"));
     same_keys(&types, "LoginCard", &card("login"));
     same_keys(&types, "LoginLine", &card("login")["lines"][0]);
     let mut status = card("statusLine");
@@ -867,7 +861,6 @@ fn the_cards_have_the_pages_field_names() {
         "questionnaire",
         "plan",
         "antigravity",
-        "webOpen",
         "terminalPrompt",
         "login",
         "statusLine",

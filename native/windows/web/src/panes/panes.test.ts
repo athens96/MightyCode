@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { hexAlpha, tokenStyleSheet } from '../theme/tokens';
-import { slotBounds, sameBounds } from './browser/types';
 import { lineNumbers, sourceSpans, treeKey } from './files/tree';
 import type { FileRow } from './files/types';
-import { paneKindWords, slimKinds } from './Panes';
+import { paneKindWords, slimKind } from './Panes';
 import { base64Bytes, clipboardKey, defaultFamily, terminalFamily, terminalSize } from './terminal/rules';
 
 const row = (path: string, depth: number, dir = false, expanded = false): FileRow => ({ path, name: path.split('/').pop() ?? path, depth, dir, expanded, noise: false, symlink: false });
@@ -78,25 +77,21 @@ describe('terminal rules', () => {
   });
 });
 
-describe('browser slot', () => {
-  it('reports device pixels covering the slot, hidden when empty or not shown', () => {
-    expect(slotBounds({ left: 10.4, top: 20, width: 100, height: 50 }, 1.5, true)).toEqual({ x: 16, y: 30, width: 150, height: 75, visible: true });
-    expect(slotBounds({ left: 0, top: 0, width: 0, height: 50 }, 1, true).visible).toBe(false);
-    expect(slotBounds({ left: 0, top: 0, width: 10, height: 10 }, 1, false).visible).toBe(false);
-    const a = slotBounds({ left: 1, top: 1, width: 1, height: 1 }, 1, true);
-    expect(sameBounds(a, { ...a })).toBe(true);
-    expect(sameBounds(undefined, a)).toBe(false);
-  });
-});
-
 describe('slim panes', () => {
   const t = (key: string) => key;
+  it('stands over every kind but an agent and a shell, a kind it does not know too', () => {
+    for (const kind of ['agent-terminal', 'files', 'workmap']) expect(slimKind(kind)).toBe(true);
+    expect(slimKind('claude')).toBe(false);
+    expect(slimKind('shell')).toBe(false);
+    // An older computer's browser pane (a remote mirror): its kind's name over an empty body.
+    expect(slimKind('browser')).toBe(true);
+    expect(paneKindWords('browser', t)).toBe('browser');
+  });
+
   it('names the kinds the slim bar stands over', () => {
-    expect([...slimKinds]).toEqual(['browser', 'agent-terminal', 'agent-browser', 'files', 'workmap']);
     expect(paneKindWords('agent-terminal', t)).toBe('dashboard.kind.agentTerminal');
     expect(paneKindWords('files', t)).toBe('files.pane.title');
     expect(paneKindWords('workmap', t)).toBe('workMap.title');
-    expect(paneKindWords('browser', t)).toBe('browser.tab.title');
   });
 
   it('has the subtle wash, the syntax colours and the layout metrics as variables', () => {

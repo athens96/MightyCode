@@ -36,11 +36,12 @@ describe('statusGlyphFor', () => {
     expect(statusGlyphFor(status, 'claude')).toEqual({ shape, tone });
   });
 
-  it('gives an idle pane its own glyph: a terminal, a globe, or a quiet ring', () => {
+  it('gives an idle pane its own glyph: a terminal, or a quiet ring', () => {
     expect(statusGlyphFor('idle', 'shell').shape).toBe('terminal');
     expect(statusGlyphFor('idle', 'agent-terminal').shape).toBe('terminal');
-    expect(statusGlyphFor('idle', 'browser').shape).toBe('globe');
-    expect(statusGlyphFor('idle', 'agent-browser').shape).toBe('globe');
+    // An older desktop's browser pane: a kind the phone does not know.
+    expect(statusGlyphFor('idle', 'browser').shape).toBe('ring');
+    expect(statusGlyphFor('idle', 'agent-browser').shape).toBe('ring');
     expect(statusGlyphFor('idle', 'claude').shape).toBe('ring');
     expect(statusGlyphFor('idle').shape).toBe('ring');
   });

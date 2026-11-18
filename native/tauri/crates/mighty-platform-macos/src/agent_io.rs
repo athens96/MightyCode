@@ -389,7 +389,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&folder);
     }
 
-    /// Mac stage integration (the CEF smoke's read-only profile): a socket folder the listener made goes with it once empty, so a run
+    /// Mac stage integration (a smoke's read-only profile): a socket folder the listener made goes with it once empty, so a run
     /// leaves the profile as it found it.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_socket_folder_it_made_goes_on_close() {

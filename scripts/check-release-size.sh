@@ -3,9 +3,10 @@
 #
 # The app refuses any package above 512 MiB (MightyCore AppUpdate.maximumPackageBytes),
 # so a release that grows past that is unusable: existing installs can never update to
-# it. The gate here stops well short of that cliff at 480 MiB, which leaves room for the
-# bundled browser engine and the WebRTC framework to grow between releases without the
-# next build suddenly becoming un-installable.
+# it. The gate here stops well short of that cliff at 480 MiB, so a release that grows
+# between builds is caught before it becomes un-installable. 0.5 bundles no browser engine
+# (no in-app browser; web pages open in the default browser), so the zip sits far below
+# the gate; it stays a maximum, not a budget for any one part.
 #
 # Usage:
 #   scripts/check-release-size.sh [package.zip ...]

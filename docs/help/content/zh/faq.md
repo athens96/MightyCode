@@ -22,9 +22,6 @@ section: faq
 > [!warning]
 > 应用运行期间，请勿覆盖应用文件，也不要同时打开两个应用。这可能会断开与 macOS 输入法的连接，导致韩文被拆成单独的字母。更新请交给应用在退出时安装已下载的版本，或使用应用内的{{ui:settings.appUpdate.restartNowButton}}（[更新](getting-started.md#update)）。
 
-## 浏览器窗格是空白的 {#browser-empty}
-浏览器窗格默认处于关闭状态。请在{{ui:settings.nav.general}}中打开{{ui:settings.display.browserToggle}}，然后重新打开应用。请参阅[浏览器窗格](terminal-files-browser.md#browser)。
-
 ## Antigravity 拒绝了命令或文件写入 {#antigravity-denied}
 Antigravity 在工作过程中无法提问，所以会跳过需要询问的操作并结束这一轮。窗格中随后会出现一张列出被拒绝操作的卡片。点{{ui:permission.allowOnce}}或{{ui:antigravity.permission.allowAlways}}，就会在同一个对话中继续，无需自己修改规则文件。请参阅 [Antigravity 的权限卡片](approvals.md#antigravity-permission)。
 

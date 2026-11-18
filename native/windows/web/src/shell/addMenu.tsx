@@ -29,7 +29,6 @@ export function useWorkspaceAddChoices(): WorkspaceAddChoice[] {
 function EntryIcon({ entry, provider }: { entry: string; provider?: string }) {
   if (provider) return <ProviderMark provider={provider} size={12} />;
   const path = entry === 'shell' ? 'M2 3h12v10H2zM4 6l2 2-2 2M8 10h4'
-    : entry === 'browser' ? 'M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zM2 8h12M8 2c2 2 2 10 0 12M8 2c-2 2-2 10 0 12'
     : entry === 'files' || entry === 'openProject' ? 'M2 4h4l1 1.5h7V13H2z'
     : entry === 'newFolder' ? 'M2 4h4l1 1.5h7V13H2zM8 7.5v4M6 9.5h4'
     : entry === 'fromGit' ? 'M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zM8 5v6M5.5 8.5 8 11l2.5-2.5'
