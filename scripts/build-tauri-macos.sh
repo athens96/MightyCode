@@ -34,6 +34,9 @@
 #  9. the 0.4.x stager's verdict on the zip from Swift's own code (tools/parity-mac `stage`: AppUpdateService.stage and validate):
 #     accepted as MightyCode.app, dev.mightycode.native, executable MightyCode, at this version. --stager names a built parity-mac;
 #     otherwise it is built here (swift build -c release).
+# It never opens the app's window, so it may run on the self-hosted Mac (native-macos.yml's mighty-mac, beside the developer's own
+# app): the only runs of the built binary are the headless --verify-resources and Swift's stager reading the zip. The signature is ad
+# hoc unless MIGHTY_CODESIGN_IDENTITY names another (CI sets "-": the developer's identity and keychain never come into CI).
 # Needs Xcode's toolchain (swift, clang, codesign, ditto, plutil), Node, the Rust toolchain with the aarch64-apple-darwin target and
 # python3.
 set -euo pipefail
