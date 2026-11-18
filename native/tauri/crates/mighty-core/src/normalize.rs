@@ -1283,9 +1283,34 @@ pub fn todo_progress(value: Option<&TodoProgress>) -> Option<TodoProgress> {
             TodoItem { content: Some(content), status: Some(status), active_form: active, id }
         })
         .filter(|i| i.content.as_deref().is_some_and(|c| !c.is_empty()))
-        .take(100)
         .collect();
-    Some(TodoProgress { items: Some(items), run_id: value.run_id.clone().filter(|r| wire::identifier(r)) })
+    Some(TodoProgress { items: Some(newest_todos(items, MAXIMUM_TODOS)), run_id: value.run_id.clone().filter(|r| wire::identifier(r)) })
+}
+
+/// The most items a saved checklist keeps.
+pub const MAXIMUM_TODOS: usize = 100;
+
+/// A checklist cut to `limit` items, in its own order: the oldest finished ones go first, so a long session's new steps (the
+/// ones the progress panel draws) are never the ones left out; only when the unfinished alone are too many, the oldest of them.
+/// (Keeping the first `limit`, as before, dropped every task made after the hundredth.)
+pub fn newest_todos(items: Vec<TodoItem>, limit: usize) -> Vec<TodoItem> {
+    if items.len() <= limit {
+        return items;
+    }
+    let mut over = items.len() - limit;
+    let mut kept: Vec<TodoItem> = items
+        .into_iter()
+        .filter(|item| {
+            if over > 0 && item.status.as_deref() == Some("completed") {
+                over -= 1;
+                return false;
+            }
+            true
+        })
+        .collect();
+    let extra = kept.len().saturating_sub(limit);
+    kept.drain(..extra);
+    kept
 }
 
 /// `BackgroundTaskTracker.ValidId`.
@@ -1895,6 +1920,50 @@ pub fn stored(snapshot: &AppSnapshot) -> AppSnapshot {
 
 #[cfg(test)]
 mod tests {
+
+    fn todo(content: &str, status: &str) -> TodoItem {
+        TodoItem { content: Some(content.into()), status: Some(status.into()), active_form: None, id: Some(content.into()) }
+    }
+
+    #[test]
+    fn a_long_checklist_keeps_its_newest_steps() {
+        // 120 tasks: the first 110 finished, the last 10 new. The 20 left out are the oldest finished ones.
+        let items: Vec<TodoItem> = (0..120)
+            .map(|i| {
+                todo(
+                    &format!("t{i}"),
+                    if i < 110 {
+                        "completed"
+                    } else if i == 110 {
+                        "in_progress"
+                    } else {
+                        "pending"
+                    },
+                )
+            })
+            .collect();
+        let kept = newest_todos(items, 100);
+        assert_eq!(kept.len(), 100);
+        assert_eq!(kept.first().and_then(|t| t.content.as_deref()), Some("t20"));
+        assert_eq!(kept.last().and_then(|t| t.content.as_deref()), Some("t119"));
+        // An unfinished old task stays, ahead of the finished ones after it.
+        let mut items: Vec<TodoItem> = (0..105).map(|i| todo(&format!("t{i}"), "completed")).collect();
+        items[0] = todo("t0", "pending");
+        let kept = newest_todos(items, 100);
+        assert_eq!(kept.iter().map(|t| t.content.as_deref().unwrap_or("")).take(2).collect::<Vec<_>>(), ["t0", "t6"]);
+        // Too many unfinished: the newest are kept.
+        let items: Vec<TodoItem> = (0..103).map(|i| todo(&format!("t{i}"), "pending")).collect();
+        assert_eq!(newest_todos(items, 100).first().and_then(|t| t.content.as_deref()), Some("t3"));
+        // Through todo_progress, as the tracker and the state file both read it.
+        let progress = TodoProgress {
+            items: Some((0..130).map(|i| todo(&format!("s{i}"), if i < 125 { "completed" } else { "pending" })).collect()),
+            run_id: None,
+        };
+        let items = todo_progress(Some(&progress)).and_then(|p| p.items).unwrap_or_default();
+        assert_eq!(items.len(), 100);
+        assert_eq!(items.last().and_then(|t| t.content.as_deref()), Some("s129"));
+    }
+
     use super::*;
     use crate::json::{JsonOut, Wire};
 

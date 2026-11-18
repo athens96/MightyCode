@@ -402,6 +402,19 @@ pub fn created_id(output: Option<&str>) -> Option<String> {
     pattern.captures(output?).map(|c| c[1].to_string())
 }
 
+/// The most tasks the tracker holds.
+const MAXIMUM_TRACKED_TASKS: usize = 256;
+
+/// A new task added to the tracked ones; when they are full, the oldest finished one makes room (else the oldest), so a long
+/// session's new tasks are never the ones dropped.
+fn push_task(tasks: &mut Vec<TodoItem>, task: TodoItem) {
+    if tasks.len() >= MAXIMUM_TRACKED_TASKS {
+        let oldest = tasks.iter().position(|t| t.status.as_deref() == Some("completed")).unwrap_or(0);
+        tasks.remove(oldest);
+    }
+    tasks.push(task);
+}
+
 impl TodoProgressTracker {
     /// `progress`: the pane's saved checklist, for a run that resumes it.
     pub fn new(progress: Option<&TodoProgress>) -> TodoProgressTracker {
@@ -526,10 +539,10 @@ impl TodoProgressTracker {
                                 if let Some(status) = status {
                                     task.status = Some(status.to_string());
                                 }
-                            } else if self.tasks.len() < 256 {
+                            } else {
                                 let content = subject.map(str::to_string).unwrap_or_else(|| task_id.clone());
                                 let active = active.or_else(|| subject.map(str::to_string)).unwrap_or_else(|| task_id.clone());
-                                self.tasks.push(todo_item(&content, status.unwrap_or("pending"), Some(&active), Some(&task_id)));
+                                push_task(&mut self.tasks, todo_item(&content, status.unwrap_or("pending"), Some(&active), Some(&task_id)));
                             }
                             changed = true;
                         }
@@ -551,8 +564,8 @@ impl TodoProgressTracker {
                     let Some(task_id) = task_id else { continue };
                     let (_, item) = self.creates.remove(index);
                     let item = TodoItem { id: Some(task_id.clone()), ..item };
-                    if !self.tasks.iter().any(|t| t.id.as_deref() == Some(task_id.as_str())) && self.tasks.len() < 256 {
-                        self.tasks.push(item);
+                    if !self.tasks.iter().any(|t| t.id.as_deref() == Some(task_id.as_str())) {
+                        push_task(&mut self.tasks, item);
                     }
                     changed = true;
                 }
@@ -941,4 +954,36 @@ fn finish(task: &mut BackgroundTask, status: &str, now: &str) {
     }
     task.status = Some(status.into());
     task.ended_at = Some(now.into());
+}
+
+#[cfg(test)]
+mod tracked_tasks {
+    use super::*;
+    use serde_json::json;
+
+    /// Claude's TaskCreate call and its result, as the stream carries them.
+    fn create(tracker: &mut TodoProgressTracker, n: usize, status: &str) -> Option<TodoProgress> {
+        let call = format!("call-{n}");
+        tracker.consume(&json!({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": call, "name": "TaskCreate", "input": {"subject": format!("task {n}")}}]}}));
+        tracker.consume(&json!({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": call, "content": format!("Task #{n} created successfully: task {n}")}]}}));
+        tracker.consume(&json!({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": format!("update-{n}"), "name": "TaskUpdate", "input": {"taskId": n.to_string(), "status": status}}]}}))
+    }
+
+    #[test]
+    fn a_long_session_keeps_its_newest_tasks() {
+        let mut tracker = TodoProgressTracker::default();
+        let mut last = None;
+        for n in 1..=300 {
+            last = create(&mut tracker, n, if n < 298 { "completed" } else { "in_progress" }).or(last);
+        }
+        assert_eq!(tracker.tasks.len(), MAXIMUM_TRACKED_TASKS);
+        let items = last.and_then(|p| p.items).unwrap_or_default();
+        assert_eq!(items.len(), 100, "the saved list is cut to 100");
+        let names: Vec<&str> = items.iter().filter_map(|t| t.content.as_deref()).collect();
+        assert_eq!(names.last(), Some(&"task 300"), "the newest task is in the list the panel reads");
+        assert!(names.contains(&"task 298") && names.contains(&"task 299"));
+    }
 }
