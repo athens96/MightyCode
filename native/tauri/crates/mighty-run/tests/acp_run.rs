@@ -420,9 +420,9 @@ async fn a_stop_tells_hermes_to_cancel_the_turn_before_the_process_ends() {
 }
 
 /// ACP, Prompt Turn › Cancellation: "The Client MUST respond to all pending session/request_permission requests with the cancelled
-/// outcome." A stop answers Hermes's waiting approval `cancelled` before it writes `session/cancel`, and its card settles; an Allow
-/// pressed in the second before Hermes is ended (here on the approval Hermes asks after the cancel) is refused as already settled and
-/// never reaches it.
+/// outcome." A stop answers Hermes's waiting approval `cancelled` before it writes `session/cancel`, and its card settles; the approval
+/// Hermes asks after the cancel, in the second before it is ended, is answered `cancelled` at once and never shows as a card, and no
+/// answer of the user's leaves after the stop (C# `AStopAnswersAWaitingPermissionCancelledAndRefusesALaterAllow`, 521fe379).
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stop_answers_hermess_waiting_approval_cancelled_first_and_takes_no_late_allow() {
     common::korean();
@@ -445,22 +445,27 @@ async fn a_stop_answers_hermess_waiting_approval_cancelled_first_and_takes_no_la
     let first = pending()[0].clone();
     let stopping = manager.clone();
     let stop = tokio::spawn(async move { stopping.stop("pane").await });
-    common::until(|| pending().len() == 2, 900, "the approval Hermes asks after the cancel, within its second").await;
-    let second = pending()[1].clone();
-    let late = manager.respond_to_tool_permission("pane", &second.id, true);
+    let frames = || lines(directory.join("stdin.txt")).iter().map(|l| common::json(l)).collect::<Vec<Value>>();
+    let cancelled =
+        |frames: &[Value], id: i64| frames.iter().position(|f| f["id"] == id && f["result"]["outcome"]["outcome"] == "cancelled");
+    common::until(|| cancelled(&frames(), 1).is_some(), 900, "the approval Hermes asks after the cancel, answered within its second").await;
+    let late = manager.respond_to_tool_permission("pane", &first.id, true);
     stop.await.unwrap().unwrap();
     common::until(|| events.ended(), 30_000, "the run ends").await;
     manager.dispose().await;
-    let frames: Vec<Value> = lines(directory.join("stdin.txt")).iter().map(|l| common::json(l)).collect();
-    let answered = frames.iter().position(|f| f["id"] == 0 && f["result"]["outcome"]["outcome"] == "cancelled");
+    let frames = frames();
+    let (answered, later) = (cancelled(&frames, 0), cancelled(&frames, 1));
     let cancel = frames.iter().position(|f| f["method"] == "session/cancel");
     assert!(
-        answered.is_some() && cancel.is_some() && answered < cancel,
-        "the waiting approval was answered cancelled before session/cancel: {frames:?}"
+        answered.is_some() && cancel.is_some() && answered < cancel && cancel < later,
+        "the waiting approval was answered cancelled before session/cancel, the later one after it: {frames:?}"
     );
-    assert!(cards.lock().unwrap().iter().any(|c| c.id == first.id && c.state == "cancelled"), "its card settled cancelled");
+    assert_eq!(frames.iter().filter(|f| f["id"] == 1).count(), 1, "the later approval was answered once, cancelled: {frames:?}");
+    assert!(!frames.iter().any(|f| f["result"]["outcome"]["outcome"] == "selected"), "no answer of the user's left: {frames:?}");
+    let shown = cards.lock().unwrap().clone();
+    assert!(shown.iter().any(|c| c.id == first.id && c.state == "cancelled"), "its card settled cancelled");
+    assert_eq!(shown.iter().filter(|c| c.state == "pending").count(), 1, "the later approval never showed as a card: {shown:?}");
     assert!(late.is_err_and(|e| e.message() == mighty_run::presentation::strings::already_settled()), "a late Allow is refused");
-    assert!(!frames.iter().any(|f| f["id"] == 1), "and never reaches Hermes: {frames:?}");
     agents::hermes_reset_question_tool();
     common::remove_when_free(&directory).await;
 }

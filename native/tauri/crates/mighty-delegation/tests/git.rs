@@ -24,7 +24,7 @@ mod checks {
     use mighty_delegation::git::auto_commit::{self, AutoCommitOutcome, MAXIMUM_NEW_FILE_BYTES};
     use mighty_delegation::git::cleanup::{self, ChildCleanupHold, ChildCleanupOutcome, ChildDiscardOutcome};
     use mighty_delegation::git::merge::{self, ChildMergeOutcome, ChildUndoOutcome};
-    use mighty_delegation::git::paths::{is_inside, same, standardized};
+    use mighty_delegation::git::paths::{is_inside, is_link, same, standardized};
     use mighty_delegation::git::worktree::{
         ChildWorktree, ChildWorktreeCheck, ChildWorktreeOutcome, MINIMUM_FREE_BYTES, Maker, NOTES_FOLDER, is_safe_session_id,
         report_file_in, task_file_in,
@@ -1542,9 +1542,34 @@ mod checks {
     /// Beyond C# (W7 review M1): a child's worktree folder replaced by a junction to another registered worktree. The cleanup keeps
     /// everything, the app's commit refuses it, and the discard unlinks the junction alone: the other worktree, its files, its
     /// registration and its branch stay, and the child's own registration and branch go.
-    #[cfg(windows)] // Junctions are Windows' (`mklink /J`).
+    #[cfg(windows)] // Junctions are Windows' (`mklink /J`); the symlink variant below is the Mac's.
     #[tokio::test]
     async fn a_worktree_folder_replaced_by_a_junction_never_reaches_what_it_points_to() {
+        worktree_folder_replaced_by_a_link().await;
+    }
+
+    /// `DelegationCleanupTests.swift "aWorktreeFolderReplacedByASymlinkNeverReachesWhatItPointsTo"` (71b4aa1a): the same with a
+    /// symbolic link. Swift's cleanup keeps it as `worktreeMissing`; this app keeps it as [`ChildCleanupHold::Link`] on both systems.
+    #[cfg(unix)] // A symbolic link to a folder; Windows' is the junction variant above (a symlink there needs a privilege).
+    #[tokio::test]
+    async fn a_worktree_folder_replaced_by_a_symlink_never_reaches_what_it_points_to() {
+        worktree_folder_replaced_by_a_link().await;
+    }
+
+    /// A folder link at `link` to `target`: a junction on Windows, a symbolic link elsewhere.
+    async fn link_folder(link: &str, target: &str) {
+        #[cfg(windows)]
+        junction(link, target).await;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    /// Takes away the folder link `link` alone (a junction is removed as a folder, a symbolic link as a file).
+    fn unlink_folder(link: &str) {
+        std::fs::remove_dir(link).or_else(|_| std::fs::remove_file(link)).unwrap();
+    }
+
+    async fn worktree_folder_replaced_by_a_link() {
         let _lane = lane::enter().await;
         let locale = en();
         let place = DelegationPlace::new();
@@ -1555,9 +1580,9 @@ mod checks {
         std::fs::write(combine(&other.worktree_path, "unsaved.txt"), "c2's own work\n").unwrap();
         std::fs::write(combine(&other.worktree_path, "c2.txt"), "c2 changed\n").unwrap();
         let merge = merged(merge::tool_merge(&git, &child.view(), &head, &place.repo()).await);
-        // c1's folder goes (its registration stays) and a junction to c2's worktree takes its place.
+        // c1's folder goes (its registration stays) and a link to c2's worktree takes its place.
         remove_folder(Path::new(&child.worktree_path));
-        junction(&child.worktree_path, &other.worktree_path).await;
+        link_folder(&child.worktree_path, &other.worktree_path).await;
         let other_state = async || {
             (
                 std::fs::read_to_string(combine(&other.worktree_path, "unsaved.txt")).ok(),
@@ -1572,7 +1597,7 @@ mod checks {
         assert_eq!(
             cleanup::clean_up(&git, &paths, &child.with_state(ChildState::Merged).view(), &merge, &place.repo(), None).await,
             ChildCleanupOutcome::Kept(ChildCleanupHold::Link),
-            "cleanup keeps everything for a worktree folder that is a junction"
+            "cleanup keeps everything for a worktree folder that is a link"
         );
         assert!(place.disk().await == before && other_state().await == untouched, "nothing changed");
         let commit = auto_commit::run(&git, &paths, &child.worktree_path, "c1", 1, "codex").await;
@@ -1580,11 +1605,22 @@ mod checks {
             commit.outcome == AutoCommitOutcome::Failed
                 && commit.why.as_deref() == Some("The child's folder is not its own git worktree.")
                 && other_state().await == untouched,
-            "the app never commits through the junction: {commit:?}"
+            "the app never commits through the link: {commit:?}"
         );
-        // Its place is still its place, named as the junction and not as what it points to.
+        // Its place is still its place, named as the link and not as what it points to.
         assert!(same(&paths.canonical_place(&child.worktree_path), &combine(&paths.canonical(&place.root()), "c1")));
         assert!(!same(&paths.canonical(&child.worktree_path), &paths.canonical_place(&child.worktree_path)));
+        // A record naming a link elsewhere than its own place is refused, and that link stays.
+        let elsewhere = combine(&place.root(), "elsewhere");
+        link_folder(&elsewhere, &other.worktree_path).await;
+        let misplaced = PlaceChild { worktree_path: elsewhere.clone(), ..child.clone() };
+        assert_eq!(
+            cleanup::discard(&git, &paths, &misplaced.view(), &place.repo(), &place.root(), &locale).await,
+            ChildDiscardOutcome::Failed(locale.get("delegation.card.error.worktreeMisplaced")),
+            "a link elsewhere than the child's place is refused"
+        );
+        assert!(is_link(&elsewhere) && other_state().await == untouched, "and stays, with what it points to");
+        unlink_folder(&elsewhere);
         assert_eq!(
             cleanup::discard(&git, &paths, &child.view(), &place.repo(), &place.root(), &locale).await,
             ChildDiscardOutcome::Discarded,
@@ -1592,7 +1628,7 @@ mod checks {
         );
         assert!(
             !Path::new(&child.worktree_path).exists() && Path::new(&other.worktree_path).is_dir() && other_state().await == untouched,
-            "only the junction went: the other worktree and its work stay"
+            "only the link went: the other worktree and its work stay"
         );
         let listed = place.worktree_list().await;
         assert!(

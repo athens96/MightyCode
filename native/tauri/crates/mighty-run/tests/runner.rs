@@ -594,6 +594,62 @@ async fn a_hosted_claude_run_with_a_picture_sends_its_user_message_once() {
     common::remove_when_free(&directory).await;
 }
 
+/// ToolPermissionVerification.cs `InteractiveRunSendsAttachmentsAsBlocks` (e15c8874): an interactive Claude run (the approval bar is
+/// shown) with a picture and a PDF hands the CLI the staged user frame as it is — a content array of the text, image and document
+/// blocks, never that frame's JSON wrapped again as one text.
+#[tokio::test(flavor = "multi_thread")]
+async fn interactive_run_sends_attachments_as_blocks() {
+    use base64::Engine;
+    common::korean();
+    let directory = common::temp("interactive-attachments");
+    let workspace = workspace(&directory);
+    let plugin = common::plugin(&directory);
+    let record = directory.join("attached");
+    let catalog = common::fake_catalog(&["--fake-cli", "claude", &record.to_string_lossy()]);
+    let events = Events::default();
+    let cell: Cell = Arc::default();
+    let mut options = RunManagerOptions::new(&plugin, resolve(&workspace), events.emit());
+    let answer = cell.clone();
+    options.permission_requested = Some(Arc::new(move |value: ToolPermissionRequest| {
+        if value.state == "pending" {
+            manager_of(&answer).respond_to_tool_permission("attached", &value.id, false).unwrap();
+        }
+    }));
+    let manager = Arc::new(RunManager::new(catalog, options));
+    cell.set(Arc::downgrade(&manager)).ok();
+    let image = mighty_run::attachments::make("picture.png", &base64::engine::general_purpose::STANDARD.decode(PNG).unwrap()).unwrap();
+    let pdf = mighty_run::attachments::make("file.pdf", b"%PDF-1.7\nfixture").unwrap();
+    let mut start = request("attached", &workspace, "claude", "describe the attachments");
+    start.attachments = Some(vec![image.clone(), pdf.clone()]);
+    manager.start(start).await.unwrap();
+    common::until(|| !manager.is_running("attached"), 20000, "the run ends").await;
+    manager.dispose().await;
+
+    assert_eq!(common::after(&args(&record), "--permission-prompt-tool"), "stdio", "the run is interactive: host prompts over stdio");
+    let written: Vec<String> = read(suffixed(&record, ".input")).lines().filter(|l| !l.is_empty()).map(str::to_string).collect();
+    assert_eq!(common::json(&written[0])["request"]["subtype"], "initialize", "the handshake is written first");
+    let frame = common::json(&written[1]);
+    assert!(frame["type"] == "user" && frame["message"]["role"] == "user", "the prompt follows the handshake as one user message: {frame}");
+    let blocks =
+        frame["message"]["content"].as_array().expect("the message content is an array of blocks, not the frame's JSON as one string");
+    assert!(
+        blocks[0]["type"] == "text" && blocks[0]["text"] == "describe the attachments",
+        "the prompt stays the first, text block: {blocks:?}"
+    );
+    let of = |kind: &str| blocks.iter().filter(|b| b["type"] == kind).map(|b| b["source"].clone()).collect::<Vec<Value>>();
+    let (pictures, documents) = (of("image"), of("document"));
+    assert!(
+        pictures.len() == 1 && pictures[0]["media_type"] == "image/png" && pictures[0]["data"] == image.data_base64.as_str(),
+        "the image block carries the picture's bytes: {pictures:?}"
+    );
+    assert!(
+        documents.len() == 1 && documents[0]["media_type"] == "application/pdf" && documents[0]["data"] == pdf.data_base64.as_str(),
+        "the document block carries the PDF's bytes: {documents:?}"
+    );
+    assert!(!written[1].contains("\\\"base64\\\""), "no JSON is escaped inside a text block");
+    common::remove_when_free(&directory).await;
+}
+
 /// Verification.cs "pending stop and disposal prevent a late child launch".
 #[tokio::test(flavor = "multi_thread")]
 async fn pending_stop_and_disposal_prevent_a_late_child_launch() {
