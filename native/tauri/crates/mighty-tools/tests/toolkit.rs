@@ -1224,6 +1224,7 @@ fn a_toolkit_steps_program_is_found_along_the_path_only() {
 /// (the probe says missing, the plan says why instead of cloning there); an address that is no URL fails the plan with why.
 #[test]
 fn a_skill_folder_never_escapes_the_skills_folder() {
+    common::korean();
     assert_eq!(probe::skill_folder_name("https://github.com/x/some-skill.git").as_deref(), Some("some-skill"));
     for url in ["https://github.com/x/D:evil", "https://github.com/x/C:", "https://github.com/x/..git"] {
         assert_eq!(probe::skill_folder_name(url), None, "{url}");

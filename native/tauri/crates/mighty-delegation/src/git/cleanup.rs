@@ -430,7 +430,8 @@ fn unlink(path: &str) -> std::io::Result<()> {
         std::fs::set_permissions(path, permissions)?;
     }
     if is_directory_link(Path::new(path), &meta) {
-        std::fs::remove_dir(path)
+        // A junction (Windows) goes as a folder; a symbolic link to a folder elsewhere is refused by rmdir (ENOTDIR) and goes as a file.
+        std::fs::remove_dir(path).or_else(|_| std::fs::remove_file(path))
     } else {
         // A link whose target is gone or is no folder: a folder link as a folder, a file link as a file.
         std::fs::remove_file(path).or_else(|_| std::fs::remove_dir(path))
