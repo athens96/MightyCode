@@ -8,8 +8,16 @@ on:
         description: Build, test and capture the help screenshots (release.py dispatches this when a build commit's push run skipped the Mac)
         type: boolean
         default: true
+      hosted:
+        description: Build and test on GitHub's runners instead of the self-hosted Mac (when it is off)
+        type: boolean
+        default: false
 permissions:
   contents: read
+env:
+  # Without notarization the build job's zip is the release package; with it, the notarize job signs it and
+  # publishes MightyCode-native-macos. The smoke job reads the same artifact.
+  MAC_ZIP_ARTIFACT: ${{ (vars.MIGHTY_MAC_NOTARIZE == '1' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) && 'MightyCode-native-macos-unsigned' || 'MightyCode-native-macos' }}
 jobs:
   changes:
     # Whether this run builds and tests the Mac app, and whether it captures the help screenshots
@@ -32,9 +40,11 @@ jobs:
 
   macos-tests:
     # The Swift core tests and the mod's checks, on their own runner beside the build job.
+    # The self-hosted Mac (runner label mighty-mac) for main pushes and dispatches, GitHub's runner for pull requests
+    # and branches: a pull request's code never runs on that Mac.
     needs: changes
     if: needs.changes.outputs.run == 'true'
-    runs-on: macos-latest
+    runs-on: ${{ fromJSON((github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.hosted != true) && '["self-hosted", "mighty-mac"]' || '"macos-latest"') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,6 +55,8 @@ jobs:
           xcrun --find swift
           xcrun swift --version
       - name: Restore SwiftPM downloads
+        # GitHub's runners only: on the self-hosted Mac this is the developer's own cache.
+        if: runner.environment == 'github-hosted'
         uses: actions/cache@v4
         with:
           path: |
@@ -62,6 +74,7 @@ jobs:
         working-directory: mods/mighty-bridge/tests
         run: npm ci --no-audit --no-fund && npm run check
       - name: Test Swift core
+        timeout-minutes: 40
         env:
           # Scenarios S1 and S2 leave their records here for the record script.
           MIGHTY_DELEGATION_RECORD_EXPORT: ${{ runner.temp }}/delegation-records
@@ -91,9 +104,10 @@ jobs:
           exit $status
 
   macos:
+    # Builds and packages the app; the same runner rule as macos-tests. The GUI checks are macos-smoke's.
     needs: changes
     if: needs.changes.outputs.run == 'true'
-    runs-on: macos-latest
+    runs-on: ${{ fromJSON((github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.hosted != true) && '["self-hosted", "mighty-mac"]' || '"macos-latest"') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -106,6 +120,8 @@ jobs:
           xcrun swift --version
           xcrun --sdk macosx --show-sdk-path
       - name: Restore SwiftPM downloads
+        # GitHub's runners only: on the self-hosted Mac this is the developer's own cache.
+        if: runner.environment == 'github-hosted'
         uses: actions/cache@v4
         with:
           path: |
@@ -116,7 +132,7 @@ jobs:
       # (CEF and Node, BrowserEngine.lock) as the Mac release zips always have; other runs build without it.
       - name: Restore the pinned browser engine (main)
         # Like the build step below, also after a failed test step, so the build never lacks the engine.
-        if: (success() || failure()) && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        if: (success() || failure()) && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && runner.environment == 'github-hosted'
         uses: actions/cache@v4
         with:
           path: ~/Library/Caches/MightyCode/browser-engine
@@ -134,11 +150,47 @@ jobs:
           MIGHTY_UPDATE_URL: ${{ vars.MIGHTY_UPDATE_URL || 'https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/latest.json' }}
           MIGHTY_UPDATE_PUBLIC_KEY: ${{ vars.MIGHTY_UPDATE_PUBLIC_KEY || 'C02DD3qWG+A5gJdYwpaEnvpzYugo354CLtUtU+oXmZ4=' }}
           MIGHTY_BROWSER_ENGINE: ${{ (github.ref == 'refs/heads/main' && github.event_name != 'pull_request') && '1' || '' }}
+          # Ad-hoc, as on GitHub's runners: on the self-hosted Mac the developer's own signing identity (and a
+          # keychain prompt) must never come into CI. The notarize job signs with the Developer ID.
+          MIGHTY_CODESIGN_IDENTITY: '-'
         run: bash scripts/build-macos.sh
+      - name: Package macOS app with executable modes and hidden resources
+        run: ditto -c -k --sequesterRsrc --keepParent release/native-macos/MightyCode.app release/MightyCode-macos.zip
+      - name: Gate the release package size before upload
+        run: scripts/check-release-size.sh release/MightyCode-macos.zip
+      # Without notarization (any branch, or main before the repository variable
+      # MIGHTY_MAC_NOTARIZE is 1) this ad-hoc zip is the release package. With it,
+      # the zip goes to the notarize-macos job, which signs, notarizes and adds the dmg.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.MAC_ZIP_ARTIFACT }}
+          path: release/MightyCode-macos.zip
+          if-no-files-found: error
+
+
+  macos-smoke:
+    # The app's GUI checks and the help screenshots, on a GitHub runner with the app the build job made: they
+    # launch the app (a second instance on a developer's Mac breaks its Korean input) and the help capture puts
+    # demo folders in the home folder, so they never run on the self-hosted Mac.
+    needs: [changes, macos]
+    if: needs.changes.outputs.run == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.MAC_ZIP_ARTIFACT }}
+          path: ${{ runner.temp }}/built
+      - name: Unpack the built app
+        id: unpack
+        run: |
+          mkdir -p release/native-macos
+          ditto -x -k "$RUNNER_TEMP/built/MightyCode-macos.zip" release/native-macos
+          test -x release/native-macos/MightyCode.app/Contents/MacOS/MightyCode
       - name: Delegation server lists its six tools headlessly; mighty-terminal keeps its four tools
         # The app binary as the two stdio MCP servers a run can launch. Only a Claude
         # pane's run with the hidden delegation switch on names the second one.
-        if: (success() || failure()) && steps.build-app.outcome == 'success'
+        if: (success() || failure()) && steps.unpack.outcome == 'success'
         timeout-minutes: 2
         run: |
           python3 - <<'PY'
@@ -221,7 +273,7 @@ jobs:
       - name: Smoke test the Ghostty terminal pane
         # A real shell in a disposable profile: PTY, folder, history, Ctrl-C, resize,
         # restart, and that the pane is running only while a command runs. Only with an app to run.
-        if: (success() || failure()) && steps.build-app.outcome == 'success'
+        if: (success() || failure()) && steps.unpack.outcome == 'success'
         timeout-minutes: 5
         run: |
           set -u
@@ -259,7 +311,7 @@ jobs:
         # The diagram in a disposable profile: block layout, resize, the 실행 split, and
         # the follow camera (the newest block sits just above the composer; a reader who
         # scrolled up is never pulled back when a new block appears). Only with an app to run.
-        if: (success() || failure()) && steps.build-app.outcome == 'success'
+        if: (success() || failure()) && steps.unpack.outcome == 'success'
         timeout-minutes: 5
         run: |
           set -u
@@ -298,7 +350,7 @@ jobs:
         # on the runner is probed or installed): its rows and states, the out-of-date Claude's
         # update, Tailscale's download page, a picked tool pulling in Homebrew, and the
         # confirmation's commands in order. The confirmation is cancelled; no script is written.
-        if: (success() || failure()) && steps.build-app.outcome == 'success'
+        if: (success() || failure()) && steps.unpack.outcome == 'success'
         timeout-minutes: 5
         run: |
           set -u
@@ -335,7 +387,7 @@ jobs:
         # The work map over a git repository of three commits and a tag in a disposable profile,
         # with a saved summary standing in for the AI's answer: the pane opens as one tab, shows
         # the versions and topic cards, and is left out of the phone's pane list. No AI request is sent.
-        if: (success() || failure()) && steps.build-app.outcome == 'success'
+        if: (success() || failure()) && steps.unpack.outcome == 'success'
         timeout-minutes: 5
         run: |
           set -u
@@ -377,7 +429,7 @@ jobs:
         # pick calls; the menu itself is not shown) starts a Claude child of a Codex pane. Every
         # Claude run is the scripted FakeClaude the app
         # build made beside the app's binary; no model runs. Only with an app to run.
-        if: (success() || failure()) && steps.build-app.outcome == 'success'
+        if: (success() || failure()) && steps.unpack.outcome == 'success'
         timeout-minutes: 5
         run: |
           set -u
@@ -484,19 +536,6 @@ jobs:
           name: MightyCode-macos-help-shots
           path: ${{ runner.temp }}/mighty-help-*/help-shots/
           if-no-files-found: warn
-      - name: Package macOS app with executable modes and hidden resources
-        run: ditto -c -k --sequesterRsrc --keepParent release/native-macos/MightyCode.app release/MightyCode-macos.zip
-      - name: Gate the release package size before upload
-        run: scripts/check-release-size.sh release/MightyCode-macos.zip
-      # Without notarization (any branch, or main before the repository variable
-      # MIGHTY_MAC_NOTARIZE is 1) this ad-hoc zip is the release package. With it,
-      # the zip goes to the notarize-macos job, which signs, notarizes and adds the dmg.
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ (vars.MIGHTY_MAC_NOTARIZE == '1' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) && 'MightyCode-native-macos-unsigned' || 'MightyCode-native-macos' }}
-          path: release/MightyCode-macos.zip
-          if-no-files-found: error
-
   notarize-macos:
     # Developer ID signing and notarization for main pushes, so a downloaded app
     # opens without Gatekeeper's warning. The certificate and the notary key are
