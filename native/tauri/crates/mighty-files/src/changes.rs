@@ -703,14 +703,15 @@ pub fn not_in_head(error: &str) -> bool {
     error.contains("does not exist in 'HEAD'") || error.contains("exists on disk, but not in 'HEAD'")
 }
 
-/// One git command as `run_git` starts it: no hooks, no fsmonitor, no optional locks, no automatic gc, nothing fetched (a partial
-/// clone fetches a missing blob from its remote on `cat-file`: `GIT_NO_LAZY_FETCH` and no transport allowed), and no GIT_* from the
-/// app's environment.
+/// One git command as `run_git` starts it: no hooks, no fsmonitor, no optional locks, no automatic gc, no signature program the
+/// repository names ([`mighty_run::git::no_programs`], as C#'s `GitHeadFile`), nothing fetched (a partial clone fetches a missing blob
+/// from its remote on `cat-file`: `GIT_NO_LAZY_FETCH` and no transport allowed), and no GIT_* from the app's environment.
 fn git_request(binary: &Path, root: &str, arguments: &[&str]) -> SpawnRequest {
     let hooks = if ignores_case() { "core.hooksPath=NUL" } else { "core.hooksPath=/dev/null" };
-    let mut all = vec!["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", hooks, "-c", "gc.auto=0", "-c", "protocol.allow=never"];
-    all.extend_from_slice(&["-C", root]);
-    all.extend_from_slice(arguments);
+    let mut all: Vec<String> =
+        ["--no-optional-locks", "-c", "core.fsmonitor=false", "-c", hooks, "-c", "gc.auto=0"].into_iter().map(str::to_string).collect();
+    all.extend(mighty_run::git::no_programs(binary));
+    all.extend(["-C", root].into_iter().chain(arguments.iter().copied()).map(str::to_string));
     let mut request = SpawnRequest::new(binary.to_path_buf(), all, root);
     for (key, _) in std::env::vars_os() {
         let key = key.to_string_lossy().into_owned();
@@ -933,12 +934,14 @@ mod tests {
         }
     }
 
-    /// HEAD's copy is read with nothing fetched: a partial clone's missing blob is no reason to reach its remote.
+    /// HEAD's copy is read with nothing fetched: a partial clone's missing blob is no reason to reach its remote; and no signature
+    /// program the repository names can start (`mighty_run::git::no_programs`, as C#'s `GitHeadFile`).
     #[test]
     fn git_reads_fetch_nothing() {
         let request = git_request(Path::new("git"), "C:\\work", &["cat-file", "blob", "HEAD:./a.txt"]);
         let args = request.args.join(" ");
         assert!(args.contains("-c protocol.allow=never"), "{args}");
+        assert!(args.contains(&mighty_run::git::no_programs(Path::new("git")).join(" ")), "{args}");
         assert!(args.ends_with("-C C:\\work cat-file blob HEAD:./a.txt"), "{args}");
         assert_eq!(request.env.get("GIT_NO_LAZY_FETCH").map(String::as_str), Some("1"));
         assert_eq!(request.env.get("GIT_TERMINAL_PROMPT").map(String::as_str), Some("0"));

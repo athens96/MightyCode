@@ -293,10 +293,11 @@ fn handler_program(handler: &str) -> String {
 }
 
 /// Whether opening a file of type `extension` (with its dot) with `handlers` (what Windows says opens it: its open verb's program and
-/// command line) would run code: a type in [`CODE_TYPES`], or a handler in [`LAUNCHERS`].
+/// command line) would run code: a type in [`CODE_TYPES`], or a handler in [`LAUNCHERS`] or any python (`python3.12`, `python312`; C#
+/// `WindowsDefaultApp.LaunchesCode`).
 pub fn opens_as_code(extension: &str, handlers: &[String]) -> bool {
     CODE_TYPES.iter().any(|t| t.eq_ignore_ascii_case(extension))
-        || handlers.iter().any(|h| LAUNCHERS.contains(&handler_program(h).as_str()))
+        || handlers.iter().map(|h| handler_program(h)).any(|program| LAUNCHERS.contains(&program.as_str()) || program.starts_with("python"))
 }
 
 /// What Windows says opens a file of type `extension`: `AssocQueryStringW`'s executable and command line, for the `open` verb (which
@@ -719,6 +720,8 @@ mod tests {
         assert_eq!(handler_program(r#""%1" %*"#), "%1");
         assert!(opens_as_code(".anything", &handlers(&[r"C:\Python312\py.exe", r#""C:\Python312\py.exe" "%1" %*"#])));
         assert!(opens_as_code(".mjs", &handlers(&[r#"C:\Program Files\nodejs\node.exe "%1""#])));
+        assert!(opens_as_code(".x", &handlers(&[r#""C:\Python312\python3.12.exe" "%1""#])), "any python is a launcher");
+        assert!(opens_as_code(".x", &handlers(&[r"C:\Tools\Python312.exe"])), "any python is a launcher");
         assert!(opens_as_code(
             ".x",
             &handlers(&[

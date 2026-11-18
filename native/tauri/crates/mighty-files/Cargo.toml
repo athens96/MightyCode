@@ -12,6 +12,8 @@ mighty-core.workspace = true
 mighty-composer.workspace = true
 mighty-graph.workspace = true
 mighty-platform.workspace = true
+# HEAD's copy is read with the work map's settings that start no program (git::no_programs); mighty-graph already depends on it.
+mighty-run.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 sha2.workspace = true
@@ -31,7 +33,6 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 tokio = { workspace = true, features = ["io-util", "time", "macros", "rt", "rt-multi-thread"] }
 # The checks write CP949 text (C# Encoding.GetEncoding(949)) and drive the run engine's parser with the originals' hook.
 encoding_rs = "0.8"
-mighty-run.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
 mighty-platform-windows.workspace = true
