@@ -987,7 +987,8 @@ impl ProviderCatalog {
             let local = env_var(&environment, "LOCALAPPDATA", windows).or_else(|| std::env::var("LOCALAPPDATA").ok()).unwrap_or_default();
             directories.push(os::combine(&os::combine(&local, "agy"), "bin"));
         }
-        if provider == "hermes" && windows
+        if provider == "hermes"
+            && windows
             && let Some(hermes) = hermes_install_folder(&environment)
         {
             directories.push(hermes);
@@ -1481,9 +1482,11 @@ mod tests {
         assert!(!supports_mods(None));
         assert!(supports_codex_approvals(Some("codex-cli 0.167.0")));
         assert!(!supports_codex_approvals(Some("codex-cli 0.153.3")));
+        // The folders are joined with the platform's separator (`os::combine`), so the shape is checked whichever it is.
+        let slashes = |path: Option<String>| path.map(|p| p.replace('\\', "/"));
         let env = BTreeMap::from([("LocalAppData".to_string(), r"C:\Users\me\AppData\Local".to_string())]);
-        assert_eq!(hermes_install_folder(&env).as_deref(), Some(r"C:\Users\me\AppData\Local\hermes\bin"));
+        assert_eq!(slashes(hermes_install_folder(&env)).as_deref(), Some("C:/Users/me/AppData/Local/hermes/bin"));
         let custom = BTreeMap::from([("hermes_home".to_string(), r"D:\hermes".to_string())]);
-        assert_eq!(hermes_install_folder(&custom).as_deref(), Some(r"D:\hermes\bin"));
+        assert_eq!(slashes(hermes_install_folder(&custom)).as_deref(), Some("D:/hermes/bin"));
     }
 }

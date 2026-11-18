@@ -675,7 +675,8 @@ impl CliAccountsCoordinator {
         }
         let mut env = environment.clone();
         env.insert("NO_COLOR".into(), "1".into());
-        env.insert("CI".into(), "1".into()); env.insert("AGY_CLI_DISABLE_AUTO_UPDATE".into(), "1".into());
+        env.insert("CI".into(), "1".into());
+        env.insert("AGY_CLI_DISABLE_AUTO_UPDATE".into(), "1".into());
         let arguments: Vec<String> = argv[1..].iter().map(|a| a.to_string()).collect();
         let home = PathBuf::from(&self.home);
         let Ok(result) = self.runner.run(&binary, &arguments, STATUS_TIMEOUT, &env, Some(&home)).await else {
@@ -748,7 +749,8 @@ impl CliAccountsCoordinator {
         {
             let mut env = environment.clone();
             env.insert("NO_COLOR".into(), "1".into());
-            env.insert("CI".into(), "1".into()); env.insert("AGY_CLI_DISABLE_AUTO_UPDATE".into(), "1".into());
+            env.insert("CI".into(), "1".into());
+            env.insert("AGY_CLI_DISABLE_AUTO_UPDATE".into(), "1".into());
             let arguments: Vec<String> = argv[1..].iter().map(|a| a.to_string()).collect();
             let home = PathBuf::from(&self.home);
             let _ = self.runner.run(&binary, &arguments, LOGOUT_TIMEOUT, &env, Some(&home)).await;
