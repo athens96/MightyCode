@@ -619,6 +619,8 @@ async fn picture_in_theme(
 ) -> Result<(u32, u32), String> {
     if host.current().theme() != theme {
         update(host, |state| state.theme = Some(theme.to_string()))?;
+        // As the page's `setTheme`: the terminals take the theme too (the Mac's Ghostty draws its own colours).
+        crate::terminal::restyle(host);
     }
     if !until(host, &format!("document.documentElement.dataset.theme === {}", literal(theme)), 10.0).await {
         return errored(format!("the page did not take the {theme} theme"));
