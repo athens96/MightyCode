@@ -488,7 +488,7 @@ public sealed class ProviderCatalog(Func<string, CancellationToken, Task<CliComm
     public static Dictionary<string, string> QuietEnvironment()
     {
         var environment = CliEnvironment.Current();
-        foreach (var key in new[] { "DISABLE_AUTOUPDATER", "DISABLE_ERROR_REPORTING", "NO_UPDATE_NOTIFIER" }) environment[key] = "1";
+        foreach (var key in new[] { "DISABLE_AUTOUPDATER", "AGY_CLI_DISABLE_AUTO_UPDATE", "DISABLE_ERROR_REPORTING", "NO_UPDATE_NOTIFIER" }) environment[key] = "1";
         return environment;
     }
     public static async Task<string> ReadBoundedAsync(StreamReader reader, int limit, CancellationToken token)

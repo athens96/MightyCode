@@ -93,7 +93,7 @@ public sealed class SetupProber(IReadOnlyDictionary<string, string> environment,
     /// <summary><c>--version</c>'s output, trimmed and at most 160 characters, or null when it did not answer in time or failed.</summary>
     private async Task<string?> ReadVersionAsync(string executable, CancellationToken cancellation)
     {
-        var quiet = new Dictionary<string, string>(variables, StringComparer.OrdinalIgnoreCase) { ["NO_COLOR"] = "1", ["DISABLE_AUTOUPDATER"] = "1", ["NO_UPDATE_NOTIFIER"] = "1" };
+        var quiet = new Dictionary<string, string>(variables, StringComparer.OrdinalIgnoreCase) { ["NO_COLOR"] = "1", ["DISABLE_AUTOUPDATER"] = "1", ["AGY_CLI_DISABLE_AUTO_UPDATE"] = "1", ["NO_UPDATE_NOTIFIER"] = "1" };
         try
         {
             // The system folder: no repository and no user-writable folder a shim's bare node could be planted in.

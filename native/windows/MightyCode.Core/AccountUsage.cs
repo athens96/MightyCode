@@ -412,7 +412,7 @@ public static class AntigravityAccountProbe
 
     public static async Task<AccountUsageSnapshot> ReadAsync(CliCommand command, IReadOnlyDictionary<string, string> environment, CancellationToken cancellation = default, TimeSpan? timeout = null)
     {
-        var quiet = new Dictionary<string, string>(environment) { ["NO_COLOR"] = "1", ["CI"] = "1" };
+        var quiet = new Dictionary<string, string>(environment) { ["NO_COLOR"] = "1", ["CI"] = "1", ["AGY_CLI_DISABLE_AUTO_UPDATE"] = "1" };
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellation); deadline.CancelAfter(timeout ?? Timeout);
         string stdout, stderr = "";
         try

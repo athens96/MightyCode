@@ -72,7 +72,7 @@ fn the_probe_lets_the_cli_fetch_the_accounts_current_models() {
     assert!(!claude.contains_key("DISABLE_TELEMETRY"), "the Claude model list probe sets no DISABLE_TELEMETRY");
     assert!(!quiet_environment(&environment).contains_key("DISABLE_TELEMETRY"), "no other read or run sets it either");
     assert!(
-        claude.get("DISABLE_AUTOUPDATER").map(String::as_str) == Some("1")
+        claude.get("DISABLE_AUTOUPDATER").map(String::as_str) == Some("1") && claude.get("AGY_CLI_DISABLE_AUTO_UPDATE").map(String::as_str) == Some("1")
             && claude.get("CLAUDE_CODE_SAFE_MODE").map(String::as_str) == Some("1")
             && claude.get("DISABLE_ERROR_REPORTING").map(String::as_str) == Some("1"),
         "the probe stays quiet otherwise"

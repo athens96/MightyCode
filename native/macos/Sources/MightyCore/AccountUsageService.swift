@@ -225,7 +225,7 @@ public actor AccountUsageService {
     /// directory so no project's configuration is read, with the CLI's own
     /// sign-in; the output is parsed and dropped, never logged.
     static func antigravity(command: ProviderCommand, environment: [String: String], timeout: TimeInterval = 20) async throws -> AccountUsageSnapshot {
-        var quiet = environment; quiet["NO_COLOR"] = "1"; quiet["CI"] = "1"
+        var quiet = environment; quiet["NO_COLOR"] = "1"; quiet["CI"] = "1"; quiet["AGY_CLI_DISABLE_AUTO_UPDATE"] = "1"
         let result: ProcessResult
         do {
             result = try await ProcessCapture.run(executable: command.executable, arguments: ["-p", "/usage", "--output-format", "json"],

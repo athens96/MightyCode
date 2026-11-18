@@ -270,7 +270,7 @@ public actor CLIAccountService {
     }
     private func run(_ arguments: [String], environment: [String: String], timeout: TimeInterval) async -> ProcessResult? {
         let stdout = AppUpdateService.OutputSink(), stderr = AppUpdateService.OutputSink()
-        var env = environment; env["NO_COLOR"] = "1"; env["CI"] = "1"
+        var env = environment; env["NO_COLOR"] = "1"; env["CI"] = "1"; env["AGY_CLI_DISABLE_AUTO_UPDATE"] = "1"
         guard let child = try? NativeChildProcess(executable: URL(fileURLWithPath: "/usr/bin/env"), arguments: arguments, environment: env, cwd: home,
                                                   stdout: { stdout.append($0) }, stderr: { stderr.append($0) }, exited: { _ in }) else { return nil }
         child.closeInput()

@@ -391,7 +391,7 @@ public sealed class CliAccountsCoordinator
         // (M/CLIAccounts.swift status). The server is started and asked alone, never through the runner, which gives no standard input.
         if (provider == "hermes") return HermesAccounts.Status(await hermesProbe(new CliCommand(binary, []), environment, cancellation));
 
-        var env = new Dictionary<string, string>(environment) { ["NO_COLOR"] = "1", ["CI"] = "1" };
+        var env = new Dictionary<string, string>(environment) { ["NO_COLOR"] = "1", ["CI"] = "1", ["AGY_CLI_DISABLE_AUTO_UPDATE"] = "1" };
         CliRunResult result;
         try { result = await runner.RunAsync(binary, argv.Skip(1).ToList(), StatusTimeout, cancellation, env, home); }
         catch (OperationCanceledException) { throw; }
@@ -474,7 +474,7 @@ public sealed class CliAccountsCoordinator
         var argv = CliAccountSupport.LogoutArguments(provider);
         if (argv is not null && FindBinary(argv[0]) is { } binary)
         {
-            var env = new Dictionary<string, string>(environment) { ["NO_COLOR"] = "1", ["CI"] = "1" };
+            var env = new Dictionary<string, string>(environment) { ["NO_COLOR"] = "1", ["CI"] = "1", ["AGY_CLI_DISABLE_AUTO_UPDATE"] = "1" };
             try { await runner.RunAsync(binary, argv.Skip(1).ToList(), LogoutTimeout, cancellation, env, home); }
             catch (OperationCanceledException) { throw; }
             catch { }

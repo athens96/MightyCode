@@ -189,7 +189,7 @@ impl SetupProber {
 /// The environment the `--version` read runs with: the CLI environment, colour, the auto-updater and update notices off.
 fn quiet(environment: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     let mut quiet = environment.clone();
-    for name in ["NO_COLOR", "DISABLE_AUTOUPDATER", "NO_UPDATE_NOTIFIER"] {
+    for name in ["NO_COLOR", "DISABLE_AUTOUPDATER", "AGY_CLI_DISABLE_AUTO_UPDATE", "NO_UPDATE_NOTIFIER"] {
         set_variable(&mut quiet, name, "1");
     }
     quiet

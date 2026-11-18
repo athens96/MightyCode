@@ -53,7 +53,7 @@ internal static class ModelListProbeVerification
         var claude = ProviderCatalog.ClaudeHeadlessEnvironment();
         Check(inherited || !claude.ContainsKey("DISABLE_TELEMETRY"), "the Claude model list probe sets no DISABLE_TELEMETRY");
         Check(inherited || !ProviderCatalog.QuietEnvironment().ContainsKey("DISABLE_TELEMETRY"), "no other read or run sets it either");
-        Check(claude.GetValueOrDefault("DISABLE_AUTOUPDATER") == "1" && claude.GetValueOrDefault("CLAUDE_CODE_SAFE_MODE") == "1" && claude.GetValueOrDefault("DISABLE_ERROR_REPORTING") == "1",
+        Check(claude.GetValueOrDefault("DISABLE_AUTOUPDATER") == "1" && claude.GetValueOrDefault("AGY_CLI_DISABLE_AUTO_UPDATE") == "1" && claude.GetValueOrDefault("CLAUDE_CODE_SAFE_MODE") == "1" && claude.GetValueOrDefault("DISABLE_ERROR_REPORTING") == "1",
             "the probe stays quiet otherwise");
         return Task.CompletedTask;
     }

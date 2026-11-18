@@ -757,7 +757,7 @@ pub fn arguments(
 /// `DISABLE_TELEMETRY` is left out on purpose: with it Claude Code answers with its built-in model list.
 pub fn quiet_environment(environment: &dyn ShellEnvironment) -> BTreeMap<String, String> {
     let mut values = environment.current().values;
-    for key in ["DISABLE_AUTOUPDATER", "DISABLE_ERROR_REPORTING", "NO_UPDATE_NOTIFIER"] {
+    for key in ["DISABLE_AUTOUPDATER", "AGY_CLI_DISABLE_AUTO_UPDATE", "DISABLE_ERROR_REPORTING", "NO_UPDATE_NOTIFIER"] {
         values.insert(key.into(), "1".into());
     }
     values
