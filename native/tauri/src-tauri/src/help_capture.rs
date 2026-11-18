@@ -189,9 +189,60 @@ async fn picture(host: &Host, clip: Option<&str>) -> Result<Vec<u8>, String> {
 }
 
 /// The Mac's (M-G): WKWebView's snapshot (`platform::page_picture`), of the whole page or of the element's box in CSS pixels (WebKit
-/// draws it at the screen's scale, as the DevTools clip does at the page's).
+/// draws it at the screen's scale, as the DevTools clip does at the page's). A terminal pane's Ghostty view lies over the page, not in
+/// it, so each shown terminal's own picture stands in its slot while the page's is taken (Swift's capture drew the window, Ghostty
+/// included).
 #[cfg(not(windows))]
 async fn picture(host: &Host, clip: Option<&str>) -> Result<Vec<u8>, String> {
+    let shown = show_terminals(host).await;
+    let result = page_snapshot(host, clip).await;
+    if shown {
+        let _ = js(host, HIDE_TERMINALS).await;
+    }
+    result
+}
+
+/// The slots of the shown terminal panes: their pane ids.
+#[cfg(not(windows))]
+const TERMINAL_SLOTS: &str = "Array.from(document.querySelectorAll('.pane-slot:not(.hidden)[data-pane-id] [data-native-slot=terminal]')).map(e => e.closest('[data-pane-id]').getAttribute('data-pane-id'))";
+
+/// The terminals' stand-in pictures taken out again, each slot as it was.
+#[cfg(not(windows))]
+const HIDE_TERMINALS: &str = "(() => { document.querySelectorAll('img[data-help-terminal]').forEach(e => e.remove()); document.querySelectorAll('[data-help-position]').forEach(e => { e.style.position = ''; e.removeAttribute('data-help-position'); }); return true; })()";
+
+/// Each shown terminal pane's Ghostty picture put in its slot, filling it, decoded before the page's picture is taken; whether any was.
+#[cfg(not(windows))]
+async fn show_terminals(host: &Host) -> bool {
+    let panes: Vec<String> = match js(host, TERMINAL_SLOTS).await {
+        Ok(answer) => serde_json::from_str(&answer).unwrap_or_default(),
+        Err(_) => return false,
+    };
+    let mut pictures = Map::new();
+    for pane in panes {
+        let Some(view) = crate::surface_terminal::natives().view(&pane) else { continue };
+        if let Ok(Some(url)) = view.snapshot().await {
+            pictures.insert(pane, Value::String(url));
+        }
+    }
+    if pictures.is_empty() {
+        return false;
+    }
+    let script = format!(
+        "((pictures) => {{ for (const [id, url] of Object.entries(pictures)) {{ const slot = document.querySelector('.pane-slot:not(.hidden)[data-pane-id=\"' + CSS.escape(id) + '\"] [data-native-slot=terminal]'); if (!slot) continue; if (getComputedStyle(slot).position === 'static') {{ slot.setAttribute('data-help-position', ''); slot.style.position = 'relative'; }} const img = document.createElement('img'); img.setAttribute('data-help-terminal', ''); img.alt = ''; img.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;'; img.src = url; slot.appendChild(img); }} return true; }})({})",
+        Value::Object(pictures)
+    );
+    if js(host, &script).await.is_err() {
+        let _ = js(host, HIDE_TERMINALS).await;
+        return false;
+    }
+    let decoded = "Array.from(document.querySelectorAll('img[data-help-terminal]')).every(e => e.complete && e.naturalWidth > 0)";
+    until(host, decoded, 5.0).await;
+    delay(150).await;
+    true
+}
+
+#[cfg(not(windows))]
+async fn page_snapshot(host: &Host, clip: Option<&str>) -> Result<Vec<u8>, String> {
     let page = host.app.get_webview(WINDOW).ok_or("no main window")?;
     let Some(clip) = clip else { return crate::platform::page_picture(&page).await };
     let script = format!(
@@ -862,8 +913,9 @@ fn write_resume_records(host: &Host, demo: &Demo, directory: &Path) -> Result<()
     Ok(())
 }
 
-/// C# `PrepareHelpTerminal`: the demo command typed into the shell pane's terminal — a prompt named after the workspace and a command of
-/// that name that prints the profile's canned output from a file, so nothing runs.
+/// C# `PrepareHelpTerminal` (Swift `prepareTerminal` where the Mac's Ghostty draws the terminal): the demo command typed into the shell
+/// pane's terminal — a prompt named after the workspace and a command of that name that prints the profile's canned output from a file,
+/// so nothing runs.
 async fn prepare_terminal(host: &Arc<Host>, demo: &Demo) -> Result<(), String> {
     let spec = demo.profile.get("terminal").ok_or("the demo has no terminal")?;
     let id = demo.pane(spec.get("role").and_then(Value::as_str).unwrap_or("shell"))?;
@@ -873,9 +925,15 @@ async fn prepare_terminal(host: &Arc<Host>, demo: &Demo) -> Result<(), String> {
         current.workspace(session.workspace_id()).map(|w| w.name().to_string()).unwrap_or_default()
     };
     select_session(host, &id)?;
-    let opened = format!("!!document.querySelector('[data-session-id=\"{id}\"] .xterm, .pane-slot.active .xterm')");
-    if !until(host, &opened, 20.0).await {
-        return errored("the terminal did not open");
+    // The page's xterm (Windows), or the pane's native view over its slot (the Mac's Ghostty, which the page never draws).
+    let native = || crate::surface_terminal::natives().view(&id);
+    let xterm = format!("!!document.querySelector('[data-session-id=\"{id}\"] .xterm, .pane-slot.active .xterm')");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while native().is_none() && !js_true(host, &xterm).await {
+        if Instant::now() >= deadline {
+            return errored("the terminal did not open");
+        }
+        delay(100).await;
     }
     let file = host.data_dir.join("help-demo").join("terminal-output.txt");
     let output: Vec<&str> = list(spec, "output").iter().map(|l| l.as_str().unwrap_or("")).collect();
@@ -892,27 +950,58 @@ async fn prepare_terminal(host: &Arc<Host>, demo: &Demo) -> Result<(), String> {
     if !wait(20.0, || terminal.is_running()).await {
         return errored("the terminal's shell did not start");
     }
-    let shell = terminals.default_shell();
-    let powershell = shell.file_stem().is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case("powershell"));
-    let file_text = file.to_string_lossy();
-    // A prompt like the workspace's, a function (or macro) of the command's name that types the canned output, and a cleared screen.
-    let setup = if powershell {
-        format!(
-            "Remove-Module PSReadLine -ErrorAction SilentlyContinue; function global:prompt {{ '{name} > ' }}; function global:{program} {{ [Console]::Write([IO.File]::ReadAllText('{}')) }}; Clear-Host\r",
-            file_text.replace('\'', "''")
-        )
-    } else {
-        format!("prompt {name} $G $S& doskey {program}=type \"{file_text}\"& cls\r")
-    };
-    terminal.write(&setup);
+    terminal.write(&shell_setup(&terminals.default_shell(), &name, program, &file.to_string_lossy()));
     delay(1200).await;
     terminal.write(&format!("{command}\r"));
     let marker = output.iter().map(|l| l.trim()).rfind(|l| !l.is_empty()).unwrap_or("");
-    let shown = format!("(document.querySelector('.pane-slot.active .xterm-rows')?.textContent ?? '').includes({})", literal(marker));
-    if !until(host, &shown, 10.0).await {
+    let shown = match native() {
+        Some(view) => {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                if view.text().await.is_ok_and(|grid| grid.contains(marker)) {
+                    break true;
+                }
+                if Instant::now() >= deadline {
+                    break false;
+                }
+                delay(100).await;
+            }
+        }
+        None => {
+            let shown =
+                format!("(document.querySelector('.pane-slot.active .xterm-rows')?.textContent ?? '').includes({})", literal(marker));
+            until(host, &shown, 10.0).await
+        }
+    };
+    if !shown {
         return errored("the terminal output did not show");
     }
     Ok(())
+}
+
+/// The line typed into the demo terminal's shell before its command (CR included): a prompt like the workspace's, a function (or macro)
+/// of the command's name that types the canned output in `file`, and a cleared screen. PowerShell and cmd as C#'s; any other shell (the
+/// Mac's zsh or bash) as Swift's: bash reads PS1, and in zsh PS1 and PROMPT are one variable, so PROMPT (set last) wins.
+fn shell_setup(shell: &Path, name: &str, program: &str, file: &str) -> String {
+    // Its name by either separator, so the choice reads the same on either OS.
+    let path = shell.to_string_lossy().to_ascii_lowercase();
+    let file_name = path.rsplit(['/', '\\']).next().unwrap_or("");
+    match file_name.strip_suffix(".exe").unwrap_or(file_name) {
+        "powershell" | "pwsh" => format!(
+            "Remove-Module PSReadLine -ErrorAction SilentlyContinue; function global:prompt {{ '{name} > ' }}; function global:{program} {{ [Console]::Write([IO.File]::ReadAllText('{}')) }}; Clear-Host\r",
+            file.replace('\'', "''")
+        ),
+        "cmd" => format!("prompt {name} $G $S& doskey {program}=type \"{file}\"& cls\r"),
+        _ => {
+            let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+            format!(
+                "unalias {program} 2>/dev/null; PS1={}; PROMPT={}; RPROMPT=''; {program}() {{ /bin/cat {}; }}; clear\r",
+                quote(&format!("{name} $ ")),
+                quote(&format!("{} %# ", name.replace('%', "%%"))),
+                quote(file)
+            )
+        }
+    }
 }
 
 /// C# `HelpSelect`: back to the overview — the active workspace with its layout's pane selected, every pane in the Mighty view with its
@@ -1622,6 +1711,27 @@ fn check_delegation(host: &Host, screen: &str, id: &str, demo: &Demo) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The Mac's shell (zsh, or bash) gets POSIX setup: the 0.5 capture typed cmd's `prompt`/`doskey` into zsh and waited for an xterm
+    /// the Mac never draws, so the terminal picture failed in every language.
+    #[test]
+    fn the_demo_terminal_setup_fits_the_shell() {
+        let file = "/tmp/it's here/terminal-output.txt";
+        for shell in ["/bin/zsh", "/bin/bash", "/opt/homebrew/bin/zsh"] {
+            let setup = shell_setup(Path::new(shell), "my-app 100%", "npm", file);
+            assert_eq!(
+                setup,
+                "unalias npm 2>/dev/null; PS1='my-app 100% $ '; PROMPT='my-app 100%% %# '; RPROMPT=''; npm() { /bin/cat '/tmp/it'\\''s here/terminal-output.txt'; }; clear\r"
+            );
+            assert!(!setup.contains("doskey") && !setup.contains("function global:"));
+        }
+        let powershell = shell_setup(Path::new(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"), "app", "npm", r"C:\it's.txt");
+        assert!(powershell.starts_with("Remove-Module PSReadLine") && powershell.contains(r"ReadAllText('C:\it''s.txt')"));
+        assert_eq!(
+            shell_setup(Path::new(r"C:\Windows\System32\cmd.exe"), "app", "npm", r"C:\out.txt"),
+            "prompt app $G $S& doskey npm=type \"C:\\out.txt\"& cls\r"
+        );
+    }
 
     /// The embedded shot list is the help site's and every screen it names is one this capture draws (C#'s list, the same 34).
     #[test]
