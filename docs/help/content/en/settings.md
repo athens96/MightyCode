@@ -3,7 +3,7 @@ title: Settings
 order: 8
 section: settings
 ---
-Open {{ui:menu.settings}} ({{kbd:⌘,}}) or the settings button at the bottom of the sidebar. Pick a tab on the left, and close with {{ui:settings.closeButton}} or {{kbd:Esc}}. The last tab you viewed is remembered. The tabs are, in order: {{ui:settings.nav.general}}, {{ui:settings.nav.models}}, {{ui:settings.nav.cli}}, {{ui:settings.nav.styles}}, {{ui:settings.remote.navTitle}}, {{ui:settings.nav.companion}}, {{ui:settings.nav.tools}} and {{ui:settings.nav.about}}.
+Open {{ui:menu.settings}} ({{kbd:⌘,}}) or the settings button at the bottom of the sidebar. Pick a tab on the left, and close with {{ui:settings.closeButton}} or {{kbd:Esc}}. The last tab you viewed is remembered. The tabs are, in order: {{ui:settings.nav.general}}, {{ui:settings.nav.models}}, {{ui:settings.nav.styles}}, {{ui:settings.remote.navTitle}}, {{ui:settings.nav.companion}}, {{ui:settings.nav.tools}} and {{ui:settings.nav.about}}.
 
 ## General {#general}
 Under {{ui:settings.display.sectionTitle}} on the {{ui:settings.nav.general}} tab you set how the app looks.
@@ -38,31 +38,6 @@ The {{ui:settings.agents.sectionTitle}} group on the same tab holds the settings
 
 ![[settings-models]]
 
-## CLI {#cli}
-The {{ui:settings.nav.cli}} tab manages each CLI's sign-in and updates. Whether each CLI is installed, its version, and its install and update buttons are in the [{{ui:settings.components.sectionTitle}}](#components) list on the {{ui:settings.nav.tools}} tab.
-
-### Sign in {#cli-accounts}
-Under {{ui:settings.cliAccounts.sectionTitle}} you sign in to each CLI.
-1. Click {{ui:settings.cliAccounts.buttonLogin}}. For Claude, choose {{ui:settings.cliAccounts.buttonLoginClaude}} or {{ui:settings.cliAccounts.buttonLoginConsole}}.
-2. The CLI's sign-in starts in a terminal. Approve it in the browser.
-   - {{platform:mac}} A terminal pane opens in the app. It opens in a local workspace, so at least one workspace must be open.
-   - {{platform:windows}} A separate console window opens. No workspace is needed.
-3. When you're signed in, the status changes. If it doesn't, click {{ui:settings.cliAccounts.refreshTooltip}} on that CLI's row. A changed account is used from the next request.
-
-To switch accounts click {{ui:settings.cliAccounts.buttonChange}}; to sign out click {{ui:settings.cliAccounts.buttonLogout}}. Turn on {{ui:settings.cliAccounts.autoLoginToggle}} to sign in again automatically when the sign-in drops and resend the failed request.
-
-The Claude row also has {{ui:settings.cliAccounts.resetModelsButton}} and {{ui:settings.cliAccounts.bedrockButton}}. {{ui:settings.cliAccounts.bedrockButton}} opens the Claude CLI's AWS Bedrock setup wizard in a terminal, the same way as a sign-in; refresh the status when you are done. {{platform:windows}} Windows has one more button, {{ui:settings.cliAccounts.resetBedrockButton}}, which backs up your Claude user settings and then deletes the Bedrock key and the Bedrock model settings.
-
-### CLI updates {#cli-update}
-{{ui:settings.cliUpdate.sectionTitle}} brings the installed CLIs up to date.
-- {{ui:settings.cliUpdate.updateButton}}: update now.
-- {{ui:settings.cliUpdate.autoUpdateToggle}}: checks when the app opens, and every 6 hours.
-- {{ui:settings.cliUpdate.autoUpdatePluginsToggle}}: updates Claude and Codex plugins too.
-
-Each CLI is updated the way it was installed (npm, Homebrew and so on).
-
-![[settings-cli]]
-
 ## Styles {#styles}
 The {{ui:settings.nav.styles}} tab manages your list of styles: register styles from files, review them, and allow or block them. If the list looks wrong, click {{ui:settings.styles.rescanButton}}. Hover over a style's name to see its id, hash and counts. See [Styles](styles.md#custom) for details.
 
@@ -96,11 +71,53 @@ The {{ui:settings.nav.companion}} tab sets up the desktop pet and the completion
 ![[companion-pet]]
 
 ## Components {#components}
-The {{ui:settings.nav.tools}} tab shows whether everything the app needs is ready.
-- {{ui:settings.components.sectionTitle}}: this holds the [{{ui:setup.title}}](getting-started.md#setup) list. Each agent CLI, prerequisite, style tool, Tailscale, gh and glab shows {{ui:setup.status.installed}}, {{ui:setup.status.missing}}, {{ui:setup.status.outdated}}, {{ui:setup.status.attention}}, {{ui:setup.status.installing}} or {{ui:setup.status.failed}}; pick what is missing and click {{ui:setup.button.install}} to review every command and install them: in a terminal pane in the app on a Mac, in a PowerShell window the app opens on Windows. Each CLI's version and sign-in state are shown here too, and a Claude Code that is too old offers {{ui:setup.button.update}}. {{ui:setup.button.recheck}}, and the automatic check while the list is open, look for the CLIs again each time.
-- {{ui:settings.toolkit.sectionTitle}}: tools you use often. Every command is shown before anything is installed, and you get a {{ui:settings.toolkit.confirmTitle}} step. You can {{ui:settings.toolkit.exportButton}} or {{ui:settings.toolkit.importButton}} the list.
+The {{ui:settings.nav.tools}} tab shows whether everything the app needs is ready, and is where you install, sign in to and update the agent CLIs. Only the items for this computer's system are shown.
+
+The top line has a view picker and two buttons.
+- {{ui:settings.components.filterAll}} / Needs attention: with Needs attention, only the rows that need something are shown: an item not installed, not signed in, with an update, failed or needing a check. The number beside it is how many.
+- Refresh (↻, {{ui:setup.button.recheck}}): reads PATH again and checks every item again.
+- {{ui:settings.components.updateAllButton}}: updates every installed agent CLI now, each the way it was installed (npm, Homebrew and so on).
+
+The list has three groups: {{ui:setup.group.agent}} (Claude, Codex, Antigravity, pi, opencode and Hermes), {{ui:settings.components.groupTools}} (Git (on a Mac, the Xcode command line tools), Homebrew (Mac), Node.js, Bun (Mac), uv, Tailscale, gh and glab) and {{ui:settings.components.groupPlugins}} (ouroboros, omc and gstack (Mac)). Each item is one row: a disclosure mark (▸), its name, its version and, for an agent CLI, the signed-in account. On the right are its status and the one button it needs most.
+- Status: {{ui:setup.status.installed}}, {{ui:settings.components.statusInstalled}} (an agent CLI installed and signed in), {{ui:settings.components.statusUpdateAvailable}}, {{ui:settings.cliAccounts.summarySignedOut}}, {{ui:settings.cliAccounts.statusNotInstalled}}, {{ui:setup.status.attention}}, {{ui:setup.status.installing}}, {{ui:setup.status.failed}}.
+- Button: {{ui:settings.components.installButton}} when it is missing ({{ui:setup.button.openPage}} for what only a download page installs), {{ui:settings.cliAccounts.buttonLogin}} when it is not signed in, {{ui:setup.button.update}} when it is out of date. A row with nothing to fix has no button.
+
+Click a row to open it in place (▾). The opened row shows the details (which version is needed, the last update's result, the account, why it needs a check, what the item is for) and every button of the item, for an agent CLI {{ui:settings.cliAccounts.buttonChange}}, {{ui:settings.cliAccounts.buttonLogout}}, {{ui:settings.cliAccounts.refreshTooltip}} and so on. Click it again to close it. The rows you opened stay open until you quit the app.
+
+Under the list, the {{ui:settings.components.groupAutoUpdate}} box has three switches and the last run's time. Point at a switch to see what it does.
+- {{ui:settings.components.autoUpdateClis}}: checks for agent CLI updates when the app opens, and every 6 hours.
+- {{ui:settings.components.autoUpdatePlugins}}: updates Claude and Codex plugins too.
+- {{ui:settings.components.autoLogin}}: when a sign-in expires, signs in again and resends the failed request.
+
+{{ui:settings.components.installButton}} installs only that item and the prerequisites it is missing. Every command is shown in one confirmation first.
+- {{platform:mac}} It runs in a terminal pane in the app, or in Terminal.app when no local workspace is open.
+- {{platform:windows}} It runs in a separate PowerShell window.
+
+Whether the item got installed is decided by checking again afterwards. The [{{ui:setup.title}}](getting-started.md#setup) window that opens on first run is a checklist: pick what is missing and click {{ui:setup.button.install}}.
+
+At the bottom of the same tab is the {{ui:settings.toolkit.sectionTitle}} box: tools you use often. Every command is shown before anything is installed, and you get a {{ui:settings.toolkit.confirmTitle}} step. You can {{ui:settings.toolkit.exportButton}} or {{ui:settings.toolkit.importButton}} the list.
 
 ![[settings-tools]]
+
+### Sign in {#cli-accounts}
+You sign in to each agent CLI on its row. A CLI that is not signed in shows {{ui:settings.cliAccounts.buttonLogin}} right on its row; its other account buttons are in the opened row.
+1. Click {{ui:settings.cliAccounts.buttonLogin}}. For Claude, choose {{ui:settings.cliAccounts.buttonLoginClaude}} or {{ui:settings.cliAccounts.buttonLoginConsole}}.
+2. The CLI's sign-in starts in a terminal. Approve it in the browser.
+   - {{platform:mac}} A terminal pane opens in the app. It opens in a local workspace, so at least one workspace must be open.
+   - {{platform:windows}} A separate console window opens. No workspace is needed.
+3. When you're signed in, the row's status changes. If it doesn't, open the row and click {{ui:settings.cliAccounts.refreshTooltip}}. A changed account is used from the next request.
+
+To switch accounts open the row and click {{ui:settings.cliAccounts.buttonChange}}; to sign out click {{ui:settings.cliAccounts.buttonLogout}}. Turn on {{ui:settings.components.autoLogin}} in the {{ui:settings.components.groupAutoUpdate}} box to sign in again automatically when the sign-in drops and resend the failed request.
+
+The opened Claude row also has {{ui:settings.cliAccounts.resetModelsButton}} and {{ui:settings.cliAccounts.bedrockButton}}. {{ui:settings.cliAccounts.bedrockButton}} opens the Claude CLI's AWS Bedrock setup wizard in a terminal, the same way as a sign-in; refresh the status when you are done. {{platform:windows}} Windows has one more button, {{ui:settings.cliAccounts.resetBedrockButton}}, which backs up your Claude user settings and then deletes the Bedrock key and the Bedrock model settings.
+
+### Updates {#cli-update}
+The agent CLIs are updated separately from the app.
+- {{ui:settings.components.updateAllButton}}: updates every installed agent CLI now. {{ui:setup.button.update}} on an out-of-date CLI's row runs the CLI update too.
+- {{ui:settings.components.autoUpdateClis}} in the {{ui:settings.components.groupAutoUpdate}} box: checks when the app opens, and every 6 hours.
+- {{ui:settings.components.autoUpdatePlugins}}: updates Claude and Codex plugins too.
+
+Each CLI is updated the way it was installed (npm, Homebrew and so on). The last update's result for each CLI shows when you open its row, and the plugin updates' results under the {{ui:settings.components.groupPlugins}} group.
 
 ## About {#about}
 The {{ui:settings.nav.about}} tab updates the app and shows where its data is kept.

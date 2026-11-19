@@ -221,13 +221,29 @@ impl SetupScreen {
 
     /// The selection plus the missing prerequisites it needs, in install order.
     pub fn plan_ids(&self) -> Vec<String> {
+        self.plan_for(&self.selection)
+    }
+
+    /// `selection` plus the missing prerequisites it needs, in install order (Settings › 구성 요소' row installs its one item so).
+    pub fn plan_for(&self, selection: &HashSet<String>) -> Vec<String> {
         match self.catalog.as_deref() {
             Some(catalog) => {
                 let results = &self.results;
-                plan::order(&self.selection, catalog, self.platform, &|id| results.get(id).is_some_and(SetupProbeResult::is_installed))
+                plan::order(selection, catalog, self.platform, &|id| results.get(id).is_some_and(SetupProbeResult::is_installed))
             }
             None => vec![],
         }
+    }
+
+    /// Whether `id`'s row may install it now (Settings › 구성 요소' 설치 and 업데이트): an item of this platform whose state the
+    /// screen's checkbox could tick, while no install runs.
+    pub fn may_install(&self, id: &str) -> bool {
+        !self.running()
+            && self
+                .catalog
+                .as_deref()
+                .and_then(|catalog| catalog.item(id))
+                .is_some_and(|item| SetupRows::is_selectable_on(self.state_of(item), item, self.platform))
     }
 
     /// The plan's items that were not picked themselves (the rows say "added for the selection").
@@ -401,14 +417,18 @@ impl SetupScreen {
 
     /// The one confirmation before anything runs: the lines that run first (the CLI environment's), then every step.
     pub fn confirmation(&self, environment: &BTreeMap<String, String>) -> Option<Confirmation> {
+        self.confirmation_of(&self.plan_ids(), environment)
+    }
+
+    /// The confirmation of the plan `ids` (in install order).
+    fn confirmation_of(&self, ids: &[String], environment: &BTreeMap<String, String>) -> Option<Confirmation> {
         let catalog = self.catalog.as_deref()?;
         let platform = self.platform;
         let (preamble, steps) = match platform {
-            SetupPlatform::Windows => (script::preamble(environment), script::steps(&self.plan_ids(), catalog, &SetupCatalog::title)),
-            SetupPlatform::MacOS => (
-                mac::preamble(&mac::home(environment)),
-                mac::steps(&self.plan_ids(), catalog, &|item| SetupCatalog::title_on(item, platform)),
-            ),
+            SetupPlatform::Windows => (script::preamble(environment), script::steps(ids, catalog, &SetupCatalog::title)),
+            SetupPlatform::MacOS => {
+                (mac::preamble(&mac::home(environment)), mac::steps(ids, catalog, &|item| SetupCatalog::title_on(item, platform)))
+            }
         };
         (!steps.is_empty()).then_some(Confirmation { preamble, steps, platform })
     }
@@ -429,6 +449,16 @@ impl SetupScreen {
             return None;
         }
         self.confirmation(environment)
+    }
+
+    /// [`SetupScreen::may_confirm`] for one item (Settings › 구성 요소' row): `id` alone plus the missing prerequisites it needs, the
+    /// screen's own picks left as they are. None when the item may not be installed now ([`SetupScreen::may_install`]).
+    pub fn may_confirm_item(&mut self, id: &str, files: &dyn SetupFiles, environment: &BTreeMap<String, String>) -> Option<Confirmation> {
+        if !self.may_install(id) || self.refuse_when_elevated(files) {
+            return None;
+        }
+        let plan = self.plan_for(&HashSet::from([id.to_string()]));
+        self.confirmation_of(&plan, environment)
     }
 
     /// C# `StartSetupInstall`: the script written into the app's own setup folder and run in a window of its own. The probe, not the

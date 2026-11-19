@@ -80,7 +80,7 @@ CLIのサインインの有効期限が切れてリクエストが失敗する�
 {{platform:windows}} Windowsでも、Antigravity、pi、opencode、Hermesはターミナルでサインインします。サインイン用のターミナルは別のウィンドウ（Windows Terminalがあれば新しいタブ）で、失敗したペインのフォルダーに開き、ターミナルでの操作はMacと同じです。Antigravity（agy）は開くブラウザでGoogleアカウントにサインインします。piは`/login`と入力し、サブスクリプションを選ぶかAPIキーを入力します。opencodeは`opencode auth login`、Hermesは`hermes model`が実行されます。サインインが確認されると、失敗したリクエストが自動的に再送信されます。アプリはこのターミナルを閉じません。
 
 > [!tip]
-> {{ui:settings.nav.cli}}タブの{{ui:settings.cliAccounts.autoLoginToggle}}をオンにしておくと、サインインが切れた時点ですぐに再サインインを始めます。
+> {{ui:settings.nav.tools}}タブの{{ui:settings.cliAccounts.autoLoginToggle}}をオンにしておくと、サインインが切れた時点ですぐに再サインインを始めます。
 
 ## バックグラウンドタスク {#background}
 Claudeは、時間のかかるコマンドやサブエージェントをバックグラウンドで実行することがあります。この場合、Claudeの応答が終わっても作業が残っています。

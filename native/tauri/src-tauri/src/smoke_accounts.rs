@@ -7,9 +7,9 @@
 //!   put back (`restored`). No CLI is asked and nothing is looked up: a smoke queues no read.
 //! - `usageReset`: the 리셋권 read over a fixture clock and a GET-only fake transport renders cedar_ember available and juniper_tide
 //!   unknown, with the four allowed GETs and no other method (C# `ClaudeResetSmoke`; L1427's "wired into the app's smoke").
-//! - `cliAccountsSection`: Settings' CLI tab shows `CliAccountSmoke`'s fixture statuses (signed in with an account, signed out, not
-//!   installed, one that cannot sign out), with no account read; the change button opens dialog D8, cancelled, and nothing is signed
-//!   out.
+//! - `cliAccountsSection`: Settings › 구성 요소' agent CLI rows show `CliAccountSmoke`'s fixture statuses (signed in with an account, signed out, not
+//!   installed, one that cannot sign out), with no account read; Claude's row opened (`components-row-toggle-claude`), its change
+//!   button opens dialog D8, cancelled, and nothing is signed out.
 //! - `loginCard` (Rust only): a fixture retry on a pane draws its sign-in card; its dismiss (`loginAction dismiss`) removes it.
 //!
 //! The step's contract (smoke.rs): [`start`] begins it and answers whether it runs; its probe in the page reports through
@@ -56,12 +56,16 @@ const PROBE: &str = r#"(async () => {
     Object.assign(report, { hostChips: state.chips, hostCards: state.cards, directLookupDefaultOff: state.directOff, dashboardBars: state.bars, geminiNote: state.geminiNote });
     report.restored = (await host('usageRestore')).restored;
     report.usageReset = await host('usageReset');
-    // cliAccountsSection: the fixture statuses in Settings' CLI tab, then D8 opened and cancelled.
+    // cliAccountsSection: the fixture statuses in Settings › 구성 요소' agent CLI rows, then D8 opened and cancelled.
     await host('cliOpen');
     const form = () => document.querySelector('[data-native-view=settings]');
     report.cliShown = !!(await until(() => form()?.querySelector('[data-aid="cli-account-row-claude"]'), 15000));
     report.summaries = [...(form()?.querySelectorAll('[data-aid^="cli-account-status-"]') ?? [])].map((e) => e.textContent ?? '');
     report.rows = [...(form()?.querySelectorAll('[data-aid^="cli-account-row-"]') ?? [])].map((e) => e.dataset.aid);
+    // Claude's row opens first: its 계정 변경 is in the row's opened panel.
+    const change = () => form()?.querySelector('[data-aid="cli-account-change-claude"]');
+    if (!change()) press(form(), 'components-row-toggle-claude');
+    report.rowOpened = !!(await until(() => change(), 10000));
     report.changePressed = press(form(), 'cli-account-change-claude');
     const dialog = () => [...document.querySelectorAll('[data-native-view^=dialog-]')].pop();
     report.confirmationShown = !!(await until(() => dialog() && (dialog().textContent ?? '').includes(words.confirm), 10000));
@@ -265,7 +269,8 @@ pub async fn smoke_accounts(action: String, args: Value, host: tauri::State<'_, 
             }))
         }
         "cliOpen" => {
-            crate::settings::cli_accounts::show_fixture(Some(accounts::smoke_fixture_statuses()));
+            crate::settings::tools::show_fixture(Some(accounts::smoke_fixture_statuses()));
+            // A saved CLI tab's name: it opens 구성 요소, where each agent CLI's row is its account row.
             crate::settings::open(&host, Some("cli"));
             Ok(Value::Null)
         }
@@ -277,7 +282,7 @@ pub async fn smoke_accounts(action: String, args: Value, host: tauri::State<'_, 
         }
         "cliClose" => {
             crate::settings::close(&host);
-            crate::settings::cli_accounts::show_fixture(None);
+            crate::settings::tools::show_fixture(None);
             Ok(Value::Null)
         }
         "loginCard" => {

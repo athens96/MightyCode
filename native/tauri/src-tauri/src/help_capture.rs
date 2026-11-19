@@ -39,7 +39,7 @@ pub(crate) const SHOTS: &str = include_str!("../../../../docs/help/shots.json");
 const DEMO_PROFILE: &str = include_str!("../../../contracts/fixtures/demo-profile.json");
 
 /// The screens this capture draws (C# `HelpKnownScreens`); any other is listed as skipped.
-pub const KNOWN_SCREENS: [&str; 34] = [
+pub const KNOWN_SCREENS: [&str; 33] = [
     "welcome",
     "overview",
     "sidebar-collapsed",
@@ -67,7 +67,6 @@ pub const KNOWN_SCREENS: [&str; 34] = [
     "settings-models",
     "settings-styles",
     "settings-tools",
-    "settings-cli",
     "settings-mobile",
     "settings-companion",
     "settings-about",
@@ -1155,8 +1154,8 @@ async fn open_screen(host: &Arc<Host>, screen: &str, demo: Option<&mut Demo>) ->
             delay(500).await;
             Ok(Target { clip: Some("[data-testid=session-info]"), cleanup: Some(Cleanup::Escape(200)), ..Target::default() })
         }
-        "settings-general" | "settings-models" | "settings-styles" | "settings-tools" | "settings-cli" | "settings-mobile"
-        | "settings-companion" | "settings-about" => {
+        "settings-general" | "settings-models" | "settings-styles" | "settings-tools" | "settings-mobile" | "settings-companion"
+        | "settings-about" => {
             // As the Mac's: the saved category, then Settings opened; the sheet alone is the picture. The phone's screen is 원격 연결
             // on its 휴대폰 tab since the Settings tidy-up (the shot keeps its id: the help pages show it as `settings-mobile`).
             let category = match screen {
@@ -1742,12 +1741,13 @@ mod tests {
         );
     }
 
-    /// The embedded shot list is the help site's and every screen it names is one this capture draws (C#'s list, the same 34).
+    /// The embedded shot list is the help site's and every screen it names is one this capture draws (C#'s list, the same 34, less
+    /// settings-cli since the CLI tab is 구성 요소' rows: settings-tools shows them).
     #[test]
     fn every_listed_shot_is_a_screen_the_capture_knows() {
         let shots: Value = serde_json::from_str(SHOTS).unwrap();
         let list = shots["shots"].as_array().unwrap();
-        assert_eq!(list.len(), 34);
+        assert_eq!(list.len(), 33);
         for shot in list {
             assert!(KNOWN_SCREENS.contains(&shot["screen"].as_str().unwrap()), "{shot}");
             assert!(shot["id"].as_str().is_some_and(|id| !id.is_empty()));

@@ -1,15 +1,16 @@
-//! The CLI tab's accounts box against C#'s capture (plan W6 §1.8 item 5): `mighty-native/tests/golden/cli.json` is C#'s Settings › CLI
-//! as its web smoke first pushed it (dark, Korean, the runtime and the account statuses not read yet), normalized by `parity`
+//! The CLI accounts box against C#'s capture (plan W6 §1.8 item 5): `mighty-native/tests/golden/cli.json` is C#'s Settings › CLI as
+//! its web smoke first pushed it (dark, Korean, the runtime and the account statuses not read yet), normalized by `parity`
 //! (`tools/parity/native.ps1`, `native-diff --write-cs`), with the Settings tidy-up's words (the shorter automatic sign-in note, 상태
-//! 새로고침). The box is drawn here as Settings draws it in a smoke and compared byte for byte with its section of the capture; the
-//! capture's 이 PC의 CLI and Claude Mods sections are C#'s boxes this app no longer draws (구성 요소 shows the CLIs).
+//! 새로고침). The box is drawn here from its builder and compared byte for byte with its section of the capture; the capture's 이 PC의
+//! CLI and Claude Mods sections are C#'s boxes this app no longer draws. Settings has no CLI tab any more (구성 요소 draws each agent
+//! CLI as one line that opens in place, with this crate's sign-in and account buttons and the automatic sign-in switch), so the
+//! golden holds the whole box as C# draws it: the account rows and the switch.
 
 use std::sync::Arc;
 
 use mighty_accounts::accounts::CliLoginOption;
 use mighty_accounts::view::{self, AccountActions, AccountRow, AccountsModel};
 use mighty_core::locale::Locale;
-use mighty_core::settings_sections::{self as sections};
 use mighty_native::parity;
 use mighty_native::surface::{SurfaceModel, Surfaces};
 use mighty_native::ui::{El, Env, Ui};
@@ -74,7 +75,7 @@ fn the_accounts_box_matches_cs_while_every_status_is_checking() {
     // system language is English would read them in English).
     mighty_run::strings::set_language("ko");
     let locale = Locale::new("ko");
-    let title = sections::title_of(&locale, sections::CLI_ACCOUNTS).unwrap();
+    let title = locale.get("settings.cliAccounts.sectionTitle");
     let rows = AccountsModel::from_statuses(&Default::default())
         .into_iter()
         .map(|status| AccountRow { status, pending: false, message: None, working: false })

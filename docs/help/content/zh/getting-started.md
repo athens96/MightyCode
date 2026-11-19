@@ -17,7 +17,7 @@ Mighty Code 是一款桌面应用，可以在一个窗口中并排使用 Claude 
 - Hermes: Mac `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`（需要 Git），Windows `irm https://hermes-agent.nousresearch.com/install.ps1 | iex`（见 [Hermes](agent-pane.md#hermes)）
 
 > [!tip]
-> 打开应用后，可以在{{ui:settings.nav.tools}}标签页中查看哪些 CLI 已就绪。缺少的工具可以直接在那里安装。登录在{{ui:settings.nav.cli}}标签页中进行。请参阅[设置](settings.md#components)。
+> 打开应用后，可以在{{ui:settings.nav.tools}}标签页中查看哪些 CLI 已就绪。缺少的工具可以直接在那里安装。登录和 CLI 更新也在同一标签页中进行。请参阅[设置](settings.md#components)。
 
 ## 安装 {#install}
 1. 从[下载页面](https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/index.html)下载适合你操作系统的文件。
@@ -56,7 +56,7 @@ Mighty Code 是一款桌面应用，可以在一个窗口中并排使用 Claude 
 Windows 应用也以同样的方式更新（[Windows 上的不同之处](windows.md#install)）。
 
 > [!note]
-> AI CLI 的更新与应用更新分开进行。请使用{{ui:settings.nav.cli}}标签页中的{{ui:settings.cliUpdate.sectionTitle}}。
+> AI CLI 的更新与应用更新分开进行。请使用{{ui:settings.nav.tools}}标签页中的{{ui:settings.components.updateAllButton}}按钮。请参阅[更新](settings.md#cli-update)。
 
 ## 首次启动 {#first-launch}
 首次打开时还没有工作区，因此会显示欢迎界面。
@@ -73,7 +73,7 @@ Windows 应用也以同样的方式更新（[Windows 上的不同之处](windows
 
 Git（Xcode Command Line Tools）会打开系统安装窗口，请在该窗口中完成。脚本最多等待 30 分钟；按 Control-C 只会结束等待并继续下一步。如果因为未同意 Xcode 许可而无法运行 git，Git 会显示为{{ui:setup.status.attention}}。Tailscale 会打开官方下载页面。版本过旧的 Claude Code 会显示为{{ui:setup.status.outdated}}，并出现{{ui:setup.button.update}}按钮。
 
-可以用{{ui:setup.button.later}}关闭；勾选{{ui:setup.button.neverShow}}后再关闭，启动时就不会再打开。缺少必需工具期间，欢迎界面上有{{ui:setup.title}}按钮，因缺少 CLI 而受阻的窗格中有{{ui:setup.blocked.install}}按钮。设置 → {{ui:settings.nav.tools}}中也有同一个列表。
+可以用{{ui:setup.button.later}}关闭；勾选{{ui:setup.button.neverShow}}后再关闭，启动时就不会再打开。缺少必需工具期间，欢迎界面上有{{ui:setup.title}}按钮，因缺少 CLI 而受阻的窗格中有{{ui:setup.blocked.install}}按钮。设置 → {{ui:settings.nav.tools}}中也有这些项目，每项一行，可用各自的{{ui:settings.components.installButton}}按钮安装（[组件](settings.md#components)）。
 
 {{platform:windows}} Windows 上也有同样的界面。命令以主文件夹为工作文件夹，在应用单独打开的一个 PowerShell 窗口中依次运行（安装了 Windows Terminal 时为其标签页，否则为控制台窗口），最后按 Enter 之前窗口一直保持打开。Claude Code、Codex、Antigravity、Hermes 和 uv 使用各自的官方 PowerShell 安装脚本安装，pi 和 opencode 通过 npm 安装，Git 和 glab 通过 winget 仅为当前用户安装，Node.js 和 gh 通过 winget 为所有用户安装。为所有用户安装时，Windows 可能会自己弹出管理员确认窗口；此界面本身不会请求管理员权限。安装结束后，应用会从注册表重新读取 PATH 并检查。Homebrew、Bun 和 gstack 只在 Mac 上安装。
 

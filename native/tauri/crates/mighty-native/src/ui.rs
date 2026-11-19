@@ -325,6 +325,8 @@ pub struct Button {
     pub size: Option<f64>,
     /// A `MenuFlyout`: the page draws it as a menu.
     pub flyout: Option<Vec<MenuItem>>,
+    /// A disclosure's button (a list row that opens in place): whether what it opens shows, read as `aria-expanded`.
+    pub expanded: Option<bool>,
 }
 
 /// A Border.
@@ -381,7 +383,8 @@ pub struct El {
     pub min_width: Option<f64>,
     /// A control's own `IsEnabled`.
     pub enabled: bool,
-    /// The builder's mark (C# `WebNativeReader.Mark`): `row`, `wideRow`, `settingsRow`, `loading`.
+    /// The builder's mark (C# `WebNativeReader.Mark`): `row`, `wideRow`, `settingsRow`, `loading`; `cards` (a box the page draws
+    /// without its card, its own cards inside) and `card` (one of them).
     pub role: Option<&'static str>,
     /// `AutomationProperties.AutomationId`.
     pub aid: Option<String>,

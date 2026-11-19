@@ -375,7 +375,8 @@ fn toolkit_approval_binds_to_content_hash() {
     store.approve("my-npm", None).unwrap();
     let renewed = store.get_approval(&changed).expect("re-approved");
     assert_ne!(renewed.content_hash, approval.content_hash, "new hash differs after content change");
-    assert!(store.get_approval(&ToolkitStore::bundled()[0]).is_none(), "bundled entry approval is always null");
+    let bundled = ToolkitFileEntry { source: ToolkitEntrySource::Bundled, ..make_entry("my-npm", package("npm", "typescript", None)) };
+    assert!(store.get_approval(&bundled).is_none(), "a bundled entry's approval is always null");
     let store2 = ToolkitStore::new(&dir);
     let loaded = store2.list().0.into_iter().find(|e| e.id == "my-npm").expect("entry reloaded");
     assert_eq!(store2.get_approval(&loaded).map(|a| a.content_hash), Some(renewed.content_hash), "approval hash survives reload");
@@ -396,7 +397,6 @@ async fn toolkit_plan_runs_only_missing_approved_entries() {
     let action = |id: &str| plan.iter().find(|i| i.entry.id == id).map(|i| i.action);
     assert_eq!(action("approved-npm"), Some(PlanAction::Run), "approved gets Run action");
     assert_eq!(action("unapproved-npm"), Some(PlanAction::Skip), "unapproved gets Skip action");
-    assert_eq!(action("mighty-styles"), Some(PlanAction::Run), "bundled entry in plan when missing");
     let executor = FakeExecutor::default();
     let results = runner.run(&plan, &executor).await;
     assert_eq!(results.iter().find(|r| r.entry_id == "unapproved-npm").map(|r| r.verdict), Some(Verdict::Skipped));
@@ -492,7 +492,8 @@ async fn toolkit_plan_is_a_step_list() {
     common::remove(&home);
 }
 
-/// "bundled entry sorts first and survives an unreadable store" (ToolkitVerification.cs:475).
+/// "bundled entry sorts first and survives an unreadable store" (ToolkitVerification.cs:475): no entry is bundled any more, so an
+/// unreadable store lists nothing and says why.
 #[test]
 fn bundled_entry_sorts_first_and_survives_an_unreadable_store() {
     common::korean();
@@ -502,7 +503,7 @@ fn bundled_entry_sorts_first_and_survives_an_unreadable_store() {
     let store = ToolkitStore::new(&dir);
     let (entries, error) = store.list();
     assert_eq!(error, Some(strings::get("toolkit.error.unreadable")), "the app's own sentence for an unreadable file");
-    assert!(entries.len() == 1 && entries[0].id == "mighty-styles" && entries[0].source == ToolkitEntrySource::Bundled);
+    assert!(entries.is_empty(), "nothing is bundled: {entries:?}");
     assert_eq!(std::fs::read(&path).unwrap(), b"not-json{{{", "toolkit.json is byte-identical after an unreadable load");
     common::remove(&dir);
 }

@@ -4,17 +4,17 @@ order: 12
 section: faq
 ---
 ## 无法发送请求 {#cannot-send}
-- 输入框下方会显示无法发送的原因。如果 CLI 未安装或需要登录，请检查{{ui:menu.settings}} → {{ui:settings.nav.tools}}和{{ui:settings.nav.cli}}。
+- 输入框下方会显示无法发送的原因。如果 CLI 未安装或需要登录，请检查{{ui:menu.settings}} → {{ui:settings.nav.tools}}。
 - 终端窗格不能附加文件。请使用 AI 窗格。
 - 运行期间按{{kbd:Enter}}不会立即发送，而是放入队列。请参阅[运行时继续提出请求](agent-pane.md#queue)。
 
 ## 模型列表中没有想要的模型 {#model-missing}
 1. 打开模型按钮，点击{{ui:composer.model.refresh}}。
-2. 如果仍然没有，请在{{ui:settings.nav.cli}}标签页中点击{{ui:settings.cliAccounts.resetModelsButton}}按钮。
+2. 如果仍然没有，请在{{ui:settings.nav.tools}}标签页的 Claude 一行中点击{{ui:settings.cliAccounts.resetModelsButton}}按钮。
 3. 自己使用的模型名称，可以添加到{{ui:settings.nav.models}}标签页的{{ui:settings.phaseModels.registeredTitle}}中。
 
 ## 登录总是断开 {#login}
-请打开{{ui:settings.nav.cli}}标签页中的{{ui:settings.cliAccounts.autoLoginToggle}}。登录一断开就会重新开始登录，并重新发送失败的请求。请参阅[登录断开时](approvals.md#login-recovery)。
+请打开{{ui:settings.nav.tools}}标签页中的{{ui:settings.cliAccounts.autoLoginToggle}}。登录一断开就会重新开始登录，并重新发送失败的请求。请参阅[登录断开时](approvals.md#login-recovery)。
 
 ## 韩文输入被拆成单独的字母 {#korean-input}
 在菜单栏的{{ui:menu.workspace}}菜单中点击{{ui:menu.reconnectInputMethod}}。如果问题仍然存在，请用{{ui:menu.saveInputDiagnostics}}保存诊断文件并发给我们。

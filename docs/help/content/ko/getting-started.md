@@ -17,7 +17,7 @@ Mighty Code는 Claude Code, Codex CLI, Google의 Antigravity CLI, pi, opencode, 
 - Hermes: Mac `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash` (Git이 필요합니다), Windows `irm https://hermes-agent.nousresearch.com/install.ps1 | iex` ([Hermes](agent-pane.md#hermes) 참고)
 
 > [!tip]
-> 앱을 연 뒤 {{ui:settings.nav.tools}}에서 어떤 CLI가 준비됐는지 봅니다. 빠진 것은 그 자리에서 설치합니다. 로그인은 {{ui:settings.nav.cli}} 탭에서 합니다. [설정](settings.md#components)을 보세요.
+> 앱을 연 뒤 {{ui:settings.nav.tools}}에서 어떤 CLI가 준비됐는지 봅니다. 빠진 것은 그 자리에서 설치합니다. 로그인과 CLI 업데이트도 같은 탭에서 합니다. [설정](settings.md#components)을 보세요.
 
 ## 설치 {#install}
 1. [다운로드 페이지](https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/index.html)에서 내 운영체제용 파일을 받습니다.
@@ -56,7 +56,7 @@ Mighty Code는 Claude Code, Codex CLI, Google의 Antigravity CLI, pi, opencode, 
 Windows 앱도 같은 방식으로 업데이트합니다([Windows에서 다른 점](windows.md#install)).
 
 > [!note]
-> AI CLI의 업데이트는 앱 업데이트와 따로 합니다. {{ui:settings.nav.cli}} 탭의 {{ui:settings.cliUpdate.sectionTitle}} 항목을 쓰세요.
+> AI CLI의 업데이트는 앱 업데이트와 따로 합니다. {{ui:settings.nav.tools}} 탭의 {{ui:settings.components.updateAllButton}} 단추를 쓰세요. [업데이트](settings.md#cli-update)를 보세요.
 
 ## 첫 실행 {#first-launch}
 처음 열면 아직 워크스페이스가 없어서 시작 화면이 보입니다.
@@ -73,7 +73,7 @@ Windows 앱도 같은 방식으로 업데이트합니다([Windows에서 다른 �
 
 Git(Xcode Command Line Tools)은 시스템 설치 창이 열리고 그 창에서 마칩니다. 스크립트는 30분까지 기다리고, Control-C를 누르면 기다림만 끝내고 다음 단계로 넘어갑니다. Xcode 라이선스에 동의하지 않아 git이 실행되지 않으면 {{ui:setup.status.attention}}로 보입니다. Tailscale은 공식 내려받기 페이지를 엽니다. 너무 오래된 Claude Code는 {{ui:setup.status.outdated}}로 보이고 {{ui:setup.button.update}} 단추가 나옵니다.
 
-{{ui:setup.button.later}}로 닫을 수 있고, {{ui:setup.button.neverShow}}에 체크하고 닫으면 앱을 열 때 다시 나오지 않습니다. 필수 도구가 빠져 있는 동안 시작 화면에 {{ui:setup.title}} 단추가 있고, CLI가 없어 막힌 실행 창에는 {{ui:setup.blocked.install}} 단추가 있습니다. 같은 목록이 설정 → {{ui:settings.nav.tools}}에도 있습니다.
+{{ui:setup.button.later}}로 닫을 수 있고, {{ui:setup.button.neverShow}}에 체크하고 닫으면 앱을 열 때 다시 나오지 않습니다. 필수 도구가 빠져 있는 동안 시작 화면에 {{ui:setup.title}} 단추가 있고, CLI가 없어 막힌 실행 창에는 {{ui:setup.blocked.install}} 단추가 있습니다. 같은 항목이 설정 → {{ui:settings.nav.tools}}에도 한 줄씩 있고, 줄마다 {{ui:settings.components.installButton}} 단추로 설치합니다([구성 요소](settings.md#components)).
 
 {{platform:windows}} Windows에도 같은 화면이 있습니다. 명령은 앱이 따로 여는 PowerShell 창 하나(Windows Terminal이 있으면 그 탭, 없으면 콘솔 창)에서 홈 폴더를 작업 폴더로 차례로 실행되고, 마지막에 Enter를 누를 때까지 창이 열려 있습니다. Claude Code, Codex, Antigravity, Hermes, uv는 각자의 공식 PowerShell 설치 스크립트로, pi와 opencode는 npm으로, Git과 glab은 winget으로 이 사용자에게만, Node.js와 gh는 winget으로 모든 사용자에게 설치합니다. 모든 사용자용 설치는 Windows가 직접 관리자 확인 창을 띄울 수 있지만, 이 화면 자체는 관리자 권한을 요청하지 않습니다. 설치가 끝나면 앱이 PATH를 레지스트리에서 다시 읽어 확인합니다. Homebrew, Bun, gstack은 Mac에서만 설치합니다.
 

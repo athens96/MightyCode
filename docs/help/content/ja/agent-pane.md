@@ -55,7 +55,7 @@ section: agent-pane
 GoogleのエージェントはAntigravity CLI(`agy`)で動きます。AntigravityはClaudeやGPT-OSSのモデルも実行できます。
 
 - インストール: Macでは`curl -fsSL https://antigravity.google/cli/install.sh | bash`を実行すると、`~/.local/bin`に`agy`が入ります。WindowsではPowerShellで`irm https://antigravity.google/cli/install.ps1 | iex`を実行すると、`%LOCALAPPDATA%\agy\bin`に`agy.exe`が入ります。アップデートはアプリが`agy update`で行います。
-- サインイン: ターミナルペインで`agy`を一度実行し、ブラウザでGoogleアカウントにサインインします。{{ui:settings.nav.cli}}タブの{{ui:settings.cliAccounts.buttonLogin}}をクリックすると、アプリが代わりに実行します。Antigravityにはサインアウトのコマンドがないため、アカウントを切り替えるには`agy`の中で`/logout`を使います。
+- サインイン: ターミナルペインで`agy`を一度実行し、ブラウザでGoogleアカウントにサインインします。{{ui:settings.nav.tools}}タブの{{ui:settings.cliAccounts.buttonLogin}}をクリックすると、アプリが代わりに実行します。Antigravityにはサインアウトのコマンドがないため、アカウントを切り替えるには`agy`の中で`/logout`を使います。
 - 権限: Antigravityはアプリの中で確認できません。{{ui:permission.label.default}}はagyに保存されたAgent Modeに従います(agyの`/config`で変えていなければレビュー)。ワークスペースのファイルは読めますが、確認が必要なファイル編集とシェルコマンドは拒否し、ターンを終えてから、拒否した操作を権限カードで尋ねます。{{ui:permission.allowOnce}}または{{ui:antigravity.permission.allowAlways}}を押すと、同じ会話で続きが進みます([Antigravityの権限カード](approvals.md#antigravity-permission))。{{ui:permission.label.plan}}はagy自身のフォルダに計画を書き、プロジェクトを変更せずに止まります。実行するには、次のリクエストを別のモードで送ってください。あらかじめ許可しておきたい操作は、`~/.gemini/antigravity-cli/settings.json`の`permissions.allow`に許可ルール(例: `command(git status)`。ルールはそのテキストで始まるすべてのコマンドを許可するので、できるだけ狭く)を自分で追加するか、{{ui:permission.label.acceptEdits}}(ファイル編集)または{{ui:permission.label.fullAccess}}(すべて許可)を選んでください。
 - Antigravityのモデルは名前に思考の深さが含まれているため、{{ui:composer.effort.label}}を別に選びません。
 - {{ui:graph.view.mighty}}表示はClaudeやCodexと同じです。Antigravityが起動したサブエージェントはリクエストの下にそれぞれのブロックになり、その内容(受けた指示、メッセージ、ツール呼び出し、送り返した答え)は`~/.gemini/antigravity-cli`(Windowsでは`%USERPROFILE%\.gemini\antigravity-cli`)に残るサブエージェント自身の記録から読みます。読んだファイルは名前だけが表示され、中身は写しません。会話の以前のリクエストも同じ記録から読み込み、{{ui:resume.choice.resume}}にはこのフォルダのAntigravityの会話が表示されます。
@@ -65,7 +65,7 @@ GoogleのエージェントはAntigravity CLI(`agy`)で動きます。Antigravit
 pi(`pi`)は、多くのモデル提供元で使えるオープンソースのコーディングエージェントCLIです。
 
 - インストール: {{ui:setup.title}}画面からインストールします(HomebrewとNode.jsがなければ先にインストールします)。自分でインストールするなら`npm install -g @mariozechner/pi-coding-agent`を実行します。アップデートはアプリが`pi update self`で行います。
-- サインイン: {{ui:settings.nav.cli}}タブの{{ui:settings.cliAccounts.buttonLogin}}を押すと、`pi`を実行するターミナルペインが開きます。そこで`/login`と入力し、サブスクリプション(Claude Pro/Max、ChatGPT、GitHub Copilot)またはAPIキーを選びます。環境変数のAPIキー(`ANTHROPIC_API_KEY`など)や`~/.pi/agent/auth.json`に保存された認証情報もサインイン済みと見なします。サインアウトはpiの中で`/logout`と入力します。
+- サインイン: {{ui:settings.nav.tools}}タブの{{ui:settings.cliAccounts.buttonLogin}}を押すと、`pi`を実行するターミナルペインが開きます。そこで`/login`と入力し、サブスクリプション(Claude Pro/Max、ChatGPT、GitHub Copilot)またはAPIキーを選びます。環境変数のAPIキー(`ANTHROPIC_API_KEY`など)や`~/.pi/agent/auth.json`に保存された認証情報もサインイン済みと見なします。サインアウトはpiの中で`/logout`と入力します。
 - モデル: サインインすると、`pi --list-models`の一覧が「提供元/モデル」の名前で表示され、先頭の項目はpi自身の設定に従います。思考機能のないモデルでは{{ui:composer.effort.label}}は表示されません。段階はOff、Minimal、Low、Medium、High、XHighです。
 - 権限: piには承認ウィンドウがないため、モードは2つです。{{ui:permission.label.defaultCodex}}モードは読み取りツール(read、grep、find、ls)だけを有効にします。{{ui:permission.label.fullAccess}}モードはすべてのツールを確認なしで使い、プロジェクトの外にも触れられます。
 - リクエストごとにペインの作業フォルダで`pi --mode rpc`を実行し、ペインのセッションを引き継ぎます。セッションは`~/.pi/agent/sessions`に保存され、{{ui:resume.choice.resume}}にもこのフォルダのpiセッションが表示されます。
@@ -76,7 +76,7 @@ pi(`pi`)は、多くのモデル提供元で使えるオープンソースのコ
 opencode(`opencode`)は、多くのモデル提供元で使えるオープンソースのコーディングエージェントCLIです。自社サービスopencode Zenの無料モデルはサインインなしでも使えます。
 
 - インストール: {{ui:setup.title}}画面からインストールします(HomebrewとNode.jsがなければ先にインストールします)。自分でインストールするなら`npm install -g @opencode/cli`を実行します。アプリはOpenCode 2を使います。MacにOpenCode 1があると古いものとして表示され、セットアップ画面からインストールするとnpmの`opencode-ai`を先に削除します。アップデートはアプリが`opencode upgrade`で行います。
-- サインイン: {{ui:settings.nav.cli}}タブの{{ui:settings.cliAccounts.buttonLogin}}を押すと、`opencode auth login`を実行するターミナルペインが開きます。そこで提供元を選び、そのサブスクリプションでサインインするかAPIキーを入力します。opencodeが保存したサインイン(`opencode auth list`)や環境変数のAPIキー(`ANTHROPIC_API_KEY`など)もサインイン済みと見なし、どちらもなければopencode Zenの無料モデルだけが表示されます。ログアウトはターミナルで`opencode auth logout`を実行します。
+- サインイン: {{ui:settings.nav.tools}}タブの{{ui:settings.cliAccounts.buttonLogin}}を押すと、`opencode auth login`を実行するターミナルペインが開きます。そこで提供元を選び、そのサブスクリプションでサインインするかAPIキーを入力します。opencodeが保存したサインイン(`opencode auth list`)や環境変数のAPIキー(`ANTHROPIC_API_KEY`など)もサインイン済みと見なし、どちらもなければopencode Zenの無料モデルだけが表示されます。ログアウトはターミナルで`opencode auth logout`を実行します。
 - モデル: `opencode models`の一覧が「提供元/モデル」の名前で表示され、先頭の項目はopencode自身の設定に従います。
 - 権限: 選んだモードがそのリクエストだけのopencode自身のルールになり、ルールが確認に残した操作はClaudeと同じくペインに承認カードとして届きます。{{ui:permission.label.default}}はファイルの編集、コマンド、Web、プロジェクト外へのアクセスの前に確認し、{{ui:permission.label.acceptEdits}}はファイルの編集を確認せず、{{ui:permission.label.plan}}はファイルを編集しないopencodeのplanエージェントで実行し、{{ui:permission.label.fullAccess}}は確認しません。
 - リクエストごとにペインの作業フォルダで`opencode acp`(OpenCode 2、Agent Client Protocol)を実行し、ペインのセッションを引き継ぎます。セッションはopencodeの`opencode.db`に保存され、{{ui:resume.choice.resume}}にもこのフォルダのopencodeセッションが表示されます。使用量にはセッションの費用、使用中のコンテキスト、リクエストのトークンが表示されます。
@@ -87,7 +87,7 @@ opencode(`opencode`)は、多くのモデル提供元で使えるオープンソ
 Hermes(`hermes`)は、Nous ResearchのオープンソースのエージェントCLI(Hermes Agent)です。Nous Portal、OpenRouter、Anthropic、OpenAIなど多くのモデル提供元を使えます。
 
 - インストール: {{ui:setup.title}}画面からインストールします(Gitがなければ先にインストールします)。公式のインストールスクリプトが専用のPython環境と一緒に`~/.hermes`へインストールし、ブラウザツールもダウンロードするため数分かかります。自分でインストールする場合は、Macでは`curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`を、WindowsではPowerShellで`irm https://hermes-agent.nousresearch.com/install.ps1 | iex`を実行します。アップデートはアプリが`hermes update`で行います。
-- サインイン: {{ui:settings.nav.cli}}タブの{{ui:settings.cliAccounts.buttonLogin}}ボタンをクリックすると、`hermes model`を実行するターミナルペインが開きます。そこでモデルの提供元を選び、サインインするかAPIキーを入力してから、既定のモデルを選びます。アプリが読むのは、Hermesが資格情報を見つけた提供元の名前だけです。資格情報を消すにはターミナルで`hermes auth`を使います。
+- サインイン: {{ui:settings.nav.tools}}タブの{{ui:settings.cliAccounts.buttonLogin}}ボタンをクリックすると、`hermes model`を実行するターミナルペインが開きます。そこでモデルの提供元を選び、サインインするかAPIキーを入力してから、既定のモデルを選びます。アプリが読むのは、Hermesが資格情報を見つけた提供元の名前だけです。資格情報を消すにはターミナルで`hermes auth`を使います。
 - モデル: 最初の項目はHermes自体の設定(`hermes model`で決めた既定のモデル)に従います。Hermesはセッションを開いて初めてモデル一覧を示すため、最初のリクエストを送ったあとから`提供元:モデル`の一覧が表示されます。
 - 権限: {{ui:permission.label.default}}はファイルを変更するたびにペインの承認カードで確認し、{{ui:permission.label.acceptEdits}}は作業フォルダ内の変更を確認せず、{{ui:permission.label.fullAccess}}はHermesの`--yolo`で危険なコマンドも確認しません。危険なコマンド(`rm -rf`など)はHermesの承認設定(`approvals.mode`)に従ってカードで確認し、それ以外のコマンドと読み取りは確認しません。計画専用のモードはありません。{{ui:permission.label.fullAccess}}はセッション開始時に決まるため、すでに始めたセッションには新しい会話から適用されます。
 - リクエストごとにペインの作業フォルダで`hermes acp`(Agent Client Protocol)を実行し、ペインのセッションを引き継ぎます。実際の作業はHermesのゲートウェイ(バックグラウンドプロセス)が行い、必要なときに自動で起動し、使われなくなると終了します。セッションは`~/.hermes/state.db`に保存され、{{ui:resume.choice.resume}}にもこのフォルダのHermesセッションが表示されます。使用量にはセッションの累計トークンと使用中のコンテキストが表示され、費用はHermesが知らせません。

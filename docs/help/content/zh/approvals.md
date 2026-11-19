@@ -80,7 +80,7 @@ CLI 登录过期导致请求失败时，输入框上方会出现登录恢复卡�
 {{platform:windows}} 在 Windows 上，Antigravity、pi、opencode 和 Hermes 同样在终端中登录。登录终端会在单独的窗口中（若已安装 Windows Terminal，则为新标签页）于失败窗格的文件夹中打开，在终端中的操作与 Mac 相同：Antigravity（agy）会打开浏览器，请用 Google 账户登录；pi 则输入 `/login`，选择订阅或输入 API 密钥；opencode 会运行 `opencode auth login`，Hermes 会运行 `hermes model`。确认登录后，失败的请求会自动重新发送。应用不会关闭该终端。
 
 > [!tip]
-> 打开{{ui:settings.nav.cli}}标签页中的{{ui:settings.cliAccounts.autoLoginToggle}}后，登录一断开就会立即重新开始登录。
+> 打开{{ui:settings.nav.tools}}标签页中的{{ui:settings.cliAccounts.autoLoginToggle}}后，登录一断开就会立即重新开始登录。
 
 ## 后台任务 {#background}
 Claude 有时会在后台运行耗时较长的命令或子智能体。这时即使 Claude 的回答已经结束，任务也仍在进行。

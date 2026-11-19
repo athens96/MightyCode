@@ -22,9 +22,10 @@ interface Base {
   /**
    * What the host's builder made it (WebNativeReader.Mark): `row` — a settings row (its first child the name and caption, the
    * rest the controls at the right), `wideRow` — the name over a control the row's full width, `settingsRow` — one row of a
-   * settings card (its rule and insets are the standard's, not the form's).
+   * settings card (its rule and insets are the standard's, not the form's), `cards` — a box drawn without its card, its own
+   * cards inside (Settings › 구성 요소), `card` — one of those cards.
    */
-  role?: 'row' | 'wideRow' | 'settingsRow';
+  role?: 'row' | 'wideRow' | 'settingsRow' | 'cards' | 'card';
   /** In a grid: its cell. */
   row?: number;
   col?: number;
@@ -49,8 +50,8 @@ export type NativeNode = Base & (
   | { t: 'select'; id: number; index: number; name: string; items: string[] }
   | { t: 'field'; id: number; text: string; placeholder?: string; multiline?: boolean; readonly?: boolean; password?: boolean; name?: string; mono?: boolean }
   | { t: 'slider'; id: number; value: number; min: number; max: number; step: number; name: string }
-  | { t: 'button'; id: number; name: string; label?: string; c?: NativeNode[]; accent?: boolean; destructive?: boolean }
-  | { t: 'menu'; id: number; name: string; label?: string; c?: NativeNode[]; items: MenuItem[] }
+  | { t: 'button'; id: number; name: string; label?: string; c?: NativeNode[]; accent?: boolean; destructive?: boolean; expanded?: boolean }
+  | { t: 'menu'; id: number; name: string; label?: string; c?: NativeNode[]; items: MenuItem[]; accent?: boolean }
   | { t: 'expander'; id: number; open: boolean; header: NativeNode | null; c: NativeNode[] | null }
   | { t: 'info'; title?: string; message?: string; severity: string }
   | { t: 'list'; id: number; index: number; items: NativeNode[] }

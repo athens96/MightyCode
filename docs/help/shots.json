@@ -256,15 +256,6 @@
       }
     },
     {
-      "id": "settings-cli",
-      "section": "settings",
-      "screen": "settings-cli",
-      "window": {
-        "width": 1440,
-        "height": 900
-      }
-    },
-    {
       "id": "settings-companion",
       "section": "settings",
       "screen": "settings-companion",

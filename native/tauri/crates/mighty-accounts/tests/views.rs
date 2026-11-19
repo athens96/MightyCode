@@ -1,7 +1,8 @@
-//! The CLI tab's boxes and dialogs D8 and D9 as the page reads them (C# MainWindow.Settings.cs:145-153, :576-1026), rendered
-//! headlessly through mighty-native's reader and surfaces: each box's rows and their automation ids, what a button does, the dialogs'
-//! kind, title and buttons. With them the Core half of AcpAgentAccountVerification `TheWindowsAccountsSectionListsEveryProvider`
-//! (Verification.cs:1400): the section lists every provider in the provider order and a terminal sign-in's row says what it asks.
+//! The CLI accounts' box (the parts of 구성 요소' agent CLI rows) and dialogs D8 and D9 as the page reads them (C#
+//! MainWindow.Settings.cs:145-153, :576-1026), rendered headlessly through mighty-native's reader and surfaces: each box's rows and their
+//! automation ids, what a button does, the dialogs' kind, title and buttons. With them the Core half of AcpAgentAccountVerification
+//! `TheWindowsAccountsSectionListsEveryProvider` (Verification.cs:1400): the section lists every provider in the provider order and a
+//! terminal sign-in's row says what it asks.
 
 mod common;
 

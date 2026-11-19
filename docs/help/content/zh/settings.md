@@ -3,7 +3,7 @@ title: 设置
 order: 8
 section: settings
 ---
-通过{{ui:menu.settings}}（{{kbd:⌘,}}）或侧边栏底部的设置按钮打开。在左侧选择标签页，用{{ui:settings.closeButton}}按钮或{{kbd:Esc}}关闭。设置会记住你上次查看的标签页。标签页的顺序是{{ui:settings.nav.general}}、{{ui:settings.nav.models}}、{{ui:settings.nav.cli}}、{{ui:settings.nav.styles}}、{{ui:settings.remote.navTitle}}、{{ui:settings.nav.companion}}、{{ui:settings.nav.tools}}、{{ui:settings.nav.about}}。
+通过{{ui:menu.settings}}（{{kbd:⌘,}}）或侧边栏底部的设置按钮打开。在左侧选择标签页，用{{ui:settings.closeButton}}按钮或{{kbd:Esc}}关闭。设置会记住你上次查看的标签页。标签页的顺序是{{ui:settings.nav.general}}、{{ui:settings.nav.models}}、{{ui:settings.nav.styles}}、{{ui:settings.remote.navTitle}}、{{ui:settings.nav.companion}}、{{ui:settings.nav.tools}}、{{ui:settings.nav.about}}。
 
 ## 通用 {#general}
 在{{ui:settings.nav.general}}标签页的{{ui:settings.display.sectionTitle}}中更改应用的外观。
@@ -38,31 +38,6 @@ section: settings
 
 ![[settings-models]]
 
-## CLI {#cli}
-在{{ui:settings.nav.cli}}标签页中管理 CLI 的登录和更新。每个 CLI 是否已安装、版本以及安装和更新按钮，都在{{ui:settings.nav.tools}}标签页的[{{ui:settings.components.sectionTitle}}](#components)列表中。
-
-### 登录 {#cli-accounts}
-在{{ui:settings.cliAccounts.sectionTitle}}中分别登录各个 CLI。
-1. 点击{{ui:settings.cliAccounts.buttonLogin}}。Claude 需要在{{ui:settings.cliAccounts.buttonLoginClaude}}和{{ui:settings.cliAccounts.buttonLoginConsole}}之间选择。
-2. CLI 登录会在终端中开始。请在浏览器中完成授权。
-   - {{platform:mac}} 应用内会打开终端窗格。它在本地工作区中打开，因此需要至少打开一个工作区。
-   - {{platform:windows}} 会打开单独的控制台窗口，不需要工作区。
-3. 登录完成后，状态会随之更新。如果没有更新，请点击该 CLI 一行中的{{ui:settings.cliAccounts.refreshTooltip}}按钮。更换后的账户从下一个请求起生效。
-
-要更换账户，请点击{{ui:settings.cliAccounts.buttonChange}}；要退出登录，请点击{{ui:settings.cliAccounts.buttonLogout}}。打开{{ui:settings.cliAccounts.autoLoginToggle}}后，登录断开时会自动重新登录，并重新发送失败的请求。
-
-Claude 一行还有{{ui:settings.cliAccounts.resetModelsButton}}和{{ui:settings.cliAccounts.bedrockButton}}按钮。{{ui:settings.cliAccounts.bedrockButton}}以与登录相同的方式在终端中打开 Claude CLI 的 AWS Bedrock 设置向导，完成后请刷新状态。{{platform:windows}} Windows 上还有一个{{ui:settings.cliAccounts.resetBedrockButton}}按钮，会先备份 Claude 用户设置，再删除 Bedrock 密钥和 Bedrock 模型设置。
-
-### CLI 更新 {#cli-update}
-在{{ui:settings.cliUpdate.sectionTitle}}中将已安装的 CLI 更新到最新版本。
-- {{ui:settings.cliUpdate.updateButton}}按钮：立即更新。
-- {{ui:settings.cliUpdate.autoUpdateToggle}}：在打开应用时以及每 6 小时检查一次。
-- {{ui:settings.cliUpdate.autoUpdatePluginsToggle}}：同时更新 Claude 和 Codex 插件。
-
-更新时沿用 CLI 最初的安装方式（npm、Homebrew 等）。
-
-![[settings-cli]]
-
 ## 风格 {#styles}
 在{{ui:settings.nav.styles}}标签页中管理风格列表：从文件注册风格、检查内容后允许或阻止。列表不对时，请点击{{ui:settings.styles.rescanButton}}按钮。把指针放在风格名称上，可以看到它的 ID、哈希和数量。详情请参阅[风格](styles.md#custom)。
 
@@ -96,11 +71,53 @@ Claude 一行还有{{ui:settings.cliAccounts.resetModelsButton}}和{{ui:settings
 ![[companion-pet]]
 
 ## 组件 {#components}
-{{ui:settings.nav.tools}}标签页显示应用所需的内容是否已准备就绪。
-- {{ui:settings.components.sectionTitle}}：这里是[{{ui:setup.title}}](getting-started.md#setup)列表。每个智能体 CLI、基础工具、风格工具、Tailscale、gh 和 glab 都会显示{{ui:setup.status.installed}}、{{ui:setup.status.missing}}、{{ui:setup.status.outdated}}、{{ui:setup.status.attention}}、{{ui:setup.status.installing}}或{{ui:setup.status.failed}}之一；选择缺少的项目并点击{{ui:setup.button.install}}，确认所有命令后即可安装：Mac 上在应用内的终端窗格中运行，Windows 上在应用单独打开的 PowerShell 窗口中运行。每个 CLI 的版本和登录状态也在这里查看，版本过旧的 Claude Code 会出现{{ui:setup.button.update}}按钮。{{ui:setup.button.recheck}}按钮以及列表打开期间的自动检查每次都会重新查找 CLI。
-- {{ui:settings.toolkit.sectionTitle}}：常用工具的列表。安装前会显示所有要运行的命令，并请你{{ui:settings.toolkit.confirmTitle}}。可以{{ui:settings.toolkit.exportButton}}或{{ui:settings.toolkit.importButton}}该列表。
+{{ui:settings.nav.tools}}标签页显示应用所需的内容是否已准备就绪，智能体 CLI 的安装、登录和更新也都在这里管理。只显示适用于这台电脑系统的项目。
+
+最上方一行是显示切换和两个按钮。
+- {{ui:settings.components.filterAll}} / 需处理：选择需处理后，只显示需要处理的行，即未安装、未登录、有可用更新、失败或需要处理的项目。旁边的数字是这类项目的数量。
+- 刷新（↻，{{ui:setup.button.recheck}}）：重新读取 PATH，并重新检查所有项目。
+- {{ui:settings.components.updateAllButton}}：立即更新所有已安装的智能体 CLI，每个 CLI 都沿用最初的安装方式（npm、Homebrew 等）。
+
+列表分为三组：{{ui:setup.group.agent}}（Claude、Codex、Antigravity、pi、opencode、Hermes）、{{ui:settings.components.groupTools}}（Git（Mac 上为 Xcode 命令行工具）、Homebrew（Mac）、Node.js、Bun（Mac）、uv、Tailscale、gh、glab）和{{ui:settings.components.groupPlugins}}（ouroboros、omc、gstack（Mac））。每个项目占一行，行内有展开标记（▸）、名称、版本，智能体 CLI 还有已登录的账户。右侧是状态，以及当前最需要的一个按钮。
+- 状态：{{ui:setup.status.installed}}、{{ui:settings.components.statusInstalled}}（智能体 CLI 已安装并已登录）、{{ui:settings.components.statusUpdateAvailable}}、{{ui:settings.cliAccounts.summarySignedOut}}、{{ui:settings.cliAccounts.statusNotInstalled}}、{{ui:setup.status.attention}}、{{ui:setup.status.installing}}、{{ui:setup.status.failed}}。
+- 按钮：缺少时为{{ui:settings.components.installButton}}（只能通过下载页面安装的项目为{{ui:setup.button.openPage}}），未登录时为{{ui:settings.cliAccounts.buttonLogin}}，过旧时为{{ui:setup.button.update}}。没有问题时不显示按钮。
+
+点击某一行会就地展开（▾）。展开后显示详细信息（需要哪个版本、上次更新的结果、账户信息、需要处理的原因、该项目的用途），以及该项目的所有按钮，智能体 CLI 有{{ui:settings.cliAccounts.buttonChange}}、{{ui:settings.cliAccounts.buttonLogout}}、{{ui:settings.cliAccounts.refreshTooltip}}等。再次点击即可收起。展开过的行会一直保持展开，直到退出应用。
+
+列表下方的{{ui:settings.components.groupAutoUpdate}}框中有三个开关和上次运行的时间。把指针移到开关上即可看到说明。
+- {{ui:settings.components.autoUpdateClis}}：在打开应用时以及每 6 小时检查一次智能体 CLI 更新。
+- {{ui:settings.components.autoUpdatePlugins}}：同时更新 Claude 和 Codex 插件。
+- {{ui:settings.components.autoLogin}}：登录过期时重新登录，并重新发送失败的请求。
+
+点击{{ui:settings.components.installButton}}，只会安装该项目以及它缺少的前置工具。所有要运行的命令会先在一个确认框中全部列出。
+- {{platform:mac}} 在应用内的终端窗格中运行；没有打开本地工作区时，在终端（Terminal.app）中运行。
+- {{platform:windows}} 在单独的 PowerShell 窗口中运行。
+
+是否安装成功，由完成后的重新检查来判断。首次运行时打开的[{{ui:setup.title}}](getting-started.md#setup)窗口是一个清单：选择缺少的项目并点击{{ui:setup.button.install}}。
+
+同一标签页的最下方是{{ui:settings.toolkit.sectionTitle}}框，即常用工具的列表。安装前会显示所有要运行的命令，并请你{{ui:settings.toolkit.confirmTitle}}。可以{{ui:settings.toolkit.exportButton}}或{{ui:settings.toolkit.importButton}}该列表。
 
 ![[settings-tools]]
+
+### 登录 {#cli-accounts}
+在每个智能体 CLI 的那一行登录。未登录的 CLI 会在行内直接显示{{ui:settings.cliAccounts.buttonLogin}}按钮，其他账户按钮在展开该行后显示。
+1. 点击{{ui:settings.cliAccounts.buttonLogin}}。Claude 需要在{{ui:settings.cliAccounts.buttonLoginClaude}}和{{ui:settings.cliAccounts.buttonLoginConsole}}之间选择。
+2. CLI 登录会在终端中开始。请在浏览器中完成授权。
+   - {{platform:mac}} 应用内会打开终端窗格。它在本地工作区中打开，因此需要至少打开一个工作区。
+   - {{platform:windows}} 会打开单独的控制台窗口，不需要工作区。
+3. 登录完成后，该行的状态会随之更新。如果没有更新，请展开该行并点击{{ui:settings.cliAccounts.refreshTooltip}}。更换后的账户从下一个请求起生效。
+
+要更换账户，请展开该行并点击{{ui:settings.cliAccounts.buttonChange}}；要退出登录，请点击{{ui:settings.cliAccounts.buttonLogout}}。打开{{ui:settings.components.groupAutoUpdate}}框中的{{ui:settings.components.autoLogin}}后，登录断开时会自动重新登录，并重新发送失败的请求。
+
+展开 Claude 一行后，还有{{ui:settings.cliAccounts.resetModelsButton}}和{{ui:settings.cliAccounts.bedrockButton}}按钮。{{ui:settings.cliAccounts.bedrockButton}}以与登录相同的方式在终端中打开 Claude CLI 的 AWS Bedrock 设置向导，完成后请刷新状态。{{platform:windows}} Windows 上还有一个{{ui:settings.cliAccounts.resetBedrockButton}}按钮，会先备份 Claude 用户设置，再删除 Bedrock 密钥和 Bedrock 模型设置。
+
+### 更新 {#cli-update}
+智能体 CLI 与应用分开更新。
+- {{ui:settings.components.updateAllButton}}按钮：立即更新所有已安装的智能体 CLI。过旧 CLI 一行中的{{ui:setup.button.update}}按钮也会运行 CLI 更新。
+- {{ui:settings.components.groupAutoUpdate}}框中的{{ui:settings.components.autoUpdateClis}}：在打开应用时以及每 6 小时检查一次。
+- {{ui:settings.components.autoUpdatePlugins}}：同时更新 Claude 和 Codex 插件。
+
+更新时沿用 CLI 最初的安装方式（npm、Homebrew 等）。每个 CLI 上次更新的结果在展开该 CLI 一行后显示，插件更新的结果显示在{{ui:settings.components.groupPlugins}}组下方。
 
 ## 关于 {#about}
 在{{ui:settings.nav.about}}标签页中可以更新应用，并查看数据存储位置。

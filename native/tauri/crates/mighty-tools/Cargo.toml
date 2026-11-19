@@ -24,6 +24,10 @@ mighty-run.workspace = true
 mighty-composer.workspace = true
 # The forms (`view`): the virtual WinUI, its reader and the settings kit.
 mighty-native.workspace = true
+# Settings › 구성 요소 (`view::components`): each agent CLI's row is the accounts' row with its install and update parts, and the
+# automatic sign-in and update switches and the CLI update's results are those crates' parts.
+mighty-accounts.workspace = true
+mighty-updates.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 indexmap.workspace = true

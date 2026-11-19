@@ -10,7 +10,7 @@ use crate::app_update_view::Words;
 use crate::locale::Locale;
 
 /// Each Windows key whose Mac row says something else: Swift's key, or None when the Mac shows no such row.
-pub const MAC_KEYS: [(&str, Option<&str>); 14] = [
+pub const MAC_KEYS: [(&str, Option<&str>); 15] = [
     // ⌘Enter, not Ctrl+Enter (SettingsView.swift:375).
     ("settings.delegation.descriptionWindows", Some("settings.delegation.description")),
     // ⌘=, ⌘− and ⌘0 in the View menu (SettingsView.swift:313).
@@ -33,6 +33,7 @@ pub const MAC_KEYS: [(&str, Option<&str>); 14] = [
     // 원격 연결: "this Mac", the Keychain, and no PowerShell or Windows confinement rule.
     ("remote.windows.settings.tailscaleOff", Some("settings.remote.tailscaleOff")),
     ("remote.windows.settings.shareNote", Some("settings.remote.shareNote")),
+    ("remote.windows.host.error.noTailscale", Some("remote.host.error.noTailscale")),
     ("remote.windows.settings.scopeKey", Some("settings.remote.scope.key")),
     ("remote.windows.settings.allowFullAccessDescription", Some("settings.remote.allowFullAccessDescription")),
     // 앱 정보: the state folder shows in Finder.

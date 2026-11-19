@@ -434,6 +434,37 @@ impl Ui<'_> {
         .va(VAlign::Center)
     }
 
+    /// A status pill: 11pt medium words in `ink` on a rounded `fill` (설치됨 in `done-text` on `done-soft`, 업데이트 있음 in
+    /// `wait-text` on `wait-soft`, 실패 in `err-text` on `err-soft`, a neutral word in `ink2` on `track`).
+    pub fn settings_pill(&self, text: impl Into<String>, ink: Token, fill: Token) -> El {
+        let mut words = self.text_block(text, 11.0);
+        if let Some(block) = words.text_mut() {
+            block.foreground = Some(self.brush(ink));
+            block.weight = 500;
+            block.wrapping = Wrapping::NoWrap;
+        }
+        El::border(Border {
+            child: Some(Box::new(words)),
+            padding: Thickness::new(metrics::SPACING_SM, 2.0, metrics::SPACING_SM, 2.0),
+            corner_radius: 10.0,
+            background: Some(self.brush(fill)),
+            ..Border::default()
+        })
+        .va(VAlign::Center)
+    }
+
+    /// A card of its own inside a box the page draws without its card (a box of several cards, its node marked `cards`): the page's
+    /// settings card (radius 16 on `card`), marked `card`.
+    pub fn settings_card(&self, content: El) -> El {
+        El::border(Border {
+            child: Some(Box::new(content)),
+            background: Some(self.brush(Token::Card)),
+            corner_radius: SETTINGS_CARD_RADIUS,
+            ..Border::default()
+        })
+        .mark("card")
+    }
+
     /// `SettingsSymbol`: a symbol in an ink.
     pub fn settings_symbol(&self, glyph: impl Into<String>, size: f64, ink: Token) -> El {
         El::new(Kind::FontIcon { glyph: glyph.into(), size: Some(size), foreground: Some(self.brush(ink)) }).va(VAlign::Center)

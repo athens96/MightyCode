@@ -16,9 +16,10 @@
 //!   missing Antigravity offers its install, a shell never, an old Claude its update (`blockedPaneInstall`); the screen holds no dialog
 //!   and closes by its ✕ (`setupTools`).
 //! - `componentsSection` (C# `RunComponentsSectionSmoke`): the five-entry fixture with one plugin, npm and winget entry each and two
-//!   of the Mac's; the three approved; Settings › 도구 shows the setup list and this PC's three tools; the plan runs through a fake
-//!   executor that only records (a winget install leaves its link, so the probe after it finds it installed); the Mac's entries stay
-//!   in the file byte for byte; the box's install returns at once in a smoke (C#'s `RunToolkitInstall`).
+//!   of the Mac's; the three approved; Settings › 구성 요소 shows its rows (Claude's account row, Git's, no checkbox) and this PC's
+//!   three tools; the plan runs through a fake executor that only records (a winget install leaves its link, so the probe after it
+//!   finds it installed); the Mac's entries stay in the file byte for byte; the box's install returns at once in a smoke (C#'s
+//!   `RunToolkitInstall`).
 //! - `statusLine`: a Claude pane in a temporary workspace whose `.claude\settings.json` has a command, and a temporary home whose own
 //!   has another: the card asks for trust while the home's line shows, and Allow shows the workspace's rows.
 
@@ -73,11 +74,11 @@ const PROBE: &str = r#"(async () => {
     report.afterCancel = await host('state');
     report.blocked = await host('blockedPane');
     report.toolsClosed = await closeSetup();
-    // componentsSection: Settings › 도구 over the fixture.
+    // componentsSection: Settings › 구성 요소 over the fixture: its rows (an agent CLI's is its account row, no checkbox), the toolkit.
     report.components = await host('components');
-    const form = await until(() => { const f = document.querySelector('[data-native-view=settings] [data-testid=settings-form][data-category=tools]'); return f && f.querySelector('[data-aid^="toolkit-entry-smoke"]') && at(f, 'setup-list') && at(f, 'settings-toolkit-results') ? f : null; }, 15000);
+    const form = await until(() => { const f = document.querySelector('[data-native-view=settings] [data-testid=settings-form][data-category=tools]'); return f && f.querySelector('[data-aid^="toolkit-entry-smoke"]') && at(f, 'components-list') && at(f, 'cli-account-row-claude') && at(f, 'components-row-git') && at(f, 'settings-toolkit-results') ? f : null; }, 15000);
     report.visibleIds = form ? [...form.querySelectorAll('[data-aid^="toolkit-entry-"]')].map((e) => e.dataset.aid.slice('toolkit-entry-'.length)) : [];
-    report.setupList = !!at(form, 'setup-list');
+    report.setupList = !!at(form, 'components-list') && !!at(form, 'cli-account-row-claude') && !!at(form, 'components-row-git') && !form.querySelector('[data-aid^="setup-check-"]');
     report.resultsShown = !!at(form, 'settings-toolkit-results');
     const before = dialogs().length;
     at(form, 'settings-toolkit-install')?.querySelector('button')?.click();
@@ -471,7 +472,7 @@ async fn components_fixture(folder: &Path) -> Result<(Arc<ToolkitStore>, Vec<Too
     Ok((store, runs, report))
 }
 
-/// The components step: the fixture's store in place of the app's, its run's results in the box, Settings opened on 도구.
+/// The components step: the fixture's store in place of the app's, its run's results in the box, Settings opened on 구성 요소.
 async fn components(host: &Arc<Host>) -> Result<Value, String> {
     let folder = temp_folder("components");
     fixtures().components = Some(folder.clone());

@@ -10,11 +10,7 @@
 
 ## 번들 항목
 
-| ID | 종류 | 소스 |
-|----|------|------|
-| mighty-styles | plugin | athens96/mighty-styles (mighty-styles@mighty-styles) |
-
-mighty-styles는 아직 게시되지 않아 설치 행이 실패로 표시될 수 있다. 이는 정상 동작이다.
+없다. 예전에 기본으로 들어 있던 mighty-styles 플러그인(athens96/mighty-styles)은 저장소가 게시된 적이 없어 설치가 늘 실패했으므로 목록에서 뺐다. 저장 파일에 `bundled`로 표시된 항목이 남아 있으면 상자는 그 표시대로 그린다.
 
 ## 항목 종류
 

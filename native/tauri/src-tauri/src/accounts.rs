@@ -171,7 +171,7 @@ async fn read_status(host: &Host, provider: &str) -> Option<CliAccountStatus> {
     Some(coordinator(host)?.status(provider).await)
 }
 
-/// The panes' cards and the CLI tab drawn again.
+/// The panes' cards and 구성 요소' account rows drawn again.
 fn redraw(host: &Host) {
     crate::panes::mark_all(host);
     if crate::native::is_open(host, crate::settings::SURFACE) {
@@ -241,8 +241,8 @@ pub fn start_sign_in(host: &Arc<Host>, provider: &str, option: Option<&str>) {
     crate::native::act(&host.clone(), async move { start_cli_sign_in(&host, &provider, option).await });
 }
 
-/// `accounts::refresh`: C# `RefreshVisibleSettingsAccountsAsync` — every account status read again, the CLI tab's rings turning
-/// meanwhile (Settings' CLI tab as it opens, outside a smoke).
+/// `accounts::refresh`: C# `RefreshVisibleSettingsAccountsAsync` — every account status read again, 구성 요소' rings turning
+/// meanwhile (Settings' 구성 요소 as it opens, outside a smoke).
 pub fn refresh(host: &Arc<Host>) {
     if host.smoke.is_some() {
         return;
@@ -857,7 +857,7 @@ async fn terminal_login_fallback(host: &Arc<Host>, provider: &str) {
     redraw(host);
 }
 
-// ── the CLI tab's buttons ─────────────────────────────────────────────────────────────────────────────────────────────────
+// ── the account rows' buttons ────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// `RequireIdleAccount`: refused while the account changes, a CLI updates or the provider runs.
 fn require_idle_account(host: &Host, provider: &str) -> Result<(), String> {
@@ -1111,7 +1111,7 @@ async fn reset_claude_bedrock(host: &Arc<Host>) -> Result<(), String> {
     reset_claude_models(host).await
 }
 
-/// The CLI tab's buttons, each the C# button's action through `Then`: the row held while it works, the rows drawn again after.
+/// The account rows' buttons (구성 요소' agent CLI rows), each the C# button's action through `Then`: the row held while it works, the rows drawn again after.
 pub struct TabActions {
     pub host: Arc<Host>,
 }
@@ -1308,7 +1308,7 @@ mod tests {
 
     use super::*;
 
-    /// Review C1: the CLI tab's model reads the state (its auto-login switch) before it takes any account lock, so it never waits on
+    /// Review C1: the accounts' model reads the state (its auto-login switch) before it takes any account lock, so it never waits on
     /// the state's lock while holding one that a pass holding the state's lock waits on (`login_input`, `busy`). Before, it held the
     /// waits, messages and work maps across `host.view()`: these two threads deadlocked.
     #[test]
@@ -1397,9 +1397,9 @@ mod tests {
         assert!(!accounts.has_job("codex") && *codex.borrow(), "the closed pane's sign-in ends");
     }
 
-    /// The source-grep halves of C#'s L1400 and L1427 as the app's registry: the sign-in card's, the usage popover's and the CLI tab's
+    /// The source-grep halves of C#'s L1400 and L1427 as the app's registry: the sign-in card's, the usage popover's and 구성 요소'
     /// methods are registered (`loginAction`, `usageRefresh`, `usageDirect`; the native forms' through `nativeAction`), and Settings'
-    /// CLI category draws the accounts (every provider's row: tests/views.rs) with the CLI updates.
+    /// 구성 요소 draws the accounts (each agent CLI's row is its account row: mighty-tools tests/view.rs) with the CLI updates.
     #[test]
     fn the_accounts_and_usage_are_wired_into_the_app() {
         let names = crate::methods::registry().names();
@@ -1407,8 +1407,8 @@ mod tests {
             assert!(names.contains(method), "{method} is registered");
         }
         let locale = Locale::new("ko");
-        let boxes: Vec<crate::settings::Builder> = crate::settings::groups(&locale, "cli").into_iter().map(|g| g.build).collect();
-        let ours: [crate::settings::Builder; 2] = [crate::settings::cli_accounts::accounts, crate::settings::cli_update::cli_update];
-        assert!(ours.iter().all(|b| boxes.iter().any(|g| std::ptr::fn_addr_eq(*g, *b))), "the CLI tab draws the accounts' boxes");
+        let boxes: Vec<crate::settings::Builder> = crate::settings::groups(&locale, "tools").into_iter().map(|g| g.build).collect();
+        let ours: crate::settings::Builder = crate::settings::tools::components;
+        assert!(boxes.iter().any(|g| std::ptr::fn_addr_eq(*g, ours)), "구성 요소 draws the accounts' rows");
     }
 }

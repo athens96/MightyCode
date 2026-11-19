@@ -3,6 +3,8 @@ import { createContext, useContext, useEffect, useRef, useState, type CSSPropert
 import { boxStyle, edges, ink, nodeText, type MenuItem, type NativeNode as Node } from './types';
 import { Pending } from '../pending/Pending';
 import { DialogLoading } from '../dialogs/DialogShell';
+import { Icon } from '../icons/Icon';
+import { glyphIcon } from './glyphs';
 
 /** What a node's input does: `nativeAction` on the view it belongs to. */
 export type Act = (id: number, op: 'invoke' | 'toggle' | 'select' | 'text' | 'value', value?: unknown) => void;
@@ -60,7 +62,7 @@ function Menu({ node }: { node: Extract<Node, { t: 'menu' }> }) {
     ));
   return (
     <span className="native-menu-host" ref={element}>
-      <button type="button" className="native-button native-pull" aria-haspopup="menu" aria-expanded={open} aria-label={node.name || undefined} disabled={node.disabled}
+      <button type="button" className={'native-button native-pull' + (node.accent ? ' accent' : '')} aria-haspopup="menu" aria-expanded={open} aria-label={node.name || undefined} disabled={node.disabled}
         data-native-id={node.id} onClick={() => setOpen(!open)}>
         {node.label ?? (node.c ?? []).map((child, i) => <NativeNode key={i} node={child} />)}
         <span className="native-chevron" aria-hidden="true">⌄</span>
@@ -100,8 +102,13 @@ function Inner({ node }: { node: Node }) {
       const style: CSSProperties = rowLabel ? { fontWeight: node.weight === 'bold' ? 600 : undefined } : { fontSize: node.size ? `calc(${node.size}px * var(--text-scale, 1))` : undefined, color: ink(node.ink), fontWeight: node.weight === 'bold' ? 600 : node.weight === 'medium' ? 500 : undefined };
       return <span className={'native-text' + (node.mono ? ' mono' : '') + (node.nowrap ? ' nowrap' : '') + (node.selectable ? ' selectable' : '')} style={style}>{node.text}</span>;
     }
-    case 'glyph':
+    case 'glyph': {
+      // A Segoe code point drawn as its Lucide icon (glyphs.ts): the Mac has no Segoe icon font.
+      const icon = glyphIcon(node.glyph);
+      const size = node.size ?? 14;
+      if (icon) return <span className="native-glyph icon-glyph" aria-hidden="true" style={{ width: `calc(${size}px * var(--text-scale, 1))`, height: `calc(${size}px * var(--text-scale, 1))`, color: ink(node.ink) }}><Icon name={icon} size={size} weight={2} /></span>;
       return <span className="native-glyph" aria-hidden="true" style={{ fontSize: node.size ? `calc(${node.size}px * var(--text-scale, 1))` : undefined, color: ink(node.ink) }}>{node.glyph}</span>;
+    }
     case 'image':
       return <img className="native-image" src={node.src} alt={node.help ?? ''} />;
     case 'dot':
@@ -150,8 +157,8 @@ function Inner({ node }: { node: Node }) {
     case 'button': {
       const plain = node.c !== undefined && node.label === undefined;
       return (
-        <button type="button" className={plain ? 'native-plain' : 'native-button' + (node.accent ? ' accent' : '') + (node.destructive ? ' destructive' : '')} disabled={node.disabled}
-          aria-label={node.name || undefined} title={node.help ?? (plain && !nodeText(node) ? node.name : undefined)} data-native-id={node.id} onClick={() => act(node.id, 'invoke')}>
+        <button type="button" className={plain ? 'native-plain' + (node.expanded !== undefined ? ' native-disclosure' : '') : 'native-button' + (node.accent ? ' accent' : '') + (node.destructive ? ' destructive' : '')} disabled={node.disabled}
+          aria-label={node.name || undefined} aria-expanded={node.expanded} title={node.help ?? (plain && !nodeText(node) ? node.name : undefined)} data-native-id={node.id} onClick={() => act(node.id, 'invoke')}>
           {node.label ?? <Children nodes={node.c} />}
         </button>
       );

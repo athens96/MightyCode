@@ -1,7 +1,10 @@
 //! `tools`: 구성 요소 and 내 작업 도구 모음 (C# MainWindow.Settings.cs:253-571, MainWindow.Setup.cs:175-384). Owner: W6-B.
 //!
-//! - 구성 요소 is the setup screen's explanation over its list (setup.rs keeps the screen's state; drawing the list counts as it shown,
-//!   which starts its probes and poll).
+//! - 구성 요소 is what the CLI tab and the setup list were, in one box (mighty-tools `view::components`): the automatic update and
+//!   sign-in switches and 모두 업데이트 over a row per agent CLI (its account row with its install and update), per tool and per
+//!   Claude plugin. setup.rs keeps the setup's state and draws it; drawing it counts as the list shown, which starts its probes and
+//!   poll. A saved CLI tab (0.5.3 and earlier) opens here. The box shows the smoke's fixture account statuses while the accounts step
+//!   holds them (C#'s smoke hands `BuildCliAccountsSection` its fixture statuses).
 //! - 내 작업 도구 모음 is the toolkit's last read: the store's list (`toolkit.json` in the profile folder with `--allow-state-write`, else
 //!   this machine's local folder for the profile: mighty-tools `store_folder`), each tool's approval and file-only probe (a smoke's
 //!   probe reads its own folder only), the last run's results. The box reads it on first showing and after each action, on a task of
@@ -14,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use mighty_accounts::accounts::CliAccountStatus;
 use mighty_native::surface::DialogResult;
 use mighty_native::ui::{El, Ui};
 use mighty_platform::Paths;
@@ -110,11 +114,26 @@ pub fn read(host: &Host) {
     crate::native::touch(host, crate::settings::SURFACE);
 }
 
-/// 구성 요소 (Components) (C# `BuildComponentsSection`): the setup screen's explanation over its list.
+/// The smoke's fixture account statuses while its accounts step shows them (C# `CliAccountSmoke.FixtureStatuses`).
+static FIXTURE: Mutex<Option<Vec<CliAccountStatus>>> = Mutex::new(None);
+
+/// The smoke shows (Some) or stops showing (None) its fixture account statuses in 구성 요소' agent CLI rows.
+pub fn show_fixture(statuses: Option<Vec<CliAccountStatus>>) {
+    *lock(&FIXTURE) = statuses;
+}
+
+/// The accounts' model 구성 요소 draws: the smoke's fixture statuses while its step holds them, else each provider's last status.
+pub fn accounts_model(host: &Host) -> mighty_accounts::view::AccountsModel {
+    let fixture = lock(&FIXTURE).clone();
+    crate::accounts::accounts_model(host, fixture)
+}
+
+/// 구성 요소 (Components): the switches, 모두 업데이트 and a row per item (setup.rs `components_tab`); its drawing counts as the list
+/// shown.
 pub fn components(host: &Arc<Host>, ui: &mut Ui) -> El {
-    let list = crate::setup::list(host, ui);
+    let tab = crate::setup::components_tab(host, ui);
     crate::setup::components_drawn(host);
-    view::components_box(ui, list)
+    tab
 }
 
 /// 내 작업 도구 모음 (Toolkit) (C# `BuildToolkitSection`): the box over the last read; the first showing reads it.

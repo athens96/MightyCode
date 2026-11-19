@@ -55,7 +55,7 @@ section: agent-pane
 Google 에이전트는 Antigravity CLI(`agy`)로 실행됩니다. Antigravity는 Claude와 GPT-OSS 모델도 실행할 수 있습니다.
 
 - 설치: Mac에서는 `curl -fsSL https://antigravity.google/cli/install.sh | bash`를 실행하면 `~/.local/bin`에 `agy`가 설치됩니다. Windows에서는 PowerShell에서 `irm https://antigravity.google/cli/install.ps1 | iex`를 실행하면 `%LOCALAPPDATA%\agy\bin`에 `agy.exe`가 설치됩니다. 업데이트는 앱이 `agy update`로 합니다.
-- 로그인: 터미널 창에서 `agy`를 한 번 실행하고 브라우저에서 Google 계정으로 로그인합니다. {{ui:settings.nav.cli}} 탭의 {{ui:settings.cliAccounts.buttonLogin}}을 누르면 앱이 대신 실행합니다. Antigravity에는 로그아웃 명령이 없으므로, 계정을 바꿀 때는 `agy` 안에서 `/logout`을 씁니다.
+- 로그인: 터미널 창에서 `agy`를 한 번 실행하고 브라우저에서 Google 계정으로 로그인합니다. {{ui:settings.nav.tools}} 탭의 {{ui:settings.cliAccounts.buttonLogin}}을 누르면 앱이 대신 실행합니다. Antigravity에는 로그아웃 명령이 없으므로, 계정을 바꿀 때는 `agy` 안에서 `/logout`을 씁니다.
 - 권한: Antigravity는 앱 안에서 물어볼 수 없습니다. {{ui:permission.label.default}}은 agy에 저장된 Agent Mode를 따릅니다(agy의 `/config`에서 바꾸지 않았다면 검토). 작업 폴더의 파일은 읽을 수 있지만, 물어봐야 하는 파일 수정과 셸 명령은 거절하고 그 턴을 끝낸 뒤, 거절한 작업을 모은 권한 카드로 묻습니다. {{ui:permission.allowOnce}}이나 {{ui:antigravity.permission.allowAlways}}을 누르면 같은 대화에서 이어서 진행합니다([Antigravity의 권한 카드](approvals.md#antigravity-permission)). {{ui:permission.label.plan}}은 agy 자체 폴더에 계획을 쓰고 프로젝트는 고치지 않은 채 멈춥니다. 실행하려면 다음 요청을 다른 모드로 보내세요. 카드에 없는 작업을 미리 허용하려면 `~/.gemini/antigravity-cli/settings.json`의 `permissions.allow`에 허용 규칙(예: `command(git status)`, 그 글자로 시작하는 모든 명령을 허용하니 되도록 좁게)을 직접 추가하거나, {{ui:permission.label.acceptEdits}}(파일 수정) 또는 {{ui:permission.label.fullAccess}}(모두 허용)를 고르세요.
 - Antigravity 모델은 이름에 생각 깊이가 들어 있어 {{ui:composer.effort.label}}를 따로 고르지 않습니다.
 - {{ui:graph.view.mighty}} 보기는 Claude, Codex와 같습니다. Antigravity가 띄운 하위 에이전트는 요청 아래에 따로 블록이 되고, 그 내용(받은 지시, 메시지, 도구 호출, 돌려보낸 답)은 `~/.gemini/antigravity-cli`(Windows에서는 `%USERPROFILE%\.gemini\antigravity-cli`)에 남는 하위 에이전트 자신의 기록에서 읽습니다. 읽은 파일은 이름만 보이고 내용은 옮기지 않습니다. 대화의 이전 요청도 같은 기록에서 불러오고, {{ui:resume.choice.resume}}에는 이 폴더의 Antigravity 대화가 나옵니다.
@@ -65,7 +65,7 @@ Google 에이전트는 Antigravity CLI(`agy`)로 실행됩니다. Antigravity는
 pi(`pi`)는 여러 모델 제공자를 쓰는 오픈소스 코딩 에이전트 CLI입니다.
 
 - 설치: {{ui:setup.title}} 화면에서 설치합니다(Homebrew와 Node.js가 없으면 먼저 설치합니다). 직접 설치하려면 `npm install -g @mariozechner/pi-coding-agent`를 실행합니다. 업데이트는 앱이 `pi update self`로 합니다.
-- 로그인: {{ui:settings.nav.cli}} 탭의 {{ui:settings.cliAccounts.buttonLogin}} 단추를 누르면 `pi`를 실행하는 터미널 창이 열립니다. 거기서 `/login`을 입력하고 구독(Claude Pro/Max, ChatGPT, GitHub Copilot)이나 API 키를 고릅니다. 환경 변수의 API 키(`ANTHROPIC_API_KEY` 등)나 `~/.pi/agent/auth.json`에 저장된 자격 증명도 로그인으로 봅니다. 로그아웃은 pi 안에서 `/logout`을 입력합니다.
+- 로그인: {{ui:settings.nav.tools}} 탭의 {{ui:settings.cliAccounts.buttonLogin}} 단추를 누르면 `pi`를 실행하는 터미널 창이 열립니다. 거기서 `/login`을 입력하고 구독(Claude Pro/Max, ChatGPT, GitHub Copilot)이나 API 키를 고릅니다. 환경 변수의 API 키(`ANTHROPIC_API_KEY` 등)나 `~/.pi/agent/auth.json`에 저장된 자격 증명도 로그인으로 봅니다. 로그아웃은 pi 안에서 `/logout`을 입력합니다.
 - 모델: 로그인하면 `pi --list-models`의 목록이 `제공자/모델` 이름으로 나오고, 첫 항목은 pi 자체 설정을 따릅니다. 생각 기능이 없는 모델에는 {{ui:composer.effort.label}} 항목이 보이지 않습니다. 단계는 Off, Minimal, Low, Medium, High, XHigh입니다.
 - 권한: pi에는 승인 창이 없어 모드가 두 가지입니다. {{ui:permission.label.defaultCodex}} 모드는 읽기 도구(read, grep, find, ls)만 켭니다. {{ui:permission.label.fullAccess}} 모드는 모든 도구를 묻지 않고 쓰며 프로젝트 밖도 건드릴 수 있습니다.
 - 요청마다 창의 작업 폴더에서 `pi --mode rpc`를 실행하고 창의 세션을 이어 갑니다. 세션은 `~/.pi/agent/sessions`에 저장되고, {{ui:resume.choice.resume}} 항목에도 이 폴더의 pi 세션이 나옵니다.
@@ -76,7 +76,7 @@ pi(`pi`)는 여러 모델 제공자를 쓰는 오픈소스 코딩 에이전트 C
 opencode(`opencode`)는 여러 모델 제공자를 쓰는 오픈소스 코딩 에이전트 CLI입니다. 자체 서비스인 opencode Zen의 무료 모델은 로그인 없이도 씁니다.
 
 - 설치: {{ui:setup.title}} 화면에서 설치합니다(Homebrew와 Node.js가 없으면 먼저 설치합니다). 직접 설치하려면 `npm install -g @opencode/cli`를 실행합니다. 앱은 OpenCode 2를 씁니다. Mac에 OpenCode 1이 있으면 오래된 것으로 보이고, 구성 요소 화면에서 설치하면 npm의 `opencode-ai`를 먼저 지웁니다. 업데이트는 앱이 `opencode upgrade`로 합니다.
-- 로그인: {{ui:settings.nav.cli}} 탭의 {{ui:settings.cliAccounts.buttonLogin}} 단추를 누르면 `opencode auth login`을 실행하는 터미널 창이 열립니다. 거기서 제공자를 고르고 그 제공자의 구독으로 로그인하거나 API 키를 입력합니다. opencode가 저장한 로그인(`opencode auth list`)이나 환경 변수의 API 키(`ANTHROPIC_API_KEY` 등)도 로그인으로 보고, 둘 다 없으면 opencode Zen의 무료 모델만 나옵니다. 로그아웃은 터미널에서 `opencode auth logout`을 실행합니다.
+- 로그인: {{ui:settings.nav.tools}} 탭의 {{ui:settings.cliAccounts.buttonLogin}} 단추를 누르면 `opencode auth login`을 실행하는 터미널 창이 열립니다. 거기서 제공자를 고르고 그 제공자의 구독으로 로그인하거나 API 키를 입력합니다. opencode가 저장한 로그인(`opencode auth list`)이나 환경 변수의 API 키(`ANTHROPIC_API_KEY` 등)도 로그인으로 보고, 둘 다 없으면 opencode Zen의 무료 모델만 나옵니다. 로그아웃은 터미널에서 `opencode auth logout`을 실행합니다.
 - 모델: `opencode models`의 목록이 `제공자/모델` 이름으로 나오고, 첫 항목은 opencode 자체 설정을 따릅니다.
 - 권한: 고른 모드가 그 요청에만 쓰는 opencode 자체 규칙이 되고, 규칙이 묻도록 남긴 일은 Claude처럼 창에 승인 카드로 옵니다. {{ui:permission.label.default}}은 파일 수정, 명령, 웹, 프로젝트 밖 접근 전에 묻고, {{ui:permission.label.acceptEdits}}은 파일 수정을 묻지 않으며, {{ui:permission.label.plan}}은 파일을 고치지 않는 opencode의 plan 에이전트로 실행하고, {{ui:permission.label.fullAccess}}은 묻지 않습니다.
 - 요청마다 창의 작업 폴더에서 `opencode acp`(OpenCode 2, Agent Client Protocol)를 실행하고 창의 세션을 이어 갑니다. 세션은 opencode의 `opencode.db`에 저장되고, {{ui:resume.choice.resume}} 항목에도 이 폴더의 opencode 세션이 나옵니다. 사용량에는 세션 비용, 쓰고 있는 컨텍스트, 요청의 토큰이 보입니다.
@@ -87,7 +87,7 @@ opencode(`opencode`)는 여러 모델 제공자를 쓰는 오픈소스 코딩 �
 Hermes(`hermes`)는 Nous Research의 오픈소스 에이전트 CLI(Hermes Agent)입니다. Nous Portal, OpenRouter, Anthropic, OpenAI 등 여러 모델 제공자를 씁니다.
 
 - 설치: {{ui:setup.title}} 화면에서 설치합니다(Git이 없으면 먼저 설치합니다). 공식 설치 스크립트가 자체 Python 환경과 함께 `~/.hermes`에 설치하고 브라우저 도구도 내려받아 몇 분 걸립니다. 직접 설치하려면 Mac에서는 `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`를, Windows에서는 PowerShell에서 `irm https://hermes-agent.nousresearch.com/install.ps1 | iex`를 실행합니다. 업데이트는 앱이 `hermes update`로 합니다.
-- 로그인: {{ui:settings.nav.cli}} 탭의 {{ui:settings.cliAccounts.buttonLogin}} 단추를 누르면 `hermes model`을 실행하는 터미널 창이 열립니다. 거기서 모델 제공자를 고르고 로그인하거나 API 키를 입력한 뒤 기본 모델을 고릅니다. 앱은 Hermes가 자격 증명을 찾은 제공자의 이름만 읽습니다. 자격 증명을 지우려면 터미널에서 `hermes auth`를 씁니다.
+- 로그인: {{ui:settings.nav.tools}} 탭의 {{ui:settings.cliAccounts.buttonLogin}} 단추를 누르면 `hermes model`을 실행하는 터미널 창이 열립니다. 거기서 모델 제공자를 고르고 로그인하거나 API 키를 입력한 뒤 기본 모델을 고릅니다. 앱은 Hermes가 자격 증명을 찾은 제공자의 이름만 읽습니다. 자격 증명을 지우려면 터미널에서 `hermes auth`를 씁니다.
 - 모델: 첫 항목은 Hermes 자체 설정(`hermes model`로 정한 기본 모델)을 따릅니다. Hermes는 세션을 열어야 모델 목록을 알려 주므로, 첫 요청을 보낸 뒤부터 `제공자:모델` 목록이 나옵니다.
 - 권한: {{ui:permission.label.default}}은 파일을 고칠 때마다 창의 승인 카드로 묻고, {{ui:permission.label.acceptEdits}}은 작업 폴더 안의 수정을 묻지 않으며, {{ui:permission.label.fullAccess}}은 Hermes의 `--yolo`로 위험한 명령도 묻지 않습니다. 위험한 명령(`rm -rf` 등)은 Hermes의 승인 설정(`approvals.mode`)에 따라 카드로 묻고, 그 밖의 명령과 읽기는 묻지 않습니다. 계획 전용 모드는 없습니다. {{ui:permission.label.fullAccess}}은 세션을 시작할 때 정해지므로, 이미 시작한 세션에는 새 대화부터 적용됩니다.
 - 요청마다 창의 작업 폴더에서 `hermes acp`(Agent Client Protocol)를 실행하고 창의 세션을 이어 갑니다. 실제 작업은 Hermes의 게이트웨이(백그라운드 프로세스)가 하며, 필요할 때 저절로 시작되고 쓰지 않으면 끝납니다. 세션은 `~/.hermes/state.db`에 저장되고, {{ui:resume.choice.resume}} 항목에도 이 폴더의 Hermes 세션이 나옵니다. 사용량에는 세션의 누적 토큰과 쓰고 있는 컨텍스트가 보이고, 비용은 Hermes가 알려 주지 않습니다.

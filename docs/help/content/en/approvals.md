@@ -80,7 +80,7 @@ If you already signed in somewhere else, click {{ui:loginRecovery.resendButton}}
 {{platform:windows}} On Windows too, Antigravity, pi, opencode and Hermes sign in in a terminal. The sign-in terminal opens in a window of its own (a new tab when Windows Terminal is installed), in the failed pane's folder, and what you do there is the same as on the Mac. Antigravity (agy) opens a browser where you sign in with your Google account. In pi, type `/login` and pick a subscription or enter an API key. opencode runs `opencode auth login`, and Hermes runs `hermes model`. Once the sign-in is confirmed, the failed request is sent again automatically. The app leaves the terminal open.
 
 > [!tip]
-> Turn on {{ui:settings.cliAccounts.autoLoginToggle}} on the {{ui:settings.nav.cli}} tab and sign-in starts again the moment it drops.
+> Turn on {{ui:settings.cliAccounts.autoLoginToggle}} on the {{ui:settings.nav.tools}} tab and sign-in starts again the moment it drops.
 
 ## Background work {#background}
 Claude sometimes runs long commands or sub-agents in the background. Then work is still going on after Claude's answer is done.

@@ -80,7 +80,7 @@ CLI 로그인이 만료되어 요청이 실패하면 입력창 위에 로그인 
 {{platform:windows}} Windows에서도 Antigravity, pi, opencode, Hermes는 터미널에서 로그인합니다. 로그인 터미널이 따로 창으로(Windows Terminal이 있으면 새 탭으로) 실패한 창의 폴더에서 열리고, 터미널에서 하는 일은 Mac과 같습니다. Antigravity(agy)는 열리는 브라우저에서 Google 계정으로 로그인합니다. pi는 `/login`을 입력해 구독을 고르거나 API 키를 입력합니다. opencode는 `opencode auth login`이, Hermes는 `hermes model`이 실행됩니다. 로그인이 확인되면 실패한 요청을 저절로 다시 보냅니다. 앱은 이 터미널을 닫지 않습니다.
 
 > [!tip]
-> {{ui:settings.nav.cli}} 탭의 {{ui:settings.cliAccounts.autoLoginToggle}}을 켜 두면 로그인이 끊긴 순간 바로 다시 로그인을 시작합니다.
+> {{ui:settings.nav.tools}} 탭의 {{ui:settings.cliAccounts.autoLoginToggle}}을 켜 두면 로그인이 끊긴 순간 바로 다시 로그인을 시작합니다.
 
 ## 백그라운드 작업 {#background}
 Claude는 오래 걸리는 명령이나 하위 에이전트를 백그라운드에서 돌리기도 합니다. 이때는 Claude의 답이 끝나도 일이 남아 있습니다.

@@ -6,12 +6,11 @@
 //! when it is available, else the first —, and that category's boxes in the Mac's order, each the rows its builder makes (every box
 //! has its own file, by its owner) toned as `BuildSectionContainer` tones them. It holds the window's dialog while it is open (C#
 //! `dialogOpen`) and refuses to open while another sheet is up. A nav saves `SettingsPane` (kept in memory; written only with
-//! `--allow-state-write`); the CLI tab reads the account statuses again, except in a smoke.
+//! `--allow-state-write`); 구성 요소 reads the account statuses again, except in a smoke. A saved category of 0.5.3 and earlier that
+//! has no tab any more opens where its boxes are now (모바일 리모트: 원격 연결's 휴대폰 tab; CLI: 구성 요소).
 
 pub mod about;
 pub mod app_update;
-pub mod cli_accounts;
-pub mod cli_update;
 pub mod companion;
 pub mod general;
 pub mod mobile;
@@ -62,7 +61,6 @@ pub fn groups(locale: &Locale, category: &str) -> Vec<Group> {
             titled("settings.agents.sectionTitle", general::agents),
         ],
         "models" => vec![slot(sections::PHASE_MODELS, models::phase_models)],
-        "cli" => vec![slot(sections::CLI_ACCOUNTS, cli_accounts::accounts), slot(sections::CLI_UPDATE, cli_update::cli_update)],
         "styles" => vec![slot(sections::STYLES, styles::styles)],
         "remote" => vec![slot(sections::REMOTE_WORKSPACES, remote::remote_workspaces)],
         "companion" => vec![slot(sections::COMPANION, companion::companion)],
@@ -89,7 +87,8 @@ pub(crate) fn folded(ui: &mut Ui, key: &str, open: bool, title: String, body: El
     ui.expander(key, open, Content::El(Box::new(header)), Content::El(Box::new(body))).aid(key)
 }
 
-/// A category a deep link or a 0.5.3 save names, as it shows now: a saved 모바일 리모트 opens 원격 연결 on its 휴대폰 tab.
+/// A category a deep link or a 0.5.3 save names, as it shows now: a saved 모바일 리모트 opens 원격 연결 on its 휴대폰 tab, a saved CLI
+/// tab 구성 요소.
 fn shown_category(id: &str) -> &str {
     let moved = sections::moved_category(id);
     if moved != id && moved == "remote" {
@@ -105,16 +104,15 @@ pub fn glyph(id: &str) -> &'static str {
         "models" => "\u{E950}",
         "styles" => "\u{E790}",
         "tools" => "\u{E7B8}",
-        "cli" => "\u{E756}",
         "about" => "\u{E946}",
         _ => "\u{E713}",
     }
 }
 
-/// The CLI tab's account statuses read again (C# `RefreshVisibleSettingsAccountsAsync`), on a task of its own so the accounts' read
-/// never runs under the surface's lock; never in a smoke.
+/// 구성 요소' account statuses read again as it opens (C# `RefreshVisibleSettingsAccountsAsync`, the CLI tab's then), on a task of its
+/// own so the accounts' read never runs under the surface's lock; never in a smoke.
 fn refresh_accounts(host: &Arc<Host>, category: &str) {
-    if category != "cli" || host.smoke.is_some() {
+    if category != "tools" || host.smoke.is_some() {
         return;
     }
     let host = host.clone();
@@ -298,7 +296,9 @@ mod tests {
             titles("general"),
             vec!["화면".to_string(), locale.get("settings.text.sectionTitle"), locale.get("settings.agents.sectionTitle")]
         );
-        assert_eq!(titles("cli"), vec![locale.get("settings.cliAccounts.sectionTitle"), locale.get("settings.cliUpdate.sectionTitle")]);
+        assert_eq!(titles("tools"), vec![locale.get("settings.components.sectionTitle"), locale.get("settings.toolkit.sectionTitle")]);
+        assert!(groups(&locale, "cli").is_empty(), "the CLI tab's accounts and updates are 구성 요소' rows");
+        assert_eq!(shown_category("cli"), "tools", "a saved CLI tab opens 구성 요소");
         assert_eq!(titles("remote"), vec!["원격 연결".to_string()]);
         assert_eq!(titles("about"), vec![locale.get("settings.appUpdate.sectionTitle"), "앱 정보".to_string()]);
         assert!(groups(&locale, "mobile").is_empty(), "모바일 리모트 is 원격 연결's 휴대폰 tab");

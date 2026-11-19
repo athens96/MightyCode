@@ -17,7 +17,7 @@ Mighty Code is a desktop app for using Claude Code, Codex CLI, Google's Antigrav
 - Hermes: Mac `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash` (needs Git), Windows `irm https://hermes-agent.nousresearch.com/install.ps1 | iex` (see [Hermes](agent-pane.md#hermes))
 
 > [!tip]
-> Once the app is open, {{ui:settings.nav.tools}} shows which CLIs are ready. Install what is missing right there. You sign in on the {{ui:settings.nav.cli}} tab. See [Settings](settings.md#components).
+> Once the app is open, {{ui:settings.nav.tools}} shows which CLIs are ready. Install what is missing right there. You sign in and update the CLIs on the same tab. See [Settings](settings.md#components).
 
 ## Install {#install}
 1. Get the file for your system from the [download page](https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/index.html).
@@ -56,7 +56,7 @@ With {{ui:settings.appUpdate.autoUpdateToggle}} off, the app does not check or d
 The Windows app updates the same way ([How Windows differs](windows.md#install)).
 
 > [!note]
-> The AI CLIs are updated separately from the app. Use {{ui:settings.cliUpdate.sectionTitle}} on the {{ui:settings.nav.cli}} tab.
+> The AI CLIs are updated separately from the app. Use {{ui:settings.components.updateAllButton}} on the {{ui:settings.nav.tools}} tab. See [Updates](settings.md#cli-update).
 
 ## First launch {#first-launch}
 The first time you open the app there is no workspace yet, so you see the welcome screen.
@@ -73,7 +73,7 @@ If no agent CLI (Claude Code, Codex, Antigravity, pi, opencode or Hermes) can ru
 
 Git (Xcode Command Line Tools) opens a system install window, where you finish it. The script waits up to 30 minutes; Control-C ends only the wait and moves on. If git does not run because the Xcode license has not been accepted, Git shows {{ui:setup.status.attention}}. Tailscale opens its official download page. A Claude Code that is too old shows {{ui:setup.status.outdated}} with an {{ui:setup.button.update}} button.
 
-{{ui:setup.button.later}} closes the screen; check {{ui:setup.button.neverShow}} before closing and it no longer opens at launch. While a required tool is missing, the welcome screen has a {{ui:setup.title}} button, and a pane blocked by a missing CLI has an {{ui:setup.blocked.install}} button. The same list is in Settings → {{ui:settings.nav.tools}}.
+{{ui:setup.button.later}} closes the screen; check {{ui:setup.button.neverShow}} before closing and it no longer opens at launch. While a required tool is missing, the welcome screen has a {{ui:setup.title}} button, and a pane blocked by a missing CLI has an {{ui:setup.blocked.install}} button. The same items are in Settings → {{ui:settings.nav.tools}}, one row each with its own {{ui:settings.components.installButton}} button ([Components](settings.md#components)).
 
 {{platform:windows}} Windows has the same screen. The commands run in order, from your home folder, in one PowerShell window the app opens (a Windows Terminal tab when it is installed, otherwise a console window), which stays open until you press Enter at the end. Claude Code, Codex, Antigravity, Hermes and uv install with their own official PowerShell installers, pi and opencode with npm, Git and glab with winget for your user only, and Node.js and gh with winget for all users. An install for all users may show Windows' own administrator prompt; the setup screen itself never asks for administrator rights. When the install ends, the app reads PATH again from the registry and checks. Homebrew, Bun and gstack install on a Mac only.
 

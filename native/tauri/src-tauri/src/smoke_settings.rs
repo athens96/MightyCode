@@ -678,8 +678,8 @@ mod tests {
         dropped.last_mut().unwrap().pop();
         assert!(!check(dropped), "a heading dropped");
         let mut swapped = groups.clone();
-        let cli = swapped.iter_mut().find(|g| g.len() == 2 && g.iter().all(|t| registered.contains(t))).expect("the CLI tab's two boxes");
-        cli.swap(0, 1);
+        let about = swapped.iter_mut().find(|g| g.len() == 2 && g.iter().all(|t| registered.contains(t))).expect("앱 정보's two boxes");
+        about.swap(0, 1);
         assert!(!check(swapped), "out of its category's order");
         let mut twice = groups.clone();
         twice[0].push(registered[1].clone());

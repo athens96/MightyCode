@@ -17,7 +17,7 @@ Mighty Codeは、Claude Code、Codex CLI、GoogleのAntigravity CLI、pi、openc
 - Hermes: Mac `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`(Gitが必要です)、Windows `irm https://hermes-agent.nousresearch.com/install.ps1 | iex`([Hermes](agent-pane.md#hermes)を参照)
 
 > [!tip]
-> アプリを開いたあと、{{ui:settings.nav.tools}}でどのCLIが準備できているかを確認できます。足りないものはその場でインストールできます。サインインは{{ui:settings.nav.cli}}タブで行います。[設定](settings.md#components)を参照してください。
+> アプリを開いたあと、{{ui:settings.nav.tools}}でどのCLIが準備できているかを確認できます。足りないものはその場でインストールできます。サインインとCLIのアップデートも同じタブで行います。[設定](settings.md#components)を参照してください。
 
 ## インストール {#install}
 1. [ダウンロードページ](https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/index.html)から、お使いのOS用のファイルをダウンロードします。
@@ -56,7 +56,7 @@ Mighty Codeは、Claude Code、Codex CLI、GoogleのAntigravity CLI、pi、openc
 Windowsアプリも同じ方法でアップデートします([Windowsでの違い](windows.md#install))。
 
 > [!note]
-> AI CLIのアップデートはアプリのアップデートとは別に行います。{{ui:settings.nav.cli}}タブの{{ui:settings.cliUpdate.sectionTitle}}を使ってください。
+> AI CLIのアップデートはアプリのアップデートとは別に行います。{{ui:settings.nav.tools}}タブの{{ui:settings.components.updateAllButton}}ボタンを使ってください。[アップデート](settings.md#cli-update)を参照してください。
 
 ## 初回起動 {#first-launch}
 初めて開いたときはまだワークスペースがないため、スタート画面が表示されます。
@@ -73,7 +73,7 @@ Windowsアプリも同じ方法でアップデートします([Windowsでの違�
 
 Git(Xcode Command Line Tools)はシステムのインストール画面が開くので、そちらで完了します。スクリプトは最大30分待ち、Control-Cを押すと待つのだけをやめて次の手順に進みます。Xcodeのライセンスに同意していないためにgitが動かない場合は、{{ui:setup.status.attention}}と表示されます。Tailscaleは公式のダウンロードページを開きます。古すぎるClaude Codeは{{ui:setup.status.outdated}}と表示され、{{ui:setup.button.update}}ボタンが出ます。
 
-{{ui:setup.button.later}}で閉じられます。{{ui:setup.button.neverShow}}にチェックしてから閉じると、起動時に開かなくなります。必須ツールが足りない間はスタート画面に{{ui:setup.title}}ボタンがあり、CLIがなくて止まっているペインには{{ui:setup.blocked.install}}ボタンがあります。同じ一覧は設定 → {{ui:settings.nav.tools}}にもあります。
+{{ui:setup.button.later}}で閉じられます。{{ui:setup.button.neverShow}}にチェックしてから閉じると、起動時に開かなくなります。必須ツールが足りない間はスタート画面に{{ui:setup.title}}ボタンがあり、CLIがなくて止まっているペインには{{ui:setup.blocked.install}}ボタンがあります。同じ項目は設定 → {{ui:settings.nav.tools}}にも1行ずつあり、行ごとの{{ui:settings.components.installButton}}ボタンでインストールできます([コンポーネント](settings.md#components))。
 
 {{platform:windows}} Windowsにも同じ画面があります。コマンドはホームフォルダーを作業フォルダーとして、アプリが別に開くPowerShellウィンドウ1つ(Windows Terminalがあればそのタブ、なければコンソールウィンドウ)で順に実行され、最後にEnterを押すまでウィンドウは開いたままです。Claude Code、Codex、Antigravity、Hermes、uvはそれぞれの公式PowerShellインストールスクリプトで、piとopencodeはnpmで、Gitとglabはwingetでこのユーザーだけに、Node.jsとghはwingetですべてのユーザーにインストールします。すべてのユーザー向けのインストールではWindows自身が管理者の確認画面を表示することがありますが、この画面自体は管理者権限を求めません。インストールが終わると、アプリはPATHをレジストリから読み直して確認します。Homebrew、Bun、gstackはMacでのみインストールします。
 

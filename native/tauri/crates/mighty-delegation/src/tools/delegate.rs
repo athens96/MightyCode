@@ -54,10 +54,10 @@ pub fn unavailable(provider: &str, availability: DelegationAgentAvailability) ->
     let label = provider_label(provider);
     match availability {
         DelegationAgentAvailability::NotInstalled => {
-            Some(format!("{label} is not installed on this PC; the user can check it in Mighty Code's Settings › CLI"))
+            Some(format!("{label} is not installed on this PC; the user can check it in Mighty Code's Settings › Components"))
         }
         DelegationAgentAvailability::SignedOut => {
-            Some(format!("{label} is not signed in on this PC; the user can check it in Mighty Code's Settings › CLI"))
+            Some(format!("{label} is not signed in on this PC; the user can check it in Mighty Code's Settings › Components"))
         }
         DelegationAgentAvailability::Ready => None,
     }

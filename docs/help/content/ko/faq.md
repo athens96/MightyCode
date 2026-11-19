@@ -4,17 +4,17 @@ order: 12
 section: faq
 ---
 ## 요청을 보낼 수 없어요 {#cannot-send}
-- 입력창 아래에 보내지 못하는 이유가 보입니다. CLI가 설치되지 않았거나 로그인이 필요하면 {{ui:menu.settings}} → {{ui:settings.nav.tools}}와 {{ui:settings.nav.cli}}를 확인하세요.
+- 입력창 아래에 보내지 못하는 이유가 보입니다. CLI가 설치되지 않았거나 로그인이 필요하면 {{ui:menu.settings}} → {{ui:settings.nav.tools}}를 확인하세요.
 - 터미널 창에는 파일을 첨부할 수 없습니다. AI 실행 창을 쓰세요.
 - 실행 중일 때 {{kbd:Enter}}는 바로 보내지 않고 대기열에 넣습니다. [실행 중에 이어서 요청하기](agent-pane.md#queue)를 보세요.
 
 ## 모델 목록에 원하는 모델이 없어요 {#model-missing}
 1. 모델 칩을 열고 {{ui:composer.model.refresh}}을 누릅니다.
-2. 그래도 없으면 {{ui:settings.nav.cli}} 탭에서 {{ui:settings.cliAccounts.resetModelsButton}} 단추를 누릅니다.
+2. 그래도 없으면 {{ui:settings.nav.tools}} 탭의 Claude 줄에서 {{ui:settings.cliAccounts.resetModelsButton}} 단추를 누릅니다.
 3. 직접 쓰는 모델 이름은 {{ui:settings.nav.models}} 탭의 {{ui:settings.phaseModels.registeredTitle}}에 더할 수 있습니다.
 
 ## 로그인이 자꾸 끊겨요 {#login}
-{{ui:settings.nav.cli}} 탭의 {{ui:settings.cliAccounts.autoLoginToggle}}을 켜세요. 끊긴 순간 다시 로그인을 시작하고, 실패한 요청을 다시 보냅니다. [로그인이 끊겼을 때](approvals.md#login-recovery)를 보세요.
+{{ui:settings.nav.tools}} 탭의 {{ui:settings.cliAccounts.autoLoginToggle}}을 켜세요. 끊긴 순간 다시 로그인을 시작하고, 실패한 요청을 다시 보냅니다. [로그인이 끊겼을 때](approvals.md#login-recovery)를 보세요.
 
 ## 한글 입력이 자모로 풀려요 {#korean-input}
 메뉴 막대의 {{ui:menu.workspace}} 메뉴에서 {{ui:menu.reconnectInputMethod}} 항목을 누르세요. 그래도 계속되면 {{ui:menu.saveInputDiagnostics}}으로 진단 파일을 저장해 알려 주세요.

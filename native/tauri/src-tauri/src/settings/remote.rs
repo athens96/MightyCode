@@ -258,19 +258,14 @@ fn share(host: &Arc<Host>, ui: &mut Ui, page: &Page) -> El {
     let port_text = ui.local("remote-port", || protocol::DEFAULT_PORT.to_string());
 
     // The status line: the dot, what it is doing, the remote runs, and start (not sharing) or stop (sharing) at the right.
-    let dot = if state.enabled {
-        Token::Done
-    } else if page.tailscale.is_empty() && !page.relay_on {
-        Token::Err
-    } else {
-        Token::Idle
-    };
+    // No Tailscale is no fault: pairing shares without it, so the dot stays the idle one.
+    let dot = if state.enabled { Token::Done } else { Token::Idle };
     let status_words = if state.enabled {
         locale.get_with("settings.remote.sharingOn", &[("count", &state.workspace_ids.len().to_string())])
     } else if page.tailscale.is_empty() && page.relay_on {
         locale.get("settings.remote.relayOnly")
     } else if page.tailscale.is_empty() {
-        strings::settings_tailscale_off()
+        locale.get("settings.remote.sharingOffNoTailscale")
     } else {
         locale.get("settings.remote.sharingOff")
     };

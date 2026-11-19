@@ -10,17 +10,17 @@ pub const STYLES: &str = "styles";
 pub const COMPONENTS: &str = "components";
 /// 원격 연결: sharing this computer, connecting to another and the phone (what was 모바일 리모트) under one tab of three top tabs.
 pub const REMOTE_WORKSPACES: &str = "remoteWorkspaces";
-pub const CLI_UPDATE: &str = "cliUpdate";
 pub const COMPANION: &str = "companion";
-pub const CLI_ACCOUNTS: &str = "cliAccounts";
 pub const APP_UPDATE: &str = "appUpdate";
 pub const APP_INFO: &str = "appInfo";
 
 /// The category a saved `SettingsPane` of 0.5.3 and earlier names that no longer has a tab of its own: its tab now (모바일 리모트 is
-/// 원격 연결's 휴대폰 tab). The saved value itself is kept as it is (settings_place.rs), only where it opens moves.
+/// 원격 연결's 휴대폰 tab; the CLI tab's accounts and updates are 구성 요소' rows). The saved value itself is kept as it is
+/// (settings_place.rs), only where it opens moves.
 pub fn moved_category(saved: &str) -> &str {
     match saved {
         "mobile" => "remote",
+        "cli" => "tools",
         other => other,
     }
 }
@@ -38,16 +38,14 @@ impl Slot {
     }
 }
 
-/// `MacOrder`: every slot in the tabs' order, with its heading. The CLI tab no longer has its own 이 PC의 CLI box (구성 요소 lists
-/// each CLI with its state, version, install, sign-in and update) nor Claude Mods (the same list says when Claude Code is too old for
-/// it); the phone's box is 원격 연결's 휴대폰 tab.
+/// `MacOrder`: every slot in the tabs' order, with its heading. There is no CLI tab any more: 구성 요소 has a row per CLI with its
+/// state, version, sign-in, install and update, the automatic sign-in and update switches over them (what CLI 계정 and CLI 업데이트
+/// were), and says when Claude Code is too old for Claude Mods; the phone's box is 원격 연결's 휴대폰 tab.
 pub fn mac_order(locale: &Locale) -> Vec<Slot> {
     let slot = |id, title: String| Slot { id, windows_title: Some(title) };
     vec![
         slot(DISPLAY, locale.get("settings.display.sectionTitle")),
         slot(PHASE_MODELS, locale.get("settings.phaseModels.sectionTitle")),
-        slot(CLI_ACCOUNTS, locale.get("settings.cliAccounts.sectionTitle")),
-        slot(CLI_UPDATE, locale.get("settings.cliUpdate.sectionTitle")),
         slot(STYLES, locale.get("settings.styles.sectionTitle")),
         slot(REMOTE_WORKSPACES, locale.get("settings.remote.navTitle")),
         slot(COMPANION, locale.get("companion.settings.sectionTitle")),
@@ -86,7 +84,6 @@ pub fn categories(locale: &Locale) -> Vec<Category> {
     vec![
         category("general", "settings.nav.general", vec![DISPLAY]),
         category("models", "settings.nav.models", vec![PHASE_MODELS]),
-        category("cli", "settings.nav.cli", vec![CLI_ACCOUNTS, CLI_UPDATE]),
         category("styles", "settings.nav.styles", vec![STYLES]),
         category("remote", "settings.remote.navTitle", vec![REMOTE_WORKSPACES]),
         category("companion", "settings.nav.companion", vec![COMPANION]),
@@ -110,9 +107,9 @@ pub struct SmokeOutcome {
     pub restored: bool,
 }
 
-/// C# `SettingsSectionsSmoke.RunAsync`: the headings built must be the registration's, the CLI update rows shown must be the fixture's
-/// statuses (`expected_statuses`, W6-D's `updates::section_fixture_statuses`), and the auto-update switch is flipped, read back and
-/// always put back to the value found. An error says what was wrong.
+/// C# `SettingsSectionsSmoke.RunAsync`: the headings built must be the registration's, the CLI update results 구성 요소' rows show
+/// must be the fixture's statuses (`expected_statuses`, W6-D's `updates::section_fixture_statuses`), and the auto-update switch is
+/// flipped, read back and always put back to the value found. An error says what was wrong.
 pub fn smoke_run(
     locale: &Locale,
     rendered_titles: &[String],
@@ -131,7 +128,7 @@ pub fn smoke_run(
     }
     if rendered_statuses != expected_statuses {
         return Err(format!(
-            "CLI update section must show every fixture result: expected {} but showed {}",
+            "구성 요소 must show every fixture CLI update result: expected {} but showed {}",
             expected_statuses.join(", "),
             rendered_statuses.join(", ")
         ));
@@ -178,8 +175,6 @@ mod tests {
             vec![
                 "화면".to_string(),
                 l.get("settings.phaseModels.sectionTitle"),
-                l.get("settings.cliAccounts.sectionTitle"),
-                l.get("settings.cliUpdate.sectionTitle"),
                 "스타일".to_string(),
                 "원격 연결".to_string(),
                 "펫과 알림".to_string(),
@@ -196,7 +191,7 @@ mod tests {
         let positions: Vec<usize> = windows(&l).iter().map(|s| mac.iter().position(|id| *id == s.id).unwrap()).collect();
         assert!(positions.windows(2).all(|w| w[0] < w[1]), "Windows sections keep the macOS relative order");
         for category in categories(&l) {
-            let named = ["styles", "remote", "companion"];
+            let named = ["styles", "remote", "companion", "tools"];
             if named.contains(&category.id) {
                 assert_eq!(
                     Some(category.title.clone()),
@@ -221,18 +216,18 @@ mod tests {
         let l = ko();
         let before_catalog = windows_titles(&l);
         let fixture: Vec<Slot> =
-            mac_order(&l).into_iter().map(|slot| if slot.id == CLI_UPDATE { Slot { windows_title: None, ..slot } } else { slot }).collect();
+            mac_order(&l).into_iter().map(|slot| if slot.id == APP_INFO { Slot { windows_title: None, ..slot } } else { slot }).collect();
         let before: Vec<String> = fixture.iter().filter_map(|s| s.windows_title.clone()).collect();
-        let update = l.get("settings.cliUpdate.sectionTitle");
+        let info = l.get("settings.appInfo.sectionTitle");
         let registered: Vec<String> = fixture
             .into_iter()
-            .map(|slot| if slot.id == CLI_UPDATE { Slot { windows_title: Some(update.clone()), ..slot } } else { slot })
+            .map(|slot| if slot.id == APP_INFO { Slot { windows_title: Some(info.clone()), ..slot } } else { slot })
             .filter_map(|s| s.windows_title)
             .collect();
         assert_eq!(registered.len(), before.len() + 1);
-        assert_eq!(registered.iter().filter(|t| **t != update).cloned().collect::<Vec<_>>(), before);
-        let accounts = l.get("settings.cliAccounts.sectionTitle");
-        assert_eq!(registered.iter().position(|t| *t == update), registered.iter().position(|t| *t == accounts).map(|at| at + 1));
+        assert_eq!(registered.iter().filter(|t| **t != info).cloned().collect::<Vec<_>>(), before);
+        let update = l.get("settings.appUpdate.sectionTitle");
+        assert_eq!(registered.iter().position(|t| *t == info), registered.iter().position(|t| *t == update).map(|at| at + 1));
         assert_eq!(windows_titles(&l), before_catalog);
     }
 
@@ -295,7 +290,7 @@ mod tests {
         assert_eq!(at("companion"), at("remote") + 1);
         assert_eq!(available(&l).iter().find(|c| c.id == "remote").unwrap().sections, vec![REMOTE_WORKSPACES]);
         assert_eq!(moved_category("mobile"), "remote");
-        assert_eq!(moved_category("cli"), "cli");
+        assert_eq!(moved_category("remote"), "remote");
         let state = AppSnapshot { settings_pane: Some("remote".into()), ..AppSnapshot::default() };
         assert_eq!(normalize::normalize(&state, false).unwrap().settings_pane.as_deref(), Some("remote"));
     }
@@ -303,6 +298,21 @@ mod tests {
     #[test]
     fn every_category_is_available_on_windows() {
         let ids: Vec<&str> = available(&ko()).iter().map(|c| c.id).collect();
-        assert_eq!(ids, vec!["general", "models", "cli", "styles", "remote", "companion", "tools", "about"]);
+        assert_eq!(ids, vec!["general", "models", "styles", "remote", "companion", "tools", "about"]);
+    }
+
+    /// The CLI tab is folded into 구성 요소 (one row per CLI with its sign-in and update): a saved `cli` (0.5.3 and earlier) opens
+    /// there, and no category, slot or heading of the CLI tab is left.
+    #[test]
+    fn a_saved_cli_tab_opens_components() {
+        let l = ko();
+        assert_eq!(moved_category("cli"), "tools");
+        assert!(available(&l).iter().any(|c| c.id == moved_category("cli")));
+        assert!(!categories(&l).iter().any(|c| c.id == "cli"));
+        assert_eq!(available(&l).iter().find(|c| c.id == "tools").unwrap().sections, vec![COMPONENTS]);
+        let titles = windows_titles(&l);
+        assert!(
+            !titles.contains(&l.get("settings.cliAccounts.sectionTitle")) && !titles.contains(&l.get("settings.cliUpdate.sectionTitle"))
+        );
     }
 }

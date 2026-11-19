@@ -224,16 +224,21 @@ pub fn fixture_results() -> Vec<CliUpdateResult> {
     ]
 }
 
-/// `updates::section_fixture_statuses`: for the `settingsSections` smoke (C# `RunSettingsSectionsSmoke`), the CLI update box built
-/// over the fixture results: the fixture's statuses and the statuses the built box shows, in order.
+/// `updates::section_fixture_statuses`: for the `settingsSections` smoke (C# `RunSettingsSectionsSmoke`), Settings › 구성 요소 built
+/// over the fixture results: the fixture's statuses in the order the tab's rows say them (each result under its CLI's row, the rows in
+/// the accounts' order, a stable sort), and the statuses the built tab shows, in order.
 #[allow(dead_code, reason = "a seam W6-A1 (the settingsSections smoke) calls")]
 pub fn section_fixture_statuses(host: &Arc<Host>) -> (Vec<String>, Vec<String>) {
     let results = fixture_results();
-    let expected = results.iter().map(|r| r.status.clone()).collect();
+    let row = |provider: &str| mighty_accounts::accounts::SECTION_PROVIDERS.iter().position(|p| *p == provider).unwrap_or(usize::MAX);
+    let mut ordered: Vec<&CliUpdateResult> = results.iter().collect();
+    ordered.sort_by_key(|result| row(&result.provider));
+    let expected = ordered.into_iter().map(|r| r.status.clone()).collect();
     let env = crate::native::env(host);
     let mut locals = Locals::default();
     let model = CliUpdateBox { results, ..box_model(host) };
-    let built = view::cli_update_box(&Ui::new(&env, &mut locals), &model, &CliUpdateActions::none());
+    // Every row opened: each result is said in its CLI's opened row.
+    let built = crate::setup::components_with(host, &mut Ui::new(&env, &mut locals), model, CliUpdateActions::none(), true);
     (expected, view::shown_statuses(&built))
 }
 
@@ -304,7 +309,7 @@ fn draining(view: &View, activity: &UpdateActivity) -> Vec<String> {
 }
 
 /// C# `NotifyAutomaticUpdates`: every pane's composer looked at again — each `BackgroundUpdateChanged`: a pane with queued requests
-/// that nothing holds any more drains them —, the CLI 업데이트 box drawn again, and the phone told the panes moved
+/// that nothing holds any more drains them —, 구성 요소 (the CLI updates' parts) drawn again, and the phone told the panes moved
 /// (`mobileRouter?.Changed()`).
 pub fn notify(host: &Arc<Host>) {
     crate::panes::mark_all(host);
@@ -580,7 +585,8 @@ fn start_tick(app: AppHandle) {
     });
 }
 
-/// What the CLI 업데이트 box shows now (C#: the window's fields `RefreshBackgroundUpdates` reads). Locks the state.
+/// What 구성 요소 shows of the CLI updates now (the switches, what runs, the results: C#'s CLI 업데이트 box, the window's fields
+/// `RefreshBackgroundUpdates` reads). Locks the state.
 pub fn box_model(host: &Host) -> CliUpdateBox {
     let (clis, plugins) = {
         let view = host.view();
@@ -632,14 +638,10 @@ pub fn box_actions(host: &Arc<Host>) -> CliUpdateActions {
     }
 }
 
-/// The box built now (settings/cli_update.rs).
-pub fn build_box(host: &Arc<Host>, ui: &Ui) -> mighty_native::ui::El {
-    view::cli_update_box(ui, &box_model(host), &box_actions(host))
-}
-
-/// The box with an environment of its own, for a check that reads a built box (the smoke).
+/// Settings › 구성 요소 built with an environment of its own over `model` and `actions`, for a check that reads a built tab (the
+/// smoke): the updates' switches, 모두 업데이트 and results are its parts.
 pub fn built_box(host: &Arc<Host>, model: &CliUpdateBox, actions: &CliUpdateActions) -> mighty_native::ui::El {
     let env: Env = crate::native::env(host);
     let mut locals = Locals::default();
-    view::cli_update_box(&Ui::new(&env, &mut locals), model, actions)
+    crate::setup::components_with(host, &mut Ui::new(&env, &mut locals), model.clone(), actions.clone(), false)
 }

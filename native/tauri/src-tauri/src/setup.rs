@@ -1,7 +1,8 @@
 //! The setup screen, `openSetup`, the badge (C# MainWindow.Setup.cs:57-551, MainWindow.WebShell.Settings.cs:218-241). Owner: W6-B.
 //!
-//! The screen's state is mighty-tools' `SetupScreen`, kept here under one lock; the screen (the surface `setup`, place `surface`) and
-//! Settings › 구성 요소 (settings/tools.rs) draw it with mighty-tools' `view` builders.
+//! The screen's state is mighty-tools' `SetupScreen`, kept here under one lock; the screen (the surface `setup`, place `surface`) draws
+//! it with its checklist and bulk install, Settings › 구성 요소 (settings/tools.rs) as a row per item with that item's own install
+//! (its confirmation and terminal the screen's), each with mighty-tools' `view` builders.
 //!
 //! - A list shown (the surface opened, the components box drawn) refreshes the probes (forced: PATH read again) and ticks its first
 //!   picks once; while one shows the poll looks every 5 s and probes again when the last probe is 30 s old and something is still
@@ -35,7 +36,9 @@ use mighty_run::model::ProviderRuntime;
 use mighty_tools::setup::catalog::SetupPlatform;
 use mighty_tools::setup::probe::SetupFirstRun;
 use mighty_tools::setup::screen::{Gate, InstallStart, ProbeContext, RUN_PROBE_INTERVAL, SetupScreen, WATCH_INTERVAL, WatchTick};
+use mighty_tools::view::components::{self, ComponentActions, ComponentsActions, ComponentsModel, ComponentsView};
 use mighty_tools::view::{self, SETUP_SURFACE, SetupActions, SetupExtras};
+use mighty_updates::view::{CliUpdateActions, CliUpdateBox};
 use tauri::Manager;
 
 use crate::host::Host;
@@ -67,6 +70,8 @@ pub struct SetupState {
     presented: AtomicBool,
     /// When Settings › 구성 요소' list was last drawn.
     components_drawn: Mutex<Option<Instant>>,
+    /// 구성 요소' opened rows and filter, kept while the app runs (every row starts closed).
+    components_view: Mutex<ComponentsView>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -84,6 +89,7 @@ pub fn of(host: &Host) -> Arc<SetupState> {
         polling: AtomicBool::new(false),
         presented: AtomicBool::new(false),
         components_drawn: Mutex::new(None),
+        components_view: Mutex::new(ComponentsView::default()),
     }));
     host.app.state::<Arc<SetupState>>().inner().clone()
 }
@@ -278,8 +284,69 @@ pub fn list(host: &Arc<Host>, ui: &Ui) -> El {
     view::setup_content(ui, &screen, &extras, Arc::new(Actions(host.clone())))
 }
 
+/// Settings › 구성 요소 as the screen's, the accounts' and the updates' state have it now (`updates`: the CLI updates' box, the host's
+/// unless a check hands its own; `all_open`: every row opened, for a check that reads every row's lines, else the rows the person
+/// opened); no I/O. The accounts' and the updates' models are read first (they take the state's lock), then the screen's lock, under
+/// which the bundled catalog is read once when nothing read it yet (the box has its rows on its first drawing).
+pub fn components_with(host: &Arc<Host>, ui: &mut Ui, updates: CliUpdateBox, update_actions: CliUpdateActions, all_open: bool) -> El {
+    let accounts = crate::settings::tools::accounts_model(host);
+    let actions = ComponentsActions {
+        components: Arc::new(Actions(host.clone())),
+        accounts: Arc::new(crate::accounts::TabActions { host: host.clone() }),
+        updates: update_actions,
+    };
+    let state = of(host);
+    let view = ComponentsView { all_open, ..lock(&state.components_view).clone() };
+    let mut screen = lock(&state.screen);
+    screen.load_catalog();
+    components::components_tab(ui, &ComponentsModel { screen: &screen, accounts: &accounts, updates: &updates, view: &view }, &actions)
+}
+
+/// [`components_with`] over the host's CLI updates and the rows the person opened.
+pub fn components_tab(host: &Arc<Host>, ui: &mut Ui) -> El {
+    components_with(host, ui, crate::updates::box_model(host), crate::updates::box_actions(host), false)
+}
+
+/// 구성 요소' own state changed (a row opened or closed, the filter): Settings drawn again.
+fn change_view(host: &Arc<Host>, change: impl FnOnce(&mut ComponentsView)) {
+    change(&mut lock(&of(host).components_view));
+    crate::native::touch(host, crate::settings::SURFACE);
+}
+
 /// What the list's controls do.
 struct Actions(Arc<Host>);
+
+/// Settings › 구성 요소' own buttons: the screen's, with the install of one item.
+impl ComponentActions for Actions {
+    fn install(&self, id: &str) {
+        let (host, id) = (self.0.clone(), id.to_string());
+        crate::native::act(&self.0, async move { request_install(&host, Some(&id)).await });
+    }
+
+    fn update(&self) {
+        SetupActions::update(self);
+    }
+
+    fn open_page(&self, url: &str) {
+        SetupActions::open_page(self, url);
+    }
+
+    fn recheck(&self) {
+        SetupActions::recheck(self);
+    }
+
+    fn abandon(&self) {
+        SetupActions::abandon(self);
+    }
+
+    fn toggle(&self, id: &str) {
+        change_view(&self.0, |view| view.toggle(id));
+    }
+
+    fn show_problems(&self, only: bool) {
+        change_view(&self.0, |view| view.problems_only = only);
+    }
+}
 
 impl SetupActions for Actions {
     /// C# `ToggleSetupSelection`.
@@ -290,7 +357,7 @@ impl SetupActions for Actions {
     /// The CLI accounts' own sign-in (a terminal window on the CLI's login command, W6-C's); why it cannot start now is the screen's
     /// message (C# `setupMessage = ex.Message`). No screen lock is held while it runs (it redraws).
     fn sign_in(&self, provider: &str) {
-        // In verification mode the sign-in only marks the CLI tab's row: the screen says so itself, as the install does.
+        // In verification mode the sign-in only marks 구성 요소' account row: the screen says so itself, as the install does.
         if !self.0.may_change_machine() {
             self.0.log.line("setup: the sign-in was refused (no --allow-state-write)");
             lock(&of(&self.0).screen).message = Some(verification_mode());
@@ -338,7 +405,7 @@ impl SetupActions for Actions {
 
     fn install(&self) {
         let host = self.0.clone();
-        crate::native::act(&self.0, async move { request_install(&host).await });
+        crate::native::act(&self.0, async move { request_install(&host, None).await });
     }
 
     /// The hint's button: the script never started, so the run is closed by hand (C# `AbandonSetupRun`).
@@ -353,7 +420,8 @@ impl SetupActions for Actions {
 
 /// C# `RequestSetupInstall`: the screen's refusals, then the confirmation (D10), then the install when it is answered Run. A run of
 /// the app that may not change the machine says so first (the verification mode's words) and shows no confirmation it would refuse.
-async fn request_install(host: &Arc<Host>) -> Result<(), String> {
+/// `only`: Settings › 구성 요소' row — that item alone with the prerequisites it is missing, the screen's picks left as they are.
+async fn request_install(host: &Arc<Host>, only: Option<&str>) -> Result<(), String> {
     let state = of(host);
     if gate(host) == Gate::ReadOnly {
         host.log.line("setup: the install was refused (no --allow-state-write)");
@@ -362,7 +430,13 @@ async fn request_install(host: &Arc<Host>) -> Result<(), String> {
         return Ok(());
     }
     let environment = environment(host);
-    let confirmation = lock(&state.screen).may_confirm(state.files.as_ref(), &environment);
+    let confirmation = {
+        let mut screen = lock(&state.screen);
+        match only {
+            Some(id) => screen.may_confirm_item(id, state.files.as_ref(), &environment),
+            None => screen.may_confirm(state.files.as_ref(), &environment),
+        }
+    };
     redraw(host);
     let Some(confirmation) = confirmation else { return Ok(()) };
     if crate::native::show_dialog(host, view::setup_confirmation(&confirmation)).await != DialogResult::Primary {
@@ -513,7 +587,8 @@ async fn finish_run(host: &Arc<Host>, run: Option<Instant>) {
         return;
     }
     refresh(host, true, None).await;
-    let shown = crate::native::is_open(host, SETUP_SURFACE);
+    // Settings › 구성 요소 shows the result itself: the screen comes back only when neither list shows.
+    let shown = crate::native::is_open(host, SETUP_SURFACE) || crate::native::is_open(host, crate::settings::SURFACE);
     let front = host.app.get_webview(crate::host::WINDOW).and_then(|page| page.window().is_focused().ok()).unwrap_or(false);
     if lock(&of(host).screen).after_finish(shown, front) {
         open(host, None);
@@ -673,14 +748,17 @@ mod tests {
         }
     }
 
-    /// C# `ToolkitVerification.ComponentsScreenIsLiveInTheRunningApp` (L1561), over the settings registry: the 도구 tab draws 구성 요소,
-    /// titled from Core, then 내 작업 도구 모음; the smoke builds both over its fixture (`componentsSection`).
+    /// C# `ToolkitVerification.ComponentsScreenIsLiveInTheRunningApp` (L1561), over the settings registry: the 구성 요소 tab draws
+    /// 구성 요소 (the CLI tab's accounts and updates among its rows), titled from Core, then 내 작업 도구 모음; the smoke builds both over
+    /// its fixture (`componentsSection`) and a saved CLI tab opens it.
     #[test]
     fn the_components_screen_is_live_in_settings() {
         let locale = Locale::new("ko");
         let titles: Vec<String> = crate::settings::groups(&locale, "tools").into_iter().map(|group| group.title).collect();
         assert_eq!(titles, [locale.get("settings.components.sectionTitle"), locale.get("settings.toolkit.sectionTitle")]);
         assert_eq!(sections::title_of(&locale, sections::COMPONENTS).as_deref(), Some(titles[0].as_str()));
+        assert!(crate::settings::groups(&locale, "cli").is_empty(), "no CLI tab");
+        assert_eq!(sections::moved_category("cli"), "tools");
         let checks: Vec<&str> = crate::smoke_setup::checks(&json!({})).into_iter().map(|(name, _)| name).collect();
         assert!(checks.contains(&"componentsSection") && checks.contains(&"statusLine"));
     }

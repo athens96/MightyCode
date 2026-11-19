@@ -3,7 +3,7 @@ title: 設定
 order: 8
 section: settings
 ---
-{{ui:menu.settings}}({{kbd:⌘,}})か、サイドバー下部の設定ボタンで開きます。左側でタブを選び、{{ui:settings.closeButton}}ボタンか{{kbd:Esc}}で閉じます。最後に表示したタブが記憶されます。タブは{{ui:settings.nav.general}}、{{ui:settings.nav.models}}、{{ui:settings.nav.cli}}、{{ui:settings.nav.styles}}、{{ui:settings.remote.navTitle}}、{{ui:settings.nav.companion}}、{{ui:settings.nav.tools}}、{{ui:settings.nav.about}}の順に並んでいます。
+{{ui:menu.settings}}({{kbd:⌘,}})か、サイドバー下部の設定ボタンで開きます。左側でタブを選び、{{ui:settings.closeButton}}ボタンか{{kbd:Esc}}で閉じます。最後に表示したタブが記憶されます。タブは{{ui:settings.nav.general}}、{{ui:settings.nav.models}}、{{ui:settings.nav.styles}}、{{ui:settings.remote.navTitle}}、{{ui:settings.nav.companion}}、{{ui:settings.nav.tools}}、{{ui:settings.nav.about}}の順に並んでいます。
 
 ## 一般 {#general}
 {{ui:settings.nav.general}}タブの{{ui:settings.display.sectionTitle}}で、アプリの見た目を変更します。
@@ -38,31 +38,6 @@ Mac では表示メニューの {{ui:menu.textBigger}}（{{kbd:⌘=}}）、{{ui:
 
 ![[settings-models]]
 
-## CLI {#cli}
-{{ui:settings.nav.cli}}タブで、CLIのサインインとアップデートを管理します。CLIごとのインストール状態、バージョン、インストール・アップデートのボタンは、{{ui:settings.nav.tools}}タブの[{{ui:settings.components.sectionTitle}}](#components)一覧にあります。
-
-### サインイン {#cli-accounts}
-{{ui:settings.cliAccounts.sectionTitle}}で、CLIごとにサインインします。
-1. {{ui:settings.cliAccounts.buttonLogin}}をクリックします。Claudeでは、{{ui:settings.cliAccounts.buttonLoginClaude}}と{{ui:settings.cliAccounts.buttonLoginConsole}}から選びます。
-2. CLIのサインインがターミナルで始まります。ブラウザで承認します。
-   - {{platform:mac}} アプリ内にターミナルペインが開きます。ローカルのワークスペースに開くため、ワークスペースが1つ以上開いている必要があります。
-   - {{platform:windows}} 別のコンソールウィンドウが開きます。ワークスペースがなくてもかまいません。
-3. サインインが完了すると状態が変わります。変わらないときは、そのCLIの行の{{ui:settings.cliAccounts.refreshTooltip}}ボタンをクリックします。変更したアカウントは次のリクエストから使われます。
-
-アカウントを変更するには{{ui:settings.cliAccounts.buttonChange}}、サインアウトするには{{ui:settings.cliAccounts.buttonLogout}}をクリックします。{{ui:settings.cliAccounts.autoLoginToggle}}をオンにすると、サインインが切れたときに自動で再サインインし、失敗したリクエストを再送信します。
-
-Claudeの行には{{ui:settings.cliAccounts.resetModelsButton}}と{{ui:settings.cliAccounts.bedrockButton}}のボタンもあります。{{ui:settings.cliAccounts.bedrockButton}}はサインインと同じ方法で、ターミナルでClaude CLIのAWS Bedrock設定ウィザードを開きます。終わったら状態を更新してください。{{platform:windows}} Windowsには{{ui:settings.cliAccounts.resetBedrockButton}}ボタンがもう1つあり、Claudeのユーザー設定をバックアップしたうえでBedrockキーとBedrockのモデル指定を削除します。
-
-### CLIのアップデート {#cli-update}
-{{ui:settings.cliUpdate.sectionTitle}}で、インストール済みのCLIを最新版にします。
-- {{ui:settings.cliUpdate.updateButton}}ボタン: 今すぐアップデートします。
-- {{ui:settings.cliUpdate.autoUpdateToggle}}: アプリの起動時と、6時間ごとに確認します。
-- {{ui:settings.cliUpdate.autoUpdatePluginsToggle}}: ClaudeとCodexのプラグインも一緒にアップデートします。
-
-CLIを最初にインストールした方法(npm、Homebrewなど)をそのまま使います。
-
-![[settings-cli]]
-
 ## スタイル {#styles}
 {{ui:settings.nav.styles}}タブでスタイルの一覧を管理します。ファイルからスタイルを登録し、内容を確認して許可したりブロックしたりします。一覧が合わないときは{{ui:settings.styles.rescanButton}}ボタンをクリックします。スタイルのID、ハッシュ、件数は、名前にポインタを合わせると表示されます。詳しくは[スタイル](styles.md#custom)にあります。
 
@@ -96,11 +71,53 @@ CLIを最初にインストールした方法(npm、Homebrewなど)をそのま�
 ![[companion-pet]]
 
 ## コンポーネント {#components}
-{{ui:settings.nav.tools}}タブでは、アプリに必要なものが準備できているかを確認できます。
-- {{ui:settings.components.sectionTitle}}: [{{ui:setup.title}}](getting-started.md#setup)の一覧がここにあります。エージェントCLI、前提ツール、スタイル用ツール、Tailscale、gh・glabごとに{{ui:setup.status.installed}}、{{ui:setup.status.missing}}、{{ui:setup.status.outdated}}、{{ui:setup.status.attention}}、{{ui:setup.status.installing}}、{{ui:setup.status.failed}}のいずれかが表示され、足りない項目を選んで{{ui:setup.button.install}}をクリックすると、すべてのコマンドを確認したうえでインストールします。Macではアプリ内のターミナルペインで、Windowsではアプリが別に開くPowerShellウィンドウで実行されます。CLIごとのバージョンとサインインの状態もここで確認でき、古すぎるClaude Codeには{{ui:setup.button.update}}ボタンが出ます。{{ui:setup.button.recheck}}ボタンと、一覧を開いている間の自動確認は毎回CLIを探し直します。
-- {{ui:settings.toolkit.sectionTitle}}: よく使うツールの一覧です。インストールの前に実行するコマンドをすべて表示し、{{ui:settings.toolkit.confirmTitle}}を求めます。一覧を{{ui:settings.toolkit.exportButton}}したり{{ui:settings.toolkit.importButton}}したりできます。
+{{ui:settings.nav.tools}}タブでは、アプリに必要なものが準備できているかを確認し、エージェントCLIのインストール、サインイン、アップデートをまとめて管理します。このコンピュータのOS向けの項目だけが表示されます。
+
+一番上の行には、表示の切り替えとボタンが2つあります。
+- {{ui:settings.components.filterAll}} / 要対応: 要対応を選ぶと、手を入れる必要がある行だけが表示されます。未インストール、未サインイン、アップデートあり、失敗、対応が必要な項目です。横の数字がその数です。
+- 更新(↻、{{ui:setup.button.recheck}}): PATHを読み直し、すべての項目を確認し直します。
+- {{ui:settings.components.updateAllButton}}: インストール済みのエージェントCLIを今すぐすべてアップデートします。CLIごとに、最初にインストールした方法(npm、Homebrewなど)をそのまま使います。
+
+一覧は3つのグループです。{{ui:setup.group.agent}}(Claude、Codex、Antigravity、pi、opencode、Hermes)、{{ui:settings.components.groupTools}}(Git(MacではXcodeコマンドラインツール)、Homebrew(Mac)、Node.js、Bun(Mac)、uv、Tailscale、gh、glab)、{{ui:settings.components.groupPlugins}}(ouroboros、omc、gstack(Mac))です。項目ごとに1行で、行には開閉の印(▸)、名前、バージョン、エージェントCLIならサインインしているアカウントがあります。右側には状態と、今いちばん必要なボタンが1つあります。
+- 状態: {{ui:setup.status.installed}}、{{ui:settings.components.statusInstalled}}(エージェントCLIがインストールされ、サインインも済み)、{{ui:settings.components.statusUpdateAvailable}}、{{ui:settings.cliAccounts.summarySignedOut}}、{{ui:settings.cliAccounts.statusNotInstalled}}、{{ui:setup.status.attention}}、{{ui:setup.status.installing}}、{{ui:setup.status.failed}}。
+- ボタン: ないときは{{ui:settings.components.installButton}}(ダウンロードページからしかインストールできない項目は{{ui:setup.button.openPage}})、サインインしていないときは{{ui:settings.cliAccounts.buttonLogin}}、古いときは{{ui:setup.button.update}}。問題がなければボタンはありません。
+
+行をクリックすると、その場で開きます(▾)。開いた行には詳しい内容(必要なバージョン、前回のアップデートの結果、アカウントの情報、対応が必要な理由、その項目の用途)と、その項目のボタンがすべてあります。エージェントCLIなら{{ui:settings.cliAccounts.buttonChange}}、{{ui:settings.cliAccounts.buttonLogout}}、{{ui:settings.cliAccounts.refreshTooltip}}などです。もう一度クリックすると閉じます。開いた行は、アプリを終了するまで覚えています。
+
+一覧の下の{{ui:settings.components.groupAutoUpdate}}ボックスには、スイッチが3つと前回の実行時刻があります。スイッチにポインタを合わせると説明が表示されます。
+- {{ui:settings.components.autoUpdateClis}}: アプリの起動時と、6時間ごとにエージェントCLIのアップデートを確認します。
+- {{ui:settings.components.autoUpdatePlugins}}: ClaudeとCodexのプラグインも一緒にアップデートします。
+- {{ui:settings.components.autoLogin}}: サインインが切れたら再サインインし、失敗したリクエストを再送信します。
+
+{{ui:settings.components.installButton}}をクリックすると、その項目と、その項目に必要で足りない前提ツールだけをインストールします。実行するコマンドは、先に1つの確認画面ですべて表示されます。
+- {{platform:mac}} アプリ内のターミナルペインで実行します。ローカルのワークスペースが開いていないときはターミナル(Terminal.app)で実行します。
+- {{platform:windows}} 別のPowerShellウィンドウで実行します。
+
+インストールできたかどうかは、終わったあとに確認し直して判断します。初回起動時に開く[{{ui:setup.title}}](getting-started.md#setup)ウィンドウは、足りないものを選んで{{ui:setup.button.install}}をクリックするチェックリストです。
+
+同じタブの一番下には、{{ui:settings.toolkit.sectionTitle}}ボックスがあります。よく使うツールの一覧です。インストールの前に実行するコマンドをすべて表示し、{{ui:settings.toolkit.confirmTitle}}を求めます。一覧を{{ui:settings.toolkit.exportButton}}したり{{ui:settings.toolkit.importButton}}したりできます。
 
 ![[settings-tools]]
+
+### サインイン {#cli-accounts}
+エージェントCLIごとに、その行でサインインします。サインインしていないCLIは行に{{ui:settings.cliAccounts.buttonLogin}}ボタンがそのまま表示され、そのほかのアカウントのボタンは行を開くと表示されます。
+1. {{ui:settings.cliAccounts.buttonLogin}}をクリックします。Claudeでは、{{ui:settings.cliAccounts.buttonLoginClaude}}と{{ui:settings.cliAccounts.buttonLoginConsole}}から選びます。
+2. CLIのサインインがターミナルで始まります。ブラウザで承認します。
+   - {{platform:mac}} アプリ内にターミナルペインが開きます。ローカルのワークスペースに開くため、ワークスペースが1つ以上開いている必要があります。
+   - {{platform:windows}} 別のコンソールウィンドウが開きます。ワークスペースがなくてもかまいません。
+3. サインインが完了すると行の状態が変わります。変わらないときは、その行を開いて{{ui:settings.cliAccounts.refreshTooltip}}をクリックします。変更したアカウントは次のリクエストから使われます。
+
+アカウントを変更するには行を開いて{{ui:settings.cliAccounts.buttonChange}}、サインアウトするには{{ui:settings.cliAccounts.buttonLogout}}をクリックします。{{ui:settings.components.groupAutoUpdate}}ボックスの{{ui:settings.components.autoLogin}}をオンにすると、サインインが切れたときに自動で再サインインし、失敗したリクエストを再送信します。
+
+Claudeの行を開くと、{{ui:settings.cliAccounts.resetModelsButton}}と{{ui:settings.cliAccounts.bedrockButton}}のボタンもあります。{{ui:settings.cliAccounts.bedrockButton}}はサインインと同じ方法で、ターミナルでClaude CLIのAWS Bedrock設定ウィザードを開きます。終わったら状態を更新してください。{{platform:windows}} Windowsには{{ui:settings.cliAccounts.resetBedrockButton}}ボタンがもう1つあり、Claudeのユーザー設定をバックアップしたうえでBedrockキーとBedrockのモデル指定を削除します。
+
+### アップデート {#cli-update}
+エージェントCLIのアップデートは、アプリのアップデートとは別に行います。
+- {{ui:settings.components.updateAllButton}}ボタン: インストール済みのエージェントCLIを今すぐすべてアップデートします。古いCLIの行の{{ui:setup.button.update}}ボタンも、CLIのアップデートを実行します。
+- {{ui:settings.components.groupAutoUpdate}}ボックスの{{ui:settings.components.autoUpdateClis}}: アプリの起動時と、6時間ごとに確認します。
+- {{ui:settings.components.autoUpdatePlugins}}: ClaudeとCodexのプラグインも一緒にアップデートします。
+
+CLIを最初にインストールした方法(npm、Homebrewなど)をそのまま使います。CLIごとの前回のアップデートの結果はそのCLIの行を開くと表示され、プラグインのアップデートの結果は{{ui:settings.components.groupPlugins}}グループの下に表示されます。
 
 ## アプリ情報 {#about}
 {{ui:settings.nav.about}}タブでは、アプリをアップデートし、データの保存場所を確認します。

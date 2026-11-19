@@ -285,7 +285,12 @@ async fn phone(relay: &str, link: &str, auth: Value) -> Result<(Value, RelayCiph
     let nonce = [9u8; 16];
     let hello = json!({"type":"hello","v":1,"clientKey": b64.encode(cipher::public_key(&secret)),"nonce": b64.encode(nonce)});
     socket.send(Message::text(hello.to_string())).await.unwrap();
-    let Some(Ok(Message::Text(ready))) = socket.next().await else { panic!("no ready") };
+    // A host that refuses closes before `ready` (its close code is the answer); a socket that ends otherwise is tried again.
+    let ready = match socket.next().await {
+        Some(Ok(Message::Text(ready))) => ready,
+        Some(Ok(Message::Close(frame))) => return Err(frame.map(|f| u16::from(f.code))),
+        _ => return Err(None),
+    };
     let ready: Value = serde_json::from_str(ready.as_str()).unwrap();
     // Anything but `ready` (the host's link still settling after a settings change): no handshake this time.
     let Some(server_key) = ready["serverKey"].as_str() else { return Err(None) };

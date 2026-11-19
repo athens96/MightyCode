@@ -112,52 +112,85 @@ fn result_row(ui: &Ui, status: &str, title: String, provider: Option<&str>, chan
     El::stack(false, metrics::SPACING_XS, row).aid(id)
 }
 
-/// `BuildCliUpdateSection` (M/CLIUpdateSettingsView.swift:8-74): the two switches each over its explanation, the progress or
-/// last-run words beside the update button, then a row per CLI result and a row per plugin result.
-pub fn cli_update_box(ui: &Ui, model: &CliUpdateBox, actions: &CliUpdateActions) -> El {
-    let mut rows = ui.settings_rows();
-    let toggle_label = strings::auto_update_toggle();
+/// The two switches, each over its explanation: four rows of a box (the box's first four).
+pub fn switch_rows(ui: &Ui, model: &CliUpdateBox, actions: &CliUpdateActions) -> [El; 4] {
+    let [(clis, clis_label, clis_help), (plugins, plugins_label, plugins_help)] = switches(ui, model, actions);
+    [
+        ui.settings_labeled(ui.settings_text(clis_label, TextStyle::default()), clis, false),
+        ui.settings_text(clis_help, TextStyle::size(11.0).ink(Token::Ink2)),
+        ui.settings_labeled(ui.settings_text(plugins_label, TextStyle::default()), plugins, false),
+        ui.settings_text(plugins_help, TextStyle::size(11.0).ink(Token::Ink2)),
+    ]
+}
+
+/// The automatic CLI update's switch (`cli-auto-update`) and the automatic plugin update's (`plugin-auto-update`), each with its
+/// label and its explanation (구성 요소' 자동 업데이트 line).
+pub fn switches(ui: &Ui, model: &CliUpdateBox, actions: &CliUpdateActions) -> [(El, String, String); 2] {
+    let clis_label = strings::auto_update_toggle();
     let toggle = actions.toggle_clis.clone();
-    let clis = ui.settings_switch(toggle_label.clone(), model.auto_update_clis, Some("cli-auto-update"), move |on| toggle(on));
-    rows.add(ui.settings_labeled(ui.settings_text(toggle_label, TextStyle::default()), clis, false));
-    rows.add(ui.settings_text(strings::section_description(), TextStyle::size(11.0).ink(Token::Ink2)));
+    let clis = ui.settings_switch(clis_label.clone(), model.auto_update_clis, Some("cli-auto-update"), move |on| toggle(on));
     let plugins_label = get("settings.cliUpdate.autoUpdatePluginsToggle");
     let toggle = actions.toggle_plugins.clone();
     let plugins = ui.settings_switch(plugins_label.clone(), model.auto_update_plugins, Some("plugin-auto-update"), move |on| toggle(on));
-    rows.add(ui.settings_labeled(ui.settings_text(plugins_label, TextStyle::default()), plugins, false));
-    rows.add(ui.settings_text(get("settings.cliUpdate.autoUpdatePluginsDescription"), TextStyle::size(11.0).ink(Token::Ink2)));
+    [(clis, clis_label, strings::section_description()), (plugins, plugins_label, get("settings.cliUpdate.autoUpdatePluginsDescription"))]
+}
 
-    // While something runs the words are the progress (primary ink); otherwise the quiet last-run time.
-    let progress = ui
-        .settings_text(progress_text(model), TextStyle::size(11.0).ink(if model.any_running { Token::Ink } else { Token::Ink2 }))
-        .aid("cli-update-progress");
-    let label = if model.any_running { strings::updating_button() } else { strings::update_button() };
+/// The progress or last-run words (`cli-update-progress`): while something runs the progress (primary ink), otherwise the quiet
+/// last-run time.
+pub fn progress_words(ui: &Ui, model: &CliUpdateBox) -> El {
+    ui.settings_text(progress_text(model), TextStyle::size(11.0).ink(if model.any_running { Token::Ink } else { Token::Ink2 }))
+        .aid("cli-update-progress")
+}
+
+/// The manual run's button (`cli-update-start`), `label` while nothing runs (업데이트 하기; 구성 요소' 모두 업데이트), 업데이트 중…
+/// while a run is on; it waits while a run or a plugin operation is on.
+pub fn start_button(ui: &Ui, model: &CliUpdateBox, actions: &CliUpdateActions, label: String) -> El {
+    let label = if model.any_running { strings::updating_button() } else { label };
     let start = actions.start.clone();
     let mut button = ui.button(label, move || start()).enabled(!model.any_running && !model.plugin_operation_running);
     button.name = String::new();
-    let button = ui.settings_push(button, ControlSize::Regular, false, false).aid("cli-update-start");
-    rows.add(ui.settings_labeled(progress, button, false));
+    ui.settings_push(button, ControlSize::Regular, false, false).aid("cli-update-start")
+}
 
-    for result in &model.results {
-        let id = format!("{RESULT_ROW_ID_PREFIX}{}-{}", result.provider, result.status);
-        let row = result_row(
-            ui,
-            &result.status,
-            CliUpdateService::result_row(result),
-            Some(&result.provider),
-            CliUpdateService::version_change(result),
-            &result.detail,
-            id,
-        );
+/// A CLI result's row (`cli-update-result-<provider>-<status>`): the mark, `Claude · 업데이트됨`, the version change, the detail.
+pub fn result_line(ui: &Ui, result: &CliUpdateResult) -> El {
+    let id = format!("{RESULT_ROW_ID_PREFIX}{}-{}", result.provider, result.status);
+    result_row(
+        ui,
+        &result.status,
+        CliUpdateService::result_row(result),
+        Some(&result.provider),
+        CliUpdateService::version_change(result),
+        &result.detail,
+        id,
+    )
+}
+
+/// A provider's automatic plugin update's row (`plugin-update-result-<provider>`).
+pub fn plugin_result_line(ui: &Ui, provider: &str, result: &PluginAutoUpdateResult) -> El {
+    let status = if result.status == "succeeded" { "updated" } else { result.status.as_str() };
+    let title = get_with(
+        "settings.cliUpdate.pluginRowTemplate",
+        &[("provider", mighty_run::providers::name(provider)), ("status", &strings::status_label(status))],
+    );
+    result_row(ui, status, title, Some(provider), None, &result.detail, format!("plugin-update-result-{provider}"))
+}
+
+/// `BuildCliUpdateSection` (M/CLIUpdateSettingsView.swift:8-74): the two switches each over its explanation, the progress or
+/// last-run words beside the update button, then a row per CLI result and a row per plugin result. Settings draws these parts in
+/// 구성 요소 (each result under its CLI's row); the whole box is kept for its checks.
+pub fn cli_update_box(ui: &Ui, model: &CliUpdateBox, actions: &CliUpdateActions) -> El {
+    let mut rows = ui.settings_rows();
+    for row in switch_rows(ui, model, actions) {
         rows.add(row);
     }
+    let button = start_button(ui, model, actions, strings::update_button());
+    rows.add(ui.settings_labeled(progress_words(ui, model), button, false));
+    for result in &model.results {
+        rows.add(result_line(ui, result));
+    }
     for (provider, result) in &model.plugin_results {
-        let status = if result.status == "succeeded" { "updated" } else { result.status.as_str() };
-        let title = get_with(
-            "settings.cliUpdate.pluginRowTemplate",
-            &[("provider", mighty_run::providers::name(provider)), ("status", &strings::status_label(status))],
-        );
-        rows.add(result_row(ui, status, title, Some(provider), None, &result.detail, format!("plugin-update-result-{provider}")));
+        rows.add(plugin_result_line(ui, provider, result));
     }
     rows.finish()
 }

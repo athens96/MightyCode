@@ -3,7 +3,7 @@ title: 설정
 order: 8
 section: settings
 ---
-{{ui:menu.settings}}({{kbd:⌘,}})이나 사이드바 아래의 설정 단추로 엽니다. 왼쪽에서 탭을 고르고, {{ui:settings.closeButton}} 단추나 {{kbd:Esc}}로 닫습니다. 마지막에 본 탭을 기억합니다. 탭은 {{ui:settings.nav.general}}, {{ui:settings.nav.models}}, {{ui:settings.nav.cli}}, {{ui:settings.nav.styles}}, {{ui:settings.remote.navTitle}}, {{ui:settings.nav.companion}}, {{ui:settings.nav.tools}}, {{ui:settings.nav.about}} 순서입니다.
+{{ui:menu.settings}}({{kbd:⌘,}})이나 사이드바 아래의 설정 단추로 엽니다. 왼쪽에서 탭을 고르고, {{ui:settings.closeButton}} 단추나 {{kbd:Esc}}로 닫습니다. 마지막에 본 탭을 기억합니다. 탭은 {{ui:settings.nav.general}}, {{ui:settings.nav.models}}, {{ui:settings.nav.styles}}, {{ui:settings.remote.navTitle}}, {{ui:settings.nav.companion}}, {{ui:settings.nav.tools}}, {{ui:settings.nav.about}} 순서입니다.
 
 ## 일반 {#general}
 {{ui:settings.nav.general}} 탭의 {{ui:settings.display.sectionTitle}} 항목에서 앱의 모양을 바꿉니다.
@@ -38,31 +38,6 @@ Mac에서는 보기 메뉴의 {{ui:menu.textBigger}}({{kbd:⌘=}}), {{ui:menu.te
 
 ![[settings-models]]
 
-## CLI {#cli}
-{{ui:settings.nav.cli}} 탭에서 CLI의 로그인과 업데이트를 관리합니다. CLI마다 설치 여부, 버전, 설치·업데이트 단추는 {{ui:settings.nav.tools}} 탭의 [{{ui:settings.components.sectionTitle}}](#components) 목록에 있습니다.
-
-### 로그인 {#cli-accounts}
-{{ui:settings.cliAccounts.sectionTitle}}에서 CLI마다 로그인합니다.
-1. {{ui:settings.cliAccounts.buttonLogin}}을 누릅니다. Claude는 {{ui:settings.cliAccounts.buttonLoginClaude}}과 {{ui:settings.cliAccounts.buttonLoginConsole}} 중에서 고릅니다.
-2. CLI의 로그인이 터미널에서 시작됩니다. 브라우저에서 승인합니다.
-   - {{platform:mac}} 앱 안에 터미널 창이 열립니다. 이 창은 로컬 워크스페이스에 열리므로 워크스페이스가 하나 이상 열려 있어야 합니다.
-   - {{platform:windows}} 별도의 콘솔 창이 열립니다. 워크스페이스가 없어도 됩니다.
-3. 로그인이 끝나면 상태가 바뀝니다. 바뀌지 않으면 그 CLI 줄의 {{ui:settings.cliAccounts.refreshTooltip}} 단추를 누릅니다. 바뀐 계정은 다음 요청부터 쓰입니다.
-
-계정을 바꾸려면 {{ui:settings.cliAccounts.buttonChange}}, 로그아웃하려면 {{ui:settings.cliAccounts.buttonLogout}}을 누릅니다. {{ui:settings.cliAccounts.autoLoginToggle}}을 켜면 로그인이 끊겼을 때 자동으로 다시 로그인하고 실패한 요청을 다시 보냅니다.
-
-Claude 줄에는 {{ui:settings.cliAccounts.resetModelsButton}}, {{ui:settings.cliAccounts.bedrockButton}} 단추도 있습니다. {{ui:settings.cliAccounts.bedrockButton}}은 로그인과 같은 방식으로 터미널에서 Claude CLI의 AWS Bedrock 설정 마법사를 엽니다. 마친 뒤 상태를 새로고침하세요. {{platform:windows}} Windows에는 {{ui:settings.cliAccounts.resetBedrockButton}} 단추가 하나 더 있어, Claude 사용자 설정을 백업한 뒤 Bedrock 키와 Bedrock 모델 지정을 지웁니다.
-
-### CLI 업데이트 {#cli-update}
-{{ui:settings.cliUpdate.sectionTitle}}에서 설치된 CLI를 최신으로 바꿉니다.
-- {{ui:settings.cliUpdate.updateButton}} 단추: 지금 업데이트합니다.
-- {{ui:settings.cliUpdate.autoUpdateToggle}}: 앱을 열 때, 그리고 6시간마다 확인합니다.
-- {{ui:settings.cliUpdate.autoUpdatePluginsToggle}}: Claude와 Codex 플러그인도 함께 업데이트합니다.
-
-CLI를 처음 설치한 방법(npm, Homebrew 등)을 그대로 씁니다.
-
-![[settings-cli]]
-
 ## 스타일 {#styles}
 {{ui:settings.nav.styles}} 탭에서 스타일 목록을 관리합니다. 파일에서 스타일을 등록하고, 내용을 확인해 허용하거나 차단합니다. 목록이 맞지 않으면 {{ui:settings.styles.rescanButton}} 단추를 누릅니다. 스타일의 ID, 해시, 개수는 이름 위에 포인터를 올리면 보입니다. 자세한 내용은 [스타일](styles.md#custom)에 있습니다.
 
@@ -96,11 +71,53 @@ CLI를 처음 설치한 방법(npm, Homebrew 등)을 그대로 씁니다.
 ![[companion-pet]]
 
 ## 구성 요소 {#components}
-{{ui:settings.nav.tools}} 탭은 앱에 필요한 것이 준비됐는지 보여 줍니다.
-- {{ui:settings.components.sectionTitle}}: [{{ui:setup.title}}](getting-started.md#setup) 목록이 여기 있습니다. 에이전트 CLI, 기본 도구, 스타일 도구, Tailscale, gh·glab마다 {{ui:setup.status.installed}}, {{ui:setup.status.missing}}, {{ui:setup.status.outdated}}, {{ui:setup.status.attention}}, {{ui:setup.status.installing}}, {{ui:setup.status.failed}} 중 하나가 보이고, 빠진 항목을 골라 {{ui:setup.button.install}}를 누르면 명령을 모두 확인한 뒤 설치합니다. Mac에서는 앱 안의 터미널 창에서, Windows에서는 앱이 따로 여는 PowerShell 창에서 실행됩니다. CLI마다 버전과 로그인 상태도 여기서 보고, 너무 오래된 Claude Code에는 {{ui:setup.button.update}} 단추가 나옵니다. {{ui:setup.button.recheck}} 단추와 목록이 열려 있는 동안의 자동 확인은 CLI를 매번 다시 찾습니다.
-- {{ui:settings.toolkit.sectionTitle}}: 자주 쓰는 도구 목록입니다. 설치 전에 실행할 명령을 모두 보여 주고 {{ui:settings.toolkit.confirmTitle}}을 받습니다. 목록을 {{ui:settings.toolkit.exportButton}}하거나 {{ui:settings.toolkit.importButton}}할 수 있습니다.
+{{ui:settings.nav.tools}} 탭은 앱에 필요한 것이 준비됐는지 보여 주고, 에이전트 CLI의 설치, 로그인, 업데이트를 한곳에서 관리합니다. 이 컴퓨터의 운영체제에 맞는 항목만 보입니다.
+
+맨 위 줄에는 보기 선택과 단추 둘이 있습니다.
+- {{ui:settings.components.filterAll}} / 문제 있음: 문제 있음을 고르면 손볼 것이 있는 줄만 보입니다. 설치 안 됨, 로그인되지 않음, 업데이트 있음, 실패, 확인 필요인 항목입니다. 옆의 숫자가 그 개수입니다.
+- 새로고침(↻, {{ui:setup.button.recheck}}): PATH를 다시 읽고 모든 항목을 다시 확인합니다.
+- {{ui:settings.components.updateAllButton}}: 설치된 에이전트 CLI를 지금 모두 업데이트합니다. CLI마다 처음 설치한 방법(npm, Homebrew 등)을 그대로 씁니다.
+
+목록은 세 묶음입니다. {{ui:setup.group.agent}}(Claude, Codex, Antigravity, pi, opencode, Hermes), {{ui:settings.components.groupTools}}(Git(Mac에서는 Xcode 명령줄 도구), Homebrew(Mac), Node.js, Bun(Mac), uv, Tailscale, gh, glab), {{ui:settings.components.groupPlugins}}(ouroboros, omc, gstack(Mac))입니다. 항목마다 한 줄이고, 줄에는 펼침 표시(▸), 이름, 버전, 에이전트 CLI라면 로그인한 계정이 있습니다. 오른쪽에는 상태와, 지금 가장 필요한 단추 하나가 있습니다.
+- 상태: {{ui:setup.status.installed}}, {{ui:settings.components.statusInstalled}}(에이전트 CLI가 설치되고 로그인까지 됨), {{ui:settings.components.statusUpdateAvailable}}, {{ui:settings.cliAccounts.summarySignedOut}}, {{ui:settings.cliAccounts.statusNotInstalled}}, {{ui:setup.status.attention}}, {{ui:setup.status.installing}}, {{ui:setup.status.failed}}.
+- 단추: 없으면 {{ui:settings.components.installButton}}(내려받기 페이지로만 설치하는 항목은 {{ui:setup.button.openPage}}), 로그인이 안 됐으면 {{ui:settings.cliAccounts.buttonLogin}}, 오래됐으면 {{ui:setup.button.update}}. 문제가 없으면 단추가 없습니다.
+
+줄을 누르면 그 자리에서 펼쳐집니다(▾). 펼친 칸에는 자세한 내용(어느 버전이 필요한지, 마지막 업데이트 결과, 계정 정보, 확인이 필요한 이유, 그 항목이 무엇에 쓰이는지)과 그 항목의 단추가 모두 있습니다. 에이전트 CLI라면 {{ui:settings.cliAccounts.buttonChange}}, {{ui:settings.cliAccounts.buttonLogout}}, {{ui:settings.cliAccounts.refreshTooltip}} 등입니다. 다시 누르면 접힙니다. 어느 줄을 펼쳤는지는 앱을 끌 때까지 기억합니다.
+
+목록 아래 {{ui:settings.components.groupAutoUpdate}} 상자에는 스위치 셋과 마지막 실행 시각이 있습니다. 스위치에 포인터를 올리면 설명이 보입니다.
+- {{ui:settings.components.autoUpdateClis}}: 앱을 열 때, 그리고 6시간마다 에이전트 CLI 업데이트를 확인합니다.
+- {{ui:settings.components.autoUpdatePlugins}}: Claude와 Codex 플러그인도 함께 업데이트합니다.
+- {{ui:settings.components.autoLogin}}: 로그인이 끊기면 다시 로그인하고, 실패한 요청을 다시 보냅니다.
+
+{{ui:settings.components.installButton}}를 누르면 그 항목과, 그 항목에 필요한데 빠져 있는 선행 도구만 설치합니다. 실행할 명령을 확인 창 하나에 모두 먼저 보여 줍니다.
+- {{platform:mac}} 앱 안의 터미널 창에서 실행합니다. 열린 로컬 워크스페이스가 없으면 터미널(Terminal.app)에서 실행합니다.
+- {{platform:windows}} 별도의 PowerShell 창에서 실행합니다.
+
+설치됐는지는 끝난 뒤 다시 확인해서 정합니다. 처음 실행할 때 열리는 [{{ui:setup.title}}](getting-started.md#setup) 창은 빠진 것을 골라 {{ui:setup.button.install}}를 누르는 체크리스트입니다.
+
+같은 탭의 맨 아래에는 {{ui:settings.toolkit.sectionTitle}} 상자가 있습니다. 자주 쓰는 도구 목록입니다. 설치 전에 실행할 명령을 모두 보여 주고 {{ui:settings.toolkit.confirmTitle}}을 받습니다. 목록을 {{ui:settings.toolkit.exportButton}}하거나 {{ui:settings.toolkit.importButton}}할 수 있습니다.
 
 ![[settings-tools]]
+
+### 로그인 {#cli-accounts}
+에이전트 CLI마다 그 줄에서 로그인합니다. 로그인이 안 된 CLI는 줄에 {{ui:settings.cliAccounts.buttonLogin}} 단추가 바로 보이고, 그 밖의 계정 단추는 줄을 펼치면 보입니다.
+1. {{ui:settings.cliAccounts.buttonLogin}}을 누릅니다. Claude는 {{ui:settings.cliAccounts.buttonLoginClaude}}과 {{ui:settings.cliAccounts.buttonLoginConsole}} 중에서 고릅니다.
+2. CLI의 로그인이 터미널에서 시작됩니다. 브라우저에서 승인합니다.
+   - {{platform:mac}} 앱 안에 터미널 창이 열립니다. 이 창은 로컬 워크스페이스에 열리므로 워크스페이스가 하나 이상 열려 있어야 합니다.
+   - {{platform:windows}} 별도의 콘솔 창이 열립니다. 워크스페이스가 없어도 됩니다.
+3. 로그인이 끝나면 줄의 상태가 바뀝니다. 바뀌지 않으면 그 줄을 펼쳐 {{ui:settings.cliAccounts.refreshTooltip}}을 누릅니다. 바뀐 계정은 다음 요청부터 쓰입니다.
+
+계정을 바꾸려면 줄을 펼쳐 {{ui:settings.cliAccounts.buttonChange}}, 로그아웃하려면 {{ui:settings.cliAccounts.buttonLogout}}을 누릅니다. {{ui:settings.components.groupAutoUpdate}} 상자의 {{ui:settings.components.autoLogin}}을 켜면 로그인이 끊겼을 때 자동으로 다시 로그인하고 실패한 요청을 다시 보냅니다.
+
+Claude 줄을 펼치면 {{ui:settings.cliAccounts.resetModelsButton}}, {{ui:settings.cliAccounts.bedrockButton}} 단추도 있습니다. {{ui:settings.cliAccounts.bedrockButton}}은 로그인과 같은 방식으로 터미널에서 Claude CLI의 AWS Bedrock 설정 마법사를 엽니다. 마친 뒤 상태를 새로고침하세요. {{platform:windows}} Windows에는 {{ui:settings.cliAccounts.resetBedrockButton}} 단추가 하나 더 있어, Claude 사용자 설정을 백업한 뒤 Bedrock 키와 Bedrock 모델 지정을 지웁니다.
+
+### 업데이트 {#cli-update}
+에이전트 CLI는 앱 업데이트와 따로 업데이트합니다.
+- {{ui:settings.components.updateAllButton}} 단추: 설치된 에이전트 CLI를 지금 모두 업데이트합니다. 오래된 CLI 줄의 {{ui:setup.button.update}} 단추도 CLI 업데이트를 실행합니다.
+- {{ui:settings.components.groupAutoUpdate}} 상자의 {{ui:settings.components.autoUpdateClis}}: 앱을 열 때, 그리고 6시간마다 확인합니다.
+- {{ui:settings.components.autoUpdatePlugins}}: Claude와 Codex 플러그인도 함께 업데이트합니다.
+
+CLI를 처음 설치한 방법(npm, Homebrew 등)을 그대로 씁니다. CLI마다 마지막 업데이트의 결과는 그 CLI 줄을 펼치면 보이고, 플러그인 업데이트의 결과는 {{ui:settings.components.groupPlugins}} 묶음 아래에 보입니다.
 
 ## 앱 정보 {#about}
 {{ui:settings.nav.about}} 탭에서는 앱을 업데이트하고 데이터 저장 위치를 봅니다.

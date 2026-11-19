@@ -1,6 +1,6 @@
 //! C# ModelSelection.cs and ClaudeModelReset.cs: a pane's model and effort kept right against a newly read model list
 //! (`ModelSelectionSupport`, M/MightyCore/ModelSelectionSupport.swift), the reads of each context's list one probe at a time
-//! (`ModelCatalogRefresh`, M/LocalModelCatalogRefresh.swift), and Settings › CLI accounts' "모델 초기화·다시 불러오기"
+//! (`ModelCatalogRefresh`, M/LocalModelCatalogRefresh.swift), and Settings › 구성 요소' Claude row's "모델 초기화·다시 불러오기"
 //! (`ClaudeModelReset`, M/AppStore+ClaudeModelReset.swift).
 
 use std::collections::HashMap;

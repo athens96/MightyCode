@@ -4,17 +4,17 @@ order: 12
 section: faq
 ---
 ## リクエストを送信できない {#cannot-send}
-- 入力欄の下に、送信できない理由が表示されます。CLIがインストールされていない場合やサインインが必要な場合は、{{ui:menu.settings}} → {{ui:settings.nav.tools}}と{{ui:settings.nav.cli}}を確認してください。
+- 入力欄の下に、送信できない理由が表示されます。CLIがインストールされていない場合やサインインが必要な場合は、{{ui:menu.settings}} → {{ui:settings.nav.tools}}を確認してください。
 - ターミナルペインにはファイルを添付できません。AIのペインを使ってください。
 - 実行中に押した{{kbd:Enter}}は、すぐには送信されずキューに入ります。[実行中に続けてリクエストする](agent-pane.md#queue)を参照してください。
 
 ## モデルの一覧に使いたいモデルがない {#model-missing}
 1. モデルのチップを開き、{{ui:composer.model.refresh}}をクリックします。
-2. それでも表示されない場合は、{{ui:settings.nav.cli}}タブで{{ui:settings.cliAccounts.resetModelsButton}}ボタンをクリックします。
+2. それでも表示されない場合は、{{ui:settings.nav.tools}}タブのClaudeの行で{{ui:settings.cliAccounts.resetModelsButton}}ボタンをクリックします。
 3. 独自に使うモデル名は、{{ui:settings.nav.models}}タブの{{ui:settings.phaseModels.registeredTitle}}に追加できます。
 
 ## サインインが何度も切れる {#login}
-{{ui:settings.nav.cli}}タブの{{ui:settings.cliAccounts.autoLoginToggle}}をオンにしてください。切れた時点で再サインインを始め、失敗したリクエストを再送信します。[サインインが切れたとき](approvals.md#login-recovery)を参照してください。
+{{ui:settings.nav.tools}}タブの{{ui:settings.cliAccounts.autoLoginToggle}}をオンにしてください。切れた時点で再サインインを始め、失敗したリクエストを再送信します。[サインインが切れたとき](approvals.md#login-recovery)を参照してください。
 
 ## ハングルの入力が字母に分解される {#korean-input}
 メニューバーの{{ui:menu.workspace}}メニューで{{ui:menu.reconnectInputMethod}}を選んでください。それでも続く場合は、{{ui:menu.saveInputDiagnostics}}で診断ファイルを保存してお知らせください。

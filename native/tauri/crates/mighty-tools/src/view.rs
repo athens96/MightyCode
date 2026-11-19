@@ -1,5 +1,5 @@
-//! The setup screen, the 구성 요소 and 내 작업 도구 모음 boxes and their dialogs (D10 the setup install's confirmation, D7 the toolkit
-//! install's), built with mighty-native's kit as C# builds them (MainWindow.Setup.cs:175-415 `BuildSetupContent`, `FillSetupContent`,
+//! The setup screen, the 구성 요소 ([`components`]) and 내 작업 도구 모음 boxes and their dialogs (D10 the setup install's
+//! confirmation, D7 the toolkit install's), built with mighty-native's kit as C# builds them (MainWindow.Setup.cs:175-415 `BuildSetupContent`, `FillSetupContent`,
 //! `SetupItemRow`, `SetupAction`, `SetupFooter`, `BuildSetupConfirmation`; MainWindow.WebShell.Settings.cs:218-241 `ShowWebSetup`;
 //! MainWindow.Settings.cs:285-501 `BuildComponentsSection`, `BuildToolkitSection`, `FillToolkitList`, `FillToolkitResults`,
 //! `RunToolkitInstall`'s confirmation).
@@ -23,6 +23,8 @@ use crate::setup::probe::{SetupProbeState, SetupRowState, SetupRows};
 use crate::setup::screen::{Confirmation, SetupScreen, WINDOW_HEIGHT, WINDOW_WIDTH};
 use crate::toolkit::file::{ToolkitEntrySource, ToolkitFileEntry};
 use crate::toolkit::runner::{ToolkitRunItem, Verdict, presentation};
+
+pub mod components;
 
 /// The setup screen's surface id (the page's `data-native-view`).
 pub const SETUP_SURFACE: &str = "setup";
@@ -216,23 +218,29 @@ fn warning(ui: &Ui, words: impl Into<String>, aid: &str) -> El {
     El::stack(true, metrics::SPACING_SM, vec![ui.settings_symbol(glyph::WARNING, 12.0, Token::WaitText), said]).aid(aid)
 }
 
-/// C# `SetupFooter`: what is going on, then 다시 확인 and the install button.
-fn footer(ui: &Ui, screen: &SetupScreen, plan: &[String], actions: &Arc<dyn SetupActions>) -> El {
+/// C# `SetupFooter`'s warning lines: what the screen says (`setup-message`), and while the script has not said it started, the hint
+/// to look at the terminal with its 끝내기 (`abandon`). The setup screen's footer and Settings › 구성 요소 show them.
+pub(crate) fn notices(ui: &Ui, screen: &SetupScreen, abandon: impl Fn() + Send + Sync + 'static) -> Vec<El> {
     let mut rows = vec![];
     if let Some(message) = &screen.message {
         rows.push(warning(ui, message.clone(), "setup-message"));
     }
     if screen.run.as_ref().is_some_and(|run| run.not_started) {
         let mut hint = warning(ui, strings::get("setup.run.checkTerminal"), "setup-run-not-started");
-        let abandon = actions.clone();
-        let end = ui
-            .settings_push(ui.button(strings::get("setup.run.end"), move || abandon.abandon()), ControlSize::Small, false, false)
-            .aid("setup-run-end");
+        let end =
+            ui.settings_push(ui.button(strings::get("setup.run.end"), abandon), ControlSize::Small, false, false).aid("setup-run-end");
         if let Some(children) = hint.children_mut() {
             children.push(end);
         }
         rows.push(hint);
     }
+    rows
+}
+
+/// C# `SetupFooter`: what is going on, then 다시 확인 and the install button.
+fn footer(ui: &Ui, screen: &SetupScreen, plan: &[String], actions: &Arc<dyn SetupActions>) -> El {
+    let abandon = actions.clone();
+    let mut rows = notices(ui, screen, move || abandon.abandon());
     let running = screen.running();
     let mut buttons = vec![];
     if running {
@@ -350,14 +358,6 @@ pub fn setup_confirmation(confirmation: &Confirmation) -> DialogSpec {
     spec.close = Some(strings::get("setup.confirm.cancel"));
     spec.default_button = DefaultButton::Close;
     spec
-}
-
-/// C# `BuildComponentsSection`: the setup screen's explanation over its list, two rows of the box.
-pub fn components_box(ui: &Ui, list: El) -> El {
-    let mut rows = ui.settings_rows();
-    rows.add(text(ui, strings::get("setup.windows.subtitle"), TextStyle::size(11.0).ink(Token::Ink2)));
-    rows.add(list);
-    rows.finish()
 }
 
 /// One tool of the box as its last read found it.

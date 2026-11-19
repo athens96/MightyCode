@@ -346,9 +346,9 @@ fn delegate_takes_an_optional_agent_and_every_answer_names_the_childs_agent() {
         assert!(tools::DELEGATE.arguments[1].description.contains(&format!("{agent} child")), "mode names a {agent} child's modes");
     }
     let detail = unavailable("codex", DelegationAgentAvailability::SignedOut).unwrap();
-    assert_eq!(detail, "Codex is not signed in on this PC; the user can check it in Mighty Code's Settings › CLI");
+    assert_eq!(detail, "Codex is not signed in on this PC; the user can check it in Mighty Code's Settings › Components");
     assert!(
-        unavailable("gemini", DelegationAgentAvailability::NotInstalled).is_some_and(|d| d.ends_with("Settings › CLI"))
+        unavailable("gemini", DelegationAgentAvailability::NotInstalled).is_some_and(|d| d.ends_with("Settings › Components"))
             && unavailable("codex", DelegationAgentAvailability::Ready).is_none()
     );
 
@@ -639,14 +639,14 @@ mod git {
                 place.call("delegate", &[("task", "Do it."), ("mode", "acceptEdits"), ("agent", "antigravity")]).await,
                 DelegationResponse::refusal_with(
                     DelegationReasonCode::AgentUnavailable,
-                    "Antigravity is not installed on this PC; the user can check it in Mighty Code's Settings › CLI"
+                    "Antigravity is not installed on this PC; the user can check it in Mighty Code's Settings › Components"
                 )
             );
             assert_eq!(
                 place.call("delegate", &[("task", "Do it."), ("mode", "onRequest"), ("agent", "codex")]).await,
                 DelegationResponse::refusal_with(
                     DelegationReasonCode::AgentUnavailable,
-                    "Codex is not signed in on this PC; the user can check it in Mighty Code's Settings › CLI"
+                    "Codex is not signed in on this PC; the user can check it in Mighty Code's Settings › Components"
                 )
             );
             assert_eq!(
@@ -786,7 +786,10 @@ mod git {
                 HumanChildStart::Failed(agent_words("delegation.human.error.agentNotInstalledWindows", "Codex"))
             );
             let words = agent_words("delegation.human.error.agentNotInstalledWindows", "Codex");
-            assert!(words.contains("› CLI") && !words.contains("Mac"), "the words point to Settings › CLI and name no Mac");
+            assert!(
+                words.contains("›") && !words.contains("› CLI") && !words.contains("Mac"),
+                "the words point to Settings › 구성 요소 (no CLI tab) and name no Mac"
+            );
             assert_eq!(
                 place.send("Try it.", Some("other"), false).await,
                 HumanChildStart::Refused(DelegationReasonCode::AgentUnknown),

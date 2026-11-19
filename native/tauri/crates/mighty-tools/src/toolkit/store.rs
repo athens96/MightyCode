@@ -56,19 +56,10 @@ impl ToolkitStore {
         self.directory.join(FILE_NAME)
     }
 
-    /// The bundled entry: always first, always visible, never requires approval.
+    /// The bundled entries, always first and never needing approval: none since the mighty-styles plugin (a repository that was
+    /// never published) left the list. A stored file entry marked bundled stays the source the box draws as such.
     pub fn bundled() -> Vec<ToolkitFileEntry> {
-        vec![ToolkitFileEntry {
-            id: "mighty-styles".into(),
-            display_name: "mighty-styles".into(),
-            install_kind: "plugin".into(),
-            install: ToolkitInstallSpec::Plugin {
-                source: "athens96/mighty-styles".into(),
-                plugin_id: "mighty-styles@mighty-styles".into(),
-            },
-            approval: None,
-            source: ToolkitEntrySource::Bundled,
-        }]
+        Vec::new()
     }
 
     fn state(&self) -> MutexGuard<'_, State> {

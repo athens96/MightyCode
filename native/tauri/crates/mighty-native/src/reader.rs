@@ -533,6 +533,9 @@ impl<'a> Reader<'a> {
                 if self.tone(button.foreground.or(Some(self.env.theme.brush(Token::Ink)))) == Some("err-text") {
                     node.insert("destructive", true.into());
                 }
+                if let Some(expanded) = button.expanded {
+                    node.insert("expanded", expanded.into());
+                }
                 if let Some(menu) = &button.flyout {
                     node.insert("t", "menu".into());
                     let items = self.menu_items(menu, &format!("{path}/m"));

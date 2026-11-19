@@ -4,17 +4,17 @@ order: 12
 section: faq
 ---
 ## I can't send a request {#cannot-send}
-- The reason is shown under the composer. If a CLI isn't installed or needs a sign-in, check {{ui:menu.settings}} → {{ui:settings.nav.tools}} and {{ui:settings.nav.cli}}.
+- The reason is shown under the composer. If a CLI isn't installed or needs a sign-in, check {{ui:menu.settings}} → {{ui:settings.nav.tools}}.
 - Terminal panes can't take attachments. Use an AI pane.
 - While a task runs, {{kbd:Enter}} queues instead of sending right away. See [Keep asking while it runs](agent-pane.md#queue).
 
 ## The model I want isn't in the list {#model-missing}
 1. Open the model chip and click {{ui:composer.model.refresh}}.
-2. If it's still missing, click {{ui:settings.cliAccounts.resetModelsButton}} on the {{ui:settings.nav.cli}} tab.
+2. If it's still missing, click {{ui:settings.cliAccounts.resetModelsButton}} on the Claude row of the {{ui:settings.nav.tools}} tab.
 3. You can add model names of your own under {{ui:settings.phaseModels.registeredTitle}} on the {{ui:settings.nav.models}} tab.
 
 ## My sign-in keeps dropping {#login}
-Turn on {{ui:settings.cliAccounts.autoLoginToggle}} on the {{ui:settings.nav.cli}} tab. Sign-in starts again the moment it drops, and the failed request is resent. See [When the sign-in drops](approvals.md#login-recovery).
+Turn on {{ui:settings.cliAccounts.autoLoginToggle}} on the {{ui:settings.nav.tools}} tab. Sign-in starts again the moment it drops, and the failed request is resent. See [When the sign-in drops](approvals.md#login-recovery).
 
 ## Korean input breaks into separate letters {#korean-input}
 In the menu bar's {{ui:menu.workspace}} menu, click {{ui:menu.reconnectInputMethod}}. If it keeps happening, save a diagnostics file with {{ui:menu.saveInputDiagnostics}} and send it to us.

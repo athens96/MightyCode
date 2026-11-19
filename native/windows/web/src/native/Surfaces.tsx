@@ -11,12 +11,13 @@ import { ActContext, NativeNode, type Act } from './NativeNode';
 import { Icon, type IconName } from '../icons/Icon';
 import { CloseButton, DialogFooter, DialogFrame, DialogHeader, useFitToggle } from '../dialogs/DialogShell';
 import { lucide } from '../icons/lucide';
+import { glyphIcon } from './glyphs';
 import { usePopover } from '../shell/popover';
 import type { NativeButton, NativeChrome, NativeNode as NativeNodeT, NativeOpen, NativeSection, NativeView } from './types';
 
 /** Each category's symbol in the Mac's sidebar (M/SettingsViews.swift SettingsPane.symbol), as its Lucide counterpart. */
 const categorySymbol: Record<string, IconName> = {
-  general: 'settings', models: 'cpu', styles: 'palette', tools: 'box', cli: 'square-terminal', remote: 'earth', companion: 'paw-print', about: 'info',
+  general: 'settings', models: 'cpu', styles: 'palette', tools: 'box', remote: 'earth', companion: 'paw-print', about: 'info',
 };
 
 const settings = tokens.metrics.settings;
@@ -46,11 +47,11 @@ function Sections({ sections, framed }: { sections: readonly NativeSection[]; fr
  * The categories' cards in the One UI list, in the side list's order: related categories share one rounded card (how
  * agents run, the connections and alerts, setup and the app); a category none of them names joins the last card.
  */
-const categoryGroups: readonly (readonly string[])[] = [['general', 'models', 'cli', 'styles'], ['remote', 'companion'], ['tools', 'about']];
+const categoryGroups: readonly (readonly string[])[] = [['general', 'models', 'styles'], ['remote', 'companion'], ['tools', 'about']];
 
 /** Each category's icon tile, in one of the palette's own tones (no colour outside the design tokens). */
 const categoryTone: Record<string, string> = {
-  general: 'var(--stop)', models: 'var(--agent)', styles: 'var(--err)', tools: 'var(--wait)', cli: 'var(--ink3)',
+  general: 'var(--stop)', models: 'var(--agent)', styles: 'var(--err)', tools: 'var(--wait)',
   remote: 'var(--task)', companion: 'var(--run)', about: 'var(--accent)',
 };
 
@@ -114,7 +115,7 @@ function Settings({ open, view, call, top }: { open: NativeOpen; view: NativeVie
                 <button key={item.id} type="button" className={'native-nav-row' + (item.id === view.selected ? ' selected' : '')} aria-current={item.id === view.selected ? 'page' : undefined}
                   data-category={item.id} onClick={() => call('nativeNav', { view: open.id, id: item.id })}>
                   <span className="native-nav-tile" aria-hidden="true" style={{ background: categoryTone[item.id] ?? 'var(--accent)' }}>
-                    {categorySymbol[item.id] ? <Icon name={categorySymbol[item.id]!} size={settings.navGlyph} weight={2} /> : <span className="native-glyph">{item.glyph}</span>}
+                    {categorySymbol[item.id] ? <Icon name={categorySymbol[item.id]!} size={settings.navGlyph} weight={2} /> : glyphIcon(item.glyph) ? <Icon name={glyphIcon(item.glyph)!} size={settings.navGlyph} weight={2} /> : <span className="native-glyph">{item.glyph}</span>}
                   </span>
                   <span className="native-nav-title">{item.title}</span>
                 </button>

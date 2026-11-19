@@ -111,9 +111,10 @@ describe('text setting', () => {
   });
 
   it('groups the settings categories into One UI cards, an unknown one in the last', () => {
-    const ids = ['general', 'models', 'cli', 'styles', 'remote', 'companion', 'tools', 'about', 'labs'].map((id) => ({ id }));
+    // The CLI tab is 구성 요소' rows now: an older host's `cli` is a category none of the cards names.
+    const ids = ['general', 'models', 'styles', 'remote', 'companion', 'tools', 'about', 'cli'].map((id) => ({ id }));
     expect(groupCategories(ids).map((group) => group.map((item) => item.id))).toEqual([
-      ['general', 'models', 'cli', 'styles'], ['remote', 'companion'], ['tools', 'about', 'labs'],
+      ['general', 'models', 'styles'], ['remote', 'companion'], ['tools', 'about', 'cli'],
     ]);
     // A host without a category leaves no empty card.
     expect(groupCategories([{ id: 'about' }]).map((group) => group.map((item) => item.id))).toEqual([['about']]);
