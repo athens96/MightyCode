@@ -40,16 +40,16 @@ section: agent-pane
 
 | エージェント | 選べる権限 |
 |---|---|
-| Claude | Plan mode · Always ask · Accept file edits · Auto mode · Bypass |
+| Claude | {{ui:permission.label.claude.plan}} · {{ui:permission.label.claude.default}} · {{ui:permission.label.claude.acceptEdits}} · {{ui:permission.label.claude.auto}} · {{ui:permission.label.claude.fullAccess}} |
 | Codex | {{ui:permission.label.defaultCodex}} · {{ui:permission.label.onRequest}} · {{ui:permission.label.acceptEditsCodex}} · {{ui:permission.label.fullAccess}} |
 | Antigravity | {{ui:permission.label.default}} · {{ui:permission.label.plan}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 | pi | {{ui:permission.label.defaultCodex}} · {{ui:permission.label.fullAccess}} |
 | opencode | {{ui:permission.label.default}} · {{ui:permission.label.plan}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 | Hermes | {{ui:permission.label.default}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 
-- ClaudeのAlways ask、Codexの{{ui:permission.label.onRequest}}、{{ui:permission.label.fullAccess}}以外のopencodeのすべてのモード、Hermesのファイル変更と危険なコマンドでは、追加の権限が必要になったときにペイン内で許可を求めます。[許可と質問](approvals.md#permission)を参照してください。
-- Auto modeは、インストールされているClaude CLIが対応している場合にのみ表示されます。Codexの{{ui:permission.label.onRequest}}は、対応していない古いCodexでは表示されません。
-- Bypassと{{ui:permission.label.fullAccess}}は、プロジェクト外のファイルやコマンドにもアクセスします。本当に必要なときだけ使ってください。
+- Claudeの{{ui:permission.label.claude.default}}、Codexの{{ui:permission.label.onRequest}}、{{ui:permission.label.fullAccess}}以外のopencodeのすべてのモード、Hermesのファイル変更と危険なコマンドでは、追加の権限が必要になったときにペイン内で許可を求めます。[許可と質問](approvals.md#permission)を参照してください。
+- {{ui:permission.label.claude.auto}}は、インストールされているClaude CLIが対応している場合にのみ表示されます。Codexの{{ui:permission.label.onRequest}}は、対応していない古いCodexでは表示されません。
+- {{ui:permission.label.claude.fullAccess}}と{{ui:permission.label.fullAccess}}は、プロジェクト外のファイルやコマンドにもアクセスします。本当に必要なときだけ使ってください。
 
 ### Antigravity {#antigravity}
 GoogleのエージェントはAntigravity CLI(`agy`)で動きます。AntigravityはClaudeやGPT-OSSのモデルも実行できます。
@@ -176,7 +176,7 @@ Mighty表示の上部にある{{ui:graph.view.diagram}} | {{ui:graph.view.timeli
 - 上部の ◀ {{ui:graph.structure.board.previous}}と ▶ {{ui:graph.structure.board.next}}で前後に移動します。その間の「リクエスト 3 / 7」のようなタイトルを押すと一覧が開き、番号、タイトル、状態、ステップを見てすぐに選べます。
 - その下に状態（スタイルを使うペインではパイプライン名も）が表示されます。ステップは各列の上のチップで、チップは線でつながっています。スタイルのないペインでは{{ui:graph.structure.column.request}} → {{ui:graph.structure.column.execution}} → {{ui:graph.structure.column.result}}、スタイルを使うペインではそのモードのフェーズです。
 - 内容はステップごとに横に並んだ列に入ります。列の見出しにはステップのチップとカードの数があります。スタイルのないペインでは、{{ui:graph.structure.column.request}}列に送ったリクエスト、{{ui:graph.structure.column.execution}}列に進み具合（最新のメッセージとツール呼び出し）と状態のカードとサブエージェントごとに一枚のカード、{{ui:graph.structure.column.result}}列に結果が置かれます。スタイルを使うペインでは、フェーズの列ごとにそのフェーズのリクエストカード（リクエスト、実行の要約、結果の1行）と、その下にサブエージェントのカードが置かれます。入れ子のサブエージェントは字下げされ、どのブロックの下かが書かれます。
-- 状態は色でもわかります。各列の背景はそのステップの状態の色になり（完了は緑、実行中は青、待機中は黄、エラーは赤、停止はグレー）、今のステップは最新のリクエストの状態に合わせ、まだ来ていないステップは背景のままです。カードは左端に同じ色のバーがあり、背景は列より淡くなります。実行中のカードは動く枠線、待機中のカードは黄色の枠線のままで、状態の文字もそのまま表示されます。
+- 状態は色でもわかります。各列の背景にはそのステップの状態の色が薄く敷かれ（完了は緑、実行中と通知待ちは青、ユーザーの応答待ちは黄、エラーは赤、停止はグレー）、今のステップは最新のリクエストの状態に合わせ、まだ来ていないステップは背景のままです。カードは左端に同じ色のバーがあり、背景は列より濃く色づきます。実行中のカードは動く枠線、待機中のカードは黄色の枠線のままで、状態の文字もそのまま表示されます。
 - 長い文章は折りたたまれていて、{{ui:graph.structure.more}}を押すとその場で開きます。カードの見出しにある小さなボタンを押すと、フローでそのブロックを表示します。
 - 表示は最新のものから開き、そのままにしておくと新しいリクエストやパイプラインに付いていきます。前のものを見ている間に新しいものが来ても位置はそのままで、▶ の横に{{ui:graph.structure.board.newRequest}}または{{ui:graph.structure.board.newPipeline}}の印が付きます。印を押すと最新のものへ移ります。
 - 列はそれぞれ別々に動きます。列の見出しは上に残り、カードだけが上下に動きます。列の上でトラックパッドやマウスホイールを上下にスクロールするか、何もない場所をドラッグすると、その列だけが動きます。列が画面に収まらないときは、横にスクロールするかドラッグしてパイプラインを横に動かします。
@@ -196,3 +196,4 @@ Claude ペインのリクエストが Edit・Write・MultiEdit でファイル�
 - ファイルにチェックを入れて「選択したN件を元に戻す」を押し、確認すると、そのファイルはリクエスト前の内容に戻ります。リクエストが新しく作ったファイルはゴミ箱(Windows ではごみ箱)に移します。ファイルの今のエンコーディングと権限はそのままで、リクエストの後に自分で直した内容も一緒に消えます。
 - 後のリクエストも同じファイルを変えていたら、そちらを先に元に戻す必要があります。なくなったファイル、テキストとして読めないファイル(1 MiB 超・バイナリ)、すでにリクエスト前と同じファイルは元に戻しません。
 - ペインごとに直近 20 件のリクエストの元の内容を保管します。シェルコマンドが変えたファイル、ほかのエージェントのペイン、リモートワークスペースのペインにはこのボタンがありません。
+- 変更の行を右クリックすると、そのファイルのその行を外部エディタで開きます。ヘッダーのボタン({{ui:editor.open}})は選んだファイルを開きます([エディタで開く](terminal-files-browser.md#open-in-editor))。

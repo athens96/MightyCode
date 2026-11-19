@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diffLines, worktreeBar } from './worktree';
+import { diffLines, newSideLines, worktreeBar } from './worktree';
 import type { PaneWorktree } from '../store/models';
 
 const t = (key: string, vars?: Record<string, string | number>) => key + (vars ? JSON.stringify(vars) : '');
@@ -18,10 +18,17 @@ describe('the worktree bar', () => {
     expect(model.resolve?.action).toBe('resolve');
     expect(model.behind).toBeUndefined();
     expect(model.setup?.tone).toBe('err');
-    expect(model.menu.map((m) => m.action)).toEqual(['changes', 'terminal', 'reveal', 'port', 'undo', 'pr', 'discard']);
+    expect(model.menu.map((m) => m.action)).toEqual(['changes', 'terminal', 'reveal', 'editor', 'port', 'undo', 'pr', 'discard']);
   });
 
   it('reads a diff line by line', () => {
     expect(diffLines('--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n same').map((l) => l.kind)).toEqual(['meta', 'meta', 'hunk', 'del', 'add', 'same']);
+  });
+
+  it('numbers each diff line by the file as it is now, for 편집기에서 열기', () => {
+    const diff = 'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -10,4 +12,5 @@ fn\n keep\n-gone\n---dashes removed\n+new\n+more\n keep\n\\ No newline at end of file';
+    expect(newSideLines(diff)).toEqual([null, null, null, 12, 12, 13, 13, 13, 14, 15, null]);
+    expect(newSideLines('@@ -1 +0,0 @@\n-only')).toEqual([1, 1]);
+    expect(newSideLines('')).toEqual([null]);
   });
 });

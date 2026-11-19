@@ -15,6 +15,8 @@ import { hostCapabilities } from '../slot/host';
 import { newClientId, newPendingRequest } from '../pending/requests';
 import { Motion } from '../theme/tokens';
 import { appendingBlock } from '../mighty/runChangesModel';
+import { NoticeChip } from '../conversation/NoticeChip';
+import { parseDelegationNotice } from '../conversation/delegationNotice';
 
 /** The host on the Mac, where ⌘Enter is the second send (shell/menu.ts `macHost`). */
 const onMac = () => hostCapabilities()?.platform === 'macos';
@@ -340,14 +342,18 @@ export function Composer({ session }: { session: RunSession }) {
               <span>{t(state.busy ? 'queue.waitingBusy' : 'queue.waiting', { count: queued })}</span>
             </div>
             {queue.waitsOnBackground && <div className="composer-queue-notice">{t(secondSendWords(queue.waitsOnBackground, onMac()))}</div>}
-            {queue.held.map((item, index) => (
+            {queue.held.map((item, index) => {
+              // A child's notice reads as a chip (its title and what happened); the pointer text the agent gets is its tooltip.
+              const notice = parseDelegationNotice(item.text);
+              return (
               <div className="composer-queue-item" key={item.id} data-queue-held={item.id}>
                 <span className="composer-queue-number">{index + 1}</span>
-                <span className="composer-queue-text">{item.text}</span>
+                <span className="composer-queue-text">{notice ? <NoticeChip notice={notice} /> : item.text}</span>
                 <RunNowButton paneId={paneId} itemId={item.id} runNow={readRunNow(item.runNow)} held={queue.held.length} />
                 <span className="composer-queue-pin" title={t('queue.heldHelp')} aria-label={t('queue.held')}><Icon name="pin" size={10} weight={2.2} fill /></span>
               </div>
-            ))}
+              );
+            })}
             {queue.items.map((item, index) => (
               <div className="composer-queue-item" key={item.id} data-queue-item={item.id}>
                 <span className="composer-queue-number">{queue.held.length + index + 1}</span>

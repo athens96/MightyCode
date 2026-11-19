@@ -557,7 +557,7 @@ fn a_pane_projects_as_the_diagram_draws_it() {
     assert!(command.flow.as_ref().is_some_and(|f| f.get("card").is_some()), "its card");
     let result = &made.blocks[&node_id("r", "result")];
     assert!(
-        result.title == "알림 대기 중" && result.status == "waiting" && result.tone == "wait" && result.awaiting.is_some(),
+        result.title == "알림 대기 중" && result.status == "running" && result.tone == "run" && result.awaiting.is_some(),
         "the request awaiting its command's notice is the 알림 대기 block: {result:?}"
     );
     let awaiting = result.awaiting.as_ref().expect("awaiting");

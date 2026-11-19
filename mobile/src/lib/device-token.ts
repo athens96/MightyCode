@@ -89,6 +89,7 @@ export type AuthErrorReason =
   | 'device-conflict'
   | 'device-limit'
   | 'legacy-refused'
+  | 'approval-denied'
   | 'malformed'
   | 'unknown';
 
@@ -132,6 +133,13 @@ const REJECTIONS: Record<AuthErrorReason, Rejection> = {
     final: false,
     retryWithNewClientId: false,
     messageKey: 'phone.relay.failure.deviceLimit',
+  },
+  // The person at the computer refused this pairing (or did not answer in time), and the
+  // code it used is spent: only a new QR code pairs again.
+  'approval-denied': {
+    final: true,
+    retryWithNewClientId: false,
+    messageKey: 'phone.relay.failure.approvalDenied',
   },
   // This app always sends a `clientId`, so a host that refuses old apps is not talking
   // about us; it is just one more answer worth retrying.

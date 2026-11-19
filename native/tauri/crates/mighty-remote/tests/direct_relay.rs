@@ -92,6 +92,8 @@ impl Fixture {
             direct_endpoints: Some(Arc::new(move || endpoints.endpoints())),
             // Loopback stands in for Tailscale (C#'s address seam).
             any_direct_peer: true,
+            // The person allows every new phone at once.
+            approver: Some(support::fake_relay::allow_all(Arc::default())),
             ..RelayOptions::default()
         };
         let platform = fake::platform(&directory, Os::Windows);
@@ -435,7 +437,8 @@ async fn mobile_direct_a_reservation_is_given_back_exactly_once() {
     // Without the seam a peer outside Tailscale's ranges is refused by the host too.
     let directory = temp("tailnet-only");
     let identity = Arc::new(Identity::load_or_create(Arc::new(FileStore(directory.clone())), true).unwrap());
-    let options = RelayOptions { watches_network: false, ..RelayOptions::default() };
+    let options =
+        RelayOptions { watches_network: false, approver: Some(support::fake_relay::allow_all(Arc::default())), ..RelayOptions::default() };
     let platform = fake::platform(&directory, Os::Windows);
     let host = RelayHost::with_options(identity, MobileRemoteSettings::default(), Arc::new(Paths), platform, options);
     host.apply(settings("ws://127.0.0.1:9", true)).await.unwrap();

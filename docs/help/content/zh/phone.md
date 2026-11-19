@@ -19,9 +19,9 @@ section: phone
 在手机上：
 1. 打开手机应用，轻点{{ui:phone.tabs.hosts}}标签页中的{{ui:phone.hosts.addHost}}。首次打开时会先显示连接指南。
 2. 用{{ui:phone.pair.mode.qr}}扫描电脑上的二维码。如果无法使用相机，请在电脑上点击{{ui:settings.mobileRemote.copyLinkButton}}按钮，把链接发到手机，再粘贴到{{ui:phone.pair.mode.manual}}中。链接中含有密钥，因此会作为机密内容复制，并在一分钟后从剪贴板清除。
-3. 轻点{{ui:phone.pair.connect}}即可连接，这部手机会出现在电脑的{{ui:settings.mobileRemote.connectedDevicesTitle}}中。
+3. 轻点{{ui:phone.pair.connect}}后，电脑上会弹出“新设备请求连接”窗口和通知，手机上会提示你在电脑上允许。在电脑上点击{{ui:settings.mobileRemote.approval.allow}}即可连接，这部手机会出现在{{ui:settings.mobileRemote.connectedDevicesTitle}}中。60 秒内未允许或点击{{ui:settings.mobileRemote.approval.refuse}}（默认按钮）则不会连接。不是你亲自配对的手机请不要允许。
 
-二维码旁有{{ui:settings.mobileRemote.hostIdLabel}}和{{ui:settings.mobileRemote.keyLabel}}。密钥要点击显示按钮才会显示。
+二维码旁有{{ui:settings.mobileRemote.hostIdLabel}}和{{ui:settings.mobileRemote.keyLabel}}。密钥要点击显示按钮才会显示。二维码、链接和密钥是一次性的配对码：显示在屏幕上时一直有效，关闭界面 10 分钟后失效，有一台设备连接或被拒绝后会换成新的配对码。已配对的设备用设备令牌连接，不会再次请求允许。
 
 {{ui:windows.mobile.connectionTitle}}中有两种连接方式：
 - {{ui:windows.mobile.relayTitle}}：默认方式，无需任何操作。
@@ -29,10 +29,17 @@ section: phone
 
 ![[settings-mobile]]
 
-已连接的手机和[已配对的电脑](remote.md#pair)会在{{ui:settings.mobileRemote.connectedDevicesTitle}}列表中各占一行，电脑以电脑图标区分。只要有任何设备，即使手机连接开关已关闭，这个列表也会显示。不再使用某台设备时，请点击该行的{{ui:settings.mobileRemote.revokeRowButton}}按钮。只有这台设备会解除配对，其他手机和电脑仍保持连接。此时配对密钥也会更新，因此之后要连接设备（包括重新连接刚解除的设备）都需要使用新的二维码或链接。已连接的手机再次扫描二维码连接时，会用新的条目替换它原来的条目，旧的连接不再可用。
+已连接的手机和[已配对的电脑](remote.md#pair)会在{{ui:settings.mobileRemote.connectedDevicesTitle}}列表中各占一行，电脑以电脑图标区分（重启应用后仍保留）。只要有任何设备，即使手机连接开关已关闭，这个列表也会显示。不再使用某台设备时，请点击该行的{{ui:settings.mobileRemote.revokeRowButton}}按钮。只有这台设备会解除配对，其他手机和电脑仍保持连接。此时屏幕上的配对码也会更新。已连接的手机再次扫描二维码连接时，会像新设备一样请求允许（并提示将替换原设备），允许后旧的连接不再可用。
 
 > [!warning]
-> 点击{{ui:settings.mobileRemote.regenerateKeyButton}}后，所有已连接的手机和已配对的电脑都会解除配对，需要重新连接。请在二维码、密钥或配对链接被他人看到时使用。
+> 点击{{ui:settings.mobileRemote.regenerateKeyButton}}后，所有已连接的手机和已配对的电脑都会解除配对，这台电脑的中继 ID 和加密密钥也会重新生成，所有设备都需要用新的二维码或链接重新连接。请在有人未经允许连接或设备丢失时使用。
+
+## 手机可见的工作区 {#workspaces}
+在 {{ui:settings.remote.phoneTab}} 标签页的 {{ui:settings.mobileRemote.workspacesTitle}} 中，选择配对的手机能看到这台电脑的哪些工作区。
+- {{ui:settings.mobileRemote.workspacesAll}}：默认值。手机能看到这台电脑上的所有工作区，并打开其中的窗格、文件（包括 `.env` 这样的文件）和运行。
+- {{ui:settings.mobileRemote.workspacesShared}}：手机只能看到 [{{ui:settings.remote.shareTitle}}](remote.md#share) 当前共享的工作区。共享关闭时一个工作区也看不到；不能打开其他工作区的窗格、文件或工作地图，也不能向其发送请求，也收不到这些窗格的通知。
+
+更改从手机的下一个请求起生效，连接不会断开。
 
 ## 通过 Tailscale 直接连接 {#direct}
 Mac 和手机在同一个 [Tailscale](https://tailscale.com) 网络中时，手机会不经中继直接连接 Mac。配对方式和加密都不变；直接连不上 Mac 时，手机会自动改用中继。
@@ -115,4 +122,4 @@ Windows 电脑也一样，只是需要一条 Windows 防火墙规则，以免连
 ## 更改中继地址 {#own-relay}
 默认中继（Cloudflare）内置在应用中，通常不需要更改。如果需要使用其他中继，请展开 {{ui:settings.remote.phoneTab}} 标签页底部折叠的 {{ui:settings.advancedTitle}}。
 - {{ui:settings.mobileRemote.relayLabel}}：填写中继地址（`wss://…`）并点击{{ui:settings.mobileRemote.applyButton}}。留空则使用默认中继。
-- {{ui:settings.mobileRemote.legacyAppsToggle}}：默认打开，没有设备令牌的旧手机应用也能连接。关闭后只有带设备令牌的应用能连接，仅凭密钥连接的手机会立即断开，所以请在所有手机都更新到最新应用后再关闭。
+- {{ui:settings.mobileRemote.legacyAppsToggle}}：默认关闭。开启后（确认警告后），没有设备令牌的很旧的手机应用仅凭下方的{{ui:settings.mobileRemote.legacyKeyLabel}}即可连接，无需允许。任何知道该密钥的人都能远程操作这台电脑，请仅在需要时开启，用完后关闭。当前应用不需要它。

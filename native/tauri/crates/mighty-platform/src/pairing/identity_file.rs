@@ -13,10 +13,16 @@
 //!
 //! Writing is `JsonSerializer.Serialize(saved, Wire.Json)`: C#'s member order, nulls left out, strings escaped as `Utf8JsonWriter`
 //! escapes them (non-ASCII and `" & ' + < > \` `` ` `` as `\uXXXX`).
+//!
+//! With a vault (the app's store: DPAPI) the file is version 2, `{version:2, hostId, vault, devices}`: the three secrets are in the
+//! vault item `vault` names ([`super::vaulted`]), the rest as above ([`encode_vaulted`], [`decode_stored`]). C# 0.4.x and builds
+//! before it refuse version 2, so going back to one of them after this means pairing the phones again; a version 1 file found later
+//! is read as before and moved to the vault.
 
 use base64::Engine;
 use serde_json::{Map, Value};
 
+use super::vaulted::{self, Secrets};
 use crate::{PairedDevice, PairingIdentity, PlatformError, PushRegistration, Result};
 
 /// The folder under the profile (C# `MobileIdentity(Path.Combine(dataDir, "mobile-remote"))`).
@@ -35,25 +41,41 @@ fn invalid() -> PlatformError {
 }
 
 /// The file's text read as C#'s constructor reads it: `Err` for any damage it refuses (the port's contract: the caller decides),
-/// a push registration the row cannot use dropped with the phone kept.
+/// a push registration the row cannot use dropped with the phone kept. A version 2 file (secrets in the vault) is refused here.
 pub fn decode(text: &str) -> Result<PairingIdentity> {
+    decode_stored(text, |_| Err(invalid())).map(|(identity, _)| identity)
+}
+
+/// [`decode`], and a version 2 file read with its secrets from `vault` (given the account the file names; its `Err` is the
+/// answer), every check then as for version 1. Also answers the account when the secrets came from the vault.
+pub fn decode_stored(text: &str, vault: impl FnOnce(&str) -> Result<Secrets>) -> Result<(PairingIdentity, Option<String>)> {
     let root: Value = serde_json::from_str(text).map_err(|_| invalid())?;
     let root = root.as_object().ok_or_else(invalid)?;
     let version = number(member(root, "version"))?;
     let host_id = string(member(root, "hostId"))?.ok_or_else(invalid)?;
-    let host_token = string(member(root, "hostToken"))?.ok_or_else(invalid)?;
-    let pairing_key = string(member(root, "pairingKey"))?.ok_or_else(invalid)?;
-    let secret = string(member(root, "secretKeyB64"))?.ok_or_else(invalid)?;
     let devices = match member(root, "devices") {
         Some(Value::Array(items)) => items.iter().map(device).collect::<Result<Vec<_>>>()?,
         _ => return Err(invalid()),
     };
-    let secret_key: [u8; 32] =
-        base64::engine::general_purpose::STANDARD.decode(secret.trim()).ok().and_then(|bytes| bytes.try_into().ok()).ok_or_else(invalid)?;
+    let (host_token, pairing_key, secret_key, account) = if version == Some(2) {
+        let account = string(member(root, "vault"))?.filter(|a| vaulted::account(a)).ok_or_else(invalid)?;
+        let secrets = vault(&account)?;
+        (secrets.host_token, secrets.pairing_key, secrets.secret_key, Some(account))
+    } else {
+        let host_token = string(member(root, "hostToken"))?.ok_or_else(invalid)?;
+        let pairing_key = string(member(root, "pairingKey"))?.ok_or_else(invalid)?;
+        let secret = string(member(root, "secretKeyB64"))?.ok_or_else(invalid)?;
+        let secret_key: [u8; 32] = base64::engine::general_purpose::STANDARD
+            .decode(secret.trim())
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or_else(invalid)?;
+        (host_token, pairing_key, secret_key, None)
+    };
     let mut ids: Vec<&str> = devices.iter().map(|d| d.id.as_str()).collect();
     ids.sort_unstable();
     ids.dedup();
-    if version != Some(1)
+    if (version != Some(1) && account.is_none())
         || !identifier(&host_id)
         || !dollar(&host_token, |t| t.len() == 64 && t.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
         || !token_shape(&pairing_key)
@@ -73,20 +95,37 @@ pub fn decode(text: &str) -> Result<PairingIdentity> {
             d
         })
         .collect();
-    Ok(PairingIdentity { host_id, host_token, pairing_key, secret_key, devices })
+    Ok((PairingIdentity { host_id, host_token, pairing_key, secret_key, devices }, account))
 }
 
 /// The text C#'s `Save` writes for `identity` (`Wire.Json`: camelCase, nulls left out, C#'s member order and escaping).
 pub fn encode(identity: &PairingIdentity) -> Result<String> {
+    encode_with(identity, None)
+}
+
+/// Version 2: [`encode`]'s text with `"vault":<account>` in place of the three secrets (`{version:2, hostId, vault, devices}`).
+pub fn encode_vaulted(identity: &PairingIdentity, account: &str) -> Result<String> {
+    encode_with(identity, Some(account))
+}
+
+fn encode_with(identity: &PairingIdentity, account: Option<&str>) -> Result<String> {
     let mut out = String::with_capacity(512 + identity.devices.len() * 256);
-    out.push_str("{\"version\":1,\"hostId\":");
+    out.push_str(if account.is_some() { "{\"version\":2,\"hostId\":" } else { "{\"version\":1,\"hostId\":" });
     escape_into(&mut out, &identity.host_id);
-    out.push_str(",\"hostToken\":");
-    escape_into(&mut out, &identity.host_token);
-    out.push_str(",\"pairingKey\":");
-    escape_into(&mut out, &identity.pairing_key);
-    out.push_str(",\"secretKeyB64\":");
-    escape_into(&mut out, &base64::engine::general_purpose::STANDARD.encode(identity.secret_key));
+    match account {
+        Some(account) => {
+            out.push_str(",\"vault\":");
+            escape_into(&mut out, account);
+        }
+        None => {
+            out.push_str(",\"hostToken\":");
+            escape_into(&mut out, &identity.host_token);
+            out.push_str(",\"pairingKey\":");
+            escape_into(&mut out, &identity.pairing_key);
+            out.push_str(",\"secretKeyB64\":");
+            escape_into(&mut out, &base64::engine::general_purpose::STANDARD.encode(identity.secret_key));
+        }
+    }
     out.push_str(",\"devices\":[");
     for (index, device) in identity.devices.iter().enumerate() {
         if index > 0 {
@@ -456,6 +495,32 @@ mod tests {
         let no_kinds = decode(&swap(",\"kinds\":[\"completed\",\"permission\"]", "")).unwrap();
         assert!(no_kinds.devices[1].push.is_none(), "a registration without kinds is dropped");
         assert!(decode(&swap(HOST_TOKEN, &format!("{HOST_TOKEN}\\n"))).is_ok(), ".NET's $ takes a final line feed");
+    }
+
+    /// Version 2 holds no secret and reads back with the vault's; the version 1 reader refuses it; a vault's refusal is the answer;
+    /// the vault's secrets pass the same checks as the file's (Windows' 64 lower-case hex digits for the host token).
+    #[test]
+    fn a_version_2_file_names_the_vault_and_reads_with_its_secrets() {
+        let account = vaulted::new_account();
+        let text = encode_vaulted(&sample(), &account).unwrap();
+        assert!(text.starts_with(&format!(
+            "{{\"version\":2,\"hostId\":\"4e0c0a3f-8a59-4a0f-9a57-0a3c1b2d3e4f\",\"vault\":\"{account}\",\"devices\":["
+        )));
+        assert!(!text.contains(HOST_TOKEN) && !text.contains(KEY) && !text.contains("secretKeyB64"));
+        assert!(decode(&text).is_err(), "the version 1 reader (and C#) refuses it");
+        let secrets = Secrets::of(&sample());
+        let read = decode_stored(&text, |a| {
+            assert_eq!(a, account);
+            Ok(secrets.clone())
+        })
+        .unwrap();
+        assert_eq!(read, (sample(), Some(account.clone())));
+        let refused = decode_stored(&text, |_| Err(PlatformError::Refused("locked".into()))).unwrap_err();
+        assert!(matches!(refused, PlatformError::Refused(why) if why == "locked"));
+        let upper = Secrets { host_token: HOST_TOKEN.to_uppercase(), ..secrets.clone() };
+        assert!(decode_stored(&text, |_| Ok(upper)).is_err());
+        assert!(decode_stored(&text.replace(&account, "mobile-pairing-x"), |_| Ok(secrets.clone())).is_err());
+        assert_eq!(decode_stored(&encode(&sample()).unwrap(), |_| unreachable!()).unwrap(), (sample(), None));
     }
 
     #[test]

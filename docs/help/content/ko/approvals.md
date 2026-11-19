@@ -16,7 +16,7 @@ section: approvals
 승인은 이 요청 한 번에만 적용됩니다. 앞으로도 계속 허용하는 규칙은 만들지 않습니다.
 
 > [!note]
-> 승인 카드는 Claude 창(Always ask 등)과 Codex의 {{ui:permission.label.onRequest}} 권한, {{ui:permission.label.fullAccess}}을 뺀 opencode 창의 모든 권한에서 뜹니다. Hermes 창에서는 파일 수정과 위험한 명령에 뜹니다. 다른 권한에서는 CLI 설정에 따라 허용되거나 막힙니다. Antigravity는 일하는 방식이 달라 [따로 묻습니다](#antigravity-permission).
+> 승인 카드는 Claude 창({{ui:permission.label.claude.default}} 등)과 Codex의 {{ui:permission.label.onRequest}} 권한, {{ui:permission.label.fullAccess}}을 뺀 opencode 창의 모든 권한에서 뜹니다. Hermes 창에서는 파일 수정과 위험한 명령에 뜹니다. 다른 권한에서는 CLI 설정에 따라 허용되거나 막힙니다. Antigravity는 일하는 방식이 달라 [따로 묻습니다](#antigravity-permission).
 
 ## Antigravity의 권한 카드 {#antigravity-permission}
 Antigravity는 일하는 도중에 앱에 물어볼 수 없습니다. 물어봐야 하는 작업(명령 실행, 파일 쓰기 등)을 만나면 그 작업만 건너뛰고 턴을 끝낸 뒤, 거절한 작업을 모두 모아 카드로 묻습니다. 권한이 {{ui:permission.label.default}}일 때도 뜹니다. 휴대폰에도 같은 카드가 뜹니다.

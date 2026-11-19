@@ -202,6 +202,14 @@ module uses those. The host answers 150 methods (`tauri-logs/unimplemented.json`
   tile of an older run too). A Claude run's Edit, Write and MultiEdit results keep the files' originals (`FileOriginalStore`: the
   profile's `file-originals` with `--allow-state-write`, else `%LOCALAPPDATA%\dev.mightycode.native\file-originals\<profile>`; the work map
   reads the same folder), pruned at the start to what the state names, a closed pane's dropped and a run's when its graph lets it go.
+- **편집기에서 열기 and the review queue** (`editor.rs` over mighty-tools' `editor`, `review.rs`): `openInEditor{source: files |
+  reference | worktree, paneId | id, path, line?}` resolves the path inside the files pane's workspace, the pane's run folder or the
+  worktree (refusing anything else) and starts the editor Settings › 일반 › 에이전트 창's 외부 편집기 picks (자동, an editor found along
+  the login shell's PATH or in its app bundle / install folder, or 시스템 기본) detached, its program and arguments as they are (named in
+  the CI guard's detached-start list). `reviewQueue{refresh?}` answers the review queue (worktree panes and delegated children that
+  finished with changes, each pane's newest finished request with captured changes), read again when a run ends (debounced), when the
+  panel opens or refreshes and after its actions, and pushed as `review{queue}` when it changed; `reviewChanges{id}` (a child's changes
+  sheet) and `reviewDismiss{key}`.
 - **The work map** (`workmap.rs`, C# MainWindow.WorkMap.cs): `openWorkMap` (the workspace's `workmap:<id>` pane, placed as the files
   pane is, never saved), `workMapState` (the model, nulls kept), `workMapSummarize` (one at a time per workspace; the model is pushed
   again as `workmap` when it ends), `workMapOpenFile` (files.rs's `open_file_in_pane`: the file revealed, selected and previewed in the

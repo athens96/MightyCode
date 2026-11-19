@@ -40,16 +40,16 @@ section: agent-pane
 
 | 智能体 | 可选权限 |
 |---|---|
-| Claude | Plan mode · Always ask · Accept file edits · Auto mode · Bypass |
+| Claude | {{ui:permission.label.claude.plan}} · {{ui:permission.label.claude.default}} · {{ui:permission.label.claude.acceptEdits}} · {{ui:permission.label.claude.auto}} · {{ui:permission.label.claude.fullAccess}} |
 | Codex | {{ui:permission.label.defaultCodex}} · {{ui:permission.label.onRequest}} · {{ui:permission.label.acceptEditsCodex}} · {{ui:permission.label.fullAccess}} |
 | Antigravity | {{ui:permission.label.default}} · {{ui:permission.label.plan}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 | pi | {{ui:permission.label.defaultCodex}} · {{ui:permission.label.fullAccess}} |
 | opencode | {{ui:permission.label.default}} · {{ui:permission.label.plan}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 | Hermes | {{ui:permission.label.default}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 
-- Claude 的 Always ask、Codex 的{{ui:permission.label.onRequest}}除{{ui:permission.label.fullAccess}}外的所有 opencode 权限，以及 Hermes 的文件修改和危险命令在需要额外权限时，会在窗格中请求批准。请参阅[批准与提问](approvals.md#permission)。
-- 只有已安装的 Claude CLI 支持时，才会显示 Auto mode。Codex 的{{ui:permission.label.onRequest}}在不支持它的旧版 Codex 中不显示。
-- Bypass 和{{ui:permission.label.fullAccess}}权限也能访问项目以外的文件和命令。请仅在确有必要时使用。
+- Claude 的 {{ui:permission.label.claude.default}}、Codex 的{{ui:permission.label.onRequest}}除{{ui:permission.label.fullAccess}}外的所有 opencode 权限，以及 Hermes 的文件修改和危险命令在需要额外权限时，会在窗格中请求批准。请参阅[批准与提问](approvals.md#permission)。
+- 只有已安装的 Claude CLI 支持时，才会显示 {{ui:permission.label.claude.auto}}。Codex 的{{ui:permission.label.onRequest}}在不支持它的旧版 Codex 中不显示。
+- {{ui:permission.label.claude.fullAccess}} 和{{ui:permission.label.fullAccess}}权限也能访问项目以外的文件和命令。请仅在确有必要时使用。
 
 ### Antigravity {#antigravity}
 Google 的智能体通过 Antigravity CLI（`agy`）运行，它也可以运行 Claude 和 GPT-OSS 模型。
@@ -176,7 +176,7 @@ Claude 列出待办清单后，请求下方会按顺序为每个已开始的步�
 - 用顶部的 ◀ {{ui:graph.structure.board.previous}}和 ▶ {{ui:graph.structure.board.next}}前后切换。点击两者之间的标题（如"请求 3 / 7"）会打开列表，显示每一项的编号、标题、状态和阶段，可直接选择。
 - 下方显示状态（使用风格的窗格还有流水线名称）。各阶段显示为每一列顶部的标签，标签之间用线相连。没有风格的窗格是{{ui:graph.structure.column.request}} → {{ui:graph.structure.column.execution}} → {{ui:graph.structure.column.result}}，使用风格的窗格是该模式的阶段。
 - 内容放在并排的列中，每个阶段一列，列头显示阶段标签和卡片数。没有风格时，{{ui:graph.structure.column.request}}列放请求，{{ui:graph.structure.column.execution}}列放显示进度（最新消息和工具调用）与状态的卡片，后面每个子代理一张卡片，{{ui:graph.structure.column.result}}列放结果。使用风格时，每个阶段列放该阶段的请求卡片（请求、执行摘要和一行结果），其子代理卡片放在下方。嵌套的子代理会缩进，并注明它在哪个块之下。
-- 颜色也会表示状态。每一列的背景按该阶段的状态着色（完成为绿色，运行中为蓝色，等待中为黄色，出错为红色，已停止为灰色），当前阶段跟随其最新请求的状态，尚未进行的阶段保持原来的背景。每张卡片左侧边缘有同色的竖条，背景比列的更浅；运行中的卡片保留流动的边框，等待中的卡片保留黄色边框，状态文字照常显示。
+- 颜色也会表示状态。每一列的背景铺上该阶段状态色的浅色（完成为绿色，运行中和等待通知为蓝色，等待你回应为黄色，出错为红色，已停止为灰色），当前阶段跟随其最新请求的状态，尚未进行的阶段保持原来的背景。每张卡片左侧边缘有同色的竖条，背景比列的颜色更深；运行中的卡片保留流动的边框，等待中的卡片保留黄色边框，状态文字照常显示。
 - 长文本默认折叠，点击{{ui:graph.structure.more}}即可就地展开。点击卡片标题栏中的小按钮，会在流程中显示该块。
 - 视图从最新的一项打开，停留在那里时会随新的请求或流水线前进。查看较早的一项时出现新项，位置保持不变，▶ 旁会出现{{ui:graph.structure.board.newRequest}}或{{ui:graph.structure.board.newPipeline}}标记，点击即可转到最新的一项。
 - 每一列各自移动：列头留在顶部，只有卡片上下移动。在某一列上用触控板或鼠标滚轮上下滚动，或拖动其中的空白处，只会移动这一列；列放不下时，横向滚动或拖动即可左右移动流水线。
@@ -196,3 +196,4 @@ Claude 窗格中的请求用 Edit、Write 或 MultiEdit 修改文件时，会保
 - 勾选文件，点击“撤销所选 N 个”并确认后，这些文件会恢复为请求前的内容。请求新建的文件会移到废纸篓（Windows 上为回收站）。文件保留当前的编码和权限；请求之后你手动做的修改也会一并丢失。
 - 如果之后的请求也改了同一文件，需要先撤销那个请求。已不存在、无法作为文本读取（超过 1 MiB 或二进制）或已与请求前相同的文件不会被撤销。
 - 每个窗格保存最近 20 个请求的原始内容。Shell 命令修改的文件、其他代理的窗格以及远程工作区的窗格没有此按钮。
+- 右键单击更改中的某一行，会在外部编辑器中打开该文件的这一行；标题栏的按钮({{ui:editor.open}})打开所选文件([在编辑器中打开](terminal-files-browser.md#open-in-editor))。

@@ -143,7 +143,11 @@ fn work_dashboard_cards_respect_usage_identity_and_stable_priority() {
     let cards: Vec<_> =
         panes.iter().map(|s| shell::make_card(s, if s.id() == "wait" { attention(1) } else { Attention::default() })).collect();
     let ordered: Vec<String> = shell::ordered(cards).iter().map(|c| c.session.id().to_string()).collect();
-    assert_eq!(ordered, ["wait", "run", "err", "new", "old", "stop", "idle"], "priority matches Mac and phone");
+    assert_eq!(
+        ordered,
+        ["wait", "err", "run", "new", "old", "stop", "idle"],
+        "what needs the user, then what failed, then what runs (the phone ranks errors right after its questions)"
+    );
     let same = [pane("a", "idle", "claude"), pane("b", "idle", "claude"), pane("c", "idle", "claude")];
     let kept: Vec<String> = shell::ordered(same.iter().map(|s| shell::make_card(s, Attention::default())).collect())
         .iter()

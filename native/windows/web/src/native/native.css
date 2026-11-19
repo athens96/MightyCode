@@ -48,6 +48,8 @@
 .settings-row-label > .native-n-stack > .native-stack > .native-node:first-child > .native-text,
 .settings-row-label > .native-n-grid > .native-grid > .native-node:first-child > .native-text { color: var(--ink); font-size: calc(var(--settings-row-name) * var(--text-scale, 1)); line-height: 19px; }
 .settings-row-label .native-stack.v { gap: 2px; }
+/* A line in a row's label (a status dot and its word, ●꺼짐): the dot 4px from its word, and both on one centre line. */
+.settings-row-label .native-stack.h { gap: var(--space-xs); align-items: center; }
 .settings-row-control { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-md); flex: none; max-width: 65%; flex-wrap: wrap; }
 .settings-row-control > .native-n-text > .native-text { color: var(--ink2); text-align: right; }
 .settings-row.wide { flex-direction: column; align-items: stretch; gap: var(--space-sm); }
@@ -83,7 +85,7 @@
    a dangerous one in err. */
 .native-button, .native-pull { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-xs); height: var(--dialog-button-height); padding: 0 var(--dialog-button-padding-x); border: 0; border-radius: var(--dialog-button-radius); background: var(--dialog-gray); color: var(--ink); font: inherit; font-size: calc(var(--type-body) * var(--text-scale, 1)); font-weight: 500; white-space: nowrap; cursor: default; }
 .native-button:hover:not(:disabled) { background: color-mix(in srgb, var(--dialog-gray) 82%, var(--ink)); }
-.native-button.accent { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.native-button.accent { background: var(--primary); color: var(--on-primary); font-weight: 600; }
 .native-button.destructive { background: var(--err); color: var(--on-status); font-weight: 600; }
 .native-button:disabled, .native-pull:disabled { opacity: .5; cursor: default; }
 .native-pull { border: 0; background: none; }
@@ -98,8 +100,8 @@
 .native-segmented button { flex: 1 1 auto; min-width: 0; padding: 0 10px; border: 0; border-radius: 5px; background: none; color: var(--ink2); font: inherit; font-size: calc(12.5px * var(--text-scale, 1)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 .native-segmented button.on { background: var(--segment-on); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .14); }
 .native-segmented button:disabled { opacity: .5; cursor: default; }
-.native-select { height: var(--dialog-button-height); max-width: 100%; padding: 0 6px 0 8px; border: var(--stroke-line) solid var(--line); border-radius: var(--dialog-button-radius); background: var(--card-raised); color: var(--ink); font: inherit; font-size: calc(var(--type-body) * var(--text-scale, 1)); }
-.native-field { min-height: var(--dialog-button-height); width: 100%; padding: 0 10px; border: var(--stroke-line) solid var(--line); border-radius: var(--dialog-button-radius); background: var(--card); color: var(--ink); font: inherit; font-size: calc(var(--type-body) * var(--text-scale, 1)); box-sizing: border-box; }
+.native-select { height: var(--dialog-button-height); max-width: 100%; padding: 0 6px 0 8px; border: var(--stroke-line) solid var(--line-strong); border-radius: var(--dialog-button-radius); background: var(--card-raised); color: var(--ink); font: inherit; font-size: calc(var(--type-body) * var(--text-scale, 1)); }
+.native-field { min-height: var(--dialog-button-height); width: 100%; padding: 0 10px; border: var(--stroke-line) solid var(--line-strong); border-radius: var(--dialog-button-radius); background: var(--card); color: var(--ink); font: inherit; font-size: calc(var(--type-body) * var(--text-scale, 1)); box-sizing: border-box; }
 .native-field:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 textarea.native-field { padding: 6px 10px; }
 .native-field.mono { font-family: var(--font-mono); }

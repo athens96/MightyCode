@@ -88,6 +88,12 @@ fn uploads_folder(host: &Host) -> std::path::PathBuf {
     }
 }
 
+/// What 이 컴퓨터 공유 shares now (none while sharing is off or was never started): what a phone held to the shared workspaces sees,
+/// in its routes and its pushes (mobile.rs).
+pub fn shared_workspace_ids() -> Vec<String> {
+    crate::remote::app_if_made().and_then(|app| app.host().map(|host| host.shared_workspace_ids())).unwrap_or_default()
+}
+
 /// The router, made the first time it is asked for.
 pub fn router(host: &Arc<Host>) -> Router {
     if let Some(state) = state(host) {
@@ -1116,6 +1122,9 @@ fn image_preview(host: &Host, name: &str, bytes: &[u8]) -> MobileImageResult {
 impl PhoneDesk for Desk {
     fn snapshot(&self) -> AppSnapshot {
         self.host().map(|h| Desk::snapshot_of(&h)).unwrap_or_default()
+    }
+    fn shared_workspace_ids(&self) -> Vec<String> {
+        shared_workspace_ids()
     }
     fn host_id(&self) -> String {
         self.host().ok().and_then(|h| crate::mobile::relay(&h)).map(|r| r.host_id()).unwrap_or_default()

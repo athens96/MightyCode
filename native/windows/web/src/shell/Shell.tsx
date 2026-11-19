@@ -14,6 +14,8 @@ import { MenuHost } from './parts';
 import { macShortcutAction, shortcutAction } from './shortcuts';
 import { macHost, useMenu } from './menu';
 import { Sidebar, sidebarSearchId } from './Sidebar';
+import { ReviewPanel } from '../review/ReviewPanel';
+import { toggleReview } from '../review/queue';
 import type { AppSnapshot } from '../store/models';
 
 function Grip({ width, setLive }: { width: number; setLive: (width: number | null) => void }) {
@@ -84,6 +86,7 @@ function useShortcuts(snapshot: AppSnapshot | null, blocked: boolean) {
         case 'settings': return call('openSettings');
         case 'files': return call('openFiles', {});
         case 'conversationSearch': return call('openConversationSearch', {});
+        case 'reviewQueue': return toggleReview();
         case 'help': return call('openHelp');
         case 'textLarger': return call('textSize', { step: 1 });
         case 'textSmaller': return call('textSize', { step: -1 });
@@ -138,6 +141,7 @@ export function Shell({ snapshot }: { snapshot: AppSnapshot | null }) {
         </div>
       </div>
       <Surfaces />
+      <ReviewPanel />
       <Dialogs />
       <PictureViewer />
     </MenuHost>

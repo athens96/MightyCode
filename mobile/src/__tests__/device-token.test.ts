@@ -148,6 +148,14 @@ describe('auth_error reasons', () => {
     );
   });
 
+  it('ends a pairing the computer refused for good: its code is spent, only a new QR pairs', () => {
+    expect(authRejectionFor('approval-denied')).toMatchObject({
+      reason: 'approval-denied',
+      final: true,
+      retryWithNewClientId: false,
+    });
+  });
+
   it('treats "legacy-refused" as a plain error, since this app always sends a clientId', () => {
     expect(authRejectionFor('legacy-refused')).toMatchObject({
       reason: 'legacy-refused',

@@ -851,14 +851,24 @@ impl Wire for PhaseModelsSnapshot {
     }
 }
 
-/// C# `MobileRemoteSettings(Enabled = false, RelayURL = "", AllowLegacyPhones = true, DirectEnabled = true, DirectPort = 43139)`.
+/// C# `MobileRemoteSettings(Enabled = false, RelayURL = "", AllowLegacyPhones = true, DirectEnabled = true, DirectPort = 43139)`, but
+/// the legacy apps off by default.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MobileRemoteSettings {
     pub enabled: bool,
     pub relay_url: Option<String>,
+    /// Apps without a device token may connect with the legacy key alone (Settings › 휴대폰 › 고급, with its warning). Off by default:
+    /// read from `legacyPhones`, written there only when on, so the `allowLegacyPhones: true` every older version wrote (its default
+    /// for everyone) does not turn it on.
     pub allow_legacy_phones: bool,
+    /// `allowLegacyPhones` as C# and the older versions wrote it (their default true), written back as read so the file stays the one
+    /// they write; it decides nothing any more ([`MobileRemoteSettings::allow_legacy_phones`] does). The switch sets both.
+    pub legacy_phones_as_saved: bool,
     pub direct_enabled: bool,
     pub direct_port: i32,
+    /// 휴대폰에서 볼 워크스페이스: false every workspace of this computer (the default), true only those 이 컴퓨터 공유 shares now.
+    /// Saved as `phoneSharedOnly` only when on (C# and Swift never write it; anything but true reads as off).
+    pub phone_shared_only: bool,
 }
 
 /// C# `MobileDirect.DefaultPort`.
@@ -869,9 +879,11 @@ impl Default for MobileRemoteSettings {
         MobileRemoteSettings {
             enabled: false,
             relay_url: Some(String::new()),
-            allow_legacy_phones: true,
+            allow_legacy_phones: false,
+            legacy_phones_as_saved: true,
             direct_enabled: true,
             direct_port: MOBILE_DIRECT_PORT,
+            phone_shared_only: false,
         }
     }
 }
@@ -882,9 +894,11 @@ impl Wire for MobileRemoteSettings {
         Ok(MobileRemoteSettings {
             enabled: json::boolean(o.get("enabled"), false)?,
             relay_url: json::string(o.get("relayURL"), some(""))?,
-            allow_legacy_phones: json::boolean(o.get("allowLegacyPhones"), true)?,
+            allow_legacy_phones: o.get("legacyPhones").and_then(Value::as_bool).unwrap_or(false),
+            legacy_phones_as_saved: json::boolean(o.get("allowLegacyPhones"), true)?,
             direct_enabled: json::boolean(o.get("directEnabled"), true)?,
             direct_port: json::int32(o.get("directPort"), MOBILE_DIRECT_PORT)?,
+            phone_shared_only: o.get("phoneSharedOnly").and_then(Value::as_bool).unwrap_or(false),
         })
     }
 
@@ -892,9 +906,15 @@ impl Wire for MobileRemoteSettings {
         out.begin_object();
         out.prop_bool("enabled", self.enabled);
         out.prop_str("relayURL", self.relay_url.as_deref());
-        out.prop_bool("allowLegacyPhones", self.allow_legacy_phones);
+        out.prop_bool("allowLegacyPhones", self.legacy_phones_as_saved);
+        if self.allow_legacy_phones {
+            out.prop_bool("legacyPhones", true);
+        }
         out.prop_bool("directEnabled", self.direct_enabled);
         out.prop_int("directPort", self.direct_port as i64);
+        if self.phone_shared_only {
+            out.prop_bool("phoneSharedOnly", true);
+        }
         out.end_object();
     }
 }
@@ -1966,5 +1986,41 @@ mod tests {
             AppSnapshot::read(&serde_json::from_str::<Value>(r#"{"autoLoginCLIs":"yes","referenceBubbleWidth":"x"}"#).unwrap()).unwrap();
         assert_eq!(lenient.auto_login_clis, None);
         assert_eq!(lenient.reference_bubble_width, None);
+    }
+
+    /// 휴대폰에서 볼 워크스페이스: every local workspace by default (nothing new written, so C#'s and Swift's text stays as it was), only
+    /// the shared ones once chosen, which survives a save, a read and the normalizing pass; anything but true reads as the default.
+    #[test]
+    fn the_phone_workspace_choice_is_saved_only_when_it_narrows() {
+        let default = MobileRemoteSettings::default();
+        assert!(!default.phone_shared_only && !default.to_json().contains("phoneSharedOnly"), "every workspace, nothing written");
+        let shared = MobileRemoteSettings { phone_shared_only: true, ..MobileRemoteSettings::default() };
+        let text = shared.to_json();
+        assert!(text.ends_with(r#","phoneSharedOnly":true}"#), "{text}");
+        let read = MobileRemoteSettings::read(&serde_json::from_str::<Value>(&text).unwrap()).unwrap();
+        assert_eq!(read, shared, "it round-trips");
+        assert!(crate::normalize::mobile_remote(Some(&read)).phone_shared_only, "the normalizing pass keeps it");
+        for odd in [r#"{"phoneSharedOnly":"yes"}"#, r#"{"phoneSharedOnly":null}"#, r#"{"phoneSharedOnly":1}"#, "{}"] {
+            assert!(!MobileRemoteSettings::read(&serde_json::from_str::<Value>(odd).unwrap()).unwrap().phone_shared_only, "{odd}");
+        }
+        let state = AppSnapshot { mobile_remote: Some(shared.clone()), ..AppSnapshot::default() };
+        let again = AppSnapshot::read(&serde_json::from_str::<Value>(&state.to_json()).unwrap()).unwrap();
+        assert_eq!(crate::normalize::mobile_remote(again.mobile_remote.as_ref()), shared, "through the saved state");
+    }
+
+    /// The legacy apps (key-only auth) are off by default, and the `allowLegacyPhones: true` every older version wrote for everyone
+    /// does not turn them on; turned on, the choice is kept in `legacyPhones` (and `allowLegacyPhones` for an older version).
+    #[test]
+    fn legacy_phones_are_off_unless_turned_on_here() {
+        assert!(!MobileRemoteSettings::default().allow_legacy_phones);
+        let older = MobileRemoteSettings::read(&serde_json::from_str::<Value>(r#"{"enabled":true,"allowLegacyPhones":true}"#).unwrap());
+        let older = older.unwrap();
+        assert!(!older.allow_legacy_phones, "an older version's default is no choice");
+        assert!(older.to_json().contains(r#""allowLegacyPhones":true,"directEnabled""#), "and it is written back as it was read");
+        let on = MobileRemoteSettings { allow_legacy_phones: true, legacy_phones_as_saved: true, ..MobileRemoteSettings::default() };
+        let text = on.to_json();
+        assert!(text.contains(r#""allowLegacyPhones":true,"legacyPhones":true"#), "{text}");
+        assert_eq!(MobileRemoteSettings::read(&serde_json::from_str::<Value>(&text).unwrap()).unwrap(), on, "it round-trips");
+        assert!(MobileRemoteSettings::default().to_json().contains(r#""allowLegacyPhones":true,"directEnabled""#), "C#'s default text");
     }
 }

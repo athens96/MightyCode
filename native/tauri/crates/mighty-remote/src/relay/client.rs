@@ -6,7 +6,10 @@
 //! first time, the device token the host gave back ever after), then requests `{id, method, path, body}` answered `{id, status, body}`
 //! (at most [`MAXIMUM_IN_FLIGHT`] at once, each frame at most 1 MiB), the host's encrypted `ping` answered `pong`, this side's own ping
 //! every 20 s and a 60 s read idle limit. A session that ends is dialled again at once, then after 1.5 s doubling to 30 s while dials
-//! fail; a final refusal (`pairing-key`, `device-revoked`, another host key) stops for good.
+//! fail; a final refusal (`pairing-key`, `device-revoked`, `approval-denied`, `desktops-off`, another host key) stops for good.
+//!
+//! A registration with a pairing code waits for the person at the host to allow it: the host says `auth_pending`, and the answer may
+//! then take up to [`ClientTimings::approval`].
 //!
 //! The relay URL (it names the host), the pairing key and the device token never reach a log, an error or `Debug`.
 
@@ -32,6 +35,8 @@ use crate::relay::host::{dial, normalize_relay};
 
 /// The pairing link's scheme and host (`mightycode://pair?…`).
 pub const LINK_PREFIX: &str = "mightycode://pair?";
+/// How long a registration waits for the host's answer after `auth_pending` (the host's 60 s and some slack).
+pub const APPROVAL_WAIT: Duration = Duration::from_secs(75);
 
 /// What is wrong with a pasted pairing link (never its contents).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,13 +73,15 @@ impl std::fmt::Debug for RelayEndpoint {
     }
 }
 
-/// A pasted pairing link (`identity::Identity::pairing_url`'s v2 link, the phone's QR): the endpoint, the pairing key and the host's
-/// name. The key never reaches `Debug`.
+/// A pasted pairing link (`identity::Identity::desktop_pairing_url`'s v2 link; an older host gives the phone's): the endpoint, the
+/// pairing code and the host's name, and whether the link says it is for a computer (`for=desktop`; an older host's never does). The
+/// key never reaches `Debug`.
 #[derive(Clone)]
 pub struct PairingLink {
     pub endpoint: RelayEndpoint,
     pub pairing_key: Zeroizing<String>,
     pub name: String,
+    pub for_desktop: bool,
 }
 
 impl std::fmt::Debug for PairingLink {
@@ -125,6 +132,7 @@ impl PairingLink {
             endpoint: RelayEndpoint { server_id: sid.to_string(), public_key, relay },
             pairing_key: Zeroizing::new(key.to_string()),
             name,
+            for_desktop: member("for") == Some("desktop"),
         })
     }
 }
@@ -175,7 +183,8 @@ pub enum RelayFailure {
     TooMany,
     /// The host answered with another key than the pairing link's: the pairing is stale (final).
     KeyMismatch,
-    /// The host refused the auth with this reason; `last` for `pairing-key` and `device-revoked` (pair again).
+    /// The host refused the auth with this reason; `last` for `pairing-key`, `device-revoked`, `approval-denied` and `desktops-off`
+    /// (pair again, with a new link).
     Refused { reason: String, last: bool },
     /// The host's answer was not the relay protocol.
     Protocol,
@@ -260,6 +269,8 @@ pub enum RequestError {
 #[derive(Debug, Clone, Copy)]
 pub struct ClientTimings {
     pub handshake: Duration,
+    /// How long a registration waits for the person at the host once it said `auth_pending`.
+    pub approval: Duration,
     pub heartbeat: Duration,
     pub idle: Duration,
     pub backoff_min: Duration,
@@ -270,6 +281,7 @@ impl Default for ClientTimings {
     fn default() -> Self {
         ClientTimings {
             handshake: crate::direct::wire::HANDSHAKE_DEADLINE,
+            approval: APPROVAL_WAIT,
             heartbeat: HEARTBEAT,
             idle: READ_IDLE,
             backoff_min: Duration::from_millis(1500),
@@ -609,18 +621,23 @@ async fn session(inner: &Arc<Inner>) -> Result<(), RelayFailure> {
     if !matches!(sent, Ok(Ok(()))) {
         return Err(RelayFailure::Lost);
     }
-    let Next::Binary(answer) = next_frame(&mut stream, deadline).await? else { return Err(RelayFailure::Protocol) };
-    let answer: Value =
-        serde_json::from_slice(&cipher.open(&answer).map_err(|_| RelayFailure::Protocol)?).map_err(|_| RelayFailure::Protocol)?;
-    match text_of(&answer, "type").as_str() {
-        "auth_ok" => {}
-        "auth_error" => {
-            let reason = text_of(&answer, "reason");
-            let last = matches!(reason.as_str(), "pairing-key" | "device-revoked");
-            return Err(RelayFailure::Refused { reason: mighty_core::wire::clean(&reason, 40), last });
+    // A registration waits for the person at the host: `auth_pending` first, then the answer within the approval time.
+    let mut deadline = deadline;
+    let answer = loop {
+        let Next::Binary(answer) = next_frame(&mut stream, deadline).await? else { return Err(RelayFailure::Protocol) };
+        let answer: Value =
+            serde_json::from_slice(&cipher.open(&answer).map_err(|_| RelayFailure::Protocol)?).map_err(|_| RelayFailure::Protocol)?;
+        match text_of(&answer, "type").as_str() {
+            "auth_pending" if !credential.has_token() => deadline = Instant::now() + inner.timings.approval,
+            "auth_ok" => break answer,
+            "auth_error" => {
+                let reason = text_of(&answer, "reason");
+                let last = matches!(reason.as_str(), "pairing-key" | "device-revoked" | "approval-denied" | "desktops-off");
+                return Err(RelayFailure::Refused { reason: mighty_core::wire::clean(&reason, 40), last });
+            }
+            _ => return Err(RelayFailure::Protocol),
         }
-        _ => return Err(RelayFailure::Protocol),
-    }
+    };
     // The token comes once, on the connection that registered this computer: from here on it is the credential.
     if let Some(token) = answer.get("deviceToken").and_then(Value::as_str).filter(|t| !t.is_empty() && t.len() <= 256) {
         let next = Credential::Token { client_id: credential.client_id().to_string(), token: Zeroizing::new(token.to_string()) };

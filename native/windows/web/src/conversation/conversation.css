@@ -10,8 +10,8 @@
   width: 85%; background: var(--ink); color: var(--card); border-radius: var(--radius-pane);
   padding: var(--inset-user-bubble-t) var(--inset-user-bubble-h) var(--inset-user-bubble-b);
 }
-.user-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
-.user-time { text-align: right; font-size: 10.5px; margin-top: 3px; }
+.user-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.user-time { text-align: right; font-size: var(--type-small); margin-top: 3px; }
 
 .reply-card {
   background: var(--card); border: var(--stroke-line) solid var(--line); border-radius: var(--radius-pane);
@@ -41,11 +41,11 @@
 .tool-square.run { background: var(--run); }
 .tool-name { font-size: 12.5px; font-weight: 700; }
 .tool-detail { font-family: var(--font-mono); font-size: var(--type-state); color: var(--ink2); overflow-wrap: anywhere; min-width: 0; }
-.tool-meta { font-size: 10.5px; color: var(--ink2); }
+.tool-meta { font-size: var(--type-small); color: var(--ink2); }
 .tool-state.running { color: var(--accent); }
 .tool-state.waiting { color: var(--wait-text); }
 .tool-state.failed { color: var(--err-text); }
-.tool-disclosure { border: 0; background: none; padding: 0; font: inherit; font-size: 10.5px; color: var(--accent); cursor: pointer; }
+.tool-disclosure { border: 0; background: none; padding: 0; font: inherit; font-size: var(--type-small); color: var(--accent); cursor: pointer; }
 .tool-disclosure:hover { text-decoration: underline; }
 .tool-disclosure:focus-visible { outline: var(--stroke-focus) solid var(--accent); }
 .entry-tool > .code-block { margin-top: var(--space-xs); }
@@ -65,10 +65,10 @@
 .thumbnail-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .thumbnail { display: block; max-width: 100%; height: auto; border-radius: var(--radius-row); border: var(--stroke-line) solid var(--line); }
 .image-note { font-size: 11px; color: var(--ink2); }
-.image-caption { font-size: 10px; color: var(--ink2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.image-caption { font-size: var(--type-small); color: var(--ink2); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .code-block { background: var(--code-surface); color: var(--code-text); border-radius: var(--radius-row); padding: var(--inset-code-block); margin: var(--space-xs) 0; overflow-x: auto; }
-.code-language { font-family: var(--font-mono); font-size: 10px; font-weight: 500; margin-bottom: var(--space-xs); }
+.code-language { font-family: var(--font-mono); font-size: var(--type-small); font-weight: 500; margin-bottom: var(--space-xs); }
 .code-block pre { margin: 0; font-family: var(--font-mono); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .markdown { line-height: 1.5; overflow-wrap: anywhere; }
@@ -145,3 +145,18 @@ ol.md-list > .md-item::before { content: attr(data-marker); }
 .shell-block-state.running { color: var(--accent); }
 .shell-block-state.failed { color: var(--err-text); }
 .shell-block-output { margin-top: 0; }
+
+/* A delegation notice as a chip (delegationNotice.ts): the child's title and what happened, its pointer text as the tooltip; in the
+   queue's held rows and leading the request bubble it went with. */
+.notice-chip {
+  display: inline-flex; align-items: center; gap: var(--space-xs); max-width: 100%; min-width: 0; vertical-align: middle;
+  padding: var(--space-xxs) var(--space-sm); border-radius: var(--radius-segment); background: var(--card-raised);
+  border: var(--stroke-line) solid var(--line); color: var(--ink); font-size: var(--type-pill); line-height: 1.35; cursor: default;
+}
+.notice-chip-mark { flex: none; color: var(--done-text); }
+.notice-chip.outcome-endedWithoutReport .notice-chip-mark { color: var(--ink2); }
+.notice-chip.outcome-failedToStart .notice-chip-mark { color: var(--err-text); }
+.notice-chip-title { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notice-chip-words { flex: none; color: var(--ink2); white-space: nowrap; }
+.user-notices { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.user-notices + .user-text { margin-top: var(--space-xs); }

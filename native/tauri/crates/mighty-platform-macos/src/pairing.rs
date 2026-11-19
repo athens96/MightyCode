@@ -2,7 +2,9 @@
 //! shared code chosen by `PlatformProfile::pairing_layout`), with Swift's modes: the folder 0700, every file 0600 from its creation
 //! (`createFile(atPath:contents:attributes: [.posixPermissions: 0o600])`). Swift `MobileRemoteService.swift:349-442`,
 //! `MobileDeviceRegistry.swift:428-486`, `RelayChannel.swift:86-104`; contract `mighty_platform::pairing` (`PairingStore`).
-//! Swift-written files read here, and what this writes reads back in Swift (`tools/parity-mac pairing`).
+//! Swift-written files read here, and what this writes reads back in Swift (`tools/parity-mac pairing`) when there is no vault. The app's
+//! store has one: the pairing key, the relay host token and the relay secret key are in the Keychain (`secrets.rs`
+//! `KeychainVault::pairing`), the files naming the item (`mighty_platform::pairing::vaulted`; Swift 0.4.x pairs anew over that).
 
 use std::fs;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -11,6 +13,8 @@ use std::sync::Arc;
 
 use mighty_platform::pairing::four_files::{FOLDER, FourFiles, PrivateFiles};
 use mighty_platform::{PairingStore, Paths};
+
+use crate::secrets::KeychainVault;
 
 /// The folder 0700 and each file 0600.
 pub struct OwnerOnly;
@@ -35,9 +39,9 @@ impl PrivateFiles for OwnerOnly {
     }
 }
 
-/// The Mac's `PairingStore` over the profile's data folder.
+/// The Mac's `PairingStore` over the profile's data folder, its secrets in the user's Keychain.
 pub fn pairing_store(paths: &dyn Paths) -> Arc<dyn PairingStore> {
-    Arc::new(FourFiles::new(paths.data_dir().join(FOLDER), Box::new(OwnerOnly)))
+    Arc::new(FourFiles::new(paths.data_dir().join(FOLDER), Box::new(OwnerOnly)).with_vault(Arc::new(KeychainVault::pairing())))
 }
 
 #[cfg(test)]
@@ -52,6 +56,38 @@ mod tests {
 
     /// `MobileRemoteExtensionTests.swift:1148 "aDeviceTokenIsIssuedOnceAndOnlyItsHashIsKept"` (its file half; the token logic is
     /// mighty-remote's `Identity`, tests/four_files.rs): the list is 0600 in a 0700 folder and holds the hash, never a token.
+    /// Swift's plain files read through the Keychain (a throwaway one): the secrets move to one item of the pairing service, the
+    /// files keep placeholders, owner-only, and a new store reads the same identity back.
+    #[test]
+    fn plain_files_move_their_secrets_to_the_keychain() {
+        use mighty_platform::pairing::four_files::{HOST_TOKEN, KEY_PAIR};
+        let throwaway = crate::secrets::Throwaway::new("pairing-move");
+        let root = std::env::temp_dir().join(format!("mighty-mac-pairing-{}-{}", std::process::id(), line!()));
+        let folder = root.join(FOLDER);
+        let identity = PairingIdentity {
+            host_id: "4e0c0a3f-8a59-4a0f-9a57-0a3c1b2d3e4f".into(),
+            host_token: "ab".repeat(32),
+            pairing_key: "A".repeat(43),
+            secret_key: [3; 32],
+            devices: vec![],
+        };
+        FourFiles::new(folder.clone(), Box::new(OwnerOnly)).save(&identity).unwrap();
+        let store = || {
+            FourFiles::new(folder.clone(), Box::new(OwnerOnly))
+                .with_vault(Arc::new(KeychainVault::pairing_only(throwaway.keychain.clone())))
+        };
+        assert_eq!(store().load().unwrap(), Some(identity.clone()));
+        let key = fs::read_to_string(folder.join(PAIRING_KEY)).unwrap();
+        assert!(key.starts_with("vault:mobile-pairing-"), "{key}");
+        assert_eq!(fs::read_to_string(folder.join(HOST_TOKEN)).unwrap(), key);
+        assert!(!fs::read_to_string(folder.join(KEY_PAIR)).unwrap().contains("secretKeyB64"));
+        for entry in fs::read_dir(&folder).unwrap() {
+            assert_eq!(mode(&entry.unwrap().path()), 0o600);
+        }
+        assert_eq!(store().load().unwrap(), Some(identity));
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn the_files_are_owner_only_in_an_owner_only_folder() {
         let root = std::env::temp_dir().join(format!("mighty-mac-pairing-{}-{}", std::process::id(), line!()));

@@ -41,6 +41,14 @@ section: layout
 
 ![[dashboard]]
 
+## 审阅队列 {#review}
+把所有待审阅的内容集中在一处。点击侧边栏{{ui:phone.dashboard.title}}下方的{{ui:review.sidebar}}，或按 {{kbd:⇧⌘R}}(Windows：{{kbd:Ctrl+Shift+R}})，即可打开{{ui:review.open}}面板。条目旁的数字是等待中的数量。
+- 列出的内容：留下更改后结束的[worktree 窗格](delegation.md#pane-worktree)和[子窗格](delegation.md#states)，以及每个窗格最近结束、且保存了所改文件的请求([审阅请求更改](agent-pane.md#request-changes))。仍在工作的窗格要等结束后才会出现。
+- 每行显示窗格名称、代理、类型、工作区、分支及其基础分支、更改的文件数以及增删的行数，还有状态({{ui:review.status.ready}}、{{ui:review.status.conflict}}、{{ui:review.status.merged}})。冲突排在最上，已合并的排在最下。
+- 按钮：{{ui:review.action.changes}}、{{ui:review.action.merge}}(有未提交文件的 worktree 窗格为{{ui:review.action.commitMerge}})、{{ui:editor.open}}、{{ui:review.action.pr}}(worktree 窗格)、{{ui:review.action.discard}}、{{ui:review.action.focus}}、{{ui:review.action.dismiss}}。合并、丢弃和 PR 与窗格栏或子窗格卡片上的操作相同，会经过同样的确认。请求的{{ui:review.action.changes}}会打开请求更改审阅。
+- 点击{{ui:review.action.dismiss}}后，该项会隐藏，直到其工作再次变化。
+- 列表在运行结束、打开面板和点击{{ui:review.refresh}}时重新读取 git，不会在每次重绘时读取。
+
 ## 添加窗格 {#add-pane}
 窗格可以是 AI 智能体（Claude、Codex、Antigravity、pi、opencode、Hermes）、终端或文件中的一种。
 
@@ -98,6 +106,7 @@ section: layout
 | {{kbd:⌘T}} | {{ui:menu.addTerminalPane}} |
 | {{kbd:⇧⌘E}} | {{ui:menu.showFiles}} |
 | {{kbd:⇧⌘F}} | {{ui:conversationSearch.open}} |
+| {{kbd:⇧⌘R}} | {{ui:review.open}} |
 | {{kbd:⌘K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{ui:menu.settings}} |

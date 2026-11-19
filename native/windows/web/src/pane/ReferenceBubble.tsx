@@ -173,6 +173,8 @@ export function ReferenceBubble({ paneId, request, top, onClose }: { paneId: str
 
   const relative = found?.relativePath;
   const act = (method: string) => { if (relative) void bridge.call(method, { paneId, path: relative }).catch(() => {}); };
+  // 편집기에서 열기 at the line asked for (src-tauri editor.rs resolves the path in the pane's folder again).
+  const editor = () => { if (relative) void bridge.call('openInEditor', { source: 'reference', paneId, path: relative, ...(line ? { line } : {}) }).catch(() => {}); };
   const side = onLeft ? 'left' : 'right';
   return (
     <div className="reference-room" ref={room} style={{ top }}>
@@ -205,6 +207,10 @@ export function ReferenceBubble({ paneId, request, top, onClose }: { paneId: str
                 <>
                   <button type="button" className="files-tool" data-testid="reference-reveal" aria-label={t('menu.showInExplorer')} title={t('menu.showInExplorer')} onClick={() => act('referenceReveal')}>
                     <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1.5 3.5h4l1.2 1.3h5.8v6.7h-11z" /></svg>
+                  </button>
+                  <button type="button" className="files-tool" data-testid="reference-editor" aria-label={line ? t('editor.openLine', { line }) : t('editor.open')}
+                    title={line ? t('editor.openLine', { line }) : t('editor.open')} onClick={editor}>
+                    <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M5 4.5 2 7l3 2.5M9 4.5 12 7 9 9.5M7.8 3 6.2 11" /></svg>
                   </button>
                   <button type="button" className="files-tool" data-testid="reference-open" aria-label={t('reference.openExternal')} title={t('reference.openExternal')} onClick={() => act('referenceOpen')}>
                     <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M8 2h4v4M12 2 6.5 7.5M10.5 8.5V12h-8.5V3.5H5.5" /></svg>

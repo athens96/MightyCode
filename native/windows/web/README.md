@@ -61,7 +61,8 @@ changes nothing. An empty `web-devtools` file there turns on the developer tools
   named in a conversation, a diagram block or a timeline row (`referenceClick.ts`) opens in the pane's reference bubble
   (`src/pane/ReferenceBubble.tsx`, sizing rules ported in `src/pane/reference.ts`), drawn with the files pane's preview. Host
   methods it calls: `openUrl`, `imageData`, `referencePreview`, `referenceOpen`, `referenceReveal`, `referenceSize`
-  (`MainWindow.WebShell.cs`). A reply's closed `sh`/`bash`/`zsh`/`shell`/`console`/`ps1`/`powershell`/`pwsh` block gets a Run
+  (`MainWindow.WebShell.cs`), and `openInEditor` (⌘-click, Ctrl+click on Windows, or the bubble's button: the external editor at the
+  line; the Rust host's `editor.rs`). A reply's closed `sh`/`bash`/`zsh`/`shell`/`console`/`ps1`/`powershell`/`pwsh` block gets a Run
   link (`shellBlocks.ts`, `ShellBlock.tsx`): `shellBlockRun` / `shellBlockStop` (`MainWindow.ShellBlockRuns.cs`) run it in the
   agent's terminal pane, and the pane's `shellRuns` field carries its state and output back. The provider marks come from
   `mobile/src/lib/provider-marks.ts` (alias `@mobile`).
@@ -100,6 +101,9 @@ changes nothing. An empty `web-devtools` file there turns on the developer tools
   `structureMotion.ts`; a revealed structure card or an opened timeline row aims the diagram (`Aim` in `Diagram.tsx`). Host
   methods: `mightyVisible`, `mightySetPresentation`, `mightySaveSize`, `mightyExpand`, `mightyResultFiles`,
   `mightyLoadOlder`, `mightyImages`, `mightyTimelineFlip`, `mightyOpenDashboard`.
+- `src/review/` — 검토 대기열 (the Rust host's `review.rs`): the queue's model and its `{kind:'review'}` push (`queue.ts`), the panel
+  opened from the sidebar's 검토 entry, ⇧⌘R and Ctrl+Shift+R (`ReviewPanel.tsx`), each item's actions through the existing methods
+  (`paneWorktreeAction`, `childAction`, `reviewChanges`, `openInEditor`, `selectSession`, `reviewDismiss`, 요청 변경 검토).
 - `src/shell/`, `src/layout/`, `src/dashboard/`, `src/dialogs/` — the frame (spec: `.omc/plans/shell-spec.md`): sidebar, banners,
   workspace header, status bar and usage popover, the layout of splits and tab groups (each group keeps the panes it has shown
   mounted, hidden behind the selected one, so a tab switch draws no pane again), the dashboard and the empty states, and the

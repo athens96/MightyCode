@@ -10,8 +10,8 @@
     "line": "#DEE2EA",
     "track": "#DDE1E9",
     "ink": "#0E1320",
-    "ink2": "#5A6377",
-    "ink3": "#616A7C",
+    "ink2": "#4A5366",
+    "ink3": "#5C6577",
     "accent": "#2459E6",
     "accentSoft": "#E6EDFF",
     "onAccent": "#FFFFFF",
@@ -93,6 +93,9 @@
       "isDark": false,
       "segmentTrack": "#DDE1E9",
       "segmentOn": "#FFFFFF",
+      "lineStrong": "#B9C0CC",
+      "primary": "#2459E6",
+      "onPrimary": "#FFFFFF",
       "tones": {
         "run": {
           "fill": "#2A5FEE",
@@ -131,9 +134,9 @@
         },
         "idle": {
           "fill": "#0E1320",
-          "text": "#5A6377",
+          "text": "#4A5366",
           "soft": "#EEF0F4",
-          "mark": "#616A7C",
+          "mark": "#5C6577",
           "glyph": "#4F5869"
         }
       },
@@ -152,6 +155,9 @@
       "isDark": true,
       "segmentTrack": "#0B0F19",
       "segmentOn": "#2A3347",
+      "lineStrong": "#3D465A",
+      "primary": "#2A5FEE",
+      "onPrimary": "#FFFFFF",
       "tones": {
         "run": {
           "fill": "#2A5FEE",
@@ -379,8 +385,8 @@
     }
   ],
   "pipeline": {
-    "columnTintOpacity": 0.6,
-    "cardTintOpacity": 0.35,
+    "columnTintOpacity": 0.12,
+    "cardTintOpacity": 0.5,
     "cardBarWidth": 3
   },
   "metrics": {
@@ -418,15 +424,15 @@
       "block": 12,
       "row": 12,
       "state": 11.5,
-      "pill": 11,
+      "pill": 12,
       "mono": 11,
-      "small": 10,
-      "badge": 9
+      "small": 11,
+      "badge": 10
     },
     "font": {
-      "mono": "Cascadia Mono, Consolas",
-      "body": "Segoe UI Variable Text, Segoe UI",
-      "heading": "Segoe UI Variable Display, Segoe UI"
+      "mono": "ui-monospace, SF Mono, Menlo, Cascadia Mono, Consolas",
+      "body": "-apple-system, BlinkMacSystemFont, Segoe UI Variable Text, Segoe UI, Apple SD Gothic Neo, Malgun Gothic",
+      "heading": "-apple-system, BlinkMacSystemFont, Segoe UI Variable Display, Segoe UI, Apple SD Gothic Neo, Malgun Gothic"
     },
     "spacing": {
       "xxs": 2,
@@ -497,7 +503,7 @@
       "paneMinWidth": 315,
       "paneMinHeight": 290,
       "splitDivider": 6,
-      "hitTarget": 22
+      "hitTarget": 24
     },
     "dash": {
       "running": {

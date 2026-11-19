@@ -35,6 +35,20 @@ export function diffRows(changes: Pick<FileChanges, 'hunks'>): DiffRow[] {
   return rows;
 }
 
+/**
+ * The line of the file as it is now that a row stands at, for 편집기에서 열기: its new-side number; a removed line the place it was
+ * taken from (the line after the last one kept or added before it, else its hunk's new start); 1 when nothing says.
+ */
+export function editorLine(rows: readonly DiffRow[], index: number): number {
+  for (let at = index; at >= 0; at--) {
+    const row = rows[at];
+    if (!row) break;
+    if (row.new !== null) return at === index ? row.new : row.new + 1;
+    if (row.kind === 'hunk') return Math.max(1, Number(/\+(\d+)/.exec(row.text)?.[1] ?? 1));
+  }
+  return 1;
+}
+
 /** The widest line number either gutter draws, in digits (at least 1). */
 export function gutterDigits(rows: readonly DiffRow[]): number {
   let most = 0;

@@ -5,7 +5,7 @@
 .composer-pills { position: relative; display: flex; align-items: center; gap: var(--space-sm); min-width: 0; flex: 1; }
 .composer-pill {
   display: inline-flex; align-items: center; gap: 5px; max-width: 200px; height: var(--layout-toolbar); padding: 0 var(--space-md); flex: none;
-  border: var(--stroke-line) solid var(--line); border-radius: calc(var(--layout-toolbar) / 2); background: var(--card); color: var(--ink);
+  border: var(--stroke-line) solid var(--line-strong); border-radius: calc(var(--layout-toolbar) / 2); background: var(--card); color: var(--ink);
   font: inherit; font-size: var(--type-pill); font-weight: 500; cursor: default;
 }
 .composer-pill.compact { width: var(--layout-toolbar); padding: 0; justify-content: center; }

@@ -23,9 +23,11 @@ export interface ExtrasInput {
   latest: string | null;
   /** The runs whose request's changes the review can show (`runChangesRuns`): their results get its button. */
   changedRuns?: ReadonlySet<string>;
+  /** The result blocks drawn as their header alone (layout emptyResultIds). */
+  emptyResults?: ReadonlySet<string> | null;
 }
 
-export function blockExtras({ layout, runs, inputs, draft, planHistory, resultSize, planText, latest, changedRuns }: ExtrasInput, previous: ReadonlyMap<string, BlockExtra>): Map<string, BlockExtra> {
+export function blockExtras({ layout, runs, inputs, draft, planHistory, resultSize, planText, latest, changedRuns, emptyResults }: ExtrasInput, previous: ReadonlyMap<string, BlockExtra>): Map<string, BlockExtra> {
   const byRun = new Map(runs.map((r) => [r.id, r]));
   // A run whose file lookup found nothing and one not looked up yet draw the same: an empty list is no list, so the lookup
   // coming back empty does not draw every settled result again.
@@ -56,6 +58,7 @@ export function blockExtras({ layout, runs, inputs, draft, planHistory, resultSi
         const files = filesOf(run);
         extra = { entries: run?.resultEntries, finalOutput: run?.finalOutput, files, filesOpen: inputs?.resultFilesRunID === run?.id, fitted: layout.fittedResultID === node.id && !resultSize, measure: node.id === latest };
         if (run && changedRuns?.has(run.id)) extra.changes = true;
+        if (emptyResults?.has(node.id)) { extra.empty = true; delete extra.measure; }
         break;
       }
       case 'draft': extra = { draft: draft }; break;

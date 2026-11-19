@@ -124,7 +124,7 @@ fn recorded_order_and_results_match_diagram() {
     let ended = groups(&[shown("completed", "completed")]).remove(0).result.expect("a result");
     let failed = groups(&[shown("running", "error")]).remove(0).result.expect("a result");
     assert!(
-        waiting.tone == Tone::Wait && waiting.awaiting && ended.tone == Tone::Done && !ended.awaiting && failed.tone == Tone::Err,
+        waiting.tone == Tone::Run && waiting.awaiting && ended.tone == Tone::Done && !ended.awaiting && failed.tone == Tone::Err,
         "the awaiting head waits in 기록"
     );
     // A steer delegation sent is a 위임 알림; one a person sent stays a 중간 요청.

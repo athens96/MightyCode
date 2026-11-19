@@ -101,9 +101,9 @@ fn same(actual: &impl serde::Serialize, expected: Value) {
 fn pills(l: &Locale, model: &str, tip_tail: &str) -> Value {
     json!({
         "provider": "claude", "model": model, "modelTip": format!("Claude · {model}{tip_tail}"),
-        "showsEffort": true, "effort": "Auto", "effortEnabled": true,
+        "showsEffort": true, "effort": l.get("composer.effort.level.auto"), "effortEnabled": true,
         "effortTip": format!("{} · {}", l.get("composer.effort.label"), l.get("settings.run.appliesNextRequest")),
-        "permission": "Always ask", "permissionHelp": l.get("composer.permissionHelp.manual"), "unlocked": false,
+        "permission": l.get("permission.label.claude.default"), "permissionHelp": l.get("composer.permissionHelp.manual"), "unlocked": false,
         "showsFast": false, "fast": false, "fastEnabled": false, "moreOn": false, "resuming": false,
     })
 }
@@ -535,7 +535,7 @@ fn options_menu_cs891_rows() {
     let rows = menus::composer_menu("options", &menu_inputs(&p, None, &levels, false)).unwrap();
     let value = serde_json::to_value(&rows).unwrap();
     assert_eq!(value[0]["kind"], "submenu");
-    assert_eq!(value[0]["text"], format!("{} · Auto", l.get("composer.effort.label")));
+    assert_eq!(value[0]["text"], format!("{} · {}", l.get("composer.effort.label"), l.get("composer.effort.level.auto")));
     assert_eq!(value[0]["items"].as_array().unwrap().len(), 6);
     assert_eq!(value[1]["text"], format!("{} · {}", l.get("composer.label.permission"), l.get("permission.label.acceptEditsCodex")));
     let modes: Vec<&str> = value[1]["items"].as_array().unwrap().iter().map(|r| r["text"].as_str().unwrap()).collect();

@@ -4,11 +4,11 @@ import { useServices, useStoreState } from '../app/context';
 import type { GraphBlockSize, MightyGraphRun, RunSession } from '../store/models';
 import { Block, type BlockActions, type BlockExtra } from './Block';
 import {
-  FollowWatch, aimLanding, arrivedResult, cameraOffset, cameraTween, centredX, dotRadius, dotStep, dotsShift, dotsShown, followTargetID, resultCamera, runsChanged, scrollsBy, showsTop, trimAnchor,
+  FollowWatch, aimLanding, arrivedResult, cameraOffset, cameraTween, centredX, progressSafeLeft, ProgressFoldWidth, dotRadius, dotStep, dotsShift, dotsShown, followTargetID, resultCamera, runsChanged, scrollsBy, showsTop, trimAnchor,
   wheelRoute, wheelScrollTarget, WheelGestureGapMs, zoomAnchored, zoomIn, zoomLabel, zoomOut, ZoomDefault, ZoomMax, ZoomMin, type Point,
 } from './camera';
 import {
-  finished, isAuxiliaryKind, isFixed, isResizable, latestResultID, makeLayout, MaximumHeight, MaximumWidth, minimumBlockSize, normalizedSizeFor,
+  emptyResultIds, finished, isAuxiliaryKind, isFixed, isResizable, latestResultID, makeLayout, MaximumHeight, MaximumWidth, minimumBlockSize, normalizedSizeFor,
   nodeId, resultDrag, resultDragSides, runNodeId, runOf, WorkSuffix, type Layout, type Size,
 } from './layout';
 import { CardHeight, DelegateKind, StepKind, focusedRequest, liveFlowIds, logRowsFit, logTarget, progressRequest, requestSpans, type RequestSpan } from './flow';
@@ -223,6 +223,10 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   // Every agent pane the host sends progress for has the progress panel (macOS MightyGraphView showsProgress); the role view is Claude's alone.
   const showsProgress = inputs?.progress !== undefined && inputs?.progress !== null;
   const blockSizes = useMemo(() => (live && live.target === 'block' ? { ...(savedSizes ?? {}), [live.id]: live.size } : savedSizes), [savedSizes, live]);
+  // A settled result with nothing to show is drawn as its header alone (layout emptyResultIds).
+  // Kept by its ids, so a push that changes no block's emptiness lays nothing out again.
+  const emptyKey = [...emptyResultIds(runs, (id) => mighty.blocks[id], inputs?.resultFilesRunID ?? null)].join('\n');
+  const emptyResults = useMemo(() => new Set(emptyKey === '' ? [] : emptyKey.split('\n')), [emptyKey]);
   const layout = useMemo(() => makeLayout(runs, session.draft, session.status === 'running', expanded, {
     resultFilesRunID: inputs?.resultFilesRunID ?? null,
     viewport: viewport.w > 0 && viewport.h > 0 ? viewport : null,
@@ -239,9 +243,14 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     galleries: inputs?.galleries ?? [],
     executions: inputs?.executions ?? [],
     fanOut: fanOut ? { opened } : null,
-  }), [runs, session.draft, session.status, expanded, inputs, viewport, zoom, live, session.graphResultSize, session.graphPlanSize, latest, measured, blockSizes, fanOut, opened]);
+    emptyResults,
+  }), [runs, session.draft, session.status, expanded, inputs, viewport, zoom, live, session.graphResultSize, session.graphPlanSize, latest, measured, blockSizes, fanOut, opened, emptyResults]);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
+  // Whether the progress panel is drawn this pass: the camera keeps its room on the left (set where the panel is worked out, below).
+  const panelShown = useRef(false);
+    const emptyRef = useRef(emptyResults);
+  emptyRef.current = emptyResults;
   // The progress panel's request (macOS MightyGraphView focusedRunID, pinnedRunID): the one in view, read as the camera moves; a new request it is
   // pinned to until the user scrolls themselves (a wheel, a drag), whatever else is in view.
   const [focusedRun, setFocusedRun] = useState<string | null>(null);
@@ -357,6 +366,8 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   }, []);
 
   const frameOf = (id: string | null) => (id === null ? null : layoutRef.current.nodes.find((n) => n.id === id)?.frame ?? null);
+  /** The left inset the camera keeps while the progress panel stands over the diagram (camera progressSafeLeft). */
+  const safeLeftOf = (vp: Size, z: number) => progressSafeLeft(panelShown.current, vp, z);
 
   // ── follow and the run-id rules after every layout pass (MightyGraphFollow, AimGraphCamera) ──
   useLayoutEffect(() => {
@@ -378,11 +389,11 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     if (ownSend || change !== 'none') held.current = null;
     if (change === 'first' || change === 'follow') {
       watch.current.start();
-      camera.current = { ...camera.current, x: centredX(viewport, zoom) };
+      camera.current = { ...camera.current, x: centredX(viewport, zoom, safeLeftOf(viewport, zoom)) };
     } else if (change === 'trim') {
       const anchor = trimAnchor(previous ?? [], ids, selected, new Set(layout.nodes.map((n) => n.id)));
       const target = anchor.kind === 'reaim' ? frameOf(anchor.nodeID) : null;
-      if (anchor.kind === 'reaim' && target) camera.current = cameraOffset(target, viewport, zoom, anchor.alignTop);
+      if (anchor.kind === 'reaim' && target) camera.current = cameraOffset(target, viewport, zoom, anchor.alignTop, false, safeLeftOf(viewport, zoom));
     }
     const targetID = followTargetID(layout, runs);
     // The user's own swipe or drag under way: the camera is theirs until it ends.
@@ -396,7 +407,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
       if (newest && frame) {
         sendTop.current = null;
         watch.current.stop();
-        camera.current = cameraOffset(frame, viewport, zoom, true);
+        camera.current = cameraOffset(frame, viewport, zoom, true, false, safeLeftOf(viewport, zoom));
         setPinnedRun(newest.id);
       }
     }
@@ -412,7 +423,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     if (revealed && resultFrame && resultID !== null) {
       sendTop.current = null;
       held.current = null;
-      camera.current = resultCamera(resultFrame, viewport, zoom);
+      camera.current = resultCamera(resultFrame, viewport, zoom, safeLeftOf(viewport, zoom));
       watch.current.moved(targetID, frameOf(targetID), camera.current, viewport, zoom);
       if (!watch.current.following) held.current = { id: resultID, anchor: pinnedAnchor(HeldCorner, resultFrame, camera.current, zoom) };
     }
@@ -425,7 +436,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
       } else if (landing) {
         const target = landing.land;
         pin.current = null;
-        camera.current = cameraOffset(target.frame, viewport, zoom, false);
+        camera.current = cameraOffset(target.frame, viewport, zoom, false, false, safeLeftOf(viewport, zoom));
         watch.current.moved(targetID, frameOf(targetID), camera.current, viewport, zoom);
         setSelected(target.id);
         // Not following from there: the block stays where it landed while what is drawn above it settles, until the view is moved.
@@ -487,7 +498,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     stopTween();
     pin.current = null;
     held.current = null;
-    camera.current = cameraOffset(node.frame, vp, zoomRef.current, false);
+    camera.current = cameraOffset(node.frame, vp, zoomRef.current, false, false, safeLeftOf(vp, zoomRef.current));
     const targetID = followTargetID(l, shared.current);
     watch.current.moved(targetID, frameOf(targetID), camera.current, vp, zoomRef.current);
     if (!isFixed(node)) setSelected(id);
@@ -573,7 +584,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     const vp = viewportRef.current;
     if (!vp) return null;
     const box = vp.getBoundingClientRect(), cam = camera.current, z = zoomRef.current;
-    const frames = layoutRef.current.nodes.filter((n) => isResizable(n.kind) && !isFixed(n))
+    const frames = layoutRef.current.nodes.filter((n) => isResizable(n.kind) && !isFixed(n) && !emptyRef.current.has(n.id))
       .map((n) => ({ id: n.id, frame: { x: n.frame.x * z + cam.x, y: n.frame.y * z + cam.y, w: n.frame.w * z, h: n.frame.h * z } }));
     return resizeTarget(clientX - box.left, clientY - box.top, frames, z);
   };
@@ -680,6 +691,9 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     toggleFiles(runId) { void bridge.call('mightyResultFiles', { paneId, runId }); },
     fitResult() { void bridge.call('mightySaveSize', { paneId, nodeId: latestResultID(shared.current) ?? '', target: 'result' }); },
     openFile(file: MightyFile, runId: string | null) { showReference.current?.({ path: file.path, line: file.line ?? null, ...(runId ? { runId } : {}) }); },
+    openInEditor(file: MightyFile) {
+      void bridge.call('openInEditor', { source: 'reference', paneId, path: file.path, ...(file.line ? { line: file.line } : {}) }).catch(() => {});
+    },
     loadOlder() { void bridge.call('mightyLoadOlder', { paneId }); },
     measured(id, height) { setMeasured((m) => (Math.abs((m[id] ?? -1) - height) < 1 ? m : { ...m, [id]: height })); },
     foldToCard(id) { openCard(id, false); },
@@ -716,10 +730,10 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   const planText = useMemo(() => (state.cards[paneId] ?? []).find((c) => c.kind === 'plan') as { plan?: string } | undefined, [state.cards, paneId])?.plan;
   const extrasCache = useRef<ReadonlyMap<string, BlockExtra>>(new Map());
   const extras = useMemo(() => {
-    const next = blockExtras({ layout, runs, inputs, draft: session.draft, planHistory: session.planHistory, resultSize: session.graphResultSize, planText, latest, changedRuns }, extrasCache.current);
+    const next = blockExtras({ layout, runs, inputs, draft: session.draft, planHistory: session.planHistory, resultSize: session.graphResultSize, planText, latest, changedRuns, emptyResults }, extrasCache.current);
     extrasCache.current = next;
     return next;
-  }, [layout, runs, inputs, session.draft, session.planHistory, session.graphResultSize, planText, latest, changedRuns]);
+  }, [layout, runs, inputs, session.draft, session.planHistory, session.graphResultSize, planText, latest, changedRuns, emptyResults]);
 
   // The sent request's block carries its pending mark (전송 중, or its failure) in place of a pill.
   const drawnExtras = useMemo(() => {
@@ -740,6 +754,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   const progressCopy = inputs?.progress;
   const progressID = showsProgress && progressCopy ? progressRequest(pinnedRun, focusedRun, newestRequestID, (id) => progressCopy[id] !== undefined) : null;
   const progress = progressID !== null ? progressCopy?.[progressID] : undefined;
+  panelShown.current = progress !== undefined;
   const unfinished = useMemo(() => new Set(runs.filter((r) => !finished(r)).map((r) => r.id)), [runs]);
   const toolbarZoom = (
     <span className="mighty-zoom">
@@ -764,7 +779,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
           <rect ref={dotsRect} className="mighty-dots" width="100%" height="100%" fill={`url(#mighty-dots-${paneId})`} />
         </svg>
         {steps && <StepsPanel key={paneId} paneId={paneId} model={steps} t={t} />}
-        {progress && <ProgressPanel key={paneId} paneId={paneId} progress={progress} onReveal={revealFlow} />}
+        {progress && <ProgressPanel key={paneId} paneId={paneId} progress={progress} onReveal={revealFlow} narrow={viewport.w > 0 && viewport.w < ProgressFoldWidth} />}
         <div className="mighty-world" ref={worldRef} onClick={onReferenceClick}>
           {/* The edges, under the blocks and in their coordinates (the layout's extent from its origin): the world's transform moves them. */}
           <svg className="mighty-edges" style={{ left: edgesBox.x, top: edgesBox.y }} width={edgesBox.w} height={edgesBox.h} viewBox={`${edgesBox.x} ${edgesBox.y} ${edgesBox.w} ${edgesBox.h}`}

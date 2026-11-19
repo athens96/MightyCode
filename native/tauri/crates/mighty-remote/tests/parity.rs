@@ -198,7 +198,10 @@ fn pairing_answer(line: &str) -> String {
     };
     let identity = Identity::load_or_create(Arc::new(Memory(std::sync::Mutex::new(Some(saved)))), false).unwrap();
     let direct: Vec<String> = if part[3] == "-" { vec![] } else { text(part[3]).split(',').map(str::to_string).collect() };
-    identity.pairing_url(&text(part[1]), &text(part[2]), &direct)
+    // The link carries the short-lived pairing code where C# put the saved key: the rest is compared as C# writes it.
+    let link = identity.pairing_url(&text(part[1]), &text(part[2]), &direct);
+    let code = mighty_remote::identity::escape_data(&identity.pairing_code(mighty_remote::identity::PairingKind::Phone));
+    link.replace(&format!("&key={code}&"), &format!("&key={}&", mighty_remote::identity::escape_data(&identity.pairing_key())))
 }
 
 #[test]

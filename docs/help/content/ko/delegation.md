@@ -61,6 +61,7 @@ Claude·Codex·Antigravity 창이 실행 중일 때 요청을 쓰고 {{kbd:⌘En
 - **막대의 메뉴**: {{ui:paneWorktree.bar.changes}}(기준 대비 바뀐 파일과 diff), {{ui:paneWorktree.bar.terminal}}, {{ui:paneWorktree.bar.finder}} (Windows: {{ui:menu.showInExplorer}}), 마지막 병합 되돌리기(워크스페이스 폴더가 그 뒤로 바뀌지 않았을 때만), {{ui:paneWorktree.bar.pr}}(확인 후 브랜치를 origin에 올리고, GitHub이면 PR 만들기 화면을 엽니다. 강제로 덮어쓰지 않습니다), {{ui:paneWorktree.bar.discard}}(자식 창이 이 창의 브랜치에서 갈라져 있으면 거절합니다).
 - **준비**: 워크스페이스 행 메뉴의 {{ui:paneWorktree.menu.copy}}에 적은 파일(예: `.env`)을 새 worktree에 복사하고, {{ui:paneWorktree.menu.setup}}을 한 번 실행합니다. 창의 실행에는 `PORT`, `MIGHTY_WORKSPACE_FOLDER`, `MIGHTY_WORKTREE` 환경 변수가 들어갑니다.
 - **닫기와 목록**: 병합하지 않은 작업이 없으면 창을 닫을 때 worktree도 지웁니다. 작업이 남아 있으면 남겨 두고, 워크스페이스 행 메뉴의 {{ui:paneWorktree.menu.list}}에서 다시 창으로 열거나 병합하거나 지울 수 있습니다.
+- **검토 대기열**: 일이 끝나 변경이 남은 worktree 창과 자식 창은 [{{ui:review.open}}](layout.md#review)에 모입니다. 막대의 메뉴에 있는 {{ui:editor.openFolder}}는 창이 일하는 폴더를 외부 편집기에서 엽니다.
 
 ## Claude에게 나눠 맡기기 {#delegate}
 Claude나 Codex 창(부모)이 일을 나눠 다른 창(자식)에게 맡길 수도 있습니다. 다른 에이전트를 지정하지 않으면 자식은 부모와 같은 에이전트입니다. 자식이 보고하면 부모가 알림을 받아 보고서를 읽고, 결과를 병합할지 정합니다. Claude와 Codex 부모 모두 Mac 앱과 Windows 앱에서 됩니다.

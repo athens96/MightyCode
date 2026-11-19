@@ -526,7 +526,8 @@ fn make(
                 block.result_files_run_id = (run.status() == "completed").then(|| run.id().to_string());
                 block.outline =
                     if awaiting.is_none() { activity::NONE.into() } else { activity::outline("running", animations_enabled).into() };
-                block.status = if awaiting.is_none() { result_state(run.status()).into() } else { "waiting".into() };
+                // Awaiting notices is under way, not waiting on the user: the run tone (amber is for a permission, a question, a plan).
+                block.status = if awaiting.is_none() { result_state(run.status()).into() } else { "running".into() };
                 // The result so far is neutral, not the done strip.
                 block.so_far = awaiting.is_none() && result_state(run.status()) == "completed" && waiting > 0;
                 block.awaiting = awaiting;

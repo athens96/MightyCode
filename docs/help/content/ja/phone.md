@@ -19,9 +19,9 @@ section: phone
 スマートフォンで:
 1. スマートフォンアプリを開き、{{ui:phone.tabs.hosts}}タブの{{ui:phone.hosts.addHost}}をタップします。初めて開いたときは、先に接続の案内が表示されます。
 2. {{ui:phone.pair.mode.qr}}でコンピュータのQRコードを読み取ります。カメラを使えない場合は、コンピュータで{{ui:settings.mobileRemote.copyLinkButton}}ボタンをクリックしてリンクを送り、{{ui:phone.pair.mode.manual}}に入力します。リンクにはキーが含まれるため秘密としてコピーされ、1分後にクリップボードから消去されます。
-3. {{ui:phone.pair.connect}}をタップすると接続され、コンピュータの{{ui:settings.mobileRemote.connectedDevicesTitle}}にそのスマートフォンが表示されます。
+3. {{ui:phone.pair.connect}}をタップすると、コンピュータに「新しいデバイスの接続要求」ウインドウと通知が表示され、スマートフォンにはコンピュータで許可するよう案内が表示されます。コンピュータで{{ui:settings.mobileRemote.approval.allow}}をクリックすると接続され、{{ui:settings.mobileRemote.connectedDevicesTitle}}にそのスマートフォンが表示されます。60秒以内に許可しないか{{ui:settings.mobileRemote.approval.refuse}}を押すと接続されません（既定のボタンは拒否です）。自分でペアリングしているスマートフォンでなければ許可しないでください。
 
-QRコードの横には{{ui:settings.mobileRemote.hostIdLabel}}と{{ui:settings.mobileRemote.keyLabel}}があります。キーは表示ボタンをクリックすると見えます。
+QRコードの横には{{ui:settings.mobileRemote.hostIdLabel}}と{{ui:settings.mobileRemote.keyLabel}}があります。キーは表示ボタンをクリックすると見えます。QRコード、リンク、キーは一度だけ使えるペアリングコードです。画面に表示されている間は使え、画面を閉じると10分後に期限切れになり、デバイスが1台接続されるか拒否されると新しいコードに変わります。接続済みのデバイスはデバイストークンで接続するため、改めて許可を求められません。
 
 {{ui:windows.mobile.connectionTitle}}には接続方法が2つあります。
 - {{ui:windows.mobile.relayTitle}}: 標準の方法です。特にすることはありません。
@@ -29,10 +29,17 @@ QRコードの横には{{ui:settings.mobileRemote.hostIdLabel}}と{{ui:settings.
 
 ![[settings-mobile]]
 
-接続したスマートフォンと[ペアリングしたコンピュータ](remote.md#pair)は{{ui:settings.mobileRemote.connectedDevicesTitle}}に1行ずつ表示され、コンピュータはコンピュータのアイコンで区別されます。この一覧は、デバイスが1つでもあればスマートフォン接続のスイッチがオフでも表示されます。デバイスを使わなくなったら、その行の{{ui:settings.mobileRemote.revokeRowButton}}ボタンをクリックします。そのデバイスだけが解除され、ほかのスマートフォンとコンピュータは接続されたままです。このときペアリングキーも新しくなるため、その後にデバイスを接続するには(解除したデバイスをもう一度接続する場合も)新しいQRコードかリンクを使います。接続済みのスマートフォンをQRコードでもう一度接続すると、そのスマートフォンの項目が新しいものに置き換わり、以前の接続は使えなくなります。
+接続したスマートフォンと[ペアリングしたコンピュータ](remote.md#pair)は{{ui:settings.mobileRemote.connectedDevicesTitle}}に1行ずつ表示され、コンピュータはコンピュータのアイコンで区別されます（アプリを再起動しても保たれます）。この一覧は、デバイスが1つでもあればスマートフォン接続のスイッチがオフでも表示されます。デバイスを使わなくなったら、その行の{{ui:settings.mobileRemote.revokeRowButton}}ボタンをクリックします。そのデバイスだけが解除され、ほかのスマートフォンとコンピュータは接続されたままです。このとき画面のペアリングコードも新しくなります。接続済みのスマートフォンをQRコードでもう一度接続すると新しいデバイスと同じく許可を求められ（同じデバイスを置き換えると表示されます）、許可すると以前の接続は使えなくなります。
 
 > [!warning]
-> {{ui:settings.mobileRemote.regenerateKeyButton}}をクリックすると、接続済みのスマートフォンとペアリングしたコンピュータがすべて解除され、接続し直す必要があります。QRコードやキー、ペアリングリンクが他人に見られたときに使ってください。
+> {{ui:settings.mobileRemote.regenerateKeyButton}}をクリックすると、接続済みのスマートフォンとペアリングしたコンピュータがすべて解除され、このコンピュータのリレーIDと暗号キーも作り直されるため、すべてのデバイスを新しいQRコードかリンクで接続し直す必要があります。誰かが許可なく接続したときや、デバイスをなくしたときに使ってください。
+
+## スマートフォンに表示するワークスペース {#workspaces}
+{{ui:settings.remote.phoneTab}} タブの {{ui:settings.mobileRemote.workspacesTitle}} で、ペアリングしたスマートフォンにこのコンピュータのどのワークスペースを表示するかを選びます。
+- {{ui:settings.mobileRemote.workspacesAll}}: 既定値です。このコンピュータのワークスペースをすべて表示し、そのペイン、ファイル (`.env` のようなファイルも)、実行を開けます。
+- {{ui:settings.mobileRemote.workspacesShared}}: [{{ui:settings.remote.shareTitle}}](remote.md#share) で今共有しているワークスペースだけが表示されます。共有をオフにするとワークスペースは一つも表示されず、ほかのワークスペースのペイン・ファイル・作業マップを開いたりリクエストを送ったりできず、そのペインの通知も届きません。
+
+変更はスマートフォンの次のリクエストから適用され、接続は切れません。
 
 ## Tailscale で直接接続する {#direct}
 Mac とスマートフォンが同じ [Tailscale](https://tailscale.com) ネットワークにあれば、スマートフォンはリレーを通さず Mac に直接接続します。ペアリングも暗号化もそのままで、Mac に直接届かないときは自動でリレーを使います。
@@ -115,4 +122,4 @@ Mac や Windows のアプリに新しいバージョンがあると、スマー�
 ## リレーのアドレスを変える {#own-relay}
 標準のリレー(Cloudflare)がアプリに組み込まれているので、通常は変える必要はありません。別のリレーを使う必要があるときは、{{ui:settings.remote.phoneTab}}タブのいちばん下にある、たたまれた{{ui:settings.advancedTitle}}を開きます。
 - {{ui:settings.mobileRemote.relayLabel}}: リレーのアドレス(`wss://…`)を入力して{{ui:settings.mobileRemote.applyButton}}をクリックします。空欄のままにすると標準のリレーを使います。
-- {{ui:settings.mobileRemote.legacyAppsToggle}}: 既定でオンになっていて、デバイストークンを持たない古いスマートフォンアプリも接続できます。オフにするとデバイストークンを持つアプリだけが接続でき、キーだけで接続しているスマートフォンはすぐに切断されるので、すべてのスマートフォンを最新のアプリにしてからオフにしてください。
+- {{ui:settings.mobileRemote.legacyAppsToggle}}: 既定でオフです。オンにすると（警告を確認したあと）、デバイストークンを持たないとても古いスマートフォンアプリが、その下の{{ui:settings.mobileRemote.legacyKeyLabel}}だけで許可なしに接続します。このキーを知っている人は誰でもこのコンピュータをリモート操作できるので、必要なときだけオンにし、使い終わったらオフにしてください。最新のアプリには必要ありません。

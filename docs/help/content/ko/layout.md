@@ -41,6 +41,14 @@ section: layout
 
 ![[dashboard]]
 
+## 검토 대기열 {#review}
+검토할 것을 한 곳에 모아 봅니다. 사이드바 {{ui:phone.dashboard.title}} 아래의 {{ui:review.sidebar}} 항목을 누르거나 {{kbd:⇧⌘R}}(Windows: {{kbd:Ctrl+Shift+R}})를 누르면 {{ui:review.open}} 패널이 열립니다. 기다리는 개수가 항목 옆에 숫자로 붙습니다.
+- 나오는 것: 변경을 남기고 끝난 [worktree 창](delegation.md#pane-worktree)과 [자식 창](delegation.md#states), 그리고 창마다 마지막으로 끝난 요청 중 바뀐 파일이 보관된 요청([요청 변경 검토](agent-pane.md#request-changes))입니다. 아직 일하는 창은 끝날 때까지 나오지 않습니다.
+- 줄마다 창 이름, 에이전트, 종류, 워크스페이스, 브랜치와 기준 브랜치, 바뀐 파일 수와 더한·지운 줄 수, 상태({{ui:review.status.ready}}, {{ui:review.status.conflict}}, {{ui:review.status.merged}})가 보입니다. 충돌이 맨 위, 병합된 것이 맨 아래에 옵니다.
+- 단추: {{ui:review.action.changes}}, {{ui:review.action.merge}}(커밋하지 않은 파일이 있는 worktree 창은 {{ui:review.action.commitMerge}}), {{ui:editor.open}}, {{ui:review.action.pr}}(worktree 창), {{ui:review.action.discard}}, {{ui:review.action.focus}}, {{ui:review.action.dismiss}}. 병합·버리기·PR은 창 위 막대나 자식 카드의 같은 동작이라 같은 확인을 거칩니다. 요청의 {{ui:review.action.changes}}는 요청 변경 검토 창을 엽니다.
+- {{ui:review.action.dismiss}}를 누르면 그 항목은 작업이 다시 바뀔 때까지 숨겨집니다.
+- 목록은 실행이 끝날 때, 패널을 열 때, {{ui:review.refresh}}을 누를 때 git을 다시 읽습니다. 화면을 그릴 때마다 읽지는 않습니다.
+
 ## 실행 창 추가 {#add-pane}
 실행 창은 AI 에이전트(Claude, Codex, Antigravity, pi, opencode, Hermes), 터미널, 파일 중 하나입니다.
 
@@ -98,6 +106,7 @@ section: layout
 | {{kbd:⌘T}} | {{ui:menu.addTerminalPane}} |
 | {{kbd:⇧⌘E}} | {{ui:menu.showFiles}} |
 | {{kbd:⇧⌘F}} | {{ui:conversationSearch.open}} |
+| {{kbd:⇧⌘R}} | {{ui:review.open}} |
 | {{kbd:⌘K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{ui:menu.settings}} |

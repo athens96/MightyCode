@@ -446,7 +446,7 @@ fn share(host: &Arc<Host>, ui: &mut Ui, page: &Page) -> El {
 }
 
 /// 페어링: the switch that lets paired computers in through the relay while this PC shares (Tailscale then not needed), how the relay
-/// link stands, and the pairing link (the phone's: the same key, valid until the 휴대폰 tab's 키 다시 만들기) to copy as a secret.
+/// link stands, and while it is on the computers' pairing link (its own short-lived code, never the phone's) to copy as a secret.
 /// Without the relay host (verification mode, a smoke) the switch is off and says why.
 fn pairing_method(host: &Arc<Host>, ui: &mut Ui, relay_on: bool, sharing: bool) -> El {
     let locale = ui.locale();
@@ -487,9 +487,11 @@ fn pairing_method(host: &Arc<Host>, ui: &mut Ui, relay_on: bool, sharing: bool) 
     if let Some(words) = status {
         parts.push(caption(ui, words).aid("settings-remote-pair-status"));
     }
-    if let Some(relay) = &relay {
-        let (to, copied, note) = (host.clone(), relay.pairing_url(), copy_note.clone());
-        // The link carries the pairing key: copied as a secret (out of clipboard history, cleared after a minute), as the key is.
+    // The computers' own link (its code short-lived and spent by one pairing, which the person here allows), only while paired
+    // computers are let in: with the switch off a computer's registration is refused anyway.
+    if let Some(relay) = relay.as_ref().filter(|_| relay_on) {
+        let (to, copied, note) = (host.clone(), relay.desktop_pairing_url(), copy_note.clone());
+        // The link carries the pairing code: copied as a secret (out of clipboard history, cleared after a minute), as the key is.
         let copy = small(
             ui,
             locale.get("settings.remote.pairCopyLink"),
@@ -715,8 +717,10 @@ fn pairing_client(host: &Arc<Host>, ui: &mut Ui, busy: bool) -> El {
         .named(locale.get("settings.remote.nameField"))
         .aid("settings-remote-pair-name")
         .on_text(move |words| typing_name.set(words));
+    // A pairing waits for the person at the other computer to allow it: said under the fields meanwhile.
+    let waiting = ui.local("remote-pair-waiting", || false);
     let ready = !busy && !link_text.get().trim().is_empty();
-    let (pairing, name_in, link_in) = (host.clone(), name_text.clone(), link_text.clone());
+    let (pairing, name_in, link_in, asking) = (host.clone(), name_text.clone(), link_text.clone(), waiting.clone());
     let connect = small(
         ui,
         locale.get("settings.remote.connectButton"),
@@ -727,9 +731,12 @@ fn pairing_client(host: &Arc<Host>, ui: &mut Ui, busy: bool) -> El {
             // The link (with its key) leaves the field before the pairing starts.
             let typed = link_in.get();
             link_in.set(String::new());
-            let (name, host) = (name_in.get(), pairing.clone());
+            let (name, host, asking) = (name_in.get(), pairing.clone(), asking.clone());
+            asking.set(true);
             crate::remote::action(&pairing, async move {
-                crate::remote::app(&host).client.pair(&name, &typed).await.map(|_| ()).map_err(|e| e.message())
+                let paired = crate::remote::app(&host).client.pair(&name, &typed).await.map(|_| ()).map_err(|e| e.message());
+                asking.set(false);
+                paired
             });
         }),
     )
@@ -742,16 +749,18 @@ fn pairing_client(host: &Arc<Host>, ui: &mut Ui, busy: bool) -> El {
         ..Grid::default()
     });
     let label = |ui: &Ui, key: &str| ui.settings_text(locale.get(key), TextStyle::size(12.0));
-    El::stack(
-        false,
-        metrics::SPACING_SM,
-        vec![
-            ui.settings_wide(label(ui, "settings.remote.pairLinkField"), link),
-            ui.settings_wide(label(ui, "settings.remote.nameField"), name_line),
-            caption(ui, locale.get("settings.remote.pairConnectNote")),
-        ],
-    )
-    .aid("settings-remote-pair-connect-part")
+    let mut parts = vec![
+        ui.settings_wide(label(ui, "settings.remote.pairLinkField"), link),
+        ui.settings_wide(label(ui, "settings.remote.nameField"), name_line),
+        caption(ui, locale.get("settings.remote.pairConnectNote")),
+    ];
+    if busy && waiting.get() {
+        parts.push(
+            ui.settings_text(locale.get("settings.remote.pairAwaitingApproval"), TextStyle::size(11.0).ink(Token::WaitText))
+                .aid("settings-remote-pair-waiting"),
+        );
+    }
+    El::stack(false, metrics::SPACING_SM, parts).aid("settings-remote-pair-connect-part")
 }
 
 /// A Tailscale address, its key and a name, each a wide row.

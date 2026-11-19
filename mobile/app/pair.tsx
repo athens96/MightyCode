@@ -26,6 +26,8 @@ export default function PairScreen() {
   const [mode, setMode] = useState<Mode>('qr');
   const [permission, requestPermission] = useCameraPermissions();
   const [busy, setBusy] = useState(false);
+  /** The computer is asking its user to allow this phone. */
+  const [awaiting, setAwaiting] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const [link, setLink] = useState('');
   const addHost = useHostsStore((state) => state.addHost);
@@ -48,15 +50,19 @@ export default function PairScreen() {
         // is read here rather than from the store, so a cold start or a deep link into
         // this screen can never pair without one.
         const clientId = await ensureClientId();
-        const info = await probeHost({
-          serverId: payload.serverId,
-          relayUrl: payload.relayUrl,
-          hostPublicKeyB64: payload.hostPublicKeyB64,
-          pairingKey: payload.pairingKey,
-          clientId,
-          // The Mac's Tailscale endpoints go first; the relay is the fallback.
-          ...(payload.directEndpoints ? { directEndpoints: payload.directEndpoints } : {}),
-        });
+        const info = await probeHost(
+          {
+            serverId: payload.serverId,
+            relayUrl: payload.relayUrl,
+            hostPublicKeyB64: payload.hostPublicKeyB64,
+            pairingKey: payload.pairingKey,
+            clientId,
+            // The Mac's Tailscale endpoints go first; the relay is the fallback.
+            ...(payload.directEndpoints ? { directEndpoints: payload.directEndpoints } : {}),
+          },
+          // The computer asks its user before it lets a new phone in: say so meanwhile.
+          { onAwaitingApproval: () => setAwaiting(true) },
+        );
         const saved = await addHost(
           { ...payload, name: payload.name || info.hostName || payload.serverId },
           {
@@ -76,6 +82,7 @@ export default function PairScreen() {
         setError(describeError(caught));
       } finally {
         setBusy(false);
+        setAwaiting(false);
       }
     },
     [addHost, ensureClientId],
@@ -124,6 +131,11 @@ export default function PairScreen() {
       </View>
 
       {error ? <ErrorBanner message={error} /> : null}
+      {awaiting ? (
+        <Card style={styles.awaiting}>
+          <Text style={styles.awaitingText}>{t('phone.pair.awaitingApproval')}</Text>
+        </Card>
+      ) : null}
 
       {mode === 'qr' ? (
         <View style={styles.scannerWrap}>
@@ -216,6 +228,8 @@ const makeStyles = (palette: Palette) =>
     modes: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: layout.gutter, paddingVertical: spacing.lg },
     scannerWrap: { flex: 1, gap: spacing.lg, paddingHorizontal: layout.gutter, paddingVertical: spacing.lg },
     permissionCard: { gap: spacing.lg },
+    awaiting: { marginHorizontal: layout.gutter },
+    awaitingText: { color: palette.text, fontSize: 14, lineHeight: 20, textAlign: 'center' },
     // The viewfinder stays black in both schemes: it frames a live camera image.
     camera: {
       backgroundColor: '#000',

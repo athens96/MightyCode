@@ -142,6 +142,9 @@ pub(crate) struct Job {
     pub dropped: HashSet<String>,
     /// The temporary Antigravity rules this run holds, released when it ends.
     pub lease: Option<Lease>,
+    /// What the full-access rule reads of the run (its kind, provider and mode, nothing it carried): an answer to one of its requests
+    /// is judged again by the switch as it is then ([`RemoteHost::full_access_refusal`]).
+    pub basis: StartRunRequest,
 }
 
 /// What `{"cursor":N,"event":…}` adds around an event in a poll, at most.
@@ -224,6 +227,10 @@ impl RemoteHost {
         if request.body.is_empty() {
             return Err(bad_request());
         }
+        // A run that full access let start asks nothing more of a client once the switch is off: its answers are refused.
+        if matches!(action, "permission" | "questions" | "plan") {
+            self.full_access_holds(id)?;
+        }
         let settled = get("permission.error.requestGone");
         let answered = match action {
             "steer" => {
@@ -255,6 +262,17 @@ impl RemoteHost {
         // What the runner refuses (settled, gone, not its kind) is a conflict, as on the Mac.
         answered.map_err(|error| HostFailure::new(409, error.message()))?;
         Ok(reply(200, &RemoteWireAnswer { protocol: protocol::VERSION, accepted: true }.to_value()))
+    }
+
+    /// Whether the job's run may still be answered from a client: what [`RemoteHost::full_access_refusal`] says of it with the switch
+    /// as it is now (an agent nothing confines here, or one in full access, once the switch went off).
+    fn full_access_holds(&self, id: &str) -> Result<(), HostFailure> {
+        let gate = lock(&self.0.gate);
+        let job = gate.jobs.get(id).ok_or_else(|| HostFailure::new(409, get("remote.host.error.runGone")))?;
+        match RemoteHost::full_access_refusal(&job.basis, gate.allows_full_access, self.0.options.windows_host) {
+            Some(refusal) => Err(HostFailure::new(403, refusal)),
+            None => Ok(()),
+        }
     }
 
     /// An answer names this run and one of its requests still waiting; any other request is refused before the runner hears of it.
@@ -393,6 +411,12 @@ impl RemoteHost {
                             cancel: Cancel::default(),
                             dropped: HashSet::new(),
                             lease: lease.take(),
+                            basis: {
+                                let mut basis = StartRunRequest::new(&id, &run.workspace_id, &run.kind, "");
+                                basis.provider = run.provider.clone();
+                                basis.settings = run.settings.clone();
+                                basis
+                            },
                         };
                         let serial = job.serial;
                         let cancel = job.cancel.clone();

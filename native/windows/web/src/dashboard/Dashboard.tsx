@@ -3,6 +3,7 @@
 import { useServices, useStoreState } from '../app/context';
 import { ProviderMark } from '../conversation/ProviderMark';
 import { useAddMenu, useWorkspaceAddChoices } from '../shell/addMenu';
+import { macHost } from '../shell/menu';
 import { BetaBadge, GitCapsule, MiddlePath, StatusGlyph, useCall, usePaneInfo } from '../shell/parts';
 import type { DashboardModel } from '../shell/types';
 import { Icon } from '../icons/Icon';
@@ -41,7 +42,7 @@ export function Dashboard({ model, onUsage }: { model: DashboardModel; onUsage: 
       </div>
       <div className={'dashboard-tiles' + (model.usage ? ' with-usage' : '')}>
         {tiles.map(([key, count, label]) => (
-          <div key={key} className={'dashboard-tile ' + key} data-testid={'dashboard-stat-' + key}>
+          <div key={key} className={'dashboard-tile ' + key + (count === 0 ? ' zero' : '')} data-testid={'dashboard-stat-' + key}>
             <span className="dashboard-tile-count">{count}</span>
             <span className="dashboard-tile-label">{t(label)}</span>
           </div>
@@ -106,13 +107,15 @@ export function Welcome({ setupNeeded }: { setupNeeded: boolean }) {
   const { t } = useServices();
   const call = useCall();
   const addChoices = useWorkspaceAddChoices();
+  // The Mac's own words and keys (⌘O, "macOS 앱"), as the Swift welcome has them; Windows keeps Ctrl+O.
+  const mac = macHost() ? 'Mac' : '';
   return (
     <div className="welcome" data-testid="welcome">
       <div className="welcome-toggle"><SidebarToggle /></div>
       <span className="welcome-spacer" />
       <Icon name="columns-2" size={58} weight={0.9} className="welcome-mark" />
       <h1 className="welcome-title">{t('layout.welcome.title')}</h1>
-      <p className="welcome-body">{t('layout.welcome.body')}</p>
+      <p className="welcome-body">{t('layout.welcome.body' + mac)}</p>
       {/* The three ways to add a workspace (the existing folder first), then the other ways in (M/WorkspaceView.swift:587-608). */}
       <div className="welcome-choices">
         <div className="welcome-buttons">
@@ -125,9 +128,9 @@ export function Welcome({ setupNeeded }: { setupNeeded: boolean }) {
           {setupNeeded && <button type="button" className="plain-button" onClick={() => call('openSetup')}>{t('setup.title')}</button>}
         </div>
       </div>
-      <div className="welcome-note welcome-shortcuts">{t('layout.welcome.shortcuts')}</div>
+      <div className="welcome-note welcome-shortcuts">{t('layout.welcome.shortcuts' + mac)}</div>
       <span className="welcome-spacer" />
-      <div className="welcome-note welcome-footer">{t('layout.welcome.footer')}</div>
+      <div className="welcome-note welcome-footer">{t('layout.welcome.footer' + mac)}</div>
     </div>
   );
 }

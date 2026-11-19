@@ -302,14 +302,15 @@ fn request_text(body: &Map<String, Value>, allow_empty: bool) -> Result<String, 
     Ok(text.to_string())
 }
 
-/// `RemoteWorkspacePhone.Workspaces`: this PC's workspaces only.
-fn local_workspaces(snapshot: &AppSnapshot) -> Vec<&Workspace> {
-    snapshot.workspaces().iter().filter(|w| w.remote.is_none()).collect()
+/// `RemoteWorkspacePhone.Workspaces`: this PC's workspaces only, and of them only `allowed` when the phone is held to some
+/// ([`crate::phone::desk::phone_workspace_ids`], 휴대폰에서 볼 워크스페이스).
+fn local_workspaces<'a>(snapshot: &'a AppSnapshot, allowed: Option<&[String]>) -> Vec<&'a Workspace> {
+    snapshot.workspaces().iter().filter(|w| w.remote.is_none() && allowed.is_none_or(|ids| ids.iter().any(|id| id == w.id()))).collect()
 }
 
-/// `RemoteWorkspacePhone.Sessions` without the files and work map panes: the panes the phone is told of.
-fn phone_panes(snapshot: &AppSnapshot) -> Vec<Arc<RunSession>> {
-    let local: std::collections::HashSet<&str> = local_workspaces(snapshot).iter().map(|w| w.id()).collect();
+/// `RemoteWorkspacePhone.Sessions` without the files and work map panes: the panes of those workspaces the phone is told of.
+fn phone_panes(snapshot: &AppSnapshot, allowed: Option<&[String]>) -> Vec<Arc<RunSession>> {
+    let local: std::collections::HashSet<&str> = local_workspaces(snapshot, allowed).iter().map(|w| w.id()).collect();
     snapshot.sessions().iter().filter(|s| local.contains(s.workspace_id()) && !matches!(s.kind(), "files" | "workmap")).cloned().collect()
 }
 
@@ -486,7 +487,8 @@ impl Inner {
         }
         let pass = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let snapshot = self.desk.snapshot();
-            let panes = phone_panes(&snapshot);
+            let allowed = self.allowed(&snapshot);
+            let panes = phone_panes(&snapshot, allowed.as_deref());
             let summaries: Vec<(MobilePaneDigest, String, String)> = panes
                 .iter()
                 .map(|pane| {
@@ -509,7 +511,7 @@ impl Inner {
                 .collect();
             let update = self.app_update_phone(&snapshot).map(|u| u.to_json()).unwrap_or_else(|| "null".into());
             let mut notes = self.notes();
-            let moved = notes.revisions.observe(local_workspaces(&snapshot), &readings, &update);
+            let moved = notes.revisions.observe(local_workspaces(&snapshot, allowed.as_deref()), &readings, &update);
             for note in moved {
                 notes.notifications.retain(|(scope, _)| *scope != note.0);
                 notes.notifications.push(note);
@@ -525,9 +527,15 @@ impl Inner {
     /// The app update as the phone sees it, with the requests running now; None when there is none.
     fn app_update_phone(&self, snapshot: &AppSnapshot) -> Option<MobileAppUpdate> {
         let state = self.desk.app_update_read()?;
+        // Every running request of this PC counts, also one in a workspace the phone does not see: an update would end it.
         let running =
-            phone_panes(snapshot).iter().filter(|s| s.status() == "running" || self.desk.is_session_running(s.id())).count() as i32;
+            phone_panes(snapshot, None).iter().filter(|s| s.status() == "running" || self.desk.is_session_running(s.id())).count() as i32;
         app_update::map(state.as_ref(), &self.desk.app_version(), running)
+    }
+
+    /// The workspaces a paired phone is held to (None: every local one), by the saved choice and what is shared now.
+    fn allowed(&self, snapshot: &AppSnapshot) -> Option<Vec<String>> {
+        crate::phone::desk::phone_workspace_ids(snapshot.mobile_remote.as_ref(), || self.desk.shared_workspace_ids())
     }
 
     /// `Pending(id)`: the pane's waiting tool permissions (never a remote pane's).
@@ -541,7 +549,10 @@ impl Inner {
     /// `Session(id)`.
     fn session(&self, id: &str) -> Result<Arc<RunSession>, MobileError> {
         let snapshot = self.desk.snapshot();
-        phone_panes(&snapshot).into_iter().find(|p| p.id() == id).ok_or_else(|| request(404, "Session not found."))
+        phone_panes(&snapshot, self.allowed(&snapshot).as_deref())
+            .into_iter()
+            .find(|p| p.id() == id)
+            .ok_or_else(|| request(404, "Session not found."))
     }
 
     fn revision(&self, id: &str) -> i64 {
@@ -606,6 +617,7 @@ impl Inner {
         let snapshot = self.desk.snapshot();
         let revision = self.notes().revisions.state();
         let host_name = self.desk.host_name();
+        let allowed = self.allowed(&snapshot);
         let mut out = JsonOut::new();
         out.begin_object();
         out.prop_int("protocol", 1);
@@ -613,7 +625,7 @@ impl Inner {
         out.prop_str("hostName", Some(&host_name));
         out.name("workspaces");
         out.begin_array();
-        for w in local_workspaces(&snapshot) {
+        for w in local_workspaces(&snapshot, allowed.as_deref()) {
             out.begin_object();
             out.prop_str("id", Some(w.id()));
             out.prop_str("name", Some(w.name()));
@@ -623,7 +635,7 @@ impl Inner {
         out.end_array();
         out.name("sessions");
         out.begin_array();
-        for pane in phone_panes(&snapshot) {
+        for pane in phone_panes(&snapshot, allowed.as_deref()) {
             let summary = self.summary(&pane, self.revision(pane.id()), &snapshot);
             out.raw(&summary);
         }
@@ -951,7 +963,9 @@ impl Inner {
     ) -> Result<Option<MobileReply>, MobileError> {
         // Only this PC's workspaces: a remote one's history is on its host.
         let snapshot = self.desk.snapshot();
-        let Some(mapped) = local_workspaces(&snapshot).into_iter().find(|w| w.id() == route[2]).cloned() else {
+        let Some(mapped) =
+            local_workspaces(&snapshot, self.allowed(&snapshot).as_deref()).into_iter().find(|w| w.id() == route[2]).cloned()
+        else {
             return Err(request(404, "Workspace not found."));
         };
         if method == "GET" && route.len() == 4 && query.is_empty() {
@@ -988,7 +1002,9 @@ impl Inner {
         let listing = method == "GET" && route[3] == "files";
         let files = method == "GET" && matches!(route[3], "files" | "file");
         let snapshot = self.desk.snapshot();
-        let Some(workspace) = local_workspaces(&snapshot).into_iter().find(|w| w.id() == route[2]).cloned() else {
+        let Some(workspace) =
+            local_workspaces(&snapshot, self.allowed(&snapshot).as_deref()).into_iter().find(|w| w.id() == route[2]).cloned()
+        else {
             return Err(if files { files::workspace_not_found(l) } else { request(404, "Workspace not found.") });
         };
         if method == "POST" && route[3] == "sessions" {

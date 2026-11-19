@@ -814,6 +814,8 @@ export interface HostLeaseOptions {
   onDirectEndpoints?: (endpoints: string[]) => void;
   /** Hears which way the tunnel reached the host, each time it opens. */
   onRoute?: (route: ConnectionRoute) => void;
+  /** Hears that the computer is asking its user to allow this pairing. */
+  onAwaitingApproval?: (seconds: number) => void;
 }
 
 function connectionOptions(options: HostLeaseOptions): RelayConnectionOptions {
@@ -823,6 +825,7 @@ function connectionOptions(options: HostLeaseOptions): RelayConnectionOptions {
   if (options.mintClientId) built.mintClientId = options.mintClientId;
   if (options.onDirectEndpoints) built.onDirectEndpoints = options.onDirectEndpoints;
   if (options.onRoute) built.onRoute = options.onRoute;
+  if (options.onAwaitingApproval) built.onAwaitingApproval = options.onAwaitingApproval;
   return built;
 }
 

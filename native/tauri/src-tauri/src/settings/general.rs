@@ -178,6 +178,21 @@ pub fn agents(host: &Arc<Host>, ui: &mut Ui) -> El {
         mighty_core::settings_words::text(&locale, crate::platform::words(), "settings.delegation.descriptionWindows").unwrap_or_default(),
     );
     rows.add(ui.settings_labeled(words, switch, true));
+
+    // 외부 편집기: what 편집기에서 열기 starts (editor.rs): 자동, each editor found (looked for as Settings opened), 시스템 기본.
+    let label = locale.get("settings.editor.label");
+    let (choices, chosen) =
+        crate::editor::picker_rows(&locale, &crate::editor::choice(host), &crate::editor::detected(), crate::platform::profile().os);
+    let values: Vec<String> = choices.iter().map(|(value, _)| value.clone()).collect();
+    let items: Vec<Content> = choices.into_iter().map(|(_, words)| Content::from(words)).collect();
+    let to = host.clone();
+    let combo = picker(ui, &label, "settings-external-editor", chosen as i32, items).on_select(move |at| {
+        if let Some(value) = values.get(at as usize) {
+            crate::editor::set_choice(&to, value);
+        }
+    });
+    let words = ui.settings_titled(&label, locale.get("settings.editor.description"));
+    rows.add(ui.settings_labeled(words, framed(ui, combo), true));
     if let Some(tips) = mighty_core::settings_words::text(&locale, crate::platform::words(), "settings.appInfo.windowsNote") {
         rows.add(ui.settings_text(tips, TextStyle::size(11.0).ink(Token::Ink2)).aid("settings-agent-tips"));
     }

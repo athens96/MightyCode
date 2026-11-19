@@ -1,8 +1,8 @@
-import { memo, useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import type { RunSession } from '../../store/models';
 import { useServices } from '../../app/context';
 import { Markdown } from '../../conversation/MarkdownView';
-import { MiddlePath } from '../../shell/parts';
+import { MiddlePath, useMenu } from '../../shell/parts';
 import { Icon, type IconName } from '../../icons/Icon';
 import { HtmlFrame, HtmlToggle, isHtmlPreview } from './HtmlView';
 import { lineNumbers, sourceSpans, treeKey } from './tree';
@@ -16,7 +16,11 @@ function Symbol({ row, symbol }: { row?: FileRow; symbol?: string }) {
   return <span className={'files-symbol files-symbol-' + kind} aria-hidden="true"><Icon name={name} size={13} weight={1.6} /></span>;
 }
 
-const Tree = memo(function Tree({ model, onRow, onKey }: { model: FilesModel; onRow: (row: FileRow) => void; onKey: (event: KeyboardEvent<HTMLDivElement>) => void }) {
+const Tree = memo(function Tree({ model, onRow, onKey, onMenu }: {
+  model: FilesModel; onRow: (row: FileRow) => void; onKey: (event: KeyboardEvent<HTMLDivElement>) => void;
+  /** A right-click on a row: its menu (편집기에서 열기 and the desktop's actions). */
+  onMenu?: (event: ReactMouseEvent, row: FileRow) => void;
+}) {
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const row = list.current?.querySelector<HTMLElement>('[aria-selected="true"]');
@@ -27,7 +31,8 @@ const Tree = memo(function Tree({ model, onRow, onKey }: { model: FilesModel; on
       {model.rows.map((row) => (
         <div key={row.path} className="files-row-group">
           <div id={'files-row-' + row.path} role="treeitem" className={'files-row' + (row.noise ? ' noise' : '')} aria-selected={row.path === model.selected} aria-expanded={row.dir && !model.filtering ? row.expanded : undefined}
-            data-path={row.path} title={row.path} style={{ paddingLeft: 'calc(var(--space-xs) + ' + (8 + row.depth * 14) + 'px)' }} onClick={() => onRow(row)}>
+            data-path={row.path} title={row.path} style={{ paddingLeft: 'calc(var(--space-xs) + ' + (8 + row.depth * 14) + 'px)' }} onClick={() => onRow(row)}
+            onContextMenu={onMenu ? (event) => onMenu(event, row) : undefined}>
             <span className="files-chevron">{row.dir && !model.filtering && <Icon name={row.expanded ? 'chevron-down' : 'chevron-right'} size={10} weight={2.8} />}</span>
             <Symbol row={row} />
             <span className="files-name">{row.name}</span>
@@ -171,6 +176,19 @@ export function FilesView({ session }: { session: RunSession }) {
   };
   const reveal = () => { if (preview) void call('filesShowInExplorer', { path: preview.path }).catch(() => {}); };
   const open = () => { if (preview) void call('filesOpen', { path: preview.path }).catch(() => {}); };
+  // 편집기에서 열기 (src-tauri editor.rs): the file, or a folder, resolved inside the workspace again by the host.
+  const editor = useCallback((path: string) => void call('openInEditor', { source: 'files', path }).catch(() => {}), [call]);
+  const menu = useMenu();
+  const menuRef = useRef(menu);
+  menuRef.current = menu;
+  // A row's right-click menu (the tree is memoised: the menu is read through a ref).
+  const onMenu = useCallback((event: ReactMouseEvent, row: FileRow) => {
+    menuRef.current.atPointer(event, [
+      { label: t(row.dir ? 'editor.openFolder' : 'editor.open'), icon: <Icon name="file-code" size={12} />, action: () => editor(row.path), testId: 'files-menu-editor' },
+      ...(row.dir ? [] : [{ label: t('graph.resultFiles.openFile', { path: row.name }), action: () => void call('filesOpen', { path: row.path }).catch(() => {}) }]),
+      { label: t('menu.showInExplorer'), action: () => void call('filesShowInExplorer', { path: row.path }).catch(() => {}) },
+    ]);
+  }, [call, editor, t]);
 
   if (model && !model.available) return <div className="files-pane files-unavailable" data-testid="files-pane" />;
   const shows = preview && !preview.failure;
@@ -190,7 +208,7 @@ export function FilesView({ session }: { session: RunSession }) {
             <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M10 6a4 4 0 1 1-1.2-2.85M10 1.5v2.5H7.5" /></svg>
           </button>
         </div>
-        {model && <Tree model={model} onRow={onRow} onKey={onKey} />}
+        {model && <Tree model={model} onRow={onRow} onKey={onKey} onMenu={onMenu} />}
       </div>
       <div className="files-preview-column" data-testid="files-preview" data-preview-path={preview?.path ?? ''} data-preview-kind={preview?.failure ? 'failed' : preview?.kind ?? ''}>
         {shows && (
@@ -218,6 +236,9 @@ export function FilesView({ session }: { session: RunSession }) {
                 </div>
               )}
               {isHtmlPreview(preview) && <HtmlToggle source={showSource} onChoose={setShowSource} />}
+              <button type="button" className="files-tool" data-testid="files-editor" aria-label={t('editor.open')} title={t('editor.open')} onClick={() => editor(preview.path)}>
+                <Icon name="file-code" size={13} weight={1.7} />
+              </button>
               <button type="button" className="files-tool" aria-label={t('graph.resultFiles.openFile', { path: preview.name })} title={t('graph.resultFiles.openFile', { path: preview.name })} onClick={open}>
                 <svg viewBox="0 0 14 14" aria-hidden="true"><path d="M8 2h4v4M12 2 6.5 7.5M10.5 8.5V12h-8.5V3.5H5.5" /></svg>
               </button>

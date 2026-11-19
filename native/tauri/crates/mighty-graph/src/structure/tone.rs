@@ -30,10 +30,10 @@ pub fn of_step(step: Step, waiting: bool) -> Option<Tone> {
 }
 
 /// `Tone.OfColumn` (MightyStructureTone.cs:38): a step's own, but the current step follows its newest request, and a free board's done
-/// 결과 whose request awaits notices waits.
+/// 결과 whose request awaits notices is still under way (the run tone: amber is only for what needs the user).
 pub fn of_column(column: &BoardColumn) -> Option<Tone> {
     if column.step.step == Step::Done && column.cards.iter().any(|c| c.kind == CardKind::Result && c.item.awaiting) {
-        return Some(Tone::Wait);
+        return Some(Tone::Run);
     }
     if column.step.step == Step::Current {
         return Some(current(column.cards.iter().rev().find(|c| c.kind != CardKind::Agent).map(|c| &*c.item)));

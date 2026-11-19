@@ -60,14 +60,14 @@ Tailscale 공유는 이 컴퓨터의 Tailscale 주소에서만 연결을 받습�
 호스트 컴퓨터에서:
 1. {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} → {{ui:settings.remote.shareTitle}} 탭의 {{ui:settings.remote.methodsTitle}}에서 {{ui:settings.remote.viaPairing}} 줄의 {{ui:settings.remote.pairAccept}}를 켭니다.
 2. 워크스페이스를 고르고 {{ui:settings.remote.startSharing}} 단추를 누릅니다. 공유하는 동안 이 컴퓨터가 릴레이에 연결하고, 그 상태가 같은 줄에 보입니다.
-3. {{ui:settings.remote.pairCopyLink}} 단추로 링크를 복사해 연결할 컴퓨터에 전합니다.
+3. {{ui:settings.remote.pairCopyLink}} 단추로 링크를 복사해 연결할 컴퓨터에 전합니다. 이 링크는 컴퓨터 전용이고(휴대폰 QR로는 컴퓨터를 연결할 수 없고, 그 반대도 마찬가지입니다) 한 번만 쓸 수 있으며, 이 화면을 닫으면 10분 뒤 만료됩니다. 상대 컴퓨터가 연결하려 하면 이 컴퓨터에 "새 기기 연결 요청" 창과 알림이 뜨니, 맞으면 {{ui:settings.mobileRemote.approval.allow}}을 누릅니다(60초 안에 답이 없으면 거절됩니다).
 
 연결할 컴퓨터에서:
-1. {{ui:settings.remote.navTitle}} → {{ui:settings.remote.connectTitle}} 탭의 스위치에서 {{ui:settings.remote.pairLinkField}}를 고르고, 링크를 붙여 넣고, 원하면 이름을 정한 뒤 {{ui:settings.remote.connectButton}} 단추를 누릅니다.
+1. {{ui:settings.remote.navTitle}} → {{ui:settings.remote.connectTitle}} 탭의 스위치에서 {{ui:settings.remote.pairLinkField}}를 고르고, 링크를 붙여 넣고, 원하면 이름을 정한 뒤 {{ui:settings.remote.connectButton}} 단추를 누릅니다. 호스트 컴퓨터에서 허용할 때까지 그곳에서 허용해 달라는 안내가 보입니다.
 2. 연결되면 그 컴퓨터가 {{ui:settings.remote.connectionsTitle}} 목록에 페어링 칩과 함께, 사이드바에 "원격 · 이름"으로 나타납니다. 연결과 연결 끊기도 Tailscale 연결과 같습니다.
 
-- 링크에는 휴대폰 QR과 같은 페어링 키가 들어 있으니 믿는 사람에게만 전하세요. 처음 연결할 때 호스트가 이 컴퓨터만의 기기 토큰을 주고, 그 뒤에는 그 토큰으로 연결합니다. 토큰은 연결 키처럼 macOS Keychain(Windows에서는 이 사용자만 풀 수 있게 암호화한 파일)에 두고 워크스페이스 기록에는 넣지 않습니다.
-- 페어링한 컴퓨터는 호스트의 {{ui:settings.remote.phoneTab}} 탭 {{ui:settings.mobileRemote.connectedDevicesTitle}} 목록에 컴퓨터 아이콘과 함께 보입니다(휴대폰 연결 스위치가 꺼져 있어도 보입니다). 그 줄의 {{ui:settings.mobileRemote.revokeRowButton}} 단추는 그 컴퓨터만 해제하고, 다른 휴대폰과 컴퓨터는 그대로 연결됩니다. 이때 페어링 키가 새로 바뀌므로 그 뒤에 연결하는 기기는 새 링크를 씁니다. {{ui:settings.mobileRemote.regenerateKeyButton}}를 누르면 휴대폰과 컴퓨터가 모두 해제되고, 다시 쓰려면 새 링크로 연결해야 합니다.
+- 링크에는 이 컴퓨터 전용의 짧게 쓰는 페어링 코드가 들어 있습니다. 링크가 남에게 넘어가도 호스트에서 허용하지 않으면 연결되지 않습니다. 처음 연결할 때 호스트가 이 컴퓨터만의 기기 토큰을 주고, 그 뒤에는 그 토큰으로 연결하므로 허용을 다시 묻지 않습니다. 토큰은 연결 키처럼 macOS Keychain(Windows에서는 이 사용자만 풀 수 있게 암호화한 파일)에 두고 워크스페이스 기록에는 넣지 않습니다. 호스트에서 {{ui:settings.remote.pairAccept}}가 꺼져 있거나 공유 중이 아니면 새 컴퓨터는 연결되지 않습니다.
+- 페어링한 컴퓨터는 호스트의 {{ui:settings.remote.phoneTab}} 탭 {{ui:settings.mobileRemote.connectedDevicesTitle}} 목록에 컴퓨터 아이콘과 함께 보입니다(휴대폰 연결 스위치가 꺼져 있어도, 앱을 다시 켜도 보입니다). 그 줄의 {{ui:settings.mobileRemote.revokeRowButton}} 단추는 그 컴퓨터만 해제하고, 다른 휴대폰과 컴퓨터는 그대로 연결됩니다. {{ui:settings.mobileRemote.regenerateKeyButton}}를 누르면 휴대폰과 컴퓨터가 모두 해제되고 호스트의 릴레이 ID와 암호 키가 새로 만들어지므로, 다시 쓰려면 새 링크로 연결해야 합니다.
 - 공유한 워크스페이스만 보이고, {{ui:settings.remote.allowFullAccess}} 스위치와 가둬 둘 수 없는 에이전트의 규칙도 Tailscale 연결과 똑같이 적용됩니다.
 - 휴대폰 설정은 바뀌지 않습니다. {{ui:settings.remote.phoneTab}} 탭에서 휴대폰 연결을 허용하지 않았다면 이 스위치가 켜져 있어도 휴대폰은 연결되지 않습니다.
 - 릴레이는 한 번에 1 MB까지 보냅니다. 페어링 연결로 보내는 첨부 파일은 합계 약 750 KB까지이고(파일 내용이 base64로 늘어납니다), 더 크면 보내기 전에 알려 줍니다. 큰 파일은 Tailscale로 연결해 보내세요. 긴 대화는 최근 항목부터 1 MB 안에 드는 만큼 보입니다.

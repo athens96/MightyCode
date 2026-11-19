@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import tokens from '@tokens/design-tokens.json';
-import { Motion, cubicBezier, ease, kebab, motionVariables, paletteVariables, percent, terminalPalette, themeName, tokenStyleSheet } from './tokens';
+import { Motion, cubicBezier, ease, kebab, motionVariables, paletteVariables, percent, quoteFamilies, terminalPalette, themeName, tokenStyleSheet } from './tokens';
 import { terminalThemes } from '../panes/terminal/rules';
+
+/** WCAG 2.x contrast of two `#RRGGBB` colours. */
+function contrast(a: string, b: string): number {
+  const luminance = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  };
+  const [x, y] = [luminance(a), luminance(b)];
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+}
 
 describe('tokens', () => {
   it('names variables in kebab case', () => {
@@ -33,6 +43,32 @@ describe('tokens', () => {
     expect(sheet).toMatch(/:root\[data-theme="dark"\]\{[^}]*--dialog-backdrop:rgba\(0,0,0,0\.5\);--dialog-border:1px;/);
   });
 
+  it('names the Mac fonts before the Windows ones, the system keywords unquoted', () => {
+    expect(quoteFamilies('-apple-system, BlinkMacSystemFont, Segoe UI, ui-monospace')).toBe('-apple-system, BlinkMacSystemFont, "Segoe UI", ui-monospace');
+    const sheet = tokenStyleSheet();
+    expect(sheet).toContain('--font-body:-apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;');
+    expect(sheet).toContain('--font-mono:ui-monospace, "SF Mono", "Menlo", "Cascadia Mono", "Consolas", monospace;');
+    // The stronger rule for inputs and pills, per theme.
+    expect(sheet).toMatch(new RegExp(`:root\\[data-theme="light"\\]\\{[^}]*--line-strong:${tokens.derived.light.lineStrong};`));
+    expect(sheet).toMatch(new RegExp(`:root\\[data-theme="dark"\\]\\{[^}]*--line-strong:${tokens.derived.dark.lineStrong};`));
+    // One primary fill for every primary action, white words on it at 4.5:1 or more in both themes.
+    for (const theme of ['light', 'dark'] as const) {
+      expect(sheet).toMatch(new RegExp(`:root\\[data-theme="${theme}"\\]\\{[^}]*--primary:${tokens.derived[theme].primary};--on-primary:${tokens.derived[theme].onPrimary};`));
+      expect(contrast(tokens.derived[theme].primary, tokens.derived[theme].onPrimary)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('keeps the quiet inks apart and readable as small words on every surface', () => {
+    for (const theme of ['light', 'dark'] as const) {
+      const palette = tokens[theme];
+      expect(palette.ink2).not.toBe(palette.ink3);
+      for (const surface of [palette.card, palette.page, palette.sidebar, palette.cardRaised]) {
+        expect(contrast(palette.ink2, surface)).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(palette.ink3, surface)).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
   it('reads any theme but light as dark, as the host does', () => {
     expect(themeName('light')).toBe('light');
     expect(themeName('dark')).toBe('dark');
@@ -60,9 +96,10 @@ describe('tokens', () => {
     expect(sheet).toContain(`--pipeline-card-tint:${percent(tokens.pipeline.cardTintOpacity)};`);
     expect(sheet).toContain(`--pipeline-card-bar:${tokens.pipeline.cardBarWidth}px;`);
     // The column's wash, the card's lighter tint (so a card stands out from its column) and the bar.
-    expect(tokens.pipeline).toEqual({ columnTintOpacity: 0.6, cardTintOpacity: 0.35, cardBarWidth: 3 });
-    expect(percent(tokens.pipeline.columnTintOpacity)).toBe('60%');
-    expect(percent(tokens.pipeline.cardTintOpacity)).toBe('35%');
+    // A faint column wash, so the colour sits on the cards (their bar and tint) rather than across the board.
+    expect(tokens.pipeline).toEqual({ columnTintOpacity: 0.12, cardTintOpacity: 0.5, cardBarWidth: 3 });
+    expect(percent(tokens.pipeline.columnTintOpacity)).toBe('12%');
+    expect(percent(tokens.pipeline.cardTintOpacity)).toBe('50%');
   });
 
   it('carries the motion tokens from the fixture, as DesignMetrics.Motion does on the Mac and in Windows Core', () => {

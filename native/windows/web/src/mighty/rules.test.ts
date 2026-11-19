@@ -3,9 +3,9 @@
 // rules worked by hand.
 import { describe, expect, it } from 'vitest';
 import type { MightyGraphRun } from '../store/models';
-import { PendingNodeID, imagesHeight, makeLayout, nodeId, resultCap, resultDrag, resultFitSize, resultSize, resultViewportLimit, runOf, suffixOf } from './layout';
+import { PendingNodeID, ResultHeadHeight, emptyResultIds, imagesHeight, makeLayout, nodeId, resultCap, resultDrag, resultFitSize, resultSize, resultViewportLimit, runOf, suffixOf } from './layout';
 import {
-  arrivedResult, resultCamera,
+  arrivedResult, resultCamera, cameraOffset, centredX, progressSafeLeft, ProgressSafeLeft,
   DotsMargin, FollowWatch, WheelGestureGapMs, ZoomMax, activityPhase, barHeight, cameraTween, dashFitting, dashForCard, dotFirst, dotRadius, dotStep, dotsShift, dotsShown, followTargetID, isAtNewest, outlineOf,
   perimeter, runsChanged, scrollsBy, wheelPan, wheelRoute, wheelScrollTarget, zoomAnchored, zoomIn, zoomLabel, zoomOut,
 } from './camera';
@@ -100,6 +100,42 @@ describe('a result that comes in', () => {
     expect(600 - (short.y + 1200)).toBe(16);
     const tall = resultCamera({ x: 0, y: 1000, w: 360, h: 900 }, viewport, 1);
     expect(tall.y + 1000).toBe(16);
+  });
+});
+
+describe('the progress panel’s room', () => {
+  it('centres in the view right of the panel while it shows and the rest holds a request, else in the whole view', () => {
+    const wide = { w: 1200, h: 600 };
+    expect(progressSafeLeft(false, wide, 1)).toBe(0);
+    expect(progressSafeLeft(true, wide, 1)).toBe(ProgressSafeLeft);
+    expect(ProgressSafeLeft).toBe(8 + 280 + 16);
+    // 820 − 304 = 516 is less than a request's 500 and its two 24 margins.
+    expect(progressSafeLeft(true, { w: 820, h: 600 }, 1)).toBe(0);
+    expect(progressSafeLeft(true, { w: 820, h: 600 }, 0.5)).toBe(ProgressSafeLeft);
+    const block = { x: 24, y: 100, w: 500, h: 140 };
+    const plain = cameraOffset(block, wide, 1, true);
+    const kept = cameraOffset(block, wide, 1, true, false, ProgressSafeLeft);
+    expect(plain.x + 24).toBe((1200 - 500) / 2);
+    expect(kept.x + 24).toBe(ProgressSafeLeft + (1200 - ProgressSafeLeft - 500) / 2);
+    expect(kept.x + 24).toBeGreaterThanOrEqual(ProgressSafeLeft);
+    expect(kept.y).toBe(plain.y);
+    expect(centredX(wide, 1, ProgressSafeLeft) - centredX(wide, 1)).toBe(ProgressSafeLeft / 2);
+    expect(resultCamera(block, wide, 1, ProgressSafeLeft).x).toBe(centredX(wide, 1, ProgressSafeLeft));
+  });
+});
+
+describe('a result with nothing to show', () => {
+  const said = (id: string): MightyGraphRun => ({ ...run(id, 'completed'), finalOutput: 'Done.' });
+  const runs = [run('e1', 'completed'), said('e2'), run('e3', 'running')];
+  it('is its header alone once settled, never while it waits or answers', () => {
+    const empty = emptyResultIds(runs, () => ({ status: 'completed' }));
+    expect([...empty]).toEqual([nodeId('e1', 'result')]);
+    expect(emptyResultIds(runs, () => ({ status: 'waiting' })).size).toBe(0);
+    expect(emptyResultIds(runs, () => ({ status: 'completed', awaiting: {} })).size).toBe(0);
+    expect(emptyResultIds(runs, () => undefined, 'e1').size).toBe(0);
+    const layout = makeLayout(runs, '', true, new Set(), { splitsExecution: true, emptyResults: empty });
+    expect(frame(layout, nodeId('e1', 'result'))?.h).toBe(ResultHeadHeight);
+    expect(frame(layout, nodeId('e2', 'result'))?.h).toBe(200);
   });
 });
 

@@ -61,6 +61,7 @@ Claude・Codex・Antigravityペインの実行中にリクエストを書いて{
 - **バーのメニュー**: {{ui:paneWorktree.bar.changes}}(ベースとの差分のあるファイルと diff)、{{ui:paneWorktree.bar.terminal}}、{{ui:paneWorktree.bar.finder}} (Windows: {{ui:menu.showInExplorer}})、直近のマージの取り消し(その後ワークスペースフォルダーが変わっていない場合のみ)、{{ui:paneWorktree.bar.pr}}(確認後にブランチを origin にプッシュし、強制はしません。GitHub ならプルリクエスト作成ページを開きます)、{{ui:paneWorktree.bar.discard}}(このペインのブランチから分かれた子ペインがあると拒否します)。
 - **準備**: ワークスペース行のメニュー {{ui:paneWorktree.menu.copy}} に書いたファイル(例: `.env`)を新しい worktree にコピーし、{{ui:paneWorktree.menu.setup}} を 1 回実行します。ペインの実行には `PORT`、`MIGHTY_WORKSPACE_FOLDER`、`MIGHTY_WORKTREE` 環境変数が入ります。
 - **閉じるときと一覧**: マージしていない作業がなければ、ペインを閉じると worktree も削除します。作業が残っていれば保持し、ワークスペース行のメニュー {{ui:paneWorktree.menu.list}} からペインとして開き直す、マージする、削除することができます。
+- **レビュー待ち**: 作業が終わって変更が残ったworktreeペインと子ペインは[{{ui:review.open}}](layout.md#review)に集まります。バーのメニューの{{ui:editor.openFolder}}は、ペインが作業するフォルダを外部エディタで開きます。
 
 ## Claudeに分けて任せる {#delegate}
 ClaudeかCodexのペイン(親)が作業を分けて、ほかのペイン(子)に任せることもできます。別のエージェントを指定しなければ、子は親と同じエージェントです。子がレポートすると、親が通知を受け取ってレポートを読み、結果をマージするかどうかを決めます。ClaudeとCodexの親は、MacアプリとWindowsアプリの両方で使えます。

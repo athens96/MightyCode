@@ -478,6 +478,62 @@ pub async fn changed_files(git: &Git, pane: &PaneWorktree) -> Option<Vec<Changed
     Some(files)
 }
 
+/// The size of a worktree's work for the review queue: the files it changed against the commit it shares with its base (its commits,
+/// what is not committed yet and its new files) and the lines added and removed in them (a binary file counts as a file, no lines; a
+/// new file's lines are not counted).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DiffStat {
+    pub files: usize,
+    pub added: usize,
+    pub removed: usize,
+}
+
+/// `git diff --numstat -z` read: `<added>\t<removed>\t<path>\0` per file (`-` for a binary file's counts); with `--no-renames` no entry
+/// spans two paths. Paths listed twice count once.
+pub fn parse_numstat(text: &str) -> (DiffStat, Vec<String>) {
+    let mut stat = DiffStat::default();
+    let mut paths: Vec<String> = vec![];
+    for entry in text.split('\0').filter(|entry| !entry.trim().is_empty()) {
+        let mut fields = entry.trim_start_matches('\n').splitn(3, '\t');
+        let (Some(added), Some(removed), Some(path)) = (fields.next(), fields.next(), fields.next()) else { continue };
+        if path.is_empty() || paths.iter().any(|p| p == path) {
+            continue;
+        }
+        stat.added += added.parse::<usize>().unwrap_or(0);
+        stat.removed += removed.parse::<usize>().unwrap_or(0);
+        paths.push(path.to_string());
+    }
+    stat.files = paths.len();
+    (stat, paths)
+}
+
+/// The commit a worktree's work is measured from: the one it shares with its base branch, else the commit it was made at (a base
+/// branch that is gone, or a detached base).
+async fn review_base(git: &Git, pane: &PaneWorktree) -> Option<String> {
+    if !pane.base_branch().is_empty()
+        && let Some(found) = merge_base(git, pane).await
+    {
+        return Some(found);
+    }
+    let made_at = pane.base_commit.as_deref().unwrap_or("");
+    is_object_name(made_at).then(|| made_at.to_string())
+}
+
+/// [`DiffStat`] of the pane's worktree (two git reads: `diff --numstat` and the untracked files); None when the worktree is gone or
+/// git fails.
+pub async fn diff_stat(git: &Git, pane: &PaneWorktree) -> Option<DiffStat> {
+    if !is_folder(pane.worktree_path()) {
+        return None;
+    }
+    let since = review_base(git, pane).await?;
+    let worktree = pane.worktree_path();
+    let diff = run(git, &["diff", "--numstat", "-z", "--no-renames", &since], worktree, 30.0).await.filter(|r| r.exit_code == 0)?;
+    let others = run(git, &["ls-files", "-z", "--others", "--exclude-standard"], worktree, 30.0).await.filter(|r| r.exit_code == 0)?;
+    let (mut stat, paths) = parse_numstat(&diff.stdout);
+    stat.files += others.stdout.split('\0').filter(|p| !p.is_empty() && !paths.iter().any(|known| known == p)).count();
+    Some(stat)
+}
+
 /// `Path.IsPathRooted`.
 fn rooted(path: &str) -> bool {
     if !os::windows() {
@@ -987,6 +1043,16 @@ mod tests {
             compare_url("me/app", "release/1.0", "mighty/p q"),
             "https://github.com/me/app/compare/release/1.0...mighty/p%20q?expand=1"
         );
+    }
+
+    #[test]
+    fn numstat_counts_files_and_lines_once_each() {
+        let text = ["3\t1\tsrc/a.rs", "-\t-\tlogo.png", "10\t0\t한글 파일.md", "2\t2\tsrc/a.rs", ""].join("\0");
+        let (stat, paths) = parse_numstat(&text);
+        assert_eq!(stat, DiffStat { files: 3, added: 13, removed: 1 }, "a binary file counts no lines; a path listed twice once");
+        assert_eq!(paths, ["src/a.rs", "logo.png", "한글 파일.md"]);
+        assert_eq!(parse_numstat(""), (DiffStat::default(), vec![]));
+        assert_eq!(parse_numstat("garbage\0").0, DiffStat::default());
     }
 
     #[test]

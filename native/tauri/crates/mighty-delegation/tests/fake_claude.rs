@@ -138,8 +138,9 @@ async fn the_fake_calls_the_delegation_server_on_the_panes_token() {
     let mut arguments = vec![];
     binding.append_arguments(&mut arguments);
     // The config names the checks' exe, as the app's names MightyCode.exe.
-    let config =
-        arguments[1].replace(&executable().replace('\\', "\\\\"), &env!("CARGO_BIN_EXE_mighty-delegation-fake").replace('\\', "\\\\"));
+    let config = std::fs::read_to_string(&arguments[1])
+        .unwrap()
+        .replace(&executable().replace('\\', "\\\\"), &env!("CARGO_BIN_EXE_mighty-delegation-fake").replace('\\', "\\\\"));
     let script = json!({"turns": [[{"call": "delegate", "arguments": {"task": "Write it", "mode": "plan"}}, {"say": "Delegated."}]]});
     std::fs::create_dir_all(root.join("scripts")).unwrap();
     std::fs::write(root.join("scripts").join(format!("{}.json", key(&root))), script.to_string()).unwrap();

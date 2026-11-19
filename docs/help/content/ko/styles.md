@@ -22,7 +22,7 @@ section: styles
 | 클러드 플랜 | 새 요청마다 Claude의 계획 모드로 시작합니다. 계획 카드를 승인하면 실행합니다. 체크리스트 진행과 백그라운드 작업이 위젯으로 보입니다. |
 
 ## 계획 카드 {#plan-card}
-Claude가 계획 모드(Plan mode, 또는 클러드 플랜 스타일)에서 계획을 마치면 계획 카드가 뜹니다.
+Claude가 {{ui:permission.label.claude.plan}}(또는 클러드 플랜 스타일)에서 계획을 마치면 계획 카드가 뜹니다.
 
 ![[plan-card]]
 

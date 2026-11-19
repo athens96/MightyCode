@@ -1433,7 +1433,9 @@ pub fn phase_models(value: Option<&PhaseModelsSnapshot>) -> Option<PhaseModelsSn
 }
 
 /// `MobileRelayHost.NormalizeRelay`: `ws(s)://host[:port]`, or null for anything `Uri` would not take as one (the parts .NET's
-/// `Uri` checks that matter for a relay address: scheme, host, user info, fragment, port).
+/// `Uri` checks that matter for a relay address: scheme, host, user info, fragment, port). Plain `ws://` (or `http://`) only on this
+/// computer itself (loopback: a relay run for a check or by hand); anywhere else the relay must be `wss://`, so its TLS hides the host
+/// token from the network.
 pub fn normalize_relay(value: &str) -> Option<String> {
     if value.trim().is_empty() || wire::utf16_len(value) > 256 || value.chars().any(char::is_whitespace) {
         return None;
@@ -1471,8 +1473,19 @@ pub fn normalize_relay(value: &str) -> Option<String> {
         Some(_) => return None,
     };
     let secure = matches!(scheme.as_str(), "https" | "wss");
+    if !secure && !loopback_host(&host) {
+        return None;
+    }
     let (scheme, default) = if secure { ("wss", 443) } else { ("ws", 80) };
     Some(if port == default { format!("{scheme}://{host}") } else { format!("{scheme}://{host}:{port}") })
+}
+
+/// `localhost`, an IPv4 address in 127.0.0.0/8 or `[::1]` (the host as [`normalize_relay`] lowers it).
+fn loopback_host(host: &str) -> bool {
+    if host == "localhost" || host == "[::1]" {
+        return true;
+    }
+    host.parse::<std::net::Ipv4Addr>().is_ok_and(|address| address.is_loopback())
 }
 
 /// `MobileRemoteSettings.Normalized`.
@@ -2056,7 +2069,13 @@ mod tests {
     fn relays_normalize_as_uri_does() {
         assert_eq!(normalize_relay("relay.example.com").as_deref(), Some("wss://relay.example.com"));
         assert_eq!(normalize_relay("https://Relay.Example.com:443/x?y").as_deref(), Some("wss://relay.example.com"));
-        assert_eq!(normalize_relay("http://h:8080").as_deref(), Some("ws://h:8080"));
+        // Plain ws:// only on this computer: anywhere else the host token would cross the network in the clear.
+        assert_eq!(normalize_relay("http://h:8080"), None);
+        assert_eq!(normalize_relay("ws://relay.example.com"), None);
+        assert_eq!(normalize_relay("ws://192.168.0.10:8787"), None);
+        assert_eq!(normalize_relay("ws://127.0.0.1:8787").as_deref(), Some("ws://127.0.0.1:8787"));
+        assert_eq!(normalize_relay("http://LocalHost:9000").as_deref(), Some("ws://localhost:9000"));
+        assert_eq!(normalize_relay("ws://[::1]:8787").as_deref(), Some("ws://[::1]:8787"));
         assert_eq!(normalize_relay("ftp://h"), None);
         assert_eq!(normalize_relay("wss://u@h"), None);
     }

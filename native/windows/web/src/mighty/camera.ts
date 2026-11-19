@@ -3,7 +3,7 @@
 // screen = node × zoom + camera.
 import type { MightyGraphRun } from '../store/models';
 import { followRunIndex } from './notice';
-import { CentreX, HistoryNodeID, ExecutionSuffix, ImagesSuffix, PlanRecordSuffix, PendingNodeID, WorkKind, maxY, nodeId, runOf, type Layout, type LayoutNode, type Rect, type Size } from './layout';
+import { CentreX, Margin, RequestWidth, HistoryNodeID, ExecutionSuffix, ImagesSuffix, PlanRecordSuffix, PendingNodeID, WorkKind, maxY, nodeId, runOf, type Layout, type LayoutNode, type Rect, type Size } from './layout';
 import { drawnNode } from './flow';
 import { ease } from '../theme/tokens';
 
@@ -16,16 +16,34 @@ export const isAuxiliaryId = (id: string) =>
 export const showsTop = (cameraY: number, zoom: number, top: number, slack = 8) =>
   Number.isFinite(zoom) && zoom > 0 && Number.isFinite(cameraY) && Number.isFinite(top) && -cameraY / zoom <= top + slack;
 
-export function cameraOffset(frame: Rect, viewport: Size, zoom: number, alignTop: boolean, alignBottom = false): Point {
-  if (alignBottom) return revealOffset(frame, viewport, zoom);
+/**
+ * The progress panel's room (mighty.css `.mighty-progress`: 8 from the left, 280 wide) and the gap kept right of it: while the panel is
+ * shown, the camera centres blocks in the view right of it (`safeLeft`), so it never stands over a block's header. A view too narrow to
+ * keep a request's width beside it is centred whole, as before.
+ */
+export const ProgressPanelLeft = 8;
+export const ProgressPanelWidth = 280;
+export const ProgressSafeGap = 16;
+export const ProgressSafeLeft = ProgressPanelLeft + ProgressPanelWidth + ProgressSafeGap;
+/** Below this pane width the progress panel opens folded (FlowParts ProgressPanel). */
+export const ProgressFoldWidth = 900;
+
+/** The left inset the camera keeps for the progress panel: its room while shown and the rest of the view still holds a request's width. */
+export function progressSafeLeft(shown: boolean, viewport: Size, zoom: number): number {
+  if (!shown || !Number.isFinite(viewport.w) || !(zoom > 0)) return 0;
+  return viewport.w - ProgressSafeLeft >= (RequestWidth + 2 * Margin) * zoom ? ProgressSafeLeft : 0;
+}
+
+export function cameraOffset(frame: Rect, viewport: Size, zoom: number, alignTop: boolean, alignBottom = false, safeLeft = 0): Point {
+  if (alignBottom) return revealOffset(frame, viewport, zoom, safeLeft);
   return {
-    x: (viewport.w - frame.w * zoom) / 2 - frame.x * zoom,
+    x: safeLeft + (viewport.w - safeLeft - frame.w * zoom) / 2 - frame.x * zoom,
     y: (alignTop ? 16 : Math.max(16, (viewport.h - frame.h * zoom) / 2)) - frame.y * zoom,
   };
 }
 
-export function revealOffset(frame: Rect, viewport: Size, zoom: number): Point {
-  const top = cameraOffset(frame, viewport, zoom, true);
+export function revealOffset(frame: Rect, viewport: Size, zoom: number, safeLeft = 0): Point {
+  const top = cameraOffset(frame, viewport, zoom, true, false, safeLeft);
   return { x: top.x, y: Math.max(top.y, viewport.h - 16 - maxY(frame) * zoom) };
 }
 
@@ -144,11 +162,11 @@ export function isAtNewest(target: Rect, camera: Point, viewport: Size, zoom: nu
   return bottom >= 0 && bottom <= viewport.h - FollowMargin + FollowSlack;
 }
 
-export const centredX = (viewport: Size, zoom: number) => viewport.w / 2 - CentreX * zoom;
+export const centredX = (viewport: Size, zoom: number, safeLeft = 0) => safeLeft + (viewport.w - safeLeft) / 2 - CentreX * zoom;
 export const followCamera = (target: Rect, viewport: Size, zoom: number, x: number, gap = FollowMargin): Point => ({ x, y: viewport.h - gap - maxY(target) * zoom });
 
-export function followOffset(frame: Rect, viewport: Size, zoom: number, alignTop: boolean, alignBottom: boolean, follows: boolean): Point {
-  return follows ? followCamera(frame, viewport, zoom, centredX(viewport, zoom)) : cameraOffset(frame, viewport, zoom, alignTop, alignBottom);
+export function followOffset(frame: Rect, viewport: Size, zoom: number, alignTop: boolean, alignBottom: boolean, follows: boolean, safeLeft = 0): Point {
+  return follows ? followCamera(frame, viewport, zoom, centredX(viewport, zoom, safeLeft)) : cameraOffset(frame, viewport, zoom, alignTop, alignBottom, safeLeft);
 }
 
 /**
@@ -160,9 +178,9 @@ export function arrivedResult(seen: string | null | undefined, current: string |
 }
 
 /** Where the camera shows a result that came in: centred as the follow is, its bottom over the margin, its top never above the view. */
-export function resultCamera(frame: Rect, viewport: Size, zoom: number): Point {
+export function resultCamera(frame: Rect, viewport: Size, zoom: number, safeLeft = 0): Point {
   const top = FollowMargin - frame.y * zoom;
-  return { x: centredX(viewport, zoom), y: Math.max(top, viewport.h - FollowMargin - maxY(frame) * zoom) };
+  return { x: centredX(viewport, zoom, safeLeft), y: Math.max(top, viewport.h - FollowMargin - maxY(frame) * zoom) };
 }
 
 export type RunChange = 'none' | 'first' | 'follow' | 'trim';

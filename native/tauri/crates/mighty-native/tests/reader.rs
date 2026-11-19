@@ -470,7 +470,7 @@ fn the_beta_badge_is_a_stop_capsule() {
     with_ui(&e, |ui| {
         assert_eq!(
             render(&ui.beta_badge(), &e),
-            "{\"t\":\"box\",\"c\":[{\"t\":\"text\",\"text\":\"\\uBCA0\\uD0C0\",\"size\":9,\"weight\":\"medium\",\"ink\":\"ink2\",\"nowrap\":true}],\"fill\":\"stop-soft\",\"pad\":[4,1,4,1],\"radius\":7,\"va\":\"center\"}"
+            "{\"t\":\"box\",\"c\":[{\"t\":\"text\",\"text\":\"\\uBCA0\\uD0C0\",\"size\":10,\"weight\":\"medium\",\"ink\":\"ink2\",\"nowrap\":true}],\"fill\":\"stop-soft\",\"pad\":[4,1,4,1],\"radius\":7,\"va\":\"center\"}"
         );
     });
 }

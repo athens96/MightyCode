@@ -678,8 +678,15 @@ impl RemoteClient {
             options.relay_timings,
             on_token,
         );
+        // A registration waits for the person at the host to allow it.
+        let limit = if secret.credential.has_token() {
+            protocol::REQUEST_TIMEOUT
+        } else {
+            options.relay_timings.approval + protocol::REQUEST_TIMEOUT
+        };
+        let pairing = !secret.credential.has_token();
         let reached = async {
-            relay.ready(protocol::REQUEST_TIMEOUT).await.map_err(|failure| message(relay_words(&failure)))?;
+            relay.ready(limit).await.map_err(|failure| message(if pairing { pairing_words(&failure) } else { relay_words(&failure) }))?;
             let reply = relay
                 .request("GET", &format!("{}info", protocol::PATH_PREFIX), None, protocol::REQUEST_TIMEOUT)
                 .await
@@ -897,6 +904,8 @@ impl Link {
 /// What the user reads when a paired host cannot be reached or refused this computer.
 pub(crate) fn relay_words(failure: &RelayFailure) -> String {
     match failure {
+        RelayFailure::Refused { reason, .. } if reason == "approval-denied" => get("remote.relay.error.approvalDenied"),
+        RelayFailure::Refused { reason, .. } if reason == "desktops-off" => get("remote.relay.error.desktopsOff"),
         RelayFailure::Unreachable => get("remote.relay.error.unreachable"),
         RelayFailure::HostOffline => get("remote.relay.error.hostOffline"),
         RelayFailure::TooMany => get("remote.host.error.tooMany"),
@@ -904,6 +913,15 @@ pub(crate) fn relay_words(failure: &RelayFailure) -> String {
         RelayFailure::Refused { .. } => get("remote.relay.error.refused"),
         RelayFailure::Protocol => get("remote.connect.error.notMighty"),
         RelayFailure::Lost | RelayFailure::Closed => get("remote.relay.error.lost"),
+    }
+}
+
+/// A pairing's failure in words: a code the host does not take (spent, run out, or the phone's) said as such, the rest as any relay
+/// failure.
+fn pairing_words(failure: &RelayFailure) -> String {
+    match failure {
+        RelayFailure::Refused { reason, .. } if reason == "pairing-key" => get("remote.pair.error.codeRefused"),
+        other => relay_words(other),
     }
 }
 

@@ -144,8 +144,8 @@ describe('pipeline colours', () => {
   it('keeps the contract tints and bar (pipeline)', () => {
     expect(Object.keys(contract.pipeline).sort()).toEqual(Object.keys(pipeline).sort());
     for (const [name, value] of Object.entries(contract.pipeline)) expect(pipeline[name as keyof typeof pipeline]).toBe(value);
-    // The card is lighter than its column, so it stands out from a column of its own tone.
-    expect(pipeline).toEqual({ columnTintOpacity: 0.6, cardTintOpacity: 0.35, cardBarWidth: 3 });
+    // A faint column wash and the stronger tint on the cards, so the colour sits on the cards rather than across the board.
+    expect(pipeline).toEqual({ columnTintOpacity: 0.12, cardTintOpacity: 0.5, cardBarWidth: 3 });
   });
 
   it.each([

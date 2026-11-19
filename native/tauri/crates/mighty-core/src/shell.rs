@@ -85,9 +85,10 @@ impl Tone {
     }
     fn rank(self) -> u8 {
         match self {
+            // What needs the user first, then what went wrong, then what is under way (the design review's wait > error > run > done).
             Tone::Wait => 0,
-            Tone::Run => 1,
-            Tone::Err => 2,
+            Tone::Err => 1,
+            Tone::Run => 2,
             Tone::Done => 3,
             Tone::Stop => 4,
             Tone::Idle => 5,
@@ -1317,7 +1318,7 @@ fn host_with_os(locale: &Locale, host: &str, platform: Option<&str>) -> String {
     locale.get_with("remote.hostWithOS", &[("host", host), ("os", &os)])
 }
 
-/// C# `WorkDashboard.Ordered`: waiting, running, failed, done, stopped, idle; the newest first within each.
+/// C# `WorkDashboard.Ordered`: waiting, failed, running, done, stopped, idle; the newest first within each.
 pub fn ordered<'a>(mut cards: Vec<Card<'a>>) -> Vec<Card<'a>> {
     cards.sort_by(|a, b| {
         let rank = Tone::of(&a.display_status).rank().cmp(&Tone::of(&b.display_status).rank());

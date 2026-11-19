@@ -374,7 +374,7 @@ pub fn another_instance_running(identifier: &str) -> bool {
 /// Notifications (Swift's address).
 pub fn open_notification_settings() -> std::result::Result<(), String> {
     #[cfg(windows)]
-    return os::open_url("ms-settings:notifications");
+    return os::open_settings_page("ms-settings:notifications");
     #[cfg(target_os = "macos")]
     return os::notify::open_notification_settings();
 }

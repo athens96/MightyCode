@@ -35,5 +35,14 @@ ClaudeやCodexがユーザーに見せる必要のあるコマンド(開発サ�
 
 ![[files-pane]]
 
+### エディタで開く {#open-in-editor}
+ファイルを直すときは、いつものエディタで開きます。行がわかっている場所では、その行に直接移動します。
+- ファイルペイン: プレビューのヘッダーの{{ui:editor.open}}ボタン、一覧でファイルやフォルダを右クリックしたメニュー({{ui:editor.openFolder}})。
+- 会話とMightyフロー: ファイル名を{{kbd:⌘}}-クリック(Windows: {{kbd:Ctrl}}-クリック)すると、プレビューの代わりにエディタでその行を開きます。プレビューのヘッダーと結果のファイル一覧の各行にあるボタンも同じです。
+- 変更の表示: [リクエストの変更をレビュー](agent-pane.md#request-changes)とworktreeペインの変更表示で行を右クリックするとその行を、ボタンは選んだファイルを開きます。
+- worktreeペインのバーのメニューと[レビュー待ち](layout.md#review)ではworktreeのフォルダを開きます。
+
+使うエディタは[設定](settings.md#agents)の{{ui:settings.editor.label}}で選びます。自動では、VS Code、Cursor、Zed、JetBrains IDE(IntelliJ IDEA、WebStorm、PyCharmなど)、Sublime Textの順で最初に見つかったものを使います。ログインシェルのPATHにあるコマンド(`code`、`cursor`、`zed`、`idea`、`subl`)を先に探し、Macではアプリケーションフォルダのアプリに入っているコマンドを、Windowsでは通常のインストールフォルダにある実行ファイルを探します。{{ui:settings.editor.system}}は行番号なしでファイルの既定アプリで開き、コードを実行するファイルは開きません。ワークスペースやworktreeの外のパスは開きません。
+
 ## Webリンク {#web-links}
 返答の中のWebリンクや、エージェントが開くWebページは、既定のブラウザで開きます。

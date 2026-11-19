@@ -603,7 +603,7 @@ html[data-theme=dark]{
 }
 html[data-theme=light]{
  --page:#ECEEF3;--card:#FFFFFF;--raised:#F5F7FB;--sidebar:#E2E6ED;--line:#DEE2EA;
- --ink:#0E1320;--ink2:#5A6377;--ink3:#616A7C;--accent:#2459E6;--accentSoft:#E6EDFF;--sInk2:#4F5869;
+ --ink:#0E1320;--ink2:#4A5366;--ink3:#5C6577;--accent:#2459E6;--accentSoft:#E6EDFF;--sInk2:#4F5869;
  --run:#2A5FEE;--runSoft:#E6EDFF;--wait:#FFA81F;--waitSoft:#FFF3DE;--waitText:#8A5300;--doneText:#06703F;--doneSoft:#E2F6EA;
  --subtle:rgba(0,0,0,.035);color-scheme:light;
 }

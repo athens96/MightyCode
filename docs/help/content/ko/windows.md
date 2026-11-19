@@ -34,6 +34,7 @@ Windows 10(버전 2004) 이상 또는 Windows 11에서 동작합니다.
 | {{kbd:⌘T}} | {{kbd:Ctrl+T}} | {{ui:menu.addTerminalPane}} |
 | {{kbd:⇧⌘E}} | {{kbd:Ctrl+Shift+E}} | {{ui:menu.showFiles}} |
 | {{kbd:⇧⌘F}} | {{kbd:Ctrl+Shift+F}} | {{ui:conversationSearch.open}} |
+| {{kbd:⇧⌘R}} | {{kbd:Ctrl+Shift+R}} | {{ui:review.open}} |
 | {{kbd:⌘K}} | {{kbd:Ctrl+K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{kbd:Ctrl+B}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{kbd:Ctrl+,}} | {{ui:menu.settings}} |

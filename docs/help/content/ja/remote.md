@@ -60,14 +60,14 @@ Tailscale の共有はこのコンピュータの Tailscale アドレスでだ�
 ホストのコンピュータで:
 1. {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} → {{ui:settings.remote.shareTitle}} タブの {{ui:settings.remote.methodsTitle}} で、{{ui:settings.remote.viaPairing}} の行の {{ui:settings.remote.pairAccept}} をオンにします。
 2. ワークスペースを選び、{{ui:settings.remote.startSharing}} を押します。共有中はこのコンピュータがリレーに接続し、その状態が同じ行に表示されます。
-3. {{ui:settings.remote.pairCopyLink}} でリンクをコピーし、接続するコンピュータに渡します。
+3. {{ui:settings.remote.pairCopyLink}} でリンクをコピーし、接続するコンピュータに渡します。このリンクはコンピュータ専用で（スマートフォンのQRコードではコンピュータを接続できず、その逆もできません）、一度だけ使え、この画面を閉じると10分後に期限切れになります。相手のコンピュータが接続しようとすると、このコンピュータに「新しいデバイスの接続要求」ウインドウと通知が表示されるので、相手が正しければ {{ui:settings.mobileRemote.approval.allow}} を押します（60秒以内に応答がないと拒否されます）。
 
 接続するコンピュータで:
-1. {{ui:settings.remote.navTitle}} → {{ui:settings.remote.connectTitle}} タブのスイッチで {{ui:settings.remote.pairLinkField}} を選び、リンクを貼り付け、必要なら名前を付けて {{ui:settings.remote.connectButton}} を押します。
+1. {{ui:settings.remote.navTitle}} → {{ui:settings.remote.connectTitle}} タブのスイッチで {{ui:settings.remote.pairLinkField}} を選び、リンクを貼り付け、必要なら名前を付けて {{ui:settings.remote.connectButton}} を押します。ホストで許可されるまで、そちらで許可するよう案内が表示されます。
 2. 接続すると、そのコンピュータが {{ui:settings.remote.connectionsTitle}} 一覧にペアリングのチップ付きで、サイドバーに「リモート · 名前」として現れます。接続と切断は Tailscale の接続と同じです。
 
-- リンクにはスマートフォンの QR コードと同じペアリングキーが含まれるので、信頼できる相手にだけ渡してください。最初の接続でホストがこのコンピュータ専用のデバイストークンを渡し、以後はそのトークンで接続します。トークンは接続キーと同じく macOS のキーチェーン（Windows ではこのユーザーだけが復号できる暗号化ファイル）に保存し、ワークスペースの記録には入れません。
-- ペアリングしたコンピュータはホストの {{ui:settings.remote.phoneTab}} タブの {{ui:settings.mobileRemote.connectedDevicesTitle}} 一覧にもコンピュータのアイコン付きで表示されます（スマートフォン接続のスイッチがオフでも表示されます）。その行の {{ui:settings.mobileRemote.revokeRowButton}} ボタンはそのコンピュータだけを解除し、ほかのスマートフォンとコンピュータは接続されたままです。このときペアリングキーが新しくなるため、その後に接続するデバイスは新しいリンクを使います。{{ui:settings.mobileRemote.regenerateKeyButton}} を押すとスマートフォンとコンピュータがすべて解除され、再び使うには新しいリンクで接続し直します。
+- リンクにはコンピュータ専用の、短時間だけ使えるペアリングコードが含まれます。リンクが他人に渡っても、ホストで許可しなければ接続されません。最初の接続でホストがこのコンピュータ専用のデバイストークンを渡し、以後はそのトークンで接続するので、改めて許可を求められません。トークンは接続キーと同じく macOS のキーチェーン（Windows ではこのユーザーだけが復号できる暗号化ファイル）に保存し、ワークスペースの記録には入れません。ホストで {{ui:settings.remote.pairAccept}} がオフのとき、または共有していないときは、新しいコンピュータは接続できません。
+- ペアリングしたコンピュータはホストの {{ui:settings.remote.phoneTab}} タブの {{ui:settings.mobileRemote.connectedDevicesTitle}} 一覧にもコンピュータのアイコン付きで表示されます（スマートフォン接続のスイッチがオフでも、再起動後も表示されます）。その行の {{ui:settings.mobileRemote.revokeRowButton}} ボタンはそのコンピュータだけを解除し、ほかのスマートフォンとコンピュータは接続されたままです。{{ui:settings.mobileRemote.regenerateKeyButton}} を押すとスマートフォンとコンピュータがすべて解除され、ホストのリレーIDと暗号キーが作り直されるため、再び使うには新しいリンクで接続し直します。
 - 見えるのは共有したワークスペースだけで、{{ui:settings.remote.allowFullAccess}} スイッチと閉じ込められないエージェントの規則も Tailscale の接続とまったく同じに適用されます。
 - スマートフォンの設定は変わりません。{{ui:settings.remote.phoneTab}} タブでスマートフォンからの接続を許可していなければ、このスイッチがオンでもスマートフォンは接続できません。
 - リレーは一度に 1 MB まで送ります。ペアリング接続で送る添付ファイルは合計約 750 KB までで（ファイルの内容は base64 で大きくなります）、超えると送る前に知らせます。大きなファイルは Tailscale で接続して送ってください。長い会話は 1 MB に収まる新しい項目から表示されます。

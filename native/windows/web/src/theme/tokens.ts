@@ -24,8 +24,17 @@ export function metricVariables(prefix: string, group: Readonly<Record<string, u
     .join('');
 }
 
-function quoteFamilies(list: string): string {
-  return list.split(',').map((family) => `"${family.trim()}"`).join(', ');
+/** The system font keywords a family list may name: CSS reads them only unquoted (a quoted `-apple-system` is a family nobody has). */
+const FAMILY_KEYWORDS = new Set(['-apple-system', 'BlinkMacSystemFont', 'system-ui', 'ui-sans-serif', 'ui-serif', 'ui-monospace', 'ui-rounded', 'sans-serif', 'serif', 'monospace']);
+
+/** A design family list (`A, B C, …`) as CSS: each family quoted, the system keywords as they are. */
+export function quoteFamilies(list: string): string {
+  return list
+    .split(',')
+    .map((family) => family.trim())
+    .filter((family) => family.length > 0)
+    .map((family) => (FAMILY_KEYWORDS.has(family) ? family : `"${family}"`))
+    .join(', ');
 }
 
 /** `#RRGGBB` at an opacity, as rgba(). */
@@ -143,7 +152,7 @@ export function tokenStyleSheet(): string {
     const derived = tokens.derived[theme];
     const glyphs = Object.entries(derived.tones).map(([tone, value]) => `--glyph-${tone}:${value.glyph};`).join('');
     const discs = Object.entries(derived.disc).map(([tone, value]) => `--disc-${tone}:${value.fill};--disc-${tone}-ink:${value.ink};`).join('');
-    return glyphs + discs + dialog[theme] + `--segment-track:${derived.segmentTrack};--segment-on:${derived.segmentOn};--subtle:${hexAlpha(subtle.color, subtle.opacity)};--syntax-keyword:${syntax.keyword};--syntax-string:${syntax.string};--syntax-number:${syntax.number};--terminal-background:${tokens.windowsOnly.terminal[theme].background};`;
+    return glyphs + discs + dialog[theme] + `--line-strong:${derived.lineStrong};--primary:${derived.primary};--on-primary:${derived.onPrimary};--segment-track:${derived.segmentTrack};--segment-on:${derived.segmentOn};--subtle:${hexAlpha(subtle.color, subtle.opacity)};--syntax-keyword:${syntax.keyword};--syntax-string:${syntax.string};--syntax-number:${syntax.number};--terminal-background:${tokens.windowsOnly.terminal[theme].background};`;
   };
   return (
     `:root{${shared}}` +

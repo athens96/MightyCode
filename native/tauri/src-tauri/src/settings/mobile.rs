@@ -3,8 +3,9 @@
 //! rows are W8-C's `mobile_direct.rs`, the firewall rule is drawn once under the tab by remote.rs). The live box needs the relay host
 //! (mobile.rs, `--allow-state-write`); without it the box is C#'s with no host.
 //!
-//! What the phone and computer pairing share lives here only: the QR, the host id and key, 키 다시 만들기 (it unpairs computers too)
-//! and the relay's address, which sits folded under 고급 with the legacy-apps switch (the built-in relay serves everyone else).
+//! What the phone and computer pairing share lives here only: the host id, 키 다시 만들기 (it unpairs computers too) and the relay's
+//! address, which sits folded under 고급 with the legacy-apps switch (the built-in relay serves everyone else). The QR, the link and the
+//! key shown are the phone's own short-lived pairing code (원격 연결's computer link has its own), kept alive while drawn.
 //! Differences from C#: the QR is drawn at scale 1 (the page draws it in CSS pixels); the link is copied as a secret, as the share
 //! tab copies it; the upload staging (W8-B's router) and screen share's sessions (W8-F, off) are not reset on a rotation here.
 
@@ -102,7 +103,9 @@ fn relay_address(host: &Arc<Host>, ui: &Ui, saved: &MobileRemoteSettings, live: 
     )
 }
 
-/// The legacy-apps switch (folded under 고급): `live` when it takes effect.
+/// The legacy-apps switch (folded under 고급) with its warning: off by default; turning it on asks first, since the legacy key then
+/// lets anyone who has it in without a token or the person's approval. While on, the legacy key (dots until shown). `live` when it
+/// takes effect.
 fn legacy_apps(host: &Arc<Host>, ui: &Ui, saved: &MobileRemoteSettings, live: bool) -> El {
     let locale = ui.locale();
     let legacy_label = locale.get("settings.mobileRemote.legacyAppsToggle");
@@ -114,19 +117,108 @@ fn legacy_apps(host: &Arc<Host>, ui: &Ui, saved: &MobileRemoteSettings, live: bo
             }
             let host = to.clone();
             crate::native::act(&to, async move {
-                crate::mobile::write(&host, |saved| MobileRemoteSettings { allow_legacy_phones: on, ..saved }).await
+                if on && !confirm_legacy(&host).await {
+                    crate::mobile::touch(&host);
+                    return Ok(());
+                }
+                crate::mobile::write(&host, |saved| MobileRemoteSettings { allow_legacy_phones: on, legacy_phones_as_saved: on, ..saved })
+                    .await
             });
         })
         .enabled(live);
-    ui.settings_labeled(ui.settings_titled(&legacy_label, locale.get("settings.mobileRemote.legacyAppsDescription")), legacy, true)
+    let switch =
+        ui.settings_labeled(ui.settings_titled(&legacy_label, locale.get("settings.mobileRemote.legacyAppsDescription")), legacy, true);
+    let relay = crate::mobile::relay(host).filter(|_| live && saved.allow_legacy_phones && host.smoke.is_none());
+    let Some(relay) = relay else { return switch };
+    let mobile = crate::mobile::ui(host);
+    let shows = lock(&mobile.ui).shows_legacy_key;
+    let label = locale.get("settings.mobileRemote.legacyKeyLabel");
+    let text = if shows { relay.legacy_key_for_display().to_string() } else { "\u{2022}".repeat(16) };
+    let key = ui.settings_text(text, TextStyle::size(11.0).mono().selectable()).named(&label).aid("settings-mobile-legacy-key");
+    let show_label = locale.get(if shows { "settings.mobileRemote.hideKeyButton" } else { "settings.mobileRemote.showKeyButton" });
+    let (to, toggling) = (host.clone(), mobile.clone());
+    let show = ui
+        .settings_push(
+            ui.button(show_label.clone(), move || {
+                let mut state = lock(&toggling.ui);
+                state.shows_legacy_key = !state.shows_legacy_key;
+                drop(state);
+                crate::mobile::touch(&to);
+            }),
+            ControlSize::Small,
+            false,
+            false,
+        )
+        .named(show_label)
+        .aid("settings-mobile-legacy-show-key");
+    El::stack(
+        false,
+        metrics::SPACING_SM,
+        vec![
+            switch,
+            El::stack(false, metrics::SPACING_XXS, vec![caption(ui, label.clone()), El::stack(true, metrics::SPACING_SM, vec![key, show])]),
+            ui.settings_text(locale.get("settings.mobileRemote.legacyKeyWarning"), TextStyle::size(11.0).ink(Token::WaitText)),
+        ],
+    )
+}
+
+/// The legacy apps turned on only after a warning whose default button keeps them off.
+async fn confirm_legacy(host: &Arc<Host>) -> bool {
+    let locale = host.locale;
+    let text = locale.get("settings.mobileRemote.legacyKeyWarning");
+    let mut spec =
+        DialogSpec::new(locale.get("settings.mobileRemote.legacyAppsToggle"), move |_| Content::Text(text.clone())).styled(None, None);
+    spec.primary = Some(DialogButton::new(locale.get("settings.mobileRemote.legacyConfirmButton")));
+    spec.close = Some(locale.get("settings.mobileRemote.cancelButton"));
+    spec.default_button = DefaultButton::Close;
+    spec.chrome = Some(DialogChrome { danger: true, ..DialogChrome::default() });
+    crate::native::show_dialog(host, spec).await == DialogResult::Primary
 }
 
 /// 고급, folded: the relay's address and the legacy-apps switch, open the first time when either was changed from its default.
 fn advanced(host: &Arc<Host>, ui: &mut Ui, saved: &MobileRemoteSettings, live: bool) -> El {
     let locale = ui.locale();
-    let changed = saved.relay_url.as_deref().is_some_and(|url| !url.trim().is_empty()) || !saved.allow_legacy_phones;
+    let changed = saved.relay_url.as_deref().is_some_and(|url| !url.trim().is_empty()) || saved.allow_legacy_phones;
     let body = El::stack(false, metrics::SPACING_MD, vec![relay_address(host, ui, saved, live), legacy_apps(host, ui, saved, live)]);
     folded(ui, "settings-mobile-advanced", changed, locale.get("settings.advancedTitle"), body)
+}
+
+/// 휴대폰에서 볼 워크스페이스: every workspace of this computer (the default) or only those 이 컴퓨터 공유 shares now, which every phone
+/// route and push is held to (mighty-remote's `phone::desk::phone_workspace_ids`). Saved with the state alone: the relay is not
+/// restarted for it, and a phone reads the change at its next request. `live` when it takes effect.
+fn phone_workspaces(host: &Arc<Host>, ui: &Ui, saved: &MobileRemoteSettings, live: bool) -> El {
+    let locale = ui.locale();
+    let title = locale.get("settings.mobileRemote.workspacesTitle");
+    let options = [
+        ("all".to_string(), locale.get("settings.mobileRemote.workspacesAll")),
+        ("shared".to_string(), locale.get("settings.mobileRemote.workspacesShared")),
+    ];
+    let chosen = if saved.phone_shared_only { "shared" } else { "all" };
+    let to = host.clone();
+    let picker = ui.settings_segmented(
+        &title,
+        "settings-mobile-workspaces",
+        &options,
+        chosen,
+        move |value| {
+            if !live {
+                return;
+            }
+            let host = to.clone();
+            crate::native::act(&to, async move {
+                host.view().update(|state| {
+                    let mut settings = state.mobile_remote.clone().unwrap_or_default();
+                    settings.phone_shared_only = value == "shared";
+                    state.mobile_remote = Some(settings);
+                })?;
+                crate::mobile::touch(&host);
+                Ok(())
+            });
+        },
+        true,
+        live,
+    );
+    ui.settings_wide(ui.settings_titled(&title, locale.get("settings.mobileRemote.workspacesDescription")), picker)
 }
 
 /// 연결 방법: the relay (always, with the built-in address unless 고급 names another), then the Tailscale path (mobile_direct.rs).
@@ -222,8 +314,9 @@ fn live(host: &Arc<Host>, ui: &mut Ui, relay: &Arc<RelayHost>) -> El {
         .visible(saved.enabled);
     rows.add(ui.settings_labeled(state_words, reconnect, true));
 
-    // B. 연결 방법: the relay, then the Tailscale path.
+    // B. 연결 방법: the relay, then the Tailscale path; then what the phone sees.
     rows.add(connection(host, ui, &saved));
+    rows.add(phone_workspaces(host, ui, &saved, true));
 
     // C. 휴대폰 연결, while the remote is on.
     let shows_identity = saved.enabled;
@@ -357,6 +450,7 @@ fn pairing(host: &Arc<Host>, ui: &mut Ui, relay: &Arc<RelayHost>, mobile: &Arc<c
         .tooltip(locale.get("windows.mobile.rotationDescription"));
     let mut words = vec![
         guide,
+        caption(ui, locale.get("settings.mobileRemote.pairingCodeNote")).aid("settings-mobile-code-note"),
         El::stack(false, metrics::SPACING_XXS, vec![caption(ui, host_id_label.clone()), host_id]),
         El::stack(false, metrics::SPACING_XXS, vec![caption(ui, key_label.clone()), El::stack(true, metrics::SPACING_SM, vec![key, show])]),
         El::stack(true, metrics::SPACING_SM, vec![copy, regenerate]),
@@ -519,8 +613,9 @@ fn at_rest(host: &Arc<Host>, ui: &mut Ui) -> El {
         rows.add(caption(ui, crate::setup::verification_mode()).aid("settings-mobile-verification"));
     }
 
-    // 연결 방법: the relay and the direct path's rows (mobile_direct.rs, W8-C).
+    // 연결 방법: the relay and the direct path's rows (mobile_direct.rs, W8-C); what the phone sees, disabled.
     rows.add(connection(host, ui, &saved));
+    rows.add(phone_workspaces(host, ui, &saved, false));
 
     // The pairing rows (title, QR, host id, key, copy and regenerate) and the devices' title: hidden without a host.
     rows.add(sub_heading(ui, locale.get("windows.mobile.pairingTitle"))).visible = false;

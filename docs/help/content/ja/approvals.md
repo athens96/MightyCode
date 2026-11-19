@@ -16,7 +16,7 @@ section: approvals
 許可はこのリクエスト1回にだけ適用されます。今後も常に許可するルールは作成しません。
 
 > [!note]
-> 許可を求めるカードは、Claudeペイン(Always askなど)と、Codexの{{ui:permission.label.onRequest}}、{{ui:permission.label.fullAccess}}以外のopencodeペインのすべての権限で表示されます。Hermesペインではファイル変更と危険なコマンドで表示されます。ほかの権限では、CLIの設定に従って許可またはブロックされます。Antigravityは動き方が違うため、[別の方法で確認します](#antigravity-permission)。
+> 許可を求めるカードは、Claudeペイン({{ui:permission.label.claude.default}}など)と、Codexの{{ui:permission.label.onRequest}}、{{ui:permission.label.fullAccess}}以外のopencodeペインのすべての権限で表示されます。Hermesペインではファイル変更と危険なコマンドで表示されます。ほかの権限では、CLIの設定に従って許可またはブロックされます。Antigravityは動き方が違うため、[別の方法で確認します](#antigravity-permission)。
 
 ## Antigravityの権限カード {#antigravity-permission}
 Antigravityは作業の途中でアプリに確認できません。確認が必要な操作(コマンドの実行、ファイルの書き込みなど)に当たると、その操作だけを飛ばしてターンを終え、拒否した操作をまとめて1枚のカードで尋ねます。権限が{{ui:permission.label.default}}のときも表示され、スマートフォンにも同じカードが表示されます。

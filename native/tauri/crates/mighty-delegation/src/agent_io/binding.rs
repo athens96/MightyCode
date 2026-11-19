@@ -2,11 +2,15 @@
 //! `MIGHTY_PANE_TOKEN` and the transport's key, Claude's `--mcp-config` and Codex's `-c` lists per mode, `ConnectDelegation`, `Redact`,
 //! the bindings and their revocation; the `RunBinding` builder mighty-run's `BindingFactory` returns. Owner: W7-C.
 //!
-//! Nothing here writes a file: a run's servers are passed on its command line, its token in its environment (never in argv, never
-//! saved, never logged; [`AgentIoBinding`]'s `Debug` hides it).
+//! The token never travels in a CLI's arguments (every local user can read those) and never in the environment of the commands an agent
+//! runs (one of them could reach the agent IO transport on it without the CLI's approval): Claude's servers come from a private config
+//! file with the token in each server's own `env`, deleted when the run ends; Codex keeps it in its own environment, forwards it to the
+//! servers by name and keeps `MIGHTY_*` from its shell tool ([`super::mcp_config`]). Never logged; [`AgentIoBinding`]'s `Debug` hides
+//! it and [`AgentIoBinding::redact`] takes it out of what the run prints.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -17,6 +21,7 @@ use mighty_platform::McpTransport;
 use mighty_run::manager::RunBinding;
 use tokio::sync::Notify;
 
+use super::mcp_config;
 use crate::mcp::delegation::{HEADLESS_ARGUMENT, SERVER_NAME as DELEGATION_SERVER};
 use crate::modes::AGENT_IO_MCP_ARGUMENT;
 use crate::request::DelegationHandler;
@@ -28,8 +33,9 @@ pub const TOKEN_KEY: &str = "MIGHTY_PANE_TOKEN";
 /// What `Redact` puts in the token's place.
 pub const REDACTED: &str = "<pane-token-redacted>";
 /// `AgentIOBinding.CodexApprovedInAcceptEdits`: the mighty-terminal tools a Codex acceptEdits run may call without asking (they read
-/// what already ran or open a page as the user chose; run_in_terminal and stop are not among them).
-pub const CODEX_APPROVED_IN_ACCEPT_EDITS: [&str; 2] = ["read_latest_output", "open_url"];
+/// what already ran; run_in_terminal, stop and open_url are not among them: a page opened in the user's browser carries what its
+/// address says out of the sandbox, network off or not, so it asks like the others).
+pub const CODEX_APPROVED_IN_ACCEPT_EDITS: [&str; 1] = ["read_latest_output"];
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -90,6 +96,15 @@ pub struct AgentIoBinding {
     token: String,
     revoked: Revocation,
     link: Mutex<Link>,
+    /// Where Claude's config file goes, and the one written for this binding until it is deleted.
+    config_folder: PathBuf,
+    config_file: Mutex<Option<PathBuf>>,
+}
+
+impl Drop for AgentIoBinding {
+    fn drop(&mut self) {
+        self.remove_config();
+    }
 }
 
 impl fmt::Debug for AgentIoBinding {
@@ -99,6 +114,7 @@ impl fmt::Debug for AgentIoBinding {
 }
 
 impl AgentIoBinding {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         pane_id: &str,
         workspace_id: &str,
@@ -107,6 +123,7 @@ impl AgentIoBinding {
         pipe_name: &str,
         executable: &str,
         transport: McpTransport,
+        config_folder: PathBuf,
     ) -> AgentIoBinding {
         let mut bytes = [0u8; 32];
         getrandom::fill(&mut bytes).expect("the OS's random numbers");
@@ -121,7 +138,21 @@ impl AgentIoBinding {
             token: bytes.iter().map(|b| format!("{b:02x}")).collect(),
             revoked: Revocation::default(),
             link: Mutex::new(Link::default()),
+            config_folder,
+            config_file: Mutex::new(None),
         }
+    }
+
+    /// Claude's config file deleted, if one was written (the run ended, the binding was revoked or dropped).
+    pub fn remove_config(&self) {
+        if let Some(path) = lock(&self.config_file).take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    /// The config file written for this binding, while it is there.
+    pub fn config_file(&self) -> Option<PathBuf> {
+        lock(&self.config_file).clone()
     }
 
     /// `Kind`: bindings are only made for agent-pane runs.
@@ -159,7 +190,8 @@ impl AgentIoBinding {
         *lock(&self.link) = Link { handler, permission_mode: permission_mode.into(), delegation };
     }
 
-    /// `Environment`: the token and the transport's name.
+    /// `Environment`: the token and the transport's name, what the MCP servers' processes are started with: Claude's config file names
+    /// them in each server's `env`; a Codex run's own environment holds them (its shell tool's commands do not get them).
     pub fn environment(&self) -> BTreeMap<String, String> {
         BTreeMap::from([(TOKEN_KEY.to_string(), self.token.clone()), (self.transport_key.to_string(), self.pipe_name.clone())])
     }
@@ -169,10 +201,13 @@ impl AgentIoBinding {
         value.replace(&self.token, REDACTED)
     }
 
-    /// `AppendArguments`: Claude's `--mcp-config` (Wire.Json: a non-ASCII path written `\uXXXX`), Codex's `-c` settings per mode.
+    /// `AppendArguments`: Claude's `--mcp-config` naming a private file written now (Wire.Json, a non-ASCII path written `\uXXXX`; each
+    /// server with [`AgentIoBinding::environment`] as its `env`; none when the file cannot be written: the run then has no pane tools),
+    /// Codex's `-c` settings per mode with `shell_environment_policy.exclude`.
     pub fn append_arguments(&self, arguments: &mut Vec<String>) {
         let delegation = self.delegation();
         let mode = self.permission_mode();
+        let environment = self.environment();
         if self.provider == "claude" {
             let mut out = JsonOut::new();
             out.begin_object();
@@ -190,15 +225,26 @@ impl AgentIoBinding {
                 out.prop_str("command", Some(&self.executable));
                 out.name("args");
                 out.strings(&[argument.to_string()]);
+                out.name("env");
+                out.begin_object();
+                for (key, value) in &environment {
+                    out.prop_str(key, Some(value));
+                }
+                out.end_object();
                 out.end_object();
             }
             out.end_object();
             out.end_object();
-            arguments.extend(["--mcp-config".to_string(), out.finish()]);
+            self.remove_config();
+            if let Ok(path) = mcp_config::write(&self.config_folder, &out.finish()) {
+                arguments.extend(["--mcp-config".to_string(), path.to_string_lossy().into_owned()]);
+                *lock(&self.config_file) = Some(path);
+            }
         } else if self.provider == "codex" {
             // By the run's mode, some tools are approved ahead: codex exec (no asking) otherwise fails every MCP call that needs an
             // approval it cannot ask for. fullAccess approves both servers' tools; acceptEdits approves the delegation server's and,
-            // of mighty-terminal's, only reading output and opening a page; manual approves none, onRequest leaves it to the human.
+            // of mighty-terminal's, only reading output; manual approves none, onRequest leaves it to the human. The servers get the
+            // token from Codex's environment by name; its shell tool's commands do not (`shell_environment_policy.exclude`).
             let mut servers = vec![(SERVER_NAME, AGENT_IO_MCP_ARGUMENT)];
             if delegation {
                 servers.push((DELEGATION_SERVER, HEADLESS_ARGUMENT));
@@ -225,15 +271,24 @@ impl AgentIoBinding {
                     }
                 }
             }
+            if let Some(exclude) = mcp_config::codex_shell_exclude(mcp_config::codex_home_config().as_deref()) {
+                arguments.extend(["-c".to_string(), format!("shell_environment_policy.exclude={exclude}")]);
+            }
         }
     }
 
-    /// What mighty-run lays over the run (C# RunManager.cs:376-379): the environment, the arguments and the redaction.
+    /// What mighty-run lays over the run (C# RunManager.cs:376-379): the environment (a Codex run's only; a Claude CLI's environment
+    /// never holds the token), the arguments, the redaction, and the config file's deletion when the run ends.
     pub fn run_binding(self: &Arc<Self>) -> RunBinding {
         let mut arguments = vec![];
         self.append_arguments(&mut arguments);
-        let binding = self.clone();
-        RunBinding { environment: self.environment(), arguments, redact: Arc::new(move |line: &str| binding.redact(line)) }
+        let (binding, ending) = (self.clone(), self.clone());
+        RunBinding {
+            environment: if self.provider == "codex" { self.environment() } else { BTreeMap::new() },
+            arguments,
+            redact: Arc::new(move |line: &str| binding.redact(line)),
+            ended: Some(Box::new(move || ending.remove_config())),
+        }
     }
 }
 
@@ -254,6 +309,8 @@ impl std::error::Error for InvalidBinding {}
 pub struct AgentIoBindings {
     transport: McpTransport,
     bindings: Mutex<HashMap<String, Arc<AgentIoBinding>>>,
+    /// Where Claude runs' config files go ([`mcp_config::fallback_folder`] until the agent IO names its own).
+    config_folder: Mutex<PathBuf>,
 }
 
 impl Default for AgentIoBindings {
@@ -264,7 +321,17 @@ impl Default for AgentIoBindings {
 
 impl AgentIoBindings {
     pub fn new(transport: McpTransport) -> AgentIoBindings {
-        AgentIoBindings { transport, bindings: Mutex::new(HashMap::new()) }
+        AgentIoBindings { transport, bindings: Mutex::new(HashMap::new()), config_folder: Mutex::new(mcp_config::fallback_folder()) }
+    }
+
+    /// Claude runs' config files from now on go in `folder` (the agent IO's own private folder).
+    pub fn set_config_folder(&self, folder: PathBuf) {
+        *lock(&self.config_folder) = folder;
+    }
+
+    /// Where Claude runs' config files go.
+    pub fn config_folder(&self) -> PathBuf {
+        lock(&self.config_folder).clone()
     }
 
     /// `Bind`: a new binding for the pane's run, revoking the one before. The pane and workspace ids are identifiers, the workspace's
@@ -286,10 +353,12 @@ impl AgentIoBindings {
         {
             return Err(InvalidBinding);
         }
-        let value = Arc::new(AgentIoBinding::new(pane, workspace_id, workspace_path, provider, pipe, executable, self.transport));
+        let folder = self.config_folder();
+        let value = Arc::new(AgentIoBinding::new(pane, workspace_id, workspace_path, provider, pipe, executable, self.transport, folder));
         let previous = lock(&self.bindings).insert(pane.to_string(), value.clone());
         if let Some(previous) = previous {
             previous.revoked.cancel();
+            previous.remove_config();
         }
         Ok(value)
     }
@@ -317,6 +386,7 @@ impl AgentIoBindings {
         let previous = lock(&self.bindings).remove(pane);
         if let Some(previous) = previous {
             previous.revoked.cancel();
+            previous.remove_config();
         }
     }
 
@@ -325,6 +395,7 @@ impl AgentIoBindings {
         let previous: Vec<_> = lock(&self.bindings).drain().map(|(_, value)| value).collect();
         for value in previous {
             value.revoked.cancel();
+            value.remove_config();
         }
     }
 }

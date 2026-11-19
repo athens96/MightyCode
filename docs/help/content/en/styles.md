@@ -22,7 +22,7 @@ Each pane remembers its style. It can't be changed while a task runs. If the sty
 | Claude plan (클러드 플랜) | Every new request starts in Claude's plan mode, and runs once you approve the plan card. Widgets show checklist progress and background tasks. |
 
 ## The plan card {#plan-card}
-When Claude finishes a plan in plan mode (Plan mode, or the Claude plan style), a plan card appears.
+When Claude finishes a plan in {{ui:permission.label.claude.plan}} (or the Claude plan style), a plan card appears.
 
 ![[plan-card]]
 

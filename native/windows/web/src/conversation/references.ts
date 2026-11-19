@@ -7,6 +7,8 @@ export interface ReferenceTarget {
   line: number | null;
   /** The Mighty run the click came from (a result's files, a block's words): its 변경사항 compare with that run's originals. */
   runId?: string;
+  /** ⌘-click (Ctrl+click on Windows): opened in the external editor at its line instead of the bubble (src-tauri editor.rs). */
+  editor?: boolean;
 }
 
 const referencePattern = /(?<![\p{L}\p{N}_])((?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|\/)?(?:[\p{L}\p{N}_.@-]+[\\/])*[\p{L}\p{N}_.@-]+\.[A-Za-z0-9]{1,12})(?::(\d{1,6}))?/gu;

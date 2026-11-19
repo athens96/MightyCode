@@ -83,6 +83,8 @@ pub struct Calls {
     pub file_changes: Option<ChangeSet>,
     pub direct: Vec<String>,
     pub extra_capabilities: Vec<String>,
+    /// What 이 컴퓨터 공유 shares now (the phone sees only these when the saved choice says so).
+    pub shared: Vec<String>,
 }
 
 pub type MobideskAction = MobileDesktopAction;
@@ -231,6 +233,9 @@ impl World {
 impl PhoneDesk for Desk {
     fn snapshot(&self) -> AppSnapshot {
         self.service.snapshot()
+    }
+    fn shared_workspace_ids(&self) -> Vec<String> {
+        self.calls().shared.clone()
     }
     fn host_id(&self) -> String {
         self.host_id.clone()

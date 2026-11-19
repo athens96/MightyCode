@@ -524,9 +524,14 @@ async fn mobile_push_a_relay_redirect_is_a_failure_and_is_never_followed() {
 fn paired(directory: &Path) -> (Arc<Identity>, String, String) {
     let identity = Arc::new(Identity::load_or_create(Arc::new(FileStore(directory.to_path_buf())), true).unwrap());
     let client = "AAECAwQFBgcICQoLDA0ODw".to_string();
-    let key = identity.pairing_key().to_string();
-    let request = AuthRequest::from_json(&json!({"type":"auth","pairingKey":key,"clientId":client,"clientName":"Phone"}));
-    let token = identity.authorize(&request, false).unwrap().device_token().expect("no token").to_string();
+    let key = identity.pairing_code(mighty_remote::identity::PairingKind::Phone);
+    let request = AuthRequest::from_json(&json!({"type":"auth","pairingKey":*key,"clientId":client,"clientName":"Phone"}));
+    let mighty_remote::identity::AuthDecision::Pending(pending) =
+        identity.authorize(&request, mighty_remote::identity::AuthPolicy::default()).unwrap()
+    else {
+        panic!("a registration asks")
+    };
+    let token = identity.register(&pending).unwrap().device_token().expect("no token").to_string();
     (identity, client, token)
 }
 

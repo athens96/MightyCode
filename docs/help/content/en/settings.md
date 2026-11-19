@@ -27,6 +27,7 @@ On a Mac the View menu's {{ui:menu.textBigger}} ({{kbd:⌘=}}), {{ui:menu.textSm
 The {{ui:settings.agents.sectionTitle}} group on the same tab holds the settings for agent panes and a few key tips.
 - {{ui:settings.display.statusLineToggle}}: runs the status line command from your Claude settings and shows it under the composer.
 - {{ui:settings.delegation.toggle}}: on by default. Claude panes can open child panes in their own worktrees, and {{kbd:⌘Enter}} in a running Claude pane runs your request in a new one. See [Mighty Orchestration](delegation.md#enable).
+- {{ui:settings.editor.label}}: what {{ui:editor.open}} starts. Choose Auto (the first one found), one of the editors found on this computer, or {{ui:settings.editor.system}}. The editors are looked for again each time Settings opens ([open in an editor](terminal-files-browser.md#open-in-editor)).
 - The tips below them: {{kbd:Enter}} sends and {{kbd:Shift+Enter}} starts a new line. Drag a tab onto another to merge them, or to an edge to split. The command pane is an interactive terminal that opens your login shell on a Mac, and PowerShell (or cmd if it is missing) on Windows.
 
 ## Models {#models}

@@ -22,9 +22,9 @@ describe('result titles', () => {
     expect(structureResultLook({ status: 'stopped' }, t)).toEqual({ title: t('graph.block.resultStopped'), icon: 'circle-stop' });
   });
 
-  it('draw a card awaiting notices with an hourglass in the wait ink', () => {
-    expect(structureResultLook({ status: 'completed', resultTitle: awaiting, resultAwaiting: true }, t)).toEqual({ title: awaiting, icon: 'hourglass', awaiting: true });
-    expect(structureResultLook({ status: 'completed', resultAwaiting: true }, t)).toEqual({ title: awaiting, icon: 'hourglass', awaiting: true });
+  it('draw a card awaiting notices with a clock in the run ink', () => {
+    expect(structureResultLook({ status: 'completed', resultTitle: awaiting, resultAwaiting: true }, t)).toEqual({ title: awaiting, icon: 'clock', awaiting: true });
+    expect(structureResultLook({ status: 'completed', resultAwaiting: true }, t)).toEqual({ title: awaiting, icon: 'clock', awaiting: true });
     expect(structureResultLook({ status: 'error', resultTitle: awaiting, resultAwaiting: true }, t)).toEqual({ title: t('graph.block.resultError'), icon: 'triangle-alert' });
   });
 

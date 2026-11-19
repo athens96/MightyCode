@@ -10,6 +10,7 @@ use std::time::Duration;
 use mighty_core::model::{AppSnapshot, RunSession, Workspace};
 use mighty_delegation::agent_io::binding::{AgentIoBindings, REDACTED, TOKEN_KEY};
 use mighty_delegation::agent_io::client;
+use mighty_delegation::agent_io::mcp_config;
 use mighty_delegation::agent_io::server::{AgentIo, TerminalCall, TerminalHandler};
 use mighty_delegation::agent_io::tools::validate;
 use mighty_delegation::agent_io::wire::{self, MAXIMUM_BYTES};
@@ -29,8 +30,9 @@ fn executable(name: &str) -> String {
 }
 
 /// "Agent IO BindingSecretsAndArgumentBoundaries"; on the Mac also Swift `AgentIOMCPServerTests.swift:273`
-/// "aRunGetsTheTokenInItsEnvironmentNotItsArgvAndClosingRevokesIt" (the token in the run's environment, never its arguments; a closed
-/// binding resolves no more).
+/// "aRunGetsTheTokenInItsEnvironmentNotItsArgvAndClosingRevokesIt": the token is never in a CLI's arguments. A Claude CLI's own
+/// environment does not hold it either (its servers read it from a private config file, gone with the run or the binding); a Codex
+/// run's does, forwarded to its servers by name and kept from its shell tool's commands (a closed binding resolves no more).
 #[test]
 fn binding_secrets_and_argument_boundaries() {
     let registry = AgentIoBindings::default();
@@ -45,20 +47,44 @@ fn binding_secrets_and_argument_boundaries() {
         !format!("{first:?}").contains(&secret) && first.redact(&format!("x{secret}y")) == format!("x{REDACTED}y"),
         "binding and output redact the secret"
     );
+    let run = first.run_binding();
+    assert!(run.environment.is_empty(), "the Claude CLI's environment, which its commands inherit, never holds the token");
+    let args = run.arguments.clone();
+    assert!(args[0] == "--mcp-config" && !args.join(" ").contains(&secret), "Claude token never appears in argv");
+    let file = std::path::PathBuf::from(&args[1]);
+    assert_eq!(first.config_file().as_deref(), Some(file.as_path()), "the argument names the binding's config file");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert!(mode(&file) == 0o600 && mode(file.parent().unwrap()) == 0o700, "the file and its folder are the user's alone");
+    }
+    let config: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(config["mcpServers"]["mighty-terminal"]["command"], json!(executable), "space-containing path is a structured argument");
+    assert_eq!(
+        config["mcpServers"]["mighty-terminal"]["env"],
+        json!({"MIGHTY_AGENT_IO_PIPE": "pipe", "MIGHTY_PANE_TOKEN": secret}),
+        "the token and the pipe go to the MCP server alone, in its own env"
+    );
+    (run.ended.expect("the run's end deletes the file"))();
+    assert!(!file.exists() && first.config_file().is_none(), "the run's end deleted the config file");
     let mut args = vec![];
     first.append_arguments(&mut args);
-    assert!(args[0] == "--mcp-config" && !args.join(" ").contains(&secret), "Claude token never appears in argv/config");
-    let config: Value = serde_json::from_str(&args[1]).unwrap();
-    assert_eq!(config["mcpServers"]["mighty-terminal"]["command"], json!(executable), "space-containing path is a structured argument");
+    let again = std::path::PathBuf::from(&args[1]);
+    assert!(again.exists(), "a new file for a new list");
     let second = registry.bind("pane", "workspace", &temp(), "codex", "pipe", &executable).unwrap();
-    assert!(registry.resolve(&secret).is_none(), "new run revokes prior binding");
-    args.clear();
-    second.append_arguments(&mut args);
+    assert!(registry.resolve(&secret).is_none() && !again.exists(), "new run revokes prior binding and deletes its file");
+    let run = second.run_binding();
     let second_secret = second.environment()[TOKEN_KEY].clone();
+    // `MIGHTY_*` joins the user's own `exclude` (none added when their Codex policy uses `filters`).
+    let exclude = mcp_config::codex_shell_exclude(mcp_config::codex_home_config().as_deref());
+    assert!(exclude.as_deref().is_none_or(|e| e.contains("\"MIGHTY_*\"")));
     assert!(
-        args.iter().any(|s| s.contains("env_vars"))
-            && args.iter().all(|s| !s.contains("developer_instructions") && !s.contains(&second_secret)),
-        "Codex forwards secret env names and preserves user instructions"
+        run.arguments.iter().any(|s| s == r#"mcp_servers.mighty-terminal.env_vars=["MIGHTY_PANE_TOKEN","MIGHTY_AGENT_IO_PIPE"]"#)
+            && exclude.is_none_or(|exclude| run.arguments.iter().any(|s| *s == format!("shell_environment_policy.exclude={exclude}")))
+            && run.arguments.iter().all(|s| !s.contains("developer_instructions") && !s.contains(&second_secret))
+            && run.environment[TOKEN_KEY] == second_secret,
+        "Codex forwards secret env names, keeps them from its shell tool and preserves user instructions"
     );
     registry.revoke("pane");
     assert!(registry.resolve(&second_secret).is_none(), "pane close revokes its token");

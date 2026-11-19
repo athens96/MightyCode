@@ -8,7 +8,8 @@ import { terminalPalette } from '../../theme/tokens';
  */
 export const terminalThemes = { dark: terminalPalette('dark'), light: terminalPalette('light') } as const;
 
-export const defaultFamily = 'Cascadia Mono, Consolas, monospace';
+/** The design's code font (design-tokens.json metrics.font.mono): the Mac's own monospace first, then Windows'. */
+export const defaultFamily = 'ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace';
 
 /** The app's code font first, then the stand-ins; a name that is empty or too long is not used. */
 export function terminalFamily(family: string | null | undefined): string {

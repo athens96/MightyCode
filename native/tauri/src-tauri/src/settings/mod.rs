@@ -204,6 +204,8 @@ fn start(host: &Arc<Host>) -> Option<tokio::sync::oneshot::Receiver<()>> {
     let sheet = Sheet::begin(host)?;
     // The text box's font lists, read once per run before any builder runs (C# `InstalledFamilies`).
     general::read_families(host);
+    // The external editors 일반 › 에이전트 창's 외부 편집기 lists, looked for again in the background (editor.rs).
+    crate::editor::refresh_in_background(host);
     // omc's and Ouroboros's settings for the phase models box (C# `LoadTools`; the fixture in a smoke).
     models::read_tools(host);
     let saved = host.view().snapshot.settings_pane.clone().map(|pane| shown_category(&pane).to_string());

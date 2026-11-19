@@ -1143,6 +1143,55 @@ async fn file_changes_the_phone_gets_changes_only_with_changes_1_under_the_file_
     assert!(CAPABILITIES.contains(&"fileChanges"), "the host advertises it");
 }
 
+/// 휴대폰에서 볼 워크스페이스: by default a paired phone sees every workspace of this computer; held to the shared ones it lists, reads
+/// and acts only in what 이 컴퓨터 공유 shares now (nothing while sharing is off), on every route: the list, a pane, files, the work map
+/// and a new pane.
+#[tokio::test]
+async fn the_phone_sees_every_local_workspace_or_only_the_shared_ones() {
+    use mighty_core::model::MobileRemoteSettings;
+    let world = World::new("mobile-shared-only");
+    let other = world.temp.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(world.folder().join("w.txt"), "w\n").unwrap();
+    std::fs::write(other.join("a.txt"), "a\n").unwrap();
+    world.desk.update(|s| s.workspaces.get_or_insert_with(Vec::new).push(support::desk::workspace("s", &other)));
+    world.desk.set_sessions(vec![pane("pane-w", "w"), pane("pane-s", "s")]);
+    let mut model = mighty_workmap::WorkMapModel::unavailable("none");
+    model.available = true;
+    world.desk.calls().work_map = Some(model);
+    let listed = |state: &Value, key: &str, field: &str| -> Vec<String> {
+        state[key].as_array().unwrap().iter().map(|v| v[field].as_str().unwrap_or_default().to_string()).collect()
+    };
+    let (status, state) = world.route("GET", "/m1/state", None).await;
+    assert!(status == 200 && listed(&state, "workspaces", "id") == ["w", "s"], "every local workspace by default: {state}");
+    assert_eq!(listed(&state, "sessions", "id"), ["pane-w", "pane-s"]);
+    assert_eq!(world.route("GET", "/m1/workspaces/w/file?path=w.txt", None).await.0, 200, "and its files");
+    assert_eq!(world.route("GET", "/m1/workspaces/w/workmap", None).await.0, 200, "and its work map");
+
+    world.desk.update(|s| s.mobile_remote = Some(MobileRemoteSettings { phone_shared_only: true, ..MobileRemoteSettings::default() }));
+    let (_, state) = world.route("GET", "/m1/state", None).await;
+    assert!(listed(&state, "workspaces", "id").is_empty() && listed(&state, "sessions", "id").is_empty(), "nothing while not sharing");
+
+    world.desk.calls().shared = vec!["s".into()];
+    let (_, state) = world.route("GET", "/m1/state", None).await;
+    assert!(listed(&state, "workspaces", "id") == ["s"] && listed(&state, "sessions", "id") == ["pane-s"], "the shared one: {state}");
+    assert_eq!(world.route("GET", "/m1/workspaces/s/file?path=a.txt", None).await.0, 200, "a shared workspace's file");
+    assert_eq!(world.route("GET", "/m1/sessions/pane-s", None).await.0, 200, "a shared workspace's pane");
+    assert_eq!(world.route("GET", "/m1/workspaces/s/workmap", None).await.0, 200, "and work map");
+    for path in ["/m1/workspaces/w/files?path=", "/m1/workspaces/w/file?path=w.txt", "/m1/sessions/pane-w", "/m1/workspaces/w/workmap"] {
+        assert_eq!(world.route("GET", path, None).await.0, 404, "{path}: a workspace not shared is not there");
+    }
+    let created = world.route("POST", "/m1/workspaces/w/sessions", Some(json!({"kind": "claude"}))).await;
+    assert_eq!(created.0, 404, "no pane is made in it");
+    let sent = world.route("POST", "/m1/sessions/pane-w/submit", Some(json!({"text": "hi", "clientRequestId": "c1"}))).await;
+    assert_eq!(sent.0, 404, "nor sent to");
+    assert!(world.desk.actions().is_empty(), "nothing reached the desktop");
+
+    world.desk.update(|s| s.mobile_remote = Some(MobileRemoteSettings::default()));
+    let (_, state) = world.route("GET", "/m1/state", None).await;
+    assert_eq!(listed(&state, "workspaces", "id"), ["w", "s"], "back to every workspace");
+}
+
 /// AskTargetsVerification.cs:146 `ThePhoneSeesTheSwitchOnlyWhereItIsOffered` (L1269), the router's half: the switch only on a pane
 /// that offers targets, and `setAskTarget` passes an id or null.
 #[tokio::test]

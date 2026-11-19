@@ -48,6 +48,8 @@ export function worktreeBar(pane: PaneWorktree, status: WorktreeStatus | null, t
       { action: 'changes', label: t('paneWorktree.bar.changes') },
       { action: 'terminal', label: t('paneWorktree.bar.terminal') },
       { action: 'reveal', label: t('menu.showInExplorer') },
+      // 편집기에서 열기: the folder the pane's runs work in (src-tauri editor.rs).
+      { action: 'editor', label: t('editor.openFolder') },
       { action: 'port', label: t('paneWorktree.bar.openPort', { port: pane.port }) },
     ],
   };
@@ -63,6 +65,23 @@ export function worktreeBar(pane: PaneWorktree, status: WorktreeStatus | null, t
   if (status?.canUndo) model.menu.push({ action: 'undo', label: t('paneWorktree.bar.undo', { base }) });
   model.menu.push({ action: 'pr', label: t('paneWorktree.bar.pr') }, { action: 'discard', label: t('paneWorktree.bar.discard') });
   return model;
+}
+
+/**
+ * The line of the file as it is now that each line of a unified diff stands at (편집기에서 열기 from the changes sheet): an added or
+ * kept line its new-side number, a removed line the place it was taken from; null for the headers and anything before the first hunk.
+ */
+export function newSideLines(text: string): (number | null)[] {
+  let next: number | null = null;
+  return text.replace(/\r\n/g, '\n').split('\n').map((line) => {
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (hunk) { next = Math.max(1, Number(hunk[1])); return next; }
+    if (line.startsWith('diff ')) { next = null; return null; }
+    if (next === null) return null;
+    if (line.startsWith('-')) return next;
+    if (line.startsWith('\\')) return null;
+    return next++;
+  });
 }
 
 /** A diff's lines with their kind, for the changes sheet. */

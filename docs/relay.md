@@ -14,13 +14,20 @@
 
 WebSocket `GET /ws` + 쿼리. `serverId`는 `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`.
 
-호스트 토큰: 호스트는 무작위 32바이트를 16진수 64자로 적은 `hostToken`을 `<데이터 폴더>/mobile-remote/relay-host-token.json`(0600)에 한 번 만들어 두고, 자기 `serverId`를 그 토큰에서 만든다: `serverId = hex(SHA-256(hostToken의 UTF-8 바이트))`(소문자 64자). 호스트 소켓(제어·데이터)은 모두 `hostToken`(`^[A-Fa-f0-9]{32,64}$`, 형식이 틀리면 4400)을 싣고, 릴레이는 연결마다 `SHA-256(hostToken)`이 `serverId`와 같은지 다시 계산해 다르거나 토큰이 없으면 4401로 닫는다. 릴레이는 토큰을 기억하지 않으므로 호스트가 떨어져 있든 릴레이가 재시작했든 확인 결과가 같다. 클라이언트 데이터 소켓은 토큰을 싣지 않는다.
+호스트 토큰: 호스트는 무작위 32바이트를 16진수 64자로 적은 `hostToken`을 한 번 만들어 이 사용자의 금고(Mac Keychain, Windows DPAPI)에 두고(아래 "비밀의 자리"), 자기 `serverId`를 그 토큰에서 만든다: `serverId = hex(SHA-256(hostToken의 UTF-8 바이트))`(소문자 64자). 호스트 소켓(제어·데이터)은 모두 `hostToken`(`^[A-Fa-f0-9]{32,64}$`)을 보이고, 릴레이는 연결마다 `SHA-256(hostToken)`이 `serverId`와 같은지 다시 계산해 다르면 4401로 닫는다. 릴레이는 토큰을 기억하지 않으므로 호스트가 떨어져 있든 릴레이가 재시작했든 확인 결과가 같다. 클라이언트 데이터 소켓은 토큰을 싣지 않는다.
+
+토큰을 보이는 방법은 둘이고 두 릴레이(Cloudflare·Node) 모두 둘 다 받는다:
+
+- **쿼리** `…&hostToken=<hex>`: 지금 필드의 Mac·Windows 앱(`crates/mighty-remote/src/relay/host.rs`)이 쓰는 형식. 형식이 틀리면 4400, 값이 틀리면 4401로 바로 닫는다. URL에 토큰이 실리므로 프록시·플랫폼 로그에 남을 수 있다(Cloudflare 릴레이는 `wrangler.toml`의 `redact_query_string`으로 로그에서 쿼리를 지우고, Hub에는 URL을 넘기지 않는다. 두 릴레이의 로그 줄은 URL·토큰을 찍지 않는다).
+- **첫 프레임** (권장, 앱은 나중에 이쪽으로 바꾼다): 쿼리에 `hostToken`을 빼고 열고, 열리자마자 첫 프레임으로 텍스트 `{"type":"host-auth","hostToken":"<hex>"}`를 보낸다. 릴레이는 답하지 않는다. 맞으면 그때부터 제어 소켓·호스트 데이터 소켓이 되고(그 전에는 알림도 받지 않고 연결도 잇지 않는다), 틀리거나 형식이 다르거나 바이너리거나 5초(`RELAY_AUTH_TIMEOUT_MS`) 안에 오지 않으면 4401로 닫는다. 호스트는 `host-auth` 바로 뒤에 기다리지 않고 다음 프레임(데이터 소켓의 `ready` 등)을 보내도 된다(순서대로 처리된다). 한 주소(IPv6는 /64)는 `serverId`마다 이렇게 기다리는 소켓을 `RELAY_MAX_PENDING_PER_IP`(8)개까지만 둘 수 있고 넘으면 4429다. 이전 릴레이는 토큰 없는 호스트 소켓을 바로 4401로 닫으므로, 앱은 이 릴레이가 배포된 뒤에 바꾼다.
 
 | 소켓 | 쿼리 | 동작 |
 |---|---|---|
-| 호스트 제어 | `serverId=…&role=server&v=1&hostToken=…` | 호스트당 1개. 릴레이가 텍스트 JSON으로 알림: `{"type":"connected","connectionId"}`, `{"type":"disconnected","connectionId"}`. 새 제어 소켓이 오면 이전 제어 소켓은 코드 4409로 닫힌다 |
-| 클라이언트 데이터 | `serverId=…&role=client&connectionId=<uuid>&v=1` | 호스트 제어 소켓이 없으면 4404로 즉시 닫음. 있으면 제어 소켓에 `connected`를 보내고 호스트 데이터 소켓을 최대 10초 기다린다(그동안 프레임 64개까지 버퍼, 초과 시 4413). 시간 내 안 오면 4504 |
-| 호스트 데이터 | `serverId=…&role=server&connectionId=<uuid>&v=1&hostToken=…` | 대기 중인 클라이언트가 없으면 4404. 있으면 두 소켓을 양방향으로 잇는다 |
+| 호스트 제어 | `serverId=…&role=server&v=1[&hostToken=…]` | 호스트당 1개. 릴레이가 텍스트 JSON으로 알림: `{"type":"connected","connectionId"}`, `{"type":"disconnected","connectionId"}`. 새 제어 소켓이 오면 이전 제어 소켓은 코드 4409로 닫힌다 |
+| 클라이언트 데이터 | `serverId=…&role=client&connectionId=<uuid>&v=1` | 호스트 제어 소켓이 없으면 4404로 즉시 닫음. 있으면 제어 소켓에 `connected`를 보내고 호스트 데이터 소켓을 최대 10초 기다린다(그동안 프레임 64개까지 버퍼, 초과 시 4413). 시간 내 안 오면 4504. 첫 프레임(`hello`)은 5초 안에 보내야 한다(아니면 4408) |
+| 호스트 데이터 | `serverId=…&role=server&connectionId=<uuid>&v=1[&hostToken=…]` | 대기 중인 클라이언트가 없으면 4404. 있으면 두 소켓을 양방향으로 잇는다 |
+
+**아직 보증되지 않은 소켓.** 클라이언트 데이터 소켓은 릴레이가 확인할 수 없으므로(인증은 E2EE 안에서 호스트가 한다) 누구나 남의 `serverId`로 열 수 있다. 32개 자리를 그런 소켓이 차지하지 못하게: 클라이언트는 열고 5초(`RELAY_HELLO_TIMEOUT_MS`) 안에 첫 프레임을 보내야 하고(휴대폰과 컴퓨터는 열리자마자 `hello`를 보낸다), 호스트 반쪽이 아직 아무것도 보내지 않은(`ready` 전) 클라이언트 소켓은 한 주소(IPv6는 /64)당 `serverId`마다 `RELAY_MAX_PENDING_PER_IP`(8)개까지다(넘으면 4429). `ready` 뒤에도 인증하지 않는 연결은 호스트가 핸드셰이크 마감으로 닫는다.
 
 데이터 소켓의 프레임(텍스트·바이너리)은 그대로 상대에게 전달된다. 한쪽이 닫히면 다른 쪽도 같은 코드로 닫고 제어 소켓에 `disconnected`를 보낸다. `GET /healthz` → `200 ok`.
 
@@ -33,6 +40,10 @@ WebSocket `GET /ws` + 쿼리. `serverId`는 `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$
 | 호스트 대기 중 프레임 버퍼 | 64개 | `RELAY_MAX_BUFFERED_FRAMES` | 4413 | 호스트 연결 전 클라이언트 초과 시 |
 | 소켓당 송신 버퍼 | 4 MiB | `RELAY_MAX_SOCKET_BUFFERED_BYTES` | 4507 | 전달이 한도를 초과하면 해당 연결만 종료 (제어 소켓·다른 연결 무관) |
 | 호스트 데이터 소켓 대기 시간 | 10초 | `RELAY_ATTACH_TIMEOUT_MS` | 4504 | 시간 내 호스트 미연결 시 |
+| 클라이언트 첫 프레임(`hello`) 마감 | 5초 | `RELAY_HELLO_TIMEOUT_MS` | 4408 | 연 뒤 아무것도 보내지 않은 클라이언트 |
+| `host-auth` 첫 프레임 마감 | 5초 | `RELAY_AUTH_TIMEOUT_MS` | 4401 | 쿼리에 `hostToken` 없이 연 호스트 소켓 |
+| 주소당 보증 전 소켓 | `serverId`마다 8개 | `RELAY_MAX_PENDING_PER_IP` | 4429 | 호스트가 아직 답하지 않은 클라이언트 소켓, `host-auth`를 기다리는 호스트 소켓 각각(IPv6는 /64) |
+| 호스트 수 (Node 릴레이만) | 전체 10000, 주소당 64 | `RELAY_MAX_SERVERS`, `RELAY_MAX_SERVERS_PER_IP` | 4429 | 새 `serverId`의 제어 소켓만 센다. 같은 호스트의 재접속(4409로 교체)은 막지 않는다. Cloudflare는 `serverId`마다 Durable Object라 따로 세지 않는다 |
 | ping 간격 | 30초 | `RELAY_PING_INTERVAL_MS` | — | 응답 없으면 소켓 강제 종료 |
 
 전체 닫기 코드 목록:
@@ -43,16 +54,18 @@ WebSocket `GET /ws` + 쿼리. `serverId`는 `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$
 | 4400 | badRequest | 쿼리 파라미터 오류 |
 | 4401 | unauthorized | 호스트 소켓의 `hostToken`이 없거나 `SHA-256(hostToken)`이 `serverId`와 다름 |
 | 4404 | notFound | 호스트 제어 소켓 없음, 또는 알 수 없는 connectionId |
+| 4408 | helloTimeout | 클라이언트 데이터 소켓이 첫 프레임 마감 안에 아무것도 보내지 않음 |
 | 4409 | conflict | 새 제어 소켓으로 대체됨 |
 | 4410 | hostOffline | 호스트 제어 소켓 연결 끊김 |
 | 4413 | bufferOverflow | 호스트 연결 전 클라이언트 프레임 초과 |
-| 4429 | tooManyConnections | serverId당 연결 수 초과 |
+| 4429 | tooManyConnections | serverId당 연결 수 초과, 주소당 보증 전 소켓 초과, Node 릴레이의 호스트 수 초과 |
 | 4504 | attachTimeout | 호스트 데이터 소켓 시간 초과 |
 | 4507 | socketBufferOverflow | 소켓 송신 버퍼 한도 초과 — 해당 연결만 종료 |
 
 ## 종단 간 암호화 (릴레이는 해석 불가)
 
-- 호스트 정적 키: X25519. `<데이터 폴더>/mobile-remote/relay-keypair.json`(0600)에 `{v:1, publicKeyB64, secretKeyB64}`.
+- 호스트 정적 키: X25519. 비밀 키는 금고에, 공개 키는 Mac `<데이터 폴더>/mobile-remote/relay-keypair.json`(0600)에 `{v:1, publicKeyB64}`(Swift 0.4는 `secretKeyB64`도 그 파일에 두었다).
+- 비밀의 자리: 페어링 키·`hostToken`·호스트 비밀 키는 금고 항목 하나(`1.<페어링 키>.<hostToken>.<비밀 키 base64url>`, 계정 `mobile-pairing-<16진수 32자>`; Mac 서비스 `dev.mightycode.native.pairing`, Windows `remote-keys\<sha256(계정)>.bin`)에 있고, 파일은 그 항목을 가리킨다(Mac `mobile-remote.key`·`relay-host-token.json`의 `vault:<계정>`, Windows `mobile-identity.json` version 2의 `vault`). 호스트 id, 기기 목록과 토큰 해시는 파일에 그대로다. 비밀이 바뀌면(키 다시 만들기) 새 항목에 쓰고 다시 읽어 확인한 다음 파일을 쓰고, 그 뒤에 옛 항목을 지운다. 파일에서 평문 비밀을 찾으면(0.5.3까지, Swift·C# 0.4가 쓴 것) 같은 방법으로 금고에 옮긴다. 금고가 거절하면 비밀은 파일에 남고 앱은 그대로 동작한다(한 번 기록하고 그 실행 동안 다시 시도하지 않는다). 가리키는 항목을 읽지 못하면 오류이지 새 신원이 아니다. Swift·C# 0.4와 0.5.3까지의 앱은 자리표시자를 손상으로 읽으므로(Mac은 새 키, Windows는 거절), 그리로 되돌아가면 휴대폰을 다시 페어링해야 한다.
 - 클라이언트: 연결마다 새 X25519 키쌍.
 - 핸드셰이크(데이터 소켓의 평문 텍스트 프레임 2개):
   1. 클라이언트 → `{"type":"hello","v":1,"clientKey":"<b64 32B>","nonce":"<b64 16B>"}`
@@ -73,7 +86,8 @@ WebSocket `GET /ws` + 쿼리. `serverId`는 `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$
 - 기기 목록은 최대 32대다. 가득 차면 90일 넘게 접속하지 않은 항목만 밀어내고, 그런 항목이 없으면 등록을 거절한다(`device-limit`). 새 기기 등록은 호스트 전체에서 1시간에 8대까지다. 등록한 지 24시간이 안 된 기기는 Mac 설정에 "새 기기"로 표시된다.
 - 호스트가 목록을 저장하지 못하면 토큰 없이 `auth_ok`를 보낸다. 앱은 이때 페어링 키를 그대로 두고 다음 접속에서 다시 토큰을 받는다.
 - Mac 설정의 **구버전 앱 허용**을 끄면 `clientId` 없는 인증을 거절한다(`legacy-refused`). 형식이 틀린 `clientId`는 구버전으로 내려 받지 않고 거절한다(`malformed`). JSON이 아닌 인증 프레임도 릴레이 경로에서는 `malformed`로 거절한다(Mac·Windows 호스트 같음; 직접 연결은 어떤 거절이든 `unauthorized`).
-- `auth_error.reason`: `pairing-key`·`device-revoked`(최종: 앱이 비밀값을 지우고 재페어링 필요로 표시), `device-conflict`(앱이 새 id로 한 번 재시도), `device-limit`·`legacy-refused`·`malformed`·그 밖의 값(최종 아님: 비밀값을 지우지 않고 오류만 보여 준다).
+- `auth_error.reason`: `pairing-key`·`device-revoked`·`approval-denied`(최종: 앱이 비밀값을 지우고 재페어링 필요로 표시), `device-conflict`(앱이 새 id로 한 번 재시도), `device-limit`·`legacy-refused`·`malformed`·그 밖의 값(최종 아님: 비밀값을 지우지 않고 오류만 보여 준다).
+- 페어링 코드와 허용(0.5.3 다음 버전부터): QR·링크의 `key`는 저장된 키가 아니라 메모리에만 있는 짧은 페어링 코드다. 휴대폰용과 컴퓨터용(`&for=desktop`이 붙은 원격 연결 링크)이 따로 있어 휴대폰 링크로 컴퓨터를(`role:"desktop"`), 컴퓨터 링크로 휴대폰을 등록할 수 없다(`pairing-key`). 코드는 설정 화면에 보이는 동안 살아 있고 마지막으로 보인 뒤 10분에 만료되며, 등록 한 번(허용이든 거절이든)에 쓰이고 새 코드로 바뀐다. 코드로 하는 등록은 호스트가 먼저 `{"type":"auth_pending","timeout":60}`을 보내고, 컴퓨터 앞의 사람에게 창과 알림으로 묻는다. 허용하면 `auth_ok`(토큰 포함), 거절하거나 60초 안에 답이 없으면 `auth_error` `approval-denied`. 한 번에 한 기기만 묻고(다른 기기는 `device-limit`), 답은 30초 동안 기억해 같은 기기의 다음 시도에 쓴다. 같은 `clientId`로 다시 등록하면 새 기기처럼 묻고, 허용하면 새 항목(처음 본 시각도 새로)이 되고 그 id의 다른 연결은 끊긴다. 컴퓨터 등록은 호스트가 "페어링한 컴퓨터의 연결 받기"를 켜고 공유 중일 때만 받는다(`desktops-off`). 토큰 인증은 묻지 않는다. `auth_pending`을 모르는 예전 앱은 무시하고, 자기 시간(휴대폰 20초) 안에 허용되면 연결된다. 저장된 `pairingKey`는 이제 구버전 앱(`clientId` 없음)만 쓰고, 그 허용은 기본으로 꺼져 있다. 새 키 만들기는 호스트 토큰(=`serverId`)과 X25519 키도 새로 만들고 릴레이에 새 이름으로 다시 붙는다. 릴레이 주소는 `wss://`만 받는다(`ws://`는 루프백만).
 - 기기 토큰은 **관리 기능**이다. 페어링 키(QR)를 가진 사람은 새 기기로 등록할 수 있으므로, QR이 유출됐다면 키를 다시 만들어야 한다.
 - 토큰·키·해시는 로그에 남기지 않는다.
 
@@ -180,14 +194,18 @@ QR/문자열: `mightycode://pair?v=2&sid=<serverId>&pk=<b64url 공개키>&relay=
 - **토큰 정리**: FCM이 토큰 자체를 무효라고 할 때만(`UNREGISTERED`, 또는 등록 토큰을 지목한 `INVALID_ARGUMENT`) 릴레이가 핸들을 지우고 410으로 답한다. 호스트는 410·404·403을 받으면 그 기기의 핸들을 지운다. `SENDER_ID_MISMATCH`(서비스 계정 키가 앱과 다른 Firebase 프로젝트), 오류 코드 없는 404·`NOT_FOUND`, 토큰을 지목하지 않은 `INVALID_ARGUMENT`는 릴레이 설정 문제라 핸들을 두고 502 `{ error: "fcm-failed", fcmError: <FCM 오류 코드> }`로 답하며, 로그에는 FCM 오류 코드만 남긴다(핸들·토큰 없음). FCM이 바쁘면(429·5xx) 502와 `Retry-After`다.
 - **전체 전송 한도**: serverId별·IP별 한도를 먼저 세고, 핸들이 그 serverId에 묶여 FCM까지 갈 때만 전체 한도를 쓴다. 모르는 핸들(404)·남의 핸들(403)은 전체 한도를 쓰지 않는다.
 - **FCM 연결**: FCM 요청과 액세스 토큰 교환은 각각 10초 안에 끝나야 한다(넘으면 502와 `Retry-After`). 액세스 토큰 교환이 실패하기 시작하면 `[push] FCM access token exchange failing`, 다시 되면 `[push] FCM access token exchange working again`을 한 번씩만 남긴다.
-- **한도**(TURN과 같은 슬라이딩 창, 기본 10분): 전송은 serverId당 120, IP당 240, 전체 3000. 핸들 등록·갱신·삭제는 IP당 30이고, 핸들 등록은 전체로도 300이다. IP는 IPv6이면 /64 하나로 세고(한 가입자가 보통 /64 전체를 쓴다) IPv4-매핑 IPv6는 그 IPv4로 센다. 전송의 IP당 한도도 같은 방식이다. 넘으면 429와 `Retry-After`.
-- **저장**: `PUSH_STORE_PATH`의 JSON 파일(0600). 120일 동안 쓰이지 않은 핸들은 지운다. 핸들은 최대 2만 개이고, 가득 차면 먼저 오래 쓰이지 않은 핸들을 비우고, 그래도 가득이면 호스트가 아직 한 번도 쓰지 않은 핸들 중 가장 오래된 것부터 비운다(호스트가 쓴 핸들은 자리 때문에 지우지 않는다). 비울 핸들이 없으면 등록은 503 `full`이다. 읽을 수 없는 파일은 `.unreadable-<시각>`으로 옮기고 빈 상태로 시작한다.
+- **한도**(TURN과 같은 슬라이딩 창, 기본 10분): 전송은 serverId당 120, IP당 240, 전체 3000. 핸들 등록·갱신·삭제는 IP당 30이고, 핸들 등록은 IP당 하루 100(`PUSH_MAX_REGISTRATIONS_PER_IP_DAY`), 릴레이가 아직 갖고 있지 않은 FCM 토큰의 등록은 전체로도 300이다. 이미 가진 토큰(같은 폰이 호스트를 하나 더 페어링하거나 다시 등록)은 전체 한도를 쓰지 않으므로, 홍수가 전체 한도를 다 써도 기존 폰의 등록은 된다. IP는 IPv6이면 /64 하나로 세고(한 가입자가 보통 /64 전체를 쓴다) IPv4-매핑 IPv6는 그 IPv4로 센다. 전송의 IP당 한도도 같은 방식이다. 넘으면 429와 `Retry-After`. Cloudflare 릴레이는 이 창들을 PushStore의 SQLite에 두므로 객체가 내려가거나 배포해도 이어서 센다. Node 릴레이는 메모리에 두어 프로세스가 다시 뜨면 새로 센다.
+- **한 쪽이 채울 수 있는 양**: 폰은 페어링(호스트)마다 핸들 하나를 받으므로, FCM 토큰 하나는 핸들을 16개(`PUSH_MAX_HANDLES_PER_TOKEN`)까지 갖고 더 등록하면 그 토큰의 가장 오래 쓰이지 않은 핸들이 자리를 내준다. 같은 토큰의 핸들이 같은 `serverId`에 다시 묶이면(앱을 다시 깔았거나 기록을 잃은 폰이 다시 등록) 예전 핸들은 지운다. `serverId` 하나에 묶인 핸들은 32개(`PUSH_MAX_HANDLES_PER_SERVER_ID`)까지이고, 넘으면 그 `serverId`의 가장 오래 쓰이지 않은 핸들이 지워진다. 지워진 핸들로 보내면 404이고, 호스트는 그 핸들을 지우며 폰은 하루 한 번의 확인(`PUT`이 404)에서 새로 등록해 호스트에 다시 준다.
+- **본문 크기**: 요청 본문은 8 KiB까지만 읽는다. 선언된 길이든 흘려보낸 바이트든 넘으면 그 자리에서 413 `too-large`로 답하고 나머지는 읽지 않는다(Node 릴레이는 `Connection: close`로 답하고 연결을 닫는다).
+- **저장**: `PUSH_STORE_PATH`의 JSON 파일(0600). 120일 동안 쓰이지 않은 핸들은 지운다. 핸들은 최대 2만 개이고, 가득 차면 먼저 오래 쓰이지 않은 핸들을 비우고, 그래도 가득이면 호스트가 아직 한 번도 쓰지 않은 핸들 중 가장 오래된 것부터, 그것도 없으면 호스트가 쓴 핸들 중 가장 오래 쓰이지 않은 것을 비운다. 그래서 가득 찬 저장소가 새 폰을 몇 달씩 막지 않는다(503 `full`은 비울 핸들이 하나도 없을 때뿐이라 사실상 오지 않는다). 읽을 수 없는 파일은 `.unreadable-<시각>`으로 옮기고 빈 상태로 시작한다.
 - **로그**: `[serverId 앞 8자] push sent` 같은 줄만 남긴다. 핸들·토큰·봉투는 남기지 않는다.
 - 서비스 계정 키(`FCM_SERVICE_ACCOUNT_FILE`)가 없거나 읽히지 않거나 JSON·개인 키가 깨졌으면 릴레이는 시작 때 `[push] FCM disabled`를 남기고 전송만 503이다. 릴레이는 계속 돌고 나머지는 그대로다. 키를 읽으면 `[push] FCM sending on`이다. 키는 앱의 `google-services.json`과 같은 Firebase 프로젝트의 것이어야 한다. 기본 릴레이(Cloudflare)의 키 설정과 확인은 [relay-cloudflare.md](relay-cloudflare.md)에 있다. 직접 올린 Node 릴레이의 설정 순서는 은퇴한 Oracle 배포 기록인 `docs/relay-oracle.md` "푸시 알림(FCM) 켜기"에 남아 있다.
 
 ## TURN 자격증명 발급 (릴레이 평문, E2EE 아님)
 
 > 릴레이가 TURN 서버가 없는 Cloudflare Workers로 옮겨 가는 동안 화면 공유는 Mac과 Windows 호스트에서 멈춰 있다(Mac `ScreenShareAvailability.enabled = false`, Windows `ScreenShareAvailability.Enabled`, `docs/mobile-remote.md`의 `"screenShare"`). 호스트가 `screenShare`를 알리지 않으므로 `turn-credentials-request`도 보내지 않는다. 아래 규약은 기능이 돌아올 때를 위해 그대로 둔다.
+>
+> 그래서 지금 TURN은 쓰이지 않는다: 기본 릴레이(Cloudflare)는 언제나 `turn-unavailable`이고, Node 릴레이도 `TURN_SECRET`이 비어 있으면(기본값) 같다. 아래 "호스트만의 실제 의미" 그대로 비밀을 넣은 Node 릴레이는 스스로 만든 `serverId`에도 발급하므로(한도로만 막는다), 화면 공유가 돌아오기 전에는 `TURN_SECRET`을 넣지 않는다(넣는 것은 은퇴한 Oracle 키트의 `compose.yaml`뿐이다).
 
 릴레이는 coturn `use-auth-secret`을 환경 변수 `TURN_SECRET`으로 보관한다. 클라이언트·호스트 앱에는 절대 전달되지 않는다.
 

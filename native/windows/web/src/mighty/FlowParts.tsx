@@ -127,8 +127,11 @@ function ProgressTime({ startedAt, endedAt, ticking }: { startedAt?: number; end
 const progressMark: Record<FlowProgressRowCopy['state'], IconName> = { done: 'circle-check', current: 'circle-dot', pending: 'circle', stopped: 'circle-stop', failed: 'circle-x' };
 const statusTone = (status: string) => (status === 'running' ? 'run' : status === 'completed' ? 'done' : status === 'error' ? 'err' : status === 'stopped' ? 'stop' : status === 'waiting' ? 'wait' : 'idle');
 
-/** Panes whose progress panel is folded: per pane, for as long as the page runs (never saved). */
+/** Panes whose progress panel the user folded, and those they opened: per pane, for as long as the page runs (never saved). A pane the user did
+ * neither in has its panel folded while it is narrow (`narrow`: under camera ProgressFoldWidth) and open otherwise. */
 const progressFolded = new Set<string>();
+const progressOpened = new Set<string>();
+const foldedFor = (paneId: string, narrow: boolean) => progressFolded.has(paneId) || (narrow && !progressOpened.has(paneId));
 
 /**
  * Scrolls `list` so that `row` shows in it, a third of the way down when it has to move: only the list's own scroll changes (scrollIntoView would
@@ -150,12 +153,14 @@ export function scrollRowIntoView(list: HTMLElement | null, row: HTMLElement | n
  * request line. A press or a wheel in it never pans the diagram. The steps and the background work each scroll in a room of their own, so every
  * one of them can be seen; when the step in progress changes, the steps scroll it into view (only that list moves, never the page).
  */
-export function ProgressPanel({ paneId, progress, onReveal }: { paneId: string; progress: FlowProgressCopy; onReveal: (nodeId: string) => void }) {
+export function ProgressPanel({ paneId, progress, onReveal, narrow = false }: { paneId: string; progress: FlowProgressCopy; onReveal: (nodeId: string) => void; narrow?: boolean }) {
   const { t } = useServices();
-  const [collapsed, setCollapsed] = useState(() => progressFolded.has(paneId));
+  const [collapsed, setCollapsed] = useState(() => foldedFor(paneId, narrow));
+  // The pane grew narrow or wide: a panel the user never folded or opened follows it.
+  useEffect(() => { setCollapsed(foldedFor(paneId, narrow)); }, [paneId, narrow]);
   const toggle = () => {
     const next = !collapsed;
-    if (next) progressFolded.add(paneId); else progressFolded.delete(paneId);
+    if (next) { progressFolded.add(paneId); progressOpened.delete(paneId); } else { progressFolded.delete(paneId); progressOpened.add(paneId); }
     setCollapsed(next);
   };
   const label = t(collapsed ? 'graph.steps.expand' : 'graph.steps.collapse');

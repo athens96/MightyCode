@@ -1,7 +1,7 @@
 // The sidebar (spec section 2; MainWindow.Sidebar.cs, Navigation.cs, Delegation.cs): search, the work-status entry, the
 // workspaces with their panes and delegated children, the layout choice and the footer. Every row's words, counts and state
 // are the host's (WebShellModel); every click runs a window action.
-import { memo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { useServices, useStoreState } from '../app/context';
 import { ProviderMark } from '../conversation/ProviderMark';
 import { activeSessionId } from '../store/store';
@@ -12,8 +12,28 @@ import type { CardAction, ChildCard, PaneInfo, RemoteServer, SidebarItem, Sideba
 import { Icon } from '../icons/Icon';
 import appIcon from '../assets/app-icon.png';
 import { Pending } from '../pending/Pending';
+import { setReviewQueue, toggleReview, useReviewOpen, useReviewQueue, type ReviewQueue } from '../review/queue';
 
 export const sidebarSearchId = 'sidebar-search';
+
+/**
+ * 검토: the review queue's entry (review/ReviewPanel.tsx) with what is waiting as its badge. The queue is asked for once as the sidebar
+ * mounts (the host reads it the first time); the host's pushes keep the badge up to date.
+ */
+export function ReviewEntry() {
+  const { t, bridge } = useServices();
+  const queue = useReviewQueue();
+  const open = useReviewOpen();
+  useEffect(() => { void bridge.call<ReviewQueue>('reviewQueue').then(setReviewQueue, () => {}); }, [bridge]);
+  const count = queue?.count ?? 0;
+  return (
+    <button type="button" className={'sidebar-entry' + (open ? ' selected' : '')} title={t('review.sidebarHelp')} data-testid="sidebar-review" onClick={toggleReview}>
+      <span className="sidebar-entry-tile review-tile" aria-hidden="true"><Icon name="list-checks" size={12} weight={2.6} /></span>
+      <span className="sidebar-entry-title">{t('review.sidebar')}</span>
+      {count > 0 && <span className="sidebar-review-count" data-testid="sidebar-review-count" aria-label={t('review.summary', { count })}>{count}</span>}
+    </button>
+  );
+}
 
 /** Makes a pane the active one: drawn at once, then the host's SelectLayoutSession saves it. */
 export function useChoosePane(): (id: string, method?: 'selectSession' | 'activatePane') => void {
@@ -224,6 +244,7 @@ export function Sidebar() {
         <span className="sidebar-entry-title">{t('phone.dashboard.title')}</span>
         <StatusCounts counts={entryCounts} />
       </button>
+      <ReviewEntry />
       <div className="sidebar-section">
         <span className="sidebar-section-title">{t('sidebar.workspacesHeader')}</span>
         <span className="sidebar-section-count">{groups.ownCount}</span>

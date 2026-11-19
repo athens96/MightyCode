@@ -113,7 +113,7 @@ pub fn register(methods: &mut Registry) {
     });
     methods.add("paneWorktreeDiff", |host: Arc<Host>, args| async move {
         let (Some(id), Some(path)) = (arg(&args, "id"), arg(&args, "path")) else { return Ok(Value::Null) };
-        let (Some(places), Some(pane)) = (places(), pane_record(&host, id)) else { return Ok(Value::Null) };
+        let (Some(places), Some(pane)) = (places(), review_record(&host, id)) else { return Ok(Value::Null) };
         Ok(core::file_diff(&places.git, &places.paths, &pane, path).await.map_or(Value::Null, Value::String))
     });
     methods.add("workspaceWorktree", |host: Arc<Host>, args| async move {
@@ -132,6 +132,51 @@ fn local_folder(workspace: &Workspace) -> String {
 
 fn pane_record(host: &Host, id: &str) -> Option<PaneWorktree> {
     host.view().snapshot.session(id).and_then(|s| s.pane_worktree.clone())
+}
+
+/// A delegated child's worktree as a pane worktree's record (its branch, the parent's branch as its base, the parent's checkout), so
+/// the changes sheet, a file's diff and the review queue read it as they read a pane's.
+pub(crate) fn child_record(id: &str) -> Option<PaneWorktree> {
+    let coordinator = crate::delegation::app()?.coordinator()?;
+    let file = coordinator.file();
+    let child = file.children.iter().find(|child| child.id == id)?;
+    Some(PaneWorktree {
+        worktree_path: Some(child.worktree_path.clone()),
+        branch: Some(child.branch.clone()),
+        base_branch: Some(child.parent_branch.clone()),
+        base_commit: Some(child.base_commit.clone()),
+        checkout: Some(child.parent_checkout.clone().unwrap_or_else(|| child.worktree_path.clone())),
+        ..PaneWorktree::default()
+    })
+}
+
+/// The worktree `id` names for reading (the review queue, the changes sheet, 편집기에서 열기): a worktree pane's record, else a
+/// delegated child's.
+pub(crate) fn review_record(host: &Host, id: &str) -> Option<PaneWorktree> {
+    pane_record(host, id).or_else(|| child_record(id))
+}
+
+/// What the review queue reads of one worktree (review.rs): how far it is from its base and the size of its work; None when git
+/// cannot say (a worktree gone, git failing). Reading git is always allowed.
+pub(crate) async fn review_reading(pane: &PaneWorktree) -> Option<(Status, core::DiffStat)> {
+    let places = places()?;
+    let status = core::status(&places.git, pane).await?;
+    let stat = core::diff_stat(&places.git, pane).await?;
+    Some((status, stat))
+}
+
+/// Whether the pane's last merge was refused for a conflict, and whether an action runs on it now.
+pub(crate) fn review_flags(id: &str) -> (bool, bool) {
+    let state = lock(&STATE);
+    (state.conflicts.contains(id), state.busy.contains(id))
+}
+
+/// The review queue's 변경 보기 for a delegated child (a worktree pane's goes through `paneWorktreeAction{changes}`): the same sheet,
+/// its files read from the child's worktree.
+pub(crate) async fn show_child_changes(host: &Arc<Host>, id: &str) {
+    if let Some(record) = child_record(id) {
+        show_changes_of(host, id, &record).await;
+    }
 }
 
 fn system_log(text: String, provider: Option<String>) -> mighty_core::model::LogEntry {
@@ -686,6 +731,12 @@ async fn pane_action(host: &Arc<Host>, id: &str, action: &str) {
                 banner(host, error);
             }
         }
+        // 편집기에서 열기: the folder the pane's runs work in, in the external editor (editor.rs).
+        "editor" => {
+            if let Err(error) = crate::editor::open_under(host, pane.run_folder(), "", None).await {
+                banner(host, error);
+            }
+        }
         _ => {}
     }
 }
@@ -953,13 +1004,6 @@ pub async fn closed(host: &Arc<Host>, closed: &RunSession) {
 /// C# `ShowPaneWorktreeChanges`: the changes sheet: the files the pane changed against its base, each file's diff asked of
 /// `paneWorktreeDiff`.
 async fn show_changes(host: &Arc<Host>, pane: &PaneWorktree) {
-    let Some(places) = places() else { return };
-    let locale = host.locale;
-    let files = core::changed_files(&places.git, pane).await.unwrap_or_default();
-    let title = locale.get_with("paneWorktree.changes.title", &[("branch", pane.branch()), ("base", pane.base_branch())]);
-    if host.view().dialog_open {
-        return;
-    }
     let pane_id = host
         .view()
         .snapshot
@@ -968,6 +1012,19 @@ async fn show_changes(host: &Arc<Host>, pane: &PaneWorktree) {
         .find(|s| s.pane_worktree.as_ref().is_some_and(|p| p.branch == pane.branch))
         .map(|s| s.id().to_string())
         .unwrap_or_default();
+    show_changes_of(host, &pane_id, pane).await;
+}
+
+/// The changes sheet of the worktree `pane` that `pane_id` names (a worktree pane, or a delegated child for the review queue): each
+/// file's diff is asked of `paneWorktreeDiff` with that id.
+async fn show_changes_of(host: &Arc<Host>, pane_id: &str, pane: &PaneWorktree) {
+    let Some(places) = places() else { return };
+    let locale = host.locale;
+    let files = core::changed_files(&places.git, pane).await.unwrap_or_default();
+    let title = locale.get_with("paneWorktree.changes.title", &[("branch", pane.branch()), ("base", pane.base_branch())]);
+    if host.view().dialog_open {
+        return;
+    }
     let files: Vec<Value> = files.iter().map(|f| json!({"path": f.path, "status": f.status})).collect();
     ask(
         host,

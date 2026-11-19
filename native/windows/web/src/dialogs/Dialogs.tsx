@@ -12,7 +12,7 @@ import { GitCreate, NewFolder } from './WorkspaceCreate';
 import { ConversationSearch } from './ConversationSearch';
 import { Pending } from '../pending/Pending';
 import { DialogLoading, DialogShell } from './DialogShell';
-import { diffLines } from '../pane/worktree';
+import { diffLines, newSideLines } from '../pane/worktree';
 import '../pane/worktree.css';
 
 /**
@@ -163,9 +163,13 @@ function PaneWorktreeText({ id, dialog, answer }: { id: number; dialog: Extract<
   );
 }
 
-/** The files a worktree pane changed against its base, and the picked file's diff (paneWorktreeDiff). */
+/**
+ * The files a worktree pane (or a delegated child, from the review queue) changed against its base, and the picked file's diff
+ * (paneWorktreeDiff). 편집기에서 열기 opens the picked file, a right-click on a diff line opens it at that line (editor.rs resolves the
+ * path in the worktree again).
+ */
 function PaneWorktreeChanges({ id, dialog, answer }: { id: number; dialog: Extract<DialogRequest, { type: 'paneWorktreeChanges' }>; answer: (value: unknown) => void }) {
-  const { bridge } = useServices();
+  const { bridge, t } = useServices();
   const [picked, setPicked] = useState<string | null>(dialog.files[0]?.path ?? null);
   const [diff, setDiff] = useState<string | null>(null);
   useEffect(() => {
@@ -173,15 +177,25 @@ function PaneWorktreeChanges({ id, dialog, answer }: { id: number; dialog: Extra
     if (picked) void bridge.call<string | null>('paneWorktreeDiff', { id: dialog.paneId, path: picked }).then((value) => { if (live) setDiff(value ?? ''); }, () => {});
     return () => { live = false; };
   }, [bridge, dialog.paneId, picked]);
+  const editor = (line: number | null) => {
+    if (picked) void bridge.call('openInEditor', { source: 'worktree', id: dialog.paneId, path: picked, ...(line ? { line } : {}) }).catch(() => {});
+  };
+  const lines = diff === null ? [] : newSideLines(diff);
   return (
-    <Sheet id={id} width={880} label={dialog.title} onCancel={() => answer(null)} buttons={<button type="button" className="btn" data-autofocus onClick={() => answer(null)}>OK</button>}>
+    <Sheet id={id} width={880} label={dialog.title} onCancel={() => answer(null)} status={picked && diff ? t('editor.lineHint') : undefined}
+      buttons={<>
+        {picked && dialog.paneId && <button type="button" className="btn" data-testid="worktree-changes-editor" onClick={() => editor(null)}>{t('editor.open')}</button>}
+        <button type="button" className="btn" data-autofocus onClick={() => answer(null)}>OK</button>
+      </>}>
       {dialog.files.length === 0 ? <p className="dialog-message">{dialog.none}</p> : (
         <div className="worktree-changes">
           <ul>{dialog.files.map((file) => (
             <li key={file.path}><button type="button" className={file.path === picked ? 'active' : ''} title={file.path} onClick={() => setPicked(file.path)}>{file.status + '  ' + file.path}</button></li>
           ))}</ul>
           {picked ? diff === null ? <Pending busy showsLabel={false} /> : (
-            <pre className="worktree-diff selectable">{diffLines(diff).map((line, index) => <div key={index} className={line.kind}>{line.text || ' '}</div>)}</pre>
+            <pre className="worktree-diff selectable">{diffLines(diff).map((line, index) => (
+              <div key={index} className={line.kind} onContextMenu={lines[index] ? (event) => { event.preventDefault(); editor(lines[index] ?? null); } : undefined}>{line.text || ' '}</div>
+            ))}</pre>
           ) : <p className="quiet">{dialog.pick}</p>}
         </div>
       )}

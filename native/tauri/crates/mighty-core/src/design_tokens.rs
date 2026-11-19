@@ -251,7 +251,7 @@ const fn palette(values: [u32; 41]) -> DesignPalette {
 /// `DesignTokens.Light`, in [`Token::ALL`]'s order.
 pub static LIGHT: DesignPalette = palette([
     0xECEEF3, 0xFFFFFF, 0xF5F7FB, 0xE2E6ED, 0xDEE2EA, 0xDDE1E9, // page … track
-    0x0E1320, 0x5A6377, 0x616A7C, 0x2459E6, 0xE6EDFF, 0xFFFFFF, // ink … onAccent
+    0x0E1320, 0x4A5366, 0x5C6577, 0x2459E6, 0xE6EDFF, 0xFFFFFF, // ink … onAccent
     0x4F5869, 0x1F4FD1, // sidebarInk2, sidebarAccent
     0x2A5FEE, 0xE6EDFF, 0xFFA81F, 0xFFF3DE, 0x2B1B00, 0x8A5300, // run … waitText
     0x08804A, 0xE2F6EA, 0x06703F, 0xD42F22, 0xFDE6E4, 0xB42318, // done … errText
@@ -290,11 +290,12 @@ pub mod metrics {
     pub const RADIUS_SEGMENT: f64 = 6.0;
     pub const TYPE_TITLE: f64 = 13.0;
     pub const TYPE_BODY: f64 = 13.0;
-    pub const TYPE_PILL: f64 = 11.0;
-    pub const TYPE_BADGE: f64 = 9.0;
-    pub const FONT_MONO: &str = "Cascadia Mono, Consolas";
-    pub const FONT_BODY: &str = "Segoe UI Variable Text, Segoe UI";
-    pub const FONT_HEADING: &str = "Segoe UI Variable Display, Segoe UI";
+    pub const TYPE_PILL: f64 = 12.0;
+    pub const TYPE_BADGE: f64 = 10.0;
+    pub const FONT_MONO: &str = "ui-monospace, SF Mono, Menlo, Cascadia Mono, Consolas";
+    pub const FONT_BODY: &str = "-apple-system, BlinkMacSystemFont, Segoe UI Variable Text, Segoe UI, Apple SD Gothic Neo, Malgun Gothic";
+    pub const FONT_HEADING: &str =
+        "-apple-system, BlinkMacSystemFont, Segoe UI Variable Display, Segoe UI, Apple SD Gothic Neo, Malgun Gothic";
     pub const SETTINGS_WIDTH: f64 = 860.0;
     pub const SETTINGS_HEIGHT: f64 = 640.0;
     pub const DIALOG_RADIUS: f64 = 12.0;

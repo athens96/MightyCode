@@ -40,16 +40,16 @@ section: agent-pane
 
 | 에이전트 | 고를 수 있는 권한 |
 |---|---|
-| Claude | Plan mode · Always ask · Accept file edits · Auto mode · Bypass |
+| Claude | {{ui:permission.label.claude.plan}} · {{ui:permission.label.claude.default}} · {{ui:permission.label.claude.acceptEdits}} · {{ui:permission.label.claude.auto}} · {{ui:permission.label.claude.fullAccess}} |
 | Codex | {{ui:permission.label.defaultCodex}} · {{ui:permission.label.onRequest}} · {{ui:permission.label.acceptEditsCodex}} · {{ui:permission.label.fullAccess}} |
 | Antigravity | {{ui:permission.label.default}} · {{ui:permission.label.plan}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 | pi | {{ui:permission.label.defaultCodex}} · {{ui:permission.label.fullAccess}} |
 | opencode | {{ui:permission.label.default}} · {{ui:permission.label.plan}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 | Hermes | {{ui:permission.label.default}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 
-- Claude의 Always ask, Codex의 {{ui:permission.label.onRequest}}, {{ui:permission.label.fullAccess}}을 뺀 opencode의 모든 권한, Hermes의 파일 수정과 위험한 명령은 추가 권한이 필요할 때 창 안에서 승인을 묻습니다. [승인과 질문](approvals.md#permission)을 보세요.
-- Auto mode는 설치된 Claude CLI가 지원할 때만 보입니다. Codex의 {{ui:permission.label.onRequest}}은 이를 지원하지 않는 예전 Codex에서는 보이지 않습니다.
-- Bypass와 {{ui:permission.label.fullAccess}} 권한은 프로젝트 밖의 파일과 명령에도 접근합니다. 꼭 필요할 때만 쓰세요.
+- Claude의 {{ui:permission.label.claude.default}}, Codex의 {{ui:permission.label.onRequest}}, {{ui:permission.label.fullAccess}}을 뺀 opencode의 모든 권한, Hermes의 파일 수정과 위험한 명령은 추가 권한이 필요할 때 창 안에서 승인을 묻습니다. [승인과 질문](approvals.md#permission)을 보세요.
+- {{ui:permission.label.claude.auto}}는 설치된 Claude CLI가 지원할 때만 보입니다. Codex의 {{ui:permission.label.onRequest}}은 이를 지원하지 않는 예전 Codex에서는 보이지 않습니다.
+- {{ui:permission.label.claude.fullAccess}}와 {{ui:permission.label.fullAccess}} 권한은 프로젝트 밖의 파일과 명령에도 접근합니다. 꼭 필요할 때만 쓰세요.
 
 ### Antigravity {#antigravity}
 Google 에이전트는 Antigravity CLI(`agy`)로 실행됩니다. Antigravity는 Claude와 GPT-OSS 모델도 실행할 수 있습니다.
@@ -176,7 +176,7 @@ Claude 창의 흐름 아래, 입력창 위에는 {{ui:graph.log.title}} 띠가 �
 - 맨 위의 ◀ {{ui:graph.structure.board.previous}}과 ▶ {{ui:graph.structure.board.next}}으로 앞뒤를 오가고, 가운데의 "요청 3 / 7" 같은 제목을 누르면 목록이 열려 번호, 제목, 상태, 단계를 보고 바로 고를 수 있습니다.
 - 그 아래에는 상태(스타일을 쓰는 창은 파이프라인 이름도)가 나옵니다. 단계는 칸마다 맨 위의 칩으로 보이고, 칩은 선으로 이어져 있습니다. 스타일이 없는 창은 {{ui:graph.structure.column.request}} → {{ui:graph.structure.column.execution}} → {{ui:graph.structure.column.result}}, 스타일을 쓰는 창은 그 모드의 단계입니다.
 - 내용은 단계마다 하나씩 나란히 놓인 칸에 담깁니다. 칸 머리에는 단계 칩과 카드 수가 있습니다. 스타일이 없는 창은 {{ui:graph.structure.column.request}} 칸에 보낸 요청, {{ui:graph.structure.column.execution}} 칸에 진행 상황(최근 메시지와 도구 호출)과 상태가 담긴 카드와 하위 에이전트마다 한 장씩의 카드, {{ui:graph.structure.column.result}} 칸에 결과가 놓입니다. 스타일을 쓰는 창은 단계 칸마다 그 단계의 요청 카드(요청, 실행 요약, 결과 한 줄)와 그 아래 하위 에이전트 카드가 놓입니다. 안쪽 하위 에이전트는 들여 쓰고 어느 블록 아래인지 적어 둡니다.
-- 상태는 색으로도 보입니다. 칸 바탕은 그 단계의 상태 색으로 물들고(완료는 초록, 실행 중은 파랑, 기다리는 중은 노랑, 오류는 빨강, 중지는 회색), 지금 단계는 가장 최근 요청의 상태를 따르며, 아직 오지 않은 단계는 바탕 그대로입니다. 카드는 왼쪽 가장자리에 같은 색의 막대가 있고 바탕은 칸보다 옅습니다. 실행 중인 카드는 움직이는 테두리를, 기다리는 카드는 노란 테두리를 그대로 두고, 상태 글자도 그대로 보입니다.
+- 상태는 색으로도 보입니다. 칸 바탕은 그 단계의 상태 색이 옅게 깔리고(완료는 초록, 실행 중과 알림 대기는 파랑, 사용자를 기다리는 중은 노랑, 오류는 빨강, 중지는 회색), 지금 단계는 가장 최근 요청의 상태를 따르며, 아직 오지 않은 단계는 바탕 그대로입니다. 카드는 왼쪽 가장자리에 같은 색의 막대가 있고 바탕은 칸보다 진하게 물듭니다. 실행 중인 카드는 움직이는 테두리를, 기다리는 카드는 노란 테두리를 그대로 두고, 상태 글자도 그대로 보입니다.
 - 긴 글은 접혀 있고 {{ui:graph.structure.more}}를 누르면 그 자리에서 펼쳐집니다. 카드 머리의 작은 버튼을 누르면 흐름에서 그 블록을 보여 줍니다.
 - 보기는 가장 최근 것에서 열리고, 그대로 두면 새 요청이나 새 파이프라인으로 따라갑니다. 이전 것을 보는 동안 새로 생기면 자리는 그대로이고 ▶ 옆에 {{ui:graph.structure.board.newRequest}} 또는 {{ui:graph.structure.board.newPipeline}} 표시가 붙습니다. 표시를 누르면 가장 최근 것으로 갑니다.
 - 칸은 저마다 따로 움직입니다. 칸 머리는 위에 그대로 있고 카드만 위아래로 움직입니다. 칸 위에서 트랙패드나 마우스 휠로 위아래로 굴리거나 빈 곳을 끌면 그 칸만 움직이고, 칸이 화면에 다 들어가지 않으면 옆으로 굴리거나 끌어 파이프라인을 옆으로 옮깁니다.
@@ -196,3 +196,4 @@ Claude 창의 요청이 Edit·Write·MultiEdit로 파일을 바꾸면 바꾸기 
 - 파일을 체크하고 "선택한 N개 되돌리기"를 누른 뒤 확인하면 그 파일이 요청 전 내용으로 돌아갑니다. 요청이 새로 만든 파일은 휴지통으로 옮깁니다. 파일의 지금 인코딩과 권한은 그대로 두고, 요청 뒤에 직접 고친 내용은 함께 사라집니다.
 - 뒤의 요청도 같은 파일을 바꿨으면 그 요청을 먼저 되돌려야 합니다. 없어졌거나 텍스트로 읽을 수 없는 파일(1 MiB 초과·바이너리)과 이미 요청 전과 같은 파일은 되돌리지 않습니다.
 - 창마다 최근 요청 20개의 원본을 보관합니다. 셸 명령이 바꾼 파일, 다른 에이전트의 창, 원격 작업 공간의 창에는 이 단추가 없습니다.
+- 변경의 줄을 오른쪽 클릭하면 그 파일의 그 줄을 외부 편집기에서 엽니다. 머리의 단추({{ui:editor.open}})는 고른 파일을 엽니다([편집기에서 열기](terminal-files-browser.md#open-in-editor)).

@@ -99,11 +99,19 @@ impl AgentIo {
     pub fn start(listener: Arc<dyn AgentIoListener>, terminal: Arc<dyn TerminalHandler>) -> Result<Arc<AgentIo>, PlatformError> {
         let name = listener.bind()?;
         let transport = listener.transport();
+        let bindings = Arc::new(AgentIoBindings::new(transport));
+        // Claude runs' config files go in the agent IO's own folder (the Unix socket's, 0700); what an app that ended without
+        // deleting its runs' files left there goes now.
+        let folder = super::mcp_config::folder_for(&name, transport == McpTransport::UnixSocket);
+        if super::mcp_config::private_folder(&folder).is_ok() {
+            super::mcp_config::sweep(&folder);
+        }
+        bindings.set_config_folder(folder);
         let io = Arc::new(AgentIo {
             listener,
             transport,
             name,
-            bindings: Arc::new(AgentIoBindings::new(transport)),
+            bindings,
             terminal,
             shutdown: Revocation::default(),
             connections: Arc::new(Semaphore::new(CONNECTIONS)),

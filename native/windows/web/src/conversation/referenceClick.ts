@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, type MouseEvent } from 'react';
 import { useServices } from '../app/context';
+import { hostCapabilities } from '../slot/host';
 import { textTargetAt, type ReferenceTarget } from './references';
 
 interface Caret {
@@ -19,6 +20,14 @@ function caretAt(x: number, y: number): Caret | null {
   if (position) return { node: position.offsetNode, offset: position.offset };
   const range = doc.caretRangeFromPoint?.(x, y);
   return range ? { node: range.startContainer, offset: range.startOffset } : null;
+}
+
+/**
+ * Whether a click asks for the external editor (편집기에서 열기) rather than the bubble: ⌘-click on the Mac (where Ctrl-click is the
+ * context menu), Ctrl+click elsewhere.
+ */
+export function editorClick(event: { metaKey: boolean; ctrlKey: boolean }): boolean {
+  return hostCapabilities()?.platform === 'macos' ? event.metaKey : event.ctrlKey;
 }
 
 /** What a link or a file name under an element names: a web address, a local file, or nothing. */
@@ -60,7 +69,7 @@ export const ReferenceContext = createContext<((target: ReferenceTarget) => void
 
 /**
  * A click handler for a view that draws transcripts (a diagram block, a timeline row): a link opens in the browser, a file
- * named under the pointer in the pane's reference bubble. A click on a button, or where no bubble is offered, does nothing.
+ * named under the pointer in the pane's reference bubble (with ⌘ or Ctrl held, in the external editor). A click on a button, or where no bubble is offered, does nothing.
  * `runAt` names the run the clicked element belongs to (the diagram's blocks), which the bubble's 변경사항 compare with.
  */
 export function useReferenceClick(runAt?: (target: Element) => string | null): (event: MouseEvent<HTMLElement>) => void {
@@ -74,7 +83,9 @@ export function useReferenceClick(runAt?: (target: Element) => string | null): (
     if ('url' in clicked) void bridge.call('openUrl', { url: clicked.url }).catch(() => {});
     else {
       const runId = runAt?.(target);
-      show?.(runId ? { ...clicked, runId } : clicked);
+      // ⌘-click (Ctrl+click on Windows) opens the file in the external editor at its line (the pane's handler, PaneView.tsx).
+      const editor = editorClick(event);
+      show?.({ ...clicked, ...(runId ? { runId } : {}), ...(editor ? { editor: true } : {}) });
     }
   }, [bridge, show, runAt]);
 }

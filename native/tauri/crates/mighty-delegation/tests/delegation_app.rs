@@ -17,8 +17,14 @@ use serde_json::Value;
 fn servers(arguments: &[String]) -> serde_json::Map<String, Value> {
     assert_eq!(arguments.iter().filter(|a| *a == "--mcp-config").count(), 1, "one --mcp-config");
     let at = arguments.iter().position(|a| a == "--mcp-config").unwrap();
-    let config: Value = serde_json::from_str(&arguments[at + 1]).unwrap();
+    let config: Value = serde_json::from_str(&config_text(&arguments[at + 1])).unwrap();
     config["mcpServers"].as_object().unwrap().clone()
+}
+
+/// The text of the config file `--mcp-config` names (never the config itself: the token is in it).
+fn config_text(path: &str) -> String {
+    assert!(!path.starts_with('{'), "--mcp-config names a file");
+    std::fs::read_to_string(path).unwrap()
 }
 
 /// `JsonSerializer.Serialize(value, Wire.Json)` of a string.
@@ -39,16 +45,21 @@ fn the_binding_attaches_the_server_only_to_a_claude_run_with_the_switch_on() {
     let off = bind("pane-a", "claude");
     let mut arguments = vec![];
     off.append_arguments(&mut arguments);
+    let env = |token: &str| format!(r#"{{"MIGHTY_AGENT_IO_PIPE":"pipe","MIGHTY_PANE_TOKEN":"{token}"}}"#);
     assert_eq!(
-        arguments[1],
-        format!(r#"{{"mcpServers":{{"mighty-terminal":{{"type":"stdio","command":{},"args":["--agent-io-mcp"]}}}}}}"#, wire(&exe)),
-        "switched off, the config is the one before"
+        config_text(&arguments[1]),
+        format!(
+            r#"{{"mcpServers":{{"mighty-terminal":{{"type":"stdio","command":{},"args":["--agent-io-mcp"],"env":{}}}}}}}"#,
+            wire(&exe),
+            env(&off.environment()[TOKEN_KEY])
+        ),
+        "switched off, the config is mighty-terminal alone, with the token in its own env"
     );
     assert!(
         !off.delegation() && off.delegation_handler().is_none() && !arguments.join(" ").contains(DELEGATION_SERVER),
         "a binding no run connected is detached"
     );
-    // On: the delegation server beside mighty-terminal, on the same token, which reaches it only through the environment.
+    // On: the delegation server beside mighty-terminal, on the same token, which reaches each only through its own env.
     let attached = bind("pane-b", "claude");
     attached.connect_delegation(Some(on.clone()), true, "");
     arguments.clear();
@@ -58,20 +69,24 @@ fn the_binding_attaches_the_server_only_to_a_claude_run_with_the_switch_on() {
     names.sort();
     assert_eq!(names, [DELEGATION_SERVER, SERVER_NAME], "both servers");
     let at = arguments.iter().position(|a| a == "--mcp-config").unwrap();
+    let token = attached.environment()[TOKEN_KEY].clone();
     assert!(
-        arguments[at + 1]
-            .contains(&format!(r#""{DELEGATION_SERVER}":{{"type":"stdio","command":{},"args":["--agent-delegation-mcp"]}}"#, wire(&exe))),
-        "the delegation server is the app binary's headless mode, with no env of its own"
+        config_text(&arguments[at + 1]).contains(&format!(
+            r#""{DELEGATION_SERVER}":{{"type":"stdio","command":{},"args":["--agent-delegation-mcp"],"env":{}}}"#,
+            wire(&exe),
+            env(&token)
+        )),
+        "the delegation server is the app binary's headless mode, on the same token in its own env"
     );
     assert_eq!(listed[SERVER_NAME]["args"], serde_json::json!(["--agent-io-mcp"]), "mighty-terminal is as it was");
-    let token = attached.environment()[TOKEN_KEY].clone();
     assert!(
         attached.delegation()
             && attached.kind() == "claude"
             && attached.provider == "claude"
             && !arguments.join(" ").contains(&token)
+            && attached.run_binding().environment.is_empty()
             && !arguments.iter().any(|a| a == "--strict-mcp-config"),
-        "the token stays in the environment"
+        "the token is in neither the CLI's arguments nor its environment"
     );
     // A Codex run in manual (or with no mode) never names it, even when the run path asks, and approves no tool ahead.
     let codex = bind("pane-c", "codex");
@@ -87,11 +102,15 @@ fn the_binding_attaches_the_server_only_to_a_claude_run_with_the_switch_on() {
             && !joined.contains("approval_mode"),
         "a Codex manual run gets no delegation server"
     );
-    // In acceptEdits it gets the server, whose tools are approved ahead, and of mighty-terminal's only reading output and opening a page.
+    // In acceptEdits it gets the server, whose tools are approved ahead, and of mighty-terminal's only reading output (opening a page
+    // asks: its address could carry anything out).
     let edits = bind("pane-d", "codex");
     edits.connect_delegation(Some(on.clone()), true, "acceptEdits");
     arguments.clear();
     edits.append_arguments(&mut arguments);
+    let exclude = mighty_delegation::agent_io::mcp_config::codex_shell_exclude(
+        mighty_delegation::agent_io::mcp_config::codex_home_config().as_deref(),
+    );
     let settings: Vec<&String> = arguments.iter().skip(1).step_by(2).collect();
     let has = |setting: &str| settings.iter().any(|s| *s == setting);
     assert!(
@@ -102,7 +121,7 @@ fn the_binding_attaches_the_server_only_to_a_claude_run_with_the_switch_on() {
             && has(r#"mcp_servers.mighty-delegation.default_tools_approval_mode="approve""#)
             && !has(r#"mcp_servers.mighty-terminal.default_tools_approval_mode="approve""#)
             && has(r#"mcp_servers.mighty-terminal.tools.read_latest_output.approval_mode="approve""#)
-            && has(r#"mcp_servers.mighty-terminal.tools.open_url.approval_mode="approve""#)
+            && !settings.iter().any(|s| s.contains("open_url"))
             && !settings.iter().any(|s| s.contains("run_in_terminal"))
             && !settings.iter().any(|s| s.contains("developer_instructions")),
         "a Codex acceptEdits run gets the server, and approvals that let its tools work"
@@ -114,13 +133,13 @@ fn the_binding_attaches_the_server_only_to_a_claude_run_with_the_switch_on() {
         r#"mcp_servers.mighty-terminal.args=["--agent-io-mcp"]"#.to_string(),
         r#"mcp_servers.mighty-terminal.env_vars=["MIGHTY_PANE_TOKEN","MIGHTY_AGENT_IO_PIPE"]"#.to_string(),
         r#"mcp_servers.mighty-terminal.tools.read_latest_output.approval_mode="approve""#.to_string(),
-        r#"mcp_servers.mighty-terminal.tools.open_url.approval_mode="approve""#.to_string(),
         format!("mcp_servers.mighty-delegation.command={command}"),
         r#"mcp_servers.mighty-delegation.args=["--agent-delegation-mcp"]"#.to_string(),
         r#"mcp_servers.mighty-delegation.env_vars=["MIGHTY_PANE_TOKEN","MIGHTY_AGENT_IO_PIPE"]"#.to_string(),
         r#"mcp_servers.mighty-delegation.default_tools_approval_mode="approve""#.to_string(),
     ]
     .into_iter()
+    .chain(exclude.map(|exclude| format!("shell_environment_policy.exclude={exclude}")))
     .flat_map(|setting| ["-c".to_string(), setting])
     .collect();
     assert_eq!(arguments, expected, "the acceptEdits list byte for byte");
@@ -298,9 +317,11 @@ async fn the_binding_factory_binds_local_runs_and_connects_delegation() {
     let workspace = Workspace { id: Some("ws".into()), path: Some(temp()), ..Workspace::default() };
     let claude = StartRunRequest::new("pane", "ws", "claude", "hi");
     let binding = factory(&claude, &workspace).expect("a local Claude run is bound");
-    let token = binding.environment["MIGHTY_PANE_TOKEN"].clone();
-    assert_eq!(binding.environment["MIGHTY_AGENT_IO_PIPE"], pipe.name());
-    assert!(servers(&binding.arguments).contains_key(DELEGATION_SERVER), "the switch on: the delegation server too");
+    assert!(binding.environment.is_empty(), "nothing in the Claude CLI's own environment");
+    let listed = servers(&binding.arguments);
+    let token = listed[SERVER_NAME]["env"]["MIGHTY_PANE_TOKEN"].as_str().unwrap().to_string();
+    assert_eq!(listed[SERVER_NAME]["env"]["MIGHTY_AGENT_IO_PIPE"], pipe.name(), "the server's own env names the pipe");
+    assert_eq!(listed[DELEGATION_SERVER]["env"], listed[SERVER_NAME]["env"], "the switch on: the delegation server too, on the same token");
     assert_eq!((binding.redact)(&format!("a{token}b")), "a<pane-token-redacted>b");
     let bound = pipe.bindings().resolve(&token).unwrap();
     assert!(bound.delegation() && bound.delegation_handler().is_some() && bound.permission_mode() == claude.settings().permission_mode);

@@ -222,10 +222,11 @@ fn project(run: &MightyGraphRun, index: usize, ordinal: i32, locale: &Locale) ->
     let mut result = None;
     if support::has_result(run) {
         let tone = Tone::of(status(run.status()));
-        // Awaiting notices, the head takes the wait tone, as the diagram's 알림 대기 block does; else the result so far is neutral.
+        // Awaiting notices, the head takes the run tone, as the diagram's 알림 대기 block does (amber is only for what needs the user);
+        // else the result so far is neutral.
         let awaiting = notice::awaiting_notice(run, std::slice::from_ref(run), locale).is_some();
         let tone = if awaiting {
-            Tone::Wait
+            Tone::Run
         } else if run.status() == "completed" && support::background_waiting(run) > 0 {
             Tone::Idle
         } else if tone == Tone::Run {

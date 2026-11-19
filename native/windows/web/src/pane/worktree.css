@@ -36,5 +36,5 @@
 .mirror-strip-dot.tone-bg-done { background: var(--done, #3fb950); }
 .mirror-strip-dot.tone-bg-wait { background: var(--wait, #d29922); }
 .mirror-strip-state, .mirror-strip-branch { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.mirror-strip-branch { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; }
-.mirror-strip-queued { font-size: 10px; font-weight: 500; white-space: nowrap; }
+.mirror-strip-branch { display: inline-flex; align-items: center; gap: 4px; font-size: var(--type-small); }
+.mirror-strip-queued { font-size: var(--type-small); font-weight: 500; white-space: nowrap; }

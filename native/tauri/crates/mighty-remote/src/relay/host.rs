@@ -10,6 +10,11 @@
 //! this PC shares with paired computers ([`RelayHost::set_desktops`]); in the second case alone a phone is turned away as if the host
 //! were offline (`connection::PHONES_OFF_CLOSE`), so turning on sharing never opens the phone's door.
 //!
+//! A registration with a pairing code is put to the person at this computer through [`RelayOptions::approver`] (the app's dialog and
+//! notification), answered within [`RelayOptions::approval_timeout`] (refused when it runs out, or when there is no approver); one
+//! device is asked about at a time, and the answer is kept [`APPROVAL_MEMORY`] for that device's next try (an older phone gives up
+//! sooner than the person may answer, a phone's direct try falls back to the relay).
+//!
 //! The direct listener's own lifecycle (Tailscale addresses, binding, the 15 s re-detection) is W8-C's (src-tauri `direct.rs` over
 //! `direct::listener`); this host keeps C#'s half of it that touches the phone table: admission, the failed-auth lockout, the direct
 //! phones dropped when the remote or its direct switch goes off, and the endpoints `auth_ok` and the pairing link carry.
@@ -34,7 +39,7 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::direct::listener::{DirectReservation, DirectSocket};
-use crate::identity::{Identity, MobileDeviceInfo, escape_data};
+use crate::identity::{Identity, MobileDeviceInfo, PairingKind, PendingRegistration, escape_data};
 use crate::relay::cipher::MAXIMUM_FRAME;
 use crate::relay::connection::{Connection, ConnectionHost, RequestHandler};
 use crate::relay::policy::{self, LinkAction, NetworkPath, Pacing, Window};
@@ -50,6 +55,25 @@ pub const MAXIMUM_CLIENTS: usize = 32;
 pub const MAXIMUM_RELAY_UNAUTHENTICATED: usize = 4;
 /// A direct connection's id starts so; relay notices never open or close one.
 pub const DIRECT_PREFIX: &str = "direct-";
+/// How long the person at this computer has to allow a new device.
+pub const APPROVAL_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long an answer is kept for the same device's next try.
+pub const APPROVAL_MEMORY: Duration = Duration::from_secs(30);
+
+/// What the person at this computer is asked about: the name the device gave, whether it is a computer (else a phone), and whether
+/// it would replace a device paired under the same id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalRequest {
+    pub name: String,
+    pub desktop: bool,
+    pub replaces: bool,
+}
+
+/// Asks the person at this computer (true: allowed). Dropped when the time runs out: whatever it showed should go then.
+pub type Approver = Arc<dyn Fn(ApprovalRequest) -> BoxFuture<'static, bool> + Send + Sync>;
+
+/// One question, by device: its answer once given, with when.
+type Answer = watch::Sender<Option<(bool, std::time::Instant)>>;
 
 /// Why the host refused a call (C#'s `ObjectDisposedException`, `ArgumentException`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +140,9 @@ pub struct RelayOptions {
     /// The runtime the host's tasks run on; none: the one [`RelayHost::with_options`] is called on. The network port's callbacks come
     /// on the OS's own threads, which have no runtime of their own (review M1).
     pub runtime: Option<tokio::runtime::Handle>,
+    /// Asks the person at this computer about a new device; none: every registration is refused.
+    pub approver: Option<Approver>,
+    pub approval_timeout: Duration,
 }
 
 impl Default for RelayOptions {
@@ -133,6 +160,8 @@ impl Default for RelayOptions {
             any_direct_peer: false,
             direct_endpoints: None,
             runtime: None,
+            approver: None,
+            approval_timeout: APPROVAL_TIMEOUT,
         }
     }
 }
@@ -194,6 +223,8 @@ pub(crate) struct Shared {
     epoch: Instant,
     /// Where the host's tasks are spawned (review M1).
     runtime: Option<tokio::runtime::Handle>,
+    /// The questions put to the person at this computer, by device (`d:`/`p:` and its client id).
+    approvals: Mutex<HashMap<String, Answer>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -255,6 +286,7 @@ impl RelayHost {
                 direct_endpoints: RwLock::new(vec![]),
                 epoch: Instant::now(),
                 runtime: options.runtime.clone().or_else(|| tokio::runtime::Handle::try_current().ok()),
+                approvals: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -335,21 +367,28 @@ impl RelayHost {
         self.shared.network_path_changed(path);
     }
 
-    /// `RotateKeyAsync`: with no device (키 다시 만들기), a new pairing key, every device and connection dropped. With a device (a
-    /// row's 연결 해제), only that device is unpaired, while it is still paired ([`RelayHost::revoke`]). True when it changed anything.
+    /// `RotateKeyAsync`: with no device (키 다시 만들기), the host made anew ([`Identity::rotate`]: new keys, a new relay name), every
+    /// device and connection dropped, and the link dialled again under the new name. With a device (a row's 연결 해제), only that
+    /// device is unpaired, while it is still paired ([`RelayHost::revoke`]). True when it changed anything.
     pub async fn rotate(&self, expected_device: Option<String>) -> Result<bool, RelayError> {
         if let Some(device) = expected_device {
             return self.revoke(&device).await;
         }
         let shared = &self.shared;
         {
-            let _lifecycle = shared.lifecycle.lock().await;
+            let lifecycle = shared.lifecycle.lock().await;
             if shared.disposed.load(Ordering::SeqCst) {
                 return Err(RelayError::Disposed);
             }
             shared.identity.rotate().map_err(|_| RelayError::Unsaved)?;
+            lock(&shared.approvals).clear();
             for client in shared.clients() {
                 client.cancel();
+            }
+            // The relay knows this host by its old name and token: the link registers again with the new ones.
+            let settings = shared.settings();
+            if shared.link_on(&settings) {
+                shared.clone().restart(settings, lifecycle).await?;
             }
         }
         shared.republish();
@@ -484,9 +523,19 @@ impl RelayHost {
         self.shared.identity.server_id()
     }
 
-    /// `PairingKeyForDisplay` (never logged; shown on the user's click).
+    /// `PairingKeyForDisplay`: the phone's live pairing code, the one the QR carries (kept alive while shown; never logged).
     pub fn pairing_key_for_display(&self) -> zeroize::Zeroizing<String> {
+        self.shared.identity.pairing_code(PairingKind::Phone)
+    }
+
+    /// The legacy apps' key (key-only auth while they are allowed; never logged).
+    pub fn legacy_key_for_display(&self) -> zeroize::Zeroizing<String> {
         self.shared.identity.pairing_key()
+    }
+
+    /// How long the live pairing code of `kind` has left (None: none now).
+    pub fn pairing_code_left(&self, kind: PairingKind) -> Option<Duration> {
+        self.shared.identity.pairing_code_left(kind)
     }
 
     /// `RelayForPush`: the relay this host dials; the push route sits beside it.
@@ -504,9 +553,15 @@ impl RelayHost {
         self.shared.settings()
     }
 
-    /// `PairingUrl`: the link (and QR) for the relay this host dials, its name and the direct endpoints.
+    /// `PairingUrl`: the phone's link (and QR) for the relay this host dials, its name and the direct endpoints, with the phone's live
+    /// pairing code (kept alive: Settings draws it while it is on screen).
     pub fn pairing_url(&self) -> String {
         self.shared.identity.pairing_url(&self.shared.relay_for_push(), &self.shared.options.host_name, &self.shared.direct_endpoints())
+    }
+
+    /// The computers' pairing link (원격 연결 › 이 컴퓨터 공유), with the computers' live pairing code (kept alive).
+    pub fn desktop_pairing_url(&self) -> String {
+        self.shared.identity.desktop_pairing_url(&self.shared.relay_for_push(), &self.shared.options.host_name)
     }
 
     pub fn identity(&self) -> &Arc<Identity> {
@@ -1020,6 +1075,53 @@ impl ConnectionHost for Shared {
     }
     fn phones_allowed(&self) -> bool {
         self.settings().enabled
+    }
+    fn desktops_allowed(&self) -> bool {
+        self.desktops.load(Ordering::SeqCst)
+    }
+    fn approve(&self, pending: &PendingRegistration) -> BoxFuture<'static, Option<bool>> {
+        let key = format!("{}:{}", if pending.desktop { "d" } else { "p" }, pending.client_id);
+        let mut answer = {
+            let mut asks = lock(&self.approvals);
+            asks.retain(|_, ask| ask.borrow().is_none_or(|(_, at)| at.elapsed() < APPROVAL_MEMORY));
+            match asks.get(&key) {
+                Some(ask) => ask.subscribe(),
+                // One device is asked about at a time.
+                None if asks.values().any(|ask| ask.borrow().is_none()) => return Box::pin(async { None }),
+                None => {
+                    let (told, answer) = watch::channel(None);
+                    asks.insert(key, told.clone());
+                    let request = ApprovalRequest { name: pending.name.clone(), desktop: pending.desktop, replaces: pending.replaces };
+                    let (approver, limit) = (self.options.approver.clone(), self.options.approval_timeout);
+                    // On a task of its own: the device leaving does not take the question with it.
+                    self.spawn(async move {
+                        let allowed = match approver {
+                            Some(approver) => tokio::time::timeout(limit, approver(request)).await.unwrap_or(false),
+                            None => false,
+                        };
+                        told.send_replace(Some((allowed, std::time::Instant::now())));
+                    });
+                    answer
+                }
+            }
+        };
+        Box::pin(async move {
+            let settled = answer.wait_for(Option::is_some).await.ok().and_then(|answer| answer.map(|(allowed, _)| allowed));
+            Some(settled.unwrap_or(false))
+        })
+    }
+    fn approval_timeout(&self) -> Duration {
+        self.options.approval_timeout
+    }
+    fn replaced(&self, device_id: &str, keep: &str) {
+        for client in self.clients() {
+            if client.id != keep && client.device_id() == device_id {
+                client.cancel();
+            }
+        }
+    }
+    fn pairing_changed(&self) {
+        self.republish();
     }
 }
 

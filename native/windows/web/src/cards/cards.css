@@ -8,8 +8,8 @@
 .card-spacer { flex: 1; }
 .card-hint { flex: 1; font-size: 11px; color: var(--ink2); }
 .card-hint-row { display: flex; align-items: center; gap: var(--space-sm); }
-.card-note { font-size: 10px; color: var(--ink2); }
-.card-wait-note { font-size: 10px; color: var(--wait-text); }
+.card-note { font-size: var(--type-small); color: var(--ink2); }
+.card-wait-note { font-size: var(--type-small); color: var(--wait-text); }
 .card-error { font-size: 11px; color: var(--err-text); user-select: text; }
 .card-waiting { font-size: 12px; color: var(--ink2); font-variant-numeric: tabular-nums; }
 
@@ -28,28 +28,28 @@
 /* The Mac's ScrollView takes its whole frame (maxHeight 180, M/ToolPermissionBar.swift) and gives it back only when the pane is short. */
 .card-details { display: flex; flex-direction: column; gap: var(--space-sm); flex: 0 1 180px; height: 180px; min-height: 40px; overflow-y: auto; }
 .card-field { display: flex; flex-direction: column; gap: var(--space-xxs); }
-.card-field-label { font-size: 10px; font-weight: 600; color: var(--ink2); }
+.card-field-label { font-size: var(--type-small); font-weight: 600; color: var(--ink2); }
 .card-field-value { font-size: 11px; white-space: pre-wrap; user-select: text; }
 .card-field-strong { font-size: 12px; font-weight: 600; user-select: text; }
 .card-field-code, .card-json { font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; word-break: break-word; background: var(--card-raised); border-radius: var(--radius-row); padding: var(--space-sm); user-select: text; margin: 0; }
-.card-json { font-size: 10px; background: transparent; padding: var(--space-xs) 0 0; }
-.card-rule { font-family: var(--font-mono); font-size: 10px; color: var(--ink2); user-select: text; }
-.card-path { font-size: 10px; }
+.card-json { font-size: var(--type-small); background: transparent; padding: var(--space-xs) 0 0; }
+.card-rule { font-family: var(--font-mono); font-size: var(--type-small); color: var(--ink2); user-select: text; }
+.card-path { font-size: var(--type-small); }
 
-/* M/PaneChrome.swift PaneCardButtonStyle: 12 bold, 24 high, padded 12, radius 9; raised with the line, ink when prominent, accent for the one primary answer. */
+/* M/PaneChrome.swift PaneCardButtonStyle: 12 bold, 24 high, padded 12, radius 9; raised with the line, the primary fill for the one primary answer. */
 .card-button {
   min-height: 24px; padding: 0 var(--space-lg); border-radius: var(--radius-card-button); font: inherit; font-size: 12px; font-weight: 700; white-space: nowrap; cursor: default;
   background: var(--card-raised); color: var(--ink); border: var(--stroke-line) solid var(--line);
 }
-.card-button.prominent { background: var(--ink); color: var(--card); border: 0; }
-.card-button.accent { background: var(--accent); color: var(--on-accent); border: 0; }
+/* The one primary answer of a card (이번만 허용, 승인하고 실행, 보내기): the primary fill with white words in both themes (4.5:1 or more). */
+.card-button.prominent, .card-button.accent { background: var(--primary); color: var(--on-primary); border: 0; }
 .card-button.small { height: 22px; padding: 0 var(--space-sm); font-size: 11px; font-weight: 500; border-radius: 5px; }
 .card-button:disabled { opacity: 0.45; }
 .card-button:focus-visible, .question-choice:focus-visible, .question-dot:focus-visible, .card-fold:focus-visible, .next-action:focus-visible, .card-icon-button:focus-visible { outline: var(--stroke-focus) solid var(--accent); outline-offset: 1px; }
-.card-icon-button { border: 0; background: transparent; color: var(--ink2); width: 22px; height: 20px; border-radius: var(--radius-file-row); cursor: default; }
+.card-icon-button { border: 0; background: transparent; color: var(--ink2); width: var(--layout-hit-target); height: var(--layout-hit-target); border-radius: var(--radius-file-row); cursor: default; }
 .card-icon-button:hover { background: var(--track); }
 .card-fold { display: flex; align-items: center; gap: var(--space-sm); flex: 1; min-width: 0; border: 0; background: transparent; color: var(--ink); font: inherit; font-size: 11px; padding: 0; text-align: left; cursor: default; border-radius: var(--radius-file-row); }
-.card-fold.small { font-size: 10px; flex: none; }
+.card-fold.small { font-size: var(--type-small); flex: none; }
 .card-chevron { color: var(--ink2); font-size: 9px; }
 /* A fold's arrow answers the pointer as the panels' fold buttons do (.mighty-icon): a soft wash behind it and the ink. */
 .card-fold { cursor: pointer; }
@@ -117,12 +117,12 @@
 .plan-record-headline { color: var(--ink2); font-size: 11px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .mighty-plan-record { display: flex; flex-direction: column; gap: var(--space-sm); }
 .mighty-plan-record .plan-document { max-height: none; overflow: visible; padding: 0; background: transparent; }
-.plan-pill { font-size: 10px; font-weight: 700; border-radius: 9px; padding: 1px var(--space-sm); }
+.plan-pill { font-size: var(--type-small); font-weight: 700; border-radius: 9px; padding: 1px var(--space-sm); }
 .plan-pill.tone-done { background: var(--done-soft); color: var(--done-text); }
 .plan-pill.tone-wait { background: var(--wait-soft); color: var(--wait-text); }
 .plan-pill.tone-stop { background: var(--stop-soft); color: var(--stop-text); }
-.plan-record-time { font-size: 10px; color: var(--ink2); }
-.plan-feedback { font-size: 10.5px; color: var(--wait-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plan-record-time { font-size: var(--type-small); color: var(--ink2); }
+.plan-feedback { font-size: var(--type-small); color: var(--wait-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .plan-feedback.open { white-space: pre-wrap; user-select: text; }
 .background-task { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xxs) var(--space-sm); font-size: 11px; }
 .background-dot { width: 6px; height: 6px; border-radius: 3px; background: var(--ink2); flex: none; }
@@ -130,16 +130,16 @@
 .background-dot.status-completed { background: var(--done); }
 .background-dot.status-failed { background: var(--err); }
 .background-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.background-detail { font-size: 10px; color: var(--ink2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.background-detail { font-size: var(--type-small); color: var(--ink2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* A run's last output line, dim and monospace on a line of its own under the row. */
-.background-tail { flex: 1 0 100%; min-width: 0; padding-left: calc(6px + var(--space-sm)); font-family: var(--font-mono); font-size: 10px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: text; }
+.background-tail { flex: 1 0 100%; min-width: 0; padding-left: calc(6px + var(--space-sm)); font-family: var(--font-mono); font-size: var(--type-small); color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; user-select: text; }
 /* A row with more to show opens on a press: its command (at most four lines, selectable) and its last output lines. */
 .background-task.opens { cursor: default; border-radius: var(--radius-file-row); }
 .background-task.opens:hover { background: var(--subtle); }
 .background-task.opens:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .background-more { flex: 1 0 100%; min-width: 0; display: flex; flex-direction: column; gap: var(--space-xxs); }
 .background-more .background-tail { flex: none; }
-.background-command { padding-left: calc(6px + var(--space-sm)); font-family: var(--font-mono); font-size: 10px; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; user-select: text; }
+.background-command { padding-left: calc(6px + var(--space-sm)); font-family: var(--font-mono); font-size: var(--type-small); color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; user-select: text; }
 
 /* Next actions (NextActions.cs): a heading, then each option as a card row with an accent arrow. */
 .next-actions { display: flex; flex-direction: column; gap: var(--space-xs); }
@@ -161,7 +161,7 @@
 .login-line.tone-ink2 { color: var(--ink2); }
 .login-line.tone-wait { color: var(--wait-text); }
 .login-code { display: flex; gap: var(--space-sm); }
-.login-code input { width: 240px; font: inherit; font-size: 11px; color: var(--ink); background: var(--card); border: var(--stroke-line) solid var(--line); border-radius: var(--radius-row); padding: 2px var(--space-sm); }
+.login-code input { width: 240px; font: inherit; font-size: 11px; color: var(--ink); background: var(--card); border: var(--stroke-line) solid var(--line-strong); border-radius: var(--radius-row); padding: 2px var(--space-sm); }
 .login-code input::placeholder { color: var(--ink3); }
 .login-buttons { display: flex; gap: var(--space-sm); align-items: center; }
 
@@ -173,7 +173,7 @@
 .status-trust-question { display: flex; gap: var(--space-xs); color: var(--ink2); }
 .status-trust-command { font-family: var(--font-mono); background: var(--track); border-radius: var(--radius-segment); padding: var(--space-sm); user-select: text; }
 .status-trust-answers { display: flex; gap: var(--space-sm); align-items: center; }
-.status-trust-note { font-size: 10px; color: var(--ink3); }
+.status-trust-note { font-size: var(--type-small); color: var(--ink3); }
 .question-kind .card-waiting { font-size: var(--type-small); }
 
 .terminal-prompt { display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-md); font-size: 12px; color: var(--ink); background: color-mix(in srgb, var(--accent) 5.5%, transparent); border-top: var(--stroke-line) solid var(--line); margin: 0 calc(-1 * var(--space-md)); }

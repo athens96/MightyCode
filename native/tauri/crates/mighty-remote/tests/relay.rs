@@ -15,7 +15,7 @@ use mighty_core::locale::Locale;
 use mighty_core::model::MobileRemoteSettings;
 use mighty_platform::pairing::identity_file;
 use mighty_platform::{Os, fake};
-use mighty_remote::identity::{AuthRequest, Identity, is_new};
+use mighty_remote::identity::{AuthDecision, AuthPolicy, AuthRequest, Identity, PairingKind, is_new};
 use mighty_remote::relay::cipher::{self, CipherError, RelayCipher};
 use mighty_remote::relay::connection::{MobileDevice, MobileReply, RequestHandler};
 use mighty_remote::relay::host::{self, RelayError, RelayHost, RelayOptions};
@@ -164,48 +164,75 @@ fn mobile_remote_shared_cipher_vectors() {
     assert_eq!(client.seal(&vec![0u8; cipher::MAXIMUM_PLAINTEXT + 1]), Err(CipherError::TooLarge));
 }
 
-/// L455 "Mobile remote DeviceTrustAndRotation" (with `NormalizeRelay` and `EffectiveRelay`).
+/// L455 "Mobile remote DeviceTrustAndRotation" (with `NormalizeRelay` and `EffectiveRelay`), with the pairing the security review asked
+/// for: a phone registers with the QR's short-lived code (never the saved key, now the legacy apps' only), the person allows it
+/// (`register`), the code is spent by it, re-pairing under the same id is a new device, and a rotation renews the keys.
 #[test]
 fn mobile_remote_device_trust_and_rotation() {
     let directory = temp("trust");
     let identity = identity_in(&directory);
+    let legacy_key = identity.pairing_key().to_string();
     let key = query(&identity.pairing_url(host::DEFAULT_RELAY, "Fixture", &[]), "key");
+    assert_ne!(key, legacy_key, "the QR carries a pairing code, never the saved key");
     let id = "abcdefghijklmnopqrstuv";
-    let decide = |identity: &Identity, value: serde_json::Value, legacy: bool| identity.authorize(&auth(value), legacy).unwrap();
+    let policy = |legacy: bool| AuthPolicy { allow_legacy: legacy, allow_desktops: true };
+    let decide = |identity: &Identity, value: serde_json::Value, legacy: bool| identity.authorize(&auth(value), policy(legacy)).unwrap();
+    // The person allows every registration at once.
+    let allowed = |identity: &Identity, value: serde_json::Value| match decide(identity, value, false) {
+        AuthDecision::Pending(pending) => identity.register(&pending).unwrap(),
+        decided => decided,
+    };
     assert_eq!(
         decide(&identity, json!({"type":"auth","pairingKey":key,"clientId":"bad"}), true).error(),
         Some("malformed"),
         "malformed client id cannot downgrade to key-only"
     );
     assert_eq!(
-        decide(&identity, json!({"type":"auth","pairingKey":key}), false).error(),
+        decide(&identity, json!({"type":"auth","pairingKey":legacy_key}), false).error(),
         Some("legacy-refused"),
         "legacy clients can be disabled"
     );
-    let joined = decide(&identity, json!({"type":"auth","pairingKey":key,"clientId":id,"clientName":"Phone"}), false);
+    assert_eq!(
+        decide(&identity, json!({"type":"auth","pairingKey":key}), true).error(),
+        Some("pairing-key"),
+        "the QR's code is no legacy key"
+    );
+    assert!(
+        matches!(
+            decide(&identity, json!({"type":"auth","pairingKey":key,"clientId":id,"clientName":"Phone"}), false),
+            AuthDecision::Pending(_)
+        ),
+        "a registration waits for the person"
+    );
+    let joined = allowed(&identity, json!({"type":"auth","pairingKey":key,"clientId":id,"clientName":"Phone"}));
     assert!(joined.device_id() == Some(id) && joined.device_token().is_some(), "first pairing issues device token");
+    assert_eq!(
+        decide(&identity, json!({"type":"auth","pairingKey":key,"clientId":"bcdefghijklmnopqrstuvw"}), false).error(),
+        Some("pairing-key"),
+        "the code is spent by one registration"
+    );
     let token = joined.device_token().unwrap().to_string();
     let file = std::fs::read_to_string(directory.join(identity_file::FILE)).unwrap();
     assert!(!file.contains(&token), "only device token hash is persisted");
-    // The phone scanned the QR again: the key and the same id re-pair it, the row keeps its first-seen time and loses its push handle,
-    // the new token works and the old one no longer does.
-    let first_seen = identity.devices().into_iter().find(|d| d.id == id).unwrap().first_seen;
+    // The phone scanned the QR again: a new code under the same id is a new registration (asked about, said to replace a device),
+    // and once allowed a new device — first seen now, its push handle gone, the old token refused.
     assert!(
         identity.set_push(id, &"h".repeat(43), &mighty_remote::push::message::KINDS.map(String::from))
             == mighty_remote::identity::PushRegistrationResult::Saved
             && identity.push_devices().len() == 1,
         "paired phone registers a push handle"
     );
-    let again = decide(&identity, json!({"type":"auth","pairingKey":key,"clientId":id,"clientName":"Galaxy"}), false);
-    assert!(
-        again.error().is_none() && again.device_id() == Some(id) && again.device_token().is_some_and(|t| t != token),
-        "pairing again with the key issues the same row a new token"
-    );
+    let key = query(&identity.pairing_url(host::DEFAULT_RELAY, "Fixture", &[]), "key");
+    let AuthDecision::Pending(pending) =
+        decide(&identity, json!({"type":"auth","pairingKey":key,"clientId":id,"clientName":"Galaxy"}), false)
+    else {
+        panic!("re-pairing asks")
+    };
+    assert!(pending.replaces, "it would replace the paired device");
+    let again = identity.register(&pending).unwrap();
+    assert!(again.device_id() == Some(id) && again.device_token().is_some_and(|t| t != token), "a new token");
     let devices = identity.devices();
-    assert!(
-        devices.len() == 1 && devices[0].first_seen == first_seen && devices[0].name == "Galaxy",
-        "re-pairing keeps one row with its first-seen time and the new name"
-    );
+    assert!(devices.len() == 1 && devices[0].is_new && devices[0].name == "Galaxy", "one row, a new device with the new name");
     assert!(identity.push_devices().is_empty(), "re-pairing drops the push registration");
     assert_eq!(
         decide(&identity, json!({"type":"auth","clientId":id,"deviceToken":token}), false).error(),
@@ -224,15 +251,18 @@ fn mobile_remote_device_trust_and_rotation() {
         Some(id),
         "returning device authenticates after app restart"
     );
+    let shown = query(&reopened.pairing_url(host::DEFAULT_RELAY, "Fixture", &[]), "key");
+    let (server_id, public_key) = (reopened.server_id(), reopened.public_key());
     reopened.rotate().unwrap();
     assert!(reopened.devices().is_empty(), "key rotation erases every device credential");
+    assert!(reopened.server_id() != server_id && reopened.public_key() != public_key, "and makes the relay name and key anew");
     assert_eq!(
         decide(&reopened, json!({"type":"auth","clientId":id,"deviceToken":token}), false).error(),
         Some("device-revoked"),
         "rotated device token is rejected"
     );
     assert_eq!(
-        decide(&reopened, json!({"type":"auth","pairingKey":key,"clientId":id}), false).error(),
+        decide(&reopened, json!({"type":"auth","pairingKey":shown,"clientId":id}), false).error(),
         Some("pairing-key"),
         "old QR key is rejected"
     );
@@ -241,7 +271,7 @@ fn mobile_remote_device_trust_and_rotation() {
         let client = format!("{n:a>22}");
         assert!(
             decide(&reopened, json!({"type":"auth","pairingKey":fresh,"clientId":client}), false).error().is_none(),
-            "registration below rate limit succeeds"
+            "registration below rate limit asks"
         );
     }
     assert_eq!(
@@ -285,10 +315,10 @@ fn mobile_remote_device_trust_and_rotation() {
     );
     let read_only = Identity::load_or_create(Arc::new(FileStore(directory.clone())), false).unwrap();
     let before = std::fs::read(directory.join(identity_file::FILE)).unwrap();
-    assert!(
-        read_only.authorize(&auth(json!({"type":"auth","pairingKey":fresh,"clientId":"yyyyyyyyyyyyyyyyyyyyyy"})), false).is_err(),
-        "a pairing that would write fails"
-    );
+    let code = read_only.pairing_code(PairingKind::Phone);
+    let asked = read_only.authorize(&auth(json!({"type":"auth","pairingKey":*code,"clientId":"yyyyyyyyyyyyyyyyyyyyyy"})), policy(false));
+    let AuthDecision::Pending(pending) = asked.unwrap() else { panic!("it asks") };
+    assert!(read_only.register(&pending).is_err(), "a pairing that would write fails");
     assert!(
         read_only.rotate().is_err() && std::fs::read(directory.join(identity_file::FILE)).unwrap() == before,
         "and the file is unchanged"
@@ -336,6 +366,11 @@ async fn mobile_remote_encrypted_relay_round_trip() {
                 }
                 let request = json!({"type":"auth","pairingKey":query(&pairing, "key"),"clientId":"abcdefghijklmnopqrstuv","clientName":"Fixture Phone"});
                 phone.send(&request.to_string()).await;
+                // A registration is asked about first: the phone is told to wait, then answered.
+                let pending = phone.receive().await.unwrap();
+                if pending["type"] != "auth_pending" || pending["timeout"] != 60 {
+                    *failure.lock().unwrap() = Some("the phone is told to wait for the person".into());
+                }
                 let answer = phone.receive().await.unwrap();
                 if answer["type"] != "auth_ok" || answer["deviceToken"].as_str().is_none() {
                     *failure.lock().unwrap() = Some("phone authenticates over encrypted relay".into());
@@ -356,10 +391,12 @@ async fn mobile_remote_encrypted_relay_round_trip() {
         })
     };
     let relay = FakeRelay::start(control, phone).await;
+    let asked = Arc::new(Mutex::new(vec![]));
     let options = RelayOptions {
         host_name: "Fixture".into(),
         watches_network: false,
         extra_capabilities: Some(Arc::new(|| vec!["screenShare".into()])),
+        approver: Some(support::fake_relay::allow_all(asked.clone())),
         ..RelayOptions::default()
     };
     let host = relay_host(&directory, options);
@@ -368,7 +405,10 @@ async fn mobile_remote_encrypted_relay_round_trip() {
     tokio::time::timeout(Duration::from_secs(15), completed.notified()).await.expect("the phone's round trip");
     assert_eq!(*failure.lock().unwrap(), None);
     assert_eq!(host.devices().len(), 1, "device registered through live WebSocket handshake");
+    assert_eq!(asked.lock().unwrap().len(), 1, "the person was asked once");
+    assert!(!asked.lock().unwrap()[0].desktop && asked.lock().unwrap()[0].name == "Fixture Phone");
     let pairing = host.pairing_url();
+    assert_ne!(query(&pairing, "key"), query(link.lock().unwrap().as_ref().unwrap(), "key"), "the spent code was replaced");
     let server_id = host.pairing_server_id();
     assert_eq!(host.pairing_key_for_display().as_str(), query(&pairing, "key"), "manual pairing key matches QR key");
     host.reconnect().await.unwrap();
@@ -378,6 +418,14 @@ async fn mobile_remote_encrypted_relay_round_trip() {
         "reconnect replaces relay socket while retaining pairing and trusted devices"
     );
     assert!(host.rotate(None).await.unwrap() && host.devices().is_empty(), "live key rotation clears device registry");
+    assert_ne!(host.pairing_server_id(), server_id, "a new relay name");
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while relay.controls() < 3 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the link registered again under the new name");
     let rotated = host.pairing_url();
     assert!(
         !host.rotate(Some("abcdefghijklmnopqrstuv".into())).await.unwrap() && host.pairing_url() == rotated,
@@ -698,13 +746,16 @@ fn mobile_host_the_device_list_marks_arrivals_and_names_the_legacy_row() {
     let directory = temp("devices");
     let identity = identity_in(&directory);
     let key = query(&identity.pairing_url(host::DEFAULT_RELAY, "Fixture", &[]), "key");
+    let all = AuthPolicy { allow_legacy: true, allow_desktops: true };
+    let legacy_key = identity.pairing_key().to_string();
+    let AuthDecision::Pending(pending) =
+        identity.authorize(&auth(json!({"type":"auth","pairingKey":key,"clientId":"abcdefghijklmnopqrstuv"})), all).unwrap()
+    else {
+        panic!("a phone asks")
+    };
     assert!(
-        identity.authorize(&auth(json!({"type":"auth","pairingKey":key})), true).unwrap().device_id() == Some("legacy")
-            && identity
-                .authorize(&auth(json!({"type":"auth","pairingKey":key,"clientId":"abcdefghijklmnopqrstuv"})), true)
-                .unwrap()
-                .device_id()
-                .is_some(),
+        identity.authorize(&auth(json!({"type":"auth","pairingKey":legacy_key})), all).unwrap().device_id() == Some("legacy")
+            && identity.register(&pending).unwrap().device_id().is_some(),
         "an old app and a phone pair"
     );
     let devices = identity.devices();

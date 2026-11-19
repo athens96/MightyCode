@@ -239,6 +239,7 @@ impl FakeClaude {
         let Some(Value::Object(entries)) = config.and_then(|c| c.get("mcpServers").cloned()) else { return };
         let mut names: Vec<String> = entries.keys().cloned().collect();
         names.sort();
+        self.log(json!({"event": "mcpConfig", "servers": names}));
         self.configured = names;
         // The delegation server is the one these scripts call.
         let Some(Value::Object(entry)) = entries.get(DELEGATION_SERVER) else { return };
@@ -247,7 +248,12 @@ impl FakeClaude {
             Some(Value::Array(list)) => list.iter().map(|item| item.as_str().unwrap_or("").to_string()).collect(),
             _ => vec![],
         };
-        match Connection::start(self.processes.as_ref(), command, &arguments, &self.cwd).await {
+        // The server's own `env` laid over the CLI's, as Claude starts a stdio server.
+        let environment: Vec<(String, String)> = match entry.get("env") {
+            Some(Value::Object(env)) => env.iter().filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string()))).collect(),
+            _ => vec![],
+        };
+        match Connection::start(self.processes.as_ref(), command, &arguments, &environment, &self.cwd).await {
             Ok(connection) => {
                 self.log(json!({"event": "mcp", "server": DELEGATION_SERVER, "tools": connection.tools}));
                 self.servers.push((DELEGATION_SERVER.to_string(), connection));
@@ -572,10 +578,17 @@ struct Connection {
 
 impl Connection {
     /// Started and initialized, its tools listed; Err with why not.
-    async fn start(processes: &dyn ProcessHost, command: &str, arguments: &[String], cwd: &str) -> Result<Connection, String> {
+    async fn start(
+        processes: &dyn ProcessHost,
+        command: &str,
+        arguments: &[String],
+        environment: &[(String, String)],
+        cwd: &str,
+    ) -> Result<Connection, String> {
         let program = on_path(command).ok_or_else(|| format!("The command {command} was not found."))?;
         let mut request = SpawnRequest::new(program, arguments.iter().cloned(), cwd);
         request.env.remove("NO_COLOR");
+        request.env.extend(environment.iter().cloned());
         let mut child = processes.spawn(request).await.map_err(|error| error.to_string())?;
         let input = child.stdin.take();
         let output = BufReader::new(child.stdout.take().ok_or("The MCP server did not start.")?);

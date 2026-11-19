@@ -130,17 +130,17 @@ pub fn provider_label(provider: &str) -> &'static str {
     model_label::provider_label(provider)
 }
 
-/// C# `PermissionLabel` (MainWindow.cs:759): Claude's own mode names in every language; the shared labels for the others.
+/// C# `PermissionLabel` (MainWindow.cs:759): Claude's own mode names (English keeps Claude's words: Plan mode, Accept file edits,
+/// Auto mode, Bypass, Always ask; the other languages say them in theirs); the shared labels for the others.
 pub fn permission_label(provider: &str, mode: &str, l: &Locale) -> String {
     if provider == "claude" {
-        return match mode {
-            "plan" => "Plan mode",
-            "acceptEdits" => "Accept file edits",
-            "auto" => "Auto mode",
-            "fullAccess" => "Bypass",
-            _ => "Always ask",
-        }
-        .into();
+        return l.get(match mode {
+            "plan" => "permission.label.claude.plan",
+            "acceptEdits" => "permission.label.claude.acceptEdits",
+            "auto" => "permission.label.claude.auto",
+            "fullAccess" => "permission.label.claude.fullAccess",
+            _ => "permission.label.claude.default",
+        });
     }
     l.get(match mode {
         "plan" => "permission.label.plan",
@@ -153,19 +153,19 @@ pub fn permission_label(provider: &str, mode: &str, l: &Locale) -> String {
     })
 }
 
-/// C# `EffortLabel` (MainWindow.cs:773).
+/// C# `EffortLabel` (MainWindow.cs:773): the level in the language (English keeps the CLIs' Off … Max and Auto).
 pub fn effort_label(effort: &str, l: &Locale) -> String {
-    match effort {
-        "off" => "Off".into(),
-        "minimal" => "Minimal".into(),
-        "low" => "Low".into(),
-        "medium" => "Medium".into(),
-        "high" => "High".into(),
-        "xhigh" => "XHigh".into(),
-        "max" => "Max".into(),
-        "ultra" => l.get("composer.effort.ultra"),
-        _ => "Auto".into(),
-    }
+    l.get(match effort {
+        "off" => "composer.effort.level.off",
+        "minimal" => "composer.effort.level.minimal",
+        "low" => "composer.effort.level.low",
+        "medium" => "composer.effort.level.medium",
+        "high" => "composer.effort.level.high",
+        "xhigh" => "composer.effort.level.xhigh",
+        "max" => "composer.effort.level.max",
+        "ultra" => "composer.effort.ultra",
+        _ => "composer.effort.level.auto",
+    })
 }
 
 /// C# `EffortPillLabel` (MainWindow.cs:775).

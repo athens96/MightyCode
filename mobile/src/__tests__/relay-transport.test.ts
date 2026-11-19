@@ -14,6 +14,7 @@ import {
   RelayConnection,
   RelayError,
   buildRelayUrl,
+  describeRelayFailure,
   mapCloseCode,
   type AuthLease,
   type ForegroundSignal,
@@ -53,6 +54,14 @@ interface FakeOptions {
   conflictingClientIds?: string[];
   /** Refuses every `auth` with this reason, whatever it carried. */
   rejectReason?: string;
+  /**
+   * Puts a pairing (the key with a `clientId`) to the person at the computer: `auth_pending`
+   * goes out at once, the answer after `afterMs` (left out, the fake answers at once and
+   * says nothing, as an older host does).
+   */
+  approval?: { afterMs: number; allow: boolean };
+  /** Answers every `auth` only after this long (a slow host that says nothing meanwhile). */
+  answerAfterMs?: number;
 }
 
 interface FakeRelay {
@@ -178,7 +187,18 @@ async function startFakeRelay(options: FakeOptions = {}): Promise<FakeRelay> {
           return;
         }
         // A token is only issued to an app that identified itself.
-        accept(message.clientId ? options.issueDeviceToken : undefined);
+        const token = message.clientId ? options.issueDeviceToken : undefined;
+        if (options.approval && message.clientId) {
+          const { afterMs, allow } = options.approval;
+          socket.send(cipher.sealJson({ type: 'auth_pending', timeout: 1 }));
+          setTimeout(() => (allow ? accept(token) : reject('approval-denied')), afterMs);
+          return;
+        }
+        if (options.answerAfterMs) {
+          setTimeout(() => accept(token), options.answerAfterMs);
+          return;
+        }
+        accept(token);
         return;
       }
 
@@ -263,6 +283,8 @@ interface ConnectOverrides {
   mintClientId?: () => Promise<string | undefined>;
   foreground?: ForegroundSignal;
   probeTimeoutMs?: number;
+  handshakeTimeoutMs?: number;
+  onAwaitingApproval?: (seconds: number) => void;
 }
 
 function connect(relay: FakeRelay, overrides: ConnectOverrides = {}) {
@@ -286,6 +308,8 @@ function connect(relay: FakeRelay, overrides: ConnectOverrides = {}) {
         mintClientId: overrides.mintClientId,
         foreground: overrides.foreground,
         probeTimeoutMs: overrides.probeTimeoutMs,
+        handshakeTimeoutMs: overrides.handshakeTimeoutMs,
+        onAwaitingApproval: overrides.onAwaitingApproval,
       },
     ),
   );
@@ -533,6 +557,47 @@ describe('RelayConnection against a fake host', () => {
 
     connection.close();
     await relay.stop();
+  });
+
+  it('waits for the computer to allow a new pairing past its usual deadline, and says so', async () => {
+    const relay = await startFakeRelay({ issueDeviceToken: 'token-9', approval: { afterMs: 600, allow: true } });
+    const asked: number[] = [];
+    const connection = connect(relay, {
+      clientId: 'client-9',
+      handshakeTimeoutMs: 200,
+      onAwaitingApproval: (seconds) => asked.push(seconds),
+    });
+    const info = await connection.ready();
+    expect(asked).toEqual([1]);
+    expect(info.deviceToken).toBe('token-9');
+    expect(connection.state).toBe('ready');
+  });
+
+  it('gives up on a host that says nothing within the deadline', async () => {
+    const relay = await startFakeRelay({ issueDeviceToken: 'token-9', answerAfterMs: 600 });
+    const asked: number[] = [];
+    const connection = connect(relay, {
+      clientId: 'client-9',
+      handshakeTimeoutMs: 200,
+      onAwaitingApproval: (seconds) => asked.push(seconds),
+    });
+    await expect(connection.ready()).rejects.toBeInstanceOf(RelayError);
+    expect(asked).toEqual([]);
+  });
+
+  it('treats a pairing the computer refused as final, in its own words', async () => {
+    const relay = await startFakeRelay({ issueDeviceToken: 'token-9', approval: { afterMs: 50, allow: false } });
+    const asked: number[] = [];
+    const connection = connect(relay, { clientId: 'client-9', onAwaitingApproval: (seconds) => asked.push(seconds) });
+    const error = await connection.ready().then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    expect(asked).toEqual([1]);
+    expect(error).toBeInstanceOf(RelayError);
+    expect((error as RelayError).failure).toBe('approval-denied');
+    expect((error as RelayError).needsRepair).toBe(true);
+    expect((error as RelayError).message).toBe(describeRelayFailure('approval-denied'));
   });
 
   it('authenticates with the token alone once it holds one', async () => {

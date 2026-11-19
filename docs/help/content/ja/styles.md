@@ -22,7 +22,7 @@ section: styles
 | Claudeプラン(클러드 플랜) | 新しいリクエストのたびに、Claudeの計画モードで始まります。計画カードを承認すると実行します。チェックリストの進捗とバックグラウンドタスクがウィジェットで表示されます。 |
 
 ## 計画カード {#plan-card}
-Claudeが計画モード(Plan mode、またはClaudeプランのスタイル)で計画を終えると、計画カードが表示されます。
+Claudeが{{ui:permission.label.claude.plan}}(またはClaudeプランのスタイル)で計画を終えると、計画カードが表示されます。
 
 ![[plan-card]]
 

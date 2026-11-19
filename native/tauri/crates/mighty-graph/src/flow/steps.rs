@@ -258,7 +258,8 @@ pub fn progress_of(index: usize, runs: &[MightyGraphRun], heading: &str, locale:
         heading: heading.into(),
         request: card::line(card::first_line(request.input())).unwrap_or_default(),
         state_word: if awaiting { notice::state_word(locale) } else { card::state_word(&status, locale) },
-        status: if awaiting { "waiting".into() } else { status },
+        // Awaiting notices is under way (`running`, the run tone), not waiting on the user; the word says 알림 대기.
+        status,
         count: (!rows.is_empty())
             .then(|| locale.get_with("graph.steps.count", &[("done", &done.to_string()), ("total", &rows.len().to_string())])),
         hidden: rows.len() - shown.len(),

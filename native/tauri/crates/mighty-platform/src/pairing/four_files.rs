@@ -20,16 +20,23 @@
 //!
 //! A save writes only the files whose bytes change, each atomically (a temporary beside it, moved over it); when one of them fails,
 //! the ones already written are put back as they were, so a failed rotation never leaves a new key with the old phones' list.
+//!
+//! With a vault (the app's store: the Keychain, mighty-platform-macos `pairing.rs`) the secrets are not in these files
+//! ([`super::vaulted`]): `mobile-remote.key` and `relay-host-token.json` hold the placeholder `vault:<account>`, and
+//! `relay-keypair.json` only `{"publicKeyB64":…,"v":1}`. Swift 0.4.x reads that as a damaged key and pairs anew, so a downgrade
+//! after this means pairing the phones again; plain secrets found here (Swift's, or a store's without a vault) are read as before
+//! and moved to the vault. Without a vault (tests, `tools/parity-mac pairing`) everything is Swift's as above.
 
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use base64::Engine;
 use serde_json::Value;
 
-use crate::{PairedDevice, PairingIdentity, PairingStore, PlatformError, PushRegistration, Result};
+use super::vaulted::{self, Secrets, VaultSlot};
+use crate::{PairedDevice, PairingIdentity, PairingStore, PlatformError, PushRegistration, Result, SecretVault};
 
 /// The folder under the data folder.
 pub const FOLDER: &str = "mobile-remote";
@@ -84,6 +91,8 @@ pub struct FourFiles {
     files: Box<dyn PrivateFiles>,
     /// The unreadable phone list's bytes, kept aside before the next write over it.
     corrupt: Mutex<Option<Vec<u8>>>,
+    /// Where the secrets go when there is a vault.
+    vault: VaultSlot,
 }
 
 impl std::fmt::Debug for FourFiles {
@@ -174,6 +183,16 @@ pub fn decode_key_pair(bytes: &[u8]) -> Option<[u8; 32]> {
     }
     let secret = object.get("secretKeyB64")?.as_str()?;
     base64::engine::general_purpose::STANDARD.decode(secret).ok()?.try_into().ok()
+}
+
+/// The key pair file when the secret is in the vault: `{"publicKeyB64":…,"v":1}`, written as [`encode_key_pair`] writes it without
+/// the secret (Swift reads it as no key pair).
+pub fn encode_public_key(secret: &[u8; 32]) -> String {
+    let public = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::from(*secret)).to_bytes();
+    let mut out = String::from("{\"publicKeyB64\":");
+    swift_string(&mut out, &base64::engine::general_purpose::STANDARD.encode(public));
+    out.push_str(",\"v\":1}");
+    out
 }
 
 /// The text `JSONSerialization.data(withJSONObject: ["v": 1, "publicKeyB64": …, "secretKeyB64": …], options: [.sortedKeys])` writes:
@@ -361,7 +380,13 @@ fn unix_seconds() -> u64 {
 impl FourFiles {
     /// The files in `folder` (the profile's `mobile-remote`).
     pub fn new(folder: PathBuf, files: Box<dyn PrivateFiles>) -> FourFiles {
-        FourFiles { folder, files, corrupt: Mutex::new(None) }
+        FourFiles { folder, files, corrupt: Mutex::new(None), vault: VaultSlot::none() }
+    }
+
+    /// The secrets kept in `vault`, those found in the files moved there ([`super::vaulted`]).
+    pub fn with_vault(mut self, vault: Arc<dyn SecretVault>) -> FourFiles {
+        self.vault = VaultSlot::new(vault);
+        self
     }
 
     pub fn folder(&self) -> &Path {
@@ -377,6 +402,38 @@ impl FourFiles {
             (KEY_PAIR, encode_key_pair(&identity.secret_key).into_bytes()),
             (DEVICES, encode_devices(&identity.devices).into_bytes()),
         ]
+    }
+
+    /// [`Self::contents`] with the secrets in the vault item `account`: placeholders and the public key in their place.
+    fn vaulted_contents(identity: &PairingIdentity, account: &str) -> [(&'static str, Vec<u8>); 5] {
+        let placeholder = vaulted::placeholder(account);
+        [
+            (PAIRING_KEY, placeholder.clone().into_bytes()),
+            (HOST_ID, identity.host_id.clone().into_bytes()),
+            (HOST_TOKEN, placeholder.into_bytes()),
+            (KEY_PAIR, encode_public_key(&identity.secret_key).into_bytes()),
+            (DEVICES, encode_devices(&identity.devices).into_bytes()),
+        ]
+    }
+
+    /// The files written for `identity`, the secrets in the vault when it takes them, else in the files.
+    fn write_identity(&self, identity: &PairingIdentity) -> Result<()> {
+        let secrets = Secrets::of(identity);
+        let prepared = self.vault.prepare(&secrets);
+        let contents = match &prepared {
+            Some(prepared) => Self::vaulted_contents(identity, &prepared.account),
+            None => Self::contents(identity),
+        };
+        match self.write_all(&contents) {
+            Ok(()) => {
+                self.vault.committed(prepared, &secrets);
+                Ok(())
+            }
+            Err(error) => {
+                self.vault.abandoned(prepared);
+                Err(error)
+            }
+        }
     }
 
     /// One file replaced atomically: `<name>.<random>` created new and private, written, flushed, moved over it.
@@ -486,41 +543,78 @@ impl PairingStore for FourFiles {
                 }
             },
         };
-        let pairing_key = match read_text(&key_path, pairing_key)? {
-            Some(key) => key,
-            None => {
-                // `rotateKey` over an unreadable key file: every token issued under the old key goes.
-                mended.extend([PAIRING_KEY, DEVICES]);
-                devices.clear();
-                new_pairing_key()
-            }
+        let key_text = read_text(&key_path, |_| true)?;
+        // A placeholder: the three secrets are in the vault, and an item that cannot be read is an error, never a new key.
+        let vault_account = key_text.as_deref().and_then(vaulted::placeholder_account).map(str::to_string);
+        let in_vault = match &vault_account {
+            Some(account) => Some(self.vault.read(account)?),
+            None => None,
         };
         let host_id = read_text(&self.folder.join(HOST_ID), identifier)?.unwrap_or_else(|| {
             mended.push(HOST_ID);
             new_host_id()
         });
-        let host_token = read_text(&self.folder.join(HOST_TOKEN), host_token)?.unwrap_or_else(|| {
-            mended.push(HOST_TOKEN);
-            hex(&random::<32>())
-        });
-        let secret_key = read_bounded(&self.folder.join(KEY_PAIR), FILE_MAXIMUM_BYTES)?
-            .flatten()
-            .and_then(|b| decode_key_pair(&b))
-            .unwrap_or_else(|| {
-                mended.push(KEY_PAIR);
-                random::<32>()
-            });
-        let identity = PairingIdentity { host_id, host_token, pairing_key, secret_key, devices };
+        let identity = match in_vault {
+            Some(secrets) => PairingIdentity {
+                host_id,
+                host_token: secrets.host_token,
+                pairing_key: secrets.pairing_key,
+                secret_key: secrets.secret_key,
+                devices,
+            },
+            None => {
+                let pairing_key = match key_text.filter(|key| pairing_key(key)) {
+                    Some(key) => key,
+                    None => {
+                        // `rotateKey` over an unreadable key file: every token issued under the old key goes.
+                        mended.extend([PAIRING_KEY, DEVICES]);
+                        devices.clear();
+                        new_pairing_key()
+                    }
+                };
+                let host_token = read_text(&self.folder.join(HOST_TOKEN), host_token)?.unwrap_or_else(|| {
+                    mended.push(HOST_TOKEN);
+                    hex(&random::<32>())
+                });
+                let secret_key = read_bounded(&self.folder.join(KEY_PAIR), FILE_MAXIMUM_BYTES)?
+                    .flatten()
+                    .and_then(|b| decode_key_pair(&b))
+                    .unwrap_or_else(|| {
+                        mended.push(KEY_PAIR);
+                        random::<32>()
+                    });
+                PairingIdentity { host_id, host_token, pairing_key, secret_key, devices }
+            }
+        };
         if !mended.is_empty() {
-            let files: Vec<(&'static str, Vec<u8>)> =
-                Self::contents(&identity).into_iter().filter(|(name, _)| mended.contains(name)).collect();
+            // Only the host id and the phones' list are mended when the secrets are in the vault.
+            let contents = match &vault_account {
+                Some(account) => Self::vaulted_contents(&identity, account),
+                None => Self::contents(&identity),
+            };
+            let files: Vec<(&'static str, Vec<u8>)> = contents.into_iter().filter(|(name, _)| mended.contains(name)).collect();
             self.write_all(&files)?;
+        }
+        match &vault_account {
+            // A move to the vault cut short (the key file is written first) may have left a secret in the other two: gone now.
+            Some(account) => {
+                let rest: Vec<(&'static str, Vec<u8>)> = Self::vaulted_contents(&identity, account)
+                    .into_iter()
+                    .filter(|(name, _)| [HOST_TOKEN, KEY_PAIR].contains(name))
+                    .collect();
+                let _ = self.write_all(&rest);
+            }
+            // Secrets found in the files move to the vault; when that fails they stay, and the identity is answered all the same.
+            None if self.vault.active() => {
+                let _ = self.write_identity(&identity);
+            }
+            None => {}
         }
         Ok(Some(identity))
     }
 
     fn save(&self, identity: &PairingIdentity) -> Result<()> {
-        self.write_all(&Self::contents(identity))
+        self.write_identity(identity)
     }
 }
 
@@ -707,6 +801,151 @@ mod tests {
         assert_eq!(kept.len(), 1);
         assert_eq!(fs::read_to_string(folder.join(&kept[0])).unwrap(), "{ not json");
         assert_eq!(store.load().unwrap().unwrap().devices.len(), 1);
+        let _ = fs::remove_dir_all(folder.parent().unwrap());
+    }
+
+    /// A vault for the tests: its items, how many saves it was asked for, and whether it refuses saves or forgets what it saved.
+    #[derive(Default)]
+    struct TestVault {
+        items: Mutex<std::collections::HashMap<String, String>>,
+        saves: Mutex<usize>,
+        refuse: bool,
+        forget: bool,
+    }
+
+    impl SecretVault for TestVault {
+        fn load(&self, id: &str) -> Option<String> {
+            lock(&self.items).get(id).cloned()
+        }
+        fn save(&self, id: &str, secret: &str) -> Result<()> {
+            *lock(&self.saves) += 1;
+            if self.refuse {
+                return Err(PlatformError::Refused("the Keychain refused the key (OSStatus -25308)".into()));
+            }
+            if !self.forget {
+                lock(&self.items).insert(id.into(), secret.into());
+            }
+            Ok(())
+        }
+        fn delete(&self, id: &str) -> Result<()> {
+            lock(&self.items).remove(id);
+            Ok(())
+        }
+    }
+
+    fn vaulted_store(folder: &Path, vault: &Arc<TestVault>) -> FourFiles {
+        store(folder).with_vault(vault.clone())
+    }
+
+    /// No file holds a secret of `identity`'s.
+    fn no_secret_in_files(folder: &Path, identity: &PairingIdentity) {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(identity.secret_key);
+        for entry in fs::read_dir(folder).unwrap() {
+            let text = fs::read_to_string(entry.unwrap().path()).unwrap();
+            assert!(!text.contains(&identity.pairing_key) && !text.contains(&identity.host_token) && !text.contains(&b64), "{text}");
+        }
+    }
+
+    /// Swift's plain files read with a vault: the identity is the same, its secrets move to one vault item, and the files keep the
+    /// host id, the phones and the public key with placeholders where the secrets stood; a new store (a new launch) reads it back.
+    #[test]
+    fn plain_files_move_their_secrets_to_the_vault_on_the_first_load() {
+        let folder = folder("migrate");
+        store(&folder).save(&identity()).unwrap();
+        let vault = Arc::new(TestVault::default());
+        assert_eq!(vaulted_store(&folder, &vault).load().unwrap(), Some(identity()));
+        no_secret_in_files(&folder, &identity());
+        let items = lock(&vault.items).clone();
+        assert_eq!(items.len(), 1);
+        let (account, text) = items.into_iter().next().unwrap();
+        assert_eq!(Secrets::decode(&text), Some(Secrets::of(&identity())));
+        assert_eq!(fs::read_to_string(folder.join(PAIRING_KEY)).unwrap(), vaulted::placeholder(&account));
+        assert_eq!(fs::read_to_string(folder.join(HOST_TOKEN)).unwrap(), vaulted::placeholder(&account));
+        assert_eq!(fs::read_to_string(folder.join(KEY_PAIR)).unwrap(), encode_public_key(&[7; 32]));
+        assert_eq!(fs::read_to_string(folder.join(DEVICES)).unwrap(), encode_devices(&identity().devices));
+        assert_eq!(fs::read_to_string(folder.join(HOST_ID)).unwrap(), identity().host_id);
+        assert_eq!(vaulted_store(&folder, &vault).load().unwrap(), Some(identity()), "read back at the next launch");
+        assert_eq!(*lock(&vault.saves), 1, "a load of vaulted files writes nothing to the vault");
+        // Without the vault the placeholder is an error, never a new key: the files stay as they are.
+        let before = fs::read(folder.join(PAIRING_KEY)).unwrap();
+        assert!(store(&folder).load().is_err());
+        assert!(vaulted_store(&folder, &Arc::new(TestVault::default())).load().is_err(), "a missing item is an error too");
+        assert_eq!(fs::read(folder.join(PAIRING_KEY)).unwrap(), before);
+        assert_eq!(fs::read_to_string(folder.join(DEVICES)).unwrap(), encode_devices(&identity().devices), "no phone is forgotten");
+        let _ = fs::remove_dir_all(folder.parent().unwrap());
+    }
+
+    /// Saves through a vault: a save that changes no secret leaves the vault alone; a rotation goes to a new item and the old one is
+    /// deleted; a rotation whose files cannot be written leaves the old files naming the old item, and the new item is deleted.
+    #[test]
+    fn saves_through_the_vault_keep_the_files_and_the_item_together() {
+        let folder = folder("vault-saves");
+        let vault = Arc::new(TestVault::default());
+        let store = vaulted_store(&folder, &vault);
+        store.save(&identity()).unwrap();
+        no_secret_in_files(&folder, &identity());
+        let mut touched = identity();
+        touched.devices[1].last_seen = "2026-11-01T00:00:00.000Z".into();
+        store.save(&touched).unwrap();
+        assert_eq!(*lock(&vault.saves), 1, "the phones' list changed, no secret did");
+        let first = lock(&vault.items).keys().next().unwrap().clone();
+        let rotated = PairingIdentity { pairing_key: "B".repeat(43), devices: vec![], ..identity() };
+        store.save(&rotated).unwrap();
+        let items = lock(&vault.items).clone();
+        assert!(items.len() == 1 && !items.contains_key(&first), "the old item goes once the files name the new one");
+        assert_eq!(vaulted_store(&folder, &vault).load().unwrap(), Some(rotated.clone()));
+        // The phones' list cannot be replaced: the key file is put back, still naming the item that holds the old key.
+        fs::remove_file(folder.join(DEVICES)).unwrap();
+        fs::create_dir(folder.join(DEVICES)).unwrap();
+        fs::write(folder.join(DEVICES).join("x"), "x").unwrap();
+        let again = PairingIdentity { pairing_key: "C".repeat(43), ..rotated.clone() };
+        assert!(store.save(&again).is_err());
+        assert_eq!(*lock(&vault.items), items, "the new item is deleted, the old one kept");
+        fs::remove_dir_all(folder.join(DEVICES)).unwrap();
+        assert_eq!(vaulted_store(&folder, &vault).load().unwrap().unwrap().pairing_key, "B".repeat(43));
+        let _ = fs::remove_dir_all(folder.parent().unwrap());
+    }
+
+    /// A vault that refuses, or gives back nothing of what it took: the secrets stay in the files, the identity is answered and
+    /// saved as before, and the vault is not asked again in this run.
+    #[test]
+    fn a_vault_that_fails_leaves_the_secrets_in_the_files() {
+        for vault in [TestVault { refuse: true, ..TestVault::default() }, TestVault { forget: true, ..TestVault::default() }] {
+            let folder = folder("vault-fails");
+            store(&folder).save(&identity()).unwrap();
+            let before: Vec<Vec<u8>> = [PAIRING_KEY, HOST_TOKEN, KEY_PAIR].iter().map(|n| fs::read(folder.join(n)).unwrap()).collect();
+            let vault = Arc::new(vault);
+            let store = vaulted_store(&folder, &vault);
+            assert_eq!(store.load().unwrap(), Some(identity()));
+            let after: Vec<Vec<u8>> = [PAIRING_KEY, HOST_TOKEN, KEY_PAIR].iter().map(|n| fs::read(folder.join(n)).unwrap()).collect();
+            assert_eq!(before, after, "the secrets stay where they were");
+            let rotated = PairingIdentity { pairing_key: "B".repeat(43), ..identity() };
+            store.save(&rotated).unwrap();
+            assert_eq!(fs::read_to_string(folder.join(PAIRING_KEY)).unwrap(), "B".repeat(43));
+            assert_eq!(*lock(&vault.saves), 1, "tried once in this run");
+            assert!(lock(&vault.items).is_empty());
+            let _ = fs::remove_dir_all(folder.parent().unwrap());
+        }
+    }
+
+    /// After a downgrade the Swift app writes plain secrets again (a new key over the placeholder): they win over the vault's and move
+    /// to a new item. A move cut short after the key file (a plain token left) is finished by the next load.
+    #[test]
+    fn plain_secrets_written_again_win_and_a_cut_short_move_is_finished() {
+        let folder = folder("downgrade");
+        let vault = Arc::new(TestVault::default());
+        vaulted_store(&folder, &vault).save(&identity()).unwrap();
+        let old = lock(&vault.items).keys().next().unwrap().clone();
+        fs::write(folder.join(PAIRING_KEY), "D".repeat(43)).unwrap();
+        fs::write(folder.join(HOST_TOKEN), "ab".repeat(32)).unwrap();
+        fs::write(folder.join(KEY_PAIR), encode_key_pair(&[9; 32])).unwrap();
+        let read = vaulted_store(&folder, &vault).load().unwrap().unwrap();
+        assert_eq!((read.pairing_key, read.host_token, read.secret_key), ("D".repeat(43), "ab".repeat(32), [9; 32]));
+        let account = lock(&vault.items).keys().find(|a| **a != old).unwrap().clone();
+        assert_eq!(fs::read_to_string(folder.join(PAIRING_KEY)).unwrap(), vaulted::placeholder(&account));
+        fs::write(folder.join(HOST_TOKEN), "ab".repeat(32)).unwrap();
+        vaulted_store(&folder, &vault).load().unwrap().unwrap();
+        assert_eq!(fs::read_to_string(folder.join(HOST_TOKEN)).unwrap(), vaulted::placeholder(&account), "the left token is gone");
         let _ = fs::remove_dir_all(folder.parent().unwrap());
     }
 

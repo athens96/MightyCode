@@ -605,7 +605,8 @@ pub fn synthetic(corpus: &Path) -> std::io::Result<usize> {
         "https://u:p@h",
         "[::1]:9000",
         "wss://[FE80::1]",
-        "http://h:443",
+        // Plain ws:// only on loopback here (C# takes any host; `normalize_relay` refuses that on purpose).
+        "http://127.0.0.1:443",
         "  ",
         "https://ex.com/",
     ]

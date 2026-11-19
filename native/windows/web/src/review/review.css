@@ -1,0 +1,31 @@
+/* 검토 대기열 (ReviewPanel.tsx): one row per item, its state glyph, its words, its size, its actions under them; only the list scrolls.
+   The sidebar's 검토 entry and its count badge are at the end. */
+.review-body { overflow: hidden; display: flex; flex-direction: column; }
+.review-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--space-sm); }
+.review-empty { margin: auto; padding: var(--space-lg); max-width: 420px; color: var(--ink2); font-size: var(--type-small); text-align: center; }
+.review-row {
+  display: grid; grid-template-columns: auto 1fr auto; grid-template-areas: "glyph words counts" "glyph actions actions";
+  column-gap: var(--space-md); row-gap: var(--space-sm); padding: var(--space-sm) var(--space-md); border-radius: var(--radius-row); background: var(--card-raised);
+}
+.review-row.status-merged { opacity: .8; }
+.review-status-icon { grid-area: glyph; display: inline-flex; padding-top: 2px; }
+.review-words { grid-area: words; min-width: 0; display: flex; flex-direction: column; gap: var(--space-xxs); }
+.review-title-line { display: flex; align-items: baseline; gap: var(--space-sm); min-width: 0; }
+.review-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--ink); }
+.review-status { flex: none; padding: 0 6px; border-radius: 999px; font-size: var(--type-pill); font-weight: 600; background: var(--subtle); color: var(--done-text); }
+.review-status.status-conflict { color: var(--err-text); }
+.review-status.status-merged { color: var(--ink2); }
+.review-place, .review-request { color: var(--ink2); font-size: var(--type-pill); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-branch { display: inline-flex; align-items: center; gap: 4px; color: var(--ink2); font-size: var(--type-pill); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-counts { grid-area: counts; align-self: start; display: inline-flex; gap: var(--space-sm); font-family: var(--font-mono); font-size: var(--type-pill); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.review-files { color: var(--ink2); font-family: inherit; }
+.review-counts .added { color: var(--done-text); }
+.review-counts .removed { color: var(--err-text); }
+.review-actions { grid-area: actions; display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.review-actions .btn.small { height: 24px; padding: 0 8px; font-size: var(--type-pill); gap: 4px; }
+
+.sidebar-entry-tile.review-tile { background: var(--accent); }
+.sidebar-review-count {
+  flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-grid; place-items: center;
+  background: var(--accent); color: var(--on-primary); font-size: var(--type-pill); font-weight: 700; font-variant-numeric: tabular-nums;
+}

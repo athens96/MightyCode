@@ -188,6 +188,9 @@ pub fn registry() -> Registry {
     crate::mighty::register(&mut methods);
     crate::terminal::register(&mut methods);
     crate::files::register(&mut methods);
+    // 편집기에서 열기 and the review queue (editor.rs, review.rs).
+    crate::editor::register(&mut methods);
+    crate::review::register(&mut methods);
     crate::history::register(&mut methods);
     crate::conversation_search::register(&mut methods);
     crate::frame::register(&mut methods);

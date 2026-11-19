@@ -44,7 +44,7 @@
 .dialog-skeleton i:nth-child(2) { flex: 1; }
 .dialog-skeleton i:nth-child(3) { width: 64px; height: 24px; border-radius: 7px; flex: none; }
 .dialog-message { margin: 0; white-space: pre-wrap; color: var(--ink2); }
-.dialog-field { height: var(--dialog-button-height); box-sizing: border-box; padding: 0 10px; border: var(--stroke-line) solid var(--line); border-radius: var(--dialog-button-radius); background: var(--card); color: var(--ink); font: inherit; }
+.dialog-field { height: var(--dialog-button-height); box-sizing: border-box; padding: 0 10px; border: var(--stroke-line) solid var(--line-strong); border-radius: var(--dialog-button-radius); background: var(--card); color: var(--ink); font: inherit; }
 .dialog-field:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 
 /* The common buttons (28 high, 12 at the sides, radius 7): the primary filled in the accent, the rest on the grey, a dangerous
@@ -55,7 +55,7 @@
   font: inherit; font-size: var(--type-body); font-weight: 500; white-space: nowrap; cursor: default;
 }
 .btn:hover:not(:disabled) { background: color-mix(in srgb, var(--dialog-gray) 82%, var(--ink)); }
-.btn.primary { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.btn.primary { background: var(--primary); color: var(--on-primary); font-weight: 600; }
 .btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 90%, var(--ink)); }
 .btn.danger { background: var(--err); color: var(--on-status); font-weight: 600; }
 .btn.text { background: transparent; color: var(--accent); padding: 0 var(--space-md); }

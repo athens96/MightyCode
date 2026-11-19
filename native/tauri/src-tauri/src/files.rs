@@ -274,6 +274,24 @@ fn reference_root(view: &View, args: &Value) -> Option<String> {
     Some(pane.working_folder.clone().unwrap_or_else(|| workspace.path().to_string()))
 }
 
+/// The folder 편집기에서 열기 resolves its path under (editor.rs): a pane's run folder ([`reference_root`]) for `reference`, else the
+/// files pane's workspace (`files_target`, which answers "Session not found." for any other pane). None for a remote workspace.
+pub(crate) fn editor_root(host: &Host, args: &Value, reference: bool) -> Result<Option<String>, String> {
+    if reference { Ok(reference_root(&host.view(), args)) } else { files_target(host, args).map(|target| target.map(|(_, root)| root)) }
+}
+
+/// The review queue's reading of one request (review.rs): the files the run `run` (as the originals keep it) of the pane changed under
+/// `root`, with the lines it added and removed (요청 변경 검토's items, whose counts are the revert's: what it puts back the request
+/// removed); None when the store kept nothing for it. Reads the store: off the page's thread.
+pub(crate) fn request_changes(host: &Host, pane: &str, run: &str, root: &str) -> Option<(usize, usize, usize)> {
+    let files = state(host).ok()?;
+    let items = mighty_files::revert::plan(&files.originals, pane, run, root);
+    if items.is_empty() {
+        return None;
+    }
+    Some((items.len(), items.iter().map(|item| item.removed).sum(), items.iter().map(|item| item.restored).sum()))
+}
+
 /// C# `DesktopService.OriginalsRun`: a graph run's `sourceRunID` (else its id); an id no graph run of the pane has stays as it is.
 fn originals_run(view: &View, pane: &str, run: &str) -> String {
     view.snapshot

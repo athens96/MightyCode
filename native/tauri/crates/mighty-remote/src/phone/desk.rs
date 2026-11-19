@@ -15,7 +15,7 @@ use indexmap::IndexMap;
 use mighty_composer::pending::SubmitReceipt;
 use mighty_core::app_update_view;
 use mighty_core::attachment::RunAttachment;
-use mighty_core::model::{AppSnapshot, PlanRecord, RunSession, Workspace};
+use mighty_core::model::{AppSnapshot, MobileRemoteSettings, PlanRecord, RunSession, Workspace};
 use mighty_core::permission::ToolPermissionRequest;
 use mighty_delegation::delivery::DelegationDeliveryItem;
 use mighty_files::changes::ChangeSet;
@@ -153,6 +153,13 @@ impl MobileError {
     }
 }
 
+/// 휴대폰에서 볼 워크스페이스 (Settings › 원격 연결 › 휴대폰) from the saved choice: None lets a paired phone see every workspace of this
+/// computer (the default); held to the shared ones, Some of what `shared` says is shared now (nothing while sharing is off). Every phone
+/// route that lists or reads a workspace, its panes, files, work map or runs is held to it, and so are the pushes.
+pub fn phone_workspace_ids(settings: Option<&MobileRemoteSettings>, shared: impl FnOnce() -> Vec<String>) -> Option<Vec<String>> {
+    settings.is_some_and(|s| s.phone_shared_only).then(shared)
+}
+
 /// The desktop as the m1 router sees it (C#'s `DesktopService` members and the router's constructor callbacks).
 ///
 /// Contract: every method may be called from any task, concurrently with the host's own calls; none blocks on the page or the host's
@@ -169,6 +176,9 @@ pub trait PhoneDesk: Send + Sync {
     fn host_name(&self) -> String;
     /// `AppVersion`.
     fn app_version(&self) -> String;
+    /// What 이 컴퓨터 공유 shares now (the workspace ids; empty while sharing is off): all a paired phone sees when 휴대폰에서 볼
+    /// 워크스페이스 says only the shared ones ([`phone_workspace_ids`]).
+    fn shared_workspace_ids(&self) -> Vec<String>;
     /// `service.IsRemoteSession`: a remote workspace's pane (never the phone's).
     fn is_remote_session(&self, session_id: &str) -> bool;
     /// `service.IsSessionRunning`.

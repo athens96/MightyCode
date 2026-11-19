@@ -138,11 +138,46 @@ mod imp {
         dirs::data_local_dir().map(|local| local.join("Programs").join("MightyCode"))
     }
 
+    /// The schemes [`open_url`] hands to their default handler: the web and mail (as the Mac's `open_url`). Every caller passes such an
+    /// address; a file, a path, `ms-settings:` or an app's own protocol (`search-ms:`, `ms-msdt:`, a custom handler) is refused here.
+    const URL_SCHEMES: [&str; 3] = ["http", "https", "mailto"];
+
+    /// The scheme of `text` when it starts with one (RFC 3986: a letter, then letters, digits, `+`, `-` or `.`, then `:`), lowercased.
+    /// One letter is a drive (`C:\x`), never a scheme; no control character or blank is let through anywhere in the text.
+    fn scheme_of(text: &str) -> Option<String> {
+        if text.chars().any(|c| c.is_control() || c.is_whitespace()) {
+            return None;
+        }
+        let (scheme, _) = text.split_once(':')?;
+        let mut chars = scheme.chars();
+        let valid = scheme.len() >= 2
+            && chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+            && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+        valid.then(|| scheme.to_ascii_lowercase())
+    }
+
     /// C# `Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })`: an http(s) or mailto address handed to the user's
-    /// default handler through `ShellExecuteW` (the handler is never the app's child, so it outlives the app). The calling thread is in
-    /// a single-threaded apartment for the call, as the shell wants (one already in another apartment stays as it is). It may wait on
-    /// the shell: an async caller runs it on a blocking thread.
+    /// default handler through `ShellExecuteW` (the handler is never the app's child, so it outlives the app); any other text is refused
+    /// before the shell sees it ([`URL_SCHEMES`]). The calling thread is in a single-threaded apartment for the call, as the shell wants
+    /// (one already in another apartment stays as it is). It may wait on the shell: an async caller runs it on a blocking thread.
     pub fn open_url(url: &str) -> std::result::Result<(), String> {
+        if !scheme_of(url).is_some_and(|scheme| URL_SCHEMES.contains(&scheme.as_str())) {
+            return Err("not an address the default handler may open".into());
+        }
+        shell_open(url)
+    }
+
+    /// Windows' Settings at one of its own pages (`ms-settings:notifications`): only an `ms-settings:` address, which [`open_url`]
+    /// refuses.
+    pub fn open_settings_page(address: &str) -> std::result::Result<(), String> {
+        if scheme_of(address).as_deref() != Some("ms-settings") {
+            return Err("not a Settings page".into());
+        }
+        shell_open(address)
+    }
+
+    /// `ShellExecuteW(open)` of an address its caller checked.
+    fn shell_open(url: &str) -> std::result::Result<(), String> {
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
         use windows_sys::Win32::UI::Shell::ShellExecuteW;
@@ -217,7 +252,11 @@ mod imp {
     pub fn platform(profile: Option<PathBuf>, identifier: &str) -> Result<Platform> {
         let paths = paths(profile, identifier)?;
         let vault = DpapiVault::new(paths.data_dir().to_path_buf());
-        let pairing = WindowsPairing::new(paths.data_dir().join(mighty_platform::pairing::identity_file::FOLDER));
+        // The phone pairing's secrets in DPAPI beside the remote keys (`remote-keys\<sha256(account)>.bin`), the file naming them.
+        let pairing = WindowsPairing::with_vault(
+            paths.data_dir().join(mighty_platform::pairing::identity_file::FOLDER),
+            Arc::new(DpapiVault::new(paths.data_dir().to_path_buf())),
+        );
         let processes: Arc<dyn mighty_platform::ProcessHost> = Arc::new(WindowsProcessHost::new());
         Ok(Platform {
             profile: PlatformProfile::windows(),
@@ -375,6 +414,32 @@ mod imp {
             assert_eq!(group_sizes("3"), Some(vec![3, 0]));
             assert_eq!(group_sizes("0"), Some(vec![0, 0]));
             assert_eq!(group_sizes("3;x"), None);
+        }
+
+        /// Only a web or mail address reaches the shell from `open_url`, only a Settings page from `open_settings_page`: a path, a
+        /// file address or another protocol's handler is refused before `ShellExecuteW` (nothing here is opened).
+        #[test]
+        fn only_web_and_mail_addresses_are_opened() {
+            for address in ["https://example.com/a?b=c", "HTTP://localhost:3000", "mailto:someone@example.com"] {
+                assert!(scheme_of(address).is_some_and(|scheme| URL_SCHEMES.contains(&scheme.as_str())), "{address}");
+            }
+            for address in [
+                r"C:\Windows\System32\calc.exe",
+                r"\\server\share\x.exe",
+                "file:///C:/Windows/System32/calc.exe",
+                "ms-settings:notifications",
+                "search-ms:query=x",
+                "ms-msdt:/id x",
+                "javascript:alert(1)",
+                "calc.exe",
+                "https://example.com/\nx",
+                " https://example.com",
+                "",
+            ] {
+                assert!(open_url(address).is_err(), "{address:?} is refused");
+            }
+            assert!(open_settings_page("https://example.com").is_err() && open_settings_page("calc.exe").is_err());
+            assert_eq!(scheme_of("ms-settings:notifications").as_deref(), Some("ms-settings"));
         }
 
         /// Only a folder is explored (a file of the same name is never handed to the shell).

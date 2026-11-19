@@ -2,8 +2,11 @@
 //! `remote::paired`): the pairing link read back, the identity binding a computer's token to its role, the Rust client's handshake and
 //! cipher against the host's own `RelayHost` over an in-process pairing relay, the mirror's routes for a paired computer (the shared
 //! workspaces only, the full-access switch and the Windows Codex rule as over Tailscale, no runs), a phone that gains nothing, the
-//! attachment limit of one frame, and the pairing's secret kept in the vault and never in the connections file. Loopback port 0 only;
-//! every folder is a temp folder; no check reaches a real relay.
+//! attachment limit of one frame, and the pairing's secret kept in the vault and never in the connections file; the pairing the
+//! security review asked for — the computers' own short-lived code (a phone's link pairs no computer, nor the other way round), the
+//! person's approval (allowed, refused, not answered), no computer while "페어링한 컴퓨터의 연결 받기" is off, the computer's role kept
+//! across a restart, and 새 키 만들기 renewing the host's keys and relay name. Loopback port 0 only; every folder is a temp folder; no
+//! check reaches a real relay.
 
 mod support;
 
@@ -20,11 +23,11 @@ use mighty_core::attachment::RunAttachment;
 use mighty_core::model::{LogEntry, MobileRemoteSettings, RunSession};
 use mighty_platform::fake::MemoryVault;
 use mighty_platform::{BoxFuture, Os, SecretVault, fake};
-use mighty_remote::identity::{AuthDecision, AuthRefusal, AuthRequest, Identity};
+use mighty_remote::identity::{AuthDecision, AuthPolicy, AuthRefusal, AuthRequest, Identity, PairingKind, ROLES_FILE};
 use mighty_remote::relay::cipher::{self, MAXIMUM_PLAINTEXT, RelayCipher};
 use mighty_remote::relay::client::{ClientTimings, Credential, PairingLink, RelayClient, RelayFailure, RequestError, new_client_id};
 use mighty_remote::relay::connection::{MobileDevice, MobileReply, RequestHandler};
-use mighty_remote::relay::host::{RelayHost, RelayOptions, dial};
+use mighty_remote::relay::host::{ApprovalRequest, RelayHost, RelayOptions, dial};
 use mighty_remote::remote::client::{ClientError, ClientOptions, RemoteClient};
 use mighty_remote::remote::host::RemoteHost;
 use mighty_remote::remote::mirror::client::refusal_status;
@@ -207,11 +210,38 @@ fn settings(relay: &str, phones: bool) -> MobileRemoteSettings {
     MobileRemoteSettings { enabled: phones, relay_url: Some(relay.into()), direct_enabled: false, ..MobileRemoteSettings::default() }
 }
 
-/// A relay host over `identity` whose handler is the app's: computers to `sharing`, phones to `phones`.
+/// A relay host over `identity` whose handler is the app's: computers to `sharing`, phones to `phones`; the person allows every new
+/// device at once.
 fn relay_host(folder: &Path, identity: Arc<Identity>, phones: Arc<Phones>, sharing: Option<RemoteHost>) -> RelayHost {
+    let options = RelayOptions {
+        approver: Some(support::fake_relay::allow_all(Arc::default())),
+        host_name: "studio-pc".into(),
+        watches_network: false,
+        ..RelayOptions::default()
+    };
+    relay_host_with(folder, identity, phones, sharing, options)
+}
+
+/// [`relay_host`] with its options given (the person's answers among them).
+fn relay_host_with(
+    folder: &Path,
+    identity: Arc<Identity>,
+    phones: Arc<Phones>,
+    sharing: Option<RemoteHost>,
+    options: RelayOptions,
+) -> RelayHost {
     let router = DesktopRouter::new(phones, Arc::new(move || sharing.clone()));
-    let options = RelayOptions { host_name: "studio-pc".into(), watches_network: false, ..RelayOptions::default() };
     RelayHost::with_options(identity, MobileRemoteSettings::default(), Arc::new(router), fake::platform(folder, Os::Windows), options)
+}
+
+const ALL: AuthPolicy = AuthPolicy { allow_legacy: true, allow_desktops: true };
+
+/// An auth decided under `policy`, a registration allowed by the person at once.
+fn allowed(identity: &Identity, auth: &Value, policy: AuthPolicy) -> AuthDecision {
+    match identity.authorize(&AuthRequest::from_json(auth), policy).unwrap() {
+        AuthDecision::Pending(pending) => identity.register(&pending).unwrap(),
+        decided => decided,
+    }
 }
 
 fn quick() -> ClientTimings {
@@ -266,6 +296,10 @@ async fn phone(relay: &str, link: &str, auth: Value) -> Result<(Value, RelayCiph
         match socket.next().await {
             Some(Ok(Message::Binary(frame))) => {
                 let answer: Value = serde_json::from_slice(&cipher.open(&frame).unwrap()).unwrap();
+                // A registration is told to wait for the person first: the answer comes after.
+                if answer["type"] == "auth_pending" {
+                    continue;
+                }
                 return Ok((answer, cipher, socket));
             }
             Some(Ok(Message::Close(frame))) => return Err(frame.map(|f| u16::from(f.code))),
@@ -281,14 +315,22 @@ async fn phone(relay: &str, link: &str, auth: Value) -> Result<(Value, RelayCiph
 fn a_pairing_link_reads_back_and_anything_else_is_refused() {
     let folder = temp("pair-link");
     let identity = identity_in(&folder);
-    let link = identity.pairing_url("wss://relay.example:8443", "studio-pc", &["100.101.102.103:43139".into()]);
+    let link = identity.desktop_pairing_url("wss://relay.example:8443", "studio-pc");
     let read = PairingLink::parse(&format!("  \"{link}\"\n")).unwrap();
     assert_eq!(read.endpoint.server_id, identity.server_id());
     assert_eq!(base64::engine::general_purpose::STANDARD.encode(read.endpoint.public_key), identity.public_key());
     assert_eq!(read.endpoint.relay, "wss://relay.example:8443");
-    assert_eq!(read.pairing_key.as_str(), identity.pairing_key().as_str());
+    assert_eq!(read.pairing_key.as_str(), identity.pairing_code(PairingKind::Desktop).as_str(), "the computers' code");
+    assert!(read.for_desktop, "said to be a computer's");
+    assert_ne!(read.pairing_key.as_str(), identity.pairing_key().as_str(), "never the saved key");
     assert_eq!(read.name, "studio-pc");
-    assert!(!format!("{read:?}").contains(identity.pairing_key().as_str()), "the key never reaches Debug");
+    assert!(!format!("{read:?}").contains(read.pairing_key.as_str()), "the key never reaches Debug");
+    let phone_link = identity.pairing_url("wss://relay.example:8443", "studio-pc", &["100.101.102.103:43139".into()]);
+    let phone = PairingLink::parse(&phone_link).unwrap();
+    assert!(!phone.for_desktop && phone.pairing_key != read.pairing_key, "the phone's link has a code of its own");
+    // A plain ws:// relay is taken only on this computer itself.
+    assert!(PairingLink::parse(&link.replace("wss%3A%2F%2Frelay.example%3A8443", "ws%3A%2F%2Frelay.example%3A8443")).is_err());
+    assert!(PairingLink::parse(&link.replace("wss%3A%2F%2Frelay.example%3A8443", "ws%3A%2F%2F127.0.0.1%3A8443")).is_ok());
     for bad in [
         "",
         "https://example.com",
@@ -302,44 +344,227 @@ fn a_pairing_link_reads_back_and_anything_else_is_refused() {
     let _ = std::fs::remove_dir_all(folder);
 }
 
-/// A computer pairs with the phone's key but its token is bound to its role: it never opens a phone session (nor a phone's token a
-/// computer's), a computer always names itself, and the identity file is the one older apps read.
+/// A computer pairs with the computers' own code and its token is bound to its role: it never opens a phone session (nor a phone's
+/// token a computer's), a computer always names itself, a phone's code pairs no computer and the computers' code no phone, no computer
+/// registers while computers are not taken, the identity file is the one older apps read, and the role is kept beside it so the
+/// computer is still one after a restart.
 #[test]
 fn a_computers_token_is_bound_to_its_role() {
     let folder = temp("pair-identity");
-    let identity = identity_in(&folder);
-    let key = identity.pairing_key().to_string();
+    let roles = folder.join(ROLES_FILE);
+    let identity = Identity::load_or_create(Arc::new(FileStore(folder.clone())), true).unwrap().with_roles_file(roles.clone());
+    let phone_code = identity.pairing_code(PairingKind::Phone).to_string();
+    let desktop_code = identity.pairing_code(PairingKind::Desktop).to_string();
     let desktop = new_client_id();
-    let paired = identity
-        .authorize(
-            &AuthRequest::from_json(&json!({"type":"auth","pairingKey":key,"clientId":desktop,"clientName":"laptop","role":"desktop"})),
-            false,
-        )
-        .unwrap();
+    let as_computer = |code: &str| json!({"type":"auth","pairingKey":code,"clientId":desktop,"clientName":"laptop","role":"desktop"});
+    assert_eq!(
+        allowed(&identity, &as_computer(&phone_code), ALL),
+        AuthDecision::Refused(AuthRefusal::PairingKey),
+        "a phone's link pairs no computer"
+    );
+    assert_eq!(
+        allowed(&identity, &as_computer(&desktop_code), AuthPolicy { allow_legacy: true, allow_desktops: false }),
+        AuthDecision::Refused(AuthRefusal::DesktopsOff),
+        "no computer while computers are not taken"
+    );
+    let paired = allowed(&identity, &as_computer(&desktop_code), ALL);
     let AuthDecision::Accepted { device_token: Some(token), .. } = paired else { panic!("a computer pairs: {paired:?}") };
     let as_desktop = json!({"type":"auth","deviceToken":token,"clientId":desktop,"role":"desktop"});
     let as_phone = json!({"type":"auth","deviceToken":token,"clientId":desktop});
-    assert!(matches!(identity.authorize(&AuthRequest::from_json(&as_desktop), false).unwrap(), AuthDecision::Accepted { .. }));
-    assert_eq!(identity.authorize(&AuthRequest::from_json(&as_phone), false).unwrap(), AuthDecision::Refused(AuthRefusal::DeviceRevoked));
+    let off = AuthPolicy::default();
+    assert!(
+        matches!(identity.authorize(&AuthRequest::from_json(&as_desktop), off).unwrap(), AuthDecision::Accepted { .. }),
+        "a token needs no switch"
+    );
+    assert_eq!(identity.authorize(&AuthRequest::from_json(&as_phone), off).unwrap(), AuthDecision::Refused(AuthRefusal::DeviceRevoked));
     let phone = new_client_id();
+    let desktop_code = identity.pairing_code(PairingKind::Desktop).to_string();
+    assert_eq!(
+        allowed(&identity, &json!({"type":"auth","pairingKey":desktop_code,"clientId":phone}), ALL),
+        AuthDecision::Refused(AuthRefusal::PairingKey),
+        "the computers' link pairs no phone"
+    );
     let AuthDecision::Accepted { device_token: Some(phone_token), .. } =
-        identity.authorize(&AuthRequest::from_json(&json!({"type":"auth","pairingKey":key,"clientId":phone})), false).unwrap()
+        allowed(&identity, &json!({"type":"auth","pairingKey":phone_code,"clientId":phone}), off)
     else {
         panic!("a phone pairs")
     };
     let claimed = json!({"type":"auth","deviceToken":phone_token,"clientId":phone,"role":"desktop"});
     assert_eq!(
-        identity.authorize(&AuthRequest::from_json(&claimed), false).unwrap(),
+        identity.authorize(&AuthRequest::from_json(&claimed), off).unwrap(),
         AuthDecision::Refused(AuthRefusal::DeviceRevoked),
         "a phone's token is no computer's"
     );
-    let nameless = json!({"type":"auth","pairingKey":key,"role":"desktop"});
-    assert_eq!(identity.authorize(&AuthRequest::from_json(&nameless), true).unwrap(), AuthDecision::Refused(AuthRefusal::Malformed));
-    // The file is still the shared codec's (no member of its own): it reads back with both devices.
-    let reloaded = identity_in(&folder);
-    assert_eq!(reloaded.devices().len(), 2);
+    let nameless = json!({"type":"auth","pairingKey":desktop_code,"role":"desktop"});
+    assert_eq!(identity.authorize(&AuthRequest::from_json(&nameless), ALL).unwrap(), AuthDecision::Refused(AuthRefusal::Malformed));
+    // The file is still the shared codec's (no member of its own): it reads back with both devices, and the role beside it.
+    let reloaded = Identity::load_or_create(Arc::new(FileStore(folder.clone())), true).unwrap().with_roles_file(roles.clone());
+    let devices = reloaded.devices();
+    assert_eq!(devices.len(), 2);
+    assert!(devices.iter().any(|d| d.id == desktop && d.desktop), "the computer is one after a restart: {devices:?}");
+    assert!(devices.iter().any(|d| d.id == phone && !d.desktop));
     let file = std::fs::read_to_string(FileStore(folder.clone()).file()).unwrap();
-    assert!(!file.contains("desktop") && !file.contains(token.as_str()), "neither the role nor the token is written");
+    assert!(!file.contains("desktop") && !file.contains(token.as_str()), "neither the role nor the token is written there");
+    let kept = std::fs::read_to_string(&roles).unwrap();
+    assert!(kept.contains(&desktop) && !kept.contains(&phone) && !kept.contains(token.as_str()), "{kept}");
+    // Without the roles file the identity reads as before (a computer as a phone until it connects).
+    assert!(identity_in(&folder).devices().iter().all(|d| !d.desktop));
+    // Unpaired, the computer leaves the file too.
+    reloaded.revoke(&desktop).unwrap();
+    assert!(!std::fs::read_to_string(&roles).unwrap().contains(&desktop));
+    let _ = std::fs::remove_dir_all(folder);
+}
+
+/// A pairing code lives while it is shown and runs out after: each draw keeps it alive for its lifetime from then (here 300 ms), a
+/// code not drawn for longer pairs nothing, the next draw makes a new one, and the key-only legacy auth is refused while legacy apps
+/// are off (the default).
+#[test]
+fn a_pairing_code_lives_while_shown_and_runs_out() {
+    let folder = temp("pair-expiry");
+    let identity =
+        Identity::load_or_create(Arc::new(FileStore(folder.clone())), true).unwrap().with_code_lifetime(Duration::from_millis(300));
+    let code = identity.pairing_code(PairingKind::Phone).to_string();
+    for _ in 0..4 {
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(*identity.pairing_code(PairingKind::Phone), code, "shown again, kept alive");
+    }
+    assert!(identity.pairing_code_left(PairingKind::Phone).is_some_and(|left| left <= Duration::from_millis(300)));
+    let auth = json!({"type":"auth","pairingKey":code,"clientId":new_client_id(),"clientName":"Phone"});
+    assert!(matches!(identity.authorize(&AuthRequest::from_json(&auth), ALL).unwrap(), AuthDecision::Pending(_)), "valid while shown");
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(identity.pairing_code_left(PairingKind::Phone), None, "run out");
+    assert_eq!(identity.authorize(&AuthRequest::from_json(&auth), ALL).unwrap(), AuthDecision::Refused(AuthRefusal::PairingKey));
+    assert_ne!(*identity.pairing_code(PairingKind::Phone), code, "the next draw makes a new one");
+    let legacy = json!({"type":"auth","pairingKey":*identity.pairing_key()});
+    let off = AuthPolicy { allow_legacy: MobileRemoteSettings::default().allow_legacy_phones, allow_desktops: false };
+    assert_eq!(identity.authorize(&AuthRequest::from_json(&legacy), off).unwrap(), AuthDecision::Refused(AuthRefusal::LegacyRefused));
+    let _ = std::fs::remove_dir_all(folder);
+}
+
+/// The person at the host decides: a registration is asked about once (a computer's said to be one), refused it is `approval-denied`
+/// for good and its code spent; not answered in time it is refused alike; a second device while one is being asked about is turned
+/// away; a device that leaves while asked finds the answer on its next try; tokens are never asked about.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_person_at_the_host_allows_or_refuses_a_new_device() {
+    let relay = PairingRelay::start().await;
+    let folder = temp("pair-approval");
+    let identity = identity_in(&folder);
+    let phones = Arc::new(Phones::default());
+    let asked: Arc<Mutex<Vec<ApprovalRequest>>> = Arc::default();
+    // Refuses: the client is told `approval-denied`, for good, and the code it held pairs nothing any more.
+    let options = |approver, timeout| RelayOptions {
+        approver: Some(approver),
+        approval_timeout: timeout,
+        host_name: "studio-pc".into(),
+        watches_network: false,
+        ..RelayOptions::default()
+    };
+    let refusing = relay_host_with(
+        &folder,
+        identity.clone(),
+        phones.clone(),
+        None,
+        options(support::fake_relay::answering(asked.clone(), false), Duration::from_secs(5)),
+    );
+    refusing.apply(settings(&relay.url, true)).await.unwrap();
+    refusing.set_desktops(true).await.unwrap();
+    until(|| relay.host_attached(), 5000, "the host's link").await;
+    let link = PairingLink::parse(&refusing.desktop_pairing_url()).unwrap();
+    let client = RelayClient::start(
+        link.endpoint.clone(),
+        Credential::PairingKey { client_id: new_client_id(), key: link.pairing_key.clone() },
+        "laptop",
+        Arc::new(DirectProxy),
+        quick(),
+        None,
+    );
+    let failure = client.ready(Duration::from_secs(10)).await.unwrap_err();
+    assert!(matches!(&failure, RelayFailure::Refused { reason, last: true } if reason == "approval-denied"), "{failure:?}");
+    assert_eq!(asked.lock().unwrap().clone(), [ApprovalRequest { name: "laptop".into(), desktop: true, replaces: false }]);
+    assert!(identity.devices().is_empty(), "nothing registered");
+    assert_ne!(PairingLink::parse(&refusing.desktop_pairing_url()).unwrap().pairing_key, link.pairing_key, "the refused code is spent");
+    client.close();
+    // A phone, refused alike (the phone app's words), and its code spent.
+    let phone_link = refusing.pairing_url();
+    let auth = json!({"type":"auth","pairingKey":member(&phone_link, "key"),"clientId":new_client_id(),"clientName":"Phone"});
+    let (answer, _, _) = phone(&relay.url, &phone_link, auth).await.unwrap();
+    assert_eq!((answer["type"].as_str(), answer["reason"].as_str()), (Some("auth_error"), Some("approval-denied")));
+    assert_eq!(asked.lock().unwrap().last().map(|a| a.desktop), Some(false), "said to be a phone");
+    refusing.dispose().await;
+
+    // Never answered: refused when the host's time runs out (here 300 ms), the person's question dropped.
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let silent: mighty_remote::relay::host::Approver = {
+        let dropped = dropped.clone();
+        Arc::new(move |_| {
+            struct Counts(Arc<AtomicUsize>);
+            impl Drop for Counts {
+                fn drop(&mut self) {
+                    self.0.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+            let counts = Counts(dropped.clone());
+            Box::pin(async move {
+                let _counts = counts;
+                std::future::pending::<bool>().await
+            })
+        })
+    };
+    let silent_host = relay_host_with(&folder, identity.clone(), phones.clone(), None, options(silent, Duration::from_millis(300)));
+    silent_host.apply(settings(&relay.url, true)).await.unwrap();
+    until(|| relay.host_attached(), 5000, "the host's link").await;
+    let phone_link = silent_host.pairing_url();
+    let phone_id = new_client_id();
+    let auth = json!({"type":"auth","pairingKey":member(&phone_link, "key"),"clientId":phone_id,"clientName":"Phone"});
+    let (answer, _, _) = phone(&relay.url, &phone_link, auth).await.unwrap();
+    assert_eq!(answer["reason"], "approval-denied", "not answered in time is refused");
+    until(|| dropped.load(Ordering::SeqCst) == 1, 2000, "the question dropped (its dialog closes)").await;
+    assert!(identity.devices().is_empty());
+    silent_host.dispose().await;
+
+    // Allowed: one device asked about at a time, and one that left while asked finds the answer on its next try.
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let allowing: mighty_remote::relay::host::Approver = {
+        let (gate, asked) = (gate.clone(), asked.clone());
+        Arc::new(move |request| {
+            asked.lock().unwrap().push(request);
+            let gate = gate.clone();
+            Box::pin(async move {
+                gate.notified().await;
+                true
+            })
+        })
+    };
+    asked.lock().unwrap().clear();
+    let host = relay_host_with(&folder, identity.clone(), phones.clone(), None, options(allowing, Duration::from_secs(10)));
+    host.apply(settings(&relay.url, true)).await.unwrap();
+    until(|| relay.host_attached(), 5000, "the host's link").await;
+    let phone_link = host.pairing_url();
+    let key = member(&phone_link, "key");
+    let first = json!({"type":"auth","pairingKey":key,"clientId":phone_id,"clientName":"Phone"});
+    let waiting = tokio::spawn({
+        let (url, link, first) = (relay.url.clone(), phone_link.clone(), first.clone());
+        async move { phone(&url, &link, first).await }
+    });
+    until(|| asked.lock().unwrap().len() == 1, 5000, "the person asked").await;
+    let other = json!({"type":"auth","pairingKey":key,"clientId":new_client_id(),"clientName":"Other"});
+    let (busy, _, _) = phone(&relay.url, &phone_link, other).await.unwrap();
+    assert_eq!(busy["reason"], "device-limit", "one device is asked about at a time");
+    // The first phone gives up (an older app's 20 s); the question stays open.
+    waiting.abort();
+    let _ = waiting.await;
+    until(|| host.connection_ids().is_empty(), 5000, "the host saw it go").await;
+    gate.notify_one();
+    let (answer, _, _) = phone(&relay.url, &phone_link, first).await.unwrap();
+    assert_eq!(answer["type"], "auth_ok", "the answer kept for its next try: {answer}");
+    assert!(answer["deviceToken"].as_str().is_some());
+    assert_eq!(asked.lock().unwrap().len(), 1, "asked once");
+    // A token never asks.
+    let token = answer["deviceToken"].as_str().unwrap().to_string();
+    let (again, _, _) = phone(&relay.url, &phone_link, json!({"type":"auth","deviceToken":token,"clientId":phone_id})).await.unwrap();
+    assert_eq!(again["type"], "auth_ok");
+    assert_eq!(asked.lock().unwrap().len(), 1, "a token is not asked about");
+    host.dispose().await;
     let _ = std::fs::remove_dir_all(folder);
 }
 
@@ -353,7 +578,7 @@ async fn the_client_handshakes_with_the_hosts_own_code() {
     let identity = identity_in(&folder);
     let phones = Arc::new(Phones::default());
     // Nothing on the relay yet: the host is offline (and that is not final).
-    let link = PairingLink::parse(&identity.pairing_url(&relay.url, "studio-pc", &[])).unwrap();
+    let link = PairingLink::parse(&identity.desktop_pairing_url(&relay.url, "studio-pc")).unwrap();
     let client_id = new_client_id();
     let offline = RelayClient::start(
         link.endpoint.clone(),
@@ -456,7 +681,11 @@ async fn a_paired_computer_mirrors_the_shared_panes_through_the_relay() {
     let client = client_in(&client_folder, vault.clone());
     let bad = client.pair("", "mightycode://pair?v=2").await.unwrap_err();
     assert_eq!(bad.message(), get("remote.pair.error.badLink"));
-    let link = host.pairing_url();
+    // The phone's link pairs no computer, said as a link that cannot be used.
+    let phone_link = host.pairing_url();
+    let refused = client.pair("", &phone_link).await.unwrap_err();
+    assert_eq!(refused.message(), get("remote.pair.error.codeRefused"));
+    let link = host.desktop_pairing_url();
     let info = client.pair("", &link).await.unwrap();
     assert_eq!(info.status, RemoteConnectionStatus::Connected);
     assert_eq!(info.name, "studio-pc", "named after the host's link");
@@ -465,8 +694,9 @@ async fn a_paired_computer_mirrors_the_shared_panes_through_the_relay() {
     // The vault keeps the token, never the key; the connections file names the relay address only.
     let secret = PairedSecret::decode(&vault.load(&info.id).unwrap()).unwrap();
     assert!(secret.credential.has_token());
-    let key = identity.pairing_key().to_string();
+    let key = member(&link, "key");
     assert!(!vault.load(&info.id).unwrap().contains(&key));
+    assert!(client.pair("", &link).await.is_err(), "the link was spent by its pairing");
     let file = std::fs::read_to_string(client_folder.join(mighty_remote::remote::saved::FILE_NAME)).unwrap();
     assert!(file.contains(&info.address) && !file.contains(&key) && !file.contains(&member(&link, "relay")));
     let Credential::Token { token, .. } = &secret.credential else { unreachable!() };
@@ -572,7 +802,7 @@ async fn a_phone_gains_nothing() {
     host.set_desktops(true).await.unwrap();
     until(|| relay.host_attached(), 5000, "the host's link").await;
     let link = host.pairing_url();
-    let key = identity.pairing_key().to_string();
+    let key = member(&link, "key");
     let auth = json!({"type":"auth","pairingKey":key,"clientId":new_client_id(),"clientName":"Phone"});
     let turned_away = phone(&relay.url, &link, auth.clone()).await.err();
     assert_eq!(turned_away, Some(Some(mighty_remote::relay::connection::PHONES_OFF_CLOSE)), "the phone meets an offline host");
@@ -658,10 +888,10 @@ async fn revoking_one_device_keeps_the_others_paired_and_connected() {
     host.set_desktops(true).await.unwrap();
     until(|| relay.host_attached(), 5000, "the host's link").await;
     let link = host.pairing_url();
-    let old_key = identity.pairing_key().to_string();
+    let old_key = member(&link, "key");
 
     // A computer pairs through the relay and keeps its token.
-    let parsed = PairingLink::parse(&link).unwrap();
+    let parsed = PairingLink::parse(&host.desktop_pairing_url()).unwrap();
     let computer = RelayClient::start(
         parsed.endpoint.clone(),
         Credential::PairingKey { client_id: new_client_id(), key: parsed.pairing_key.clone() },
@@ -701,10 +931,10 @@ async fn revoking_one_device_keeps_the_others_paired_and_connected() {
     assert!(devices[0].connected && devices[0].desktop, "and it is still connected");
     assert_eq!(host.connected_desktops(), ["laptop"]);
     assert_eq!(computer.request("GET", "/v2/info", None, Duration::from_secs(5)).await.unwrap().status, 503, "it still asks");
-    // The pairing link carries the new key; the old one pairs nothing, the phone's token opens nothing.
+    // The pairing link carries a new code; the old one pairs nothing, the phone's token opens nothing.
     let new_link = host.pairing_url();
     assert_ne!(member(&new_link, "key"), old_key);
-    assert_eq!(member(&new_link, "key"), identity.pairing_key().as_str());
+    assert_eq!(member(&new_link, "key"), host.pairing_key_for_display().as_str());
     let again = json!({"type":"auth","pairingKey":old_key,"clientId":new_client_id(),"clientName":"Stranger"});
     let (refused, _, _) = phone(&relay.url, &new_link, again).await.unwrap();
     assert_eq!((refused["type"].as_str(), refused["reason"].as_str()), (Some("auth_error"), Some("pairing-key")));
@@ -718,15 +948,31 @@ async fn revoking_one_device_keeps_the_others_paired_and_connected() {
     assert!(!host.revoke(&phone_id).await.unwrap(), "a stale press changes nothing");
     assert_eq!(host.pairing_url(), new_link);
 
-    // 키 다시 만들기: everyone goes.
+    // 키 다시 만들기: everyone goes, and the host is made anew — a new relay name and key, the link registered again under them.
+    let (server_id, public_key) = (identity.server_id(), identity.public_key());
     assert!(host.rotate(None).await.unwrap());
     assert!(host.devices().is_empty(), "every device unpaired");
+    assert!(identity.server_id() != server_id && identity.public_key() != public_key, "new keys");
     until(|| host.connected_desktops().is_empty(), 5000, "the computer's connection closed").await;
     computer.close();
+    // The old pairing opens nothing: no host under the old name (this test relay hands it to the one host, whose key is new).
     let gone = RelayClient::start(parsed.endpoint.clone(), computer_token, "laptop", Arc::new(DirectProxy), quick(), None);
     let failure = gone.ready(Duration::from_secs(5)).await.unwrap_err();
-    assert!(matches!(&failure, RelayFailure::Refused { reason, .. } if reason == "device-revoked"), "{failure:?}");
+    assert!(matches!(failure, RelayFailure::HostOffline | RelayFailure::KeyMismatch), "{failure:?}");
     gone.close();
+    // The new link, under the new name, pairs again.
+    let fresh = PairingLink::parse(&host.desktop_pairing_url()).unwrap();
+    assert_eq!(fresh.endpoint.server_id, identity.server_id());
+    let renewed = RelayClient::start(
+        fresh.endpoint.clone(),
+        Credential::PairingKey { client_id: new_client_id(), key: fresh.pairing_key.clone() },
+        "laptop",
+        Arc::new(DirectProxy),
+        quick(),
+        None,
+    );
+    renewed.ready(Duration::from_secs(10)).await.expect("the host answers under its new name");
+    renewed.close();
     host.dispose().await;
     sharing.dispose().await;
     let _ = std::fs::remove_dir_all(folder);

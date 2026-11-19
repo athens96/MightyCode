@@ -60,14 +60,14 @@ Tailscale 共享只在这台电脑的 Tailscale 地址上接受连接。每次�
 在主机电脑上：
 1. 打开 {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} → {{ui:settings.remote.shareTitle}} 标签，在 {{ui:settings.remote.methodsTitle}} 的 {{ui:settings.remote.viaPairing}} 一行中打开 {{ui:settings.remote.pairAccept}}。
 2. 选择工作区并点按 {{ui:settings.remote.startSharing}}。共享期间本机会连接中继，同一行会显示其状态。
-3. 点按 {{ui:settings.remote.pairCopyLink}}，把链接交给要连接的电脑。
+3. 点按 {{ui:settings.remote.pairCopyLink}}，把链接交给要连接的电脑。此链接只用于电脑（手机二维码不能配对电脑，反之亦然），只能使用一次，关闭此界面 10 分钟后失效。另一台电脑请求连接时，这台电脑会弹出“新设备请求连接”窗口和通知，确认无误后点按 {{ui:settings.mobileRemote.approval.allow}}（60 秒内未回应将被拒绝）。
 
 在要连接的电脑上：
-1. 在 {{ui:settings.remote.navTitle}} → {{ui:settings.remote.connectTitle}} 标签的开关中选择 {{ui:settings.remote.pairLinkField}}，粘贴链接，可按需填写名称，然后点按 {{ui:settings.remote.connectButton}}。
+1. 在 {{ui:settings.remote.navTitle}} → {{ui:settings.remote.connectTitle}} 标签的开关中选择 {{ui:settings.remote.pairLinkField}}，粘贴链接，可按需填写名称，然后点按 {{ui:settings.remote.connectButton}}。在主机允许之前，会提示你在那台电脑上允许。
 2. 连接后，那台电脑会带着配对标签出现在 {{ui:settings.remote.connectionsTitle}} 列表中，并以“远程 · 名称”出现在侧边栏中。连接与断开的方式与 Tailscale 连接相同。
 
-- 链接中含有与手机二维码相同的配对密钥，请只交给信任的人。第一次连接时，主机会给这台电脑一个专属的设备令牌，之后都用这个令牌连接。令牌像连接密钥一样保存在 macOS 钥匙串中（在 Windows 上保存在只有当前用户能解密的文件中），不会写入工作区记录。
-- 已配对的电脑也会带着电脑图标出现在主机 {{ui:settings.remote.phoneTab}} 标签的 {{ui:settings.mobileRemote.connectedDevicesTitle}} 列表中（即使手机连接开关已关闭）。该行的 {{ui:settings.mobileRemote.revokeRowButton}} 按钮只解除这台电脑的配对，其他手机和电脑仍保持连接。此时配对密钥会更新，之后连接的设备需要使用新链接。点按 {{ui:settings.mobileRemote.regenerateKeyButton}} 会解除所有手机和电脑的配对，之后需要用新链接重新连接。
+- 链接中含有电脑专用的短时配对码。即使链接落入他人手中，只要你不在主机上允许就不会连接。第一次连接时，主机会给这台电脑一个专属的设备令牌，之后都用这个令牌连接，不会再次请求允许。令牌像连接密钥一样保存在 macOS 钥匙串中（在 Windows 上保存在只有当前用户能解密的文件中），不会写入工作区记录。主机关闭 {{ui:settings.remote.pairAccept}} 或未在共享时，新的电脑无法连接。
+- 已配对的电脑也会带着电脑图标出现在主机 {{ui:settings.remote.phoneTab}} 标签的 {{ui:settings.mobileRemote.connectedDevicesTitle}} 列表中（即使手机连接开关已关闭，重启后也会显示）。该行的 {{ui:settings.mobileRemote.revokeRowButton}} 按钮只解除这台电脑的配对，其他手机和电脑仍保持连接。点按 {{ui:settings.mobileRemote.regenerateKeyButton}} 会解除所有手机和电脑的配对，并重新生成主机的中继 ID 和加密密钥，之后需要用新链接重新连接。
 - 只能看到共享的工作区，{{ui:settings.remote.allowFullAccess}} 开关以及无法限制的智能体的规则与 Tailscale 连接完全相同。
 - 手机的设置不会改变。如果没有在 {{ui:settings.remote.phoneTab}} 标签中允许手机连接，即使打开这个开关，手机也无法连接。
 - 中继一次最多传送 1 MB。通过配对连接发送的附件合计约 750 KB 以内（文件内容以 base64 传送会变大），超出时会在发送前提示。大文件请通过 Tailscale 连接后发送。较长的对话会显示能放进 1 MB 的最新条目。

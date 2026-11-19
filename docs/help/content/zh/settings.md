@@ -27,6 +27,7 @@ section: settings
 同一标签页的{{ui:settings.agents.sectionTitle}}中是与代理窗格有关的设置和按键说明。
 - {{ui:settings.display.statusLineToggle}}：运行 Claude 设置中的状态栏命令，并将结果显示在输入框下方。
 - {{ui:settings.delegation.toggle}}：默认开启。Claude 窗格可以在各自的 worktree 中打开子窗格，在运行中的 Claude 窗格里按 {{kbd:⌘Enter}} 会在新的子窗格中运行你的请求。请参阅[Mighty 编排](delegation.md#enable)。
+- {{ui:settings.editor.label}}：{{ui:editor.open}}启动的编辑器。可选择自动(找到的第一个)、此电脑上找到的编辑器或{{ui:settings.editor.system}}。每次打开设置都会重新查找([在编辑器中打开](terminal-files-browser.md#open-in-editor))。
 - 下方是按键说明：按 {{kbd:Enter}} 发送，按 {{kbd:Shift+Enter}} 换行。拖动标签页可与其他标签页合并，拖到边缘可拆分。命令运行窗格是交互式终端，在 Mac 上打开登录 shell，在 Windows 上打开 PowerShell（没有时为 cmd）。
 
 ## 模型 {#models}

@@ -54,6 +54,8 @@ export const ImagesTile = 88;
 export const RequestStep = 'request';
 export const MinimumWidth = 300;
 export const MinimumHeight = 140;
+/** A result with nothing to show is its header alone: the header's 28 and the block's two border lines (`emptyResultIds`). */
+export const ResultHeadHeight = 30;
 export const MaximumWidth = 1400;
 export const MaximumHeight = 1200;
 const SiblingGap = 20;
@@ -151,6 +153,26 @@ export function latestResultID(runs: readonly MightyGraphRun[]): string | null {
   return null;
 }
 
+/**
+ * The result blocks with nothing to show (no answer, no transcript, settled, no 알림 대기 rows, no file list open beside them): each is drawn as its
+ * header alone, ResultHeadHeight tall, in place of a block holding only "별도의 응답 내용이 없습니다". `copyOf` reads a block's copy (its status and
+ * awaiting rows); a block whose status says it is still under way keeps its body (its "응답을 기다리는 중").
+ */
+export function emptyResultIds(runs: readonly MightyGraphRun[], copyOf: (id: string) => { status?: string; awaiting?: unknown } | undefined,
+  resultFilesRunID: string | null = null): Set<string> {
+  const empty = new Set<string>();
+  for (const run of shownRuns(runs)) {
+    if (!hasResult(run) || run.id === resultFilesRunID) continue;
+    if ((run.finalOutput ?? '').trim() !== '' || run.resultEntries.some((e) => e.kind !== 'user')) continue;
+    const id = runNodeId(run, 'result');
+    const copy = copyOf(id);
+    const status = copy?.status ?? '';
+    if (copy?.awaiting || (status !== '' && !['completed', 'error', 'stopped'].includes(status))) continue;
+    empty.add(id);
+  }
+  return empty;
+}
+
 // ── the newest result card within the pane ──
 export const MinimumResultHeight = MinimumHeight;
 
@@ -244,6 +266,8 @@ export interface MakeOptions {
    * place. A request with steps has its plan column left of it. Every block but the result is a card unless the user opened it (`opened`, node ids).
    * Absent lays the runs out as every other view does. */
   fanOut?: { opened: ReadonlySet<string> } | null;
+  /** The result blocks drawn as their header alone (emptyResultIds): ResultHeadHeight tall whatever size they would have. */
+  emptyResults?: ReadonlySet<string> | null;
 }
 
 export function makeLayout(given: readonly MightyGraphRun[], draft: string, running: boolean, expanded: ReadonlySet<string>, options: MakeOptions = {}): Layout {
@@ -281,7 +305,9 @@ export function makeLayout(given: readonly MightyGraphRun[], draft: string, runn
     const workID = runNodeId(run, WorkSuffix);
     const workSize = splitsExecution ? sizeOf(workID, RequestWidth, expanded.has(workID) ? 540 : 280) : null;
     const resultID = runNodeId(run, 'result');
-    const resSize = sizeOf(resultID, RequestWidth, expanded.has(resultID) ? 440 : 200);
+    const resSize = options.emptyResults?.has(resultID)
+      ? { w: sizeOf(resultID, RequestWidth, 200).w, h: ResultHeadHeight }
+      : sizeOf(resultID, RequestWidth, expanded.has(resultID) ? 440 : 200);
     const runFinished = finished(run);
     const runResult = hasResult(run);
 

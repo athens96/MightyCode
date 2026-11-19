@@ -184,7 +184,7 @@ const Card = memo(function Card({ card, onFold, onReveal }: { card: StructureCar
 function ResultTitle({ card }: { card: StructureCard }) {
   const { t } = useServices();
   const { title, icon, awaiting, soFar } = structureResultLook(card, t);
-  return <span className={'structure-result-title' + (awaiting ? ' tone-wait' : card.finished && !soFar ? ' tone-' + card.tone : '')} data-awaiting={awaiting ? '' : undefined}><Icon name={icon} size={11} weight={2} />{title}</span>;
+  return <span className={'structure-result-title' + (awaiting ? ' tone-run' : card.finished && !soFar ? ' tone-' + card.tone : '')} data-awaiting={awaiting ? '' : undefined}><Icon name={icon} size={11} weight={2} />{title}</span>;
 }
 
 /** A column's step as the pipeline's chip (M/MightyStructureView.swift chip): done green with a check, current the accent with a dot, pending grey with a ring. */

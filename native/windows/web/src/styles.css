@@ -5,6 +5,9 @@ body {
   font-family: var(--font-body); font-size: var(--type-body);
   overflow: hidden;
 }
+/* Korean breaks between words, not inside them (main.tsx sets <html lang> from the locale); a word too long for its line still breaks.
+   break-word rather than anywhere: it leaves the min-content width alone, so compact flex rows keep their sizes. */
+:lang(ko) { word-break: keep-all; overflow-wrap: break-word; }
 .shell-loading, .shell-empty { display: grid; place-items: center; height: 100%; color: var(--ink2); }
 .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--stop); flex: none; }
 .status-dot.status-running { background: var(--run); }
@@ -29,7 +32,7 @@ body {
 .pane-figures { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; font-family: var(--font-mono); font-size: var(--type-mono); color: var(--ink2);
   mask-image: linear-gradient(to left, transparent, black 18px); }
 .pane-header-controls { flex: none; display: inline-flex; align-items: center; gap: var(--space-sm); padding-left: var(--space-xs); color: var(--ink2); }
-.pane-menu-button, .pane-plugins-button { width: 22px; height: 24px; min-width: 22px; padding: 0; color: inherit; }
+.pane-menu-button, .pane-plugins-button { width: var(--layout-hit-target); height: var(--layout-hit-target); min-width: var(--layout-hit-target); padding: 0; color: inherit; }
 .pane-shell { padding: 0; }
 .pane-shell .pane-slim-header { gap: var(--space-md); }
 .pane-shell .pane-menu-button { color: var(--on-status); }

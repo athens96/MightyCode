@@ -4,7 +4,7 @@ import type { AgentActivity, LogEntry, RunSession } from '../store/models';
 import { Entry, type EntryProps } from './Entry';
 import { providerIsBeta, providerLabel } from './format';
 import { ProviderMark } from './ProviderMark';
-import { ReferenceContext, clickedAt, linkAt, type Clicked } from './referenceClick';
+import { ReferenceContext, clickedAt, editorClick, linkAt, type Clicked } from './referenceClick';
 import { HeightCache, estimateHeight, followsAfterScroll, layout, visibleRange, type ScrollPlace } from './virtual';
 import { usePageOverlay } from '../shell/overlay';
 import { Pending, PendingBars } from '../pending/Pending';
@@ -182,10 +182,10 @@ export function Conversation({ session }: { session: RunSession }) {
   }, []);
 
   const showReference = useContext(ReferenceContext);
-  const follow = useCallback((clicked: Clicked) => {
+  const follow = useCallback((clicked: Clicked, editor = false) => {
     if (!clicked) return false;
     if ('url' in clicked) void bridge.call('openUrl', { url: clicked.url }).catch(() => {});
-    else showReference?.(clicked);
+    else showReference?.(editor ? { ...clicked, editor: true } : clicked);
     return true;
   }, [bridge, showReference]);
   const open = useCallback((element: Element) => follow(linkAt(element)), [follow]);
@@ -193,7 +193,8 @@ export function Conversation({ session }: { session: RunSession }) {
   const onClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
     const target = event.target as Element;
     if (event.button !== 0 || target.closest('button') || !scroller.current) return;
-    follow(clickedAt(target, event.clientX, event.clientY, scroller.current));
+    // ⌘-click (Ctrl+click) opens a named file in the external editor instead of the bubble.
+    follow(clickedAt(target, event.clientX, event.clientY, scroller.current), editorClick(event));
   }, [follow]);
 
   const onKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {

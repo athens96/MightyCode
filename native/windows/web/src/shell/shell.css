@@ -16,7 +16,7 @@
 
 button { font: inherit; color: inherit; }
 .icon-button {
-  display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 var(--space-xs);
+  display: inline-grid; place-items: center; min-width: var(--layout-hit-target); height: var(--layout-hit-target); padding: 0 var(--space-xs);
   border: 0; border-radius: var(--radius-file-row); background: transparent; color: var(--ink2); cursor: default;
 }
 .icon-button:hover:not(:disabled) { background: var(--card-raised); color: var(--ink); }
@@ -24,7 +24,7 @@ button { font: inherit; color: inherit; }
 .accent-button, .plain-button {
   border-radius: var(--radius-segment); padding: var(--space-xs) var(--space-md); font-size: var(--type-body); cursor: default;
 }
-.accent-button { border: 0; background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.accent-button { border: 0; background: var(--primary); color: var(--on-primary); font-weight: 600; }
 .accent-button:disabled { opacity: .5; }
 .plain-button { border: var(--stroke-line) solid var(--line); background: var(--card); color: var(--ink); }
 .plain-button:disabled { color: var(--ink3); }
@@ -32,10 +32,10 @@ button { font: inherit; color: inherit; }
 .plain-button { box-shadow: 0 0.5px 1.5px rgba(0, 0, 0, .12); }
 .link-button { border: 0; background: none; padding: 0; color: var(--accent); cursor: pointer; font-size: var(--type-small); }
 .capsule {
-  display: inline-flex; align-items: center; gap: var(--space-xs); height: 22px; padding: 0 var(--space-md); border: 0;
-  border-radius: 11px; background: var(--card-raised); color: var(--ink); font-size: var(--type-small); white-space: nowrap;
+  display: inline-flex; align-items: center; gap: var(--space-xs); height: var(--layout-hit-target); padding: 0 var(--space-md); border: 0;
+  border-radius: calc(var(--layout-hit-target) / 2); background: var(--card-raised); color: var(--ink); font-size: var(--type-small); white-space: nowrap;
 }
-.capsule.strong { background: var(--ink); color: var(--card); }
+.capsule.strong { background: var(--primary); color: var(--on-primary); }
 .capsule.quiet { color: var(--ink2); }
 .capsule:disabled { color: var(--ink3); }
 /* M/BetaBadge.swift: 9pt medium on the stop wash, a capsule. */
@@ -138,10 +138,10 @@ button { font: inherit; color: inherit; }
 .sidebar-pane-title { font-size: var(--type-side-row); font-weight: 500; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .sidebar-pane-title.strong { font-weight: 600; }
 .sidebar-closed-child .sidebar-pane-title { color: var(--sidebar-ink2); }
-.sidebar-pane-meta { display: flex; align-items: center; gap: 3px; min-height: 15px; font-size: var(--type-pill); color: var(--sidebar-ink2); min-width: 0; white-space: nowrap; }
+.sidebar-pane-meta { display: flex; align-items: center; gap: 3px; min-height: 15px; font-size: var(--type-small); color: var(--sidebar-ink2); min-width: 0; white-space: nowrap; }
 .sidebar-pane.active .sidebar-pane-meta { color: var(--ink2); }
 .sidebar-pane-detail { overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
-.sidebar-pane-wait { font-size: 10.5px; font-weight: 700; flex: none; margin-left: var(--space-sm); line-height: 17px; }
+.sidebar-pane-wait { font-size: var(--type-small); font-weight: 700; flex: none; margin-left: var(--space-sm); line-height: 17px; }
 .sidebar-add {
   display: flex; align-items: center; gap: var(--space-sm); min-height: 22px; padding: var(--inset-sidebar-row-v) var(--space-lg) var(--inset-sidebar-row-v) 28px;
   border: 0; border-radius: var(--radius-row); background: transparent; color: var(--sidebar-accent); font-size: var(--type-pill); text-align: left; cursor: default;
@@ -150,11 +150,11 @@ button { font: inherit; color: inherit; }
 .sidebar-parent-closed { display: flex; align-items: center; gap: var(--space-sm); padding: var(--inset-pane-row-v) var(--space-sm); color: var(--sidebar-ink2); font-size: var(--type-state); font-weight: 600; min-width: 0; }
 .sidebar-parent-closed-icon { width: 14px; flex: none; }
 .sidebar-parent-closed-label { white-space: nowrap; }
-.sidebar-parent-closed-branch { font-size: 10.5px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sidebar-parent-closed-branch { font-size: var(--type-small); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .sidebar-parent-closed-count { font-size: var(--type-small); font-weight: 400; flex: none; }
-.child-card { display: flex; flex-direction: column; gap: 2px; margin: 0 var(--space-sm) var(--space-xs) calc(var(--space-xl) + var(--space-sm)); font-size: 10.5px; }
+.child-card { display: flex; flex-direction: column; gap: 2px; margin: 0 var(--space-sm) var(--space-xs) calc(var(--space-xl) + var(--space-sm)); font-size: var(--type-small); }
 .child-card-actions { display: flex; gap: var(--space-md); }
-.child-card-action { border: 0; background: none; padding: 0; color: var(--sidebar-accent); font-weight: 600; font-size: 10.5px; cursor: default; }
+.child-card-action { border: 0; background: none; padding: 0; color: var(--sidebar-accent); font-weight: 600; font-size: var(--type-small); cursor: default; }
 .child-card-action.quiet { color: var(--sidebar-ink2); }
 .child-card-busy, .child-card-held { color: var(--sidebar-ink2); display: flex; gap: var(--space-xs); align-items: center; }
 .child-card-note { user-select: text; white-space: pre-wrap; }
@@ -284,11 +284,13 @@ button { font: inherit; color: inherit; }
 .dashboard-tiles { display: flex; gap: var(--space-md); margin-top: var(--space-md); }
 .dashboard-tile { display: flex; flex-direction: column; justify-content: space-between; flex: 1 1 110px; min-width: 110px; height: 84px; padding: var(--inset-dashboard-tile-v) var(--inset-dashboard-tile-h); border-radius: var(--radius-tile); box-shadow: 0 1px 1px rgba(0, 0, 0, .05); }
 .dashboard-tiles.with-usage .dashboard-tile { max-width: 220px; }
-.dashboard-tile-label { font-size: 12.5px; font-weight: 700; white-space: nowrap; }
-.dashboard-tile.running { background: var(--run); color: var(--on-status); }
-.dashboard-tile.waiting { background: var(--wait); color: var(--on-wait); }
-.dashboard-tile.done { background: var(--card); color: var(--ink2); }
+.dashboard-tile-label { font-size: var(--type-side-row); font-weight: 700; white-space: nowrap; }
+/* Every tile on the card: only its figure in the state's ink, the quiet ink while it is 0, so a page of tiles carries no blocks of colour. */
+.dashboard-tile { background: var(--card); color: var(--ink2); }
+.dashboard-tile.running .dashboard-tile-count { color: var(--accent); }
+.dashboard-tile.waiting .dashboard-tile-count { color: var(--wait-text); }
 .dashboard-tile.done .dashboard-tile-count { color: var(--done-text); }
+.dashboard-tile.zero .dashboard-tile-count { color: var(--ink3); }
 .dashboard-tile-count { font-family: var(--font-heading); font-size: var(--type-tile); font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .dashboard-usage { flex: 2 1 260px; min-width: 260px; display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--inset-dashboard-tile-v) var(--inset-dashboard-tile-h); border: 0; border-radius: var(--radius-tile); background: var(--card); text-align: left; box-shadow: 0 1px 1px rgba(0, 0, 0, .05); cursor: default; }
 .dashboard-usage-top { display: flex; justify-content: space-between; gap: var(--space-md); font-size: 12px; }
@@ -345,7 +347,7 @@ button { font: inherit; color: inherit; }
 .menu-shortcut { color: var(--ink3); font-size: var(--type-small); }
 .menu-separator { height: 1px; margin: var(--space-xs) 0; background: var(--line); }
 .sheet-field { height: 28px; padding: 0 var(--space-sm); border: var(--stroke-line) solid var(--line); border-radius: var(--radius-segment); background: var(--page); color: var(--ink); font: inherit; }
-.sheet-caption { font-size: 10px; color: var(--ink2); }
+.sheet-caption { font-size: var(--type-small); color: var(--ink2); }
 /* The create sheets (dialogs/WorkspaceCreate.tsx; M/WorkspaceCreateViews.swift): the labels trailing in their column, the fields after. */
 .create-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-md); align-items: center; min-width: 0; margin: 0; padding: 0; border: 0; }
 .create-label { justify-self: end; font-size: var(--type-row); }
@@ -389,6 +391,6 @@ button { font: inherit; color: inherit; }
 .sidebar-server-dot.tone-bg-done { background: var(--done, #3fb950); }
 .sidebar-server-dot.tone-bg-wait { background: var(--wait, #d29922); }
 .sidebar-server-names { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 1px; }
-.sidebar-server-title { font-size: 10px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.sidebar-server-line { font-size: 9.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-server-title { font-size: var(--type-small); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-server-line { font-size: var(--type-small); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-server-menu { flex: none; }

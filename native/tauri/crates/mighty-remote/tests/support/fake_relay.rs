@@ -52,6 +52,22 @@ impl mighty_platform::PairingStore for FileStore {
         Ok(written?)
     }
 }
+/// The person at the host who allows every new device at once, each question kept in `asked` (the relay host's approver).
+pub fn allow_all(asked: Arc<std::sync::Mutex<Vec<mighty_remote::relay::host::ApprovalRequest>>>) -> mighty_remote::relay::host::Approver {
+    answering(asked, true)
+}
+
+/// The person answering every question with `allowed`, each question kept in `asked`.
+pub fn answering(
+    asked: Arc<std::sync::Mutex<Vec<mighty_remote::relay::host::ApprovalRequest>>>,
+    allowed: bool,
+) -> mighty_remote::relay::host::Approver {
+    Arc::new(move |request| {
+        asked.lock().unwrap().push(request);
+        Box::pin(async move { allowed })
+    })
+}
+
 /// What one control socket does once open: its number (1 for the first) and the socket.
 pub type ControlScript = Arc<dyn Fn(usize, Socket) -> BoxFuture<'static, ()> + Send + Sync>;
 /// What the phone does on one host data socket: the connection id and the socket.
@@ -289,11 +305,11 @@ impl ScriptedPhone {
         }
     }
 
-    /// The next frame that is not the host's ping.
+    /// The next frame that is not the host's ping (nor its word to wait while the person is asked about a registration).
     pub async fn receive_reply(&mut self) -> Option<Value> {
         loop {
             let value = self.receive().await?;
-            if value["type"] != "ping" {
+            if value["type"] != "ping" && value["type"] != "auth_pending" {
                 return Some(value);
             }
         }

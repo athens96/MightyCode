@@ -3,6 +3,7 @@
 
 pub mod binding;
 pub mod client;
+pub mod mcp_config;
 pub mod server;
 pub mod tools;
 pub mod wire;

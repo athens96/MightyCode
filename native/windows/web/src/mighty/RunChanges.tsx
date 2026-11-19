@@ -4,7 +4,7 @@ import { useServices } from '../app/context';
 import { DialogLoading, DialogShell } from '../dialogs/DialogShell';
 import { Icon } from '../icons/Icon';
 import { DiffView } from '../panes/files/DiffView';
-import { diffRows, type DiffRow } from '../panes/files/diff';
+import { diffRows, editorLine, type DiffRow } from '../panes/files/diff';
 import type { FileChanges } from '../panes/files/types';
 import { usePageOverlay } from '../shell/overlay';
 import {
@@ -83,6 +83,14 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
   useEffect(() => { if (picked) noteField.current?.focus(); }, [picked]);
 
   const rows = useMemo(() => (changes ? diffRows(changes) : []), [changes]);
+  /** 편집기에서 열기: the selected file at `line` (the host resolves it in the pane's folder again, editor.rs). */
+  const openInEditor = (line: number | null) => {
+    if (selected === null) return;
+    void bridge.call('openInEditor', { source: 'reference', paneId, path: selected, ...(line ? { line } : {}) }).catch(() => {});
+  };
+  /** The header's button: the line a note is being written on, else the first changed line. */
+  const firstChange = rows.findIndex((row) => row.kind === 'added' || row.kind === 'removed');
+  const editorAt = picked?.path === selected ? editorLine(rows, picked.index) : firstChange >= 0 ? editorLine(rows, firstChange) : null;
   const noted = useMemo(() => (selected ? notedRows(rows, notes, selected) : new Set<number>()), [rows, notes, selected]);
 
   const revert = async () => {
@@ -137,6 +145,12 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
       <DialogShell kind="panel" panel="runChanges" width={1000} height={640} minWidth={640} minHeight={360} label={t('runChanges.title')}
         testId="run-changes" icon={<Icon name="file-search" size={18} weight={1.8} />} title={t('runChanges.title')}
         subtitle={plan?.root || undefined} busy={working} top={!confirming} closeTestId="run-changes-close" onCancel={onClose} onKeyDown={key}
+        tools={selected !== null ? (
+          <button type="button" className="icon-button" data-testid="run-changes-editor" onClick={() => openInEditor(editorAt)}
+            aria-label={editorAt ? t('editor.openLine', { line: editorAt }) : t('editor.open')} title={editorAt ? t('editor.openLine', { line: editorAt }) : t('editor.open')}>
+            <Icon name="file-code" size={15} weight={1.8} />
+          </button>
+        ) : undefined}
         bodyClassName="run-changes-body"
         backdrop={{ 'data-page-overlay': '', onPointerDown: stop, onWheel: stop }}
         status={summary}
@@ -184,6 +198,7 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
                 <div className="run-changes-diff">
                   {changes ? (changes.unchanged ? <div className="run-changes-placeholder">{t('runChanges.diff.unchanged')}</div>
                     : <DiffView changes={changes} noted={noted} picked={picked?.path === selected ? picked.index : null}
+                      onOpenLine={(_row, index) => openInEditor(editorLine(rows, index))}
                       onLine={(row, index) => { if (selected && noteTarget(row)) { setPicked({ row, index, path: selected }); setNoteText(''); } }} />)
                     : loadingDiff ? <DialogLoading rows={2} />
                     : <div className="run-changes-placeholder">{t(selected === null ? 'runChanges.diff.pick' : 'runChanges.diff.none')}</div>}
@@ -199,7 +214,7 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
                       <button type="button" className="btn" onClick={() => { setPicked(null); setNoteText(''); }}>{t('runChanges.confirm.cancel')}</button>
                     </div>
                   </div>
-                ) : changes && !changes.unchanged ? <div className="run-changes-hint">{t('runChanges.notes.hint')}</div> : null}
+                ) : changes && !changes.unchanged ? <div className="run-changes-hint">{t('runChanges.notes.hint')} {t('editor.lineHint')}</div> : null}
                 {notes.length > 0 && (
                   <div className="run-changes-notes" data-testid="run-changes-notes">
                     <span className="run-changes-note-on">{t('runChanges.notes.title', { count: notes.length })}</span>

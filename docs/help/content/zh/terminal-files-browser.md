@@ -35,5 +35,14 @@ Shell 退出后，请点击{{ui:terminal.restart}}。之前的命令记录可以
 
 ![[files-pane]]
 
+### 在编辑器中打开 {#open-in-editor}
+要修改文件，就在你常用的编辑器中打开它。知道行号的地方会直接跳到那一行。
+- 文件窗格：预览标题栏中的{{ui:editor.open}}按钮，以及在列表中右键单击文件或文件夹的菜单({{ui:editor.openFolder}})。
+- 对话和 Mighty 流程：{{kbd:⌘}}-单击(Windows：{{kbd:Ctrl}}-单击)文件名，会在编辑器中打开该行，而不是预览。预览标题栏和结果文件列表每行上的按钮也一样。
+- 查看更改：在[审阅请求更改](agent-pane.md#request-changes)和 worktree 窗格的查看更改中右键单击某一行会打开该行，按钮则打开所选文件。
+- worktree 窗格栏的菜单和[审阅队列](layout.md#review)会打开 worktree 文件夹。
+
+在[设置](settings.md#agents)的{{ui:settings.editor.label}}中选择编辑器。自动会按 VS Code、Cursor、Zed、JetBrains IDE(IntelliJ IDEA、WebStorm、PyCharm 等)、Sublime Text 的顺序使用找到的第一个。先在登录 shell 的 PATH 中查找命令(`code`、`cursor`、`zed`、`idea`、`subl`)，然后在 Mac 上查找“应用程序”文件夹中应用自带的命令，在 Windows 上查找常见安装文件夹中的程序。{{ui:settings.editor.system}}用文件的默认应用打开，不带行号，且永不打开可运行代码的文件。工作区或 worktree 之外的路径不会被打开。
+
 ## 网页链接 {#web-links}
 回复中的网页链接以及智能体打开的网页，都会在默认浏览器中打开。

@@ -5,6 +5,7 @@ import { useServices } from '../app/context';
 import { Entry } from '../conversation/Entry';
 import { HeightCache, estimateHeight, followsAfterScroll, layout, visibleRange, type ScrollPlace } from '../conversation/virtual';
 import { Markdown } from '../conversation/MarkdownView';
+import { editorClick } from '../conversation/referenceClick';
 import { ProviderMark } from '../conversation/ProviderMark';
 import type { LogEntry, PlanRecord } from '../store/models';
 import { PlanDocument, PlanRecordDetails } from '../cards/PlanDocument';
@@ -31,6 +32,8 @@ export interface BlockActions {
   fitResult(id: string): void;
   /** A result file opened in the pane's reference bubble, its 변경사항 against the run the files list belongs to. */
   openFile(file: MightyFile, runId: string | null): void;
+  /** 편집기에서 열기: a result file in the external editor at its line (src-tauri editor.rs). */
+  openInEditor?(file: MightyFile): void;
   loadOlder(): void;
   measured(id: string, height: number): void;
   /** A block the user opened from its card folds back to it (the role view's 카드로 접기). */
@@ -58,6 +61,8 @@ export interface BlockExtra {
   pending?: PendingState;
   /** A settled result whose request changed files the review can show (`runChangesRuns`). */
   changes?: boolean;
+  /** A settled result with nothing to show (layout emptyResultIds): its header alone, saying so, with nothing to resize or fit. */
+  empty?: boolean;
 }
 
 export interface BlockProps {
@@ -187,8 +192,8 @@ function blockSymbol(kind: string, tone: string): IconName {
     case 'question': return 'message-circle-question-mark';
     // The result so far (현재까지의 결과, Core MightyGraphBlock.SoFar) is drawn with the idle tone: a neutral clock, not the done seal.
     case 'result': return tone === 'err' ? 'triangle-alert' : tone === 'stop' ? 'circle-stop' : tone === 'idle' ? 'clock' : 'badge-check';
-    // The 알림 대기 block (Core MightyGraphBlock.Awaiting): an hourglass, not the done seal.
-    case 'awaitingNotice': return 'hourglass';
+    // The 알림 대기 block (Core MightyGraphBlock.Awaiting): a clock in the run tone, not the done seal (amber is for what needs the user).
+    case 'awaitingNotice': return 'clock';
     case 'plan': case 'planRecord': return 'clipboard-list';
     case 'draft': return 'pencil';
     case 'resultFiles': return 'files';
@@ -318,13 +323,22 @@ function Body({ recorded, ...props }: BlockProps & { recorded?: PresentedPlanRec
         <div className="mighty-body">
           {(extra.files ?? []).map((file) => (
             // M/MightyGraphResultFiles.swift: a row per file, its glyph, its name over its path in mono.
-            <button key={file.path + ':' + (file.line ?? '')} className="mighty-file" title={t('graph.resultFiles.openFile', { path: file.path })} onClick={() => actions.openFile(file, runOf(id))}>
-              <Icon name="file-text" size={13} weight={1.6} className="mighty-file-glyph" />
-              <span className="mighty-file-words">
-                <span className="mighty-file-name">{file.path.split(/[\\/]/).pop()}{file.line ? ':' + file.line : ''}</span>
-                <span className="mighty-file-path">{file.path}</span>
-              </span>
-            </button>
+            <div key={file.path + ':' + (file.line ?? '')} className="mighty-file-row">
+              <button className="mighty-file" title={t('graph.resultFiles.openFile', { path: file.path })}
+                onClick={(event) => editorClick(event) && actions.openInEditor ? actions.openInEditor(file) : actions.openFile(file, runOf(id))}>
+                <Icon name="file-text" size={13} weight={1.6} className="mighty-file-glyph" />
+                <span className="mighty-file-words">
+                  <span className="mighty-file-name">{file.path.split(/[\\/]/).pop()}{file.line ? ':' + file.line : ''}</span>
+                  <span className="mighty-file-path">{file.path}</span>
+                </span>
+              </button>
+              {actions.openInEditor && (
+                <button className="mighty-file-editor" data-testid="mighty-file-editor" title={file.line ? t('editor.openLine', { line: file.line }) : t('editor.open')}
+                  aria-label={file.line ? t('editor.openLine', { line: file.line }) : t('editor.open')} onClick={() => actions.openInEditor?.(file)}>
+                  <Icon name="file-code" size={13} weight={1.7} />
+                </button>
+              )}
+            </div>
           ))}
         </div>
       );
@@ -406,7 +420,7 @@ export const Block = memo(function Block(props: BlockProps) {
   }
   const tone = copy?.tone ?? 'idle';
   const status = copy?.status ?? '';
-  const resizable = isResizable(kind);
+  const resizable = isResizable(kind) && !extra.empty;
   const recorded = extra.planRecord ? planRecordPresentation(extra.planRecord, t, globalThis.document?.documentElement.lang || 'en') : undefined;
   const documentPlan = recorded?.plan ?? (kind === 'plan' ? extra.markdown : undefined);
   // A result whose request awaits notices is drawn as its own kind, the 알림 대기 block; it still acts as the result it stands in for.
@@ -421,7 +435,7 @@ export const Block = memo(function Block(props: BlockProps) {
   return (
     <div className={`mighty-block kind-${shownKind} tone-${tone}${copy?.soFar ? ' so-far' : ''}${selected ? ' selected' : ''}${copy?.outline === 'marching' || copy?.outline === 'solid' ? ' halo' : ''}`}
       data-block-id={id} data-kind={shownKind} data-renders={renders.current} data-changed={changed} data-visible={props.visible ? '1' : '0'} data-live={props.running ? '1' : undefined}
-      data-pending-request={extra.pending ? id : undefined}
+      data-pending-request={extra.pending ? id : undefined} data-empty={extra.empty ? '' : undefined}
       style={{ left: x, top: y, width: w, height: h }} title={copy?.fromRecord ? t('graph.history.tag') : undefined}>
       <div className={'mighty-head' + (role ? ' with-role' : '')}>
         <span className={'mighty-symbol kind-' + (copy?.notice ? 'task' : shownKind)} style={role ? { color: ink } : undefined}
@@ -433,6 +447,7 @@ export const Block = memo(function Block(props: BlockProps) {
             ? <>{copy.title!.slice(0, copy.title!.lastIndexOf(providerLabel(copy.provider)))}<ProviderMark provider={copy.provider} size={12} />{copy.title!.slice(copy.title!.lastIndexOf(providerLabel(copy.provider)))}</>
             : <>{copy?.provider && <ProviderMark provider={copy.provider} size={12} />}{copy?.title ?? ''}</>}
           {kind === 'resultFiles' && (extra.files?.length ?? 0) > 0 && <span className="mighty-title-count">{extra.files?.length}</span>}
+          {extra.empty && <span className="mighty-empty-note" data-testid={'mighty-empty-' + id}>{t('graph.block.noResponse')}</span>}
         </span>
         {role && fit?.showsMarks && role.marks.map((mark) => (
           <span key={mark.name} className="flow-mark" title={mark.help} aria-label={mark.help} data-testid={'mighty-mark-' + mark.name + '-' + id}><Icon name={markIcon(mark.name)} size={10} weight={2} /></span>
@@ -451,8 +466,12 @@ export const Block = memo(function Block(props: BlockProps) {
         <span className="mighty-controls">
           {/* A sent request: nothing while it is new, then 전송 중 by the pending rule, its failure at once (MightyStatusMark). */}
           {extra.pending ? <Pending state={extra.pending} /> : <Indicator kind={copy?.indicator ?? 'none'} />}
-          {/* A result's strip says its outcome by its colour; it carries no pill (M/MightyGraphView.swift result header). */}
           {!extra.pending && copy?.state && status !== '' && kind !== 'result' && <span className={'mighty-pill tone-' + tone}>{copy.state}</span>}
+          {/* A result's header says its outcome by its bar and a pill in the outcome's tone; the result so far and the 알림 대기 block say
+              theirs in the title alone. */}
+          {kind === 'result' && !copy?.soFar && !copy?.awaiting && copy?.state && status !== '' && (
+            <span className={'mighty-pill tone-' + tone} data-testid={'mighty-result-pill-' + id}>{copy.state}</span>
+          )}
           {copy?.capsule && <span className="mighty-capsule" title={copy.help}>{copy.capsule}</span>}
           {kind === 'result' && copy?.filesRunId && (extra.files?.length ?? 0) > 0 && (
             <button className={'mighty-icon' + (extra.filesOpen ? ' on' : '')} title={t(extra.filesOpen ? 'graph.resultFiles.closeButton' : 'graph.resultFiles.openButton')}
@@ -481,7 +500,7 @@ export const Block = memo(function Block(props: BlockProps) {
           )}
         </span>
       </div>
-      {props.visible && <Body {...props} recorded={recorded} />}
+      {props.visible && !extra.empty && <Body {...props} recorded={recorded} />}
       {kind === 'draft' && <svg className="mighty-draft-outline" width={w} height={h} aria-hidden="true"><rect x={0.75} y={0.75} width={w - 1.5} height={h - 1.5} rx={12} /></svg>}
       <Outline outline={copy?.outline ?? 'none'} w={w} h={h} />
       {resizable && (

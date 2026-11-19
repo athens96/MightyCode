@@ -184,10 +184,17 @@ impl DelegationLaunch {
                     let (inner, tokens) = (binding_factory(io.clone(), fake_exe(), link), tokens.clone());
                     Arc::new(move |request: &StartRunRequest, workspace: &Workspace| {
                         let made = inner(request, workspace);
-                        if let Some(binding) = &made
-                            && let Some(token) = binding.environment.get(TOKEN_KEY)
-                        {
-                            tokens.lock().unwrap().insert(request.session_id.clone(), token.clone());
+                        // A Codex run's environment holds it; a Claude run's servers read it from the config file its arguments name.
+                        let token = made.as_ref().and_then(|binding| {
+                            binding.environment.get(TOKEN_KEY).cloned().or_else(|| {
+                                let at = binding.arguments.iter().position(|a| a == "--mcp-config")?;
+                                let text = std::fs::read_to_string(binding.arguments.get(at + 1)?).ok()?;
+                                let config: serde_json::Value = serde_json::from_str(&text).ok()?;
+                                config["mcpServers"]["mighty-terminal"]["env"][TOKEN_KEY].as_str().map(str::to_string)
+                            })
+                        });
+                        if let Some(token) = token {
+                            tokens.lock().unwrap().insert(request.session_id.clone(), token);
                         }
                         made
                     })

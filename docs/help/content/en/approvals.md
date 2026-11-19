@@ -16,7 +16,7 @@ When the agent wants to do something outside its permission (run a command, chan
 An approval applies to this one request only. No rule is made that keeps allowing it.
 
 > [!note]
-> Approval cards appear in Claude panes (Always ask and similar modes) with Codex's {{ui:permission.label.onRequest}} mode, and in opencode panes in every mode but {{ui:permission.label.fullAccess}}. In Hermes panes they appear for file edits and dangerous commands. In other modes the CLI's own settings allow or block the action. Antigravity works differently and [asks in its own way](#antigravity-permission).
+> Approval cards appear in Claude panes ({{ui:permission.label.claude.default}} and similar modes) with Codex's {{ui:permission.label.onRequest}} mode, and in opencode panes in every mode but {{ui:permission.label.fullAccess}}. In Hermes panes they appear for file edits and dangerous commands. In other modes the CLI's own settings allow or block the action. Antigravity works differently and [asks in its own way](#antigravity-permission).
 
 ## Antigravity's permission card {#antigravity-permission}
 Antigravity cannot ask the app while it works. When it meets an action it would have to ask about (running a command, writing a file and so on), it skips just that action, finishes the turn, and then asks about everything it declined in one card. The card appears in {{ui:permission.label.default}} too, and the same card appears on your phone.

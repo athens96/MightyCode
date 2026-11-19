@@ -41,6 +41,14 @@ Click {{ui:phone.dashboard.title}} under the search field in the sidebar to see 
 
 ![[dashboard]]
 
+## Review queue {#review}
+Everything ready to review, in one place. Click {{ui:review.sidebar}} under {{ui:phone.dashboard.title}} in the sidebar, or press {{kbd:⇧⌘R}} (Windows: {{kbd:Ctrl+Shift+R}}), to open the {{ui:review.open}} panel. The number beside the entry is how many items wait.
+- What it lists: [worktree panes](delegation.md#pane-worktree) and [child panes](delegation.md#states) that finished with changes, and each pane's newest finished request whose changed files were kept ([reviewing a request's changes](agent-pane.md#request-changes)). A pane that is still working shows once it finishes.
+- Each row shows the pane's title, its agent, kind and workspace, the branch and its base, the files changed with lines added and removed, and its state ({{ui:review.status.ready}}, {{ui:review.status.conflict}}, {{ui:review.status.merged}}). Conflicts come first, merged items last.
+- Buttons: {{ui:review.action.changes}}, {{ui:review.action.merge}} ({{ui:review.action.commitMerge}} for a worktree pane with files not committed), {{ui:editor.open}}, {{ui:review.action.pr}} (worktree panes), {{ui:review.action.discard}}, {{ui:review.action.focus}} and {{ui:review.action.dismiss}}. Merge, discard and PR are the same actions as the pane's bar or the child's card, with the same confirmations. A request's {{ui:review.action.changes}} opens the request's changes review.
+- {{ui:review.action.dismiss}} hides an item until its work changes again.
+- The list reads git again when a run ends, when the panel opens and when you click {{ui:review.refresh}}, never on every redraw.
+
 ## Add a pane {#add-pane}
 A pane is an AI agent (Claude, Codex, Antigravity, pi, opencode or Hermes), a terminal or a files pane.
 
@@ -98,6 +106,7 @@ Right-clicking a pane's header offers {{ui:menu.rename}}, {{ui:session.menu.focu
 | {{kbd:⌘T}} | {{ui:menu.addTerminalPane}} |
 | {{kbd:⇧⌘E}} | {{ui:menu.showFiles}} |
 | {{kbd:⇧⌘F}} | {{ui:conversationSearch.open}} |
+| {{kbd:⇧⌘R}} | {{ui:review.open}} |
 | {{kbd:⌘K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{ui:menu.settings}} |

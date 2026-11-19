@@ -5,7 +5,7 @@
 .pending-bars { display: inline-flex; align-items: center; gap: 2px; width: 18px; height: 14px; flex: none; }
 .pending-bars span { width: 3px; height: 12px; border-radius: 1.5px; background: var(--run); transform: scaleY(0.33); animation: pending-bar 1.6s ease-in-out infinite; }
 .pending-pill { height: 18px; line-height: 18px; padding: 0 var(--space-sm); border-radius: 9px; font-size: var(--type-small); font-weight: 700; background: var(--run-soft); color: var(--accent); white-space: nowrap; }
-.pending-failed { font-size: 10.5px; color: var(--err-text); user-select: text; overflow: hidden; display: -webkit-inline-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.pending-failed { font-size: var(--type-small); color: var(--err-text); user-select: text; overflow: hidden; display: -webkit-inline-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .pending-failed .icon { flex: none; vertical-align: -2px; margin-right: var(--space-xs); }
 @keyframes pending-bar { 0%, 100% { transform: scaleY(0.33); } 50% { transform: scaleY(1); } }
 @keyframes pending-in { from { opacity: 0; } to { opacity: 1; } }

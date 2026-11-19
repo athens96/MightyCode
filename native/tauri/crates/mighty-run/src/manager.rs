@@ -73,10 +73,13 @@ pub type GraphNodes = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
 /// What a pane's Agent IO and delegation binding (C# `AgentIOBinding`, W7) adds to a Claude or Codex run.
 pub struct RunBinding {
+    /// Laid over the CLI's own environment.
     pub environment: BTreeMap<String, String>,
     pub arguments: Vec<String>,
     /// Every line the run logs or reads passes it (the pane's token never reaches the transcript).
     pub redact: Arc<dyn Fn(&str) -> String + Send + Sync>,
+    /// Called once when the run's task ends, however it ends (W7's binding deletes the private MCP config file it wrote).
+    pub ended: Option<Box<dyn FnOnce() + Send>>,
 }
 
 pub type BindingFactory = Arc<dyn Fn(&StartRunRequest, &Workspace) -> Option<RunBinding> + Send + Sync>;
@@ -236,6 +239,8 @@ struct Run {
     parser: Mutex<Option<Arc<OutputParser>>>,
     tracker: Mutex<Option<SharedSink>>,
     redact: Mutex<Option<Redact>>,
+    /// The binding's [`RunBinding::ended`], called when the run's task ends ([`RunEnd`]).
+    binding_ended: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     turn_reopened: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     /// The folder the run works in, once resolved.
     workspace_root: Mutex<Option<String>>,
@@ -443,6 +448,7 @@ impl RunManager {
                 parser: Mutex::new(None),
                 tracker: Mutex::new(None),
                 redact: Mutex::new(None),
+                binding_ended: Mutex::new(None),
                 turn_reopened: Mutex::new(None),
                 workspace_root: Mutex::new(None),
                 bytes: AtomicUsize::new(0),
@@ -660,6 +666,9 @@ impl Drop for RunEnd {
         let run = &self.run;
         if let Some(child) = lock(&run.child).take() {
             child.kill();
+        }
+        if let Some(ended) = lock(&run.binding_ended).take() {
+            ended();
         }
         {
             let mut runs = lock(&self.inner.runs);
@@ -1828,6 +1837,7 @@ impl Exec {
                 && let Some(binding) = factory(&request, &workspace)
             {
                 *lock(&run.redact) = Some(binding.redact.clone());
+                *lock(&run.binding_ended) = binding.ended;
                 environment.extend(binding.environment);
                 arguments.extend(binding.arguments);
             }

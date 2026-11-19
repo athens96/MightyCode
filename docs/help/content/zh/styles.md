@@ -22,7 +22,7 @@ section: styles
 | Claude 计划（클러드 플랜） | 每个新请求都以 Claude 的计划模式开始。批准计划卡片后开始执行。清单进度和后台任务以小组件形式显示。 |
 
 ## 计划卡片 {#plan-card}
-Claude 在计划模式（Plan mode 或 Claude 计划风格）中完成计划后，会弹出计划卡片。
+Claude 在{{ui:permission.label.claude.plan}}（或 Claude 计划风格）中完成计划后，会弹出计划卡片。
 
 ![[plan-card]]
 

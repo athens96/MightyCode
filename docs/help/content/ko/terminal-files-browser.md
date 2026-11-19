@@ -35,5 +35,14 @@ Claude나 Codex가 사용자가 봐야 하는 명령(개발 서버, 로그인 �
 
 ![[files-pane]]
 
+### 편집기에서 열기 {#open-in-editor}
+파일을 고치려면 쓰던 편집기에서 엽니다. 줄을 아는 곳에서는 그 줄로 바로 갑니다.
+- 파일 창: 미리보기 머리의 {{ui:editor.open}} 단추, 목록에서 파일이나 폴더를 오른쪽 클릭한 메뉴({{ui:editor.openFolder}}).
+- 대화와 마이티 흐름: 파일 이름을 {{kbd:⌘}}-클릭(Windows: {{kbd:Ctrl}}-클릭)하면 미리보기 대신 편집기에서 그 줄을 엽니다. 미리보기 머리와 결과 파일 목록의 줄마다 있는 단추도 같습니다.
+- 변경 보기: [요청 변경 검토](agent-pane.md#request-changes)와 worktree 창의 변경 보기에서 줄을 오른쪽 클릭하면 그 줄을, 단추는 고른 파일을 엽니다.
+- worktree 창 막대의 메뉴와 [검토 대기열](layout.md#review)에서는 worktree 폴더를 엽니다.
+
+어떤 편집기를 쓸지는 [설정](settings.md#agents)의 {{ui:settings.editor.label}}에서 고릅니다. 자동이면 VS Code, Cursor, Zed, JetBrains IDE(IntelliJ IDEA, WebStorm, PyCharm 등), Sublime Text 순으로 찾은 첫 번째를 씁니다. 로그인 셸의 PATH에 있는 명령(`code`, `cursor`, `zed`, `idea`, `subl`)을 먼저 찾고, Mac에서는 응용 프로그램 폴더의 앱 안에 든 명령을, Windows에서는 보통의 설치 폴더에 있는 실행 파일을 찾습니다. {{ui:settings.editor.system}}은 줄 번호 없이 파일의 기본 앱으로 엽니다. 코드를 실행하는 파일은 열지 않습니다. 작업 공간이나 worktree 밖의 경로는 열지 않습니다.
+
 ## 웹 링크 {#web-links}
 답변 속 웹 링크와 에이전트가 여는 웹 페이지는 기본 브라우저에서 열립니다.

@@ -6,9 +6,9 @@
 .mighty-header { font-size: var(--type-row); font-weight: 700; color: var(--ink); white-space: nowrap; }
 .mighty-summary { flex: 1; min-width: 0; font-size: var(--type-small); color: var(--ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mighty-switch { display: inline-flex; flex: none; gap: 2px; padding: 2px; border-radius: var(--radius-row); background: var(--segment-track); }
-.mighty-switch button { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 var(--space-md); border: 0; border-radius: var(--radius-segment); background: transparent; color: var(--ink2); font-size: var(--type-pill); font-weight: 600; cursor: default; white-space: nowrap; }
+.mighty-switch button { display: inline-flex; align-items: center; gap: 5px; height: var(--layout-hit-target); padding: 0 var(--space-md); border: 0; border-radius: var(--radius-segment); background: transparent; color: var(--ink2); font-size: var(--type-pill); font-weight: 600; cursor: default; white-space: nowrap; }
 .mighty-switch button.on { background: var(--segment-on); color: var(--ink); box-shadow: 0 1px 1px rgba(0, 0, 0, .12); }
-.mighty-icon { min-width: 22px; height: 22px; padding: 0 4px; border: 0; border-radius: var(--radius-segment); background: transparent; color: var(--ink2); cursor: pointer; font-size: var(--type-body); line-height: 1; }
+.mighty-icon { min-width: var(--layout-hit-target); height: var(--layout-hit-target); padding: 0 4px; border: 0; border-radius: var(--radius-segment); background: transparent; color: var(--ink2); cursor: pointer; font-size: var(--type-body); line-height: 1; }
 .mighty-icon:hover:not(:disabled) { background: color-mix(in srgb, var(--ink) 8%, transparent); }
 .mighty-icon:disabled { color: var(--ink3); cursor: default; }
 .mighty-icon.on { color: var(--accent); }
@@ -22,7 +22,7 @@
 .mighty-diagram { position: static; }
 .mighty-diagram-zoom { position: absolute; top: 0; right: var(--inset-graph-bar-h); height: 32px; display: flex; align-items: center; z-index: 2; }
 .mighty-zoom { display: inline-flex; align-items: center; gap: 2px; }
-.mighty-zoom-label { width: 44px; height: 22px; border: 0; background: transparent; color: var(--ink2); font-variant-numeric: tabular-nums; font-size: var(--type-body); cursor: default; }
+.mighty-zoom-label { width: 44px; height: var(--layout-hit-target); border: 0; background: transparent; color: var(--ink2); font-variant-numeric: tabular-nums; font-size: var(--type-body); cursor: default; }
 /* touch-action: none only where a touch screen is: on WebKit (the Mac) it makes every block of the diagram part of the
    touch-region bookkeeping, which is redone on each repaint and kept the page busy while a request ran. */
 .mighty-viewport { position: relative; flex: 1; min-height: 0; overflow: hidden; outline: none; cursor: default; }
@@ -60,31 +60,36 @@
 .mighty-block[data-live], .mighty-flow-card[data-live] { will-change: transform; }
 .mighty-block.halo { box-shadow: 0 0 0 4px var(--run-soft); }
 .mighty-block.selected { outline: 2px solid var(--accent); outline-offset: -1px; }
-/* A block's header (transcriptCard): Layout.blockHead high, its symbol in the kind's tint, the title in 12 bold; a result's header is a strip in its outcome's fill with white words. */
+/* A block's header (transcriptCard): Layout.blockHead high, its symbol in the kind's tint, the title in 12 bold. A result's header stays on the
+   card: a 3px bar in its outcome's colour down its leading edge, the symbol in the outcome's ink and a pill with the outcome's word, so the
+   status reads in both themes without a saturated strip across the block. */
 .mighty-head { flex: none; height: var(--layout-block-head); display: flex; align-items: center; gap: var(--space-sm); padding: 0 var(--inset-graph-block-body-h); border-bottom: var(--stroke-line) solid var(--line); min-width: 0; }
-.mighty-block.kind-result .mighty-head { background: var(--done); color: var(--on-status); border-bottom-color: transparent; border-radius: calc(var(--radius-block) - 1px) calc(var(--radius-block) - 1px) 0 0; }
-.mighty-block.kind-result.tone-err .mighty-head { background: var(--err); }
-.mighty-block.kind-result.tone-stop .mighty-head { background: var(--stop); }
-/* The result so far (현재까지의 결과): a neutral strip; its tone stays the request's. */
-.mighty-block.kind-result.so-far .mighty-head { background: var(--idle); }
-/* The 알림 대기 block (Core MightyGraphBlock.Awaiting): the wait strip, its words and symbol in the wait ink on it. */
-.mighty-block.kind-awaitingNotice .mighty-head { background: var(--wait); color: var(--on-wait); border-bottom-color: transparent; border-radius: calc(var(--radius-block) - 1px) calc(var(--radius-block) - 1px) 0 0; }
-.mighty-block.kind-awaitingNotice .mighty-head .mighty-icon, .mighty-block.kind-awaitingNotice .mighty-head .mighty-capsule, .mighty-symbol.kind-awaitingNotice { color: var(--on-wait); }
-.mighty-block.kind-awaitingNotice .mighty-head .mighty-capsule { background: rgba(0, 0, 0, .12); }
+.mighty-block.kind-result, .mighty-block.kind-awaitingNotice { --result-bar: var(--done); --result-ink: var(--done-text); }
+.mighty-block.kind-result.tone-err { --result-bar: var(--err); --result-ink: var(--err-text); }
+.mighty-block.kind-result.tone-stop { --result-bar: var(--stop); --result-ink: var(--stop-text); }
+/* The result so far (현재까지의 결과): a neutral bar; its tone stays the request's. */
+.mighty-block.kind-result.so-far { --result-bar: var(--ink3); --result-ink: var(--ink2); }
+.mighty-block.kind-result .mighty-head, .mighty-block.kind-awaitingNotice .mighty-head {
+  background: var(--card); box-shadow: inset var(--stroke-rail) 0 0 var(--result-bar);
+  border-radius: calc(var(--radius-block) - 1px) 0 0 0;
+}
+.mighty-block.kind-result .mighty-symbol { color: var(--result-ink); }
+/* The 알림 대기 block (Core MightyGraphBlock.Awaiting): under way, not waiting on the user, so the run tone on its soft wash and a clock;
+   amber is kept for what needs the user (a permission, a question, a plan). */
+.mighty-block.kind-awaitingNotice { --result-bar: var(--run); --result-ink: var(--accent); }
+.mighty-block.kind-awaitingNotice .mighty-head { background: var(--run-soft); }
+.mighty-symbol.kind-awaitingNotice { color: var(--accent); }
 .mighty-awaiting { display: flex; flex-direction: column; gap: var(--space-xs); padding: var(--inset-graph-block-body-v) var(--inset-graph-block-body-h) var(--space-md); border-top: var(--stroke-line) solid var(--line); }
 .mighty-awaiting-row { display: flex; align-items: baseline; gap: var(--space-sm); min-width: 0; }
 .mighty-awaiting-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
-.mighty-awaiting-word { flex: none; font-size: 11px; color: var(--ink2); }
-.mighty-awaiting-progress { font-size: 11px; font-weight: 700; color: var(--wait-text); }
-.mighty-block.kind-result .mighty-head .mighty-icon, .mighty-block.kind-result .mighty-head .mighty-capsule { color: var(--on-status); }
-.mighty-block.kind-result .mighty-head .mighty-capsule { background: rgba(0, 0, 0, .18); }
+.mighty-awaiting-word { flex: none; font-size: var(--type-small); color: var(--ink2); }
+.mighty-awaiting-progress { font-size: var(--type-small); font-weight: 700; color: var(--accent); }
 .mighty-symbol { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; color: var(--accent); }
 .mighty-symbol.kind-work, .mighty-symbol.kind-agent, .mighty-symbol.kind-execution { color: var(--agent-text); }
 .mighty-symbol.kind-task { color: var(--task-text); }
 .mighty-symbol.kind-steer { color: var(--steer-text); }
 .mighty-symbol.kind-compact { color: var(--compact-text); }
 .mighty-symbol.kind-question { color: var(--question-text); }
-.mighty-symbol.kind-result { color: var(--on-status); }
 .mighty-title { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 4px; font-size: var(--type-block); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mighty-controls { flex: none; display: inline-flex; align-items: center; gap: var(--space-sm); }
 .mighty-pill { height: 18px; line-height: 18px; padding: 0 var(--space-sm); border-radius: 9px; font-size: var(--type-small); font-weight: 700; background: var(--track); color: var(--ink2); white-space: nowrap; }
@@ -168,10 +173,14 @@
 .mighty-block.kind-resultFiles .mighty-body { display: flex; flex-direction: column; gap: 6px; padding: var(--space-sm); }
 .mighty-file { display: flex; align-items: flex-start; gap: var(--space-sm); width: 100%; text-align: left; border: 0; border-radius: 8px; background: var(--card-raised); color: var(--ink); padding: 6px var(--space-sm); cursor: default; min-width: 0; }
 .mighty-file:hover { background: color-mix(in srgb, var(--ink) 6%, var(--card-raised)); }
+.mighty-file-row { display: flex; align-items: stretch; gap: 4px; min-width: 0; }
+.mighty-file-row .mighty-file { flex: 1; }
+.mighty-file-editor { flex: none; display: inline-grid; place-items: center; width: 28px; border: 0; border-radius: 8px; background: var(--card-raised); color: var(--ink2); cursor: default; }
+.mighty-file-editor:hover { background: color-mix(in srgb, var(--ink) 6%, var(--card-raised)); color: var(--accent); }
 .mighty-file-glyph { flex: none; margin-top: 2px; color: var(--accent); }
 .mighty-file-words { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .mighty-file-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mighty-file-path { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mighty-file-path { font-family: var(--font-mono); font-size: var(--type-small); color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mighty-title-count { margin-left: var(--space-sm); font-size: 11px; font-weight: 600; color: var(--ink2); }
 .mighty-block.kind-result .mighty-head .mighty-icon { display: inline-flex; align-items: center; gap: 3px; width: auto; padding: 0 4px; font-size: 11px; font-weight: 700; }
 .mighty-images { padding: var(--space-md); }
@@ -261,23 +270,28 @@
 .timeline-kind.tint-steer { color: var(--steer-text); }
 .timeline-kind.tint-compact { color: var(--compact-text); }
 .timeline-kind.tint-question { color: var(--question-text); }
-.timeline-latest { display: flex; align-items: center; gap: 6px; padding-top: 2px; font-family: var(--font-mono); font-size: 10.8px; color: var(--ink2); white-space: nowrap; overflow: hidden; }
+.timeline-latest { display: flex; align-items: center; gap: 6px; padding-top: 2px; font-family: var(--font-mono); font-size: var(--type-mono); color: var(--ink2); white-space: nowrap; overflow: hidden; }
 .timeline-latest > span:last-child { overflow: hidden; text-overflow: ellipsis; }
 .timeline-pulse { flex: none; width: 7px; height: 7px; border-radius: 4px; background: var(--run); will-change: opacity; animation: timeline-pulse 1.6s ease-in-out infinite; }
 @keyframes timeline-pulse { 50% { opacity: 0.3; } }
 .timeline-body { border-top: var(--stroke-line) solid var(--line); }
 .timeline-transcript { height: 260px; overflow: auto; }
-/* The result under a request (MightyTimelineResultCard): radius 16, a strip in the outcome's fill, the answer in 12.5 to eight lines. */
-.timeline-result { margin-left: calc(32px + var(--space-md)); border-radius: 16px; background: var(--card); overflow: hidden; flex: none; }
-.timeline-result-head { display: flex; align-items: center; gap: var(--space-sm); padding: var(--inset-graph-block-body-v) var(--inset-graph-block-body-h); background: var(--done); color: var(--on-status); }
-.timeline-result.tone-err .timeline-result-head { background: var(--err); }
-.timeline-result.tone-stop .timeline-result-head { background: var(--stop); }
-/* The result so far (현재까지의 결과) comes idle from the host: a neutral strip. */
-.timeline-result.tone-idle .timeline-result-head { background: var(--idle); }
-/* Awaiting notices (알림 대기 중) comes in the wait tone from the host: the wait strip, its words in the wait ink on it. */
-.timeline-result.tone-wait .timeline-result-head { background: var(--wait); color: var(--on-wait); }
+/* The result under a request (MightyTimelineResultCard): radius 16, a header on the card with a 3px bar in the outcome's colour and the symbol
+   in its ink (as the diagram's result block), the answer in 12.5 to eight lines. */
+.timeline-result { margin-left: calc(32px + var(--space-md)); border-radius: 16px; background: var(--card); overflow: hidden; flex: none; --result-bar: var(--done); --result-ink: var(--done-text); }
+.timeline-result-head { display: flex; align-items: center; gap: var(--space-sm); padding: var(--inset-graph-block-body-v) var(--inset-graph-block-body-h); background: var(--card); color: var(--ink);
+  box-shadow: inset var(--stroke-rail) 0 0 var(--result-bar); border-bottom: var(--stroke-line) solid var(--line); }
+.timeline-result-head > svg { flex: none; color: var(--result-ink); }
+.timeline-result.tone-err { --result-bar: var(--err); --result-ink: var(--err-text); }
+.timeline-result.tone-stop { --result-bar: var(--stop); --result-ink: var(--stop-text); }
+/* The result so far (현재까지의 결과) comes idle from the host: a neutral bar. */
+.timeline-result.tone-idle { --result-bar: var(--ink3); --result-ink: var(--ink2); }
+/* Awaiting notices (알림 대기 중) comes in the run tone from the host: under way, on the run's soft wash with a clock (amber is for the user). */
+.timeline-result.tone-run { --result-bar: var(--run); --result-ink: var(--accent); }
+.timeline-result.tone-run .timeline-result-head { background: var(--run-soft); }
+.timeline-result.tone-wait { --result-bar: var(--wait); --result-ink: var(--wait-text); }
 .timeline-result-title { font-size: 12px; font-weight: 800; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.timeline-result-caption { font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; white-space: nowrap; }
+.timeline-result-caption { font-family: var(--font-mono); font-size: var(--type-small); font-weight: 600; white-space: nowrap; color: var(--ink2); }
 .timeline-result-body { display: flex; flex-direction: column; gap: 4px; padding: var(--space-sm) var(--inset-graph-block-body-h) var(--space-md); }
 .timeline-result-text { font-family: var(--font-transcript); font-size: 12.5px; color: var(--ink); white-space: pre-wrap; user-select: text; }
 .timeline-result-text.folded { display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }
@@ -290,7 +304,7 @@
 .structure-place { position: relative; }
 .structure-position { border: 0; padding: var(--space-xxs) var(--space-xs); border-radius: var(--radius-file-row); background: transparent; color: var(--ink); font: inherit; font-weight: 700; font-size: var(--type-title); cursor: pointer; }
 .structure-position:hover { background: var(--subtle); }
-.structure-position span { font-size: 9px; color: var(--ink2); }
+.structure-position span { font-size: var(--type-badge); color: var(--ink2); }
 /* The pipeline list: the standard's narrow popover (.popover width-s, dialogs/dialog.css) under its button. */
 .structure-list { position: absolute; top: calc(100% + var(--space-xs)); left: 0; z-index: 20; display: flex; flex-direction: column; gap: var(--space-xxs); padding: var(--space-sm); }
 .structure-entry { display: flex; align-items: flex-start; gap: var(--space-sm); width: 100%; padding: var(--space-xs) var(--space-sm); border: 0; border-radius: var(--radius-file-row); background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
@@ -373,18 +387,19 @@
 .structure-node-glyph.task { color: var(--task-text); }
 .structure-node-glyph.steer { color: var(--steer-text); }
 .structure-node-title { font-size: 11px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.structure-node-meta { font-size: 10px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.structure-parent { display: flex; align-items: center; gap: var(--space-xs); font-size: 10px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.structure-prompt { font-family: var(--font-transcript); font-size: 10.5px; color: var(--ink2); white-space: pre-wrap; word-break: break-word; }
+.structure-node-meta { font-size: var(--type-small); color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.structure-parent { display: flex; align-items: center; gap: var(--space-xs); font-size: var(--type-small); color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.structure-prompt { font-family: var(--font-transcript); font-size: var(--type-small); color: var(--ink2); white-space: pre-wrap; word-break: break-word; }
 .structure-output { font-family: var(--font-transcript); font-size: 11px; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
 /* A background run's output lines on a pipeline card, and Claude's reply to its notice. */
-.structure-tail { padding: var(--space-xxs) var(--space-sm); border-radius: var(--radius-file-row); background: var(--subtle); font-family: var(--font-mono); font-size: 10.5px; color: var(--ink2); user-select: text; }
+.structure-tail { padding: var(--space-xxs) var(--space-sm); border-radius: var(--radius-file-row); background: var(--subtle); font-family: var(--font-mono); font-size: var(--type-small); color: var(--ink2); user-select: text; }
 .structure-tail > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .structure-reply { display: flex; flex-direction: column; gap: var(--space-xxs); }
-.structure-reply-title { font-size: 10px; font-weight: 700; color: var(--ink2); }
+.structure-reply-title { font-size: var(--type-small); font-weight: 700; color: var(--ink2); }
 
 /* ── pipeline state colours (fixture `pipeline`, Core MightyStructure.Tone, M/MightyStructureView.swift) ── */
-/* A column's cards sit on its tone's soft tint; each card on a lighter one, so it stands out, with a bar in the tone's mark down its leading edge.
+/* A column takes a faint wash of its tone's soft tint and each card the stronger tint over its own card surface, with a bar in the tone's mark down
+   its leading edge, so the colour sits on the cards rather than across the board.
    A step still to come has none, and neither has a sub-agent card without a tone (as on the Mac). Both the tint and the bar are background
    layers, so the card's own corners clip them and nothing in the card is cut off. */
 .tint-run { --tint-soft: var(--run-soft); --tint-mark: var(--run); }
@@ -442,7 +457,11 @@
 .flow-card-figures-text { flex: none; white-space: nowrap; }
 
 /* A request's plan column, left of its column: its title and progress, a line per step with its mark and time. */
-/* The role view's progress panel (FlowParts ProgressPanel, macOS MightyGraphProgressPanel): fixed over the diagram's top-left corner, the request in view. */
+/* A settled result with nothing to show (layout emptyResultIds): its header alone, the "no reply" words after its title. */
+.mighty-block[data-empty] .mighty-head { border-bottom: 0; }
+.mighty-empty-note { margin-left: var(--space-sm); min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 400; color: var(--ink2); }
+/* The role view's progress panel (FlowParts ProgressPanel, macOS MightyGraphProgressPanel): fixed over the diagram's top-left corner, the request in view.
+   The camera keeps its room (camera.ts ProgressSafeLeft: these 8 + 280 and a 16 gap) while it shows; a narrow pane opens it folded (ProgressFoldWidth). */
 .mighty-progress { position: absolute; left: var(--space-md); top: var(--space-md); z-index: 1; box-sizing: border-box; width: min(280px, calc(100% - 2 * var(--space-md))); max-height: calc(100% - 2 * var(--space-md)); overflow-y: auto; display: flex; flex-direction: column; border-radius: var(--radius-block); border: var(--stroke-line) solid var(--line); background: var(--card); color: var(--ink); box-shadow: 0 2px 6px color-mix(in srgb, black 12%, transparent); }
 .mighty-progress .flow-outline-head { height: 29px; }
 .mighty-progress-request { flex: none; display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: var(--space-sm) var(--inset-graph-block-body-h); border: 0; border-bottom: var(--stroke-line) solid var(--line); background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit; }
@@ -457,7 +476,7 @@
 /* The background work the request started (macOS MightyGraphProgressPanel backgroundSection): under the steps, its own heading with running/total,
    a line per command or sub-agent; its lines lead nowhere, so they keep the plain cursor and no hover. */
 .mighty-progress-background { padding: 0 0 4px; border-top: var(--stroke-line) solid var(--line); }
-.mighty-progress-background-head { flex: none; height: 20px; display: flex; align-items: center; gap: var(--space-xs); padding: 0 var(--inset-graph-block-body-h); color: var(--ink2); font-size: 10px; }
+.mighty-progress-background-head { flex: none; height: 20px; display: flex; align-items: center; gap: var(--space-xs); padding: 0 var(--inset-graph-block-body-h); color: var(--ink2); font-size: var(--type-small); }
 .mighty-progress-background-title { font-weight: 600; }
 .mighty-progress-background-count { font-variant-numeric: tabular-nums; }
 /* Its lines scroll under its heading, about six at a time, running ones first. */
@@ -506,5 +525,5 @@
 .mighty-log-row { height: var(--log-row); display: flex; align-items: center; gap: var(--space-md); padding: 0 var(--inset-graph-bar-h); border: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; font: inherit; }
 .mighty-log-row:hover { background: var(--track); }
 .mighty-log-clock { flex: none; color: var(--ink2); font-size: var(--type-small); font-variant-numeric: tabular-nums; }
-.mighty-log-who { flex: none; width: 132px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--type-pill); font-weight: 600; }
+.mighty-log-who { flex: none; max-width: 132px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--type-pill); font-weight: 600; }
 .mighty-log-what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--type-pill); }

@@ -61,6 +61,7 @@ section: delegation
 - **栏的菜单**:{{ui:paneWorktree.bar.changes}}(相对基础分支更改的文件及差异)、{{ui:paneWorktree.bar.terminal}}、{{ui:paneWorktree.bar.finder}} (Windows: {{ui:menu.showInExplorer}})、撤销最近一次合并(仅当工作区文件夹此后没有变化时)、{{ui:paneWorktree.bar.pr}}(确认后将分支推送到 origin,从不强制;如果是 GitHub 则打开创建拉取请求的页面)、{{ui:paneWorktree.bar.discard}}(有子窗格基于此窗格的分支时会拒绝)。
 - **准备**:工作区行菜单中 {{ui:paneWorktree.menu.copy}} 列出的文件(如 `.env`)会复制到新 worktree,然后运行一次 {{ui:paneWorktree.menu.setup}}。窗格的运行会获得 `PORT`、`MIGHTY_WORKSPACE_FOLDER` 和 `MIGHTY_WORKTREE` 环境变量。
 - **关闭与列表**:没有未合并工作的窗格关闭时会一并删除其 worktree。仍有工作的会保留,可在工作区行菜单的 {{ui:paneWorktree.menu.list}} 中重新作为窗格打开、合并或删除。
+- **审阅队列**：工作结束且留下更改的 worktree 窗格和子窗格会汇集到[{{ui:review.open}}](layout.md#review)。栏菜单中的{{ui:editor.openFolder}}会在外部编辑器中打开窗格工作的文件夹。
 
 ## 让 Claude 分工 {#delegate}
 Claude 或 Codex 窗格（父窗格）也可以把工作拆开，交给其他窗格（子窗格）；除非它指定别的代理，子窗格运行它自己的代理。子窗格报告后，父窗格收到通知，阅读报告，再决定是否合并结果。Claude 和 Codex 父窗格在 Mac 应用和 Windows 应用中都可使用。

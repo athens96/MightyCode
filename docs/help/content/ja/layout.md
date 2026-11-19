@@ -41,6 +41,14 @@ section: layout
 
 ![[dashboard]]
 
+## レビュー待ち {#review}
+レビューするものを一か所にまとめて見ます。サイドバーの{{ui:phone.dashboard.title}}の下にある{{ui:review.sidebar}}を押すか、{{kbd:⇧⌘R}}(Windows: {{kbd:Ctrl+Shift+R}})を押すと{{ui:review.open}}パネルが開きます。項目の横の数字は待っている件数です。
+- 表示されるもの: 変更を残して終わった[worktreeペイン](delegation.md#pane-worktree)と[子ペイン](delegation.md#states)、そしてペインごとに最後に終わったリクエストのうち変更したファイルが保管されたもの([リクエストの変更をレビュー](agent-pane.md#request-changes))です。まだ作業中のペインは終わるまで表示されません。
+- 各行にペインの名前、エージェント、種類、ワークスペース、ブランチとベースブランチ、変更したファイル数と追加・削除した行数、状態({{ui:review.status.ready}}、{{ui:review.status.conflict}}、{{ui:review.status.merged}})が表示されます。競合が一番上、マージ済みが一番下です。
+- ボタン: {{ui:review.action.changes}}、{{ui:review.action.merge}}(コミットしていないファイルがあるworktreeペインは{{ui:review.action.commitMerge}})、{{ui:editor.open}}、{{ui:review.action.pr}}(worktreeペイン)、{{ui:review.action.discard}}、{{ui:review.action.focus}}、{{ui:review.action.dismiss}}。マージ・破棄・PRはペインのバーや子のカードと同じ操作なので、同じ確認を経ます。リクエストの{{ui:review.action.changes}}はリクエストの変更レビューを開きます。
+- {{ui:review.action.dismiss}}を押すと、その項目は作業が再び変わるまで隠れます。
+- 一覧は実行が終わったとき、パネルを開いたとき、{{ui:review.refresh}}を押したときにgitを読み直します。描画のたびには読みません。
+
 ## ペインを追加する {#add-pane}
 ペインは、AIエージェント(Claude、Codex、Antigravity、pi、opencode、Hermes)、ターミナル、ファイルのいずれかです。
 
@@ -98,6 +106,7 @@ section: layout
 | {{kbd:⌘T}} | {{ui:menu.addTerminalPane}} |
 | {{kbd:⇧⌘E}} | {{ui:menu.showFiles}} |
 | {{kbd:⇧⌘F}} | {{ui:conversationSearch.open}} |
+| {{kbd:⇧⌘R}} | {{ui:review.open}} |
 | {{kbd:⌘K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{ui:menu.settings}} |

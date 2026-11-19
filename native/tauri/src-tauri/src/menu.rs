@@ -69,11 +69,12 @@ pub const VIEW: [Item; 5] = [
 ];
 
 /// Workspace (Swift's `CommandMenu(L("menu.workspace"))`).
-pub const WORKSPACE: [Item; 12] = [
+pub const WORKSPACE: [Item; 13] = [
     page("search", "menu.searchWorkspaces", Some("Cmd+K")),
     page("newShell", "menu.addTerminalPane", Some("Cmd+T")),
     page("files", "menu.showFiles", Some("Shift+Cmd+E")),
     page("conversationSearch", "conversationSearch.open", Some("Shift+Cmd+F")),
+    page("reviewQueue", "review.open", Some("Shift+Cmd+R")),
     page("workMap", "workMap.open", None),
     page("usage", "usage.open", None),
     host("shellCommand", "shellCommand.install"),
@@ -416,6 +417,7 @@ mod tests {
                 ("newShell", "Cmd+T"),
                 ("files", "Shift+Cmd+E"),
                 ("conversationSearch", "Shift+Cmd+F"),
+                ("reviewQueue", "Shift+Cmd+R"),
                 ("settings", "Cmd+,"),
                 ("help", "Cmd+?"),
             ]

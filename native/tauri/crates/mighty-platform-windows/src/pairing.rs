@@ -6,28 +6,43 @@
 //!
 //! One difference from C#, on purpose: C#'s constructor secures (and creates) the folder before it reads; here only a save does, so a
 //! read-only launch (verification mode) neither makes the folder nor touches its access list.
+//!
+//! A second one: given a vault (the app's: DPAPI, `dpapi.rs`), the pairing key, the host token and the relay secret key are kept
+//! there and the file is version 2, naming the vault item instead (`identity_file::encode_vaulted`, `mighty_platform::pairing::
+//! vaulted`); a version 1 file is read as before and its secrets moved out (they stay in it when DPAPI refuses). C# 0.4.x refuses a
+//! version 2 file, so going back to it means pairing the phones again.
 
 use std::fs;
 use std::io::{Read, Write};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use mighty_platform::pairing::identity_file::{self, FILE, MAXIMUM_BYTES};
-use mighty_platform::{PairingIdentity, PairingStore, PlatformError, Result};
+use mighty_platform::pairing::vaulted::{Secrets, VaultSlot};
+use mighty_platform::{PairingIdentity, PairingStore, PlatformError, Result, SecretVault};
 
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 /// `FILE_SHARE_NONE`: nobody else opens the temporary file while it is written.
 const SHARE_NONE: u32 = 0;
 
 /// `mobile-identity.json` in `folder` (the profile's `mobile-remote`).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct WindowsPairing {
     folder: PathBuf,
+    /// Where the secrets go when there is a vault.
+    vault: VaultSlot,
 }
 
 impl WindowsPairing {
+    /// The secrets in the file (C#'s version 1).
     pub fn new(folder: PathBuf) -> WindowsPairing {
-        WindowsPairing { folder }
+        WindowsPairing { folder, vault: VaultSlot::none() }
+    }
+
+    /// The secrets in `vault`, the file version 2; a version 1 file's secrets moved there when it is read.
+    pub fn with_vault(folder: PathBuf, vault: Arc<dyn SecretVault>) -> WindowsPairing {
+        WindowsPairing { folder, vault: VaultSlot::new(vault) }
     }
 
     fn file(&self) -> PathBuf {
@@ -71,14 +86,46 @@ impl PairingStore for WindowsPairing {
         // `File.ReadAllText` drops a UTF-8 byte order mark.
         let text = std::str::from_utf8(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes))
             .map_err(|_| PlatformError::Invalid("Invalid mobile identity.".into()))?;
-        identity_file::decode(text).map(Some)
+        // Version 2: the secrets from the vault, an item that cannot be read an error (never a new identity).
+        let (identity, account) = identity_file::decode_stored(text, |account| self.vault.read(account))?;
+        // Secrets found in the file move to the vault; when that fails they stay, and the identity is answered all the same.
+        if account.is_none() && self.vault.active() {
+            let _ = self.write_identity(&identity);
+        }
+        Ok(Some(identity))
+    }
+
+    fn save(&self, identity: &PairingIdentity) -> Result<()> {
+        self.write_identity(identity)
+    }
+}
+
+impl WindowsPairing {
+    /// The file for `identity`: version 2 naming the vault item that holds its secrets when the vault takes them (a new item for
+    /// new secrets, deleted again when the file cannot be written), else version 1 with the secrets.
+    fn write_identity(&self, identity: &PairingIdentity) -> Result<()> {
+        secure_directory(&self.folder)?;
+        let secrets = Secrets::of(identity);
+        let prepared = self.vault.prepare(&secrets);
+        let text = match &prepared {
+            Some(prepared) => identity_file::encode_vaulted(identity, &prepared.account),
+            None => identity_file::encode(identity),
+        };
+        match text.and_then(|text| self.write(&text)) {
+            Ok(()) => {
+                self.vault.committed(prepared, &secrets);
+                Ok(())
+            }
+            Err(error) => {
+                self.vault.abandoned(prepared);
+                Err(error)
+            }
+        }
     }
 
     /// `Save`: beside the file as `mobile-identity.json.<guid>` (created new, nobody else sharing it), flushed to the disk, then moved
     /// over the file; the temporary file removed when anything failed.
-    fn save(&self, identity: &PairingIdentity) -> Result<()> {
-        secure_directory(&self.folder)?;
-        let text = identity_file::encode(identity)?;
+    fn write(&self, text: &str) -> Result<()> {
         let temporary = self.folder.join(format!("{FILE}.{}", guid()));
         let written = (|| -> std::io::Result<()> {
             let mut file = fs::OpenOptions::new().write(true).create_new(true).share_mode(SHARE_NONE).open(&temporary)?;
@@ -147,6 +194,58 @@ mod tests {
         changed.pairing_key = "B".repeat(43);
         store.save(&changed).unwrap();
         assert_eq!(store.load().unwrap().unwrap().pairing_key, "B".repeat(43), "a second save replaces the file");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A refusing vault (DPAPI saying no).
+    struct RefusingVault;
+
+    impl SecretVault for RefusingVault {
+        fn load(&self, _id: &str) -> Option<String> {
+            None
+        }
+        fn save(&self, _id: &str, _secret: &str) -> Result<()> {
+            Err(PlatformError::Refused("DPAPI: refused".into()))
+        }
+        fn delete(&self, _id: &str) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A version 1 file read with a vault: its secrets move there and the file becomes version 2 without them; it reads back at the
+    /// next launch; a rotation goes to a new item; without the item the load is an error and the file stays.
+    #[test]
+    fn a_version_1_file_moves_its_secrets_to_the_vault() {
+        let root = temporary("vault");
+        let folder = root.join(identity_file::FOLDER);
+        WindowsPairing::new(folder.clone()).save(&identity()).unwrap();
+        let vault = Arc::new(mighty_platform::fake::MemoryVault::default());
+        let store = WindowsPairing::with_vault(folder.clone(), vault.clone());
+        assert_eq!(store.load().unwrap(), Some(identity()));
+        let text = fs::read_to_string(folder.join(FILE)).unwrap();
+        assert!(text.starts_with("{\"version\":2,") && !text.contains(&identity().pairing_key) && !text.contains(&identity().host_token));
+        assert_eq!(WindowsPairing::with_vault(folder.clone(), vault.clone()).load().unwrap(), Some(identity()));
+        let rotated = PairingIdentity { pairing_key: "B".repeat(43), ..identity() };
+        store.save(&rotated).unwrap();
+        assert_eq!(WindowsPairing::with_vault(folder.clone(), vault.clone()).load().unwrap(), Some(rotated));
+        let before = fs::read(folder.join(FILE)).unwrap();
+        assert!(WindowsPairing::with_vault(folder.clone(), Arc::new(mighty_platform::fake::MemoryVault::default())).load().is_err());
+        assert!(WindowsPairing::new(folder.clone()).load().is_err());
+        assert_eq!(fs::read(folder.join(FILE)).unwrap(), before, "never a new identity over it");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A vault that refuses: the file keeps its secrets (version 1) and the identity loads and saves as before.
+    #[test]
+    fn a_refusing_vault_leaves_the_secrets_in_the_file() {
+        let root = temporary("vault-refuses");
+        let folder = root.join(identity_file::FOLDER);
+        WindowsPairing::new(folder.clone()).save(&identity()).unwrap();
+        let store = WindowsPairing::with_vault(folder.clone(), Arc::new(RefusingVault));
+        assert_eq!(store.load().unwrap(), Some(identity()));
+        assert_eq!(fs::read_to_string(folder.join(FILE)).unwrap(), identity_file::encode(&identity()).unwrap());
+        store.save(&identity()).unwrap();
+        assert_eq!(WindowsPairing::new(folder.clone()).load().unwrap(), Some(identity()));
         let _ = fs::remove_dir_all(&root);
     }
 

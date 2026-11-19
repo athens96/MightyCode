@@ -19,9 +19,9 @@ On the computer:
 On the phone:
 1. Open the phone app and tap {{ui:phone.hosts.addHost}} on the {{ui:phone.tabs.hosts}} tab. The first time, a connection guide shows first.
 2. Scan the computer's QR code with {{ui:phone.pair.mode.qr}}. If you can't use the camera, click {{ui:settings.mobileRemote.copyLinkButton}} on the computer, send yourself the link and paste it in {{ui:phone.pair.mode.manual}}. The link carries the key, so it is copied as a secret and cleared from the clipboard after a minute.
-3. Tap {{ui:phone.pair.connect}}. The phone connects and appears under {{ui:settings.mobileRemote.connectedDevicesTitle}} on the computer.
+3. Tap {{ui:phone.pair.connect}}. The computer shows a "new device" window and a notification, and the phone asks you to allow it on the computer. Click {{ui:settings.mobileRemote.approval.allow}} on the computer and the phone connects and appears under {{ui:settings.mobileRemote.connectedDevicesTitle}}. Without an answer in 60 seconds, or with {{ui:settings.mobileRemote.approval.refuse}} (the default button), it does not connect. Allow only a phone you are pairing yourself.
 
-Next to the QR code are the {{ui:settings.mobileRemote.hostIdLabel}} and the {{ui:settings.mobileRemote.keyLabel}}. The key shows only when you click its show button.
+Next to the QR code are the {{ui:settings.mobileRemote.hostIdLabel}} and the {{ui:settings.mobileRemote.keyLabel}}. The key shows only when you click its show button. The QR code, the link and the key are a one-time pairing code: it keeps working while it is on screen, expires 10 minutes after you close the screen, and is replaced once a device connects or is refused. Devices already paired connect with their device token and are not asked again.
 
 {{ui:windows.mobile.connectionTitle}} offers two ways to connect.
 - {{ui:windows.mobile.relayTitle}}: the default. Nothing to do.
@@ -29,10 +29,17 @@ Next to the QR code are the {{ui:settings.mobileRemote.hostIdLabel}} and the {{u
 
 ![[settings-mobile]]
 
-Paired phones and [paired computers](remote.md#pair) are listed one per row under {{ui:settings.mobileRemote.connectedDevicesTitle}}; a computer shows a computer icon. The list is shown whenever there is a paired device, even with the phone connection switch off. When you stop using a device, click {{ui:settings.mobileRemote.revokeRowButton}} on its row. Only that device is unpaired; your other phones and computers stay connected. The pairing key is renewed at the same time, so a device you pair after that (including the one you unpaired) needs the new QR code or link. Pairing a phone again with the QR code replaces its entry, and its old pairing stops working.
+Paired phones and [paired computers](remote.md#pair) are listed one per row under {{ui:settings.mobileRemote.connectedDevicesTitle}}; a computer shows a computer icon (kept after the app restarts). The list is shown whenever there is a paired device, even with the phone connection switch off. When you stop using a device, click {{ui:settings.mobileRemote.revokeRowButton}} on its row. Only that device is unpaired; your other phones and computers stay connected. The pairing code on screen is renewed at the same time. Pairing a phone again with the QR code asks for your approval like a new device (it says it replaces one), and once allowed its old pairing stops working.
 
 > [!warning]
-> {{ui:settings.mobileRemote.regenerateKeyButton}} unpairs every paired phone and every paired computer, and they have to pair again. Use it if someone else saw the QR code, the key or a pairing link.
+> {{ui:settings.mobileRemote.regenerateKeyButton}} unpairs every paired phone and every paired computer and makes this computer's relay ID and encryption key anew, so every device has to pair again with a new QR code or link. Use it if someone connected without your permission or you lost a device.
+
+## Workspaces the phone sees {#workspaces}
+In the {{ui:settings.remote.phoneTab}} tab, {{ui:settings.mobileRemote.workspacesTitle}} chooses which of this computer's workspaces a paired phone sees.
+- {{ui:settings.mobileRemote.workspacesAll}}: the default. The phone sees every workspace on this computer and opens its panes, files (a file like `.env` too) and runs.
+- {{ui:settings.mobileRemote.workspacesShared}}: the phone sees only the workspaces [{{ui:settings.remote.shareTitle}}](remote.md#share) is sharing right now. With sharing off it sees no workspace at all; it cannot open another workspace's panes, files or work map or send to them, and gets no notifications from their panes.
+
+A change applies from the phone's next request; the connection stays up.
 
 ## Connect directly over Tailscale {#direct}
 When the Mac and the phone are on the same [Tailscale](https://tailscale.com) network, the phone connects straight to the Mac without the relay. Pairing and encryption stay the same, and when the Mac can't be reached directly the phone uses the relay on its own.
@@ -115,4 +122,4 @@ When the Mac or Windows app has a new version, a **{{ui:phone.appUpdate.title}}*
 ## Change the relay address {#own-relay}
 The default relay (Cloudflare) is built into the app, so usually there is nothing to change. To use another relay, open the folded {{ui:settings.advancedTitle}} group at the bottom of the {{ui:settings.remote.phoneTab}} tab.
 - {{ui:settings.mobileRemote.relayLabel}}: enter the relay's address (`wss://…`) and click {{ui:settings.mobileRemote.applyButton}}. Leave it empty to use the default relay.
-- {{ui:settings.mobileRemote.legacyAppsToggle}}: on by default, so older phone apps without a device token can still connect. Turned off, only apps with a device token connect and phones connected by the key alone drop at once, so turn it off only after every phone runs the latest app.
+- {{ui:settings.mobileRemote.legacyAppsToggle}}: off by default. Turned on (after a warning), very old phone apps without a device token connect with the {{ui:settings.mobileRemote.legacyKeyLabel}} shown below it alone, without approval. Anyone who knows that key can control this computer remotely, so turn it on only when you need it and off again afterwards. The current app does not need it.

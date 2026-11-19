@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { baseCaption, diffRows, gutterDigits, hunkHeader, showsChanges } from './diff';
+import { baseCaption, diffRows, editorLine, gutterDigits, hunkHeader, showsChanges } from './diff';
 import type { FileChanges } from './types';
 import fixture from '@tokens/file-diff.json';
 
@@ -25,6 +25,14 @@ describe('변경사항 rows (DiffView)', () => {
       { kind: 'context', old: 99, new: 100, text: 'z' },
     ]);
     expect(gutterDigits(rows)).toBe(3);
+    // 편집기에서 열기 opens a row at the line it stands at now: a removed line where it was taken from.
+    expect(rows.map((_, index) => editorLine(rows, index))).toEqual([1, 1, 2, 2, 3, 98, 98, 99, 100]);
+  });
+
+  it('opens a line removed at a hunk\'s top at the hunk\'s new start, and 1 when nothing says', () => {
+    const rows = diffRows({ hunks: [{ oldStart: 5, oldLines: 1, newStart: 4, newLines: 0, lines: [{ op: '-', text: 'gone' }] }] });
+    expect(editorLine(rows, 1)).toBe(4);
+    expect(editorLine([], 0)).toBe(1);
   });
 
   it('a created file starts its empty old side at 0 and numbers only the new side', () => {

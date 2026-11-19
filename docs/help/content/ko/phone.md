@@ -19,9 +19,9 @@ section: phone
 휴대폰에서:
 1. 휴대폰 앱을 열고 {{ui:phone.tabs.hosts}} 탭의 {{ui:phone.hosts.addHost}}를 누릅니다. 처음 열면 연결 안내가 먼저 보입니다.
 2. {{ui:phone.pair.mode.qr}}으로 컴퓨터의 QR 코드를 찍습니다. 카메라를 쓸 수 없으면 컴퓨터에서 {{ui:settings.mobileRemote.copyLinkButton}} 단추를 눌러 링크를 보내고 {{ui:phone.pair.mode.manual}}에 넣습니다. 링크에는 키가 들어 있어 비밀로 복사되고, 1분 뒤 클립보드에서 지워집니다.
-3. {{ui:phone.pair.connect}}를 누르면 연결되고, 컴퓨터의 {{ui:settings.mobileRemote.connectedDevicesTitle}}에 그 휴대폰이 나타납니다.
+3. {{ui:phone.pair.connect}}를 누르면 컴퓨터에 "새 기기 연결 요청" 창과 알림이 뜨고, 휴대폰에는 컴퓨터에서 허용해 달라는 안내가 보입니다. 컴퓨터에서 {{ui:settings.mobileRemote.approval.allow}}을 누르면 연결되고, 컴퓨터의 {{ui:settings.mobileRemote.connectedDevicesTitle}}에 그 휴대폰이 나타납니다. 60초 안에 허용하지 않거나 {{ui:settings.mobileRemote.approval.refuse}}을 누르면 연결되지 않습니다(기본 단추는 거절입니다). 직접 페어링한 휴대폰이 아니면 허용하지 마세요.
 
-QR 코드 옆에는 {{ui:settings.mobileRemote.hostIdLabel}}와 {{ui:settings.mobileRemote.keyLabel}}가 있습니다. 키는 보기 단추를 눌러야 보입니다.
+QR 코드 옆에는 {{ui:settings.mobileRemote.hostIdLabel}}와 {{ui:settings.mobileRemote.keyLabel}}가 있습니다. 키는 보기 단추를 눌러야 보입니다. QR 코드, 링크, 키는 한 번만 쓸 수 있는 페어링 코드입니다. 화면에 떠 있는 동안은 계속 쓸 수 있고, 화면을 닫으면 10분 뒤 만료되며, 한 기기가 연결되거나 거절되면 새 코드로 바뀝니다. 이미 연결된 기기는 기기 토큰으로 연결하므로 허용을 다시 묻지 않습니다.
 
 {{ui:windows.mobile.connectionTitle}} 항목에는 연결 방법이 둘 있습니다.
 - {{ui:windows.mobile.relayTitle}}: 기본 방법입니다. 따로 할 일은 없습니다.
@@ -29,10 +29,17 @@ QR 코드 옆에는 {{ui:settings.mobileRemote.hostIdLabel}}와 {{ui:settings.mo
 
 ![[settings-mobile]]
 
-연결된 휴대폰과 [페어링한 컴퓨터](remote.md#pair)는 {{ui:settings.mobileRemote.connectedDevicesTitle}} 목록에 한 줄씩 보이고, 컴퓨터는 컴퓨터 아이콘으로 구분됩니다. 이 목록은 기기가 하나라도 있으면 휴대폰 연결 스위치가 꺼져 있어도 보입니다. 기기를 더 이상 쓰지 않으면 그 줄의 {{ui:settings.mobileRemote.revokeRowButton}} 단추를 누릅니다. 그 기기만 해제되고 다른 휴대폰과 컴퓨터는 그대로 연결됩니다. 이때 페어링 키도 새로 바뀌므로, 그 뒤에 기기를 연결하려면(해제한 기기를 다시 연결할 때도) 새 QR 코드나 링크를 씁니다. 이미 연결한 휴대폰을 QR 코드로 다시 연결하면 그 휴대폰의 항목이 새것으로 바뀌고, 예전 연결은 더 이상 쓰이지 않습니다.
+연결된 휴대폰과 [페어링한 컴퓨터](remote.md#pair)는 {{ui:settings.mobileRemote.connectedDevicesTitle}} 목록에 한 줄씩 보이고, 컴퓨터는 컴퓨터 아이콘으로 구분됩니다(앱을 다시 켜도 유지됩니다). 이 목록은 기기가 하나라도 있으면 휴대폰 연결 스위치가 꺼져 있어도 보입니다. 기기를 더 이상 쓰지 않으면 그 줄의 {{ui:settings.mobileRemote.revokeRowButton}} 단추를 누릅니다. 그 기기만 해제되고 다른 휴대폰과 컴퓨터는 그대로 연결됩니다. 이때 화면의 페어링 코드도 새로 바뀝니다. 이미 연결한 휴대폰을 QR 코드로 다시 연결하면 새 기기처럼 허용을 묻고(같은 기기를 대체한다고 알려 줍니다), 허용하면 예전 연결은 더 이상 쓰이지 않습니다.
 
 > [!warning]
-> {{ui:settings.mobileRemote.regenerateKeyButton}}를 누르면 연결된 휴대폰과 페어링한 컴퓨터가 모두 해제되어 다시 연결해야 합니다. QR 코드나 키, 페어링 링크가 남에게 보였을 때 쓰세요.
+> {{ui:settings.mobileRemote.regenerateKeyButton}}를 누르면 연결된 휴대폰과 페어링한 컴퓨터가 모두 해제되고, 이 컴퓨터의 릴레이 ID와 암호 키도 새로 만들어져 모든 기기를 새 QR 코드나 링크로 다시 연결해야 합니다. 누군가 허락 없이 연결했거나 기기를 잃어버렸을 때 쓰세요.
+
+## 휴대폰에서 볼 워크스페이스 {#workspaces}
+{{ui:settings.remote.phoneTab}} 탭의 {{ui:settings.mobileRemote.workspacesTitle}}에서 페어링한 휴대폰이 이 컴퓨터의 어떤 워크스페이스를 볼지 고릅니다.
+- {{ui:settings.mobileRemote.workspacesAll}}: 기본값입니다. 이 컴퓨터의 워크스페이스를 모두 보고, 그 창과 파일(`.env` 같은 파일도), 실행을 엽니다.
+- {{ui:settings.mobileRemote.workspacesShared}}: [{{ui:settings.remote.shareTitle}}](remote.md#share)에서 지금 공유하는 워크스페이스만 보입니다. 공유를 끄면 휴대폰에는 워크스페이스가 하나도 보이지 않고, 다른 워크스페이스의 창·파일·작업 지도를 열거나 요청을 보낼 수 없으며 그 창의 알림도 오지 않습니다.
+
+바꾸면 휴대폰의 다음 요청부터 적용되고, 연결은 끊기지 않습니다.
 
 ## Tailscale로 직접 연결 {#direct}
 Mac과 휴대폰이 같은 [Tailscale](https://tailscale.com) 네트워크에 있으면 휴대폰은 릴레이를 거치지 않고 Mac에 바로 연결합니다. 연결 방법도 암호화도 그대로이고, Mac에 닿지 않을 때는 알아서 릴레이로 연결합니다.
@@ -115,4 +122,4 @@ Mac이나 Windows 앱에 새 버전이 있으면, 휴대폰에서 그 컴퓨터�
 ## 릴레이 주소 바꾸기 {#own-relay}
 기본 릴레이(Cloudflare)가 앱에 들어 있어 보통은 바꿀 일이 없습니다. 다른 릴레이를 써야 하면 {{ui:settings.remote.phoneTab}} 탭 맨 아래의 접힌 {{ui:settings.advancedTitle}} 항목을 펼칩니다.
 - {{ui:settings.mobileRemote.relayLabel}}: 릴레이 주소(`wss://…`)를 넣고 {{ui:settings.mobileRemote.applyButton}}을 누릅니다. 비워 두면 기본 릴레이를 씁니다.
-- {{ui:settings.mobileRemote.legacyAppsToggle}}: 기본으로 켜져 있어 기기 토큰이 없는 예전 휴대폰 앱도 연결됩니다. 끄면 기기 토큰이 있는 앱만 연결되고 키로만 연결된 휴대폰은 바로 끊기니, 모든 휴대폰을 최신 앱으로 올린 뒤 끄세요.
+- {{ui:settings.mobileRemote.legacyAppsToggle}}: 기본으로 꺼져 있습니다. 켜면(경고를 확인한 뒤) 기기 토큰이 없는 아주 오래된 휴대폰 앱이 그 아래 {{ui:settings.mobileRemote.legacyKeyLabel}}만으로 허용 없이 연결됩니다. 이 키를 아는 누구나 이 컴퓨터를 원격으로 조작할 수 있으니 꼭 필요할 때만 켜고 다 쓰면 끄세요. 최신 앱에는 필요 없습니다.

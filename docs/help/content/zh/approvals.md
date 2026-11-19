@@ -16,7 +16,7 @@ section: approvals
 批准仅对这一次请求有效，不会创建今后持续允许的规则。
 
 > [!note]
-> 批准卡片会在 Claude 窗格（Always ask 等）、Codex 的{{ui:permission.label.onRequest}}权限以及 opencode 窗格中除{{ui:permission.label.fullAccess}}外的所有权限下弹出。在 Hermes 窗格中，文件修改和危险命令会弹出卡片。在其他权限下，是允许还是阻止取决于 CLI 设置。Antigravity 的工作方式不同，会[用自己的方式询问](#antigravity-permission)。
+> 批准卡片会在 Claude 窗格（{{ui:permission.label.claude.default}} 等）、Codex 的{{ui:permission.label.onRequest}}权限以及 opencode 窗格中除{{ui:permission.label.fullAccess}}外的所有权限下弹出。在 Hermes 窗格中，文件修改和危险命令会弹出卡片。在其他权限下，是允许还是阻止取决于 CLI 设置。Antigravity 的工作方式不同，会[用自己的方式询问](#antigravity-permission)。
 
 ## Antigravity 的权限卡片 {#antigravity-permission}
 Antigravity 在工作过程中无法向应用提问。遇到必须询问的操作（运行命令、写入文件等）时，它只跳过该操作，先结束这一轮，再把所有被拒绝的操作汇总到一张卡片里询问。{{ui:permission.label.default}}权限下也会弹出，手机上会出现同样的卡片。

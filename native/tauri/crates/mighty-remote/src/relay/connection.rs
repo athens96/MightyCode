@@ -4,6 +4,11 @@
 //! 8 slots (a duplicate id or a ninth answers 429), one writer, `ping` → `pong`, the host's encrypted ping every 20 s with a 60 s read
 //! idle limit, notify frames, and the host-level errors (414 path, 413 reply, 500). Owner: W8-A.
 //!
+//! A registration with a pairing code waits for the person at the host (`ConnectionHost::approve`, the relay host's approval): the
+//! device is told `{"type":"auth_pending","timeout":<s>}` (an older app ignores it), then gets `auth_ok` with its token once allowed,
+//! or `auth_error` `approval-denied` when refused or not answered in time; a device that leaves meanwhile leaves the question open
+//! for its next try (the host remembers the answer a little while).
+//!
 //! Written whole in W8 Step 0: [`RequestHandler`] (what the m1 router is to a connection: `phone::router::Router` implements it, A's
 //! round-trip test a stub), [`MobileReply`] and [`MobileDevice`].
 //!
@@ -29,7 +34,7 @@ use tokio::time::Instant;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::identity::{AuthDecision, AuthRequest};
+use crate::identity::{AuthDecision, AuthPolicy, AuthRefusal, AuthRequest, Identity, PendingRegistration};
 use crate::relay::cipher::{MAXIMUM_FRAME, MAXIMUM_PLAINTEXT, RelayCipher};
 
 /// What runs once a reply's frame was sent (C# `MobileReply.AfterSend`: an app update that restarts the app after answering).
@@ -107,8 +112,20 @@ pub const GENERIC_REFUSAL: &str = "unauthorized";
 
 /// What a connection reads of its host (the relay host's shared half).
 pub(crate) trait ConnectionHost: Send + Sync + 'static {
-    fn identity(&self) -> &crate::identity::Identity;
+    fn identity(&self) -> &Identity;
     fn allow_legacy(&self) -> bool;
+    /// Computers may register now (this PC shares with paired computers: "페어링한 컴퓨터의 연결 받기" on while sharing).
+    fn desktops_allowed(&self) -> bool;
+    /// The person at this computer asked about `pending` (a dialog and a notification), answered within the host's approval time:
+    /// Some(true) allowed, Some(false) refused or not answered in time, None when another device is being asked about now (this one
+    /// is turned away as at the device limit). Dropping the future leaves the question open (the answer is kept a little while).
+    fn approve(&self, pending: &PendingRegistration) -> BoxFuture<'static, Option<bool>>;
+    /// How long the person has to answer (said to the device in `auth_pending`).
+    fn approval_timeout(&self) -> Duration;
+    /// A registration replaced the device paired under `device_id`: its other connections (the device that held the old token) end.
+    fn replaced(&self, device_id: &str, keep: &str);
+    /// A pairing code was spent (a registration allowed or refused): Settings shows a new one.
+    fn pairing_changed(&self);
     fn handler(&self) -> Arc<dyn RequestHandler>;
     /// `auth_ok`'s `hostName`, `appVersion`, `capabilities` and `direct`.
     fn host_name(&self) -> String;
@@ -324,12 +341,17 @@ impl Connection {
             return Err(Ended);
         }
         let desktop = request.desktop;
-        let decision = host.identity().authorize(&request, host.allow_legacy()).map_err(|_| Ended)?;
+        let policy = AuthPolicy { allow_legacy: host.allow_legacy(), allow_desktops: host.desktops_allowed() };
+        let decision = host.identity().authorize(&request, policy).map_err(|_| Ended)?;
 
         // From here every frame is sealed by the one writer.
         let (outbox, inbox) = mpsc::channel(OUTBOX);
         *lock(&self.outbox) = Some(outbox);
         tasks.spawn(writer(sink, cipher.clone(), inbox, self.clone()));
+        let decision = match decision {
+            AuthDecision::Pending(pending) => self.approval(&*host, &pending, &mut stream).await?,
+            decided => decided,
+        };
 
         let device_id = match decision {
             AuthDecision::Refused(refusal) => {
@@ -347,6 +369,8 @@ impl Connection {
                 self.send_and_wait(out.finish().into_bytes()).await;
                 return Err(Ended);
             }
+            // Settled above: a pending registration comes back allowed or refused.
+            AuthDecision::Pending(_) => return Err(Ended),
             AuthDecision::Accepted { device_id, device_token } => {
                 let name = host.identity().devices().into_iter().find(|d| d.id == device_id).map(|d| d.name).unwrap_or_default();
                 *lock(&self.device) = Some(MobileDevice { client_id: device_id.clone(), name, direct: self.direct, desktop });
@@ -409,6 +433,54 @@ impl Connection {
             let body = root.get("body").cloned();
             requests.spawn(handle(self.clone(), host.clone(), device_id.clone(), id, method, path, body));
         }
+    }
+}
+
+impl Connection {
+    /// A registration with a pairing code, put to the person at the host: the device told to wait, then the answer — the device
+    /// registered (its old connections ended when it replaced one) or refused (`approval-denied`, the code spent; `device-limit` while
+    /// another device is being asked about). The device leaving meanwhile ends this connection and leaves the question open.
+    async fn approval<S, H>(
+        &self,
+        host: &H,
+        pending: &PendingRegistration,
+        stream: &mut futures_util::stream::SplitStream<WebSocketStream<S>>,
+    ) -> Step<AuthDecision>
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        H: ConnectionHost,
+    {
+        let mut out = JsonOut::new();
+        out.begin_object();
+        out.prop_str("type", Some("auth_pending"));
+        out.prop_int("timeout", host.approval_timeout().as_secs() as i64);
+        out.end_object();
+        self.send(out.finish().into_bytes()).await;
+        let asked = host.approve(pending);
+        let answer = tokio::select! {
+            answer = asked => answer,
+            // Nothing is read from a device that waits; a close, an error or the end of its socket ends the wait (its frames, if any,
+            // are dropped).
+            () = async { while next(stream).await.is_ok() {} } => return Err(Ended),
+        };
+        let decision = match answer {
+            None => AuthDecision::Refused(AuthRefusal::DeviceLimit),
+            Some(false) => {
+                host.identity().refuse(pending);
+                AuthDecision::Refused(AuthRefusal::ApprovalDenied)
+            }
+            Some(true) => {
+                let decision = host.identity().register(pending).map_err(|_| Ended)?;
+                if pending.replaces && decision.device_id().is_some() {
+                    host.replaced(&pending.client_id, &self.id);
+                }
+                decision
+            }
+        };
+        if answer.is_some() {
+            host.pairing_changed();
+        }
+        Ok(decision)
     }
 }
 

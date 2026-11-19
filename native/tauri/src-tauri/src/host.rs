@@ -472,6 +472,10 @@ impl Host {
                     {
                         runs.service.clear_permissions(&event.session_id);
                     }
+                    // A run ended: the review queue reads its worktrees and requests again once things settle (review.rs).
+                    if event.kind == "status" && matches!(event.status.as_deref(), Some("stopped" | "completed" | "error")) {
+                        crate::review::changed(self);
+                    }
                     crate::composer::run_event(&mut view, &event)
                 };
                 self.schedule();

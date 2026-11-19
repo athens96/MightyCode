@@ -818,6 +818,21 @@ fn only_a_keyed_run_request_gets_the_attachment_body() {
     assert!(limiter.allow_peer("100.90.1.1") && limiter.allow_keyed(), "the next second starts afresh");
 }
 
+/// Past 64 peers a new one replaces the oldest only: a burst of new addresses never clears a busy peer's count.
+#[test]
+fn a_new_peer_past_64_evicts_only_the_oldest() {
+    let now = Arc::new(Mutex::new(Duration::ZERO));
+    let read = now.clone();
+    let limiter = RateLimiter::new(Arc::new(move || *read.lock().unwrap()));
+    assert!(limiter.allow_peer("old"), "the oldest peer");
+    *now.lock().unwrap() += Duration::from_millis(100);
+    assert!((0..300).all(|_| limiter.allow_peer("busy")) && !limiter.allow_peer("busy"), "a peer at its limit");
+    assert!((0..62).all(|n| limiter.allow_peer(&format!("peer-{n}"))), "64 peers in all");
+    assert!(limiter.allow_peer("new"), "a 65th peer");
+    assert!(!limiter.allow_peer("busy"), "the busy peer keeps its count: the table was not cleared");
+    assert!((0..300).all(|_| limiter.allow_peer("old")) && !limiter.allow_peer("old"), "the oldest was the one let go");
+}
+
 fn get_request(target: &str, key: &str, extra: &str) -> String {
     format!("GET {target} HTTP/1.1\r\nAuthorization: Bearer {key}\r\nx-mighty-remote-version: 2\r\n{extra}\r\n")
 }

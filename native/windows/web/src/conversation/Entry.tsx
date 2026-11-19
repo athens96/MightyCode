@@ -6,6 +6,8 @@ import { CodeBlock, Markdown, Questionnaire } from './MarkdownView';
 import { ProviderMark } from './ProviderMark';
 import { Icon } from '../icons/Icon';
 import { parseQuestionnaire } from './questionnaire';
+import { leadingNotices } from './delegationNotice';
+import { NoticeChip } from './NoticeChip';
 
 export interface EntryProps {
   entry: LogEntry;
@@ -44,10 +46,13 @@ function language(): string {
 /** The request: an ink bubble over the right 85%, its time under the words. */
 function UserBubble({ entry }: { entry: LogEntry }) {
   const time = entryTime(entry.timestamp, language());
+  // Held delegation notices lead the request they went with: each a chip (the agent's text in its tooltip), then the words.
+  const { notices, rest } = leadingNotices(entry.text);
   return (
     <div className="entry entry-user" data-entry-kind="user">
       <div className="user-bubble">
-        <div className="user-text" data-text="">{entry.text}</div>
+        {notices.length > 0 && <div className="user-notices">{notices.map((notice, index) => <NoticeChip key={index} notice={notice} />)}</div>}
+        {(notices.length === 0 || rest.length > 0) && <div className="user-text" data-text="">{rest}</div>}
         {time && <div className="user-time">{time}</div>}
       </div>
     </div>

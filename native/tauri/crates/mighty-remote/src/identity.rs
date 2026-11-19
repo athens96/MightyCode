@@ -12,10 +12,21 @@
 //!
 //! Every change is saved before it takes effect (C#'s `Save` keeps the old state when the write fails); an identity loaded without
 //! `may_write` (verification mode) refuses every save, so it never writes the profile.
+//!
+//! Pairing (the security review's fix): a device registers only with a short-lived pairing code, never with a key that lives on.
+//! There are two codes, held in memory only: the phone's (the QR and the 휴대폰 tab's link) and the computers' (원격 연결 › 이 컴퓨터
+//! 공유's link), so a phone's link never pairs a computer nor the other way round. A code is made when Settings shows it, lives
+//! [`PAIRING_CODE_LIFETIME`] from the last time it was shown (Settings draws it four times a second while it is on screen, which keeps
+//! it alive there), and is spent by one registration, approved or refused: the next draw shows a new one. A registration with a code
+//! is [`AuthDecision::Pending`] until the person at this computer allows it ([`Identity::register`]) or refuses it, or it times out
+//! ([`Identity::refuse`]); the relay host asks. A device with its token never asks again. The key the identity file keeps
+//! (`pairing_key`) is now only the legacy apps' (key-only auth, off unless Settings › 휴대폰 › 고급 turns it on).
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use mighty_core::locale::Locale;
@@ -44,6 +55,59 @@ pub const REGISTRATIONS_PER_HOUR: usize = 8;
 const IDLE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 const HOUR_MS: i64 = 60 * 60 * 1000;
 const MINUTE_MS: i64 = 60 * 1000;
+/// How long a pairing code lives after it was last shown.
+pub const PAIRING_CODE_LIFETIME: Duration = Duration::from_secs(10 * 60);
+/// The file beside the identity that says which devices are computers (the identity files keep no such member).
+pub const ROLES_FILE: &str = "device-roles.json";
+
+/// Which pairing code: the phone's or the computers'.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PairingKind {
+    Phone,
+    Desktop,
+}
+
+impl PairingKind {
+    fn slot(self) -> usize {
+        match self {
+            PairingKind::Phone => 0,
+            PairingKind::Desktop => 1,
+        }
+    }
+}
+
+/// What an auth may do besides a token: the legacy apps' key-only auth (Settings › 휴대폰 › 고급) and a computer's registration (원격
+/// 연결 › 이 컴퓨터 공유's "페어링한 컴퓨터의 연결 받기", while sharing).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct AuthPolicy {
+    pub allow_legacy: bool,
+    pub allow_desktops: bool,
+}
+
+/// A registration with a pairing code waiting for the person at this computer: who asks (its client id and name, a computer or a
+/// phone, whether it would replace a device paired under the same id) and which code it presented. Never its code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRegistration {
+    pub client_id: String,
+    pub name: String,
+    pub desktop: bool,
+    /// A device is paired under this id already: allowing it replaces that device (its token stops working).
+    pub replaces: bool,
+    serial: u64,
+}
+
+impl PendingRegistration {
+    pub fn kind(&self) -> PairingKind {
+        if self.desktop { PairingKind::Desktop } else { PairingKind::Phone }
+    }
+}
+
+/// A live pairing code (in memory only).
+struct Code {
+    key: Zeroizing<String>,
+    expires: Instant,
+    serial: u64,
+}
 
 /// The auth frame's members (`{type:"auth", clientId, clientName, pairingKey | deviceToken}`) as `JsonElementExtensions.Text` reads them
 /// (a member that is not a string reads as absent); its secrets never reach `Debug`.
@@ -93,7 +157,8 @@ impl std::fmt::Debug for AuthRequest {
     }
 }
 
-/// `MobileAuthResult.Error`'s words.
+/// `MobileAuthResult.Error`'s words, and the two pairing ones: the person at this computer refused (or did not answer in time), and a
+/// computer's registration while this computer takes none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthRefusal {
     Malformed,
@@ -101,6 +166,8 @@ pub enum AuthRefusal {
     PairingKey,
     LegacyRefused,
     DeviceLimit,
+    ApprovalDenied,
+    DesktopsOff,
 }
 
 impl AuthRefusal {
@@ -112,15 +179,18 @@ impl AuthRefusal {
             AuthRefusal::PairingKey => "pairing-key",
             AuthRefusal::LegacyRefused => "legacy-refused",
             AuthRefusal::DeviceLimit => "device-limit",
+            AuthRefusal::ApprovalDenied => "approval-denied",
+            AuthRefusal::DesktopsOff => "desktops-off",
         }
     }
 }
 
-/// C# `MobileAuthResult(DeviceId, DeviceToken, Error)`: the device accepted (with its new token on first pairing or re-pairing), or
-/// why not. The token never reaches `Debug`.
+/// C# `MobileAuthResult(DeviceId, DeviceToken, Error)`: the device accepted (with its new token on first pairing or re-pairing), a
+/// registration waiting for the person at this computer, or why not. The token never reaches `Debug`.
 #[derive(Clone, PartialEq, Eq)]
 pub enum AuthDecision {
     Accepted { device_id: String, device_token: Option<String> },
+    Pending(PendingRegistration),
     Refused(AuthRefusal),
 }
 
@@ -129,21 +199,21 @@ impl AuthDecision {
     pub fn error(&self) -> Option<&'static str> {
         match self {
             AuthDecision::Refused(refusal) => Some(refusal.reason()),
-            AuthDecision::Accepted { .. } => None,
+            AuthDecision::Accepted { .. } | AuthDecision::Pending(_) => None,
         }
     }
 
     pub fn device_id(&self) -> Option<&str> {
         match self {
             AuthDecision::Accepted { device_id, .. } => Some(device_id),
-            AuthDecision::Refused(_) => None,
+            AuthDecision::Pending(_) | AuthDecision::Refused(_) => None,
         }
     }
 
     pub fn device_token(&self) -> Option<&str> {
         match self {
             AuthDecision::Accepted { device_token, .. } => device_token.as_deref(),
-            AuthDecision::Refused(_) => None,
+            AuthDecision::Pending(_) | AuthDecision::Refused(_) => None,
         }
     }
 }
@@ -156,14 +226,15 @@ impl std::fmt::Debug for AuthDecision {
                 .field("device_id", device_id)
                 .field("device_token", &device_token.as_ref().map(|_| "<redacted>"))
                 .finish(),
+            AuthDecision::Pending(pending) => f.debug_tuple("Pending").field(pending).finish(),
             AuthDecision::Refused(refusal) => f.debug_tuple("Refused").field(refusal).finish(),
         }
     }
 }
 
 /// C# `MobileDeviceInfo(Id, Name, FirstSeen, LastSeen, Legacy, Connected, IsNew)`: a paired phone as the settings list draws it.
-/// `desktop`: another computer's Mighty Code, known once it has authenticated with `"role":"desktop"` in this run (the identity files
-/// keep no such member, so after a restart a paired computer reads as a phone until it connects again).
+/// `desktop`: another computer's Mighty Code, known once it has authenticated with `"role":"desktop"`; kept across restarts in
+/// [`ROLES_FILE`] beside the identity (the identity files keep no such member).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MobileDeviceInfo {
     pub id: String,
@@ -205,10 +276,13 @@ impl std::fmt::Debug for PushDevice {
 
 struct State {
     saved: PairingIdentity,
-    /// When the registrations of the last hour were made (milliseconds since the epoch).
+    /// When the registrations of the last hour were asked for (milliseconds since the epoch).
     registrations: Vec<i64>,
-    /// The ids that authenticated as another computer in this run (never saved: the files have no member for it).
+    /// The ids that authenticated as another computer (kept in [`ROLES_FILE`] when the identity has one).
     desktops: HashSet<String>,
+    /// The live pairing codes, the phone's and the computers' ([`PairingKind::slot`]).
+    codes: [Option<Code>; 2],
+    next_serial: u64,
 }
 
 /// Told after a rotation (`None`: every device is gone) or a single device's revoke (`Some(id)`, once per row removed).
@@ -219,6 +293,9 @@ pub struct Identity {
     store: Arc<dyn PairingStore>,
     may_write: bool,
     locale: Locale,
+    /// Where the computers' ids are kept ([`ROLES_FILE`]); none: in memory for this run.
+    roles: Option<PathBuf>,
+    code_lifetime: Duration,
     state: Mutex<State>,
     rotated: Mutex<Vec<(u64, Listener)>>,
     next_listener: AtomicU64,
@@ -297,6 +374,22 @@ pub fn is_new(first_seen: &str, now_ms: i64) -> bool {
     parse_ms(first_seen).is_some_and(|seen| (0..NEW_DEVICE_WINDOW_MS).contains(&(now_ms - seen)))
 }
 
+/// The device list without the row of `id` (a registration under it replaces it) with room for one more: at [`MAXIMUM_DEVICES`] the
+/// device idle longest (over 90 days) makes way; None when none may.
+fn room(devices: &[PairedDevice], id: &str, now: i64) -> Option<Vec<PairedDevice>> {
+    let mut devices: Vec<PairedDevice> = devices.iter().filter(|d| d.id != id).cloned().collect();
+    if devices.len() >= MAXIMUM_DEVICES {
+        let old = devices
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| parse_ms(&d.last_seen).is_some_and(|last| now - last > IDLE_MS))
+            .min_by(|(_, a), (_, b)| a.last_seen.cmp(&b.last_seen))
+            .map(|(at, _)| at)?;
+        devices.remove(old);
+    }
+    Some(devices)
+}
+
 impl Identity {
     /// The saved identity, or a new one saved now when `may_write` (C#'s constructor); `Err` when the file is damaged (the caller
     /// shows it) or when there is none and the app may not write (verification mode: nothing is created).
@@ -320,7 +413,9 @@ impl Identity {
             store,
             may_write,
             locale: Locale::new("en"),
-            state: Mutex::new(State { saved, registrations: vec![], desktops: HashSet::new() }),
+            roles: None,
+            code_lifetime: PAIRING_CODE_LIFETIME,
+            state: Mutex::new(State { saved, registrations: vec![], desktops: HashSet::new(), codes: [None, None], next_serial: 1 }),
             rotated: Mutex::new(vec![]),
             next_listener: AtomicU64::new(1),
         })
@@ -332,8 +427,62 @@ impl Identity {
         self
     }
 
+    /// The computers' ids kept in `path` ([`ROLES_FILE`] beside the identity): read now (a file that is missing or not this shape
+    /// reads as none), written whenever a computer pairs or a device goes.
+    pub fn with_roles_file(mut self, path: PathBuf) -> Identity {
+        let known = std::fs::read(&path).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()).map(|value| {
+            value
+                .get("desktops")
+                .and_then(Value::as_array)
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(Value::as_str)
+                        .filter(|id| identity_file::client_id(id))
+                        .map(str::to_string)
+                        .collect::<Vec<String>>()
+                })
+                .unwrap_or_default()
+        });
+        if let Some(known) = known {
+            let state = self.state.get_mut().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let paired: HashSet<String> = state.saved.devices.iter().map(|d| d.id.clone()).collect();
+            state.desktops = known.into_iter().filter(|id| paired.contains(id)).collect();
+        }
+        self.roles = Some(path);
+        self
+    }
+
+    /// How long a pairing code lives after it was last shown (the checks shorten it).
+    pub fn with_code_lifetime(mut self, lifetime: Duration) -> Identity {
+        self.code_lifetime = lifetime;
+        self
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         lock(&self.state)
+    }
+
+    /// The computers' ids written to [`ROLES_FILE`] (only the paired ones; nothing in verification mode or without a file). A write
+    /// that fails is no failure of the change: the icon reads as a phone's after a restart until the computer connects again.
+    fn save_roles(&self, state: &State) {
+        let Some(path) = self.roles.as_ref().filter(|_| self.may_write) else { return };
+        let mut ids: Vec<&String> = state.desktops.iter().filter(|id| state.saved.devices.iter().any(|d| &d.id == *id)).collect();
+        ids.sort();
+        let text = serde_json::json!({"v": 1, "desktops": ids}).to_string();
+        let temporary = path.with_extension("json.tmp");
+        let written = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(&temporary, text.as_bytes()));
+        if written.and_then(|()| std::fs::rename(&temporary, path)).is_err() {
+            let _ = std::fs::remove_file(&temporary);
+            eprintln!("mobile remote: the device roles were not saved");
+        }
+    }
+
+    /// Marks `id` a computer (or not) and keeps it when that changed.
+    fn set_desktop(&self, state: &mut State, id: &str, desktop: bool) {
+        let changed = if desktop { state.desktops.insert(id.to_string()) } else { state.desktops.remove(id) };
+        if changed {
+            self.save_roles(state);
+        }
     }
 
     /// `Save`: the store writes `next`, then it is the state; a write that fails (or verification mode) keeps the old state.
@@ -371,15 +520,48 @@ impl Identity {
         base64::engine::general_purpose::STANDARD.encode(cipher::public_key(&self.secret()))
     }
 
-    /// `PairingKey`, for the settings box's masked key and its copy (never logged).
+    /// The saved `PairingKey`: now only the legacy apps' (key-only auth while they are allowed), shown under Settings › 휴대폰 › 고급
+    /// (never logged). Devices that register present a pairing code ([`Identity::pairing_code`]) instead.
     pub fn pairing_key(&self) -> Zeroizing<String> {
         Zeroizing::new(self.state().saved.pairing_key.clone())
     }
 
-    /// `Authenticate(auth, allowLegacy)`. `Err` when the change it makes (a `Touch`, a new device) could not be saved: C#'s `Save`
-    /// throws there and the connection ends unanswered.
-    pub fn authorize(&self, auth: &AuthRequest, allow_legacy: bool) -> Result<AuthDecision> {
-        use AuthDecision::{Accepted, Refused};
+    /// The live pairing code of `kind`, made when there is none or it ran out, and kept alive for [`PAIRING_CODE_LIFETIME`] from now:
+    /// what Settings shows (the QR, the links), so it stays valid while it is on screen (never logged).
+    pub fn pairing_code(&self, kind: PairingKind) -> Zeroizing<String> {
+        let mut state = self.state();
+        let now = Instant::now();
+        let expires = now + self.code_lifetime;
+        let slot = kind.slot();
+        if let Some(code) = state.codes[slot].as_mut().filter(|code| code.expires > now) {
+            code.expires = code.expires.max(expires);
+            return code.key.clone();
+        }
+        let serial = state.next_serial;
+        state.next_serial += 1;
+        let key = Zeroizing::new(random_token());
+        state.codes[slot] = Some(Code { key: key.clone(), expires, serial });
+        key
+    }
+
+    /// How long the live pairing code of `kind` has left; None when there is none (never shown, spent or run out).
+    pub fn pairing_code_left(&self, kind: PairingKind) -> Option<Duration> {
+        let now = Instant::now();
+        self.state().codes[kind.slot()].as_ref().filter(|code| code.expires > now).map(|code| code.expires - now)
+    }
+
+    /// Both pairing codes forgotten: whatever was shown pairs nothing; the next draw shows new ones.
+    pub fn forget_codes(&self) {
+        self.state().codes = [None, None];
+    }
+
+    /// `Authenticate(auth, allowLegacy)`: a device token (its device touched and accepted), the legacy apps' key-only auth while
+    /// `policy` allows it (against the saved key, as before), or a registration with a pairing code — the phone's for a phone, the
+    /// computers' for a computer (refused while `policy` takes no computers) — which comes back [`AuthDecision::Pending`] for the
+    /// person at this computer to allow ([`Identity::register`]) or refuse ([`Identity::refuse`]). `Err` when the change it makes (a
+    /// `Touch`, the legacy row) could not be saved: C#'s `Save` throws there and the connection ends unanswered.
+    pub fn authorize(&self, auth: &AuthRequest, policy: AuthPolicy) -> Result<AuthDecision> {
+        use AuthDecision::{Accepted, Pending, Refused};
         let mut state = self.state();
         if auth.kind.as_deref() != Some("auth") {
             return Ok(Refused(AuthRefusal::Malformed));
@@ -399,23 +581,23 @@ impl Identity {
             };
             self.touch(&mut state, &device.id)?;
             if auth.desktop {
-                state.desktops.insert(device.id.clone());
+                self.set_desktop(&mut state, &device.id, true);
             }
             return Ok(Accepted { device_id: device.id, device_token: None });
         }
         let Some(presented) = presented.filter(|p| p.encode_utf16().count() <= 256) else {
             return Ok(Refused(AuthRefusal::Malformed));
         };
-        if !equal(&hash(presented), &hash(&state.saved.pairing_key)) {
-            return Ok(Refused(AuthRefusal::PairingKey));
-        }
-        let now = now_ms();
         // A computer always names itself: it keeps a token, never the legacy row.
         if auth.desktop && id.is_none() {
             return Ok(Refused(AuthRefusal::Malformed));
         }
         let Some(id) = id else {
-            if !allow_legacy {
+            // The legacy apps (no client id, so no token): the saved key, while they are allowed, with no code and no approval.
+            if !equal(&hash(presented), &hash(&state.saved.pairing_key)) {
+                return Ok(Refused(AuthRefusal::PairingKey));
+            }
+            if !policy.allow_legacy {
                 return Ok(Refused(AuthRefusal::LegacyRefused));
             }
             if state.saved.devices.iter().any(|d| d.id == LEGACY) {
@@ -437,46 +619,81 @@ impl Identity {
             }
             return Ok(Accepted { device_id: LEGACY.into(), device_token: None });
         };
-        // Pairing again with the key under an id that holds a token (the phone scanned the QR anew, say after the relay moved): the
-        // row is the same phone's, so it gets a new token and the old one stops working (M/MobileDeviceRegistry.swift issueToken). Its
-        // first-seen time stays; its push handle goes, since the phone registers one again for the new pairing.
-        let earlier = state.saved.devices.iter().find(|d| d.id == id && d.token_hash.is_some()).map(|d| d.first_seen.clone());
+        // A registration: the live code of its own kind (a phone's link never pairs a computer, nor the other way round).
+        let kind = if auth.desktop { PairingKind::Desktop } else { PairingKind::Phone };
+        let now_instant = Instant::now();
+        let serial = state.codes[kind.slot()]
+            .as_ref()
+            .filter(|code| code.expires > now_instant && equal(&hash(presented), &hash(&code.key)))
+            .map(|code| code.serial);
+        let Some(serial) = serial else { return Ok(Refused(AuthRefusal::PairingKey)) };
+        if auth.desktop && !policy.allow_desktops {
+            return Ok(Refused(AuthRefusal::DesktopsOff));
+        }
+        let now = now_ms();
         state.registrations.retain(|at| now - at <= HOUR_MS);
-        if state.registrations.len() >= REGISTRATIONS_PER_HOUR {
+        if state.registrations.len() >= REGISTRATIONS_PER_HOUR || room(&state.saved.devices, &id, now).is_none() {
             return Ok(Refused(AuthRefusal::DeviceLimit));
         }
-        let mut devices: Vec<PairedDevice> = state.saved.devices.iter().filter(|d| d.id != id).cloned().collect();
-        if devices.len() >= MAXIMUM_DEVICES {
-            let old = devices
-                .iter()
-                .enumerate()
-                .filter(|(_, d)| parse_ms(&d.last_seen).is_some_and(|last| now - last > IDLE_MS))
-                .min_by(|(_, a), (_, b)| a.last_seen.cmp(&b.last_seen))
-                .map(|(at, _)| at);
-            let Some(old) = old else { return Ok(Refused(AuthRefusal::DeviceLimit)) };
-            devices.remove(old);
-        }
-        let fresh = random_token();
+        state.registrations.push(now);
         let given =
             auth.client_name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| self.locale.get("mobileRemote.device.defaultName"));
+        Ok(Pending(PendingRegistration {
+            client_id: id.clone(),
+            name: wire::clean(&given, 40),
+            desktop: auth.desktop,
+            replaces: state.saved.devices.iter().any(|d| d.id == id),
+            serial,
+        }))
+    }
+
+    /// A pending registration the person at this computer allowed: the device registered with a new token, as a new device (first
+    /// seen now; one paired under the same id before is replaced, its token and push handle gone), and the code it presented spent
+    /// (the next draw shows a new one). Refused with `pairing-key` when that code was spent or replaced meanwhile (another device
+    /// took it, a new key, a revoke); its time running out while the person decided does not count. `Err` when it could not be saved
+    /// (nothing changes, the code stays).
+    pub fn register(&self, pending: &PendingRegistration) -> Result<AuthDecision> {
+        let mut state = self.state();
+        let slot = pending.kind().slot();
+        if state.codes[slot].as_ref().map(|code| code.serial) != Some(pending.serial) {
+            return Ok(AuthDecision::Refused(AuthRefusal::PairingKey));
+        }
+        let now = now_ms();
+        let Some(mut devices) = room(&state.saved.devices, &pending.client_id, now) else {
+            return Ok(AuthDecision::Refused(AuthRefusal::DeviceLimit));
+        };
+        let fresh = random_token();
         let mark = time::now_o();
         devices.push(PairedDevice {
-            id: id.clone(),
-            name: wire::clean(&given, 40),
-            token_hash: Some(token_hash(&fresh, auth.desktop)),
-            first_seen: earlier.unwrap_or_else(|| mark.clone()),
+            id: pending.client_id.clone(),
+            name: pending.name.clone(),
+            token_hash: Some(token_hash(&fresh, pending.desktop)),
+            first_seen: mark.clone(),
             last_seen: mark,
             push: None,
         });
         let next = PairingIdentity { devices, ..state.saved.clone() };
         self.save(&mut state, next)?;
-        state.registrations.push(now);
-        if auth.desktop {
-            state.desktops.insert(id.clone());
+        state.codes[slot] = None;
+        let known: HashSet<String> = state.saved.devices.iter().map(|d| d.id.clone()).collect();
+        state.desktops.retain(|id| known.contains(id));
+        if pending.desktop {
+            state.desktops.insert(pending.client_id.clone());
         } else {
-            state.desktops.remove(&id);
+            state.desktops.remove(&pending.client_id);
         }
-        Ok(Accepted { device_id: id, device_token: Some(fresh) })
+        self.save_roles(&state);
+        Ok(AuthDecision::Accepted { device_id: pending.client_id.clone(), device_token: Some(fresh) })
+    }
+
+    /// A pending registration refused (by the person, or by its time running out): the code it presented is spent, so whoever holds
+    /// it cannot ask again; the next draw shows a new one. Nothing when that code is gone already.
+    pub fn refuse(&self, pending: &PendingRegistration) {
+        let mut state = self.state();
+        let slot = pending.kind().slot();
+        if state.codes[slot].as_ref().map(|code| code.serial) == Some(pending.serial) {
+            state.codes[slot] = None;
+        }
     }
 
     /// `Touch`: `lastSeen` written at most once a minute.
@@ -507,21 +724,32 @@ impl Identity {
         lock(&self.rotated).len()
     }
 
-    /// `Rotate`: a new pairing key, every device dropped; the listeners told.
+    /// `Rotate` (새 키 만들기): every device dropped and the host made anew but for its id — a new legacy key, a new relay secret
+    /// key (so a new public key), a new host token (so a new relay name, `ServerId`) — since every device pairs again anyway; the
+    /// pairing codes forgotten; the listeners told. The relay host dials again under the new name ([`crate::relay::host::RelayHost::
+    /// rotate`]).
     pub fn rotate(&self) -> Result<()> {
         {
             let mut state = self.state();
-            let next = PairingIdentity { pairing_key: random_token(), devices: vec![], ..state.saved.clone() };
+            let next = PairingIdentity {
+                host_id: state.saved.host_id.clone(),
+                host_token: hex(random::<32>().as_ref()),
+                pairing_key: random_token(),
+                secret_key: *random::<32>(),
+                devices: vec![],
+            };
             self.save(&mut state, next)?;
             state.registrations.clear();
             state.desktops.clear();
+            state.codes = [None, None];
+            self.save_roles(&state);
         }
         self.tell(None);
         Ok(())
     }
 
-    /// One device unpaired (the settings row's 연결 해제): its row, token and push handle go, and the pairing key is made anew so a key
-    /// it may still hold pairs nothing; every other device keeps its row and token (they authenticate by token, not by the key) and
+    /// One device unpaired (the settings row's 연결 해제): its row, token and push handle go, and the legacy key is made anew and the
+    /// pairing codes forgotten so nothing it may still hold pairs again; every other device keeps its row and token (they authenticate by token, not by the key) and
     /// stays connected. The legacy row (apps without a device token, which authenticate by the key alone) goes with the old key. The
     /// ids removed (empty when `id` was not paired: nothing changes); `Err` when it could not be saved (nothing changes either).
     pub fn revoke(&self, id: &str) -> Result<Vec<String>> {
@@ -538,6 +766,8 @@ impl Identity {
             for gone in &removed {
                 state.desktops.remove(gone);
             }
+            state.codes = [None, None];
+            self.save_roles(&state);
             removed
         };
         for gone in &removed {
@@ -558,24 +788,36 @@ impl Identity {
         self.state().saved.devices.iter().any(|d| d.id == id && (d.token_hash.is_some() || (id == LEGACY && legacy_allowed)))
     }
 
-    /// `PairingUrl(relay, name, direct)`: the v2 pairing link; `direct` adds the direct path's endpoints as `direct=`, joined with
-    /// commas and percent-encoded as the Mac writes it.
+    /// `PairingUrl(relay, name, direct)`: the phone's v2 pairing link with the phone's live pairing code (kept alive: Settings shows
+    /// it); `direct` adds the direct path's endpoints as `direct=`, joined with commas and percent-encoded as the Mac writes it.
     pub fn pairing_url(&self, relay: &str, name: &str, direct: &[String]) -> String {
-        let state = self.state();
-        let public = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(cipher::public_key(&Zeroizing::new(state.saved.secret_key)));
-        let mut url = format!(
-            "mightycode://pair?v=2&sid={}&pk={}&relay={}&key={}&name={}",
-            hash(&state.saved.host_token),
-            escape_data(&public),
-            escape_data(relay),
-            escape_data(&state.saved.pairing_key),
-            escape_data(&wire::clean(name, 120))
-        );
+        let code = self.pairing_code(PairingKind::Phone);
+        let mut url = self.link(relay, name, &code);
         if !direct.is_empty() {
             url.push_str("&direct=");
             url.push_str(&escape_data(&direct.join(",")));
         }
         url
+    }
+
+    /// The computers' pairing link (원격 연결 › 이 컴퓨터 공유): the phone's shape (an older computer reads it alike) with the
+    /// computers' live code (kept alive) and `for=desktop`; no direct endpoints (a computer comes through the relay only).
+    pub fn desktop_pairing_url(&self, relay: &str, name: &str) -> String {
+        let code = self.pairing_code(PairingKind::Desktop);
+        self.link(relay, name, &code) + "&for=desktop"
+    }
+
+    fn link(&self, relay: &str, name: &str, code: &str) -> String {
+        let state = self.state();
+        let public = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(cipher::public_key(&Zeroizing::new(state.saved.secret_key)));
+        format!(
+            "mightycode://pair?v=2&sid={}&pk={}&relay={}&key={}&name={}",
+            hash(&state.saved.host_token),
+            escape_data(&public),
+            escape_data(relay),
+            escape_data(code),
+            escape_data(&wire::clean(name, 120))
+        )
     }
 
     /// `Devices`: the paired phones as the settings list draws them (`connected` false: the relay host knows who is connected), the

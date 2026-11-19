@@ -35,5 +35,14 @@ Files outside the workspace are not shown. If files changed, click {{ui:files.tr
 
 ![[files-pane]]
 
+### Open in an editor {#open-in-editor}
+To change a file, open it in the editor you use. Where the line is known, the editor goes straight to it.
+- Files pane: the {{ui:editor.open}} button in the preview's header, and the menu you get by right-clicking a file or folder in the list ({{ui:editor.openFolder}}).
+- Conversation and Mighty flow: {{kbd:⌘}}-click (Windows: {{kbd:Ctrl}}-click) a file name to open it at its line in the editor instead of the preview. The button in the preview's header and on each row of a result's file list do the same.
+- Changes: in [reviewing a request's changes](agent-pane.md#request-changes) and in a worktree pane's changes, right-click a line to open the file at that line; the button opens the selected file.
+- The worktree pane bar's menu and the [review queue](layout.md#review) open the worktree's folder.
+
+Choose the editor with {{ui:settings.editor.label}} in [Settings](settings.md#agents). Auto uses the first one found of VS Code, Cursor, Zed, the JetBrains IDEs (IntelliJ IDEA, WebStorm, PyCharm and the rest) and Sublime Text. Commands on your login shell's PATH (`code`, `cursor`, `zed`, `idea`, `subl`) come first; then, on the Mac, the command inside the app in your Applications folder, and on Windows the program in its usual install folder. {{ui:settings.editor.system}} opens the file in its default app, without the line, and never opens a file that runs code. A path outside the workspace or worktree is not opened.
+
 ## Web links {#web-links}
 A web link in a reply, and a page an agent opens, open in your default browser.

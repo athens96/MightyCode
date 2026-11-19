@@ -94,7 +94,7 @@ pub struct HostOptions {
 }
 
 /// C# `RemoteRateLimiter`: each peer has 300 requests a second; only requests with the key count toward the shared 600, so a device
-/// without it cannot crowd the real client out. At most 64 peers are remembered.
+/// without it cannot crowd the real client out. At most 64 peers are remembered; a new one past them replaces the oldest.
 pub struct RateLimiter {
     clock: Clock,
     state: Mutex<Rates>,
@@ -121,8 +121,13 @@ impl RateLimiter {
             entry = (now, 0);
         }
         entry.1 += 1;
-        if !peers.contains_key(peer) && peers.len() >= 64 {
-            peers.clear();
+        // A new peer past 64 takes the place of the one whose second started longest ago: never the whole table, so a burst of
+        // new addresses cannot start every other peer's count afresh.
+        if !peers.contains_key(peer)
+            && peers.len() >= 64
+            && let Some(oldest) = peers.iter().min_by_key(|(_, (start, _))| *start).map(|(key, _)| key.clone())
+        {
+            peers.remove(&oldest);
         }
         peers.insert(peer.to_string(), entry);
         entry.1 <= 300
@@ -295,6 +300,13 @@ impl RemoteHost {
             allows_full_access: gate.allows_full_access,
             ..gate.state.clone()
         }
+    }
+
+    /// The workspaces shared now (their ids while sharing is on, else none), without [`RemoteHost::state`]'s listener check: what a
+    /// paired phone held to the shared workspaces sees (`phone::desk::phone_workspace_ids`).
+    pub fn shared_workspace_ids(&self) -> Vec<String> {
+        let gate = lock(&self.0.gate);
+        if gate.state.enabled { gate.state.workspace_ids.clone() } else { vec![] }
     }
 
     /// `SetAllowsFullAccess(allowed)`: whether clients may run commands and full-access agents here, from their next run.

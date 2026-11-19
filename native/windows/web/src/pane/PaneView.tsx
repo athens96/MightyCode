@@ -82,7 +82,11 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
   const [reference, setReference] = useState<ReferenceRequest | null>(null);
   const clicks = useRef(0);
   const room = useRef<HTMLDivElement>(null);
-  const showReference = useCallback((target: ReferenceTarget) => setReference({ ...target, seq: ++clicks.current }), []);
+  const showReference = useCallback((target: ReferenceTarget) => {
+    // ⌘/Ctrl+click: the file in the external editor at its line, resolved in the pane's folder by the host (editor.rs).
+    if (target.editor) void bridge.call('openInEditor', { source: 'reference', paneId: session.id, path: target.path, ...(target.line ? { line: target.line } : {}) }).catch(() => {});
+    else setReference({ ...target, seq: ++clicks.current });
+  }, [bridge, session.id]);
   const closeReference = useCallback(() => setReference(null), []);
   if (slimKind(session.kind)) return <SlimPane session={session} />;
   // Under the Mighty bar while the Mighty view shows.

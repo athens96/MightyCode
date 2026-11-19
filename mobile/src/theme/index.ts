@@ -160,8 +160,8 @@ export const lightPalette: Palette = {
   accent: '#2459E6',
   accentMuted: '#E6EDFF',
   text: '#0E1320',
-  textMuted: '#5A6377',
-  textFaint: '#616A7C',
+  textMuted: '#4A5366',
+  textFaint: '#5C6577',
   success: '#06703F',
   danger: '#B42318',
   dangerSurface: '#FDE6E4',
@@ -477,14 +477,14 @@ export function toneColors(palette: Palette, tone: Tone): ToneColors {
 
 /**
  * The 파이프라인 view's state colours, from `native/contracts/fixtures/design-tokens.json`
- * (`pipeline`): a column's cards sit on its tone's soft tint at `columnTintOpacity`, each card
- * on the same tint at the lighter `cardTintOpacity` so it stands out from a column of its own
- * tone, with a `cardBarWidth` bar in the tone's mark down its leading edge.
+ * (`pipeline`): a column takes a faint wash of its tone's soft tint at `columnTintOpacity`, each
+ * card the stronger `cardTintOpacity` of the same tint, so the colour sits on the cards rather
+ * than across the board, with a `cardBarWidth` bar in the tone's mark down its leading edge.
  * `pipeline-tone.test.ts` holds them to the contract.
  */
 export const pipeline = {
-  columnTintOpacity: 0.6,
-  cardTintOpacity: 0.35,
+  columnTintOpacity: 0.12,
+  cardTintOpacity: 0.5,
   cardBarWidth: 3,
 } as const;
 

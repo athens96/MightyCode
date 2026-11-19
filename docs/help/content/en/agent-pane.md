@@ -40,16 +40,16 @@ The permission mode sets what the agent may do without asking.
 
 | Agent | Modes |
 |---|---|
-| Claude | Plan mode · Always ask · Accept file edits · Auto mode · Bypass |
+| Claude | {{ui:permission.label.claude.plan}} · {{ui:permission.label.claude.default}} · {{ui:permission.label.claude.acceptEdits}} · {{ui:permission.label.claude.auto}} · {{ui:permission.label.claude.fullAccess}} |
 | Codex | {{ui:permission.label.defaultCodex}} · {{ui:permission.label.onRequest}} · {{ui:permission.label.acceptEditsCodex}} · {{ui:permission.label.fullAccess}} |
 | Antigravity | {{ui:permission.label.default}} · {{ui:permission.label.plan}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 | pi | {{ui:permission.label.defaultCodex}} · {{ui:permission.label.fullAccess}} |
 | opencode | {{ui:permission.label.default}} · {{ui:permission.label.plan}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 | Hermes | {{ui:permission.label.default}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 
-- Claude's Always ask, Codex's {{ui:permission.label.onRequest}} every opencode mode but {{ui:permission.label.fullAccess}}, and Hermes's file edits and dangerous commands ask for approval in the pane when extra permission is needed. See [Approvals and questions](approvals.md#permission).
-- Auto mode appears only when the installed Claude CLI supports it. Codex's {{ui:permission.label.onRequest}} is hidden on older Codex versions that do not support it.
-- Bypass and {{ui:permission.label.fullAccess}} reach files and commands outside the project too. Use them only when you must.
+- Claude's {{ui:permission.label.claude.default}}, Codex's {{ui:permission.label.onRequest}} every opencode mode but {{ui:permission.label.fullAccess}}, and Hermes's file edits and dangerous commands ask for approval in the pane when extra permission is needed. See [Approvals and questions](approvals.md#permission).
+- {{ui:permission.label.claude.auto}} appears only when the installed Claude CLI supports it. Codex's {{ui:permission.label.onRequest}} is hidden on older Codex versions that do not support it.
+- {{ui:permission.label.claude.fullAccess}} and {{ui:permission.label.fullAccess}} reach files and commands outside the project too. Use them only when you must.
 
 ### Antigravity {#antigravity}
 Google's agent runs through Antigravity CLI (`agy`), which can also run Claude and GPT-OSS models.
@@ -176,7 +176,7 @@ Pick {{ui:graph.view.structure}} on the same switch to see requests as a kanban-
 - ◀ {{ui:graph.structure.board.previous}} and ▶ {{ui:graph.structure.board.next}} at the top step back and forth. Click the title between them, such as "Request 3 / 7", to open the list with each one's number, title, status and steps, and pick any of them.
 - Below that is the status (and, in a pane with a style, the pipeline's name). The steps are the chips at the top of each column, joined by lines. In a pane without a style they are {{ui:graph.structure.column.request}} → {{ui:graph.structure.column.execution}} → {{ui:graph.structure.column.result}}; in a pane that uses a style, the mode's phases.
 - The content sits in columns side by side, one per step, each headed by the step's chip and its number of cards. Without a style, the {{ui:graph.structure.column.request}} column holds the request, the {{ui:graph.structure.column.execution}} column a card with the progress (the latest message and tool calls) and the status followed by one card per sub-agent, and the {{ui:graph.structure.column.result}} column the result. With a style, each phase column holds that phase's request cards (the request, a run summary and the result on one line) with their sub-agent cards under them. Nested sub-agents are indented and say which block they run under.
-- Colour shows the state too. Each column is washed in its step's state colour (green when done, blue while running, yellow while waiting, red on an error, grey when stopped), the current step follows its newest request, and a step not reached yet stays plain. Every card has a bar of that colour down its left edge and a wash lighter than its column's; a running card keeps its moving outline, a waiting card its yellow outline, and the status words stay as they are.
+- Colour shows the state too. Each column takes a faint wash of its step's state colour (green when done, blue while running or awaiting notices, yellow while waiting on you, red on an error, grey when stopped), the current step follows its newest request, and a step not reached yet stays plain. Every card has a bar of that colour down its left edge and a stronger wash than its column's; a running card keeps its moving outline, a waiting card its yellow outline, and the status words stay as they are.
 - Long text is folded; {{ui:graph.structure.more}} opens it in place. The small button in a card's header shows that block in the flow.
 - The view opens on the newest one and, left there, moves on to each new request or pipeline. While you look at an older one, a new one leaves you where you are and puts a {{ui:graph.structure.board.newRequest}} or {{ui:graph.structure.board.newPipeline}} badge next to ▶; click it to go to the newest.
 - Each column moves on its own: its header stays on top while its cards move up and down. Scroll up or down over a column with the trackpad or the mouse wheel, or drag an empty spot in it, to move that column only; when the columns don't all fit, scroll or drag sideways to move the board sideways.
@@ -196,3 +196,4 @@ When a request in a Claude pane changes files with Edit, Write or MultiEdit, eac
 - Check files, choose "Revert N selected" and confirm: they go back to their content before the request. A file the request created goes to the Trash (the Recycle Bin on Windows). The file keeps its current encoding and permissions; edits you made after the request are lost too.
 - A file a later request also changed needs that request reverted first. A file that is gone, no longer reads as text (over 1 MiB or binary) or already matches its content before the request is not reverted.
 - Each pane keeps the originals of its last 20 requests. Files changed by shell commands, other agents' panes and panes of remote workspaces get no button.
+- Right-click a line of the changes to open the file at that line in your external editor; the header's button ({{ui:editor.open}}) opens the selected file ([open in an editor](terminal-files-browser.md#open-in-editor)).

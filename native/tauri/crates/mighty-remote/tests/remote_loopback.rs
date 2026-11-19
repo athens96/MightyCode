@@ -573,6 +573,63 @@ async fn answers_reach_only_their_own_jobs_requests() {
     fixture.dispose().await;
 }
 
+/// "remote loopback: a run full access let start is answered only while the switch stays on": the rule is read again at each
+/// answer (a run in full access, and on a Windows host a Codex run in any mode), while a Claude run in its own mode keeps its answers.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn answers_wait_for_the_full_access_switch_when_the_run_needed_it() {
+    set_language("ko");
+    let fixture = make_host(MakeHost { windows_host: Some(true), runtime: Some("info-darwin.json"), ..MakeHost::default() }).await;
+    let state = fixture.host.start(&[fixture.shared.id().into()], 0).await.unwrap();
+    let (target, key) = (loopback(state.port.unwrap()), state.key.clone().unwrap());
+    let start = |provider: &'static str, mode: &'static str| {
+        let (target, key, workspace) = (target.clone(), key.clone(), fixture.shared.id().to_string());
+        async move {
+            let body = wire_start(&workspace, "claude", "ask", provider, mode).to_value();
+            RemoteWireJob::decode(&post(&target, &key, "/v2/runs", &body).await.unwrap()).unwrap().job_id
+        }
+    };
+    let asked = |job: String| {
+        let (target, key) = (target.clone(), key.clone());
+        async move {
+            for tries in 0.. {
+                if poll_raw(&target, &key, &job, 0).await.events.iter().any(|e| e.event["type"] == "permission") {
+                    break;
+                }
+                assert!(tries < 200, "the tool request reached the host");
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    };
+    let own = start("claude", "acceptEdits").await;
+    fixture.host.set_allows_full_access(true);
+    let full = start("claude", "fullAccess").await;
+    let codex = start("codex", "acceptEdits").await;
+    for job in [&own, &full, &codex] {
+        asked(job.clone()).await;
+    }
+    fixture.host.set_allows_full_access(false);
+    let permission = |run: &str| RemoteWirePermission { run_id: run.into(), request_id: "perm-1".into(), allow: true }.to_value();
+    let refused = post(&target, &key, &format!("/v2/runs/{full}/permission"), &permission(&full)).await.unwrap_err();
+    assert!(refused.status() == Some(403) && refused.message() == get("remote.host.error.fullAccessOff"), "a full access run's answer");
+    let refused = post(&target, &key, &format!("/v2/runs/{codex}/permission"), &permission(&codex)).await.unwrap_err();
+    assert!(
+        refused.status() == Some(403) && refused.message() == strings::host_agent_needs_full_access("codex"),
+        "a Windows host's Codex run's answer"
+    );
+    let questions = RemoteWireQuestions { run_id: full.clone(), request_id: "perm-1".into(), answers: IndexMap::new() }.to_value();
+    assert_eq!(post(&target, &key, &format!("/v2/runs/{full}/questions"), &questions).await.unwrap_err().status(), Some(403));
+    let plan = RemoteWirePlan::from(&codex, "perm-1", &PlanDecision::approve_auto_edit()).to_value();
+    assert_eq!(post(&target, &key, &format!("/v2/runs/{codex}/plan"), &plan).await.unwrap_err().status(), Some(403));
+    let runner = fixture.runner().unwrap();
+    assert!(runner.answers.lock().unwrap().is_empty(), "no refused answer reached the runner");
+    post(&target, &key, &format!("/v2/runs/{own}/permission"), &permission(&own)).await.unwrap();
+    fixture.host.set_allows_full_access(true);
+    post(&target, &key, &format!("/v2/runs/{full}/permission"), &permission(&full)).await.unwrap();
+    let answered: Vec<String> = runner.answers.lock().unwrap().iter().map(|(job, _, _)| job.clone()).collect();
+    assert_eq!(answered, [own, full], "a Claude run in its own mode, then the full access run once the switch is on again");
+    fixture.dispose().await;
+}
+
 /// A runner that takes each run only when the check lets it (its start waits), and keeps it until it is stopped.
 #[derive(Default)]
 struct GatedRunner {

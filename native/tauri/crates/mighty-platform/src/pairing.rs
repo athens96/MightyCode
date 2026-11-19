@@ -4,6 +4,7 @@
 
 pub mod four_files;
 pub mod identity_file;
+pub mod vaulted;
 
 use std::fmt;
 
@@ -54,9 +55,10 @@ impl fmt::Debug for PairingIdentity {
 }
 
 /// Contract: `load` is `Ok(None)` when nothing was paired yet and `Err` when the files exist but are damaged, foreign or too large
-/// (the caller decides whether to start over). `save` commits the identity and the device list together, so a failed key rotation
-/// cannot leave a new key with an old device list (Windows: one file written atomically; the Mac: its four files, each atomically).
-/// The folder is this user's only.
+/// (the caller decides whether to start over), or when their secrets are in the vault ([`vaulted`]) and cannot be read now (never a
+/// reason to start over). `save` commits the identity and the device list together, so a failed key rotation cannot leave a new key
+/// with an old device list (Windows: one file written atomically; the Mac: its four files, each atomically). The folder is this
+/// user's only. A store given a vault keeps the secrets there and moves secrets it finds in its files there ([`vaulted`]).
 pub trait PairingStore: Send + Sync {
     fn load(&self) -> Result<Option<PairingIdentity>>;
     fn save(&self, identity: &PairingIdentity) -> Result<()>;

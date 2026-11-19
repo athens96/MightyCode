@@ -24,7 +24,7 @@ use mighty_remote::identity::Identity;
 use mighty_remote::push::hub::{PushHub, PushSeams, PushSource};
 use mighty_remote::push::planner::{self, PushPane};
 use mighty_remote::relay::connection::{MobileDevice, MobileReply, RequestHandler};
-use mighty_remote::relay::host::{RelayHost, RelayOptions, StatusSubscription};
+use mighty_remote::relay::host::{ApprovalRequest, Approver, RelayHost, RelayOptions, StatusSubscription};
 use mighty_run::service::ServiceEvent;
 use tauri::Manager;
 
@@ -38,8 +38,10 @@ const TICK: Duration = Duration::from_millis(250);
 pub struct BoxState {
     /// The relay field as typed (None: as saved).
     pub typed: Option<String>,
-    /// The pairing key shown in the clear.
+    /// The pairing code shown in the clear.
     pub shows_key: bool,
+    /// The legacy apps' key shown in the clear (고급, while they are allowed).
+    pub shows_legacy_key: bool,
     /// The last QR drawn: its link and its PNG as a data URL with its side in pixels.
     pub qr: Option<(String, String, f64)>,
 }
@@ -122,8 +124,10 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
         return;
     }
     let ports = crate::platform::remote_ports(platform, false);
+    // Which devices are computers is kept beside the identity (its files have no member for it), so a paired computer keeps its icon.
+    let roles = platform.paths.data_dir().join(mighty_platform::pairing::identity_file::FOLDER).join(mighty_remote::identity::ROLES_FILE);
     let identity = match Identity::load_or_create(ports.pairing.clone(), true) {
-        Ok(identity) => Arc::new(identity.with_locale(host.locale)),
+        Ok(identity) => Arc::new(identity.with_locale(host.locale).with_roles_file(roles)),
         Err(error) => {
             host.log
                 .line(&format!("mobile remote: the pairing identity could not be read ({})", mighty_remote::identity::error_kind(&error)));
@@ -148,6 +152,8 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
         }),
         // The app's runtime: the network port's callbacks come on Windows' own threads.
         runtime: Some(tauri::async_runtime::handle().inner().clone()),
+        // A new phone or computer is let in only once the person here allows it.
+        approver: Some(approver(host)),
         ..RelayOptions::default()
     };
     let mut relay_platform = platform.clone();
@@ -189,6 +195,63 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
     });
 }
 
+/// Asks the person at this computer about a device that registers with a pairing code: the window brought forward, an OS notification
+/// ("새 기기 '<name>'(휴대폰)가 연결하려 합니다") and a dialog whose default button refuses. The relay host gives it its time (60 s) and
+/// drops it after, which closes the dialog; a quitting app refuses.
+fn approver(host: &Arc<Host>) -> Approver {
+    let weak = Arc::downgrade(host);
+    Arc::new(move |request: ApprovalRequest| {
+        let weak = weak.clone();
+        Box::pin(async move {
+            match weak.upgrade() {
+                Some(host) if !host.closing() && host.smoke.is_none() => ask(&host, request).await,
+                _ => false,
+            }
+        })
+    })
+}
+
+/// [`approver`]'s question; true when allowed.
+async fn ask(host: &Arc<Host>, request: ApprovalRequest) -> bool {
+    use mighty_native::surface::{DefaultButton, DialogButton, DialogResult, DialogSpec};
+    use mighty_native::ui::Content;
+    let locale = host.locale;
+    let kind = locale.get(if request.desktop { "settings.mobileRemote.approval.computer" } else { "settings.mobileRemote.approval.phone" });
+    let line = locale.get_with("settings.mobileRemote.approval.body", &[("name", &request.name), ("kind", &kind)]);
+    let title = locale.get("settings.mobileRemote.approval.title");
+    if let Some(ports) = host.app.try_state::<crate::platform::Ports>() {
+        let notifier = ports.notifier.clone();
+        let notification = mighty_platform::Notification { title: title.clone(), body: line.clone(), pane_id: None };
+        tauri::async_runtime::spawn(async move {
+            let _ = notifier.notify(notification).await;
+        });
+    }
+    if let Some(window) = host.app.get_webview_window(crate::host::WINDOW) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+    let mut text = format!("{line}\n\n{}", locale.get("settings.mobileRemote.approval.explanation"));
+    if request.replaces {
+        text.push_str("\n\n");
+        text.push_str(&locale.get("settings.mobileRemote.approval.replaces"));
+    }
+    let mut spec = DialogSpec::new(title, move |_| Content::Text(text.clone())).styled(None, None);
+    spec.primary = Some(DialogButton::new(locale.get("settings.mobileRemote.approval.allow")));
+    spec.close = Some(locale.get("settings.mobileRemote.approval.refuse"));
+    spec.default_button = DefaultButton::Close;
+    let dialog = crate::native::start_dialog(host, spec);
+    /// The dialog closes however the question ends (answered, or dropped when its time ran out).
+    struct Closes(Arc<Host>, String);
+    impl Drop for Closes {
+        fn drop(&mut self) {
+            crate::native::close(&self.0, &self.1);
+        }
+    }
+    let _closes = Closes(host.clone(), dialog.id.clone());
+    dialog.wait().await == DialogResult::Primary
+}
+
 /// The 250 ms tick (C#'s `mobileNotify.Tick`): pushes planned on every tick (nothing while the remote is off), and while a phone is
 /// connected the router's notifications sent.
 async fn tick(host: Arc<Host>, relay: Arc<RelayHost>, push: Arc<PushHub>) {
@@ -220,7 +283,13 @@ struct Panes(Arc<Host>);
 fn project(service: &mighty_run::service::RunService, sign_in_lost: &dyn Fn(&str) -> bool) -> Vec<PushPane> {
     let snapshot = service.snapshot();
     let sessions: Vec<&mighty_core::model::RunSession> = snapshot.sessions().iter().map(|s| s.as_ref()).collect();
-    let workspaces = snapshot.workspaces.clone().unwrap_or_default();
+    let mut workspaces = snapshot.workspaces.clone().unwrap_or_default();
+    // A phone held to the shared workspaces (휴대폰에서 볼 워크스페이스) is told of nothing in another.
+    if let Some(allowed) =
+        mighty_remote::phone::desk::phone_workspace_ids(snapshot.mobile_remote.as_ref(), crate::phone::shared_workspace_ids)
+    {
+        workspaces.retain(|w| allowed.iter().any(|id| id == w.id()));
+    }
     planner::project(
         &sessions,
         &workspaces,
@@ -306,7 +375,12 @@ pub async fn reconnect(host: &Arc<Host>) -> Result<(), String> {
 pub async fn rotate(host: &Arc<Host>, device: Option<String>) -> Result<(), String> {
     let Some(relay) = relay(host).filter(|_| host.smoke.is_none()) else { return Ok(()) };
     relay.rotate(device).await.map_err(|error| error.to_string())?;
-    lock(&state(host).ui).shows_key = false;
+    {
+        let mobile = state(host);
+        let mut ui = lock(&mobile.ui);
+        ui.shows_key = false;
+        ui.shows_legacy_key = false;
+    }
     touch(host);
     Ok(())
 }

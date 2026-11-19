@@ -568,7 +568,10 @@ pub fn header(i: &ComposerInputs) -> Header {
         runtime::state_label(shown, l)
     };
     let (rest, _, help) = header_figures(i);
-    Header { word, tone: Tone::of(shown).name(), timed: pane.kind() != "shell" && pane.run_timing.is_some(), rest, help }
+    // Amber is for what needs the user (a permission, a question, a plan); a pane waiting on its background work's notices is still
+    // under way, so it keeps the run tone.
+    let tone = if awaiting { Tone::Run } else { Tone::of(shown) };
+    Header { word, tone: tone.name(), timed: pane.kind() != "shell" && pane.run_timing.is_some(), rest, help }
 }
 
 /// C# `PaneView.WebComposerState` (MainWindow.WebShell.Composer.cs:560).

@@ -7,6 +7,7 @@ import type { AppSnapshot } from '../store/models';
 import { hostCapabilities } from '../slot/host';
 import type { ShortcutAction } from './shortcuts';
 import { sidebarSearchId } from './Sidebar';
+import { toggleReview } from '../review/queue';
 
 /** The page's actions the menu reaches: its shortcuts' and the four items that have no key. */
 export type MenuAction = ShortcutAction | 'newFolder' | 'fromGit' | 'workMap' | 'usage';
@@ -19,7 +20,7 @@ export interface MenuPush {
 
 const actions: readonly string[] = [
   'openFolder', 'newPane', 'search', 'toggleSidebar', 'newShell', 'settings', 'files', 'help', 'textLarger', 'textSmaller', 'textReset',
-  'conversationSearch', 'newFolder', 'fromGit', 'workMap', 'usage',
+  'conversationSearch', 'reviewQueue', 'newFolder', 'fromGit', 'workMap', 'usage',
 ];
 
 export function isMenuPush(message: { kind: string }): message is MenuPush {
@@ -58,6 +59,7 @@ export function runAction(action: MenuAction, call: Call, snapshot: AppSnapshot,
     case 'settings': return run('openSettings');
     case 'files': return run('openFiles', {});
     case 'conversationSearch': return run('openConversationSearch', {});
+    case 'reviewQueue': return toggleReview();
     case 'workMap': return snapshot.activeWorkspaceId ? run('openWorkMap', { workspaceId: snapshot.activeWorkspaceId }) : undefined;
     case 'usage': return openUsage();
     case 'help': return run('openHelp');

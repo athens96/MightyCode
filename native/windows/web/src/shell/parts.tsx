@@ -67,9 +67,10 @@ export function BetaBadge() {
 export function StatusCounts({ counts, long = false }: { counts: Counts; long?: boolean }) {
   const { t } = useServices();
   const entries: [Tone, number, string][] = [
+    // What needs the user, then what went wrong, then what is under way (wait > error > run > done).
     ['wait', counts.questions + counts.permissions, 'phone.dashboard.stat.waiting'],
-    ['run', counts.running, 'session.state.running'],
     ['err', counts.errors, 'session.state.error'],
+    ['run', counts.running, 'session.state.running'],
   ];
   if (long) entries.push(['done', counts.done, 'session.state.completed'], ['stop', counts.stopped, 'session.state.stopped'], ['idle', counts.idle, 'session.state.idle']);
   const shown = entries.filter(([, count]) => count > 0);

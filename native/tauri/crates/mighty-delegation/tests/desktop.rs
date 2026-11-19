@@ -210,12 +210,12 @@ fn pane(s: &DelegationLaunch, id: &str, kind: &str, provider: &str, mode: &str) 
     }
 }
 
-/// The servers a run's `--mcp-config` names, sorted.
-fn servers(argv: &Value) -> Vec<String> {
-    let config: Value = serde_json::from_str(&steps::option(argv, "--mcp-config").unwrap_or_default()).unwrap_or(Value::Null);
-    let mut names: Vec<String> = config["mcpServers"].as_object().map(|servers| servers.keys().cloned().collect()).unwrap_or_default();
-    names.sort();
-    names
+/// The servers each run's `--mcp-config` file named, sorted, as the fake read it when it started (the file goes with the run).
+fn servers(log: &[Value]) -> Vec<Vec<String>> {
+    log.iter()
+        .filter(|entry| entry["event"] == "mcpConfig")
+        .map(|entry| entry["servers"].as_array().unwrap().iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .collect()
 }
 
 /// DelegationAppVerification "delegation: the real run path attaches the server and runs a child in its worktree" (L674).
@@ -237,7 +237,8 @@ async fn real_run_path() {
     let log = s.log(&repo);
     let argv: Vec<&Value> = log.iter().filter(|entry| entry["event"] == "argv").collect();
     assert!(
-        servers(argv[0]) == [TERMINAL_SERVER]
+        servers(&log) == [vec![TERMINAL_SERVER.to_string()]]
+            && steps::option(argv[0], "--mcp-config").is_some_and(|path| !path.starts_with('{'))
             && s.binding(PARENT).is_some_and(|binding| !binding.delegation())
             && !log.iter().any(|entry| entry["event"] == "mcp"),
         "switched off, one server"
@@ -252,7 +253,7 @@ async fn real_run_path() {
     let token = binding.environment().get(TOKEN_KEY).cloned().unwrap_or_default();
     let words: Vec<&str> = argv[1]["arguments"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
     assert!(
-        servers(argv[1]) == [DELEGATION_SERVER, TERMINAL_SERVER]
+        servers(&log).get(1).is_some_and(|names| names == &[DELEGATION_SERVER, TERMINAL_SERVER])
             && binding.delegation()
             && binding.kind() == "claude"
             && binding.provider == "claude"

@@ -271,7 +271,10 @@ jobs:
                  'src-tauri/src/update_helper.rs', 'src-tauri/src/app_update.rs', 'crates/mighty-platform-windows/src/update.rs',
                  'crates/mighty-platform-windows/tests/update_helper.rs',
                  # Mac stage M-H: the Mac's install.sh started by its update installer (and that file's own check).
-                 'crates/mighty-platform-macos/src/update.rs') + $port },
+                 'crates/mighty-platform-macos/src/update.rs',
+                 # 편집기에서 열기: the user's external editor, which must outlive the app and never sit in its children's job (a program
+                 # and its arguments as they are, a .exe only on Windows; mighty-tools' editor.rs builds them).
+                 'src-tauri/src/editor.rs') + $port },
             @{ what = 'ProcessHost::start_detached_waitable called'; pattern = '\bstart_detached_waitable\s*\('; skip = '\bfn\s+start_detached_waitable'
                allowed = @(
                  # The Ouroboros dashboard daemon, which C# leaves running (W9-E), and the Windows implementation's own contract test.

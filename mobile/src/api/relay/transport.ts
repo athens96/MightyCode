@@ -50,6 +50,13 @@ export const DIRECT_TIMEOUT_MS = 1_800;
  * a round trip or two; anything slower is better served by the relay, taken at once.
  */
 export const DIRECT_AUTH_TIMEOUT_MS = 3_000;
+/**
+ * A first pairing waits for the person at the computer to allow it: the host says
+ * `auth_pending` with its own time (60 s), and the answer may take that long plus this.
+ */
+const APPROVAL_SLACK_MS = 15_000;
+/** The longest a pairing waits for that answer, whatever the host says. */
+export const APPROVAL_WAIT_MAX_MS = 180_000;
 
 export type RelayState = 'connecting' | 'handshaking' | 'ready' | 'closed';
 
@@ -60,6 +67,7 @@ export type RelayFailure =
   | 'device-revoked'
   | 'device-conflict'
   | 'device-limit'
+  | 'approval-denied'
   | 'auth-refused'
   | 'too-many'
   | 'relay-unreachable'
@@ -75,6 +83,7 @@ const failureMessageKeys: Record<RelayFailure, string> = {
   'device-revoked': 'phone.relay.failure.deviceRevoked',
   'device-conflict': 'phone.relay.failure.deviceConflict',
   'device-limit': 'phone.relay.failure.deviceLimit',
+  'approval-denied': 'phone.relay.failure.approvalDenied',
   'auth-refused': 'phone.relay.failure.authRefused',
   'too-many': 'phone.relay.failure.tooMany',
   'relay-unreachable': 'phone.hosts.reachability.relayOffline',
@@ -94,6 +103,7 @@ const authFailures: Record<AuthErrorReason, RelayFailure> = {
   'device-conflict': 'device-conflict',
   'device-limit': 'device-limit',
   'legacy-refused': 'auth-refused',
+  'approval-denied': 'approval-denied',
   malformed: 'auth-refused',
   unknown: 'auth-refused',
 };
@@ -102,9 +112,12 @@ export function describeRelayFailure(failure: RelayFailure): string {
   return t(failureMessageKeys[failure]);
 }
 
-/** A rejected key or a released device: neither fixes itself, both need pairing again. */
+/**
+ * A rejected key, a released device or a pairing the computer refused: none fixes itself,
+ * all need pairing again.
+ */
 export function isFinalFailure(failure: RelayFailure | undefined): boolean {
-  return failure === 'unpaired' || failure === 'device-revoked';
+  return failure === 'unpaired' || failure === 'device-revoked' || failure === 'approval-denied';
 }
 
 /**
@@ -256,10 +269,17 @@ export interface RelayConnectionOptions {
   directTimeoutMs?: number;
   /** Overrides `DIRECT_AUTH_TIMEOUT_MS`. */
   directAuthTimeoutMs?: number;
+  /** Overrides how long a relay socket gets to reach `auth_ok` (20 s); the checks shorten it. */
+  handshakeTimeoutMs?: number;
   /** Called with the endpoints a host lists in `auth_ok`, so they can be stored. */
   onDirectEndpoints?: (endpoints: string[]) => void;
   /** Called each time the tunnel is ready, with the way it reached the host. */
   onRoute?: (route: ConnectionRoute) => void;
+  /**
+   * Called when the host puts this pairing to the person at the computer (`auth_pending`),
+   * with how many seconds they have; the tunnel then waits that long for the answer.
+   */
+  onAwaitingApproval?: (seconds: number) => void;
 }
 
 function defaultSocketFactory(url: string): RelaySocket {
@@ -370,8 +390,10 @@ export class RelayConnection {
   private readonly mintClientId: (() => Promise<string | undefined>) | undefined;
   private readonly directTimeoutMs: number;
   private readonly directAuthTimeoutMs: number;
+  private readonly handshakeTimeoutMs: number;
   private readonly onDirectEndpoints: ((endpoints: string[]) => void) | undefined;
   private readonly onRoute: ((route: ConnectionRoute) => void) | undefined;
+  private readonly onAwaitingApproval: ((seconds: number) => void) | undefined;
 
   constructor(
     private readonly target: RelayTarget,
@@ -387,8 +409,10 @@ export class RelayConnection {
     this.mintClientId = options.mintClientId;
     this.directTimeoutMs = options.directTimeoutMs ?? DIRECT_TIMEOUT_MS;
     this.directAuthTimeoutMs = options.directAuthTimeoutMs ?? DIRECT_AUTH_TIMEOUT_MS;
+    this.handshakeTimeoutMs = options.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS;
     this.onDirectEndpoints = options.onDirectEndpoints;
     this.onRoute = options.onRoute;
+    this.onAwaitingApproval = options.onAwaitingApproval;
     this.directEndpoints = [...(target.directEndpoints ?? [])];
     this.auth = {
       clientId: target.clientId,
@@ -669,7 +693,7 @@ export class RelayConnection {
       () => {
         if (this.currentState !== 'ready') this.dropSocket(socket, 'host-not-attached');
       },
-      route === 'direct' ? this.directAuthTimeoutMs : HANDSHAKE_TIMEOUT_MS,
+      route === 'direct' ? this.directAuthTimeoutMs : this.handshakeTimeoutMs,
     );
 
     const hello = () => {
@@ -833,6 +857,7 @@ export class RelayConnection {
       reason?: unknown;
       capabilities?: unknown;
       direct?: unknown;
+      timeout?: unknown;
     };
 
     if (typeof envelope.id === 'string' && envelope.type === undefined) {
@@ -861,6 +886,22 @@ export class RelayConnection {
           this.onDirectEndpoints?.(direct);
         }
         this.onAuthenticated(info, deviceToken);
+        return;
+      }
+      case 'auth_pending': {
+        // The host asks the person at the computer before it registers this phone. Only a
+        // pairing waits (a token is never asked about): its deadline becomes the host's
+        // time plus some slack, on the direct path too.
+        const socket = this.socket;
+        if (!socket || this.currentState === 'ready' || this.auth.deviceToken) return;
+        const seconds =
+          typeof envelope.timeout === 'number' && envelope.timeout > 0 ? envelope.timeout : 60;
+        const waitMs = Math.min(seconds * 1000 + APPROVAL_SLACK_MS, APPROVAL_WAIT_MAX_MS);
+        if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
+        this.handshakeTimer = setTimeout(() => {
+          if (this.currentState !== 'ready') this.dropSocket(socket, 'timeout');
+        }, waitMs);
+        this.onAwaitingApproval?.(seconds);
         return;
       }
       case 'auth_error': {

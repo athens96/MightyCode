@@ -2,14 +2,15 @@
 //! four_files::FourFiles`, as the Mac runs it, with the Swift checks of `MobileRemoteService` and `MobileDeviceRegistry` ported by name.
 //! What differs from Swift on purpose is said at each test (the shared `Identity` is C#'s: 키 다시 만들기 is a rotation, a row's 연결 해제
 //! unpairs that device alone and makes a new key, a client id has 22 characters, an unwritable list fails the pairing instead of
-//! admitting the phone without a token).
+//! admitting the phone without a token). A device pairs with a short-lived pairing code and the person's approval (`register` here
+//! stands for the approval); the saved key is the legacy apps' only.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mighty_platform::pairing::four_files::{DEVICES, FourFiles, KEY_PAIR, PAIRING_KEY, PlainFiles};
 use mighty_platform::{PairingStore, PlatformError};
-use mighty_remote::identity::{AuthDecision, AuthRefusal, AuthRequest, Identity, PushRegistrationResult, hash};
+use mighty_remote::identity::{AuthDecision, AuthPolicy, AuthRefusal, AuthRequest, Identity, PairingKind, PushRegistrationResult, hash};
 use serde_json::json;
 
 const PHONE: &str = "cGhvbmUtb25lLTAwMDAwMA";
@@ -46,12 +47,28 @@ impl Drop for Folder {
     }
 }
 
-fn pair(identity: &Identity, key: &str, id: &str, name: &str) -> Result<AuthDecision, PlatformError> {
-    identity.authorize(&AuthRequest::from_json(&json!({"type": "auth", "pairingKey": key, "clientId": id, "clientName": name})), true)
+const ALL: AuthPolicy = AuthPolicy { allow_legacy: true, allow_desktops: true };
+
+/// An auth decided, a registration allowed by the person at once.
+fn allowed(identity: &Identity, auth: serde_json::Value) -> Result<AuthDecision, PlatformError> {
+    match identity.authorize(&AuthRequest::from_json(&auth), ALL)? {
+        AuthDecision::Pending(pending) => identity.register(&pending),
+        decided => Ok(decided),
+    }
+}
+
+/// A phone pairs with `key` (allowed at once).
+fn pair_with(identity: &Identity, key: &str, id: &str, name: &str) -> Result<AuthDecision, PlatformError> {
+    allowed(identity, json!({"type": "auth", "pairingKey": key, "clientId": id, "clientName": name}))
+}
+
+/// A phone pairs with the phone's live pairing code (allowed at once).
+fn pair(identity: &Identity, id: &str, name: &str) -> Result<AuthDecision, PlatformError> {
+    pair_with(identity, &identity.pairing_code(PairingKind::Phone), id, name)
 }
 
 fn returning(identity: &Identity, id: &str, token: &str) -> AuthDecision {
-    identity.authorize(&AuthRequest::from_json(&json!({"type": "auth", "deviceToken": token, "clientId": id})), true).unwrap()
+    identity.authorize(&AuthRequest::from_json(&json!({"type": "auth", "deviceToken": token, "clientId": id})), ALL).unwrap()
 }
 
 fn token(decision: AuthDecision) -> String {
@@ -72,7 +89,7 @@ fn revoking_rotates_the_key_before_the_row_and_fails_whole_or_not_at_all() {
     let folder = Folder::new("revoke");
     let identity = folder.identity();
     let key = identity.pairing_key().to_string();
-    let phone = token(pair(&identity, &key, PHONE, "iPhone").unwrap());
+    let phone = token(pair(&identity, PHONE, "iPhone").unwrap());
     folder.block_list();
     assert!(identity.rotate().is_err(), "half a revoke is never reported as a whole one");
     assert_eq!(identity.devices().iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), [PHONE]);
@@ -94,10 +111,12 @@ fn revoking_one_device_keeps_the_others_and_makes_a_new_key() {
     let folder = Folder::new("revoke-one");
     let identity = Arc::new(folder.identity());
     let key = identity.pairing_key().to_string();
-    let phone = token(pair(&identity, &key, PHONE, "iPhone").unwrap());
-    let desktop_auth = json!({"type": "auth", "pairingKey": key, "clientId": OTHER, "clientName": "laptop", "role": "desktop"});
-    let desktop = token(identity.authorize(&AuthRequest::from_json(&desktop_auth), true).unwrap());
-    identity.authorize(&AuthRequest::from_json(&json!({"type": "auth", "pairingKey": key})), true).unwrap();
+    let phone = token(pair(&identity, PHONE, "iPhone").unwrap());
+    let code = identity.pairing_code(PairingKind::Desktop);
+    let desktop_auth = json!({"type": "auth", "pairingKey": *code, "clientId": OTHER, "clientName": "laptop", "role": "desktop"});
+    let desktop = token(allowed(&identity, desktop_auth).unwrap());
+    identity.authorize(&AuthRequest::from_json(&json!({"type": "auth", "pairingKey": key})), ALL).unwrap();
+    let shown = identity.pairing_code(PairingKind::Phone).to_string();
     assert_eq!(identity.devices().len(), 3, "a phone, a computer and the legacy row");
     assert!(identity.devices().iter().any(|d| d.id == OTHER && d.desktop), "the computer is marked as one");
     let heard = Arc::new(std::sync::Mutex::new(vec![]));
@@ -119,10 +138,10 @@ fn revoking_one_device_keeps_the_others_and_makes_a_new_key() {
     assert_eq!(returning(&identity, PHONE, &phone), AuthDecision::Refused(AuthRefusal::DeviceRevoked), "the revoked token");
     let desktop_again = json!({"type": "auth", "deviceToken": desktop, "clientId": OTHER, "role": "desktop"});
     assert!(
-        matches!(identity.authorize(&AuthRequest::from_json(&desktop_again), true).unwrap(), AuthDecision::Accepted { .. }),
+        matches!(identity.authorize(&AuthRequest::from_json(&desktop_again), ALL).unwrap(), AuthDecision::Accepted { .. }),
         "the other device's token still opens it"
     );
-    assert_eq!(pair(&identity, &key, PHONE, "iPhone").unwrap(), AuthDecision::Refused(AuthRefusal::PairingKey), "the old key");
+    assert_eq!(pair_with(&identity, &shown, PHONE, "iPhone").unwrap(), AuthDecision::Refused(AuthRefusal::PairingKey), "the code shown");
     assert!(identity.revoke(PHONE).unwrap().is_empty(), "a device no longer paired: nothing changes");
     let reloaded = folder.identity();
     assert_eq!(reloaded.devices().iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), [OTHER], "saved");
@@ -132,14 +151,14 @@ fn revoking_one_device_keeps_the_others_and_makes_a_new_key() {
     assert!(identity.devices().is_empty(), "키 다시 만들기 still drops everyone");
     assert_eq!(heard.lock().unwrap().last(), Some(&None));
     assert_eq!(
-        identity.authorize(&AuthRequest::from_json(&desktop_again), true).unwrap(),
+        identity.authorize(&AuthRequest::from_json(&desktop_again), ALL).unwrap(),
         AuthDecision::Refused(AuthRefusal::DeviceRevoked)
     );
 }
 
 /// `MobileRemoteTests.swift:944 "keysPersistAndStatusExposesTheOfferOnlyWhileConnected"` (the keys' half; the offer while connected is
 /// the relay's): the key, the host token (the relay's server id) and the key pair survive a new identity over the same files, and a
-/// rotation empties the list.
+/// rotation empties the list and makes them all anew (every device pairs again anyway), the host id kept.
 #[test]
 fn keys_persist_and_status_exposes_the_offer_only_while_connected() {
     let folder = Folder::new("persist");
@@ -151,10 +170,14 @@ fn keys_persist_and_status_exposes_the_offer_only_while_connected() {
     );
     assert!(read(&folder.0.join(KEY_PAIR)).starts_with("{\"publicKeyB64\":"), "Swift's key pair file");
     let key = first.pairing_key().to_string();
-    token(pair(&first, &key, PHONE, "iPhone").unwrap());
+    token(pair(&first, PHONE, "iPhone").unwrap());
     first.rotate().unwrap();
-    assert!(folder.identity().devices().is_empty() && *folder.identity().pairing_key() != key);
-    assert_eq!(folder.identity().server_id(), again.server_id(), "the server id is the host token's, untouched by a rotation");
+    let rotated = folder.identity();
+    assert!(rotated.devices().is_empty() && *rotated.pairing_key() != key);
+    assert_ne!(rotated.server_id(), again.server_id(), "a new host token, so a new relay name");
+    assert_ne!(rotated.public_key(), again.public_key(), "a new relay key pair");
+    assert_eq!((rotated.server_id(), rotated.public_key()), (first.server_id(), first.public_key()), "saved as it is used");
+    assert_eq!(rotated.host_id(), again.host_id(), "the host id stays");
 }
 
 /// `RelayChannelTests.swift:34 "keypairPersistsOwnerOnlyAndPairingOfferRoundTrips"` (the key pair's half; its modes are
@@ -179,8 +202,7 @@ fn keypair_persists_owner_only_and_pairing_offer_round_trips() {
 fn a_phone_with_a_token_registers_a_handle_and_the_kinds_it_wants() {
     let folder = Folder::new("push");
     let identity = folder.identity();
-    let key = identity.pairing_key().to_string();
-    token(pair(&identity, &key, PHONE, "Phone").unwrap());
+    token(pair(&identity, PHONE, "Phone").unwrap());
     let kinds = ["permission".to_string(), "completed".to_string(), "future-kind".to_string()];
     assert_eq!(identity.set_push(PHONE, HANDLE, &kinds), PushRegistrationResult::Saved);
     let pushed = folder.identity().push_devices();
@@ -198,8 +220,7 @@ fn a_phone_with_a_token_registers_a_handle_and_the_kinds_it_wants() {
 fn an_unregister_that_cannot_be_saved_is_reported_and_keeps_the_handle() {
     let folder = Folder::new("unregister");
     let identity = folder.identity();
-    let key = identity.pairing_key().to_string();
-    token(pair(&identity, &key, PHONE, "Phone").unwrap());
+    token(pair(&identity, PHONE, "Phone").unwrap());
     assert_eq!(identity.set_push(PHONE, HANDLE, &["completed".to_string()]), PushRegistrationResult::Saved);
     folder.block_list();
     assert!(!identity.clear_push(PHONE, None), "a phone told 'off' hears that it failed");
@@ -239,8 +260,7 @@ fn the_list_drops_a_handle_it_cannot_use() {
 fn a_device_token_is_issued_once_and_only_its_hash_is_kept() {
     let folder = Folder::new("token");
     let identity = folder.identity();
-    let key = identity.pairing_key().to_string();
-    let phone = token(pair(&identity, &key, PHONE, "Young's iPhone").unwrap());
+    let phone = token(pair(&identity, PHONE, "Young's iPhone").unwrap());
     assert_eq!(identity.devices().len(), 1);
     assert!(!identity.devices()[0].legacy && identity.devices()[0].name == "Young's iPhone");
     assert!(matches!(returning(&identity, PHONE, &phone), AuthDecision::Accepted { device_token: None, .. }));
@@ -252,21 +272,26 @@ fn a_device_token_is_issued_once_and_only_its_hash_is_kept() {
     assert!(matches!(returning(&folder.identity(), PHONE, &phone), AuthDecision::Accepted { .. }));
 }
 
-/// `MobileRemoteExtensionTests.swift:1179 "pairingAgainWithTheKeyGivesTheSameRowANewToken"`.
+/// `MobileRemoteExtensionTests.swift:1179 "pairingAgainWithTheKeyGivesTheSameRowANewToken"`, made safe: pairing again under an id that is
+/// paired asks the person like any new device (said to replace one), and once allowed it is a new device — a new token, first seen
+/// now, its old token refused — rather than that device's row quietly taken over.
 #[test]
-fn pairing_again_with_the_key_gives_the_same_row_a_new_token() {
+fn pairing_again_under_a_paired_id_asks_and_makes_a_new_device() {
     let folder = Folder::new("again");
     let identity = folder.identity();
-    let key = identity.pairing_key().to_string();
-    let first = token(pair(&identity, &key, PHONE, "Young's iPhone").unwrap());
-    let before = folder.identity().devices()[0].first_seen.clone();
-    let fresh = token(pair(&identity, &key, PHONE, "Young's Galaxy").unwrap());
+    let first = token(pair(&identity, PHONE, "Young's iPhone").unwrap());
+    let code = identity.pairing_code(PairingKind::Phone);
+    let auth = json!({"type": "auth", "pairingKey": *code, "clientId": PHONE, "clientName": "Young's Galaxy"});
+    let AuthDecision::Pending(pending) = identity.authorize(&AuthRequest::from_json(&auth), ALL).unwrap() else { panic!("it asks") };
+    assert!(pending.replaces && pending.name == "Young's Galaxy" && !pending.desktop);
+    assert!(matches!(returning(&identity, PHONE, &first), AuthDecision::Accepted { .. }), "nothing changes before it is allowed");
+    let fresh = token(identity.register(&pending).unwrap());
     assert_ne!(fresh, first);
     let after = folder.identity().devices();
-    assert!(after.len() == 1 && after[0].first_seen == before && after[0].name == "Young's Galaxy");
+    assert!(after.len() == 1 && after[0].name == "Young's Galaxy" && after[0].is_new);
     assert!(matches!(returning(&identity, PHONE, &fresh), AuthDecision::Accepted { .. }));
     assert_eq!(returning(&identity, PHONE, &first), AuthDecision::Refused(AuthRefusal::DeviceRevoked));
-    assert_eq!(pair(&identity, "not-the-key", PHONE, "x").unwrap(), AuthDecision::Refused(AuthRefusal::PairingKey));
+    assert_eq!(pair_with(&identity, "not-the-key", PHONE, "x").unwrap(), AuthDecision::Refused(AuthRefusal::PairingKey));
 }
 
 /// `MobileRemoteExtensionTests.swift:1205 "aFailedWriteIssuesNoTokenAndMakesARevokeFail"` (the shared `Identity` refuses the pairing
@@ -275,11 +300,10 @@ fn pairing_again_with_the_key_gives_the_same_row_a_new_token() {
 fn a_failed_write_issues_no_token_and_makes_a_revoke_fail() {
     let folder = Folder::new("failed");
     let identity = folder.identity();
-    let key = identity.pairing_key().to_string();
-    let phone = token(pair(&identity, &key, PHONE, "iPhone").unwrap());
+    let phone = token(pair(&identity, PHONE, "iPhone").unwrap());
     let before = identity.devices();
     folder.block_list();
-    assert!(pair(&identity, &key, OTHER, "new").is_err(), "a token the host cannot remember is worse than no token");
+    assert!(pair(&identity, OTHER, "new").is_err(), "a token the host cannot remember is worse than no token");
     assert_eq!(identity.devices(), before);
     assert!(identity.rotate().is_err());
     assert_eq!(identity.devices(), before);

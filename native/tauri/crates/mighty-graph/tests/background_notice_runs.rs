@@ -745,25 +745,28 @@ fn a_request_awaiting_notices_is_the_awaiting_notice_block() {
     check(
         block.kind == "result"
             && block.title == "알림 대기 중"
-            && block.status == "waiting"
+            && block.status == "running"
             && block.outline == activity::MARCHING
             && block.awaiting.as_ref() == Some(&awaiting)
             && block.state == "알림 대기"
-            && view_model::tone(&block) == Tone::Wait,
+            && view_model::tone(&block) == Tone::Run,
         &format!("the diagram's 알림 대기 block: {block:?}"),
     );
     check(
         notice::awaiting_notice(&support::shown_runs(&all, &ko)[0], &[], &ko) == Some(awaiting.clone()),
         "a shown run carries its awaiting",
     );
-    check(timeline::groups(&all, &ko)[0].result.as_ref().is_some_and(|r| r.awaiting && r.tone == Tone::Wait), "기록's result head waits");
+    check(
+        timeline::groups(&all, &ko)[0].result.as_ref().is_some_and(|r| r.awaiting && r.tone == Tone::Run),
+        "기록's result head is under way",
+    );
     check(free_rows(&all).iter().map(|r| r.item.awaiting).collect::<Vec<_>>() == [true, false, false], "the pipeline card awaits");
     let result_column = |all: &[MightyGraphRun]| {
         let boards = board::boards(&free_shape(all), &ko);
         let column = &boards[0].columns[2];
         tone::of_card(&column.cards[0], column)
     };
-    same(result_column(&all), Some(Tone::Wait), "the pipeline's 결과 waits");
+    same(result_column(&all), Some(Tone::Run), "the pipeline's 결과 is under way");
     // The phone's pipeline: the 알림 대기 card, and the running count for an older phone.
     let phone = mobile::make(&free_shape(&all), all.len(), None, None, None, None).expect("a structure");
     let items: Vec<mobile::MobileItem> = phone.rows.expect("rows").into_iter().map(|r| r.item).collect();
@@ -991,7 +994,7 @@ fn a_notice_run_reads_the_requests_waiting_count() {
     check(free_rows(&all).iter().map(|r| r.item.background_waiting).collect::<Vec<_>>() == [3, 3, 3, 1], "pipeline cards");
     check(
         timeline::groups(&all, &ko).iter().map(|g| g.result.as_ref().map(|r| r.tone)).collect::<Vec<_>>()
-            == [Some(Tone::Wait), Some(Tone::Idle), Some(Tone::Idle), Some(Tone::Wait)],
+            == [Some(Tone::Run), Some(Tone::Idle), Some(Tone::Idle), Some(Tone::Run)],
         "기록's results: the requests wait, the notice runs read so far",
     );
     // The work ends one by one; the notice run goes on reading the count until the last one.
