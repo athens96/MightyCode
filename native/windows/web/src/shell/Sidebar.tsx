@@ -231,9 +231,6 @@ export function Sidebar() {
           onClick={(event) => menu.under(event.currentTarget, addChoices.map((choice) => ({ label: choice.label, icon: <Icon name={choice.icon} size={12} />, action: choice.run, testId: 'workspace-add-' + choice.key })))}>
           <Icon name="folder-plus" size={13} />
         </button>
-        <button type="button" className="icon-button" title={t('remote.menu.connect')} aria-label={t('remote.menu.connect')} onClick={() => call('connectRemote')}>
-          <Icon name="globe" size={13} />
-        </button>
       </div>
       <div className="sidebar-list">
         {listed.length === 0 && groups.servers.every((g) => g.workspaces.length === 0) && (
