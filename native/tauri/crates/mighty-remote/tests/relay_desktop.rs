@@ -821,7 +821,8 @@ async fn a_phone_gains_nothing() {
     let (answer, cipher, mut socket) = loop {
         match phone(&relay.url, &link, auth.clone()).await {
             Ok(done) => break done,
-            Err(None) if tries < 50 => {
+            // 4404: the relay has no host for the id yet (its link is coming back after the change), as a socket ended early.
+            Err(None | Some(4404)) if tries < 50 => {
                 tries += 1;
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
