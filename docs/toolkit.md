@@ -128,8 +128,8 @@ brew·repoScript는 Windows에서 목록에 없으므로 탐지하지 않는다.
 
 ## 화면 조작 (설정 → 구성 요소)
 
-`ComponentsSettingsView.swift`의 `ToolkitSettingsSection`이 그린다.
-접근성 ID는 모두 `settings-toolkit`으로 시작한다.
+0.5(Mac·Windows 공통)는 `native/tauri/src-tauri/src/settings/tools.rs`의 "내 작업 도구 모음" 칸이 그리고, 저장·탐지·실행은 `native/tauri/crates/mighty-tools/src/toolkit/`(`store.rs`, `probe.rs`, `runner.rs`, `file.rs`)다. 0.4에서는 `ComponentsSettingsView.swift`의 `ToolkitSettingsSection`이 그렸다.
+아래 표의 접근성 ID는 0.4 Swift 화면의 것이다(모두 `settings-toolkit`으로 시작한다).
 
 | 조작 | 접근성 ID | 하는 일 |
 |------|-----------|---------|

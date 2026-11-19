@@ -36,7 +36,7 @@
 - 권한이 없는 폴더·파일은 앱을 멈추지 않고 "읽을 수 없습니다"로 표시한다.
 - 아무것도 쓰지 않으며, 원격 내용을 불러오지 않는다.
 
-구현은 `MightyCore/WorkspaceFiles.swift`(`WorkspaceFiles`, `TextEncoding`, `FilePreviewClassifier`)와 `MightyCore/SourceHighlighter.swift`(`SourceLines`, `SourceHighlighter`)이며 `WorkspaceFilesTests`가 정렬·잡음 폴더·링크 탈출·안전한 열기(FIFO, 마지막 요소 링크, 루트 밖 실제 경로)·분류·인코딩·크기 제한·줄 나누기·강조 토큰을 검사한다.
+0.5(Rust, Mac·Windows 공통)의 구현은 `native/tauri/crates/mighty-files/`(`listing.rs` 목록·정렬, `classify.rs` 분류·인코딩·크기 한도, `source.rs` 줄·강조·찾기, `tree.rs`, `preview.rs`)와 앱 쪽 `src-tauri/src/files.rs`, 화면 `native/windows/web/src/panes/files/`(`FilesView.tsx`, `HtmlView.tsx`, `DiffView.tsx`)이고, 검사는 `crates/mighty-files/tests/`(`files_pane.rs` 등)다. 0.4에서는 `MightyCore/WorkspaceFiles.swift`(`WorkspaceFiles`, `TextEncoding`, `FilePreviewClassifier`)와 `MightyCore/SourceHighlighter.swift`(`SourceLines`, `SourceHighlighter`)였고 `WorkspaceFilesTests`가 정렬·잡음 폴더·링크 탈출·안전한 열기(FIFO, 마지막 요소 링크, 루트 밖 실제 경로)·분류·인코딩·크기 제한·줄 나누기·강조 토큰을 검사한다.
 
 ## 미리보기
 
@@ -100,6 +100,8 @@ NSTextView와 같은 곳에서 줄을 나눈다: `\n`, `\r`, `\r\n`(한 줄바�
 
 ## 검사
 
+0.5: `cargo test -p mighty-files`(`native/tauri`), 화면은 앱 스모크(`--smoke-test`)의 파일 단계(`src-tauri/src/smoke_files.rs`: 창 추가 메뉴로 파일 창 열기, 트리, 강조 미리보기, HTML 프레임, 참조 말풍선)와 페이지 검사(`native/windows/web`의 `npx vitest run`). 아래 명령은 은퇴한 0.4 Swift 앱의 것이다.
+
 ```sh
 release/native-macos/MightyCode.app/Contents/MacOS/MightyCode \
   --files-smoke-test --smoke-exit --profile /tmp/mighty-files-smoke
@@ -109,7 +111,7 @@ release/native-macos/MightyCode.app/Contents/MacOS/MightyCode \
 
 ## Windows
 
-Windows 앱(`native/windows`)은 같은 창을 같은 규칙으로 보인다. 규칙은 `MightyCode.Core/WorkspaceFiles.cs`가 macOS `WorkspaceFiles.swift`·`SourceHighlighter.swift`를 그대로 옮긴 것이고, 화면은 `MightyCode.WinUI/MainWindow.Files.cs`다. 검사는 `FilesPaneVerification.cs`(Core.Tests, macOS `WorkspaceFilesTests`와 같은 벡터)와 GUI 스모크 키 `filesPane`이다.
+0.5에서는 Mac·Windows가 위의 같은 Rust 코드와 페이지를 쓴다. 아래는 은퇴한 0.4 Windows 앱(`native/windows`)의 기록이다. 그 앱은 같은 창을 같은 규칙으로 보였고, 규칙은 `MightyCode.Core/WorkspaceFiles.cs`가 macOS `WorkspaceFiles.swift`·`SourceHighlighter.swift`를 그대로 옮긴 것이고, 화면은 `MightyCode.WinUI/MainWindow.Files.cs`다. 검사는 `FilesPaneVerification.cs`(Core.Tests, macOS `WorkspaceFilesTests`와 같은 벡터)와 GUI 스모크 키 `filesPane`이다.
 
 - 여는 방법: **Ctrl+Shift+E**(⇧⌘E의 ⌘를 Ctrl로), 탭 그룹의 `+` 메뉴와 워크스페이스 메뉴의 **파일 창 열기**. 워크스페이스마다 하나이고, 처음 열면 현재 창의 왼쪽으로 분할한다. 저장하지 않으므로 앱을 다시 켜면 없다. 펼친 폴더와 마지막으로 본 파일은 앱이 켜져 있는 동안 기억한다.
 - 경로 규칙: 심볼릭 링크와 정션을 풀어 실제 경로가 루트 안일 때만 보이고 연다. `..`·절대 경로·드라이브 문자·`:`(NTFS 스트림 이름)·NUL은 거절한다. 연 다음에는 핸들의 최종 경로(`GetFinalPathNameByHandle`)가 루트 안인지 다시 보고, 디스크 파일이 아닌 핸들(장치 이름 등)은 "미리볼 수 없는 파일"이다. 숨김 속성 파일도 보인다.

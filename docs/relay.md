@@ -7,7 +7,7 @@
 | 역할 | 구현 | 위치 |
 |---|---|---|
 | 릴레이 | 기본: Cloudflare Workers + Durable Objects(`serverId`마다 Hub 하나, [`relay-cloudflare.md`](relay-cloudflare.md)). 직접 올리기: Node.js + `ws`, 상태 없음, `serverId`로 소켓을 짝지음. 와이어는 같다 | `relay/cloudflare/`, `relay/` (Docker 이미지 포함) |
-| 호스트(데몬) | Mac 앱의 `MobileRemoteService`, Windows 앱의 `MobileRelayHost` (둘 다 직접 연결 리스너 `MobileDirectListener` 포함) | `native/macos/Sources/MightyCore/Remote/`, `native/windows/MightyCode.Core/Remote/` |
+| 호스트(데몬) | 0.5 Rust 앱(Mac·Windows 공통)의 릴레이 호스트와 직접 연결 리스너. 0.4의 Swift `MobileRemoteService`·C# `MobileRelayHost`는 은퇴한 참고 구현 | `native/tauri/crates/mighty-remote/src/relay/`(`host.rs`, 다른 컴퓨터 쪽 `client.rs`), `src/direct/`, 앱 연결 `native/tauri/src-tauri/src/direct.rs` |
 | 클라이언트 | Expo 앱의 `relayTransport` | `mobile/src/api/relay/` |
 
 ## 릴레이 와이어 (평문, 릴레이가 해석)
@@ -125,7 +125,7 @@ QR/문자열: `mightycode://pair?v=2&sid=<serverId>&pk=<b64url 공개키>&relay=
 
 릴레이 없이 휴대폰이 호스트(Mac·Windows PC)에 직접 데이터 소켓을 여는 길이다. 휴대폰은 `ws://<끝점>/ws?v=1`로 연다 — 직접 연결에는 상대가 호스트 하나뿐이므로 `serverId`도 `connectionId`도 싣지 않는다(테일넷에서 엿본 값으로 릴레이에 무엇을 해 볼 거리를 남기지 않는다). 열린 소켓 위의 평문 `hello`/`ready`, 암호화 프레임, `auth`·`auth_ok`, m1 터널, `notify`, ping은 위의 절과 똑같다. 그래서 직접 연결도 페어링한 공개키로 호스트를 확인하고, 페어링 키나 기기 토큰으로만 들어온다. 핸드셰이크를 마치지 못한 연결은 끊긴다. Mac과 Windows 호스트가 연다.
 
-**Mac 리스너** (`MobileDirect.swift`)
+**Mac 리스너** (0.4 `MobileDirect.swift`의 설명이다. 0.5는 Mac·Windows가 같은 Rust 리스너 `crates/mighty-remote/src/direct/listener.rs`를 쓰고, Mac에서는 `utun` 이름도 본다: `tailscale.rs`)
 
 - 모바일 리모트와 설정의 "Tailscale로 직접 연결"(기본 켜짐)이 둘 다 켜져 있을 때만 연다. 릴레이 연결 여부와는 상관없다.
 - **무엇이 Tailscale인가**: `getifaddrs`의 `utun` 인터페이스 가운데 **그 인터페이스 자신이 fd7a:115c:a1e0::/48 주소를 가진 것**만 Tailscale로 본다(Cloudflare WARP 같은 다른 VPN도 `utun`에 100.64.0.0/10을 붙이지만 Tailscale의 IPv6 접두사는 갖지 않는다). 그 인터페이스의 100.64.0.0/10·fd7a:115c:a1e0::/48 주소만 쓴다. 판단은 순수 함수 하나(`TailscaleAddresses.select(interfaces:)`)가 하며, 원격 워크스페이스와 같은 규칙을 같은 코드로 쓴다.
@@ -142,14 +142,14 @@ QR/문자열: `mightycode://pair?v=2&sid=<serverId>&pk=<b64url 공개키>&relay=
 - 핸드셰이크 제한 시간은 릴레이 연결과 같은 10초.
 - 릴레이 제어 소켓이 끊기거나 다시 열려도 직접 연결은 그대로다(릴레이의 `disconnected` 알림도 직접 연결에는 손대지 않는다). 모바일 리모트나 직접 연결 스위치를 끄면 직접 연결만 닫는다. 기기 해제·키 다시 만들기는 경로와 상관없이 같은 규칙으로 닫는다.
 
-**Windows 리스너** (`MightyCode.Core/Remote/MobileDirect.cs`·`MobileDirectListener.cs`·`MobileRelayHost.cs`)
+**Windows 리스너** (0.4 `MightyCode.Core/Remote/MobileDirect.cs`·`MobileDirectListener.cs`·`MobileRelayHost.cs`의 설명이다. 0.5는 같은 규칙을 `crates/mighty-remote/src/direct/`가 옮겨 받았다)
 
 - 켜지는 조건(모바일 리모트와 "Tailscale로 직접 연결" 둘 다), 포트(기본 43139, 1024–65535), 받지 않는 연결(두 범위 밖의 상대, 함께 36개, 휴대폰 표 32대, 핸드셰이크 4개·같은 주소 2개, 60초 안에 주소마다 인증 5번 실패), 일반 거절 `unauthorized`, 10초 핸드셰이크 제한, `direct-` id, 릴레이가 끊기거나 다시 열려도 직접 연결이 그대로인 것은 Mac과 같다.
 - **무엇이 Tailscale인가**: `NetworkInterface.GetAllNetworkInterfaces()`의 켜진 어댑터 가운데 **그 어댑터 자신이 fd7a:115c:a1e0::/48 주소를 가진 것**만 Tailscale로 보고, 그 어댑터의 두 범위 주소만 쓴다(`TailscaleAddresses.Select`). Mac과 달리 어댑터 이름은 보지 않는다: Windows에서는 사용자가 어댑터 이름을 바꿀 수 있고 Wintun 어댑터의 종류는 정해진 `NetworkInterfaceType` 값이 아니다. 두 앱이 같은 사례 파일 `native/contracts/fixtures/tailscale-addresses.json`을 읽고, 플랫폼마다 답(`darwin`·`win32`)이 다른 사례는 이 차이에서 오는 두 가지뿐이다.
 - 주소마다 `TcpListener` 하나를 그 주소에만 묶는다(와일드카드 없음, `ExclusiveAddressUse`). 특정 IP에 묶는 `HttpListener`는 관리자 권한의 URL ACL이 필요해 쓰지 않는다. Mac의 `requiredInterface` 고정은 없고, 주소에 묶는 것과 Windows의 강한 호스트 모델로 대신한다.
 - WebSocket 업그레이드는 앱이 직접 읽는다: 요청 머리 8 KiB까지, `GET /ws`(질의는 보지 않음)·`HTTP/1.1`·`Upgrade: websocket`·`Connection: Upgrade`·`Sec-WebSocket-Version: 13`·16바이트 `Sec-WebSocket-Key`가 아니면 답 없이 닫는다. 업그레이드도 10초 핸드셰이크 제한 안이다. 그 뒤는 `WebSocket.CreateFromStream`(서버, 프레임 1 MiB)이고, 릴레이 데이터 소켓과 같은 `Connection`이 핸드셰이크·인증·m1 터널을 맡는다.
 - 주소는 Windows의 주소 변경 알림(`NetworkChange.NetworkAddressChanged`)과 15초마다 다시 읽는다. MagicDNS 이름은 싣지 않는다(휴대폰은 이름을 열지 않는다).
-- **Windows 방화벽**: 규칙 하나를 더하거나 고치거나 지우는 일은 사용자가 설정의 방화벽 규칙 줄에서 버튼을 누를 때, 또는 규칙이 있는 채로 모바일 리모트나 직접 연결 스위치를 끌 때만 한다. 규칙은 이 앱(`MightyCode.exe`)만, 모든 프로필에서, 이 앱의 포트로 오는 TCP 연결 가운데 상대가 100.64.0.0/10·fd7a:115c:a1e0::/48 안이고 닿는 로컬 주소도 그 두 범위 안인 것만 허용한다. 명령은 상수와 앱 자신의 경로로만 만든 `%SystemRoot%\System32\netsh.exe advfirewall firewall add rule name="Mighty Code (Tailscale)" dir=in action=allow protocol=TCP localport=<포트> localip=100.64.0.0/10,fd7a:115c:a1e0::/48 remoteip=100.64.0.0/10,fd7a:115c:a1e0::/48 program="<앱 exe>" profile=any`(같은 이름의 규칙이 이미 있으면 같은 내용으로 `set rule name="Mighty Code (Tailscale)" new … enable=yes`라 규칙이 쌓이지 않고 뺀 포트는 닫힌다. 지울 때는 `delete rule name="Mighty Code (Tailscale)"`)이고 Windows의 UAC 확인을 거친다. 같은 이름의 규칙이 있는지는 관리자 권한 없이 `show rule`의 종료 코드로 읽는다(포트까지 맞는지는 아니다). 줄의 버튼은 규칙이 있으면 "규칙 지우기", 없으면 "규칙 추가"(열 포트가 없고 규칙도 없으면 버튼 없음)이고, 규칙의 상태를 읽지 못했으면 "다시 확인"이라 관리자 권한을 묻지 않고 다시 읽기만 한다. 규칙이 있는 채 포트를 바꾸면 줄의 안내가 규칙을 지우고 다시 추가하라고 한다. 원격이나 직접 연결을 끄는 클릭은, 그 규칙을 쓰는 기능이 남지 않으면 규칙도 지운다(다시 UAC). 앱이 Windows에 관리자 권한을 요청하는 곳은 여기 하나다.
+- **Windows 방화벽**: 규칙 하나를 더하거나 고치거나 지우는 일은 사용자가 설정의 방화벽 규칙 줄에서 버튼을 누를 때, 또는 규칙이 있는 채로 모바일 리모트나 직접 연결 스위치를 끌 때만 한다. 규칙은 이 앱(`MightyCode.exe`)만, 모든 프로필에서, 이 앱의 포트로 오는 TCP 연결 가운데 상대가 100.64.0.0/10·fd7a:115c:a1e0::/48 안이고 닿는 로컬 주소도 그 두 범위 안인 것만 허용한다. 명령은 상수와 앱 자신의 경로로만 만든 `%SystemRoot%\System32\netsh.exe advfirewall firewall add rule name="Mighty Code (Tailscale)" dir=in action=allow protocol=TCP localport=<포트> localip=100.64.0.0/10,fd7a:115c:a1e0::/48 remoteip=100.64.0.0/10,fd7a:115c:a1e0::/48 program="<앱 exe>" profile=any`(같은 이름의 규칙이 이미 있으면 같은 내용으로 `set rule name="Mighty Code (Tailscale)" new … enable=yes`라 규칙이 쌓이지 않고 뺀 포트는 닫힌다. 지울 때는 `delete rule name="Mighty Code (Tailscale)"`)이고 Windows의 UAC 확인을 거친다. 같은 이름의 규칙이 있는지는 관리자 권한 없이 `show rule`의 종료 코드로 읽는다(포트까지 맞는지는 아니다). 줄의 버튼은 규칙이 있으면 "규칙 지우기", 없으면 "규칙 추가"(열 포트가 없고 규칙도 없으면 버튼 없음)이고, 규칙의 상태를 읽지 못했으면 "다시 확인"이라 관리자 권한을 묻지 않고 다시 읽기만 한다. 0.5에서 이 줄은 설정 › 원격 연결 아래에 한 번 그려지고(`src-tauri/src/settings/remote.rs`), 규칙이 있으면 버튼이 **방화벽 규칙 갱신**이 되어 UAC 한 번으로 규칙을 지금 쓰는 포트에 맞춘다(`set rule`). 규칙이 지금 포트를 모두 열지 않으면 상태에 "갱신 필요"가 붙는다. 원격이나 직접 연결을 끄는 클릭은, 그 규칙을 쓰는 기능이 남지 않으면 규칙도 지운다(다시 UAC). 앱이 Windows에 관리자 권한을 요청하는 곳은 여기 하나다.
 
 **끝점 알리기**
 
@@ -183,7 +183,7 @@ QR/문자열: `mightycode://pair?v=2&sid=<serverId>&pk=<b64url 공개키>&relay=
 - **한도**(TURN과 같은 슬라이딩 창, 기본 10분): 전송은 serverId당 120, IP당 240, 전체 3000. 핸들 등록·갱신·삭제는 IP당 30이고, 핸들 등록은 전체로도 300이다. IP는 IPv6이면 /64 하나로 세고(한 가입자가 보통 /64 전체를 쓴다) IPv4-매핑 IPv6는 그 IPv4로 센다. 전송의 IP당 한도도 같은 방식이다. 넘으면 429와 `Retry-After`.
 - **저장**: `PUSH_STORE_PATH`의 JSON 파일(0600). 120일 동안 쓰이지 않은 핸들은 지운다. 핸들은 최대 2만 개이고, 가득 차면 먼저 오래 쓰이지 않은 핸들을 비우고, 그래도 가득이면 호스트가 아직 한 번도 쓰지 않은 핸들 중 가장 오래된 것부터 비운다(호스트가 쓴 핸들은 자리 때문에 지우지 않는다). 비울 핸들이 없으면 등록은 503 `full`이다. 읽을 수 없는 파일은 `.unreadable-<시각>`으로 옮기고 빈 상태로 시작한다.
 - **로그**: `[serverId 앞 8자] push sent` 같은 줄만 남긴다. 핸들·토큰·봉투는 남기지 않는다.
-- 서비스 계정 키(`FCM_SERVICE_ACCOUNT_FILE`)가 없거나 읽히지 않거나 JSON·개인 키가 깨졌으면 릴레이는 시작 때 `[push] FCM disabled`를 남기고 전송만 503이다. 릴레이는 계속 돌고 나머지는 그대로다. 키를 읽으면 `[push] FCM sending on`이다. 키는 앱의 `google-services.json`과 같은 Firebase 프로젝트의 것이어야 한다. 설정 순서와 재배포 뒤 실제 기기 확인은 `docs/relay-oracle.md` "푸시 알림(FCM) 켜기"다.
+- 서비스 계정 키(`FCM_SERVICE_ACCOUNT_FILE`)가 없거나 읽히지 않거나 JSON·개인 키가 깨졌으면 릴레이는 시작 때 `[push] FCM disabled`를 남기고 전송만 503이다. 릴레이는 계속 돌고 나머지는 그대로다. 키를 읽으면 `[push] FCM sending on`이다. 키는 앱의 `google-services.json`과 같은 Firebase 프로젝트의 것이어야 한다. 기본 릴레이(Cloudflare)의 키 설정과 확인은 [relay-cloudflare.md](relay-cloudflare.md)에 있다. 직접 올린 Node 릴레이의 설정 순서는 은퇴한 Oracle 배포 기록인 `docs/relay-oracle.md` "푸시 알림(FCM) 켜기"에 남아 있다.
 
 ## TURN 자격증명 발급 (릴레이 평문, E2EE 아님)
 

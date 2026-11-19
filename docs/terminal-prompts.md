@@ -44,5 +44,6 @@
 
 ## 구현 위치
 
-- Mac: `MightyCore/TerminalPrompt.swift`(모델·판별·감시), `MightyCode/AppStore+TerminalPrompts.swift`(폴링·답·폰 알림), `MightyCode/TerminalPromptCard.swift`, `MobileRemoteModels.swift`(`MobileTerminalPromptAnswer`), `MobileRemoteService.swift`(`terminal-prompt` 경로).
+- 0.5(Rust 앱, Mac·Windows 공통): 판별·감시 `native/tauri/crates/mighty-terminal/src/prompt.rs`(`detect`, `TerminalPromptMonitor`), 앱 쪽 폴링·답 `src-tauri/src/terminal.rs`·`panes.rs`, 폰 경로 `crates/mighty-remote/src/phone/router.rs`·`src-tauri/src/phone.rs`, 카드 `native/windows/web/src/cards/terminalPrompt.ts`·`Cards.tsx`.
+- 0.4 Mac(은퇴한 참고 구현): `MightyCore/TerminalPrompt.swift`(모델·판별·감시), `MightyCode/AppStore+TerminalPrompts.swift`(폴링·답·폰 알림), `MightyCode/TerminalPromptCard.swift`, `MobileRemoteModels.swift`(`MobileTerminalPromptAnswer`), `MobileRemoteService.swift`(`terminal-prompt` 경로).
 - Windows·폰: 같은 규칙과 같은 문자열.

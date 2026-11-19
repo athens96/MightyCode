@@ -76,9 +76,12 @@ Backup written first; written atomically.
 
 ## Who writes the files
 
-- **macOS** now writes both files: picking a phase row or a detail row calls `ModelSettingsFileStore`
+- **0.5 (Rust, Mac and Windows alike)**: Settings › Models (`native/tauri/src-tauri/src/settings/models.rs`) draws the section from
+  `crates/mighty-run/src/phase_section.rs` and writes through `model_settings.rs` / `phase_models.rs` (tests: `crates/mighty-run/tests/phase_models.rs`).
+  The two bullets below describe the retired 0.4 Swift and C# apps.
+- **macOS (0.4)** wrote both files: picking a phase row or a detail row calls `ModelSettingsFileStore`
   (`AppStore+PhaseModels.swift`), so omc agents land in `config.jsonc` and Ouroboros keys in `config.yaml`.
-- **Windows** does the same from the Settings section `phaseModels` (Core `PhaseModelSection.cs`,
+- **Windows (0.4)** did the same from the Settings section `phaseModels` (Core `PhaseModelSection.cs`,
   `ModelSettingsFileStore.cs`, `OmcAgentCatalog.cs`; WinUI `MainWindow.Settings.cs`).
 
 Both platforms re-read the file immediately before writing, back it up next to the original

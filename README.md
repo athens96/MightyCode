@@ -6,12 +6,14 @@
 
 [macOS 빌드](https://github.com/athens96/MightyCode/actions/workflows/native-macos.yml) · [Windows 빌드](https://github.com/athens96/MightyCode/actions/workflows/native-windows.yml) · [도움말](https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/help/) · [다운로드](https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/)
 
-Mighty Code는 프로젝트 폴더(워크스페이스)마다 여러 실행 창을 열고, 창마다 에이전트 CLI를 직접 실행해 대화와 설정을 따로 유지합니다. 요청·하위 에이전트·백그라운드 작업을 블록 흐름으로 보여 주는 **마이티 보기**, 정해진 순서로 일을 진행하는 **스타일**(오로보로스·클러드 플랜), 일을 자기 git worktree를 가진 자식 창에 나눠 맡기는 **마이티 오케스트레이션**, 작업 상태를 알려 주는 **데스크톱 펫**, 다른 컴퓨터의 워크스페이스를 여는 **원격 연결(Tailscale)**, 휴대폰에서 상태를 보고 답하는 **휴대폰 원격**이 있습니다. macOS 앱과 Windows 앱(**베타**), Android 휴대폰 앱이 있고, 화면은 한국어·영어·중국어·일본어로 볼 수 있습니다.
+Mighty Code는 프로젝트 폴더(워크스페이스)마다 여러 실행 창을 열고, 창마다 에이전트 CLI를 직접 실행해 대화와 설정을 따로 유지합니다. 요청·하위 에이전트·백그라운드 작업을 블록 흐름으로 보여 주는 **마이티 보기**, 정해진 순서로 일을 진행하는 **스타일**(오로보로스·클러드 플랜), 일을 자기 git worktree를 가진 자식 창에 나눠 맡기는 **마이티 오케스트레이션**, 작업 상태를 알려 주는 **데스크톱 펫**, 다른 컴퓨터의 워크스페이스를 여는 **원격 연결**(Tailscale 또는 릴레이 페어링), 휴대폰에서 상태를 보고 답하는 **휴대폰 원격**이 있습니다. macOS 앱과 Windows 앱(**베타**), Android 휴대폰 앱이 있고, 화면은 한국어·영어·중국어·일본어로 볼 수 있습니다.
 
 사용할 AI CLI는 따로 설치하고 로그인해야 합니다. 쓰지 않을 CLI는 설치하지 않아도 됩니다. 배포 중인 버전은 [다운로드 페이지](https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/)에, 이 저장소의 버전은 [`VERSION`](VERSION)에 있습니다.
 
-- **macOS:** Swift + SwiftUI/AppKit, macOS 14 이상, Apple Silicon
-- **Windows (베타):** C# + .NET 10 + WinUI 3 호스트에 WebView2로 띄운 React 화면(`native/windows/web`), x64·ARM64, Windows 10(버전 2004) 이상 또는 Windows 11
+- **0.5부터 한 앱:** Rust + Tauri 2 호스트(`native/tauri`)가 Mac과 Windows에서 같은 React 화면(`native/windows/web/src`)을 띄웁니다. Mac 터미널은 Ghostty입니다.
+- **macOS:** macOS 14 이상, Apple Silicon
+- **Windows (베타):** x64·ARM64, Windows 10(버전 2004) 이상 또는 Windows 11, 화면은 WebView2
+- 0.4까지의 Swift 앱(`native/macos`)과 C# 앱(`native/windows`의 `web/` 밖)은 은퇴한 참고 구현으로 저장소에 남아 있습니다.
 - **휴대폰:** React Native(Expo) Android 앱, 릴레이 서버를 거쳐 종단 간 암호화로 연결(같은 Tailscale 네트워크면 같은 암호화로 컴퓨터에 직접)
 
 ## 다운로드와 설치
@@ -39,7 +41,7 @@ AI CLI는 앱을 처음 열 때 나오는 **필요한 도구** 화면에서 골�
 
 pi와 opencode는 Node.js가, Mac의 Hermes는 Git이 필요합니다.
 
-> **Windows:** 코드 서명이 없어 Windows(SmartScreen)가 처음 실행을 막을 수 있습니다. 그러면 **추가 정보** → **실행**을 누르세요. Visual C++ 런타임을 찾지 못한다고 하면 [Microsoft Visual C++ 재배포 가능 패키지(v14)](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)를 설치하세요. 앱 화면과 터미널 창은 Microsoft Edge WebView2 런타임으로 그립니다(없으면 이전 WinUI 화면으로 열리고 런타임이 없다고 알려 줍니다). .NET 런타임은 설치 프로그램과 zip에 들어 있습니다.
+> **Windows:** 코드 서명이 없어 Windows(SmartScreen)가 처음 실행을 막을 수 있습니다. 그러면 **추가 정보** → **실행**을 누르세요. 앱 화면과 터미널 창은 Microsoft Edge WebView2 런타임으로 그립니다. 0.5부터 C 런타임을 앱에 묶어 넣어 .NET 런타임이나 Visual C++ 재배포 가능 패키지는 따로 필요 없습니다.
 
 **업데이트:** **새 버전을 자동으로 받아 설치**가 켜져 있으면(처음부터 켜져 있습니다) 앱이 열 때와 6시간마다 새 버전을 확인하고, 받아서 서명을 확인한 뒤 준비해 둡니다. 준비된 업데이트는 앱을 종료할 때 설치되고, 앱이 한동안 쉬고 있으면 1분 알림 뒤 다시 시작하며 설치합니다(열려 있던 워크스페이스와 창은 그대로 돌아옵니다). 직접 하려면 **설정 → 앱 정보 → 앱 업데이트**에서 확인하고 **지금 다시 시작**을 누릅니다. 휴대폰 앱에서도 연결된 컴퓨터의 앱을 업데이트할 수 있습니다. AI CLI 업데이트는 따로 **설정 → CLI → CLI 업데이트**에서 합니다.
 
@@ -103,16 +105,16 @@ pi와 opencode는 Node.js가, Mac의 Hermes는 Git이 필요합니다.
 - 파일 창(⇧⌘E)은 읽기 전용으로 소스·Markdown·이미지·PDF를 미리 봅니다.
 
 **설정** — [설정](docs/help/content/ko/settings.md)
-- 일반(테마·언어·글자 크기와 글꼴·상태 줄·마이티 오케스트레이션), 모델(작업 단계별 모델), 스타일, 구성 요소(필요한 도구, 내 작업 도구 모음), CLI(로그인·업데이트), 모바일 리모트, 원격 연결 (Tailscale), 펫과 알림, 앱 정보(업데이트·데이터 위치) 탭이 있습니다.
+- 일반(테마·언어·글자 크기와 글꼴·상태 줄·마이티 오케스트레이션), 모델(작업 단계별 모델), 스타일, 구성 요소(필요한 도구, 내 작업 도구 모음), CLI(로그인·업데이트), 원격 연결(이 컴퓨터 공유·다른 컴퓨터 연결·휴대폰), 펫과 알림, 앱 정보(업데이트·데이터 위치) 탭이 있습니다.
 
-**원격 연결 (Tailscale)** — [원격 연결](docs/help/content/ko/remote.md)
+**원격 연결** — [원격 연결](docs/help/content/ko/remote.md)
 - Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 Tailscale로 이어, 한쪽에서 다른 컴퓨터의 워크스페이스를 열고 그 컴퓨터의 CLI·계정으로 Claude·Codex·Antigravity와 명령을 실행합니다. 파일은 복사하지 않습니다.
-- 공유하는 컴퓨터는 **설정 → 원격 연결 (Tailscale) → 이 컴퓨터 공유**에서 워크스페이스를 고르고 주소와 연결 키를 알려 줍니다. 연결하는 컴퓨터는 **다른 컴퓨터 연결**에 그 주소와 키를 넣고 워크스페이스를 엽니다.
+- 공유하는 컴퓨터는 **설정 → 원격 연결 → 이 컴퓨터 공유**에서 워크스페이스를 고르고 Tailscale 주소와 연결 키를 알려 주거나, 0.5.3부터는 휴대폰처럼 페어링 링크로 Tailscale 없이 릴레이를 거쳐 연결하게 합니다. 연결하는 컴퓨터는 **다른 컴퓨터 연결**에 그 주소와 키, 또는 페어링 링크를 넣습니다.
 - 원격 창도 마이티 보기와 승인·질문·계획 카드를 그대로 씁니다. 마이티 오케스트레이션, 파일 창, 파일을 읽는 스타일, pi·opencode·Hermes 창은 원격 워크스페이스에서 쓸 수 없고, 휴대폰에는 보이지 않습니다. Windows에서 공유하려면 방화벽 규칙 하나를 더합니다(관리자 확인 한 번).
 
 **휴대폰 원격** — [휴대폰 원격](docs/help/content/ko/phone.md)
-- 컴퓨터(Mac 또는 Windows)의 **설정 → 모바일 리모트**에서 연결을 허용하고 QR 코드로 휴대폰을 연결합니다. 공유기 포트나 VPN이 필요 없고, 릴레이는 내용을 볼 수 없습니다. 같은 Tailscale 네트워크에 있으면 릴레이 없이 바로 연결합니다(**Tailscale로 직접 연결**, 기본 켜짐).
-- 휴대폰 앱의 **현황**·**세션**·**알림**·**호스트** 탭에서 상태를 보고, 요청을 보내고, 승인·질문·계획에 답합니다. Android 앱은 푸시 알림도 받습니다(작업 완료·실패, 권한 요청·질문·계획·로그인 만료). 0.4.58에서 기본 릴레이가 새 서버로 바뀌었으니, 그 전에 연결한 휴대폰에 알림이 오지 않으면 QR로 한 번 다시 연결하세요.
+- 컴퓨터(Mac 또는 Windows)의 **설정 → 원격 연결 → 휴대폰**에서 연결을 허용하고 QR 코드로 휴대폰을 연결합니다. 공유기 포트나 VPN이 필요 없고, 릴레이는 내용을 볼 수 없습니다. 같은 Tailscale 네트워크에 있으면 릴레이 없이 바로 연결합니다(**Tailscale로 직접 연결**, 기본 켜짐).
+- 휴대폰 앱의 **현황**·**알림**·**호스트** 세 탭에서 상태를 보고, 요청을 보내고, 승인·질문·계획에 답합니다. Android 앱은 푸시 알림도 받습니다(작업 완료·실패, 권한 요청·질문·계획·로그인 만료). 0.4.58에서 기본 릴레이가 새 서버로 바뀌었으니, 그 전에 연결한 휴대폰에 알림이 오지 않으면 QR로 한 번 다시 연결하세요.
 - 컴퓨터 앱에 새 버전이 있으면 휴대폰에서 **데스크톱 앱 업데이트**로 설치하고 다시 시작하게 할 수 있습니다.
 - **화면 보기·조작**(베타, Android)은 0.4.58부터 잠시 멈춰 있습니다. 휴대폰마다 정한 허용 범위는 그대로 남아 다시 켜지면 돌아옵니다.
 - 기본 릴레이 대신 `relay/`를 직접 배포해 쓸 수 있습니다. 계약은 [docs/mobile-remote.md](docs/mobile-remote.md)와 [docs/relay.md](docs/relay.md)에 있습니다.
@@ -130,47 +132,33 @@ cd MightyCode
 
 ### macOS
 
-macOS 14 이상과 Swift 6 이상의 도구(Xcode 또는 Command Line Tools)가 필요합니다. 첫 빌드에서 고정된 Swift 패키지(Ghostty 터미널, WebRTC 등)를 내려받습니다.
+macOS 14 이상(Apple Silicon), Rust 도구(rustup, `aarch64-apple-darwin`), Node.js 22, Xcode 도구(swift·clang·codesign)가 필요합니다. 첫 빌드에서 Ghostty 터미널 라이브러리를 내려받습니다(`scripts/fetch-ghosttykit.sh`).
 
 ```sh
 bash scripts/setup-codesign.sh          # 한 번만: 재빌드해도 macOS 권한 허용이 유지되는 로컬 서명 인증서
-bash scripts/build-macos.sh             # release/native-macos/MightyCode.app
-bash scripts/test-native-macos.sh --filter "AppUpdateTests|AttachmentTests"
+MIGHTY_CODESIGN_IDENTITY="Mighty Claude Dev" bash scripts/build-tauri-macos.sh   # release/tauri-macos/MightyCode.app (MIGHTY_UPDATE_PUBLIC_KEY·MIGHTY_UPDATE_URL 필요, 서명은 기본 ad hoc)
+bash scripts/install-macos.sh release/tauri-macos/MightyCode.app
+cd native/tauri && cargo test -p mighty-core
 ```
 
-- 로컬에서는 테스트를 `--filter`로 골라 돌립니다. 전체 테스트는 CI에서 돌고, 로컬에서 꼭 전부 돌리려면 `MIGHTY_FULL_SUITE=1`을 붙입니다.
 - `/Applications`에 설치하거나 갱신할 때는 `bash scripts/install-macos.sh`를 씁니다. 실행 중인 앱이 끝나기를 기다렸다가 백업 후 교체하고 다시 엽니다. 실행 중인 앱의 파일을 직접 덮어쓰면 macOS 입력기 연결이 끊겨 한글이 자모로 풀립니다.
 - 앱 안 브라우저는 없습니다(0.5에서 뺌): 웹 페이지는 기본 브라우저에서 열리고, 빌드에 브라우저 엔진을 넣지 않습니다.
-
-임시 프로필로 앱 시작과 셸 실행을 확인할 수 있습니다. 실제 AI 요청은 보내지 않습니다.
-
-```sh
-release/native-macos/MightyCode.app/Contents/MacOS/MightyCode \
-  --smoke-test --smoke-exit --profile /tmp/mighty-native-smoke
-```
+- 개발 빌드·명령줄 옵션·크레이트 구조는 [native/tauri/README.md](native/tauri/README.md)에 있습니다. `scripts/build-macos.sh`·`test-native-macos.sh`는 은퇴한 Swift 앱의 것입니다.
 
 ### Windows
 
-Windows 10 버전 2004(빌드 19041) 이상 또는 Windows 11, **.NET 10 SDK**, **Node.js 22**, **PowerShell 7**, Windows SDK 빌드 도구(Visual Studio의 Windows 앱 개발 도구 또는 Build Tools)가 필요합니다. Windows App SDK 버전은 프로젝트에서 고정합니다.
-
-창의 화면은 WebView2에 띄운 React 페이지입니다(`native/windows/web`, [README](native/windows/web/README.md)). `dotnet build`·`build-windows.ps1`이 `npm ci`(처음 한 번)와 `npm run build`를 직접 돌려 `Assets\Web`에 넣습니다. 상태 폴더(`%APPDATA%\MightyCode` 또는 `--profile` 폴더)에 빈 `ui-winui` 파일을 두면 이전 WinUI 화면으로 열립니다(비상구).
+Windows 10 버전 2004(빌드 19041) 이상 또는 Windows 11, Rust 도구(MSVC 링커), **Node.js 22**, PowerShell이 필요합니다. 설치 프로그램은 [Inno Setup 6](https://jrsoftware.org/isinfo.php)으로 만듭니다.
 
 ```powershell
-# C# 코어 검사 후 x64 / ARM64 앱 빌드
-pwsh ./scripts/build-windows.ps1 -Architecture x64 -Configuration Release
-pwsh ./scripts/build-windows.ps1 -Architecture arm64 -Configuration Release
+. .\native\tauri\scripts\env.ps1      # 한 번만: MSVC 환경
+pwsh ./scripts/build-tauri-windows.ps1 -Architecture x64 -Installer   # release\tauri-windows-x64\, release\MightyCode-windows-x64.zip
+pwsh ./scripts/build-tauri-windows.ps1 -Architecture arm64
 
-# 격리된 프로필로 앱 실행 검사: WinUI 비상구가 뜨는지 짧게, 그다음 웹 화면과 그 곁의 동작 전부
-pwsh ./scripts/test-native-windows.ps1 -Executable ./release/native-windows-x64/MightyCode.exe
-pwsh ./scripts/test-native-windows.ps1 -Web -Executable ./release/native-windows-x64/MightyCode.exe
-
-# 웹 화면 검사(빌드 전에도)
+# 화면(React 페이지) 검사
 cd native/windows/web; npm ci; npm run typecheck; npm test
 ```
 
-`build-windows.ps1`은 먼저 `MightyCode.Core.Tests`를 돌린 뒤, self-contained 앱을 `release/native-windows-<아키텍처>/`에, 배포 zip과 SHA-256 파일을 `release/MightyCode-windows-<아키텍처>.zip`에 만듭니다. 다른 출력 폴더는 `-OutputDirectory`로 지정합니다. `-Installer`를 붙이면 [Inno Setup 6](https://jrsoftware.org/isinfo.php)으로 설치 프로그램 `release/MightyCode-windows-<아키텍처>-setup.exe`도 만듭니다(`native/windows/installer/MightyCode.iss`, `ISCC.exe` 경로는 `MIGHTY_ISCC`로 지정 가능). `pwsh ./scripts/test-windows-installer.ps1 -Setup <setup.exe> -Version <버전>`은 그것을 조용히 설치해 확인하고 다시 제거합니다. 이 패키지는 코드 서명하지 않습니다.
-
-Mac에서는 Windows 앱을 실행할 수 없지만, C# 코어 검사(`dotnet run --project native/windows/MightyCode.Core.Tests --configuration Release`)와 WinUI 컴파일 검사(`bash scripts/check-winui-compile.sh`)는 돌릴 수 있습니다.
+`build-tauri-windows.ps1`은 C 런타임을 정적으로 묶었는지(`native/tauri/scripts/check-imports.ps1`) 확인하고, 0.4.x 앱이 업데이트로 받을 수 있는 같은 이름의 zip과 설치 프로그램(`native/windows/installer/MightyCode.iss`)을 만듭니다. 이 패키지는 코드 서명하지 않습니다. `scripts/build-windows.ps1`·`test-native-windows.ps1`은 은퇴한 C# 앱의 것입니다.
 
 ### 휴대폰 앱과 릴레이
 
@@ -187,12 +175,10 @@ cd relay/cloudflare && npm install && npm test # 앱의 기본 릴레이인 Clou
 앱의 설정과 기록은 이 컴퓨터에만 저장됩니다. 위치는 **설정 → 앱 정보**에서 보고 열 수 있습니다. 기본 위치는 macOS `~/Library/Application Support/MightyCode/`, Windows `%APPDATA%\MightyCode\`입니다. 대화 기록 자체는 각 CLI의 세션으로 남습니다.
 
 ```text
-native/macos/Sources/MightyCode/       SwiftUI/AppKit 화면·앱 상태
-native/macos/Sources/MightyCore/         Swift 실행기·저장·스타일·모바일 리모트·원격 워크스페이스
-native/windows/MightyCode.WinUI/       Windows 호스트(WebView2 창, 페이지가 부르는 동작)와 이전 WinUI 화면
-native/windows/web/                      Windows 창의 React 화면 (Vite + TypeScript)
-native/windows/MightyCode.Core/        C# 실행기·저장
-native/windows/MightyCode.Core.Tests/  C# 회귀 검사
+native/tauri/                            0.5 앱: Rust 크레이트(crates/)와 Tauri 호스트(src-tauri/)
+native/windows/web/                      Mac·Windows 창의 React 화면 (Vite + TypeScript)
+native/macos/                            은퇴한 0.4 Swift 앱(참고 구현; 번들 스타일·로케일 사본은 여기서 읽음)
+native/windows/MightyCode.*/             은퇴한 0.4 C# 앱(참고 구현)
 native/contracts/                        Mac·Windows 클라이언트가 함께 따르는 JSON 계약과 테스트 벡터(휴대폰도 사용)
 mobile/                                  휴대폰 앱 (React Native + Expo)
 relay/                                   휴대폰 원격용 릴레이 서버
@@ -219,7 +205,7 @@ CI(GitHub Actions)는 빌드·테스트와 함께 다음 검사를 돌립니다.
 
 도움말 원문을 고쳤다면 `node scripts/help/build.mjs --check`로 페이지·언어 구조, UI 키, 내부 링크를 확인하세요. 화면 문구는 [docs/i18n.md](docs/i18n.md), 색상·간격 규칙은 [docs/design-system/](docs/design-system/)을 따릅니다.
 
-기다림이 생기는 사용자 동작(단추·카드·단축키 등)을 새로 넣으면 [docs/interaction.md](docs/interaction.md) 표에 한 줄을 더하고, 처리 중 표시는 그 플랫폼의 공통 부품(맥 `PendingIndicator`, 윈도우 웹 화면·폰 `<Pending>`)을 씁니다.
+기다림이 생기는 사용자 동작(단추·카드·단축키 등)을 새로 넣으면 [docs/interaction.md](docs/interaction.md) 표에 한 줄을 더하고, 처리 중 표시는 그 플랫폼의 공통 부품(Mac·Windows 화면 `native/windows/web/src/pending/Pending.tsx`, 폰 `<Pending>`)을 씁니다.
 
 ## 라이선스
 

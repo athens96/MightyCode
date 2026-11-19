@@ -59,6 +59,21 @@ Ouroboros 플러그인(`ouroboros@ouroboros`)과 `uvx`가 필요하다. 없으�
 
 ## 구현 위치
 
+0.5(Rust 앱, Mac·Windows 공통):
+
+| 부분 | 파일 |
+|---|---|
+| 매니페스트 | `native/macos/Sources/MightyCore/Resources/Styles/ouroboros.json`(그대로 묶음: `native/tauri/crates/mighty-styles/src/bundled.rs`) |
+| 범용 엔진 | `native/tauri/crates/mighty-styles/src/`(`decoder.rs`, `validator.rs`, `evaluator.rs`, `projection.rs`, `registry.rs`, `trust.rs`) |
+| 질문 진행 상태 | `native/tauri/crates/mighty-run/src/questionnaire.rs` |
+| 질문 블록 | `native/tauri/crates/mighty-graph/src/tracker/`, `node.rs` |
+| 스타일 전환·승인·행동·설치 | `native/tauri/src-tauri/src/styles.rs` |
+| 전용 입력창, 행동 칩 | `native/windows/web/src/composer/Guided.tsx`, `Toolbar.tsx` |
+| 스타일 설정 화면 | `native/tauri/src-tauri/src/settings/styles.rs` |
+| 테스트 | `native/tauri/crates/mighty-styles/tests/`(`golden.rs`, `styles.rs`, `claude_plan.rs`) |
+
+아래는 은퇴한 0.4 Swift 앱의 위치다(참고 구현).
+
 | 부분 | 파일 |
 |---|---|
 | 매니페스트(행동·단계·규칙·준비물·자동 허용·표현) | `native/macos/Sources/MightyCore/Resources/Styles/ouroboros.json` — 스키마는 [mighty-styles.md](mighty-styles.md) |

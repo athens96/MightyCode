@@ -8,7 +8,7 @@ Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 Tailscale로 이으면, �
 
 ## 화면
 
-**설정 → 원격 연결 (Tailscale)** 탭(`RemoteSettingsView.swift`, 이 절은 Mac 기준이고 Windows의 같은 탭은 아래 [Windows 절](#windows와-macwindows)에 있다). 사이드바 워크스페이스 머리글의 네트워크 단추, 워크스페이스의 **창 추가** 메뉴의 **다른 컴퓨터 연결…**, 첫 화면의 같은 단추가 이 탭을 연다.
+**설정 → 원격 연결** 탭. 0.5(Rust 앱)는 Mac·Windows가 같은 화면이다(`native/tauri/src-tauri/src/settings/remote.rs`; 아래에 남은 `…Swift`·`.cs` 이름은 은퇴한 0.4 앱의 참고 구현이다). 탭 안은 **이 컴퓨터 공유 | 다른 컴퓨터 연결 | 휴대폰** 세 탭이고, 고른 안쪽 탭은 앱이 도는 동안만 기억한다. 사이드바의 지구본(네트워크) 단추는 0.5.3에서 없어졌고, 사이드바 아래의 설정 단추로 설정을 열어 이 탭을 고르거나, 워크스페이스의 **창 추가** 메뉴의 **다른 컴퓨터 연결…**, 첫 화면(작업 현황)의 같은 단추로 연다.
 
 - **이 컴퓨터 공유**: 공유할 로컬 워크스페이스를 고르고(기본은 앞에 있는 워크스페이스), 포트(기본 `43137`)를 정해 **공유 시작**. 공유 중에는 이 Mac의 Tailscale 주소(`주소:포트`)마다 한 줄과 연결 키가 **복사** 단추와 함께 보이고, 이 Mac에서 도는 원격 실행 수가 보인다. 키의 **복사**는 클립보드 항목을 숨김(Concealed)·임시(Transient)로 표시해 클립보드 관리 앱이 보이거나 남기지 않게 하고, 60초 뒤에도 클립보드에 그 키가 있으면 지운다. 공유 중에는 **원격에서 전체 권한·명령 실행 허용** 스위치가 있다. 꺼져 있으면(기본, 공유를 시작할 때마다 꺼짐) 호스트는 원격 명령 창(kind `shell`)과 전체 권한 실행(Claude bypassPermissions, Codex danger-full-access, Antigravity 전체 권한)을 실행 전에 403으로 거절하고, 클라이언트 창에 이유가 보인다. **공유 중지**는 원격 실행을 멈추고 키를 폐기한다. 앱을 열 때 공유는 항상 꺼져 있다.
 - **다른 컴퓨터 연결**: 주소(Tailscale IP, `[IPv6]`, MagicDNS 이름; 포트와 `http://`는 생략 가능)와 키, 이름(비우면 호스트 이름)을 넣고 **연결**. 같은 주소로 새 키를 넣으면 저장된 연결의 키를 바꾼다.
@@ -32,9 +32,9 @@ Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 Tailscale로 이으면, �
 | 기능 | 원격에서 |
 | --- | --- |
 | 마이티 오케스트레이션(위임, 자식 작업 트리) | 끔. 호스트 실행에는 위임 서버를 붙이지 않고, 입력창의 작업 트리 단추도 나오지 않는다 |
-| 파일 창, 브라우저 창 | 만들 수 없음(메뉴에서 빠지고, 단추는 꺼짐) |
+| 파일 창 | 만들 수 없음(메뉴에서 빠지고, 단추는 꺼짐). 앱 안 브라우저는 0.5.1에서 없어졌다 |
 | 파일을 읽는 스타일(작업 폴더 스타일, 상태 파일, 사전 조건 검사) | 스타일 선택기가 나오지 않음. 원격 창은 자유 요청만 |
-| 에이전트 터미널·웹 열기 도구(`run_in_terminal`, `open_url`) | 호스트 실행에는 창별 MCP 서버를 붙이지 않음 |
+| 에이전트 터미널·웹 열기 도구(`run_in_terminal`, `open_url` — 0.5에서는 기본 브라우저로 연다) | 호스트 실행에는 창별 MCP 서버를 붙이지 않음 |
 | 상태 줄, git 배지, 작업 폴더의 슬래시 명령, 이전 세션 이어가기, 이전 요청 불러오기 | 쓰지 않음(사용자 수준 슬래시 명령만) |
 | 플러그인 관리, CLI 로그인 터미널 | 호스트의 Mighty Code에서 한다 |
 | 그림 미리보기 | 호스트의 그림 캐시 키라 클라이언트에서는 뺀다 |
@@ -47,7 +47,7 @@ Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 Tailscale로 이으면, �
 
 ## 그 컴퓨터의 창 그대로 (원격 미러)
 
-연결한 컴퓨터(호스트)가 공유한 워크스페이스를, 호스트에 이미 열려 있는 에이전트 창(대화, 마이티 보기·진행 상황, 상태)과 함께 이 컴퓨터(클라이언트) 사이드바에 그대로 보여 주고, 여기서 계속 쓰게 한다. 창은 호스트의 것이다. 클라이언트에서 보낸 글은 휴대폰에서 보낸 것처럼 그 호스트 창의 다음 요청이 된다(실행 중이면 호스트의 대기열). 2026-11-13 Mac에 만들었다(`MightyCore/Remote/RemoteMirror.swift`, `RemoteHostService.serveMirror`, `RemoteClientService`의 `mirror…`, 앱의 `AppStore+RemoteMirror.swift`·`RemoteMirrorViews.swift`). 같은 날 Windows에도 같은 와이어로 만들었다([Windows 구현](#windows-구현)). 그래서 Mac 클라이언트가 Windows 호스트를, Windows 클라이언트가 Mac 호스트를 비춘다.
+연결한 컴퓨터(호스트)가 공유한 워크스페이스를, 호스트에 이미 열려 있는 에이전트 창(대화, 마이티 보기·진행 상황, 상태)과 함께 이 컴퓨터(클라이언트) 사이드바에 그대로 보여 주고, 여기서 계속 쓰게 한다. 창은 호스트의 것이다. 클라이언트에서 보낸 글은 휴대폰에서 보낸 것처럼 그 호스트 창의 다음 요청이 된다(실행 중이면 호스트의 대기열). 2026-11-13 Mac(Swift)과 Windows(C#)에 같은 와이어로 만들었고([Windows 구현](#windows-구현)), 0.5는 Rust로 옮겼다(`native/tauri/crates/mighty-remote/src/remote/mirror/`의 `host.rs`·`client.rs`·`desktop_host.rs`, 호스트 `remote/host/`, 클라이언트 `remote/client/`). 그래서 Mac 클라이언트가 Windows 호스트를, Windows 클라이언트가 Mac 호스트를 비춘다.
 
 ### 화면 (클라이언트)
 
@@ -128,8 +128,8 @@ Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 Tailscale로 이으면, �
 
 Tailscale이 없는 두 컴퓨터도 휴대폰처럼 한 번 페어링하면 원격 미러를 릴레이로 쓴다(Rust 앱; 와이어와 인증은 `docs/relay.md` "다른 컴퓨터"). Tailscale 경로는 그대로다.
 
-- **호스트**: 설정 › 원격 연결 › "다른 컴퓨터와 페어링"의 "페어링한 컴퓨터의 연결 받기"(`RemoteHost::set_relay`, 메모리에만, 공유를 멈췄다 다시 켜도 유지)를 켜면, 공유하는 동안 릴레이 호스트가 제어 소켓을 연다. 이 스위치가 켜져 있으면 Tailscale 주소가 없어도 공유를 시작할 수 있다(주소 없이, 페어링한 컴퓨터만). "페어링 링크 복사"는 휴대폰 QR과 같은 링크를 비밀 복사(기록 제외, 1분 뒤 지움)하고, "QR 보기"는 그 QR을 그린다. 페어링한 컴퓨터의 요청은 `RemoteHost::serve_relay`가 받는다: 공유 중이고 스위치가 켜져 있어야 하며(아니면 503), Tailscale 피어와 같은 요청 수 제한(기기마다 초당 300, 전체 600)을 거친 뒤 `GET /v2/info`와 미러 라우트만 Tailscale과 같은 코드로 처리한다.
-- **클라이언트**: "페어링 코드로 연결"에 링크를 붙여 넣으면 `RemoteClient::pair`가 새 `clientId`로 페어링하고(호스트 키 확인), 호스트가 준 토큰과 릴레이·`serverId`·공개키를 JSON 하나로 볼트(Mac Keychain, Windows DPAPI)에 연결 키처럼 둔다. 연결 파일(`remote-connections.json`)에는 `relay:`와 `serverId` 앞 16자로 된 주소만 들어간다(이전 앱은 그 항목만 건너뛴다). 다시 연결은 볼트의 토큰으로 한다. 같은 호스트의 링크로 다시 페어링하면 그 연결의 페어링을 바꾼다.
+- **호스트**: 설정 › 원격 연결 › 이 컴퓨터 공유 › 연결 방식 › 페어링의 "페어링한 컴퓨터의 연결 받기"(`RemoteHost::set_relay`, 메모리에만, 공유를 멈췄다 다시 켜도 유지)를 켜면, 공유하는 동안 릴레이 호스트가 제어 소켓을 연다. 이 스위치가 켜져 있으면 Tailscale 주소가 없어도 공유를 시작할 수 있다(주소 없이, 페어링한 컴퓨터만). "페어링 링크 복사"는 휴대폰 QR과 같은 링크를 비밀 복사(기록 제외, 1분 뒤 지움)하고, "QR 보기"는 그 QR을 그린다. 페어링한 컴퓨터의 요청은 `RemoteHost::serve_relay`가 받는다: 공유 중이고 스위치가 켜져 있어야 하며(아니면 503), Tailscale 피어와 같은 요청 수 제한(기기마다 초당 300, 전체 600)을 거친 뒤 `GET /v2/info`와 미러 라우트만 Tailscale과 같은 코드로 처리한다.
+- **클라이언트**: 설정 › 원격 연결 › 다른 컴퓨터 연결에서 "페어링 링크"를 골라 링크를 붙여 넣으면 `RemoteClient::pair`가 새 `clientId`로 페어링하고(호스트 키 확인), 호스트가 준 토큰과 릴레이·`serverId`·공개키를 JSON 하나로 볼트(Mac Keychain, Windows DPAPI)에 연결 키처럼 둔다. 연결 파일(`remote-connections.json`)에는 `relay:`와 `serverId` 앞 16자로 된 주소만 들어간다(이전 앱은 그 항목만 건너뛴다). 다시 연결은 볼트의 토큰으로 한다. 같은 호스트의 링크로 다시 페어링하면 그 연결의 페어링을 바꾼다.
 - 연결된 뒤에는 사이드바의 "원격 · 이름", 연결·끊기, 미러 폴링이 Tailscale 연결과 같다(`mirror::client`가 연결마다 HTTP 또는 릴레이 링크로 보낸다). 경로 확인(`ensure_route`)은 하지 않는다.
 - **한계**: 프레임 하나가 1 MiB라 보내기 본문(첨부 base64 포함)이 그보다 크면 클라이언트가 "첨부 파일이 페어링 연결로 한 번에 보낼 수 있는 크기를 넘습니다"로 거절하고 아무것도 보내지 않는다. 세션 상세는 호스트가 릴레이용으로 약 960 KiB 안으로 다시 줄인다. 이 컴퓨터의 창을 호스트에서 실행하는 원격 창(`/v2/runs`, 폴 응답이 1.5 MiB까지)은 페어링 연결로 나르지 않는다.
 
@@ -177,12 +177,12 @@ Tailscale이 없는 두 컴퓨터도 휴대폰처럼 한 번 페어링하면 원
 
 Windows 앱도 같은 `/v2/` 프로토콜로 공유하고 연결한다. 그래서 Mac→Mac, Mac→Windows, Windows→Mac, Windows→Windows가 모두 된다. 두 앱이 같은 요청·응답·이벤트를 쓰는지는 공유 픽스처 `native/contracts/fixtures/remote-v2/`가 묶는다. Mac이 기준이고, Mac(`RemoteWireFixtureTests`)과 Windows Core(`RemoteWireFixtureVerification`)가 같은 파일을 읽는다.
 
-- **화면**: **설정 → 원격 연결 (Tailscale)** 탭(`MainWindow.RemoteWorkspaces.cs`)이 모바일과 펫 사이에 있다. 공유(주소·연결 키·고르기·포트·전체 권한 스위치), 방화벽 규칙, 다른 컴퓨터 연결, 연결한 컴퓨터와 공유 워크스페이스가 한 상자 안에 구역별 제목으로 나뉜다. 3초마다 상태를 다시 읽고, 공유가 스스로 멈췄으면 탭에 그 사실을 적는다. 사이드바 워크스페이스 머리글의 네트워크 단추와 **창 추가** 메뉴의 **다른 컴퓨터 연결…**도 이 탭을 연다.
+- **화면**: **설정 → 원격 연결** 탭(`MainWindow.RemoteWorkspaces.cs`)이 모바일과 펫 사이에 있다. 공유(주소·연결 키·고르기·포트·전체 권한 스위치), 방화벽 규칙, 다른 컴퓨터 연결, 연결한 컴퓨터와 공유 워크스페이스가 한 상자 안에 구역별 제목으로 나뉜다. 3초마다 상태를 다시 읽고, 공유가 스스로 멈췄으면 탭에 그 사실을 적는다. 사이드바 워크스페이스 머리글의 네트워크 단추와 **창 추가** 메뉴의 **다른 컴퓨터 연결…**도 이 탭을 연다.
 - **연결 줄**: 연결한 컴퓨터의 줄은 Mac처럼 이름과 주소만 보인다. 호스트의 OS는 줄이 아니라 원격 워크스페이스(사이드바의 호스트 이름, 머리글의 호스트 배지, 상태 막대 "{호스트} · {OS}에서 실행 · 연결됨/연결 안 됨", 세션 정보의 **실행 컴퓨터**·**실행 컴퓨터 OS**)에 나온다.
 - **호스트(Windows)**: `MightyCode.Core/Remote/RemoteHostService.cs`가 Tailscale 주소마다 `RemoteHttpListener`(TcpListener, HTTP/1.1, 연결마다 요청 하나)를 그 주소에만 바인딩한다. 받는 순간 상대를 거르고 상대마다 연결 8개, 키 없는 요청의 본문은 읽지 않음, SHA-256 뒤 상수 시간 비교, 상대마다 초당 300번·키가 맞는 요청 전체 600번은 Mac과 같다. 실행은 호스트의 `RunManager`(그 PC의 CLI·로그인, 창별 MCP·위임·그림 캐시 없음)로 한다. 이 PC에서 다른 컴퓨터의 실행이 도는 동안에는 CLI 업데이트(수동·자동)와 플러그인 변경을 미룬다.
 - **요청 경로**: Windows 호스트는 요청 경로를 쓰인 그대로 읽는다. 퍼센트 인코딩을 풀지 않고 `#` 조각을 떼지 않으므로, Mac이라면 열어 줬을 경로에 Windows 호스트는 404나 400을 답한다. 달라지는 것은 상태 코드뿐이며, 키·`Origin`·상대 주소 검사를 건너뛰는 길이 아니다.
 - **명령 창**: Windows 호스트에서는 명령마다 시스템 폴더의 `powershell.exe -NoProfile -NonInteractive -Command <글>`을 공유 폴더에서 새로 띄운다(`RemoteCommandShell`, 환경 변수 `NoDefaultCurrentDirectoryInExePath=1`). Mac 호스트는 `$SHELL -l -c`. 창의 빈 화면 안내(`remote.windows.pane.commandNote`)와 상태 막대·세션 정보는 호스트의 OS(`/info`의 `runtime.platform`: `darwin`·`win32`)를 보여 준다.
-- **전체 권한 스위치(Windows 호스트)**: Mac 호스트에서는 Seatbelt가 Codex·Antigravity의 읽기 전용·작업 폴더 쓰기 실행을 가둔다. Windows에서는 그 가둠을 확인할 수 없으므로, Windows 호스트는 **원격에서 전체 권한·명령 실행 허용**이 꺼져 있으면 다른 컴퓨터의 Codex·Antigravity 실행을 권한 모드와 상관없이 실행 전에 403(`remote.windows.host.error.agentNeedsFullAccess`: 다른 권한 모드로는 안 되고 스위치를 켜야 한다는 문구)으로 거절한다(`RemoteHostService.FullAccessRefusal`, 실패 시 닫힘). Claude는 권한 요청으로 묻기 때문에 스위치가 꺼져 있어도 지금처럼 실행된다. Mac 호스트의 규칙은 그대로다.
+- **전체 권한 스위치(가둘 수 없는 에이전트)**: Mac 호스트에서 가둬지는 것은 Codex뿐이다(Codex 자신의 Seatbelt 샌드박스, `sandbox_mode`). agy는 샌드박스 인자 없이 실행되고 검토 모드는 CLI 자체 규칙일 뿐이라, Mac 호스트도 스위치가 꺼져 있으면 Antigravity·pi·opencode·Hermes 원격 실행과 미러 창의 보내기·권한 허용·질문 답·계획 결정을 403(`remote.host.error.agentNeedsFullAccess`)으로 거절한다(0.5.3까지는 C#의 "Seatbelt가 Antigravity도 가둔다"는 전제로 Mac에서 허용했다; `RemoteHost::confined_agent`). Windows에서는 Codex의 가둠도 확인할 수 없으므로, Windows 호스트는 **원격에서 전체 권한·명령 실행 허용**이 꺼져 있으면 다른 컴퓨터의 Claude 아닌 모든 에이전트 실행(Codex·Antigravity·pi·opencode·Hermes)을 권한 모드와 상관없이 실행 전에 403(`remote.windows.host.error.agentNeedsFullAccess`: 다른 권한 모드로는 안 되고 스위치를 켜야 한다는 문구)으로 거절한다(0.5 `mighty-remote/src/remote/host/mod.rs` `full_access_refusal`, 0.4 `RemoteHostService.FullAccessRefusal`, 실패 시 닫힘). Claude는 권한 요청으로 묻기 때문에 스위치가 꺼져 있어도 지금처럼 실행된다.
 - **이벤트 맞추기**: Windows 실행 이벤트는 Mac 모양으로 바꿔 보낸다. 로그인 만료 사유는 `auth`이고, 권한 요청 입력은 `inputJSON`이며, 시각은 `yyyy-MM-ddTHH:mm:ss.fffZ`로 쓰고, 그림은 뺀다. 그래프는 Mac의 `graph`(ExecutionGraphNode)로 보낸다. Windows 클라이언트가 실행 요청에 `x-mighty-remote-graph: run`을 붙이면 Windows 호스트는 그 실행에 `graph` 대신 Windows의 `graph_run`(MightyGraphRun)을 보내고, Mac 호스트는 이 머리를 무시한다. Windows 클라이언트는 Mac 호스트의 `graph`를 조용히 버리므로, Mac에서 도는 실행의 Windows 마이티 보기는 대화 기록으로 묶은 블록만 보인다.
 - **클라이언트(Windows)**: `RemoteClientService`는 요청마다 그 IP로 가는 출발 주소가 이 PC의 Tailscale 주소인지(UDP 소켓 연결, 보내는 것 없음) 다시 본다. 리디렉션을 따르지 않고 프록시·쿠키를 쓰지 않으며, 응답은 2 MiB까지, 15초(첨부 실행 60초) 안에 읽는다. 폴링이 429·503·시간 초과로 실패하면 10초 동안 다시 묻는다. 쓸 수 없는 이벤트 하나는 빼고 안내 줄을 남기며, 기다리는 권한 요청은 창마다 최신 32개만 둔다. 이 PC의 파일·브라우저·터미널·Explorer 열기·스타일·위임은 원격 워크스페이스에서 꺼 두고(워크스페이스의 폴더를 읽는 곳은 모두 `LocalPath`를 거친다), 이 PC의 CLI 업데이트·로그인 대기는 원격 창을 붙잡지 않는다.
 - **저장(Windows)**: 연결 목록은 `remote-connections.json`(버전 2, 키 없음, 임시 파일에 쓴 뒤 바꾸는 원자적 쓰기), 키는 `<프로필>\remote-keys\<id의 SHA-256>.bin`에 현재 Windows 사용자 DPAPI(`CryptProtectData`, `ProtectedData`의 CurrentUser와 같음)로 암호화해 둔다. DPAPI가 거절하면 키는 앱을 끌 때까지만 메모리에 있다. 연결 목록 파일을 다른 프로그램이 붙잡고 있어 읽지 못하면 덮어쓰지 않고 잠시 뒤 다시 읽는다. `Workspace.remote`는 Mac과 같은 `{"version": 2, …}`이며 버전이 없거나 다른 값이면 불러올 때 버린다.
@@ -191,6 +191,8 @@ Windows 앱도 같은 `/v2/` 프로토콜로 공유하고 연결한다. 그래�
 - **기기 확인 남음**: UAC 창과 방화벽 규칙, Mac→Windows와 Windows→Mac 실제 연결은 Windows PC에서 확인해야 한다(실제 기기 연결은 아직 확인하지 못했다. `docs/windows-screen-checklist.md`의 "원격 워크스페이스").
 
 ## 검사
+
+0.5(Rust)의 검사는 `native/tauri/crates/mighty-remote/tests/`의 `remote_wire.rs`·`remote_state.rs`·`remote_client.rs`·`remote_host.rs`·`remote_hostile.rs`·`remote_loopback.rs`·`remote_mirror.rs`·`remote_desktop.rs`·`remote_parity.rs`·`remote_antigravity.rs`, 페어링 연결은 `relay_desktop.rs`다(`cargo test -p mighty-remote`). 아래 목록은 은퇴한 0.4 Swift·C# 검사의 설명으로, 같은 항목을 Rust 검사가 옮겨 받았다.
 
 `native/macos/Tests/MightyCoreTests/RemoteWorkspaceTests.swift`, `RemoteMirrorTests.swift`. CI의 "Remote workspaces — host and client talk over loopback" 단계가 이 두 묶음을 따로 돌린다.
 

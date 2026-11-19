@@ -1,5 +1,7 @@
 # Oracle Cloud Always Free에 릴레이 올리기
 
+> **지난 기록입니다.** 기본 릴레이는 이제 Cloudflare Workers(`wss://mighty-relay.athens96.workers.dev`, `native/tauri/crates/mighty-remote/src/relay/host.rs` `DEFAULT_RELAY`, [relay-cloudflare.md](relay-cloudflare.md))이고, 예전 기본값 `wss://mightyclaude.duckdns.org`(이 문서의 Oracle 인스턴스)는 은퇴했습니다(`RETIRED_DEFAULT_RELAYS`). 아래는 Node 릴레이(`relay/`)를 직접 올리고 싶을 때 참고로만 남깁니다.
+
 Mighty Code 릴레이(`relay/`)를 Oracle Cloud Always Free 인스턴스에 올려, 휴대폰이 어느 네트워크에서든 Mac에 닿게 합니다. 끝나면 `https://<이름>.duckdns.org/healthz`가 `ok`를 돌려주고, Mac에 넣을 주소는 `wss://<이름>.duckdns.org`입니다.
 
 릴레이는 암호문만 전달하고 아무 비밀도 모릅니다(docs/relay.md). 서버에 둘 비밀값도 없습니다 — 인증서는 Caddy가 80·443 포트로 직접 받습니다.
@@ -91,7 +93,7 @@ bash MightyCode/relay/deploy/oracle/setup.sh myrelay.duckdns.org
 
 ## 6. Mac에 넣기
 
-Mighty Code → **설정 → 모바일 리모트 → 릴레이**에 `wss://myrelay.duckdns.org`를 넣고 **적용**. QR이 뜨면 휴대폰으로 스캔합니다. 앱의 기본 릴레이는 `MobileWire.defaultRelayURL` 한 줄이고, 지금은 이 저장소 주인이 배포한 `wss://mightyclaude.duckdns.org`입니다. 칸을 비워 두면 그 주소를 쓰고, 칸에 넣은 주소가 항상 우선합니다.
+Mighty Code → **설정 → 원격 연결 → 휴대폰 → 고급 → 릴레이 주소**에 `wss://myrelay.duckdns.org`를 넣고 **적용**. QR이 뜨면 휴대폰으로 스캔합니다. 앱의 기본 릴레이는 Cloudflare의 `wss://mighty-relay.athens96.workers.dev`(`relay/host.rs` `DEFAULT_RELAY`)입니다. 칸을 비워 두면 그 주소를 쓰고, 칸에 넣은 주소가 항상 우선합니다.
 
 ## 문제 해결
 

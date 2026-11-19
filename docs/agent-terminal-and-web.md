@@ -1,6 +1,8 @@
 # Agent Terminal and Web-Open Bridge
 
-Every Claude and Codex agent pane in Mighty Code gets a dedicated terminal pane and a URL-opening flow through a per-pane bundled stdio MCP server. This document explains the routing rules, the run/read/stop cycle, the URL choice card, pane lifetime, permission handling, and the per-pane token rules.
+Every Claude and Codex agent pane in Mighty Code gets a dedicated terminal pane and a URL-opening flow through a per-pane bundled stdio MCP server. This document explains the routing rules, the run/read/stop cycle, URL opening, pane lifetime, permission handling, and the per-pane token rules.
+
+> **0.5 note:** the type and test names below (`PaneMCPToolManifest`, `AgentProcessRegistry`, the `--filter` table) are the retired Swift 0.4 app's. In 0.5 the tools live in `native/tauri/crates/mighty-delegation/src/agent_io/` (`tools.rs`, `server.rs`) and the app side in `native/tauri/src-tauri/src/agent_io.rs`. 0.5.1 removed the in-app browser: `open_url` always opens the page in the default browser (see §3).
 
 ---
 
@@ -13,9 +15,9 @@ The per-pane MCP server exposes exactly four tools under the name `mighty-termin
 | `run_in_terminal` | Run a command in the user's dedicated terminal pane where they can watch it live. Use for commands the user should see and for long-running processes such as dev servers, watchers and long builds. |
 | `read_latest_output` | Read the output produced since the last read by a process started with `run_in_terminal`. |
 | `stop` | Stop a process started with `run_in_terminal` with an escalating signal sequence (see §2). |
-| `open_url` | Open an http or https URL in the in-app browser pane or the system browser per the user's choice for this workspace. |
+| `open_url` | Open an http or https URL in the user's default browser. |
 
-The tool descriptions deliberately guide the agent: **short internal work** (grep, file reads, quick build or test checks) stays in the agent's built-in Bash tool and runs quietly. Only commands the user should observe, and long-running processes, go through `run_in_terminal`. The server also sends this instruction at `initialize` time, so it reaches the agent even before it reads any one tool's description. The same instruction (`PaneMCPToolManifest.webGuidance`) tells the agent that when the user asks it to show or open a web page, it opens the page with `open_url` — so the page lands in the browser pane or the system browser as the user chose for this workspace — and never with shell commands such as `open`, `xdg-open` or `osascript`.
+The tool descriptions deliberately guide the agent: **short internal work** (grep, file reads, quick build or test checks) stays in the agent's built-in Bash tool and runs quietly. Only commands the user should observe, and long-running processes, go through `run_in_terminal`. The server also sends this instruction at `initialize` time, so it reaches the agent even before it reads any one tool's description. The same instruction (`PaneMCPToolManifest.webGuidance`) tells the agent that when the user asks it to show or open a web page, it opens the page with `open_url` — so the page opens in the user's default browser — and never with shell commands such as `open`, `xdg-open` or `osascript`.
 
 The routing choice is made by the agent following the tool descriptions; the Mac app adds no extra approval surface beyond the agent's own permission mode (see §5).
 
@@ -63,43 +65,11 @@ The result — the final output plus the exit code or, when a signal ended it, t
 
 ---
 
-## 3. Per-workspace URL choice, the 30-second fallback, and Settings
+## 3. Opening URLs
 
-### First open
+Since 0.5.1 there is no in-app browser. `open_url` opens the page in the user's default browser (the OS's handler) at once and answers `{"destination": "external", "url": …}` (`src-tauri/src/agent_io.rs` `open_url`). There is no choice card, no 30-second fallback, no remembered per-workspace choice and no "Open agent links" setting any more; the 0.4 settings `agentWebOpenChoices` and `browserEngineEnabled` are dropped when an old state file is read (`crates/mighty-core/src/model.rs`, `normalize.rs`).
 
-When the agent calls `open_url` with an http or https URL and the workspace has no remembered choice, the app shows a small card **inside the agent pane that asked**, above its composer — not a separate window. Only that request waits on the user; the rest of the app, and that pane's own transcript, stay usable, and a second pane asking for a different URL gets its own card.
-
-The card shows the URL, a **"Remember my choice for this workspace"** checkbox, and two buttons: **Open in App** and **Open in Browser**.
-
-- **Open in App** — opens the URL in the agent pane's own in-app browser pane.
-- **Open in Browser** — hands the URL to the system's default browser.
-- **Remember checkbox** — if ticked, the choice is saved for this workspace and the card is not shown again for it.
-
-**30-second fallback:** if the user does not answer within 30 seconds (`WebOpenService.defaultPromptTimeoutSeconds`, also read from an injectable clock in tests), the app takes the card down and opens the URL **in-app** without saving anything. The question is still unanswered for this workspace, so the next `open_url` call without a remembered choice shows the card again. The agent does not wait on the card's answer itself; the 30-second clock runs entirely on the app's side.
-
-### Remembered choice
-
-When the workspace has a remembered destination, `open_url` opens immediately with no card. A rejected URL (wrong scheme, empty, or over 8,192 characters) returns an error and opens nothing; no card is shown for it either.
-
-**Accepted schemes:** `http` and `https` (including localhost), and the URL must be 8,192 characters or fewer. All other schemes — `file:`, `javascript:`, `data:`, and everything else — plus empty input and over-long URLs are rejected with a clear error message.
-
-### Settings entry
-
-Settings shows a per-workspace picker labelled **"Open agent links"** with three values:
-
-| Value | Behaviour |
-|-------|-----------|
-| Ask each time | The card appears on the next `open_url` call. |
-| In app | Always open in the in-app browser pane; no card. |
-| In system browser | Always open in the system browser; no card. |
-
-The remembered choice — whether set from the card's checkbox or from this picker — is stored in `UserDefaults` under the key `agentTerminal.webOpenChoices`, keyed by workspace id, and survives a restart. Settings and every open agent pane read the same store, so a change made in Settings is in force on the very next `open_url` call from panes that are already open; there is no per-pane copy that can go stale.
-
-### In-app opening and the fallback to the system browser
-
-An in-app open shows the page in **one agent-browser pane per agent pane**: the pane is made on that agent pane's first in-app open and reused (navigated to the new URL) for every later one. It sits next to the agent pane, the same way the terminal pane does.
-
-The in-app browser pane needs the CEF browser engine, which is **off by default** (Settings → Display → "Use browser panes (experimental)", `browser.engineEnabled`) and, once turned on, only takes effect after the app is **restarted** — the setting is read once at launch. When the engine is off, missing from the build, the agent pane it belongs to is already gone, or the layout has no room for another pane, the in-app browser pane cannot be made, and `open_url` falls back to the system browser instead. The tool result is truthful about this: it tells the agent the page opened in the user's system browser because the in-app browser pane was chosen but could not show it, rather than claiming it opened in the app.
+**Accepted URLs:** absolute `http` and `https` URLs (including localhost) with a host, no userinfo and no control characters, 8,192 characters or fewer (`agent_io/tools.rs` `validate`). Everything else — `file:`, `javascript:`, `data:`, empty or over-long input — is rejected with an error and opens nothing.
 
 ---
 
@@ -119,13 +89,9 @@ Processes started through the terminal tool keep running after the terminal pane
 
 The `AgentProcessRegistry` is keyed by agent pane id and lives for the app's lifetime. Every new agent run in the same agent pane gets a **new MCP token** (see §6) but re-attaches to the same runner, so it can call `read_latest_output` or `stop` on handles started by earlier runs in that pane.
 
-### Browser pane
-
-The in-app browser pane opened by `open_url` (see §3) is a CEF browser pane. An agent pane owns at most one browser pane; a later in-app open navigates that same pane rather than opening a new one, and brings it back if the user closed it. An external open opens no in-app pane.
-
 ### Relay pane list
 
-Both the terminal pane and the browser pane appear in the relay pane-list payload alongside the agent pane that owns them, so the phone can see them. They carry `terminal: true` and are view-only from the phone: the phone lists them but does not let the user send commands to them. Rendering their contents on the phone is out of scope.
+The terminal pane appears in the relay pane-list payload alongside the agent pane that owns it, so the phone can see them. It carries `terminal: true` and are view-only from the phone: the phone lists it but does not let the user send commands to it. Rendering its contents on the phone is out of scope.
 
 ---
 
@@ -230,10 +196,9 @@ bash scripts/test-native-macos.sh --scratch-path /tmp/mc-agent-terminal-scratch 
 | `AgentTerminalTool` | A command run through `run_in_terminal` returns its full output and exit code. |
 | `LongRunningProcess` | The 12-second running/handle path, 64 KB reads with 1 MB retention, and the stop escalation. |
 | `TerminalPaneLifetime` | One pane per agent pane, reuse, survival past pane close, and typed input reaching read-back. |
-| `OpenURLChoice` | The URL choice card, the remembered choice, the 30-second fallback, and Settings. |
 | `PaneBinding` | Per-pane MCP tokens, pane isolation, and revocation. |
 | `AgentToolSurface` | Exactly the four tools are exposed, with the expected routing guidance. |
-| `AgentPaneListPayload` | The terminal and browser panes appear in the relay pane-list payload. |
+| `AgentPaneListPayload` | The terminal pane appears in the relay pane-list payload. |
 | `ShellBlockRun` | Which reply blocks get a Run button, their keys, the run record's states, restore and the output tail. |
 
 Run each filter separately, substituting it for `<Name>` above.

@@ -1,6 +1,6 @@
 # 입력창 `/` 명령 완성
 
-Claude·Codex 실행 창의 입력창에 `/`로 시작하는 글을 쓰면 그 실행기가 인식하는 스킬과 사용자 명령 목록이 입력창 위에 나타난다. Gemini 실행 창에서는 아래의 앱 기능 항목만 나온다(스킬·사용자 명령 스캔은 Claude·Codex만 지원). 계속 입력하면 이름과 설명으로 좁혀지고, ↑↓로 고른 뒤 Enter 또는 Tab을 누르거나 항목을 클릭하면 `/이름 `이 입력창에 채워지고 커서는 끝으로 간다. Esc는 현재 초안에 대해 목록을 닫는다. 이름 뒤에 공백을 넣어 인자를 쓰기 시작하면 목록은 자동으로 사라진다. 한글 조합 중에는 키를 가로채지 않는다.
+에이전트 실행 창의 입력창에 `/`로 시작하는 글을 쓰면 그 실행기가 인식하는 스킬과 사용자 명령 목록이 입력창 위에 나타난다. 스킬·명령 파일은 Claude·Codex·Antigravity·pi에서 읽고, opencode·Hermes 창에서는 아래의 앱 기능 항목만 나온다(0.5 구현: `native/tauri/crates/mighty-composer/src/slash.rs` `commands`, `catalog_builtins`). 계속 입력하면 이름과 설명으로 좁혀지고, ↑↓로 고른 뒤 Enter 또는 Tab을 누르거나 항목을 클릭하면 `/이름 `이 입력창에 채워지고 커서는 끝으로 간다. Esc는 현재 초안에 대해 목록을 닫는다. 이름 뒤에 공백을 넣어 인자를 쓰기 시작하면 목록은 자동으로 사라진다. 한글 조합 중에는 키를 가로채지 않는다.
 
 ## 어디에서 읽어 오나
 
@@ -11,6 +11,8 @@ Claude·Codex 실행 창의 입력창에 `/`로 시작하는 글을 쓰면 그 �
 | Claude | `~/.claude/plugins/installed_plugins.json`의 각 플러그인 `installPath` 아래 `skills/`, `commands/` | `플러그인:이름` | 플러그인 <이름> |
 | Claude | 워크스페이스의 `.claude/skills`, `.claude/commands` | 위와 같음 | 프로젝트 스킬·명령 |
 | Codex | `~/.codex/skills/<폴더>/SKILL.md`, 워크스페이스의 `.codex/skills` | frontmatter `name` | Codex 스킬·프로젝트 스킬 |
+| Antigravity | `~/.gemini/antigravity-cli/builtin/skills`, `~/.gemini/antigravity-cli/skills`, 워크스페이스의 `.agents/skills` | frontmatter `name` | Antigravity 스킬·프로젝트 스킬 |
+| pi | `~/.pi/agent/skills`, 워크스페이스의 `.pi/skills` | frontmatter `name` | pi 스킬·프로젝트 스킬 |
 
 설명은 frontmatter `description`에서, 명령 파일에 frontmatter가 없으면 본문 첫 줄에서 가져온다. 같은 이름이 여러 곳에 있으면 프로젝트 항목이 사용자·플러그인 항목을 가린다. 이름은 `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` 형식만 받아들이고, 목록은 400개까지다.
 
@@ -18,18 +20,18 @@ Claude·Codex 실행 창의 입력창에 `/`로 시작하는 글을 쓰면 그 �
 
 ## CLI 자체 명령은 앱이 대신한다
 
-`/plugin`, `/clear`, `/model` 같은 CLI 자체 명령은 대화형 터미널 전용이라 앱이 쓰는 비대화형 실행(`claude -p`, `codex exec`, `gemini -p`)에서는 동작하지 않는다(`/plugin isn't available in this environment.`). 그래서 목록에는 **앱 기능** 항목으로 들어가고, 고르면 CLI에 보내는 대신 앱의 같은 기능을 바로 연다. 입력창은 비워진다. 각 CLI 사용자가 아는 이름을 그대로 쓴다.
+`/plugin`, `/clear`, `/model` 같은 CLI 자체 명령은 대화형 터미널 전용이라 앱이 쓰는 비대화형 실행(`claude -p`, `codex exec`, Antigravity의 `agy` 등)에서는 동작하지 않는다(`/plugin isn't available in this environment.`). 그래서 목록에는 **앱 기능** 항목으로 들어가고, 고르면 CLI에 보내는 대신 앱의 같은 기능을 바로 연다. 입력창은 비워진다. 각 CLI 사용자가 아는 이름을 그대로 쓴다.
 
-| 동작 | Claude | Codex | Gemini |
-|---|---|---|---|
-| 플러그인 마켓플레이스 열기 | `/plugin` | `/plugins` | — (앱에 Gemini 확장 화면이 없음) |
-| 모델 바꾸기 (이어서 모델을 고름) | `/model` | `/model` | `/model` |
-| 작업 권한 바꾸기 (이어서 모드를 고름) | `/permissions` | `/approvals` | `/approval-mode` |
-| 새 대화로 시작 | `/clear` | `/new` | `/clear` |
-| 이 실행 창의 토큰·비용 (세션 정보) | `/cost`, `/usage` | `/status` | `/stats` |
-| Mighty Code 설정 열기 | `/config` | `/settings` | `/settings` |
-| 실행 창 이름 바꾸기 | `/rename` | `/rename` | `/rename` |
-| 앱 명령 목록을 실행 기록에 표시 | `/help` | `/help` | `/help` |
+| 동작 | Claude | Codex | Antigravity | pi | opencode·Hermes |
+|---|---|---|---|---|---|
+| 플러그인 마켓플레이스 열기 | `/plugin` | `/plugins` | — | — | — |
+| 모델 바꾸기 (이어서 모델을 고름) | `/model` | `/model` | `/model` | `/model` | `/model` |
+| 작업 권한 바꾸기 (이어서 모드를 고름) | `/permissions` | `/approvals` | `/permissions` | `/permissions` | `/permissions` |
+| 새 대화로 시작 | `/clear` | `/new` | `/clear` | `/new` | `/new` |
+| 이 실행 창의 토큰·비용 (세션 정보) | `/cost`, `/usage` | `/status` | `/usage` | `/session` | `/usage` |
+| Mighty Code 설정 열기 | `/config` | `/settings` | `/config` | `/settings` | `/settings` |
+| 실행 창 이름 바꾸기 | `/rename` | `/rename` | `/rename` | `/rename` | `/rename` |
+| 앱 명령 목록을 실행 기록에 표시 | `/help` | `/help` | `/help` | `/help` | `/help` |
 
 스킬이나 사용자 명령이 앱 기능과 같은 이름이면 앱 기능이 우선한다. 목록을 닫고 `/clear`나 `/model opus`처럼 끝까지 직접 쳐서 Enter를 눌러도 CLI로 보내지 않고 같은 동작을 한다. 인자가 없거나 목록에 없는 값이면 목록을 다시 열거나 시스템 메시지로 알린다.
 

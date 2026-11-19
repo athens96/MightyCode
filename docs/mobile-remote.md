@@ -5,7 +5,7 @@ PC에서 실행 중인 Mighty Code에 휴대폰으로 접속해 워크스페이�
 ## 동작 개요
 
 1. 릴레이 서버를 하나 띄운다(`relay/`, Docker 이미지 제공). 집·회사 어디서든 접속하려면 공개 주소(`wss://…`)가 있어야 하고, 같은 Wi‑Fi에서만 쓸 때는 Mac에서 `npm start`로 띄운 `ws://<Mac IP>:8787`로 충분하다.
-2. Mac의 **설정 → 모바일 리모트**에 릴레이 주소를 넣고 스위치를 켠다. 앱이 릴레이에 접속하면 QR 코드가 나타난다. QR에는 호스트 ID, 호스트 공개키, 릴레이 주소, 페어링 키가 들어 있다. 스위치 상태·릴레이 주소·키는 저장되어 앱을 다시 켜도 유지되며, 릴레이가 끊기면 자동으로 재접속한다.
+2. Mac의 **설정 → 원격 연결 → 휴대폰**에 릴레이 주소(고급)를 넣고 스위치를 켠다. 앱이 릴레이에 접속하면 QR 코드가 나타난다. QR에는 호스트 ID, 호스트 공개키, 릴레이 주소, 페어링 키가 들어 있다. 스위치 상태·릴레이 주소·키는 저장되어 앱을 다시 켜도 유지되며, 릴레이가 끊기면 자동으로 재접속한다.
 3. 휴대폰 앱에서 QR을 스캔하거나 페어링 링크를 붙여 넣는다. 앱은 릴레이를 통해 Mac과 X25519 키 교환을 하고, 페어링 키로 인증한 뒤 키를 보안 저장소에 남긴다.
 4. 이후 앱은 암호화된 채널로 `/m1/*` 요청을 보내고, Mac은 변화가 있을 때 `notify`를 보내 즉시 갱신하게 한다.
 5. 요청 전송은 데스크톱의 입력창과 같은 규칙을 따른다. 실행 중인 창에 보낸 글은 언제나 그 창의 대기열에 들어가 다음 요청이 되고, 진행 중인 턴에 끼어들지 않는다. 중지, 권한 허용·거부, 질문 답변, 새 실행 창 만들기도 가능하다.
@@ -15,7 +15,7 @@ PC에서 실행 중인 Mighty Code에 휴대폰으로 접속해 워크스페이�
 
 릴레이 대신 휴대폰이 호스트(Mac·Windows PC)에 바로 WebSocket을 여는 길이다. 바뀌는 것은 소켓을 어디에 여는가뿐이고, 그 위의 `hello`/`ready` 핸드셰이크·ChaCha20-Poly1305 프레임·인증(페어링 키·기기 토큰)·m1 터널은 릴레이 경로와 한 글자도 다르지 않다. 와이어와 제한은 [relay.md](relay.md)의 "Tailscale 직접 연결" 절.
 
-- **Mac**: **설정 → 모바일 리모트**의 "Tailscale로 직접 연결" 스위치(기본 켜짐)와 포트(기본 `43139`, 1024–65535). 모바일 리모트가 켜져 있고 이 스위치도 켜져 있을 때만, Mac의 Tailscale 주소에서만 연결을 받는다. Tailscale 인터페이스는 fd7a:115c:a1e0::/48 주소를 가진 `utun`이고(그래야 같은 100.64.0.0/10을 쓰는 WARP 같은 VPN이 빠진다), 그 인터페이스의 두 범위 주소에만 그 인터페이스로 고정해 연다. 0.0.0.0·LAN·공인 주소에는 열지 않고, 상대 주소가 두 범위 밖이면 받지 않는다. 주소는 네트워크가 바뀔 때와 15초마다 다시 읽는다. 스위치 아래 줄은 대기 중인 `주소:포트` 목록, "Tailscale을 찾지 못함", 또는 열지 못한 이유를 보여 준다. 릴레이가 끊겨 있어도 직접 연결이 열려 있으면 QR이 나온다. 연결 수·상대 주소별 한도와 인증 실패 제한은 relay.md에 있다.
+- **Mac**: **설정 → 원격 연결 → 휴대폰**의 "Tailscale로 직접 연결" 스위치(기본 켜짐)와 포트(기본 `43139`, 1024–65535). 모바일 리모트가 켜져 있고 이 스위치도 켜져 있을 때만, Mac의 Tailscale 주소에서만 연결을 받는다. Tailscale 인터페이스는 fd7a:115c:a1e0::/48 주소를 가진 `utun`이고(그래야 같은 100.64.0.0/10을 쓰는 WARP 같은 VPN이 빠진다), 그 인터페이스의 두 범위 주소에만 그 인터페이스로 고정해 연다. 0.0.0.0·LAN·공인 주소에는 열지 않고, 상대 주소가 두 범위 밖이면 받지 않는다. 주소는 네트워크가 바뀔 때와 15초마다 다시 읽는다. 스위치 아래 줄은 대기 중인 `주소:포트` 목록, "Tailscale을 찾지 못함", 또는 열지 못한 이유를 보여 준다. 릴레이가 끊겨 있어도 직접 연결이 열려 있으면 QR이 나온다. 연결 수·상대 주소별 한도와 인증 실패 제한은 relay.md에 있다.
 - **Windows**: 같은 스위치(기본 켜짐)·포트(기본 `43139`)·상태 줄에 **방화벽 규칙** 줄이 더 있다. Tailscale 어댑터는 fd7a:115c:a1e0::/48 주소를 가진 어댑터이고(이름은 보지 않는다), 그 어댑터의 두 범위 주소에만 주소마다 하나씩 `TcpListener`로 연다. 한도·거절·끝점 알리기는 Mac과 같고, MagicDNS 이름은 싣지 않는다. Windows 방화벽은 줄의 "규칙 추가" 버튼을 누를 때 UAC 확인을 거쳐 규칙 하나(이 앱만, 모든 프로필, TCP, 이 포트, 상대와 닿는 로컬 주소 둘 다 Tailscale 범위)를 더하고(이미 있으면 그 자리에서 고친다), "규칙 지우기" 버튼이나 규칙이 있는 채 원격·직접 연결을 끄는 클릭이 지운다. 규칙의 상태를 읽지 못하면 버튼이 "다시 확인"이 되어 권한을 묻지 않고 다시 읽는다. 자세한 규칙은 [relay.md](relay.md)의 "Windows 리스너"와 [windows-mobile-remote.md](windows-mobile-remote.md).
 - **페어링**: QR에 선택 파라미터 `direct=`(쉼표로 구분한 `host:port`, 퍼센트 인코딩)가 붙는다. Tailscale CLI가 있으면 `tailscale status --json`의 MagicDNS 이름(`….ts.net`)도 함께 싣는다. 이 파라미터를 모르는 구버전 앱은 무시하고 릴레이로 붙는다.
 - **이미 페어링한 휴대폰**: 호스트는 `"direct"` 기능을 광고하고, `auth_ok`와 `GET /m1/info`에 지금의 끝점 목록 `direct: string[]`을 싣는다(직접 연결이 꺼져 있거나 Tailscale이 없으면 빈 배열). 휴대폰은 `"direct"` 기능을 광고한 호스트의 목록만 받아 저장된 목록을 바꾼다. 그래서 QR 없이도 접속할 때마다 최신 주소를 알고, Mac이 직접 연결을 끄면 시도를 멈춘다.
@@ -100,10 +100,10 @@ MobilePaneWorktree {
 
 모델 이름은 양쪽이 같은 규칙으로 버전까지 붙여 보여 준다(`claude-opus-5-5` → `Opus 5.5`, `gpt-5.2-codex` → `GPT-5.2 Codex`, `gemini-3-pro-preview` → `Gemini 3 Pro`). 규칙은 `MightyCore/ModelLabel.swift`와 `mobile/src/lib/model-label.ts`가 함께 지키고, 둘 다 `native/contracts/fixtures/model-labels.json`으로 검사한다. `resolvedModel`(선택)은 별칭(`opus`)에 버전을 붙일 근거다: 설치된 CLI 모델 목록의 `resolvedModel`, 목록에 없으면 같은 계열 별칭에 한해, 그 별칭이 지금처럼 선택돼 있던 동안 그 창이 보고한 모델. Mac(`MobileRemoteSupport.resolvedModel`)과 Windows(`ModelLabel.Resolution`) 호스트가 같은 규칙을 쓰므로 `default`의 Antigravity 창에는 이 필드가 없어 휴대폰은 `Antigravity 설정 따름`만 보이고, 지금 선택이 아닌 모델을 위해 보고된 모델은 보내지 않는다. `default`·`opusplan` 같은 다른 별칭은 제 이름 뒤에 ` · Opus 5.5`처럼 붙인다(휴대폰의 `default` 이름은 `provider.fallback.defaultLabel`, 예: `Claude 설정 따름`). 근거가 없으면 보내지 않고, 휴대폰은 버전 없이 `Opus`로 보여 준다(버전을 지어내지 않는다). 휴대폰은 이 값을 표시에만 쓰고, 설정 변경으로 보내는 값은 언제나 `model`·옵션 `id` 그대로다. 구버전 휴대폰은 이 필드를 무시하고, 구버전 호스트에서는 필드가 없으므로 `model`만으로 라벨을 만든다. 모델 선택지(`options.models[].label`)는 Mac이 같은 규칙으로 만든 라벨이다. `provider: "gemini"`는 전송·저장 id 그대로이고, 이 창에서 Google의 Antigravity CLI(`agy`)를 돌리는 호스트(`/m1/info`의 `platform`·`appVersion`으로 Mac `darwin` 0.4.23 이상, Windows `win32` 0.4.28 이상, 버전을 모르거나 읽을 수 없으면 이쪽으로 본다)면 휴대폰도 이름을 "Antigravity"(베타 배지, Gemini 마크 유지)로, 그보다 오래된 호스트면 "Gemini"로 보인다(`hostRunsAntigravity`). Antigravity를 돌리는 호스트의 창에서 agy 모델 이름은 Mac 모델 목록과 같게 읽는다: `gemini-4-argon-medium` → `Gemini 4 Argon (Medium)`, `claude-opus-5-5-high` → `Claude Opus 5.5 (High)`, `gpt-oss-120b-medium` → `GPT-OSS 120B (Medium)`(`antigravityModelLabel`; 클라이언트마다 따로 검사하고 공유 픽스처에는 없다).
 
-에이전트 창이 소유한 창 두 가지도 같은 목록에 실린다: 전용 터미널 창(`kind: "agent-terminal"`,
-id `agent-terminal:<에이전트 창 id>`)과 에이전트가 앱 안에서 연 브라우저 창(`kind: "agent-browser"`,
-id `agent-browser:<에이전트 창 id>`). 둘 다 `terminal: true`로 실려서 휴대폰은 목록에만 올리고
-명령은 보내지 않는다(내용 렌더링은 범위 밖). 에이전트 창이 닫히면 두 창도 목록에서 사라진다.
+에이전트 창이 소유한 전용 터미널 창(`kind: "agent-terminal"`, id `agent-terminal:<에이전트 창 id>`)도
+같은 목록에 실린다. `terminal: true`로 실려서 휴대폰은 목록에만 올리고 명령은 보내지 않는다(내용 렌더링은 범위 밖).
+에이전트 창이 닫히면 그 창도 목록에서 사라진다. 0.4의 에이전트 브라우저 창(`kind: "agent-browser"`)은 0.5.1에서
+앱 안 브라우저와 함께 없어졌고(에이전트가 여는 링크는 기본 브라우저로 간다), 0.4 상태 파일의 그 창은 읽을 때 버린다.
 Mac의 읽기 전용 파일 창(`kind: "files"`, id `files:<워크스페이스 id>`)은 목록에 싣지 않으며, 그 id로 온 요청은
 찾을 수 없는 창으로 처리한다([file-pane.md](file-pane.md)).
 
@@ -729,7 +729,7 @@ MobilePushMessage {
 
 ### 기기 관리
 
-휴대폰은 처음 페어링할 때 페어링 키로 인증하고, 호스트가 발급한 **기기 토큰**을 보안 저장소에 넣은 뒤부터는 토큰으로 인증한다. 프레임·거절 사유·등록 제한은 [relay.md](relay.md)의 "기기 토큰" 절을 따른다. Mac 설정의 **모바일 리모트**에 기기 목록이 나오고, 한 대를 해제하거나 **키 다시 만들기**를 누르면 페어링 키가 새로 만들어지고, 기기 목록 전체가 지워진다. 새 키 아래에서는 기존 토큰이 모두 무효이므로 **모든 휴대폰이 QR로 다시 페어링해야 한다**. 토큰을 모르는 구버전 앱도 마찬가지다. 기기 토큰은 관리 기능이지 QR 유출에 대한 방어가 아니다.
+휴대폰은 처음 페어링할 때 페어링 키로 인증하고, 호스트가 발급한 **기기 토큰**을 보안 저장소에 넣은 뒤부터는 토큰으로 인증한다. 프레임·거절 사유·등록 제한은 [relay.md](relay.md)의 "기기 토큰" 절을 따른다. Mac 설정의 **원격 연결 → 휴대폰**에 기기 목록이 나오고, 한 대를 해제하거나 **키 다시 만들기**를 누르면 페어링 키가 새로 만들어지고, 기기 목록 전체가 지워진다. 새 키 아래에서는 기존 토큰이 모두 무효이므로 **모든 휴대폰이 QR로 다시 페어링해야 한다**. 토큰을 모르는 구버전 앱도 마찬가지다. 기기 토큰은 관리 기능이지 QR 유출에 대한 방어가 아니다.
 
 ## 데스크톱 구현
 
@@ -739,7 +739,7 @@ MobilePushMessage {
 - `MightyCore/Remote/MobileDirect.swift`: Tailscale 직접 연결 — Tailscale 인터페이스 고르기(`select(interfaces:)`: fd7a:115c:a1e0::/48 주소를 가진 `utun`만, 그 인터페이스의 두 범위 주소만), MagicDNS 이름, 끝점 쓰기·읽기, 주소마다 하나씩 그 `utun`에 고정해 여는 WebSocket 리스너(`MobileDirectListener`, 프레임 1 MiB, 동시 연결 36개, 한도 밖 연결은 `forceCancel`), 데이터 소켓 추상화(`RelayFrameSocket`: 릴레이의 `URLSessionWebSocketTask`와 직접 연결의 `NWConnection`).
 - Windows: `MightyCode.Core/Remote/TailscaleAddresses.cs`(같은 규칙, 어댑터 이름 없이), `MobileDirect.cs`(한도·끝점·업그레이드·입장·상태 줄), `MobileDirectListener.cs`(주소마다 `TcpListener`, 함께 36개), `MobileRelayHost.cs`(같은 `Connection`, `direct-` id, 일반 거절, 재확인), `MightyCode.Core/WindowsFirewallRule.cs`(방화벽 규칙 하나, UAC), WinUI `MainWindow.MobileRemote.cs`·`MainWindow.MobileDirect.cs`.
 - `MightyCode/AppStore+MobileRemote.swift`: 스냅샷·권한·대기열 변화를 리비전으로 바꾸고 명령을 실제 창에 적용하는 브리지.
-- 설정 화면의 **모바일 리모트** 절: 스위치, 릴레이 주소, 연결 상태, Tailscale 직접 연결 스위치·포트·상태 줄, QR 코드, 키 다시 만들기, 구버전 앱 허용 스위치, 페어링된 기기 목록(이름·처음/마지막 접속·연결 중·새 기기 표시)과 기기별 해제.
+- 설정 화면의 **원격 연결 → 휴대폰** 탭: 스위치, 릴레이 주소, 연결 상태, Tailscale 직접 연결 스위치·포트·상태 줄, QR 코드, 키 다시 만들기, 구버전 앱 허용 스위치, 페어링된 기기 목록(이름·처음/마지막 접속·연결 중·새 기기 표시)과 기기별 해제.
 - `MightyCore/Remote/MobileRemoteSupport.swift`: 확장의 순수 규칙(이름·페이지·설정 검증, 상태줄·사용량 변환, 명령 매핑, 마이티 블록 투영과 리비전 요약, 안내형 프롬프트, `/guided`의 관문 판정 `guidedDecision`).
 - `MightyCore/Remote/MobileUploadStore.swift`: 첨부 업로드 저장소(0700 폴더·0600 파일, 순서·크기 검증, 기기·실행 창 범위, 단일 사용, 10분 만료).
 - `MightyCore/Remote/MobileDeviceRegistry.swift`: 기기 토큰 등록부와 인증 판정(`devices.json`).

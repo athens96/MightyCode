@@ -1,12 +1,14 @@
-# 기존 세션 이어가기 (Mac)
+# 기존 세션 이어가기
+
+> 0.5(Rust 앱, Mac·Windows 공통)의 구현은 `native/tauri/crates/mighty-history/src/resumable.rs`(목록·규칙)다. 아래의 `AddAgentPane`·`HistoryScan`·`StateRepository` 같은 이름은 은퇴한 0.4 Swift 앱의 참고 구현이고, 규칙은 같은 이름의 Rust 함수(`offers_resume`, `may_ask_resume`, `QUIET_LOOK_UP_MS` 등)가 옮겨 받았다.
 
 워크스페이스의 **창 추가** 메뉴(사이드바 워크스페이스의 마지막 줄, 작업 현황의 워크스페이스 머리글)에서 Claude나 Codex를 고르면, 이 워크스페이스 폴더에 그 실행기의 이어갈 수 있는 세션이 있을 때 먼저 **새로 시작**과 **이어가기…** 중에서 고른다. **이어가기…**를 고르면 같은 창이 그 실행기의 세션 목록으로 바뀐다. 하나를 고르면 그 실행기의 새 에이전트 창이 생기고, 다음에 보내는 메시지가 그 세션에 이어진다(Claude `--resume <id>`, Codex `exec resume <id>` 또는 승인 연결의 스레드 이어가기). Windows 앱에도 같은 규칙으로 있다(`ResumableSessions.cs`, `MainWindow.ResumeSession.cs`, [windows-parity.md](windows-parity.md)). 휴대폰에는 아직 없다. 릴레이 메시지 형식은 바뀌지 않았다.
 
 ## 새로 시작 / 이어가기
 
-- **묻는 실행기**: 앱이 기록을 읽을 수 있는 Claude·Codex만 묻는다(`ResumableSessions.providers`, `AddAgentPane.offersResume`). Gemini, 터미널, 브라우저 탭은 예전처럼 바로 창을 만든다.
+- **묻는 실행기**: 0.5는 여섯 에이전트(Claude·Codex·Antigravity·pi·opencode·Hermes) 모두에 묻는다(`resumable.rs` `PROVIDERS`, `offers_resume`). 터미널 창은 바로 만들고, 앱 안 브라우저 탭은 0.5.1에서 없어졌다. 0.4 Mac 앱은 Claude·Codex만 물었다.
 - **묻지 않고 바로 새로 시작하는 경우**: 메뉴에서 Claude·Codex를 고르면 그 실행기의 기록만 메인 액터 밖에서 아래 목록 규칙대로 찾아보고(자동 실행 기록은 숨김, 열린 창이 이어가는 세션은 제외), 첫 세션 하나를 찾으면 멈춘다. 이때는 기록의 머리(첫 작업 폴더와 첫 요청)만 읽고 요청 수 세기와 기록 끝의 모델 읽기는 하지 않는다(`AddAgentPane.probe`). 찾은 세션이 없으면, 또는 찾는 동안 다른 창이 그 세션을 가져갔으면 묻지 않고 새 창을 만든다(`AddAgentPane.step`). 그래서 자동 실행 기록만 있는 폴더에서도 묻지 않는다.
-- **찾는 동안**: 0.3초(`AddAgentPane.quietLookUp`) 안에 끝나지 않으면 아래 시트를 "세션 기록을 읽는 중…" 상태로 먼저 열고, 결과가 나오면 묻는 상태로 바꾸거나(세션이 있을 때) 시트를 닫고 새 창을 만든다(없을 때). 이 상태에서도 **새로 시작**은 바로 되고, **이어가기…**는 결과를 기다린다. **취소**·Esc는 찾기를 멈추고 창을 만들지 않는다. 찾는 동안 Claude·Codex를 다시 골라도 무시하고(한 번에 하나만 찾는다), Gemini·터미널·브라우저 탭은 기다리지 않고 바로 만든다. 찾는 동안 다른 워크스페이스나 작업 현황으로 옮기거나, 다른 방법(⌘N, 휴대폰)으로 창을 만들거나, 워크스페이스를 목록에서 빼면 찾기를 취소하고(읽던 기록 파일 사이에서 멈춘다) 결과는 버린다. 시트가 열리기 전에 다른 시트가 열렸어도 결과를 버린다.
+- **찾는 동안**: 0.3초(`AddAgentPane.quietLookUp`) 안에 끝나지 않으면 아래 시트를 "세션 기록을 읽는 중…" 상태로 먼저 열고, 결과가 나오면 묻는 상태로 바꾸거나(세션이 있을 때) 시트를 닫고 새 창을 만든다(없을 때). 이 상태에서도 **새로 시작**은 바로 되고, **이어가기…**는 결과를 기다린다. **취소**·Esc는 찾기를 멈추고 창을 만들지 않는다. 찾는 동안 Claude·Codex를 다시 골라도 무시하고(한 번에 하나만 찾는다), 터미널 창은 기다리지 않고 바로 만든다. 찾는 동안 다른 워크스페이스나 작업 현황으로 옮기거나, 다른 방법(⌘N, 휴대폰)으로 창을 만들거나, 워크스페이스를 목록에서 빼면 찾기를 취소하고(읽던 기록 파일 사이에서 멈춘다) 결과는 버린다. 시트가 열리기 전에 다른 시트가 열렸어도 결과를 버린다.
 - **고르는 창**: 실행기 아이콘과 "{실행기} 실행 창 추가", 이 폴더에 이어갈 수 있는 세션이 있다는 안내, **취소**·**이어가기…**·**새로 시작** 버튼이 있는 작은 시트다. Return은 **새로 시작**, Esc는 **취소**(창을 만들지 않음)다. 접근성 식별자는 `add-pane-choice`, `add-pane-choice-checking`(찾는 중 표시), `add-pane-choice-new`, `add-pane-choice-resume`, `add-pane-choice-cancel`이다.
 - **목록으로 넘어가기**: 고르는 창과 목록은 같은 시트에서 내용만 바뀐다(`ResumePickerRequest.stage`). 목록에서 **취소**를 누르면 시트 전체를 닫는다.
 - 파일 메뉴의 **새 Claude 실행 창**(⌘N)과 창이 하나도 없는 워크스페이스의 **새 Claude 실행 창** 버튼은 묻지 않고 바로 새 창을 만든다.
@@ -16,7 +18,7 @@
 - **찾는 곳**
   - Claude: `$CLAUDE_CONFIG_DIR`(없으면 `~/.claude`)`/projects/<폴더 이름>/<세션 ID>.jsonl`. 폴더 이름은 워크스페이스 경로와 심볼릭 링크를 푼 실제 경로 각각에서 영숫자 외 문자를 `-`로 바꾼 것이다. 하위 에이전트 기록(`<세션 ID>/subagents/…`)과 UUID가 아닌 이름(`agent-….jsonl`)은 넣지 않는다. 다른 경로가 같은 폴더 이름이 될 수 있으므로, 기록에 처음 나오는 `cwd`가 워크스페이스(또는 실제 경로)가 아니면 뺀다. 사이드체인으로 시작하는 기록과 사용자 요청이 하나도 없는 기록도 뺀다.
   - Codex: `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-…-<스레드 ID>.jsonl` 중 첫 줄 `session_meta`의 `cwd`가 워크스페이스(또는 실제 경로)인 것. 하위 스레드(`source.subagent`: `spawn_agent` 자식, 가디언 검토)는 뺀다. 첫 줄은 512 KiB 안에서만 찾는다.
-  - Gemini는 넣지 않는다. 앱이 Gemini 기록(`~/.gemini/tmp/<프로젝트>/chats/`)을 읽지 않고, 이전 기록 불러오기도 Gemini에는 없다([mighty-mode.md](mighty-mode.md)).
+  - Antigravity·pi·opencode·Hermes도 0.5에서는 각자의 기록을 읽는다(`resumable.rs`; opencode·Hermes는 아래 "opencode·Hermes" 줄). 0.4 Mac 앱은 Gemini/Antigravity 기록을 읽지 않았다.
 - **이미 쓰는 세션 제외**: 앱에 열린 모든 창(모든 워크스페이스)의 이어가기 ID(`resumeId`)와 같은 세션은 목록에 나오지 않는다(대소문자 무시). 시트가 열린 동안 다른 창이 가져간 세션도 목록에서 사라지고, 고르는 순간 다시 확인해 이미 쓰이고 있으면 창을 만들지 않고 "이 세션은 이미 다른 창에서 이어가고 있습니다."를 띄운다. 그래서 두 창이 같은 세션을 이어가는 일은 없다.
 - **한 줄**: 실행기 아이콘(Codex는 베타 배지), 제목, 마지막 기록 시각(방금·N분 전·N시간 전·N일 전, 파일 수정 시각), 요청 수(작은 기록만), 모델.
   - 제목은 사용자가 처음 입력한 요청이다. 이전 다이어그램 불러오기와 같은 함수(`HistoryScan.claudePrompt`·`HistoryScan.codexPrompt`, [mighty-mode.md](mighty-mode.md)의 "요청으로 보는 줄")로 정한다. Claude는 `-p` 입력과 대화형 `claude`의 `"origin":{"kind":"human"}` 줄만 보고, 도구 결과·메타 줄·주입된 알림·다른 에이전트 메시지·컨텍스트 정리 요약·사이드체인·중단 표시·`<local-command-stdout>`/`<local-command-stderr>`(로컬 명령 출력)는 건너뛰며, 슬래시 명령은 입력한 모양(`/model`, `/review main`)으로 보인다. Codex는 `UserMessage` 항목(0.153 이후), 없으면 `user_message` 이벤트(0.147 이전), 그것도 없으면 주입된 문맥(`<…>`, `# AGENTS.md instructions`)이 아닌 첫 사용자 메시지다. 첫 턴에 사용자 글이 없으면 다음 턴에서 찾는다. 한 줄로 합쳐 200자까지 보인다. 제목을 찾지 못한 기록은 "제목 없는 세션"으로 나온다.
