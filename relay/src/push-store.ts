@@ -39,9 +39,19 @@ export interface PushStoreOptions {
   /** File on the server volume; '' keeps handles in memory only (tests, local runs). */
   readonly path: string;
   readonly maxHandles: number;
+  /** Handles one FCM token may have (one per paired host); a further one replaces the token's least recently used. Default 16. */
+  readonly maxPerToken?: number;
+  /** Handles one serverId may have bound; a further first use replaces its least recently used. Default 32. */
+  readonly maxPerServerId?: number;
   /** A handle neither refreshed nor used for this long is dropped. */
   readonly idleMs: number;
   readonly log: (line: string) => void;
+}
+
+function leastRecentlyUsed(records: readonly PushHandleRecord[]): PushHandleRecord | null {
+  let oldest: PushHandleRecord | null = null;
+  for (const record of records) if (oldest === null || record.usedAt < oldest.usedAt) oldest = record;
+  return oldest;
 }
 
 function validRecord(value: unknown): value is PushHandleRecord {
@@ -59,6 +69,11 @@ function validRecord(value: unknown): value is PushHandleRecord {
 /**
  * Push handles → FCM tokens. A handle is what a phone hands its hosts; the token
  * never leaves the relay. A handle answers only the first host that used it.
+ *
+ * What one party can fill is bounded: a token keeps at most `maxPerToken` handles and a
+ * serverId at most `maxPerServerId` bound ones (the newest replaces the least recently
+ * used), the same token bound twice to one serverId keeps only the newer handle (a phone
+ * that registered again), and a full store makes room instead of refusing phones.
  */
 export class PushHandleStore {
   readonly #records = new Map<string, PushHandleRecord>();
@@ -81,16 +96,29 @@ export class PushHandleStore {
     return this.#records.size;
   }
 
+  /** Whether some handle carries `fcmToken`. */
+  hasToken(fcmToken: string): boolean {
+    for (const record of this.#records.values()) if (record.fcmToken === fcmToken) return true;
+    return false;
+  }
+
   async register(fcmToken: string, now: number): Promise<{ handle: string; secret: string } | null> {
     if (!FCM_TOKEN_PATTERN.test(fcmToken)) return null;
     this.#dropIdle(now);
+    const perToken = this.#options.maxPerToken ?? 16;
+    for (;;) {
+      const mine = [...this.#records.values()].filter((r) => r.fcmToken === fcmToken);
+      if (mine.length < perToken) break;
+      this.#records.delete(leastRecentlyUsed(mine)!.handle);
+    }
     if (this.#records.size >= this.#options.maxHandles) {
       this.#options.log('[push] handle store full');
-      // Room comes only from handles no host has used yet, least recently used first; bound ones stay.
+      // Handles no host has used yet go first, least recently used first; then the least recently used bound one.
       while (this.#records.size >= this.#options.maxHandles) {
-        const unused = this.#leastRecentlyUsedUnbound();
-        if (unused === null) return null;
-        this.#records.delete(unused);
+        const all = [...this.#records.values()];
+        const victim = leastRecentlyUsed(all.filter((r) => r.serverId === null)) ?? leastRecentlyUsed(all);
+        if (victim === null) return null;
+        this.#records.delete(victim.handle);
       }
     }
     const handle = newPushSecret();
@@ -122,6 +150,7 @@ export class PushHandleStore {
     if (record.serverId !== null && record.serverId !== serverId) return { kind: 'foreign' };
     const firstUse = record.serverId === null;
     const stale = now - (this.#persistedUsedAt.get(handle) ?? record.usedAt) > DAY_MS;
+    if (firstUse) this.#makeRoomFor(record, serverId);
     record.serverId = serverId;
     record.usedAt = now;
     // usedAt reaches the disk at most daily per handle (measured from the last write); it only feeds the idle sweep.
@@ -146,12 +175,21 @@ export class PushHandleStore {
     return stored.length === given.length && timingSafeEqual(stored, given) ? record : null;
   }
 
-  #leastRecentlyUsedUnbound(): string | null {
-    let oldest: PushHandleRecord | null = null;
-    for (const record of this.#records.values()) {
-      if (record.serverId === null && (oldest === null || record.usedAt < oldest.usedAt)) oldest = record;
+  /**
+   * Before `record` is first bound to `serverId`: an older handle of the same token bound to
+   * the same serverId goes (the phone registered again), and the serverId's least recently
+   * used handles go until it is under its quota.
+   */
+  #makeRoomFor(record: PushHandleRecord, serverId: string): void {
+    const quota = this.#options.maxPerServerId ?? 32;
+    for (const other of [...this.#records.values()]) {
+      if (other !== record && other.serverId === serverId && other.fcmToken === record.fcmToken) this.#records.delete(other.handle);
     }
-    return oldest?.handle ?? null;
+    for (;;) {
+      const bound = [...this.#records.values()].filter((r) => r !== record && r.serverId === serverId);
+      if (bound.length < quota) return;
+      this.#records.delete(leastRecentlyUsed(bound)!.handle);
+    }
   }
 
   #dropIdle(now: number): void {

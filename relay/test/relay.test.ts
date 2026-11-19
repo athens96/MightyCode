@@ -112,6 +112,9 @@ beforeAll(async () => {
     host: '127.0.0.1',
     port: 0,
     attachTimeoutMs: 5000,
+    authTimeoutMs: 300,
+    // Every test here connects from 127.0.0.1 and leaves its hosts up until the end.
+    maxServersPerIp: 1000,
     logger: silent,
   });
 });
@@ -1024,5 +1027,214 @@ describe('limits', () => {
     } finally {
       await tinyRelay.close();
     }
+  });
+});
+
+/** A relay of its own for one test, closed afterwards. */
+async function ownRelay(overrides: Parameters<typeof startRelay>[0], run: (handle: RelayHandle) => Promise<void>): Promise<void> {
+  const handle = await startRelay({ host: '127.0.0.1', port: 0, logger: silent, ...overrides });
+  try {
+    await run(handle);
+  } finally {
+    await handle.close();
+  }
+}
+
+/** A socket that claims to come from `ip` through a trusted proxy. */
+function socketFrom(handle: RelayHandle, query: Record<string, string>, ip: string): WebSocket {
+  const ws = new WebSocket(url(handle, query), { headers: { 'x-forwarded-for': ip } });
+  ws.binaryType = 'nodebuffer';
+  ws.on('error', () => {});
+  open.push(ws);
+  return ws;
+}
+
+const hostAuth = (hostToken: string): string => JSON.stringify({ type: 'host-auth', hostToken });
+
+describe('host-auth frame (token out of the URL)', () => {
+  it('opens a control socket whose first frame carries the token', async () => {
+    const { serverId, hostToken } = identity('frame-control');
+    const control = socket(relay, { serverId, role: 'server', v: '1' });
+    await opened(control);
+    control.send(hostAuth(hostToken));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const notice = nextJson(control);
+    const client = socket(relay, { serverId, role: 'client', connectionId: 'conn-frame-01', v: '1' });
+    await opened(client);
+    expect(await notice).toEqual({ type: 'connected', connectionId: 'conn-frame-01' });
+    expect(await closeCode(control, 500)).toBe('open');
+  });
+
+  it('pairs a host data socket that authenticates by frame and sends at once after it', async () => {
+    const { serverId, hostToken } = identity('frame-data');
+    const connectionId = 'conn-frame-02';
+    const control = socket(relay, { serverId, role: 'server', v: '1' });
+    await opened(control);
+    control.send(hostAuth(hostToken));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const notice = nextJson(control);
+    const client = socket(relay, { serverId, role: 'client', connectionId, v: '1' });
+    await opened(client);
+    await notice;
+    client.send('hello-from-client');
+    const host = socket(relay, { serverId, role: 'server', connectionId, v: '1' });
+    const buffered = nextFrame(host);
+    await opened(host);
+    host.send(hostAuth(hostToken));
+    host.send('ready-from-host');
+    expect((await nextFrame(client)).data.toString('utf8')).toBe('ready-from-host');
+    expect((await buffered).data.toString('utf8')).toBe('hello-from-client');
+  });
+
+  it('closes 4401 on a wrong token, a binary or malformed first frame, and no frame in time', async () => {
+    const { serverId } = identity('frame-wrong');
+    const wrong = socket(relay, { serverId, role: 'server', v: '1' });
+    await opened(wrong);
+    wrong.send(hostAuth(identity('someone-else').hostToken));
+    expect(await closeCode(wrong)).toBe(4401);
+    const binary = socket(relay, { serverId, role: 'server', v: '1' });
+    await opened(binary);
+    binary.send(Buffer.from(hostAuth(identity('frame-wrong').hostToken)));
+    expect(await closeCode(binary)).toBe(4401);
+    const garbage = socket(relay, { serverId, role: 'server', v: '1' });
+    await opened(garbage);
+    garbage.send('{"type":"host-auth","hostToken":"zz"}');
+    expect(await closeCode(garbage)).toBe(4401);
+    const silentHost = socket(relay, { serverId, role: 'server', v: '1' });
+    await opened(silentHost);
+    expect(await closeCode(silentHost, 2000)).toBe(4401);
+    // None of these became the host.
+    expect(await closeCode(socket(relay, { serverId, role: 'client', connectionId: 'conn-frame-03', v: '1' }))).toBe(4404);
+  });
+
+  it('keeps one address to maxPendingPerIp sockets awaiting their host-auth frame', async () => {
+    await ownRelay({ trustProxy: true, maxPendingPerIp: 2, authTimeoutMs: 2000 }, async (handle) => {
+      const { serverId, hostToken } = identity('frame-pending');
+      const waiting = [0, 1].map(() => socketFrom(handle, { serverId, role: 'server', v: '1' }, '198.51.100.7'));
+      await Promise.all(waiting.map(opened));
+      const third = socketFrom(handle, { serverId, role: 'server', v: '1' }, '198.51.100.7');
+      expect(await closeCode(third)).toBe(4429);
+      // Another address is not affected, and an authenticated socket frees its place.
+      const other = socketFrom(handle, { serverId, role: 'server', v: '1' }, '198.51.100.8');
+      await opened(other);
+      waiting[0]!.send(hostAuth(hostToken));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const fourth = socketFrom(handle, { serverId, role: 'server', v: '1' }, '198.51.100.7');
+      await opened(fourth);
+      expect(await closeCode(fourth, 300)).toBe('open');
+    });
+  });
+});
+
+describe('pre-auth slot squatting', () => {
+  it('closes 4408 a client that sends nothing within the hello deadline, and keeps one that does', async () => {
+    await ownRelay({ helloTimeoutMs: 200, attachTimeoutMs: 5000 }, async (handle) => {
+      const { serverId, hostToken } = identity('hello-deadline');
+      const control = new WebSocket(url(handle, { serverId, role: 'server', v: '1', hostToken }));
+      open.push(control);
+      await opened(control);
+      const mute = new WebSocket(url(handle, { serverId, role: 'client', connectionId: 'conn-mute-01', v: '1' }));
+      open.push(mute);
+      const talker = new WebSocket(url(handle, { serverId, role: 'client', connectionId: 'conn-talk-01', v: '1' }));
+      open.push(talker);
+      await Promise.all([opened(mute), opened(talker)]);
+      talker.send('{"type":"hello"}');
+      expect(await closeCode(mute, 1000)).toBe(4408);
+      expect(await closeCode(talker, 300)).toBe('open');
+    });
+  });
+
+  it('keeps one address to maxPendingPerIp client sockets the host has not answered', async () => {
+    await ownRelay({ trustProxy: true, maxPendingPerIp: 2 }, async (handle) => {
+      const { serverId, hostToken } = identity('pending-cap');
+      const control = socketFrom(handle, { serverId, role: 'server', v: '1', hostToken }, '192.0.2.1');
+      await opened(control);
+      const first = socketFrom(handle, { serverId, role: 'client', connectionId: 'conn-pend-01', v: '1' }, '203.0.113.5');
+      const second = socketFrom(handle, { serverId, role: 'client', connectionId: 'conn-pend-02', v: '1' }, '203.0.113.5');
+      await Promise.all([opened(first), opened(second)]);
+      const third = socketFrom(handle, { serverId, role: 'client', connectionId: 'conn-pend-03', v: '1' }, '203.0.113.5');
+      expect(await closeCode(third)).toBe(4429);
+      const elsewhere = socketFrom(handle, { serverId, role: 'client', connectionId: 'conn-pend-04', v: '1' }, '203.0.113.6');
+      await opened(elsewhere);
+      // Once the host answers one of them it no longer counts as pending.
+      first.send('hello');
+      const host = socketFrom(handle, { serverId, role: 'server', connectionId: 'conn-pend-01', v: '1', hostToken }, '192.0.2.1');
+      await opened(host);
+      host.send('ready');
+      await nextFrame(first);
+      const fourth = socketFrom(handle, { serverId, role: 'client', connectionId: 'conn-pend-05', v: '1' }, '203.0.113.5');
+      await opened(fourth);
+      expect(await closeCode(fourth, 200)).toBe('open');
+    });
+  });
+});
+
+describe('host caps', () => {
+  it('keeps one address to maxServersPerIp hosts but lets a host replace its own control socket', async () => {
+    await ownRelay({ trustProxy: true, maxServersPerIp: 2 }, async (handle) => {
+      const [a, b, c] = ['cap-a', 'cap-b', 'cap-c'].map(identity) as [ReturnType<typeof identity>, ReturnType<typeof identity>, ReturnType<typeof identity>];
+      const first = socketFrom(handle, { serverId: a.serverId, role: 'server', v: '1', hostToken: a.hostToken }, '198.51.100.20');
+      const second = socketFrom(handle, { serverId: b.serverId, role: 'server', v: '1', hostToken: b.hostToken }, '198.51.100.20');
+      await Promise.all([opened(first), opened(second)]);
+      const third = socketFrom(handle, { serverId: c.serverId, role: 'server', v: '1', hostToken: c.hostToken }, '198.51.100.20');
+      expect(await closeCode(third)).toBe(4429);
+      const again = socketFrom(handle, { serverId: a.serverId, role: 'server', v: '1', hostToken: a.hostToken }, '198.51.100.20');
+      await opened(again);
+      expect(await closeCode(first)).toBe(4409);
+      const elsewhere = socketFrom(handle, { serverId: c.serverId, role: 'server', v: '1', hostToken: c.hostToken }, '198.51.100.21');
+      await opened(elsewhere);
+      expect(await closeCode(elsewhere, 200)).toBe('open');
+    });
+  });
+
+  it('holds at most maxServers hosts and logs reaching the cap without identifiers', async () => {
+    const lines: string[] = [];
+    await ownRelay({ trustProxy: true, maxServers: 1, logger: (line) => lines.push(line) }, async (handle) => {
+      const a = identity('global-a');
+      const b = identity('global-b');
+      const first = socketFrom(handle, { serverId: a.serverId, role: 'server', v: '1', hostToken: a.hostToken }, '198.51.100.30');
+      await opened(first);
+      const second = socketFrom(handle, { serverId: b.serverId, role: 'server', v: '1', hostToken: b.hostToken }, '198.51.100.31');
+      expect(await closeCode(second)).toBe(4429);
+      expect(lines).toContain('[relay] host cap reached');
+      const closedFirst = closed(first);
+      first.close(1000, 'bye');
+      await closedFirst;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const retry = socketFrom(handle, { serverId: b.serverId, role: 'server', v: '1', hostToken: b.hostToken }, '198.51.100.31');
+      await opened(retry);
+      expect(await closeCode(retry, 200)).toBe('open');
+    });
+  });
+});
+
+describe('logs', () => {
+  it('never print a host token, a URL or a frame', async () => {
+    const lines: string[] = [];
+    const { serverId, hostToken } = identity('log-check');
+    await ownRelay({ logger: (line) => lines.push(line) }, async (handle) => {
+      const control = new WebSocket(url(handle, { serverId, role: 'server', v: '1', hostToken }));
+      open.push(control);
+      await opened(control);
+      const client = new WebSocket(url(handle, { serverId, role: 'client', connectionId: 'conn-log-01', v: '1' }));
+      open.push(client);
+      await opened(client);
+      client.send('secret-frame');
+      const host = new WebSocket(url(handle, { serverId, role: 'server', connectionId: 'conn-log-01', v: '1' }));
+      open.push(host);
+      await opened(host);
+      host.send(hostAuth(hostToken));
+      await nextFrame(host);
+      const done = closed(host);
+      client.close(1000, 'bye');
+      await done;
+    });
+    const text = lines.join('\n');
+    expect(lines.length).toBeGreaterThan(0);
+    expect(text).not.toContain(hostToken);
+    expect(text).not.toContain(serverId);
+    expect(text).not.toContain('hostToken');
+    expect(text).not.toContain('/ws');
+    expect(text).not.toContain('secret-frame');
   });
 });

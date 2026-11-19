@@ -3,7 +3,6 @@
  * `wrangler dev` (local workerd): the same sockets, close codes and push answers.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,10 +11,12 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const PORT = 8799 + Math.floor(Math.random() * 200);
-const BASE = `127.0.0.1:${PORT}`;
+import { startWorker, type LocalWorker } from './harness.ts';
+
+let BASE = '';
 const MAX_CONNECTIONS = 3;
 const MAX_BUFFERED = 4;
+const MAX_PENDING_PER_IP = 2;
 
 interface FrameInfo {
   data: Buffer;
@@ -29,7 +30,7 @@ function identity(label: string): { serverId: string; hostToken: string } {
   return { serverId: sha256Hex(hostToken), hostToken };
 }
 
-let worker: ChildProcess;
+let worker: LocalWorker | undefined;
 let state: string;
 const open: WebSocket[] = [];
 
@@ -95,32 +96,20 @@ async function http(path: string, init?: RequestInit): Promise<Response> {
 
 beforeAll(async () => {
   state = mkdtempSync(join(tmpdir(), 'mighty-relay-cf-'));
-  worker = spawn(
-    'npx',
-    [
-      'wrangler', 'dev', '--ip', '127.0.0.1', '--port', String(PORT), '--persist-to', state, '--show-interactive-dev-session=false',
-      '--var', 'RELAY_ATTACH_TIMEOUT_MS:800', '--var', `RELAY_MAX_CONNECTIONS:${MAX_CONNECTIONS}`, '--var', `RELAY_MAX_BUFFERED_FRAMES:${MAX_BUFFERED}`,
-    ],
-    { cwd: join(import.meta.dirname, '..'), env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CI: '1' }, stdio: ['ignore', 'pipe', 'pipe'] },
-  );
-  let output = '';
-  worker.stdout?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
-  worker.stderr?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
-  const deadline = Date.now() + 90_000;
-  for (;;) {
-    try {
-      if ((await http('/healthz')).status === 200) break;
-    } catch {
-      // not up yet
-    }
-    if (Date.now() > deadline || worker.exitCode !== null) throw new Error(`wrangler dev did not start:\n${output}`);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
+  worker = await startWorker(state, {
+    RELAY_ATTACH_TIMEOUT_MS: '800',
+    RELAY_MAX_CONNECTIONS: String(MAX_CONNECTIONS),
+    RELAY_MAX_BUFFERED_FRAMES: String(MAX_BUFFERED),
+    RELAY_AUTH_TIMEOUT_MS: '500',
+    RELAY_HELLO_TIMEOUT_MS: '1500',
+    RELAY_MAX_PENDING_PER_IP: String(MAX_PENDING_PER_IP),
+  });
+  BASE = worker.base;
 }, 120_000);
 
-afterAll(() => {
+afterAll(async () => {
   for (const ws of open) ws.terminate();
-  worker?.kill('SIGTERM');
+  await worker?.stop();
   if (state) rmSync(state, { recursive: true, force: true });
 });
 
@@ -304,8 +293,12 @@ describe('limits', () => {
     for (let i = 0; i < MAX_CONNECTIONS; i++) {
       const client = socket({ serverId, role: 'client', connectionId: `crowd-0000000${i}`, v: '1' });
       await opened(client);
+      client.send('hello');
       const host = socket({ serverId, role: 'server', connectionId: `crowd-0000000${i}`, v: '1', hostToken });
       await opened(host);
+      const answer = nextFrame(client);
+      host.send('ready');
+      await answer;
     }
     expect((await closed(socket({ serverId, role: 'client', connectionId: 'crowd-overflow', v: '1' }))).code).toBe(4429);
   });
@@ -361,4 +354,112 @@ describe('push', () => {
     expect(unavailable.status).toBe(503);
     expect(await unavailable.json()).toEqual({ error: 'push-unavailable' });
   });
+});
+
+const hostAuth = (hostToken: string): string => JSON.stringify({ type: 'host-auth', hostToken });
+
+/**
+ * The close code, or 'open' if the socket is still up after `ms`. Under `wrangler dev` the
+ * close event comes some 10 s after the relay's close frame (the TCP close lags), hence the wait.
+ */
+function closeCode(ws: WebSocket, ms = 15_000): Promise<number | 'open'> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve('open'), ms);
+    ws.once('close', (code: number) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
+  });
+}
+
+describe('host-auth frame (token out of the URL)', () => {
+  it('opens a control socket and a host data socket that bring the token in their first frame', async () => {
+    const { serverId, hostToken } = identity('frame-1');
+    const connectionId = 'conn-frame-01';
+    const control = socket({ serverId, role: 'server', v: '1' });
+    await opened(control);
+    control.send(hostAuth(hostToken));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const connected = nextJson(control);
+    const client = socket({ serverId, role: 'client', connectionId, v: '1' });
+    await opened(client);
+    expect(await connected).toEqual({ type: 'connected', connectionId });
+    client.send('hello-from-client');
+    const host = socket({ serverId, role: 'server', connectionId, v: '1' });
+    const buffered = nextFrame(host);
+    await opened(host);
+    host.send(hostAuth(hostToken));
+    host.send('ready-from-host');
+    expect((await nextFrame(client)).data.toString('utf8')).toBe('ready-from-host');
+    expect((await buffered).data.toString('utf8')).toBe('hello-from-client');
+  }, 40_000);
+
+  it('closes 4401 on a wrong token, a binary first frame and no frame in time, and none becomes the host', async () => {
+    const { serverId, hostToken } = identity('frame-2');
+    // Two at a time: one address may keep only MAX_PENDING_PER_IP sockets waiting.
+    const [wrong, mute] = [0, 1].map(() => socket({ serverId, role: 'server', v: '1' })) as [WebSocket, WebSocket];
+    await Promise.all([opened(wrong), opened(mute)]);
+    const codes = Promise.all([closeCode(wrong), closeCode(mute)]);
+    wrong.send(hostAuth(identity('frame-2-other').hostToken));
+    expect(await codes).toEqual([4401, 4401]);
+    const binary = socket({ serverId, role: 'server', v: '1' });
+    await opened(binary);
+    const binaryCode = closeCode(binary);
+    binary.send(Buffer.from(hostAuth(hostToken)));
+    expect(await binaryCode).toBe(4401);
+    expect((await closed(socket({ serverId, role: 'client', connectionId: 'conn-frame-02', v: '1' }))).code).toBe(4404);
+  }, 40_000);
+
+  it(`keeps one address to ${MAX_PENDING_PER_IP} sockets owing their host-auth frame`, async () => {
+    const { serverId, hostToken } = identity('frame-3');
+    const waiting = Array.from({ length: MAX_PENDING_PER_IP }, () => socket({ serverId, role: 'server', v: '1' }));
+    await Promise.all(waiting.map(opened));
+    expect(await closeCode(socket({ serverId, role: 'server', v: '1' }))).toBe(4429);
+    waiting[0]!.send(hostAuth(hostToken));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const next = socket({ serverId, role: 'server', v: '1' });
+    await opened(next);
+    next.send(hostAuth(hostToken));
+    // The newest control socket replaces the one that authenticated first.
+    expect(await closeCode(waiting[0]!)).toBe(4409);
+  }, 40_000);
+});
+
+describe('pre-auth slot squatting', () => {
+  it('closes 4408 a client that sends nothing within the hello deadline and keeps one that does', async () => {
+    const { serverId, hostToken } = identity('hello-1');
+    const control = socket({ serverId, role: 'server', v: '1', hostToken });
+    await opened(control);
+    const mute = socket({ serverId, role: 'client', connectionId: 'conn-mute-0001', v: '1' });
+    const talker = socket({ serverId, role: 'client', connectionId: 'conn-talk-0001', v: '1' });
+    await Promise.all([opened(mute), opened(talker)]);
+    talker.send('hello');
+    // Both host halves attach, so the attach timeout is out of the picture.
+    const muteHost = socket({ serverId, role: 'server', connectionId: 'conn-mute-0001', v: '1', hostToken });
+    const talkerHost = socket({ serverId, role: 'server', connectionId: 'conn-talk-0001', v: '1', hostToken });
+    await Promise.all([opened(muteHost), opened(talkerHost)]);
+    expect(await closeCode(mute)).toBe(4408);
+    expect(await closeCode(talker, 500)).toBe('open');
+  }, 40_000);
+
+  it(`keeps one address to ${MAX_PENDING_PER_IP} client sockets the host has not answered`, async () => {
+    const { serverId, hostToken } = identity('pending-1');
+    const control = socket({ serverId, role: 'server', v: '1', hostToken });
+    await opened(control);
+    const first = socket({ serverId, role: 'client', connectionId: 'conn-pend-0001', v: '1' });
+    const second = socket({ serverId, role: 'client', connectionId: 'conn-pend-0002', v: '1' });
+    await Promise.all([opened(first), opened(second)]);
+    first.send('hello');
+    second.send('hello');
+    expect(await closeCode(socket({ serverId, role: 'client', connectionId: 'conn-pend-0003', v: '1' }))).toBe(4429);
+    const host = socket({ serverId, role: 'server', connectionId: 'conn-pend-0001', v: '1', hostToken });
+    await opened(host);
+    const answer = nextFrame(first);
+    host.send('ready');
+    await answer;
+    const next = socket({ serverId, role: 'client', connectionId: 'conn-pend-0004', v: '1' });
+    await opened(next);
+    next.send('hello');
+    expect(await closeCode(next, 300)).toBe('open');
+  }, 40_000);
 });

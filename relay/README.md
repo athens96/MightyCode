@@ -35,12 +35,18 @@ npm test                       # vitest
 | `RELAY_MAX_CONNECTIONS` | `32` | `serverId`당 동시 연결 수 |
 | `RELAY_MAX_BUFFERED_FRAMES` | `64` | 호스트 부착 전 버퍼링할 클라이언트 프레임 수 |
 | `RELAY_MAX_PAYLOAD` | `1048576` | 프레임 최대 크기(바이트) |
+| `RELAY_HELLO_TIMEOUT_MS` | `5000` | 클라이언트가 첫 프레임(`hello`)을 보내야 하는 시간(넘으면 4408) |
+| `RELAY_AUTH_TIMEOUT_MS` | `5000` | 쿼리에 `hostToken` 없이 연 호스트 소켓이 `host-auth` 프레임을 보내야 하는 시간(넘으면 4401) |
+| `RELAY_MAX_PENDING_PER_IP` | `8` | 한 주소(IPv6는 /64)가 `serverId`마다 둘 수 있는 보증 전 소켓: 호스트가 아직 답하지 않은 클라이언트 소켓, `host-auth`를 기다리는 호스트 소켓 각각(넘으면 4429) |
+| `RELAY_MAX_SERVERS` · `RELAY_MAX_SERVERS_PER_IP` | `10000` · `64` | 호스트(제어 소켓) 수 상한, 한 주소의 상한(넘으면 4429, 같은 호스트의 재접속은 예외). Node 릴레이만 |
 | `PUSH_STORE_PATH` | (빈 값) | 푸시 핸들 파일. 비면 메모리에만 둔다(로컬 실행) |
 | `FCM_SERVICE_ACCOUNT_FILE` | (빈 값) | FCM 서비스 계정 JSON 경로. 비거나 읽을 수 없거나 키가 깨졌으면 `POST /push/v1/send`가 503(릴레이는 계속 돈다) |
 | `PUSH_RATE_WINDOW_MS` | `600000` | 푸시 한도 창 |
 | `PUSH_MAX_SEND_PER_SERVER_ID` · `PUSH_MAX_SEND_PER_IP` · `PUSH_MAX_SEND_GLOBAL` | `120` · `240` · `3000` | 창마다 전송 수 |
 | `PUSH_MAX_HANDLE_OPS_PER_IP` | `30` | 창마다 IP당(IPv6는 /64당) 핸들 등록·갱신·삭제 수 |
-| `PUSH_MAX_REGISTRATIONS_GLOBAL` | `300` | 창마다 전체 핸들 등록 수 |
+| `PUSH_MAX_REGISTRATIONS_GLOBAL` | `300` | 창마다 릴레이에 없던 FCM 토큰의 등록 수(전체) |
+| `PUSH_MAX_REGISTRATIONS_PER_IP_DAY` | `100` | IP당(IPv6는 /64당) 하루 핸들 등록 수 |
+| `PUSH_MAX_HANDLES_PER_TOKEN` · `PUSH_MAX_HANDLES_PER_SERVER_ID` | `16` · `32` | FCM 토큰 하나의 핸들 수, `serverId` 하나에 묶인 핸들 수. 넘으면 가장 오래 쓰이지 않은 것이 자리를 내준다 |
 | `PUSH_MAX_HANDLES` · `PUSH_HANDLE_IDLE_DAYS` | `20000` · `120` | 핸들 수 상한, 쓰이지 않은 핸들을 지우는 날 수 |
 
 ## Docker
@@ -80,11 +86,11 @@ Caddy는 인증서를 자동 발급하고 WebSocket 업그레이드를 그대로
 
 | 소켓 | 쿼리 | 동작 |
 |---|---|---|
-| 호스트 제어 | `serverId&role=server&v=1` | `serverId`당 1개. 새 소켓이 오면 이전 소켓은 4409로 닫히고 대기 상태는 새 소켓이 이어받는다. `{"type":"connected"\|"disconnected","connectionId"}` 알림 수신 |
+| 호스트 제어 | `serverId&role=server&v=1` + `hostToken`(쿼리, 또는 첫 프레임 `{"type":"host-auth","hostToken"}`) | `serverId`당 1개. 새 소켓이 오면 이전 소켓은 4409로 닫히고 대기 상태는 새 소켓이 이어받는다. `{"type":"connected"\|"disconnected","connectionId"}` 알림 수신 |
 | 클라이언트 데이터 | `serverId&role=client&connectionId&v=1` | 제어 소켓 없으면 4404. 있으면 호스트 데이터 소켓을 기다리며 최대 64프레임 버퍼(초과 4413), 시간 초과 4504 |
-| 호스트 데이터 | `serverId&role=server&connectionId&v=1` | 대기 중인 클라이언트가 없으면 4404. 있으면 양방향 파이프(버퍼는 순서대로 먼저 전달) |
+| 호스트 데이터 | `serverId&role=server&connectionId&v=1` + `hostToken`(제어 소켓과 같이) | 대기 중인 클라이언트가 없으면 4404. 있으면 양방향 파이프(버퍼는 순서대로 먼저 전달) |
 
-종료 코드: `4400` 잘못된 쿼리, `4404` 대상 없음, `4409` 제어 소켓 교체, `4410` 호스트 오프라인, `4413` 버퍼 초과, `4429` 연결 수 초과, `4504` 호스트 부착 시간 초과.
+종료 코드: `4400` 잘못된 쿼리, `4401` 호스트 토큰 없음·틀림, `4404` 대상 없음, `4408` 클라이언트 첫 프레임 시간 초과, `4409` 제어 소켓 교체, `4410` 호스트 오프라인, `4413` 버퍼 초과, `4429` 연결 수 초과, `4504` 호스트 부착 시간 초과.
 한쪽 데이터 소켓이 닫히면 반대쪽도 **같은 코드·사유**로 닫히고 제어 소켓에 `disconnected`가 간다.
 
 ## 라이선스

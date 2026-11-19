@@ -23,5 +23,8 @@ new_sqlite_classes = ["Hub", "PushStore"]
 
 # The FCM service account JSON is a secret, never a var:
 #   npx wrangler secret put FCM_SERVICE_ACCOUNT < service-account.json
+# Query strings are cut from request URLs in logs and traces: hosts in the field still put their
+# hostToken in the /ws query (docs/relay.md "릴레이 와이어"). The code never logs URLs or tokens.
 [observability]
 enabled = true
+redact_query_string = true

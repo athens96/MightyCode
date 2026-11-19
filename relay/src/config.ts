@@ -10,6 +10,20 @@ export interface RelayConfig {
   readonly pingIntervalMs: number;
   /** Maximum concurrent data connections per serverId. */
   readonly maxConnectionsPerServer: number;
+  /** How long a host socket opened without `hostToken` in its query has to send its `host-auth` frame. */
+  readonly authTimeoutMs: number;
+  /** How long a client data socket has to send its first frame (the E2EE `hello`). */
+  readonly helloTimeoutMs: number;
+  /**
+   * Sockets one source address (IPv6: its /64) may hold per serverId that are not yet
+   * vouched for: client data sockets the host has not answered, and host sockets still
+   * owing their `host-auth` frame.
+   */
+  readonly maxPendingPerIp: number;
+  /** Host control sockets (distinct serverIds) the relay holds at most. */
+  readonly maxServers: number;
+  /** Host control sockets (distinct serverIds) one source address (IPv6: its /64) may hold. */
+  readonly maxServersPerIp: number;
   /** Client frames buffered while the host data socket is still attaching. */
   readonly maxBufferedFrames: number;
   /** Maximum WebSocket frame payload in bytes. */
@@ -52,11 +66,24 @@ export interface RelayConfig {
   readonly pushMaxSendGlobal: number;
   /** Handle registrations, refreshes and deletions per source IP (IPv6: per /64) per window. */
   readonly pushMaxHandleOpsPerIp: number;
-  /** Handle registrations across all IPs per window: registration needs no account, so this bounds a flood. */
+  /**
+   * Registrations of FCM tokens the relay does not hold yet, across all IPs, per window:
+   * registration needs no account, so this bounds a flood. A token already held does not count.
+   */
   readonly pushMaxRegistrationsGlobal: number;
+  /** Handle registrations per source IP (IPv6: per /64) per day. */
+  readonly pushMaxRegistrationsPerIpDay: number;
+  /**
+   * Handles one FCM token may have (a phone has one per paired host); a further registration
+   * replaces the token's least recently used handle.
+   */
+  readonly pushMaxHandlesPerToken: number;
+  /** Handles one serverId may have bound; a further first use replaces its least recently used one. */
+  readonly pushMaxHandlesPerServerId: number;
   /**
    * Handles kept at most. When full, idle ones go first, then the least recently used
-   * handle no host has used yet; handles a host has used are never dropped for space.
+   * handle no host has used yet, and only then the least recently used bound handle, so
+   * a full store never refuses a phone.
    */
   readonly pushMaxHandles: number;
   /** A handle neither refreshed nor used for this many days is dropped. */
@@ -75,6 +102,11 @@ const DEFAULTS: RelayConfig = {
   attachTimeoutMs: 10_000,
   pingIntervalMs: 30_000,
   maxConnectionsPerServer: 32,
+  authTimeoutMs: 5_000,
+  helloTimeoutMs: 5_000,
+  maxPendingPerIp: 8,
+  maxServers: 10_000,
+  maxServersPerIp: 64,
   maxBufferedFrames: 64,
   maxPayload: 1024 * 1024,
   maxSocketBufferedBytes: 4 * 1024 * 1024,
@@ -94,6 +126,9 @@ const DEFAULTS: RelayConfig = {
   pushMaxSendGlobal: 3000,
   pushMaxHandleOpsPerIp: 30,
   pushMaxRegistrationsGlobal: 300,
+  pushMaxRegistrationsPerIpDay: 100,
+  pushMaxHandlesPerToken: 16,
+  pushMaxHandlesPerServerId: 32,
   pushMaxHandles: 20_000,
   pushHandleIdleDays: 120,
   trustProxy: false,
@@ -114,6 +149,11 @@ export function loadConfig(overrides: Partial<RelayConfig> = {}): RelayConfig {
     attachTimeoutMs: envInt('RELAY_ATTACH_TIMEOUT_MS', DEFAULTS.attachTimeoutMs),
     pingIntervalMs: envInt('RELAY_PING_INTERVAL_MS', DEFAULTS.pingIntervalMs),
     maxConnectionsPerServer: envInt('RELAY_MAX_CONNECTIONS', DEFAULTS.maxConnectionsPerServer),
+    authTimeoutMs: envInt('RELAY_AUTH_TIMEOUT_MS', DEFAULTS.authTimeoutMs),
+    helloTimeoutMs: envInt('RELAY_HELLO_TIMEOUT_MS', DEFAULTS.helloTimeoutMs),
+    maxPendingPerIp: envInt('RELAY_MAX_PENDING_PER_IP', DEFAULTS.maxPendingPerIp),
+    maxServers: envInt('RELAY_MAX_SERVERS', DEFAULTS.maxServers),
+    maxServersPerIp: envInt('RELAY_MAX_SERVERS_PER_IP', DEFAULTS.maxServersPerIp),
     maxBufferedFrames: envInt('RELAY_MAX_BUFFERED_FRAMES', DEFAULTS.maxBufferedFrames),
     maxPayload: envInt('RELAY_MAX_PAYLOAD', DEFAULTS.maxPayload),
     maxSocketBufferedBytes: envInt('RELAY_MAX_SOCKET_BUFFERED_BYTES', DEFAULTS.maxSocketBufferedBytes),
@@ -133,6 +173,9 @@ export function loadConfig(overrides: Partial<RelayConfig> = {}): RelayConfig {
     pushMaxSendGlobal: envInt('PUSH_MAX_SEND_GLOBAL', DEFAULTS.pushMaxSendGlobal),
     pushMaxHandleOpsPerIp: envInt('PUSH_MAX_HANDLE_OPS_PER_IP', DEFAULTS.pushMaxHandleOpsPerIp),
     pushMaxRegistrationsGlobal: envInt('PUSH_MAX_REGISTRATIONS_GLOBAL', DEFAULTS.pushMaxRegistrationsGlobal),
+    pushMaxRegistrationsPerIpDay: envInt('PUSH_MAX_REGISTRATIONS_PER_IP_DAY', DEFAULTS.pushMaxRegistrationsPerIpDay),
+    pushMaxHandlesPerToken: envInt('PUSH_MAX_HANDLES_PER_TOKEN', DEFAULTS.pushMaxHandlesPerToken),
+    pushMaxHandlesPerServerId: envInt('PUSH_MAX_HANDLES_PER_SERVER_ID', DEFAULTS.pushMaxHandlesPerServerId),
     pushMaxHandles: envInt('PUSH_MAX_HANDLES', DEFAULTS.pushMaxHandles),
     pushHandleIdleDays: envInt('PUSH_HANDLE_IDLE_DAYS', DEFAULTS.pushHandleIdleDays),
     trustProxy: process.env['RELAY_TRUST_PROXY']?.trim() === '1',

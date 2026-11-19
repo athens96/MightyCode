@@ -6,7 +6,7 @@ Mighty Code의 기본 릴레이는 Cloudflare Workers에 있습니다: `wss://mi
 
 - **Worker** (`src/worker.ts`): `GET /healthz`, `GET /ws?…`, `/push/v1/*`. 쿼리 검사(4400)와 호스트 토큰 확인(4401)은 Worker가 하고, 소켓은 그 `serverId`의 Hub로 넘깁니다.
 - **Hub** (`src/hub.ts`, Durable Object, `serverId`마다 하나): 제어 소켓, 클라이언트 데이터 소켓, 호스트 데이터 소켓을 짝지어 프레임을 그대로 넘깁니다. 닫기 코드(4404 4409 4410 4413 4429 4504)와 `connected`/`disconnected` 알림은 Node 릴레이와 같습니다. 소켓은 hibernation API로 받으므로 오래 열린 제어 소켓이 있어도 메시지가 없는 동안은 요금이 붙지 않습니다. 소켓의 종류와 연결 id는 소켓에 붙여 두고(태그·attachment), 호스트 반쪽이 붙기 전에 클라이언트가 보낸 프레임만 메모리에 둡니다(그동안은 붙기 기다림 타이머가 객체를 깨워 둡니다).
-- **PushStore** (`src/push.ts`, Durable Object, 하나): 푸시 핸들을 SQLite 저장소에 두고 FCM HTTP v1로 보냅니다. 전송 규칙은 Node 릴레이와 같은 `relay/src/fcm-core.ts`이고, 서명만 WebCrypto입니다. 한도 창은 메모리에 있어 객체가 내려가면 새로 셉니다.
+- **PushStore** (`src/push.ts`, Durable Object, 하나): 푸시 핸들을 SQLite 저장소에 두고 FCM HTTP v1로 보냅니다. 전송 규칙은 Node 릴레이와 같은 `relay/src/fcm-core.ts`이고, 서명만 WebCrypto입니다. 한도 창은 같은 SQLite 저장소(`rate_events`)에 두어 객체가 내려가거나 다시 배포돼도 이어서 셉니다. 등록은 토큰당 핸들 16개, `serverId`당 32개까지이고, 저장소가 차면 오래 안 쓴 핸들부터 비웁니다(503 대신).
 
 Node 릴레이와 다른 점:
 - **TURN 없음.** 제어 소켓의 `turn-credentials-request`에는 `turn-unavailable`로 답합니다. 화면 공유(BETA)는 호스트에서 잠시 꺼 두었습니다.
@@ -28,7 +28,7 @@ curl https://mighty-relay.<계정>.workers.dev/healthz   # ok
 
 키가 맞는지는 가짜 FCM 토큰으로 핸들을 하나 만들어 보내 보면 압니다: `410 token-gone`이면 FCM까지 닿은 것이고, `502`에 `Retry-After: 60`이면 키 교환이 실패한 것, `502`에 `fcmError`가 있으면 그 이름(예: `SENDER_ID_MISMATCH`, 다른 Firebase 프로젝트의 키)이 원인입니다.
 
-한도는 `wrangler.toml`의 `[vars]`나 `--var`로 바꿀 수 있습니다: `RELAY_ATTACH_TIMEOUT_MS` `RELAY_MAX_CONNECTIONS` `RELAY_MAX_BUFFERED_FRAMES` `RELAY_MAX_PAYLOAD`, `PUSH_*`(이름과 기본값은 [`relay/README.md`](../relay/README.md)의 표와 같습니다).
+한도는 `wrangler.toml`의 `[vars]`나 `--var`로 바꿀 수 있습니다: `RELAY_ATTACH_TIMEOUT_MS` `RELAY_AUTH_TIMEOUT_MS`(호스트의 `host-auth` 첫 프레임 마감) `RELAY_HELLO_TIMEOUT_MS`(클라이언트 첫 프레임 마감, 4408) `RELAY_MAX_PENDING_PER_IP`(주소·`serverId`당 인증 전 소켓, 4429) `RELAY_MAX_CONNECTIONS` `RELAY_MAX_BUFFERED_FRAMES` `RELAY_MAX_PAYLOAD`, `PUSH_*`(`PUSH_MAX_HANDLES_PER_TOKEN` `PUSH_MAX_HANDLES_PER_SERVER_ID` `PUSH_MAX_REGISTRATIONS_PER_IP_DAY` 포함; 이름과 기본값은 [`relay/README.md`](../relay/README.md)의 표와 같습니다).
 
 ## 시험
 

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { connect } from 'node:net';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -56,6 +57,34 @@ function send(base: string, who: { serverId: string; hostToken: string }, handle
   return call(base, 'POST', '/push/v1/send', { serverId: who.serverId, handle, payload }, who.hostToken);
 }
 
+/**
+ * Writes `request` on a raw socket (and, when `keepSending`, keeps writing chunks after it
+ * like a client streaming a huge body), then gives the response head and whether the relay
+ * closed the connection within two seconds.
+ */
+function rawRequest(port: number, request: string, keepSending = false): Promise<{ head: string; closed: boolean }> {
+  return new Promise((resolve) => {
+    const socket = connect(port, '127.0.0.1');
+    let received = '';
+    let pump: NodeJS.Timeout | undefined;
+    const finish = (closed: boolean): void => {
+      clearInterval(pump);
+      clearTimeout(timer);
+      socket.destroy();
+      resolve({ head: received.split('\r\n\r\n')[0] ?? '', closed });
+    };
+    const timer = setTimeout(() => finish(false), 2000);
+    socket.on('data', (data: Buffer) => { received += data.toString('latin1'); });
+    socket.on('close', () => finish(true));
+    socket.on('error', () => {});
+    socket.write(request);
+    if (keepSending) {
+      const more = `${(4096).toString(16)}\r\n${'y'.repeat(4096)}\r\n`;
+      pump = setInterval(() => { if (!socket.destroyed) socket.write(more); }, 5);
+    }
+  });
+}
+
 describe('push handles', () => {
   it('hands out a handle and a secret for a token', async () => {
     const { base } = await relay();
@@ -94,11 +123,11 @@ describe('push handles', () => {
 });
 
 describe('push limits', () => {
-  function registerFrom(base: string, ip: string): Promise<Response> {
+  function registerFrom(base: string, ip: string, fcmToken = FCM_TOKEN): Promise<Response> {
     return fetch(`${base}/push/v1/handles`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-forwarded-for': ip },
-      body: JSON.stringify({ fcmToken: FCM_TOKEN }),
+      body: JSON.stringify({ fcmToken }),
     });
   }
 
@@ -127,13 +156,47 @@ describe('push limits', () => {
     expect((await registerFrom(base, '::ffff:203.0.113.7')).status).toBe(429);
   });
 
-  it('limits registrations across all IPs', async () => {
+  it('limits registrations of new tokens across all IPs', async () => {
     const { base } = await relay({ trustProxy: true, pushMaxRegistrationsGlobal: 2 });
-    expect((await registerFrom(base, '203.0.113.1')).status).toBe(201);
-    expect((await registerFrom(base, '203.0.113.2')).status).toBe(201);
-    const res = await registerFrom(base, '203.0.113.3');
+    expect((await registerFrom(base, '203.0.113.1', `${FCM_TOKEN}1`)).status).toBe(201);
+    expect((await registerFrom(base, '203.0.113.2', `${FCM_TOKEN}2`)).status).toBe(201);
+    const res = await registerFrom(base, '203.0.113.3', `${FCM_TOKEN}3`);
     expect(res.status).toBe(429);
     expect(Number(res.headers.get('retry-after'))).toBeGreaterThan(0);
+    // A phone pairing one more host, or registering again, adds no new token and still gets through.
+    expect((await registerFrom(base, '203.0.113.1', `${FCM_TOKEN}1`)).status).toBe(201);
+  });
+
+  it('limits registrations per IP per day', async () => {
+    const { base } = await relay({ trustProxy: true, pushMaxRegistrationsPerIpDay: 2 });
+    expect((await registerFrom(base, '203.0.113.9', `${FCM_TOKEN}a`)).status).toBe(201);
+    expect((await registerFrom(base, '203.0.113.9', `${FCM_TOKEN}b`)).status).toBe(201);
+    const res = await registerFrom(base, '203.0.113.9', `${FCM_TOKEN}c`);
+    expect(res.status).toBe(429);
+    expect(Number(res.headers.get('retry-after'))).toBeGreaterThan(600);
+    expect((await registerFrom(base, '203.0.113.10', `${FCM_TOKEN}c`)).status).toBe(201);
+  });
+
+  it('replaces the oldest handle of a token past its cap instead of growing', async () => {
+    const { base } = await relay({ pushMaxHandlesPerToken: 2 });
+    const first = await register(base);
+    const second = await register(base);
+    const third = await register(base);
+    const host = identity('per-token');
+    expect((await send(base, host, first.handle)).status).toBe(404);
+    expect((await send(base, host, second.handle)).status).toBe(202);
+    expect((await send(base, identity('per-token-2'), third.handle)).status).toBe(202);
+  });
+
+  it('keeps a serverId to its quota of bound handles', async () => {
+    const { base } = await relay({ pushMaxHandlesPerServerId: 1 });
+    const host = identity('quota');
+    const older = await register(base);
+    expect((await send(base, host, older.handle)).status).toBe(202);
+    const res = await call(base, 'POST', '/push/v1/handles', { fcmToken: `${FCM_TOKEN}-other` });
+    const newer = (await res.json()) as { handle: string };
+    expect((await send(base, host, newer.handle)).status).toBe(202);
+    expect((await send(base, host, older.handle)).status).toBe(404);
   });
 
   it('logs a full store without identifiers and makes room from unused handles', async () => {
@@ -280,6 +343,26 @@ describe('push send', () => {
     const { base } = await relay({ pushSender: null });
     const made = await register(base);
     expect((await send(base, identity('host-a'), made.handle)).status).toBe(503);
+  });
+
+  it('answers an oversized body 413 and closes without reading the rest', async () => {
+    const { base } = await relay();
+    const { port } = new URL(base);
+    // Declared too large: answered before any body byte is read.
+    const declared = await rawRequest(Number(port), 'POST /push/v1/handles HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 104857600\r\n\r\n{"fcmToken":"');
+    expect(declared.head).toMatch(/^HTTP\/1\.1 413 /);
+    expect(declared.head.toLowerCase()).toContain('connection: close');
+    expect(declared.closed).toBe(true);
+    // Streamed (chunked) past the limit: answered once the limit is passed, then closed while the client still sends.
+    const chunk = 'x'.repeat(4096);
+    const body = Array.from({ length: 4 }, () => `${(4096).toString(16)}\r\n${chunk}\r\n`).join('');
+    const streamed = await rawRequest(Number(port), `PUT /push/v1/handles/${'A'.repeat(43)} HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n${body}`, true);
+    expect(streamed.head).toMatch(/^HTTP\/1\.1 413 /);
+    expect(streamed.closed).toBe(true);
+    // An unknown route reads no more than the limit either.
+    const unknown = await rawRequest(Number(port), 'POST /push/v1/nope HTTP/1.1\r\nHost: x\r\nContent-Length: 104857600\r\n\r\n');
+    expect(unknown.head).toMatch(/^HTTP\/1\.1 413 /);
+    expect(unknown.closed).toBe(true);
   });
 
   it('keeps answering /healthz and 404 elsewhere', async () => {

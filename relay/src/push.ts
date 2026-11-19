@@ -21,20 +21,52 @@ const HANDLE_PATH = /^\/push\/v1\/handles\/([A-Za-z0-9_-]{43})$/;
 
 type Body = { readonly ok: true; readonly value: Record<string, unknown> } | { readonly ok: false; readonly status: 400 | 413 };
 
-async function readBody(req: IncomingMessage): Promise<Body> {
+/**
+ * The request body, or null once it passes `BODY_LIMIT` (declared or streamed): reading
+ * stops there and the request is left paused, for `refuseTooLarge` to answer and close.
+ */
+function collectBody(req: IncomingMessage): Promise<Buffer | null> {
   const declared = Number(req.headers['content-length'] ?? '0');
-  let size = 0;
-  let tooLarge = declared > BODY_LIMIT;
-  const chunks: Buffer[] = [];
-  for await (const chunk of req as AsyncIterable<Buffer>) {
-    size += chunk.length;
-    if (size > BODY_LIMIT) tooLarge = true;
-    // Keep draining so the socket stays usable for the reply.
-    if (!tooLarge) chunks.push(chunk);
-  }
-  if (tooLarge) return { ok: false, status: 413 };
+  if (declared > BODY_LIMIT) return Promise.resolve(null);
+  if (req.readableEnded) return Promise.resolve(Buffer.alloc(0));
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const done = (value: Buffer | null): void => {
+      req.off('data', onData);
+      req.off('end', onEnd);
+      req.off('error', onError);
+      resolve(value);
+    };
+    const onData = (chunk: Buffer): void => {
+      size += chunk.length;
+      if (size > BODY_LIMIT) {
+        req.pause();
+        done(null);
+        return;
+      }
+      chunks.push(chunk);
+    };
+    const onEnd = (): void => done(Buffer.concat(chunks));
+    const onError = (): void => done(null);
+    req.on('data', onData);
+    req.on('end', onEnd);
+    req.on('error', onError);
+  });
+}
+
+/** 413, then the connection closes: the rest of an oversized body is never read. */
+function refuseTooLarge(req: IncomingMessage, res: ServerResponse): void {
+  res.setHeader('connection', 'close');
+  res.once('finish', () => req.socket.destroy());
+  failure(res, 413, 'too-large');
+}
+
+async function readBody(req: IncomingMessage): Promise<Body> {
+  const bytes = await collectBody(req);
+  if (bytes === null) return { ok: false, status: 413 };
   try {
-    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const parsed: unknown = JSON.parse(bytes.toString('utf8'));
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { ok: false, status: 400 };
     return { ok: true, value: parsed as Record<string, unknown> };
   } catch {
@@ -122,6 +154,7 @@ export class PushRoutes {
   readonly #sendByIp: SlidingWindowLimiter;
   readonly #sendGlobal: SlidingWindowLimiter;
   readonly #registrationsGlobal: SlidingWindowLimiter;
+  readonly #registrationsByIpDay: SlidingWindowLimiter;
   readonly #sweeper: NodeJS.Timeout;
 
   constructor(config: RelayConfig, store: PushHandleStore, sender: PushSender | null, log: RelayLogger, now: () => number) {
@@ -135,9 +168,10 @@ export class PushRoutes {
     this.#sendByIp = new SlidingWindowLimiter(window, config.pushMaxSendPerIp);
     this.#sendGlobal = new SlidingWindowLimiter(window, config.pushMaxSendGlobal);
     this.#registrationsGlobal = new SlidingWindowLimiter(window, config.pushMaxRegistrationsGlobal);
+    this.#registrationsByIpDay = new SlidingWindowLimiter(DAY_MS, config.pushMaxRegistrationsPerIpDay);
     this.#sweeper = setInterval(() => {
       const at = this.#now();
-      const limiters = [this.#handleOpsByIp, this.#sendByServerId, this.#sendByIp, this.#sendGlobal, this.#registrationsGlobal];
+      const limiters = [this.#handleOpsByIp, this.#sendByServerId, this.#sendByIp, this.#sendGlobal, this.#registrationsGlobal, this.#registrationsByIpDay];
       for (const limiter of limiters) limiter.sweep(at);
     }, window);
     this.#sweeper.unref?.();
@@ -151,10 +185,8 @@ export class PushRoutes {
     if (req.method === 'POST' && path === '/push/v1/handles') await this.#register(req, res, ip);
     else if (req.method === 'POST' && path === '/push/v1/send') await this.#send(req, res, ip);
     else if ((req.method === 'PUT' || req.method === 'DELETE') && HANDLE_PATH.test(path)) await this.#manage(req, res, ip, HANDLE_PATH.exec(path)?.[1] ?? '');
-    else {
-      req.resume();
-      reply(res, 404, { error: 'not-found' });
-    }
+    else if ((await collectBody(req)) === null) refuseTooLarge(req, res);
+    else reply(res, 404, { error: 'not-found' });
     return true;
   }
 
@@ -175,10 +207,14 @@ export class PushRoutes {
 
   async #register(req: IncomingMessage, res: ServerResponse, ip: string): Promise<void> {
     const body = await readBody(req);
-    if (!body.ok) return failure(res, body.status, body.status === 413 ? 'too-large' : 'bad-request');
+    if (!body.ok) return body.status === 413 ? refuseTooLarge(req, res) : failure(res, 400, 'bad-request');
     const token = body.value['fcmToken'];
     if (typeof token !== 'string' || !FCM_TOKEN_PATTERN.test(token)) return failure(res, 400, 'bad-request');
-    const rate = this.#take([[this.#handleOpsByIp, ip], [this.#registrationsGlobal, '*']]);
+    // A token the relay already holds (a phone pairing one more host, or registering again) adds no
+    // new phone, so only new tokens spend the shared budget a flood would exhaust.
+    const checks: Array<readonly [SlidingWindowLimiter, string]> = [[this.#handleOpsByIp, ip], [this.#registrationsByIpDay, ip]];
+    if (!this.#store.hasToken(token)) checks.push([this.#registrationsGlobal, '*']);
+    const rate = this.#take(checks);
     if (!rate.ok) return failure(res, 429, 'rate-limited', rate.retryAfterSecs);
     const made = await this.#store.register(token, this.#now());
     if (made === null) return failure(res, 503, 'full');
@@ -187,9 +223,9 @@ export class PushRoutes {
 
   async #manage(req: IncomingMessage, res: ServerResponse, ip: string, handle: string): Promise<void> {
     const secret = bearer(req) ?? '';
+    if (req.method !== 'PUT' && (await collectBody(req)) === null) return refuseTooLarge(req, res);
     const body = req.method === 'PUT' ? await readBody(req) : null;
-    if (req.method !== 'PUT') req.resume();
-    if (body !== null && !body.ok) return failure(res, body.status, body.status === 413 ? 'too-large' : 'bad-request');
+    if (body !== null && !body.ok) return body.status === 413 ? refuseTooLarge(req, res) : failure(res, 400, 'bad-request');
     const token = body?.ok === true ? body.value['fcmToken'] : undefined;
     if (req.method === 'PUT' && (typeof token !== 'string' || !FCM_TOKEN_PATTERN.test(token))) return failure(res, 400, 'bad-request');
     const rate = this.#take([[this.#handleOpsByIp, ip]]);
@@ -203,7 +239,7 @@ export class PushRoutes {
 
   async #send(req: IncomingMessage, res: ServerResponse, ip: string): Promise<void> {
     const body = await readBody(req);
-    if (!body.ok) return failure(res, body.status, body.status === 413 ? 'too-large' : 'bad-request');
+    if (!body.ok) return body.status === 413 ? refuseTooLarge(req, res) : failure(res, 400, 'bad-request');
     const { serverId, handle, payload } = body.value;
     const hostToken = bearer(req);
     if (typeof serverId !== 'string' || !SERVER_ID_PATTERN.test(serverId)) return failure(res, 400, 'bad-request');
@@ -247,7 +283,14 @@ export async function createPushRoutes(
   now: () => number = Date.now,
 ): Promise<PushRoutes> {
   const store = await PushHandleStore.open(
-    { path: config.pushStorePath, maxHandles: config.pushMaxHandles, idleMs: config.pushHandleIdleDays * DAY_MS, log },
+    {
+      path: config.pushStorePath,
+      maxHandles: config.pushMaxHandles,
+      maxPerToken: config.pushMaxHandlesPerToken,
+      maxPerServerId: config.pushMaxHandlesPerServerId,
+      idleMs: config.pushHandleIdleDays * DAY_MS,
+      log,
+    },
     now(),
   );
   let resolved: PushSender | null = null;

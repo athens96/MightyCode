@@ -5,6 +5,7 @@ import type { RelayConfig } from './config.ts';
 import {
   CloseCode,
   ownsServerId,
+  parseHostAuthFrame,
   sendableCloseCode,
   truncateReason,
   type ControlNotice,
@@ -13,6 +14,7 @@ import {
   type TurnRateLimited,
   type TurnUnavailable,
 } from './protocol.ts';
+import { pushIpKey } from './push.ts';
 
 /** A frame held while the host data socket is still attaching. */
 interface BufferedFrame {
@@ -24,14 +26,22 @@ interface Connection {
   readonly serverId: string;
   readonly connectionId: string;
   readonly client: WebSocket;
+  /** The client's source address as per-address caps count it (IPv6: its /64). */
+  readonly ipKey: string;
   host: WebSocket | null;
   buffered: BufferedFrame[];
   attachTimer: NodeJS.Timeout | null;
+  /** Running until the client sends its first frame (the E2EE `hello`). */
+  helloTimer: NodeJS.Timeout | null;
+  /** Whether the host half has sent the client anything (its `ready`); until then the slot is pending. */
+  answered: boolean;
   closed: boolean;
 }
 
 interface ServerEntry {
   control: WebSocket | null;
+  /** The address key of the current control socket, for the per-address host cap. */
+  controlIp: string | null;
   readonly connections: Map<string, Connection>;
 }
 
@@ -61,6 +71,8 @@ export class RelayHub {
   readonly #log: RelayLogger;
   readonly #servers = new Map<string, ServerEntry>();
   readonly #alive = new Map<WebSocket, boolean>();
+  /** Host sockets still owing their `host-auth` frame, per `serverId` and address key. */
+  readonly #authPending = new Map<string, number>();
   #keepalive: NodeJS.Timeout | null = null;
 
   /** Timestamps (ms) of recent TURN mints, keyed by serverId. */
@@ -76,25 +88,80 @@ export class RelayHub {
     this.#startKeepalive();
   }
 
-  /** Entry point for an accepted WebSocket with an already validated query. */
+  /**
+   * Entry point for an accepted WebSocket with an already validated query. A host socket
+   * proves its serverId with `hostToken` in the query (the form hosts in the field use) or,
+   * without it, with a `host-auth` first frame (docs/relay.md "릴레이 와이어").
+   */
   handleSocket(ws: WebSocket, params: SocketParams, ip: string): void {
     this.#track(ws);
-    if (params.kind !== 'client-data' && !ownsServerId(params.serverId, params.hostToken)) {
+    const ipKey = pushIpKey(ip);
+    if (params.kind === 'client-data') {
+      this.#handleClientData(ws, params.serverId, params.connectionId ?? '', ipKey);
+      return;
+    }
+    if (params.hostToken === null) {
+      this.#awaitHostAuth(ws, params, ip, ipKey);
+      return;
+    }
+    if (!ownsServerId(params.serverId, params.hostToken)) {
       this.#untrack(ws);
       closeSocket(ws, CloseCode.unauthorized, 'invalid or missing host token');
       return;
     }
-    switch (params.kind) {
-      case 'control':
-        this.#handleControl(ws, params.serverId, ip);
-        return;
-      case 'client-data':
-        this.#handleClientData(ws, params.serverId, params.connectionId ?? '');
-        return;
-      case 'host-data':
-        this.#handleHostData(ws, params.serverId, params.connectionId ?? '');
-        return;
+    this.#openHost(ws, params, ip, ipKey);
+  }
+
+  #openHost(ws: WebSocket, params: SocketParams, ip: string, ipKey: string): void {
+    if (params.kind === 'control') this.#handleControl(ws, params.serverId, ip, ipKey);
+    else this.#handleHostData(ws, params.serverId, params.connectionId ?? '');
+  }
+
+  /**
+   * A host socket without `hostToken` in its query: its first frame must be `host-auth`
+   * within `authTimeoutMs`, or it closes 4401. Until then it is nothing to the hub; one
+   * address may keep only `maxPendingPerIp` of these per serverId.
+   */
+  #awaitHostAuth(ws: WebSocket, params: SocketParams, ip: string, ipKey: string): void {
+    const key = `${params.serverId} ${ipKey}`;
+    const waiting = this.#authPending.get(key) ?? 0;
+    if (waiting >= this.#config.maxPendingPerIp) {
+      this.#untrack(ws);
+      closeSocket(ws, CloseCode.tooManyConnections, 'too many pending connections');
+      return;
     }
+    this.#authPending.set(key, waiting + 1);
+    let settled = false;
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ws.off('message', onFirst);
+      ws.off('close', settle);
+      const left = (this.#authPending.get(key) ?? 1) - 1;
+      if (left <= 0) this.#authPending.delete(key);
+      else this.#authPending.set(key, left);
+    };
+    const onFirst = (data: RawData, isBinary: boolean): void => {
+      settle();
+      const frame = toBuffer(data);
+      const token = isBinary || frame.length > 512 ? null : parseHostAuthFrame(frame.toString('utf8'));
+      if (token === null || !ownsServerId(params.serverId, token)) {
+        this.#untrack(ws);
+        closeSocket(ws, CloseCode.unauthorized, 'invalid or missing host token');
+        return;
+      }
+      this.#openHost(ws, params, ip, ipKey);
+    };
+    const timer = setTimeout(() => {
+      settle();
+      this.#untrack(ws);
+      closeSocket(ws, CloseCode.unauthorized, 'host-auth frame missing');
+    }, this.#config.authTimeoutMs);
+    timer.unref?.();
+    ws.on('message', onFirst);
+    ws.on('close', settle);
+    ws.on('error', () => closeSocket(ws, CloseCode.normal, ''));
   }
 
   /** Rejects a socket that failed query validation. */
@@ -109,6 +176,7 @@ export class RelayHub {
       this.#keepalive = null;
     }
     this.#alive.clear();
+    this.#authPending.clear();
     this.#turnRateByServerId.clear();
     this.#turnRateByIp.clear();
     this.#turnRateGlobal.clear();
@@ -116,15 +184,32 @@ export class RelayHub {
 
   // --- control socket ------------------------------------------------------
 
-  #handleControl(ws: WebSocket, serverId: string, ip: string): void {
+  #handleControl(ws: WebSocket, serverId: string, ip: string, ipKey: string): void {
+    // A host replacing its own control socket was already counted; only a new one meets the caps.
+    if ((this.#servers.get(serverId)?.control ?? null) === null) {
+      let hosts = 0;
+      let fromAddress = 0;
+      for (const other of this.#servers.values()) {
+        if (other.control === null) continue;
+        hosts += 1;
+        if (other.controlIp === ipKey) fromAddress += 1;
+      }
+      if (hosts >= this.#config.maxServers || fromAddress >= this.#config.maxServersPerIp) {
+        this.#untrack(ws);
+        closeSocket(ws, CloseCode.tooManyConnections, 'too many hosts');
+        if (hosts >= this.#config.maxServers) this.#log('[relay] host cap reached');
+        return;
+      }
+    }
     let entry = this.#servers.get(serverId);
     if (entry === undefined) {
-      entry = { control: null, connections: new Map() };
+      entry = { control: null, controlIp: null, connections: new Map() };
       this.#servers.set(serverId, entry);
     }
 
     const previous = entry.control;
     entry.control = ws;
+    entry.controlIp = ipKey;
     if (previous !== null && previous !== ws) {
       // The newer control socket inherits the pending/paired connections.
       closeSocket(previous, CloseCode.conflict, 'replaced by newer control socket');
@@ -140,6 +225,7 @@ export class RelayHub {
       const current = this.#servers.get(serverId);
       if (current === undefined || current.control !== ws) return;
       current.control = null;
+      current.controlIp = null;
       for (const connection of [...current.connections.values()]) {
         this.#teardown(connection, CloseCode.hostOffline, 'host offline', null);
       }
@@ -275,7 +361,7 @@ export class RelayHub {
 
   // --- client data socket --------------------------------------------------
 
-  #handleClientData(ws: WebSocket, serverId: string, connectionId: string): void {
+  #handleClientData(ws: WebSocket, serverId: string, connectionId: string, ipKey: string): void {
     const entry = this.#servers.get(serverId);
     if (entry === undefined || entry.control === null) {
       this.#untrack(ws);
@@ -292,14 +378,26 @@ export class RelayHub {
       closeSocket(ws, CloseCode.badRequest, 'duplicate connectionId');
       return;
     }
+    let pending = 0;
+    for (const other of entry.connections.values()) {
+      if (other.ipKey === ipKey && !other.answered) pending += 1;
+    }
+    if (pending >= this.#config.maxPendingPerIp) {
+      this.#untrack(ws);
+      closeSocket(ws, CloseCode.tooManyConnections, 'too many pending connections');
+      return;
+    }
 
     const connection: Connection = {
       serverId,
       connectionId,
       client: ws,
+      ipKey,
       host: null,
       buffered: [],
       attachTimer: null,
+      helloTimer: null,
+      answered: false,
       closed: false,
     };
     entry.connections.set(connectionId, connection);
@@ -307,12 +405,21 @@ export class RelayHub {
       this.#teardown(connection, CloseCode.attachTimeout, 'host data socket timeout', null);
     }, this.#config.attachTimeoutMs);
     connection.attachTimer.unref?.();
+    // Phones and computers send `hello` as soon as the socket opens; a client that does not holds a slot for nothing.
+    connection.helloTimer = setTimeout(() => {
+      this.#teardown(connection, CloseCode.helloTimeout, 'hello timeout', null);
+    }, this.#config.helloTimeoutMs);
+    connection.helloTimer.unref?.();
 
     this.#log(`[${shortId(serverId)}] connect client ${connectionId}`);
     this.#notify(entry, { type: 'connected', connectionId });
 
     ws.on('message', (data: RawData, isBinary: boolean) => {
       const payload = toBuffer(data);
+      if (connection.helloTimer !== null) {
+        clearTimeout(connection.helloTimer);
+        connection.helloTimer = null;
+      }
       if (connection.host !== null) {
         this.#forwardOrClose(connection, connection.host, payload, isBinary);
         return;
@@ -361,6 +468,7 @@ export class RelayHub {
     }
 
     ws.on('message', (data: RawData, isBinary: boolean) => {
+      connection.answered = true;
       this.#forwardOrClose(connection, connection.client, toBuffer(data), isBinary);
     });
     ws.on('close', (code: number, reason: Buffer) => {
@@ -388,6 +496,10 @@ export class RelayHub {
     if (connection.attachTimer !== null) {
       clearTimeout(connection.attachTimer);
       connection.attachTimer = null;
+    }
+    if (connection.helloTimer !== null) {
+      clearTimeout(connection.helloTimer);
+      connection.helloTimer = null;
     }
     connection.buffered = [];
 

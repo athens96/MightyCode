@@ -23,9 +23,14 @@ export const CloseCode = {
   conflict: 4409,
   /** Host control socket went away. */
   hostOffline: 4410,
+  /** A client data socket sent nothing (no `hello`) within the hello deadline. */
+  helloTimeout: 4408,
   /** Client sent more frames than the relay buffers while the host attaches. */
   bufferOverflow: 4413,
-  /** Per-serverId connection cap reached. */
+  /**
+   * Per-serverId connection cap, per-address cap on sockets not yet answered or
+   * authenticated, or the relay's host caps (Node relay) reached.
+   */
   tooManyConnections: 4429,
   /** Host data socket did not attach in time. */
   attachTimeout: 4504,
@@ -47,8 +52,10 @@ export interface SocketParams {
   /** Present for every kind except `control`. */
   readonly connectionId: string | null;
   /**
-   * The host secret carried by `control` and `host-data` sockets (null when
-   * absent, and always null for `client-data`). See `ownsServerId`.
+   * The host secret carried in the query by `control` and `host-data` sockets (always
+   * null for `client-data`). Null on a host socket means the token comes in the first
+   * frame instead (`parseHostAuthFrame`), which keeps it out of URLs and their logs.
+   * See `ownsServerId`.
    */
   readonly hostToken: string | null;
 }
@@ -85,6 +92,31 @@ export interface TurnRateLimited {
 /** Relay → host: TURN credentials not available (secret not configured). */
 export interface TurnUnavailable {
   readonly type: 'turn-unavailable';
+}
+
+/**
+ * Host → relay, the first frame of a host socket opened without `hostToken` in its
+ * query: `{"type":"host-auth","hostToken":"<hex>"}` as a text frame. Nothing answers
+ * it; a wrong, malformed or missing frame closes the socket 4401.
+ */
+export interface HostAuthFrame {
+  readonly type: 'host-auth';
+  readonly hostToken: string;
+}
+
+/** The token of a well-formed `host-auth` frame, or null for anything else. */
+export function parseHostAuthFrame(frame: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(frame);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const record = parsed as Record<string, unknown>;
+  const token = record['hostToken'];
+  if (record['type'] !== 'host-auth' || typeof token !== 'string' || !HOST_TOKEN_PATTERN.test(token)) return null;
+  return token;
 }
 
 export type ParseResult =

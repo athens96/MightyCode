@@ -9,6 +9,7 @@ import { SlidingWindowLimiter } from '../src/rate.ts';
 
 const TOKEN_A = 'fcm-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const TOKEN_B = 'fcm-token-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const TOKEN_C = 'fcm-token-cccccccccccccccccccccccccccccc';
 const SERVER_1 = 'a'.repeat(64);
 const SERVER_2 = 'b'.repeat(64);
 const DAY = 86_400_000;
@@ -67,15 +68,80 @@ describe('PushHandleStore', () => {
     expect(store.size).toBe(0);
   });
 
-  it('refuses a new handle when full of bound handles, after dropping idle ones', async () => {
+  it('makes room from the least recently used bound handle when full of bound handles, after dropping idle ones', async () => {
     const lines: string[] = [];
-    const store = await PushHandleStore.open(options('', { maxHandles: 1, idleMs: DAY, log: (line) => lines.push(line) }), 0);
-    const made = (await store.register(TOKEN_A, 0))!;
-    await store.bind(made.handle, SERVER_1, 0);
-    expect(await store.register(TOKEN_B, 1)).toBeNull();
+    const store = await PushHandleStore.open(options('', { maxHandles: 2, idleMs: 10 * DAY, log: (line) => lines.push(line) }), 0);
+    const older = (await store.register(TOKEN_A, 0))!;
+    await store.bind(older.handle, SERVER_1, 0);
+    const newer = (await store.register(TOKEN_B, 1))!;
+    await store.bind(newer.handle, SERVER_2, 1);
+    // A full store never answers a phone 503 for months: the stalest bound handle goes.
+    expect(await store.register(TOKEN_C, 2)).not.toBeNull();
     expect(lines).toEqual(['[push] handle store full']);
-    expect(await store.register(TOKEN_B, 2 * DAY)).not.toBeNull();
+    expect(store.size).toBe(2);
+    expect((await store.bind(older.handle, SERVER_1, 3)).kind).toBe('unknown');
+    expect((await store.bind(newer.handle, SERVER_2, 3)).kind).toBe('ok');
+    // Idle handles go before anything is evicted for room.
+    lines.length = 0;
+    expect(await store.register(TOKEN_A, 20 * DAY)).not.toBeNull();
+    expect(lines).toEqual([]);
     expect(store.size).toBe(1);
+  });
+
+  it('keeps at most maxPerToken handles per FCM token, replacing the least recently used', async () => {
+    const store = await PushHandleStore.open(options('', { maxPerToken: 2 }), 0);
+    const first = (await store.register(TOKEN_A, 0))!;
+    const second = (await store.register(TOKEN_A, 1))!;
+    await store.bind(first.handle, SERVER_1, 2);
+    // A phone with two paired hosts keeps both handles; a third registration replaces the stalest.
+    const third = (await store.register(TOKEN_A, 3))!;
+    expect(store.size).toBe(2);
+    expect((await store.bind(second.handle, SERVER_2, 4)).kind).toBe('unknown');
+    expect((await store.bind(first.handle, SERVER_1, 4)).kind).toBe('ok');
+    expect((await store.bind(third.handle, SERVER_2, 4)).kind).toBe('ok');
+    // Another token is untouched by the cap.
+    expect(await store.register(TOKEN_B, 5)).not.toBeNull();
+    expect(store.size).toBe(3);
+  });
+
+  it('keeps only the newer handle when the same token is bound to the same serverId again', async () => {
+    const store = await PushHandleStore.open(options(''), 0);
+    const before = (await store.register(TOKEN_A, 0))!;
+    await store.bind(before.handle, SERVER_1, 1);
+    const elsewhere = (await store.register(TOKEN_A, 2))!;
+    await store.bind(elsewhere.handle, SERVER_2, 3);
+    // The phone was reinstalled or lost its record and registered again for SERVER_1.
+    const again = (await store.register(TOKEN_A, 4))!;
+    expect((await store.bind(again.handle, SERVER_1, 5)).kind).toBe('ok');
+    expect((await store.bind(before.handle, SERVER_1, 6)).kind).toBe('unknown');
+    expect((await store.bind(elsewhere.handle, SERVER_2, 6)).kind).toBe('ok');
+    expect(store.size).toBe(2);
+  });
+
+  it('keeps at most maxPerServerId bound handles per serverId, replacing its least recently used', async () => {
+    const store = await PushHandleStore.open(options('', { maxPerServerId: 2 }), 0);
+    const tokens = ['fcm-token-1111111111111111111111', 'fcm-token-2222222222222222222222', 'fcm-token-3333333333333333333333'];
+    const made = [];
+    for (const [i, token] of tokens.entries()) {
+      const handle = (await store.register(token, i))!;
+      made.push(handle);
+      expect((await store.bind(handle.handle, SERVER_1, 10 + i)).kind).toBe('ok');
+    }
+    expect((await store.bind(made[0]!.handle, SERVER_1, 20)).kind).toBe('unknown');
+    expect((await store.bind(made[1]!.handle, SERVER_1, 20)).kind).toBe('ok');
+    expect((await store.bind(made[2]!.handle, SERVER_1, 20)).kind).toBe('ok');
+    // Another serverId's handles are not touched by SERVER_1's quota.
+    const other = (await store.register(TOKEN_B, 21))!;
+    expect((await store.bind(other.handle, SERVER_2, 22)).kind).toBe('ok');
+    expect(store.size).toBe(3);
+  });
+
+  it('knows which tokens it holds', async () => {
+    const store = await PushHandleStore.open(options(''), 0);
+    expect(store.hasToken(TOKEN_A)).toBe(false);
+    await store.register(TOKEN_A, 0);
+    expect(store.hasToken(TOKEN_A)).toBe(true);
+    expect(store.hasToken(TOKEN_B)).toBe(false);
   });
 
   it('makes room by dropping the least recently used handle no host has used', async () => {
