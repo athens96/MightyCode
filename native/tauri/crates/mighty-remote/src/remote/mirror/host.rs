@@ -25,6 +25,10 @@ use crate::remote::http_server::{HttpRequest, HttpResponse};
 use crate::remote::text;
 use crate::remote::wire::{RemoteSharedWorkspace, RemoteWireAnswer, RemoteWirePlan, protocol as remote_protocol};
 
+/// A pane's detail through the relay stays under this many bytes of session JSON: one relay frame (1 MiB with its 28-byte seal) less
+/// room for the detail's and the reply's envelopes.
+pub const RELAY_DETAIL_BYTES: usize = crate::relay::cipher::MAXIMUM_PLAINTEXT - 64 * 1024;
+
 /// What an action on a host pane refused with (C#: the exception's message, answered 409).
 pub type Refusal = String;
 
@@ -110,13 +114,15 @@ impl RemoteHost {
         Ok(())
     }
 
-    /// `ServeMirrorAsync(request, route, query, revision)`: `route` is the path after `/v2/mirror`.
+    /// `ServeMirrorAsync(request, route, query, revision)`: `route` is the path after `/v2/mirror`; `relay`: a paired computer's request
+    /// through the relay, whose answer is one relay frame (a pane's detail is fitted under [`RELAY_DETAIL_BYTES`]).
     pub(crate) async fn serve_mirror(
         &self,
         request: &HttpRequest,
         route: &[&str],
         query: &str,
         revision: u64,
+        relay: bool,
     ) -> Result<HttpResponse, HostFailure> {
         let host = lock(&self.0.gate).mirror.clone().ok_or_else(|| HostFailure::new(404, get("remote.mirror.error.unavailable")))?;
         let workspaces = self.shared_workspaces();
@@ -180,11 +186,14 @@ impl RemoteHost {
         if request.method == "GET" && route.len() == 2 {
             let detail = host.detail(id, shared).await.ok_or_else(|| HostFailure::new(404, get("remote.error.paneNotFound")))?;
             self.still_sharing(revision)?;
+            // Through the relay the answer is one frame: the oldest entries go first, as the 1.5 MiB fitting does (the revision stays the
+            // pane's, so a client polls it as before).
+            let session = if relay { support::fitted(detail.session, RELAY_DETAIL_BYTES) } else { detail.session };
             let wire = WireMirrorDetail {
                 protocol: remote_protocol::VERSION,
                 mirror: protocol::VERSION,
                 revision: detail.revision,
-                session: support::write(&detail.session),
+                session: support::write(&session),
             };
             return Ok(reply(200, &wire.to_value()));
         }

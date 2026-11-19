@@ -104,7 +104,7 @@ impl DeskMirrorHost {
     async fn route(&self, path: String, body: Value) -> Result<Value, Refusal> {
         let router = self.router()?;
         let raw = serde_json::value::RawValue::from_string(body.to_string()).map_err(|_| start_failed())?;
-        let device = MobileDevice { client_id: DEVICE.into(), name: DEVICE.into(), direct: false };
+        let device = MobileDevice { client_id: DEVICE.into(), name: DEVICE.into(), direct: false, desktop: false };
         let reply = router.route(device, "POST".into(), path, Some(raw)).await;
         let answer: Value = serde_json::from_str(&reply.body).unwrap_or(Value::Null);
         if reply.status >= 400 {

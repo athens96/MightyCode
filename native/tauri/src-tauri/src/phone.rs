@@ -136,7 +136,7 @@ pub fn take_notifications(host: &Host) -> Vec<(String, i64)> {
 /// connection hands the router, from the smoke's own device.
 pub async fn route(host: &Arc<Host>, method: &str, path: &str, body: Option<Value>) -> MobileReply {
     let body = body.and_then(|b| serde_json::value::RawValue::from_string(b.to_string()).ok());
-    let device = MobileDevice { client_id: "smoke-phone".into(), name: "Smoke".into(), direct: false };
+    let device = MobileDevice { client_id: "smoke-phone".into(), name: "Smoke".into(), direct: false, desktop: false };
     router(host).route(device, method.into(), path.into(), body).await
 }
 

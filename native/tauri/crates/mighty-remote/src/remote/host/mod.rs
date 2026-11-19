@@ -2,7 +2,9 @@
 //! M/Remote/RemoteHostService.swift; plan §1.6): serves the chosen local workspaces to other Mighty Code apps on this PC's Tailscale
 //! addresses only. The key is 32 random bytes in base64url, new on every start, in memory only, revoked at stop, compared as SHA-256 in
 //! fixed time. Every request is authorized in C#'s order (503 stopped, 403 origin or peer, 429 per peer, 401 key, 429 overall, 426
-//! version), then routed (400 `badPath`, `GET /v2/info`, the runs). Runs go through this PC's own runner ([`runs`]); a run its client
+//! version), then routed (400 `badPath`, `GET /v2/info`, the runs). Computers paired through the relay (`remote::paired`) reach the
+//! same routes but the runs ([`RemoteHost::serve_relay`]) while this PC shares with them ([`RemoteHost::set_relay`]); with that switch on
+//! sharing starts without Tailscale too, on no address, for them alone. Runs go through this PC's own runner ([`runs`]); a run its client
 //! stops polling for the heartbeat is stopped. Sharing never survives the app. Started only from the Start button when the app may
 //! listen (`Host::may_listen`). Owner: W8-D.
 
@@ -173,6 +175,8 @@ pub(crate) struct Gate {
     pub reported_rules: HashMap<String, (HashSet<String>, Duration)>,
     /// The app's panes for the remote mirror (W9-J, `remote::mirror::host`); None answers its routes 404.
     pub mirror: Option<Arc<dyn crate::remote::mirror::host::MirrorHost>>,
+    /// Computers paired through the relay are served while sharing is on (the user's switch; kept across a stop and a start).
+    pub relay: bool,
 }
 
 pub(crate) struct HostInner {
@@ -251,6 +255,7 @@ impl RemoteHost {
                 jobs: HashMap::new(),
                 reported_rules: HashMap::new(),
                 mirror: None,
+                relay: false,
             }),
             announcing: Mutex::new(()),
             host_id: wire::new_id(),
@@ -296,6 +301,17 @@ impl RemoteHost {
     pub fn set_allows_full_access(&self, allowed: bool) -> RemoteHostState {
         lock(&self.0.gate).allows_full_access = allowed;
         self.state()
+    }
+
+    /// Whether computers paired through the relay are served while sharing is on; on, sharing also starts on a PC without Tailscale
+    /// (for them alone). Off answers their requests 503 at once.
+    pub fn set_relay(&self, on: bool) {
+        lock(&self.0.gate).relay = on;
+    }
+
+    /// [`RemoteHost::set_relay`]'s switch.
+    pub fn relay(&self) -> bool {
+        lock(&self.0.gate).relay
     }
 
     /// `FullAccessRefusal(request, allowed, windowsHost)`: what a client may not run here while full access is off: a command pane, an
@@ -378,8 +394,13 @@ impl RemoteHost {
             (options.resolve_local)(id.clone()).await.map_err(StartFailure::Message)?;
         }
         self.checked(revision)?;
-        let addresses = self.listen_addresses()?;
-        if addresses.is_empty() {
+        // With paired computers served through the relay, a PC without Tailscale shares with them alone (on no address).
+        let relay = lock(&self.0.gate).relay;
+        let addresses = match self.listen_addresses() {
+            Err(_) if relay => vec![],
+            read => read?,
+        };
+        if addresses.is_empty() && !relay {
             return Err(StartFailure::Message(strings::host_no_tailscale()));
         }
         let key = new_key().ok_or_else(|| StartFailure::Message(get("remote.host.error.keyFailed")))?;
@@ -429,7 +450,8 @@ impl RemoteHost {
         gate.state = RemoteHostState {
             enabled: true,
             key: Some(key),
-            port: Some(bound),
+            // Shared with paired computers alone (no address), no port is open: none for the firewall rule either.
+            port: (!addresses.is_empty()).then_some(bound),
             workspace_ids: workspace_ids.to_vec(),
             addresses: addresses.iter().map(|a| RemoteAddress { host: a.clone(), port: bound }.display()).collect(),
             ..RemoteHostState::default()
@@ -623,6 +645,58 @@ impl RemoteHost {
 
     async fn route(&self, request: &HttpRequest, revision: u64) -> Result<HttpResponse, HostFailure> {
         self.authorize(request, revision)?;
+        self.dispatch(request, revision, false).await
+    }
+
+    /// A paired computer's request through the relay (`remote::paired::DesktopRouter`; `device` its client id, for the rate limit):
+    /// sharing on with the relay switch, the same rates as a Tailscale peer's, then `GET /v2/info` and the mirror's routes exactly as over
+    /// Tailscale (the shared workspaces only, the full-access switch, the Windows Codex and Antigravity rule), a pane's detail fitted
+    /// under one relay frame. The runs are not carried (404): their polls outgrow a frame. Its answer as the relay carries it.
+    pub async fn serve_relay(&self, device: &str, method: &str, path: &str, body: Option<&[u8]>) -> crate::relay::connection::MobileReply {
+        let host = self.clone();
+        let request = HttpRequest {
+            method: method.to_string(),
+            target: path.to_string(),
+            headers: if body.is_some() {
+                HashMap::from([("content-type".to_string(), "application/json".to_string())])
+            } else {
+                HashMap::new()
+            },
+            body: body.map(<[u8]>::to_vec).unwrap_or_default(),
+            remote_address: String::new(),
+        };
+        let device = device.to_string();
+        let routed = tokio::spawn(async move {
+            let revision = host.authorize_relay(&device)?;
+            host.dispatch(&request, revision, true).await
+        });
+        let response = match routed.await {
+            Ok(Ok(response)) => response,
+            Ok(Err(failure)) => failure_response(failure.status, &failure.message),
+            Err(error) if error.is_panic() => failure_response(500, &get("remote.host.error.badRequest")),
+            Err(_) => failure_response(503, &get("remote.host.error.stopped")),
+        };
+        crate::relay::connection::MobileReply::new(response.status, String::from_utf8_lossy(&response.body).into_owned())
+    }
+
+    /// `Authorize` for a paired computer: sharing on with the relay switch, then the per-device and the shared rates. The key, the
+    /// peer's address and the version header are the relay connection's own (its pairing, its encrypted session).
+    fn authorize_relay(&self, device: &str) -> Result<u64, HostFailure> {
+        let revision = {
+            let gate = lock(&self.0.gate);
+            if !(gate.state.enabled && gate.relay && gate.servers.iter().all(HttpListener::is_listening)) {
+                return Err(stopped());
+            }
+            gate.generation
+        };
+        if !self.0.rates.allow_peer(&format!("relay:{device}")) || !self.0.rates.allow_keyed() {
+            return Err(HostFailure::new(429, get("remote.host.error.tooMany")));
+        }
+        Ok(revision)
+    }
+
+    /// The routes once a request is let in; `relay`: it came from a paired computer through the relay (no runs, a frame's detail).
+    async fn dispatch(&self, request: &HttpRequest, revision: u64, relay: bool) -> Result<HttpResponse, HostFailure> {
         // No dot segment is ever resolved. Windows routes the path as written; the Mac routes `URLComponents.path`, its escapes
         // decoded (`HostOptions::decodes_paths`). Either way the target itself must be one the Mac's reader takes.
         let (path, query) = match request.target.find('?') {
@@ -639,7 +713,10 @@ impl RemoteHost {
         }
         // The remote mirror's routes (W9-J, `remote::mirror::host`).
         if route[0] == "mirror" {
-            return self.serve_mirror(request, &route[1..], query, revision).await;
+            return self.serve_mirror(request, &route[1..], query, revision, relay).await;
+        }
+        if relay {
+            return Err(HostFailure::new(404, get("remote.relay.error.runsNotCarried")));
         }
         self.serve_runs(request, &route, query, revision).await
     }

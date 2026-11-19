@@ -1,8 +1,9 @@
 //! 원격 작업 공간 (C# `BuildRemoteWorkspacesSection`, MainWindow.RemoteWorkspaces.cs:180-560; M/RemoteSettingsView.swift): the intro;
-//! sharing this PC (its addresses, the key, the full-access switch, what is shared, or the workspaces to pick and the port); the Windows
-//! Firewall rule; connecting to another computer; the connected computers with their shared workspaces; and what remote workspaces can
-//! and cannot do. While it is shown it reads this PC's Tailscale addresses every three seconds (remote.rs `page_tailscale`) and both
-//! sides on each read. Owner: W8-D.
+//! sharing this PC (its addresses, the key, the full-access switch, what is shared, or the workspaces to pick and the port); pairing
+//! other computers through the relay (the switch that lets them in while sharing, the pairing link to copy and its QR); the Windows
+//! Firewall rule; connecting to another computer over Tailscale, or with a pairing link through the relay; the connected computers with
+//! their shared workspaces; and what remote workspaces can and cannot do. While it is shown it reads this PC's Tailscale addresses every
+//! three seconds (remote.rs `page_tailscale`) and both sides on each read. Owner: W8-D.
 //!
 //! The firewall rows are W8-C's rule (shared with the phone's direct path, direct.rs: its state, busy mark, outcome words and presses);
 //! the rule's second port is [`crate::remote::sharing_port`].
@@ -81,6 +82,12 @@ pub fn remote_workspaces(host: &Arc<Host>, ui: &mut Ui) -> El {
     };
     let sharing_host = app.host().is_some();
     let connections = app.client.connections();
+    // "페어링한 컴퓨터의 연결 받기": kept on the sharing host across a stop and a start; the relay link follows it while sharing.
+    let relay_on = app.host().is_some_and(|sharing| sharing.relay());
+    if crate::mobile::relay(host).is_some_and(|relay| relay.desktops() != (relay_on && state.enabled)) {
+        let syncing = host.clone();
+        tauri::async_runtime::spawn(async move { crate::remote::sync_relay(&syncing).await });
+    }
 
     // What is shared, or else the workspace in front, once per showing (the page's kept values go when it is drawn anew).
     let selected = ui.local("remote-selected", || {
@@ -115,13 +122,15 @@ pub fn remote_workspaces(host: &Arc<Host>, ui: &mut Ui) -> El {
     // Share this computer: the heading and its status line.
     let dot = if state.enabled {
         Token::Done
-    } else if tailscale.is_empty() {
+    } else if tailscale.is_empty() && !relay_on {
         Token::Err
     } else {
         Token::Idle
     };
     let status_words = if state.enabled {
         locale.get_with("settings.remote.sharingOn", &[("count", &state.workspace_ids.len().to_string())])
+    } else if tailscale.is_empty() && relay_on {
+        locale.get("settings.remote.relayOnly")
     } else if tailscale.is_empty() {
         strings::settings_tailscale_off()
     } else {
@@ -268,6 +277,7 @@ pub fn remote_workspaces(host: &Arc<Host>, ui: &mut Ui) -> El {
                 if let Some(sharing) = app.host().cloned() {
                     sharing.stop().await;
                 }
+                crate::remote::sync_relay(&host).await;
                 Ok(())
             });
         }),
@@ -316,7 +326,7 @@ pub fn remote_workspaces(host: &Arc<Host>, ui: &mut Ui) -> El {
     let start = small(
         ui,
         locale.get("settings.remote.startSharing"),
-        !busy && sharing_host && !tailscale.is_empty() && picked,
+        !busy && sharing_host && (!tailscale.is_empty() || relay_on) && picked,
         true,
         false,
         Box::new(move || {
@@ -347,7 +357,9 @@ pub fn remote_workspaces(host: &Arc<Host>, ui: &mut Ui) -> El {
                     return Err(mighty_run::strings::get("windows.notifications.statusVerificationMode"));
                 }
                 let Some(sharing) = crate::remote::app(&host).host().cloned() else { return Ok(()) };
-                sharing.start(&ids, number).await.map(|_| ())
+                let started = sharing.start(&ids, number).await.map(|_| ());
+                crate::remote::sync_relay(&host).await;
+                started
             });
         }),
     )
@@ -367,6 +379,7 @@ pub fn remote_workspaces(host: &Arc<Host>, ui: &mut Ui) -> El {
     .visible(!state.enabled);
     let sharing = El::stack(false, metrics::SPACING_SM, sharing).visible(state.enabled);
     rows.add(El::stack(false, metrics::SPACING_SM, vec![heading(ui, "settings.remote.shareTitle"), status, sharing, not_sharing]));
+    rows.add(pairing_host(host, ui, relay_on, state.enabled));
 
     // The Windows Firewall rule (W8-C's, shared with the phone's direct path, direct.rs): one UAC prompt per change, none in a smoke run.
     // Added or updated in place for the ports in use now (FirewallPorts), or removed. Read (unelevated) each time the page is shown,
@@ -481,6 +494,8 @@ pub fn remote_workspaces(host: &Arc<Host>, ui: &mut Ui) -> El {
         ],
     ));
 
+    rows.add(pairing_client(host, ui, busy));
+
     let mut error_style = TextStyle::size(11.0).ink(Token::ErrText);
     error_style.selectable = true;
     rows.add(ui.settings_text(error.clone().unwrap_or_default(), error_style).aid("settings-remote-error")).visible = error.is_some();
@@ -507,6 +522,166 @@ pub fn remote_workspaces(host: &Arc<Host>, ui: &mut Ui) -> El {
     }
     rows.add(El::stack(false, metrics::SPACING_XXS, scope).aid("settings-remote-scope"));
     rows.finish()
+}
+
+/// 다른 컴퓨터와 페어링: the switch that lets paired computers in through the relay while this PC shares (Tailscale then not needed),
+/// how the relay link stands, and the pairing link (the phone's: the same key, valid until 키 다시 만들기) to copy, with its QR on
+/// request. Without the relay host (verification mode, a smoke) the switch is off and says why.
+fn pairing_host(host: &Arc<Host>, ui: &mut Ui, relay_on: bool, sharing: bool) -> El {
+    let locale = ui.locale();
+    let relay = crate::mobile::relay(host).filter(|_| host.smoke.is_none());
+    let caption = |ui: &Ui, text: String| ui.settings_text(text, TextStyle::size(11.0).ink(Token::Ink2));
+    let mut parts = vec![
+        ui.settings_text(locale.get("settings.remote.pairTitle"), TextStyle::size(13.0).medium()),
+        caption(ui, locale.get("settings.remote.pairIntro")),
+    ];
+    let switching = host.clone();
+    let accept = ui
+        .settings_switch(locale.get("settings.remote.pairAccept"), relay_on, Some("settings-remote-pair-accept"), move |on| {
+            if let Some(sharing) = crate::remote::app(&switching).host() {
+                sharing.set_relay(on);
+            }
+            let host = switching.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::remote::sync_relay(&host).await;
+                crate::native::touch(&host, crate::settings::SURFACE);
+            });
+        })
+        .enabled(relay.is_some());
+    parts.push(ui.settings_labeled(
+        ui.settings_titled(locale.get("settings.remote.pairAccept"), locale.get("settings.remote.pairAcceptDescription")),
+        accept,
+        true,
+    ));
+    let status = match &relay {
+        None => Some(locale.get("settings.remote.pairUnavailable")),
+        Some(_) if !relay_on => None,
+        Some(_) if !sharing => Some(locale.get("settings.remote.pairWaiting")),
+        Some(relay) if relay.status().connected => {
+            Some(locale.get_with("settings.remote.pairReady", &[("count", &relay.connected_desktops().len().to_string())]))
+        }
+        Some(_) => Some(locale.get("settings.remote.pairConnecting")),
+    };
+    if let Some(words) = status {
+        parts.push(caption(ui, words).aid("settings-remote-pair-status"));
+    }
+    if let Some(relay) = &relay {
+        let link = relay.pairing_url();
+        let shows_qr = ui.local("remote-pair-qr", || false);
+        let copy_note: Local<Option<bool>> = ui.local("remote-pair-copy-note", || None);
+        let small = |ui: &Ui, title: String, action: Box<dyn Fn() + Send + Sync>| {
+            ui.settings_push(ui.button(title, action), ControlSize::Small, false, false)
+        };
+        let (to, copied, note) = (host.clone(), link.clone(), copy_note.clone());
+        // The link carries the pairing key: copied as a secret (out of clipboard history, cleared after a minute), as the key is.
+        let copy = small(
+            ui,
+            locale.get("settings.remote.pairCopyLink"),
+            Box::new(move || {
+                let (said, host) = (note.clone(), to.clone());
+                crate::remote::copy_key(&to, copied.clone(), move |done| {
+                    said.set(Some(done));
+                    crate::native::touch(&host, crate::settings::SURFACE);
+                });
+            }),
+        )
+        .aid("settings-remote-pair-copy");
+        let flip = shows_qr.clone();
+        let qr_label = locale.get(if shows_qr.get() { "settings.remote.pairHideQr" } else { "settings.remote.pairShowQr" });
+        let qr_button = small(ui, qr_label, Box::new(move || flip.update(|on| *on = !*on))).aid("settings-remote-pair-qr-button");
+        parts.push(El::stack(true, metrics::SPACING_SM, vec![copy, qr_button]));
+        if let Some(done) = copy_note.get() {
+            parts.push(
+                ui.settings_text(
+                    locale.get(if done { "settings.remote.pairLinkCopied" } else { "settings.remote.pairLinkCopyFailed" }),
+                    TextStyle::size(11.0).ink(if done { Token::Ink2 } else { Token::ErrText }),
+                )
+                .aid("settings-remote-pair-copy-note"),
+            );
+        }
+        if shows_qr.get()
+            && let Some((png, side)) = mighty_remote::identity::pairing_qr(&link, 1.0)
+        {
+            use base64::Engine;
+            let data = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png));
+            let image = El::new(Kind::Image { src: Some(data) })
+                .width(side as f64)
+                .height(side as f64)
+                .named(locale.get("settings.remote.pairQrAccessibility"))
+                .aid("settings-remote-pair-qr");
+            parts.push(
+                El::border(mighty_native::ui::Border {
+                    child: Some(Box::new(image)),
+                    background: Some(ui.brush(Token::OnStatus)),
+                    corner_radius: 8.0,
+                    ..mighty_native::ui::Border::default()
+                })
+                .ha(mighty_native::ui::HAlign::Left),
+            );
+        }
+        parts.push(caption(ui, locale.get("settings.remote.pairNote")));
+    }
+    El::stack(false, metrics::SPACING_SM, parts).aid("settings-remote-pair")
+}
+
+/// 페어링 코드로 연결: the pasted pairing link (masked like a key: it carries one) and a name, connected through the relay
+/// ([`mighty_remote::remote::client::RemoteClient::pair`]); the connection then lists below and in the sidebar as any other.
+fn pairing_client(host: &Arc<Host>, ui: &mut Ui, busy: bool) -> El {
+    let locale = ui.locale();
+    let link_text = ui.local("remote-pair-link", String::new);
+    let name_text = ui.local("remote-pair-name", String::new);
+    let typing_link = link_text.clone();
+    let link = El::new(Kind::PasswordBox { text: link_text.get(), placeholder: locale.get("settings.remote.pairLinkPlaceholder") })
+        .height(metrics::SPACING_XL + 3.0)
+        .va(VAlign::Center)
+        .named(locale.get("settings.remote.pairLinkField"))
+        .aid("settings-remote-pair-link")
+        .on_text(move |words| typing_link.set(words));
+    let typing_name = name_text.clone();
+    let name = ui
+        .settings_field(El::text_box(name_text.get()), 11.0)
+        .placeholder(locale.get("settings.remote.namePlaceholder"))
+        .named(locale.get("settings.remote.nameField"))
+        .aid("settings-remote-pair-name")
+        .on_text(move |words| typing_name.set(words));
+    let ready = !busy && !link_text.get().trim().is_empty();
+    let (pairing, name_in, link_in) = (host.clone(), name_text.clone(), link_text.clone());
+    let connect = ui
+        .settings_push(
+            ui.button(locale.get("settings.remote.connectButton"), move || {
+                // The link (with its key) leaves the field before the pairing starts.
+                let typed = link_in.get();
+                link_in.set(String::new());
+                let (name, host) = (name_in.get(), pairing.clone());
+                crate::remote::action(&pairing, async move {
+                    crate::remote::app(&host).client.pair(&name, &typed).await.map(|_| ()).map_err(|e| e.message())
+                });
+            })
+            .enabled(ready),
+            ControlSize::Small,
+            true,
+            false,
+        )
+        .aid("settings-remote-pair-connect")
+        .cell(0, 1);
+    let name_line = El::grid(Grid {
+        children: vec![name, connect],
+        cols: vec![Track::Star(1.0), Track::Auto],
+        col_spacing: metrics::SPACING_SM,
+        ..Grid::default()
+    });
+    let label = |ui: &Ui, key: &str| ui.settings_text(locale.get(key), TextStyle::size(12.0));
+    El::stack(
+        false,
+        metrics::SPACING_SM,
+        vec![
+            ui.settings_text(locale.get("settings.remote.pairConnectTitle"), TextStyle::size(13.0).medium()),
+            ui.settings_wide(label(ui, "settings.remote.pairLinkField"), link),
+            ui.settings_wide(label(ui, "settings.remote.nameField"), name_line),
+            ui.settings_text(locale.get("settings.remote.pairConnectNote"), TextStyle::size(11.0).ink(Token::Ink2)),
+        ],
+    )
+    .aid("settings-remote-pair-connect-part")
 }
 
 /// `ConnectionRow(connection, snapshot)`: its dot, name and address, refresh (and disconnect while connected) and remove; its detail;

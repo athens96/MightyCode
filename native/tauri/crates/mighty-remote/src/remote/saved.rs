@@ -2,7 +2,8 @@
 //! R\RemoteConnectionFile.cs; M/Remote/RemoteClientService.swift `SavedFile`, version 2; plan §1.6): `{"version":2,"connections":[{id,
 //! name,address}]}`, at most 256 KiB, never a key (that is in the vault). A file of another version (the remote workspaces removed on
 //! 2026-09-28 wrote version 1, with keys), a damaged or oversize one reads as no connections; an entry with a bad or repeated id, or an
-//! address that does not parse or repeats an earlier entry's, is skipped alone. Written atomically, only where the app may write the
+//! address that does not parse or repeats an earlier entry's, is skipped alone. A connection paired through the relay is saved under its
+//! `relay:` address (`paired::relay_address`); an older app skips it alone. Written atomically, only where the app may write the
 //! profile (`--allow-state-write`; else the connections live in memory for the launch). Owner: W8-D.
 
 use std::io;
@@ -12,7 +13,6 @@ use mighty_core::json::JsonOut;
 use mighty_core::wire;
 use serde_json::Value;
 
-use crate::remote::address::RemoteAddress;
 use crate::remote::text;
 use crate::remote::wire::protocol;
 
@@ -122,8 +122,7 @@ fn usable(connections: impl Iterator<Item = (Option<String>, Option<String>, Opt
         }
         let Some(id) = id.filter(|id| wire::identifier(id) && !kept.iter().any(|k| &k.id == id)) else { continue };
         let Some(address) = address.filter(|a| !a.is_empty() && a.encode_utf16().count() <= MAXIMUM_ADDRESS) else { continue };
-        let Ok(parsed) = RemoteAddress::parse(&address) else { continue };
-        let display = parsed.display();
+        let Some(display) = crate::remote::paired::display_address(&address) else { continue };
         if kept.iter().any(|k| k.address == display) {
             continue;
         }

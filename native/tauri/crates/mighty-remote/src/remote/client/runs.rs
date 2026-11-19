@@ -240,6 +240,10 @@ impl RemoteClient {
             let connection_id = reference.connection_id.clone().unwrap_or_default();
             let host_workspace_id = reference.workspace_id.clone().unwrap_or_default();
             let connection = gate.connections.get(&connection_id).ok_or_else(not_connected)?;
+            // A connection paired through the relay carries the remote mirror only: this PC's own panes run there over Tailscale.
+            if crate::remote::paired::is_relay_address(&connection.info.address) {
+                return Err(message(get("remote.relay.error.runsNotCarried")));
+            }
             let (Some(target), Some(key)) = (connection.target.clone(), connection.key.clone()) else { return Err(not_connected()) };
             if connection.info.status != RemoteConnectionStatus::Connected
                 || !connection.info.shared().iter().any(|w| w.id == host_workspace_id)
@@ -695,6 +699,12 @@ impl RemoteClient {
         let panes: Vec<String> = {
             let mut gate = lock(&self.0.gate);
             gate.closing = true;
+            // Paired connections' relay links end with the app (their sessions closed, nothing dialled again).
+            for entry in gate.connections.values_mut() {
+                if let Some(relay) = entry.relay.take() {
+                    relay.close();
+                }
+            }
             gate.runs.keys().cloned().collect()
         };
         for pane in panes {

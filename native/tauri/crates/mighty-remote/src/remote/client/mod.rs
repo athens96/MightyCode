@@ -3,7 +3,9 @@
 //! first use), the remote workspaces opened through them, and the runs of their panes ([`runs`]), which make it mighty-run's
 //! `RemoteRunner`. Every change to which connections are listed, its vault call and the file write after it go one at a time, in the
 //! order the list changes. A connection's requests leave only through this PC's Tailscale tunnel (the route is asked before each one).
-//! A lost connection ends its runs with `remote.run.error.connectionLost`; a 401 on a start fails the connection. Owner: W8-D.
+//! A lost connection ends its runs with `remote.run.error.connectionLost`; a 401 on a start fails the connection. A connection paired
+//! through the relay ([`RemoteClient::pair`], `remote::paired`) has no Tailscale target: its link is a [`RelayClient`] and its key in the
+//! vault the pairing's secret; it carries the remote mirror only (the runs' polls outgrow a relay frame). Owner: W8-D.
 
 pub mod runs;
 
@@ -15,13 +17,15 @@ use std::time::{Duration, Instant};
 
 use mighty_core::model::Workspace;
 use mighty_core::wire;
-use mighty_platform::SecretVault;
+use mighty_platform::{ProxyResolver, SecretVault};
 use mighty_run::model::RunEvent;
 use mighty_run::strings::{get, get_with};
 use mighty_run::{RunError, permissions::ToolPermissionRequest};
 
+use crate::relay::client::{ClientTimings, Credential, PairingLink, RelayClient, RelayFailure, TokenSink, new_client_id};
 use crate::remote::address::RemoteAddress;
 use crate::remote::events::PendingPermissions;
+use crate::remote::paired::{self, PairedSecret};
 use crate::remote::saved::{self, SavedConnection};
 use crate::remote::strings;
 use crate::remote::text;
@@ -58,6 +62,11 @@ pub struct ClientOptions {
     pub saved_read_wait: Duration,
     /// The connections file may be written (`--allow-state-write`); else the list lives in memory for this launch.
     pub writes: bool,
+    /// How the relay is reached for a paired connection (the system's proxy); None goes straight.
+    pub relay_proxy: Option<Arc<dyn ProxyResolver>>,
+    /// How a host this computer pairs with names it in its device list.
+    pub client_name: String,
+    pub relay_timings: ClientTimings,
 }
 
 impl Default for ClientOptions {
@@ -69,6 +78,9 @@ impl Default for ClientOptions {
             poll_retry_window: protocol::POLL_RETRY_WINDOW,
             saved_read_wait: Duration::from_secs(5),
             writes: true,
+            relay_proxy: None,
+            client_name: String::new(),
+            relay_timings: ClientTimings::default(),
         }
     }
 }
@@ -130,6 +142,8 @@ pub(crate) struct Entry {
     /// Which entry this is (C#'s reference): a connection replaced by a connect is another entry under the same id.
     pub serial: u64,
     pub revision: u64,
+    /// A paired connection's link while it is connected (its `key` is then the pairing's secret, and it has no `target`).
+    pub relay: Option<RelayClient>,
 }
 
 /// The key is left out.
@@ -267,22 +281,66 @@ impl RemoteClient {
             }
             existing
         };
-        let _connecting = Connecting { client: self.clone(), address: display };
-        self.connect_reached(label, trimmed, &parsed, existing).await
+        let _connecting = Connecting { client: self.clone(), address: display.clone() };
+        let (target, info) = self.reach(&parsed, trimmed).await?;
+        let id = existing.as_ref().map(|(id, _, _)| id.clone()).unwrap_or_else(wire::new_id);
+        self.connect_reached(label, trimmed, &display, existing, id, Link::Http(target), info).await
     }
 
+    /// `PairAsync(name, link)` ("페어링 코드로 연결"): pairs with the host of a pasted pairing link through its relay (its key checked,
+    /// this computer registered with a new client id, the host's token kept), reads its /info there, and saves the connection with the
+    /// pairing's secret in the vault; a link for a host paired before replaces that connection's pairing.
+    pub async fn pair(&self, name: &str, link: &str) -> Result<RemoteConnectionInfo, ClientError> {
+        let label = name.trim();
+        if text::count(label, saved::MAXIMUM_NAME + 1) > saved::MAXIMUM_NAME {
+            return Err(message(get("remote.connect.error.badKey")));
+        }
+        let link = PairingLink::parse(link).map_err(|_| message(get("remote.pair.error.badLink")))?;
+        let display = paired::relay_address(&link.endpoint.server_id);
+        self.saved_read().await?;
+        let existing = {
+            let mut gate = lock(&self.0.gate);
+            if gate.closing {
+                return Err(message(get("common.appClosing")));
+            }
+            let existing =
+                gate.connections.values().find(|c| c.info.address == display).map(|c| (c.info.id.clone(), c.info.name.clone(), c.serial));
+            if existing.is_none() && gate.connections.len() >= protocol::MAXIMUM_CONNECTIONS {
+                return Err(too_many());
+            }
+            if !gate.connecting.insert(display.clone()) {
+                return Err(message(get("remote.connect.error.busy")));
+            }
+            existing
+        };
+        let _connecting = Connecting { client: self.clone(), address: display.clone() };
+        let id = existing.as_ref().map(|(id, _, _)| id.clone()).unwrap_or_else(wire::new_id);
+        let secret = PairedSecret {
+            endpoint: link.endpoint.clone(),
+            credential: Credential::PairingKey { client_id: new_client_id(), key: link.pairing_key.clone() },
+        };
+        let (relay, info) = self.reach_relay(&id, &secret).await?;
+        // The token the host gave back (or, when it could not save it, the key again) is what the vault keeps.
+        let kept = PairedSecret { credential: relay.credential(), ..secret }.encode();
+        let label = if label.is_empty() && !link.name.is_empty() { link.name.as_str() } else { label };
+        self.connect_reached(label, &kept, &display, existing, id, Link::Relay(relay), info).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn connect_reached(
         &self,
         label: &str,
         key: &str,
-        parsed: &RemoteAddress,
+        display: &str,
         existing: Option<(String, String, u64)>,
+        id: String,
+        link: Link,
+        info: RemoteWireInfo,
     ) -> Result<RemoteConnectionInfo, ClientError> {
-        let (target, info) = self.reach(parsed, key).await?;
         if lock(&self.0.gate).closing {
+            link.close();
             return Err(message(get("common.appClosing")));
         }
-        let id = existing.as_ref().map(|(id, _, _)| id.clone()).unwrap_or_else(wire::new_id);
         if let Some((_, _, serial)) = &existing {
             // The old key's connection ends, and its runs are taken, in one step before their stops.
             let taken = {
@@ -300,10 +358,12 @@ impl RemoteClient {
             {
                 let gate = lock(&self.0.gate);
                 if gate.closing {
+                    link.close();
                     return Err(message(get("common.appClosing")));
                 }
                 // Another connect may have filled the list while this one waited on the host: refused before its key is saved.
                 if !gate.connections.contains_key(&id) && gate.connections.len() >= protocol::MAXIMUM_CONNECTIONS {
+                    link.close();
                     return Err(too_many());
                 }
             }
@@ -319,7 +379,7 @@ impl RemoteClient {
             view = RemoteConnectionInfo {
                 id: id.clone(),
                 name,
-                address: parsed.display(),
+                address: display.to_string(),
                 status: RemoteConnectionStatus::Connected,
                 host_name: Some(info.host_name.clone()),
                 workspaces: Some(info.workspaces.clone()),
@@ -329,17 +389,14 @@ impl RemoteClient {
             {
                 let mut gate = lock(&self.0.gate);
                 let serial = self.next_serial();
-                gate.connections.insert(
+                let (target, relay) = link.into_parts();
+                let replaced = gate.connections.insert(
                     id.clone(),
-                    Entry {
-                        info: view.clone(),
-                        key: Some(key.to_string()),
-                        target: Some(target),
-                        key_pending: false,
-                        serial,
-                        revision: serial,
-                    },
+                    Entry { info: view.clone(), key: Some(key.to_string()), target, key_pending: false, serial, revision: serial, relay },
                 );
+                if let Some(old) = replaced.and_then(|old| old.relay) {
+                    old.close();
+                }
                 if !gate.order.contains(&id) {
                     gate.order.push(id.clone());
                 }
@@ -394,15 +451,26 @@ impl RemoteClient {
         };
         let _connecting = Connecting { client: self.clone(), address: address.clone() };
         let result = async {
-            let parsed = RemoteAddress::parse(&address).map_err(message)?;
-            let (target, info) = self.reach(&parsed, &key).await?;
+            let (link, info) = if paired::is_relay_address(&address) {
+                let secret = PairedSecret::decode(&key).ok_or_else(|| message(get("remote.pair.error.secretDamaged")))?;
+                let (relay, info) = self.reach_relay(id, &secret).await?;
+                (Link::Relay(relay), info)
+            } else {
+                let parsed = RemoteAddress::parse(&address).map_err(message)?;
+                let (target, info) = self.reach(&parsed, &key).await?;
+                (Link::Http(target), info)
+            };
             let result = {
                 let mut gate = lock(&self.0.gate);
                 let current_now = !gate.closing && unchanged(&gate, id, serial, revision);
                 // Disconnected, removed, replaced or lost while this one waited on the host: that newer state stands.
                 match gate.connections.get_mut(id) {
                     Some(current) if current_now => {
-                        current.target = Some(target);
+                        let (target, relay) = link.into_parts();
+                        current.target = target;
+                        if let Some(old) = std::mem::replace(&mut current.relay, relay) {
+                            old.close();
+                        }
                         current.info.status = RemoteConnectionStatus::Connected;
                         current.info.host_name = Some(info.host_name.clone());
                         current.info.workspaces = Some(info.workspaces.clone());
@@ -410,7 +478,10 @@ impl RemoteClient {
                         current.info.detail = Some(get("remote.connect.detail.connected"));
                         current.info.clone()
                     }
-                    _ => return Err(message(get("remote.connect.error.changed"))),
+                    _ => {
+                        link.close();
+                        return Err(message(get("remote.connect.error.changed")));
+                    }
                 }
             };
             self.tell_changed();
@@ -440,9 +511,15 @@ impl RemoteClient {
         }
         let found = {
             let gate = lock(&self.0.gate);
-            gate.connections.get(id).map(|c| (c.info.clone(), c.target.clone(), c.serial, c.revision))
+            gate.connections.get(id).map(|c| (c.info.clone(), c.target.clone(), c.serial, c.revision, c.relay.is_some()))
         };
-        if let Some((info, Some(target), serial, revision)) = found
+        // A paired connection's link goes through the relay: no route to check.
+        if let Some((info, _, _, _, true)) = &found
+            && info.status == RemoteConnectionStatus::Connected
+        {
+            return Ok(info.clone());
+        }
+        if let Some((info, Some(target), serial, revision, _)) = found
             && info.status == RemoteConnectionStatus::Connected
         {
             self.ensure_route(id, serial, revision, &target).await?;
@@ -574,6 +651,67 @@ impl RemoteClient {
         Ok((target, info))
     }
 
+    /// A paired host reached through its relay: the link started with `secret` (a token the host gives back on the way is kept in the
+    /// vault under `id` at once), its first session up, and its /info read and checked as over Tailscale. The link is closed on any
+    /// failure.
+    async fn reach_relay(&self, id: &str, secret: &PairedSecret) -> Result<(RelayClient, RemoteWireInfo), ClientError> {
+        let options = &self.0.options;
+        let proxy = options.relay_proxy.clone().unwrap_or_else(|| Arc::new(paired::DirectProxy));
+        let (keys, saved_id, endpoint) = (self.0.keys.clone(), id.to_string(), secret.endpoint.clone());
+        // Only a connection already saved keeps a later token here; a pairing keeps the one it gets when it saves the connection.
+        let known = lock(&self.0.gate).connections.contains_key(id);
+        let on_token: Option<TokenSink> = known.then(|| {
+            let sink: TokenSink = Arc::new(move |credential: &Credential| {
+                let text = PairedSecret { endpoint: endpoint.clone(), credential: credential.clone() }.encode();
+                let (keys, id) = (keys.clone(), saved_id.clone());
+                tokio::task::spawn_blocking(move || {
+                    let _ = keys.save(&id, &text);
+                });
+            });
+            sink
+        });
+        let relay = RelayClient::start(
+            secret.endpoint.clone(),
+            secret.credential.clone(),
+            &options.client_name,
+            proxy,
+            options.relay_timings,
+            on_token,
+        );
+        let reached = async {
+            relay.ready(protocol::REQUEST_TIMEOUT).await.map_err(|failure| message(relay_words(&failure)))?;
+            let reply = relay
+                .request("GET", &format!("{}info", protocol::PATH_PREFIX), None, protocol::REQUEST_TIMEOUT)
+                .await
+                .map_err(relay_error)?;
+            let data = answer(reply).map_err(ClientError::Transport)?;
+            let mut info = RemoteWireInfo::decode(&data).map_err(|_| message(get("remote.connect.error.notMighty")))?;
+            info.runtime = validation::bounded(&info.runtime);
+            validation::info(&info).map_err(|e| message(e.0))?;
+            Ok(info)
+        }
+        .await;
+        match reached {
+            Ok(info) => Ok((relay, info)),
+            Err(error) => {
+                relay.close();
+                Err(error)
+            }
+        }
+    }
+
+    /// The link of a connected paired connection, with its entry and revision; None for any other connection.
+    pub(crate) fn relay_of(&self, id: &str) -> Option<(RelayClient, u64, u64)> {
+        let gate = lock(&self.0.gate);
+        let entry = gate.connections.get(id).filter(|c| c.info.status == RemoteConnectionStatus::Connected)?;
+        Some((entry.relay.clone()?, entry.serial, entry.revision))
+    }
+
+    /// Whether `id` is a paired connection (saved under a `relay:` address).
+    pub fn is_paired(&self, id: &str) -> bool {
+        lock(&self.0.gate).connections.get(id).is_some_and(|c| paired::is_relay_address(&c.info.address))
+    }
+
     /// `EnsureRouteAsync`: before each request to the host the route still goes through the tunnel, or the connection is lost (never
     /// retried). When the connection changed since `revision`, that newer state stands and only this request is refused.
     pub(crate) async fn ensure_route(&self, id: &str, serial: u64, revision: u64, target: &RemoteTarget) -> Result<(), ClientError> {
@@ -603,6 +741,9 @@ impl RemoteClient {
             let Some(entry) = gate.connections.get_mut(id) else { return false };
             entry.revision = serial;
             entry.target = None;
+            if let Some(relay) = entry.relay.take() {
+                relay.close();
+            }
             entry.info.status = RemoteConnectionStatus::Disconnected;
             entry.info.detail = Some(text::cut(words, text::DEFAULT_CUT));
             // Taken with the revision: a poll that lands in between finds its run gone and leaves the pane's last word to this.
@@ -640,8 +781,7 @@ impl RemoteClient {
             gate.loaded = true;
             let late = gate.load_failed;
             for item in items {
-                let Ok(address) = RemoteAddress::parse(&item.address) else { continue };
-                let display = address.display();
+                let Some(display) = paired::display_address(&item.address) else { continue };
                 if gate.connections.contains_key(&item.id)
                     || gate.connections.values().any(|c| c.info.address == display)
                     || gate.connections.len() >= protocol::MAXIMUM_CONNECTIONS
@@ -656,8 +796,10 @@ impl RemoteClient {
                     detail: Some(get("remote.connect.detail.saved")),
                     ..RemoteConnectionInfo::default()
                 };
-                gate.connections
-                    .insert(item.id.clone(), Entry { info, key: None, target: None, key_pending: true, serial, revision: serial });
+                gate.connections.insert(
+                    item.id.clone(),
+                    Entry { info, key: None, target: None, key_pending: true, serial, revision: serial, relay: None },
+                );
                 gate.order.push(item.id);
             }
             late
@@ -718,6 +860,9 @@ impl RemoteClient {
 fn disconnected(entry: &mut Entry, revision: u64) {
     entry.revision = revision;
     entry.target = None;
+    if let Some(relay) = entry.relay.take() {
+        relay.close();
+    }
     entry.info.status = RemoteConnectionStatus::Disconnected;
     entry.info.detail = Some(get("remote.connect.detail.disconnected"));
 }
@@ -725,6 +870,77 @@ fn disconnected(entry: &mut Entry, revision: u64) {
 /// `Unchanged(id, entry, revision)`: the entry listed under `id` is still `serial` at `revision`. Under the gate.
 pub(crate) fn unchanged(gate: &Gate, id: &str, serial: u64, revision: u64) -> bool {
     gate.connections.get(id).is_some_and(|c| c.serial == serial && c.revision == revision)
+}
+
+/// How a connection is reached: over Tailscale (its resolved target) or through the relay (its link).
+enum Link {
+    Http(RemoteTarget),
+    Relay(RelayClient),
+}
+
+impl Link {
+    fn into_parts(self) -> (Option<RemoteTarget>, Option<RelayClient>) {
+        match self {
+            Link::Http(target) => (Some(target), None),
+            Link::Relay(relay) => (None, Some(relay)),
+        }
+    }
+
+    /// A link that will not be kept is let go (a relay link's session closed).
+    fn close(&self) {
+        if let Link::Relay(relay) = self {
+            relay.close();
+        }
+    }
+}
+
+/// What the user reads when a paired host cannot be reached or refused this computer.
+pub(crate) fn relay_words(failure: &RelayFailure) -> String {
+    match failure {
+        RelayFailure::Unreachable => get("remote.relay.error.unreachable"),
+        RelayFailure::HostOffline => get("remote.relay.error.hostOffline"),
+        RelayFailure::TooMany => get("remote.host.error.tooMany"),
+        RelayFailure::KeyMismatch | RelayFailure::Refused { last: true, .. } => get("remote.relay.error.pairAgain"),
+        RelayFailure::Refused { .. } => get("remote.relay.error.refused"),
+        RelayFailure::Protocol => get("remote.connect.error.notMighty"),
+        RelayFailure::Lost | RelayFailure::Closed => get("remote.relay.error.lost"),
+    }
+}
+
+/// A relay request's failure as the transport's (a final refusal is the caller's to act on: [`RelayFailure::is_final`]).
+pub(crate) fn relay_error(error: crate::relay::client::RequestError) -> ClientError {
+    use crate::relay::client::RequestError;
+    match error {
+        RequestError::TooLarge => message(get("remote.relay.error.tooLarge")),
+        RequestError::BadBody => message(get("remote.connect.error.badRequest")),
+        RequestError::Timeout => ClientError::Transport(TransportError::Timeout(strings::timeout())),
+        RequestError::Lost => ClientError::Transport(TransportError::Network(get("remote.relay.error.lost"))),
+        RequestError::Failure(failure) if failure.transient() => ClientError::Transport(TransportError::Network(relay_words(&failure))),
+        RequestError::Failure(failure) => message(relay_words(&failure)),
+    }
+}
+
+/// A relay answer as the HTTP transport reads one: its body, or the host's refusal (its `error` words, else the status's).
+pub(crate) fn answer(reply: crate::relay::client::RelayReply) -> Result<Vec<u8>, TransportError> {
+    if (200..300).contains(&reply.status) {
+        return Ok(reply.body);
+    }
+    if !(400..600).contains(&reply.status) {
+        return Err(TransportError::InvalidData(get("remote.connect.error.notMighty")));
+    }
+    // The relay host's own refusal of a reply past one frame names the phone; this computer says its own words.
+    let words = if reply.status == 413 {
+        get("remote.connect.error.responseTooLarge")
+    } else {
+        serde_json::from_slice::<serde_json::Value>(&reply.body)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+            .unwrap_or_else(|| get_with("remote.connect.error.unexpectedStatus", &[("status", &reply.status.to_string())]))
+    };
+    Err(TransportError::Status(crate::remote::wire::RemoteHttpFailure {
+        status: reply.status,
+        message: text::cut(&words, text::DEFAULT_CUT),
+    }))
 }
 
 fn too_many() -> ClientError {

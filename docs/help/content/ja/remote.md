@@ -3,7 +3,7 @@ title: リモート接続（Tailscale）
 order: 10
 section: remote
 ---
-Mac または Windows のコンピュータ 2 台の Mighty Code を [Tailscale](https://tailscale.com/kb/1017/install) でつなぐと、一方でもう一方のコンピュータのワークスペースを開き、そのコンピュータで Claude・Codex・Antigravity とコマンドを実行できます。ファイルと CLI のログインは実行するコンピュータに置いたままで、プロジェクトのファイルをコピーや同期はしません。
+Mac または Windows のコンピュータ 2 台の Mighty Code を [Tailscale](https://tailscale.com/kb/1017/install) でつなぐと、一方でもう一方のコンピュータのワークスペースを開き、そのコンピュータで Claude・Codex・Antigravity とコマンドを実行できます。ファイルと CLI のログインは実行するコンピュータに置いたままで、プロジェクトのファイルをコピーや同期はしません。Tailscale がない場合は、スマートフォンのように[ペアリングで接続](#pair)できます。
 
 ## 準備 {#prepare}
 - 2 台のコンピュータに Mighty Code と Tailscale をインストールし、同じ tailnet にログインします。
@@ -27,7 +27,7 @@ Mac または Windows のコンピュータ 2 台の Mighty Code を [Tailscale]
 
 ## 別のコンピュータに接続 {#connect}
 作業を頼むコンピュータで:
-1. {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} タブを開きます。サイドバー見出しのネットワークボタンや、{{ui:workspace.addPane}} メニューの {{ui:remote.menu.connect}} からも同じ画面が開きます。
+1. {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} タブを開きます。{{ui:workspace.addPane}} メニューの {{ui:remote.menu.connect}} からも同じ画面が開きます。
 2. {{ui:settings.remote.connectTitle}} にホストのアドレス（Tailscale の IP または MagicDNS 名）と接続キーを入れ、{{ui:settings.remote.connectButton}} を押します。ホストがポートを変えていなければ、アドレスだけで足ります。
 3. 接続したコンピュータの下に共有中のワークスペースが表示されます。接続すると、そのコンピュータの共有ワークスペースが開いているペインごと自動でサイドバーに現れ、{{ui:remote.mirror.view}} でそのワークスペースへ直接移動できます（[そのコンピュータのペインをそのまま](#mirror)）。
 
@@ -36,6 +36,26 @@ Mac または Windows のコンピュータ 2 台の Mighty Code を [Tailscale]
 {{platform:mac}} 接続キーは macOS のキーチェーンにだけ保存し、ワークスペースの記録には入れません。再接続のときに macOS がキーチェーンへのアクセスを尋ねたら「常に許可」を選んでください。アプリは同じ署名で配布されるので、この選択はアップデート後も保たれます。
 
 {{platform:windows}} Windows でも接続キーをワークスペースの記録には入れず、この Windows ユーザーだけが読めるよう暗号化してアプリのデータフォルダに保存します。共有するときは {{ui:remote.windows.firewall.add}} ボタンで、Tailscale の範囲からの接続にだけアプリのポートを開くファイアウォールの規則を 1 つ追加します。このとき Windows の管理者の確認が 1 回表示されます。規則がすでにあるときは、ボタンが {{ui:remote.windows.firewall.update}} になります。この規則はスマートフォンの直接接続と共用なので、{{ui:settings.nav.mobile}} タブからも同じ規則を変更できます。 規則が今使っているポートをすべて開いていないときは、更新が必要だと表示します。規則を削除すると、スマートフォンの直接接続のポートと共有のポートが両方閉じます。
+
+## ペアリングで接続（Tailscale なし） {#pair}
+どちらのコンピュータにも Tailscale がなくても、スマートフォンのように一度ペアリングすれば、[モバイルリモート](phone.md)と同じ Mighty リレーを経由して接続できます。接続はエンドツーエンドで暗号化され、リレーは内容を読めません。接続した側は[そのコンピュータのペインをそのまま](#mirror)使います。
+
+ホストのコンピュータで:
+1. {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} タブの {{ui:settings.remote.pairTitle}} で {{ui:settings.remote.pairAccept}} をオンにします。
+2. {{ui:settings.remote.shareTitle}} でワークスペースを選び、{{ui:settings.remote.startSharing}} を押します。このスイッチがオンなら Tailscale がなくても共有を開始でき、共有中はこのコンピュータがリレーに接続します。
+3. {{ui:settings.remote.pairCopyLink}} でリンクをコピーし、接続するコンピュータに渡します。{{ui:settings.remote.pairShowQr}} で同じリンクの QR コードも表示できます。
+
+接続するコンピュータで:
+1. {{ui:settings.remote.navTitle}} タブの {{ui:settings.remote.pairConnectTitle}} にリンクを貼り付け、必要なら名前を付けて {{ui:settings.remote.connectButton}} を押します。
+2. 接続すると、そのコンピュータが接続一覧とサイドバーに「リモート · 名前」として現れ、接続と切断は Tailscale の接続と同じです。アドレス欄には `relay:` で始まる名前が表示されます。
+
+- リンクにはスマートフォンの QR コードと同じペアリングキーが含まれるので、信頼できる相手にだけ渡してください。最初の接続でホストがこのコンピュータ専用のデバイストークンを渡し、以後はそのトークンで接続します。トークンは接続キーと同じく macOS のキーチェーン（Windows ではこのユーザーだけが復号できる暗号化ファイル）に保存し、ワークスペースの記録には入れません。
+- ペアリングしたコンピュータはホストの {{ui:settings.nav.mobile}} タブのデバイス一覧にも表示されます。そこで {{ui:settings.mobileRemote.regenerateKeyButton}} を押すとスマートフォンとコンピュータがすべて解除され、再び使うには新しいリンクで接続し直します。
+- 見えるのは共有したワークスペースだけで、{{ui:settings.remote.allowFullAccess}} スイッチと Windows の Codex・Antigravity の規則も Tailscale の接続とまったく同じに適用されます。
+- {{ui:settings.nav.mobile}} の設定は変わりません。モバイルリモートがオフの間は、このスイッチがオンでもスマートフォンは接続できません。
+- リレーは一度に 1 MB まで送ります。ペアリング接続で送る添付ファイルは合計約 750 KB までで（ファイルの内容は base64 で大きくなります）、超えると送る前に知らせます。大きなファイルは Tailscale で接続して送ってください。長い会話は 1 MB に収まる新しい項目から表示されます。
+- ペアリング接続で使えるのは[そのコンピュータのペインをそのまま](#mirror)だけです。このコンピュータのペインをそこで実行するリモートペイン（{{ui:settings.remote.openButton}} ボタン）には Tailscale の接続が必要です。
+- ホストが共有を止めるかスイッチをオフにすると、接続した側に共有が止まったと表示されます。ホストが再び共有したら、新しいリンクなしで {{ui:settings.remote.refreshButton}} を押して再接続できます。
 
 ## そのコンピュータのペインをそのまま {#mirror}
 別のコンピュータに接続すると、そのコンピュータが共有しているワークスペースが、そこで開いているエージェントペインごとサイドバーに現れます。会話、{{ui:graph.view.mighty}} ビュー、進捗と状態がリアルタイムで反映され、ここから送信・停止や、承認・質問・計画への回答ができます。ペインはそのコンピュータで、その CLI とアカウントで動きます。送った内容はそのペインの次のリクエストになり、実行中ならそのコンピュータのキューに入ります。

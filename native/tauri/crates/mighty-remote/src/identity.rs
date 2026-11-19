@@ -5,6 +5,11 @@
 //! with none idle 90 days), re-pairing a client id, `Touch` at most once a minute, rotation, push registrations, and the pairing URL
 //! `mightycode://pair?v=2&sid=…&pk=…&relay=…&key=…&name=…[&direct=…]` (`Uri.EscapeDataString`). Owner: W8-A.
 //!
+//! A paired computer (the remote mirror through the relay, docs/remote-workspaces.md "페어링으로 연결") pairs with the same key and lives
+//! in the same device list, but says `"role":"desktop"` in its auth and its token's hash is taken over [`DESKTOP_TOKEN_DOMAIN`] and the
+//! token: a computer's token never opens a phone session and a phone's never a computer's, with no new member in either OS's identity
+//! files (their codecs are byte for byte the older apps'), and an older app that reads the file meets only a token it cannot match.
+//!
 //! Every change is saved before it takes effect (C#'s `Save` keeps the old state when the write fails); an identity loaded without
 //! `may_write` (verification mode) refuses every save, so it never writes the profile.
 
@@ -23,6 +28,12 @@ use zeroize::Zeroizing;
 
 use crate::push::message::KINDS;
 use crate::relay::cipher;
+
+/// The auth frame's `role` of another computer's Mighty Code.
+pub const DESKTOP_ROLE: &str = "desktop";
+/// What a computer's token is hashed after (`SHA-256(domain ‖ token)`): the role is bound to the token itself, so the device list needs no
+/// member of its own and a phone's token can never be presented as a computer's (or the other way round).
+pub const DESKTOP_TOKEN_DOMAIN: &str = "mighty-desktop-v1:";
 
 /// How long a newly registered phone is marked as an arrival (`MobileIdentity.NewDeviceWindow`).
 pub const NEW_DEVICE_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
@@ -45,6 +56,8 @@ pub struct AuthRequest {
     pub client_name: Option<String>,
     pub pairing_key: Option<String>,
     pub device_token: Option<String>,
+    /// `"role":"desktop"`: another computer's Mighty Code (the remote mirror through the relay), never a phone.
+    pub desktop: bool,
 }
 
 impl AuthRequest {
@@ -59,6 +72,7 @@ impl AuthRequest {
             client_name: text("clientName"),
             pairing_key: text("pairingKey"),
             device_token: text("deviceToken"),
+            desktop: text("role").as_deref() == Some(DESKTOP_ROLE),
         }
     }
 
@@ -70,7 +84,11 @@ impl AuthRequest {
 
 impl std::fmt::Debug for AuthRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AuthRequest").field("client_id", &self.client_id).field("client_name", &self.client_name).finish_non_exhaustive()
+        f.debug_struct("AuthRequest")
+            .field("client_id", &self.client_id)
+            .field("client_name", &self.client_name)
+            .field("desktop", &self.desktop)
+            .finish_non_exhaustive()
     }
 }
 
@@ -245,6 +263,11 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The stored hash of a device token: a phone's as before, a computer's over [`DESKTOP_TOKEN_DOMAIN`].
+fn token_hash(token: &str, desktop: bool) -> String {
+    if desktop { hash(&format!("{DESKTOP_TOKEN_DOMAIN}{token}")) } else { hash(token) }
+}
+
 fn equal(first: &str, second: &str) -> bool {
     first.len() == second.len() && bool::from(first.as_bytes().ct_eq(second.as_bytes()))
 }
@@ -363,7 +386,8 @@ impl Identity {
             && let Some(token) = auth.device_token.as_deref().filter(|t| t.encode_utf16().count() <= 256)
         {
             let device = state.saved.devices.iter().find(|d| Some(&d.id) == id.as_ref()).cloned();
-            let Some(device) = device.filter(|d| d.token_hash.as_deref().is_some_and(|stored| equal(stored, &hash(token)))) else {
+            let presented = token_hash(token, auth.desktop);
+            let Some(device) = device.filter(|d| d.token_hash.as_deref().is_some_and(|stored| equal(stored, &presented))) else {
                 return Ok(Refused(AuthRefusal::DeviceRevoked));
             };
             self.touch(&mut state, &device.id)?;
@@ -376,6 +400,10 @@ impl Identity {
             return Ok(Refused(AuthRefusal::PairingKey));
         }
         let now = now_ms();
+        // A computer always names itself: it keeps a token, never the legacy row.
+        if auth.desktop && id.is_none() {
+            return Ok(Refused(AuthRefusal::Malformed));
+        }
         let Some(id) = id else {
             if !allow_legacy {
                 return Ok(Refused(AuthRefusal::LegacyRefused));
@@ -425,7 +453,7 @@ impl Identity {
         devices.push(PairedDevice {
             id: id.clone(),
             name: wire::clean(&given, 40),
-            token_hash: Some(hash(&fresh)),
+            token_hash: Some(token_hash(&fresh, auth.desktop)),
             first_seen: earlier.unwrap_or_else(|| mark.clone()),
             last_seen: mark,
             push: None,

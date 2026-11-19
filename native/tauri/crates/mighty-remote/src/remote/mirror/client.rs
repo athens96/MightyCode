@@ -3,6 +3,10 @@
 //! (as every request of the client); a 401 (the host shares with a new key now) leaves the connection disconnected, as a run's poll does;
 //! any other refusal is the caller's to read (its status and the host's words). An answer that is not the mirror's is
 //! [`TransportError::InvalidData`] (C#'s `InvalidDataException`, `remote.mirror.error.badAnswer`).
+//!
+//! A connection paired through the relay (`remote::paired`) sends the same requests on its relay link instead ([`MirrorTransport`]): no
+//! route to check, one frame each way (a send whose attachments do not fit one frame is refused here, before anything is sent), and a
+//! final refusal (the pairing no longer opens the host) leaves the connection disconnected as a 401 does.
 
 use std::time::Duration;
 
@@ -11,7 +15,7 @@ use mighty_core::attachment::RunAttachment;
 use mighty_core::wire;
 use mighty_run::plan_mode::PlanDecision;
 use mighty_run::questionnaire::UserQuestionAnswer;
-use mighty_run::strings::get;
+use mighty_run::strings::{get, get_with};
 
 use super::{
     MirrorPane, MirrorState, WireMirrorCreate, WireMirrorCreated, WireMirrorDetail, WireMirrorOutcome, WireMirrorPermission,
@@ -20,6 +24,20 @@ use super::{
 use crate::remote::client::{ClientError, RemoteClient, lock};
 use crate::remote::transport::{self, Method, Request, TransportError};
 use crate::remote::wire::{RemoteConnectionStatus, RemoteWirePlan, protocol as remote_protocol, to_bytes};
+
+/// Where a mirror request goes: over Tailscale to the host's address with its key, or on the paired connection's relay link.
+enum MirrorTransport {
+    Http { target: crate::remote::transport::RemoteTarget, key: String, serial: u64, revision: u64 },
+    Relay { relay: crate::relay::client::RelayClient, serial: u64, revision: u64 },
+}
+
+/// The largest send body through the relay: one frame (1 MiB less its seal) less the request's envelope (`{id, method, path}`).
+pub const RELAY_BODY_BYTES: usize = crate::relay::cipher::MAXIMUM_PLAINTEXT - 1024;
+
+/// The relay's send limit as the user reads it ("1 MB": attachments travel base64, so somewhat less of the files themselves).
+fn relay_limit_words() -> String {
+    format!("{} MB", RELAY_BODY_BYTES.div_ceil(1024 * 1024))
+}
 
 fn bad_answer() -> ClientError {
     ClientError::Transport(TransportError::InvalidData(get("remote.mirror.error.badAnswer")))
@@ -53,7 +71,23 @@ fn session_path(host_session_id: &str, action: &str) -> Result<String, ClientErr
 }
 
 impl RemoteClient {
-    /// `MirrorRequestAsync`: one request on a connected connection, after its route is checked; a 401 fails the connection.
+    /// How a connected connection's mirror requests go now; None when it is not connected.
+    fn mirror_transport(&self, connection_id: &str) -> Option<MirrorTransport> {
+        if let Some((relay, serial, revision)) = self.relay_of(connection_id) {
+            return Some(MirrorTransport::Relay { relay, serial, revision });
+        }
+        let gate = lock(&self.0.gate);
+        let entry = gate.connections.get(connection_id).filter(|e| e.info.status == RemoteConnectionStatus::Connected)?;
+        match (&entry.target, &entry.key) {
+            (Some(target), Some(key)) => {
+                Some(MirrorTransport::Http { target: target.clone(), key: key.clone(), serial: entry.serial, revision: entry.revision })
+            }
+            _ => None,
+        }
+    }
+
+    /// `MirrorRequestAsync`: one request on a connected connection, after its route is checked (over Tailscale) or on its relay link;
+    /// a 401, or a pairing that no longer opens the host, fails the connection.
     async fn mirror_request(
         &self,
         connection_id: &str,
@@ -62,18 +96,29 @@ impl RemoteClient {
         body: Option<Vec<u8>>,
         timeout: Option<Duration>,
     ) -> Result<Vec<u8>, ClientError> {
-        let (target, key, serial, revision) = {
-            let gate = lock(&self.0.gate);
-            if gate.closing {
-                return Err(ClientError::Message(get("common.appClosing")));
+        if lock(&self.0.gate).closing {
+            return Err(ClientError::Message(get("common.appClosing")));
+        }
+        let (target, key, serial, revision) = match self.mirror_transport(connection_id) {
+            Some(MirrorTransport::Http { target, key, serial, revision }) => (target, key, serial, revision),
+            Some(MirrorTransport::Relay { relay, serial, revision }) => {
+                let verb = if method == Method::Get { "GET" } else { "POST" };
+                let answered = relay.request(verb, path, body.as_deref(), timeout.unwrap_or(remote_protocol::REQUEST_TIMEOUT)).await;
+                return match answered {
+                    Ok(reply) => crate::remote::client::answer(reply).map_err(ClientError::Transport),
+                    Err(error) => {
+                        // The host no longer takes this pairing (a new key, this computer released): disconnected, as a 401 leaves it.
+                        if let crate::relay::client::RequestError::Failure(failure) = &error
+                            && failure.is_final()
+                        {
+                            let words = crate::remote::client::relay_words(failure);
+                            self.fail(connection_id, &words, Some((serial, revision))).await;
+                        }
+                        Err(crate::remote::client::relay_error(error))
+                    }
+                };
             }
-            match gate.connections.get(connection_id) {
-                Some(entry) if entry.info.status == RemoteConnectionStatus::Connected => match (&entry.target, &entry.key) {
-                    (Some(target), Some(key)) => (target.clone(), key.clone(), entry.serial, entry.revision),
-                    _ => return Err(ClientError::Message(get("remote.run.error.notConnected"))),
-                },
-                _ => return Err(ClientError::Message(get("remote.run.error.notConnected"))),
-            }
+            None => return Err(ClientError::Message(get("remote.run.error.notConnected"))),
         };
         self.ensure_route(connection_id, serial, revision, &target).await?;
         let request = Request { body: body.as_deref(), timeout, ..Request::default() };
@@ -138,6 +183,14 @@ impl RemoteClient {
         let body = to_bytes(&WireMirrorSubmit { text: text.into(), attachments: files.then_some(attachments) }.to_value());
         if body.len() > mighty_run::attachments::MAXIMUM_REQUEST_BYTES || !files && body.len() > remote_protocol::MAXIMUM_REQUEST_BYTES {
             return Err(ClientError::Message(get("remote.run.error.tooLarge")));
+        }
+        // Through the relay a send is one frame: attachments that do not fit it are refused here with words that say so.
+        if self.is_paired(connection_id) && body.len() > RELAY_BODY_BYTES {
+            return Err(ClientError::Message(if files {
+                get_with("remote.relay.error.attachmentsTooLarge", &[("size", &relay_limit_words())])
+            } else {
+                get("remote.run.error.tooLarge")
+            }));
         }
         let timeout = if files { remote_protocol::UPLOAD_TIMEOUT } else { protocol::SEND_TIMEOUT };
         let path = session_path(host_session_id, "submit")?;

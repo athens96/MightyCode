@@ -223,7 +223,7 @@ impl World {
 
     pub async fn from(&self, device: &str, method: &str, path: &str, body: Option<Value>) -> MobileReply {
         let raw = body.map(|b| serde_json::value::RawValue::from_string(b.to_string()).expect("raw"));
-        let device = MobileDevice { client_id: device.into(), name: "Phone".into(), direct: false };
+        let device = MobileDevice { client_id: device.into(), name: "Phone".into(), direct: false, desktop: false };
         self.router.route(device, method.into(), path.into(), raw).await
     }
 }

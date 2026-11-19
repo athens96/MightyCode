@@ -3,7 +3,7 @@ title: Remote connection (Tailscale)
 order: 10
 section: remote
 ---
-Link two computers' Mighty Code (Mac or Windows) over [Tailscale](https://tailscale.com/kb/1017/install), and one computer can open the other's workspaces and run Claude, Codex, Antigravity and commands on that computer. Files and CLI sign-ins stay where the work runs; no project files are copied or synced.
+Link two computers' Mighty Code (Mac or Windows) over [Tailscale](https://tailscale.com/kb/1017/install), and one computer can open the other's workspaces and run Claude, Codex, Antigravity and commands on that computer. Files and CLI sign-ins stay where the work runs; no project files are copied or synced. Without Tailscale, [connect by pairing](#pair) as a phone does.
 
 ## Before you start {#prepare}
 - Install Mighty Code and Tailscale on both computers and sign both into the same tailnet.
@@ -27,7 +27,7 @@ Sharing accepts connections on this computer's Tailscale addresses only. It is a
 
 ## Connect to another computer {#connect}
 On the computer that gives the work:
-1. Open {{ui:menu.settings}} → the {{ui:settings.remote.navTitle}} tab. The network button in the sidebar header and {{ui:remote.menu.connect}} in the {{ui:workspace.addPane}} menu open the same place.
+1. Open {{ui:menu.settings}} → the {{ui:settings.remote.navTitle}} tab. {{ui:remote.menu.connect}} in the {{ui:workspace.addPane}} menu opens the same place.
 2. Under {{ui:settings.remote.connectTitle}}, enter the host's address (its Tailscale IP or MagicDNS name) and the key, then press {{ui:settings.remote.connectButton}}. Unless the host changed the port, the address alone is enough.
 3. The shared workspaces appear under the connected computer. Once connected, that computer's shared workspaces appear in the sidebar on their own, with the panes open there; {{ui:remote.mirror.view}} takes you straight to one ([The other computer's panes as they are](#mirror)).
 
@@ -36,6 +36,26 @@ A remote workspace shows a computer icon and its host's name in the sidebar, and
 {{platform:mac}} The key is kept in the macOS Keychain only, never in the workspace state. If macOS asks for Keychain access when it connects again, choose "Always Allow"; the app ships with the same signature, so the choice survives updates.
 
 {{platform:windows}} On Windows the key is never kept in the workspace state either: it is saved encrypted so only this Windows user can read it, in the app's data folder. When sharing, the {{ui:remote.windows.firewall.add}} button adds one firewall rule that opens the app's ports only to Tailscale's ranges; Windows shows its administrator prompt once. If the rule already exists, the button reads {{ui:remote.windows.firewall.update}} instead, and the rule is shared with the phone's direct connection, so the {{ui:settings.nav.mobile}} tab changes the same rule. If the rule does not open every port in use now, the tab says it needs updating. Removing the rule closes both the phone's direct-connection port and the sharing port.
+
+## Connect by pairing (no Tailscale) {#pair}
+Without Tailscale on either computer, pair once as a phone does and connect through the same Mighty relay as the [phone remote](phone.md). The connection is end-to-end encrypted, so the relay cannot read it, and the connected computer uses [the other computer's panes as they are](#mirror).
+
+On the host computer:
+1. Open {{ui:menu.settings}} → the {{ui:settings.remote.navTitle}} tab and, under {{ui:settings.remote.pairTitle}}, turn on {{ui:settings.remote.pairAccept}}.
+2. Under {{ui:settings.remote.shareTitle}}, pick the workspaces and press {{ui:settings.remote.startSharing}}. With this switch on, sharing can start without Tailscale; while it shares, this computer connects to the relay.
+3. Press {{ui:settings.remote.pairCopyLink}} and give the link to the computer that connects. {{ui:settings.remote.pairShowQr}} shows the same link as a QR code.
+
+On the computer that connects:
+1. In the {{ui:settings.remote.navTitle}} tab, paste the link under {{ui:settings.remote.pairConnectTitle}}, name it if you like, and press {{ui:settings.remote.connectButton}}.
+2. Once connected, the computer appears in the connection list and in the sidebar as "Remote · name", and connecting and disconnecting work as for a Tailscale connection. Its address reads as a name starting with `relay:`.
+
+- The link carries the same pairing key as the phone's QR code: give it only to people you trust. On the first connection the host hands this computer a device token of its own, which it uses from then on. The token is kept like a connection key, in the macOS Keychain (on Windows, in a file encrypted for this user only), never in the workspace state.
+- A paired computer also appears in the host's device list in the {{ui:settings.nav.mobile}} tab. Pressing {{ui:settings.mobileRemote.regenerateKeyButton}} there unpairs every phone and computer; connect again with a new link to use it again.
+- Only the shared workspaces are visible, and the {{ui:settings.remote.allowFullAccess}} switch and the Windows rule for Codex and Antigravity apply exactly as over Tailscale.
+- The {{ui:settings.nav.mobile}} settings do not change. While the phone remote is off, phones cannot connect even with this switch on.
+- The relay carries at most 1 MB at a time. Attachments sent over a paired connection are limited to about 750 KB in total (their contents grow in base64); larger ones are refused before anything is sent. Connect over Tailscale for large files. A long conversation shows its newest entries that fit in 1 MB.
+- A paired connection offers [the other computer's panes as they are](#mirror) only. Remote panes that run this computer's panes there (the {{ui:settings.remote.openButton}} button) need a Tailscale connection.
+- When the host stops sharing or turns the switch off, the connected computer says sharing stopped. Once the host shares again, press {{ui:settings.remote.refreshButton}} to reconnect; no new link is needed.
 
 ## The other computer's panes as they are {#mirror}
 When you connect to another computer, the workspaces that computer shares appear in the sidebar with the agent panes open there. Conversations, the {{ui:graph.view.mighty}} views, progress and status follow live, and you can send, stop and answer approvals, questions and plans from here. The panes run on that computer with its CLIs and accounts; what you send becomes that pane's next request, queued there if it is busy.

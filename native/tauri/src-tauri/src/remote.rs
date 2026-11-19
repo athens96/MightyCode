@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use mighty_core::model::{AppSnapshot, RunSession, Workspace};
 use mighty_core::shell::RemoteConnection;
 use mighty_platform::fake::MemoryVault;
-use mighty_platform::{Clipboard, Network, Platform, SecretVault};
+use mighty_platform::{BoxFuture, Clipboard, Network, Platform, Proxy, ProxyResolver, SecretVault};
 use mighty_remote::remote::client::{ClientOptions, LocalAddresses, RemoteClient, RouteCheck};
 use mighty_remote::remote::features;
 use mighty_remote::remote::host::{Addresses, HostOptions, HostRuntime, RemoteHost, host_runner};
@@ -60,6 +60,22 @@ impl SecretVault for KeyVault {
     }
 }
 
+/// The system's proxy for a paired connection's relay link: the platform's once [`start`] has it, straight before (and in a smoke).
+struct AppProxy(Weak<RemoteApp>);
+
+impl ProxyResolver for AppProxy {
+    fn resolve(&self, url: &str) -> BoxFuture<'_, mighty_platform::Result<Proxy>> {
+        let resolver = self.0.upgrade().and_then(|app| app.proxy.get().cloned());
+        let url = url.to_string();
+        Box::pin(async move {
+            match resolver {
+                Some(resolver) => resolver.resolve(&url).await,
+                None => Ok(Proxy::Direct),
+            }
+        })
+    }
+}
+
 /// What the page keeps between its reads (C# `remoteBusy`, `remoteError`, `remoteSharingShown` and the page's Tailscale reading).
 #[derive(Default)]
 pub struct Page {
@@ -80,6 +96,8 @@ pub struct RemoteApp {
     vault: Arc<KeyVault>,
     /// This PC's network and whether its Tailscale adapter must be named `utun` (the Mac); set at start.
     network: OnceLock<(Arc<dyn Network>, bool)>,
+    /// The system's proxy for paired connections' relay links; set at start.
+    proxy: OnceLock<Arc<dyn ProxyResolver>>,
     host: OnceLock<RemoteHost>,
     runtime: OnceLock<Arc<HostRuntime>>,
     /// `remoteHostRuns`: another computer's runs going on this PC; while any does, this PC's CLIs and plugins are not updated.
@@ -100,7 +118,7 @@ pub fn app(host: &Arc<Host>) -> Arc<RemoteApp> {
     }
     let smoke = host.smoke.is_some();
     let made = Arc::new_cyclic(|me: &Weak<RemoteApp>| {
-        let (route, local) = (me.clone(), me.clone());
+        let (route, local, proxy) = (me.clone(), me.clone(), me.clone());
         let route_check: RouteCheck = Arc::new(move |ip: &str| {
             let app = route.upgrade().ok_or_else(|| "closing".to_string())?;
             Ok(mighty_remote::remote::address::through_tailscale(ip, &|| app.tailscale()))
@@ -112,6 +130,9 @@ pub fn app(host: &Arc<Host>) -> Arc<RemoteApp> {
             route_check: (!smoke).then_some(route_check),
             local_addresses: (!smoke).then_some(local_addresses),
             writes: host.writes() && !smoke,
+            // A paired connection's relay link goes through the system's proxy, as the phone remote's does.
+            relay_proxy: Some(Arc::new(AppProxy(proxy))),
+            client_name: client_name(),
             ..ClientOptions::default()
         };
         let approving = Arc::downgrade(host);
@@ -127,6 +148,7 @@ pub fn app(host: &Arc<Host>) -> Arc<RemoteApp> {
             ),
             vault,
             network: OnceLock::new(),
+            proxy: OnceLock::new(),
             host: OnceLock::new(),
             runtime: OnceLock::new(),
             host_runs: AtomicUsize::new(0),
@@ -227,6 +249,12 @@ fn machine_name(platform: &Platform) -> String {
     if name.trim().is_empty() { strings::host_os(Some(platform.profile.m1_platform)) } else { name }
 }
 
+/// How a host this computer pairs with names it in its device list: the machine's name, else the app's.
+fn client_name() -> String {
+    let name = crate::mobile::machine_name();
+    if name.trim().is_empty() { "Mighty Code".into() } else { name }
+}
+
 /// The system folder a sharing host's commands take Windows PowerShell from (C# `Environment.SpecialFolder.System`); none on the Mac.
 fn system_folder(platform: &Platform) -> Option<String> {
     if platform.profile.os != mighty_platform::Os::Windows {
@@ -267,6 +295,7 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
     let smoke = host.smoke.is_some();
     let ports = crate::platform::remote_ports(platform, smoke);
     let _ = app.network.set((ports.network.clone(), platform.profile.tailscale_needs_utun));
+    let _ = app.proxy.set(ports.proxy.clone());
     if host.writes() && !smoke {
         let _ = app.vault.platform.set(platform.secrets.clone());
     }
@@ -442,6 +471,21 @@ pub fn blocked_reason(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) ->
 /// The run service's runner for remote workspaces' panes (`RunServiceOptions.remote`), read once as runs.rs makes the service.
 pub fn runner(host: &Arc<Host>) -> Option<Arc<dyn RemoteRunner>> {
     Some(Arc::new(app(host).client.clone()))
+}
+
+/// Whether paired computers should keep the relay link up now: this PC shares, with "페어링한 컴퓨터의 연결 받기" on.
+pub fn relay_wanted(host: &Arc<Host>) -> bool {
+    app(host).host().is_some_and(|sharing| sharing.relay() && sharing.state().enabled)
+}
+
+/// The relay host's link follows [`relay_wanted`] (the phone remote's own settings never change): after a start, a stop, the switch,
+/// and whenever the page finds them apart (a sharing that ended on its own).
+pub async fn sync_relay(host: &Arc<Host>) {
+    let Some(relay) = crate::mobile::relay(host) else { return };
+    let wanted = relay_wanted(host);
+    if relay.desktops() != wanted && relay.set_desktops(wanted).await.is_err() {
+        host.log.line("remote: the relay link for paired computers could not be changed");
+    }
 }
 
 /// The sharing host's port while it shares (the firewall rule's second port, W8-C).

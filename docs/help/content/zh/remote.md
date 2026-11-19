@@ -3,7 +3,7 @@ title: 远程连接（Tailscale）
 order: 10
 section: remote
 ---
-用 [Tailscale](https://tailscale.com/kb/1017/install) 连接两台 Mac 或 Windows 电脑上的 Mighty Code 后，可以在一台电脑上打开另一台的工作区，并在那台电脑上运行 Claude、Codex、Antigravity 和命令。文件和 CLI 登录都留在实际运行的电脑上，不会复制或同步项目文件。
+用 [Tailscale](https://tailscale.com/kb/1017/install) 连接两台 Mac 或 Windows 电脑上的 Mighty Code 后，可以在一台电脑上打开另一台的工作区，并在那台电脑上运行 Claude、Codex、Antigravity 和命令。文件和 CLI 登录都留在实际运行的电脑上，不会复制或同步项目文件。没有 Tailscale 时，可以像手机一样[通过配对连接](#pair)。
 
 ## 准备 {#prepare}
 - 在两台电脑上安装 Mighty Code 和 Tailscale，并登录同一个 tailnet。
@@ -27,7 +27,7 @@ section: remote
 
 ## 连接其他电脑 {#connect}
 在要下达任务的电脑上：
-1. 打开 {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} 标签。侧边栏标题中的网络按钮，以及 {{ui:workspace.addPane}} 菜单中的 {{ui:remote.menu.connect}} 也会打开同一处。
+1. 打开 {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} 标签。{{ui:workspace.addPane}} 菜单中的 {{ui:remote.menu.connect}} 也会打开同一处。
 2. 在 {{ui:settings.remote.connectTitle}} 中输入主机的地址（Tailscale IP 或 MagicDNS 名称）和连接密钥，然后点按 {{ui:settings.remote.connectButton}}。如果主机没有更改端口，只输入地址即可。
 3. 已连接电脑下方会列出共享的工作区。连接后，那台电脑共享的工作区会连同其中打开的窗格自动出现在侧边栏；点按 {{ui:remote.mirror.view}} 可直接前往（[原样显示那台电脑的窗格](#mirror)）。
 
@@ -36,6 +36,26 @@ section: remote
 {{platform:mac}} 连接密钥只保存在 macOS 钥匙串中，不会写入工作区记录。重新连接时如果 macOS 询问钥匙串访问权限，请选择“始终允许”；应用以相同的签名发布，因此这个选择在更新后仍然有效。
 
 {{platform:windows}} 在 Windows 上，连接密钥同样不会写入工作区记录，而是加密保存在应用的数据文件夹中，只有当前 Windows 用户可以读取。共享时，{{ui:remote.windows.firewall.add}} 按钮会添加一条防火墙规则，只向 Tailscale 地址段打开应用的端口；Windows 会弹出一次管理员确认。如果规则已存在，该按钮会显示为 {{ui:remote.windows.firewall.update}}，并且这条规则与手机直连共用，所以在 {{ui:settings.nav.mobile}} 标签页中改的是同一条规则。 如果规则没有打开当前使用的全部端口，标签页会提示需要更新。删除规则会同时关闭手机直连端口和共享端口。
+
+## 通过配对连接（无需 Tailscale） {#pair}
+两台电脑都没有 Tailscale 时，也可以像手机一样配对一次，然后经由与[手机远程](phone.md)相同的 Mighty 中继连接。连接采用端到端加密，中继无法读取内容；连接方使用[原样显示那台电脑的窗格](#mirror)。
+
+在主机电脑上：
+1. 打开 {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} 标签，在 {{ui:settings.remote.pairTitle}} 中打开 {{ui:settings.remote.pairAccept}}。
+2. 在 {{ui:settings.remote.shareTitle}} 中选择工作区并点按 {{ui:settings.remote.startSharing}}。打开这个开关后，没有 Tailscale 也能开始共享；共享期间本机会连接中继。
+3. 点按 {{ui:settings.remote.pairCopyLink}}，把链接交给要连接的电脑。点按 {{ui:settings.remote.pairShowQr}} 可以看到同一链接的二维码。
+
+在要连接的电脑上：
+1. 在 {{ui:settings.remote.navTitle}} 标签的 {{ui:settings.remote.pairConnectTitle}} 中粘贴链接，可按需填写名称，然后点按 {{ui:settings.remote.connectButton}}。
+2. 连接后，那台电脑会以“远程 · 名称”出现在连接列表和侧边栏中，连接与断开的方式与 Tailscale 连接相同。地址处显示以 `relay:` 开头的名称。
+
+- 链接中含有与手机二维码相同的配对密钥，请只交给信任的人。第一次连接时，主机会给这台电脑一个专属的设备令牌，之后都用这个令牌连接。令牌像连接密钥一样保存在 macOS 钥匙串中（在 Windows 上保存在只有当前用户能解密的文件中），不会写入工作区记录。
+- 已配对的电脑也会出现在主机 {{ui:settings.nav.mobile}} 标签的设备列表中。在那里点按 {{ui:settings.mobileRemote.regenerateKeyButton}} 会解除所有手机和电脑的配对，之后需要用新链接重新连接。
+- 只能看到共享的工作区，{{ui:settings.remote.allowFullAccess}} 开关以及 Windows 上 Codex 和 Antigravity 的规则与 Tailscale 连接完全相同。
+- {{ui:settings.nav.mobile}} 的设置不会改变。手机远程关闭时，即使打开这个开关，手机也无法连接。
+- 中继一次最多传送 1 MB。通过配对连接发送的附件合计约 750 KB 以内（文件内容以 base64 传送会变大），超出时会在发送前提示。大文件请通过 Tailscale 连接后发送。较长的对话会显示能放进 1 MB 的最新条目。
+- 配对连接只提供[原样显示那台电脑的窗格](#mirror)。要在那台电脑上运行本机窗格的远程窗格（{{ui:settings.remote.openButton}} 按钮）需要 Tailscale 连接。
+- 主机停止共享或关闭开关后，连接方会显示共享已停止。主机重新共享后，点按 {{ui:settings.remote.refreshButton}} 即可重新连接，无需新的链接。
 
 ## 原样显示那台电脑的窗格 {#mirror}
 连接到其他电脑后，那台电脑共享的工作区会连同其中打开的代理窗格一起出现在侧边栏。对话、{{ui:graph.view.mighty}} 视图、进度和状态实时同步，你可以在这里发送、停止，并回答批准、提问和计划。窗格在那台电脑上用它的 CLI 和账号运行；你发送的内容成为该窗格的下一个请求，正在运行时会排进那台电脑的队列。

@@ -70,13 +70,15 @@ impl std::fmt::Debug for MobileReply {
     }
 }
 
-/// The phone a request comes from, once its `auth` passed: its 22-character client id (or `legacy`), its name, and whether it came
-/// over the direct path. Never its token.
+/// The phone a request comes from, once its `auth` passed: its 22-character client id (or `legacy`), its name, whether it came over
+/// the direct path, and whether it is another computer's Mighty Code rather than a phone (`"role":"desktop"`, bound to its token by the
+/// identity: the remote mirror's requests, never the phone's routes). Never its token.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MobileDevice {
     pub client_id: String,
     pub name: String,
     pub direct: bool,
+    pub desktop: bool,
 }
 
 /// What answers an authenticated phone's requests (C#'s `Func<string, string, JsonElement?, string, CancellationToken,
@@ -117,7 +119,14 @@ pub(crate) trait ConnectionHost: Send + Sync + 'static {
     fn record_direct_failure(&self, peer: IpAddr);
     /// A phone authenticated: the status's count moves.
     fn authenticated(&self);
+    /// Phones are let in (the phone remote's switch). False while the link runs only for paired computers: a phone then meets the
+    /// host as offline, as when the relay link is down.
+    fn phones_allowed(&self) -> bool;
 }
+
+/// The close code a phone gets while the link runs only for paired computers: the relay's own `hostOffline`, which the phone app reads
+/// as the host being away (it keeps its pairing and tries again later).
+pub const PHONES_OFF_CLOSE: u16 = 4410;
 
 struct Outgoing {
     plaintext: Vec<u8>,
@@ -169,6 +178,11 @@ impl Connection {
     /// The authenticated phone's id ("" before its auth passed).
     pub fn device_id(&self) -> String {
         lock(&self.device).as_ref().map(|d| d.client_id.clone()).unwrap_or_default()
+    }
+
+    /// The authenticated device, None before its auth passed.
+    pub fn device(&self) -> Option<MobileDevice> {
+        lock(&self.device).clone()
     }
 
     /// `Cancel`: the connection ends (its socket closed, its requests dropped).
@@ -300,6 +314,16 @@ impl Connection {
         // A frame that is not JSON reads as an empty object, so it is refused as malformed (generically and counted on the direct
         // path) rather than ending the connection unanswered.
         let request = AuthRequest::from_bytes(&plaintext);
+        // A phone while the phone remote is off is turned away before its auth is read, so nothing is registered or touched.
+        if !request.desktop && !host.phones_allowed() {
+            let close = tokio_tungstenite::tungstenite::protocol::CloseFrame {
+                code: PHONES_OFF_CLOSE.into(),
+                reason: tokio_tungstenite::tungstenite::Utf8Bytes::from_static("host offline"),
+            };
+            let _ = tokio::time::timeout_at(deadline, sink.send(Message::Close(Some(close)))).await;
+            return Err(Ended);
+        }
+        let desktop = request.desktop;
         let decision = host.identity().authorize(&request, host.allow_legacy()).map_err(|_| Ended)?;
 
         // From here every frame is sealed by the one writer.
@@ -325,7 +349,7 @@ impl Connection {
             }
             AuthDecision::Accepted { device_id, device_token } => {
                 let name = host.identity().devices().into_iter().find(|d| d.id == device_id).map(|d| d.name).unwrap_or_default();
-                *lock(&self.device) = Some(MobileDevice { client_id: device_id.clone(), name, direct: self.direct });
+                *lock(&self.device) = Some(MobileDevice { client_id: device_id.clone(), name, direct: self.direct, desktop });
                 self.authenticated.store(true, Ordering::SeqCst);
                 let mut out = JsonOut::new();
                 out.begin_object();
@@ -409,8 +433,7 @@ async fn handle<H: ConnectionHost>(
     if connection.cancelled() || !host.identity().contains(&device_id, host.allow_legacy()) {
         return;
     }
-    let device =
-        lock(&connection.device).clone().unwrap_or(MobileDevice { client_id: device_id, name: String::new(), direct: connection.direct });
+    let Some(device) = lock(&connection.device).clone() else { return };
     let route = host.handler().handle(device, method, path, body);
     // The route on a task of its own: a panic is a 500, never the connection's end; dropping this request (the connection ended)
     // aborts it.

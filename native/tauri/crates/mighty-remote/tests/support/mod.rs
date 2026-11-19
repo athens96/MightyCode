@@ -8,6 +8,7 @@ pub mod desk;
 pub mod fake_host;
 pub mod fake_relay;
 pub mod lane;
+pub mod pairing_relay;
 
 use std::sync::Arc;
 

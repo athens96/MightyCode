@@ -3,7 +3,7 @@ title: 원격 연결 (Tailscale)
 order: 10
 section: remote
 ---
-Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 [Tailscale](https://tailscale.com/kb/1017/install)로 이으면, 한쪽에서 다른 쪽 컴퓨터의 워크스페이스를 열고 그 컴퓨터에서 Claude·Codex·Antigravity와 명령을 실행할 수 있습니다. 파일과 CLI 로그인은 실행하는 컴퓨터에 그대로 있고, 프로젝트 파일을 복사하거나 동기화하지 않습니다.
+Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 [Tailscale](https://tailscale.com/kb/1017/install)로 이으면, 한쪽에서 다른 쪽 컴퓨터의 워크스페이스를 열고 그 컴퓨터에서 Claude·Codex·Antigravity와 명령을 실행할 수 있습니다. 파일과 CLI 로그인은 실행하는 컴퓨터에 그대로 있고, 프로젝트 파일을 복사하거나 동기화하지 않습니다. Tailscale이 없으면 휴대폰처럼 [페어링으로 연결](#pair)할 수 있습니다.
 
 ## 준비 {#prepare}
 - 두 컴퓨터에 Mighty Code와 Tailscale을 설치하고 같은 tailnet에 로그인합니다.
@@ -27,7 +27,7 @@ Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 [Tailscale](https://tailsc
 
 ## 다른 컴퓨터 연결 {#connect}
 일을 시킬 컴퓨터에서:
-1. {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} 탭을 엽니다. 사이드바 머리글의 네트워크 단추, {{ui:workspace.addPane}} 메뉴의 {{ui:remote.menu.connect}} 항목도 같은 곳을 엽니다.
+1. {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} 탭을 엽니다. {{ui:workspace.addPane}} 메뉴의 {{ui:remote.menu.connect}} 항목도 같은 곳을 엽니다.
 2. {{ui:settings.remote.connectTitle}} 항목에 호스트의 주소(Tailscale IP 또는 MagicDNS 이름)와 연결 키를 넣고 {{ui:settings.remote.connectButton}} 단추를 누릅니다. 포트를 바꾸지 않았다면 주소만 넣으면 됩니다.
 3. 연결한 컴퓨터 아래에 공유된 워크스페이스가 보입니다. 연결하면 그 컴퓨터의 공유 워크스페이스가 거기 열린 창과 함께 사이드바에 저절로 나타나고, {{ui:remote.mirror.view}} 단추는 그 워크스페이스로 바로 갑니다([그 컴퓨터의 창 그대로](#mirror)).
 
@@ -36,6 +36,26 @@ Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 [Tailscale](https://tailsc
 {{platform:mac}} 연결 키는 macOS Keychain에만 저장하고 워크스페이스 기록에는 넣지 않습니다. 다시 연결할 때 macOS가 Keychain 접근을 물으면 "항상 허용"을 고르세요. 앱이 같은 서명으로 배포되므로 이 선택은 업데이트 뒤에도 유지됩니다.
 
 {{platform:windows}} Windows에서는 연결 키를 워크스페이스 기록에 넣지 않고, 이 Windows 사용자만 풀 수 있게 암호화해 앱의 데이터 폴더에 저장합니다. 공유할 때는 {{ui:remote.windows.firewall.add}} 단추로 Tailscale 대역에서 오는 연결에만 앱의 포트를 여는 방화벽 규칙 하나를 추가합니다. 이때 Windows가 관리자 확인 창을 한 번 띄웁니다. 규칙이 이미 있으면 같은 자리에 {{ui:remote.windows.firewall.update}} 단추가 나오고, 휴대폰 직접 연결의 규칙과 하나로 함께 쓰므로 {{ui:settings.nav.mobile}} 탭에서도 같은 규칙을 고칠 수 있습니다. 규칙의 포트가 지금 쓰는 포트를 모두 담지 않으면 갱신이 필요하다고 표시합니다. 규칙을 지우면 휴대폰 직접 연결 포트와 공유 포트가 함께 닫힙니다.
+
+## 페어링으로 연결 (Tailscale 없이) {#pair}
+두 컴퓨터에 Tailscale이 없어도, 휴대폰처럼 한 번 페어링하면 [휴대폰 원격](phone.md)과 같은 Mighty 릴레이를 거쳐 연결할 수 있습니다. 연결은 종단 간 암호화되어 릴레이는 내용을 볼 수 없고, 연결한 컴퓨터는 [그 컴퓨터의 창 그대로](#mirror)를 씁니다.
+
+호스트 컴퓨터에서:
+1. {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} 탭의 {{ui:settings.remote.pairTitle}} 항목에서 {{ui:settings.remote.pairAccept}}를 켭니다.
+2. {{ui:settings.remote.shareTitle}} 항목에서 워크스페이스를 고르고 {{ui:settings.remote.startSharing}} 단추를 누릅니다. 이 스위치가 켜져 있으면 Tailscale이 없어도 공유를 시작할 수 있고, 공유하는 동안 이 컴퓨터가 릴레이에 연결합니다.
+3. {{ui:settings.remote.pairCopyLink}} 단추로 링크를 복사해 연결할 컴퓨터에 전합니다. {{ui:settings.remote.pairShowQr}} 단추로 같은 링크의 QR도 볼 수 있습니다.
+
+연결할 컴퓨터에서:
+1. {{ui:settings.remote.navTitle}} 탭의 {{ui:settings.remote.pairConnectTitle}} 항목에 링크를 붙여 넣고, 원하면 이름을 정한 뒤 {{ui:settings.remote.connectButton}} 단추를 누릅니다.
+2. 연결되면 그 컴퓨터가 연결 목록과 사이드바에 "원격 · 이름"으로 나타나고, 연결과 연결 끊기도 Tailscale 연결과 같습니다. 주소 자리에는 `relay:`로 시작하는 이름이 보입니다.
+
+- 링크에는 휴대폰 QR과 같은 페어링 키가 들어 있으니 믿는 사람에게만 전하세요. 처음 연결할 때 호스트가 이 컴퓨터만의 기기 토큰을 주고, 그 뒤에는 그 토큰으로 연결합니다. 토큰은 연결 키처럼 macOS Keychain(Windows에서는 이 사용자만 풀 수 있게 암호화한 파일)에 두고 워크스페이스 기록에는 넣지 않습니다.
+- 페어링한 컴퓨터는 호스트의 {{ui:settings.nav.mobile}} 탭 기기 목록에도 보입니다. 거기서 {{ui:settings.mobileRemote.regenerateKeyButton}}를 누르면 휴대폰과 컴퓨터가 모두 해제되고, 다시 쓰려면 새 링크로 연결해야 합니다.
+- 공유한 워크스페이스만 보이고, {{ui:settings.remote.allowFullAccess}} 스위치와 Windows의 Codex·Antigravity 규칙도 Tailscale 연결과 똑같이 적용됩니다.
+- {{ui:settings.nav.mobile}} 설정은 바뀌지 않습니다. 모바일 리모트가 꺼져 있으면 이 스위치가 켜져 있어도 휴대폰은 연결되지 않습니다.
+- 릴레이는 한 번에 1 MB까지 보냅니다. 페어링 연결로 보내는 첨부 파일은 합계 약 750 KB까지이고(파일 내용이 base64로 늘어납니다), 더 크면 보내기 전에 알려 줍니다. 큰 파일은 Tailscale로 연결해 보내세요. 긴 대화는 최근 항목부터 1 MB 안에 드는 만큼 보입니다.
+- 페어링 연결에서는 [그 컴퓨터의 창 그대로](#mirror)만 씁니다. 이 컴퓨터의 창을 그 컴퓨터에서 실행하는 원격 창({{ui:settings.remote.openButton}} 단추)은 Tailscale 연결에서만 됩니다.
+- 호스트가 공유를 멈추거나 스위치를 끄면 연결한 컴퓨터에 공유를 멈췄다는 말이 보입니다. 호스트가 다시 공유하면 링크를 다시 받을 필요 없이 {{ui:settings.remote.refreshButton}} 단추로 다시 연결합니다.
 
 ## 그 컴퓨터의 창 그대로 {#mirror}
 다른 컴퓨터에 연결하면, 그 컴퓨터가 공유한 워크스페이스가 거기 열려 있는 에이전트 창 그대로 사이드바에 나타납니다. 대화, {{ui:graph.view.mighty}} 보기, 진행 상황과 상태가 실시간으로 따라오고, 여기서 보내기·멈추기와 승인·질문·계획 답을 할 수 있습니다. 창은 그 컴퓨터에서 그 컴퓨터의 CLI와 계정으로 실행되고, 보낸 글은 그 창의 다음 요청이 됩니다. 실행 중이면 그 컴퓨터의 대기열에 들어갑니다.

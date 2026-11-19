@@ -5,7 +5,8 @@
 //!   the in-process fake relay itself). Without [`Host::may_reach_relay`] (`--allow-state-write`) nothing is loaded, written or dialled
 //!   — the profile's host token would supersede a running C# app's relay socket (4409) — and `host.log` and the Settings box say
 //!   verification mode. With it: the identity loaded (made at first use), the relay host made with the phone router as its handler
-//!   (`phone::handler`, W8-B; a 404 router until it exists), the push hub beside it, the saved `mobileRemote` settings applied (the link
+//!   (`phone::handler`, W8-B; a 404 router until it exists) behind `remote::paired::DesktopRouter` (a computer paired through the relay
+//!   reaches the sharing host's mirror, never a phone route), the push hub beside it, the saved `mobileRemote` settings applied (the link
 //!   dials only when they are on), and the 250 ms tick started.
 //! - The tick (its own task, never the bridge's): `push.observe` over the panes as the phone sees them, then — while a phone is
 //!   connected — `phone::take_notifications` → `relay.notify`.
@@ -129,7 +130,12 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
             return;
         }
     };
-    let handler = crate::phone::handler(host).unwrap_or_else(|| Arc::new(NoRouter));
+    let phones = crate::phone::handler(host).unwrap_or_else(|| Arc::new(NoRouter));
+    // A paired computer's requests go to the sharing host (made by remote.rs, maybe later than this): the mirror with its own rules.
+    let handler: Arc<dyn RequestHandler> = Arc::new(mighty_remote::remote::paired::DesktopRouter::new(
+        phones,
+        Arc::new(|| crate::remote::app_if_made().and_then(|app| app.host().cloned())),
+    ));
     let name = machine_name();
     let options = RelayOptions {
         host_name: name.clone(),
@@ -287,7 +293,7 @@ pub async fn write(host: &Arc<Host>, change: impl FnOnce(MobileRemoteSettings) -
 /// C#'s `ReconnectAsync` from the box's button.
 pub async fn reconnect(host: &Arc<Host>) -> Result<(), String> {
     let Some(relay) = relay(host).filter(|_| host.smoke.is_none()) else { return Ok(()) };
-    if !host.view().snapshot.mobile_remote.as_ref().is_some_and(|m| m.enabled) {
+    if !host.view().snapshot.mobile_remote.as_ref().is_some_and(|m| m.enabled) && !relay.desktops() {
         return Ok(());
     }
     relay.reconnect().await.map_err(|error| error.to_string())?;

@@ -6,6 +6,10 @@
 //! direct path's sockets handed in by W8-C's listener ([`crate::direct::listener::DirectSink`]: admission counted under the host's
 //! table lock, the socket run as a direct connection); dispose. The relay URL is never logged. Owner: W8-A.
 //!
+//! Paired computers (the remote mirror, `remote::paired`) reach this same host: the link runs while the phone remote is on or while
+//! this PC shares with paired computers ([`RelayHost::set_desktops`]); in the second case alone a phone is turned away as if the host
+//! were offline (`connection::PHONES_OFF_CLOSE`), so turning on sharing never opens the phone's door.
+//!
 //! The direct listener's own lifecycle (Tailscale addresses, binding, the 15 s re-detection) is W8-C's (src-tauri `direct.rs` over
 //! `direct::listener`); this host keeps C#'s half of it that touches the phone table: admission, the failed-auth lockout, the direct
 //! phones dropped when the remote or its direct switch goes off, and the endpoints `auth_ok` and the pairing link carry.
@@ -177,6 +181,8 @@ pub(crate) struct Shared {
     settings: RwLock<MobileRemoteSettings>,
     generation: AtomicU64,
     disposed: AtomicBool,
+    /// This PC shares with paired computers: the link runs even while the phone remote is off.
+    desktops: AtomicBool,
     table: Mutex<Table>,
     /// C#'s `DirectAuthFailures` (W8-C's `direct::admit`).
     failures: crate::direct::admit::DirectAuthFailures,
@@ -239,6 +245,7 @@ impl RelayHost {
                 settings: RwLock::new(MobileRemoteSettings { enabled: false, ..MobileRemoteSettings::default() }),
                 generation: AtomicU64::new(0),
                 disposed: AtomicBool::new(false),
+                desktops: AtomicBool::new(false),
                 table: Mutex::new(Table { clients: HashMap::new(), reserved: vec![], next_reservation: 1 }),
                 failures: crate::direct::admit::DirectAuthFailures::default(),
                 status: Mutex::new(MobileRelayStatus::disabled()),
@@ -272,6 +279,49 @@ impl RelayHost {
         }
         let settings = shared.settings();
         shared.clone().restart(settings, lifecycle).await
+    }
+
+    /// Whether paired computers keep the link up (this PC shares with them): on, the link runs even while the phone remote is off, and
+    /// phones are then turned away as from an offline host; the phone remote's own settings are never changed. Off again, the link
+    /// follows the phone remote alone.
+    pub async fn set_desktops(&self, on: bool) -> Result<(), RelayError> {
+        let shared = &self.shared;
+        let lifecycle = shared.lifecycle.lock().await;
+        if shared.disposed.load(Ordering::SeqCst) {
+            return Err(RelayError::Disposed);
+        }
+        let before = shared.desktops.swap(on, Ordering::SeqCst);
+        let settings = shared.settings();
+        // The phone remote's link runs (and stays) either way.
+        if before == on || settings.enabled {
+            return Ok(());
+        }
+        shared.clone().restart(settings, lifecycle).await
+    }
+
+    /// Whether paired computers keep the link up ([`RelayHost::set_desktops`]).
+    pub fn desktops(&self) -> bool {
+        self.shared.desktops.load(Ordering::SeqCst)
+    }
+
+    /// Whether the link runs or should (the phone remote on, or this PC sharing with paired computers).
+    pub fn link_on(&self) -> bool {
+        self.shared.link_on(&self.shared.settings())
+    }
+
+    /// The names of the paired computers connected now (never their ids or tokens).
+    pub fn connected_desktops(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .shared
+            .clients()
+            .into_iter()
+            .filter(|c| c.authenticated())
+            .filter_map(|c| c.device())
+            .filter(|d| d.desktop)
+            .map(|d| d.name)
+            .collect();
+        names.sort();
+        names
     }
 
     /// `ReconnectSoon`: dials again once the path settles, whatever it then is (a wake from sleep: asleep, the PC missed the relay's
@@ -467,6 +517,11 @@ impl Shared {
         self.settings.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
+    /// The link runs while the phone remote is on or while paired computers are shared with.
+    fn link_on(&self, settings: &MobileRemoteSettings) -> bool {
+        settings.enabled || self.desktops.load(Ordering::SeqCst)
+    }
+
     fn direct_endpoints(&self) -> Vec<String> {
         match &self.options.direct_endpoints {
             Some(source) => source(),
@@ -530,7 +585,7 @@ impl Shared {
                 client.cancel();
             }
         }
-        if !value.enabled {
+        if !self.link_on(&value) {
             self.stop_watching();
             self.publish(false, "disabled", None, None);
             return Ok(());
@@ -842,7 +897,7 @@ impl Shared {
             return;
         }
         let mut guard = self.lifecycle.lock().await;
-        if self.disposed.load(Ordering::SeqCst) || !self.settings().enabled {
+        if self.disposed.load(Ordering::SeqCst) || !self.link_on(&self.settings()) {
             return;
         }
         if action == LinkAction::Offline {
@@ -930,6 +985,9 @@ impl ConnectionHost for Shared {
     }
     fn authenticated(&self) {
         self.republish();
+    }
+    fn phones_allowed(&self) -> bool {
+        self.settings().enabled
     }
 }
 
