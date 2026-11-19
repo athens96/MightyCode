@@ -93,6 +93,9 @@ pub const FAKE_PROBE: &str = r#"(async () => {
     report.secondRun = !!(await until(async () => (await step('state')).graphRuns >= 3, 10000));
     await step('steps');
     const rows = () => [...(scope()?.querySelectorAll('[data-testid=mighty-progress] [data-testid^=mighty-progress-row-]') ?? [])];
+    // A narrow pane starts with its panel folded (FlowParts foldedFor): open it, as a person would, to read its rows.
+    const panel = await until(() => scope()?.querySelector('[data-testid=mighty-progress]'), 15000);
+    if (panel?.hasAttribute('data-collapsed')) panel.querySelector('[data-testid=mighty-progress-fold]')?.click();
     report.stepsDrawn = !!(await until(() => rows().length === 3, 15000));
     report.stepsCount = q('[data-testid=mighty-progress-count]')?.textContent ?? null;
     report.stepsStates = rows().map((e) => [...e.classList].find((c) => c.startsWith('state-'))?.slice(6) ?? '').join(',');
