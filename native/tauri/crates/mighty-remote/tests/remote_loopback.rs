@@ -252,7 +252,8 @@ async fn tool_requests_are_answered_from_the_client_and_graph_runs_go_only_where
 /// graph events (graph nodes, no `graph_run`); the Windows value is the check above.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_mac_host_ignores_the_graph_runs_header() {
-    set_language("en");
+    // Korean as every other test here: the language is the process's, and the tests that compare refusal words run beside this one.
+    set_language("ko");
     let fixture = make_host(MakeHost { graph_runs: Some(false), ..MakeHost::default() }).await;
     let state = fixture.host.start(&[fixture.shared.id().into()], 0).await.unwrap();
     let (target, key) = (loopback(state.port.unwrap()), state.key.clone().unwrap());
