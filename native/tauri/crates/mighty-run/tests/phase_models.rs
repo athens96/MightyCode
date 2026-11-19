@@ -885,3 +885,41 @@ fn the_section_form_is_the_screens_rows() {
         "the delete button removes it"
     );
 }
+
+// 6. An alias picked for a knob Claude Code reads as a model is saved as that model, and never reaches the CLI as an alias.
+#[test]
+fn a_picked_alias_reaches_claude_as_its_model() {
+    let option = |value: &str, resolved: &str| ModelOption { resolved_model: Some(resolved.into()), ..ModelOption::new(value, value, "") };
+    let catalog = ModelCatalog::new(
+        "cli",
+        vec![option("sonnet", "claude-sonnet-5-5"), option("opus", "claude-opus-5-5"), option("haiku", "claude-haiku-5-5")],
+        "",
+    );
+    // The execution row sets the main model and the sonnet knob; the planning row the opus knob.
+    let picked = phase_routing::apply_claude_row(Phase::Execution, "sonnet", &new_snapshot());
+    let picked = phase_routing::apply_claude_row(Phase::Planning, "sonnet", &picked);
+    let saved = phase_models::concrete_claude_models(&picked, &catalog);
+    assert_eq!(saved.claude_main.as_deref(), Some("sonnet"), "--model takes the alias as it is");
+    assert_eq!(saved.claude_sonnet_alias.as_deref(), Some("claude-sonnet-5-5"));
+    assert_eq!(saved.claude_opus_alias.as_deref(), Some("claude-sonnet-5-5"), "planning on sonnet: the opus knob names sonnet's model");
+    let args = providers::arguments(&StartRunRequest::new("s", "w", "claude", "x"), "/plugin", Some(&saved)).unwrap();
+    let settings = after(&args, "--settings");
+    assert!(settings.contains(r#""ANTHROPIC_DEFAULT_SONNET_MODEL":"claude-sonnet-5-5""#), "{settings}");
+    assert!(settings.contains(r#""ANTHROPIC_DEFAULT_OPUS_MODEL":"claude-sonnet-5-5""#), "{settings}");
+    assert_eq!(after(&args, "--model"), "sonnet");
+    // A model id and an unknown alias are kept; a context suffix is an alias too.
+    let kept = phase_models::concrete_claude_models(&snapshot(|s| s.claude_haiku_alias = Some("claude-haiku-4-5".into())), &catalog);
+    assert_eq!(kept.claude_haiku_alias.as_deref(), Some("claude-haiku-4-5"));
+    assert_eq!(phase_models::claude_alias("opus[1m]"), Some("opus"));
+    assert_eq!(phase_models::claude_alias("claude-opus-5-5"), None);
+    // An alias saved before (no model known for it) never reaches the CLI where a model is wanted: Claude's own mapping stands.
+    let old = snapshot(|s| {
+        s.claude_main = Some("sonnet".into());
+        s.claude_sonnet_alias = Some("sonnet".into());
+        s.claude_subagent_default = Some("haiku".into());
+    });
+    let args = providers::arguments(&StartRunRequest::new("s", "w", "claude", "x"), "/plugin", Some(&old)).unwrap();
+    let settings = after(&args, "--settings");
+    assert!(!settings.contains("ANTHROPIC_DEFAULT_SONNET_MODEL"), "{settings}");
+    assert!(settings.contains(r#""CLAUDE_CODE_SUBAGENT_MODEL":"haiku""#), "the sub-agent model takes an alias: {settings}");
+}

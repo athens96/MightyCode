@@ -589,13 +589,15 @@ pub fn arguments(
                 env.insert("CLAUDE_CODE_EFFORT_LEVEL".into(), Value::String(settings.effort.clone()));
             }
             if let Some(phase) = &phase {
-                for (key, value) in [
-                    ("ANTHROPIC_DEFAULT_OPUS_MODEL", model_or_default(&phase.claude_opus_alias)),
-                    ("ANTHROPIC_DEFAULT_SONNET_MODEL", model_or_default(&phase.claude_sonnet_alias)),
-                    ("ANTHROPIC_DEFAULT_HAIKU_MODEL", model_or_default(&phase.claude_haiku_alias)),
-                    ("CLAUDE_CODE_SUBAGENT_MODEL", model_or_default(&phase.claude_subagent_default)),
+                for (key, value, names_a_model) in [
+                    ("ANTHROPIC_DEFAULT_OPUS_MODEL", model_or_default(&phase.claude_opus_alias), true),
+                    ("ANTHROPIC_DEFAULT_SONNET_MODEL", model_or_default(&phase.claude_sonnet_alias), true),
+                    ("ANTHROPIC_DEFAULT_HAIKU_MODEL", model_or_default(&phase.claude_haiku_alias), true),
+                    ("CLAUDE_CODE_SUBAGENT_MODEL", model_or_default(&phase.claude_subagent_default), false),
                 ] {
-                    if value != "default" {
+                    // An alias where Claude Code wants a model (saved before the settings saved the model it stands for) would be
+                    // sent to the API as it is and refused: Claude's own mapping stands instead (phase_models::concrete_claude_models).
+                    if value != "default" && !(names_a_model && phase_models::claude_alias(&value).is_some()) {
                         env.insert(key.into(), Value::String(value));
                     }
                 }

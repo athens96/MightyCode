@@ -113,10 +113,13 @@ fn save_edit(
     let before = tools();
     let mut made = None;
     let mut refused = None;
+    let claude = catalog(host, "claude");
     host.view().update(|state| {
         let config = state.phase_models.clone().unwrap_or_else(phase_models::new_snapshot);
         match make(&config, &before) {
-            Ok(edit) => {
+            Ok(mut edit) => {
+                // An alias picked for a knob Claude Code reads as a model is saved as the model it stands for (sonnet → its id).
+                edit.config = phase_models::concrete_claude_models(&edit.config, &claude);
                 state.phase_models = Some(edit.config.clone());
                 made = Some(edit);
             }

@@ -40,6 +40,41 @@ pub fn normalized(value: Option<&PhaseModelsSnapshot>) -> Option<PhaseModelsSnap
     normalize::phase_models(value)
 }
 
+/// Claude Code's own model aliases: what `--model` takes as it is, and what each `ANTHROPIC_DEFAULT_<ALIAS>_MODEL` names.
+pub const CLAUDE_ALIASES: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
+
+/// A Claude alias (`sonnet`, `opus[1m]`, …) with its context suffix, or None for a model id.
+pub fn claude_alias(value: &str) -> Option<&str> {
+    let bare = value.split('[').next().unwrap_or(value);
+    CLAUDE_ALIASES.iter().copied().find(|alias| *alias == bare)
+}
+
+/// The knobs Claude Code reads as environment variables (`ANTHROPIC_DEFAULT_OPUS_MODEL`, …) name a model, not an alias: an alias
+/// there is sent to the API as it is and refused ("sonnet" is no model), and the sonnet knob naming `sonnet` sends `--model
+/// sonnet` round in a circle. So an alias picked for one of them is saved as the model the CLI says it stands for now
+/// (`ModelOption.resolved_model`, e.g. `claude-sonnet-5-5`); the main model keeps the alias, which `--model` takes as it is.
+pub fn concrete_claude_models(config: &PhaseModelsSnapshot, catalog: &ModelCatalog) -> PhaseModelsSnapshot {
+    let concrete = |value: &Option<String>| -> Option<String> {
+        let value = value.as_deref()?;
+        if claude_alias(value).is_none() {
+            return Some(value.to_string());
+        }
+        let resolved = catalog
+            .models
+            .iter()
+            .find(|m| m.value == value)
+            .and_then(|m| m.resolved_model.clone())
+            .filter(|id| !id.is_empty() && claude_alias(id).is_none());
+        Some(resolved.unwrap_or_else(|| value.to_string()))
+    };
+    PhaseModelsSnapshot {
+        claude_opus_alias: concrete(&config.claude_opus_alias),
+        claude_sonnet_alias: concrete(&config.claude_sonnet_alias),
+        claude_haiku_alias: concrete(&config.claude_haiku_alias),
+        ..config.clone()
+    }
+}
+
 /// `PhaseModelPreferences.EffectiveModel`: a Claude pane on its default model runs Settings › Models' main model.
 pub fn effective_model(request: &StartRunRequest) -> String {
     if request.provider == "claude" && request.model == "default" {
