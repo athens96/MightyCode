@@ -1,6 +1,6 @@
 # 마이티 스타일 엔진 (계약 문서)
 
-상태: **구현됨**. 이 문서는 구현 이전에 고정한 계약이다. 0.4 Swift 앱(`native/macos/Sources/MightyCore/Styles/`)에서 구현했고, 0.5(Rust)는 `native/tauri/crates/mighty-styles/`(디코딩·검증·평가·투영·레지스트리·신뢰)와 `src-tauri/src/styles.rs`가 옮겨 받았다. 번들 매니페스트(`ouroboros.json`, `claude-plan.json`)는 지금도 `native/macos/Sources/MightyCore/Resources/Styles/`의 파일을 바이트 그대로 묶는다(`mighty-styles/src/bundled.rs`). 아래에 Swift 이름이 나오면 0.4 참고 구현을 가리킨다. 마이티 모드의 "스타일"(처음 이관한 [Ouroboros](ouroboros-mode.md) · Paperthin — Paperthin은 v7에서 지웠다)을 Swift 분기가 아니라 **선언적 JSON 매니페스트**로 구동하는 범용 엔진을 정의한다. 내장 두 스타일은 번들 매니페스트 2개로 이관되고, 폰(`mobile/`)은 매니페스트 결과를 받아 그리는 범용 렌더러가 되며, 엔진은 `mighty-style-engine-v1` 태그로 고정된 뒤 **JSON과 테스트만 추가하는 diff**로 oh-my-claudecode와 gstack이 붙는다.
+상태: **계약 확정, 미구현**. 이 문서는 구현 이전에 고정되는 계약이다. 마이티 모드의 "스타일"(처음 이관한 [Ouroboros](ouroboros-mode.md) · Paperthin — Paperthin은 v7에서 지웠다)을 Swift 분기가 아니라 **선언적 JSON 매니페스트**로 구동하는 범용 엔진을 정의한다. 내장 두 스타일은 번들 매니페스트 2개로 이관되고, 폰(`mobile/`)은 매니페스트 결과를 받아 그리는 범용 렌더러가 되며, 엔진은 `mighty-style-engine-v1` 태그로 고정된 뒤 **JSON과 테스트만 추가하는 diff**로 oh-my-claudecode와 gstack이 붙는다.
 
 읽는 순서: 스키마(1) → 검증(2) → 출처·신뢰(3·4) → 엔진 API(5) → 앱(6) → 폰(7) → 고정(8) → 테스트(9) → 후속(10) → 부록 A → 구현 순서(11). 부록 A는 네 스타일이 이 스키마로 표현되는지 확인하는 스케치이고, 11장은 이 계약을 서로 부딪히지 않는 세 갈래 작업으로 나눈다.
 
