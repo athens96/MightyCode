@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-i18n="meta.title.about">About — Mighty Code</title>
+  <meta name="description" content="Mighty Code 구조와 동작 방식 안내">
+  <link rel="icon" href="assets/icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Top Navigation -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a href="index.html" class="brand">
+        <img src="assets/icon.png" alt="Mighty Code">
+        <span>Mighty Code</span>
+      </a>
+
+      <nav class="nav-links" aria-label="Navigation">
+        <a href="index.html" class="nav-link" data-i18n="nav.main">메인</a>
+        <a href="docs.html" class="nav-link" data-docs-link data-i18n="nav.docs">문서</a>
+        <a href="about.html" class="nav-link active" data-i18n="nav.about">About</a>
+        <a href="https://github.com/athens96/MightyCode" target="_blank" rel="noopener" class="nav-link">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          GitHub
+        </a>
+      </nav>
+
+      <div class="nav-actions">
+        <div class="lang-switch" role="group" aria-label="Language">
+          <button type="button" class="lang-btn active" data-lang-btn="ko">한국어</button>
+          <button type="button" class="lang-btn" data-lang-btn="en">EN</button>
+          <button type="button" class="lang-btn" data-lang-btn="zh">中文</button>
+          <button type="button" class="lang-btn" data-lang-btn="ja">日本語</button>
+        </div>
+
+        <button type="button" class="icon-btn" data-theme-toggle title="Theme" aria-label="Theme">
+          <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+          <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+        <a href="index.html#download" class="btn btn-primary" data-i18n="nav.download">다운로드</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="container" style="padding-top:32px;padding-bottom:48px">
+    <div class="doc-block">
+      <h2 data-i18n="about.overview.title">개요</h2>
+      <p data-i18n-html="about.overview.desc">
+        <b>Mighty Code</b>는 프로젝트 폴더(워크스페이스)마다 여러 실행 창을 열고, 창마다 에이전트 CLI(Claude Code, Codex, Antigravity, pi, opencode, Hermes)를 직접 실행해 대화와 설정을 따로 유지하는 데스크톱 앱입니다.
+        화면은 한국어·영어·중국어·일본어로 볼 수 있습니다.
+      </p>
+    </div>
+
+    <div class="doc-block">
+      <h2 data-i18n="about.arch.title">구조 (Rust + Tauri 2)</h2>
+      <p data-i18n-html="about.arch.desc">
+        macOS 앱과 Windows 앱은 하나의 Rust + Tauri 2 워크스페이스(<code>native/tauri</code>)로 만들어집니다.
+        공통 로직(<code>mighty-core</code>, <code>mighty-run</code>, <code>mighty-graph</code>, <code>mighty-delegation</code>, <code>mighty-remote</code>, <code>mighty-tools</code>)은 OS 코드 없이 공유하고,
+        플랫폼마다 다른 부분은 포트(<code>mighty-platform</code>)에 각 운영체제 구현을 끼워 넣습니다.
+      </p>
+
+      <div class="arch-diagram">
+        <div class="arch-node">
+          <h4>macOS</h4>
+          <p style="margin:0;font-size:13.5px" data-i18n-html="about.arch.mac">
+            Rust + Tauri 2 + <code>objc2</code>(AppKit). 터미널은 네이티브 <b>Ghostty</b>(libghostty C API, Metal) 뷰를 올리고, 브라우저는 CEF와 WKWebView 중 설정으로 고릅니다. macOS 14 이상, Apple Silicon.
+          </p>
+        </div>
+
+        <div class="arch-node">
+          <h4>Windows (베타)</h4>
+          <p style="margin:0;font-size:13.5px" data-i18n-html="about.arch.win">
+            Rust + Tauri 2 + WebView2. 터미널은 Rust <b>ConPTY + xterm.js</b>를 쓰고, 프로세스 관리는 Job Object, 비밀값 저장은 DPAPI를 씁니다. Windows 10(2004) 이상 또는 Windows 11, x64·ARM64.
+          </p>
+        </div>
+
+        <div class="arch-node">
+          <h4>휴대폰 (Android)</h4>
+          <p style="margin:0;font-size:13.5px" data-i18n-html="about.arch.mob">
+            React Native(Expo) Android 앱. 릴레이 서버를 거쳐 종단 간 암호화(X25519 → HKDF → ChaCha20-Poly1305)로 연결하며, 같은 Tailscale 네트워크면 컴퓨터에 직접 연결합니다.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="doc-block">
+      <h2 data-i18n="about.sec.title">동작 원칙과 지원 범위</h2>
+      <ul style="padding-left:20px;margin:0" data-i18n-html="about.sec.list">
+        <li>앱은 <code>sudo</code>를 쓰지 않고 시스템 비밀번호를 받지 않습니다.</li>
+        <li>릴레이는 암호문만 전달하고 아무 비밀도 모르며, 파일로 된 스타일은 내용을 확인해 허용한 뒤에만 씁니다.</li>
+        <li>자동 업데이트는 매니페스트의 Ed25519 서명을 확인한 뒤에만 설치합니다.</li>
+        <li>Claude를 뺀 에이전트 창(Codex, Antigravity, pi, opencode, Hermes)에는 베타 표시가 붙습니다.</li>
+        <li><code>pi</code>, <code>opencode</code>, <code>Hermes</code> 창은 아직 마이티 오케스트레이션과 원격 워크스페이스에서 쓸 수 없습니다.</li>
+      </ul>
+    </div>
+
+    <div class="doc-block">
+      <h2 data-i18n="about.oss.title">저장소와 빌드</h2>
+      <p data-i18n="about.oss.desc">소스 코드, 릴레이(Cloudflare Workers / Oracle Cloud 배포 스크립트), 도움말 원문, CI 워크플로는 GitHub 저장소에 있습니다.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px">
+        <a href="https://github.com/athens96/MightyCode" target="_blank" rel="noopener" class="btn btn-primary">GitHub (athens96/MightyCode) ↗</a>
+        <a href="https://github.com/athens96/MightyCode/actions/workflows/native-macos.yml" target="_blank" rel="noopener" class="btn" data-i18n="about.oss.mac">macOS 빌드 ↗</a>
+        <a href="https://github.com/athens96/MightyCode/actions/workflows/native-windows.yml" target="_blank" rel="noopener" class="btn" data-i18n="about.oss.win">Windows 빌드 ↗</a>
+      </div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer-inner">
+      <div style="display:flex;align-items:center;gap:8px">
+        <img src="assets/icon.png" alt="" width="20" height="20" style="border-radius:5px">
+        <span><b>Mighty Code</b></span>
+      </div>
+      <div class="footer-links">
+        <a href="index.html" data-i18n="nav.main">메인</a>
+        <a href="docs.html" data-docs-link data-i18n="nav.docs">문서</a>
+        <a href="about.html" data-i18n="nav.about">About</a>
+        <a href="https://github.com/athens96/MightyCode" target="_blank" rel="noopener">GitHub ↗</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

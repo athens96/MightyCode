@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-i18n="meta.title.main">Mighty Code</title>
+  <meta name="description" content="Claude Code · Codex · Antigravity · pi · opencode · Hermes를 한 창에서 나란히 쓰는 데스크톱 앱입니다.">
+  <link rel="icon" href="assets/icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Top Navigation -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a href="index.html" class="brand">
+        <img src="assets/icon.png" alt="Mighty Code">
+        <span>Mighty Code</span>
+      </a>
+
+      <nav class="nav-links" aria-label="Navigation">
+        <a href="index.html" class="nav-link active" data-i18n="nav.main">메인</a>
+        <a href="docs.html" class="nav-link" data-docs-link data-i18n="nav.docs">문서</a>
+        <a href="about.html" class="nav-link" data-i18n="nav.about">About</a>
+        <a href="https://github.com/athens96/MightyCode" target="_blank" rel="noopener" class="nav-link">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          GitHub
+        </a>
+      </nav>
+
+      <div class="nav-actions">
+        <div class="lang-switch" role="group" aria-label="Language">
+          <button type="button" class="lang-btn active" data-lang-btn="ko">한국어</button>
+          <button type="button" class="lang-btn" data-lang-btn="en">EN</button>
+          <button type="button" class="lang-btn" data-lang-btn="zh">中文</button>
+          <button type="button" class="lang-btn" data-lang-btn="ja">日本語</button>
+        </div>
+
+        <button type="button" class="icon-btn" data-theme-toggle title="Theme" aria-label="Theme">
+          <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+          <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+        <a href="#download" class="btn btn-primary" data-i18n="nav.download">다운로드</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Hero -->
+    <section class="hero">
+      <div class="hero-card">
+        <div class="hero-head">
+          <img src="assets/icon.png" alt="Mighty Code">
+          <div>
+            <h1>Mighty Code</h1>
+            <div class="hero-meta" data-i18n="hero.meta">macOS · Windows · Android</div>
+          </div>
+        </div>
+
+        <p class="hero-desc" data-i18n-html="hero.desc">
+          <b>Claude Code · Codex · Antigravity · pi · opencode · Hermes를 한 창에서 나란히 쓰는 데스크톱 앱입니다.</b><br>
+          프로젝트 폴더(워크스페이스)마다 여러 실행 창을 열고, 창마다 에이전트 CLI를 직접 실행해 대화와 설정을 따로 유지합니다.
+          요청·하위 에이전트·백그라운드 작업을 블록 흐름으로 보여 주는 <b>마이티 보기</b>, 정해진 순서로 일을 진행하는 <b>스타일</b>(오로보로스·클러드 플랜),
+          일을 자기 git worktree를 가진 자식 창에 나눠 맡기는 <b>마이티 오케스트레이션</b>, 다른 컴퓨터의 워크스페이스를 여는 <b>원격 연결(Tailscale)</b>,
+          휴대폰에서 상태를 보고 답하는 <b>휴대폰 원격</b>이 있습니다.
+        </p>
+
+        <div class="hero-actions">
+          <a href="#download" class="btn btn-primary" data-i18n="hero.btn.download">다운로드</a>
+          <a href="docs.html" class="btn" data-docs-link data-i18n="hero.btn.docs">도움말 · 문서</a>
+          <a href="https://github.com/athens96/MightyCode" target="_blank" rel="noopener" class="btn">GitHub ↗</a>
+        </div>
+
+        <!-- Supported AI CLIs: Authentic App Icons & Homepage Links -->
+        <div class="cli-links-grid" aria-label="Supported AI CLIs">
+          <a href="https://code.claude.com" target="_blank" rel="noopener" class="cli-link-card">
+            <span class="cli-mark" style="color:#D97757">
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4.714 15.956 L9.432 13.308 L9.511 13.078 L9.432 12.95 L9.201 12.95 L8.412 12.902 L5.716 12.829 L3.379 12.732 L1.114 12.61 L0.543 12.489 L0.009 11.785 L0.064 11.432 L0.543 11.111 L1.229 11.171 L2.747 11.275 L5.024 11.432 L6.675 11.53 L9.122 11.785 L9.511 11.785 L9.565 11.627 L9.432 11.53 L9.329 11.432 L6.973 9.836 L4.423 8.148 L3.087 7.176 L2.365 6.684 L2.001 6.223 L1.843 5.215 L2.498 4.493 L3.379 4.553 L3.603 4.614 L4.496 5.3 L6.402 6.776 L8.892 8.609 L9.256 8.913 L9.402 8.809 L9.42 8.737 L9.256 8.463 L7.902 6.017 L6.457 3.527 L5.813 2.495 L5.643 1.876 C5.583 1.621 5.54 1.409 5.54 1.147 L6.287 0.134 L6.7 0 L7.695 0.134 L8.114 0.498 L8.734 1.913 L9.735 4.141 L11.29 7.17 L11.745 8.069 L11.988 8.901 L12.079 9.156 L12.237 9.156 L12.237 9.01 L12.364 7.304 L12.601 5.209 L12.832 2.514 L12.911 1.755 L13.287 0.844 L14.034 0.352 L14.617 0.631 L15.096 1.317 L15.03 1.761 L14.744 3.612 L14.186 6.515 L13.821 8.457 L14.034 8.457 L14.277 8.215 L15.26 6.909 L16.912 4.845 L17.64 4.025 L18.49 3.121 L19.037 2.69 L20.069 2.69 L20.828 3.819 L20.488 4.985 L19.425 6.332 L18.545 7.474 L17.282 9.174 L16.493 10.534 L16.566 10.643 L16.754 10.625 L19.607 10.018 L21.149 9.738 L22.989 9.423 L23.821 9.811 L23.912 10.206 L23.584 11.013 L21.617 11.499 L19.31 11.961 L15.874 12.774 L15.831 12.805 L15.88 12.865 L17.428 13.011 L18.09 13.047 L19.711 13.047 L22.728 13.272 L23.517 13.794 L23.991 14.432 L23.912 14.917 L22.698 15.537 L21.058 15.148 L17.233 14.237 L15.922 13.909 L15.74 13.909 L15.74 14.019 L16.833 15.087 L18.836 16.897 L21.344 19.228 L21.471 19.805 L21.15 20.26 L20.81 20.212 L18.606 18.554 L17.756 17.807 L15.831 16.186 L15.704 16.186 L15.704 16.356 L16.147 17.006 L18.49 20.527 L18.612 21.608 L18.442 21.96 L17.835 22.173 L17.167 22.051 L15.795 20.127 L14.38 17.959 L13.239 16.016 L13.099 16.095 L12.425 23.35 L12.109 23.721 L11.381 24 L10.774 23.539 L10.452 22.792 L10.774 21.316 L11.162 19.392 L11.478 17.862 L11.763 15.961 L11.933 15.33 L11.921 15.288 L11.781 15.306 L10.349 17.273 L8.169 20.218 L6.445 22.063 L6.032 22.227 L5.316 21.857 L5.382 21.195 L5.783 20.606 L8.169 17.57 L9.608 15.688 L10.537 14.602 L10.531 14.444 L10.476 14.444 L4.138 18.56 L3.008 18.706 L2.523 18.25 L2.583 17.504 L2.814 17.261 L4.721 15.949 Z"/></svg>
+            </span>
+            <span class="cli-link-info">
+              <b>Claude Code</b>
+              <small>code.claude.com ↗</small>
+            </span>
+          </a>
+
+          <a href="https://github.com/openai/codex" target="_blank" rel="noopener" class="cli-link-card">
+            <span class="cli-mark" style="color:#10A37F">
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M22.282 9.821 C22.825 8.186 22.637 6.397 21.766 4.91 C20.457 2.632 17.826 1.46 15.256 2.01 C13.808 0.4 11.611 -0.317 9.492 0.131 C7.373 0.579 5.653 2.123 4.981 4.182 C3.293 4.528 1.836 5.585 0.983 7.082 C-0.34 9.357 -0.04 12.227 1.726 14.178 C1.181 15.812 1.367 17.602 2.237 19.089 C3.547 21.369 6.18 22.541 8.751 21.989 C9.895 23.277 11.538 24.01 13.26 24 C15.894 24.002 18.227 22.302 19.032 19.794 C20.719 19.447 22.176 18.391 23.029 16.894 C24.337 14.623 24.035 11.769 22.282 9.821 Z M13.26 22.429 C12.209 22.431 11.19 22.062 10.384 21.388 L10.525 21.308 L15.304 18.55 C15.546 18.408 15.695 18.149 15.696 17.869 L15.696 11.132 L17.716 12.3 C17.737 12.31 17.751 12.33 17.754 12.352 L17.754 17.935 C17.749 20.415 15.74 22.424 13.26 22.429 Z M3.599 18.304 C3.072 17.393 2.883 16.326 3.065 15.29 L3.207 15.375 L7.99 18.134 C8.231 18.275 8.529 18.275 8.77 18.134 L14.613 14.765 L14.613 17.097 C14.612 17.122 14.6 17.145 14.58 17.159 L9.74 19.95 C7.589 21.189 4.842 20.452 3.599 18.304 Z M2.341 7.896 C2.872 6.979 3.71 6.281 4.706 5.923 L4.706 11.6 C4.703 11.879 4.851 12.139 5.094 12.277 L10.909 15.631 L8.889 16.799 C8.866 16.811 8.84 16.811 8.818 16.799 L3.987 14.013 C1.841 12.769 1.105 10.023 2.341 7.872 Z M18.937 11.751 L13.104 8.364 L15.119 7.2 C15.141 7.188 15.168 7.188 15.19 7.2 L20.02 9.991 C21.528 10.861 22.398 12.523 22.253 14.258 C22.108 15.993 20.975 17.488 19.344 18.096 L19.344 12.418 C19.335 12.14 19.181 11.886 18.937 11.751 Z M20.948 8.728 L20.806 8.643 L16.032 5.861 C15.79 5.719 15.489 5.719 15.247 5.861 L9.409 9.23 L9.409 6.897 C9.406 6.873 9.417 6.85 9.437 6.836 L14.268 4.049 C15.779 3.179 17.657 3.26 19.088 4.258 C20.518 5.256 21.243 6.99 20.948 8.709 Z M8.306 12.863 L6.287 11.699 C6.266 11.687 6.252 11.666 6.248 11.643 L6.248 6.074 C6.251 4.33 7.26 2.745 8.84 2.005 C10.419 1.266 12.283 1.506 13.624 2.621 L13.482 2.701 L8.704 5.459 C8.462 5.601 8.313 5.86 8.311 6.14 Z M9.404 10.498 L12.006 8.998 L14.613 10.498 L14.613 13.497 L12.016 14.997 L9.409 13.497 Z"/></svg>
+            </span>
+            <span class="cli-link-info">
+              <b>Codex CLI</b>
+              <small>openai/codex ↗</small>
+            </span>
+          </a>
+
+          <a href="https://antigravity.google" target="_blank" rel="noopener" class="cli-link-card">
+            <span class="cli-mark" style="color:#4285F4">
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11.04 19.32 C11.68 20.78 12 22.34 12 24 C12 22.34 12.31 20.78 12.93 19.32 C13.57 17.86 14.43 16.59 15.51 15.51 C16.59 14.43 17.86 13.58 19.32 12.96 C20.78 12.32 22.34 12 24 12 C22.34 12 20.78 11.69 19.32 11.07 C17.899 10.457 16.606 9.582 15.51 8.49 C14.418 7.394 13.543 6.101 12.93 4.68 C12.31 3.22 12 1.66 12 0 C12 1.66 11.68 3.22 11.04 4.68 C10.42 6.14 9.57 7.41 8.49 8.49 C7.394 9.582 6.101 10.457 4.68 11.07 C3.22 11.69 1.66 12 0 12 C1.66 12 3.22 12.32 4.68 12.96 C6.14 13.58 7.41 14.43 8.49 15.51 C9.57 16.59 10.42 17.86 11.04 19.32 Z"/></svg>
+            </span>
+            <span class="cli-link-info">
+              <b>Antigravity</b>
+              <small>antigravity.google ↗</small>
+            </span>
+          </a>
+
+          <a href="https://github.com/badlogic/pi-mono" target="_blank" rel="noopener" class="cli-link-card">
+            <span class="cli-mark" style="color:#8B7CF6">
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 4.5 L21 4.5 L21 7.5 L17.5 7.5 L17.5 17 C17.5 18.2 18 18.6 19.2 18.6 L20.5 18.6 L20.5 21.5 L18.8 21.5 C15.6 21.5 14.5 19.9 14.5 17.2 L14.5 7.5 L9.6 7.5 L9.6 21 L6.6 21 L6.6 7.5 L3 7.5 Z"/></svg>
+            </span>
+            <span class="cli-link-info">
+              <b>pi</b>
+              <small>badlogic/pi-mono ↗</small>
+            </span>
+          </a>
+
+          <a href="https://opencode.ai" target="_blank" rel="noopener" class="cli-link-card">
+            <span class="cli-mark" style="color:#8A8F98">
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 3 L21 3 L21 21 L3 21 Z M7 7 L7 13 L17 13 L17 7 Z"/></svg>
+            </span>
+            <span class="cli-link-info">
+              <b>opencode</b>
+              <small>opencode.ai ↗</small>
+            </span>
+          </a>
+
+          <a href="https://hermes-agent.nousresearch.com" target="_blank" rel="noopener" class="cli-link-card">
+            <span class="cli-mark" style="color:#D9A441">
+              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 6 L10 6 L10 10.5 L14 10.5 L14 6 L17 6 L17 21 L14 21 L14 13.5 L10 13.5 L10 21 L7 21 Z M1 3 L6 5.5 L6 9.5 L3.5 9.5 Z M23 3 L18 5.5 L18 9.5 L20.5 9.5 Z"/></svg>
+            </span>
+            <span class="cli-link-info">
+              <b>Hermes</b>
+              <small>nousresearch.com ↗</small>
+            </span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Screen Viewer -->
+      <div class="viewer-card">
+        <div class="viewer-tabs" role="tablist">
+          <button type="button" class="viewer-tab active" data-view-tab="overview" data-i18n="tab.overview">화면 구성</button>
+          <button type="button" class="viewer-tab" data-view-tab="mighty" data-i18n="tab.mighty">마이티 보기</button>
+          <button type="button" class="viewer-tab" data-view-tab="delegation" data-i18n="tab.delegation">마이티 오케스트레이션</button>
+          <button type="button" class="viewer-tab" data-view-tab="plan" data-i18n="tab.plan">스타일과 계획 카드</button>
+          <button type="button" class="viewer-tab" data-view-tab="dashboard" data-i18n="tab.dashboard">작업 현황</button>
+          <button type="button" class="viewer-tab" data-view-tab="mobile" data-i18n="tab.mobile">휴대폰 원격</button>
+        </div>
+
+        <div class="viewer-pane active" data-view-pane="overview">
+          <img class="t-dark" data-lang-img="overview-dark.webp" src="ko/img/overview-dark.webp" alt="화면 구성">
+          <img class="t-light" data-lang-img="overview-light.webp" src="ko/img/overview-light.webp" alt="화면 구성">
+          <div class="viewer-foot">
+            <span data-i18n-html="cap.overview"><b>화면 구성:</b> 사이드바에서 워크스페이스와 실행 창을 고르고, 오른쪽 작업 영역에 에이전트·터미널·파일·브라우저 창을 탭이나 분할로 배치합니다.</span>
+            <code>⌘O · ⌘N · ⌘T · ⇧⌘E</code>
+          </div>
+        </div>
+
+        <div class="viewer-pane" data-view-pane="mighty">
+          <img class="t-dark" data-lang-img="agent-mighty-overview-dark.webp" src="ko/img/agent-mighty-overview-dark.webp" alt="마이티 보기">
+          <img class="t-light" data-lang-img="agent-mighty-overview-light.webp" src="ko/img/agent-mighty-overview-light.webp" alt="마이티 보기">
+          <div class="viewer-foot">
+            <span data-i18n-html="cap.mighty"><b>마이티 보기:</b> 요청 → 그 사이에 일어난 일(하위 에이전트·백그라운드 명령) → 최종 결과와 바꾼 줄을 블록 흐름으로 보여 줍니다.</span>
+            <code data-i18n="cap.mighty.code">흐름 | 기록 | 파이프라인</code>
+          </div>
+        </div>
+
+        <div class="viewer-pane" data-view-pane="delegation">
+          <img class="t-dark" data-lang-img="delegation-tree-dark.webp" src="ko/img/delegation-tree-dark.webp" alt="마이티 오케스트레이션">
+          <img class="t-light" data-lang-img="delegation-tree-light.webp" src="ko/img/delegation-tree-light.webp" alt="마이티 오케스트레이션">
+          <div class="viewer-foot">
+            <span data-i18n-html="cap.delegation"><b>마이티 오케스트레이션:</b> 자식은 저마다 자기 git worktree와 브랜치(<code>mighty/&lt;자식 id&gt;</code>)에서 일하고, 끝나면 사이드바 카드에서 부모 브랜치에 병합하거나 버립니다.</span>
+            <code>⌘Enter / Ctrl+Enter</code>
+          </div>
+        </div>
+
+        <div class="viewer-pane" data-view-pane="plan">
+          <img class="t-dark" data-lang-img="plan-card-dark.webp" src="ko/img/plan-card-dark.webp" alt="계획 카드">
+          <img class="t-light" data-lang-img="plan-card-light.webp" src="ko/img/plan-card-light.webp" alt="계획 카드">
+          <div class="viewer-foot">
+            <span data-i18n-html="cap.plan"><b>스타일과 계획:</b> 클러드 플랜은 새 요청마다 계획 모드로 시작하고, 계획 카드의 네 가지 답(자동 편집 승인 / 매번 확인 승인 / 수정 요청 / 취소)으로 진행합니다.</span>
+            <code>Ouroboros · Claude Plan</code>
+          </div>
+        </div>
+
+        <div class="viewer-pane" data-view-pane="dashboard">
+          <img class="t-dark" data-lang-img="dashboard-dark.webp" src="ko/img/dashboard-dark.webp" alt="작업 현황">
+          <img class="t-light" data-lang-img="dashboard-light.webp" src="ko/img/dashboard-light.webp" alt="작업 현황">
+          <div class="viewer-foot">
+            <span data-i18n-html="cap.dashboard"><b>작업 현황:</b> 모든 워크스페이스의 실행 창을 상태 순으로 모으고, 실행 중·응답 대기·완료 개수와 계정 사용량을 보여 줍니다.</span>
+            <code>⌘K / Ctrl+K</code>
+          </div>
+        </div>
+
+        <div class="viewer-pane" data-view-pane="mobile">
+          <img class="t-dark" data-lang-img="settings-mobile-dark.webp" src="ko/img/settings-mobile-dark.webp" alt="모바일 리모트">
+          <img class="t-light" data-lang-img="settings-mobile-light.webp" src="ko/img/settings-mobile-light.webp" alt="모바일 리모트">
+          <div class="viewer-foot">
+            <span data-i18n-html="cap.mobile"><b>휴대폰 원격:</b> QR 코드로 휴대폰을 연결해 상태를 보고 승인·질문·계획에 답합니다. 릴레이는 암호문만 전달하며 같은 Tailscale 네트워크면 직접 연결합니다.</span>
+            <code>X25519 · ChaCha20-Poly1305</code>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Download & Install (Version and links are populated dynamically from latest.json) -->
+    <section id="download" class="section">
+      <div class="section-head-row">
+        <h2 class="section-title" data-i18n="dl.title">다운로드와 설치</h2>
+        <span id="dl-version-badge" class="brand-badge">…</span>
+      </div>
+      <p class="section-sub" data-i18n="dl.sub">내 운영체제용 파일을 받습니다. 설치 후 새 버전은 앱 안에서 서명을 확인한 뒤 자동으로 받아 준비합니다.</p>
+
+      <div class="dl-grid">
+        <div class="dl-card">
+          <h3><span>macOS</span> <span class="tag">Apple Silicon</span></h3>
+          <p class="dl-sub" data-i18n="dl.mac.desc">macOS 14 이상. 열고 Mighty Code를 응용 프로그램 폴더로 끌어다 놓습니다.</p>
+          <div class="dl-links">
+            <a class="btn btn-primary" data-dl-asset="macos-dmg" href="https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/" data-i18n="dl.mac.dmg">Mac 앱 (MightyCode-macos.dmg)</a>
+            <a class="btn" data-dl-asset="macos-zip" href="https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/" data-i18n="dl.mac.zip">Mac 앱 (MightyCode-macos.zip)</a>
+          </div>
+          <div><span class="dl-note" data-i18n="dl.mac.badge">Apple 공증 완료 · 보안 경고 없이 열립니다</span></div>
+        </div>
+
+        <div class="dl-card">
+          <h3><span>Windows</span> <span class="tag" data-i18n="dl.win.tag">베타 · x64 / ARM64</span></h3>
+          <p class="dl-sub" data-i18n="dl.win.desc">Windows 10(버전 2004) 이상 또는 Windows 11. 관리자 권한 없이 이 사용자에게만 설치됩니다.</p>
+          <div class="dl-links">
+            <a class="btn btn-primary" data-dl-asset="win-x64-exe" href="https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/" data-i18n="dl.win.x64">Windows 설치 프로그램 (x64)</a>
+            <a class="btn" data-dl-asset="win-arm64-exe" href="https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/" data-i18n="dl.win.arm64">Windows 설치 프로그램 (ARM64)</a>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+              <a class="btn" data-dl-asset="win-x64-zip" href="https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/">zip · x64</a>
+              <a class="btn" data-dl-asset="win-arm64-zip" href="https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/">zip · ARM64</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="dl-card">
+          <h3><span>Android</span> <span class="tag">APK</span></h3>
+          <p class="dl-sub" data-i18n="dl.and.desc">휴대폰에 받아 설치하고 컴퓨터의 설정 → 모바일 리모트에서 QR 코드로 연결합니다.</p>
+          <div class="dl-links">
+            <a class="btn btn-primary" data-dl-asset="android-apk" href="https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/android/MightyCode-android.apk" data-i18n="dl.and.apk">Android 앱 (MightyCode-android.apk)</a>
+            <a class="btn" href="docs.html#phone" data-docs-hash="#phone" data-i18n="dl.and.guide">휴대폰 원격 도움말 →</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Core Features Summary -->
+    <section class="section">
+      <h2 class="section-title" data-i18n="feat.title" style="margin-bottom:6px">주요 기능</h2>
+      <p class="section-sub" data-i18n="feat.sub">각 기능의 자세한 사용법은 문서(도움말)에 있습니다.</p>
+
+      <div class="feature-grid">
+        <div class="feature-box">
+          <h3><span data-i18n="feat.f1.title">에이전트 창과 마이티 보기</span> <a href="docs.html#agent-pane" data-docs-hash="#agent-pane" class="tag">03</a></h3>
+          <p data-i18n="feat.f1.desc">실행 중에도 다음 요청을 대기열(창당 16개)에 넣을 수 있습니다. 모든 에이전트 창은 요청 → 그 사이에 일어난 일 → 최종 결과를 블록 흐름으로 보여 주고, 흐름·기록·파이프라인 보기로 전환합니다.</p>
+        </div>
+
+        <div class="feature-box">
+          <h3><span data-i18n="feat.f2.title">마이티 오케스트레이션</span> <a href="docs.html#delegation" data-docs-hash="#delegation" class="tag">06</a></h3>
+          <p data-i18n="feat.f2.desc">에이전트 창이 일하는 동안 다른 일을 옆의 자식 창에 맡깁니다(⌘Enter 또는 delegate 도구). 자식은 저마다 자기 git worktree(mighty/&lt;자식 id&gt;)에서 일하고, 끝나면 부모 브랜치에 병합하거나 버립니다. 자식은 Claude, Codex, Antigravity로 실행할 수 있습니다.</p>
+        </div>
+
+        <div class="feature-box">
+          <h3><span data-i18n="feat.f3.title">스타일과 계획 카드</span> <a href="docs.html#styles" data-docs-hash="#styles" class="tag">04</a></h3>
+          <p data-i18n="feat.f3.desc">Claude 창에서 입력창 위 메뉴로 오로보로스(Ouroboros)와 클러드 플랜 스타일을 고릅니다. 클러드 플랜은 새 요청마다 계획 모드로 시작하며, 계획 카드와 데스크톱 펫에서 승인·수정 요청·취소를 고릅니다.</p>
+        </div>
+
+        <div class="feature-box">
+          <h3><span data-i18n="feat.f4.title">승인·질문·로그인 복구</span> <a href="docs.html#approvals" data-docs-hash="#approvals" class="tag">05</a></h3>
+          <p data-i18n="feat.f4.desc">권한 밖의 일은 승인 카드로, 질문은 선택 요청 카드로 묻습니다. Antigravity는 거절한 작업을 턴 끝에 모아 묻고, 허용하면 같은 대화를 이어갑니다. CLI 로그인이 만료되면 복구 카드에서 다시 로그인하고 실패한 요청을 다시 보냅니다.</p>
+        </div>
+
+        <div class="feature-box">
+          <h3><span data-i18n="feat.f5.title">터미널·파일·브라우저 창</span> <a href="docs.html#terminal-files-browser" data-docs-hash="#terminal-files-browser" class="tag">07</a></h3>
+          <p data-i18n="feat.f5.desc">터미널 창(⌘T)은 워크스페이스 폴더에서 열리는 실제 터미널입니다(Mac은 Ghostty, Windows는 PowerShell). 파일 창(⇧⌘E)은 소스·Markdown·이미지·PDF를 미리 보고 변경점을 비교합니다.</p>
+        </div>
+
+        <div class="feature-box">
+          <h3><span data-i18n="feat.f6.title">원격 연결(Tailscale)과 휴대폰 원격</span> <a href="docs.html#phone" data-docs-hash="#phone" class="tag">09 · 10</a></h3>
+          <p data-i18n="feat.f6.desc">Mac이나 Windows 두 대를 Tailscale로 이어 다른 컴퓨터의 워크스페이스를 열거나, QR 코드로 휴대폰을 연결해 종단 간 암호화(릴레이 또는 Tailscale 직접 연결)로 상태를 보고 답합니다.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer-inner">
+      <div style="display:flex;align-items:center;gap:8px">
+        <img src="assets/icon.png" alt="" width="20" height="20" style="border-radius:5px">
+        <span><b>Mighty Code</b></span>
+      </div>
+      <div class="footer-links">
+        <a href="index.html" data-i18n="nav.main">메인</a>
+        <a href="docs.html" data-docs-link data-i18n="nav.docs">문서</a>
+        <a href="about.html" data-i18n="nav.about">About</a>
+        <a href="https://github.com/athens96/MightyCode" target="_blank" rel="noopener">GitHub ↗</a>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
