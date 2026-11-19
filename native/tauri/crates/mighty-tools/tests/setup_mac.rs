@@ -18,7 +18,7 @@ use mighty_tools::setup::probe::{
     self, CommandReader, Finder, SetupFirstRun, SetupProbeResult, SetupProbeState, SetupProber, SetupRowState, SetupRows, VersionReader,
 };
 use mighty_tools::setup::screen::{Gate, InstallStart, SetupScreen, WatchTick};
-use mighty_tools::setup::{files, plan};
+use mighty_tools::setup::plan;
 
 /// Every item the Mac lists, in the catalog's order: the agent CLIs, the command line tools, Homebrew, Node, Bun, uv, the Claude
 /// plugins, gstack, Tailscale, gh and glab.
@@ -249,7 +249,7 @@ async fn the_mac_script_parses_as_bash() {
     assert_eq!(steps.len(), MAC_ITEMS.len() - 1, "every Mac item but the page");
     let folder = common::temp("mac-script");
     let script = mac::render(&steps, &labels(), "/Users/it's me", "/tmp/a'b/started", "/tmp/a'b/done");
-    let file = files::write_shell_script(&script, &folder).unwrap();
+    let file = mighty_tools::setup::files::write_shell_script(&script, &folder).unwrap();
     assert!(file.extension().is_some_and(|e| e == "command") && std::fs::read(&file).unwrap().starts_with(b"#!/bin/bash"));
     let host = common::processes();
     let arguments = ["-n".to_string(), file.to_string_lossy().into_owned()];
