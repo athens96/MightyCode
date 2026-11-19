@@ -272,9 +272,12 @@ fn agent_facts(model: &ComponentsModel<'_>, item: Option<&SetupItem>, row: &Acco
         Facts { words, tone, problem, turning, need: needs.first().copied() }
     };
     match state {
-        Some(state @ (SetupRowState::Missing | SetupRowState::Failed | SetupRowState::Installing | SetupRowState::Checking)) => {
+        // While the probe is still looking, the account already known says more than "checking"; it says checking itself when it
+        // knows nothing either.
+        Some(state @ (SetupRowState::Missing | SetupRowState::Failed | SetupRowState::Installing)) => {
             return setup(state);
         }
+        Some(SetupRowState::Checking) if checking => return setup(SetupRowState::Checking),
         Some(SetupRowState::Attention) => return setup(SetupRowState::Attention),
         _ => {}
     }
