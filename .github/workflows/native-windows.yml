@@ -12,10 +12,12 @@ permissions:
   contents: read
 jobs:
   changes:
-    # Whether this run builds and tests Windows: scripts/ci-changes.sh (skipped when only Mac or relay files changed).
+    # Whether this run builds and tests Windows (skipped when only Mac or relay files changed) and runs the Rust checks
+    # (rust: pushes that change what the Rust workspace builds or reads): scripts/ci-changes.sh.
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.decide.outputs.run }}
+      rust: ${{ steps.decide.outputs.rust }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,6 +29,52 @@ jobs:
           MESSAGE: ${{ github.event.head_commit.message }}
           FULL: ${{ inputs.full }}
         run: bash scripts/ci-changes.sh windows
+
+  rust:
+    # The shared Rust crates' format, lints and tests on Windows, the gate main's pushes had not had (native-tauri.yml runs the
+    # same checks on pull requests only). A debug build of its own, beside the release build below, on x64 alone: the
+    # crates' logic does not differ by architecture, and the arm64 release build still compiles everything. Its twin is
+    # native-macos.yml's macos-rust.
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    name: Rust checks (Windows)
+    runs-on: windows-2025
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: native/tauri
+    env:
+      CARGO_TERM_COLOR: always
+      # scripts/env.ps1 imports vcvars64 on the development PC; the runner's Visual Studio is found by rustc itself.
+      MIGHTY_TAURI_ENV: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/tauri -> target
+          key: windows-rust-checks
+      - name: Rust — format
+        run: |
+          cargo fmt --all --check
+          if ($LASTEXITCODE -ne 0) { throw 'cargo fmt --check failed' }
+      - name: Rust — clippy
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { throw 'cargo clippy failed' }
+      - name: Rust — tests
+        # Every test target runs even after one fails, so one red run names every failure. The --skip names are tests that hold
+        # a wall-clock bound and fail on a loaded runner with no code change behind them: skipped in CI only and still run by
+        # every local cargo test, as the Swift tests' CIRunner did (the same list in native-macos.yml and native-tauri.yml).
+        run: |
+          cargo test --workspace --no-fail-fast -- `
+            --skip install_on_quit_waits_for_the_app_but_not_for_its_headless_children `
+            --skip a_wake_calls_back_until_the_subscription_ends `
+            --skip a_windows_host_refuses_codex_and_antigravity_until_the_switch_is_on
+          if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
 
   windows:
     needs: changes

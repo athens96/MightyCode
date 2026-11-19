@@ -20,11 +20,13 @@ env:
   MAC_ZIP_ARTIFACT: ${{ (vars.MIGHTY_MAC_NOTARIZE == '1' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')) && 'MightyCode-native-macos-unsigned' || 'MightyCode-native-macos' }}
 jobs:
   changes:
-    # Whether this run builds and tests the Mac app, and whether it captures the help screenshots
-    # (release commits and full dispatches only): scripts/ci-changes.sh.
+    # Whether this run builds and tests the Mac app, whether it runs the Rust checks (rust: pushes that change what the Rust
+    # workspace builds or reads) and whether it captures the help screenshots (release commits and full dispatches only):
+    # scripts/ci-changes.sh.
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.decide.outputs.run }}
+      rust: ${{ steps.decide.outputs.rust }}
       help: ${{ steps.decide.outputs.help }}
     steps:
       - uses: actions/checkout@v4
@@ -77,6 +79,60 @@ jobs:
       # exported) no longer gate a release. The Rust app's tests, smokes and delegation records (S1-S3 through
       # delegation-record.py) run in native-tauri.yml; the Swift sources stay in native/macos only as the oracle
       # tools/parity-mac compiles from.
+
+  macos-rust:
+    # The shared Rust crates' format, lints and tests on the Mac, the gate main's pushes had not had (native-tauri.yml runs the
+    # same checks on pull requests only); a debug build of its own beside the release build. The same runner rule as
+    # macos-tests (ci-changes.sh never sets rust for a pull request, so a pull request's code never runs here either), and the
+    # self-hosted Mac's own Rust toolchain as the macos job uses it. cargo test runs no app window. Its twin is
+    # native-windows.yml's rust job. After the macos job (whether it passed or not): on the one self-hosted Mac the release build
+    # goes first, so macos-smoke and notarize-macos on GitHub's runners are not held behind these checks.
+    needs: [changes, macos]
+    if: ${{ !cancelled() && needs.changes.outputs.rust == 'true' }}
+    name: Rust checks (macOS)
+    runs-on: ${{ fromJSON((github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.hosted != true) && '["self-hosted", "mighty-mac"]' || '"macos-latest"') }}
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        if: runner.environment == 'github-hosted'
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        if: runner.environment == 'github-hosted'
+        with:
+          workspaces: native/tauri -> target
+          key: macos-rust-checks
+      - name: The self-hosted Mac's Rust toolchain
+        if: runner.environment != 'github-hosted'
+        run: |
+          cargo --version && rustc --version || { echo "::error::no Rust toolchain on this runner (install rustup there, or dispatch with hosted)"; exit 1; }
+          rustc -vV | grep -qx 'host: aarch64-apple-darwin' || { echo "::error::the self-hosted Mac's Rust is not for arm64"; exit 1; }
+          cargo fmt --version && cargo clippy --version || { echo "::error::the self-hosted Mac's Rust has no rustfmt or clippy (rustup component add rustfmt clippy)"; exit 1; }
+      - name: libghostty for the Mac's terminal (the Mac crate's build.rs links it with MIGHTY_MAC_NATIVE=1, as the release build)
+        run: |
+          xcframework="$(bash scripts/fetch-ghosttykit.sh)"
+          echo "MIGHTY_MAC_NATIVE=1" >> "$GITHUB_ENV"
+          echo "MIGHTY_GHOSTTY_XCFRAMEWORK=$xcframework" >> "$GITHUB_ENV"
+      - name: Rust — format
+        working-directory: native/tauri
+        run: cargo fmt --all --check
+      - name: Rust — clippy
+        working-directory: native/tauri
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Rust — tests
+        working-directory: native/tauri
+        # Every test target runs even after one fails, so one red run names every failure. The --skip names are tests that hold
+        # a wall-clock bound and fail on a loaded runner (or this busy Mac) with no code change behind them: skipped in CI only and
+        # still run by every local cargo test, as the Swift tests' CIRunner did (the same list in native-windows.yml and
+        # native-tauri.yml).
+        run: |
+          cargo test --workspace --no-fail-fast -- \
+            --skip install_on_quit_waits_for_the_app_but_not_for_its_headless_children \
+            --skip a_wake_calls_back_until_the_subscription_ends \
+            --skip a_windows_host_refuses_codex_and_antigravity_until_the_switch_is_on
 
   macos:
     # 0.5: builds and packages the Rust + Tauri app (native/tauri, scripts/build-tauri-macos.sh) in the 0.4.x bundle, so an installed
