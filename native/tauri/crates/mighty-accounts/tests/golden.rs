@@ -70,6 +70,9 @@ impl AccountActions for Nothing {
 
 #[test]
 fn the_accounts_box_matches_cs_while_every_status_is_checking() {
+    // Korean before the rows are made: their status words are read when the model is built, not when it is drawn (a runner whose
+    // system language is English would read them in English).
+    mighty_run::strings::set_language("ko");
     let locale = Locale::new("ko");
     let title = sections::title_of(&locale, sections::CLI_ACCOUNTS).unwrap();
     let rows = AccountsModel::from_statuses(&Default::default())
