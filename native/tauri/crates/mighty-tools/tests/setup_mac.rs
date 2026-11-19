@@ -14,11 +14,11 @@ use mighty_platform::setup::FakeSetupFiles;
 use mighty_run::strings;
 use mighty_tools::setup::catalog::{SetupCatalog, SetupGroup, SetupPlatform, SetupProbe};
 use mighty_tools::setup::mac::{self, MacScriptLabels};
+use mighty_tools::setup::plan;
 use mighty_tools::setup::probe::{
     self, CommandReader, Finder, SetupFirstRun, SetupProbeResult, SetupProbeState, SetupProber, SetupRowState, SetupRows, VersionReader,
 };
 use mighty_tools::setup::screen::{Gate, InstallStart, SetupScreen, WatchTick};
-use mighty_tools::setup::plan;
 
 /// Every item the Mac lists, in the catalog's order: the agent CLIs, the command line tools, Homebrew, Node, Bun, uv, the Claude
 /// plugins, gstack, Tailscale, gh and glab.
