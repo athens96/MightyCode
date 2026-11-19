@@ -1,11 +1,12 @@
 //! 앱 업데이트 (C# `BuildAppUpdateSection` and `RenderAppUpdateSection`, MainWindow.AppUpdate.cs:104-255; M/AppUpdateSettingsView.swift)
 //! over mighty-core's `app_update_view::describe` of the live coordinator (app_update.rs). Owner: W9-C.
 //!
-//! The version beside its label; the typed address (with its hint, or the build's address line) or the built-in address under its
-//! label; the automatic switch with its description; the 10pt signature note; a notice row a build without a key shows the state in;
-//! the state (the ring while checking, staging or installing, the 140-wide bar while downloading, the words) beside the one button; the
-//! failure row (a kept error beside a staged update, the retry promise); the release notes. Rows C# collapses are hidden (the page drops
-//! them). The box is built again on every change of the update (app_update.rs `Seams::changed`).
+//! The version beside its label (the one place Settings shows it); the automatic switch with its description; a notice row a build
+//! without a key shows the state in; the state (the ring while checking, staging or installing, the 140-wide bar while downloading, the
+//! words) beside the one button; the failure row (a kept error beside a staged update, the retry promise); the release notes; then,
+//! folded under 고급 since they are a developer's, the typed address (with its hint, or the build's address line) or the built-in
+//! address under its label and the 10pt signature note — open the first time when an address was typed. Rows C# collapses are hidden
+//! (the page drops them). The box is built again on every change of the update (app_update.rs `Seams::changed`).
 //!
 //! The button checks, downloads, cancels or restarts only where the build may change the machine (plan §4: a development build or a
 //! `--read-only` launch never writes `<data>\updates`); elsewhere it is drawn disabled.
@@ -17,6 +18,7 @@ use mighty_core::design_tokens::{Token, metrics};
 use mighty_native::kit::{ControlSize, TextStyle};
 use mighty_native::ui::{Content, El, Grid, Kind, Track, Ui};
 
+use super::folded;
 use crate::host::Host;
 
 /// C#'s automation ids.
@@ -66,33 +68,6 @@ pub fn section(host: &Arc<Host>, ui: &mut Ui) -> El {
     let label = ui.settings_text(text(&locale, "CurrentVersionLabel"), TextStyle::default());
     rows.add(ui.settings_labeled(label, ui.settings_text(version, TextStyle::size(13.0).ink(Token::Ink2).selectable()), false));
 
-    // The typed address, saved as it is typed (C#'s TextChanged), with its hint or the build's address line under it.
-    let to = host.clone();
-    let address = ui
-        .settings_field(El::text_box(typed_url.unwrap_or_default()), 12.0)
-        .placeholder(text(&locale, "ManifestUrlPlaceholder"))
-        .aid(ADDRESS_ID)
-        .enabled(view.address_field_enabled && view.section_enabled)
-        .on_text(move |typed| {
-            let _ = to.view().update(|state| state.app_update_manifest_url_override = (!typed.is_empty()).then_some(typed));
-        });
-    let hint = view.built_in_address_line.clone().unwrap_or_else(|| text_in(&locale, crate::app_update::words(), "ManifestUrlHint"));
-    let typed = El::stack(false, metrics::SPACING_SM, vec![address, ui.settings_text(hint, TextStyle::size(11.0).ink(Token::Ink2))]);
-    rows.add(typed).visible = view.section_enabled && view.address_field_enabled;
-    // The build's own address, under its label (screens/10-settings-about-*.webp).
-    let built_in = update.as_ref().and_then(|u| u.core.coordinator.built_in_manifest_url().map(str::to_string)).unwrap_or_default();
-    let mut address_text = TextStyle::size(11.0).ink(Token::Ink2).selectable();
-    address_text.mono = true;
-    let built_in = El::stack(
-        false,
-        metrics::SPACING_XS,
-        vec![
-            ui.settings_text(locale.get("settings.appUpdate.manifestUrlAddressLabel"), TextStyle::default()),
-            ui.settings_text(built_in, address_text),
-        ],
-    );
-    rows.add(built_in).visible = view.section_enabled && !view.address_field_enabled;
-
     // The automatic switch, what it does under its label.
     let toggle_label = text(&locale, "AutoUpdateToggle");
     let to = host.clone();
@@ -102,7 +77,6 @@ pub fn section(host: &Arc<Host>, ui: &mut Ui) -> El {
     });
     let words = ui.settings_titled(&toggle_label, text(&locale, "AutoUpdateDescription"));
     rows.add(ui.settings_labeled(words, switch, true)).visible = view.section_enabled;
-    rows.add(ui.settings_text(view.signature_notice.clone(), TextStyle::size(10.0).ink(Token::Ink2))).visible = view.section_enabled;
 
     // The state's ink: accent and medium for a new version, the wait ink for a failure or a build that cannot check, the primary ink
     // while it works, the quiet ink otherwise.
@@ -155,6 +129,38 @@ pub fn section(host: &Arc<Host>, ui: &mut Ui) -> El {
 
     let notes = view.notes.as_deref().map(|notes| first_lines(notes, NOTES_LINES)).unwrap_or_default();
     rows.add(ui.settings_text(notes, TextStyle::size(11.0).ink(Token::Ink2).selectable())).visible = view.notes.is_some();
+
+    // 고급, folded: the typed address, saved as it is typed (C#'s TextChanged), with its hint or the build's address line under it, or
+    // the build's own address under its label (screens/10-settings-about-*.webp); then the signature note.
+    let typed_before = typed_url.as_deref().is_some_and(|url| !url.is_empty());
+    let to = host.clone();
+    let address = ui
+        .settings_field(El::text_box(typed_url.unwrap_or_default()), 12.0)
+        .placeholder(text(&locale, "ManifestUrlPlaceholder"))
+        .aid(ADDRESS_ID)
+        .enabled(view.address_field_enabled && view.section_enabled)
+        .on_text(move |typed| {
+            let _ = to.view().update(|state| state.app_update_manifest_url_override = (!typed.is_empty()).then_some(typed));
+        });
+    let hint = view.built_in_address_line.clone().unwrap_or_else(|| text_in(&locale, crate::app_update::words(), "ManifestUrlHint"));
+    let typed = El::stack(false, metrics::SPACING_SM, vec![address, ui.settings_text(hint, TextStyle::size(11.0).ink(Token::Ink2))])
+        .visible(view.address_field_enabled);
+    let built_in = update.as_ref().and_then(|u| u.core.coordinator.built_in_manifest_url().map(str::to_string)).unwrap_or_default();
+    let mut address_text = TextStyle::size(11.0).ink(Token::Ink2).selectable();
+    address_text.mono = true;
+    let built_in = El::stack(
+        false,
+        metrics::SPACING_XS,
+        vec![
+            ui.settings_text(locale.get("settings.appUpdate.manifestUrlAddressLabel"), TextStyle::default()),
+            ui.settings_text(built_in, address_text),
+        ],
+    )
+    .visible(!view.address_field_enabled);
+    let signature = ui.settings_text(view.signature_notice.clone(), TextStyle::size(10.0).ink(Token::Ink2));
+    let body = El::stack(false, metrics::SPACING_MD, vec![typed, built_in, signature]);
+    let advanced = folded(ui, "app-update-advanced", typed_before, locale.get("settings.advancedTitle"), body);
+    rows.add(advanced).visible = view.section_enabled;
     rows.finish()
 }
 

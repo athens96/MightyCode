@@ -789,11 +789,32 @@ async fn the_host_serves_only_shared_agent_panes() {
     let info =
         |mode: &str, provider: &str| MirrorPaneInfo { workspace_id: "ws".into(), permission_mode: mode.into(), provider: provider.into() };
     assert_eq!(RemoteHost::mirror_refusal(&info("manual", "gemini"), false, true), Some(strings::host_agent_needs_full_access("gemini")));
+    assert_eq!(
+        RemoteHost::mirror_refusal(&info("manual", "gemini"), false, false),
+        Some(strings::mac_host_agent_needs_full_access("gemini")),
+        "nothing confines Antigravity on a Mac either"
+    );
     assert!(
         RemoteHost::mirror_refusal(&info("manual", "codex"), false, false).is_none()
             && RemoteHost::mirror_refusal(&info("acceptEdits", "claude"), false, true).is_none(),
-        "Antigravity on a Windows host waits too; a Mac host confines them, and Claude keeps its modes"
+        "a Mac host's Codex runs in its sandbox, and Claude keeps its modes"
     );
+    // The answers carry a refused pane's run on as a send would: an allow, an answer and a plan's decision wait for the switch too
+    // (a decline does not).
+    let codex_answers = [
+        ("permission", r#"{"requestId":"perm-6","runId":"pane-2","allow":true}"#.to_string()),
+        ("questions", node("questions.json").to_string()),
+        ("plan", node("plan.json").to_string()),
+    ];
+    for (route, answer) in &codex_answers {
+        let refused = ask(port, &key, Method::Post, &format!("/v2/mirror/sessions/pane-2/{route}"), Some(answer)).await;
+        assert!(
+            refused.0 == 403 && error_of(&refused) == strings::host_agent_needs_full_access("codex"),
+            "a Windows host's Codex pane takes no {route} answer without the switch: {refused:?}"
+        );
+    }
+    let decline = r#"{"requestId":"perm-7","runId":"pane-2","allow":false}"#;
+    assert_eq!(ask(port, &key, Method::Post, "/v2/mirror/sessions/pane-2/permission", Some(decline)).await.0, 200, "a decline");
     let always_body = r#"{"requestId":"perm-1","runId":"pane-1","allow":true,"always":true}"#;
     let always = ask(port, &key, Method::Post, "/v2/mirror/sessions/pane-1/permission", Some(always_body)).await;
     assert!(always.0 == 403 && error_of(&always) == get("remote.host.error.antigravityAlways"), "항상 허용 waits for the switch");

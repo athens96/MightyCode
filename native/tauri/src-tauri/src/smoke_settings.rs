@@ -632,8 +632,7 @@ mod tests {
     use super::*;
 
     /// Review L7: the settingsSections order is read off the page's headings: categories showing their boxes in `SettingsGroups`'
-    /// order pass (Windows' CLI tab puts CLI Update last, as C# does); a heading dropped, shown twice or out of its category's order
-    /// fails `smoke_run`.
+    /// order pass; a heading dropped, shown twice or out of its category's order fails `smoke_run`.
     /// The leak scan reads the words a push shows (texts, labels, headers, placeholders, a pop-up's items) and not its ids, inks or
     /// automation ids; a key among them fails it, as do fewer than 50 strings.
     #[test]
@@ -679,8 +678,8 @@ mod tests {
         dropped.last_mut().unwrap().pop();
         assert!(!check(dropped), "a heading dropped");
         let mut swapped = groups.clone();
-        let cli = swapped.iter_mut().find(|g| g.len() == 4).expect("the CLI tab's four boxes");
-        cli.swap(0, 3);
+        let cli = swapped.iter_mut().find(|g| g.len() == 2 && g.iter().all(|t| registered.contains(t))).expect("the CLI tab's two boxes");
+        cli.swap(0, 1);
         assert!(!check(swapped), "out of its category's order");
         let mut twice = groups.clone();
         twice[0].push(registered[1].clone());

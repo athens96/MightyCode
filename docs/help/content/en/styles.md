@@ -47,7 +47,7 @@ Besides the bundled styles you can use styles from files.
 2. A new style must be reviewed once. Use {{ui:settings.styles.viewButton}} to check its source, the tools it allows automatically, its install command and every button.
 3. If it looks right, click {{ui:settings.styles.allowButton}}.
 
-If the style file changes, you are asked again. To take the approval back, click {{ui:settings.styles.revokeButton}} in the same place.
+If the style file changes, you are asked again. To block an allowed style, click {{ui:settings.styles.revokeButton}} in the same place; {{ui:settings.styles.unblockButton}} lifts the block. To take a style off the list, click {{ui:settings.styles.removeButton}}. Hover over a style's name to see its id and hash.
 
 > [!warning]
 > A style that allows tools automatically runs those tools without asking. Allow it only if you trust where it came from.

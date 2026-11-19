@@ -93,8 +93,9 @@ impl RemoteHost {
         lock(&self.0.gate).mirror = value;
     }
 
-    /// `MirrorRefusal(pane, allowed, windowsHost)`: what a client may not send into a host pane while full access is off: a pane in full
-    /// access, and on a Windows host a Codex or Antigravity pane in any mode (`full_access_refusal`'s rules). None when it may.
+    /// `MirrorRefusal(pane, allowed, windowsHost)`: what a client may not send into, or answer for, a host pane while full access is off: a
+    /// pane in full access, and in any mode a pane whose agent nothing confines on this host (`full_access_refusal`'s rules: every agent
+    /// but Claude on Windows, and every agent but Claude and Codex on a Mac). None when it may.
     pub fn mirror_refusal(pane: &MirrorPaneInfo, allowed: bool, windows_host: bool) -> Option<String> {
         let request = StartRunRequest {
             settings: Some(mighty_core::model::RunSettings {
@@ -201,6 +202,7 @@ impl RemoteHost {
             return Err(HostFailure::new(404, get("remote.host.error.badPath")));
         }
         let allowed = lock(&self.0.gate).allows_full_access;
+        let refused = RemoteHost::mirror_refusal(&pane, allowed, self.0.options.windows_host);
         // What the app refuses (settled, gone, busy, not its kind) is a conflict, its message the reason, as on the Mac.
         let conflict = |refusal: Refusal| HostFailure::new(409, refusal);
         match route[2] {
@@ -221,9 +223,9 @@ impl RemoteHost {
                 let attachments = mighty_run::attachments::validate(Some(&attachments))
                     .map_err(|error| HostFailure::new(400, error.message()))?
                     .unwrap_or_default();
-                // A pane in full access (and on this Windows PC a Codex or Antigravity pane) runs only when this computer lets others
-                // run with it.
-                if let Some(refusal) = RemoteHost::mirror_refusal(&pane, allowed, self.0.options.windows_host) {
+                // A pane in full access (and a pane whose agent nothing confines here) runs only when this computer lets others run
+                // with it.
+                if let Some(refusal) = refused {
                     return Err(HostFailure::new(403, refusal));
                 }
                 let outcome = host.submit(id, submit.text, attachments).await.map_err(conflict)?;
@@ -239,15 +241,28 @@ impl RemoteHost {
                 if always && !allowed {
                     return Err(HostFailure::new(403, get("remote.host.error.antigravityAlways")));
                 }
+                // An allow lets such a pane's tool go on as a send would, so it waits for the same switch; a decline never widens it.
+                if permission.allow
+                    && let Some(refusal) = refused
+                {
+                    return Err(HostFailure::new(403, refusal));
+                }
                 host.permission(id, permission.request_id, permission.run_id, permission.allow, always).await.map_err(conflict)?
             }
             "questions" => {
                 let questions = body(request, WireMirrorQuestions::decode)?;
+                // An answer, and a plan's decision below, carry the run on as a send does: the same refusal.
+                if let Some(refusal) = refused {
+                    return Err(HostFailure::new(403, refusal));
+                }
                 host.answers(id, questions.request_id, questions.run_id, questions.answers).await.map_err(conflict)?
             }
             "plan" => {
                 let plan = body(request, RemoteWirePlan::decode)?;
                 let decision = plan.decision().ok_or_else(bad_request)?;
+                if let Some(refusal) = refused {
+                    return Err(HostFailure::new(403, refusal));
+                }
                 host.plan(id, plan.request_id, plan.run_id, decision).await.map_err(conflict)?
             }
             _ => return Err(HostFailure::new(404, get("remote.host.error.badPath"))),

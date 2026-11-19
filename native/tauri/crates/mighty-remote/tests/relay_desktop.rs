@@ -257,7 +257,9 @@ async fn phone(relay: &str, link: &str, auth: Value) -> Result<(Value, RelayCiph
     socket.send(Message::text(hello.to_string())).await.unwrap();
     let Some(Ok(Message::Text(ready))) = socket.next().await else { panic!("no ready") };
     let ready: Value = serde_json::from_str(ready.as_str()).unwrap();
-    let server_key = b64.decode(ready["serverKey"].as_str().unwrap()).unwrap();
+    // Anything but `ready` (the host's link still settling after a settings change): no handshake this time.
+    let Some(server_key) = ready["serverKey"].as_str() else { return Err(None) };
+    let server_key = b64.decode(server_key).unwrap();
     let cipher = RelayCipher::new(&secret, &server_key, &nonce, &b64.decode(ready["nonce"].as_str().unwrap()).unwrap(), false).unwrap();
     socket.send(Message::binary(cipher.seal(auth.to_string().as_bytes()).unwrap())).await.unwrap();
     loop {
@@ -579,7 +581,18 @@ async fn a_phone_gains_nothing() {
     // The phone remote on: the phone pairs, and the mirror's path is the phone router's.
     host.apply(settings(&relay.url, true)).await.unwrap();
     until(|| relay.host_attached(), 5000, "the host's link").await;
-    let (answer, cipher, mut socket) = phone(&relay.url, &link, auth).await.unwrap();
+    // The host's link may still be settling after the change: a handshake that meets no `ready` is tried again.
+    let mut tries = 0;
+    let (answer, cipher, mut socket) = loop {
+        match phone(&relay.url, &link, auth.clone()).await {
+            Ok(done) => break done,
+            Err(None) if tries < 50 => {
+                tries += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            Err(code) => panic!("the phone could not pair: {code:?}"),
+        }
+    };
     assert_eq!(answer["type"], "auth_ok");
     let asked = panes.asked.load(Ordering::SeqCst);
     let request = json!({"id":"r1","method":"GET","path":"/v2/mirror"});
@@ -628,4 +641,93 @@ async fn sharing_starts_without_tailscale_only_for_paired_computers() {
     assert!(sharing.host.relay(), "the switch outlives the sharing");
     assert_eq!(sharing.host.serve_relay("device", "GET", "/v2/info", None).await.status, 503, "nothing is served once it stops");
     sharing.dispose().await;
+}
+
+/// A row's 연결 해제 unpairs that device alone: the phone's connection is closed and its token refused, the paired computer stays
+/// connected (and its token keeps opening the host), the pairing key is made anew so the old one pairs nothing, and the link shows the
+/// new key. 키 다시 만들기 still unpairs everyone. The device list marks the computer as one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revoking_one_device_keeps_the_others_paired_and_connected() {
+    let relay = PairingRelay::start().await;
+    let folder = temp("pair-revoke-one");
+    let identity = identity_in(&folder);
+    let phones = Arc::new(Phones::default());
+    let sharing = make_host(MakeHost::default()).await;
+    let host = relay_host(&folder, identity.clone(), phones.clone(), Some(sharing.host.clone()));
+    host.apply(settings(&relay.url, true)).await.unwrap();
+    host.set_desktops(true).await.unwrap();
+    until(|| relay.host_attached(), 5000, "the host's link").await;
+    let link = host.pairing_url();
+    let old_key = identity.pairing_key().to_string();
+
+    // A computer pairs through the relay and keeps its token.
+    let parsed = PairingLink::parse(&link).unwrap();
+    let computer = RelayClient::start(
+        parsed.endpoint.clone(),
+        Credential::PairingKey { client_id: new_client_id(), key: parsed.pairing_key.clone() },
+        "laptop",
+        Arc::new(DirectProxy),
+        quick(),
+        None,
+    );
+    computer.ready(Duration::from_secs(5)).await.unwrap();
+    let computer_token = computer.credential();
+    assert!(computer_token.has_token());
+    // A phone pairs and stays connected.
+    let phone_id = new_client_id();
+    let auth = json!({"type":"auth","pairingKey":old_key,"clientId":phone_id,"clientName":"Phone"});
+    let (answer, _cipher, mut socket) = phone(&relay.url, &link, auth).await.unwrap();
+    assert_eq!(answer["type"], "auth_ok");
+    let phone_token = answer["deviceToken"].as_str().unwrap().to_string();
+    until(|| host.devices().iter().filter(|d| d.connected).count() == 2, 5000, "both connected").await;
+    let listed = host.devices();
+    assert!(listed.iter().any(|d| d.id == computer_token.client_id() && d.desktop), "the computer is listed as one: {listed:?}");
+    assert!(listed.iter().any(|d| d.id == phone_id && !d.desktop), "the phone as a phone");
+
+    assert!(host.revoke(&phone_id).await.unwrap(), "the phone was paired");
+    // Only the phone's connection ends.
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match socket.next().await {
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                Some(Ok(_)) => continue,
+            }
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "the revoked phone's connection was closed");
+    let devices = host.devices();
+    assert_eq!(devices.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), [computer_token.client_id()], "only the computer is left");
+    assert!(devices[0].connected && devices[0].desktop, "and it is still connected");
+    assert_eq!(host.connected_desktops(), ["laptop"]);
+    assert_eq!(computer.request("GET", "/v2/info", None, Duration::from_secs(5)).await.unwrap().status, 503, "it still asks");
+    // The pairing link carries the new key; the old one pairs nothing, the phone's token opens nothing.
+    let new_link = host.pairing_url();
+    assert_ne!(member(&new_link, "key"), old_key);
+    assert_eq!(member(&new_link, "key"), identity.pairing_key().as_str());
+    let again = json!({"type":"auth","pairingKey":old_key,"clientId":new_client_id(),"clientName":"Stranger"});
+    let (refused, _, _) = phone(&relay.url, &new_link, again).await.unwrap();
+    assert_eq!((refused["type"].as_str(), refused["reason"].as_str()), (Some("auth_error"), Some("pairing-key")));
+    let token_auth = json!({"type":"auth","deviceToken":phone_token,"clientId":phone_id});
+    let (refused, _, _) = phone(&relay.url, &new_link, token_auth).await.unwrap();
+    assert_eq!((refused["type"].as_str(), refused["reason"].as_str()), (Some("auth_error"), Some("device-revoked")));
+    // The computer's token still opens the host on a new connection.
+    let reopened = RelayClient::start(parsed.endpoint.clone(), computer_token.clone(), "laptop", Arc::new(DirectProxy), quick(), None);
+    assert!(reopened.ready(Duration::from_secs(5)).await.is_ok(), "the computer's token is untouched");
+    reopened.close();
+    assert!(!host.revoke(&phone_id).await.unwrap(), "a stale press changes nothing");
+    assert_eq!(host.pairing_url(), new_link);
+
+    // 키 다시 만들기: everyone goes.
+    assert!(host.rotate(None).await.unwrap());
+    assert!(host.devices().is_empty(), "every device unpaired");
+    until(|| host.connected_desktops().is_empty(), 5000, "the computer's connection closed").await;
+    computer.close();
+    let gone = RelayClient::start(parsed.endpoint.clone(), computer_token, "laptop", Arc::new(DirectProxy), quick(), None);
+    let failure = gone.ready(Duration::from_secs(5)).await.unwrap_err();
+    assert!(matches!(&failure, RelayFailure::Refused { reason, .. } if reason == "device-revoked"), "{failure:?}");
+    gone.close();
+    host.dispose().await;
+    sharing.dispose().await;
+    let _ = std::fs::remove_dir_all(folder);
 }

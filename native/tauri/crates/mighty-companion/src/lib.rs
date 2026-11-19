@@ -15,6 +15,7 @@
 //! | [`layout`] | `CompanionBubbleLayout`, `CompanionResizeEdges` | W8-E |
 //! | [`card`] | `CompanionOverlayCard`, `CompanionOverlayRequest` | W8-E |
 //! | [`follow`] | `RefreshCompanion`'s choice of agent, its bubble and its row (MainWindow.Companion.cs) | W8-E |
+//! | [`progress`] | the Mac's `CompanionProgress` (the progress card over the bubble) | W8-E |
 //! | [`scene`] | `CompanionOverlay`'s drawing as a display list | W8-E |
 //! | [`Companion`] | `CompanionOverlay`'s state: its size and place, the card, the press, drag and resize, the menu, the plan's scroll | W8-E |
 // A guard kept through a match or if-let body has called out while held: bind first.
@@ -29,6 +30,7 @@ pub mod layout;
 pub mod pet;
 pub mod plan;
 pub mod prefs;
+pub mod progress;
 pub mod scene;
 
 use std::sync::Arc;
@@ -40,6 +42,7 @@ use mighty_platform::{LogicalPoint, LogicalRect, PetEvent, PetScene, PetWindow};
 
 use crate::card::CompanionCard;
 use crate::layout::Edges;
+use crate::progress::CompanionProgress;
 use crate::scene::{Painter, PlanBox, PlanMeasure};
 
 /// What the overlay asks of the app (C# `CompanionOverlay`'s events): `Act` is its `Action(key, action)` — a bubble button, a choice,
@@ -121,6 +124,8 @@ pub struct Companion {
     bubble_items: Vec<PetItem>,
     hits: Vec<(PetRect, String)>,
     spinner: Option<PetPoint>,
+    /// Where the progress card's spinner turns, while its request runs.
+    progress_spinner: Option<PetPoint>,
     plan_measure: Option<PlanMeasure>,
     plan: PlanBox,
     menu_items: Vec<(PetRect, String, String)>,
@@ -160,6 +165,7 @@ impl Default for Companion {
             bubble_items: vec![],
             hits: vec![],
             spinner: None,
+            progress_spinner: None,
             plan_measure: None,
             plan: PlanBox::default(),
             menu_items: vec![],
@@ -174,13 +180,15 @@ impl Default for Companion {
     }
 }
 
+/// The card without its clocks (the bubble's and the progress card's lines'): a clock that ticks redraws, it does not lay out again.
+fn without_clock(card: &CompanionCard) -> CompanionCard {
+    CompanionCard { elapsed: None, progress: card.progress.as_ref().map(CompanionProgress::without_clocks), ..card.clone() }
+}
+
 fn same_without_clock(a: Option<&CompanionCard>, b: Option<&CompanionCard>) -> bool {
     match (a, b) {
         (None, None) => true,
-        (Some(a), Some(b)) => {
-            CompanionCard { elapsed: None, ..a.clone() } == CompanionCard { elapsed: None, ..b.clone() }
-                && a.elapsed.is_none() == b.elapsed.is_none()
-        }
+        (Some(a), Some(b)) => without_clock(a) == without_clock(b) && a.elapsed.is_none() == b.elapsed.is_none(),
         _ => false,
     }
 }
@@ -233,7 +241,7 @@ impl Companion {
             self.cancel_resize();
         }
         let changed = self.show_bubble != shown || !same_without_clock(self.card.as_ref(), value.as_ref());
-        let ticked = self.card.as_ref().map(|c| &c.elapsed) != value.as_ref().map(|c| &c.elapsed);
+        let ticked = self.card != value;
         if key(self.card.as_ref()) != key(value.as_ref()) {
             self.plan.scroll = 0.0;
         }
@@ -273,6 +281,26 @@ impl Companion {
 
     fn tall(&self) -> bool {
         self.show_bubble && self.card.as_ref().is_some_and(|c| c.approval.is_some())
+    }
+
+    /// The progress card over the task bubble and whether it is folded: none over a request or with the bubble away.
+    fn progress(&self) -> Option<(&CompanionProgress, bool)> {
+        let card = self.card.as_ref().filter(|c| self.show_bubble && c.approval.is_none())?;
+        card.progress.as_ref().map(|p| (p, card.progress_collapsed))
+    }
+
+    /// How much taller the window stands for the progress card (the gap to the bubble included).
+    fn above(&self) -> f64 {
+        self.progress().map_or(0.0, |(progress, collapsed)| progress.height(collapsed))
+    }
+
+    /// The progress card's place: as wide as the bubble, over it by its gap.
+    fn progress_area(&self) -> Option<PetRect> {
+        let above = self.above();
+        (above > 0.0).then(|| {
+            let bubble = self.bubble_area();
+            PetRect::new(bubble.x, bubble.y - above, bubble.width, above - progress::GAP)
+        })
     }
 
     /// The approval is never narrower than the default.
@@ -323,11 +351,13 @@ impl Companion {
         let origin = from.unwrap_or((self.left, self.top, self.pixel_width, self.pixel_height));
         let screen = self.work_area(LogicalPoint { x: f64::from(origin.0 + origin.2 / 2), y: f64::from(origin.1 + origin.3 - 64) });
         let needed = self.measure_bubble();
-        self.bubble_height = needed.min((((f64::from(screen.bottom - screen.top)) / self.scale - layout::CHROME) as i32).max(1));
+        // The progress card stands over the bubble, which leaves it its room on the screen.
+        let above = self.above();
+        self.bubble_height = needed.min((((f64::from(screen.bottom - screen.top)) / self.scale - layout::CHROME - above) as i32).max(1));
         self.bubble_cut = needed - self.bubble_height;
         let size = layout::panel_size(Some(f64::from(self.width)), self.fixed_height, self.tall());
         self.panel_width = size.0;
-        self.height = size.1.max(f64::from(self.bubble_height) + layout::CHROME);
+        self.height = size.1.max(f64::from(self.bubble_height) + layout::CHROME + above);
         let (w, h) = ((self.panel_width * self.scale).ceil() as i32, (self.height * self.scale).ceil() as i32);
         self.left = origin.0
             + match keep.cmp(&0) {
@@ -367,6 +397,7 @@ impl Companion {
         self.card_dirty = false;
         self.hits.clear();
         self.spinner = None;
+        self.progress_spinner = None;
         self.bubble_items.clear();
         let Some(current) = self.card.clone().filter(|_| self.show_bubble) else { return };
         let palette = scene::palette(current.light);
@@ -403,6 +434,14 @@ impl Companion {
         self.spinner = painter.spinner;
         self.plan = painter.plan;
         self.bubble_items = vec![PetItem::Group { role: "bubble".into(), rect: bubble, opacity: 1.0, items }];
+        if let (Some((progress, collapsed)), Some(area)) = (self.progress().map(|(p, c)| (p.clone(), c)), self.progress_area()) {
+            let mut plan = None;
+            let mut painter = Painter::new(measure.as_ref(), palette, true, &mut plan);
+            painter.progress_card(&progress, collapsed, area);
+            self.progress_spinner = painter.spinner;
+            self.hits.append(&mut painter.hits);
+            self.bubble_items.insert(0, painter.items.remove(0));
+        }
     }
 
     /// C# `Draw(row, column, reducedMotion)`'s picture: the bubble, the turning spinner, the pet (walking while carried) and the menu, at
@@ -437,8 +476,8 @@ impl Companion {
         let palette = scene::palette(self.card.as_ref().is_some_and(|c| c.light));
         let accent = scene::paint(palette[Token::Accent], 1.0);
         let mut items = self.bubble_items.clone();
-        if let Some(center) = self.spinner {
-            let step = if self.still { 0 } else { (self.ticks % 12) as u32 };
+        let step = if self.still { 0 } else { (self.ticks % 12) as u32 };
+        for center in [self.progress_spinner, self.spinner].into_iter().flatten() {
             items.push(scene::spinner(center, step, accent));
         }
         let frame = self.pet_area();
@@ -510,6 +549,14 @@ impl Companion {
                 .iter()
                 .find(|item| item.0.contains(at.x, at.y))
                 .map_or_else(|| "menu-close".into(), |item| item.1.clone());
+        }
+        // The progress card: its heading folds it, the rest opens the pane.
+        if let Some(area) = self.progress_area().filter(|area| area.contains(at.x, at.y)) {
+            return self
+                .hits
+                .iter()
+                .find(|(bounds, _)| area.contains(bounds.x, bounds.y) && bounds.contains(at.x, at.y))
+                .map_or_else(|| "open".into(), |(_, id)| id.clone());
         }
         if self.show_bubble && self.card.is_some() && self.bubble_area().contains(at.x, at.y) {
             if !self.resize_at(at).is_none() {
@@ -807,6 +854,11 @@ impl Companion {
     /// The window, the bubble and the pet's frame in DIPs, and the scale (C# `SmokeGeometry`).
     pub fn geometry(&self) -> Geometry {
         Geometry { width: self.panel_width, height: self.height, bubble: self.bubble_area(), pet: self.pet_area(), scale: self.scale }
+    }
+
+    /// Where the progress card stands over the bubble, while it shows.
+    pub fn progress_rect(&self) -> Option<PetRect> {
+        self.progress_area()
     }
 
     /// The bubble's size and the window's bottom right (C# `SmokeLayout`).

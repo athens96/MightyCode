@@ -335,21 +335,45 @@ impl RelayHost {
         self.shared.network_path_changed(path);
     }
 
-    /// `RotateKeyAsync(expectedDeviceId)`: a new pairing key, every device and connection dropped; with an expected device, only when
-    /// that device is still paired (a revoke). True when it rotated.
+    /// `RotateKeyAsync`: with no device (키 다시 만들기), a new pairing key, every device and connection dropped. With a device (a
+    /// row's 연결 해제), only that device is unpaired, while it is still paired ([`RelayHost::revoke`]). True when it changed anything.
     pub async fn rotate(&self, expected_device: Option<String>) -> Result<bool, RelayError> {
+        if let Some(device) = expected_device {
+            return self.revoke(&device).await;
+        }
         let shared = &self.shared;
         {
             let _lifecycle = shared.lifecycle.lock().await;
             if shared.disposed.load(Ordering::SeqCst) {
                 return Err(RelayError::Disposed);
             }
-            if expected_device.as_deref().is_some_and(|device| !shared.identity.contains(device, true)) {
-                return Ok(false);
-            }
             shared.identity.rotate().map_err(|_| RelayError::Unsaved)?;
             for client in shared.clients() {
                 client.cancel();
+            }
+        }
+        shared.republish();
+        Ok(true)
+    }
+
+    /// One device unpaired ([`Identity::revoke`]): its row and token gone, the pairing key made anew (the QR and link change), and only
+    /// its connections closed (and the legacy apps', whose row goes with the old key); every other phone and computer stays paired and
+    /// connected. False when it is not paired (a stale press: nothing changes).
+    pub async fn revoke(&self, device: &str) -> Result<bool, RelayError> {
+        let shared = &self.shared;
+        {
+            let _lifecycle = shared.lifecycle.lock().await;
+            if shared.disposed.load(Ordering::SeqCst) {
+                return Err(RelayError::Disposed);
+            }
+            let removed = shared.identity.revoke(device).map_err(|_| RelayError::Unsaved)?;
+            if removed.is_empty() {
+                return Ok(false);
+            }
+            for client in shared.clients() {
+                if removed.contains(&client.device_id()) {
+                    client.cancel();
+                }
             }
         }
         shared.republish();
@@ -436,10 +460,18 @@ impl RelayHost {
         self.shared.direct_endpoints()
     }
 
-    /// `Devices`: the paired phones with those connected now marked.
+    /// `Devices`: the paired phones and computers with those connected now marked (a connected computer marked as one).
     pub fn devices(&self) -> Vec<MobileDeviceInfo> {
-        let connected: Vec<String> = self.shared.clients().iter().filter(|c| c.authenticated()).map(|c| c.device_id()).collect();
-        self.shared.identity.devices().into_iter().map(|d| MobileDeviceInfo { connected: connected.contains(&d.id), ..d }).collect()
+        let connected: Vec<_> = self.shared.clients().iter().filter(|c| c.authenticated()).filter_map(|c| c.device()).collect();
+        self.shared
+            .identity
+            .devices()
+            .into_iter()
+            .map(|d| {
+                let live: Vec<_> = connected.iter().filter(|c| c.client_id == d.id).collect();
+                MobileDeviceInfo { connected: !live.is_empty(), desktop: d.desktop || live.iter().any(|c| c.desktop), ..d }
+            })
+            .collect()
     }
 
     /// `HostId`.

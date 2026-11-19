@@ -1157,8 +1157,15 @@ async fn open_screen(host: &Arc<Host>, screen: &str, demo: Option<&mut Demo>) ->
         }
         "settings-general" | "settings-models" | "settings-styles" | "settings-tools" | "settings-cli" | "settings-mobile"
         | "settings-companion" | "settings-about" => {
-            // As the Mac's: the saved category, then Settings opened; the sheet alone is the picture.
-            let category = &screen["settings-".len()..];
+            // As the Mac's: the saved category, then Settings opened; the sheet alone is the picture. The phone's screen is 원격 연결
+            // on its 휴대폰 tab since the Settings tidy-up (the shot keeps its id: the help pages show it as `settings-mobile`).
+            let category = match screen {
+                "settings-mobile" => {
+                    crate::settings::remote::show_tab(crate::settings::remote::Tab::Phone);
+                    "remote"
+                }
+                other => &other["settings-".len()..],
+            };
             open_settings(host, category).await?;
             Ok(Target { clip: Some("[data-testid=native-settings]"), cleanup: Some(Cleanup::Settings), ..Target::default() })
         }

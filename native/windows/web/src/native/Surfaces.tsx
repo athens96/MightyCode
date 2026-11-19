@@ -16,7 +16,7 @@ import type { NativeButton, NativeChrome, NativeNode as NativeNodeT, NativeOpen,
 
 /** Each category's symbol in the Mac's sidebar (M/SettingsViews.swift SettingsPane.symbol), as its Lucide counterpart. */
 const categorySymbol: Record<string, IconName> = {
-  general: 'settings', models: 'cpu', styles: 'palette', tools: 'box', cli: 'square-terminal', mobile: 'smartphone', remote: 'earth', companion: 'paw-print', about: 'info',
+  general: 'settings', models: 'cpu', styles: 'palette', tools: 'box', cli: 'square-terminal', remote: 'earth', companion: 'paw-print', about: 'info',
 };
 
 const settings = tokens.metrics.settings;
@@ -43,15 +43,15 @@ function Sections({ sections, framed }: { sections: readonly NativeSection[]; fr
 }
 
 /**
- * The categories' cards in the One UI list: related categories share one rounded card (setup and models, the
- * workspace's tools, the connections, the rest); a category none of them names joins the last card.
+ * The categories' cards in the One UI list, in the side list's order: related categories share one rounded card (how
+ * agents run, the connections and alerts, setup and the app); a category none of them names joins the last card.
  */
-const categoryGroups: readonly (readonly string[])[] = [['general', 'models', 'styles'], ['tools', 'cli'], ['mobile', 'remote'], ['companion', 'about']];
+const categoryGroups: readonly (readonly string[])[] = [['general', 'models', 'cli', 'styles'], ['remote', 'companion'], ['tools', 'about']];
 
 /** Each category's icon tile, in one of the palette's own tones (no colour outside the design tokens). */
 const categoryTone: Record<string, string> = {
   general: 'var(--stop)', models: 'var(--agent)', styles: 'var(--err)', tools: 'var(--wait)', cli: 'var(--ink3)',
-  mobile: 'var(--done)', remote: 'var(--task)', companion: 'var(--run)', about: 'var(--accent)',
+  remote: 'var(--task)', companion: 'var(--run)', about: 'var(--accent)',
 };
 
 export function groupCategories<T extends { id: string }>(items: readonly T[]): T[][] {

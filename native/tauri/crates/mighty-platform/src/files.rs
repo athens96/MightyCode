@@ -108,6 +108,11 @@ pub trait Desktop: Send + Sync {
     fn open(&self, path: &Path) -> Result<bool>;
     /// Puts the picture on the clipboard (C# `DataPackage.SetBitmap`, then `Clipboard.Flush`, so it stays after the app quits).
     fn copy_image(&self, image: &ClipboardImage) -> Result<()>;
+    /// Moves the file to the Trash (the Recycle Bin on Windows), where the person can take it back (Swift
+    /// `FileManager.trashItem`, 요청 되돌리기's file a request made). An OS that has no such move refuses: nothing is deleted.
+    fn trash(&self, _path: &Path) -> Result<()> {
+        Err(PlatformError::unsupported("Desktop", "trash"))
+    }
 }
 
 /// What a save dialog offers (C# `FileSavePicker`: `SuggestedFileName`, one `FileTypeChoices` entry).

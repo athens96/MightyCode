@@ -164,6 +164,8 @@ impl Runs {
         antigravity: AntigravityRuleLeases,
     ) -> Arc<Runs> {
         mighty_run::strings::set_language(host.locale.language());
+        // The Mac reads its own words where the crates' copy has Windows-only ones (this PC, PowerShell: settings_words.rs).
+        mighty_run::strings::use_words(crate::platform::words());
         // `{value:N0}` (the attachments' sizes) in the user's regional format, as C#'s current culture writes it.
         if let Some((separator, sizes)) = crate::platform::number_grouping() {
             mighty_run::strings::set_number_grouping(&separator, &sizes);

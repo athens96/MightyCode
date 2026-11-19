@@ -111,9 +111,9 @@ describe('text setting', () => {
   });
 
   it('groups the settings categories into One UI cards, an unknown one in the last', () => {
-    const ids = ['general', 'models', 'styles', 'tools', 'cli', 'mobile', 'remote', 'companion', 'about', 'labs'].map((id) => ({ id }));
+    const ids = ['general', 'models', 'cli', 'styles', 'remote', 'companion', 'tools', 'about', 'labs'].map((id) => ({ id }));
     expect(groupCategories(ids).map((group) => group.map((item) => item.id))).toEqual([
-      ['general', 'models', 'styles'], ['tools', 'cli'], ['mobile', 'remote'], ['companion', 'about', 'labs'],
+      ['general', 'models', 'cli', 'styles'], ['remote', 'companion'], ['tools', 'about', 'labs'],
     ]);
     // A host without a category leaves no empty card.
     expect(groupCategories([{ id: 'about' }]).map((group) => group.map((item) => item.id))).toEqual([['about']]);

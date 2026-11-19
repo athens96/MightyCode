@@ -289,7 +289,8 @@ impl Desk {
                 .entry(pane.id().to_string())
                 .or_insert_with(|| {
                     Arc::new(ResultFilesMemo::new(|run, folder| {
-                        mighty::look_through(run, folder, &StdFiles { ignores_case: cfg!(windows) })
+                        let ignores_case = crate::platform::names_ignore_case(std::path::Path::new(folder));
+                        mighty::look_through(run, folder, &StdFiles { ignores_case })
                     }))
                 })
                 .clone()
@@ -307,7 +308,8 @@ impl Desk {
                 });
             mighty::Roles { fan_out: pane.provider() == "claude", definitions: (*definitions).clone() }
         });
-        let lookup = StdFiles { ignores_case: cfg!(windows) };
+        let lookup =
+            StdFiles { ignores_case: root.as_deref().is_some_and(|r| crate::platform::names_ignore_case(std::path::Path::new(r))) };
         let runs = mighty::runs(
             &saved,
             &RunsInputs {

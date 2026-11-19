@@ -18,17 +18,11 @@ pub fn app_update(host: &Arc<Host>, ui: &mut Ui) -> El {
     crate::settings::app_update::section(host, ui)
 }
 
-/// 앱 정보 (C# `BuildAppInfoSection`): the version beside its label, the Windows note, the guide's button, the state folder's button and
-/// its path in 10pt mono.
+/// 앱 정보 (C# `BuildAppInfoSection`): the guide's button, the state folder's button (Finder on the Mac, Explorer on Windows) and its
+/// path in 10pt mono. The version is 앱 업데이트's first row, shown once; the keyboard tips are 일반 › 에이전트 창's.
 pub fn app_info(host: &Arc<Host>, ui: &mut Ui) -> El {
     let locale = ui.locale();
     let mut rows = ui.settings_rows();
-    let version = ui.settings_text(version_text(host), TextStyle::size(13.0).ink(Token::Ink2).selectable());
-    rows.add(ui.settings_labeled(ui.settings_text(locale.get("settings.appInfo.versionLabel"), TextStyle::default()), version, false));
-    // Windows' note on keys and PowerShell; the Mac shows none (Swift's names SwiftUI, which this app is not).
-    if let Some(note) = mighty_core::settings_words::text(&locale, crate::platform::words(), "settings.appInfo.windowsNote") {
-        rows.add(ui.settings_text(note, TextStyle::size(11.0).ink(Token::Ink2)));
-    }
     let to = host.clone();
     let help = ui
         .settings_push(
@@ -46,10 +40,13 @@ pub fn app_info(host: &Arc<Host>, ui: &mut Ui) -> El {
     let to = host.clone();
     let show = ui
         .settings_push(
-            ui.button(locale.get("menu.showInExplorer"), move || {
-                let folder = folder.clone();
-                crate::native::act(&to, async move { crate::platform::show_in_explorer(&folder) });
-            }),
+            ui.button(
+                mighty_core::settings_words::text(&locale, crate::platform::words(), "menu.showInExplorer").unwrap_or_default(),
+                move || {
+                    let folder = folder.clone();
+                    crate::native::act(&to, async move { crate::platform::show_in_explorer(&folder) });
+                },
+            ),
             ControlSize::Regular,
             false,
             false,

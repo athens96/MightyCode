@@ -5,48 +5,54 @@ section: phone
 ---
 スマートフォンアプリを使うと、外出先からでもMacやWindows PCのMighty Codeを確認して操作できます。作業の状態を確認し、リクエストを送信し、許可や質問に答えます。
 
-Macとスマートフォンはリレーサーバー経由で接続されます。内容はエンドツーエンドで暗号化されるため、リレーは内容を見ることができません。ルーターのポートを開けたり、VPNを使ったりする必要はありません。Tailscale を使っていれば、[リレーを通さず直接](#direct)接続することもできます。
+コンピュータとスマートフォンはリレーサーバー経由で接続されます。標準のリレーがアプリに組み込まれているので、別に用意するものはありません。内容はエンドツーエンドで暗号化されるため、リレーは内容を見ることができません。ルーターのポートを開けたり、VPNを使ったりする必要はありません。Tailscale を使っていれば、[リレーを通さず直接](#direct)接続することもできます。
 
 ## スマートフォンアプリを入手する {#get-app}
 [ダウンロードページ](https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/index.html)からAndroidアプリ(APK)をダウンロードしてインストールします。
 
 ## 接続する {#pair}
-Macで:
-1. {{ui:menu.settings}} → {{ui:settings.nav.mobile}}タブを開きます。
-2. {{ui:settings.mobileRemote.relayLabel}}のアドレスを空欄のままにすると、標準のリレーを使います。自分で運用しているリレーがある場合は、アドレスを入力して{{ui:settings.mobileRemote.applyButton}}をクリックします。
-3. {{ui:settings.mobileRemote.allowToggle}}をオンにします。QRコードが表示されます。
+コンピュータで:
+1. {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} → {{ui:settings.remote.phoneTab}}タブを開きます。
+2. {{ui:settings.mobileRemote.allowToggle}}をオンにします。Windowsでは{{ui:windows.mobile.allow}}です。横に接続状態が表示され、リレーへの接続中のまま止まっているときは{{ui:settings.mobileRemote.reconnectButton}}ボタンをクリックします。
+3. {{ui:windows.mobile.pairingTitle}}にQRコードと3つの手順の案内が表示されます。
 
 スマートフォンで:
-1. アプリを開き、{{ui:phone.tabs.hosts}}タブの{{ui:phone.hosts.addHost}}をタップします。初めて開いたときは、先に接続の案内が表示されます。
-2. {{ui:phone.pair.mode.qr}}でMacのQRコードを読み取ります。カメラを使えない場合は、Macで{{ui:settings.mobileRemote.copyLinkButton}}をクリックしてリンクを送り、{{ui:phone.pair.mode.manual}}に入力します。
-3. {{ui:phone.pair.connect}}をタップすると接続されます。
+1. スマートフォンアプリを開き、{{ui:phone.tabs.hosts}}タブの{{ui:phone.hosts.addHost}}をタップします。初めて開いたときは、先に接続の案内が表示されます。
+2. {{ui:phone.pair.mode.qr}}でコンピュータのQRコードを読み取ります。カメラを使えない場合は、コンピュータで{{ui:settings.mobileRemote.copyLinkButton}}ボタンをクリックしてリンクを送り、{{ui:phone.pair.mode.manual}}に入力します。リンクにはキーが含まれるため秘密としてコピーされ、1分後にクリップボードから消去されます。
+3. {{ui:phone.pair.connect}}をタップすると接続され、コンピュータの{{ui:settings.mobileRemote.connectedDevicesTitle}}にそのスマートフォンが表示されます。
+
+QRコードの横には{{ui:settings.mobileRemote.hostIdLabel}}と{{ui:settings.mobileRemote.keyLabel}}があります。キーは表示ボタンをクリックすると見えます。
+
+{{ui:windows.mobile.connectionTitle}}には接続方法が2つあります。
+- {{ui:windows.mobile.relayTitle}}: 標準の方法です。特にすることはありません。
+- {{ui:mobileRemote.direct.toggle}}: ポートを決めて適用し、その下に状態が表示されます。[Tailscale で直接接続する](#direct)を参照してください。
 
 ![[settings-mobile]]
 
-接続したスマートフォンは、Macの{{ui:settings.mobileRemote.connectedDevicesTitle}}に表示されます。スマートフォンを使わなくなったら、{{ui:settings.mobileRemote.revokeRowButton}}をクリックします。接続済みのスマートフォンをQRコードでもう一度接続すると、そのスマートフォンの項目が新しいものに置き換わり、以前の接続は使えなくなります。
+接続したスマートフォンと[ペアリングしたコンピュータ](remote.md#pair)は{{ui:settings.mobileRemote.connectedDevicesTitle}}に1行ずつ表示され、コンピュータはコンピュータのアイコンで区別されます。この一覧は、デバイスが1つでもあればスマートフォン接続のスイッチがオフでも表示されます。デバイスを使わなくなったら、その行の{{ui:settings.mobileRemote.revokeRowButton}}ボタンをクリックします。そのデバイスだけが解除され、ほかのスマートフォンとコンピュータは接続されたままです。このときペアリングキーも新しくなるため、その後にデバイスを接続するには(解除したデバイスをもう一度接続する場合も)新しいQRコードかリンクを使います。接続済みのスマートフォンをQRコードでもう一度接続すると、そのスマートフォンの項目が新しいものに置き換わり、以前の接続は使えなくなります。
 
 > [!warning]
-> {{ui:settings.mobileRemote.regenerateKeyButton}}をクリックすると、接続済みのスマートフォンをすべて接続し直す必要があります。QRコードやキーが他人に見られたときに使ってください。
+> {{ui:settings.mobileRemote.regenerateKeyButton}}をクリックすると、接続済みのスマートフォンとペアリングしたコンピュータがすべて解除され、接続し直す必要があります。QRコードやキー、ペアリングリンクが他人に見られたときに使ってください。
 
 ## Tailscale で直接接続する {#direct}
 Mac とスマートフォンが同じ [Tailscale](https://tailscale.com) ネットワークにあれば、スマートフォンはリレーを通さず Mac に直接接続します。ペアリングも暗号化もそのままで、Mac に直接届かないときは自動でリレーを使います。
 
 1. Mac とスマートフォンで Tailscale をオンにし、同じアカウントでログインします。
-2. Mac の {{ui:settings.nav.mobile}} タブで {{ui:mobileRemote.direct.toggle}} がオンになっていることを確かめます(初期設定でオンです)。その下の行に Tailscale のアドレスが出ていれば準備完了です。{{ui:mobileRemote.direct.status.notFound}} と出ていれば、Mac の Tailscale がオフです。
+2. コンピュータの {{ui:settings.remote.phoneTab}} タブで {{ui:mobileRemote.direct.toggle}} がオンになっていることを確かめます(初期設定でオンです)。その下の行に Tailscale のアドレスが出ていれば準備完了です。{{ui:mobileRemote.direct.status.notFound}} と出ていれば、Mac の Tailscale がオフです。
 3. すでにペアリングしたスマートフォンはペアリングし直す必要はありません。次に接続したときに Mac がアドレスを伝えます。
 
 スマートフォンの {{ui:phone.tabs.hosts}} タブで、Mac のカードに {{ui:phone.direct.route.direct}} または {{ui:phone.direct.route.relay}} と表示されます。
 
-Windows PC でも同じです。ただし接続が遮断されないよう、Windows ファイアウォールの規則が 1 つ必要です。{{ui:settings.nav.mobile}} タブで {{ui:mobileRemote.direct.windows.firewall.addButton}} を押し、Windows の管理者の確認を許可してください。この規則は Tailscale のアドレスからこのアプリへの接続だけを許可します。規則があると同じ行のボタンは {{ui:mobileRemote.direct.windows.firewall.removeButton}} に変わり、規則を読み取れないときは管理者の確認なしで読み直す {{ui:setup.button.recheck}} になります。直接接続をオンにしたままポートを変えたら、規則を削除してからもう一度追加してください。直接接続またはモバイルリモートをオフにすると規則も一緒に削除され（このコンピュータがワークスペースを[共有](remote.md#share)している間は、そのポートに必要なので残ります）、このときも管理者の確認を求められます。これはスマートフォンの直接接続のポートとワークスペース共有のポートを一緒に開く 1 つの規則です。規則がある間は同じ行に {{ui:remote.windows.firewall.update}} ボタンも表示され、いま使っているポートに合わせて直します。{{ui:settings.remote.navTitle}} タブでも同じ規則を追加・更新・削除できます。
+Windows PC でも同じです。ただし接続が遮断されないよう、Windows ファイアウォールの規則が 1 つ必要です。{{ui:settings.remote.phoneTab}} タブの下の {{ui:settings.remote.firewallTitle}} で {{ui:remote.windows.firewall.add}} ボタンを押し、Windows の管理者の確認を許可してください。この規則は Tailscale のアドレスからこのアプリへの接続だけを許可します。規則があるときは {{ui:remote.windows.firewall.update}} ボタンでいま使っているポートに合わせて直し、{{ui:remote.windows.firewall.remove}} ボタンで削除します。直接接続またはスマートフォンからの接続をオフにすると規則も一緒に削除され（このコンピュータがワークスペースを[共有](remote.md#share)している間は、そのポートに必要なので残ります）、このときも管理者の確認を求められます。これはスマートフォンの直接接続のポートとワークスペース共有のポートを一緒に開く 1 つの規則なので、{{ui:settings.remote.shareTitle}} タブで変更しても同じ規則が変わります（[Windows ファイアウォール](remote.md#firewall)）。
 
 ## スマートフォンでできること {#use}
-スマートフォンアプリには4つのタブがあります。
+スマートフォンアプリには3つのタブがあります。
 
 | タブ | 内容 |
 |---|---|
 | {{ui:phone.tabs.dashboard}} | {{ui:phone.dashboard.title}}: ペアリングしたすべてのコンピューターの実行中、対応待ち、完了の件数を合計して表示し、その下にコンピューターごとのワークスペースとセッションを順に表示します。セッションを開いて会話を確認し、リクエストを送信します。 |
 | {{ui:phone.tabs.alerts}} | 回答が必要な許可・質問と、終わったタスク |
-| {{ui:phone.tabs.hosts}} | 接続したMacと接続状態 |
+| {{ui:phone.tabs.hosts}} | 接続したコンピュータ(Mac・Windows)と接続状態 |
 
 セッション内では、リクエストの送信と停止、モデル・権限・思考レベルの変更、スラッシュコマンド、ファイルの添付、ワークスペースのファイルの閲覧(読み取り専用)ができます。
 
@@ -80,7 +86,7 @@ Macで[Mightyオーケストレーション](delegation.md)により作られた
 - 通知の内容は、このスマートフォンだけが読めるようにコンピューターが暗号化します。リレーと Google は読めません。通知はリレーを通るので、Tailscale で直接接続していても、コンピューターがインターネットにつながっていれば届きます。
 - コンピューターのアプリとスマートフォンのアプリの両方が、この機能のあるバージョンである必要があります。この機能のないコンピューターのアプリは通知を送りません。とても古いスマートフォンアプリでペアリングした場合は、もう一度ペアリングしてください。
 - 0.4.58で既定のリレーが新しいサーバーに変わりました。それより前に接続したスマートフォンに通知が届かない場合は、QRコードで一度接続し直してください。
-- スマートフォンからの接続（モバイルリモート）をオフにしている間、コンピューターは何も送りません。オンに戻したときも、その間にあったことは知らせません。
+- コンピュータでスマートフォンからの接続をオフにしている間、コンピューターは何も送りません。オンに戻したときも、その間にあったことは知らせません。
 
 アプリが止まったときは、止まった場所だけを開発者に送ります。会話・コマンド・パスは送りません。{{ui:phone.settings.title}} で {{ui:phone.settings.crashReports}} をオフにできます。
 
@@ -88,10 +94,9 @@ Macで[Mightyオーケストレーション](delegation.md)により作られた
 スマートフォンからMacの画面を表示し、許可すれば操作することもできます。{{ui:badge.beta}}の機能で、現在はAndroidアプリでのみ利用できます。
 
 > [!warning]
-> 0.4.58から、画面の表示と操作を一時停止しています(MacとWindowsの両方)。既定のリレーを新しいサーバーへ移行している間は、スマートフォンに画面表示のボタンが出ず、設定の{{ui:settings.screenShare.sectionTitle}}にはその旨の1行だけが表示されます。スマートフォンごとに決めた許可範囲と権限はそのまま残り、再開すると元に戻ります。以下は再開したときの使い方です。
-1. Macの{{ui:settings.nav.mobile}}タブの下にある{{ui:settings.screenShare.sectionTitle}}で、スマートフォンごとに{{ui:settings.screenShare.grantLabel}}を{{ui:settings.screenShare.grantView}}または{{ui:settings.screenShare.grantControl}}に設定します。新しいスマートフォンは{{ui:settings.screenShare.grantNone}}から始まります。
-2. {{ui:settings.screenShare.permissions.openButton}}で、画面収録やアクセシビリティなどのMacの権限を許可します。
-3. スマートフォンで{{ui:phone.screenShare.open}}をタップし、{{ui:phone.screenShare.mode.view}}または{{ui:phone.screenShare.mode.control}}を選びます。
+> 0.4.58から、画面の表示と操作を一時停止しています(MacとWindowsの両方)。既定のリレーを新しいサーバーへ移行している間は、スマートフォンに画面表示のボタンが出ず、コンピュータの設定にも画面表示の項目はありません。スマートフォンごとに決めた許可範囲と権限はそのまま残り、再開すると元に戻ります。
+
+再開したら、スマートフォンで{{ui:phone.screenShare.open}}をタップし、{{ui:phone.screenShare.mode.view}}または{{ui:phone.screenShare.mode.control}}を選びます。
 
 初めて操作を許可するときは、両方の画面に表示される指紋が一致しているかを確認します。操作を始めるたびに、スマートフォンで生体認証かPINを求められます。
 
@@ -107,5 +112,7 @@ Mac や Windows のアプリに新しいバージョンがあると、スマー�
 - コンピューターは更新を公式の場所からダウンロードし、署名を確認してからインストールします。スマートフォンは開始を伝えるだけです。
 - この機能は 0.4.55 以降のコンピューターで使えます。
 
-## リレーを自分で運用する {#own-relay}
-標準のリレーの代わりに、自分でリレーを運用できます。リポジトリの`relay/`フォルダをサーバーにデプロイし、そのアドレス(`wss://…`)をMacの{{ui:settings.mobileRemote.relayLabel}}に入力してください。
+## リレーのアドレスを変える {#own-relay}
+標準のリレー(Cloudflare)がアプリに組み込まれているので、通常は変える必要はありません。別のリレーを使う必要があるときは、{{ui:settings.remote.phoneTab}}タブのいちばん下にある、たたまれた{{ui:settings.advancedTitle}}を開きます。
+- {{ui:settings.mobileRemote.relayLabel}}: リレーのアドレス(`wss://…`)を入力して{{ui:settings.mobileRemote.applyButton}}をクリックします。空欄のままにすると標準のリレーを使います。
+- {{ui:settings.mobileRemote.legacyAppsToggle}}: 既定でオンになっていて、デバイストークンを持たない古いスマートフォンアプリも接続できます。オフにするとデバイストークンを持つアプリだけが接続でき、キーだけで接続しているスマートフォンはすぐに切断されるので、すべてのスマートフォンを最新のアプリにしてからオフにしてください。

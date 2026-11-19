@@ -301,7 +301,8 @@ pub async fn reconnect(host: &Arc<Host>) -> Result<(), String> {
     Ok(())
 }
 
-/// C#'s `Revoke(id)` after its confirmation: a new key (every phone unpaired), or for a phone only while it is still paired.
+/// C#'s `Revoke(id)` after its confirmation: with no device a new key (every phone and computer unpaired); with one, only that device
+/// unpaired while it is still paired (a new key too, the others keep theirs and stay connected).
 pub async fn rotate(host: &Arc<Host>, device: Option<String>) -> Result<(), String> {
     let Some(relay) = relay(host).filter(|_| host.smoke.is_none()) else { return Ok(()) };
     relay.rotate(device).await.map_err(|error| error.to_string())?;

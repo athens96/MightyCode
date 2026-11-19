@@ -2,6 +2,10 @@
 //! its login command typed and run there (Swift `AppStore.startCLILogin`, AppStore+CLIAccounts.swift:66-101), where Windows opens a
 //! console window of its own (the platform's `TerminalLauncher`). It is the accounts coordinator's `TerminalLauncher` on the Mac
 //! (accounts.rs `sign_in_launcher`), so the sign-in's flow (the status read until it says signed in) is the same code.
+//!
+//! The setup screen's install runs the same way on the Mac ([`SetupPane`], Swift's setup terminal): its script typed into a shell pane,
+//! where the user watches it and answers what a step asks. Without a local workspace to hold the pane, setup.rs hands the script to
+//! Terminal.app instead (the platform's `TerminalLauncher`).
 
 use std::sync::Arc;
 
@@ -69,8 +73,14 @@ pub struct PaneSignIn {
     pub app: tauri::AppHandle,
 }
 
+/// The Mac's setup install "window": a shell pane of the window with the setup script typed into it (the setup screen's
+/// `TerminalLauncher` on the Mac, setup.rs `start_install`).
+pub struct SetupPane {
+    pub app: tauri::AppHandle,
+}
+
 /// The pane holds no process of the launcher's: the sign-in is seen by its status, as a Windows Terminal tab's is.
-struct Opened;
+pub struct Opened;
 
 impl TerminalWindow for Opened {
     fn holds_command(&self) -> bool {
@@ -90,46 +100,58 @@ pub fn local_workspace(snapshot: &mighty_core::AppSnapshot) -> Option<String> {
 }
 
 impl TerminalLauncher for PaneSignIn {
-    /// Settings and the setup screen close (Swift closes its sheet so the pane can be added); the chosen local workspace becomes the
-    /// active one and gets the shell pane now, so a refusal (no local workspace, the 128-pane limit) is the caller's error; then the
-    /// command is typed into it once its shell is up (styles.rs `type_into_pane`, Swift's `autoRun`).
     fn open(&self, launch: TerminalLaunch) -> mighty_platform::Result<Box<dyn TerminalWindow>> {
-        let Some(host) = self.app.try_state::<Arc<Host>>().map(|host| host.inner().clone()) else {
-            return Err(PlatformError::unsupported("terminal pane", "open"));
-        };
-        let command = command_line(&launch).ok_or_else(|| PlatformError::Invalid("no command".into()))?;
-        let refused = |key: &str| PlatformError::Refused(host.locale.get(key));
-        let workspace = {
-            let mut view = host.view();
-            let workspace = local_workspace(&view.snapshot).ok_or_else(|| refused("settings.cliAccounts.noWorkspace"))?;
-            if !mighty_core::add_pane::has_room(&view.snapshot) {
-                return Err(refused("settings.cliAccounts.tooManyPanes"));
-            }
-            if view.snapshot.active_workspace_id.as_deref() != Some(workspace.as_str()) {
-                crate::frame::select_workspace(&mut view, &workspace).map_err(PlatformError::Refused)?;
-            }
-            workspace
-        };
-        crate::settings::close(&host);
-        crate::native::close(&host, mighty_tools::view::SETUP_SURFACE);
-        let pane_id = mighty_core::wire::new_id();
-        let (made, named) = (pane_id.clone(), title(&launch, &host.locale));
-        let added = crate::frame::add_pane_to(&host, Some(&workspace), "shell", "claude", None, move |pane| {
-            mighty_core::model::RunSession { id: Some(made), title: Some(named), ..pane }
-        });
-        match added {
-            Ok(true) => {}
-            Ok(false) => return Err(refused("settings.cliAccounts.terminalFailed")),
-            Err(error) => return Err(PlatformError::Refused(error)),
-        }
-        host.schedule();
-        tauri::async_runtime::spawn(async move {
-            if let Err(error) = crate::styles::type_into_pane(&host, &pane_id, &command, true).await {
-                host.log.line(&format!("sign-in pane: {error}"));
-            }
-        });
-        Ok(Box::new(Opened))
+        open_pane(&self.app, launch)
     }
+}
+
+impl TerminalLauncher for SetupPane {
+    fn open(&self, launch: TerminalLaunch) -> mighty_platform::Result<Box<dyn TerminalWindow>> {
+        open_pane(&self.app, launch)
+    }
+}
+
+/// Settings and the setup screen close (Swift closes its sheet so the pane can be added); the chosen local workspace becomes the
+/// active one and gets the shell pane now, so a refusal (no local workspace, the 128-pane limit) is the caller's error; then the
+/// command is typed into it once its shell is up (styles.rs `type_into_pane`, Swift's `autoRun`).
+fn open_pane(app: &tauri::AppHandle, launch: TerminalLaunch) -> mighty_platform::Result<Box<dyn TerminalWindow>> {
+    let Some(host) = app.try_state::<Arc<Host>>().map(|host| host.inner().clone()) else {
+        return Err(PlatformError::unsupported("terminal pane", "open"));
+    };
+    let command = command_line(&launch).ok_or_else(|| PlatformError::Invalid("no command".into()))?;
+    let refused = |key: &str| PlatformError::Refused(host.locale.get(key));
+    let workspace = {
+        let mut view = host.view();
+        let workspace = local_workspace(&view.snapshot).ok_or_else(|| refused("settings.cliAccounts.noWorkspace"))?;
+        if !mighty_core::add_pane::has_room(&view.snapshot) {
+            return Err(refused("settings.cliAccounts.tooManyPanes"));
+        }
+        if view.snapshot.active_workspace_id.as_deref() != Some(workspace.as_str()) {
+            crate::frame::select_workspace(&mut view, &workspace).map_err(PlatformError::Refused)?;
+        }
+        workspace
+    };
+    crate::settings::close(&host);
+    crate::native::close(&host, mighty_tools::view::SETUP_SURFACE);
+    let pane_id = mighty_core::wire::new_id();
+    let (made, named) = (pane_id.clone(), title(&launch, &host.locale));
+    let added = crate::frame::add_pane_to(&host, Some(&workspace), "shell", "claude", None, move |pane| mighty_core::model::RunSession {
+        id: Some(made),
+        title: Some(named),
+        ..pane
+    });
+    match added {
+        Ok(true) => {}
+        Ok(false) => return Err(refused("settings.cliAccounts.terminalFailed")),
+        Err(error) => return Err(PlatformError::Refused(error)),
+    }
+    host.schedule();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = crate::styles::type_into_pane(&host, &pane_id, &command, true).await {
+            host.log.line(&format!("terminal pane: {error}"));
+        }
+    });
+    Ok(Box::new(Opened))
 }
 
 #[cfg(test)]

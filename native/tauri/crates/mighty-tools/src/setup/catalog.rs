@@ -28,14 +28,24 @@ impl SetupGroup {
     pub const ALL: [SetupGroup; 5] = [SetupGroup::Agent, SetupGroup::Prerequisite, SetupGroup::Style, SetupGroup::Network, SetupGroup::Dev];
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// The catalog's platforms. The screen's default is Windows' (the C# app's rules), as its checks were written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub enum SetupPlatform {
     MacOS,
+    #[default]
     Windows,
 }
 
 impl SetupPlatform {
     pub const ALL: [SetupPlatform; 2] = [SetupPlatform::MacOS, SetupPlatform::Windows];
+
+    /// The catalog's platform for the OS the app runs on (the platform profile's `os`).
+    pub fn of(os: mighty_platform::Os) -> SetupPlatform {
+        match os {
+            mighty_platform::Os::Macos => SetupPlatform::MacOS,
+            mighty_platform::Os::Windows => SetupPlatform::Windows,
+        }
+    }
 
     fn name(self) -> &'static str {
         match self {
@@ -276,12 +286,34 @@ impl SetupCatalog {
         }
     }
 
+    /// The title's key on Windows.
     pub fn title_key(item: &SetupItem) -> &str {
-        Self::WINDOWS_TITLES.iter().find(|(id, _)| *id == item.id).map(|(_, key)| *key).unwrap_or(&item.label_key)
+        Self::title_key_on(item, SetupPlatform::Windows)
     }
 
+    /// The detail's key on Windows.
     pub fn detail_key(item: &SetupItem) -> &str {
-        Self::WINDOWS_DETAILS.iter().find(|(id, _)| *id == item.id).map(|(_, key)| *key).unwrap_or(&item.description_key)
+        Self::detail_key_on(item, SetupPlatform::Windows)
+    }
+
+    /// The title's key on `platform`: the catalog's own on the Mac, Windows' wording where it has one.
+    pub fn title_key_on(item: &SetupItem, platform: SetupPlatform) -> &str {
+        match platform {
+            SetupPlatform::MacOS => &item.label_key,
+            SetupPlatform::Windows => {
+                Self::WINDOWS_TITLES.iter().find(|(id, _)| *id == item.id).map(|(_, key)| *key).unwrap_or(&item.label_key)
+            }
+        }
+    }
+
+    /// The detail's key on `platform`: the catalog's own on the Mac, Windows' wording where it has one.
+    pub fn detail_key_on(item: &SetupItem, platform: SetupPlatform) -> &str {
+        match platform {
+            SetupPlatform::MacOS => &item.description_key,
+            SetupPlatform::Windows => {
+                Self::WINDOWS_DETAILS.iter().find(|(id, _)| *id == item.id).map(|(_, key)| *key).unwrap_or(&item.description_key)
+            }
+        }
     }
 
     pub fn title(item: &SetupItem) -> String {
@@ -290,6 +322,14 @@ impl SetupCatalog {
 
     pub fn detail(item: &SetupItem) -> String {
         strings::get(Self::detail_key(item))
+    }
+
+    pub fn title_on(item: &SetupItem, platform: SetupPlatform) -> String {
+        strings::get(Self::title_key_on(item, platform))
+    }
+
+    pub fn detail_on(item: &SetupItem, platform: SetupPlatform) -> String {
+        strings::get(Self::detail_key_on(item, platform))
     }
 
     pub fn allowed_flags(program: &str) -> Option<&'static [&'static str]> {

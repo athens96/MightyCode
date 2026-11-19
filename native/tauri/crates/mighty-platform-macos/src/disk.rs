@@ -42,6 +42,25 @@ impl DiskSpace for MacDiskSpace {
     }
 }
 
+/// Whether names on the volume holding `path` (or its nearest existing parent folder) compare ignoring case:
+/// `pathconf(_PC_CASE_SENSITIVE)` asks the volume, as APFS can be formatted either way (case-insensitive as installed); a volume that
+/// cannot say reads as ignoring case ([`mighty_platform::disk::names_ignore_case`]).
+pub fn names_ignore_case(path: &Path) -> bool {
+    mighty_platform::disk::names_ignore_case(path.ancestors().find(|folder| folder.is_dir()).and_then(case_sensitive))
+}
+
+/// `pathconf(_PC_CASE_SENSITIVE)` of an existing folder: 1 case-sensitive, 0 not, None when the call fails or the volume has no answer.
+fn case_sensitive(folder: &Path) -> Option<bool> {
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(folder.as_os_str().as_bytes()).ok()?;
+    // SAFETY: a NUL-terminated path that lives for the call; pathconf only reads it.
+    match unsafe { libc::pathconf(name.as_ptr(), libc::_PC_CASE_SENSITIVE) } {
+        1 => Some(true),
+        0 => Some(false),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,5 +77,19 @@ mod tests {
         let through_parent = MacDiskSpace.available_bytes(&missing).unwrap();
         assert!(through_parent > 0);
         assert!(!missing.exists(), "nothing is made");
+    }
+
+    /// The volume's answer matches what the volume does: a file made as `Case.txt` is found as `CASE.TXT` exactly when the temporary
+    /// folder's volume says it ignores case; a folder not made yet is asked through its parent.
+    #[test]
+    fn the_volume_says_whether_names_ignore_case() {
+        let folder = std::env::temp_dir().join(format!("mighty-case-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("Case.txt"), b"x").unwrap();
+        let found_otherwise = folder.join("CASE.TXT").is_file();
+        assert_eq!(names_ignore_case(&folder), found_otherwise, "pathconf agrees with the disk");
+        assert_eq!(names_ignore_case(&folder.join("not-made").join("child")), found_otherwise, "through the nearest parent");
+        assert!(case_sensitive(&folder.join("not-made")).is_none(), "a missing folder has no answer");
+        std::fs::remove_dir_all(&folder).unwrap();
     }
 }

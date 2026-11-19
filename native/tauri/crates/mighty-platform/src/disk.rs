@@ -12,3 +12,22 @@ pub trait DiskSpace: Send + Sync {
     /// delegation counts that as too little.
     fn available_bytes(&self, path: &Path) -> Result<u64>;
 }
+
+/// Whether names on a volume compare ignoring case, from what the volume said: `Some(true)` when it called itself case-sensitive,
+/// `Some(false)` when not, None when it could not say. Unsaid counts as ignoring case, the default of the Mac's APFS and HFS+ and of
+/// Windows' NTFS: a reference that differs only in case is then still found and listed once (`StdFiles::ignores_case`).
+pub fn names_ignore_case(case_sensitive: Option<bool>) -> bool {
+    !case_sensitive.unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_volume_ignores_case_unless_it_says_it_does_not() {
+        assert!(!names_ignore_case(Some(true)), "a case-sensitive volume (a case-sensitive APFS, most Linux file systems)");
+        assert!(names_ignore_case(Some(false)), "APFS and HFS+ as installed, NTFS");
+        assert!(names_ignore_case(None), "a volume that cannot say reads as the Mac's and Windows' default");
+    }
+}

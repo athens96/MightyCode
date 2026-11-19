@@ -77,7 +77,7 @@ pub struct HostOptions {
     /// is still left out.
     pub addresses: Option<Addresses>,
     pub clock: Clock,
-    /// This PC runs Windows, where Codex and Antigravity are not confined as on a Mac (`full_access_refusal`).
+    /// This PC runs Windows, where Codex is not confined by its Seatbelt sandbox as on a Mac (`full_access_refusal`).
     pub windows_host: bool,
     /// The request path is percent-decoded before it is routed, as the Mac's `URLComponents.path` gives it
     /// (`PlatformProfile::remote_decodes_request_paths`; Windows routes it as written).
@@ -315,19 +315,31 @@ impl RemoteHost {
     }
 
     /// `FullAccessRefusal(request, allowed, windowsHost)`: what a client may not run here while full access is off: a command pane, an
-    /// agent in full access, and on a Windows host a Codex or Antigravity agent in any mode; None when it may.
+    /// agent in full access, and in any mode an agent nothing confines here ([`RemoteHost::confined_agent`]); None when it may.
     pub fn full_access_refusal(request: &StartRunRequest, allowed: bool, windows_host: bool) -> Option<String> {
         if allowed {
             None
         } else if request.kind == "shell" {
             Some(get("remote.host.error.commandsOff"))
-        } else if request.provider != "claude" && windows_host {
-            Some(strings::host_agent_needs_full_access(&request.provider))
+        } else if !RemoteHost::confined_agent(&request.provider, windows_host) {
+            Some(if windows_host {
+                strings::host_agent_needs_full_access(&request.provider)
+            } else {
+                strings::mac_host_agent_needs_full_access(&request.provider)
+            })
         } else if request.settings.as_ref().is_some_and(|s| s.permission_mode == "fullAccess") {
             Some(get("remote.host.error.fullAccessOff"))
         } else {
             None
         }
+    }
+
+    /// Whether a remote request's agent runs held in below full access on this host: Claude asks through its own permission modes, and
+    /// Codex runs in its Seatbelt sandbox (`sandbox_mode`) on a Mac only. Antigravity (agy's review mode declines, nothing confines it),
+    /// pi, opencode and Hermes have no sandbox on either OS. C# took a Mac's Seatbelt to confine Antigravity too; nothing launches agy
+    /// in one.
+    pub fn confined_agent(provider: &str, windows_host: bool) -> bool {
+        provider == "claude" || provider == "codex" && !windows_host
     }
 
     /// `StartAsync(workspaceIds, port)`: starts sharing on every Tailscale address this PC has, with a new key. Err is what the user reads.
@@ -584,6 +596,10 @@ impl RemoteHost {
             if !gate.state.enabled || gate.servers.iter().all(HttpListener::is_listening) {
                 return false;
             }
+            // Paired computers come through the relay, not a listener: a dead Tailscale listener does not end their sharing.
+            if gate.relay {
+                return false;
+            }
             gate.generation
         };
         let Ok(handle) = tokio::runtime::Handle::try_current() else { return false };
@@ -682,10 +698,14 @@ impl RemoteHost {
     /// `Authorize` for a paired computer: sharing on with the relay switch, then the per-device and the shared rates. The key, the
     /// peer's address and the version header are the relay connection's own (its pairing, its encrypted session).
     fn authorize_relay(&self, device: &str) -> Result<u64, HostFailure> {
+        // The relay carries these requests: the Tailscale listeners (whether any is bound or still accepting) are not asked.
         let revision = {
             let gate = lock(&self.0.gate);
-            if !(gate.state.enabled && gate.relay && gate.servers.iter().all(HttpListener::is_listening)) {
-                return Err(stopped());
+            if !gate.state.enabled {
+                return Err(HostFailure::new(503, get("remote.relay.error.notSharing")));
+            }
+            if !gate.relay {
+                return Err(HostFailure::new(503, get("remote.relay.error.pairingOff")));
             }
             gate.generation
         };

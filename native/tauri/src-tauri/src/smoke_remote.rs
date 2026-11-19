@@ -20,12 +20,13 @@ use crate::host::{Host, lock};
 /// The checks of its report, as C# names them in the step's result.
 const KEYS: [&str; 3] = ["settingsPage", "sharing", "connected"];
 
-/// The page's box, read as the page would get it.
+/// The page's box, read as the page would get it: its share and connect tabs at once (`every_part`), as the page drew them on one
+/// page before the Settings tidy-up put them under top tabs.
 struct RemoteBox(Arc<Host>);
 
 impl SurfaceModel for RemoteBox {
     fn view(&mut self, ui: &mut Ui) -> View {
-        let body = crate::settings::remote::remote_workspaces(&self.0, ui);
+        let body = crate::settings::remote::every_part(&self.0, ui);
         View::Settings {
             title: String::new(),
             close: String::new(),

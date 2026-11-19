@@ -1,0 +1,32 @@
+/* 요청 변경 검토 (RunChanges.tsx): the request's files at the left (280 wide), the selected file's 변경사항 at the right, the note
+   being written and the notes so far under it. Only the list and the diff scroll. */
+.run-changes-body { overflow: hidden; }
+.run-changes-split { flex: 1; min-height: 0; display: flex; gap: var(--space-md); }
+.run-changes-list { flex: none; width: 280px; min-height: 0; display: flex; flex-direction: column; gap: var(--space-sm); padding-right: var(--space-md); border-right: var(--stroke-line) solid var(--line); }
+.run-changes-list-head { display: flex; align-items: center; justify-content: space-between; color: var(--ink2); font-size: var(--type-small); font-weight: 600; }
+.run-changes-rows { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: var(--space-xs); }
+.run-changes-row { display: flex; align-items: flex-start; gap: var(--space-sm); padding: var(--space-sm); border-radius: var(--radius-row); background: var(--card-raised); cursor: pointer; }
+.run-changes-row.selected { background: var(--accent-soft); }
+.run-changes-row input { margin: 2px 0 0; flex: none; }
+.run-changes-icon { flex: none; display: inline-flex; padding-top: 1px; color: var(--accent); }
+.run-changes-row.refused .run-changes-icon { color: var(--ink2); }
+.run-changes-name { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-xxs); }
+.run-changes-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: var(--type-small); color: var(--ink); }
+.run-changes-detail { color: var(--ink2); font-size: var(--type-pill); }
+.run-changes-row.refused .run-changes-detail { color: var(--wait-text); }
+.run-changes-counts { flex: none; font-family: var(--font-mono); font-size: var(--type-pill); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.run-changes-counts .added { color: var(--done-text); }
+.run-changes-counts .removed { color: var(--err-text); }
+.run-changes-review { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: var(--space-sm); }
+.run-changes-diff { flex: 1; min-height: 0; display: flex; flex-direction: column; border: var(--stroke-line) solid var(--line); border-radius: var(--radius-row); background: var(--card); overflow: hidden; }
+.run-changes-placeholder { margin: auto; padding: var(--space-lg); color: var(--ink2); font-size: var(--type-small); text-align: center; }
+.run-changes-hint { color: var(--ink2); font-size: var(--type-pill); }
+.run-changes-note-editor, .run-changes-notes { flex: none; display: flex; flex-direction: column; gap: var(--space-xs); }
+.run-changes-note-on { color: var(--ink2); font-size: var(--type-pill); font-weight: 600; }
+.run-changes-note-line { display: flex; gap: var(--space-sm); }
+.run-changes-note-line .dialog-field { flex: 1; min-width: 0; }
+.run-changes-notes-list { max-height: 96px; overflow: auto; display: flex; flex-direction: column; gap: var(--space-xxs); }
+.run-changes-note { display: flex; align-items: flex-start; gap: var(--space-sm); }
+.run-changes-note-place { flex: none; padding: 0; border: 0; background: transparent; color: var(--accent); font-family: var(--font-mono); font-size: var(--type-pill); cursor: pointer; }
+.run-changes-note-text { flex: 1; min-width: 0; color: var(--ink); font-size: var(--type-pill); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.run-changes-note-remove { flex: none; display: inline-flex; padding: 0; border: 0; background: transparent; color: var(--ink2); cursor: pointer; }

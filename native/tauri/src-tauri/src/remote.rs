@@ -368,7 +368,7 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
         heartbeat: protocol::HEARTBEAT_TIMEOUT,
         addresses,
         clock: mighty_remote::remote::host::monotonic(),
-        windows_host: !platform.profile.remote_confines_agents,
+        windows_host: !platform.profile.remote_confines_codex,
         decodes_paths: platform.profile.remote_decodes_request_paths,
         graph_runs: platform.profile.remote_graph_runs,
         // A client's continuation adds its card's rules to this PC's agy settings, counted with this PC's own panes.
@@ -422,9 +422,11 @@ pub async fn connect_remote(host: Arc<Host>, args: Value) -> Reply {
     Ok(Value::Null)
 }
 
-/// `OpenRemoteSettings`: Settings on its 원격 연결 page (the sidebar header's button and the add-pane menus' Connect to Another
-/// Computer…); a Settings already open turns to that page; while another dialog is open nothing happens.
+/// `OpenRemoteSettings`: Settings on its 원격 연결 page, on 다른 컴퓨터 연결 where the connections are (the dashboard's connect, the
+/// add-pane menus' Connect to Another Computer…, a remote workspace's 원격 연결 설정…); a Settings already open turns to that page;
+/// while another dialog is open nothing happens.
 pub fn open_settings(host: &Arc<Host>) {
+    crate::settings::remote::show_tab(crate::settings::remote::Tab::Connect);
     if crate::settings::select(host, "remote") || host.view().dialog_open {
         return;
     }

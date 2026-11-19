@@ -1,7 +1,8 @@
-//! `cli`: 이 PC의 CLI, CLI 계정 and Claude Mods (C# MainWindow.Settings.cs:145-153, :573-1026). Owner: W6-C.
+//! `cli`: CLI 계정 (C# MainWindow.Settings.cs:573-1026). Owner: W6-C.
 //!
-//! Each box is mighty-accounts' builder over the host's models (accounts.rs): the run engine's runtime, the accounts' statuses and
-//! their rows' state. The CLI accounts box shows the smoke's fixture statuses while the accounts step holds them (C#'s smoke hands
+//! The box is mighty-accounts' builder over the host's models (accounts.rs): the accounts' statuses and their rows' state. The tab's
+//! old 이 PC의 CLI and Claude Mods boxes are gone since the Settings tidy-up: 구성 요소 lists each CLI with its state, version,
+//! install, sign-in and update, and says when Claude Code is too old for Claude Mods, so the CLI tab keeps the accounts and updates. The CLI accounts box shows the smoke's fixture statuses while the accounts step holds them (C#'s smoke hands
 //! `BuildCliAccountsSection` its fixture statuses).
 
 use std::sync::{Arc, Mutex};
@@ -19,23 +20,9 @@ pub fn show_fixture(statuses: Option<Vec<CliAccountStatus>>) {
     *FIXTURE.lock().unwrap_or_else(|p| p.into_inner()) = statuses;
 }
 
-/// 이 PC의 CLI (Providers) (C# `BuildProvidersSection`, MainWindow.Settings.cs:576-621).
-pub fn providers(host: &Arc<Host>, ui: &mut Ui) -> El {
-    let model = crate::accounts::providers_model(host);
-    let recheck = host.clone();
-    mighty_accounts::view::providers(ui, &model, move || crate::accounts::recheck_runtime(&recheck))
-}
-
 /// CLI 계정 (CLI accounts) (C# `BuildCliAccountsSectionFromState`, MainWindow.Settings.cs:628-1026).
 pub fn accounts(host: &Arc<Host>, ui: &mut Ui) -> El {
     let fixture = FIXTURE.lock().unwrap_or_else(|p| p.into_inner()).clone();
     let model = crate::accounts::accounts_model(host, fixture);
     mighty_accounts::view::accounts(ui, &model, Arc::new(crate::accounts::TabActions { host: host.clone() }))
-}
-
-/// Claude Mods (C# `BuildClaudeModsSection`, MainWindow.Settings.cs:145-153): Claude's runtime as the run engine read it.
-pub fn claude_mods(host: &Arc<Host>, ui: &mut Ui) -> El {
-    // Not read yet in a smoke, as C#'s (see `accounts::providers_model`).
-    let claude = if host.smoke.is_some() { None } else { host.runs().and_then(|runs| runs.runtime("claude")) };
-    mighty_accounts::view::claude_mods(ui, claude.as_ref())
 }

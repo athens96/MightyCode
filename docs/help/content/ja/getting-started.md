@@ -7,7 +7,7 @@ Mighty Codeは、Claude Code、Codex CLI、GoogleのAntigravity CLI、pi、openc
 
 ## 必要なもの {#requirements}
 - macOS 14以降。WindowsではWindows 10(バージョン2004)以降またはWindows 11です。
-- 使用するAI CLI。アプリはCLIを直接実行するため、インストールとサインインが必要です。Macでは、アプリを初めて開いたときに表示される{{ui:setup.title}}画面からインストールできます([初回起動](#first-launch))。使わないCLIはインストールしなくてもかまいません。
+- 使用するAI CLI。アプリはCLIを直接実行するため、インストールとサインインが必要です。アプリを初めて開いたときに表示される{{ui:setup.title}}画面からインストールできます([初回起動](#first-launch))。使わないCLIはインストールしなくてもかまいません。
 
 - Claude Code: Mac `curl -fsSL https://claude.ai/install.sh | bash`, Windows `npm install -g @anthropic-ai/claude-code`
 - Codex CLI: Mac `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, Windows `npm install -g @openai/codex`
@@ -17,7 +17,7 @@ Mighty Codeは、Claude Code、Codex CLI、GoogleのAntigravity CLI、pi、openc
 - Hermes: Mac `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`(Gitが必要です)、Windows `irm https://hermes-agent.nousresearch.com/install.ps1 | iex`([Hermes](agent-pane.md#hermes)を参照)
 
 > [!tip]
-> アプリを開いたあと、{{ui:settings.nav.tools}}でどのCLIが準備できているかを確認できます。Macではその場でインストールでき、Windowsではインストールコマンドをコピーします。サインインは{{ui:settings.nav.cli}}タブで行います。[設定](settings.md#components)を参照してください。
+> アプリを開いたあと、{{ui:settings.nav.tools}}でどのCLIが準備できているかを確認できます。足りないものはその場でインストールできます。サインインは{{ui:settings.nav.cli}}タブで行います。[設定](settings.md#components)を参照してください。
 
 ## インストール {#install}
 1. [ダウンロードページ](https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/index.html)から、お使いのOS用のファイルをダウンロードします。
@@ -68,7 +68,7 @@ Windowsアプリも同じ方法でアップデートします([Windowsでの違�
 
 1. インストールする項目にチェックを入れます。最初に開いたときは、足りないGitと、エージェントCLIが1つもなければClaude Codeが最初からチェックされていて、選んだ項目に必要なツール(例: ghに必要なHomebrew)も一緒に入ります。
 2. {{ui:setup.button.install}}をクリックすると、実行するコマンドがすべて順番に表示されます。{{ui:setup.confirm.run}}をクリックするまで何も実行されません。
-3. コマンドは、アプリが別に開く1つのターミナルウィンドウで、ホームフォルダーから順に実行されます。このウィンドウはペインではなく、ワークスペースには保存されません。パスワードや確認を求められたら、ターミナルで直接答えてください。アプリはsudoを使わず、パスワードも受け取りません。ある手順が失敗しても次の手順に進みます。
+3. Macでは、アプリ内のターミナルペインが1つローカルのワークスペースに開き(設定とこの画面は閉じます)、その中でコマンドがホームフォルダーから順に実行されます。ワークスペースが1つも開いていないとき(初回起動時)は、同じコマンドがmacOSのターミナルアプリの新しいウインドウで実行されます。初回はmacOSが許可を確認することがあります。どちらの場合も、終わるとこの画面の状態がもう一度確認されます。パスワードや確認を求められたら、そのターミナルペインで直接答えてください。アプリはsudoを使わず、パスワードも受け取りません。ある手順が失敗しても次の手順に進みます。
 4. 終わるとアプリが再確認します。アプリが前面にあればこの画面をもう一度開き、そうでなければステータスバーに{{ui:setup.finishedBadge}}ボタンを表示します。結果はコマンドの終了コードではなく、再確認した状態で決まります。CLIが新しく入ったときは{{ui:setup.button.signIn}}ボタンが表示されます。
 
 Git(Xcode Command Line Tools)はシステムのインストール画面が開くので、そちらで完了します。スクリプトは最大30分待ち、Control-Cを押すと待つのだけをやめて次の手順に進みます。Xcodeのライセンスに同意していないためにgitが動かない場合は、{{ui:setup.status.attention}}と表示されます。Tailscaleは公式のダウンロードページを開きます。古すぎるClaude Codeは{{ui:setup.status.outdated}}と表示され、{{ui:setup.button.update}}ボタンが出ます。
@@ -98,6 +98,6 @@ Git(Xcode Command Line Tools)はシステムのインストール画面が開く
 ## ヘルプを開く {#help}
 このヘルプはアプリから直接開けます。アプリで選んだ言語で表示されます。
 
-- Mac：メニューバーの{{ui:menu.help}}（{{kbd:⌘?}}）、または{{ui:menu.settings}} → {{ui:settings.nav.about}}の{{ui:settings.appInfo.openHelpButton}}ボタン
+- Mac：メニューバーの{{ui:menu.help}}（{{kbd:⌘?}}）、サイドバー下部のヘルプボタン、または{{ui:menu.settings}} → {{ui:settings.nav.about}}の{{ui:settings.appInfo.openHelpButton}}ボタン
 - Windows：サイドバー下部のヘルプボタン、{{kbd:F1}}、または{{ui:menu.settings}} → {{ui:settings.nav.about}}の{{ui:settings.appInfo.openHelpButton}}ボタン
 - スマートフォン：{{ui:phone.tabs.hosts}}タブの{{ui:phone.hosts.help}}ボタン

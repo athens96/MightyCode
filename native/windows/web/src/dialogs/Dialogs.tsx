@@ -1,6 +1,6 @@
 // The dialogs the window's flows ask the page to draw (MainWindow.WebShell.Shell.cs OpenWebDialog): a confirmation (remove
-// workspace, delegation, parent close), the rename sheet (spec section 9), the resume sheets (section 3) and the two create
-// sheets (WorkspaceCreate.tsx). Each answers with `dialogAnswer`; what the answer does stays the host's flow. All of them are
+// workspace, delegation, parent close), the rename sheet (spec section 9), the resume sheets (section 3), the two create
+// sheets (WorkspaceCreate.tsx) and 대화 검색 (ConversationSearch.tsx). Each answers with `dialogAnswer`; what the answer does stays the host's flow. All of them are
 // the popup standard's alert (A) or form sheet (B) (DialogShell.tsx).
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useServices, useStoreState } from '../app/context';
@@ -9,6 +9,7 @@ import { BetaBadge, MiddlePath } from '../shell/parts';
 import { Icon } from '../icons/Icon';
 import type { DialogRequest, OpenDialog, ResumeRows } from '../shell/types';
 import { GitCreate, NewFolder } from './WorkspaceCreate';
+import { ConversationSearch } from './ConversationSearch';
 import { Pending } from '../pending/Pending';
 import { DialogLoading, DialogShell } from './DialogShell';
 import { diffLines } from '../pane/worktree';
@@ -221,6 +222,7 @@ function DialogView({ open }: { open: OpenDialog }) {
     case 'rename': return <Rename id={open.id} dialog={dialog} answer={answer} />;
     case 'resumeChoice': return <ResumeChoice id={open.id} dialog={dialog} answer={answer} />;
     case 'resumeList': return <ResumeList id={open.id} dialog={dialog} answer={answer} />;
+    case 'conversationSearch': return <ConversationSearch id={open.id} dialog={dialog} answer={answer} />;
     case 'newFolder': return <NewFolder id={open.id} dialog={dialog} answer={answer} />;
     case 'gitCreate': return <GitCreate id={open.id} dialog={dialog} answer={answer} />;
     case 'paneWorktreeChoice': return <PaneWorktreeChoice id={open.id} dialog={dialog} answer={answer} />;

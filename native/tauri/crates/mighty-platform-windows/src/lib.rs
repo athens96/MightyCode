@@ -293,6 +293,12 @@ mod imp {
         Arc::new(WindowsDiskSpace)
     }
 
+    /// Whether names on the volume holding `path` compare ignoring case (the result-file lookup): Windows' file systems do, as C#'s
+    /// `PathComparison` takes them to.
+    pub fn names_ignore_case(_path: &std::path::Path) -> bool {
+        true
+    }
+
     /// The process host alone, for the exe's `--fake-claude` mode, which starts before any profile is read (W7-C).
     pub fn process_host() -> Arc<dyn mighty_platform::ProcessHost> {
         Arc::new(WindowsProcessHost::new())

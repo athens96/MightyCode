@@ -242,7 +242,8 @@ impl Collector<'_> {
 /// real root or is no regular file. A drive letter stays as written, so `Z:\proj\…` on a mapped or `subst` drive resolves as `Z:\proj\…`.
 #[derive(Debug, Clone, Copy)]
 pub struct StdFiles {
-    /// Paths compare ignoring case (Windows' file systems): two references to one file are one.
+    /// Paths compare ignoring case (Windows' file systems, the Mac's APFS as installed: the volume's own answer, `names_ignore_case`):
+    /// two references to one file are one, and an absolute reference that differs from the root only in case is inside it.
     pub ignores_case: bool,
 }
 
@@ -259,7 +260,7 @@ impl ResultFileLookup for StdFiles {
         let base = workspace_files::full_path(Path::new(root))?;
         let candidate = workspace_files::full_path(&base.join(path))?;
         // Lexical escapes, other drives, shares and stream names are refused before the target is touched.
-        let relative = match workspace_files::relative(&candidate, &base) {
+        let relative = match workspace_files::relative_with(&candidate, &base, self.ignores_case) {
             Some(relative) => relative,
             None => {
                 // An absolute path written through a link above the root (the Mac's `/var` → `/private/var`, `/tmp` → `/private/tmp`)
@@ -270,7 +271,7 @@ impl ResultFileLookup for StdFiles {
                     return None;
                 }
                 let real = workspace_files::real_path(&candidate)?;
-                workspace_files::relative(&real, &base)?
+                workspace_files::relative_with(&real, &base, self.ignores_case)?
             }
         }
         .replace('\\', "/");
@@ -336,6 +337,33 @@ mod tests {
             files_in(&["see src/화면.ts:3 and [a](a.txt:hidden)"], Some(&base), &files),
             vec![ResultFile { path: "src/화면.ts".into(), line: Some(3) }]
         );
+    }
+
+    /// On a volume whose names ignore case (the Mac's APFS as installed, Windows), a reference written in another case than the file or
+    /// the root is the same file: found, and listed once. Told the volume is case-sensitive, the absolute one stays outside the root.
+    #[test]
+    fn a_volume_that_ignores_case_finds_a_reference_in_another_case() {
+        let temp = Temp(std::env::temp_dir().join(format!("mighty-result-case-{}", mighty_core::wire::new_id())));
+        let root = temp.0.join("Work");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src").join("Read.md"), "x").unwrap();
+        if !root.join("SRC").join("READ.MD").is_file() {
+            eprintln!("skipped: this volume's names are case-sensitive");
+            return;
+        }
+        let files = StdFiles { ignores_case: true };
+        let base = files.real_root(&root.to_string_lossy()).unwrap();
+        let upper_root = format!("{}WORK", base.strip_suffix("Work").unwrap());
+        let absolute = std::path::Path::new(&upper_root).join("src").join("Read.md").to_string_lossy().into_owned();
+        assert!(files.resolve(&absolute, &base).is_some(), "the root in another case: {absolute}");
+        assert_eq!(
+            files_in(&["see src/Read.md and src/read.md"], Some(&base), &files),
+            vec![ResultFile { path: "src/Read.md".into(), line: None }],
+            "one file, listed once"
+        );
+        let strict = StdFiles { ignores_case: false };
+        assert_eq!(strict.resolve(&absolute, &base), None, "a case-sensitive rule keeps the other case outside the root");
+        assert_eq!(files_in(&["see src/Read.md and src/read.md"], Some(&base), &strict).len(), 2, "two names, two entries");
     }
 
     /// A junction is a link anyone may make on Windows: one inside the workspace to a folder outside it gives nothing, one to a folder

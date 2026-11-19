@@ -20,8 +20,9 @@ block2 = "0.6"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std", "block2", "NSArray", "NSAttributedString", "NSBundle", "NSData", "NSDate", "NSDictionary", "NSError", "NSGeometry",
-    "NSNotification", "NSObject", "NSOperation", "NSProcessInfo", "NSRange", "NSSet", "NSString", "NSThread", "NSURL", "NSUserDefaults",
-    "NSUUID", "NSValue",
+    # 요청 되돌리기: a file a request made goes to the Trash (files.rs `MacDesktop::trash`).
+    "NSFileManager", "NSNotification", "NSObject", "NSOperation", "NSProcessInfo", "NSRange", "NSSet", "NSString", "NSThread", "NSURL",
+    "NSUserDefaults", "NSUUID", "NSValue",
 ] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std", "block2", "libc", "objc2-core-foundation", "objc2-core-graphics", "objc2-quartz-core", "NSApplication", "NSBitmapImageRep",

@@ -10,7 +10,7 @@ A real terminal that opens in the workspace folder.
 1. Use {{ui:menu.addTerminalPane}} ({{kbd:⌘T}}), or {{ui:workspace.addPane}} → {{ui:workspace.newTerminal}}.
 2. Type commands as usual.
 
-If the shell exits, click {{ui:terminal.restart}}. Earlier command history is in the pane menu under {{ui:pane.menu.terminalHistory}}. Terminals are not reopened after the app quits.
+If the shell exits, click {{ui:terminal.restart}}. Earlier command history is under {{ui:pane.menu.terminalHistory}} in the pane header's … menu, and under {{ui:terminal.history.title}} when you right-click the pane header. Terminals are not reopened after the app quits.
 
 ![[terminal-pane]]
 
@@ -26,8 +26,9 @@ A read-only pane for browsing the workspace's files. It never changes them.
 | File | How it shows |
 |---|---|
 | Source and text | Line numbers and highlighting. Only the first 1 MB of a large file is shown. |
-| Markdown | Switch between {{ui:files.markdown.rendered}} and {{ui:files.markdown.source}}. |
-| Pictures and PDF | {{ui:files.image.fit}}, {{ui:files.image.actualSize}}, {{ui:files.image.zoomIn}}, {{ui:files.image.zoomOut}}. Only the first page of a PDF is shown. |
+| Markdown | Switch between {{ui:files.markdown.rendered}} and {{ui:files.markdown.source}}. A file over 128 KB is shown as source. |
+| HTML | Switch between {{ui:files.markdown.rendered}}, drawn as a page, and {{ui:files.markdown.source}}. |
+| Pictures and PDF | {{ui:files.image.fit}}, {{ui:files.image.actualSize}}, {{ui:files.image.zoomIn}}, {{ui:files.image.zoomOut}}. Only the first page of a PDF is shown. A picture over 50 MB is not previewed, and one over 100 megapixels is shown fitted only. |
 | Anything else | {{ui:files.preview.unsupported}}. Open it with {{ui:menu.showInFinder}}. |
 
 Files outside the workspace are not shown. If files changed, click {{ui:files.tree.refresh}}.

@@ -4,6 +4,7 @@
 pub mod catalog;
 pub mod components;
 pub mod files;
+pub mod mac;
 pub mod plan;
 pub mod probe;
 pub mod screen;

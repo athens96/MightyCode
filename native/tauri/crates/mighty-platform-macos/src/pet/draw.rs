@@ -66,6 +66,9 @@ pub fn symbol(family: &str, glyph: &str) -> Option<&'static str> {
         "\u{E740}" => "arrow.up.left.and.arrow.down.right",
         "\u{E70F}" => "pencil",
         "\u{E8A7}" => "arrow.up.forward.app",
+        // The progress card's background work: a sub-agent, a command.
+        "\u{E77B}" => "person.crop.circle",
+        "\u{E756}" => "terminal",
         _ => "circle",
     })
 }
@@ -523,6 +526,8 @@ mod tests {
     #[test]
     fn the_segoe_icons_read_as_sf_symbols() {
         assert_eq!(symbol(ICONS, "\u{E823}"), Some("clock"));
+        assert_eq!(symbol(ICONS, "\u{E77B}"), Some("person.crop.circle"));
+        assert_eq!(symbol(ICONS, "\u{E756}"), Some("terminal"));
         assert_eq!(symbol(SYMBOLS, "\u{270B}"), Some("hand.raised.fill"));
         assert_eq!(symbol(BODY, "?"), None);
     }

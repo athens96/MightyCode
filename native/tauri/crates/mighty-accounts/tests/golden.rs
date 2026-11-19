@@ -1,12 +1,13 @@
-//! The CLI tab's boxes against C#'s capture (plan W6 §1.8 item 5): `mighty-native/tests/golden/cli.json` is C#'s Settings › CLI as
-//! its web smoke first pushed it (dark, Korean, the runtime and the account statuses not read yet), normalized by `parity`
-//! (`tools/parity/native.ps1`, `native-diff --write-cs`). Each box is drawn here as Settings draws it in a smoke and compared byte for
-//! byte with its section of the capture.
+//! The CLI tab's accounts box against C#'s capture (plan W6 §1.8 item 5): `mighty-native/tests/golden/cli.json` is C#'s Settings › CLI
+//! as its web smoke first pushed it (dark, Korean, the runtime and the account statuses not read yet), normalized by `parity`
+//! (`tools/parity/native.ps1`, `native-diff --write-cs`), with the Settings tidy-up's words (the shorter automatic sign-in note, 상태
+//! 새로고침). The box is drawn here as Settings draws it in a smoke and compared byte for byte with its section of the capture; the
+//! capture's 이 PC의 CLI and Claude Mods sections are C#'s boxes this app no longer draws (구성 요소 shows the CLIs).
 
 use std::sync::Arc;
 
 use mighty_accounts::accounts::CliLoginOption;
-use mighty_accounts::view::{self, AccountActions, AccountRow, AccountsModel, ProvidersModel};
+use mighty_accounts::view::{self, AccountActions, AccountRow, AccountsModel};
 use mighty_core::locale::Locale;
 use mighty_core::settings_sections::{self as sections};
 use mighty_native::parity;
@@ -68,14 +69,6 @@ impl AccountActions for Nothing {
 }
 
 #[test]
-fn the_providers_box_matches_cs_before_the_runtime_is_read() {
-    let locale = Locale::new("ko");
-    let title = sections::title_of(&locale, sections::PROVIDERS).unwrap();
-    let model = ProvidersModel { runtime: vec![], checking: false };
-    assert_eq!(drawn(title, move |ui| view::providers(ui, &model, || {})), golden(0));
-}
-
-#[test]
 fn the_accounts_box_matches_cs_while_every_status_is_checking() {
     let locale = Locale::new("ko");
     let title = sections::title_of(&locale, sections::CLI_ACCOUNTS).unwrap();
@@ -86,11 +79,4 @@ fn the_accounts_box_matches_cs_while_every_status_is_checking() {
     let model = AccountsModel { rows, reading: false, auto_login: true };
     let actions: Arc<dyn AccountActions> = Arc::new(Nothing);
     assert_eq!(drawn(title, move |ui| view::accounts(ui, &model, actions.clone())), golden(1));
-}
-
-#[test]
-fn the_claude_mods_box_matches_cs_before_the_runtime_is_read() {
-    let locale = Locale::new("ko");
-    let title = sections::title_of(&locale, sections::CLAUDE_MODS).unwrap();
-    assert_eq!(drawn(title, |ui| view::claude_mods(ui, None)), golden(2));
 }

@@ -141,9 +141,10 @@ pub struct PlatformProfile {
     pub direct_advertises_magic_dns: bool,
     /// W8: a remote workspace host answers `x-mighty-remote-graph: run` with `graph_run` events (Windows; the Mac ignores it).
     pub remote_graph_runs: bool,
-    /// W8: a remote workspace host confines Codex and Antigravity runs (the Mac's Seatbelt); without it (Windows) it refuses them
-    /// unless full access is switched on.
-    pub remote_confines_agents: bool,
+    /// W8: a remote workspace host's Codex runs are confined by Codex's own Seatbelt sandbox (`sandbox_mode`, the Mac); without it
+    /// (Windows) a remote Codex run waits for the full-access switch. Antigravity, pi, opencode and Hermes get no sandbox on either OS
+    /// (agy's review mode is the CLI's own rule, not a confinement), so a host refuses them for remote requests unless the switch is on.
+    pub remote_confines_codex: bool,
 }
 
 impl PlatformProfile {
@@ -166,7 +167,7 @@ impl PlatformProfile {
             tailscale_needs_utun: false,
             direct_advertises_magic_dns: false,
             remote_graph_runs: true,
-            remote_confines_agents: false,
+            remote_confines_codex: false,
         }
     }
 
@@ -189,7 +190,7 @@ impl PlatformProfile {
             tailscale_needs_utun: true,
             direct_advertises_magic_dns: true,
             remote_graph_runs: false,
-            remote_confines_agents: true,
+            remote_confines_codex: true,
         }
     }
 
@@ -219,7 +220,7 @@ mod tests {
         assert!(mac.tailscale_needs_utun && !windows.tailscale_needs_utun);
         assert!(mac.direct_advertises_magic_dns && !windows.direct_advertises_magic_dns);
         assert!(windows.remote_graph_runs && !mac.remote_graph_runs);
-        assert!(mac.remote_confines_agents && !windows.remote_confines_agents);
+        assert!(mac.remote_confines_codex && !windows.remote_confines_codex);
         // M-H (plan fact 6, D16): the stamped address wins and the package is checked again before the swap on both OSes, as the
         // Swift app does; only the words without a key and the package differ.
         assert!(windows.build_update_url_wins && mac.build_update_url_wins);

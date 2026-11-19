@@ -7,7 +7,7 @@ Mighty Code 是一款桌面应用，可以在一个窗口中并排使用 Claude 
 
 ## 准备工作 {#requirements}
 - macOS 14 或更高版本。Windows 需要 Windows 10（版本 2004）或更高版本，或 Windows 11。
-- 要使用的 AI CLI。应用会直接运行 CLI，因此需要安装并登录。在 Mac 上，可以在首次打开应用时出现的{{ui:setup.title}}界面中安装（[首次启动](#first-launch)）。不打算使用的 CLI 无需安装。
+- 要使用的 AI CLI。应用会直接运行 CLI，因此需要安装并登录。可以在首次打开应用时出现的{{ui:setup.title}}界面中安装（[首次启动](#first-launch)）。不打算使用的 CLI 无需安装。
 
 - Claude Code: Mac `curl -fsSL https://claude.ai/install.sh | bash`, Windows `npm install -g @anthropic-ai/claude-code`
 - Codex CLI: Mac `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, Windows `npm install -g @openai/codex`
@@ -17,7 +17,7 @@ Mighty Code 是一款桌面应用，可以在一个窗口中并排使用 Claude 
 - Hermes: Mac `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash`（需要 Git），Windows `irm https://hermes-agent.nousresearch.com/install.ps1 | iex`（见 [Hermes](agent-pane.md#hermes)）
 
 > [!tip]
-> 打开应用后，可以在{{ui:settings.nav.tools}}标签页中查看哪些 CLI 已就绪。Mac 上可以直接在那里安装，Windows 上可以复制安装命令。登录在{{ui:settings.nav.cli}}标签页中进行。请参阅[设置](settings.md#components)。
+> 打开应用后，可以在{{ui:settings.nav.tools}}标签页中查看哪些 CLI 已就绪。缺少的工具可以直接在那里安装。登录在{{ui:settings.nav.cli}}标签页中进行。请参阅[设置](settings.md#components)。
 
 ## 安装 {#install}
 1. 从[下载页面](https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/index.html)下载适合你操作系统的文件。
@@ -68,7 +68,7 @@ Windows 应用也以同样的方式更新（[Windows 上的不同之处](windows
 
 1. 勾选要安装的项目。首次打开时，缺少的 Git 会预先勾选；如果一个智能体 CLI 都没有，Claude Code 也会预先勾选；所选项目需要的工具（例如 gh 需要的 Homebrew）会一并加入。
 2. 点击{{ui:setup.button.install}}后，会按顺序显示将要运行的所有命令。点击{{ui:setup.confirm.run}}之后才会运行。
-3. 命令会在应用单独打开的一个终端窗口中，从主文件夹开始依次运行。这个窗口不是窗格，不会保存到工作区。需要输入密码或确认的步骤，请直接在终端中回答；应用不会使用 sudo，也不会接收你的密码。某一步失败时，仍会继续下一步。
+3. 在 Mac 上，应用会在一个本地工作区中打开应用内的终端窗格（设置和此界面会关闭），命令在其中从主文件夹开始依次运行。没有打开任何工作区时（首次运行），同样的命令会在 macOS“终端”应用的新窗口中运行；macOS 可能会询问一次是否允许。无论哪种方式，结束后都会重新检查此界面中的状态。需要输入密码或确认的步骤，请直接在该终端窗格中回答；应用不会使用 sudo，也不会接收你的密码。某一步失败时，仍会继续下一步。
 4. 结束后，应用会重新检查。应用在前台时会重新打开此界面，否则会在状态栏显示{{ui:setup.finishedBadge}}按钮。结果以重新检查到的状态为准，而不是命令的退出状态。新装好 CLI 时会出现{{ui:setup.button.signIn}}按钮。
 
 Git（Xcode Command Line Tools）会打开系统安装窗口，请在该窗口中完成。脚本最多等待 30 分钟；按 Control-C 只会结束等待并继续下一步。如果因为未同意 Xcode 许可而无法运行 git，Git 会显示为{{ui:setup.status.attention}}。Tailscale 会打开官方下载页面。版本过旧的 Claude Code 会显示为{{ui:setup.status.outdated}}，并出现{{ui:setup.button.update}}按钮。
@@ -98,6 +98,6 @@ Git（Xcode Command Line Tools）会打开系统安装窗口，请在该窗口�
 ## 打开帮助 {#help}
 可以直接在应用中打开本帮助，并以应用中选择的语言显示。
 
-- Mac：菜单栏中的{{ui:menu.help}}（{{kbd:⌘?}}），或{{ui:menu.settings}} → {{ui:settings.nav.about}}中的{{ui:settings.appInfo.openHelpButton}}按钮
+- Mac：菜单栏中的{{ui:menu.help}}（{{kbd:⌘?}}）、侧边栏底部的帮助按钮，或{{ui:menu.settings}} → {{ui:settings.nav.about}}中的{{ui:settings.appInfo.openHelpButton}}按钮
 - Windows：侧边栏底部的帮助按钮、{{kbd:F1}}，或{{ui:menu.settings}} → {{ui:settings.nav.about}}中的{{ui:settings.appInfo.openHelpButton}}按钮
 - 手机：{{ui:phone.tabs.hosts}}标签页中的{{ui:phone.hosts.help}}按钮

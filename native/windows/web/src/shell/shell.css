@@ -370,6 +370,19 @@ button { font: inherit; color: inherit; }
 .resume-row-title { font-size: 12px; font-weight: 500; display: flex; gap: var(--space-sm); }
 .resume-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-sm); height: 100%; text-align: center; }
 .resume-footer { display: flex; gap: var(--space-md); align-items: center; }
+/* 대화 검색 (ConversationSearch.tsx): resume-list rows with the snippet's matches marked and the chosen hit raised. */
+.conversation-search-busy { position: absolute; right: var(--space-sm); top: 50%; transform: translateY(-50%); display: flex; }
+.conversation-hit { display: flex; gap: var(--space-md); align-items: flex-start; padding: var(--space-sm) var(--space-md); border-radius: var(--radius-file-row); cursor: default; }
+.conversation-hit:hover { background: var(--card); }
+.conversation-hit.selected { background: var(--card); box-shadow: inset 0 0 0 1px var(--accent); }
+.conversation-hit-text { display: flex; flex-direction: column; gap: var(--space-xxs); min-width: 0; flex: 1; }
+.conversation-hit-head { display: flex; gap: var(--space-sm); align-items: baseline; min-width: 0; }
+.conversation-hit-title { font-size: 12px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-hit-date { flex: none; }
+.conversation-hit-snippet { font-size: 11px; color: var(--ink2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.conversation-hit-snippet mark { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--ink); border-radius: 2px; }
+.conversation-hit-foot { display: flex; gap: var(--space-md); align-items: center; }
+.conversation-hit-actions { margin-left: auto; display: flex; gap: var(--space-xs); }
 /* A server's header over its shared workspaces (Sidebar.tsx ServerHeader; M/RemoteMirrorViews.swift RemoteServerHeader). */
 .sidebar-server { display: flex; align-items: center; gap: var(--space-sm, 8px); padding: var(--space-md, 12px) 10px 2px; color: var(--sidebar-ink2); }
 .sidebar-server-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--ink3); }

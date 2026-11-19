@@ -3,7 +3,7 @@ import { useServices, useStoreState } from '../app/context';
 import { ComposerCard } from '../cards/Cards';
 import type { RunSession } from '../store/models';
 import { attachmentRefusal, byteLabel, toBase64 } from './attachments';
-import { enterAction, maximumDraft } from './keys';
+import { enterAction, maximumDraft, secondSendWords } from './keys';
 import { choose, closed, move, paletteDraft, paletteKey, paletteState, safeIndex, type PaletteState, type SlashCatalog, type SlashCommand } from './slash';
 import { AskUnsandboxedRow, MenuList, StyleRow, Toolbar, usePopover } from './Toolbar';
 import { Guided } from './Guided';
@@ -11,8 +11,13 @@ import { readRunNow, runNowBranches, runNowTip, runNowWaits, type RunNow, type R
 import { Icon } from '../icons/Icon';
 import type { AttachmentPreview, ComposerState, SendResult } from './types';
 import { usePageOverlay } from '../shell/overlay';
+import { hostCapabilities } from '../slot/host';
 import { newClientId, newPendingRequest } from '../pending/requests';
 import { Motion } from '../theme/tokens';
+import { appendingBlock } from '../mighty/runChangesModel';
+
+/** The host on the Mac, where ⌘Enter is the second send (shell/menu.ts `macHost`). */
+const onMac = () => hostCapabilities()?.platform === 'macos';
 
 /** The editor grows to six lines, then scrolls (MainWindow.cs: ComposerLine + 5 × ComposerLineStep). */
 const maxLines = 6;
@@ -117,7 +122,7 @@ export function Composer({ session }: { session: RunSession }) {
   useEffect(() => {
     if (!fill || fill.seq === filled.current) return;
     filled.current = fill.seq;
-    change(fill.text);
+    change(fill.append ? appendingBlock(fill.text, editor.current?.value ?? '') : fill.text);
     const element = editor.current;
     if (element) { element.focus(); requestAnimationFrame(() => element.setSelectionRange(element.value.length, element.value.length)); }
   }, [fill, change]);
@@ -213,7 +218,7 @@ export function Composer({ session }: { session: RunSession }) {
         return;
       }
     }
-    const action = enterAction({ ...event, isComposing: event.nativeEvent.isComposing });
+    const action = enterAction({ ...event, isComposing: event.nativeEvent.isComposing }, onMac());
     if (action === 'pass') return;
     event.preventDefault();
     if (action === 'swallow') return;
@@ -253,7 +258,7 @@ export function Composer({ session }: { session: RunSession }) {
   const queued = (queue?.held.length ?? 0) + (queue?.items.length ?? 0);
   // The 보낼 대상 switch: the target asked now (null for Claude). Its name fills composer.ask.placeholder, which the host picks for an idle pane.
   const asked = state?.askTargets?.find((target) => target.id === state.askTarget) ?? null;
-  const placeholder = t(state?.placeholderKey ?? (session.kind === 'shell' ? 'composer.placeholder.shell' : 'composer.placeholder.idle'), { name: asked?.label ?? '' });
+  const placeholder = t(secondSendWords(state?.placeholderKey ?? (session.kind === 'shell' ? 'composer.placeholder.shell' : 'composer.placeholder.idle'), onMac()), { name: asked?.label ?? '' });
   const primaryName = state?.primary === 'queue' ? t('queue.add') : state?.primary === 'stop' ? t('composer.stop.name') : t('composer.send.name');
   const primaryTip = state?.primary === 'queue' ? t('queue.addHint') : state?.primary === 'stop' ? t('composer.stop.tooltip') : t('composer.send.tooltip');
 
@@ -334,7 +339,7 @@ export function Composer({ session }: { session: RunSession }) {
               <Icon name="rotate-ccw-clock" size={11} weight={2.4} className="composer-queue-clock" />
               <span>{t(state.busy ? 'queue.waitingBusy' : 'queue.waiting', { count: queued })}</span>
             </div>
-            {queue.waitsOnBackground && <div className="composer-queue-notice">{t(queue.waitsOnBackground)}</div>}
+            {queue.waitsOnBackground && <div className="composer-queue-notice">{t(secondSendWords(queue.waitsOnBackground, onMac()))}</div>}
             {queue.held.map((item, index) => (
               <div className="composer-queue-item" key={item.id} data-queue-held={item.id}>
                 <span className="composer-queue-number">{index + 1}</span>
@@ -385,7 +390,7 @@ export function Composer({ session }: { session: RunSession }) {
             <button type="button" className="composer-stop-small" aria-label={t('composer.stop.name')} disabled={state.stopping} onClick={() => call('stop')}><Icon name="square" size={9} weight={0} fill /></button>
           )}
           {state?.worktree && (
-            <button type="button" className="composer-worktree" data-testid="composer-worktree" aria-label={t('queue.worktree')} title={t(state.worktreeMenuOnly ? 'queue.worktreeMenuHintMac' : 'queue.worktreeHint')} disabled={!state.worktreeEnabled} onClick={() => void send(true)}><Icon name="split" size={13} weight={2.2} /></button>
+            <button type="button" className="composer-worktree" data-testid="composer-worktree" aria-label={t('queue.worktree')} title={t(state.worktreeMenuOnly ? 'queue.worktreeMenuHintMac' : onMac() ? 'queue.worktreeHintMac' : 'queue.worktreeHint')} disabled={!state.worktreeEnabled} onClick={() => void send(true)}><Icon name="split" size={13} weight={2.2} /></button>
           )}
           <button
             type="button"

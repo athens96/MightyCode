@@ -12,7 +12,7 @@ section: layout
 - {{ui:sidebar.searchPlaceholder}}: {{kbd:⌘K}}を押すと検索欄に直接移動します。
 - {{ui:phone.dashboard.title}}: すべてのワークスペースのペインの状態を1か所で確認します。
 - {{ui:sidebar.workspacesHeader}}の一覧: ワークスペースをクリックすると、そのワークスペースに切り替わります。横の矢印をクリックすると、ペインの一覧を展開したり折りたたんだりします。
-- 下部: 画面テーマのボタン(ダーク/ライト)と設定ボタン。
+- 下部: ヘルプボタン、画面テーマのボタン(ダーク/ライト)と設定ボタン。
 
 ワークスペースの一覧を展開すると、最後の行に{{ui:workspace.addPane}}ボタンがあります。ペインの行を右クリックすると、{{ui:menu.rename}}、{{ui:menu.closePane}}の項目があります。
 
@@ -20,6 +20,7 @@ section: layout
 サイドバーと作業エリアの境界線をドラッグすると、サイドバーの幅が変わります({{ui:sidebar.resize}})。
 - 境界線にポインタを合わせると、アクセントカラーに変わります。左右にドラッグして幅を合わせます。幅は決まった範囲の中でだけ変わり、アプリを開き直しても保たれます。
 - 境界線をダブルクリックすると、既定の幅に戻ります。
+- 境界線をTabキーで選んで{{kbd:←}} / {{kbd:→}}を押すと、10pxずつ狭く・広くなります。
 - 境界線を左端までドラッグすると、サイドバーが折りたたまれます。再び展開すると、ドラッグする前の幅に戻ります。
 
 ### サイドバーを折りたたむ {#sidebar-collapse}
@@ -47,7 +48,7 @@ section: layout
 2. 作成するペインを選びます: エージェント(Claude、Codex、Antigravity、pi、opencode、Hermes)のペインか{{ui:workspace.newTerminal}}。メニューの一番下のまとまりには、ワークスペースを追加する3つの方法、{{ui:workspace.add.existing}}、{{ui:workspace.add.newFolder}}、{{ui:workspace.add.fromGit}}があります([ワークスペースを開く](getting-started.md#open-workspace))。
 3. 新しいAIペインは、同じエージェントで最後に使ったペインのモデル、思考レベル、権限、表示方法を引き継ぎます。会話は新しく始まります。
 
-ショートカット: {{ui:menu.newClaudePane}}は{{kbd:⌘N}}、{{ui:menu.addTerminalPane}}は{{kbd:⌘T}}、{{ui:menu.showFiles}}は{{kbd:⇧⌘E}}です。
+ショートカット: {{ui:menu.newClaudePane}}は{{kbd:⌘N}}、{{ui:menu.addTerminalPane}}は{{kbd:⌘T}}、{{ui:menu.showFiles}}は{{kbd:⇧⌘E}}です。実行ペインは、すべてのワークスペースを合わせて128個まで開けます(ほかのコンピュータのペインをそのまま表示するリモートペインは数えません)。
 
 > [!note]
 > Claude以外のエージェント(Codex、Antigravity、pi、opencode、Hermes)のペインには{{ui:badge.beta}}の表示が付きます。
@@ -62,12 +63,20 @@ section: layout
 
 ![[resume-list]]
 
+### 過去の会話を検索 {#conversation-search}
+{{ui:conversationSearch.open}}（{{kbd:⇧⌘F}}）は、このフォルダの過去のセッションのリクエストと回答から言葉を探します。ワークスペースのヘッダーの虫めがねボタン、サイドバーでワークスペースを右クリックしたメニュー、メニューバーのワークスペースメニューからも開けます。
+- 一つのメッセージにすべての単語が含まれるセッションが新しい順に最大50件表示され、見つかった言葉に印が付きます。ツールの出力は検索しません。
+- Claude、Codex、Antigravity、piのセッションを検索し、opencodeとHermesのセッションは検索しません。ペインで開いているセッションと60日より古いセッションは含まれません。
+- {{kbd:↑}} {{kbd:↓}}で選んで{{kbd:Enter}}を押すか、{{ui:conversationSearch.resume}}をクリックすると、新しいペインがそのセッションを続けます。
+- {{ui:conversationSearch.export}}は、その会話のリクエストと回答をMarkdownファイルに保存します。
+- リモートワークスペースでは使えません。セッションの記録がそのコンピュータにあるためです。
+
 ## タブと分割 {#tabs-splits}
 - タブをドラッグしてほかのグループの中央にドロップすると、タブとしてまとまります({{ui:layout.drop.merge}})。
 - グループの左・右・上・下の端にドロップすると、その方向に分割されます。
 - 分割の境界線をドラッグするとサイズが変わり、ダブルクリックすると半分ずつに分かれます。
 - ドラッグ中に{{kbd:Esc}}を押すとキャンセルされます。
-- タブを右クリックすると、{{ui:menu.rename}}、{{ui:menu.focusPane}}、{{ui:menu.closeTab}}の項目があります。
+- タブをダブルクリックすると名前を変更します。右クリックすると、{{ui:menu.rename}}、{{ui:menu.focusPane}}、{{ui:menu.closeTab}}の項目があります。
 
 配置はワークスペースごとに保存されます。ワークスペースを切り替えても、それぞれの配置がそのまま残ります。
 
@@ -75,9 +84,11 @@ section: layout
 ペインのヘッダーにある…ボタンには、次の項目があります。
 - {{ui:menu.rename}}
 - {{ui:menu.focusPane}}: このペインだけを大きく表示します。もう一度選ぶと{{ui:pane.menu.restoreLayout}}で元に戻ります。
-- {{ui:pane.menu.copyLog}}
-- {{ui:pane.menu.newConversation}}: 次のリクエストからは以前の会話を引き継ぎません。
+- {{ui:pane.menu.copyLog}}: エージェントペインの実行記録をコピーします。ターミナルペインでは、この位置に{{ui:pane.menu.terminalHistory}}があります([ターミナルペイン](terminal-files-browser.md#terminal))。
+- {{ui:pane.menu.newConversation}}: 次のリクエストからは以前の会話を引き継ぎません(エージェントペイン)。
 - {{ui:menu.closePane}}
+
+ペインのヘッダーを右クリックすると{{ui:menu.rename}}、{{ui:session.menu.focus}}、{{ui:session.menu.close}}の項目があり、ターミナルペインには{{ui:terminal.history.title}}もあります。
 
 ## ショートカット {#shortcuts}
 | ショートカット | 動作 |
@@ -86,6 +97,7 @@ section: layout
 | {{kbd:⌘N}} | {{ui:menu.newClaudePane}} |
 | {{kbd:⌘T}} | {{ui:menu.addTerminalPane}} |
 | {{kbd:⇧⌘E}} | {{ui:menu.showFiles}} |
+| {{kbd:⇧⌘F}} | {{ui:conversationSearch.open}} |
 | {{kbd:⌘K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{ui:menu.settings}} |

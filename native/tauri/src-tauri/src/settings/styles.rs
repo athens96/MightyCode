@@ -1,6 +1,7 @@
 //! The styles box (C# `BuildStylesSection`, MainWindow.Styles.cs:18-139; M/StyleSettingsSection.swift:16-108): the lock banner while
-//! the trust file cannot be read, the register and rescan buttons, the explanation, a row per style — its name beside the state
-//! capsule, its figures, its path, its small buttons — and a faded row per file that was refused. Owner: W9-D.
+//! the trust file cannot be read, the register and refresh buttons, the explanation, a row per style — its name beside the state
+//! capsule, its path, its small buttons — and a faded row per file that was refused. Owner: W9-D. A style's id, hash and counts are a
+//! style author's, so they sit in the name's tooltip (보기 shows the whole manifest).
 //!
 //! The registry is read off the dispatcher (styles.rs) and kept here until the next rescan or decision; the box is drawn from it.
 //! Register, allow, revoke, unblock and remove write only where `Host::writes` allows (their buttons are off otherwise).
@@ -144,11 +145,10 @@ pub fn styles(host: &Arc<Host>, ui: &mut Ui) -> El {
     rows.finish().aid("settings-style-rows")
 }
 
-/// One style's row: its name beside the state capsule, its id, hash, action and tool counts, its path, then view, the decision and
-/// (a user style) remove.
+/// One style's row: its name (its id, hash, action and tool counts in its tooltip) beside the state capsule, its path, then view, the
+/// decision (allow, block or unblock) and (a user style) delete.
 fn style_row(host: &Arc<Host>, ui: &mut Ui, style: &RegisteredStyle, locked: bool, writes: bool) -> El {
     let locale = ui.locale();
-    let count = |key: &str, n: usize| locale.get_with(key, &[("count", &n.to_string())]);
     // A style the app ships reads the bundled badge's one word here, as the Mac's list does (M/Styles/StyleSurfaces.swift:248).
     let capsule = if style.approval == "preApproved" {
         locale.get("settings.toolkit.bundledBadge")
@@ -159,16 +159,9 @@ fn style_row(host: &Arc<Host>, ui: &mut Ui, style: &RegisteredStyle, locked: boo
         true,
         metrics::SPACING_SM,
         vec![
-            ui.settings_text(presentation::name(&locale, style), TextStyle::size(12.0).medium()),
+            ui.settings_text(presentation::name(&locale, style), TextStyle::size(12.0).medium()).tooltip(figures(&locale, style)),
             ui.settings_capsule(capsule, ui.brush(Token::Ink2), ui.theme().subtle(), 10.0, 8.0),
         ],
-    );
-    let figures = format!(
-        "{} · {} · {} · {}",
-        style.id(),
-        locale.get_with("settings.styles.hashDetailTemplate", &[("hash", &style.hash[..12.min(style.hash.len())])]),
-        count("settings.styles.actionCountTemplate", style.manifest.actions.len()),
-        count("settings.styles.autoAllowCountTemplate", style.manifest.auto_allow().len())
     );
     let mut controls = vec![];
     let viewed = style.clone();
@@ -216,12 +209,19 @@ fn style_row(host: &Arc<Host>, ui: &mut Ui, style: &RegisteredStyle, locked: boo
     El::stack(
         false,
         metrics::SPACING_XS,
-        vec![
-            head,
-            ui.settings_text(figures, TextStyle::size(10.0).ink(Token::Ink2)),
-            ui.settings_tertiary(style.path.clone(), 10.0, true, true),
-            El::stack(true, metrics::SPACING_SM, controls),
-        ],
+        vec![head, ui.settings_tertiary(style.path.clone(), 10.0, true, true), El::stack(true, metrics::SPACING_SM, controls)],
     )
     .aid(format!("settings-style-{}", style.id()))
+}
+
+/// A style's id, its hash's first 12 characters, its action and auto-allow counts: the name's tooltip.
+fn figures(locale: &mighty_core::locale::Locale, style: &RegisteredStyle) -> String {
+    let count = |key: &str, n: usize| locale.get_with(key, &[("count", &n.to_string())]);
+    format!(
+        "{} · {} · {} · {}",
+        style.id(),
+        locale.get_with("settings.styles.hashDetailTemplate", &[("hash", &style.hash[..12.min(style.hash.len())])]),
+        count("settings.styles.actionCountTemplate", style.manifest.actions.len()),
+        count("settings.styles.autoAllowCountTemplate", style.manifest.auto_allow().len())
+    )
 }

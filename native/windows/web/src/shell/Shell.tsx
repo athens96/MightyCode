@@ -83,6 +83,7 @@ function useShortcuts(snapshot: AppSnapshot | null, blocked: boolean) {
         }
         case 'settings': return call('openSettings');
         case 'files': return call('openFiles', {});
+        case 'conversationSearch': return call('openConversationSearch', {});
         case 'help': return call('openHelp');
         case 'textLarger': return call('textSize', { step: 1 });
         case 'textSmaller': return call('textSize', { step: -1 });

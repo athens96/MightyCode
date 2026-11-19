@@ -28,6 +28,8 @@ use mighty_companion::card::{CompanionCard, CompanionOption, CompanionRequest};
 use mighty_companion::follow::{self, Agent, Follower};
 use mighty_companion::pet::CompanionPet;
 use mighty_companion::prefs::{self, CompanionPreferences};
+use mighty_companion::progress::CompanionProgress;
+use mighty_companion::scene::PROGRESS_FOLD;
 use mighty_companion::{Companion, CompanionAction, bubble};
 use mighty_core::design_tokens::{Token, metrics};
 use mighty_core::model::{AppSnapshot, RunSession};
@@ -400,7 +402,7 @@ pub fn refresh(host: &Host) {
     let statuses: Vec<String> = agents.iter().map(|s| status_of(s, requests.get(s.id()).unwrap_or(&none))).collect();
     let now = companion.now();
     let standing = lock(&companion.overlay).is_some();
-    let (card, visible) = {
+    let (card, visible, progress_pane) = {
         let mut state = lock(&companion.state);
         state.busy = statuses.iter().filter(|s| busy(s)).count();
         // The drafts and the error of requests seen waiting that wait no longer are let go (C# `ReceiveCompanionPermission`); a draft of
@@ -463,12 +465,26 @@ pub fn refresh(host: &Host) {
             pending,
         );
         let visible = current.is_some() && (permission.is_some() || followed.bubble && shows_task);
-        (card, visible)
+        let progress_pane = current.filter(|_| permission.is_none() && followed.bubble && shows_task);
+        (CompanionCard { progress_collapsed: state.prefs.progress_folded(), ..card }, visible, progress_pane)
     };
+    // The progress card over the task bubble: the newest request of the pane it shows, read with the state's lock let go.
+    let card = CompanionCard { progress: progress_pane.and_then(|pane| progress_of(host, &pane)), ..card };
     let mut overlay = lock(&companion.overlay);
     if let Some(standing) = overlay.as_mut() {
         standing.companion.set_card(Some(card), visible);
     }
+}
+
+/// The progress card of a pane (the Mac's `shownProgress`): its newest request's steps and background work as the page's progress
+/// panel has them, numbered as the page numbers it (its older history's requests counted); None for a request with neither.
+fn progress_of(host: &Host, pane: &Arc<RunSession>) -> Option<CompanionProgress> {
+    let earlier = {
+        let view = host.view();
+        let (older, _) = crate::history::older(host, &view, pane);
+        older.iter().filter(|run| !run.is_notice()).count()
+    };
+    CompanionProgress::newest(pane.graph_runs(), earlier, mighty_core::time::DateTimeOffset::now(), &host.locale)
 }
 
 /// C# `CompanionCard`: the workspace over the title, the state word and clock, the request and the work; or the request waiting on the
@@ -534,6 +550,8 @@ fn card(
         count,
         pending,
         approval: permission.map(|p| request_card(host, state, p, origin)),
+        progress: None,
+        progress_collapsed: false,
     }
 }
 
@@ -704,6 +722,17 @@ async fn press(host: &Arc<Host>, companion: &Arc<CompanionApp>, key: &str, actio
             if turned_on {
                 save(host, companion);
             }
+            refresh(host);
+            return;
+        }
+        PROGRESS_FOLD => {
+            // The progress card folds to its heading or opens again, and stays so between launches.
+            {
+                let mut state = lock(&companion.state);
+                let folded = state.prefs.progress_folded();
+                state.prefs.progress_collapsed = Some(!folded);
+            }
+            save(host, companion);
             refresh(host);
             return;
         }

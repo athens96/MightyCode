@@ -7,7 +7,7 @@ Mighty Code is a desktop app for using Claude Code, Codex CLI, Google's Antigrav
 
 ## What you need {#requirements}
 - macOS 14 or later. On Windows: Windows 10 (version 2004) or later, or Windows 11.
-- The AI CLIs you want to use. The app runs the CLIs directly, so they need to be installed and signed in. On a Mac you can install them from the {{ui:setup.title}} screen the app shows the first time it opens ([First launch](#first-launch)). You can skip the ones you won't use.
+- The AI CLIs you want to use. The app runs the CLIs directly, so they need to be installed and signed in. You can install them from the {{ui:setup.title}} screen the app shows the first time it opens ([First launch](#first-launch)). You can skip the ones you won't use.
 
 - Claude Code: Mac `curl -fsSL https://claude.ai/install.sh | bash`, Windows `npm install -g @anthropic-ai/claude-code`
 - Codex CLI: Mac `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, Windows `npm install -g @openai/codex`
@@ -17,7 +17,7 @@ Mighty Code is a desktop app for using Claude Code, Codex CLI, Google's Antigrav
 - Hermes: Mac `curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash` (needs Git), Windows `irm https://hermes-agent.nousresearch.com/install.ps1 | iex` (see [Hermes](agent-pane.md#hermes))
 
 > [!tip]
-> Once the app is open, {{ui:settings.nav.tools}} shows which CLIs are ready. On a Mac you install them right there; on Windows you copy the install commands. You sign in on the {{ui:settings.nav.cli}} tab. See [Settings](settings.md#components).
+> Once the app is open, {{ui:settings.nav.tools}} shows which CLIs are ready. Install what is missing right there. You sign in on the {{ui:settings.nav.cli}} tab. See [Settings](settings.md#components).
 
 ## Install {#install}
 1. Get the file for your system from the [download page](https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/index.html).
@@ -68,7 +68,7 @@ If no agent CLI (Claude Code, Codex, Antigravity, pi, opencode or Hermes) can ru
 
 1. Check what you want to install. The first time, a missing Git starts checked, and so does Claude Code when there is no agent CLI at all; and anything a picked item needs (such as Homebrew for gh) comes along.
 2. Click {{ui:setup.button.install}}. Every command that will run is shown, in order. Nothing runs until you click {{ui:setup.confirm.run}}.
-3. The commands run one after another, from your home folder, in a terminal window the app opens for them. It is not a pane and is not saved with your workspaces. Answer any password or confirmation prompt in the terminal yourself; the app never uses sudo and never sees your password. If a step fails, the next one still runs.
+3. On a Mac, one terminal pane opens in the app, in a local workspace (Settings and this screen close), and the commands run in it one after another, from your home folder. With no workspace open (the first run), the same commands run in a new window of the macOS Terminal app instead; macOS may ask once to allow it. Either way, the rows here are checked again when it ends. Answer any password or confirmation prompt in that terminal pane yourself; the app never uses sudo and never sees your password. If a step fails, the next one still runs.
 4. When it ends, the app checks again. If the app is in front, this screen opens again; otherwise the status bar shows a {{ui:setup.finishedBadge}} button. What counts is what the check finds, not how a command exited. When a CLI has just appeared, a {{ui:setup.button.signIn}} button shows.
 
 Git (Xcode Command Line Tools) opens a system install window, where you finish it. The script waits up to 30 minutes; Control-C ends only the wait and moves on. If git does not run because the Xcode license has not been accepted, Git shows {{ui:setup.status.attention}}. Tailscale opens its official download page. A Claude Code that is too old shows {{ui:setup.status.outdated}} with an {{ui:setup.button.update}} button.
@@ -98,6 +98,6 @@ Right-click a workspace in the sidebar for {{ui:menu.rename}}, {{ui:menu.showInF
 ## Opening this help {#help}
 You can open this help straight from the app. It opens in the language you chose in the app.
 
-- Mac: {{ui:menu.help}} ({{kbd:⌘?}}) in the menu bar, or the {{ui:settings.appInfo.openHelpButton}} button in {{ui:menu.settings}} → {{ui:settings.nav.about}}
+- Mac: {{ui:menu.help}} ({{kbd:⌘?}}) in the menu bar, the help button at the bottom of the sidebar, or the {{ui:settings.appInfo.openHelpButton}} button in {{ui:menu.settings}} → {{ui:settings.nav.about}}
 - Windows: the help button at the bottom of the sidebar, {{kbd:F1}}, or the {{ui:settings.appInfo.openHelpButton}} button in {{ui:menu.settings}} → {{ui:settings.nav.about}}
 - Phone: the {{ui:phone.hosts.help}} button on the {{ui:phone.tabs.hosts}} tab

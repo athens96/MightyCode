@@ -137,7 +137,7 @@ impl RequestHandler for DesktopRouter {
         let sharing = (self.sharing)();
         Box::pin(async move {
             let Some(sharing) = sharing else {
-                return error_reply(503, &mighty_run::strings::get("remote.host.error.stopped"));
+                return error_reply(503, &mighty_run::strings::get("remote.relay.error.notSharing"));
             };
             sharing.serve_relay(&device.client_id, &method, &path, body.as_ref().map(|raw| raw.get().as_bytes())).await
         })

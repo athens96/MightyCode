@@ -30,6 +30,16 @@ pub fn write_script(text: &str, folder: &Path) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
+/// The Mac's script (Swift `SetupScriptFiles.writeScript`): `text` as plain UTF-8 in a new `.command` file with a random name in
+/// `folder` (the folder is this user's alone). The pane hands its path to bash; Terminal.app, the fallback, runs a `.command` file
+/// (the Mac's terminal launcher makes it runnable by its owner first). A name that is already there fails the write.
+pub fn write_shell_script(text: &str, folder: &Path) -> std::io::Result<PathBuf> {
+    let path = folder.join(format!("install-{}.command", uuid::Uuid::new_v4().simple()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+    file.write_all(text.as_bytes())?;
+    Ok(path)
+}
+
 /// Fresh marker paths in `folder`, which nothing has made yet: `(started, done)`.
 pub fn markers(folder: &Path) -> (PathBuf, PathBuf) {
     let id = uuid::Uuid::new_v4().simple().to_string();
@@ -59,7 +69,8 @@ pub fn runner_process_id(files: &dyn SetupFiles, started_marker: &Path) -> Optio
 
 /// Whether the run is over: the script made its end marker, or it started and its PowerShell is gone without making it (the window
 /// was closed; a Windows Terminal tab leaves the app no process of its own to wait for). `is_running` stands in for the port's
-/// process check (the checks').
+/// process check (the checks'). The Mac's script writes no process ID: its end marker is made on any exit (bash's EXIT trap, a
+/// closed pane's hang-up included).
 pub fn run_ended(files: &dyn SetupFiles, started_marker: &Path, done_marker: &Path, is_running: Option<&dyn Fn(u32) -> bool>) -> bool {
     if marker_exists(files, done_marker) {
         return true;

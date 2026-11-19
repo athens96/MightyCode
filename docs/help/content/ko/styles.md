@@ -47,7 +47,7 @@ Claude가 계획 모드(Plan mode, 또는 클러드 플랜 스타일)에서 계�
 2. 새 스타일은 처음 한 번 내용을 확인해야 합니다. {{ui:settings.styles.viewButton}} 단추로 출처, 자동 허용할 도구, 설치 명령, 모든 단추를 확인합니다.
 3. 괜찮으면 {{ui:settings.styles.allowButton}}을 누릅니다.
 
-스타일 파일이 바뀌면 다시 확인을 받습니다. 허용을 거두려면 같은 곳의 {{ui:settings.styles.revokeButton}}를 누릅니다.
+스타일 파일이 바뀌면 다시 확인을 받습니다. 허용한 스타일을 막으려면 같은 곳의 {{ui:settings.styles.revokeButton}} 단추를 누르고, 다시 풀려면 {{ui:settings.styles.unblockButton}} 단추를 누릅니다. 목록에서 지우려면 {{ui:settings.styles.removeButton}} 단추를 누릅니다. 스타일의 ID와 해시는 이름 위에 포인터를 올리면 보입니다.
 
 > [!warning]
 > 도구를 자동 허용하는 스타일은 그 도구를 묻지 않고 실행합니다. 출처를 믿을 수 있을 때만 허용하세요.

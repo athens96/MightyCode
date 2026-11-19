@@ -1,9 +1,8 @@
-//! The direct path's rows of 모바일 원격 (C# MainWindow.MobileRemote.cs `BuildMobileRemoteSection`'s direct part and `ShowDirect`; the
-//! firewall row's state from MainWindow.MobileDirect.cs): the Tailscale switch over the Windows words, and while it is on its port with
-//! its own apply button, what the path found, and the Windows Firewall rule's row with the one button that asks Windows to elevate
-//! (add while there is none, remove while there is one, read again while it could not be read) and the update button. The switch and
-//! the port take effect as they are applied (`direct::write`); the row says only Core's words. In a smoke every control is off, as C#'s
-//! Loaded handler leaves them. Owner: W8-C.
+//! The direct path's rows of 원격 연결's 휴대폰 tab (C# MainWindow.MobileRemote.cs `BuildMobileRemoteSection`'s direct part and
+//! `ShowDirect`): the Tailscale switch over this OS's words, and while it is on its port with its own apply button and what the path
+//! found. The Windows Firewall rule it needs is the one sharing uses too, drawn once under the tab with one set of words
+//! (remote.rs `firewall`). The switch and the port take effect as they are applied (`direct::write`); the rows say only Core's words.
+//! In a smoke every control is off, as C#'s Loaded handler leaves them. Owner: W8-C.
 
 use std::sync::Arc;
 
@@ -11,7 +10,6 @@ use mighty_core::design_tokens::{Token, metrics};
 use mighty_core::model::MobileRemoteSettings;
 use mighty_native::kit::{ControlSize, TextStyle};
 use mighty_native::ui::{Border, El, Kind, Thickness, Ui, VAlign};
-use mighty_platform::FirewallRule;
 use mighty_remote::direct::strings;
 
 use super::mobile::MOBILE_INDENT;
@@ -25,22 +23,13 @@ pub(super) const MOBILE_PORT_WIDTH: f64 = 80.0;
 pub fn rows(host: &Arc<Host>, ui: &mut Ui, saved: &MobileRemoteSettings) -> El {
     let locale = ui.locale();
     let smoke = host.smoke.is_some();
-    // The rule is read (unelevated) once each time Settings shows the box, unless a change still waits on its prompt (C#'s Loaded).
-    let read = ui.local("mobile-direct-firewall-read", || false);
-    if !read.get() {
-        read.set(true);
-        direct::settings_opened(host);
-    }
-    let firewall = direct::firewall_view(host);
-    let ports = direct::firewall_ports(host);
     let status = direct::status(host);
     let words = strings::status_detail(&locale, &status);
-    let caption = |ui: &Ui, text: String| ui.settings_text(text, TextStyle::size(11.0).ink(Token::Ink2));
     let small = |ui: &Ui, title: String, press: Box<dyn Fn() + Send + Sync>| {
         ui.settings_push(ui.button(title, press), ControlSize::Small, false, false)
     };
 
-    // The Mac (no firewall step, `PlatformProfile::direct_connection_firewall`) says this Mac's own words and shows no firewall row.
+    // The Mac (no firewall step, `PlatformProfile::direct_connection_firewall`) says this Mac's own words.
     let has_firewall = direct::has_firewall(host);
     let description = if has_firewall { strings::description(&locale) } else { locale.get("mobileRemote.direct.description") };
     let direct_label = locale.get("mobileRemote.direct.toggle");
@@ -94,43 +83,5 @@ pub fn rows(host: &Arc<Host>, ui: &mut Ui, saved: &MobileRemoteSettings) -> El {
     .margin(indent)
     .visible(saved.enabled && saved.direct_enabled && !words.is_empty());
 
-    let present = matches!(firewall.rule, FirewallRule::Present { .. });
-    let state_words = format!(
-        "{}{}{}",
-        strings::firewall_state(&locale, &firewall.rule),
-        direct::firewall_needs_update_words(host),
-        firewall.message.as_ref().map(|message| format!(" · {message}")).unwrap_or_default()
-    );
-    let firewall_words = El::stack(
-        false,
-        metrics::SPACING_XXS,
-        vec![
-            caption(ui, state_words).aid("settings-mobile-firewall-state"),
-            caption(ui, strings::firewall_description(&locale)),
-            caption(ui, strings::port_hint(&locale)),
-            caption(ui, locale.get("remote.windows.firewall.removeClosesBoth")),
-        ],
-    );
-    let unknown = firewall.rule == FirewallRule::Unreadable;
-    let label = if unknown { strings::firewall_recheck_button(&locale) } else { strings::firewall_button(&locale, &firewall.rule) };
-    let free = !smoke && !firewall.busy;
-    let to = host.clone();
-    let button = small(ui, label.clone(), Box::new(move || direct::firewall_pressed(&to)))
-        .named(&label)
-        .aid("settings-mobile-firewall-button")
-        // With no port to open and no rule to remove there is nothing to press, so the button is not shown at all.
-        .visible(firewall.rule != FirewallRule::Missing || !ports.is_empty())
-        // Adding, removing and even reading the rule run netsh: only with --allow-state-write (D4).
-        .enabled(free && firewall.may_change);
-    let to = host.clone();
-    let update = small(ui, locale.get("remote.windows.firewall.update"), Box::new(move || direct::firewall_update_pressed(&to)))
-        .aid("settings-mobile-firewall-update")
-        .visible(present && !ports.is_empty())
-        .enabled(free && firewall.may_change);
-    let firewall_buttons = El::stack(true, metrics::SPACING_SM, vec![update, button]);
-    let firewall_row =
-        El::border(Border { child: Some(Box::new(ui.settings_labeled(firewall_words, firewall_buttons, true))), ..Border::default() })
-            .margin(indent)
-            .visible(has_firewall && (saved.direct_enabled || present));
-    El::stack(false, metrics::SPACING_SM, vec![direct_line, port_row, status_row, firewall_row])
+    El::stack(false, metrics::SPACING_SM, vec![direct_line, port_row, status_row])
 }

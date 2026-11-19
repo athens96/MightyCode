@@ -16,6 +16,8 @@ use crate::bubble::{self, BubbleButton};
 use crate::card::{CompanionCard, CompanionRequest};
 use crate::layout;
 use crate::plan::{self, PlanBlock};
+use crate::progress::{CompanionProgress, ProgressLine};
+use mighty_graph::flow::steps::ProgressState;
 
 /// The bubble: padding 12 inside a radius of 18.
 pub const INSET: f64 = 12.0;
@@ -42,6 +44,10 @@ pub const MENU_ROW: f64 = 26.0;
 pub const MENU_INSET: f64 = 4.0;
 pub const MENU_ROW_RADIUS: f64 = 4.0;
 pub const MENU_TYPE: f64 = 13.0;
+/// The progress card's corner, its state pill's height, and the press on its heading that folds it.
+pub const PROGRESS_CORNER: f64 = 14.0;
+pub const PILL_HEIGHT: f64 = 18.0;
+pub const PROGRESS_FOLD: &str = "progress-fold";
 /// C# `DesignMetrics.Radius.Row`, `.Search`.
 const RADIUS_ROW: f64 = 8.0;
 const RADIUS_SEARCH: f64 = 7.0;
@@ -65,6 +71,17 @@ pub fn status_ink(status: &str) -> Token {
         "error" | "failed" => Token::ErrText,
         "stopped" | "cancelled" | "interrupted" => Token::StopText,
         _ => Token::Ink2,
+    }
+}
+
+/// `DesignPalette.Soft(DesignTone(blockStatus:))`: the wash of a state's pill.
+pub fn status_soft(status: &str) -> Token {
+    match status {
+        "running" | "starting" | "queued" => Token::RunSoft,
+        "waiting" => Token::WaitSoft,
+        "completed" => Token::DoneSoft,
+        "error" | "failed" => Token::ErrSoft,
+        _ => Token::StopSoft,
     }
 }
 
@@ -681,6 +698,167 @@ impl<'a> Painter<'a> {
                 self.icon(ICONS, "\u{F136}", 13.0, x, y, ink, Some(("\u{F13C}", card)));
             }
             _ => self.push(PetItem::Ellipse { center: PetPoint { x, y }, radius_x: 5.9, radius_y: 5.9, color: ink, stroke: Some(1.2) }),
+        }
+    }
+
+    /// The progress card over the bubble (the Mac's `CompanionProgressCard`) in `area`: on the bubble's card at radius 14 with its
+    /// hairline, a 26-high heading — the clipboard in the accent, "진행 상황", the request's number and the steps done, the state in its
+    /// pill (the spinner before it while the request runs) and the fold's chevron — that folds the card; open, the step lines, "외 N개",
+    /// then the background work under its own small heading, each line a press that opens the pane. The spinner's centre is
+    /// [`Painter::spinner`].
+    pub fn progress_card(&mut self, progress: &CompanionProgress, collapsed: bool, area: PetRect) {
+        use crate::progress::{HEADER_HEIGHT, ROW_HEIGHT, SECTION_HEIGHT};
+        let outer = std::mem::take(&mut self.items);
+        let card = self.color(Token::Card);
+        self.fill(area, PROGRESS_CORNER, card);
+        let edge = paint(self.palette[Token::Ink], 0.10);
+        self.hairline(area, PROGRESS_CORNER, edge, metrics::STROKE_LINE);
+        let (x, w) = (area.x + metrics::SPACING_MD, area.width - 2.0 * metrics::SPACING_MD);
+        let middle = area.y + HEADER_HEIGHT / 2.0;
+        // The right of the heading first: the chevron, the state's pill and the spinner before it.
+        const CHEVRON: f64 = 9.0;
+        let gap = metrics::SPACING_XS;
+        let chevron_x = x + w - CHEVRON / 2.0;
+        let ink2 = self.color(Token::Ink2);
+        let tip = if collapsed { -1.8 } else { 1.8 };
+        for (from, to) in
+            [((chevron_x - 3.5, middle - tip), (chevron_x, middle + tip)), ((chevron_x, middle + tip), (chevron_x + 3.5, middle - tip))]
+        {
+            self.push(PetItem::Line {
+                from: PetPoint { x: from.0, y: from.1 },
+                to: PetPoint { x: to.0, y: to.1 },
+                color: ink2,
+                width: 1.5,
+                round: true,
+            });
+        }
+        let word = self.text(&progress.state_word, 10.0, 700, WIDE, 1, None, false);
+        let pill_width = (word.width + 2.0 * metrics::SPACING_SM).ceil();
+        let pill_x = x + w - CHEVRON - gap - pill_width;
+        let soft = paint(self.palette[status_soft(&progress.status)], 1.0);
+        self.fill(PetRect::new(pill_x, middle - PILL_HEIGHT / 2.0, pill_width, PILL_HEIGHT), PILL_HEIGHT / 2.0, soft);
+        self.put(&word, pill_x + metrics::SPACING_SM, (middle - word.height / 2.0).round(), status_ink(&progress.status));
+        let mut right = pill_x;
+        if progress.running {
+            self.spinner = Some(PetPoint { x: pill_x - metrics::SPACING_SM - 4.5, y: middle });
+            right -= metrics::SPACING_SM + 9.0;
+        }
+        // The left: the clipboard, the title, the request's number (cut to what is left) and the count.
+        let accent = self.color(Token::Accent);
+        self.icon(ICONS, "\u{E9D5}", 10.0, x + 5.0, middle, accent, None);
+        let mut cursor = x + 10.0 + gap;
+        let title = self.text(&progress.title, 10.0, 700, WIDE, 1, None, false);
+        self.put(&title, cursor, (middle - title.height / 2.0).round(), Token::Ink);
+        cursor += title.width + gap;
+        let count = progress.count.as_deref().map(|c| self.text(c, 10.0, 600, WIDE, 1, None, true));
+        let count_width = count.as_ref().map_or(0.0, |c| c.width + gap);
+        let heading = self.text(&progress.heading, 10.0, 400, (right - gap - count_width - cursor).max(1.0), 1, None, false);
+        self.put(&heading, cursor, (middle - heading.height / 2.0).round(), Token::Ink2);
+        cursor += heading.width + gap;
+        if let Some(count) = &count {
+            self.put(count, cursor, (middle - count.height / 2.0).round(), Token::Ink2);
+        }
+        self.hits.push((PetRect::new(area.x, area.y, area.width, HEADER_HEIGHT), PROGRESS_FOLD.into()));
+        if !collapsed {
+            let mut y = area.y + HEADER_HEIGHT;
+            for row in &progress.rows {
+                self.progress_line(row, x, y, w);
+                y += ROW_HEIGHT;
+            }
+            if let Some(more) = &progress.more {
+                self.progress_more(more, x, y);
+                y += SECTION_HEIGHT;
+            }
+            if !progress.background.is_empty() {
+                // "백그라운드 1/3" at the foot of its 18.
+                let label = self.text(&progress.background_title, 9.0, 600, WIDE, 1, None, false);
+                let count = self.text(&progress.background_count, 9.0, 400, WIDE, 1, None, true);
+                self.put(&label, x, y + SECTION_HEIGHT - label.height, Token::Ink2);
+                self.put(&count, x + label.width + gap, y + SECTION_HEIGHT - count.height, Token::Ink2);
+                y += SECTION_HEIGHT;
+                for item in &progress.background {
+                    self.progress_line(item, x, y, w);
+                    y += ROW_HEIGHT;
+                }
+                if let Some(more) = &progress.background_more {
+                    self.progress_more(more, x, y);
+                }
+            }
+            let lines = PetRect::new(area.x, area.y + HEADER_HEIGHT, area.width, area.height - HEADER_HEIGHT);
+            self.hits.push((lines, "open".into()));
+        }
+        let drawn = std::mem::replace(&mut self.items, outer);
+        self.push(PetItem::Group { role: "progress".into(), rect: area, opacity: 1.0, items: drawn });
+    }
+
+    /// A line of the progress card: its state's mark in a column of 12, a background piece's symbol (a sub-agent or a command), its words
+    /// on one line (the step in progress semibold, one to come in the secondary ink, a finished one faded) and its time at the right.
+    fn progress_line(&mut self, line: &ProgressLine, x: f64, y: f64, w: f64) {
+        let gap = metrics::SPACING_XS;
+        let middle = y + crate::progress::ROW_HEIGHT / 2.0;
+        self.progress_mark(line.state, x + 6.0, middle);
+        let mut cursor = x + 12.0 + gap;
+        if let Some(agent) = line.agent {
+            let ink = self.color(Token::Ink2);
+            self.icon(ICONS, if agent { "\u{E77B}" } else { "\u{E756}" }, 9.0, cursor + 4.5, middle, ink, None);
+            cursor += 9.0 + gap;
+        }
+        let time = line.time.as_deref().map(|t| self.text(t, 9.0, 400, WIDE, 1, None, true));
+        let time_width = time.as_ref().map_or(0.0, |t| t.width.ceil() + gap);
+        if let Some(time) = &time {
+            self.put(time, x + w - time.width, (middle - time.height / 2.0).round(), Token::Ink2);
+        }
+        let current = line.state == ProgressState::Current;
+        let words = self.text(&line.text, 10.5, if current { 600 } else { 400 }, (x + w - time_width - cursor).max(1.0), 1, None, false);
+        let ink = if line.state == ProgressState::Pending { Token::Ink2 } else { Token::Ink };
+        if line.state == ProgressState::Done {
+            let outer = std::mem::take(&mut self.items);
+            self.put(&words, cursor, (middle - words.height / 2.0).round(), ink);
+            let drawn = std::mem::replace(&mut self.items, outer);
+            self.push(PetItem::Group {
+                role: "done".into(),
+                rect: PetRect::new(cursor, y, words.width, crate::progress::ROW_HEIGHT),
+                opacity: 0.75,
+                items: drawn,
+            });
+        } else {
+            self.put(&words, cursor, (middle - words.height / 2.0).round(), ink);
+        }
+    }
+
+    /// "외 N개" in its 18.
+    fn progress_more(&mut self, more: &str, x: f64, y: f64) {
+        let words = self.text(more, 9.0, 400, WIDE, 1, None, false);
+        self.put(&words, x, (y + (crate::progress::SECTION_HEIGHT - words.height) / 2.0).round(), Token::Ink2);
+    }
+
+    /// A step's mark, 10 across: the filled check once done, a ring with its middle filled while in progress, a ring to come, a ring with
+    /// a square once stopped, the filled exclamation once failed.
+    fn progress_mark(&mut self, state: ProgressState, x: f64, y: f64) {
+        let center = PetPoint { x, y };
+        match state {
+            ProgressState::Done => {
+                let ink = self.color(Token::Done);
+                self.icon(ICONS, "\u{EC61}", 10.0, x, y, ink, None);
+            }
+            ProgressState::Current => {
+                let ink = self.color(Token::Run);
+                self.push(PetItem::Ellipse { center, radius_x: 4.4, radius_y: 4.4, color: ink, stroke: Some(1.2) });
+                self.push(PetItem::Ellipse { center, radius_x: 2.4, radius_y: 2.4, color: ink, stroke: None });
+            }
+            ProgressState::Pending => {
+                let ink = self.color(Token::Ink2);
+                self.push(PetItem::Ellipse { center, radius_x: 4.4, radius_y: 4.4, color: ink, stroke: Some(1.0) });
+            }
+            ProgressState::Stopped => {
+                let ink = self.color(Token::Stop);
+                self.push(PetItem::Ellipse { center, radius_x: 4.4, radius_y: 4.4, color: ink, stroke: Some(1.2) });
+                self.fill(PetRect::new(x - 1.8, y - 1.8, 3.6, 3.6), 0.8, ink);
+            }
+            ProgressState::Failed => {
+                let (ink, card) = (self.color(Token::Err), self.color(Token::Card));
+                self.icon(ICONS, "\u{F136}", 10.0, x, y, ink, Some(("\u{F13C}", card)));
+            }
         }
     }
 

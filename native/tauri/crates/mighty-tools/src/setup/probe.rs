@@ -30,17 +30,30 @@ pub enum SetupProbeState {
     NeedsAttention,
 }
 
-/// C# `SetupProbeResult(State, Version?, Minimum?)`.
+/// C# `SetupProbeResult(State, Version?, Minimum?)`, with Swift's attention reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetupProbeResult {
     pub state: SetupProbeState,
     pub version: Option<String>,
     pub minimum: Option<String>,
+    /// Why an item needs attention (the Mac's command line tools: [`ATTENTION_GIT_UNUSABLE`], [`ATTENTION_XCODE_LICENSE`]), as the
+    /// locale key of the words the row shows under it.
+    pub attention: Option<&'static str>,
 }
+
+/// The Mac's command line tools are selected but `/usr/bin/git` does not answer (Swift `SetupAttention.gitUnusable`).
+pub const ATTENTION_GIT_UNUSABLE: &str = "setup.attention.gitUnusable";
+/// The selected Xcode's license is not accepted yet, so git does not run (Swift `SetupAttention.xcodeLicense`).
+pub const ATTENTION_XCODE_LICENSE: &str = "setup.attention.xcodeLicense";
 
 impl SetupProbeResult {
     pub fn new(state: SetupProbeState, version: Option<&str>, minimum: Option<&str>) -> SetupProbeResult {
-        SetupProbeResult { state, version: version.map(str::to_string), minimum: minimum.map(str::to_string) }
+        SetupProbeResult { state, version: version.map(str::to_string), minimum: minimum.map(str::to_string), attention: None }
+    }
+
+    /// There, but not usable for `reason` (a locale key).
+    pub fn needs_attention(reason: &'static str) -> SetupProbeResult {
+        SetupProbeResult { attention: Some(reason), ..SetupProbeResult::new(SetupProbeState::NeedsAttention, None, None) }
     }
 
     pub fn missing() -> SetupProbeResult {
@@ -72,10 +85,23 @@ pub type Finder = Arc<dyn Fn(&str, &BTreeMap<String, String>) -> Vec<String> + S
 /// `--version`'s output for a program's full path, or None when it did not answer in time or failed.
 pub type VersionReader = Arc<dyn Fn(String) -> BoxFuture<'static, Option<String>> + Send + Sync>;
 
+/// A fixed system command run to its end with a deadline (the Mac's `/usr/bin/xcode-select -p`, `/usr/bin/git --version`): its exit
+/// code and its output and error output together, or None when it could not start or did not end in time.
+pub type CommandReader = Arc<dyn Fn(String, Vec<String>) -> BoxFuture<'static, Option<(i32, String)>> + Send + Sync>;
+
+/// The Mac's command line tools: where `xcode-select -p` says they are, then whether the system's git runs (Swift
+/// `SetupProber.xcodeSelectPath`, `systemGitVersion`).
+pub const XCODE_SELECT: &str = "/usr/bin/xcode-select";
+pub const SYSTEM_GIT: &str = "/usr/bin/git";
+/// The folders an app bundle is looked for in (`~/Applications` is the user's own, after `/Applications`).
+pub const APPLICATIONS: &str = "/Applications";
+
 /// Written in a skill's folder by the Mac's setup screen: a folder it placed counts only once its setup finished.
 pub const SKILL_INSTALLING_MARKER: &str = ".mighty-setup";
 pub const SKILL_DONE_MARKER: &str = ".mighty-setup-ok";
 pub const VERSION_TIMEOUT: Duration = Duration::from_secs(4);
+/// The deadline of the Mac's system commands (Swift's `git --version` gets 6 s).
+pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(6);
 
 /// C# `SetupProber`.
 #[derive(Clone)]
@@ -83,12 +109,32 @@ pub struct SetupProber {
     environment: BTreeMap<String, String>,
     finder: Finder,
     versions: VersionReader,
+    /// The platform whose catalog entries are probed (Windows unless [`SetupProber::on`] says otherwise).
+    platform: SetupPlatform,
+    /// The Mac's system commands; None: the command line tools count as missing.
+    commands: Option<CommandReader>,
 }
 
 impl SetupProber {
-    /// `environment`: the CLI environment (C# `CliEnvironment.Current()`, or its forced refresh).
+    /// `environment`: the CLI environment (C# `CliEnvironment.Current()`, or its forced refresh). Probes the Windows entries.
     pub fn new(environment: BTreeMap<String, String>, finder: Finder, versions: VersionReader) -> SetupProber {
-        SetupProber { environment, finder, versions }
+        SetupProber { environment, finder, versions, platform: SetupPlatform::Windows, commands: None }
+    }
+
+    /// The same prober over `platform`'s entries.
+    pub fn on(mut self, platform: SetupPlatform) -> SetupProber {
+        self.platform = platform;
+        self
+    }
+
+    /// The same prober running the Mac's system commands through `commands`.
+    pub fn with_commands(mut self, commands: CommandReader) -> SetupProber {
+        self.commands = Some(commands);
+        self
+    }
+
+    pub fn platform(&self) -> SetupPlatform {
+        self.platform
     }
 
     /// The app's prober: versions read through `processes` in `neutral` (the system folder: no repository and no user-writable
@@ -100,11 +146,16 @@ impl SetupProber {
         neutral: PathBuf,
     ) -> SetupProber {
         let quiet = quiet(&environment);
+        let (commands_processes, commands_quiet, commands_neutral) = (processes.clone(), quiet.clone(), neutral.clone());
         let versions: VersionReader = Arc::new(move |executable: String| {
             let (processes, quiet, neutral) = (processes.clone(), quiet.clone(), neutral.clone());
             Box::pin(async move { read_version(processes.as_ref(), &executable, &quiet, &neutral).await })
         });
-        SetupProber::new(environment, finder, versions)
+        let commands: CommandReader = Arc::new(move |program: String, arguments: Vec<String>| {
+            let (processes, quiet, neutral) = (commands_processes.clone(), commands_quiet.clone(), commands_neutral.clone());
+            Box::pin(async move { run_command(processes.as_ref(), &program, &arguments, &quiet, &neutral).await })
+        });
+        SetupProber::new(environment, finder, versions).with_commands(commands)
     }
 
     fn home(&self) -> PathBuf {
@@ -143,7 +194,7 @@ impl SetupProber {
                     }
                 }
                 let Some(minimum) = minimum_version else {
-                    return SetupProbeResult { state: SetupProbeState::Installed, version, minimum: None };
+                    return SetupProbeResult { state: SetupProbeState::Installed, version, minimum: None, attention: None };
                 };
                 match version {
                     None => SetupProbeResult::new(SetupProbeState::Unverified, None, Some(minimum)),
@@ -165,20 +216,47 @@ impl SetupProber {
                     SetupProbeResult::missing()
                 }
             }
-            // The command line tools and app bundles are the Mac's; the Windows catalog never asks for them.
-            _ => SetupProbeResult::missing(),
+            // Swift: where `xcode-select -p` points must be a folder; only then the system's git is asked (on a Mac without the tools,
+            // /usr/bin/git itself offers to install them), and an unaccepted Xcode license says so in git's own words.
+            SetupProbe::CommandLineTools => {
+                let Some(commands) = &self.commands else { return SetupProbeResult::missing() };
+                let selected = commands(XCODE_SELECT.to_string(), vec!["-p".to_string()]).await;
+                let path = selected.filter(|(code, _)| *code == 0).map(|(_, output)| output.trim().to_string());
+                if !path.is_some_and(|path| !path.is_empty() && Path::new(&path).is_dir()) {
+                    return SetupProbeResult::missing();
+                }
+                match commands(SYSTEM_GIT.to_string(), vec!["--version".to_string()]).await {
+                    None => SetupProbeResult::needs_attention(ATTENTION_GIT_UNUSABLE),
+                    Some((0, _)) => SetupProbeResult::installed(None),
+                    Some((_, output)) if output.to_lowercase().contains("license") => {
+                        SetupProbeResult::needs_attention(ATTENTION_XCODE_LICENSE)
+                    }
+                    Some(_) => SetupProbeResult::needs_attention(ATTENTION_GIT_UNUSABLE),
+                }
+            }
+            // Swift: the bundle in /Applications or ~/Applications, else its command along the PATH.
+            SetupProbe::AppBundle { name, executable_name } => {
+                let folders = [PathBuf::from(APPLICATIONS), self.home().join("Applications")];
+                if folders.iter().any(|folder| folder.join(name).is_dir())
+                    || executable_name.as_deref().is_some_and(|executable| !self.executables(executable).is_empty())
+                {
+                    SetupProbeResult::installed(None)
+                } else {
+                    SetupProbeResult::missing()
+                }
+            }
         }
     }
 
-    /// C# `ProbeAllAsync`: every item that has a Windows entry (only those in `only`, when given), one after another, in the
-    /// catalog's order.
+    /// C# `ProbeAllAsync`: every item that has an entry for the prober's platform (only those in `only`, when given), one after
+    /// another, in the catalog's order.
     pub async fn probe_all(&self, catalog: &SetupCatalog, only: Option<&HashSet<String>>) -> IndexMap<String, SetupProbeResult> {
         let mut results = IndexMap::new();
         for item in &catalog.items {
             if only.is_some_and(|only| !only.contains(&item.id)) {
                 continue;
             }
-            let Some(entry) = item.entry(SetupPlatform::Windows) else { continue };
+            let Some(entry) = item.entry(self.platform) else { continue };
             let result = self.probe(&entry.probe).await;
             results.insert(item.id.clone(), result);
         }
@@ -207,6 +285,20 @@ async fn read_version(
     let ran = crate::process::run(processes, request, None, VERSION_TIMEOUT, 16_384).await.ok()?;
     let text = ran.output.trim();
     (ran.exit_code == 0 && !ran.timed_out && !text.is_empty()).then(|| take_units(text, 160))
+}
+
+/// A fixed system command (Swift `ProcessCapture.run` with a 6 s deadline): its exit code and both outputs, or None when it could not
+/// start or did not end in time.
+async fn run_command(
+    processes: &dyn ProcessHost,
+    program: &str,
+    arguments: &[String],
+    environment: &BTreeMap<String, String>,
+    neutral: &Path,
+) -> Option<(i32, String)> {
+    let request = processes.cli_request(Path::new(program), arguments, neutral, environment).ok()?;
+    let ran = crate::process::run(processes, request, None, COMMAND_TIMEOUT, 16_384).await.ok()?;
+    (!ran.timed_out).then(|| (ran.exit_code, format!("{}{}", ran.output, ran.error_output)))
 }
 
 /// The first `count` UTF-16 units of `text` (C# `text[..count]`), never splitting a character.
@@ -336,7 +428,12 @@ impl SetupRows {
     /// Whether the row's box may be ticked: what is missing or failed, and an out-of-date tool that is not an agent CLI (those get the
     /// CLI update instead), or one its own update cannot bring up to date (OpenCode 1 to 2).
     pub fn is_selectable(state: SetupRowState, item: &SetupItem) -> bool {
-        item.entry(SetupPlatform::Windows).is_some_and(|entry| entry.install.runs_in_terminal())
+        Self::is_selectable_on(state, item, SetupPlatform::Windows)
+    }
+
+    /// [`SetupRows::is_selectable`] over `platform`'s entry.
+    pub fn is_selectable_on(state: SetupRowState, item: &SetupItem, platform: SetupPlatform) -> bool {
+        item.entry(platform).is_some_and(|entry| entry.install.runs_in_terminal())
             && match state {
                 SetupRowState::Missing | SetupRowState::Failed => true,
                 SetupRowState::Outdated => item.provider().is_none() || SetupCatalog::REINSTALLED_WHEN_OUTDATED.contains(&item.id.as_str()),
@@ -368,10 +465,20 @@ impl SetupFirstRun {
     /// True when no agent CLI can run, or a required item (Git) is not ready, unless the user chose never to see it again. Results
     /// still missing count as not known yet.
     pub fn should_present(catalog: &SetupCatalog, results: &HashMap<String, SetupProbeResult>, never_show: bool) -> bool {
+        Self::should_present_on(catalog, results, never_show, SetupPlatform::Windows)
+    }
+
+    /// [`SetupFirstRun::should_present`] over `platform`'s items.
+    pub fn should_present_on(
+        catalog: &SetupCatalog,
+        results: &HashMap<String, SetupProbeResult>,
+        never_show: bool,
+        platform: SetupPlatform,
+    ) -> bool {
         if never_show {
             return false;
         }
-        let items: Vec<&SetupItem> = catalog.items.iter().filter(|item| item.entry(SetupPlatform::Windows).is_some()).collect();
+        let items: Vec<&SetupItem> = catalog.items.iter().filter(|item| item.entry(platform).is_some()).collect();
         if !items.iter().all(|item| results.contains_key(&item.id)) {
             return false;
         }
@@ -387,19 +494,33 @@ impl SetupFirstRun {
         Self::should_present(catalog, results, false)
     }
 
+    /// [`SetupFirstRun::needs_attention`] over `platform`'s items.
+    pub fn needs_attention_on(catalog: &SetupCatalog, results: &HashMap<String, SetupProbeResult>, platform: SetupPlatform) -> bool {
+        Self::should_present_on(catalog, results, false, platform)
+    }
+
     /// Every required item that is missing, and Claude Code when no agent CLI is there at all.
     pub fn preselection(catalog: &SetupCatalog, results: &HashMap<String, SetupProbeResult>) -> HashSet<String> {
+        Self::preselection_on(catalog, results, SetupPlatform::Windows)
+    }
+
+    /// [`SetupFirstRun::preselection`] over `platform`'s items.
+    pub fn preselection_on(
+        catalog: &SetupCatalog,
+        results: &HashMap<String, SetupProbeResult>,
+        platform: SetupPlatform,
+    ) -> HashSet<String> {
         let mut picked = HashSet::new();
         for item in &catalog.items {
             if item.required
                 && results.get(&item.id).map(|r| r.state) == Some(SetupProbeState::Missing)
-                && item.entry(SetupPlatform::Windows).is_some_and(|entry| entry.install.runs_in_terminal())
+                && item.entry(platform).is_some_and(|entry| entry.install.runs_in_terminal())
             {
                 picked.insert(item.id.clone());
             }
         }
         let agents: Vec<&SetupItem> =
-            catalog.items.iter().filter(|item| item.group == SetupGroup::Agent && item.entry(SetupPlatform::Windows).is_some()).collect();
+            catalog.items.iter().filter(|item| item.group == SetupGroup::Agent && item.entry(platform).is_some()).collect();
         if !agents.iter().any(|item| results.get(&item.id).is_some_and(SetupProbeResult::is_installed))
             && let Some(first) = agents.first()
             && results.get(&first.id).map(|r| r.state) == Some(SetupProbeState::Missing)

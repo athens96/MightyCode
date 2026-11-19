@@ -3,7 +3,7 @@
 
 export type ShortcutAction =
   | 'openFolder' | 'newPane' | 'search' | 'toggleSidebar' | 'newShell' | 'settings' | 'files' | 'help'
-  | 'textLarger' | 'textSmaller' | 'textReset';
+  | 'textLarger' | 'textSmaller' | 'textReset' | 'conversationSearch';
 
 export interface ShortcutKey {
   key: string;
@@ -19,6 +19,7 @@ export function shortcutAction(event: ShortcutKey): ShortcutAction | null {
   if (!event.ctrlKey) return event.key === 'F1' && !event.shiftKey ? 'help' : null;
   if (event.shiftKey) {
     if (event.code === 'KeyE') return 'files';
+    if (event.code === 'KeyF') return 'conversationSearch';
     // Ctrl++ on the main keyboard is Ctrl+Shift+=.
     return event.code === 'Equal' ? 'textLarger' : null;
   }
@@ -38,7 +39,7 @@ export function shortcutAction(event: ShortcutKey): ShortcutAction | null {
 
 /**
  * The Mac's shortcuts in the Rust host's build (plan D9; `import.meta.env.MODE === 'tauri'` and the host's `macos` only): ⌘ is the
- * modifier where Windows has Ctrl (M/MightyCodeApp.swift's menu keys: ⌘O ⌘N ⌘K ⌘T ⇧⌘E ⌘, ⌘= ⌘- ⌘0, ⌃⌘S for the sidebar, ⌘? for help by its character),
+ * modifier where Windows has Ctrl (M/MightyCodeApp.swift's menu keys: ⌘O ⌘N ⌘K ⌘T ⇧⌘E ⇧⌘F ⌘, ⌘= ⌘- ⌘0, ⌃⌘S for the sidebar, ⌘? for help by its character),
  * and a Ctrl key is left to the text fields (⌃K, ⌃T edit text on a Mac). The menu bar has the same keys: what the page takes here
  * the menu does not see, and what it leaves the menu runs.
  */
@@ -49,6 +50,7 @@ export function macShortcutAction(event: ShortcutKey): ShortcutAction | null {
   if (event.key === '?') return 'help';
   if (event.shiftKey) {
     if (event.code === 'KeyE') return 'files';
+    if (event.code === 'KeyF') return 'conversationSearch';
     return event.code === 'Equal' ? 'textLarger' : null;
   }
   switch (event.code) {

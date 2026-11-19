@@ -47,7 +47,7 @@ Claude 在计划模式（Plan mode 或 Claude 计划风格）中完成计划后�
 2. 新风格需要先检查一次内容。用{{ui:settings.styles.viewButton}}按钮确认来源、自动允许的工具、安装命令和所有按钮。
 3. 确认无误后，点击{{ui:settings.styles.allowButton}}。
 
-风格文件发生变化后，需要重新确认。要撤销允许，请在同一位置点击{{ui:settings.styles.revokeButton}}。
+风格文件发生变化后，需要重新确认。要阻止已允许的风格，请在同一位置点击{{ui:settings.styles.revokeButton}}按钮；要解除，请点击{{ui:settings.styles.unblockButton}}按钮。要从列表中删除，请点击{{ui:settings.styles.removeButton}}按钮。把指针放在风格名称上，可以看到它的 ID 和哈希。
 
 > [!warning]
 > 自动允许工具的风格会在不询问的情况下运行这些工具。请仅在信任其来源时允许。

@@ -714,7 +714,7 @@ async fn mobile_push_registration_follows_the_macs_rules() {
     let platform = mighty_platform::fake::platform(&directory, mighty_platform::Os::Windows);
     let host = mighty_remote::relay::host::RelayHost::new(identity.clone(), Default::default(), Arc::new(NoRoutes), platform);
     assert!(host.rotate(Some(client.clone())).await.unwrap());
-    assert!(push.views().is_empty() && identity.push_devices().is_empty(), "a revoke (a rotated key) forgets every view and handle");
+    assert!(push.views().is_empty() && identity.push_devices().is_empty(), "a revoke forgets the device's view and handle");
     host.dispose().await;
     // Reading the file drops a handle the row cannot use and keeps the phone.
     let other = temp("rules-file");

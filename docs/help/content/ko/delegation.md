@@ -162,7 +162,7 @@ Claude에게 맡긴 자식이 보고하거나 시작하지 못하면 부모에�
 부모는 `follow_up` 도구로 Claude에게 맡긴 자식에게 후속 지시를 두 번까지 보낼 수 있습니다. 후속 지시는 알림과 같은 규칙으로 자식 창에 전달되고, 하나에 48 KiB까지입니다. 사람은 자식 창의 입력창에 직접 쓰면 되고, 횟수 제한이 없습니다.
 
 ## 켜고 끄기 {#enable}
-{{platform:mac}} 끄지 않는 한 켜져 있습니다. 설정의 {{ui:settings.nav.general}} 탭에서 {{ui:settings.delegation.toggle}}을 켜고 끕니다. 앱을 다시 열지 않아도 다음에 시작하는 실행부터 적용됩니다. 같은 스위치가 defaults 키 `delegation.enabled`이므로 터미널에서 다음 명령으로 꺼도 되고, `defaults delete dev.mightycode.native delegation.enabled`로 다시 켭니다.
+{{platform:mac}} 끄지 않는 한 켜져 있습니다. 설정의 {{ui:settings.nav.general}} 탭 {{ui:settings.agents.sectionTitle}} 항목에서 {{ui:settings.delegation.toggle}}을 켜고 끕니다. 앱을 다시 열지 않아도 다음에 시작하는 실행부터 적용됩니다. 같은 스위치가 defaults 키 `delegation.enabled`이므로 터미널에서 다음 명령으로 꺼도 되고, `defaults delete dev.mightycode.native delegation.enabled`로 다시 켭니다.
 
 ```sh
 defaults write dev.mightycode.native delegation.enabled -bool false
@@ -170,7 +170,7 @@ defaults write dev.mightycode.native delegation.enabled -bool false
 
 {{platform:mac}} 예전 버전은 그 키를 켜야만 켜졌고, 끄는 방법이 `defaults delete …`였습니다. 이제 그렇게 하면 켜진 채로 남으므로, 계속 꺼 두려면 설정에서 {{ui:settings.delegation.toggle}}을 끄세요.
 
-{{platform:windows}} 끄지 않는 한 켜져 있습니다. 설정의 {{ui:settings.nav.general}} 탭에서 {{ui:settings.delegation.toggle}}을 켜고 끕니다. 앱을 다시 열지 않아도 다음에 시작하는 실행부터 적용됩니다. 같은 스위치가 `HKEY_CURRENT_USER\Software\MightyCode` 아래의 `delegation.enabled` 값(REG_DWORD)이라서, 0이면 꺼지고 값이 없거나 다른 값이면 켜집니다. 그래서 명령 프롬프트나 PowerShell에서 다음 명령으로 꺼도 되고, `reg delete "HKCU\Software\MightyCode" /v delegation.enabled /f`로 다시 켭니다.
+{{platform:windows}} 끄지 않는 한 켜져 있습니다. 설정의 {{ui:settings.nav.general}} 탭 {{ui:settings.agents.sectionTitle}} 항목에서 {{ui:settings.delegation.toggle}}을 켜고 끕니다. 앱을 다시 열지 않아도 다음에 시작하는 실행부터 적용됩니다. 같은 스위치가 `HKEY_CURRENT_USER\Software\MightyCode` 아래의 `delegation.enabled` 값(REG_DWORD)이라서, 0이면 꺼지고 값이 없거나 다른 값이면 켜집니다. 그래서 명령 프롬프트나 PowerShell에서 다음 명령으로 꺼도 되고, `reg delete "HKCU\Software\MightyCode" /v delegation.enabled /f`로 다시 켭니다.
 
 ```
 reg add "HKCU\Software\MightyCode" /v delegation.enabled /t REG_DWORD /d 0 /f

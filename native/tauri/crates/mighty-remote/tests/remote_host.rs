@@ -775,17 +775,33 @@ fn only_a_keyed_run_request_gets_the_attachment_body() {
             && refusal(&shell, true, false).is_none()
             && refusal(&full.clone().with_provider("codex"), true, false).is_none()
     );
-    // A Windows host cannot confirm it confines Codex or Antigravity as Seatbelt does on a Mac: without the switch they are refused.
-    for (provider, mode) in
-        [("codex", "manual"), ("codex", "acceptEdits"), ("codex", "onRequest"), ("gemini", "manual"), ("gemini", "acceptEdits")]
-    {
+    // A Windows host cannot confirm it confines Codex as its Seatbelt sandbox does on a Mac: without the switch it is refused.
+    for mode in ["manual", "acceptEdits", "onRequest"] {
+        let agent = StartRunRequest::new("j", "w", "claude", "hi").with_provider("codex").with_settings(settings(mode));
+        assert_eq!(refusal(&agent, false, true), Some(strings::host_agent_needs_full_access("codex")), "codex {mode} on Windows");
+        assert!(refusal(&agent, true, true).is_none() && refusal(&agent, false, false).is_none(), "codex {mode}: the switch, or a Mac");
+    }
+    // Nothing confines Antigravity, pi, opencode or Hermes on either OS: each host refuses them in any mode without the switch.
+    for (provider, mode) in [
+        ("gemini", "manual"),
+        ("gemini", "plan"),
+        ("gemini", "acceptEdits"),
+        ("pi", "manual"),
+        ("opencode", "manual"),
+        ("hermes", "acceptEdits"),
+    ] {
         let agent = StartRunRequest::new("j", "w", "claude", "hi").with_provider(provider).with_settings(settings(mode));
         assert_eq!(refusal(&agent, false, true), Some(strings::host_agent_needs_full_access(provider)), "{provider} {mode} on Windows");
-        assert!(
-            refusal(&agent, true, true).is_none() && refusal(&agent, false, false).is_none(),
-            "{provider} {mode}: the switch, or a Mac"
-        );
+        assert_eq!(refusal(&agent, false, false), Some(strings::mac_host_agent_needs_full_access(provider)), "{provider} {mode} on a Mac");
+        assert!(refusal(&agent, true, true).is_none() && refusal(&agent, true, false).is_none(), "{provider} {mode}: the switch");
     }
+    assert!(
+        RemoteHost::confined_agent("claude", true)
+            && RemoteHost::confined_agent("claude", false)
+            && RemoteHost::confined_agent("codex", false)
+            && !RemoteHost::confined_agent("codex", true)
+            && ["gemini", "pi", "opencode", "hermes"].iter().all(|p| !RemoteHost::confined_agent(p, false))
+    );
     assert!(
         refusal(&edits, false, true).is_none() && refusal(&StartRunRequest::new("j", "w", "claude", "hi"), false, true).is_none(),
         "Claude keeps its modes"

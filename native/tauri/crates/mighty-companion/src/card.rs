@@ -5,6 +5,7 @@
 //! ([`crate::scene`]). Owner: W8-E.
 
 use crate::bubble::BubbleButton;
+use crate::progress::CompanionProgress;
 
 /// C# `CompanionOverlayOption(Label, Description, Picked)`: one choice of a question.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -37,7 +38,8 @@ pub struct CompanionRequest {
 
 /// C# `CompanionOverlayCard(Key, Light, Status, Workspace, Title, State, Timing, Request, Work, Position, Count, Pending, Approval)`:
 /// `elapsed` is the run clock's words (`AgentRunTiming.Label()`, None without a timing), read again by the app each second; `position`
-/// of `count` pages it among the busy agents; `pending` is another agent's request behind this page.
+/// of `count` pages it among the busy agents; `pending` is another agent's request behind this page. `progress` is the progress card
+/// over the task bubble (the Mac's `CompanionProgress`; never over a request), folded to its heading when `progress_collapsed`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CompanionCard {
     pub key: String,
@@ -53,4 +55,6 @@ pub struct CompanionCard {
     pub count: usize,
     pub pending: bool,
     pub approval: Option<CompanionRequest>,
+    pub progress: Option<CompanionProgress>,
+    pub progress_collapsed: bool,
 }

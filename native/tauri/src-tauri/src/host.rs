@@ -590,6 +590,8 @@ impl Host {
         let mut model = shell_model(snapshot, &context, layout_defaults);
         // The remote mirror's servers, strips and status words (mirror.rs, W9-J), read with the state locked.
         crate::mirror::frame(self, snapshot, &mut model);
+        // The agent panes with a terminal (terminal.rs): the header's button that reopens its pane.
+        crate::terminal::mark_agent_terminals(self, &mut model);
         model
     }
 

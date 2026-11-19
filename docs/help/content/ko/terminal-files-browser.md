@@ -10,7 +10,7 @@ section: terminal-files-browser
 1. {{ui:menu.addTerminalPane}}({{kbd:⌘T}})를 누르거나 {{ui:workspace.addPane}} → {{ui:workspace.newTerminal}} 항목을 고릅니다.
 2. 명령을 직접 입력합니다.
 
-셸이 끝나면 {{ui:terminal.restart}}을 누릅니다. 예전 명령 기록은 실행 창 메뉴의 {{ui:pane.menu.terminalHistory}}에서 봅니다. 앱을 끄면 터미널은 다시 열리지 않습니다.
+셸이 끝나면 {{ui:terminal.restart}}을 누릅니다. 예전 명령 기록은 창 머리 … 메뉴의 {{ui:pane.menu.terminalHistory}}에서 봅니다. 창 머리를 오른쪽 클릭한 메뉴의 {{ui:terminal.history.title}} 항목도 같습니다. 앱을 끄면 터미널은 다시 열리지 않습니다.
 
 ![[terminal-pane]]
 
@@ -26,8 +26,9 @@ Claude나 Codex가 사용자가 봐야 하는 명령(개발 서버, 로그인 �
 | 파일 | 보이는 방식 |
 |---|---|
 | 소스·텍스트 | 줄 번호와 색 강조. 큰 파일은 처음 1 MB만 보입니다. |
-| Markdown | {{ui:files.markdown.rendered}}와 {{ui:files.markdown.source}} 보기를 전환합니다. |
-| 이미지·PDF | {{ui:files.image.fit}}, {{ui:files.image.actualSize}}, {{ui:files.image.zoomIn}}, {{ui:files.image.zoomOut}}. PDF는 첫 쪽만 보입니다. |
+| Markdown | {{ui:files.markdown.rendered}}와 {{ui:files.markdown.source}} 보기를 전환합니다. 128 KB가 넘는 파일은 소스로 보입니다. |
+| HTML | 페이지로 그린 {{ui:files.markdown.rendered}}와 {{ui:files.markdown.source}} 보기를 전환합니다. |
+| 이미지·PDF | {{ui:files.image.fit}}, {{ui:files.image.actualSize}}, {{ui:files.image.zoomIn}}, {{ui:files.image.zoomOut}}. PDF는 첫 쪽만 보입니다. 50 MB가 넘는 이미지는 미리 보지 않고, 1억 화소가 넘는 이미지는 맞춤 크기로만 보입니다. |
 | 그 밖 | {{ui:files.preview.unsupported}}. {{ui:menu.showInFinder}}로 엽니다. |
 
 워크스페이스 밖의 파일은 보이지 않습니다. 파일이 바뀌었으면 {{ui:files.tree.refresh}}을 누릅니다.

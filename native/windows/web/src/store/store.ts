@@ -24,7 +24,7 @@ export interface StoreState {
   /** Each pane's cards as the host last pushed them. */
   cards: Readonly<Record<string, readonly Card[]>>;
   /** Words a card put in a pane's draft (a next action); `seq` counts them so the same words twice still fill. */
-  fills: Readonly<Record<string, { text: string; seq: number }>>;
+  fills: Readonly<Record<string, { text: string; seq: number; append?: boolean }>>;
   /** Each shown pane's Mighty model as the host pushed it (MainWindow.WebShell.Mighty.cs). */
   mighty: Readonly<Record<string, MightyPane>>;
   /** The frame's model as the host last pushed it (MainWindow.WebShell.Shell.cs). */
@@ -83,6 +83,8 @@ export interface FillMessage {
   kind: 'fill';
   paneId: string;
   text: string;
+  /** After what the composer holds, a blank line between (요청 변경 검토's notes), rather than in place of it. */
+  append?: boolean;
 }
 
 /** The page's own message: a pane chosen by a click, shown before the host's state follows (undefined: forget the choice). */
@@ -413,7 +415,7 @@ export function reduce(state: StoreState, message: StoreMessage): StoreState {
     case 'picture':
       return message.picture === state.picture ? state : { ...state, picture: message.picture };
     case 'fill':
-      return { ...state, fills: { ...state.fills, [message.paneId]: { text: message.text, seq: (state.fills[message.paneId]?.seq ?? 0) + 1 } } };
+      return { ...state, fills: { ...state.fills, [message.paneId]: { text: message.text, seq: (state.fills[message.paneId]?.seq ?? 0) + 1, ...(message.append ? { append: true } : {}) } } };
     case 'pending':
       return applyPending(state, message);
     case 'view':

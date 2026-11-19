@@ -13,6 +13,7 @@
 //! Every change is saved before it takes effect (C#'s `Save` keeps the old state when the write fails); an identity loaded without
 //! `may_write` (verification mode) refuses every save, so it never writes the profile.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -161,6 +162,8 @@ impl std::fmt::Debug for AuthDecision {
 }
 
 /// C# `MobileDeviceInfo(Id, Name, FirstSeen, LastSeen, Legacy, Connected, IsNew)`: a paired phone as the settings list draws it.
+/// `desktop`: another computer's Mighty Code, known once it has authenticated with `"role":"desktop"` in this run (the identity files
+/// keep no such member, so after a restart a paired computer reads as a phone until it connects again).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MobileDeviceInfo {
     pub id: String,
@@ -170,6 +173,7 @@ pub struct MobileDeviceInfo {
     pub legacy: bool,
     pub connected: bool,
     pub is_new: bool,
+    pub desktop: bool,
 }
 
 /// C# `MobilePushRegistrationResult`. NeedsToken: an unknown phone or the legacy row, since the push key comes from a device token.
@@ -203,9 +207,12 @@ struct State {
     saved: PairingIdentity,
     /// When the registrations of the last hour were made (milliseconds since the epoch).
     registrations: Vec<i64>,
+    /// The ids that authenticated as another computer in this run (never saved: the files have no member for it).
+    desktops: HashSet<String>,
 }
 
-type Listener = Arc<dyn Fn() + Send + Sync>;
+/// Told after a rotation (`None`: every device is gone) or a single device's revoke (`Some(id)`, once per row removed).
+type Listener = Arc<dyn Fn(Option<&str>) + Send + Sync>;
 
 /// The pairing identity and its devices.
 pub struct Identity {
@@ -313,7 +320,7 @@ impl Identity {
             store,
             may_write,
             locale: Locale::new("en"),
-            state: Mutex::new(State { saved, registrations: vec![] }),
+            state: Mutex::new(State { saved, registrations: vec![], desktops: HashSet::new() }),
             rotated: Mutex::new(vec![]),
             next_listener: AtomicU64::new(1),
         })
@@ -391,6 +398,9 @@ impl Identity {
                 return Ok(Refused(AuthRefusal::DeviceRevoked));
             };
             self.touch(&mut state, &device.id)?;
+            if auth.desktop {
+                state.desktops.insert(device.id.clone());
+            }
             return Ok(Accepted { device_id: device.id, device_token: None });
         }
         let Some(presented) = presented.filter(|p| p.encode_utf16().count() <= 256) else {
@@ -461,6 +471,11 @@ impl Identity {
         let next = PairingIdentity { devices, ..state.saved.clone() };
         self.save(&mut state, next)?;
         state.registrations.push(now);
+        if auth.desktop {
+            state.desktops.insert(id.clone());
+        } else {
+            state.desktops.remove(&id);
+        }
         Ok(Accepted { device_id: id, device_token: Some(fresh) })
     }
 
@@ -478,9 +493,10 @@ impl Identity {
         self.save(state, next)
     }
 
-    /// `Rotated`: told after every rotation (a revoke included), once the new key is saved; every phone, its token and its push handle
-    /// are gone. Dropping the subscription unregisters.
-    pub fn on_rotated(self: &Arc<Self>, listener: impl Fn() + Send + Sync + 'static) -> RotationSubscription {
+    /// `Rotated`: told after every rotation, once the new key is saved, with `None` (every phone, its token and its push handle are
+    /// gone), and after a single device's revoke with `Some(id)` for each row it removed (the other devices stay paired). Dropping the
+    /// subscription unregisters.
+    pub fn on_rotated(self: &Arc<Self>, listener: impl Fn(Option<&str>) + Send + Sync + 'static) -> RotationSubscription {
         let id = self.next_listener.fetch_add(1, Ordering::SeqCst);
         lock(&self.rotated).push((id, Arc::new(listener)));
         RotationSubscription { identity: Arc::downgrade(self), id }
@@ -498,12 +514,43 @@ impl Identity {
             let next = PairingIdentity { pairing_key: random_token(), devices: vec![], ..state.saved.clone() };
             self.save(&mut state, next)?;
             state.registrations.clear();
+            state.desktops.clear();
         }
+        self.tell(None);
+        Ok(())
+    }
+
+    /// One device unpaired (the settings row's 연결 해제): its row, token and push handle go, and the pairing key is made anew so a key
+    /// it may still hold pairs nothing; every other device keeps its row and token (they authenticate by token, not by the key) and
+    /// stays connected. The legacy row (apps without a device token, which authenticate by the key alone) goes with the old key. The
+    /// ids removed (empty when `id` was not paired: nothing changes); `Err` when it could not be saved (nothing changes either).
+    pub fn revoke(&self, id: &str) -> Result<Vec<String>> {
+        let removed: Vec<String> = {
+            let mut state = self.state();
+            if !state.saved.devices.iter().any(|d| d.id == id) {
+                return Ok(vec![]);
+            }
+            let (gone, kept): (Vec<PairedDevice>, Vec<PairedDevice>) =
+                state.saved.devices.iter().cloned().partition(|d| d.id == id || d.id == LEGACY);
+            let next = PairingIdentity { pairing_key: random_token(), devices: kept, ..state.saved.clone() };
+            self.save(&mut state, next)?;
+            let removed: Vec<String> = gone.into_iter().map(|d| d.id).collect();
+            for gone in &removed {
+                state.desktops.remove(gone);
+            }
+            removed
+        };
+        for gone in &removed {
+            self.tell(Some(gone));
+        }
+        Ok(removed)
+    }
+
+    fn tell(&self, device: Option<&str>) {
         let listeners: Vec<Listener> = lock(&self.rotated).iter().map(|(_, l)| l.clone()).collect();
         for listener in listeners {
-            listener();
+            listener(device);
         }
-        Ok(())
     }
 
     /// `Contains(id, legacyAllowed)`: a paired phone with a token, or the legacy row while legacy phones are allowed.
@@ -535,7 +582,8 @@ impl Identity {
     /// row that stands for every app without a device token named in the user's language.
     pub fn devices(&self) -> Vec<MobileDeviceInfo> {
         let now = now_ms();
-        self.state()
+        let state = self.state();
+        state
             .saved
             .devices
             .iter()
@@ -547,6 +595,7 @@ impl Identity {
                 legacy: d.token_hash.is_none(),
                 connected: false,
                 is_new: is_new(&d.first_seen, now),
+                desktop: state.desktops.contains(&d.id),
             })
             .collect()
     }

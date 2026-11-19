@@ -30,8 +30,9 @@ use mighty_core::model::{AppSnapshot, RunSession};
 use mighty_native::surface::{DialogResult, Next, SurfaceModel};
 use mighty_native::ui::{El, Local, Ui};
 use mighty_native::view::{Place, View};
-use mighty_platform::{Paths, PrefsStore, SetupFiles};
+use mighty_platform::{Paths, PrefsStore, SetupFiles, TerminalLaunch, TerminalLauncher};
 use mighty_run::model::ProviderRuntime;
+use mighty_tools::setup::catalog::SetupPlatform;
 use mighty_tools::setup::probe::SetupFirstRun;
 use mighty_tools::setup::screen::{Gate, InstallStart, ProbeContext, RUN_PROBE_INTERVAL, SetupScreen, WATCH_INTERVAL, WatchTick};
 use mighty_tools::view::{self, SETUP_SURFACE, SetupActions, SetupExtras};
@@ -78,7 +79,7 @@ pub fn of(host: &Host) -> Arc<SetupState> {
         return state.inner().clone();
     }
     host.app.manage(Arc::new(SetupState {
-        screen: Mutex::new(SetupScreen::new()),
+        screen: Mutex::new(SetupScreen::for_platform(platform(host))),
         files: files_port(host),
         polling: AtomicBool::new(false),
         presented: AtomicBool::new(false),
@@ -91,6 +92,12 @@ pub fn of(host: &Host) -> Arc<SetupState> {
 /// `WindowsSetupFiles`, whose system folder is the probes' working folder, as C# `SetupProber` runs them in `SystemDirectory`).
 fn files_port(host: &Host) -> Arc<dyn SetupFiles> {
     if host.smoke.is_some() { Arc::new(mighty_platform::setup::FakeSetupFiles::default()) } else { crate::platform::setup_files() }
+}
+
+/// The catalog platform the screen lists and installs: this OS's (the platform profile's), except in a smoke, whose fixed results,
+/// fakes and checks are the Windows screen's on every OS.
+fn platform(host: &Host) -> SetupPlatform {
+    if host.smoke.is_some() { SetupPlatform::Windows } else { SetupPlatform::of(crate::platform::profile().os) }
 }
 
 /// Whether this run may change the machine: C#'s `options.SmokeTest` branches, and W6's `--allow-state-write` default.
@@ -394,7 +401,15 @@ async fn start_install(host: &Arc<Host>, steps: Vec<mighty_tools::setup::script:
     let state = of(host);
     let environment = environment(host);
     let Some(folder) = script_folder(host) else { return };
-    let terminals = host.app.state::<crate::platform::Ports>().terminals.clone();
+    // Windows' console window (the platform's launcher), a smoke's recording one; the Mac's terminal pane, where the user answers what
+    // a step asks (Swift's setup terminal), as the CLI sign-in opens there (`PlatformProfile::agent_sign_in`), else Terminal.app. The
+    // pane reads the frame's state and closes this screen, which take the state's lock and the screen's: the screen hands its launch
+    // over and the pane opens once the screen's lock is let go.
+    let window = host.app.state::<crate::platform::Ports>().terminals.clone();
+    let deferred = Arc::new(Deferred::default());
+    let pane = deferred.clone();
+    let terminals =
+        crate::sign_in_pane::sign_in_launcher(crate::platform::profile().agent_sign_in, host.smoke.is_some(), window.clone(), || pane);
     let (task, gate) = (state.clone(), gate(host));
     let started = tauri::async_runtime::spawn_blocking(move || {
         let mut screen = lock(&task.screen);
@@ -402,6 +417,15 @@ async fn start_install(host: &Arc<Host>, steps: Vec<mighty_tools::setup::script:
         (started, screen.run.as_ref().map(|run| run.opened))
     })
     .await;
+    let handed = lock(&deferred.0).take();
+    if let (Ok((InstallStart::Started, Some(opened))), Some(launch)) = (&started, handed)
+        && let Err(error) = open_mac_terminal(host, window.as_ref(), launch)
+    {
+        host.log.line(&format!("setup: the install's terminal did not open: {error}"));
+        lock(&state.screen).launch_failed(*opened, error);
+        redraw(host);
+        return;
+    }
     match started {
         Ok((InstallStart::Started, Some(opened))) => watch(host.clone(), opened),
         Ok((InstallStart::NotAllowed, _)) => {
@@ -411,6 +435,32 @@ async fn start_install(host: &Arc<Host>, steps: Vec<mighty_tools::setup::script:
         _ => {}
     }
     redraw(host);
+}
+
+/// The Mac's install terminal: the pane in a local workspace first (the user follows the install in the window), else (no local
+/// workspace on this Mac yet, as on its first run, or a pane that would not open) the same script in a Terminal.app window of its own
+/// (Swift's setup terminal window). Either way the script's EXIT trap makes the end marker the watcher waits for.
+fn open_mac_terminal(host: &Host, window: &dyn TerminalLauncher, launch: TerminalLaunch) -> mighty_platform::Result<()> {
+    let pane = crate::sign_in_pane::SetupPane { app: host.app.clone() };
+    match pane.open(launch.clone()) {
+        Ok(_) => return Ok(()),
+        Err(error) => host.log.line(&format!("setup: no terminal pane ({error}); the script opens in Terminal.app")),
+    }
+    let argv = mighty_tools::setup::mac::terminal_app_arguments(&launch.argv)
+        .ok_or_else(|| mighty_platform::PlatformError::Invalid("the install launch names no script".into()))?;
+    window.open(TerminalLaunch { argv, resolved: None, ..launch }).map(|_| ())
+}
+
+/// The Mac's install pane as the screen sees it: the launch is kept, and the pane opened with it once the screen's lock is let go
+/// ([`start_install`]).
+#[derive(Default)]
+struct Deferred(Mutex<Option<TerminalLaunch>>);
+
+impl TerminalLauncher for Deferred {
+    fn open(&self, launch: TerminalLaunch) -> mighty_platform::Result<Box<dyn mighty_platform::TerminalWindow>> {
+        *lock(&self.0) = Some(launch);
+        Ok(Box::new(crate::sign_in_pane::Opened))
+    }
 }
 
 /// C# `WatchSetupRun`: every 2 s the markers looked at (off the async workers); the not-started hint; the run's items probed every
@@ -480,7 +530,8 @@ struct SetupSurface {
 impl SurfaceModel for SetupSurface {
     fn view(&mut self, ui: &mut Ui) -> View {
         let ticked = self.never_show.clone();
-        view::setup_view(list(&self.host, ui), self.never_show.get(), move |on| ticked.set(on))
+        let platform = lock(&of(&self.host).screen).platform();
+        view::setup_view_on(platform, list(&self.host, ui), self.never_show.get(), move |on| ticked.set(on))
     }
 
     fn button(&mut self, _which: Option<&str>) -> Next {
@@ -531,7 +582,7 @@ pub async fn present_if_needed(host: &Arc<Host>) {
     let present = {
         let state = of(host);
         let screen = lock(&state.screen);
-        screen.catalog().is_some_and(|catalog| SetupFirstRun::should_present(catalog, &screen.results, never))
+        screen.should_present(never)
     };
     if present {
         open(host, None);

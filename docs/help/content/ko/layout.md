@@ -12,7 +12,7 @@ section: layout
 - {{ui:sidebar.searchPlaceholder}}: {{kbd:⌘K}}를 누르면 검색칸으로 바로 갑니다.
 - {{ui:phone.dashboard.title}}: 모든 워크스페이스의 실행 창 상태를 한곳에서 봅니다.
 - {{ui:sidebar.workspacesHeader}} 목록: 워크스페이스를 누르면 그 워크스페이스로 바뀝니다. 옆의 화살표를 누르면 실행 창 목록을 펼치거나 접습니다.
-- 아래쪽: 화면 테마 단추(다크·라이트)와 설정 단추.
+- 아래쪽: 도움말 단추, 화면 테마 단추(어둡게·밝게)와 설정 단추.
 
 워크스페이스 목록을 펼치면 마지막 줄에 {{ui:workspace.addPane}} 단추가 있습니다. 실행 창 줄을 오른쪽 클릭하면 {{ui:menu.rename}}, {{ui:menu.closePane}} 항목이 있습니다.
 
@@ -20,6 +20,7 @@ section: layout
 사이드바와 작업 영역 사이의 경계선을 끌면 사이드바 폭이 바뀝니다({{ui:sidebar.resize}}).
 - 경계선에 마우스를 올리면 강조색으로 바뀝니다. 좌우로 끌어 폭을 맞춥니다. 폭은 정해진 범위 안에서만 바뀌고, 앱을 다시 열어도 유지됩니다.
 - 경계선을 두 번 클릭하면 기본 폭으로 돌아갑니다.
+- 경계선을 Tab 키로 고른 뒤 {{kbd:←}} / {{kbd:→}}를 누르면 10px씩 좁아지거나 넓어집니다.
 - 경계선을 왼쪽 끝까지 끌면 사이드바가 접힙니다. 다시 펼치면 끌기 전의 폭으로 돌아옵니다.
 
 ### 사이드바 접기 {#sidebar-collapse}
@@ -47,7 +48,7 @@ section: layout
 2. 만들 창을 고릅니다: 에이전트(Claude, Codex, Antigravity, pi, opencode, Hermes) 실행 창 또는 {{ui:workspace.newTerminal}}. 메뉴 맨 아래 묶음에는 워크스페이스를 추가하는 {{ui:workspace.add.existing}}, {{ui:workspace.add.newFolder}}, {{ui:workspace.add.fromGit}} 세 항목이 있습니다([워크스페이스 열기](getting-started.md#open-workspace)).
 3. 새 AI 실행 창은 같은 에이전트로 가장 최근에 쓴 창의 모델·사고 강도·권한·보기 방식을 이어받습니다. 대화는 새로 시작합니다.
 
-단축키: {{ui:menu.newClaudePane}}은 {{kbd:⌘N}}, {{ui:menu.addTerminalPane}} 항목은 {{kbd:⌘T}}, {{ui:menu.showFiles}} 항목은 {{kbd:⇧⌘E}}입니다.
+단축키: {{ui:menu.newClaudePane}}은 {{kbd:⌘N}}, {{ui:menu.addTerminalPane}} 항목은 {{kbd:⌘T}}, {{ui:menu.showFiles}} 항목은 {{kbd:⇧⌘E}}입니다. 실행 창은 모든 워크스페이스를 합쳐 128개까지 열 수 있습니다(다른 컴퓨터의 창을 그대로 보여 주는 원격 창은 세지 않습니다).
 
 > [!note]
 > Claude를 뺀 에이전트(Codex, Antigravity, pi, opencode, Hermes)의 실행 창에는 {{ui:badge.beta}} 표시가 붙습니다.
@@ -62,12 +63,20 @@ section: layout
 
 ![[resume-list]]
 
+### 지난 대화 검색 {#conversation-search}
+{{ui:conversationSearch.open}}({{kbd:⇧⌘F}})은 이 폴더의 지난 세션에서 요청과 답에 들어 있는 말을 찾습니다. 워크스페이스 머리의 돋보기 단추, 사이드바에서 워크스페이스를 오른쪽 클릭한 메뉴, 메뉴 막대의 워크스페이스 메뉴에서도 엽니다.
+- 모든 단어가 한 메시지에 들어 있는 세션이 최근 것부터 50개까지 나오고, 찾은 말에 표시가 붙습니다. 도구 실행 결과는 찾지 않습니다.
+- Claude, Codex, Antigravity, pi의 세션을 찾고 opencode와 Hermes의 세션은 찾지 않습니다. 지금 창에서 열려 있는 세션과 60일보다 오래된 세션은 빠집니다.
+- {{kbd:↑}} {{kbd:↓}}로 고르고 {{kbd:Enter}}를 누르거나 {{ui:conversationSearch.resume}}를 누르면 새 창이 그 세션을 이어갑니다.
+- {{ui:conversationSearch.export}}은 그 대화의 요청과 답을 Markdown 파일로 저장합니다.
+- 원격 워크스페이스에서는 쓸 수 없습니다. 세션 기록이 그 컴퓨터에 있기 때문입니다.
+
 ## 탭과 분할 {#tabs-splits}
 - 탭을 끌어 다른 그룹 가운데에 놓으면 탭으로 합쳐집니다({{ui:layout.drop.merge}}).
 - 그룹의 왼쪽·오른쪽·위·아래 가장자리에 놓으면 그쪽으로 나뉩니다.
 - 나눈 경계선을 끌면 크기가 바뀌고, 두 번 클릭하면 반반으로 나뉩니다.
 - 끌던 중 {{kbd:Esc}}를 누르면 취소됩니다.
-- 탭을 오른쪽 클릭하면 {{ui:menu.rename}}, {{ui:menu.focusPane}}, {{ui:menu.closeTab}} 항목이 있습니다.
+- 탭을 두 번 클릭하면 이름을 바꿉니다. 오른쪽 클릭하면 {{ui:menu.rename}}, {{ui:menu.focusPane}}, {{ui:menu.closeTab}} 항목이 있습니다.
 
 배치는 워크스페이스마다 저장됩니다. 워크스페이스를 바꿔도 각자의 배치가 그대로 남습니다.
 
@@ -75,9 +84,11 @@ section: layout
 실행 창 머리의 … 단추에는 다음이 있습니다.
 - {{ui:menu.rename}}
 - {{ui:menu.focusPane}}: 이 창만 크게 봅니다. 다시 누르면 {{ui:pane.menu.restoreLayout}}로 돌아갑니다.
-- {{ui:pane.menu.copyLog}}
-- {{ui:pane.menu.newConversation}}: 다음 요청부터 이전 대화를 잇지 않습니다.
+- {{ui:pane.menu.copyLog}}: 에이전트 창의 실행 기록을 복사합니다. 터미널 창에는 이 자리에 {{ui:pane.menu.terminalHistory}} 항목이 있습니다([터미널 창](terminal-files-browser.md#terminal)).
+- {{ui:pane.menu.newConversation}}: 다음 요청부터 이전 대화를 잇지 않습니다(에이전트 창).
 - {{ui:menu.closePane}}
+
+창 머리를 오른쪽 클릭하면 {{ui:menu.rename}}, {{ui:session.menu.focus}}, {{ui:session.menu.close}} 항목이 있고, 터미널 창에는 {{ui:terminal.history.title}} 항목도 있습니다.
 
 ## 단축키 {#shortcuts}
 | 단축키 | 동작 |
@@ -86,6 +97,7 @@ section: layout
 | {{kbd:⌘N}} | {{ui:menu.newClaudePane}} |
 | {{kbd:⌘T}} | {{ui:menu.addTerminalPane}} |
 | {{kbd:⇧⌘E}} | {{ui:menu.showFiles}} |
+| {{kbd:⇧⌘F}} | {{ui:conversationSearch.open}} |
 | {{kbd:⌘K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{ui:menu.settings}} |

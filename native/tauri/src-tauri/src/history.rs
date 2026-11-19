@@ -268,7 +268,7 @@ fn local_folder(workspace: &Workspace) -> Option<&str> {
 
 /// `ResumeQuery(workspace)`: the folder's records under the CLI homes, open panes' sessions left out, the app's own never hidden; none
 /// for a remote workspace.
-fn query(host: &Host, view: &View, workspace: &Workspace) -> Option<ResumableSessionQuery> {
+pub(crate) fn query(host: &Host, view: &View, workspace: &Workspace) -> Option<ResumableSessionQuery> {
     let folder = local_folder(workspace)?;
     let history = of(host);
     let mut environment = history.environment();

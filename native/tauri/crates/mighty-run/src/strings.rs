@@ -2,10 +2,15 @@
 //! OS's preferred languages, as C#'s `LanguagePreference = "system"` reads them. The checks pin Korean, as C#'s `Verification` does.
 
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use mighty_core::app_update_view::Words;
 use mighty_core::locale::{self, Locale};
 
 static LANGUAGE: RwLock<Option<&'static str>> = RwLock::new(None);
+/// The host is the Mac: a Windows key with a Mac counterpart (`settings_words::MAC_KEYS`) reads the Mac's words. Off until the host
+/// says, so every check reads the Windows words C# pinned.
+static MAC_WORDS: AtomicBool = AtomicBool::new(false);
 /// `CultureInfo.CurrentCulture`'s group separator and sizes, as the host read them from the OS's regional format.
 static NUMBER_GROUPING: RwLock<Option<(String, Vec<usize>)>> = RwLock::new(None);
 
@@ -48,14 +53,24 @@ pub fn locale() -> Locale {
     }
 }
 
+/// Whose words a lookup reads where the Windows and Mac apps differ (the host's platform, set once at start).
+pub fn use_words(words: Words) {
+    MAC_WORDS.store(words == Words::Mac, Ordering::SeqCst);
+}
+
+/// The key a lookup reads: on the Mac, the Mac's counterpart of a Windows-only key.
+fn swapped(key: &str) -> &str {
+    if MAC_WORDS.load(Ordering::SeqCst) { mighty_core::settings_words::mac_swap(key).unwrap_or(key) } else { key }
+}
+
 /// `Locale.Get(key)`.
 pub fn get(key: &str) -> String {
-    locale().get(key)
+    locale().get(swapped(key))
 }
 
 /// `Locale.Get(key, substitutions)`.
 pub fn get_with(key: &str, subs: &[(&str, &str)]) -> String {
-    locale().get_with(key, subs)
+    locale().get_with(swapped(key), subs)
 }
 
 /// `ProviderMark.Label`.

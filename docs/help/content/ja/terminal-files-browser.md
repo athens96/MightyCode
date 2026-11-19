@@ -10,7 +10,7 @@ section: terminal-files-browser
 1. {{ui:menu.addTerminalPane}}({{kbd:⌘T}})を選ぶか、{{ui:workspace.addPane}} → {{ui:workspace.newTerminal}}を選びます。
 2. コマンドを直接入力します。
 
-シェルが終了したら{{ui:terminal.restart}}をクリックします。以前のコマンド履歴は、ペインのメニューの{{ui:pane.menu.terminalHistory}}で確認できます。アプリを終了すると、ターミナルは再び開かれません。
+シェルが終了したら{{ui:terminal.restart}}をクリックします。以前のコマンド履歴は、ペインのヘッダーの…メニューの{{ui:pane.menu.terminalHistory}}で確認できます。ペインのヘッダーを右クリックしたメニューの{{ui:terminal.history.title}}も同じです。アプリを終了すると、ターミナルは再び開かれません。
 
 ![[terminal-pane]]
 
@@ -26,8 +26,9 @@ ClaudeやCodexがユーザーに見せる必要のあるコマンド(開発サ�
 | ファイル | 表示のされ方 |
 |---|---|
 | ソース・テキスト | 行番号とシンタックスハイライト付き。大きなファイルは最初の1 MBだけが表示されます。 |
-| Markdown | {{ui:files.markdown.rendered}}と{{ui:files.markdown.source}}の表示を切り替えます。 |
-| 画像・PDF | {{ui:files.image.fit}}、{{ui:files.image.actualSize}}、{{ui:files.image.zoomIn}}、{{ui:files.image.zoomOut}}。PDFは最初のページだけが表示されます。 |
+| Markdown | {{ui:files.markdown.rendered}}と{{ui:files.markdown.source}}の表示を切り替えます。128 KBを超えるファイルはソースで表示されます。 |
+| HTML | ページとして描いた{{ui:files.markdown.rendered}}と{{ui:files.markdown.source}}の表示を切り替えます。 |
+| 画像・PDF | {{ui:files.image.fit}}、{{ui:files.image.actualSize}}、{{ui:files.image.zoomIn}}、{{ui:files.image.zoomOut}}。PDFは最初のページだけが表示されます。50 MBを超える画像はプレビューせず、1億画素を超える画像は全体表示だけになります。 |
 | その他 | {{ui:files.preview.unsupported}}。{{ui:menu.showInFinder}}で開きます。 |
 
 ワークスペース外のファイルは表示されません。ファイルが変更された場合は{{ui:files.tree.refresh}}をクリックします。

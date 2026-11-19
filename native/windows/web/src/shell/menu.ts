@@ -19,7 +19,7 @@ export interface MenuPush {
 
 const actions: readonly string[] = [
   'openFolder', 'newPane', 'search', 'toggleSidebar', 'newShell', 'settings', 'files', 'help', 'textLarger', 'textSmaller', 'textReset',
-  'newFolder', 'fromGit', 'workMap', 'usage',
+  'conversationSearch', 'newFolder', 'fromGit', 'workMap', 'usage',
 ];
 
 export function isMenuPush(message: { kind: string }): message is MenuPush {
@@ -57,6 +57,7 @@ export function runAction(action: MenuAction, call: Call, snapshot: AppSnapshot,
     }
     case 'settings': return run('openSettings');
     case 'files': return run('openFiles', {});
+    case 'conversationSearch': return run('openConversationSearch', {});
     case 'workMap': return snapshot.activeWorkspaceId ? run('openWorkMap', { workspaceId: snapshot.activeWorkspaceId }) : undefined;
     case 'usage': return openUsage();
     case 'help': return run('openHelp');

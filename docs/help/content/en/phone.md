@@ -5,48 +5,54 @@ section: phone
 ---
 With the phone app you can follow and drive Mighty Code on your Mac or Windows PC while you're away: check on tasks, send requests, and answer approvals and questions.
 
-The Mac and the phone connect through a relay server. Everything is encrypted end to end, so the relay can't read it. You don't need to open router ports or use a VPN. If you use Tailscale, the phone can also [connect directly](#direct) without the relay.
+The computer and the phone connect through a relay server. The default relay is built into the app, so there is nothing to set up. Everything is encrypted end to end, so the relay can't read it. You don't need to open router ports or use a VPN. If you use Tailscale, the phone can also [connect directly](#direct) without the relay.
 
 ## Get the phone app {#get-app}
 Download the Android app (APK) from the [download page](https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/index.html) and install it.
 
 ## Pair your phone {#pair}
-On the Mac:
-1. Open {{ui:menu.settings}} → {{ui:settings.nav.mobile}}.
-2. Leave the {{ui:settings.mobileRemote.relayLabel}} address empty to use the default relay. If you run your own relay, enter its address and click {{ui:settings.mobileRemote.applyButton}}.
-3. Turn on {{ui:settings.mobileRemote.allowToggle}}. A QR code appears.
+On the computer:
+1. Open {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} → the {{ui:settings.remote.phoneTab}} tab.
+2. Turn on {{ui:settings.mobileRemote.allowToggle}}. On Windows it is {{ui:windows.mobile.allow}}. Its state shows beside it; if it stays stuck connecting to the relay, click {{ui:settings.mobileRemote.reconnectButton}}.
+3. Under {{ui:windows.mobile.pairingTitle}}, a QR code appears beside three steps.
 
 On the phone:
-1. Open the app and tap {{ui:phone.hosts.addHost}} on the {{ui:phone.tabs.hosts}} tab. The first time, a connection guide shows first.
-2. Scan the Mac's QR code with {{ui:phone.pair.mode.qr}}. If you can't use the camera, click {{ui:settings.mobileRemote.copyLinkButton}} on the Mac, send yourself the link and paste it in {{ui:phone.pair.mode.manual}}.
-3. Tap {{ui:phone.pair.connect}}.
+1. Open the phone app and tap {{ui:phone.hosts.addHost}} on the {{ui:phone.tabs.hosts}} tab. The first time, a connection guide shows first.
+2. Scan the computer's QR code with {{ui:phone.pair.mode.qr}}. If you can't use the camera, click {{ui:settings.mobileRemote.copyLinkButton}} on the computer, send yourself the link and paste it in {{ui:phone.pair.mode.manual}}. The link carries the key, so it is copied as a secret and cleared from the clipboard after a minute.
+3. Tap {{ui:phone.pair.connect}}. The phone connects and appears under {{ui:settings.mobileRemote.connectedDevicesTitle}} on the computer.
+
+Next to the QR code are the {{ui:settings.mobileRemote.hostIdLabel}} and the {{ui:settings.mobileRemote.keyLabel}}. The key shows only when you click its show button.
+
+{{ui:windows.mobile.connectionTitle}} offers two ways to connect.
+- {{ui:windows.mobile.relayTitle}}: the default. Nothing to do.
+- {{ui:mobileRemote.direct.toggle}}: set the port and apply it; its state shows below. See [Connect directly over Tailscale](#direct).
 
 ![[settings-mobile]]
 
-Paired phones are listed under {{ui:settings.mobileRemote.connectedDevicesTitle}} on the Mac. When you stop using a phone, click {{ui:settings.mobileRemote.revokeRowButton}}. Pairing a phone again with the QR code replaces its entry, and its old pairing stops working.
+Paired phones and [paired computers](remote.md#pair) are listed one per row under {{ui:settings.mobileRemote.connectedDevicesTitle}}; a computer shows a computer icon. The list is shown whenever there is a paired device, even with the phone connection switch off. When you stop using a device, click {{ui:settings.mobileRemote.revokeRowButton}} on its row. Only that device is unpaired; your other phones and computers stay connected. The pairing key is renewed at the same time, so a device you pair after that (including the one you unpaired) needs the new QR code or link. Pairing a phone again with the QR code replaces its entry, and its old pairing stops working.
 
 > [!warning]
-> {{ui:settings.mobileRemote.regenerateKeyButton}} means every paired phone has to pair again. Use it if someone else saw the QR code or the key.
+> {{ui:settings.mobileRemote.regenerateKeyButton}} unpairs every paired phone and every paired computer, and they have to pair again. Use it if someone else saw the QR code, the key or a pairing link.
 
 ## Connect directly over Tailscale {#direct}
 When the Mac and the phone are on the same [Tailscale](https://tailscale.com) network, the phone connects straight to the Mac without the relay. Pairing and encryption stay the same, and when the Mac can't be reached directly the phone uses the relay on its own.
 
 1. Turn on Tailscale on the Mac and the phone and sign in with the same account.
-2. In the {{ui:settings.nav.mobile}} tab on the Mac, check that {{ui:mobileRemote.direct.toggle}} is on (it is by default). When the line below it shows Tailscale addresses, you're set. If it says {{ui:mobileRemote.direct.status.notFound}}, Tailscale is off on the Mac.
+2. In the {{ui:settings.remote.phoneTab}} tab on the computer, check that {{ui:mobileRemote.direct.toggle}} is on (it is by default). When the line below it shows Tailscale addresses, you're set. If it says {{ui:mobileRemote.direct.status.notFound}}, Tailscale is off on the Mac.
 3. Phones you already paired don't need pairing again. The Mac tells them its addresses the next time they connect.
 
 On the phone, the Mac's card in the {{ui:phone.tabs.hosts}} tab shows {{ui:phone.direct.route.direct}} or {{ui:phone.direct.route.relay}}.
 
-It works the same with a Windows PC, which needs one Windows Firewall rule so the connection isn't blocked. In the {{ui:settings.nav.mobile}} tab, click {{ui:mobileRemote.direct.windows.firewall.addButton}} and allow Windows' administrator prompt. The rule lets only connections from Tailscale addresses reach this app. Once the rule exists, the button on the same row becomes {{ui:mobileRemote.direct.windows.firewall.removeButton}}; when the rule can't be read, it becomes {{ui:setup.button.recheck}}, which reads again without an administrator prompt. If you change the port while the direct connection is on, remove the rule and add it again. Turning the direct connection or the mobile remote off removes the rule too (it stays while this computer is [sharing workspaces](remote.md#share), which still need its port), and Windows asks for administrator approval again. It is one rule that opens both the phone's direct port and the workspace-sharing port. While it exists, the same row also offers {{ui:remote.windows.firewall.update}}, which fits it to the ports in use now, and the {{ui:settings.remote.navTitle}} tab adds, updates or removes the same rule.
+It works the same with a Windows PC, which needs one Windows Firewall rule so the connection isn't blocked. In the {{ui:settings.remote.firewallTitle}} group under the {{ui:settings.remote.phoneTab}} tab, click {{ui:remote.windows.firewall.add}} and allow Windows' administrator prompt. The rule lets only connections from Tailscale addresses reach this app. Once the rule exists, {{ui:remote.windows.firewall.update}} fits it to the ports in use now and {{ui:remote.windows.firewall.remove}} removes it. Turning the direct connection or phone access off removes the rule too (it stays while this computer is [sharing workspaces](remote.md#share), which still need its port), and Windows asks for administrator approval again. It is one rule that opens both the phone's direct port and the workspace-sharing port, so a change on the {{ui:settings.remote.shareTitle}} tab changes the same rule ([Windows Firewall](remote.md#firewall)).
 
 ## What you can do on the phone {#use}
-The phone app has four tabs.
+The phone app has three tabs.
 
 | Tab | What it shows |
 |---|---|
 | {{ui:phone.tabs.dashboard}} | {{ui:phone.dashboard.title}}: the counts of running, waiting and finished work across every paired computer, then each computer's workspaces and sessions in turn. Open a session to read the conversation and send requests. |
 | {{ui:phone.tabs.alerts}} | Approvals and questions waiting for you, and finished work |
-| {{ui:phone.tabs.hosts}} | Your paired Macs and whether they are connected |
+| {{ui:phone.tabs.hosts}} | Your paired computers (Mac or Windows) and whether they are connected |
 
 Inside a session you can send and stop requests, change the model, permission and thinking effort, run slash commands, attach files and browse the workspace's files (read-only).
 
@@ -80,7 +86,7 @@ Your phone gets a notification when a run on a connected computer (Mac or Window
 - The computer encrypts each notification so only this phone can read it; the relay and Google can't. Notifications go through the relay, so over a direct Tailscale connection they still arrive, as long as the computer can reach the internet.
 - Both the desktop app and the phone app need a version with this feature. A desktop app without it sends no notifications. If you paired with a very old phone app, pair again.
 - The default relay moved to a new server in 0.4.58. If a phone paired before then gets no notifications, pair it again once with the QR code.
-- While phone remote access is off the computer sends nothing, and when you turn it back on it does not report what happened in the meantime.
+- While phone access is off on the computer it sends nothing, and when you turn it back on it does not report what happened in the meantime.
 
 When the app crashes it sends the developers only where it stopped, never conversations, commands or paths. You can turn {{ui:phone.settings.crashReports}} off in {{ui:phone.settings.title}}.
 
@@ -88,10 +94,9 @@ When the app crashes it sends the developers only where it stopped, never conver
 You can watch your Mac's screen from the phone and, if you allow it, control it. This is a {{ui:badge.beta}} feature, in the Android app only for now.
 
 > [!warning]
-> Since 0.4.58, screen view & control is paused (on the Mac and on Windows). While the default relay moves to a new server, the phone offers no screen button, and the {{ui:settings.screenShare.sectionTitle}} section of Settings shows only a line saying it is paused. The access you set for each phone and the permissions you granted are kept and come back when it returns. What follows describes it as it works when it is back.
-1. On the Mac, under {{ui:settings.screenShare.sectionTitle}} on the {{ui:settings.nav.mobile}} tab, set {{ui:settings.screenShare.grantLabel}} for each phone to {{ui:settings.screenShare.grantView}} or {{ui:settings.screenShare.grantControl}}. A new phone starts at {{ui:settings.screenShare.grantNone}}.
-2. Use {{ui:settings.screenShare.permissions.openButton}} to grant the Mac permissions it needs, such as Screen Recording and Accessibility.
-3. On the phone, tap {{ui:phone.screenShare.open}} and choose {{ui:phone.screenShare.mode.view}} or {{ui:phone.screenShare.mode.control}}.
+> Since 0.4.58, screen view & control is paused (on the Mac and on Windows). While the default relay moves to a new server, the phone offers no screen button, and Settings on the computer has nothing for screen view. The access you set for each phone and the permissions you granted are kept and come back when it returns.
+
+When it is back, tap {{ui:phone.screenShare.open}} on the phone and choose {{ui:phone.screenShare.mode.view}} or {{ui:phone.screenShare.mode.control}}.
 
 The first time you allow control, check that the fingerprint matches on both screens. Each time control starts, the phone asks for your biometrics or PIN.
 
@@ -107,5 +112,7 @@ When the Mac or Windows app has a new version, a **{{ui:phone.appUpdate.title}}*
 - The computer downloads the update from the official address and installs it only after checking its signature. The phone only tells it to start.
 - This works with computers on 0.4.55 or later.
 
-## Run your own relay {#own-relay}
-Instead of the default relay you can run your own. Deploy the `relay/` folder from the repository to a server, then enter its address (`wss://…`) under {{ui:settings.mobileRemote.relayLabel}} on the Mac.
+## Change the relay address {#own-relay}
+The default relay (Cloudflare) is built into the app, so usually there is nothing to change. To use another relay, open the folded {{ui:settings.advancedTitle}} group at the bottom of the {{ui:settings.remote.phoneTab}} tab.
+- {{ui:settings.mobileRemote.relayLabel}}: enter the relay's address (`wss://…`) and click {{ui:settings.mobileRemote.applyButton}}. Leave it empty to use the default relay.
+- {{ui:settings.mobileRemote.legacyAppsToggle}}: on by default, so older phone apps without a device token can still connect. Turned off, only apps with a device token connect and phones connected by the key alone drop at once, so turn it off only after every phone runs the latest app.

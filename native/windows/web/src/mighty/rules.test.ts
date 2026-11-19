@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { MightyGraphRun } from '../store/models';
 import { PendingNodeID, imagesHeight, makeLayout, nodeId, resultCap, resultDrag, resultFitSize, resultSize, resultViewportLimit, runOf, suffixOf } from './layout';
 import {
+  arrivedResult, resultCamera,
   DotsMargin, FollowWatch, WheelGestureGapMs, ZoomMax, activityPhase, barHeight, cameraTween, dashFitting, dashForCard, dotFirst, dotRadius, dotStep, dotsShift, dotsShown, followTargetID, isAtNewest, outlineOf,
   perimeter, runsChanged, scrollsBy, wheelPan, wheelRoute, wheelScrollTarget, zoomAnchored, zoomIn, zoomLabel, zoomOut,
 } from './camera';
@@ -82,6 +83,23 @@ describe('sizing and drags', () => {
     expect(id.startsWith('5:')).toBe(true);
     expect(suffixOf(id)).toBe('agent:x');
     expect(runOf(id)).toBe('런-1');
+  });
+});
+
+describe('a result that comes in', () => {
+  it('is shown once, never on the first pass', () => {
+    expect(arrivedResult(undefined, '3:r:result')).toBe(false);
+    expect(arrivedResult(null, '3:r:result')).toBe(true);
+    expect(arrivedResult('2:r:result', '3:r:result')).toBe(true);
+    expect(arrivedResult('3:r:result', '3:r:result')).toBe(false);
+    expect(arrivedResult('3:r:result', null)).toBe(false);
+  });
+  it('lands with its bottom over the margin, or its top at the margin when it is taller than the view', () => {
+    const viewport = { w: 800, h: 600 };
+    const short = resultCamera({ x: 0, y: 1000, w: 360, h: 200 }, viewport, 1);
+    expect(600 - (short.y + 1200)).toBe(16);
+    const tall = resultCamera({ x: 0, y: 1000, w: 360, h: 900 }, viewport, 1);
+    expect(tall.y + 1000).toBe(16);
   });
 });
 

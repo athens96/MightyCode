@@ -1,7 +1,8 @@
 //! M-F: the Mac's menu bar through Tauri's Menu API (Swift `MightyCodeApp.swift:62-134`; the items, shortcuts and locale keys are the
 //! plan's §2 F row): the App menu, File (⌘O, New Folder…, Create from Git…, ⌘N), Edit, View (⌃⌘S, ⌘= ⌘- ⌘0, full screen), the
-//! Workspace menu (⌘K ⌘T ⇧⌘E, Work map, usage, Install shell command 'mighty', Reconnect Input Method, Save Input Method Diagnostics,
-//! ⌘,), Window and Help (⌘?). The Edit menu is what makes ⌘C/⌘V/⌘X/⌘A/⌘Z work in WKWebView's text fields. Windows has no menu bar.
+//! Workspace menu (⌘K ⌘T ⇧⌘E, ⇧⌘F conversation search, Work map, usage, Install shell command 'mighty', Reconnect Input Method,
+//! Save Input Method Diagnostics, ⌘,), Window and Help (⌘?). The Edit menu is what makes ⌘C/⌘V/⌘X/⌘A/⌘Z work in WKWebView's text
+//! fields. Windows has no menu bar.
 //!
 //! - Labels come from the locale catalogues in the app's language; the standard menus' own words (File, Edit, …) are AppKit's in that
 //!   language, kept here because a Tauri menu has no system localization. The language takes effect at the next start (Settings ›
@@ -9,8 +10,7 @@
 //! - An item that is page UI (the palette, the panes, the text size, settings, help) reaches the page as a `{kind:'menu', action}` push
 //!   the page maps behind tauri+macos (plan D9), which runs the same handler as its ⌘ shortcut and keeps Swift's rule of no action
 //!   while a sheet is up. The input method items and the shell command are the host's own.
-//! - Not carried over: Swift's conversation search (⇧⌘F), project tasks (⇧⌘R), agent context and "Export diagnostics…", which the
-//!   shared app does not have.
+//! - Not carried over: Swift's project tasks (⇧⌘R), agent context and "Export diagnostics…", which the shared app does not have.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -69,10 +69,11 @@ pub const VIEW: [Item; 5] = [
 ];
 
 /// Workspace (Swift's `CommandMenu(L("menu.workspace"))`).
-pub const WORKSPACE: [Item; 11] = [
+pub const WORKSPACE: [Item; 12] = [
     page("search", "menu.searchWorkspaces", Some("Cmd+K")),
     page("newShell", "menu.addTerminalPane", Some("Cmd+T")),
     page("files", "menu.showFiles", Some("Shift+Cmd+E")),
+    page("conversationSearch", "conversationSearch.open", Some("Shift+Cmd+F")),
     page("workMap", "workMap.open", None),
     page("usage", "usage.open", None),
     host("shellCommand", "shellCommand.install"),
@@ -414,6 +415,7 @@ mod tests {
                 ("search", "Cmd+K"),
                 ("newShell", "Cmd+T"),
                 ("files", "Shift+Cmd+E"),
+                ("conversationSearch", "Shift+Cmd+F"),
                 ("settings", "Cmd+,"),
                 ("help", "Cmd+?"),
             ]

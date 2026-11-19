@@ -29,10 +29,10 @@ Antigravity 在工作过程中无法提问，所以会跳过需要询问的操�
 串联命令、使用管道、重定向或可能删除数据的命令只能{{ui:permission.allowOnce}}。规则会允许以该文本开头的所有命令，长期保留这样的规则有风险。请参阅 [Antigravity 的权限卡片](approvals.md#antigravity-permission)。
 
 ## 手机无法连接 {#phone}
-- 检查 Mac 的{{ui:settings.nav.mobile}}中是否已打开{{ui:settings.mobileRemote.allowToggle}}。
+- 检查电脑的{{ui:settings.remote.navTitle}} › {{ui:settings.remote.phoneTab}}标签页中是否已打开{{ui:settings.mobileRemote.allowToggle}}（Windows 上为{{ui:windows.mobile.allow}}）。
 - 如果状态一直停在“正在连接中继”，请点击{{ui:settings.mobileRemote.reconnectButton}}按钮。
-- 如果手机的{{ui:phone.tabs.hosts}}标签页中显示{{ui:phone.hosts.reachability.unauthorized}}，说明 Mac 的密钥已更改。请用二维码重新连接。
-- Mac 处于睡眠状态时无法连接。
+- 如果手机的{{ui:phone.tabs.hosts}}标签页中显示{{ui:phone.hosts.reachability.unauthorized}}，说明电脑重新生成了密钥，或解除了这部手机的配对。请用二维码重新连接。
+- 电脑处于睡眠状态时无法连接。
 - 0.4.58 之前连接的手机如果收不到通知，请用二维码重新连接一次。默认中继已换到新服务器（[通知](phone.md#notifications)）。
 
 ## 关闭窗格后，对话会消失吗？ {#history}

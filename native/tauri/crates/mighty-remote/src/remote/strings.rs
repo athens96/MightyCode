@@ -34,6 +34,11 @@ pub fn host_command_too_long() -> String {
 pub fn host_agent_needs_full_access(provider: &str) -> String {
     get_with("remote.windows.host.error.agentNeedsFullAccess", &[("agent", provider_label(provider))])
 }
+/// A Mac host refuses another computer's Antigravity, pi, opencode or Hermes run while the full-access switch is off, in any mode: no
+/// sandbox holds them in the shared folder (Codex's Seatbelt holds Codex). A Mac key, beside the Windows one above.
+pub fn mac_host_agent_needs_full_access(provider: &str) -> String {
+    get_with("remote.host.error.agentNeedsFullAccess", &[("agent", provider_label(provider))])
+}
 pub fn not_local() -> String {
     get("remote.windows.workspace.error.notLocal")
 }

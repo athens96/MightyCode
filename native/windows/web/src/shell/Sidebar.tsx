@@ -99,6 +99,8 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
     { separator: true },
     { label: t('menu.showFiles'), action: () => call('openFiles', { workspaceId: workspace.id }) },
     { label: t('workMap.open'), action: () => call('openWorkMap', { workspaceId: workspace.id }) },
+    // 대화 검색 is the Rust host's (conversation_search.rs).
+    ...(import.meta.env.MODE === 'tauri' ? [{ label: t('conversationSearch.open'), action: () => call('openConversationSearch', { workspaceId: workspace.id }) }] : []),
     // Where its agent panes work and what each new worktree gets (MainWindow.PaneWorktree.cs WorkspaceWorktreeAction).
     { separator: true },
     { label: t('paneWorktree.menu.mode'), disabled: true },

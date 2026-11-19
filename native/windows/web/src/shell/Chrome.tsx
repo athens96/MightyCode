@@ -10,6 +10,7 @@ import type { HeaderModel, ShellModel, UsageDetails } from './types';
 import { usePageOverlay } from './overlay';
 import { Icon } from '../icons/Icon';
 import { Pending } from '../pending/Pending';
+import { hostCapabilities } from '../slot/host';
 
 export function Banners({ shell }: { shell: ShellModel }) {
   const { t } = useServices();
@@ -76,6 +77,12 @@ export function WorkspaceHeader({ header, counts, layoutMode }: { header: Header
         onClick={() => call('openFiles', { workspaceId: header.id })}><Icon name="folder" size={16} weight={1.5} /></button>
       <button type="button" className="icon-button header-icon-button" disabled={!header.workMapEnabled} title={header.workMapHelp} aria-label={t('workMap.open')} data-testid="open-workmap"
         onClick={() => call('openWorkMap', { workspaceId: header.id })}><Icon name="map" size={16} weight={1.5} /></button>
+      {/* 대화 검색 (the Rust host's): this computer's session records, so not for a remote workspace (M/WorkspaceView.swift). */}
+      {import.meta.env.MODE === 'tauri' && (
+        <button type="button" className="icon-button header-icon-button" disabled={Boolean(header.remoteHost)} aria-label={t('conversationSearch.open')} data-testid="open-conversation-search"
+          title={header.remoteHost ? t('conversationSearch.remote') : t('conversationSearch.open') + (hostCapabilities()?.platform === 'macos' ? ' (⇧⌘F)' : ' (Ctrl+Shift+F)')}
+          onClick={() => call('openConversationSearch', { workspaceId: header.id })}><Icon name="search" size={16} weight={1.5} /></button>
+      )}
     </header>
   );
 }

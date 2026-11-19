@@ -119,7 +119,8 @@ pub fn at_text(ms: i64) -> String {
 }
 
 impl PushHub {
-    /// `new MobilePushHub(service, host, hostName)`: subscribed to the identity's rotation (a rotated key forgets every view).
+    /// `new MobilePushHub(service, host, hostName)`: subscribed to the identity's rotation (a rotated key forgets every view, a
+    /// revoked device its own).
     pub fn new(identity: Arc<Identity>, host_name: &str, seams: PushSeams) -> Arc<PushHub> {
         let hub = Arc::new(PushHub {
             identity: identity.clone(),
@@ -133,9 +134,14 @@ impl PushHub {
             rotation: Mutex::new(None),
         });
         let weak: Weak<PushHub> = Arc::downgrade(&hub);
-        let subscription = identity.on_rotated(move || {
+        let subscription = identity.on_rotated(move |device| {
             if let Some(hub) = weak.upgrade() {
-                hub.forget_views();
+                match device {
+                    None => hub.forget_views(),
+                    Some(device) => {
+                        lock(&hub.viewing).remove(device);
+                    }
+                }
             }
         });
         *lock(&hub.rotation) = Some(subscription);

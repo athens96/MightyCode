@@ -29,10 +29,10 @@ Antigravity cannot ask while it works, so it skips what it would have to ask abo
 A command that chains, pipes, redirects or may delete data offers only {{ui:permission.allowOnce}}. A rule allows every command that starts with its text, so keeping such a rule would be risky. See [Antigravity's permission card](approvals.md#antigravity-permission).
 
 ## My phone won't connect {#phone}
-- Check that {{ui:settings.mobileRemote.allowToggle}} is on under {{ui:settings.nav.mobile}} on the Mac.
+- Check that {{ui:settings.mobileRemote.allowToggle}} ({{ui:windows.mobile.allow}} on Windows) is on in the {{ui:settings.remote.navTitle}} › {{ui:settings.remote.phoneTab}} tab on the computer.
 - If the status is stuck on connecting to the relay, click {{ui:settings.mobileRemote.reconnectButton}}.
-- If the phone's {{ui:phone.tabs.hosts}} tab shows {{ui:phone.hosts.reachability.unauthorized}}, the Mac's key changed. Pair again with the QR code.
-- A sleeping Mac can't be reached.
+- If the phone's {{ui:phone.tabs.hosts}} tab shows {{ui:phone.hosts.reachability.unauthorized}}, the computer made a new key or unpaired this phone. Pair again with the QR code.
+- A sleeping computer can't be reached.
 - If a phone paired before 0.4.58 gets no notifications, pair it again once with the QR code: the default relay moved to a new server ([Notifications](phone.md#notifications)).
 
 ## Does closing a pane lose the conversation? {#history}

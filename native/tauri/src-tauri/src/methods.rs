@@ -189,6 +189,7 @@ pub fn registry() -> Registry {
     crate::terminal::register(&mut methods);
     crate::files::register(&mut methods);
     crate::history::register(&mut methods);
+    crate::conversation_search::register(&mut methods);
     crate::frame::register(&mut methods);
     // A delegated child's card actions (delegation.rs, W7-D).
     methods.add("childAction", crate::delegation::child_action);

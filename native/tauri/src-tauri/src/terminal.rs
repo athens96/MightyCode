@@ -834,6 +834,16 @@ pub fn terminals(host: &Host) -> Result<Arc<Terminals>, String> {
     host.app.try_state::<Arc<Terminals>>().map(|state| state.inner().clone()).ok_or_else(|| "the terminals are not ready".to_string())
 }
 
+/// The frame's agent panes that have a terminal (C# `agentTerminals`), shown or not: their header offers 터미널 창 열기
+/// (`terminalPromptShow`, M/SessionPaneView.swift's `agent-terminal-open-` button).
+pub fn mark_agent_terminals(host: &Host, model: &mut mighty_core::shell::ShellModel) {
+    let Ok(terminals) = terminals(host) else { return };
+    let agents = lock(&terminals.agents);
+    for pane in &mut model.panes {
+        pane.agent_terminal = agents.contains_key(&pane.id);
+    }
+}
+
 /// The theme or the text setting changed (methods.rs's `setTheme`, frame.rs's `textSize`): every terminal takes its look again.
 pub fn restyle(host: &Host) {
     if let Ok(terminals) = terminals(host) {

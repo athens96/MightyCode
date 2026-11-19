@@ -47,7 +47,7 @@ Mightyフローでは、計画はリクエストの下のブロックに表示�
 2. 新しいスタイルは、最初に一度内容を確認する必要があります。{{ui:settings.styles.viewButton}}ボタンで、提供元、自動で許可するツール、インストールコマンド、すべてのボタンを確認します。
 3. 問題がなければ{{ui:settings.styles.allowButton}}をクリックします。
 
-スタイルのファイルが変更されると、再度確認が必要になります。許可を取り消すには、同じ場所の{{ui:settings.styles.revokeButton}}をクリックします。
+スタイルのファイルが変更されると、再度確認が必要になります。許可したスタイルを止めるには同じ場所の{{ui:settings.styles.revokeButton}}ボタンを、解除するには{{ui:settings.styles.unblockButton}}ボタンをクリックします。一覧から消すには{{ui:settings.styles.removeButton}}ボタンをクリックします。スタイルのIDとハッシュは、名前にポインタを合わせると表示されます。
 
 > [!warning]
 > ツールを自動で許可するスタイルは、そのツールを確認なしで実行します。提供元が信頼できる場合にのみ許可してください。

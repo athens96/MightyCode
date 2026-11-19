@@ -5,48 +5,54 @@ section: phone
 ---
 휴대폰 앱으로 밖에서도 Mac이나 Windows PC의 Mighty Code를 보고 다룰 수 있습니다. 작업 상태를 보고, 요청을 보내고, 승인과 질문에 답합니다.
 
-Mac과 휴대폰은 릴레이 서버를 거쳐 연결됩니다. 내용은 처음부터 끝까지 암호화되어 릴레이는 내용을 볼 수 없습니다. 공유기 포트를 열거나 VPN을 쓸 필요가 없습니다. Tailscale을 쓰고 있다면 [릴레이 없이 직접](#direct) 연결할 수도 있습니다.
+컴퓨터와 휴대폰은 릴레이 서버를 거쳐 연결됩니다. 기본 릴레이가 앱에 들어 있어 따로 준비할 일은 없습니다. 내용은 처음부터 끝까지 암호화되어 릴레이는 내용을 볼 수 없습니다. 공유기 포트를 열거나 VPN을 쓸 필요가 없습니다. Tailscale을 쓰고 있다면 [릴레이 없이 직접](#direct) 연결할 수도 있습니다.
 
 ## 휴대폰 앱 받기 {#get-app}
 [다운로드 페이지](https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/index.html)에서 Android 앱(APK)을 받아 설치합니다.
 
 ## 연결하기 {#pair}
-Mac에서:
-1. {{ui:menu.settings}} → {{ui:settings.nav.mobile}} 탭을 엽니다.
-2. {{ui:settings.mobileRemote.relayLabel}} 주소는 비워 두면 기본 릴레이를 씁니다. 직접 운영하는 릴레이가 있으면 주소를 넣고 {{ui:settings.mobileRemote.applyButton}}을 누릅니다.
-3. {{ui:settings.mobileRemote.allowToggle}}을 켭니다. QR 코드가 나타납니다.
+컴퓨터에서:
+1. {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} → {{ui:settings.remote.phoneTab}} 탭을 엽니다.
+2. {{ui:settings.mobileRemote.allowToggle}}을 켭니다. Windows에서는 {{ui:windows.mobile.allow}}입니다. 옆에 연결 상태가 보이고, 릴레이 연결 중에서 멈춰 있으면 {{ui:settings.mobileRemote.reconnectButton}} 단추를 누릅니다.
+3. {{ui:windows.mobile.pairingTitle}} 항목에 QR 코드와 세 단계 안내가 나타납니다.
 
 휴대폰에서:
-1. 앱을 열고 {{ui:phone.tabs.hosts}} 탭의 {{ui:phone.hosts.addHost}}를 누릅니다. 처음 열면 연결 안내가 먼저 보입니다.
-2. {{ui:phone.pair.mode.qr}}으로 Mac의 QR 코드를 찍습니다. 카메라를 쓸 수 없으면 Mac에서 {{ui:settings.mobileRemote.copyLinkButton}}를 눌러 링크를 보내고 {{ui:phone.pair.mode.manual}}에 넣습니다.
-3. {{ui:phone.pair.connect}}를 누르면 연결됩니다.
+1. 휴대폰 앱을 열고 {{ui:phone.tabs.hosts}} 탭의 {{ui:phone.hosts.addHost}}를 누릅니다. 처음 열면 연결 안내가 먼저 보입니다.
+2. {{ui:phone.pair.mode.qr}}으로 컴퓨터의 QR 코드를 찍습니다. 카메라를 쓸 수 없으면 컴퓨터에서 {{ui:settings.mobileRemote.copyLinkButton}} 단추를 눌러 링크를 보내고 {{ui:phone.pair.mode.manual}}에 넣습니다. 링크에는 키가 들어 있어 비밀로 복사되고, 1분 뒤 클립보드에서 지워집니다.
+3. {{ui:phone.pair.connect}}를 누르면 연결되고, 컴퓨터의 {{ui:settings.mobileRemote.connectedDevicesTitle}}에 그 휴대폰이 나타납니다.
+
+QR 코드 옆에는 {{ui:settings.mobileRemote.hostIdLabel}}와 {{ui:settings.mobileRemote.keyLabel}}가 있습니다. 키는 보기 단추를 눌러야 보입니다.
+
+{{ui:windows.mobile.connectionTitle}} 항목에는 연결 방법이 둘 있습니다.
+- {{ui:windows.mobile.relayTitle}}: 기본 방법입니다. 따로 할 일은 없습니다.
+- {{ui:mobileRemote.direct.toggle}}: 포트를 정하고 적용하며, 아래에 상태가 보입니다. [Tailscale로 직접 연결](#direct)을 보세요.
 
 ![[settings-mobile]]
 
-연결된 휴대폰은 Mac의 {{ui:settings.mobileRemote.connectedDevicesTitle}}에 보입니다. 휴대폰을 더 이상 쓰지 않으면 {{ui:settings.mobileRemote.revokeRowButton}}를 누릅니다. 이미 연결한 휴대폰을 QR 코드로 다시 연결하면 그 휴대폰의 항목이 새것으로 바뀌고, 예전 연결은 더 이상 쓰이지 않습니다.
+연결된 휴대폰과 [페어링한 컴퓨터](remote.md#pair)는 {{ui:settings.mobileRemote.connectedDevicesTitle}} 목록에 한 줄씩 보이고, 컴퓨터는 컴퓨터 아이콘으로 구분됩니다. 이 목록은 기기가 하나라도 있으면 휴대폰 연결 스위치가 꺼져 있어도 보입니다. 기기를 더 이상 쓰지 않으면 그 줄의 {{ui:settings.mobileRemote.revokeRowButton}} 단추를 누릅니다. 그 기기만 해제되고 다른 휴대폰과 컴퓨터는 그대로 연결됩니다. 이때 페어링 키도 새로 바뀌므로, 그 뒤에 기기를 연결하려면(해제한 기기를 다시 연결할 때도) 새 QR 코드나 링크를 씁니다. 이미 연결한 휴대폰을 QR 코드로 다시 연결하면 그 휴대폰의 항목이 새것으로 바뀌고, 예전 연결은 더 이상 쓰이지 않습니다.
 
 > [!warning]
-> {{ui:settings.mobileRemote.regenerateKeyButton}}를 누르면 연결된 휴대폰을 모두 다시 연결해야 합니다. QR 코드나 키가 남에게 보였을 때 쓰세요.
+> {{ui:settings.mobileRemote.regenerateKeyButton}}를 누르면 연결된 휴대폰과 페어링한 컴퓨터가 모두 해제되어 다시 연결해야 합니다. QR 코드나 키, 페어링 링크가 남에게 보였을 때 쓰세요.
 
 ## Tailscale로 직접 연결 {#direct}
 Mac과 휴대폰이 같은 [Tailscale](https://tailscale.com) 네트워크에 있으면 휴대폰은 릴레이를 거치지 않고 Mac에 바로 연결합니다. 연결 방법도 암호화도 그대로이고, Mac에 닿지 않을 때는 알아서 릴레이로 연결합니다.
 
 1. Mac과 휴대폰에서 Tailscale을 켜고 같은 계정으로 로그인합니다.
-2. Mac의 {{ui:settings.nav.mobile}} 탭에서 {{ui:mobileRemote.direct.toggle}}이 켜져 있는지 봅니다(기본으로 켜져 있습니다). 아래 줄에 Tailscale 주소가 보이면 준비된 것입니다. {{ui:mobileRemote.direct.status.notFound}}이 보이면 Mac의 Tailscale이 꺼져 있는 것입니다.
+2. 컴퓨터의 {{ui:settings.remote.phoneTab}} 탭에서 {{ui:mobileRemote.direct.toggle}}이 켜져 있는지 봅니다(기본으로 켜져 있습니다). 아래 줄에 Tailscale 주소가 보이면 준비된 것입니다. {{ui:mobileRemote.direct.status.notFound}}이 보이면 Mac의 Tailscale이 꺼져 있는 것입니다.
 3. 이미 연결한 휴대폰은 다시 연결할 필요가 없습니다. 다음에 연결할 때 Mac이 주소를 알려 줍니다.
 
 휴대폰의 {{ui:phone.tabs.hosts}} 탭에서 연결된 Mac 카드에 {{ui:phone.direct.route.direct}} 또는 {{ui:phone.direct.route.relay}}가 표시됩니다.
 
-Windows PC에서도 같습니다. 다만 Windows 방화벽이 연결을 막지 않도록 규칙이 하나 필요합니다. {{ui:settings.nav.mobile}} 탭에서 {{ui:mobileRemote.direct.windows.firewall.addButton}}를 누르고 Windows의 관리자 확인을 허용하세요. 이 규칙은 Tailscale 주소에서 이 앱으로 오는 연결만 허용합니다. 규칙이 있으면 같은 줄의 버튼이 {{ui:mobileRemote.direct.windows.firewall.removeButton}}로 바뀌고, 규칙을 읽지 못했을 때는 관리자 확인 없이 다시 읽는 {{ui:setup.button.recheck}}이 됩니다. 직접 연결을 켠 채 포트를 바꾸면 규칙을 지우고 다시 추가하세요. 직접 연결이나 모바일 리모트를 끄면 규칙도 함께 지우고(이 컴퓨터가 워크스페이스를 [공유](remote.md#share) 중이면 그 포트에 필요하므로 남깁니다), 이때도 관리자 확인을 묻습니다. 이 규칙은 휴대폰 직접 연결의 포트와 워크스페이스 공유의 포트를 함께 여는 하나의 규칙입니다. 규칙이 있는 동안에는 같은 줄에 {{ui:remote.windows.firewall.update}} 단추도 나와 지금 쓰는 포트에 맞춰 고치며, {{ui:settings.remote.navTitle}} 탭에서도 같은 규칙을 추가·갱신·지울 수 있습니다.
+Windows PC에서도 같습니다. 다만 Windows 방화벽이 연결을 막지 않도록 규칙이 하나 필요합니다. {{ui:settings.remote.phoneTab}} 탭 아래의 {{ui:settings.remote.firewallTitle}} 항목에서 {{ui:remote.windows.firewall.add}} 단추를 누르고 Windows의 관리자 확인을 허용하세요. 이 규칙은 Tailscale 주소에서 이 앱으로 오는 연결만 허용합니다. 규칙이 있으면 {{ui:remote.windows.firewall.update}} 단추로 지금 쓰는 포트에 맞춰 고치고, {{ui:remote.windows.firewall.remove}} 단추로 지웁니다. 직접 연결이나 휴대폰 연결을 끄면 규칙도 함께 지우고(이 컴퓨터가 워크스페이스를 [공유](remote.md#share) 중이면 그 포트에 필요하므로 남깁니다), 이때도 관리자 확인을 묻습니다. 이 규칙은 휴대폰 직접 연결의 포트와 워크스페이스 공유의 포트를 함께 여는 하나의 규칙이라, {{ui:settings.remote.shareTitle}} 탭에서 고쳐도 같은 규칙이 바뀝니다([Windows 방화벽](remote.md#firewall)).
 
 ## 휴대폰에서 할 수 있는 일 {#use}
-휴대폰 앱에는 탭이 네 개 있습니다.
+휴대폰 앱에는 탭이 세 개 있습니다.
 
 | 탭 | 내용 |
 |---|---|
 | {{ui:phone.tabs.dashboard}} | {{ui:phone.dashboard.title}}: 연결한 모든 컴퓨터의 실행 중, 응답 대기, 완료 개수를 합쳐 보이고, 그 아래 컴퓨터마다 워크스페이스와 세션을 차례로 보입니다. 세션을 열어 대화를 보고 요청을 보냅니다. |
 | {{ui:phone.tabs.alerts}} | 답이 필요한 승인·질문과 끝난 작업 |
-| {{ui:phone.tabs.hosts}} | 연결한 Mac과 연결 상태 |
+| {{ui:phone.tabs.hosts}} | 연결한 컴퓨터(Mac·Windows)와 연결 상태 |
 
 세션 안에서는 요청 보내기와 중지, 모델·권한·사고 강도 바꾸기, 슬래시 명령, 파일 첨부, 워크스페이스 파일 보기(읽기 전용)를 할 수 있습니다.
 
@@ -80,7 +86,7 @@ Mac에서 [마이티 오케스트레이션](delegation.md)으로 만든 자식 �
 - 알림 내용은 컴퓨터가 이 휴대폰만 열 수 있게 암호화합니다. 릴레이와 Google은 읽지 못합니다. 알림은 릴레이를 거치므로 Tailscale로 직접 연결해도 컴퓨터가 인터넷에 닿아야 옵니다.
 - 컴퓨터 앱과 휴대폰 앱이 모두 이 기능이 있는 버전이어야 합니다. 이 기능이 없는 컴퓨터 앱에서는 알림이 오지 않습니다. 아주 오래된 휴대폰 앱으로 페어링했다면 다시 페어링하세요.
 - 0.4.58에서 기본 릴레이가 새 서버로 바뀌었습니다. 그 전에 연결한 휴대폰에 알림이 오지 않으면 QR 코드로 한 번 다시 연결하세요.
-- 휴대폰 연결(모바일 리모트)을 끈 동안에는 컴퓨터가 아무것도 보내지 않고, 다시 켜면 그동안 있었던 일은 알리지 않습니다.
+- 컴퓨터에서 휴대폰 연결을 끈 동안에는 컴퓨터가 아무것도 보내지 않고, 다시 켜면 그동안 있었던 일은 알리지 않습니다.
 
 앱이 멈추면 멈춘 곳만 개발자에게 보냅니다. 대화·명령·경로는 보내지 않고, {{ui:phone.settings.title}}에서 {{ui:phone.settings.crashReports}}를 끌 수 있습니다.
 
@@ -88,10 +94,9 @@ Mac에서 [마이티 오케스트레이션](delegation.md)으로 만든 자식 �
 휴대폰에서 Mac 화면을 보고, 허용하면 조작할 수도 있습니다. {{ui:badge.beta}} 기능이며 지금은 Android 앱에만 있습니다.
 
 > [!warning]
-> 0.4.58부터 화면 보기·조작을 잠시 멈췄습니다(Mac과 Windows 모두). 기본 릴레이가 새 서버로 옮겨 가는 동안에는 휴대폰에 화면 보기 단추가 나오지 않고, 설정의 {{ui:settings.screenShare.sectionTitle}} 자리에는 멈췄다는 안내 한 줄만 보입니다. 휴대폰마다 정해 둔 허용 범위와 권한은 그대로 남아 다시 켜지면 돌아옵니다. 아래는 다시 켜졌을 때의 사용법입니다.
-1. Mac의 {{ui:settings.nav.mobile}} 탭 아래 {{ui:settings.screenShare.sectionTitle}}에서 휴대폰마다 {{ui:settings.screenShare.grantLabel}}을 {{ui:settings.screenShare.grantView}} 또는 {{ui:settings.screenShare.grantControl}}으로 정합니다. 새 휴대폰은 {{ui:settings.screenShare.grantNone}}으로 시작합니다.
-2. {{ui:settings.screenShare.permissions.openButton}}으로 화면 기록, 손쉬운 사용 등 Mac 권한을 허용합니다.
-3. 휴대폰에서 {{ui:phone.screenShare.open}}를 누르고 {{ui:phone.screenShare.mode.view}} 또는 {{ui:phone.screenShare.mode.control}}을 고릅니다.
+> 0.4.58부터 화면 보기·조작을 잠시 멈췄습니다(Mac과 Windows 모두). 기본 릴레이가 새 서버로 옮겨 가는 동안에는 휴대폰에 화면 보기 단추가 나오지 않고, 컴퓨터의 설정에도 화면 보기 항목이 없습니다. 휴대폰마다 정해 둔 허용 범위와 권한은 그대로 남아 다시 켜지면 돌아옵니다.
+
+다시 켜지면 휴대폰에서 {{ui:phone.screenShare.open}}를 누르고 {{ui:phone.screenShare.mode.view}} 또는 {{ui:phone.screenShare.mode.control}}을 고릅니다.
 
 조작을 처음 허용할 때는 두 화면에 보이는 지문이 같은지 확인합니다. 조작을 시작할 때마다 휴대폰이 생체 인증이나 PIN을 묻습니다.
 
@@ -107,5 +112,7 @@ Mac이나 Windows 앱에 새 버전이 있으면, 휴대폰에서 그 컴퓨터�
 - 업데이트 파일은 컴퓨터가 공식 주소에서 받고, 서명을 확인한 뒤에만 설치합니다. 휴대폰은 시작하라고 알릴 뿐입니다.
 - 이 기능은 0.4.55부터 있는 컴퓨터에서 됩니다.
 
-## 릴레이 직접 운영하기 {#own-relay}
-기본 릴레이 대신 직접 릴레이를 운영할 수 있습니다. 저장소의 `relay/` 폴더를 서버에 배포한 뒤 그 주소(`wss://…`)를 Mac의 {{ui:settings.mobileRemote.relayLabel}}에 넣으세요.
+## 릴레이 주소 바꾸기 {#own-relay}
+기본 릴레이(Cloudflare)가 앱에 들어 있어 보통은 바꿀 일이 없습니다. 다른 릴레이를 써야 하면 {{ui:settings.remote.phoneTab}} 탭 맨 아래의 접힌 {{ui:settings.advancedTitle}} 항목을 펼칩니다.
+- {{ui:settings.mobileRemote.relayLabel}}: 릴레이 주소(`wss://…`)를 넣고 {{ui:settings.mobileRemote.applyButton}}을 누릅니다. 비워 두면 기본 릴레이를 씁니다.
+- {{ui:settings.mobileRemote.legacyAppsToggle}}: 기본으로 켜져 있어 기기 토큰이 없는 예전 휴대폰 앱도 연결됩니다. 끄면 기기 토큰이 있는 앱만 연결되고 키로만 연결된 휴대폰은 바로 끊기니, 모든 휴대폰을 최신 앱으로 올린 뒤 끄세요.

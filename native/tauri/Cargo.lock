@@ -2268,6 +2268,7 @@ dependencies = [
  "indexmap 2.14.2",
  "mighty-composer",
  "mighty-core",
+ "mighty-graph",
  "mighty-platform",
  "mighty-run",
  "regex",

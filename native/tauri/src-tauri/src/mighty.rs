@@ -220,7 +220,9 @@ pub fn flush(host: &Arc<Host>) {
             let (host, id, root) = (host.clone(), id.clone(), root.clone());
             tauri::async_runtime::spawn_blocking(move || {
                 let texts = view_model::result_texts(&lookup.run);
-                let files = result_files::files_in(&texts, root.as_deref(), &StdFiles { ignores_case: cfg!(windows) });
+                // Case follows the folder's volume (APFS ignores it as installed, a case-sensitive volume does not).
+                let ignores_case = root.as_deref().is_some_and(|r| crate::platform::names_ignore_case(std::path::Path::new(r)));
+                let files = result_files::files_in(&texts, root.as_deref(), &StdFiles { ignores_case });
                 let mut view = host.view();
                 if let Some(ui) = view.panes.get_mut(&id) {
                     ui.mighty.found_result_files(lookup.run.id(), lookup.key, files);

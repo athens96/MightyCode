@@ -34,7 +34,7 @@ fn ignores_case() -> bool {
     std::path::MAIN_SEPARATOR == '\\'
 }
 
-fn same_path(a: &str, b: &str) -> bool {
+pub(crate) fn same_path(a: &str, b: &str) -> bool {
     if ignores_case() { normalize::ordinal_ignore_case(a, b).is_eq() } else { a == b }
 }
 
@@ -511,6 +511,25 @@ impl FileOriginalStore {
             }
         }
         out
+    }
+
+    /// Swift `FileOriginalStore.files`: the paths whose originals the run kept (the files it edited, refused ones left out), in the
+    /// order they were recorded; empty when the run is unknown or was recorded under another root than `root`.
+    pub fn files(&self, session_id: &str, run_id: &str, root: &str) -> Vec<String> {
+        let run_id = source_run(run_id);
+        let Some(real_root) = workspace_files::real_path(Path::new(root)) else { return vec![] };
+        if !wire::identifier(session_id) || !wire::identifier(run_id) {
+            return vec![];
+        }
+        let _guard = lock(&self.inner);
+        let Some(manifest) = Manifest::read(&self.run_folder(session_id, run_id)) else { return vec![] };
+        if manifest.session_id != session_id
+            || manifest.run_id != run_id
+            || !manifest.root.as_deref().is_some_and(|kept| same_path(kept, &real_root.to_string_lossy()))
+        {
+            return vec![];
+        }
+        manifest.files.iter().filter(|f| !manifest.refuses(&f.path)).map(|f| f.path.clone()).collect()
     }
 
     /// C# `Runs`: the run ids the store holds for a session, newest first.

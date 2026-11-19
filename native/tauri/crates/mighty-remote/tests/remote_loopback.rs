@@ -166,6 +166,32 @@ async fn a_windows_host_refuses_codex_and_antigravity_until_the_switch_is_on() {
     fixture.dispose().await;
 }
 
+/// "remote loopback: a Mac host runs Codex in its sandbox but refuses Antigravity until the switch is on": nothing launches agy (nor
+/// pi, opencode, Hermes) in a sandbox, so a Mac host holds them to the switch as a Windows host does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mac_host_refuses_antigravity_but_not_codex_until_the_switch_is_on() {
+    set_language("ko");
+    let fixture = make_host(MakeHost { windows_host: Some(false), runtime: Some("info-darwin.json"), ..MakeHost::default() }).await;
+    let state = fixture.host.start(&[fixture.shared.id().into()], 0).await.unwrap();
+    let (target, key) = (loopback(state.port.unwrap()), state.key.clone().unwrap());
+    let start = |provider: &'static str, mode: &'static str| {
+        let (target, key, workspace) = (target.clone(), key.clone(), fixture.shared.id().to_string());
+        async move { post(&target, &key, "/v2/runs", &wire_start(&workspace, "claude", "hi", provider, mode).to_value()).await }
+    };
+    for (provider, mode) in [("gemini", "acceptEdits"), ("gemini", "manual"), ("pi", "manual")] {
+        let refused = start(provider, mode).await.unwrap_err();
+        assert!(
+            refused.status() == Some(403) && refused.message() == strings::mac_host_agent_needs_full_access(provider),
+            "{provider} {mode}"
+        );
+    }
+    assert!(started(&fixture).is_empty(), "nothing ran");
+    start("codex", "acceptEdits").await.unwrap();
+    until(|| started(&fixture).len() == 1, 10_000, "the Codex run").await;
+    assert_eq!(started(&fixture)[0].provider, "codex", "a Mac host's Codex runs in its sandbox without the switch");
+    fixture.dispose().await;
+}
+
 /// "remote loopback: tool requests are answered from the client and graph runs go only where asked".
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tool_requests_are_answered_from_the_client_and_graph_runs_go_only_where_asked() {

@@ -86,6 +86,24 @@ pub fn disk_space() -> Arc<dyn mighty_platform::DiskSpace> {
     os::disk_space()
 }
 
+/// The app's own process at launch, before its first child: on the Mac, ends what an earlier run left running when it crashed and
+/// writes this run's agent process groups down under `local_dir` (`child-groups`) until it exits (mighty-platform-macos
+/// `child_groups`). Windows needs none: its Job Object ends the children when the app's handle closes, a crash included.
+pub fn record_child_groups(local_dir: &std::path::Path) {
+    #[cfg(windows)]
+    let _ = local_dir;
+    #[cfg(target_os = "macos")]
+    if let Err(error) = os::record_child_groups(&local_dir.join("child-groups")) {
+        eprintln!("child groups: {error}");
+    }
+}
+
+/// Whether names on the volume holding `path` compare ignoring case (a run's result files are looked up and listed once by it): the
+/// Mac asks the volume (APFS is case-insensitive as installed, and can be formatted case-sensitive), Windows' always do.
+pub fn names_ignore_case(path: &std::path::Path) -> bool {
+    os::names_ignore_case(path)
+}
+
 /// The process host alone, for the exe's `--fake-claude` mode, which serves before any profile is read (main.rs).
 pub fn process_host() -> Arc<dyn mighty_platform::ProcessHost> {
     os::process_host()
@@ -185,13 +203,11 @@ pub fn long_time(at: &str) -> Option<String> {
 /// The setup screen's files port (setup.rs, W6-B): the script folder and its ACL, and whether the app runs elevated (Windows'
 /// `WindowsSetupFiles`; the Mac's `MacSetupFiles`, M-G).
 #[cfg(windows)]
-#[allow(dead_code, reason = "setup.rs's files_port (W6-B) switches to it at integration")]
 pub fn setup_files() -> Arc<dyn mighty_platform::SetupFiles> {
     Arc::new(os::WindowsSetupFiles)
 }
 
 #[cfg(target_os = "macos")]
-#[allow(dead_code, reason = "setup.rs's files_port (W6-B) switches to it at integration")]
 pub fn setup_files() -> Arc<dyn mighty_platform::SetupFiles> {
     os::setup::setup_files()
 }

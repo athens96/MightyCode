@@ -162,7 +162,7 @@ Claudeに任せた子がレポートしたときと、開始できなかった�
 親は`follow_up`ツールで、Claudeに任せた子に追加の指示を2回まで送れます。追加の指示は通知と同じ決まりで子ペインに届き、一つあたり48 KiBまでです。あなたは子ペインの入力欄に直接書けばよく、回数の制限はありません。
 
 ## オンとオフ {#enable}
-{{platform:mac}} オフにしない限りオンです。設定の{{ui:settings.nav.general}}タブで{{ui:settings.delegation.toggle}}を切り替えます。アプリを開き直さなくても、次に始まる実行から反映されます。同じスイッチがdefaultsキー`delegation.enabled`なので、ターミナルで次のコマンドを実行してもオフにでき、`defaults delete dev.mightycode.native delegation.enabled`でオンに戻ります:
+{{platform:mac}} オフにしない限りオンです。設定の{{ui:settings.nav.general}}タブの{{ui:settings.agents.sectionTitle}}で{{ui:settings.delegation.toggle}}を切り替えます。アプリを開き直さなくても、次に始まる実行から反映されます。同じスイッチがdefaultsキー`delegation.enabled`なので、ターミナルで次のコマンドを実行してもオフにでき、`defaults delete dev.mightycode.native delegation.enabled`でオンに戻ります:
 
 ```sh
 defaults write dev.mightycode.native delegation.enabled -bool false
@@ -170,7 +170,7 @@ defaults write dev.mightycode.native delegation.enabled -bool false
 
 {{platform:mac}} 以前のバージョンはこのキーを設定したときだけオンになり、オフにするには`defaults delete …`を使っていました。今はそうするとオンのままになるので、オフのままにするには設定で{{ui:settings.delegation.toggle}}をオフにしてください。
 
-{{platform:windows}} オフにしない限りオンです。設定の{{ui:settings.nav.general}}タブで{{ui:settings.delegation.toggle}}を切り替えます。アプリを開き直さなくても、次に始まる実行から反映されます。同じスイッチが`HKEY_CURRENT_USER\Software\MightyCode`の下の`delegation.enabled`の値(REG_DWORD)で、0ならオフ、値がないかほかの値ならオンです。そのため、コマンドプロンプトまたはPowerShellで次のコマンドを実行してもオフにでき、`reg delete "HKCU\Software\MightyCode" /v delegation.enabled /f`でオンに戻ります:
+{{platform:windows}} オフにしない限りオンです。設定の{{ui:settings.nav.general}}タブの{{ui:settings.agents.sectionTitle}}で{{ui:settings.delegation.toggle}}を切り替えます。アプリを開き直さなくても、次に始まる実行から反映されます。同じスイッチが`HKEY_CURRENT_USER\Software\MightyCode`の下の`delegation.enabled`の値(REG_DWORD)で、0ならオフ、値がないかほかの値ならオンです。そのため、コマンドプロンプトまたはPowerShellで次のコマンドを実行してもオフにでき、`reg delete "HKCU\Software\MightyCode" /v delegation.enabled /f`でオンに戻ります:
 
 ```
 reg add "HKCU\Software\MightyCode" /v delegation.enabled /t REG_DWORD /d 0 /f

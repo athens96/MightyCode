@@ -1,7 +1,7 @@
-//! The 이 PC의 CLI, CLI 계정 and Claude Mods boxes and dialogs D8 and D9 (C# MainWindow.Settings.cs:145-153 `BuildClaudeModsSection`,
-//! :576-621 `BuildProvidersSection`, :628-810 `BuildCliAccountsSection`, :905-932 `ConfirmCliSignOut`, :1015-1026 `ResetClaudeBedrock`),
-//! built with mighty-native's settings kit from models the host keeps: no I/O here, they run on every read of the settings surface.
-//! What a button does is the host's ([`AccountActions`]).
+//! The CLI 계정 box and dialogs D8 and D9 (C# MainWindow.Settings.cs:628-810 `BuildCliAccountsSection`, :905-932 `ConfirmCliSignOut`,
+//! :1015-1026 `ResetClaudeBedrock`), built with mighty-native's settings kit from models the host keeps: no I/O here, they run on every
+//! read of the settings surface. What a button does is the host's ([`AccountActions`]). C#'s 이 PC의 CLI and Claude Mods boxes are not
+//! drawn since the Settings tidy-up: 구성 요소' setup list shows each CLI's state, version and the Claude Code that Mods needs.
 
 use std::sync::Arc;
 
@@ -9,7 +9,6 @@ use mighty_core::design_tokens::{Token, metrics};
 use mighty_native::kit::{ControlSize, TextStyle, provider_mark};
 use mighty_native::surface::{DialogButton, DialogSpec};
 use mighty_native::ui::{Content, El, Grid, HAlign, Kind, MenuItem, Thickness, Track, Ui, VAlign, Wrapping};
-use mighty_run::model::ProviderRuntime;
 use mighty_run::{providers, strings};
 
 use crate::accounts::{CliAccountStatus, CliLoginOption, SECTION_PROVIDERS, copy};
@@ -24,8 +23,6 @@ pub const ACCOUNT_ROW_ID_PREFIX: &str = "cli-account-row-";
 pub const WARNING_GLYPH: &str = "\u{E7BA}";
 /// The refresh mark (Segoe Fluent `Refresh`).
 pub const REFRESH_GLYPH: &str = "\u{E72C}";
-/// `ProviderCatalog.SupportsMods`' minimum Claude Code (the runtime's `ModsInfo.MinimumVersion`).
-pub const MODS_MINIMUM_VERSION: &str = "2.1.271";
 
 /// One account's row as the section shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -264,73 +261,6 @@ pub fn accounts(ui: &mut Ui, model: &AccountsModel, actions: Arc<dyn AccountActi
     let labeled = ui.settings_labeled(ui.settings_text(label, TextStyle::default()), switch, false);
     rows.add(labeled);
     rows.add(ui.settings_text(strings::get("settings.cliAccounts.autoLoginDescription"), TextStyle::size(11.0).ink(Token::Ink2)));
-    rows.finish()
-}
-
-/// The CLIs on this PC's model: each provider's runtime once read, and the recheck under way.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ProvidersModel {
-    pub runtime: Vec<ProviderRuntime>,
-    pub checking: bool,
-}
-
-/// `BuildProvidersSection`: one row per CLI — its mark, name and 베타 capsule against the ready or needs-setup word (the quiet
-/// "checking" until the runtime was read), the version in 10pt mono, the detail — then the note beside the recheck button.
-pub fn providers(ui: &mut Ui, model: &ProvidersModel, recheck: impl Fn() + Send + Sync + 'static) -> El {
-    let mut rows = ui.settings_rows();
-    for id in mighty_core::wire::PROVIDERS {
-        let item = model.runtime.iter().find(|p| p.id == id);
-        let mut name =
-            vec![provider_mark(), ui.settings_text(item.map_or(providers::name(id), |p| p.name.as_str()), TextStyle::size(13.0).medium())];
-        if providers::is_beta(id) {
-            name.push(ui.beta_badge());
-        }
-        let state = match item {
-            None => ui.settings_text(strings::get("settings.components.statusChecking"), TextStyle::size(10.0).ink(Token::Ink2)),
-            Some(p) if p.available => {
-                ui.settings_text(strings::get("settings.providers.statusReady"), TextStyle::size(10.0).ink(Token::DoneText))
-            }
-            Some(_) => ui.settings_text(strings::get("settings.providers.statusNeedsSetup"), TextStyle::size(10.0).ink(Token::WaitText)),
-        };
-        let header = El::grid(Grid {
-            children: vec![El::stack(true, metrics::SPACING_SM, name), state.cell(0, 1)],
-            cols: vec![Track::Star(1.0), Track::Auto],
-            col_spacing: metrics::SPACING_SM,
-            ..Grid::default()
-        });
-        let mut parts = vec![header];
-        if let Some(version) = item.and_then(|p| p.version.as_deref()).filter(|v| !v.is_empty()) {
-            parts.push(ui.settings_text(version, TextStyle::size(10.0).ink(Token::Ink2).mono()));
-        }
-        let detail = item.map_or_else(|| strings::get("window.status.checkingRuntime"), |p| p.detail.clone());
-        parts.push(ui.settings_text(detail, TextStyle::size(11.0).ink(Token::Ink2).selectable()));
-        let row = El::stack(false, metrics::SPACING_SM, parts)
-            .margin(Thickness::new(0.0, metrics::SPACING_XS, 0.0, metrics::SPACING_XS))
-            .aid(format!("settings-provider-{id}"));
-        rows.add(row);
-    }
-    let label = strings::get(if model.checking { "settings.providers.checkingButton" } else { "settings.providers.checkButton" });
-    let check = ui
-        .settings_push(ui.button(label, recheck), ControlSize::Regular, false, false)
-        .named(strings::get("settings.providers.checkButton"))
-        .aid("settings-providers-check")
-        .enabled(!model.checking);
-    let note = ui.settings_text(strings::get("settings.providers.loginNote"), TextStyle::size(11.0).ink(Token::Ink2));
-    rows.add(ui.settings_labeled(note, check, false));
-    rows.finish()
-}
-
-/// `BuildClaudeModsSection`: the status sentence, then the minimum version beside its label (Claude's runtime: its detail, and the
-/// Claude Code that Mods needs).
-pub fn claude_mods(ui: &mut Ui, claude: Option<&ProviderRuntime>) -> El {
-    let mut rows = ui.settings_rows();
-    let detail = claude.map_or_else(|| strings::get("window.status.checkingRuntime"), |c| c.detail.clone());
-    rows.add(ui.settings_text(detail, TextStyle::size(12.0).ink(Token::Ink2).selectable()));
-    if claude.is_some() {
-        let label = ui.settings_text(strings::get("settings.claudeMods.compatLabel"), TextStyle::default());
-        let version = ui.settings_text(MODS_MINIMUM_VERSION, TextStyle::size(13.0).ink(Token::Ink2).selectable());
-        rows.add(ui.settings_labeled(label, version, false));
-    }
     rows.finish()
 }
 

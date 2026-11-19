@@ -11,6 +11,7 @@ pub mod acp;
 pub mod antigravity;
 pub mod backward;
 pub mod codex_sessions;
+pub mod conversation_search;
 pub mod files;
 pub mod history;
 pub mod pi;

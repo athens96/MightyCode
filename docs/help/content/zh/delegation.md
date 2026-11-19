@@ -162,7 +162,7 @@ Mighty 编排也适用于 Codex 和 Antigravity 窗格。默认情况下，子�
 父窗格可以用 `follow_up` 工具给交给 Claude 的子窗格发送最多两条后续指示。后续指示按照与通知相同的规则送到子窗格，每条最多 48 KiB。你可以直接在子窗格的输入框中输入，没有次数限制。
 
 ## 开启和关闭 {#enable}
-{{platform:mac}} 除非你关闭，否则它一直开启。在设置的{{ui:settings.nav.general}}标签页中切换{{ui:settings.delegation.toggle}}；无需重新打开应用，从下一次开始的运行起生效。同一个开关就是 defaults 键 `delegation.enabled`，因此在终端中运行下面的命令也能关闭它，运行 `defaults delete dev.mightycode.native delegation.enabled` 则重新开启。
+{{platform:mac}} 除非你关闭，否则它一直开启。在设置的{{ui:settings.nav.general}}标签页{{ui:settings.agents.sectionTitle}}中切换{{ui:settings.delegation.toggle}}；无需重新打开应用，从下一次开始的运行起生效。同一个开关就是 defaults 键 `delegation.enabled`，因此在终端中运行下面的命令也能关闭它，运行 `defaults delete dev.mightycode.native delegation.enabled` 则重新开启。
 
 ```sh
 defaults write dev.mightycode.native delegation.enabled -bool false
@@ -170,7 +170,7 @@ defaults write dev.mightycode.native delegation.enabled -bool false
 
 {{platform:mac}} 以前的版本只有设置了该键才会开启，关闭的方法是 `defaults delete …`。现在这样做会让它保持开启，所以要继续关闭，请在设置中关闭{{ui:settings.delegation.toggle}}。
 
-{{platform:windows}} 除非你关闭，否则它一直开启。在设置的{{ui:settings.nav.general}}标签页中切换{{ui:settings.delegation.toggle}}；无需重新打开应用，从下一次开始的运行起生效。同一个开关就是 `HKEY_CURRENT_USER\Software\MightyCode` 下的 `delegation.enabled` 值（REG_DWORD）：为 0 时关闭，没有这个值或为其他值时开启。因此在命令提示符或 PowerShell 中运行下面的命令也能关闭它，运行 `reg delete "HKCU\Software\MightyCode" /v delegation.enabled /f` 则重新开启。
+{{platform:windows}} 除非你关闭，否则它一直开启。在设置的{{ui:settings.nav.general}}标签页{{ui:settings.agents.sectionTitle}}中切换{{ui:settings.delegation.toggle}}；无需重新打开应用，从下一次开始的运行起生效。同一个开关就是 `HKEY_CURRENT_USER\Software\MightyCode` 下的 `delegation.enabled` 值（REG_DWORD）：为 0 时关闭，没有这个值或为其他值时开启。因此在命令提示符或 PowerShell 中运行下面的命令也能关闭它，运行 `reg delete "HKCU\Software\MightyCode" /v delegation.enabled /f` 则重新开启。
 
 ```
 reg add "HKCU\Software\MightyCode" /v delegation.enabled /t REG_DWORD /d 0 /f

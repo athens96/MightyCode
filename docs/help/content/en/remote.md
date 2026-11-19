@@ -1,61 +1,86 @@
 ---
-title: Remote connection (Tailscale)
+title: Remote connection
 order: 10
 section: remote
 ---
-Link two computers' Mighty Code (Mac or Windows) over [Tailscale](https://tailscale.com/kb/1017/install), and one computer can open the other's workspaces and run Claude, Codex, Antigravity and commands on that computer. Files and CLI sign-ins stay where the work runs; no project files are copied or synced. Without Tailscale, [connect by pairing](#pair) as a phone does.
+Link two computers' Mighty Code (Mac or Windows), and one computer can open the other's workspaces and run Claude, Codex, Antigravity and commands on that computer. Files and CLI sign-ins stay where the work runs; no project files are copied or synced.
+
+There are two ways to link them.
+- {{ui:settings.remote.viaPairing}}: pair once, as a phone does, and connect through the Mighty relay. No Tailscale is needed. See [Connect by pairing](#pair).
+- {{ui:settings.remote.viaTailscale}}: connect straight to the other computer with its address and key inside the same [Tailscale](https://tailscale.com/kb/1017/install) network (tailnet). Remote panes that run this computer's panes there, and large attachments, need Tailscale.
+
+Everything happens in {{ui:menu.settings}} → the {{ui:settings.remote.navTitle}} tab. A line of introduction sits at the top, with the {{ui:settings.remote.shareTitle}} | {{ui:settings.remote.connectTitle}} | {{ui:settings.remote.phoneTab}} tabs below it. The inner tab you chose is remembered only while the app runs. For phones, see [Phone remote](phone.md).
 
 ## Before you start {#prepare}
-- Install Mighty Code and Tailscale on both computers and sign both into the same tailnet.
+- Install Mighty Code on both computers.
 - On the computer that will do the work (the host), install and sign in to the CLIs you will use. Remote runs use the host's CLIs and accounts.
-- No router port forwarding and no Tailscale Serve or Funnel are needed. Just make sure your tailnet policy lets the two devices reach each other.
+- To connect over Tailscale, install Tailscale on both computers and sign both into the same tailnet. No router port forwarding and no Tailscale Serve or Funnel are needed. Just make sure your tailnet policy lets the two devices reach each other.
 
 ## Share this computer {#share}
 On the host computer:
-1. Open {{ui:menu.settings}} → the {{ui:settings.remote.navTitle}} tab.
-2. Under {{ui:settings.remote.shareTitle}}, pick the local workspaces to share. Leave the port as it is (43137) unless you need another.
-3. Press {{ui:settings.remote.startSharing}}. This computer's Tailscale addresses and the connection key appear. Copy them with {{ui:settings.remote.copyButton}} and give them to the other computer.
+1. Open {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} → the {{ui:settings.remote.shareTitle}} tab.
+2. Under {{ui:settings.remote.pickWorkspaces}}, check the local workspaces to share.
+3. Under {{ui:settings.remote.methodsTitle}}, get the methods you want ready (see below).
+4. Press {{ui:settings.remote.startSharing}} beside the status line at the top. While sharing, the {{ui:settings.remote.sharedListTitle}} list takes its place.
+
+{{ui:settings.remote.methodsTitle}} has one row per method.
+- {{ui:settings.remote.viaPairing}}: the {{ui:settings.remote.pairAccept}} switch, the relay's state and the {{ui:settings.remote.pairCopyLink}} button. The link carries the same key as the phone's QR code, so it is copied as a secret and cleared from the clipboard after a minute. In a run that cannot use the relay, the switch is greyed out and says why. See [Connect by pairing](#pair).
+- {{ui:settings.remote.viaTailscale}}: when this computer has no Tailscale address, a line says so with an {{ui:settings.remote.tailscaleInstall}} button that opens the {{ui:settings.nav.tools}} tab. Before sharing, there is a {{ui:settings.remote.portLabel}} field; leave it as it is (43137) unless you need another. While sharing, this computer's Tailscale addresses and the {{ui:settings.remote.keyLabel}} appear. Show the key, copy it with {{ui:settings.remote.copyButton}}, and give it to the other computer.
+
+Without Tailscale, sharing still starts when {{ui:settings.remote.pairAccept}} is on; then only paired computers connect, through the relay.
 
 While sharing, the {{ui:settings.remote.allowFullAccess}} switch appears. While it is off (the default), connected computers cannot use remote command panes or run agents with full access; such requests are refused before they run, and the pane says why. It turns off again whenever sharing starts.
 
-{{platform:windows}} When a Windows PC shares, connected computers also cannot use Codex or Antigravity panes while this switch is off, whatever their permission mode, because Windows cannot confine Codex and Antigravity to the shared folder the way macOS does. Claude panes still run and ask for permission as usual.
+While this switch is off, connected computers also cannot use an agent pane that the sharing computer cannot confine to the shared folder, whatever its permission mode: on a Mac, Antigravity, pi, opencode and Hermes (none of them runs in a sandbox); on Windows, every agent other than Claude, Codex included (Windows cannot confine Codex in a sandbox the way a Mac does). Codex on a Mac runs in its own sandbox, and Claude panes on either computer still run and ask for permission as usual. In such a pane, allowing a tool, answering a question and approving a plan need the switch too, not only sending.
 
-Sharing accepts connections on this computer's Tailscale addresses only. It is always off when the app starts. {{ui:settings.remote.stopSharing}} stops the remote runs and revokes the key; sharing again gives a new key to pass on.
+Tailscale sharing accepts connections on this computer's Tailscale addresses only. Sharing is always off when the app starts. {{ui:settings.remote.stopSharing}} stops the remote runs and revokes the key; sharing again gives a new key to pass on.
 
 > [!warning]
-> Any device with the key can run agents and commands in the shared workspaces. Depending on the permission mode, they may reach outside the folder with the host user's rights. Give the key only to devices you trust.
+> Any device with the key or the pairing link can run agents and commands in the shared workspaces. Depending on the permission mode, they may reach outside the folder with the host user's rights. Give the key and the link only to devices you trust.
 
 ## Connect to another computer {#connect}
 On the computer that gives the work:
-1. Open {{ui:menu.settings}} → the {{ui:settings.remote.navTitle}} tab. {{ui:remote.menu.connect}} in the {{ui:workspace.addPane}} menu opens the same place.
-2. Under {{ui:settings.remote.connectTitle}}, enter the host's address (its Tailscale IP or MagicDNS name) and the key, then press {{ui:settings.remote.connectButton}}. Unless the host changed the port, the address alone is enough.
-3. The shared workspaces appear under the connected computer. Once connected, that computer's shared workspaces appear in the sidebar on their own, with the panes open there; {{ui:remote.mirror.view}} takes you straight to one ([The other computer's panes as they are](#mirror)).
+1. Open {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} → the {{ui:settings.remote.connectTitle}} tab. {{ui:remote.menu.connect}} in the {{ui:workspace.addPane}} menu opens the same place.
+2. In the two-way switch at the top, pick {{ui:settings.remote.pairLinkField}} or Tailscale address.
+   - {{ui:settings.remote.pairLinkField}}: paste the link from the host and, if you like, give it a {{ui:settings.remote.nameField}}.
+   - Tailscale address: enter the {{ui:settings.remote.addressField}} (its Tailscale IP or MagicDNS name) and the {{ui:settings.remote.keyField}}, and a name if you like. Unless the host changed the port, the address alone is enough.
+3. Press {{ui:settings.remote.connectButton}}.
+
+The {{ui:settings.remote.connectionsTitle}} list below has one row per connection: the computer's name, a method chip (Pairing or Tailscale), its state ({{ui:settings.remote.status.connected}}, {{ui:settings.remote.status.disconnected}} or {{ui:settings.remote.status.saved}}), the {{ui:settings.remote.refreshButton}} and {{ui:settings.remote.disconnectButton}} buttons, and a delete icon. The shared workspaces appear under the connected computer. Once connected, that computer's shared workspaces appear in the sidebar on their own, with the panes open there; {{ui:remote.mirror.view}} takes you straight to one ([The other computer's panes as they are](#mirror)). The folded {{ui:settings.remote.scopeTitle}} group sits at the bottom of the tab.
 
 A remote workspace shows a computer icon and its host's name in the sidebar, and its connection state in the workspace header and the status bar. After the app restarts, the connection stays saved and connects again on the first send from a remote pane or when you press {{ui:settings.remote.refreshButton}}.
 
 {{platform:mac}} The key is kept in the macOS Keychain only, never in the workspace state. If macOS asks for Keychain access when it connects again, choose "Always Allow"; the app ships with the same signature, so the choice survives updates.
 
-{{platform:windows}} On Windows the key is never kept in the workspace state either: it is saved encrypted so only this Windows user can read it, in the app's data folder. When sharing, the {{ui:remote.windows.firewall.add}} button adds one firewall rule that opens the app's ports only to Tailscale's ranges; Windows shows its administrator prompt once. If the rule already exists, the button reads {{ui:remote.windows.firewall.update}} instead, and the rule is shared with the phone's direct connection, so the {{ui:settings.nav.mobile}} tab changes the same rule. If the rule does not open every port in use now, the tab says it needs updating. Removing the rule closes both the phone's direct-connection port and the sharing port.
+{{platform:windows}} On Windows the key is never kept in the workspace state either: it is saved encrypted so only this Windows user can read it, in the app's data folder. Sharing over Tailscale needs one firewall rule ([Windows Firewall](#firewall)).
 
 ## Connect by pairing (no Tailscale) {#pair}
-Without Tailscale on either computer, pair once as a phone does and connect through the same Mighty relay as the [phone remote](phone.md). The connection is end-to-end encrypted, so the relay cannot read it, and the connected computer uses [the other computer's panes as they are](#mirror).
+Without Tailscale on either computer, pair once as a phone does and connect through the same Mighty relay as the [phone remote](phone.md). The relay is built into the app, so there is nothing to set up. The connection is end-to-end encrypted, so the relay cannot read it, and the connected computer uses [the other computer's panes as they are](#mirror).
 
 On the host computer:
-1. Open {{ui:menu.settings}} → the {{ui:settings.remote.navTitle}} tab and, under {{ui:settings.remote.pairTitle}}, turn on {{ui:settings.remote.pairAccept}}.
-2. Under {{ui:settings.remote.shareTitle}}, pick the workspaces and press {{ui:settings.remote.startSharing}}. With this switch on, sharing can start without Tailscale; while it shares, this computer connects to the relay.
-3. Press {{ui:settings.remote.pairCopyLink}} and give the link to the computer that connects. {{ui:settings.remote.pairShowQr}} shows the same link as a QR code.
+1. Open {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} → the {{ui:settings.remote.shareTitle}} tab and, in the {{ui:settings.remote.viaPairing}} row under {{ui:settings.remote.methodsTitle}}, turn on {{ui:settings.remote.pairAccept}}.
+2. Pick the workspaces and press {{ui:settings.remote.startSharing}}. While it shares, this computer connects to the relay, and the same row shows its state.
+3. Press {{ui:settings.remote.pairCopyLink}} and give the link to the computer that connects.
 
 On the computer that connects:
-1. In the {{ui:settings.remote.navTitle}} tab, paste the link under {{ui:settings.remote.pairConnectTitle}}, name it if you like, and press {{ui:settings.remote.connectButton}}.
-2. Once connected, the computer appears in the connection list and in the sidebar as "Remote · name", and connecting and disconnecting work as for a Tailscale connection. Its address reads as a name starting with `relay:`.
+1. In {{ui:settings.remote.navTitle}} → the {{ui:settings.remote.connectTitle}} tab, pick {{ui:settings.remote.pairLinkField}} in the switch, paste the link, name it if you like, and press {{ui:settings.remote.connectButton}}.
+2. Once connected, the computer appears in the {{ui:settings.remote.connectionsTitle}} list with a Pairing chip and in the sidebar as "Remote · name". Connecting and disconnecting work as for a Tailscale connection.
 
 - The link carries the same pairing key as the phone's QR code: give it only to people you trust. On the first connection the host hands this computer a device token of its own, which it uses from then on. The token is kept like a connection key, in the macOS Keychain (on Windows, in a file encrypted for this user only), never in the workspace state.
-- A paired computer also appears in the host's device list in the {{ui:settings.nav.mobile}} tab. Pressing {{ui:settings.mobileRemote.regenerateKeyButton}} there unpairs every phone and computer; connect again with a new link to use it again.
-- Only the shared workspaces are visible, and the {{ui:settings.remote.allowFullAccess}} switch and the Windows rule for Codex and Antigravity apply exactly as over Tailscale.
-- The {{ui:settings.nav.mobile}} settings do not change. While the phone remote is off, phones cannot connect even with this switch on.
+- A paired computer also appears, with a computer icon, in the {{ui:settings.mobileRemote.connectedDevicesTitle}} list on the host's {{ui:settings.remote.phoneTab}} tab (even with the phone connection switch off). {{ui:settings.mobileRemote.revokeRowButton}} on its row unpairs only that computer; your other phones and computers stay connected. The pairing key is renewed then, so a device you pair afterwards needs the new link. Pressing {{ui:settings.mobileRemote.regenerateKeyButton}} unpairs every phone and computer; connect again with a new link to use it again.
+- Only the shared workspaces are visible, and the {{ui:settings.remote.allowFullAccess}} switch and the rule for agents that cannot be confined apply exactly as over Tailscale.
+- The phone settings do not change. If phones are not allowed on the {{ui:settings.remote.phoneTab}} tab, phones cannot connect even with this switch on.
 - The relay carries at most 1 MB at a time. Attachments sent over a paired connection are limited to about 750 KB in total (their contents grow in base64); larger ones are refused before anything is sent. Connect over Tailscale for large files. A long conversation shows its newest entries that fit in 1 MB.
 - A paired connection offers [the other computer's panes as they are](#mirror) only. Remote panes that run this computer's panes there (the {{ui:settings.remote.openButton}} button) need a Tailscale connection.
 - When the host stops sharing or turns the switch off, the connected computer says sharing stopped. Once the host shares again, press {{ui:settings.remote.refreshButton}} to reconnect; no new link is needed.
+
+## Windows Firewall {#firewall}
+{{platform:windows}} On Windows, a {{ui:settings.remote.firewallTitle}} group sits under the {{ui:settings.remote.shareTitle}} and {{ui:settings.remote.phoneTab}} tabs. It manages one rule that opens the app's ports only to Tailscale's ranges, and a line shows its current state.
+- {{ui:remote.windows.firewall.add}} adds the rule. Windows shows its administrator prompt once.
+- If the rule already exists, {{ui:remote.windows.firewall.update}} appears in its place and fits the rule to the ports in use now. If the rule does not open every port in use, the group says it needs updating.
+- {{ui:remote.windows.firewall.remove}} removes the rule.
+
+This one rule opens both the workspace-sharing port and the phone's [direct connection](phone.md#direct) port. So a change from either tab changes the same rule, and removing it closes both ports. A paired connection goes through the relay and needs no rule.
 
 ## The other computer's panes as they are {#mirror}
 When you connect to another computer, the workspaces that computer shares appear in the sidebar with the agent panes open there. Conversations, the {{ui:graph.view.mighty}} views, progress and status follow live, and you can send, stop and answer approvals, questions and plans from here. The panes run on that computer with its CLIs and accounts; what you send becomes that pane's next request, queued there if it is busy.
@@ -65,8 +90,8 @@ When you connect to another computer, the workspaces that computer shares appear
 - {{ui:workspace.addPane}} opens a new agent pane on that computer, and closing a pane closes it there too.
 - After you disconnect, the panes stay as they last were and can't send. Removing the connection removes that server's workspaces. These panes aren't saved on this computer, so after reopening the app they come back once you connect.
 - Conversations show up to the last 80 entries, without pictures. Rename panes and change models or permission modes on that computer. Command panes aren't shown, and [what remote panes can't do](#use) applies here too.
-- Sending to a pane running with full access, and "Always allow", work only when that computer has {{ui:settings.remote.allowFullAccess}} on. When that computer runs Windows, sending to its Codex and Antigravity panes needs the switch too (Windows cannot confine them to the shared folder).
-- If that computer's Mighty Code is an older version without this feature, its panes don't appear and the header says why. Use {{ui:settings.remote.openButton}} in Settings to work in its workspaces as this computer's remote panes.
+- Sending to a pane running with full access, and "Always allow", work only when that computer has {{ui:settings.remote.allowFullAccess}} on. Sending to, and answering for (allowing a tool, a question, a plan), an agent pane that computer cannot confine needs the switch too: on a Mac, Antigravity, pi, opencode and Hermes; on Windows, every agent other than Claude.
+- If that computer's Mighty Code is an older version without this feature, its panes don't appear and the header says why. Use {{ui:settings.remote.openButton}} in the {{ui:settings.remote.connectionsTitle}} list to work in its workspaces as this computer's remote panes (over Tailscale).
 
 ## Using remote panes {#use}
 - Use agent panes as you would local ones. Model, permission mode, effort and Fast mode travel to the host; a setting the host's CLI does not support is reported before the run.
@@ -84,7 +109,7 @@ These are not available in a remote workspace, because they read this computer's
 pi, opencode and Hermes panes cannot be opened in a remote workspace yet. Remote workspaces do not appear on the [phone](phone.md).
 
 ## When the connection drops {#disconnect}
-- If the network drops, a running remote pane ends in an error and the connection list says why. The host stops a run it no longer hears from within about 30 seconds.
-- {{ui:settings.remote.disconnectButton}} stops that connection's runs and keeps the connection. Press {{ui:settings.remote.refreshButton}} or send from a remote pane to use it again.
-- If the host restarted sharing, you need its new key. Connecting to the same address with the new key replaces the saved connection's key.
+- If the network drops, a running remote pane ends in an error and the {{ui:settings.remote.connectionsTitle}} list says why. The host stops a run it no longer hears from within about 30 seconds.
+- {{ui:settings.remote.disconnectButton}} stops that connection's runs and keeps the connection. Press {{ui:settings.remote.refreshButton}} or send from a remote pane to use it again. To remove the connection too, click the delete icon on its row.
+- If a Tailscale host restarted sharing, you need its new key. Connecting to the same address with the new key replaces the saved connection's key.
 - While the host computer sleeps or Mighty Code is closed there, no new work can be sent.

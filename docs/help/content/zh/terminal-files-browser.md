@@ -10,7 +10,7 @@ section: terminal-files-browser
 1. 选择{{ui:menu.addTerminalPane}}（{{kbd:⌘T}}），或选择{{ui:workspace.addPane}} → {{ui:workspace.newTerminal}}。
 2. 直接输入命令。
 
-Shell 退出后，请点击{{ui:terminal.restart}}。之前的命令记录可以在窗格菜单的{{ui:pane.menu.terminalHistory}}中查看。退出应用后，终端不会重新打开。
+Shell 退出后，请点击{{ui:terminal.restart}}。之前的命令记录可以在窗格标题栏 … 菜单的{{ui:pane.menu.terminalHistory}}中查看，右键点击窗格标题栏后的{{ui:terminal.history.title}}也一样。退出应用后，终端不会重新打开。
 
 ![[terminal-pane]]
 
@@ -26,8 +26,9 @@ Shell 退出后，请点击{{ui:terminal.restart}}。之前的命令记录可以
 | 文件 | 显示方式 |
 |---|---|
 | 源代码、文本 | 显示行号和语法高亮。大文件只显示前 1 MB。 |
-| Markdown | 在{{ui:files.markdown.rendered}}和{{ui:files.markdown.source}}视图之间切换。 |
-| 图片、PDF | {{ui:files.image.fit}}、{{ui:files.image.actualSize}}、{{ui:files.image.zoomIn}}、{{ui:files.image.zoomOut}}。PDF 只显示第一页。 |
+| Markdown | 在{{ui:files.markdown.rendered}}和{{ui:files.markdown.source}}视图之间切换。超过 128 KB 的文件以源码显示。 |
+| HTML | 在绘制为页面的{{ui:files.markdown.rendered}}和{{ui:files.markdown.source}}视图之间切换。 |
+| 图片、PDF | {{ui:files.image.fit}}、{{ui:files.image.actualSize}}、{{ui:files.image.zoomIn}}、{{ui:files.image.zoomOut}}。PDF 只显示第一页。超过 50 MB 的图片不预览，超过 1 亿像素的图片只能以适合窗口的大小显示。 |
 | 其他 | {{ui:files.preview.unsupported}}。可以用{{ui:menu.showInFinder}}打开。 |
 
 工作区以外的文件不会显示。如果文件有变化，请点击{{ui:files.tree.refresh}}。

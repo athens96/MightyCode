@@ -405,6 +405,10 @@ pub struct PaneInfo {
     /// (src-tauri mirror.rs), None for any other pane.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mirror: Option<MirrorStrip>,
+    /// An agent pane whose terminal (Agent IO's) is open, its pane shown or closed: the header's 터미널 창 열기 button puts the
+    /// pane back (M/SessionPaneView.swift `agentTerminals[session.id] != nil`); the host fills it (src-tauri terminal.rs).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub agent_terminal: bool,
 }
 
 /// C# `WebMirrorStrip` (M/RemoteMirrorViews.swift `MirrorPaneBanner`): the strip over a mirrored pane, "원격 창 · ● {host}에서 실행 중 ·
@@ -482,6 +486,7 @@ pub fn pane_info(locale: &Locale, s: &RunSession, attention: Attention, now: Dat
             .as_ref()
             .map(|pane| locale.get_with("paneWorktree.marker", &[("branch", pane.branch()), ("base", pane.base_branch())])),
         mirror: None,
+        agent_terminal: false,
     }
 }
 

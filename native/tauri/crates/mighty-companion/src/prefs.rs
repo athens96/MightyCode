@@ -1,5 +1,6 @@
 //! `<profile>\companion-settings.json` (`Wire.Json`, nulls left out): `enabled=true, showsTask=true, notifications=true,
-//! reducedMotion=false, selectedPet="mighty-raccoon", bubbleWidth? (220-640), bubbleHeight? (100-480), left?, top?`; read at most 64 KiB
+//! reducedMotion=false, selectedPet="mighty-raccoon", bubbleWidth? (220-640), bubbleHeight? (100-480), left?, top?,
+//! progressCollapsed?` (the progress card over the bubble folded, the Mac app's key; none until it is first folded); read at most 64 KiB
 //! through a safe path (any error: the defaults), written to a `.companion-<guid>` temporary file then moved (no flush), unknown keys
 //! dropped. Written only with `--allow-state-write` (the smoke: its own profile) (C# Core\Companion.cs `CompanionPreferences`; plan §1.7).
 //! Owner: W8-E.
@@ -37,6 +38,8 @@ pub struct CompanionPreferences {
     pub bubble_height: Option<f64>,
     pub left: Option<i32>,
     pub top: Option<i32>,
+    /// The progress card over the bubble folded to its heading; None (open) until it is first folded or opened.
+    pub progress_collapsed: Option<bool>,
 }
 
 impl Default for CompanionPreferences {
@@ -51,11 +54,17 @@ impl Default for CompanionPreferences {
             bubble_height: None,
             left: None,
             top: None,
+            progress_collapsed: None,
         }
     }
 }
 
 impl CompanionPreferences {
+    /// Whether the progress card is folded to its heading.
+    pub fn progress_folded(&self) -> bool {
+        self.progress_collapsed.unwrap_or(false)
+    }
+
     /// `JsonSerializer.Serialize(this, Wire.Json)`: the record's properties in their order, a null left out.
     pub fn to_json(&self) -> String {
         let mut out = JsonOut::new();
@@ -69,6 +78,7 @@ impl CompanionPreferences {
         out.prop_opt_float("bubbleHeight", self.bubble_height);
         out.prop_opt_int("left", self.left.map(i64::from));
         out.prop_opt_int("top", self.top.map(i64::from));
+        out.prop_opt_bool("progressCollapsed", self.progress_collapsed);
         out.end_object();
         out.finish()
     }
@@ -97,6 +107,7 @@ impl CompanionPreferences {
             bubble_height: json::opt_float64(object.get("bubbleHeight")).ok()?,
             left: json::opt_int32(object.get("left")).ok()?,
             top: json::opt_int32(object.get("top")).ok()?,
+            progress_collapsed: json::opt_boolean(object.get("progressCollapsed")).ok()?,
         };
         Some(CompanionPreferences {
             bubble_width: read.bubble_width.filter(|w| w.is_finite()).map(|w| layout::width(Some(w))),
@@ -185,6 +196,13 @@ mod tests {
             r#"{"enabled":true,"showsTask":true,"notifications":true,"reducedMotion":true,"selectedPet":"local:\uD3AB\u003C\u0022x\u0022\u003E","bubbleWidth":318,"bubbleHeight":260.5,"left":-100,"top":200}"#
         );
         assert_eq!(CompanionPreferences::from_json(moved.to_json().as_bytes()), Some(moved));
+        // The progress card's fold, the Mac app's key, kept once it was first set.
+        let folded = CompanionPreferences { progress_collapsed: Some(true), ..CompanionPreferences::default() };
+        assert!(folded.to_json().ends_with(r#""selectedPet":"mighty-raccoon","progressCollapsed":true}"#));
+        let read = CompanionPreferences::from_json(folded.to_json().as_bytes()).unwrap();
+        assert!(read.progress_folded() && !CompanionPreferences::default().progress_folded());
+        assert_eq!(read, folded);
+        assert_eq!(CompanionPreferences::from_json(br#"{"progressCollapsed":"yes"}"#), None);
     }
 
     #[test]

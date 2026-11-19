@@ -6,6 +6,10 @@
 //!
 //! An install changes the machine: [`Gate`] says whether this run of the app may start one (W6 defaults: only with
 //! `--allow-state-write` until W9, never in a smoke).
+//!
+//! The screen lists and installs one platform's entries ([`SetupScreen::for_platform`], the host's platform profile): Windows' runs
+//! its PowerShell script in a console window of its own (`script`), the Mac's its bash script in a terminal pane of the window
+//! (`mac`, Swift AppStore+Setup.swift), handed to the same `TerminalLauncher` port.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -13,12 +17,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mighty_platform::console::{TerminalLaunch, TerminalLauncher};
-use mighty_platform::{ProcessHost, SetupFiles, ShellEnvironment};
+use mighty_platform::{PlatformError, ProcessHost, SetupFiles, ShellEnvironment};
 use mighty_run::model::ProviderRuntime;
 use mighty_run::strings;
 
 use crate::setup::catalog::{SetupCatalog, SetupItem, SetupPlatform};
 use crate::setup::files;
+use crate::setup::mac::{self, MacScriptLabels};
 use crate::setup::plan;
 use crate::setup::probe::{Finder, SetupFirstRun, SetupProbeResult, SetupProber, SetupRowState, SetupRows, SetupRuntimeSync};
 use crate::setup::script::{self, SetupScriptLabels, SetupScriptStep};
@@ -116,6 +121,8 @@ pub enum WatchTick {
 pub struct Confirmation {
     pub preamble: Vec<String>,
     pub steps: Vec<SetupScriptStep>,
+    /// Whose script these lines are (the confirmation's words say where they run).
+    pub platform: SetupPlatform,
 }
 
 /// How the screen probes this PC: the CLI environment (read again from the registry when forced), the platform's finder, and
@@ -140,6 +147,8 @@ impl ProbeContext {
 #[derive(Debug, Default)]
 pub struct SetupScreen {
     catalog: Option<Arc<SetupCatalog>>,
+    /// The platform whose entries the screen lists, probes and installs.
+    platform: SetupPlatform,
     pub results: HashMap<String, SetupProbeResult>,
     pub selection: HashSet<String>,
     /// The GUI smoke's fixed probe results: nothing on the machine is probed while they are set.
@@ -159,8 +168,18 @@ pub struct SetupScreen {
 }
 
 impl SetupScreen {
+    /// The Windows screen (the C# app's).
     pub fn new() -> SetupScreen {
         SetupScreen::default()
+    }
+
+    /// The screen of `platform` (the host's: `SetupPlatform::of(profile.os)`).
+    pub fn for_platform(platform: SetupPlatform) -> SetupScreen {
+        SetupScreen { platform, ..SetupScreen::default() }
+    }
+
+    pub fn platform(&self) -> SetupPlatform {
+        self.platform
     }
 
     /// The catalog, read once. A broken one is said, not hidden.
@@ -188,12 +207,10 @@ impl SetupScreen {
         self.run.as_ref().is_some_and(|run| !run.finished)
     }
 
-    /// The items with a Windows entry, in the catalog's order.
+    /// The items with an entry for the screen's platform, in the catalog's order.
     pub fn items(&self) -> Vec<&SetupItem> {
-        self.catalog
-            .as_deref()
-            .map(|c| c.items.iter().filter(|item| item.entry(SetupPlatform::Windows).is_some()).collect())
-            .unwrap_or_default()
+        let platform = self.platform;
+        self.catalog.as_deref().map(|c| c.items.iter().filter(|item| item.entry(platform).is_some()).collect()).unwrap_or_default()
     }
 
     pub fn state_of(&self, item: &SetupItem) -> SetupRowState {
@@ -207,9 +224,7 @@ impl SetupScreen {
         match self.catalog.as_deref() {
             Some(catalog) => {
                 let results = &self.results;
-                plan::order(&self.selection, catalog, SetupPlatform::Windows, &|id| {
-                    results.get(id).is_some_and(SetupProbeResult::is_installed)
-                })
+                plan::order(&self.selection, catalog, self.platform, &|id| results.get(id).is_some_and(SetupProbeResult::is_installed))
             }
             None => vec![],
         }
@@ -239,7 +254,7 @@ impl SetupScreen {
         self.focus = focus.map(str::to_string);
         if let Some(focus) = focus
             && let Some(item) = self.catalog.as_deref().and_then(|c| c.item(focus))
-            && SetupRows::is_selectable(self.state_of(item), item)
+            && SetupRows::is_selectable_on(self.state_of(item), item, self.platform)
         {
             self.selection.insert(focus.to_string());
         }
@@ -259,12 +274,12 @@ impl SetupScreen {
         }
         let Some(catalog) = self.catalog.clone() else { return };
         self.did_preselect = true;
-        self.selection.extend(SetupFirstRun::preselection(&catalog, &self.results));
+        self.selection.extend(SetupFirstRun::preselection_on(&catalog, &self.results, self.platform));
     }
 
     /// The welcome screen's button shows while this holds (the frame's `setupNeeded`).
     pub fn needs_attention(&self) -> bool {
-        self.catalog.as_deref().is_some_and(|catalog| SetupFirstRun::needs_attention(catalog, &self.results))
+        self.catalog.as_deref().is_some_and(|catalog| SetupFirstRun::needs_attention_on(catalog, &self.results, self.platform))
     }
 
     /// The frame's flags: `(setup badge, setupNeeded)`.
@@ -335,6 +350,11 @@ impl SetupScreen {
         self.probed_at = Some(now);
     }
 
+    /// The launch's look (C# `SetupFirstRun.ShouldPresent`) over the screen's platform.
+    pub fn should_present(&self, never_show: bool) -> bool {
+        self.catalog.as_deref().is_some_and(|catalog| SetupFirstRun::should_present_on(catalog, &self.results, never_show, self.platform))
+    }
+
     /// The whole refresh with the probe run here: `begin_refresh`, the probe (or the fixed results), `finish_refresh`. A queued forced
     /// refresh is the caller's to run when `again` comes back.
     pub async fn refresh(
@@ -355,8 +375,12 @@ impl SetupScreen {
         let results = match catalog {
             None => results,
             Some((force, only)) => {
-                let Some(catalog) = lock(screen).catalog.clone() else { return Refreshed::default() };
-                let prober = context.prober(force).await;
+                let (catalog, platform) = {
+                    let screen = lock(screen);
+                    (screen.catalog.clone(), screen.platform)
+                };
+                let Some(catalog) = catalog else { return Refreshed::default() };
+                let prober = context.prober(force).await.on(platform);
                 prober.probe_all(&catalog, only.as_ref()).await.into_iter().collect()
             }
         };
@@ -378,13 +402,21 @@ impl SetupScreen {
     /// The one confirmation before anything runs: the lines that run first (the CLI environment's), then every step.
     pub fn confirmation(&self, environment: &BTreeMap<String, String>) -> Option<Confirmation> {
         let catalog = self.catalog.as_deref()?;
-        let steps = script::steps(&self.plan_ids(), catalog, &SetupCatalog::title);
-        (!steps.is_empty()).then(|| Confirmation { preamble: script::preamble(environment), steps })
+        let platform = self.platform;
+        let (preamble, steps) = match platform {
+            SetupPlatform::Windows => (script::preamble(environment), script::steps(&self.plan_ids(), catalog, &SetupCatalog::title)),
+            SetupPlatform::MacOS => (
+                mac::preamble(&mac::home(environment)),
+                mac::steps(&self.plan_ids(), catalog, &|item| SetupCatalog::title_on(item, platform)),
+            ),
+        };
+        (!steps.is_empty()).then_some(Confirmation { preamble, steps, platform })
     }
 
-    /// An app started as administrator installs nothing from this screen: every step would run elevated. Says so and refuses.
+    /// An app started as administrator installs nothing from this screen: every step would run elevated. Says so and refuses. The
+    /// Mac's screen asks no such thing (Swift's does not): its steps run in the user's own shell pane.
     pub fn refuse_when_elevated(&mut self, files: &dyn SetupFiles) -> bool {
-        if !files.is_elevated() {
+        if self.platform != SetupPlatform::Windows || !files.is_elevated() {
             return false;
         }
         self.message = Some(strings::get("setup.windows.error.elevated"));
@@ -422,19 +454,24 @@ impl SetupScreen {
             return InstallStart::Refused;
         }
         let folder = folder.to_path_buf();
+        let platform = self.platform;
         let prepared = (|| -> Result<(PathBuf, (PathBuf, PathBuf)), String> {
             files::prepare_directory(files, &folder)?;
             // Earlier runs' scripts and markers are of no further use.
             files::remove_leftovers(files, &folder);
             let markers = files::markers(&folder);
-            let text = script::render(
-                steps,
-                &SetupScriptLabels::localized(),
-                environment,
-                &markers.0.to_string_lossy(),
-                &markers.1.to_string_lossy(),
-            );
-            let script = files::write_script(&text, &folder).map_err(|error| error.to_string())?;
+            let (started, done) = (markers.0.to_string_lossy(), markers.1.to_string_lossy());
+            let script = match platform {
+                SetupPlatform::Windows => {
+                    let text = script::render(steps, &SetupScriptLabels::localized(), environment, &started, &done);
+                    files::write_script(&text, &folder)
+                }
+                SetupPlatform::MacOS => {
+                    let text = mac::render(steps, &MacScriptLabels::localized(), &mac::home(environment), &started, &done);
+                    files::write_shell_script(&text, &folder)
+                }
+            }
+            .map_err(|error| error.to_string())?;
             Ok((script, markers))
         })();
         let (script, markers) = match prepared {
@@ -444,22 +481,20 @@ impl SetupScreen {
                 return InstallStart::Refused;
             }
         };
-        // The app wrote this command itself from its own catalog, after the user confirmed it.
-        let argv = script::launch_arguments(&script.to_string_lossy(), files.system_folder().as_deref(), environment);
-        let mut variables = environment.clone();
-        set_variable(&mut variables, NO_CURRENT_DIRECTORY_SEARCH, "1");
-        // The console window the script runs in outlives the app (C# `Process.Start` of `CliAccountTerminal.LaunchPlan`: Windows
-        // Terminal by the full path found along the PATH, else the system's console host), the system's PowerShell by its own path.
-        let launch = TerminalLaunch {
-            resolved: argv.first().cloned(),
-            argv,
-            directory: Some(folder.clone()),
-            title: None,
-            environment: variables,
-            prefer_terminal_app: true,
+        let launch = match platform {
+            SetupPlatform::Windows => windows_launch(&script, &folder, files, environment),
+            // The Mac's pane (Swift's terminal window): bash on the script, typed into the user's shell, where every question a step
+            // asks is answered.
+            SetupPlatform::MacOS => TerminalLaunch {
+                argv: mac::launch_arguments(&script.to_string_lossy()),
+                directory: Some(folder.clone()),
+                title: Some(strings::get("setup.terminal.title")),
+                environment: environment.clone(),
+                ..TerminalLaunch::default()
+            },
         };
         if let Err(error) = terminals.open(launch) {
-            self.message = Some(strings::get_with("setup.windows.error.terminal", &[("error", &error.to_string())]));
+            self.message = Some(terminal_refusal(platform, error));
             return InstallStart::Refused;
         }
         self.terminals_opened += 1;
@@ -474,6 +509,19 @@ impl SetupScreen {
             not_started: false,
         });
         InstallStart::Started
+    }
+
+    /// The terminal the started run was handed to could not open after all (the Mac's pane opens once the screen's lock is let go,
+    /// setup.rs `start_install`): the run that opened at `opened` is taken back and the refusal said, as [`SetupScreen::start_install`]
+    /// says it. False when that run is not the screen's running one.
+    pub fn launch_failed(&mut self, opened: Instant, error: PlatformError) -> bool {
+        if !self.runs(opened) {
+            return false;
+        }
+        self.run = None;
+        self.terminals_opened = self.terminals_opened.saturating_sub(1);
+        self.message = Some(terminal_refusal(self.platform, error));
+        true
     }
 
     /// One look of C# `WatchSetupRun` (every [`WATCH_INTERVAL`]): ended by its markers or its PowerShell's end; the not-started
@@ -555,6 +603,34 @@ impl SetupScreen {
 
 fn lock(screen: &std::sync::Mutex<SetupScreen>) -> std::sync::MutexGuard<'_, SetupScreen> {
     screen.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// What the screen says when the install's terminal does not open: the Mac pane's own refusal (no workspace on this Mac, too many
+/// panes) is a whole sentence already.
+fn terminal_refusal(platform: SetupPlatform, error: PlatformError) -> String {
+    match (platform, error) {
+        (SetupPlatform::MacOS, PlatformError::Refused(words)) => words,
+        (SetupPlatform::MacOS, error) => strings::get_with("setup.error.terminal", &[("error", &error.to_string())]),
+        (SetupPlatform::Windows, error) => strings::get_with("setup.windows.error.terminal", &[("error", &error.to_string())]),
+    }
+}
+
+/// The Windows console window's launch for the written script.
+fn windows_launch(script: &Path, folder: &Path, files: &dyn SetupFiles, environment: &BTreeMap<String, String>) -> TerminalLaunch {
+    // The app wrote this command itself from its own catalog, after the user confirmed it.
+    let argv = script::launch_arguments(&script.to_string_lossy(), files.system_folder().as_deref(), environment);
+    let mut variables = environment.clone();
+    set_variable(&mut variables, NO_CURRENT_DIRECTORY_SEARCH, "1");
+    // The console window the script runs in outlives the app (C# `Process.Start` of `CliAccountTerminal.LaunchPlan`: Windows
+    // Terminal by the full path found along the PATH, else the system's console host), the system's PowerShell by its own path.
+    TerminalLaunch {
+        resolved: argv.first().cloned(),
+        argv,
+        directory: Some(folder.to_path_buf()),
+        title: None,
+        environment: variables,
+        prefer_terminal_app: true,
+    }
 }
 
 /// The GUI smoke's fixed probe results (C# MainWindow.SetupSmoke.cs): every Windows item missing, Claude Code out of date (2.0.0

@@ -32,8 +32,8 @@ use objc2_app_kit::{
     NSWorkspace,
 };
 use objc2_foundation::{
-    NSArray, NSBundle, NSData, NSDictionary, NSNumber, NSString, NSURL, NSURLIsAliasFileKey, NSURLIsApplicationKey, NSURLIsExecutableKey,
-    NSURLIsPackageKey, NSURLIsRegularFileKey, NSURLIsSymbolicLinkKey, NSURLResourceKey,
+    NSArray, NSBundle, NSData, NSDictionary, NSFileManager, NSNumber, NSString, NSURL, NSURLIsAliasFileKey, NSURLIsApplicationKey,
+    NSURLIsExecutableKey, NSURLIsPackageKey, NSURLIsRegularFileKey, NSURLIsSymbolicLinkKey, NSURLResourceKey,
 };
 
 /// The files pane's ports on the Mac.
@@ -615,6 +615,17 @@ impl Desktop for MacDesktop {
     /// The general pasteboard gets the picture as PNG and TIFF; it keeps them after the app quits.
     fn copy_image(&self, image: &ClipboardImage) -> Result<()> {
         autoreleasepool(|_| put_image(&NSPasteboard::generalPasteboard(), image))
+    }
+
+    /// `FileManager.trashItem(at:resultingItemURL:)`: the file (a link itself, never what it points at) in the Trash, where Finder's Put
+    /// Back returns it.
+    fn trash(&self, path: &Path) -> Result<()> {
+        std::fs::symlink_metadata(path)?;
+        autoreleasepool(|_| {
+            NSFileManager::defaultManager()
+                .trashItemAtURL_resultingItemURL_error(&file_url(path), None)
+                .map_err(|error| PlatformError::Refused(error.localizedDescription().to_string()))
+        })
     }
 }
 

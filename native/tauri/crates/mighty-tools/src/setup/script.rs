@@ -22,6 +22,8 @@ pub struct SetupScriptStep {
     pub item_id: String,
     pub title: String,
     pub body: String,
+    /// The Mac's: the step waits for a system window to finish the install (Swift `SetupScriptStep.waitsOutside`); never on Windows.
+    pub waits_outside: bool,
 }
 
 /// A step's heading: `(index from 1, count, title)`.
@@ -113,7 +115,7 @@ pub fn steps(ids: &[String], catalog: &SetupCatalog, title: &dyn Fn(&SetupItem) 
         .filter_map(|id| {
             let item = catalog.item(id)?;
             let body = body(item.entry(SetupPlatform::Windows)?)?;
-            Some(SetupScriptStep { item_id: id.clone(), title: title(item), body })
+            Some(SetupScriptStep { item_id: id.clone(), title: title(item), body, waits_outside: false })
         })
         .collect()
 }

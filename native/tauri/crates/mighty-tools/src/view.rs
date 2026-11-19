@@ -82,9 +82,10 @@ fn setup_action(ui: &Ui, key: &str, aid: String, prominent: bool, enabled: bool,
 /// C# `SetupItemRow`: the box (hidden where nothing may be picked), then the name with its mark, capsules and version over the
 /// state's word, the detail, what is out of date or unread, why it is ticked, and its own buttons.
 fn item_row(ui: &Ui, screen: &SetupScreen, item: &SetupItem, added: bool, extras: &SetupExtras, actions: &Arc<dyn SetupActions>) -> El {
+    let platform = screen.platform();
     let state = screen.state_of(item);
     let result = screen.results.get(&item.id);
-    let selectable = SetupRows::is_selectable(state, item);
+    let selectable = SetupRows::is_selectable_on(state, item, platform);
     let focused = screen.focus.as_deref() == Some(item.id.as_str());
     let picked = screen.selection.contains(&item.id);
     let running = screen.running();
@@ -94,7 +95,7 @@ fn item_row(ui: &Ui, screen: &SetupScreen, item: &SetupItem, added: bool, extras
         .enabled(selectable && !added && !running)
         .va(VAlign::Top)
         .opacity(if selectable || picked || added { 1.0 } else { 0.0 })
-        .named(SetupCatalog::title(item))
+        .named(SetupCatalog::title_on(item, platform))
         .aid(format!("setup-check-{}", item.id))
         .on_toggle(move |_| toggle.toggle(&id));
     let mut name = vec![];
@@ -112,7 +113,7 @@ fn item_row(ui: &Ui, screen: &SetupScreen, item: &SetupItem, added: bool, extras
             Token::Ink,
         )),
     }
-    name.push(text(ui, SetupCatalog::title(item), TextStyle::size(13.0).medium()));
+    name.push(text(ui, SetupCatalog::title_on(item, platform), TextStyle::size(13.0).medium()));
     if item.provider().is_some_and(mighty_run::providers::is_beta) {
         name.push(ui.beta_badge());
     }
@@ -146,7 +147,7 @@ fn item_row(ui: &Ui, screen: &SetupScreen, item: &SetupItem, added: bool, extras
         col_spacing: metrics::SPACING_SM,
         ..Grid::default()
     });
-    let mut words = vec![head, text(ui, SetupCatalog::detail(item), TextStyle::size(11.0).ink(Token::Ink2))];
+    let mut words = vec![head, text(ui, SetupCatalog::detail_on(item, platform), TextStyle::size(11.0).ink(Token::Ink2))];
     if let Some(result) = result {
         match (result.state, result.minimum.as_deref()) {
             (SetupProbeState::Outdated, Some(minimum)) => words.push(text(
@@ -160,6 +161,10 @@ fn item_row(ui: &Ui, screen: &SetupScreen, item: &SetupItem, added: bool, extras
                 TextStyle::size(11.0).ink(Token::WaitText),
             )),
             _ => {}
+        }
+        // The Mac's command line tools: why git does not run yet (Swift's attention line).
+        if let Some(reason) = result.attention.filter(|_| result.state == SetupProbeState::NeedsAttention) {
+            words.push(text(ui, strings::get(reason), TextStyle::size(11.0).ink(Token::WaitText)));
         }
     }
     if added {
@@ -182,7 +187,7 @@ fn item_row(ui: &Ui, screen: &SetupScreen, item: &SetupItem, added: bool, extras
         }
     }
     if state != SetupRowState::Installed
-        && let Some(SetupRecipe::VendorPage { url }) = item.entry(SetupPlatform::Windows).map(|entry| &entry.install)
+        && let Some(SetupRecipe::VendorPage { url }) = item.entry(platform).map(|entry| &entry.install)
     {
         let (open, url) = (actions.clone(), url.to_string());
         buttons
@@ -281,10 +286,21 @@ pub fn setup_content(ui: &Ui, screen: &SetupScreen, extras: &SetupExtras, action
 /// C# `ShowWebSetup`'s view: the list, then its never-show box (`setup-never-show`, ticked from `never_show`) at the footer's left; the
 /// header's ✕ is 다음에 하기.
 pub fn setup_view(list: El, never_show: bool, toggle_never_show: impl Fn(bool) + Send + Sync + 'static) -> View {
+    setup_view_on(SetupPlatform::Windows, list, never_show, toggle_never_show)
+}
+
+/// [`setup_view`] on `platform`: the subtitle says where the install runs (Windows' PowerShell window, the Mac's terminal pane).
+pub fn setup_view_on(
+    platform: SetupPlatform,
+    list: El,
+    never_show: bool,
+    toggle_never_show: impl Fn(bool) + Send + Sync + 'static,
+) -> View {
     let footer = El::check_box(never_show, strings::get("setup.button.neverShow")).aid("setup-never-show").on_toggle(toggle_never_show);
+    let subtitle = if platform == SetupPlatform::MacOS { "setup.subtitle" } else { "setup.windows.subtitle" };
     View::Setup {
         title: strings::get("setup.title"),
-        subtitle: strings::get("setup.windows.subtitle"),
+        subtitle: strings::get(subtitle),
         close: strings::get("setup.button.later"),
         body: Some(list),
         footer: Some(footer),
@@ -298,6 +314,7 @@ pub fn setup_view(list: El, never_show: bool, toggle_never_show: impl Fn(bool) +
 /// default.
 pub fn setup_confirmation(confirmation: &Confirmation) -> DialogSpec {
     let (preamble, steps) = (confirmation.preamble.join("\n"), confirmation.steps.clone());
+    let body_key = if confirmation.platform == SetupPlatform::MacOS { "setup.confirm.body" } else { "setup.windows.confirm.body" };
     let mut spec = DialogSpec::new(strings::get("setup.confirm.title"), move |ui: &mut Ui| {
         let mut body = vec![
             El::stack(
@@ -324,11 +341,8 @@ pub fn setup_confirmation(confirmation: &Confirmation) -> DialogSpec {
             );
         }
         let scroll = El::new(Kind::ScrollViewer { content: El::stack(false, metrics::SPACING_MD, body).into() }).max_height(340.0);
-        let content = El::stack(
-            false,
-            metrics::SPACING_MD,
-            vec![text(ui, strings::get("setup.windows.confirm.body"), TextStyle::size(12.0).ink(Token::Ink2)), scroll],
-        );
+        let content =
+            El::stack(false, metrics::SPACING_MD, vec![text(ui, strings::get(body_key), TextStyle::size(12.0).ink(Token::Ink2)), scroll]);
         Content::El(Box::new(content))
     })
     .styled(None, None);

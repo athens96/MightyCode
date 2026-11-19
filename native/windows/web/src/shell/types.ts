@@ -41,6 +41,8 @@ export interface PaneInfo {
   worktree?: string | null;
   /** Another computer's pane (the remote mirror): its strip's words (MainWindow.RemoteMirror.cs WebMirrorStrip). */
   mirror?: MirrorStrip | null;
+  /** An agent pane whose terminal is open, its pane shown or closed: the header's 터미널 창 열기 button. */
+  agentTerminal?: boolean;
 }
 
 /** The strip over a mirrored pane (M/RemoteMirrorViews.swift MirrorPaneBanner): "원격 창 · ● {host}에서 실행 중 · {state}", branch and queue. */
@@ -223,6 +225,7 @@ export type DialogRequest =
   | { type: 'rename'; title: string; hint: string; current: string; field: string; save: string; cancel: string; automatic?: string }
   | { type: 'resumeChoice'; provider: string; title: string; message: string; checking: boolean }
   | { type: 'resumeList'; provider: string; title: string; path: string }
+  | { type: 'conversationSearch'; title: string; path: string }
   | { type: 'newFolder'; title: string; subtitle: string; labels: CreateLabels; location: string }
   | { type: 'gitCreate'; title: string; subtitle: string; labels: CreateLabels; location: string }
   | { type: 'paneWorktreeChoice'; title: string; message: string; canWorktree: boolean; worktree: string; always: string; sameFolder: string; cancel: string }
@@ -284,6 +287,23 @@ export interface ResumeRows {
   hidden?: string;
   empty?: string;
   reason?: string;
+}
+
+/** One session 대화 검색 found (conversation_search.rs `row`): `id` is `provider:session`. */
+export interface ConversationHit {
+  id: string;
+  provider: string;
+  agent: string;
+  title: string;
+  date: string;
+  snippet: string;
+  matches: string;
+}
+
+/** `conversationSearch{query}`: the sessions searched and, for a query with words, what matched (newest first). */
+export interface ConversationResults {
+  count: number;
+  hits: ConversationHit[];
 }
 
 /** host → web pushes of the frame. */

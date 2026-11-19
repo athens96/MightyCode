@@ -29,10 +29,10 @@ Antigravity는 일하는 도중에 물어볼 수 없어서, 물어봐야 하는 
 명령을 잇거나 파이프·리디렉션을 쓰거나 데이터를 지울 수 있는 명령은 {{ui:permission.allowOnce}}만 할 수 있습니다. 규칙은 그 글자로 시작하는 모든 명령을 허용하므로 그런 규칙을 계속 두면 위험하기 때문입니다. [Antigravity의 권한 카드](approvals.md#antigravity-permission)를 보세요.
 
 ## 휴대폰이 연결되지 않아요 {#phone}
-- Mac의 {{ui:settings.nav.mobile}}에서 {{ui:settings.mobileRemote.allowToggle}}이 켜져 있는지 봅니다.
+- 컴퓨터의 {{ui:settings.remote.navTitle}} › {{ui:settings.remote.phoneTab}} 탭에서 {{ui:settings.mobileRemote.allowToggle}}(Windows는 {{ui:windows.mobile.allow}})이 켜져 있는지 봅니다.
 - 상태가 릴레이 연결 중에서 멈춰 있으면 {{ui:settings.mobileRemote.reconnectButton}} 단추를 누릅니다.
-- 휴대폰 {{ui:phone.tabs.hosts}} 탭에 {{ui:phone.hosts.reachability.unauthorized}}가 보이면 Mac의 키가 바뀐 것입니다. QR 코드로 다시 연결하세요.
-- Mac이 잠자기 상태이면 연결되지 않습니다.
+- 휴대폰 {{ui:phone.tabs.hosts}} 탭에 {{ui:phone.hosts.reachability.unauthorized}}가 보이면 컴퓨터에서 키를 다시 만들었거나 이 휴대폰의 연결을 해제한 것입니다. QR 코드로 다시 연결하세요.
+- 컴퓨터가 잠자기 상태이면 연결되지 않습니다.
 - 0.4.58 전에 연결한 휴대폰에 알림이 오지 않으면 QR 코드로 한 번 다시 연결하세요. 기본 릴레이가 새 서버로 바뀌었습니다([알림](phone.md#notifications)).
 
 ## 실행 창을 닫으면 대화가 사라지나요? {#history}

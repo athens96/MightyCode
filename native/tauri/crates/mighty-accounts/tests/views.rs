@@ -8,14 +8,13 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use mighty_accounts::accounts::{self, CliAccountStatus, CliLoginOption, copy};
-use mighty_accounts::view::{self, AccountActions, AccountRow, AccountsModel, ProvidersModel};
+use mighty_accounts::view::{self, AccountActions, AccountRow, AccountsModel};
 use mighty_core::locale::Locale;
 use mighty_core::text_appearance::TextAppearance;
 use mighty_native::surface::{DialogSurface, Next, SurfaceModel, Surfaces};
 use mighty_native::tokens::Theme;
 use mighty_native::ui::{El, Env, Ui};
 use mighty_native::view::{Place, Section, View};
-use mighty_run::model::ProviderRuntime;
 use mighty_run::strings;
 use serde_json::Value;
 
@@ -217,65 +216,6 @@ fn the_windows_accounts_section_lists_every_provider_in_its_rows() {
     for provider in ["pi", "opencode", "hermes"] {
         assert!(accounts::login_hint(provider).is_some(), "{provider} says what its terminal asks");
     }
-}
-
-fn runtime(id: &str, available: bool, version: Option<&str>, detail: &str) -> ProviderRuntime {
-    ProviderRuntime {
-        id: id.into(),
-        name: mighty_run::providers::name(id).into(),
-        available,
-        version: version.map(str::to_string),
-        detail: detail.into(),
-        model_catalog: mighty_run::providers::fallback(id),
-        capabilities: mighty_run::providers::capabilities(id, version),
-    }
-}
-
-/// `BuildProvidersSection`: before the runtime is read every row says it is checking; then ready or needs setup, the version in mono,
-/// the detail; the recheck button runs its action and waits while it checks.
-#[test]
-fn the_providers_box_says_each_clis_state() {
-    common::korean();
-    let pressed = Arc::new(Mutex::new(0));
-    let (_, before) = render(|ui| view::providers(ui, &ProvidersModel::default(), || {}));
-    let checking = strings::get("settings.components.statusChecking");
-    assert_eq!(texts(&before).iter().filter(|t| **t == checking).count(), mighty_core::wire::PROVIDERS.len(), "every row checks");
-    let model = ProvidersModel {
-        runtime: vec![runtime("claude", true, Some("2.1.300"), "ready"), runtime("codex", false, None, "missing")],
-        checking: false,
-    };
-    let count = pressed.clone();
-    let (surfaces, after) = render(move |ui| {
-        let count = count.clone();
-        view::providers(ui, &model, move || *count.lock().unwrap() += 1)
-    });
-    let shown = texts(&after);
-    assert!(
-        shown.contains(&strings::get("settings.providers.statusReady"))
-            && shown.contains(&strings::get("settings.providers.statusNeedsSetup"))
-    );
-    let version = nodes(&after).into_iter().find(|n| n["text"] == "2.1.300").expect("the version");
-    assert_eq!(version["mono"], Value::Bool(true), "the version in the code font");
-    for id in mighty_core::wire::PROVIDERS {
-        assert!(by_aid(&after, &format!("settings-provider-{id}")).is_some(), "{id}'s row");
-    }
-    let check = by_aid(&after, "settings-providers-check").unwrap();
-    assert!(surfaces.act("settings", check["id"].as_i64().unwrap(), "invoke", &Value::Null).run(|_| {}) && *pressed.lock().unwrap() == 1);
-    let (_, busy) = render(|ui| view::providers(ui, &ProvidersModel { runtime: vec![], checking: true }, || {}));
-    assert_eq!(by_aid(&busy, "settings-providers-check").unwrap()["disabled"], Value::Bool(true), "it waits while it checks");
-}
-
-/// `BuildClaudeModsSection`: the checking sentence until Claude's runtime is read; then its detail and the minimum version.
-#[test]
-fn the_claude_mods_box_says_its_state_and_minimum_version() {
-    common::korean();
-    let (_, before) = render(|ui| view::claude_mods(ui, None));
-    assert_eq!(texts(&before), [strings::get("window.status.checkingRuntime")]);
-    let claude = runtime("claude", true, Some("2.1.300"), "Mods ready");
-    let (_, after) = render(move |ui| view::claude_mods(ui, Some(&claude)));
-    let shown = texts(&after);
-    assert!(shown.contains(&"Mods ready".to_string()) && shown.contains(&view::MODS_MINIMUM_VERSION.to_string()));
-    assert!(shown.contains(&strings::get("settings.claudeMods.compatLabel")));
 }
 
 fn dialog(spec: mighty_native::surface::DialogSpec) -> Value {

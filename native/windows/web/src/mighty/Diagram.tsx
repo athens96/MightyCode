@@ -4,7 +4,7 @@ import { useServices, useStoreState } from '../app/context';
 import type { GraphBlockSize, MightyGraphRun, RunSession } from '../store/models';
 import { Block, type BlockActions, type BlockExtra } from './Block';
 import {
-  FollowWatch, aimLanding, cameraOffset, cameraTween, centredX, dotRadius, dotStep, dotsShift, dotsShown, followTargetID, runsChanged, scrollsBy, showsTop, trimAnchor,
+  FollowWatch, aimLanding, arrivedResult, cameraOffset, cameraTween, centredX, dotRadius, dotStep, dotsShift, dotsShown, followTargetID, resultCamera, runsChanged, scrollsBy, showsTop, trimAnchor,
   wheelRoute, wheelScrollTarget, WheelGestureGapMs, zoomAnchored, zoomIn, zoomLabel, zoomOut, ZoomDefault, ZoomMax, ZoomMin, type Point,
 } from './camera';
 import {
@@ -12,9 +12,11 @@ import {
   nodeId, resultDrag, resultDragSides, runNodeId, runOf, WorkSuffix, type Layout, type Size,
 } from './layout';
 import { CardHeight, DelegateKind, StepKind, focusedRequest, liveFlowIds, logRowsFit, logTarget, progressRequest, requestSpans, type RequestSpan } from './flow';
-import { newestRequestRun } from './notice';
+import { followRunIndex, newestRequestRun } from './notice';
 import { DelegateLineNode, FlowCardNode, FlowLogStrip, ProgressPanel } from './FlowParts';
 import { blockExtras } from './extras';
+import { RunChanges } from './RunChanges';
+import { settledRunsKey } from './runChangesModel';
 import { edgesCursor, pinnedAnchor, pinnedCamera, pinnedUnit, resizedSize, resizeTarget, type Edges } from './resize';
 import { setBlockSize } from './prefs';
 import { shareRuns } from './share';
@@ -177,6 +179,9 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
    * Mighty view while another view shows. */
   const { opened, setOpened, measured, setMeasured } = memory;
   const [selected, setSelected] = useState<string | null>(null);
+  /** 요청 변경 검토: the runs whose request's changes it can show, and the run it is open for. */
+  const [changedRuns, setChangedRuns] = useState<ReadonlySet<string>>(() => new Set());
+  const [changesRun, setChangesRun] = useState<string | null>(null);
   const [visibleKey, setVisibleKey] = useState('');
   const [live, setLive] = useState<{ id: string; size: GraphBlockSize; target: Drag['target'] } | null>(null);
   const [pending, setPending] = useState<{ sizes: Record<string, GraphBlockSize> | null; base: unknown } | null>(null);
@@ -244,6 +249,8 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   const pinnedRef = useRef(pinnedRun);
   /** An own send waiting for its request to be laid out, by the newest request it was sent after ('' for none). */
   const sendTop = useRef<string | null>(null);
+  /** The newest work's result block seen in the pass before (undefined before the first pass): one that comes in is shown. */
+  const resultSeen = useRef<string | null | undefined>(undefined);
   pinnedRef.current = pinnedRun;
   const spans = useMemo<RequestSpan[]>(() => {
     if (!showsProgress) return [];
@@ -393,6 +400,22 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
         setPinnedRun(newest.id);
       }
     }
+    // The newest work's result came in: the camera glides to it, its top kept in view, following on from there when it all fits (a
+    // send that pinned its request to the top stopped the follow, so the result would land out of sight under the work).
+    const followRun = runs[followRunIndex(runs) ?? -1];
+    const resultID = followRun ? runNodeId(followRun, 'result') : null;
+    const resultFrame = frameOf(resultID);
+    const shownResult = resultFrame ? resultID : null;
+    const revealed = !aim && !userMoving && arrivedResult(resultSeen.current, shownResult);
+    // The last result seen stays until another comes in, so one that leaves the layout for a pass and returns is not shown again.
+    if (resultSeen.current === undefined || shownResult !== null) resultSeen.current = shownResult;
+    if (revealed && resultFrame && resultID !== null) {
+      sendTop.current = null;
+      held.current = null;
+      camera.current = resultCamera(resultFrame, viewport, zoom);
+      watch.current.moved(targetID, frameOf(targetID), camera.current, viewport, zoom);
+      if (!watch.current.following) held.current = { id: resultID, anchor: pinnedAnchor(HeldCorner, resultFrame, camera.current, zoom) };
+    }
     // A block asked for from another view: after the run-id rules, so a send is followed first and this wins.
     if (aim) {
       const landing = aimLanding(aim, layout, runs, fanOut, opened);
@@ -422,7 +445,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     // An own send glides to its request (motion.scroll); Reduce Motion moves at once. A move under way keeps going to where
     // this pass put the camera.
     const moving = tween.current;
-    if (ownSend && !aim && !reducesMotion()) startTween(before, camera.current);
+    if ((ownSend || revealed) && !aim && !reducesMotion()) startTween(before, camera.current);
     else if (moving && !aim && !ownSend) {
       // This pass moved the camera (the request grew, the follow went on): the move heads there instead.
       if (Math.abs(camera.current.x - before.x) > 0.5 || Math.abs(camera.current.y - before.y) > 0.5) moving.to = camera.current;
@@ -660,6 +683,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     loadOlder() { void bridge.call('mightyLoadOlder', { paneId }); },
     measured(id, height) { setMeasured((m) => (Math.abs((m[id] ?? -1) - height) < 1 ? m : { ...m, [id]: height })); },
     foldToCard(id) { openCard(id, false); },
+    openChanges(runId) { setChangesRun(runId); },
   }), [bridge, paneId, openCard, setMeasured]);
 
   const onKeyDown = (event: React.KeyboardEvent) => {
@@ -677,14 +701,25 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     setZoom(next);
   };
 
+  // The settled runs' results offer 요청 변경 검토 once the host says their request's edits were kept (files.rs runChangesRuns).
+  const settledKey = useMemo(() => settledRunsKey(runs), [runs]);
+  useEffect(() => {
+    let live = true;
+    const ids = settledKey === '' ? [] : settledKey.split('\n');
+    const take = (found: readonly string[]) => setChangedRuns((now) => (now.size === found.length && found.every((id) => now.has(id)) ? now : new Set(found)));
+    if (ids.length === 0) take([]);
+    else bridge.call<string[] | null>('runChangesRuns', { paneId, runIds: ids }).then((found) => { if (live) take(found ?? []); }, () => {});
+    return () => { live = false; };
+  }, [bridge, paneId, settledKey]);
+
   // ── each block's own parts, kept while they do not change ──
   const planText = useMemo(() => (state.cards[paneId] ?? []).find((c) => c.kind === 'plan') as { plan?: string } | undefined, [state.cards, paneId])?.plan;
   const extrasCache = useRef<ReadonlyMap<string, BlockExtra>>(new Map());
   const extras = useMemo(() => {
-    const next = blockExtras({ layout, runs, inputs, draft: session.draft, planHistory: session.planHistory, resultSize: session.graphResultSize, planText, latest }, extrasCache.current);
+    const next = blockExtras({ layout, runs, inputs, draft: session.draft, planHistory: session.planHistory, resultSize: session.graphResultSize, planText, latest, changedRuns }, extrasCache.current);
     extrasCache.current = next;
     return next;
-  }, [layout, runs, inputs, session.draft, session.planHistory, session.graphResultSize, planText, latest]);
+  }, [layout, runs, inputs, session.draft, session.planHistory, session.graphResultSize, planText, latest, changedRuns]);
 
   // The sent request's block carries its pending mark (전송 중, or its failure) in place of a pill.
   const drawnExtras = useMemo(() => {
@@ -764,6 +799,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
       </div>
       {/* The session log under a Claude pane's flow, above the composer (FlowLog): no strip without a request. */}
       {fanOut && inputs?.log && <FlowLogStrip paneId={paneId} log={inputs.log} squeezed={!logRowsFit(room)} onToggle={toggleLog} onReveal={revealFlow} />}
+      {changesRun !== null && <RunChanges paneId={paneId} runId={changesRun} onClose={() => setChangesRun(null)} />}
     </div>
   );
 }

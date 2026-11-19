@@ -97,7 +97,6 @@ pub struct Accounts {
     working: Mutex<HashSet<String>>,
     reading: AtomicUsize,
     model_reset: AtomicBool,
-    checking_runtime: AtomicBool,
     serial: AtomicU64,
     /// Sign-outs confirmed in D8, counted before any gate (the smoke's check that D8 cancelled confirmed none).
     sign_out_attempts: AtomicUsize,
@@ -1212,31 +1211,6 @@ fn model_of(
     mighty_accounts::view::AccountsModel { rows, reading: accounts.reading.load(Ordering::SeqCst) > 0, auto_login }
 }
 
-/// The providers box's model: the run engine's runtime per provider, and the recheck under way.
-pub fn providers_model(host: &Host) -> mighty_accounts::view::ProvidersModel {
-    // A smoke shows the runtime as not read yet, as C#'s does (it never reads it in a smoke): never this PC's CLIs.
-    if host.smoke.is_some() {
-        return mighty_accounts::view::ProvidersModel { runtime: vec![], checking: of(host).checking_runtime.load(Ordering::SeqCst) };
-    }
-    let runtime = host.runs().map(|runs| mighty_core::wire::PROVIDERS.iter().filter_map(|p| runs.runtime(p)).collect()).unwrap_or_default();
-    mighty_accounts::view::ProvidersModel { runtime, checking: of(host).checking_runtime.load(Ordering::SeqCst) }
-}
-
-/// The providers box's recheck (`RefreshRuntime`): the CLIs found again and read, the button waiting meanwhile.
-pub fn recheck_runtime(host: &Arc<Host>) {
-    let accounts = of(host);
-    if accounts.checking_runtime.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    redraw(host);
-    let host = host.clone();
-    tauri::async_runtime::spawn(async move {
-        crate::models::reload_runtime(&host).await;
-        of(&host).checking_runtime.store(false, Ordering::SeqCst);
-        redraw(&host);
-    });
-}
-
 /// The smoke's sign-in card (the `loginCard` step): a fixture retry of `pane` kept as if its run had lost the sign-in.
 pub fn smoke_retry(host: &Host, pane: &RunSession) {
     let mut request = StartRunRequest::new(pane.id(), pane.workspace_id(), "claude", "smoke sign-in fixture");
@@ -1425,7 +1399,7 @@ mod tests {
 
     /// The source-grep halves of C#'s L1400 and L1427 as the app's registry: the sign-in card's, the usage popover's and the CLI tab's
     /// methods are registered (`loginAction`, `usageRefresh`, `usageDirect`; the native forms' through `nativeAction`), and Settings'
-    /// CLI category draws the providers, the accounts (every provider's row: tests/views.rs) and Claude Mods with the CLI updates.
+    /// CLI category draws the accounts (every provider's row: tests/views.rs) with the CLI updates.
     #[test]
     fn the_accounts_and_usage_are_wired_into_the_app() {
         let names = crate::methods::registry().names();
@@ -1434,8 +1408,7 @@ mod tests {
         }
         let locale = Locale::new("ko");
         let boxes: Vec<crate::settings::Builder> = crate::settings::groups(&locale, "cli").into_iter().map(|g| g.build).collect();
-        let ours: [crate::settings::Builder; 3] =
-            [crate::settings::cli_accounts::providers, crate::settings::cli_accounts::accounts, crate::settings::cli_accounts::claude_mods];
+        let ours: [crate::settings::Builder; 2] = [crate::settings::cli_accounts::accounts, crate::settings::cli_update::cli_update];
         assert!(ours.iter().all(|b| boxes.iter().any(|g| std::ptr::fn_addr_eq(*g, *b))), "the CLI tab draws the accounts' boxes");
     }
 }

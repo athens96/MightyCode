@@ -12,7 +12,7 @@ section: layout
 - {{ui:sidebar.searchPlaceholder}}：按{{kbd:⌘K}}可直接跳到搜索框。
 - {{ui:phone.dashboard.title}}：在一处查看所有工作区中窗格的状态。
 - {{ui:sidebar.workspacesHeader}}列表：点击工作区即可切换到该工作区。点击旁边的箭头可以展开或收起其窗格列表。
-- 底部：主题按钮（深色、浅色）和设置按钮。
+- 底部：帮助按钮、主题按钮（深色、浅色）和设置按钮。
 
 展开工作区后，最后一行是{{ui:workspace.addPane}}按钮。右键点击窗格所在的行，可以看到{{ui:menu.rename}}和{{ui:menu.closePane}}。
 
@@ -20,6 +20,7 @@ section: layout
 拖动侧边栏与主区域之间的边界线，即可调整侧边栏的宽度（{{ui:sidebar.resize}}）。
 - 指针移到边界线上时，它会变为强调色。左右拖动即可调整宽度。宽度只在限定范围内变化，重新打开应用后仍会保留。
 - 双击边界线可恢复默认宽度。
+- 用 Tab 键选中边界线后按{{kbd:←}} / {{kbd:→}}，每次变窄或变宽 10 px。
 - 将边界线一直拖到最左侧会收起侧边栏。再次展开时，会恢复拖动前的宽度。
 
 ### 收起侧边栏 {#sidebar-collapse}
@@ -47,7 +48,7 @@ section: layout
 2. 选择要创建的窗格：智能体（Claude、Codex、Antigravity、pi、opencode、Hermes）窗格或{{ui:workspace.newTerminal}}。菜单最下方一组是添加工作区的三种方式：{{ui:workspace.add.existing}}、{{ui:workspace.add.newFolder}}和{{ui:workspace.add.fromGit}}（[打开工作区](getting-started.md#open-workspace)）。
 3. 新的 AI 窗格会沿用同一智能体最近使用过的窗格的模型、思考强度、权限和视图。对话则从头开始。
 
-快捷键：{{ui:menu.newClaudePane}}为{{kbd:⌘N}}，{{ui:menu.addTerminalPane}}为{{kbd:⌘T}}，{{ui:menu.showFiles}}为{{kbd:⇧⌘E}}。
+快捷键：{{ui:menu.newClaudePane}}为{{kbd:⌘N}}，{{ui:menu.addTerminalPane}}为{{kbd:⌘T}}，{{ui:menu.showFiles}}为{{kbd:⇧⌘E}}。所有工作区合计最多可以打开 128 个窗格（原样显示其他电脑窗格的远程窗格不计入）。
 
 > [!note]
 > 除 Claude 以外的智能体窗格（Codex、Antigravity、pi、opencode、Hermes）带有{{ui:badge.beta}}标记。
@@ -62,12 +63,20 @@ section: layout
 
 ![[resume-list]]
 
+### 搜索过去的对话 {#conversation-search}
+{{ui:conversationSearch.open}}（{{kbd:⇧⌘F}}）会在此文件夹过去会话的请求和回答中查找词语。也可以从工作区标题栏的放大镜按钮、在侧边栏右键点击工作区的菜单，以及菜单栏的工作区菜单打开。
+- 列出某条消息包含所有词的会话，按时间从新到旧，最多 50 个，找到的词会被标出。不搜索工具输出。
+- 搜索 Claude、Codex、Antigravity 和 pi 的会话，不搜索 opencode 和 Hermes 的会话。已在窗格中打开的会话和超过 60 天的会话不包括在内。
+- 用 {{kbd:↑}} {{kbd:↓}} 选择后按 {{kbd:Enter}}，或点击{{ui:conversationSearch.resume}}，新窗格会继续该会话。
+- {{ui:conversationSearch.export}}会把该对话的请求和回答保存为 Markdown 文件。
+- 远程工作区中不可用，因为会话记录在那台电脑上。
+
 ## 标签页与分割 {#tabs-splits}
 - 将标签页拖到另一组的中间，即可合并为标签页（{{ui:layout.drop.merge}}）。
 - 放到某组的左、右、上、下边缘，就会向该方向分割。
 - 拖动分割线可以调整大小，双击分割线则平分两侧。
 - 拖动过程中按{{kbd:Esc}}即可取消。
-- 右键点击标签页，可以看到{{ui:menu.rename}}、{{ui:menu.focusPane}}和{{ui:menu.closeTab}}。
+- 双击标签页可以重命名。右键点击标签页，可以看到{{ui:menu.rename}}、{{ui:menu.focusPane}}和{{ui:menu.closeTab}}。
 
 布局按工作区分别保存。切换工作区后，各自的布局保持不变。
 
@@ -75,9 +84,11 @@ section: layout
 窗格标题栏中的 … 按钮包含以下项目：
 - {{ui:menu.rename}}
 - {{ui:menu.focusPane}}：只放大显示此窗格。再次点击即可{{ui:pane.menu.restoreLayout}}。
-- {{ui:pane.menu.copyLog}}
-- {{ui:pane.menu.newConversation}}：从下一个请求起不再接续之前的对话。
+- {{ui:pane.menu.copyLog}}：复制智能体窗格的运行记录。终端窗格在这个位置是{{ui:pane.menu.terminalHistory}}（[终端窗格](terminal-files-browser.md#terminal)）。
+- {{ui:pane.menu.newConversation}}：从下一个请求起不再接续之前的对话（智能体窗格）。
 - {{ui:menu.closePane}}
+
+右键点击窗格标题栏，会有{{ui:menu.rename}}、{{ui:session.menu.focus}}和{{ui:session.menu.close}}，终端窗格还有{{ui:terminal.history.title}}。
 
 ## 快捷键 {#shortcuts}
 | 快捷键 | 操作 |
@@ -86,6 +97,7 @@ section: layout
 | {{kbd:⌘N}} | {{ui:menu.newClaudePane}} |
 | {{kbd:⌘T}} | {{ui:menu.addTerminalPane}} |
 | {{kbd:⇧⌘E}} | {{ui:menu.showFiles}} |
+| {{kbd:⇧⌘F}} | {{ui:conversationSearch.open}} |
 | {{kbd:⌘K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{ui:menu.settings}} |

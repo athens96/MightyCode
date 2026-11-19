@@ -19,7 +19,7 @@ section: agent-pane
 ### 运行时继续提出请求 {#queue}
 任务运行期间也可以写下一个请求。输入框中有文字时，停止按钮旁会出现与发送按钮相同的圆形按钮。
 - {{kbd:Enter}}或{{ui:queue.add}}按钮：作为下一个请求放入队列。当前任务结束后按顺序执行。每个窗格最多可放 16 个。
-- {{kbd:⌘Enter}}或{{ui:queue.worktree}}按钮：在开启了 Mighty 编排、位于有提交的分支上的 git 仓库中的 Claude 窗格，或处于子窗格能更改文件的模式的 Codex、Antigravity 窗格里，会在此窗格旁打开一个拥有自己 git worktree 的新子窗格并立即运行，正在运行的任务照常继续；子窗格完成后，在侧边栏的卡片上合并它的结果（[在新的 worktree 中运行](delegation.md#worktree)）。
+- {{kbd:⌘Enter}}（Windows 上为{{kbd:Ctrl+Enter}}）或{{ui:queue.worktree}}按钮：在开启了 Mighty 编排、位于有提交的分支上的 git 仓库中的 Claude 窗格，或处于子窗格能更改文件的模式的 Codex、Antigravity 窗格里，会在此窗格旁打开一个拥有自己 git worktree 的新子窗格并立即运行，正在运行的任务照常继续；子窗格完成后，在侧边栏的卡片上合并它的结果（[在新的 worktree 中运行](delegation.md#worktree)）。
 - 在子窗格中、在这样的仓库之外，或关闭 Mighty 编排时，{{kbd:⌘Enter}}也会像{{kbd:Enter}}一样放入队列。无法创建或启动子窗格时，文字同样会放入队列（[在新的 worktree 中运行](delegation.md#worktree)）。你发送的内容不再插入正在运行的任务；在较早的记录中，Mighty 视图仍会把这类文字显示为橙色的{{ui:graph.block.steer}}块。直接送进正在运行的 Claude 父窗格的委派通知，显示为同样颜色的{{ui:graph.block.delegationNotice}}块（[通知和保留](delegation.md#notices)）。
 - 队列中的每个请求，在 ✕ 旁都有一个{{ui:queue.runNow}}按钮。在能创建新 worktree 的地方（条件与上面的 {{kbd:⌘Enter}} 相同），它会立即在新的子窗格中运行该请求，正在运行的任务照常继续。右键点按（Mac 上也可按住 Control 点按）可以选择其他代理。按钮的提示会说明将会发生哪一种。只有附件、没有文字的请求不会进入 worktree。
 - 无法创建 worktree 时，请求在本窗格中处理。窗格处于空闲状态（例如因出错而停止）时，会立即开始该请求。Claude 的回答已结束、只剩后台任务的窗格，会把它直接送进正在运行的 Claude，并在 Mighty 视图中显示为{{ui:graph.block.steer}}块（带附件的请求要等到任务结束）。其他情况下按钮显示为灰色，提示会说明原因：当前任务必须先结束、为该窗格保留的项目要先送出，或 CLI 正在更新。此时请求依次等待。Antigravity 卡片的后续请求只会在它自己的窗格中运行。
@@ -41,14 +41,14 @@ section: agent-pane
 | 智能体 | 可选权限 |
 |---|---|
 | Claude | Plan mode · Always ask · Accept file edits · Auto mode · Bypass |
-| Codex | {{ui:permission.label.defaultCodex}} · {{ui:permission.label.acceptEditsCodex}} · {{ui:permission.label.onRequest}} · {{ui:permission.label.fullAccess}} |
+| Codex | {{ui:permission.label.defaultCodex}} · {{ui:permission.label.onRequest}} · {{ui:permission.label.acceptEditsCodex}} · {{ui:permission.label.fullAccess}} |
 | Antigravity | {{ui:permission.label.default}} · {{ui:permission.label.plan}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 | pi | {{ui:permission.label.defaultCodex}} · {{ui:permission.label.fullAccess}} |
 | opencode | {{ui:permission.label.default}} · {{ui:permission.label.plan}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 | Hermes | {{ui:permission.label.default}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 
 - Claude 的 Always ask、Codex 的{{ui:permission.label.onRequest}}除{{ui:permission.label.fullAccess}}外的所有 opencode 权限，以及 Hermes 的文件修改和危险命令在需要额外权限时，会在窗格中请求批准。请参阅[批准与提问](approvals.md#permission)。
-- 只有已安装的 Claude CLI 支持时，才会显示 Auto mode。
+- 只有已安装的 Claude CLI 支持时，才会显示 Auto mode。Codex 的{{ui:permission.label.onRequest}}在不支持它的旧版 Codex 中不显示。
 - Bypass 和{{ui:permission.label.fullAccess}}权限也能访问项目以外的文件和命令。请仅在确有必要时使用。
 
 ### Antigravity {#antigravity}
@@ -105,7 +105,7 @@ Hermes（`hermes`）是 Nous Research 的开源智能体 CLI（Hermes Agent）�
 
 ### 附加文件和图片 {#attachments}
 点击回形针按钮、将文件拖到输入框中，或用{{kbd:⌘V}}粘贴图片。
-- 最多 8 个文件，每个文件 5 MiB，总计 8 MiB。
+- 最多 8 个文件，每个文件 5 MiB，总计 8 MiB。图片（PNG、JPEG、GIF、WebP）、PDF 和文本文件按原格式传递，其他文件作为二进制文件传递。
 - 发送前可以预览，并逐个移除。也可以只发送附件。
 - 终端窗格不能添加附件。
 
@@ -130,7 +130,7 @@ Hermes（`hermes`）是 Nous Research 的开源智能体 CLI（Hermes Agent）�
 | `/rename` | {{ui:slash.builtin.rename}} |
 | `/help` | {{ui:slash.builtin.help}} |
 
-Codex 和 Antigravity 的命令名称略有不同（例如 Codex 的 `/new`、`/approvals`、`/status`，Antigravity 的 `/usage`、`/config`）。列表中没有的 `/名称` 会作为 CLI 的技能、用户命令或插件命令原样传递。Antigravity 的技能也是这样运行的，列表中会显示 agy 自带的技能、`~/.gemini/antigravity-cli/skills` 中你的技能以及文件夹的 `.agents/skills`；但 `/help`、`/skills` 等 Antigravity 自身的只读命令只有在终端中以 `agy -p "/help"` 单独运行时才会回答，因此在应用中会以 agy 的错误结束。
+Codex 和 Antigravity 的命令名称略有不同（例如 Codex 的 `/new`、`/approvals`、`/status`，Antigravity 的 `/usage`、`/config`）。列表中没有的 `/名称` 会作为 CLI 的技能、用户命令或插件命令原样传递。Antigravity 的技能也是这样运行的，列表中会显示 agy 自带的技能、`~/.gemini/antigravity-cli/skills` 中你的技能以及文件夹的 `.agents/skills`；pi 使用 `/new`、`/session`、`/settings`，opencode 和 Hermes 使用 `/new`、`/usage`、`/settings`。在任何智能体窗格中，`/help` 都由应用直接显示此窗格可用的命令。`/skills` 等 Antigravity 自身的只读命令只有在终端中以 `agy -p "/skills"` 单独运行时才会回答，因此在应用中会以 agy 的错误结束。
 
 ### 上下文与用量 {#session-info}
 发送按钮旁的圆环显示对话已使用了多少上下文。点击它可以查看{{ui:composer.sessionInfo.contextUsage}}、输入/输出/缓存 token、费用、所用模型和会话 ID。只显示 CLI 报告的值，不会估算未知的值。
@@ -151,9 +151,9 @@ Claude 列出待办清单后，请求下方会按顺序为每个已开始的步�
 
 在 Claude 窗格的流程下方、输入框上方，有一条{{ui:graph.log.title}}。它的标题行是当前状态：主会话的模型和状态、它的子智能体中有多少个在运行，以及有多少个后台命令在运行，各用其角色的颜色显示。展开后，它会列出最新请求中最近发生的五件事：时间、是谁（主会话的模型或子智能体的名称）、做了什么（工具调用、子智能体的开始和结束、提问、{{ui:graph.block.compact}}、通知到达）。点击某一行，流程会移到对应的块。用右端的按钮可以把它折叠成只剩状态行，每个窗格会记住是否折叠。
 
-在后台启动的子智能体和后台命令（任务）在运行期间不会画成请求的块，而是在输入框上方的后台任务条里。在 Mac 的 Claude 窗格中，子智能体还会显示为上面的卡片。每一行显示类型、名称、用时和输出的最后一行；展开一行会显示它运行的命令（子智能体显示提示的第一行）和输出的最后几行（最多 6 行）。任务结束、通知送达 Claude 后，Claude 的每一次回答都会生成一个新的{{ui:graph.background.noticeRun}}图表，每个已结束的任务一个块：类型行（子智能体还是后台命令，以及结束状态）、命令、输出的最后几行，以及子智能体的报告。在{{ui:graph.view.timeline}}中，这个图表是新增的一行；在{{ui:graph.view.structure}}中，它是末尾新增的一张卡片（看板）。手机上的 Mighty 视图和流水线也一样。
+在后台启动的子智能体和后台命令（任务）在运行期间不会画成请求的块，而是在输入框上方的后台任务条里。在 Claude 窗格的流程中，它们还会显示为上面的卡片。每一行显示类型、名称、用时和输出的最后一行；展开一行会显示它运行的命令（子智能体显示提示的第一行）和输出的最后几行（最多 6 行）。任务结束、通知送达 Claude 后，Claude 的每一次回答都会生成一个新的{{ui:graph.background.noticeRun}}图表，每个已结束的任务一个块：类型行（子智能体还是后台命令，以及结束状态）、命令、输出的最后几行，以及子智能体的报告。在{{ui:graph.view.timeline}}中，这个图表是新增的一行；在{{ui:graph.view.structure}}中，它是末尾新增的一张卡片（看板）。手机上的 Mighty 视图和流水线也一样。
 
-每个智能体窗格的流程左上角都有{{ui:graph.progress.title}}面板。它显示画面中请求的编号、状态和内容；智能体告知计划时，还会显示每个步骤是已完成、进行中（时间在走）还是未开始。步骤来自 Claude 的待办清单、Codex 的计划以及 opencode 和 Hermes 的计划；Antigravity 和 pi 不发送计划，所以只显示请求和状态。如果请求启动了后台任务（命令、后台子智能体），底部的{{ui:graph.progress.background}}组会显示正在运行的数量和总数，并为每项显示一行（状态和耗时）：正在运行的排在前面，最多四行，其余以数量显示。新请求开始时显示该请求；你自己滚动后，改为显示画面中的请求。点击请求行会移到该请求，点击步骤行会移到该步骤的卡片（只有 Claude 窗格的流程有步骤卡片）。用标题栏的按钮折叠后，只留下标题和请求行。
+每个智能体窗格的流程左上角都有{{ui:graph.progress.title}}面板。它显示画面中请求的编号、状态和内容；智能体告知计划时，还会显示每个步骤是已完成、进行中（时间在走）还是未开始。步骤来自 Claude 的待办清单、Codex 的计划以及 opencode 和 Hermes 的计划；Antigravity 和 pi 不发送计划，所以只显示请求和状态。如果请求启动了后台任务（命令、后台子智能体），底部的{{ui:graph.progress.background}}组会显示正在运行的数量和总数，并为每项显示一行（状态和耗时）：正在运行的排在前面，最多 100 行，可在面板内滚动查看，超出部分以数量显示。新请求开始时显示该请求；你自己滚动后，改为显示画面中的请求。点击请求行会移到该请求，点击步骤行会移到该步骤的卡片（只有 Claude 窗格的流程有步骤卡片）。用标题栏的按钮折叠后，只留下标题和请求行。
 
 - 拖动空白处或滚动即可移动流程。用缩放按钮可以在 50% 到 150% 之间调整。
 - 点击某个块后，只在该块内部滚动。点击空白处或按{{kbd:Esc}}即可取消选择。
@@ -188,3 +188,11 @@ Claude 列出待办清单后，请求下方会按顺序为每个已开始的步�
 请求结束后，结果卡片会整理出结果。Claude 的回答结束后请求即变为完成。如果它启动的后台任务（包括给已结束的子智能体发消息而重新唤醒的）仍在运行，或已结束但 Claude 还没有回答它的通知，结果卡片会变成等待色的{{ui:graph.block.awaitingNotice}}块：在目前的回答下面，每个任务显示{{ui:plan.background.awaitingNotice}}或{{ui:plan.background.noticeDelivered}}，并显示“通知 1/2”这样的已收到通知数。在此期间，宠物和窗格标题显示{{ui:graph.state.awaitingNotice}}。所有通知都得到回答后，它会变为{{ui:graph.block.result}}。Claude 收到后台任务的通知后再次回答时，这段回答不会接在请求的结果后面，每一次回答都会打开一个新的图表（[后台任务](approvals.md#background)）。如果同一请求的其他后台任务仍在运行，这段回答的卡片标题会显示“目前的结果 · 正在等待 N 个后台任务”，告诉你还剩几个。如果结果中提到了文件，可以用{{ui:graph.resultFiles.openButton}}按钮打开文件列表。点击块中的文件路径会弹出预览。最新的结果卡片会适应窗格大小；如果你手动调整过大小，会出现{{ui:graph.result.fitToWindow}}按钮。 如果是请求更改过的源代码或 Markdown 文件，预览标题处会出现 {{ui:files.changes.show}} | {{ui:files.changes.full}} 切换，并先显示{{ui:files.changes.show}}：只显示更改的行及其前后 3 行，旁边标有旧行号和新行号，添加的行为绿色背景，删除的行为红色背景。上方一行说明比较的对象：从结果文件列表或区块中打开时，是该请求第一次更改文件之前的内容（{{ui:files.changes.baseRun}}），没有该原始内容时则是最后一次提交。没有更改时不显示切换，只显示整个文件。
 
 ![[result-card]]
+
+### 审阅请求更改 {#request-changes}
+Claude 窗格中的请求用 Edit、Write 或 MultiEdit 修改文件时，会保存每个文件修改前的内容。这样的请求结束后，结果卡片的标题栏会出现 {{ui:runChanges.openButton}} 按钮，点击即可打开 {{ui:runChanges.title}}：左侧是该请求修改的文件及增删行数，右侧是所选文件与请求前内容相比的更改。
+
+- 点击更改中的某一行即可在该行留下意见。点击“将 N 条意见放入输入框”后，这些意见会带上文件和行位置，作为一条后续请求追加到输入框已有内容之后，不会立即发送。
+- 勾选文件，点击“撤销所选 N 个”并确认后，这些文件会恢复为请求前的内容。请求新建的文件会移到废纸篓（Windows 上为回收站）。文件保留当前的编码和权限；请求之后你手动做的修改也会一并丢失。
+- 如果之后的请求也改了同一文件，需要先撤销那个请求。已不存在、无法作为文本读取（超过 1 MiB 或二进制）或已与请求前相同的文件不会被撤销。
+- 每个窗格保存最近 20 个请求的原始内容。Shell 命令修改的文件、其他代理的窗格以及远程工作区的窗格没有此按钮。

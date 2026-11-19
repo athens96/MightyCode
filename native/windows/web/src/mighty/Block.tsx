@@ -35,6 +35,8 @@ export interface BlockActions {
   measured(id: string, height: number): void;
   /** A block the user opened from its card folds back to it (the role view's 카드로 접기). */
   foldToCard(id: string): void;
+  /** 요청 변경 검토 of the result's request (RunChanges.tsx). */
+  openChanges(runId: string): void;
 }
 
 /** What only some kinds draw; each part keeps its object while it does not change. */
@@ -54,6 +56,8 @@ export interface BlockExtra {
   measure?: boolean;
   /** A sent request's block before the host's run replaces it: its 전송 중, or its failure (natural submit B1). */
   pending?: PendingState;
+  /** A settled result whose request changed files the review can show (`runChangesRuns`). */
+  changes?: boolean;
 }
 
 export interface BlockProps {
@@ -453,6 +457,10 @@ export const Block = memo(function Block(props: BlockProps) {
           {kind === 'result' && copy?.filesRunId && (extra.files?.length ?? 0) > 0 && (
             <button className={'mighty-icon' + (extra.filesOpen ? ' on' : '')} title={t(extra.filesOpen ? 'graph.resultFiles.closeButton' : 'graph.resultFiles.openButton')}
               onClick={() => actions.toggleFiles(copy.filesRunId!)}><Icon name="files" size={13} weight={1.75} /><span>{extra.files?.length}</span></button>
+          )}
+          {kind === 'result' && extra.changes && runOf(id) && (
+            <button className="mighty-icon" data-testid={'mighty-run-changes-' + id} title={t('runChanges.openButton')} aria-label={t('runChanges.openButton')}
+              onClick={() => actions.openChanges(runOf(id)!)}><Icon name="file-search" size={13} weight={1.75} /></button>
           )}
           {kind === 'result' && !extra.fitted && extra.measure && (
             <button className="mighty-icon" data-fit="" title={t('graph.result.fitToWindow')} onClick={() => actions.fitResult(id)}>⤢</button>

@@ -21,6 +21,7 @@ use mighty_platform::{BoxFuture, FirewallChange, FirewallRule};
 use mighty_remote::direct::listener::{DirectPath, DirectPathOptions, DirectReservation, DirectSettings, DirectSink, DirectSocket};
 use mighty_remote::direct::status::{DirectState, MobileDirectStatus};
 use mighty_remote::direct::{strings, wire};
+use mighty_remote::remote::strings as remote_strings;
 use serde_json::{Map, Value, json};
 
 use crate::host::Host;
@@ -71,17 +72,19 @@ fn require(holds: bool, why: impl Into<String>) -> Result<(), String> {
     if holds { Ok(()) } else { Err(why.into()) }
 }
 
-/// 모바일 원격 as Settings shows it, on a surface of the smoke's own.
+/// 원격 연결's 휴대폰 tab as Settings shows it, on a surface of the smoke's own: the phone's box and the firewall rule under it.
 struct MobileBox(Arc<Host>);
 
 impl SurfaceModel for MobileBox {
     fn view(&mut self, ui: &mut Ui) -> View {
-        let body = crate::settings::mobile::mobile_remote(&self.0, ui);
+        let mut parts = vec![crate::settings::mobile::mobile_remote(&self.0, ui)];
+        parts.extend(crate::settings::remote::firewall(&self.0, ui));
+        let body = mighty_native::ui::El::stack(false, 0.0, parts);
         View::Settings {
             title: String::new(),
             close: String::new(),
             nav: vec![],
-            selected: "mobile".into(),
+            selected: "remote".into(),
             sections: vec![Section { title: None, beta: false, node: Some(ui.section_body(body)) }],
             width: 1.0,
             height: 1.0,
@@ -201,15 +204,13 @@ async fn rows_and_rule(
         return no_firewall(host, recorder, &shown, checks).await;
     }
     require(
-        words(&shown, "settings-mobile-firewall-state").as_deref()
+        words(&shown, "settings-remote-firewall-state").as_deref()
             == Some(strings::firewall_state(&locale, &FirewallRule::Missing).as_str()),
-        format!("the rule must read as absent: {:?}", words(&shown, "settings-mobile-firewall-state")),
+        format!("the rule must read as absent: {:?}", words(&shown, "settings-remote-firewall-state")),
     )?;
-    let button = control(&shown, "settings-mobile-firewall-button").ok_or("the box has no settings-mobile-firewall-button")?;
+    let button = control(&shown, "settings-remote-firewall-add").ok_or("the box has no settings-remote-firewall-add")?;
     require(
-        label(&shown, "settings-mobile-firewall-button").as_deref()
-            == Some(strings::firewall_button(&locale, &FirewallRule::Missing).as_str())
-            && disabled(&button),
+        label(&shown, "settings-remote-firewall-add").as_deref() == Some(remote_strings::firewall_add().as_str()) && disabled(&button),
         "the rule's button must offer to add it and be off in a smoke run",
     )?;
     let launched = recorder.launched();
@@ -267,7 +268,7 @@ async fn rows_and_rule(
     let shown = read(host);
     require(
         rule() == FirewallRule::Unreadable
-            && label(&shown, "settings-mobile-firewall-button").as_deref() == Some(strings::firewall_recheck_button(&locale).as_str()),
+            && label(&shown, "settings-remote-firewall-add").as_deref() == Some(strings::firewall_recheck_button(&locale).as_str()),
         "an unreadable rule offers to check again",
     )?;
     recorder.query_answers(None);
@@ -287,7 +288,7 @@ async fn no_firewall(
     checks: &mut Map<String, Value>,
 ) -> Result<(), String> {
     require(
-        node(shown, "settings-mobile-firewall-state").is_none() && node(shown, "settings-mobile-firewall-button").is_none(),
+        node(shown, "settings-remote-firewall-state").is_none() && node(shown, "settings-remote-firewall-add").is_none(),
         "a platform with no firewall step shows no firewall row",
     )?;
     checks.insert("firewallRow".into(), json!(true));
@@ -395,9 +396,9 @@ mod tests {
     use super::*;
 
     /// "mobile direct: the settings rows and the smoke are wired" (L499; D17): C# read the WinUI sources; the Rust form reads the
-    /// equivalent Rust files — the rows draw every automation id, the box calls them, only Core's words reach the firewall row, a smoke
-    /// never reads or changes this PC's rule, the button is busy while a change waits, the smoke step drives the rows under
-    /// `mobileDirect` and the result carries its keys.
+    /// equivalent Rust files — the rows draw every automation id, the box calls them, only Core's words reach the firewall row (one row
+    /// for sharing and the phone since the Settings tidy-up, remote.rs), a smoke never reads or changes this PC's rule, the button is
+    /// busy while a change waits, the smoke step drives the rows under `mobileDirect` and the result carries its keys.
     #[test]
     fn mobile_direct_the_settings_rows_and_the_smoke_are_wired() {
         let rows = include_str!("settings/mobile_direct.rs");
@@ -406,18 +407,18 @@ mod tests {
             "settings-mobile-direct-port",
             "settings-mobile-direct-apply",
             "settings-mobile-direct-status",
-            "settings-mobile-firewall-state",
-            "settings-mobile-firewall-button",
-            "settings-mobile-firewall-update",
         ] {
-            assert!(rows.contains(&format!("\"{id}\"")), "the mobile remote section draws {id}");
+            assert!(rows.contains(&format!("\"{id}\"")), "the phone tab draws {id}");
         }
-        assert!(include_str!("settings/mobile.rs").contains("mobile_direct::rows(host, ui, &saved)"), "the box draws the direct rows");
-        assert!(
-            rows.contains("strings::description(") && rows.contains("strings::status_detail(") && rows.contains("strings::firewall_state("),
-            "the rows say what Core words"
-        );
-        assert!(rows.contains("strings::firewall_recheck_button("), "an unknown rule can be checked again");
+        let firewall = include_str!("settings/remote.rs");
+        for id in ["settings-remote-firewall-state", "settings-remote-firewall-add", "settings-remote-firewall-remove"] {
+            assert!(firewall.contains(&format!("\"{id}\"")), "the firewall row draws {id}");
+        }
+        assert!(include_str!("settings/mobile.rs").contains("mobile_direct::rows(host, ui, saved)"), "the box draws the direct rows");
+        assert!(firewall.contains("rows.add(super::mobile::mobile_remote(host, ui));"), "the phone tab draws the phone's box");
+        assert!(rows.contains("strings::description(") && rows.contains("strings::status_detail("), "the rows say what Core words");
+        assert!(firewall.contains("direct_strings::firewall_state("), "the firewall row says Core's words");
+        assert!(firewall.contains("direct_strings::firewall_recheck_button("), "an unknown rule can be checked again");
         let direct = include_str!("direct.rs");
         assert!(direct.contains("direct().message = strings::firewall_outcome(&host.locale, &result);"), "only Core's outcome words");
         assert!(direct.contains("return state.smoke_firewall.clone();"), "a smoke run never reads or changes this PC's firewall");
@@ -426,7 +427,7 @@ mod tests {
             direct.contains("state.busy = true;") && direct.contains("direct().busy = false;") && direct.contains("impl Drop for Busy"),
             "the button is busy while a change waits"
         );
-        assert!(rows.contains("!firewall.busy"), "the rows read the busy mark");
+        assert!(firewall.contains("!firewall.busy"), "the row reads the busy mark");
         assert!(direct.contains("switched_off(&host).await;"), "turning the path off takes the rule away from that same click");
         assert!(direct.contains("host.may_listen().then("), "the path exists only when the app may listen");
         let smoke = include_str!("smoke.rs");
@@ -441,7 +442,7 @@ mod tests {
         let names: Vec<&str> = checks(&json!({})).into_iter().map(|(name, _)| name).collect();
         assert!(names.iter().all(|name| name.starts_with("mobileDirect")) && names.len() == KEYS.len() + 1, "one check per key and passed");
         let verb = ["run", "as"].concat();
-        assert!(!rows.contains(&verb) && !direct.contains(&verb), "no window file names the elevation verb");
+        assert!(!rows.contains(&verb) && !firewall.contains(&verb) && !direct.contains(&verb), "no window file names the elevation verb");
     }
 
     #[test]

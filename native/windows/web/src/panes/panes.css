@@ -73,6 +73,11 @@
 .files-diff-row.hunk { margin-top: var(--space-xs); background: var(--card-raised); color: var(--ink2); }
 .files-diff-row.hunk:first-child { margin-top: 0; }
 .files-diff-row.noNewline .files-diff-text { color: var(--ink2); font-style: italic; }
+/* 요청 변경 검토 (RunChanges.tsx): a line takes a note on click; a noted line keeps an accent bar, the one being noted an accent wash. */
+.files-diff-row.notable { cursor: pointer; }
+.files-diff-row.notable:hover { box-shadow: inset 2px 0 0 var(--line); }
+.files-diff-row.noted { box-shadow: inset 3px 0 0 var(--accent); }
+.files-diff-row.picked { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
 .syntax-keyword { color: var(--syntax-keyword); }
 .syntax-string { color: var(--syntax-string); }
 .syntax-number { color: var(--syntax-number); }

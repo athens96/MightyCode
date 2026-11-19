@@ -19,7 +19,7 @@ section: agent-pane
 ### 실행 중에 이어서 요청하기 {#queue}
 작업이 도는 동안에도 다음 요청을 쓸 수 있습니다. 입력창에 글이 있으면 중지 단추 옆에 보내기 단추와 같은 둥근 단추가 생깁니다.
 - {{kbd:Enter}} 또는 {{ui:queue.add}} 단추: 다음 요청으로 대기열에 넣습니다. 지금 작업이 끝나면 순서대로 실행합니다. 한 창에 16개까지 넣을 수 있습니다.
-- {{kbd:⌘Enter}} 또는 {{ui:queue.worktree}} 단추: 마이티 오케스트레이션이 켜진 Claude 창이나 자식이 파일을 바꿀 수 있는 모드의 Codex·Antigravity 창이 커밋이 있는 브랜치의 git 저장소에 있으면, 이 창 옆에 자기 git worktree를 가진 새 자식 창을 열어 바로 실행합니다. 돌고 있는 작업은 그대로 이어지고, 자식이 끝나면 사이드바의 카드에서 결과를 병합합니다([새 worktree에서 실행하기](delegation.md#worktree)).
+- {{kbd:⌘Enter}}(Windows는 {{kbd:Ctrl+Enter}}) 또는 {{ui:queue.worktree}} 단추: 마이티 오케스트레이션이 켜진 Claude 창이나 자식이 파일을 바꿀 수 있는 모드의 Codex·Antigravity 창이 커밋이 있는 브랜치의 git 저장소에 있으면, 이 창 옆에 자기 git worktree를 가진 새 자식 창을 열어 바로 실행합니다. 돌고 있는 작업은 그대로 이어지고, 자식이 끝나면 사이드바의 카드에서 결과를 병합합니다([새 worktree에서 실행하기](delegation.md#worktree)).
 - 자식 창, 그런 저장소 밖의 창, 마이티 오케스트레이션을 끈 창에서는 {{kbd:⌘Enter}}도 {{kbd:Enter}}처럼 대기열에 넣습니다. 자식을 만들거나 시작하지 못했을 때도 글은 대기열로 갑니다([새 worktree에서 실행하기](delegation.md#worktree)). 보낸 글이 실행 중인 작업에 끼어드는 일은 이제 없습니다. 예전 기록의 마이티 보기에는 그렇게 보낸 글이 주황색 {{ui:graph.block.steer}} 블록으로 남아 있습니다. 실행 중인 Claude 부모에게 바로 전달된 위임 알림은 같은 색의 {{ui:graph.block.delegationNotice}} 블록으로 보입니다([알림과 보류](delegation.md#notices)).
 - 대기열의 각 요청에는 ✕ 옆에 {{ui:queue.runNow}} 단추가 있습니다. 새 worktree를 만들 수 있는 곳(위 {{kbd:⌘Enter}}와 같은 조건)이면 그 요청을 새 자식 창에서 지금 실행하고, 돌고 있는 작업은 그대로 이어집니다. 오른쪽 클릭(Mac은 Control-클릭도 됩니다)하면 다른 에이전트를 고를 수 있습니다. 단추의 도움말이 어느 쪽으로 실행될지 알려 줍니다. 글 없이 첨부 파일만 있는 요청은 worktree로 가지 않습니다.
 - worktree를 만들 수 없는 곳에서는 이 창에서 처리합니다. 오류로 멈춘 창처럼 쉬고 있으면 그 요청을 지금 시작하고, Claude의 답은 끝났고 백그라운드 작업만 남은 창이면 그 요청이 실행 중인 Claude에 들어가 마이티 보기에 {{ui:graph.block.steer}} 블록으로 보입니다. 첨부가 있는 요청은 작업이 끝날 때까지 기다립니다. 그 밖에는 단추가 흐리게 표시되고 도움말이 까닭을 알려 줍니다. 지금 작업이 먼저 끝나야 하거나, 이 창에 보류된 항목이 먼저 가야 하거나, CLI 업데이트 중인 경우입니다. 그 요청은 차례를 기다립니다. Antigravity 카드의 후속 요청은 늘 자기 창에서만 실행합니다.
@@ -41,14 +41,14 @@ section: agent-pane
 | 에이전트 | 고를 수 있는 권한 |
 |---|---|
 | Claude | Plan mode · Always ask · Accept file edits · Auto mode · Bypass |
-| Codex | {{ui:permission.label.defaultCodex}} · {{ui:permission.label.acceptEditsCodex}} · {{ui:permission.label.onRequest}} · {{ui:permission.label.fullAccess}} |
+| Codex | {{ui:permission.label.defaultCodex}} · {{ui:permission.label.onRequest}} · {{ui:permission.label.acceptEditsCodex}} · {{ui:permission.label.fullAccess}} |
 | Antigravity | {{ui:permission.label.default}} · {{ui:permission.label.plan}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 | pi | {{ui:permission.label.defaultCodex}} · {{ui:permission.label.fullAccess}} |
 | opencode | {{ui:permission.label.default}} · {{ui:permission.label.plan}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 | Hermes | {{ui:permission.label.default}} · {{ui:permission.label.acceptEdits}} · {{ui:permission.label.fullAccess}} |
 
 - Claude의 Always ask, Codex의 {{ui:permission.label.onRequest}}, {{ui:permission.label.fullAccess}}을 뺀 opencode의 모든 권한, Hermes의 파일 수정과 위험한 명령은 추가 권한이 필요할 때 창 안에서 승인을 묻습니다. [승인과 질문](approvals.md#permission)을 보세요.
-- Auto mode는 설치된 Claude CLI가 지원할 때만 보입니다.
+- Auto mode는 설치된 Claude CLI가 지원할 때만 보입니다. Codex의 {{ui:permission.label.onRequest}}은 이를 지원하지 않는 예전 Codex에서는 보이지 않습니다.
 - Bypass와 {{ui:permission.label.fullAccess}} 권한은 프로젝트 밖의 파일과 명령에도 접근합니다. 꼭 필요할 때만 쓰세요.
 
 ### Antigravity {#antigravity}
@@ -105,7 +105,7 @@ Hermes(`hermes`)는 Nous Research의 오픈소스 에이전트 CLI(Hermes Agent)
 
 ### 파일과 이미지 첨부 {#attachments}
 클립 단추를 누르거나, 파일을 입력창에 끌어 놓거나, {{kbd:⌘V}}로 이미지를 붙여 넣습니다.
-- 최대 8개, 파일당 5 MiB, 합계 8 MiB까지 첨부합니다.
+- 최대 8개, 파일당 5 MiB, 합계 8 MiB까지 첨부합니다. 이미지(PNG·JPEG·GIF·WebP), PDF, 텍스트 파일은 그 형식으로, 그 밖의 파일은 바이너리 파일로 전달됩니다.
 - 보내기 전에 미리 보고 하나씩 뺄 수 있습니다. 첨부만 보내도 됩니다.
 - 터미널 창에는 첨부할 수 없습니다.
 
@@ -130,7 +130,7 @@ oh-my-claudecode가 설치된 Claude 창에는 입력창에 {{ui:composer.ask.me
 | `/rename` | {{ui:slash.builtin.rename}} |
 | `/help` | {{ui:slash.builtin.help}} |
 
-Codex와 Antigravity는 이름이 조금 다릅니다(예: Codex `/new`, `/approvals`, `/status`, Antigravity `/usage`, `/config`). 목록에 없는 `/이름`은 CLI의 스킬·사용자 명령·플러그인 명령으로 그대로 전달됩니다. Antigravity의 스킬도 이렇게 실행되며, 목록에는 agy에 들어 있는 스킬, `~/.gemini/antigravity-cli/skills`의 내 스킬, 폴더의 `.agents/skills`가 나옵니다. 다만 `/help`, `/skills` 같은 Antigravity 자체의 조회 명령은 터미널에서 `agy -p "/help"`처럼 따로 실행할 때만 답하므로, 앱에서는 agy의 오류로 끝납니다.
+Codex와 Antigravity는 이름이 조금 다릅니다(예: Codex `/new`, `/approvals`, `/status`, Antigravity `/usage`, `/config`). 목록에 없는 `/이름`은 CLI의 스킬·사용자 명령·플러그인 명령으로 그대로 전달됩니다. Antigravity의 스킬도 이렇게 실행되며, 목록에는 agy에 들어 있는 스킬, `~/.gemini/antigravity-cli/skills`의 내 스킬, 폴더의 `.agents/skills`가 나옵니다. pi는 `/new`, `/session`, `/settings`, opencode와 Hermes는 `/new`, `/usage`, `/settings`를 씁니다. `/help`는 어느 에이전트에서나 앱이 이 창에서 쓸 수 있는 명령을 직접 보여 줍니다. `/skills` 같은 Antigravity 자체의 조회 명령은 터미널에서 `agy -p "/skills"`처럼 따로 실행할 때만 답하므로, 앱에서는 agy의 오류로 끝납니다.
 
 ### 컨텍스트와 사용량 {#session-info}
 보내기 단추 옆의 동그란 고리는 대화가 컨텍스트를 얼마나 썼는지 보여 줍니다. 누르면 {{ui:composer.sessionInfo.contextUsage}}, 입력·출력·캐시 토큰, 비용, 쓴 모델, 세션 ID를 봅니다. CLI가 알려 준 값만 보여 주고, 모르는 값은 추정하지 않습니다.
@@ -151,9 +151,9 @@ Claude가 할 일 목록을 만들면 요청 아래에 시작한 단계가 하�
 
 Claude 창의 흐름 아래, 입력창 위에는 {{ui:graph.log.title}} 띠가 있습니다. 머리 한 줄은 지금의 상태입니다. 메인 세션의 모델과 상태, 하위 에이전트 가운데 몇 개가 실행 중인지, 백그라운드 명령이 몇 개 도는지가 역할 색으로 나옵니다. 띠를 펼치면 가장 새 요청에서 최근에 있었던 일 다섯 줄이 시각, 누가(메인 세션의 모델이나 하위 에이전트의 이름), 무엇을(도구 호출, 하위 에이전트의 시작과 끝, 질문, {{ui:graph.block.compact}}, 알림 도착) 순서로 나옵니다. 줄을 누르면 흐름이 그 블록으로 이동합니다. 오른쪽 끝의 단추로 접으면 상태 줄만 남고, 접었는지는 창마다 기억합니다.
 
-백그라운드로 시작한 하위 에이전트와 백그라운드 명령(작업)은 도는 동안 요청의 블록으로 그려지지 않고 입력창 위의 백그라운드 작업 줄에 있습니다. Mac의 Claude 창은 하위 에이전트를 위의 카드로도 보여 줍니다. 행에는 종류, 이름, 걸린 시간과 마지막 출력 한 줄이 나오고, 행을 펼치면 실행한 명령(하위 에이전트는 프롬프트 첫 줄)과 출력의 마지막 줄들(최대 6줄)이 나옵니다. 작업이 끝나 알림이 가면 Claude의 답마다 새 {{ui:graph.background.noticeRun}} 다이어그램이 생기고, 끝난 작업마다 블록 하나가 종류 줄(하위 에이전트인지 백그라운드 실행인지와 끝난 상태), 명령, 출력의 마지막 줄들, 하위 에이전트의 보고를 담습니다. {{ui:graph.view.timeline}}에서는 이 다이어그램이 새 행으로, {{ui:graph.view.structure}}에서는 맨 끝의 새 카드(보드)로 붙습니다. 휴대폰의 마이티 보기와 파이프라인도 같습니다.
+백그라운드로 시작한 하위 에이전트와 백그라운드 명령(작업)은 도는 동안 요청의 블록으로 그려지지 않고 입력창 위의 백그라운드 작업 줄에 있습니다. Claude 창의 흐름에는 이것들이 위의 카드로도 섭니다. 행에는 종류, 이름, 걸린 시간과 마지막 출력 한 줄이 나오고, 행을 펼치면 실행한 명령(하위 에이전트는 프롬프트 첫 줄)과 출력의 마지막 줄들(최대 6줄)이 나옵니다. 작업이 끝나 알림이 가면 Claude의 답마다 새 {{ui:graph.background.noticeRun}} 다이어그램이 생기고, 끝난 작업마다 블록 하나가 종류 줄(하위 에이전트인지 백그라운드 실행인지와 끝난 상태), 명령, 출력의 마지막 줄들, 하위 에이전트의 보고를 담습니다. {{ui:graph.view.timeline}}에서는 이 다이어그램이 새 행으로, {{ui:graph.view.structure}}에서는 맨 끝의 새 카드(보드)로 붙습니다. 휴대폰의 마이티 보기와 파이프라인도 같습니다.
 
-모든 에이전트 창의 흐름 왼쪽 위에는 {{ui:graph.progress.title}} 패널이 떠 있습니다. 화면에 보이는 요청의 번호와 상태, 요청 내용이 나오고, 에이전트가 계획을 알려 주면 단계마다 끝남, 진행 중(흐르는 시간), 남음이 나옵니다. 단계는 Claude의 할 일 목록, Codex의 계획, opencode·Hermes의 계획에서 옵니다. 계획을 보내지 않는 Antigravity와 pi는 요청과 상태만 보입니다. 요청이 백그라운드 작업(명령, 백그라운드 하위 에이전트)을 띄웠으면 맨 아래 {{ui:graph.progress.background}} 묶음에 실행 중인 수와 전체 수, 작업마다 한 줄(상태와 걸린 시간)이 나옵니다. 실행 중인 작업부터 네 줄까지 보이고 나머지는 개수로 줄입니다. 새 요청이 시작되면 그 요청을 보여 주고, 직접 스크롤하면 화면에 보이는 요청으로 바뀝니다. 요청 줄을 누르면 그 요청으로, 단계 줄을 누르면 그 단계 카드로 이동합니다(단계 카드는 Claude 창의 흐름에만 있습니다). 머리의 단추로 접으면 머리와 요청 줄만 남습니다.
+모든 에이전트 창의 흐름 왼쪽 위에는 {{ui:graph.progress.title}} 패널이 떠 있습니다. 화면에 보이는 요청의 번호와 상태, 요청 내용이 나오고, 에이전트가 계획을 알려 주면 단계마다 끝남, 진행 중(흐르는 시간), 남음이 나옵니다. 단계는 Claude의 할 일 목록, Codex의 계획, opencode·Hermes의 계획에서 옵니다. 계획을 보내지 않는 Antigravity와 pi는 요청과 상태만 보입니다. 요청이 백그라운드 작업(명령, 백그라운드 하위 에이전트)을 띄웠으면 맨 아래 {{ui:graph.progress.background}} 묶음에 실행 중인 수와 전체 수, 작업마다 한 줄(상태와 걸린 시간)이 나옵니다. 실행 중인 작업부터 100줄까지 들어가고 패널 안에서 스크롤해 봅니다. 그보다 많으면 나머지는 개수로 줄입니다. 새 요청이 시작되면 그 요청을 보여 주고, 직접 스크롤하면 화면에 보이는 요청으로 바뀝니다. 요청 줄을 누르면 그 요청으로, 단계 줄을 누르면 그 단계 카드로 이동합니다(단계 카드는 Claude 창의 흐름에만 있습니다). 머리의 단추로 접으면 머리와 요청 줄만 남습니다.
 
 - 빈 곳을 끌거나 스크롤해서 흐름을 움직입니다. 확대·축소 단추로 50~150%로 볼 수 있습니다.
 - 블록을 누르면 그 블록 안만 스크롤합니다. 빈 곳을 누르거나 {{kbd:Esc}}를 누르면 선택이 풀립니다.
@@ -188,3 +188,11 @@ Claude 창의 흐름 아래, 입력창 위에는 {{ui:graph.log.title}} 띠가 �
 요청이 끝나면 결과 카드에 결과가 정리됩니다. 요청은 Claude의 답이 끝나면 완료로 바뀝니다. 그 요청이 띄운 백그라운드 작업(이미 끝난 하위 에이전트에 메시지를 보내 다시 깨운 것도 포함)이 아직 돌거나, 끝났지만 Claude가 그 알림에 아직 답하지 않았으면 결과 카드는 대기 색의 {{ui:graph.block.awaitingNotice}} 블록이 됩니다. 지금까지의 답 아래에 작업마다 {{ui:plan.background.awaitingNotice}} 또는 {{ui:plan.background.noticeDelivered}}이 붙고, "알림 1/2"처럼 받은 알림 수가 보입니다. 이 동안 펫과 창 머리는 {{ui:graph.state.awaitingNotice}}를 보입니다. 모든 알림에 답하면 {{ui:graph.block.result}}로 바뀝니다. 백그라운드 작업의 알림을 받고 Claude가 다시 답하면 그 답은 요청의 결과에 붙지 않고, 답 하나마다 새 다이어그램이 열립니다([백그라운드 작업](approvals.md#background)). 같은 요청의 다른 백그라운드 작업이 아직 돌고 있으면 그 답의 카드 제목은 "현재까지의 결과 · 백그라운드 작업 N개 기다리는 중"으로 남은 작업 수를 보여 줍니다. 결과에 파일이 나오면 {{ui:graph.resultFiles.openButton}} 단추로 목록을 엽니다. 블록 안의 파일 경로를 누르면 미리보기가 뜹니다. 가장 최근 결과 카드는 창 크기에 맞춰지고, 크기를 직접 바꿨다면 {{ui:graph.result.fitToWindow}} 단추가 생깁니다. 요청이 바꾼 소스·Markdown 파일이면 미리보기 머리에 {{ui:files.changes.show}} | {{ui:files.changes.full}} 전환이 생기고 {{ui:files.changes.show}}부터 보입니다. 바뀐 줄만 앞뒤 3줄과 함께 옛 줄 번호·새 줄 번호를 달아 보여 주며, 더한 줄은 초록, 지운 줄은 빨강 바탕입니다. 위 줄이 무엇과 비교했는지 알려 줍니다: 결과 파일 목록이나 블록에서 열면 그 요청이 파일을 처음 바꾸기 전 내용({{ui:files.changes.baseRun}}), 그 원본이 없으면 마지막 커밋입니다. 바뀐 것이 없으면 전환 없이 전체 파일만 보입니다.
 
 ![[result-card]]
+
+### 요청 변경 검토 {#request-changes}
+Claude 창의 요청이 Edit·Write·MultiEdit로 파일을 바꾸면 바꾸기 직전 내용이 보관됩니다. 그런 요청이 끝나면 결과 카드 머리에 {{ui:runChanges.openButton}} 단추가 생기고, 누르면 {{ui:runChanges.title}} 창이 열립니다. 왼쪽에는 그 요청이 바꾼 파일과 더한·지운 줄 수가, 오른쪽에는 고른 파일을 요청 전 내용과 비교한 변경이 보입니다.
+
+- 변경의 줄을 누르면 그 줄에 의견을 남길 수 있습니다. "의견 N개 입력창에 넣기"를 누르면 의견들이 파일과 줄 위치가 붙은 후속 요청 하나로 입력창의 글 뒤에 들어갑니다. 바로 보내지는 않습니다.
+- 파일을 체크하고 "선택한 N개 되돌리기"를 누른 뒤 확인하면 그 파일이 요청 전 내용으로 돌아갑니다. 요청이 새로 만든 파일은 휴지통으로 옮깁니다. 파일의 지금 인코딩과 권한은 그대로 두고, 요청 뒤에 직접 고친 내용은 함께 사라집니다.
+- 뒤의 요청도 같은 파일을 바꿨으면 그 요청을 먼저 되돌려야 합니다. 없어졌거나 텍스트로 읽을 수 없는 파일(1 MiB 초과·바이너리)과 이미 요청 전과 같은 파일은 되돌리지 않습니다.
+- 창마다 최근 요청 20개의 원본을 보관합니다. 셸 명령이 바꾼 파일, 다른 에이전트의 창, 원격 작업 공간의 창에는 이 단추가 없습니다.

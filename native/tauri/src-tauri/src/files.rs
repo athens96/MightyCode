@@ -64,7 +64,7 @@ pub struct Files {
     frames: Mutex<FrameHosts>,
     pub originals: Arc<FileOriginalStore>,
     pub ports: FilePorts,
-    save: Arc<dyn SaveDialog>,
+    pub(crate) save: Arc<dyn SaveDialog>,
     formats: Arc<dyn Formats>,
     /// Each pane's kept runs as last seen (a pane gone takes its originals; a run its graph let go takes its own).
     kept: Mutex<HashMap<String, HashSet<String>>>,
@@ -280,6 +280,21 @@ fn originals_run(view: &View, pane: &str, run: &str) -> String {
         .session(pane)
         .and_then(|p| p.graph_runs().iter().find(|r| r.id() == run).map(|r| r.source_run_id.clone().unwrap_or_else(|| r.id().to_string())))
         .unwrap_or_else(|| run.to_string())
+}
+
+/// The review's pane: its run folder (a local pane's, [`reference_root`]), its id (the originals' session) and what `pick` reads off the
+/// view for it; None for a remote or unknown pane, or when `pick` finds nothing.
+fn run_changes_target<T>(host: &Host, args: &Value, pick: impl FnOnce(&View, &str, &Value) -> Option<T>) -> Option<(String, String, T)> {
+    let view = host.view();
+    let root = reference_root(&view, args)?;
+    let pane = text(args, "paneId")?.to_string();
+    let picked = pick(&view, &pane, args)?;
+    Some((root, pane, picked))
+}
+
+/// The run a review is of (`runId`, a graph run's id), as the originals keep it ([`originals_run`]).
+fn run_arg(view: &View, pane: &str, args: &Value) -> Option<String> {
+    text(args, "runId").filter(|r| wire::identifier(r)).map(|r| originals_run(view, pane, r))
 }
 
 /// C# `WorkspaceFiles.Resolve(path, root)` read off the page's thread.
@@ -747,6 +762,71 @@ pub fn register(methods: &mut Registry) {
         )
         .await;
         Ok(changes.map_or(Value::Null, |c| c.to_json()))
+    });
+    // 요청 변경 검토 (M/RunChangesSheet.swift): of the graph runs named, those whose originals the store kept for a file under the pane's
+    // run folder; a result block of one gets the review's button.
+    methods.add("runChangesRuns", |host: Arc<Host>, args| async move {
+        let Some((root, pane, runs)) = run_changes_target(&host, &args, |view, pane, args| {
+            let ids = args.get("runIds").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+            Some(
+                ids.iter()
+                    .filter_map(Value::as_str)
+                    .filter(|r| wire::identifier(r))
+                    .take(500)
+                    .map(|r| (r.to_string(), originals_run(view, pane, r)))
+                    .collect::<Vec<_>>(),
+            )
+        }) else {
+            return Ok(json!([]));
+        };
+        let files = state(&host)?;
+        let changed = tauri::async_runtime::spawn_blocking(move || {
+            runs.into_iter().filter(|(_, kept)| !files.originals.files(&pane, kept, &root).is_empty()).map(|(id, _)| id).collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+        Ok(json!(changed))
+    });
+    // The files one request changed, as reverting each would go (`RunRevert.plan`); null for a remote or unknown pane.
+    methods.add("runChanges", |host: Arc<Host>, args| async move {
+        let Some((root, pane, run)) = run_changes_target(&host, &args, run_arg) else { return Ok(Value::Null) };
+        let files = state(&host)?;
+        let shown = root.clone();
+        let items = tauri::async_runtime::spawn_blocking(move || mighty_files::revert::plan(&files.originals, &pane, &run, &root))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(json!({"root": shown, "items": items.iter().map(mighty_files::revert::Item::to_json).collect::<Vec<_>>()}))
+    });
+    // The chosen paths put back (`RunRevert.apply`), each checked again just before it is written; a file the request made goes to the
+    // Trash. Answers each path's outcome and the review as it is now.
+    methods.add("runChangesRevert", |host: Arc<Host>, args| async move {
+        let Some((root, pane, run)) = run_changes_target(&host, &args, run_arg) else { return Ok(Value::Null) };
+        let paths: Vec<String> = args
+            .get("paths")
+            .and_then(Value::as_array)
+            .map(|list| list.iter().filter_map(Value::as_str).take(changes::MAXIMUM_FILES_PER_RUN).map(str::to_string).collect())
+            .unwrap_or_default();
+        if paths.is_empty() {
+            return Ok(Value::Null);
+        }
+        let files = state(&host)?;
+        let (outcomes, items) = tauri::async_runtime::spawn_blocking(move || {
+            let desktop = files.ports.desktop.clone();
+            let trash = move |path: &Path| desktop.trash(path).map_err(|e| e.to_string());
+            let outcomes = mighty_files::revert::apply(&files.originals, &pane, &run, &root, Some(&paths), &trash);
+            (outcomes, mighty_files::revert::plan(&files.originals, &pane, &run, &root))
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        let outcomes: Vec<Value> = outcomes
+            .iter()
+            .map(|(path, outcome)| {
+                let mut value = outcome.to_json();
+                value["path"] = json!(path);
+                value
+            })
+            .collect();
+        Ok(json!({"outcomes": outcomes, "items": items.iter().map(mighty_files::revert::Item::to_json).collect::<Vec<_>>()}))
     });
     // Resolved again at the click: the workspace or the file may have changed while the bubble was open.
     methods.add("referenceOpen", |host: Arc<Host>, args| async move {

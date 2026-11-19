@@ -8,15 +8,22 @@ pub const DISPLAY: &str = "display";
 pub const PHASE_MODELS: &str = "phaseModels";
 pub const STYLES: &str = "styles";
 pub const COMPONENTS: &str = "components";
-pub const MOBILE_REMOTE: &str = "mobileRemote";
+/// 원격 연결: sharing this computer, connecting to another and the phone (what was 모바일 리모트) under one tab of three top tabs.
 pub const REMOTE_WORKSPACES: &str = "remoteWorkspaces";
 pub const CLI_UPDATE: &str = "cliUpdate";
 pub const COMPANION: &str = "companion";
-pub const PROVIDERS: &str = "providers";
 pub const CLI_ACCOUNTS: &str = "cliAccounts";
-pub const CLAUDE_MODS: &str = "claudeMods";
 pub const APP_UPDATE: &str = "appUpdate";
 pub const APP_INFO: &str = "appInfo";
+
+/// The category a saved `SettingsPane` of 0.5.3 and earlier names that no longer has a tab of its own: its tab now (모바일 리모트 is
+/// 원격 연결's 휴대폰 tab). The saved value itself is kept as it is (settings_place.rs), only where it opens moves.
+pub fn moved_category(saved: &str) -> &str {
+    match saved {
+        "mobile" => "remote",
+        other => other,
+    }
+}
 
 /// One slot (C# `SettingsSectionSlot`): its id and the heading Windows draws, none for a feature not on Windows yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,21 +38,20 @@ impl Slot {
     }
 }
 
-/// `MacOrder`: every macOS slot in the Mac's order, with its Windows heading.
+/// `MacOrder`: every slot in the tabs' order, with its heading. The CLI tab no longer has its own 이 PC의 CLI box (구성 요소 lists
+/// each CLI with its state, version, install, sign-in and update) nor Claude Mods (the same list says when Claude Code is too old for
+/// it); the phone's box is 원격 연결's 휴대폰 tab.
 pub fn mac_order(locale: &Locale) -> Vec<Slot> {
     let slot = |id, title: String| Slot { id, windows_title: Some(title) };
     vec![
         slot(DISPLAY, locale.get("settings.display.sectionTitle")),
         slot(PHASE_MODELS, locale.get("settings.phaseModels.sectionTitle")),
-        slot(STYLES, locale.get("settings.styles.sectionTitle")),
-        slot(COMPONENTS, locale.get("settings.components.sectionTitle")),
-        slot(MOBILE_REMOTE, locale.get("settings.mobileRemote.sectionTitle")),
-        slot(REMOTE_WORKSPACES, locale.get("settings.remote.navTitle")),
-        slot(CLI_UPDATE, locale.get("settings.cliUpdate.sectionTitle")),
-        slot(COMPANION, locale.get("companion.settings.sectionTitle")),
-        slot(PROVIDERS, locale.get("settings.providers.sectionTitleWindows")),
         slot(CLI_ACCOUNTS, locale.get("settings.cliAccounts.sectionTitle")),
-        slot(CLAUDE_MODS, "Claude Mods".into()),
+        slot(CLI_UPDATE, locale.get("settings.cliUpdate.sectionTitle")),
+        slot(STYLES, locale.get("settings.styles.sectionTitle")),
+        slot(REMOTE_WORKSPACES, locale.get("settings.remote.navTitle")),
+        slot(COMPANION, locale.get("companion.settings.sectionTitle")),
+        slot(COMPONENTS, locale.get("settings.components.sectionTitle")),
         slot(APP_UPDATE, locale.get("settings.appUpdate.sectionTitle")),
         slot(APP_INFO, locale.get("settings.appInfo.sectionTitle")),
     ]
@@ -74,18 +80,17 @@ pub struct Category {
     pub sections: Vec<&'static str>,
 }
 
-/// `SettingsNavigation.Categories`.
+/// `SettingsNavigation.Categories`, in the side list's order: what is set most often first, setup and the app's own last.
 pub fn categories(locale: &Locale) -> Vec<Category> {
     let category = |id, key: &str, sections: Vec<&'static str>| Category { id, title: locale.get(key), sections };
     vec![
         category("general", "settings.nav.general", vec![DISPLAY]),
         category("models", "settings.nav.models", vec![PHASE_MODELS]),
+        category("cli", "settings.nav.cli", vec![CLI_ACCOUNTS, CLI_UPDATE]),
         category("styles", "settings.nav.styles", vec![STYLES]),
-        category("tools", "settings.nav.tools", vec![COMPONENTS]),
-        category("cli", "settings.nav.cli", vec![CLI_UPDATE, CLI_ACCOUNTS, PROVIDERS, CLAUDE_MODS]),
-        category("mobile", "settings.nav.mobile", vec![MOBILE_REMOTE]),
         category("remote", "settings.remote.navTitle", vec![REMOTE_WORKSPACES]),
         category("companion", "settings.nav.companion", vec![COMPANION]),
+        category("tools", "settings.nav.tools", vec![COMPONENTS]),
         category("about", "settings.nav.about", vec![APP_UPDATE, APP_INFO]),
     ]
 }
@@ -162,7 +167,8 @@ mod tests {
         Locale::new("ko")
     }
 
-    /// Verification.cs:1173 "settings sections appear in the macOS order with their titles".
+    /// Verification.cs:1173 "settings sections appear in the macOS order with their titles", in the tabs' order since the 0.5.4 tidy-up:
+    /// each tab's name is its first box's heading (원격 연결, 스타일, 펫과 알림), no English heading is left.
     #[test]
     fn sections_appear_in_mac_order_with_their_titles() {
         let l = ko();
@@ -172,15 +178,12 @@ mod tests {
             vec![
                 "화면".to_string(),
                 l.get("settings.phaseModels.sectionTitle"),
-                l.get("settings.styles.sectionTitle"),
-                l.get("settings.components.sectionTitle"),
-                l.get("settings.mobileRemote.sectionTitle"),
-                l.get("settings.remote.navTitle"),
-                l.get("settings.cliUpdate.sectionTitle"),
-                l.get("companion.settings.sectionTitle"),
-                "이 PC의 CLI".to_string(),
                 l.get("settings.cliAccounts.sectionTitle"),
-                "Claude Mods".to_string(),
+                l.get("settings.cliUpdate.sectionTitle"),
+                "스타일".to_string(),
+                "원격 연결".to_string(),
+                "펫과 알림".to_string(),
+                l.get("settings.components.sectionTitle"),
                 l.get("settings.appUpdate.sectionTitle"),
                 "앱 정보".to_string(),
             ]
@@ -192,7 +195,17 @@ mod tests {
         let mac: Vec<&str> = mac_order(&l).iter().map(|s| s.id).collect();
         let positions: Vec<usize> = windows(&l).iter().map(|s| mac.iter().position(|id| *id == s.id).unwrap()).collect();
         assert!(positions.windows(2).all(|w| w[0] < w[1]), "Windows sections keep the macOS relative order");
-        assert!(mac.iter().position(|id| *id == CLI_UPDATE) < mac.iter().position(|id| *id == PROVIDERS));
+        for category in categories(&l) {
+            let named = ["styles", "remote", "companion"];
+            if named.contains(&category.id) {
+                assert_eq!(
+                    Some(category.title.clone()),
+                    title_of(&l, category.sections[0]),
+                    "{}: the tab is named as its box",
+                    category.id
+                );
+            }
+        }
     }
 
     /// Verification.cs:1174 "settings sections leave out features that are not on Windows yet".
@@ -207,20 +220,19 @@ mod tests {
     fn registering_a_section_does_not_touch_the_others() {
         let l = ko();
         let before_catalog = windows_titles(&l);
-        let fixture: Vec<Slot> = mac_order(&l)
-            .into_iter()
-            .map(|slot| if slot.id == CLAUDE_MODS { Slot { windows_title: None, ..slot } } else { slot })
-            .collect();
+        let fixture: Vec<Slot> =
+            mac_order(&l).into_iter().map(|slot| if slot.id == CLI_UPDATE { Slot { windows_title: None, ..slot } } else { slot }).collect();
         let before: Vec<String> = fixture.iter().filter_map(|s| s.windows_title.clone()).collect();
+        let update = l.get("settings.cliUpdate.sectionTitle");
         let registered: Vec<String> = fixture
             .into_iter()
-            .map(|slot| if slot.id == CLAUDE_MODS { Slot { windows_title: Some("Claude Mods".into()), ..slot } } else { slot })
+            .map(|slot| if slot.id == CLI_UPDATE { Slot { windows_title: Some(update.clone()), ..slot } } else { slot })
             .filter_map(|s| s.windows_title)
             .collect();
         assert_eq!(registered.len(), before.len() + 1);
-        assert_eq!(registered.iter().filter(|t| *t != "Claude Mods").cloned().collect::<Vec<_>>(), before);
+        assert_eq!(registered.iter().filter(|t| **t != update).cloned().collect::<Vec<_>>(), before);
         let accounts = l.get("settings.cliAccounts.sectionTitle");
-        assert_eq!(registered.iter().position(|t| t == "Claude Mods"), registered.iter().position(|t| *t == accounts).map(|at| at + 1));
+        assert_eq!(registered.iter().position(|t| *t == update), registered.iter().position(|t| *t == accounts).map(|at| at + 1));
         assert_eq!(windows_titles(&l), before_catalog);
     }
 
@@ -272,15 +284,18 @@ mod tests {
         assert_eq!(*state.borrow(), original, "a failed run leaves the switch as it was");
     }
 
-    /// Verification.cs:1178 "remote settings: the remote page sits between mobile and companion".
+    /// Verification.cs:1178 "remote settings: the remote page sits between mobile and companion", since the tidy-up the one 원격 연결
+    /// tab (the phone's box is its 휴대폰 tab) after 스타일 and before 펫과 알림; a saved 모바일 리모트 opens there.
     #[test]
-    fn the_remote_page_sits_between_mobile_and_companion() {
+    fn the_remote_page_sits_between_styles_and_companion() {
         let l = ko();
         let ids: Vec<&str> = available(&l).iter().map(|c| c.id).collect();
         let at = |id: &str| ids.iter().position(|i| *i == id).unwrap();
-        assert_eq!(at("remote"), at("mobile") + 1);
+        assert_eq!(at("remote"), at("styles") + 1);
         assert_eq!(at("companion"), at("remote") + 1);
         assert_eq!(available(&l).iter().find(|c| c.id == "remote").unwrap().sections, vec![REMOTE_WORKSPACES]);
+        assert_eq!(moved_category("mobile"), "remote");
+        assert_eq!(moved_category("cli"), "cli");
         let state = AppSnapshot { settings_pane: Some("remote".into()), ..AppSnapshot::default() };
         assert_eq!(normalize::normalize(&state, false).unwrap().settings_pane.as_deref(), Some("remote"));
     }
@@ -288,6 +303,6 @@ mod tests {
     #[test]
     fn every_category_is_available_on_windows() {
         let ids: Vec<&str> = available(&ko()).iter().map(|c| c.id).collect();
-        assert_eq!(ids, vec!["general", "models", "styles", "tools", "cli", "mobile", "remote", "companion", "about"]);
+        assert_eq!(ids, vec!["general", "models", "cli", "styles", "remote", "companion", "tools", "about"]);
     }
 }

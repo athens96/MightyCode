@@ -357,31 +357,9 @@ pub fn typed_port(typed: &str) -> Option<i32> {
     typed.parse::<i32>().ok().filter(|port| mighty_remote::direct::wire::valid_port(i64::from(*port)))
 }
 
-/// The firewall button pressed (C#: re-check while unknown, else remove while present, add otherwise).
-pub fn firewall_pressed(host: &Arc<Host>) {
-    let host = host.clone();
-    crate::native::act(&host.clone(), async move {
-        let rule = direct().rule.clone();
-        match rule {
-            FirewallRule::Unreadable => recheck_firewall_rule(&host).await,
-            FirewallRule::Present { .. } => change_firewall_rule(&host, false).await,
-            FirewallRule::Missing => change_firewall_rule(&host, true).await,
-        }
-        Ok(())
-    });
-}
-
-/// The update button: the rule set to exactly the ports in use now (an elevated set rule).
-pub fn firewall_update_pressed(host: &Arc<Host>) {
-    let host = host.clone();
-    crate::native::act(&host.clone(), async move {
-        change_firewall_rule(&host, true).await;
-        Ok(())
-    });
-}
-
-/// 원격 연결's add button (C# MainWindow.RemoteWorkspaces.cs:277): the unelevated query again while the rule could not be read, else
-/// the rule added or updated in place for the ports in use now.
+/// The firewall row's add button (C# MainWindow.RemoteWorkspaces.cs:277; one row for sharing and the phone's direct path since the
+/// Settings tidy-up): the unelevated query again while the rule could not be read, else the rule added or updated in place for the
+/// ports in use now.
 pub fn firewall_add_pressed(host: &Arc<Host>) {
     let host = host.clone();
     crate::native::act(&host.clone(), async move {
@@ -395,7 +373,7 @@ pub fn firewall_add_pressed(host: &Arc<Host>) {
     });
 }
 
-/// 원격 연결's remove button: the rule taken away (it closes the phone's direct port and the sharing port both).
+/// The firewall row's delete button: the rule taken away (it closes the phone's direct port and the sharing port both).
 pub fn firewall_remove_pressed(host: &Arc<Host>) {
     let host = host.clone();
     crate::native::act(&host.clone(), async move {

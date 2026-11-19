@@ -29,10 +29,10 @@ Antigravityは作業の途中で確認できないため、確認が必要な操
 コマンドをつなぐ、パイプやリダイレクトを使う、またはデータを消す可能性があるコマンドは{{ui:permission.allowOnce}}しかできません。ルールはそのテキストで始まるすべてのコマンドを許可するため、そのようなルールを残しておくのは危険だからです。[Antigravityの権限カード](approvals.md#antigravity-permission)を参照してください。
 
 ## スマートフォンが接続できない {#phone}
-- Macの{{ui:settings.nav.mobile}}で、{{ui:settings.mobileRemote.allowToggle}}がオンになっているかを確認します。
+- コンピュータの{{ui:settings.remote.navTitle}} › {{ui:settings.remote.phoneTab}}タブで、{{ui:settings.mobileRemote.allowToggle}}(Windowsでは{{ui:windows.mobile.allow}})がオンになっているかを確認します。
 - 状態が「リレーに接続中」のまま止まっている場合は、{{ui:settings.mobileRemote.reconnectButton}}ボタンをクリックします。
-- スマートフォンの{{ui:phone.tabs.hosts}}タブに{{ui:phone.hosts.reachability.unauthorized}}と表示される場合は、Macのキーが変更されています。QRコードで接続し直してください。
-- Macがスリープ中の場合は接続できません。
+- スマートフォンの{{ui:phone.tabs.hosts}}タブに{{ui:phone.hosts.reachability.unauthorized}}と表示される場合は、コンピュータでキーを作り直したか、このスマートフォンの接続を解除しています。QRコードで接続し直してください。
+- コンピュータがスリープ中の場合は接続できません。
 - 0.4.58より前に接続したスマートフォンに通知が届かない場合は、QRコードで一度接続し直してください。既定のリレーが新しいサーバーに変わりました([通知](phone.md#notifications))。
 
 ## ペインを閉じると会話は消えますか？ {#history}

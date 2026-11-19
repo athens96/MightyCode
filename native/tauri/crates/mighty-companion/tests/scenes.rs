@@ -9,8 +9,11 @@ use mighty_companion::bubble;
 use mighty_companion::card::{CompanionCard, CompanionOption, CompanionRequest};
 use mighty_companion::layout::{self, Edges};
 use mighty_companion::prefs::CompanionPreferences;
+use mighty_companion::progress::{self, CompanionProgress, ProgressLine};
 use mighty_companion::{Companion, CompanionAction};
+use mighty_graph::flow::steps::ProgressState;
 use mighty_platform::fake::FakePet;
+use mighty_platform::pet::PetItem;
 use mighty_platform::pet::{PetBitmap, PetScene};
 use mighty_platform::surface::PetInput;
 use mighty_platform::{LogicalPoint, LogicalRect, PetEvent, PetWindow};
@@ -81,6 +84,37 @@ fn plan_request(plan: &str) -> CompanionRequest {
         received: Some("08:05에 받음".into()),
         buttons: bubble::plan(false),
         ..CompanionRequest::default()
+    }
+}
+
+fn line(text: &str, state: ProgressState, agent: Option<bool>, time: Option<&str>) -> ProgressLine {
+    ProgressLine { text: text.into(), state, agent, time: time.map(str::to_string) }
+}
+
+/// A request's progress card: a step of each state, two left out, a sub-agent and a command in the background.
+fn progress_card() -> CompanionProgress {
+    CompanionProgress {
+        title: "진행 상황".into(),
+        heading: "요청 27".into(),
+        count: Some("3/7".into()),
+        state_word: "실행 중".into(),
+        status: "running".into(),
+        running: true,
+        rows: vec![
+            line("3. Read the Swift card", ProgressState::Done, None, Some("12초")),
+            line("4. Port the model to the shared crate", ProgressState::Current, None, Some("1분 4초")),
+            line("5. Draw it through the pet's display list", ProgressState::Pending, None, None),
+            line("6. Stopped step", ProgressState::Stopped, None, Some("3초")),
+            line("7. Failed step", ProgressState::Failed, None, Some("8초")),
+        ],
+        more: Some("외 2개".into()),
+        background_title: "백그라운드".into(),
+        background_count: "1/2".into(),
+        background: vec![
+            line("Review the diff", ProgressState::Current, Some(true), Some("20초")),
+            line("cargo test -p mighty-companion", ProgressState::Done, Some(false), Some("41초")),
+        ],
+        background_more: None,
     }
 }
 
@@ -354,6 +388,16 @@ fn every_row_and_card_kind_draws_its_golden_scene() {
             with(task("planSending", "waiting"), CompanionRequest { busy: true, buttons: bubble::plan(true), ..plan_request("# Sending") }),
         ),
         ("light", CompanionCard { light: true, ..task("light", "waiting") }),
+        ("progress", CompanionCard { state: "실행 중".into(), progress: Some(progress_card()), ..task("progress", "running") }),
+        (
+            "progressFolded",
+            CompanionCard {
+                state: "실행 중".into(),
+                progress: Some(progress_card()),
+                progress_collapsed: true,
+                ..task("progressFolded", "running")
+            },
+        ),
     ];
     for (name, card) in kinds {
         companion.set_card(Some(card), true);
@@ -382,4 +426,54 @@ fn every_row_and_card_kind_draws_its_golden_scene() {
     }
     assert_eq!(golden["rows"], checked_in["rows"], "the rows' scenes");
     assert_eq!(golden["paw"], checked_in["paw"], "the paw's scene");
+}
+
+/// The Mac's progress card over the task bubble: the window grows over the bubble by the card (the pet's feet stay), its heading folds
+/// it, a line opens the pane, it turns its own spinner while the request runs, and it is never over a request.
+#[test]
+fn the_progress_card_stands_over_the_task_bubble_and_folds() {
+    korean();
+    let pet = FakePet::default();
+    pet.set_work_area(LogicalRect { x: 0.0, y: 0.0, width: 2560.0, height: 1400.0 });
+    let mut companion = open(&pet);
+    let mut events = pet.events().unwrap();
+    let plain = CompanionCard { state: "실행 중".into(), ..task("progress", "running") };
+    companion.set_card(Some(plain.clone()), true);
+    let before = companion.geometry();
+    let feet = companion.placement().bottom;
+    assert_eq!(companion.progress_rect(), None, "no card without a progress");
+    let card = progress_card();
+    companion.set_card(Some(CompanionCard { progress: Some(card.clone()), ..plain.clone() }), true);
+    let after = companion.geometry();
+    let area = companion.progress_rect().expect("the card");
+    assert_eq!(after.bubble.height, before.bubble.height, "the bubble keeps its height");
+    assert_eq!((area.x, area.width), (after.bubble.x, after.bubble.width), "as wide as the bubble");
+    assert_eq!(area.bottom() + progress::GAP, after.bubble.y, "over the bubble by its gap");
+    assert_eq!(area.height + progress::GAP, card.height(false));
+    assert_eq!(after.height, (after.bubble.height + layout::CHROME + card.height(false)).max(layout::BASE_HEIGHT));
+    assert_eq!(companion.placement().bottom, feet, "the pet's feet stay where they stood");
+    let scene = companion.scene();
+    assert!(scene.items.iter().any(|item| matches!(item, PetItem::Group { role, .. } if role == "progress")));
+    let spinners = scene.items.iter().filter(|item| matches!(item, PetItem::Arc { .. })).count();
+    assert_eq!(spinners, 2, "the bubble's presence and the card's state each turn");
+    assert_eq!(click(&mut companion, &pet, &mut events, "progress-fold"), Some(vec![act("progress", "progress-fold")]));
+    let opens = companion.target("open").expect("the card's lines");
+    assert!(opens.y > area.y + progress::HEADER_HEIGHT && opens.y < area.bottom());
+    assert_eq!(click(&mut companion, &pet, &mut events, "open"), Some(vec![act("progress", "open")]));
+    // Folded to its heading: shorter, and nothing under it to press.
+    companion.set_card(Some(CompanionCard { progress: Some(card.clone()), progress_collapsed: true, ..plain.clone() }), true);
+    assert_eq!(companion.progress_rect().map(|a| a.height), Some(progress::HEADER_HEIGHT));
+    assert_eq!(companion.target("open"), None);
+    assert_eq!(companion.placement().bottom, feet);
+    // A clock that ticks redraws the card in place.
+    let mut ticked = card.clone();
+    ticked.rows[1].time = Some("1분 5초".into());
+    companion.set_card(Some(CompanionCard { progress: Some(ticked), ..plain.clone() }), true);
+    assert_eq!(companion.progress_rect(), Some(area));
+    // A request takes the bubble: no card over it; a bubble put away has none either.
+    companion
+        .set_card(Some(CompanionCard { progress: Some(card.clone()), ..with(task("progress", "waiting"), approval_request(true)) }), true);
+    assert_eq!(companion.progress_rect(), None);
+    companion.set_card(Some(CompanionCard { progress: Some(card), ..plain }), false);
+    assert_eq!(companion.progress_rect(), None);
 }

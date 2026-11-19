@@ -23,6 +23,7 @@ mod build_info;
 mod cards;
 mod companion;
 mod composer;
+mod conversation_search;
 mod deep_link;
 mod delegation;
 mod delta;
@@ -267,6 +268,8 @@ fn main() {
     };
     // C# `MigrateRenamedIdentifiers`: the data from before the rename moved before anything reads it (W9-F).
     startup::before_ui(&options, &platform, policy);
+    // What a crash of an earlier run left running is ended, and this run's children written down, before the first child starts.
+    platform::record_child_groups(platform.paths.local_dir());
     let data_dir = platform.paths.data_dir().to_path_buf();
     let legacy = platform.paths.legacy_data_dirs().to_vec();
     // The log: the profile's `tauri-logs` only where the run writes or is a smoke, else this machine's own (startup.rs, W9-F).

@@ -10,7 +10,9 @@
 //!   left in its group is ended (SIGTERM, then SIGKILL 150 ms later: `terminateGroup`), then the leader is reaped, so a
 //!   background child holding a pipe never keeps a reader waiting (Swift "testProcessGroupCleansBackgroundChildWhenParentExits");
 //! - a close waits for the exit, then for the group to be empty;
-//! - every group still alive when the app exits gets SIGKILL from an `atexit` handler (Swift's `LiveRunRegistry.killAll` at quit).
+//! - every group still alive when the app exits gets SIGKILL from an `atexit` handler (Swift's `LiveRunRegistry.killAll` at quit);
+//!   a crash skips it, so each group is also written down and the next launch ends what is left (`child_groups`, the Job Object's
+//!   kill-on-close on Windows).
 //!
 //! A pipe a process outside the group still holds (a daemon started with `setsid`, a `set -m` job) is read for one second after the
 //! leader's exit and at most 16 MB, then looked at once more (64 KB); past that the app's end is closed and the writer gets EPIPE
@@ -149,6 +151,8 @@ extern "C" fn kill_live() {
                     crate::pty::end_session(*session);
                 }
             }
+            // Nothing is left for the next launch to end.
+            crate::child_groups::exiting();
             return;
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -163,15 +167,17 @@ fn live() -> MutexGuard<'static, Option<Live>> {
     lock(&LIVE)
 }
 
-/// Counts `group` as alive until [`forget_group`].
+/// Counts `group` as alive until [`forget_group`], and writes it down for the next launch should the app crash (`child_groups`).
 pub(crate) fn track_group(group: libc::pid_t) {
     live().get_or_insert_with(Live::default).groups.insert(group);
+    crate::child_groups::started_group(group);
 }
 
 pub(crate) fn forget_group(group: libc::pid_t) {
     if let Some(live) = live().as_mut() {
         live.groups.remove(&group);
     }
+    crate::child_groups::ended_group(group);
 }
 
 /// Counts the PTY session `session` leads as alive until [`forget_session`].

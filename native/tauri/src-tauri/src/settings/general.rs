@@ -1,5 +1,8 @@
-//! `general`: 화면, 글자, 에이전트 링크 (C# MainWindow.Settings.cs:83-142 `BuildDisplaySection`, `BuildAgentLinksSection`;
+//! `general`: 화면, 글자 and 에이전트 창 (C# MainWindow.Settings.cs:83-142 `BuildDisplaySection`, `BuildAgentLinksSection`;
 //! MainWindow.TextAppearance.cs:113-202 `BuildTextSection`; MainWindow.Delegation.cs `DelegationOn`, `SetDelegationOn`). Owner: W6-A.
+//!
+//! 화면 is the app's look only (theme, language); what changes how agent panes run — Claude's status line, Mighty orchestration — and
+//! the panes' keyboard tips (which 앱 정보 used to hold) are 에이전트 창's.
 
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -111,15 +114,15 @@ fn families() -> (Vec<String>, Vec<String>) {
     FAMILIES.get().cloned().unwrap_or_default()
 }
 
-/// 화면 (C# `BuildDisplaySection`): the theme and language pickers, the language note, then the status line and delegation switches,
-/// each with its explanation under its label (not C#'s browser switch: 0.5 has no in-app browser).
+/// 화면 (C# `BuildDisplaySection`): the theme and language pickers and the language note (not C#'s browser switch: 0.5 has no in-app
+/// browser).
 pub fn display(host: &Arc<Host>, ui: &mut Ui) -> El {
     let locale = ui.locale();
-    let (theme, preference, status_line) = {
+    let (theme, preference) = {
         let view = host.view();
         let s = &view.snapshot;
         let theme = if s.theme() == "light" { "light" } else { "dark" };
-        (theme, s.language_preference().to_string(), s.status_line_enabled)
+        (theme, s.language_preference().to_string())
     };
     let mut rows = ui.settings_rows();
 
@@ -152,7 +155,15 @@ pub fn display(host: &Arc<Host>, ui: &mut Ui) -> El {
     );
     rows.add(ui.settings_labeled(ui.settings_text(&language_label, TextStyle::default()), picker, false));
     rows.add(ui.settings_text(locale.get("settings.display.languageRestartNote"), TextStyle::size(11.0).ink(Token::Ink2)));
+    rows.finish()
+}
 
+/// 에이전트 창: the status line and delegation switches, each with its explanation under its label, then the panes' keyboard tips
+/// (C# `BuildAppInfoSection`'s Windows note; the Mac's own words name its login shell, not PowerShell).
+pub fn agents(host: &Arc<Host>, ui: &mut Ui) -> El {
+    let locale = ui.locale();
+    let status_line = host.view().snapshot.status_line_enabled;
+    let mut rows = ui.settings_rows();
     let label = locale.get("settings.display.statusLineToggle");
     let to = host.clone();
     let switch = ui.settings_switch(&label, status_line, Some("settings-status-line"), move |on| set_status_line(&to, on));
@@ -167,6 +178,9 @@ pub fn display(host: &Arc<Host>, ui: &mut Ui) -> El {
         mighty_core::settings_words::text(&locale, crate::platform::words(), "settings.delegation.descriptionWindows").unwrap_or_default(),
     );
     rows.add(ui.settings_labeled(words, switch, true));
+    if let Some(tips) = mighty_core::settings_words::text(&locale, crate::platform::words(), "settings.appInfo.windowsNote") {
+        rows.add(ui.settings_text(tips, TextStyle::size(11.0).ink(Token::Ink2)).aid("settings-agent-tips"));
+    }
     rows.finish()
 }
 

@@ -162,7 +162,7 @@ Held notices show at the top of the queue above the parent's composer, as rows w
 The parent can send a child Claude handed work to up to two follow-ups with its `follow_up` tool. A follow-up reaches the child pane by the same rules as a notice, and each can be up to 48 KiB. You can type straight into the child pane's composer, with no limit on how many times.
 
 ## Turn it on or off {#enable}
-{{platform:mac}} It is on unless you turn it off. Switch {{ui:settings.delegation.toggle}} on the {{ui:settings.nav.general}} tab of Settings; it applies from the next run that starts, with no relaunch. The same switch is the defaults key `delegation.enabled`, so this command in Terminal turns it off too, and `defaults delete dev.mightycode.native delegation.enabled` turns it back on.
+{{platform:mac}} It is on unless you turn it off. Switch {{ui:settings.delegation.toggle}} under {{ui:settings.agents.sectionTitle}} on the {{ui:settings.nav.general}} tab of Settings; it applies from the next run that starts, with no relaunch. The same switch is the defaults key `delegation.enabled`, so this command in Terminal turns it off too, and `defaults delete dev.mightycode.native delegation.enabled` turns it back on.
 
 ```sh
 defaults write dev.mightycode.native delegation.enabled -bool false
@@ -170,7 +170,7 @@ defaults write dev.mightycode.native delegation.enabled -bool false
 
 {{platform:mac}} Earlier versions were on only when that key was set, and turning it off meant `defaults delete …`. That now leaves it on, so to keep it off, switch off {{ui:settings.delegation.toggle}} in Settings.
 
-{{platform:windows}} It is on unless you turn it off. Switch {{ui:settings.delegation.toggle}} on the {{ui:settings.nav.general}} tab of Settings; it applies from the next run that starts, with no relaunch. The same switch is the `delegation.enabled` value (REG_DWORD) under `HKEY_CURRENT_USER\Software\MightyCode`: zero is off, and a missing value or any other is on. So this command in Command Prompt or PowerShell turns it off too, and `reg delete "HKCU\Software\MightyCode" /v delegation.enabled /f` turns it back on.
+{{platform:windows}} It is on unless you turn it off. Switch {{ui:settings.delegation.toggle}} under {{ui:settings.agents.sectionTitle}} on the {{ui:settings.nav.general}} tab of Settings; it applies from the next run that starts, with no relaunch. The same switch is the `delegation.enabled` value (REG_DWORD) under `HKEY_CURRENT_USER\Software\MightyCode`: zero is off, and a missing value or any other is on. So this command in Command Prompt or PowerShell turns it off too, and `reg delete "HKCU\Software\MightyCode" /v delegation.enabled /f` turns it back on.
 
 ```
 reg add "HKCU\Software\MightyCode" /v delegation.enabled /t REG_DWORD /d 0 /f

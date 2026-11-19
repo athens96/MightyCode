@@ -18,18 +18,18 @@ pub mod mobile;
 pub mod mobile_direct;
 pub mod models;
 pub mod remote;
-pub mod screen;
 pub mod styles;
 pub mod tools;
 
 use std::sync::Arc;
 
-use mighty_core::design_tokens::metrics;
+use mighty_core::design_tokens::{Token, metrics};
 use mighty_core::help_site;
 use mighty_core::locale::Locale;
 use mighty_core::settings_sections::{self as sections, available};
+use mighty_native::kit::TextStyle;
 use mighty_native::surface::{Next, SurfaceModel};
-use mighty_native::ui::{El, Ui};
+use mighty_native::ui::{Content, El, Ui};
 use mighty_native::view::{NavItem, Place, Section, View};
 use serde_json::Value;
 
@@ -49,31 +49,53 @@ pub struct Group {
     pub beta: bool,
 }
 
-/// `SettingsGroups(category)`: each category's boxes in the Mac's order. A registered slot keeps the heading Core gives it; the boxes
-/// the Mac draws inside a slot's tab (the toolkit, screen view) take theirs from the catalogue.
+/// `SettingsGroups(category)`: each category's boxes in the tabs' order. A registered slot keeps the heading Core gives it; the boxes
+/// drawn inside a slot's tab (the text, the agent panes' switches, the toolkit) take theirs from the catalogue. The paused screen view
+/// box (one sentence, nothing to set) is no longer drawn: it comes back with screen view.
 pub fn groups(locale: &Locale, category: &str) -> Vec<Group> {
     let slot = |id: &str, build: Builder| Group { title: sections::title_of(locale, id).unwrap_or_default(), build, beta: false };
-    let titled = |key: &str, build: Builder, beta: bool| Group { title: locale.get(key), build, beta };
+    let titled = |key: &str, build: Builder| Group { title: locale.get(key), build, beta: false };
     match category {
-        "general" => vec![slot(sections::DISPLAY, general::display), titled("settings.text.sectionTitle", general::text, false)],
+        "general" => vec![
+            slot(sections::DISPLAY, general::display),
+            titled("settings.text.sectionTitle", general::text),
+            titled("settings.agents.sectionTitle", general::agents),
+        ],
         "models" => vec![slot(sections::PHASE_MODELS, models::phase_models)],
+        "cli" => vec![slot(sections::CLI_ACCOUNTS, cli_accounts::accounts), slot(sections::CLI_UPDATE, cli_update::cli_update)],
         "styles" => vec![slot(sections::STYLES, styles::styles)],
-        "tools" => vec![slot(sections::COMPONENTS, tools::components), titled("settings.toolkit.sectionTitle", tools::toolkit, false)],
-        "cli" => vec![
-            slot(sections::PROVIDERS, cli_accounts::providers),
-            slot(sections::CLI_ACCOUNTS, cli_accounts::accounts),
-            slot(sections::CLAUDE_MODS, cli_accounts::claude_mods),
-            slot(sections::CLI_UPDATE, cli_update::cli_update),
-        ],
-        "mobile" => vec![
-            slot(sections::MOBILE_REMOTE, mobile::mobile_remote),
-            titled("settings.screenShare.sectionTitle", screen::screen_share, true),
-        ],
         "remote" => vec![slot(sections::REMOTE_WORKSPACES, remote::remote_workspaces)],
         "companion" => vec![slot(sections::COMPANION, companion::companion)],
+        "tools" => vec![slot(sections::COMPONENTS, tools::components), titled("settings.toolkit.sectionTitle", tools::toolkit)],
         "about" => vec![slot(sections::APP_UPDATE, about::app_update), slot(sections::APP_INFO, about::app_info)],
         _ => vec![],
     }
+}
+
+/// A part's heading inside a box (원격 연결's parts, the phone's groups): one size for every tab, 13pt medium.
+pub(crate) fn sub_heading(ui: &Ui, title: impl Into<String>) -> El {
+    ui.settings_text(title, TextStyle::size(13.0).medium())
+}
+
+/// A note under a row: 11pt `ink2`.
+pub(crate) fn caption(ui: &Ui, text: impl Into<String>) -> El {
+    ui.settings_text(text, TextStyle::size(11.0).ink(Token::Ink2))
+}
+
+/// A folded part (고급, what remote workspaces can and cannot do): its heading opens it; whether it is open is kept under `key` while
+/// Settings shows the tab (`open` the first time, e.g. open when something in it was already changed).
+pub(crate) fn folded(ui: &mut Ui, key: &str, open: bool, title: String, body: El) -> El {
+    let header = ui.settings_text(title, TextStyle::size(12.0).medium().ink(Token::Ink2));
+    ui.expander(key, open, Content::El(Box::new(header)), Content::El(Box::new(body))).aid(key)
+}
+
+/// A category a deep link or a 0.5.3 save names, as it shows now: a saved 모바일 리모트 opens 원격 연결 on its 휴대폰 tab.
+fn shown_category(id: &str) -> &str {
+    let moved = sections::moved_category(id);
+    if moved != id && moved == "remote" {
+        remote::show_tab(remote::Tab::Phone);
+    }
+    moved
 }
 
 /// `SettingsCategoryGlyph`: the side list's Segoe Fluent symbol per category (the page draws its own Lucide icons for the known ones).
@@ -84,7 +106,6 @@ pub fn glyph(id: &str) -> &'static str {
         "styles" => "\u{E790}",
         "tools" => "\u{E7B8}",
         "cli" => "\u{E756}",
-        "mobile" => "\u{E8EA}",
         "about" => "\u{E946}",
         _ => "\u{E713}",
     }
@@ -151,8 +172,14 @@ impl SurfaceModel for SettingsSurface {
     /// `surface.Navigate`: nothing for the category shown or one not available; else that category's boxes, and `SettingsPane`
     /// saved (C#'s `Act(UpdateAsync)`: the banner cleared first, a failure shown there).
     fn navigate(&mut self, to: &str) -> bool {
-        if to == self.category || !available(&self.host.locale).iter().any(|c| c.id == to) {
+        let moved = sections::moved_category(to) != to;
+        let to = shown_category(to);
+        if !available(&self.host.locale).iter().any(|c| c.id == to) {
             return false;
+        }
+        if to == self.category {
+            // A 모바일 리모트 link while 원격 연결 shows: only its top tab turned.
+            return moved;
         }
         self.category = to.to_string();
         refresh_accounts(&self.host, to);
@@ -179,7 +206,7 @@ fn start(host: &Arc<Host>) -> Option<tokio::sync::oneshot::Receiver<()>> {
     general::read_families(host);
     // omc's and Ouroboros's settings for the phase models box (C# `LoadTools`; the fixture in a smoke).
     models::read_tools(host);
-    let saved = host.view().snapshot.settings_pane.clone();
+    let saved = host.view().snapshot.settings_pane.clone().map(|pane| shown_category(&pane).to_string());
     let categories = available(&host.locale);
     let category = saved.filter(|pane| categories.iter().any(|c| c.id == pane)).unwrap_or_else(|| categories[0].id.to_string());
     refresh_accounts(host, &category);
@@ -265,19 +292,16 @@ mod tests {
             let boxes = groups(&locale, category.id);
             assert!(!boxes.is_empty() && boxes.iter().all(|g| !g.title.is_empty()), "{}", category.id);
         }
-        assert_eq!(titles("general"), vec!["화면".to_string(), locale.get("settings.text.sectionTitle")]);
         assert_eq!(
-            titles("cli"),
-            vec![
-                "이 PC의 CLI".to_string(),
-                locale.get("settings.cliAccounts.sectionTitle"),
-                "Claude Mods".to_string(),
-                locale.get("settings.cliUpdate.sectionTitle")
-            ]
+            titles("general"),
+            vec!["화면".to_string(), locale.get("settings.text.sectionTitle"), locale.get("settings.agents.sectionTitle")]
         );
-        assert!(groups(&locale, "mobile")[1].beta, "screen view carries the 베타 capsule");
+        assert_eq!(titles("cli"), vec![locale.get("settings.cliAccounts.sectionTitle"), locale.get("settings.cliUpdate.sectionTitle")]);
+        assert_eq!(titles("remote"), vec!["원격 연결".to_string()]);
         assert_eq!(titles("about"), vec![locale.get("settings.appUpdate.sectionTitle"), "앱 정보".to_string()]);
+        assert!(groups(&locale, "mobile").is_empty(), "모바일 리모트 is 원격 연결's 휴대폰 tab");
         assert!(groups(&locale, "elsewhere").is_empty());
+        assert!(available(&locale).iter().flat_map(|c| groups(&locale, c.id)).all(|g| !g.beta), "no box is a paused beta");
     }
 
     #[test]

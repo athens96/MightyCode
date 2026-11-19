@@ -1,7 +1,8 @@
 //! The phone pairing identity over the Mac's four files (Mac stage M-B): mighty-remote's `Identity` on `mighty_platform::pairing::
 //! four_files::FourFiles`, as the Mac runs it, with the Swift checks of `MobileRemoteService` and `MobileDeviceRegistry` ported by name.
-//! What differs from Swift on purpose is said at each test (the shared `Identity` is C#'s: a revoke is a rotation, a client id has 22
-//! characters, an unwritable list fails the pairing instead of admitting the phone without a token).
+//! What differs from Swift on purpose is said at each test (the shared `Identity` is C#'s: 키 다시 만들기 is a rotation, a row's 연결 해제
+//! unpairs that device alone and makes a new key, a client id has 22 characters, an unwritable list fails the pairing instead of
+//! admitting the phone without a token).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -83,6 +84,57 @@ fn revoking_rotates_the_key_before_the_row_and_fails_whole_or_not_at_all() {
     assert_eq!(returning(&identity, PHONE, &phone), AuthDecision::Refused(AuthRefusal::DeviceRevoked));
     let reloaded = folder.identity();
     assert!(reloaded.devices().is_empty() && *reloaded.pairing_key() == *identity.pairing_key());
+}
+
+/// A row's 연결 해제 unpairs that device alone (unlike Swift's revoke and the shared `Identity`'s rotation): the others keep their rows
+/// and tokens, the key is made anew so the old one pairs nothing, the legacy row (which has only the key) goes with it, the listeners
+/// hear each removed id; one that cannot be written changes nothing; a rotation still drops everyone.
+#[test]
+fn revoking_one_device_keeps_the_others_and_makes_a_new_key() {
+    let folder = Folder::new("revoke-one");
+    let identity = Arc::new(folder.identity());
+    let key = identity.pairing_key().to_string();
+    let phone = token(pair(&identity, &key, PHONE, "iPhone").unwrap());
+    let desktop_auth = json!({"type": "auth", "pairingKey": key, "clientId": OTHER, "clientName": "laptop", "role": "desktop"});
+    let desktop = token(identity.authorize(&AuthRequest::from_json(&desktop_auth), true).unwrap());
+    identity.authorize(&AuthRequest::from_json(&json!({"type": "auth", "pairingKey": key})), true).unwrap();
+    assert_eq!(identity.devices().len(), 3, "a phone, a computer and the legacy row");
+    assert!(identity.devices().iter().any(|d| d.id == OTHER && d.desktop), "the computer is marked as one");
+    let heard = Arc::new(std::sync::Mutex::new(vec![]));
+    let told = heard.clone();
+    let _subscription = identity.on_rotated(move |device| told.lock().unwrap().push(device.map(str::to_string)));
+
+    folder.block_list();
+    assert!(identity.revoke(PHONE).is_err(), "half a revoke is never reported as a whole one");
+    assert_eq!(identity.devices().len(), 3);
+    assert_eq!(*identity.pairing_key(), key);
+    folder.unblock_list();
+    assert!(heard.lock().unwrap().is_empty(), "nothing was told for a revoke that failed");
+
+    let removed = identity.revoke(PHONE).unwrap();
+    assert_eq!(removed, [PHONE.to_string(), "legacy".to_string()], "the phone and the legacy row, whose key is gone");
+    assert_eq!(*heard.lock().unwrap(), [Some(PHONE.to_string()), Some("legacy".to_string())]);
+    assert_eq!(identity.devices().iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), [OTHER]);
+    assert_ne!(*identity.pairing_key(), key, "a new key");
+    assert_eq!(returning(&identity, PHONE, &phone), AuthDecision::Refused(AuthRefusal::DeviceRevoked), "the revoked token");
+    let desktop_again = json!({"type": "auth", "deviceToken": desktop, "clientId": OTHER, "role": "desktop"});
+    assert!(
+        matches!(identity.authorize(&AuthRequest::from_json(&desktop_again), true).unwrap(), AuthDecision::Accepted { .. }),
+        "the other device's token still opens it"
+    );
+    assert_eq!(pair(&identity, &key, PHONE, "iPhone").unwrap(), AuthDecision::Refused(AuthRefusal::PairingKey), "the old key");
+    assert!(identity.revoke(PHONE).unwrap().is_empty(), "a device no longer paired: nothing changes");
+    let reloaded = folder.identity();
+    assert_eq!(reloaded.devices().iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), [OTHER], "saved");
+    assert_eq!(*reloaded.pairing_key(), *identity.pairing_key());
+
+    identity.rotate().unwrap();
+    assert!(identity.devices().is_empty(), "키 다시 만들기 still drops everyone");
+    assert_eq!(heard.lock().unwrap().last(), Some(&None));
+    assert_eq!(
+        identity.authorize(&AuthRequest::from_json(&desktop_again), true).unwrap(),
+        AuthDecision::Refused(AuthRefusal::DeviceRevoked)
+    );
 }
 
 /// `MobileRemoteTests.swift:944 "keysPersistAndStatusExposesTheOfferOnlyWhileConnected"` (the keys' half; the offer while connected is

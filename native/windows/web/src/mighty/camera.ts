@@ -151,6 +151,20 @@ export function followOffset(frame: Rect, viewport: Size, zoom: number, alignTop
   return follows ? followCamera(frame, viewport, zoom, centredX(viewport, zoom)) : cameraOffset(frame, viewport, zoom, alignTop, alignBottom);
 }
 
+/**
+ * Whether the newest work's result block came in since the pass before: `seen` is the result seen then (undefined before the first
+ * pass, which shows what is already there and moves nothing), `current` the one there now.
+ */
+export function arrivedResult(seen: string | null | undefined, current: string | null): boolean {
+  return seen !== undefined && current !== null && current !== seen;
+}
+
+/** Where the camera shows a result that came in: centred as the follow is, its bottom over the margin, its top never above the view. */
+export function resultCamera(frame: Rect, viewport: Size, zoom: number): Point {
+  const top = FollowMargin - frame.y * zoom;
+  return { x: centredX(viewport, zoom), y: Math.max(top, viewport.h - FollowMargin - maxY(frame) * zoom) };
+}
+
 export type RunChange = 'none' | 'first' | 'follow' | 'trim';
 
 export function runsChanged(previous: readonly string[] | null, current: readonly string[], following: boolean): RunChange {

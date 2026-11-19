@@ -18,10 +18,6 @@ fn ignores_case() -> bool {
     std::path::MAIN_SEPARATOR == '\\'
 }
 
-fn same(a: &str, b: &str) -> bool {
-    if ignores_case() { normalize::ordinal_ignore_case(a, b).is_eq() } else { a == b }
-}
-
 /// `Path.GetFullPath`: absolute, `.` and `..` collapsed (missing parts kept). Nothing on disk is read.
 pub fn full_path(path: &Path) -> Option<PathBuf> {
     let absolute = std::path::absolute(path).ok()?;
@@ -162,6 +158,13 @@ pub fn contains(real_path: &Path, real_root: &Path) -> bool {
 
 /// The part of `path` under `root` (both resolved), its separators as they are: "" for the root itself, None outside it.
 pub fn relative(path: &Path, root: &Path) -> Option<String> {
+    relative_with(path, root, ignores_case())
+}
+
+/// [`relative`] with the case rule given: `ignores_case` for a volume whose names compare ignoring case (the Mac's APFS as installed,
+/// which the OS rule above does not know), so `/Users/me/Proj/a.txt` is inside `/Users/me/proj`.
+pub fn relative_with(path: &Path, root: &Path, ignores_case: bool) -> Option<String> {
+    let same = |a: &str, b: &str| if ignores_case { normalize::ordinal_ignore_case(a, b).is_eq() } else { a == b };
     let root_text = root.to_string_lossy();
     let path_text = path.to_string_lossy();
     let root = trim_separator(&root_text);

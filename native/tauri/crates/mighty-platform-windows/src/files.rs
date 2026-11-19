@@ -414,6 +414,35 @@ impl Desktop for WindowsDesktop {
             None => Err(PlatformError::Refused("the clipboard call panicked".into())),
         }
     }
+
+    /// `SHFileOperationW` deleting with undo: the file in the Recycle Bin, where Explorer's Restore returns it. No dialog but the one
+    /// Windows shows when the file cannot be recycled (a network folder) and would be gone for good, which the person may refuse.
+    fn trash(&self, path: &Path) -> Result<()> {
+        use windows_sys::Win32::UI::Shell::{
+            FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FOF_WANTNUKEWARNING, SHFILEOPSTRUCTW, SHFileOperationW,
+        };
+        std::fs::symlink_metadata(path)?;
+        // A list of paths, each NUL-ended, the list ended by one more NUL; the shell call takes no `\\?\` path.
+        let mut from: Vec<u16> = path.as_os_str().encode_wide().collect();
+        from.extend([0, 0]);
+        let outcome = in_apartment(move || {
+            let mut operation = SHFILEOPSTRUCTW {
+                wFunc: FO_DELETE,
+                pFrom: from.as_ptr(),
+                fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT | FOF_WANTNUKEWARNING) as u16,
+                ..Default::default()
+            };
+            // SAFETY: the structure and the list it points at live across the call.
+            let result = unsafe { SHFileOperationW(&mut operation) };
+            (result, operation.fAnyOperationsAborted != 0)
+        });
+        match outcome {
+            Some((0, false)) if !path.exists() => Ok(()),
+            Some((0, _)) => Err(PlatformError::Refused("the file was not moved to the Recycle Bin".into())),
+            Some((code, _)) => Err(PlatformError::Refused(format!("the shell could not move the file to the Recycle Bin (0x{code:X})"))),
+            None => Err(PlatformError::Refused("the shell call panicked".into())),
+        }
+    }
 }
 
 /// A `BITMAPV5HEADER` and the pixels, bottom row first, as BGRA.

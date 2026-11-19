@@ -18,6 +18,7 @@ import { useCall, useMenu, type MenuItem } from '../shell/parts';
 import { WorktreeBar } from './WorktreeBar';
 import { MirrorStrip } from './MirrorStrip';
 import { usePaneInfo } from '../shell/parts';
+import { logText } from './log';
 
 /** The header's clock, redrawn each second while the run is not finished (MW.Composer.cs RefreshElapsed). */
 function Clock({ session }: { session: RunSession }) {
@@ -34,7 +35,10 @@ function Clock({ session }: { session: RunSession }) {
   return <span className="pane-clock" data-testid="pane-clock">{clockLabel(timing, now, t('dashboard.card.approximate'))}</span>;
 }
 
-/** The pane's ··· menu (M/SessionPaneView.swift paneMenu): rename, focus or back to the layout, a new conversation, close. */
+/**
+ * The pane's ··· menu (M/SessionPaneView.swift paneMenu): rename, focus or back to the layout, a shell's earlier command history, an
+ * agent's log copied, a new conversation, close.
+ */
 function PaneMenu({ session }: { session: RunSession }) {
   const { bridge, t } = useServices();
   const menu = useMenu();
@@ -46,6 +50,9 @@ function PaneMenu({ session }: { session: RunSession }) {
     ...(mirrored ? [] : [{ label: t('menu.rename'), action: () => call('renameSession', { id: session.id }) }]),
     { label: t(focused ? 'pane.menu.restoreLayout' : 'menu.focusPane'), action: () => call('focusPane', { id: session.id, toggle: true }) },
   ];
+  // A shell's history of what its pane recorded, as the tab's menu has it (Layout.tsx paneMenu, `terminalHistory`).
+  if (session.kind === 'shell') items.push({ label: t('pane.menu.terminalHistory'), action: () => call('terminalHistory', { paneId: session.id }) });
+  else items.push({ label: t('pane.menu.copyLog'), disabled: session.logs.length === 0, action: () => void navigator.clipboard?.writeText(logText(session.logs, session.provider, t)).catch(() => {}) });
   if (session.kind !== 'shell') items.push({ label: t('pane.menu.newConversation'), disabled: session.status === 'running' || !session.resumeId, action: () => void bridge.call('newConversation', { paneId: session.id }).catch(() => {}) });
   items.push({ separator: true }, { label: t('menu.closePane'), action: () => call('closeSession', { id: session.id }) });
   return (
@@ -65,7 +72,8 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
   const store = useStoreState();
   const header = store.composers[session.id]?.header;
   // Another computer's pane (the remote mirror): its strip under the header.
-  const mirror = usePaneInfo().get(session.id)?.mirror;
+  const info = usePaneInfo().get(session.id);
+  const mirror = info?.mirror;
   const agent = session.kind === 'claude' || session.kind === 'shell';
   // An agent pane with a Mighty view always shows it; the conversation stays for the panes that have none.
   const mighty = drawsDiagram(session);
@@ -122,6 +130,12 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
             <button type="button" className="icon-button pane-plugins-button" data-testid="pane-plugins" title={t('pane.plugins.help', { provider: providerLabel(session.provider) })}
               aria-label={t('plugins.titleTemplate', { provider: providerLabel(session.provider) })} onClick={() => void bridge.call('openPlugins', { id: session.id }).catch(() => {})}>
               <Icon name="puzzle" size={14} weight={2.2} /></button>
+          )}
+          {/* The agent's terminal after its pane was closed (M/SessionPaneView.swift `agent-terminal-open-`): the pane back beside it, selected. */}
+          {info?.agentTerminal && (
+            <button type="button" className="icon-button pane-plugins-button" data-testid="pane-agent-terminal" title={t('agentTerminal.terminalPane.open')}
+              aria-label={t('agentTerminal.terminalPane.open')} onClick={() => void bridge.call('terminalPromptShow', { paneId: session.id }).catch(() => {})}>
+              <Icon name="terminal" size={14} weight={2.2} /></button>
           )}
           <PaneMenu session={session} />
         </span>

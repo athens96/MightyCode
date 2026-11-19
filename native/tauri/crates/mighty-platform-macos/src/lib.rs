@@ -17,11 +17,14 @@
 //!
 //! Real already: [`paths`] (`~/Library/Application Support/MightyCode`), [`cli_copies`], [`MacPathProbe`]. No Mac counterpart, by
 //! design: the firewall (Tailscale's direct path needs no rule on the Mac), the toast activator (Windows' COM activation), the
-//! terminal launcher (the Mac signs in in a terminal pane, `PlatformProfile::agent_sign_in`). Nor is there the Swift app's browser pane
+//! terminal launcher's console window (the Mac signs in in a terminal pane, `PlatformProfile::agent_sign_in`; its [`terminal`] launcher
+//! only hands the setup screen's script to Terminal.app when no workspace holds the pane). Nor is there the Swift app's browser pane
 //! (CEF or WKWebView, M-E): 0.5 opens a web page in the default browser ([`open_url`]).
 #![cfg(target_os = "macos")]
 
 pub mod agent_io;
+/// A crash's leftover children ended at the next launch (the Job Object's kill-on-close on Windows).
+pub mod child_groups;
 pub mod claude_credentials;
 pub mod clipboard;
 pub mod disk;
@@ -45,6 +48,8 @@ pub mod pty;
 pub mod secrets;
 pub mod session;
 pub mod setup;
+/// The setup script in a Terminal.app window (the terminal launcher).
+pub mod terminal;
 pub mod terminal_surface;
 pub mod update;
 pub mod update_transport;
@@ -59,8 +64,9 @@ use mighty_platform::{
 };
 
 pub use agent_io::{agent_io_connector, agent_io_listener};
+pub use child_groups::record_child_groups;
 pub use clipboard::clipboard;
-pub use disk::disk_space;
+pub use disk::{disk_space, names_ignore_case};
 pub use files::{file_ports, open_url, show_in_explorer};
 pub use fonts::font_catalog;
 pub use formats::{decimal_separator, long_time, number_grouping, short_date_time};
@@ -154,10 +160,10 @@ pub fn path_probe() -> Arc<dyn mighty_platform::PathProbe> {
     Arc::new(MacPathProbe)
 }
 
-/// A command in a terminal window of its own: none on the Mac, which signs in in its own terminal pane (W6;
-/// `PlatformProfile::agent_sign_in`).
+/// A script in a terminal window of its own: Terminal.app ([`terminal`]). The Mac signs in in its own terminal pane (W6;
+/// `PlatformProfile::agent_sign_in`); the setup screen's install falls back to this window when no local workspace holds its pane.
 pub fn terminal_launcher() -> Arc<dyn mighty_platform::TerminalLauncher> {
-    Arc::new(Unsupported)
+    terminal::terminal_launcher()
 }
 
 /// Each copy of the command `name` along the environment's PATH (M/AppStore+AskTargets.swift reads the login shell's PATH): an
