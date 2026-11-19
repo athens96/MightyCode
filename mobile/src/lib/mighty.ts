@@ -148,7 +148,7 @@ export function resultTitle(status: string, waiting: number | undefined, awaitin
  * The heading of a run's result card in the Mighty view: "✓ 최종 결과" once the run finished, 알림 대기 중 (no "✓",
  * it is not over) while it awaits its background work's notices, the result so far while its request's background work
  * runs (a notice run's, or from an older host), and plain
- * 최종 결과 for a run that failed or stopped, whose header strip already says so in its colour (`resultTitle`).
+ * 최종 결과 for a run that failed or stopped, whose header's dot, title ink and status word already say so (`resultTitle`).
  */
 export function resultCardHeading(run: Pick<MobileMightyRun, 'status' | 'backgroundWaiting' | 'awaitingNotice'>): string {
   if (run.status !== 'completed') return t('phone.blocks.finalResult');

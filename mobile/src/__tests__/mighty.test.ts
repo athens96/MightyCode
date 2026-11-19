@@ -659,7 +659,7 @@ describe('a result still waiting on background work', () => {
     expect(resultCardHeading({ status: 'completed' })).toBe(`✓ ${t('phone.blocks.finalResult')}`);
     expect(resultCardHeading({ status: 'completed', backgroundWaiting: 2 })).toBe(t('graph.block.resultSoFar', { count: 2 }));
     expect(resultCardHeading({ status: 'completed', backgroundWaiting: 2 }).startsWith('✓')).toBe(false);
-    // A failed or stopped run keeps the plain heading its strip's colour goes with, waiting count or not.
+    // A failed or stopped run keeps the plain heading its header's dot and status ink go with, waiting count or not.
     expect(resultCardHeading({ status: 'error', backgroundWaiting: 2 })).toBe(t('phone.blocks.finalResult'));
     expect(resultCardHeading({ status: 'stopped' })).toBe(t('phone.blocks.finalResult'));
   });

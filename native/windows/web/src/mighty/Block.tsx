@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Icon, type IconName } from '../icons/Icon';
+import { Icon } from '../icons/Icon';
 import { providerLabel } from '../conversation/format';
 import { useServices } from '../app/context';
 import { Entry } from '../conversation/Entry';
@@ -17,7 +17,7 @@ import type { MightyBlockCopy, MightyExecutionCard, MightyFile } from './types';
 import type { PlanRecord as PresentedPlanRecord } from '../cards/types';
 import { BottomRight, type Edges } from './resize';
 import { headerFit } from './flow';
-import { inkVar, markIcon } from './FlowParts';
+import { inkVar, markIcon, ToneDot } from './FlowParts';
 import { useMenu } from '../shell/parts';
 import { Pending } from '../pending/Pending';
 import type { PendingState } from '../pending/display';
@@ -179,28 +179,14 @@ function Indicator({ kind }: { kind: string }) {
   return null;
 }
 
-/** Each block's symbol and its tint (M/MightyGraphView.swift: the request's arrow message, 실행's gears, an agent's card, a task's terminal…). */
-function blockSymbol(kind: string, tone: string): IconName {
-  switch (kind) {
-    case 'request': return 'circle-arrow-up';
-    case 'work': return 'cog';
-    case 'step': return 'list-checks';
-    case 'agent': return 'square-user-round';
-    case 'task': return 'square-terminal';
-    case 'steer': return 'message-square-text';
-    case 'compact': return 'shrink';
-    case 'question': return 'message-circle-question-mark';
-    // The result so far (현재까지의 결과, Core MightyGraphBlock.SoFar) is drawn with the idle tone: a neutral clock, not the done seal.
-    case 'result': return tone === 'err' ? 'triangle-alert' : tone === 'stop' ? 'circle-stop' : tone === 'idle' ? 'clock' : 'badge-check';
-    // The 알림 대기 block (Core MightyGraphBlock.Awaiting): a clock in the run tone, not the done seal (amber is for what needs the user).
-    case 'awaitingNotice': return 'clock';
-    case 'plan': case 'planRecord': return 'clipboard-list';
-    case 'draft': return 'pencil';
-    case 'resultFiles': return 'files';
-    case 'images': return 'image';
-    case 'execution': return 'cog';
-    default: return 'square';
-  }
+/**
+ * The tone of a block's header dot (header option ⑨ 점 + 색 제목, /tmp/mc-design/headers.html .v9): its status colour, a request's always neutral, the
+ * result so far neutral too, and the 알림 대기 block in the run tone (under way, not waiting on the user: amber is for what needs the user).
+ */
+export function dotTone(kind: string, tone: string, soFar: boolean): string {
+  if (kind === 'request' || soFar) return 'idle';
+  if (kind === 'awaitingNotice') return 'run';
+  return tone;
 }
 
 /** The running or waiting edge over a card (MightyGraphActivity): a running one marches (Marching.tsx), a waiting or still one is a plain line. */
@@ -425,7 +411,7 @@ export const Block = memo(function Block(props: BlockProps) {
   const documentPlan = recorded?.plan ?? (kind === 'plan' ? extra.markdown : undefined);
   // A result whose request awaits notices is drawn as its own kind, the 알림 대기 block; it still acts as the result it stands in for.
   const shownKind = kind === 'result' && copy?.awaiting ? 'awaitingNotice' : kind;
-  // Who the block is (Core FlowCopy.Role): its role's ink on its icon, and the chips that fit beside what the header always shows
+  // Who the block is (Core FlowCopy.Role): its role's summary on its dot, its ink on its type, and the chips that fit beside what the header always shows
   // (flow.ts headerFit): the marks, the lead's effort, the type, which give way first in a narrow block.
   const role = copy?.flow?.role;
   const ink = role ? inkVar(role.ink) : undefined;
@@ -438,9 +424,10 @@ export const Block = memo(function Block(props: BlockProps) {
       data-pending-request={extra.pending ? id : undefined} data-empty={extra.empty ? '' : undefined}
       style={{ left: x, top: y, width: w, height: h }} title={copy?.fromRecord ? t('graph.history.tag') : undefined}>
       <div className={'mighty-head' + (role ? ' with-role' : '')}>
-        <span className={'mighty-symbol kind-' + (copy?.notice ? 'task' : shownKind)} style={role ? { color: ink } : undefined}
+        {/* The block's status as a small dot (⑨): its words are the header's (the title, the state in the meta), the role's summary its label. */}
+        <span className={'mighty-symbol kind-' + (copy?.notice ? 'task' : shownKind)}
           aria-hidden={role ? undefined : 'true'} role={role ? 'img' : undefined} aria-label={role?.summary} title={role?.summary} data-testid={role ? 'mighty-role-' + id : undefined}>
-          <Icon name={copy?.notice ? 'terminal' : blockSymbol(shownKind, copy?.soFar ? 'idle' : tone)} size={14} weight={1.75} /></span>
+          <ToneDot tone={dotTone(shownKind, tone, !!copy?.soFar)} /></span>
         <span className="mighty-title">
           {/* "요청 2 · Claude": the provider's mark before its name (ProviderBadgeIcon.labelled), else before the title. */}
           {copy?.provider && (copy.title ?? '').lastIndexOf(providerLabel(copy.provider)) > 0
@@ -466,11 +453,11 @@ export const Block = memo(function Block(props: BlockProps) {
         <span className="mighty-controls">
           {/* A sent request: nothing while it is new, then 전송 중 by the pending rule, its failure at once (MightyStatusMark). */}
           {extra.pending ? <Pending state={extra.pending} /> : <Indicator kind={copy?.indicator ?? 'none'} />}
-          {!extra.pending && copy?.state && status !== '' && kind !== 'result' && <span className={'mighty-pill tone-' + tone}>{copy.state}</span>}
-          {/* A result's header says its outcome by its bar and a pill in the outcome's tone; the result so far and the 알림 대기 block say
-              theirs in the title alone. */}
+          {/* The state's word in the meta, in ink2 (⑨: no pill); a result says its outcome by its dot and title colour and this word, the result
+              so far and the 알림 대기 block theirs in the title alone. */}
+          {!extra.pending && copy?.state && status !== '' && kind !== 'result' && <span className={'mighty-state tone-' + tone}>{copy.state}</span>}
           {kind === 'result' && !copy?.soFar && !copy?.awaiting && copy?.state && status !== '' && (
-            <span className={'mighty-pill tone-' + tone} data-testid={'mighty-result-pill-' + id}>{copy.state}</span>
+            <span className={'mighty-state tone-' + tone} data-testid={'mighty-result-state-' + id}>{copy.state}</span>
           )}
           {copy?.capsule && <span className="mighty-capsule" title={copy.help}>{copy.capsule}</span>}
           {kind === 'result' && copy?.filesRunId && (extra.files?.length ?? 0) > 0 && (

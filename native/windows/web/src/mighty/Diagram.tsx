@@ -11,7 +11,7 @@ import {
   emptyResultIds, finished, isAuxiliaryKind, isFixed, isResizable, latestResultID, makeLayout, MaximumHeight, MaximumWidth, minimumBlockSize, normalizedSizeFor,
   nodeId, resultDrag, resultDragSides, runNodeId, runOf, WorkSuffix, type Layout, type Size,
 } from './layout';
-import { CardHeight, DelegateKind, StepKind, focusedRequest, liveFlowIds, logRowsFit, logTarget, progressRequest, requestSpans, type RequestSpan } from './flow';
+import { CardHeight, DelegateKind, focusedRequest, liveFlowIds, logRowsFit, logTarget, progressRequest, requestSpans, type RequestSpan } from './flow';
 import { followRunIndex, newestRequestRun } from './notice';
 import { DelegateLineNode, FlowCardNode, FlowLogStrip, ProgressPanel } from './FlowParts';
 import { blockExtras } from './extras';
@@ -793,9 +793,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
             // The role view's own nodes (FlowParts.tsx), each drawn from its copy; a node whose copy has not come yet waits for it.
             if (node.compact) {
               const card = copy?.flow?.card;
-              // The 실행 card wears the 실행 block's gears, a step's card the checklist, a sub-agent or a command its own symbol.
-              const icon = node.kind === 'work' ? 'cog' : node.kind === StepKind ? 'list-checks' : copy?.kind === 'task' || card?.isTask ? 'square-terminal' : 'square-user-round';
-              return card ? <FlowCardNode key={node.id} id={node.id} kind={node.kind} icon={icon} x={x} y={y} w={w} h={h} card={card}
+              return card ? <FlowCardNode key={node.id} id={node.id} kind={node.kind} x={x} y={y} w={w} h={h} card={card}
                 outline={copy?.outline === 'marching' || copy?.outline === 'solid' || (card.running && node.kind !== 'agent')}
                 onActivate={activateCard} onOpen={(id) => openCard(id, true)} /> : null;
             }

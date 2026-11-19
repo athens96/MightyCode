@@ -12,6 +12,10 @@ import type { FlowCardCopy, FlowLineCopy, FlowLogCopy, FlowMarkCopy, FlowProgres
 /** A design token's colour (Core FlowRoles.Token, a role's or a custom agent's ink). */
 export const inkVar = (token: string) => `var(--${kebab(token)})`;
 
+/** A header's status dot with its soft halo, in a tone's colour (header option ⑨, mighty.css .tone-dot): the diagram's blocks and cards, the
+ * timeline's result cards and the pipeline's cards lead with it. */
+export const ToneDot = ({ tone }: { tone: string }) => <span className={'tone-dot dot-' + tone} aria-hidden="true" />;
+
 /** The symbol each mark is drawn with (macOS FlowMark.symbol). */
 export const markIcon = (name: FlowMarkCopy['name']): IconName => (name === 'background' ? 'square-stack' : name === 'fork' ? 'copy' : 'git-branch');
 
@@ -34,7 +38,7 @@ function useNow(running: boolean): number {
 }
 
 /** The card's second line: who it is (a command: its command line, set as code), then its figures — a command's exit code, the time read against the
- * page's clock, the tools and the tokens; the state is the header's pill. Only this line reads the clock. */
+ * page's clock, the tools and the tokens; the state is the header's word. Only this line reads the clock. */
 function CardFigures({ card, nodeId }: { card: FlowCardCopy; nodeId: string }) {
   const { t } = useServices();
   const now = useNow(card.running && card.startedAt !== undefined && !card.pending);
@@ -54,16 +58,15 @@ function CardFigures({ card, nodeId }: { card: FlowCardCopy; nodeId: string }) {
 
 /**
  * A block of the role view folded to its card (FlowCard): a sub-agent, a background command, the 실행 block or a step. It wears the full block's frame
- * — the same header with its glyph in the role's ink, title, nested count, marks, status pill and open button, the same corners — and holds two lines
+ * — the same header with its status dot, title, nested count, marks, state word and open button, the same corners — and holds two lines
  * under it: what it is doing (or did) now, and who it is with its figures. A click goes to a finished background block's copy, else opens the block in
  * place; the open button always opens it in place. Never selected or resized: a wheel over it pans.
  */
-export const FlowCardNode = memo(function FlowCardNode({ id, kind = 'agent', icon, x, y, w, h, card, outline, onActivate, onOpen }: {
-  id: string; kind?: string; icon: IconName; x: number; y: number; w: number; h: number; card: FlowCardCopy; outline: boolean;
+export const FlowCardNode = memo(function FlowCardNode({ id, kind = 'agent', x, y, w, h, card, outline, onActivate, onOpen }: {
+  id: string; kind?: string; x: number; y: number; w: number; h: number; card: FlowCardCopy; outline: boolean;
   onActivate: (id: string, copy: string | undefined) => void; onOpen: (id: string) => void;
 }) {
   const { t } = useServices();
-  const ink = inkVar(card.ink);
   const shade = tone(card);
   // What the main session said reads as text in the card's own ink; a command is code, quieter; a step not begun says so.
   const activity = card.activity ?? (card.pending ? card.stateWord : undefined);
@@ -74,13 +77,14 @@ export const FlowCardNode = memo(function FlowCardNode({ id, kind = 'agent', ico
       aria-label={[card.title, card.stateWord, card.identity, card.activity].filter(Boolean).join(', ')}
       onClick={(event) => { if (!(event.target as Element).closest('button')) onActivate(id, card.copyNodeId); }}>
       <div className="mighty-head flow-card-head">
-        <span className="mighty-symbol" style={{ color: ink }} aria-hidden="true"><Icon name={icon} size={14} weight={1.75} /></span>
+        {/* The card's status as the block header's dot (⑨), its state's word in the meta on the right. */}
+        <span className="mighty-symbol" aria-hidden="true"><ToneDot tone={shade} /></span>
         <span className="mighty-title flow-card-title">{card.title}</span>
         {card.nested > 0 && <span className="flow-card-nested" title={card.nestedHelp} aria-label={card.nestedHelp} data-testid={'mighty-card-nested-' + id}>(+{card.nested})</span>}
         {card.marks.map((mark) => <span key={mark.name} className="flow-mark" title={mark.help} aria-label={mark.help}><Icon name={markIcon(mark.name)} size={10} weight={2} /></span>)}
         <span className="flow-head-spacer" />
         <span className="mighty-controls">
-          <span className={'mighty-pill tone-' + shade} data-testid={'mighty-card-state-' + id}>{card.stateWord}</span>
+          <span className={'mighty-state tone-' + shade} data-testid={'mighty-card-state-' + id}>{card.stateWord}</span>
           <button type="button" className="mighty-icon flow-card-open" title={t('graph.card.open')} aria-label={t('graph.card.open')} data-testid={'mighty-expand-' + id}
             onClick={() => onOpen(id)}><Icon name="unfold-vertical" size={14} weight={1.75} /></button>
         </span>

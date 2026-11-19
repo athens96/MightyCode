@@ -475,12 +475,34 @@ export function toneColors(palette: Palette, tone: Tone): ToneColors {
   }
 }
 
+/** A block header's colours (`headerTone`): the status dot, the soft halo round it, the title's ink. */
+export interface HeaderTone {
+  dot: string;
+  halo: string;
+  title: string;
+}
+
+/**
+ * A request's block and result headers (option ⑨ "점 + 색 제목"): the header stays on the card, with
+ * an 8 pt dot in the status fill inside a 3 pt halo of its soft tint leading the title. A result-like
+ * block's title takes the status's text ink (`title`); a request, step or agent block keeps its own
+ * ink and wears the dot alone. No tone (`undefined`, `idle`) is the neutral request: a faint dot on
+ * the raised step, the secondary ink.
+ */
+export function headerTone(palette: Palette, tone: Tone | undefined): HeaderTone {
+  if (tone === undefined || tone === 'idle') {
+    return { dot: palette.textFaint, halo: palette.surfaceRaised, title: palette.textMuted };
+  }
+  const colors = toneColors(palette, tone);
+  return { dot: colors.fill, halo: colors.soft, title: colors.ink };
+}
+
 /**
  * The 파이프라인 view's state colours, from `native/contracts/fixtures/design-tokens.json`
- * (`pipeline`): a column takes a faint wash of its tone's soft tint at `columnTintOpacity`, each
- * card the stronger `cardTintOpacity` of the same tint, so the colour sits on the cards rather
- * than across the board, with a `cardBarWidth` bar in the tone's mark down its leading edge.
- * `pipeline-tone.test.ts` holds them to the contract.
+ * (`pipeline`): a column takes a faint wash of its tone's soft tint at `columnTintOpacity`. The
+ * phone's cards no longer use `cardTintOpacity` or `cardBarWidth`: since option ⑨ a card stays on
+ * its own background with a status dot before its title (`headerTone`, `StatusDot`). The values
+ * are still kept, and `pipeline-tone.test.ts` holds them to the contract the desktops share.
  */
 export const pipeline = {
   columnTintOpacity: 0.12,

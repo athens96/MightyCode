@@ -28,7 +28,7 @@ import {
 import type { MobileStructure, StructureActivity, StructureItem, StructureNode, StructureRow } from '@/api/types';
 import { AssistantMarkdown } from '@/components/assistant-markdown';
 import { BottomSheet } from '@/components/sheets';
-import { StatusChip } from '@/components/status-chip';
+import { StatusDot } from '@/components/status-dot';
 import { EmptyState } from '@/components/ui';
 import type { EndScrollable, FollowBottomProps } from '@/hooks/use-follow-bottom';
 import { t } from '@/lib/i18n';
@@ -81,6 +81,7 @@ import {
 import {
   cardShadow,
   dialog,
+  headerTone,
   monoText,
   pipeline,
   radius,
@@ -88,7 +89,6 @@ import {
   statusLabel,
   tintOver,
   toneColors,
-  toneMark,
   typeScale,
   usePalette,
   useStyles,
@@ -127,43 +127,59 @@ function stepColors(palette: Palette, look: StepLook, tone: Tone | undefined): {
 }
 
 /**
- * A 파이프라인 card's state (`cardTone`): its tone's soft tint laid on the card's own surface;
- * nothing for a step still to come. `CardBar` draws the bar down its leading edge.
+ * A 파이프라인 card's head (option ⑨ "점 + 색 제목"): the card keeps its own background — no tint,
+ * no bar down its edge, no pill — and a status dot in the card's tone (`cardTone`) leads its title.
+ * A result-like title takes the status's ink (`ink`); the status word follows as the meta, in the
+ * secondary ink, so it is read aloud where the pill used to be.
  */
-function cardTint(palette: Palette, tone: Tone | undefined): ViewStyle | undefined {
-  if (!tone) return undefined;
-  return { backgroundColor: tintOver(palette.surfaceRaised, toneColors(palette, tone).soft, pipeline.cardTintOpacity) };
-}
-
-/**
- * A tinted card's bar in its tone's mark: a straight bar down the leading edge, clipped to the
- * card's corners by a layer of its own, so the card keeps its shadow, its content does not move
- * and the running outline still goes round the whole card. Nothing on an untinted card.
- */
-function CardBar({ tone }: { tone: Tone | undefined }) {
+function CardHead({
+  tone,
+  title,
+  ink,
+  status,
+  children,
+  testID,
+}: {
+  tone: Tone | undefined;
+  title: string;
+  /** The title in its status's text ink: the result-like cards. */
+  ink?: boolean;
+  /** The status word, as the head's meta; absent where the title already says it. */
+  status?: string;
+  /** More meta after the status word (the tally). */
+  children?: ReactElement | null;
+  testID?: string;
+}) {
   const palette = usePalette();
   const styles = useStyles(makeStyles);
-  if (!tone) return null;
   return (
-    <View pointerEvents="none" style={styles.cardClip}>
-      <View style={[styles.cardBar, { backgroundColor: toneMark(palette, tone) }]} />
+    <View style={styles.cardHead} testID={testID}>
+      <StatusDot tone={tone} />
+      <Text numberOfLines={2} style={[styles.cardTitle, ink && { color: headerTone(palette, tone).title }]}>
+        {title}
+      </Text>
+      {status ? (
+        <Text numberOfLines={1} style={styles.cardMeta}>
+          {statusLabel(status)}
+        </Text>
+      ) : null}
+      {children}
     </View>
   );
 }
 
-/**
- * A status pill on a pipeline card: on a tinted card, a hairline in the card's mark round it, so
- * the pill's own soft fill still reads against the tint (the Mac's `tintedCardEdge`).
- */
-function CardPill({ status, tone }: { status: string; tone: Tone | undefined }) {
-  const palette = usePalette();
-  const styles = useStyles(makeStyles);
-  return (
-    <View>
-      <StatusChip status={status} />
-      {tone ? <View pointerEvents="none" style={[styles.pillEdge, { borderColor: toneMark(palette, tone) }]} /> : null}
-    </View>
-  );
+/** A result's tone in its head: the running blue while it awaits its notices, the secondary ink for the result so far. */
+function resultTone(item: StructureItem, tone: Tone | undefined): Tone | undefined {
+  if (item.status === 'error' || item.status === 'stopped') return toneOf(item.status);
+  if (item.awaitingNotice === true) return 'run';
+  if (item.status === 'completed' && item.backgroundWaiting !== undefined && item.backgroundWaiting > 0) return undefined;
+  return tone;
+}
+
+/** Whether a result's heading already says its state (알림 대기 중, the result so far), so no status word follows it. */
+function resultSaysState(item: StructureItem): boolean {
+  if (item.status === 'error' || item.status === 'stopped') return false;
+  return item.awaitingNotice === true || (item.backgroundWaiting !== undefined && item.backgroundWaiting > 0);
 }
 
 /**
@@ -304,33 +320,27 @@ function Outcome({ item }: { item: StructureItem }) {
   );
 }
 
-/** A free board's 요청: the column and the bar already say which, so the card is what was asked. */
-const RequestCard = memo(function RequestCard({ item, tone }: { item: StructureItem; tone?: Tone }) {
-  const palette = usePalette();
+/** A free board's 요청: a neutral dot before its heading (a request has no state of its own), then what was asked. */
+const RequestCard = memo(function RequestCard({ item }: { item: StructureItem; tone?: Tone }) {
   const styles = useStyles(makeStyles);
   return (
-    <View style={[styles.card, cardTint(palette, tone)]}>
-      <CardBar tone={tone} />
+    <View style={styles.card}>
+      <CardHead tone={undefined} title={itemHeading(item)} />
       {item.request ? (
         <FoldableText text={item.request} lines={FOLD_LINES.request} label={t('graph.structure.column.request')} />
-      ) : (
-        <Text style={styles.heading}>{itemHeading(item)}</Text>
-      )}
+      ) : null}
     </View>
   );
 });
 
 /** A free board's 실행: it starts with its status, then the latest reply and tool calls. */
 const ExecutionCard = memo(function ExecutionCard({ item, tone }: { item: StructureItem; tone?: Tone }) {
-  const palette = usePalette();
   const styles = useStyles(makeStyles);
   return (
-    <View accessibilityLabel={executionTitle(item)} style={[styles.card, cardTint(palette, tone)]}>
-      <CardBar tone={tone} />
-      <View style={styles.partHead}>
-        <CardPill status={item.status} tone={tone} />
+    <View accessibilityLabel={executionTitle(item)} style={styles.card}>
+      <CardHead tone={tone} title={executionTitle(item)} status={item.status}>
         <Tally item={item} />
-      </View>
+      </CardHead>
       <Progress item={item} />
       <OmittedNodes item={item} />
       <RunningOutline status={item.status} corner={radius.card} />
@@ -338,19 +348,22 @@ const ExecutionCard = memo(function ExecutionCard({ item, tone }: { item: Struct
   );
 });
 
-/** A free board's 결과: titled only when the request failed or stopped. */
+/**
+ * A free board's 결과: its heading in the status's ink after the dot — done green, an error red, a stop grey,
+ * 알림 대기 중 in the running blue while it awaits its background work's notices, the result so far in the
+ * secondary ink — then the answer.
+ */
 const ResultCard = memo(function ResultCard({ item, tone }: { item: StructureItem; tone?: Tone }) {
-  const palette = usePalette();
   const styles = useStyles(makeStyles);
-  const ended = item.status === 'error' || item.status === 'stopped';
-  // Awaiting its background work's notices, the answer is titled 알림 대기 중 in the wait ink.
-  const awaiting = !ended && item.awaitingNotice === true;
   return (
-    <View style={[styles.card, cardTint(palette, tone)]}>
-      <CardBar tone={tone} />
-      {ended || awaiting ? (
-        <Text style={[styles.partLabel, { color: toneColors(palette, awaiting ? 'wait' : toneOf(item.status)).ink }]}>{resultHeading(item)}</Text>
-      ) : null}
+    <View style={styles.card}>
+      <CardHead
+        tone={resultTone(item, tone)}
+        title={resultHeading(item)}
+        ink
+        {...(item.finished && !resultSaysState(item) ? { status: item.status } : {})}
+        testID={`structure-result-head-${item.runId}`}
+      />
       <Outcome item={item} />
     </View>
   );
@@ -381,14 +394,16 @@ function FoldedCard({ item, onOpen, tone }: { item: StructureItem; onOpen: () =>
       accessibilityHint={t('graph.structure.unfoldCard')}
       accessibilityState={{ expanded: false }}
       onPress={onOpen}
-      style={({ pressed }) => [styles.card, cardTint(palette, tone), styles.folded, pressed && styles.pressed]}
+      style={({ pressed }) => [styles.card, styles.folded, pressed && styles.pressed]}
     >
-      <CardBar tone={tone} />
       <View style={styles.foldedHead}>
+        <StatusDot tone={tone} />
         <Text numberOfLines={1} style={[styles.heading, styles.foldedHeading]}>
           {itemHeading(item)}
         </Text>
-        <CardPill status={item.status} tone={tone} />
+        <Text numberOfLines={1} style={styles.cardMeta}>
+          {statusLabel(item.status)}
+        </Text>
         <Tally item={item} />
         <Text style={styles.foldMark}>▾</Text>
       </View>
@@ -425,9 +440,11 @@ const SummaryCard = memo(function SummaryCard({
   const styles = useStyles(makeStyles);
   if (folded) return <FoldedCard item={item} tone={tone} onOpen={() => onToggle(item)} />;
   return (
-    <View style={[styles.card, cardTint(palette, tone)]}>
-      <CardBar tone={tone} />
+    <View style={styles.card}>
       <View style={styles.headingRow}>
+        <View style={styles.headingDot}>
+          <StatusDot tone={tone} />
+        </View>
         <Text accessibilityRole="header" numberOfLines={2} style={[styles.heading, styles.headingText]}>
           {itemHeading(item)}
         </Text>
@@ -452,16 +469,21 @@ const SummaryCard = memo(function SummaryCard({
         <Text numberOfLines={1} style={styles.partLabel}>
           {executionTitle(item)}
         </Text>
-        <CardPill status={item.status} tone={tone} />
+        <Text numberOfLines={1} style={styles.cardMeta}>
+          {statusLabel(item.status)}
+        </Text>
         <Tally item={item} />
       </View>
       <Progress item={item} />
       <OmittedNodes item={item} />
       {item.finished ? (
         <View style={styles.foldable}>
-          <Text style={[styles.partLabel, { color: toneColors(palette, toneOf(item.status)).ink }]}>
-            {resultHeading(item)}
-          </Text>
+          <View style={styles.partHead}>
+            <StatusDot tone={resultTone(item, toneOf(item.status))} />
+            <Text style={[styles.partLabel, { color: headerTone(palette, resultTone(item, toneOf(item.status))).title }]}>
+              {resultHeading(item)}
+            </Text>
+          </View>
           <Outcome item={item} />
         </View>
       ) : null}
@@ -471,11 +493,10 @@ const SummaryCard = memo(function SummaryCard({
 });
 
 /**
- * A sub-agent or task: its status as a bar, its title, kind and model, the block it runs
+ * A sub-agent or task: its status as a dot leading its title, kind and model, the block it runs
  * under when nested (indented by its depth too), what it was asked and said.
  */
 const AgentCard = memo(function AgentCard({ node, parent, tone }: { node: StructureNode; parent?: string; tone?: Tone }) {
-  const palette = usePalette();
   const styles = useStyles(makeStyles);
   const [open, setOpen] = useState(false);
   const folds = nodeFolds(node);
@@ -493,22 +514,20 @@ const AgentCard = memo(function AgentCard({ node, parent, tone }: { node: Struct
   const opens = task && ended && (lines.length > 0 || !!reply);
   return (
     <View
-      style={[
-        styles.node,
-        { marginLeft: node.depth * spacing.lg },
-        tone && { backgroundColor: tintOver(palette.surface, toneColors(palette, tone).soft, pipeline.cardTintOpacity) },
-      ]}
+      style={[styles.node, { marginLeft: node.depth * spacing.lg }]}
     >
-      {/* The sub-agent card's own bar is the pipeline's bar: one bar, in the tone's mark; none untinted. */}
-      {tone ? <View style={[styles.nodeBar, { backgroundColor: toneMark(palette, tone) }]} /> : null}
       <View style={styles.nodeBody}>
-        <Text
-          accessibilityLabel={t('graph.structure.nodeAccessibility', { title, status: statusLabel(node.status) })}
-          numberOfLines={1}
-          style={styles.nodeTitle}
-        >
-          {title}
-        </Text>
+        {/* The sub-agent's head: a dot in its status's tone before its title, on the card's own background. */}
+        <View style={styles.nodeHead}>
+          <StatusDot tone={tone} />
+          <Text
+            accessibilityLabel={t('graph.structure.nodeAccessibility', { title, status: statusLabel(node.status) })}
+            numberOfLines={1}
+            style={styles.nodeTitle}
+          >
+            {title}
+          </Text>
+        </View>
         <Text numberOfLines={1} style={styles.nodeMeta}>
           {`${label ? [label, ...meta.split(' · ').slice(1)].join(' · ') : meta} · ${statusLabel(node.status)}`}
         </Text>
@@ -935,7 +954,7 @@ function BoardListSheet({
             <Text style={styles.boardNumber}>{board.kind === 'request' ? (omitted ?? 0) + index + 1 : index + 1}</Text>
             <View style={styles.boardTexts}>
               <View style={styles.partHead}>
-                <StatusChip status={board.status} />
+                <StatusDot tone={toneOf(board.status)} />
                 <Text numberOfLines={1} style={[styles.boardTitle, selected && { color: palette.accent }]}>
                   {title}
                 </Text>
@@ -1037,12 +1056,15 @@ function BoardView({
           ) : null}
         </View>
         <View style={styles.statusRow}>
-          <StatusChip status={board.status} />
+          <StatusDot tone={toneOf(board.status)} testID="structure-board-dot" />
           {board.kind === 'pipeline' ? (
             <Text accessibilityRole="header" numberOfLines={1} style={[styles.heading, styles.headingText]}>
               {boardTitle(board, boards.length, structure.omitted)}
             </Text>
           ) : null}
+          <Text numberOfLines={1} style={styles.cardMeta}>
+            {statusLabel(board.status)}
+          </Text>
         </View>
         {index === 0 && structure.omitted ? (
           <Text style={styles.note}>{t('phone.structure.omitted', { count: structure.omitted })}</Text>
@@ -1168,9 +1190,12 @@ const makeStyles = (palette: Palette) =>
     heading: { ...typeScale.heading, color: palette.text, fontSize: 15, lineHeight: 20 },
     headingRow: { alignItems: 'flex-start', flexDirection: 'row', gap: spacing.md },
     headingText: { flex: 1 },
-    cardClip: { bottom: 0, left: 0, position: 'absolute', right: 0, top: 0, borderRadius: radius.card, overflow: 'hidden' },
-    cardBar: { bottom: 0, left: 0, position: 'absolute', top: 0, width: pipeline.cardBarWidth },
-    pillEdge: { bottom: 0, left: 0, position: 'absolute', right: 0, top: 0, borderRadius: radius.round, borderWidth: 1 },
+    // The 14 pt dot, centred on the heading's first 20 pt line.
+    headingDot: { paddingTop: spacing.xs },
+    cardHead: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
+    cardTitle: { color: palette.text, flexShrink: 1, fontSize: 13, fontWeight: '700', lineHeight: 18 },
+    // A head's meta (option ⑨): the status word in the secondary ink, where the pill was.
+    cardMeta: { color: palette.textMuted, fontSize: 11.5, fontWeight: '500' },
     folded: { gap: spacing.xs },
     foldedHead: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
     foldedHeading: { flexShrink: 1 },
@@ -1193,9 +1218,9 @@ const makeStyles = (palette: Palette) =>
       flexDirection: 'row',
       overflow: 'hidden',
     },
-    nodeBar: { width: pipeline.cardBarWidth },
     nodeBody: { flex: 1, gap: spacing.xs, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
-    nodeTitle: { color: palette.text, fontSize: 12.5, fontWeight: '700' },
+    nodeHead: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
+    nodeTitle: { color: palette.text, flexShrink: 1, fontSize: 12.5, fontWeight: '700' },
     nodeMeta: { color: palette.textMuted, fontSize: 11 },
     // A picker row of the shared bottom sheet: edge to edge, `dialog.rowHeight` tall.
     boardRow: {

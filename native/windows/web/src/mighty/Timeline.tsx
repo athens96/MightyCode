@@ -8,7 +8,7 @@ import { useReferenceClick } from '../conversation/referenceClick';
 import { Icon, type IconName } from '../icons/Icon';
 import { ProviderMark } from '../conversation/ProviderMark';
 import { providerLabel } from '../conversation/format';
-import { inkVar } from './FlowParts';
+import { inkVar, ToneDot } from './FlowParts';
 import { Pending } from '../pending/Pending';
 import type { PendingState } from '../pending/display';
 import { holding, pendingRunId, requestState, runsFor, type PendingRequest } from '../pending/requests';
@@ -144,7 +144,8 @@ const Group = memo(function Group({ group, run, paneId, provider, onOpenRow, pen
       {group.result !== undefined && (
         <div className={'timeline-result tone-' + resultTone} data-node-id={group.resultNodeId}>
           <div className="timeline-result-head">
-            <Icon name={resultTone === 'err' ? 'triangle-alert' : resultTone === 'stop' ? 'circle-stop' : resultTone === 'wait' || resultTone === 'run' || resultTone === 'idle' ? 'clock' : 'badge-check'} size={12} weight={2.4} />
+            {/* The outcome as the diagram's result header says it (⑨): a dot in its tone and the title in its ink. */}
+            <ToneDot tone={resultTone} />
             <span className="timeline-result-title">{timelineResultTitle(group, t)}</span>
             <span className="spacer" />
             {group.resultCaption && <span className="timeline-result-caption">{group.resultCaption}</span>}

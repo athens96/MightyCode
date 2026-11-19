@@ -12,6 +12,7 @@ import {
   statusText,
   stillRunning,
 } from '@/lib/flow-roles';
+import { StatusDot } from '@/components/status-dot';
 import { toneOf } from '@/lib/status-tone';
 import { t } from '@/lib/i18n';
 import { monoText, radius, spacing, toneColors, useStyles, usePalette, type Palette } from '@/theme';
@@ -226,7 +227,6 @@ const PROGRESS_ROW_STEP = 28;
  * line counts what an older host (or a runaway plan past the host's cap) leaves out. Folded, the header and the request line stay.
  */
 export function ProgressPanel({ progress, onRequest }: { progress: MobileProgress; onRequest?: () => void }) {
-  const palette = usePalette();
   const styles = useStyles(makeStyles);
   const [folded, setFolded] = useState(false);
   const background = progress.background ?? [];
@@ -235,7 +235,6 @@ export function ProgressPanel({ progress, onRequest }: { progress: MobileProgres
     (progress.running && progress.rows.some((row) => row.state === 'current' && row.startedAt !== undefined && row.endedAt === undefined)) ||
     background.some((line) => line.state === 'current' && line.startedAt !== undefined && line.endedAt === undefined);
   const now = useNow(1000, ticking);
-  const tone = toneColors(palette, toneOf(progress.status));
   const rowsView = useRef<ScrollView>(null);
   const rowTops = useRef(new Map<number, number>());
   const scrolledTo = useRef<number | undefined>(undefined);
@@ -274,10 +273,9 @@ export function ProgressPanel({ progress, onRequest }: { progress: MobileProgres
       </View>
       <Pressable accessibilityRole="button" onPress={onRequest} disabled={!onRequest} testID="mighty-progress-request">
         <View style={styles.progressRequestRow}>
+          <StatusDot tone={toneOf(progress.status)} testID="mighty-progress-dot" />
           <Text style={styles.progressHeading}>{progress.heading}</Text>
-          <View style={[styles.progressPill, { backgroundColor: tone.soft }]}>
-            <Text style={[styles.progressPillText, { color: tone.ink }]}>{progress.stateWord}</Text>
-          </View>
+          <Text style={styles.progressState}>{progress.stateWord}</Text>
         </View>
         {progress.request ? (
           <Text numberOfLines={2} style={styles.progressRequest}>
@@ -380,8 +378,8 @@ const makeStyles = (palette: Palette) =>
     progressFold: { color: palette.textMuted, fontSize: 14, fontWeight: '700' },
     progressRequestRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
     progressHeading: { color: palette.text, fontSize: 12.5, fontWeight: '700' },
-    progressPill: { borderRadius: radius.md, paddingHorizontal: spacing.sm, paddingVertical: 1 },
-    progressPillText: { fontSize: 11, fontWeight: '700' },
+    // The request's state as the header's meta (option ⑨): the secondary ink, the dot before the heading carries its colour.
+    progressState: { color: palette.textMuted, fontSize: 11.5, fontWeight: '500' },
     progressRequest: { color: palette.textMuted, fontSize: 12.5, lineHeight: 17 },
     progressRowsRoom: { flexGrow: 0, maxHeight: PROGRESS_ROWS_HEIGHT },
     progressRows: { gap: spacing.xs, paddingTop: spacing.xs },

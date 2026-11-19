@@ -13,6 +13,7 @@ import { structureResultLook } from './resultTitle';
 import { usePageOverlay } from '../shell/overlay';
 import { usePopover } from '../shell/popover';
 import { Icon, type IconName } from '../icons/Icon';
+import { ToneDot } from './FlowParts';
 import { Pending } from '../pending/Pending';
 import { holding, pendingRunId, requestState, runsFor, type PendingRequest } from '../pending/requests';
 import { submitScroll } from '../pending/submitScroll';
@@ -78,7 +79,7 @@ const Bolt = ({ status }: { status: string }) => status === 'running' ? <span cl
 
 /**
  * A card of the board (M/MightyStructureView.swift card): the request's words; the 실행 part with its pill, tally, latest reply and
- * tool calls; the result's answer or what it waits for; a styled board's summary; or a sub-agent's small card with its status bar.
+ * tool calls; the result's answer or what it waits for; a styled board's summary; or a sub-agent's small card led by its status dot.
  */
 const Card = memo(function Card({ card, onFold, onReveal }: { card: StructureCard; onFold: (element: HTMLElement) => void; onReveal: Reveal }) {
   const { t } = useServices();
@@ -93,7 +94,8 @@ const Card = memo(function Card({ card, onFold, onReveal }: { card: StructureCar
       {card.activity.length > 0 && <div className="structure-activity">{card.activity.map((a, i) => <ActivityRow key={i} line={a} />)}</div>}
     </>
   );
-  const pill = <span className={'mighty-pill tone-' + card.tone}>{card.statusWord}</span>;
+  // The 실행 part's state as the diagram's headers say it (⑨): a dot in its tone and its word in the tone's ink, no pill.
+  const pill = <span className={'structure-state tone-' + card.tone}><ToneDot tone={card.tone} />{card.statusWord}</span>;
   switch (card.kind) {
     case 'request':
       return (
@@ -146,8 +148,6 @@ const Card = memo(function Card({ card, onFold, onReveal }: { card: StructureCar
       );
     default: {
       const task = card.nodeKind === 'task';
-      // A task notice (the only steer the structure keeps) wears the steer's glyph and ink, as its timeline row does.
-      const steer = card.nodeKind === 'steer';
       const last = card.activity[card.activity.length - 1];
       // A background sub-agent or run is named as the diagram's block names it, in place of its plain kind.
       const label = backgroundLabel(t, { kind: card.nodeKind, background: card.background, status: card.status });
@@ -161,7 +161,8 @@ const Card = memo(function Card({ card, onFold, onReveal }: { card: StructureCar
         <div className={'structure-node tone-' + card.tone + edgeClass(card.status) + tintClass(card.tint)} data-card-id={card.id} data-node-id={card.nodeId}
           style={{ marginLeft: Math.min(card.depth ?? 0, 3) * 16 }}>
           <div className="structure-card-row">
-            <span className={'structure-node-glyph' + (task ? ' task' : steer ? ' steer' : '')}><Icon name={task ? 'square-terminal' : steer ? 'message-square-text' : 'square-user-round'} size={11} weight={2} /></span>
+            {/* Its status as the diagram's block header says it (⑨): a dot in its tone; its kind is in its meta. */}
+            <span className="structure-node-glyph"><ToneDot tone={card.tone} /></span>
             <span className="structure-node-title">{card.title}</span>
             {meta && <span className="structure-node-meta">{meta}</span>}
             <span className="spacer" /><Bolt status={card.status} /><RevealButton id={card.nodeId} fallback={request} onReveal={onReveal} />
@@ -183,8 +184,10 @@ const Card = memo(function Card({ card, onFold, onReveal }: { card: StructureCar
  * so far without outcome ink while background work runs (resultTitle.ts). */
 function ResultTitle({ card }: { card: StructureCard }) {
   const { t } = useServices();
-  const { title, icon, awaiting, soFar } = structureResultLook(card, t);
-  return <span className={'structure-result-title' + (awaiting ? ' tone-run' : card.finished && !soFar ? ' tone-' + card.tone : '')} data-awaiting={awaiting ? '' : undefined}><Icon name={icon} size={11} weight={2} />{title}</span>;
+  const { title, awaiting, soFar } = structureResultLook(card, t);
+  const tone = awaiting ? 'run' : card.finished && !soFar ? card.tone : 'idle';
+  // ⑨: a dot in the outcome's tone before the title in its ink.
+  return <span className={'structure-result-title tone-' + tone} data-awaiting={awaiting ? '' : undefined}><ToneDot tone={tone} />{title}</span>;
 }
 
 /** A column's step as the pipeline's chip (M/MightyStructureView.swift chip): done green with a check, current the accent with a dot, pending grey with a ring. */

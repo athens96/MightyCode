@@ -15,7 +15,7 @@ import { AssistantMarkdown } from '@/components/assistant-markdown';
 import { NoticeReply, RunHead } from '@/components/background-run';
 import { AdvisorCard, CardLines, DelegateRow, ProgressPanel, ReturnRow, RoleBar } from '@/components/flow-roles';
 import { ResultFiles } from '@/components/result-files';
-import { StatusChip } from '@/components/status-chip';
+import { StatusDot } from '@/components/status-dot';
 import { EmptyState } from '@/components/ui';
 import { formatDuration } from '@/components/log-entry-view';
 import type { EndScrollable, FollowBottomProps } from '@/hooks/use-follow-bottom';
@@ -47,8 +47,10 @@ import {
   cardShadow,
   monoText,
   motion,
+  headerTone,
   radius,
   spacing,
+  statusLabel,
   toneColors,
   typeScale,
   useStyles,
@@ -254,10 +256,15 @@ function BlockRow({
           style={({ pressed }) => [styles.blockHead, pressed && styles.pressed]}
         >
           <View style={styles.blockBody}>
-            <Text numberOfLines={2} style={styles.blockTitle}>
-              {blockTitle(block)}
-              {card?.nested ? <Text style={styles.nested}>{` (+${card.nested})`}</Text> : null}
-            </Text>
+            <View style={styles.titleRow}>
+              <View style={styles.titleDot}>
+                <StatusDot tone={tone} testID={`mighty-dot-${block.id}`} />
+              </View>
+              <Text numberOfLines={2} style={styles.blockTitle}>
+                {blockTitle(block)}
+                {card?.nested ? <Text style={styles.nested}>{` (+${card.nested})`}</Text> : null}
+              </Text>
+            </View>
             {card ? (
               <CardLines block={block} card={card} identity={identity} task={run} />
             ) : (
@@ -288,7 +295,9 @@ function BlockRow({
               {copy ? t('graph.card.showCopy') : open ? t('phone.blocks.collapse') : t('phone.blocks.expand')}
             </Text>
           </View>
-          <StatusChip status={block.status} />
+          <Text numberOfLines={1} style={styles.meta}>
+            {statusLabel(block.status)}
+          </Text>
         </Pressable>
         {open ? (
           <BlockDetails
@@ -356,25 +365,42 @@ function BlockDetails({
 
 /**
  * The run's final answer, set apart from the blocks the way the Mac's result block is: a
- * white card under a header strip in the run's colour — green once it finished, the
- * status colour when it ended in an error or was stopped. A long answer shows its head
- * until asked for the rest.
+ * white card whose header stays on the card (option ⑨), a status dot and the title in the
+ * status's ink — green once it finished, red for an error, the stop grey when stopped, the
+ * running blue while it awaits its background work's notices, the secondary ink for the
+ * result so far — and the status word as its meta. A long answer shows its head until
+ * asked for the rest.
  */
 function ResultCard({ run, text }: { run: MobileMightyRun; text: string }) {
   const palette = usePalette();
   const styles = useStyles(makeStyles);
   const [full, setFull] = useState(false);
   const { preview, folded } = resultPreview(text);
-  // Awaiting its background work's notices, the card is the 알림 대기 block: the wait strip, and the work's rows under the answer so far.
+  // Awaiting its background work's notices, the card is the 알림 대기 block: the running blue, and the work's rows under the answer so far.
   const awaiting = run.status === 'completed' ? run.awaitingNotice : undefined;
-  const colors = toneColors(palette, awaiting ? 'wait' : toneOf(run.status));
+  // The result so far, while the request's background work runs: the secondary ink.
+  const soFar = run.status === 'completed' && !awaiting && run.backgroundWaiting !== undefined && run.backgroundWaiting > 0;
+  const tone = awaiting ? 'run' : soFar ? undefined : toneOf(run.status);
+  const heading = resultCardHeading(run);
+  // The heading already says 알림 대기 중 or the result so far; otherwise the status word, which the pill used to carry.
+  const meta = awaiting || soFar ? undefined : statusLabel(run.status);
 
   return (
     <View style={styles.resultCard}>
-      <View style={[styles.resultHead, { backgroundColor: colors.fill }]}>
-        <Text style={[styles.resultHeading, { color: colors.onFill }]}>
-          {resultCardHeading(run)}
-        </Text>
+      <View
+        accessible
+        accessibilityRole="header"
+        accessibilityLabel={meta ? `${heading}, ${meta}` : heading}
+        style={styles.resultHead}
+        testID={`mighty-result-head-${run.id}`}
+      >
+        <StatusDot tone={tone} />
+        <Text style={[styles.resultHeading, { color: headerTone(palette, tone).title }]}>{heading}</Text>
+        {meta ? (
+          <Text numberOfLines={1} style={styles.meta}>
+            {meta}
+          </Text>
+        ) : null}
       </View>
       <View style={styles.resultBody}>
         <AssistantMarkdown selectable text={full ? text : preview} />
@@ -399,7 +425,7 @@ function ResultCard({ run, text }: { run: MobileMightyRun; text: string }) {
                 <Text style={styles.awaitingWord}>{awaitedTaskWord(task.status)}</Text>
               </View>
             ))}
-            <Text style={[styles.awaitingProgress, { color: toneColors(palette, 'wait').ink }]}>{awaitingProgress(awaiting)}</Text>
+            <Text style={[styles.awaitingProgress, { color: toneColors(palette, 'run').ink }]}>{awaitingProgress(awaiting)}</Text>
           </View>
         ) : null}
       </View>
@@ -452,10 +478,13 @@ function RunGroup({ run, ordinal, newest, onOpenFile, focus, copies }: {
       >
         <View style={styles.runTitleRow}>
           <Text style={styles.runChevron}>{open ? '▾' : '▸'}</Text>
+          <StatusDot tone={toneOf(run.status)} testID={`mighty-run-dot-${run.id}`} />
           <Text numberOfLines={2} style={styles.runTitle}>
             {runHeading(run, ordinal)}
           </Text>
-          <StatusChip status={run.status} />
+          <Text numberOfLines={1} style={styles.meta}>
+            {statusLabel(run.status)}
+          </Text>
         </View>
         {preview ? (
           <Text numberOfLines={2} style={styles.runPreview}>
@@ -775,7 +804,12 @@ const makeStyles = (palette: Palette) =>
       paddingVertical: spacing.md,
     },
     blockBody: { flex: 1, gap: spacing.xs },
-    blockTitle: { color: palette.text, fontSize: 14, fontWeight: '700', lineHeight: 19 },
+    titleRow: { alignItems: 'flex-start', flexDirection: 'row', gap: spacing.md },
+    // The 14 pt dot, centred on the title's first 19 pt line.
+    titleDot: { paddingTop: spacing.xs },
+    blockTitle: { color: palette.text, flex: 1, fontSize: 14, fontWeight: '700', lineHeight: 19 },
+    // A header's meta on the right (option ⑨): the status word in the secondary ink, no pill.
+    meta: { color: palette.textMuted, fontSize: 11.5, fontWeight: '500', lineHeight: 19 },
     nested: { color: palette.textFaint, fontSize: 12, fontWeight: '600' },
     blockMeta: { color: palette.textMuted, fontSize: 11.5 },
     blockSummary: { color: palette.textMuted, fontSize: 12, lineHeight: 17, marginTop: spacing.xs },
@@ -795,8 +829,17 @@ const makeStyles = (palette: Palette) =>
       marginTop: spacing.xs,
       overflow: 'hidden',
     },
-    resultHead: { paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
-    resultHeading: { fontSize: 12.5, fontWeight: '800' },
+    resultHead: {
+      alignItems: 'center',
+      borderBottomColor: palette.border,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      flexDirection: 'row',
+      gap: spacing.md,
+      minHeight: 32,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.sm,
+    },
+    resultHeading: { flex: 1, fontSize: 12.5, fontWeight: '800' },
     resultBody: { gap: spacing.xs, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
     awaiting: { gap: spacing.xs, paddingTop: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border },
     awaitingRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.sm },

@@ -43,10 +43,11 @@ describe('the 알림 대기 block', () => {
   it('is drawn as its own kind, under way and marching, with the answer so far and then the work rows', () => {
     const html = render(copy(rows));
     expect(html).toContain('class="mighty-block kind-awaitingNotice tone-run halo"');
-    // No outcome pill: the title says 알림 대기 중.
-    expect(html).not.toContain('mighty-result-pill');
+    // No outcome word: the title says 알림 대기 중; the header leads with the run tone's dot (⑨).
+    expect(html).not.toContain('mighty-result-state');
     expect(html).toContain('data-kind="awaitingNotice"');
     expect(html).toContain('mighty-symbol kind-awaitingNotice');
+    expect(html).toContain('class="tone-dot dot-run"');
     expect(html).toContain('data-outline="marching"');
     expect(html).toContain('>알림 대기 중<');
     expect(html.indexOf('Started the build.')).toBeGreaterThan(0);
@@ -62,7 +63,9 @@ describe('the 알림 대기 block', () => {
     expect(html).toContain('data-kind="result"');
     expect(html).not.toContain('mighty-awaiting');
     expect(html).toContain('>최종 결과<');
-    // Its outcome in a pill in the done tone, beside the bar the header draws.
-    expect(html).toContain('class="mighty-pill tone-done" data-testid="mighty-result-pill-5:r:result">완료<');
+    // Its outcome (⑨): a dot in the done tone, and the outcome's word in the meta, no pill or bar.
+    expect(html).toContain('class="tone-dot dot-done"');
+    expect(html).toContain('class="mighty-state tone-done" data-testid="mighty-result-state-5:r:result">완료<');
+    expect(html).not.toContain('mighty-pill');
   });
 });

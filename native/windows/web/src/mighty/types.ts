@@ -27,7 +27,7 @@ export interface MightyBlockCopy {
   notice?: boolean;
   /** A result whose request awaits its background work's notices (Core MightyGraphBlock.Awaiting): the 알림 대기 block, its rows under the answer so far. */
   awaiting?: MightyAwaiting;
-  /** A result that is the result so far (Core MightyGraphBlock.SoFar): its strip and symbol are neutral, its tone stays the request's. */
+  /** A result that is the result so far (Core MightyGraphBlock.SoFar): its dot and title are neutral, its tone stays the request's. */
   soFar?: boolean;
   /** The role view's words for this node (Core FlowCopy.Block): who the block is, its card, a delegate line, a step or the plan column. */
   flow?: FlowBlockCopy;

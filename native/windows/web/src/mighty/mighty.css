@@ -60,36 +60,34 @@
 .mighty-block[data-live], .mighty-flow-card[data-live] { will-change: transform; }
 .mighty-block.halo { box-shadow: 0 0 0 4px var(--run-soft); }
 .mighty-block.selected { outline: 2px solid var(--accent); outline-offset: -1px; }
-/* A block's header (transcriptCard): Layout.blockHead high, its symbol in the kind's tint, the title in 12 bold. A result's header stays on the
-   card: a 3px bar in its outcome's colour down its leading edge, the symbol in the outcome's ink and a pill with the outcome's word, so the
-   status reads in both themes without a saturated strip across the block. */
+/* A block's header (transcriptCard; header option ⑨ 점 + 색 제목): Layout.blockHead high and on the card, no strip, bar or pill. Its symbol is
+   a small dot in its status colour with a soft halo (.tone-dot), a result's title takes its outcome's ink, and the state's word stays in the
+   meta on the right, in ink2. */
 .mighty-head { flex: none; height: var(--layout-block-head); display: flex; align-items: center; gap: var(--space-sm); padding: 0 var(--inset-graph-block-body-h); border-bottom: var(--stroke-line) solid var(--line); min-width: 0; }
-.mighty-block.kind-result, .mighty-block.kind-awaitingNotice { --result-bar: var(--done); --result-ink: var(--done-text); }
-.mighty-block.kind-result.tone-err { --result-bar: var(--err); --result-ink: var(--err-text); }
-.mighty-block.kind-result.tone-stop { --result-bar: var(--stop); --result-ink: var(--stop-text); }
-/* The result so far (현재까지의 결과): a neutral bar; its tone stays the request's. */
-.mighty-block.kind-result.so-far { --result-bar: var(--ink3); --result-ink: var(--ink2); }
-.mighty-block.kind-result .mighty-head, .mighty-block.kind-awaitingNotice .mighty-head {
-  background: var(--card); box-shadow: inset var(--stroke-rail) 0 0 var(--result-bar);
-  border-radius: calc(var(--radius-block) - 1px) 0 0 0;
-}
-.mighty-block.kind-result .mighty-symbol { color: var(--result-ink); }
-/* The 알림 대기 block (Core MightyGraphBlock.Awaiting): under way, not waiting on the user, so the run tone on its soft wash and a clock;
-   amber is kept for what needs the user (a permission, a question, a plan). */
-.mighty-block.kind-awaitingNotice { --result-bar: var(--run); --result-ink: var(--accent); }
-.mighty-block.kind-awaitingNotice .mighty-head { background: var(--run-soft); }
-.mighty-symbol.kind-awaitingNotice { color: var(--accent); }
+/* The status dot every header of the diagram family leads with: 8 across, a 3px halo in its tone's soft tint; neutral (ink3) without a tone. */
+.tone-dot { --dot: var(--ink3); --dot-soft: color-mix(in srgb, var(--ink3) 22%, transparent); flex: none; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--dot); box-shadow: 0 0 0 3px var(--dot-soft); }
+.tone-dot.dot-run { --dot: var(--run); --dot-soft: var(--run-soft); }
+.tone-dot.dot-wait { --dot: var(--wait); --dot-soft: var(--wait-soft); }
+.tone-dot.dot-done { --dot: var(--done); --dot-soft: var(--done-soft); }
+.tone-dot.dot-err { --dot: var(--err); --dot-soft: var(--err-soft); }
+.tone-dot.dot-stop { --dot: var(--stop); --dot-soft: var(--stop-soft); }
+/* A result's title in its outcome's ink: done green, failed red, stopped grey; the result so far in ink2; the 알림 대기 block (Core
+   MightyGraphBlock.Awaiting) in the accent, under way rather than waiting on the user (amber is kept for what needs the user). */
+.mighty-block.kind-result .mighty-title { color: var(--done-text); }
+.mighty-block.kind-result.tone-err .mighty-title { color: var(--err-text); }
+.mighty-block.kind-result.tone-stop .mighty-title { color: var(--stop-text); }
+.mighty-block.kind-result.so-far .mighty-title { color: var(--ink2); }
+.mighty-block.kind-awaitingNotice .mighty-title { color: var(--accent); }
+/* The state's word on the right of a header: meta, not a pill. */
+.mighty-state { flex: none; font-size: var(--type-small); font-weight: 500; color: var(--ink2); white-space: nowrap; }
 .mighty-awaiting { display: flex; flex-direction: column; gap: var(--space-xs); padding: var(--inset-graph-block-body-v) var(--inset-graph-block-body-h) var(--space-md); border-top: var(--stroke-line) solid var(--line); }
 .mighty-awaiting-row { display: flex; align-items: baseline; gap: var(--space-sm); min-width: 0; }
 .mighty-awaiting-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
 .mighty-awaiting-word { flex: none; font-size: var(--type-small); color: var(--ink2); }
 .mighty-awaiting-progress { font-size: var(--type-small); font-weight: 700; color: var(--accent); }
-.mighty-symbol { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; color: var(--accent); }
-.mighty-symbol.kind-work, .mighty-symbol.kind-agent, .mighty-symbol.kind-execution { color: var(--agent-text); }
-.mighty-symbol.kind-task { color: var(--task-text); }
-.mighty-symbol.kind-steer { color: var(--steer-text); }
-.mighty-symbol.kind-compact { color: var(--compact-text); }
-.mighty-symbol.kind-question { color: var(--question-text); }
+/* The dot's place: the 16 the kind's glyph had, so the title stands where it stood. */
+.mighty-symbol { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; }
 .mighty-title { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 4px; font-size: var(--type-block); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mighty-controls { flex: none; display: inline-flex; align-items: center; gap: var(--space-sm); }
 .mighty-pill { height: 18px; line-height: 18px; padding: 0 var(--space-sm); border-radius: 9px; font-size: var(--type-small); font-weight: 700; background: var(--track); color: var(--ink2); white-space: nowrap; }
@@ -276,26 +274,25 @@
 @keyframes timeline-pulse { 50% { opacity: 0.3; } }
 .timeline-body { border-top: var(--stroke-line) solid var(--line); }
 .timeline-transcript { height: 260px; overflow: auto; }
-/* The result under a request (MightyTimelineResultCard): radius 16, a header on the card with a 3px bar in the outcome's colour and the symbol
-   in its ink (as the diagram's result block), the answer in 12.5 to eight lines. */
-.timeline-result { margin-left: calc(32px + var(--space-md)); border-radius: 16px; background: var(--card); overflow: hidden; flex: none; --result-bar: var(--done); --result-ink: var(--done-text); }
+/* The result under a request (MightyTimelineResultCard): radius 16, a header on the card as the diagram's result block draws it (⑨: a dot in the
+   outcome's tone, the title in its ink, the caption in ink2), the answer in 12.5 to eight lines. */
+.timeline-result { margin-left: calc(32px + var(--space-md)); border-radius: 16px; background: var(--card); overflow: hidden; flex: none; --result-ink: var(--done-text); }
 .timeline-result-head { display: flex; align-items: center; gap: var(--space-sm); padding: var(--inset-graph-block-body-v) var(--inset-graph-block-body-h); background: var(--card); color: var(--ink);
-  box-shadow: inset var(--stroke-rail) 0 0 var(--result-bar); border-bottom: var(--stroke-line) solid var(--line); }
-.timeline-result-head > svg { flex: none; color: var(--result-ink); }
-.timeline-result.tone-err { --result-bar: var(--err); --result-ink: var(--err-text); }
-.timeline-result.tone-stop { --result-bar: var(--stop); --result-ink: var(--stop-text); }
-/* The result so far (현재까지의 결과) comes idle from the host: a neutral bar. */
-.timeline-result.tone-idle { --result-bar: var(--ink3); --result-ink: var(--ink2); }
-/* Awaiting notices (알림 대기 중) comes in the run tone from the host: under way, on the run's soft wash with a clock (amber is for the user). */
-.timeline-result.tone-run { --result-bar: var(--run); --result-ink: var(--accent); }
-.timeline-result.tone-run .timeline-result-head { background: var(--run-soft); }
-.timeline-result.tone-wait { --result-bar: var(--wait); --result-ink: var(--wait-text); }
+  border-bottom: var(--stroke-line) solid var(--line); }
+.timeline-result-head .tone-dot { margin: 0 2px; }
+.timeline-result-title { color: var(--result-ink); }
+.timeline-result.tone-err { --result-ink: var(--err-text); }
+.timeline-result.tone-stop { --result-ink: var(--stop-text); }
+/* The result so far (현재까지의 결과) comes idle from the host: a neutral dot, the title in ink2. */
+.timeline-result.tone-idle { --result-ink: var(--ink2); }
+/* Awaiting notices (알림 대기 중) comes in the run tone from the host: under way, the accent (amber is for the user). */
+.timeline-result.tone-run { --result-ink: var(--accent); }
+.timeline-result.tone-wait { --result-ink: var(--wait-text); }
 .timeline-result-title { font-size: 12px; font-weight: 800; white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .timeline-result-caption { font-family: var(--font-mono); font-size: var(--type-small); font-weight: 600; white-space: nowrap; color: var(--ink2); }
 .timeline-result-body { display: flex; flex-direction: column; gap: 4px; padding: var(--space-sm) var(--inset-graph-block-body-h) var(--space-md); }
 .timeline-result-text { font-family: var(--font-transcript); font-size: 12.5px; color: var(--ink); white-space: pre-wrap; user-select: text; }
 .timeline-result-text.folded { display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; }
-.timeline-result.tone-stop { border-top-color: var(--stop); }
 .timeline-result-text.folded { max-height: calc(8 * 1.5em); overflow: hidden; }
 
 /* ── structure ── */
@@ -323,7 +320,7 @@
 .structure-entry-steps { font-size: var(--type-small); color: var(--ink2); }
 .structure-badge { border: 0; padding: var(--space-xxs) var(--space-sm); border-radius: 999px; background: var(--accent); color: var(--on-accent); font: inherit; font-size: var(--type-small); font-weight: 700; cursor: pointer; }
 /* M/MightyStructureView.swift: the board's status under the navigation and a rule; the columns 16 apart, each a chip with its count and a
-   line on to the next column (green once done); cards on the block card at radius 10, agents' small cards at 8 with a 3-wide status bar. */
+   line on to the next column (green once done); cards on the block card at radius 10, agents' small cards at 8 led by a status dot. */
 .structure-nav { border-bottom: 0; padding: var(--space-sm) var(--inset-graph-block-body-h) 0; }
 .structure-step { display: inline-grid; place-items: center; width: 22px; height: 22px; border: 0; padding: 0; background: transparent; color: var(--ink); border-radius: var(--radius-file-row); cursor: default; }
 .structure-step:disabled { color: var(--ink3); }
@@ -368,7 +365,9 @@
 .structure-answer { flex: 1; min-width: 0; font-size: 12px; }
 .structure-rule { height: var(--stroke-line); background: var(--line); }
 .structure-execution { display: inline-flex; align-items: center; gap: var(--space-xs); font-size: 11px; font-weight: 700; color: var(--ink); white-space: nowrap; }
-.structure-result-title { display: inline-flex; align-items: center; gap: var(--space-xs); font-size: 11px; font-weight: 700; color: var(--ink2); white-space: nowrap; }
+.structure-result-title { display: inline-flex; align-items: center; gap: var(--space-sm); font-size: 11px; font-weight: 700; color: var(--ink2); white-space: nowrap; }
+.structure-result-title .tone-dot, .structure-state .tone-dot { margin: 0 2px; }
+.structure-result-title.tone-run { color: var(--accent); }
 .structure-result-title.tone-done { color: var(--done-text); }
 .structure-result-title.tone-err { color: var(--err-text); }
 .structure-result-title.tone-stop { color: var(--stop-text); }
@@ -383,9 +382,7 @@
 .structure-activity-text.mono { font-family: var(--font-mono); }
 .structure-node { position: relative; flex: none; display: flex; flex-direction: column; gap: var(--space-xxs); border-radius: 8px; border: var(--stroke-line) solid var(--line); background: var(--card); overflow: hidden;
   padding: var(--space-xs) var(--space-xs) var(--space-xs) var(--space-md); }
-.structure-node-glyph { display: inline-grid; flex: none; color: var(--agent-text); }
-.structure-node-glyph.task { color: var(--task-text); }
-.structure-node-glyph.steer { color: var(--steer-text); }
+.structure-node-glyph { display: inline-grid; place-items: center; flex: none; width: 12px; height: 12px; }
 .structure-node-title { font-size: 11px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .structure-node-meta { font-size: var(--type-small); color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .structure-parent { display: flex; align-items: center; gap: var(--space-xs); font-size: var(--type-small); color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -398,25 +395,29 @@
 .structure-reply-title { font-size: var(--type-small); font-weight: 700; color: var(--ink2); }
 
 /* ── pipeline state colours (fixture `pipeline`, Core MightyStructure.Tone, M/MightyStructureView.swift) ── */
-/* A column takes a faint wash of its tone's soft tint and each card the stronger tint over its own card surface, with a bar in the tone's mark down
-   its leading edge, so the colour sits on the cards rather than across the board.
-   A step still to come has none, and neither has a sub-agent card without a tone (as on the Mac). Both the tint and the bar are background
-   layers, so the card's own corners clip them and nothing in the card is cut off. */
-.tint-run { --tint-soft: var(--run-soft); --tint-mark: var(--run); }
-.tint-wait { --tint-soft: var(--wait-soft); --tint-mark: var(--wait-text); }
-.tint-done { --tint-soft: var(--done-soft); --tint-mark: var(--done); }
-.tint-err { --tint-soft: var(--err-soft); --tint-mark: var(--err); }
-.tint-stop { --tint-soft: var(--stop-soft); --tint-mark: var(--stop); }
+/* A column takes a faint wash of its tone's soft tint and each card the stronger tint over its own card surface, so the colour sits on the cards
+   rather than across the board; the card's status is its dot (⑨), no bar down its leading edge.
+   A step still to come has none, and neither has a sub-agent card without a tone (as on the Mac). The tint is a background layer, so the card's
+   own corners clip it and nothing in the card is cut off. */
+.tint-run { --tint-soft: var(--run-soft); }
+.tint-wait { --tint-soft: var(--wait-soft); }
+.tint-done { --tint-soft: var(--done-soft); }
+.tint-err { --tint-soft: var(--err-soft); }
+.tint-stop { --tint-soft: var(--stop-soft); }
 /* The column's wash sits on the frame around its scrolling body, so the cards and the scroll bar scroll over it unclipped. */
 .structure-column-frame { flex: 1; min-height: 0; display: flex; flex-direction: column; border-radius: 10px; }
 .structure-column.tinted > .structure-column-frame { background: color-mix(in srgb, var(--tint-soft) var(--pipeline-column-tint), transparent); }
 .structure-card.tinted, .structure-node.tinted {
   --tint-card: color-mix(in srgb, var(--tint-soft) var(--pipeline-card-tint), transparent);
-  background-image: linear-gradient(var(--tint-mark), var(--tint-mark)), linear-gradient(var(--tint-card), var(--tint-card));
-  background-size: var(--pipeline-card-bar) 100%, 100% 100%; background-position: left top; background-repeat: no-repeat; background-origin: padding-box; background-clip: padding-box;
+  background-image: linear-gradient(var(--tint-card), var(--tint-card)); background-origin: padding-box; background-clip: padding-box;
 }
-/* The 실행 pill on a tinted card: a hairline in the card's mark, so its own soft fill still reads against the tint (M/MightyStructureView.swift tintedCardEdge). */
-.structure-card.tinted.kind-execution .mighty-pill, .structure-card.tinted.kind-summary .mighty-pill { box-shadow: inset 0 0 0 var(--stroke-line) var(--tint-mark); }
+/* The 실행 part's state (⑨): a dot in its tone and its word in the tone's ink, where a pill was. */
+.structure-state { display: inline-flex; align-items: center; gap: var(--space-sm); font-size: 11px; font-weight: 700; color: var(--ink2); white-space: nowrap; }
+.structure-state.tone-run { color: var(--accent); }
+.structure-state.tone-wait { color: var(--wait-text); }
+.structure-state.tone-done { color: var(--done-text); }
+.structure-state.tone-err { color: var(--err-text); }
+.structure-state.tone-stop { color: var(--stop-text); }
 /* A waiting card wears the wait line, as the diagram's waiting block does; only a running one the run line (.live). */
 .structure-card.waiting, .structure-node.waiting { border: 2px solid var(--wait); }
 .structure-card.waiting { padding: calc(var(--space-sm) - 1px) calc(var(--inset-graph-block-body-h) - 1px); }
