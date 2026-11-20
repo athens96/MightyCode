@@ -7,8 +7,9 @@
   <meta name="description" content="Claude Code · Codex · Antigravity · pi · opencode · Hermes를 한 창에서 나란히 쓰는 데스크톱 앱입니다.">
   <link rel="icon" href="assets/icon.png">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="home.css">
 </head>
-<body>
+<body class="home">
   <!-- Top Navigation -->
   <header class="topbar">
     <div class="topbar-inner">
@@ -44,171 +45,182 @@
     </div>
   </header>
 
-  <main class="container">
-    <!-- Hero -->
-    <section class="hero">
-      <div class="hero-card">
-        <div class="hero-head">
-          <img src="assets/icon.png" alt="Mighty Code">
-          <div>
-            <h1>Mighty Code</h1>
-            <div class="hero-meta" data-i18n="hero.meta">macOS · Windows · Android</div>
-          </div>
-        </div>
-
-        <p class="hero-desc" data-i18n-html="hero.desc">
-          <b>Claude Code · Codex · Antigravity · pi · opencode · Hermes를 한 창에서 나란히 쓰는 데스크톱 앱입니다.</b><br>
-          프로젝트 폴더(워크스페이스)마다 여러 실행 창을 열고, 창마다 에이전트 CLI를 직접 실행해 대화와 설정을 따로 유지합니다.
-          요청·하위 에이전트·백그라운드 작업을 블록 흐름으로 보여 주는 <b>마이티 보기</b>, 정해진 순서로 일을 진행하는 <b>스타일</b>(오로보로스·클러드 플랜),
-          일을 자기 git worktree를 가진 자식 창에 나눠 맡기는 <b>마이티 오케스트레이션</b>, 다른 컴퓨터의 워크스페이스를 여는 <b>원격 연결(Tailscale)</b>,
-          휴대폰에서 상태를 보고 답하는 <b>휴대폰 원격</b>이 있습니다.
-        </p>
-
-        <div class="hero-actions">
-          <a href="#download" class="btn btn-primary" data-i18n="hero.btn.download">다운로드</a>
-          <a href="docs.html" class="btn" data-docs-link data-i18n="hero.btn.docs">도움말 · 문서</a>
-          <a href="https://github.com/athens96/MightyCode" target="_blank" rel="noopener" class="btn">GitHub ↗</a>
-        </div>
-
-        <!-- Supported AI CLIs: Authentic App Icons & Homepage Links -->
-        <div class="cli-links-grid" aria-label="Supported AI CLIs">
-          <a href="https://code.claude.com" target="_blank" rel="noopener" class="cli-link-card">
-            <span class="cli-mark" style="color:#D97757">
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4.714 15.956 L9.432 13.308 L9.511 13.078 L9.432 12.95 L9.201 12.95 L8.412 12.902 L5.716 12.829 L3.379 12.732 L1.114 12.61 L0.543 12.489 L0.009 11.785 L0.064 11.432 L0.543 11.111 L1.229 11.171 L2.747 11.275 L5.024 11.432 L6.675 11.53 L9.122 11.785 L9.511 11.785 L9.565 11.627 L9.432 11.53 L9.329 11.432 L6.973 9.836 L4.423 8.148 L3.087 7.176 L2.365 6.684 L2.001 6.223 L1.843 5.215 L2.498 4.493 L3.379 4.553 L3.603 4.614 L4.496 5.3 L6.402 6.776 L8.892 8.609 L9.256 8.913 L9.402 8.809 L9.42 8.737 L9.256 8.463 L7.902 6.017 L6.457 3.527 L5.813 2.495 L5.643 1.876 C5.583 1.621 5.54 1.409 5.54 1.147 L6.287 0.134 L6.7 0 L7.695 0.134 L8.114 0.498 L8.734 1.913 L9.735 4.141 L11.29 7.17 L11.745 8.069 L11.988 8.901 L12.079 9.156 L12.237 9.156 L12.237 9.01 L12.364 7.304 L12.601 5.209 L12.832 2.514 L12.911 1.755 L13.287 0.844 L14.034 0.352 L14.617 0.631 L15.096 1.317 L15.03 1.761 L14.744 3.612 L14.186 6.515 L13.821 8.457 L14.034 8.457 L14.277 8.215 L15.26 6.909 L16.912 4.845 L17.64 4.025 L18.49 3.121 L19.037 2.69 L20.069 2.69 L20.828 3.819 L20.488 4.985 L19.425 6.332 L18.545 7.474 L17.282 9.174 L16.493 10.534 L16.566 10.643 L16.754 10.625 L19.607 10.018 L21.149 9.738 L22.989 9.423 L23.821 9.811 L23.912 10.206 L23.584 11.013 L21.617 11.499 L19.31 11.961 L15.874 12.774 L15.831 12.805 L15.88 12.865 L17.428 13.011 L18.09 13.047 L19.711 13.047 L22.728 13.272 L23.517 13.794 L23.991 14.432 L23.912 14.917 L22.698 15.537 L21.058 15.148 L17.233 14.237 L15.922 13.909 L15.74 13.909 L15.74 14.019 L16.833 15.087 L18.836 16.897 L21.344 19.228 L21.471 19.805 L21.15 20.26 L20.81 20.212 L18.606 18.554 L17.756 17.807 L15.831 16.186 L15.704 16.186 L15.704 16.356 L16.147 17.006 L18.49 20.527 L18.612 21.608 L18.442 21.96 L17.835 22.173 L17.167 22.051 L15.795 20.127 L14.38 17.959 L13.239 16.016 L13.099 16.095 L12.425 23.35 L12.109 23.721 L11.381 24 L10.774 23.539 L10.452 22.792 L10.774 21.316 L11.162 19.392 L11.478 17.862 L11.763 15.961 L11.933 15.33 L11.921 15.288 L11.781 15.306 L10.349 17.273 L8.169 20.218 L6.445 22.063 L6.032 22.227 L5.316 21.857 L5.382 21.195 L5.783 20.606 L8.169 17.57 L9.608 15.688 L10.537 14.602 L10.531 14.444 L10.476 14.444 L4.138 18.56 L3.008 18.706 L2.523 18.25 L2.583 17.504 L2.814 17.261 L4.721 15.949 Z"/></svg>
-            </span>
-            <span class="cli-link-info">
-              <b>Claude Code</b>
-              <small>code.claude.com ↗</small>
-            </span>
-          </a>
-
-          <a href="https://github.com/openai/codex" target="_blank" rel="noopener" class="cli-link-card">
-            <span class="cli-mark" style="color:#10A37F">
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M22.282 9.821 C22.825 8.186 22.637 6.397 21.766 4.91 C20.457 2.632 17.826 1.46 15.256 2.01 C13.808 0.4 11.611 -0.317 9.492 0.131 C7.373 0.579 5.653 2.123 4.981 4.182 C3.293 4.528 1.836 5.585 0.983 7.082 C-0.34 9.357 -0.04 12.227 1.726 14.178 C1.181 15.812 1.367 17.602 2.237 19.089 C3.547 21.369 6.18 22.541 8.751 21.989 C9.895 23.277 11.538 24.01 13.26 24 C15.894 24.002 18.227 22.302 19.032 19.794 C20.719 19.447 22.176 18.391 23.029 16.894 C24.337 14.623 24.035 11.769 22.282 9.821 Z M13.26 22.429 C12.209 22.431 11.19 22.062 10.384 21.388 L10.525 21.308 L15.304 18.55 C15.546 18.408 15.695 18.149 15.696 17.869 L15.696 11.132 L17.716 12.3 C17.737 12.31 17.751 12.33 17.754 12.352 L17.754 17.935 C17.749 20.415 15.74 22.424 13.26 22.429 Z M3.599 18.304 C3.072 17.393 2.883 16.326 3.065 15.29 L3.207 15.375 L7.99 18.134 C8.231 18.275 8.529 18.275 8.77 18.134 L14.613 14.765 L14.613 17.097 C14.612 17.122 14.6 17.145 14.58 17.159 L9.74 19.95 C7.589 21.189 4.842 20.452 3.599 18.304 Z M2.341 7.896 C2.872 6.979 3.71 6.281 4.706 5.923 L4.706 11.6 C4.703 11.879 4.851 12.139 5.094 12.277 L10.909 15.631 L8.889 16.799 C8.866 16.811 8.84 16.811 8.818 16.799 L3.987 14.013 C1.841 12.769 1.105 10.023 2.341 7.872 Z M18.937 11.751 L13.104 8.364 L15.119 7.2 C15.141 7.188 15.168 7.188 15.19 7.2 L20.02 9.991 C21.528 10.861 22.398 12.523 22.253 14.258 C22.108 15.993 20.975 17.488 19.344 18.096 L19.344 12.418 C19.335 12.14 19.181 11.886 18.937 11.751 Z M20.948 8.728 L20.806 8.643 L16.032 5.861 C15.79 5.719 15.489 5.719 15.247 5.861 L9.409 9.23 L9.409 6.897 C9.406 6.873 9.417 6.85 9.437 6.836 L14.268 4.049 C15.779 3.179 17.657 3.26 19.088 4.258 C20.518 5.256 21.243 6.99 20.948 8.709 Z M8.306 12.863 L6.287 11.699 C6.266 11.687 6.252 11.666 6.248 11.643 L6.248 6.074 C6.251 4.33 7.26 2.745 8.84 2.005 C10.419 1.266 12.283 1.506 13.624 2.621 L13.482 2.701 L8.704 5.459 C8.462 5.601 8.313 5.86 8.311 6.14 Z M9.404 10.498 L12.006 8.998 L14.613 10.498 L14.613 13.497 L12.016 14.997 L9.409 13.497 Z"/></svg>
-            </span>
-            <span class="cli-link-info">
-              <b>Codex CLI</b>
-              <small>openai/codex ↗</small>
-            </span>
-          </a>
-
-          <a href="https://antigravity.google" target="_blank" rel="noopener" class="cli-link-card">
-            <span class="cli-mark" style="color:#4285F4">
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11.04 19.32 C11.68 20.78 12 22.34 12 24 C12 22.34 12.31 20.78 12.93 19.32 C13.57 17.86 14.43 16.59 15.51 15.51 C16.59 14.43 17.86 13.58 19.32 12.96 C20.78 12.32 22.34 12 24 12 C22.34 12 20.78 11.69 19.32 11.07 C17.899 10.457 16.606 9.582 15.51 8.49 C14.418 7.394 13.543 6.101 12.93 4.68 C12.31 3.22 12 1.66 12 0 C12 1.66 11.68 3.22 11.04 4.68 C10.42 6.14 9.57 7.41 8.49 8.49 C7.394 9.582 6.101 10.457 4.68 11.07 C3.22 11.69 1.66 12 0 12 C1.66 12 3.22 12.32 4.68 12.96 C6.14 13.58 7.41 14.43 8.49 15.51 C9.57 16.59 10.42 17.86 11.04 19.32 Z"/></svg>
-            </span>
-            <span class="cli-link-info">
-              <b>Antigravity</b>
-              <small>antigravity.google ↗</small>
-            </span>
-          </a>
-
-          <a href="https://github.com/badlogic/pi-mono" target="_blank" rel="noopener" class="cli-link-card">
-            <span class="cli-mark" style="color:#8B7CF6">
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 4.5 L21 4.5 L21 7.5 L17.5 7.5 L17.5 17 C17.5 18.2 18 18.6 19.2 18.6 L20.5 18.6 L20.5 21.5 L18.8 21.5 C15.6 21.5 14.5 19.9 14.5 17.2 L14.5 7.5 L9.6 7.5 L9.6 21 L6.6 21 L6.6 7.5 L3 7.5 Z"/></svg>
-            </span>
-            <span class="cli-link-info">
-              <b>pi</b>
-              <small>badlogic/pi-mono ↗</small>
-            </span>
-          </a>
-
-          <a href="https://opencode.ai" target="_blank" rel="noopener" class="cli-link-card">
-            <span class="cli-mark" style="color:#8A8F98">
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 3 L21 3 L21 21 L3 21 Z M7 7 L7 13 L17 13 L17 7 Z"/></svg>
-            </span>
-            <span class="cli-link-info">
-              <b>opencode</b>
-              <small>opencode.ai ↗</small>
-            </span>
-          </a>
-
-          <a href="https://hermes-agent.nousresearch.com" target="_blank" rel="noopener" class="cli-link-card">
-            <span class="cli-mark" style="color:#D9A441">
-              <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 6 L10 6 L10 10.5 L14 10.5 L14 6 L17 6 L17 21 L14 21 L14 13.5 L10 13.5 L10 21 L7 21 Z M1 3 L6 5.5 L6 9.5 L3.5 9.5 Z M23 3 L18 5.5 L18 9.5 L20.5 9.5 Z"/></svg>
-            </span>
-            <span class="cli-link-info">
-              <b>Hermes</b>
-              <small>nousresearch.com ↗</small>
-            </span>
-          </a>
+  <main>
+    <!-- Hero: the product shot lies tilted and settles flat as you scroll (home.js) -->
+    <section class="h-hero">
+      <div class="glow a"></div><div class="glow b"></div>
+      <div class="wrap" style="position:relative">
+        <div class="eyebrow" data-i18n="hero.meta">macOS · Windows · Android</div>
+        <h1><span class="grad" data-i18n-html="home.hero.title">여섯 에이전트를,<br>한 창에서.</span></h1>
+        <p class="lead" data-i18n="home.hero.lead">Claude Code, Codex, Antigravity, pi, opencode, Hermes를 나란히 띄우고, 하는 일을 블록 흐름으로 지켜보세요.</p>
+        <div class="cta">
+          <a class="h-btn" href="#download" data-i18n="nav.download">다운로드</a>
+          <a class="h-link" href="#flow" data-i18n="home.hero.how">어떻게 동작하나요 ›</a>
         </div>
       </div>
-
-      <!-- Screen Viewer -->
-      <div class="viewer-card">
-        <div class="viewer-tabs" role="tablist">
-          <button type="button" class="viewer-tab active" data-view-tab="overview" data-i18n="tab.overview">화면 구성</button>
-          <button type="button" class="viewer-tab" data-view-tab="mighty" data-i18n="tab.mighty">마이티 보기</button>
-          <button type="button" class="viewer-tab" data-view-tab="delegation" data-i18n="tab.delegation">마이티 오케스트레이션</button>
-          <button type="button" class="viewer-tab" data-view-tab="plan" data-i18n="tab.plan">스타일과 계획 카드</button>
-          <button type="button" class="viewer-tab" data-view-tab="dashboard" data-i18n="tab.dashboard">작업 현황</button>
-          <button type="button" class="viewer-tab" data-view-tab="mobile" data-i18n="tab.mobile">휴대폰 원격</button>
-        </div>
-
-        <div class="viewer-pane active" data-view-pane="overview">
-          <img class="t-dark" data-lang-img="overview-dark.webp" src="ko/img/overview-dark.webp" alt="화면 구성">
-          <img class="t-light" data-lang-img="overview-light.webp" src="ko/img/overview-light.webp" alt="화면 구성">
-          <div class="viewer-foot">
-            <span data-i18n-html="cap.overview"><b>화면 구성:</b> 사이드바에서 워크스페이스와 실행 창을 고르고, 오른쪽 작업 영역에 에이전트·터미널·파일·브라우저 창을 탭이나 분할로 배치합니다.</span>
-            <code>⌘O · ⌘N · ⌘T · ⇧⌘E</code>
-          </div>
-        </div>
-
-        <div class="viewer-pane" data-view-pane="mighty">
-          <img class="t-dark" data-lang-img="agent-mighty-overview-dark.webp" src="ko/img/agent-mighty-overview-dark.webp" alt="마이티 보기">
-          <img class="t-light" data-lang-img="agent-mighty-overview-light.webp" src="ko/img/agent-mighty-overview-light.webp" alt="마이티 보기">
-          <div class="viewer-foot">
-            <span data-i18n-html="cap.mighty"><b>마이티 보기:</b> 요청 → 그 사이에 일어난 일(하위 에이전트·백그라운드 명령) → 최종 결과와 바꾼 줄을 블록 흐름으로 보여 줍니다.</span>
-            <code data-i18n="cap.mighty.code">흐름 | 기록 | 파이프라인</code>
-          </div>
-        </div>
-
-        <div class="viewer-pane" data-view-pane="delegation">
-          <img class="t-dark" data-lang-img="delegation-tree-dark.webp" src="ko/img/delegation-tree-dark.webp" alt="마이티 오케스트레이션">
-          <img class="t-light" data-lang-img="delegation-tree-light.webp" src="ko/img/delegation-tree-light.webp" alt="마이티 오케스트레이션">
-          <div class="viewer-foot">
-            <span data-i18n-html="cap.delegation"><b>마이티 오케스트레이션:</b> 자식은 저마다 자기 git worktree와 브랜치(<code>mighty/&lt;자식 id&gt;</code>)에서 일하고, 끝나면 사이드바 카드에서 부모 브랜치에 병합하거나 버립니다.</span>
-            <code>⌘Enter / Ctrl+Enter</code>
-          </div>
-        </div>
-
-        <div class="viewer-pane" data-view-pane="plan">
-          <img class="t-dark" data-lang-img="plan-card-dark.webp" src="ko/img/plan-card-dark.webp" alt="계획 카드">
-          <img class="t-light" data-lang-img="plan-card-light.webp" src="ko/img/plan-card-light.webp" alt="계획 카드">
-          <div class="viewer-foot">
-            <span data-i18n-html="cap.plan"><b>스타일과 계획:</b> 클러드 플랜은 새 요청마다 계획 모드로 시작하고, 계획 카드의 네 가지 답(자동 편집 승인 / 매번 확인 승인 / 수정 요청 / 취소)으로 진행합니다.</span>
-            <code>Ouroboros · Claude Plan</code>
-          </div>
-        </div>
-
-        <div class="viewer-pane" data-view-pane="dashboard">
-          <img class="t-dark" data-lang-img="dashboard-dark.webp" src="ko/img/dashboard-dark.webp" alt="작업 현황">
-          <img class="t-light" data-lang-img="dashboard-light.webp" src="ko/img/dashboard-light.webp" alt="작업 현황">
-          <div class="viewer-foot">
-            <span data-i18n-html="cap.dashboard"><b>작업 현황:</b> 모든 워크스페이스의 실행 창을 상태 순으로 모으고, 실행 중·응답 대기·완료 개수와 계정 사용량을 보여 줍니다.</span>
-            <code>⌘K / Ctrl+K</code>
-          </div>
-        </div>
-
-        <div class="viewer-pane" data-view-pane="mobile">
-          <img class="t-dark" data-lang-img="settings-mobile-dark.webp" src="ko/img/settings-mobile-dark.webp" alt="모바일 리모트">
-          <img class="t-light" data-lang-img="settings-mobile-light.webp" src="ko/img/settings-mobile-light.webp" alt="모바일 리모트">
-          <div class="viewer-foot">
-            <span data-i18n-html="cap.mobile"><b>휴대폰 원격:</b> QR 코드로 휴대폰을 연결해 상태를 보고 승인·질문·계획에 답합니다. 릴레이는 암호문만 전달하며 같은 Tailscale 네트워크면 직접 연결합니다.</span>
-            <code>X25519 · ChaCha20-Poly1305</code>
-          </div>
+      <div class="stage-3d">
+        <div class="shot-frame" id="heroShot">
+          <div class="bar" aria-hidden="true"><i></i><i></i><i></i></div>
+          <img class="t-dark" data-lang-img="overview-dark.webp" src="ko/img/overview-dark.webp" width="2880" height="1800" fetchpriority="high" alt="Mighty Code">
+          <img class="t-light" data-lang-img="overview-light.webp" src="ko/img/overview-light.webp" width="2880" height="1800" loading="lazy" alt="Mighty Code">
         </div>
       </div>
     </section>
 
-    <!-- Download & Install (Version and links are populated dynamically from latest.json) -->
-    <section id="download" class="section">
-      <div class="section-head-row">
-        <h2 class="section-title" data-i18n="dl.title">다운로드와 설치</h2>
-        <span id="dl-version-badge" class="brand-badge">…</span>
-      </div>
-      <p class="section-sub" data-i18n="dl.sub">내 운영체제용 파일을 받습니다. 설치 후 새 버전은 앱 안에서 서명을 확인한 뒤 자동으로 받아 준비합니다.</p>
+    <!-- The agent CLIs, each linking to its home page -->
+    <section class="ribbon">
+      <h2 data-i18n="home.agents.title">이미 쓰는 에이전트 CLI 그대로</h2>
+      <div class="marquee"><div class="track" id="track">
+      <a class="chip" href="https://code.claude.com" target="_blank" rel="noopener"><span class="chip-mark" style="color:#D97757"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4.714 15.956 L9.432 13.308 L9.511 13.078 L9.432 12.95 L9.201 12.95 L8.412 12.902 L5.716 12.829 L3.379 12.732 L1.114 12.61 L0.543 12.489 L0.009 11.785 L0.064 11.432 L0.543 11.111 L1.229 11.171 L2.747 11.275 L5.024 11.432 L6.675 11.53 L9.122 11.785 L9.511 11.785 L9.565 11.627 L9.432 11.53 L9.329 11.432 L6.973 9.836 L4.423 8.148 L3.087 7.176 L2.365 6.684 L2.001 6.223 L1.843 5.215 L2.498 4.493 L3.379 4.553 L3.603 4.614 L4.496 5.3 L6.402 6.776 L8.892 8.609 L9.256 8.913 L9.402 8.809 L9.42 8.737 L9.256 8.463 L7.902 6.017 L6.457 3.527 L5.813 2.495 L5.643 1.876 C5.583 1.621 5.54 1.409 5.54 1.147 L6.287 0.134 L6.7 0 L7.695 0.134 L8.114 0.498 L8.734 1.913 L9.735 4.141 L11.29 7.17 L11.745 8.069 L11.988 8.901 L12.079 9.156 L12.237 9.156 L12.237 9.01 L12.364 7.304 L12.601 5.209 L12.832 2.514 L12.911 1.755 L13.287 0.844 L14.034 0.352 L14.617 0.631 L15.096 1.317 L15.03 1.761 L14.744 3.612 L14.186 6.515 L13.821 8.457 L14.034 8.457 L14.277 8.215 L15.26 6.909 L16.912 4.845 L17.64 4.025 L18.49 3.121 L19.037 2.69 L20.069 2.69 L20.828 3.819 L20.488 4.985 L19.425 6.332 L18.545 7.474 L17.282 9.174 L16.493 10.534 L16.566 10.643 L16.754 10.625 L19.607 10.018 L21.149 9.738 L22.989 9.423 L23.821 9.811 L23.912 10.206 L23.584 11.013 L21.617 11.499 L19.31 11.961 L15.874 12.774 L15.831 12.805 L15.88 12.865 L17.428 13.011 L18.09 13.047 L19.711 13.047 L22.728 13.272 L23.517 13.794 L23.991 14.432 L23.912 14.917 L22.698 15.537 L21.058 15.148 L17.233 14.237 L15.922 13.909 L15.74 13.909 L15.74 14.019 L16.833 15.087 L18.836 16.897 L21.344 19.228 L21.471 19.805 L21.15 20.26 L20.81 20.212 L18.606 18.554 L17.756 17.807 L15.831 16.186 L15.704 16.186 L15.704 16.356 L16.147 17.006 L18.49 20.527 L18.612 21.608 L18.442 21.96 L17.835 22.173 L17.167 22.051 L15.795 20.127 L14.38 17.959 L13.239 16.016 L13.099 16.095 L12.425 23.35 L12.109 23.721 L11.381 24 L10.774 23.539 L10.452 22.792 L10.774 21.316 L11.162 19.392 L11.478 17.862 L11.763 15.961 L11.933 15.33 L11.921 15.288 L11.781 15.306 L10.349 17.273 L8.169 20.218 L6.445 22.063 L6.032 22.227 L5.316 21.857 L5.382 21.195 L5.783 20.606 L8.169 17.57 L9.608 15.688 L10.537 14.602 L10.531 14.444 L10.476 14.444 L4.138 18.56 L3.008 18.706 L2.523 18.25 L2.583 17.504 L2.814 17.261 L4.721 15.949 Z"/></svg></span>Claude Code</a>
+      <a class="chip" href="https://github.com/openai/codex" target="_blank" rel="noopener"><span class="chip-mark" style="color:#10A37F"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M22.282 9.821 C22.825 8.186 22.637 6.397 21.766 4.91 C20.457 2.632 17.826 1.46 15.256 2.01 C13.808 0.4 11.611 -0.317 9.492 0.131 C7.373 0.579 5.653 2.123 4.981 4.182 C3.293 4.528 1.836 5.585 0.983 7.082 C-0.34 9.357 -0.04 12.227 1.726 14.178 C1.181 15.812 1.367 17.602 2.237 19.089 C3.547 21.369 6.18 22.541 8.751 21.989 C9.895 23.277 11.538 24.01 13.26 24 C15.894 24.002 18.227 22.302 19.032 19.794 C20.719 19.447 22.176 18.391 23.029 16.894 C24.337 14.623 24.035 11.769 22.282 9.821 Z M13.26 22.429 C12.209 22.431 11.19 22.062 10.384 21.388 L10.525 21.308 L15.304 18.55 C15.546 18.408 15.695 18.149 15.696 17.869 L15.696 11.132 L17.716 12.3 C17.737 12.31 17.751 12.33 17.754 12.352 L17.754 17.935 C17.749 20.415 15.74 22.424 13.26 22.429 Z M3.599 18.304 C3.072 17.393 2.883 16.326 3.065 15.29 L3.207 15.375 L7.99 18.134 C8.231 18.275 8.529 18.275 8.77 18.134 L14.613 14.765 L14.613 17.097 C14.612 17.122 14.6 17.145 14.58 17.159 L9.74 19.95 C7.589 21.189 4.842 20.452 3.599 18.304 Z M2.341 7.896 C2.872 6.979 3.71 6.281 4.706 5.923 L4.706 11.6 C4.703 11.879 4.851 12.139 5.094 12.277 L10.909 15.631 L8.889 16.799 C8.866 16.811 8.84 16.811 8.818 16.799 L3.987 14.013 C1.841 12.769 1.105 10.023 2.341 7.872 Z M18.937 11.751 L13.104 8.364 L15.119 7.2 C15.141 7.188 15.168 7.188 15.19 7.2 L20.02 9.991 C21.528 10.861 22.398 12.523 22.253 14.258 C22.108 15.993 20.975 17.488 19.344 18.096 L19.344 12.418 C19.335 12.14 19.181 11.886 18.937 11.751 Z M20.948 8.728 L20.806 8.643 L16.032 5.861 C15.79 5.719 15.489 5.719 15.247 5.861 L9.409 9.23 L9.409 6.897 C9.406 6.873 9.417 6.85 9.437 6.836 L14.268 4.049 C15.779 3.179 17.657 3.26 19.088 4.258 C20.518 5.256 21.243 6.99 20.948 8.709 Z M8.306 12.863 L6.287 11.699 C6.266 11.687 6.252 11.666 6.248 11.643 L6.248 6.074 C6.251 4.33 7.26 2.745 8.84 2.005 C10.419 1.266 12.283 1.506 13.624 2.621 L13.482 2.701 L8.704 5.459 C8.462 5.601 8.313 5.86 8.311 6.14 Z M9.404 10.498 L12.006 8.998 L14.613 10.498 L14.613 13.497 L12.016 14.997 L9.409 13.497 Z"/></svg></span>Codex CLI</a>
+      <a class="chip" href="https://antigravity.google" target="_blank" rel="noopener"><span class="chip-mark" style="color:#4285F4"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M11.04 19.32 C11.68 20.78 12 22.34 12 24 C12 22.34 12.31 20.78 12.93 19.32 C13.57 17.86 14.43 16.59 15.51 15.51 C16.59 14.43 17.86 13.58 19.32 12.96 C20.78 12.32 22.34 12 24 12 C22.34 12 20.78 11.69 19.32 11.07 C17.899 10.457 16.606 9.582 15.51 8.49 C14.418 7.394 13.543 6.101 12.93 4.68 C12.31 3.22 12 1.66 12 0 C12 1.66 11.68 3.22 11.04 4.68 C10.42 6.14 9.57 7.41 8.49 8.49 C7.394 9.582 6.101 10.457 4.68 11.07 C3.22 11.69 1.66 12 0 12 C1.66 12 3.22 12.32 4.68 12.96 C6.14 13.58 7.41 14.43 8.49 15.51 C9.57 16.59 10.42 17.86 11.04 19.32 Z"/></svg></span>Antigravity</a>
+      <a class="chip" href="https://github.com/badlogic/pi-mono" target="_blank" rel="noopener"><span class="chip-mark" style="color:#8B7CF6"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 4.5 L21 4.5 L21 7.5 L17.5 7.5 L17.5 17 C17.5 18.2 18 18.6 19.2 18.6 L20.5 18.6 L20.5 21.5 L18.8 21.5 C15.6 21.5 14.5 19.9 14.5 17.2 L14.5 7.5 L9.6 7.5 L9.6 21 L6.6 21 L6.6 7.5 L3 7.5 Z"/></svg></span>pi</a>
+      <a class="chip" href="https://opencode.ai" target="_blank" rel="noopener"><span class="chip-mark" style="color:#8A8F98"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 3 L21 3 L21 21 L3 21 Z M7 7 L7 13 L17 13 L17 7 Z"/></svg></span>opencode</a>
+      <a class="chip" href="https://hermes-agent.nousresearch.com" target="_blank" rel="noopener"><span class="chip-mark" style="color:#D9A441"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 6 L10 6 L10 10.5 L14 10.5 L14 6 L17 6 L17 21 L14 21 L14 13.5 L10 13.5 L10 21 L7 21 Z M1 3 L6 5.5 L6 9.5 L3.5 9.5 Z M23 3 L18 5.5 L18 9.5 L20.5 9.5 Z"/></svg></span>Hermes</a>
+      </div></div>
+    </section>
 
+    <!-- Statement: its words light up with the scroll -->
+    <section class="statement"><div class="wrap">
+      <h2 id="words" data-i18n-html="home.statement">터미널 로그를 읽는 대신,<br>에이전트가 지금 무엇을 하는지<br>한눈에 보세요.</h2>
+    </div></section>
+
+    <!-- Mighty View: a sticky diagram that grows with the scroll -->
+    <section class="scrolly" id="flow" data-scrolly="flow">
+      <div class="sticky"><div class="wrap grid">
+        <div>
+          <div class="kicker" data-i18n="home.flow.kicker">마이티 보기</div>
+          <h2 class="sec-title" data-i18n-html="home.flow.title">요청부터 결과까지,<br>흐름으로.</h2>
+          <div class="steps">
+            <div class="step" data-at="0"><b data-i18n="home.flow.s1.t">요청을 보냅니다.</b><p data-i18n="home.flow.s1.d">실행 중에도 다음 요청을 대기열에 쌓아 둘 수 있습니다.</p></div>
+            <div class="step" data-at="1"><b data-i18n="home.flow.s2.t">단계가 블록으로 자랍니다.</b><p data-i18n="home.flow.s2.d">하위 에이전트와 백그라운드 명령이 나타나는 대로 이어집니다.</p></div>
+            <div class="step" data-at="2"><b data-i18n="home.flow.s3.t">결과로 화면이 이동합니다.</b><p data-i18n="home.flow.s3.d">바꾼 줄과 함께 최종 결과가 도착하면 그 블록으로 부드럽게 옮겨 갑니다.</p></div>
+          </div>
+          <a class="more" href="docs.html#agent-pane" data-docs-hash="#agent-pane" data-i18n="home.more">자세히 보기 ›</a>
+        </div>
+        <div class="canvas" aria-hidden="true"><div class="cam">
+          <div class="blk" data-k="0" style="top:30px"><div class="h"><span class="tdot"></span><span class="t" data-i18n="home.flow.req">요청 7 · Claude</span><span class="sp"></span><span class="m">10:42</span></div><div class="bd" data-i18n="home.flow.reqText">로그인 화면에 “비밀번호 찾기” 링크를 넣어 줘</div></div>
+          <div class="wire" data-k="1" style="top:108px;height:30px"></div>
+          <div class="blk" data-k="1" style="top:138px" id="fs1"><div class="h"><span class="tdot"></span><span class="t" data-i18n="home.flow.step1">1. 화면 코드 찾기</span><span class="sp"></span><span class="m" data-m>완료 · 0:08</span></div><div class="bd"><code>rg "LoginForm" src/</code><div class="pbar"><i></i></div></div></div>
+          <div class="wire" data-k="2" style="top:232px;height:30px"></div>
+          <div class="blk" data-k="2" style="top:262px" id="fs2"><div class="h"><span class="tdot"></span><span class="t" data-i18n="home.flow.step2">2. 하위 에이전트 · 테스트</span><span class="sp"></span><span class="m" data-m>완료 · 1:12</span></div><div class="bd"><code>npm test -- LoginForm</code><div class="pbar"><i></i></div></div></div>
+          <div class="wire" data-k="3" style="top:356px;height:30px"></div>
+          <div class="blk res" data-k="3" style="top:386px" id="fres"><div class="h"><span class="tdot"></span><span class="t" data-i18n="home.flow.result">결과</span><span class="sp"></span><span class="m" data-m>완료 · 4:21</span></div><div class="bd"><span data-i18n="home.flow.resultText">링크를 추가하고 테스트 4개가 모두 통과했습니다.</span><div class="diff"><span>src/LoginForm.tsx</span><span class="p">+12</span><span class="n">−2</span></div></div></div>
+        </div></div>
+      </div></div>
+    </section>
+
+    <!-- Mighty Orchestration: children branch off on their own worktrees and merge back -->
+    <section class="scrolly orch" id="orch" data-scrolly="orch">
+      <div class="sticky"><div class="wrap grid">
+        <div>
+          <div class="kicker" data-i18n="home.orch.kicker">마이티 오케스트레이션</div>
+          <h2 class="sec-title" data-i18n-html="home.orch.title">기다리지 말고,<br>나눠 맡기세요.</h2>
+          <div class="steps">
+            <div class="step" data-at="0"><b data-i18n="home.orch.s1.t">⌘Enter로 옆 창에 보냅니다.</b><p data-i18n="home.orch.s1.d">실행 중이면 대기열로 보낼지, 어느 에이전트의 워크트리로 보낼지 고릅니다.</p></div>
+            <div class="step" data-at="1"><b data-i18n="home.orch.s2.t">자식은 자기 브랜치에서 일합니다.</b><p data-i18n-html="home.orch.s2.d">저마다 git worktree <code>mighty/&lt;id&gt;</code>를 가져 서로 부딪히지 않습니다.</p></div>
+            <div class="step" data-at="2"><b data-i18n="home.orch.s3.t">검토하고 병합합니다.</b><p data-i18n="home.orch.s3.d">바뀐 내용을 확인한 뒤 부모 브랜치에 합치거나 버립니다.</p></div>
+          </div>
+          <a class="more" href="docs.html#delegation" data-docs-hash="#delegation" data-i18n="home.more">자세히 보기 ›</a>
+        </div>
+        <div class="canvas" aria-hidden="true">
+          <svg viewBox="0 0 560 500">
+            <path class="link" data-k="1" d="M280 112 C280 170 100 170 100 218"/>
+            <path class="link" data-k="1" d="M280 112 L280 218"/>
+            <path class="link" data-k="1" d="M280 112 C280 170 460 170 460 218"/>
+            <path class="link merge" data-k="3" d="M100 308 C100 370 280 370 280 404"/>
+            <path class="link merge" data-k="3" d="M280 308 L280 404"/>
+            <path class="link merge" data-k="3" d="M460 308 C460 370 280 370 280 404"/>
+            <g class="node" data-k="0"><rect class="card" x="170" y="40" width="220" height="72" rx="12"/><circle cx="192" cy="66" r="4" fill="#2A5FEE"/><text x="204" y="70" data-i18n="home.orch.parent">부모 · Claude</text><text class="sub" x="190" y="94">main</text></g>
+            <g class="node child" data-k="1"><rect class="card" x="20" y="218" width="160" height="90" rx="12"/><circle cx="40" cy="242" r="4" fill="#D97757"/><text x="52" y="246">Claude</text><text class="sub" x="36" y="268">mighty/a1f3</text><rect class="track-bg" x="36" y="284" width="128" height="5" rx="2.5"/><rect class="prog" x="36" y="284" width="128" height="5" rx="2.5"/><text class="badge" x="150" y="247">✓</text></g>
+            <g class="node child" data-k="1"><rect class="card" x="200" y="218" width="160" height="90" rx="12"/><circle cx="220" cy="242" r="4" fill="#10A37F"/><text x="232" y="246">Codex</text><text class="sub" x="216" y="268">mighty/b72c</text><rect class="track-bg" x="216" y="284" width="128" height="5" rx="2.5"/><rect class="prog" x="216" y="284" width="128" height="5" rx="2.5"/><text class="badge" x="330" y="247">✓</text></g>
+            <g class="node child" data-k="1"><rect class="card" x="380" y="218" width="160" height="90" rx="12"/><circle cx="400" cy="242" r="4" fill="#4285F4"/><text x="412" y="246">Antigravity</text><text class="sub" x="396" y="268">mighty/c0de</text><rect class="track-bg" x="396" y="284" width="128" height="5" rx="2.5"/><rect class="prog" x="396" y="284" width="128" height="5" rx="2.5"/><text class="badge" x="510" y="247">✓</text></g>
+            <g class="node merged" data-k="3"><rect x="180" y="404" width="200" height="56" rx="28"/><text x="280" y="437" text-anchor="middle" data-i18n="home.orch.merged">병합 완료 · 3</text></g>
+          </svg>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- Numbers that count up when they show -->
+    <section class="numbers"><div class="wrap">
+      <div class="numgrid">
+        <div class="num reveal"><div class="v" data-count="6">6</div><p data-i18n="home.num.agents">나란히 쓰는 에이전트 CLI</p></div>
+        <div class="num reveal d1"><div class="v"><span data-count="16">16</span><small data-i18n="home.num.unit">개</small></div><p data-i18n="home.num.queue">창마다 쌓아 두는 다음 요청</p></div>
+        <div class="num reveal d2"><div class="v">E2E</div><p data-i18n="home.num.e2e">휴대폰과 주고받는 모든 내용의 종단 간 암호화</p></div>
+      </div>
+    </div></section>
+
+    <!-- Phone Remote: notification, then the approval sheet, then approved -->
+    <section class="phone-sec" id="phone"><div class="wrap phone-grid">
+      <div class="phone-copy reveal">
+        <div class="kicker" data-i18n="home.phone.kicker">휴대폰 원격</div>
+        <h2 class="sec-title" data-i18n-html="home.phone.title">자리를 비워도,<br>일은 멈추지 않게.</h2>
+        <p data-i18n="home.phone.desc">승인이 필요하면 휴대폰에 알림이 옵니다. 내용을 보고 그 자리에서 답하세요. 새 기기는 컴퓨터에서 직접 허락해야만 연결됩니다.</p>
+        <div class="lockline"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg><span data-i18n="home.phone.lock">릴레이는 암호문만 전달합니다 · X25519 · ChaCha20-Poly1305</span></div>
+        <a class="more" href="docs.html#phone" data-docs-hash="#phone" data-i18n="home.more">자세히 보기 ›</a>
+      </div>
+      <div class="phone" id="phoneMock" aria-hidden="true">
+        <div class="island"></div>
+        <div class="notif"><b data-i18n="home.phone.notifTitle">Mighty Code · 로그인 수정</b><span data-i18n="home.phone.notif">Claude가 명령 실행 승인을 기다립니다</span></div>
+        <div class="screen">
+          <div class="ph-row wait"><div class="h"><span class="tdot"></span><span data-i18n="home.phone.r1">로그인 수정</span><span class="sp"></span><span class="m" data-i18n="home.phone.r1s">대기</span></div><p data-i18n="home.phone.r1d">승인을 기다리는 중</p></div>
+          <div class="ph-row run"><div class="h"><span class="tdot"></span><span data-i18n="home.phone.r2">API 정리</span><span class="sp"></span><span class="m" data-i18n="home.phone.r2s">실행 중</span></div><p data-i18n="home.phone.r2d">2. 하위 에이전트 · 테스트</p></div>
+          <div class="ph-row done"><div class="h"><span class="tdot"></span><span data-i18n="home.phone.r3">문서 사이트</span><span class="sp"></span><span class="m" data-i18n="home.phone.r3s">완료</span></div><p data-i18n="home.phone.r3d">가이드를 고쳤습니다</p></div>
+        </div>
+        <div class="sheet"><h4 data-i18n="home.phone.ask">명령을 실행할까요?</h4><p data-i18n="home.phone.askFrom">Claude · 로그인 수정</p><pre>npm run migrate -- --env dev</pre><div class="btns"><span data-i18n="home.phone.deny">거절</span><span class="ok" data-i18n="home.phone.allow">승인</span></div></div>
+      </div>
+    </div></section>
+
+    <!-- Feature tiles -->
+    <section class="bento-sec" id="more"><div class="wrap">
+      <h2 class="sec-title reveal" data-i18n="home.bento.title">작은 것까지, 다 챙겼습니다.</h2>
+      <div class="bento">
+        <div class="tile w4 reveal"><h3 data-i18n="home.plan.t">스타일과 계획 카드</h3><p data-i18n="home.plan.d">오로보로스나 클러드 플랜으로 정해진 순서대로. 계획을 읽고 승인하거나 고쳐 달라고 하세요.</p>
+          <img class="shot t-dark" data-lang-img="plan-card-dark.webp" src="ko/img/plan-card-dark.webp" alt="" loading="lazy" decoding="async">
+          <img class="shot t-light" data-lang-img="plan-card-light.webp" src="ko/img/plan-card-light.webp" alt="" loading="lazy" decoding="async">
+        </div>
+        <div class="tile w2 h2 pet reveal d1"><h3 data-i18n="home.pet.t">데스크톱 펫</h3><p data-i18n="home.pet.d">진행 상황과 승인 요청을 화면 구석에서.</p>
+          <img class="shot t-dark" data-lang-img="companion-pet-dark.webp" src="ko/img/companion-pet-dark.webp" alt="" loading="lazy" decoding="async">
+          <img class="shot t-light" data-lang-img="companion-pet-light.webp" src="ko/img/companion-pet-light.webp" alt="" loading="lazy" decoding="async">
+        </div>
+        <div class="tile w2 reveal"><h3 data-i18n="home.queue.t">요청 대기열</h3><p data-i18n="home.queue.d">실행 중에도 계속 말을 거세요.</p>
+          <div class="queue" aria-hidden="true"><div class="q"><span class="tdot"></span><span data-i18n="home.queue.q1">다크 모드도 맞춰 줘</span></div><div class="q"><span class="tdot"></span><span data-i18n="home.queue.q2">테스트 하나 더</span></div><div class="q"><span class="tdot"></span><span data-i18n="home.queue.q3">README 갱신</span></div></div>
+        </div>
+        <div class="tile w2 reveal d1"><h3 data-i18n="home.search.t">대화 검색</h3><p data-i18n="home.search.d">지난 대화 속 그 한 줄을 바로.</p>
+          <div class="search" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span class="typed" data-i18n="home.search.q">비밀번호 찾기 링크</span><span class="caret"></span></div>
+        </div>
+        <div class="tile w3 reveal"><h3 data-i18n="home.remote.t">다른 컴퓨터 열기</h3><p data-i18n="home.remote.d">페어링 코드로 다른 Mac·Windows의 워크스페이스를 그대로 엽니다. 처음 연결은 상대 컴퓨터가 허락해야 합니다.</p>
+          <div class="devices" aria-hidden="true">
+            <div class="device"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M1 20h22"/></svg><span data-i18n="home.remote.here">이 Mac</span></div>
+            <div class="pipe"></div>
+            <div class="device"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span data-i18n="home.remote.there">작업실 PC</span></div>
+          </div>
+          <a class="more" href="docs.html#remote" data-docs-hash="#remote" data-i18n="home.more">자세히 보기 ›</a>
+        </div>
+        <div class="tile w3 reveal d1"><h3 data-i18n="home.review.t">검토 대기열</h3><p data-i18n="home.review.d">에이전트가 바꾼 파일을 차례로 살펴보고, 원하는 편집기에서 바로 엽니다.</p>
+          <div class="files" aria-hidden="true">
+            <div class="file cur"><span>src/LoginForm.tsx</span><span class="sp"></span><span class="p">+12</span><span class="n">−2</span><span class="open" data-i18n="home.review.open">편집기에서 열기</span></div>
+            <div class="file"><span>src/LoginForm.test.tsx</span><span class="sp"></span><span class="p">+28</span><span class="n">−0</span></div>
+          </div>
+        </div>
+        <div class="tile w3 reveal"><h3 data-i18n="home.dash.t">작업 현황</h3><p data-i18n="home.dash.d">모든 워크스페이스의 창을 상태 순으로, 계정 사용량까지.</p>
+          <img class="shot t-dark" data-lang-img="dashboard-dark.webp" src="ko/img/dashboard-dark.webp" alt="" loading="lazy" decoding="async">
+          <img class="shot t-light" data-lang-img="dashboard-light.webp" src="ko/img/dashboard-light.webp" alt="" loading="lazy" decoding="async">
+        </div>
+        <div class="tile w3 reveal d1"><h3 data-i18n="home.term.t">터미널 · 파일</h3><p data-i18n="home.term.d">Mac은 Ghostty, Windows는 PowerShell. 소스·Markdown·이미지 미리 보기와 변경점 비교까지.</p>
+          <img class="shot t-dark" data-lang-img="terminal-pane-dark.webp" src="ko/img/terminal-pane-dark.webp" alt="" loading="lazy" decoding="async">
+          <img class="shot t-light" data-lang-img="terminal-pane-light.webp" src="ko/img/terminal-pane-light.webp" alt="" loading="lazy" decoding="async">
+        </div>
+      </div>
+    </div></section>
+
+    <!-- Download: the version and links come from latest.json (app.js) -->
+    <section class="final" id="download">
+      <div class="glow a"></div>
+      <div class="wrap" style="position:relative">
+        <h2><span class="grad" data-i18n="home.final.title">지금 시작하세요.</span></h2>
+        <p class="sub" data-i18n="dl.sub">내 운영체제용 파일을 받습니다. 설치 후 새 버전은 앱 안에서 서명을 확인한 뒤 자동으로 받아 준비합니다.</p>
+        <span id="dl-version-badge" class="brand-badge">…</span>
       <div class="dl-grid">
         <div class="dl-card">
           <h3><span>macOS</span> <span class="tag">Apple Silicon</span></h3>
@@ -242,43 +254,6 @@
           </div>
         </div>
       </div>
-    </section>
-
-    <!-- Core Features Summary -->
-    <section class="section">
-      <h2 class="section-title" data-i18n="feat.title" style="margin-bottom:6px">주요 기능</h2>
-      <p class="section-sub" data-i18n="feat.sub">각 기능의 자세한 사용법은 문서(도움말)에 있습니다.</p>
-
-      <div class="feature-grid">
-        <div class="feature-box">
-          <h3><span data-i18n="feat.f1.title">에이전트 창과 마이티 보기</span> <a href="docs.html#agent-pane" data-docs-hash="#agent-pane" class="tag">03</a></h3>
-          <p data-i18n="feat.f1.desc">실행 중에도 다음 요청을 대기열(창당 16개)에 넣을 수 있습니다. 모든 에이전트 창은 요청 → 그 사이에 일어난 일 → 최종 결과를 블록 흐름으로 보여 주고, 흐름·기록·파이프라인 보기로 전환합니다.</p>
-        </div>
-
-        <div class="feature-box">
-          <h3><span data-i18n="feat.f2.title">마이티 오케스트레이션</span> <a href="docs.html#delegation" data-docs-hash="#delegation" class="tag">06</a></h3>
-          <p data-i18n="feat.f2.desc">에이전트 창이 일하는 동안 다른 일을 옆의 자식 창에 맡깁니다(⌘Enter 또는 delegate 도구). 자식은 저마다 자기 git worktree(mighty/&lt;자식 id&gt;)에서 일하고, 끝나면 부모 브랜치에 병합하거나 버립니다. 자식은 Claude, Codex, Antigravity로 실행할 수 있습니다.</p>
-        </div>
-
-        <div class="feature-box">
-          <h3><span data-i18n="feat.f3.title">스타일과 계획 카드</span> <a href="docs.html#styles" data-docs-hash="#styles" class="tag">04</a></h3>
-          <p data-i18n="feat.f3.desc">Claude 창에서 입력창 위 메뉴로 오로보로스(Ouroboros)와 클러드 플랜 스타일을 고릅니다. 클러드 플랜은 새 요청마다 계획 모드로 시작하며, 계획 카드와 데스크톱 펫에서 승인·수정 요청·취소를 고릅니다.</p>
-        </div>
-
-        <div class="feature-box">
-          <h3><span data-i18n="feat.f4.title">승인·질문·로그인 복구</span> <a href="docs.html#approvals" data-docs-hash="#approvals" class="tag">05</a></h3>
-          <p data-i18n="feat.f4.desc">권한 밖의 일은 승인 카드로, 질문은 선택 요청 카드로 묻습니다. Antigravity는 거절한 작업을 턴 끝에 모아 묻고, 허용하면 같은 대화를 이어갑니다. CLI 로그인이 만료되면 복구 카드에서 다시 로그인하고 실패한 요청을 다시 보냅니다.</p>
-        </div>
-
-        <div class="feature-box">
-          <h3><span data-i18n="feat.f5.title">터미널·파일·브라우저 창</span> <a href="docs.html#terminal-files-browser" data-docs-hash="#terminal-files-browser" class="tag">07</a></h3>
-          <p data-i18n="feat.f5.desc">터미널 창(⌘T)은 워크스페이스 폴더에서 열리는 실제 터미널입니다(Mac은 Ghostty, Windows는 PowerShell). 파일 창(⇧⌘E)은 소스·Markdown·이미지·PDF를 미리 보고 변경점을 비교합니다.</p>
-        </div>
-
-        <div class="feature-box">
-          <h3><span data-i18n="feat.f6.title">원격 연결(Tailscale)과 휴대폰 원격</span> <a href="docs.html#phone" data-docs-hash="#phone" class="tag">09 · 10</a></h3>
-          <p data-i18n="feat.f6.desc">Mac이나 Windows 두 대를 Tailscale로 이어 다른 컴퓨터의 워크스페이스를 열거나, QR 코드로 휴대폰을 연결해 종단 간 암호화(릴레이 또는 Tailscale 직접 연결)로 상태를 보고 답합니다.</p>
-        </div>
       </div>
     </section>
   </main>
@@ -299,5 +274,6 @@
   </footer>
 
   <script src="app.js"></script>
+  <script src="home.js"></script>
 </body>
 </html>
