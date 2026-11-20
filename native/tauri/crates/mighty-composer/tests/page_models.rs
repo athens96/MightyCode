@@ -13,7 +13,7 @@ use common::ko;
 use mighty_composer::cards::{
     self, BackgroundTask, CardInputs, LoginInput, LoginJob, PermissionRequest, PlanDraft, StatusLineInput, StatusRun,
 };
-use mighty_composer::composer::{self, ComposerInputs, HeldItem, PaneViewState, StyleRow, WindowRules};
+use mighty_composer::composer::{self, ComposerInputs, HeldItem, PaneViewState, StyleRow, WindowRules, WorktreeAgent};
 use mighty_composer::menus::{self, MenuAction, MenuInputs, MenuRow};
 use mighty_composer::queue::{ComposerSecondSend, QueuedComposerInput};
 use mighty_composer::runtime::{CatalogModel, ModelCatalog, ProviderCapabilities, ProviderRuntime};
@@ -123,11 +123,11 @@ fn web_composer_state_cs560_an_idle_claude_pane_can_send() {
         json!({
             "paneId": "p1", "kind": "claude", "busy": false, "starting": false, "stopping": false, "canSend": true,
             "checkingModels": false, "attachmentsLoading": false, "placeholderKey": "composer.placeholder.idle", "install": false,
-            "primary": "send", "primaryEnabled": true, "worktree": false, "worktreeMenuOnly": false, "worktreeEnabled": false,
+            "primary": "send", "primaryEnabled": true, "worktree": false, "worktreeEnabled": false,
             "queue": { "held": [], "items": [] }, "attachments": [], "attachmentsAllowed": true,
             "pills": pills(&l, &model, "\nThe CLI's choice"),
             "header": { "word": l.get("session.state.idle"), "tone": "idle", "timed": false, "rest": "", "help": "Claude Code" },
-            "resumed": false, "toggles": { "statusLine": false }, "askTargets": [],
+            "resumed": false, "toggles": { "statusLine": false }, "worktreeAgents": [],
         }),
     );
 }
@@ -164,7 +164,7 @@ fn web_composer_state_cs566_a_running_pane_queues_and_offers_a_worktree() {
         json!({
             "paneId": "p1", "kind": "claude", "busy": true, "starting": false, "stopping": false, "canSend": false,
             "checkingModels": false, "attachmentsLoading": false, "placeholderKey": "composer.placeholder.busyWorktree", "install": false,
-            "primary": "queue", "primaryEnabled": true, "worktree": true, "worktreeMenuOnly": false, "worktreeEnabled": true,
+            "primary": "queue", "primaryEnabled": true, "worktree": true, "worktreeEnabled": true,
             "queue": {
                 "held": [ { "id": "n-1", "text": "Notice", "runNow": "held" }, { "id": "n-2", "text": "Notice 2" } ],
                 "items": [ { "id": "q-1", "text": "queued 1", "attachments": [], "runNow": "worktree" } ],
@@ -172,7 +172,7 @@ fn web_composer_state_cs566_a_running_pane_queues_and_offers_a_worktree() {
             "attachments": [], "attachmentsAllowed": true, "pills": expected_pills,
             "style": { "label": "Plan", "hint": "Plans first", "enabled": true },
             "header": { "word": l.get("session.state.running"), "tone": "run", "timed": false, "rest": "", "help": "Claude Code" },
-            "resumed": true, "toggles": { "statusLine": true }, "askTargets": [],
+            "resumed": true, "toggles": { "statusLine": true }, "worktreeAgents": [],
         }),
     );
 }
@@ -225,6 +225,83 @@ fn web_composer_state_cs571_a_held_pane_says_why_and_queues_nothing() {
     assert_eq!(state.hold.as_deref(), Some("Claude"));
     assert_eq!(state.blocked.as_deref(), Some("Updating Claude"));
     assert!(!state.install, "a manual block offers no install");
+}
+
+/// 실행 중 보내기 on a running pane: the worktree menu's agents are its choices; a saved agent that can run now makes Enter run written
+/// words in its new worktree (primary `worktree`, the placeholder naming it), while the worktree button stays the pane's own agent's.
+#[test]
+fn a_running_pane_offers_the_busy_send_choices_and_runs_now_with_the_chosen_agent() {
+    let (pane, ws, runtime, levels) = (pane("claude", "running"), workspace(), claude_runtime(), efforts());
+    let agents = vec![
+        WorktreeAgent { agent: "claude".into(), label: "Claude".into(), detail: "Claude · 기본".into(), enabled: true },
+        WorktreeAgent { agent: "codex".into(), label: "Codex".into(), detail: "Codex · 자동 편집".into(), enabled: true },
+        WorktreeAgent {
+            agent: "gemini".into(), label: "Antigravity".into(), detail: "Antigravity — 설치 안 됨".into(), enabled: false
+        },
+    ];
+    let window = WindowRules { second_send: ComposerSecondSend::Worktree, worktree_agents: agents.clone(), ..WindowRules::default() };
+    let state_with = |busy_send: Option<&str>, draft: &str, files: bool| {
+        let mut view = PaneViewState { draft: draft.into(), busy_send: busy_send.map(str::to_string), ..Default::default() };
+        if files {
+            view.attachments = vec![mighty_composer::attachments::make("a.txt", b"text", &ko()).unwrap()];
+        }
+        composer::composer_state(&inputs(&pane, &ws, Some(&runtime), &levels, &view, &window))
+    };
+
+    // 대기열 (the default): Enter queues; the choices are on offer.
+    let queued = state_with(None, "fix it", false);
+    assert_eq!((queued.primary, queued.placeholder_key, queued.busy_send.as_deref()), ("queue", "composer.placeholder.busyWorktree", None));
+    assert_eq!(queued.worktree_agents, agents);
+    assert!(queued.worktree && queued.worktree_enabled, "the worktree button is the second send's own-agent child");
+
+    // 워크트리 · Codex: Enter runs now in Codex's new worktree.
+    let codex = state_with(Some("codex"), "fix it", false);
+    assert_eq!(
+        (codex.primary, codex.placeholder_key, codex.busy_send.as_deref()),
+        ("worktree", "composer.placeholder.busyRunNow", Some("codex"))
+    );
+    assert!(codex.primary_enabled && codex.worktree);
+
+    // An agent that cannot run now (not installed) is not in effect: Enter queues.
+    let blocked = state_with(Some("gemini"), "fix it", false);
+    assert_eq!((blocked.primary, blocked.busy_send.as_deref()), ("queue", None));
+
+    // Files alone need no worktree: they queue, whatever the choice.
+    let files = state_with(Some("codex"), "", true);
+    assert_eq!(files.primary, "queue");
+
+    // An idle pane has no choice in effect: its Enter sends, and the page draws no 실행 중 보내기.
+    let idle_pane = self::pane("claude", "idle");
+    let view = PaneViewState { draft: "x".into(), busy_send: Some("codex".into()), ..Default::default() };
+    let idle = composer::composer_state(&inputs(&idle_pane, &ws, Some(&runtime), &levels, &view, &window));
+    assert!(idle.busy_send.is_none() && idle.primary == "send");
+    assert_eq!(idle.placeholder_key, "composer.placeholder.idle");
+}
+
+/// A pane whose own agent cannot make a child in its mode (the old menu-only state) has no worktree button: its other agents are
+/// 실행 중 보내기's, and a queued row runs through the row's agent pick (`agentMenu`).
+#[test]
+fn a_menu_only_pane_has_no_worktree_button_but_offers_the_other_agents() {
+    let (pane, ws, runtime, levels) = (pane("claude", "running"), workspace(), claude_runtime(), efforts());
+    let queued = QueuedComposerInput {
+        id: "q-1".into(),
+        text: "queued".into(),
+        attachments: vec![],
+        permission_mode_override: None,
+        prepared: false,
+        continuation: false,
+    };
+    let view = PaneViewState { draft: "fix it".into(), queue: vec![queued], busy_send: Some("codex".into()), ..Default::default() };
+    let window = WindowRules {
+        second_send: ComposerSecondSend::Queue,
+        worktree_menu_only: true,
+        worktree_agents: vec![WorktreeAgent { agent: "codex".into(), label: "Codex".into(), detail: "Codex".into(), enabled: true }],
+        ..WindowRules::default()
+    };
+    let state = composer::composer_state(&inputs(&pane, &ws, Some(&runtime), &levels, &view, &window));
+    assert!(!state.worktree && !state.worktree_enabled);
+    assert_eq!((state.primary, state.busy_send.as_deref()), ("worktree", Some("codex")));
+    assert_eq!(state.queue.items[0].run_now, Some("agentMenu"));
 }
 
 /// MainWindow.WebShell.Composer.cs:545-553 `WebHeader` with MainWindow.PaneHeader.cs:303 `HeaderFigures`: waiting requests name
@@ -681,26 +758,26 @@ fn the_composer_state_has_the_pages_field_names() {
     let window = WindowRules {
         background_update_holds: true,
         held_items: vec![HeldItem { id: "h".into(), text: "t".into() }],
-        ask_targets: vec![mighty_composer::ask_targets::ALL[0]],
-        ask_notice: Some("n".into()),
+        worktree_agents: vec![WorktreeAgent { agent: "codex".into(), label: "Codex".into(), detail: "d".into(), enabled: true }],
         style: Some(StyleRow { label: "s".into(), badge: Some("b".into()), hint: "h".into(), enabled: true }),
         guided: Some(json!({})),
         manual_mutation_block: Some("m".into()),
         ..WindowRules::default()
     };
     let mut full_pane = pane.clone();
-    full_pane.ask_target = Some("codex".into());
     full_pane.session_usage = mighty_core::model::SessionUsage::from_json(
         &json!({ "provider": "claude", "source": "s", "tokenScope": "session", "contextUsedTokens": 1, "contextWindowTokens": 2, "updatedAt": "2027-01-15T08:05:00.0000000+00:00" }),
     );
     let state = composer::composer_state(&inputs(&full_pane, &ws, Some(&runtime), &levels, &view, &window));
-    let value = serde_json::to_value(&state).unwrap();
-    same_keys(&types, "ComposerState", &state);
+    let mut value = serde_json::to_value(&state).unwrap();
+    // A CLI update's hold (for `hold`) only queues, so 실행 중 보내기's agent is not in effect: its key is checked as written elsewhere.
+    value["busySend"] = json!("codex");
+    same_keys(&types, "ComposerState", &value);
     for (name, item) in [
         ("QueueHeld", &value["queue"]["held"][0]),
         ("QueueItem", &value["queue"]["items"][0]),
         ("ComposerAttachment", &value["attachments"][0]),
-        ("AskTargetOption", &value["askTargets"][0]),
+        ("WorktreeAgent", &value["worktreeAgents"][0]),
     ] {
         same_keys(&types, name, item);
     }

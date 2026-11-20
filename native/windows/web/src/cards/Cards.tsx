@@ -58,10 +58,11 @@ const none: readonly Card[] = [];
  * The cards over the composer, in the WinUI order (MainWindow.Composer.cs): next actions, the plan history, background work,
  * the permission host (a plan, a question, a tool permission or the Antigravity card) and the web-open prompts.
  */
-export function Cards({ paneId }: { paneId: string }) {
+export function Cards({ paneId, hideBackground = false }: { paneId: string; hideBackground?: boolean }) {
   const { cards, call, reply, error } = usePaneCards(paneId, true);
   const request = cards.find((card) => card.kind === 'permission' || card.kind === 'questionnaire' || card.kind === 'plan' || card.kind === 'antigravity');
-  const shown = cards.filter((card) => card.kind !== 'login' && card.kind !== 'statusLine');
+  // `hideBackground`: the Mighty view shows the background work in its progress panel, so the strip over the composer would repeat it.
+  const shown = cards.filter((card) => card.kind !== 'login' && card.kind !== 'statusLine' && !(hideBackground && card.kind === 'background'));
   if (shown.length === 0 && !error) return null;
   return (
     <div className="cards" data-testid="cards">
@@ -69,7 +70,7 @@ export function Cards({ paneId }: { paneId: string }) {
         switch (card.kind) {
           case 'nextActions': return <NextActions key="next" paneId={paneId} card={card} call={call} />;
           case 'planHistory': return <PlanHistory key="history" card={card} />;
-          case 'background': return <Background key="background" card={card} call={call} />;
+          case 'background': return hideBackground ? null : <Background key="background" card={card} call={call} />;
           case 'terminalPrompt': return <TerminalPrompt key={card.promptId} card={card} reply={reply} />;
           default: return null;
         }

@@ -117,17 +117,15 @@ pub fn requests(host: &Host, id: &str) -> Vec<ToolPermissionRequest> {
     host.runs().map(|r| r.service.pending_permissions(id).into_iter().filter(crate::styles::shows).collect()).unwrap_or_default()
 }
 
-/// What the window knows of the pane that the composer reads (C# `owner.*` members); the later stages' stay at rest. A Claude pane
-/// whose catalogue was never scanned is scanned for its "send to" switch (ask.rs, C# `RefreshAskCatalog(pane, whenStale: false)`).
-/// The update holds are W6-D's (updates.rs: `BackgroundUpdateHolds`, `ManualMutationBlockReason`, `ManualUpdateReason`), the missing
+/// What the window knows of the pane that the composer reads (C# `owner.*` members); the later stages' stay at rest. The update holds are W6-D's (updates.rs: `BackgroundUpdateHolds`, `ManualMutationBlockReason`, `ManualUpdateReason`), the missing
 /// CLI's install W6-B's (setup.rs: `SetupItemForMissingCli`), each read with the state locked.
 fn window_rules(host: &Host, snapshot: &AppSnapshot, pane: &RunSession, pending: usize) -> WindowRules {
-    crate::ask::refresh_catalog(host, snapshot, pane, false);
-    // The second send, the worktree menu, the held items and a child's ending run (delegation.rs, W7-D).
+    // The second send, the worktree menu and its agents, the held items and a child's ending run (delegation.rs, W7-D).
     let delegation = crate::delegation::window_inputs(host, snapshot, pane);
     WindowRules {
         second_send: delegation.second_send,
         worktree_menu_only: delegation.worktree_menu_only,
+        worktree_agents: delegation.worktree_agents,
         held_items: delegation.held_items,
         ending_run: delegation.ending_run,
         background_update_holds: crate::updates::holds(host, snapshot, pane),
@@ -137,8 +135,6 @@ fn window_rules(host: &Host, snapshot: &AppSnapshot, pane: &RunSession, pending:
         pending_requests: pending,
         awaits_notice: mighty_graph::notice::awaits_notice(pane),
         status_line_enabled: snapshot.status_line_enabled,
-        ask_targets: crate::ask::targets_for(host, snapshot, pane),
-        ask_notice: crate::ask::notice(host, pane.id()),
         // A remote pane's block (remote.rs, W8-D: `RemoteWorkspaceFeatures.BlockedReason`).
         remote_block: crate::remote::blocked_reason(host, snapshot, pane),
         ..WindowRules::default()

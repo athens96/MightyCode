@@ -5,11 +5,12 @@ import type { RunSession } from '../store/models';
 import { attachmentRefusal, byteLabel, toBase64 } from './attachments';
 import { enterAction, maximumDraft, secondSendWords } from './keys';
 import { choose, closed, move, paletteDraft, paletteKey, paletteState, safeIndex, type PaletteState, type SlashCatalog, type SlashCommand } from './slash';
-import { AskUnsandboxedRow, MenuList, StyleRow, Toolbar, usePopover } from './Toolbar';
+import { MenuList, StyleRow, Toolbar, usePopover } from './Toolbar';
 import { Guided } from './Guided';
-import { readRunNow, runNowBranches, runNowTip, runNowWaits, type RunNow, type RunNowChoice } from './queue';
+import { readRunNow, rowAgent, runNowBranches, runNowTip, runNowWaits, type RunNow } from './queue';
 import { Icon } from '../icons/Icon';
-import type { AttachmentPreview, ComposerState, SendResult } from './types';
+import type { AttachmentPreview, ComposerState, SendResult, WorktreeAgent } from './types';
+import { ProviderMark } from '../conversation/ProviderMark';
 import { usePageOverlay } from '../shell/overlay';
 import { hostCapabilities } from '../slot/host';
 import { newClientId, newPendingRequest } from '../pending/requests';
@@ -258,11 +259,13 @@ export function Composer({ session }: { session: RunSession }) {
 
   const queue = state?.queue;
   const queued = (queue?.held.length ?? 0) + (queue?.items.length ?? 0);
-  // The 보낼 대상 switch: the target asked now (null for Claude). Its name fills composer.ask.placeholder, which the host picks for an idle pane.
-  const asked = state?.askTargets?.find((target) => target.id === state.askTarget) ?? null;
-  const placeholder = t(secondSendWords(state?.placeholderKey ?? (session.kind === 'shell' ? 'composer.placeholder.shell' : 'composer.placeholder.idle'), onMac()), { name: asked?.label ?? '' });
-  const primaryName = state?.primary === 'queue' ? t('queue.add') : state?.primary === 'stop' ? t('composer.stop.name') : t('composer.send.name');
-  const primaryTip = state?.primary === 'queue' ? t('queue.addHint') : state?.primary === 'stop' ? t('composer.stop.tooltip') : t('composer.send.tooltip');
+  // 실행 중 보내기: the agent whose new worktree a busy pane's Enter runs the words in (absent: the queue). Its name fills the
+  // placeholder the host picks for it (composer.placeholder.busyRunNow) and the primary button's words.
+  const agents = state?.worktreeAgents ?? [];
+  const runsWith = agents.find((agent) => agent.agent === state?.busySend) ?? null;
+  const placeholder = t(secondSendWords(state?.placeholderKey ?? (session.kind === 'shell' ? 'composer.placeholder.shell' : 'composer.placeholder.idle'), onMac()), { agent: runsWith?.label ?? '' });
+  const primaryName = state?.primary === 'worktree' ? t('queue.runNowAgent', { agent: runsWith?.label ?? '' }) : state?.primary === 'queue' ? t('queue.add') : state?.primary === 'stop' ? t('composer.stop.name') : t('composer.send.name');
+  const primaryTip = state?.primary === 'worktree' ? t('queue.runNowAgentHint', { agent: runsWith?.label ?? '' }) : state?.primary === 'queue' ? t('queue.addHint') : state?.primary === 'stop' ? t('composer.stop.tooltip') : t('composer.send.tooltip');
 
   return (
     <div className="composer-region">
@@ -279,15 +282,6 @@ export function Composer({ session }: { session: RunSession }) {
         <div className="composer-row composer-error" data-testid="composer-error" role="alert">
           <span>{state?.attachmentError ?? error}</span>
           <button type="button" className="composer-icon-button" aria-label={t('composer.attachment.dismissError')} onClick={() => { setError(null); if (state?.attachmentError) call('dismissAttachmentError'); }}>×</button>
-        </div>
-      )}
-      {/* Files staged before another CLI was chosen stay, but do not go with its ask (M/SessionPaneView.swift ask-attachments-off). */}
-      {asked && state && state.attachments.length > 0 && <div className="composer-row" data-testid="composer-ask-attachments-off" role="status">{t('composer.ask.attachmentsOff')}</div>}
-      <AskUnsandboxedRow target={asked} />
-      {state?.askNotice && (
-        <div className="composer-row" data-testid="composer-ask-notice" role="status">
-          <span>{state.askNotice}</span>
-          <button type="button" className="composer-icon-button" aria-label={t('common.close')} onClick={() => call('dismissAskNotice')}>×</button>
         </div>
       )}
       {palette.commands.length > 0 && (
@@ -349,7 +343,7 @@ export function Composer({ session }: { session: RunSession }) {
               <div className="composer-queue-item" key={item.id} data-queue-held={item.id}>
                 <span className="composer-queue-number">{index + 1}</span>
                 <span className="composer-queue-text">{notice ? <NoticeChip notice={notice} /> : item.text}</span>
-                <RunNowButton paneId={paneId} itemId={item.id} runNow={readRunNow(item.runNow)} held={queue.held.length} />
+                <RunNowButton paneId={paneId} itemId={item.id} runNow={readRunNow(item.runNow)} held={queue.held.length} agents={agents} own={session.provider} />
                 <span className="composer-queue-pin" title={t('queue.heldHelp')} aria-label={t('queue.held')}><Icon name="pin" size={10} weight={2.2} fill /></span>
               </div>
               );
@@ -361,7 +355,7 @@ export function Composer({ session }: { session: RunSession }) {
                   {item.text.length === 0 ? t('queue.attachmentsOnly') : item.text}
                   {item.attachments.length > 0 && <span className="composer-queue-files">{item.attachments.join(', ')}</span>}
                 </span>
-                <RunNowButton paneId={paneId} itemId={item.id} runNow={readRunNow(item.runNow)} held={queue.held.length} />
+                <RunNowButton paneId={paneId} itemId={item.id} runNow={readRunNow(item.runNow)} held={queue.held.length} agents={agents} own={session.provider} />
                 <button type="button" className="composer-icon-button" aria-label={t('queue.remove')} onClick={() => call('queueRemove', { itemId: item.id })}>×</button>
               </div>
             ))}
@@ -384,19 +378,19 @@ export function Composer({ session }: { session: RunSession }) {
         <ComposerCard paneId={paneId} kind="login" />
         <div className="composer-toolbar">
           {state?.attachmentsAllowed !== false && (
-            <button type="button" className="composer-pill compact composer-attach" aria-label={t('composer.attach.name')} title={asked ? t('composer.ask.attachmentsOff') : t('composer.attach.name')} disabled={state?.attachmentsLoading || asked !== null} onClick={() => call('pickAttachments')}><Icon name="paperclip" size={14} weight={1.75} /></button>
+            <button type="button" className="composer-pill compact composer-attach" aria-label={t('composer.attach.name')} title={t('composer.attach.name')} disabled={state?.attachmentsLoading} onClick={() => call('pickAttachments')}><Icon name="paperclip" size={14} weight={1.75} /></button>
           )}
-          {state?.pills ? <Toolbar paneId={paneId} pills={state.pills} busy={state.busy} showUsage={showUsage} onUsageShown={usageShown} resumed={state.resumed} askTargets={state.askTargets ?? []} askTarget={asked?.id ?? null} />
+          {state?.pills ? <Toolbar paneId={paneId} pills={state.pills} busy={state.busy} showUsage={showUsage} onUsageShown={usageShown} resumed={state.resumed} worktreeAgents={agents} busySend={runsWith?.agent ?? null} />
             : <span className="composer-shell-title">{t('composer.shell.title')}</span>}
           {state?.toggles && state.toggles.statusLine !== null && (
             <button type="button" className={'composer-toggle' + (state.toggles.statusLine ? ' on' : '')} aria-pressed={state.toggles.statusLine} title={t(state.toggles.statusLine ? 'composer.statusLine.hide' : 'composer.statusLine.show')}
               aria-label={t('composer.statusLine.name')} onClick={() => call('composerToggle', { which: 'statusLine' })}><Icon name="panel-bottom" size={13} weight={1.75} /></button>
           )}
-          {state?.primary === 'queue' && (
+          {(state?.primary === 'queue' || state?.primary === 'worktree') && (
             <button type="button" className="composer-stop-small" aria-label={t('composer.stop.name')} disabled={state.stopping} onClick={() => call('stop')}><Icon name="square" size={9} weight={0} fill /></button>
           )}
           {state?.worktree && (
-            <button type="button" className="composer-worktree" data-testid="composer-worktree" aria-label={t('queue.worktree')} title={t(state.worktreeMenuOnly ? 'queue.worktreeMenuHintMac' : onMac() ? 'queue.worktreeHintMac' : 'queue.worktreeHint')} disabled={!state.worktreeEnabled} onClick={() => void send(true)}><Icon name="split" size={13} weight={2.2} /></button>
+            <button type="button" className="composer-worktree" data-testid="composer-worktree" aria-label={t('queue.worktree')} title={t(onMac() ? 'queue.worktreeHintMac' : 'queue.worktreeHint')} disabled={!state.worktreeEnabled} onClick={() => void send(true)}><Icon name="split" size={13} weight={2.2} /></button>
           )}
           <button
             type="button"
@@ -407,7 +401,8 @@ export function Composer({ session }: { session: RunSession }) {
             disabled={!state?.primaryEnabled}
             onClick={primary}
           >
-            {state?.primary === 'stop' ? <Icon name="square" size={11} weight={0} fill /> : state?.primary === 'queue' ? <Icon name="list-plus" size={14} weight={2.2} /> : <Icon name="arrow-up" size={15} weight={2.4} />}
+            {state?.primary === 'stop' ? <Icon name="square" size={11} weight={0} fill /> : state?.primary === 'queue' ? <Icon name="list-plus" size={14} weight={2.2} />
+              : state?.primary === 'worktree' ? <Icon name="split" size={14} weight={2.2} /> : <Icon name="arrow-up" size={15} weight={2.4} />}
           </button>
         </div>
         <ComposerCard paneId={paneId} kind="statusLine" />
@@ -428,34 +423,43 @@ export function Composer({ session }: { session: RunSession }) {
 
 /**
  * 바로 실행 beside a queued row's × or the first held row's pin (M/QueuedInputsView.swift runNowButton): what the host decided
- * for the row (Core QueueRunNow). On a worktree row a right-click, Shift+F10 or the menu key picks the child's agent; an
- * agent-menu row's click opens that menu. A row that must wait is drawn with aria-disabled, not disabled: Chromium shows no
- * title on a disabled button, and the reason must stay readable and the button focusable. A null runNow draws nothing.
+ * for the row (Core QueueRunNow). A worktree row has the agent pick before it: the worktree menu's agents, the pane's own agent
+ * first chosen ([`rowAgent`]); 바로 실행 runs the row in a new worktree of the agent picked. A row that must wait is drawn with
+ * aria-disabled, not disabled: Chromium shows no title on a disabled button, and the reason must stay readable and the button
+ * focusable. A null runNow draws nothing.
  */
-function RunNowButton({ paneId, itemId, runNow, held }: { paneId: string; itemId: string; runNow: RunNow | null; held: number }) {
+function RunNowButton({ paneId, itemId, runNow, held, agents, own }: { paneId: string; itemId: string; runNow: RunNow | null; held: number; agents: readonly WorktreeAgent[]; own: string }) {
   const { bridge, t } = useServices();
-  const [choices, setChoices] = useState<RunNowChoice[] | null>(null);
-  const close = useCallback(() => setChoices(null), []);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
   const menuRef = usePopover(close);
-  usePageOverlay(choices !== null);
+  usePageOverlay(open);
   if (runNow === null) return null;
-  const openMenu = async () => { try { setChoices(await bridge.call<RunNowChoice[]>('queueRunNowMenu', { paneId })); } catch { setChoices(null); } };
-  const run = (agent?: string) => { setChoices(null); void bridge.call('queueRunNow', { paneId, itemId, ...(agent ? { agent } : {}) }).catch(() => {}); };
   const branch = runNowBranches(runNow);
-  const waits = runNowWaits(runNow);
-  const [key, values] = runNowTip(runNow, held);
+  const agent = branch ? rowAgent(agents, picked, own) : null;
+  // A worktree row with no agent that can run now waits, as the host would refuse it. (The host sends the worktree menu's agents
+  // whenever it offers a worktree, which a worktree row needs.)
+  const noAgent = branch && agent === null;
+  const waits = runNowWaits(runNow) || noAgent;
+  const run = () => { void bridge.call('queueRunNow', { paneId, itemId, ...(agent ? { agent: agent.agent } : {}) }).catch(() => {}); };
+  const [key, values] = noAgent ? ['queue.runNowUnavailableHelp'] : runNowTip(runNow, held, agent?.label ?? '');
   return (
     <span className="composer-queue-run-now" ref={menuRef}>
+      {branch && agents.length > 0 && (
+        <button type="button" className="composer-text-button composer-queue-agent" data-run-now-agent={itemId} aria-haspopup="menu" aria-expanded={open}
+          aria-label={t('queue.runNowAgentPick', { agent: agent?.label ?? '' })} title={t('queue.runNowAgentPick', { agent: agent?.label ?? '' })} onClick={() => setOpen(!open)}>
+          {agent && <ProviderMark provider={agent.agent} size={11} />}<Icon name="chevron-down" size={7} weight={3} />
+        </button>
+      )}
       <button type="button" className={'composer-text-button composer-queue-run' + (waits ? ' waits' : '')} data-run-now={itemId} title={t(key, values)}
-        aria-disabled={waits || undefined} aria-haspopup={branch ? 'menu' : undefined}
-        onClick={() => { if (waits) return; if (runNow === 'agentMenu') void openMenu(); else run(); }}
-        onContextMenu={branch ? (event) => { event.preventDefault(); void openMenu(); } : undefined}>
+        aria-disabled={waits || undefined} onClick={() => { if (!waits) run(); }}>
         <Icon name={branch ? 'split' : 'play'} size={9} weight={branch ? 2.2 : 1} fill={!branch} />{t('queue.runNow')}
       </button>
-      {choices && (
+      {open && (
         <div className="composer-popover popover composer-menu" role="menu" data-menu="run-now" data-page-overlay="">
-          <MenuList rows={[{ kind: 'header', text: t('composer.worktreeMenu.title') }, ...choices.map((c) => ({ kind: 'action' as const, text: c.text, enabled: c.enabled }))]}
-            path={[]} choose={(path) => { const choice = choices[(path[0] ?? 0) - 1]; if (choice) run(choice.agent); }} />
+          <MenuList rows={[{ kind: 'header', text: t('composer.worktreeMenu.title') }, ...agents.map((a) => ({ kind: 'choice' as const, text: a.detail, enabled: a.enabled, checked: a.agent === agent?.agent }))]}
+            path={[]} choose={(path) => { const choice = agents[(path[0] ?? 0) - 1]; setOpen(false); if (choice) setPicked(choice.agent); }} />
         </div>
       )}
     </span>

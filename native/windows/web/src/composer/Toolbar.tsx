@@ -7,7 +7,7 @@ import { usePageOverlay } from '../shell/overlay';
 import { BetaBadge } from '../shell/parts';
 import { Icon, type IconName } from '../icons/Icon';
 import type { Translate } from '../i18n/locale';
-import type { AskTargetOption } from './types';
+import type { WorktreeAgent } from './types';
 import { runSettingsEnter } from './keys';
 
 /** A toolbar narrower than this folds effort, permission and Fast into one options menu (ArrangeComposer's overflow). */
@@ -229,63 +229,57 @@ export function StyleRow({ paneId, style }: { paneId: string; style: { label: st
   );
 }
 
-/** One row of the 보낼 대상 menu: a target id (null for Claude) or the separator under Claude. */
-export type AskRow = { kind: 'choice'; id: string | null; text: string; checked: boolean } | { kind: 'separator' };
-
-/** The row above the editor while another CLI is the target: it runs without approvals or a sandbox (M/SessionPaneView.swift ask-unsandboxed). */
-export function AskUnsandboxedRow({ target }: { target: AskTargetOption | null }) {
-  const { t } = useServices();
-  if (!target) return null;
-  return <div className="composer-row" data-testid="composer-ask-unsandboxed" role="status">{t('composer.ask.unsandboxed', { name: target.label })}</div>;
-}
-
-/** The 보낼 대상 menu (M/SessionPaneView.swift askOptions): Claude first, a separator, then every installed CLI; the one in use is checked. */
-export function askRows(targets: readonly AskTargetOption[], current: string | null, t: Translate): AskRow[] {
+/** The 실행 중 보내기 menu: 대기열 first, a separator, then 워크트리 · <agent> for each agent of the worktree menu (one that cannot run now
+ * is off, its reason as the help); the one in effect is checked. */
+export function busySendRows(agents: readonly WorktreeAgent[], current: string | null, t: Translate): MenuRow[] {
   return [
-    { kind: 'choice', id: null, text: t('composer.ask.claude'), checked: current === null },
+    { kind: 'header', text: t('composer.busySend.title') },
+    { kind: 'choice', text: t('composer.busySend.queue'), enabled: true, checked: current === null },
     { kind: 'separator' },
-    ...targets.map((target): AskRow => ({ kind: 'choice', id: target.id, text: target.label, checked: current === target.id })),
+    ...agents.map((agent): MenuRow => ({
+      kind: 'choice', text: t('composer.busySend.worktree', { agent: agent.label }), enabled: agent.enabled, checked: current === agent.agent, help: agent.detail,
+    })),
   ];
 }
 
-/** Chooses where the pane's sends go (null: Claude). The host checks the pane offers it, saves it and pushes the composer again. */
-export function chooseAskTarget(bridge: { call: (method: string, args?: unknown) => Promise<unknown> }, paneId: string, target: string | null): Promise<unknown> {
-  return bridge.call('setAskTarget', { paneId, target });
+/** The agent of a 실행 중 보내기 row (`busySendRows`' path): null for 대기열, undefined for a header or separator. */
+export function busySendChoice(agents: readonly WorktreeAgent[], index: number): string | null | undefined {
+  if (index === 1) return null;
+  return index >= 3 ? agents[index - 3]?.agent : undefined;
 }
 
 /**
- * The 보낼 대상 pill (M/SessionPaneView.swift askMenu): the target asked, or Claude, tinted while another CLI is asked, with its own
- * menu. Drawn only while the pane offers a target; it stays on while the pane is busy, since the choice is the next request's.
+ * The 실행 중 보내기 pill: what Enter does while the pane runs — queue the words (대기열) or run them now in a new worktree of the
+ * chosen agent. Drawn only while the pane runs and offers a worktree; the choice is the pane's, kept by the host until changed.
  */
-export function AskPill({ paneId, targets, current, compact = false }: { paneId: string; targets: readonly AskTargetOption[]; current: string | null; compact?: boolean }) {
+export function BusySendPill({ paneId, agents, current, compact = false }: { paneId: string; agents: readonly WorktreeAgent[]; current: string | null; compact?: boolean }) {
   const { bridge, t } = useServices();
   const [open, setOpen] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const close = useCallback(() => setOpen(false), []);
   const ref = usePopover(close);
   usePageOverlay(open);
-  if (targets.length === 0) return null;
-  const asked = targets.find((target) => target.id === current) ?? null;
-  const name = asked?.label ?? 'Claude';
-  const choose = (target: string | null) => {
+  if (agents.length === 0) return null;
+  const chosen = agents.find((agent) => agent.agent === current) ?? null;
+  const name = chosen ? t('composer.busySend.worktree', { agent: chosen.label }) : t('composer.busySend.queue');
+  const choose = (path: number[]) => {
+    const agent = busySendChoice(agents, path[0] ?? -1);
     setOpen(false);
+    if (agent === undefined) return;
     setProblem(null);
-    chooseAskTarget(bridge, paneId, target).catch((failure: unknown) => setProblem(failure instanceof Error ? failure.message : String(failure)));
+    bridge.call('setBusySend', { paneId, agent }).catch((failure: unknown) => setProblem(failure instanceof Error ? failure.message : String(failure)));
   };
   return (
     <>
-      <button type="button" className={'composer-pill' + (compact ? ' compact' : '') + (asked ? ' on' : '')} data-pill="ask" data-testid="composer-ask" aria-haspopup="menu"
-        aria-label={t('composer.ask.menuLabel') + ' · ' + (asked?.label ?? t('composer.ask.claude'))} title={t('composer.ask.menuLabel') + ' · ' + name} onClick={() => setOpen(!open)}>
-        <Icon name="message-square-share" size={13} weight={1.75} className="pill-glyph" />{!compact && <span className="pill-text">{name}</span>}{!compact && <Icon name="chevron-down" size={8} weight={3} className="pill-chevron" />}
+      <button type="button" className={'composer-pill' + (compact ? ' compact' : '') + (chosen ? ' on' : '')} data-pill="busySend" data-testid="composer-busy-send" aria-haspopup="menu"
+        aria-label={t('composer.busySend.title') + ' · ' + name} title={t('composer.busySend.help') + '\n' + name} onClick={() => setOpen(!open)}>
+        {chosen ? <span className="pill-glyph"><ProviderMark provider={chosen.agent} size={12} /></span> : <Icon name="list-plus" size={13} weight={1.75} className="pill-glyph" />}
+        {!compact && <span className="pill-text">{name}</span>}{!compact && <Icon name="chevron-down" size={8} weight={3} className="pill-chevron" />}
       </button>
       {problem && <span className="composer-pill-problem" role="alert">{problem}</span>}
       {open && (
-        <div ref={ref} className="composer-popover popover composer-menu" role="menu" data-menu="ask" data-page-overlay="">
-          {askRows(targets, asked?.id ?? null, t).map((row, index) => row.kind === 'separator' ? <div key={index} className="menu-separator" role="separator" /> : (
-            <button key={index} type="button" role="menuitemradio" aria-checked={row.checked} className="menu-row" data-ask-target={row.id ?? 'claude'} onClick={() => choose(row.id)}>
-              <span className="menu-check">{row.checked ? '✓' : ''}</span>{row.text}
-            </button>
-          ))}
+        <div ref={ref} className="composer-popover popover composer-menu" role="menu" data-menu="busySend" data-page-overlay="">
+          <MenuList rows={busySendRows(agents, chosen?.agent ?? null, t)} path={[]} choose={(path) => choose(path)} />
         </div>
       )}
     </>
@@ -297,7 +291,7 @@ export function AskPill({ paneId, targets, current, compact = false }: { paneId:
  * the pane's actions) and the context ring (session info). Every list and every change is the host's; while the pane is busy
  * the pills are off, as in WinUI.
  */
-export function Toolbar({ paneId, pills, busy, showUsage, onUsageShown, resumed = false, askTargets = [], askTarget = null }: { paneId: string; pills: Pills; busy: boolean; showUsage: boolean; onUsageShown: () => void; resumed?: boolean; askTargets?: readonly AskTargetOption[]; askTarget?: string | null }) {
+export function Toolbar({ paneId, pills, busy, showUsage, onUsageShown, resumed = false, worktreeAgents = [], busySend = null }: { paneId: string; pills: Pills; busy: boolean; showUsage: boolean; onUsageShown: () => void; resumed?: boolean; worktreeAgents?: readonly WorktreeAgent[]; busySend?: string | null }) {
   const { bridge, t } = useServices();
   const [open, setOpen] = useState<Open>(null);
   const [narrow, setNarrow] = useState(false);
@@ -349,7 +343,7 @@ export function Toolbar({ paneId, pills, busy, showUsage, onUsageShown, resumed 
   return (
     <div ref={host} className="composer-pills">
       {pill('model', <><span className="pill-glyph"><ProviderMark provider={pills.provider} size={12} /></span><span className="pill-text">{pills.model}</span></>, pills.modelTip)}
-      <AskPill paneId={paneId} targets={askTargets} current={askTarget} compact={narrow} />
+      {busy && <BusySendPill paneId={paneId} agents={worktreeAgents} current={busySend} compact={narrow} />}
       {!narrow && pills.showsEffort && pill('effort', <>{glyph('brain')}<span className="pill-text">{pills.effort}</span></>, pills.effortTip, pills.effortEnabled)}
       {!narrow && pill('permission', <>{glyph(pills.unlocked ? 'lock-open' : 'shield-half')}<span className="pill-text">{pills.permission}</span></>, pills.permissionHelp, true, pills.unlocked)}
       {!narrow && pills.showsFast && (

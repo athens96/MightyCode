@@ -1,11 +1,12 @@
-//! The composer's "send to" switch on a Claude agent pane (C# MainWindow.AskTargets.cs, M/MightyCode/AppStore+AskTargets.swift):
-//! another installed CLI asked through oh-my-claudecode's ask skill (mighty-composer `ask_targets`). Which target executables this
-//! computer has is read off the page's thread with the slash catalogue, at most every 30 s; whether a pane's catalogue has the skill
-//! is noted by each scan (`SlashCatalogCache`). A saved choice that is no longer offered reads as Claude, and the pane says so once.
-//! The phone's side of the switch (phone.rs, W8-B): the detail's `askTargets`/`askTarget` from [`targets_for`], and `setAskTarget`
-//! through [`set_target`] after the target is checked against the ones the pane offers.
+//! The phone's "send to" switch on a Claude agent pane (C# MainWindow.AskTargets.cs, M/MightyCode/AppStore+AskTargets.swift):
+//! another installed CLI asked through oh-my-claudecode's ask skill (mighty-composer `ask_targets`). The desktop composer has no such
+//! switch (its 실행 중 보내기 picks a worktree agent instead) and never wraps its sends. Which target executables this computer has is
+//! read off the page's thread with the slash catalogue, at most every 30 s; whether a pane's catalogue has the skill is noted by each
+//! scan (`SlashCatalogCache`). A saved choice that is no longer offered reads as Claude and is cleared. The phone's side (phone.rs,
+//! W8-B): the detail's `askTargets`/`askTarget` from [`targets_for`], and `setAskTarget` through [`set_target`] after the target is
+//! checked against the ones the pane offers.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -30,14 +31,11 @@ struct Probe {
     next_at: Option<Instant>,
 }
 
-/// The window's part of the switch (C# `installedAskExecutables`, `askProbe*`, `askFallbackNotices`, `slashCatalogs`,
-/// `slashScansInFlight`).
+/// The window's part of the switch (C# `installedAskExecutables`, `askProbe*`, `slashCatalogs`, `slashScansInFlight`).
 #[derive(Default)]
 struct Ask {
     installed: Mutex<HashSet<String>>,
     probe: Mutex<Probe>,
-    /// A pane's notice that its saved target is gone and its sends go to Claude, until it is dismissed or another target is chosen.
-    notices: Mutex<HashMap<String, String>>,
     catalogs: Mutex<SlashCatalogCache>,
     scans: Mutex<HashSet<String>>,
 }
@@ -74,11 +72,6 @@ pub fn targets_for(host: &Host, state: &AppSnapshot, pane: &RunSession) -> Vec<A
 pub fn send_target(host: &Host, state: &AppSnapshot, pane: &RunSession) -> Option<AskTarget> {
     pane.ask_target.as_ref()?;
     ask_targets::effective(pane.ask_target.as_deref(), &targets_for(host, state, pane))
-}
-
-/// `askFallbackNotices[id]`.
-pub fn notice(host: &Host, id: &str) -> Option<String> {
-    lock(&switch(host).notices).get(id).cloned()
 }
 
 /// `AskTargetsKnown`: the PATH read once and the pane's catalogue scanned.
@@ -219,14 +212,14 @@ fn targets_changed(host: &Host) {
     host.panes_changed();
 }
 
-/// `ReconcileAskTargets`: a saved target that is no longer offered (oh-my-claudecode or its CLI gone) reads as Claude — the pane says
-/// so once and the choice is cleared. Judged only after the PATH was read and the pane's catalogue scanned.
+/// `ReconcileAskTargets`: a saved target that is no longer offered (oh-my-claudecode or its CLI gone) reads as Claude, and the choice
+/// is cleared. Judged only after the PATH was read and the pane's catalogue scanned.
 fn reconcile(host: &Host) {
     let ask = switch(host);
     if !lock(&ask.probe).finished {
         return;
     }
-    let gone: Vec<(String, String)> = {
+    let gone: Vec<String> = {
         let view = host.view();
         view.snapshot
             .sessions()
@@ -237,12 +230,10 @@ fn reconcile(host: &Host) {
                     && lock(&ask.catalogs).offers_ask(pane.provider(), catalog_path(&view.snapshot, pane).as_deref()).is_some();
                 ask_targets::fell_back(pane.ask_target.as_deref(), &targets_for(host, &view.snapshot, pane), true, scanned)
             })
-            .map(|pane| (pane.id().to_string(), pane.ask_target.clone().unwrap_or_default()))
+            .map(|pane| pane.id().to_string())
             .collect()
     };
-    for (id, saved) in gone {
-        let name = ask_targets::ALL.iter().find(|t| t.id == saved).map_or(saved.clone(), |t| t.label.to_string());
-        lock(&ask.notices).insert(id.clone(), host.locale.get_with("composer.ask.fellBack", &[("name", &name)]));
+    for id in gone {
         // C# `Act(() => SetAskTarget(id, null))`: what it fails with shows in the banner.
         if let Err(error) = set_target(host, &id, None) {
             host.view().error = Some(error);
@@ -252,14 +243,12 @@ fn reconcile(host: &Host) {
 
 /// `SetAskTarget`: saves a pane's choice (None: Claude) and redraws its composer. A target the pane does not offer is refused.
 pub fn set_target(host: &Host, id: &str, target: Option<String>) -> Result<(), String> {
-    let ask = switch(host);
     let mut view = host.view();
     let Some(pane) = view.snapshot.session(id).cloned() else { return Err(host.locale.get("remote.error.paneNotFound")) };
-    if let Some(target) = &target {
-        if !targets_for(host, &view.snapshot, &pane).iter().any(|t| t.id == target) {
-            return Err(host.locale.get("remote.error.badBody"));
-        }
-        lock(&ask.notices).remove(id);
+    if let Some(target) = &target
+        && !targets_for(host, &view.snapshot, &pane).iter().any(|t| t.id == target)
+    {
+        return Err(host.locale.get("remote.error.badBody"));
     }
     if pane.ask_target != target {
         crate::composer::change(&mut view, id, |p| RunSession { ask_target: target.clone(), ..p.clone() })?;
@@ -268,15 +257,6 @@ pub fn set_target(host: &Host, id: &str, target: Option<String>) -> Result<(), S
         ui.dirty = true;
     }
     Ok(())
-}
-
-/// `DismissAskNotice`: takes a pane's fallback notice down.
-pub fn dismiss_notice(host: &Host, id: &str) {
-    if lock(&switch(host).notices).remove(id).is_some()
-        && let Some(ui) = host.view().panes.get_mut(id)
-    {
-        ui.dirty = true;
-    }
 }
 
 /// `AwaitAskTargets`: waits briefly until a pane with a saved choice knows whether it still stands, so a send never goes unwrapped

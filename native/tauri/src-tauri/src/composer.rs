@@ -2,7 +2,7 @@
 //! never-shown `PaneView`'s own rule: the draft (`WebSetDraft`), the send (`Submit`: a busy pane queues, an idle one starts its request
 //! through the run service, a start that did not happen puts the draft and its files back), the stop, the queue (its drain when the run
 //! ends, 바로 실행), attachments (picked, dropped, pasted), the slash palette, the pills' menus, the run settings, the status-line toggle,
-//! a new conversation and the "send to" switch.
+//! a new conversation and 실행 중 보내기 (what a busy pane's Enter does).
 //!
 //! What a later stage owns answers as C# does without it: a typed built-in, a guided question and a style's prompt are W9's (the text
 //! goes to the agent as typed). The second send (Ctrl+Enter), 바로 실행's worktree and held rows and the worktree menu go through
@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::Engine as _;
-use mighty_composer::ask_targets;
 use mighty_composer::attachments;
 use mighty_composer::menus::{self, MenuAction, MenuInputs, RunSettingsForm};
 use mighty_composer::pending::SubmitReceipt;
@@ -174,56 +173,41 @@ pub(crate) fn reset_unavailable_agy_model(host: &Host, id: &str) -> Result<(), S
 
 /// C# `PaneView.Submit` (MainWindow.cs:533): the editor's text and attachments go the way the spec orders it — a busy pane's queue or
 /// new worktree, then a start. What happened: started, notStarted, queued, worktree, blocked or none, with the request's user entry
-/// and graph run when it started at once. `second`: Ctrl+Enter, which on a busy pane runs written words in a new child worktree where
-/// delegation offers one (`SecondSend` is `Worktree`), and otherwise queues them as Enter does (the menu-only state too: the page has
-/// no worktree-agent menu, W7 plan D7).
+/// and graph run when it started at once. On a busy pane written words run now in a new child worktree ([`queue::busy_route`]):
+/// `second` (⌘Enter / Ctrl+Enter, the worktree button) with the pane's own agent where delegation offers one (`SecondSend` is
+/// `Worktree`), Enter with 실행 중 보내기's agent while it may start one; otherwise they queue.
 async fn submit(host: &Arc<Host>, id: &str, second: bool) -> Result<SubmitReceipt, String> {
-    send(host, id, second, true).await
+    send(host, id, second).await
 }
 
-/// C# `Send(wrapsAsk: false)`: a style's own prompt (styles.rs's guided action), never asked of another CLI.
+/// C# `Send(wrapsAsk: false)`: a style's own prompt (styles.rs's guided action).
 pub(crate) async fn submit_own(host: &Arc<Host>, id: &str) -> Result<SubmitReceipt, String> {
-    send(host, id, false, false).await
+    send(host, id, false).await
 }
 
-async fn send(host: &Arc<Host>, id: &str, second: bool, wraps_ask: bool) -> Result<SubmitReceipt, String> {
+async fn send(host: &Arc<Host>, id: &str, second: bool) -> Result<SubmitReceipt, String> {
     // Another computer's pane (the remote mirror, W9-J): the text is its next request there, queued there while it runs.
     if let Some(sent) = crate::mirror::submit(host, id).await {
         return sent;
     }
-    // A saved "send to" choice not yet known to stand waits briefly for the pane's catalogue and the PATH read (ask.rs).
-    if wraps_ask {
-        crate::ask::await_targets(host, id).await;
+    if !panes::alive(&host.view(), id) {
+        return Ok(SubmitReceipt::new("none"));
     }
-    // Asking another CLI carries the words alone, wrapped once here: staged files stay in the composer.
-    let asked = {
-        let view = host.view();
-        if !panes::alive(&view, id) {
-            return Ok(SubmitReceipt::new("none"));
-        }
-        let pane = session(&view, id)?;
-        if wraps_ask { crate::ask::send_target(host, &view.snapshot, &pane) } else { None }
-    };
-    // DeferBusyComposer: a busy pane (running, starting) always queues the draft as its next request.
+    // DeferBusyComposer: a busy pane (running, starting) queues the draft as its next request, or runs it in a new worktree.
     let taken = {
         let mut view = host.view();
         let pane = session(&view, id)?;
         let busy_run = pane.status() == "running" || running(host, id);
-        // C# `DeferBusyComposer`'s second send: on a pane that may have children, written words run now in a new child worktree.
+        // A CLI update's hold only queues.
         let holds = crate::updates::holds(host, &view.snapshot, &pane);
-        let worktree = second
-            && !holds
-            && crate::delegation::window_inputs(host, &view.snapshot, &pane).second_send == queue::ComposerSecondSend::Worktree;
+        let delegation = crate::delegation::window_inputs(host, &view.snapshot, &pane);
         let ui = panes::ui(&mut view, id)?;
-        if asked.is_some() && ask_targets::wrap(&ui.view.draft, asked).is_none() {
-            return Ok(SubmitReceipt::new("none"));
-        }
         if busy_run || ui.view.starting {
             if pane.kind() != "claude" || !ui.has_content() || ui.view.starting || ui.view.attachments_loading {
                 return Ok(SubmitReceipt::new("none"));
             }
-            let Some(text) = ask_targets::wrap(&ui.view.draft, asked) else { return Ok(SubmitReceipt::new("none")) };
-            let files = if asked.is_none() { ui.view.attachments.clone() } else { vec![] };
+            let text = ui.view.draft.clone();
+            let files = ui.view.attachments.clone();
             // The same request validation applies before consuming a draft even though it runs later.
             let mut probe = StartRunRequest::new(pane.id(), pane.workspace_id(), pane.kind(), &text);
             probe.provider = pane.provider().to_string();
@@ -231,8 +215,14 @@ async fn send(host: &Arc<Host>, id: &str, second: bool, wraps_ask: bool) -> Resu
             probe.settings = pane.settings.clone();
             probe.attachments = (!files.is_empty()).then(|| files.clone());
             probe.validate().map_err(|e| e.message().to_string())?;
-            if worktree && !text.chars().all(char::is_whitespace) {
-                // Taken from the composer now, so a second Ctrl+Enter cannot send it again.
+            let route = if holds {
+                queue::BusyRoute::Queue
+            } else {
+                let agent = mighty_composer::composer::busy_send_agent(ui.view.busy_send.as_deref(), &delegation.worktree_agents);
+                queue::busy_route(second, delegation.second_send, agent.map(|a| a.agent.as_str()), pane.provider(), &text)
+            };
+            if let queue::BusyRoute::Worktree(agent) = route {
+                // Taken from the composer now, so a second Enter cannot send it again.
                 let sent: HashSet<String> = files.iter().map(|f| f.id.clone()).collect();
                 ui.view.attachments.retain(|a| !sent.contains(&a.id));
                 ui.view.draft.clear();
@@ -242,7 +232,7 @@ async fn send(host: &Arc<Host>, id: &str, second: bool, wraps_ask: bool) -> Resu
                     let _ = runs.service.update_draft(id, "");
                 }
                 host.view().sync();
-                crate::delegation::run_in_new_worktree(host, id, text, files, None, None);
+                crate::delegation::run_in_new_worktree(host, id, text, files, agent, None);
                 return Ok(SubmitReceipt::new("worktree"));
             }
             let override_mode = queue::background::queued_override(ui.view.launches_in_plan_mode);
@@ -273,12 +263,11 @@ async fn send(host: &Arc<Host>, id: &str, second: bool, wraps_ask: bool) -> Resu
         ui.view.starting = true;
         ui.submission += 1;
         let typed = std::mem::take(&mut ui.view.draft);
-        let files = if asked.is_none() { std::mem::take(&mut ui.view.attachments) } else { vec![] };
+        let files = std::mem::take(&mut ui.view.attachments);
         ui.dirty = true;
         (typed, files, ui.submission)
     };
     let (typed, files, submission) = taken;
-    let submitted = ask_targets::wrap(&typed, asked).unwrap_or_else(|| typed.clone());
     // The model list as the CLI has it now comes first: the request takes the pane's model and effort after it (models.rs).
     crate::models::prepare(host, id).await;
     let moot = {
@@ -289,7 +278,7 @@ async fn send(host: &Arc<Host>, id: &str, second: bool, wraps_ask: bool) -> Resu
     let outcome = if moot {
         None
     } else {
-        Some(match crate::styles::prepare_submission(host, id, &submitted, !files.is_empty()).await {
+        Some(match crate::styles::prepare_submission(host, id, &typed, !files.is_empty()).await {
             Ok(text) => start_run(host, id, &text, files.clone(), None, false, None).await,
             Err(error) => Err(error),
         })
@@ -944,15 +933,16 @@ pub fn register(methods: &mut Registry) {
         }
         Ok(Value::Null)
     });
-    // 바로 실행 on one queued row (`agent`: the row's menu pick), C# `RunQueuedNow`.
+    // 바로 실행 on one queued row (`agent`: the row's agent pick; the pane's own agent is its default), C# `RunQueuedNow`.
     methods.add("queueRunNow", |host: Arc<Host>, args| async move {
         let item = text(&args, "itemId").unwrap_or("").to_string();
-        let agent = text(&args, "agent").map(str::to_string);
-        let (id, path) = {
+        let (id, path, agent) = {
             let mut view = host.view();
             let id = ensure(&mut view, pane_id(&args))?;
+            let provider = view.snapshot.session(&id).map(|p| p.provider().to_string()).unwrap_or_default();
             let rows = run_now_rows(&host, &mut view, &id);
-            (id, rows.iter().find(|(row, _)| *row == item).map_or(QueueRunNowPath::Hidden, |(_, p)| *p))
+            let path = rows.iter().find(|(row, _)| *row == item).map_or(QueueRunNowPath::Hidden, |(_, p)| *p);
+            (id, path, queue::worktree_agent(text(&args, "agent"), &provider))
         };
         match path {
             // At the head, the queue's own start takes it.
@@ -976,7 +966,7 @@ pub fn register(methods: &mut Registry) {
             }
             // Every held item released now (delegation.rs, W7-D).
             QueueRunNowPath::Held => crate::delegation::release_held_now(&host, &id),
-            // A new worktree child (of `agent` when the row's menu picked one); a pick needs the menu still on offer, and an Antigravity
+            // A new worktree child (of `agent` when the row picked another one); a pick needs the menu still on offer, and an Antigravity
             // card's continuation never leaves its pane.
             QueueRunNowPath::Worktree | QueueRunNowPath::AgentMenu if path == QueueRunNowPath::Worktree || agent.is_some() => {
                 let row = {
@@ -1000,10 +990,27 @@ pub fn register(methods: &mut Registry) {
         }
         Ok(Value::Null)
     });
-    // The worktree menu's agents are delegation's (delegation.rs, W7-D: `OffersWorktreeMenu`).
-    methods.add("queueRunNowMenu", |host: Arc<Host>, args| async move {
-        let id = ensure(&mut host.view(), pane_id(&args))?;
-        Ok(crate::delegation::run_now_menu(&host, &id))
+    // 실행 중 보내기: what a busy pane's Enter does — the queue (null) or a new worktree of one of the worktree menu's agents that can
+    // run now. Kept on the pane view while the app runs.
+    methods.add("setBusySend", |host: Arc<Host>, args| async move {
+        let mut view = host.view();
+        let id = ensure(&mut view, pane_id(&args))?;
+        let agent = match args.get("agent") {
+            Some(Value::String(agent)) => Some(agent.clone()),
+            Some(Value::Null) | None => None,
+            _ => return Err(host.locale.get("remote.error.badBody")),
+        };
+        if let Some(agent) = &agent {
+            let pane = session(&view, &id)?;
+            let agents = crate::delegation::window_inputs(&host, &view.snapshot, &pane).worktree_agents;
+            if mighty_composer::composer::busy_send_agent(Some(agent), &agents).is_none() {
+                return Err(host.locale.get("remote.error.badBody"));
+            }
+        }
+        let ui = panes::ui(&mut view, &id)?;
+        ui.view.busy_send = agent;
+        ui.dirty = true;
+        Ok(Value::Null)
     });
     // C# `installCli`: the setup screen on the item that installs the pane's missing CLI (setup.rs, W6-B).
     methods.add("installCli", |host: Arc<Host>, args| async move {
@@ -1229,22 +1236,6 @@ pub fn register(methods: &mut Registry) {
             refresh_models(&host, &view, &id);
         }
         Ok(json!(reset))
-    });
-    // The 보낼 대상 switch (ask.rs, C# `SetAskTarget`): a target the pane offers, or null for Claude.
-    methods.add("setAskTarget", |host: Arc<Host>, args| async move {
-        let id = ensure(&mut host.view(), pane_id(&args))?;
-        let target = match args.get("target") {
-            Some(Value::String(target)) => Some(target.clone()),
-            Some(Value::Null) => None,
-            _ => return Err(host.locale.get("remote.error.badBody")),
-        };
-        crate::ask::set_target(&host, &id, target)?;
-        Ok(Value::Null)
-    });
-    methods.add("dismissAskNotice", |host: Arc<Host>, args| async move {
-        let id = ensure(&mut host.view(), pane_id(&args))?;
-        crate::ask::dismiss_notice(&host, &id);
-        Ok(Value::Null)
     });
 }
 

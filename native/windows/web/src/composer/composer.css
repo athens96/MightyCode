@@ -63,8 +63,10 @@
 .composer-queue-text { flex: 1; min-width: 0; font-size: var(--type-pill); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .composer-queue-files { display: block; font-size: var(--type-small); color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .composer-queue-pin { display: inline-grid; place-items: center; width: 18px; height: 16px; flex: none; color: var(--ink2); }
-/* 바로 실행 before a row's × or the first held row's pin: its agent menu opens over the queue, right-aligned to it. */
-.composer-queue-run-now { position: relative; display: inline-flex; flex: none; align-self: flex-start; }
+/* 바로 실행 before a row's × or the first held row's pin, a worktree row's agent pick before it: the pick's menu opens over the queue,
+   right-aligned to them. */
+.composer-queue-run-now { position: relative; display: inline-flex; align-items: center; gap: var(--space-sm); flex: none; align-self: flex-start; }
+.composer-queue-agent { display: inline-flex; align-items: center; gap: 2px; padding: 0; color: var(--ink2); }
 .composer-queue-run-now .composer-popover { left: auto; right: 0; }
 .composer-queue-run.waits { color: var(--ink2); cursor: default; }
 .composer-queue-run.waits:hover { background: transparent; }

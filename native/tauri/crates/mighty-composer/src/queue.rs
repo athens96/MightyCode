@@ -62,6 +62,35 @@ pub fn returns_to_composer(child_agent: Option<&str>, parent_agent: &str) -> boo
     child_agent.is_some_and(|c| c != parent_agent)
 }
 
+/// The agent a new worktree child is asked for: None for the pane's own agent (the second send's child), else the one chosen.
+pub fn worktree_agent(agent: Option<&str>, provider: &str) -> Option<String> {
+    agent.filter(|agent| *agent != provider).map(str::to_string)
+}
+
+/// Where a busy pane's send goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BusyRoute {
+    /// The next request, behind the run.
+    Queue,
+    /// Now, in a new child worktree: of the pane's own agent (None) or of another one.
+    Worktree(Option<String>),
+}
+
+/// A busy pane's send: `second` (⌘Enter / Ctrl+Enter, the worktree button) runs written words in a new worktree of the pane's own
+/// agent where `second_send` offers one; Enter follows 실행 중 보내기, `busy_agent` (None: the queue). Files alone always queue.
+pub fn busy_route(second: bool, second_send: ComposerSecondSend, busy_agent: Option<&str>, provider: &str, text: &str) -> BusyRoute {
+    if text.chars().all(char::is_whitespace) {
+        return BusyRoute::Queue;
+    }
+    if second {
+        return if second_send == ComposerSecondSend::Worktree { BusyRoute::Worktree(None) } else { BusyRoute::Queue };
+    }
+    match busy_agent {
+        Some(agent) => BusyRoute::Worktree(worktree_agent(Some(agent), provider)),
+        None => BusyRoute::Queue,
+    }
+}
+
 /// C# `ComposerSecondSends.MenuOnly` (Delegation.cs:99). `any_choice_unblocked`: one of the worktree menu's choices
 /// (`DelegationChildChoice`) can run now.
 pub fn menu_only(

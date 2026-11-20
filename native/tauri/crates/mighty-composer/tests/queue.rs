@@ -174,3 +174,34 @@ fn the_queue_says_what_became_of_it() {
     assert_eq!(queue::settle_notice("completed", 2, false, &l), None);
     assert_eq!(queue::settle_notice("stopped", 0, false, &l), None);
 }
+
+/// A busy pane's send: ⌘Enter / Ctrl+Enter always asks for the pane's own agent's worktree (or queues where none is offered); Enter
+/// follows 실행 중 보내기 — the queue, or a new worktree of the chosen agent (the pane's own agent asked for as the second send asks).
+/// Files alone always queue.
+#[test]
+fn a_busy_send_goes_where_the_choice_says() {
+    use queue::BusyRoute::{Queue, Worktree};
+    let route = queue::busy_route;
+    // Enter with 대기열.
+    assert_eq!(route(false, ComposerSecondSend::Worktree, None, "claude", "fix it"), Queue);
+    // Enter with 워크트리 · Codex, and with the pane's own agent.
+    assert_eq!(route(false, ComposerSecondSend::Worktree, Some("codex"), "claude", "fix it"), Worktree(Some("codex".into())));
+    assert_eq!(route(false, ComposerSecondSend::Worktree, Some("claude"), "claude", "fix it"), Worktree(None));
+    // Another agent on a pane whose own agent offers no worktree (the old menu-only state).
+    assert_eq!(route(false, ComposerSecondSend::Queue, Some("gemini"), "codex", "fix it"), Worktree(Some("gemini".into())));
+    // The second send ignores the choice: the pane's own agent, or the queue.
+    assert_eq!(route(true, ComposerSecondSend::Worktree, Some("codex"), "claude", "fix it"), Worktree(None));
+    assert_eq!(route(true, ComposerSecondSend::Queue, Some("codex"), "codex", "fix it"), Queue);
+    // No written words: the queue.
+    assert_eq!(route(false, ComposerSecondSend::Worktree, Some("codex"), "claude", "  \n"), Queue);
+    assert_eq!(route(true, ComposerSecondSend::Worktree, None, "claude", ""), Queue);
+}
+
+/// A queued row's agent pick: the pane's own agent (or none) asks for the second send's child, another agent for its own.
+#[test]
+fn a_queued_rows_agent_pick_names_the_child() {
+    assert_eq!(queue::worktree_agent(None, "claude"), None);
+    assert_eq!(queue::worktree_agent(Some("claude"), "claude"), None);
+    assert_eq!(queue::worktree_agent(Some("codex"), "claude").as_deref(), Some("codex"));
+    assert_eq!(queue::worktree_agent(Some("gemini"), "codex").as_deref(), Some("gemini"));
+}

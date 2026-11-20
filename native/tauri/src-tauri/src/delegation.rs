@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
-use mighty_composer::composer::HeldItem;
+use mighty_composer::composer::{HeldItem, WorktreeAgent};
 use mighty_composer::queue::{self, ComposerSecondSend, QueuedComposerInput};
 use mighty_core::attachment::RunAttachment;
 use mighty_core::model::{AppSnapshot, RunSession};
@@ -376,10 +376,12 @@ pub fn sidebar_rows(host: &Host, snapshot: &AppSnapshot) -> Vec<SidebarChild> {
     app().map(|app| app.sidebar_children()).unwrap_or_default()
 }
 
-/// What the composer reads of delegation for one pane (`WindowRules`' `SecondSend`, `WorktreeMenuOnly`, `HeldItems`, `EndingRun`).
+/// What the composer reads of delegation for one pane (`WindowRules`' `SecondSend`, `WorktreeMenuOnly`, `HeldItems`, `EndingRun`, and
+/// the worktree menu's agents 실행 중 보내기 and the queued rows' agent pick offer).
 pub struct WindowInputs {
     pub second_send: ComposerSecondSend,
     pub worktree_menu_only: bool,
+    pub worktree_agents: Vec<WorktreeAgent>,
     pub held_items: Vec<HeldItem>,
     pub ending_run: bool,
 }
@@ -387,13 +389,23 @@ pub struct WindowInputs {
 /// The pane's composer inputs (C# `owner.SecondSend(pane)`, `WorktreeMenuOnly`, `HeldItems`, `Delegation.EndingRuns.Contains`), read
 /// with the state locked as [`sidebar_rows`]. A style's plan-first launch is the pane's `launches_in_plan_mode`, which styles.rs sets from its style.
 pub fn window_inputs(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) -> WindowInputs {
-    let _ = host;
     let Some(app) = app() else {
-        return WindowInputs { second_send: ComposerSecondSend::Queue, worktree_menu_only: false, held_items: vec![], ending_run: false };
+        return WindowInputs {
+            second_send: ComposerSecondSend::Queue,
+            worktree_menu_only: false,
+            worktree_agents: vec![],
+            held_items: vec![],
+            ending_run: false,
+        };
     };
+    let second_send = app.second_send(snapshot, pane);
+    let worktree_menu_only = app.worktree_menu_only(snapshot, pane, false);
+    // C# `OffersWorktreeMenu`: its agents only while a worktree is on offer.
+    let offers = second_send == ComposerSecondSend::Worktree || worktree_menu_only;
     WindowInputs {
-        second_send: app.second_send(snapshot, pane),
-        worktree_menu_only: app.worktree_menu_only(snapshot, pane, false),
+        second_send,
+        worktree_menu_only,
+        worktree_agents: if offers { worktree_agents(&host.locale, &app, pane) } else { vec![] },
         held_items: app.held_items(pane.id()).into_iter().map(|item| HeldItem { id: item.id, text: item.text }).collect(),
         ending_run: app.ending_run(pane.id()),
     }
@@ -690,27 +702,21 @@ pub fn offers_worktree_menu(host: &Host, snapshot: &AppSnapshot, pane: &str) -> 
     app.offers_worktree_menu(snapshot, pane, false)
 }
 
-/// `queueRunNowMenu`'s rows (C# `WebRunNowChoices`): each agent of the worktree menu, its row's words and whether it can run now; none
-/// while the menu is not on offer.
-pub fn run_now_menu(host: &Host, pane: &str) -> Value {
-    let snapshot = host.view().snapshot.clone();
-    let (Some(app), Some(session)) = (app(), snapshot.session(pane)) else { return json!([]) };
-    if !app.offers_worktree_menu(&snapshot, session, false) {
-        return json!([]);
-    }
-    let rows: Vec<Value> = app
-        .worktree_child_choices(session, false)
+/// The worktree menu's agents (C# `WebRunNowChoices`), for 실행 중 보내기 and the queued rows' agent pick: each agent's name, its row's
+/// words (the mode its child starts in, or why it cannot run now) and whether it can run now.
+fn worktree_agents(locale: &mighty_core::locale::Locale, app: &DelegationApp, session: &RunSession) -> Vec<WorktreeAgent> {
+    app.worktree_child_choices(session, false)
         .into_iter()
         .map(|choice| {
-            let title = choice_title(&host.locale, &choice);
-            json!({
-                "agent": choice.agent,
-                "text": mighty_composer::runtime::beta_label(&choice.agent, &title, &host.locale),
-                "enabled": choice.blocked.is_none(),
-            })
+            let title = choice_title(locale, &choice);
+            WorktreeAgent {
+                label: mighty_composer::runtime::beta_label(&choice.agent, mighty_composer::runtime::provider_label(&choice.agent), locale),
+                detail: mighty_composer::runtime::beta_label(&choice.agent, &title, locale),
+                enabled: choice.blocked.is_none(),
+                agent: choice.agent,
+            }
         })
-        .collect();
-    Value::Array(rows)
+        .collect()
 }
 
 /// C# `WorktreeChoiceTitle(choice, parent, marksShortcut: false)`: the agent and the mode its child starts in, or why it cannot run it.

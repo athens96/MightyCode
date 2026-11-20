@@ -3,7 +3,7 @@
 import type { Pills } from './menus';
 import type { RunNow } from './queue';
 
-export type { RunNow, RunNowChoice } from './queue';
+export type { RunNow } from './queue';
 
 /** A row delegation holds for the pane; only the first carries 바로 실행 (the host sends null for the rest). */
 export interface QueueHeld {
@@ -43,10 +43,11 @@ export interface ComposerState {
   install: boolean;
   /** The provider's label while a background CLI update holds sends. */
   hold: string | null;
-  primary: 'send' | 'stop' | 'queue';
+  /** `worktree`: the pane runs, and Enter runs the words now in a new worktree of 실행 중 보내기's agent (`busySend`). */
+  primary: 'send' | 'stop' | 'queue' | 'worktree';
   primaryEnabled: boolean;
+  /** The worktree button: the second send's child of the pane's own agent. */
   worktree: boolean;
-  worktreeMenuOnly: boolean;
   worktreeEnabled: boolean;
   queue: {
     held: QueueHeld[];
@@ -68,12 +69,10 @@ export interface ComposerState {
   style?: { label: string; badge: string | null; hint: string; enabled: boolean } | null;
   /** The chosen style's guide panel under that row (MainWindow.WebShell.Guided.cs); null or absent without a style. */
   guided?: GuidedPanel | null;
-  /** The 보낼 대상 switch (MainWindow.AskTargets.cs): the other CLIs a Claude pane with oh-my-claudecode may ask, in the menu's order; none (or absent) hides it. */
-  askTargets?: AskTargetOption[];
-  /** The target the pane's sends go to now; null or absent for Claude. */
-  askTarget?: string | null;
-  /** The notice that the saved target is gone and sends go to Claude (composer.ask.fellBack), until it is dismissed. */
-  askNotice?: string | null;
+  /** The worktree menu's agents while the pane offers a worktree: 실행 중 보내기's choices (drawn only while it runs) and the queued rows' agent pick; none hides both. */
+  worktreeAgents: WorktreeAgent[];
+  /** 실행 중 보내기: the agent whose new worktree Enter runs the words in now; absent: Enter queues them (대기열). */
+  busySend?: string | null;
 }
 
 /** A phase in the style's bar: the one the pane is in, one already reached, or one still ahead. */
@@ -128,10 +127,12 @@ export interface GuidedPanel {
   guidance?: string | null;
 }
 
-/** One choice of the 보낼 대상 switch: an oh-my-claudecode ask target id and its name. */
-export interface AskTargetOption {
-  id: string;
+/** One agent of the worktree menu: its provider id, its name, the row's words (the mode its child starts in, or why it cannot run now) and whether it can run now. */
+export interface WorktreeAgent {
+  agent: string;
   label: string;
+  detail: string;
+  enabled: boolean;
 }
 
 /**

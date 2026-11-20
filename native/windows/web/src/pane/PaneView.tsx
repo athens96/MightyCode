@@ -100,7 +100,7 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
           {reference && !remote && <ReferenceBubble paneId={session.id} request={reference} top={bubbleTop} onClose={closeReference} />}
         </div>
       </ReferenceContext.Provider>
-      {session.kind === 'claude' && <Cards key={'cards-' + session.id} paneId={session.id} />}
+      {session.kind === 'claude' && <Cards key={'cards-' + session.id} paneId={session.id} hideBackground={mighty} />}
       {agent && <Composer key={'composer-' + session.id} session={session} />}
     </>
   );

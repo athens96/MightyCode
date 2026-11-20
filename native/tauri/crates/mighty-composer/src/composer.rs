@@ -65,6 +65,9 @@ pub struct PaneViewState {
     pub queue: Vec<QueuedComposerInput>,
     /// `LaunchesInPlanMode`: the active style starts every request in plan mode.
     pub launches_in_plan_mode: bool,
+    /// 실행 중 보내기: the agent whose new child worktree a busy pane's Enter runs the words in; None queues them. Kept while the app
+    /// runs, until the human changes it; it takes effect only while that agent is one of [`WindowRules::worktree_agents`] it may start.
+    pub busy_send: Option<String>,
 }
 
 /// The style row over the editor (`styleHost`), from the style engine.
@@ -92,10 +95,9 @@ pub struct WindowRules {
     pub ending_run: bool,
     pub pending_requests: usize,
     pub awaits_notice: bool,
-    /// `AskTargetsFor(pane)` ([`ask_targets_for`]).
-    pub ask_targets: Vec<AskTarget>,
-    /// `askFallbackNotices[id]`.
-    pub ask_notice: Option<String>,
+    /// The agents a child of the busy pane may run in a new worktree (the worktree menu's, delegation's `WorktreeChildChoices`), each
+    /// with whether it can now; none while the pane offers no worktree.
+    pub worktree_agents: Vec<WorktreeAgent>,
     /// `Snapshot.StatusLineEnabled`.
     pub status_line_enabled: bool,
     pub style: Option<StyleRow>,
@@ -116,8 +118,7 @@ impl Default for WindowRules {
             ending_run: false,
             pending_requests: 0,
             awaits_notice: false,
-            ask_targets: vec![],
-            ask_notice: None,
+            worktree_agents: vec![],
             status_line_enabled: false,
             style: None,
             guided: None,
@@ -242,10 +243,22 @@ pub struct Toggles {
     pub status_line: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct AskTargetOption {
-    pub id: &'static str,
-    pub label: &'static str,
+/// One agent of the worktree menu (page `WorktreeAgent`): the provider id, its name, the row's words (the mode its child starts in, or
+/// why it cannot run now) and whether it can run now.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeAgent {
+    pub agent: String,
+    pub label: String,
+    pub detail: String,
+    pub enabled: bool,
+}
+
+/// The agent the busy pane's Enter runs the words with in a new worktree ([`PaneViewState::busy_send`]): the saved one while it may run
+/// a child now, else None (the queue).
+pub fn busy_send_agent<'a>(saved: Option<&str>, agents: &'a [WorktreeAgent]) -> Option<&'a WorktreeAgent> {
+    let saved = saved?;
+    agents.iter().find(|agent| agent.agent == saved && agent.enabled)
 }
 
 /// `PaneView.WebComposerState` (MainWindow.WebShell.Composer.cs:560).
@@ -269,7 +282,6 @@ pub struct ComposerState {
     pub primary: &'static str,
     pub primary_enabled: bool,
     pub worktree: bool,
-    pub worktree_menu_only: bool,
     pub worktree_enabled: bool,
     pub queue: QueueModel,
     pub attachments: Vec<AttachmentChip>,
@@ -286,11 +298,12 @@ pub struct ComposerState {
     pub resumed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub toggles: Option<Toggles>,
-    pub ask_targets: Vec<AskTargetOption>,
+    /// The worktree menu's agents while the agent pane offers a worktree (else none): 실행 중 보내기's choices, drawn only while it is
+    /// busy, and the queued rows' agent pick.
+    pub worktree_agents: Vec<WorktreeAgent>,
+    /// The agent a busy pane's Enter runs the words with in a new worktree now ([`busy_send_agent`]); absent: Enter queues them.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ask_target: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ask_notice: Option<String>,
+    pub busy_send: Option<String>,
 }
 
 // ── the rules ───────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -362,19 +375,18 @@ pub fn refresh(i: &ComposerInputs) -> Refreshed {
             None => unsupported_settings.clone().unwrap_or_default(),
         },
     };
-    let asking = ask_targets::effective(pane.ask_target.as_deref(), &i.window.ask_targets).filter(|_| pane.ask_target.is_some());
     let placeholder_key = if i.view.checking_models {
         "composer.placeholder.checkingModels"
     } else if busy {
-        if pane.kind() == "claude" && i.window.second_send == ComposerSecondSend::Worktree {
+        if pane.kind() == "claude" && busy_agent(i).is_some() {
+            "composer.placeholder.busyRunNow"
+        } else if pane.kind() == "claude" && i.window.second_send == ComposerSecondSend::Worktree {
             "composer.placeholder.busyWorktree"
         } else {
             "composer.placeholder.busyQueue"
         }
     } else if pane.kind() == "shell" {
         "composer.placeholder.shell"
-    } else if asking.is_some() {
-        "composer.ask.placeholder"
     } else {
         "composer.placeholder.idle"
     };
@@ -385,8 +397,16 @@ pub fn refresh(i: &ComposerInputs) -> Refreshed {
         && (pane.kind() == "shell" || available)
         && !unsupported_effort
         && unsupported_settings.is_none()
-        && (!blank(&i.view.draft) || !i.view.attachments.is_empty() && asking.is_none());
+        && (!blank(&i.view.draft) || !i.view.attachments.is_empty());
     Refreshed { reason, placeholder_key, can_send }
+}
+
+/// The 실행 중 보내기 agent of a busy pane ([`busy_send_agent`]); None while a CLI update holds the pane, which only queues.
+fn busy_agent<'a>(i: &'a ComposerInputs) -> Option<&'a WorktreeAgent> {
+    if i.window.background_update_holds {
+        return None;
+    }
+    busy_send_agent(i.view.busy_send.as_deref(), &i.window.worktree_agents)
 }
 
 /// C# `RunNowPane` (MainWindow.QueuedComposer.cs:290): the pane as 바로 실행 reads it.
@@ -582,7 +602,11 @@ pub fn composer_state(i: &ComposerInputs) -> ComposerState {
     let busy = busy(i);
     let has_content = !blank(&view.draft) || !view.attachments.is_empty();
     let queueable = busy && !view.starting && !view.queue_starting && pane.kind() == "claude" && has_content;
-    let primary = if queueable {
+    // 실행 중 보내기 on an agent: written words run now in its new worktree (files alone still queue, as the second send's).
+    let runs_now = queueable && !blank(&view.draft) && busy_agent(i).is_some();
+    let primary = if runs_now {
+        "worktree"
+    } else if queueable {
         "queue"
     } else if busy {
         "stop"
@@ -590,9 +614,9 @@ pub fn composer_state(i: &ComposerInputs) -> ComposerState {
         "send"
     };
     // RefreshQueuedComposer (MainWindow.QueuedComposer.cs:138-144).
+    // The worktree button is the second send's: a child of the pane's own agent. Another agent's is 실행 중 보내기's.
     let second = if queueable { i.window.second_send } else { ComposerSecondSend::Queue };
-    let worktree_menu_only = queueable && second == ComposerSecondSend::Queue && i.window.worktree_menu_only;
-    let offers_worktree = (second == ComposerSecondSend::Worktree || worktree_menu_only) && !blank(&view.draft);
+    let offers_worktree = second == ComposerSecondSend::Worktree && !blank(&view.draft);
     let rows = run_now_rows(i);
     let mutation_block = i.window.manual_mutation_block.as_ref();
     let queue_enabled = !view.starting
@@ -617,7 +641,7 @@ pub fn composer_state(i: &ComposerInputs) -> ComposerState {
         blocked: (!reason.is_empty()).then_some(reason),
         hold: i.window.background_update_holds.then(|| runtime::provider_label(pane.provider()).to_string()),
         primary,
-        primary_enabled: if primary == "queue" {
+        primary_enabled: if primary == "queue" || primary == "worktree" {
             queue_enabled
         } else if busy {
             !view.stopping
@@ -625,7 +649,6 @@ pub fn composer_state(i: &ComposerInputs) -> ComposerState {
             refreshed.can_send
         },
         worktree: offers_worktree,
-        worktree_menu_only,
         worktree_enabled: offers_worktree && queue_enabled,
         queue: QueueModel {
             held: i
@@ -671,9 +694,8 @@ pub fn composer_state(i: &ComposerInputs) -> ComposerState {
         resumed: pane.resume_id.is_some(),
         toggles: (pane.kind() == "claude" && pane.provider() == "claude")
             .then(|| Toggles { status_line: (!remote).then_some(i.window.status_line_enabled) }),
-        ask_targets: i.window.ask_targets.iter().map(|t| AskTargetOption { id: t.id, label: t.label }).collect(),
-        ask_target: ask_targets::effective(pane.ask_target.as_deref(), &i.window.ask_targets).map(|t| t.id),
-        ask_notice: i.window.ask_notice.clone(),
+        worktree_agents: if pane.kind() == "claude" { i.window.worktree_agents.clone() } else { vec![] },
+        busy_send: (busy && pane.kind() == "claude").then(|| busy_agent(i).map(|agent| agent.agent.clone())).flatten(),
     }
 }
 
