@@ -1103,7 +1103,7 @@ pub fn pet(frame: PetRect, atlas: bool, row: i32, column: u32, accent: PetColor)
     vec![PetItem::Sprite { cell: PetRect::new(f64::from(column) * cell_w, f64::from(row) * cell_h, cell_w, cell_h), dest, opacity: 1.0 }]
 }
 
-/// The menu's two entries (C# `LayoutMenu`): 펫 숨기기, 에이전트 열기.
+/// The menu's two entries (C# `LayoutMenu`): Mighty Pet 숨기기, 에이전트 열기.
 pub fn menu_entries() -> [(&'static str, String); 2] {
     [("hide", mighty_run::strings::get("menu.hidePet")), ("open", mighty_run::strings::get("menu.openAgent"))]
 }

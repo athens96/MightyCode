@@ -165,7 +165,7 @@ mod tests {
     }
 
     /// Verification.cs:1173 "settings sections appear in the macOS order with their titles", in the tabs' order since the 0.5.4 tidy-up:
-    /// each tab's name is its first box's heading (원격 연결, 스타일, 펫과 알림), no English heading is left.
+    /// each tab's name is its first box's heading (원격 연결, 스타일, Mighty Pet과 알림), no English heading is left.
     #[test]
     fn sections_appear_in_mac_order_with_their_titles() {
         let l = ko();
@@ -177,7 +177,7 @@ mod tests {
                 l.get("settings.phaseModels.sectionTitle"),
                 "스타일".to_string(),
                 "원격 연결".to_string(),
-                "펫과 알림".to_string(),
+                "Mighty Pet과 알림".to_string(),
                 l.get("settings.components.sectionTitle"),
                 l.get("settings.appUpdate.sectionTitle"),
                 "앱 정보".to_string(),
@@ -280,7 +280,7 @@ mod tests {
     }
 
     /// Verification.cs:1178 "remote settings: the remote page sits between mobile and companion", since the tidy-up the one 원격 연결
-    /// tab (the phone's box is its 휴대폰 tab) after 스타일 and before 펫과 알림; a saved 모바일 리모트 opens there.
+    /// tab (the phone's box is its 휴대폰 tab) after 스타일 and before Mighty Pet과 알림; a saved 모바일 리모트 opens there.
     #[test]
     fn the_remote_page_sits_between_styles_and_companion() {
         let l = ko();
