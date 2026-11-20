@@ -1,0 +1,12 @@
+# The Mighty Code website on Cloudflare Workers static assets: `cd site && wrangler deploy`.
+# Every file here is served as it is; worker.js answers only /api/* (the live latest.json the download
+# buttons read), and .assetsignore keeps this file and the worker out of the public files.
+name = "mightycode"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+[assets]
+directory = "."
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
