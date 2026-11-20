@@ -27,6 +27,7 @@ On a Mac the View menu's {{ui:menu.textBigger}} ({{kbd:⌘=}}), {{ui:menu.textSm
 The {{ui:settings.agents.sectionTitle}} group on the same tab holds the settings for agent panes and a few key tips.
 - {{ui:settings.display.statusLineToggle}}: runs the status line command from your Claude settings and shows it under the composer.
 - {{ui:settings.delegation.toggle}}: on by default. Claude panes can open child panes in their own worktrees, and {{kbd:⌘Enter}} in a running Claude pane runs your request in a new one. See [Mighty Orchestration](delegation.md#enable).
+- {{ui:settings.agents.checklistToggle}}: on by default. While on, Gemini, Codex, opencode and Hermes get a short instruction to keep a plan (a checklist) while they work, so the progress panel shows real plan steps. The pane's request keeps only what you typed. When off, or when no plan comes, the panel shows what the agent does as steps ([Mighty View](agent-pane.md#diagram)).
 - {{ui:settings.editor.label}}: what {{ui:editor.open}} starts. Choose Auto (the first one found), one of the editors found on this computer, or {{ui:settings.editor.system}}. The editors are looked for again each time Settings opens ([open in an editor](terminal-files-browser.md#open-in-editor)).
 - The tips below them: {{kbd:Enter}} sends and {{kbd:Shift+Enter}} starts a new line. Drag a tab onto another to merge them, or to an edge to split. The command pane is an interactive terminal that opens your login shell on a Mac, and PowerShell (or cmd if it is missing) on Windows.
 
@@ -56,12 +57,12 @@ The {{ui:settings.remote.navTitle}} › {{ui:settings.remote.phoneTab}} tab lets
 
 Screen view & control is paused for now, so Settings has nothing for it ([Screen view](phone.md#screen)).
 
-## Pet & alerts {#companion}
-The {{ui:settings.nav.companion}} tab sets up the desktop pet and the completion notification.
-- {{ui:companion.settings.enabled}}: a raccoon pet that walks on your screen. Drag it to move it; click it to open or close its bubble.
+## Mighty Pet & alerts {#companion}
+The {{ui:settings.nav.companion}} tab sets up Mighty Pet and the completion notification.
+- {{ui:companion.settings.enabled}}: Mighty Pet, a raccoon that walks on your screen. Drag it to move it; click it to open or close its bubble.
 - {{ui:companion.settings.task}}: the bubble shows the request, the current step and the time taken. You can also answer approvals there ({{ui:permission.allowOnce}} / {{ui:permission.deny}}). The symbol button on an approval, question or plan bubble opens that pane, where you see the whole request or type your own answer.
-- Over the bubble sits the {{ui:graph.progress.title}} card of that pane's latest request: the same as the pane's progress panel, with the request number, the steps done, its state, a few steps around the current one and the background work, each with its time. Click the card's header to fold it to the header and again to unfold it; it stays folded the next time the app opens. Click a step line to open that pane. A request with no steps and no background work has no card, and neither does a bubble that shows an approval, question or plan, or a closed bubble.
-- {{ui:companion.settings.pet}}: choose the pet. Add more with {{ui:companion.settings.import}}, read the pets again with {{ui:companion.settings.reload}}, and put the pet and its bubble size back where they started with {{ui:companion.settings.resetPosition}}.
+- Over the bubble sits the {{ui:graph.progress.title}} card of that pane's latest request: the same as the pane's progress panel, with the request number, the steps done, its state, every step and piece of background work, each with its time. With more than eight lines the card's list scrolls inside it, opening on the current step. Click the card's header to fold it to the header and again to unfold it; it stays folded the next time the app opens. Click a step line to open that pane. A request with no steps and no background work has no card, and neither does a bubble that shows an approval, question or plan, or a closed bubble.
+- {{ui:companion.settings.pet}}: choose the pet. Add more with {{ui:companion.settings.import}}, read the pets again with {{ui:companion.settings.reload}}, and put Mighty Pet and its bubble size back where they started with {{ui:companion.settings.resetPosition}}.
 - {{ui:companion.settings.motion}}: less movement.
 - {{ui:companion.settings.macNotifications}} ({{ui:windows.notifications.toggleLabel}} on Windows): a Mac notification when a request finishes successfully. Clicking it opens that pane. The notification never contains the request or its result.
 - Under it, the system's notification permission is shown, and {{ui:windows.notifications.settingsButton}} opens the system's notification settings.
@@ -95,7 +96,7 @@ Under the list, the {{ui:settings.components.groupAutoUpdate}} box has three swi
 
 Whether the item got installed is decided by checking again afterwards. The [{{ui:setup.title}}](getting-started.md#setup) window that opens on first run is a checklist: pick what is missing and click {{ui:setup.button.install}}.
 
-At the bottom of the same tab is the {{ui:settings.toolkit.sectionTitle}} box: tools you use often. Every command is shown before anything is installed, and you get a {{ui:settings.toolkit.confirmTitle}} step. You can {{ui:settings.toolkit.exportButton}} or {{ui:settings.toolkit.importButton}} the list.
+At the bottom of the same tab is the {{ui:settings.toolkit.sectionTitle}} box: a list of tools you gather yourself, empty at first. Add a tool with {{ui:settings.toolkit.addButton}}; each entry has {{ui:settings.toolkit.approveButton}} and {{ui:settings.toolkit.removeButton}} buttons. Only approved tools can be installed. Every command is shown before anything is installed, and you get a {{ui:settings.toolkit.confirmTitle}} step. You can {{ui:settings.toolkit.exportButton}} or {{ui:settings.toolkit.importButton}} the list.
 
 ![[settings-tools]]
 

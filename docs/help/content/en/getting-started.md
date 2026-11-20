@@ -9,8 +9,8 @@ Mighty Code is a desktop app for using Claude Code, Codex CLI, Google's Antigrav
 - macOS 14 or later. On Windows: Windows 10 (version 2004) or later, or Windows 11.
 - The AI CLIs you want to use. The app runs the CLIs directly, so they need to be installed and signed in. You can install them from the {{ui:setup.title}} screen the app shows the first time it opens ([First launch](#first-launch)). You can skip the ones you won't use.
 
-- Claude Code: Mac `curl -fsSL https://claude.ai/install.sh | bash`, Windows `npm install -g @anthropic-ai/claude-code`
-- Codex CLI: Mac `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, Windows `npm install -g @openai/codex`
+- Claude Code: Mac `curl -fsSL https://claude.ai/install.sh | bash`, Windows `irm https://claude.ai/install.ps1 | iex`
+- Codex CLI: Mac `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, Windows `irm https://chatgpt.com/codex/install.ps1 | iex`
 - Antigravity CLI: Mac `curl -fsSL https://antigravity.google/cli/install.sh | bash`, Windows [Antigravity](agent-pane.md#antigravity)
 - pi: Mac and Windows `npm install -g @mariozechner/pi-coding-agent` (needs Node.js; see [pi](agent-pane.md#pi))
 - opencode: Mac and Windows `npm install -g @opencode/cli` (OpenCode 2) (needs Node.js; see [opencode](agent-pane.md#opencode))
@@ -39,7 +39,7 @@ The app is idle when all of the following hold. If one stops holding while the n
 - No agent task is running or waiting to start, no card waits for an answer and no request waits in a queue.
 - No composer holds unsent text or attachments.
 - No terminal is running a command or holding a background process, and no CLI sign-in, update or install is under way.
-- No phone upload, no screen sharing and no remote run this computer hosts for another one.
+- No phone upload and no remote run this computer hosts for another one.
 - This computer is not sharing its workspaces with another computer (sharing turned on counts even with no remote run going).
 - No Settings window or dialog is open.
 - There was no keyboard or mouse input for 5 minutes, and no run ended and no request was sent in the last 3 minutes.
@@ -88,7 +88,7 @@ There are three ways to add one. Pick any of them from the folder button at the 
 
 The {{ui:workspace.create.location}} remembers the last place you used. The first time it is the folder next to the current workspace (its parent folder), or the home folder if there is none. The new or downloaded folder is added as a workspace at once and a Claude pane opens. The two new items have no shortcuts.
 
-Right-click a workspace in the sidebar for {{ui:menu.rename}}, {{ui:menu.showInFinder}} and {{ui:workspace.menu.remove}}. Removing it from the list leaves the project files on disk untouched. Open more panes with {{ui:menu.newClaudePane}} ({{kbd:⌘N}}).
+Right-click a workspace in the sidebar for {{ui:menu.rename}}, {{ui:menu.showInFinder}}, {{ui:menu.showFiles}}, {{ui:workMap.open}}, {{ui:conversationSearch.open}} and {{ui:workspace.menu.remove}}, and in a git repository also {{ui:paneWorktree.menu.mode}}, {{ui:paneWorktree.menu.list}}, {{ui:paneWorktree.menu.copy}} and {{ui:paneWorktree.menu.setup}} ([A worktree per pane](delegation.md#pane-worktree)). Removing it from the list leaves the project files on disk untouched. Open more panes with {{ui:menu.newClaudePane}} ({{kbd:⌘N}}).
 
 ## Change the language {#language}
 1. Open {{ui:menu.settings}} → {{ui:settings.nav.general}}.

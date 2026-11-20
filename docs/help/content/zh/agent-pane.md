@@ -18,10 +18,11 @@ section: agent-pane
 
 ### 运行时继续提出请求 {#queue}
 任务运行期间也可以写下一个请求。输入框中有文字时，停止按钮旁会出现与发送按钮相同的圆形按钮。
-- {{kbd:Enter}}或{{ui:queue.add}}按钮：作为下一个请求放入队列。当前任务结束后按顺序执行。每个窗格最多可放 16 个。
-- {{kbd:⌘Enter}}（Windows 上为{{kbd:Ctrl+Enter}}）或{{ui:queue.worktree}}按钮：在开启了 Mighty 编排、位于有提交的分支上的 git 仓库中的 Claude 窗格，或处于子窗格能更改文件的模式的 Codex、Antigravity 窗格里，会在此窗格旁打开一个拥有自己 git worktree 的新子窗格并立即运行，正在运行的任务照常继续；子窗格完成后，在侧边栏的卡片上合并它的结果（[在新的 worktree 中运行](delegation.md#worktree)）。
-- 在子窗格中、在这样的仓库之外，或关闭 Mighty 编排时，{{kbd:⌘Enter}}也会像{{kbd:Enter}}一样放入队列。无法创建或启动子窗格时，文字同样会放入队列（[在新的 worktree 中运行](delegation.md#worktree)）。你发送的内容不再插入正在运行的任务；在较早的记录中，Mighty 视图仍会把这类文字显示为橙色的{{ui:graph.block.steer}}块。直接送进正在运行的 Claude 父窗格的委派通知，显示为同样颜色的{{ui:graph.block.delegationNotice}}块（[通知和保留](delegation.md#notices)）。
-- 队列中的每个请求，在 ✕ 旁都有一个{{ui:queue.runNow}}按钮。在能创建新 worktree 的地方（条件与上面的 {{kbd:⌘Enter}} 相同），它会立即在新的子窗格中运行该请求，正在运行的任务照常继续。右键点按（Mac 上也可按住 Control 点按）可以选择其他代理。按钮的提示会说明将会发生哪一种。只有附件、没有文字的请求不会进入 worktree。
+- {{kbd:Enter}}或{{ui:queue.add}}按钮：作为下一个请求放入队列。当前任务结束后按顺序执行。每个窗格最多可放 16 个。如果在下面的{{ui:composer.busySend.title}}中选了代理，则改为立即用该代理在新的 worktree 中运行。
+- {{ui:composer.busySend.title}}：只在运行时显示在输入框底部一行的选项。它提供{{ui:composer.busySend.queue}}（默认），以及此窗格可作为子窗格启动的每个代理的一项，例如“worktree · Codex”（Claude、Codex、Antigravity）。CLI 未安装或未登录、没有合适模式，或你直接打开的子窗格已有 3 个的项目显示为灰色并说明原因。所选的值决定{{kbd:Enter}}和圆形按钮的作用：把请求放入队列，或在此窗格旁打开该代理的子窗格，立即在新的 worktree 中运行。输入框的提示和按钮名称也随之改变。每个窗格会记住所选的值，直到退出应用。只有附件、没有文字的请求会放入队列。
+- {{kbd:⌘Enter}}（Windows 上为{{kbd:Ctrl+Enter}}）或{{ui:queue.worktree}}按钮：无论{{ui:composer.busySend.title}}选了什么，始终使用此窗格自己的代理。在开启了 Mighty 编排、位于有提交的分支上的 git 仓库中的 Claude 窗格，或处于子窗格能更改文件的模式的 Codex、Antigravity 窗格里，会在此窗格旁打开一个拥有自己 git worktree 的新子窗格并立即运行，正在运行的任务照常继续；子窗格完成后，在侧边栏的卡片上合并它的结果（[在新的 worktree 中运行](delegation.md#worktree)）。
+- 在子窗格中、在这样的仓库之外，或关闭 Mighty 编排时，{{kbd:⌘Enter}}也会像{{kbd:Enter}}一样放入队列。如果此窗格的代理在当前模式下无法创建子窗格、但其他代理可以，{{kbd:⌘Enter}}会放入队列，不过可以通过{{ui:composer.busySend.title}}和下面{{ui:queue.runNow}}的代理选择，在该代理的子窗格中运行。无法创建或启动子窗格时，文字同样会放入队列（[在新的 worktree 中运行](delegation.md#worktree)）。你发送的内容不再插入正在运行的任务；在较早的记录中，Mighty 视图仍会把这类文字显示为橙色的{{ui:graph.block.steer}}块。直接送进正在运行的 Claude 父窗格的委派通知，显示为同样颜色的{{ui:graph.block.delegationNotice}}块（[通知和保留](delegation.md#notices)）。
+- 队列中的每个请求，在 ✕ 旁都有一个{{ui:queue.runNow}}按钮。在能创建新 worktree 的地方（满足上面 {{kbd:⌘Enter}} 的条件，或换用其他代理就能创建子窗格的窗格），它会立即在新的子窗格中运行该请求，正在运行的任务照常继续。在按钮前的代理选择（默认是此窗格的代理）中选择其他代理，即可在该代理的子窗格中运行。按钮的提示会说明将会发生哪一种。只有附件、没有文字的请求不会进入 worktree。
 - 无法创建 worktree 时，请求在本窗格中处理。窗格处于空闲状态（例如因出错而停止）时，会立即开始该请求。Claude 的回答已结束、只剩后台任务的窗格，会把它直接送进正在运行的 Claude，并在 Mighty 视图中显示为{{ui:graph.block.steer}}块（带附件的请求要等到任务结束）。其他情况下按钮显示为灰色，提示会说明原因：当前任务必须先结束、为该窗格保留的项目要先送出，或 CLI 正在更新。此时请求依次等待。Antigravity 卡片的后续请求只会在它自己的窗格中运行。
 
 停止任务时，排队中的请求也会被取消。但在只等待后台工作的窗格中停止时，队列会保留，并立即开始第一个请求。重新打开应用后，队列会被清空。
@@ -110,7 +111,7 @@ Hermes（`hermes`）是 Nous Research 的开源智能体 CLI（Hermes Agent）�
 - 终端窗格不能添加附件。
 
 ### 发送对象 {#ask-target}
-安装了 oh-my-claudecode 的 Claude 窗格，输入框里会出现{{ui:composer.ask.menuLabel}}开关。它列出已安装的其他 CLI（Codex、Antigravity 等）；选定后，之后的请求会通过 oh-my-claudecode 的 `ask` 发给它，答案会出现在 Claude 的回复中。选择{{ui:composer.ask.claude}}则像以前一样发给 Claude。Mac、Windows 应用的网页窗口和手机上都能使用。
+在手机应用中，安装了 oh-my-claudecode 的 Claude 窗格，输入框里会出现{{ui:composer.ask.menuLabel}}开关。它列出已安装的其他 CLI（Codex、Antigravity 等）；选定后，之后的请求会通过 oh-my-claudecode 的 `ask` 发给它，答案会出现在 Claude 的回复中。选择{{ui:composer.ask.claude}}则像以前一样发给 Claude。Mac 和 Windows 应用的输入框没有这个开关，从那里发送的请求总是发给该窗格自己的代理。若要交给其他代理，请使用[{{ui:composer.busySend.title}}](#queue)或队列行的代理选择。
 - 向其他 CLI 提问时无法发送附件。
 - oh-my-claudecode 启动所选 CLI 时会关闭它的审批确认和沙盒，因此它可以不经询问就修改此文件夹中的文件并运行命令。Mighty Code 的权限模式和审批卡片只管 Claude 启动它的那一步。选择了某个 CLI 期间，输入框会用一行显示此警告。
 - 在 Windows 上，旧版 oh-my-claudecode 会拒绝向 Antigravity 提问。如果收到这样的回答，请更新 oh-my-claudecode 或改用 Gemini CLI。
@@ -143,7 +144,7 @@ Codex 和 Antigravity 的命令名称略有不同（例如 Codex 的 `/new`、`/
 ### Mighty 流程 {#diagram}
 Claude 窗格的流程是：请求 → 中间发生的事 → {{ui:graph.block.result}}。请求块只包含你发送的内容。在答复到来之前，结果的位置上会有一张{{ui:graph.block.execution}}卡片，显示主会话的模型和它现在在做的事（Claude 最后说的话，或之后运行的命令）。点击卡片会展开包含全部消息和工具调用的{{ui:graph.block.execution}}块；答复到来后，{{ui:graph.block.result}}卡片会出现在那个位置。中间没有任何事情的简短提问只有请求和结果两个块。其他智能体的窗格仍然在请求块正下方接着{{ui:graph.block.execution}}块。
 
-块的标题栏显示是谁在工作。图标颜色表示角色（主会话、子智能体、后台命令）。标题后面是子智能体的类型（Explore、你自己创建的智能体名称等）以及后台、分叉、worktree 标记，{{ui:graph.block.execution}}块还会显示窗格中选择的思考强度。模型与令牌数一起显示；还没有响应时，在请求的模型后面标注“请求”。如果你创建的智能体的定义文件里有 `color`，就使用该颜色。块较窄时这些标记会先隐藏，把鼠标放在图标上可以看到全部。
+块的标题栏用最前面的状态点和标题显示当前状态。点的颜色表示状态（运行中为蓝色，等待你回应为黄色，完成为绿色，出错为红色，已停止为灰色）。{{ui:graph.block.result}}的标题也会染成该颜色，让已结束的结果一目了然。是谁在工作（主会话、子智能体、后台命令）由类型标记的颜色显示，把鼠标放在点上会告诉你角色。标题后面是子智能体的类型（Explore、你自己创建的智能体名称等）以及后台、分叉、worktree 标记，{{ui:graph.block.execution}}块还会显示窗格中选择的思考强度。模型与令牌数一起显示；还没有响应时，在请求的模型后面标注“请求”。如果你创建的智能体的定义文件里有 `color`，就使用该颜色。块较窄时这些标记会先隐藏，把鼠标放在点上可以看到全部。
 
 在 Claude 窗格的流程中，除结果以外的内容都会折叠成小卡片。子智能体和后台命令无论在运行还是已结束都是卡片，卡片和块有相同的标题栏（图标、标题、状态、展开按钮），下面显示两行：现在在做的事（结束后为答复的第一行），以及类型和模型、已用时间、工具调用次数和令牌。只显示应用实际看到的值，没有进度百分比。点击卡片会展开为完整的块，用块标题栏上的{{ui:graph.card.fold}}按钮可以再次折叠。点击已结束的后台子智能体卡片，会展开{{ui:graph.background.noticeRun}}图中的那个块。在后台运行的命令（例如等待 CI、构建应用、开发服务器）也会以灰色卡片站在同一行，显示说明和命令、该命令最后输出的一行，以及运行时间或结束状态和退出码。
 
@@ -151,9 +152,9 @@ Claude 列出待办清单后，请求下方会按顺序为每个已开始的步�
 
 在 Claude 窗格的流程下方、输入框上方，有一条{{ui:graph.log.title}}。它的标题行是当前状态：主会话的模型和状态、它的子智能体中有多少个在运行，以及有多少个后台命令在运行，各用其角色的颜色显示。展开后，它会列出最新请求中最近发生的五件事：时间、是谁（主会话的模型或子智能体的名称）、做了什么（工具调用、子智能体的开始和结束、提问、{{ui:graph.block.compact}}、通知到达）。点击某一行，流程会移到对应的块。用右端的按钮可以把它折叠成只剩状态行，每个窗格会记住是否折叠。
 
-在后台启动的子智能体和后台命令（任务）在运行期间不会画成请求的块，而是在输入框上方的后台任务条里。在 Claude 窗格的流程中，它们还会显示为上面的卡片。每一行显示类型、名称、用时和输出的最后一行；展开一行会显示它运行的命令（子智能体显示提示的第一行）和输出的最后几行（最多 6 行）。任务结束、通知送达 Claude 后，Claude 的每一次回答都会生成一个新的{{ui:graph.background.noticeRun}}图表，每个已结束的任务一个块：类型行（子智能体还是后台命令，以及结束状态）、命令、输出的最后几行，以及子智能体的报告。在{{ui:graph.view.timeline}}中，这个图表是新增的一行；在{{ui:graph.view.structure}}中，它是末尾新增的一张卡片（看板）。手机上的 Mighty 视图和流水线也一样。
+在后台启动的子智能体和后台命令（任务）在运行期间不会画成请求的块，而是在下面{{ui:graph.progress.title}}面板的{{ui:graph.progress.background}}组里。在 Claude 窗格的流程中，它们还会显示为上面的卡片。任务结束、通知送达 Claude 后，Claude 的每一次回答都会生成一个新的{{ui:graph.background.noticeRun}}图表，每个已结束的任务一个块：类型行（子智能体还是后台命令，以及结束状态）、命令、输出的最后几行，以及子智能体的报告。在{{ui:graph.view.timeline}}中，这个图表是新增的一行；在{{ui:graph.view.structure}}中，它是末尾新增的一张卡片（看板）。手机上的 Mighty 视图和流水线也一样。
 
-每个智能体窗格的流程左上角都有{{ui:graph.progress.title}}面板。它显示画面中请求的编号、状态和内容；智能体告知计划时，还会显示每个步骤是已完成、进行中（时间在走）还是未开始。步骤来自 Claude 的待办清单、Codex 的计划以及 opencode 和 Hermes 的计划；Antigravity 和 pi 不发送计划，所以只显示请求和状态。如果请求启动了后台任务（命令、后台子智能体），底部的{{ui:graph.progress.background}}组会显示正在运行的数量和总数，并为每项显示一行（状态和耗时）：正在运行的排在前面，最多 100 行，可在面板内滚动查看，超出部分以数量显示。新请求开始时显示该请求；你自己滚动后，改为显示画面中的请求。点击请求行会移到该请求，点击步骤行会移到该步骤的卡片（只有 Claude 窗格的流程有步骤卡片）。用标题栏的按钮折叠后，只留下标题和请求行。
+每个智能体窗格的流程左上角都有{{ui:graph.progress.title}}面板。它显示画面中请求的编号、状态和内容；智能体告知计划时，还会显示每个步骤是已完成、进行中（时间在走）还是未开始。步骤来自 Claude 的待办清单、Codex 的计划（`update_plan`）、opencode 和 Hermes 的计划以及 Gemini 的清单（task.md）。{{ui:menu.settings}} › {{ui:settings.nav.general}} 中的 {{ui:settings.agents.checklistToggle}}（默认开启）会请 Gemini、Codex、opencode 和 Hermes 在工作时留下计划。没有收到计划的请求，以及没有计划功能的 pi，会把智能体正在做的事（读取、写入、修改文件，命令，搜索，子智能体）逐行显示为步骤。如果请求启动了后台任务（命令、后台子智能体），底部的{{ui:graph.progress.background}}组会显示正在运行的数量和总数，并为每项显示一行（状态和耗时）：正在运行的排在前面，最多 100 行，可在面板内滚动查看，超出部分以数量显示。新请求开始时显示该请求；你自己滚动后，改为显示画面中的请求。最终结果到达时，流程会平滑地移到那个{{ui:graph.block.result}}块；如果那时你正在自己移动流程，或正在移到其他块，则保持不动。点击请求行会移到该请求，点击步骤行会移到该步骤的卡片（只有 Claude 窗格的流程有步骤卡片）。用标题栏的按钮折叠后，只留下标题和请求行。
 
 - 拖动空白处或滚动即可移动流程。用缩放按钮可以在 50% 到 150% 之间调整。
 - 点击某个块后，只在该块内部滚动。点击空白处或按{{kbd:Esc}}即可取消选择。
@@ -176,7 +177,7 @@ Claude 列出待办清单后，请求下方会按顺序为每个已开始的步�
 - 用顶部的 ◀ {{ui:graph.structure.board.previous}}和 ▶ {{ui:graph.structure.board.next}}前后切换。点击两者之间的标题（如"请求 3 / 7"）会打开列表，显示每一项的编号、标题、状态和阶段，可直接选择。
 - 下方显示状态（使用风格的窗格还有流水线名称）。各阶段显示为每一列顶部的标签，标签之间用线相连。没有风格的窗格是{{ui:graph.structure.column.request}} → {{ui:graph.structure.column.execution}} → {{ui:graph.structure.column.result}}，使用风格的窗格是该模式的阶段。
 - 内容放在并排的列中，每个阶段一列，列头显示阶段标签和卡片数。没有风格时，{{ui:graph.structure.column.request}}列放请求，{{ui:graph.structure.column.execution}}列放显示进度（最新消息和工具调用）与状态的卡片，后面每个子代理一张卡片，{{ui:graph.structure.column.result}}列放结果。使用风格时，每个阶段列放该阶段的请求卡片（请求、执行摘要和一行结果），其子代理卡片放在下方。嵌套的子代理会缩进，并注明它在哪个块之下。
-- 颜色也会表示状态。每一列的背景铺上该阶段状态色的浅色（完成为绿色，运行中和等待通知为蓝色，等待你回应为黄色，出错为红色，已停止为灰色），当前阶段跟随其最新请求的状态，尚未进行的阶段保持原来的背景。每张卡片左侧边缘有同色的竖条，背景比列的颜色更深；运行中的卡片保留流动的边框，等待中的卡片保留黄色边框，状态文字照常显示。
+- 颜色也会表示状态。每一列的背景铺上该阶段状态色的浅色（完成为绿色，运行中和等待通知为蓝色，等待你回应为黄色，出错为红色，已停止为灰色），当前阶段跟随其最新请求的状态，尚未进行的阶段保持原来的背景。每张卡片状态文字前的点是同样的颜色，背景比列的颜色更深；运行中的卡片保留流动的边框，等待中的卡片保留黄色边框，状态文字照常显示。
 - 长文本默认折叠，点击{{ui:graph.structure.more}}即可就地展开。点击卡片标题栏中的小按钮，会在流程中显示该块。
 - 视图从最新的一项打开，停留在那里时会随新的请求或流水线前进。查看较早的一项时出现新项，位置保持不变，▶ 旁会出现{{ui:graph.structure.board.newRequest}}或{{ui:graph.structure.board.newPipeline}}标记，点击即可转到最新的一项。
 - 每一列各自移动：列头留在顶部，只有卡片上下移动。在某一列上用触控板或鼠标滚轮上下滚动，或拖动其中的空白处，只会移动这一列；列放不下时，横向滚动或拖动即可左右移动流水线。
@@ -185,7 +186,7 @@ Claude 列出待办清单后，请求下方会按顺序为每个已开始的步�
 ![[agent-structure]]
 
 ### 结果卡片 {#result}
-请求结束后，结果卡片会整理出结果。Claude 的回答结束后请求即变为完成。如果它启动的后台任务（包括给已结束的子智能体发消息而重新唤醒的）仍在运行，或已结束但 Claude 还没有回答它的通知，结果卡片会变成等待色的{{ui:graph.block.awaitingNotice}}块：在目前的回答下面，每个任务显示{{ui:plan.background.awaitingNotice}}或{{ui:plan.background.noticeDelivered}}，并显示“通知 1/2”这样的已收到通知数。在此期间，宠物和窗格标题显示{{ui:graph.state.awaitingNotice}}。所有通知都得到回答后，它会变为{{ui:graph.block.result}}。Claude 收到后台任务的通知后再次回答时，这段回答不会接在请求的结果后面，每一次回答都会打开一个新的图表（[后台任务](approvals.md#background)）。如果同一请求的其他后台任务仍在运行，这段回答的卡片标题会显示“目前的结果 · 正在等待 N 个后台任务”，告诉你还剩几个。如果结果中提到了文件，可以用{{ui:graph.resultFiles.openButton}}按钮打开文件列表。点击块中的文件路径会弹出预览。最新的结果卡片会适应窗格大小；如果你手动调整过大小，会出现{{ui:graph.result.fitToWindow}}按钮。 如果是请求更改过的源代码或 Markdown 文件，预览标题处会出现 {{ui:files.changes.show}} | {{ui:files.changes.full}} 切换，并先显示{{ui:files.changes.show}}：只显示更改的行及其前后 3 行，旁边标有旧行号和新行号，添加的行为绿色背景，删除的行为红色背景。上方一行说明比较的对象：从结果文件列表或区块中打开时，是该请求第一次更改文件之前的内容（{{ui:files.changes.baseRun}}），没有该原始内容时则是最后一次提交。没有更改时不显示切换，只显示整个文件。
+请求结束后，结果卡片会整理出结果。Claude 的回答结束后请求即变为完成。如果它启动的后台任务（包括给已结束的子智能体发消息而重新唤醒的）仍在运行，或已结束但 Claude 还没有回答它的通知，结果卡片会变成等待色的{{ui:graph.block.awaitingNotice}}块：在目前的回答下面，每个任务显示{{ui:plan.background.awaitingNotice}}或{{ui:plan.background.noticeDelivered}}，并显示“通知 1/2”这样的已收到通知数。在此期间，Mighty Pet 和窗格标题显示{{ui:graph.state.awaitingNotice}}。所有通知都得到回答后，它会变为{{ui:graph.block.result}}。Claude 收到后台任务的通知后再次回答时，这段回答不会接在请求的结果后面，每一次回答都会打开一个新的图表（[后台任务](approvals.md#background)）。如果同一请求的其他后台任务仍在运行，这段回答的卡片标题会显示“目前的结果 · 正在等待 N 个后台任务”，告诉你还剩几个。如果结果中提到了文件，可以用{{ui:graph.resultFiles.openButton}}按钮打开文件列表。点击块中的文件路径会弹出预览。最新的结果卡片会适应窗格大小；如果你手动调整过大小，会出现{{ui:graph.result.fitToWindow}}按钮。 如果是请求更改过的源代码或 Markdown 文件，预览标题处会出现 {{ui:files.changes.show}} | {{ui:files.changes.full}} 切换，并先显示{{ui:files.changes.show}}：只显示更改的行及其前后 3 行，旁边标有旧行号和新行号，添加的行为绿色背景，删除的行为红色背景。上方一行说明比较的对象：从结果文件列表或区块中打开时，是该请求第一次更改文件之前的内容（{{ui:files.changes.baseRun}}），没有该原始内容时则是最后一次提交。没有更改时不显示切换，只显示整个文件。
 
 ![[result-card]]
 

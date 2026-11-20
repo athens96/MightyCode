@@ -73,7 +73,7 @@ When the result names files in the workspace, a {{ui:graph.resultFiles.title}} l
 
 The {{ui:phone.session.view.structure}} view shows the pipeline the desktop app sends as boards, one at a time. In a pane without a style each request is a board; in a pane with a style each pipeline is a board: a run of requests whose step never goes back. ◀ and ▶ at the top move between boards, and tapping the place in the middle ("Request 3 / 7") opens the list to pick one. When a new board arrives while you read an older one, a {{ui:graph.structure.board.newRequest}} or {{ui:graph.structure.board.newPipeline}} badge appears; tap it to go to the newest board. Below them are the board's status and its steps as a row of chips: finished steps are green, the current step is in the accent colour and the steps still to come are grey, each with its card count. Each step has its own column; swipe sideways or tap a chip to move between them, and the board opens on its current step. A pane without a style has the columns {{ui:graph.structure.column.request}} → {{ui:graph.structure.column.execution}} → {{ui:graph.structure.column.result}}, with the sub-agents' cards after the {{ui:graph.structure.column.execution}} card. In a pane with a style each column holds its step's requests and their sub-agents, and a finished request folds to one card that opens when you tap it. A running card's border pulses. This view needs the desktop app (Mac or Windows) on the same version as the phone app or newer; with an older one the view asks you to update the desktop app.
 
-A child pane made on the Mac by [Mighty Orchestration](delegation.md) is listed one step in under its parent pane, with its state ({{ui:delegation.child.state.reported}}, {{ui:delegation.child.state.merged}} and so on) on the right. A Windows PC doesn't send a child's parent and state to the phone yet, so a child pane on a Windows PC is listed like any other pane. Merging or discarding a child can't be done from the phone; it is done in the desktop app (Mac or Windows). Gemini panes of a desktop app that runs Antigravity (Mac 0.4.23 or later, Windows 0.4.28 or later) are shown as Antigravity ({{ui:badge.beta}}); those of an older app are shown as Gemini.
+A child pane made in the desktop app (Mac and Windows) by [Mighty Orchestration](delegation.md) is listed one step in under its parent pane, with its state ({{ui:delegation.child.state.reported}}, {{ui:delegation.child.state.merged}} and so on) on the right. An older app doesn't send this, so its child panes are listed like any other pane. Merging or discarding a child can't be done from the phone; it is done in the desktop app (Mac or Windows). Gemini panes of a desktop app that runs Antigravity (Mac 0.4.23 or later, Windows 0.4.28 or later) are shown as Antigravity ({{ui:badge.beta}}); those of an older app are shown as Gemini.
 
 ## Approvals and questions {#approvals}
 When an agent asks for approval or asks a question, the {{ui:phone.tabs.alerts}} tab shows a count.
@@ -98,17 +98,10 @@ Your phone gets a notification when a run on a connected computer (Mac or Window
 When the app crashes it sends the developers only where it stopped, never conversations, commands or paths. You can turn {{ui:phone.settings.crashReports}} off in {{ui:phone.settings.title}}.
 
 ## Screen view {#screen}
-You can watch your Mac's screen from the phone and, if you allow it, control it. This is a {{ui:badge.beta}} feature, in the Android app only for now.
+Watching a computer's screen from the phone and, if you allow it, controlling it is a {{ui:badge.beta}} feature.
 
 > [!warning]
-> Since 0.4.58, screen view & control is paused (on the Mac and on Windows). While the default relay moves to a new server, the phone offers no screen button, and Settings on the computer has nothing for screen view. The access you set for each phone and the permissions you granted are kept and come back when it returns.
-
-When it is back, tap {{ui:phone.screenShare.open}} on the phone and choose {{ui:phone.screenShare.mode.view}} or {{ui:phone.screenShare.mode.control}}.
-
-The first time you allow control, check that the fingerprint matches on both screens. Each time control starts, the phone asks for your biometrics or PIN.
-
-> [!tip]
-> Press {{kbd:⌃⌥⌘K}} on the Mac to stop every remote screen session at once. Control ends after 10 minutes without input, viewing after 30.
+> Since 0.4.58, screen view & control is paused (on the Mac and on Windows). The phone offers no screen button, and Settings on the computer has nothing for screen view. The access you set for each phone and the permissions you granted are kept and come back when it returns.
 
 ## Desktop app update {#desktop-update}
 

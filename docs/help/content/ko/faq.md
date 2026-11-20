@@ -6,7 +6,7 @@ section: faq
 ## 요청을 보낼 수 없어요 {#cannot-send}
 - 입력창 아래에 보내지 못하는 이유가 보입니다. CLI가 설치되지 않았거나 로그인이 필요하면 {{ui:menu.settings}} → {{ui:settings.nav.tools}}를 확인하세요.
 - 터미널 창에는 파일을 첨부할 수 없습니다. AI 실행 창을 쓰세요.
-- 실행 중일 때 {{kbd:Enter}}는 바로 보내지 않고 대기열에 넣습니다. [실행 중에 이어서 요청하기](agent-pane.md#queue)를 보세요.
+- 실행 중일 때 {{kbd:Enter}}는 기본으로 바로 보내지 않고 대기열에 넣습니다. 입력창 아래 {{ui:composer.busySend.title}}에서 에이전트를 골라 두면 그 에이전트의 새 worktree에서 바로 실행합니다. [실행 중에 이어서 요청하기](agent-pane.md#queue)를 보세요.
 
 ## 모델 목록에 원하는 모델이 없어요 {#model-missing}
 1. 모델 칩을 열고 {{ui:composer.model.refresh}}을 누릅니다.

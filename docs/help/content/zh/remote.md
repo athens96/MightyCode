@@ -24,7 +24,7 @@ section: remote
 4. 点按顶部状态行旁的 {{ui:settings.remote.startSharing}}。共享期间，该位置改为显示 {{ui:settings.remote.sharedListTitle}} 列表。
 
 {{ui:settings.remote.methodsTitle}} 中每种方式占一行：
-- {{ui:settings.remote.viaPairing}}：有 {{ui:settings.remote.pairAccept}} 开关、中继状态和 {{ui:settings.remote.pairCopyLink}} 按钮。链接中含有与手机二维码相同的密钥，因此会作为机密内容复制，并在一分钟后从剪贴板清除。在无法使用中继的运行中，开关会变灰并显示原因。请参阅[通过配对连接](#pair)。
+- {{ui:settings.remote.viaPairing}}：有 {{ui:settings.remote.pairAccept}} 开关和中继状态，打开开关后会出现 {{ui:settings.remote.pairCopyLink}} 按钮。链接中含有电脑专用的配对码（与手机二维码不同），因此会作为机密内容复制，并在一分钟后从剪贴板清除。在无法使用中继的运行中，开关会变灰并显示原因。请参阅[通过配对连接](#pair)。
 - {{ui:settings.remote.viaTailscale}}：这台电脑没有 Tailscale 地址时，会显示相应说明和 {{ui:settings.remote.tailscaleInstall}} 按钮，点按后打开 {{ui:settings.nav.tools}} 标签。开始共享前有 {{ui:settings.remote.portLabel}} 输入框，一般保持不变（43137）。共享期间会显示这台电脑的 Tailscale 地址和 {{ui:settings.remote.keyLabel}}。用显示按钮查看密钥，用 {{ui:settings.remote.copyButton}} 复制后告诉要连接的一方。
 
 即使没有 Tailscale，只要打开了 {{ui:settings.remote.pairAccept}}，也能开始共享。此时只有已配对的电脑能经由中继连接。
@@ -36,7 +36,7 @@ section: remote
 Tailscale 共享只在这台电脑的 Tailscale 地址上接受连接。每次打开应用时共享都是关闭的。点按 {{ui:settings.remote.stopSharing}} 会停止远程运行并作废连接密钥；再次共享时需要告知新的密钥。
 
 > [!warning]
-> 持有连接密钥或配对链接的设备可以在共享的工作区中运行任务和命令。根据权限模式，它们可能以主机用户的权限访问文件夹以外的内容。请只把密钥和链接告诉你信任的设备。
+> 已连接的设备可以在共享的工作区中运行任务和命令。根据权限模式，它们可能以主机用户的权限访问文件夹以外的内容。持有 Tailscale 连接密钥的设备可以直接连接，因此请只把密钥告诉你信任的设备。配对链接只能使用一次，并且要在主机上点击{{ui:settings.mobileRemote.approval.allow}}才会连接。
 
 ## 连接其他电脑 {#connect}
 在要下达任务的电脑上：

@@ -25,7 +25,7 @@ Windows 10(バージョン2004)以降またはWindows 11で動作します。
 アップデートもMacと同じです。新しいバージョンを自動でダウンロードしておき、アプリを閉じて終了するときにインストールし、アプリが休んでいるときは1分の通知のあと再起動してインストールします([アップデート](getting-started.md#update))。手動で行うときは{{ui:menu.settings}} → {{ui:settings.nav.about}}を使います。インストーラーで入れたアプリは同じフォルダで新しいバージョンに置き換わり、インストールされているアプリの一覧に表示されるバージョンも追従します。新しいインストーラーを上書きで実行してもかまいません。
 
 ## ショートカット {#shortcuts}
-{{kbd:⌘}}の代わりに{{kbd:Ctrl}}を使います。サイドバーの折りたたみとリモート画面の停止だけはキーが異なります。{{kbd:Ctrl+O}}は既存のフォルダを開きます。{{ui:workspace.add.newFolder}}と{{ui:workspace.add.fromGit}}はMacと同じく、サイドバーのフォルダボタンのメニュー、空のサイドバーと初回の画面のボタン、ペインを追加するメニューから選び、ショートカットはありません([ワークスペースを開く](getting-started.md#open-workspace))。
+{{kbd:⌘}}の代わりに{{kbd:Ctrl}}を使います。サイドバーの折りたたみとヘルプだけはキーが異なります。{{kbd:Ctrl+O}}は既存のフォルダを開きます。{{ui:workspace.add.newFolder}}と{{ui:workspace.add.fromGit}}はMacと同じく、サイドバーのフォルダボタンのメニュー、空のサイドバーと初回の画面のボタン、ペインを追加するメニューから選び、ショートカットはありません([ワークスペースを開く](getting-started.md#open-workspace))。
 
 | Mac | Windows | 動作 |
 |---|---|---|
@@ -38,9 +38,9 @@ Windows 10(バージョン2004)以降またはWindows 11で動作します。
 | {{kbd:⌘K}} | {{kbd:Ctrl+K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{kbd:Ctrl+B}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{kbd:Ctrl+,}} | {{ui:menu.settings}} |
+| {{kbd:⌘?}} | {{kbd:F1}} | {{ui:menu.help}} |
 | {{kbd:⌘=}} / {{kbd:⌘-}} / {{kbd:⌘0}} | {{kbd:Ctrl+=}} / {{kbd:Ctrl+-}} / {{kbd:Ctrl+0}} | {{ui:menu.textBigger}} / {{ui:menu.textSmaller}} / {{ui:menu.textActualSize}} |
 | {{kbd:⌘Enter}} | {{kbd:Ctrl+Enter}} | 実行中のペインで新しいworktreeですぐに実行、できないときはキューに追加 |
-| {{kbd:⌃⌥⌘K}} | {{kbd:Ctrl+Alt+Esc}} | スマートフォンからのリモート画面セッションをすべて止める([リモート画面](phone.md#screen)) |
 
 Windowsにはメニューバーがありません。同じ機能は、サイドバーと{{ui:workspace.addPane}}メニューにあります。
 
@@ -52,11 +52,11 @@ Windowsにはメニューバーがありません。同じ機能は、サイド�
 | Antigravity | PowerShellのインストーラーで`%LOCALAPPDATA%\agy\bin`に入り、記録は`%USERPROFILE%\.gemini\antigravity-cli`に残ります([Antigravity](agent-pane.md#antigravity))。 |
 | ターミナルペイン | Windows PowerShellを使います。 |
 | 完了通知 | {{ui:windows.notifications.toggleLabel}}でオンにします。 |
-| リモート画面 | モバイルリモートのリモート画面は使えます(今はMacと同じく[一時停止しています](phone.md#screen))。画質のオプションはMacより少なくなります。{{kbd:Ctrl+Alt+Esc}}を押すと、すべてのリモート画面セッションがすぐに止まります。 |
+| リモート画面 | モバイルリモートのリモート画面は、Macと同じく[一時停止しています](phone.md#screen)。 |
 | 言語 | 変更した言語は、アプリを開き直すと適用されます。 |
 | ファイルの場所 | {{ui:menu.showInFinder}}の代わりに{{ui:menu.showInExplorer}}があります。 |
-| Mightyオーケストレーション | 初期状態でオンで、{{ui:settings.nav.general}} › {{ui:settings.agents.sectionTitle}}のスイッチでオフにできます。このスイッチはレジストリの値でもあります([オンとオフ](delegation.md#enable))。worktreeは`%USERPROFILE%\.mightycode\worktrees`にでき、中にジャンクションやシンボリックリンクがあると自動では片付けません([ペインを閉じる・後片付け](delegation.md#close))。{{ui:queue.worktree}}ボタンを右クリックすると、別のエージェントの子でリクエストを実行できます([新しいworktreeで実行](delegation.md#worktree))。 |
-| 文字サイズとフォント | Macと同じく{{ui:settings.nav.general}} › {{ui:settings.text.sectionTitle}}でサイズ（85〜150%）、{{ui:settings.text.uiFontLabel}}、{{ui:settings.text.transcriptFontLabel}}、{{ui:settings.text.codeFontLabel}}を選ぶと、開いているウィンドウがすべてすぐに変わります。{{kbd:Ctrl+=}} / {{kbd:Ctrl+-}} / {{kbd:Ctrl+0}}も使えますが、ターミナルのペインにフォーカスがあるときは、キーはそのペインで使われます。設定はレジストリの `HKEY_CURRENT_USER\Software\MightyCode` に保存されます。確認ウィンドウの本文のようにWindows標準のコントロールが決める文字はアプリを開き直すと変わり、ペットの吹き出しはまだこの設定に従いません。 |
+| Mightyオーケストレーション | 初期状態でオンで、{{ui:settings.nav.general}} › {{ui:settings.agents.sectionTitle}}のスイッチでオフにできます。このスイッチはレジストリの値でもあります([オンとオフ](delegation.md#enable))。worktreeは`%USERPROFILE%\.mightycode\worktrees`にでき、中にジャンクションやシンボリックリンクがあると自動では片付けません([ペインを閉じる・後片付け](delegation.md#close))。ペインの実行中に入力欄の{{ui:composer.busySend.title}}で別のエージェントを選ぶと、そのエージェントの子でリクエストを実行できます([新しいworktreeで実行](delegation.md#worktree))。 |
+| 文字サイズとフォント | Macと同じく{{ui:settings.nav.general}} › {{ui:settings.text.sectionTitle}}でサイズ（85〜150%）、{{ui:settings.text.uiFontLabel}}、{{ui:settings.text.transcriptFontLabel}}、{{ui:settings.text.codeFontLabel}}を選ぶと、開いているウィンドウがすべてすぐに変わります。{{kbd:Ctrl+=}} / {{kbd:Ctrl+-}} / {{kbd:Ctrl+0}}も使えますが、ターミナルのペインにフォーカスがあるときは、キーはそのペインで使われます。設定はレジストリの `HKEY_CURRENT_USER\Software\MightyCode` に保存されます。確認ウィンドウの本文のようにWindows標準のコントロールが決める文字はアプリを開き直すと変わり、Mighty Petの吹き出しはまだこの設定に従いません。 |
 | Tailscale で直接接続 | スマートフォンは Windows PC にも[直接接続](phone.md#direct)します。Windows ファイアウォールの規則は {{ui:settings.remote.navTitle}} タブの {{ui:settings.remote.firewallTitle}} で {{ui:remote.windows.firewall.add}} ボタンを押して追加し、Windows の管理者の確認を 1 回経ます。アプリが管理者権限を求めるのは、このファイアウォールの規則を変更するときだけで、この項目は {{ui:settings.remote.shareTitle}} タブと {{ui:settings.remote.phoneTab}} タブの下にあります（[Windows ファイアウォール](remote.md#firewall)）。 |
 | リモート接続 | Macと同じ画面とプロトコルで、MacとWindowsのどちら向きにも接続できます（[リモート接続](remote.md)）。接続キーはキーチェーンではなく、このWindowsユーザーだけが復号できるファイルに保存します。Tailscaleで共有するには {{ui:remote.windows.firewall.add}} ボタンでファイアウォールルールを1つ追加します（スマートフォンの直接接続と共用の同じルールで、管理者確認が1回あります）。リモートコマンドはWindowsホストではPowerShellで実行します。{{ui:settings.remote.allowFullAccess}} スイッチがオフのあいだは、ほかのコンピュータはWindowsホストでClaude以外のエージェントのペイン(Codex、Antigravityなど)を使えません。Windowsはこれらのエージェントを共有フォルダの中に閉じ込められないためです（Mac のホストが受け付けるのはサンドボックスで動く Codex だけです）。MacとWindowsのあいだの接続は、まだ実機で確認できていません。 |
 

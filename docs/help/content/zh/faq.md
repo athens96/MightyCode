@@ -6,7 +6,7 @@ section: faq
 ## 无法发送请求 {#cannot-send}
 - 输入框下方会显示无法发送的原因。如果 CLI 未安装或需要登录，请检查{{ui:menu.settings}} → {{ui:settings.nav.tools}}。
 - 终端窗格不能附加文件。请使用 AI 窗格。
-- 运行期间按{{kbd:Enter}}不会立即发送，而是放入队列。请参阅[运行时继续提出请求](agent-pane.md#queue)。
+- 运行期间按{{kbd:Enter}}默认不会立即发送，而是放入队列。如果在输入框下方的{{ui:composer.busySend.title}}中选了代理，则会立即在该代理的新 worktree 中运行。请参阅[运行时继续提出请求](agent-pane.md#queue)。
 
 ## 模型列表中没有想要的模型 {#model-missing}
 1. 打开模型按钮，点击{{ui:composer.model.refresh}}。

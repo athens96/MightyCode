@@ -27,8 +27,8 @@ Mightyオーケストレーションは、エージェントのペインが作�
 
 | したいこと | 方法 |
 |---|---|
-| 今の作業のあとに続けて実行 | {{kbd:Enter}}(キューに入ります) |
-| 今の作業とは別に、すぐ実行 | {{kbd:⌘Enter}}または{{ui:queue.worktree}}ボタン、またはキューの行の{{ui:queue.runNow}}ボタン |
+| 今の作業のあとに続けて実行 | {{kbd:Enter}}({{ui:composer.busySend.title}}が{{ui:composer.busySend.queue}}のとき、既定) |
+| 今の作業とは別に、すぐ実行 | {{kbd:⌘Enter}}または{{ui:queue.worktree}}ボタン、実行中に{{ui:composer.busySend.title}}で選んだエージェントで{{kbd:Enter}}、またはキューの行の{{ui:queue.runNow}}ボタン |
 | 結果を親のブランチに取り込む | カードの{{ui:delegation.card.merge}}ボタン |
 | マージを取り消す | カードの{{ui:delegation.card.undo}}ボタン |
 | 結果を捨てる | カードの{{ui:delegation.card.discard}}ボタン |
@@ -36,14 +36,13 @@ Mightyオーケストレーションは、エージェントのペインが作�
 ## 新しいworktreeで実行する {#worktree}
 Claude・Codex・Antigravityペインの実行中にリクエストを書いて{{kbd:⌘Enter}}を押すか、停止ボタンの横にある丸い{{ui:queue.worktree}}ボタン(ブランチのアイコン)を押します。実行中の作業はそのまま続き、リクエストは専用のworktreeを持つ新しい子ペインですぐに実行されます。その間に親ペインで入力を始めていなければ、新しいペインがすぐに画面に出ます。
 
-- 実行中のペインで{{kbd:Enter}}を押すと、リクエストはキューに入り、今の作業が終わったあとに実行されます。入力欄の案内文に、二つのキーの働きが表示されます。
+- 実行中のペインで{{kbd:Enter}}を押すと、初期設定ではリクエストはキューに入り、今の作業が終わったあとに実行されます。{{ui:composer.busySend.title}}でエージェントを選んでおくと、{{kbd:Enter}}でもそのエージェントの新しいworktreeですぐ実行します(下記)。入力欄の案内文に、{{kbd:Enter}}の今の働きが表示されます。
 - 新しいworktreeは、作れる場所でだけ使います。コミットのあるブランチをチェックアウトしたgitリポジトリである必要があります。それ以外の場所(gitリポジトリでない、まだコミットがない、ブランチではなくコミットをチェックアウトしている)では、{{kbd:⌘Enter}}は{{kbd:Enter}}と同じようにリクエストをキューに入れます。
 - 子は親の最後のコミットから始まります。ブランチ`mighty/<子のid>`ができ、worktreeはプロジェクトフォルダーの外(Macは`~/.mightycode/worktrees/<子のid>`、Windowsは`%USERPROFILE%\.mightycode\worktrees\<子のid>`)にできるので、親の作業には触れません。親のフォルダーでまだコミットしていない変更は、子には渡りません。
 - ペインと同じエージェントの子は、親ペインの権限モードで、親ペインのモデルと{{ui:composer.effort.label}}で実行します。すべてのリクエストをプランモードで始めるスタイルでは、プランモードで始まります。親と同じ表示で開き、親がマイティ表示でスタイルを使っていたなら同じスタイルで始まります(スタイルの進み具合は子の最初のリクエストから別に数えます)。添付ファイルも一緒に渡ります。
 - 最初のメッセージは入力したテキストが先に来て、その後にアプリが、子がどこで作業するかを伝え、終わったらコミットしてREPORT.mdを書くよう添えます。そうするとカードからマージできます。スラッシュコマンド(`/`で始まるテキスト)は入力したとおり単独で実行され、アプリの案内は子ペインの次のリクエストとして続くため、コマンドの引数になりません。
-- {{platform:mac}} 別のエージェントでリクエストを実行するには、{{ui:queue.worktree}}ボタンを右クリック(またはControlクリック)して、Claude、Codex、Antigravityから選びます。{{kbd:⌘Enter}}とふつうのクリックは、ペインと同じエージェントのままです。グレーの項目には実行できない理由が出ます。CLIがインストールされていないかサインインしていない(設定 › CLIで確認)、ペインのモードが許す範囲でファイルを変更できるモードがない、自分で始めた子がすでに3つ開いている、のいずれかです。別のエージェントの子は、ファイルを変更でき、ペインのモードが許さないことはしない自分のモードのうち一番広いモードで始まり([CodexとAntigravity](#agents))、そのエージェントの新しいペインが受け取るモデルと{{ui:composer.effort.label}}を使い、ペインと同じ表示で開きますが、スタイルは引き継ぎません。その子を作れないか始められないときは、テキストと添付ファイルは入力欄に戻り、会話に理由が書かれます。ペイン自身には送りません。ペインのエージェントはそのモードで子を持てないが別のエージェントなら持てるときは、ボタンはそのまま表示され、クリックでメニューが開き、{{kbd:⌘Enter}}はリクエストをキューに入れます。
-- {{platform:windows}} 別のエージェントでリクエストを実行するには、{{ui:queue.worktree}}ボタンを右クリック(またはボタン上でShift+F10)して、Claude、Codex、Antigravityから選びます。{{kbd:Ctrl+Enter}}とふつうのクリックは、ペインと同じエージェントのままです。ほかは上のMacと同じです。グレーの項目には実行できない理由が出ます。別のエージェントの子は、ペインのモードが許さないことをしない自分のモードのうち最も広いモードで始まり、そのエージェントの新しいペインが受け取るモデルと{{ui:composer.effort.label}}を使い、子を起動できなかったテキストは入力欄に戻ります。別のエージェントの子しか使えない場所では、クリックでメニューが開き、{{kbd:Ctrl+Enter}}は以前どおりリクエストをキューに入れます。
-- すでにキューにあるリクエストも、その行の{{ui:queue.runNow}}ボタンで同じように送れます。エージェントは{{platform:mac}} 右クリック(またはControlクリック)、{{platform:windows}} 右クリック(またはShift+F10)で選びます。その子を作れない、または始められないときは、リクエストはキューの先頭に戻り、会話に理由が書かれます。
+- 別のエージェントでリクエストを実行するには、実行中に入力欄の下の行の{{ui:composer.busySend.title}}で「worktree · Codex」のようにClaude、Codex、Antigravityから選び、{{kbd:Enter}}で送ります。テキストがなく添付ファイルだけのリクエストはキューに入ります。{{kbd:⌘Enter}}(Windowsでは{{kbd:Ctrl+Enter}})と{{ui:queue.worktree}}ボタンは、いつもペインと同じエージェントです。グレーの項目には実行できない理由が出ます。CLIがインストールされていないかサインインしていない({{ui:menu.settings}} › {{ui:settings.nav.tools}}で確認)、ペインのモードが許す範囲でファイルを変更できるモードがない、自分で始めた子がすでに3つ開いている、のいずれかです。別のエージェントの子は、ファイルを変更でき、ペインのモードが許さないことはしない自分のモードのうち一番広いモードで始まり([CodexとAntigravity](#agents))、そのエージェントの新しいペインが受け取るモデルと{{ui:composer.effort.label}}を使い、ペインと同じ表示で開きますが、スタイルは引き継ぎません。その子を作れないか始められないときは、テキストと添付ファイルは入力欄に戻り、会話に理由が書かれます。ペイン自身には送りません。ペインのエージェントはそのモードで子を持てないが別のエージェントなら持てるときは、{{ui:queue.worktree}}ボタンは表示されず、{{ui:composer.busySend.title}}では別のエージェントだけを選べ、{{kbd:⌘Enter}}はリクエストをキューに入れます。
+- すでにキューにあるリクエストも、その行の{{ui:queue.runNow}}ボタンで同じように送れます。エージェントはボタンの前のエージェント選択で選びます(既定はペインのエージェント)。その子を作れない、または始められないときは、リクエストはキューの先頭に戻り、会話に理由が書かれます。
 - 子ペインは同じエージェントのふつうのペインと同じように使えます。承認カードに答え、追加のリクエストを送り、権限モードを変えられます。
 - 自分で起動した子について、親ペインのClaudeは通知を受け取りません。親が任せた作業ではないからです。親のツールもこの子を一覧に出さず、マージも追加の指示もできません(`human_started`)。サイドバーで状態を確かめ、カードのボタンを自分で使ってください。
 - 開いておける子は親ペイン一つにつき3つまでで、ディスクの空きが10 GB必要です。終わった子ペインを閉じるか破棄すると空きができます。
@@ -82,11 +81,11 @@ ClaudeかCodexのペイン(親)が作業を分けて、ほかのペイン(子)�
 ## CodexとAntigravity {#agents}
 MightyオーケストレーションはCodexとAntigravityのペインでも使えます。既定では、子は親のエージェントで実行されます。Codexペインの子はCodexペイン、Antigravityペインの子はAntigravityペインです。
 
-どのエージェントも3つのエージェントのどれの子でも持てます。{{ui:queue.worktree}}ボタンのメニューから選ぶか([新しいworktreeで実行](#worktree))、ClaudeかCodexの親が`delegate`の`agent`(`claude`、`codex`、`antigravity`)で指定します。子は下に書いた自分のエージェントのルールで動きます。モードも、作業を誰がコミットするかも(Claudeの子は自分でコミットし、CodexとAntigravityの子の作業はアプリがコミットします)子のエージェントに従います。通知とマージは親のエージェントに従います。`delegate`は、知らないエージェント(`agent_unknown`)、インストールされていないかサインインしていないエージェント(`agent_unavailable`)、子のエージェントのモードでないか、そのモードではファイルを変更できないか、親のモードより多くのことができるモードを拒否します(モードの比べ方は[Claudeに分けて任せる](#delegate)にあります)。
+どのエージェントも3つのエージェントのどれの子でも持てます。実行中の{{ui:composer.busySend.title}}かキューの行のエージェント選択で選ぶか([新しいworktreeで実行](#worktree))、ClaudeかCodexの親が`delegate`の`agent`(`claude`、`codex`、`antigravity`)で指定します。子は下に書いた自分のエージェントのルールで動きます。モードも、作業を誰がコミットするかも(Claudeの子は自分でコミットし、CodexとAntigravityの子の作業はアプリがコミットします)子のエージェントに従います。通知とマージは親のエージェントに従います。`delegate`は、知らないエージェント(`agent_unknown`)、インストールされていないかサインインしていないエージェント(`agent_unavailable`)、子のエージェントのモードでないか、そのモードではファイルを変更できないか、親のモードより多くのことができるモードを拒否します(モードの比べ方は[Claudeに分けて任せる](#delegate)にあります)。
 
 - **子が作業できるモード**: 子は親の権限モードで始まるため、CodexとAntigravityのペインは、子がファイルを変更できるモードでだけ{{kbd:⌘Enter}}で子を起動します。Codexは{{ui:permission.label.acceptEditsCodex}}・{{ui:permission.label.onRequest}}・{{ui:permission.label.fullAccess}}、Antigravityは{{ui:permission.label.acceptEdits}}・{{ui:permission.label.fullAccess}}です。それ以外のモードでは、{{kbd:⌘Enter}}はこれまでどおりリクエストをキューに入れます。
 - **Codex**のペインに委任ツールが付くのは{{ui:permission.label.acceptEditsCodex}}と{{ui:permission.label.fullAccess}}のときだけです。{{ui:permission.label.defaultCodex}}ではCodexがツールを断り、{{ui:permission.label.onRequest}}ではアプリが表示できない方法で確認を求めるためです。`delegate`は、ファイルを変更できない子のモードを断ります。Codexが`merge`を呼べるのは、実行が{{ui:permission.label.fullAccess}}で始まったときだけで、それ以外は断られる(`merge_human_only`)ので、カードからマージします。実行中のCodexのターンはテキストを受け取れないため、実行中のCodexの親への通知は、その実行が正常に終わったあと次の実行として届き、停止やエラーで終わったときは保留されます。
-- **Antigravity**のペインには委任ツールがありません(Antigravityはグローバル設定からしかツールを受け取らず、アプリはその設定を変えません)。子は{{kbd:⌘Enter}}か{{ui:queue.worktree}}ボタンでだけ起動します。
+- **Antigravity**のペインには委任ツールがありません(Antigravityはグローバル設定からしかツールを受け取らず、アプリはその設定を変えません)。子は{{kbd:⌘Enter}}、{{ui:queue.worktree}}ボタン、{{ui:composer.busySend.title}}でだけ起動します。
 - CodexとAntigravityの子は、{{ui:permission.label.fullAccess}}でなければ自分のworktreeでコミットできないので、変更をそのまま残すよう案内されます。子の実行がREPORT.mdを変えて正常に終わると、アプリが変更を子のブランチにコミットし(`mighty: <子のid> report r<n>`)、そのコミットで報告を記録します。停止やエラーで終わったときは、次の正常な終了を待ちます。.gitignoreが除く新しいファイル、秘密情報に見える新しいファイル(`.env*`、`*.pem`、`*.key`、`*.pfx`、`*.p12`、`*.ppk`、`id_rsa*`、`id_ed25519*`、`id_ecdsa*`、`id_dsa*`、`credentials*`、`secrets.*`、`.npmrc`、`.pypirc`)、5 MBを超える新しいファイルはコミットせず、後の二つは子ペインに名前を表示します。コミットにはgitに設定した名前とメールアドレスを使い(ないと失敗し、ペインにそう表示します)、署名はしません。worktreeに未解決のマージ競合があるときは何もコミットせず、ペインにそう表示します。
 - カードのマージが競合で断られたとき、競合の解決を頼むのはコミットできる子({{ui:permission.label.fullAccess}})だけです。それ以外は、子を{{ui:permission.label.fullAccess}}に切り替えてから子ペインで頼むか、そのworktreeのターミナルで自分で競合を解決してコミットしてください。
 - リポジトリのサブフォルダーをワークスペースとして開いた場合、Codexの子はREPORT.mdがあるworktreeの最上位フォルダーにも書き込めて、Antigravityの子にはそのフォルダーが追加されます。
@@ -191,5 +190,5 @@ reg add "HKCU\Software\MightyCode" /v delegation.enabled /t REG_DWORD /d 0 /f
 | 任せる作業(TASK.md、自分で起動したリクエスト) | 64 KiB |
 | 必要なディスクの空き | 10 GB |
 
-- 子は親と同じエージェントで実行され、別のエージェントでも実行されます([CodexとAntigravity](#agents))。ClaudeとCodexのペインはツールと{{kbd:⌘Enter}}で、Antigravityのペインは{{kbd:⌘Enter}}でだけ子を作ります([CodexとAntigravity](#agents))。
+- 子は親と同じエージェントで実行され、別のエージェントでも実行されます([CodexとAntigravity](#agents))。ClaudeとCodexのペインはdelegateツールでも子を作り、Antigravityのペインはツールなしで{{kbd:⌘Enter}}、{{ui:queue.worktree}}ボタン、{{ui:composer.busySend.title}}、{{ui:queue.runNow}}でだけ作ります([CodexとAntigravity](#agents))。
 - MacアプリもWindowsアプリも初期状態でオンで、設定にスイッチがあります([オンとオフ](#enable))。スマートフォンに新しい画面はなく、保留された行はスマートフォンのキューにも表示されます。

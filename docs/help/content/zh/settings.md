@@ -27,6 +27,7 @@ section: settings
 同一标签页的{{ui:settings.agents.sectionTitle}}中是与代理窗格有关的设置和按键说明。
 - {{ui:settings.display.statusLineToggle}}：运行 Claude 设置中的状态栏命令，并将结果显示在输入框下方。
 - {{ui:settings.delegation.toggle}}：默认开启。Claude 窗格可以在各自的 worktree 中打开子窗格，在运行中的 Claude 窗格里按 {{kbd:⌘Enter}} 会在新的子窗格中运行你的请求。请参阅[Mighty 编排](delegation.md#enable)。
+- {{ui:settings.agents.checklistToggle}}：默认开启。开启时会附上一条简短指示，请 Gemini、Codex、opencode 和 Hermes 在工作时留下计划（清单），进度面板就会显示真正的计划步骤。窗格中的请求只保留你输入的内容。关闭时或没有收到计划时，面板把智能体正在做的事显示为步骤（[Mighty 视图](agent-pane.md#diagram)）。
 - {{ui:settings.editor.label}}：{{ui:editor.open}}启动的编辑器。可选择自动(找到的第一个)、此电脑上找到的编辑器或{{ui:settings.editor.system}}。每次打开设置都会重新查找([在编辑器中打开](terminal-files-browser.md#open-in-editor))。
 - 下方是按键说明：按 {{kbd:Enter}} 发送，按 {{kbd:Shift+Enter}} 换行。拖动标签页可与其他标签页合并，拖到边缘可拆分。命令运行窗格是交互式终端，在 Mac 上打开登录 shell，在 Windows 上打开 PowerShell（没有时为 cmd）。
 
@@ -56,12 +57,12 @@ section: settings
 
 屏幕查看与控制目前暂时停用，因此设置中没有这一项（[远程屏幕](phone.md#screen)）。
 
-## 宠物与提醒 {#companion}
-在{{ui:settings.nav.companion}}标签页中设置桌面宠物和完成通知。
-- {{ui:companion.settings.enabled}}：显示一只在屏幕上走动的浣熊宠物。可以拖动宠物移动位置，点击它可以打开或关闭气泡。
+## Mighty Pet 与提醒 {#companion}
+在{{ui:settings.nav.companion}}标签页中设置 Mighty Pet 和完成通知。
+- {{ui:companion.settings.enabled}}：显示在屏幕上走动的浣熊 Mighty Pet。可以拖动 Mighty Pet 移动位置，点击它可以打开或关闭气泡。
 - {{ui:companion.settings.task}}：在气泡中显示请求、当前任务和用时。也可以在气泡中回答批准请求（{{ui:permission.allowOnce}} / {{ui:permission.deny}}）。批准、提问和计划气泡上的图标按钮会打开对应的窗格，以便查看完整请求或自己输入答案。
-- 气泡上方附有该窗格最近一个请求的{{ui:graph.progress.title}}卡片，内容与窗格的进度面板相同：请求编号、已完成的步骤数、状态、当前步骤前后的几个步骤以及后台任务，各自附带用时。点击卡片标题可折叠为只剩标题，再次点击即可展开；折叠状态在下次打开应用时依然保留。点击步骤行会打开对应的窗格。没有步骤也没有后台任务的请求、气泡显示批准、提问或计划时，以及气泡关闭时，不显示卡片。
-- {{ui:companion.settings.pet}}：选择宠物。可以用{{ui:companion.settings.import}}添加其他宠物，用{{ui:companion.settings.reload}}重新读取宠物列表，用{{ui:companion.settings.resetPosition}}把宠物位置和气泡大小恢复为初始状态。
+- 气泡上方附有该窗格最近一个请求的{{ui:graph.progress.title}}卡片，内容与窗格的进度面板相同：请求编号、已完成的步骤数、状态、所有步骤以及后台任务，各自附带用时。超过八行时可在卡片内滚动查看，打开时先显示当前步骤。点击卡片标题可折叠为只剩标题，再次点击即可展开；折叠状态在下次打开应用时依然保留。点击步骤行会打开对应的窗格。没有步骤也没有后台任务的请求、气泡显示批准、提问或计划时，以及气泡关闭时，不显示卡片。
+- {{ui:companion.settings.pet}}：选择宠物。可以用{{ui:companion.settings.import}}添加其他宠物，用{{ui:companion.settings.reload}}重新读取宠物列表，用{{ui:companion.settings.resetPosition}}把 Mighty Pet 位置和气泡大小恢复为初始状态。
 - {{ui:companion.settings.motion}}：减少动作。
 - {{ui:companion.settings.macNotifications}}（Windows 上为{{ui:windows.notifications.toggleLabel}}）：请求成功完成时发送 Mac 通知。点击通知会打开对应的窗格。通知中不包含请求或结果的内容。
 - 下方显示操作系统的通知权限状态，{{ui:windows.notifications.settingsButton}}按钮会打开系统的通知设置。
@@ -95,7 +96,7 @@ section: settings
 
 是否安装成功，由完成后的重新检查来判断。首次运行时打开的[{{ui:setup.title}}](getting-started.md#setup)窗口是一个清单：选择缺少的项目并点击{{ui:setup.button.install}}。
 
-同一标签页的最下方是{{ui:settings.toolkit.sectionTitle}}框，即常用工具的列表。安装前会显示所有要运行的命令，并请你{{ui:settings.toolkit.confirmTitle}}。可以{{ui:settings.toolkit.exportButton}}或{{ui:settings.toolkit.importButton}}该列表。
+同一标签页的最下方是{{ui:settings.toolkit.sectionTitle}}框，用来自己收集常用工具，一开始是空的。用{{ui:settings.toolkit.addButton}}添加工具，每一项都有{{ui:settings.toolkit.approveButton}}和{{ui:settings.toolkit.removeButton}}按钮。只有批准过的工具才能安装；安装前会显示所有要运行的命令，并请你{{ui:settings.toolkit.confirmTitle}}。可以{{ui:settings.toolkit.exportButton}}或{{ui:settings.toolkit.importButton}}该列表。
 
 ![[settings-tools]]
 

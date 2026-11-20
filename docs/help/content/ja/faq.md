@@ -6,7 +6,7 @@ section: faq
 ## リクエストを送信できない {#cannot-send}
 - 入力欄の下に、送信できない理由が表示されます。CLIがインストールされていない場合やサインインが必要な場合は、{{ui:menu.settings}} → {{ui:settings.nav.tools}}を確認してください。
 - ターミナルペインにはファイルを添付できません。AIのペインを使ってください。
-- 実行中に押した{{kbd:Enter}}は、すぐには送信されずキューに入ります。[実行中に続けてリクエストする](agent-pane.md#queue)を参照してください。
+- 実行中に押した{{kbd:Enter}}は、初期設定ではすぐには送信されずキューに入ります。入力欄の下の{{ui:composer.busySend.title}}でエージェントを選んでおくと、そのエージェントの新しいworktreeですぐ実行します。[実行中に続けてリクエストする](agent-pane.md#queue)を参照してください。
 
 ## モデルの一覧に使いたいモデルがない {#model-missing}
 1. モデルのチップを開き、{{ui:composer.model.refresh}}をクリックします。

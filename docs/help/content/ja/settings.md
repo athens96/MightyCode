@@ -27,6 +27,7 @@ Mac では表示メニューの {{ui:menu.textBigger}}（{{kbd:⌘=}}）、{{ui:
 同じタブの{{ui:settings.agents.sectionTitle}}には、エージェントペインに関する設定とキーの案内があります。
 - {{ui:settings.display.statusLineToggle}}: Claudeの設定にあるステータスラインのコマンドを実行し、入力欄の下に表示します。
 - {{ui:settings.delegation.toggle}}: 初期状態でオンです。Claudeペインが専用のworktreeで子ペインを開けるようになり、実行中のClaudeペインで{{kbd:⌘Enter}}を押すとリクエストが新しい子ペインで実行されます。[Mightyオーケストレーション](delegation.md#enable)を参照してください。
+- {{ui:settings.agents.checklistToggle}}: 初期状態でオンです。オンのあいだは、Gemini、Codex、opencode、Hermesに作業中の計画（チェックリスト）を残すよう短い指示を添え、進行状況パネルに実際の計画のステップが出ます。ペインのリクエストには入力した内容だけが残ります。オフのときや計画が届かないときは、エージェントがしていることがステップとして出ます（[マイティ表示](agent-pane.md#diagram)）。
 - {{ui:settings.editor.label}}: {{ui:editor.open}}が起動するエディタです。自動(見つかった最初のもの)、このコンピュータで見つかったエディタ、{{ui:settings.editor.system}}から選びます。設定を開くたびに探し直します([エディタで開く](terminal-files-browser.md#open-in-editor))。
 - その下にキーの案内があります。{{kbd:Enter}}で送信し、{{kbd:Shift+Enter}}で改行します。タブをドラッグしてほかのタブとまとめたり、端へ移して分割したりします。コマンド実行ペインは、Macではログインシェル、WindowsではPowerShell(ない場合はcmd)を開く対話型ターミナルです。
 
@@ -56,12 +57,12 @@ Mac では表示メニューの {{ui:menu.textBigger}}（{{kbd:⌘=}}）、{{ui:
 
 画面の表示と操作は現在一時停止しているため、設定にその項目はありません([リモート画面](phone.md#screen))。
 
-## ペットと通知 {#companion}
-{{ui:settings.nav.companion}}タブで、デスクトップペットと完了通知を設定します。
-- {{ui:companion.settings.enabled}}: 画面上を動き回るアライグマのペットを表示します。ペットはドラッグして移動でき、クリックすると吹き出しが開閉します。
+## Mighty Petと通知 {#companion}
+{{ui:settings.nav.companion}}タブで、Mighty Petと完了通知を設定します。
+- {{ui:companion.settings.enabled}}: 画面上を動き回るアライグマのMighty Petを表示します。Mighty Petはドラッグして移動でき、クリックすると吹き出しが開閉します。
 - {{ui:companion.settings.task}}: 吹き出しに、リクエスト、現在の作業、経過時間を表示します。吹き出しから許可({{ui:permission.allowOnce}} / {{ui:permission.deny}})に答えることもできます。承認・質問・プランの吹き出しの記号ボタンは、リクエスト全体を見たり回答を自分で書いたりできるよう、そのペインを開きます。
-- 吹き出しの上には、そのペインの最新リクエストの{{ui:graph.progress.title}}カードが付きます。ペインの進行パネルと同じ内容で、リクエスト番号、終わったステップ数、状態、いまのステップ前後のいくつかのステップとバックグラウンド作業が、それぞれの経過時間とともに表示されます。カードの見出しをクリックすると見出しだけに折りたたまれ、もう一度クリックすると開きます。折りたたんだ状態は次にアプリを開いても保たれます。ステップの行をクリックすると、そのペインが開きます。ステップもバックグラウンド作業もないリクエスト、吹き出しが承認・質問・プランを表示している間、吹き出しが閉じているときはカードは表示されません。
-- {{ui:companion.settings.pet}}: ペットを選びます。{{ui:companion.settings.import}}でほかのペットを追加し、{{ui:companion.settings.reload}}でペットの一覧を読み直し、{{ui:companion.settings.resetPosition}}でペットの位置と吹き出しのサイズを最初の状態に戻します。
+- 吹き出しの上には、そのペインの最新リクエストの{{ui:graph.progress.title}}カードが付きます。ペインの進行パネルと同じ内容で、リクエスト番号、終わったステップ数、状態、すべてのステップとバックグラウンド作業が、それぞれの経過時間とともに表示されます。8行を超えるとカードの中でスクロールでき、最初はいまのステップが見える位置で開きます。カードの見出しをクリックすると見出しだけに折りたたまれ、もう一度クリックすると開きます。折りたたんだ状態は次にアプリを開いても保たれます。ステップの行をクリックすると、そのペインが開きます。ステップもバックグラウンド作業もないリクエスト、吹き出しが承認・質問・プランを表示している間、吹き出しが閉じているときはカードは表示されません。
+- {{ui:companion.settings.pet}}: ペットを選びます。{{ui:companion.settings.import}}でほかのペットを追加し、{{ui:companion.settings.reload}}でペットの一覧を読み直し、{{ui:companion.settings.resetPosition}}でMighty Petの位置と吹き出しのサイズを最初の状態に戻します。
 - {{ui:companion.settings.motion}}: 動きを減らします。
 - {{ui:companion.settings.macNotifications}}(Windowsでは{{ui:windows.notifications.toggleLabel}}): リクエストが正常に終わると、Macの通知を送ります。通知をクリックすると、そのペインが開きます。通知にはリクエストや結果の内容は含まれません。
 - その下にOSの通知の許可状態が表示され、{{ui:windows.notifications.settingsButton}}ボタンでシステムの通知設定を開きます。
@@ -95,7 +96,7 @@ Mac では表示メニューの {{ui:menu.textBigger}}（{{kbd:⌘=}}）、{{ui:
 
 インストールできたかどうかは、終わったあとに確認し直して判断します。初回起動時に開く[{{ui:setup.title}}](getting-started.md#setup)ウィンドウは、足りないものを選んで{{ui:setup.button.install}}をクリックするチェックリストです。
 
-同じタブの一番下には、{{ui:settings.toolkit.sectionTitle}}ボックスがあります。よく使うツールの一覧です。インストールの前に実行するコマンドをすべて表示し、{{ui:settings.toolkit.confirmTitle}}を求めます。一覧を{{ui:settings.toolkit.exportButton}}したり{{ui:settings.toolkit.importButton}}したりできます。
+同じタブの一番下には、{{ui:settings.toolkit.sectionTitle}}ボックスがあります。よく使うツールを自分で集めておく一覧で、最初は空です。{{ui:settings.toolkit.addButton}}でツールを追加し、項目ごとに{{ui:settings.toolkit.approveButton}}と{{ui:settings.toolkit.removeButton}}のボタンがあります。承認したツールだけをインストールでき、インストールの前に実行するコマンドをすべて表示して、{{ui:settings.toolkit.confirmTitle}}を求めます。一覧を{{ui:settings.toolkit.exportButton}}したり{{ui:settings.toolkit.importButton}}したりできます。
 
 ![[settings-tools]]
 

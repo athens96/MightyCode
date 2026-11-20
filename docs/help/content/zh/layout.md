@@ -11,6 +11,7 @@ section: layout
 侧边栏从上到下依次是：
 - {{ui:sidebar.searchPlaceholder}}：按{{kbd:⌘K}}可直接跳到搜索框。
 - {{ui:phone.dashboard.title}}：在一处查看所有工作区中窗格的状态。
+- {{ui:review.sidebar}}：集中查看有待审阅更改的窗格和请求（[审阅队列](#review)）。
 - {{ui:sidebar.workspacesHeader}}列表：点击工作区即可切换到该工作区。点击旁边的箭头可以展开或收起其窗格列表。
 - 底部：帮助按钮、主题按钮（深色、浅色）和设置按钮。
 
@@ -53,7 +54,7 @@ section: layout
 窗格可以是 AI 智能体（Claude、Codex、Antigravity、pi、opencode、Hermes）、终端或文件中的一种。
 
 1. 点击侧边栏中的{{ui:workspace.addPane}}按钮。
-2. 选择要创建的窗格：智能体（Claude、Codex、Antigravity、pi、opencode、Hermes）窗格或{{ui:workspace.newTerminal}}。菜单最下方一组是添加工作区的三种方式：{{ui:workspace.add.existing}}、{{ui:workspace.add.newFolder}}和{{ui:workspace.add.fromGit}}（[打开工作区](getting-started.md#open-workspace)）。
+2. 选择要创建的窗格：智能体（Claude、Codex、Antigravity、pi、opencode、Hermes）窗格、{{ui:workspace.newTerminal}}或{{ui:menu.showFiles}}（{{kbd:⇧⌘E}}）。菜单最下方一组是添加工作区的三种方式：{{ui:workspace.add.existing}}、{{ui:workspace.add.newFolder}}和{{ui:workspace.add.fromGit}}（[打开工作区](getting-started.md#open-workspace)）。
 3. 新的 AI 窗格会沿用同一智能体最近使用过的窗格的模型、思考强度、权限和视图。对话则从头开始。
 
 快捷键：{{ui:menu.newClaudePane}}为{{kbd:⌘N}}，{{ui:menu.addTerminalPane}}为{{kbd:⌘T}}，{{ui:menu.showFiles}}为{{kbd:⇧⌘E}}。所有工作区合计最多可以打开 128 个窗格（原样显示其他电脑窗格的远程窗格不计入）。
@@ -110,7 +111,9 @@ section: layout
 | {{kbd:⌘K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{ui:menu.settings}} |
-| {{kbd:Enter}} | 发送请求 |
+| {{kbd:Enter}} | 发送请求。在运行中的窗格里，按{{ui:composer.busySend.title}}的选择放入队列，或立即在所选代理的新 worktree 中运行（[运行时继续提出请求](agent-pane.md#queue)） |
 | {{kbd:⇧Enter}} | 换行 |
 | {{kbd:⌘Enter}} | 在运行中的窗格里立即在新的 worktree 中运行（开启了[Mighty 编排](delegation.md#worktree)、位于 git 仓库中的窗格）；在其他运行中的窗格里放入队列 |
 | {{kbd:Esc}} | 关闭弹出面板、关闭斜杠命令列表 |
+| {{kbd:⌘=}} / {{kbd:⌘-}} / {{kbd:⌘0}} | {{ui:menu.textBigger}} / {{ui:menu.textSmaller}} / {{ui:menu.textActualSize}} |
+| {{kbd:⌘?}} | {{ui:menu.help}} |

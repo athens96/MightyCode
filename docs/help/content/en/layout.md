@@ -11,6 +11,7 @@ The window has a sidebar on the left and a work area on the right. In the work a
 From the top, the sidebar has:
 - {{ui:sidebar.searchPlaceholder}}: press {{kbd:⌘K}} to jump to the search field.
 - {{ui:phone.dashboard.title}}: the state of every pane in every workspace, in one place.
+- {{ui:review.sidebar}}: the panes and requests with changes to review, gathered together ([Review queue](#review)).
 - The {{ui:sidebar.workspacesHeader}} list: click a workspace to switch to it. Click the arrow beside it to show or hide its panes.
 - At the bottom: the help button, the theme button (dark or light) and the settings button.
 
@@ -53,7 +54,7 @@ Everything ready to review, in one place. Click {{ui:review.sidebar}} under {{ui
 A pane is an AI agent (Claude, Codex, Antigravity, pi, opencode or Hermes), a terminal or a files pane.
 
 1. Click {{ui:workspace.addPane}} in the sidebar.
-2. Pick what to add: an agent pane (Claude, Codex, Antigravity, pi, opencode or Hermes) or {{ui:workspace.newTerminal}}. The bottom group of the menu has the three ways to add a workspace: {{ui:workspace.add.existing}}, {{ui:workspace.add.newFolder}} and {{ui:workspace.add.fromGit}} ([Open a workspace](getting-started.md#open-workspace)).
+2. Pick what to add: an agent pane (Claude, Codex, Antigravity, pi, opencode or Hermes), {{ui:workspace.newTerminal}} or {{ui:menu.showFiles}} ({{kbd:⇧⌘E}}). The bottom group of the menu has the three ways to add a workspace: {{ui:workspace.add.existing}}, {{ui:workspace.add.newFolder}} and {{ui:workspace.add.fromGit}} ([Open a workspace](getting-started.md#open-workspace)).
 3. A new AI pane takes the model, thinking effort, permission and view of the most recently used pane of the same agent. The conversation starts fresh.
 
 Shortcuts: {{ui:menu.newClaudePane}} is {{kbd:⌘N}}, {{ui:menu.addTerminalPane}} is {{kbd:⌘T}} and {{ui:menu.showFiles}} is {{kbd:⇧⌘E}}. Up to 128 panes can be open across all workspaces (remote panes that show another computer's panes as they are do not count).
@@ -110,7 +111,9 @@ Right-clicking a pane's header offers {{ui:menu.rename}}, {{ui:session.menu.focu
 | {{kbd:⌘K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{ui:menu.settings}} |
-| {{kbd:Enter}} | Send the request |
+| {{kbd:Enter}} | Send the request. In a running pane, queue it or run it right away in a new worktree with the agent picked, as {{ui:composer.busySend.title}} says ([Keep asking while it runs](agent-pane.md#queue)) |
 | {{kbd:⇧Enter}} | New line |
 | {{kbd:⌘Enter}} | In a running pane, run it now in a new worktree (a pane with [Mighty Orchestration](delegation.md#worktree) on, in a git repository); in any other running pane, add it to the queue |
 | {{kbd:Esc}} | Close a sheet or the slash list |
+| {{kbd:⌘=}} / {{kbd:⌘-}} / {{kbd:⌘0}} | {{ui:menu.textBigger}} / {{ui:menu.textSmaller}} / {{ui:menu.textActualSize}} |
+| {{kbd:⌘?}} | {{ui:menu.help}} |

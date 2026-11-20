@@ -3,7 +3,7 @@ title: Approvals, questions and sign-in
 order: 5
 section: approvals
 ---
-When an agent needs your decision, a card appears in its pane. Answer it and the work goes on. The same requests also show up in Work status, on the desktop pet and on your phone.
+When an agent needs your decision, a card appears in its pane. Answer it and the work goes on. The same requests also show up in Work status, on Mighty Pet and on your phone.
 
 ## Approve a permission {#permission}
 When the agent wants to do something outside its permission (run a command, change a file and so on), an approval card appears.
@@ -84,12 +84,12 @@ If you already signed in somewhere else, click {{ui:loginRecovery.resendButton}}
 
 ## Background work {#background}
 Claude sometimes runs long commands or sub-agents in the background. Then work is still going on after Claude's answer is done.
-- A {{ui:plan.background.title}} line appears above the composer (from the start of the request). It counts the tasks this request started that have ended and those still running, like "Done: 1 · Running: 2". Click the line to see each task's kind, state and time.
-- When a task ends, Claude is notified and carries on with the result. An ended task shows as ended and stays on the line until you send the next request. Once they have all ended, the line stays and reads "Running: 0".
-- While it runs, background work is not drawn in the request's blocks; it lives on the strip above. Click a row to open the command it ran (a sub-agent shows the first line of its prompt) and the last lines of its output (up to 6). The phone shows the same two counts on a collapsed line above the Mighty view, which opens to the rows of the tasks still running.
+- Background work shows in the {{ui:graph.progress.background}} group of the progress panel above the diagram (from the start of the request). The "1/3" beside the group's title is the number of tasks still running and the total this request started. Each row shows its state, its kind (command or sub-agent), the first line of its command or prompt, and the time it has taken; hover over a row to see it in full.
+- When a task ends, Claude is notified and carries on with the result. An ended task shows as ended and stays in the group until you send the next request.
+- While it runs, background work is not drawn in the request's blocks in the Mighty view; it lives only in the progress panel. The phone keeps a folded {{ui:plan.background.title}} line above the Mighty view that shows the ended and running counts, like "Done: 1 · Running: 2", and opens to the rows of the tasks still running.
 - When a task ends and its notice goes to Claude, nothing is added to the request: each answer of Claude's opens a new diagram. It is titled after the finished work, like "{{ui:graph.background.noticeRun}} · code review agent", and shortened to "… and N more" when several ended together. It shows the ended task's {{ui:graph.block.task}} block (command, how it ended, summary) and Claude's answer. It is not a request, so it takes no request number. In the flow it is a new card at the bottom; in {{ui:graph.view.timeline}} it is a new row, and in {{ui:graph.view.structure}} a new card (board) at the end. A notice that names nothing opens no diagram unless Claude answers it. Until every notice has been answered, the request's own result card stays an {{ui:graph.block.awaitingNotice}} block ([result card](agent-pane.md)).
 - A sub-agent started in the background works the same way. When it ends, its block in the Mighty view shows {{ui:graph.state.completed}}, {{ui:graph.state.error}} or {{ui:graph.state.stopped}} (also {{ui:graph.state.stopped}} if the app restarted before it finished), and the final report it hands back becomes the block's result. A message it sends while still running is added to the block's log and does not end it; Claude's answer to that message gets its own {{ui:graph.background.messageRun}} diagram. Further messages from the same agent, with Claude's answers, go on in that same diagram. Claude's answer to the end shows in the {{ui:graph.background.noticeRun}} diagram.
-- A request you send now waits in the queue and starts after the background work ends. To start it now, click stop: the queue stays and its first request starts next. In a pane with [Mighty Orchestration](delegation.md#worktree) on, in a git repository, {{kbd:⌘Enter}} ({{kbd:Ctrl+Enter}} on Windows) can also run it right away in a new worktree.
-- This line can't be hidden. It stays while there is background work, and whether you left it open is remembered.
+- A request you send now waits in the queue by default and starts after the background work ends. To start it now, click stop: the queue stays and its first request starts next. In a pane with [Mighty Orchestration](delegation.md#worktree) on, in a git repository, {{kbd:⌘Enter}} ({{kbd:Ctrl+Enter}} on Windows) runs it right away in a new worktree, and if you picked an agent under {{ui:composer.busySend.title}} below the composer, {{kbd:Enter}} too runs it right away in a new worktree with that agent ([Keep asking while it runs](agent-pane.md#queue)).
+- Folding the progress panel folds the background group with it.
 
 ![[background-work]]

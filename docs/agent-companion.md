@@ -1,5 +1,7 @@
 # Agent activity and desktop companion (macOS)
 
+The desktop companion's official name is **Mighty Pet**: the app's words, the help and the website call it that in every language (ko/en/ja/zh), while "pet" alone still names a character sprite (a Codex pet, the pet image). Code keeps its `companion`/`pet` identifiers.
+
 The native Mac client renders Foundation-parsed Markdown in one read-only AppKit NSTextView. Headings, lists, checklists, quotes, native tables, inline styles and fenced code keep their structure. Drag selection and copy cross paragraph, tool and message boundaries. Selection anchors follow entry IDs through streaming updates and log pruning. Code can be copied. HTTP/HTTPS/mailto links open on click; message images do not trigger automatic network requests.
 
 An existing conversation opens at its latest message after the native viewport has finished its first layout. Scrolling up or selecting text keeps that reading position through later output updates.
@@ -16,7 +18,7 @@ A waiting indication means an explicit provider event (for example a Claude perm
 
 ## Pet and status UI
 
-- Bottom right paw: toggle desktop pet.
+- Bottom right paw: toggle Mighty Pet.
 - Bottom right status button: open the agent list, current actions and jump to an agent.
 - Click the pet to show or hide its task bubble. Click the bubble (or the pet's Open agent context-menu item) to activate Mighty Code and select that agent, including its workspace and dock tab.
 - Drag the pet itself to move its window. Moving right or left plays the matching walking animation; releasing it restores the animation for its current task. A drag does not toggle the bubble. Both the pet setting and macOS Reduce Motion can keep frames static.

@@ -24,7 +24,7 @@ Mac または Windows のコンピュータ 2 台の Mighty Code をつなぐと
 4. 上部の状態行の横にある {{ui:settings.remote.startSharing}} を押します。共有中はその場所に {{ui:settings.remote.sharedListTitle}} の一覧が表示されます。
 
 {{ui:settings.remote.methodsTitle}} には方式ごとに 1 行あります。
-- {{ui:settings.remote.viaPairing}}: {{ui:settings.remote.pairAccept}} スイッチ、リレーの状態、{{ui:settings.remote.pairCopyLink}} ボタンがあります。リンクにはスマートフォンの QR コードと同じキーが含まれるため、秘密としてコピーされ、1 分後にクリップボードから消去されます。リレーを使えない実行では、スイッチは淡色表示になり理由が表示されます。[ペアリングで接続](#pair)を参照してください。
+- {{ui:settings.remote.viaPairing}}: {{ui:settings.remote.pairAccept}} スイッチとリレーの状態があり、スイッチをオンにすると {{ui:settings.remote.pairCopyLink}} ボタンが表示されます。リンクにはコンピュータ専用のペアリングコード（スマートフォンの QR コードとは別）が含まれるため、秘密としてコピーされ、1 分後にクリップボードから消去されます。リレーを使えない実行では、スイッチは淡色表示になり理由が表示されます。[ペアリングで接続](#pair)を参照してください。
 - {{ui:settings.remote.viaTailscale}}: このコンピュータに Tailscale のアドレスがないときは、その旨の説明と {{ui:settings.remote.tailscaleInstall}} ボタンが表示され、押すと {{ui:settings.nav.tools}} タブが開きます。共有の前は {{ui:settings.remote.portLabel}} の欄があります。通常はそのまま（43137）にします。共有中は、このコンピュータの Tailscale アドレスと {{ui:settings.remote.keyLabel}} が表示されます。キーは表示ボタンで確認し、{{ui:settings.remote.copyButton}} でコピーして接続する側に伝えます。
 
 Tailscale がなくても、{{ui:settings.remote.pairAccept}} がオンなら共有を開始できます。このときはペアリングしたコンピュータだけがリレーで接続します。
@@ -36,7 +36,7 @@ Tailscale がなくても、{{ui:settings.remote.pairAccept}} がオンなら共
 Tailscale の共有はこのコンピュータの Tailscale アドレスでだけ接続を受け付けます。アプリを開き直すと共有は必ずオフで始まります。{{ui:settings.remote.stopSharing}} を押すとリモート実行が止まり、接続キーは破棄されます。もう一度共有するときは新しいキーを伝えてください。
 
 > [!warning]
-> 接続キーやペアリングリンクを持つ機器は、共有したワークスペースでエージェントとコマンドを実行できます。権限モードによっては、ホストのユーザー権限でフォルダの外にもアクセスできます。キーとリンクは信頼できる機器にだけ教えてください。
+> 接続した機器は、共有したワークスペースでエージェントとコマンドを実行できます。権限モードによっては、ホストのユーザー権限でフォルダの外にもアクセスできます。Tailscale の接続キーを持つ機器はすぐに接続できるため、キーは信頼できる機器にだけ教えてください。ペアリングリンクは一度だけ使え、ホストで {{ui:settings.mobileRemote.approval.allow}} を押さないと接続されません。
 
 ## 別のコンピュータに接続 {#connect}
 作業を頼むコンピュータで:

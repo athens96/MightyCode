@@ -27,6 +27,7 @@ Mac에서는 보기 메뉴의 {{ui:menu.textBigger}}({{kbd:⌘=}}), {{ui:menu.te
 같은 탭의 {{ui:settings.agents.sectionTitle}} 항목에는 에이전트 창에 관한 설정과 키 안내가 있습니다.
 - {{ui:settings.display.statusLineToggle}}: Claude 설정의 상태 줄 명령을 실행해 입력창 아래에 보여 줍니다.
 - {{ui:settings.delegation.toggle}}: 기본으로 켜져 있습니다. Claude 창이 자기 worktree를 가진 자식 창을 열 수 있고, 실행 중인 Claude 창에서 {{kbd:⌘Enter}}를 누르면 요청이 새 자식 창에서 실행됩니다. [마이티 오케스트레이션](delegation.md#enable)을 보세요.
+- {{ui:settings.agents.checklistToggle}}: 기본으로 켜져 있습니다. 켜져 있으면 Gemini, Codex, opencode, Hermes에게 작업하는 동안 계획(체크리스트)을 남겨 달라는 짧은 지시를 함께 보내, 진행 상황 패널에 실제 계획 단계가 보입니다. 창의 요청에는 입력한 내용만 남습니다. 끄거나 계획이 오지 않으면 에이전트가 하는 일이 단계로 보입니다([마이티 보기](agent-pane.md#diagram)).
 - {{ui:settings.editor.label}}: {{ui:editor.open}}가 시작할 편집기입니다. 자동(찾은 것 중 첫 번째), 이 컴퓨터에서 찾은 편집기, {{ui:settings.editor.system}} 중에서 고릅니다. 설정을 열 때마다 다시 찾습니다([편집기에서 열기](terminal-files-browser.md#open-in-editor)).
 - 아래에 키 안내가 있습니다. {{kbd:Enter}}로 보내고 {{kbd:Shift+Enter}}로 줄을 바꿉니다. 탭을 끌어 다른 탭과 합치거나 가장자리로 옮겨 나눕니다. 명령 실행 창은 Mac에서는 로그인 셸, Windows에서는 PowerShell(없으면 cmd)을 여는 대화형 터미널입니다.
 
@@ -56,12 +57,12 @@ Mac에서는 보기 메뉴의 {{ui:menu.textBigger}}({{kbd:⌘=}}), {{ui:menu.te
 
 화면 보기·조작은 지금 잠시 멈춰 있어서 설정에 그 항목이 없습니다([화면 보기](phone.md#screen)).
 
-## 펫과 알림 {#companion}
-{{ui:settings.nav.companion}} 탭에서 데스크톱 펫과 완료 알림을 정합니다.
-- {{ui:companion.settings.enabled}}: 화면 위를 다니는 너구리 펫을 켭니다. 펫을 끌어 옮기고, 누르면 말풍선이 열리고 닫힙니다.
+## Mighty Pet과 알림 {#companion}
+{{ui:settings.nav.companion}} 탭에서 Mighty Pet과 완료 알림을 정합니다.
+- {{ui:companion.settings.enabled}}: 화면 위를 다니는 너구리 Mighty Pet을 켭니다. Mighty Pet을 끌어 옮기고, 누르면 말풍선이 열리고 닫힙니다.
 - {{ui:companion.settings.task}}: 말풍선에 요청과 지금 하는 일, 걸린 시간을 보여 줍니다. 말풍선에서 승인({{ui:permission.allowOnce}} / {{ui:permission.deny}})에 답할 수도 있습니다. 승인·질문·계획 말풍선의 기호 단추는 요청 전체를 보거나 답을 직접 쓸 수 있게 그 실행 창을 엽니다.
-- 말풍선 위에는 그 창의 최근 요청 {{ui:graph.progress.title}} 카드가 붙습니다. 실행 창의 진행 패널과 같은 내용으로, 요청 번호와 끝난 단계 수, 상태, 지금 하는 단계 앞뒤의 단계 몇 개와 백그라운드 작업이 각자 걸린 시간과 함께 보입니다. 카드 머리를 누르면 머리만 남게 접히고 다시 누르면 펼쳐지며, 접은 상태는 다음에 앱을 열어도 그대로입니다. 단계 줄을 누르면 그 실행 창이 열립니다. 단계도 백그라운드 작업도 없는 요청이거나 말풍선이 승인·질문·계획을 보이는 동안, 말풍선이 닫혀 있을 때는 카드가 없습니다.
-- {{ui:companion.settings.pet}}: 펫을 고릅니다. {{ui:companion.settings.import}}로 다른 펫을 더하고, {{ui:companion.settings.reload}} 단추로 펫 목록을 다시 읽고, {{ui:companion.settings.resetPosition}} 단추로 펫의 위치와 말풍선 크기를 처음대로 돌립니다.
+- 말풍선 위에는 그 창의 최근 요청 {{ui:graph.progress.title}} 카드가 붙습니다. 실행 창의 진행 패널과 같은 내용으로, 요청 번호와 끝난 단계 수, 상태, 모든 단계와 백그라운드 작업이 각자 걸린 시간과 함께 보입니다. 줄이 여덟 줄보다 많으면 카드 안에서 스크롤해 보고, 처음에는 지금 하는 단계가 보이게 열립니다. 카드 머리를 누르면 머리만 남게 접히고 다시 누르면 펼쳐지며, 접은 상태는 다음에 앱을 열어도 그대로입니다. 단계 줄을 누르면 그 실행 창이 열립니다. 단계도 백그라운드 작업도 없는 요청이거나 말풍선이 승인·질문·계획을 보이는 동안, 말풍선이 닫혀 있을 때는 카드가 없습니다.
+- {{ui:companion.settings.pet}}: 펫을 고릅니다. {{ui:companion.settings.import}}로 다른 펫을 더하고, {{ui:companion.settings.reload}} 단추로 펫 목록을 다시 읽고, {{ui:companion.settings.resetPosition}} 단추로 Mighty Pet의 위치와 말풍선 크기를 처음대로 돌립니다.
 - {{ui:companion.settings.motion}}: 움직임을 줄입니다.
 - {{ui:companion.settings.macNotifications}}(Windows는 {{ui:windows.notifications.toggleLabel}}): 요청이 성공적으로 끝나면 Mac 알림을 보냅니다. 알림을 누르면 그 실행 창이 열립니다. 알림에는 요청이나 결과 내용이 들어가지 않습니다.
 - 그 아래에 운영체제의 알림 허용 상태가 보이고, {{ui:windows.notifications.settingsButton}} 단추로 시스템의 알림 설정을 엽니다.
@@ -95,7 +96,7 @@ Mac에서는 보기 메뉴의 {{ui:menu.textBigger}}({{kbd:⌘=}}), {{ui:menu.te
 
 설치됐는지는 끝난 뒤 다시 확인해서 정합니다. 처음 실행할 때 열리는 [{{ui:setup.title}}](getting-started.md#setup) 창은 빠진 것을 골라 {{ui:setup.button.install}}를 누르는 체크리스트입니다.
 
-같은 탭의 맨 아래에는 {{ui:settings.toolkit.sectionTitle}} 상자가 있습니다. 자주 쓰는 도구 목록입니다. 설치 전에 실행할 명령을 모두 보여 주고 {{ui:settings.toolkit.confirmTitle}}을 받습니다. 목록을 {{ui:settings.toolkit.exportButton}}하거나 {{ui:settings.toolkit.importButton}}할 수 있습니다.
+같은 탭의 맨 아래에는 {{ui:settings.toolkit.sectionTitle}} 상자가 있습니다. 자주 쓰는 도구를 직접 모아 두는 목록이고, 처음에는 비어 있습니다. {{ui:settings.toolkit.addButton}}로 도구를 넣고, 항목마다 {{ui:settings.toolkit.approveButton}}과 {{ui:settings.toolkit.removeButton}} 단추가 있습니다. 승인한 도구만 설치할 수 있고, 설치 전에 실행할 명령을 모두 보여 주고 {{ui:settings.toolkit.confirmTitle}}을 받습니다. 목록을 {{ui:settings.toolkit.exportButton}}하거나 {{ui:settings.toolkit.importButton}}할 수 있습니다.
 
 ![[settings-tools]]
 

@@ -11,6 +11,7 @@ section: layout
 사이드바에는 위에서부터 다음이 있습니다.
 - {{ui:sidebar.searchPlaceholder}}: {{kbd:⌘K}}를 누르면 검색칸으로 바로 갑니다.
 - {{ui:phone.dashboard.title}}: 모든 워크스페이스의 실행 창 상태를 한곳에서 봅니다.
+- {{ui:review.sidebar}}: 검토할 변경이 있는 창과 요청을 모아 봅니다([검토 대기열](#review)).
 - {{ui:sidebar.workspacesHeader}} 목록: 워크스페이스를 누르면 그 워크스페이스로 바뀝니다. 옆의 화살표를 누르면 실행 창 목록을 펼치거나 접습니다.
 - 아래쪽: 도움말 단추, 화면 테마 단추(어둡게·밝게)와 설정 단추.
 
@@ -53,7 +54,7 @@ section: layout
 실행 창은 AI 에이전트(Claude, Codex, Antigravity, pi, opencode, Hermes), 터미널, 파일 중 하나입니다.
 
 1. 사이드바의 {{ui:workspace.addPane}} 단추를 누릅니다.
-2. 만들 창을 고릅니다: 에이전트(Claude, Codex, Antigravity, pi, opencode, Hermes) 실행 창 또는 {{ui:workspace.newTerminal}}. 메뉴 맨 아래 묶음에는 워크스페이스를 추가하는 {{ui:workspace.add.existing}}, {{ui:workspace.add.newFolder}}, {{ui:workspace.add.fromGit}} 세 항목이 있습니다([워크스페이스 열기](getting-started.md#open-workspace)).
+2. 만들 창을 고릅니다: 에이전트(Claude, Codex, Antigravity, pi, opencode, Hermes) 실행 창, {{ui:workspace.newTerminal}}, 또는 {{ui:menu.showFiles}}({{kbd:⇧⌘E}}). 메뉴 맨 아래 묶음에는 워크스페이스를 추가하는 {{ui:workspace.add.existing}}, {{ui:workspace.add.newFolder}}, {{ui:workspace.add.fromGit}} 세 항목이 있습니다([워크스페이스 열기](getting-started.md#open-workspace)).
 3. 새 AI 실행 창은 같은 에이전트로 가장 최근에 쓴 창의 모델·사고 강도·권한·보기 방식을 이어받습니다. 대화는 새로 시작합니다.
 
 단축키: {{ui:menu.newClaudePane}}은 {{kbd:⌘N}}, {{ui:menu.addTerminalPane}} 항목은 {{kbd:⌘T}}, {{ui:menu.showFiles}} 항목은 {{kbd:⇧⌘E}}입니다. 실행 창은 모든 워크스페이스를 합쳐 128개까지 열 수 있습니다(다른 컴퓨터의 창을 그대로 보여 주는 원격 창은 세지 않습니다).
@@ -110,7 +111,9 @@ section: layout
 | {{kbd:⌘K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{ui:menu.settings}} |
-| {{kbd:Enter}} | 요청 보내기 |
+| {{kbd:Enter}} | 요청 보내기. 실행 중인 창에서는 {{ui:composer.busySend.title}}에 따라 대기열에 넣거나 고른 에이전트의 새 worktree에서 바로 실행([실행 중에 이어서 요청하기](agent-pane.md#queue)) |
 | {{kbd:⇧Enter}} | 줄바꿈 |
 | {{kbd:⌘Enter}} | 실행 중인 창에서 새 worktree에서 바로 실행([마이티 오케스트레이션](delegation.md#worktree)이 켜진, git 저장소의 창). 그 밖의 실행 중인 창에서는 대기열에 추가 |
 | {{kbd:Esc}} | 시트 닫기, 슬래시 목록 닫기 |
+| {{kbd:⌘=}} / {{kbd:⌘-}} / {{kbd:⌘0}} | {{ui:menu.textBigger}} / {{ui:menu.textSmaller}} / {{ui:menu.textActualSize}} |
+| {{kbd:⌘?}} | {{ui:menu.help}} |

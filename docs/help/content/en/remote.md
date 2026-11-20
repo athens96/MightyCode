@@ -24,7 +24,7 @@ On the host computer:
 4. Press {{ui:settings.remote.startSharing}} beside the status line at the top. While sharing, the {{ui:settings.remote.sharedListTitle}} list takes its place.
 
 {{ui:settings.remote.methodsTitle}} has one row per method.
-- {{ui:settings.remote.viaPairing}}: the {{ui:settings.remote.pairAccept}} switch, the relay's state and the {{ui:settings.remote.pairCopyLink}} button. The link carries the same key as the phone's QR code, so it is copied as a secret and cleared from the clipboard after a minute. In a run that cannot use the relay, the switch is greyed out and says why. See [Connect by pairing](#pair).
+- {{ui:settings.remote.viaPairing}}: the {{ui:settings.remote.pairAccept}} switch and the relay's state; turning the switch on brings up the {{ui:settings.remote.pairCopyLink}} button. The link carries a pairing code for computers only (not the phone's QR code), so it is copied as a secret and cleared from the clipboard after a minute. In a run that cannot use the relay, the switch is greyed out and says why. See [Connect by pairing](#pair).
 - {{ui:settings.remote.viaTailscale}}: when this computer has no Tailscale address, a line says so with an {{ui:settings.remote.tailscaleInstall}} button that opens the {{ui:settings.nav.tools}} tab. Before sharing, there is a {{ui:settings.remote.portLabel}} field; leave it as it is (43137) unless you need another. While sharing, this computer's Tailscale addresses and the {{ui:settings.remote.keyLabel}} appear. Show the key, copy it with {{ui:settings.remote.copyButton}}, and give it to the other computer.
 
 Without Tailscale, sharing still starts when {{ui:settings.remote.pairAccept}} is on; then only paired computers connect, through the relay.
@@ -36,7 +36,7 @@ While this switch is off, connected computers also cannot use an agent pane that
 Tailscale sharing accepts connections on this computer's Tailscale addresses only. Sharing is always off when the app starts. {{ui:settings.remote.stopSharing}} stops the remote runs and revokes the key; sharing again gives a new key to pass on.
 
 > [!warning]
-> Any device with the key or the pairing link can run agents and commands in the shared workspaces. Depending on the permission mode, they may reach outside the folder with the host user's rights. Give the key and the link only to devices you trust.
+> A connected device can run agents and commands in the shared workspaces. Depending on the permission mode, it may reach outside the folder with the host user's rights. A device with the Tailscale connection key connects straight away, so give the key only to devices you trust. A pairing link works once, and connects only after you click {{ui:settings.mobileRemote.approval.allow}} on the host.
 
 ## Connect to another computer {#connect}
 On the computer that gives the work:

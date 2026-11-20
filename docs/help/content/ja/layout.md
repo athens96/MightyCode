@@ -11,6 +11,7 @@ section: layout
 サイドバーには上から順に次のものがあります。
 - {{ui:sidebar.searchPlaceholder}}: {{kbd:⌘K}}を押すと検索欄に直接移動します。
 - {{ui:phone.dashboard.title}}: すべてのワークスペースのペインの状態を1か所で確認します。
+- {{ui:review.sidebar}}: レビューする変更があるペインとリクエストをまとめて確認します([レビュー待ち](#review))。
 - {{ui:sidebar.workspacesHeader}}の一覧: ワークスペースをクリックすると、そのワークスペースに切り替わります。横の矢印をクリックすると、ペインの一覧を展開したり折りたたんだりします。
 - 下部: ヘルプボタン、画面テーマのボタン(ダーク/ライト)と設定ボタン。
 
@@ -53,7 +54,7 @@ section: layout
 ペインは、AIエージェント(Claude、Codex、Antigravity、pi、opencode、Hermes)、ターミナル、ファイルのいずれかです。
 
 1. サイドバーの{{ui:workspace.addPane}}ボタンをクリックします。
-2. 作成するペインを選びます: エージェント(Claude、Codex、Antigravity、pi、opencode、Hermes)のペインか{{ui:workspace.newTerminal}}。メニューの一番下のまとまりには、ワークスペースを追加する3つの方法、{{ui:workspace.add.existing}}、{{ui:workspace.add.newFolder}}、{{ui:workspace.add.fromGit}}があります([ワークスペースを開く](getting-started.md#open-workspace))。
+2. 作成するペインを選びます: エージェント(Claude、Codex、Antigravity、pi、opencode、Hermes)のペイン、{{ui:workspace.newTerminal}}、または{{ui:menu.showFiles}}({{kbd:⇧⌘E}})。メニューの一番下のまとまりには、ワークスペースを追加する3つの方法、{{ui:workspace.add.existing}}、{{ui:workspace.add.newFolder}}、{{ui:workspace.add.fromGit}}があります([ワークスペースを開く](getting-started.md#open-workspace))。
 3. 新しいAIペインは、同じエージェントで最後に使ったペインのモデル、思考レベル、権限、表示方法を引き継ぎます。会話は新しく始まります。
 
 ショートカット: {{ui:menu.newClaudePane}}は{{kbd:⌘N}}、{{ui:menu.addTerminalPane}}は{{kbd:⌘T}}、{{ui:menu.showFiles}}は{{kbd:⇧⌘E}}です。実行ペインは、すべてのワークスペースを合わせて128個まで開けます(ほかのコンピュータのペインをそのまま表示するリモートペインは数えません)。
@@ -110,7 +111,9 @@ section: layout
 | {{kbd:⌘K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{ui:menu.settings}} |
-| {{kbd:Enter}} | リクエストを送信 |
+| {{kbd:Enter}} | リクエストを送信。実行中のペインでは{{ui:composer.busySend.title}}に従ってキューに入れるか、選んだエージェントの新しいworktreeですぐ実行([実行中に続けてリクエストする](agent-pane.md#queue)) |
 | {{kbd:⇧Enter}} | 改行 |
 | {{kbd:⌘Enter}} | 実行中のペインで、新しいworktreeですぐ実行([Mightyオーケストレーション](delegation.md#worktree)がオンで、gitリポジトリにあるペイン)。それ以外の実行中のペインではキューに追加 |
 | {{kbd:Esc}} | シートを閉じる、スラッシュコマンドの一覧を閉じる |
+| {{kbd:⌘=}} / {{kbd:⌘-}} / {{kbd:⌘0}} | {{ui:menu.textBigger}} / {{ui:menu.textSmaller}} / {{ui:menu.textActualSize}} |
+| {{kbd:⌘?}} | {{ui:menu.help}} |

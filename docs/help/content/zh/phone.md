@@ -73,7 +73,7 @@ Windows 电脑也一样，只是需要一条 Windows 防火墙规则，以免连
 
 {{ui:phone.session.view.structure}}视图以看板的形式逐个显示桌面应用发送的流水线。没有风格的窗格中每个请求是一个看板；使用风格的窗格中每条流水线是一个看板，即阶段不回退的一串连续请求。用顶部的 ◀ ▶ 切换看板，点击中间的位置（如"请求 3 / 7"）可从列表中选择。查看较早的看板时如果出现新看板，会显示{{ui:graph.structure.board.newRequest}}或{{ui:graph.structure.board.newPipeline}}标记，点击即可前往最新的看板。下面是看板的状态和一排阶段标签：已完成的阶段为绿色，当前阶段为强调色，尚未开始的阶段为灰色，每个标签都带有卡片数。每个阶段各有一列，左右滑动或点击标签即可切换，打开时显示当前阶段的列。没有风格的窗格的列为{{ui:graph.structure.column.request}} → {{ui:graph.structure.column.execution}} → {{ui:graph.structure.column.result}}，子代理卡片排在{{ui:graph.structure.column.execution}}卡片之后。使用风格的窗格中，每列列出该阶段的请求及其子代理，已结束的请求折叠为一张卡片，点按即可展开。正在运行的卡片边框会闪烁。此视图需要与手机应用版本相同或更新的桌面应用（Mac 或 Windows）；桌面应用较旧时，视图会提示更新桌面应用。
 
-在 Mac 上通过 [Mighty 编排](delegation.md)创建的子窗格，会在会话列表中缩进一级显示在父窗格下方，右侧显示其状态（{{ui:delegation.child.state.reported}}、{{ui:delegation.child.state.merged}} 等）。Windows 电脑目前还不会把子窗格的父窗格和状态发送给手机，因此 Windows 电脑上的子窗格在列表中与普通窗格一样显示。合并或丢弃子窗格无法在手机上进行，只能在桌面应用（Mac 或 Windows）中进行。使用 Antigravity 的桌面应用（Mac 0.4.23 及以上、Windows 0.4.28 及以上）中的 Gemini 窗格显示为 Antigravity（{{ui:badge.beta}}），更旧版本应用中的窗格显示为 Gemini。
+在桌面应用（Mac 和 Windows）中通过 [Mighty 编排](delegation.md)创建的子窗格，会在会话列表中缩进一级显示在父窗格下方，右侧显示其状态（{{ui:delegation.child.state.reported}}、{{ui:delegation.child.state.merged}} 等）。不发送这些信息的旧版应用中的子窗格，在列表中与普通窗格一样显示。合并或丢弃子窗格无法在手机上进行，只能在桌面应用（Mac 或 Windows）中进行。使用 Antigravity 的桌面应用（Mac 0.4.23 及以上、Windows 0.4.28 及以上）中的 Gemini 窗格显示为 Antigravity（{{ui:badge.beta}}），更旧版本应用中的窗格显示为 Gemini。
 
 ## 批准与提问 {#approvals}
 智能体请求批准或提问时，{{ui:phone.tabs.alerts}}标签页上会显示数量。
@@ -98,17 +98,10 @@ Windows 电脑也一样，只是需要一条 Windows 防火墙规则，以免连
 应用崩溃时只会把出错位置发给开发者，不发送对话、命令或路径。可以在 {{ui:phone.settings.title}} 中关闭 {{ui:phone.settings.crashReports}}。
 
 ## 远程屏幕 {#screen}
-可以在手机上查看 Mac 的屏幕，获得允许后还可以操控。这是{{ui:badge.beta}}功能，目前仅在 Android 应用中提供。
+在手机上查看电脑的屏幕，获得允许后还可以操控。这是{{ui:badge.beta}}功能。
 
 > [!warning]
-> 从 0.4.58 起，屏幕查看与控制暂时停用（Mac 和 Windows 都是）。在默认中继迁移到新服务器期间，手机上不会出现查看屏幕的按钮，电脑的设置中也没有屏幕查看这一项。为每部手机设定的允许范围和已授予的权限都会保留，重新开启后恢复。
-
-重新开启后，在手机上轻点{{ui:phone.screenShare.open}}，然后选择{{ui:phone.screenShare.mode.view}}或{{ui:phone.screenShare.mode.control}}。
-
-首次允许操控时，请确认两个屏幕上显示的指纹一致。每次开始操控时，手机都会要求进行生物识别或 PIN 验证。
-
-> [!tip]
-> 在 Mac 上按{{kbd:⌃⌥⌘K}}可以立即停止所有远程屏幕会话。操控在 10 分钟内、查看在 30 分钟内没有任何输入时，会自动结束。
+> 从 0.4.58 起，屏幕查看与控制暂时停用（Mac 和 Windows 都是）。手机上不会出现查看屏幕的按钮，电脑的设置中也没有屏幕查看这一项。为每部手机设定的允许范围和已授予的权限都会保留，重新开启后恢复。
 
 ## 桌面应用更新 {#desktop-update}
 

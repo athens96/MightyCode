@@ -25,7 +25,7 @@ Windows 10(버전 2004) 이상 또는 Windows 11에서 동작합니다.
 업데이트도 Mac과 같습니다. 새 버전을 알아서 받아 두었다가 앱을 닫아 종료할 때 설치하고, 앱이 쉬고 있으면 1분 알림 뒤 다시 시작하며 설치합니다([업데이트](getting-started.md#update)). 직접 하려면 {{ui:menu.settings}} → {{ui:settings.nav.about}}에서 합니다. 설치 프로그램으로 설치한 앱은 같은 폴더에서 새 버전으로 바뀌고, 설치된 앱 목록에 보이는 버전도 따라 바뀝니다. 새 설치 프로그램을 받아 그 위에 설치해도 됩니다.
 
 ## 단축키 {#shortcuts}
-{{kbd:⌘}} 대신 {{kbd:Ctrl}}를 씁니다. 사이드바 접기와 원격 화면 멈추기만 키가 다릅니다. {{kbd:Ctrl+O}}는 기존 폴더를 엽니다. {{ui:workspace.add.newFolder}}와 {{ui:workspace.add.fromGit}}은 Mac과 같이 사이드바의 폴더 단추 메뉴, 비어 있는 사이드바와 처음 화면의 단추, 창 추가 메뉴에서 고르며 단축키는 없습니다([워크스페이스 열기](getting-started.md#open-workspace)).
+{{kbd:⌘}} 대신 {{kbd:Ctrl}}를 씁니다. 사이드바 접기와 도움말만 키가 다릅니다. {{kbd:Ctrl+O}}는 기존 폴더를 엽니다. {{ui:workspace.add.newFolder}}와 {{ui:workspace.add.fromGit}}은 Mac과 같이 사이드바의 폴더 단추 메뉴, 비어 있는 사이드바와 처음 화면의 단추, 창 추가 메뉴에서 고르며 단축키는 없습니다([워크스페이스 열기](getting-started.md#open-workspace)).
 
 | Mac | Windows | 동작 |
 |---|---|---|
@@ -38,9 +38,9 @@ Windows 10(버전 2004) 이상 또는 Windows 11에서 동작합니다.
 | {{kbd:⌘K}} | {{kbd:Ctrl+K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{kbd:Ctrl+B}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{kbd:Ctrl+,}} | {{ui:menu.settings}} |
+| {{kbd:⌘?}} | {{kbd:F1}} | {{ui:menu.help}} |
 | {{kbd:⌘=}} / {{kbd:⌘-}} / {{kbd:⌘0}} | {{kbd:Ctrl+=}} / {{kbd:Ctrl+-}} / {{kbd:Ctrl+0}} | {{ui:menu.textBigger}} / {{ui:menu.textSmaller}} / {{ui:menu.textActualSize}} |
 | {{kbd:⌘Enter}} | {{kbd:Ctrl+Enter}} | 실행 중인 창에서 새 worktree에서 바로 실행, 그럴 수 없으면 대기열에 추가 |
-| {{kbd:⌃⌥⌘K}} | {{kbd:Ctrl+Alt+Esc}} | 휴대폰의 원격 화면 세션을 모두 멈춤([화면 보기](phone.md#screen)) |
 
 Windows에는 메뉴 막대가 없습니다. 같은 기능은 사이드바와 {{ui:workspace.addPane}} 메뉴에 있습니다.
 
@@ -52,11 +52,11 @@ Windows에는 메뉴 막대가 없습니다. 같은 기능은 사이드바와 {{
 | Antigravity | PowerShell 설치 프로그램으로 `%LOCALAPPDATA%\agy\bin`에 설치하고, 기록은 `%USERPROFILE%\.gemini\antigravity-cli`에 남습니다([Antigravity](agent-pane.md#antigravity)). |
 | 터미널 창 | Windows PowerShell을 씁니다. |
 | 완료 알림 | {{ui:windows.notifications.toggleLabel}}으로 켭니다. |
-| 화면 보기 | 휴대폰 원격의 화면 보기는 됩니다(지금은 Mac처럼 [잠시 멈춰 있습니다](phone.md#screen)). 화질 옵션은 Mac보다 적습니다. 모든 원격 화면 세션은 {{kbd:Ctrl+Alt+Esc}}로 바로 멈춥니다. |
+| 화면 보기 | 휴대폰 원격의 화면 보기는 Mac처럼 [잠시 멈춰 있습니다](phone.md#screen). |
 | 언어 | 바꾼 언어는 앱을 다시 열면 적용됩니다. |
 | 파일 위치 | {{ui:menu.showInFinder}} 대신 {{ui:menu.showInExplorer}}가 있습니다. |
-| 마이티 오케스트레이션 | 기본으로 켜져 있고 {{ui:settings.nav.general}} › {{ui:settings.agents.sectionTitle}}의 스위치로 끕니다. 이 스위치는 레지스트리 값이기도 합니다([켜고 끄기](delegation.md#enable)). worktree는 `%USERPROFILE%\.mightycode\worktrees`에 생기고, 안에 정션이나 심볼릭 링크가 있으면 자동으로 정리하지 않습니다([창 닫기와 정리](delegation.md#close)). {{ui:queue.worktree}} 버튼을 오른쪽 클릭하면 다른 에이전트의 자식에서 요청을 실행합니다([새 worktree에서 실행하기](delegation.md#worktree)). |
-| 글자 크기와 글꼴 | {{ui:settings.nav.general}} › {{ui:settings.text.sectionTitle}}에서 Mac처럼 크기(85~150%)와 {{ui:settings.text.uiFontLabel}}, {{ui:settings.text.transcriptFontLabel}}, {{ui:settings.text.codeFontLabel}}을 고르고, 열린 창이 모두 바로 따라갑니다. {{kbd:Ctrl+=}} / {{kbd:Ctrl+-}} / {{kbd:Ctrl+0}}도 되지만, 터미널 창에 커서가 있으면 이 키는 그 창이 씁니다. 값은 레지스트리 `HKEY_CURRENT_USER\Software\MightyCode`에 저장됩니다. 확인 창 본문처럼 Windows 기본 컨트롤이 정하는 글자는 앱을 다시 열면 바뀌고, 펫 말풍선은 아직 따라가지 않습니다. |
+| 마이티 오케스트레이션 | 기본으로 켜져 있고 {{ui:settings.nav.general}} › {{ui:settings.agents.sectionTitle}}의 스위치로 끕니다. 이 스위치는 레지스트리 값이기도 합니다([켜고 끄기](delegation.md#enable)). worktree는 `%USERPROFILE%\.mightycode\worktrees`에 생기고, 안에 정션이나 심볼릭 링크가 있으면 자동으로 정리하지 않습니다([창 닫기와 정리](delegation.md#close)). 실행 중 입력창의 {{ui:composer.busySend.title}}에서 다른 에이전트를 고르면 그 에이전트의 자식에서 요청을 실행합니다([새 worktree에서 실행하기](delegation.md#worktree)). |
+| 글자 크기와 글꼴 | {{ui:settings.nav.general}} › {{ui:settings.text.sectionTitle}}에서 Mac처럼 크기(85~150%)와 {{ui:settings.text.uiFontLabel}}, {{ui:settings.text.transcriptFontLabel}}, {{ui:settings.text.codeFontLabel}}을 고르고, 열린 창이 모두 바로 따라갑니다. {{kbd:Ctrl+=}} / {{kbd:Ctrl+-}} / {{kbd:Ctrl+0}}도 되지만, 터미널 창에 커서가 있으면 이 키는 그 창이 씁니다. 값은 레지스트리 `HKEY_CURRENT_USER\Software\MightyCode`에 저장됩니다. 확인 창 본문처럼 Windows 기본 컨트롤이 정하는 글자는 앱을 다시 열면 바뀌고, Mighty Pet 말풍선은 아직 따라가지 않습니다. |
 | Tailscale로 직접 연결 | 휴대폰이 Windows PC에도 [직접 연결](phone.md#direct)합니다. Windows 방화벽 규칙은 {{ui:settings.remote.navTitle}} 탭의 {{ui:settings.remote.firewallTitle}} 항목에서 {{ui:remote.windows.firewall.add}} 단추로 더하고, Windows의 관리자 확인을 한 번 거칩니다. 앱이 관리자 권한을 묻는 때는 이 방화벽 규칙을 바꿀 때뿐이며, 이 항목은 {{ui:settings.remote.shareTitle}} 탭과 {{ui:settings.remote.phoneTab}} 탭 아래에 있습니다([Windows 방화벽](remote.md#firewall)). |
 | 원격 연결 | Mac과 같은 화면과 프로토콜이며 Mac↔Windows 어느 방향이든 연결됩니다([원격 연결](remote.md)). 연결 키는 Keychain 대신 이 Windows 사용자만 풀 수 있는 암호화 파일에 두고, Tailscale로 공유하려면 {{ui:remote.windows.firewall.add}} 단추로 방화벽 규칙 하나를 추가합니다(휴대폰 직접 연결과 같은 규칙, 관리자 확인 한 번). 원격 명령은 Windows 호스트에서 PowerShell로 실행합니다. 공유 중 {{ui:settings.remote.allowFullAccess}} 스위치가 꺼져 있으면 다른 컴퓨터는 Windows 호스트에서 Claude가 아닌 에이전트 창(Codex, Antigravity 등)을 쓸 수 없습니다. Windows는 이런 에이전트를 공유 폴더 안에 가두지 못하기 때문입니다(Mac 호스트는 샌드박스 안에서 도는 Codex만 받습니다). Mac↔Windows 실제 기기 연결은 아직 확인 중입니다. |
 

@@ -9,8 +9,8 @@ Mighty Code 是一款桌面应用，可以在一个窗口中并排使用 Claude 
 - macOS 14 或更高版本。Windows 需要 Windows 10（版本 2004）或更高版本，或 Windows 11。
 - 要使用的 AI CLI。应用会直接运行 CLI，因此需要安装并登录。可以在首次打开应用时出现的{{ui:setup.title}}界面中安装（[首次启动](#first-launch)）。不打算使用的 CLI 无需安装。
 
-- Claude Code: Mac `curl -fsSL https://claude.ai/install.sh | bash`, Windows `npm install -g @anthropic-ai/claude-code`
-- Codex CLI: Mac `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, Windows `npm install -g @openai/codex`
+- Claude Code: Mac `curl -fsSL https://claude.ai/install.sh | bash`, Windows `irm https://claude.ai/install.ps1 | iex`
+- Codex CLI: Mac `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, Windows `irm https://chatgpt.com/codex/install.ps1 | iex`
 - Antigravity CLI: Mac `curl -fsSL https://antigravity.google/cli/install.sh | bash`, Windows [Antigravity](agent-pane.md#antigravity)
 - pi: Mac 和 Windows `npm install -g @mariozechner/pi-coding-agent`（需要 Node.js，见 [pi](agent-pane.md#pi)）
 - opencode: Mac 和 Windows `npm install -g @opencode/cli`（OpenCode 2）（需要 Node.js，见 [opencode](agent-pane.md#opencode)）
@@ -39,7 +39,7 @@ Mighty Code 是一款桌面应用，可以在一个窗口中并排使用 Claude 
 - 没有正在运行或等待开始的智能体任务，没有等待回答的卡片，队列中也没有请求。
 - 输入框中没有未发送的文字或附件。
 - 没有正在执行命令或占着后台进程的终端，也没有进行中的 CLI 登录、更新或安装。
-- 没有手机上传、屏幕共享，也没有本机为其他电脑运行的远程任务。
+- 没有手机上传，也没有本机为其他电脑运行的远程任务。
 - 本机没有与其他电脑共享工作区（即使没有正在运行的远程任务，只要开启了共享就不算空闲）。
 - 没有打开的设置或对话框。
 - 5 分钟内没有键盘或鼠标输入，3 分钟内也没有结束的运行或发送的请求。
@@ -88,7 +88,7 @@ Git（Xcode Command Line Tools）会打开系统安装窗口，请在该窗口�
 
 {{ui:workspace.create.location}}会记住上次使用的位置。第一次使用时是当前工作区旁边的文件夹（即它的上级文件夹），没有的话则是主文件夹。新建或下载的文件夹会立即添加为工作区，并打开一个 Claude 窗格。这两个新项目没有快捷键。
 
-在侧边栏中右键点击工作区，可以看到{{ui:menu.rename}}、{{ui:menu.showInFinder}}和{{ui:workspace.menu.remove}}。从列表中移除后，磁盘上的项目文件仍会原样保留。要打开更多窗格，请使用{{ui:menu.newClaudePane}}（{{kbd:⌘N}}）。
+在侧边栏中右键点击工作区，可以看到{{ui:menu.rename}}、{{ui:menu.showInFinder}}、{{ui:menu.showFiles}}、{{ui:workMap.open}}、{{ui:conversationSearch.open}}和{{ui:workspace.menu.remove}}；如果是 git 仓库，还有{{ui:paneWorktree.menu.mode}}、{{ui:paneWorktree.menu.list}}、{{ui:paneWorktree.menu.copy}}和{{ui:paneWorktree.menu.setup}}（[窗格使用自己的 worktree](delegation.md#pane-worktree)）。从列表中移除后，磁盘上的项目文件仍会原样保留。要打开更多窗格，请使用{{ui:menu.newClaudePane}}（{{kbd:⌘N}}）。
 
 ## 更改语言 {#language}
 1. 打开{{ui:menu.settings}} → {{ui:settings.nav.general}}。

@@ -6,7 +6,7 @@ section: faq
 ## I can't send a request {#cannot-send}
 - The reason is shown under the composer. If a CLI isn't installed or needs a sign-in, check {{ui:menu.settings}} → {{ui:settings.nav.tools}}.
 - Terminal panes can't take attachments. Use an AI pane.
-- While a task runs, {{kbd:Enter}} queues instead of sending right away. See [Keep asking while it runs](agent-pane.md#queue).
+- While a task runs, {{kbd:Enter}} by default queues instead of sending right away. If you pick an agent under {{ui:composer.busySend.title}} below the composer, it runs right away in a new worktree with that agent. See [Keep asking while it runs](agent-pane.md#queue).
 
 ## The model I want isn't in the list {#model-missing}
 1. Open the model chip and click {{ui:composer.model.refresh}}.

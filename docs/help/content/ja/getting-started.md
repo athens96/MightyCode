@@ -9,8 +9,8 @@ Mighty Codeは、Claude Code、Codex CLI、GoogleのAntigravity CLI、pi、openc
 - macOS 14以降。WindowsではWindows 10(バージョン2004)以降またはWindows 11です。
 - 使用するAI CLI。アプリはCLIを直接実行するため、インストールとサインインが必要です。アプリを初めて開いたときに表示される{{ui:setup.title}}画面からインストールできます([初回起動](#first-launch))。使わないCLIはインストールしなくてもかまいません。
 
-- Claude Code: Mac `curl -fsSL https://claude.ai/install.sh | bash`, Windows `npm install -g @anthropic-ai/claude-code`
-- Codex CLI: Mac `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, Windows `npm install -g @openai/codex`
+- Claude Code: Mac `curl -fsSL https://claude.ai/install.sh | bash`, Windows `irm https://claude.ai/install.ps1 | iex`
+- Codex CLI: Mac `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, Windows `irm https://chatgpt.com/codex/install.ps1 | iex`
 - Antigravity CLI: Mac `curl -fsSL https://antigravity.google/cli/install.sh | bash`, Windows [Antigravity](agent-pane.md#antigravity)
 - pi: MacとWindows `npm install -g @mariozechner/pi-coding-agent`(Node.jsが必要です。[pi](agent-pane.md#pi)を参照)
 - opencode: MacとWindows `npm install -g @opencode/cli`(OpenCode 2)(Node.jsが必要です。[opencode](agent-pane.md#opencode)を参照)
@@ -39,7 +39,7 @@ Mighty Codeは、Claude Code、Codex CLI、GoogleのAntigravity CLI、pi、openc
 - 実行中または開始待ちのエージェントのタスク、回答を待つカード、キューのリクエストがない。
 - 入力欄に送信していないテキストや添付ファイルがない。
 - コマンドを実行中のターミナルやバックグラウンドのプロセスを抱えたターミナルがなく、CLIのサインイン・アップデート・インストールが進行中でない。
-- スマートフォンからのアップロード、画面共有、このコンピュータが別のコンピュータのために実行しているリモート実行がない。
+- スマートフォンからのアップロードと、このコンピュータが別のコンピュータのために実行しているリモート実行がない。
 - このコンピュータがワークスペースを別のコンピュータと共有していない(リモート実行が動いていなくても、共有がオンなら休んでいる状態ではありません)。
 - 設定やダイアログが開いていない。
 - 5分間キーボードやマウスの入力がなく、3分以内に終わった実行や送ったリクエストがない。
@@ -88,7 +88,7 @@ Git(Xcode Command Line Tools)はシステムのインストール画面が開く
 
 {{ui:workspace.create.location}}は最後に使った場所を覚えています。初回は現在のワークスペースの隣のフォルダ(その親フォルダ)、なければホームフォルダです。作成またはダウンロードしたフォルダはすぐにワークスペースとして追加され、Claudeのペインが開きます。新しい2つの項目にはショートカットがありません。
 
-サイドバーでワークスペースを右クリックすると、{{ui:menu.rename}}、{{ui:menu.showInFinder}}、{{ui:workspace.menu.remove}}の項目があります。一覧から削除しても、ディスク上のプロジェクトファイルはそのまま残ります。ペインをさらに開くには{{ui:menu.newClaudePane}}({{kbd:⌘N}})を使います。
+サイドバーでワークスペースを右クリックすると、{{ui:menu.rename}}、{{ui:menu.showInFinder}}、{{ui:menu.showFiles}}、{{ui:workMap.open}}、{{ui:conversationSearch.open}}、{{ui:workspace.menu.remove}}の項目があり、gitリポジトリなら{{ui:paneWorktree.menu.mode}}、{{ui:paneWorktree.menu.list}}、{{ui:paneWorktree.menu.copy}}、{{ui:paneWorktree.menu.setup}}もあります([ペインごとの worktree](delegation.md#pane-worktree))。一覧から削除しても、ディスク上のプロジェクトファイルはそのまま残ります。ペインをさらに開くには{{ui:menu.newClaudePane}}({{kbd:⌘N}})を使います。
 
 ## 言語を変更する {#language}
 1. {{ui:menu.settings}} → {{ui:settings.nav.general}}を開きます。

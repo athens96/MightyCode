@@ -33,9 +33,9 @@ Claude 在{{ui:permission.label.claude.plan}}（或 Claude 计划风格）中完
    - {{ui:plan.card.revise}}：写下需要修改的地方并点击{{ui:plan.card.reviseSend}}，Claude 会重新制定计划。
    - {{ui:plan.card.cancel}}：拒绝该计划并停止本次任务。
 
-在 Mighty 流程中，计划显示在请求下方的块里，四种答复位于输入区域（使用风格时位于风格面板中）。计划块会像结果卡片一样适应窗格大小；如果你手动调整过大小，会出现{{ui:graph.result.fitToWindow}}按钮。在默认视图和记录中，计划和答复会一起显示在输入框上方的一张卡片里。
+在 Mighty 流程中，计划显示在请求下方的块里，四种答复位于输入区域（使用风格时位于风格面板中）。计划块会像结果卡片一样适应窗格大小；如果你手动调整过大小，会出现{{ui:graph.result.fitToWindow}}按钮。在{{ui:graph.view.timeline}}中，计划和答复会一起显示在输入框上方的一张卡片里。
 
-桌面宠物也会显示完成的计划：收到的时间和完整的计划，计划较长时可以在气泡内滚动。可以直接在宠物上点击{{ui:plan.card.approveAuto}}、{{ui:plan.card.approveConfirm}}或{{ui:plan.card.cancel}}。点击{{ui:plan.card.revise}}会在一个小窗口中打开计划，供你填写修改内容；点击{{ui:companion.plan.review}}会在同一个窗口中放大阅读计划。这个窗口带有全部四种答复，答复计划后窗口会自动关闭。
+Mighty Pet 也会显示完成的计划：收到的时间和完整的计划，计划较长时可以在气泡内滚动。可以直接在 Mighty Pet 上点击{{ui:plan.card.approveAuto}}、{{ui:plan.card.approveConfirm}}或{{ui:plan.card.cancel}}。点击{{ui:plan.card.revise}}会在一个小窗口中打开计划，供你填写修改内容；点击{{ui:companion.plan.review}}会在同一个窗口中放大阅读计划。这个窗口带有全部四种答复，答复计划后窗口会自动关闭。
 
 已答复的计划会保留在记录中，可以再次查看。
 

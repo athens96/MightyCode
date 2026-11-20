@@ -9,8 +9,8 @@ Mighty Code는 Claude Code, Codex CLI, Google의 Antigravity CLI, pi, opencode, 
 - macOS 14 이상. Windows는 Windows 10(버전 2004) 이상 또는 Windows 11입니다.
 - 사용할 AI CLI. 앱은 CLI를 직접 실행하므로 설치하고 로그인해야 합니다. 앱을 처음 열 때 나오는 {{ui:setup.title}} 화면에서 설치할 수 있습니다([첫 실행](#first-launch)). 쓰지 않을 CLI는 설치하지 않아도 됩니다.
 
-- Claude Code: Mac `curl -fsSL https://claude.ai/install.sh | bash`, Windows `npm install -g @anthropic-ai/claude-code`
-- Codex CLI: Mac `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, Windows `npm install -g @openai/codex`
+- Claude Code: Mac `curl -fsSL https://claude.ai/install.sh | bash`, Windows `irm https://claude.ai/install.ps1 | iex`
+- Codex CLI: Mac `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, Windows `irm https://chatgpt.com/codex/install.ps1 | iex`
 - Antigravity CLI: Mac `curl -fsSL https://antigravity.google/cli/install.sh | bash`, Windows [Antigravity](agent-pane.md#antigravity)
 - pi: Mac과 Windows `npm install -g @mariozechner/pi-coding-agent` (Node.js가 필요합니다. [pi](agent-pane.md#pi) 참고)
 - opencode: Mac과 Windows `npm install -g @opencode/cli` (OpenCode 2) (Node.js가 필요합니다. [opencode](agent-pane.md#opencode) 참고)
@@ -39,7 +39,7 @@ Mighty Code는 Claude Code, Codex CLI, Google의 Antigravity CLI, pi, opencode, 
 - 실행 중이거나 시작을 기다리는 에이전트 작업, 답을 기다리는 카드, 대기열의 요청이 없습니다.
 - 입력창에 보내지 않은 글이나 첨부 파일이 없습니다.
 - 명령이 돌고 있거나 백그라운드 프로세스를 붙잡고 있는 터미널이 없고, CLI 로그인·업데이트·설치가 진행 중이지 않습니다.
-- 휴대폰 업로드, 화면 공유, 이 컴퓨터가 다른 컴퓨터를 위해 돌리는 원격 실행이 없습니다.
+- 휴대폰 업로드와, 이 컴퓨터가 다른 컴퓨터를 위해 돌리는 원격 실행이 없습니다.
 - 이 컴퓨터가 워크스페이스를 다른 컴퓨터와 공유하고 있지 않습니다(돌고 있는 원격 실행이 없어도 공유가 켜져 있으면 쉬는 상태가 아닙니다).
 - 설정이나 대화상자가 열려 있지 않습니다.
 - 5분 동안 키보드·마우스 입력이 없었고, 3분 안에 끝난 실행이나 보낸 요청이 없습니다.
@@ -88,7 +88,7 @@ Git(Xcode Command Line Tools)은 시스템 설치 창이 열리고 그 창에서
 
 {{ui:workspace.create.location}}는 마지막에 쓴 곳을 기억합니다. 처음에는 현재 워크스페이스 옆(그 상위 폴더)이고, 없으면 홈 폴더입니다. 만든 폴더나 내려받은 폴더는 바로 워크스페이스로 추가되고 Claude 실행 창이 열립니다. 새 항목 두 개에는 단축키가 없습니다.
 
-사이드바에서 워크스페이스를 오른쪽 클릭하면 {{ui:menu.rename}}, {{ui:menu.showInFinder}}, {{ui:workspace.menu.remove}} 항목이 있습니다. 목록에서 제거해도 디스크의 프로젝트 파일은 그대로 남습니다. 새 실행 창은 {{ui:menu.newClaudePane}}({{kbd:⌘N}})으로 엽니다.
+사이드바에서 워크스페이스를 오른쪽 클릭하면 {{ui:menu.rename}}, {{ui:menu.showInFinder}}, {{ui:menu.showFiles}}, {{ui:workMap.open}}, {{ui:conversationSearch.open}}, {{ui:workspace.menu.remove}} 항목이 있고, git 저장소면 {{ui:paneWorktree.menu.mode}}, {{ui:paneWorktree.menu.list}}, {{ui:paneWorktree.menu.copy}}, {{ui:paneWorktree.menu.setup}}도 있습니다([창마다 worktree](delegation.md#pane-worktree)). 목록에서 제거해도 디스크의 프로젝트 파일은 그대로 남습니다. 새 실행 창은 {{ui:menu.newClaudePane}}({{kbd:⌘N}})으로 엽니다.
 
 ## 언어 바꾸기 {#language}
 1. {{ui:menu.settings}} → {{ui:settings.nav.general}}을 엽니다.

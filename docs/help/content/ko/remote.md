@@ -24,7 +24,7 @@ Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 이으면, 한쪽에서 �
 4. 위쪽 상태 줄 옆의 {{ui:settings.remote.startSharing}} 단추를 누릅니다. 공유하는 동안에는 그 자리에 {{ui:settings.remote.sharedListTitle}} 목록이 보입니다.
 
 {{ui:settings.remote.methodsTitle}}에는 방식마다 한 줄이 있습니다.
-- {{ui:settings.remote.viaPairing}}: {{ui:settings.remote.pairAccept}} 스위치와 릴레이 상태, {{ui:settings.remote.pairCopyLink}} 단추가 있습니다. 링크에는 휴대폰 QR과 같은 키가 들어 있어 비밀로 복사되고, 1분 뒤 클립보드에서 지워집니다. 릴레이를 쓸 수 없는 실행에서는 스위치가 흐리게 보이고 그 이유가 나옵니다. [페어링으로 연결](#pair)을 보세요.
+- {{ui:settings.remote.viaPairing}}: {{ui:settings.remote.pairAccept}} 스위치와 릴레이 상태가 있고, 스위치를 켜면 {{ui:settings.remote.pairCopyLink}} 단추가 나옵니다. 링크에는 컴퓨터 전용 페어링 코드(휴대폰 QR과 다름)가 들어 있어 비밀로 복사되고, 1분 뒤 클립보드에서 지워집니다. 릴레이를 쓸 수 없는 실행에서는 스위치가 흐리게 보이고 그 이유가 나옵니다. [페어링으로 연결](#pair)을 보세요.
 - {{ui:settings.remote.viaTailscale}}: 이 컴퓨터에 Tailscale 주소가 없으면 그렇다는 안내와 {{ui:settings.remote.tailscaleInstall}} 단추가 보이고, 누르면 {{ui:settings.nav.tools}} 탭이 열립니다. 공유하기 전에는 {{ui:settings.remote.portLabel}} 칸이 있습니다. 보통 그대로 둡니다(43137). 공유하는 동안에는 이 컴퓨터의 Tailscale 주소와 {{ui:settings.remote.keyLabel}}가 보입니다. 키는 보기 단추로 확인하고, {{ui:settings.remote.copyButton}} 단추로 복사해 연결할 쪽에 알려 줍니다.
 
 Tailscale이 없어도 {{ui:settings.remote.pairAccept}}가 켜져 있으면 공유를 시작할 수 있습니다. 이때는 페어링한 컴퓨터만 릴레이로 연결합니다.
@@ -36,7 +36,7 @@ Tailscale이 없어도 {{ui:settings.remote.pairAccept}}가 켜져 있으면 공
 Tailscale 공유는 이 컴퓨터의 Tailscale 주소에서만 연결을 받습니다. 앱을 다시 열면 공유는 항상 꺼진 상태로 시작합니다. {{ui:settings.remote.stopSharing}} 단추를 누르면 원격 실행이 멈추고 연결 키는 폐기됩니다. 다시 공유하면 새 키를 알려 줘야 합니다.
 
 > [!warning]
-> 연결 키나 페어링 링크를 가진 기기는 공유한 워크스페이스에서 작업과 명령을 실행할 수 있습니다. 권한 모드에 따라 호스트 사용자의 권한으로 폴더 밖에도 접근할 수 있습니다. 키와 링크는 신뢰하는 기기에만 알려 주세요.
+> 연결된 기기는 공유한 워크스페이스에서 작업과 명령을 실행할 수 있습니다. 권한 모드에 따라 호스트 사용자의 권한으로 폴더 밖에도 접근할 수 있습니다. Tailscale 연결 키를 가진 기기는 바로 연결되므로 키는 신뢰하는 기기에만 알려 주세요. 페어링 링크는 한 번만 쓰이고, 호스트에서 {{ui:settings.mobileRemote.approval.allow}}을 눌러야 연결됩니다.
 
 ## 다른 컴퓨터 연결 {#connect}
 일을 시킬 컴퓨터에서:
