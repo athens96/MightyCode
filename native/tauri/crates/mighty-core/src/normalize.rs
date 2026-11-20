@@ -1668,8 +1668,32 @@ fn normalize_session(s: &RunSession, restoring: bool, remote_ids: &HashSet<Strin
     Ok(if restoring { restored_title(normalized) } else { normalized })
 }
 
+/// The text budget each pane's normalize gets (`textBudget`, 2 MiB of JSON). It was one budget shared by every pane of this PC; with
+/// the split state each pane is normalized, written and read on its own, so none depends on another's size.
+pub const PANE_TEXT_BUDGET: i64 = 2 * 1024 * 1024;
+
+/// What a save keeps between its normalizes: each pane's last normalized result, taken again while the pane is the same object
+/// (`Arc`) and the remote workspaces are the same. A running pane is normalized every time (its timing is observed then).
+#[derive(Debug, Default)]
+pub struct PaneCache {
+    panes: HashMap<String, (Arc<RunSession>, Arc<RunSession>)>,
+    remote_ids: HashSet<String>,
+}
+
+impl PaneCache {
+    fn take(&self, pane: &Arc<RunSession>) -> Option<Arc<RunSession>> {
+        let (input, output) = self.panes.get(pane.id())?;
+        (Arc::ptr_eq(input, pane) && pane.status() != "running").then(|| output.clone())
+    }
+}
+
 /// C# `StateStore.Normalize(value, restoring)`.
 pub fn normalize(value: &AppSnapshot, restoring: bool) -> R<AppSnapshot> {
+    normalize_with(value, restoring, None)
+}
+
+/// [`normalize`], each unchanged pane taken from `cache` (a save's), which then holds this normalize's panes.
+pub fn normalize_with(value: &AppSnapshot, restoring: bool, mut cache: Option<&mut PaneCache>) -> R<AppSnapshot> {
     if value.version != 1 {
         return Ok(AppSnapshot::default());
     }
@@ -1703,7 +1727,6 @@ pub fn normalize(value: &AppSnapshot, restoring: bool) -> R<AppSnapshot> {
         .collect();
     let ids: HashSet<String> = workspaces.iter().map(|w| w.id().to_string()).collect();
     let remote_ids: HashSet<String> = workspaces.iter().filter(|w| w.remote.is_some()).map(|w| w.id().to_string()).collect();
-    let mut budget = Budget { text: 2 * 1024 * 1024 };
     let all = value.sessions();
     let mut seen = HashSet::new();
     let mut listed: Vec<&Arc<RunSession>> = vec![];
@@ -1734,8 +1757,23 @@ pub fn normalize(value: &AppSnapshot, restoring: bool) -> R<AppSnapshot> {
     // budget of their own, so a connected host's transcripts never cut this PC's. Only a mirror pane of a mirror workspace is one.
     let mirror_ids: HashSet<&str> = workspaces.iter().filter(|w| w.remote.as_ref().is_some_and(|r| r.mirror)).map(|w| w.id()).collect();
     let mut normalized: HashMap<String, Arc<RunSession>> = HashMap::new();
+    if let Some(cache) = cache.as_deref_mut()
+        && cache.remote_ids != remote_ids
+    {
+        cache.panes.clear();
+        cache.remote_ids = remote_ids.clone();
+    }
+    let mut kept: HashMap<String, (Arc<RunSession>, Arc<RunSession>)> = HashMap::new();
     for s in listed.iter().filter(|s| s.mirror.is_none() && !mirror_ids.contains(s.workspace_id())).take(layout::MAXIMUM_SESSIONS) {
-        normalized.insert(s.id().to_string(), Arc::new(normalize_session(s, restoring, &remote_ids, &mut budget)?));
+        let pane = match cache.as_deref().filter(|_| !restoring).and_then(|c| c.take(s)) {
+            Some(pane) => pane,
+            None => Arc::new(normalize_session(s, restoring, &remote_ids, &mut Budget { text: PANE_TEXT_BUDGET })?),
+        };
+        kept.insert(s.id().to_string(), ((*s).clone(), pane.clone()));
+        normalized.insert(s.id().to_string(), pane);
+    }
+    if let Some(cache) = cache {
+        cache.panes = kept;
     }
     let mut mirror_budget = Budget { text: 16 * 1024 * 1024 };
     for s in listed

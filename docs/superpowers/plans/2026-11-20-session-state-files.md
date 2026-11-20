@@ -28,14 +28,14 @@
     <pane id>.json.bak
 ```
 
-- **Body fields:** the ones that grow, with the same wire names as today, so `RunSession`'s reader and writer are reused:
+- **Body fields:** the ones that grow with a pane's requests, with the same wire names as today, so `RunSession`'s reader and writer are reused:
   - `logs`
   - `graphRuns`
   - `shellRuns`
   - `planHistory`
   - `todoProgress`
   - `backgroundWork`
-  - `draft`
+- **The draft stays in the index:** it changes as the person types, and rewriting a body of several MB for each pause would undo the point.
 - **Index pane entry:** every other `RunSession` field, plus:
   - `bodyRevision`: grows by one on every body write.
   - `digest`: see Phase 2.

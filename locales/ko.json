@@ -1685,6 +1685,8 @@
   "store.error.timingSaveFailed": "실행 시간을 저장하지 못했습니다: {error}",
   "store.error.workspaceFolderNotFound": "작업 폴더를 찾을 수 없습니다.",
   "store.notice.restoredBackup": "저장 파일을 읽을 수 없어 직전 백업으로 되살렸습니다. 읽지 못한 파일은 {file}(으)로 남겨 두었습니다.",
+  "store.notice.paneRestoredBackup": "창 하나의 기록 파일을 읽을 수 없어 직전 백업으로 되살렸습니다. 읽지 못한 파일은 {file}(으)로 남겨 두었습니다.",
+  "store.notice.paneStartedEmpty": "창 하나의 기록 파일을 읽을 수 없고 백업도 없어 그 창은 기록 없이 열었습니다. 읽지 못한 파일은 {file}(으)로 남겨 두었습니다.",
   "store.notice.unreadableStartedEmpty": "저장 파일을 읽을 수 없고 백업도 없어 빈 상태로 시작했습니다. 읽지 못한 파일은 {file}(으)로 남겨 두었습니다. 작업 폴더를 다시 추가하세요.",
   "usage.keychain.allowAndCheck": "Keychain 접근 허용하고 조회",
   "usage.keychain.needed": "Keychain 허용 필요",

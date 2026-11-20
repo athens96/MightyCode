@@ -845,6 +845,15 @@ async fn seed(host: &Arc<Host>) -> Result<(String, Map<String, Value>), String> 
         std::fs::create_dir_all(&copy).map_err(|e| e.to_string())?;
         std::fs::copy(Path::new(&source).join(mighty_core::store::STATE_FILE), copy.join(mighty_core::store::STATE_FILE))
             .map_err(|e| e.to_string())?;
+        // The panes' bodies of a split state come too.
+        let bodies = Path::new(&source).join(mighty_core::store::SESSIONS_DIR);
+        if let Ok(files) = std::fs::read_dir(&bodies) {
+            let into = copy.join(mighty_core::store::SESSIONS_DIR);
+            std::fs::create_dir_all(&into).map_err(|e| e.to_string())?;
+            for file in files.flatten().filter(|f| f.file_name().to_string_lossy().ends_with(".json")) {
+                std::fs::copy(file.path(), into.join(file.file_name())).map_err(|e| e.to_string())?;
+            }
+        }
         let mut store = mighty_core::store::Store::new(copy, None, false);
         let snapshot = store.load(&host.locale).map_err(|e| e.to_string())?;
         let mut ids: HashMap<String, String> = HashMap::new();

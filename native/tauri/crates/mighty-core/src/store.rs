@@ -22,7 +22,10 @@ use serde_json::{Map, Value};
 
 use crate::json::{self, JsonOut, Wire};
 use crate::locale::Locale;
-use crate::model::{AppSnapshot, RemoteWorkspaceReference, Workspace};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use crate::model::{AppSnapshot, RemoteWorkspaceReference, RunSession, Workspace};
 use crate::normalize;
 use crate::wire::{self, new_id};
 
@@ -272,7 +275,11 @@ pub fn read_state(bytes: &[u8], locale: &Locale) -> Result<AppSnapshot, StateErr
     if bytes.len() as u64 > MAXIMUM_STATE_BYTES {
         return Err(StateError::TooLarge(bytes.len() as u64));
     }
-    let value = parse_document(&text_of(bytes))?;
+    read_state_value(parse_document(&text_of(bytes))?, locale)
+}
+
+/// [`read_state`] of a state already parsed (the split state's index with its panes' bodies laid on).
+fn read_state_value(value: Value, locale: &Locale) -> Result<AppSnapshot, StateError> {
     let Value::Object(root) = &value else { return Err(StateError::InvalidFormat("not an object".into())) };
     // C# TryGetInt32: an integer literal only (1.0 and 1e0 read as floats here, which as_i64 refuses); on anything but a number
     // it throws (InvalidOperationException).
@@ -300,6 +307,12 @@ pub fn encode_for_save(snapshot: &AppSnapshot) -> Result<(AppSnapshot, Vec<u8>),
     let normalized = normalize::normalize(&snapshot.without_mirrors(), false).map_err(state_error)?;
     let encoded = encode_fitting(&normalized)?;
     Ok((normalized, encoded))
+}
+
+/// The state as the one file C# writes (no files panes, every pane whole): what the split index and bodies together hold, which the
+/// parity check compares with C#'s save.
+pub fn encode_whole(snapshot: &AppSnapshot) -> Vec<u8> {
+    encode(snapshot)
 }
 
 /// The state's file bytes.
@@ -347,20 +360,159 @@ pub fn encode_fitting(normalized: &AppSnapshot) -> Result<Vec<u8>, StateError> {
 fn trimmed(snapshot: &AppSnapshot, graph_budget: i64, keep_logs: Option<usize>) -> Result<AppSnapshot, StateError> {
     let mut sessions = Vec::with_capacity(snapshot.sessions().len());
     for session in snapshot.sessions() {
-        let runs = match session.graph_runs.as_deref() {
-            Some(runs) if !runs.is_empty() => {
-                let mut budget = graph_budget;
-                Some(normalize::graph_runs(runs, false, &mut budget, None).map_err(state_error)?).filter(|r| !r.is_empty())
-            }
-            _ => session.graph_runs.clone(),
-        };
-        let logs = match (keep_logs, session.logs.as_deref()) {
-            (Some(keep), Some(logs)) if logs.len() > keep => Some(logs[logs.len() - keep..].to_vec()),
-            _ => session.logs.clone(),
-        };
-        sessions.push(std::sync::Arc::new(crate::model::RunSession { graph_runs: runs, logs, ..(**session).clone() }));
+        sessions.push(Arc::new(trimmed_pane(session, graph_budget, keep_logs)?));
     }
     Ok(AppSnapshot { sessions: Some(sessions), ..snapshot.clone() })
+}
+
+/// One pane with its diagrams cut to their newest requests within `graph_budget` and, given `keep_logs`, its log to that many entries.
+fn trimmed_pane(session: &RunSession, graph_budget: i64, keep_logs: Option<usize>) -> Result<RunSession, StateError> {
+    let runs = match session.graph_runs.as_deref() {
+        Some(runs) if !runs.is_empty() => {
+            let mut budget = graph_budget;
+            Some(normalize::graph_runs(runs, false, &mut budget, None).map_err(state_error)?).filter(|r| !r.is_empty())
+        }
+        _ => session.graph_runs.clone(),
+    };
+    let logs = match (keep_logs, session.logs.as_deref()) {
+        (Some(keep), Some(logs)) if logs.len() > keep => Some(logs[logs.len() - keep..].to_vec()),
+        _ => session.logs.clone(),
+    };
+    Ok(RunSession { graph_runs: runs, logs, ..session.clone() })
+}
+
+// ── the split state: an index and one body file per pane ────────────────────────────────────────────────────────────────
+
+/// The folder of the panes' body files, beside the index.
+pub const SESSIONS_DIR: &str = "sessions";
+
+/// The largest body file of one pane written or read (as the whole state's was).
+pub const MAXIMUM_BODY_BYTES: u64 = MAXIMUM_STATE_BYTES;
+
+/// A pane's body file name: its id when that is a safe file name everywhere (letters, digits, `-`, `_`), else a hash of it; the file
+/// names its pane inside (`sessionId`), which the read checks.
+pub fn body_file_name(id: &str) -> String {
+    if !id.is_empty() && id.len() <= 128 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') {
+        return format!("{id}.json");
+    }
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in id.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x00000100000001b3);
+    }
+    format!("h-{hash:016x}.json")
+}
+
+/// A pane's body file bytes (`{version, sessionId, bodyRevision, ...}`), at most [`MAXIMUM_BODY_BYTES`]: a pane that outgrows it keeps
+/// its newest requests (then its newest log entries) in the written copy, as the one state file did.
+pub fn encode_body(pane: &RunSession, revision: u64) -> Result<Vec<u8>, StateError> {
+    let encode = |pane: &RunSession| {
+        let mut out = JsonOut::new();
+        pane.write_body(&mut out, revision);
+        out.finish().into_bytes()
+    };
+    let encoded = encode(pane);
+    if encoded.len() as u64 <= MAXIMUM_BODY_BYTES {
+        return Ok(encoded);
+    }
+    let mut last = encoded.len();
+    for budget in FITTING_GRAPH_BUDGETS {
+        let smaller = encode(&trimmed_pane(pane, budget, None)?);
+        if smaller.len() as u64 <= MAXIMUM_BODY_BYTES {
+            return Ok(smaller);
+        }
+        last = smaller.len();
+    }
+    for keep in FITTING_LOG_ENTRIES {
+        let smaller = encode(&trimmed_pane(pane, 0, Some(keep))?);
+        if smaller.len() as u64 <= MAXIMUM_BODY_BYTES {
+            return Ok(smaller);
+        }
+        last = smaller.len();
+    }
+    Err(StateError::StateTooLarge(last))
+}
+
+/// The split state's index bytes: the stored state (no files panes) with each pane's body left out and its revision named.
+pub fn encode_index(stored: &AppSnapshot, revision: &dyn Fn(&str) -> u64) -> Vec<u8> {
+    let mut out = JsonOut::new();
+    stored.write_split_index(&mut out, revision);
+    out.finish().into_bytes()
+}
+
+/// One body file read: its fields (without `version`, `sessionId` and `bodyRevision`) and its revision. Err for a file that is not
+/// `id`'s body (damaged, too large, not version 1, another pane's).
+fn read_body_file(path: &Path, id: &str) -> Result<(Map<String, Value>, u64), StateError> {
+    let size = fs::metadata(path)?.len();
+    if size > MAXIMUM_BODY_BYTES {
+        return Err(StateError::TooLarge(size));
+    }
+    let bytes = fs::read(path)?;
+    if damaged(&bytes) {
+        return Err(StateError::InvalidFormat("damaged".into()));
+    }
+    let Value::Object(mut body) = parse_document(&text_of(&bytes))? else {
+        return Err(StateError::InvalidFormat("not an object".into()));
+    };
+    if body.remove("version").and_then(|v| v.as_i64()) != Some(1) {
+        return Err(StateError::InvalidFormat("version is not 1".into()));
+    }
+    if body.remove("sessionId").as_ref().and_then(Value::as_str) != Some(id) {
+        return Err(StateError::InvalidFormat("another pane's body".into()));
+    }
+    let revision = body.remove("bodyRevision").and_then(|v| v.as_u64()).unwrap_or(0);
+    body.retain(|name, _| crate::model::BODY_FIELDS.contains(&name.as_str()));
+    Ok((body, revision))
+}
+
+/// A pane's body laid on its index entry. In a split index the body's fields are the pane's. In an index an older app wrote (no
+/// marker: the app went back to a version before the split, then forward again) a field the entry holds itself is the newer one, and
+/// its requests and log entries go after the body's that the entry does not hold, so nothing written on either side is lost.
+pub fn lay_body(entry: &mut Map<String, Value>, body: Map<String, Value>, split: bool) {
+    for (name, value) in body {
+        let own = entry.get(&name).filter(|v| !v.is_null());
+        match own {
+            None => {
+                entry.insert(name, value);
+            }
+            Some(_) if split => {
+                entry.insert(name, value);
+            }
+            Some(Value::Array(newer)) if matches!(name.as_str(), "logs" | "graphRuns") => {
+                let held: HashSet<&str> = newer.iter().filter_map(|item| item.get("id").and_then(Value::as_str)).collect();
+                let Value::Array(older) = value else { continue };
+                let mut merged: Vec<Value> =
+                    older.into_iter().filter(|item| item.get("id").and_then(Value::as_str).is_none_or(|id| !held.contains(id))).collect();
+                merged.extend(newer.iter().cloned());
+                entry.insert(name, Value::Array(merged));
+            }
+            Some(_) => {}
+        }
+    }
+}
+
+/// Removes the body files (and their `.bak`) of panes the index no longer lists: a closed pane's data goes as it always did. A file
+/// set aside as unreadable stays for the person to look at.
+fn remove_unlisted_bodies(folder: &Path, listed: &HashSet<String>) {
+    let Ok(entries) = fs::read_dir(folder) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let body = name.strip_suffix(".bak").unwrap_or(&name);
+        if body.ends_with(".json") && !listed.contains(body) {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// The profile's private folder for the panes' bodies (owner only on Unix).
+fn private_folder(path: &Path) -> io::Result<()> {
+    fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 /// Where a load's state came from.
@@ -397,6 +549,16 @@ pub struct Store {
     pub source: Option<LoadSource>,
     /// How the save swaps the new file in (`ReplaceFileW` on Windows; see [`portable_replace`]).
     pub replace: fn(&Path, &Path, &Path) -> io::Result<()>,
+    /// The state on disk is split (its index has the marker); until it is, the first save keeps a copy of the one file first.
+    split: bool,
+    /// Each pane's body revision as last read or written.
+    revisions: HashMap<String, u64>,
+    /// Each pane's normalized state as its body was last written: a save writes a pane's file only when its pane is another object.
+    written: HashMap<String, Arc<RunSession>>,
+    /// The index bytes last written (an unchanged index is not written again).
+    written_index: Option<Vec<u8>>,
+    /// The panes a save normalized last, taken again while they are the same objects.
+    cache: normalize::PaneCache,
 }
 
 impl Store {
@@ -412,6 +574,83 @@ impl Store {
             aside: None,
             source: None,
             replace: portable_replace,
+            split: false,
+            revisions: HashMap::new(),
+            written: HashMap::new(),
+            written_index: None,
+            cache: normalize::PaneCache::default(),
+        }
+    }
+
+    /// The folder of the panes' body files.
+    pub fn sessions_dir(&self) -> PathBuf {
+        self.directory.join(SESSIONS_DIR)
+    }
+
+    /// Whether the state on disk is the split one (its index named so when it loaded, or written so since).
+    pub fn is_split(&self) -> bool {
+        self.split
+    }
+
+    /// The state file's bytes as a load reads them: the index (or the one file of an older state) checked as [`read_state`] checks
+    /// it, with each pane's body file laid on its entry first. A body file that does not read is moved aside (with writing on) and
+    /// its `.bak` taken, else the pane opens without its body; a note in `locale` says which file was left.
+    fn read_split(&mut self, bytes: &[u8], locale: &Locale) -> Result<AppSnapshot, StateError> {
+        if bytes.len() as u64 > MAXIMUM_STATE_BYTES {
+            return Err(StateError::TooLarge(bytes.len() as u64));
+        }
+        let mut value = parse_document(&text_of(bytes))?;
+        self.split = false;
+        self.revisions.clear();
+        self.written.clear();
+        self.written_index = None;
+        let mut notes = vec![];
+        if let Value::Object(root) = &mut value {
+            self.split = root.remove(crate::model::SPLIT_MARKER).and_then(|v| v.as_i64()) == Some(1);
+            if let Some(Value::Array(panes)) = root.get_mut("sessions") {
+                for pane in panes.iter_mut() {
+                    let Some(entry) = pane.as_object_mut() else { continue };
+                    let revision = entry.remove("bodyRevision").and_then(|v| v.as_u64());
+                    let Some(id) = entry.get("id").and_then(Value::as_str).map(str::to_string) else { continue };
+                    if let Some(revision) = revision {
+                        self.revisions.insert(id.clone(), revision);
+                    }
+                    if let Some((body, revision)) = self.read_body(&id, locale, &mut notes) {
+                        let known = self.revisions.get(&id).copied().unwrap_or(0);
+                        self.revisions.insert(id.clone(), known.max(revision));
+                        lay_body(entry, body, self.split);
+                    }
+                }
+            }
+        }
+        if !notes.is_empty() {
+            let mut all = self.load_notice.take().into_iter().collect::<Vec<_>>();
+            all.extend(notes);
+            self.load_notice = Some(all.join("\n"));
+        }
+        read_state_value(value, locale)
+    }
+
+    /// `id`'s body file, its `.bak` when the file does not read (the file moved aside first, with writing on); none when it has none.
+    fn read_body(&self, id: &str, locale: &Locale, notes: &mut Vec<String>) -> Option<(Map<String, Value>, u64)> {
+        let folder = self.sessions_dir();
+        let name = body_file_name(id);
+        let path = folder.join(&name);
+        if !path.exists() {
+            return None;
+        }
+        match read_body_file(&path, id) {
+            Ok(body) => Some(body),
+            Err(_) => {
+                let aside = format!("{name}.unreadable-{}-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"), &new_id()[..8]);
+                if self.writes {
+                    let _ = fs::rename(&path, folder.join(&aside));
+                }
+                let restored = read_body_file(&folder.join(format!("{name}.bak")), id).ok();
+                let key = if restored.is_some() { "store.notice.paneRestoredBackup" } else { "store.notice.paneStartedEmpty" };
+                notes.push(locale.get_with(key, &[("file", &format!("{SESSIONS_DIR}/{aside}"))]));
+                restored
+            }
         }
     }
 
@@ -470,7 +709,7 @@ impl Store {
                 }
                 let backup = self.backup_path();
                 let restored = if backup.exists() {
-                    match fs::read(&backup).map_err(StateError::Io).and_then(|b| read_state(&b, locale)) {
+                    match fs::read(&backup).map_err(StateError::Io).and_then(|b| self.read_split(&b, locale)) {
                         Ok(snapshot) => Some(snapshot),
                         Err(StateError::Io(e)) => return Err(StateError::Io(e)),
                         Err(StateError::Json(_) | StateError::InvalidFormat(_) | StateError::TooLarge(_)) => None,
@@ -485,7 +724,7 @@ impl Store {
                 self.load_notice = Some(locale.get_with(key, &[("file", &aside)]));
                 self.aside = Some(aside);
             } else {
-                match read_state(&bytes, locale) {
+                match self.read_split(&bytes, locale) {
                     Ok(snapshot) => {
                         self.snapshot = snapshot;
                         if !matches!(self.source, Some(LoadSource::Legacy(_))) {
@@ -573,26 +812,64 @@ impl Store {
         Some(item)
     }
 
-    /// C# `SaveAsync`: normalized, checked, written. The normalized state is kept as the store's.
+    /// C# `SaveAsync`: normalized, checked, written, as the split state: the body file of each pane that changed since its last
+    /// write, then the index, then the body files of panes no longer listed removed. A crash between leaves bodies newer than the
+    /// index, which loads. The normalized state is kept as the store's.
     pub fn save(&mut self, snapshot: &AppSnapshot) -> Result<(), StateError> {
         if !self.loaded {
             return Err(StateError::NotLoaded);
         }
-        let (normalized, encoded) = {
-            // The remote mirror's workspaces and panes are another computer's, held while connected: never written.
-            let normalized = normalize::normalize(&snapshot.without_mirrors(), false).map_err(state_error)?;
-            for workspace in normalized.workspaces() {
-                if !self.approves(workspace) {
-                    return Err(StateError::PathNotApproved);
-                }
+        // The remote mirror's workspaces and panes are another computer's, held while connected: never written.
+        let normalized = normalize::normalize_with(&snapshot.without_mirrors(), false, Some(&mut self.cache)).map_err(state_error)?;
+        for workspace in normalized.workspaces() {
+            if !self.approves(workspace) {
+                return Err(StateError::PathNotApproved);
             }
-            let encoded = encode_fitting(&normalized)?;
-            (normalized, encoded)
-        };
+        }
+        let stored = normalize::stored(&normalized);
+        let mut bodies: Vec<(Arc<RunSession>, u64, Vec<u8>)> = vec![];
+        for pane in stored.sessions() {
+            if self.written.get(pane.id()).is_some_and(|last| Arc::ptr_eq(last, pane)) {
+                continue;
+            }
+            let revision = self.revisions.get(pane.id()).copied().unwrap_or(0) + 1;
+            bodies.push((pane.clone(), revision, encode_body(pane, revision)?));
+        }
+        let fresh: HashMap<&str, u64> = bodies.iter().map(|(pane, revision, _)| (pane.id(), *revision)).collect();
+        let index = encode_index(&stored, &|id| fresh.get(id).or_else(|| self.revisions.get(id)).copied().unwrap_or(0));
+        if index.len() as u64 > MAXIMUM_STATE_BYTES {
+            return Err(StateError::StateTooLarge(index.len()));
+        }
         if !self.writes {
             return Err(StateError::WritesOff);
         }
-        atomic_write(&self.state_path(), &encoded, Some(&self.backup_path()), self.replace)?;
+        let state = self.state_path();
+        if !self.split && state.exists() {
+            // The one file of a state before the split, kept once as it was.
+            let kept = self.directory.join(format!("{STATE_FILE}.before-session-files-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+            if !kept.exists() {
+                fs::copy(&state, &kept)?;
+            }
+        }
+        let folder = self.sessions_dir();
+        if !bodies.is_empty() || !folder.exists() {
+            private_folder(&folder)?;
+        }
+        for (pane, revision, bytes) in bodies {
+            let name = body_file_name(pane.id());
+            atomic_write(&folder.join(&name), &bytes, Some(&folder.join(format!("{name}.bak"))), self.replace)?;
+            self.revisions.insert(pane.id().to_string(), revision);
+            self.written.insert(pane.id().to_string(), pane);
+        }
+        if self.written_index.as_deref() != Some(index.as_slice()) || !state.exists() {
+            atomic_write(&state, &index, Some(&self.backup_path()), self.replace)?;
+            self.written_index = Some(index);
+        }
+        self.split = true;
+        let listed: HashSet<String> = stored.sessions().iter().map(|s| body_file_name(s.id())).collect();
+        self.written.retain(|id, _| listed.contains(&body_file_name(id)));
+        self.revisions.retain(|id, _| listed.contains(&body_file_name(id)));
+        remove_unlisted_bodies(&folder, &listed);
         self.snapshot = normalized;
         Ok(())
     }
@@ -622,7 +899,12 @@ pub fn atomic_write(path: &Path, data: &[u8], backup: Option<&Path>, replace: fn
     let temporary = PathBuf::from(format!("{}.{}.tmp", path.display(), new_id()));
     let result = (|| {
         {
-            let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            // The profile's files hold conversations and keys: the owner's alone on Unix.
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            let mut file = options.open(&temporary)?;
             file.write_all(data)?;
             file.sync_all()?;
         }

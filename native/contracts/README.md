@@ -7,7 +7,20 @@ requirements.
 
 ## State
 
-`workspace-state.json` remains version 1. Optional legacy `provider` and
+`workspace-state.json` remains version 1. Since the Rust app's session state
+files (docs/superpowers/plans/2026-11-20-session-state-files.md) it is an index
+with `"sessionFiles": 1`: each pane's entry leaves out its body (`logs`,
+`graphRuns`, `planHistory`, `todoProgress`, `backgroundWork`, `shellRuns`) and
+names the revision of `sessions/<pane id>.json` (`bodyRevision`), which holds
+`{version: 1, sessionId, bodyRevision}` and those fields (owner-only files on
+Unix). A save writes only the bodies of panes that changed, then the index, then
+removes the bodies of closed panes. A load lays each body on its entry; an index
+without the marker (an older app wrote it) keeps its own fields and its requests
+and log entries go after the body's it lacks. Each pane is normalized with a
+text budget of its own (C# shared one across the panes). An older app reads the
+index and shows its panes without history.
+
+Optional legacy `provider` and
 `settings` fields default to Claude and automatic effort/manual permission.
 Only `running` states become `stopped` during restore.
 

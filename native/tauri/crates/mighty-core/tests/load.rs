@@ -142,11 +142,16 @@ fn a_save_keeps_the_file_it_replaces_as_the_backup_and_leaves_no_temporary_file(
     loaded.theme = Some("light".into());
     store.save(&loaded).unwrap();
     assert_eq!(fs::read_to_string(dir.join("workspace-state.json.bak")).unwrap(), first);
-    let saved = fs::read(dir.join(store::STATE_FILE)).unwrap();
-    assert_eq!(saved, store::encode_for_save(&loaded).unwrap().1);
-    assert!(String::from_utf8_lossy(&saved).contains(r#""theme":"light""#));
-    let names: Vec<String> = listing(&dir).into_iter().map(|(n, _)| n).collect();
-    assert_eq!(names, vec!["workspace-state.json", "workspace-state.json.bak"]);
+    let saved = String::from_utf8(fs::read(dir.join(store::STATE_FILE)).unwrap()).unwrap();
+    assert!(saved.contains(r#""theme":"light""#));
+    assert!(saved.contains(r#""sessionFiles":1"#), "the state is written split");
+    // The one file of the state before the split is kept once, and the panes' folder is made beside the index.
+    let mut names: Vec<String> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names.len(), 4, "{names:?}");
+    assert_eq!(&names[..3], ["sessions", "workspace-state.json", "workspace-state.json.bak"]);
+    assert!(names[3].starts_with("workspace-state.json.before-session-files-"), "{names:?}");
+    assert_eq!(fs::read_to_string(dir.join(&names[3])).unwrap(), first);
     // A workspace the load did not have, and no one approved, is refused.
     let mut foreign = store.snapshot.clone();
     foreign.workspaces_mut()[0].path = Some(if cfg!(windows) { "C:\\elsewhere".into() } else { "/elsewhere".into() });

@@ -464,9 +464,14 @@ usage, app update, setup, resource banner, the CLI's model catalogue).
   A file holding a NUL byte (what a power cut leaves) is moved aside to `workspace-state.json.unreadable-<time>-<id>` and its
   `.bak` loaded (or an empty state), with C#'s notice in the OS's language; any other unreadable file stops loading and every
   save, so it is never overwritten.
-- Saving is C#'s `SaveAsync` and `AtomicWriteAsync`: normalized, every workspace one the load or the user approved, files panes
-  left out, at most 8 MiB, written to a temporary file flushed to the disk and swapped in with `ReplaceFileW` (the old file kept
-  as `.bak`), a refused swap tried 40 times 50 ms apart. A change the user makes is saved at once; a stream of changes waits
+- Saving is C#'s `SaveAsync` and `AtomicWriteAsync`, as a split state (docs/superpowers/plans/2026-11-20-session-state-files.md):
+  `workspace-state.json` is an index (`"sessionFiles": 1`) and each pane's body (`logs`, `graphRuns`, `planHistory`,
+  `todoProgress`, `backgroundWork`, `shellRuns`) is `sessions/<pane id>.json`, each at most 8 MiB and owner-only on Unix. A
+  save normalizes only the panes that changed (each with a text budget of its own), writes their bodies, then the index, then
+  removes closed panes' bodies; the first save of an older one-file state keeps it as `workspace-state.json.before-session-files-
+  <time>`. A damaged body is set aside with its pane alone restored from its `.bak` or opened empty. Every file is written to a
+  temporary file flushed to the disk and swapped in with `ReplaceFileW` (the old file kept as `.bak`), a refused swap tried 40
+  times 50 ms apart. A change the user makes is saved at once; a stream of changes waits
   0.22 s and at least 1.5 s after the last save began (`SaveSchedule`); quitting saves once more.
 
 **Writing is off unless `--allow-state-write` is given.** Without it nothing writes the state file, its backup or anything else in

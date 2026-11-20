@@ -219,16 +219,42 @@ impl AppSnapshot {
     /// Written with or without its `sessions` (the bridge's state text leaves them out), and with or without the graph agents'
     /// output files (`WebDelta.PageSnapshot`: the page never gets them).
     pub fn write_with(&self, out: &mut JsonOut, sessions: bool, output_files: bool) {
+        self.write_sessions(out, if sessions { Sessions::Whole { output_files } } else { Sessions::None });
+    }
+
+    /// The split state's index (`workspace-state.json` with `"sessionFiles": 1`): every pane without its body, which its own file
+    /// holds, with the revision of the body written for it (`body_revision`).
+    pub fn write_split_index(&self, out: &mut JsonOut, body_revision: &dyn Fn(&str) -> u64) {
+        self.write_sessions(out, Sessions::Index(body_revision));
+    }
+
+    fn write_sessions(&self, out: &mut JsonOut, sessions: Sessions<'_>) {
         out.begin_object();
         out.prop_int("version", self.version as i64);
+        if matches!(sessions, Sessions::Index(_)) {
+            out.prop_int(SPLIT_MARKER, 1);
+        }
         out.prop_list("workspaces", self.workspaces.as_ref());
-        if sessions && let Some(list) = &self.sessions {
-            out.name("sessions");
-            out.begin_array();
-            for session in list {
-                session.write_with(out, true, output_files);
+        if let Some(list) = &self.sessions {
+            match sessions {
+                Sessions::None => {}
+                Sessions::Whole { output_files } => {
+                    out.name("sessions");
+                    out.begin_array();
+                    for session in list {
+                        session.write_with(out, true, output_files);
+                    }
+                    out.end_array();
+                }
+                Sessions::Index(revision) => {
+                    out.name("sessions");
+                    out.begin_array();
+                    for session in list {
+                        session.write_index(out, revision(session.id()));
+                    }
+                    out.end_array();
+                }
             }
-            out.end_array();
         }
         out.prop_str("activeWorkspaceId", self.active_workspace_id.as_deref());
         out.prop_str("activeSessionId", self.active_session_id.as_deref());
@@ -1123,11 +1149,69 @@ impl Wire for RunSession {
     }
 }
 
+/// The split state's index names itself so (`"sessionFiles": 1`): its panes' bodies are in `sessions/<id>.json`.
+pub const SPLIT_MARKER: &str = "sessionFiles";
+
+/// How a state write holds its panes.
+enum Sessions<'a> {
+    None,
+    Whole { output_files: bool },
+    Index(&'a dyn Fn(&str) -> u64),
+}
+
+/// Which of a pane's fields one write holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaneFields {
+    /// Every field (the state as one file, the page).
+    All,
+    /// Every field but `logs` and `graphRuns` (the delta's fields).
+    WithoutLists,
+    /// The pane's entry in the split state's index: every field but the body's ([`BODY_FIELDS`]).
+    Index,
+    /// The pane's body file: only [`BODY_FIELDS`].
+    Body,
+}
+
+impl PaneFields {
+    fn body(self) -> bool {
+        self != PaneFields::Index
+    }
+    fn lists(self) -> bool {
+        matches!(self, PaneFields::All | PaneFields::Body)
+    }
+}
+
+/// The fields a pane's body file holds in the split state (`sessions/<id>.json`): the ones that grow with its requests. Everything
+/// else, the draft included, stays in the index.
+pub const BODY_FIELDS: [&str; 6] = ["logs", "graphRuns", "planHistory", "todoProgress", "backgroundWork", "shellRuns"];
+
 impl RunSession {
     /// Written with or without its two lists (the delta's fields leave `logs` and `graphRuns` out), and with or without the graph
     /// agents' output files (`WebDelta.PageRuns`).
     pub fn write_with(&self, out: &mut JsonOut, lists: bool, output_files: bool) {
+        self.write_fields(out, if lists { PaneFields::All } else { PaneFields::WithoutLists }, output_files, None);
+    }
+
+    /// The pane's entry in the split state's index: its fields but the body's, and the revision of the body file written for it.
+    pub fn write_index(&self, out: &mut JsonOut, body_revision: u64) {
+        self.write_fields(out, PaneFields::Index, true, Some(body_revision));
+    }
+
+    /// The pane's body file: `{version, sessionId, bodyRevision}` and its [`BODY_FIELDS`].
+    pub fn write_body(&self, out: &mut JsonOut, body_revision: u64) {
+        self.write_fields(out, PaneFields::Body, true, Some(body_revision));
+    }
+
+    fn write_fields(&self, out: &mut JsonOut, fields: PaneFields, output_files: bool, body_revision: Option<u64>) {
         out.begin_object();
+        if fields == PaneFields::Body {
+            out.prop_int("version", 1);
+            out.prop_str("sessionId", self.id.as_deref());
+            out.prop_int("bodyRevision", body_revision.unwrap_or(0) as i64);
+            self.write_body_fields(out, fields, output_files);
+            out.end_object();
+            return;
+        }
         out.prop_str("id", self.id.as_deref());
         out.prop_str("workspaceId", self.workspace_id.as_deref());
         out.prop_str("title", self.title.as_deref());
@@ -1136,7 +1220,7 @@ impl RunSession {
         out.prop_str("model", self.model.as_deref());
         out.prop_str("provider", self.provider.as_deref());
         out.prop("settings", self.settings.as_ref());
-        if lists {
+        if fields == PaneFields::All {
             out.prop_list("logs", self.logs.as_ref());
         }
         out.prop_str("resumeId", self.resume_id.as_deref());
@@ -1152,7 +1236,9 @@ impl RunSession {
         out.prop_str("mightyStyle", self.mighty_style.as_deref());
         out.prop_str("mightyStyleHash", self.mighty_style_hash.as_deref());
         out.prop_str("mightyStyleSince", self.mighty_style_since.as_deref());
-        if lists && let Some(runs) = &self.graph_runs {
+        if fields == PaneFields::All
+            && let Some(runs) = &self.graph_runs
+        {
             out.name("graphRuns");
             out.begin_array();
             for run in runs {
@@ -1186,15 +1272,41 @@ impl RunSession {
         out.prop_str("workspaceProfileKey", self.workspace_profile_key.as_deref());
         out.prop_str("ownerSessionId", self.owner_session_id.as_deref());
         out.prop_str("titleMode", self.title_mode.as_deref());
-        out.prop_list("planHistory", self.plan_history.as_ref());
-        out.prop("todoProgress", self.todo_progress.as_ref());
-        out.prop("backgroundWork", self.background_work.as_ref());
+        if fields.body() {
+            out.prop_list("planHistory", self.plan_history.as_ref());
+            out.prop("todoProgress", self.todo_progress.as_ref());
+            out.prop("backgroundWork", self.background_work.as_ref());
+        }
         out.prop_str("parentSessionId", self.parent_session_id.as_deref());
         out.prop_str("workingFolder", self.working_folder.as_deref());
         out.prop("paneWorktree", self.pane_worktree.as_ref());
         out.prop_str("askTarget", self.ask_target.as_deref());
-        out.prop_list("shellRuns", self.shell_block_runs.as_ref());
+        if fields.body() {
+            out.prop_list("shellRuns", self.shell_block_runs.as_ref());
+        }
+        if let (PaneFields::Index, Some(revision)) = (fields, body_revision) {
+            out.prop_int("bodyRevision", revision as i64);
+        }
         out.end_object();
+    }
+
+    /// The body's fields in the order the whole pane writes them.
+    fn write_body_fields(&self, out: &mut JsonOut, fields: PaneFields, output_files: bool) {
+        if fields.lists() {
+            out.prop_list("logs", self.logs.as_ref());
+            if let Some(runs) = &self.graph_runs {
+                out.name("graphRuns");
+                out.begin_array();
+                for run in runs {
+                    run.write_with(out, output_files);
+                }
+                out.end_array();
+            }
+        }
+        out.prop_list("planHistory", self.plan_history.as_ref());
+        out.prop("todoProgress", self.todo_progress.as_ref());
+        out.prop("backgroundWork", self.background_work.as_ref());
+        out.prop_list("shellRuns", self.shell_block_runs.as_ref());
     }
 
     pub fn id(&self) -> &str {
