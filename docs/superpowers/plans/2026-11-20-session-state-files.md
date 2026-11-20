@@ -161,3 +161,25 @@ Out of scope for now: unloading idle panes again.
 - Web: `npx tsc --noEmit -p .` and `npx vitest run`
 - `node scripts/check-locales.js` (new notice keys, copied to mobile and macOS)
 - Mac build staged with `scripts/install-macos.sh` through launchctl. Never a second app instance.
+
+## Status (2026-11-21)
+
+- **Phase 1** (`8b0e5692`, `72746237`): done as planned.
+  - The draft stays in the index.
+  - Because every window change normalizes the whole state, a pane whose object changed is compared by its body before it is written.
+- **Phase 2** (`a30817bf`): done.
+  - The digest holds `logCount`, `tail` (8 entries, 1000 characters each, plus the latest request when it is older) and `runIds`.
+  - A pane whose body is on disk holds the tail as its `logs`, so the list readers (phone summary and revisions, mirror revision,
+    dashboard card, pet status) work unchanged.
+  - `FileOriginalStore::kept_runs` and the phone's count read `kept_run_ids()` and `log_count()`.
+- **Phase 3**: done.
+  - Lazy load of panes outside the active workspace.
+  - `Store::load_pane_body`.
+  - `RunService::ensure_bodies` before `launch` and `update_pane`.
+  - `View::sync` reads the active workspace's bodies.
+  - The phone router (`session`) and the mirror's `detail` read the pane's body first.
+  - Guards:
+    - the load's JSON copy keeps the mark;
+    - the store's own `on_disk` set protects a pane even from a copy that lost the mark;
+    - an addition is laid over the file by id.
+  - The work map, review, deep links and history act on the active workspace's panes or on the newest time only.

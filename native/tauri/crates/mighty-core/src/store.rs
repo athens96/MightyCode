@@ -433,6 +433,27 @@ pub fn encode_body(pane: &RunSession, revision: u64) -> Result<Vec<u8>, StateErr
     Err(StateError::StateTooLarge(last))
 }
 
+/// `copy` (the state written and read back) with the panes whose body `loaded` left on disk marked so again: the mark and the summary
+/// are never written, and a pane holding only its summary's entries must never pass for one read whole.
+fn with_bodies_on_disk(mut copy: AppSnapshot, loaded: &AppSnapshot) -> AppSnapshot {
+    let on_disk: HashMap<&str, &Arc<RunSession>> = loaded.sessions().iter().filter(|s| s.body_on_disk).map(|s| (s.id(), s)).collect();
+    if on_disk.is_empty() {
+        return copy;
+    }
+    let panes = copy
+        .sessions()
+        .iter()
+        .map(|pane| match on_disk.get(pane.id()) {
+            Some(original) => {
+                Arc::new(RunSession { body_on_disk: true, stored_digest: original.stored_digest.clone(), ..(**pane).clone() })
+            }
+            None => pane.clone(),
+        })
+        .collect();
+    copy.sessions = Some(panes);
+    copy
+}
+
 /// Whether two states of a pane hold the same body ([`crate::model::BODY_FIELDS`]).
 fn same_body(a: &RunSession, b: &RunSession) -> bool {
     a.logs == b.logs
@@ -571,6 +592,12 @@ pub struct Store {
     cache: normalize::PaneCache,
     /// Each pane's summary as the index held it when the state loaded.
     digests: HashMap<String, crate::model::SessionDigest>,
+    /// A load of a split state reads the bodies of the active workspace's panes only; the others stay on disk until something asks
+    /// for them ([`Store::load_pane_body`]). Off by default (the checks and tools read every body).
+    pub lazy: bool,
+    /// The panes whose body the load left on disk and no one read since: the store's own record, so a save never takes what such a
+    /// pane holds for its whole body, even from a copy of the state that lost the pane's mark.
+    on_disk: HashSet<String>,
 }
 
 impl Store {
@@ -592,7 +619,82 @@ impl Store {
             written_index: None,
             cache: normalize::PaneCache::default(),
             digests: HashMap::new(),
+            lazy: false,
+            on_disk: HashSet::new(),
         }
+    }
+
+    /// The body of a pane the load left on disk, read now and laid on the pane as the app holds it (its index fields), normalized as
+    /// a load normalizes: the pane whole, `body_on_disk` false. A pane whose file is gone or does not read comes back without the
+    /// flag and with what it held (its summary's last entries), so it is not asked for again; None for a pane read whole already.
+    pub fn load_pane_body(&mut self, pane: &RunSession) -> Option<RunSession> {
+        if !pane.body_on_disk && !self.on_disk.contains(pane.id()) {
+            return None;
+        }
+        self.read_whole(pane)
+    }
+
+    /// [`Store::load_pane_body`] without its check: the pane's file read and laid on the pane.
+    fn read_whole(&mut self, pane: &RunSession) -> Option<RunSession> {
+        self.on_disk.remove(pane.id());
+        let whole = || RunSession { body_on_disk: false, stored_digest: None, ..pane.clone() };
+        let mut notes = vec![];
+        let locale = Locale::new("en");
+        let Some((body, revision)) = self.read_body(pane.id(), &locale, &mut notes) else { return Some(whole()) };
+        let Ok(Value::Object(mut entry)) = serde_json::from_str::<Value>(&pane.to_json()) else { return Some(whole()) };
+        for field in crate::model::BODY_FIELDS {
+            entry.remove(field);
+        }
+        lay_body(&mut entry, body, true);
+        let remote = self.snapshot.workspace(pane.workspace_id()).is_some_and(|w| w.remote.is_some());
+        let read = RunSession::read(&Value::Object(entry)).ok().and_then(|read| normalize::restored_pane(&read, remote).ok());
+        let Some(read) = read else { return Some(whole()) };
+        let loaded = RunSession { body_on_disk: false, stored_digest: None, ..read };
+        let known = self.revisions.get(pane.id()).copied().unwrap_or(0);
+        self.revisions.insert(pane.id().to_string(), known.max(revision));
+        // What the file holds now: the next save writes the pane again only when its body changes from this.
+        self.written.insert(pane.id().to_string(), Arc::new(loaded.clone()));
+        Some(loaded)
+    }
+
+    /// A pane the load left on disk, as a save writes it: unchanged (only its summary's entries, no other body field), nothing to
+    /// write; changed (something added to it before its body was read), its file's body with the additions laid over by id.
+    fn body_with_additions(&mut self, pane: &RunSession) -> Option<RunSession> {
+        let digest = pane.stored_digest.as_deref().or_else(|| self.digests.get(pane.id()));
+        let known: HashSet<String> = digest.map(|d| d.tail.iter().map(|e| e.id().to_string()).collect()).unwrap_or_default();
+        let added_logs: Vec<&crate::model::LogEntry> = pane.logs().iter().filter(|e| !known.contains(e.id())).collect();
+        let untouched = added_logs.is_empty()
+            && pane.graph_runs().is_empty()
+            && pane.plan_history.is_none()
+            && pane.todo_progress.is_none()
+            && pane.background_work.is_none()
+            && pane.shell_block_runs.is_none();
+        if untouched {
+            return None;
+        }
+        let mut whole = self.read_whole(pane)?;
+        // Written now: what it holds stays the app's (still marked on disk there), and its file is the whole body from here on.
+        self.on_disk.insert(pane.id().to_string());
+        let mut logs = whole.logs().to_vec();
+        for entry in added_logs {
+            if !logs.iter().any(|e| e.id == entry.id) {
+                logs.push(entry.clone());
+            }
+        }
+        whole.logs = Some(logs);
+        let mut runs = whole.graph_runs().to_vec();
+        for run in pane.graph_runs() {
+            match runs.iter().position(|r| r.id == run.id) {
+                Some(at) => runs[at] = run.clone(),
+                None => runs.push(run.clone()),
+            }
+        }
+        whole.graph_runs = Some(runs);
+        whole.plan_history = pane.plan_history.clone().or(whole.plan_history);
+        whole.todo_progress = pane.todo_progress.clone().or(whole.todo_progress);
+        whole.background_work = pane.background_work.clone().or(whole.background_work);
+        whole.shell_block_runs = pane.shell_block_runs.clone().or(whole.shell_block_runs);
+        Some(whole)
     }
 
     /// A pane's body revision as last read or written (0 for none): what a remote reader can ask "changed since" with.
@@ -626,11 +728,15 @@ impl Store {
         self.split = false;
         self.revisions.clear();
         self.digests.clear();
+        self.on_disk.clear();
         self.written.clear();
         self.written_index = None;
         let mut notes = vec![];
+        let mut on_disk: HashSet<String> = HashSet::new();
         if let Value::Object(root) = &mut value {
             self.split = root.remove(crate::model::SPLIT_MARKER).and_then(|v| v.as_i64()) == Some(1);
+            let active = root.get("activeWorkspaceId").and_then(Value::as_str).map(str::to_string);
+            let lazy = self.lazy && self.split;
             if let Some(Value::Array(panes)) = root.get_mut("sessions") {
                 for pane in panes.iter_mut() {
                     let Some(entry) = pane.as_object_mut() else { continue };
@@ -645,6 +751,21 @@ impl Store {
                     if let Some(revision) = revision {
                         self.revisions.insert(id.clone(), revision);
                     }
+                    // Outside the active workspace, a pane with a summary and a body file keeps its body on disk: what it holds is
+                    // the summary's entries until something reads it.
+                    let elsewhere = entry.get("workspaceId").and_then(Value::as_str) != active.as_deref();
+                    if lazy
+                        && elsewhere
+                        && let Some(digest) = self.digests.get(&id)
+                        && self.sessions_dir().join(body_file_name(&id)).exists()
+                    {
+                        let tail: Vec<Value> =
+                            digest.tail.iter().filter_map(|e| serde_json::from_str(&crate::json::Wire::to_json(e)).ok()).collect();
+                        entry.insert("logs".into(), Value::Array(tail));
+                        on_disk.insert(id.clone());
+                        self.on_disk.insert(id.clone());
+                        continue;
+                    }
                     if let Some((body, revision)) = self.read_body(&id, locale, &mut notes) {
                         let known = self.revisions.get(&id).copied().unwrap_or(0);
                         self.revisions.insert(id.clone(), known.max(revision));
@@ -658,7 +779,21 @@ impl Store {
             all.extend(notes);
             self.load_notice = Some(all.join("\n"));
         }
-        read_state_value(value, locale)
+        let mut snapshot = read_state_value(value, locale)?;
+        if !on_disk.is_empty() {
+            let panes = snapshot
+                .sessions()
+                .iter()
+                .map(|pane| match self.digests.get(pane.id()).filter(|_| on_disk.contains(pane.id())) {
+                    Some(digest) => {
+                        Arc::new(RunSession { body_on_disk: true, stored_digest: Some(Arc::new(digest.clone())), ..(**pane).clone() })
+                    }
+                    None => pane.clone(),
+                })
+                .collect();
+            snapshot.sessions = Some(panes);
+        }
+        Ok(snapshot)
     }
 
     /// `id`'s body file, its `.bak` when the file does not read (the file moved aside first, with writing on); none when it has none.
@@ -772,7 +907,7 @@ impl Store {
         }
         self.approved = self.snapshot.workspaces().iter().map(|w| (w.id().to_string(), w.clone())).collect();
         self.loaded = true;
-        Ok(clone_state(&self.snapshot))
+        Ok(with_bodies_on_disk(clone_state(&self.snapshot), &self.snapshot))
     }
 
     /// C# `ApproveLocal`: a folder the user picked, as a workspace (the one listed already for it, if any).
@@ -858,7 +993,35 @@ impl Store {
         }
         let stored = normalize::stored(&normalized);
         let mut bodies: Vec<(Arc<RunSession>, u64, Vec<u8>)> = vec![];
+        // A pane whose body was never read: its index entry keeps the summary it had, and its file is written only when something was
+        // added to it meanwhile (laid over the file's body, never in place of it).
+        let mut whole_of: HashMap<String, RunSession> = HashMap::new();
+        let held: Vec<Arc<RunSession>> =
+            stored.sessions().iter().filter(|p| p.body_on_disk || self.on_disk.contains(p.id())).cloned().collect();
+        for pane in &held {
+            if self.written.get(pane.id()).is_some_and(|last| Arc::ptr_eq(last, pane) || same_body(last, pane)) {
+                continue;
+            }
+            match self.body_with_additions(pane) {
+                Some(whole) => {
+                    whole_of.insert(pane.id().to_string(), whole);
+                }
+                None => {
+                    self.written.insert(pane.id().to_string(), pane.clone());
+                }
+            }
+        }
+        let mut merged: HashMap<String, crate::model::SessionDigest> = HashMap::new();
         for pane in stored.sessions() {
+            if pane.body_on_disk || self.on_disk.contains(pane.id()) {
+                let Some(whole) = whole_of.remove(pane.id()) else { continue };
+                merged.insert(pane.id().to_string(), crate::model::SessionDigest::of(&whole));
+                let revision = self.revisions.get(pane.id()).copied().unwrap_or(0) + 1;
+                let bytes = encode_body(&whole, revision)?;
+                // Kept as the pane the app holds, so the next save finds it written.
+                bodies.push((pane.clone(), revision, bytes));
+                continue;
+            }
             // Every change the window makes normalizes the whole state, so an untouched pane is often another object with the same
             // body: compared by its body's fields then, and written only when they differ.
             if self.written.get(pane.id()).is_some_and(|last| Arc::ptr_eq(last, pane) || same_body(last, pane)) {
@@ -867,6 +1030,19 @@ impl Store {
             }
             let revision = self.revisions.get(pane.id()).copied().unwrap_or(0) + 1;
             bodies.push((pane.clone(), revision, encode_body(pane, revision)?));
+        }
+        // A pane whose body was laid over its file names its new summary in the index.
+        let mut stored = stored;
+        if !merged.is_empty() {
+            let panes = stored
+                .sessions()
+                .iter()
+                .map(|pane| match merged.get(pane.id()) {
+                    Some(digest) => Arc::new(RunSession { stored_digest: Some(Arc::new(digest.clone())), ..(**pane).clone() }),
+                    None => pane.clone(),
+                })
+                .collect();
+            stored.sessions = Some(panes);
         }
         let fresh: HashMap<&str, u64> = bodies.iter().map(|(pane, revision, _)| (pane.id(), *revision)).collect();
         let index = encode_index(&stored, &|id| fresh.get(id).or_else(|| self.revisions.get(id)).copied().unwrap_or(0));
@@ -902,6 +1078,7 @@ impl Store {
         let listed: HashSet<String> = stored.sessions().iter().map(|s| body_file_name(s.id())).collect();
         self.written.retain(|id, _| listed.contains(&body_file_name(id)));
         self.revisions.retain(|id, _| listed.contains(&body_file_name(id)));
+        self.on_disk.retain(|id| listed.contains(&body_file_name(id)));
         remove_unlisted_bodies(&folder, &listed);
         self.snapshot = normalized;
         Ok(())

@@ -66,3 +66,52 @@ async fn the_service_replaces_one_pane_and_saves_as_asked() {
     service.dispose().await;
     assert!(!service.update_pane("shell", |pane| Some((pane.clone(), PaneSave::Now))), "a closing service changes nothing");
 }
+
+/// A pane the split state's load left on disk (its body read only when needed, mighty-core store.rs): holding one entry of three.
+fn on_disk(service: &RunService) {
+    use mighty_core::model::{LogEntry, SessionDigest};
+    let entry = |id: &str| LogEntry { id: Some(id.into()), kind: Some("assistant".into()), text: Some(id.into()), ..LogEntry::default() };
+    let tail = vec![entry("e3")];
+    let mut snapshot = service.snapshot();
+    let at = snapshot.sessions().iter().position(|s| s.id() == "agent").unwrap();
+    let pane = RunSession {
+        logs: Some(tail.clone()),
+        body_on_disk: true,
+        stored_digest: Some(Arc::new(SessionDigest { log_count: 3, tail, run_ids: vec![] })),
+        ..(*snapshot.sessions()[at]).clone()
+    };
+    snapshot.sessions_mut()[at] = Arc::new(pane);
+    service.replace(snapshot);
+    service.set_body_loader(Arc::new(move |pane: &RunSession| {
+        Some(RunSession {
+            logs: Some(vec![entry("e1"), entry("e2"), entry("e3")]),
+            body_on_disk: false,
+            stored_digest: None,
+            ..pane.clone()
+        })
+    }));
+}
+
+#[tokio::test]
+async fn a_pane_whose_body_is_on_disk_is_read_whole_before_a_change_to_it() {
+    let (service, _events) = service();
+    on_disk(&service);
+    assert!(service.snapshot().session("agent").unwrap().body_on_disk);
+    assert!(service.update_pane("agent", |pane| {
+        let mut next = pane.clone();
+        next.status = Some("idle".into());
+        Some((next, PaneSave::Later))
+    }));
+    let pane = service.snapshot().session("agent").unwrap().clone();
+    assert!(!pane.body_on_disk);
+    assert_eq!(pane.logs().iter().map(|e| e.id()).collect::<Vec<_>>(), ["e1", "e2", "e3"], "the whole history, then the change");
+}
+
+#[tokio::test]
+async fn reading_a_workspaces_bodies_reads_only_those_still_on_disk() {
+    let (service, _events) = service();
+    on_disk(&service);
+    assert!(service.ensure_workspace_bodies("w"));
+    assert!(!service.ensure_workspace_bodies("w"), "nothing left to read");
+    assert_eq!(service.snapshot().session("agent").unwrap().log_count(), 3);
+}

@@ -135,6 +135,10 @@ impl MirrorHost for DeskMirrorHost {
 
     fn detail(&self, session_id: String, workspace_ids: HashSet<String>) -> BoxFuture<'_, Option<MirrorPane>> {
         Box::pin(async move {
+            // A pane the load left on disk is read whole before its detail is made.
+            if let Some(router) = (self.router)() {
+                router.ensure_body(&session_id);
+            }
             let state = (self.snapshot)();
             let pane = mirrorable(&state, &workspace_ids).find(|s| s.id() == session_id)?.clone();
             let (permissions, queued) = (self.pending(&session_id), (self.queued)(&session_id));

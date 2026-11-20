@@ -1123,6 +1123,11 @@ impl PhoneDesk for Desk {
     fn snapshot(&self) -> AppSnapshot {
         self.host().map(|h| Desk::snapshot_of(&h)).unwrap_or_default()
     }
+    fn ensure_body(&self, id: &str) {
+        if let Ok(host) = self.host() {
+            crate::bodies::ensure(&host, &[id]);
+        }
+    }
     fn shared_workspace_ids(&self) -> Vec<String> {
         shared_workspace_ids()
     }

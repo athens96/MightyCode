@@ -1029,11 +1029,16 @@ pub const DIGEST_TAIL: usize = 8;
 pub const DIGEST_TEXT: usize = 1000;
 
 impl SessionDigest {
-    /// The summary of `pane`'s body as it is.
+    /// The summary of `pane`'s body as it is. The latest request comes along when it is older than the last entries: a pane titled by
+    /// its requests is titled by it, and its timing is read from it, before its body is read.
     pub fn of(pane: &RunSession) -> SessionDigest {
         let logs = pane.logs();
-        let tail = logs[logs.len().saturating_sub(DIGEST_TAIL)..]
-            .iter()
+        let from = logs.len().saturating_sub(DIGEST_TAIL);
+        let request = logs[..from].iter().rposition(|e| e.kind() == "user").filter(|_| !logs[from..].iter().any(|e| e.kind() == "user"));
+        let tail = request
+            .map(|at| &logs[at])
+            .into_iter()
+            .chain(logs[from..].iter())
             .map(|entry| LogEntry {
                 text: entry.text.as_deref().map(|t| crate::wire::clean(t, DIGEST_TEXT)),
                 activity: entry.activity.clone().map(|a| AgentActivity { output: None, ..a }),

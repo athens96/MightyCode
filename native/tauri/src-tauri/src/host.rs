@@ -134,10 +134,18 @@ impl View {
         self.revision += 1;
     }
 
-    /// The page's copy taken from the service again (a run event changed it, or a change went through it).
+    /// The page's copy taken from the service again (a run event changed it, or a change went through it). The active workspace's
+    /// panes are read whole first when the load left their body on disk (a workspace just opened; bodies.rs).
     pub fn sync(&mut self) {
         if let Some(service) = &self.service {
-            self.snapshot = service.snapshot();
+            let mut snapshot = service.snapshot();
+            if let Some(active) = snapshot.active_workspace_id.clone()
+                && snapshot.sessions().iter().any(|s| s.body_on_disk && s.workspace_id() == active)
+                && service.ensure_workspace_bodies(&active)
+            {
+                snapshot = service.snapshot();
+            }
+            self.snapshot = snapshot;
             self.revision += 1;
         }
     }
@@ -443,6 +451,11 @@ impl Host {
     }
 
     /// Every pane view's composer and cards are looked at again on the next tick (a runtime read, a setting).
+    /// The store, for the run service's reader of the panes' bodies the load left on disk (bodies.rs).
+    pub fn store_handle(&self) -> Arc<Mutex<Store>> {
+        self.store.clone()
+    }
+
     pub fn panes_changed(&self) {
         for pane in self.view().panes.values_mut() {
             pane.dirty = true;

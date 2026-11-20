@@ -274,6 +274,7 @@ impl Runs {
                 delegation: crate::delegation::run_hooks(host),
             },
         );
+        service.set_body_loader(crate::bodies::loader(host.store_handle()));
         let runs = Arc::new(Runs { service: Arc::new(service), catalog, images, runtime: Mutex::new(HashMap::new()) });
         host.attach(runs.clone());
         let pump = host.clone();

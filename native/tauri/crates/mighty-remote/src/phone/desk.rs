@@ -171,6 +171,11 @@ pub trait PhoneDesk: Send + Sync {
 
     /// `service.Snapshot`: the state as it is now (the run service's own copy).
     fn snapshot(&self) -> AppSnapshot;
+    /// The pane's body read from its file if the load left it on disk, before a route reads the pane (its detail, its entries, a
+    /// send): the split state reads a pane outside the active workspace only when something asks for it.
+    fn ensure_body(&self, id: &str) {
+        let _ = id;
+    }
     /// `HostId`: the pairing identity's host id (the phone's `/m1/info`).
     fn host_id(&self) -> String;
     /// `HostName`: this computer's name as the phone shows it.

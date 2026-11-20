@@ -1687,6 +1687,13 @@ impl PaneCache {
     }
 }
 
+/// One pane normalized as a load normalizes it (`restoring`), with a budget of its own: a pane whose body is read after the state
+/// loaded. `remote` says its workspace is another computer's.
+pub fn restored_pane(pane: &RunSession, remote: bool) -> R<RunSession> {
+    let remote_ids: HashSet<String> = if remote { [pane.workspace_id().to_string()].into() } else { HashSet::new() };
+    normalize_session(pane, true, &remote_ids, &mut Budget { text: PANE_TEXT_BUDGET })
+}
+
 /// C# `StateStore.Normalize(value, restoring)`.
 pub fn normalize(value: &AppSnapshot, restoring: bool) -> R<AppSnapshot> {
     normalize_with(value, restoring, None)

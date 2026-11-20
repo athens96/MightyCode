@@ -13,7 +13,9 @@ with `"sessionFiles": 1`: each pane's entry leaves out its body (`logs`,
 `graphRuns`, `planHistory`, `todoProgress`, `backgroundWork`, `shellRuns`) and
 names the revision of `sessions/<pane id>.json` (`bodyRevision`), which holds
 `{version: 1, sessionId, bodyRevision}` and those fields (owner-only files on
-Unix). A save writes only the bodies of panes that changed, then the index, then
+Unix). Each entry also keeps `digest` (`logCount`, `tail`: the last entries cut
+to 1000 characters with the latest request, `runIds`), which lists read for a
+pane whose body is not loaded yet. A save writes only the bodies of panes that changed, then the index, then
 removes the bodies of closed panes. A load lays each body on its entry; an index
 without the marker (an older app wrote it) keeps its own fields and its requests
 and log entries go after the body's it lacks. Each pane is normalized with a

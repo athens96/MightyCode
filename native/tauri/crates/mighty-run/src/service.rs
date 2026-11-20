@@ -260,7 +260,12 @@ pub struct RunService {
     admitting: Option<Admitting>,
     /// The remote mirror's panes (W9-J), set once by the app ([`RunService::set_mirror`]).
     mirror: OnceLock<Arc<dyn MirrorRunner>>,
+    /// Reads the body of a pane the load left on disk (the store's `load_pane_body`), set once by the app.
+    body_loader: OnceLock<BodyLoader>,
 }
+
+/// Reads a pane's body from its file: the pane whole, or None when there is nothing to read (it is whole already).
+pub type BodyLoader = Arc<dyn Fn(&RunSession) -> Option<RunSession> + Send + Sync>;
 
 /// How the service is made.
 pub struct RunServiceOptions {
@@ -360,7 +365,17 @@ impl RunService {
         manager_options.antigravity_rules = Some(rules.clone());
         antigravity::remove_leftovers(rules, leftovers_done);
         let manager = RunManager::new(providers, manager_options);
-        (RunService { shared, manager, remote: options.remote, admitting: options.admitting, mirror: OnceLock::new() }, receiver)
+        (
+            RunService {
+                shared,
+                manager,
+                remote: options.remote,
+                admitting: options.admitting,
+                mirror: OnceLock::new(),
+                body_loader: OnceLock::new(),
+            },
+            receiver,
+        )
     }
 
     pub fn manager(&self) -> &RunManager {
@@ -403,6 +418,54 @@ impl RunService {
             }
             Err(_) => false,
         }
+    }
+
+    /// The app's reader of the panes' bodies the load left on disk (set once; a later call changes nothing).
+    pub fn set_body_loader(&self, loader: BodyLoader) {
+        let _ = self.body_loader.set(loader);
+    }
+
+    /// Reads the bodies of the panes in `ids` the load left on disk, so whatever reads or changes them next has them whole. The files
+    /// are read with the lock let go; a pane changed meanwhile keeps its change (read again under the lock). True when a pane changed.
+    pub fn ensure_bodies(&self, ids: &[&str]) -> bool {
+        let Some(loader) = self.body_loader.get().cloned() else { return false };
+        let waiting: Vec<Arc<RunSession>> = {
+            let state = lock(&self.shared.state);
+            state.snapshot.sessions().iter().filter(|s| s.body_on_disk && ids.contains(&s.id())).cloned().collect()
+        };
+        if waiting.is_empty() {
+            return false;
+        }
+        let read: Vec<(Arc<RunSession>, RunSession)> =
+            waiting.into_iter().filter_map(|pane| loader(&pane).map(|whole| (pane, whole))).collect();
+        let mut state = lock(&self.shared.state);
+        let mut changed = false;
+        for (before, whole) in read {
+            let Some(at) = state.snapshot.sessions().iter().position(|s| s.id() == before.id()) else { continue };
+            let now = state.snapshot.sessions()[at].clone();
+            if !now.body_on_disk {
+                continue;
+            }
+            let next = if Arc::ptr_eq(&now, &before) { whole } else { with_additions(whole, &now) };
+            state.snapshot.sessions_mut()[at] = Arc::new(next);
+            changed = true;
+        }
+        changed
+    }
+
+    /// The panes of `workspace` whose body is still on disk, read ([`RunService::ensure_bodies`]).
+    pub fn ensure_workspace_bodies(&self, workspace: &str) -> bool {
+        let ids: Vec<String> = {
+            let state = lock(&self.shared.state);
+            state
+                .snapshot
+                .sessions()
+                .iter()
+                .filter(|s| s.body_on_disk && s.workspace_id() == workspace)
+                .map(|s| s.id().to_string())
+                .collect()
+        };
+        self.ensure_bodies(&ids.iter().map(String::as_str).collect::<Vec<_>>())
     }
 
     /// The state as the service has it now.
@@ -499,6 +562,7 @@ impl RunService {
     /// streams). `change` gets the pane and gives back its next record and how it is saved, or None to change nothing. False when
     /// the service is closing, the pane is gone or `change` changed nothing.
     pub fn update_pane(&self, session_id: &str, change: impl FnOnce(&RunSession) -> Option<(RunSession, PaneSave)>) -> bool {
+        self.ensure_bodies(&[session_id]);
         let save = {
             let mut state = lock(&self.shared.state);
             if state.closing {
@@ -579,6 +643,8 @@ impl RunService {
     /// stopped before it started. `title_from`: what an automatic title follows when it is not the input (`Some("")` for a run
     /// delegation starts on its own: none).
     pub async fn launch(&self, value: StartRunRequest, title_from: Option<&str>, reach: bool) -> Result<Option<String>> {
+        // A run adds to its pane's history: the pane's body is read first if the load left it on disk.
+        self.ensure_bodies(&[value.session_id.as_str()]);
         // A mirrored pane's request is the host pane's next one, as the phone's send: nothing runs or changes here.
         if let Some(mirror) = self.mirror_of(&value.session_id) {
             let mirror = mirror?;
@@ -968,4 +1034,35 @@ fn resolve_local(shared: &Shared, id: &str) -> Result<Workspace> {
         return Err(RunError::Io(strings::get("store.error.workspaceFolderNotFound")));
     }
     Ok(workspace)
+}
+
+/// A pane read whole from its file, with what was added to it meanwhile (while its body was being read) laid over by id.
+fn with_additions(mut whole: RunSession, now: &RunSession) -> RunSession {
+    let mut logs = whole.logs().to_vec();
+    for entry in now.logs() {
+        if !logs.iter().any(|e| e.id == entry.id) {
+            logs.push(entry.clone());
+        }
+    }
+    whole.logs = Some(logs);
+    let mut runs = whole.graph_runs().to_vec();
+    for run in now.graph_runs() {
+        match runs.iter().position(|r| r.id == run.id) {
+            Some(at) => runs[at] = run.clone(),
+            None => runs.push(run.clone()),
+        }
+    }
+    whole.graph_runs = Some(runs);
+    RunSession {
+        plan_history: now.plan_history.clone().or(whole.plan_history.take()),
+        todo_progress: now.todo_progress.clone().or(whole.todo_progress.take()),
+        background_work: now.background_work.clone().or(whole.background_work.take()),
+        shell_block_runs: now.shell_block_runs.clone().or(whole.shell_block_runs.take()),
+        // The pane's own fields as they are now; its body as read and added to.
+        logs: whole.logs.take(),
+        graph_runs: whole.graph_runs.take(),
+        body_on_disk: false,
+        stored_digest: None,
+        ..now.clone()
+    }
 }

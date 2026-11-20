@@ -282,3 +282,99 @@ fn a_pane_normalized_again_into_another_object_with_the_same_body_is_not_written
     assert_eq!(reread.session(P2).unwrap().draft.as_deref(), Some("typed"));
     fs::remove_dir_all(dir).unwrap();
 }
+
+const P3: &str = "33333333-3333-4333-8333-333333333333";
+
+/// Two workspaces, the first active; the second's pane has a long history whose latest request is older than its last entries.
+fn two_workspaces() -> String {
+    let (a, b) = if cfg!(windows) { (r"C:\\a", r"C:\\b") } else { ("/a", "/b") };
+    let mut logs = vec![r#"{"id":"u1","kind":"user","text":"make the tests pass","timestamp":"2026-11-20T00:00:00Z"}"#.to_string()];
+    logs.extend((0..12).map(|i| entry(&format!("c{i}"), &format!("reply {i}"))));
+    format!(
+        r#"{{"version":1,"workspaces":[{{"id":"w1","name":"A","path":"{a}","createdAt":"2026-11-20T00:00:00Z"}},{{"id":"w2","name":"B","path":"{b}","createdAt":"2026-11-20T00:00:00Z"}}],"activeWorkspaceId":"w1","sessions":[{},{}]}}"#,
+        pane(P1, &[entry("a1", "first")]),
+        pane(P3, &logs).replace(r#""workspaceId":"w1""#, r#""workspaceId":"w2""#)
+    )
+}
+
+fn lazy(dir: &Path) -> (Store, AppSnapshot) {
+    let mut store = Store::new(dir.to_path_buf(), None, true);
+    store.lazy = true;
+    let snapshot = store.load(&en()).unwrap();
+    (store, snapshot)
+}
+
+#[test]
+fn a_lazy_load_reads_the_active_workspaces_bodies_and_leaves_the_others_on_disk() {
+    let dir = temp_dir("split-lazy");
+    fs::write(dir.join(store::STATE_FILE), two_workspaces()).unwrap();
+    let (mut first, snapshot) = loaded(&dir);
+    store_split(&mut first, &snapshot);
+    let eager_title = loaded(&dir).1.session(P3).unwrap().title().to_string();
+
+    let (mut store, snapshot) = lazy(&dir);
+    let active = snapshot.session(P1).unwrap();
+    assert!(!active.body_on_disk);
+    let other = snapshot.session(P3).unwrap();
+    assert!(other.body_on_disk, "the other workspace's pane keeps its body on disk");
+    assert_eq!(other.log_count(), 13);
+    assert!(other.logs().len() < 13, "it holds its summary's entries");
+    assert_eq!(other.logs().last().unwrap().text(), "reply 11");
+    assert_eq!(other.title(), eager_title, "titled by its latest request as a whole load titles it");
+
+    let whole = store.load_pane_body(other).expect("its body");
+    assert!(!whole.body_on_disk);
+    assert_eq!(whole.logs().len(), 13);
+    assert_eq!(whole.title(), eager_title);
+
+    // A save of the state as it loaded writes no body, the one on disk included.
+    store.save(&snapshot).unwrap();
+    assert_eq!(body(&dir, P3)["bodyRevision"], 1);
+    assert_eq!(body(&dir, P3)["logs"].as_array().unwrap().len(), 13);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn something_added_to_a_pane_whose_body_is_on_disk_is_laid_over_its_file_never_in_its_place() {
+    let dir = temp_dir("split-lazy-added");
+    fs::write(dir.join(store::STATE_FILE), two_workspaces()).unwrap();
+    let (mut first, snapshot) = loaded(&dir);
+    store_split(&mut first, &snapshot);
+
+    let (mut store, snapshot) = lazy(&dir);
+    assert!(snapshot.session(P3).unwrap().body_on_disk);
+    let next = with_log(&snapshot, P3, "note", "a note added before the body was read");
+    store.save(&next).unwrap();
+    let file = body(&dir, P3);
+    assert_eq!(file["bodyRevision"], 2);
+    assert_eq!(file["logs"].as_array().unwrap().len(), 14, "the 13 on disk and the note");
+    // Saved again unchanged: not written again.
+    store.save(&next).unwrap();
+    assert_eq!(body(&dir, P3)["bodyRevision"], 2);
+    let (_, reread) = loaded(&dir);
+    assert_eq!(reread.session(P3).unwrap().logs().len(), 14);
+    assert_eq!(reread.session(P3).unwrap().logs().last().unwrap().text(), "a note added before the body was read");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+fn store_split(store: &mut Store, snapshot: &AppSnapshot) {
+    store.save(snapshot).unwrap();
+    assert!(store.is_split());
+}
+
+#[test]
+fn a_copy_of_the_state_that_lost_a_panes_mark_never_overwrites_its_body() {
+    let dir = temp_dir("split-lazy-lost-mark");
+    fs::write(dir.join(store::STATE_FILE), two_workspaces()).unwrap();
+    let (mut first, snapshot) = loaded(&dir);
+    store_split(&mut first, &snapshot);
+
+    let (mut store, snapshot) = lazy(&dir);
+    // The state written and read back somewhere in the app: the mark and the summary are gone, the summary's entries remain.
+    let copy = store::clone_state(&snapshot);
+    assert!(!copy.session(P3).unwrap().body_on_disk);
+    store.save(&copy).unwrap();
+    let (_, reread) = loaded(&dir);
+    assert_eq!(reread.session(P3).unwrap().logs().len(), 13, "the whole history is still there");
+    fs::remove_dir_all(dir).unwrap();
+}

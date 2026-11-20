@@ -19,6 +19,7 @@ mod antigravity;
 mod app_update;
 mod args;
 mod ask;
+mod bodies;
 mod build_info;
 mod cards;
 mod companion;
@@ -282,6 +283,8 @@ fn main() {
     // save: the app starts empty in memory and says why.
     let legacy = legacy.into_iter().find(|dir| dir.join(store::STATE_FILE).exists());
     let mut state = store::Store::new(data_dir.clone(), legacy, policy.writes);
+    // The split state reads the active workspace's panes whole and the others' when something needs them (bodies.rs).
+    state.lazy = true;
     let loaded = state.load(&Locale::new(methods::chosen_language("system")));
     let (mut snapshot, failure) = match loaded {
         Ok(snapshot) => (snapshot, None),

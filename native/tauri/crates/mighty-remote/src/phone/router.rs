@@ -334,6 +334,11 @@ fn home() -> PathBuf {
 }
 
 impl Router {
+    /// The pane's body read if the load left it on disk (the mirror's detail asks before it reads the pane).
+    pub fn ensure_body(&self, id: &str) {
+        self.inner.desk.ensure_body(id);
+    }
+
     pub fn new(desk: Arc<dyn PhoneDesk>, options: RouterOptions) -> Router {
         let uploads = Arc::new(MobileUploads::new(&options.uploads));
         Router {
@@ -549,8 +554,9 @@ impl Inner {
         self.desk.pending_permissions(id).into_iter().filter(|p| p.state == "pending" && p.run_id == id).collect()
     }
 
-    /// `Session(id)`.
+    /// `Session(id)`: the pane whole (its body read first if the load left it on disk).
     fn session(&self, id: &str) -> Result<Arc<RunSession>, MobileError> {
+        self.desk.ensure_body(id);
         let snapshot = self.desk.snapshot();
         phone_panes(&snapshot, self.allowed(&snapshot).as_deref())
             .into_iter()
