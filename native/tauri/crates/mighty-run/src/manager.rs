@@ -1368,6 +1368,7 @@ impl Exec {
         if self.run.request.provider != "claude" {
             return;
         }
+        self.check_recorded_tasks(frame);
         let mut background = lock(&self.background);
         if let Some(work) = background.consume(frame) {
             (self.emit)(RunEvent { background: Some(work), ..RunEvent::new(session, "background") });
@@ -1379,6 +1380,36 @@ impl Exec {
         {
             (self.emit)(RunEvent { background: Some(ended), ..RunEvent::new(session, "background") });
         }
+    }
+
+    /// The checklist's tasks checked against Claude Code's own record of them ([`crate::claude_tasks`]) when the run starts (its init
+    /// frame) and when its turn ends. At the start a correction is the pane's list as an earlier request left it, so it is put on that
+    /// request (its `run_id`): a task that finished while the app was not watching is then done before this request's first step, and
+    /// never drawn as one of its steps.
+    fn check_recorded_tasks(&self, frame: &Value) {
+        let kind = meta::text(frame, "type");
+        let start = kind == Some("system") && meta::text(frame, "subtype") == Some("init");
+        let end = kind == Some("result") && !stream::is_notification_result(frame) && meta::top_level(frame);
+        if !start && !end {
+            return;
+        }
+        let Some(session_id) = meta::text(frame, "session_id") else { return };
+        let ids = lock(&self.todos).task_ids();
+        if ids.is_empty() {
+            return;
+        }
+        let environment = lock(&self.children).environment.clone().unwrap_or_default();
+        let Some(home) = crate::claude_tasks::home_of(&environment) else { return };
+        let config = crate::claude_tasks::config_folder(&environment, &home);
+        let Some(folder) = crate::claude_tasks::folder(&config, session_id) else { return };
+        let Some(recorded) = crate::claude_tasks::read(&folder, &ids) else { return };
+        let mut todos = lock(&self.todos);
+        let earlier = todos.last_progress().and_then(|p| p.run_id.clone());
+        let Some(progress) = todos.reconcile(&recorded) else { return };
+        drop(todos);
+        let run_id = if start { earlier } else { self.todo_run_id.clone() };
+        let progress = mighty_core::model::TodoProgress { run_id, ..progress };
+        (self.emit)(RunEvent { todos: Some(progress), ..RunEvent::new(&self.run.request.session_id, "todos") });
     }
 
     fn background_running(&self) -> bool {

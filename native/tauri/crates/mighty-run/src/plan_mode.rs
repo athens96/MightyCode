@@ -619,6 +619,39 @@ impl TodoProgressTracker {
         self.emit_changed()
     }
 
+    /// The ids of the task tools' tasks held, to check against Claude Code's record of them.
+    pub fn task_ids(&self) -> Vec<String> {
+        self.tasks.iter().filter_map(|t| t.id.clone()).collect()
+    }
+
+    /// The run's progress as last sent or restored (its `run_id` the request it was recorded on).
+    pub fn last_progress(&self) -> Option<&TodoProgress> {
+        self.progress.as_ref()
+    }
+
+    /// The held tasks made what Claude Code recorded (`recorded`, from [`crate::claude_tasks::read`]): each found task's status,
+    /// subject and active form; a task whose file is gone dropped. A tool call the stream never showed (the app quit during a run)
+    /// is caught up this way, so a finished task is never left running and drawn again as a step of a later request. The new progress
+    /// when it changed.
+    pub fn reconcile(&mut self, recorded: &HashMap<String, crate::claude_tasks::RecordedTask>) -> Option<TodoProgress> {
+        let before = self.tasks.clone();
+        self.tasks.retain(|t| t.id.as_deref().is_none_or(|id| recorded.contains_key(id)));
+        for task in &mut self.tasks {
+            let Some(found) = task.id.as_deref().and_then(|id| recorded.get(id)) else { continue };
+            task.status = Some(found.status.clone());
+            if let Some(subject) = &found.subject {
+                task.content = Some(subject.clone());
+            }
+            if let Some(active) = &found.active_form {
+                task.active_form = Some(active.clone());
+            }
+        }
+        if self.tasks == before {
+            return None;
+        }
+        self.emit_changed()
+    }
+
     /// The checklist as it stands, when it is not the one last sent: the task tools' tasks, else the plan, else (no plan this run)
     /// the tool calls.
     fn emit_changed(&mut self) -> Option<TodoProgress> {

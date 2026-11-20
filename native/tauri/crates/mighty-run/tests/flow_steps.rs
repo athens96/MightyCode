@@ -249,3 +249,42 @@ fn an_acp_agents_plan_is_the_requests_steps() {
         recorded.graph_runs.unwrap()[0].steps.clone().unwrap_or_default().into_iter().map(|s| s.status.unwrap_or_default()).collect();
     assert_eq!(statuses, ["completed", "in_progress", "pending"], "an opencode pane keeps the steps on its request");
 }
+
+#[test]
+fn a_task_that_finished_unseen_is_caught_up_and_never_a_step_of_the_next_request() {
+    use mighty_run::claude_tasks::RecordedTask;
+    use std::collections::HashMap;
+    // The pane's list as the last request left it: task 7 finished, but the app quit before it saw task 8's "completed".
+    let saved = list(vec![item("Release", "completed", Some("7")), item("Update the Mac", "in_progress", Some("8"))], "R1");
+    let mut tracker = TodoProgressTracker::new(Some(&saved));
+    assert_eq!(tracker.task_ids(), vec!["7".to_string(), "8".to_string()]);
+    let recorded: HashMap<String, RecordedTask> = [
+        ("7".to_string(), RecordedTask { subject: Some("Release".into()), active_form: None, status: "completed".into() }),
+        ("8".to_string(), RecordedTask { subject: Some("Update the Mac".into()), active_form: None, status: "completed".into() }),
+    ]
+    .into();
+    let caught_up = tracker.reconcile(&recorded).expect("task 8 changed");
+    assert!(todos::items(&caught_up).iter().all(|i| i.status.as_deref() == Some("completed")));
+    assert!(tracker.reconcile(&recorded).is_none(), "nothing more to catch up");
+
+    // The correction lands on the earlier request; the next request's first task then starts its steps alone.
+    let mut runs = vec![request("R1", "completed"), request("R2", "running")];
+    let corrected = TodoProgress { run_id: Some("R1".into()), ..caught_up };
+    flow_steps::record(&corrected, &mut runs, Some(&saved), at(1.0));
+    let next = list(
+        vec![
+            item("Release", "completed", Some("7")),
+            item("Update the Mac", "completed", Some("8")),
+            item("Store", "in_progress", Some("9")),
+        ],
+        "R2",
+    );
+    flow_steps::record(&next, &mut runs, Some(&corrected), at(2.0));
+    let steps: Vec<&str> = flow_steps::steps(&runs[1]).iter().filter_map(|s| s.content.as_deref()).collect();
+    assert_eq!(steps, vec!["Store"]);
+
+    // A task whose file is gone was deleted.
+    let only_seven: HashMap<String, RecordedTask> = [("7".to_string(), recorded["7"].clone())].into();
+    let pruned = tracker.reconcile(&only_seven).expect("task 8 deleted");
+    assert_eq!(todos::items(&pruned).len(), 1);
+}

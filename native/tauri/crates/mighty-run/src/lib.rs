@@ -34,6 +34,7 @@ pub mod apply;
 pub mod attachments;
 pub mod background_output;
 pub mod checklist;
+pub mod claude_tasks;
 pub mod codex_approval;
 pub mod compaction;
 pub mod failure;
