@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mighty Code Help</title>
+<script>(function(){
+ var built=["ko","en","zh","ja"],pick="en";
+ var wanted=(navigator.languages&&navigator.languages.length?navigator.languages:[navigator.language||""]);
+ for(var i=0;i<wanted.length;i++){var code=String(wanted[i]).toLowerCase().split("-")[0];if(built.indexOf(code)>=0){pick=code;break;}}
+ location.replace(pick+"/index.html"+location.hash);
+})();</script>
+<style>body{font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0B0F19;color:#EEF1F7;display:grid;place-items:center;min-height:100vh;margin:0}a{color:#7FA3FF}</style>
+</head>
+<body><p>Mighty Code Help: <a href="ko/index.html" hreflang="ko" lang="ko">한국어</a> · <a href="en/index.html" hreflang="en" lang="en">English</a> · <a href="zh/index.html" hreflang="zh-Hans" lang="zh-Hans">简体中文</a> · <a href="ja/index.html" hreflang="ja" lang="ja">日本語</a></p></body>
+</html>

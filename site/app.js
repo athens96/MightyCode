@@ -69,7 +69,7 @@
       "home.bento.title": "작은 것까지, 다 챙겼습니다.",
       "home.plan.t": "스타일과 계획 카드",
       "home.plan.d": "오로보로스나 클러드 플랜으로 정해진 순서대로. 계획을 읽고 승인하거나 고쳐 달라고 하세요.",
-      "home.pet.t": "데스크톱 펫",
+      "home.pet.t": "Mighty Pet",
       "home.pet.d": "진행 상황과 승인 요청을 화면 구석에서.",
       "home.queue.t": "요청 대기열",
       "home.queue.d": "실행 중에도 계속 말을 거세요.",
@@ -187,7 +187,7 @@
       "home.bento.title": "Every detail, taken care of.",
       "home.plan.t": "Styles and plan cards",
       "home.plan.d": "Work in a set order with Ouroboros or Claude Plan. Read the plan, then approve it or ask for changes.",
-      "home.pet.t": "Desktop pet",
+      "home.pet.t": "Mighty Pet",
       "home.pet.d": "Progress and approvals from a corner of your screen.",
       "home.queue.t": "Request queue",
       "home.queue.d": "Keep talking while the agent works.",
@@ -305,7 +305,7 @@
       "home.bento.title": "细节之处，都已考虑。",
       "home.plan.t": "样式与计划卡片",
       "home.plan.d": "用 Ouroboros 或 Claude 计划按固定顺序推进。阅读计划后批准或要求修改。",
-      "home.pet.t": "桌面宠物",
+      "home.pet.t": "Mighty Pet",
       "home.pet.d": "在屏幕一角查看进度和审批请求。",
       "home.queue.t": "请求队列",
       "home.queue.d": "运行中也能继续提出请求。",
@@ -423,7 +423,7 @@
       "home.bento.title": "細かいところまで、抜かりなく。",
       "home.plan.t": "スタイルとプランカード",
       "home.plan.d": "Ouroboros や Claude プランで決まった順に進めます。プランを読んで承認するか、修正を頼みましょう。",
-      "home.pet.t": "デスクトップペット",
+      "home.pet.t": "Mighty Pet",
       "home.pet.d": "進行状況と承認依頼を画面の隅で。",
       "home.queue.t": "リクエストキュー",
       "home.queue.d": "実行中も話しかけ続けられます。",
@@ -521,7 +521,8 @@
       img.src = `${lang}/img/${file}`;
     });
 
-    const docsHref = lang === "ko" ? "docs.html" : `${lang}/index.html`;
+    // The help is the app's own help build, copied in by scripts/site/sync-help.sh.
+    const docsHref = `help/${lang}/`;
     document.querySelectorAll("[data-docs-link]").forEach((a) => {
       a.setAttribute("href", docsHref);
     });
