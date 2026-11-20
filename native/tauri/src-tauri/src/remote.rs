@@ -377,6 +377,132 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
         network: ports.network,
     };
     let _ = app.host.set(RemoteHost::new(options));
+    restore_sharing(host);
+}
+
+/// Where this PC's sharing choice is kept between launches: whether it shared, what and on which port, and whether paired computers
+/// were let in through the relay. Without it every launch started with sharing off, so a computer paired through the relay was refused
+/// ("상대 컴퓨터가 지금 공유 중이 아닙니다") after this PC restarted until someone pressed Start here again.
+const SHARING_FILE: &str = "remote-sharing.json";
+
+/// The sharing choice [`SHARING_FILE`] holds. Full access is never kept: it is off whenever sharing starts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SavedSharing {
+    pub sharing: bool,
+    pub workspace_ids: Vec<String>,
+    pub port: u16,
+    pub relay: bool,
+}
+
+impl SavedSharing {
+    pub fn encode(&self) -> String {
+        serde_json::json!({
+            "version": 1,
+            "sharing": self.sharing,
+            "workspaceIds": self.workspace_ids,
+            "port": self.port,
+            "relay": self.relay,
+        })
+        .to_string()
+    }
+
+    /// The file's choice; none for a file that is not one (it is then as if sharing was off).
+    pub fn decode(text: &str) -> Option<SavedSharing> {
+        let value: Value = serde_json::from_str(text).ok()?;
+        if value.get("version").and_then(Value::as_i64) != Some(1) {
+            return None;
+        }
+        let workspace_ids = value
+            .get("workspaceIds")
+            .and_then(Value::as_array)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(Value::as_str)
+                    .filter(|id| mighty_core::wire::identifier(id))
+                    .take(protocol::MAXIMUM_SHARED_WORKSPACES)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(SavedSharing {
+            sharing: value.get("sharing").and_then(Value::as_bool).unwrap_or(false),
+            workspace_ids,
+            port: value.get("port").and_then(Value::as_u64).and_then(|p| u16::try_from(p).ok()).unwrap_or(protocol::DEFAULT_PORT),
+            relay: value.get("relay").and_then(Value::as_bool).unwrap_or(false),
+        })
+    }
+}
+
+/// Keeps the sharing choice as it is now, after the person here started or stopped sharing or flipped the pairing switch (only where
+/// the app writes its profile, never in a smoke). Quitting does not touch it: the next launch shares again as before.
+pub fn remember_sharing(host: &Arc<Host>, port: Option<u16>) {
+    if !host.writes() || host.smoke.is_some() {
+        return;
+    }
+    let Some(sharing) = app(host).host().cloned() else { return };
+    let state = sharing.state();
+    let path = host.data_dir.join(SHARING_FILE);
+    let before = std::fs::read_to_string(&path).ok().and_then(|text| SavedSharing::decode(&text)).unwrap_or_default();
+    let saved = SavedSharing {
+        sharing: state.enabled,
+        workspace_ids: if state.enabled { state.workspace_ids.clone() } else { before.workspace_ids.clone() },
+        port: port.or(state.port).unwrap_or(before.port.max(protocol::DEFAULT_PORT)),
+        relay: sharing.relay(),
+    };
+    if saved == before && path.exists() {
+        return;
+    }
+    if mighty_core::store::atomic_write(&path, saved.encode().as_bytes(), None, mighty_core::store::portable_replace).is_err() {
+        host.log.line("remote: the sharing choice could not be saved");
+    }
+}
+
+/// How often, and how far apart, a restored sharing that could not start yet (Tailscale still coming up after a restart) is tried.
+const RESTORE_TRIES: u32 = 10;
+const RESTORE_GAP: Duration = Duration::from_secs(30);
+
+/// Shares again as the last launch left it ([`SHARING_FILE`]): the pairing switch first, then the workspaces still listed here on the
+/// same port, tried a few times while this PC's network comes up. Only where the app may listen, never in a smoke.
+fn restore_sharing(host: &Arc<Host>) {
+    if !host.may_listen() || host.smoke.is_some() {
+        return;
+    }
+    let Some(saved) = std::fs::read_to_string(host.data_dir.join(SHARING_FILE)).ok().and_then(|text| SavedSharing::decode(&text)) else {
+        return;
+    };
+    let Some(sharing) = app(host).host().cloned() else { return };
+    sharing.set_relay(saved.relay);
+    if !saved.sharing {
+        return;
+    }
+    let host = host.clone();
+    tauri::async_runtime::spawn(async move {
+        for attempt in 1..=RESTORE_TRIES {
+            if host.closing() || sharing.state().enabled {
+                break;
+            }
+            let ids: Vec<String> = {
+                let view = host.view();
+                let local: Vec<&str> = view.snapshot.workspaces().iter().filter(|w| w.remote.is_none()).map(|w| w.id()).collect();
+                saved.workspace_ids.iter().filter(|id| local.contains(&id.as_str())).cloned().collect()
+            };
+            if ids.is_empty() {
+                break;
+            }
+            match sharing.start(&ids, saved.port).await {
+                Ok(_) => {
+                    host.log.line("remote: sharing restored as the last launch left it");
+                    break;
+                }
+                Err(error) if attempt == RESTORE_TRIES => {
+                    host.log.line(&format!("remote: the last launch's sharing did not start again: {error}"));
+                }
+                Err(_) => tokio::time::sleep(RESTORE_GAP).await,
+            }
+        }
+        sync_relay(&host).await;
+        crate::native::touch(&host, crate::settings::SURFACE);
+    });
 }
 
 /// A runtime when this PC's CLIs could not be read (the host still answers /info with no CLI).
@@ -621,6 +747,27 @@ mod tests {
     use mighty_updates::cli_update::holds::{ProviderUse, UpdateActivity, ready_for_automatic_update};
 
     use super::*;
+
+    #[test]
+    fn the_sharing_choice_reads_back_and_a_foreign_file_is_none() {
+        let saved =
+            SavedSharing { sharing: true, workspace_ids: vec!["A1B2C3D4-0000-4000-8000-000000000001".into()], port: 43137, relay: true };
+        assert_eq!(SavedSharing::decode(&saved.encode()), Some(saved));
+        assert_eq!(SavedSharing::decode(r#"{"version":2,"sharing":true}"#), None);
+        assert_eq!(SavedSharing::decode("not json"), None);
+        let odd = SavedSharing::decode(r#"{"version":1,"sharing":true,"workspaceIds":["../x",7],"port":70000}"#).unwrap();
+        assert!(odd.workspace_ids.is_empty());
+        assert_eq!(odd.port, protocol::DEFAULT_PORT);
+        assert!(!odd.relay);
+    }
+
+    #[test]
+    fn sharing_comes_back_with_the_app_and_each_choice_of_the_person_here_is_kept() {
+        let remote = source("remote.rs");
+        assert!(remote.contains("    let _ = app.host.set(RemoteHost::new(options));\n    restore_sharing(host);"));
+        let settings = source("settings/remote.rs");
+        assert_eq!(settings.matches("crate::remote::remember_sharing(").count(), 3);
+    }
 
     fn source(file: &str) -> String {
         std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file)).unwrap()

@@ -294,6 +294,7 @@ fn share(host: &Arc<Host>, ui: &mut Ui, page: &Page) -> El {
                 if let Some(sharing) = app.host().cloned() {
                     sharing.stop().await;
                 }
+                crate::remote::remember_sharing(&host, None);
                 crate::remote::sync_relay(&host).await;
                 Ok(())
             });
@@ -337,6 +338,9 @@ fn share(host: &Arc<Host>, ui: &mut Ui, page: &Page) -> El {
                 }
                 let Some(sharing) = crate::remote::app(&host).host().cloned() else { return Ok(()) };
                 let started = sharing.start(&ids, number).await.map(|_| ());
+                if started.is_ok() {
+                    crate::remote::remember_sharing(&host, Some(number));
+                }
                 crate::remote::sync_relay(&host).await;
                 started
             });
@@ -453,6 +457,7 @@ fn pairing_method(host: &Arc<Host>, ui: &mut Ui, relay_on: bool, sharing: bool) 
             if let Some(sharing) = crate::remote::app(&switching).host() {
                 sharing.set_relay(on);
             }
+            crate::remote::remember_sharing(&switching, None);
             let host = switching.clone();
             tauri::async_runtime::spawn(async move {
                 crate::remote::sync_relay(&host).await;
