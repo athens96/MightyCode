@@ -264,3 +264,21 @@ fn a_pane_whose_body_is_on_disk_answers_from_its_summary() {
     assert_eq!(on_disk.kept_run_ids(), ["run-1"]);
     assert_eq!(on_disk.body_digest().log_count, 20);
 }
+
+#[test]
+fn a_pane_normalized_again_into_another_object_with_the_same_body_is_not_written() {
+    let dir = temp_dir("split-same-body");
+    fs::write(dir.join(store::STATE_FILE), one_file()).unwrap();
+    let (mut store, snapshot) = loaded(&dir);
+    store.save(&snapshot).unwrap();
+    // What the window's every change does: the whole state normalized, every pane a new object; one pane's draft changes.
+    let mut next = mighty_core::normalize::normalize(&snapshot, false).unwrap();
+    let at = next.sessions().iter().position(|s| s.id() == P2).unwrap();
+    next.sessions_mut()[at] = Arc::new(RunSession { draft: Some("typed".into()), ..(*next.sessions()[at]).clone() });
+    store.save(&next).unwrap();
+    assert_eq!(body(&dir, P1)["bodyRevision"], 1, "P1's body did not change");
+    assert_eq!(body(&dir, P2)["bodyRevision"], 1, "a new draft is the index's, not the body's");
+    let (_, reread) = loaded(&dir);
+    assert_eq!(reread.session(P2).unwrap().draft.as_deref(), Some("typed"));
+    fs::remove_dir_all(dir).unwrap();
+}

@@ -433,6 +433,16 @@ pub fn encode_body(pane: &RunSession, revision: u64) -> Result<Vec<u8>, StateErr
     Err(StateError::StateTooLarge(last))
 }
 
+/// Whether two states of a pane hold the same body ([`crate::model::BODY_FIELDS`]).
+fn same_body(a: &RunSession, b: &RunSession) -> bool {
+    a.logs == b.logs
+        && a.graph_runs == b.graph_runs
+        && a.plan_history == b.plan_history
+        && a.todo_progress == b.todo_progress
+        && a.background_work == b.background_work
+        && a.shell_block_runs == b.shell_block_runs
+}
+
 /// The split state's index bytes: the stored state (no files panes) with each pane's body left out and its revision named.
 pub fn encode_index(stored: &AppSnapshot, revision: &dyn Fn(&str) -> u64) -> Vec<u8> {
     let mut out = JsonOut::new();
@@ -849,7 +859,10 @@ impl Store {
         let stored = normalize::stored(&normalized);
         let mut bodies: Vec<(Arc<RunSession>, u64, Vec<u8>)> = vec![];
         for pane in stored.sessions() {
-            if self.written.get(pane.id()).is_some_and(|last| Arc::ptr_eq(last, pane)) {
+            // Every change the window makes normalizes the whole state, so an untouched pane is often another object with the same
+            // body: compared by its body's fields then, and written only when they differ.
+            if self.written.get(pane.id()).is_some_and(|last| Arc::ptr_eq(last, pane) || same_body(last, pane)) {
+                self.written.insert(pane.id().to_string(), pane.clone());
                 continue;
             }
             let revision = self.revisions.get(pane.id()).copied().unwrap_or(0) + 1;
