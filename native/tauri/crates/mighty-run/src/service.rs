@@ -616,6 +616,9 @@ impl RunService {
                 return Err(RunError::State(strings::get("run.blocked.worktreeMissing")));
             }
             request.phase_models = phase_models::normalized(state.snapshot.phase_models.as_ref());
+            // 에이전트 창's checklist switch, for the agents it asks, on this computer (a remote workspace's host asks by its own switch).
+            request.checklist =
+                !remote && request.kind == "claude" && crate::checklist::asks(&request.provider) && state.snapshot.agent_checklist_on();
             request.todo_progress = if request.resume_id.is_none() { None } else { pane.todo_progress.clone() };
             // A terminal pane keeps a folder too (a pane worktree's terminal), but only an agent pane's run works in it.
             request.working_folder = if pane.kind() == "claude" { pane.working_folder.clone() } else { None };

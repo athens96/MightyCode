@@ -85,8 +85,14 @@ pub fn opencode_model(json: Option<&str>) -> Option<String> {
     })
 }
 
+/// The first request's words, without the notes the app added after them.
 fn opencode_prompt(json: Option<&str>) -> Option<String> {
-    json_object(json, |value| mighty_core::json::text(value, "text").map(str::trim).filter(|t| !t.is_empty()).map(str::to_string))
+    json_object(json, |value| {
+        mighty_core::json::text(value, "text")
+            .map(mighty_run::checklist::without_app_notes)
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+    })
 }
 
 fn milliseconds(value: Option<&str>) -> Option<DateTimeOffset> {
@@ -149,7 +155,7 @@ pub fn opencode_rows(database: &Path, directories: &[String], since: DateTimeOff
 /// The `state_meta` key of a session's creation receipt (hermes_state_local.py `POLICY_PREFIX`).
 const POLICY_PREFIX: &str = "gateway.local_policy.v1:";
 /// What the app writes after the user's request while Hermes's question tool is on: not the user's words.
-const NOTE_START: &str = "[Note from the Mighty Code app, not from the user:";
+const NOTE_START: &str = mighty_run::checklist::ACP_NOTE_START;
 
 /// `HermesSessions.Home`: `$HERMES_HOME` when that is a full path, else the platform default (`%LOCALAPPDATA%\hermes` on Windows,
 /// `~/.hermes` elsewhere) with `$HERMES_DATA_DIR_SUFFIX` after the name. `home` is the user folder the default is found under when
@@ -439,6 +445,21 @@ fn hermes_parts(json: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "an opencode request reads without the note the app put after it; Hermes's reader cuts it as before".
+    #[test]
+    fn acp_requests_read_without_the_apps_notes() {
+        use mighty_run::checklist::{HERMES_INSTRUCTION, OPENCODE_INSTRUCTION};
+        let part = |text: &str| serde_json::json!({"type": "text", "text": text}).to_string();
+        assert_eq!(
+            opencode_prompt(Some(&part(&format!("make three files\n\n{OPENCODE_INSTRUCTION}")))).as_deref(),
+            Some("make three files")
+        );
+        let quoted = format!("what is \"{OPENCODE_INSTRUCTION}\"?");
+        assert_eq!(opencode_prompt(Some(&part(&quoted))), Some(quoted.clone()), "the words mid-text stay");
+        let both = format!("quiz me\n\n{}\n\n{HERMES_INSTRUCTION}", mighty_run::acp::agents::HERMES_PROMPT_NOTE);
+        assert_eq!(hermes_without_note(&both), "quiz me");
+    }
 
     #[test]
     fn placeholders_and_models() {

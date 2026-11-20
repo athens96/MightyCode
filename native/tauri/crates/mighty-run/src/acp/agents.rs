@@ -338,7 +338,10 @@ pub const HERMES_QUESTION_KEY: &str = "platform_toolsets.acp";
 pub const HERMES_QUESTION_TOOL: &str = "clarify";
 /// `HermesQuestionTool.PromptNote`: what follows the user's request in a Hermes prompt while clarify is on (Hermes has no per-run system
 /// prompt). After the request, not before it: Hermes titles a session by the start of its first message.
-pub const HERMES_PROMPT_NOTE: &str = "[Note from the Mighty Code app, not from the user: this pane shows your clarify tool as a card the user answers with a click. Whenever you present the user with options to choose from (a quiz or multiple-choice problem, a preference, a decision), call clarify with the question and the choices instead of listing them in your reply.]";
+pub const HERMES_PROMPT_NOTE: &str = concat!(
+    crate::checklist::acp_note_start!(),
+    " this pane shows your clarify tool as a card the user answers with a click. Whenever you present the user with options to choose from (a quiz or multiple-choice problem, a preference, a decision), call clarify with the question and the choices instead of listing them in your reply.]"
+);
 
 /// `HermesQuestionTool.Outcome`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

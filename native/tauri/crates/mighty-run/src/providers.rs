@@ -654,6 +654,11 @@ pub fn arguments(
                 args.push("-c".into());
                 args.push(format!("model_reasoning_effort=\"{}\"", settings.effort));
             }
+            // The checklist switch's words, as instructions only Codex reads (a TOML basic string: JSON's escapes are TOML's).
+            if crate::checklist::wanted(&request) {
+                args.push("-c".into());
+                args.push(format!("developer_instructions={}", text_json::wire(&json!(crate::checklist::CODEX_INSTRUCTION))));
+            }
             if let Some(phase) = &phase {
                 let review = model_or_default(&phase.codex_review_model);
                 if review != "default" {

@@ -56,6 +56,9 @@ pub struct AppSnapshot {
     pub background_work_open: Option<bool>,
     pub last_create_location: Option<String>,
     pub antigravity_migrated: Option<bool>,
+    /// 에이전트 창's "에이전트에게 진행 체크리스트 요청": a request asks Antigravity, Codex, opencode and Hermes to keep a plan (on
+    /// unless false; [`AppSnapshot::agent_checklist_on`]). Saved as `agentChecklist`; 0.5.4's `antigravityChecklist` is read too.
+    pub agent_checklist: Option<bool>,
     pub reference_bubble_width: Option<f64>,
     pub reference_bubble_height: Option<f64>,
     pub claude_direct_usage_lookup_enabled: bool,
@@ -95,6 +98,7 @@ impl Default for AppSnapshot {
             background_work_open: None,
             last_create_location: None,
             antigravity_migrated: None,
+            agent_checklist: None,
             reference_bubble_width: None,
             reference_bubble_height: None,
             claude_direct_usage_lookup_enabled: false,
@@ -182,6 +186,7 @@ impl Wire for AppSnapshot {
             background_work_open: lenient_bool(o.get("backgroundWorkOpen")),
             last_create_location: lenient_string(o.get("lastCreateLocation")),
             antigravity_migrated: lenient_bool(o.get("antigravityMigrated")),
+            agent_checklist: lenient_bool(o.get("agentChecklist")).or_else(|| lenient_bool(o.get("antigravityChecklist"))),
             reference_bubble_width: lenient_double(o.get("referenceBubbleWidth")),
             reference_bubble_height: lenient_double(o.get("referenceBubbleHeight")),
             claude_direct_usage_lookup_enabled: json::boolean(o.get("claudeDirectUsageLookupEnabled"), false)?,
@@ -205,6 +210,12 @@ impl Wire for AppSnapshot {
 }
 
 impl AppSnapshot {
+    /// Whether an agent pane's requests ask its agent to keep a progress checklist: on unless switched off, so a state file that
+    /// never named it (every one before the switch) asks.
+    pub fn agent_checklist_on(&self) -> bool {
+        self.agent_checklist != Some(false)
+    }
+
     /// Written with or without its `sessions` (the bridge's state text leaves them out), and with or without the graph agents'
     /// output files (`WebDelta.PageSnapshot`: the page never gets them).
     pub fn write_with(&self, out: &mut JsonOut, sessions: bool, output_files: bool) {
@@ -249,6 +260,7 @@ impl AppSnapshot {
         out.prop_opt_bool("backgroundWorkOpen", self.background_work_open);
         out.prop_str("lastCreateLocation", self.last_create_location.as_deref());
         out.prop_opt_bool("antigravityMigrated", self.antigravity_migrated);
+        out.prop_opt_bool("agentChecklist", self.agent_checklist);
         write_lenient_double(out, "referenceBubbleWidth", self.reference_bubble_width);
         write_lenient_double(out, "referenceBubbleHeight", self.reference_bubble_height);
         out.prop_bool("claudeDirectUsageLookupEnabled", self.claude_direct_usage_lookup_enabled);
@@ -1964,6 +1976,29 @@ impl PaneLayoutNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_agent_checklist_is_on_unless_switched_off() {
+        let mut snapshot = AppSnapshot::default();
+        assert!(snapshot.agent_checklist_on(), "a state file that never named it asks");
+        snapshot.agent_checklist = Some(false);
+        assert!(!snapshot.agent_checklist_on());
+        snapshot.agent_checklist = Some(true);
+        assert!(snapshot.agent_checklist_on());
+    }
+
+    #[test]
+    fn the_agent_checklist_reads_the_older_key_and_saves_the_new_one() {
+        let read = |text: &str| AppSnapshot::read(&serde_json::from_str::<Value>(text).unwrap()).unwrap();
+        let old = read(r#"{"version":1,"antigravityChecklist":false}"#);
+        assert_eq!(old.agent_checklist, Some(false), "0.5.4's key keeps its choice");
+        assert_eq!(read(r#"{"version":1,"agentChecklist":true,"antigravityChecklist":false}"#).agent_checklist, Some(true));
+        let mut out = JsonOut::new();
+        old.write_with(&mut out, false, false);
+        let saved: Value = serde_json::from_str(&out.finish()).unwrap();
+        assert_eq!(saved["agentChecklist"], false);
+        assert!(saved.get("antigravityChecklist").is_none());
+    }
 
     #[test]
     fn a_session_round_trips_in_csharp_order() {

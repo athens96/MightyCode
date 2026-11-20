@@ -13,6 +13,8 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use crate::activity::{clean, prefix_utf8};
+use crate::antigravity::steps::AntigravitySteps;
+use crate::checklist::{self, ActivityList};
 use crate::meta;
 use crate::model::RunEvent;
 use crate::strings;
@@ -325,7 +327,14 @@ pub fn apply(session: RunSession, event: &RunEvent) -> RunSession {
             };
             RunSession { plan_history: Some(history), settings: Some(settings), ..session }
         }
-        "todos" => RunSession { todo_progress: normalized_todos(event.todos.as_ref()), ..session },
+        // A request's tool calls are its steps, not a checklist the pane keeps (or a resumed run continues).
+        "todos" => RunSession {
+            todo_progress: normalized_todos(event.todos.as_ref()).filter(|p| {
+                let items = todos::items(p);
+                items.is_empty() || !items.iter().all(checklist::is_activity)
+            }),
+            ..session
+        },
         "background" => RunSession { background_work: normalized_background(event.background.as_ref(), false), ..session },
         "status" if event.status.as_deref() == Some("running") => RunSession { background_work: None, ..session },
         _ => session,
@@ -372,12 +381,18 @@ pub mod todos {
 
 /// C# `TodoProgressTracker`: the main agent's checklist as Claude Code's own reader takes it — the task tools (TaskCreate, confirmed by
 /// its "Task #N created" result, and TaskUpdate) when there are any, else the last TodoWrite list; Codex's todo_list item; an ACP
-/// agent's plan.
+/// agent's plan; an Antigravity run's steps ([`AntigravitySteps`]); while a run has no plan, its tool calls (`checklist`).
 #[derive(Debug, Clone, Default)]
 pub struct TodoProgressTracker {
     tasks: Vec<TodoItem>,
     creates: Vec<(String, TodoItem)>,
     todo_write: Option<Vec<TodoItem>>,
+    /// An Antigravity run's checklist (agy's stream has no plan of its own).
+    antigravity: AntigravitySteps,
+    /// Codex's, an ACP agent's or pi's tool calls: the request's steps while it has no plan (`checklist`).
+    activity: ActivityList,
+    /// A plan came in this run (a saved one does not hide the activity).
+    planned: bool,
     emitted: bool,
     pub progress: Option<TodoProgress>,
 }
@@ -420,7 +435,8 @@ impl TodoProgressTracker {
     pub fn new(progress: Option<&TodoProgress>) -> TodoProgressTracker {
         let mut tracker = TodoProgressTracker::default();
         let Some(progress) = progress else { return tracker };
-        let items = todos::items(progress);
+        // An earlier request's tool calls are no checklist to continue.
+        let items: Vec<TodoItem> = todos::items(progress).iter().filter(|i| !checklist::is_activity(i)).cloned().collect();
         if items.is_empty() {
             return tracker;
         }
@@ -443,6 +459,13 @@ impl TodoProgressTracker {
         let kind = meta::text(frame, "type");
         if kind == Some("acp.update") {
             let update = meta::prop(frame, "update");
+            if meta::text_of(update, "sessionUpdate") != Some("plan") {
+                let call = checklist::acp_activity(frame)?;
+                if !self.activity.note(&call) {
+                    return None;
+                }
+                return self.emit_changed();
+            }
             let planned = update.and_then(|u| meta::prop(u, "entries"));
             let (Some(Value::Array(entries)), Some("plan")) = (planned, meta::text_of(update, "sessionUpdate")) else { return None };
             let list: Vec<TodoItem> = entries
@@ -460,13 +483,25 @@ impl TodoProgressTracker {
                 return None;
             }
             self.todo_write = Some(list);
+            self.planned = true;
+            changed = true;
+        } else if meta::text(frame, "event").is_some() {
+            // agy's stream: the request's task.md, task boundaries or tool calls.
+            self.todo_write = Some(self.antigravity.consume(frame)?);
             changed = true;
         } else if matches!(kind, Some("item.started" | "item.updated" | "item.completed")) {
             let item = meta::prop(frame, "item");
-            let (Some("todo_list"), Some(Value::Array(entries))) = (meta::text_of(item, "type"), item.and_then(|i| meta::prop(i, "items")))
-            else {
+            if meta::text_of(item, "type") != Some("todo_list") {
+                let call = checklist::codex_activity(frame)?;
+                if !self.activity.note(&call) {
+                    return None;
+                }
+                return self.emit_changed();
+            }
+            let Some(Value::Array(entries)) = item.and_then(|i| meta::prop(i, "items")) else {
                 return None;
             };
+            self.planned = true;
             let mut current = false;
             self.todo_write = Some(
                 entries
@@ -484,6 +519,13 @@ impl TodoProgressTracker {
                     .collect(),
             );
             changed = true;
+        } else if matches!(kind, Some("tool_execution_start" | "tool_execution_update" | "tool_execution_end")) {
+            // pi keeps no plan: its tool calls are the steps.
+            let call = checklist::pi_activity(frame)?;
+            if !self.activity.note(&call) {
+                return None;
+            }
+            return self.emit_changed();
         } else {
             let Some(Value::Array(blocks)) = blocks else { return None };
             if kind == Some("assistant") {
@@ -574,8 +616,20 @@ impl TodoProgressTracker {
         if !changed {
             return None;
         }
+        self.emit_changed()
+    }
+
+    /// The checklist as it stands, when it is not the one last sent: the task tools' tasks, else the plan, else (no plan this run)
+    /// the tool calls.
+    fn emit_changed(&mut self) -> Option<TodoProgress> {
         let items: Vec<TodoItem> = self.tasks.iter().cloned().chain(self.creates.iter().map(|(_, item)| item.clone())).collect();
-        let list = if items.is_empty() { self.todo_write.clone().unwrap_or_default() } else { items };
+        let list = if !items.is_empty() {
+            items
+        } else if self.planned || self.activity.is_empty() {
+            self.todo_write.clone().unwrap_or_default()
+        } else {
+            self.activity.items().to_vec()
+        };
         let next = normalized_todos(Some(&TodoProgress { items: Some(list), run_id: None }))?;
         if self.emitted && todos::same_as(&next, self.progress.as_ref()) {
             return None;

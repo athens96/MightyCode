@@ -51,6 +51,18 @@ const ROLES: [&str; 2] = ["user", "assistant"];
 /// The speaker and words of one JSON line of a session record, or None when the line is no message (a tool call or result, metadata,
 /// bad JSON).
 pub fn message(line: &str) -> Option<(Speaker, String)> {
+    // A request without the notes the app added after it: they are searched, shown and exported as no one's words.
+    match recorded(line)? {
+        (Speaker::User, text) => {
+            let typed = mighty_run::checklist::without_app_notes(&text);
+            (!typed.trim().is_empty()).then_some((Speaker::User, typed))
+        }
+        agent => Some(agent),
+    }
+}
+
+/// A line's speaker and words as recorded.
+fn recorded(line: &str) -> Option<(Speaker, String)> {
     let object: Value = serde_json::from_str(line).ok()?;
     let object = object.as_object()?;
     let speaker = |role: &str| if role == "user" { Speaker::User } else { Speaker::Agent };
@@ -256,6 +268,20 @@ mod tests {
         message(line).map(|(_, text)| text)
     }
 
+    /// "search, its snippets and the Markdown export read a request without the notes the app put after it".
+    #[test]
+    fn requests_are_searched_and_exported_without_the_apps_notes() {
+        use mighty_run::checklist::{CODEX_INSTRUCTION, OPENCODE_INSTRUCTION};
+        let user = |text: &str| serde_json::json!({"type": "event_msg", "payload": {"type": "user_message", "message": text}}).to_string();
+        let sent = user(&format!("fix the build\n\n{CODEX_INSTRUCTION}"));
+        assert_eq!(message(&sent), Some((Speaker::User, "fix the build".into())));
+        let only = user(OPENCODE_INSTRUCTION);
+        assert_eq!(message(&only), None, "a request that was only the note is no message");
+        let quoted = user(&format!("quote: {OPENCODE_INSTRUCTION}"));
+        assert_eq!(message(&quoted).map(|(_, t)| t), Some(format!("quote: {OPENCODE_INSTRUCTION}")), "the words mid-text stay");
+        let exported = markdown([sent.as_str()], "T", "나", "에이전트");
+        assert!(exported.contains("fix the build") && !exported.contains("update_plan"), "the export: {exported}");
+    }
     #[test]
     fn messages_of_each_record_shape_are_read_and_tool_traffic_is_not() {
         assert_eq!(

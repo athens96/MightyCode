@@ -599,8 +599,12 @@ impl ProviderInput {
         if allow_permission_prompts && request.provider == "claude" {
             Self::host_prompts(&mut args);
         }
-        let input =
-            if request.provider == "gemini" { Self::antigravity_user_message(&request.input) } else { Self::prompt_frame(&request.input) };
+        let input = if request.provider == "gemini" {
+            let sent = crate::checklist::with_instruction(&request.input, &request);
+            Self::antigravity_user_message(&sent)
+        } else {
+            Self::prompt_frame(&request.input)
+        };
         Ok(ProviderInput { arguments: args, standard_input: input.into_bytes() })
     }
 

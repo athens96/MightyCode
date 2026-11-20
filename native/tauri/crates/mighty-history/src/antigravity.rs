@@ -238,6 +238,17 @@ pub fn has_transcript(brain: &Path, conversation: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    /// "an Antigravity request reads without the checklist words the app put after it; the same words inside it stay".
+    #[test]
+    fn antigravity_requests_read_without_the_apps_checklist_words() {
+        use mighty_run::antigravity::steps::CHECKLIST_INSTRUCTION;
+        let content =
+            format!("<USER_REQUEST>\nfix it\n\n{CHECKLIST_INSTRUCTION}\n</USER_REQUEST>\n<ADDITIONAL_METADATA>x</ADDITIONAL_METADATA>");
+        assert_eq!(request(Some(&content)).as_deref(), Some("fix it"));
+        let quoted = format!("<USER_REQUEST>explain: {CHECKLIST_INSTRUCTION}</USER_REQUEST>");
+        assert_eq!(request(Some(&quoted)), Some(format!("explain: {CHECKLIST_INSTRUCTION}")), "the words mid-text stay");
+    }
+
     #[test]
     fn record_helpers() {
         assert_eq!(

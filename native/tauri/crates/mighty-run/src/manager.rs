@@ -909,8 +909,16 @@ impl Exec {
                 )
             })
             .collect();
-        let note = (hermes && questions.asks).then_some(agents::HERMES_PROMPT_NOTE);
-        let prompt = acp::prompt_text(&request.input, &references, note);
+        // Hermes's clarify note and the checklist switch's words follow the request in the prompt alone (the transcript keeps the request).
+        let notes: Vec<&str> = [
+            (hermes && questions.asks).then_some(agents::HERMES_PROMPT_NOTE),
+            crate::checklist::instruction(&request.provider).filter(|_| crate::checklist::wanted(request)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let note = (!notes.is_empty()).then(|| notes.join("\n\n"));
+        let prompt = acp::prompt_text(&request.input, &references, note.as_deref());
         let images = files
             .iter()
             .filter(|(attachment, _)| picture(&attachment.media_type))
@@ -1562,7 +1570,8 @@ impl Exec {
                         }
                     }
                 }
-                "opencode" | "hermes" => self.read_plan_mode(&frame),
+                // An agent's plan, else its tool calls, as the request's steps (agy's from task.md or task boundaries first; pi has no plan).
+                "opencode" | "hermes" | "gemini" | "pi" => self.read_plan_mode(&frame),
                 "codex" => {
                     self.read_plan_mode(&frame);
                     match meta::text(&frame, "type") {
@@ -1786,6 +1795,17 @@ impl Exec {
             }
             // pi exits on a session it cannot find (one that never got an answer is not written): such a pane starts a new session.
             let mut launch = request.clone();
+            // The checklist switch's words: agy's after its stdin line; Codex's as its developer instructions (providers::arguments),
+            // or after the prompt when the user's own Codex config sets those, which `-c` would replace.
+            if provider == "gemini"
+                || provider == "codex" && crate::checklist::wanted(&request) && {
+                    let home = crate::antigravity::permissions::user_profile();
+                    crate::checklist::codex_sets_developer_instructions(&environment, home.as_deref(), Path::new(&workspace_path))
+                }
+            {
+                input = crate::checklist::with_instruction(&input, &request);
+                launch.checklist = false;
+            }
             if provider == "pi"
                 && let (Some(resume), Some(sessions)) = (&request.resume_id, &inner.options.pi_sessions)
                 && !sessions(resume, &workspace_path, &environment)

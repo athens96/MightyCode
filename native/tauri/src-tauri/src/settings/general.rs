@@ -179,6 +179,15 @@ pub fn agents(host: &Arc<Host>, ui: &mut Ui) -> El {
     );
     rows.add(ui.settings_labeled(words, switch, true));
 
+    // 에이전트에게 진행 체크리스트 요청: Antigravity, Codex, opencode and Hermes are asked to keep a plan the progress panel shows
+    // (mighty_run::checklist).
+    let label = locale.get("settings.agents.checklistToggle");
+    let checklist = host.view().snapshot.agent_checklist_on();
+    let to = host.clone();
+    let switch = ui.settings_switch(&label, checklist, Some("settings-agent-checklist"), move |on| set_agent_checklist(&to, on));
+    let words = ui.settings_titled(&label, locale.get("settings.agents.checklistDescription"));
+    rows.add(ui.settings_labeled(words, switch, true));
+
     // 외부 편집기: what 편집기에서 열기 starts (editor.rs): 자동, each editor found (looked for as Settings opened), 시스템 기본.
     let label = locale.get("settings.editor.label");
     let (choices, chosen) =
@@ -219,6 +228,12 @@ fn set_status_line(host: &Arc<Host>, on: bool) {
         host.panes_changed();
         Ok(())
     });
+}
+
+/// "에이전트에게 진행 체크리스트 요청": saved; the next request reads it as it starts.
+fn set_agent_checklist(host: &Arc<Host>, on: bool) {
+    let host = host.clone();
+    crate::native::act(&host.clone(), async move { host.view().update(|state| state.agent_checklist = Some(on)) });
 }
 
 /// 글자 (C# `BuildTextSection`): the size from 85% to 150%, the interface, conversation and code fonts each over a line of words in

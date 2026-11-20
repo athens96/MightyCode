@@ -256,6 +256,11 @@ fn non_empty(text: Option<&str>) -> Option<String> {
     text.map(str::trim).filter(|t| !t.is_empty()).map(str::to_string)
 }
 
+/// What the user typed: a stored request without the notes the app added after it (`mighty_run::checklist::without_app_notes`).
+fn typed(text: Option<&str>) -> Option<String> {
+    non_empty(text.map(mighty_run::checklist::without_app_notes).as_deref())
+}
+
 fn array(value: Option<&Value>) -> &[Value] {
     value.and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[])
 }
@@ -270,12 +275,12 @@ pub fn codex_user_item(line: &[u8]) -> Option<String> {
         return None;
     }
     let joined = array(prop(item, "content")).iter().filter_map(|c| json::text(c, "text")).collect::<Vec<_>>().join("\n");
-    non_empty(Some(&joined))
+    typed(Some(&joined))
 }
 
 pub fn codex_user_event(line: &[u8]) -> Option<String> {
     let payload = codex_payload(line, "event_msg")?;
-    (json::text(&payload, "type") == Some("user_message")).then(|| non_empty(json::text(&payload, "message"))).flatten()
+    (json::text(&payload, "type") == Some("user_message")).then(|| typed(json::text(&payload, "message"))).flatten()
 }
 
 pub fn codex_user_response(line: &[u8]) -> Option<String> {
@@ -289,7 +294,7 @@ pub fn codex_user_response(line: &[u8]) -> Option<String> {
         .filter_map(|c| json::text(c, "text"))
         .collect::<Vec<_>>()
         .join("\n");
-    let text = non_empty(Some(&joined))?;
+    let text = typed(Some(&joined))?;
     (!text.starts_with('<') && !text.starts_with("# AGENTS.md instructions")).then_some(text)
 }
 
@@ -447,6 +452,28 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "a Codex request reads without the checklist words the app put after it; the same words inside the request stay".
+    #[test]
+    fn codex_requests_read_without_the_apps_checklist_words() {
+        use mighty_run::checklist::CODEX_INSTRUCTION;
+        let item = |text: &str| {
+            serde_json::json!({"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "UserMessage", "content": [{"type": "text", "text": text}]}}}).to_string()
+        };
+        let event = |text: &str| serde_json::json!({"type": "event_msg", "payload": {"type": "user_message", "message": text}}).to_string();
+        let response = |text: &str| {
+            serde_json::json!({"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}}).to_string()
+        };
+        let sent = format!("fix it\n\n{CODEX_INSTRUCTION}");
+        assert_eq!(codex_user_item(item(&sent).as_bytes()).as_deref(), Some("fix it"));
+        assert_eq!(codex_user_event(event(&sent).as_bytes()).as_deref(), Some("fix it"));
+        assert_eq!(codex_user_response(response(&sent).as_bytes()).as_deref(), Some("fix it"));
+        assert_eq!(codex_prompt(&[event(&sent)]).as_deref(), Some("fix it"), "the session list's title");
+        let quoted = format!("why does it say \"{CODEX_INSTRUCTION}\"?");
+        assert_eq!(codex_user_event(event(&quoted).as_bytes()), Some(quoted.clone()), "the words mid-text stay");
+        let later = format!("fix it\n\n{CODEX_INSTRUCTION}\n\nand then this");
+        assert_eq!(codex_user_event(event(&later).as_bytes()), Some(later.clone()), "a paragraph the user wrote after them keeps them");
+    }
 
     #[test]
     fn slash_commands_and_local_output_read_as_typed() {

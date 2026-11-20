@@ -11,6 +11,7 @@
 //! | `AntigravitySettingsText` (the byte-exact edits of `permissions.allow`), `AntigravitySettingsException` | [`settings`] |
 //! | `AntigravityRuleLeases` (the rules the app holds, its ledger) | [`leases`] |
 //! | `AntigravityMigration.ModelUnavailable` | [`model_unavailable`] |
+//! | (this port's) a request's steps for the progress panel: task.md, task boundaries, the agent's tool calls | [`steps`] |
 //!
 //! The parser's half (`OutputParser.Antigravity`) is `parser::antigravity`; the sub-agent watcher (`AntigravitySubagentWatcher`,
 //! `AntigravityChildRecord`) is mighty-graph's, beside the tracker it feeds; the cards in the desktop service are `service`'s.
@@ -19,6 +20,7 @@ pub mod leases;
 pub mod permissions;
 pub mod records;
 pub mod settings;
+pub mod steps;
 
 pub use leases::{AntigravityRuleLeases, Lease};
 pub use permissions::{

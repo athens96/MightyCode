@@ -68,8 +68,9 @@ pub fn request(content: Option<&str>) -> Option<String> {
         let end = content[from..].find("</USER_REQUEST>").map_or(content.len(), |e| e + from);
         text = &content[from..end];
     }
-    let trimmed = text.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
+    // The checklist words the app added after the request are not what the user typed.
+    let trimmed = crate::checklist::without_app_notes(text.trim());
+    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 /// `Message`: the text of a `[Message] … sender=<id> … content=…` system message from `sender`.

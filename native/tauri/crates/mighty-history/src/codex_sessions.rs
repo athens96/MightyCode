@@ -326,7 +326,7 @@ impl CodexSessionThread {
                     && typed
                     && let Some(human) = content_text(prop(p, "content")).filter(|h| !h.starts_with('<'))
                 {
-                    self.input = clean(Some(&human), MAXIMUM_INPUT_BYTES);
+                    self.input = clean(Some(&mighty_run::checklist::without_app_notes(&human)), MAXIMUM_INPUT_BYTES);
                     self.dirty = true;
                 }
             }

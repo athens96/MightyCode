@@ -61,6 +61,10 @@ pub struct StartRunRequest {
     pub antigravity_grant: Option<AllowGrant>,
     /// The card a continuation answers (`AntigravityCard`): put back with the reason when the run cannot start.
     pub antigravity_card: Option<PermissionRequest>,
+    /// Whether the agent is asked to keep a checklist (the switch "에이전트에게 진행 체크리스트 요청", `AppSnapshot::agent_checklist_on`;
+    /// `checklist::wanted`): set when the run is accepted, for a local pane of an agent the switch asks; never saved, never read from a
+    /// remote's JSON.
+    pub checklist: bool,
     /// The id this run's diagram block carries (`DesktopService.Launch` names it); None lets the runner pick one.
     pub graph_run_id: Option<String>,
     pub receipt: Option<Arc<Mutex<RunStartReceipt>>>,
@@ -89,6 +93,7 @@ impl StartRunRequest {
             pane_environment: None,
             antigravity_grant: None,
             antigravity_card: None,
+            checklist: false,
             graph_run_id: None,
             receipt: None,
         }
