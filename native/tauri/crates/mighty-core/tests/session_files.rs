@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use common::temp_dir;
 use mighty_core::locale::Locale;
-use mighty_core::model::{AppSnapshot, LogEntry, RunSession};
+use mighty_core::model::{AppSnapshot, LogEntry, RunSession, SessionDigest};
 use mighty_core::store::{self, Store};
 use serde_json::Value;
 
@@ -214,4 +214,53 @@ fn a_pane_id_that_is_no_safe_file_name_gets_a_hashed_one() {
     let odd = store::body_file_name("files:w1");
     assert!(odd.starts_with("h-") && odd.ends_with(".json") && !odd.contains(':'), "{odd}");
     let _ = RunSession::default();
+}
+
+#[test]
+fn the_index_keeps_a_summary_of_each_panes_body() {
+    let dir = temp_dir("split-digest");
+    fs::write(dir.join(store::STATE_FILE), one_file()).unwrap();
+    let (mut store, snapshot) = loaded(&dir);
+    store.save(&snapshot).unwrap();
+    let index: Value = serde_json::from_slice(&fs::read(dir.join(store::STATE_FILE)).unwrap()).unwrap();
+    let first = index["sessions"].as_array().unwrap().iter().find(|p| p["id"] == P1).unwrap();
+    assert_eq!(first["digest"]["logCount"], 2);
+    assert_eq!(first["digest"]["tail"].as_array().unwrap().len(), 2);
+
+    let (again, _) = loaded(&dir);
+    let digest = again.index_digest(P1).expect("the summary read with the index");
+    assert_eq!(digest.log_count, 2);
+    assert_eq!(digest.tail.last().unwrap().text(), "second");
+    assert_eq!(again.body_revision(P1), 1);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_pane_whose_body_is_on_disk_answers_from_its_summary() {
+    let long = "x".repeat(5000);
+    let mut pane = RunSession { id: Some(P1.into()), ..RunSession::default() };
+    pane.logs = Some(
+        (0..20)
+            .map(|i| LogEntry {
+                id: Some(format!("e{i}")),
+                kind: Some("assistant".into()),
+                text: Some(long.clone()),
+                ..LogEntry::default()
+            })
+            .collect(),
+    );
+    let digest = SessionDigest::of(&pane);
+    assert_eq!(digest.log_count, 20);
+    assert_eq!(digest.tail.len(), mighty_core::model::DIGEST_TAIL);
+    assert!(digest.tail.iter().all(|e| e.text().len() <= mighty_core::model::DIGEST_TEXT));
+    let on_disk = RunSession {
+        logs: Some(digest.tail.clone()),
+        graph_runs: None,
+        body_on_disk: true,
+        stored_digest: Some(Arc::new(SessionDigest { run_ids: vec!["run-1".into()], ..digest })),
+        ..pane
+    };
+    assert_eq!(on_disk.log_count(), 20);
+    assert_eq!(on_disk.kept_run_ids(), ["run-1"]);
+    assert_eq!(on_disk.body_digest().log_count, 20);
 }

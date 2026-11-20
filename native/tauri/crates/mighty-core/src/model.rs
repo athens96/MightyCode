@@ -1005,6 +1005,77 @@ pub struct RunSession {
     pub shell_block_runs: Option<Vec<ShellBlockRun>>,
     /// `[JsonIgnore] Mirror`: the host pane a remote mirror pane shows (C# `RemoteMirrorReference`, W9-J): never read, written or saved.
     pub mirror: Option<MirrorReference>,
+    /// The pane's body ([`BODY_FIELDS`]) is in its file and not read yet: what is held of it is the summary's last entries
+    /// ([`RunSession::body_digest`]). Never written: a pane read whole has it false.
+    pub body_on_disk: bool,
+    /// The summary the split state's index keeps of the pane's body, as read with the index: what lists read of a pane whose body is
+    /// on disk. Never written as such: the index's summary is made from the body each save.
+    pub stored_digest: Option<Arc<SessionDigest>>,
+}
+
+/// What lists need of a pane's body without the body (the phone's and the mirror's pane lists, the dashboard card, the review's kept
+/// originals): its log's length, its last entries (each text cut short) and the ids of the requests its diagrams keep. The split
+/// state's index keeps one per pane (`digest`), so a pane whose body is not read yet still shows and keeps what it holds.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SessionDigest {
+    pub log_count: i64,
+    pub tail: Vec<LogEntry>,
+    /// The diagrams' request ids and the ids they were made from (`FileOriginalStore.KeptRuns`).
+    pub run_ids: Vec<String>,
+}
+
+/// How many of the log's last entries a summary keeps, and how much of each text.
+pub const DIGEST_TAIL: usize = 8;
+pub const DIGEST_TEXT: usize = 1000;
+
+impl SessionDigest {
+    /// The summary of `pane`'s body as it is.
+    pub fn of(pane: &RunSession) -> SessionDigest {
+        let logs = pane.logs();
+        let tail = logs[logs.len().saturating_sub(DIGEST_TAIL)..]
+            .iter()
+            .map(|entry| LogEntry {
+                text: entry.text.as_deref().map(|t| crate::wire::clean(t, DIGEST_TEXT)),
+                activity: entry.activity.clone().map(|a| AgentActivity { output: None, ..a }),
+                images: None,
+                ..entry.clone()
+            })
+            .collect();
+        SessionDigest { log_count: logs.len() as i64, tail, run_ids: kept_run_ids(pane.graph_runs()) }
+    }
+
+    pub fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_int("logCount", self.log_count);
+        out.prop_list("tail", Some(&self.tail));
+        out.prop_strings("runIds", Some(&self.run_ids));
+        out.end_object();
+    }
+
+    /// The index's summary; none for one that does not read (the pane's body is then read when it is needed).
+    pub fn read(value: &Value) -> Option<SessionDigest> {
+        let object = value.as_object()?;
+        Some(SessionDigest {
+            log_count: object.get("logCount").and_then(Value::as_i64).unwrap_or(0).max(0),
+            tail: object.get("tail").and_then(|t| json::skipping_list::<LogEntry>(Some(t)).ok().flatten()).unwrap_or_default(),
+            run_ids: object
+                .get("runIds")
+                .and_then(Value::as_array)
+                .map(|ids| ids.iter().filter_map(Value::as_str).filter(|id| crate::wire::identifier(id)).map(str::to_string).collect())
+                .unwrap_or_default(),
+        })
+    }
+}
+
+/// The ids of the requests `runs` keep and of the runs they were made from.
+pub fn kept_run_ids(runs: &[MightyGraphRun]) -> Vec<String> {
+    let mut ids: Vec<String> = vec![];
+    for id in runs.iter().flat_map(|r| [r.id.clone(), r.source_run_id.clone()]).flatten() {
+        if crate::wire::identifier(&id) && !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
 }
 
 /// C# `RemoteMirrorReference(ConnectionId, HostSessionId, HostWorkspaceId, HostName)`: what ties a client pane to the host pane it
@@ -1059,6 +1130,8 @@ impl Default for RunSession {
             ask_target: None,
             shell_block_runs: None,
             mirror: None,
+            body_on_disk: false,
+            stored_digest: None,
         }
     }
 }
@@ -1141,6 +1214,8 @@ impl Wire for RunSession {
             ask_target: lenient_string(o.get("askTarget")),
             shell_block_runs: lenient_list(o.get("shellRuns")),
             mirror: None,
+            body_on_disk: false,
+            stored_digest: None,
         })
     }
 
@@ -1286,6 +1361,8 @@ impl RunSession {
         }
         if let (PaneFields::Index, Some(revision)) = (fields, body_revision) {
             out.prop_int("bodyRevision", revision as i64);
+            out.name("digest");
+            self.body_digest().write(out);
         }
         out.end_object();
     }
@@ -1338,6 +1415,31 @@ impl RunSession {
     }
     pub fn graph_runs(&self) -> &[MightyGraphRun] {
         self.graph_runs.as_deref().unwrap_or(&[])
+    }
+
+    /// The summary of the pane's body: the saved one while the body is on disk, else made from the body.
+    pub fn body_digest(&self) -> SessionDigest {
+        match (&self.stored_digest, self.body_on_disk) {
+            (Some(digest), true) => (**digest).clone(),
+            _ => SessionDigest::of(self),
+        }
+    }
+
+    /// The ids of the requests the pane's diagrams keep and of the runs they were made from, read from the summary while the body is
+    /// on disk (what the review's kept originals hold on to).
+    pub fn kept_run_ids(&self) -> Vec<String> {
+        match (&self.stored_digest, self.body_on_disk) {
+            (Some(digest), true) => digest.run_ids.clone(),
+            _ => kept_run_ids(self.graph_runs()),
+        }
+    }
+
+    /// How many entries the pane's log holds, its summary's count while the body is on disk.
+    pub fn log_count(&self) -> usize {
+        match (&self.stored_digest, self.body_on_disk) {
+            (Some(digest), true) => digest.log_count.max(0) as usize,
+            _ => self.logs().len(),
+        }
     }
 }
 

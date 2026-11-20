@@ -617,14 +617,9 @@ impl FileOriginalStore {
     }
 
     /// C# `KeptRuns(session)`: the runs a pane's graph keeps, its runs' ids and the ids they were made from.
+    /// A pane whose body is still on disk keeps what its saved summary names, so its originals stay until the body is read.
     pub fn kept_runs(session: &RunSession) -> HashSet<String> {
-        session
-            .graph_runs()
-            .iter()
-            .flat_map(|r| [Some(r.id().to_string()), r.source_run_id.clone()])
-            .flatten()
-            .filter(|id| wire::identifier(id))
-            .collect()
+        session.kept_run_ids().into_iter().collect()
     }
 
     /// C# `KeptRuns(sessions)`: the kept runs of every pane; a pane id that appears twice keeps the runs of both.

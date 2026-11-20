@@ -55,7 +55,7 @@ impl Fingerprint {
             provider: pane.provider().into(),
             model: pane.model().into(),
             resume_id: pane.resume_id.clone(),
-            count: logs.len(),
+            count: pane.log_count(),
             tail,
             usage: pane.session_usage.as_ref().map(|u| u.updated_at.clone()),
             settings: format!("{}|{}", settings.effort, settings.permission_mode),

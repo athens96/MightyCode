@@ -559,6 +559,8 @@ pub struct Store {
     written_index: Option<Vec<u8>>,
     /// The panes a save normalized last, taken again while they are the same objects.
     cache: normalize::PaneCache,
+    /// Each pane's summary as the index held it when the state loaded.
+    digests: HashMap<String, crate::model::SessionDigest>,
 }
 
 impl Store {
@@ -579,7 +581,18 @@ impl Store {
             written: HashMap::new(),
             written_index: None,
             cache: normalize::PaneCache::default(),
+            digests: HashMap::new(),
         }
+    }
+
+    /// A pane's body revision as last read or written (0 for none): what a remote reader can ask "changed since" with.
+    pub fn body_revision(&self, id: &str) -> u64 {
+        self.revisions.get(id).copied().unwrap_or(0)
+    }
+
+    /// A pane's summary as the index held it when the state loaded.
+    pub fn index_digest(&self, id: &str) -> Option<&crate::model::SessionDigest> {
+        self.digests.get(id)
     }
 
     /// The folder of the panes' body files.
@@ -602,6 +615,7 @@ impl Store {
         let mut value = parse_document(&text_of(bytes))?;
         self.split = false;
         self.revisions.clear();
+        self.digests.clear();
         self.written.clear();
         self.written_index = None;
         let mut notes = vec![];
@@ -611,6 +625,12 @@ impl Store {
                 for pane in panes.iter_mut() {
                     let Some(entry) = pane.as_object_mut() else { continue };
                     let revision = entry.remove("bodyRevision").and_then(|v| v.as_u64());
+                    // The index's summary of the body, kept for a pane whose body is read later; the body read below is the pane's own.
+                    if let Some(digest) = entry.remove("digest").as_ref().and_then(crate::model::SessionDigest::read)
+                        && let Some(id) = entry.get("id").and_then(Value::as_str)
+                    {
+                        self.digests.insert(id.to_string(), digest);
+                    }
                     let Some(id) = entry.get("id").and_then(Value::as_str).map(str::to_string) else { continue };
                     if let Some(revision) = revision {
                         self.revisions.insert(id.clone(), revision);
