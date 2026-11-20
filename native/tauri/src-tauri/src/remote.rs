@@ -769,8 +769,9 @@ mod tests {
         assert_eq!(settings.matches("crate::remote::remember_sharing(").count(), 3);
     }
 
+    /// A source file's text with its line ends as the repository stores them (a Windows checkout may turn them into CRLF).
     fn source(file: &str) -> String {
-        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file)).unwrap()
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file)).unwrap().replace("\r\n", "\n")
     }
 
     fn remote(path: &str) -> Workspace {
