@@ -12,6 +12,7 @@ import { applyHostPush, isHostPush } from './slot/host';
 import { dispatchMenu, isMenuPush } from './shell/menu';
 import { dispatchReview, isReviewPush } from './review/queue';
 import { installTokens } from './theme/tokens';
+import { installAutoTooltips } from './shell/autoTooltip';
 import './styles.css';
 import './conversation/conversation.css';
 import './composer/composer.css';
@@ -29,6 +30,8 @@ import './pending/pending.css';
 
 async function start(bridge: Bridge): Promise<void> {
   installTokens(document);
+  // Every button shows a tooltip on hover: its own title, else the words it already shows or speaks (shell/autoTooltip.ts).
+  installAutoTooltips(document);
   const store = new Store();
   // A terminal's output and the work map's state go to the pane that listens, not through the store (panes/channel.ts). The Rust
   // host's `host` push (what it draws natively) goes to its own slice (slot/host.ts); the C# build has no such branch.
