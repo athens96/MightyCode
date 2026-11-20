@@ -704,9 +704,11 @@ impl<'a> Painter<'a> {
     /// The progress card over the bubble (the Mac's `CompanionProgressCard`) in `area`: on the bubble's card at radius 14 with its
     /// hairline, a 26-high heading — the clipboard in the accent, "진행 상황", the request's number and the steps done, the state in its
     /// pill (the spinner before it while the request runs) and the fold's chevron — that folds the card; open, the step lines, "외 N개",
-    /// then the background work under its own small heading, each line a press that opens the pane. The spinner's centre is
-    /// [`Painter::spinner`].
-    pub fn progress_card(&mut self, progress: &CompanionProgress, collapsed: bool, area: PetRect) {
+    /// then the background work under its own small heading, each line a press that opens the pane. The lines stand in a box at most
+    /// eight lines tall that scrolls: `scroll` is how far (None: where the list opens, on the step in progress), clipped to the box with a
+    /// slim thumb at its right once the list outgrows it, as the plan's box does. Returns the box, how tall the list is and the scroll
+    /// it took. The spinner's centre is [`Painter::spinner`].
+    pub fn progress_card(&mut self, progress: &CompanionProgress, collapsed: bool, area: PetRect, scroll: Option<f64>) -> PlanBox {
         use crate::progress::{HEADER_HEIGHT, ROW_HEIGHT, SECTION_HEIGHT};
         let outer = std::mem::take(&mut self.items);
         let card = self.color(Token::Card);
@@ -759,10 +761,22 @@ impl<'a> Painter<'a> {
             self.put(count, cursor, (middle - count.height / 2.0).round(), Token::Ink2);
         }
         self.hits.push((PetRect::new(area.x, area.y, area.width, HEADER_HEIGHT), PROGRESS_FOLD.into()));
+        let mut list_box = PlanBox::default();
         if !collapsed {
-            let mut y = area.y + HEADER_HEIGHT;
+            let list = PetRect::new(area.x, area.y + HEADER_HEIGHT, area.width, progress.list_height());
+            let extent = progress.list_extent();
+            let overflow = (extent - list.height).max(0.0);
+            let scrolled = scroll.unwrap_or_else(|| progress.opening_scroll()).clamp(0.0, overflow);
+            list_box = PlanBox { area: list, extent, scroll: scrolled };
+            // The thumb takes the right edge while the list scrolls: the times stand clear of it.
+            let w = if overflow > 0.0 { w - metrics::SPACING_SM } else { w };
+            let seen = |y: f64, height: f64| y + height >= list.y && y <= list.bottom();
+            let above = std::mem::take(&mut self.items);
+            let mut y = list.y - scrolled;
             for row in &progress.rows {
-                self.progress_line(row, x, y, w);
+                if seen(y, ROW_HEIGHT) {
+                    self.progress_line(row, x, y, w);
+                }
                 y += ROW_HEIGHT;
             }
             if let Some(more) = &progress.more {
@@ -777,18 +791,29 @@ impl<'a> Painter<'a> {
                 self.put(&count, x + label.width + gap, y + SECTION_HEIGHT - count.height, Token::Ink2);
                 y += SECTION_HEIGHT;
                 for item in &progress.background {
-                    self.progress_line(item, x, y, w);
+                    if seen(y, ROW_HEIGHT) {
+                        self.progress_line(item, x, y, w);
+                    }
                     y += ROW_HEIGHT;
                 }
                 if let Some(more) = &progress.background_more {
                     self.progress_more(more, x, y);
                 }
             }
+            let lines = std::mem::replace(&mut self.items, above);
+            self.items.push(PetItem::Clip { rect: list, items: lines });
+            if overflow > 0.0 {
+                let thumb = 16f64.max(list.height * list.height / extent);
+                let travel = list.height - 4.0 - thumb;
+                let color = paint(self.palette[Token::Ink], 0.25);
+                self.fill(PetRect::new(area.right() - 5.0, list.y + 2.0 + travel * scrolled / overflow, 3.0, thumb), 1.5, color);
+            }
             let lines = PetRect::new(area.x, area.y + HEADER_HEIGHT, area.width, area.height - HEADER_HEIGHT);
             self.hits.push((lines, "open".into()));
         }
         let drawn = std::mem::replace(&mut self.items, outer);
         self.push(PetItem::Group { role: "progress".into(), rect: area, opacity: 1.0, items: drawn });
+        list_box
     }
 
     /// A line of the progress card: its state's mark in a column of 12, a background piece's symbol (a sub-agent or a command), its words

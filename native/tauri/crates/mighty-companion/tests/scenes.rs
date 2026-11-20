@@ -107,6 +107,7 @@ fn progress_card() -> CompanionProgress {
             line("6. Stopped step", ProgressState::Stopped, None, Some("3초")),
             line("7. Failed step", ProgressState::Failed, None, Some("8초")),
         ],
+        focus: 1,
         more: Some("외 2개".into()),
         background_title: "백그라운드".into(),
         background_count: "1/2".into(),
@@ -426,6 +427,73 @@ fn every_row_and_card_kind_draws_its_golden_scene() {
     }
     assert_eq!(golden["rows"], checked_in["rows"], "the rows' scenes");
     assert_eq!(golden["paw"], checked_in["paw"], "the paw's scene");
+}
+
+/// A request with more steps and background work than the card's eight lines keeps every line: the list opens on the step in progress
+/// and the wheel over it scrolls to its first and last lines, with no "외 N개"; a request that fits does not scroll.
+#[test]
+fn the_progress_cards_long_list_scrolls_instead_of_counting_the_rest() {
+    korean();
+    let pet = FakePet::default();
+    pet.set_work_area(LogicalRect { x: 0.0, y: 0.0, width: 2560.0, height: 1400.0 });
+    let mut companion = open(&pet);
+    let mut events = pet.events().unwrap();
+    let state = |index: usize| match index.cmp(&9) {
+        std::cmp::Ordering::Less => ProgressState::Done,
+        std::cmp::Ordering::Equal => ProgressState::Current,
+        std::cmp::Ordering::Greater => ProgressState::Pending,
+    };
+    let long = CompanionProgress {
+        rows: (0..14).map(|i| line(&format!("{}. Step {}", i + 1, i + 1), state(i), None, None)).collect(),
+        focus: 9,
+        more: None,
+        background: (0..4).map(|i| line(&format!("Task {i}"), ProgressState::Current, Some(false), Some("1초"))).collect(),
+        background_count: "4/4".into(),
+        ..progress_card()
+    };
+    let plain = CompanionCard { state: "실행 중".into(), ..task("progress-long", "running") };
+    companion.set_card(Some(CompanionCard { progress: Some(long.clone()), ..plain.clone() }), true);
+    let _ = companion.scene();
+    let list = companion.progress_box();
+    assert_eq!(list.area.height, progress::MAXIMUM_LIST, "eight lines tall at most");
+    assert_eq!(list.extent, long.list_extent());
+    assert_eq!(list.scroll, long.opening_scroll(), "it opens on the step before the one in progress");
+    let texts = |c: &mut Companion| c.scene().texts().iter().map(|t| t.value.clone()).collect::<Vec<String>>();
+    let shown = texts(&mut companion);
+    assert!(shown.contains(&"10. Step 10".to_string()) && !shown.contains(&"1. Step 1".to_string()));
+    assert!(!shown.iter().any(|t| t.starts_with("외 ")), "no \"외 N개\"");
+    let center = LogicalPoint { x: list.area.x + list.area.width / 2.0, y: list.area.y + list.area.height / 2.0 };
+    pet.draw(&companion.scene()).unwrap();
+    for _ in 0..30 {
+        pet.send(PetInput::Wheel { at: center, delta: 120 }).unwrap();
+    }
+    pump(&mut companion, &mut events);
+    assert_eq!(companion.progress_box().scroll, 0.0, "up to the first step");
+    assert!(texts(&mut companion).contains(&"1. Step 1".to_string()));
+    for _ in 0..30 {
+        pet.send(PetInput::Wheel { at: center, delta: -120 }).unwrap();
+    }
+    pump(&mut companion, &mut events);
+    let end = companion.progress_box();
+    assert!((end.scroll - (end.extent - end.area.height)).abs() < 0.01, "down to the last piece of background work");
+    assert!(texts(&mut companion).contains(&"Task 3".to_string()));
+    // The same request keeps where it was scrolled; the next request opens on its own step in progress.
+    let mut later = long.clone();
+    later.rows[10].state = ProgressState::Current;
+    companion.set_card(Some(CompanionCard { progress: Some(later), ..plain.clone() }), true);
+    let _ = companion.scene();
+    assert_eq!(companion.progress_box().scroll, end.scroll);
+    companion.set_card(
+        Some(CompanionCard { progress: Some(CompanionProgress { heading: "요청 28".into(), ..long.clone() }), ..plain.clone() }),
+        true,
+    );
+    let _ = companion.scene();
+    assert_eq!(companion.progress_box().scroll, long.opening_scroll());
+    // A list that fits its box does not scroll.
+    companion.set_card(Some(CompanionCard { progress: Some(progress_card()), ..plain }), true);
+    let _ = companion.scene();
+    let fits = companion.progress_box();
+    assert!(fits.extent <= fits.area.height && fits.scroll == 0.0);
 }
 
 /// The Mac's progress card over the task bubble: the window grows over the bubble by the card (the pet's feet stay), its heading folds

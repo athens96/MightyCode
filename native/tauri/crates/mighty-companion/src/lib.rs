@@ -128,6 +128,10 @@ pub struct Companion {
     progress_spinner: Option<PetPoint>,
     plan_measure: Option<PlanMeasure>,
     plan: PlanBox,
+    /// How far the progress card's list was scrolled by hand (None: it stands where it opens, on the step in progress), and its box
+    /// as last drawn.
+    progress_scroll: Option<f64>,
+    progress_box: PlanBox,
     menu_items: Vec<(PetRect, String, String)>,
     menu_area: PetRect,
     menu_open: bool,
@@ -168,6 +172,8 @@ impl Default for Companion {
             progress_spinner: None,
             plan_measure: None,
             plan: PlanBox::default(),
+            progress_scroll: None,
+            progress_box: PlanBox::default(),
             menu_items: vec![],
             menu_area: PetRect::default(),
             menu_open: false,
@@ -244,6 +250,11 @@ impl Companion {
         let ticked = self.card != value;
         if key(self.card.as_ref()) != key(value.as_ref()) {
             self.plan.scroll = 0.0;
+        }
+        // Another request (or another pane's) opens its list on its own step in progress again.
+        let request = |card: Option<&CompanionCard>| card.and_then(|c| c.progress.as_ref()).map(|p| p.heading.clone());
+        if key(self.card.as_ref()) != key(value.as_ref()) || request(self.card.as_ref()) != request(value.as_ref()) {
+            self.progress_scroll = None;
         }
         self.card = value;
         self.show_bubble = shown;
@@ -398,6 +409,7 @@ impl Companion {
         self.hits.clear();
         self.spinner = None;
         self.progress_spinner = None;
+        self.progress_box = PlanBox::default();
         self.bubble_items.clear();
         let Some(current) = self.card.clone().filter(|_| self.show_bubble) else { return };
         let palette = scene::palette(current.light);
@@ -437,7 +449,7 @@ impl Companion {
         if let (Some((progress, collapsed)), Some(area)) = (self.progress().map(|(p, c)| (p.clone(), c)), self.progress_area()) {
             let mut plan = None;
             let mut painter = Painter::new(measure.as_ref(), palette, true, &mut plan);
-            painter.progress_card(&progress, collapsed, area);
+            self.progress_box = painter.progress_card(&progress, collapsed, area, self.progress_scroll);
             self.progress_spinner = painter.spinner;
             self.hits.append(&mut painter.hits);
             self.bubble_items.insert(0, painter.items.remove(0));
@@ -805,6 +817,21 @@ impl Companion {
                 if self.card_dirty {
                     self.render_card();
                 }
+                // Over the progress card's list that outgrew its box, the wheel moves the list (as the pane's progress panel scrolls).
+                let list = self.progress_box;
+                if self.show_bubble
+                    && !self.menu_open
+                    && self.progress().is_some_and(|(_, collapsed)| !collapsed)
+                    && list.extent > list.area.height
+                    && list.area.contains(at.x, at.y)
+                {
+                    let moved = (list.scroll - f64::from(*delta) / 120.0 * scene::PLAN_NOTCH).clamp(0.0, list.extent - list.area.height);
+                    if moved != list.scroll {
+                        self.progress_scroll = Some(moved);
+                        self.card_dirty = true;
+                    }
+                    return None;
+                }
                 let over_plan = self.card.as_ref().and_then(|c| c.approval.as_ref()).is_some_and(|r| r.plan.is_some());
                 if self.show_bubble
                     && !self.menu_open
@@ -926,6 +953,11 @@ impl Companion {
             self.render_card();
         }
         self.plan
+    }
+
+    /// The progress card's list as last drawn: its box, how tall the whole list is and how far it is scrolled.
+    pub fn progress_box(&self) -> PlanBox {
+        self.progress_box
     }
 
     /// The scale the window draws at.

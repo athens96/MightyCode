@@ -1,7 +1,7 @@
 //! The pet's progress card over its bubble (the Mac's CompanionProgress.swift and `CompanionProgressCard` in
 //! AgentCompanionViews.swift): the progress panel of the agent the bubble shows — its newest request (mighty-graph `progress_of`, the
-//! page's own panel) — cut to what fits a small card. A few steps around the one in progress, then a few pieces of background work; it
-//! folds to its heading (`progressCollapsed` in the settings). A request with neither steps nor background work has no card, and the
+//! page's own panel) — every step and piece of background work the panel holds, in a list as tall as eight lines at most that scrolls
+//! inside the card (opened on the step in progress, as the page's panel scrolls in its own box); it folds to its heading (`progressCollapsed` in the settings). A request with neither steps nor background work has no card, and the
 //! card goes with the task bubble: none while a request for the user takes the bubble or the bubble is put away. Its words and clocks
 //! are read by the app once a second, as the bubble's are. Owner: W8-E.
 
@@ -12,9 +12,10 @@ use mighty_graph::flow::card::elapsed_words;
 use mighty_graph::flow::steps::{self, ProgressState};
 use mighty_graph::support;
 
-/// The most steps and pieces of background work the card shows.
-pub const MAXIMUM_ROWS: usize = 5;
-pub const MAXIMUM_BACKGROUND: usize = 3;
+/// How many lines the card's list shows before it scrolls: its height is at most this many lines and a section heading.
+pub const VISIBLE_LINES: usize = 8;
+/// The list's box at its tallest.
+pub const MAXIMUM_LIST: f64 = VISIBLE_LINES as f64 * ROW_HEIGHT + SECTION_HEIGHT;
 /// The heading, a line, the "외 N개" and "백그라운드" lines.
 pub const HEADER_HEIGHT: f64 = 26.0;
 pub const ROW_HEIGHT: f64 = 20.0;
@@ -46,7 +47,9 @@ pub struct CompanionProgress {
     pub status: String,
     pub running: bool,
     pub rows: Vec<ProgressLine>,
-    /// "외 4개" for the steps the rows leave out.
+    /// The row the list opens on: the step in progress, else the last one done.
+    pub focus: usize,
+    /// "외 4개" for the steps the page's panel leaves out too (past its 100 lines).
     pub more: Option<String>,
     /// "백그라운드" and "1/3" (running of all of it), with the background work.
     pub background_title: String,
@@ -80,11 +83,8 @@ impl CompanionProgress {
             .position(|r| r.state == ProgressState::Current)
             .or_else(|| rows.iter().rposition(|r| r.state == ProgressState::Done))
             .unwrap_or(0);
-        let start = if rows.len() <= MAXIMUM_ROWS { 0 } else { focus.saturating_sub(1).min(rows.len() - MAXIMUM_ROWS) };
         let shown: Vec<ProgressLine> = rows
             .iter()
-            .skip(start)
-            .take(MAXIMUM_ROWS)
             .map(|row| ProgressLine {
                 text: row.text.clone(),
                 state: row.state,
@@ -92,11 +92,9 @@ impl CompanionProgress {
                 time: time(row.started_at, row.ended_at, row.state == ProgressState::Current && progress.running, now, locale),
             })
             .collect();
-        let hidden = progress.hidden + rows.len() - shown.len();
         let background: Vec<ProgressLine> = progress
             .background
             .iter()
-            .take(MAXIMUM_BACKGROUND)
             .map(|item| ProgressLine {
                 text: item.text.clone(),
                 state: item.state,
@@ -114,10 +112,11 @@ impl CompanionProgress {
             status: progress.status.clone(),
             running: progress.running,
             rows: shown,
-            more: more(hidden, locale),
+            focus,
+            more: more(progress.hidden, locale),
             background_title: locale.get("graph.progress.background"),
             background_count: format!("{running_background}/{all_background}"),
-            background_more: more(all_background - background.len(), locale),
+            background_more: more(progress.background_hidden, locale),
             background,
         })
     }
@@ -133,19 +132,36 @@ impl CompanionProgress {
         CompanionProgress::make(&steps::progress_of(index, shown, &heading, locale), now, locale)
     }
 
-    /// How tall the card stands over the bubble, the gap to it included: the window grows by this much.
-    pub fn height(&self, collapsed: bool) -> f64 {
-        let mut height = HEADER_HEIGHT + GAP;
-        if collapsed {
-            return height;
-        }
-        height += self.rows.len() as f64 * ROW_HEIGHT + if self.more.is_some() { SECTION_HEIGHT } else { 0.0 };
+    /// How tall the whole list is, steps, "외 N개" and the background work under its heading: it scrolls when taller than
+    /// [`list_height`](Self::list_height).
+    pub fn list_extent(&self) -> f64 {
+        let mut extent = self.rows.len() as f64 * ROW_HEIGHT + if self.more.is_some() { SECTION_HEIGHT } else { 0.0 };
         if !self.background.is_empty() {
-            height += SECTION_HEIGHT
+            extent += SECTION_HEIGHT
                 + self.background.len() as f64 * ROW_HEIGHT
                 + if self.background_more.is_some() { SECTION_HEIGHT } else { 0.0 };
         }
-        height + PADDING
+        extent
+    }
+
+    /// How tall the list's box stands: the whole list up to [`VISIBLE_LINES`] lines and a section heading.
+    pub fn list_height(&self) -> f64 {
+        self.list_extent().min(MAXIMUM_LIST)
+    }
+
+    /// Where the list stands scrolled before anyone scrolls it: the line before the focus at the top, so the step in progress shows with
+    /// the one done before it.
+    pub fn opening_scroll(&self) -> f64 {
+        (self.focus.saturating_sub(1) as f64 * ROW_HEIGHT).clamp(0.0, (self.list_extent() - self.list_height()).max(0.0))
+    }
+
+    /// How tall the card stands over the bubble, the gap to it included: the window grows by this much.
+    pub fn height(&self, collapsed: bool) -> f64 {
+        let height = HEADER_HEIGHT + GAP;
+        if collapsed {
+            return height;
+        }
+        height + self.list_height() + PADDING
     }
 
     /// The card without its clocks: a clock that ticks redraws the card, nothing more.
@@ -232,25 +248,27 @@ mod tests {
     }
 
     #[test]
-    fn the_card_keeps_the_step_in_progress_in_view_and_counts_the_rest() {
+    fn the_card_holds_every_step_and_opens_on_the_one_in_progress() {
         let card = CompanionProgress::newest(&[run("r", 9, 6, 0)], 0, at(75), &ko()).expect("a card");
-        assert_eq!(card.rows.len(), MAXIMUM_ROWS);
+        assert_eq!(card.rows.len(), 9, "every step, no \"외 N개\"");
+        assert_eq!(card.rows[4..7].iter().map(|r| r.text.as_str()).collect::<Vec<_>>(), ["5. 단계 5", "6. 단계 6", "7. 단계 7"]);
         assert_eq!(
-            card.rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(),
-            ["5. 단계 5", "6. 단계 6", "7. 단계 7", "8. 단계 8", "9. 단계 9"]
-        );
-        assert_eq!(
-            card.rows.iter().map(|r| r.state).collect::<Vec<_>>()[..3],
+            card.rows.iter().map(|r| r.state).collect::<Vec<_>>()[4..7],
             [ProgressState::Done, ProgressState::Done, ProgressState::Current]
         );
-        assert_eq!(card.more.as_deref(), Some("외 4개"), "the four steps before the window");
+        assert_eq!(card.more, None);
+        assert_eq!(card.focus, 6);
+        // Nine lines outgrow the eight-line box; it opens with the step before the one in progress at its top, held to its end.
+        assert_eq!(card.list_extent(), 9.0 * ROW_HEIGHT);
+        assert_eq!(card.list_height(), MAXIMUM_LIST);
+        assert_eq!(card.opening_scroll(), (9.0 * ROW_HEIGHT - MAXIMUM_LIST).min(5.0 * ROW_HEIGHT));
         assert_eq!(card.count.as_deref(), Some("6/9"));
         assert_eq!(card.heading, "요청 1");
         assert_eq!((card.title.as_str(), card.status.as_str(), card.running), ("진행 상황", "running", true));
         // A finished step took its time; the step in progress counts from its start; one to come has none.
-        assert_eq!(card.rows[0].time.as_deref(), Some("9초"));
-        assert_eq!(card.rows[2].time.as_deref(), Some("15초"));
-        assert_eq!(card.rows[3].time, None);
+        assert_eq!(card.rows[4].time.as_deref(), Some("9초"));
+        assert_eq!(card.rows[6].time.as_deref(), Some("15초"));
+        assert_eq!(card.rows[7].time, None);
         assert!(card.background.is_empty() && card.background_more.is_none());
         // The page numbers the request after the pane's older history.
         assert_eq!(CompanionProgress::newest(&[run("r", 9, 6, 0)], 26, at(75), &ko()).unwrap().heading, "요청 27");
@@ -268,14 +286,15 @@ mod tests {
     fn background_work_alone_makes_a_card_and_folding_shrinks_it() {
         let card = CompanionProgress::newest(&[run("r", 0, 0, 5)], 0, at(61), &ko()).expect("a card");
         assert!(card.rows.is_empty() && card.count.is_none() && card.more.is_none());
-        assert_eq!(card.background.len(), MAXIMUM_BACKGROUND);
-        assert_eq!(card.background_more.as_deref(), Some("외 2개"));
+        assert_eq!(card.background.len(), 5, "every piece of background work, no \"외 N개\"");
+        assert_eq!(card.background_more, None);
         assert_eq!((card.background_title.as_str(), card.background_count.as_str()), ("백그라운드", "5/5"));
         assert!(card.background.iter().all(|b| b.agent == Some(false) && b.time.as_deref() == Some("1분 0초")));
         let open = card.height(false);
         let folded = card.height(true);
         assert_eq!(folded, HEADER_HEIGHT + GAP);
-        assert_eq!(open, folded + SECTION_HEIGHT + 3.0 * ROW_HEIGHT + SECTION_HEIGHT + PADDING);
+        assert_eq!(open, folded + SECTION_HEIGHT + 5.0 * ROW_HEIGHT + PADDING);
+        assert_eq!(card.opening_scroll(), 0.0, "it fits: nothing to scroll");
     }
 
     #[test]
