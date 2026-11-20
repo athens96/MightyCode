@@ -132,3 +132,53 @@ fn every_state_shaped_contract_fixture_is_covered() {
     }
     assert!(shaped.is_empty(), "state-shaped contract fixtures not in the parity corpus: {shaped:?}");
 }
+
+/// Several long-lived panes, each within its own 2 MiB of diagrams, together outgrow the 8 MiB file: the save still writes, cutting the
+/// written copy of each pane's diagrams to its newest requests, and what it wrote loads again.
+#[test]
+fn a_state_too_large_for_the_file_is_saved_with_its_newest_requests() {
+    let profile = read_json(&repo().join("native/contracts/fixtures/demo-profile.json"));
+    let root = if cfg!(windows) { PathBuf::from("C:\\demo\\Projects") } else { PathBuf::from("/demo/Projects") };
+    let mut state = demo::demo_state(&profile, "en", &root);
+    let words = "x".repeat(30_000);
+    let runs = |pane: usize| -> Value {
+        Value::Array(
+            (0..40)
+                .map(|n| {
+                    json!({
+                        "id": format!("run-{pane}-{n:02}"),
+                        "input": format!("request {n}"),
+                        "status": "completed",
+                        "provider": "claude",
+                        "rootEntries": (0..2).map(|e| json!({"id": format!("e-{pane}-{n}-{e}"), "kind": "assistant", "text": words, "timestamp": "2026-11-20T00:00:00Z"})).collect::<Vec<_>>(),
+                        "resultEntries": [],
+                        "agents": [],
+                    })
+                })
+                .collect(),
+        )
+    };
+    let sessions = state["sessions"].as_array_mut().unwrap();
+    let mut grown = 0;
+    for (index, session) in sessions.iter_mut().enumerate() {
+        if session["kind"] == "claude" && session["provider"] == "claude" {
+            session["graphRuns"] = runs(index);
+            grown += 1;
+        }
+    }
+    assert!(grown >= 5, "enough panes to outgrow the file: {grown}");
+    // Read past the file check (the state is built in memory, as the app holds it).
+    let loaded = store::decode(&state).unwrap();
+    let whole = mighty_core::json::Wire::to_json(&loaded).len();
+    assert!(whole as u64 > store::MAXIMUM_STATE_BYTES, "the state itself is over the limit: {whole}");
+
+    let (_, written) = store::encode_for_save(&loaded).expect("the save fits instead of failing");
+    assert!(written.len() as u64 <= store::MAXIMUM_STATE_BYTES, "{} bytes", written.len());
+    let again = store::read_state(&written, &en()).expect("what was written loads");
+    for session in again.sessions().iter().filter(|s| s.graph_runs.as_ref().is_some_and(|r| !r.is_empty())) {
+        let ids: Vec<&str> = session.graph_runs.as_ref().unwrap().iter().map(|r| r.id()).collect();
+        assert!(ids.iter().any(|id| id.ends_with("-39")), "the newest request is kept: {ids:?}");
+        assert!(!ids.iter().any(|id| id.ends_with("-00")), "the oldest is cut first: {ids:?}");
+    }
+    assert_eq!(again.sessions().len(), loaded.sessions().len(), "no pane is lost");
+}

@@ -298,13 +298,69 @@ pub fn read_state(bytes: &[u8], locale: &Locale) -> Result<AppSnapshot, StateErr
 pub fn encode_for_save(snapshot: &AppSnapshot) -> Result<(AppSnapshot, Vec<u8>), StateError> {
     // The remote mirror's workspaces and panes are never written, whoever encodes the state.
     let normalized = normalize::normalize(&snapshot.without_mirrors(), false).map_err(state_error)?;
-    let mut out = JsonOut::new();
-    normalize::stored(&normalized).write(&mut out);
-    let encoded = out.finish().into_bytes();
-    if encoded.len() as u64 > MAXIMUM_STATE_BYTES {
-        return Err(StateError::StateTooLarge(encoded.len()));
-    }
+    let encoded = encode_fitting(&normalized)?;
     Ok((normalized, encoded))
+}
+
+/// The state's file bytes.
+fn encode(snapshot: &AppSnapshot) -> Vec<u8> {
+    let mut out = JsonOut::new();
+    normalize::stored(snapshot).write(&mut out);
+    out.finish().into_bytes()
+}
+
+/// The saved diagrams' budget per pane, in the order a state too large for the file tries them (the live one is
+/// [`normalize::LIVE_HISTORY_LIMIT`]), and how many log entries a pane keeps after that.
+const FITTING_GRAPH_BUDGETS: [i64; 6] = [1024 * 1024, 512 * 1024, 256 * 1024, 128 * 1024, 32 * 1024, 0];
+const FITTING_LOG_ENTRIES: [usize; 3] = [200, 100, 40];
+
+/// The bytes written for `normalized`, at most [`MAXIMUM_STATE_BYTES`]. Each pane may keep 2 MiB of diagrams, so a few long-lived
+/// panes together outgrow the file; rather than refuse every save from then on (and lose what changed since), the written copy of
+/// each pane's diagrams is cut to its newest requests under a smaller and smaller budget, then its log to its newest entries, until
+/// it fits. Only the written copy shrinks: the app keeps what it shows, and each agent's own history loads the older requests again
+/// when the pane is scrolled up.
+pub fn encode_fitting(normalized: &AppSnapshot) -> Result<Vec<u8>, StateError> {
+    let encoded = encode(normalized);
+    if encoded.len() as u64 <= MAXIMUM_STATE_BYTES {
+        return Ok(encoded);
+    }
+    let mut last = encoded.len();
+    for budget in FITTING_GRAPH_BUDGETS {
+        let smaller = encode(&trimmed(normalized, budget, None)?);
+        if smaller.len() as u64 <= MAXIMUM_STATE_BYTES {
+            return Ok(smaller);
+        }
+        last = smaller.len();
+    }
+    for keep in FITTING_LOG_ENTRIES {
+        let smaller = encode(&trimmed(normalized, 0, Some(keep))?);
+        if smaller.len() as u64 <= MAXIMUM_STATE_BYTES {
+            return Ok(smaller);
+        }
+        last = smaller.len();
+    }
+    Err(StateError::StateTooLarge(last))
+}
+
+/// `snapshot` with each pane's diagrams cut to their newest requests within `graph_budget` bytes (the normalizer's own measure) and,
+/// given `keep_logs`, its log to that many newest entries.
+fn trimmed(snapshot: &AppSnapshot, graph_budget: i64, keep_logs: Option<usize>) -> Result<AppSnapshot, StateError> {
+    let mut sessions = Vec::with_capacity(snapshot.sessions().len());
+    for session in snapshot.sessions() {
+        let runs = match session.graph_runs.as_deref() {
+            Some(runs) if !runs.is_empty() => {
+                let mut budget = graph_budget;
+                Some(normalize::graph_runs(runs, false, &mut budget, None).map_err(state_error)?).filter(|r| !r.is_empty())
+            }
+            _ => session.graph_runs.clone(),
+        };
+        let logs = match (keep_logs, session.logs.as_deref()) {
+            (Some(keep), Some(logs)) if logs.len() > keep => Some(logs[logs.len() - keep..].to_vec()),
+            _ => session.logs.clone(),
+        };
+        sessions.push(std::sync::Arc::new(crate::model::RunSession { graph_runs: runs, logs, ..(**session).clone() }));
+    }
+    Ok(AppSnapshot { sessions: Some(sessions), ..snapshot.clone() })
 }
 
 /// Where a load's state came from.
@@ -530,12 +586,7 @@ impl Store {
                     return Err(StateError::PathNotApproved);
                 }
             }
-            let mut out = JsonOut::new();
-            normalize::stored(&normalized).write(&mut out);
-            let encoded = out.finish().into_bytes();
-            if encoded.len() as u64 > MAXIMUM_STATE_BYTES {
-                return Err(StateError::StateTooLarge(encoded.len()));
-            }
+            let encoded = encode_fitting(&normalized)?;
             (normalized, encoded)
         };
         if !self.writes {
