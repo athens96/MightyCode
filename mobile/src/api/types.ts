@@ -193,15 +193,16 @@ export interface MobileSessionSummary {
    */
   canSteer?: boolean;
   /**
-   * A Mighty Orchestration child pane's parent pane (Mac only). The list draws the child one
-   * step in under its parent when the parent is listed too. Absent on other panes and hosts.
+   * A Mighty Orchestration child pane's parent pane (Mac and Windows). The list draws the child one
+   * step in under its parent when the parent is listed too. Absent on other panes and older hosts.
    */
   parentSessionId?: string;
-  /** That child's state as the Mac sidebar says it (`ChildState`): an open string. */
+  /** That child's state as the host's sidebar says it (`ChildState`): an open string. */
   childState?: string;
   /**
-   * The pane works in its own git worktree (Mac 0.4.61+): its branch, the branch it merges into, its PORT and where it
-   * stands. Absent on every other pane and from older hosts; a pane that has it takes `POST …/worktree`.
+   * The pane works in its own git worktree: its branch, the branch it merges into, its PORT and where it stands. Sent by
+   * the Swift Mac host (0.4.61+), which takes `POST …/worktree` for it; the Rust host (Mac and Windows) does not send it
+   * yet, as it has no such route. Absent on every other pane and from older hosts.
    */
   worktree?: MobilePaneWorktree;
 }

@@ -22,8 +22,10 @@ use mighty_core::json::{JsonOut, Wire};
 use mighty_core::locale::Locale;
 use mighty_core::model::{AppSnapshot, RunSession, Workspace};
 use mighty_core::permission::ToolPermissionRequest;
+use mighty_core::shell::DelegationChildRow;
 use mighty_core::wire;
 use mighty_delegation::request::DelegationName;
+use mighty_delegation::sidebar;
 use mighty_platform::BoxFuture;
 use mighty_run::model::ModelCatalog;
 use mighty_run::plan_mode::{self, PlanDecision};
@@ -489,12 +491,13 @@ impl Inner {
             let snapshot = self.desk.snapshot();
             let allowed = self.allowed(&snapshot);
             let panes = phone_panes(&snapshot, allowed.as_deref());
+            let children = self.desk.child_rows();
             let summaries: Vec<(MobilePaneDigest, String, String)> = panes
                 .iter()
                 .map(|pane| {
                     let digest = self.desk.digest(pane).unwrap_or_else(|| unread(pane));
                     let held = self.desk.held_items(pane.id()).iter().map(|i| i.id.clone()).collect::<Vec<_>>().join("\n");
-                    (digest, self.summary(pane, 0, &snapshot), held)
+                    (digest, self.summary(pane, 0, &snapshot, &children), held)
                 })
                 .collect();
             let readings: Vec<Reading> = panes
@@ -559,8 +562,9 @@ impl Inner {
         self.notes().revisions.session(id)
     }
 
-    /// `Summary(pane, revision)`: one pane as the phone's list shows it.
-    fn summary(&self, pane: &RunSession, revision: i64, snapshot: &AppSnapshot) -> String {
+    /// `Summary(pane, revision)`: one pane as the phone's list shows it. `children` is the sidebar's child list
+    /// ([`PhoneDesk::child_rows`]), read once for every pane of a pass.
+    fn summary(&self, pane: &RunSession, revision: i64, snapshot: &AppSnapshot, children: &[DelegationChildRow]) -> String {
         let _ = snapshot;
         let l = locale();
         let pending = self.pending(pane.id());
@@ -608,6 +612,13 @@ impl Inner {
         out.prop_str("titleMode", Some(pane.title_mode.as_deref().unwrap_or("auto")));
         out.prop_str("resolvedModel", resolved.as_deref());
         out.prop_bool("canSteer", false);
+        // A Mighty Orchestration child: its sidebar row's parent and state, waiting while it asks for a human's answer
+        // (`DelegationSidebar.shownState`, the sidebar's own test). A pane the delegation file does not list carries neither.
+        if let Some(row) = children.iter().find(|row| row.id == pane.id()) {
+            let asks_human = !pending.is_empty() || antigravity > 0;
+            out.prop_str("parentSessionId", Some(&row.parent_session_id));
+            out.prop_str("childState", Some(sidebar::shown_state(row.state, asks_human).name()));
+        }
         out.end_object();
         out.finish()
     }
@@ -635,8 +646,9 @@ impl Inner {
         out.end_array();
         out.name("sessions");
         out.begin_array();
+        let children = self.desk.child_rows();
         for pane in phone_panes(&snapshot, allowed.as_deref()) {
-            let summary = self.summary(&pane, self.revision(pane.id()), &snapshot);
+            let summary = self.summary(&pane, self.revision(pane.id()), &snapshot, &children);
             out.raw(&summary);
         }
         out.end_array();
@@ -671,7 +683,7 @@ impl Inner {
         out.prop_int("protocol", 1);
         out.prop_int("revision", revision);
         out.name("session");
-        out.raw(&self.summary(pane, revision, &snapshot));
+        out.raw(&self.summary(pane, revision, &snapshot, &self.desk.child_rows()));
         out.name("entries");
         out.list(&mighty::phone_entries(&logs[logs.len().saturating_sub(mighty::MAXIMUM_ENTRIES)..]));
         out.prop_bool("hasOlder", logs.len() > mighty::MAXIMUM_ENTRIES);

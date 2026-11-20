@@ -1467,3 +1467,55 @@ async fn mobile_remote_a_dropped_submit_still_spends_its_claim() {
     world.desk.calls().action = Some(Arc::new(|_| Ok(ActionAnswer::Value(Value::Null))));
     assert_eq!(world.route("POST", "/m1/sessions/pane/submit", Some(json!({"text": "next"}))).await.0, 202, "the slot came back");
 }
+
+/// The summary's Mighty Orchestration link (Mac `MobileRemoteSupport.childLink`, sent by the Rust host on both OSes): a delegated child
+/// carries its parent and its sidebar state (waiting while it asks a human), a pane the delegation file does not list carries neither.
+#[tokio::test]
+async fn the_summary_carries_a_childs_parent_and_state() {
+    use mighty_core::shell::{ChildState, DelegationChildRow};
+
+    let world = World::new("mobile-children");
+    let child = |id: &str| RunSession { parent_session_id: Some("parent".into()), ..pane(id, "w") };
+    world.desk.set_sessions(vec![pane("parent", "w"), child("child"), child("asks"), pane("plain", "w")]);
+    let row = |id: &str, state: ChildState| DelegationChildRow {
+        id: id.into(),
+        parent_session_id: "parent".into(),
+        state,
+        task: None,
+        parent_branch: "main".into(),
+        parent_checkout: None,
+        can_undo: false,
+        held_notices: 0,
+        started_by_human: false,
+        agent: "claude".into(),
+    };
+    {
+        let mut calls = world.desk.calls();
+        calls.children = vec![row("child", ChildState::Reported), row("asks", ChildState::Running), row("gone", ChildState::Running)];
+        calls.permissions.push(permission("p1", "asks", "Bash", "{}"));
+    }
+    let (_, state) = world.route("GET", "/m1/state", None).await;
+    let found: std::collections::HashMap<String, Value> =
+        state["sessions"].as_array().unwrap().iter().map(|p| (p["id"].as_str().unwrap().to_string(), p.clone())).collect();
+
+    assert!(
+        found["child"]["parentSessionId"] == "parent" && found["child"]["childState"] == "reported",
+        "a child carries its parent and its row's state"
+    );
+    assert!(
+        found["asks"]["parentSessionId"] == "parent" && found["asks"]["childState"] == "waiting",
+        "a running child that asks for a human's answer reads as waiting"
+    );
+    for id in ["plain", "parent"] {
+        assert!(
+            found[id].get("parentSessionId").is_none() && found[id].get("childState").is_none(),
+            "{id}: a pane the delegation file does not list as a child carries neither"
+        );
+    }
+    assert!(found.values().all(|p| p.get("worktree").is_none()), "the Rust host sends no worktree until it takes POST …/worktree");
+    let (_, detail) = world.route("GET", "/m1/sessions/child", None).await;
+    assert!(
+        detail["session"]["parentSessionId"] == "parent" && detail["session"]["childState"] == "reported",
+        "the session reply's summary says the same"
+    );
+}

@@ -17,6 +17,7 @@ use mighty_core::app_update_view;
 use mighty_core::attachment::RunAttachment;
 use mighty_core::model::{AppSnapshot, MobileRemoteSettings, PlanRecord, RunSession, Workspace};
 use mighty_core::permission::ToolPermissionRequest;
+use mighty_core::shell::DelegationChildRow;
 use mighty_delegation::delivery::DelegationDeliveryItem;
 use mighty_files::changes::ChangeSet;
 use mighty_graph::structure::mobile::Built;
@@ -187,6 +188,9 @@ pub trait PhoneDesk: Send + Sync {
     fn pending_permissions(&self, session_id: &str) -> Vec<ToolPermissionRequest>;
     /// `service.HeldItems`: what delegation holds for the pane, oldest first.
     fn held_items(&self, session_id: &str) -> Vec<DelegationDeliveryItem>;
+    /// `service.DelegationChildren`: the delegated children as the sidebar lists them (`DelegationSidebar.rows`), for a child pane's
+    /// `parentSessionId` and `childState`; empty without delegation.
+    fn child_rows(&self) -> Vec<DelegationChildRow>;
     /// `service.AntigravityCard`: the pane's Antigravity card, if one waits.
     fn antigravity_card(&self, session_id: &str) -> Option<PermissionRequest>;
     /// `service.PendingAntigravityCard`: that card if it is still the one with these ids.

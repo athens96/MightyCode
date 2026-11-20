@@ -12,6 +12,7 @@ use indexmap::IndexMap;
 use mighty_core::app_update_view;
 use mighty_core::model::{AppSnapshot, PlanRecord, RunSession, Workspace};
 use mighty_core::permission::ToolPermissionRequest;
+use mighty_core::shell::DelegationChildRow;
 use mighty_delegation::delivery::DelegationDeliveryItem;
 use mighty_files::changes::ChangeSet;
 use mighty_graph::structure::mobile::Built;
@@ -78,6 +79,8 @@ pub struct Calls {
     pub answered: Vec<(String, String, String)>,
     pub running: HashSet<String>,
     pub held: HashMap<String, Vec<DelegationDeliveryItem>>,
+    /// The sidebar's delegated children (`child_rows`).
+    pub children: Vec<DelegationChildRow>,
     pub cards: HashMap<String, PermissionRequest>,
     pub run_folders: HashMap<String, String>,
     pub file_changes: Option<ChangeSet>,
@@ -261,6 +264,9 @@ impl PhoneDesk for Desk {
     }
     fn held_items(&self, session_id: &str) -> Vec<DelegationDeliveryItem> {
         self.calls().held.get(session_id).cloned().unwrap_or_default()
+    }
+    fn child_rows(&self) -> Vec<DelegationChildRow> {
+        self.calls().children.clone()
     }
     fn antigravity_card(&self, session_id: &str) -> Option<PermissionRequest> {
         self.calls().cards.get(session_id).cloned()

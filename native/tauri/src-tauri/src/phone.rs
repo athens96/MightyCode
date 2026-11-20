@@ -1154,6 +1154,9 @@ impl PhoneDesk for Desk {
     fn held_items(&self, session_id: &str) -> Vec<DelegationDeliveryItem> {
         held(session_id)
     }
+    fn child_rows(&self) -> Vec<mighty_core::shell::DelegationChildRow> {
+        crate::delegation::app().map(|app| app.rows()).unwrap_or_default()
+    }
     fn antigravity_card(&self, session_id: &str) -> Option<PermissionRequest> {
         self.host().ok()?.runs()?.service.antigravity_card(session_id)
     }
