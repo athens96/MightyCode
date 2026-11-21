@@ -220,3 +220,56 @@ fn a_checkpoint_lands_on_its_run_and_the_trackers_next_record_keeps_it() {
     let read = MightyGraphRun::read(&serde_json::from_str(&json).unwrap()).unwrap();
     assert_eq!(read.checkpoints(), std::slice::from_ref(&checkpoint));
 }
+
+/// Every agent the diagram follows, not Claude alone: a step of its checklist done and its run's end are due for a snapshot, and an
+/// activity step (a tool call) is not.
+#[test]
+fn every_agents_steps_and_end_are_due_for_a_snapshot() {
+    use mighty_core::graph::MightyGraphRun;
+    use mighty_core::model::{AppSnapshot, RunSession, TodoProgress};
+    use mighty_core::time::DateTimeOffset;
+    use mighty_run::checkpoints::due;
+    use mighty_run::plan_mode;
+    for provider in ["codex", "gemini", "opencode", "hermes", "pi"] {
+        let run = MightyGraphRun {
+            id: Some("r".into()),
+            status: Some("running".into()),
+            source_run_id: Some("r".into()),
+            provider: Some(provider.into()),
+            ..MightyGraphRun::default()
+        };
+        let pane = RunSession {
+            id: Some("s".into()),
+            kind: Some("claude".into()),
+            provider: Some(provider.into()),
+            graph_runs: Some(vec![run.clone()]),
+            ..RunSession::default()
+        };
+        let mut state = AppSnapshot { sessions: Some(vec![Arc::new(pane)]), ..AppSnapshot::default() };
+        let now = DateTimeOffset::now();
+        let todos = |status: &str| {
+            let mut event = RunEvent::new("s", "todos");
+            event.todos = Some(TodoProgress {
+                items: Some(vec![
+                    plan_mode::todo_item("Write the parser", status, None, Some("1")),
+                    plan_mode::todo_item("Read src/a.rs", status, None, Some("activity:call-1")),
+                ]),
+                run_id: Some("r".into()),
+            });
+            event
+        };
+        let runs = |state: &AppSnapshot| state.sessions()[0].graph_runs().to_vec();
+        state = mighty_run::apply::apply(&state, &todos("in_progress"), now);
+        let before = runs(&state);
+        state = mighty_run::apply::apply(&state, &todos("completed"), now);
+        let steps = due(&before, &runs(&state));
+        assert_eq!(steps.len(), 1, "{provider}: one step, not the activity: {steps:?}");
+        assert_eq!((steps[0].1.as_str(), steps[0].2.as_deref()), ("step", Some("Write the parser")), "{provider}");
+        let before = runs(&state);
+        let ended =
+            RunEvent { graph_run: Some(MightyGraphRun { status: Some("completed".into()), ..run }), ..RunEvent::new("s", "graph_run") };
+        state = mighty_run::apply::apply(&state, &ended, now);
+        let end = due(&before, &runs(&state));
+        assert_eq!(end.iter().map(|d| d.1.as_str()).collect::<Vec<_>>(), vec!["end"], "{provider}");
+    }
+}
