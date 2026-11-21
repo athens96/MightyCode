@@ -466,7 +466,7 @@ impl Coordinator {
     /// keeps its state and card, and a discard may be tried again.
     pub async fn discard_child(&self, id: &str) -> ChildDiscardOutcome {
         let id = id.to_string();
-        self.isolated(move |coordinator| async move { coordinator.discard_child_now(&id).await }).await
+        self.isolated(ChildDiscardOutcome::Failed, move |coordinator| async move { coordinator.discard_child_now(&id).await }).await
     }
 
     async fn discard_child_now(&self, id: &str) -> ChildDiscardOutcome {

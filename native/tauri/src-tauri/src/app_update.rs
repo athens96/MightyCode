@@ -106,6 +106,7 @@ struct CoreState {
     timer: Timer,
     closing: bool,
     /// C#'s `appUpdateSmokeSignedBuild`: the box renders as a signed build with the switch on.
+    #[cfg(feature = "dev-harness")]
     smoke_signed_build: bool,
 }
 
@@ -416,28 +417,35 @@ impl Core {
     }
 
     /// The idle blockers now, from the app's idle facts (the smoke's draft check).
+    #[cfg(feature = "dev-harness")]
     pub fn idle_blockers(&self) -> Vec<IdleBlocker> {
         let now = self.now();
         auto::idle_blockers(&self.seams.idle_facts(now), now)
     }
 
     /// The restart offer's state (the smoke sets and restores it).
+    #[cfg(any(feature = "dev-harness", test))]
     pub fn restart(&self) -> RestartState {
         self.state().restart
     }
 
+    #[cfg(feature = "dev-harness")]
     pub fn set_restart(&self, restart: RestartState) {
         self.state().restart = restart;
     }
 
     /// C#'s `appUpdateSmokeSignedBuild`.
+    #[cfg(feature = "dev-harness")]
     pub fn set_smoke_signed_build(&self, on: bool) {
         self.state().smoke_signed_build = on;
     }
 
     /// How the box describes the state now (C# `RenderAppUpdateSection`'s `Describe` call).
     pub fn describe(&self, locale: &Locale) -> mighty_core::app_update_view::SectionView {
+        #[cfg(feature = "dev-harness")]
         let signed = self.state().smoke_signed_build;
+        #[cfg(not(feature = "dev-harness"))]
+        let signed = false;
         mighty_core::app_update_view::describe(
             locale,
             words(),
@@ -1070,6 +1078,7 @@ pub fn set_automatic(host: &Arc<Host>, on: bool) -> Result<(), String> {
 
 /// The saved switch written as the smoke flips and restores it (C#'s `service.UpdateAsync(AppUpdateAutoCheck)`), the mirror kept; the
 /// loop is not told (a smoke has none).
+#[cfg(feature = "dev-harness")]
 pub fn write_automatic(host: &Host, on: bool) {
     let _ = host.view().update(|state| state.app_update_auto_check = on);
     if let Some(update) = of(host) {

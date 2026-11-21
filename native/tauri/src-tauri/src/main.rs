@@ -16,7 +16,6 @@
 mod accounts;
 mod agent_io;
 mod antigravity;
-#[cfg_attr(not(feature = "dev-harness"), allow(dead_code))]
 mod app_update;
 mod args;
 mod ask;

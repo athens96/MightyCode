@@ -517,7 +517,9 @@ async fn start(
         if !panes::alive(&view, id) || ui.is_none_or(|u| u.submission != submission) {
             return Err(cancelled());
         }
-        let ui = ui.expect("the pane's view");
+        let Some(ui) = ui else {
+            return Err(cancelled());
+        };
         match queue_id {
             Some(item) => {
                 let queued = ui.queue.items().iter().find(|q| q.id == item).cloned().ok_or_else(cancelled)?;

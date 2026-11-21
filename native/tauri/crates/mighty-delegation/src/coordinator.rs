@@ -433,29 +433,27 @@ impl Coordinator {
 
     /// `Save`: saves the file as the coordinator holds it now — what a save the disk refused earlier left unwritten is written.
     pub async fn save(&self) -> Result<(), SaveError> {
-        self.isolated(|coordinator| async move {
-            let context = coordinator.prune_context().await;
-            let mut state = coordinator.lock();
-            let file = DelegationFile::clone(&state.file);
-            coordinator.commit(&mut state, file, &context)
-        })
+        self.isolated(
+            |reason| Err(SaveError::Io(std::io::Error::new(std::io::ErrorKind::Interrupted, reason))),
+            |coordinator| async move {
+                let context = coordinator.prune_context().await;
+                let mut state = coordinator.lock();
+                let file = DelegationFile::clone(&state.file);
+                coordinator.commit(&mut state, file, &context)
+            },
+        )
         .await
     }
 
     /// C#'s `Isolated`: a mutating call runs to its end on a task of its own, whatever happens to the caller's future (a dropped call
-    /// never leaves a merge made in git but not on record). A panic in it is the caller's.
-    pub(crate) async fn isolated<T, F>(&self, work: impl FnOnce(Coordinator) -> F) -> T
+    /// never leaves a merge made in git but not on record). A panic in it is the caller's; a task cancelled when its runtime shuts down
+    /// returns `cancelled` instead of panicking.
+    pub(crate) async fn isolated<T, F>(&self, cancelled: impl FnOnce(String) -> T, work: impl FnOnce(Coordinator) -> F) -> T
     where
         T: Send + 'static,
         F: Future<Output = T> + Send + 'static,
     {
-        match tokio::spawn(work(self.clone())).await {
-            Ok(value) => value,
-            Err(error) => match error.try_into_panic() {
-                Ok(panic) => std::panic::resume_unwind(panic),
-                Err(error) => panic!("the coordinator's task did not finish: {error}"),
-            },
-        }
+        await_isolated(tokio::spawn(work(self.clone())), cancelled).await
     }
 
     /// `PruneContext`: what pruning may assume now — which of the file's parents still have an open pane, and that any merge of a child
@@ -566,60 +564,81 @@ impl Coordinator {
     /// `MergeFromCard` ([`crate::cards`]).
     pub async fn merge_from_card(&self, id: &str) -> crate::git::merge::ChildMergeOutcome {
         let id = id.to_string();
-        self.isolated(move |coordinator| async move { coordinator.merge_from_card_now(&id).await }).await
+        self.isolated(
+            crate::git::merge::ChildMergeOutcome::Failed,
+            move |coordinator| async move { coordinator.merge_from_card_now(&id).await },
+        )
+        .await
     }
 
     /// `UndoMergeFromCard` ([`crate::cards`]).
     pub async fn undo_merge_from_card(&self, id: &str) -> crate::git::merge::ChildUndoOutcome {
         let id = id.to_string();
-        self.isolated(move |coordinator| async move { coordinator.undo_merge_from_card_now(&id).await }).await
+        self.isolated(crate::git::merge::ChildUndoOutcome::Failed, move |coordinator| async move {
+            coordinator.undo_merge_from_card_now(&id).await
+        })
+        .await
     }
 
     /// `DiscardFromCard` ([`crate::cards`]).
     pub async fn discard_from_card(&self, id: &str, confirmed_nested: Option<&[String]>) -> crate::cards::ChildCardDiscardOutcome {
         let (id, confirmed) = (id.to_string(), confirmed_nested.map(<[String]>::to_vec));
-        self.isolated(move |coordinator| async move { coordinator.discard_from_card_now(&id, confirmed).await }).await
+        self.isolated(crate::cards::ChildCardDiscardOutcome::Failed, move |coordinator| async move {
+            coordinator.discard_from_card_now(&id, confirmed).await
+        })
+        .await
     }
 
     /// `CloseChild` ([`crate::cards`]).
     pub async fn close_child(&self, id: &str, still_running: bool) -> crate::git::cleanup::ChildCleanupOutcome {
         let id = id.to_string();
-        self.isolated(move |coordinator| async move { coordinator.close_child_now(&id, still_running).await }).await
+        self.isolated(crate::git::cleanup::ChildCleanupOutcome::Failed, move |coordinator| async move {
+            coordinator.close_child_now(&id, still_running).await
+        })
+        .await
     }
 
     /// `ChildRunStarted` ([`crate::reports`]).
     pub async fn child_run_started(&self, id: &str, run_id: &str) {
         let (id, run_id) = (id.to_string(), run_id.to_string());
-        self.isolated(move |coordinator| async move { coordinator.child_run_started_now(&id, &run_id).await }).await
+        self.isolated(|_| (), move |coordinator| async move { coordinator.child_run_started_now(&id, &run_id).await }).await
     }
 
     /// `ChildRunEnded` ([`crate::reports`]).
     pub async fn child_run_ended(&self, id: &str, run_id: &str, end: crate::reports::ChildRunEnd) -> Option<crate::model::Notice> {
         let (id, run_id) = (id.to_string(), run_id.to_string());
-        self.isolated(move |coordinator| async move { coordinator.child_run_ended_now(&id, &run_id, end).await }).await
+        self.isolated(|_| None, move |coordinator| async move { coordinator.child_run_ended_now(&id, &run_id, end).await }).await
     }
 
     /// `AwaitRun` ([`crate::reports`]).
     pub async fn await_run(&self, run_id: &str, id: &str) -> Option<crate::model::Notice> {
         let (run_id, id) = (run_id.to_string(), id.to_string());
-        self.isolated(move |coordinator| async move { coordinator.await_run_now(&run_id, &id).await }).await
+        self.isolated(|_| None, move |coordinator| async move { coordinator.await_run_now(&run_id, &id).await }).await
     }
 
     /// `InterruptRunsKilledByQuit` ([`crate::reports`]).
     pub async fn interrupt_runs_killed_by_quit(&self) -> Vec<String> {
-        self.isolated(|coordinator| async move { coordinator.interrupt_runs_killed_by_quit_now().await }).await
+        self.isolated(|_| Vec::new(), |coordinator| async move { coordinator.interrupt_runs_killed_by_quit_now().await }).await
     }
 
     /// `Send` ([`crate::delivery`]).
     pub async fn send(&self, text: &str, session_id: &str, start: Option<RunStarter>) -> crate::delivery::DelegationRelease {
         let (text, session_id) = (text.to_string(), session_id.to_string());
-        self.isolated(move |coordinator| async move { coordinator.send_now(&text, &session_id, start).await }).await
+        self.isolated(
+            |_| crate::delivery::DelegationRelease::NotStarted,
+            move |coordinator| async move { coordinator.send_now(&text, &session_id, start).await },
+        )
+        .await
     }
 
     /// `RunNext` ([`crate::delivery`]).
     pub async fn run_next(&self, session_id: &str) -> crate::delivery::DelegationRelease {
         let session_id = session_id.to_string();
-        self.isolated(move |coordinator| async move { coordinator.run_next_now(&session_id).await }).await
+        self.isolated(
+            |_| crate::delivery::DelegationRelease::NotStarted,
+            move |coordinator| async move { coordinator.run_next_now(&session_id).await },
+        )
+        .await
     }
 
     /// `StartHumanChild` ([`crate::tools::delegate`]).
@@ -632,10 +651,20 @@ impl Coordinator {
         agent: Option<&str>,
     ) -> crate::tools::delegate::HumanChildStart {
         let (text, parent_id, agent) = (text.to_string(), parent_id.to_string(), agent.map(str::to_string));
-        self.isolated(move |coordinator| async move {
+        self.isolated(crate::tools::delegate::HumanChildStart::Failed, move |coordinator| async move {
             coordinator.start_human_child_now(&text, &parent_id, starter, plan_first, agent.as_deref()).await
         })
         .await
+    }
+}
+
+async fn await_isolated<T>(task: tokio::task::JoinHandle<T>, cancelled: impl FnOnce(String) -> T) -> T {
+    match task.await {
+        Ok(value) => value,
+        Err(error) => match error.try_into_panic() {
+            Ok(panic) => std::panic::resume_unwind(panic),
+            Err(error) => cancelled(format!("the coordinator's task did not finish: {error}")),
+        },
     }
 }
 
@@ -643,5 +672,18 @@ impl DelegationHandler for Coordinator {
     fn handle(&self, request: DelegationRequest, caller: DelegationCaller) -> BoxFuture<'static, DelegationResponse> {
         let coordinator = self.clone();
         Box::pin(async move { coordinator.handle_call(request, caller).await })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancelled_isolated_task_returns_fallback_without_panicking() {
+        let handle = tokio::spawn(async { std::future::pending::<Result<(), String>>().await });
+        handle.abort();
+        let outcome = await_isolated(handle, Err).await;
+        assert!(outcome.is_err_and(|msg| msg.contains("the coordinator's task did not finish")));
     }
 }

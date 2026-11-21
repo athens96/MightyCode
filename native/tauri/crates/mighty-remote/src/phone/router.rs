@@ -816,7 +816,7 @@ impl Inner {
             return self.poll(&route, &query).await;
         }
         if method == "POST" && route == ["m1", "app-update"] && query.is_empty() {
-            return self.app_update(body, &l).await;
+            return self.app_update(device, body, &l).await;
         }
         if route.len() == 3 && route[1] == "screen-share" {
             return Err(request(503, "Screen sharing is not available on this host."));
@@ -972,7 +972,10 @@ impl Inner {
         .await
     }
 
-    async fn app_update(&self, body: Option<&RawValue>, l: &Locale) -> Routed {
+    async fn app_update(&self, device: &str, body: Option<&RawValue>, l: &Locale) -> Routed {
+        if device == mighty_platform::pairing::identity_file::LEGACY {
+            return Err(MobileError::request(403, l.get("phone.screenShare.refusal.legacyClient"), Some("legacyClient")));
+        }
         let value = body_object(body, MAXIMUM_BODY)?;
         let install = text(&value, "action") == Some("install");
         if !install && text(&value, "action") != Some("check") {

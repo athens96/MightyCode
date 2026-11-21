@@ -299,7 +299,7 @@ impl Coordinator {
     /// A named future, not an `async fn`: the pass awaits run events that call it again, and a boxed type ends that cycle.
     pub fn deliver_pending(&self) -> mighty_platform::BoxFuture<'static, ()> {
         let coordinator = self.clone();
-        Box::pin(async move { coordinator.isolated(|coordinator| async move { coordinator.deliver_pending_now().await }).await })
+        Box::pin(async move { coordinator.isolated(|_| (), |coordinator| async move { coordinator.deliver_pending_now().await }).await })
     }
 
     async fn deliver_pending_now(&self) {

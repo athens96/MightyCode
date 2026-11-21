@@ -301,6 +301,34 @@ impl ScriptedPhone {
         &self.ready
     }
 
+    /// Sends a forward-secret (`"fs": 1`) hello, reads `ready` with `"ephemeralKey"`, and constructs `RelayCipher::new_fs_client`.
+    #[allow(dead_code)]
+    pub async fn hello_fs(&mut self) -> &Value {
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let client_pub = cipher::public_key(&self.secret);
+        let hello = serde_json::json!({
+            "type": "hello",
+            "v": 1,
+            "clientKey": b64.encode(client_pub),
+            "nonce": b64.encode(self.nonce),
+            "fs": 1
+        });
+        self.socket.send(Message::text(hello.to_string())).await.unwrap();
+        let ready = self.next_text().await;
+        let server = b64.decode(ready["serverKey"].as_str().unwrap()).unwrap();
+        let ephemeral = b64.decode(ready["ephemeralKey"].as_str().unwrap()).unwrap();
+        let server_nonce = b64.decode(ready["nonce"].as_str().unwrap()).unwrap();
+        self.cipher = Some(RelayCipher::new_fs_client(&self.secret, &client_pub, &server, &ephemeral, &self.nonce, &server_nonce).unwrap());
+        self.ready = ready;
+        &self.ready
+    }
+
+    /// Seals one frame advancing the send counter without sending it (for testing strict sequence gaps).
+    #[allow(dead_code)]
+    pub fn seal_only(&self, plaintext: &[u8]) -> Vec<u8> {
+        self.cipher.as_ref().unwrap().seal(plaintext).unwrap()
+    }
+
     /// One encrypted frame of JSON text.
     pub async fn send(&mut self, json: &str) {
         let frame = self.cipher.as_ref().unwrap().seal(json.as_bytes()).unwrap();

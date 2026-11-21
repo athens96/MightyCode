@@ -661,6 +661,13 @@ pub fn forget_draft(host: &Host, request: &ToolPermissionRequest) {
     }
 }
 
+fn current_or_last_question<'a>(
+    questionnaire: &'a UserQuestionnaire,
+    progress: &QuestionnaireProgress,
+) -> Option<&'a mighty_run::questionnaire::UserQuestion> {
+    progress.current(questionnaire).or_else(|| questionnaire.questions.last())
+}
+
 /// C# `CompanionRequest`: the approval, the question or the finished plan, with the bubble's buttons for it.
 fn request_card(host: &Host, state: &mut State, permission: &ToolPermissionRequest, origin: String) -> CompanionRequest {
     let key = follow::permission_key(&permission.run_id, &permission.id);
@@ -690,26 +697,27 @@ fn request_card(host: &Host, state: &mut State, permission: &ToolPermissionReque
     {
         // One question at a time, its choices answered in the bubble.
         let progress = draft(state, permission).clone();
-        let question = progress.current(&questionnaire).unwrap_or_else(|| questionnaire.questions.last().expect("a question")).clone();
-        return CompanionRequest {
-            question: true,
-            title: bubble::question_title(&questionnaire, &progress),
-            origin,
-            headline: Some(question.question.clone()),
-            multi_select: question.multi_select,
-            options: question
-                .options
-                .iter()
-                .map(|o| CompanionOption {
-                    label: o.label.clone(),
-                    description: o.description.clone(),
-                    picked: bubble::picked(&o.label, &questionnaire, &progress),
-                })
-                .collect(),
-            buttons: bubble::question(&questionnaire, &progress),
-            error,
-            ..CompanionRequest::default()
-        };
+        if let Some(question) = current_or_last_question(&questionnaire, &progress).cloned() {
+            return CompanionRequest {
+                question: true,
+                title: bubble::question_title(&questionnaire, &progress),
+                origin,
+                headline: Some(question.question.clone()),
+                multi_select: question.multi_select,
+                options: question
+                    .options
+                    .iter()
+                    .map(|o| CompanionOption {
+                        label: o.label.clone(),
+                        description: o.description.clone(),
+                        picked: bubble::picked(&o.label, &questionnaire, &progress),
+                    })
+                    .collect(),
+                buttons: bubble::question(&questionnaire, &progress),
+                error,
+                ..CompanionRequest::default()
+            };
+        }
     }
     let presentation = ToolPermissionPresentation::make(&permission.tool_name, &permission.input_json);
     let code = presentation.fields.iter().find(|f| f.code).map(|f| f.value.clone());
@@ -1291,5 +1299,12 @@ mod tests {
         companion.closing.store(true, Ordering::SeqCst);
         companion.notify();
         assert!(!tokio::time::timeout(Duration::from_millis(200), task).await.unwrap().unwrap(), "exited on shutdown");
+    }
+
+    #[test]
+    fn empty_questionnaire_returns_none_without_panicking() {
+        let empty = UserQuestionnaire { questions: vec![] };
+        let progress = QuestionnaireProgress::new("req-empty");
+        assert!(current_or_last_question(&empty, &progress).is_none());
     }
 }

@@ -33,9 +33,10 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::Instant;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
+use zeroize::Zeroizing;
 
 use crate::identity::{AuthDecision, AuthPolicy, AuthRefusal, AuthRequest, Identity, PendingRegistration};
-use crate::relay::cipher::{MAXIMUM_FRAME, MAXIMUM_PLAINTEXT, RelayCipher};
+use crate::relay::cipher::{self, MAXIMUM_FRAME, MAXIMUM_PLAINTEXT, RelayCipher};
 
 /// What runs once a reply's frame was sent (C# `MobileReply.AfterSend`: an app update that restarts the app after answering).
 pub type AfterSend = Box<dyn FnOnce() -> BoxFuture<'static, ()> + Send>;
@@ -84,6 +85,13 @@ pub struct MobileDevice {
     pub name: String,
     pub direct: bool,
     pub desktop: bool,
+}
+
+impl MobileDevice {
+    /// Whether this device authenticated through key-only legacy mode (`"legacy"`, without a device token).
+    pub fn is_legacy(&self) -> bool {
+        self.client_id == mighty_platform::pairing::identity_file::LEGACY
+    }
 }
 
 /// What answers an authenticated phone's requests (C#'s `Func<string, string, JsonElement?, string, CancellationToken,
@@ -309,20 +317,43 @@ impl Connection {
         if hello.get("type").and_then(serde_json::Value::as_str) != Some("hello") || version != Some(1) {
             return Err(Ended);
         }
+        let wants_fs = hello.get("fs").and_then(serde_json::Value::as_i64) == Some(1);
         let b64 = base64::engine::general_purpose::STANDARD;
         let text = |name: &str| hello.get(name).and_then(serde_json::Value::as_str).unwrap_or("").to_string();
         let client_key = b64.decode(text("clientKey")).map_err(|_| Ended)?;
         let client_nonce = b64.decode(text("nonce")).map_err(|_| Ended)?;
         let mut nonce = [0u8; 16];
         getrandom::fill(&mut nonce).map_err(|_| Ended)?;
-        let cipher =
-            Arc::new(RelayCipher::new(host.identity().secret().as_ref(), &client_key, &client_nonce, &nonce, true).map_err(|_| Ended)?);
+        let host_static_secret = host.identity().secret();
+        let (cipher, host_eph_pub) = if wants_fs {
+            let mut host_eph_secret = Zeroizing::new([0u8; 32]);
+            getrandom::fill(host_eph_secret.as_mut()).map_err(|_| Ended)?;
+            let host_static_pub = cipher::public_key(&host_static_secret);
+            let host_eph_pub = cipher::public_key(&host_eph_secret);
+            let cipher = RelayCipher::new_fs_host(
+                host_static_secret.as_ref(),
+                host_eph_secret.as_ref(),
+                &client_key,
+                &host_static_pub,
+                &host_eph_pub,
+                &client_nonce,
+                &nonce,
+            )
+            .map_err(|_| Ended)?;
+            (Arc::new(cipher), Some(host_eph_pub))
+        } else {
+            let cipher = RelayCipher::new(host_static_secret.as_ref(), &client_key, &client_nonce, &nonce, true).map_err(|_| Ended)?;
+            (Arc::new(cipher), None)
+        };
         let mut ready = JsonOut::new();
         ready.begin_object();
         ready.prop_str("type", Some("ready"));
         ready.prop_int("v", 1);
         ready.prop_str("serverKey", Some(&host.identity().public_key()));
         ready.prop_str("nonce", Some(&b64.encode(nonce)));
+        if let Some(eph) = &host_eph_pub {
+            ready.prop_str("ephemeralKey", Some(&b64.encode(eph)));
+        }
         ready.end_object();
         tokio::time::timeout_at(deadline, sink.send(Message::text(ready.finish()))).await.map_err(|_| Ended)?.map_err(|_| Ended)?;
         let auth = within(deadline, next(&mut stream)).await?;

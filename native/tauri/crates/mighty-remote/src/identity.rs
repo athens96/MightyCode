@@ -57,6 +57,8 @@ const HOUR_MS: i64 = 60 * 60 * 1000;
 const MINUTE_MS: i64 = 60 * 1000;
 /// How long a pairing code lives after it was last shown.
 pub const PAIRING_CODE_LIFETIME: Duration = Duration::from_secs(10 * 60);
+/// Absolute maximum lifetime of a pairing code from initial creation, even when Settings stays open continuously.
+pub const MAX_PAIRING_CODE_LIFETIME: Duration = Duration::from_secs(60 * 60);
 /// The file beside the identity that says which devices are computers (the identity files keep no such member).
 pub const ROLES_FILE: &str = "device-roles.json";
 
@@ -106,6 +108,7 @@ impl PendingRegistration {
 struct Code {
     key: Zeroizing<String>,
     expires: Instant,
+    max_expires: Instant,
     serial: u64,
 }
 
@@ -296,6 +299,7 @@ pub struct Identity {
     /// Where the computers' ids are kept ([`ROLES_FILE`]); none: in memory for this run.
     roles: Option<PathBuf>,
     code_lifetime: Duration,
+    max_code_lifetime: Duration,
     state: Mutex<State>,
     rotated: Mutex<Vec<(u64, Listener)>>,
     next_listener: AtomicU64,
@@ -415,6 +419,7 @@ impl Identity {
             locale: Locale::new("en"),
             roles: None,
             code_lifetime: PAIRING_CODE_LIFETIME,
+            max_code_lifetime: MAX_PAIRING_CODE_LIFETIME,
             state: Mutex::new(State { saved, registrations: vec![], desktops: HashSet::new(), codes: [None, None], next_serial: 1 }),
             rotated: Mutex::new(vec![]),
             next_listener: AtomicU64::new(1),
@@ -455,6 +460,12 @@ impl Identity {
     /// How long a pairing code lives after it was last shown (the checks shorten it).
     pub fn with_code_lifetime(mut self, lifetime: Duration) -> Identity {
         self.code_lifetime = lifetime;
+        self
+    }
+
+    /// Absolute ceiling on how long a pairing code lives from initial creation, regardless of repeated display.
+    pub fn with_max_code_lifetime(mut self, max_lifetime: Duration) -> Identity {
+        self.max_code_lifetime = max_lifetime;
         self
     }
 
@@ -526,28 +537,34 @@ impl Identity {
         Zeroizing::new(self.state().saved.pairing_key.clone())
     }
 
-    /// The live pairing code of `kind`, made when there is none or it ran out, and kept alive for [`PAIRING_CODE_LIFETIME`] from now:
-    /// what Settings shows (the QR, the links), so it stays valid while it is on screen (never logged).
+    /// The live pairing code of `kind`, made when there is none or it ran out, and kept alive for [`PAIRING_CODE_LIFETIME`] from now
+    /// up to [`MAX_PAIRING_CODE_LIFETIME`] from when it was first made: what Settings shows (the QR, the links), so it stays valid
+    /// while it is on screen yet still rotates at least once an hour (never logged).
     pub fn pairing_code(&self, kind: PairingKind) -> Zeroizing<String> {
         let mut state = self.state();
         let now = Instant::now();
-        let expires = now + self.code_lifetime;
         let slot = kind.slot();
-        if let Some(code) = state.codes[slot].as_mut().filter(|code| code.expires > now) {
-            code.expires = code.expires.max(expires);
+        if let Some(code) = state.codes[slot].as_mut().filter(|code| code.expires > now && code.max_expires > now) {
+            let sliding = (now + self.code_lifetime).min(code.max_expires);
+            code.expires = code.expires.max(sliding).min(code.max_expires);
             return code.key.clone();
         }
         let serial = state.next_serial;
         state.next_serial += 1;
+        let max_expires = now + self.max_code_lifetime;
+        let expires = (now + self.code_lifetime).min(max_expires);
         let key = Zeroizing::new(random_token());
-        state.codes[slot] = Some(Code { key: key.clone(), expires, serial });
+        state.codes[slot] = Some(Code { key: key.clone(), expires, max_expires, serial });
         key
     }
 
     /// How long the live pairing code of `kind` has left; None when there is none (never shown, spent or run out).
     pub fn pairing_code_left(&self, kind: PairingKind) -> Option<Duration> {
         let now = Instant::now();
-        self.state().codes[kind.slot()].as_ref().filter(|code| code.expires > now).map(|code| code.expires - now)
+        self.state().codes[kind.slot()]
+            .as_ref()
+            .filter(|code| code.expires > now && code.max_expires > now)
+            .map(|code| code.expires.min(code.max_expires) - now)
     }
 
     /// Both pairing codes forgotten: whatever was shown pairs nothing; the next draw shows new ones.
@@ -624,7 +641,7 @@ impl Identity {
         let now_instant = Instant::now();
         let serial = state.codes[kind.slot()]
             .as_ref()
-            .filter(|code| code.expires > now_instant && equal(&hash(presented), &hash(&code.key)))
+            .filter(|code| code.expires > now_instant && code.max_expires > now_instant && equal(&hash(presented), &hash(&code.key)))
             .map(|code| code.serial);
         let Some(serial) = serial else { return Ok(Refused(AuthRefusal::PairingKey)) };
         if auth.desktop && !policy.allow_desktops {

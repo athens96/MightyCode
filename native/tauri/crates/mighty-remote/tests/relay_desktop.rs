@@ -446,6 +446,148 @@ fn a_pairing_code_lives_while_shown_and_runs_out() {
     let _ = std::fs::remove_dir_all(folder);
 }
 
+/// Even when Settings stays open continuously and redraws the pairing code well inside its sliding window, the code still rotates once
+/// its absolute max-age ceiling (`MAX_PAIRING_CODE_LIFETIME` / `with_max_code_lifetime`) is reached.
+#[test]
+fn a_pairing_code_rotates_at_max_lifetime_even_while_continuously_shown() {
+    let folder = temp("pair-max-expiry");
+    let identity = Identity::load_or_create(Arc::new(FileStore(folder.clone())), true)
+        .unwrap()
+        .with_code_lifetime(Duration::from_millis(250))
+        .with_max_code_lifetime(Duration::from_millis(450));
+    let start = std::time::Instant::now();
+    let initial = identity.pairing_code(PairingKind::Phone).to_string();
+    for _ in 0..3 {
+        std::thread::sleep(Duration::from_millis(100));
+        if start.elapsed() < Duration::from_millis(380) {
+            assert_eq!(*identity.pairing_code(PairingKind::Phone), initial, "sliding window keeps code alive before max lifetime");
+        }
+    }
+    while start.elapsed() < Duration::from_millis(500) {
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    let rotated = identity.pairing_code(PairingKind::Phone).to_string();
+    assert_ne!(rotated, initial, "code rotated once absolute max-age ceiling elapsed despite continuous display");
+    let stale_auth = json!({"type":"auth","pairingKey":initial,"clientId":new_client_id(),"clientName":"Phone"});
+    assert_eq!(identity.authorize(&AuthRequest::from_json(&stale_auth), ALL).unwrap(), AuthDecision::Refused(AuthRefusal::PairingKey));
+    let fresh_auth = json!({"type":"auth","pairingKey":rotated,"clientId":new_client_id(),"clientName":"Phone"});
+    assert!(matches!(identity.authorize(&AuthRequest::from_json(&fresh_auth), ALL).unwrap(), AuthDecision::Pending(_)));
+    let _ = std::fs::remove_dir_all(folder);
+}
+
+/// `RelayClient` advertises `"fs": 1` in `hello`, derives the forward-secret key when `ready` includes `"ephemeralKey"`, falls back to
+/// `v1` when talking to an older host that omits `"ephemeralKey"`, and rejects a malformed `"ephemeralKey"` with `RelayFailure::Protocol`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn relay_client_negotiates_fs_and_falls_back_to_v1_host() {
+    let host_static_secret = [0x42u8; 32];
+    let host_static_pub = cipher::public_key(&host_static_secret);
+
+    for mode in ["fs", "v1", "bad-eph"] {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let url = format!("ws://127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let seen_fs = Arc::new(Mutex::new(None::<Option<i64>>));
+        let recorded_fs = seen_fs.clone();
+
+        let server = tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else { return };
+            let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else { return };
+            let Some(Ok(Message::Text(hello_txt))) = ws.next().await else { return };
+            let hello: Value = serde_json::from_str(hello_txt.as_str()).unwrap();
+            *recorded_fs.lock().unwrap() = Some(hello.get("fs").and_then(Value::as_i64));
+            let b64 = base64::engine::general_purpose::STANDARD;
+            let client_pub = b64.decode(hello["clientKey"].as_str().unwrap()).unwrap();
+            let client_nonce = b64.decode(hello["nonce"].as_str().unwrap()).unwrap();
+            let server_nonce = [0x77u8; 16];
+
+            if mode == "bad-eph" {
+                let ready = json!({
+                    "type": "ready",
+                    "v": 1,
+                    "serverKey": b64.encode(host_static_pub),
+                    "nonce": b64.encode(server_nonce),
+                    "ephemeralKey": "not-32-bytes"
+                });
+                let _ = ws.send(Message::text(ready.to_string())).await;
+                return;
+            }
+
+            let cipher = if mode == "fs" {
+                let host_eph_secret = [0x99u8; 32];
+                let host_eph_pub = cipher::public_key(&host_eph_secret);
+                let ready = json!({
+                    "type": "ready",
+                    "v": 1,
+                    "serverKey": b64.encode(host_static_pub),
+                    "nonce": b64.encode(server_nonce),
+                    "ephemeralKey": b64.encode(host_eph_pub)
+                });
+                ws.send(Message::text(ready.to_string())).await.unwrap();
+                RelayCipher::new_fs_host(
+                    &host_static_secret,
+                    &host_eph_secret,
+                    &client_pub,
+                    &host_static_pub,
+                    &host_eph_pub,
+                    &client_nonce,
+                    &server_nonce,
+                )
+                .unwrap()
+            } else {
+                let ready = json!({
+                    "type": "ready",
+                    "v": 1,
+                    "serverKey": b64.encode(host_static_pub),
+                    "nonce": b64.encode(server_nonce)
+                });
+                ws.send(Message::text(ready.to_string())).await.unwrap();
+                RelayCipher::new(&host_static_secret, &client_pub, &client_nonce, &server_nonce, true).unwrap()
+            };
+
+            let Some(Ok(Message::Binary(auth_frame))) = ws.next().await else { return };
+            let auth_plain: Value = serde_json::from_slice(&cipher.open(&auth_frame).unwrap()).unwrap();
+            assert_eq!(auth_plain["type"], "auth");
+            let auth_ok = json!({
+                "type": "auth_ok",
+                "hostName": format!("host-{mode}"),
+                "hostId": "hid",
+                "appVersion": "0.5.7",
+                "capabilities": []
+            });
+            ws.send(Message::binary(cipher.seal(auth_ok.to_string().as_bytes()).unwrap())).await.unwrap();
+            if let Some(Ok(Message::Binary(req_frame))) = ws.next().await {
+                let req: Value = serde_json::from_slice(&cipher.open(&req_frame).unwrap()).unwrap();
+                let reply = json!({"id": req["id"], "status": 200, "body": {"mode": mode}});
+                let _ = ws.send(Message::binary(cipher.seal(reply.to_string().as_bytes()).unwrap())).await;
+            }
+        });
+
+        let endpoint =
+            mighty_remote::relay::client::RelayEndpoint { server_id: "sid12345".into(), public_key: host_static_pub, relay: url };
+        let client = RelayClient::start(
+            endpoint,
+            Credential::Token { client_id: new_client_id(), token: zeroize::Zeroizing::new("tok".into()) },
+            "laptop",
+            Arc::new(DirectProxy),
+            ClientTimings { backoff_min: Duration::from_secs(30), backoff_max: Duration::from_secs(30), ..quick() },
+            None,
+        );
+
+        if mode == "bad-eph" {
+            assert_eq!(client.ready(Duration::from_secs(5)).await, Err(RelayFailure::Protocol));
+        } else {
+            let hello = client.ready(Duration::from_secs(5)).await.unwrap();
+            assert_eq!(hello.host_name, format!("host-{mode}"));
+            let reply = client.request("GET", "/v2/info", None, Duration::from_secs(5)).await.unwrap();
+            assert_eq!(reply.status, 200);
+            let body: Value = serde_json::from_slice(&reply.body).unwrap();
+            assert_eq!(body["mode"], mode);
+        }
+        assert_eq!(*seen_fs.lock().unwrap(), Some(Some(1)), "RelayClient must advertise fs:1 in hello");
+        client.close();
+        let _ = server.await;
+    }
+}
+
 /// The person at the host decides: a registration is asked about once (a computer's said to be one), refused it is `approval-denied`
 /// for good and its code spent; not answered in time it is refused alike; a second device while one is being asked about is turned
 /// away; a device that leaves while asked finds the answer on its next try; tokens are never asked about.

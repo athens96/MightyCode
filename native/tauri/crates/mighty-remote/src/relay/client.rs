@@ -576,13 +576,15 @@ async fn session(inner: &Arc<Inner>) -> Result<(), RelayFailure> {
     let (mut sink, mut stream) = socket.split();
     let b64 = base64::engine::general_purpose::STANDARD;
     let secret = random::<32>();
+    let client_pub = cipher::public_key(&secret);
     let client_nonce = random::<16>();
     let mut hello = JsonOut::new();
     hello.begin_object();
     hello.prop_str("type", Some("hello"));
     hello.prop_int("v", 1);
-    hello.prop_str("clientKey", Some(&b64.encode(cipher::public_key(&secret))));
+    hello.prop_str("clientKey", Some(&b64.encode(client_pub)));
     hello.prop_str("nonce", Some(&b64.encode(client_nonce.as_ref())));
+    hello.prop_int("fs", 1);
     hello.end_object();
     let sent = tokio::time::timeout_at(deadline, sink.send(Message::text(hello.finish()))).await;
     if !matches!(sent, Ok(Ok(()))) {
@@ -599,8 +601,15 @@ async fn session(inner: &Arc<Inner>) -> Result<(), RelayFailure> {
         return Err(RelayFailure::KeyMismatch);
     }
     let server_nonce = b64.decode(text_of(&ready, "nonce")).map_err(|_| RelayFailure::Protocol)?;
-    let cipher =
-        RelayCipher::new(secret.as_ref(), &server_key, client_nonce.as_ref(), &server_nonce, false).map_err(|_| RelayFailure::Protocol)?;
+    let cipher = match ready.get("ephemeralKey") {
+        None | Some(Value::Null) => RelayCipher::new(secret.as_ref(), &server_key, client_nonce.as_ref(), &server_nonce, false)
+            .map_err(|_| RelayFailure::Protocol)?,
+        Some(ephemeral) => {
+            let host_eph_pub = ephemeral.as_str().and_then(decode_key).ok_or(RelayFailure::Protocol)?;
+            RelayCipher::new_fs_client(secret.as_ref(), &client_pub, &server_key, &host_eph_pub, client_nonce.as_ref(), &server_nonce)
+                .map_err(|_| RelayFailure::Protocol)?
+        }
+    };
     let credential = lock(&inner.credential).clone();
     let auth = {
         let mut out = JsonOut::new();

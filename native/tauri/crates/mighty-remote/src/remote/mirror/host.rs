@@ -231,7 +231,10 @@ impl RemoteHost {
                 let outcome = host.submit(id, submit.text, attachments).await.map_err(conflict)?;
                 return Ok(reply(200, &WireMirrorOutcome { protocol: remote_protocol::VERSION, outcome }.to_value()));
             }
-            // As a run's stop and the Mac's, a stop and a close read no body.
+            // As a run's stop and the Mac's, a stop and a close read no body. Neither `stop` nor `close` is gated behind
+            // `mirror_refusal`: `allows_full_access` confines starting/continuing unconfined agent execution, whereas stopping or
+            // closing an idle/running pane (such as an unconfined Codex pane newly created via `workspaces/{id}/sessions` in C#
+            // `RemoteMirrorVerification` / `tests/remote_mirror.rs::a_windows_client_mirrors_a_windows_host`) executes no agent turn.
             "stop" => host.stop(id).await.map_err(conflict)?,
             "close" => host.close(id).await.map_err(conflict)?,
             "permission" => {

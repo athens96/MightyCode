@@ -898,6 +898,21 @@ async fn phone_app_update_the_route_validates_and_asks_before_stopping_requests(
         router.state_revision() == revision + 1 && router.take_notifications().iter().any(|n| n.0 == "state"),
         "a changed update moves the state revision"
     );
+
+    // Key-only legacy phones ("legacy") are refused 403 on POST /m1/app-update and never trigger checks or restarts.
+    assert!(
+        mighty_remote::relay::connection::MobileDevice { client_id: "legacy".into(), name: "Legacy".into(), direct: false, desktop: false }
+            .is_legacy()
+    );
+    let acts_before = world.desk.calls().app_acts.len();
+    for body in [json!({"action": "check"}), json!({"action": "install", "confirm": true})] {
+        let refused = world.from("legacy", "POST", "/m1/app-update", Some(body)).await;
+        let parsed: Value = serde_json::from_str(&refused.body).unwrap();
+        assert_eq!(refused.status, 403, "legacy key-only device refused 403 on app-update");
+        assert_eq!(parsed["code"], "legacyClient");
+        assert_eq!(parsed["error"], l().get("phone.screenShare.refusal.legacyClient"));
+    }
+    assert_eq!(world.desk.calls().app_acts.len(), acts_before, "legacy refusal did not act on app update");
 }
 
 fn permission(id: &str, run: &str, tool: &str, input: &str) -> ToolPermissionRequest {

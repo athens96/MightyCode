@@ -42,13 +42,17 @@ npm install                               # the Tauri CLI (@tauri-apps/cli)
 npm run tauri dev                         # Vite dev server (native/windows/web, --mode tauri) + the app
 npm run tauri build -- --debug            # target\debug\MightyCode.exe with the page built into it (no installer: bundle.active is false)
 npm run tauri build                       # the same, optimized: target\release\MightyCode.exe
+npm run tauri build -- --no-default-features  # slim production binary without `dev-harness` (smoke, help-capture, perf, fake CLI modes)
 cargo test -p mighty-core
 cargo clippy --workspace -- -D warnings
+cargo clippy -p mightycode --no-default-features --all-targets -- -D warnings
 ```
 
 `tauri build` first runs `npm run build -- --mode tauri` in `native/windows/web`, which writes `dist-tauri/` (never the `dist/`
 the C# build ships). A plain `cargo build` makes a *dev* binary (Tauri's `custom-protocol` feature off) that loads the Vite dev
-server at `http://localhost:5173` instead of the built page; build with the Tauri CLI to get one that runs on its own.
+server at `http://localhost:5173` instead of the built page; build with the Tauri CLI to get one that runs on its own. By default
+`mightycode` enables the `dev-harness` Cargo feature (`smoke_*`, `--help-capture`, `--perf-scenario`, `--verify-resources`, fake CLI
+modes, and `tauri/unstable` for `get_webview`); pass `--no-default-features` to strip all test and smoke harnesses for production.
 
 The VS 2022 Build Tools on the development PC are not registered with vswhere, so rustc cannot find `link.exe` unless
 `scripts/env.ps1` has imported `vcvars64.bat`'s environment.
@@ -539,12 +543,14 @@ spelling wins here, the last of all in C#).
   writes, on the default profile, takes C#'s own `<data>\web-profile` (`paths::web_folders`) and opens it with C#'s environment options
   (no browser arguments), making the page again for about 10 s while C#'s WebView2 still holds the folder
   (0x8007139F, right after the update swap).
-- CSP: the page's build-time meta policy (`vite.config.ts`). `vite build --mode tauri` adds `connect-src 'self' ipc:
-  http://ipc.localhost` so Tauri's IPC is not blocked (WebView2 reaches it at `http://ipc.localhost`); the C# build's policy is
-  unchanged. `app.security.csp` is null, so Tauri adds no policy of its own. HTML previews' frames come from the `mightyhtml` protocol
-  (`http://mightyhtml.h<random>.html.mighty.invalid/…` on Windows, wry's form of a custom scheme; `mightyhtml://h<random>…` on the Mac), so
-  the Tauri build's `frame-src` is `http://*.html.mighty.invalid mightyhtml:` where C#'s is `https://*.html.mighty.invalid` (its WebView2
-  virtual hosts); a frame's own navigations are held to it as well.
+- CSP: `tauri.conf.json` sets `app.security.csp` (`default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;
+  frame-src http://*.html.mighty.invalid mightyhtml:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'self' ipc:
+  http://ipc.localhost`) alongside the page's build-time meta policy (`vite.config.ts`), with `devCsp: null` for Vite HMR in dev and
+  `dangerousDisableAssetCspModification: ["style-src"]` so Tauri's asset CSP rewriter preserves `'unsafe-inline'` for runtime inline
+  styles; the C# build's policy is unchanged. HTML previews' frames come from the `mightyhtml` protocol (`http://mightyhtml.h<random>.html.mighty.invalid/…`
+  on Windows, wry's form of a custom scheme; `mightyhtml://h<random>…` on the Mac), so the Tauri build's `frame-src` is
+  `http://*.html.mighty.invalid mightyhtml:` where C#'s is `https://*.html.mighty.invalid` (its WebView2 virtual hosts); a frame's own
+  navigations are held to it as well.
 
 ## Smoke
 
