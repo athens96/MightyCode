@@ -56,6 +56,40 @@ describe('parseServiceAccount', () => {
   it('refuses a file without a private key', () => {
     expect(() => parseServiceAccount('{"project_id":"x","client_email":"a@b"}')).toThrow(/service account/);
   });
+
+  it('accepts Google HTTPS OAuth token_uri endpoints and rejects http or SSRF hosts', () => {
+    const withTokenUri = (tokenUri: unknown) =>
+      JSON.stringify({
+        project_id: 'demo-project',
+        client_email: 'relay@demo-project.iam.gserviceaccount.com',
+        private_key: privateKey,
+        ...(tokenUri === undefined ? {} : { token_uri: tokenUri }),
+      });
+
+    expect(parseServiceAccount(withTokenUri(undefined)).tokenUri).toBe('https://oauth2.googleapis.com/token');
+    expect(parseServiceAccount(withTokenUri('https://www.googleapis.com/oauth2/v4/token')).tokenUri).toBe(
+      'https://www.googleapis.com/oauth2/v4/token',
+    );
+    expect(parseServiceAccount(withTokenUri('https://accounts.google.com/o/oauth2/token')).tokenUri).toBe(
+      'https://accounts.google.com/o/oauth2/token',
+    );
+
+    for (const bad of [
+      'http://oauth2.googleapis.com/token',
+      'http://127.0.0.1:9/token',
+      'http://169.254.169.254/latest/meta-data/',
+      'https://evil.example.com/token',
+      'https://evil-googleapis.com/token',
+      'https://oauth2.googleapis.com:8443/token',
+      'https://user:pass@oauth2.googleapis.com/token',
+      'not a url',
+      '',
+      null,
+      123,
+    ]) {
+      expect(() => parseServiceAccount(withTokenUri(bad))).toThrow(/bad token_uri/);
+    }
+  });
 });
 
 describe('FcmHttpV1Sender', () => {
@@ -85,7 +119,15 @@ describe('FcmHttpV1Sender', () => {
     expect(sendCall.url).toBe('https://fcm.googleapis.com/v1/projects/demo-project/messages:send');
     expect(sendCall.init.headers['authorization']).toBe('Bearer ya29.test');
     expect(JSON.parse(sendCall.init.body)).toEqual({
-      message: { token: 'device-token', data: { v: '1', h: 'H', p: 'P' }, android: { priority: 'HIGH', ttl: '3600s' } },
+      message: {
+        token: 'device-token',
+        data: { v: '1', h: 'H', p: 'P' },
+        android: { priority: 'HIGH', ttl: '3600s' },
+        apns: {
+          headers: { 'apns-priority': '10' },
+          payload: { aps: { 'content-available': 1, 'mutable-content': 1 } },
+        },
+      },
     });
   });
 

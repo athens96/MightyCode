@@ -10,7 +10,9 @@ import { handleNotificationEvent, showPush } from '@/lib/push/runtime';
 installCryptoPolyfill();
 installCrashReporting();
 try {
-  setBackgroundMessageHandler(getMessaging(), (remote) => showPush(remote as { data?: Record<string, unknown> }));
+  setBackgroundMessageHandler(getMessaging(), (remote) =>
+    showPush(remote as { data?: Record<string, unknown> }, { nowMs: Date.now() }),
+  );
 } catch {
   // A build without Firebase: no pushes arrive, nothing to handle.
 }

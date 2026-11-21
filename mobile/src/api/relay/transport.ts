@@ -1,15 +1,18 @@
 import {
   DIRECTION_CLIENT_TO_HOST,
   DIRECTION_HOST_TO_CLIENT,
+  KEY_LENGTH,
   RelayCipher,
   RelayCryptoError,
   bytesEqual,
+  deriveForwardSecretSessionKey,
   deriveSessionKey,
   fromBase64,
   generateHandshakeNonce,
   generateKeyPair,
   randomUuid,
   toBase64,
+  type RelayKeyPair,
 } from '@/api/relay/crypto';
 import {
   afterAuthOk,
@@ -25,6 +28,8 @@ import { t } from '@/lib/i18n';
 
 /** Wire version of both the relay query string and the handshake envelopes. */
 export const RELAY_WIRE_VERSION = 1;
+/** Forward-secrecy handshake extension version (`fs: 1`). */
+export const RELAY_FORWARD_SECRECY_VERSION = 1;
 /** Concurrent tunnelled requests allowed by docs/relay.md. */
 export const MAX_IN_FLIGHT = 8;
 export const PING_INTERVAL_MS = 20_000;
@@ -811,6 +816,7 @@ export class RelayConnection {
           v: RELAY_WIRE_VERSION,
           clientKey: toBase64(keyPair.publicKey),
           nonce: toBase64(clientNonce),
+          fs: RELAY_FORWARD_SECRECY_VERSION,
         }),
       );
     };
@@ -820,7 +826,7 @@ export class RelayConnection {
       if (this.socket !== socket) return;
       this.frames += 1;
       try {
-        this.handleMessage(event.data, keyPair.secretKey, clientNonce, socket);
+        this.handleMessage(event.data, keyPair, clientNonce, socket);
       } catch (error) {
         const failure = error instanceof RelayError ? error.failure : 'protocol';
         this.dropSocket(socket, failure);
@@ -843,12 +849,12 @@ export class RelayConnection {
 
   private handleMessage(
     data: unknown,
-    secretKey: Uint8Array,
+    keyPair: RelayKeyPair,
     clientNonce: Uint8Array,
     socket: RelaySocket,
   ): void {
     if (typeof data === 'string') {
-      this.handleHandshake(data, secretKey, clientNonce, socket);
+      this.handleHandshake(data, keyPair, clientNonce, socket);
       return;
     }
     const bytes = toBytes(data);
@@ -870,11 +876,11 @@ export class RelayConnection {
 
   private handleHandshake(
     raw: string,
-    secretKey: Uint8Array,
+    keyPair: RelayKeyPair,
     clientNonce: Uint8Array,
     socket: RelaySocket,
   ): void {
-    let parsed: { type?: string; serverKey?: string; nonce?: string };
+    let parsed: { type?: string; serverKey?: string; nonce?: string; ephemeralKey?: unknown };
     try {
       parsed = JSON.parse(raw) as typeof parsed;
     } catch {
@@ -894,19 +900,42 @@ export class RelayConnection {
     }
 
     let key: Uint8Array;
+    let strictSequence = false;
     try {
-      key = deriveSessionKey({
-        secretKey,
-        peerPublicKey: serverKey,
-        clientNonce,
-        serverNonce: fromBase64(parsed.nonce),
-      });
+      const serverNonce = fromBase64(parsed.nonce);
+      if (typeof parsed.ephemeralKey === 'string' && parsed.ephemeralKey.length > 0) {
+        const hostEphemeralPublicKey = fromBase64(parsed.ephemeralKey);
+        if (hostEphemeralPublicKey.length !== KEY_LENGTH) {
+          throw new RelayError('protocol', undefined, t('phone.relay.handshakeInvalid'));
+        }
+        key = deriveForwardSecretSessionKey({
+          clientSecretKey: keyPair.secretKey,
+          clientPublicKey: keyPair.publicKey,
+          hostStaticPublicKey: serverKey,
+          hostEphemeralPublicKey,
+          clientNonce,
+          serverNonce,
+        });
+        strictSequence = true;
+      } else {
+        key = deriveSessionKey({
+          secretKey: keyPair.secretKey,
+          peerPublicKey: serverKey,
+          clientNonce,
+          serverNonce,
+        });
+      }
     } finally {
-      secretKey.fill(0);
-      if (this.ephemeralSecretKey === secretKey) this.ephemeralSecretKey = undefined;
+      keyPair.secretKey.fill(0);
+      if (this.ephemeralSecretKey === keyPair.secretKey) this.ephemeralSecretKey = undefined;
     }
     this.cipher?.destroy();
-    this.cipher = new RelayCipher(key, DIRECTION_CLIENT_TO_HOST, DIRECTION_HOST_TO_CLIENT);
+    this.cipher = new RelayCipher(
+      key,
+      DIRECTION_CLIENT_TO_HOST,
+      DIRECTION_HOST_TO_CLIENT,
+      strictSequence,
+    );
     this.authenticate(socket);
   }
 

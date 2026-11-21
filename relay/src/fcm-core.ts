@@ -37,6 +37,20 @@ const FETCH_TIMEOUT_MS = 10_000;
 /** FCM error codes are upper-case words; anything else is never written to a log. */
 const ERROR_CODE_PATTERN = /^[A-Z_]{1,40}$/;
 
+function isAllowedGoogleTokenUri(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.port !== '') {
+    return false;
+  }
+  const host = url.hostname.toLowerCase();
+  return host === 'oauth2.googleapis.com' || host.endsWith('.googleapis.com') || host === 'accounts.google.com';
+}
+
 export function parseServiceAccount(text: string): ServiceAccount {
   let parsed: Record<string, unknown>;
   try {
@@ -48,10 +62,14 @@ export function parseServiceAccount(text: string): ServiceAccount {
   const clientEmail = parsed['client_email'];
   const privateKey = parsed['private_key'];
   const tokenUri = parsed['token_uri'];
+  const resolvedTokenUri = tokenUri === undefined ? DEFAULT_TOKEN_URI : tokenUri;
   if (typeof projectId !== 'string' || !/^[a-z0-9-]{1,64}$/.test(projectId)) throw new Error('service account: bad project_id');
   if (typeof clientEmail !== 'string' || !clientEmail.includes('@')) throw new Error('service account: bad client_email');
   if (typeof privateKey !== 'string' || !privateKey.includes('PRIVATE KEY')) throw new Error('service account: no private_key');
-  return { projectId, clientEmail, privateKey, tokenUri: typeof tokenUri === 'string' ? tokenUri : DEFAULT_TOKEN_URI };
+  if (typeof resolvedTokenUri !== 'string' || !isAllowedGoogleTokenUri(resolvedTokenUri)) {
+    throw new Error('service account: bad token_uri');
+  }
+  return { projectId, clientEmail, privateKey, tokenUri: resolvedTokenUri };
 }
 
 /** base64url without padding of raw bytes. */
@@ -139,7 +157,17 @@ export class FcmHttpV1Core implements PushSender {
       response = await this.#fetch(`https://fcm.googleapis.com/v1/projects/${this.#account.projectId}/messages:send`, {
         method: 'POST',
         headers: { authorization: `Bearer ${access}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ message: { token: fcmToken, data, android: { priority: 'HIGH', ttl: '3600s' } } }),
+        body: JSON.stringify({
+          message: {
+            token: fcmToken,
+            data,
+            android: { priority: 'HIGH', ttl: '3600s' },
+            apns: {
+              headers: { 'apns-priority': '10' },
+              payload: { aps: { 'content-available': 1, 'mutable-content': 1 } },
+            },
+          },
+        }),
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
       if (response.status === 200) return { kind: 'sent' };

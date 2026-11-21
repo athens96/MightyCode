@@ -5,7 +5,7 @@
  * 502 (`fcm-failed`) and an unknown one 404 — which is all these tests need to tell apart.
  */
 
-import { createHash, generateKeyPairSync } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,13 +21,12 @@ function identity(label: string): { serverId: string; hostToken: string } {
   return { serverId: sha256Hex(hostToken), hostToken };
 }
 
-const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-/** A well-formed service account whose token exchange goes to a closed local port. */
+/** A service account that parses at startup whose PKCS#8 import fails locally on send without network I/O. */
 const SERVICE_ACCOUNT = JSON.stringify({
   project_id: 'demo-project',
   client_email: 'sender@example.invalid',
-  private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
-  token_uri: 'http://127.0.0.1:9/token',
+  private_key: '-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----\n',
+  token_uri: 'https://oauth2.googleapis.com/token',
 });
 
 const BASE_VARS = {

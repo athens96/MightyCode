@@ -13,6 +13,7 @@ jest.mock('react-native-notify-kit', () => ({
   default: {
     createChannel: jest.fn(async () => 'channel'),
     displayNotification: jest.fn(async () => 'shown'),
+    requestPermission: jest.fn(async () => ({ authorizationStatus: 1 })),
   },
   AndroidImportance: { DEFAULT: 3, HIGH: 4 },
   AndroidVisibility: { PRIVATE: 0, PUBLIC: 1, SECRET: -1 },
@@ -78,36 +79,83 @@ jest.mock('@/lib/push/host-lease', () => {
   };
 });
 
+import { chacha20poly1305 } from '@noble/ciphers/chacha';
+import { toBase64Url, utf8Encode } from '@/api/relay/crypto';
 import type { MobileState } from '@/api/types';
 import { PUSH_HANDLE_PREFIX } from '@/lib/push/registry';
+import { PUSH_INFO, PUSH_VERSION, pushKey } from '@/lib/push/seal';
 
 type Runtime = typeof import('@/lib/push/runtime');
 
 const { seal } = JSON.parse(readFileSync(resolve(__dirname, '../../../native/contracts/fixtures/push.json'), 'utf8')) as {
-  seal: { deviceToken: string; clientId: string; handle: string; envelope: string; tampered: string[]; otherHandle: string };
+  seal: {
+    deviceToken: string;
+    clientId: string;
+    handle: string;
+    plaintext: string;
+    envelope: string;
+    tampered: string[];
+    otherHandle: string;
+  };
 };
 // A plain stub before any module reset, so expo's lazy `fetch` global is never built here.
 (globalThis as { fetch?: unknown }).fetch = jest.fn();
 const SECRET = 's'.repeat(43);
 const RELAY = 'wss://relay.example';
 
+function sealFixtureMessage(
+  overrides: Record<string, unknown> = {},
+  options: { handle?: string; nonceByte?: number } = {},
+): string {
+  const handle = options.handle ?? seal.handle;
+  const nonce = new Uint8Array(12).fill(options.nonceByte ?? 0x42);
+  const key = pushKey(seal.deviceToken, seal.clientId);
+  const baseMessage = JSON.parse(seal.plaintext) as Record<string, unknown>;
+  const plaintext = utf8Encode(JSON.stringify({ ...baseMessage, ...overrides }));
+  const ciphertext = chacha20poly1305(key, nonce, utf8Encode(`${PUSH_INFO}:${handle}`)).encrypt(plaintext);
+  const out = new Uint8Array(1 + nonce.length + ciphertext.length);
+  out[0] = PUSH_VERSION;
+  out.set(nonce, 1);
+  out.set(ciphertext, 1 + nonce.length);
+  return toBase64Url(out);
+}
+
 function mocks() {
   return {
-    notifee: (jest.requireMock('react-native-notify-kit') as { default: { displayNotification: jest.Mock; createChannel: jest.Mock } }).default,
+    notifee: (
+      jest.requireMock('react-native-notify-kit') as {
+        default: {
+          displayNotification: jest.Mock;
+          createChannel: jest.Mock;
+          requestPermission: jest.Mock;
+        };
+      }
+    ).default,
     messaging: jest.requireMock('@react-native-firebase/messaging') as Record<string, jest.Mock>,
     store: jest.requireMock('expo-secure-store') as { items: Map<string, string> },
     lease: (jest.requireMock('@/lib/push/host-lease') as { fake: { state: Record<string, unknown> & { hosts: unknown[]; tokens: Record<string, string> }; clients: Record<string, unknown> } }).fake,
     lock: (jest.requireMock('@/lib/push/device-lock') as { isDeviceLocked: jest.Mock }).isDeviceLocked,
     permissions: (jest.requireMock('react-native') as { PermissionsAndroid: { request: jest.Mock } }).PermissionsAndroid.request,
+    platform: (jest.requireMock('react-native') as { Platform: { OS: string; Version: number | string } }).Platform,
   };
 }
 
 /** Each test gets fresh module state (token, opener, retries) and a fresh keychain. */
-function load(): { runtime: Runtime; m: ReturnType<typeof mocks> } {
+function load(os: 'android' | 'ios' = 'android'): { runtime: Runtime; m: ReturnType<typeof mocks> } {
   jest.resetModules();
   const m = mocks();
+  m.platform.OS = os;
+  m.platform.Version = os === 'android' ? 34 : '18.0';
   m.store.items.clear();
-  for (const fn of [m.notifee.displayNotification, m.notifee.createChannel, ...Object.values(m.messaging), m.permissions]) fn.mockClear();
+  for (const fn of [
+    m.notifee.displayNotification,
+    m.notifee.createChannel,
+    m.notifee.requestPermission,
+    ...Object.values(m.messaging),
+    m.permissions,
+  ]) {
+    fn.mockClear();
+  }
   m.lock.mockReturnValue(false);
   m.lease.state.hosts = [];
   m.lease.state.tokens = {};
@@ -171,38 +219,80 @@ describe('showPush', () => {
       { id: 'ws-api', name: 'api', path: '/api' },
     ];
     const pane = (workspaceId: string) => ({ id: 'pane-1', workspaceId }) as MobileState['sessions'][number];
-    const push = { data: { v: '1', h: seal.handle, p: seal.envelope } };
+    const pushFor = (id: string) => ({
+      data: { v: '1', h: seal.handle, p: sealFixtureMessage({ id }) },
+    });
 
     // The fixture's push is pane-1 in "demo"; the phone last saw pane-1 in "api".
     await workspaceMute.learn('pair-b', { protocol: 1, revision: 1, hostName: 'Mac', workspaces, sessions: [pane('ws-api')] });
     await workspaceMute.setMuted('pair-b', 'ws-demo', true);
-    await runtime.showPush(push);
+    await runtime.showPush(pushFor('request:run-1:req-1'));
     expect(m.notifee.displayNotification).toHaveBeenCalledTimes(1);
 
     await workspaceMute.setMuted('pair-b', 'ws-api', true);
-    await runtime.showPush(push);
+    await runtime.showPush(pushFor('request:run-1:req-2'));
     expect(m.notifee.displayNotification).toHaveBeenCalledTimes(1);
 
     // The pane is gone from the host's list: the name "demo" places it.
     await workspaceMute.learn('pair-b', { protocol: 1, revision: 2, hostName: 'Mac', workspaces, sessions: [] });
-    await runtime.showPush(push);
+    await runtime.showPush(pushFor('request:run-1:req-3'));
     expect(m.notifee.displayNotification).toHaveBeenCalledTimes(1);
 
     await workspaceMute.setMuted('pair-b', 'ws-demo', false);
-    await runtime.showPush(push);
+    await runtime.showPush(pushFor('request:run-1:req-4'));
     expect(m.notifee.displayNotification).toHaveBeenCalledTimes(2);
     // Muting is the phone's alone: no host was called.
     expect(withHostClient).not.toHaveBeenCalled();
   });
 
-  it('shows host text as written, never as markup', () => {
-    const { runtime } = load();
-    expect(runtime.plainText('fix <Row> & <b>x</b>')).toBe('fix &lt;Row&gt; &amp; &lt;b&gt;x&lt;/b&gt;');
+  it('deduplicates replayed or duplicate FCM deliveries with the same message.id per pairing', async () => {
+    const { runtime, m } = load();
+    pair(m, 'pair-b', true);
+    await runtime.showPush({ data: { v: '1', h: seal.handle, p: seal.envelope } });
+    // Exact duplicate FCM delivery and re-encrypted envelope with the same message.id are both dropped.
+    await runtime.showPush({ data: { v: '1', h: seal.handle, p: seal.envelope } });
+    await runtime.showPush({
+      data: { v: '1', h: seal.handle, p: sealFixtureMessage({}, { nonceByte: 0x99 }) },
+    });
+    expect(m.notifee.displayNotification).toHaveBeenCalledTimes(1);
+
+    // Another pairing with its own handle is not blocked by pair-b's message.id namespace.
+    pair(m, 'pair-c', true, seal.otherHandle);
+    await runtime.showPush({
+      data: { v: '1', h: seal.otherHandle, p: sealFixtureMessage({}, { handle: seal.otherHandle }) },
+    });
+    expect(m.notifee.displayNotification).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps the line breaks of a body', () => {
-    const { runtime } = load();
-    expect(runtime.plainBody('first <a>\nsecond\r\nthird')).toBe('first &lt;a&gt;<br>second<br>third');
+  it('enforces 24h max age and 10m future skew when nowMs is supplied', async () => {
+    const { runtime, m } = load();
+    pair(m, 'pair-b', true);
+    const nowMs = Date.parse('2026-11-21T12:00:00Z');
+
+    // Older than 24h -> dropped without burning the message.id.
+    const stale = sealFixtureMessage({ id: 'req:stale', at: '2026-11-20T11:59:59Z' });
+    await runtime.showPush({ data: { v: '1', h: seal.handle, p: stale } }, { nowMs });
+    expect(m.notifee.displayNotification).not.toHaveBeenCalled();
+
+    // More than 10m in the future -> dropped.
+    const future = sealFixtureMessage({ id: 'req:future', at: '2026-11-21T12:10:01Z' });
+    await runtime.showPush({ data: { v: '1', h: seal.handle, p: future } }, { nowMs });
+    expect(m.notifee.displayNotification).not.toHaveBeenCalled();
+
+    // Fresh timestamp within window -> shown once.
+    const fresh = sealFixtureMessage({ id: 'req:fresh', at: '2026-11-21T11:55:00Z' });
+    await runtime.showPush({ data: { v: '1', h: seal.handle, p: fresh } }, { nowMs });
+    expect(m.notifee.displayNotification).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows host text as written on Android and keeps plain text without HTML tags on iOS', () => {
+    const android = load('android').runtime;
+    expect(android.plainText('fix <Row> & <b>x</b>')).toBe('fix &lt;Row&gt; &amp; &lt;b&gt;x&lt;/b&gt;');
+    expect(android.plainBody('first <a>\nsecond\r\nthird')).toBe('first &lt;a&gt;<br>second<br>third');
+
+    const ios = load('ios').runtime;
+    expect(ios.plainText('fix <Row> & <b>x</b>')).toBe('fix <Row> & <b>x</b>');
+    expect(ios.plainBody('first <a> & b\nsecond\r\nthird')).toBe('first <a> & b\nsecond\nthird');
   });
 });
 
@@ -343,10 +433,19 @@ describe('syncing with the hosts', () => {
 
 describe('startPush', () => {
   it('asks for the Android 13 notification permission only once', async () => {
-    const { runtime, m } = load();
+    const { runtime, m } = load('android');
     (await runtime.startPush())();
     (await runtime.startPush())();
     expect(m.permissions).toHaveBeenCalledTimes(1);
+    expect(m.notifee.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it('asks for the iOS notification permission only once via NotifyKit', async () => {
+    const { runtime, m } = load('ios');
+    (await runtime.startPush())();
+    (await runtime.startPush())();
+    expect(m.notifee.requestPermission).toHaveBeenCalledTimes(1);
+    expect(m.permissions).not.toHaveBeenCalled();
   });
 
   it('listens for pushes before the permission prompt is up', async () => {

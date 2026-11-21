@@ -1,7 +1,11 @@
+import { hkdf } from '@noble/hashes/hkdf';
+import { sha256 } from '@noble/hashes/sha256';
 import { x25519 } from '@noble/curves/ed25519';
 import {
   DIRECTION_CLIENT_TO_HOST,
   DIRECTION_HOST_TO_CLIENT,
+  FS_TRANSCRIPT_DOMAIN,
+  HKDF_FS_INFO_PREFIX,
   MAXIMUM_FRAME,
   NONCE_LENGTH,
   RelayCipher,
@@ -9,6 +13,7 @@ import {
   TAG_LENGTH,
   buildNonce,
   bytesEqual,
+  deriveForwardSecretSessionKey,
   deriveSessionKey,
   fromBase64,
   generateHandshakeNonce,
@@ -116,6 +121,141 @@ describe('deriveSessionKey', () => {
   });
 });
 
+describe('deriveForwardSecretSessionKey (fs: 1)', () => {
+  it('derives the deterministic cross-platform fs:1 test vector and agrees symmetrically', () => {
+    const hostStaticSecret = new Uint8Array(32).fill(0x11);
+    const hostEphSecret = new Uint8Array(32).fill(0x22);
+    const clientEphSecret = new Uint8Array(32).fill(0x33);
+    const clientNonce = new Uint8Array(16).fill(0x44);
+    const serverNonce = new Uint8Array(16).fill(0x55);
+
+    const hostStaticPublicKey = x25519.getPublicKey(hostStaticSecret);
+    const hostEphemeralPublicKey = x25519.getPublicKey(hostEphSecret);
+    const clientPublicKey = x25519.getPublicKey(clientEphSecret);
+
+    const clientDerived = deriveForwardSecretSessionKey({
+      clientSecretKey: clientEphSecret,
+      clientPublicKey,
+      hostStaticPublicKey,
+      hostEphemeralPublicKey,
+      clientNonce,
+      serverNonce,
+    });
+    const clientDerivedAutoPub = deriveForwardSecretSessionKey({
+      clientSecretKey: clientEphSecret,
+      hostStaticPublicKey,
+      hostEphemeralPublicKey,
+      clientNonce,
+      serverNonce,
+    });
+    expect(clientDerived).toHaveLength(32);
+    expect(bytesEqual(clientDerived, clientDerivedAutoPub)).toBe(true);
+
+    // Host-side symmetric derivation check (X25519(hostStatic, clientPub) ‖ X25519(hostEph, clientPub)).
+    const sharedStatic = x25519.getSharedSecret(hostStaticSecret, clientPublicKey);
+    const sharedEph = x25519.getSharedSecret(hostEphSecret, clientPublicKey);
+    const ikm = Buffer.concat([sharedStatic, sharedEph]);
+    const salt = Buffer.concat([clientNonce, serverNonce]);
+    const transcript = sha256(
+      Buffer.concat([
+        utf8Encode(FS_TRANSCRIPT_DOMAIN),
+        clientPublicKey,
+        hostStaticPublicKey,
+        hostEphemeralPublicKey,
+        clientNonce,
+        serverNonce,
+      ]),
+    );
+    const info = Buffer.concat([utf8Encode(HKDF_FS_INFO_PREFIX), transcript]);
+    expect(info).toHaveLength(56);
+    const hostDerived = hkdf(sha256, ikm, salt, info, 32);
+    expect(bytesEqual(clientDerived, hostDerived)).toBe(true);
+    expect(Buffer.from(clientDerived).toString('hex')).toBe(
+      '49e1f5131039cdaaf2d57605b329b5c034a2aca27343150760e556da99ad9690',
+    );
+  });
+
+  it('rejects low-order (all-zero) shared secrets for either static or ephemeral DH', () => {
+    const client = generateKeyPair();
+    const validHost = generateKeyPair();
+    const zeroPoint = new Uint8Array(32);
+    expect(() =>
+      deriveForwardSecretSessionKey({
+        clientSecretKey: client.secretKey,
+        clientPublicKey: client.publicKey,
+        hostStaticPublicKey: zeroPoint,
+        hostEphemeralPublicKey: validHost.publicKey,
+        clientNonce: new Uint8Array(16),
+        serverNonce: new Uint8Array(16),
+      }),
+    ).toThrow(RelayCryptoError);
+    expect(() =>
+      deriveForwardSecretSessionKey({
+        clientSecretKey: client.secretKey,
+        clientPublicKey: client.publicKey,
+        hostStaticPublicKey: validHost.publicKey,
+        hostEphemeralPublicKey: zeroPoint,
+        clientNonce: new Uint8Array(16),
+        serverNonce: new Uint8Array(16),
+      }),
+    ).toThrow(RelayCryptoError);
+  });
+
+  it('validates key and nonce lengths', () => {
+    const client = generateKeyPair();
+    const hostStatic = generateKeyPair();
+    const hostEph = generateKeyPair();
+    expect(() =>
+      deriveForwardSecretSessionKey({
+        clientSecretKey: new Uint8Array(31),
+        hostStaticPublicKey: hostStatic.publicKey,
+        hostEphemeralPublicKey: hostEph.publicKey,
+        clientNonce: new Uint8Array(16),
+        serverNonce: new Uint8Array(16),
+      }),
+    ).toThrow(RelayCryptoError);
+    expect(() =>
+      deriveForwardSecretSessionKey({
+        clientSecretKey: client.secretKey,
+        hostStaticPublicKey: hostStatic.publicKey,
+        hostEphemeralPublicKey: hostEph.publicKey,
+        clientNonce: new Uint8Array(15),
+        serverNonce: new Uint8Array(16),
+      }),
+    ).toThrow(RelayCryptoError);
+  });
+
+  it('zeroes temporary shared secrets after derivation', () => {
+    const client = generateKeyPair();
+    const hostStatic = generateKeyPair();
+    const hostEph = generateKeyPair();
+    const captured: Uint8Array[] = [];
+    const realGetSharedSecret = x25519.getSharedSecret.bind(x25519);
+    const spy = jest.spyOn(x25519, 'getSharedSecret').mockImplementation((priv, pub) => {
+      const result = realGetSharedSecret(priv, pub);
+      captured.push(result);
+      return result;
+    });
+    try {
+      const key = deriveForwardSecretSessionKey({
+        clientSecretKey: client.secretKey,
+        clientPublicKey: client.publicKey,
+        hostStaticPublicKey: hostStatic.publicKey,
+        hostEphemeralPublicKey: hostEph.publicKey,
+        clientNonce: generateHandshakeNonce(),
+        serverNonce: generateHandshakeNonce(),
+      });
+      expect(key).toHaveLength(32);
+      expect(captured).toHaveLength(2);
+      for (const secret of captured) {
+        expect(secret.every((byte) => byte === 0)).toBe(true);
+      }
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('nonce layout', () => {
   it('is [direction 1B][0,0,0][counter 8B big-endian]', () => {
     expect(Array.from(buildNonce(DIRECTION_CLIENT_TO_HOST, 0n))).toEqual([
@@ -211,6 +351,47 @@ describe('RelayCipher', () => {
 
     hostCipher.destroy();
     expect(() => hostCipher.open(frame)).toThrow(RelayCryptoError);
+  });
+
+  it('accepts skipped counters when strictSequence is false (v1 default) and rejects gaps when strictSequence is true (fs:1)', () => {
+    const key = new Uint8Array(32).fill(0xab);
+    const sender = new RelayCipher(
+      new Uint8Array(key),
+      DIRECTION_CLIENT_TO_HOST,
+      DIRECTION_HOST_TO_CLIENT,
+    );
+    const frame0 = sender.seal(utf8Encode('zero'));
+    const frame1 = sender.seal(utf8Encode('one'));
+    const frame2 = sender.seal(utf8Encode('two'));
+
+    // Default v1 receiver (strictSequence = false) tolerates counter gaps (0n -> 2n).
+    const gapTolerant = new RelayCipher(
+      new Uint8Array(key),
+      DIRECTION_HOST_TO_CLIENT,
+      DIRECTION_CLIENT_TO_HOST,
+      false,
+    );
+    expect(Buffer.from(gapTolerant.open(frame0)).toString()).toBe('zero');
+    expect(Buffer.from(gapTolerant.open(frame2)).toString()).toBe('two');
+
+    // Strict receiver (strictSequence = true) requires 0n first, then +1n with no gaps.
+    const strict = new RelayCipher(
+      new Uint8Array(key),
+      DIRECTION_HOST_TO_CLIENT,
+      DIRECTION_CLIENT_TO_HOST,
+      true,
+    );
+    expect(() => strict.open(frame1)).toThrow(RelayCryptoError);
+    expect(Buffer.from(strict.open(frame0)).toString()).toBe('zero');
+    // Skipping 1n (0n -> 2n) fails without advancing lastReceivedCounter.
+    expect(() => strict.open(frame2)).toThrow(RelayCryptoError);
+    // Tampered 1n fails AEAD decryption without advancing lastReceivedCounter either.
+    const tampered1 = new Uint8Array(frame1);
+    tampered1[tampered1.length - 1] = (tampered1[tampered1.length - 1] ?? 0) ^ 0xff;
+    expect(() => strict.open(tampered1)).toThrow(RelayCryptoError);
+    // Genuine 1n then 2n succeed in sequence.
+    expect(Buffer.from(strict.open(frame1)).toString()).toBe('one');
+    expect(Buffer.from(strict.open(frame2)).toString()).toBe('two');
   });
 });
 

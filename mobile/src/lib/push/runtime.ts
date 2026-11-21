@@ -34,7 +34,7 @@ import {
   type PushNotificationSpec,
 } from '@/lib/push/notification';
 import { findHostByHandle, globalPushFetch, syncHostPush } from '@/lib/push/registry';
-import { openPush, pushKey } from '@/lib/push/seal';
+import { SeenPushIds, isFreshPushTimestamp, openPush, pushKey } from '@/lib/push/seal';
 import { enabledKinds, pushSettings } from '@/lib/push/settings';
 import { createViewingReporter } from '@/lib/push/viewing';
 import { workspaceMute } from '@/lib/push/workspace-mute';
@@ -75,13 +75,18 @@ export async function ensureChannels(): Promise<void> {
   });
 }
 
-/** The notification library reads its texts as HTML; a host's title such as `fix <Row>` must show as written. */
+/**
+ * Android's notification library reads texts as HTML (`fix <Row>` must show as written);
+ * iOS `UNMutableNotificationContent` displays plain text verbatim.
+ */
 export function plainText(text: string): string {
+  if (Platform.OS !== 'android') return text;
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/** A body as written: escaped, with its line breaks kept (HTML would fold them into spaces). */
+/** A body as written: HTML-escaped with `<br>` on Android, plain `\n` line breaks on iOS. */
 export function plainBody(text: string): string {
+  if (Platform.OS !== 'android') return text.replace(/\r\n/g, '\n');
   return plainText(text).replace(/\r?\n/g, '<br>');
 }
 
@@ -102,13 +107,23 @@ function toNotification(spec: PushNotificationSpec): Notification {
   };
 }
 
+const seenPushIds = new SeenPushIds();
+
+export interface ShowPushOptions {
+  /** Current epoch ms; when supplied, drops pushes older than 24h or >10m in the future. */
+  nowMs?: number;
+}
+
 /**
  * An FCM data message → the host's sealed message → a local notification. The pairing is the
  * one whose handle (`h`) the push came through and whose key opens it; the sealed `hostId` never
- * picks it. Anything else, a kind switched off or a workspace muted on this phone, is dropped
- * without a word.
+ * picks it. Duplicate `message.id`s per pairing, stale timestamps (when `options.nowMs` is set),
+ * kinds switched off, or workspaces muted on this phone are dropped without a word.
  */
-export async function showPush(remote: { data?: Record<string, unknown> }): Promise<void> {
+export async function showPush(
+  remote: { data?: Record<string, unknown> },
+  options?: ShowPushOptions,
+): Promise<void> {
   try {
     const data = remote.data ?? {};
     const handle = data['h'];
@@ -123,6 +138,8 @@ export async function showPush(remote: { data?: Record<string, unknown> }): Prom
     const opened = openPush(payload, pushKey(token, clientId), handle);
     const message = opened === null ? null : parsePushMessage(opened);
     if (message === null) return;
+    if (options?.nowMs !== undefined && !isFreshPushTimestamp(message.at, options.nowMs)) return;
+    if (!seenPushIds.add(`${storageId}:${message.id}`)) return;
     await pushSettings.ready;
     if (!pushSettings.get().kinds[message.kind]) return;
     // A workspace muted on this phone drops every kind; one the phone cannot place is shown.
@@ -221,6 +238,12 @@ export async function handleNotificationEvent({ type, detail }: Event, open?: (p
 }
 
 async function askOnce(): Promise<void> {
+  if (Platform.OS === 'ios') {
+    if ((await SecureStore.getItemAsync(ASKED_KEY)) === '1') return;
+    await setSecretItem(SecureStore, ASKED_KEY, '1');
+    await notifee.requestPermission();
+    return;
+  }
   if (Platform.OS !== 'android' || Number(Platform.Version) < 33) return;
   if ((await SecureStore.getItemAsync(ASKED_KEY)) === '1') return;
   await setSecretItem(SecureStore, ASKED_KEY, '1');
@@ -333,7 +356,9 @@ export async function startPush(): Promise<() => void> {
     lastToken = token;
     requestSync();
   });
-  const stopMessages = onMessage(messaging, (remote) => showPush(remote as { data?: Record<string, unknown> }));
+  const stopMessages = onMessage(messaging, (remote) =>
+    showPush(remote as { data?: Record<string, unknown> }, { nowMs: Date.now() }),
+  );
   requestSync();
   await askOnce().catch(() => undefined);
   return () => {

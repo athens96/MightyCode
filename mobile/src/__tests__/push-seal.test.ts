@@ -3,7 +3,15 @@ import { resolve } from 'node:path';
 
 import { utf8Decode, utf8Encode } from '@/api/relay/crypto';
 import { parsePushMessage } from '@/lib/push/message';
-import { openPush, pushKey } from '@/lib/push/seal';
+import {
+  PUSH_MAX_AGE_MS,
+  PUSH_MAX_FUTURE_SKEW_MS,
+  PUSH_REPLAY_CACHE_SIZE,
+  SeenPushIds,
+  isFreshPushTimestamp,
+  openPush,
+  pushKey,
+} from '@/lib/push/seal';
 
 /**
  * The same file `MobilePushSealTests.swift` and the Windows `MobilePushVerification` read:
@@ -95,5 +103,58 @@ describe('parsePushMessage', () => {
     expect(parse(null)).toBeNull();
     expect(parsePushMessage(utf8Encode('{not json'))).toBeNull();
     expect(parsePushMessage(Uint8Array.from([0xff, 0xfe]))).toBeNull();
+  });
+});
+
+describe('SeenPushIds replay cache', () => {
+  it('deduplicates up to 128 recent message ids and evicts the least recently seen entry', () => {
+    const seen = new SeenPushIds();
+    expect(PUSH_REPLAY_CACHE_SIZE).toBe(128);
+    expect(seen.add('msg-0')).toBe(true);
+    expect(seen.has('msg-0')).toBe(true);
+    expect(seen.add('msg-0')).toBe(false);
+
+    for (let i = 1; i < PUSH_REPLAY_CACHE_SIZE; i += 1) {
+      expect(seen.add(`msg-${i}`)).toBe(true);
+    }
+    expect(seen.size).toBe(PUSH_REPLAY_CACHE_SIZE);
+
+    // Refresh msg-0 so msg-1 becomes the oldest entry.
+    expect(seen.add('msg-0')).toBe(false);
+    expect(seen.add('msg-128')).toBe(true);
+    expect(seen.size).toBe(PUSH_REPLAY_CACHE_SIZE);
+    expect(seen.has('msg-0')).toBe(true);
+    expect(seen.has('msg-1')).toBe(false);
+
+    seen.clear();
+    expect(seen.size).toBe(0);
+    expect(seen.add('msg-0')).toBe(true);
+  });
+
+  it('rejects non-positive capacities', () => {
+    expect(() => new SeenPushIds(0)).toThrow(RangeError);
+    expect(() => new SeenPushIds(-3)).toThrow(RangeError);
+  });
+});
+
+describe('isFreshPushTimestamp', () => {
+  const nowMs = Date.parse('2026-11-21T12:00:00.000Z');
+
+  it('accepts timestamps up to 24h old and up to 10m ahead, including sub-ms precision and offsets', () => {
+    expect(isFreshPushTimestamp('2026-11-21T12:00:00Z', nowMs)).toBe(true);
+    expect(isFreshPushTimestamp('2026-11-20T12:00:00.000Z', nowMs)).toBe(true);
+    expect(isFreshPushTimestamp('2026-11-21T12:10:00.000Z', nowMs)).toBe(true);
+    expect(isFreshPushTimestamp('2026-11-21T21:00:00.1234567+09:00', nowMs)).toBe(true);
+    expect(isFreshPushTimestamp(new Date(nowMs - PUSH_MAX_AGE_MS).toISOString(), nowMs)).toBe(true);
+    expect(isFreshPushTimestamp(new Date(nowMs + PUSH_MAX_FUTURE_SKEW_MS).toISOString(), nowMs)).toBe(true);
+  });
+
+  it('rejects stale (>24h), excessive future skew (>10m), and malformed timestamps', () => {
+    expect(isFreshPushTimestamp(new Date(nowMs - PUSH_MAX_AGE_MS - 1).toISOString(), nowMs)).toBe(false);
+    expect(isFreshPushTimestamp(new Date(nowMs + PUSH_MAX_FUTURE_SKEW_MS + 1).toISOString(), nowMs)).toBe(false);
+    expect(isFreshPushTimestamp('2026-11-21', nowMs)).toBe(false);
+    expect(isFreshPushTimestamp('not-a-timestamp', nowMs)).toBe(false);
+    expect(isFreshPushTimestamp('', nowMs)).toBe(false);
+    expect(isFreshPushTimestamp('2026-11-21T12:00:00Z', Number.NaN)).toBe(false);
   });
 });

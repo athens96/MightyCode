@@ -3,13 +3,19 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import {
   DIRECTION_CLIENT_TO_HOST,
   DIRECTION_HOST_TO_CLIENT,
+  FS_TRANSCRIPT_DOMAIN,
+  HKDF_FS_INFO_PREFIX,
   RelayCipher,
   deriveSessionKey,
   fromBase64,
   generateHandshakeNonce,
   generateKeyPair,
   toBase64,
+  utf8Encode,
 } from '@/api/relay/crypto';
+import { x25519 } from '@noble/curves/ed25519';
+import { hkdf } from '@noble/hashes/hkdf';
+import { sha256 } from '@noble/hashes/sha256';
 import {
   RelayConnection,
   RelayError,
@@ -62,11 +68,19 @@ interface FakeOptions {
   approval?: { afterMs: number; allow: boolean };
   /** Answers every `auth` only after this long (a slow host that says nothing meanwhile). */
   answerAfterMs?: number;
+  /** Negotiates `fs: 1` when `hello.fs === 1` by returning `ready.ephemeralKey`. */
+  forwardSecrecy?: boolean;
+  /** Overrides `ready.ephemeralKey` verbatim to test malformed ephemeral keys. */
+  rawEphemeralKey?: string;
+  /** Advances the fake host's send counter by sealing and discarding one frame right after `auth_ok`. */
+  skipCounterAfterAuth?: boolean;
 }
 
 interface FakeRelay {
   url: string;
   hostPublicKeyB64: string;
+  /** Plaintext `hello` frames sent by clients. */
+  hellos: Array<Record<string, unknown>>;
   /** Plaintext envelopes the fake host received after authentication. */
   received: unknown[];
   queries: URLSearchParams[];
@@ -82,6 +96,7 @@ interface FakeRelay {
 async function startFakeRelay(options: FakeOptions = {}): Promise<FakeRelay> {
   const hostKeys = generateKeyPair();
   const server = new WebSocketServer({ port: 0 });
+  const hellos: Array<Record<string, unknown>> = [];
   const received: unknown[] = [];
   const queries: URLSearchParams[] = [];
   /** The Mac's `devices.json`: a token stays valid until the device is released. */
@@ -105,16 +120,66 @@ async function startFakeRelay(options: FakeOptions = {}): Promise<FakeRelay> {
 
     socket.on('message', (raw: RawData, isBinary: boolean) => {
       if (!isBinary) {
-        const hello = JSON.parse(raw.toString()) as { type: string; clientKey: string; nonce: string };
+        const hello = JSON.parse(raw.toString()) as {
+          type: string;
+          clientKey: string;
+          nonce: string;
+          fs?: number;
+        };
+        hellos.push(hello as unknown as Record<string, unknown>);
         if (hello.type !== 'hello') {
           socket.close(4400, 'expected hello');
           return;
         }
         const serverNonce = generateHandshakeNonce();
+        const clientPublicKey = fromBase64(hello.clientKey);
+        const clientNonce = fromBase64(hello.nonce);
+        if (options.rawEphemeralKey !== undefined) {
+          socket.send(
+            JSON.stringify({
+              type: 'ready',
+              v: 1,
+              serverKey: toBase64(hostKeys.publicKey),
+              nonce: toBase64(serverNonce),
+              ephemeralKey: options.rawEphemeralKey,
+            }),
+          );
+          return;
+        }
+        if (options.forwardSecrecy && hello.fs === 1) {
+          const hostEph = generateKeyPair();
+          const sharedStatic = x25519.getSharedSecret(hostKeys.secretKey, clientPublicKey);
+          const sharedEph = x25519.getSharedSecret(hostEph.secretKey, clientPublicKey);
+          const ikm = Buffer.concat([sharedStatic, sharedEph]);
+          const salt = Buffer.concat([clientNonce, serverNonce]);
+          const transcript = sha256(
+            Buffer.concat([
+              utf8Encode(FS_TRANSCRIPT_DOMAIN),
+              clientPublicKey,
+              hostKeys.publicKey,
+              hostEph.publicKey,
+              clientNonce,
+              serverNonce,
+            ]),
+          );
+          const info = Buffer.concat([utf8Encode(HKDF_FS_INFO_PREFIX), transcript]);
+          const key = hkdf(sha256, ikm, salt, info, 32);
+          cipher = new RelayCipher(key, DIRECTION_HOST_TO_CLIENT, DIRECTION_CLIENT_TO_HOST, true);
+          socket.send(
+            JSON.stringify({
+              type: 'ready',
+              v: 1,
+              serverKey: toBase64(hostKeys.publicKey),
+              nonce: toBase64(serverNonce),
+              ephemeralKey: toBase64(hostEph.publicKey),
+            }),
+          );
+          return;
+        }
         const key = deriveSessionKey({
           secretKey: hostKeys.secretKey,
-          peerPublicKey: fromBase64(hello.clientKey),
-          clientNonce: fromBase64(hello.nonce),
+          peerPublicKey: clientPublicKey,
+          clientNonce,
           serverNonce,
         });
         cipher = new RelayCipher(key, DIRECTION_HOST_TO_CLIENT, DIRECTION_CLIENT_TO_HOST);
@@ -160,6 +225,10 @@ async function startFakeRelay(options: FakeOptions = {}): Promise<FakeRelay> {
             knownTokens.add(deviceToken);
           }
           socket.send(cipher!.sealJson(body));
+          if (options.skipCounterAfterAuth) {
+            // Burn counter 1n without sending it on the wire; the next frame carries counter 2n.
+            cipher!.sealJson({ type: 'noop' });
+          }
           if (options.notifyAfterAuth) {
             socket.send(cipher!.sealJson({ type: 'notify', ...options.notifyAfterAuth }));
           }
@@ -233,6 +302,7 @@ async function startFakeRelay(options: FakeOptions = {}): Promise<FakeRelay> {
   const fake: FakeRelay = {
     url: `ws://127.0.0.1:${port}`,
     hostPublicKeyB64: toBase64(hostKeys.publicKey),
+    hellos,
     received,
     queries,
     ignorePings: (value) => {
@@ -829,5 +899,71 @@ describe('RelayConnection against a fake host', () => {
     expect((error as RelayError).failure).toBe('relay-unreachable');
     expect((error as RelayError).message).toBe('릴레이 연결 안 됨');
     connection.close();
+  });
+
+  it('negotiates fs: 1 when ready.ephemeralKey is present and enforces strict sequence counters', async () => {
+    const relay = await startFakeRelay({
+      forwardSecrecy: true,
+      notifyAfterAuth: { scope: 'state', revision: 5 },
+    });
+    const connection = connect(relay);
+    const notifications: { scope: string; revision: number }[] = [];
+    connection.onNotify((event) => notifications.push(event));
+
+    const info = await connection.ready();
+    expect(info.hostId).toBe('host-1');
+    expect(relay.hellos[0]?.['fs']).toBe(1);
+
+    const response = await connection.request('GET', '/m1/state?since=0&wait=0');
+    expect(response.status).toBe(200);
+    await waitFor(() => notifications.length === 1);
+    expect(notifications).toEqual([{ scope: 'state', revision: 5 }]);
+
+    connection.close();
+    await relay.stop();
+  });
+
+  it('drops an fs: 1 tunnel on a skipped receive counter while v1 fallback tolerates counter gaps', async () => {
+    // v1 host omits ready.ephemeralKey -> strictSequence = false (gap 0n -> 2n accepted).
+    const v1Relay = await startFakeRelay({
+      forwardSecrecy: false,
+      skipCounterAfterAuth: true,
+      notifyAfterAuth: { scope: 'state', revision: 9 },
+    });
+    const v1Conn = connect(v1Relay);
+    const v1Notifies: { scope: string; revision: number }[] = [];
+    v1Conn.onNotify((event) => v1Notifies.push(event));
+    await v1Conn.ready();
+    expect(v1Relay.hellos[0]?.['fs']).toBe(1);
+    await waitFor(() => v1Notifies.length === 1);
+    expect(v1Conn.state).toBe('ready');
+    v1Conn.close();
+    await v1Relay.stop();
+
+    // fs: 1 host sends ready.ephemeralKey -> strictSequence = true (gap 0n -> 2n drops socket).
+    const fsRelay = await startFakeRelay({
+      forwardSecrecy: true,
+      skipCounterAfterAuth: true,
+      notifyAfterAuth: { scope: 'state', revision: 9 },
+    });
+    const fsConn = connect(fsRelay);
+    const fsStates: Array<{ state: RelayState; failure?: string }> = [];
+    fsConn.onStateChange((state, failure) => fsStates.push({ state, failure }));
+    await waitFor(() => fsStates.some((entry) => entry.state === 'closed' && entry.failure === 'protocol'));
+    expect(fsConn.failure).toBe('protocol');
+    fsConn.close();
+    await fsRelay.stop();
+  });
+
+  it('rejects a ready.ephemeralKey with invalid byte length as a protocol error', async () => {
+    const relay = await startFakeRelay({
+      rawEphemeralKey: toBase64(new Uint8Array(16).fill(0x77)),
+    });
+    const connection = connect(relay);
+    const error = await connection.ready().catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(RelayError);
+    expect((error as RelayError).failure).toBe('protocol');
+    connection.close();
+    await relay.stop();
   });
 });

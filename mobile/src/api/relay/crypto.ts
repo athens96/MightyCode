@@ -7,6 +7,10 @@ import { t } from '@/lib/i18n';
 
 /** HKDF `info` string fixed by docs/relay.md. */
 export const HKDF_INFO = 'mightyclaude-relay-v1';
+/** Transcript domain prefix for forward-secret (`fs: 1`) handshakes. */
+export const FS_TRANSCRIPT_DOMAIN = 'mighty-relay-fs-v1';
+/** HKDF `info` prefix for forward-secret (`fs: 1`) handshakes. */
+export const HKDF_FS_INFO_PREFIX = 'mightyclaude-relay-fs-v1';
 /** Frame nonce direction byte for client → host traffic. */
 export const DIRECTION_CLIENT_TO_HOST = 0x01;
 /** Frame nonce direction byte for host → client traffic. */
@@ -188,6 +192,74 @@ export function deriveSessionKey(input: DeriveKeyInput): Uint8Array {
   }
 }
 
+export interface DeriveForwardSecretKeyInput {
+  clientSecretKey: Uint8Array;
+  clientPublicKey?: Uint8Array;
+  hostStaticPublicKey: Uint8Array;
+  hostEphemeralPublicKey: Uint8Array;
+  clientNonce: Uint8Array;
+  serverNonce: Uint8Array;
+}
+
+/**
+ * Forward-secret (`fs: 1`) hybrid static+ephemeral X25519 session key derivation:
+ * `ikm = X25519(clientSecret, hostStatic) ‖ X25519(clientSecret, hostEph)` (64B),
+ * `salt = clientNonce ‖ serverNonce` (32B),
+ * `transcript = SHA256("mighty-relay-fs-v1" ‖ clientPub ‖ hostStaticPub ‖ hostEphPub ‖ clientNonce ‖ serverNonce)`,
+ * `info = "mightyclaude-relay-fs-v1" ‖ transcript` (56B).
+ */
+export function deriveForwardSecretSessionKey(input: DeriveForwardSecretKeyInput): Uint8Array {
+  if (
+    input.clientSecretKey.length !== KEY_LENGTH ||
+    input.hostStaticPublicKey.length !== KEY_LENGTH ||
+    input.hostEphemeralPublicKey.length !== KEY_LENGTH ||
+    (input.clientPublicKey !== undefined && input.clientPublicKey.length !== KEY_LENGTH)
+  ) {
+    throw new RelayCryptoError(t('phone.relay.crypto.keyLength'));
+  }
+  if (
+    input.clientNonce.length !== HANDSHAKE_NONCE_LENGTH ||
+    input.serverNonce.length !== HANDSHAKE_NONCE_LENGTH
+  ) {
+    throw new RelayCryptoError(t('phone.relay.crypto.nonceLength'));
+  }
+
+  let sharedStatic: Uint8Array | undefined;
+  let sharedEph: Uint8Array | undefined;
+  let ikm: Uint8Array | undefined;
+  try {
+    let clientPublicKey: Uint8Array;
+    try {
+      clientPublicKey = input.clientPublicKey ?? x25519.getPublicKey(input.clientSecretKey);
+      sharedStatic = x25519.getSharedSecret(input.clientSecretKey, input.hostStaticPublicKey);
+      sharedEph = x25519.getSharedSecret(input.clientSecretKey, input.hostEphemeralPublicKey);
+    } catch {
+      throw new RelayCryptoError(t('phone.relay.crypto.sharedSecret'));
+    }
+    if (isAllZero(sharedStatic) || isAllZero(sharedEph)) {
+      throw new RelayCryptoError(t('phone.relay.crypto.zeroSecret'));
+    }
+    ikm = concatBytes(sharedStatic, sharedEph);
+    const salt = concatBytes(input.clientNonce, input.serverNonce);
+    const transcript = sha256(
+      concatBytes(
+        utf8Encode(FS_TRANSCRIPT_DOMAIN),
+        clientPublicKey,
+        input.hostStaticPublicKey,
+        input.hostEphemeralPublicKey,
+        input.clientNonce,
+        input.serverNonce,
+      ),
+    );
+    const info = concatBytes(utf8Encode(HKDF_FS_INFO_PREFIX), transcript);
+    return hkdf(sha256, ikm, salt, info, KEY_LENGTH);
+  } finally {
+    sharedStatic?.fill(0);
+    sharedEph?.fill(0);
+    ikm?.fill(0);
+  }
+}
+
 /** `[direction 1B][0,0,0][counter 8B big-endian]`. */
 export function buildNonce(direction: number, counter: bigint): Uint8Array {
   if (counter < 0n || counter > 0xffffffffffffffffn) {
@@ -223,6 +295,7 @@ export class RelayCipher {
     private readonly key: Uint8Array,
     private readonly sendDirection: number,
     private readonly receiveDirection: number,
+    private readonly strictSequence = false,
   ) {
     if (key.length !== KEY_LENGTH) throw new RelayCryptoError(t('phone.relay.crypto.keyLength'));
   }
@@ -257,7 +330,13 @@ export class RelayCipher {
     if (direction !== this.receiveDirection) {
       throw new RelayCryptoError(t('phone.relay.crypto.frameDirection'));
     }
-    if (this.lastReceivedCounter !== undefined && counter <= this.lastReceivedCounter) {
+    if (this.strictSequence) {
+      const expectedCounter =
+        this.lastReceivedCounter === undefined ? 0n : this.lastReceivedCounter + 1n;
+      if (counter !== expectedCounter) {
+        throw new RelayCryptoError(t('phone.relay.crypto.replay'));
+      }
+    } else if (this.lastReceivedCounter !== undefined && counter <= this.lastReceivedCounter) {
       throw new RelayCryptoError(t('phone.relay.crypto.replay'));
     }
     const nonce = frame.slice(0, NONCE_LENGTH);
