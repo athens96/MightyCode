@@ -5,7 +5,7 @@ import type { RunSession } from '../store/models';
 import { attachmentRefusal, byteLabel, toBase64 } from './attachments';
 import { enterAction, maximumDraft, secondSendWords } from './keys';
 import { choose, closed, move, paletteDraft, paletteKey, paletteState, safeIndex, type PaletteState, type SlashCatalog, type SlashCommand } from './slash';
-import { MenuList, StyleRow, Toolbar, usePopover } from './Toolbar';
+import { BusySendPill, MenuList, StyleRow, Toolbar, usePopover } from './Toolbar';
 import { Guided } from './Guided';
 import { readRunNow, rowAgent, runNowBranches, runNowTip, runNowWaits, type RunNow } from './queue';
 import { Icon } from '../icons/Icon';
@@ -389,6 +389,8 @@ export function Composer({ session }: { session: RunSession }) {
           {(state?.primary === 'queue' || state?.primary === 'worktree') && (
             <button type="button" className="composer-stop-small" aria-label={t('composer.stop.name')} disabled={state.stopping} onClick={() => call('stop')}><Icon name="square" size={9} weight={0} fill /></button>
           )}
+          {/* 실행 중 보내기: what Enter does while the pane runs, beside the worktree button it chooses for (대기열, or an agent's worktree). */}
+          {state?.busy && state.pills && <BusySendPill paneId={paneId} agents={agents} current={runsWith?.agent ?? null} compact />}
           {state?.worktree && (
             <button type="button" className="composer-worktree" data-testid="composer-worktree" aria-label={t('queue.worktree')} title={t(onMac() ? 'queue.worktreeHintMac' : 'queue.worktreeHint')} disabled={!state.worktreeEnabled} onClick={() => void send(true)}><Icon name="split" size={13} weight={2.2} /></button>
           )}

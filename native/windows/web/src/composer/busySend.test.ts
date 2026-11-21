@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { ServicesContext, type AppServices } from '../app/context';
 import { translator } from '../i18n/locale';
 import type { Pills } from './menus';
-import { busySendChoice, busySendRows, Toolbar } from './Toolbar';
+import { BusySendPill, busySendChoice, busySendRows, Toolbar } from './Toolbar';
 import type { WorktreeAgent } from './types';
 
 const t = translator([{
@@ -28,19 +28,24 @@ const pill = (html: string) => html.match(/<button[^>]*data-pill="busySend"[^>]*
 
 // 실행 중 보내기: what Enter does while the pane runs — the queue, or a new worktree of the chosen agent.
 describe('the 실행 중 보내기 pill', () => {
-  it('shows only while the pane runs and offers a worktree agent', () => {
-    expect(render({ worktreeAgents: agents })).not.toContain('data-pill="busySend"');
-    expect(render({ busy: true })).not.toContain('data-pill="busySend"');
-    expect(render({ busy: true, worktreeAgents: [] })).not.toContain('data-pill="busySend"');
-    const html = render({ busy: true, worktreeAgents: agents });
+  // The pill sits beside the worktree button (Composer.tsx, drawn while the pane runs), as an icon: the queue's, or the chosen agent's.
+  const alone = (over: { agents?: WorktreeAgent[]; current?: string | null } = {}) =>
+    renderToStaticMarkup(createElement(ServicesContext.Provider, { value: services },
+      createElement(BusySendPill, { paneId: 'p', agents: over.agents ?? agents, current: over.current ?? null, compact: true })));
+
+  it('is no longer among the toolbar\'s pills, and draws nothing without a worktree agent', () => {
+    expect(render({ busy: true, worktreeAgents: agents })).not.toContain('data-pill="busySend"');
+    expect(alone({ agents: [] })).toBe('');
+    const html = alone();
     expect(pill(html)).not.toContain('disabled');
-    expect(html).toContain('>Queue<');
+    expect(pill(html)).toContain('aria-label="While running, send to · Queue"');
+    expect(html).not.toContain('>Queue<');
   });
 
-  it('names and tints the agent chosen', () => {
-    const html = render({ busy: true, worktreeAgents: agents, busySend: 'codex' });
-    expect(pill(html)).toContain('composer-pill on');
-    expect(html).toContain('>Worktree · Codex<');
+  it('shows the chosen agent\'s mark and names it in its label', () => {
+    const html = alone({ current: 'codex' });
+    expect(pill(html)).toContain('composer-busy-send compact on');
+    expect(pill(html)).toContain('Worktree · Codex');
     expect(html).toContain('data-provider="codex"');
   });
 

@@ -164,7 +164,7 @@ export function ReferenceBubble({ paneId, request, top, onClose }: { paneId: str
   else if (answer === 'failed') content = <Notice text={t('files.preview.failed')} />;
   else if (!found || !preview) content = <Notice text={t('files.preview.missing')} />;
   else if (preview.failure) content = <Notice text={preview.failure} />;
-  else if (diffable && showsDiff) content = <DiffView changes={diffable} />;
+  else if (diffable && showsDiff) content = <DiffView changes={diffable} name={found?.relativePath ?? preview.name} />;
   else if (markdownRendered) content = <div className="files-markdown"><Markdown text={preview.text ?? ''} /></div>;
   else if (htmlPage && found.relativePath) content = <HtmlFrame paneId={paneId} path={found.relativePath} name={preview.name} reference />;
   else if (preview.kind === 'source' || preview.kind === 'markdown') content = <SourceView preview={preview} />;

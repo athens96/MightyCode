@@ -1,11 +1,13 @@
-import { memo, useCallback, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import type { RunSession } from '../../store/models';
 import { useServices } from '../../app/context';
 import { Markdown } from '../../conversation/MarkdownView';
 import { MiddlePath, useMenu } from '../../shell/parts';
 import { Icon, type IconName } from '../../icons/Icon';
 import { HtmlFrame, HtmlToggle, isHtmlPreview } from './HtmlView';
-import { lineNumbers, sourceSpans, treeKey } from './tree';
+import { File as PierreFile } from '@pierre/diffs/react';
+import { treeKey } from './tree';
+import { useAppTheme } from './useAppTheme';
 import { listenPane } from '../channel';
 import type { FilePreview, FileRow, FilesModel } from './types';
 
@@ -49,14 +51,22 @@ const Tree = memo(function Tree({ model, onRow, onKey, onMenu }: {
   );
 });
 
+/**
+ * A source file as text with its line numbers, coloured by @pierre/diffs (Shiki's grammars, the same as VS Code's and as the
+ * 변경사항 view's), its language from the file's name; a long line wraps when the host says so.
+ */
 export function SourceView({ preview }: { preview: FilePreview }) {
-  const text = preview.text ?? '';
+  const theme = useAppTheme();
+  const file = useMemo(() => ({ name: preview.name, contents: preview.text ?? '' }), [preview.name, preview.text]);
+  const options = useMemo(() => ({
+    theme: { dark: 'pierre-dark', light: 'pierre-light' },
+    themeType: theme,
+    overflow: preview.wraps ? ('wrap' as const) : ('scroll' as const),
+    disableFileHeader: true,
+  }), [theme, preview.wraps]);
   return (
-    <div className={'files-source' + (preview.wraps ? ' wraps' : '')} data-testid="files-source">
-      <pre className="files-lines" aria-hidden="true">{lineNumbers(preview.lines ?? 1)}</pre>
-      <pre className="files-code">
-        {sourceSpans(text, preview.tokens).map((span, index) => (span.kind ? <span key={index} className={'syntax-' + span.kind}>{span.text}</span> : span.text))}
-      </pre>
+    <div className="files-source highlighted" data-testid="files-source">
+      <PierreFile file={file} options={options} />
     </div>
   );
 }

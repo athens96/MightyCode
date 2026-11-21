@@ -68,6 +68,7 @@ Mac 화면 공유(BETA)의 클립보드는 휴대폰과 같은 zstd 형식으로
   - Node.js는 앱에 담지 않습니다.
 - **Windows 앱**: 자체 포함 .NET·ASP.NET Core 런타임(MIT, `dotnet-*`·`aspnetcore-*`의 라이선스와 THIRD-PARTY-NOTICES), WebView2 SDK(`WebView2-LICENSE.txt`·`WebView2-NOTICE.txt`), Windows App SDK 런타임(Microsoft 소프트웨어 사용 조건과 고지, `WindowsAppSDK-*`), 터미널의 xterm.js·addon-fit(MIT, `Assets/Terminal/`), 아래의 Lucide·Bouncy Castle·QRCoder·ZstdSharp·Win2D.
 - **릴레이와 모바일 앱**: 릴레이 서버(`relay/`)와 모바일 앱(`mobile/`)의 npm 의존성(`ws`, `@noble/curves`, `@noble/hashes`, `@noble/ciphers`, Expo 등)은 각 패키지의 `LICENSE`를 따르며 `package-lock.json`에 버전이 고정되어 있습니다. Cloudflare 릴레이(`relay/cloudflare/`)의 배포 코드에는 외부 패키지가 없습니다.
+- **앱 화면(맥·Windows 공통)**: 소스 미리보기와 변경사항(diff) 보기는 `@pierre/diffs`·`@pierre/highlights`·`@pierre/theme`·`@pierre/theming`(Apache License 2.0, `pierre-diffs-LICENSE.md`), 색칠은 Shiki(MIT, `shiki-LICENSE`, 문법과 테마는 각 원본의 라이선스를 따르며 `@shikijs/langs`·`@shikijs/themes`에 고지가 있습니다), diff 계산은 jsdiff(BSD 3-Clause, `jsdiff-LICENSE`), 그 밖에 hast-util-to-html(MIT, `hast-util-to-html-LICENSE`)·lru_map(MIT)을 씁니다. 버전은 `native/windows/web/package-lock.json`에 고정되어 있습니다.
 - 펫과 앱 아이콘: `assets/`(생성 기록 `generation.md`).
 
 ---
@@ -136,6 +137,7 @@ The Mac screen-share (BETA) clipboard is compressed with zstd, the same format t
 The license texts are in `native/licenses/`; the Mac app carries them in `Contents/Resources/ThirdPartyLicenses/`, the Windows app in `ThirdPartyLicenses/`.
 
 - **Mac app**: no browser engine (Chromium Embedded Framework is not shipped: there is no in-app browser, web pages open in the default browser). Ghostty (the terminal, MIT) with what is statically linked into it: Oniguruma (BSD 2-Clause), FreeType (under the FreeType License; Portions of this software are copyright © 2026 The FreeType Project (www.freetype.org). All rights reserved.), simdutf and Wuffs (under MIT), Highway (under BSD 3-Clause), libpng and zlib, in `Ghostty-*-LICENSE`. MSDisplayLink (MIT), bash-preexec (MIT). Node.js is not shipped.
+- **The app's page (Mac and Windows)**: the source preview and the diff view use `@pierre/diffs`, `@pierre/highlights`, `@pierre/theme` and `@pierre/theming` (Apache License 2.0, `pierre-diffs-LICENSE.md`), Shiki for the colours (MIT, `shiki-LICENSE`; its grammars and themes keep their own licences, noted in `@shikijs/langs` and `@shikijs/themes`), jsdiff for the diff (BSD 3-Clause, `jsdiff-LICENSE`), hast-util-to-html (MIT, `hast-util-to-html-LICENSE`) and lru_map (MIT). Their versions are pinned in `native/windows/web/package-lock.json`.
 - **Windows app**: the self-contained .NET and ASP.NET Core runtimes (MIT, with their THIRD-PARTY-NOTICES), the WebView2 SDK, the Windows App SDK runtime (Microsoft Software License Terms and notices), xterm.js and addon-fit (MIT, `Assets/Terminal/`), and Lucide, Bouncy Castle, QRCoder, ZstdSharp and Win2D below.
 
 ## Provider marks

@@ -64,6 +64,13 @@
 .files-diff-count { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .files-diff-count.added { color: var(--done-text); }
 .files-diff-count.removed { color: var(--err-text); }
+.files-source.highlighted { display: block; overflow: auto; font-size: 12px; --diffs-font-size: 12px; --diffs-line-height: 18px; --diffs-font-family: var(--font-mono); --diffs-tab-size: 4; --diffs-bg-context-override: var(--card); }
+.files-diff-layout { flex: none; display: inline-flex; border: var(--stroke-line) solid var(--line); border-radius: var(--radius-file-row); overflow: hidden; }
+.files-diff-layout > button { border: 0; background: transparent; color: var(--ink2); font: inherit; font-size: var(--type-small); padding: 1px var(--space-sm); cursor: pointer; }
+.files-diff-layout > button.chosen { background: var(--card-raised); color: var(--ink); }
+.files-diff-body { flex: 1; min-height: 0; overflow: auto; font-size: 12px; --diffs-font-size: 12px; --diffs-line-height: 18px; --diffs-font-family: var(--font-mono); --diffs-tab-size: 4; --diffs-bg-context-override: var(--card); }
+.files-diff-body.notable { cursor: pointer; }
+.files-diff-note-mark { margin: 2px 0 2px 6ch; padding: 1px var(--space-sm); display: inline-block; border-radius: var(--radius-file-row); background: var(--card-raised); color: var(--ink2); font-size: var(--type-small); }
 .files-diff-rows { flex: 1; min-height: 0; overflow: auto; padding: var(--space-xs) 0; font-family: var(--font-mono); font-size: 12px; line-height: 17px; color: var(--ink); }
 .files-diff-row { display: flex; min-width: max-content; }
 .files-diff-number { flex: none; padding: 0 var(--space-xs); text-align: right; color: var(--ink3); user-select: none; box-sizing: content-box; }

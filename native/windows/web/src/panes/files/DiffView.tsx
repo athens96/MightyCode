@@ -1,20 +1,35 @@
-import { memo, useMemo } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { PatchDiff, type DiffLineAnnotation } from '@pierre/diffs/react';
 import { useServices } from '../../app/context';
-import { baseCaption, diffRows, gutterDigits, type DiffRow } from './diff';
+import { baseCaption, diffRows, placeOf, rowOf, unifiedPatch, type DiffRow } from './diff';
 import type { FileChanges } from './types';
+import { useAppTheme } from './useAppTheme';
+
+/** Where the chosen layout is kept between views and launches. */
+const LAYOUT_KEY = 'mc.diff.layout';
+
+function savedLayout(): 'split' | 'unified' {
+  try {
+    return localStorage.getItem(LAYOUT_KEY) === 'split' ? 'split' : 'unified';
+  } catch {
+    return 'unified';
+  }
+}
 
 /**
- * The 변경사항 view of a source preview (M/FileDiffView.swift, the phone's DiffView): a caption naming the base and the
- * counts, the truncated note, then a unified diff in the source's monospace: per hunk its `@@` head, then its lines with
- * the old and new line numbers in two gutters, added lines on the done wash and removed ones on the error wash. A screen
- * reader hears each added or removed line's kind before its text. Memoised on the change set: a bubble resized by its grip
- * re-renders with the same object and leaves the rows alone.
+ * The 변경사항 view of a source preview and of 요청 변경 검토 (M/FileDiffView.swift, the phone's DiffView): a caption naming the
+ * base and the counts, a 한 줄로 | 나란히 toggle, the truncated note, then the diff drawn by @pierre/diffs from the host's hunks: the
+ * source's syntax colours (Shiki, the same as VS Code's), the words that changed inside a line marked, unchanged stretches folded
+ * between hunks. A click on a line picks it for a note and a right-click opens the file there; both name the line by its index in
+ * `diffRows`, as before. Memoised on the change set: a bubble resized by its grip re-renders with the same object.
  */
-export const DiffView = memo(function DiffView({ changes, onLine, onOpenLine, noted, picked }: {
+export const DiffView = memo(function DiffView({ changes, name, onLine, onOpenLine, noted, picked }: {
   changes: FileChanges;
-  /** 편집기에서 열기: a right-click on a line (not a hunk's head) opens the file there; the rows' indexes are `diffRows`'. */
+  /** The file's name or path: the renderer picks the source's language from it. */
+  name?: string;
+  /** 편집기에서 열기: a right-click on a line opens the file there; the rows' indexes are `diffRows`'. */
   onOpenLine?: (row: DiffRow, index: number) => void;
-  /** 요청 변경 검토: a click on a line (not a hunk's head) picks it for a note; the rows' indexes are `diffRows`'. */
+  /** 요청 변경 검토: a click on a line picks it for a note; the rows' indexes are `diffRows`'. */
   onLine?: (row: DiffRow, index: number) => void;
   /** Rows that carry a note. */
   noted?: ReadonlySet<number>;
@@ -22,8 +37,55 @@ export const DiffView = memo(function DiffView({ changes, onLine, onOpenLine, no
   picked?: number | null;
 }) {
   const { t } = useServices();
+  const theme = useAppTheme();
+  const [layout, setLayout] = useState(savedLayout);
   const rows = useMemo(() => diffRows(changes), [changes]);
-  const width = gutterDigits(rows) + 'ch';
+  const patch = useMemo(() => unifiedPatch(name ?? 'file', changes), [name, changes]);
+  // The line under the pointer, for a right-click (the renderer reports hovers, not context menus).
+  const hovered = useRef<number>(-1);
+  const choose = (next: 'split' | 'unified') => {
+    setLayout(next);
+    try {
+      localStorage.setItem(LAYOUT_KEY, next);
+    } catch {
+      // A page without storage keeps the choice for this view only.
+    }
+  };
+  const annotations = useMemo<DiffLineAnnotation<number>[]>(() => {
+    const marks: DiffLineAnnotation<number>[] = [];
+    for (const index of noted ?? []) {
+      const place = rows[index] && placeOf(rows[index]);
+      if (place) marks.push({ ...place, metadata: index });
+    }
+    return marks;
+  }, [noted, rows]);
+  const pickedPlace = picked !== null && picked !== undefined && rows[picked] ? placeOf(rows[picked]) : null;
+  const options = useMemo(() => ({
+    theme: { dark: 'pierre-dark', light: 'pierre-light' },
+    themeType: theme,
+    diffStyle: layout,
+    lineDiffType: 'word-alt' as const,
+    hunkSeparators: 'line-info-basic' as const,
+    overflow: 'scroll' as const,
+    disableFileHeader: true,
+    lineHoverHighlight: 'both' as const,
+    onLineClick: onLine ? ({ lineNumber, annotationSide }: { lineNumber: number; annotationSide: 'deletions' | 'additions' }) => {
+      const index = rowOf(rows, annotationSide, lineNumber);
+      if (index >= 0) onLine(rows[index]!, index);
+    } : undefined,
+    onLineEnter: ({ lineNumber, annotationSide }: { lineNumber: number; annotationSide: 'deletions' | 'additions' }) => {
+      hovered.current = rowOf(rows, annotationSide, lineNumber);
+    },
+    onLineLeave: () => {
+      hovered.current = -1;
+    },
+  }), [theme, layout, onLine, rows]);
+  const contextMenu = useCallback((event: React.MouseEvent) => {
+    const index = hovered.current;
+    if (!onOpenLine || index < 0 || !rows[index]) return;
+    event.preventDefault();
+    onOpenLine(rows[index]!, index);
+  }, [onOpenLine, rows]);
   const base = baseCaption(changes);
   const caption = base === 'created' ? t('files.changes.created')
     : base === 'run' ? t('files.changes.baseRun')
@@ -35,21 +97,20 @@ export const DiffView = memo(function DiffView({ changes, onLine, onOpenLine, no
         <span>{caption}</span>
         <span className="files-diff-count added">+{changes.added}</span>
         <span className="files-diff-count removed">−{changes.removed}</span>
+        <span className="files-diff-layout" role="group" aria-label={t('files.changes.layout')}>
+          <button type="button" className={layout === 'unified' ? 'chosen' : ''} aria-pressed={layout === 'unified'} onClick={() => choose('unified')}>{t('files.changes.unified')}</button>
+          <button type="button" className={layout === 'split' ? 'chosen' : ''} aria-pressed={layout === 'split'} onClick={() => choose('split')}>{t('files.changes.split')}</button>
+        </span>
       </div>
       {changes.truncated && <div className="files-banner">{t('files.changes.truncated')}</div>}
-      <div className="files-diff-rows">
-        {rows.map((row, index) => (
-          <div key={index} className={'files-diff-row ' + row.kind + (noted?.has(index) ? ' noted' : '') + (picked === index ? ' picked' : '')
-            + (onLine && row.kind !== 'hunk' && row.kind !== 'noNewline' ? ' notable' : '')}
-            onClick={onLine && row.kind !== 'hunk' && row.kind !== 'noNewline' ? () => onLine(row, index) : undefined}
-            onContextMenu={onOpenLine && row.kind !== 'noNewline' ? (event) => { event.preventDefault(); onOpenLine(row, index); } : undefined}>
-            <span className="files-diff-number" style={{ width }}>{row.old ?? ''}</span>
-            <span className="files-diff-number" style={{ width }}>{row.new ?? ''}</span>
-            <span className="files-diff-op" aria-hidden="true">{row.kind === 'added' ? '+' : row.kind === 'removed' ? '−' : ''}</span>
-            {(row.kind === 'added' || row.kind === 'removed') && <span className="visually-hidden">{row.kind === 'added' ? t('files.changes.added') : t('files.changes.removed')} </span>}
-            <span className="files-diff-text">{row.kind === 'noNewline' ? '\\ ' + t('files.changes.noNewline') : row.text}</span>
-          </div>
-        ))}
+      <div className={'files-diff-body' + (onLine ? ' notable' : '')} onContextMenu={contextMenu}>
+        <PatchDiff<number>
+          patch={patch}
+          options={options}
+          lineAnnotations={annotations}
+          selectedLines={pickedPlace ? { start: pickedPlace.lineNumber, end: pickedPlace.lineNumber, side: pickedPlace.side } : null}
+          renderAnnotation={() => <div className="files-diff-note-mark">{t('runChanges.notes.title', { count: 1 })}</div>}
+        />
       </div>
     </div>
   );

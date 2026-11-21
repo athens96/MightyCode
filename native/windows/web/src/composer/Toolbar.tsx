@@ -271,10 +271,10 @@ export function BusySendPill({ paneId, agents, current, compact = false }: { pan
   };
   return (
     <>
-      <button type="button" className={'composer-pill' + (compact ? ' compact' : '') + (chosen ? ' on' : '')} data-pill="busySend" data-testid="composer-busy-send" aria-haspopup="menu"
+      <button type="button" className={'composer-pill composer-busy-send' + (compact ? ' compact' : '') + (chosen ? ' on' : '')} data-pill="busySend" data-testid="composer-busy-send" aria-haspopup="menu"
         aria-label={t('composer.busySend.title') + ' · ' + name} title={t('composer.busySend.help') + '\n' + name} onClick={() => setOpen(!open)}>
         {chosen ? <span className="pill-glyph"><ProviderMark provider={chosen.agent} size={12} /></span> : <Icon name="list-plus" size={13} weight={1.75} className="pill-glyph" />}
-        {!compact && <span className="pill-text">{name}</span>}{!compact && <Icon name="chevron-down" size={8} weight={3} className="pill-chevron" />}
+        {!compact && <span className="pill-text">{name}</span>}<Icon name="chevron-down" size={8} weight={3} className="pill-chevron" />
       </button>
       {problem && <span className="composer-pill-problem" role="alert">{problem}</span>}
       {open && (
@@ -343,7 +343,6 @@ export function Toolbar({ paneId, pills, busy, showUsage, onUsageShown, resumed 
   return (
     <div ref={host} className="composer-pills">
       {pill('model', <><span className="pill-glyph"><ProviderMark provider={pills.provider} size={12} /></span><span className="pill-text">{pills.model}</span></>, pills.modelTip)}
-      {busy && <BusySendPill paneId={paneId} agents={worktreeAgents} current={busySend} compact={narrow} />}
       {!narrow && pills.showsEffort && pill('effort', <>{glyph('brain')}<span className="pill-text">{pills.effort}</span></>, pills.effortTip, pills.effortEnabled)}
       {!narrow && pill('permission', <>{glyph(pills.unlocked ? 'lock-open' : 'shield-half')}<span className="pill-text">{pills.permission}</span></>, pills.permissionHelp, true, pills.unlocked)}
       {!narrow && pills.showsFast && (

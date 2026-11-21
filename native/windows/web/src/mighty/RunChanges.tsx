@@ -197,7 +197,7 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
               <div className="run-changes-review">
                 <div className="run-changes-diff">
                   {changes ? (changes.unchanged ? <div className="run-changes-placeholder">{t('runChanges.diff.unchanged')}</div>
-                    : <DiffView changes={changes} noted={noted} picked={picked?.path === selected ? picked.index : null}
+                    : <DiffView changes={changes} name={selected ?? undefined} noted={noted} picked={picked?.path === selected ? picked.index : null}
                       onOpenLine={(_row, index) => openInEditor(editorLine(rows, index))}
                       onLine={(row, index) => { if (selected && noteTarget(row)) { setPicked({ row, index, path: selected }); setNoteText(''); } }} />)
                     : loadingDiff ? <DialogLoading rows={2} />

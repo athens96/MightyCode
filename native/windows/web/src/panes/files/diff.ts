@@ -67,3 +67,40 @@ export function baseCaption(changes: Pick<FileChanges, 'base' | 'created' | 'hea
 export function showsChanges(changes: FileChanges | null | undefined): changes is FileChanges {
   return !!changes && !changes.unchanged && changes.hunks.length > 0;
 }
+
+/**
+ * The change set as a unified patch for the diff renderer (DiffView.tsx): git's file head for `name` (a created file from
+ * /dev/null), then each hunk's `@@` head and its lines, a line without a final line break followed by git's marker.
+ */
+export function unifiedPatch(name: string, changes: Pick<FileChanges, 'hunks' | 'created'>): string {
+  const path = name.replace(/\\/g, '/') || 'file';
+  const out: string[] = [`diff --git a/${path} b/${path}`];
+  if (changes.created) out.push('new file mode 100644', '--- /dev/null');
+  else out.push(`--- a/${path}`);
+  out.push(`+++ b/${path}`);
+  for (const hunk of changes.hunks) {
+    out.push(hunkHeader(hunk));
+    for (const line of hunk.lines) {
+      out.push(line.op + line.text);
+      if (line.noNewline) out.push('\\ No newline at end of file');
+    }
+  }
+  return out.join('\n') + '\n';
+}
+
+/**
+ * The index in `rows` (`diffRows`) of the line the renderer reports: its side ('deletions' the old file, 'additions' the new
+ * one) and its number on that side; -1 for none. A context line answers on either side.
+ */
+export function rowOf(rows: readonly DiffRow[], side: 'deletions' | 'additions', line: number): number {
+  return rows.findIndex((row) => side === 'deletions'
+    ? (row.kind === 'removed' || row.kind === 'context') && row.old === line
+    : (row.kind === 'added' || row.kind === 'context') && row.new === line);
+}
+
+/** The renderer's place of a row (`rowOf`'s inverse): an added line on the new side, a removed or context line on the old. */
+export function placeOf(row: DiffRow): { side: 'deletions' | 'additions'; lineNumber: number } | null {
+  if (row.kind === 'added' && row.new !== null) return { side: 'additions', lineNumber: row.new };
+  if ((row.kind === 'removed' || row.kind === 'context') && row.old !== null) return { side: row.kind === 'context' ? 'additions' : 'deletions', lineNumber: row.kind === 'context' ? (row.new ?? row.old) : row.old };
+  return null;
+}

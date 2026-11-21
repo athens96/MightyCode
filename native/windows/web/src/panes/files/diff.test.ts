@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { baseCaption, diffRows, editorLine, gutterDigits, hunkHeader, showsChanges } from './diff';
+import { baseCaption, diffRows, editorLine, gutterDigits, hunkHeader, showsChanges, unifiedPatch, rowOf, placeOf } from './diff';
 import type { FileChanges } from './types';
 import fixture from '@tokens/file-diff.json';
 
@@ -79,5 +79,31 @@ describe('변경사항 rows (DiffView)', () => {
         if (next.length) expect(next.at(-1), item.name).toBe(hunk.newStart + hunk.newLines - 1);
       }
     }
+  });
+});
+
+describe('the patch the renderer draws', () => {
+  const changes = {
+    created: false,
+    hunks: [{ oldStart: 3, oldLines: 3, newStart: 3, newLines: 3, lines: [
+      { op: ' ' as const, text: 'keep' }, { op: '-' as const, text: 'old' }, { op: '+' as const, text: 'new', noNewline: true }, { op: ' ' as const, text: 'tail' },
+    ] }],
+  };
+
+  it('is git\'s unified form of the hunks, a missing final line break marked', () => {
+    expect(unifiedPatch('src\\a.ts', changes)).toBe(
+      'diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -3,3 +3,3 @@\n keep\n-old\n+new\n\\ No newline at end of file\n tail\n');
+    expect(unifiedPatch('n.ts', { ...changes, created: true })).toContain('new file mode 100644\n--- /dev/null\n+++ b/n.ts');
+  });
+
+  it('names a reported line by its row and a row by its place', () => {
+    const rows = diffRows(changes);
+    expect(rowOf(rows, 'deletions', 4)).toBe(2);
+    expect(rowOf(rows, 'additions', 4)).toBe(3);
+    expect(rowOf(rows, 'additions', 3)).toBe(1);
+    expect(rowOf(rows, 'deletions', 99)).toBe(-1);
+    expect(placeOf(rows[2]!)).toEqual({ side: 'deletions', lineNumber: 4 });
+    expect(placeOf(rows[3]!)).toEqual({ side: 'additions', lineNumber: 4 });
+    expect(placeOf(rows[0]!)).toBeNull();
   });
 });

@@ -7,8 +7,7 @@ import { ServicesContext, type AppServices } from '../app/context';
 import { translator } from '../i18n/locale';
 import type { MightyGraphRun } from '../store/models';
 import { emptyState, reduce } from '../store/store';
-import { DiffView } from '../panes/files/DiffView';
-import { diffRows } from '../panes/files/diff';
+import { diffRows, placeOf, rowOf } from '../panes/files/diff';
 import type { FileChanges } from '../panes/files/types';
 import { Block, type BlockActions } from './Block';
 import { blockExtras } from './extras';
@@ -79,13 +78,12 @@ describe('a note on a diff line', () => {
     expect([...notedRows(rows, notes, 'a.ts')]).toEqual([2, 4]);
   });
 
-  it('draws the noted and the picked rows, and lines that take a click', () => {
-    const services = { bridge: { call: () => Promise.resolve(null) }, store: {}, t: translator([{}]) } as unknown as AppServices;
-    const html = renderToStaticMarkup(createElement(ServicesContext.Provider, { value: services },
-      createElement(DiffView, { changes, noted: new Set([2]), picked: 4, onLine: () => {} })));
-    expect(html).toContain('files-diff-row removed noted notable');
-    expect(html).toContain('files-diff-row added picked notable');
-    expect(html).toContain('files-diff-row hunk"');
+  it('places the noted and the picked rows on the side the diff renderer draws them', () => {
+    // DiffView hands these places to @pierre/diffs as annotations and the selected line (it draws in a browser only).
+    expect(placeOf(rows[2]!)).toEqual({ side: 'deletions', lineNumber: 2 });
+    expect(placeOf(rows[4]!)).toEqual({ side: 'additions', lineNumber: 3 });
+    expect(rowOf(rows, 'deletions', 2)).toBe(2);
+    expect(rowOf(rows, 'additions', 3)).toBe(4);
   });
 });
 
