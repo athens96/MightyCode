@@ -390,7 +390,7 @@ jobs:
             native/windows/web/package-lock.json
             native/tauri/package-lock.json
       # The 0.4.x stager's verdict on the zip comes from C#'s own code (tools/parity `update stage`).
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
       - uses: dtolnay/rust-toolchain@stable
@@ -479,7 +479,7 @@ jobs:
           # The tags the 0.4.x app is built from.
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '10.0.x'
       - uses: actions/setup-node@v4
