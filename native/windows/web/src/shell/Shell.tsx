@@ -1,22 +1,23 @@
 // The window (spec section 1): the sidebar column with its grip, and the detail column of banners, workspace header, the
 // panes (layout, dashboard, welcome or the empty-panes invitation) and the status bar; the menus, the dialogs and the
 // window's shortcuts (section 8) over them.
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { shallowEqual, useServices, useStoreSelector } from '../app/context';
 import { escapeCssAttr } from '../app/cssEscape';
 import { Dashboard, EmptyPanes, Welcome } from '../dashboard/Dashboard';
 import { Dialogs } from '../dialogs/Dialogs';
-import { Surfaces } from '../native/Surfaces';
 import { Layout } from '../layout/Layout';
-import { PictureViewer } from '../pictures/PictureViewer';
 import { dragSlack, layoutMetrics } from '../layout/geometry';
 import { Banners, StatusBar, WorkspaceHeader } from './Chrome';
 import { MenuHost } from './parts';
 import { macShortcutAction, shortcutAction } from './shortcuts';
 import { macHost, useMenu } from './menu';
 import { Sidebar, sidebarSearchId } from './Sidebar';
-import { ReviewPanel } from '../review/ReviewPanel';
-import { toggleReview } from '../review/queue';
+import { toggleReview, useReviewOpen } from '../review/queue';
+
+const LazySurfaces = lazy(() => import('../native/Surfaces').then((m) => ({ default: m.Surfaces })));
+const LazyReviewPanel = lazy(() => import('../review/ReviewPanel').then((m) => ({ default: m.ReviewPanel })));
+const LazyPictureViewer = lazy(() => import('../pictures/PictureViewer').then((m) => ({ default: m.PictureViewer })));
 
 function Grip({ width, setLive }: { width: number; setLive: (width: number | null) => void }) {
   const { t, bridge } = useServices();
@@ -101,7 +102,7 @@ function useShortcuts(blocked: boolean) {
 
 export function Shell() {
   const { t, bridge, store } = useServices();
-  const { hasSnapshot, collapsed, savedWidth, hasWorkspaces, snapshotLayout, shell, selected, blocked } = useStoreSelector(
+  const { hasSnapshot, collapsed, savedWidth, hasWorkspaces, snapshotLayout, shell, selected, hasNatives, hasPicture, blocked } = useStoreSelector(
     (state) => ({
       hasSnapshot: state.snapshot !== null,
       collapsed: state.snapshot?.sidebarCollapsed ?? false,
@@ -110,15 +111,20 @@ export function Shell() {
       snapshotLayout: state.snapshot?.layout ?? 'grid',
       shell: state.shell,
       selected: state.selected,
+      hasNatives: state.natives.length > 0,
+      hasPicture: state.picture !== undefined,
       blocked: state.dialogs.length > 0 || state.natives.length > 0 || state.picture !== undefined || (state.shell?.dialogOpen ?? false),
     }),
     shallowEqual,
   );
+  const reviewOpen = useReviewOpen();
   const [live, setLive] = useState<number | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
   const closeUsage = useCallback((open: boolean) => setUsageOpen(open), []);
   useEffect(() => {
     void bridge.call('shellState').then((value) => { if (value) store.dispatch({ kind: 'shell', shell: value as NonNullable<typeof shell> }); }, () => {});
+    // Views open before the page loaded (or loaded again) are sent again without eagerly loading Surfaces.
+    void bridge.call('nativeState').catch(() => {});
   }, [bridge, store]);
   // A notification's click selected a pane: its row comes into view.
   useEffect(() => {
@@ -150,10 +156,10 @@ export function Shell() {
           <StatusBar shell={shell} usageOpen={usageOpen} setUsageOpen={closeUsage} />
         </div>
       </div>
-      <Surfaces />
-      <ReviewPanel />
+      {hasNatives && <Suspense fallback={null}><LazySurfaces skipInitialSync /></Suspense>}
+      {reviewOpen && <Suspense fallback={null}><LazyReviewPanel /></Suspense>}
       <Dialogs />
-      <PictureViewer />
+      {hasPicture && <Suspense fallback={null}><LazyPictureViewer /></Suspense>}
     </MenuHost>
   );
 }

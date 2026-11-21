@@ -3,6 +3,7 @@ import { emptyState, type StoreState } from '../store/store';
 import type { ShellModel } from '../shell/types';
 import { goneReport, pageCovers, sameReport, SlotReporter, slotReport, wantsSnapshot, type SlotReport } from './bounds';
 import { applyHostPush, hostCapabilities, isHostPush, nativeTerminal, readCapabilities, resetHostCapabilities, subscribeHost } from './host';
+import { safeSnapshotUrl } from './NativeSlot';
 
 const box = (left: number, top: number, width: number, height: number) => ({ left, top, width, height, right: left + width, bottom: top + height });
 
@@ -147,5 +148,27 @@ describe('slot reporter', () => {
     expect(calls.at(-1)).toEqual({ method: 'surfaceBounds', args: { paneId: 'p1', surface: 'terminal', ...goneReport } });
     reporter.update(shown());
     expect(calls.at(-1)?.args.visible).toBe(true);
+  });
+});
+
+describe('safeSnapshotUrl', () => {
+  it('accepts base64 PNG, JPEG, and WebP data URLs', () => {
+    expect(safeSnapshotUrl('data:image/png;base64,iVBORw0KGgo=')).toBe('data:image/png;base64,iVBORw0KGgo=');
+    expect(safeSnapshotUrl('data:image/jpeg;base64,/9j/4AAQSkZJRg==')).toBe('data:image/jpeg;base64,/9j/4AAQSkZJRg==');
+    expect(safeSnapshotUrl('data:image/webp;base64,UklGRh4AAABXRUJQ')).toBe('data:image/webp;base64,UklGRh4AAABXRUJQ');
+  });
+
+  it('rejects non-image schemes, SVG, empty payloads, and CSS breakout characters', () => {
+    expect(safeSnapshotUrl(undefined)).toBeNull();
+    expect(safeSnapshotUrl('')).toBeNull();
+    expect(safeSnapshotUrl('data:image/png;base64,')).toBeNull();
+    expect(safeSnapshotUrl('data:image/svg+xml;base64,PHN2Zz4=')).toBeNull();
+    expect(safeSnapshotUrl('https://example.com/snap.png')).toBeNull();
+    expect(safeSnapshotUrl('javascript:alert(1)')).toBeNull();
+    expect(safeSnapshotUrl('data:image/png;base64,AAAA");background:red;url("')).toBeNull();
+    expect(safeSnapshotUrl("data:image/png;base64,AAAA'")).toBeNull();
+    expect(safeSnapshotUrl('data:image/png;base64,AAAA)')).toBeNull();
+    expect(safeSnapshotUrl('data:image/png;base64,AAAA\nBBBB')).toBeNull();
+    expect(safeSnapshotUrl('data:image/png;base64,AAAA\rBBBB')).toBeNull();
   });
 });

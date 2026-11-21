@@ -315,7 +315,9 @@ const fileExtensions = new Set([
   'svelte', 'dart', 'php', 'lua', 'ex', 'exs', 'erl', 'hs', 'ml', 'zig', 'ini', 'cfg', 'conf', 'log', 'csproj', 'sln', 'xaml', 'proto',
 ]);
 const bareUrl = /\b(?:https?:\/\/|mailto:)[^\s<>"'`]+/giu;
-const filePattern = /(?<![\p{L}\p{N}_@/\\.-])((?:[A-Za-z]:[\\/]|~\/|\.{1,2}[\\/]|\/)?(?:[\p{L}\p{N}_.@-]+[\\/])*[\p{L}\p{N}_.@-]*[\p{L}_][\p{L}\p{N}_.@-]*\.([A-Za-z][A-Za-z0-9]{0,11}))(?::(\d{1,6}))?(?::\d{1,6})?(?![\p{L}\p{N}_\\/])/gu;
+// Split stem into disjoint prefix (no letter/underscore) + mandatory letter/underscore + tail
+// so long unbroken strings scan in O(n) with no quadratic backtracking.
+const filePattern = /(?<![\p{L}\p{N}_@/\\.-])((?:[A-Za-z]:[\\/]|~\/|\.{1,2}[\\/]|\/)?(?:[\p{L}\p{N}_.@-]+[\\/])*[\p{N}.@-]*[\p{L}_][\p{L}\p{N}_.@-]*\.([A-Za-z][A-Za-z0-9]{0,11}))(?::(\d{1,6}))?(?::\d{1,6})?(?![\p{L}\p{N}_\\/])/gu;
 
 /** A bare web address cut where prose goes on: trailing punctuation and a closing bracket it did not open left out. */
 function trimUrl(url: string): string {
@@ -344,12 +346,14 @@ function fileOf(match: RegExpExecArray | RegExpMatchArray): { path: string; line
 }
 
 /** Plain text with the web addresses and the files it names drawn as links. */
-function linked(text: string): Inline[] {
+function linked(text: string, budget?: Budget): Inline[] {
+  if (budget) spend(budget);
   const out: Inline[] = [];
   let at = 0;
   const words = (piece: string) => {
     let from = 0;
     for (const match of piece.matchAll(filePattern)) {
+      if (budget) spend(budget);
       const file = fileOf(match);
       if (!file) continue;
       if (match.index! > from) out.push({ type: 'text', text: piece.slice(from, match.index) });
@@ -359,6 +363,7 @@ function linked(text: string): Inline[] {
     if (from < piece.length) out.push({ type: 'text', text: piece.slice(from) });
   };
   for (const match of text.matchAll(bareUrl)) {
+    if (budget) spend(budget);
     const url = trimUrl(match[0]);
     if (url.length < 10 || webUrl(url) === null) continue;
     if (match.index! > at) words(text.slice(at, match.index));
@@ -369,17 +374,18 @@ function linked(text: string): Inline[] {
   return out;
 }
 
-/** AgentTranscript.Spans: the inline marks of one paragraph, a heading or a cell. */
-export function parseInline(text: string, pictures = true, depth = 0): Inline[] {
+function parseInlineWithBudget(text: string, pictures: boolean, depth: number, budget?: Budget): Inline[] {
+  if (budget) spend(budget);
   const out: Inline[] = [];
   let position = 0;
   let pending = '';
   const flush = () => {
-    if (pending.length > 0) out.push(...linked(pending));
+    if (pending.length > 0) out.push(...linked(pending, budget));
     pending = '';
   };
-  const nested = (inner: string) => (depth < maximumDepth ? parseInline(inner, pictures, depth + 1) : [{ type: 'text' as const, text: inner }]);
+  const nested = (inner: string) => (depth < maximumDepth ? parseInlineWithBudget(inner, pictures, depth + 1, budget) : [{ type: 'text' as const, text: inner }]);
   for (const match of text.matchAll(inlinePattern)) {
+    if (budget) spend(budget);
     // No escape is read inside a Windows path: its backslashes stay.
     if (match[1] !== undefined && inPath(text, match.index)) continue;
     pending += text.slice(position, match.index);
@@ -402,7 +408,11 @@ export function parseInline(text: string, pictures = true, depth = 0): Inline[] 
     else if (match[5] !== undefined) out.push({ type: 'strong', children: nested(value.slice(2, -2)) });
     else if (match[6] !== undefined) out.push({ type: 'em', children: nested(value.slice(1, -1)) });
     else if (match[7] !== undefined) out.push({ type: 'strike', children: nested(value.slice(2, -2)) });
-    else if (match[9] !== undefined) out.push({ type: 'autolink', url: value.slice(1, -1) });
+    else if (match[9] !== undefined) {
+      const url = value.slice(1, -1);
+      if (webUrl(url) !== null) out.push({ type: 'autolink', url });
+      else out.push({ type: 'text', text: value });
+    }
     else {
       const split = value.indexOf('](');
       const label = value.slice(1, split);
@@ -418,35 +428,42 @@ export function parseInline(text: string, pictures = true, depth = 0): Inline[] 
   return out;
 }
 
-function build(blocks: readonly Raw[], pictures: boolean): Block[] {
+/** AgentTranscript.Spans: the inline marks of one paragraph, a heading or a cell. */
+export function parseInline(text: string, pictures = true, depth = 0): Inline[] {
+  return parseInlineWithBudget(text, pictures, depth);
+}
+
+function build(blocks: readonly Raw[], pictures: boolean, budget: Budget): Block[] {
   return blocks.map((block): Block => {
+    spend(budget);
     switch (block.type) {
       case 'paragraph':
-        return { type: 'paragraph', inline: parseInline(block.text, pictures) };
+        return { type: 'paragraph', inline: parseInlineWithBudget(block.text, pictures, 0, budget) };
       case 'heading':
-        return { type: 'heading', level: block.level, inline: parseInline(block.text, pictures) };
+        return { type: 'heading', level: block.level, inline: parseInlineWithBudget(block.text, pictures, 0, budget) };
       case 'code': {
         const questions = parseQuestionnaire(block.text);
         return questions ? { type: 'questionnaire', questions } : block;
       }
       case 'quote':
-        return { type: 'quote', children: build(block.children, pictures) };
+        return { type: 'quote', children: build(block.children, pictures, budget) };
       case 'list':
         return {
           type: 'list',
           ordered: block.ordered,
           items: block.items.map((item) => {
+            spend(budget);
             const first = item.children[0];
             const mark = first?.type === 'paragraph' && first.text.length >= 4 ? first.text.slice(0, 4).toLowerCase() : '';
             if (first?.type === 'paragraph' && (mark === '[x] ' || mark === '[ ] ')) {
               const rest: Raw[] = [{ type: 'paragraph', text: first.text.slice(4) }, ...item.children.slice(1)];
-              return { ordinal: item.ordinal, task: mark === '[x] ' ? 'checked' : 'open', children: build(rest, pictures) };
+              return { ordinal: item.ordinal, task: mark === '[x] ' ? 'checked' : 'open', children: build(rest, pictures, budget) };
             }
-            return { ordinal: item.ordinal, task: null, children: build(item.children, pictures) };
+            return { ordinal: item.ordinal, task: null, children: build(item.children, pictures, budget) };
           }),
         };
       case 'table':
-        return { type: 'table', align: block.align, rows: block.rows.map((row) => block.align.map((_, column) => parseInline(row[column] ?? '', false))) };
+        return { type: 'table', align: block.align, rows: block.rows.map((row) => block.align.map((_, column) => parseInlineWithBudget(row[column] ?? '', false, 0, budget))) };
       case 'rule':
       case 'source':
         return block;
@@ -460,7 +477,7 @@ export function parseMarkdown(text: string, pictures = true, budgetMs = markdown
   if (utf8Length(text) > maximumRenderBytes) return [{ type: 'source', lines }];
   try {
     const budget: Budget = { cells: maximumTableCells, deadline: performance.now() + budgetMs };
-    return build(parseBlocks(lines, 0, budget), pictures);
+    return build(parseBlocks(lines, 0, budget), pictures, budget);
   } catch (error) {
     if (error instanceof OutOfTime) return [{ type: 'source', lines }];
     throw error;

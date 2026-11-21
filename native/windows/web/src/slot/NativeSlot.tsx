@@ -5,6 +5,14 @@ import { overlayBoxes } from '../shell/overlay';
 import { pageCovers, SlotReporter, slotReport } from './bounds';
 import { useHostCapabilities, type SurfaceKind } from './host';
 
+const SAFE_SNAPSHOT_URL = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/i;
+
+/** Validates a native slot snapshot data URL before interpolating it into CSS `url(...)`. */
+export function safeSnapshotUrl(url: string | undefined): string | null {
+  if (!url) return null;
+  return SAFE_SNAPSHOT_URL.test(url) ? url : null;
+}
+
 /**
  * Reports `element` as a native view's slot (docs/tauri-architecture.md §3): its bounds in device pixels on the next frame after
  * anything that can move or cover it (its size, the window, a scroll, the frame's model, the dialogs, the host's views, a page
@@ -20,8 +28,9 @@ export function useNativeSlot(element: RefObject<HTMLElement | null>, paneId: st
     const target = element.current;
     if (!target || !host) return undefined;
     const picture = (url: string | undefined) => {
-      target.style.backgroundImage = url ? `url("${url}")` : '';
-      target.style.backgroundSize = url ? '100% 100%' : '';
+      const safe = safeSnapshotUrl(url);
+      target.style.backgroundImage = safe ? `url("${safe}")` : '';
+      target.style.backgroundSize = safe ? '100% 100%' : '';
     };
     const reporter = new SlotReporter(paneId, surface, (method, args) => bridge.call(method, args), picture);
     let frame = 0;

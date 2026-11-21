@@ -84,10 +84,16 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
 
   const rows = useMemo(() => (changes ? diffRows(changes) : []), [changes]);
   /** 편집기에서 열기: the selected file at `line` (the host resolves it in the pane's folder again, editor.rs). */
-  const openInEditor = (line: number | null) => {
+  const openInEditor = useCallback((line: number | null) => {
     if (selected === null) return;
     void bridge.call('openInEditor', { source: 'reference', paneId, path: selected, ...(line ? { line } : {}) }).catch(() => {});
-  };
+  }, [bridge, paneId, selected]);
+  const onOpenLine = useCallback((_row: DiffRow, index: number) => {
+    openInEditor(editorLine(rows, index));
+  }, [openInEditor, rows]);
+  const onLine = useCallback((row: DiffRow, index: number) => {
+    if (selected && noteTarget(row)) { setPicked({ row, index, path: selected }); setNoteText(''); }
+  }, [selected]);
   /** The header's button: the line a note is being written on, else the first changed line. */
   const firstChange = rows.findIndex((row) => row.kind === 'added' || row.kind === 'removed');
   const editorAt = picked?.path === selected ? editorLine(rows, picked.index) : firstChange >= 0 ? editorLine(rows, firstChange) : null;
@@ -198,8 +204,7 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
                 <div className="run-changes-diff">
                   {changes ? (changes.unchanged ? <div className="run-changes-placeholder">{t('runChanges.diff.unchanged')}</div>
                     : <DiffView changes={changes} name={selected ?? undefined} noted={noted} picked={picked?.path === selected ? picked.index : null}
-                      onOpenLine={(_row, index) => openInEditor(editorLine(rows, index))}
-                      onLine={(row, index) => { if (selected && noteTarget(row)) { setPicked({ row, index, path: selected }); setNoteText(''); } }} />)
+                      onOpenLine={onOpenLine} onLine={onLine} />)
                     : loadingDiff ? <DialogLoading rows={2} />
                     : <div className="run-changes-placeholder">{t(selected === null ? 'runChanges.diff.pick' : 'runChanges.diff.none')}</div>}
                 </div>

@@ -174,6 +174,28 @@ export function themeName(theme: string | undefined): 'light' | 'dark' {
   return theme === 'light' ? 'light' : 'dark';
 }
 
+export const THEME_STORAGE_KEY = 'mc.theme';
+
+/** Reads the last applied theme from storage (defaulting to dark), safe when storage is unavailable. */
+export function savedTheme(storage?: Pick<Storage, 'getItem'> | null): 'light' | 'dark' {
+  try {
+    const store = storage === undefined ? globalThis.localStorage : storage;
+    return themeName(store?.getItem(THEME_STORAGE_KEY) ?? undefined);
+  } catch {
+    return 'dark';
+  }
+}
+
+/** Remembers the applied theme so the next launch paints it before React mounts. */
+export function saveTheme(theme: 'light' | 'dark', storage?: Pick<Storage, 'setItem'> | null): void {
+  try {
+    const store = storage === undefined ? globalThis.localStorage : storage;
+    store?.setItem(THEME_STORAGE_KEY, theme);
+  } catch {
+    // Storage may be unavailable or full; the live theme still applies.
+  }
+}
+
 /** The terminal's xterm palette for a theme: the fixture's windowsOnly.terminal (the Mac terminal's Ghostty themes as values). */
 export function terminalPalette(theme: 'light' | 'dark') {
   return tokens.windowsOnly.terminal[theme];

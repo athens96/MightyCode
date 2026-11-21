@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import tokens from '@tokens/design-tokens.json';
-import { Motion, cubicBezier, ease, kebab, motionVariables, paletteVariables, percent, quoteFamilies, terminalPalette, themeName, tokenStyleSheet } from './tokens';
+import { Motion, THEME_STORAGE_KEY, cubicBezier, ease, kebab, motionVariables, paletteVariables, percent, quoteFamilies, saveTheme, savedTheme, terminalPalette, themeName, tokenStyleSheet } from './tokens';
+import { textStyleSheet } from './text';
 import { terminalThemes } from '../panes/terminal/rules';
 
 /** WCAG 2.x contrast of two `#RRGGBB` colours. */
@@ -73,6 +74,44 @@ describe('tokens', () => {
     expect(themeName('light')).toBe('light');
     expect(themeName('dark')).toBe('dark');
     expect(themeName(undefined)).toBe('dark');
+  });
+
+  it('persists and restores the startup theme safely without throwing when storage fails', () => {
+    const backing = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => backing.get(key) ?? null,
+      setItem: (key: string, value: string) => { backing.set(key, value); },
+    };
+    expect(savedTheme(storage)).toBe('dark');
+    saveTheme('light', storage);
+    expect(backing.get(THEME_STORAGE_KEY)).toBe('light');
+    expect(savedTheme(storage)).toBe('light');
+    saveTheme('dark', storage);
+    expect(savedTheme(storage)).toBe('dark');
+    backing.set(THEME_STORAGE_KEY, 'unknown');
+    expect(savedTheme(storage)).toBe('dark');
+
+    const broken = {
+      getItem: () => { throw new Error('blocked'); },
+      setItem: () => { throw new Error('quota'); },
+    };
+    expect(savedTheme(broken)).toBe('dark');
+    expect(savedTheme(null)).toBe('dark');
+    expect(() => saveTheme('light', broken)).not.toThrow();
+    expect(() => saveTheme('light', null)).not.toThrow();
+  });
+
+  it('strips newlines, quotes, backslashes, and control characters from text font families', () => {
+    const sheet = textStyleSheet({
+      scale: 1,
+      family: 'Aptos"\r\n} body { display: none; }\x00\x1f\x7f',
+      codeFamily: 'Fira\\Code\nMono',
+      transcriptFamily: '"\r\n\\',
+    });
+    expect(sheet).not.toMatch(/[\r\n\u0000-\u001f\u007f-\u009f]/);
+    expect(sheet).toContain('--font-body:"Aptos} body { display: none; }", var(--font-design-body);');
+    expect(sheet).toContain('--font-mono:"FiraCodeMono", var(--font-design-mono);');
+    expect(sheet).not.toContain('--font-transcript:');
   });
 
   it('takes the terminal palette from the fixture (windowsOnly.terminal), both themes, every xterm colour', () => {

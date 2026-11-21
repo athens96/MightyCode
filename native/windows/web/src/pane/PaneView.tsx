@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { RunSession } from '../store/models';
 import { shallowEqual, useServices, useStoreSelector } from '../app/context';
 import { Conversation } from '../conversation/Conversation';
@@ -10,7 +10,7 @@ import { SlimPane, slimKind } from '../panes/Panes';
 import { TerminalView } from '../panes/terminal/TerminalView';
 import { ReferenceContext } from '../conversation/referenceClick';
 import type { ReferenceTarget } from '../conversation/references';
-import { ReferenceBubble, type ReferenceRequest } from './ReferenceBubble';
+import type { ReferenceRequest } from './ReferenceBubble';
 import { Icon } from '../icons/Icon';
 import { providerLabel } from '../conversation/format';
 import { drawsDiagram } from '../pending/requests';
@@ -18,6 +18,8 @@ import { useCall, useMenu, type MenuItem } from '../shell/parts';
 import { WorktreeBar } from './WorktreeBar';
 import { MirrorStrip } from './MirrorStrip';
 import { logText } from './log';
+
+const LazyReferenceBubble = lazy(() => import('./ReferenceBubble').then((m) => ({ default: m.ReferenceBubble })));
 
 /** The header's clock, redrawn each second while the run is not finished (MW.Composer.cs RefreshElapsed). */
 function Clock({ session }: { session: RunSession }) {
@@ -107,7 +109,11 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
       <ReferenceContext.Provider value={remote ? null : showReference}>
         <div className="pane-room" ref={room}>
           {mighty ? <MightyView key={'mighty-' + session.id} session={session} /> : <Conversation key={session.id} session={session} />}
-          {reference && !remote && <ReferenceBubble paneId={session.id} request={reference} top={bubbleTop} onClose={closeReference} />}
+          {reference && !remote && (
+            <Suspense fallback={null}>
+              <LazyReferenceBubble paneId={session.id} request={reference} top={bubbleTop} onClose={closeReference} />
+            </Suspense>
+          )}
         </div>
       </ReferenceContext.Provider>
       {session.kind === 'claude' && <Cards key={'cards-' + session.id} paneId={session.id} hideBackground={mighty} />}

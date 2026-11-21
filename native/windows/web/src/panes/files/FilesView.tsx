@@ -154,21 +154,22 @@ export function FilesView({ session }: { session: RunSession }) {
     void show(message.path, false);
   }), [call, apply, show, paneId]);
 
-  const choose = (row: FileRow) => {
+  const choose = useCallback((row: FileRow) => {
     void call<FilesModel>('filesSelect', { path: row.path }).then(apply, () => {});
     setModel((current) => (current ? { ...current, selected: row.path } : current));
     if (!row.dir) void show(row.path, true);
-  };
-  const onRow = (row: FileRow) => {
+  }, [call, apply, show]);
+  const filtering = model?.filtering ?? false;
+  const onRow = useCallback((row: FileRow) => {
     if (row.dir) {
-      if (model?.filtering) void call<FilesModel>('filesReveal', { path: row.path }).then((value) => { apply(value); if (value) setFilter(value.filter); }, () => {});
+      if (filtering) void call<FilesModel>('filesReveal', { path: row.path }).then((value) => { apply(value); if (value) setFilter(value.filter); }, () => {});
       else void call<FilesModel>('filesToggle', { path: row.path }).then(apply, () => {});
       setModel((current) => (current ? { ...current, selected: row.path } : current));
       return;
     }
     choose(row);
-  };
-  const onKey = (event: KeyboardEvent<HTMLDivElement>) => {
+  }, [filtering, call, apply, choose]);
+  const onKey = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
     if (!model) return;
     const action = treeKey(model.rows, model.selected, event.key, model.filtering);
     if (action.kind === 'none') return;
@@ -177,7 +178,7 @@ export function FilesView({ session }: { session: RunSession }) {
     if (action.kind === 'select') { if (row) choose(row); else setModel({ ...model, selected: action.path }); }
     else if (action.kind === 'toggle') void call<FilesModel>('filesToggle', { path: action.path }).then(apply, () => {});
     else void call<FilesModel>('filesReveal', { path: action.path }).then((value) => { apply(value); if (value) setFilter(value.filter); }, () => {});
-  };
+  }, [model, call, apply, choose]);
   const onFilter = (text: string) => {
     setFilter(text);
     // The list follows once typing pauses for about 100 ms, not on every key.

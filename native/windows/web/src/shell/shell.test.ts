@@ -1,7 +1,14 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { ServicesContext, type AppServices } from '../app/context';
+import { translator } from '../i18n/locale';
+import { Store } from '../store/store';
+import { StatusBar } from './Chrome';
 import { filterWorkspaces } from './filter';
 import { isMenuPush } from './menu';
 import { macShortcutAction, shortcutAction } from './shortcuts';
+import type { ShellModel } from './types';
 
 const key = (code: string, extra: Partial<{ key: string; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }> = {}) =>
   ({ key: extra.key ?? '', code, ctrlKey: extra.ctrlKey ?? true, shiftKey: extra.shiftKey ?? false, altKey: extra.altKey ?? false, metaKey: false });
@@ -66,5 +73,47 @@ describe("the Mac's shortcuts and menu (D9, the Rust host on macOS only)", () =>
     expect(isMenuPush({ kind: 'menu', action: 'workMap' } as { kind: string })).toBe(true);
     expect(isMenuPush({ kind: 'menu', action: 'quit' } as { kind: string })).toBe(false);
     expect(isMenuPush({ kind: 'host' })).toBe(false);
+  });
+});
+
+describe('usage reset link validation (Chrome.tsx)', () => {
+  const services = {
+    bridge: { call: () => Promise.resolve(null) },
+    store: new Store(),
+    t: translator([{}]),
+  } as unknown as AppServices;
+
+  const renderStatus = (url: string) => {
+    const shell = {
+      status: { machine: 'local', panes: '1', running: '0' },
+      usage: {
+        title: 'Usage',
+        refreshLabel: 'Refresh',
+        refreshTooltip: 'Refresh',
+        refreshing: false,
+        shared: '',
+        cards: [{
+          provider: 'claude',
+          name: 'Claude',
+          title: 'Claude',
+          beta: false,
+          windows: [],
+          reset: { title: 'Reset', rows: [], link: 'Open guide', url },
+        }],
+      },
+    } as unknown as ShellModel;
+    return renderToStaticMarkup(
+      createElement(ServicesContext.Provider, { value: services },
+        createElement(StatusBar, { shell, usageOpen: true, setUsageOpen: () => {} })),
+    );
+  };
+
+  it('enables valid http/https reset URLs and disables unsafe schemes', () => {
+    const valid = renderStatus('https://example.com/reset');
+    expect(valid).toContain('Open guide');
+    expect(valid).not.toMatch(/<button[^>]*disabled=""[^>]*>Open guide<\/button>/);
+
+    const invalid = renderStatus('javascript:alert(1)');
+    expect(invalid).toMatch(/<button[^>]*disabled=""[^>]*>Open guide<\/button>/);
   });
 });

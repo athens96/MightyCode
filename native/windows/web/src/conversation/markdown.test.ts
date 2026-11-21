@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { inPath, markdown, maximumRenderBytes, parseInline, parseMarkdown, type Block, type Inline } from './markdown';
 
 const text = (value: string): Inline => ({ type: 'text', text: value });
@@ -114,6 +114,35 @@ describe('blocks', () => {
     expect(parseMarkdown('# a\nb', true, -1)).toEqual([{ type: 'source', lines: ['# a', 'b'] }]);
   });
 
+  it('enforces the time budget inside build() and parseInline() on single-line input', () => {
+    // Call 1 sets deadline (0 + 250 = 250); calls 2-3 succeed in parseBlocks; call 4+ expire inside build()/parseInline().
+    let calls = 0;
+    const now = vi.spyOn(performance, 'now').mockImplementation(() => (++calls <= 3 ? 0 : 300));
+    try {
+      const line = '**bold** and _italic_ and src/a.ts';
+      expect(parseMarkdown(line, true, 250)).toEqual([{ type: 'source', lines: [line] }]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('parses 50 KB unbroken strings without quadratic backtracking (<50ms)', () => {
+    const cases = [
+      'a'.repeat(50_000),
+      '1'.repeat(50_000),
+      'a.1'.repeat(16_666),
+      'a.aaaaaaaaaaaaaaa'.repeat(3_000),
+    ];
+    for (const input of cases) {
+      const start = performance.now();
+      const blocks = parseMarkdown(input);
+      const elapsed = performance.now() - start;
+      expect(elapsed).toBeLessThan(50);
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]!.type).toBe('paragraph');
+    }
+  });
+
   it('shows a questionnaire inside a code block', () => {
     const json = JSON.stringify({ questions: [{ header: 'H', question: 'Q?', multiSelect: false, options: [{ label: 'a', description: '' }, { label: 'b', description: 'd' }] }] });
     expect(parseMarkdown('```json\n' + json + '\n```')[0]).toMatchObject({ type: 'questionnaire', questions: [{ header: 'H' }] });
@@ -185,8 +214,11 @@ describe('inline', () => {
     ]);
   });
 
-  it('reads autolinks', () => {
+  it('reads autolinks and validates angle-bracket destinations through webUrl()', () => {
     expect(parseInline('see <https://a.b/c> and <mailto:x@y.z>')).toEqual([text('see '), { type: 'autolink', url: 'https://a.b/c' }, text(' and '), { type: 'autolink', url: 'mailto:x@y.z' }]);
+    expect(parseInline('bad <https://[invalid> and <http://a.b:99999>')).toEqual([
+      text('bad '), text('<https://[invalid>'), text(' and '), text('<http://a.b:99999>'),
+    ]);
   });
 
   it('never fetches a remote picture and refuses an unknown scheme', () => {

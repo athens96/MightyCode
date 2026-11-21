@@ -4,6 +4,7 @@
 import { useEffect, useRef } from 'react';
 import { useServices } from '../app/context';
 import { ProviderMark } from '../conversation/ProviderMark';
+import { webUrl } from '../conversation/references';
 import { SidebarToggle } from '../dashboard/Dashboard';
 import { BetaBadge, GitCapsule, MiddlePath, StatusCounts, useCall, useMenu, type MenuItem } from './parts';
 import type { HeaderModel, ShellModel, UsageDetails } from './types';
@@ -106,28 +107,31 @@ function UsagePopover({ usage, onClose }: { usage: UsageDetails; onClose: () => 
           {usage.refreshing ? <Pending busy showsLabel={false} /> : '↻'}
         </button>
       </div>
-      {usage.cards.map((card) => (
-        <div key={card.provider} className="usage-card">
-          <div className="usage-card-title"><ProviderMark provider={card.provider} size={13} /><strong aria-label={card.title}>{card.name}</strong>{card.beta && <BetaBadge />}<span className="spacer" />{card.account && <span className="quiet">{card.account}</span>}</div>
-          {card.windows.map((w, index) => (
-            <div key={index} className="usage-window">
-              <div className="usage-window-line"><span>{w.label}</span><span>{w.used}</span></div>
-              <span className="usage-bar"><span className={'usage-bar-fill' + (w.warning ? ' warning' : '')} style={{ width: `${Math.round(Math.min(Math.max(w.fraction, 0), 1) * 100)}%` }} /></span>
-              {w.reset && <div className="quiet small">{w.reset}</div>}
-            </div>
-          ))}
-          {card.detail && <div className="quiet small">{card.detail}</div>}
-          {card.note && <div className="quiet">{card.note}</div>}
-          {card.reset && (
-            <div className="usage-reset">
-              <div className="strong">{card.reset.title}</div>
-              {card.reset.rows.map((row) => <div key={row.program}><div className="quiet small">{row.label}</div><div>{row.text}</div></div>)}
-              <button type="button" className="link-button" onClick={() => call('openUrl', { url: card.reset!.url })}>{card.reset.link}</button>
-            </div>
-          )}
-          {card.checkedAt && <div className="tertiary small">{card.checkedAt}</div>}
-        </div>
-      ))}
+      {usage.cards.map((card) => {
+        const resetUrl = card.reset ? webUrl(card.reset.url) : null;
+        return (
+          <div key={card.provider} className="usage-card">
+            <div className="usage-card-title"><ProviderMark provider={card.provider} size={13} /><strong aria-label={card.title}>{card.name}</strong>{card.beta && <BetaBadge />}<span className="spacer" />{card.account && <span className="quiet">{card.account}</span>}</div>
+            {card.windows.map((w, index) => (
+              <div key={index} className="usage-window">
+                <div className="usage-window-line"><span>{w.label}</span><span>{w.used}</span></div>
+                <span className="usage-bar"><span className={'usage-bar-fill' + (w.warning ? ' warning' : '')} style={{ width: `${Math.round(Math.min(Math.max(w.fraction, 0), 1) * 100)}%` }} /></span>
+                {w.reset && <div className="quiet small">{w.reset}</div>}
+              </div>
+            ))}
+            {card.detail && <div className="quiet small">{card.detail}</div>}
+            {card.note && <div className="quiet">{card.note}</div>}
+            {card.reset && (
+              <div className="usage-reset">
+                <div className="strong">{card.reset.title}</div>
+                {card.reset.rows.map((row) => <div key={row.program}><div className="quiet small">{row.label}</div><div>{row.text}</div></div>)}
+                <button type="button" className="link-button" disabled={!resetUrl} onClick={() => { if (resetUrl) call('openUrl', { url: resetUrl }); }}>{card.reset.link}</button>
+              </div>
+            )}
+            {card.checkedAt && <div className="tertiary small">{card.checkedAt}</div>}
+          </div>
+        );
+      })}
       {usage.direct && (
         <label className="usage-direct">
           <span><span>{usage.direct.label}</span><span className="quiet small">{usage.direct.description}</span></span>

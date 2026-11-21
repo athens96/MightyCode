@@ -1,9 +1,11 @@
+import { lazy, Suspense } from 'react';
 import type { RunSession } from '../store/models';
 import { useServices } from '../app/context';
 import type { Translate } from '../i18n/locale';
-import { FilesView } from './files/FilesView';
 import { TerminalView } from './terminal/TerminalView';
-import { WorkMapView } from './workmap/WorkMapView';
+
+const LazyFilesView = lazy(() => import('./files/FilesView').then((m) => ({ default: m.FilesView })));
+const LazyWorkMapView = lazy(() => import('./workmap/WorkMapView').then((m) => ({ default: m.WorkMapView })));
 
 /**
  * Whether a pane shows the slim bar and no header of its own (WinUI MainWindow.PaneHeader.cs GroupSlimHeaderKinds): every kind
@@ -39,8 +41,10 @@ export function SlimPane({ session }: { session: RunSession }) {
         <span className="pane-slim-words">{paneKindWords(session.kind, t)}</span>
       </header>
       <div className="pane-slim-body">
-        {session.kind === 'files' && <FilesView session={session} />}
-        {session.kind === 'workmap' && <WorkMapView session={session} />}
+        <Suspense fallback={null}>
+          {session.kind === 'files' && <LazyFilesView session={session} />}
+          {session.kind === 'workmap' && <LazyWorkMapView session={session} />}
+        </Suspense>
         {session.kind === 'agent-terminal' && <TerminalView session={session} />}
       </div>
     </section>

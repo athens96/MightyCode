@@ -12,7 +12,7 @@ import { dispatchPanePush, isPanePush } from './panes/channel';
 import { applyHostPush, isHostPush } from './slot/host';
 import { dispatchMenu, isMenuPush } from './shell/menu';
 import { dispatchReview, isReviewPush } from './review/queue';
-import { installTokens } from './theme/tokens';
+import { installTokens, savedTheme } from './theme/tokens';
 import { installAutoTooltips } from './shell/autoTooltip';
 import './styles.css';
 import './conversation/conversation.css';
@@ -30,6 +30,7 @@ import './pictures/pictures.css';
 import './pending/pending.css';
 
 async function start(bridge: Bridge): Promise<void> {
+  document.documentElement.dataset.theme = savedTheme();
   installTokens(document);
   // Every button shows a tooltip on hover: its own title, else the words it already shows or speaks (shell/autoTooltip.ts).
   installAutoTooltips(document);

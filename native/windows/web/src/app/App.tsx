@@ -1,17 +1,19 @@
 import { useEffect } from 'react';
 import { Shell } from '../shell/Shell';
 import { applyText } from '../theme/text';
-import { themeName } from '../theme/tokens';
+import { saveTheme, themeName } from '../theme/tokens';
 import { shallowEqual, useStoreSelector } from './context';
 
 export function App() {
-  const { theme, text } = useStoreSelector(
-    (state) => ({ theme: themeName(state.snapshot?.theme), text: state.text }),
+  const { snapshotTheme, text } = useStoreSelector(
+    (state) => ({ snapshotTheme: state.snapshot ? themeName(state.snapshot.theme) : null, text: state.text }),
     shallowEqual,
   );
   useEffect(() => { applyText(document, text); }, [text]);
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
+    if (!snapshotTheme) return;
+    document.documentElement.dataset.theme = snapshotTheme;
+    saveTheme(snapshotTheme);
+  }, [snapshotTheme]);
   return <Shell />;
 }

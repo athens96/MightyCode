@@ -1,5 +1,4 @@
-import { memo, useEffect, useMemo, useState } from 'react';
-import { PatchDiff } from '@pierre/diffs/react';
+import { lazy, memo, Suspense, useEffect, useMemo, useState } from 'react';
 import { Icon } from '../icons/Icon';
 import { useServices } from '../app/context';
 import { editorClick } from '../conversation/referenceClick';
@@ -8,6 +7,8 @@ import type { CheckpointFile } from '../store/models';
 import type { MightyFile } from './types';
 import type { BlockActions } from './Block';
 import { byFile, foldered, matches, openAtFirst, SEARCH_FROM, SECTION_ROWS, type RollUpSection } from './rollup';
+
+const LazyPatchDiff = lazy(() => import('@pierre/diffs/react').then((m) => ({ default: m.PatchDiff })));
 
 type Translate = ReturnType<typeof useServices>['t'];
 
@@ -226,5 +227,11 @@ function StepDiff({ paneId, section, file, t }: { paneId: string; section: RollU
   }), [theme]);
   if (patch === undefined) return <div className="mighty-rollup-note">{t('graph.rollUp.loading')}</div>;
   if (patch === null) return <div className="mighty-rollup-note">{t('graph.rollUp.diffFailed')}</div>;
-  return <div className="mighty-rollup-patch" data-testid="mighty-rollup-patch"><PatchDiff patch={patch} options={options} /></div>;
+  return (
+    <div className="mighty-rollup-patch" data-testid="mighty-rollup-patch">
+      <Suspense fallback={<div className="mighty-rollup-note">{t('graph.rollUp.loading')}</div>}>
+        <LazyPatchDiff patch={patch} options={options} />
+      </Suspense>
+    </div>
+  );
 }

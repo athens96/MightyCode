@@ -5,7 +5,9 @@ import tokens from '@tokens/design-tokens.json';
 import type { TextSetting } from '../native/types';
 
 function family(chosen: string | null | undefined, fallback: string): string | null {
-  return chosen ? `"${chosen.replace(/["\\]/g, '')}", var(${fallback})` : null;
+  if (!chosen) return null;
+  const clean = chosen.replace(/["\\\u0000-\u001f\u007f-\u009f]/g, '').trim();
+  return clean ? `"${clean}", var(${fallback})` : null;
 }
 
 /** The style sheet for a text setting; empty for the design's own (scale 1, no families). */

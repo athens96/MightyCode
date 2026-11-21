@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Icon } from '../icons/Icon';
 import { useServices, useStoreSelector } from '../app/context';
 import type { GraphBlockSize, MightyGraphRun, RunSession } from '../store/models';
@@ -15,7 +15,6 @@ import { CardHeight, DelegateKind, focusedRequest, liveFlowIds, logRowsFit, logT
 import { followRunIndex, newestRequestRun } from './notice';
 import { DelegateLineNode, FlowCardNode, FlowLogStrip, ProgressPanel } from './FlowParts';
 import { blockExtras } from './extras';
-import { RunChanges } from './RunChanges';
 import { settledRunsKey } from './runChangesModel';
 import { edgesCursor, pinnedAnchor, pinnedCamera, pinnedUnit, resizedSize, resizeTarget, type Edges } from './resize';
 import { setBlockSize } from './prefs';
@@ -30,6 +29,8 @@ import { Motion, reducesMotion } from '../theme/tokens';
 import type { Translate } from '../i18n/locale';
 
 const Overscan = 300;
+const EMPTY_EXTRA: BlockExtra = Object.freeze({});
+const LazyRunChanges = lazy(() => import('./RunChanges').then((m) => ({ default: m.RunChanges })));
 
 /** The run of the block a click landed in, for the reference bubble's 변경사항. */
 const blockRun = (target: Element) => {
@@ -511,6 +512,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     watch.current.userChangedLayout();
     setOpened((s) => { if (s.has(id) === open) return s; const n = new Set(s); if (open) n.add(id); else n.delete(id); return n; });
   }, [setOpened]);
+  const openFlowCard = useCallback((id: string) => openCard(id, true), [openCard]);
   /** A card's click: a finished background block's copy in its notice run, shown and selected; any other card opens in place. */
   const activateCard = useCallback((id: string, copy: string | undefined) => {
     if (copy && layoutRef.current.nodes.some((n) => n.id === copy)) reveal(copy);
@@ -796,13 +798,13 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
               const card = copy?.flow?.card;
               return card ? <FlowCardNode key={node.id} id={node.id} kind={node.kind} x={x} y={y} w={w} h={h} card={card}
                 outline={copy?.outline === 'marching' || copy?.outline === 'solid' || (card.running && node.kind !== 'agent')}
-                onActivate={activateCard} onOpen={(id) => openCard(id, true)} /> : null;
+                onActivate={activateCard} onOpen={openFlowCard} /> : null;
             }
             if (node.kind === DelegateKind) return copy?.flow?.line ? <DelegateLineNode key={node.id} id={node.id} x={x} y={y} w={w} h={h} line={copy.flow.line} /> : null;
             return (
               <Block key={node.id} paneId={paneId} provider={session.provider} id={node.id} kind={node.kind}
                 x={x} y={y} w={w} h={h}
-                copy={copy} extra={drawnExtras.get(node.id) ?? {}} visible={visible.has(node.id)}
+                copy={copy} extra={drawnExtras.get(node.id) ?? EMPTY_EXTRA} visible={visible.has(node.id)}
                 selected={selected === node.id} expanded={expanded.has(node.id)}
                 running={unfinished.has(runOf(node.id) ?? '')}
                 foldable={fanOut && copy?.flow?.card !== undefined}
@@ -813,7 +815,11 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
       </div>
       {/* The session log under a Claude pane's flow, above the composer (FlowLog): no strip without a request. */}
       {fanOut && inputs?.log && <FlowLogStrip paneId={paneId} log={inputs.log} squeezed={!logRowsFit(room)} onToggle={toggleLog} onReveal={revealFlow} />}
-      {changesRun !== null && <RunChanges paneId={paneId} runId={changesRun} onClose={() => setChangesRun(null)} />}
+      {changesRun !== null && (
+        <Suspense fallback={null}>
+          <LazyRunChanges paneId={paneId} runId={changesRun} onClose={() => setChangesRun(null)} />
+        </Suspense>
+      )}
     </div>
   );
 }

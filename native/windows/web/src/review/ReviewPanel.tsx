@@ -2,18 +2,19 @@
 // with its pane, agent, branch, size and state, and the actions that already do the work (their confirmations are the host's
 // dialogs, drawn over this panel: it sits on the surface layer). Opened from the sidebar's 검토 entry, ⇧⌘R on the Mac and
 // Ctrl+Shift+R on Windows.
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useServices, useStoreSelector } from '../app/context';
 import { DialogLoading, DialogShell } from '../dialogs/DialogShell';
 import { Icon, type IconName } from '../icons/Icon';
-import { RunChanges } from '../mighty/RunChanges';
 import { usePageOverlay } from '../shell/overlay';
 import {
   itemActions, runReviewAction, setReviewOpen, setReviewQueue, useReviewOpen, useReviewQueue,
   type ReviewAction, type ReviewItem, type ReviewKind, type ReviewQueue, type ReviewStatus,
 } from './queue';
 import './review.css';
+
+const LazyRunChanges = lazy(() => import('../mighty/RunChanges').then((m) => ({ default: m.RunChanges })));
 
 /** Each kind's and status's words, named in full so the locale check sees them used. */
 const kindKey: Record<ReviewKind, string> = { worktree: 'review.kind.worktree', child: 'review.kind.child', request: 'review.kind.request' };
@@ -112,7 +113,11 @@ function ReviewDialog() {
         status={queue ? t('review.summary', { count: queue.count }) : ''}>
         <ReviewList queue={queue} t={t} working={working} onAction={act} />
       </DialogShell>
-      {runChanges && <RunChanges paneId={runChanges.paneId} runId={runChanges.runId} onClose={() => { setRunChanges(null); refresh(); }} />}
+      {runChanges && (
+        <Suspense fallback={null}>
+          <LazyRunChanges paneId={runChanges.paneId} runId={runChanges.runId} onClose={() => { setRunChanges(null); refresh(); }} />
+        </Suspense>
+      )}
     </>
   );
 }
