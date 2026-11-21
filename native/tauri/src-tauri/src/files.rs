@@ -567,19 +567,32 @@ fn frame_origin(scheme: &str, host: &str) -> String {
     if cfg!(windows) { format!("{scheme}://{PROTOCOL}.{host}") } else { format!("{PROTOCOL}://{host}") }
 }
 
-/// The policy a served page carries: sandboxed to scripts (as its frame is, also when it is opened some other way), then C#'s
-/// `LocalHtmlDocument.ContentPolicy` (mighty-composer's `CONTENT_POLICY`: its own files, inline scripts and styles, data and blob
-/// pictures, no connection of its own — Tauri's IPC included, review M-E 1 with the host's nonce — no plugins, base or forms), except
-/// that its own files and frames come from the frame hosts too (`'self'` alone matches nothing in a sandboxed WebKit frame; `frame-src`
-/// where C#'s says `'none'`: a previewed page may show a sibling page).
-fn frame_policy(scheme: &str) -> String {
-    let hosts = if cfg!(windows) { format!("{scheme}://*{}", frames::HOST_SUFFIX) } else { format!("{PROTOCOL}:") };
+/// The policy a served file carries: sandboxed to scripts (as its frame is, also when a document such as HTML, SVG or XML is opened
+/// some other way), then C#'s `LocalHtmlDocument.ContentPolicy` (mighty-composer's `CONTENT_POLICY`: its own files, inline scripts and
+/// styles, data and blob pictures, no connection of its own — Tauri's IPC included, review M-E 1 with the host's nonce — no plugins,
+/// base or forms), except that its own files and frames come from this exact host's origin too (`'self'` alone matches nothing in a
+/// sandboxed WebKit frame; `frame-src` where C#'s says `'none'`: a previewed page may show a sibling page from its own folder only).
+fn frame_policy(scheme: &str, host: &str) -> String {
+    let origin = frame_origin(scheme, &host.to_ascii_lowercase());
     // A sandboxed frame's origin is opaque, and WebKit then matches `'self'` to nothing (WebView2 still matches the address's origin):
-    // the frame hosts are named beside it, so the page's own files load on both.
+    // this host's exact origin is named beside it, so the page's own files load on both while other previewed folders' hosts stay cut off.
     let content = mighty_composer::html::CONTENT_POLICY
-        .replace("'self'", &format!("'self' {hosts}"))
-        .replace("frame-src 'none'", &format!("frame-src {hosts}"));
+        .replace("'self'", &format!("'self' {origin}"))
+        .replace("frame-src 'none'", &format!("frame-src {origin}"));
     format!("sandbox allow-scripts; {content}")
+}
+
+/// Builds a `200` response for any served `mightyhtml` asset: every response carries `Content-Security-Policy` scoped to the requested
+/// host so non-HTML active documents (`.svg`, `.xml`) are sandboxed and cut off from the host and other folders just like HTML.
+fn frame_response(served: frames::Served, scheme: &str, host: &str) -> tauri::http::Response<Vec<u8>> {
+    tauri::http::Response::builder()
+        .status(200)
+        .header("Content-Type", served.media_type)
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Cache-Control", "no-store")
+        .header("Content-Security-Policy", frame_policy(scheme, host))
+        .body(served.bytes)
+        .unwrap_or_default()
 }
 
 /// C# `WebHtmlAddress`: the file's address under its folder's host (the folder kept with the root it was resolved under), or None.
@@ -616,15 +629,7 @@ pub fn protocol(
         }
         log.push(path);
         drop(log);
-        let mut response = tauri::http::Response::builder()
-            .status(200)
-            .header("Content-Type", served.media_type)
-            .header("X-Content-Type-Options", "nosniff")
-            .header("Cache-Control", "no-store");
-        if served.media_type == "text/html" {
-            response = response.header("Content-Security-Policy", frame_policy(frame_scheme(&app)));
-        }
-        responder.respond(response.body(served.bytes).unwrap_or_default());
+        responder.respond(frame_response(served, frame_scheme(&app), &host));
     });
 }
 
@@ -987,21 +992,53 @@ async fn futures_join<F: std::future::Future<Output = ()>>(loads: impl Iterator<
 mod tests {
     use super::*;
 
-    /// A frame's address and its page's policy follow the page's scheme (`use_https_scheme` moves the custom protocol too).
+    /// A frame's address and its page's policy follow the page's scheme (`use_https_scheme` moves the custom protocol too) and scope to
+    /// the exact requested host rather than wildcarding every previewed folder.
     #[test]
     fn frames_follow_the_page_scheme() {
         let host = format!("h1{}", frames::HOST_SUFFIX);
+        let upper = format!("H1{}", frames::HOST_SUFFIX.to_ascii_uppercase());
         if cfg!(windows) {
             assert_eq!(frame_origin("http", &host), "http://mightyhtml.h1.html.mighty.invalid");
             assert_eq!(frame_origin("https", &host), "https://mightyhtml.h1.html.mighty.invalid");
-            assert!(frame_policy("http").starts_with("sandbox allow-scripts; default-src 'none';"));
-            assert!(frame_policy("http").contains("connect-src 'none'; frame-src http://*.html.mighty.invalid; object-src 'none'"));
-            assert!(frame_policy("https").contains("frame-src https://*.html.mighty.invalid;"));
-            assert!(frame_policy("http").contains("script-src 'self' http://*.html.mighty.invalid 'unsafe-inline'"));
+            let http = frame_policy("http", &host);
+            let https = frame_policy("https", &host);
+            assert!(http.starts_with("sandbox allow-scripts; default-src 'none';"));
+            assert!(http.contains("connect-src 'none'; frame-src http://mightyhtml.h1.html.mighty.invalid; object-src 'none'"));
+            assert!(https.contains("frame-src https://mightyhtml.h1.html.mighty.invalid;"));
+            assert!(http.contains("script-src 'self' http://mightyhtml.h1.html.mighty.invalid 'unsafe-inline'"));
+            assert!(!http.contains("*.html.mighty.invalid"), "policy must not wildcard all frame hosts: {http}");
+            assert_eq!(frame_policy("http", &upper), http, "host casing is normalized");
         } else {
             assert_eq!(frame_origin("http", &host), "mightyhtml://h1.html.mighty.invalid");
-            assert!(frame_policy("http").contains("connect-src 'none'; frame-src mightyhtml:; object-src 'none'"));
-            assert!(frame_policy("http").contains("script-src 'self' mightyhtml: 'unsafe-inline'"), "{}", frame_policy("http"));
+            let policy = frame_policy("http", &host);
+            assert!(policy.starts_with("sandbox allow-scripts; default-src 'none';"));
+            assert!(policy.contains("connect-src 'none'; frame-src mightyhtml://h1.html.mighty.invalid; object-src 'none'"));
+            assert!(policy.contains("script-src 'self' mightyhtml://h1.html.mighty.invalid 'unsafe-inline'"), "{policy}");
+            assert!(!policy.contains("mightyhtml: ") && !policy.contains("mightyhtml:;"), "policy must scope to exact host: {policy}");
+            assert_eq!(frame_policy("http", &upper), policy, "host casing is normalized");
+        }
+        let other = format!("h2{}", frames::HOST_SUFFIX);
+        assert_ne!(frame_policy("http", &host), frame_policy("http", &other));
+        assert!(!frame_policy("http", &host).contains(&other));
+    }
+
+    /// P0-SEC-2: every `200` response from `mightyhtml` (including `.svg` and `.xml` active documents) carries the host-scoped CSP.
+    #[test]
+    fn every_mightyhtml_response_carries_host_scoped_csp() {
+        let host = format!("h1{}", frames::HOST_SUFFIX);
+        let expected_csp = frame_policy("http", &host);
+        for media_type in ["text/html", "image/svg+xml", "application/xml", "text/javascript", "text/css", "image/png"] {
+            let response = frame_response(frames::Served { bytes: b"body".to_vec(), media_type }, "http", &host);
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.headers().get("Content-Type").and_then(|v| v.to_str().ok()), Some(media_type));
+            assert_eq!(response.headers().get("X-Content-Type-Options").and_then(|v| v.to_str().ok()), Some("nosniff"));
+            assert_eq!(response.headers().get("Cache-Control").and_then(|v| v.to_str().ok()), Some("no-store"));
+            assert_eq!(
+                response.headers().get("Content-Security-Policy").and_then(|v| v.to_str().ok()),
+                Some(expected_csp.as_str()),
+                "{media_type} must receive host-scoped CSP"
+            );
         }
     }
 

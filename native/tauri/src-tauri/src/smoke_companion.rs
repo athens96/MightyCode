@@ -1331,8 +1331,9 @@ async fn design_steps(
 /// method and read from the host's log (as smoke_delegation.rs's probe).
 async fn page_probe(host: &Host, body: &str) -> Result<Value, String> {
     let mark = format!("smoke-companion-dom-{}-{}", std::process::id(), wire::new_id());
+    let nonce = crate::host_nonce(&host.app);
     let script = format!(
-        "(async () => {{ const until = async (test, ms) => {{ const end = performance.now() + ms; while (performance.now() < end) {{ const v = await test(); if (v) return v; await new Promise((r) => setTimeout(r, 100)); }} return test(); }}; const r = {{}}; try {{ {body} }} catch (error) {{ r.error = String(error); }} await window.__TAURI_INTERNALS__.invoke('host_post', {{ nonce: window.__MIGHTY_HOST_NONCE__, message: {{ kind: 'call', id: 990000 + Math.floor(Math.random() * 9999), method: 'log', args: {{ level: 'info', message: '{mark} ' + JSON.stringify(r) }} }} }}); }})()"
+        "(async () => {{ const until = async (test, ms) => {{ const end = performance.now() + ms; while (performance.now() < end) {{ const v = await test(); if (v) return v; await new Promise((r) => setTimeout(r, 100)); }} return test(); }}; const r = {{}}; try {{ {body} }} catch (error) {{ r.error = String(error); }} await window.__TAURI_INTERNALS__.invoke('host_post', {{ nonce: '{nonce}', message: {{ kind: 'call', id: 990000 + Math.floor(Math.random() * 9999), method: 'log', args: {{ level: 'info', message: '{mark} ' + JSON.stringify(r) }} }} }}); }})()"
     );
     let page = host.app.get_webview(crate::host::WINDOW).ok_or("no main window")?;
     page.eval(&script).map_err(|e| e.to_string())?;

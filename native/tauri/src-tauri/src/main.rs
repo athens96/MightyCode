@@ -135,15 +135,16 @@ impl HostNonce {
         HostNonce(format!("{}{}", mighty_core::wire::new_id(), mighty_core::wire::new_id()).replace('-', ""))
     }
 
-    /// The top frame's script on the app's origin `origin` (a value it cannot change, set before the page's own scripts run); in any
-    /// other frame or on any other address it defines nothing. Protocol and host are compared (`tauri://` has no web origin).
+    /// The top frame's script on the app's origin `origin` (read-only, non-enumerable, configurable so the page's bridge can capture it
+    /// in a closure and delete it from `window` at boot); in any other frame or on any other address it defines nothing. Protocol and host
+    /// are compared (`tauri://` has no web origin).
     fn script(&self, origin: &tauri::Url) -> String {
         let host = match origin.port() {
             Some(port) => format!("{}:{port}", origin.host_str().unwrap_or("")),
             None => origin.host_str().unwrap_or("").to_string(),
         };
         format!(
-            "if (window.top === window && location.protocol === '{}:' && location.host === '{host}') {{ Object.defineProperty(window, '__MIGHTY_HOST_NONCE__', {{ value: '{}', writable: false, configurable: false }}); }}",
+            "if (window.top === window && location.protocol === '{}:' && location.host === '{host}') {{ Object.defineProperty(window, '__MIGHTY_HOST_NONCE__', {{ value: '{}', writable: false, enumerable: false, configurable: true }}); }}",
             origin.scheme(),
             self.0
         )
@@ -154,6 +155,11 @@ impl HostNonce {
         let Some(nonce) = nonce else { return false };
         nonce.len() == self.0.len() && nonce.bytes().zip(self.0.bytes()).fold(0u8, |differ, (a, b)| differ | (a ^ b)) == 0
     }
+}
+
+/// This run's host nonce, for smoke probes that run via `page.eval` after the bridge has captured and deleted `window.__MIGHTY_HOST_NONCE__`.
+pub(crate) fn host_nonce(app: &tauri::AppHandle) -> String {
+    app.try_state::<HostNonce>().map(|nonce| nonce.0.clone()).unwrap_or_default()
 }
 
 /// Where the app's own page is served (tauri's `get_app_url`): the dev server in a dev build, else the `tauri` protocol
@@ -709,9 +715,23 @@ mod tests {
         assert!(!nonce.accepts(Some(&HostNonce::new().0)), "each run has its own");
         let script = nonce.script(&url("http://tauri.localhost"));
         assert!(script.contains(&nonce.0) && script.contains("__MIGHTY_HOST_NONCE__"));
+        assert!(script.contains("writable: false, enumerable: false, configurable: true"), "{script}");
         assert!(script.starts_with("if (window.top === window && location.protocol === 'http:' && location.host === 'tauri.localhost')"));
         assert!(nonce.script(&url("tauri://localhost")).contains("location.protocol === 'tauri:' && location.host === 'localhost'"));
         assert!(nonce.script(&url("http://localhost:5173")).contains("location.host === 'localhost:5173'"), "the dev server's port");
+    }
+
+    /// P0-SEC-2: `tauri.conf.json` configures the main WebView CSP (with `devCsp: null` for Vite HMR in dev).
+    #[test]
+    fn tauri_config_sets_main_webview_csp() {
+        let raw: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let security = &raw["app"]["security"];
+        let csp = security["csp"].as_str().expect("app.security.csp must be a policy string");
+        assert!(csp.contains("default-src 'self'"));
+        assert!(csp.contains("frame-src http://*.html.mighty.invalid mightyhtml:"));
+        assert!(csp.contains("object-src 'none'"));
+        assert!(csp.contains("connect-src 'self' ipc: http://ipc.localhost"));
+        assert!(security["devCsp"].is_null());
     }
 
     fn url(text: &str) -> tauri::Url {

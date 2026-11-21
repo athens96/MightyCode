@@ -101,17 +101,16 @@ impl PairingStore for WindowsPairing {
 }
 
 impl WindowsPairing {
-    /// The file for `identity`: version 2 naming the vault item that holds its secrets when the vault takes them (a new item for
-    /// new secrets, deleted again when the file cannot be written), else version 1 with the secrets.
+    /// The file for `identity`: version 2 naming the vault item that holds its secrets when a vault is configured (failing closed when
+    /// the vault refuses, and deleting a fresh item if writing the file fails), else version 1 with the secrets for unvaulted stores.
     fn write_identity(&self, identity: &PairingIdentity) -> Result<()> {
-        secure_directory(&self.folder)?;
         let secrets = Secrets::of(identity);
-        let prepared = self.vault.prepare(&secrets);
+        let prepared = self.vault.prepare(&secrets)?;
         let text = match &prepared {
             Some(prepared) => identity_file::encode_vaulted(identity, &prepared.account),
             None => identity_file::encode(identity),
         };
-        match text.and_then(|text| self.write(&text)) {
+        match secure_directory(&self.folder).and(text).and_then(|text| self.write(&text)) {
             Ok(()) => {
                 self.vault.committed(prepared, &secrets);
                 Ok(())
@@ -235,17 +234,25 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    /// A vault that refuses: the file keeps its secrets (version 1) and the identity loads and saves as before.
+    /// P0-SEC-3: a vault that refuses fails closed on save instead of writing plaintext secrets to disk.
     #[test]
-    fn a_refusing_vault_leaves_the_secrets_in_the_file() {
+    fn a_refusing_vault_refuses_to_write_plaintext_secrets() {
+        let fresh = temporary("vault-refuses-fresh");
+        let fresh_folder = fresh.join(identity_file::FOLDER);
+        let err = WindowsPairing::with_vault(fresh_folder.clone(), Arc::new(RefusingVault)).save(&identity()).unwrap_err();
+        assert!(matches!(err, PlatformError::Refused(_)), "expected Refused, got {err:?}");
+        assert!(!fresh_folder.exists(), "a refused save must not write plaintext files");
+
         let root = temporary("vault-refuses");
         let folder = root.join(identity_file::FOLDER);
         WindowsPairing::new(folder.clone()).save(&identity()).unwrap();
+        let before = fs::read_to_string(folder.join(FILE)).unwrap();
         let store = WindowsPairing::with_vault(folder.clone(), Arc::new(RefusingVault));
         assert_eq!(store.load().unwrap(), Some(identity()));
-        assert_eq!(fs::read_to_string(folder.join(FILE)).unwrap(), identity_file::encode(&identity()).unwrap());
-        store.save(&identity()).unwrap();
-        assert_eq!(WindowsPairing::new(folder.clone()).load().unwrap(), Some(identity()));
+        assert_eq!(fs::read_to_string(folder.join(FILE)).unwrap(), before);
+        let rotated = PairingIdentity { pairing_key: "B".repeat(43), ..identity() };
+        assert!(matches!(store.save(&rotated), Err(PlatformError::Refused(_))));
+        assert_eq!(fs::read_to_string(folder.join(FILE)).unwrap(), before, "refused save must not overwrite file with plaintext");
         let _ = fs::remove_dir_all(&root);
     }
 

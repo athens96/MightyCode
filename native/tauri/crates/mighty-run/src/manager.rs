@@ -1783,7 +1783,7 @@ impl Exec {
                     return Err(Failure::Error(strings::get("run.error.modsVersionRequired")));
                 }
                 let plugin = PathBuf::from(&inner.options.plugin_directory).join(".claude-plugin").join("plugin.json");
-                if !plugin.is_file() {
+                if inner.options.plugin_directory.is_empty() || !plugin.is_file() {
                     return Err(Failure::Error(strings::get("run.error.modsResourceMissing")));
                 }
                 let exec = Arc::downgrade(self);

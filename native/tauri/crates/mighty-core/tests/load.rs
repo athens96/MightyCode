@@ -243,3 +243,95 @@ fn a_saved_gemini_cli_pane_is_moved_once() {
     );
     fs::remove_dir_all(dir).unwrap();
 }
+
+/// P0-CORE-1: when `workspace-state.json` is missing but `workspace-state.json.bak` exists and is valid, `load()` recovers from
+/// `.bak` instead of silently starting empty; a corrupt `.bak` still starts empty cleanly.
+#[test]
+fn a_missing_primary_state_recovers_from_its_valid_backup() {
+    let dir = temp_dir("missing-primary-bak");
+    fs::write(dir.join("workspace-state.json.bak"), good()).unwrap();
+    // Read-only recovers without modifying disk.
+    let before = listing(&dir);
+    let mut reader = Store::new(dir.clone(), None, false);
+    let loaded = reader.load(&en()).unwrap();
+    assert_eq!(reader.source, Some(LoadSource::Backup));
+    assert_eq!(loaded.theme(), "light");
+    assert_eq!(loaded.workspaces().len(), 1);
+    assert_eq!(listing(&dir), before, "read-only recovery leaves disk untouched");
+    // Writable recovers and the next save restores the primary file.
+    let mut writer = Store::new(dir.clone(), None, true);
+    let loaded = writer.load(&en()).unwrap();
+    assert_eq!(writer.source, Some(LoadSource::Backup));
+    assert_eq!(loaded.workspaces().len(), 1);
+    writer.save(&loaded).unwrap();
+    assert!(dir.join(store::STATE_FILE).exists(), "save recreates the missing primary state file");
+    fs::remove_dir_all(&dir).unwrap();
+
+    // Corrupt `.bak` with missing primary falls back to empty without failing load.
+    let corrupt = temp_dir("missing-primary-corrupt-bak");
+    fs::write(corrupt.join("workspace-state.json.bak"), b"{not json").unwrap();
+    let mut store = Store::new(corrupt.clone(), None, true);
+    let loaded = store.load(&en()).unwrap();
+    assert_eq!(store.source, Some(LoadSource::Empty));
+    assert!(loaded.workspaces().is_empty());
+    fs::remove_dir_all(&corrupt).unwrap();
+}
+
+/// P0-CORE-1: on Unix, `portable_replace` keeps `destination` intact when `source` cannot be renamed, refreshes `.bak` atomically
+/// with `0o600` permissions, and `Store` enforces `0o700` on its directory and `0o600` on legacy and pre-split copies.
+#[cfg(unix)]
+#[test]
+fn portable_replace_and_store_copies_are_crash_safe_and_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+
+    let dir = temp_dir("replace-unix");
+    let source = dir.join("state.tmp");
+    let destination = dir.join(store::STATE_FILE);
+    let backup = dir.join("workspace-state.json.bak");
+    fs::write(&destination, b"previous-state").unwrap();
+    fs::set_permissions(&destination, fs::Permissions::from_mode(0o644)).unwrap();
+    fs::write(&backup, b"stale-backup").unwrap();
+    fs::set_permissions(&backup, fs::Permissions::from_mode(0o644)).unwrap();
+
+    // If `source` does not exist, `destination` is NEVER removed or moved away.
+    assert!(store::portable_replace(&dir.join("missing.tmp"), &destination, &backup).is_err());
+    assert_eq!(fs::read(&destination).unwrap(), b"previous-state", "destination stayed intact on rename failure");
+    assert_eq!(fs::read(&backup).unwrap(), b"previous-state", "backup holds previous destination");
+    assert_eq!(mode(&backup), 0o600, "backup is written with 0o600 permissions");
+
+    // Successful replace atomically swaps `source` -> `destination` and updates `.bak` with 0o600, leaving no temp files.
+    fs::write(&source, b"next-state").unwrap();
+    fs::set_permissions(&source, fs::Permissions::from_mode(0o600)).unwrap();
+    store::portable_replace(&source, &destination, &backup).unwrap();
+    assert_eq!(fs::read(&destination).unwrap(), b"next-state");
+    assert_eq!(fs::read(&backup).unwrap(), b"previous-state");
+    assert_eq!(mode(&backup), 0o600);
+    assert!(!source.exists());
+    let mut names: Vec<String> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    assert_eq!(names, ["workspace-state.json", "workspace-state.json.bak"]);
+    fs::remove_dir_all(&dir).unwrap();
+
+    // Legacy migration (`copy_new`), store directory, and pre-split backup all get owner-only permissions.
+    let legacy = temp_dir("legacy-perms");
+    fs::write(legacy.join(store::STATE_FILE), good()).unwrap();
+    fs::set_permissions(legacy.join(store::STATE_FILE), fs::Permissions::from_mode(0o644)).unwrap();
+    let profile = temp_dir("profile-perms");
+    fs::set_permissions(&profile, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut store = Store::new(profile.clone(), Some(legacy.clone()), true);
+    let loaded = store.load(&en()).unwrap();
+    assert_eq!(mode(&profile), 0o700, "store directory tightened to 0o700");
+    assert_eq!(mode(&profile.join(store::STATE_FILE)), 0o600, "legacy copy created 0o600");
+    store.save(&loaded).unwrap();
+    let pre_split = fs::read_dir(&profile)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.file_name().unwrap().to_string_lossy().starts_with("workspace-state.json.before-session-files-"))
+        .expect("pre-split backup");
+    assert_eq!(mode(&pre_split), 0o600, "pre-split backup created 0o600");
+    assert_eq!(mode(&profile.join("workspace-state.json.bak")), 0o600, "state backup created 0o600");
+    fs::remove_dir_all(&profile).unwrap();
+    fs::remove_dir_all(&legacy).unwrap();
+}

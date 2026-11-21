@@ -378,3 +378,60 @@ fn a_copy_of_the_state_that_lost_a_panes_mark_never_overwrites_its_body() {
     assert_eq!(reread.session(P3).unwrap().logs().len(), 13, "the whole history is still there");
     fs::remove_dir_all(dir).unwrap();
 }
+
+/// P0-CORE-1: when a pane's primary body file is missing but its `.bak` exists and is valid, `read_body` recovers it (both on
+/// eager load and on lazy `load_pane_body`), and saving recreates the primary file; closing a pane that has both primary and `.bak`
+/// removes both files so a closed pane's `.bak` is never resurrected.
+#[test]
+fn a_missing_body_file_recovers_from_backup_and_closing_removes_backup_too() {
+    let dir = temp_dir("split-missing-body-bak");
+    fs::write(dir.join(store::STATE_FILE), one_file()).unwrap();
+    let (mut store, snapshot) = loaded(&dir);
+    store.save(&snapshot).unwrap();
+    // Second save creates `.bak` files for both P1 and P2.
+    let updated = with_log(&with_log(&snapshot, P1, "a3", "third"), P2, "b2", "second-other");
+    store.save(&updated).unwrap();
+    let folder = dir.join(store::SESSIONS_DIR);
+    let p1_primary = folder.join(store::body_file_name(P1));
+    let p1_backup = folder.join(format!("{}.bak", store::body_file_name(P1)));
+    let p2_primary = folder.join(store::body_file_name(P2));
+    let p2_backup = folder.join(format!("{}.bak", store::body_file_name(P2)));
+    assert!(p1_primary.exists() && p1_backup.exists() && p2_primary.exists() && p2_backup.exists());
+
+    // Remove P1's primary body file while keeping its `.bak`: eager load recovers P1 from `.bak`.
+    fs::remove_file(&p1_primary).unwrap();
+    let (mut recovered, reread) = loaded(&dir);
+    assert_eq!(texts(&reread, P1), ["first", "second"], "missing primary body recovered from .bak");
+    assert_eq!(texts(&reread, P2), ["other", "second-other"]);
+    recovered.save(&reread).unwrap();
+    assert!(p1_primary.exists(), "next save restores the missing primary body file");
+
+    // Closing P2 when BOTH primary and `.bak` exist removes both files.
+    let mut closed = reread.clone();
+    closed.sessions_mut().retain(|s| s.id() != P2);
+    recovered.save(&closed).unwrap();
+    assert!(!p2_primary.exists(), "closed pane primary body file removed");
+    assert!(!p2_backup.exists(), "closed pane .bak file removed");
+    fs::remove_dir_all(dir).unwrap();
+
+    // Lazy `load_pane_body` also recovers from `.bak` if the primary file disappears after load, and saving recreates it.
+    let lazy_dir = temp_dir("split-lazy-missing-body-bak");
+    fs::write(lazy_dir.join(store::STATE_FILE), two_workspaces()).unwrap();
+    let (mut first, snapshot) = loaded(&lazy_dir);
+    store_split(&mut first, &snapshot);
+    first.save(&with_log(&snapshot, P3, "c12", "extra")).unwrap();
+    let (mut lazy_store, lazy_snapshot) = lazy(&lazy_dir);
+    let p3_primary = lazy_dir.join(store::SESSIONS_DIR).join(store::body_file_name(P3));
+    let p3_backup = lazy_dir.join(store::SESSIONS_DIR).join(format!("{}.bak", store::body_file_name(P3)));
+    assert!(p3_primary.exists() && p3_backup.exists());
+    fs::remove_file(&p3_primary).unwrap();
+    let whole = lazy_store.load_pane_body(lazy_snapshot.session(P3).unwrap()).expect("recovered body");
+    assert_eq!(whole.logs().len(), 13, "lazy load recovered P3 from .bak");
+    let mut with_whole = lazy_snapshot.clone();
+    for s in with_whole.sessions_mut().iter_mut().filter(|s| s.id() == P3) {
+        *s = Arc::new(whole.clone());
+    }
+    lazy_store.save(&with_whole).unwrap();
+    assert!(p3_primary.exists(), "save after lazy .bak recovery re-creates primary body file");
+    fs::remove_dir_all(lazy_dir).unwrap();
+}

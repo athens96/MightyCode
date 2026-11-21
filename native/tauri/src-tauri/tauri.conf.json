@@ -12,7 +12,10 @@
   "app": {
     "windows": [],
     "withGlobalTauri": false,
-    "security": { "csp": null }
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src http://*.html.mighty.invalid mightyhtml:; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'self' ipc: http://ipc.localhost",
+      "devCsp": null
+    }
   },
   "bundle": {
     "active": false,

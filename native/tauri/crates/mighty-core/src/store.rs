@@ -652,8 +652,11 @@ impl Store {
         let loaded = RunSession { body_on_disk: false, stored_digest: None, ..read };
         let known = self.revisions.get(pane.id()).copied().unwrap_or(0);
         self.revisions.insert(pane.id().to_string(), known.max(revision));
-        // What the file holds now: the next save writes the pane again only when its body changes from this.
-        self.written.insert(pane.id().to_string(), Arc::new(loaded.clone()));
+        // What the file holds now: the next save writes the pane again only when its body changes from this (only when the primary
+        // file exists; if we recovered from `.bak`, leave `written` unset so the next save re-creates the primary file).
+        if self.sessions_dir().join(body_file_name(pane.id())).exists() {
+            self.written.insert(pane.id().to_string(), Arc::new(loaded.clone()));
+        }
         Some(loaded)
     }
 
@@ -796,13 +799,15 @@ impl Store {
         Ok(snapshot)
     }
 
-    /// `id`'s body file, its `.bak` when the file does not read (the file moved aside first, with writing on); none when it has none.
+    /// `id`'s body file, or its `.bak` when the primary file is missing or does not read (a corrupt primary is moved aside first,
+    /// with writing on); none when neither exists or decodes.
     fn read_body(&self, id: &str, locale: &Locale, notes: &mut Vec<String>) -> Option<(Map<String, Value>, u64)> {
         let folder = self.sessions_dir();
         let name = body_file_name(id);
         let path = folder.join(&name);
+        let backup = folder.join(format!("{name}.bak"));
         if !path.exists() {
-            return None;
+            return backup.exists().then(|| read_body_file(&backup, id).ok()).flatten();
         }
         match read_body_file(&path, id) {
             Ok(body) => Some(body),
@@ -811,11 +816,39 @@ impl Store {
                 if self.writes {
                     let _ = fs::rename(&path, folder.join(&aside));
                 }
-                let restored = read_body_file(&folder.join(format!("{name}.bak")), id).ok();
+                let restored = read_body_file(&backup, id).ok();
                 let key = if restored.is_some() { "store.notice.paneRestoredBackup" } else { "store.notice.paneStartedEmpty" };
                 notes.push(locale.get_with(key, &[("file", &format!("{SESSIONS_DIR}/{aside}"))]));
                 restored
             }
+        }
+    }
+
+    /// Reads `workspace-state.json.bak` if it exists and is valid; restores store metadata on corrupt/unreadable backup.
+    fn read_backup(&mut self, locale: &Locale) -> Result<Option<AppSnapshot>, StateError> {
+        let backup = self.backup_path();
+        if !backup.exists() {
+            return Ok(None);
+        }
+        let bytes = fs::read(&backup).map_err(StateError::Io)?;
+        if damaged(&bytes) {
+            return Ok(None);
+        }
+        let previous_notice = self.load_notice.clone();
+        match self.read_split(&bytes, locale) {
+            Ok(snapshot) => Ok(Some(snapshot)),
+            Err(StateError::Io(e)) => Err(StateError::Io(e)),
+            Err(StateError::Json(_) | StateError::InvalidFormat(_) | StateError::TooLarge(_)) => {
+                self.split = false;
+                self.revisions.clear();
+                self.digests.clear();
+                self.on_disk.clear();
+                self.written.clear();
+                self.written_index = None;
+                self.load_notice = previous_notice;
+                Ok(None)
+            }
+            Err(other) => Err(other),
         }
     }
 
@@ -843,12 +876,21 @@ impl Store {
     /// in (C# loads before the saved language preference is applied: the OS's).
     pub fn load(&mut self, locale: &Locale) -> Result<AppSnapshot, StateError> {
         if self.writes {
-            fs::create_dir_all(&self.directory)?;
+            private_folder(&self.directory)?;
         }
         let state = self.state_path();
         let mut path = state.clone();
         self.source = Some(LoadSource::Empty);
+        let mut recovered_from_backup = false;
         if !state.exists()
+            && let Some(snapshot) = self.read_backup(locale)?
+        {
+            self.source = Some(LoadSource::Backup);
+            self.snapshot = snapshot;
+            recovered_from_backup = true;
+        }
+        if !recovered_from_backup
+            && !state.exists()
             && let Some(legacy) = &self.legacy
         {
             let original = legacy.join(STATE_FILE);
@@ -865,24 +907,16 @@ impl Store {
                 self.source = Some(LoadSource::Legacy(original));
             }
         }
-        if path.exists() {
+        if recovered_from_backup {
+            // Already recovered into self.snapshot from `.bak`.
+        } else if path.exists() {
             let bytes = fs::read(&path)?;
             if damaged(&bytes) {
                 let aside = format!("{STATE_FILE}.unreadable-{}-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"), &new_id()[..8]);
                 if self.writes {
                     fs::rename(&state, self.directory.join(&aside))?;
                 }
-                let backup = self.backup_path();
-                let restored = if backup.exists() {
-                    match fs::read(&backup).map_err(StateError::Io).and_then(|b| self.read_split(&b, locale)) {
-                        Ok(snapshot) => Some(snapshot),
-                        Err(StateError::Io(e)) => return Err(StateError::Io(e)),
-                        Err(StateError::Json(_) | StateError::InvalidFormat(_) | StateError::TooLarge(_)) => None,
-                        Err(other) => return Err(other),
-                    }
-                } else {
-                    None
-                };
+                let restored = self.read_backup(locale)?;
                 let key = if restored.is_some() { "store.notice.restoredBackup" } else { "store.notice.unreadableStartedEmpty" };
                 self.source = Some(if restored.is_some() { LoadSource::Backup } else { LoadSource::DamagedEmpty });
                 self.snapshot = restored.unwrap_or_else(|| AppSnapshot { antigravity_migrated: Some(true), ..AppSnapshot::default() });
@@ -1052,12 +1086,17 @@ impl Store {
         if !self.writes {
             return Err(StateError::WritesOff);
         }
+        private_folder(&self.directory)?;
         let state = self.state_path();
         if !self.split && state.exists() {
-            // The one file of a state before the split, kept once as it was.
+            // The one file of a state before the split, kept once as it was (owner-only on Unix).
             let kept = self.directory.join(format!("{STATE_FILE}.before-session-files-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
             if !kept.exists() {
-                fs::copy(&state, &kept)?;
+                match copy_new(&state, &kept) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error.into()),
+                }
             }
         }
         let folder = self.sessions_dir();
@@ -1085,15 +1124,82 @@ impl Store {
     }
 }
 
-/// `File.Copy(from, to, overwrite: false)`.
+/// `File.Copy(from, to, overwrite: false)`, owner-only on Unix and synced to disk.
 fn copy_new(from: &Path, to: &Path) -> io::Result<()> {
     let bytes = fs::read(from)?;
-    let mut file = fs::OpenOptions::new().write(true).create_new(true).open(to)?;
-    file.write_all(&bytes)
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(to)?;
+    let written = file.write_all(&bytes).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(error) = written {
+        let _ = fs::remove_file(to);
+        return Err(error);
+    }
+    #[cfg(unix)]
+    sync_parent(to);
+    Ok(())
 }
 
-/// `File.Replace` as .NET does it off Windows: the old file renamed to the backup, the new one renamed into its place. The host
-/// puts `ReplaceFileW` here on Windows.
+/// Syncs `path`'s parent directory on Unix so directory entry updates (renames, creations) are durable across crashes.
+#[cfg(unix)]
+fn sync_parent(path: &Path) {
+    if let Some(parent) = path.parent()
+        && let Ok(dir) = fs::File::open(parent)
+    {
+        let _ = dir.sync_all();
+    }
+}
+
+/// Writes `bytes` into a new `0o600` temporary file beside `target`, syncs it, and atomically renames it over `target`.
+#[cfg(not(windows))]
+fn write_private_atomic(target: &Path, bytes: &[u8]) -> io::Result<()> {
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = PathBuf::from(format!("{}.{}.tmp", target.display(), new_id()));
+    let written = (|| {
+        {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+            let mut file = options.open(&temporary)?;
+            file.write_all(bytes)?;
+            file.sync_all()?;
+        }
+        fs::rename(&temporary, target)
+    })();
+    if written.is_err() && temporary.exists() {
+        let _ = fs::remove_file(&temporary);
+    }
+    written
+}
+
+/// Crash-safe file replacement on Unix: if `destination` exists, copy its contents into `backup` atomically via a `0o600` synced
+/// temporary file (leaving `destination` untouched throughout), then perform a single atomic `fs::rename(source, destination)` and
+/// `fsync` the parent directory so `destination` never disappears in any crash window.
+#[cfg(not(windows))]
+pub fn portable_replace(source: &Path, destination: &Path, backup: &Path) -> io::Result<()> {
+    match fs::read(destination) {
+        Ok(previous) => {
+            write_private_atomic(backup, &previous)?;
+            #[cfg(unix)]
+            sync_parent(backup);
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::rename(source, destination)?;
+    #[cfg(unix)]
+    sync_parent(destination);
+    Ok(())
+}
+
+/// `File.Replace` as .NET does it on Windows (the host puts `ReplaceFileW` here on Windows).
+#[cfg(windows)]
 pub fn portable_replace(source: &Path, destination: &Path, backup: &Path) -> io::Result<()> {
     fs::rename(destination, backup)?;
     fs::rename(source, destination)
@@ -1122,7 +1228,14 @@ pub fn atomic_write(path: &Path, data: &[u8], backup: Option<&Path>, replace: fn
         loop {
             let swapped = match backup {
                 Some(backup) if path.exists() => replace(&temporary, path, backup),
-                _ => fs::rename(&temporary, path),
+                _ => {
+                    let renamed = fs::rename(&temporary, path);
+                    #[cfg(unix)]
+                    if renamed.is_ok() {
+                        sync_parent(path);
+                    }
+                    renamed
+                }
             };
             match swapped {
                 Ok(()) => return Ok(()),

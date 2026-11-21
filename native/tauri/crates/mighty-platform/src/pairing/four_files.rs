@@ -416,10 +416,11 @@ impl FourFiles {
         ]
     }
 
-    /// The files written for `identity`, the secrets in the vault when it takes them, else in the files.
+    /// The files written for `identity`, the secrets in the vault when one is configured (failing closed if the vault refuses), else in
+    /// the files for explicitly unvaulted stores.
     fn write_identity(&self, identity: &PairingIdentity) -> Result<()> {
         let secrets = Secrets::of(identity);
-        let prepared = self.vault.prepare(&secrets);
+        let prepared = self.vault.prepare(&secrets)?;
         let contents = match &prepared {
             Some(prepared) => Self::vaulted_contents(identity, &prepared.account),
             None => Self::contents(identity),
@@ -586,14 +587,21 @@ impl PairingStore for FourFiles {
                 PairingIdentity { host_id, host_token, pairing_key, secret_key, devices }
             }
         };
+        let mut migrated = false;
         if !mended.is_empty() {
-            // Only the host id and the phones' list are mended when the secrets are in the vault.
-            let contents = match &vault_account {
-                Some(account) => Self::vaulted_contents(&identity, account),
-                None => Self::contents(&identity),
-            };
-            let files: Vec<(&'static str, Vec<u8>)> = contents.into_iter().filter(|(name, _)| mended.contains(name)).collect();
-            self.write_all(&files)?;
+            if vault_account.is_none() && self.vault.active() {
+                // Newly mended secrets must go through the vault (fail closed if it refuses) rather than being written in plaintext.
+                self.write_identity(&identity)?;
+                migrated = true;
+            } else {
+                // Only the host id and the phones' list are mended when the secrets are in the vault.
+                let contents = match &vault_account {
+                    Some(account) => Self::vaulted_contents(&identity, account),
+                    None => Self::contents(&identity),
+                };
+                let files: Vec<(&'static str, Vec<u8>)> = contents.into_iter().filter(|(name, _)| mended.contains(name)).collect();
+                self.write_all(&files)?;
+            }
         }
         match &vault_account {
             // A move to the vault cut short (the key file is written first) may have left a secret in the other two: gone now.
@@ -604,8 +612,9 @@ impl PairingStore for FourFiles {
                     .collect();
                 let _ = self.write_all(&rest);
             }
-            // Secrets found in the files move to the vault; when that fails they stay, and the identity is answered all the same.
-            None if self.vault.active() => {
+            // Pre-existing plaintext files try to move to the vault; when that fails they stay untouched (no new plaintext written), and
+            // any subsequent save fails closed until the vault accepts them.
+            None if self.vault.active() && !migrated => {
                 let _ = self.write_identity(&identity);
             }
             None => {}
@@ -906,23 +915,35 @@ mod tests {
         let _ = fs::remove_dir_all(folder.parent().unwrap());
     }
 
-    /// A vault that refuses, or gives back nothing of what it took: the secrets stay in the files, the identity is answered and
-    /// saved as before, and the vault is not asked again in this run.
+    /// P0-SEC-3: a vault that refuses or fails read-back verification fails closed on save (`PlatformError::Refused`) instead of writing
+    /// plaintext secrets to disk; pre-existing plaintext files are left untouched when migration fails.
     #[test]
-    fn a_vault_that_fails_leaves_the_secrets_in_the_files() {
-        for vault in [TestVault { refuse: true, ..TestVault::default() }, TestVault { forget: true, ..TestVault::default() }] {
-            let folder = folder("vault-fails");
+    fn a_vault_that_fails_refuses_writes_instead_of_writing_plaintext_secrets() {
+        for make_vault in [|| TestVault { refuse: true, ..TestVault::default() }, || TestVault { forget: true, ..TestVault::default() }] {
+            // Fresh store: save fails closed and creates no plaintext files.
+            let fresh = folder("vault-fails-fresh");
+            let fresh_vault = Arc::new(make_vault());
+            let err = vaulted_store(&fresh, &fresh_vault).save(&identity()).unwrap_err();
+            assert!(matches!(err, PlatformError::Refused(_)), "expected Refused, got {err:?}");
+            assert!(!fresh.exists(), "a refused vault save must not create plaintext files on disk");
+            assert!(lock(&fresh_vault.items).is_empty());
+
+            // Pre-existing legacy plaintext files: load leaves them untouched when migration fails, and saving rotated secrets fails
+            // closed instead of writing the new secrets to disk in plaintext.
+            let folder = folder("vault-fails-legacy");
             store(&folder).save(&identity()).unwrap();
             let before: Vec<Vec<u8>> = [PAIRING_KEY, HOST_TOKEN, KEY_PAIR].iter().map(|n| fs::read(folder.join(n)).unwrap()).collect();
-            let vault = Arc::new(vault);
+            let vault = Arc::new(make_vault());
             let store = vaulted_store(&folder, &vault);
             assert_eq!(store.load().unwrap(), Some(identity()));
             let after: Vec<Vec<u8>> = [PAIRING_KEY, HOST_TOKEN, KEY_PAIR].iter().map(|n| fs::read(folder.join(n)).unwrap()).collect();
-            assert_eq!(before, after, "the secrets stay where they were");
+            assert_eq!(before, after, "failed migration leaves pre-existing files untouched");
             let rotated = PairingIdentity { pairing_key: "B".repeat(43), ..identity() };
-            store.save(&rotated).unwrap();
-            assert_eq!(fs::read_to_string(folder.join(PAIRING_KEY)).unwrap(), "B".repeat(43));
-            assert_eq!(*lock(&vault.saves), 1, "tried once in this run");
+            let err = store.save(&rotated).unwrap_err();
+            assert!(matches!(err, PlatformError::Refused(_)), "expected Refused on save, got {err:?}");
+            let after_save: Vec<Vec<u8>> = [PAIRING_KEY, HOST_TOKEN, KEY_PAIR].iter().map(|n| fs::read(folder.join(n)).unwrap()).collect();
+            assert_eq!(before, after_save, "refused save must not write plaintext secrets to disk");
+            assert_eq!(*lock(&vault.saves), 2, "vault was consulted for migration and again for save");
             assert!(lock(&vault.items).is_empty());
             let _ = fs::remove_dir_all(folder.parent().unwrap());
         }

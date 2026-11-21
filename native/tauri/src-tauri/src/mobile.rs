@@ -252,6 +252,21 @@ async fn ask(host: &Arc<Host>, request: ApprovalRequest) -> bool {
     dialog.wait().await == DialogResult::Primary
 }
 
+/// Resets [`MobileState::notifying`] on drop, even if a notification pass panics or its future is cancelled.
+struct NotifyGuard<'a>(&'a AtomicBool);
+
+impl<'a> NotifyGuard<'a> {
+    fn try_acquire(flag: &'a AtomicBool) -> Option<Self> {
+        (!flag.swap(true, Ordering::SeqCst)).then_some(Self(flag))
+    }
+}
+
+impl Drop for NotifyGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// The 250 ms tick (C#'s `mobileNotify.Tick`): pushes planned on every tick (nothing while the remote is off), and while a phone is
 /// connected the router's notifications sent.
 async fn tick(host: Arc<Host>, relay: Arc<RelayHost>, push: Arc<PushHub>) {
@@ -265,13 +280,15 @@ async fn tick(host: Arc<Host>, relay: Arc<RelayHost>, push: Arc<PushHub>) {
         let source = Panes(host.clone());
         let _ = push.observe(&source);
         let mobile = state(&host);
-        if relay.status().connections == 0 || mobile.notifying.swap(true, Ordering::SeqCst) {
+        if relay.status().connections == 0 {
             continue;
         }
+        let Some(_notifying) = NotifyGuard::try_acquire(&mobile.notifying) else {
+            continue;
+        };
         for (scope, revision) in crate::phone::take_notifications(&host) {
             relay.notify(&scope, revision).await;
         }
-        mobile.notifying.store(false, Ordering::SeqCst);
     }
 }
 
@@ -461,5 +478,43 @@ mod tests {
         let panes = super::project(&service, &|id| id == "held");
         let lost: Vec<(&str, bool)> = panes.iter().map(|p| (p.session_id.as_str(), p.sign_in_lost)).collect();
         assert_eq!(lost, vec![("held", true), ("free", false)]);
+    }
+
+    /// P0-CORE-2: `NotifyGuard` clears `notifying` on normal drop, on panic unwind, and when an in-flight async task is cancelled.
+    #[tokio::test]
+    async fn notify_guard_resets_flag_on_drop_panic_and_cancellation() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let flag = Arc::new(AtomicBool::new(false));
+        {
+            let guard = super::NotifyGuard::try_acquire(&flag).expect("first acquire succeeds");
+            assert!(flag.load(Ordering::SeqCst));
+            assert!(super::NotifyGuard::try_acquire(&flag).is_none(), "second acquire refused while held");
+            drop(guard);
+        }
+        assert!(!flag.load(Ordering::SeqCst), "normal drop resets flag");
+
+        // Panic unwind resets flag.
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = super::NotifyGuard::try_acquire(&flag).unwrap();
+            assert!(flag.load(Ordering::SeqCst));
+            panic!("simulated notify panic");
+        }));
+        assert!(panicked.is_err());
+        assert!(!flag.load(Ordering::SeqCst), "panic unwind resets flag");
+
+        // Future cancellation (task abort while suspended at `.await`) resets flag.
+        let flag_task = flag.clone();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let entered_task = entered.clone();
+        let handle = tokio::spawn(async move {
+            let _guard = super::NotifyGuard::try_acquire(&flag_task).unwrap();
+            entered_task.notify_one();
+            std::future::pending::<()>().await;
+        });
+        entered.notified().await;
+        assert!(flag.load(Ordering::SeqCst));
+        handle.abort();
+        let _ = handle.await;
+        assert!(!flag.load(Ordering::SeqCst), "cancelled future resets flag");
     }
 }

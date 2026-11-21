@@ -110,7 +110,8 @@ fn hermes_run_ended(host: &Host, event: &ServiceEvent) -> Option<String> {
 
 /// The mighty-bridge plugin the Claude runs load (C#: `mods/mighty-bridge` copied next to the app as `claude-mods`): beside the exe
 /// when it was put there, else in the Mac bundle's `Contents/Resources/mods/mighty-bridge` (the Swift app's place,
-/// scripts/build-tauri-macos.sh), else the repository's own (a development build).
+/// scripts/build-tauri-macos.sh), else — a development build only — the repository's own. A release build never reads the build
+/// machine's paths: empty when neither place has it.
 pub fn plugin_directory() -> String {
     let exe = std::env::current_exe().ok();
     let beside = exe.as_ref().and_then(|exe| exe.parent().map(|dir| dir.join("claude-mods")));
@@ -119,17 +120,17 @@ pub fn plugin_directory() -> String {
         .as_deref()
         .and_then(mighty_updates::app_update::stage_mac::bundle_of)
         .map(|bundle| bundle.join("Contents").join("Resources").join("mods").join("mighty-bridge"));
-    match [beside, bundled].into_iter().flatten().find(|dir| dir.join(".claude-plugin").is_dir()) {
-        Some(dir) => dir.to_string_lossy().into_owned(),
-        None => Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("..")
-            .join("mods")
-            .join("mighty-bridge")
-            .to_string_lossy()
-            .into_owned(),
-    }
+    #[cfg(debug_assertions)]
+    let repository = Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("..").join("mods").join("mighty-bridge"));
+    #[cfg(not(debug_assertions))]
+    let repository = None;
+    plugin_directory_among(beside, bundled, repository).map(|dir| dir.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// The first of the folders that holds `.claude-plugin`: beside the exe, in the Mac bundle's resources, or (development only) in the
+/// repository.
+fn plugin_directory_among(beside: Option<PathBuf>, bundled: Option<PathBuf>, repository: Option<PathBuf>) -> Option<PathBuf> {
+    [beside, bundled, repository].into_iter().flatten().find(|dir| dir.join(".claude-plugin").is_dir())
 }
 
 /// The agents' files the app ships (C# `AgentFiles`: the Mac bundle's Resources/Agents, which the C# build copies next to its exe as
@@ -479,6 +480,28 @@ mod tests {
         assert_eq!(among(&exe, Some(&repository)), Some(resources.join("Agents")), "the resources come before the repository");
         std::fs::create_dir_all(exe.join("Agents")).unwrap();
         assert_eq!(among(&exe, Some(&repository)), Some(exe.join("Agents")), "beside the exe comes first");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// P0-SEC-3: the mighty-bridge plugin follows the same rule as `agents_directory`: beside the exe, then bundled in the Mac app,
+    /// and the repository only in development builds (never leaking `CARGO_MANIFEST_DIR` in release).
+    #[test]
+    fn the_plugin_directory_is_beside_the_exe_then_bundled_and_the_repository_only_in_development() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("mighty-plugin-{}-{nanos}", std::process::id()));
+        let (beside, bundled, repository) = (root.join("claude-mods"), root.join("bundled"), root.join("repository"));
+        for folder in [&beside, &bundled, &repository] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        let among = |repo: Option<&Path>| plugin_directory_among(Some(beside.clone()), Some(bundled.clone()), repo.map(Path::to_path_buf));
+        assert_eq!(among(None), None, "a release build without the plugin anywhere finds none");
+        std::fs::create_dir_all(repository.join(".claude-plugin")).unwrap();
+        assert_eq!(among(Some(&repository)), Some(repository.clone()), "a development build falls back to the repository");
+        assert_eq!(among(None), None, "a release build never reads the repository");
+        std::fs::create_dir_all(bundled.join(".claude-plugin")).unwrap();
+        assert_eq!(among(Some(&repository)), Some(bundled.clone()), "the bundle comes before the repository");
+        std::fs::create_dir_all(beside.join(".claude-plugin")).unwrap();
+        assert_eq!(among(Some(&repository)), Some(beside.clone()), "beside the exe comes first");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

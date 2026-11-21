@@ -13,7 +13,8 @@ use crate::host::Host;
 /// The command's name.
 pub const NAME: &str = "mighty";
 
-/// Swift `ShellCommand.script`, byte for byte (its file ends with one more newline).
+/// The `mighty` shell command (hardened version of Swift `ShellCommand.script`, with `--` guards so dash-prefixed folders or prompts
+/// cannot be read as flags or injected into `osascript`; its file ends with one more newline).
 pub const SCRIPT: &str = r#"#!/bin/sh
 # Mighty Code: open a folder (default: the current one) as a workspace,
 # with an optional request put in the composer (never sent).
@@ -21,8 +22,8 @@ pub const SCRIPT: &str = r#"#!/bin/sh
 #   mighty ../other        open another folder
 #   mighty "fix the tests" open this folder with a request
 dir="$PWD"
-if [ $# -gt 0 ] && [ -d "$1" ]; then dir="$(cd "$1" && pwd)"; shift; fi
-enc() { osascript -l JavaScript -e 'function run(a) { return encodeURIComponent(a[0]) }' "$1"; }
+if [ $# -gt 0 ] && [ -d "$1" ]; then case "$1" in -*) dir="$(CDPATH= cd -- "./$1" && pwd)" ;; *) dir="$(CDPATH= cd -- "$1" && pwd)" ;; esac; shift; fi
+enc() { osascript -l JavaScript -e 'function run(a) { return encodeURIComponent(a[0]) }' -- "$1"; }
 url="mightycode://open?path=$(enc "$dir")"
 if [ $# -gt 0 ]; then url="$url&prompt=$(enc "$*")"; fi
 exec open "$url""#;
@@ -195,5 +196,79 @@ mod tests {
         for language in mighty_core::locale::LANGUAGES {
             assert!(words(language).2.contains("{path}"));
         }
+    }
+
+    /// P0-SEC-1: both `cd` and `osascript` terminate option parsing with `--` so dash-prefixed folder names and prompts cannot inject
+    /// flags or JXA code.
+    #[test]
+    fn the_script_guards_cd_and_osascript_against_option_injection() {
+        assert!(SCRIPT.contains("cd -- "), "cd must use --: {SCRIPT}");
+        assert!(
+            SCRIPT.contains("osascript -l JavaScript -e 'function run(a) { return encodeURIComponent(a[0]) }' -- \"$1\""),
+            "osascript must terminate flags with -- before \"$1\": {SCRIPT}"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[allow(clippy::disallowed_methods, reason = "the test runs the installed shell script itself, no child of the app")]
+    #[test]
+    fn dash_prefixed_prompts_and_folders_are_encoded_literally_not_executed() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::process::Command;
+
+        let root = std::env::temp_dir().join(format!("mighty-sec1-{}-{}", std::process::id(), mighty_core::wire::new_id()));
+        let home = root.join("home");
+        let work = root.join("work");
+        let fake_bin = root.join("bin");
+        let marker = root.join("injected-marker");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&fake_bin).unwrap();
+        // Fake `open` captures the URL argument instead of launching the app.
+        let fake_open = fake_bin.join("open");
+        std::fs::write(&fake_open, "#!/bin/sh\nprintf '%s' \"$1\"\n").unwrap();
+        std::fs::set_permissions(&fake_open, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let Installed::Written(mighty) = install(&home, false).unwrap() else { panic!("written") };
+        let path_env = format!("{}:/usr/bin:/bin", fake_bin.display());
+        let run = |cwd: &Path, args: &[&str]| -> String {
+            let output =
+                Command::new(&mighty).args(args).current_dir(cwd).env("PATH", &path_env).output().expect("run installed mighty script");
+            assert!(output.status.success(), "mighty failed ({}): {}", output.status, String::from_utf8_lossy(&output.stderr));
+            String::from_utf8(output.stdout).unwrap()
+        };
+
+        // 1. Prompt starting with `-e` trying to inject JXA code must be URL-encoded literally, never executed.
+        let payload = format!("-e 'ObjC.import(\"stdlib\");$.system(\"touch {}\")'", marker.display());
+        let url = run(&work, &[&payload]);
+        assert!(!marker.exists(), "JXA injection must never execute");
+        let expected_work = std::fs::canonicalize(&work).unwrap();
+        let parsed = tauri::Url::parse(&url).unwrap();
+        assert_eq!(parsed.scheme(), "mightycode");
+        assert_eq!(parsed.host_str(), Some("open"));
+        let params: std::collections::HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+        assert_eq!(params.get("path").map(String::as_str), Some(expected_work.to_str().unwrap()));
+        assert_eq!(params.get("prompt").map(String::as_str), Some(payload.as_str()));
+
+        // 2. Other flag-shaped prompts (`-e`, `-l AppleScript`, `--`) are also encoded literally.
+        for prompt in ["-e", "-l AppleScript", "--"] {
+            let url = run(&work, &[prompt]);
+            let parsed = tauri::Url::parse(&url).unwrap();
+            let params: std::collections::HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+            assert_eq!(params.get("prompt").map(String::as_str), Some(prompt), "prompt {prompt:?}");
+        }
+
+        // 3. Folders starting with `-` (including `-L`, `-e`, and literal `-`) are resolved safely, not read as flags or OLDPWD.
+        for name in ["-L", "-e", "-"] {
+            let dash_dir = work.join(name);
+            std::fs::create_dir_all(&dash_dir).unwrap();
+            let expected = std::fs::canonicalize(&dash_dir).unwrap();
+            let url = run(&work, &[name, "-e", "ObjC.import(\"stdlib\")"]);
+            let parsed = tauri::Url::parse(&url).unwrap();
+            let params: std::collections::HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+            assert_eq!(params.get("path").map(String::as_str), Some(expected.to_str().unwrap()), "folder {name:?}");
+            assert_eq!(params.get("prompt").map(String::as_str), Some("-e ObjC.import(\"stdlib\")"), "folder {name:?} prompt");
+        }
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

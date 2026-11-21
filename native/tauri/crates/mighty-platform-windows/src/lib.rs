@@ -90,7 +90,6 @@ mod imp {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use mighty_platform::unsupported::Unsupported;
     use mighty_platform::{
         AppPaths, BoxFuture, Drawing, Paths, PetWindow, Platform, PlatformError, PlatformProfile, Result, SurfaceFactory, SurfaceKind,
         TerminalOptions, TerminalSurface,
@@ -267,7 +266,7 @@ mod imp {
             secrets: Arc::new(vault),
             prefs: Arc::new(RegistryPrefs::app()),
             pairing: Arc::new(pairing),
-            notifier: Arc::new(Unsupported),
+            notifier: notifier(),
             firewall: Arc::new(WindowsFirewall::new(processes)),
             updates: Arc::new(WindowsUpdates),
             network: Arc::new(WindowsNetwork),

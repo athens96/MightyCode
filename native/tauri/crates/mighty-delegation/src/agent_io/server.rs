@@ -361,8 +361,8 @@ pub fn logged_binding_factory(
         };
         let (handler, enabled) = delegation();
         let settings = request.settings();
-        let attached = super::binding::attaches_delegation(&request.kind, &request.provider, &settings.permission_mode) && enabled;
         let mode = request.permission_mode_override.clone().unwrap_or(settings.permission_mode);
+        let attached = super::binding::attaches_delegation(&request.kind, &request.provider, &mode) && enabled;
         binding.connect_delegation(handler, attached, &mode);
         Some(binding.run_binding())
     })
@@ -435,5 +435,65 @@ mod tests {
         ] {
             assert_eq!(read(malformed), None, "{malformed}");
         }
+    }
+
+    /// P0-CORE-2: `permission_mode_override` governs whether delegation is attached (not the un-overridden `settings.permission_mode`).
+    #[tokio::test]
+    async fn permission_mode_override_governs_delegation_attachment() {
+        use mighty_core::model::{RunSettings, Workspace};
+        use mighty_run::model::StartRunRequest;
+
+        struct NoTerminal;
+        impl TerminalHandler for NoTerminal {
+            fn handle(&self, _call: TerminalCall) -> BoxFuture<'static, Result<Value, String>> {
+                Box::pin(async { Err(String::new()) })
+            }
+        }
+        struct OkDelegation;
+        impl DelegationHandler for OkDelegation {
+            fn handle(&self, _request: DelegationRequest, _caller: DelegationCaller) -> BoxFuture<'static, DelegationResponse> {
+                Box::pin(async { DelegationResponse::failure("unused") })
+            }
+        }
+
+        let pipe = AgentIo::start(Arc::new(mighty_platform::fake::FakeAgentIo::default()), Arc::new(NoTerminal)).unwrap();
+        let handler: Arc<dyn DelegationHandler> = Arc::new(OkDelegation);
+        let exe = if cfg!(windows) { r"C:\mighty\app.exe" } else { "/mighty/app" }.to_string();
+        let workspace =
+            Workspace { id: Some("ws".into()), path: Some(std::env::temp_dir().to_string_lossy().into_owned()), ..Workspace::default() };
+        let factory = binding_factory(pipe.clone(), exe, Arc::new(move || (Some(handler.clone()), true)));
+        let delegation_key = format!("mcp_servers.{}.", crate::mcp::delegation::SERVER_NAME);
+
+        // Widening override: Codex pane stored as `manual` (no delegation), overridden to `acceptEdits` -> delegation IS attached.
+        let mut widened = StartRunRequest::new("codex-widened", "ws", "claude", "hi");
+        widened.provider = "codex".into();
+        widened.settings = Some(RunSettings { permission_mode: "manual".into(), ..RunSettings::default() });
+        widened.permission_mode_override = Some("acceptEdits".into());
+        let widened_binding = factory(&widened, &workspace).expect("bound");
+        let token = widened_binding.environment.get(super::super::binding::TOKEN_KEY).unwrap();
+        let bound = pipe.bindings().resolve(token).unwrap();
+        assert!(bound.delegation(), "override to acceptEdits must attach delegation");
+        assert_eq!(bound.permission_mode(), "acceptEdits");
+        assert!(
+            widened_binding.arguments.iter().any(|arg| arg.contains(&delegation_key)),
+            "delegation server must be passed to Codex CLI when override attaches delegation"
+        );
+
+        // Narrowing override: Codex pane stored as `fullAccess`, overridden to `manual` -> delegation is NOT attached.
+        let mut narrowed = StartRunRequest::new("codex-narrowed", "ws", "claude", "hi");
+        narrowed.provider = "codex".into();
+        narrowed.settings = Some(RunSettings { permission_mode: "fullAccess".into(), ..RunSettings::default() });
+        narrowed.permission_mode_override = Some("manual".into());
+        let narrowed_binding = factory(&narrowed, &workspace).expect("bound");
+        let token = narrowed_binding.environment.get(super::super::binding::TOKEN_KEY).unwrap();
+        let bound = pipe.bindings().resolve(token).unwrap();
+        assert!(!bound.delegation(), "override to manual must detach delegation");
+        assert_eq!(bound.permission_mode(), "manual");
+        assert!(
+            narrowed_binding.arguments.iter().all(|arg| !arg.contains(&delegation_key)),
+            "delegation server must not be passed when override detaches delegation"
+        );
+
+        pipe.close().await;
     }
 }
