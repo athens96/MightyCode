@@ -34,7 +34,7 @@ jobs:
       rust: ${{ steps.decide.outputs.rust }}
       help: ${{ steps.decide.outputs.help }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -55,7 +55,7 @@ jobs:
     runs-on: ${{ fromJSON((github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.hosted != true) && '["self-hosted", "mighty-mac"]' || '"macos-latest"') }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -103,7 +103,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
@@ -154,7 +154,7 @@ jobs:
     runs-on: ${{ fromJSON((github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.hosted != true) && '["self-hosted", "mighty-mac"]' || '"macos-latest"') }}
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The build number is the commit count, so the whole history is fetched.
           fetch-depth: 0
@@ -233,7 +233,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/download-artifact@v4
@@ -366,7 +366,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
