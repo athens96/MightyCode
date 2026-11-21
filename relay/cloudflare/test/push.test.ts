@@ -110,16 +110,45 @@ describe('push store limits', () => {
     expect(await send(base, 'host-d', q[2]!)).toBe(502);
   }, 120_000);
 
-  it('makes room in a full store from the least recently used bound handle instead of answering 503', async () => {
+  it('refuses unauthenticated registrations with 503 when full of bound handles, while still evicting unbound handles', async () => {
     const { base } = await start(newState(), { ...BASE_VARS, PUSH_MAX_HANDLES: '2' });
     const older = await handleFor(base, token('full-1'));
     expect(await send(base, 'full-a', older)).toBe(502);
-    const newer = await handleFor(base, token('full-2'));
-    expect(await send(base, 'full-b', newer)).toBe(502);
-    const fresh = await register(base, token('full-3'));
-    expect(fresh.status).toBe(201);
-    expect(await send(base, 'full-a', older)).toBe(404);
-    expect(await send(base, 'full-b', newer)).toBe(502);
+    // Second slot holds an unbound handle: a fresh registration evicts only the unbound one.
+    const unbound = await handleFor(base, token('full-unbound'));
+    const replacement = await handleFor(base, token('full-2'));
+    expect(await send(base, 'full-a', older)).toBe(502);
+    expect(await send(base, 'full-b', unbound)).toBe(404);
+    // Now bind the second slot so all slots are bound.
+    expect(await send(base, 'full-b', replacement)).toBe(502);
+    const refused = await register(base, token('full-3'));
+    expect(refused.status).toBe(503);
+    expect(await refused.json()).toEqual({ error: 'full' });
+    // Both bound handles remain intact.
+    expect(await send(base, 'full-a', older)).toBe(502);
+    expect(await send(base, 'full-b', replacement)).toBe(502);
+  }, 120_000);
+
+  it('does not bind or evict handles when rejected by the global send rate limit', async () => {
+    const { base } = await start(newState(), {
+      ...BASE_VARS,
+      PUSH_MAX_SEND_GLOBAL: '1',
+      PUSH_MAX_HANDLES_PER_SERVER_ID: '1',
+      PUSH_RATE_WINDOW_MS: '600',
+    });
+    const h1 = await handleFor(base, token('g-nomut-1'));
+    const h2 = await handleFor(base, token('g-nomut-2'));
+    // Spend the 1 global send slot binding h1 to host-a.
+    expect(await send(base, 'g-host-a', h1)).toBe(502);
+    // While globally rate-limited, host-a tries to send to unbound h2: rejected 429.
+    expect(await send(base, 'g-host-a', h2)).toBe(429);
+    // Wait for the short window to pass.
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    // h2 must still be unbound so host-b can bind it (not 403 foreign-handle).
+    expect(await send(base, 'g-host-b', h2)).toBe(502);
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    // h1 must still exist for host-a (not evicted by #makeRoomFor during the 429).
+    expect(await send(base, 'g-host-a', h1)).toBe(502);
   }, 120_000);
 
   it('keeps its rate windows across a restart and counts only new tokens against the global registration budget', async () => {

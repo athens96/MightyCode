@@ -30,6 +30,7 @@ interface Connection {
   readonly ipKey: string;
   host: WebSocket | null;
   buffered: BufferedFrame[];
+  bufferedBytes: number;
   attachTimer: NodeJS.Timeout | null;
   /** Running until the client sends its first frame (the E2EE `hello`). */
   helloTimer: NodeJS.Timeout | null;
@@ -101,7 +102,7 @@ export class RelayHub {
       return;
     }
     if (params.hostToken === null) {
-      this.#awaitHostAuth(ws, params, ip, ipKey);
+      this.#awaitHostAuth(ws, params, ipKey);
       return;
     }
     if (!ownsServerId(params.serverId, params.hostToken)) {
@@ -109,11 +110,11 @@ export class RelayHub {
       closeSocket(ws, CloseCode.unauthorized, 'invalid or missing host token');
       return;
     }
-    this.#openHost(ws, params, ip, ipKey);
+    this.#openHost(ws, params, ipKey);
   }
 
-  #openHost(ws: WebSocket, params: SocketParams, ip: string, ipKey: string): void {
-    if (params.kind === 'control') this.#handleControl(ws, params.serverId, ip, ipKey);
+  #openHost(ws: WebSocket, params: SocketParams, ipKey: string): void {
+    if (params.kind === 'control') this.#handleControl(ws, params.serverId, ipKey);
     else this.#handleHostData(ws, params.serverId, params.connectionId ?? '');
   }
 
@@ -122,7 +123,7 @@ export class RelayHub {
    * within `authTimeoutMs`, or it closes 4401. Until then it is nothing to the hub; one
    * address may keep only `maxPendingPerIp` of these per serverId.
    */
-  #awaitHostAuth(ws: WebSocket, params: SocketParams, ip: string, ipKey: string): void {
+  #awaitHostAuth(ws: WebSocket, params: SocketParams, ipKey: string): void {
     const key = `${params.serverId} ${ipKey}`;
     const waiting = this.#authPending.get(key) ?? 0;
     if (waiting >= this.#config.maxPendingPerIp) {
@@ -151,7 +152,7 @@ export class RelayHub {
         closeSocket(ws, CloseCode.unauthorized, 'invalid or missing host token');
         return;
       }
-      this.#openHost(ws, params, ip, ipKey);
+      this.#openHost(ws, params, ipKey);
     };
     const timer = setTimeout(() => {
       settle();
@@ -184,7 +185,7 @@ export class RelayHub {
 
   // --- control socket ------------------------------------------------------
 
-  #handleControl(ws: WebSocket, serverId: string, ip: string, ipKey: string): void {
+  #handleControl(ws: WebSocket, serverId: string, ipKey: string): void {
     // A host replacing its own control socket was already counted; only a new one meets the caps.
     if ((this.#servers.get(serverId)?.control ?? null) === null) {
       let hosts = 0;
@@ -217,7 +218,7 @@ export class RelayHub {
     this.#log(`[${shortId(serverId)}] connect control`);
 
     ws.on('message', (data: RawData) => {
-      this.#handleControlMessage(ws, serverId, ip, toBuffer(data));
+      this.#handleControlMessage(ws, serverId, ipKey, toBuffer(data));
     });
     ws.on('close', () => {
       this.#untrack(ws);
@@ -240,7 +241,7 @@ export class RelayHub {
    * (the relay must not read or act on E2EE application frames that might
    * occasionally be routed through the control socket by accident).
    */
-  #handleControlMessage(ws: WebSocket, serverId: string, ip: string, data: Buffer): void {
+  #handleControlMessage(ws: WebSocket, serverId: string, ipKey: string, data: Buffer): void {
     let parsed: unknown;
     try {
       parsed = JSON.parse(data.toString('utf8'));
@@ -254,12 +255,12 @@ export class RelayHub {
     ) {
       return;
     }
-    this.#handleTurnRequest(ws, serverId, ip);
+    this.#handleTurnRequest(ws, serverId, ipKey);
   }
 
   // --- TURN credential minting --------------------------------------------
 
-  #handleTurnRequest(ws: WebSocket, serverId: string, ip: string): void {
+  #handleTurnRequest(ws: WebSocket, serverId: string, ipKey: string): void {
     const secret = this.#config.turnSecret;
     if (!secret) {
       const msg: TurnUnavailable = { type: 'turn-unavailable' };
@@ -284,7 +285,7 @@ export class RelayHub {
       return;
     }
 
-    const perIp = this.#rateSlot(this.#turnRateByIp, ip, this.#config.turnMaxPerIp, now);
+    const perIp = this.#rateSlot(this.#turnRateByIp, ipKey, this.#config.turnMaxPerIp, now);
     if (!perIp.ok) {
       const msg: TurnRateLimited = {
         type: 'turn-rate-limited',
@@ -315,7 +316,7 @@ export class RelayHub {
     perServer.times.push(now);
     this.#turnRateByServerId.set(serverId, perServer.times);
     perIp.times.push(now);
-    this.#turnRateByIp.set(ip, perIp.times);
+    this.#turnRateByIp.set(ipKey, perIp.times);
     global.times.push(now);
     this.#turnRateGlobal.set('*', global.times);
 
@@ -395,6 +396,7 @@ export class RelayHub {
       ipKey,
       host: null,
       buffered: [],
+      bufferedBytes: 0,
       attachTimer: null,
       helloTimer: null,
       answered: false,
@@ -424,11 +426,15 @@ export class RelayHub {
         this.#forwardOrClose(connection, connection.host, payload, isBinary);
         return;
       }
-      if (connection.buffered.length >= this.#config.maxBufferedFrames) {
+      if (
+        connection.buffered.length >= this.#config.maxBufferedFrames ||
+        connection.bufferedBytes + payload.byteLength > this.#config.maxBufferedBytes
+      ) {
         this.#teardown(connection, CloseCode.bufferOverflow, 'buffer overflow', null);
         return;
       }
       connection.buffered.push({ payload, binary: isBinary });
+      connection.bufferedBytes += payload.byteLength;
     });
     ws.on('close', (code: number, reason: Buffer) => {
       this.#untrack(ws);
@@ -462,6 +468,7 @@ export class RelayHub {
 
     const pending = connection.buffered;
     connection.buffered = [];
+    connection.bufferedBytes = 0;
     for (const frame of pending) {
       if (connection.closed) break;
       this.#forwardOrClose(connection, ws, frame.payload, frame.binary);
@@ -502,6 +509,7 @@ export class RelayHub {
       connection.helloTimer = null;
     }
     connection.buffered = [];
+    connection.bufferedBytes = 0;
 
     const entry = this.#servers.get(connection.serverId);
     if (entry?.connections.get(connection.connectionId) === connection) {

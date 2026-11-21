@@ -207,6 +207,29 @@ describe('push limits', () => {
     expect(lines).toContain('[push] handle store full');
     expect((await send(base, identity('host-a'), first.handle)).status).toBe(404);
   });
+
+  it('refuses unauthenticated registrations with 503 when full of bound handles instead of evicting them', async () => {
+    const lines: string[] = [];
+    const { base } = await relay({ pushMaxHandles: 2, logger: (line) => lines.push(line) });
+    const hostA = identity('bound-a');
+    const hostB = identity('bound-b');
+    const first = await register(base);
+    expect((await send(base, hostA, first.handle)).status).toBe(202);
+    const secondRes = await call(base, 'POST', '/push/v1/handles', { fcmToken: `${FCM_TOKEN}-b` });
+    expect(secondRes.status).toBe(201);
+    const second = (await secondRes.json()) as { handle: string; secret: string };
+    expect((await send(base, hostB, second.handle)).status).toBe(202);
+
+    // Flood of unauthenticated registrations with fresh tokens must return 503 and preserve bound handles.
+    for (let i = 0; i < 3; i += 1) {
+      const refused = await call(base, 'POST', '/push/v1/handles', { fcmToken: `${FCM_TOKEN}-flood-${i}` });
+      expect(refused.status).toBe(503);
+      expect(await refused.json()).toEqual({ error: 'full' });
+    }
+    expect(lines).toContain('[push] handle store full');
+    expect((await send(base, hostA, first.handle)).status).toBe(202);
+    expect((await send(base, hostB, second.handle)).status).toBe(202);
+  });
 });
 
 describe('push send', () => {
@@ -330,6 +353,34 @@ describe('push send', () => {
     expect(limited.status).toBe(429);
     expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0);
     expect(sender.sent).toHaveLength(1);
+  });
+
+  it('does not bind or evict handles when rejected by the global send rate limit', async () => {
+    const { base } = await relay({
+      pushMaxSendGlobal: 1,
+      pushMaxHandlesPerServerId: 1,
+      pushRateWindowMs: 80,
+    });
+    const hostA = identity('global-no-mutate-a');
+    const hostB = identity('global-no-mutate-b');
+    const h1 = await register(base);
+    const h2Res = await call(base, 'POST', '/push/v1/handles', { fcmToken: `${FCM_TOKEN}-second` });
+    expect(h2Res.status).toBe(201);
+    const h2 = (await h2Res.json()) as { handle: string };
+
+    // Spend the 1 global slot binding h1 to hostA.
+    expect((await send(base, hostA, h1.handle)).status).toBe(202);
+    // While globally rate-limited, hostA tries to send to unbound h2: rejected 429.
+    expect((await send(base, hostA, h2.handle)).status).toBe(429);
+
+    // Wait for the short rate window to pass.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    // h2 must still be unbound so hostB can bind it (not 403 foreign-handle).
+    expect((await send(base, hostB, h2.handle)).status).toBe(202);
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    // h1 must still be bound to hostA (not evicted by #makeRoomFor during the 429).
+    expect((await send(base, hostA, h1.handle)).status).toBe(202);
   });
 
   it('refuses a guessed or foreign handle once its serverId or IP is over budget', async () => {

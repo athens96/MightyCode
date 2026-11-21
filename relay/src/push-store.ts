@@ -73,7 +73,8 @@ function validRecord(value: unknown): value is PushHandleRecord {
  * What one party can fill is bounded: a token keeps at most `maxPerToken` handles and a
  * serverId at most `maxPerServerId` bound ones (the newest replaces the least recently
  * used), the same token bound twice to one serverId keeps only the newer handle (a phone
- * that registered again), and a full store makes room instead of refusing phones.
+ * that registered again), and a full store evicts only idle or unbound handles (refusing
+ * unauthenticated registrations rather than displacing bound pairings).
  */
 export class PushHandleStore {
   readonly #records = new Map<string, PushHandleRecord>();
@@ -113,13 +114,14 @@ export class PushHandleStore {
     }
     if (this.#records.size >= this.#options.maxHandles) {
       this.#options.log('[push] handle store full');
-      // Handles no host has used yet go first, least recently used first; then the least recently used bound one.
-      while (this.#records.size >= this.#options.maxHandles) {
-        const all = [...this.#records.values()];
-        const victim = leastRecentlyUsed(all.filter((r) => r.serverId === null)) ?? leastRecentlyUsed(all);
-        if (victim === null) return null;
-        this.#records.delete(victim.handle);
-      }
+      // Only evict handles no host has bound yet (serverId === null); bound handles belong to
+      // active pairings and cannot be displaced by unauthenticated registrations.
+      const needed = this.#records.size - this.#options.maxHandles + 1;
+      const unbound = [...this.#records.values()]
+        .filter((r) => r.serverId === null)
+        .sort((a, b) => a.usedAt - b.usedAt);
+      if (unbound.length < needed) return null;
+      for (const victim of unbound.slice(0, needed)) this.#records.delete(victim.handle);
     }
     const handle = newPushSecret();
     const secret = newPushSecret();
@@ -142,6 +144,14 @@ export class PushHandleStore {
     this.#records.delete(handle);
     await this.#save();
     return true;
+  }
+
+  /** Read-only validation of whether `serverId` may use `handle`, without mutating bindings or quotas. */
+  checkBind(handle: string, serverId: string): 'ok' | 'unknown' | 'foreign' {
+    const record = this.#records.get(handle);
+    if (record === undefined) return 'unknown';
+    if (record.serverId !== null && record.serverId !== serverId) return 'foreign';
+    return 'ok';
   }
 
   async bind(handle: string, serverId: string, now: number): Promise<BindResult> {

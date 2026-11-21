@@ -1,4 +1,6 @@
-/** WebCrypto twins of the Node relay's hashing (../src/protocol.ts, ../src/push-store.ts). */
+/** WebCrypto and Node-compat twins of the Node relay's hashing (../src/protocol.ts, ../src/push-store.ts). */
+
+import { createHash } from 'node:crypto';
 
 function hex(bytes: ArrayBuffer): string {
   return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -8,10 +10,15 @@ export async function sha256Hex(value: string): Promise<string> {
   return hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)));
 }
 
+/** Synchronous SHA-256 hex digest (nodejs_compat) to avoid async yield gaps in Durable Objects. */
+export function sha256HexSync(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
 /** Same rule as `ownsServerId`: the serverId is the lowercase hex SHA-256 of the UTF-8 hostToken. */
 export async function ownsServerIdAsync(serverId: string, hostToken: string | null): Promise<boolean> {
   if (hostToken === null) return false;
-  return (await sha256Hex(hostToken)) === serverId;
+  return sameDigest(await sha256Hex(hostToken), serverId);
 }
 
 /** 32 random bytes, base64url without padding (`newPushSecret`). */

@@ -68,20 +68,20 @@ describe('PushHandleStore', () => {
     expect(store.size).toBe(0);
   });
 
-  it('makes room from the least recently used bound handle when full of bound handles, after dropping idle ones', async () => {
+  it('refuses registration when full of bound handles, and accepts again once idle handles expire', async () => {
     const lines: string[] = [];
     const store = await PushHandleStore.open(options('', { maxHandles: 2, idleMs: 10 * DAY, log: (line) => lines.push(line) }), 0);
     const older = (await store.register(TOKEN_A, 0))!;
     await store.bind(older.handle, SERVER_1, 0);
     const newer = (await store.register(TOKEN_B, 1))!;
     await store.bind(newer.handle, SERVER_2, 1);
-    // A full store never answers a phone 503 for months: the stalest bound handle goes.
-    expect(await store.register(TOKEN_C, 2)).not.toBeNull();
+    // Unauthenticated registrations must never displace bound handles.
+    expect(await store.register(TOKEN_C, 2)).toBeNull();
     expect(lines).toEqual(['[push] handle store full']);
     expect(store.size).toBe(2);
-    expect((await store.bind(older.handle, SERVER_1, 3)).kind).toBe('unknown');
+    expect((await store.bind(older.handle, SERVER_1, 3)).kind).toBe('ok');
     expect((await store.bind(newer.handle, SERVER_2, 3)).kind).toBe('ok');
-    // Idle handles go before anything is evicted for room.
+    // Once bound handles age past idleMs, the idle sweep drops them and registration succeeds.
     lines.length = 0;
     expect(await store.register(TOKEN_A, 20 * DAY)).not.toBeNull();
     expect(lines).toEqual([]);

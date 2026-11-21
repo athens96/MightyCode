@@ -11,7 +11,7 @@ import type { RateDecision } from '../../src/rate.ts';
 import type { PushSender } from '../../src/fcm-core.ts';
 import { workerFcmSender } from './fcm.ts';
 import { HUB_HEADERS } from './hub.ts';
-import { newSecret, ownsServerIdAsync, sameDigest, sha256Hex } from './identity.ts';
+import { newSecret, ownsServerIdAsync, sameDigest, sha256HexSync } from './identity.ts';
 import { pushIpKey } from './ip.ts';
 
 /** Same patterns as ../src/push-store.ts and ../src/push.ts. */
@@ -224,25 +224,27 @@ export class PushStore extends DurableObject<PushEnv> {
     // One token keeps at most maxPerToken handles (one per paired host); the newest replaces the least recently used.
     const mine = this.#sql.exec<{ handle: string }>('SELECT handle FROM handles WHERE fcm_token = ? ORDER BY used_at ASC', token).toArray();
     while (mine.length >= this.#maxPerToken) this.#sql.exec('DELETE FROM handles WHERE handle = ?', mine.shift()?.handle ?? '');
-    let count = this.#count();
+    const count = this.#count();
     if (count >= this.#maxHandles) {
       console.log('[push] handle store full');
-      // Handles no host has used yet go first, least recently used first; then the least recently used bound one,
-      // so a full store never refuses phones for months.
-      while (count >= this.#maxHandles) {
-        const victim =
-          this.#sql.exec<{ handle: string }>('SELECT handle FROM handles WHERE server_id IS NULL ORDER BY used_at ASC LIMIT 1').toArray()[0] ??
-          this.#sql.exec<{ handle: string }>('SELECT handle FROM handles ORDER BY used_at ASC LIMIT 1').toArray()[0];
-        if (victim === undefined) return failure(503, 'full');
+      // Only evict handles no host has bound yet; unauthenticated registrations cannot displace active pairings.
+      const needed = count - this.#maxHandles + 1;
+      const victims = this.#sql
+        .exec<{ handle: string }>(
+          'SELECT handle FROM handles WHERE server_id IS NULL ORDER BY used_at ASC LIMIT ?',
+          needed,
+        )
+        .toArray();
+      if (victims.length < needed) return failure(503, 'full');
+      for (const victim of victims) {
         this.#sql.exec('DELETE FROM handles WHERE handle = ?', victim.handle);
-        count -= 1;
       }
     }
     const handle = newSecret();
     const secret = newSecret();
     this.#sql.exec(
       'INSERT INTO handles (handle, secret_hash, fcm_token, server_id, created_at, used_at) VALUES (?, ?, ?, NULL, ?, ?)',
-      handle, await sha256Hex(secret), token, now, now,
+      handle, sha256HexSync(secret), token, now, now,
     );
     return reply(201, { handle, secret });
   }
@@ -257,7 +259,7 @@ export class PushStore extends DurableObject<PushEnv> {
     const rate = this.#take([[this.#handleOpsByIp, ip]], now);
     if (!rate.ok) return failure(429, 'rate-limited', rate.retryAfterSecs);
     const row = this.#row(handle);
-    if (row === null || !HANDLE_PATTERN.test(secret) || !sameDigest(row.secret_hash, await sha256Hex(secret))) return failure(404, 'unknown-handle');
+    if (row === null || !HANDLE_PATTERN.test(secret) || !sameDigest(row.secret_hash, sha256HexSync(secret))) return failure(404, 'unknown-handle');
     if (isPut) this.#sql.exec('UPDATE handles SET fcm_token = ?, used_at = ? WHERE handle = ?', token as string, now, handle);
     else this.#sql.exec('DELETE FROM handles WHERE handle = ?', handle);
     return reply(204);
@@ -279,12 +281,13 @@ export class PushStore extends DurableObject<PushEnv> {
     const row = this.#row(handle);
     if (row === null) return failure(404, 'unknown-handle');
     if (row.server_id !== null && row.server_id !== serverId) return failure(403, 'foreign-handle');
+    // Only a send that would reach FCM spends the shared budget, so guessed or foreign handles cannot use it up.
+    // Check global rate limit BEFORE mutating bindings or running #makeRoomFor eviction.
+    const global = this.#take([[this.#sendGlobal, '*']], now);
+    if (!global.ok) return failure(429, 'rate-limited', global.retryAfterSecs);
     if (row.server_id === null) this.#makeRoomFor(row, serverId);
     // usedAt only feeds the idle sweep: written on first use and then at most daily.
     if (row.server_id === null || now - row.used_at > DAY_MS) this.#sql.exec('UPDATE handles SET server_id = ?, used_at = ? WHERE handle = ?', serverId, now, handle);
-    // Only a send that would reach FCM spends the shared budget, so guessed or foreign handles cannot use it up.
-    const global = this.#take([[this.#sendGlobal, '*']], now);
-    if (!global.ok) return failure(429, 'rate-limited', global.retryAfterSecs);
     const short = serverId.slice(0, 8);
     const result = await this.#sender.send(row.fcm_token, { v: '1', h: handle, p: payload });
     switch (result.kind) {

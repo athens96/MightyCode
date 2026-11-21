@@ -1,6 +1,6 @@
 /** Wire-level constants and query validation for `GET /ws`. */
 
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 export const WS_PATH = '/ws';
 export const PROTOCOL_VERSION = '1';
@@ -162,7 +162,9 @@ export function parseSocketParams(query: URLSearchParams): ParseResult {
  */
 export function ownsServerId(serverId: string, hostToken: string | null): boolean {
   if (hostToken === null) return false;
-  return createHash('sha256').update(hostToken, 'utf8').digest('hex') === serverId;
+  const expected = new TextEncoder().encode(createHash('sha256').update(hostToken, 'utf8').digest('hex'));
+  const actual = new TextEncoder().encode(serverId);
+  return expected.byteLength === actual.byteLength && timingSafeEqual(expected, actual);
 }
 
 /**

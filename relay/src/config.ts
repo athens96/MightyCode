@@ -26,6 +26,8 @@ export interface RelayConfig {
   readonly maxServersPerIp: number;
   /** Client frames buffered while the host data socket is still attaching. */
   readonly maxBufferedFrames: number;
+  /** Maximum total bytes of client frames buffered while the host data socket is still attaching. */
+  readonly maxBufferedBytes: number;
   /** Maximum WebSocket frame payload in bytes. */
   readonly maxPayload: number;
   /** Maximum bytes buffered for sending on a single data socket before closing that connection. */
@@ -82,8 +84,8 @@ export interface RelayConfig {
   readonly pushMaxHandlesPerServerId: number;
   /**
    * Handles kept at most. When full, idle ones go first, then the least recently used
-   * handle no host has used yet, and only then the least recently used bound handle, so
-   * a full store never refuses a phone.
+   * handle no host has used yet; bound handles are never evicted by unauthenticated
+   * registrations (which receive 503 when only bound handles remain).
    */
   readonly pushMaxHandles: number;
   /** A handle neither refreshed nor used for this many days is dropped. */
@@ -108,6 +110,7 @@ const DEFAULTS: RelayConfig = {
   maxServers: 10_000,
   maxServersPerIp: 64,
   maxBufferedFrames: 64,
+  maxBufferedBytes: 2 * 1024 * 1024,
   maxPayload: 1024 * 1024,
   maxSocketBufferedBytes: 4 * 1024 * 1024,
   turnSecret: '',
@@ -155,6 +158,7 @@ export function loadConfig(overrides: Partial<RelayConfig> = {}): RelayConfig {
     maxServers: envInt('RELAY_MAX_SERVERS', DEFAULTS.maxServers),
     maxServersPerIp: envInt('RELAY_MAX_SERVERS_PER_IP', DEFAULTS.maxServersPerIp),
     maxBufferedFrames: envInt('RELAY_MAX_BUFFERED_FRAMES', DEFAULTS.maxBufferedFrames),
+    maxBufferedBytes: envInt('RELAY_MAX_BUFFERED_BYTES', DEFAULTS.maxBufferedBytes),
     maxPayload: envInt('RELAY_MAX_PAYLOAD', DEFAULTS.maxPayload),
     maxSocketBufferedBytes: envInt('RELAY_MAX_SOCKET_BUFFERED_BYTES', DEFAULTS.maxSocketBufferedBytes),
     turnSecret: process.env['TURN_SECRET']?.trim() ?? DEFAULTS.turnSecret,

@@ -616,6 +616,32 @@ describe('turn credentials', () => {
     }
   });
 
+  it('normalizes IPv6 addresses to /64 and IPv4-mapped IPv6 for per-IP TURN rate limiting', async () => {
+    const turnRelay = await startRelay({
+      host: '127.0.0.1',
+      port: 0,
+      logger: silent,
+      turnSecret: TURN_SECRET,
+      turnMaxPerServerId: 100,
+      turnMaxPerIp: 1,
+      turnMaxGlobal: 100,
+      turnRateWindowMs: 60_000,
+      trustProxy: true,
+    });
+    try {
+      expect(await mint(await turnControl(turnRelay, 'v6-a', '2001:db8:1:2::1'))).toBe('turn-credentials');
+      // Another host interface ID in the same /64 shares the bucket.
+      expect(await mint(await turnControl(turnRelay, 'v6-b', '2001:db8:1:2:ffff::2'))).toBe('turn-rate-limited');
+      // A different /64 gets its own bucket.
+      expect(await mint(await turnControl(turnRelay, 'v6-c', '2001:db8:1:3::1'))).toBe('turn-credentials');
+      // IPv4-mapped IPv6 shares the IPv4 bucket.
+      expect(await mint(await turnControl(turnRelay, 'v4m-a', '203.0.113.7'))).toBe('turn-credentials');
+      expect(await mint(await turnControl(turnRelay, 'v4m-b', '::ffff:203.0.113.7'))).toBe('turn-rate-limited');
+    } finally {
+      await turnRelay.close();
+    }
+  });
+
   it('stops minting for everyone once the global cap is reached', async () => {
     const turnRelay = await startRelay({
       host: '127.0.0.1',
@@ -965,6 +991,28 @@ describe('limits', () => {
 
     for (let i = 0; i < 65; i += 1) client.send(`frame-${i}`);
     expect((await closed(client)).code).toBe(4413);
+  });
+
+  it('closes 4413 when pending client frames exceed maxBufferedBytes before maxBufferedFrames', async () => {
+    expect(relay.config.maxBufferedBytes).toBe(2 * 1024 * 1024);
+    await ownRelay({ maxBufferedFrames: 64, maxBufferedBytes: 2048 }, async (handle) => {
+      const { serverId, hostToken } = identity('byte-overflow-1');
+      const connectionId = 'conn-byte-ovf-01';
+      const control = new WebSocket(url(handle, { serverId, role: 'server', v: '1', hostToken }));
+      open.push(control);
+      await opened(control);
+      const client = new WebSocket(url(handle, { serverId, role: 'client', connectionId, v: '1' }));
+      open.push(client);
+      await opened(client);
+      await nextJson(control);
+
+      const done = closed(client);
+      // 3 x 1024 = 3072 > 2048 bytes, well below maxBufferedFrames (64).
+      client.send(Buffer.alloc(1024, 1));
+      client.send(Buffer.alloc(1024, 2));
+      client.send(Buffer.alloc(1024, 3));
+      expect((await done).code).toBe(4413);
+    });
   });
 
   it('closes 4507 when forwarding would exceed maxSocketBufferedBytes (host→client)', async () => {

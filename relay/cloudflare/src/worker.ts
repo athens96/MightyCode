@@ -5,12 +5,17 @@
  */
 
 import { CloseCode, parseSocketParams, WS_PATH } from '../../src/protocol.ts';
+import { SlidingWindowLimiter, type RateDecision } from '../../src/rate.ts';
 import { ownsServerIdAsync } from './identity.ts';
 import { HUB_HEADERS } from './hub.ts';
+import { pushIpKey } from './ip.ts';
 import { BODY_LIMIT } from './push.ts';
 
 /** The URL a Hub sees; the client's URL (and any token in its query) is not handed on. */
 const HUB_URL = 'https://hub.invalid/ws';
+const DEFAULT_WS_RATE_WINDOW_MS = 60_000;
+const DEFAULT_WS_MAX_UPGRADES_PER_IP = 120;
+const DEFAULT_WS_MAX_UPGRADES_GLOBAL = 2_000;
 
 export { Hub } from './hub.ts';
 export { PushStore } from './push.ts';
@@ -20,6 +25,68 @@ export interface Env {
   readonly PUSH: DurableObjectNamespace;
   /** The FCM service account JSON (a secret); absent or broken leaves sending off (503). */
   readonly FCM_SERVICE_ACCOUNT?: string;
+  /** Sliding window for isolate-level `/ws` upgrade limiting (ms). */
+  readonly WS_RATE_WINDOW_MS?: string;
+  /** Max `/ws` upgrades per IP (IPv6: /64) per window before touching a Hub DO. */
+  readonly WS_MAX_UPGRADES_PER_IP?: string;
+  /** Max `/ws` upgrades across all IPs per window in this isolate before touching a Hub DO. */
+  readonly WS_MAX_UPGRADES_GLOBAL?: string;
+}
+
+function envInt(raw: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(raw ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Isolate-level per-IP + global sliding-window limiter for `/ws` upgrades, run before
+ * `env.HUB.get(idFromName(serverId))` so a flood of random serverIds cannot fan out
+ * Durable Objects unboundedly.
+ */
+export class WsUpgradeLimiter {
+  readonly #byIp: SlidingWindowLimiter;
+  readonly #global: SlidingWindowLimiter;
+  readonly #sweepEveryMs: number;
+  #sweptAt = 0;
+
+  constructor(windowMs: number, maxPerIp: number, maxGlobal: number) {
+    this.#byIp = new SlidingWindowLimiter(windowMs, maxPerIp);
+    this.#global = new SlidingWindowLimiter(windowMs, maxGlobal);
+    this.#sweepEveryMs = Math.min(windowMs, 60_000);
+  }
+
+  take(ipKey: string, now = Date.now()): RateDecision {
+    if (now - this.#sweptAt >= this.#sweepEveryMs) {
+      this.#sweptAt = now;
+      this.#byIp.sweep(now);
+      this.#global.sweep(now);
+    }
+    const perIp = this.#byIp.check(ipKey, now);
+    if (!perIp.ok) return perIp;
+    const global = this.#global.check('*', now);
+    if (!global.ok) return global;
+    this.#byIp.record(ipKey, now);
+    this.#global.record('*', now);
+    return { ok: true };
+  }
+}
+
+let wsUpgradeLimiter: { readonly key: string; readonly limiter: WsUpgradeLimiter } | null = null;
+
+function getWsUpgradeLimiter(env: Env): WsUpgradeLimiter {
+  const windowMs = envInt(env.WS_RATE_WINDOW_MS, DEFAULT_WS_RATE_WINDOW_MS);
+  const maxPerIp = envInt(env.WS_MAX_UPGRADES_PER_IP, DEFAULT_WS_MAX_UPGRADES_PER_IP);
+  const maxGlobal = envInt(env.WS_MAX_UPGRADES_GLOBAL, DEFAULT_WS_MAX_UPGRADES_GLOBAL);
+  const key = `${windowMs}:${maxPerIp}:${maxGlobal}`;
+  if (wsUpgradeLimiter === null || wsUpgradeLimiter.key !== key) {
+    wsUpgradeLimiter = { key, limiter: new WsUpgradeLimiter(windowMs, maxPerIp, maxGlobal) };
+  }
+  return wsUpgradeLimiter.limiter;
+}
+
+/** Resets the isolate-level `/ws` upgrade limiter (tests). */
+export function resetWsUpgradeLimiter(): void {
+  wsUpgradeLimiter = null;
 }
 
 function text(status: number, body: string): Response {
@@ -85,11 +152,23 @@ export default {
       if (params.kind !== 'client-data' && !byFrame && !(await ownsServerIdAsync(params.serverId, params.hostToken))) {
         return refuseSocket(CloseCode.unauthorized, 'invalid or missing host token');
       }
+      const sourceIp = clientIp(request);
+      const rate = getWsUpgradeLimiter(env).take(pushIpKey(sourceIp));
+      if (!rate.ok) {
+        return new Response('rate limited', {
+          status: 429,
+          headers: {
+            'content-type': 'text/plain; charset=utf-8',
+            'cache-control': 'no-store',
+            'retry-after': String(rate.retryAfterSecs),
+          },
+        });
+      }
       const headers = new Headers(request.headers);
       headers.set(HUB_HEADERS.kind, params.kind);
       headers.set(HUB_HEADERS.serverId, params.serverId);
       headers.set(HUB_HEADERS.connectionId, params.connectionId ?? '');
-      headers.set(HUB_HEADERS.ip, clientIp(request));
+      headers.set(HUB_HEADERS.ip, sourceIp);
       headers.set(HUB_HEADERS.auth, byFrame ? 'frame' : 'query');
       const hub = env.HUB.get(env.HUB.idFromName(params.serverId));
       // The Hub gets no query: a host token in the URL goes no further than this check.

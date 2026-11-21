@@ -56,6 +56,7 @@ interface Attachment {
 
 interface Pending {
   frames: Array<string | ArrayBuffer>;
+  bytes: number;
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -63,6 +64,7 @@ interface HubEnv {
   readonly RELAY_ATTACH_TIMEOUT_MS?: string;
   readonly RELAY_MAX_CONNECTIONS?: string;
   readonly RELAY_MAX_BUFFERED_FRAMES?: string;
+  readonly RELAY_MAX_BUFFERED_BYTES?: string;
   readonly RELAY_MAX_PAYLOAD?: string;
   readonly RELAY_AUTH_TIMEOUT_MS?: string;
   readonly RELAY_HELLO_TIMEOUT_MS?: string;
@@ -100,6 +102,7 @@ export class Hub extends DurableObject<HubEnv> {
   readonly #attachTimeoutMs: number;
   readonly #maxConnections: number;
   readonly #maxBufferedFrames: number;
+  readonly #maxBufferedBytes: number;
   readonly #maxPayload: number;
   readonly #authTimeoutMs: number;
   readonly #helloTimeoutMs: number;
@@ -113,6 +116,7 @@ export class Hub extends DurableObject<HubEnv> {
     this.#attachTimeoutMs = envInt(env.RELAY_ATTACH_TIMEOUT_MS, 10_000);
     this.#maxConnections = envInt(env.RELAY_MAX_CONNECTIONS, 32);
     this.#maxBufferedFrames = envInt(env.RELAY_MAX_BUFFERED_FRAMES, 64);
+    this.#maxBufferedBytes = envInt(env.RELAY_MAX_BUFFERED_BYTES, 2 * 1024 * 1024);
     this.#maxPayload = envInt(env.RELAY_MAX_PAYLOAD, 1024 * 1024);
     this.#authTimeoutMs = envInt(env.RELAY_AUTH_TIMEOUT_MS, 5_000);
     this.#helloTimeoutMs = envInt(env.RELAY_HELLO_TIMEOUT_MS, 5_000);
@@ -205,6 +209,7 @@ export class Hub extends DurableObject<HubEnv> {
     this.#accept(ws, ['client', tagFor.client(connectionId)], { kind: 'client', connectionId, serverId, ip });
     this.#pending.set(connectionId, {
       frames: [],
+      bytes: 0,
       timer: setTimeout(() => this.#teardown(connectionId, CloseCode.attachTimeout, 'host data socket timeout', null), this.#attachTimeoutMs),
     });
     // Phones and computers send `hello` as soon as the socket opens; a client that does not holds a slot for nothing.
@@ -241,7 +246,8 @@ export class Hub extends DurableObject<HubEnv> {
     const me = this.#attachment(ws);
     if (me === null || me.done === true) return;
     if (me.authPending === true) return this.#authFrame(ws, me, message);
-    if (byteLength(message) > this.#maxPayload) {
+    const size = byteLength(message);
+    if (size > this.#maxPayload) {
       if (me.kind === 'control') {
         this.#retire(ws);
         closeSocket(ws, 1009, 'message too big');
@@ -270,14 +276,15 @@ export class Hub extends DurableObject<HubEnv> {
         let pending = this.#pending.get(id);
         if (pending === undefined) {
           // The object was evicted between the client's arrival and now: start the wait again.
-          pending = { frames: [], timer: setTimeout(() => this.#teardown(id, CloseCode.attachTimeout, 'host data socket timeout', null), this.#attachTimeoutMs) };
+          pending = { frames: [], bytes: 0, timer: setTimeout(() => this.#teardown(id, CloseCode.attachTimeout, 'host data socket timeout', null), this.#attachTimeoutMs) };
           this.#pending.set(id, pending);
         }
-        if (pending.frames.length >= this.#maxBufferedFrames) {
+        if (pending.frames.length >= this.#maxBufferedFrames || pending.bytes + size > this.#maxBufferedBytes) {
           this.#teardown(id, CloseCode.bufferOverflow, 'buffer overflow', null);
           return;
         }
         pending.frames.push(message);
+        pending.bytes += size;
         return;
       }
       case 'host': {

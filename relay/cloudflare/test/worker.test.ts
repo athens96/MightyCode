@@ -100,6 +100,7 @@ beforeAll(async () => {
     RELAY_ATTACH_TIMEOUT_MS: '800',
     RELAY_MAX_CONNECTIONS: String(MAX_CONNECTIONS),
     RELAY_MAX_BUFFERED_FRAMES: String(MAX_BUFFERED),
+    RELAY_MAX_BUFFERED_BYTES: String(64 * 1024),
     RELAY_AUTH_TIMEOUT_MS: '500',
     RELAY_HELLO_TIMEOUT_MS: '1500',
     RELAY_MAX_PENDING_PER_IP: String(MAX_PENDING_PER_IP),
@@ -311,6 +312,19 @@ describe('limits', () => {
     await opened(client);
     const done = closed(client);
     for (let i = 0; i <= MAX_BUFFERED; i++) client.send(`f${i}`);
+    expect((await done).code).toBe(4413);
+  });
+
+  it('closes 4413 when pending client frames exceed RELAY_MAX_BUFFERED_BYTES before frame cap', async () => {
+    const { serverId, hostToken } = identity('byte-overrun');
+    const control = socket({ serverId, role: 'server', v: '1', hostToken });
+    await opened(control);
+    const client = socket({ serverId, role: 'client', connectionId: 'conn-byte-0001', v: '1' });
+    await opened(client);
+    const done = closed(client);
+    // 2 x 40 KiB = 80 KiB > 64 KiB cap, well below MAX_BUFFERED (4 frames).
+    client.send(Buffer.alloc(40 * 1024, 1));
+    client.send(Buffer.alloc(40 * 1024, 2));
     expect((await done).code).toBe(4413);
   });
 });

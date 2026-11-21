@@ -250,12 +250,17 @@ export class PushRoutes {
     if (this.#sender === null) return failure(res, 503, 'push-unavailable');
     const rate = this.#take([[this.#sendByServerId, serverId], [this.#sendByIp, ip]]);
     if (!rate.ok) return failure(res, 429, 'rate-limited', rate.retryAfterSecs);
+    // Validate the handle read-only before spending the global budget or mutating bindings/quotas.
+    const access = this.#store.checkBind(handle, serverId);
+    if (access === 'unknown') return failure(res, 404, 'unknown-handle');
+    if (access === 'foreign') return failure(res, 403, 'foreign-handle');
+    // Only a send that would reach FCM spends the shared budget, so guessed or foreign handles cannot use it up.
+    // Check global rate limit BEFORE binding or running #makeRoomFor eviction so 429s never mutate state.
+    const global = this.#take([[this.#sendGlobal, '*']]);
+    if (!global.ok) return failure(res, 429, 'rate-limited', global.retryAfterSecs);
     const bound = await this.#store.bind(handle, serverId, this.#now());
     if (bound.kind === 'unknown') return failure(res, 404, 'unknown-handle');
     if (bound.kind === 'foreign') return failure(res, 403, 'foreign-handle');
-    // Only a send that would reach FCM spends the shared budget, so guessed or foreign handles cannot use it up.
-    const global = this.#take([[this.#sendGlobal, '*']]);
-    if (!global.ok) return failure(res, 429, 'rate-limited', global.retryAfterSecs);
     const result = await this.#sender.send(bound.fcmToken, { v: '1', h: handle, p: payload });
     switch (result.kind) {
       case 'sent':
