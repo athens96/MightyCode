@@ -1,11 +1,14 @@
-// The remote screen is Android-only in this beta. Its native libraries are kept out of the
-// iOS build entirely, so a missing pod or an iOS-incompatible release can never break it:
-// react-native-webrtc, react-native-zstd, and react-native-nitro-modules (which only
-// react-native-zstd uses). The JavaScript side loads them lazily and never on iOS.
+// Screen share has been paused since 0.4.58, and react-native-reanimated / react-native-worklets
+// are unused in app code (kept in package.json only to satisfy expo-router's peer dependency tree
+// and package-lock.json sync). Keep their native modules excluded from autolinking on both iOS and
+// Android so release builds do not bundle unused native binaries while keeping screen-share JS code
+// and tests intact for future re-enablement.
 module.exports = {
   dependencies: {
-    'react-native-webrtc': { platforms: { ios: null } },
-    'react-native-zstd': { platforms: { ios: null } },
-    'react-native-nitro-modules': { platforms: { ios: null } },
+    'react-native-webrtc': { platforms: { ios: null, android: null } },
+    'react-native-zstd': { platforms: { ios: null, android: null } },
+    'react-native-nitro-modules': { platforms: { ios: null, android: null } },
+    'react-native-reanimated': { platforms: { ios: null, android: null } },
+    'react-native-worklets': { platforms: { ios: null, android: null } },
   },
 };

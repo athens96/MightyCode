@@ -1,6 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 
-import type { SecretStore } from '@/lib/host-secrets';
+import { setSecretItem, type SecretStore } from '@/lib/host-secrets';
 import { PUSH_KINDS, type PushKind } from '@/lib/push/message';
 
 /** SecureStore key for the phone's notification settings. */
@@ -81,7 +81,7 @@ export function createPushSettings(store: SecretStore) {
       current = change(current);
       const saved = readFailed
         ? Promise.resolve()
-        : store.setItemAsync(PUSH_SETTINGS_KEY, JSON.stringify(current)).catch(() => undefined);
+        : setSecretItem(store, PUSH_SETTINGS_KEY, JSON.stringify(current)).catch(() => undefined);
       tell();
       await saved;
     };

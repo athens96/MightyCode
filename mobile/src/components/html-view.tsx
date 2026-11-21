@@ -21,6 +21,7 @@ export function HtmlView({ html }: { html: string }) {
     <WebView
       source={{ html, baseUrl: HTML_BASE_URL }}
       originWhitelist={['*']}
+      javaScriptEnabled={false}
       onShouldStartLoadWithRequest={allow}
       setSupportMultipleWindows={false}
       allowFileAccess={false}

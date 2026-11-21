@@ -23,8 +23,10 @@ export interface OfflineRetryOptions {
   unreachable: () => string[];
   /** Probes one host again, leaving its row as it is until the answer arrives. */
   refresh: (id: string) => Promise<void>;
-  /** Calls `listener` whenever `unreachable` may answer differently; returns the unsubscribe. */
+  /** Calls `listener` whenever `unreachable` or `isActive` may answer differently; returns the unsubscribe. */
   subscribe: (listener: () => void) => () => void;
+  /** While false (e.g. app backgrounded), retry timers stay paused without probing. */
+  isActive?: () => boolean;
   minMs?: number;
   maxMs?: number;
 }
@@ -52,7 +54,7 @@ export function retryUnreachableHosts(options: OfflineRetryOptions): () => void 
   const schedule = () => {
     if (timer) clearTimeout(timer);
     timer = undefined;
-    if (stopped) return;
+    if (stopped || (options.isActive && !options.isActive())) return;
     const down = new Set(options.unreachable());
     // A host that is back — or that someone else is checking — starts short next time.
     for (const id of backoff.keys()) if (!down.has(id)) backoff.delete(id);
@@ -65,6 +67,7 @@ export function retryUnreachableHosts(options: OfflineRetryOptions): () => void 
 
   const probeDue = () => {
     timer = undefined;
+    if (stopped || (options.isActive && !options.isActive())) return;
     const now = Date.now();
     for (const [id, entry] of backoff) {
       if (probing.has(id) || entry.due > now) continue;

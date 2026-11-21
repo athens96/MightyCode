@@ -1,3 +1,4 @@
+import { File, Paths } from 'expo-file-system';
 import { generateClientId } from '@/lib/device-token';
 
 /**
@@ -19,11 +20,32 @@ export const CLIENT_ID_KEY = 'mightyclaude.clientId.v1';
  */
 export const HOST_CLIENT_ID_PREFIX = 'mightyclaude.clientId.v1.host.';
 
+export interface SecretStoreWriteOptions {
+  keychainAccessible?: number;
+}
+
 /** The part of `expo-secure-store` these helpers use. */
 export interface SecretStore {
   getItemAsync(key: string): Promise<string | null>;
-  setItemAsync(key: string, value: string): Promise<void>;
+  setItemAsync(key: string, value: string, options?: SecretStoreWriteOptions): Promise<void>;
   deleteItemAsync(key: string): Promise<void>;
+  readonly AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY?: number;
+}
+
+/**
+ * iOS Keychain accessibility for secrets read by background push / headless handlers while
+ * the device is locked after first unlock. Guarded so Jest mocks without the native constant
+ * pass no options object.
+ */
+export function backgroundKeychainOptions(store?: SecretStore): SecretStoreWriteOptions | undefined {
+  const accessible = store?.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY;
+  return typeof accessible === 'number' ? { keychainAccessible: accessible } : undefined;
+}
+
+/** Writes `value` under `key` with `AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY` when supported. */
+export function setSecretItem(store: SecretStore, key: string, value: string): Promise<void> {
+  const options = backgroundKeychainOptions(store);
+  return options ? store.setItemAsync(key, value, options) : store.setItemAsync(key, value);
 }
 
 /** The install's `clientId`, generating and storing one the first time it is asked for. */
@@ -34,7 +56,7 @@ export async function ensureClientId(
   const existing = await store.getItemAsync(CLIENT_ID_KEY);
   if (existing && existing.length > 0) return existing;
   const created = make();
-  await store.setItemAsync(CLIENT_ID_KEY, created);
+  await setSecretItem(store, CLIENT_ID_KEY, created);
   return created;
 }
 
@@ -58,7 +80,7 @@ export async function mintHostClientId(
   make: () => string = generateClientId,
 ): Promise<string> {
   const created = make();
-  await store.setItemAsync(`${HOST_CLIENT_ID_PREFIX}${hostId}`, created);
+  await setSecretItem(store, `${HOST_CLIENT_ID_PREFIX}${hostId}`, created);
   return created;
 }
 
@@ -97,13 +119,13 @@ export async function writeHostSecrets(
   secrets: HostSecrets,
 ): Promise<void> {
   if (secrets.deviceToken) {
-    await store.setItemAsync(`${DEVICE_TOKEN_PREFIX}${hostId}`, secrets.deviceToken);
+    await setSecretItem(store, `${DEVICE_TOKEN_PREFIX}${hostId}`, secrets.deviceToken);
     await store.deleteItemAsync(`${PAIRING_KEY_PREFIX}${hostId}`);
     return;
   }
   await store.deleteItemAsync(`${DEVICE_TOKEN_PREFIX}${hostId}`);
   if (secrets.pairingKey) {
-    await store.setItemAsync(`${PAIRING_KEY_PREFIX}${hostId}`, secrets.pairingKey);
+    await setSecretItem(store, `${PAIRING_KEY_PREFIX}${hostId}`, secrets.pairingKey);
   } else {
     await store.deleteItemAsync(`${PAIRING_KEY_PREFIX}${hostId}`);
   }
@@ -132,4 +154,76 @@ export async function forgetHostSecrets(store: SecretStore, hostId: string): Pro
 export async function forgetHost(store: SecretStore, hostId: string): Promise<void> {
   await forgetHostSecrets(store, hostId);
   await store.deleteItemAsync(`${HOST_CLIENT_ID_PREFIX}${hostId}`);
+}
+
+// ------------------------------------------------ paired-hosts metadata index
+
+/** Legacy SecureStore key; migrated once to `HOST_INDEX_FILENAME` on read. */
+export const INDEX_KEY = 'mightyclaude.hosts.v2.index';
+/** Private document file holding the non-secret paired-hosts JSON array (no 2048-byte cap). */
+export const HOST_INDEX_FILENAME = 'hosts.v2.index.json';
+
+export interface HostIndexStorage {
+  read(): Promise<string | null>;
+  write(text: string): Promise<void>;
+}
+
+function indexFile(suffix = ''): File {
+  return new File(Paths.document, `${HOST_INDEX_FILENAME}${suffix}`);
+}
+
+/**
+ * Paired-hosts index stored atomically in the app's private document directory, matching the
+ * pattern of `workspace-mute.ts` (write to `.tmp`, then atomic `moveSync` with overwrite).
+ */
+export const documentHostIndexStorage: HostIndexStorage = {
+  read: async () => {
+    if (!Paths?.document || typeof File !== 'function') return null;
+    const file = indexFile();
+    return file.exists ? file.text() : null;
+  },
+  write: async (text) => {
+    if (!Paths?.document || typeof File !== 'function') {
+      throw new Error('FileSystem document directory unavailable');
+    }
+    const temp = indexFile('.tmp');
+    if (temp.exists) temp.delete();
+    temp.create();
+    temp.write(text);
+    temp.moveSync(indexFile(), { overwrite: true });
+  },
+};
+
+/**
+ * Reads the paired-hosts index from `files`. When the file does not yet exist, checks legacy
+ * `SecureStore.getItemAsync(INDEX_KEY)`: if present, persists it to `files` and deletes the
+ * legacy SecureStore entry only after the file write succeeds.
+ */
+export async function readHostIndex(
+  store: SecretStore,
+  files: HostIndexStorage = documentHostIndexStorage,
+): Promise<string | null> {
+  try {
+    const existing = await files.read();
+    if (existing !== null) return existing;
+  } catch {
+    // Fall through to legacy SecureStore read if the document file is unreadable.
+  }
+  const legacy = await store.getItemAsync(INDEX_KEY);
+  if (legacy === null) return null;
+  try {
+    await files.write(legacy);
+    await store.deleteItemAsync(INDEX_KEY).catch(() => undefined);
+  } catch {
+    // Keep legacy SecureStore entry intact so migration retries on the next load.
+  }
+  return legacy;
+}
+
+/** Writes the paired-hosts index to `files` (never to SecureStore). */
+export async function writeHostIndex(
+  text: string,
+  files: HostIndexStorage = documentHostIndexStorage,
+): Promise<void> {
+  await files.write(text);
 }

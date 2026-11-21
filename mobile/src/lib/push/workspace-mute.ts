@@ -2,7 +2,7 @@ import { File, Paths } from 'expo-file-system';
 import * as SecureStore from 'expo-secure-store';
 
 import type { MobileState } from '@/api/types';
-import type { SecretStore } from '@/lib/host-secrets';
+import { setSecretItem, type SecretStore } from '@/lib/host-secrets';
 import type { PushMessage } from '@/lib/push/message';
 
 /**
@@ -252,7 +252,7 @@ export function createWorkspaceMute({
         tell();
         const key = MUTED_PREFIX + storageId;
         try {
-          await (next.length === 0 ? store.deleteItemAsync(key) : store.setItemAsync(key, JSON.stringify(next)));
+          await (next.length === 0 ? store.deleteItemAsync(key) : setSecretItem(store, key, JSON.stringify(next)));
           return true;
         } catch {
           if (muted.get(storageId) === next) {

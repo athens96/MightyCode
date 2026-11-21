@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react';
+import { AppState } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
+import { peekHostConnection } from '@/api/client';
 import { appForeground } from '@/api/relay/foreground';
 import { Tabs } from 'expo-router/js-tabs';
 import { HostPoller } from '@/components/host-poller';
@@ -45,12 +47,24 @@ export default function TabsLayout() {
     useCallback(
       () =>
         retryUnreachableHosts({
+          isActive: () => AppState.currentState === 'active',
           unreachable: () => {
             const state = useHostsStore.getState();
-            return unreachableHostIds(state.hosts, state.status);
+            // Skip hosts that already have an active pooled RelayConnection retrying on its own
+            // so we never open duplicate unpooled `probeHost()` WebSockets alongside HostPoller.
+            return unreachableHostIds(state.hosts, state.status).filter(
+              (id) => !peekHostConnection(id)?.retrying,
+            );
           },
           refresh: (id) => useHostsStore.getState().refreshReachability(id, { quiet: true }),
-          subscribe: (listener) => useHostsStore.subscribe(listener),
+          subscribe: (listener) => {
+            const unsubscribeStore = useHostsStore.subscribe(listener);
+            const appStateSub = AppState.addEventListener('change', listener);
+            return () => {
+              unsubscribeStore();
+              appStateSub.remove();
+            };
+          },
         }),
       [],
     ),

@@ -20,7 +20,9 @@ import {
   forgetHostSecrets,
   mintHostClientId,
   readHostClientId,
+  readHostIndex,
   readHostSecrets,
+  writeHostIndex,
   writeHostSecrets,
   type HostSecrets,
 } from '@/lib/host-secrets';
@@ -31,8 +33,6 @@ import { forgetPushHandle, globalPushFetch } from '@/lib/push/registry';
 import { workspaceMute } from '@/lib/push/workspace-mute';
 import { forgetControlKey } from '@/lib/screen-share/control-key';
 import { nativeControlKey } from '@/lib/screen-share/native-control-key';
-
-const INDEX_KEY = 'mightyclaude.hosts.v2.index';
 
 type HostRemovalListener = (id: string) => void;
 const hostRemovalListeners = new Set<HostRemovalListener>();
@@ -272,7 +272,7 @@ export const useHostsStore = create<HostsState>((set, get) => ({
 
   load: async (options) => {
     const clientId = await ensureClientId(SecureStore);
-    const hosts = parseIndex(await SecureStore.getItemAsync(INDEX_KEY));
+    const hosts = parseIndex(await readHostIndex(SecureStore));
     const keys: Record<string, string> = {};
     const tokens: Record<string, string> = {};
     const clientIds: Record<string, string> = {};
@@ -320,7 +320,7 @@ export const useHostsStore = create<HostsState>((set, get) => ({
       ? { deviceToken: info.deviceToken }
       : { pairingKey: payload.pairingKey };
     await writeHostSecrets(SecureStore, id, secrets);
-    await SecureStore.setItemAsync(INDEX_KEY, JSON.stringify(hosts));
+    await writeHostIndex(JSON.stringify(hosts));
     closeHostClient(id);
     set((prev) => {
       const keys = { ...prev.keys };
@@ -343,7 +343,7 @@ export const useHostsStore = create<HostsState>((set, get) => ({
     const current = get().hosts.find((entry) => entry.id === id);
     if (!current || sameEndpoints(current.directEndpoints, endpoints)) return;
     const hosts = get().hosts.map((entry) => (entry.id === id ? withDirectEndpoints(entry, endpoints) : entry));
-    await SecureStore.setItemAsync(INDEX_KEY, JSON.stringify(hosts));
+    await writeHostIndex(JSON.stringify(hosts));
     set({ hosts });
   },
 
@@ -408,7 +408,7 @@ export const useHostsStore = create<HostsState>((set, get) => ({
     await forgetHost(SecureStore, id);
     // The screen-share control key belongs to this pairing and goes with it.
     await forgetControlKey({ hostId: id, native: nativeControlKey() });
-    await SecureStore.setItemAsync(INDEX_KEY, JSON.stringify(hosts));
+    await writeHostIndex(JSON.stringify(hosts));
     set((prev) => {
       const keys = { ...prev.keys };
       const tokens = { ...prev.tokens };
@@ -447,6 +447,11 @@ export const useHostsStore = create<HostsState>((set, get) => ({
           [id]: { reachability: 'online', detail: pooled.info?.hostName, route: pooled.route },
         },
       }));
+      return;
+    }
+    // A quiet background retry does not open a duplicate unpooled probe socket while a
+    // pooled RelayConnection is already dialling or backing off to reconnect for this host.
+    if (options?.quiet && pooled?.retrying) {
       return;
     }
     if (!options?.quiet) {

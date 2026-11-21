@@ -1,4 +1,4 @@
-import { probeHost } from '@/api/client';
+import { peekHostConnection, probeHost } from '@/api/client';
 import {
   RETRY_MAX_MS,
   RETRY_MIN_MS,
@@ -15,7 +15,7 @@ jest.mock('expo-secure-store', () => ({
 jest.mock('@/api/client', () => ({
   closeHostClient: jest.fn(),
   describeError: (error: unknown) => String(error),
-  peekHostConnection: () => undefined,
+  peekHostConnection: jest.fn(() => undefined),
   probeHost: jest.fn(),
 }));
 
@@ -150,6 +150,37 @@ describe('retryUnreachableHosts', () => {
     list.set('other', true);
     expect(jest.getTimerCount()).toBe(0);
   });
+
+  it('pauses timers while inactive (backgrounded) and resumes when returning to active', async () => {
+    const list = fakeList('mac');
+    const refresh = jest.fn(async () => undefined);
+    let active = false;
+    const stop = retryUnreachableHosts({
+      ...list,
+      isActive: () => active,
+      refresh,
+    });
+
+    // Backgrounded initially: no timer scheduled, no probes run.
+    expect(jest.getTimerCount()).toBe(0);
+    await jest.advanceTimersByTimeAsync(RETRY_MAX_MS * 4);
+    expect(refresh).not.toHaveBeenCalled();
+
+    // Returning to active schedules and runs the retry probe.
+    active = true;
+    for (const listener of list.listeners) listener();
+    expect(jest.getTimerCount()).toBe(1);
+    await jest.advanceTimersByTimeAsync(RETRY_MIN_MS);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    // Moving back to background clears pending timers immediately.
+    active = false;
+    for (const listener of list.listeners) listener();
+    expect(jest.getTimerCount()).toBe(0);
+    await jest.advanceTimersByTimeAsync(RETRY_MAX_MS * 4);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    stop();
+  });
 });
 
 describe('the list probe that retries in the background', () => {
@@ -163,6 +194,24 @@ describe('the list probe that retries in the background', () => {
     appVersion: '1.0.0',
     pairedAt: '2026-09-29T00:00:00.000Z',
   };
+
+  beforeEach(() => {
+    (peekHostConnection as jest.Mock).mockReturnValue(undefined);
+    (probeHost as jest.Mock).mockReset();
+  });
+
+  it('skips opening a duplicate unpooled probeHost() socket during quiet retries when a pooled tunnel is already retrying', async () => {
+    (peekHostConnection as jest.Mock).mockReturnValue({ state: 'closed', retrying: true });
+    useHostsStore.setState({
+      hosts: [host],
+      keys: { mac: 'pairing-key' },
+      tokens: {},
+      status: { mac: { reachability: 'offline', detail: 'down' } },
+    });
+
+    await useHostsStore.getState().refreshReachability('mac', { quiet: true });
+    expect(probeHost).not.toHaveBeenCalled();
+  });
 
   it('leaves an offline row as it is while the probe runs, where a pull shows "checking"', async () => {
     let fail: (error: unknown) => void = () => undefined;

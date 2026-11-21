@@ -116,6 +116,7 @@ describe('an HTML file on the file screen', () => {
     await flush(); await flush();
     expect(webViews(view!)).toHaveLength(1);
     expect(webViews(view!)[0]!.props.allowFileAccess).toBe(false);
+    expect(webViews(view!)[0]!.props.javaScriptEnabled).toBe(false);
     expect(htmlNavigation('about:blank', true)).toBe('stay');
     expect(htmlNavigation('about:blank#top', true)).toBe('stay');
     expect(htmlNavigation('https://example.com/x', true)).toBe('browser');

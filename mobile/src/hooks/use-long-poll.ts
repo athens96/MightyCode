@@ -1,10 +1,16 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { describeError, isAbortError, needsRepair } from '@/api/client';
 import { appForeground } from '@/api/relay/foreground';
 import type { RelayState } from '@/api/relay/transport';
 import { nextBackoff } from '@/lib/merge';
 import { isFreshAnswer, relayCameBack } from '@/lib/resync';
+
+function isAppActive(): boolean {
+  const state = AppState?.currentState;
+  return state === undefined ? true : state === 'active';
+}
 
 export interface LongPollOptions<T> {
   /** Poll only while true; also gates on screen focus. */
@@ -43,6 +49,7 @@ export function useLongPoll<T>(options: LongPollOptions<T>): LongPollHandle {
   const [repairNeeded, setRepairNeeded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [generation, setGeneration] = useState(0);
+  const [appActive, setAppActive] = useState<boolean>(() => isAppActive());
 
   const latest = useRef({ fetchPage, revisionOf, onData, subscribe });
   latest.current = { fetchPage, revisionOf, onData, subscribe };
@@ -50,6 +57,17 @@ export function useLongPoll<T>(options: LongPollOptions<T>): LongPollHandle {
   const refresh = useCallback(() => {
     setGeneration((value) => value + 1);
   }, []);
+
+  useEffect(() => {
+    if (typeof AppState?.addEventListener !== 'function') return undefined;
+    setAppActive(isAppActive());
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      setAppActive(nextState === 'active');
+    });
+    return () => subscription?.remove?.();
+  }, []);
+
+  const active = enabled && appActive;
 
   useFocusEffect(
     useCallback(() => {
@@ -70,7 +88,7 @@ export function useLongPoll<T>(options: LongPollOptions<T>): LongPollHandle {
 
   useFocusEffect(
     useCallback(() => {
-      if (!enabled) {
+      if (!active) {
         setLoading(false);
         return undefined;
       }
@@ -140,7 +158,7 @@ export function useLongPoll<T>(options: LongPollOptions<T>): LongPollHandle {
         controller?.abort();
       };
       // Callbacks are read through `latest`, so identity changes do not restart the loop.
-    }, [enabled, generation]),
+    }, [active, generation]),
   );
 
   return { error, loading, needsRepair: repairNeeded, refresh };

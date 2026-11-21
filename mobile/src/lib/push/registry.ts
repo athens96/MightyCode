@@ -1,6 +1,6 @@
 import { ApiError, type MobileClient } from '@/api/client';
 import { hasCapability, parseCapabilities } from '@/lib/capabilities';
-import type { SecretStore } from '@/lib/host-secrets';
+import { setSecretItem, type SecretStore } from '@/lib/host-secrets';
 import { createKeyedMutex } from '@/lib/keyed-mutex';
 import type { PushKind } from '@/lib/push/message';
 
@@ -95,7 +95,7 @@ async function save(
   storageId: string,
   record: PushHandleRecord,
 ): Promise<PushHandleRecord> {
-  await store.setItemAsync(PUSH_HANDLE_PREFIX + storageId, JSON.stringify(record));
+  await setSecretItem(store, PUSH_HANDLE_PREFIX + storageId, JSON.stringify(record));
   return record;
 }
 

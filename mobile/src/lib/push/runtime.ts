@@ -17,6 +17,7 @@ import notifee, {
 
 import type { MobileClient } from '@/api/client';
 import { hasCapability, parseCapabilities } from '@/lib/capabilities';
+import { setSecretItem } from '@/lib/host-secrets';
 import { answerFromNotification } from '@/lib/push/actions';
 import { isDeviceLocked } from '@/lib/push/device-lock';
 import { loadedHosts, withHostClient } from '@/lib/push/host-lease';
@@ -222,7 +223,7 @@ export async function handleNotificationEvent({ type, detail }: Event, open?: (p
 async function askOnce(): Promise<void> {
   if (Platform.OS !== 'android' || Number(Platform.Version) < 33) return;
   if ((await SecureStore.getItemAsync(ASKED_KEY)) === '1') return;
-  await SecureStore.setItemAsync(ASKED_KEY, '1');
+  await setSecretItem(SecureStore, ASKED_KEY, '1');
   await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
 }
 

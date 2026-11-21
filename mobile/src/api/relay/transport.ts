@@ -231,6 +231,18 @@ export interface ForegroundSignal {
   subscribe(listener: () => void): () => void;
 }
 
+/** Network interface/reachability change reported by `expo-network` (or a test double). */
+export interface NetworkChangeEvent {
+  type?: string;
+  isConnected?: boolean;
+  isInternetReachable?: boolean;
+}
+
+/** Fires whenever the device's network type or reachability transitions. */
+export interface NetworkSignal {
+  subscribe(listener: (event: NetworkChangeEvent) => void): () => void;
+}
+
 /** The right to spend a host's pairing key, and the freshest state to spend it with. */
 export interface AuthLease {
   auth: DeviceAuthState;
@@ -245,6 +257,10 @@ export interface RelayConnectionOptions {
   autoReconnect?: boolean;
   createSocket?: RelaySocketFactory;
   foreground?: ForegroundSignal;
+  /** Overrides the default `expo-network` listener; pass `null` to disable network recovery. */
+  network?: NetworkSignal | null;
+  /** Reports whether the app is currently foregrounded (defaults to `AppState.currentState === 'active'`). */
+  isForeground?: () => boolean;
   requestTimeoutMs?: number;
   /** Overrides `FOREGROUND_PROBE_MS`. */
   probeTimeoutMs?: number;
@@ -286,6 +302,59 @@ function defaultSocketFactory(url: string): RelaySocket {
   const Ctor = (globalThis as { WebSocket?: new (url: string) => RelaySocket }).WebSocket;
   if (!Ctor) throw new RelayError('relay-unreachable', undefined, t('phone.relay.noWebSocket'));
   return new Ctor(url);
+}
+
+/**
+ * Checks whether the app is currently foregrounded. Guarded so pure Node Jest tests without a
+ * React Native `AppState` native module still default to foregrounded.
+ */
+function defaultIsForeground(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const rn = require('react-native') as { AppState?: { currentState?: string } };
+    const state = rn?.AppState?.currentState;
+    return state === undefined || state === 'active';
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Subscribes to `expo-network`'s `addNetworkStateListener` when the native module is available.
+ * Guarded so Node Jest tests work cleanly without requiring a native `ExpoNetwork` module.
+ */
+function subscribeExpoNetwork(
+  listener: (event: NetworkChangeEvent) => void,
+): (() => void) | undefined {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const network = require('expo-network') as {
+      addNetworkStateListener?: (
+        cb: (event: NetworkChangeEvent) => void,
+      ) => { remove?: () => void };
+    };
+    if (typeof network?.addNetworkStateListener !== 'function') return undefined;
+    const subscription = network.addNetworkStateListener(listener);
+    return () => {
+      try {
+        subscription?.remove?.();
+      } catch {
+        // Ignore teardown errors when native module is absent.
+      }
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function networkKeyOf(event: NetworkChangeEvent): string {
+  return `${event.type ?? ''}:${String(event.isConnected ?? '')}:${String(event.isInternetReachable ?? '')}`;
+}
+
+function isNetworkReachable(event: NetworkChangeEvent): boolean {
+  if (event.isConnected === false || event.isInternetReachable === false) return false;
+  if (event.type === 'NONE') return false;
+  return true;
 }
 
 function toBytes(data: unknown): Uint8Array | undefined {
@@ -368,6 +437,8 @@ export class RelayConnection {
   private authFailure: RelayFailure | undefined;
   private authRejection: AuthRejection | undefined;
   private unsubscribeForeground: (() => void) | undefined;
+  private unsubscribeNetwork: (() => void) | undefined;
+  private lastNetworkKey: string | undefined;
   /** Held from the moment the pairing key goes out until the host has answered. */
   private authLease: (() => void) | undefined;
   /** `device-conflict` buys exactly one more attempt, under a fresh id. */
@@ -396,6 +467,7 @@ export class RelayConnection {
   private readonly onDirectEndpoints: ((endpoints: string[]) => void) | undefined;
   private readonly onRoute: ((route: ConnectionRoute) => void) | undefined;
   private readonly onAwaitingApproval: ((seconds: number) => void) | undefined;
+  private readonly isForeground: () => boolean;
 
   constructor(
     private readonly target: RelayTarget,
@@ -415,6 +487,7 @@ export class RelayConnection {
     this.onDirectEndpoints = options.onDirectEndpoints;
     this.onRoute = options.onRoute;
     this.onAwaitingApproval = options.onAwaitingApproval;
+    this.isForeground = options.isForeground ?? defaultIsForeground;
     this.directEndpoints = [...(target.directEndpoints ?? [])];
     this.auth = {
       clientId: target.clientId,
@@ -423,6 +496,11 @@ export class RelayConnection {
     };
     if (options.foreground) {
       this.unsubscribeForeground = options.foreground.subscribe(() => this.onForeground());
+    }
+    if (this.autoReconnect && options.network !== null) {
+      this.unsubscribeNetwork = options.network
+        ? options.network.subscribe((event) => this.onNetworkChange(event))
+        : subscribeExpoNetwork((event) => this.onNetworkChange(event));
     }
     this.connect();
   }
@@ -452,6 +530,13 @@ export class RelayConnection {
   /** How the open tunnel reached the host; undefined while it is not open. */
   get route(): ConnectionRoute | undefined {
     return this.currentState === 'ready' ? this.attemptRoute : undefined;
+  }
+
+  /** True while this tunnel is live, dialling, or automatically retrying on its own. */
+  get retrying(): boolean {
+    if (this.disposed) return false;
+    if (this.currentState !== 'closed') return true;
+    return this.autoReconnect && !isFinalFailure(this.currentFailure);
   }
 
   onNotify(listener: (event: RelayNotification) => void): () => void {
@@ -549,6 +634,21 @@ export class RelayConnection {
     else this.reconnectNow();
   }
 
+  /**
+   * The network interface or reachability transitioned (e.g. Wi-Fi ↔ cellular, or offline →
+   * online). While foregrounded, trigger an immediate ping probe on a `ready` tunnel or cancel
+   * reconnect backoff immediately instead of waiting up to `PONG_DEADLINE_MS` (60 s).
+   */
+  private onNetworkChange(event: NetworkChangeEvent): void {
+    if (this.disposed || !this.autoReconnect) return;
+    const key = networkKeyOf(event);
+    if (key === this.lastNetworkKey) return;
+    this.lastNetworkKey = key;
+    if (!this.isForeground() || !isNetworkReachable(event)) return;
+    if (this.socket && this.currentState === 'ready') this.probe();
+    else this.reconnectNow();
+  }
+
   private probe(): void {
     const socket = this.socket;
     if (!socket || this.probeTimer) return;
@@ -568,6 +668,8 @@ export class RelayConnection {
     this.disposed = true;
     this.unsubscribeForeground?.();
     this.unsubscribeForeground = undefined;
+    this.unsubscribeNetwork?.();
+    this.unsubscribeNetwork = undefined;
     this.teardown(new RelayError('closed'));
     this.setState('closed');
     this.notifyListeners.clear();
