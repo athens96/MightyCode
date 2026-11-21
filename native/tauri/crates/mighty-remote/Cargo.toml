@@ -32,7 +32,7 @@ serde_json.workspace = true
 indexmap = { workspace = true, features = ["serde"] }
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "io-util", "net"] }
 sha2.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 getrandom = "0.3"
 uuid.workspace = true
 url = "2"

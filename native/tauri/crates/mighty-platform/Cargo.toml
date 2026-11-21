@@ -13,7 +13,7 @@ tokio = { workspace = true, features = ["sync", "io-util", "time", "macros"] }
 # relay secret's base64 (pairing/identity_file.rs, W8-A).
 serde.workspace = true
 serde_json.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 # Mac stage M-B: the Mac's four pairing files (pairing/four_files.rs) make a missing part as Swift does (random bytes) and write the
 # relay key pair's public key (X25519 of the secret), as mighty-remote's relay already does.
 getrandom = "0.3"

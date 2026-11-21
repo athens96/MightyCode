@@ -27,7 +27,7 @@ chrono.workspace = true
 regex.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "io-util"] }
 url = "2"
-base64 = "0.22"
+base64 = "0.23"
 # W6 Step 0 listed it for every part; nothing here hashes yet.
 sha2.workspace = true
 

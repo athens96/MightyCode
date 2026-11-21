@@ -2244,7 +2244,7 @@ dependencies = [
 name = "mighty-accounts"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "mighty-core",
  "mighty-native",
@@ -2283,7 +2283,7 @@ dependencies = [
 name = "mighty-composer"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "encoding_rs",
  "mighty-core",
@@ -2335,7 +2335,7 @@ dependencies = [
 name = "mighty-files"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "encoding_rs",
  "image",
@@ -2408,7 +2408,7 @@ dependencies = [
 name = "mighty-platform"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "getrandom 0.3.4",
  "serde",
  "serde_json",
@@ -2420,7 +2420,7 @@ dependencies = [
 name = "mighty-platform-macos"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "block2",
  "core-foundation",
  "core-graphics",
@@ -2451,7 +2451,7 @@ dependencies = [
 name = "mighty-platform-windows"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "dirs",
  "getrandom 0.3.4",
  "mighty-platform",
@@ -2472,7 +2472,7 @@ dependencies = [
 name = "mighty-remote"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chacha20poly1305",
  "chrono",
  "futures-util",
@@ -2515,7 +2515,7 @@ dependencies = [
 name = "mighty-run"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "bytes",
  "chrono",
  "getrandom 0.3.4",
@@ -2560,7 +2560,7 @@ dependencies = [
 name = "mighty-terminal"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "mighty-core",
  "mighty-platform",
  "mighty-platform-macos",
@@ -2602,7 +2602,7 @@ dependencies = [
 name = "mighty-updates"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "ed25519-dalek",
  "flate2",
@@ -2647,7 +2647,7 @@ dependencies = [
 name = "mightycode"
 version = "0.5.8"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "indexmap 2.14.2",
  "mighty-accounts",
