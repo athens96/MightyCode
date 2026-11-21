@@ -1,11 +1,12 @@
 #!/bin/bash
-# Proves the release size gate with real files: a 479 MiB package passes, a 481 MiB
-# package fails, the 480 MiB boundary itself passes, and a missing package fails. The
+# Proves the release size gate with real files: a 279 MiB package passes, a 281 MiB
+# package fails, the 280 MiB boundary itself passes, and a missing package fails. The
 # fixtures are sparse (created by seeking, so they occupy almost no disk) but carry the
-# apparent length the gate and the updater both measure.
+# apparent length the gate, R2 upload limit (300 MiB) and updater (512 MiB) all measure.
 #
 # It also checks that the macOS release steps in docs/app-update.md and the macOS
-# release workflow call the gate before anything is uploaded.
+# release workflow call the gate before anything is uploaded, and that the Windows
+# Tauri packager enforces the 280 MiB cap on both the ZIP and the setup installer.
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -25,39 +26,40 @@ trap cleanup EXIT
 
 sparse() {
   # $1 = path, $2 = size in MiB. bs=1 count=0 with a seek writes nothing and leaves a
-  # hole, so a 481 MiB fixture costs no real bytes.
+  # hole, so a 281 MiB fixture costs no real bytes.
   dd if=/dev/zero of="$1" bs=1 count=0 seek=$(( $2 * MIB )) 2>/dev/null
   actual="$(stat -f%z "$1" 2>/dev/null || stat -c%s "$1")"
   [ "$actual" -eq $(( $2 * MIB )) ] || fail "fixture $1 is $actual bytes, wanted $(( $2 * MIB ))"
 }
 
-# 1. 479 MiB passes.
-under="$WORK/MightyCode-macos-479.zip"
-sparse "$under" 479
+# 1. 279 MiB passes.
+under="$WORK/MightyCode-macos-279.zip"
+sparse "$under" 279
 if ! out="$("$GATE" "$under" 2>&1)"; then
-  fail "the gate rejected a 479 MiB package: $out"
+  fail "the gate rejected a 279 MiB package: $out"
 fi
-grep -q "479.0 MiB" <<<"$out" || fail "the gate did not report the 479 MiB size: $out"
-grep -q "^PASS:" <<<"$out" || fail "the gate did not pass a 479 MiB package: $out"
+grep -q "279.0 MiB" <<<"$out" || fail "the gate did not report the 279 MiB size: $out"
+grep -q "^PASS:" <<<"$out" || fail "the gate did not pass a 279 MiB package: $out"
 
-# 2. 481 MiB fails, and says why.
-over="$WORK/MightyCode-macos-481.zip"
-sparse "$over" 481
+# 2. 281 MiB fails, and says why.
+over="$WORK/MightyCode-macos-281.zip"
+sparse "$over" 281
 if out="$("$GATE" "$over" 2>&1)"; then
-  fail "the gate accepted a 481 MiB package: $out"
+  fail "the gate accepted a 281 MiB package: $out"
 fi
-grep -q "481.0 MiB" <<<"$out" || fail "the failure did not report the 481 MiB size: $out"
-grep -q "480 MiB release gate" <<<"$out" || fail "the failure did not name the 480 MiB gate: $out"
+grep -q "281.0 MiB" <<<"$out" || fail "the failure did not report the 281 MiB size: $out"
+grep -q "280 MiB release gate" <<<"$out" || fail "the failure did not name the 280 MiB gate: $out"
+grep -q "300 MiB" <<<"$out" || fail "the failure did not name the 300 MiB R2 upload cap: $out"
 grep -q "512 MiB" <<<"$out" || fail "the failure did not name the 512 MiB updater cap: $out"
 
-# 3. The boundary belongs to the passing side: 480 MiB exactly is accepted, one byte
+# 3. The boundary belongs to the passing side: 280 MiB exactly is accepted, one byte
 #    more is not.
-boundary="$WORK/MightyCode-macos-480.zip"
-sparse "$boundary" 480
-"$GATE" "$boundary" >/dev/null 2>&1 || fail "the gate rejected exactly 480 MiB"
-dd if=/dev/zero of="$WORK/over-by-one.zip" bs=1 count=0 seek=$(( 480 * MIB + 1 )) 2>/dev/null
+boundary="$WORK/MightyCode-macos-280.zip"
+sparse "$boundary" 280
+"$GATE" "$boundary" >/dev/null 2>&1 || fail "the gate rejected exactly 280 MiB"
+dd if=/dev/zero of="$WORK/over-by-one.zip" bs=1 count=0 seek=$(( 280 * MIB + 1 )) 2>/dev/null
 if "$GATE" "$WORK/over-by-one.zip" >/dev/null 2>&1; then
-  fail "the gate accepted 480 MiB + 1 byte"
+  fail "the gate accepted 280 MiB + 1 byte"
 fi
 
 # 4. A single oversized package fails the whole run even when another one is fine.
@@ -86,10 +88,19 @@ WORKFLOW="$PROJECT_ROOT/.github/workflows/native-macos.yml"
 grep -qF 'scripts/check-release-size.sh' "$WORKFLOW" \
   || fail ".github/workflows/native-macos.yml does not call the release size gate"
 wf_gate_line="$(grep -n 'scripts/check-release-size.sh' "$WORKFLOW" | head -1 | cut -d: -f1)"
-wf_pack_line="$(grep -n 'ditto -c -k' "$WORKFLOW" | head -1 | cut -d: -f1)"
-wf_upload_line="$(awk -v start="$wf_pack_line" 'NR > start && /upload-artifact/ { print NR; exit }' "$WORKFLOW")"
+wf_pack_line="$(grep -nE 'scripts/build-tauri-macos\.sh|ditto -c -k' "$WORKFLOW" | head -1 | cut -d: -f1 || true)"
+wf_upload_line="$(awk -v start="${wf_pack_line:-0}" 'NR > start && /upload-artifact/ { print NR; exit }' "$WORKFLOW")"
 [ -n "$wf_pack_line" ] && [ -n "$wf_upload_line" ] || fail "cannot locate the packaging/upload steps in the macOS workflow"
 [ "$wf_gate_line" -gt "$wf_pack_line" ] || fail "the workflow gates the package before it is built"
 [ "$wf_gate_line" -lt "$wf_upload_line" ] || fail "the workflow uploads the package before gating its size"
 
-echo "PASS: the 480 MiB release size gate holds (479 MiB passes, 481 MiB fails) and runs before upload"
+# 7. The Windows Tauri packager must enforce the 280 MiB cap on both the ZIP and setup installer.
+WIN_BUILD="$PROJECT_ROOT/scripts/build-tauri-windows.ps1"
+grep -qF '280MB' "$WIN_BUILD" \
+  || fail "scripts/build-tauri-windows.ps1 does not enforce the 280 MiB cap"
+grep -qE '\$size\s+-gt\s+\$maxPackageBytes' "$WIN_BUILD" \
+  || fail "scripts/build-tauri-windows.ps1 does not gate the Windows ZIP size"
+grep -qE '\$setupSize\s+-gt\s+\$maxPackageBytes' "$WIN_BUILD" \
+  || fail "scripts/build-tauri-windows.ps1 does not gate the Windows setup.exe size"
+
+echo "PASS: the 280 MiB release size gate holds (279 MiB passes, 281 MiB fails) and runs before upload"

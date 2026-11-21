@@ -1,0 +1,126 @@
+name: Mobile, Relay & Scripts
+on:
+  push:
+    paths:
+      - 'relay/**'
+      - 'mobile/**'
+      - 'scripts/**'
+      - 'locales/**'
+      - 'docs/help/**'
+      - 'docs/app-update.md'
+      - 'NOTICE.md'
+      - 'licenses/**'
+      - 'native/licenses/**'
+      - '.github/workflows/mobile-relay-scripts.yml'
+      - '.github/workflows/native-macos.yml'
+      - '.github/workflows/release-manifest.yml'
+  pull_request:
+    paths:
+      - 'relay/**'
+      - 'mobile/**'
+      - 'scripts/**'
+      - 'locales/**'
+      - 'docs/help/**'
+      - 'docs/app-update.md'
+      - 'NOTICE.md'
+      - 'licenses/**'
+      - 'native/licenses/**'
+      - '.github/workflows/mobile-relay-scripts.yml'
+      - '.github/workflows/native-macos.yml'
+      - '.github/workflows/release-manifest.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  # Cancel superseded PR runs; never cancel pushes or dispatches on main.
+  group: mobile-relay-scripts-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || (github.ref == 'refs/heads/main' && github.run_id || github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  relay:
+    name: Relay (Node)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: relay/package-lock.json
+      - name: Install, build and test relay
+        working-directory: relay
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          npm test
+
+  relay-cloudflare:
+    name: Relay (Cloudflare Worker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: relay/cloudflare/package-lock.json
+      - name: Install, typecheck and test Cloudflare relay
+        working-directory: relay/cloudflare
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm test
+
+  mobile:
+    name: Mobile (Expo / React Native)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Install, typecheck and test mobile
+        working-directory: mobile
+        run: |
+          npm ci --no-audit --no-fund
+          npm run typecheck
+          npm test
+
+  scripts:
+    name: Scripts & quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install cryptography (hash-pinned) for release script tests
+        run: |
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --no-deps -r scripts/requirements-sign.txt
+      - name: Node script tests
+        run: node --test scripts/tests/check-locales.test.mjs scripts/tests/check-design-tokens.test.mjs scripts/tests/help-build.test.mjs
+      - name: Python script unit tests
+        env:
+          # ubuntu-latest's swiftc has no CryptoKit; sign with the hash-pinned cryptography package.
+          MIGHTY_SIGNER: cryptography
+        run: python3 -m unittest scripts/tests/test_release.py scripts/test_delegation_record.py
+      - name: Shell release & license gates
+        run: |
+          bash scripts/tests/test-release-size-gate.sh
+          bash scripts/tests/test-license-notices.sh

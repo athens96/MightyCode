@@ -71,8 +71,9 @@ const COMPLETE_LANGUAGES = LANGUAGE_CONFIG.complete;
 const TRANSLATIONS = LANGUAGE_CONFIG.translations;
 const LANGUAGES = [...COMPLETE_LANGUAGES, ...TRANSLATIONS];
 const PLACEHOLDER = /\{([A-Za-z][A-Za-z0-9]*)\}/g;
-// `t("key")` / `t('key')` (phone), `L("key")` (Swift), `Locale.Get("key")` (C#)
-const REFERENCE = /\b(?:t|L|Locale\.Get)\(\s*["']([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)["']/g;
+// `t("key")` / `t('key')` (phone, web), `L("key")` (Swift), `Locale.Get("key")` (C#),
+// `locale.get("key")` / `locale().get("key")` / `l.get("key")` / `Locale::new(...).get("key")` / `strings::get("key")` / `*.get_with("key")` (Rust)
+const REFERENCE = /(?:\b(?:t|L|Locale\.Get|(?:[A-Za-z0-9_]*locale|l)(?:\(\))?\s*\.get(?:_with)?|Locale::new\([^)]*\)\s*\.get(?:_with)?|strings::get(?:_with)?)|\.get_with)\(\s*["']([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+)["']/g;
 const HANGUL = /[ᄀ-ᇿ㄰-㆏가-힯]/;
 const HANGUL_CODE = (code) => (code >= 0x1100 && code <= 0x11ff) || (code >= 0x3130 && code <= 0x318f) || (code >= 0xac00 && code <= 0xd7af);
 // `\uAC00` (C#, TS) and `\u{AC00}` (Swift, TS) spelled in a source. An even run of backslashes

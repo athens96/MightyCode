@@ -1,12 +1,13 @@
 #!/bin/bash
-# Release size gate for the packages the Mac self-update downloads.
+# Release size gate for the release packages (Mac zip/dmg and self-update archives).
 #
-# The app refuses any package above 512 MiB (MightyCore AppUpdate.maximumPackageBytes),
-# so a release that grows past that is unusable: existing installs can never update to
-# it. The gate here stops well short of that cliff at 480 MiB, so a release that grows
-# between builds is caught before it becomes un-installable. 0.5 bundles no browser engine
-# (no in-app browser; web pages open in the default browser), so the zip sits far below
-# the gate; it stays a maximum, not a budget for any one part.
+# Wrangler's `r2 object put` refuses any single object above 300 MiB (scripts/release.py
+# MAX_UPLOAD_BYTES = 300 MiB), and the app refuses any self-update package above 512 MiB
+# (MightyCore AppUpdate.maximumPackageBytes). The R2 single-object upload ceiling is the
+# tighter cliff, so the gate here stops at 280 MiB (20 MiB headroom below the 300 MiB R2
+# limit), catching growth before a build fails to upload or becomes un-installable. 0.5
+# bundles no browser engine (no in-app browser; web pages open in the default browser), so
+# the zip sits far below the gate; it stays a maximum, not a budget for any one part.
 #
 # Usage:
 #   scripts/check-release-size.sh [package.zip ...]
@@ -15,7 +16,8 @@
 # before uploading anything to the release bucket (see docs/app-update.md).
 set -euo pipefail
 
-GATE_MIB=480
+GATE_MIB=280
+UPLOAD_CAP_MIB=300
 UPDATER_CAP_MIB=512
 MIB=1048576
 GATE_BYTES=$((GATE_MIB * MIB))
@@ -51,11 +53,11 @@ for path in "${packages[@]}"; do
   bytes="$(file_bytes "$path")"
   size="$(human_mib "$bytes")"
   if [ "$bytes" -gt "$GATE_BYTES" ]; then
-    echo "FAIL: $path is $size MiB, above the $GATE_MIB MiB release gate (updater cap $UPDATER_CAP_MIB MiB)." >&2
-    echo "      Shrink the package before upload; installs on the old version cannot update to it." >&2
+    echo "FAIL: $path is $size MiB, above the $GATE_MIB MiB release gate (R2 upload cap $UPLOAD_CAP_MIB MiB, updater cap $UPDATER_CAP_MIB MiB)." >&2
+    echo "      Shrink the package before upload; wrangler r2 object put refuses files over $UPLOAD_CAP_MIB MiB and installs cannot update past $UPDATER_CAP_MIB MiB." >&2
     failed=1
   else
-    echo "OK: $path is $size MiB, within the $GATE_MIB MiB release gate (updater cap $UPDATER_CAP_MIB MiB)"
+    echo "OK: $path is $size MiB, within the $GATE_MIB MiB release gate (R2 upload cap $UPLOAD_CAP_MIB MiB, updater cap $UPDATER_CAP_MIB MiB)"
   fi
 done
 

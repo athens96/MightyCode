@@ -1,7 +1,7 @@
 name: Release manifest
 # Signs the update manifest (latest.json) for a release with MIGHTY_UPDATE_SIGNING_KEY, the only copy of the private key,
 # kept as a secret of the `release` environment (main only). Dispatched by `scripts/release.py manifest` (docs/release.md);
-# publishes nothing. It signs only packages built by a successful push run of native-macos.yml/native-windows.yml on main.
+# publishes nothing. It signs only packages built by a successful push or workflow_dispatch run of native-macos.yml/native-windows.yml on main.
 run-name: Release manifest ${{ inputs.version }} [${{ inputs.request }}]
 on:
   workflow_dispatch:
@@ -10,10 +10,10 @@ on:
         description: Release version x.y.z (must equal VERSION of the build commit and of the dispatched ref)
         required: true
       macos_run:
-        description: Run id of "Native clients — macOS" (push on main) for the build commit
+        description: Run id of "Native clients — macOS" (push or workflow_dispatch on main) for the build commit
         required: true
       windows_run:
-        description: Run id of "Native clients — Windows" (push on main) for the same commit
+        description: Run id of "Native clients — Windows" (push or workflow_dispatch on main) for the same commit
         required: true
       notes_b64:
         description: Short update notes (release/<ver>/update-notes.md), UTF-8, base64
@@ -93,12 +93,15 @@ jobs:
               got = {"path": run.get("path"), "event": run.get("event"), "head_branch": run.get("head_branch"),
                      "head_repository": (run.get("head_repository") or {}).get("full_name"),
                      "status": run.get("status"), "conclusion": run.get("conclusion")}
-              want = {"path": path, "event": "push", "head_branch": "main", "head_repository": repo,
+              want = {"path": path, "head_branch": "main", "head_repository": repo,
                       "status": "completed", "conclusion": "success"}
               for key, value in want.items():
                   if got[key] != value:
                       print(f"::error::{kind} run {run.get('id')}: {key} is {got[key]!r}, not {value!r}")
                       bad = True
+              if got["event"] not in ("push", "workflow_dispatch"):
+                  print(f"::error::{kind} run {run.get('id')}: event is {got['event']!r}, not 'push' or 'workflow_dispatch'")
+                  bad = True
               shas.add(run.get("head_sha"))
               print(f"{kind}: run {run.get('id')} {got} at {run.get('head_sha')}")
           if len(shas) != 1:
@@ -124,7 +127,7 @@ jobs:
           python-version: '3.12'
       - name: Install cryptography (hash-pinned)
         run: |
-          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r scripts/requirements-sign.txt
+          python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --no-deps -r scripts/requirements-sign.txt
       - name: Download the macOS package
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:

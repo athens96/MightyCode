@@ -1,4 +1,4 @@
-# Builds the Rust + Tauri app (native/tauri) for release on Windows in the 0.4.x shape (W9 plan §1.6, D10, D12, D13): the counterpart of
+﻿# Builds the Rust + Tauri app (native/tauri) for release on Windows in the 0.4.x shape (W9 plan §1.6, D10, D12, D13): the counterpart of
 # build-windows.ps1, whose artifact names, zip layout and setup program it keeps, so an installed 0.4.x app updates itself to it.
 #
 #   .\scripts\build-tauri-windows.ps1 -Architecture x64|arm64 [-Installer] [-Version 0.5.0-rc.7] [-OutputDirectory <new folder>]
@@ -179,8 +179,9 @@ try {
             [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $file.FullName, $entry, [IO.Compression.CompressionLevel]::Optimal)
         }
     } finally { $zip.Dispose() }
+    $maxPackageBytes = 280MB
     $size = (Get-Item -LiteralPath $archive).Length
-    if ($size -gt 512MB) { throw "the zip is $size bytes; the 0.4.x app refuses a package over 512 MiB" }
+    if ($size -gt $maxPackageBytes) { throw "the zip is $size bytes; release packages must stay within 280 MiB (20 MiB headroom below the 300 MiB R2 upload limit and 512 MiB updater cap)" }
     $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
     [IO.File]::WriteAllText("$archive.sha256", "$hash  $([IO.Path]::GetFileName($archive))`n", [Text.Encoding]::ASCII)
     Write-Output "package: $archive ($size bytes)"
@@ -189,9 +190,11 @@ try {
         # The same .iss as C#'s (AppId, exe name, install folder): only the folder it packs differs.
         Invoke-Checked 'ISCC' { & $iscc /Q "/DAppVersion=$numericVersion" "/DArch=$Architecture" "/DSourceDir=$OutputDirectory" "/DOutputDir=$releaseDirectory" (Join-Path $root 'native\windows\installer\MightyCode.iss') }
         if (-not (Test-Path $setup -PathType Leaf)) { throw "ISCC left no setup program at $setup" }
+        $setupSize = (Get-Item -LiteralPath $setup).Length
+        if ($setupSize -gt $maxPackageBytes) { throw "the setup program is $setupSize bytes; release packages must stay within 280 MiB (20 MiB headroom below the 300 MiB R2 upload limit)" }
         $setupHash = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash.ToLowerInvariant()
         [IO.File]::WriteAllText("$setup.sha256", "$setupHash  $([IO.Path]::GetFileName($setup))`n", [Text.Encoding]::ASCII)
-        Write-Output "setup program: $setup"
+        Write-Output "setup program: $setup ($setupSize bytes)"
     }
 
     # --- the 0.4.x stager's verdict on the zip (plan fact 3), from C#'s own code

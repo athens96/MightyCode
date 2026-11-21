@@ -5,14 +5,20 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  # Cancel superseded PR runs; never cancel pushes or dispatches on main.
+  group: style-freeze-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || (github.ref == 'refs/heads/main' && github.run_id || github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   freeze:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
           # The check reads the tag and the history behind it.
           fetch-depth: 0
+          persist-credentials: false
       - name: The frozen style engine is unchanged since the tag
         run: |
           set -euo pipefail

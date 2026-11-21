@@ -202,12 +202,22 @@ class ManifestTests(unittest.TestCase):
             f.write("@exit /b 1\n" if os.name == "nt" else "#!/bin/sh\nexit 1\n")
         os.chmod(fake, 0o755)
         path = tools + os.pathsep + os.environ.get("PATH", "")
-        with patch.dict(os.environ, {"PATH": path}):
-            os.environ.pop("MIGHTY_SIGNER", None)
-            with self.assertRaisesRegex(release.ReleaseError, "make-update-manifest.py"):
+        # Hide any pre-compiled Swift signer binary so make-update-manifest.py must invoke swiftc unless skipped.
+        cached_signer = os.path.join(release.ROOT, ".build", "update-manifest-sign")
+        backup_signer = os.path.join(self.folder, "update-manifest-sign.bak")
+        moved_signer = os.path.exists(cached_signer)
+        if moved_signer:
+            shutil.move(cached_signer, backup_signer)
+        try:
+            with patch.dict(os.environ, {"PATH": path}):
+                os.environ.pop("MIGHTY_SIGNER", None)
+                with self.assertRaisesRegex(release.ReleaseError, "make-update-manifest.py"):
+                    release.make_manifest("0.4.48", 1360, self.folder, self.key, self.notes, self.out)
+            with patch.dict(os.environ, {"PATH": path, "MIGHTY_SIGNER": "cryptography"}):
                 release.make_manifest("0.4.48", 1360, self.folder, self.key, self.notes, self.out)
-        with patch.dict(os.environ, {"PATH": path, "MIGHTY_SIGNER": "cryptography"}):
-            release.make_manifest("0.4.48", 1360, self.folder, self.key, self.notes, self.out)
+        finally:
+            if moved_signer and os.path.exists(backup_signer):
+                shutil.move(backup_signer, cached_signer)
         with open(self.out, encoding="utf-8") as f:
             self.assertEqual(self.verify(json.load(f))["build"], 1360)
 
@@ -432,6 +442,8 @@ class StateTests(unittest.TestCase):
                 workflow = args[args.index("--workflow") + 1]
                 return json.dumps([{"databaseId": run_ids[0] if "macos" in workflow else run_ids[1], "status": "completed",
                                     "headBranch": "main", "conclusion": conclusions[workflow], "url": "u", "createdAt": "t"}])
+            if args[:3] == ["gh", "run", "view"]:
+                return json.dumps({"jobs": [{"name": "changes", "conclusion": "success"}, {"name": "build", "conclusion": "success"}]})
             raise AssertionError(args)
         return patch.object(release, "sh", side_effect=sh)
 
@@ -841,6 +853,64 @@ class TauriVersionTests(unittest.TestCase):
         self.cargo.write_bytes(b'name = "mightycode"\n')
         with self.assertRaisesRegex(release.ReleaseError, "Cargo.toml"):
             release.write_tauri_version("0.5.0")
+
+
+class ReleaseManifestWorkflowTests(unittest.TestCase):
+    """release-manifest.yml accepts main push and workflow_dispatch runs, and installs cryptography with --no-deps."""
+
+    WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "release-manifest.yml"
+
+    def extract_run_check_script(self):
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        marker = "Check where the packages come from"
+        start = text.index(marker)
+        py_start = text.index("python3 - <<'PY'\n", start) + len("python3 - <<'PY'\n")
+        py_end = text.index("\n          PY", py_start)
+        lines = text[py_start:py_end].splitlines()
+        return "\n".join(line[10:] if line.startswith(" " * 10) else line for line in lines) + "\n"
+
+    def run_check(self, macos_run, windows_run):
+        import subprocess, sys
+        script = self.extract_run_check_script()
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "run-macos.json").write_text(json.dumps(macos_run), encoding="utf-8")
+            Path(tmp, "run-windows.json").write_text(json.dumps(windows_run), encoding="utf-8")
+            env = dict(os.environ, RUNNER_TEMP=tmp, GITHUB_REPOSITORY=release.REPO)
+            return subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True)
+
+    def make_run(self, workflow_path, *, event="push", branch="main", sha="a" * 40, status="completed", conclusion="success"):
+        return {
+            "id": 123,
+            "path": workflow_path,
+            "event": event,
+            "head_branch": branch,
+            "head_repository": {"full_name": release.REPO},
+            "status": status,
+            "conclusion": conclusion,
+            "head_sha": sha,
+        }
+
+    def test_accepts_push_and_workflow_dispatch_on_main(self):
+        mac = self.make_run(".github/workflows/native-macos.yml", event="workflow_dispatch")
+        win = self.make_run(".github/workflows/native-windows.yml", event="push")
+        done = self.run_check(mac, win)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_rejects_pull_request_event_or_non_main_branch(self):
+        mac = self.make_run(".github/workflows/native-macos.yml", event="pull_request")
+        win = self.make_run(".github/workflows/native-windows.yml", event="push")
+        done = self.run_check(mac, win)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("event", done.stdout + done.stderr)
+
+        mac_branch = self.make_run(".github/workflows/native-macos.yml", event="workflow_dispatch", branch="feat/x")
+        done_branch = self.run_check(mac_branch, win)
+        self.assertNotEqual(done_branch.returncode, 0)
+        self.assertIn("head_branch", done_branch.stdout + done_branch.stderr)
+
+    def test_pip_install_uses_no_deps_with_hashes(self):
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("--require-hashes --only-binary=:all: --no-deps -r scripts/requirements-sign.txt", text)
 
 
 

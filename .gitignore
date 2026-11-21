@@ -35,3 +35,6 @@ docs/help/site/
 mobile/google-services.json
 relay/deploy/oracle/secrets/
 relay/deploy/oracle/fcm-service-account.json
+
+# Cloudflare Wrangler local state and cache.
+.wrangler/

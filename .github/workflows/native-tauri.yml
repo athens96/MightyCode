@@ -350,16 +350,6 @@ jobs:
           $left = $files | Select-String -Pattern '\bDirectTls\b' -List
           if ($wired -and $left) { $left | ForEach-Object { "$($_.Path):$($_.LineNumber)" }; throw 'DirectTls is still named after MacHttps backs the update transport' }
           if ($wired) { 'MacHttps backs the update transport; DirectTls is gone' } else { 'MacHttps not wired yet: DirectTls stays (temporary)' }
-      - name: The prepared 0.5 switch of native-macos.yml applies to main's
-        # Mac stage M-I: native/tauri/release/native-macos.yml.0.5.patch is applied at the 0.5 merge; checked here against
-        # origin/main's native-macos.yml in a scratch index (nothing is checked out or changed).
-        shell: bash
-        working-directory: .
-        run: |
-          git fetch --no-tags --depth=1 origin main
-          export GIT_INDEX_FILE="$RUNNER_TEMP/main.index"
-          git read-tree FETCH_HEAD
-          git apply --cached --check --verbose native/tauri/release/native-macos.yml.0.5.patch
 
   package:
     # The release candidate in the 0.4.x shape (W9 plan §1.6, D10, D13, D15): what native-windows.yml builds from the C# app, here from

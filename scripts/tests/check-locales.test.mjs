@@ -759,3 +759,77 @@ test('a language listed as complete in scripts/locale-languages.json must carry 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Rust locale key references: catch missing keys without false positives ────
+test('Rust locale calls (locale.get, self.locale().get, l.get, get_with) fail --check on missing keys', () => {
+  for (const [label, snippet, key] of [
+    ['locale.get', 'let s = locale.get("no.such.key");\n', 'no.such.key'],
+    ['self.locale.get', 'let s = self.locale.get("rust.missing.field");\n', 'rust.missing.field'],
+    ['self.locale().get', 'let s = self.locale().get("rust.missing.method");\n', 'rust.missing.method'],
+    ['l.get', 'let s = l.get("rust.missing.short");\n', 'rust.missing.short'],
+    ['locale.get_with', 'let s = locale.get_with("rust.missing.with", &[("n", "1")]);\n', 'rust.missing.with'],
+    ['multiline get_with', 'let s = other\n    .get_with("rust.missing.multiline", &[]);\n', 'rust.missing.multiline'],
+    ['Locale::new().get', 'let s = Locale::new("en").get("rust.missing.ctor");\n', 'rust.missing.ctor'],
+    ['strings::get', 'let s = strings::get("rust.missing.strings");\n', 'rust.missing.strings'],
+    ['strings::get_with', 'let s = mighty_run::strings::get_with("rust.missing.stringsWith", &[]);\n', 'rust.missing.stringsWith'],
+  ]) {
+    const dir = tmpDir();
+    try {
+      setup(dir, {
+        koJson: KO,
+        enJson: EN,
+        files: {
+          ...USED,
+          'native/tauri/src-tauri/src/sample.rs': snippet,
+        },
+      });
+      // Generate docs/i18n.md first for --check (would otherwise fail on missing doc)
+      const docDir = tmpDir();
+      try {
+        setup(docDir, { koJson: KO, enJson: EN, files: USED });
+        run(['--root', docDir]);
+        fs.copyFileSync(path.join(docDir, 'docs/i18n.md'), path.join(dir, 'docs/i18n.md'));
+      } finally {
+        fs.rmSync(docDir, { recursive: true, force: true });
+      }
+      const r = run(['--root', dir, '--check']);
+      assert.notEqual(r.status, 0, `${label} with missing key ${key} must fail --check`);
+      const out = r.stderr + r.stdout;
+      assert.match(out, /Rust app/, `${label}: missing Rust app label in diagnostics`);
+      assert.match(out, new RegExp(key.replaceAll('.', '\\.')), `${label}: missing key ${key} in diagnostics`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('non-locale .get() calls in Rust (HashMap, JSON args, prefs) do not false-positive', () => {
+  const dir = tmpDir();
+  try {
+    const rustSource = [
+      'let a = map.get("not_a_locale_key");',
+      'let b = map.get("not.a.locale.key");',
+      'let c = args.get("payload.field");',
+      'let d = prefs.get("appUpdate.automatic");',
+      'let e = html.get("dom.node");',
+      'let ok1 = locale.get("a.one");',
+      'let ok2 = l.get_with("a.one", &[("n", "1")]);',
+      'let ok3 = self.locale().get("a.two");',
+      '',
+    ].join('\n');
+    setup(dir, {
+      koJson: KO,
+      enJson: EN,
+      files: {
+        'native/windows/MightyCode.WinUI/MightyCode.WinUI.csproj': CSPROJ,
+        'native/tauri/crates/mighty-core/src/sample.rs': rustSource,
+      },
+    });
+    const written = run(['--root', dir]);
+    assert.equal(written.status, 0, `non-locale .get() must not fail\nstderr: ${written.stderr}`);
+    const checked = run(['--root', dir, '--check']);
+    assert.equal(checked.status, 0, `non-locale .get() must pass --check\nstderr: ${checked.stderr}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
