@@ -202,6 +202,14 @@ impl FakeRelay {
                             refusals.lock().unwrap().push(code);
                             let frame = CloseFrame { code: CloseCode::from(code), reason: "".into() };
                             let _ = socket.close(Some(frame)).await;
+                            let _ = tokio::time::timeout(std::time::Duration::from_millis(500), async {
+                                while let Some(Ok(message)) = socket.next().await {
+                                    if message.is_close() {
+                                        break;
+                                    }
+                                }
+                            })
+                            .await;
                             return;
                         }
                     };
@@ -209,6 +217,14 @@ impl FakeRelay {
                         refusals.lock().unwrap().push(code);
                         let frame = CloseFrame { code: CloseCode::from(code), reason: "".into() };
                         let _ = socket.close(Some(frame)).await;
+                        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), async {
+                            while let Some(Ok(message)) = socket.next().await {
+                                if message.is_close() {
+                                    break;
+                                }
+                            }
+                        })
+                        .await;
                         return;
                     }
                     match connection {

@@ -309,10 +309,18 @@ jobs:
             profile="$RUNNER_TEMP/mighty-help-$lang"
             rm -rf "$profile"
             echo "::group::Help capture ($lang)"
-            # perl's alarm bounds one launch, so a stuck language cannot use up the step.
-            if ! perl -e 'alarm shift; exec @ARGV' 420 "$APP" --help-capture --smoke-exit --profile "$profile" -language "$lang"; then
-              echo "::error title=Help capture ($lang)::the app exited non-zero or timed out"
-              status=1
+            # perl's alarm bounds one launch, so a stuck language cannot use up the step; retry once if WebKit XPC drops startup.
+            if ! perl -e 'alarm shift; exec @ARGV' 420 "$APP" --help-capture --smoke-exit --profile "$profile" -language "$lang" \
+               || [ ! -f "$profile/help-shots/$lang/manifest.json" ]; then
+              echo "Help capture ($lang) attempt 1 failed; host.log:"
+              cat "$profile/tauri-logs/host.log" 2>/dev/null || true
+              rm -rf "$profile"
+              if ! perl -e 'alarm shift; exec @ARGV' 420 "$APP" --help-capture --smoke-exit --profile "$profile" -language "$lang"; then
+                echo "Help capture ($lang) attempt 2 failed; host.log:"
+                cat "$profile/tauri-logs/host.log" 2>/dev/null || true
+                echo "::error title=Help capture ($lang)::the app exited non-zero or timed out"
+                status=1
+              fi
             fi
             echo "::endgroup::"
           done

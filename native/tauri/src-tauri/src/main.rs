@@ -187,6 +187,14 @@ pub(crate) fn host_nonce(app: &tauri::AppHandle) -> String {
     app.try_state::<HostNonce>().map(|nonce| nonce.0.clone()).unwrap_or_default()
 }
 
+/// Re-navigates the main webview to `index.html` when a cold headless WebKit XPC launch drops the initial page load in smoke/help-capture.
+#[cfg(feature = "dev-harness")]
+pub(crate) fn navigate_home(app: &tauri::AppHandle) -> bool {
+    let Some(home) = app.try_state::<AppOrigin>().and_then(|origin| origin.home()) else { return false };
+    let Some(page) = app.get_webview(WINDOW) else { return false };
+    page.navigate(home).is_ok()
+}
+
 /// Where the app's own page is served (tauri's `get_app_url`): the dev server in a dev build, else the `tauri` protocol
 /// (`http://tauri.localhost` on Windows, `tauri://localhost` on the Mac).
 struct AppOrigin(tauri::Url);

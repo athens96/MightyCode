@@ -908,6 +908,7 @@ async fn relay_host_authenticates_via_first_frame_never_query_string() {
 /// `ProxyResolver` so PAC scripts never see `hostToken`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn relay_host_falls_back_to_query_auth_on_legacy_relays_and_strips_proxy_queries() {
+    use futures_util::StreamExt;
     use sha2::{Digest, Sha256};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
@@ -951,6 +952,16 @@ async fn relay_host_falls_back_to_query_auth_on_legacy_relays_and_strips_proxy_q
                     query.contains(&format!("serverId={expected_server}")) && query.contains(&format!("hostToken={expected_token}"));
                 if !has_valid_query_token {
                     let _ = socket.close(Some(CloseFrame { code: CloseCode::from(4401), reason: "missing hostToken".into() })).await;
+                    // Drain any in-flight first-frame `host-auth` and close reply before dropping `TcpStream`,
+                    // otherwise Winsock aborts loopback sockets with unread bytes (`WSAECONNRESET`) and discards the 4401 frame.
+                    let _ = tokio::time::timeout(Duration::from_millis(500), async {
+                        while let Some(Ok(message)) = socket.next().await {
+                            if message.is_close() {
+                                break;
+                            }
+                        }
+                    })
+                    .await;
                     return;
                 }
                 if query.contains("connectionId=") {

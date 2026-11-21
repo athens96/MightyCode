@@ -971,7 +971,25 @@ impl Smoke {
     pub fn watch(host: Arc<Host>) {
         std::thread::spawn(move || {
             if let Some(smoke) = host.smoke.as_ref().filter(|smoke| smoke.is_special()) {
-                std::thread::sleep(SPECIAL_PAGE);
+                let started = Instant::now();
+                let mut retried_15 = false;
+                let mut retried_45 = false;
+                while started.elapsed() < SPECIAL_PAGE {
+                    if smoke.progress().special_begun || smoke.progress().finished {
+                        return;
+                    }
+                    let elapsed = started.elapsed();
+                    if !retried_15 && elapsed >= Duration::from_secs(15) {
+                        retried_15 = true;
+                        host.log.line("smoke: special run page not ready after 15 s; navigating home");
+                        let _ = crate::navigate_home(&host.app);
+                    } else if !retried_45 && elapsed >= Duration::from_secs(45) {
+                        retried_45 = true;
+                        host.log.line("smoke: special run page not ready after 45 s; navigating home");
+                        let _ = crate::navigate_home(&host.app);
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                }
                 if !smoke.progress().special_begun {
                     let error = format!("the page did not come up within {} s", SPECIAL_PAGE.as_secs());
                     host.log.line(&format!("smoke: {error}"));
