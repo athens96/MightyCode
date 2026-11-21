@@ -14,7 +14,7 @@ import {
   type TurnRateLimited,
   type TurnUnavailable,
 } from './protocol.ts';
-import { pushIpKey } from './push.ts';
+import { pushIpKey } from './ip.ts';
 
 /** A frame held while the host data socket is still attaching. */
 interface BufferedFrame {

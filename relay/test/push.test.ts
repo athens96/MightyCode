@@ -140,6 +140,10 @@ describe('push limits', () => {
     expect(pushIpKey('::ffff:203.0.113.7')).toBe('203.0.113.7');
     expect(pushIpKey('::ffff:cb00:7107')).toBe('203.0.113.7');
     expect(pushIpKey('fe80::1%en0')).toBe('fe80:0:0:0::/64');
+    // Malformed addresses are left untouched instead of throwing or colliding.
+    expect(pushIpKey('1:2:3:4:5:6:7:8::')).toBe('1:2:3:4:5:6:7:8::');
+    expect(pushIpKey('::ffff:01.2.3.4')).toBe('::ffff:01.2.3.4');
+    expect(pushIpKey('203.0.113.7:8080')).toBe('203.0.113.7:8080');
   });
 
   it('shares one handle budget across a whole IPv6 /64', async () => {

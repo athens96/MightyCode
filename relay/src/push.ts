@@ -1,14 +1,16 @@
 import { createPrivateKey } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { isIP } from 'node:net';
 
 import type { RelayConfig } from './config.ts';
 import { FcmHttpV1Sender, parseServiceAccount, type PushSender } from './fcm.ts';
 import type { RelayLogger } from './hub.ts';
+import { pushIpKey } from './ip.ts';
 import { HOST_TOKEN_PATTERN, ownsServerId, SERVER_ID_PATTERN } from './protocol.ts';
 import { FCM_TOKEN_PATTERN, HANDLE_PATTERN, PushHandleStore } from './push-store.ts';
 import { SlidingWindowLimiter, type RateDecision } from './rate.ts';
+
+export { pushIpKey };
 
 /** A sealed push (docs/relay.md "푸시 알림"): base64url, at most 3072 characters. */
 export const PUSH_PAYLOAD_PATTERN = /^[A-Za-z0-9_-]{24,3072}$/;
@@ -99,44 +101,6 @@ function failure(res: ServerResponse, status: number, code: string, retryAfterSe
 
 function clampRetryAfter(secs: number): number {
   return Number.isFinite(secs) ? Math.min(RETRY_AFTER_MAX_SECS, Math.max(1, Math.ceil(secs))) : 60;
-}
-
-/** The eight 16-bit groups of a valid IPv6 address (zone already removed), or null. */
-function ipv6Groups(ip: string): number[] | null {
-  let text = ip;
-  const lastColon = text.lastIndexOf(':');
-  const tail = text.slice(lastColon + 1);
-  if (tail.includes('.')) {
-    const octets = tail.split('.').map(Number);
-    if (octets.length !== 4 || octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) return null;
-    const [a = 0, b = 0, c = 0, d = 0] = octets;
-    text = `${text.slice(0, lastColon + 1)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
-  }
-  const halves = text.split('::');
-  if (halves.length > 2) return null;
-  const parse = (part: string): number[] => (part === '' ? [] : part.split(':').map((g) => Number.parseInt(g, 16)));
-  const head = parse(halves[0] ?? '');
-  const rest = halves.length === 2 ? parse(halves[1] ?? '') : [];
-  const fill = halves.length === 2 ? 8 - head.length - rest.length : 0;
-  if (fill < 0) return null;
-  const groups = [...head, ...new Array<number>(fill).fill(0), ...rest];
-  return groups.length === 8 && groups.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff) ? groups : null;
-}
-
-/**
- * The key push limits count a source under: IPv4 as is, IPv6 by its /64 (one subscriber
- * usually holds a whole /64), and an IPv4-mapped IPv6 address as its IPv4 address.
- */
-export function pushIpKey(ip: string): string {
-  const bare = ip.split('%')[0] ?? ip;
-  if (isIP(bare) !== 6) return ip;
-  const groups = ipv6Groups(bare);
-  if (groups === null) return ip;
-  const [g0, g1, g2, g3, g4, g5, g6 = 0, g7 = 0] = groups;
-  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff) {
-    return `${g6 >> 8}.${g6 & 0xff}.${g7 >> 8}.${g7 & 0xff}`;
-  }
-  return `${groups.slice(0, 4).map((g) => g.toString(16)).join(':')}::/64`;
 }
 
 function shortId(serverId: string): string {

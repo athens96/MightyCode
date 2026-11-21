@@ -13,5 +13,5 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "../src/protocol.ts", "../src/rate.ts", "../src/fcm-core.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "../src/protocol.ts", "../src/rate.ts", "../src/fcm-core.ts", "../src/ip.ts"]
 }

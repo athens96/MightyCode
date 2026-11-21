@@ -9,9 +9,27 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { WebSocket } from 'ws';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { startWorker, type LocalWorker } from './harness.ts';
+vi.mock('cloudflare:workers', () => ({
+  DurableObject: class DurableObject<E = unknown> {
+    protected ctx: DurableObjectState;
+    protected env: E;
+    constructor(ctx: DurableObjectState, env: E) {
+      this.ctx = ctx;
+      this.env = env;
+    }
+  },
+}));
+
+import { Hub, HUB_HEADERS, type HubEnv } from '../src/hub.ts';
+import {
+  installWorkersGlobals,
+  MockDurableObjectState,
+  startWorker,
+  type LocalWorker,
+  type MockWebSocket,
+} from './harness.ts';
 
 let BASE = '';
 const MAX_CONNECTIONS = 3;
@@ -476,4 +494,186 @@ describe('pre-auth slot squatting', () => {
     next.send('hello');
     expect(await closeCode(next, 300)).toBe('open');
   }, 40_000);
+});
+
+describe('Hub Durable Object alarms & hibernation', () => {
+  let restoreGlobals: (() => void) | undefined;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-21T00:00:00.000Z'));
+    restoreGlobals = installWorkersGlobals();
+  });
+
+  afterEach(() => {
+    restoreGlobals?.();
+    restoreGlobals = undefined;
+    vi.useRealTimers();
+  });
+
+  function hubRequest(headers: Record<string, string>): Request {
+    return new Request('https://hub.invalid/ws', { method: 'GET', headers });
+  }
+
+  async function openSocket(hub: Hub, headers: Record<string, string>): Promise<MockWebSocket> {
+    const res = (await hub.fetch(hubRequest(headers))) as Response & { webSocket: MockWebSocket | null };
+    expect(res.status).toBe(101);
+    const server = res.webSocket?.peer;
+    if (!server) throw new Error('expected server WebSocket from Hub.fetch');
+    return server;
+  }
+
+  it('closes an expired pre-auth socket via alarm() even after simulated DO hibernation', async () => {
+    const { serverId } = identity('alarm-auth-hibernate');
+    const ctx = new MockDurableObjectState();
+    const env: HubEnv = { RELAY_AUTH_TIMEOUT_MS: '500', RELAY_MAX_PENDING_PER_IP: '2' };
+    const hub = new Hub(ctx as unknown as DurableObjectState, env);
+
+    const serverWs = await openSocket(hub, {
+      [HUB_HEADERS.kind]: 'control',
+      [HUB_HEADERS.serverId]: serverId,
+      [HUB_HEADERS.ip]: '203.0.113.10',
+      [HUB_HEADERS.auth]: 'frame',
+    });
+
+    expect(await ctx.storage.getAlarm()).toBe(Date.now() + 500);
+    // No permanent 'auth' tag is ever attached.
+    expect(ctx.getWebSockets('auth')).toEqual([]);
+    expect(ctx.getTags(serverWs)).toEqual(['control']);
+
+    // Simulate DO hibernation/eviction: discard `hub` and reconstruct a fresh Hub on the same `ctx`.
+    const wokenHub = new Hub(ctx as unknown as DurableObjectState, env);
+    vi.advanceTimersByTime(500);
+
+    expect(await ctx.fireAlarm(wokenHub)).toBe(true);
+    expect(serverWs.closed).toEqual({ code: 4401, reason: 'host-auth frame missing' });
+    expect(await ctx.storage.getAlarm()).toBeNull();
+  });
+
+  it('never leaks an auth tag on authenticated control or host-data sockets and clears the alarm', async () => {
+    const { serverId, hostToken } = identity('no-auth-tag-leak');
+    const ctx = new MockDurableObjectState();
+    const env: HubEnv = { RELAY_AUTH_TIMEOUT_MS: '500', RELAY_HELLO_TIMEOUT_MS: '1500', RELAY_ATTACH_TIMEOUT_MS: '2000' };
+    const hub = new Hub(ctx as unknown as DurableObjectState, env);
+
+    const controlWs = await openSocket(hub, {
+      [HUB_HEADERS.kind]: 'control',
+      [HUB_HEADERS.serverId]: serverId,
+      [HUB_HEADERS.ip]: '203.0.113.11',
+      [HUB_HEADERS.auth]: 'frame',
+    });
+    expect(ctx.getWebSockets('auth')).toEqual([]);
+    expect(await ctx.storage.getAlarm()).toBe(Date.now() + 500);
+
+    await hub.webSocketMessage(controlWs as unknown as globalThis.WebSocket, hostAuth(hostToken));
+    expect(ctx.getWebSockets('auth')).toEqual([]);
+    expect(ctx.getTags(controlWs)).toEqual(['control']);
+    expect(await ctx.storage.getAlarm()).toBeNull();
+
+    const clientWs = await openSocket(hub, {
+      [HUB_HEADERS.kind]: 'client-data',
+      [HUB_HEADERS.serverId]: serverId,
+      [HUB_HEADERS.connectionId]: 'conn-clean-1',
+      [HUB_HEADERS.ip]: '198.51.100.5',
+      [HUB_HEADERS.auth]: 'query',
+    });
+    await hub.webSocketMessage(clientWs as unknown as globalThis.WebSocket, 'hello');
+
+    const hostWs = await openSocket(hub, {
+      [HUB_HEADERS.kind]: 'host-data',
+      [HUB_HEADERS.serverId]: serverId,
+      [HUB_HEADERS.connectionId]: 'conn-clean-1',
+      [HUB_HEADERS.ip]: '203.0.113.11',
+      [HUB_HEADERS.auth]: 'frame',
+    });
+    await hub.webSocketMessage(hostWs as unknown as globalThis.WebSocket, hostAuth(hostToken));
+
+    expect(ctx.getWebSockets('auth')).toEqual([]);
+    expect(ctx.getTags(hostWs)).toEqual(['host', 'h:conn-clean-1']);
+    expect(hostWs.sent).toEqual(['hello']);
+    expect(await ctx.storage.getAlarm()).toBeNull();
+  });
+
+  it('closes an expired pre-hello client socket via alarm() with 4408 after simulated DO hibernation', async () => {
+    const { serverId } = identity('alarm-hello-hibernate');
+    const ctx = new MockDurableObjectState();
+    const env: HubEnv = { RELAY_HELLO_TIMEOUT_MS: '600', RELAY_ATTACH_TIMEOUT_MS: '2000' };
+    const hub = new Hub(ctx as unknown as DurableObjectState, env);
+
+    const controlWs = await openSocket(hub, {
+      [HUB_HEADERS.kind]: 'control',
+      [HUB_HEADERS.serverId]: serverId,
+      [HUB_HEADERS.ip]: '203.0.113.20',
+      [HUB_HEADERS.auth]: 'query',
+    });
+    const clientWs = await openSocket(hub, {
+      [HUB_HEADERS.kind]: 'client-data',
+      [HUB_HEADERS.serverId]: serverId,
+      [HUB_HEADERS.connectionId]: 'conn-mute-hib',
+      [HUB_HEADERS.ip]: '198.51.100.20',
+      [HUB_HEADERS.auth]: 'query',
+    });
+    // Host attaches promptly, clearing attachDeadline while helloDeadline stays persisted.
+    const hostWs = await openSocket(hub, {
+      [HUB_HEADERS.kind]: 'host-data',
+      [HUB_HEADERS.serverId]: serverId,
+      [HUB_HEADERS.connectionId]: 'conn-mute-hib',
+      [HUB_HEADERS.ip]: '203.0.113.20',
+      [HUB_HEADERS.auth]: 'query',
+    });
+    expect(await ctx.storage.getAlarm()).toBe(Date.now() + 600);
+
+    // Simulate DO hibernation: fresh Hub instance has no in-memory timers or maps.
+    const wokenHub = new Hub(ctx as unknown as DurableObjectState, env);
+    vi.advanceTimersByTime(600);
+
+    expect(await ctx.fireAlarm(wokenHub)).toBe(true);
+    expect(clientWs.closed).toEqual({ code: 4408, reason: 'hello timeout' });
+    expect(hostWs.closed).toEqual({ code: 4408, reason: 'hello timeout' });
+    expect(controlWs.sent.map((frame) => JSON.parse(String(frame)) as unknown)).toEqual([
+      { type: 'connected', connectionId: 'conn-mute-hib' },
+      { type: 'disconnected', connectionId: 'conn-mute-hib' },
+    ]);
+    expect(await ctx.storage.getAlarm()).toBeNull();
+  });
+
+  it('closes an unattached client socket via alarm() with 4504 after hello and simulated DO hibernation', async () => {
+    const { serverId } = identity('alarm-attach-hibernate');
+    const ctx = new MockDurableObjectState();
+    const env: HubEnv = { RELAY_HELLO_TIMEOUT_MS: '500', RELAY_ATTACH_TIMEOUT_MS: '1200' };
+    const hub = new Hub(ctx as unknown as DurableObjectState, env);
+
+    const controlWs = await openSocket(hub, {
+      [HUB_HEADERS.kind]: 'control',
+      [HUB_HEADERS.serverId]: serverId,
+      [HUB_HEADERS.ip]: '203.0.113.30',
+      [HUB_HEADERS.auth]: 'query',
+    });
+    const start = Date.now();
+    const clientWs = await openSocket(hub, {
+      [HUB_HEADERS.kind]: 'client-data',
+      [HUB_HEADERS.serverId]: serverId,
+      [HUB_HEADERS.connectionId]: 'conn-attach-hib',
+      [HUB_HEADERS.ip]: '198.51.100.30',
+      [HUB_HEADERS.auth]: 'query',
+    });
+    expect(await ctx.storage.getAlarm()).toBe(start + 500);
+
+    // Client sends hello at +100ms: helloDeadline clears and alarm shifts to attachDeadline (+1200ms).
+    vi.advanceTimersByTime(100);
+    await hub.webSocketMessage(clientWs as unknown as globalThis.WebSocket, 'hello');
+    expect(await ctx.storage.getAlarm()).toBe(start + 1200);
+
+    // Simulate DO hibernation and advance to attachDeadline.
+    const wokenHub = new Hub(ctx as unknown as DurableObjectState, env);
+    vi.advanceTimersByTime(1100);
+
+    expect(await ctx.fireAlarm(wokenHub)).toBe(true);
+    expect(clientWs.closed).toEqual({ code: 4504, reason: 'host data socket timeout' });
+    expect(controlWs.sent.map((frame) => JSON.parse(String(frame)) as unknown)).toEqual([
+      { type: 'connected', connectionId: 'conn-attach-hib' },
+      { type: 'disconnected', connectionId: 'conn-attach-hib' },
+    ]);
+    expect(await ctx.storage.getAlarm()).toBeNull();
+  });
 });
