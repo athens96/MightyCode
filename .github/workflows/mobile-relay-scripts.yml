@@ -7,6 +7,8 @@ on:
       - 'scripts/**'
       - 'locales/**'
       - 'native/windows/web/**'
+      - 'native/tauri/Cargo.lock'
+      - 'native/tauri/Cargo.toml'
       - 'native/contracts/**'
       - 'docs/help/**'
       - 'docs/app-update.md'
@@ -23,6 +25,8 @@ on:
       - 'scripts/**'
       - 'locales/**'
       - 'native/windows/web/**'
+      - 'native/tauri/Cargo.lock'
+      - 'native/tauri/Cargo.toml'
       - 'native/contracts/**'
       - 'docs/help/**'
       - 'docs/app-update.md'
@@ -145,3 +149,20 @@ jobs:
         run: |
           bash scripts/tests/test-release-size-gate.sh
           bash scripts/tests/test-license-notices.sh
+
+  rust-audit:
+    name: Rust dependency audit (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+      - name: Audit Cargo.lock against RustSec (advisory)
+        # Advisory mode: native/tauri/Cargo.lock records Tauri/wry/tao's Linux-only GTK3/glib 0.18
+        # transitive crates (e.g. glib 0.18.5 RUSTSEC-2024-0429 and unmaintained gtk/gdk/atk/proc-macro-error),
+        # which are never compiled into the shipped macOS or Windows builds.
+        continue-on-error: true
+        run: cargo audit --file native/tauri/Cargo.lock

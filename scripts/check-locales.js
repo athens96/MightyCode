@@ -2,7 +2,7 @@
 // Usage: node scripts/check-locales.js                               # check, and rewrite docs/i18n.md
 //        node scripts/check-locales.js --check                       # check only (fails when docs/i18n.md is out of date)
 //        node scripts/check-locales.js --root <dir>                  # check another root (fixture tests)
-//        node scripts/check-locales.js --touched-since <sha>         # also check the Windows files touched since <sha>
+//        node scripts/check-locales.js --touched-since <sha>         # also check the desktop/web/Rust files touched since <sha>
 //        node scripts/check-locales.js --write-budget                # lower the Korean-literal budget to today's counts
 //
 // locales/ko.json and locales/en.json are the one source in this repository; the three
@@ -35,10 +35,11 @@
 // An exemption that no longer matches anything fails, so the list cannot go stale.
 // --write-budget lowers each area to its count and never raises one.
 //
-// With --touched-since <sha>, the Windows Core and WinUI source files touched since that
-// SHA (committed or not) must not keep hard-coded Korean literals the budget counts: the
-// budget's exempt files and regions and allowed literals stay out, as they do in the ratchet.
-// MainWindow.Smoke.cs is a check diagnostic and is left out.
+// With --touched-since <sha>, the Windows Core, Windows WinUI, Windows web and Rust app
+// source files touched since that SHA (committed or not) must not keep hard-coded Korean
+// literals the budget counts: the budget's exempt files and regions and allowed literals stay
+// out, as they do in the ratchet. MainWindow.Smoke.cs and smoke*.rs are check diagnostics and
+// are left out.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -90,7 +91,7 @@ function decodeHangulEscapes(source) {
   });
 }
 
-/// The five clients (the budget's areas), and the Windows web window, whose key references alone are checked. `roots` is where literals are counted and key
+/// The seven clients (the budget's areas). `roots` is where literals are counted and key
 /// references are found; `copies` are the copies that must be byte-identical to the original.
 const CLIENTS = [
   {
@@ -127,24 +128,26 @@ const CLIENTS = [
     copies: ['mobile/src/locales'],
   },
   {
-    // The Windows web window reads the root files through its bundler (`@locales/…`), so it
-    // has no copy. Only its key references are checked (a key it calls must exist, and its
-    // calls keep a key in use); its literals are not a budget area. Its tests are left out.
+    // The 0.5 web UI (`native/windows/web/src`, shared by Windows and macOS Tauri) reads the
+    // root files through its bundler (`@locales/…`), so it has no copy. Its key references and
+    // Korean-literal budget are both gated; unit tests (`*.test.ts(x)`) are left out.
     label: 'Windows web',
     roots: ['native/windows/web/src'],
     extensions: ['.ts', '.tsx'],
     copies: [],
-    referencesOnly: true,
     skipFile: /\.test\.tsx?$/,
+    defaultFixtureBudget: 0,
   },
   {
-    // The Rust + Tauri app embeds the root files (mighty-core's locale.rs, include_str!), so it
-    // has no copy either; like the Windows web window only its key references are checked.
+    // The 0.5 Rust + Tauri app embeds the root files (mighty-core's locale.rs, include_str!),
+    // so it has no copy either. Its key references and Korean-literal budget are both gated;
+    // GUI smoke modules (`smoke.rs`, `smoke_*.rs`) and `#[cfg(test)]` items are left out.
     label: 'Rust app',
     roots: ['native/tauri/crates', 'native/tauri/src-tauri/src'],
     extensions: ['.rs'],
     copies: [],
-    referencesOnly: true,
+    skipFile: /(?:^|\/)smoke(?:_[^/]*)?\.rs$/,
+    defaultFixtureBudget: 0,
   },
 ];
 
@@ -152,13 +155,17 @@ const CLIENTS = [
 const SKIP_DIRECTORIES = new Set([
   'node_modules',
   '.build',
+  'target',
   'bin',
   'obj',
   'Resources',
   'locales',
-  // Tests are not product UI: their literals are neither left-over copy nor key references.
+  // Tests and standalone dev examples/benches are not product UI: their literals are neither left-over copy nor key references.
   '__tests__',
   'Tests',
+  'tests',
+  'examples',
+  'benches',
 ]);
 
 const failures = [];
@@ -256,22 +263,219 @@ function stripComments(source) {
   return out;
 }
 
+/// Advances past a Rust string (`"..."`, `r"..."`, `r#"..."#`, `br...`, `cr...`) or character
+/// literal (`'x'`, `'\u{...}'`), returning `-1` for lifetimes (`'a`, `'static`, `'_`) and
+/// anything else. Lifetimes must not open single-quoted strings across lines.
+function skipRustStringOrChar(source, index) {
+  const ch = source[index];
+  const prev = index > 0 ? source[index - 1] : '';
+  if (!/[A-Za-z0-9_]/.test(prev) && (ch === 'r' || ((ch === 'b' || ch === 'c') && source[index + 1] === 'r'))) {
+    let cursor = ch === 'r' ? index + 1 : index + 2;
+    let hashes = 0;
+    while (source[cursor] === '#') {
+      hashes += 1;
+      cursor += 1;
+    }
+    if (source[cursor] === '"') {
+      const close = '"' + '#'.repeat(hashes);
+      const end = source.indexOf(close, cursor + 1);
+      return end < 0 ? source.length : end + close.length;
+    }
+  }
+  if (ch === '"') {
+    let cursor = index + 1;
+    while (cursor < source.length) {
+      if (source[cursor] === '\\') {
+        cursor += 2;
+        continue;
+      }
+      if (source[cursor] === '"') return cursor + 1;
+      cursor += 1;
+    }
+    return source.length;
+  }
+  if (ch === "'") {
+    const match = source.slice(index).match(/^'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F]{1,6}\}|.)|[^\\'\n])'/);
+    if (match) return index + match[0].length;
+  }
+  return -1;
+}
+
+/// Strips `//` and nested `/* ... */` comments in Rust without misreading lifetimes as quotes.
+function stripRustComments(source) {
+  let out = '';
+  let index = 0;
+  while (index < source.length) {
+    if (source[index] === '/' && source[index + 1] === '/') {
+      while (index < source.length && source[index] !== '\n') index += 1;
+      continue;
+    }
+    if (source[index] === '/' && source[index + 1] === '*') {
+      let depth = 1;
+      index += 2;
+      while (index < source.length && depth > 0) {
+        if (source[index] === '/' && source[index + 1] === '*') {
+          depth += 1;
+          index += 2;
+          continue;
+        }
+        if (source[index] === '*' && source[index + 1] === '/') {
+          depth -= 1;
+          index += 2;
+          continue;
+        }
+        if (source[index] === '\n') out += '\n';
+        index += 1;
+      }
+      continue;
+    }
+    const next = skipRustStringOrChar(source, index);
+    if (next > index) {
+      out += source.slice(index, next);
+      index = next;
+      continue;
+    }
+    out += source[index];
+    index += 1;
+  }
+  return out;
+}
+
+/// Strips `#[cfg(test)]` items (`mod tests { ... }`, test helper functions/structs/impls, or
+/// test-only struct fields) from comment-stripped Rust source while keeping line breaks intact.
+function stripRustCfgTest(stripped) {
+  const attrPattern = /#\[\s*cfg\s*\(\s*test\s*\)\s*\]/y;
+  let out = '';
+  let index = 0;
+  while (index < stripped.length) {
+    const nextString = skipRustStringOrChar(stripped, index);
+    if (nextString > index) {
+      out += stripped.slice(index, nextString);
+      index = nextString;
+      continue;
+    }
+    attrPattern.lastIndex = index;
+    if (!attrPattern.exec(stripped)) {
+      out += stripped[index];
+      index += 1;
+      continue;
+    }
+    let cursor = attrPattern.lastIndex;
+    // Skip any stacked attributes (such as `#[path = "..."]` or `#[allow(...)]`) on the same item.
+    while (cursor < stripped.length) {
+      while (cursor < stripped.length && /\s/.test(stripped[cursor])) cursor += 1;
+      if (stripped[cursor] === '#' && stripped[cursor + 1] === '[') {
+        let brackets = 1;
+        cursor += 2;
+        while (cursor < stripped.length && brackets > 0) {
+          const inner = skipRustStringOrChar(stripped, cursor);
+          if (inner > cursor) {
+            cursor = inner;
+            continue;
+          }
+          if (stripped[cursor] === '[') brackets += 1;
+          else if (stripped[cursor] === ']') brackets -= 1;
+          cursor += 1;
+        }
+        continue;
+      }
+      break;
+    }
+    let parens = 0;
+    let angles = 0;
+    while (cursor < stripped.length) {
+      const inner = skipRustStringOrChar(stripped, cursor);
+      if (inner > cursor) {
+        cursor = inner;
+        continue;
+      }
+      if ((stripped[cursor] === '-' || stripped[cursor] === '=') && stripped[cursor + 1] === '>') {
+        cursor += 2;
+        continue;
+      }
+      const ch = stripped[cursor];
+      if (ch === '(') {
+        parens += 1;
+        cursor += 1;
+        continue;
+      }
+      if (ch === ')') {
+        if (parens > 0) {
+          parens -= 1;
+          cursor += 1;
+          continue;
+        }
+        break;
+      }
+      if (ch === '<') {
+        angles += 1;
+        cursor += 1;
+        continue;
+      }
+      if (ch === '>' && angles > 0) {
+        angles -= 1;
+        cursor += 1;
+        continue;
+      }
+      if (parens === 0 && angles === 0 && (ch === ';' || ch === ',')) {
+        cursor += 1;
+        break;
+      }
+      if (parens === 0 && ch === '{') {
+        let braces = 1;
+        cursor += 1;
+        while (cursor < stripped.length && braces > 0) {
+          const bodyStr = skipRustStringOrChar(stripped, cursor);
+          if (bodyStr > cursor) {
+            cursor = bodyStr;
+            continue;
+          }
+          if (stripped[cursor] === '{') braces += 1;
+          else if (stripped[cursor] === '}') braces -= 1;
+          cursor += 1;
+        }
+        break;
+      }
+      cursor += 1;
+    }
+    out += stripped.slice(index, cursor).replace(/[^\n]/g, '');
+    index = cursor;
+  }
+  return out;
+}
+
+function stripSource(relative, source) {
+  return relative.endsWith('.rs') ? stripRustCfgTest(stripRustComments(source)) : stripComments(source);
+}
+
 /// Counts the hard-coded Korean literals left: one per string literal that holds Hangul,
 /// one per line of Hangul text that JSX draws as it is, and, as a last resort, one per
 /// run of Hangul the literal pattern cannot see: text nested in an interpolation
 /// (Swift `"\(c ? "가" : "나")"`, C# `$"{(c ? "가" : "나")}"`) or inside a Swift `"""` block.
 const STRING_LITERAL = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g;
+const RUST_STRING_LITERAL = /(?<![A-Za-z0-9_])(?:b|c)?r(#*)"[\s\S]*?"\1|"(?:[^"\\]|\\.)*"/g;
 const JSX_TEXT = /^[^<>{}]*$/;
 
+function literalPatternFor(relative) {
+  return relative.endsWith('.rs') ? RUST_STRING_LITERAL : STRING_LITERAL;
+}
+
+function literalInner(relative, match) {
+  if (!relative.endsWith('.rs')) return match.slice(1, -1);
+  const open = match.indexOf('"');
+  return match.slice(open + 1, match.lastIndexOf('"'));
+}
+
 function countLiterals(relative, source) {
-  const stripped = stripComments(source);
+  const stripped = stripSource(relative, source);
+  const pattern = literalPatternFor(relative);
   let count = 0;
-  for (const match of stripped.match(STRING_LITERAL) ?? []) {
+  for (const match of stripped.match(pattern) ?? []) {
     if (HANGUL.test(match)) count += 1;
   }
   if (relative.endsWith('.tsx')) {
     // JSX text nodes have no quotes: count the lines of Hangul that sit between `>` and `<`.
-    const withoutStrings = stripped.replace(STRING_LITERAL, '""');
+    const withoutStrings = stripped.replace(pattern, '""');
     for (const line of withoutStrings.split('\n')) {
       const trimmed = line.trim();
       if (HANGUL.test(trimmed) && JSX_TEXT.test(trimmed)) count += 1;
@@ -279,7 +483,7 @@ function countLiterals(relative, source) {
   }
   // Whatever Hangul is left once every matched literal is blanked sits outside a literal
   // the pattern recognised. Each quote-free run of it on a line counts once.
-  const residue = stripped.replace(STRING_LITERAL, '""');
+  const residue = stripped.replace(pattern, '""');
   for (const line of residue.split('\n')) {
     if (!HANGUL.test(line)) continue;
     if (relative.endsWith('.tsx') && JSX_TEXT.test(line.trim())) continue; // a JSX line, counted above
@@ -392,10 +596,11 @@ function classifyLiterals(relative, rawSource, record = true) {
   if (entries.length === 0) return { counted: countLiterals(relative, countedSource), exempt, allowed: 0 };
   let allowed = 0;
   // Comments are stripped first, so an allowed literal quoted in a comment is not the one blanked.
-  let remaining = stripComments(countedSource);
-  for (const match of remaining.match(STRING_LITERAL) ?? []) {
+  let remaining = stripSource(relative, countedSource);
+  const pattern = literalPatternFor(relative);
+  for (const match of remaining.match(pattern) ?? []) {
     if (!HANGUL.test(match)) continue;
-    const inner = match.slice(1, -1);
+    const inner = literalInner(relative, match);
     const entry = entries.find((candidate) => candidate.literals.includes(inner));
     if (!entry) continue;
     if (record) entry.found.add(inner);
@@ -556,15 +761,16 @@ for (const client of CLIENTS) {
         exempt += classified.exempt;
         allowed += classified.allowed;
       }
-      const stripped = stripComments(source);
+      const stripped = stripSource(relative, source);
       for (const match of stripped.matchAll(REFERENCE)) {
         keys.add(match[1]);
         if (!calledFrom.has(match[1])) calledFrom.set(match[1], relative);
       }
       // A key kept in a table and looked up indirectly is a reference too: a string
       // literal whose content is exactly a key counts as a use.
-      for (const literal of stripped.match(STRING_LITERAL) ?? []) {
-        const inner = literal.slice(1, -1);
+      const pattern = literalPatternFor(relative);
+      for (const literal of stripped.match(pattern) ?? []) {
+        const inner = literalInner(relative, literal);
         if (knownKeys.has(inner)) keys.add(inner);
       }
     }
@@ -579,7 +785,8 @@ for (const client of CLIENTS) {
     }
   }
   if (client.referencesOnly) continue;
-  const limit = budget?.areas?.[client.label];
+  const rawLimit = budget?.areas?.[client.label];
+  const limit = rawLimit === undefined && rootIdx >= 0 ? client.defaultFixtureBudget : rawLimit;
   report.push({ label: client.label, literals, exempt, allowed, files, moved: keys.size, budget: limit });
 }
 
@@ -612,7 +819,7 @@ if (budget) {
     if (typeof row.budget !== 'number') {
       fail(`${BUDGET}의 areas에 ${row.label}의 상한이 없습니다.`);
     } else if (row.literals > row.budget) {
-      fail(`${row.label}: 한국어 하드코딩 문구가 ${row.literals}개로 상한 ${row.budget}개를 넘습니다. L()/Locale.Get()/t() 키로 옮기세요.`);
+      fail(`${row.label}: 한국어 하드코딩 문구가 ${row.literals}개로 상한 ${row.budget}개를 넘습니다. L()/Locale.Get()/t()/locale.get() 키로 옮기세요.`);
     } else if (row.literals < row.budget) {
       staleAreas.push(row);
     }
@@ -630,11 +837,15 @@ if (budget) {
   }
 }
 
-// ── Touched Windows files (--touched-since) ───────────────────────────────────
+// ── Touched desktop/web/Rust files (--touched-since) ──────────────────────────
 if (TOUCHED_SINCE) {
   const SMOKE_EXEMPT = 'native/windows/MightyCode.WinUI/MainWindow.Smoke.cs';
-  const windowsClients = CLIENTS.filter(
-    (c) => c.label === 'Windows Core' || c.label === 'Windows WinUI',
+  const touchedClients = CLIENTS.filter(
+    (c) =>
+      c.label === 'Windows Core' ||
+      c.label === 'Windows WinUI' ||
+      c.label === 'Windows web' ||
+      c.label === 'Rust app',
   );
 
   const touchedSet = new Set();
@@ -664,9 +875,10 @@ if (TOUCHED_SINCE) {
     );
   } catch {}
 
-  for (const client of windowsClients) {
+  for (const client of touchedClients) {
     for (const root of client.roots) {
       for (const relative of walk(root, client.extensions, [])) {
+        if (client.skipFile?.test(relative)) continue;
         if (relative === SMOKE_EXEMPT) continue;
         if (!touchedSet.has(relative)) continue;
         // What the budget counts: exempt smoke files and regions and allowed literals stay out.
@@ -727,6 +939,8 @@ function documentation() {
   out.push('| --- | --- |');
   out.push('| macOS | `native/macos/Sources/MightyCore/Resources/Locales` (`Package.swift`의 `.copy`) |');
   out.push('| Windows | `MightyCode.WinUI.csproj`의 `Content` 연결 — 뿌리의 파일 자체를 옮기므로 어긋날 수 없다 |');
+  out.push('| Windows 웹 창 (0.5 공통 UI) | 사본 없음 — 번들러(`@locales/…`)가 뿌리의 파일 자체를 읽는다 |');
+  out.push('| Rust + Tauri (0.5 호스트) | 사본 없음 — `mighty-core`의 `locale.rs`가 `include_str!`로 뿌리의 파일 자체를 포함한다 |');
   out.push('| 전화기 | `mobile/src/locales` (`mobile/src/lib/i18n.ts`가 import) |');
   out.push('');
   out.push('`node scripts/check-locales.js`가 네 언어 모두 사본이 원본과 바이트까지 같은지, 키 집합과 자리표가');

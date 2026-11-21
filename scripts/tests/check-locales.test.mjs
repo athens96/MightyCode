@@ -37,7 +37,15 @@ const CSPROJ = `<Project>
  */
 // A budget roomy enough that no area can be over it; fitBudget then sets each area to its count.
 const ROOMY_BUDGET = {
-  areas: { 'macOS app': 100, 'macOS core': 100, 'Windows Core': 100, 'Windows WinUI': 100, phone: 100 },
+  areas: {
+    'macOS app': 100,
+    'macOS core': 100,
+    'Windows Core': 100,
+    'Windows WinUI': 100,
+    phone: 100,
+    'Windows web': 100,
+    'Rust app': 100,
+  },
 };
 const BUDGET_FILE = 'scripts/korean-literal-budget.json';
 
@@ -440,7 +448,15 @@ test('a translation copy that differs from the original fails', () => {
 
 // ── The Korean-literal budget (scripts/korean-literal-budget.json) ──────────────
 const APP = 'native/macos/Sources/MightyCode';
-const ZERO_AREAS = { 'macOS app': 0, 'macOS core': 0, 'Windows Core': 0, 'Windows WinUI': 0, phone: 0 };
+const ZERO_AREAS = {
+  'macOS app': 0,
+  'macOS core': 0,
+  'Windows Core': 0,
+  'Windows WinUI': 0,
+  phone: 0,
+  'Windows web': 0,
+  'Rust app': 0,
+};
 const budgetFor = (macApp, extra = {}) => ({ areas: { ...ZERO_AREAS, 'macOS app': macApp }, ...extra });
 const readBudget = (dir) => JSON.parse(fs.readFileSync(path.join(dir, BUDGET_FILE), 'utf8'));
 
@@ -829,6 +845,148 @@ test('non-locale .get() calls in Rust (HashMap, JSON args, prefs) do not false-p
     assert.equal(written.status, 0, `non-locale .get() must not fail\nstderr: ${written.stderr}`);
     const checked = run(['--root', dir, '--check']);
     assert.equal(checked.status, 0, `non-locale .get() must pass --check\nstderr: ${checked.stderr}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── 0.5 Windows web & Rust app Korean-literal ratchet ─────────────────────────
+test('unbudgeted Korean literals in native/windows/web/src/App.tsx fail --check, while *.test.tsx is skipped', () => {
+  const dir = tmpDir();
+  try {
+    setup(dir, {
+      budget: { areas: ZERO_AREAS },
+      koJson: KO,
+      enJson: EN,
+      files: {
+        ...USED,
+        'native/windows/web/src/App.tsx': 'export const App = () => <div>{t("a.one")}</div>;\n',
+        'native/windows/web/src/App.test.tsx': 'const fixture = "테스트 전용 문구";\n',
+      },
+    });
+    assert.equal(run(['--root', dir]).status, 0, 'clean App.tsx + Korean in App.test.tsx must pass and write docs/i18n.md');
+    assert.equal(run(['--root', dir, '--check']).status, 0, 'clean App.tsx must pass --check');
+
+    fs.writeFileSync(
+      path.join(dir, 'native/windows/web/src/App.tsx'),
+      'const label = "하드코딩";\nexport const App = () => <div>\n  직접 쓴 한글\n</div>;\n',
+    );
+    const failed = run(['--root', dir, '--check']);
+    assert.notEqual(failed.status, 0, 'hard-coded Korean in App.tsx must fail --check');
+    assert.match(failed.stderr, /Windows web: 한국어 하드코딩 문구가 2개로 상한 0개를 넘습니다/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('unbudgeted Korean literals in native/tauri/src-tauri/src/foo.rs fail --check, while #[cfg(test)], smoke_*.rs, tests/ and examples/ do not false-positive', () => {
+  const dir = tmpDir();
+  try {
+    const cleanProdWithTests = [
+      'pub struct Counter {',
+      '    pub label: &\'static str,',
+      '    #[cfg(test)]',
+      '    calls: usize,',
+      '}',
+      '/// 한글 주석과 apostrophe\'s lifetime 뒤 주석도 문구가 아니다.',
+      'pub fn clean<\'a>(s: &\'a str) -> &\'a str { s }',
+      '#[cfg(test)]',
+      'fn test_helper() -> Result<&\'static str, String> {',
+      '    Ok("헬퍼 테스트 한글")',
+      '}',
+      '#[cfg(test)]',
+      'mod tests {',
+      '    #[test]',
+      '    fn sample() {',
+      '        let a = "단위 테스트 한글";',
+      '        let b = r#"원시 문자열 테스트"#;',
+      '    }',
+      '}',
+      '',
+    ].join('\n');
+
+    setup(dir, {
+      budget: { areas: ZERO_AREAS },
+      koJson: KO,
+      enJson: EN,
+      files: {
+        ...USED,
+        'native/tauri/src-tauri/src/foo.rs': cleanProdWithTests,
+        'native/tauri/src-tauri/src/smoke_sample.rs': 'pub const PROBE: &str = "스모크 픽스처";\n',
+        'native/tauri/crates/mighty-core/tests/integration.rs': 'const T: &str = "통합 테스트";\n',
+        'native/tauri/crates/mighty-core/examples/demo.rs': 'fn main() { println!("예제 한글"); }\n',
+      },
+    });
+    const written = run(['--root', dir]);
+    assert.equal(written.status, 0, `#[cfg(test)], smoke_*.rs, tests/ and examples/ must not false-positive\nstderr: ${written.stderr}`);
+    const checked = run(['--root', dir, '--check']);
+    assert.equal(checked.status, 0, `clean Rust prod code must pass --check\nstderr: ${checked.stderr}`);
+
+    // Now add hard-coded Korean in production code (both after a #[cfg(test)] struct field and as raw / escaped strings).
+    fs.writeFileSync(
+      path.join(dir, 'native/tauri/src-tauri/src/foo.rs'),
+      cleanProdWithTests + '\npub fn bad() -> (&\'static str, &\'static str) { ("제품 한글", r#"원시 \\u{D55C}\\u{AE00}"#) }\n',
+    );
+    const failed = run(['--root', dir, '--check']);
+    assert.notEqual(failed.status, 0, 'unbudgeted Korean in foo.rs prod code must fail --check');
+    assert.match(failed.stderr, /Rust app: 한국어 하드코딩 문구가 2개로 상한 0개를 넘습니다/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--touched-since catches Korean literals in Windows web and Rust app while ignoring #[cfg(test)] and smoke_*.rs', () => {
+  const dir = tmpDir();
+  try {
+    setup(dir, {
+      budget: { areas: ZERO_AREAS },
+      koJson: KO,
+      enJson: EN,
+      files: {
+        ...USED,
+        'native/windows/web/src/App.tsx': 'export const App = () => null;\n',
+        'native/tauri/src-tauri/src/foo.rs': 'pub fn ok() -> &\'static str { "ok" }\n',
+        'native/tauri/src-tauri/src/smoke_ui.rs': '// smoke\n',
+      },
+    });
+    const g = gitInit(dir);
+    const sha = gitCommit(g, 'baseline');
+
+    // Touch foo.rs with #[cfg(test)] Korean only, and smoke_ui.rs with Korean -> must pass.
+    fs.appendFileSync(
+      path.join(dir, 'native/tauri/src-tauri/src/foo.rs'),
+      '#[cfg(test)]\nmod tests { const S: &str = "테스트 한글"; }\n',
+    );
+    fs.appendFileSync(path.join(dir, 'native/tauri/src-tauri/src/smoke_ui.rs'), 'const S: &str = "스모크 한글";\n');
+    const cleanTouched = run(['--root', dir, '--touched-since', sha]);
+    assert.equal(cleanTouched.status, 0, `#[cfg(test)] and smoke_*.rs must pass --touched-since\nstderr: ${cleanTouched.stderr}`);
+
+    // Touch App.tsx and foo.rs prod code with Korean -> both must be reported by --touched-since.
+    fs.writeFileSync(path.join(dir, 'native/windows/web/src/App.tsx'), 'export const msg = "웹 한글";\n');
+    fs.appendFileSync(path.join(dir, 'native/tauri/src-tauri/src/foo.rs'), 'pub const BAD: &str = "러스트 한글";\n');
+    const dirtyTouched = run(['--root', dir, '--touched-since', sha]);
+    assert.notEqual(dirtyTouched.status, 0, 'touched web/Rust prod Korean must fail');
+    assert.match(dirtyTouched.stderr, /Windows web: native\/windows\/web\/src\/App\.tsx에 한국어 하드코딩 문구가 1개 남아 있습니다/);
+    assert.match(dirtyTouched.stderr, /Rust app: native\/tauri\/src-tauri\/src\/foo\.rs에 한국어 하드코딩 문구가 1개 남아 있습니다/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('legacy 5-area fixture budgets under --root default Windows web and Rust app to 0', () => {
+  const dir = tmpDir();
+  try {
+    const legacyFiveAreas = {
+      areas: { 'macOS app': 0, 'macOS core': 0, 'Windows Core': 0, 'Windows WinUI': 0, phone: 0 },
+    };
+    setup(dir, { budget: legacyFiveAreas, koJson: KO, enJson: EN, files: USED });
+    const ok = run(['--root', dir]);
+    assert.equal(ok.status, 0, `legacy 5-area fixture must stay compatible\nstderr: ${ok.stderr}`);
+
+    fs.mkdirSync(path.join(dir, 'native/tauri/src-tauri/src'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'native/tauri/src-tauri/src/foo.rs'), 'pub const S: &str = "한글";\n');
+    const bad = run(['--root', dir]);
+    assert.notEqual(bad.status, 0, 'defaulted 0 budget must still catch Korean in Rust app');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

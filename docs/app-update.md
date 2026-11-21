@@ -126,14 +126,14 @@ python3 scripts/make-update-manifest.py --macos release/MightyCode-macos.zip \
 
 ## 크기 게이트
 
-앱은 512 MiB보다 큰 패키지를 아예 받지 않으므로(`AppUpdate.maximumPackageBytes`), 그보다 커진 릴리스는 기존 설치본이 업데이트할 수 없는 죽은 패키지가 된다. 그래서 **패키징 직후, 아무것도 올리기 전에** 480 MiB 게이트를 돌린다. 릴리스마다 조금씩 커져도 다음 빌드가 갑자기 설치 불가가 되지 않도록 512 MiB 상한보다 일찍 막는다. 0.5에는 브라우저 엔진이 들어 있지 않아(앱 안 브라우저 없음) zip은 게이트보다 훨씬 작다. 게이트는 상한일 뿐 어느 한 부분의 몫이 아니다.
+Wrangler `r2 object put`은 단일 객체 300 MiB(`scripts/release.py` `MAX_UPLOAD_BYTES`)를 넘으면 업로드를 거부하고, 앱 자체 업데이터는 512 MiB(`AppUpdate.maximumPackageBytes`)보다 큰 패키지를 아예 받지 않아 그보다 커진 릴리스는 기존 설치본이 업데이트할 수 없는 죽은 패키지가 된다. 두 한도 가운데 R2 단일 객체 업로드 한도(300 MiB)가 더 촘촘하므로, **패키징 직후, 아무것도 올리기 전에** 20 MiB 여유를 둔 **280 MiB** 게이트를 돌린다. 릴리스마다 조금씩 커져도 다음 빌드가 갑자기 업로드 실패나 설치 불가가 되지 않도록 일찍 막는다. 0.5에는 브라우저 엔진이 들어 있지 않아(앱 안 브라우저 없음) zip은 게이트보다 훨씬 작다. 게이트는 상한일 뿐 어느 한 부분의 몫이 아니다.
 
 ```bash
 ditto -c -k --sequesterRsrc --keepParent release/native-macos/MightyCode.app release/MightyCode-macos.zip
-scripts/check-release-size.sh release/MightyCode-macos.zip   # 480 MiB를 넘으면 0이 아닌 코드로 끝난다
+scripts/check-release-size.sh release/MightyCode-macos.zip   # 280 MiB를 넘으면 0이 아닌 코드로 끝난다
 ```
 
-인자 없이 부르면 `release/MightyCode-macos.zip`을 본다. 게이트가 실패하면 올리지 않고 패키지를 줄인다(번들 리소스·프레임워크부터). `.github/workflows/native-macos.yml`도 패키징 단계와 아티팩트 업로드 사이에서 같은 스크립트를 돌린다. `scripts/tests/test-release-size-gate.sh`가 479 MiB·481 MiB 희소 파일로 이 경계를 확인한다.
+인자 없이 부르면 `release/MightyCode-macos.zip`을 본다. 게이트가 실패하면 올리지 않고 패키지를 줄인다(번들 리소스·프레임워크부터). `.github/workflows/native-macos.yml`도 패키징 단계와 아티팩트 업로드 사이에서 같은 스크립트를 돌리며, Windows Tauri 패키저(`scripts/build-tauri-windows.ps1`)도 ZIP과 설치 프로그램에 같은 280 MiB 상한을 건다. `scripts/tests/test-release-size-gate.sh`가 279 MiB·280 MiB·281 MiB 희소 파일로 이 경계를 확인한다.
 
 ## Cloudflare에 올리기
 

@@ -2,11 +2,11 @@
 
 [`docs/devtool-gap-review.md`](devtool-gap-review.md)에서 고른 항목을 구현한 기록이다. 항목마다 모델 규칙은 `MightyCore`에, 화면은 `MightyCode`에 둔다. Windows는 아직 따라가지 않았다.
 
-> **0.5 상태.** 아래는 은퇴한 0.4 Swift Mac 앱(`native/macos`)에 만든 기록이다. 0.5(Rust + Tauri, Mac·Windows 공통)로 옮겨 온 것은 10번의 링크(`mightycode://`, `native/tauri/src-tauri/src/deep_link.rs`)와 셸 명령 `mighty`(`src-tauri/src/shell_command.rs`), 12번 창마다 worktree(`native/tauri/crates/mighty-delegation/src/pane_worktree.rs`, 페이지 `native/windows/web/src/pane/WorktreeBar.tsx`)뿐이다. 1 요청 되돌리기, 2 변경 리뷰와 줄 의견, 3 커밋·PR, 4 비교 실행, 5 대화 검색, 6 저장한 요청(`/prompt`, `/prompts`), 7 사용량 집계와 하루 예산, 8 에이전트 맥락, 9 작업 실행과 열린 포트, 10의 웹훅, 11 커밋 전 비밀값 검사·이 요청이 한 일·진단 정보 내보내기는 **Swift 0.4에만 있고 0.5에는 아직 없다**. 0.5 메뉴의 "사용량 보기"는 계정 사용량 화면이지 7번의 집계가 아니고, 예전 `usage.dailyBudgetUSD`·`notifications.webhookURL` 키는 Swift가 쓰던 설정 키 목록(`crates/mighty-platform/src/prefs.rs`)에 올라 있을 뿐 그 기능은 없다. 각 절 제목의 표시를 보라.
+> **0.5 상태.** 아래는 은퇴한 0.4 Swift Mac 앱(`native/macos`)에 만든 기록이다. 0.5(Rust + Tauri, Mac·Windows 공통)로 옮겨 온 것은 **1번 요청 되돌리기**(`native/tauri/crates/mighty-files/src/revert.rs`, `src-tauri/src/files.rs`, `native/windows/web/src/mighty/RunChanges.tsx`), **2번 변경 리뷰와 줄 의견·검토 대기열**(`native/windows/web/src/mighty/RunChanges.tsx`·`runChangesModel.ts`, 통합 검토 대기열 `src-tauri/src/review.rs`·`native/windows/web/src/review/ReviewPanel.tsx`), **5번 대화 검색**(`crates/mighty-history/src/conversation_search.rs`, `src-tauri/src/conversation_search.rs`, `native/windows/web/src/dialogs/ConversationSearch.tsx`), **10번의 링크(`mightycode://`)와 셸 명령 `mighty`**(`src-tauri/src/deep_link.rs`, `src-tauri/src/shell_command.rs`), **12번 창마다 worktree**(`crates/mighty-delegation/src/pane_worktree.rs`, `src-tauri/src/pane_worktree.rs`, 페이지 `native/windows/web/src/pane/WorktreeBar.tsx`)다. 반면 3 커밋·PR, 4 비교 실행, 6 저장한 요청(`/prompt`, `/prompts`), 7 사용량 집계와 하루 예산, 8 에이전트 맥락, 9 작업 실행과 열린 포트, 10의 웹훅, 11 커밋 전 비밀값 검사·이 요청이 한 일·진단 정보 내보내기는 **Swift 0.4에만 있고 0.5에는 아직 없다**. 0.5 메뉴의 "사용량 보기"는 계정 사용량 화면이지 7번의 집계가 아니고, 예전 `usage.dailyBudgetUSD`·`notifications.webhookURL` 키는 Swift가 쓰던 설정 키 목록(`crates/mighty-platform/src/prefs.rs`)에 올라 있을 뿐 그 기능은 없다. 각 절 제목의 표시를 보라.
 
-## 1. 요청 되돌리기 (Swift 0.4만, 0.5에 아직 없음)
+## 1. 요청 되돌리기 (0.5에도 있음)
 
-- 모델: `MightyCore/RunRevert.swift`, 검사: `Tests/MightyCoreTests/RunRevertTests.swift`.
+- 모델: `MightyCore/RunRevert.swift`, 검사: `Tests/MightyCoreTests/RunRevertTests.swift`. 0.5: `native/tauri/crates/mighty-files/src/revert.rs`, 호스트 `native/tauri/src-tauri/src/files.rs`(`runChangesRuns`·`runChanges`·`runChangesRevert`), 웹 `native/windows/web/src/mighty/RunChanges.tsx`.
 - 화면: 마이티 보기의 결과 블록 머리에 검토 단추(`doc.text.magnifyingglass`)가 붙는다. `FileOriginalStore`가 그 요청이 바꾼 파일의 원본을 하나라도 갖고 있을 때만 보인다. 누르면 `RunChangesSheet`가 열린다.
 - 되돌리기는 `FileOriginalStore`가 보관한 "요청이 처음 바꾸기 전 내용"을 파일에 다시 쓴다. 변경사항 보기가 기준으로 쓰는 바로 그 내용이다.
 - 거부 규칙(한 파일의 거부가 다른 파일을 막지 않는다):
@@ -18,9 +18,9 @@
 - 다시 쓸 때 지금 파일의 인코딩(BOM 포함, CP949·UTF-16도)과 권한을 그대로 둔다.
 - 확인 창은 "요청 뒤에 직접 고친 내용도 함께 사라진다"고 알린다. 각 줄에 되돌리면 돌아올 줄 수와 빠질 줄 수를 보여 준다.
 
-## 2. 변경 리뷰 화면과 줄 의견 (Swift 0.4만, 0.5에 아직 없음)
+## 2. 변경 리뷰 화면과 줄 의견 (0.5에도 있음 — 검토 대기열 포함)
 
-- 모델: `MightyCore/ReviewNotes.swift`, 검사: `Tests/MightyCoreTests/ReviewNotesTests.swift`.
+- 모델: `MightyCore/ReviewNotes.swift`, 검사: `Tests/MightyCoreTests/ReviewNotesTests.swift`. 0.5: 요청 변경 검토 `native/windows/web/src/mighty/RunChanges.tsx`·`runChangesModel.ts`, 그리고 worktree 창·위임 자식·최신 완료 요청 변경을 한데 모아 보여 주는 **검토 대기열**(`native/tauri/src-tauri/src/review.rs`, `native/windows/web/src/review/ReviewPanel.tsx`, 사이드바 검토 항목·⇧⌘R / Ctrl+Shift+R).
 - 화면: 1번의 `RunChangesSheet`를 검토 화면으로 넓혔다. 왼쪽은 요청이 바꾼 파일 목록(되돌리기 체크 포함), 오른쪽은 고른 파일의 diff(`FileChanges.read`, 기준은 요청 전 원본)다. diff 뷰(`FileDiffView`)는 `onLine`을 줄 때만 줄을 누를 수 있고, 다른 곳(참조 말풍선·파일 창)은 그대로 텍스트 선택만 한다.
 - 줄을 누르면 그 줄에 의견을 쓴다. 의견이 달린 줄은 왼쪽 가장자리에 표시된다. 지운 줄에는 "요청 전 n행"으로, 나머지 줄에는 `path:line`으로 자리를 남긴다.
 - **의견 n개 입력창에 넣기**는 의견을 파일·줄 순서로 정렬한 후속 요청 한 덩어리로 만들어 창의 입력창 뒤에 붙이고 검토 화면을 닫는다. 바로 보내지 않으므로 사용자가 고친 뒤 보낸다.
@@ -44,9 +44,9 @@
 - 누르면 입력창의 요청이 에이전트마다 `runInNewWorktree`로 새 worktree의 자식 창에서 동시에 실행된다. 자식 하나가 실패하면 기존 worktree 메뉴와 같은 규칙으로 그 이유가 창에 남는다. 이 동작을 위해 worktree 준비 확인(`refreshWorktreeReadiness`)을 창이 쉴 때도 한 번 한다.
 - **비교 결과 보기**(같은 메뉴): 같은 요청 글로 사람이 연 자식이 둘 이상이면 가장 최근 묶음을 나란히 보인다. 열마다 에이전트, 상태, 부모 브랜치 대비 바꾼 파일 수와 +/− 줄(`git diff --shortstat <부모 브랜치>...mighty/<id>`), CLI가 알려 준 비용, 그리고 **창 보기 · 병합 · 폐기…**(사이드바 카드와 같은 동작). 병합은 보고를 마친 자식만 된다.
 
-## 5. 대화 검색 (Swift 0.4만, 0.5에 아직 없음)
+## 5. 대화 검색 (0.5에도 있음)
 
-- 모델: `MightyCore/ConversationSearch.swift`, 검사: `Tests/MightyCoreTests/ConversationSearchTests.swift`.
+- 모델: `MightyCore/ConversationSearch.swift`, 검사: `Tests/MightyCoreTests/ConversationSearchTests.swift`. 0.5: `native/tauri/crates/mighty-history/src/conversation_search.rs`, 호스트 `native/tauri/src-tauri/src/conversation_search.rs`(`openConversationSearch`·`conversationSearch`·`conversationExport`), 웹 `native/windows/web/src/dialogs/ConversationSearch.tsx`·`conversationSearchRules.ts`(JSONL 기록인 Claude·Codex·pi·Antigravity 세션을 읽고 DB 기반 opencode·Hermes 세션은 제외).
 - 여는 곳: 워크스페이스 머리의 돋보기 단추, 메뉴 **워크스페이스 → 대화 검색**(⇧⌘F). 원격 워크스페이스에서는 꺼진다.
 - 대상은 세션 이어가기 목록과 같다(`ResumableSessions`: 이 폴더의 Claude·Codex·Antigravity 세션, 60일 이내, 지금 창에 열린 세션 제외, 자동 실행 제외). 색인을 만들지 않고 검색할 때마다 세션 파일을 읽는다(파일당 마지막 24 MiB). 입력을 멈추고 250ms 뒤에 찾고, 다시 치면 앞의 검색을 취소한다.
 - 요청과 답 메시지만 본다: Claude `message.content`의 text 조각, Codex `response_item`의 `message`와 `user_message`/`agent_message` 이벤트, 그 밖의 `role`+`content|parts|text` 줄. 도구 호출과 결과(`tool_result`, `function_call_output`)는 보지 않는다.

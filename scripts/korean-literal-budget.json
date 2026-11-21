@@ -1,12 +1,14 @@
 {
   "version": 1,
-  "note": "Hard-coded Korean string literals left per client (area of scripts/check-locales.js). The count must equal its area's budget: more is a new literal, fewer means the budget is stale; lower it with node scripts/check-locales.js --write-budget, which never raises one. Stage 2-1 added a last-resort count of Hangul the literal pattern cannot see (inside interpolations and Swift/C# \"\"\" blocks), so the other areas were re-based on that true count: macOS core 872→874, WinUI 189→190, phone 202→219; Windows Core fell 161→137 when SlashCommandStrings moved to the shared keys macOS reads. Exemptions and allowed literals are not counted; each says why, and one that no longer matches anything fails the check. Stage 2-2 moved macOS core to the shared keys (874→0): the frozen style engine (Styles/**, v6) and the Hangul composer's jamo tables are exempt, and saved-data markers, the status-line trust names and reply matchers are allowed. Stage 2-3 moved Windows Core (137→0) and WinUI (190→0) to the shared keys: the WinUI GUI smoke (MainWindow.Smoke.cs) is exempt and the status-line trust names stay as written; --touched-since now leaves out what the budget exempts or allows. Hangul spelled as \\uXXXX / \\u{XXXX} escapes is decoded before counting, so escapes cannot hide a literal: the Windows matchers and smoke fixtures written that way are allowed or exempt by name. Stage 2-4 moved the phone (mobile/app, mobile/src) to the shared keys (219→0): the phone's style renderer (mobile/src/lib/styles.ts) is frozen with the v6 engine and exempt, and the next-action reply matchers stay as written.",
+  "note": "Hard-coded Korean string literals left per client (area of scripts/check-locales.js). The count must equal its area's budget: more is a new literal, fewer means the budget is stale; lower it with node scripts/check-locales.js --write-budget, which never raises one. Stage 2-1 added a last-resort count of Hangul the literal pattern cannot see (inside interpolations and Swift/C# \"\"\" blocks), so the other areas were re-based on that true count: macOS core 872→874, WinUI 189→190, phone 202→219; Windows Core fell 161→137 when SlashCommandStrings moved to the shared keys macOS reads. Exemptions and allowed literals are not counted; each says why, and one that no longer matches anything fails the check. Stage 2-2 moved macOS core to the shared keys (874→0): the frozen style engine (Styles/**, v6) and the Hangul composer's jamo tables are exempt, and saved-data markers, the status-line trust names and reply matchers are allowed. Stage 2-3 moved Windows Core (137→0) and WinUI (190→0) to the shared keys: the WinUI GUI smoke (MainWindow.Smoke.cs) is exempt and the status-line trust names stay as written; --touched-since now leaves out what the budget exempts or allows. Hangul spelled as \\uXXXX / \\u{XXXX} escapes is decoded before counting, so escapes cannot hide a literal: the Windows matchers and smoke fixtures written that way are allowed or exempt by name. Stage 2-4 moved the phone (mobile/app, mobile/src) to the shared keys (219→0): the phone's style renderer (mobile/src/lib/styles.ts) is frozen with the v6 engine and exempt, and the next-action reply matchers stay as written. Stage 2-5 extended the ratchet to the 0.5 desktop web UI (Windows web, 0) and Rust + Tauri host (Rust app, 0), allowing saved-data markers, reply/prompt matchers, status-line trust names, reserved style names, ko-KR short-time markers, macOS standard OS menu roles and inline 4-language OS helper strings kept out of locales/*.json for C# parity.",
   "areas": {
     "macOS app": 0,
     "macOS core": 0,
     "Windows Core": 0,
     "Windows WinUI": 0,
-    "phone": 0
+    "phone": 0,
+    "Windows web": 0,
+    "Rust app": 0
   },
   "exemptFiles": {
     "native/macos/Sources/MightyCode/AgentTranscriptDiagnostics.swift": "A GUI smoke step: AppStore+AgentSmoke runs it under --smoke-test. Its fixtures and failure messages go to smoke-result.json, not to the UI.",
@@ -160,6 +162,138 @@
       "file": "native/windows/MightyCode.Core/TerminalPrompt.cs",
       "literal": "(password|passphrase|passcode|\\bpin\\b|token|secret|비밀번호|암호|パスワード|密码)[^\\n]*[:?：]\\s*$",
       "reason": "The same password pattern as the Mac's TerminalPromptDetector, matched against what a terminal command prints; never shown."
+    },
+    {
+      "file": "native/tauri/crates/mighty-accounts/src/usage/presentation.rs",
+      "literals": [
+        "오후",
+        "오전"
+      ],
+      "reason": "short_time's ko-KR 12-hour period markers (\"오전\"/\"오후\", matching .NET ToString(\"t\", ko-KR) alongside \"AM\"/\"PM\" for en-US)."
+    },
+    {
+      "file": "native/tauri/crates/mighty-companion/src/animation.rs",
+      "literals": [
+        "읽",
+        "검색",
+        "검토",
+        "찾는"
+      ],
+      "reason": "Matched against activity summaries (Korean summaries kept in saved logs) to choose the companion's reviewing animation, as on macOS and Windows; the English words beside them cover English summaries."
+    },
+    {
+      "file": "native/tauri/crates/mighty-composer/src/attachments.rs",
+      "literal": "첨부: ",
+      "reason": "The \"첨부: \" attachment marker written into and parsed back from saved user log entries, kept as written in every language (as on macOS and Windows)."
+    },
+    {
+      "file": "native/tauri/crates/mighty-core/src/normalize.rs",
+      "literal": "첨부: ",
+      "reason": "The saved \"첨부: \" attachment marker, parsed back to separate the typed request from its attachment lines (as in MightyCore/Models.swift)."
+    },
+    {
+      "file": "native/tauri/crates/mighty-history/src/history.rs",
+      "literal": "첨부: ",
+      "reason": "The saved \"첨부: \" attachment marker, parsed out of resumed session history (as in MightyCore/SessionHistory.swift)."
+    },
+    {
+      "file": "native/tauri/crates/mighty-run/src/attachments.rs",
+      "literal": "첨부: ",
+      "reason": "The saved \"첨부: \" attachment marker for run attachment summaries, kept identical across languages."
+    },
+    {
+      "file": "native/tauri/crates/mighty-composer/src/next_actions.rs",
+      "literals": [
+        ", 또는 ",
+        " \\u{2014} 또는 ",
+        " 또는 ",
+        " 중에서 선택",
+        " 중 선택",
+        " 중 하나",
+        "또는"
+      ],
+      "reason": "Matched against the agent's own reply text to split Korean next-action choices, as on macOS, Windows and phone; the English words beside them cover English replies."
+    },
+    {
+      "file": "native/tauri/crates/mighty-core/src/settings_sections.rs",
+      "literal": "구성 요소 must show every fixture CLI update result: expected {} but showed {}",
+      "reason": "smoke_run's failure diagnostic for smoke-result.json (matching C# SettingsSectionsSmoke), never shown in the UI."
+    },
+    {
+      "file": "native/tauri/crates/mighty-native/src/parity.rs",
+      "literal": "글꼴",
+      "reason": "parity::mask's golden-test normalizer: matches font-family select controls in Korean or English captures (\"글꼴\" / \"font\") to empty machine-specific font lists."
+    },
+    {
+      "file": "native/tauri/crates/mighty-styles/src/decoder.rs",
+      "literal": "클러드 플랜",
+      "reason": "RESERVED_NAMES: the bundled Claude plan style's name as claude-plan.json spells it, matched folded against non-bundled manifests (contract 1.2, as on macOS and C#); never shown."
+    },
+    {
+      "file": "native/tauri/crates/mighty-terminal/src/prompt.rs",
+      "literal": "(?i)(password|passphrase|passcode|\\bpin\\b|token|secret|비밀번호|암호|パスワード|密码)[^\\n]*[:?：]\\s*$",
+      "reason": "The same terminal password-prompt pattern as macOS and C# TerminalPromptDetector, matched against what a command prints; never shown."
+    },
+    {
+      "file": "native/tauri/crates/mighty-tools/src/status_line/strings.rs",
+      "literals": [
+        "프로젝트 로컬 설정",
+        "프로젝트 설정",
+        "사용자 설정"
+      ],
+      "reason": "StatusLineConfig source names: hashed into the trust fingerprint a workspace's allowed status-line command is saved under (as on macOS and C#), so they stay as written; source_label shows the localized name."
+    },
+    {
+      "file": "native/tauri/src-tauri/src/deep_link.rs",
+      "literals": [
+        "링크의 내용을 초안에 추가할까요?",
+        "링크가 \\\"{pane}\\\"의 초안 뒤에 다음 내용을 추가하려 합니다. 보내지는 않습니다.\\n\\n{text}",
+        "추가"
+      ],
+      "reason": "draft_words(\"ko\"): 4-language (ko/ja/zh/en) inline table for the deep-link draft confirmation dialog, kept out of locales/*.json so C# parity builds stay unchanged."
+    },
+    {
+      "file": "native/tauri/src-tauri/src/editor.rs",
+      "literal": "편집기에서 열기: not started in a smoke",
+      "reason": "Smoke-mode diagnostic log line written only when host.smoke.is_some(), never shown in the UI."
+    },
+    {
+      "file": "native/tauri/src-tauri/src/menu.rs",
+      "literals": [
+        "파일",
+        "편집",
+        "보기",
+        "윈도우",
+        "도움말",
+        "Mighty Code에 관하여",
+        "서비스",
+        "Mighty Code 가리기",
+        "기타 가리기",
+        "모두 보기",
+        "Mighty Code 종료",
+        "닫기",
+        "실행 취소",
+        "실행 복귀",
+        "오려두기",
+        "복사하기",
+        "붙여넣기",
+        "전체 선택",
+        "전체 화면 시작",
+        "최소화",
+        "확대/축소",
+        "모두 앞으로 가져오기"
+      ],
+      "reason": "standard(\"ko\"): macOS standard OS application/edit/window menu role labels in the 4-language (ko/ja/zh/en) table; custom menu items use locale.get()."
+    },
+    {
+      "file": "native/tauri/src-tauri/src/shell_command.rs",
+      "literals": [
+        "이 실행은 이 Mac을 바꿀 수 없어서 'mighty' 명령을 설치하지 않았습니다. 설치된 앱이나 --allow-state-write로 실행하세요.",
+        "'mighty'를 바꿀까요?",
+        "{path}는 Mighty Code의 명령이 아닙니다. Mighty Code의 명령으로 바꿀까요?",
+        "바꾸기"
+      ],
+      "reason": "words(\"ko\"): 4-language (ko/ja/zh/en) inline table for the 'mighty' shell command installer prompts, kept out of locales/*.json so C# parity builds stay unchanged."
     }
   ]
 }
