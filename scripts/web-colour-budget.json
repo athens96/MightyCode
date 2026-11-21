@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "note": "Hardcoded colour literals (hex #rgb/#rgba/#rrggbb/#rrggbbaa, rgb/rgba, hsl/hsla) per file in the 0.5 desktop web UI (native/windows/web/src). Every surface, border, ink and accent is meant to read a design-token CSS variable from src/theme/tokens.ts. Neutral black alpha shadows inside CSS `box-shadow` declarations (`rgba(0, 0, 0, …)` / `rgb(0 0 0 / …)`) are not counted. Counts only go down; lower them with node scripts/check-design-tokens.js --write. Exempt files are not counted; each says why, and a glob that matches no file fails.",
+  "exemptFiles": {
+    "native/windows/web/src/theme/**": "The web design-token source itself (converts native/contracts/fixtures/design-tokens.json into CSS custom properties).",
+    "native/windows/web/src/icons/**": "Icon primitives and Lucide SVG path definitions (draw in currentColor, not app chrome palette tokens)."
+  },
+  "files": {
+    "native/windows/web/src/conversation/conversation.css": 3,
+    "native/windows/web/src/pane/worktree.css": 4,
+    "native/windows/web/src/panes/panes.css": 1,
+    "native/windows/web/src/shell/shell.css": 2
+  }
+}

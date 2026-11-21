@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Usage: node scripts/check-design-tokens.js                  # check the three ratchets against their budgets
+// Usage: node scripts/check-design-tokens.js                  # check the four ratchets against their budgets
 //        node scripts/check-design-tokens.js --check          # the same
 //        node scripts/check-design-tokens.js --write          # lower every budget to today's counts
 //        node scripts/check-design-tokens.js --write-budget   # the same (the check-locales.js spelling)
 //        node scripts/check-design-tokens.js --root <dir>     # check another root (fixture tests)
 //
-// Three ratchets that may only go down. Plain node only, no dependencies.
+// Four ratchets that may only go down. Plain node only, no dependencies.
 //
 // 1. Colour literals (scripts/design-token-budget.json), from the Windows design conversion
 //    (.omc/plans/windows-design-conversion.md, stage 1). Every surface, border, ink and
@@ -65,6 +65,14 @@
 //
 // 4. Not a ratchet: the motion tokens' shape (design-tokens.json `motion`) and the pending display
 //    cases (fixtures/pending.json) checked against them; see section 4 below.
+//
+// 5. Web UI colour literals (scripts/web-colour-budget.json), for the active 0.5 desktop web UI
+//    (native/windows/web/src, .css / .ts / .tsx). Every surface, border, ink and accent is meant to
+//    read a CSS custom property from src/theme/tokens.ts. This counts hardcoded hex (#rgb, #rgba,
+//    #rrggbb, #rrggbbaa), rgb()/rgba() and hsl()/hsla() literals per file. Neutral black alpha
+//    shadows inside CSS `box-shadow` declarations (`rgba(0, 0, 0, …)` / `rgb(0 0 0 / …)`) are not
+//    counted, and the budget's exemptFiles (e.g. src/theme/**, src/icons/**) are not counted. As
+//    with sections 1 and 3, a file over its budget or outside it fails, and one under it is stale.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -453,6 +461,89 @@ if (tokensPresent) {
     fail(`${PENDING_FILE} is missing.`);
   }
   if (failures.length === before) console.log(`motion tokens: ${MOTION_KEYS.length} keys hold; pending display cases agree with them.`);
+}
+
+// ── 5. Colour literals (0.5 desktop web UI) ──────────────────────────────────
+const WEB_COLOUR_BUDGET = 'scripts/web-colour-budget.json';
+const WEB_COLOUR_ROOT = 'native/windows/web/src';
+const WEB_COLOUR_EXTENSIONS = ['.css', '.ts', '.tsx'];
+
+const CSS_LITERAL_OR_COMMENT = /("(?:[^"\\\n]|\\.)*")|('(?:[^'\\\n]|\\.)*')|\/\*[\s\S]*?\*\//g;
+function stripCssComments(source) {
+  return source.replace(CSS_LITERAL_OR_COMMENT, (match, doubleQuoted, singleQuoted) =>
+    doubleQuoted ?? singleQuoted ?? match.replace(/[^\n]/g, ''));
+}
+
+// Neutral black alpha shadows inside CSS `box-shadow` declarations (e.g. `box-shadow: 0 1px 1px rgba(0, 0, 0, .05)`
+// or `rgb(0 0 0 / 12%)`) are elevation shadows rather than palette tokens. Coloured shadows and `rgba(0, 0, 0, …)`
+// outside `box-shadow` still count.
+function stripBoxShadowBlackAlpha(css) {
+  return css.replace(/(?<![0-9A-Za-z_-])box-shadow\s*:[^;{}]+/gi, (declaration) =>
+    declaration
+      .replace(/\brgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*(?:\d+(?:\.\d+)?%|0?\.\d+|1(?:\.0+)?|0)\s*\)/gi, ' ')
+      .replace(/\brgb\(\s*0\s+0\s+0\s*\/\s*(?:\d+(?:\.\d+)?%|0?\.\d+|1(?:\.0+)?|0)\s*\)/gi, ' '));
+}
+
+const WEB_COLOUR_PATTERNS = [
+  /(?<![0-9A-Za-z_-])#(?:[0-9A-Fa-f]{8}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{4}|[0-9A-Fa-f]{3})(?![0-9A-Za-z_-])/g,
+  /\b(?:rgba?|hsla?)\s*\(/gi,
+];
+
+function countWebColours(relative) {
+  const raw = readText(relative);
+  const stripped = relative.endsWith('.css')
+    ? stripBoxShadowBlackAlpha(stripCssComments(raw))
+    : stripComments(raw);
+  return WEB_COLOUR_PATTERNS.reduce((total, pattern) => total + (stripped.match(pattern)?.length ?? 0), 0);
+}
+
+const webColourBudgetFile = readBudget(WEB_COLOUR_BUDGET);
+const webSourceFiles = walk(WEB_COLOUR_ROOT, WEB_COLOUR_EXTENSIONS, []).sort();
+if (!webColourBudgetFile && rootIndex < 0) {
+  fail(`${WEB_COLOUR_BUDGET} is missing.`);
+} else if (webColourBudgetFile || webSourceFiles.length > 0) {
+  const budget = webColourBudgetFile ?? { exemptFiles: {}, files: {} };
+  const exemptGlobs = Object.entries(budget.exemptFiles ?? {}).map(([glob, reason]) => ({
+    glob,
+    reason,
+    pattern: globPattern(glob),
+    matched: 0,
+  }));
+  const allowed = budget.files ?? {};
+  const counts = {};
+  for (const relative of webSourceFiles) {
+    const exemptBy = exemptGlobs.filter((entry) => entry.pattern.test(relative));
+    for (const entry of exemptBy) entry.matched += 1;
+    if (exemptBy.length > 0) continue;
+    const value = countWebColours(relative);
+    if (value > 0) counts[relative] = value;
+  }
+  for (const entry of exemptGlobs) {
+    if (entry.matched === 0) fail(`${WEB_COLOUR_BUDGET}: exemptFiles ${entry.glob} matches no file.`);
+    if (!entry.reason) fail(`${WEB_COLOUR_BUDGET}: exemptFiles ${entry.glob} gives no reason.`);
+  }
+  const over = [];
+  for (const [file, value] of Object.entries(counts)) {
+    const limit = allowed[file] ?? 0;
+    if (value > limit) {
+      over.push(`${file}: ${value} web colour literals, budget ${limit}. Use a design-token CSS variable (src/theme/tokens.ts) instead.`);
+    }
+  }
+  failures.push(...over);
+  const total = sum(Object.values(counts));
+  const budgetTotal = sum(Object.values(allowed));
+  if (WRITE && over.length === 0 && webColourBudgetFile) {
+    const files = Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
+    fs.writeFileSync(path.join(ROOT, WEB_COLOUR_BUDGET), JSON.stringify({ ...webColourBudgetFile, files }, null, 2) + '\n');
+    console.log(`web-colour budget written: ${total} web colour literals in ${Object.keys(files).length} files (was ${budgetTotal}).`);
+  } else {
+    for (const [file, limit] of Object.entries(allowed)) {
+      if ((counts[file] ?? 0) < limit) {
+        fail(`${file}: ${counts[file] ?? 0} web colour literals, budget ${limit}. Lower the budget: node scripts/check-design-tokens.js --write`);
+      }
+    }
+    console.log(`colour literals (web): ${total} in ${Object.keys(counts).length} files (budget ${budgetTotal}, exempt ${exemptGlobs.length} globs).`);
+  }
 }
 
 if (failures.length > 0) {

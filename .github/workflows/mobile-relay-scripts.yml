@@ -6,6 +6,8 @@ on:
       - 'mobile/**'
       - 'scripts/**'
       - 'locales/**'
+      - 'native/windows/web/**'
+      - 'native/contracts/**'
       - 'docs/help/**'
       - 'docs/app-update.md'
       - 'NOTICE.md'
@@ -20,6 +22,8 @@ on:
       - 'mobile/**'
       - 'scripts/**'
       - 'locales/**'
+      - 'native/windows/web/**'
+      - 'native/contracts/**'
       - 'docs/help/**'
       - 'docs/app-update.md'
       - 'NOTICE.md'
@@ -55,6 +59,9 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build
           npm test
+      - name: Audit production dependencies (relay)
+        working-directory: relay
+        run: npm audit --omit=dev --audit-level=high
 
   relay-cloudflare:
     name: Relay (Cloudflare Worker)
@@ -75,6 +82,9 @@ jobs:
           npm ci --no-audit --no-fund
           npm run typecheck
           npm test
+      - name: Audit production dependencies (Cloudflare relay)
+        working-directory: relay/cloudflare
+        run: npm audit --omit=dev --audit-level=high
 
   mobile:
     name: Mobile (Expo / React Native)
@@ -95,6 +105,12 @@ jobs:
           npm ci --no-audit --no-fund
           npm run typecheck
           npm test
+      - name: Audit production dependencies (mobile — advisory)
+        # Advisory until upstream Expo / @react-native-firebase / react-native-markdown-display transitive
+        # advisories resolve without breaking upgrades; Dependabot tracks updates weekly.
+        working-directory: mobile
+        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
 
   scripts:
     name: Scripts & quality gates
@@ -113,6 +129,11 @@ jobs:
       - name: Install cryptography (hash-pinned) for release script tests
         run: |
           python3 -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --no-deps -r scripts/requirements-sign.txt
+      - name: Repository locale, design-token and help gates
+        run: |
+          node scripts/check-locales.js --check
+          node scripts/check-design-tokens.js --check
+          node scripts/help/build.mjs --check
       - name: Node script tests
         run: node --test scripts/tests/check-locales.test.mjs scripts/tests/check-design-tokens.test.mjs scripts/tests/help-build.test.mjs
       - name: Python script unit tests

@@ -1,5 +1,5 @@
 // node --test scripts/tests/check-design-tokens.test.mjs
-// Checks the spacing-literal and font-literal ratchets of check-design-tokens.js against fixture trees.
+// Checks the spacing-literal, font-literal and web colour-literal ratchets of check-design-tokens.js against fixture trees.
 // It never touches the real sources or budgets.
 
 import { test } from 'node:test';
@@ -13,13 +13,14 @@ const CHECKER = new URL('../check-design-tokens.js', import.meta.url).pathname;
 const NODE = process.execPath;
 const SPACING_BUDGET = 'scripts/spacing-literal-budget.json';
 const FONT_BUDGET = 'scripts/font-literal-budget.json';
+const WEB_COLOUR_BUDGET = 'scripts/web-colour-budget.json';
 
 function run(dir, ...args) {
   return spawnSync(NODE, [CHECKER, '--root', dir, ...args], { encoding: 'utf8' });
 }
 
-/** A fixture root with an empty colour budget, the given spacing and font budgets and source files. */
-function fixture({ areas = { macOS: 0, Windows: 0, phone: 0 }, exemptFiles, fonts = { files: {} }, files = {} } = {}) {
+/** A fixture root with an empty colour budget, the given spacing, font and optional web-colour budgets and source files. */
+function fixture({ areas = { macOS: 0, Windows: 0, phone: 0 }, exemptFiles, fonts = { files: {} }, webColours, files = {} } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'spacing-ck-'));
   const write = (relative, content) => {
     fs.mkdirSync(path.join(dir, path.dirname(relative)), { recursive: true });
@@ -28,6 +29,7 @@ function fixture({ areas = { macOS: 0, Windows: 0, phone: 0 }, exemptFiles, font
   write('scripts/design-token-budget.json', JSON.stringify({ exempt: {}, files: {} }));
   write(SPACING_BUDGET, JSON.stringify({ areas, ...(exemptFiles ? { exemptFiles } : {}) }));
   write(FONT_BUDGET, JSON.stringify(fonts));
+  if (webColours !== undefined) write(WEB_COLOUR_BUDGET, JSON.stringify(webColours));
   for (const [relative, content] of Object.entries(files)) write(relative, content);
   return dir;
 }
@@ -39,6 +41,8 @@ function areas(dir) {
 const MAC = 'native/macos/Sources/MightyCode/View.swift';
 const WIN = 'native/windows/MightyCode.WinUI/MainWindow.View.cs';
 const PHONE = 'mobile/src/components/view.tsx';
+const WEB_CSS = 'native/windows/web/src/shell/shell.css';
+const WEB_TSX = 'native/windows/web/src/shell/Chrome.tsx';
 
 test('a count above the budget fails', () => {
   const dir = fixture({
@@ -211,5 +215,146 @@ test('a font budget only goes down, and its exempt globs must match', () => {
     assert.match(r.stderr, /exemptFiles native\/windows\/MightyCode\.WinUI\/Gone\.cs matches no file/);
   } finally {
     fs.rmSync(empty, { recursive: true, force: true });
+  }
+});
+
+test('a hardcoded #ff0000 in a web .css file fails --check', () => {
+  const dir = fixture({
+    webColours: { files: {} },
+    files: {
+      [WEB_CSS]: '.banner { color: #ff0000; background: var(--card); }\n',
+    },
+  });
+  try {
+    const r = run(dir, '--check');
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /shell\.css: 1 web colour literals, budget 0\. Use a design-token CSS variable/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a hardcoded #ff0000, rgb() or hsl() in a web .tsx file fails --check', () => {
+  const dir = fixture({
+    webColours: { files: {} },
+    files: {
+      [WEB_TSX]: [
+        'export function Chrome() {',
+        "  return <div style={{ color: '#ff0000', borderColor: 'rgb(10, 20, 30)', background: `hsl(0, 100%, 50%)` }} />;",
+        '}',
+        '',
+      ].join('\n'),
+    },
+  });
+  try {
+    const r = run(dir, '--check');
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /Chrome\.tsx: 3 web colour literals, budget 0\. Use a design-token CSS variable/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('web colour ratchet exempts neutral box-shadow black alpha, comments, ID selectors, tests and exempt globs, but catches coloured shadows and non-shadow rgba', () => {
+  const clean = fixture({
+    webColours: {
+      exemptFiles: {
+        'native/windows/web/src/theme/**': 'token source',
+        'native/windows/web/src/icons/**': 'icons',
+      },
+      files: {},
+    },
+    files: {
+      [WEB_CSS]: [
+        '/* #ff0000 rgba(255, 0, 0, .5) in a comment */',
+        '#root, #add-btn { background: var(--page); color: var(--ink); }',
+        '.card { box-shadow: 0 1px 2px rgba(0, 0, 0, .12), inset 0 0 0 1px rgb(0 0 0 / 8%); }',
+        '.mix { border-color: color-mix(in srgb, var(--accent) 80%, transparent); }',
+        '',
+      ].join('\n'),
+      [WEB_TSX]: [
+        '// #ff0000 in a line comment',
+        '/* rgba(255, 0, 0, 0.5) in a block comment */',
+        "export const tone = 'var(--accent)';",
+        '',
+      ].join('\n'),
+      'native/windows/web/src/theme/tokens.ts': "export const backdrop = 'rgba(0,0,0,0.4)';\n",
+      'native/windows/web/src/icons/Icon.tsx': "export const stroke = '#000';\n",
+      'native/windows/web/src/shell/shell.test.ts': "export const sample = '#ff0000';\n",
+    },
+  });
+  try {
+    const r = run(clean, '--check');
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /colour literals \(web\): 0 in 0 files \(budget 0, exempt 2 globs\)/);
+  } finally {
+    fs.rmSync(clean, { recursive: true, force: true });
+  }
+
+  const badShadowAndBackdrop = fixture({
+    webColours: { files: {} },
+    files: {
+      [WEB_CSS]: [
+        '.glow { box-shadow: 0 2px 8px rgba(255, 0, 0, .2); }',
+        '.scrim { background: rgba(0, 0, 0, .5); }',
+        '',
+      ].join('\n'),
+    },
+  });
+  try {
+    const r = run(badShadowAndBackdrop, '--check');
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /shell\.css: 2 web colour literals, budget 0/);
+  } finally {
+    fs.rmSync(badShadowAndBackdrop, { recursive: true, force: true });
+  }
+});
+
+test('web colour budget only goes down, --write never raises it, and exempt globs must match', () => {
+  const dir = fixture({
+    webColours: {
+      exemptFiles: { 'native/windows/web/src/theme/**': 'token source' },
+      files: { [WEB_CSS]: 3 },
+    },
+    files: {
+      [WEB_CSS]: '.a { color: #3fb950; }\n',
+      'native/windows/web/src/theme/tokens.ts': "export const x = '#ffffff';\n",
+    },
+  });
+  try {
+    const stale = run(dir, '--check');
+    assert.notEqual(stale.status, 0);
+    assert.match(stale.stderr, /shell\.css: 1 web colour literals, budget 3\. Lower the budget/);
+
+    const write = run(dir, '--write');
+    assert.equal(write.status, 0, write.stderr);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, WEB_COLOUR_BUDGET), 'utf8')).files, { [WEB_CSS]: 1 });
+    assert.equal(run(dir, '--check').status, 0);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  const over = fixture({
+    webColours: { files: { [WEB_CSS]: 1 } },
+    files: { [WEB_CSS]: '.a { color: #3fb950; background: #ff0000; }\n' },
+  });
+  try {
+    const r = run(over, '--write');
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /shell\.css: 2 web colour literals, budget 1/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(over, WEB_COLOUR_BUDGET), 'utf8')).files, { [WEB_CSS]: 1 });
+  } finally {
+    fs.rmSync(over, { recursive: true, force: true });
+  }
+
+  const unmatched = fixture({
+    webColours: { exemptFiles: { 'native/windows/web/src/gone/**': 'removed' }, files: {} },
+  });
+  try {
+    const r = run(unmatched, '--check');
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /exemptFiles native\/windows\/web\/src\/gone\/\*\* matches no file/);
+  } finally {
+    fs.rmSync(unmatched, { recursive: true, force: true });
   }
 });
