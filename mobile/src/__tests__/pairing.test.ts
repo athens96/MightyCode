@@ -6,6 +6,7 @@ import {
   isLocalRelayHost,
   normalizeRelayUrl,
   pairingFingerprint,
+  pairingUrlFromSearchParams,
   parsePairingUrl,
   relayTransportError,
   type PairingPayload,
@@ -199,5 +200,47 @@ describe('identity helpers', () => {
     expect(describeRelayTarget('wss://relay.example.com:8787', 'sid-1')).toBe(
       'relay.example.com:8787 · sid-1',
     );
+  });
+});
+
+describe('pairingUrlFromSearchParams', () => {
+  it('returns undefined when no pairing parameters are present', () => {
+    expect(pairingUrlFromSearchParams({})).toBeUndefined();
+    expect(pairingUrlFromSearchParams({ unrelated: '1' })).toBeUndefined();
+  });
+
+  it('returns the raw url parameter when provided', () => {
+    const raw = formatPairingUrl(payload);
+    expect(pairingUrlFromSearchParams({ url: `  ${raw}  ` })).toBe(raw);
+    expect(pairingUrlFromSearchParams({ url: [raw, 'ignored'] })).toBe(raw);
+  });
+
+  it('reconstructs a deep link from individual query parameters including direct endpoints', () => {
+    const reconstructed = pairingUrlFromSearchParams({
+      v: '2',
+      sid: payload.serverId,
+      pk: publicKeyUrl,
+      relay: payload.relayUrl,
+      key: payload.pairingKey,
+      name: payload.name,
+      direct: '100.101.102.103:43139,[fd7a:115c:a1e0::1]:43139',
+    });
+    expect(reconstructed).toBeDefined();
+    expect(parsePairingUrl(reconstructed!)).toEqual({
+      ok: true,
+      value: {
+        ...payload,
+        directEndpoints: ['100.101.102.103:43139', '[fd7a:115c:a1e0::1]:43139'],
+      },
+    });
+  });
+
+  it('reconstructs invalid or partial deep-link parameters so parsePairingUrl reports the error', () => {
+    const reconstructed = pairingUrlFromSearchParams({ v: '3', sid: 'mac' });
+    expect(reconstructed).toBe('mightycode://pair?v=3&sid=mac');
+    expect(parsePairingUrl(reconstructed!)).toEqual({
+      ok: false,
+      error: '지원하지 않는 페어링 버전입니다 (v=3).',
+    });
   });
 });

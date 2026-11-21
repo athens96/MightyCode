@@ -28,6 +28,37 @@ export type PairingParseResult =
   | { ok: false; error: string };
 
 const SERVER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const PAIRING_PARAM_KEYS = ['v', 'sid', 'pk', 'relay', 'key', 'name', 'direct'] as const;
+
+function firstSearchParam(value: string | string[] | undefined): string | undefined {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.find((entry) => typeof entry === 'string');
+  return undefined;
+}
+
+/**
+ * Reconstructs a `mightycode://pair?...` URL from Expo Router search params when `/pair`
+ * is opened via a deep link (`mightycode://pair?v=2&...` or `?url=...`). Returns undefined
+ * when no pairing parameters are present (normal navigation to `/pair`).
+ */
+export function pairingUrlFromSearchParams(
+  params: Record<string, string | string[] | undefined>,
+): string | undefined {
+  const directUrl = firstSearchParam(params.url)?.trim();
+  if (directUrl) return directUrl;
+
+  const query = new URLSearchParams();
+  let found = false;
+  for (const key of PAIRING_PARAM_KEYS) {
+    const value = firstSearchParam(params[key]);
+    if (value !== undefined) {
+      query.set(key, value);
+      found = true;
+    }
+  }
+  if (!found) return undefined;
+  return `${PAIRING_SCHEME}?${query.toString()}`;
+}
 
 function readParams(raw: string): URLSearchParams | null {
   const trimmed = raw.trim();

@@ -6,7 +6,7 @@ import { KEY_SEPARATOR } from '@/lib/keys';
 import type { HostIdentity } from '@/lib/provider-host';
 import { mergeSessionDetail, mergeState } from '@/lib/merge';
 import { workspaceMute } from '@/lib/push/workspace-mute';
-import { hostLeaseOptions, useHostsStore } from '@/store/hosts';
+import { hostLeaseOptions, onHostRemoved, useHostsStore } from '@/store/hosts';
 
 function detailKey(hostId: string, sessionId: string): string {
   return `${hostId}${KEY_SEPARATOR}${sessionId}`;
@@ -109,6 +109,9 @@ export const useLiveStore = create<LiveStore>((set) => ({
     }),
 }));
 
+// Drop cached host state/details/capabilities/commands whenever a pairing is removed.
+onHostRemoved((hostId) => useLiveStore.getState().clearHost(hostId));
+
 export function useHostState(hostId: string | undefined): MobileState | undefined {
   return useLiveStore((store) => (hostId ? store.states[hostId] : undefined));
 }
@@ -157,6 +160,9 @@ export function useHostClient(hostId: string | undefined): MobileClient | undefi
   const hostPublicKeyB64 = useHostsStore(
     (state) => state.hosts.find((entry) => entry.id === hostId)?.hostPublicKeyB64,
   );
+  const directEndpoints = useHostsStore(
+    (state) => state.hosts.find((entry) => entry.id === hostId)?.directEndpoints,
+  );
   const pairingKey = useHostsStore((state) => (hostId ? state.keys[hostId] : undefined));
   const deviceToken = useHostsStore((state) => (hostId ? state.tokens[hostId] : undefined));
   // A host that once answered `device-conflict` has its own id; everyone else shares one.
@@ -172,8 +178,9 @@ export function useHostClient(hostId: string | undefined): MobileClient | undefi
     if (clientId) value.clientId = clientId;
     if (deviceToken) value.deviceToken = deviceToken;
     else if (pairingKey) value.pairingKey = pairingKey;
+    if (directEndpoints?.length) value.directEndpoints = directEndpoints;
     return value;
-  }, [serverId, relayUrl, hostPublicKeyB64, pairingKey, deviceToken, clientId]);
+  }, [serverId, relayUrl, hostPublicKeyB64, directEndpoints, pairingKey, deviceToken, clientId]);
 
   useEffect(() => {
     if (!hostId || !credentials) {

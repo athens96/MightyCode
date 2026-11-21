@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -9,10 +9,15 @@ import {
   View,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Button, Card, Chip, ErrorBanner } from '@/components/ui';
 import { describeError, probeHost } from '@/api/client';
-import { parsePairingUrl, relayTransportError, type PairingPayload } from '@/lib/pairing';
+import {
+  pairingUrlFromSearchParams,
+  parsePairingUrl,
+  relayTransportError,
+  type PairingPayload,
+} from '@/lib/pairing';
 import { t } from '@/lib/i18n';
 import { useHostsStore } from '@/store/hosts';
 import { showToast } from '@/store/toast';
@@ -23,15 +28,31 @@ type Mode = 'qr' | 'manual';
 export default function PairScreen() {
   const palette = usePalette();
   const styles = useStyles(makeStyles);
-  const [mode, setMode] = useState<Mode>('qr');
+  const searchParams = useLocalSearchParams();
+  const deepLinkUrl = pairingUrlFromSearchParams(searchParams);
+  const [mode, setMode] = useState<Mode>(() => (deepLinkUrl ? 'manual' : 'qr'));
   const [permission, requestPermission] = useCameraPermissions();
   const [busy, setBusy] = useState(false);
   /** The computer is asking its user to allow this phone. */
   const [awaiting, setAwaiting] = useState(false);
-  const [error, setError] = useState<string | undefined>(undefined);
-  const [link, setLink] = useState('');
+  const [error, setError] = useState<string | undefined>(() => {
+    if (!deepLinkUrl) return undefined;
+    const parsed = parsePairingUrl(deepLinkUrl);
+    return parsed.ok ? undefined : parsed.error;
+  });
+  const [link, setLink] = useState(() => deepLinkUrl ?? '');
+  const handledDeepLink = useRef<string | undefined>(deepLinkUrl);
   const addHost = useHostsStore((state) => state.addHost);
   const ensureClientId = useHostsStore((state) => state.ensureClientId);
+
+  useEffect(() => {
+    if (!deepLinkUrl || deepLinkUrl === handledDeepLink.current) return;
+    handledDeepLink.current = deepLinkUrl;
+    setMode('manual');
+    setLink(deepLinkUrl);
+    const parsed = parsePairingUrl(deepLinkUrl);
+    setError(parsed.ok ? undefined : parsed.error);
+  }, [deepLinkUrl]);
 
   const pair = useCallback(
     async (payload: PairingPayload) => {

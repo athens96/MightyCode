@@ -1,6 +1,8 @@
+import { x25519 } from '@noble/curves/ed25519';
 import {
   DIRECTION_CLIENT_TO_HOST,
   DIRECTION_HOST_TO_CLIENT,
+  MAXIMUM_FRAME,
   NONCE_LENGTH,
   RelayCipher,
   RelayCryptoError,
@@ -87,6 +89,31 @@ describe('deriveSessionKey', () => {
       }),
     ).toThrow(RelayCryptoError);
   });
+
+  it('zeroes the temporary X25519 shared secret immediately after HKDF derivation', () => {
+    const client = generateKeyPair();
+    const host = generateKeyPair();
+    let capturedShared: Uint8Array | undefined;
+    const realGetSharedSecret = x25519.getSharedSecret.bind(x25519);
+    const spy = jest.spyOn(x25519, 'getSharedSecret').mockImplementation((priv, pub) => {
+      const result = realGetSharedSecret(priv, pub);
+      capturedShared = result;
+      return result;
+    });
+    try {
+      const sessionKey = deriveSessionKey({
+        secretKey: client.secretKey,
+        peerPublicKey: host.publicKey,
+        clientNonce: generateHandshakeNonce(),
+        serverNonce: generateHandshakeNonce(),
+      });
+      expect(sessionKey).toHaveLength(32);
+      expect(capturedShared).toBeDefined();
+      expect(capturedShared?.every((byte) => byte === 0)).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe('nonce layout', () => {
@@ -160,6 +187,31 @@ describe('RelayCipher', () => {
     const { hostCipher } = handshake();
     expect(() => hostCipher.open(new Uint8Array(10))).toThrow(RelayCryptoError);
   });
+
+  it('enforces MAXIMUM_FRAME (1 MiB) on open()', () => {
+    const { clientCipher, hostCipher } = handshake();
+    const maxPlaintext = new Uint8Array(MAXIMUM_FRAME - NONCE_LENGTH - TAG_LENGTH);
+    const atLimit = clientCipher.seal(maxPlaintext);
+    expect(atLimit).toHaveLength(MAXIMUM_FRAME);
+    expect(hostCipher.open(atLimit)).toHaveLength(maxPlaintext.length);
+
+    const oversized = new Uint8Array(MAXIMUM_FRAME + 1);
+    oversized.set(buildNonce(DIRECTION_CLIENT_TO_HOST, 1n), 0);
+    expect(() => hostCipher.open(oversized)).toThrow(RelayCryptoError);
+  });
+
+  it('zeroes session key bytes on destroy() and rejects further seal/open calls', () => {
+    const { clientKey, clientCipher, hostCipher } = handshake();
+    const frame = clientCipher.seal(utf8Encode('before-destroy'));
+    expect(clientKey.some((byte) => byte !== 0)).toBe(true);
+
+    clientCipher.destroy();
+    expect(clientKey.every((byte) => byte === 0)).toBe(true);
+    expect(() => clientCipher.seal(utf8Encode('after-destroy'))).toThrow(RelayCryptoError);
+
+    hostCipher.destroy();
+    expect(() => hostCipher.open(frame)).toThrow(RelayCryptoError);
+  });
 });
 
 describe('base64 helpers', () => {
@@ -205,8 +257,17 @@ describe('base64 helpers', () => {
     }
   });
 
-  it('rejects non-base64 input', () => {
-    expect(() => fromBase64('not*base64')).toThrow(RelayCryptoError);
+  it('rejects non-base64 input without leaking the raw input in the error message', () => {
+    const secretLike = 'super-secret*token-12345';
+    let caught: unknown;
+    try {
+      fromBase64(secretLike);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(RelayCryptoError);
+    expect((caught as Error).message).not.toContain(secretLike);
+    expect((caught as Error).message).not.toContain('{text}');
   });
 });
 

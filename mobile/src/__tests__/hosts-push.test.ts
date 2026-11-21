@@ -72,6 +72,63 @@ describe('removing a pairing', () => {
     expect(workspaceMute.mutedNow('host-a')).toEqual([]);
     expect(mockItems.get(`${MUTED_PREFIX}host-b`)).toBe('["ws-a"]');
   });
+
+  it('clears cached live store data for the removed host without touching other hosts', async () => {
+    globalThis.fetch = jest.fn(async () => ({ status: 204 }) as Response) as unknown as typeof fetch;
+    useHostsStore.setState({ hosts: [host, { ...host, id: 'host-b' }] });
+    const state = {
+      protocol: 1 as const,
+      revision: 1,
+      hostName: 'Mac',
+      workspaces: [],
+      sessions: [],
+    };
+    const detail = {
+      protocol: 1 as const,
+      revision: 1,
+      session: {
+        id: 'sess-1',
+        workspaceId: 'ws-1',
+        title: 'Pane',
+        kind: 'claude' as const,
+        provider: 'claude' as const,
+        model: 'sonnet',
+        status: 'idle' as const,
+        revision: 1,
+        updatedAt: '2026-11-01T00:00:00.000Z',
+        pendingPermissions: 0,
+        pendingQuestions: 0,
+        queued: 0,
+        terminal: false,
+      },
+      entries: [],
+      hasMoreEntries: false,
+      permissions: [],
+      queued: [],
+    };
+    useLiveStore.getState().applyState('host-a', state, true);
+    useLiveStore.getState().applyState('host-b', state, true);
+    useLiveStore.getState().applyDetail('host-a', 'sess-1', detail, true);
+    useLiveStore.getState().applyDetail('host-b', 'sess-1', detail, true);
+    useLiveStore.getState().setCapabilities('host-a', ['queue'], { platform: 'darwin', appVersion: '1.0' });
+    useLiveStore.getState().setCapabilities('host-b', ['queue'], { platform: 'darwin', appVersion: '1.0' });
+    useLiveStore.getState().setCommands('host-a', 'sess-1', []);
+    useLiveStore.getState().setCommands('host-b', 'sess-1', []);
+
+    await useHostsStore.getState().removeHost('host-a');
+
+    const live = useLiveStore.getState();
+    expect(live.states['host-a']).toBeUndefined();
+    expect(live.capabilities['host-a']).toBeUndefined();
+    expect(live.hostIdentity['host-a']).toBeUndefined();
+    expect(Object.keys(live.details).some((k) => k.startsWith('host-a'))).toBe(false);
+    expect(Object.keys(live.detailReceivedAt).some((k) => k.startsWith('host-a'))).toBe(false);
+    expect(Object.keys(live.commands).some((k) => k.startsWith('host-a'))).toBe(false);
+    // Other hosts remain intact.
+    expect(live.states['host-b']).toBeDefined();
+    expect(live.capabilities['host-b']).toEqual(['queue']);
+    expect(Object.keys(live.details).some((k) => k.startsWith('host-b'))).toBe(true);
+  });
 });
 
 describe('learning where a push belongs', () => {

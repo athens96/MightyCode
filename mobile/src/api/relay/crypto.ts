@@ -17,6 +17,8 @@ export const KEY_LENGTH = 32;
 export const HANDSHAKE_NONCE_LENGTH = 16;
 /** ChaCha20-Poly1305 authentication tag length. */
 export const TAG_LENGTH = 16;
+/** Largest encrypted frame accepted on the wire (1 MiB, matching the relay's maxPayload). */
+export const MAXIMUM_FRAME = 1024 * 1024;
 
 export class RelayCryptoError extends Error {
   constructor(message: string) {
@@ -85,7 +87,9 @@ export function fromBase64(text: string): Uint8Array {
   for (const char of clean) {
     let value = STANDARD_ALPHABET.indexOf(char);
     if (value < 0) value = URL_ALPHABET.indexOf(char);
-    if (value < 0) throw new RelayCryptoError(t('phone.relay.crypto.notBase64', { text }));
+    if (value < 0) {
+      throw new RelayCryptoError(t('phone.relay.crypto.notBase64', { text: '[redacted]' }));
+    }
     buffer = (buffer << 6) | value;
     bits += 6;
     if (bits >= 8) {
@@ -173,11 +177,15 @@ export function deriveSessionKey(input: DeriveKeyInput): Uint8Array {
   } catch {
     throw new RelayCryptoError(t('phone.relay.crypto.sharedSecret'));
   }
-  if (isAllZero(shared)) {
-    throw new RelayCryptoError(t('phone.relay.crypto.zeroSecret'));
+  try {
+    if (isAllZero(shared)) {
+      throw new RelayCryptoError(t('phone.relay.crypto.zeroSecret'));
+    }
+    const salt = concatBytes(input.clientNonce, input.serverNonce);
+    return hkdf(sha256, shared, salt, utf8Encode(HKDF_INFO), KEY_LENGTH);
+  } finally {
+    shared.fill(0);
   }
-  const salt = concatBytes(input.clientNonce, input.serverNonce);
-  return hkdf(sha256, shared, salt, utf8Encode(HKDF_INFO), KEY_LENGTH);
 }
 
 /** `[direction 1B][0,0,0][counter 8B big-endian]`. */
@@ -209,6 +217,7 @@ export function parseNonce(nonce: Uint8Array): { direction: number; counter: big
 export class RelayCipher {
   private sendCounter = 0n;
   private lastReceivedCounter: bigint | undefined;
+  private destroyed = false;
 
   constructor(
     private readonly key: Uint8Array,
@@ -218,7 +227,14 @@ export class RelayCipher {
     if (key.length !== KEY_LENGTH) throw new RelayCryptoError(t('phone.relay.crypto.keyLength'));
   }
 
+  /** Zeroes session key material in place and prevents any further use of this cipher. */
+  destroy(): void {
+    this.key.fill(0);
+    this.destroyed = true;
+  }
+
   seal(plaintext: Uint8Array): Uint8Array {
+    if (this.destroyed) throw new RelayCryptoError(t('phone.relay.crypto.keyLength'));
     const nonce = buildNonce(this.sendDirection, this.sendCounter);
     this.sendCounter += 1n;
     const sealed = chacha20poly1305(this.key, nonce).encrypt(plaintext);
@@ -230,8 +246,12 @@ export class RelayCipher {
   }
 
   open(frame: Uint8Array): Uint8Array {
+    if (this.destroyed) throw new RelayCryptoError(t('phone.relay.crypto.decrypt'));
     if (frame.length < NONCE_LENGTH + TAG_LENGTH) {
       throw new RelayCryptoError(t('phone.relay.crypto.frameShort'));
+    }
+    if (frame.length > MAXIMUM_FRAME) {
+      throw new RelayCryptoError(t('phone.relay.cannotOpenFrame'));
     }
     const { direction, counter } = parseNonce(frame.slice(0, NONCE_LENGTH));
     if (direction !== this.receiveDirection) {

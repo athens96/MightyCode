@@ -342,6 +342,8 @@ interface Waiter {
 export class RelayConnection {
   private socket: RelaySocket | undefined;
   private cipher: RelayCipher | undefined;
+  /** Ephemeral X25519 secret for the in-progress handshake; zeroed once derived or closed. */
+  private ephemeralSecretKey: Uint8Array | undefined;
   private currentState: RelayState = 'closed';
   private currentFailure: RelayFailure | undefined;
   private hostInfo: RelayHostInfo | undefined;
@@ -687,6 +689,8 @@ export class RelayConnection {
     socket.binaryType = 'arraybuffer';
     const keyPair = generateKeyPair();
     const clientNonce = generateHandshakeNonce();
+    this.ephemeralSecretKey?.fill(0);
+    this.ephemeralSecretKey = keyPair.secretKey;
 
     // A direct socket has a short deadline of its own, after which the relay is taken.
     this.handshakeTimer = setTimeout(
@@ -787,12 +791,19 @@ export class RelayConnection {
       throw new RelayError('unpaired', undefined, t('phone.relay.hostKeyMismatch'));
     }
 
-    const key = deriveSessionKey({
-      secretKey,
-      peerPublicKey: serverKey,
-      clientNonce,
-      serverNonce: fromBase64(parsed.nonce),
-    });
+    let key: Uint8Array;
+    try {
+      key = deriveSessionKey({
+        secretKey,
+        peerPublicKey: serverKey,
+        clientNonce,
+        serverNonce: fromBase64(parsed.nonce),
+      });
+    } finally {
+      secretKey.fill(0);
+      if (this.ephemeralSecretKey === secretKey) this.ephemeralSecretKey = undefined;
+    }
+    this.cipher?.destroy();
     this.cipher = new RelayCipher(key, DIRECTION_CLIENT_TO_HOST, DIRECTION_HOST_TO_CLIENT);
     this.authenticate(socket);
   }
@@ -1065,6 +1076,9 @@ export class RelayConnection {
       socket.onclose = null;
     }
     this.socket = undefined;
+    this.ephemeralSecretKey?.fill(0);
+    this.ephemeralSecretKey = undefined;
+    this.cipher?.destroy();
     this.cipher = undefined;
     this.stopHeartbeat();
     this.stopProbe();
@@ -1174,6 +1188,9 @@ export class RelayConnection {
     this.cancelRace?.();
     const socket = this.socket;
     this.socket = undefined;
+    this.ephemeralSecretKey?.fill(0);
+    this.ephemeralSecretKey = undefined;
+    this.cipher?.destroy();
     this.cipher = undefined;
     this.releaseAuthLease();
     this.stopHeartbeat();

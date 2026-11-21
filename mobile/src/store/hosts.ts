@@ -34,6 +34,15 @@ import { nativeControlKey } from '@/lib/screen-share/native-control-key';
 
 const INDEX_KEY = 'mightyclaude.hosts.v2.index';
 
+type HostRemovalListener = (id: string) => void;
+const hostRemovalListeners = new Set<HostRemovalListener>();
+
+/** Registers a cleanup callback run whenever a paired host is removed from the store. */
+export function onHostRemoved(listener: HostRemovalListener): () => void {
+  hostRemovalListeners.add(listener);
+  return () => hostRemovalListeners.delete(listener);
+}
+
 export interface PairedHost {
   /** Storage-safe identifier derived from the relay `serverId`. */
   id: string;
@@ -411,6 +420,7 @@ export const useHostsStore = create<HostsState>((set, get) => ({
       delete status[id];
       return { hosts, keys, tokens, clientIds, status };
     });
+    for (const listener of hostRemovalListeners) listener(id);
   },
 
   refreshReachability: async (id, options) => {

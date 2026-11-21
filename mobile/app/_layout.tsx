@@ -1,6 +1,13 @@
 import { useEffect, useMemo } from 'react';
-import { Pressable, StyleSheet } from 'react-native';
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider, router } from 'expo-router';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  DarkTheme,
+  DefaultTheme,
+  Stack,
+  ThemeProvider,
+  router,
+  type ErrorBoundaryProps,
+} from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -10,7 +17,16 @@ import { ToastHost } from '@/components/toast-host';
 import { installCryptoPolyfill } from '@/api/relay/random';
 import { useHostsStore } from '@/store/hosts';
 import { t } from '@/lib/i18n';
-import { darkPalette, dialog, headingFontFamily, radius, useStyles, usePalette, type Palette } from '@/theme';
+import {
+  darkPalette,
+  dialog,
+  headingFontFamily,
+  radius,
+  spacing,
+  useStyles,
+  usePalette,
+  type Palette,
+} from '@/theme';
 
 /** A modal panel's ✕ on the left of its head (the popup standard), since iOS shows no grabber. */
 function CloseButton() {
@@ -30,6 +46,33 @@ function CloseButton() {
 
 // `@noble/*` reads `globalThis.crypto.getRandomValues`, which React Native lacks.
 installCryptoPolyfill();
+
+/** Root Expo Router error boundary: catches unhandled render crashes with a recoverable retry screen. */
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  const styles = useStyles(makeStyles);
+  const detail = error.message.trim();
+  return (
+    <View style={styles.errorScreen}>
+      <View style={styles.errorCard}>
+        <Text accessibilityRole="header" style={styles.errorTitle}>
+          {t('phone.error.unknown')}
+        </Text>
+        {detail.length > 0 ? (
+          <Text numberOfLines={6} style={styles.errorMessage}>
+            {detail}
+          </Text>
+        ) : null}
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => void retry()}
+          style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
+        >
+          <Text style={styles.retryLabel}>{t('phone.files.retry')}</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
 
 export default function RootLayout() {
   const load = useHostsStore((state) => state.load);
@@ -132,4 +175,46 @@ const makeStyles = (palette: Palette) =>
       width: dialog.closeHit,
     },
     pressed: { opacity: 0.6 },
+    errorScreen: {
+      alignItems: 'center',
+      backgroundColor: palette.background,
+      flex: 1,
+      justifyContent: 'center',
+      padding: spacing.xxl,
+    },
+    errorCard: {
+      backgroundColor: palette.surface,
+      borderColor: palette.border,
+      borderRadius: radius.card,
+      borderWidth: StyleSheet.hairlineWidth,
+      gap: spacing.lg,
+      maxWidth: dialog.alertWidth,
+      padding: dialog.padding,
+      width: '100%',
+    },
+    errorTitle: {
+      color: palette.text,
+      fontFamily: headingFontFamily,
+      fontSize: 18,
+      fontWeight: '700',
+    },
+    errorMessage: {
+      color: palette.textMuted,
+      fontSize: 14,
+      lineHeight: 20,
+    },
+    retryButton: {
+      alignItems: 'center',
+      backgroundColor: palette.accent,
+      borderRadius: radius.md,
+      justifyContent: 'center',
+      minHeight: dialog.buttonHeight,
+      paddingHorizontal: spacing.xl,
+      paddingVertical: spacing.md,
+    },
+    retryLabel: {
+      color: palette.onAccent,
+      fontSize: 15,
+      fontWeight: '700',
+    },
   });
