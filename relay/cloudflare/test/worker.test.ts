@@ -29,6 +29,7 @@ import {
   startWorker,
   type LocalWorker,
   type MockWebSocket,
+  removeState,
 } from './harness.ts';
 
 let BASE = '';
@@ -129,7 +130,7 @@ beforeAll(async () => {
 afterAll(async () => {
   for (const ws of open) ws.terminate();
   await worker?.stop();
-  if (state) rmSync(state, { recursive: true, force: true });
+  if (state) removeState(state);
 });
 
 describe('http surface', () => {

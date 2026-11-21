@@ -12,7 +12,7 @@ import { join } from 'node:path';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { startWorker, type LocalWorker } from './harness.ts';
+import { removeState, startWorker, type LocalWorker } from './harness.ts';
 
 const sha256Hex = (value: string): string => createHash('sha256').update(value, 'utf8').digest('hex');
 
@@ -55,7 +55,7 @@ async function start(state: string, vars: Record<string, string>): Promise<Local
 
 afterAll(async () => {
   for (const worker of workers) await worker.stop();
-  for (const state of states) rmSync(state, { recursive: true, force: true });
+  for (const state of states) removeState(state);
 });
 
 async function register(base: string, fcmToken: string): Promise<Response> {

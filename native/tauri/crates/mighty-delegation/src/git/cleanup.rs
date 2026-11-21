@@ -515,7 +515,8 @@ pub fn worktree_exists(path: &str) -> bool {
     exists(path)
 }
 
-#[cfg(test)]
+// The module's one check is Unix's (a symlink's target permissions); on Windows it would hold nothing but an unused import.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

@@ -6,6 +6,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface LocalWorker {
@@ -204,4 +205,17 @@ export function installWorkersGlobals(): () => void {
       delete g['WebSocket'];
     }
   };
+}
+
+/**
+ * Removes a test's wrangler state folder, best effort: `wrangler dev` leaves its `workerd` child writing the Durable Object's
+ * storage (alarms, hibernation) for a moment after it was stopped, so the folder can still be filling while it is removed (ENOTEMPTY
+ * on CI). Retried, then left to the system's temp cleanup; never fails the suite after its tests passed.
+ */
+export function removeState(state: string): void {
+  try {
+    rmSync(state, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch {
+    // A temporary folder the OS clears anyway.
+  }
 }

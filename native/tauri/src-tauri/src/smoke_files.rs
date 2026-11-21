@@ -55,7 +55,12 @@ const PROBE: &str = r#"(async () => {
     report.filesFolderOpened = !!(await until(() => row('smoke-folder/hello.ts'), 10000));
     row('smoke-folder/hello.ts')?.click();
     const preview = (path) => slot(filesId)?.querySelector('[data-testid=files-preview][data-preview-path="' + path + '"]');
-    report.filesPreview = !!(await until(() => { const p = preview('smoke-folder/hello.ts'); return !!p && (p.querySelector('[data-testid=files-source]')?.textContent ?? '').includes('smokeMarker') && !!p.querySelector('.syntax-keyword') && (p.querySelector('.files-lines')?.textContent ?? '').startsWith('1'); }, 10000));
+    // A source is drawn by @pierre/diffs inside its element's open shadow root: its text, its first line number, a coloured token.
+    const code = (root) => root?.querySelector('[data-testid=files-source] diffs-container')?.shadowRoot ?? null;
+    const sourceText = (root) => code(root)?.textContent ?? '';
+    const firstLine = (root) => code(root)?.querySelector('[data-line-number-content]')?.textContent ?? '';
+    const coloured = (root) => [...(code(root)?.querySelectorAll('span[style]') ?? [])].some((s) => /color|--/.test(s.getAttribute('style') ?? ''));
+    report.filesPreview = !!(await until(() => { const p = preview('smoke-folder/hello.ts'); return !!p && sourceText(p).includes('smokeMarker') && coloured(p) && firstLine(p) === '1'; }, 10000));
     // An HTML file as a page: the sandboxed frame from the host's protocol. Its load is recorded from before the click (a load event
     // reaches the document's capture listeners), so a frame that loads before the wait below starts still counts.
     window.addEventListener('message', (event) => { if (event.data && event.data.smokeFrame) report.htmlFrameSees = { nonce: event.data.nonce, tauri: event.data.tauri }; });
@@ -82,7 +87,7 @@ const PROBE: &str = r#"(async () => {
         n.parentElement.dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0, clientX: b.left + b.width / 2, clientY: b.top + b.height / 2 })); return true; } return false; };
     report.referenceClicked = !!(await until(() => click(), 10000));
     const bubble = () => room()?.querySelector('[data-testid=reference-bubble]');
-    report.referenceOpened = !!(await until(() => { const b = bubble(); return !!b && b.dataset.referenceKind === 'source' && b.dataset.referenceLine === '3' && (b.querySelector('[data-testid=files-source]')?.textContent ?? '').includes('referenceMarker') && (b.querySelector('.files-lines')?.textContent ?? '').startsWith('1'); }, 15000));
+    report.referenceOpened = !!(await until(() => { const b = bubble(); return !!b && b.dataset.referenceKind === 'source' && b.dataset.referenceLine === '3' && sourceText(b).includes('referenceMarker') && firstLine(b) === '1'; }, 15000));
     bubble()?.querySelector('[data-testid=reference-close]')?.click();
     report.referenceClosed = !!(await until(() => !bubble(), 10000));
     // The picture viewer: a PNG and an SVG in the diagram, the SVG drawn as PNG, the first opened and closed with Esc.
