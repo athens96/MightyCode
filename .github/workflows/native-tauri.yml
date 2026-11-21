@@ -485,7 +485,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Python's cryptography (the throwaway key, certificate and manifest signature)
@@ -559,7 +559,7 @@ jobs:
           cache-dependency-path: |
             native/windows/web/package-lock.json
             native/tauri/package-lock.json
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Python's cryptography (the throwaway update key)
@@ -725,7 +725,7 @@ jobs:
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/macos/Package.resolved', 'native/macos/Vendor/libghostty-spm/Package.swift') }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Python's cryptography (the throwaway certificate and the manifest's signature)
