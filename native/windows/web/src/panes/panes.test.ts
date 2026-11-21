@@ -1,7 +1,12 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { ServicesContext, type AppServices } from '../app/context';
+import { translator } from '../i18n/locale';
 import { hexAlpha, tokenStyleSheet } from '../theme/tokens';
-import { lineNumbers, sourceSpans, treeKey } from './files/tree';
-import type { FileRow } from './files/types';
+import { Tree } from './files/FilesView';
+import { fileRowId, lineNumbers, scrollRowIntoView, sourceSpans, treeKey, visibleTreeSlice } from './files/tree';
+import type { FileRow, FilesModel } from './files/types';
 import { paneKindWords, slimKind } from './Panes';
 import { base64Bytes, clipboardKey, defaultFamily, terminalFamily, terminalSize } from './terminal/rules';
 
@@ -100,5 +105,90 @@ describe('slim panes', () => {
     expect(sheet).toContain('--subtle:rgba(');
     expect(sheet).toContain('--syntax-keyword:');
     expect(sheet).toContain('--layout-pane-header:');
+  });
+});
+
+describe('files tree row IDs & virtualization', () => {
+  const services = {
+    bridge: { call: () => Promise.resolve(null) },
+    store: { dispatch: () => {} },
+    t: translator([{}]),
+  } as unknown as AppServices;
+
+  const renderTree = (model: FilesModel) =>
+    renderToStaticMarkup(
+      createElement(
+        ServicesContext.Provider,
+        { value: services },
+        createElement(Tree, { model, onRow: () => {}, onKey: () => {} }),
+      ),
+    );
+
+  it('URI-encodes file row IDs and aria-activedescendant so spaces and special characters form valid HTML IDREFs', () => {
+    const specialPath = 'src/my folder/file #1 [draft].ts';
+    expect(fileRowId(specialPath)).toBe('files-row-' + encodeURIComponent(specialPath));
+    expect(fileRowId(specialPath)).not.toMatch(/[\s#[\]]/);
+
+    const model: FilesModel = {
+      available: true,
+      filter: '',
+      filtering: false,
+      selected: specialPath,
+      rows: [row('src/my folder', 0, true, true), row(specialPath, 1)],
+      notes: [],
+    };
+    const html = renderTree(model);
+    const encoded = 'files-row-' + encodeURIComponent(specialPath);
+    expect(html).toContain(`aria-activedescendant="${encoded}"`);
+    expect(html).toContain(`id="${encoded}"`);
+    expect(html).toContain(`data-path="${specialPath}"`);
+  });
+
+  it('computes visibleTreeSlice window bounds and invariant spacer heights', () => {
+    expect(visibleTreeSlice(0, 0, 440, 22, 10)).toEqual({ start: 0, end: 0, topSpacer: 0, bottomSpacer: 0 });
+
+    const top = visibleTreeSlice(1000, 0, 440, 22, 10);
+    expect(top).toEqual({ start: 0, end: 30, topSpacer: 0, bottomSpacer: (1000 - 30) * 22 });
+
+    const mid = visibleTreeSlice(1000, 2200, 440, 22, 10);
+    expect(mid).toEqual({ start: 90, end: 130, topSpacer: 90 * 22, bottomSpacer: (1000 - 130) * 22 });
+    expect(mid.topSpacer + (mid.end - mid.start) * 22 + mid.bottomSpacer).toBe(1000 * 22);
+
+    const end = visibleTreeSlice(1000, 999_999, 440, 22, 10);
+    expect(end.end).toBe(1000);
+    expect(end.bottomSpacer).toBe(0);
+    expect(end.end - end.start).toBe(30);
+    expect(end.topSpacer + (end.end - end.start) * 22 + end.bottomSpacer).toBe(1000 * 22);
+
+    expect(scrollRowIntoView(5, 22, 100, 200)).toBeNull();
+    expect(scrollRowIntoView(2, 22, 100, 200)).toBe(44);
+    expect(scrollRowIntoView(20, 22, 100, 200)).toBe(21 * 22 - 200);
+  });
+
+  it('renders all rows directly when rows.length <= 200 and windows when rows.length > 200', () => {
+    const makeRows = (count: number) => Array.from({ length: count }, (_, i) => row(`src/file-${i}.ts`, 1));
+
+    const smallHtml = renderTree({
+      available: true,
+      filter: '',
+      filtering: false,
+      selected: 'src/file-0.ts',
+      rows: makeRows(200),
+      notes: [],
+    });
+    expect(smallHtml.match(/role="treeitem"/g)).toHaveLength(200);
+
+    const largeHtml = renderTree({
+      available: true,
+      filter: '',
+      filtering: false,
+      selected: 'src/file-0.ts',
+      rows: makeRows(500),
+      notes: [],
+    });
+    const renderedCount = largeHtml.match(/role="treeitem"/g)?.length ?? 0;
+    expect(renderedCount).toBeGreaterThan(20);
+    expect(renderedCount).toBeLessThan(80);
+    expect(largeHtml).toContain(`height:${(500 - renderedCount) * 22}px`);
   });
 });

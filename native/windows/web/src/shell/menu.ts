@@ -75,6 +75,7 @@ export function useMenu(blocked: boolean, setUsageOpen: (open: boolean) => void)
   const state = useRef({ blocked, setUsageOpen });
   state.current = { blocked, setUsageOpen };
   useEffect(() => {
+    if (import.meta.env.MODE !== 'tauri' && import.meta.env.MODE !== 'test') return;
     const call: Call = (method, args) => bridge.call(method, args).catch(() => undefined);
     const listener = (action: MenuAction) => {
       const current = store.getState().snapshot;

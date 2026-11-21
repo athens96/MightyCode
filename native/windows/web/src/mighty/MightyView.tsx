@@ -96,7 +96,7 @@ export function MightyView({ session }: { session: RunSession }) {
       <div className="mighty-bar">
         <span className="mighty-switch" role="group" aria-label={t('graph.view.switch')}>
           {(['diagram', 'timeline', 'structure'] as const).map((mode) => (
-            <button key={mode} className={mode === presentation ? 'on' : ''} data-presentation={mode}
+            <button key={mode} type="button" className={mode === presentation ? 'on' : ''} data-presentation={mode}
               onClick={() => { if (mode !== presentation) choose({ presentation: mode }); }}>
               <Icon name={mode === 'diagram' ? 'share-2' : mode === 'timeline' ? 'list' : 'columns-3'} size={12} weight={2} />{t('graph.view.' + mode)}
             </button>

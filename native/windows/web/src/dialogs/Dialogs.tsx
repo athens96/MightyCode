@@ -185,7 +185,7 @@ function PaneWorktreeChanges({ id, dialog, answer }: { id: number; dialog: Extra
     <Sheet id={id} width={880} label={dialog.title} onCancel={() => answer(null)} status={picked && diff ? t('editor.lineHint') : undefined}
       buttons={<>
         {picked && dialog.paneId && <button type="button" className="btn" data-testid="worktree-changes-editor" onClick={() => editor(null)}>{t('editor.open')}</button>}
-        <button type="button" className="btn" data-autofocus onClick={() => answer(null)}>OK</button>
+        <button type="button" className="btn" data-autofocus onClick={() => answer(null)}>{t('dialog.close')}</button>
       </>}>
       {dialog.files.length === 0 ? <p className="dialog-message">{dialog.none}</p> : (
         <div className="worktree-changes">

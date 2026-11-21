@@ -4,7 +4,7 @@
 // room; 이미지 복사, 저장, 탐색기에서 보기 and 기본 앱으로 열기 are the host's (`imageAction`, PaneView.TranscriptImageAction).
 // Esc or a click beside the card closes it; focus stays inside while it is open and goes back where it was. It is the popup
 // standard's panel (kind C, its size kept as "pictures"): ✕ in the header, the zoom at the footer's left and the actions at its right.
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react';
 import { useServices, useStoreSelector } from '../app/context';
 import { Icon, type IconName } from '../icons/Icon';
 import { usePageOverlay } from '../shell/overlay';
@@ -27,7 +27,6 @@ const actions: { action: PictureAction; label: string; icon: IconName }[] = [
 /** The open viewer itself; exported for its markup test. */
 export function Viewer({ picture }: { picture: OpenPicture }) {
   const { bridge, store, t } = useServices();
-  const card = useRef<HTMLDivElement | null>(null);
   const stage = useRef<HTMLDivElement>(null);
   const [room, setRoom] = useState<Size>({ width: 0, height: 0 });
   const [natural, setNatural] = useState<Size | null>(null);
@@ -41,12 +40,6 @@ export function Viewer({ picture }: { picture: OpenPicture }) {
   const drawn = natural ? drawnSize(natural, room, zoom) : null;
   const zoomTo = (next: number) => { setZoom(next); setPan((current) => natural ? clampPan(current, drawnSize(natural, room, next), room) : current); };
 
-  // Focus goes in at once and back to what held it (the thumbnail or tile) when the viewer closes.
-  useEffect(() => {
-    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    card.current?.querySelector<HTMLElement>('[data-autofocus]')?.focus();
-    return () => { if (before?.isConnected) before.focus(); };
-  }, []);
   useLayoutEffect(() => {
     const element = stage.current;
     if (!element) return undefined;
@@ -73,22 +66,6 @@ export function Viewer({ picture }: { picture: OpenPicture }) {
     return () => element.removeEventListener('wheel', wheel);
   }, []);
 
-  // Esc closes wherever focus is, before the window's own keys see it.
-  useEffect(() => {
-    const escape = (event: globalThis.KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); store.dispatch({ kind: 'picture' }); } };
-    window.addEventListener('keydown', escape, true);
-    return () => window.removeEventListener('keydown', escape, true);
-  }, [store]);
-
-  const key = (event: KeyboardEvent) => {
-    if (event.key !== 'Tab' || !card.current) return;
-    // Tab and Shift+Tab go round the card's controls.
-    const focusable = [...card.current.querySelectorAll<HTMLElement>('button:not(:disabled), [tabindex="0"]')];
-    if (focusable.length === 0) return;
-    const first = focusable[0]!, last = focusable[focusable.length - 1]!;
-    if (event.shiftKey && (document.activeElement === first || !card.current.contains(document.activeElement))) { event.preventDefault(); last.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-  };
   const pannable = drawn !== null && (drawn.width > room.width + 0.5 || drawn.height > room.height + 0.5);
   const down = (event: PointerEvent<HTMLDivElement>) => {
     if (!pannable || event.button !== 0) return;
@@ -107,7 +84,7 @@ export function Viewer({ picture }: { picture: OpenPicture }) {
       .finally(() => setBusy(false));
   };
   return (
-    <DialogShell kind="panel" panel="pictures" width={1200} height={900} minWidth={420} minHeight={320} label={t('images.open')} frameRef={card} focus="none" onKeyDown={key}
+    <DialogShell kind="panel" panel="pictures" width={1200} height={900} minWidth={420} minHeight={320} label={t('images.open')}
       icon={<Icon name="image" size={18} weight={1.8} />} title={t('images.open')} subtitle={picture.alt && <span className="picture-name" title={picture.alt}>{picture.alt}</span>}
       closeTestId="picture-close" onCancel={close} bodyClassName="picture-body"
       backdrop={{ 'data-page-overlay': '', 'data-testid': 'picture-viewer', onClick: (event: MouseEvent<HTMLDivElement>) => { if (event.target === event.currentTarget) close(); } }}

@@ -127,31 +127,83 @@ interface OpenMenu {
   x: number;
   y: number;
   items: MenuItem[];
+  trigger?: HTMLElement | null;
 }
 
-const MenuContext = createContext<(at: { x: number; y: number }, items: MenuItem[]) => void>(() => {});
+const MenuContext = createContext<(at: { x: number; y: number }, items: MenuItem[], trigger?: HTMLElement | null) => void>(() => {});
+
+/** Next enabled menu item for `ArrowDown`, `ArrowUp`, `Home` or `End`; null for other keys or an empty list. */
+export function nextMenuItem<T>(items: readonly T[], active: unknown, key: string): T | null {
+  if (items.length === 0) return null;
+  const index = items.indexOf(active as T);
+  switch (key) {
+    case 'ArrowDown':
+      return index < 0 ? items[0]! : items[(index + 1) % items.length]!;
+    case 'ArrowUp':
+      return index < 0 ? items[items.length - 1]! : items[(index - 1 + items.length) % items.length]!;
+    case 'Home':
+      return items[0]!;
+    case 'End':
+      return items[items.length - 1]!;
+    default:
+      return null;
+  }
+}
 
 /** Opens a menu at the pointer (a right-click) or under an element (a button). */
 export function useMenu(): { atPointer: (event: ReactMouseEvent, items: MenuItem[]) => void; under: (element: Element, items: MenuItem[]) => void } {
   const open = useContext(MenuContext);
   return useMemo(() => ({
-    atPointer: (event, items) => { event.preventDefault(); event.stopPropagation(); open({ x: event.clientX, y: event.clientY }, items); },
-    under: (element, items) => { const box = element.getBoundingClientRect(); open({ x: box.left, y: box.bottom + 2 }, items); },
+    atPointer: (event, items) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const active = typeof document !== 'undefined' && document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const trigger = active && active !== document.body ? active : (event.currentTarget instanceof HTMLElement ? event.currentTarget : null);
+      open({ x: event.clientX, y: event.clientY }, items, trigger);
+    },
+    under: (element, items) => {
+      const box = element.getBoundingClientRect();
+      const trigger = element instanceof HTMLElement ? element : (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement ? document.activeElement : null);
+      open({ x: box.left, y: box.bottom + 2 }, items, trigger);
+    },
   }), [open]);
 }
 
 export function MenuHost({ children }: { children: ReactNode }) {
   const [menu, setMenu] = useState<OpenMenu | null>(null);
   const element = useRef<HTMLDivElement>(null);
-  const open = useCallback((at: { x: number; y: number }, items: MenuItem[]) => setMenu({ ...at, items }), []);
+  const open = useCallback((at: { x: number; y: number }, items: MenuItem[], trigger?: HTMLElement | null) => {
+    const fallback = typeof document !== 'undefined' && document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setMenu({ ...at, items, trigger: trigger ?? fallback });
+  }, []);
   usePageOverlay(menu !== null);
   useEffect(() => {
     if (!menu) return;
     const close = (event: Event) => { if (!(event.target instanceof Node && element.current?.contains(event.target))) setMenu(null); };
-    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') setMenu(null); };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        const trigger = menu.trigger;
+        setMenu(null);
+        if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+        return;
+      }
+      const root = element.current;
+      if (!root) return;
+      const enabled = [...root.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')];
+      const next = nextMenuItem(enabled, document.activeElement, event.key);
+      if (next) {
+        event.preventDefault();
+        event.stopPropagation();
+        next.focus({ preventScroll: true });
+      }
+    };
     const blur = () => setMenu(null);
     window.addEventListener('mousedown', close, true); window.addEventListener('keydown', key, true); window.addEventListener('blur', blur, { once: true });
-    element.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+    const first = element.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)');
+    if (first) first.focus({ preventScroll: true });
+    else element.current?.focus({ preventScroll: true });
     return () => { window.removeEventListener('mousedown', close, true); window.removeEventListener('keydown', key, true); window.removeEventListener('blur', blur); };
   }, [menu]);
   // Kept inside the window: a menu opened near the right or bottom edge opens toward the middle.
@@ -160,7 +212,7 @@ export function MenuHost({ children }: { children: ReactNode }) {
     <MenuContext.Provider value={open}>
       {children}
       {menu && (
-        <div ref={element} className="menu" role="menu" style={style} data-testid="menu" data-page-overlay="">
+        <div ref={element} className="menu" role="menu" tabIndex={-1} style={style} data-testid="menu" data-page-overlay="">
           {menu.items.map((item, index) =>
             item.separator ? <div key={index} className="menu-separator" role="separator" /> : (
               <button key={index} type="button" role="menuitem" className="menu-item" disabled={item.disabled} data-testid={item.testId}

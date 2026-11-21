@@ -4,7 +4,7 @@ import { Entry } from '../conversation/Entry';
 import { Markdown } from '../conversation/MarkdownView';
 import type { LogEntry, MightyGraphRun, RunSession } from '../store/models';
 import type { TimelineGroup, TimelineRow } from './types';
-import { useReferenceClick } from '../conversation/referenceClick';
+import { useReferenceClick, useReferenceKey } from '../conversation/referenceClick';
 import { Icon, type IconName } from '../icons/Icon';
 import { ProviderMark } from '../conversation/ProviderMark';
 import { providerLabel } from '../conversation/format';
@@ -58,8 +58,9 @@ function RowBody({ entries, paneId, provider, input }: { entries: readonly LogEn
   const shown = useMemo(() => entries.filter((e) => e.kind !== 'user').slice(-40), [entries]);
   const toggle = useMemo(() => () => {}, []);
   const onClick = useReferenceClick(groupRun);
+  const onKeyDown = useReferenceKey(groupRun);
   return (
-    <div className="timeline-body" onClick={onClick}>
+    <div className="timeline-body" onClick={onClick} onKeyDown={onKeyDown}>
       {input && <div className="mighty-band">{input}</div>}
       <div className="timeline-transcript">
         {shown.map((entry) => <Entry key={entry.id} entry={entry} paneId={paneId} provider={provider} shell={false} live={false} expanded={false} onToggle={toggle} />)}
@@ -87,7 +88,7 @@ const Row = memo(function Row({ row, run, paneId, provider, open, onToggle, firs
         <span className={'timeline-node tone-' + row.tone + (row.ring ? ' ring' : '')}><Icon name={symbol} size={11} weight={2.4} /></span>
       </div>
       <div className={'timeline-card' + (row.tone === 'run' ? ' edge-run' : row.tone === 'wait' ? ' edge-wait' : '')}>
-        <button className="timeline-card-head" onClick={() => onToggle(row.nodeId)} disabled={!entries && !row.input}>
+        <button type="button" className="timeline-card-head" onClick={() => onToggle(row.nodeId)} disabled={!entries && !row.input}>
           <span className="timeline-card-words">
             <span className="timeline-title">{row.title}</span>
             {/* The glyph in the block's role ink when it has one, as its diagram header wears it (M/MightyGraphView.swift timelineLook). */}
@@ -153,7 +154,7 @@ const Group = memo(function Group({ group, run, paneId, provider, onOpenRow, pen
           {group.result && (
             <div className="timeline-result-body">
               <div className={'timeline-result-text' + (group.resultFolds && !full ? ' folded' : '')}>{group.result}</div>
-              {group.resultFolds && <button className="mighty-link" onClick={() => setFull((f) => !f)}>{t(full ? 'phone.blocks.resultLess' : 'phone.blocks.resultMore')}</button>}
+              {group.resultFolds && <button type="button" className="mighty-link" onClick={() => setFull((f) => !f)}>{t(full ? 'phone.blocks.resultLess' : 'phone.blocks.resultMore')}</button>}
             </div>
           )}
         </div>
@@ -202,7 +203,13 @@ export function Timeline({ session, groups: hostGroups, older, history, onOpenRo
   const atEnd = useRef(true);
   const ownSeen = useRef(own);
   const moving = useRef<(() => void) | null>(null);
-  useEffect(() => () => moving.current?.(), []);
+  const rememberFrame = useRef(0);
+  const restoreFrame = useRef(0);
+  useEffect(() => () => {
+    moving.current?.();
+    if (rememberFrame.current) cancelAnimationFrame(rememberFrame.current);
+    if (restoreFrame.current) cancelAnimationFrame(restoreFrame.current);
+  }, []);
   /** The reader's own wheel or drag stops a move to the last group (submitScroll.ts animateScrollTop). */
   const stopMoving = () => { moving.current?.(); moving.current = null; };
   const progress = useRef<{ last: string | null; finished: ReadonlyMap<string, boolean> } | null>(null);
@@ -250,8 +257,10 @@ export function Timeline({ session, groups: hostGroups, older, history, onOpenRo
       if (target) element.scrollTop += target.getBoundingClientRect().top - element.getBoundingClientRect().top - anchor.current.offset;
     }
     armed.current = element.scrollTop > 2;
+    if (rememberFrame.current) { cancelAnimationFrame(rememberFrame.current); rememberFrame.current = 0; }
     remember();
-    requestAnimationFrame(() => { restoring.current = false; });
+    if (restoreFrame.current) cancelAnimationFrame(restoreFrame.current);
+    restoreFrame.current = requestAnimationFrame(() => { restoreFrame.current = 0; restoring.current = false; });
   }, [groups, own, pendingId]);
 
   const onScroll = () => {
@@ -259,7 +268,12 @@ export function Timeline({ session, groups: hostGroups, older, history, onOpenRo
     if (!element) return;
     atEnd.current = isNearBottom(element.scrollHeight, element.scrollTop, element.clientHeight);
     if (restoring.current) return;
-    remember();
+    if (!rememberFrame.current) {
+      rememberFrame.current = requestAnimationFrame(() => {
+        rememberFrame.current = 0;
+        if (!restoring.current) remember();
+      });
+    }
     if (element.scrollTop > 2) armed.current = true;
     else if (armed.current) { armed.current = false; void bridge.call('mightyLoadOlder', { paneId: session.id }); }
   };
@@ -268,7 +282,7 @@ export function Timeline({ session, groups: hostGroups, older, history, onOpenRo
       {/* The history card the diagram has at its top (M/MightyGraphView.swift historyCard), centred. */}
       {history && (
         <div className="timeline-history">
-          {history.acts ? <button className="mighty-link" onClick={() => void bridge.call('mightyLoadOlder', { paneId: session.id })}><Icon name="circle-arrow-up" size={13} weight={2} />{history.text}</button>
+          {history.acts ? <button type="button" className="mighty-link" onClick={() => void bridge.call('mightyLoadOlder', { paneId: session.id })}><Icon name="circle-arrow-up" size={13} weight={2} />{history.text}</button>
             : <span className="mighty-muted">{history.text}</span>}
         </div>
       )}

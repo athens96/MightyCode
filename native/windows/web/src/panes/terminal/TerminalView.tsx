@@ -12,7 +12,7 @@ import type { TerminalFooter } from './types';
 /** The footer's pushes of a terminal the platform draws (the Mac's Ghostty): the engine, the title, the folder and the grid as the host
  * reads them, where xterm's entry (registry.ts) would have taken them. */
 function useNativeFooter(paneId: string, setFooter: (footer: TerminalFooter) => void): void {
-  const native = nativeTerminal() && hostCapabilities()?.platform === 'macos';
+  const native = (import.meta.env.MODE === 'tauri' || import.meta.env.MODE === 'test') && nativeTerminal() && hostCapabilities()?.platform === 'macos';
   useEffect(() => {
     if (!native) return;
     return listenPane('terminal', paneId, ({ message }) => { if (message.type === 'footer') setFooter(message.footer); });
@@ -32,9 +32,9 @@ export function TerminalView({ session, fallback }: { session: RunSession; fallb
   const paneId = session.id;
   const [footer, setFooter] = useState<TerminalFooter | undefined>(() => terminalEntry(paneId)?.footer);
   // In the Rust host's build, a platform that draws terminals itself (the Mac's Ghostty) gets a NativeSlot instead of xterm.js.
-  if (import.meta.env.MODE === 'tauri') useHostCapabilities();
+  useHostCapabilities();
   // There no xterm entry takes the footer's pushes: the pane listens for them itself (the Mac, D9).
-  if (import.meta.env.MODE === 'tauri') useNativeFooter(paneId, setFooter);
+  useNativeFooter(paneId, setFooter);
 
   useEffect(() => {
     let live = true;

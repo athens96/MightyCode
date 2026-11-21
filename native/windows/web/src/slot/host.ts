@@ -52,8 +52,16 @@ export function subscribeHost(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+const noopSubscribe = () => () => {};
+const noCapabilities = (): HostCapabilities | undefined => undefined;
+
 export function useHostCapabilities(): HostCapabilities | undefined {
-  return useSyncExternalStore(subscribeHost, hostCapabilities);
+  const active = import.meta.env.MODE === 'tauri' || import.meta.env.MODE === 'test';
+  return useSyncExternalStore(
+    active ? subscribeHost : noopSubscribe,
+    active ? hostCapabilities : noCapabilities,
+    active ? hostCapabilities : noCapabilities,
+  );
 }
 
 /** Tests only: forget the push. */

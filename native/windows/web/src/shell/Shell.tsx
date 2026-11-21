@@ -132,8 +132,8 @@ export function Shell() {
     document.querySelector('.sidebar [data-session-id="' + escapeCssAttr(selected.paneId) + '"]')?.scrollIntoView({ block: 'nearest' });
   }, [selected]);
   useShortcuts(blocked);
-  // The Mac's menu bar (D9): its items that are page UI arrive as `menu` pushes.
-  if (import.meta.env.MODE === 'tauri') useMenu(blocked, closeUsage);
+  // The Mac's menu bar (D9): its items that are page UI arrive as `menu` pushes (gated inside the hook outside Tauri).
+  useMenu(blocked, closeUsage);
   if (!hasSnapshot || !shell) return <div className="shell-loading" data-testid="loading">{t('launch.preparing')}</div>;
   const width = live ?? savedWidth;
   const header = shell.dashboard ? undefined : shell.header;

@@ -1,15 +1,26 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import type { RunSession } from '../../store/models';
 import { useServices } from '../../app/context';
 import { Markdown } from '../../conversation/MarkdownView';
+import { useReferenceClick, useReferenceKey } from '../../conversation/referenceClick';
 import { MiddlePath, useMenu } from '../../shell/parts';
 import { Icon, type IconName } from '../../icons/Icon';
 import { HtmlFrame, HtmlToggle, isHtmlPreview } from './HtmlView';
 import { File as PierreFile } from '@pierre/diffs/react';
-import { treeKey } from './tree';
+import {
+  DEFAULT_FILE_ROW_HEIGHT,
+  DEFAULT_TREE_OVERSCAN,
+  TREE_WINDOW_THRESHOLD,
+  fileRowId,
+  scrollRowIntoView,
+  treeKey,
+  visibleTreeSlice,
+} from './tree';
 import { useAppTheme } from './useAppTheme';
 import { listenPane } from '../channel';
 import type { FilePreview, FileRow, FilesModel } from './types';
+
+export { fileRowId, visibleTreeSlice };
 
 /** The symbols of the tree and the head (M/FilePaneView.swift, WinUI FileSymbol): folder, page, picture, source as </>. */
 function Symbol({ row, symbol }: { row?: FileRow; symbol?: string }) {
@@ -18,21 +29,62 @@ function Symbol({ row, symbol }: { row?: FileRow; symbol?: string }) {
   return <span className={'files-symbol files-symbol-' + kind} aria-hidden="true"><Icon name={name} size={13} weight={1.6} /></span>;
 }
 
-const Tree = memo(function Tree({ model, onRow, onKey, onMenu }: {
+export const Tree = memo(function Tree({ model, onRow, onKey, onMenu }: {
   model: FilesModel; onRow: (row: FileRow) => void; onKey: (event: KeyboardEvent<HTMLDivElement>) => void;
   /** A right-click on a row: its menu (편집기에서 열기 and the desktop's actions). */
   onMenu?: (event: ReactMouseEvent, row: FileRow) => void;
 }) {
   const list = useRef<HTMLDivElement>(null);
+  const windowed = model.rows.length > TREE_WINDOW_THRESHOLD;
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(600);
+  const [rowHeight, setRowHeight] = useState(DEFAULT_FILE_ROW_HEIGHT);
+
+  useLayoutEffect(() => {
+    const element = list.current;
+    if (!windowed || !element) return undefined;
+    const measure = () => {
+      setViewportHeight((current) => (element.clientHeight > 0 && element.clientHeight !== current ? element.clientHeight : current));
+      const firstRow = element.querySelector<HTMLElement>('.files-row-group');
+      const measured = firstRow?.offsetHeight ?? 0;
+      if (measured > 0) setRowHeight((current) => (current === measured ? current : measured));
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [windowed, model.rows.length]);
+
   useEffect(() => {
-    const row = list.current?.querySelector<HTMLElement>('[aria-selected="true"]');
-    row?.scrollIntoView({ block: 'nearest' });
-  }, [model.selected]);
+    const element = list.current;
+    if (!element || !model.selected) return;
+    const rendered = element.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (rendered) {
+      rendered.scrollIntoView({ block: 'nearest' });
+      return;
+    }
+    if (!windowed) return;
+    const index = model.rows.findIndex((candidate) => candidate.path === model.selected);
+    const nextScroll = scrollRowIntoView(index, rowHeight, element.scrollTop, element.clientHeight || viewportHeight);
+    if (nextScroll !== null) {
+      element.scrollTop = nextScroll;
+      setScrollTop(nextScroll);
+    }
+  }, [model.selected, model.rows, windowed, rowHeight, viewportHeight]);
+
+  const slice = windowed ? visibleTreeSlice(model.rows.length, scrollTop, viewportHeight, rowHeight, DEFAULT_TREE_OVERSCAN) : null;
+  const shownRows = slice ? model.rows.slice(slice.start, slice.end) : model.rows;
+
   return (
-    <div className="files-tree" role="tree" tabIndex={0} ref={list} data-testid="files-tree" aria-activedescendant={model.selected ? 'files-row-' + model.selected : undefined} onKeyDown={onKey}>
-      {model.rows.map((row) => (
+    <div className="files-tree" role="tree" tabIndex={0} ref={list} data-testid="files-tree"
+      aria-activedescendant={model.selected ? fileRowId(model.selected) : undefined}
+      onKeyDown={onKey}
+      onScroll={windowed ? (event) => setScrollTop(event.currentTarget.scrollTop) : undefined}>
+      {slice && slice.topSpacer > 0 && <div aria-hidden="true" style={{ height: slice.topSpacer }} />}
+      {shownRows.map((row) => (
         <div key={row.path} className="files-row-group">
-          <div id={'files-row-' + row.path} role="treeitem" className={'files-row' + (row.noise ? ' noise' : '')} aria-selected={row.path === model.selected} aria-expanded={row.dir && !model.filtering ? row.expanded : undefined}
+          <div id={fileRowId(row.path)} role="treeitem" className={'files-row' + (row.noise ? ' noise' : '')} aria-selected={row.path === model.selected} aria-expanded={row.dir && !model.filtering ? row.expanded : undefined}
             data-path={row.path} title={row.path} style={{ paddingLeft: 'calc(var(--space-xs) + ' + (8 + row.depth * 14) + 'px)' }} onClick={() => onRow(row)}
             onContextMenu={onMenu ? (event) => onMenu(event, row) : undefined}>
             <span className="files-chevron">{row.dir && !model.filtering && <Icon name={row.expanded ? 'chevron-down' : 'chevron-right'} size={10} weight={2.8} />}</span>
@@ -46,6 +98,7 @@ const Tree = memo(function Tree({ model, onRow, onKey, onMenu }: {
           )}
         </div>
       ))}
+      {slice && slice.bottomSpacer > 0 && <div aria-hidden="true" style={{ height: slice.bottomSpacer }} />}
       {model.notes.map((note) => <div key={note} className="files-note">{note}</div>)}
     </div>
   );
@@ -109,6 +162,8 @@ function Unsupported({ preview, reveal }: { preview: FilePreview; reveal: () => 
  */
 export function FilesView({ session }: { session: RunSession }) {
   const { bridge, t } = useServices();
+  const onReferenceClick = useReferenceClick();
+  const onReferenceKey = useReferenceKey();
   const paneId = session.id;
   const [model, setModel] = useState<FilesModel | null>(null);
   const [filter, setFilter] = useState('');
@@ -265,7 +320,7 @@ export function FilesView({ session }: { session: RunSession }) {
           {!preview && !loading && <div className="files-placeholder">{t('files.preview.placeholder')}</div>}
           {preview?.failure && <div className="files-placeholder" data-testid="files-failure">{preview.failure}</div>}
           {shows && preview.kind === 'source' && (htmlPage ? <HtmlFrame paneId={paneId} path={preview.path} name={preview.name} reference={false} /> : <SourceView preview={preview} />)}
-          {shows && preview.kind === 'markdown' && (markdownRendered ? <div className="files-markdown"><Markdown text={preview.text ?? ''} /></div> : <SourceView preview={preview} />)}
+          {shows && preview.kind === 'markdown' && (markdownRendered ? <div className="files-markdown" onClick={onReferenceClick} onKeyDown={onReferenceKey}><Markdown text={preview.text ?? ''} /></div> : <SourceView preview={preview} />)}
           {shows && preview.kind === 'image' && (image ? <ImageView preview={preview} zoom={zoom} /> : <Unsupported preview={preview} reveal={reveal} />)}
           {shows && preview.kind === 'unsupported' && <Unsupported preview={preview} reveal={reveal} />}
         </div>

@@ -22,7 +22,7 @@ import { shareRuns } from './share';
 import { stepsModel } from './steps';
 import { StepsPanel } from './StepsPanel';
 import type { MightyBlockCopy, MightyPane, MightyFile } from './types';
-import { ReferenceContext, useReferenceClick } from '../conversation/referenceClick';
+import { ReferenceContext, useReferenceClick, useReferenceKey } from '../conversation/referenceClick';
 import { holding, pendingRun, pendingRunId, requestState, runsFor, type PendingRequest } from '../pending/requests';
 import { submitScroll } from '../pending/submitScroll';
 import { Motion, reducesMotion } from '../theme/tokens';
@@ -201,6 +201,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   const showReference = useRef(referenceShown);
   showReference.current = referenceShown;
   const onReferenceClick = useReferenceClick(blockRun);
+  const onReferenceKey = useReferenceKey(blockRun);
   const loadingOlder = useRef<unknown>(null);
 
   const hostRuns = useMemo(() => {
@@ -761,9 +762,9 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   const unfinished = useMemo(() => new Set(runs.filter((r) => !finished(r)).map((r) => r.id)), [runs]);
   const toolbarZoom = (
     <span className="mighty-zoom">
-      <button className="mighty-icon" title={t('graph.zoom.out')} aria-label={t('graph.zoom.out')} disabled={zoom <= ZoomMin} onClick={() => setZoomTo(zoomOut(zoom))}><Icon name="zoom-out" size={15} weight={1.75} /></button>
-      <button className="mighty-zoom-label" title={t('graph.zoom.reset')} onClick={() => setZoomTo(ZoomDefault)} data-testid="mighty-zoom">{zoomLabel(zoom)}</button>
-      <button className="mighty-icon" title={t('graph.zoom.in')} aria-label={t('graph.zoom.in')} disabled={zoom >= ZoomMax} onClick={() => setZoomTo(zoomIn(zoom))}><Icon name="zoom-in" size={15} weight={1.75} /></button>
+      <button type="button" className="mighty-icon" title={t('graph.zoom.out')} aria-label={t('graph.zoom.out')} disabled={zoom <= ZoomMin} onClick={() => setZoomTo(zoomOut(zoom))}><Icon name="zoom-out" size={15} weight={1.75} /></button>
+      <button type="button" className="mighty-zoom-label" title={t('graph.zoom.reset')} onClick={() => setZoomTo(ZoomDefault)} data-testid="mighty-zoom">{zoomLabel(zoom)}</button>
+      <button type="button" className="mighty-icon" title={t('graph.zoom.in')} aria-label={t('graph.zoom.in')} disabled={zoom >= ZoomMax} onClick={() => setZoomTo(zoomIn(zoom))}><Icon name="zoom-in" size={15} weight={1.75} /></button>
     </span>
   );
 
@@ -783,7 +784,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
         </svg>
         {steps && <StepsPanel key={paneId} paneId={paneId} model={steps} t={t} />}
         {progress && <ProgressPanel key={paneId} paneId={paneId} progress={progress} onReveal={revealFlow} narrow={viewport.w > 0 && viewport.w < ProgressFoldWidth} />}
-        <div className="mighty-world" ref={worldRef} onClick={onReferenceClick}>
+        <div className="mighty-world" ref={worldRef} onClick={onReferenceClick} onKeyDown={onReferenceKey}>
           {/* The edges, under the blocks and in their coordinates (the layout's extent from its origin): the world's transform moves them. */}
           <svg className="mighty-edges" style={{ left: edgesBox.x, top: edgesBox.y }} width={edgesBox.w} height={edgesBox.h} viewBox={`${edgesBox.x} ${edgesBox.y} ${edgesBox.w} ${edgesBox.h}`}
             aria-hidden="true" data-testid="mighty-edges">

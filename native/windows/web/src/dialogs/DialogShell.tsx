@@ -10,6 +10,7 @@ import tokens from '@tokens/design-tokens.json';
 import { useServices } from '../app/context';
 import { ErrorBoundary } from '../app/ErrorBoundary';
 import { Icon } from '../icons/Icon';
+import { handleModalKeyDown, isTopModal, registerModal, type ModalKeyEvent } from './focusTrap';
 import { clampSize, dragSize, fitSize, loadSize, saveSize, sheetWidth, type Size } from './panelSize';
 
 export type DialogKind = 'alert' | 'sheet' | 'panel';
@@ -80,6 +81,21 @@ export function DialogFrame(props: DialogFrameProps) {
   shownRef.current = shown;
 
   useLayoutEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => {
+      if (before?.isConnected) before.focus({ preventScroll: true });
+    };
+  }, []);
+
+  const modalToken = useRef<symbol | null>(null);
+  if (!modalToken.current) modalToken.current = Symbol('dialog');
+  useLayoutEffect(() => {
+    if (!top) return undefined;
+    return registerModal(modalToken.current!);
+  }, [top]);
+
+  useLayoutEffect(() => {
     if (!top || focus === 'none') return;
     const root = element.current;
     if (!root) return;
@@ -90,14 +106,34 @@ export function DialogFrame(props: DialogFrameProps) {
     target?.focus({ preventScroll: true });
   }, [top, focus]);
 
-  const cancel = useRef(onCancel);
-  cancel.current = onCancel;
+  const modalState = useRef({ kind, busy, top, onCancel });
+  modalState.current = { kind, busy, top, onCancel };
+  const runModalKey = useCallback((native: ModalKeyEvent) => {
+    const current = modalState.current;
+    if (!current.top || !isTopModal(modalToken.current!)) return false;
+    return handleModalKeyDown(native, {
+      root: element.current,
+      activeElement: typeof document !== 'undefined' ? document.activeElement : null,
+      busy: current.busy,
+      kind: current.kind,
+      onCancel: current.onCancel,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!top || typeof window === 'undefined') return undefined;
+    const onWindowKeyDown = (event: globalThis.KeyboardEvent) => { runModalKey(event); };
+    window.addEventListener('keydown', onWindowKeyDown);
+    return () => window.removeEventListener('keydown', onWindowKeyDown);
+  }, [top, runModalKey]);
+
   const key = (event: KeyboardEvent) => {
     props.onKeyDown?.(event);
-    if (event.key !== 'Escape' || !top || event.nativeEvent.isComposing || event.defaultPrevented) return;
-    event.preventDefault(); event.stopPropagation();
-    if (kind === 'panel' && busy) return;
-    cancel.current();
+    if (event.defaultPrevented) return;
+    if (runModalKey(event.nativeEvent)) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
   };
 
   const keep = useCallback((next: Size) => { setSize(next); setFitted(false); if (panel) saveSize(panel, next); }, [panel]);

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { shallowEqual, useServices, useStoreSelector } from '../app/context';
 import { Markdown } from '../conversation/MarkdownView';
+import { useReferenceClick, useReferenceKey } from '../conversation/referenceClick';
 import type { ReferenceTarget } from '../conversation/references';
 import { showsChanges } from '../panes/files/diff';
 import { ImageView, SourceView } from '../panes/files/FilesView';
@@ -60,6 +61,8 @@ function Notice({ text }: { text: string }) {
  */
 export function ReferenceBubble({ paneId, request, top, onClose }: { paneId: string; request: ReferenceRequest; top: number; onClose: () => void }) {
   const { bridge, t } = useServices();
+  const onReferenceClick = useReferenceClick();
+  const onReferenceKey = useReferenceKey();
   const bubbleSize = useStoreSelector(
     (state) => ({ width: state.snapshot?.referenceBubbleWidth, height: state.snapshot?.referenceBubbleHeight }),
     shallowEqual,
@@ -169,7 +172,7 @@ export function ReferenceBubble({ paneId, request, top, onClose }: { paneId: str
   else if (!found || !preview) content = <Notice text={t('files.preview.missing')} />;
   else if (preview.failure) content = <Notice text={preview.failure} />;
   else if (diffable && showsDiff) content = <Suspense fallback={<div className="files-progress" />}><LazyDiffView changes={diffable} name={found?.relativePath ?? preview.name} /></Suspense>;
-  else if (markdownRendered) content = <div className="files-markdown"><Markdown text={preview.text ?? ''} /></div>;
+  else if (markdownRendered) content = <div className="files-markdown" onClick={onReferenceClick} onKeyDown={onReferenceKey}><Markdown text={preview.text ?? ''} /></div>;
   else if (htmlPage && found.relativePath) content = <HtmlFrame paneId={paneId} path={found.relativePath} name={preview.name} reference />;
   else if (preview.kind === 'source' || preview.kind === 'markdown') content = <SourceView preview={preview} />;
   else if (preview.kind === 'image' && preview.image) content = <ImageView preview={preview} zoom={null} />;

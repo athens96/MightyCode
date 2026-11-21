@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useServices } from '../app/context';
 import { Markdown } from '../conversation/MarkdownView';
+import { useReferenceClick, useReferenceKey } from '../conversation/referenceClick';
 import { backgroundLabel } from './background';
-import { nodeId, RequestStep, terminal } from './layout';
+import { nodeId, RequestStep, runOf, terminal } from './layout';
 import {
   ColumnWatch, StructureNavigation, WheelTracker, confined, isDrag, mayPan, newestBoardIndex, panOrigin, scrollable, stepsSummary, userMoving,
   type Page, type PanTarget, type Scroll, type XY,
@@ -68,7 +69,7 @@ function Fold({ text, lines, className, onFold }: { text: string; lines: number;
 function RevealButton({ id, fallback, onReveal }: { id: string; fallback: string; onReveal: Reveal }) {
   const { t } = useServices();
   return (
-    <button className="structure-reveal" data-testid="structure-reveal" title={t('graph.structure.reveal')} aria-label={t('graph.structure.reveal')} onClick={() => onReveal(id, fallback)}>
+    <button type="button" className="structure-reveal" data-testid="structure-reveal" title={t('graph.structure.reveal')} aria-label={t('graph.structure.reveal')} onClick={() => onReveal(id, fallback)}>
       <Icon name="square-arrow-out-up-right" size={12} weight={1.75} />
     </button>
   );
@@ -252,6 +253,11 @@ export function pendingBoard(request: PendingRequest, ordinal: number, t: Transl
  * down (MightyStructurePan); a short press is a click. The newest board's columns follow their newest card (ColumnWatch) unless
  * the reader moved away; a card's reveal button shows its block in the diagram.
  */
+const cardRun = (target: Element) => {
+  const id = target.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId;
+  return id ? runOf(id) : null;
+};
+
 export function Structure({ boards, onReveal, pending: sent, session, own = 0 }: {
   boards: readonly StructureBoard[] | null; onReveal: Reveal;
   /** The pane, for the host's run of the sent request. */
@@ -262,6 +268,8 @@ export function Structure({ boards, onReveal, pending: sent, session, own = 0 }:
   own?: number;
 }) {
   const { t } = useServices();
+  const onReferenceClick = useReferenceClick(cardRun);
+  const onReferenceKey = useReferenceKey(cardRun);
   // The stand-in board stays until the host's boards hold the request's run (they come a moment after the run itself).
   const arrived = sent && session && sent.phase !== 'failed' ? runsFor(sent, session) : [];
   const held = arrived.length > 0 && (boards ?? []).some((board) => board.runIds.some((id) => arrived.includes(id)));
@@ -432,15 +440,15 @@ export function Structure({ boards, onReveal, pending: sent, session, own = 0 }:
     <div className="mighty-structure" data-testid="mighty-structure" data-board-count={list.length} data-board-id={board.id} ref={root}
       data-pending-request={pending && board.id === pendingRunId(pending) ? board.id : undefined}>
       <nav className="structure-nav">
-        <button className="structure-step" title={t('graph.structure.board.previous')} aria-label={t('graph.structure.board.previous')} disabled={index <= 0} onClick={() => move(() => navigation.step(-1, list))}><Icon name="chevron-left" size={13} weight={2.4} /></button>
+        <button type="button" className="structure-step" title={t('graph.structure.board.previous')} aria-label={t('graph.structure.board.previous')} disabled={index <= 0} onClick={() => move(() => navigation.step(-1, list))}><Icon name="chevron-left" size={13} weight={2.4} /></button>
         <span className="structure-place" ref={place}>
-          <button className="structure-position" data-testid="structure-list-button" title={t('graph.structure.board.list')} aria-haspopup="listbox" aria-expanded={listOpen} onClick={() => setListOpen((o) => !o)}>
+          <button type="button" className="structure-position" data-testid="structure-list-button" title={t('graph.structure.board.list')} aria-haspopup="listbox" aria-expanded={listOpen} onClick={() => setListOpen((o) => !o)}>
             {position(board, index)}<Icon name="chevron-down" size={9} weight={2.6} />
           </button>
           {listOpen && (
             <div className="structure-list popover width-s" role="listbox" data-page-overlay="" aria-label={t('graph.structure.board.list')} data-testid="structure-list">
               {list.map((b, at) => (
-                <button key={b.id} role="option" aria-selected={at === index} className={'structure-entry' + (at === index ? ' chosen' : '')} data-board-id={b.id}
+                <button key={b.id} type="button" role="option" aria-selected={at === index} className={'structure-entry' + (at === index ? ' chosen' : '')} data-board-id={b.id}
                   onClick={() => { setListOpen(false); move(() => navigation.select(b.id, list)); }}>
                   <span className="structure-entry-number">{at + 1}</span>
                   <span className={'structure-entry-mark tone-' + b.tone} aria-hidden="true" />
@@ -453,9 +461,9 @@ export function Structure({ boards, onReveal, pending: sent, session, own = 0 }:
             </div>
           )}
         </span>
-        <button className="structure-step" title={t('graph.structure.board.next')} aria-label={t('graph.structure.board.next')} disabled={index >= list.length - 1} onClick={() => move(() => navigation.step(1, list))}><Icon name="chevron-right" size={13} weight={2.4} /></button>
+        <button type="button" className="structure-step" title={t('graph.structure.board.next')} aria-label={t('graph.structure.board.next')} disabled={index >= list.length - 1} onClick={() => move(() => navigation.step(1, list))}><Icon name="chevron-right" size={13} weight={2.4} /></button>
         {unseen && (
-          <button className="structure-badge" data-testid="structure-unseen" title={t('graph.structure.board.showNewest')} onClick={() => move(() => navigation.showNewest(list))}>
+          <button type="button" className="structure-badge" data-testid="structure-unseen" title={t('graph.structure.board.showNewest')} onClick={() => move(() => navigation.showNewest(list))}>
             {t(board.kind === 'pipeline' ? 'graph.structure.board.newPipeline' : 'graph.structure.board.newRequest')}
           </button>
         )}
@@ -467,7 +475,7 @@ export function Structure({ boards, onReveal, pending: sent, session, own = 0 }:
         {board.kind === 'pipeline' && <span className="structure-headline">{title(board, index)}</span>}
       </div>
       <div className="structure-columns" ref={page} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={endPress} onPointerCancel={endPress}
-        onLostPointerCapture={endPress} onClickCapture={onClickCapture} onScrollCapture={onColumnScroll}>
+        onLostPointerCapture={endPress} onClickCapture={onClickCapture} onClick={onReferenceClick} onKeyDown={onReferenceKey} onScrollCapture={onColumnScroll}>
         {board.columns.map((column, at) => (
           <div key={column.id} className={'structure-column step-' + column.step + tintClass(column.tone)} data-column-id={column.id}>
             <header className="structure-column-head" title={column.title + ' · ' + column.stepWord}>

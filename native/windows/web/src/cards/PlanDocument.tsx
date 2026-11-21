@@ -1,7 +1,8 @@
-import { useEffect, useRef, type KeyboardEvent, type MouseEvent } from 'react';
+import { useLayoutEffect, useRef, type KeyboardEvent, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { useServices } from '../app/context';
 import { Markdown } from '../conversation/MarkdownView';
+import { useReferenceClick, useReferenceKey } from '../conversation/referenceClick';
 import { Icon } from '../icons/Icon';
 import { usePageOverlay } from '../shell/overlay';
 import { DialogShell } from '../dialogs/DialogShell';
@@ -10,12 +11,14 @@ import type { PlanRecord } from './types';
 /** One answered plan's meaning, kept with its text in both the history strip and the diagram. */
 export function PlanRecordDetails({ record, expanded, metadata = true }: { record: PlanRecord; expanded: boolean; metadata?: boolean }) {
   const { t } = useServices();
+  const onReferenceClick = useReferenceClick();
+  const onReferenceKey = useReferenceKey();
   return <>
     {metadata && <div className="plan-record-meta">
       <span className={'plan-pill tone-' + record.tone}>{record.outcomeTitle}</span>
       <span className="plan-record-time">{record.time}</span>
     </div>}
-    {expanded ? <div className="plan-document"><Markdown text={record.plan} /></div> : metadata && <div className="plan-record-headline">{record.headline}</div>}
+    {expanded ? <div className="plan-document" onClick={onReferenceClick} onKeyDown={onReferenceKey}><Markdown text={record.plan} /></div> : metadata && <div className="plan-record-headline">{record.headline}</div>}
     {expanded && record.truncated && <div className="card-note">{t('plan.history.truncated')}</div>}
     {record.feedback && <div className={'plan-feedback' + (expanded ? ' open' : '')} title={record.feedback}>{t('plan.history.feedback')} · {record.feedback}</div>}
   </>;
@@ -42,27 +45,15 @@ export function PlanDocument(props: PlanDocumentProps) {
 export function PlanDocumentDialog({ title, subtitle, plan, onClose }: PlanDocumentProps) {
   const { t } = useServices();
   const card = useRef<HTMLDivElement | null>(null);
-  const close = useRef(onClose);
-  close.current = onClose;
+  const onReferenceClick = useReferenceClick();
+  const onReferenceKey = useReferenceKey();
   usePageOverlay(true);
-  useEffect(() => {
-    const before = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    card.current?.querySelector<HTMLElement>('[data-testid=plan-document-close]')?.focus();
-    const escape = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
-      event.preventDefault(); event.stopPropagation(); close.current();
-    };
-    window.addEventListener('keydown', escape, true);
-    return () => { window.removeEventListener('keydown', escape, true); if (before?.isConnected) before.focus(); };
+  useLayoutEffect(() => {
+    card.current?.querySelector<HTMLElement>('[data-testid=plan-document-close]')?.focus({ preventScroll: true });
   }, []);
   const key = (event: KeyboardEvent) => {
+    onReferenceKey(event);
     event.stopPropagation();
-    if (event.key !== 'Tab' || !card.current) return;
-    const controls = [...card.current.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], [tabindex="0"]')];
-    const first = controls[0], last = controls[controls.length - 1];
-    if (!first || !last) return;
-    if (event.shiftKey && (document.activeElement === first || !card.current.contains(document.activeElement))) { event.preventDefault(); last.focus(); }
-    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
   const stop = (event: { stopPropagation(): void }) => event.stopPropagation();
   return (
@@ -73,7 +64,9 @@ export function PlanDocumentDialog({ title, subtitle, plan, onClose }: PlanDocum
         'data-page-overlay': '', 'data-close-label': t('plan.card.close'), onPointerDown: stop, onWheel: stop,
         onClick: (event: MouseEvent<HTMLDivElement>) => { event.stopPropagation(); if (event.target === event.currentTarget) onClose(); },
       }}>
-      <Markdown text={plan} />
+      <div onClick={onReferenceClick}>
+        <Markdown text={plan} />
+      </div>
     </DialogShell>
   );
 }

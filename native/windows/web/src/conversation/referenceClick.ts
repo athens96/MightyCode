@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, type MouseEvent } from 'react';
+import { createContext, useCallback, useContext, type KeyboardEvent, type MouseEvent } from 'react';
 import { useServices } from '../app/context';
 import { hostCapabilities } from '../slot/host';
 import { textTargetAt, type ReferenceTarget } from './references';
@@ -41,6 +41,31 @@ export function linkAt(element: Element): Clicked {
   const path = link?.dataset.path;
   const line = Number(link?.dataset.line);
   return path ? { path, line: Number.isInteger(line) && line > 0 ? line : null } : null;
+}
+
+export interface LinkKeyEvent {
+  key: string;
+  altKey?: boolean;
+  shiftKey?: boolean;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  isComposing?: boolean;
+  nativeEvent?: { isComposing?: boolean };
+  defaultPrevented?: boolean;
+  target: unknown;
+}
+
+/**
+ * Whether a key event activates a focused `[role="link"]` element: plain `Enter` or `Ctrl+Enter` / `⌘+Enter`
+ * (never while composing or with Alt/Shift).
+ */
+export function linkKeyTarget(event: LinkKeyEvent): Clicked {
+  if (event.key !== 'Enter' || event.defaultPrevented) return null;
+  if (event.altKey || event.shiftKey) return null;
+  if (event.isComposing || event.nativeEvent?.isComposing) return null;
+  const target = event.target as { closest?: (selector: string) => Element | null } | null;
+  const link = target?.closest?.('[role="link"]');
+  return link ? linkAt(link) : null;
 }
 
 /**
@@ -88,6 +113,26 @@ export function useReferenceClick(runAt?: (target: Element) => string | null): (
       // ⌘-click (Ctrl+click on Windows) opens the file in the external editor at its line (the pane's handler, PaneView.tsx).
       const editor = editorClick(event);
       show?.({ ...clicked, ...(runId ? { runId } : {}), ...(editor ? { editor: true } : {}) });
+    }
+  }, [bridge, show, runAt]);
+}
+
+/**
+ * Keyboard companion to `useReferenceClick`: plain `Enter` (and `Ctrl+Enter` / `⌘+Enter`) on a focused `[role="link"]`
+ * opens web links in the browser and local paths in the pane's reference bubble.
+ */
+export function useReferenceKey(runAt?: (target: Element) => string | null): (event: KeyboardEvent) => void {
+  const { bridge } = useServices();
+  const show = useContext(ReferenceContext);
+  return useCallback((event: KeyboardEvent) => {
+    const clicked = linkKeyTarget(event);
+    if (!clicked) return;
+    event.preventDefault();
+    if ('url' in clicked) void bridge.call('openUrl', { url: clicked.url }).catch(() => {});
+    else {
+      const target = event.target as Element;
+      const runId = runAt?.(target);
+      show?.({ ...clicked, ...(runId ? { runId } : {}) });
     }
   }, [bridge, show, runAt]);
 }

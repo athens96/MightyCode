@@ -2,7 +2,7 @@
 // (EffectiveLayout, focus showing one group) as splits with draggable dividers and tab groups with their strips. A group keeps
 // every pane it has shown mounted, hidden behind the selected one, so a tab switch draws no pane again. Every change of the
 // tree is the host's: SelectLayoutSession, ActivatePane, ResizeSplit / ResetSplit, DockSession, CloseSession.
-import { memo, useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { memo, useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useServices, useStoreSelector } from '../app/context';
 import { escapeCssAttr } from '../app/cssEscape';
 import { ErrorBoundary } from '../app/ErrorBoundary';
@@ -121,7 +121,7 @@ function pressTab(event: ReactPointerEvent<HTMLElement>, id: string, workspaceId
  *  a page overlay over the dock (shell/overlay.ts) steps the native views (the Mac's Ghostty terminal) aside, so the ghost and the hints
  *  show over them too and the pointer stays the page's. */
 function TabDragGhost() {
-  const drag = useSyncExternalStore(subscribeDrag, dragging);
+  const drag = useSyncExternalStore(subscribeDrag, dragging, () => null);
   usePageOverlay(drag !== null);
   if (!drag) return null;
   return (
@@ -152,7 +152,7 @@ const Tab = memo(function Tab({ info, selected, workspaceId, index }: TabProps) 
   const call = useCall();
   const menu = useMenu();
   const choose = useChoosePane();
-  const landing = useSyncExternalStore(subscribeDrag, () => { const target = dragging()?.press.target; return target?.tabId === info.id ? target.side ?? null : null; });
+  const landing = useSyncExternalStore(subscribeDrag, () => { const target = dragging()?.press.target; return target?.tabId === info.id ? target.side ?? null : null; }, () => null);
   const items: MenuItem[] = [
     { label: t('menu.rename'), action: () => call('renameSession', { id: info.id }) },
     { label: t('menu.focusPane'), action: () => call('focusPane', { id: info.id }) },
@@ -176,6 +176,43 @@ const Tab = memo(function Tab({ info, selected, workspaceId, index }: TabProps) 
 });
 
 const hintKey: Record<DropEdge, string> = { center: 'layout.drop.merge', left: 'layout.drop.left', right: 'layout.drop.right', top: 'layout.drop.top', bottom: 'layout.drop.bottom' };
+
+/** Next tab index for `ArrowLeft`, `ArrowRight`, `Home` or `End` inside a `role="tablist"`; null otherwise. */
+export function nextTablistIndex(count: number, current: number, key: string): number | null {
+  if (count <= 0 || current < 0 || current >= count) return null;
+  switch (key) {
+    case 'ArrowLeft':
+      return (current - 1 + count) % count;
+    case 'ArrowRight':
+      return (current + 1) % count;
+    case 'Home':
+      return 0;
+    case 'End':
+      return count - 1;
+    default:
+      return null;
+  }
+}
+
+export type SplitKeyAction = { kind: 'resize'; ratio: number } | { kind: 'reset' } | null;
+
+/** Keyboard adjustment for a split separator: arrows step by 0.05 (clamped), `Home`/`End`/`0` reset. */
+export function splitKeyAction(ratio: number, key: string): SplitKeyAction {
+  switch (key) {
+    case 'ArrowLeft':
+    case 'ArrowUp':
+      return { kind: 'resize', ratio: clampRatio(ratio - 0.05) };
+    case 'ArrowRight':
+    case 'ArrowDown':
+      return { kind: 'resize', ratio: clampRatio(ratio + 0.05) };
+    case 'Home':
+    case 'End':
+    case '0':
+      return { kind: 'reset' };
+    default:
+      return null;
+  }
+}
 
 const PaneSlot = memo(function PaneSlot({
   paneId,
@@ -213,7 +250,7 @@ function TabGroup({ node, workspaceId, activeId }: { node: PaneLayoutNode; works
   const panes = usePaneInfo();
   const strip = useRef<HTMLDivElement>(null);
   // Over a tab the landing mark shows instead of the group's hint.
-  const hint = useSyncExternalStore(subscribeDrag, () => { const target = dragging()?.press.target; return target?.groupId === node.id && target.tabId === undefined ? target.edge : null; });
+  const hint = useSyncExternalStore(subscribeDrag, () => { const target = dragging()?.press.target; return target?.groupId === node.id && target.tabId === undefined ? target.edge : null; }, () => null);
   // The pane the click chose shows at once; otherwise the group's own selection.
   const selected = activeId && node.sessionIds.includes(activeId) ? activeId : node.selectedSessionId ?? node.sessionIds[0];
   // Every pane this group has shown stays mounted while it is one of its tabs.
@@ -242,9 +279,21 @@ function TabGroup({ node, workspaceId, activeId }: { node: PaneLayoutNode; works
     }
     menu.atPointer(event, items);
   }, [call, menu, store, t]);
+  const onStripKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const tabButton = (event.target as Element).closest?.('[role="tab"]') as HTMLButtonElement | null;
+    if (!tabButton || !strip.current) return;
+    const tabs = [...strip.current.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    const next = nextTablistIndex(tabs.length, tabs.indexOf(tabButton), event.key);
+    if (next === null) return;
+    event.preventDefault();
+    const target = tabs[next];
+    target?.focus();
+    const id = target?.closest<HTMLElement>('.tab[data-tab-id]')?.dataset.tabId;
+    if (id) choose(id);
+  };
   return (
     <div className={'tab-group' + (holdsActive ? ' holds-active' : '')} data-group-id={node.id} data-workspace-id={workspaceId} data-testid="tab-group">
-      <div className="tab-strip" ref={strip} role="tablist">
+      <div className="tab-strip" ref={strip} role="tablist" onKeyDown={onStripKeyDown}>
         {node.sessionIds.map((id, index) => {
           const info = panes.get(id);
           return info ? <Tab key={id} info={info} selected={id === selected} workspaceId={workspaceId} index={index} /> : null;
@@ -292,6 +341,13 @@ function Split({ node, workspaceId, activeId }: { node: PaneLayoutNode; workspac
     // The host's tree comes back with this share; until then the live one stands.
     setTimeout(() => setLive(null), 400);
   };
+  const key = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const action = splitKeyAction(ratio, event.key);
+    if (!action) return;
+    event.preventDefault();
+    if (action.kind === 'reset') call('resetSplit', { workspaceId, splitId: node.id });
+    else call('resizeSplit', { workspaceId, splitId: node.id, ratio: action.ratio });
+  };
   const style = horizontal
     ? { gridTemplateColumns: `minmax(${first.width}px, ${ratio}fr) ${layoutMetrics.splitDivider}px minmax(${second.width}px, ${1 - ratio}fr)` }
     : { gridTemplateRows: `minmax(${first.height}px, ${ratio}fr) ${layoutMetrics.splitDivider}px minmax(${second.height}px, ${1 - ratio}fr)` };
@@ -299,8 +355,9 @@ function Split({ node, workspaceId, activeId }: { node: PaneLayoutNode; workspac
     <div ref={element} className={'split ' + (horizontal ? 'horizontal' : 'vertical')} style={style} data-split-id={node.id} data-testid="split">
       <LayoutNode node={node.children[0]!} workspaceId={workspaceId} activeId={activeId} />
       <div className={'split-divider' + (live !== null ? ' dragging' : '')} role="separator" aria-orientation={horizontal ? 'vertical' : 'horizontal'}
+        tabIndex={0} aria-valuenow={Math.round(ratio * 100)} aria-valuemin={10} aria-valuemax={90}
         aria-label={t(horizontal ? 'layout.divider.horizontal' : 'layout.divider.vertical')} title={t('layout.divider.tooltip')}
-        onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={() => { press.current = null; setLive(null); }}
+        onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={() => { press.current = null; setLive(null); }} onKeyDown={key}
         onDoubleClick={() => call('resetSplit', { workspaceId, splitId: node.id })}>
         <span className="split-handle" />
       </div>

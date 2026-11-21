@@ -7,8 +7,12 @@ import { Store } from '../store/store';
 import { StatusBar } from './Chrome';
 import { filterWorkspaces } from './filter';
 import { isMenuPush } from './menu';
+import { nextMenuItem } from './parts';
+import { Shell } from './Shell';
 import { macShortcutAction, shortcutAction } from './shortcuts';
 import type { ShellModel } from './types';
+import { TerminalView } from '../panes/terminal/TerminalView';
+import type { RunSession } from '../store/models';
 
 const key = (code: string, extra: Partial<{ key: string; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }> = {}) =>
   ({ key: extra.key ?? '', code, ctrlKey: extra.ctrlKey ?? true, shiftKey: extra.shiftKey ?? false, altKey: extra.altKey ?? false, metaKey: false });
@@ -115,5 +119,39 @@ describe('usage reset link validation (Chrome.tsx)', () => {
 
     const invalid = renderStatus('javascript:alert(1)');
     expect(invalid).toMatch(/<button[^>]*disabled=""[^>]*>Open guide<\/button>/);
+  });
+});
+
+describe('MenuHost keyboard navigation & unconditional hooks', () => {
+  it('cycles enabled menu items via ArrowDown, ArrowUp, Home and End', () => {
+    const items = ['rename', 'focus', 'close'];
+    expect(nextMenuItem(items, null, 'ArrowDown')).toBe('rename');
+    expect(nextMenuItem(items, 'rename', 'ArrowDown')).toBe('focus');
+    expect(nextMenuItem(items, 'close', 'ArrowDown')).toBe('rename');
+    expect(nextMenuItem(items, 'rename', 'ArrowUp')).toBe('close');
+    expect(nextMenuItem(items, 'close', 'Home')).toBe('rename');
+    expect(nextMenuItem(items, 'rename', 'End')).toBe('close');
+    expect(nextMenuItem([], null, 'ArrowDown')).toBeNull();
+    expect(nextMenuItem(items, 'rename', 'Tab')).toBeNull();
+  });
+
+  it('calls hooks unconditionally in Shell and TerminalView during SSR', () => {
+    const store = new Store();
+    const services = {
+      bridge: { call: () => Promise.resolve(null) },
+      store,
+      t: translator([{ 'launch.preparing': 'Preparing…', 'terminal.accessibility': 'Terminal' }]),
+    } as unknown as AppServices;
+
+    const shellHtml = renderToStaticMarkup(
+      createElement(ServicesContext.Provider, { value: services }, createElement(Shell)),
+    );
+    expect(shellHtml).toContain('Preparing…');
+
+    const session = { id: 'term-1', workspaceId: 'w1', title: 'Shell', kind: 'shell', provider: 'claude', status: 'idle', draft: '', logs: [] } as unknown as RunSession;
+    const termHtml = renderToStaticMarkup(
+      createElement(ServicesContext.Provider, { value: services }, createElement(TerminalView, { session })),
+    );
+    expect(termHtml).toContain('data-testid="terminal-pane"');
   });
 });

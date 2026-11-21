@@ -4,7 +4,7 @@ import type { AgentActivity, LogEntry, RunSession } from '../store/models';
 import { Entry, type EntryProps } from './Entry';
 import { providerIsBeta, providerLabel } from './format';
 import { ProviderMark } from './ProviderMark';
-import { ReferenceContext, clickedAt, editorClick, linkAt, type Clicked } from './referenceClick';
+import { ReferenceContext, clickedAt, editorClick, linkKeyTarget, type Clicked } from './referenceClick';
 import { HeightCache, estimateHeight, followsAfterScroll, layout, visibleRange, type ScrollPlace } from './virtual';
 import { usePageOverlay } from '../shell/overlay';
 import { Pending, PendingBars } from '../pending/Pending';
@@ -193,7 +193,6 @@ export function Conversation({ session }: { session: RunSession }) {
     else showReference?.(editor ? { ...clicked, editor: true } : clicked);
     return true;
   }, [bridge, showReference]);
-  const open = useCallback((element: Element) => follow(linkAt(element)), [follow]);
 
   const onClick = useCallback((event: MouseEvent<HTMLDivElement>) => {
     const target = event.target as Element;
@@ -203,9 +202,9 @@ export function Conversation({ session }: { session: RunSession }) {
   }, [follow]);
 
   const onKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Enter' && event.ctrlKey && open(event.target as Element)) event.preventDefault();
+    if (follow(linkKeyTarget(event))) event.preventDefault();
     if (event.key === 'Escape') setMenu(null);
-  }, [open]);
+  }, [follow]);
 
   const onContextMenu = useCallback((event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
