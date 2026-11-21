@@ -42,10 +42,57 @@ pub fn resolve(path: &str, root: &str, line: Option<i32>) -> Option<Target> {
         local.truncate(colon);
     }
     let files = StdFiles { ignores_case: std::path::MAIN_SEPARATOR == '\\' };
-    let resolved = files.resolve(&local, root)?;
+    // A reply often names a file from a folder below the workspace (`src/a.ts` for `app/src/a.ts`): the one file whose path ends so.
+    let resolved = match files.resolve(&local, root) {
+        Some(found) => found,
+        None => files.resolve(&ending_in(&local, Path::new(root))?, root)?,
+    };
     let real_root = workspace_files::real_path(Path::new(root))?;
     let relative = workspace_files::relative(Path::new(&resolved), &real_root)?.replace('\\', "/");
     Some(Target { relative_path: relative, line: line.filter(|l| *l > 0) })
+}
+
+/// Folders never searched for a file a reply named: tools' caches, dependencies and build output (hidden folders too).
+const SKIPPED: [&str; 12] =
+    ["node_modules", "target", "dist", "build", "venv", "__pycache__", "Pods", "DerivedData", "coverage", "obj", "out", "vendor"];
+/// The most entries a search for a named file reads, so a huge workspace answers quickly (as not found).
+const SEARCH_LIMIT: usize = 120_000;
+
+/// The workspace-relative path of the one file below `root` whose path ends with `named` (a relative path of at least a folder
+/// and a name, or a file name), shortest first when several do; None when none does, when `named` is absolute or climbs out, or when
+/// the search reads too much.
+fn ending_in(named: &str, root: &Path) -> Option<String> {
+    let wanted: Vec<&str> = named.split(['/', '\\']).filter(|p| !p.is_empty() && *p != ".").collect();
+    if wanted.is_empty() || named.starts_with(['/', '\\']) || wanted.contains(&"..") || named.contains(':') {
+        return None;
+    }
+    let mut folders = vec![root.to_path_buf()];
+    let mut read = 0usize;
+    let mut found: Vec<String> = vec![];
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = std::fs::read_dir(&folder) else { continue };
+        for entry in entries.flatten() {
+            read += 1;
+            if read > SEARCH_LIMIT {
+                return None;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Ok(kind) = entry.file_type() else { continue };
+            if kind.is_dir() {
+                if !SKIPPED.contains(&name.as_str()) && !name.starts_with('.') {
+                    folders.push(entry.path());
+                }
+            } else if kind.is_file() && name == *wanted.last()? {
+                let Ok(relative) = entry.path().strip_prefix(root).map(|r| r.to_string_lossy().replace('\\', "/")) else { continue };
+                let parts: Vec<&str> = relative.split('/').collect();
+                if parts.len() >= wanted.len() && parts[parts.len() - wanted.len()..] == wanted[..] {
+                    found.push(relative);
+                }
+            }
+        }
+    }
+    found.sort_by_key(|p| (p.matches('/').count(), p.clone()));
+    found.into_iter().next()
 }
 
 static REFERENCE: LazyLock<Regex> = LazyLock::new(|| {
@@ -128,4 +175,26 @@ pub fn text_target_at(text: &str, position: usize) -> Option<(String, Option<i32
         at += c.len_utf8();
     }
     None
+}
+
+#[cfg(test)]
+mod ending_tests {
+    use super::*;
+
+    #[test]
+    fn a_file_named_from_a_folder_below_the_workspace_is_found_by_its_ending() {
+        let root = std::env::temp_dir().join(format!("mc-ref-{}", mighty_core::wire::new_id()));
+        std::fs::create_dir_all(root.join("app/src/composer")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules/x/src/composer")).unwrap();
+        std::fs::create_dir_all(root.join(".build/src/composer")).unwrap();
+        std::fs::write(root.join(".build/src/composer/Toolbar.tsx"), "x").unwrap();
+        std::fs::write(root.join("app/src/composer/Toolbar.tsx"), "x").unwrap();
+        std::fs::write(root.join("node_modules/x/src/composer/Toolbar.tsx"), "x").unwrap();
+        let target = resolve("src/composer/Toolbar.tsx:12", &root.to_string_lossy(), None).expect("found by its ending");
+        assert_eq!(target.relative_path, "app/src/composer/Toolbar.tsx");
+        assert_eq!(target.line, Some(12));
+        assert!(resolve("src/other/Missing.tsx", &root.to_string_lossy(), None).is_none());
+        assert!(resolve("../outside.tsx", &root.to_string_lossy(), None).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

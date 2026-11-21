@@ -149,8 +149,31 @@ describe('inline', () => {
   });
 
   it('keeps every backslash of a Windows path', () => {
-    expect(parseInline('open C:\\Work\\.claude\\settings.json now')).toEqual([text('open C:\\Work\\.claude\\settings.json now')]);
+    expect(parseInline('open C:\\Work\\.claude\\settings.json now')).toEqual([
+      text('open '), { type: 'path', text: 'C:\\Work\\.claude\\settings.json', path: 'C:\\Work\\.claude\\settings.json', line: null }, text(' now'),
+    ]);
     expect(parseInline('in native\\windows\\_build')).toEqual([text('in native\\windows\\_build')]);
+  });
+
+  it('draws the bare web addresses and the files a reply names as links', () => {
+    expect(parseInline('see https://example.com/a?b=1. done')).toEqual([text('see '), { type: 'autolink', url: 'https://example.com/a?b=1' }, text('. done')]);
+    expect(parseInline('(https://example.com/x)')).toEqual([text('('), { type: 'autolink', url: 'https://example.com/x' }, text(')')]);
+    expect(parseInline('fixed src/store.rs:767 and README.md')).toEqual([
+      text('fixed '), { type: 'path', text: 'src/store.rs:767', path: 'src/store.rs', line: 767 }, text(' and '),
+      { type: 'path', text: 'README.md', path: 'README.md', line: null },
+    ]);
+    // A version, a host name or a word with a dot is no file.
+    expect(parseInline('0.5.7 on workers.dev e.g. this')).toEqual([text('0.5.7 on workers.dev e.g. this')]);
+    expect(parseInline('`native/a/b.tsx`')).toEqual([{ type: 'code', text: 'native/a/b.tsx', path: 'native/a/b.tsx', line: null }]);
+    expect(parseInline('`npm run build`')).toEqual([{ type: 'code', text: 'npm run build' }]);
+    expect(parseInline('`https://example.com/a`')).toEqual([{ type: 'code', text: 'https://example.com/a', url: 'https://example.com/a' }]);
+    expect(parseInline('`https://…`')).toEqual([{ type: 'code', text: 'https://…' }]);
+    // One check of a code span never shifts where the next text is searched from.
+    parseInline('`src/a.ts` and `README.md`');
+    expect(parseInline('docs/plans/2026-11-20-files.md and a/b.md')).toEqual([
+      { type: 'path', text: 'docs/plans/2026-11-20-files.md', path: 'docs/plans/2026-11-20-files.md', line: null }, text(' and '),
+      { type: 'path', text: 'a/b.md', path: 'a/b.md', line: null },
+    ]);
   });
 
   it('tells web links, local links and other destinations apart', () => {

@@ -56,7 +56,12 @@ function Spans({ nodes }: { nodes: readonly Inline[] }): ReactNode {
       case 'text':
         return node.text;
       case 'code':
-        return <code key={index} className="md-code">{node.text}</code>;
+        if (node.url) return <code key={index} className="md-code md-link" data-url={node.url} role="link" tabIndex={0}>{node.text}</code>;
+        return node.path
+          ? <code key={index} className="md-code md-local" data-path={node.path} data-line={node.line ?? undefined} role="link" tabIndex={0}>{node.text}</code>
+          : <code key={index} className="md-code">{node.text}</code>;
+      case 'path':
+        return <span key={index} className="md-local" data-path={node.path} data-line={node.line ?? undefined} role="link" tabIndex={0}>{node.text}</span>;
       case 'strong':
         return <strong key={index}><Spans nodes={node.children} /></strong>;
       case 'em':

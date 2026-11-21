@@ -6,7 +6,10 @@ import { localPath, utf8Length, webUrl } from './references';
 
 export type Inline =
   | { type: 'text'; text: string }
-  | { type: 'code'; text: string }
+  /** Inline code; `path` when the whole code is a file name (a link to the reference preview, its line when it names one). */
+  | { type: 'code'; text: string; path?: string; line?: number | null; url?: string }
+  /** A file named in the text (`src/a.ts`, `store.rs:12`): drawn as a link to the reference preview. */
+  | { type: 'path'; text: string; path: string; line: number | null }
   | { type: 'strong' | 'em' | 'strongEm' | 'strike'; children: Inline[] }
   /** `web`: http, https or mailto, drawn `label (url)` in the accent; `local`: a file, label and `(path)` underlined. */
   | { type: 'link'; kind: 'web' | 'local'; target: string; children: Inline[] }
@@ -304,13 +307,75 @@ function image(value: string, pictures: boolean): Inline {
   return { type: 'image', kind, alt, source };
 }
 
+/** Code files and documents a reply names: a name without a folder is a file only with one of these extensions. */
+const fileExtensions = new Set([
+  'rs', 'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'json', 'jsonc', 'md', 'mdx', 'txt', 'toml', 'yaml', 'yml', 'lock', 'css', 'scss', 'less',
+  'html', 'htm', 'py', 'rb', 'go', 'java', 'kt', 'kts', 'swift', 'c', 'h', 'cc', 'cpp', 'hpp', 'cs', 'fs', 'sh', 'bash', 'zsh', 'ps1',
+  'bat', 'cmd', 'sql', 'xml', 'svg', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'pdf', 'csv', 'env', 'plist', 'gradle', 'vue',
+  'svelte', 'dart', 'php', 'lua', 'ex', 'exs', 'erl', 'hs', 'ml', 'zig', 'ini', 'cfg', 'conf', 'log', 'csproj', 'sln', 'xaml', 'proto',
+]);
+const bareUrl = /\b(?:https?:\/\/|mailto:)[^\s<>"'`]+/giu;
+const filePattern = /(?<![\p{L}\p{N}_@/\\.-])((?:[A-Za-z]:[\\/]|~\/|\.{1,2}[\\/]|\/)?(?:[\p{L}\p{N}_.@-]+[\\/])*[\p{L}\p{N}_.@-]*[\p{L}_][\p{L}\p{N}_.@-]*\.([A-Za-z][A-Za-z0-9]{0,11}))(?::(\d{1,6}))?(?::\d{1,6})?(?![\p{L}\p{N}_\\/])/gu;
+
+/** A bare web address cut where prose goes on: trailing punctuation and a closing bracket it did not open left out. */
+function trimUrl(url: string): string {
+  let end = url.length;
+  while (end > 0 && '.,;:!?\'"'.includes(url[end - 1]!)) end--;
+  let value = url.slice(0, end);
+  for (const [open, close] of [['(', ')'], ['[', ']'], ['{', '}']] as const) {
+    while (value.endsWith(close) && value.split(open).length < value.split(close).length) value = value.slice(0, -1);
+  }
+  return value;
+}
+
+/** A file a reply names in `text` when the whole of it is one (`src/a.ts`, `a.rs:12`): its path and line; null otherwise. */
+export function fileReference(text: string): { path: string; line: number | null } | null {
+  // A fresh copy: the shared global pattern would carry its position over to the next search.
+  const match = new RegExp(filePattern.source, 'u').exec(text.trim());
+  if (!match || match.index !== 0 || match[0].length !== text.trim().length) return null;
+  return fileOf(match);
+}
+
+function fileOf(match: RegExpExecArray | RegExpMatchArray): { path: string; line: number | null } | null {
+  const path = match[1]!;
+  const folder = /[\\/]/.test(path);
+  if (!folder && !fileExtensions.has(match[2]!.toLowerCase())) return null;
+  return { path, line: match[3] === undefined ? null : Number(match[3]) };
+}
+
+/** Plain text with the web addresses and the files it names drawn as links. */
+function linked(text: string): Inline[] {
+  const out: Inline[] = [];
+  let at = 0;
+  const words = (piece: string) => {
+    let from = 0;
+    for (const match of piece.matchAll(filePattern)) {
+      const file = fileOf(match);
+      if (!file) continue;
+      if (match.index! > from) out.push({ type: 'text', text: piece.slice(from, match.index) });
+      out.push({ type: 'path', text: match[0], ...file });
+      from = match.index! + match[0].length;
+    }
+    if (from < piece.length) out.push({ type: 'text', text: piece.slice(from) });
+  };
+  for (const match of text.matchAll(bareUrl)) {
+    const url = trimUrl(match[0]);
+    if (url.length < 10 || webUrl(url) === null) continue;
+    if (match.index! > at) words(text.slice(at, match.index));
+    out.push({ type: 'autolink', url });
+    at = match.index! + url.length;
+  }
+  if (at < text.length) words(text.slice(at));
+  return out;
+}
+
 /** AgentTranscript.Spans: the inline marks of one paragraph, a heading or a cell. */
 export function parseInline(text: string, pictures = true, depth = 0): Inline[] {
   const out: Inline[] = [];
   let position = 0;
   let pending = '';
   const flush = () => {
-    if (pending.length > 0) out.push({ type: 'text', text: pending });
+    if (pending.length > 0) out.push(...linked(pending));
     pending = '';
   };
   const nested = (inner: string) => (depth < maximumDepth ? parseInline(inner, pictures, depth + 1) : [{ type: 'text' as const, text: inner }]);
@@ -326,7 +391,13 @@ export function parseInline(text: string, pictures = true, depth = 0): Inline[] 
     }
     flush();
     if (match[2] !== undefined) out.push(image(value, pictures));
-    else if (match[3] !== undefined) out.push({ type: 'code', text: value.startsWith('``') ? value.slice(2, -2).trim() : value.slice(1, -1) });
+    else if (match[3] !== undefined) {
+      const code = value.startsWith('``') ? value.slice(2, -2).trim() : value.slice(1, -1);
+      const address = trimUrl(code.trim());
+      const file = fileReference(code);
+      if (/^(?:https?:\/\/|mailto:)\S+$/i.test(code.trim()) && webUrl(address) !== null) out.push({ type: 'code', text: code, url: address });
+      else out.push(file ? { type: 'code', text: code, ...file } : { type: 'code', text: code });
+    }
     else if (match[4] !== undefined) out.push({ type: 'strongEm', children: nested(value.slice(3, -3)) });
     else if (match[5] !== undefined) out.push({ type: 'strong', children: nested(value.slice(2, -2)) });
     else if (match[6] !== undefined) out.push({ type: 'em', children: nested(value.slice(1, -1)) });

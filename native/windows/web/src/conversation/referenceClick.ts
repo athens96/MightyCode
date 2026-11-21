@@ -37,8 +37,10 @@ export type Clicked = { url: string } | ReferenceTarget | null;
 export function linkAt(element: Element): Clicked {
   const url = element.closest<HTMLElement>('[data-url]')?.dataset.url;
   if (url) return { url };
-  const path = element.closest<HTMLElement>('[data-path]')?.dataset.path;
-  return path ? { path, line: null } : null;
+  const link = element.closest<HTMLElement>('[data-path]');
+  const path = link?.dataset.path;
+  const line = Number(link?.dataset.line);
+  return path ? { path, line: Number.isInteger(line) && line > 0 ? line : null } : null;
 }
 
 /**
