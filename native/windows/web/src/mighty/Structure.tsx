@@ -332,20 +332,22 @@ export function Structure({ boards, onReveal, pending: sent, session, own = 0 }:
       const scroll = follow.current.observe(board.id, newest, column, columnPage(body, column), false);
       if (scroll) scrollTo(body, scroll);
     }
-  });
+  }, [board, newest, bodies]);
   // A column that grows without a draw of this view (a Markdown picture, a font): judged as layout.
+  const boardId = board?.id;
+  const cardsKey = board ? board.columns.map((c) => `${c.id}:${c.cards.length}`).join('|') : '';
   useEffect(() => {
-    if (!board) return undefined;
+    if (!boardId) return undefined;
     const observer = new ResizeObserver(() => {
       for (const body of bodies()) {
         const column = columnOf(body);
-        const scroll = follow.current.observe(board.id, newest, column, columnPage(body, column), moving());
+        const scroll = follow.current.observe(boardId, newest, column, columnPage(body, column), moving());
         if (scroll) scrollTo(body, scroll);
       }
     });
     for (const body of bodies()) { observer.observe(body); for (const child of body.children) observer.observe(child); }
     return () => observer.disconnect();
-  });
+  }, [boardId, newest, cardsKey, bodies]);
 
   const onColumnScroll = (event: React.UIEvent<HTMLElement>) => {
     const body = event.target as HTMLElement;

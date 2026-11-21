@@ -1,6 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { PaneShownContext } from '../pane/shown';
-import { useServices, useStoreState } from '../app/context';
+import { shallowEqual, useServices, useStoreSelector } from '../app/context';
 import type { RunSession } from '../store/models';
 import type { ViewChoice } from '../store/store';
 import { shownInMighty } from '../pending/requests';
@@ -21,7 +21,7 @@ export const presentationOf = (session: RunSession) =>
  * `views`, dropped once the host's state holds it). The same object while nothing was clicked.
  */
 export function useShownSession(session: RunSession): RunSession {
-  const choice = useStoreState().views[session.id];
+  const choice = useStoreSelector((state) => state.views[session.id]);
   return useMemo(() => {
     if (!choice) return session;
     return { ...session, ...(choice.presentation !== undefined ? { graphViewMode: choice.presentation } : {}) };
@@ -45,14 +45,21 @@ export function useViewSwitch(paneId: string): (choice: ViewChoice) => void {
  */
 export function MightyView({ session }: { session: RunSession }) {
   const { bridge, t } = useServices();
-  const stored = useStoreState();
-  const mighty = stored.mighty[session.id] ?? emptyMighty;
+  const { mightyPane, pendingList, own, steered } = useStoreSelector(
+    (state) => ({
+      mightyPane: state.mighty[session.id],
+      pendingList: state.pending[session.id],
+      own: state.ownSubmits[session.id] ?? 0,
+      steered: state.steered?.paneId === session.id ? state.steered : undefined,
+    }),
+    shallowEqual,
+  );
+  const mighty = mightyPane ?? emptyMighty;
   const presentation = presentationOf(session);
   const choose = useViewSwitch(session.id);
   // The request the composer just sent, drawn in every view until the host's block replaces it (natural submit B1), and the
   // count of own sends every view moves on (B2).
-  const pending = shownInMighty(stored.pending[session.id]);
-  const own = stored.ownSubmits[session.id] ?? 0;
+  const pending = shownInMighty(pendingList);
   // What the diagram keeps while the timeline or the pipeline shows (macOS MightyGraphView openedCards, resultHeights): the cards the user opened
   // and the newest result's measured height, so it comes back as it was.
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
@@ -67,7 +74,6 @@ export function MightyView({ session }: { session: RunSession }) {
     if (presentationOf(session) !== 'diagram') choose({ presentation: 'diagram' });
   }, [aimAt, choose, session]);
   // A send that went into the running run as a new turn (steered): the diagram opens on its steer block, else on the request.
-  const steered = stored.steered;
   const steerSeen = useRef(steered?.seq ?? 0);
   useEffect(() => {
     if (!steered || steered.paneId !== session.id || steered.seq === steerSeen.current) return;

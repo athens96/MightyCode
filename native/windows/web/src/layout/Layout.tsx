@@ -2,8 +2,10 @@
 // (EffectiveLayout, focus showing one group) as splits with draggable dividers and tab groups with their strips. A group keeps
 // every pane it has shown mounted, hidden behind the selected one, so a tab switch draws no pane again. Every change of the
 // tree is the host's: SelectLayoutSession, ActivatePane, ResizeSplit / ResetSplit, DockSession, CloseSession.
-import { memo, useLayoutEffect, useRef, useState, useSyncExternalStore, type PointerEvent as ReactPointerEvent } from 'react';
-import { useServices, useStoreState } from '../app/context';
+import { memo, useCallback, useLayoutEffect, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useServices, useStoreSelector } from '../app/context';
+import { escapeCssAttr } from '../app/cssEscape';
+import { ErrorBoundary } from '../app/ErrorBoundary';
 import { ProviderMark } from '../conversation/ProviderMark';
 import { PaneView } from '../pane/PaneView';
 import { PaneShownContext } from '../pane/shown';
@@ -11,7 +13,7 @@ import { BetaBadge, StatusGlyph, useCall, useMenu, usePaneInfo, type MenuItem } 
 import { useChoosePane } from '../shell/Sidebar';
 import type { LayoutModel, PaneInfo } from '../shell/types';
 import { activeSessionId } from '../store/store';
-import type { PaneLayoutNode, RunSession } from '../store/models';
+import type { PaneLayoutNode } from '../store/models';
 import { usePageOverlay } from '../shell/overlay';
 import { clampRatio, dragSlack, layoutMetrics, layoutMinimum, type DropEdge } from './geometry';
 import { dockArguments, resolveTabDrop, startTabPress, stepTabPress, stripScroll, type TabDragHit, type TabDragTarget, type TabPress } from './tabDrag';
@@ -175,8 +177,36 @@ const Tab = memo(function Tab({ info, selected, workspaceId, index }: TabProps) 
 
 const hintKey: Record<DropEdge, string> = { center: 'layout.drop.merge', left: 'layout.drop.left', right: 'layout.drop.right', top: 'layout.drop.top', bottom: 'layout.drop.bottom' };
 
-function TabGroup({ node, workspaceId, sessions, activeId }: { node: PaneLayoutNode; workspaceId: string; sessions: Map<string, RunSession>; activeId?: string }) {
-  const { t } = useServices();
+const PaneSlot = memo(function PaneSlot({
+  paneId,
+  shown,
+  active,
+  onActivate,
+  onHeaderContextMenu,
+}: {
+  paneId: string;
+  shown: boolean;
+  active: boolean;
+  onActivate: (id: string) => void;
+  onHeaderContextMenu: (event: ReactMouseEvent, id: string) => void;
+}) {
+  const session = useStoreSelector((state) => state.snapshot?.sessions.find((s) => s.id === paneId));
+  if (!session) return null;
+  return (
+    <div className={'pane-slot' + (shown ? '' : ' hidden') + (active ? ' active' : '')} data-pane-id={paneId} aria-hidden={!shown}
+      onPointerDownCapture={() => { if (!active) onActivate(paneId); }}
+      onContextMenu={(event) => { if ((event.target as Element).closest('.pane-header')) onHeaderContextMenu(event, paneId); }}>
+      <PaneShownContext.Provider value={shown}>
+        <ErrorBoundary scope="pane" resetKey={paneId}>
+          <PaneView session={session} />
+        </ErrorBoundary>
+      </PaneShownContext.Provider>
+    </div>
+  );
+});
+
+function TabGroup({ node, workspaceId, activeId }: { node: PaneLayoutNode; workspaceId: string; activeId?: string }) {
+  const { t, store } = useServices();
   const call = useCall();
   const menu = useMenu();
   const choose = useChoosePane();
@@ -193,21 +223,25 @@ function TabGroup({ node, workspaceId, sessions, activeId }: { node: PaneLayoutN
   const holdsActive = activeId !== undefined && node.sessionIds.includes(activeId);
   // A strip with more tabs than room shows the selected one in its middle.
   useLayoutEffect(() => {
-    const tab = strip.current?.querySelector<HTMLElement>('[data-tab-id="' + selected + '"]');
+    if (!selected) return;
+    const tab = strip.current?.querySelector<HTMLElement>('[data-tab-id="' + escapeCssAttr(selected) + '"]');
     const bar = strip.current;
     if (!tab || !bar || bar.scrollWidth <= bar.clientWidth) return;
     bar.scrollLeft = Math.max(0, tab.offsetLeft + tab.offsetWidth / 2 - bar.clientWidth / 2);
   }, [selected, node.sessionIds.length]);
-  const paneMenu = (id: string): MenuItem[] => {
+  const onActivate = useCallback((id: string) => choose(id, 'activatePane'), [choose]);
+  const onHeaderContextMenu = useCallback((event: ReactMouseEvent, id: string) => {
     const items: MenuItem[] = [
       { label: t('menu.rename'), action: () => call('renameSession', { id }) },
       { label: t('session.menu.focus'), action: () => call('focusPane', { id, toggle: true }) },
       { label: t('session.menu.close'), action: () => call('closeSession', { id }) },
     ];
     // A shell's history of what its pane recorded (Navigation.cs:352-364), before the close.
-    if (sessions.get(id)?.kind === 'shell') items.splice(2, 0, { label: t('terminal.history.title'), action: () => call('terminalHistory', { paneId: id }) });
-    return items;
-  };
+    if (store.getState().snapshot?.sessions.find((s) => s.id === id)?.kind === 'shell') {
+      items.splice(2, 0, { label: t('terminal.history.title'), action: () => call('terminalHistory', { paneId: id }) });
+    }
+    menu.atPointer(event, items);
+  }, [call, menu, store, t]);
   return (
     <div className={'tab-group' + (holdsActive ? ' holds-active' : '')} data-group-id={node.id} data-workspace-id={workspaceId} data-testid="tab-group">
       <div className="tab-strip" ref={strip} role="tablist">
@@ -217,20 +251,9 @@ function TabGroup({ node, workspaceId, sessions, activeId }: { node: PaneLayoutN
         })}
       </div>
       <div className="tab-body">
-        {[...seen.current].map((id) => {
-          const session = sessions.get(id);
-          if (!session) return null;
-          const shown = id === selected;
-          return (
-            <div key={id} className={'pane-slot' + (shown ? '' : ' hidden') + (id === activeId ? ' active' : '')} data-pane-id={id} aria-hidden={!shown}
-              onPointerDownCapture={() => { if (activeId !== id) choose(id, 'activatePane'); }}
-              onContextMenu={(event) => { if ((event.target as Element).closest('.pane-header')) menu.atPointer(event, paneMenu(id)); }}>
-              <PaneShownContext.Provider value={shown}>
-                <PaneView session={session} />
-              </PaneShownContext.Provider>
-            </div>
-          );
-        })}
+        {[...seen.current].map((id) => (
+          <PaneSlot key={id} paneId={id} shown={id === selected} active={id === activeId} onActivate={onActivate} onHeaderContextMenu={onHeaderContextMenu} />
+        ))}
       </div>
       {hint && (
         <div className={'drop-hint ' + hint} data-testid="drop-hint"><span className="drop-hint-label">{t(hintKey[hint])}</span></div>
@@ -239,7 +262,7 @@ function TabGroup({ node, workspaceId, sessions, activeId }: { node: PaneLayoutN
   );
 }
 
-function Split({ node, workspaceId, sessions, activeId }: { node: PaneLayoutNode; workspaceId: string; sessions: Map<string, RunSession>; activeId?: string }) {
+function Split({ node, workspaceId, activeId }: { node: PaneLayoutNode; workspaceId: string; activeId?: string }) {
   const { t } = useServices();
   const call = useCall();
   const horizontal = node.axis === 'horizontal';
@@ -274,34 +297,31 @@ function Split({ node, workspaceId, sessions, activeId }: { node: PaneLayoutNode
     : { gridTemplateRows: `minmax(${first.height}px, ${ratio}fr) ${layoutMetrics.splitDivider}px minmax(${second.height}px, ${1 - ratio}fr)` };
   return (
     <div ref={element} className={'split ' + (horizontal ? 'horizontal' : 'vertical')} style={style} data-split-id={node.id} data-testid="split">
-      <LayoutNode node={node.children[0]!} workspaceId={workspaceId} sessions={sessions} activeId={activeId} />
+      <LayoutNode node={node.children[0]!} workspaceId={workspaceId} activeId={activeId} />
       <div className={'split-divider' + (live !== null ? ' dragging' : '')} role="separator" aria-orientation={horizontal ? 'vertical' : 'horizontal'}
         aria-label={t(horizontal ? 'layout.divider.horizontal' : 'layout.divider.vertical')} title={t('layout.divider.tooltip')}
         onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={() => { press.current = null; setLive(null); }}
         onDoubleClick={() => call('resetSplit', { workspaceId, splitId: node.id })}>
         <span className="split-handle" />
       </div>
-      <LayoutNode node={node.children[1]!} workspaceId={workspaceId} sessions={sessions} activeId={activeId} />
+      <LayoutNode node={node.children[1]!} workspaceId={workspaceId} activeId={activeId} />
     </div>
   );
 }
 
-function LayoutNode(props: { node: PaneLayoutNode; workspaceId: string; sessions: Map<string, RunSession>; activeId?: string }) {
+function LayoutNode(props: { node: PaneLayoutNode; workspaceId: string; activeId?: string }) {
   if (props.node.kind === 'tabs' || props.node.children.length < 2) return <TabGroup key={props.node.id} {...props} />;
   return <Split key={props.node.id} {...props} />;
 }
 
 /** The dock: the tree in a scroll area at least as large as its panes' minimums (RenderPaneLayout). */
 export function Layout({ layout }: { layout: LayoutModel }) {
-  const state = useStoreState();
-  const sessions = useRef<{ list: RunSession[] | undefined; map: Map<string, RunSession> }>({ list: undefined, map: new Map() });
-  const list = state.snapshot?.sessions;
-  if (sessions.current.list !== list) sessions.current = { list, map: new Map((list ?? []).map((s) => [s.id, s])) };
+  const activeId = useStoreSelector(activeSessionId);
   const minimum = layoutMinimum(layout.root);
   return (
     <div className="dock" data-testid="layout" data-mode={layout.mode}>
       <div className="dock-content" style={{ minWidth: minimum.width, minHeight: minimum.height }}>
-        <LayoutNode node={layout.root} workspaceId={layout.workspaceId} sessions={sessions.current.map} activeId={activeSessionId(state)} />
+        <LayoutNode node={layout.root} workspaceId={layout.workspaceId} activeId={activeId} />
       </div>
       <TabDragGhost />
     </div>

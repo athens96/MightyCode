@@ -4,7 +4,7 @@
 // Ctrl+Shift+R on Windows.
 import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useServices, useStoreState } from '../app/context';
+import { useServices, useStoreSelector } from '../app/context';
 import { DialogLoading, DialogShell } from '../dialogs/DialogShell';
 import { Icon, type IconName } from '../icons/Icon';
 import { RunChanges } from '../mighty/RunChanges';
@@ -83,7 +83,7 @@ export function ReviewList({ queue, t, working, onAction }: { queue: ReviewQueue
 /** The panel while it is open: read again as it opens, kept up by the host's pushes. */
 function ReviewDialog() {
   const { bridge, t } = useServices();
-  const dialogs = useStoreState().dialogs.length;
+  const dialogs = useStoreSelector((state) => state.dialogs.length);
   const queue = useReviewQueue();
   const [refreshing, setRefreshing] = useState(false);
   const [working, setWorking] = useState<string | null>(null);

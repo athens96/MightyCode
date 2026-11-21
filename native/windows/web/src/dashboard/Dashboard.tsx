@@ -1,6 +1,6 @@
 // The work-status page (spec section 5; MainWindow.Dashboard.cs, DashboardWorkspaces.cs) and the empty states (section 6;
 // MainWindow.EmptyStates.cs). The counts, the order of the rows and their words are the host's (WorkDashboard).
-import { useServices, useStoreState } from '../app/context';
+import { useServices, useStoreSelector } from '../app/context';
 import { ProviderMark } from '../conversation/ProviderMark';
 import { useAddMenu, useWorkspaceAddChoices } from '../shell/addMenu';
 import { macHost } from '../shell/menu';
@@ -11,7 +11,7 @@ import { Icon } from '../icons/Icon';
 export function SidebarToggle() {
   const { t } = useServices();
   const call = useCall();
-  const collapsed = useStoreState().snapshot?.sidebarCollapsed ?? false;
+  const collapsed = useStoreSelector((state) => state.snapshot?.sidebarCollapsed ?? false);
   const label = t(collapsed ? 'sidebar.expand' : 'sidebar.collapse') + ' (Ctrl+B)';
   return (
     <button type="button" className="icon-button sidebar-toggle" title={label} aria-label={label} data-testid="sidebar-toggle"

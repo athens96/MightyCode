@@ -5,7 +5,7 @@
 // or panel its chrome names, and the companion is a popover.
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import tokens from '@tokens/design-tokens.json';
-import { useServices, useStoreState } from '../app/context';
+import { useServices, useStoreSelector } from '../app/context';
 import { BetaBadge } from '../shell/parts';
 import { ActContext, NativeNode, type Act } from './NativeNode';
 import { Icon, type IconName } from '../icons/Icon';
@@ -205,7 +205,7 @@ function Surface({ open, top }: { open: NativeOpen; top: boolean }) {
 
 /** Every open view, oldest first, so the newest lies on top. */
 export function Surfaces() {
-  const natives = useStoreState().natives;
+  const natives = useStoreSelector((state) => state.natives);
   const { bridge } = useServices();
   // Views open before the page loaded (or loaded again) are sent again.
   useEffect(() => { void bridge.call('nativeState').catch(() => {}); }, [bridge]);

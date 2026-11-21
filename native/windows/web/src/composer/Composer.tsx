@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react';
-import { useServices, useStoreState } from '../app/context';
+import { shallowEqual, useServices, useStoreSelector } from '../app/context';
 import { ComposerCard } from '../cards/Cards';
 import type { RunSession } from '../store/models';
 import { attachmentRefusal, byteLabel, toBase64 } from './attachments';
@@ -36,9 +36,10 @@ const draftRest = 300;
  */
 export function Composer({ session }: { session: RunSession }) {
   const { bridge, store, t } = useServices();
-  const stored = useStoreState();
-  const state: ComposerState | undefined = stored.composers[session.id];
-  const fill = stored.fills[session.id];
+  const { state, fill } = useStoreSelector(
+    (stored) => ({ state: stored.composers[session.id], fill: stored.fills[session.id] }),
+    shallowEqual,
+  );
   const [text, setText] = useState(() => session.draft ?? '');
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<AttachmentPreview | null>(null);

@@ -2,7 +2,8 @@
 // panes (layout, dashboard, welcome or the empty-panes invitation) and the status bar; the menus, the dialogs and the
 // window's shortcuts (section 8) over them.
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { useServices, useStoreState } from '../app/context';
+import { shallowEqual, useServices, useStoreSelector } from '../app/context';
+import { escapeCssAttr } from '../app/cssEscape';
 import { Dashboard, EmptyPanes, Welcome } from '../dashboard/Dashboard';
 import { Dialogs } from '../dialogs/Dialogs';
 import { Surfaces } from '../native/Surfaces';
@@ -16,7 +17,6 @@ import { macHost, useMenu } from './menu';
 import { Sidebar, sidebarSearchId } from './Sidebar';
 import { ReviewPanel } from '../review/ReviewPanel';
 import { toggleReview } from '../review/queue';
-import type { AppSnapshot } from '../store/models';
 
 function Grip({ width, setLive }: { width: number; setLive: (width: number | null) => void }) {
   const { t, bridge } = useServices();
@@ -61,25 +61,26 @@ function Grip({ width, setLive }: { width: number; setLive: (width: number | nul
 }
 
 /** The window's shortcuts: the host's WinUI accelerators are cleared in web mode, so the page answers them. */
-function useShortcuts(snapshot: AppSnapshot | null, blocked: boolean) {
-  const { bridge } = useServices();
-  const state = useRef({ snapshot, blocked });
-  state.current = { snapshot, blocked };
+function useShortcuts(blocked: boolean) {
+  const { bridge, store } = useServices();
+  const blockedRef = useRef(blocked);
+  blockedRef.current = blocked;
   useEffect(() => {
     const call = (method: string, args?: unknown) => void bridge.call(method, args).catch(() => {});
     const key = (event: KeyboardEvent) => {
       // The Mac in the Rust host (D9): ⌘ is the modifier, and a Ctrl key is the text field's.
       const action = import.meta.env.MODE === 'tauri' && macHost() ? macShortcutAction(event) : shortcutAction(event);
-      if (!action || state.current.blocked || !state.current.snapshot) return;
+      const snapshot = store.getState().snapshot;
+      if (!action || blockedRef.current || !snapshot) return;
       event.preventDefault();
       switch (action) {
         case 'openFolder': return call('pickFolder');
         case 'newPane': return call('newPane', { kind: 'claude' });
         case 'newShell': return call('newPane', { kind: 'shell' });
-        case 'toggleSidebar': return call('setSidebarCollapsed', { collapsed: !state.current.snapshot.sidebarCollapsed });
+        case 'toggleSidebar': return call('setSidebarCollapsed', { collapsed: !snapshot.sidebarCollapsed });
         case 'search': {
           const focus = () => { const field = document.getElementById(sidebarSearchId) as HTMLInputElement | null; field?.focus(); field?.select(); };
-          if (state.current.snapshot.sidebarCollapsed) void bridge.call('setSidebarCollapsed', { collapsed: false }).then(() => requestAnimationFrame(focus), () => {});
+          if (snapshot.sidebarCollapsed) void bridge.call('setSidebarCollapsed', { collapsed: false }).then(() => requestAnimationFrame(focus), () => {});
           else focus();
           return;
         }
@@ -95,13 +96,24 @@ function useShortcuts(snapshot: AppSnapshot | null, blocked: boolean) {
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
-  }, [bridge]);
+  }, [bridge, store]);
 }
 
-export function Shell({ snapshot }: { snapshot: AppSnapshot | null }) {
+export function Shell() {
   const { t, bridge, store } = useServices();
-  const state = useStoreState();
-  const shell = state.shell;
+  const { hasSnapshot, collapsed, savedWidth, hasWorkspaces, snapshotLayout, shell, selected, blocked } = useStoreSelector(
+    (state) => ({
+      hasSnapshot: state.snapshot !== null,
+      collapsed: state.snapshot?.sidebarCollapsed ?? false,
+      savedWidth: state.snapshot?.sidebarWidth ?? layoutMetrics.sidebarDefault,
+      hasWorkspaces: (state.snapshot?.workspaces.length ?? 0) > 0,
+      snapshotLayout: state.snapshot?.layout ?? 'grid',
+      shell: state.shell,
+      selected: state.selected,
+      blocked: state.dialogs.length > 0 || state.natives.length > 0 || state.picture !== undefined || (state.shell?.dialogOpen ?? false),
+    }),
+    shallowEqual,
+  );
   const [live, setLive] = useState<number | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
   const closeUsage = useCallback((open: boolean) => setUsageOpen(open), []);
@@ -109,21 +121,19 @@ export function Shell({ snapshot }: { snapshot: AppSnapshot | null }) {
     void bridge.call('shellState').then((value) => { if (value) store.dispatch({ kind: 'shell', shell: value as NonNullable<typeof shell> }); }, () => {});
   }, [bridge, store]);
   // A notification's click selected a pane: its row comes into view.
-  const selected = state.selected;
   useEffect(() => {
     if (!selected) return;
-    document.querySelector('.sidebar [data-session-id="' + selected.paneId + '"]')?.scrollIntoView({ block: 'nearest' });
+    document.querySelector('.sidebar [data-session-id="' + escapeCssAttr(selected.paneId) + '"]')?.scrollIntoView({ block: 'nearest' });
   }, [selected]);
-  useShortcuts(snapshot, state.dialogs.length > 0 || state.natives.length > 0 || state.picture !== undefined || (shell?.dialogOpen ?? false));
+  useShortcuts(blocked);
   // The Mac's menu bar (D9): its items that are page UI arrive as `menu` pushes.
-  if (import.meta.env.MODE === 'tauri') useMenu(snapshot, state.dialogs.length > 0 || state.natives.length > 0 || state.picture !== undefined || (shell?.dialogOpen ?? false), closeUsage);
-  if (!snapshot || !shell) return <div className="shell-loading" data-testid="loading">{t('launch.preparing')}</div>;
-  const collapsed = snapshot.sidebarCollapsed;
-  const width = live ?? snapshot.sidebarWidth;
+  if (import.meta.env.MODE === 'tauri') useMenu(blocked, closeUsage);
+  if (!hasSnapshot || !shell) return <div className="shell-loading" data-testid="loading">{t('launch.preparing')}</div>;
+  const width = live ?? savedWidth;
   const header = shell.dashboard ? undefined : shell.header;
   const counts = header ? shell.workspaces.find((w) => w.id === header.id)?.counts : undefined;
   const main = shell.dashboard ? <Dashboard model={shell.dashboard} onUsage={() => setUsageOpen(true)} />
-    : snapshot.workspaces.length === 0 ? <Welcome setupNeeded={shell.setupNeeded} />
+    : !hasWorkspaces ? <Welcome setupNeeded={shell.setupNeeded} />
     : shell.layout ? <Layout layout={shell.layout} />
     : <EmptyPanes />;
   return (
@@ -135,7 +145,7 @@ export function Shell({ snapshot }: { snapshot: AppSnapshot | null }) {
         </div>
         <div className="detail">
           <Banners shell={shell} />
-          {header && <WorkspaceHeader header={header} counts={counts} layoutMode={shell.layout?.mode ?? snapshot.layout} />}
+          {header && <WorkspaceHeader header={header} counts={counts} layoutMode={shell.layout?.mode ?? snapshotLayout} />}
           <main className="shell-main">{main}</main>
           <StatusBar shell={shell} usageOpen={usageOpen} setUsageOpen={closeUsage} />
         </div>

@@ -5,7 +5,7 @@
 // Esc or a click beside the card closes it; focus stays inside while it is open and goes back where it was. It is the popup
 // standard's panel (kind C, its size kept as "pictures"): ✕ in the header, the zoom at the footer's left and the actions at its right.
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
-import { useServices, useStoreState } from '../app/context';
+import { useServices, useStoreSelector } from '../app/context';
 import { Icon, type IconName } from '../icons/Icon';
 import { usePageOverlay } from '../shell/overlay';
 import { DialogShell } from '../dialogs/DialogShell';
@@ -13,7 +13,7 @@ import { clampPan, clampZoom, drawnSize, stepZoom, zoomPercent, ZoomMax, ZoomMin
 
 /** The viewer while a picture is open; nothing otherwise. Mounted once, in the shell. */
 export function PictureViewer() {
-  const picture = useStoreState().picture;
+  const picture = useStoreSelector((state) => state.picture);
   return picture ? <Viewer key={picture.url + JSON.stringify(picture.source)} picture={picture} /> : null;
 }
 

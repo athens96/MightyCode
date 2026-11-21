@@ -70,18 +70,19 @@ export function runAction(action: MenuAction, call: Call, snapshot: AppSnapshot,
 }
 
 /** The menu's pushes run while the shell is up; none while a sheet, a native view or the picture viewer is open, or before the state. */
-export function useMenu(snapshot: AppSnapshot | null, blocked: boolean, setUsageOpen: (open: boolean) => void): void {
-  const { bridge } = useServices();
-  const state = useRef({ snapshot, blocked, setUsageOpen });
-  state.current = { snapshot, blocked, setUsageOpen };
+export function useMenu(blocked: boolean, setUsageOpen: (open: boolean) => void): void {
+  const { bridge, store } = useServices();
+  const state = useRef({ blocked, setUsageOpen });
+  state.current = { blocked, setUsageOpen };
   useEffect(() => {
     const call: Call = (method, args) => bridge.call(method, args).catch(() => undefined);
     const listener = (action: MenuAction) => {
-      const { snapshot: current, blocked: held, setUsageOpen: usage } = state.current;
+      const current = store.getState().snapshot;
+      const { blocked: held, setUsageOpen: usage } = state.current;
       if (!macHost() || held || !current) return;
       runAction(action, call, current, () => usage(true));
     };
     listeners.add(listener);
     return () => { listeners.delete(listener); };
-  }, [bridge]);
+  }, [bridge, store]);
 }

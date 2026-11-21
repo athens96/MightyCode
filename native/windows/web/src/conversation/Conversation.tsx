@@ -1,5 +1,5 @@
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
-import { useServices, useStoreState } from '../app/context';
+import { shallowEqual, useServices, useStoreSelector } from '../app/context';
 import type { AgentActivity, LogEntry, RunSession } from '../store/models';
 import { Entry, type EntryProps } from './Entry';
 import { providerIsBeta, providerLabel } from './format';
@@ -64,14 +64,19 @@ const Row = memo(function Row({ observe, ...props }: EntryProps & { observe: (el
  */
 export function Conversation({ session }: { session: RunSession }) {
   const { bridge, t } = useServices();
-  const stored = useStoreState();
+  const { pending, activity, own } = useStoreSelector(
+    (state) => ({
+      pending: state.pending[session.id],
+      activity: state.activities[session.id],
+      own: state.ownSubmits[session.id] ?? 0,
+    }),
+    shallowEqual,
+  );
   const logs = session.logs;
-  const requests = shownInConversation(stored.pending[session.id], session);
+  const requests = shownInConversation(pending, session);
   // A request whose 전송 중 has shown keeps its shortest time in place of the host's entry (natural submit A1).
-  const held = useMemo(() => heldInConversation(stored.pending[session.id]), [stored.pending, session.id]);
+  const held = useMemo(() => heldInConversation(pending), [pending]);
   const running = awaitsFirstOutput(session) && requests.length === 0 && held.size === 0;
-  const activity = stored.activities[session.id];
-  const own = stored.ownSubmits[session.id] ?? 0;
   const scroller = useRef<HTMLDivElement>(null);
   const [heights] = useState(() => new HeightCache());
   const following = useRef(true);
@@ -107,8 +112,8 @@ export function Conversation({ session }: { session: RunSession }) {
         frame.current = requestAnimationFrame(() => setVersion((value) => value + 1));
       }),
   );
-  // Each row stops being observed as it leaves (observe's cleanup); only the pending redraw is left to cancel.
-  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  // Disconnect the observer and cancel any pending frame when the conversation unmounts.
+  useEffect(() => () => { rows.disconnect(); cancelAnimationFrame(frame.current); }, [rows]);
   const observe = useCallback((element: HTMLDivElement | null) => {
     if (!element) return undefined;
     rows.observe(element);

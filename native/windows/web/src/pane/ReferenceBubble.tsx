@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { useServices, useStoreState } from '../app/context';
+import { shallowEqual, useServices, useStoreSelector } from '../app/context';
 import { Markdown } from '../conversation/MarkdownView';
 import type { ReferenceTarget } from '../conversation/references';
 import { DiffView } from '../panes/files/DiffView';
@@ -59,7 +59,10 @@ function Notice({ text }: { text: string }) {
  */
 export function ReferenceBubble({ paneId, request, top, onClose }: { paneId: string; request: ReferenceRequest; top: number; onClose: () => void }) {
   const { bridge, t } = useServices();
-  const snapshot = useStoreState().snapshot;
+  const bubbleSize = useStoreSelector(
+    (state) => ({ width: state.snapshot?.referenceBubbleWidth, height: state.snapshot?.referenceBubbleHeight }),
+    shallowEqual,
+  );
   const room = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const [roomSize, setRoomSize] = useState({ width: 0, height: 0 });
@@ -130,7 +133,7 @@ export function ReferenceBubble({ paneId, request, top, onClose }: { paneId: str
     source.scrollTop = lineScrollTop(line, height);
   }, [preview, line, showsDiff]);
 
-  const wanted = live ?? wantedBubbleSize(snapshot?.referenceBubbleWidth, snapshot?.referenceBubbleHeight);
+  const wanted = live ?? wantedBubbleSize(bubbleSize.width, bubbleSize.height);
   const frame = bubbleFrame(roomSize.width, roomSize.height, wanted);
 
   const save = (size: BubbleSize | null) => void bridge.call('referenceSize', size ? { width: size.width, height: size.height } : {}).catch(() => {});

@@ -1,8 +1,8 @@
 // The sidebar (spec section 2; MainWindow.Sidebar.cs, Navigation.cs, Delegation.cs): search, the work-status entry, the
 // workspaces with their panes and delegated children, the layout choice and the footer. Every row's words, counts and state
 // are the host's (WebShellModel); every click runs a window action.
-import { memo, useEffect, useState } from 'react';
-import { useServices, useStoreState } from '../app/context';
+import { memo, useCallback, useEffect, useState } from 'react';
+import { shallowEqual, useServices, useStoreSelector } from '../app/context';
 import { ProviderMark } from '../conversation/ProviderMark';
 import { activeSessionId } from '../store/store';
 import { useAddMenu, useWorkspaceAddChoices } from './addMenu';
@@ -38,11 +38,11 @@ export function ReviewEntry() {
 /** Makes a pane the active one: drawn at once, then the host's SelectLayoutSession saves it. */
 export function useChoosePane(): (id: string, method?: 'selectSession' | 'activatePane') => void {
   const { bridge, store } = useServices();
-  return (id: string, method: 'selectSession' | 'activatePane' = 'selectSession') => {
+  return useCallback((id: string, method: 'selectSession' | 'activatePane' = 'selectSession') => {
     store.dispatch({ kind: 'choose', paneId: id });
     // A choice the host turned down (a dialog was open) is forgotten after a while; one it took is forgotten as its state arrives.
     void bridge.call(method, { id }).catch(() => {}).finally(() => setTimeout(() => { if (store.getState().chosen === id) store.dispatch({ kind: 'choose', paneId: undefined }); }, 1500));
-  };
+  }, [bridge, store]);
 }
 
 function childMenu(call: (method: string, args?: unknown) => void, id: string, actions: readonly CardAction[] | undefined): MenuItem[] {
@@ -108,7 +108,7 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
   const call = useCall();
   const menu = useMenu();
   const addMenu = useAddMenu();
-  const worktreeMode = useStoreState().snapshot?.workspaces.find((w) => w.id === workspace.id)?.paneWorktreeMode ?? 'ask';
+  const worktreeMode = useStoreSelector((state) => state.snapshot?.workspaces.find((w) => w.id === workspace.id)?.paneWorktreeMode ?? 'ask');
   // A mirror workspace is the host's: named and shared there, it leaves when that computer stops sharing it.
   const items: MenuItem[] = workspace.mirror ? [] : [
     { label: t('menu.rename'), action: () => call('renameWorkspace', { id: workspace.id }) },
@@ -217,19 +217,25 @@ function ServerHeader({ server }: { server: RemoteServer }) {
 
 export function Sidebar() {
   const { t } = useServices();
-  const state = useStoreState();
+  const { hasSnapshot, activeWorkspaceId, theme, activeId } = useStoreSelector(
+    (state) => ({
+      hasSnapshot: state.snapshot !== null,
+      activeWorkspaceId: state.snapshot?.activeWorkspaceId,
+      theme: state.snapshot?.theme,
+      activeId: activeSessionId(state),
+    }),
+    shallowEqual,
+  );
   const shell = useShell();
   const panes = usePaneInfo();
   const call = useCall();
   const menu = useMenu();
   const addChoices = useWorkspaceAddChoices();
   const [search, setSearch] = useState('');
-  const snapshot = state.snapshot;
-  if (!snapshot || !shell) return <nav className="sidebar" />;
+  if (!hasSnapshot || !shell) return <nav className="sidebar" />;
   const dashboard = shell.dashboard !== undefined;
   const groups = sidebarGroups(shell.workspaces, shell.servers, search);
   const listed = groups.local;
-  const activeId = activeSessionId(state);
   const entryCounts = shell.entry;
   return (
     <nav className="sidebar" aria-label={t('sidebar.workspacesHeader')} data-testid="sidebar">
@@ -261,7 +267,7 @@ export function Sidebar() {
         )}
         {listed.map((workspace) => (
           <WorkspaceGroup key={workspace.id} workspace={workspace} panes={panes} activeId={activeId} dashboard={dashboard}
-            selected={!dashboard && snapshot.activeWorkspaceId === workspace.id} />
+            selected={!dashboard && activeWorkspaceId === workspace.id} />
         ))}
         {/* Each connected computer's shared workspaces under its own header (the remote mirror). */}
         {groups.servers.map((group) => (
@@ -269,7 +275,7 @@ export function Sidebar() {
             <ServerHeader server={group.server} />
             {group.workspaces.map((workspace) => (
               <WorkspaceGroup key={workspace.id} workspace={workspace} panes={panes} activeId={activeId} dashboard={dashboard}
-                selected={!dashboard && snapshot.activeWorkspaceId === workspace.id} />
+                selected={!dashboard && activeWorkspaceId === workspace.id} />
             ))}
           </div>
         ))}
@@ -292,7 +298,7 @@ export function Sidebar() {
         </span>
         <button type="button" className="icon-button sidebar-footer-button" title={t('menu.help')} aria-label={t('menu.help')} onClick={() => call('openHelp')}><Icon name="circle-question-mark" size={15} /></button>
         <button type="button" className="icon-button sidebar-footer-button" title={t('sidebar.toggleTheme')} aria-label={t('sidebar.toggleTheme')} data-testid="theme-toggle"
-          onClick={() => call('setTheme', { theme: snapshot.theme === 'light' ? 'dark' : 'light' })}><Icon name={snapshot.theme === 'light' ? 'moon' : 'sun'} size={15} /></button>
+          onClick={() => call('setTheme', { theme: theme === 'light' ? 'dark' : 'light' })}><Icon name={theme === 'light' ? 'moon' : 'sun'} size={15} /></button>
         <button type="button" className="icon-button sidebar-footer-button" title={t('settings.settingsWindowTitle')} aria-label={t('settings.settingsWindowTitle')} data-testid="sidebar-settings" onClick={() => call('openSettings')}>
           <Icon name="settings" size={15} />
         </button>

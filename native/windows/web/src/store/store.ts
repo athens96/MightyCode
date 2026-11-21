@@ -225,15 +225,34 @@ export function rememberDequeued(state: StoreState, next: ComposerState, now: nu
 export function queuedStarts(state: StoreState, sessions: readonly SessionDelta[], now: number, previous: readonly RunSession[] = []): StoreState {
   let next = state;
   for (const delta of sessions) {
+    const composer = state.composers[delta.id];
+    const hasQueued = composer !== undefined && (composer.queue.held.length > 0 || composer.queue.items.length > 0);
+    const rawDequeued = state.dequeued?.[delta.id];
+    const hasDequeued = rawDequeued !== undefined && rawDequeued.length > 0;
+    if (!hasQueued && !hasDequeued) continue;
+
+    const rawAdded = delta.logs?.added;
+    const rawReplaced = delta.logs?.replaced;
+    const rawWhole = delta.session?.logs;
+    const hasUser =
+      (rawAdded?.some((entry) => entry.kind === 'user') ?? false)
+      || (rawReplaced?.some((entry) => entry.kind === 'user') ?? false)
+      || (rawWhole?.some((entry) => entry.kind === 'user') ?? false);
+    if (!hasUser) continue;
+
+    const recent = rawDequeued ? rawDequeued.filter((item) => now - item.at <= DequeuedMemory) : [];
+    const words = new Set([...queueTexts(composer), ...recent.map((item) => item.text)].filter((text) => text.length > 0));
+    if (words.size === 0) continue;
+
+    const candidates = [...(rawAdded ?? []), ...(rawReplaced ?? []), ...(rawWhole ?? [])]
+      .filter((entry) => entry.kind === 'user' && words.has(entry.text.trim()));
+    if (candidates.length === 0) continue;
+
     // Only entries the pane did not have before this delta: a whole record sent again carries every past request too.
     const known = new Set(previous.find((session) => session.id === delta.id)?.logs.map((entry) => entry.id) ?? []);
-    const added = [...(delta.logs?.added ?? []), ...(delta.logs?.replaced ?? []), ...(delta.session?.logs ?? [])]
-      .filter((entry) => entry.kind === 'user' && !known.has(entry.id)).map((entry) => entry.text.trim());
-    if (added.length === 0) continue;
-    const recent = (state.dequeued?.[delta.id] ?? []).filter((item) => now - item.at <= DequeuedMemory);
-    const words = new Set([...queueTexts(state.composers[delta.id]), ...recent.map((item) => item.text)]);
-    const matched = added.filter((text) => text.length > 0 && words.has(text));
+    const matched = candidates.filter((entry) => !known.has(entry.id)).map((entry) => entry.text.trim());
     if (matched.length === 0) continue;
+
     next = bumpOwn(next, delta.id);
     const left = recent.filter((item) => !matched.includes(item.text));
     const dequeued = { ...next.dequeued };
@@ -352,17 +371,31 @@ export function reduce(state: StoreState, message: StoreMessage): StoreState {
       if (!current) return state;
       const sessions = mergeSessions(current.sessions, message.sessions, message.removed, message.order);
       if (sessions === current.sessions && !message.state) return state;
-      const gone = new Set(message.removed);
-      const activities = Object.fromEntries(Object.entries(state.activities).filter(([id]) => !gone.has(id)));
-      const permissions = Object.fromEntries(Object.entries(state.permissions).filter(([id]) => !gone.has(id)));
       const snapshot: AppSnapshot = message.state ? { ...message.state, sessions } : { ...current, sessions };
-      const composers = Object.fromEntries(Object.entries(state.composers).filter(([id]) => !gone.has(id)));
-      const cards = Object.fromEntries(Object.entries(state.cards).filter(([id]) => !gone.has(id)));
-      const fills = Object.fromEntries(Object.entries(state.fills).filter(([id]) => !gone.has(id)));
-      const mighty = Object.fromEntries(Object.entries(state.mighty).filter(([id]) => !gone.has(id)));
-      // A picture whose pane closed closes with it.
-      const picture = state.picture && gone.has(state.picture.source.paneId) ? undefined : state.picture;
-      const moved = settleViews(settlePending(settle(gone.size === 0 ? { ...state, snapshot } : { ...state, snapshot, activities, permissions, composers, cards, fills, mighty, picture })), true);
+      let base: StoreState;
+      if (message.removed.length === 0) {
+        base = { ...state, snapshot };
+      } else {
+        const gone = new Set(message.removed);
+        const filterGone = <T,>(record: Readonly<Record<string, T>>): Readonly<Record<string, T>> => {
+          let changed = false;
+          for (const id of gone) {
+            if (id in record) { changed = true; break; }
+          }
+          if (!changed) return record;
+          return Object.fromEntries(Object.entries(record).filter(([id]) => !gone.has(id)));
+        };
+        const activities = filterGone(state.activities);
+        const permissions = filterGone(state.permissions);
+        const composers = filterGone(state.composers);
+        const cards = filterGone(state.cards);
+        const fills = filterGone(state.fills);
+        const mighty = filterGone(state.mighty);
+        // A picture whose pane closed closes with it.
+        const picture = state.picture && gone.has(state.picture.source.paneId) ? undefined : state.picture;
+        base = { ...state, snapshot, activities, permissions, composers, cards, fills, mighty, picture };
+      }
+      const moved = settleViews(settlePending(settle(base)), true);
       return queuedStarts(moved, message.sessions, Date.now(), current.sessions);
     }
     case 'event':

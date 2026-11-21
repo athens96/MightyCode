@@ -1,6 +1,6 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { Icon } from '../icons/Icon';
-import { useServices, useStoreState } from '../app/context';
+import { useServices, useStoreSelector } from '../app/context';
 import type { GraphBlockSize, MightyGraphRun, RunSession } from '../store/models';
 import { Block, type BlockActions, type BlockExtra } from './Block';
 import {
@@ -153,8 +153,10 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   own?: number;
 }) {
   const { bridge, t } = useServices();
-  const state = useStoreState();
   const paneId = session.id;
+  const planText = useStoreSelector(
+    (state) => ((state.cards[paneId] ?? []).find((c) => c.kind === 'plan') as { plan?: string } | undefined)?.plan,
+  );
   const inputs = mighty.inputs;
   const viewportRef = useRef<HTMLDivElement>(null);
   /** The flow's whole box: the diagram's view and the session log strip under it (logRowsFit). */
@@ -727,7 +729,6 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
   }, [bridge, paneId, settledKey]);
 
   // ── each block's own parts, kept while they do not change ──
-  const planText = useMemo(() => (state.cards[paneId] ?? []).find((c) => c.kind === 'plan') as { plan?: string } | undefined, [state.cards, paneId])?.plan;
   const extrasCache = useRef<ReadonlyMap<string, BlockExtra>>(new Map());
   const extras = useMemo(() => {
     const next = blockExtras({ layout, runs, inputs, draft: session.draft, planHistory: session.planHistory, resultSize: session.graphResultSize, planText, latest, changedRuns, emptyResults }, extrasCache.current);

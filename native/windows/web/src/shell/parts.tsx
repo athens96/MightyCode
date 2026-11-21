@@ -1,14 +1,14 @@
 // Small pieces the frame draws in many places: the status glyph (MightyCode.Core/StatusGlyph.cs tones), the beta capsule,
 // the status counts (StatusCountsView), the Git capsule and one context menu at a time.
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { useServices, useStoreState } from '../app/context';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { useServices, useStoreSelector } from '../app/context';
 import type { Counts, GitInfo, PaneInfo, ShellModel, Tone } from './types';
 import { usePageOverlay } from './overlay';
 import { Icon, type IconName } from '../icons/Icon';
 
 /** The frame's model, or null before the host sent it. */
 export function useShell(): ShellModel | null {
-  return useStoreState().shell;
+  return useStoreSelector((state) => state.shell);
 }
 
 /** Each pane's info by id. */
@@ -134,10 +134,10 @@ const MenuContext = createContext<(at: { x: number; y: number }, items: MenuItem
 /** Opens a menu at the pointer (a right-click) or under an element (a button). */
 export function useMenu(): { atPointer: (event: ReactMouseEvent, items: MenuItem[]) => void; under: (element: Element, items: MenuItem[]) => void } {
   const open = useContext(MenuContext);
-  return {
+  return useMemo(() => ({
     atPointer: (event, items) => { event.preventDefault(); event.stopPropagation(); open({ x: event.clientX, y: event.clientY }, items); },
     under: (element, items) => { const box = element.getBoundingClientRect(); open({ x: box.left, y: box.bottom + 2 }, items); },
-  };
+  }), [open]);
 }
 
 export function MenuHost({ children }: { children: ReactNode }) {
@@ -149,9 +149,10 @@ export function MenuHost({ children }: { children: ReactNode }) {
     if (!menu) return;
     const close = (event: Event) => { if (!(event.target instanceof Node && element.current?.contains(event.target))) setMenu(null); };
     const key = (event: KeyboardEvent) => { if (event.key === 'Escape') setMenu(null); };
-    window.addEventListener('mousedown', close, true); window.addEventListener('keydown', key, true); window.addEventListener('blur', () => setMenu(null), { once: true });
+    const blur = () => setMenu(null);
+    window.addEventListener('mousedown', close, true); window.addEventListener('keydown', key, true); window.addEventListener('blur', blur, { once: true });
     element.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
-    return () => { window.removeEventListener('mousedown', close, true); window.removeEventListener('keydown', key, true); };
+    return () => { window.removeEventListener('mousedown', close, true); window.removeEventListener('keydown', key, true); window.removeEventListener('blur', blur); };
   }, [menu]);
   // Kept inside the window: a menu opened near the right or bottom edge opens toward the middle.
   const style = menu ? { left: Math.min(menu.x, window.innerWidth - 240), top: Math.min(menu.y, window.innerHeight - 32 * menu.items.length - 8) } : undefined;

@@ -37,3 +37,15 @@ body {
 .pane-shell .pane-slim-header { gap: var(--space-md); }
 .pane-shell .pane-menu-button { color: var(--on-status); }
 .hero-status-pill { flex: none; display: inline-flex; align-items: center; height: 18px; padding: 0 var(--space-md); border: 1.5px solid currentColor; border-radius: 9px; font-size: var(--type-pill); font-weight: 700; white-space: nowrap; }
+
+.error-boundary {
+  display: grid; place-items: center; width: 100%; height: 100%; min-height: 120px; padding: 16px;
+  color: var(--ink); background: var(--card);
+}
+.error-boundary-app { background: var(--page); }
+.error-boundary-card {
+  display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: 420px; text-align: center;
+  padding: 20px 24px; border: var(--stroke-line) solid var(--line); border-radius: var(--radius-pane); background: var(--card);
+}
+.error-boundary-title { font-family: var(--font-heading); font-size: var(--type-header); font-weight: 600; color: var(--ink); }
+.error-boundary-detail { font-family: var(--font-mono); font-size: var(--type-mono); color: var(--ink2); max-width: 100%; overflow-wrap: anywhere; }

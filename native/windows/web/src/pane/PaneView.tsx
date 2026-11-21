@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { RunSession } from '../store/models';
-import { useServices, useStoreState } from '../app/context';
+import { shallowEqual, useServices, useStoreSelector } from '../app/context';
 import { Conversation } from '../conversation/Conversation';
 import { Composer } from '../composer/Composer';
 import { Cards } from '../cards/Cards';
@@ -17,7 +17,6 @@ import { drawsDiagram } from '../pending/requests';
 import { useCall, useMenu, type MenuItem } from '../shell/parts';
 import { WorktreeBar } from './WorktreeBar';
 import { MirrorStrip } from './MirrorStrip';
-import { usePaneInfo } from '../shell/parts';
 import { logText } from './log';
 
 /** The header's clock, redrawn each second while the run is not finished (MW.Composer.cs RefreshElapsed). */
@@ -43,9 +42,14 @@ function PaneMenu({ session }: { session: RunSession }) {
   const { bridge, t } = useServices();
   const menu = useMenu();
   const call = useCall();
-  const focused = useStoreState().shell?.layout?.mode === 'focus';
-  // A mirrored pane carries its host's name: no rename here (M/WorkspaceView.swift).
-  const mirrored = !!usePaneInfo().get(session.id)?.mirror;
+  const { focused, mirrored } = useStoreSelector(
+    (state) => ({
+      focused: state.shell?.layout?.mode === 'focus',
+      // A mirrored pane carries its host's name: no rename here (M/WorkspaceView.swift).
+      mirrored: Boolean(state.shell?.panes.find((p) => p.id === session.id)?.mirror),
+    }),
+    shallowEqual,
+  );
   const items: MenuItem[] = [
     ...(mirrored ? [] : [{ label: t('menu.rename'), action: () => call('renameSession', { id: session.id }) }]),
     { label: t(focused ? 'pane.menu.restoreLayout' : 'menu.focusPane'), action: () => call('focusPane', { id: session.id, toggle: true }) },
@@ -69,16 +73,22 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
   const { t, bridge } = useServices();
   // A view switch clicked a moment ago shows at once (natural submit B4); the same object while none waits for the host.
   const session = useShownSession(saved);
-  const store = useStoreState();
-  const header = store.composers[session.id]?.header;
-  // Another computer's pane (the remote mirror): its strip under the header.
-  const info = usePaneInfo().get(session.id);
-  const mirror = info?.mirror;
+  // Another computer's pane (the remote mirror): its strip under the header; a remote pane's files are on its host: no bubble opens there.
+  const { header, mirror, agentTerminal, remote } = useStoreSelector(
+    (state) => {
+      const info = state.shell?.panes.find((p) => p.id === session.id);
+      return {
+        header: state.composers[session.id]?.header,
+        mirror: info?.mirror,
+        agentTerminal: Boolean(info?.agentTerminal),
+        remote: Boolean(state.snapshot?.workspaces.find((w) => w.id === session.workspaceId)?.remote),
+      };
+    },
+    shallowEqual,
+  );
   const agent = session.kind === 'claude' || session.kind === 'shell';
   // An agent pane with a Mighty view always shows it; the conversation stays for the panes that have none.
   const mighty = drawsDiagram(session);
-  // A remote pane's files are on its host: no bubble opens there.
-  const remote = !!store.snapshot?.workspaces.find((w) => w.id === session.workspaceId)?.remote;
   const [reference, setReference] = useState<ReferenceRequest | null>(null);
   const clicks = useRef(0);
   const room = useRef<HTMLDivElement>(null);
@@ -136,7 +146,7 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
               <Icon name="puzzle" size={14} weight={2.2} /></button>
           )}
           {/* The agent's terminal after its pane was closed (M/SessionPaneView.swift `agent-terminal-open-`): the pane back beside it, selected. */}
-          {info?.agentTerminal && (
+          {agentTerminal && (
             <button type="button" className="icon-button pane-plugins-button" data-testid="pane-agent-terminal" title={t('agentTerminal.terminalPane.open')}
               aria-label={t('agentTerminal.terminalPane.open')} onClick={() => void bridge.call('terminalPromptShow', { paneId: session.id }).catch(() => {})}>
               <Icon name="terminal" size={14} weight={2.2} /></button>

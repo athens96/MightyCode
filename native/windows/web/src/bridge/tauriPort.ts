@@ -6,9 +6,30 @@ import type { HostPort } from './bridge';
 export const HOST_POST = 'host_post';
 export const HOST_MESSAGE = 'host-message';
 
+let capturedNonce: unknown = undefined;
+let nonceCaptured = false;
+
+function captureHostNonce(): unknown {
+  const holder = globalThis as { __MIGHTY_HOST_NONCE__?: unknown };
+  if ('__MIGHTY_HOST_NONCE__' in holder && holder.__MIGHTY_HOST_NONCE__ !== undefined) {
+    capturedNonce = holder.__MIGHTY_HOST_NONCE__;
+    nonceCaptured = true;
+    try {
+      delete holder.__MIGHTY_HOST_NONCE__;
+    } catch {
+      // Non-configurable property: keep the private copy and ignore deletion failure.
+    }
+  }
+  return capturedNonce;
+}
+
+// Capture once at module initialization so an injected nonce does not remain exposed on globalThis.
+captureHostNonce();
+
 /** This run's nonce, which the host gives the page's main frame only and wants with every post (main.rs `HostNonce`). */
 export function hostNonce(): unknown {
-  return (globalThis as { __MIGHTY_HOST_NONCE__?: unknown }).__MIGHTY_HOST_NONCE__;
+  if (!nonceCaptured) captureHostNonce();
+  return capturedNonce;
 }
 
 /** The two Tauri calls the port makes; a test hands in its own. */

@@ -3,7 +3,7 @@
 // them (MainWindow.WorkspaceCreate.cs ShowWebWorkspaceCreateAsync); every rule and every word is the host's: the labels it
 // sends, and createCheck, makeFolder, repoName, gitProbe and gitCreate, which answer in WorkspaceCreate.cs's words.
 import { useEffect, useId, useRef, useState } from 'react';
-import { useServices, useStoreState } from '../app/context';
+import { useServices, useStoreSelector } from '../app/context';
 import { Icon } from '../icons/Icon';
 import { MiddlePath } from '../shell/parts';
 import type { CreateLabels, DialogRequest } from '../shell/types';
@@ -131,7 +131,7 @@ export function GitCreate({ id, dialog, answer }: { id: number; dialog: Extract<
   const { labels } = dialog;
   const urlId = useId();
   const nameId = useId();
-  const progress = useStoreState().gitProgress?.[id];
+  const progress = useStoreSelector((state) => state.gitProgress?.[id]);
   const [url, setUrl] = useState('');
   const [name, setName] = useState('');
   const [edited, setEdited] = useState(false);

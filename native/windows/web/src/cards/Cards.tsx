@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Keyboar
 import { flushSync } from 'react-dom';
 import { Icon } from '../icons/Icon';
 import { backgroundRowOpens } from '../mighty/background';
-import { useServices, useStoreState } from '../app/context';
+import { useServices, useStoreSelector } from '../app/context';
 import { Markdown } from '../conversation/MarkdownView';
 import { cardKey, forwardIndex, restoreIndex } from './keys';
 import * as draftOf from './questionnaire';
@@ -24,7 +24,7 @@ type Reply = (method: string, args?: Record<string, unknown>) => Promise<{ ok: t
 /** A pane's cards and the way to answer them: every answer is a host method (MainWindow.WebShell.Cards.cs). */
 function usePaneCards(paneId: string, load = false): { cards: readonly Card[]; call: Call; reply: Reply; error: string | null; setError(value: string | null): void } {
   const { bridge, store } = useServices();
-  const cards = useStoreState().cards[paneId] ?? none;
+  const cards = useStoreSelector((state) => state.cards[paneId] ?? none);
   const [error, setError] = useState<string | null>(null);
   const call = useCallback<Call>(async (method, args = {}) => {
     setError(null);

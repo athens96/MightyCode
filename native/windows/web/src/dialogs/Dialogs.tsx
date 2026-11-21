@@ -3,7 +3,7 @@
 // sheets (WorkspaceCreate.tsx) and 대화 검색 (ConversationSearch.tsx). Each answers with `dialogAnswer`; what the answer does stays the host's flow. All of them are
 // the popup standard's alert (A) or form sheet (B) (DialogShell.tsx).
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { useServices, useStoreState } from '../app/context';
+import { useServices, useStoreSelector } from '../app/context';
 import { ProviderMark } from '../conversation/ProviderMark';
 import { BetaBadge, MiddlePath } from '../shell/parts';
 import { Icon } from '../icons/Icon';
@@ -248,7 +248,7 @@ function DialogView({ open }: { open: OpenDialog }) {
 
 /** The newest dialog over the window; the others wait under it. */
 export function Dialogs() {
-  const dialogs = useStoreState().dialogs;
+  const dialogs = useStoreSelector((state) => state.dialogs);
   const top = dialogs[dialogs.length - 1];
   return top ? <DialogView key={top.id} open={top} /> : null;
 }

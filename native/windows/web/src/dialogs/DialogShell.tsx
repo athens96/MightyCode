@@ -8,6 +8,7 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type HTMLAttributes, type PointerEvent, type ReactNode, type Ref } from 'react';
 import tokens from '@tokens/design-tokens.json';
 import { useServices } from '../app/context';
+import { ErrorBoundary } from '../app/ErrorBoundary';
 import { Icon } from '../icons/Icon';
 import { clampSize, dragSize, fitSize, loadSize, saveSize, sheetWidth, type Size } from './panelSize';
 
@@ -228,7 +229,11 @@ export function DialogShell({ closable, status, buttons, bodyClassName, bodyRef,
   return (
     <DialogFrame {...frame}>
       <DialogHeader title={title} subtitle={subtitle} icon={icon} tools={tools} onClose={closes ? frame.onCancel : undefined} busy={frame.busy} closeTestId={closeTestId} />
-      <div className={'dialog-body' + (bodyClassName ? ' ' + bodyClassName : '')} ref={bodyRef}>{children}</div>
+      <div className={'dialog-body' + (bodyClassName ? ' ' + bodyClassName : '')} ref={bodyRef}>
+        <ErrorBoundary scope="dialog" resetKey={frame.panel ?? frame.label}>
+          {children}
+        </ErrorBoundary>
+      </div>
       <DialogFooter status={status}>{buttons}</DialogFooter>
     </DialogFrame>
   );

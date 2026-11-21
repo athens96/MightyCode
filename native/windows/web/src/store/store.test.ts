@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { devSnapshot } from '../bridge/devHost';
 import type { AppState, RunSession, ToolPermissionRequest } from './models';
 import type { ComposerState } from '../composer/types';
-import { Store, activeSessionId, applyPermission, emptyState, mergeSessions, reduce, selectedSession, settlePending } from './store';
+import { Store, DequeuedMemory, activeSessionId, applyPermission, emptyState, mergeSessions, queuedStarts, reduce, selectedSession, settlePending } from './store';
 import { StartedGrace, newPendingRequest } from '../pending/requests';
 
 const loaded = () => reduce(emptyState, { kind: 'snapshot', snapshot: devSnapshot() });
@@ -301,6 +301,58 @@ describe('sent requests and view choices (natural submit)', () => {
     const composer = { paneId: session.id, queue: { held: [], items: [{ id: 'q', text: past.text, attachments: [] }], waitsOnBackground: null } } as unknown as ComposerState;
     const next = reduce(reduce(state, { kind: 'composer', state: composer }), { kind: 'delta', sessions: [{ id: session.id, session: { ...session, title: 'again' } }], removed: [] });
     expect(next.ownSubmits[session.id]).toBeUndefined();
+  });
+
+  it('preserves unrelated store dictionary references when a delta removes no panes (and when removed panes are absent from a dictionary)', () => {
+    let state = loaded();
+    state = reduce(state, { kind: 'event', event: { sessionId: 's1', type: 'activity', activity: { id: 'a1', provider: 'claude', kind: 'tool', state: 'running', summary: 'work' } } });
+    state = reduce(state, { kind: 'cards', paneId: 's1', cards: [] });
+    state = reduce(state, { kind: 'fill', paneId: 's1', text: 'hello' });
+
+    // Streaming delta with removed: [] preserves every per-pane dictionary reference.
+    const streamed = reduce(state, {
+      kind: 'delta',
+      sessions: [{ id: 's1', logs: { added: [{ id: 'a-new', kind: 'assistant', text: 'chunk', timestamp: '2026-01-01T00:00:00Z' }] } }],
+      removed: [],
+    });
+    expect(streamed.activities).toBe(state.activities);
+    expect(streamed.permissions).toBe(state.permissions);
+    expect(streamed.composers).toBe(state.composers);
+    expect(streamed.cards).toBe(state.cards);
+    expect(streamed.fills).toBe(state.fills);
+    expect(streamed.mighty).toBe(state.mighty);
+
+    // Removing s2 drops nothing from dictionaries that only hold s1, preserving their references too.
+    const removedOther = reduce(streamed, { kind: 'delta', sessions: [], removed: ['s2'] });
+    expect(removedOther.activities).toBe(streamed.activities);
+    expect(removedOther.cards).toBe(streamed.cards);
+    expect(removedOther.fills).toBe(streamed.fills);
+  });
+
+  it('short-circuits queuedStarts when there are no queued/dequeued items or no user entries, and respects expiry and held items', () => {
+    const state = loaded();
+    const session = selectedSession(state.snapshot)!;
+    const now = 1_000_000;
+
+    // No queued or dequeued entries: returns the exact same state even with a new user log entry.
+    const userEntry = { id: 'u-new', kind: 'user' as const, text: 'hello', timestamp: '2026-01-01T00:00:00Z' };
+    expect(queuedStarts(state, [{ id: session.id, logs: { added: [userEntry] } }], now, state.snapshot!.sessions)).toBe(state);
+
+    // With a held queue item, an assistant-only delta short-circuits and returns the same state.
+    const heldComposer = { paneId: session.id, queue: { held: [{ id: 'h1', text: 'held task', attachments: [] }], items: [], waitsOnBackground: null } } as unknown as ComposerState;
+    const withHeld = reduce(state, { kind: 'composer', state: heldComposer });
+    const assistantEntry = { id: 'a-stream', kind: 'assistant' as const, text: 'held task', timestamp: '2026-01-01T00:00:00Z' };
+    expect(queuedStarts(withHeld, [{ id: session.id, logs: { added: [assistantEntry] } }], now, state.snapshot!.sessions)).toBe(withHeld);
+
+    // A matching new user entry in logs.replaced bumps ownSubmits.
+    const heldUserEntry = { id: 'u-held', kind: 'user' as const, text: '  held task  ', timestamp: '2026-01-01T00:00:00Z' };
+    const matched = queuedStarts(withHeld, [{ id: session.id, logs: { replaced: [heldUserEntry] } }], now, state.snapshot!.sessions);
+    expect(matched.ownSubmits[session.id]).toBe(1);
+
+    // An expired dequeued entry does not trigger an ownSubmit.
+    const withExpired = { ...state, dequeued: { [session.id]: [{ text: 'old task', at: now - DequeuedMemory - 1 }] } };
+    const oldUserEntry = { id: 'u-old', kind: 'user' as const, text: 'old task', timestamp: '2026-01-01T00:00:00Z' };
+    expect(queuedStarts(withExpired, [{ id: session.id, logs: { added: [oldUserEntry] } }], now, state.snapshot!.sessions)).toBe(withExpired);
   });
 });
 

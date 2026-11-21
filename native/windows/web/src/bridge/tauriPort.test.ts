@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Bridge } from './bridge';
 import { HOST_MESSAGE, HOST_POST, tauriPort, type TauriApi } from './tauriPort';
 
@@ -124,5 +124,52 @@ describe('tauriPort', () => {
     await expect(first).rejects.toThrow(/no event permission/);
     await expect(bridge.call('ready')).rejects.toThrow(/no event permission/);
     expect(tauri.invoked).toEqual([]);
+  });
+});
+
+describe('hostNonce', () => {
+  const holder = globalThis as { __MIGHTY_HOST_NONCE__?: unknown };
+
+  afterEach(() => {
+    try {
+      delete holder.__MIGHTY_HOST_NONCE__;
+    } catch {
+      // Non-configurable property in the final test case stays read-only in this isolated worker.
+    }
+    vi.resetModules();
+  });
+
+  it('captures __MIGHTY_HOST_NONCE__ on module load, deletes it from globalThis, and caches it', async () => {
+    holder.__MIGHTY_HOST_NONCE__ = 'boot-nonce';
+    vi.resetModules();
+    const fresh = await import('./tauriPort');
+    expect('__MIGHTY_HOST_NONCE__' in holder).toBe(false);
+    expect(fresh.hostNonce()).toBe('boot-nonce');
+    holder.__MIGHTY_HOST_NONCE__ = 'spoofed-nonce';
+    expect(fresh.hostNonce()).toBe('boot-nonce');
+  });
+
+  it('captures and deletes __MIGHTY_HOST_NONCE__ on first access when injected after load', async () => {
+    delete holder.__MIGHTY_HOST_NONCE__;
+    vi.resetModules();
+    const fresh = await import('./tauriPort');
+    expect(fresh.hostNonce()).toBeUndefined();
+    holder.__MIGHTY_HOST_NONCE__ = 'late-nonce';
+    expect(fresh.hostNonce()).toBe('late-nonce');
+    expect('__MIGHTY_HOST_NONCE__' in holder).toBe(false);
+    holder.__MIGHTY_HOST_NONCE__ = 'other-nonce';
+    expect(fresh.hostNonce()).toBe('late-nonce');
+  });
+
+  it('handles a non-configurable __MIGHTY_HOST_NONCE__ without throwing', async () => {
+    delete holder.__MIGHTY_HOST_NONCE__;
+    Object.defineProperty(globalThis, '__MIGHTY_HOST_NONCE__', {
+      value: 'locked-nonce',
+      writable: false,
+      configurable: false,
+    });
+    vi.resetModules();
+    const fresh = await import('./tauriPort');
+    expect(fresh.hostNonce()).toBe('locked-nonce');
   });
 });

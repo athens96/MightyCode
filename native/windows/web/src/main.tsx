@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './app/App';
 import { ServicesContext } from './app/context';
+import { ErrorBoundary } from './app/ErrorBoundary';
 import { Bridge, hostPort } from './bridge/bridge';
 import { devHost } from './bridge/devHost';
 import type { LocaleInfo } from './bridge/protocol';
@@ -42,6 +43,10 @@ async function start(bridge: Bridge): Promise<void> {
     : isReviewPush(message) ? dispatchReview(message)
     : isPanePush(message) ? dispatchPanePush(message) : store.dispatch(message)));
   window.addEventListener('error', (event) => void bridge.call('log', { level: 'error', message: String(event.message) }).catch(() => {}));
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event.reason instanceof Error ? (event.reason.stack || event.reason.message) : String(event.reason);
+    void bridge.call('log', { level: 'error', message: 'unhandledrejection: ' + reason }).catch(() => {});
+  });
   const locale = await bridge.call<LocaleInfo>('getLocale');
   document.documentElement.lang = locale.language;
   const t = await loadTranslator(locale.language);
@@ -50,7 +55,9 @@ async function start(bridge: Bridge): Promise<void> {
   createRoot(element).render(
     <StrictMode>
       <ServicesContext.Provider value={{ bridge, store, t }}>
-        <App />
+        <ErrorBoundary scope="app">
+          <App />
+        </ErrorBoundary>
       </ServicesContext.Provider>
     </StrictMode>,
   );
