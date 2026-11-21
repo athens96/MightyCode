@@ -12,7 +12,8 @@
 //! is never logged nor put into an error. Loopback and `localhost` always go straight.
 
 use std::ffi::c_void;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use core_foundation::array::{CFArray, CFArrayRef};
@@ -164,35 +165,68 @@ fn url_of(text: &str) -> Option<CFURL> {
     (!url.is_null()).then(|| unsafe { CFURL::wrap_under_create_rule(url) })
 }
 
-/// What the PAC callback hands back to the lookup that waits on its run loop.
+struct SendCfArray(CFArray<CFType>);
+
+// SAFETY: CFArray produced by CFNetwork PAC resolution holds immutable proxy dictionaries; synchronized under Mutex and released via
+// CFRelease (which is thread-safe).
+unsafe impl Send for SendCfArray {}
+
+/// What the PAC callback hands back to the lookup that waits on its run loop. Heap-allocated via `Arc` and retained/released by
+/// CFNetwork through `StreamClientContext`, eliminating any stack use-after-free if CFNetwork delivers a late callback or teardown
+/// after `PAC_TIMEOUT`.
 struct PacResult {
-    done: std::cell::Cell<bool>,
-    list: std::cell::RefCell<Option<CFArray<CFType>>>,
+    done: AtomicBool,
+    list: Mutex<Option<SendCfArray>>,
+}
+
+extern "C" fn pac_retain(info: *const c_void) -> *const c_void {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !info.is_null() {
+            // SAFETY: `info` came from `Arc::as_ptr(&result)` which stays alive across context registration.
+            unsafe { Arc::increment_strong_count(info.cast::<PacResult>()) };
+        }
+    }));
+    info
+}
+
+extern "C" fn pac_release(info: *const c_void) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if !info.is_null() {
+            // SAFETY: balances a matching `pac_retain` call on the same `Arc<PacResult>`.
+            drop(unsafe { Arc::from_raw(info.cast::<PacResult>()) });
+        }
+    }));
 }
 
 extern "C" fn pac_done(client: *mut c_void, proxies: CFArrayRef, error: CFErrorRef) {
-    // SAFETY: `client` is the `PacResult` the waiting lookup owns until it removes the source, which happens after this returns; it is
-    // only read and written through its cells, on this same thread (the lookup's run loop).
-    let result = unsafe { &*(client as *const PacResult) };
-    result.done.set(true);
-    if error.is_null() && !proxies.is_null() {
-        // SAFETY: a list CFNetwork owns for this call; retained by the wrap.
-        *result.list.borrow_mut() = Some(unsafe { CFArray::wrap_under_get_rule(proxies) });
-    }
-    CFRunLoop::get_current().stop();
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if client.is_null() {
+            return;
+        }
+        // SAFETY: `client` is an `Arc<PacResult>` retained by CFNetwork via `pac_retain` until the source is completely torn down.
+        let result = unsafe { &*(client as *const PacResult) };
+        if error.is_null() && !proxies.is_null() {
+            // SAFETY: a list CFNetwork owns for this call; retained by the wrap.
+            let wrapped = unsafe { CFArray::wrap_under_get_rule(proxies) };
+            *result.list.lock().unwrap_or_else(|p| p.into_inner()) = Some(SendCfArray(wrapped));
+        }
+        result.done.store(true, Ordering::SeqCst);
+        CFRunLoop::get_current().stop();
+    }));
 }
 
 /// Runs an automatic configuration (its address or its text) for `target` on this thread's run loop; None when it cannot be run.
 fn run_script(script: &Entry, target: &CFURL) -> Option<Vec<Entry>> {
-    let result = PacResult { done: std::cell::Cell::new(false), list: std::cell::RefCell::new(None) };
+    let result = Arc::new(PacResult { done: AtomicBool::new(false), list: Mutex::new(None) });
     let mut context = StreamClientContext {
         version: 0,
-        info: (&result as *const PacResult).cast_mut().cast(),
-        retain: None,
-        release: None,
+        info: Arc::as_ptr(&result).cast_mut().cast(),
+        retain: Some(pac_retain),
+        release: Some(pac_release),
         copy_description: None,
     };
-    // SAFETY: the script and target live across the call; the context's info outlives the source (removed below before it goes).
+    // SAFETY: the script and target live across the call; CFNetwork retains `result` via `pac_retain` and releases it via
+    // `pac_release`, so `result` remains valid even if CFNetwork cleans up asynchronously after timeout.
     let source = unsafe {
         match script {
             Entry::Script(url) => {
@@ -217,7 +251,7 @@ fn run_script(script: &Entry, target: &CFURL) -> Option<Vec<Entry>> {
     let mode = unsafe { kCFRunLoopDefaultMode };
     run_loop.add_source(&source, mode);
     let deadline = std::time::Instant::now() + PAC_TIMEOUT;
-    while !result.done.get() {
+    while !result.done.load(Ordering::SeqCst) {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         if left.is_zero() {
             break;
@@ -225,9 +259,10 @@ fn run_script(script: &Entry, target: &CFURL) -> Option<Vec<Entry>> {
         CFRunLoop::run_in_mode(mode, left.min(Duration::from_millis(250)), true);
     }
     run_loop.remove_source(&source, mode);
-    // SAFETY: the source is invalidated so CFNetwork never calls back into `result` after it goes.
+    // SAFETY: invalidate the source; any in-flight CFNetwork reference still safely holds `Arc<PacResult>` via `pac_retain`/`pac_release`.
     unsafe { core_foundation::runloop::CFRunLoopSourceInvalidate(source.as_concrete_TypeRef()) };
-    result.list.borrow().as_ref().map(entries)
+    let guard = result.list.lock().unwrap_or_else(|p| p.into_inner());
+    guard.as_ref().map(|wrapped| entries(&wrapped.0))
 }
 
 /// The first usable answer of `list`, running automatic configuration where it says so (once: a PAC's own answer never runs another).
@@ -368,5 +403,26 @@ mod tests {
     async fn the_live_lookup_answers() {
         let answer = MacProxy.resolve("wss://relay.example.invalid/ws?hostToken=x").await.unwrap();
         assert!(matches!(answer, Proxy::Direct | Proxy::Http { .. }), "{answer:?}");
+    }
+
+    /// P1-FFI-1: `PacResult` is heap-allocated via `Arc` and `pac_retain`/`pac_release` keep its strong count balanced, so late
+    /// callbacks or async teardown after timeout cannot cause a stack UAF.
+    #[test]
+    fn pac_context_retain_and_release_manage_arc_lifetime() {
+        let result = Arc::new(PacResult { done: AtomicBool::new(false), list: Mutex::new(None) });
+        let raw = Arc::as_ptr(&result).cast::<c_void>();
+        assert_eq!(Arc::strong_count(&result), 1);
+        let retained = pac_retain(raw);
+        assert_eq!(retained, raw);
+        assert_eq!(Arc::strong_count(&result), 2);
+        // Simulate caller dropping its Arc while CFNetwork still holds a retained copy.
+        let weak = Arc::downgrade(&result);
+        drop(result);
+        assert!(weak.upgrade().is_some(), "retained CFNetwork reference keeps PacResult alive");
+        // Calling pac_done with null proxies/error marks done cleanly without unwinding.
+        pac_done(retained.cast_mut(), std::ptr::null(), std::ptr::null_mut());
+        assert!(weak.upgrade().unwrap().done.load(Ordering::SeqCst));
+        pac_release(retained);
+        assert!(weak.upgrade().is_none(), "pac_release drops the final reference cleanly");
     }
 }

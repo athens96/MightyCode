@@ -77,6 +77,7 @@ pub fn reload_tools(host: &Arc<Host>) {
 
 /// The smoke's models: its fixture tools, no drafts and `catalogs` in place of the providers'; what was there is given back to
 /// [`restore`] afterwards.
+#[cfg(feature = "dev-harness")]
 pub fn swap_for_smoke(catalogs: HashMap<String, ModelCatalog>) -> Models {
     let smoke = Models { tools: Some(phase_section::smoke_fixture_tools()), drafts: HashMap::new(), catalogs: Some(catalogs) };
     let mut models = MODELS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -84,6 +85,7 @@ pub fn swap_for_smoke(catalogs: HashMap<String, ModelCatalog>) -> Models {
 }
 
 /// The models as they were before [`swap_for_smoke`].
+#[cfg(feature = "dev-harness")]
 pub fn restore(saved: Models) {
     *MODELS.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(saved);
 }
@@ -443,6 +445,7 @@ fn registered(host: &Arc<Host>, ui: &mut Ui, provider: &phase_section::ProviderF
 /// The smoke's `phaseModelsSection` (C# `RunPhaseModelsSectionSmoke`): the box over `{claudeMain: "fixture-main", codexSubagentEffort:
 /// "xhigh"}` and the fixture tools shows both providers, Claude's execution as mixed, Codex's sub-agent effort as xhigh, no model
 /// picker for Codex's planning and execution, and each provider's add field with the five effort chips. The failed checks' names, if any.
+#[cfg(feature = "dev-harness")]
 pub fn smoke_section(host: &Arc<Host>, ui: &mut Ui) -> Vec<&'static str> {
     let config = PhaseModelsSnapshot {
         claude_main: Some("fixture-main".into()),
@@ -493,6 +496,7 @@ pub fn smoke_section(host: &Arc<Host>, ui: &mut Ui) -> Vec<&'static str> {
 }
 
 /// Every automation id in the tree built, shown or not.
+#[cfg(feature = "dev-harness")]
 fn tree_aids(el: &El, out: &mut Vec<String>) {
     if let Some(aid) = &el.aid {
         out.push(aid.clone());

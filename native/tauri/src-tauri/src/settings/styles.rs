@@ -41,7 +41,7 @@ async fn pick(host: &Host) -> Option<std::path::PathBuf> {
     use tauri_plugin_dialog::DialogExt;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let mut dialog = host.app.dialog().file().add_filter("JSON", &["json"]);
-    if let Some(window) = host.app.get_window(crate::host::WINDOW) {
+    if let Some(window) = host.app.get_webview_window(crate::host::WINDOW) {
         dialog = dialog.set_parent(&window);
     }
     dialog.pick_file(move |file| {

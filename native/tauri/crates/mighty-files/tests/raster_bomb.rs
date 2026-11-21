@@ -198,3 +198,42 @@ fn a_huge_picture_inside_an_svg_is_left_out() {
     let largest = LARGEST.load(Ordering::Relaxed);
     assert!(largest < 16 * 1024 * 1024, "the largest allocation drawing it: {largest} bytes");
 }
+
+/// P1-PERF-2: multiple embedded `<image>` elements share a cumulative pixel cap (`MAXIMUM_EMBEDDED_PIXELS`), unreadable blobs fail
+/// closed, and `decode()` enforces explicit width/height/alloc limits.
+#[test]
+fn svg_cumulative_embedded_pixel_cap_and_decode_limits() {
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner());
+    // Each image is 3,000 × 3,000 = 9 MP (< 16.77 MP individually), so the first fits, while the second pushes cumulative pixels
+    // to 18 MP (> 16.77 MP) and must be omitted.
+    let tile = base64::engine::general_purpose::STANDARD.encode(black_png(3000, 3000));
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\">\
+         <rect width=\"100\" height=\"100\" fill=\"#c33\"/>\
+         <image x=\"0\" y=\"0\" width=\"50\" height=\"100\" preserveAspectRatio=\"none\" href=\"data:image/png;base64,{tile}\"/>\
+         <image x=\"50\" y=\"0\" width=\"50\" height=\"100\" preserveAspectRatio=\"none\" href=\"data:image/png;base64,{tile}\"/>\
+         </svg>"
+    );
+    let drawn = raster::svg_png(svg.as_bytes(), 100, false).unwrap();
+    let img = image::load_from_memory(&drawn.png).unwrap().to_rgba8();
+    assert_eq!(img.get_pixel(25, 50).0, [0, 0, 0, 0xFF], "first 9 MP image fits in budget");
+    assert_eq!(img.get_pixel(75, 50).0, [0xCC, 0x33, 0x33, 0xFF], "second 9 MP image exceeds cumulative budget and is omitted");
+
+    // Unparseable embedded blob where `imagesize::blob_size` returns Err fails closed (background shows through).
+    let garbage = base64::engine::general_purpose::STANDARD.encode(b"not-a-valid-image-header");
+    let bad_svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"20\">\
+         <rect width=\"20\" height=\"20\" fill=\"#c33\"/>\
+         <image width=\"20\" height=\"20\" href=\"data:image/png;base64,{garbage}\"/>\
+         </svg>"
+    );
+    let bad_drawn = raster::svg_png(bad_svg.as_bytes(), 20, false).unwrap();
+    let bad_img = image::load_from_memory(&bad_drawn.png).unwrap().to_rgba8();
+    assert_eq!(bad_img.get_pixel(10, 10).0, [0xCC, 0x33, 0x33, 0xFF], "unreadable embedded image fails closed");
+
+    // `decode()` rejects images exceeding `MAXIMUM_DECODE_DIMENSION` without allocating gigabytes.
+    let huge_dim = black_png(raster::MAXIMUM_DECODE_DIMENSION + 1, 1);
+    LARGEST.store(0, Ordering::Relaxed);
+    assert!(raster::decode(&huge_dim).is_none(), "image past MAXIMUM_DECODE_DIMENSION must be rejected");
+    assert!(LARGEST.load(Ordering::Relaxed) < 16 * 1024 * 1024, "rejected image must not allocate huge buffers");
+}

@@ -221,6 +221,7 @@ pub fn remote_workspaces(host: &Arc<Host>, ui: &mut Ui) -> El {
 
 /// The share and connect tabs and the firewall rule at once, for the remote smoke (smoke_remote.rs), which reads both sides on one
 /// surface: the connect part on its Tailscale way in, whose button the smoke checks.
+#[cfg(feature = "dev-harness")]
 pub(crate) fn every_part(host: &Arc<Host>, ui: &mut Ui) -> El {
     let page = read(host, ui);
     let mut parts = vec![share(host, ui, &page)];

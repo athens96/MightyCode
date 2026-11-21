@@ -142,11 +142,11 @@ pub fn object_owner(object: &impl AsRawHandle) -> Result<Vec<u8>> {
 }
 
 /// A security descriptor made from SDDL, freed on drop.
-struct Descriptor(PSECURITY_DESCRIPTOR);
+pub(crate) struct Descriptor(PSECURITY_DESCRIPTOR);
 
 impl Descriptor {
     /// `CurrentUserOnly`'s server side: `owner` the owner, one entry granting it `PipeAccessRights.FullControl`.
-    fn owner_only(owner: &[u8]) -> Result<Descriptor> {
+    pub(crate) fn owner_only(owner: &[u8]) -> Result<Descriptor> {
         let sid = sid_text(owner)?;
         let sddl = wide(format!("O:{sid}D:(A;;0x1f019f;;;{sid})"));
         let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
@@ -157,6 +157,10 @@ impl Descriptor {
             return Err(refused("the pipe's access list"));
         }
         Ok(Descriptor(descriptor))
+    }
+
+    pub(crate) fn as_ptr(&self) -> PSECURITY_DESCRIPTOR {
+        self.0
     }
 }
 

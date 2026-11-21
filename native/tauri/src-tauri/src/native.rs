@@ -150,14 +150,17 @@ pub fn push_text(host: &Host) {
 /// not ready (or the app quits) every text sent is forgotten.
 pub fn tick(host: &Host) {
     let natives = of(host);
-    if host.closing() || !host.view().ready {
+    if host.closing() || !host.is_ready() {
         natives.surfaces.forget_sent();
         *lock(&natives.text_sent) = None;
         return;
     }
     let env = env(host);
     natives.surfaces.render_all_to(&env, |push| post(host, "native", push));
-    push_text(host);
+    // `frame::set_text` pushes text changes immediately; the periodic tick only needs to send it before the first push after `ready`.
+    if lock(&natives.text_sent).is_none() {
+        push_text(host);
+    }
 }
 
 /// The surfaces an input changed, pushed after the call's result (C#'s `DispatcherQueue.TryEnqueue(PushNative)`); host.rs's flush.
@@ -170,8 +173,7 @@ pub fn flush(host: &Host) {
 
 /// The main window's client area in DIPs, what `StyledDialog` fits a fixed sheet against (none known: 0).
 fn window_room(host: &Host) -> (f64, f64) {
-    let Some(page) = host.app.get_webview(WINDOW) else { return (0.0, 0.0) };
-    let window = page.window();
+    let Some(window) = host.app.get_webview_window(WINDOW) else { return (0.0, 0.0) };
     match (window.inner_size(), window.scale_factor()) {
         (Ok(size), Ok(scale)) if scale > 0.0 => (f64::from(size.width) / scale, f64::from(size.height) / scale),
         _ => (0.0, 0.0),
@@ -256,18 +258,22 @@ pub fn register(methods: &mut Registry) {
         let value = args.get("value").cloned().unwrap_or(Value::Null);
         // `(int)element`: the id as an integer, a fraction cut off.
         let outcome = natives.surfaces.act(view, id as i64, text(&args, "op").unwrap_or(""), &value);
+        let mut open_url_target = None;
         let done = outcome.run(|url| {
             // A smoke opens no browser (it would outlive the run): the address is logged, as `open_help` does.
             if host.smoke.is_some() {
                 host.log.line(&format!("smoke: native link not opened: {url}"));
-            } else if let Some(url) = crate::methods::openable_url(url)
-                && let Err(error) = crate::platform::open_url(&url)
-            {
-                host.log.line(&format!("native link: {error}"));
+            } else if let Some(url) = crate::methods::openable_url(url) {
+                open_url_target = Some(url);
             }
         });
         // The change shows at once, after this call's result (the flush the dispatcher schedules), not on the next tick.
         lock(&natives.dirty).insert(view.to_string());
+        if let Some(url) = open_url_target
+            && let Ok(Err(error)) = tauri::async_runtime::spawn_blocking(move || crate::platform::open_url(&url)).await
+        {
+            host.log.line(&format!("native link: {error}"));
+        }
         Ok(json!(done))
     });
     methods.add("nativeNav", |host: Arc<Host>, args| async move {

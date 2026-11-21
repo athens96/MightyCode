@@ -16,6 +16,7 @@
 mod accounts;
 mod agent_io;
 mod antigravity;
+#[cfg_attr(not(feature = "dev-harness"), allow(dead_code))]
 mod app_update;
 mod args;
 mod ask;
@@ -33,6 +34,7 @@ mod direct;
 mod editor;
 mod files;
 mod frame;
+#[cfg(feature = "dev-harness")]
 mod help_capture;
 mod history;
 mod host;
@@ -48,6 +50,7 @@ mod notifications;
 mod ouroboros;
 mod pane_worktree;
 mod panes;
+#[cfg(feature = "dev-harness")]
 mod perf;
 mod phone;
 mod platform;
@@ -60,24 +63,43 @@ mod settings_place;
 mod setup;
 mod shell_command;
 mod sign_in_pane;
+#[cfg(feature = "dev-harness")]
 mod smoke;
+#[cfg(feature = "dev-harness")]
 mod smoke_accounts;
+#[cfg(feature = "dev-harness")]
 mod smoke_acp;
+#[cfg(feature = "dev-harness")]
 mod smoke_app_update;
+#[cfg(feature = "dev-harness")]
 mod smoke_companion;
+#[cfg(feature = "dev-harness")]
 mod smoke_delegation;
+#[cfg(feature = "dev-harness")]
 mod smoke_direct;
+#[cfg(feature = "dev-harness")]
 mod smoke_files;
+#[cfg(feature = "dev-harness")]
 mod smoke_frame;
+#[cfg(feature = "dev-harness")]
 mod smoke_help;
+#[cfg(feature = "dev-harness")]
 mod smoke_history;
+#[cfg(feature = "dev-harness")]
 mod smoke_phone;
+#[cfg(feature = "dev-harness")]
 mod smoke_remote;
+#[cfg(feature = "dev-harness")]
 mod smoke_runs;
+#[cfg(feature = "dev-harness")]
 mod smoke_settings;
+#[cfg(feature = "dev-harness")]
 mod smoke_setup;
+#[cfg(feature = "dev-harness")]
 mod smoke_styles;
+#[cfg(feature = "dev-harness")]
 mod smoke_terminal;
+#[cfg(feature = "dev-harness")]
 mod smoke_updates;
 mod startup;
 mod status_line;
@@ -89,6 +111,7 @@ mod terminal;
 mod update_helper;
 mod updates;
 mod usage;
+#[cfg(feature = "dev-harness")]
 mod verify_resources;
 mod workmap;
 mod workspace_create;
@@ -98,13 +121,14 @@ use std::sync::Arc;
 
 use mighty_core::locale::Locale;
 use mighty_core::store::{self, LoadSource};
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(feature = "dev-harness")]
+use serde_json::json;
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
-use crate::host::{Host, WINDOW};
+use crate::host::{Host, Smoke, WINDOW};
 use crate::logfile::LogFile;
-use crate::smoke::Smoke;
 use crate::surface::SurfaceManager;
 
 /// Page → host: one message (`{kind:"call", ...}`), queued for the dispatcher; the answer comes back on `host-message`. Only the
@@ -158,6 +182,7 @@ impl HostNonce {
 }
 
 /// This run's host nonce, for smoke probes that run via `page.eval` after the bridge has captured and deleted `window.__MIGHTY_HOST_NONCE__`.
+#[cfg(feature = "dev-harness")]
 pub(crate) fn host_nonce(app: &tauri::AppHandle) -> String {
     app.try_state::<HostNonce>().map(|nonce| nonce.0.clone()).unwrap_or_default()
 }
@@ -203,6 +228,7 @@ impl AppOrigin {
 }
 
 /// The smoke's probe script hands what it read of the page here (smoke.rs).
+#[cfg(feature = "dev-harness")]
 #[tauri::command]
 fn smoke_probe(probe: Value, host: tauri::State<'_, Arc<Host>>) {
     if let Some(smoke) = &host.smoke {
@@ -235,15 +261,28 @@ fn source_name(source: &LoadSource) -> String {
 /// helper `--update-helper …` (update_helper.rs, W9-B), which the 0.4.x app starts from its staged folder with only `SystemRoot` set.
 /// The release build's GUI subsystem still reads the stdio handles a CLI hands it.
 fn exe_mode(args: &[String]) -> Option<i32> {
-    use mighty_delegation::{fake_claude, help_demo_cli, modes};
+    use mighty_delegation::modes;
     match args {
         [only] if only == modes::AGENT_IO_MCP_ARGUMENT => Some(modes::agent_io_mcp(platform::agent_io_connector())),
         [only] if only == modes::DELEGATION_MCP_ARGUMENT => Some(modes::delegation_mcp(platform::agent_io_connector())),
-        [first, root, rest @ ..] if first == fake_claude::ARGUMENT && mighty_core::normalize::fully_qualified(root) => {
-            Some(fake_claude::run(Path::new(root), rest, platform::process_host()))
+        #[cfg(feature = "dev-harness")]
+        [first, root, rest @ ..] if first == mighty_delegation::fake_claude::ARGUMENT && mighty_core::normalize::fully_qualified(root) => {
+            Some(mighty_delegation::fake_claude::run(Path::new(root), rest, platform::process_host()))
         }
-        // Mac stage M-H: --verify-resources, the Mac build's and install scripts' check of the bundle.
-        _ => help_demo_cli::try_run(args).or_else(|| update_helper::try_run(args)).or_else(|| verify_resources::try_run(args)),
+        _ => {
+            #[cfg(feature = "dev-harness")]
+            if let Some(code) = mighty_delegation::help_demo_cli::try_run(args) {
+                return Some(code);
+            }
+            if let Some(code) = update_helper::try_run(args) {
+                return Some(code);
+            }
+            #[cfg(feature = "dev-harness")]
+            if let Some(code) = verify_resources::try_run(args) {
+                return Some(code);
+            }
+            None
+        }
     }
 }
 
@@ -314,6 +353,7 @@ fn main() {
         _ => None,
     };
     let source = state.source.clone().unwrap_or(LoadSource::Empty);
+    #[cfg(feature = "dev-harness")]
     let load = json!({
         "path": state.state_path(),
         "source": source_name(&source),
@@ -344,6 +384,7 @@ fn main() {
     {
         state.replace = host::replace_file;
     }
+    #[cfg(feature = "dev-harness")]
     let smoke = options.smoke_test.then(|| {
         let mode = match (&options.smoke_fake_cli, options.smoke_real_claude) {
             (Some(_), _) => smoke::Mode::FakeClaude,
@@ -366,16 +407,21 @@ fn main() {
         )
         .special(special)
     });
+    #[cfg(not(feature = "dev-harness"))]
+    let smoke: Option<Smoke> = None;
     let theme = snapshot.theme().to_string();
     let mut parts = Some((state, banner, log, smoke));
     let debugging_port = options.remote_debugging_port;
     let native_dump = options.native_dump.clone();
     // The smoke's stand-in Claude records what it was sent beside the smoke's logs.
+    #[cfg(feature = "dev-harness")]
     let fake_claude = options.smoke_fake_cli.clone().map(|binary| runs::FakeClaude {
         binary,
         recording: smoke::RECORDING.into(),
         record: log_dir.join("fake-claude").join("replay"),
     });
+    #[cfg(not(feature = "dev-harness"))]
+    let fake_claude: Option<runs::FakeClaude> = None;
     // The picture cache: the profile's own when the app may write it, else this machine's local folder for the profile.
     // These stores follow the write policy (W9: `policy.writes` replaced the flag here; a release build writes the profile's own).
     let image_dir = if policy.writes {
@@ -415,20 +461,23 @@ fn main() {
     let adopted = startup::adopts_csharp_web_data(&options, policy);
     let web_folders = platform.paths.web_folders(adopted);
 
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![
-            host_post,
-            smoke_probe,
-            smoke::smoke_surface,
-            smoke_runs::smoke_step,
-            smoke_terminal::smoke_terminal,
-            smoke_history::smoke_history,
-            smoke_settings::smoke_settings,
-            smoke_setup::smoke_setup,
-            smoke_accounts::smoke_accounts,
-            smoke_updates::smoke_updates
-        ])
+    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    #[cfg(feature = "dev-harness")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        host_post,
+        smoke_probe,
+        smoke::smoke_surface,
+        smoke_runs::smoke_step,
+        smoke_terminal::smoke_terminal,
+        smoke_history::smoke_history,
+        smoke_settings::smoke_settings,
+        smoke_setup::smoke_setup,
+        smoke_accounts::smoke_accounts,
+        smoke_updates::smoke_updates
+    ]);
+    #[cfg(not(feature = "dev-harness"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![host_post]);
+    let app = builder
         // HTML previews' folders, each under a host of its own, for the page's sandboxed frame (files.rs).
         .register_asynchronous_uri_scheme_protocol(files::PROTOCOL, files::protocol)
         .setup(move |app| {
@@ -456,13 +505,17 @@ fn main() {
             let _ = frame::OPEN_FILES.set(files::open_files);
             let _ = frame::RESUME.set(Arc::new(history::HistoryResume));
             // The run engine: the run service owns the state from here on (runs.rs).
+            #[cfg(feature = "dev-harness")]
             if let Some(fake) = &fake_claude
                 && let Some(folder) = fake.record.parent()
             {
                 let _ = std::fs::create_dir_all(folder);
             }
             // The smoke's stand-in agy writes its own settings, never the user's, and keeps its ledger beside them.
+            #[cfg(feature = "dev-harness")]
             let agy_settings = fake_claude.as_ref().map(runs::FakeClaude::agy_settings);
+            #[cfg(not(feature = "dev-harness"))]
+            let agy_settings: Option<std::path::PathBuf> = None;
             let agy_ledger = match agy_settings.as_deref().and_then(Path::parent).and_then(Path::parent).and_then(Path::parent) {
                 Some(home) => home.join(antigravity::LEDGER),
                 None => antigravity_ledger.clone(),
@@ -561,6 +614,7 @@ fn main() {
                     let _ = returned.await;
                 }
             });
+            #[cfg(feature = "dev-harness")]
             if host.smoke.is_some() {
                 Smoke::watch(host.clone());
             }
@@ -732,6 +786,7 @@ mod tests {
         assert!(csp.contains("object-src 'none'"));
         assert!(csp.contains("connect-src 'self' ipc: http://ipc.localhost"));
         assert!(security["devCsp"].is_null());
+        assert_eq!(security["dangerousDisableAssetCspModification"], serde_json::json!(["style-src"]));
     }
 
     fn url(text: &str) -> tauri::Url {

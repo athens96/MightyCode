@@ -98,7 +98,7 @@ impl SaveDialog for TauriSave {
             let (sender, receiver) = tokio::sync::oneshot::channel();
             let mut dialog =
                 app.dialog().file().set_file_name(&request.suggested_name).add_filter(&request.filter_name, &[&request.extension]);
-            if let Some(window) = app.get_window(crate::host::WINDOW) {
+            if let Some(window) = app.get_webview_window(crate::host::WINDOW) {
                 dialog = dialog.set_parent(&window);
             }
             dialog.save_file(move |path| {
@@ -115,7 +115,10 @@ pub fn start(host: &Arc<Host>, originals_dir: PathBuf) {
     // Every reader of the user's files (pictures, HTML assets, the files pane) asks the open handle where it is.
     mighty_composer::files::use_file_handles(ports.handles.clone());
     let originals = Arc::new(FileOriginalStore::new(originals_dir, changes::MAXIMUM_BYTES, ports.handles.clone()));
-    let snapshot = host.view().snapshot.clone();
+    let (snapshot, mut last_revision) = {
+        let view = host.view();
+        (view.snapshot.clone(), view.revision())
+    };
     let kept = FileOriginalStore::kept_runs_of(snapshot.sessions().iter().map(|s| s.as_ref()));
     let files = Arc::new(Files {
         trees: Mutex::new(HashMap::new()),
@@ -130,13 +133,26 @@ pub fn start(host: &Arc<Host>, originals_dir: PathBuf) {
     host.app.manage(files.clone());
     // C# DesktopService.InitializeAsync: what the saved state no longer names goes.
     std::thread::spawn(move || originals.prune(&kept));
-    let watcher = host.clone();
+    let watcher = Arc::downgrade(host);
     std::thread::Builder::new()
         .name("file-originals".into())
         .spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_secs(2));
-                let sessions = watcher.view().snapshot.sessions().to_vec();
+            while let Some(host) = watcher.upgrade() {
+                if !host.wait_or_close(Duration::from_secs(2)) {
+                    return;
+                }
+                if host.revision() == last_revision {
+                    continue;
+                }
+                let sessions = {
+                    let view = host.view();
+                    let rev = view.revision();
+                    if rev == last_revision {
+                        continue;
+                    }
+                    last_revision = rev;
+                    view.snapshot.sessions().to_vec()
+                };
                 retain_originals(&files, &sessions);
             }
         })
@@ -519,7 +535,11 @@ async fn picture_action(
             let request =
                 SaveRequest { suggested_name: "image".into(), filter_name: shown.media_type.clone(), extension: extension.into() };
             if let Some(path) = files.save.pick(request).await.map_err(|e| e.to_string())? {
-                std::fs::write(&path, &shown.bytes).map_err(|e| e.to_string())?;
+                let bytes = shown.bytes;
+                tauri::async_runtime::spawn_blocking(move || std::fs::write(&path, &bytes))
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .map_err(|e| e.to_string())?;
             }
             Ok(())
         }

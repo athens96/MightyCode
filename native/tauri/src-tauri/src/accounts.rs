@@ -100,11 +100,16 @@ pub struct Accounts {
     serial: AtomicU64,
     /// Sign-outs confirmed in D8, counted before any gate (the smoke's check that D8 cancelled confirmed none).
     sign_out_attempts: AtomicUsize,
+    /// Bumped whenever the retry book's set of remembered sign-in-lost panes changes (mobile.rs push gate).
+    retry_epoch: AtomicU64,
     /// The app is closing: no sign-in starts, every wait ends.
     closed: AtomicBool,
 }
 
 impl Accounts {
+    fn bump_retry_epoch(&self) {
+        self.retry_epoch.fetch_add(1, Ordering::Release);
+    }
     fn has_job(&self, provider: &str) -> bool {
         lock(&self.jobs).contains_key(provider)
     }
@@ -322,7 +327,10 @@ pub async fn login_action(host: Arc<Host>, args: Value) -> Reply {
         "openLink" => {
             let url = lock(&accounts.jobs).get(&provider).and_then(|j| j.process.as_ref().and_then(|p| p.output().url));
             if let Some(url) = url {
-                crate::platform::open_url(url.as_str())?;
+                let url = url.to_string();
+                tauri::async_runtime::spawn_blocking(move || crate::platform::open_url(&url))
+                    .await
+                    .map_err(|error| error.to_string())??;
             }
         }
         "code" => {
@@ -373,6 +381,7 @@ pub fn on_run_event(host: &Arc<Host>, event: &RunEvent) {
 pub fn on_request_starting(host: &Arc<Host>, request: &StartRunRequest) {
     let accounts = of(host);
     lock(&accounts.book).sent(request, None);
+    accounts.bump_retry_epoch();
     lock(&accounts.notes).remove(&request.session_id);
     lock(&accounts.awaiting_update).remove(&request.session_id);
     cancel_unused_login(host, &request.provider);
@@ -401,6 +410,7 @@ async fn confirm_login_failure(host: &Arc<Host>, retry: CliLoginRetry) {
         return;
     }
     lock(&accounts.book).remember(retry.clone());
+    accounts.bump_retry_epoch();
     redraw(host);
     start_automatic_login_if_allowed(host, retry, status);
 }
@@ -709,6 +719,9 @@ async fn resend_login_request(host: &Arc<Host>, id: &str) {
     let outcome = start_again(host, id, &retry).await;
     if let Err(error) = outcome {
         let kept = lock(&accounts.book).remember(retry);
+        if kept {
+            accounts.bump_retry_epoch();
+        }
         if kept && let Some(error) = error {
             lock(&accounts.notes).insert(id.to_string(), error);
         }
@@ -805,6 +818,7 @@ fn dismiss(host: &Arc<Host>, id: &str) {
     let accounts = of(host);
     let provider = lock(&accounts.book).requests().get(id).map(|r| r.request.provider.clone());
     lock(&accounts.book).drop_session(id);
+    accounts.bump_retry_epoch();
     lock(&accounts.notes).remove(id);
     lock(&accounts.awaiting_update).remove(id);
     if let Some(provider) = provider {
@@ -1212,6 +1226,7 @@ fn model_of(
 }
 
 /// The smoke's sign-in card (the `loginCard` step): a fixture retry of `pane` kept as if its run had lost the sign-in.
+#[cfg(feature = "dev-harness")]
 pub fn smoke_retry(host: &Host, pane: &RunSession) {
     let mut request = StartRunRequest::new(pane.id(), pane.workspace_id(), "claude", "smoke sign-in fixture");
     request.provider = pane.provider().to_string();
@@ -1228,13 +1243,20 @@ pub fn has_retry(host: &Host, pane: &str) -> bool {
     lock(&of(host).book).requests().contains_key(pane)
 }
 
+/// Lock-free epoch bumped whenever the remembered login-retry set changes (mobile.rs push-observe gate).
+pub fn retry_epoch(host: &Host) -> u64 {
+    host.app.try_state::<Arc<Accounts>>().map_or(0, |a| a.retry_epoch.load(Ordering::Acquire))
+}
+
 /// Whether the account changes or a button of its row works (the smoke's D8 waits for it to settle).
+#[cfg(feature = "dev-harness")]
 pub fn is_changing(accounts: &Accounts, provider: &str) -> bool {
     let working = lock(&accounts.working).contains(provider);
     working || accounts.is_changing(provider)
 }
 
 /// Whether a sign-out was confirmed in D8, before any gate (the smoke's D8 cancelled must leave none).
+#[cfg(feature = "dev-harness")]
 pub fn signed_out_in_smoke(host: &Host) -> bool {
     of(host).sign_out_attempts.load(Ordering::SeqCst) > 0
 }
@@ -1257,6 +1279,9 @@ fn prune_of(accounts: &Accounts, snapshot: &AppSnapshot) {
         lock(&accounts.book).drop_session(id);
         lock(&accounts.notes).remove(id);
         lock(&accounts.awaiting_update).remove(id);
+    }
+    if !gone.is_empty() {
+        accounts.bump_retry_epoch();
     }
     let providers: Vec<String> = lock(&accounts.jobs).keys().cloned().collect();
     for provider in providers {
@@ -1286,6 +1311,7 @@ pub fn shutdown(host: &Host) {
         wait.send_replace(true);
     }
     lock(&accounts.book).clear();
+    accounts.bump_retry_epoch();
     lock(&accounts.notes).clear();
     lock(&accounts.awaiting_update).clear();
     lock(&accounts.deferred).clear();

@@ -15,7 +15,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use mighty_core::locale::Locale;
-use mighty_core::notifications::{self, Decision, SmokeOutcome};
+#[cfg(feature = "dev-harness")]
+use mighty_core::notifications::SmokeOutcome;
+use mighty_core::notifications::{self, Decision};
 use mighty_platform::activator::{AUMID, CLSID, session_id};
 use mighty_platform::{Notification, Subscription, ToastActivator};
 use tauri::Manager;
@@ -262,6 +264,7 @@ pub fn focus(host: &Arc<Host>, pane: &str) {
 /// the user's registry), so it is unsupported there and skipped, as on CI's runners. Where it is supported, the fixture's toast is the
 /// one a run's completion shows (the localized `NotificationTitle`, the body over `FixtureTitle`), and a send that fails is the smoke's
 /// failure (the error comes back, C#'s throw), never a skip.
+#[cfg(feature = "dev-harness")]
 pub async fn smoke(host: &Arc<Host>) -> Result<SmokeOutcome, String> {
     let supported = host.may_change_machine();
     notifications::smoke_run(

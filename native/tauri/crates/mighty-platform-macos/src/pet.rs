@@ -51,6 +51,11 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Keeps a Rust panic from unwinding across an Objective-C/AppKit FFI boundary.
+fn guarded<R>(fallback: R, f: impl FnOnce() -> R) -> R {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(fallback)
+}
+
 /// One display: its frame and the part not under the menu bar and the Dock, in the desktop's units, down from the top left.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Screen {
@@ -230,44 +235,52 @@ define_class!(
         /// The layer's contents are the render thread's picture: AppKit never draws into it ([`PetView::update_layer`]).
         #[unsafe(method(wantsUpdateLayer))]
         fn wants_update_layer(&self) -> bool {
-            true
+            guarded(true, || true)
         }
 
         #[unsafe(method(updateLayer))]
         fn update_layer(&self) {
-            self.apply();
+            guarded((), || self.apply());
         }
 
         /// A press on the pet acts at once even while another app is in front (the panel never activates this one).
         #[unsafe(method(acceptsFirstMouse:))]
         fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
-            true
+            guarded(true, || true)
         }
 
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
-            let shared = &self.ivars().shared;
-            let pointer = shared.pointer(self, event);
-            // Windows' second press of a double click is WM_LBUTTONDBLCLK instead of a press.
-            shared.emit(if event.clickCount() % 2 == 0 { PetEvent::DoubleClicked(pointer) } else { PetEvent::Pressed(pointer) });
+            guarded((), || {
+                let shared = &self.ivars().shared;
+                let pointer = shared.pointer(self, event);
+                // Windows' second press of a double click is WM_LBUTTONDBLCLK instead of a press.
+                shared.emit(if event.clickCount() % 2 == 0 { PetEvent::DoubleClicked(pointer) } else { PetEvent::Pressed(pointer) });
+            });
         }
 
         #[unsafe(method(mouseUp:))]
         fn mouse_up(&self, event: &NSEvent) {
-            let shared = &self.ivars().shared;
-            shared.emit(PetEvent::Released(shared.pointer(self, event)));
+            guarded((), || {
+                let shared = &self.ivars().shared;
+                shared.emit(PetEvent::Released(shared.pointer(self, event)));
+            });
         }
 
         #[unsafe(method(mouseDragged:))]
         fn mouse_dragged(&self, event: &NSEvent) {
-            let shared = &self.ivars().shared;
-            shared.emit(PetEvent::Moved(shared.pointer(self, event)));
+            guarded((), || {
+                let shared = &self.ivars().shared;
+                shared.emit(PetEvent::Moved(shared.pointer(self, event)));
+            });
         }
 
         #[unsafe(method(mouseMoved:))]
         fn mouse_moved(&self, event: &NSEvent) {
-            let shared = &self.ivars().shared;
-            shared.emit(PetEvent::Moved(shared.pointer(self, event)));
+            guarded((), || {
+                let shared = &self.ivars().shared;
+                shared.emit(PetEvent::Moved(shared.pointer(self, event)));
+            });
         }
 
         #[unsafe(method(rightMouseDown:))]
@@ -275,54 +288,64 @@ define_class!(
 
         #[unsafe(method(rightMouseUp:))]
         fn right_mouse_up(&self, event: &NSEvent) {
-            let shared = &self.ivars().shared;
-            shared.emit(PetEvent::RightClicked(shared.pointer(self, event)));
+            guarded((), || {
+                let shared = &self.ivars().shared;
+                shared.emit(PetEvent::RightClicked(shared.pointer(self, event)));
+            });
         }
 
         /// A notch of a wheel is Windows' 120; a trackpad's scroll counts as a notch every 30 points of it, its momentum ignored.
         #[unsafe(method(scrollWheel:))]
         fn scroll_wheel(&self, event: &NSEvent) {
-            let shared = &self.ivars().shared;
-            let delta = if event.hasPreciseScrollingDeltas() {
-                if event.momentumPhase().0 != 0 {
-                    return;
+            guarded((), || {
+                let shared = &self.ivars().shared;
+                let delta = if event.hasPreciseScrollingDeltas() {
+                    if event.momentumPhase().0 != 0 {
+                        return;
+                    }
+                    let mut kept = lock(&shared.wheel);
+                    *kept += event.scrollingDeltaY();
+                    if kept.abs() < 30.0 {
+                        return;
+                    }
+                    let notch = if *kept > 0.0 { 120 } else { -120 };
+                    *kept = 0.0;
+                    notch
+                } else {
+                    (event.scrollingDeltaY() * 120.0).round() as i32
+                };
+                if delta != 0 {
+                    shared.emit(PetEvent::Wheel { pointer: shared.pointer(self, event), delta });
                 }
-                let mut kept = lock(&shared.wheel);
-                *kept += event.scrollingDeltaY();
-                if kept.abs() < 30.0 {
-                    return;
-                }
-                let notch = if *kept > 0.0 { 120 } else { -120 };
-                *kept = 0.0;
-                notch
-            } else {
-                (event.scrollingDeltaY() * 120.0).round() as i32
-            };
-            if delta != 0 {
-                shared.emit(PetEvent::Wheel { pointer: shared.pointer(self, event), delta });
-            }
+            });
         }
 
         #[unsafe(method(mouseEntered:))]
         fn mouse_entered(&self, _event: &NSEvent) {
-            self.ivars().shared.hovering.store(true, Ordering::SeqCst);
-            set_cursor(*lock(&self.ivars().shared.cursor));
+            guarded((), || {
+                self.ivars().shared.hovering.store(true, Ordering::SeqCst);
+                set_cursor(*lock(&self.ivars().shared.cursor));
+            });
         }
 
         #[unsafe(method(mouseExited:))]
         fn mouse_exited(&self, _event: &NSEvent) {
-            self.ivars().shared.hovering.store(false, Ordering::SeqCst);
-            set_cursor(PetCursor::Arrow);
+            guarded((), || {
+                self.ivars().shared.hovering.store(false, Ordering::SeqCst);
+                set_cursor(PetCursor::Arrow);
+            });
         }
 
         #[unsafe(method(updateTrackingAreas))]
         fn update_tracking_areas(&self) {
-            // SAFETY: NSView's own handling first.
-            let () = unsafe { msg_send![super(self), updateTrackingAreas] };
-            for area in self.trackingAreas().iter() {
-                self.removeTrackingArea(&area);
-            }
-            self.track();
+            guarded((), || {
+                // SAFETY: NSView's own handling first.
+                let () = unsafe { msg_send![super(self), updateTrackingAreas] };
+                for area in self.trackingAreas().iter() {
+                    self.removeTrackingArea(&area);
+                }
+                self.track();
+            });
         }
     }
 );
@@ -494,15 +517,17 @@ fn make_panel(mtm: MainThreadMarker, shared: Arc<Shared>) -> Panel {
     *lock(&LAST_PANEL) = Some(MainOnly(panel.clone()));
     let watched = Arc::downgrade(&shared);
     let block = block2::RcBlock::new(move |_note: std::ptr::NonNull<NSNotification>| {
-        let (Some(shared), Some(mtm)) = (watched.upgrade(), MainThreadMarker::new()) else { return };
-        let read = Desktop::read(mtm);
-        let units = read.units;
-        let before = std::mem::replace(&mut *lock(&shared.desktop), read).units;
-        shared.reduce_motion.store(reduce_motion(), Ordering::SeqCst);
-        if (units - before).abs() > f64::EPSILON {
-            shared.emit(PetEvent::DpiChanged { scale: units });
-        }
-        shared.emit(PetEvent::DisplayChanged);
+        guarded((), || {
+            let (Some(shared), Some(mtm)) = (watched.upgrade(), MainThreadMarker::new()) else { return };
+            let read = Desktop::read(mtm);
+            let units = read.units;
+            let before = std::mem::replace(&mut *lock(&shared.desktop), read).units;
+            shared.reduce_motion.store(reduce_motion(), Ordering::SeqCst);
+            if (units - before).abs() > f64::EPSILON {
+                shared.emit(PetEvent::DpiChanged { scale: units });
+            }
+            shared.emit(PetEvent::DisplayChanged);
+        });
     });
     // SAFETY: a block that only reads AppKit on the main thread, where AppKit posts the notice (no queue).
     let observer = unsafe {

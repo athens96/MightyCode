@@ -212,6 +212,8 @@ pub(crate) struct Shared {
     disposed: AtomicBool,
     /// This PC shares with paired computers: the link runs even while the phone remote is off.
     desktops: AtomicBool,
+    /// Set when a pre-`host-auth` relay refuses query-less sockets with 4400/4401, falling back to query-string `hostToken`.
+    query_auth: AtomicBool,
     table: Mutex<Table>,
     /// C#'s `DirectAuthFailures` (W8-C's `direct::admit`).
     failures: crate::direct::admit::DirectAuthFailures,
@@ -277,6 +279,7 @@ impl RelayHost {
                 generation: AtomicU64::new(0),
                 disposed: AtomicBool::new(false),
                 desktops: AtomicBool::new(false),
+                query_auth: AtomicBool::new(false),
                 table: Mutex::new(Table { clients: HashMap::new(), reserved: vec![], next_reservation: 1 }),
                 failures: crate::direct::admit::DirectAuthFailures::default(),
                 status: Mutex::new(MobileRelayStatus::disabled()),
@@ -678,6 +681,7 @@ impl Shared {
             return Ok(());
         }
         let relay = effective_relay(value.relay_url.as_deref(), DEFAULT_RELAY).ok_or(RelayError::InvalidRelay)?;
+        self.query_auth.store(false, Ordering::SeqCst);
         let (lifetime, cancelled) = watch::channel(false);
         let current = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.publish(false, "connecting", None, None);
@@ -707,18 +711,31 @@ impl Shared {
         }
     }
 
-    /// The control socket's address (`SocketUri`): never logged.
-    fn socket_url(&self, relay: &str, connection: Option<&str>) -> String {
-        let mut query = format!(
-            "serverId={}&role=server&v=1&hostToken={}",
-            escape_data(&self.identity.server_id()),
-            escape_data(&self.identity.host_token())
-        );
+    /// The control or data socket's address (`SocketUri`): never logged. Prefers omitting `hostToken` from the URL query string (sending
+    /// it in the first `host-auth` WebSocket frame instead), falling back to query-string `hostToken` only if a legacy relay refuses
+    /// query-less host connections.
+    fn socket_url(&self, relay: &str, connection: Option<&str>, query_auth: bool) -> String {
+        let mut query = format!("serverId={}&role=server&v=1", escape_data(&self.identity.server_id()));
+        if query_auth {
+            query.push_str("&hostToken=");
+            query.push_str(&escape_data(&self.identity.host_token()));
+        }
         if let Some(connection) = connection {
             query.push_str("&connectionId=");
             query.push_str(&escape_data(connection));
         }
         format!("{relay}/ws?{query}")
+    }
+
+    /// Sends the first-frame `{"type":"host-auth","hostToken":...}` message immediately after a relay WebSocket connects.
+    async fn send_host_auth(&self, socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>) -> bool {
+        let token = self.identity.host_token();
+        let frame = serde_json::json!({
+            "type": "host-auth",
+            "hostToken": token.as_str(),
+        })
+        .to_string();
+        socket.send(Message::Text(frame.into())).await.is_ok()
     }
 
     /// `RunAsync`: the control loop of one generation — dial, keep alive, open a data socket per `connected` notice, close one per
@@ -728,16 +745,33 @@ impl Shared {
         while !*cancelled.borrow() && current == self.generation.load(Ordering::SeqCst) {
             let mut connected = false;
             let mut close: Option<u16> = None;
-            let url = self.socket_url(&relay, None);
+            let used_query_auth = self.query_auth.load(Ordering::SeqCst);
+            let url = self.socket_url(&relay, None, used_query_auth);
             let dialled = tokio::select! {
-                dialled = dial(&url, self.platform.proxy.as_ref()) => dialled.ok(),
+                dialled = dial(&url, self.platform.proxy.as_ref()) => Some(dialled),
                 _ = until_true(&mut cancelled) => None,
             };
-            if let Some(mut socket) = dialled {
-                connected = true;
-                delay = 1;
-                self.publish(true, "connected", None, None);
-                close = self.control(&mut socket, &relay, &mut cancelled).await;
+            let mut immediate_auth_refusal = matches!(dialled, Some(Err(DialError::Http(400 | 401))));
+            if let Some(Ok(mut socket)) = dialled {
+                let authenticated = if used_query_auth {
+                    true
+                } else {
+                    tokio::select! {
+                        sent = self.send_host_auth(&mut socket) => sent,
+                        _ = until_true(&mut cancelled) => false,
+                    }
+                };
+                if authenticated {
+                    let opened_at = Instant::now();
+                    connected = true;
+                    self.publish(true, "connected", None, None);
+                    close = self.control(&mut socket, &relay, &mut cancelled).await;
+                    if matches!(close, Some(4400 | 4401)) && opened_at.elapsed() < Duration::from_secs(2) {
+                        immediate_auth_refusal = true;
+                    } else {
+                        delay = 1;
+                    }
+                }
             }
             // The relay's phones end with their control socket.
             let ended: Vec<Arc<Connection>> = self.clients().into_iter().filter(|c| !c.direct).collect();
@@ -749,6 +783,10 @@ impl Shared {
             }
             if *cancelled.borrow() || current != self.generation.load(Ordering::SeqCst) {
                 break;
+            }
+            if !used_query_auth && immediate_auth_refusal {
+                self.query_auth.store(true, Ordering::SeqCst);
+                continue;
             }
             // The relay says why it closed; a socket that ended without a word had stopped answering.
             self.publish(false, "reconnecting", Some(close_reason(close, connected)), Some(delay));
@@ -825,10 +863,13 @@ impl Shared {
             table.clients.insert(id.to_string(), connection.clone());
             connection
         };
-        let url = self.socket_url(relay, Some(id));
+        let query_auth = self.query_auth.load(Ordering::SeqCst);
+        let url = self.socket_url(relay, Some(id), query_auth);
         let shared = self.clone();
-        let open: BoxFuture<'static, Option<WebSocketStream<MaybeTlsStream<TcpStream>>>> =
-            Box::pin(async move { dial(&url, shared.platform.proxy.as_ref()).await.ok() });
+        let open: BoxFuture<'static, Option<WebSocketStream<MaybeTlsStream<TcpStream>>>> = Box::pin(async move {
+            let mut socket = dial(&url, shared.platform.proxy.as_ref()).await.ok()?;
+            if query_auth { Some(socket) } else { shared.send_host_auth(&mut socket).await.then_some(socket) }
+        });
         let shared = self.clone();
         self.spawn(async move { shared.serve(connection, open).await });
         true
@@ -1208,8 +1249,11 @@ pub async fn dial(url: &str, proxy: &dyn mighty_platform::ProxyResolver) -> Resu
     };
     let host = parsed.host_str().filter(|h| !h.is_empty()).ok_or(DialError::Address)?.to_string();
     let port = parsed.port().unwrap_or(default);
-    // A system proxy that cannot be read is no proxy (.NET goes straight then).
-    let route = proxy.resolve(url).await.unwrap_or(Proxy::Direct);
+    // A system proxy that cannot be read is no proxy (.NET goes straight then). Strip query/fragment so PAC scripts never see tokens.
+    let mut proxy_url = parsed.clone();
+    proxy_url.set_query(None);
+    proxy_url.set_fragment(None);
+    let route = proxy.resolve(proxy_url.as_str()).await.unwrap_or(Proxy::Direct);
     let tcp = match route {
         Proxy::Direct => TcpStream::connect(format!("{host}:{port}")).await.map_err(|_| DialError::Connect)?,
         Proxy::Http { host: proxy_host, port: proxy_port } => {

@@ -141,6 +141,7 @@ fn environment(host: &Host) -> std::collections::BTreeMap<String, String> {
 
 /// C# `RedrawSetup`: every list on screen drawn again now (the frame's clock would on its next tick).
 pub fn redraw(host: &Host) {
+    host.shell_dirty();
     for surface in [SETUP_SURFACE, crate::settings::SURFACE] {
         if crate::native::is_open(host, surface) {
             crate::native::touch(host, surface);
@@ -589,7 +590,7 @@ async fn finish_run(host: &Arc<Host>, run: Option<Instant>) {
     refresh(host, true, None).await;
     // Settings › 구성 요소 shows the result itself: the screen comes back only when neither list shows.
     let shown = crate::native::is_open(host, SETUP_SURFACE) || crate::native::is_open(host, crate::settings::SURFACE);
-    let front = host.app.get_webview(crate::host::WINDOW).and_then(|page| page.window().is_focused().ok()).unwrap_or(false);
+    let front = host.app.get_webview_window(crate::host::WINDOW).and_then(|window| window.is_focused().ok()).unwrap_or(false);
     if lock(&of(host).screen).after_finish(shown, front) {
         open(host, None);
     }
@@ -701,6 +702,7 @@ pub fn item_for(host: &Host, kind: &str, provider: &str, remote: bool, runtime: 
 mod tests {
     use mighty_core::locale::Locale;
     use mighty_core::settings_sections as sections;
+    #[cfg(feature = "dev-harness")]
     use serde_json::json;
 
     /// W9-F: the install script's folder — `--profile`'s own in any build; for the default profile C#'s `<LocalAppData>/MightyCode/setup`
@@ -731,20 +733,23 @@ mod tests {
         assert!(names.contains("openSetup") && names.contains("installCli"), "{names:?}");
         let elevated = mighty_run::strings::get("setup.windows.error.elevated");
         assert!(!elevated.is_empty() && !elevated.starts_with("setup."), "the elevated refusal is said in words");
-        let checks: Vec<&str> = crate::smoke_setup::checks(&json!({})).into_iter().map(|(name, _)| name).collect();
-        for name in [
-            "setupView",
-            "setup",
-            "setupToolsFirstRunDecision",
-            "setupToolsWelcomeButton",
-            "setupToolsRows",
-            "setupToolsActions",
-            "setupToolsCancelledWithoutTerminal",
-            "setupToolsBlockedPaneInstall",
-            "setupTools",
-            "setupInstallCli",
-        ] {
-            assert!(checks.contains(&name), "the smoke reads {name}");
+        #[cfg(feature = "dev-harness")]
+        {
+            let checks: Vec<&str> = crate::smoke_setup::checks(&json!({})).into_iter().map(|(name, _)| name).collect();
+            for name in [
+                "setupView",
+                "setup",
+                "setupToolsFirstRunDecision",
+                "setupToolsWelcomeButton",
+                "setupToolsRows",
+                "setupToolsActions",
+                "setupToolsCancelledWithoutTerminal",
+                "setupToolsBlockedPaneInstall",
+                "setupTools",
+                "setupInstallCli",
+            ] {
+                assert!(checks.contains(&name), "the smoke reads {name}");
+            }
         }
     }
 
@@ -759,7 +764,10 @@ mod tests {
         assert_eq!(sections::title_of(&locale, sections::COMPONENTS).as_deref(), Some(titles[0].as_str()));
         assert!(crate::settings::groups(&locale, "cli").is_empty(), "no CLI tab");
         assert_eq!(sections::moved_category("cli"), "tools");
-        let checks: Vec<&str> = crate::smoke_setup::checks(&json!({})).into_iter().map(|(name, _)| name).collect();
-        assert!(checks.contains(&"componentsSection") && checks.contains(&"statusLine"));
+        #[cfg(feature = "dev-harness")]
+        {
+            let checks: Vec<&str> = crate::smoke_setup::checks(&json!({})).into_iter().map(|(name, _)| name).collect();
+            assert!(checks.contains(&"componentsSection") && checks.contains(&"statusLine"));
+        }
     }
 }

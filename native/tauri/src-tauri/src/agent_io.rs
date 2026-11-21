@@ -14,6 +14,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use mighty_delegation::agent_io::binding::AgentIoBinding;
@@ -38,6 +39,8 @@ struct AgentIoState {
     handler: Mutex<Option<Arc<dyn DelegationHandler>>>,
     /// The agent panes the last reconcile saw (C# `agentBoundPanes`): only a pane seen and then gone is revoked.
     seen: Mutex<HashSet<String>>,
+    /// State revision last reconciled (`u64::MAX` before first reconcile), so idle 10 Hz polls skip `HashSet` churn.
+    last_revision: AtomicU64,
 }
 
 /// The state, made the first time it is asked for.
@@ -45,7 +48,12 @@ fn state(host: &Host) -> Arc<AgentIoState> {
     if let Some(state) = host.app.try_state::<Arc<AgentIoState>>() {
         return state.inner().clone();
     }
-    let state = Arc::new(AgentIoState { io: Mutex::new(None), handler: Mutex::new(None), seen: Mutex::new(HashSet::new()) });
+    let state = Arc::new(AgentIoState {
+        io: Mutex::new(None),
+        handler: Mutex::new(None),
+        seen: Mutex::new(HashSet::new()),
+        last_revision: AtomicU64::new(u64::MAX),
+    });
     // Another thread may have managed one meanwhile: that one is the state.
     host.app.manage(state.clone());
     host.app.try_state::<Arc<AgentIoState>>().map(|s| s.inner().clone()).unwrap_or(state)
@@ -137,12 +145,19 @@ pub fn factory(host: &Arc<Host>) -> Option<BindingFactory> {
 
 /// C# `ReconcileAgentIO`: an agent pane that left the state loses its binding (and its queued calls); its terminal goes with it
 /// (terminal.rs). Only a pane an earlier look saw is revoked: the page's copy of the state may not have taken a run's new pane yet,
-/// and its binding stays. Called on the host's 100 ms poll without the state's lock held: one look at the pane ids, nothing more.
+/// and its binding stays. Called on the host's 100 ms poll without the state's lock held: skipped lock-free while revision is unchanged.
 pub fn reconcile(host: &Host) {
     let Some(state) = host.app.try_state::<Arc<AgentIoState>>().map(|state| state.inner().clone()) else { return };
     let Some(io) = lock(&state.io).clone() else { return };
-    let agents: HashSet<String> =
-        host.view().snapshot.sessions().iter().filter(|s| s.kind() == "claude").map(|s| s.id().to_string()).collect();
+    let rev = host.revision();
+    if state.last_revision.load(Ordering::Acquire) == rev {
+        return;
+    }
+    let (rev, agents): (u64, HashSet<String>) = {
+        let view = host.view();
+        (view.revision(), view.snapshot.sessions().iter().filter(|s| s.kind() == "claude").map(|s| s.id().to_string()).collect())
+    };
+    state.last_revision.store(rev, Ordering::Release);
     let gone = retire(&mut lock(&state.seen), agents);
     for pane in gone {
         io.revoke(&pane);

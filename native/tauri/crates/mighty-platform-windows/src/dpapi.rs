@@ -14,7 +14,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use mighty_platform::{PlatformError, Result, SecretVault};
 use sha2::{Digest, Sha256};
@@ -115,8 +115,14 @@ impl SecretVault for DpapiVault {
         if secret.is_empty() {
             return Err(PlatformError::Invalid("an empty secret".into()));
         }
+        if secret.len() > MAXIMUM_BLOB {
+            return Err(PlatformError::Invalid("the secret is too large".into()));
+        }
         let folder = self.prepare_folder()?;
         let blob = transform(secret.as_bytes(), &entropy(id), Direction::Encrypt)?;
+        if blob.len() > MAXIMUM_BLOB {
+            return Err(PlatformError::Invalid("the encrypted secret is too large".into()));
+        }
         atomic_write(&folder.join(file_name(id)), &blob)
     }
 
@@ -145,13 +151,16 @@ fn read_bounded(path: &Path) -> Option<Vec<u8>> {
     (!blob.is_empty() && blob.len() <= MAXIMUM_BLOB).then_some(blob)
 }
 
-/// Writes `bytes` beside `path` and renames it over, so a reader sees the old file or the new one, never half of one.
+/// Writes `bytes` beside `path` using `create_new(true)` with an unpredictable temporary name and renames it over, so a reader sees
+/// the old file or the new one, never half of one, and a pre-existing file/link at the temporary name is never clobbered.
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let temporary = path.with_extension(format!("bin.{}-{nanos}.tmp", std::process::id()));
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).map_err(|error| PlatformError::Refused(format!("random temp name: {error}")))?;
+    let suffix: String = random.iter().map(|b| format!("{b:02x}")).collect();
+    let temporary = path.with_extension(format!("bin.{}-{suffix}.tmp", std::process::id()));
     let written = (|| {
         use std::io::Write;
-        let mut file = fs::File::create(&temporary)?;
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
@@ -311,6 +320,8 @@ pub(crate) fn owned_by(folder: &Path, user: &Sid) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
 
     fn temporary(name: &str) -> PathBuf {
@@ -350,6 +361,7 @@ mod tests {
         vault.delete("a").unwrap();
         assert_eq!(vault.load("a"), None);
         assert!(vault.save("e", "").is_err());
+        assert!(vault.save("too-big", &"x".repeat(MAXIMUM_BLOB + 1)).is_err(), "secrets over 16 KiB must be refused in save()");
         let _ = fs::remove_dir_all(directory);
     }
 }

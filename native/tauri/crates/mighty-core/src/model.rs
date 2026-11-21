@@ -333,6 +333,84 @@ impl AppSnapshot {
         self.workspaces.get_or_insert_with(Vec::new)
     }
 
+    /// Whether every non-session field written by `write_with(..., false, false)` is identical (ordered maps and bit-exact floats),
+    /// guaranteeing byte-identical JSON output when `true`.
+    pub fn same_non_session_fields(&self, other: &AppSnapshot) -> bool {
+        let AppSnapshot {
+            version,
+            workspaces,
+            sessions: _,
+            active_workspace_id,
+            active_session_id,
+            expanded_workspace_ids,
+            layout,
+            pane_layouts,
+            pane_layout_modes,
+            pane_layout_active_session_ids,
+            theme,
+            sidebar_width,
+            sidebar_collapsed,
+            trusted_status_lines,
+            status_line_enabled,
+            completion_notifications_enabled,
+            auto_update_clis,
+            auto_update_plugins,
+            auto_login_clis,
+            background_work_open,
+            last_create_location,
+            antigravity_migrated,
+            agent_checklist,
+            reference_bubble_width,
+            reference_bubble_height,
+            claude_direct_usage_lookup_enabled,
+            app_update_auto_check,
+            app_update_last_checked_at,
+            app_update_manifest_url_override,
+            language_preference,
+            settings_pane,
+            mobile_remote,
+            model_defaults,
+            phase_models,
+        } = self;
+        *version == other.version
+            && active_workspace_id == &other.active_workspace_id
+            && active_session_id == &other.active_session_id
+            && layout == &other.layout
+            && theme == &other.theme
+            && sidebar_width.to_bits() == other.sidebar_width.to_bits()
+            && *sidebar_collapsed == other.sidebar_collapsed
+            && *status_line_enabled == other.status_line_enabled
+            && *completion_notifications_enabled == other.completion_notifications_enabled
+            && auto_update_clis == &other.auto_update_clis
+            && auto_update_plugins == &other.auto_update_plugins
+            && auto_login_clis == &other.auto_login_clis
+            && background_work_open == &other.background_work_open
+            && last_create_location == &other.last_create_location
+            && antigravity_migrated == &other.antigravity_migrated
+            && agent_checklist == &other.agent_checklist
+            && same_opt_f64(*reference_bubble_width, other.reference_bubble_width)
+            && same_opt_f64(*reference_bubble_height, other.reference_bubble_height)
+            && *claude_direct_usage_lookup_enabled == other.claude_direct_usage_lookup_enabled
+            && *app_update_auto_check == other.app_update_auto_check
+            && app_update_last_checked_at == &other.app_update_last_checked_at
+            && app_update_manifest_url_override == &other.app_update_manifest_url_override
+            && language_preference == &other.language_preference
+            && settings_pane == &other.settings_pane
+            && expanded_workspace_ids == &other.expanded_workspace_ids
+            && workspaces == &other.workspaces
+            && same_ordered_map(pane_layouts.as_ref(), other.pane_layouts.as_ref(), |a, b| match (a, b) {
+                (None, None) => true,
+                (Some(x), Some(y)) => same_layout_node(x, y),
+                _ => false,
+            })
+            && same_ordered_map(pane_layout_modes.as_ref(), other.pane_layout_modes.as_ref(), PartialEq::eq)
+            && same_ordered_map(pane_layout_active_session_ids.as_ref(), other.pane_layout_active_session_ids.as_ref(), PartialEq::eq)
+            && same_ordered_map(trusted_status_lines.as_ref(), other.trusted_status_lines.as_ref(), PartialEq::eq)
+            && mobile_remote == &other.mobile_remote
+            && same_opt(model_defaults.as_ref(), other.model_defaults.as_ref(), same_model_defaults)
+            && phase_models == &other.phase_models
+    }
+
     /// Whether the state holds anything of the remote mirror (a mirror workspace or a mirrored pane).
     pub fn has_mirrors(&self) -> bool {
         self.workspaces().iter().any(|w| w.remote.as_ref().is_some_and(|r| r.mirror)) || self.sessions().iter().any(|s| s.mirror.is_some())
@@ -1446,6 +1524,206 @@ impl RunSession {
             _ => self.logs().len(),
         }
     }
+
+    /// Whether every non-list field written by `write_with(..., false, false)` is identical (ordered maps and bit-exact floats),
+    /// guaranteeing byte-identical JSON field maps when `true`.
+    pub fn same_non_list_fields(&self, other: &RunSession) -> bool {
+        let RunSession {
+            id,
+            workspace_id,
+            title,
+            kind,
+            status,
+            model,
+            provider,
+            settings,
+            logs: _,
+            resume_id,
+            created_at,
+            draft,
+            run_timing,
+            session_usage,
+            current_activity: _,
+            agent_view_mode,
+            mighty_style,
+            mighty_style_hash,
+            mighty_style_since,
+            graph_runs: _,
+            graph_result_size,
+            graph_plan_size,
+            graph_block_sizes,
+            graph_sizes_layout,
+            graph_view_mode,
+            flow_log_collapsed,
+            workspace_profile_key,
+            owner_session_id,
+            title_mode,
+            plan_history,
+            todo_progress,
+            background_work,
+            parent_session_id,
+            working_folder,
+            pane_worktree,
+            ask_target,
+            shell_block_runs,
+            mirror: _,
+            body_on_disk: _,
+            stored_digest: _,
+        } = self;
+        id == &other.id
+            && workspace_id == &other.workspace_id
+            && title == &other.title
+            && kind == &other.kind
+            && status == &other.status
+            && model == &other.model
+            && provider == &other.provider
+            && resume_id == &other.resume_id
+            && created_at == &other.created_at
+            && draft == &other.draft
+            && agent_view_mode == &other.agent_view_mode
+            && mighty_style == &other.mighty_style
+            && mighty_style_hash == &other.mighty_style_hash
+            && mighty_style_since == &other.mighty_style_since
+            && graph_sizes_layout == &other.graph_sizes_layout
+            && graph_view_mode == &other.graph_view_mode
+            && flow_log_collapsed == &other.flow_log_collapsed
+            && workspace_profile_key == &other.workspace_profile_key
+            && owner_session_id == &other.owner_session_id
+            && title_mode == &other.title_mode
+            && parent_session_id == &other.parent_session_id
+            && working_folder == &other.working_folder
+            && ask_target == &other.ask_target
+            && run_timing == &other.run_timing
+            && same_opt(settings.as_ref(), other.settings.as_ref(), same_run_settings)
+            && same_opt(session_usage.as_ref(), other.session_usage.as_ref(), same_session_usage)
+            && same_opt(graph_result_size.as_ref(), other.graph_result_size.as_ref(), same_graph_block_size)
+            && same_opt(graph_plan_size.as_ref(), other.graph_plan_size.as_ref(), same_graph_block_size)
+            && same_ordered_map(graph_block_sizes.as_ref(), other.graph_block_sizes.as_ref(), |a, b| {
+                same_opt(a.as_ref(), b.as_ref(), same_graph_block_size)
+            })
+            && plan_history == &other.plan_history
+            && todo_progress == &other.todo_progress
+            && background_work == &other.background_work
+            && pane_worktree == &other.pane_worktree
+            && shell_block_runs == &other.shell_block_runs
+    }
+}
+
+fn same_opt_f64(a: Option<f64>, b: Option<f64>) -> bool {
+    a.map(f64::to_bits) == b.map(f64::to_bits)
+}
+
+fn same_opt<T>(a: Option<&T>, b: Option<&T>, eq: impl Fn(&T, &T) -> bool) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => eq(x, y),
+        _ => false,
+    }
+}
+
+fn same_ordered_map<K: Eq, V>(a: Option<&IndexMap<K, V>>, b: Option<&IndexMap<K, V>>, eq: impl Fn(&V, &V) -> bool) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x.len() == y.len() && x.iter().zip(y.iter()).all(|((k1, v1), (k2, v2))| k1 == k2 && eq(v1, v2)),
+        _ => false,
+    }
+}
+
+fn same_layout_node(a: &PaneLayoutNode, b: &PaneLayoutNode) -> bool {
+    let PaneLayoutNode { id, kind, session_ids, selected_session_id, axis, ratio, children } = a;
+    id == &b.id
+        && kind == &b.kind
+        && session_ids == &b.session_ids
+        && selected_session_id == &b.selected_session_id
+        && axis == &b.axis
+        && ratio.to_bits() == b.ratio.to_bits()
+        && match (children, &b.children) {
+            (None, None) => true,
+            (Some(x), Some(y)) => {
+                x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| same_opt(p.as_ref(), q.as_ref(), same_layout_node))
+            }
+            _ => false,
+        }
+}
+
+fn same_provider_mode_defaults(a: &ProviderModeDefaults, b: &ProviderModeDefaults) -> bool {
+    let ProviderModeDefaults { mode_defaults, registered_models } = a;
+    same_ordered_map(mode_defaults.as_ref(), b.mode_defaults.as_ref(), PartialEq::eq) && registered_models == &b.registered_models
+}
+
+fn same_model_defaults(a: &ModelDefaultsConfig, b: &ModelDefaultsConfig) -> bool {
+    let ModelDefaultsConfig { claude, codex } = a;
+    same_opt(claude.as_ref(), b.claude.as_ref(), same_provider_mode_defaults)
+        && same_opt(codex.as_ref(), b.codex.as_ref(), same_provider_mode_defaults)
+}
+
+fn same_graph_block_size(a: &GraphBlockSize, b: &GraphBlockSize) -> bool {
+    let GraphBlockSize { width, height } = a;
+    width.to_bits() == b.width.to_bits() && height.to_bits() == b.height.to_bits()
+}
+
+fn same_run_settings(a: &RunSettings, b: &RunSettings) -> bool {
+    let RunSettings { effort, permission_mode, max_turns, max_budget_usd, fast_mode, web_search, network_access, advisor } = a;
+    effort == &b.effort
+        && permission_mode == &b.permission_mode
+        && max_turns == &b.max_turns
+        && same_opt_f64(*max_budget_usd, b.max_budget_usd)
+        && *fast_mode == b.fast_mode
+        && web_search == &b.web_search
+        && *network_access == b.network_access
+        && advisor == &b.advisor
+}
+
+fn same_rate_limit(a: &SessionRateLimit, b: &SessionRateLimit) -> bool {
+    let SessionRateLimit { kind, percent_used, resets_at } = a;
+    kind == &b.kind && same_opt_f64(*percent_used, b.percent_used) && resets_at == &b.resets_at
+}
+
+fn same_session_usage(a: &SessionUsage, b: &SessionUsage) -> bool {
+    let SessionUsage {
+        provider,
+        source,
+        token_scope,
+        model,
+        selected_model,
+        provider_session_id,
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+        reasoning_tokens,
+        total_tokens,
+        context_used_tokens,
+        context_window_tokens,
+        cost_usd,
+        cost_scope,
+        rate_limits,
+        rate_limits_updated_at,
+        updated_at,
+    } = a;
+    provider == &b.provider
+        && source == &b.source
+        && token_scope == &b.token_scope
+        && model == &b.model
+        && selected_model == &b.selected_model
+        && provider_session_id == &b.provider_session_id
+        && input_tokens == &b.input_tokens
+        && output_tokens == &b.output_tokens
+        && cache_read_tokens == &b.cache_read_tokens
+        && cache_write_tokens == &b.cache_write_tokens
+        && reasoning_tokens == &b.reasoning_tokens
+        && total_tokens == &b.total_tokens
+        && context_used_tokens == &b.context_used_tokens
+        && context_window_tokens == &b.context_window_tokens
+        && same_opt_f64(*cost_usd, b.cost_usd)
+        && cost_scope == &b.cost_scope
+        && match (rate_limits, &b.rate_limits) {
+            (None, None) => true,
+            (Some(x), Some(y)) => x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| same_rate_limit(p, q)),
+            _ => false,
+        }
+        && rate_limits_updated_at == &b.rate_limits_updated_at
+        && updated_at == &b.updated_at
 }
 
 /// A pane's run settings (C# `RunSettings` and its `RunSettingsJsonConverter`, which reads the exact names and always writes

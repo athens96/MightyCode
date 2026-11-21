@@ -13,6 +13,7 @@
 //! encoding it is in now (its byte order mark too: the store keeps originals without one) and its permissions; its line endings are the
 //! original's, which the store kept as they were.
 
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use mighty_composer::text::{TextEncodingKind, byte_order_mark, decode_text};
@@ -151,10 +152,36 @@ pub fn apply(
     outcomes
 }
 
-/// The real path of the regular file at `relative` inside `root`; None when it is gone, a folder or leaves the root.
+/// Maximum file size read during revert (matches [`diff::MAXIMUM_SIDE_BYTES`]).
+const MAXIMUM_BYTES: u64 = diff::MAXIMUM_SIDE_BYTES as u64;
+
+#[cfg(windows)]
+fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    meta.file_attributes() & 0x0400 != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn same_file(expected: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    expected.dev() == opened.dev() && expected.ino() == opened.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file(_expected: &std::fs::Metadata, _opened: &std::fs::Metadata) -> bool {
+    true
+}
+
+/// The real path of the regular file at `relative` inside `root`; None when it is gone, a link, a folder or leaves the root.
 fn regular_file(relative: &str, root: &str) -> Option<PathBuf> {
     let real = workspace_files::resolve(relative, Path::new(root))?;
-    std::fs::symlink_metadata(&real).ok()?.file_type().is_file().then_some(real)
+    let meta = std::fs::symlink_metadata(&real).ok()?;
+    (!meta.file_type().is_symlink() && !is_reparse_point(&meta) && meta.file_type().is_file()).then_some(real)
 }
 
 fn item(store: &FileOriginalStore, path: &str, original: &FileOriginal, root: &str, touched_later: bool) -> Item {
@@ -204,10 +231,27 @@ fn encode(text: &str, encoding: TextEncodingKind) -> Option<Vec<u8>> {
 }
 
 /// Writes `text` in place of the file at `path` in the encoding the file is in now, keeping its permissions: to a temporary name beside
-/// it, then moved over. Refused, the file untouched, when the bytes would not read back as `text`.
+/// it, then moved over. Refused, the file untouched, when `path` is a symlink/non-regular file, exceeds [`MAXIMUM_BYTES`], or when the
+/// bytes would not read back as `text`.
 fn write(text: &str, path: &Path) -> std::io::Result<()> {
-    let current = std::fs::read(path)?;
-    let permissions = std::fs::metadata(path)?.permissions();
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() || is_reparse_point(&meta) || !meta.file_type().is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "revert target is not a regular file"));
+    }
+    if meta.len() > MAXIMUM_BYTES {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "revert target exceeds maximum size"));
+    }
+    let permissions = meta.permissions();
+    let file = std::fs::File::open(path)?;
+    let opened_meta = file.metadata()?;
+    if !opened_meta.file_type().is_file() || !same_file(&meta, &opened_meta) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "revert target changed before read"));
+    }
+    let mut current = Vec::new();
+    file.take(MAXIMUM_BYTES + 1).read_to_end(&mut current)?;
+    if current.len() as u64 > MAXIMUM_BYTES {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "revert target exceeds maximum size"));
+    }
     let encoding = decode_text(&current, false).map_or(TextEncodingKind::Utf8, |d| d.encoding);
     let refused = || std::io::Error::new(std::io::ErrorKind::InvalidData, "the original does not fit the file's encoding");
     let bytes = encode(text, encoding).ok_or_else(refused)?;
@@ -217,9 +261,14 @@ fn write(text: &str, path: &Path) -> std::io::Result<()> {
     }
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let temporary = path.with_file_name(format!(".{name}.{}.revert.tmp", uuid::Uuid::new_v4().simple()));
-    let written = std::fs::write(&temporary, &bytes)
-        .and_then(|()| std::fs::set_permissions(&temporary, permissions))
-        .and_then(|()| std::fs::rename(&temporary, path));
+    let written = (|| -> std::io::Result<()> {
+        let mut temp_file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        temp_file.write_all(&bytes)?;
+        temp_file.sync_all()?;
+        drop(temp_file);
+        std::fs::set_permissions(&temporary, permissions)?;
+        std::fs::rename(&temporary, path)
+    })();
     if written.is_err() {
         let _ = std::fs::remove_file(&temporary);
     }
@@ -247,5 +296,31 @@ mod tests {
             assert_eq!(decoded.text, text, "{kind:?}");
         }
         assert!(encode("emoji 😀", TextEncodingKind::Cp949).is_none(), "CP949 has no code for it");
+    }
+
+    /// P1-SEC-2: `write` refuses symlinks and files exceeding `MAXIMUM_BYTES` without mutating targets.
+    #[test]
+    fn write_rejects_symlinks_and_oversized_files() {
+        let base = std::env::temp_dir().join(format!("mighty-revert-sec2-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&base).unwrap();
+
+        // Oversized target (> 1 MiB) is refused.
+        let huge = base.join("huge.txt");
+        std::fs::write(&huge, vec![b'a'; (MAXIMUM_BYTES as usize) + 16]).unwrap();
+        assert!(write("small\n", &huge).is_err(), "files exceeding MAXIMUM_BYTES must be rejected");
+        assert_eq!(std::fs::metadata(&huge).unwrap().len(), MAXIMUM_BYTES + 16, "oversized file left untouched");
+
+        // Symlink target is refused without touching the pointed-to file.
+        #[cfg(unix)]
+        {
+            let target = base.join("real.txt");
+            let link = base.join("link.txt");
+            std::fs::write(&target, "secret\n").unwrap();
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            assert!(write("overwritten\n", &link).is_err(), "symlink target must be rejected");
+            assert_eq!(std::fs::read_to_string(&target).unwrap(), "secret\n", "symlink target content untouched");
+        }
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

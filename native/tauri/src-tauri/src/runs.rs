@@ -20,7 +20,9 @@ use mighty_graph::TrackerFactory;
 use mighty_history::{codex_sessions, history};
 use mighty_platform::{ProcessHost, ShellEnvironment};
 use mighty_run::antigravity::AntigravityRuleLeases;
-use mighty_run::model::{CliCommand, ModelCatalog, ProviderRuntime};
+#[cfg(feature = "dev-harness")]
+use mighty_run::model::CliCommand;
+use mighty_run::model::{ModelCatalog, ProviderRuntime};
 use mighty_run::parser::{ImageError, ImageStore};
 use mighty_run::providers::{self, Finder, ProviderCatalog};
 use mighty_run::service::{Configure, RunService, RunServiceOptions, ServiceEvent};
@@ -35,6 +37,7 @@ const IMAGE_CACHE_BYTES: u64 = 200 * 1_048_576;
 /// app's `ask_user` tool; its Antigravity, the same binary as C#'s fake agy (`--agy-denied`, refused `echo hi` on a new conversation)
 /// over the smoke's own agy settings ([`FakeClaude::agy_settings`]); and the ACP step's opencode (`--fake-acp`, smoke_acp.rs). Every
 /// other provider is missing.
+#[cfg(feature = "dev-harness")]
 #[derive(Debug, Clone)]
 pub struct FakeClaude {
     pub binary: PathBuf,
@@ -43,6 +46,11 @@ pub struct FakeClaude {
     pub record: PathBuf,
 }
 
+#[cfg(not(feature = "dev-harness"))]
+#[derive(Debug, Clone)]
+pub enum FakeClaude {}
+
+#[cfg(feature = "dev-harness")]
 impl FakeClaude {
     /// The smoke's own agy settings (never the user's): beside the fake's record.
     pub fn agy_settings(&self) -> PathBuf {
@@ -51,6 +59,7 @@ impl FakeClaude {
 }
 
 /// The stand-in agy's settings for the fake's record `record`: `<record's folder>\agy-home\.gemini\antigravity-cli\settings.json`.
+#[cfg(feature = "dev-harness")]
 pub fn fake_agy_settings(record: &Path) -> PathBuf {
     let folder = record.parent().map(Path::to_path_buf).unwrap_or_default();
     folder.join("agy-home").join(".gemini").join("antigravity-cli").join("settings.json")
@@ -184,6 +193,7 @@ impl Runs {
         if let Some((separator, sizes)) = crate::platform::number_grouping() {
             mighty_run::strings::set_number_grouping(&separator, &sizes);
         }
+        #[cfg(feature = "dev-harness")]
         let finder: Option<Finder> = fake.map(|fake| {
             let command = CliCommand::new(
                 fake.binary.to_string_lossy().into_owned(),
@@ -239,9 +249,17 @@ impl Runs {
             });
             finder
         });
+        #[cfg(not(feature = "dev-harness"))]
+        let finder: Option<Finder> = {
+            let _ = fake;
+            None
+        };
         // A help capture or perf scenario (W9-H) starts no CLI: none is found, so the runtime read runs none; the help capture's demo CLIs
         // are overrides (`ProviderCatalog::set_override`), which come before the finder.
+        #[cfg(feature = "dev-harness")]
         let special = host.smoke.as_ref().is_some_and(crate::smoke::Smoke::is_special);
+        #[cfg(not(feature = "dev-harness"))]
+        let special = false;
         let finder = finder.or_else(|| {
             special.then(|| {
                 let none: Finder = Arc::new(|_provider: String| Box::pin(async { None }));
@@ -359,6 +377,7 @@ impl Runs {
 
     /// C#'s smoke runtime (`new ProviderRuntime(p, Name(p), true, "fixture", "isolated fixture", Fallback(p), Capabilities(p))` for every
     /// provider): each one available with its built-in list, read from no CLI (the help capture and the perf scenario, W9-H).
+    #[cfg(feature = "dev-harness")]
     pub fn use_fixture_runtime(&self) {
         let mut runtime = crate::host::lock(&self.runtime);
         for provider in mighty_core::wire::PROVIDERS {

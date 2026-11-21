@@ -175,13 +175,16 @@ impl Connection {
     }
 
     /// Hands a checked event to the run while it is still registered. `dispose` takes the same lock, so once it returns even an
-    /// authenticated request still reading its body cannot reach the run.
+    /// authenticated request still reading its body cannot reach the run; the lock is dropped before invoking `receive` so a
+    /// callback cannot deadlock if it re-enters `dispose`.
     fn deliver(&self, value: &Value) -> bool {
-        let mut state = lock(&self.state);
-        if state.released || !self.bridge.upgrade().is_some_and(|bridge| bridge.is_current(self)) {
-            return false;
+        {
+            let mut state = lock(&self.state);
+            if state.released || !self.bridge.upgrade().is_some_and(|bridge| bridge.is_current(self)) {
+                return false;
+            }
+            state.received = state.received.saturating_add(1);
         }
-        state.received = state.received.saturating_add(1);
         (self.receive)(value);
         true
     }
@@ -366,11 +369,14 @@ async fn drain(body: &mut Incoming) {
     .await;
 }
 
-/// C# `ModBridge.HandleAsync`, the body drained after any answer that did not read it.
+/// C# `ModBridge.HandleAsync`, the body drained after any answer that did not read it (except 401/403, which return immediately
+/// without spending time or bandwidth draining an unauthenticated/forbidden caller's body).
 async fn handle(inner: &Inner, remote: SocketAddr, request: Request<Incoming>) -> Response<Empty<Bytes>> {
     let (parts, mut body) = request.into_parts();
     let response = answer(inner, remote, &parts, &mut body).await;
-    drain(&mut body).await;
+    if !matches!(response.status(), StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+        drain(&mut body).await;
+    }
     response
 }
 
@@ -388,7 +394,15 @@ async fn answer(inner: &Inner, remote: SocketAddr, request: &hyper::http::reques
     let authorization: String = headers.get_all("authorization").iter().filter_map(|v| v.to_str().ok()).collect::<Vec<_>>().join(",");
     let connection = if authorization.len() == 71 && authorization.starts_with("Bearer ") {
         let presented = &authorization.as_bytes()[7..];
-        lock(&inner.connections).values().find(|c| fixed_time_equals(presented, c.token.as_bytes())).cloned()
+        let connections = lock(&inner.connections);
+        // Scan every entry in constant time without short-circuiting on the first match.
+        let mut matched: Option<Arc<Connection>> = None;
+        for candidate in connections.values() {
+            if fixed_time_equals(presented, candidate.token.as_bytes()) {
+                matched = Some(candidate.clone());
+            }
+        }
+        matched
     } else {
         None
     };

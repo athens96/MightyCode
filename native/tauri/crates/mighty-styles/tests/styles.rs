@@ -638,3 +638,20 @@ fn styles_a_decision_fails_while_another_process_holds_the_write_lock() {
     store.decide(&style, "approved").expect("approved once the lock is free");
     assert!(single(&profile, &workspace, "corpus-min").runnable());
 }
+
+/// P1-PERF-2: precompiled glob matchers match nested wildcards (`**`, `*`, `?`) and respect dot-file rules.
+#[test]
+fn precompiled_glob_matches_nested_wildcards_and_skips_dotfiles() {
+    let base = Temp::new();
+    std::fs::create_dir_all(base.join("a").join("b")).unwrap();
+    std::fs::create_dir_all(base.join("a").join(".hidden")).unwrap();
+    std::fs::write(base.join("a").join("one.txt"), "1").unwrap();
+    std::fs::write(base.join("a").join("b").join("two.txt"), "2").unwrap();
+    std::fs::write(base.join("a").join("b").join("skip.md"), "3").unwrap();
+    std::fs::write(base.join("a").join(".secret.txt"), "4").unwrap();
+    std::fs::write(base.join("a").join(".hidden").join("three.txt"), "5").unwrap();
+
+    assert_eq!(files::matches(&base.0, "**/*.txt"), vec!["a/b/two.txt", "a/one.txt"]);
+    assert_eq!(files::matches(&base.0, "a/b/t?o.txt"), vec!["a/b/two.txt"]);
+    assert_eq!(files::matches(&base.0, "a/.*.txt"), vec!["a/.secret.txt"]);
+}

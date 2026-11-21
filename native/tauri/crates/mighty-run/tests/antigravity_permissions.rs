@@ -1051,11 +1051,12 @@ fn what_a_crash_left_in_the_other_ledger_goes_too() {
     elsewhere(&other).apply(&grant("agy-1", true, &["command(echo hi)"])).unwrap();
     assert!(folder.text().unwrap().contains("command(echo hi)") && other.exists(), "left behind in the other ledger");
     let written = std::fs::read(&other).unwrap();
-    // A launch that may not write it: the rule leaves agy's settings, the other ledger is left as it is.
+    // A launch that may not write the other ledger (`writes: false`) must NOT mutate `settings.json` either, because it cannot
+    // clear its ledger entries (which would otherwise repeatedly strip user-added rules on every launch).
     let read_only = folder.leases().with_other_ledger(&other, false);
     read_only.remove_leftovers();
     read_only.settled();
-    assert_eq!(folder.text().unwrap(), real(), "taken out of agy's settings");
+    assert!(folder.text().unwrap().contains("command(echo hi)"), "read-only ledger must not mutate settings.json");
     assert_eq!(std::fs::read(&other).unwrap(), written, "the other ledger, which may not be written, as it was");
     // One that may write it: taken out and the other ledger pruned.
     elsewhere(&other).apply(&grant("agy-2", true, &["command(ls)"])).unwrap();
@@ -1063,6 +1064,34 @@ fn what_a_crash_left_in_the_other_ledger_goes_too() {
     writing.remove_leftovers();
     writing.settled();
     assert!(folder.text().unwrap() == real() && !other.exists(), "taken out and the ledger let go");
+}
+
+/// P1-SEC-3: startup cleanup sweeps orphaned `.settings.json.mighty-*.tmp` files when `settings.json` exists, and preserves them
+/// when `settings.json` is missing (so a `KeptTemporary` sole remaining copy is never lost).
+#[test]
+fn startup_cleanup_sweeps_orphaned_settings_temporaries_safely() {
+    english();
+    let folder = Folder::new("orphan-tmps");
+    folder.make(Some(&real()));
+    let settings_dir = folder.settings_path().parent().unwrap().to_path_buf();
+    let orphan = settings_dir.join(".settings.json.mighty-deadbeef.tmp");
+    let unrelated = settings_dir.join("other.tmp");
+    std::fs::write(&orphan, b"stale").unwrap();
+    std::fs::write(&unrelated, b"keep").unwrap();
+
+    let leases = folder.leases();
+    leases.remove_leftovers_checked().unwrap();
+    leases.settled();
+    assert!(!orphan.exists(), "orphaned .settings.json.mighty-*.tmp must be swept on startup");
+    assert!(unrelated.exists(), "unrelated .tmp files must be untouched");
+
+    // When settings.json itself is missing, do not sweep the temporary (it could be the only remaining copy from a failed swap).
+    std::fs::remove_file(folder.settings_path()).unwrap();
+    let sole_copy = settings_dir.join(".settings.json.mighty-solecopy.tmp");
+    std::fs::write(&sole_copy, b"only-copy").unwrap();
+    leases.remove_leftovers_checked().unwrap();
+    leases.settled();
+    assert!(sole_copy.exists(), "temporary must not be deleted when settings.json is missing");
 }
 
 /// S-L4: a swap that left the temporary as the only copy (`ReplaceFileW` 1176 or 1177, marked [`leases::KeptTemporary`]) never deletes it;

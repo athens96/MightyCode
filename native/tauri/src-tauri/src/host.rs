@@ -22,16 +22,16 @@ use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock, mpsc};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, mpsc};
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mighty_core::AppSnapshot;
 use mighty_core::locale::Locale;
 use mighty_core::model::PaneLayoutNode;
 use mighty_core::normalize;
-use mighty_core::shell::{Attention, RemoteConnection, Runtime, ShellContext, ShellModel, WorkspaceGitInfo, shell_model};
+use mighty_core::shell::{AppUpdateFrame, Attention, RemoteConnection, Runtime, ShellContext, ShellModel, WorkspaceGitInfo, shell_model};
 use mighty_core::store::{Saver, Store};
 use mighty_graph::view::MightyPushes;
 use mighty_platform::{ProcessHost, SpawnRequest};
@@ -44,7 +44,28 @@ use crate::delta::Bridge;
 use crate::logfile::LogFile;
 use crate::panes::PaneUi;
 use crate::runs::Runs;
-use crate::smoke::Smoke;
+#[cfg(feature = "dev-harness")]
+pub use crate::smoke::Smoke;
+
+/// Uninhabited stand-in when built without `dev-harness` (`--no-default-features`): `Option<Smoke>` is zero-sized and
+/// every `host.smoke.is_some()` check constant-folds to `false`.
+#[cfg(not(feature = "dev-harness"))]
+pub enum Smoke {}
+
+#[cfg(not(feature = "dev-harness"))]
+impl Smoke {
+    pub fn pushed(&self, _kind: &str) {
+        match *self {}
+    }
+
+    pub fn called(&self, _method: &str) {
+        match *self {}
+    }
+
+    pub fn check(&self, _host: &Arc<Host>) {
+        match *self {}
+    }
+}
 
 /// The event every host → page message travels on, and the window it goes to.
 pub const EVENT: &str = "host-message";
@@ -74,14 +95,65 @@ impl Registry {
     }
 }
 
+/// Sentinel value for `sent_revision_atomic` before any snapshot/delta has been sent.
+const NO_REVISION: u64 = u64::MAX;
+
+/// Fingerprint of the inputs `shell-clock` reads so idle ticks skip rebuilding & serializing `ShellModel` JSON.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShellKey {
+    revision: u64,
+    shell_epoch: u64,
+    time_bucket: i64,
+    shows_dashboard: bool,
+    dialog_open: bool,
+    error: Option<String>,
+    git: Option<(String, Option<WorkspaceGitInfo>)>,
+    app_update: Option<AppUpdateFrame>,
+}
+
+impl ShellKey {
+    #[allow(clippy::too_many_arguments)]
+    fn matches(
+        &self,
+        revision: u64,
+        shell_epoch: u64,
+        time_bucket: i64,
+        shows_dashboard: bool,
+        dialog_open: bool,
+        error: &Option<String>,
+        git: &Option<(String, Option<WorkspaceGitInfo>)>,
+        app_update: &Option<AppUpdateFrame>,
+    ) -> bool {
+        self.revision == revision
+            && self.shell_epoch == shell_epoch
+            && self.time_bucket == time_bucket
+            && self.shows_dashboard == shows_dashboard
+            && self.dialog_open == dialog_open
+            && self.error == *error
+            && self.git == *git
+            && self.app_update == *app_update
+    }
+}
+
+/// Time bucket for `shell_model`: 1-second resolution while a Claude pane has a running elapsed timer, 1-minute resolution when idle
+/// (`age_label` only changes on minute boundaries).
+fn shell_time_bucket(snapshot: &AppSnapshot, now: chrono::DateTime<chrono::Utc>) -> i64 {
+    let running_timer = snapshot.sessions().iter().any(|s| {
+        s.kind() == "claude" && s.status() == "running" && s.run_timing.as_ref().is_some_and(|t| t.is_valid() && t.finished_at.is_none())
+    });
+    if running_timer { now.timestamp() } else { now.timestamp().div_euclid(60) }
+}
+
 /// The state the page sees, what was last sent of it, and the window's own state the frame model reads.
 pub struct View {
     pub snapshot: AppSnapshot,
     /// Bumped by every change; a flush of a revision already sent sends nothing (C#: the snapshot's reference).
     revision: u64,
+    revision_atomic: Arc<AtomicU64>,
     pub ready: bool,
     bridge: Bridge,
     sent_shell: Option<String>,
+    last_shell_key: Option<ShellKey>,
     /// The window's `layoutDefaults`: layouts made for workspaces without a saved one, kept so their ids stay put.
     pub layout_defaults: HashMap<String, PaneLayoutNode>,
     pub shows_dashboard: bool,
@@ -93,6 +165,8 @@ pub struct View {
     saver: Option<Arc<Saver>>,
     /// The run service, which owns the state once it is attached: `snapshot` is then its copy for the page (`sync`).
     service: Option<Arc<RunService>>,
+    /// Non-blocking callback invoked when `sync()` sees active-workspace panes whose bodies are still on disk.
+    body_wake: Option<Arc<dyn Fn(String) + Send + Sync>>,
     /// The never-shown pane views the page writes in (C# `views`, `WebPane`): composer, cards and Mighty state per pane.
     pub panes: HashMap<String, PaneUi>,
     /// The panes whose Mighty view the page shows, and what was last pushed for each (C# `webMighty`).
@@ -100,6 +174,43 @@ pub struct View {
 }
 
 impl View {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn bump_revision(&mut self) {
+        self.revision += 1;
+        self.revision_atomic.store(self.revision, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(service: Arc<RunService>) -> View {
+        View {
+            snapshot: service.snapshot(),
+            revision: 0,
+            revision_atomic: Arc::new(AtomicU64::new(0)),
+            ready: false,
+            bridge: Bridge::default(),
+            sent_shell: None,
+            last_shell_key: None,
+            layout_defaults: HashMap::new(),
+            shows_dashboard: false,
+            dialog_open: false,
+            error: None,
+            git: None,
+            saver: None,
+            service: Some(service),
+            body_wake: None,
+            panes: HashMap::new(),
+            mighty: MightyPushes::default(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_body_wake(&mut self, wake: Arc<dyn Fn(String) + Send + Sync>) {
+        self.body_wake = Some(wake);
+    }
+
     /// C# `DesktopService.UpdateAsync`: the change, normalized as C# normalizes every change, then saved (queued).
     pub fn update(&mut self, change: impl FnOnce(&mut AppSnapshot)) -> Result<(), String> {
         if let Some(service) = self.service.clone() {
@@ -118,7 +229,7 @@ impl View {
         change(&mut next);
         let next = normalize::normalize(&next, false).map_err(|e| e.to_string())?;
         self.snapshot = next;
-        self.revision += 1;
+        self.bump_revision();
         if let Some(saver) = &self.saver {
             saver.queue(self.snapshot.clone());
         }
@@ -126,27 +237,31 @@ impl View {
     }
 
     /// The state replaced as it is, without a normalize or a save (a change C# makes to `snapshot` directly).
+    #[cfg(feature = "dev-harness")]
     pub fn replace(&mut self, next: AppSnapshot) {
         if let Some(service) = &self.service {
             service.replace(next.clone());
         }
         self.snapshot = next;
-        self.revision += 1;
+        self.bump_revision();
     }
 
-    /// The page's copy taken from the service again (a run event changed it, or a change went through it). The active workspace's
-    /// panes are read whole first when the load left their body on disk (a workspace just opened; bodies.rs).
+    /// The page's copy taken from the service again (a run event changed it, or a change went through it). Never performs
+    /// synchronous disk I/O under `host.view()`: if the active workspace has lazy panes still on disk, schedules a coalesced
+    /// background load via `body_wake` (`bodies.rs`) instead.
     pub fn sync(&mut self) {
         if let Some(service) = &self.service {
-            let mut snapshot = service.snapshot();
-            if let Some(active) = snapshot.active_workspace_id.clone()
-                && snapshot.sessions().iter().any(|s| s.body_on_disk && s.workspace_id() == active)
-                && service.ensure_workspace_bodies(&active)
-            {
-                snapshot = service.snapshot();
-            }
+            let snapshot = service.snapshot();
+            let missing_workspace = snapshot
+                .active_workspace_id
+                .as_ref()
+                .filter(|active| snapshot.sessions().iter().any(|s| s.body_on_disk && s.workspace_id() == active.as_str()))
+                .cloned();
             self.snapshot = snapshot;
-            self.revision += 1;
+            self.bump_revision();
+            if let (Some(workspace), Some(load)) = (missing_workspace, self.body_wake.as_ref()) {
+                load(workspace);
+            }
         }
     }
 
@@ -215,6 +330,95 @@ fn guarded_pass(log: &LogFile, logged: &Mutex<BTreeSet<String>>, clock: &str, wo
     }
 }
 
+#[derive(Default)]
+struct FlushState {
+    pending: bool,
+    closed: bool,
+}
+
+/// Reusable coalescing flush wakeup shared between [`Host::schedule`] and the single `"host-flush"` worker thread.
+pub(crate) struct FlushWake {
+    state: Mutex<FlushState>,
+    signal: Condvar,
+}
+
+impl FlushWake {
+    pub(crate) fn new() -> Arc<FlushWake> {
+        Arc::new(FlushWake { state: Mutex::new(FlushState::default()), signal: Condvar::new() })
+    }
+
+    pub(crate) fn request(&self) {
+        let mut state = lock(&self.state);
+        if state.closed || state.pending {
+            return;
+        }
+        state.pending = true;
+        self.signal.notify_one();
+    }
+
+    fn close(&self) {
+        let mut state = lock(&self.state);
+        state.closed = true;
+        self.signal.notify_all();
+    }
+
+    /// Waits for a flush request, coalesces over `window` (waking immediately on close), and returns `true` to flush or `false` to exit.
+    fn wait_next(&self, window: Duration) -> bool {
+        let mut state = lock(&self.state);
+        while !state.pending && !state.closed {
+            state = self.signal.wait(state).unwrap_or_else(|p| p.into_inner());
+        }
+        if state.closed {
+            return false;
+        }
+        if !window.is_zero() {
+            let deadline = Instant::now() + window;
+            while !state.closed {
+                let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                    break;
+                };
+                let (next, timeout) = self.signal.wait_timeout(state, remaining).unwrap_or_else(|p| p.into_inner());
+                state = next;
+                if timeout.timed_out() {
+                    break;
+                }
+            }
+            if state.closed {
+                return false;
+            }
+        }
+        // Clear pending before flushing so changes arriving while flushing schedule another pass.
+        state.pending = false;
+        true
+    }
+}
+
+/// Wakes sleeping clock threads immediately when the host begins closing or drops.
+struct CloseSignal {
+    closed: Mutex<bool>,
+    signal: Condvar,
+}
+
+impl CloseSignal {
+    fn new() -> Arc<CloseSignal> {
+        Arc::new(CloseSignal { closed: Mutex::new(false), signal: Condvar::new() })
+    }
+
+    fn close(&self) {
+        *lock(&self.closed) = true;
+        self.signal.notify_all();
+    }
+
+    fn wait(&self, duration: Duration) -> bool {
+        let guard = lock(&self.closed);
+        if *guard {
+            return false;
+        }
+        let (guard, _) = self.signal.wait_timeout_while(guard, duration, |closed| !*closed).unwrap_or_else(|p| p.into_inner());
+        !*guard
+    }
+}
+
 pub struct Host {
     pub app: AppHandle,
     pub data_dir: PathBuf,
@@ -227,6 +431,16 @@ pub struct Host {
     /// The run engine, attached once the host exists (runs.rs).
     runs: OnceLock<Arc<Runs>>,
     view: Arc<Mutex<View>>,
+    /// Lock-free mirror of `View::revision`, bumped on every state update/replace/sync.
+    revision_atomic: Arc<AtomicU64>,
+    /// Lock-free mirror of `View::ready`.
+    ready_atomic: AtomicBool,
+    /// Lock-free mirror of `View::bridge.sent_revision()` (`NO_REVISION` when `None`).
+    sent_revision_atomic: AtomicU64,
+    /// Bumped whenever an external subsystem feeding `ShellModel` changes (`remote`, `setup`, `companion`, `terminal`, `git`, etc.).
+    shell_epoch: AtomicU64,
+    /// In-flight lazy workspace body loads (`bodies.rs`).
+    body_loads: Arc<crate::bodies::BodyLoads>,
     saver: Arc<Saver>,
     /// The profile's store: what it approved is what a save may write (`approve_local`).
     store: Arc<Mutex<Store>>,
@@ -235,12 +449,21 @@ pub struct Host {
     unimplemented: Mutex<BTreeSet<String>>,
     /// The clocks' panics already logged.
     panics: Mutex<BTreeSet<String>>,
-    /// A flush is waiting on its 16 ms timer.
-    flush_pending: AtomicBool,
+    /// Wakes the single reusable 16 ms coalescing flush worker.
+    flush_wake: Arc<FlushWake>,
+    /// Wakes background clock threads immediately on shutdown.
+    close_signal: Arc<CloseSignal>,
     closed: AtomicBool,
     /// Quit began: the runs are being disposed before delegation stops and the last save (main.rs), C#'s `closing = true` at the start
     /// of `DisposeAsync`.
     quitting: AtomicBool,
+}
+
+impl Drop for Host {
+    fn drop(&mut self) {
+        self.flush_wake.close();
+        self.close_signal.close();
+    }
 }
 
 pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -279,12 +502,15 @@ impl Host {
             .expect("the host-message thread");
         let snapshot = store.snapshot.clone();
         let store = Arc::new(Mutex::new(store));
+        let revision_atomic = Arc::new(AtomicU64::new(0));
         let view = Arc::new(Mutex::new(View {
             snapshot,
             revision: 0,
+            revision_atomic: revision_atomic.clone(),
             ready: false,
             bridge: Bridge::default(),
             sent_shell: None,
+            last_shell_key: None,
             layout_defaults: HashMap::new(),
             shows_dashboard: false,
             dialog_open: false,
@@ -292,6 +518,7 @@ impl Host {
             git: None,
             saver: None,
             service: None,
+            body_wake: None,
             panes: HashMap::new(),
             mighty: MightyPushes::default(),
         }));
@@ -317,7 +544,9 @@ impl Host {
             },
         ));
         lock(&view).saver = Some(saver.clone());
-        Arc::new(Host {
+        let flush_wake = FlushWake::new();
+        let close_signal = CloseSignal::new();
+        let host = Arc::new(Host {
             app,
             data_dir,
             processes,
@@ -327,24 +556,74 @@ impl Host {
             smoke,
             runs: OnceLock::new(),
             view,
+            revision_atomic,
+            ready_atomic: AtomicBool::new(false),
+            sent_revision_atomic: AtomicU64::new(NO_REVISION),
+            shell_epoch: AtomicU64::new(0),
+            body_loads: Arc::new(crate::bodies::BodyLoads::default()),
             saver,
             store,
             registry,
             outbox: Mutex::new(outbox),
             unimplemented: Mutex::new(BTreeSet::new()),
             panics: Mutex::new(BTreeSet::new()),
-            flush_pending: AtomicBool::new(false),
+            flush_wake: flush_wake.clone(),
+            close_signal,
             closed: AtomicBool::new(false),
             quitting: AtomicBool::new(false),
-        })
+        });
+        // Single reusable 16 ms coalescing flush worker (no per-flush OS thread spawning).
+        let weak = Arc::downgrade(&host);
+        std::thread::Builder::new()
+            .name("host-flush".into())
+            .spawn(move || {
+                while flush_wake.wait_next(Duration::from_millis(16)) {
+                    let Some(host) = weak.upgrade() else { return };
+                    if host.closing() {
+                        return;
+                    }
+                    host.pass("flush", || host.flush());
+                }
+            })
+            .expect("the host-flush thread");
+        host
     }
 
     pub fn view(&self) -> MutexGuard<'_, View> {
         lock(&self.view)
     }
 
+    /// Lock-free current state revision (`View::revision`), bumped on every update/replace/sync.
+    pub fn revision(&self) -> u64 {
+        self.revision_atomic.load(Ordering::Acquire)
+    }
+
+    /// Lock-free readiness flag (`View::ready`).
+    pub fn is_ready(&self) -> bool {
+        self.ready_atomic.load(Ordering::Acquire)
+    }
+
+    /// Marks external frame-model inputs (`remote`, `setup`, `companion`, `terminal`, `git`, etc.) dirty so the next shell tick rebuilds.
+    pub fn shell_dirty(&self) {
+        self.shell_epoch.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn shell_epoch(&self) -> u64 {
+        self.shell_epoch.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn body_loads(&self) -> &Arc<crate::bodies::BodyLoads> {
+        &self.body_loads
+    }
+
+    /// Sleeps up to `duration`, waking immediately on shutdown; returns `true` while the host is still open.
+    pub fn wait_or_close(&self, duration: Duration) -> bool {
+        !self.closing() && self.close_signal.wait(duration)
+    }
+
     /// C# `StateStore.ApproveLocal`: a folder the user picked, as a workspace a save may write (the one listed for it, if any).
     /// Whether a save may write `workspace` as it is (the store approved it).
+    #[cfg(feature = "dev-harness")]
     pub fn approves(&self, workspace: &mighty_core::model::Workspace) -> bool {
         lock(&self.store).approves(workspace)
     }
@@ -424,8 +703,12 @@ impl Host {
 
     /// The run service takes the state from here on (runs.rs).
     pub fn attach(&self, runs: Arc<Runs>) {
+        let service = runs.service.clone();
+        let loader =
+            crate::bodies::workspace_scheduler(self.body_loads.clone(), service.clone(), self.view.clone(), self.flush_wake.clone());
         let mut view = self.view();
-        view.service = Some(runs.service.clone());
+        view.service = Some(service);
+        view.body_wake = Some(loader);
         let _ = self.runs.set(runs);
     }
 
@@ -448,6 +731,8 @@ impl Host {
     /// last save.
     pub fn begin_closing(&self) {
         self.quitting.store(true, Ordering::SeqCst);
+        self.flush_wake.close();
+        self.close_signal.close();
     }
 
     /// Every pane view's composer and cards are looked at again on the next tick (a runtime read, a setting).
@@ -505,6 +790,7 @@ impl Host {
                         pane.dirty = true;
                     }
                     view.mighty.dirty(&request.run_id);
+                    self.shell_dirty();
                 }
             }
             // The service's own state: the page's copy may not have taken the event this save is for yet (a run's end is saved
@@ -547,8 +833,11 @@ impl Host {
     pub fn page_started(&self) {
         let mut view = self.view();
         view.ready = false;
+        self.ready_atomic.store(false, Ordering::Release);
         view.bridge.reset();
+        self.sent_revision_atomic.store(NO_REVISION, Ordering::Release);
         view.sent_shell = None;
+        view.last_shell_key = None;
         // The page asks for its panes' composer, cards and Mighty views again as it mounts them.
         view.mighty = MightyPushes::default();
         for pane in view.panes.values_mut() {
@@ -560,21 +849,26 @@ impl Host {
     pub fn ready(&self) {
         let mut view = self.view();
         view.ready = true;
+        self.ready_atomic.store(true, Ordering::Release);
         let revision = view.revision;
         let View { snapshot, bridge, .. } = &mut *view;
         let text = bridge.snapshot(snapshot, revision);
+        self.sent_revision_atomic.store(revision, Ordering::Release);
         self.push(&view, "snapshot", text);
     }
 
     pub fn shell_model(&self, view: &mut View) -> ShellModel {
+        let app_update = crate::app_update::frame(self);
+        self.shell_model_with(view, chrono::Utc::now(), app_update.as_ref())
+    }
+
+    fn shell_model_with(&self, view: &mut View, now: chrono::DateTime<chrono::Utc>, app_update: Option<&AppUpdateFrame>) -> ShellModel {
         let empty_attention: HashMap<String, Attention> = HashMap::new();
         let empty_git: HashMap<String, WorkspaceGitInfo> = HashMap::new();
         // The remote workspaces' connections (remote.rs, W8-D) and the companion's controls (companion.rs, W8-E), read with the state locked.
         let remote: HashMap<String, RemoteConnection> = crate::remote::connections(self);
-        let companion = crate::companion::frame_model(self);
-        // The app update's banner and status bar words (app_update.rs, W9-C), read with the state locked.
-        let app_update = crate::app_update::frame(self);
         let View { snapshot, layout_defaults, shows_dashboard, dialog_open, error, git, .. } = view;
+        let companion = crate::companion::frame_model(self, snapshot);
         let active_git =
             active_git_key(snapshot).and_then(|key| git.as_ref().filter(|(k, _)| *k == key).and_then(|(_, info)| info.as_ref()));
         // The setup's badge and banner (setup.rs, W6-B), read with the state locked.
@@ -586,7 +880,7 @@ impl Host {
         let context = ShellContext {
             locale: self.locale,
             version: &self.version,
-            now: chrono::Utc::now(),
+            now,
             error: error.clone(),
             resource: None,
             dialog_open: *dialog_open,
@@ -602,7 +896,7 @@ impl Host {
             remote: &remote,
             usage: usage.as_ref(),
             companion: companion.as_ref(),
-            app_update: app_update.as_ref(),
+            app_update,
         };
         let mut model = shell_model(snapshot, &context, layout_defaults);
         // The remote mirror's servers, strips and status words (mirror.rs, W9-J), read with the state locked.
@@ -614,12 +908,45 @@ impl Host {
 
     /// The frame model, pushed when its JSON changed (`PushWebShellModel`).
     fn push_shell(&self, view: &mut View) {
+        let app_update = crate::app_update::frame(self);
+        self.push_shell_with(view, app_update, false);
+    }
+
+    /// Periodic clock path of [`push_shell`]: skips rebuilding and serializing `ShellModel` JSON when neither state revision,
+    /// external shell epoch, view UI fields, app-update frame nor wall-clock time bucket changed.
+    fn push_shell_on_clock(&self, view: &mut View, app_update: Option<AppUpdateFrame>) {
+        self.push_shell_with(view, app_update, true);
+    }
+
+    fn push_shell_with(&self, view: &mut View, app_update: Option<AppUpdateFrame>, skip_if_unchanged: bool) {
         if !view.ready {
             view.sent_shell = None;
+            view.last_shell_key = None;
             return;
         }
-        let model = self.shell_model(view);
+        let now = chrono::Utc::now();
+        let epoch = self.shell_epoch();
+        let time_bucket = shell_time_bucket(&view.snapshot, now);
+        if skip_if_unchanged
+            && view.sent_shell.is_some()
+            && view.last_shell_key.as_ref().is_some_and(|key| {
+                key.matches(view.revision, epoch, time_bucket, view.shows_dashboard, view.dialog_open, &view.error, &view.git, &app_update)
+            })
+        {
+            return;
+        }
+        let model = self.shell_model_with(view, now, app_update.as_ref());
         let text = serde_json::to_string(&model).unwrap_or_default();
+        view.last_shell_key = Some(ShellKey {
+            revision: view.revision,
+            shell_epoch: epoch,
+            time_bucket,
+            shows_dashboard: view.shows_dashboard,
+            dialog_open: view.dialog_open,
+            error: view.error.clone(),
+            git: view.git.clone(),
+            app_update,
+        });
         if view.sent_shell.as_deref() == Some(text.as_str()) {
             return;
         }
@@ -637,7 +964,9 @@ impl Host {
             }
             let revision = view.revision;
             let View { snapshot, bridge, .. } = &mut *view;
-            if let Some(delta) = bridge.flush(snapshot, revision) {
+            let delta = bridge.flush(snapshot, revision);
+            self.sent_revision_atomic.store(bridge.sent_revision().unwrap_or(NO_REVISION), Ordering::Release);
+            if let Some(delta) = delta {
                 self.push(&view, "delta", delta);
             }
             self.push_shell(&mut view);
@@ -645,17 +974,9 @@ impl Host {
         crate::native::flush(self);
     }
 
-    /// `Schedule`: a flush about one frame from now, which every change until then rides along with.
+    /// `Schedule`: a flush about one frame from now, coalesced onto the single reusable flush worker.
     pub fn schedule(self: &Arc<Self>) {
-        if self.flush_pending.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        let host = self.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(16));
-            host.flush_pending.store(false, Ordering::SeqCst);
-            host.pass("flush", || host.flush());
-        });
+        self.flush_wake.request();
     }
 
     /// One pass of a clock: a panic in it is logged and the clock goes on.
@@ -670,19 +991,20 @@ impl Host {
             .name("bridge-poll".into())
             .spawn(move || {
                 let mut ticks = 0u64;
-                while !host.closed.load(Ordering::SeqCst) {
-                    std::thread::sleep(Duration::from_millis(100));
+                let mut last_git_rev: Option<u64> = None;
+                while host.wait_or_close(Duration::from_millis(100)) {
                     ticks += 1;
                     host.pass("bridge-poll", || {
-                        let (ready, changed) = {
-                            let view = host.view();
-                            (view.ready, view.bridge.sent_revision() != Some(view.revision))
-                        };
-                        if ready && changed {
+                        let rev = host.revision();
+                        if host.is_ready() && host.sent_revision_atomic.load(Ordering::Acquire) != rev {
                             host.schedule();
                         }
                         if ticks.is_multiple_of(5) {
-                            host.refresh_git(ticks.is_multiple_of(100));
+                            let force = ticks.is_multiple_of(100);
+                            if force || last_git_rev != Some(rev) {
+                                last_git_rev = Some(rev);
+                                host.refresh_git(force);
+                            }
                         }
                     });
                     // An agent pane that left the state loses its Agent IO binding (C# `ReconcileAgentIO`; agent_io.rs, W7-C).
@@ -696,8 +1018,7 @@ impl Host {
             .spawn(move || {
                 // The composer and cards pushes (30 ms coalesce, C# FlushWebComposers / FlushWebCards) and the Mighty views' (120 ms).
                 let mut ticks = 0u64;
-                while !host.closed.load(Ordering::SeqCst) {
-                    std::thread::sleep(Duration::from_millis(30));
+                while host.wait_or_close(Duration::from_millis(30)) {
                     ticks += 1;
                     host.pass("pane-clock", || crate::panes::flush(&host));
                     if ticks.is_multiple_of(4) {
@@ -710,10 +1031,12 @@ impl Host {
         std::thread::Builder::new()
             .name("shell-clock".into())
             .spawn(move || {
-                while !host.closed.load(Ordering::SeqCst) {
-                    std::thread::sleep(Duration::from_millis(250));
+                while host.wait_or_close(Duration::from_millis(250)) {
                     host.pass("shell-clock", || {
-                        host.push_shell(&mut host.view());
+                        if host.is_ready() {
+                            let app_update = crate::app_update::frame(&host);
+                            host.push_shell_on_clock(&mut host.view(), app_update);
+                        }
                         // C# `webShellClock.Tick += PushWebNatives`: the native views and the text setting, each when it changed.
                         crate::native::tick(&host);
                     });
@@ -728,7 +1051,9 @@ impl Host {
         let (key, folder) = {
             let mut view = self.view();
             let Some(key) = active_git_key(&view.snapshot) else {
-                view.git = None;
+                if view.git.take().is_some() {
+                    self.shell_dirty();
+                }
                 return;
             };
             if view.git.as_ref().is_some_and(|(k, _)| *k == key) && !force {
@@ -737,6 +1062,7 @@ impl Host {
             let folder = key.split_once('|').map(|(_, path)| path.to_string()).unwrap_or_default();
             if view.git.as_ref().is_none_or(|(k, _)| *k != key) {
                 view.git = Some((key.clone(), None));
+                self.shell_dirty();
             }
             (key, folder)
         };
@@ -745,7 +1071,11 @@ impl Host {
             let info = read_git(host.processes.as_ref(), &folder).await;
             let mut view = host.view();
             if active_git_key(&view.snapshot).as_deref() == Some(key.as_str()) {
-                view.git = Some((key, info));
+                let next = Some((key, info));
+                if view.git != next {
+                    view.git = next;
+                    host.shell_dirty();
+                }
             }
         });
     }
@@ -755,6 +1085,8 @@ impl Host {
         if self.closed.swap(true, Ordering::SeqCst) {
             return;
         }
+        self.flush_wake.close();
+        self.close_signal.close();
         // Every run stopped first (its children with it), as DisposeAsync stops them before its last save.
         if let Some(runs) = self.runs.get() {
             tauri::async_runtime::block_on(runs.service.dispose());
@@ -1134,9 +1466,11 @@ mod tests {
         let mut view = View {
             snapshot: AppSnapshot::default(),
             revision: 0,
+            revision_atomic: Arc::new(AtomicU64::new(0)),
             ready: false,
             bridge: Bridge::default(),
             sent_shell: None,
+            last_shell_key: None,
             layout_defaults: HashMap::new(),
             shows_dashboard: false,
             dialog_open: false,
@@ -1144,6 +1478,7 @@ mod tests {
             git: None,
             saver: None,
             service: None,
+            body_wake: None,
             panes: HashMap::new(),
             mighty: MightyPushes::default(),
         };
@@ -1201,5 +1536,83 @@ mod tests {
         assert_eq!(info.branch, "main");
         assert!(!marker.exists(), "no program of the repository's ran");
         let _ = std::fs::remove_dir_all(&parent);
+    }
+
+    /// P1-PERF-1: `FlushWake` coalesces bursts onto a single reusable worker thread and exits immediately on `close()`.
+    #[test]
+    fn flush_wake_coalesces_on_single_worker_and_exits_on_close() {
+        let wake = FlushWake::new();
+        let worker_wake = wake.clone();
+        let flushes = Arc::new(AtomicU64::new(0));
+        let worker_flushes = flushes.clone();
+        let worker = std::thread::spawn(move || {
+            while worker_wake.wait_next(Duration::from_millis(20)) {
+                worker_flushes.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        // Burst 50 rapid requests: they coalesce into 1 flush pass instead of spawning 50 threads.
+        for _ in 0..50 {
+            wake.request();
+        }
+        for _ in 0..100 {
+            if flushes.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(flushes.load(Ordering::SeqCst), 1, "burst coalesced into a single flush");
+        // Another request after the first flush fires a second pass on the same worker.
+        wake.request();
+        for _ in 0..100 {
+            if flushes.load(Ordering::SeqCst) >= 2 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(flushes.load(Ordering::SeqCst), 2, "subsequent schedule runs on the same worker");
+        // Closing wakes the parked worker immediately.
+        let started = Instant::now();
+        wake.close();
+        worker.join().expect("worker exited cleanly");
+        assert!(started.elapsed() < Duration::from_millis(200), "worker exited promptly on close");
+    }
+
+    /// P1-PERF-1: `CloseSignal` wakes sleeping clock threads immediately on close.
+    #[test]
+    fn close_signal_wakes_sleepers_immediately() {
+        let signal = CloseSignal::new();
+        let waiter = signal.clone();
+        let started = Instant::now();
+        let thread = std::thread::spawn(move || waiter.wait(Duration::from_secs(30)));
+        std::thread::sleep(Duration::from_millis(15));
+        signal.close();
+        assert!(!thread.join().unwrap(), "closed waiter returns false");
+        assert!(started.elapsed() < Duration::from_millis(500), "woke promptly instead of sleeping 30s");
+    }
+
+    /// P1-PERF-1: `shell_time_bucket` uses minute buckets when idle and second buckets while a Claude pane timer is running.
+    #[test]
+    fn shell_time_bucket_uses_minutes_when_idle_and_seconds_when_running() {
+        let idle = AppSnapshot::default();
+        let t0 = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(); // 2023-11-14T22:13:20Z
+        let t1 = chrono::DateTime::from_timestamp(1_700_000_010, 0).unwrap(); // same minute
+        let t2 = chrono::DateTime::from_timestamp(1_700_000_060, 0).unwrap(); // next minute
+        assert_eq!(shell_time_bucket(&idle, t0), shell_time_bucket(&idle, t1), "idle stays in same minute bucket");
+        assert_ne!(shell_time_bucket(&idle, t0), shell_time_bucket(&idle, t2), "idle advances on minute boundary");
+
+        let mut running = AppSnapshot::default();
+        running.sessions_mut().push(Arc::new(mighty_core::model::RunSession {
+            id: Some("p1".into()),
+            kind: Some("claude".into()),
+            status: Some("running".into()),
+            run_timing: Some(mighty_core::model::AgentRunTiming {
+                started_at: mighty_core::time::DateTimeOffset::now(),
+                last_observed_at: mighty_core::time::DateTimeOffset::now(),
+                finished_at: None,
+                is_approximate: false,
+            }),
+            ..mighty_core::model::RunSession::default()
+        }));
+        assert_ne!(shell_time_bucket(&running, t0), shell_time_bucket(&running, t1), "running timer ticks every second");
     }
 }

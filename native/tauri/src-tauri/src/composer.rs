@@ -1032,7 +1032,7 @@ pub fn register(methods: &mut Registry) {
             let (sender, receiver) = tokio::sync::oneshot::channel();
             let mut dialog = picker.app.dialog().file();
             // Owned by the app's window (C#'s FileOpenPicker is initialized with it): modal to it, in front of it.
-            if let Some(window) = tauri::Manager::get_window(&picker.app, crate::host::WINDOW) {
+            if let Some(window) = tauri::Manager::get_webview_window(&picker.app, crate::host::WINDOW) {
                 dialog = dialog.set_parent(&window);
             }
             dialog.pick_files(move |files| {

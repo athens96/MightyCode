@@ -28,7 +28,7 @@ pub fn app_info(host: &Arc<Host>, ui: &mut Ui) -> El {
         .settings_push(
             ui.button(locale.get("settings.appInfo.openHelpButton"), move || {
                 let host = to.clone();
-                crate::native::act(&to, async move { crate::settings::open_help(&host) });
+                crate::native::act(&to, async move { crate::settings::open_help(&host).await });
             }),
             ControlSize::Regular,
             false,
@@ -44,7 +44,11 @@ pub fn app_info(host: &Arc<Host>, ui: &mut Ui) -> El {
                 mighty_core::settings_words::text(&locale, crate::platform::words(), "menu.showInExplorer").unwrap_or_default(),
                 move || {
                     let folder = folder.clone();
-                    crate::native::act(&to, async move { crate::platform::show_in_explorer(&folder) });
+                    crate::native::act(&to, async move {
+                        tauri::async_runtime::spawn_blocking(move || crate::platform::show_in_explorer(&folder))
+                            .await
+                            .map_err(|error| error.to_string())?
+                    });
                 },
             ),
             ControlSize::Regular,

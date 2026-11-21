@@ -16,8 +16,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::Duration;
 
 use mighty_composer::cards::TerminalPromptInput;
@@ -35,7 +35,9 @@ use mighty_terminal::shell_blocks::{self, ShellBlockOutput};
 use mighty_terminal::{
     AgentTerminal, PaneEvents, PaneKind, PaneOptions, Ports, PromptTerminal, TerminalFont, TerminalMessage, TerminalPane,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(feature = "dev-harness")]
+use serde_json::json;
 use tauri::Manager;
 
 use crate::frame::{activate_pane, select_session};
@@ -143,6 +145,75 @@ struct BlockRun {
 
 type Agents = Arc<Mutex<HashMap<String, Arc<AgentTerminal>>>>;
 
+#[derive(Default)]
+struct WakeState {
+    panes: usize,
+    agents: usize,
+    closing: bool,
+}
+
+/// Parks `terminal-clock` and `shell-activity` whenever no terminals exist, waking immediately on creation or shutdown.
+/// Lock ordering: `panes`/`agents` -> `wake.state` (waiters never acquire `panes`/`agents` while holding `wake.state`).
+struct TerminalWake {
+    state: Mutex<WakeState>,
+    signal: Condvar,
+}
+
+impl TerminalWake {
+    fn new() -> Arc<TerminalWake> {
+        Arc::new(TerminalWake { state: Mutex::new(WakeState::default()), signal: Condvar::new() })
+    }
+
+    fn set_panes(&self, count: usize) {
+        let mut state = lock(&self.state);
+        let grew = count > state.panes;
+        state.panes = count;
+        if grew {
+            self.signal.notify_all();
+        }
+    }
+
+    fn set_agents(&self, count: usize) {
+        let mut state = lock(&self.state);
+        let grew = count > state.agents;
+        state.agents = count;
+        if grew {
+            self.signal.notify_all();
+        }
+    }
+
+    fn close(&self) {
+        let mut state = lock(&self.state);
+        state.closing = true;
+        state.panes = 0;
+        state.agents = 0;
+        self.signal.notify_all();
+    }
+
+    /// Parks until at least one pane (or, if `include_agents`, an agent terminal) exists, returning `None` once closing.
+    /// Returns `Some(has_panes)` when awake.
+    fn wait_active(&self, include_agents: bool) -> Option<bool> {
+        let mut state = lock(&self.state);
+        while !state.closing && state.panes == 0 && (!include_agents || state.agents == 0) {
+            state = self.signal.wait(state).unwrap_or_else(|p| p.into_inner());
+        }
+        (!state.closing).then_some(state.panes > 0)
+    }
+
+    /// Sleeps up to `duration`, waking immediately when closing or (if `wake_on_pane`) when a pane opens.
+    fn sleep_or_close(&self, duration: Duration, wake_on_pane: bool) -> bool {
+        let guard = lock(&self.state);
+        if guard.closing {
+            return false;
+        }
+        let (guard, _) = self
+            .signal
+            .wait_timeout_while(guard, duration, |s| !s.closing && !(wake_on_pane && s.panes > 0))
+            .unwrap_or_else(|p| p.into_inner());
+        !guard.closing
+    }
+}
+
 /// Every terminal of the window (C# `views`' terminal halves, `agentTerminals`, `terminalPrompts`, `shellBlockRunning`).
 pub struct Terminals {
     host: Weak<Host>,
@@ -156,7 +227,15 @@ pub struct Terminals {
     smoke_allowed: Mutex<HashSet<String>>,
     /// Closes started when a pane or an agent pane went (each on its own task): the quit waits for them too.
     closes: Mutex<Vec<tauri::async_runtime::JoinHandle<()>>>,
+    wake: Arc<TerminalWake>,
+    last_reconcile_rev: AtomicU64,
     closing: AtomicBool,
+}
+
+impl Drop for Terminals {
+    fn drop(&mut self) {
+        self.wake.close();
+    }
 }
 
 /// What a pane asks of the window, answered from the host.
@@ -360,6 +439,7 @@ impl Terminals {
                 Os::Macos => "Ghostty".into(),
             },
         };
+        let wake = TerminalWake::new();
         let terminals = Arc::new(Terminals {
             host: Arc::downgrade(host),
             ports,
@@ -370,6 +450,8 @@ impl Terminals {
             blocks: Mutex::default(),
             smoke_allowed: Mutex::default(),
             closes: Mutex::default(),
+            wake: wake.clone(),
+            last_reconcile_rev: AtomicU64::new(u64::MAX),
             closing: AtomicBool::new(false),
         });
         host.app.manage(terminals.clone());
@@ -387,31 +469,45 @@ impl Terminals {
             })
         }));
         let clock = Arc::downgrade(&terminals);
+        let clock_wake = wake.clone();
         std::thread::Builder::new()
             .name("terminal-clock".into())
             .spawn(move || {
                 let mut ticks = 0u64;
-                while let Some(terminals) = clock.upgrade() {
+                while let Some(has_panes) = clock_wake.wait_active(true) {
+                    let Some(terminals) = clock.upgrade() else { return };
                     if terminals.closing.load(Ordering::SeqCst) {
                         return;
                     }
-                    for pane in terminals.all() {
-                        pane.tick();
-                    }
-                    ticks += 1;
-                    if ticks.is_multiple_of(8) {
+                    if has_panes {
+                        for pane in terminals.all() {
+                            pane.tick();
+                        }
+                        ticks += 1;
+                        if ticks.is_multiple_of(8) {
+                            terminals.reconcile();
+                        }
+                        drop(terminals);
+                        if !clock_wake.sleep_or_close(FLUSH_INTERVAL, false) {
+                            return;
+                        }
+                    } else {
                         terminals.reconcile();
+                        drop(terminals);
+                        if !clock_wake.sleep_or_close(FLUSH_INTERVAL * 8, true) {
+                            return;
+                        }
                     }
-                    drop(terminals);
-                    std::thread::sleep(FLUSH_INTERVAL);
                 }
             })
             .expect("the terminal clock");
         let reading = Arc::downgrade(&terminals);
+        let reading_wake = wake;
         std::thread::Builder::new()
             .name("shell-activity".into())
             .spawn(move || {
-                while let Some(terminals) = reading.upgrade() {
+                while reading_wake.wait_active(false).is_some() {
+                    let Some(terminals) = reading.upgrade() else { return };
                     if terminals.closing.load(Ordering::SeqCst) {
                         return;
                     }
@@ -419,7 +515,9 @@ impl Terminals {
                         pane.read_activity();
                     }
                     drop(terminals);
-                    std::thread::sleep(ACTIVITY_INTERVAL);
+                    if !reading_wake.sleep_or_close(ACTIVITY_INTERVAL, false) {
+                        return;
+                    }
                 }
             })
             .expect("the shell-activity reading");
@@ -473,16 +571,28 @@ impl Terminals {
         if let Some(earlier) = panes.insert(id.to_string(), pane.clone()) {
             self.close_later(async move { earlier.dispose().await });
         }
+        self.wake.set_panes(panes.len());
         Ok(pane)
     }
 
     /// An agent pane's terminal, made the first time in `directory` (C# `agentTerminals`; Agent IO's `run_in_terminal` makes it too,
     /// W7).
     pub fn agent(&self, pane: &str, directory: &Path) -> Arc<AgentTerminal> {
-        lock(&self.agents)
-            .entry(pane.to_string())
-            .or_insert_with(|| AgentTerminal::new(directory.to_path_buf(), self.ports.ptys.clone(), self.ports.environment.clone()))
-            .clone()
+        let (terminal, inserted) = {
+            let mut agents = lock(&self.agents);
+            let before = agents.len();
+            let terminal = agents
+                .entry(pane.to_string())
+                .or_insert_with(|| AgentTerminal::new(directory.to_path_buf(), self.ports.ptys.clone(), self.ports.environment.clone()))
+                .clone();
+            let after = agents.len();
+            self.wake.set_agents(after);
+            (terminal, after != before)
+        };
+        if inserted && let Some(host) = self.host.upgrade() {
+            host.shell_dirty();
+        }
+        terminal
     }
 
     /// The agent pane's terminal, if it has one (C# `agentTerminals.TryGetValue`).
@@ -493,8 +603,16 @@ impl Terminals {
     /// C# `EndAgentTerminal`'s terminal half: the agent pane's terminal and everything it started end, and this returns once they
     /// have (a delegated child's discard and close cleanup look for links in its worktree only then).
     pub async fn end_agent(&self, pane: &str) {
-        let terminal = lock(&self.agents).remove(pane);
+        let terminal = {
+            let mut agents = lock(&self.agents);
+            let removed = agents.remove(pane);
+            self.wake.set_agents(agents.len());
+            removed
+        };
         if let Some(terminal) = terminal {
+            if let Some(host) = self.host.upgrade() {
+                host.shell_dirty();
+            }
             let _ = tokio::time::timeout(QUIT_WAIT, terminal.dispose()).await;
         }
     }
@@ -503,18 +621,26 @@ impl Terminals {
     /// `ReconcileAgentIO`); each close on its own task.
     fn reconcile(&self) {
         let Some(host) = self.host.upgrade() else { return };
-        let (terminal_panes, agent_panes): (HashSet<String>, HashSet<String>) = {
+        let rev = host.revision();
+        if self.last_reconcile_rev.load(Ordering::Acquire) == rev {
+            return;
+        }
+        let (rev, terminal_panes, agent_panes): (u64, HashSet<String>, HashSet<String>) = {
             let view = host.view();
             let sessions = view.snapshot.sessions();
             (
+                view.revision(),
                 sessions.iter().filter(|s| matches!(s.kind(), "shell" | AGENT_TERMINAL)).map(|s| s.id().to_string()).collect(),
                 sessions.iter().filter(|s| s.kind() == "claude").map(|s| s.id().to_string()).collect(),
             )
         };
+        self.last_reconcile_rev.store(rev, Ordering::Release);
         let gone: Vec<Arc<TerminalPane>> = {
             let mut panes = lock(&self.panes);
             let ids: Vec<String> = panes.keys().filter(|id| !terminal_panes.contains(*id)).cloned().collect();
-            ids.iter().filter_map(|id| panes.remove(id)).collect()
+            let removed = ids.iter().filter_map(|id| panes.remove(id)).collect();
+            self.wake.set_panes(panes.len());
+            removed
         };
         for pane in gone {
             crate::surface_terminal::natives().forget(pane.id());
@@ -523,8 +649,13 @@ impl Terminals {
         let ended: Vec<Arc<AgentTerminal>> = {
             let mut agents = lock(&self.agents);
             let ids: Vec<String> = agents.keys().filter(|id| !agent_panes.contains(*id)).cloned().collect();
-            ids.iter().filter_map(|id| agents.remove(id)).collect()
+            let removed = ids.iter().filter_map(|id| agents.remove(id)).collect();
+            self.wake.set_agents(agents.len());
+            removed
         };
+        if !ended.is_empty() {
+            host.shell_dirty();
+        }
         for agent in ended {
             self.close_later(async move { agent.dispose().await });
         }
@@ -533,6 +664,7 @@ impl Terminals {
     /// Every terminal closed (the app quits): at once, all together, the closes already under way with them, the wait bounded.
     pub async fn close_all(&self) {
         self.closing.store(true, Ordering::SeqCst);
+        self.wake.close();
         let panes: Vec<Arc<TerminalPane>> = lock(&self.panes).drain().map(|(_, pane)| pane).collect();
         let agents: Vec<Arc<AgentTerminal>> = lock(&self.agents).drain().map(|(_, agent)| agent).collect();
         let mut closes: Vec<_> = lock(&self.closes).drain(..).collect();
@@ -780,12 +912,14 @@ impl Terminals {
     }
 
     /// The smoke's own pane may start a shell.
+    #[cfg(feature = "dev-harness")]
     pub fn smoke_allow(&self, pane: &str) {
         lock(&self.smoke_allowed).insert(pane.to_string());
     }
 
     /// The pane's terminal as the smoke reads it: its status in the state, its footer and the host's diagnostics; null before the
     /// pane has a terminal.
+    #[cfg(feature = "dev-harness")]
     pub fn smoke_state(&self, host: &Host, pane: &str) -> Value {
         let status = host.view().snapshot.session(pane).map(|s| s.status().to_string());
         let Some(terminal) = lock(&self.panes).get(pane).cloned() else { return json!({"status": status}) };
@@ -796,8 +930,14 @@ impl Terminals {
     }
 
     /// The smoke's pane closed: its terminal ends at once (as the pane's close would end it); whether it was there.
+    #[cfg(feature = "dev-harness")]
     pub async fn smoke_close(&self, pane: &str) -> bool {
-        let terminal = lock(&self.panes).remove(pane);
+        let terminal = {
+            let mut panes = lock(&self.panes);
+            let removed = panes.remove(pane);
+            self.wake.set_panes(panes.len());
+            removed
+        };
         crate::surface_terminal::natives().forget(pane);
         match terminal {
             Some(terminal) => {
@@ -1077,5 +1217,69 @@ mod tests {
         };
         let golden = include_str!("../../crates/mighty-native/tests/golden/terminal-history.json");
         assert_eq!(crate::native::golden_dialog(history_dialog(&pane, &Locale::new("ko"))), golden.trim_end());
+    }
+
+    /// P1-PERF-1: `TerminalWake` parks idle terminal clock threads with zero wakeups while 0 terminals exist,
+    /// wakes immediately when a pane/agent is created, and exits cleanly on `close()`.
+    #[test]
+    fn terminal_wake_parks_when_empty_and_wakes_on_create_or_close() {
+        let wake = TerminalWake::new();
+        let ticks = Arc::new(AtomicU64::new(0));
+        let w_clock = wake.clone();
+        let t_clock = ticks.clone();
+        let clock = std::thread::spawn(move || {
+            while let Some(has_panes) = w_clock.wait_active(true) {
+                t_clock.fetch_add(1, Ordering::SeqCst);
+                if !w_clock.sleep_or_close(Duration::from_millis(5), !has_panes) {
+                    break;
+                }
+            }
+        });
+        let act_ticks = Arc::new(AtomicU64::new(0));
+        let w_act = wake.clone();
+        let t_act = act_ticks.clone();
+        let activity = std::thread::spawn(move || {
+            while w_act.wait_active(false).is_some() {
+                t_act.fetch_add(1, Ordering::SeqCst);
+                if !w_act.sleep_or_close(Duration::from_millis(5), false) {
+                    break;
+                }
+            }
+        });
+        // With 0 panes and 0 agents, both threads remain completely parked.
+        std::thread::sleep(Duration::from_millis(40));
+        assert_eq!(ticks.load(Ordering::SeqCst), 0, "terminal-clock stayed parked with 0 terminals");
+        assert_eq!(act_ticks.load(Ordering::SeqCst), 0, "shell-activity stayed parked with 0 panes");
+
+        // Adding an agent wakes only terminal-clock, NOT shell-activity.
+        wake.set_agents(1);
+        for _ in 0..50 {
+            if ticks.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(ticks.load(Ordering::SeqCst) >= 1, "terminal-clock woke when agent created");
+        assert_eq!(act_ticks.load(Ordering::SeqCst), 0, "shell-activity still parked with 0 panes");
+
+        // Adding a pane wakes shell-activity immediately.
+        wake.set_panes(1);
+        for _ in 0..50 {
+            if act_ticks.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(act_ticks.load(Ordering::SeqCst) >= 1, "shell-activity woke when pane created");
+
+        // Removing all panes/agents re-parks cleanly; closing wakes and terminates both threads immediately.
+        wake.set_panes(0);
+        wake.set_agents(0);
+        std::thread::sleep(Duration::from_millis(20));
+        let started = std::time::Instant::now();
+        wake.close();
+        clock.join().unwrap();
+        activity.join().unwrap();
+        assert!(started.elapsed() < Duration::from_millis(200), "both threads exited promptly on close");
     }
 }

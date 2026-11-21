@@ -14,7 +14,7 @@
 //! - Run service events (host.rs's change hook, [`push_note`] / [`noted`]) tell the push hub what moved.
 //! - Never a real relay in a test or the smoke; no URL is ever logged.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -58,6 +58,8 @@ pub struct MobileState {
     /// One settings change at a time (C#'s `writing`).
     writing: tokio::sync::Mutex<()>,
     notifying: AtomicBool,
+    /// Bumped when a push note arrives or remote settings/devices change so the 250 ms tick skips idle `push.observe` passes.
+    note_epoch: AtomicU64,
     pub ui: Mutex<BoxState>,
 }
 
@@ -267,19 +269,62 @@ impl Drop for NotifyGuard<'_> {
     }
 }
 
-/// The 250 ms tick (C#'s `mobileNotify.Tick`): pushes planned on every tick (nothing while the remote is off), and while a phone is
-/// connected the router's notifications sent.
+/// Decides whether a 250 ms mobile tick should invoke `push.observe`: skips work when mobile remote is disabled, when 0 devices are
+/// paired, or when neither state revision nor push-note/login-retry epochs changed since the last observation. Runs once on an
+/// enabled → disabled transition so `PushHub` clears its cached baseline.
+#[derive(Default)]
+struct PushObserveGate {
+    active: bool,
+    last_key: Option<(u64, u64, u64)>,
+}
+
+impl PushObserveGate {
+    fn should_observe(&mut self, enabled: bool, paired_devices: usize, revision: u64, note_epoch: u64, retry_epoch: u64) -> bool {
+        if !enabled {
+            let needs_reset = self.active;
+            self.active = false;
+            self.last_key = None;
+            return needs_reset;
+        }
+        if paired_devices == 0 {
+            self.active = false;
+            self.last_key = None;
+            return false;
+        }
+        let key = (revision, note_epoch, retry_epoch);
+        if self.active && self.last_key == Some(key) {
+            return false;
+        }
+        self.active = true;
+        self.last_key = Some(key);
+        true
+    }
+}
+
+/// The 250 ms tick (C#'s `mobileNotify.Tick`): pushes planned when remote is on with paired devices and something moved, and while
+/// a phone is connected the router's notifications sent.
 async fn tick(host: Arc<Host>, relay: Arc<RelayHost>, push: Arc<PushHub>) {
     let mut interval = tokio::time::interval(TICK);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut gate = PushObserveGate::default();
     loop {
         interval.tick().await;
         if host.closing() {
             return;
         }
-        let source = Panes(host.clone());
-        let _ = push.observe(&source);
         let mobile = state(&host);
+        let enabled = relay.enabled();
+        let paired_devices = if enabled { relay.devices().len() } else { 0 };
+        if gate.should_observe(
+            enabled,
+            paired_devices,
+            host.revision(),
+            mobile.note_epoch.load(Ordering::Acquire),
+            crate::accounts::retry_epoch(&host),
+        ) {
+            let source = Panes(host.clone());
+            let _ = push.observe(&source);
+        }
         if relay.status().connections == 0 {
             continue;
         }
@@ -350,6 +395,9 @@ pub fn push_note(event: &ServiceEvent) -> Option<PushNote> {
 /// host.rs's change hook: the note handed to the push hub (cheap; no lock of the view).
 pub fn noted(host: &Host, note: Option<PushNote>) {
     let (Some(note), Some(push)) = (note, push(host)) else { return };
+    if let Some(mobile) = host.app.try_state::<Arc<MobileState>>() {
+        mobile.note_epoch.fetch_add(1, Ordering::Release);
+    }
     match note {
         PushNote::Began(id) => push.began(&id),
         PushNote::Changed => push.changed(),
@@ -516,5 +564,26 @@ mod tests {
         handle.abort();
         let _ = handle.await;
         assert!(!flag.load(Ordering::SeqCst), "cancelled future resets flag");
+    }
+
+    /// P1-PERF-1: `PushObserveGate` skips idle 4x/sec `push.observe` passes when disabled, unpaired, or unchanged,
+    /// triggers on revision/note/retry changes, and runs once when turning off so `PushHub` clears its cached state.
+    #[test]
+    fn push_observe_gate_skips_when_disabled_unpaired_or_unchanged() {
+        let mut gate = super::PushObserveGate::default();
+        assert!(!gate.should_observe(false, 0, 1, 0, 0), "disabled skips");
+        assert!(!gate.should_observe(false, 2, 1, 0, 0), "disabled skips even with paired devices");
+        assert!(!gate.should_observe(true, 0, 1, 0, 0), "0 paired devices skips");
+
+        assert!(gate.should_observe(true, 1, 1, 0, 0), "first active tick observes");
+        assert!(!gate.should_observe(true, 1, 1, 0, 0), "unchanged revision and epochs skip");
+        assert!(gate.should_observe(true, 1, 2, 0, 0), "revision change observes");
+        assert!(!gate.should_observe(true, 1, 2, 0, 0), "steady again skips");
+        assert!(gate.should_observe(true, 1, 2, 1, 0), "push note epoch change observes");
+        assert!(gate.should_observe(true, 1, 2, 1, 1), "retry epoch change observes");
+
+        // Turning off observes once to let `PushHub` reset, then skips forever while off.
+        assert!(gate.should_observe(false, 1, 2, 1, 1), "enabled -> disabled resets once");
+        assert!(!gate.should_observe(false, 1, 2, 1, 1), "stays skipped while disabled");
     }
 }

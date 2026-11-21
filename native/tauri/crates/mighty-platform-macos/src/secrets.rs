@@ -225,7 +225,15 @@ impl KeychainVault {
     }
 
     /// `SecItemUpdate`, else `SecItemAdd` with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` (into the confined keychain).
+    /// Acquires `KEYCHAIN_UI` so writes never race with silent reads toggling process-wide Keychain UI state.
     fn write(&self, id: &str, secret: &str) -> std::result::Result<(), i32> {
+        self.write_with_wait(id, secret, VAULT_WAIT)
+    }
+
+    fn write_with_wait(&self, id: &str, secret: &str, wait: std::time::Duration) -> std::result::Result<(), i32> {
+        let Some(_ui) = keychain_ui_within(wait) else {
+            return Err(ERR_SEC_INTERACTION_NOT_ALLOWED);
+        };
         let query = Query::generic(&self.keychains, self.service, Some(id));
         let value = CFData::from_buffer(secret.as_bytes());
         let update = CFDictionary::from_CFType_pairs(&[(key(unsafe { kSecValueData }), value.as_CFType())]);
@@ -247,6 +255,19 @@ impl KeychainVault {
         let status = unsafe { SecItemAdd(item.dictionary().as_concrete_TypeRef(), std::ptr::null_mut()) };
         if status == ERR_SEC_SUCCESS { Ok(()) } else { Err(status) }
     }
+
+    fn delete_with_wait(&self, id: &str, wait: std::time::Duration) -> Result<()> {
+        let Some(_ui) = keychain_ui_within(wait) else {
+            return Err(PlatformError::Refused(format!("the Keychain refused the delete (OSStatus {ERR_SEC_INTERACTION_NOT_ALLOWED})")));
+        };
+        let query = Query::generic(&self.keychains, self.service, Some(id));
+        // SAFETY: a valid query dictionary.
+        let status = unsafe { SecItemDelete(query.dictionary().as_concrete_TypeRef()) };
+        match status {
+            ERR_SEC_SUCCESS | ERR_SEC_ITEM_NOT_FOUND => Ok(()),
+            status => Err(PlatformError::Refused(format!("the Keychain refused the delete (OSStatus {status})"))),
+        }
+    }
 }
 
 impl SecretVault for KeychainVault {
@@ -266,13 +287,7 @@ impl SecretVault for KeychainVault {
     }
 
     fn delete(&self, id: &str) -> Result<()> {
-        let query = Query::generic(&self.keychains, self.service, Some(id));
-        // SAFETY: a valid query dictionary.
-        let status = unsafe { SecItemDelete(query.dictionary().as_concrete_TypeRef()) };
-        match status {
-            ERR_SEC_SUCCESS | ERR_SEC_ITEM_NOT_FOUND => Ok(()),
-            status => Err(PlatformError::Refused(format!("the Keychain refused the delete (OSStatus {status})"))),
-        }
+        self.delete_with_wait(id, VAULT_WAIT)
     }
 }
 
@@ -416,5 +431,26 @@ mod tests {
         assert_eq!(vault.load("conn-junk"), None);
         let raw = Query::generic(&throwaway.keychains(), SERVICE, Some("conn-junk")).data(false);
         assert_eq!(raw, Err(ERR_SEC_ITEM_NOT_FOUND), "nothing copied forward");
+    }
+
+    /// P1-FFI-1: `save`/`write` and `delete` acquire `KEYCHAIN_UI` and fail cleanly when the lock is held past the wait bound.
+    #[test]
+    fn write_and_delete_respect_keychain_ui_lock() {
+        let throwaway = Throwaway::new("lock-write-delete");
+        let vault = KeychainVault::only(throwaway.keychain.clone());
+        let (held, release) = (std::sync::mpsc::channel::<()>(), std::sync::mpsc::channel::<()>());
+        let holder = std::thread::spawn(move || {
+            let _ui = keychain_ui_within(std::time::Duration::from_secs(5)).expect("free");
+            held.0.send(()).unwrap();
+            release.1.recv().unwrap();
+        });
+        held.1.recv().unwrap();
+        let brief = std::time::Duration::from_millis(100);
+        assert_eq!(vault.write_with_wait("locked-id", FIRST, brief), Err(ERR_SEC_INTERACTION_NOT_ALLOWED));
+        assert!(vault.delete_with_wait("locked-id", brief).is_err(), "delete must respect KEYCHAIN_UI lock");
+        release.0.send(()).unwrap();
+        holder.join().unwrap();
+        vault.save("locked-id", FIRST).unwrap();
+        vault.delete("locked-id").unwrap();
     }
 }

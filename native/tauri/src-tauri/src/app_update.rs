@@ -690,12 +690,49 @@ fn inside_stage(helper: &Path, staged: &Path) -> bool {
     dotnet::to_upper_invariant(&helper.to_string_lossy()).starts_with(&dotnet::to_upper_invariant(&root))
 }
 
+#[cfg(windows)]
+fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    meta.file_attributes() & 0x0400 != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
+    false
+}
+
 /// C# `LaunchUpdateHelperAsync`: the staged version's exe started detached, hidden, in the temporary folder, with only `SystemRoot`;
-/// with a relaunch the app then quits through its normal quit path (`quit`).
+/// with a relaunch the app then quits through its normal quit path (`quit`). Re-verifies the staged tree and package SHA-256 before
+/// launching the helper when the staged folder is present on disk.
 pub fn launch_helper(processes: &dyn ProcessHost, locale: &Locale, plan: &InstallPlan, quit: &dyn Fn()) -> Result<(), String> {
     let helper = plan.staged_helper_executable();
     if !inside_stage(&helper, &plan.staged_directory) {
         return Err(locale.get("settings.appUpdate.helperOutsideStage"));
+    }
+    if let Ok(meta) = std::fs::symlink_metadata(&helper)
+        && (meta.file_type().is_symlink() || is_reparse_point(&meta) || !meta.is_file())
+    {
+        return Err(locale.get("appUpdate.error.packageRecheckFailed"));
+    }
+    if let Ok(staged_meta) = std::fs::symlink_metadata(&plan.staged_directory) {
+        if staged_meta.file_type().is_symlink() || is_reparse_point(&staged_meta) || !staged_meta.is_dir() {
+            return Err(locale.get("appUpdate.error.packageRecheckFailed"));
+        }
+        if let Ok(pkg_meta) = std::fs::symlink_metadata(&plan.package_path) {
+            if pkg_meta.file_type().is_symlink() || is_reparse_point(&pkg_meta) || !pkg_meta.is_file() {
+                return Err(locale.get("appUpdate.error.packageRecheckFailed"));
+            }
+            let digest = mighty_updates::app_update::service::sha256(&plan.package_path)
+                .map_err(|_| locale.get("appUpdate.error.packageRecheckFailed"))?;
+            if !digest.eq_ignore_ascii_case(&plan.sha256) {
+                return Err(locale.get("appUpdate.error.packageRecheckFailed"));
+            }
+        }
+        let valid = mighty_updates::app_update::stage::verify_staged_tree(&plan.staged_directory, &plan.package_path)
+            .map_err(|_| locale.get("appUpdate.error.packageRecheckFailed"))?;
+        if !valid {
+            return Err(locale.get("appUpdate.error.packageRecheckFailed"));
+        }
     }
     let environment: BTreeMap<String, String> = HELPER_ENVIRONMENT.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     processes
@@ -806,7 +843,7 @@ pub fn mac_stager(processes: Arc<dyn ProcessHost>, installer: Arc<dyn UpdateInst
         let (processes, installer, trees) = (processes.clone(), installer.clone(), trees.clone());
         Box::pin(async move {
             for folder in package.parent().into_iter().chain(package.parent().and_then(Path::parent)) {
-                let _ = installer.make_private(folder);
+                installer.make_private(folder).map_err(|error| mighty_updates::app_update::UpdateError::Plain(error.to_string()))?;
             }
             let unzip = |package: PathBuf, folder: PathBuf| async move { ditto(processes.as_ref(), &package, &folder).await };
             let may_execute = |file: &Path| installer.may_execute(file);

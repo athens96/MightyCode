@@ -368,6 +368,23 @@ async fn mobile_host_a_phone_is_told_only_of_what_changed() {
         woken["revision"] == ra + 3 && started.elapsed() < std::time::Duration::from_secs(3),
         "a pane's poll answers when that pane moves"
     );
+    // P1-RLY-1: Notify wakes long polls promptly when `router.changed()` fires (no 100 ms polling latency).
+    let notify_start = std::time::Instant::now();
+    let notify_path = format!("/m1/sessions/a?since={}&wait=5", ra + 3);
+    let notify_poll = world.route("GET", &notify_path, None);
+    let fast_mover = async {
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        let mut moved = a.clone();
+        moved.logs.as_mut().unwrap().push(entry("u3", "user", "fast", 3));
+        world.desk.set_sessions(vec![moved, b.clone()]);
+        router.changed();
+    };
+    let ((_, fast_woken), ()) = tokio::join!(notify_poll, fast_mover);
+    assert!(
+        fast_woken["revision"] == ra + 4 && notify_start.elapsed() < std::time::Duration::from_millis(150),
+        "Notify-driven poll should wake well before a full polling step: elapsed {:?}",
+        notify_start.elapsed()
+    );
     router.take_notifications();
     set(vec![b.clone()]);
     let closed = router.take_notifications();

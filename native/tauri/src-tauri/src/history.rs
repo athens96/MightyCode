@@ -71,6 +71,7 @@ pub fn of(host: &Host) -> Arc<History> {
 
 impl History {
     /// The smoke's own records (C# `HistoryHomeOverride`).
+    #[cfg(feature = "dev-harness")]
     pub fn set_home_override(&self, home: Option<PathBuf>) {
         *lock(&self.home_override) = home;
     }

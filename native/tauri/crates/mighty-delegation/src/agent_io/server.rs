@@ -89,7 +89,7 @@ pub struct AgentIo {
     terminal: Arc<dyn TerminalHandler>,
     shutdown: Revocation,
     connections: Arc<Semaphore>,
-    delegation_calls: Mutex<HashMap<String, usize>>,
+    delegation_calls: Arc<Mutex<HashMap<String, usize>>>,
     listeners: Mutex<Vec<JoinHandle<()>>>,
     serving: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -115,7 +115,7 @@ impl AgentIo {
             terminal,
             shutdown: Revocation::default(),
             connections: Arc::new(Semaphore::new(CONNECTIONS)),
-            delegation_calls: Mutex::new(HashMap::new()),
+            delegation_calls: Arc::new(Mutex::new(HashMap::new())),
             listeners: Mutex::new(vec![]),
             serving: Mutex::new(vec![]),
         });
@@ -289,6 +289,17 @@ impl AgentIo {
         call: &Value,
         deadline: &mut Instant,
     ) -> Option<DelegationResponse> {
+        self.answer_delegation_with_timeout(document, packet, call, deadline, Duration::from_secs(DELEGATION_SECONDS)).await
+    }
+
+    async fn answer_delegation_with_timeout(
+        &self,
+        document: &Lenient,
+        packet: &Map<String, Value>,
+        call: &Value,
+        deadline: &mut Instant,
+        timeout: Duration,
+    ) -> Option<DelegationResponse> {
         // A token or an argument that is not text (a lone surrogate among them) is a malformed call.
         let Ok(token) = document.text(packet.get("token")).map(|token| token.unwrap_or("").to_string()) else {
             return Some(DelegationResponse::failure(MALFORMED_MESSAGE));
@@ -304,8 +315,8 @@ impl AgentIo {
             }
             *count += 1;
         }
-        let _counted = Counted { calls: &self.delegation_calls, token };
-        *deadline = Instant::now() + Duration::from_secs(DELEGATION_SECONDS);
+        let counted = Counted { calls: self.delegation_calls.clone(), token };
+        *deadline = Instant::now() + timeout;
         let caller = DelegationCaller {
             pane_id: binding.pane_id.clone(),
             kind: binding.kind().to_string(),
@@ -313,8 +324,12 @@ impl AgentIo {
             delegation: binding.delegation(),
             permission_mode: binding.permission_mode(),
         };
-        // On its own task: a handler that panics is one that did not answer, and one past the deadline goes on unwatched.
-        let handled = tokio::spawn(handler.handle(request, caller));
+        // On its own task: a handler that panics is one that did not answer, and one past the deadline keeps holding its
+        // per-token concurrency slot until the spawned handler finishes instead of releasing it prematurely on timeout.
+        let handled = tokio::spawn(async move {
+            let _counted = counted;
+            handler.handle(request, caller).await
+        });
         tokio::select! {
             answered = tokio::time::timeout_at(*deadline, handled) => Some(match answered {
                 Ok(Ok(response)) => response,
@@ -368,15 +383,15 @@ pub fn logged_binding_factory(
     })
 }
 
-/// One delegation call counted against its token until it is answered.
-struct Counted<'a> {
-    calls: &'a Mutex<HashMap<String, usize>>,
+/// One delegation call counted against its token until its spawned handler task finishes.
+struct Counted {
+    calls: Arc<Mutex<HashMap<String, usize>>>,
     token: String,
 }
 
-impl Drop for Counted<'_> {
+impl Drop for Counted {
     fn drop(&mut self) {
-        let mut calls = lock(self.calls);
+        let mut calls = lock(&self.calls);
         if let Some(count) = calls.get_mut(&self.token) {
             *count -= 1;
             if *count == 0 {
@@ -493,6 +508,102 @@ mod tests {
             narrowed_binding.arguments.iter().all(|arg| !arg.contains(&delegation_key)),
             "delegation server must not be passed when override detaches delegation"
         );
+
+        pipe.close().await;
+    }
+
+    /// P1-SEC-1: timed-out delegation calls must keep holding their `DELEGATION_CALLS_PER_TOKEN` slot until the spawned handler
+    /// task actually finishes, rather than releasing the slot prematurely on timeout.
+    #[tokio::test]
+    async fn timed_out_delegation_calls_hold_slots_until_handler_finishes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::sync::Notify;
+
+        struct NoTerminal;
+        impl TerminalHandler for NoTerminal {
+            fn handle(&self, _call: TerminalCall) -> BoxFuture<'static, Result<Value, String>> {
+                Box::pin(async { Err("unused".into()) })
+            }
+        }
+        struct StuckDelegation {
+            entered: AtomicUsize,
+            release: Arc<Notify>,
+        }
+        impl DelegationHandler for StuckDelegation {
+            fn handle(&self, _request: DelegationRequest, _caller: DelegationCaller) -> BoxFuture<'static, DelegationResponse> {
+                self.entered.fetch_add(1, Ordering::SeqCst);
+                let release = self.release.clone();
+                Box::pin(async move {
+                    release.notified().await;
+                    DelegationResponse::failure("finished")
+                })
+            }
+        }
+
+        let pipe = AgentIo::start(Arc::new(mighty_platform::fake::FakeAgentIo::default()), Arc::new(NoTerminal)).unwrap();
+        let release = Arc::new(Notify::new());
+        let handler = Arc::new(StuckDelegation { entered: AtomicUsize::new(0), release: release.clone() });
+        let exe = if cfg!(windows) { r"C:\mighty\app.exe" } else { "/mighty/app" }.to_string();
+        let binding = pipe.bind("pane-timeout", "ws", &std::env::temp_dir().to_string_lossy(), "claude", &exe).unwrap();
+        binding.connect_delegation(Some(handler.clone()), true, "fullAccess");
+        let token = binding.environment()[super::super::binding::TOKEN_KEY].clone();
+
+        let make_packet = |token: &str| {
+            let bytes = format!(r#"{{"token":"{token}","delegation":{{"tool":"list_children","arguments":{{}}}}}}"#);
+            Lenient::parse_bytes(bytes.as_bytes()).unwrap()
+        };
+
+        // Start DELEGATION_CALLS_PER_TOKEN calls with a short timeout while their spawned tasks remain blocked.
+        let mut futures = Vec::new();
+        for _ in 0..DELEGATION_CALLS_PER_TOKEN {
+            let pipe = pipe.clone();
+            let token = token.clone();
+            futures.push(tokio::spawn(async move {
+                let document = make_packet(&token);
+                let packet = document.value.as_object().unwrap();
+                let call = packet.get("delegation").unwrap();
+                let mut deadline = Instant::now() + Duration::from_secs(TERMINAL_SECONDS);
+                pipe.answer_delegation_with_timeout(&document, packet, call, &mut deadline, Duration::from_millis(40)).await
+            }));
+        }
+        for fut in futures {
+            assert_eq!(fut.await.unwrap(), Some(DelegationResponse::failure(NO_ANSWER_MESSAGE)));
+        }
+        assert_eq!(handler.entered.load(Ordering::SeqCst), DELEGATION_CALLS_PER_TOKEN);
+
+        // Even after timeout, all slots are still held by the unfinished tasks, so another call must get BUSY_MESSAGE.
+        let document = make_packet(&token);
+        let packet = document.value.as_object().unwrap();
+        let call = packet.get("delegation").unwrap();
+        let mut deadline = Instant::now() + Duration::from_secs(TERMINAL_SECONDS);
+        assert_eq!(
+            pipe.answer_delegation_with_timeout(&document, packet, call, &mut deadline, Duration::from_millis(40)).await,
+            Some(DelegationResponse::failure(BUSY_MESSAGE)),
+            "timed-out tasks must continue holding their concurrency slots until finished"
+        );
+
+        // Once the blocked tasks finish, the slots are released and a subsequent call proceeds normally.
+        release.notify_waiters();
+        let wait_limit = Instant::now() + Duration::from_secs(2);
+        while !lock(&pipe.delegation_calls).is_empty() && Instant::now() < wait_limit {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(lock(&pipe.delegation_calls).is_empty(), "slots must be released once spawned handlers finish");
+
+        let pipe2 = pipe.clone();
+        let token2 = token.clone();
+        let next = tokio::spawn(async move {
+            let document = make_packet(&token2);
+            let packet = document.value.as_object().unwrap();
+            let call = packet.get("delegation").unwrap();
+            let mut deadline = Instant::now() + Duration::from_secs(TERMINAL_SECONDS);
+            pipe2.answer_delegation_with_timeout(&document, packet, call, &mut deadline, Duration::from_secs(2)).await
+        });
+        while handler.entered.load(Ordering::SeqCst) < DELEGATION_CALLS_PER_TOKEN + 1 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        release.notify_waiters();
+        assert_eq!(next.await.unwrap(), Some(DelegationResponse::failure("finished")));
 
         pipe.close().await;
     }

@@ -8,7 +8,7 @@
 //! - Codex: the token stays in the Codex process's environment, forwarded to the servers by name (`mcp_servers.<name>.env_vars`), and
 //!   `shell_environment_policy.exclude` keeps `MIGHTY_*` out of the commands its shell tool runs ([`codex_shell_exclude`]).
 
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -104,6 +104,21 @@ pub fn sweep(folder: &Path) -> usize {
     swept
 }
 
+/// Reads a bounded, non-symlink Codex `config.toml` file.
+fn read_codex_config(path: &Path) -> Option<String> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if meta.file_type().is_symlink() || !meta.file_type().is_file() || meta.len() > MAXIMUM_CODEX_CONFIG {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(MAXIMUM_CODEX_CONFIG + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > MAXIMUM_CODEX_CONFIG {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
 /// `$CODEX_HOME/config.toml` (`~/.codex/config.toml` without it), as this process's environment names it; None when it cannot be read.
 pub fn codex_home_config() -> Option<String> {
     let home = std::env::var_os("CODEX_HOME").filter(|h| !h.is_empty()).map(PathBuf::from).or_else(|| {
@@ -111,29 +126,75 @@ pub fn codex_home_config() -> Option<String> {
             .filter(|h| !h.is_empty())
             .map(|h| PathBuf::from(h).join(".codex"))
     })?;
-    let path = home.join("config.toml");
-    if std::fs::metadata(&path).ok()?.len() > MAXIMUM_CODEX_CONFIG {
-        return None;
+    read_codex_config(&home.join("config.toml"))
+}
+
+/// `<workspace>/.codex/config.toml`, when present. Returns `None` only if no config entry exists there; if an entry exists but is a
+/// symlink, oversized, or unreadable, returns a non-TOML marker so [`codex_shell_exclude_with_project`] fails closed and enforces
+/// `MIGHTY_*` exclusion.
+pub fn codex_project_config(workspace: &Path) -> Option<String> {
+    let path = workspace.join(".codex").join("config.toml");
+    match std::fs::symlink_metadata(&path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => Some("[".to_string()),
+        Ok(_) => Some(read_codex_config(&path).unwrap_or_else(|| "[".to_string())),
     }
-    std::fs::read_to_string(path).ok()
+}
+
+/// Extracts `shell_environment_policy` from a parsed TOML config and notes whether any profile defines one too.
+fn project_touches_shell_policy(table: &toml::Table) -> bool {
+    if table.contains_key("shell_environment_policy") {
+        return true;
+    }
+    table
+        .get("profiles")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|profiles| profiles.values().filter_map(toml::Value::as_table).any(|p| p.contains_key("shell_environment_policy")))
+}
+
+fn collect_excludes(policy: Option<&toml::Table>, patterns: &mut Vec<String>) {
+    if let Some(list) = policy.and_then(|p| p.get("exclude")).and_then(toml::Value::as_array) {
+        for item in list.iter().filter_map(toml::Value::as_str) {
+            if !patterns.iter().any(|existing| existing == item) {
+                patterns.push(item.to_string());
+            }
+        }
+    }
 }
 
 /// The value of `-c shell_environment_policy.exclude=…` for a Codex run: the user's own `exclude` (from `config`, the text of their
 /// Codex `config.toml`) with [`CODEX_SHELL_EXCLUDE`] added, as a TOML array. A `-c` override replaces only that one key, so the
 /// user's `inherit`, `include_only`, `set` and `ignore_default_excludes` stand. None when their policy uses `filters`, which Codex
-/// refuses beside `exclude` (that run's shell then keeps what their filters let through). A project's `.codex/config.toml` or a
-/// profile's `exclude` is not read: the override takes its place.
+/// refuses beside `exclude` (that run's shell then keeps what their filters let through).
 pub fn codex_shell_exclude(config: Option<&str>) -> Option<String> {
-    let table: Option<toml::Table> = config.and_then(|text| text.parse().ok());
-    let policy = table.as_ref().and_then(|t| t.get("shell_environment_policy")).and_then(toml::Value::as_table);
-    if policy.is_some_and(|p| p.contains_key("filters")) {
+    codex_shell_exclude_with_project(config, None)
+}
+
+/// Like [`codex_shell_exclude`], also inspecting a workspace-local `.codex/config.toml` (`project`) so a repo-local Codex config
+/// cannot silently override `MIGHTY_*` exclusion via `shell_environment_policy` (`exclude`, `filters`, or a profile override).
+pub fn codex_shell_exclude_with_project(home: Option<&str>, project: Option<&str>) -> Option<String> {
+    let home_table: Option<toml::Table> = home.and_then(|text| text.parse().ok());
+    let home_policy = home_table.as_ref().and_then(|t| t.get("shell_environment_policy")).and_then(toml::Value::as_table);
+
+    let (project_table, project_invalid) = match project {
+        None => (None, false),
+        Some(text) => match text.parse::<toml::Table>() {
+            Ok(table) => (Some(table), false),
+            Err(_) => (None, true),
+        },
+    };
+    let project_policy = project_table.as_ref().and_then(|t| t.get("shell_environment_policy")).and_then(toml::Value::as_table);
+    let project_overrides_policy = project_invalid || project_table.as_ref().is_some_and(project_touches_shell_policy);
+
+    // Only skip `-c shell_environment_policy.exclude` when the trusted user home config uses `filters` AND the repository itself
+    // does not define or tamper with `shell_environment_policy`.
+    if home_policy.is_some_and(|p| p.contains_key("filters")) && !project_overrides_policy {
         return None;
     }
-    let mut patterns: Vec<String> = policy
-        .and_then(|p| p.get("exclude"))
-        .and_then(toml::Value::as_array)
-        .map(|list| list.iter().filter_map(toml::Value::as_str).map(str::to_string).collect())
-        .unwrap_or_default();
+
+    let mut patterns = Vec::new();
+    collect_excludes(home_policy, &mut patterns);
+    collect_excludes(project_policy, &mut patterns);
     if !patterns.iter().any(|p| p == CODEX_SHELL_EXCLUDE) {
         patterns.push(CODEX_SHELL_EXCLUDE.to_string());
     }
@@ -185,5 +246,76 @@ mod tests {
         assert_eq!(codex_shell_exclude(Some(users)).as_deref(), Some(r#"["AWS_*","MIGHTY_*"]"#), "theirs kept, ours once");
         let filters = "[shell_environment_policy]\nfilters = [{ exclude = [\"AWS_*\"] }]\n";
         assert_eq!(codex_shell_exclude(Some(filters)), None, "Codex refuses exclude beside filters");
+    }
+
+    /// P1-SEC-1: project-local `.codex/config.toml` is inspected so a repo cannot silently override `MIGHTY_*` exclusion.
+    #[test]
+    fn project_local_codex_config_cannot_override_mighty_exclusion() {
+        let user_exclude = "[shell_environment_policy]\nexclude = [\"AWS_*\"]\n";
+        let user_filters = "[shell_environment_policy]\nfilters = [{ exclude = [\"AWS_*\"] }]\n";
+        let repo_exclude = "[shell_environment_policy]\nexclude = [\"GCP_*\"]\n";
+        let repo_filters = "[shell_environment_policy]\nfilters = [{ include = [\"*\"] }]\n";
+        let repo_profile = "[profiles.dev.shell_environment_policy]\nexclude = [\"NONE\"]\n";
+        let repo_unrelated = "model = \"o3\"\n";
+
+        assert_eq!(
+            codex_shell_exclude_with_project(Some(user_exclude), Some(repo_exclude)).as_deref(),
+            Some(r#"["AWS_*","GCP_*","MIGHTY_*"]"#),
+            "merges user and project excludes and always keeps MIGHTY_*"
+        );
+        assert_eq!(
+            codex_shell_exclude_with_project(None, Some(repo_filters)).as_deref(),
+            Some(r#"["MIGHTY_*"]"#),
+            "repo-local filters must not suppress MIGHTY_* exclude override"
+        );
+        assert_eq!(
+            codex_shell_exclude_with_project(Some(user_filters), Some(repo_filters)).as_deref(),
+            Some(r#"["MIGHTY_*"]"#),
+            "repo-local filters cannot ride on user filters to bypass MIGHTY_* exclusion"
+        );
+        assert_eq!(
+            codex_shell_exclude_with_project(Some(user_filters), Some(repo_exclude)).as_deref(),
+            Some(r#"["GCP_*","MIGHTY_*"]"#),
+            "repo-local exclude overrides user filters, so MIGHTY_* exclusion must be enforced"
+        );
+        assert_eq!(
+            codex_shell_exclude_with_project(Some(user_filters), Some(repo_profile)).as_deref(),
+            Some(r#"["MIGHTY_*"]"#),
+            "repo-local profile shell_environment_policy must fail closed"
+        );
+        assert_eq!(
+            codex_shell_exclude_with_project(Some(user_filters), Some("not toml [")).as_deref(),
+            Some(r#"["MIGHTY_*"]"#),
+            "unparseable repo-local config must fail closed"
+        );
+        assert_eq!(
+            codex_shell_exclude_with_project(Some(user_filters), Some(repo_unrelated)),
+            None,
+            "unrelated repo config still respects trusted user filters"
+        );
+
+        // Disk reading via `codex_project_config`: absent -> None, present -> Some(content), symlink -> fail closed.
+        let workspace = folder("project-codex");
+        std::fs::create_dir_all(&workspace).unwrap();
+        assert_eq!(codex_project_config(&workspace), None);
+        std::fs::create_dir_all(workspace.join(".codex")).unwrap();
+        let config_path = workspace.join(".codex").join("config.toml");
+        std::fs::write(&config_path, repo_exclude).unwrap();
+        let loaded = codex_project_config(&workspace);
+        assert_eq!(codex_shell_exclude_with_project(None, loaded.as_deref()).as_deref(), Some(r#"["GCP_*","MIGHTY_*"]"#));
+        #[cfg(unix)]
+        {
+            let target = workspace.join("real.toml");
+            std::fs::write(&target, repo_unrelated).unwrap();
+            std::fs::remove_file(&config_path).unwrap();
+            std::os::unix::fs::symlink(&target, &config_path).unwrap();
+            let linked = codex_project_config(&workspace);
+            assert_eq!(
+                codex_shell_exclude_with_project(Some(user_filters), linked.as_deref()).as_deref(),
+                Some(r#"["MIGHTY_*"]"#),
+                "symlinked repo-local .codex/config.toml must fail closed"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&workspace);
     }
 }

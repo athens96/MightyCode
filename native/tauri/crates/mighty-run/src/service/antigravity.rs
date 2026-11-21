@@ -32,13 +32,24 @@ pub(super) fn next_holder() -> u64 {
     NEXT_HOLDER.fetch_add(1, Ordering::Relaxed)
 }
 
-/// C# `InitializeAsync`'s `RemoveLeftovers` (C2): what a crash left in agy's settings goes on a thread of its own, and `done` says when;
-/// no agy run starts before ([`RunService::hold_antigravity_rules`]).
-pub(super) fn remove_leftovers(rules: AntigravityRuleLeases, done: tokio::sync::watch::Sender<bool>) {
+/// Result of startup cleanup of leftover temporary Antigravity rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum LeftoversState {
+    Pending,
+    Clean,
+    Failed(String),
+}
+
+/// C# `InitializeAsync`'s `RemoveLeftovers` (C2): what a crash left in agy's settings goes on a thread of its own, and `done` says
+/// whether cleanup succeeded or failed closed; no agy run starts before ([`RunService::hold_antigravity_rules`]).
+pub(super) fn remove_leftovers(rules: AntigravityRuleLeases, done: tokio::sync::watch::Sender<LeftoversState>) {
     std::thread::spawn(move || {
-        // A panic on the way still lets runs start: what it could not take out stays recorded for the next launch.
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rules.remove_leftovers()));
-        let _ = done.send(true);
+        let state = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rules.remove_leftovers_checked())) {
+            Ok(Ok(())) => LeftoversState::Clean,
+            Ok(Err(error)) => LeftoversState::Failed(error),
+            Err(_) => LeftoversState::Failed("failed to remove leftover temporary Antigravity permission rules".into()),
+        };
+        let _ = done.send(state);
     });
 }
 
@@ -148,8 +159,14 @@ impl Shared {
             return Ok(());
         }
         let mut removed = self.leftovers_removed.clone();
-        // A removal that ended without saying so (its thread gone) lets runs start too.
-        let _ = removed.wait_for(|done| *done).await;
+        // Wait for startup leftover cleanup to finish, and fail closed if it exhausted retries or failed.
+        let state = match removed.wait_for(|state| !matches!(state, LeftoversState::Pending)).await {
+            Ok(guard) => guard.clone(),
+            Err(_) => LeftoversState::Failed("failed to remove leftover temporary Antigravity permission rules".into()),
+        };
+        if let LeftoversState::Failed(message) = state {
+            return Err(RunError::State(message));
+        }
         let Some(grant) = request.antigravity_grant.clone() else { return Ok(()) };
         let holder = lock(&self.state).routes.get(&request.session_id).map_or(0, |route| route.holder);
         let (shared, session) = (self.clone(), request.session_id.clone());
@@ -270,10 +287,10 @@ impl RunService {
         lock(&self.shared.antigravity).leases.get(session_id).map(|(_, lease)| lease.rules.clone())
     }
 
-    /// The leftovers a crash left in agy's settings are out (C2): agy runs may start.
+    /// The leftovers a crash left in agy's settings have finished attempting cleanup (C2).
     pub async fn antigravity_leftovers_removed(&self) {
         let mut removed = self.shared.leftovers_removed.clone();
-        let _ = removed.wait_for(|done| *done).await;
+        let _ = removed.wait_for(|state| !matches!(state, LeftoversState::Pending)).await;
     }
 
     /// `ReleaseAntigravityRules`: quit — the temporary rules leave agy's settings with the runs that held them.
@@ -347,9 +364,10 @@ mod tests {
     }
 
     /// The service's shared part over `rules`, the leftovers out already or not.
-    fn shared(rules: AntigravityRuleLeases, removed: bool) -> (Arc<Shared>, tokio::sync::watch::Sender<bool>) {
+    fn shared(rules: AntigravityRuleLeases, removed: bool) -> (Arc<Shared>, tokio::sync::watch::Sender<LeftoversState>) {
         let (events, _receiver) = tokio::sync::mpsc::unbounded_channel();
-        let (done, leftovers_removed) = tokio::sync::watch::channel(removed);
+        let initial = if removed { LeftoversState::Clean } else { LeftoversState::Pending };
+        let (done, leftovers_removed) = tokio::sync::watch::channel(initial);
         let shared = Arc::new(Shared {
             state: Mutex::new(State { snapshot: AppSnapshot::default(), routes: HashMap::new(), closing: false }),
             events,
@@ -466,6 +484,31 @@ mod tests {
         shared.receive_antigravity(&RunEvent::state("pane", "stopped", None));
         until(|| rules.held().is_empty() && settings_are(&folder, SETTINGS), "released and out of the settings").await;
         rules.settled();
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    fn always_fail_swap(_temporary: &Path, _target: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "locked"))
+    }
+
+    /// P1-SEC-3: if startup leftover cleanup exhausts retries, `hold_antigravity_rules` fails closed for `agy` runs instead of
+    /// silently treating uncleared temporary rules as clean (while non-`agy` providers still proceed).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn agy_run_fails_closed_when_leftovers_removal_exhausts_retries() {
+        let folder = folder("leftovers-fail-closed");
+        let crashed = rules(&folder, leases::portable_replace);
+        crashed.apply(&AllowGrant::new("agy-0", &["command(git clean -fdx)"], true)).unwrap();
+
+        let failing = rules(&folder, always_fail_swap);
+        let (shared, done) = shared(failing.clone(), false);
+        remove_leftovers(failing, done);
+
+        let agy_req = StartRunRequest::new("pane", "ws", "claude", "hi").with_provider("gemini");
+        let result = shared.hold_antigravity_rules(&agy_req).await;
+        assert!(result.is_err(), "agy run must be blocked when leftover cleanup exhausts retries");
+
+        let claude_req = StartRunRequest::new("claude-pane", "ws", "claude", "hi").with_provider("claude");
+        shared.hold_antigravity_rules(&claude_req).await.expect("non-agy providers are unaffected");
         let _ = std::fs::remove_dir_all(&folder);
     }
 }

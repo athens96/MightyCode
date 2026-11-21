@@ -214,6 +214,7 @@ pub fn setup_files() -> Arc<dyn mighty_platform::SetupFiles> {
 
 /// The page's whole picture as PNG bytes (the help capture, W9-H): WebView2's `CapturePreview` on Windows; WKWebView's snapshot on the
 /// Mac (`mighty-platform-macos` `page`, M-G).
+#[cfg(feature = "dev-harness")]
 pub async fn page_picture(page: &tauri::Webview) -> std::result::Result<Vec<u8>, String> {
     #[cfg(windows)]
     return os::page::capture_preview(page).await.map_err(|e| e.to_string());
@@ -223,14 +224,14 @@ pub async fn page_picture(page: &tauri::Webview) -> std::result::Result<Vec<u8>,
 
 /// The picture of a box of the page (x, y, width, height in CSS pixels) as PNG bytes (the help capture's popovers): WKWebView's snapshot
 /// of that rectangle (M-G); Windows clips through the DevTools protocol instead ([`page_devtools`]).
-#[cfg(target_os = "macos")]
+#[cfg(all(feature = "dev-harness", target_os = "macos"))]
 pub async fn page_picture_of(page: &tauri::Webview, clip: (f64, f64, f64, f64)) -> std::result::Result<Vec<u8>, String> {
     os::page::snapshot(page, Some(clip)).await
 }
 
 /// A DevTools protocol call on the page (the help capture's clipped pictures and reduced motion, W9-H): Windows' WebView2 only; the
 /// Mac's WKWebView has none (M-G clips its snapshot instead).
-#[cfg(windows)]
+#[cfg(all(feature = "dev-harness", windows))]
 pub async fn page_devtools(page: &tauri::Webview, method: &str, arguments: &str) -> std::result::Result<String, String> {
     os::page::devtools(page, method, arguments).await.map_err(|e| e.to_string())
 }
@@ -435,23 +436,27 @@ pub fn find_on_path(name: &str, environment: &std::collections::BTreeMap<String,
 
 /// The smoke's own limit with the stand-in CLI: the Mac's run (WebKit, Ghostty, the native panels, its own help capture) took about
 /// 120–150 s on the runner at the Mac stage's integration, given room to about 400 s; Windows' 645 s (W9 plan R13).
+#[cfg(feature = "dev-harness")]
 pub fn smoke_fake_claude_seconds() -> u64 {
     if cfg!(target_os = "macos") { 400 } else { 645 }
 }
 
 /// A folder as the processes started in it read their own working folder: the Mac's temporary `/var/…` is `/private/var/…` there
 /// (canonical); Windows' as it is (canonicalizing would add the verbatim prefix).
+#[cfg(feature = "dev-harness")]
 pub fn as_processes_see(folder: &std::path::Path) -> std::path::PathBuf {
     if cfg!(windows) { folder.to_path_buf() } else { std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf()) }
 }
 
 /// Whether the smoke's gate is every check outside smoke.rs' `MAC_PENDING_STEPS` (the Mac) rather than every check (Windows).
+#[cfg(feature = "dev-harness")]
 pub fn smoke_gate_skips_pending() -> bool {
     cfg!(target_os = "macos")
 }
 
 /// Whether the page's webview runs Tauri's initialization scripts in its frames too (WebView2 through wry, whatever "main frame only"
 /// says); WKWebView keeps them in the main frame. Either way the host's nonce is defined only in the top frame (main.rs `HostNonce`).
+#[cfg(feature = "dev-harness")]
 pub fn frames_get_init_scripts() -> bool {
     cfg!(windows)
 }
@@ -478,6 +483,7 @@ pub fn name_standard_menus(window: &tauri::menu::Submenu<tauri::Wry>, help: &tau
 }
 
 /// The menu bar as AppKit holds it (main thread): each item's menu, title, key equivalent and modifier bits (`os::menu`).
+#[cfg(feature = "dev-harness")]
 pub fn menu_entries() -> Option<Vec<(String, String, String, u64)>> {
     #[cfg(target_os = "macos")]
     return os::menu::entries().map(|items| items.into_iter().map(|i| (i.menu, i.title, i.key, i.modifiers)).collect());
@@ -486,6 +492,7 @@ pub fn menu_entries() -> Option<Vec<(String, String, String, u64)>> {
 }
 
 /// A key equivalent pressed through the menu bar (main thread): whether an item took it.
+#[cfg(feature = "dev-harness")]
 pub fn press_menu_key(key: &str, code: u16, modifiers: u64) -> Option<bool> {
     #[cfg(target_os = "macos")]
     return os::menu::press(key, code, modifiers);
@@ -520,6 +527,7 @@ pub async fn save_input_diagnostics(page: &tauri::Webview, data_dir: &std::path:
 
 /// The last pet panel's facts as the smoke reads them back (main thread): what Swift's `CompanionPanel` sets, each true when it
 /// holds. None where the pet is no panel (Windows: its window's own `focus` says what it can).
+#[cfg(feature = "dev-harness")]
 pub fn pet_panel_facts() -> Option<Vec<(&'static str, bool)>> {
     #[cfg(target_os = "macos")]
     return os::pet::panel_facts();

@@ -559,3 +559,71 @@ async fn a_bridge_closed_at_once_stops_its_server() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(TcpStream::connect(&address).await.is_err(), "the server still listens after the bridge closed");
 }
+
+/// P1-SEC-1: 401/403 responses return immediately without draining an unauthenticated/forbidden caller's stalled body for 5 s.
+#[tokio::test(flavor = "multi_thread")]
+async fn unauthorized_and_forbidden_return_immediately_without_draining_body() {
+    let bridge = ModBridge::new();
+    let (_received, sink) = counting();
+    let connection = bridge.register(sink, false).await.unwrap();
+    let address = connection.url.trim_start_matches("http://").split('/').next().unwrap().to_string();
+
+    for (label, extra_header, expected) in [
+        ("401 unauthorized", format!("Authorization: Bearer {}\r\n", "0".repeat(64)), "401"),
+        ("403 forbidden", format!("Authorization: Bearer {}\r\nOrigin: https://evil.example\r\n", connection.token), "403"),
+    ] {
+        let mut stream = TcpStream::connect(&address).await.unwrap();
+        // Announce a 512 KiB body and deliberately withhold it: draining would stall for 5 s.
+        let head = format!(
+            "POST /events HTTP/1.1\r\nHost: {address}\r\n{extra_header}Content-Type: application/json\r\nContent-Length: 524288\r\nConnection: close\r\n\r\n"
+        );
+        stream.write_all(head.as_bytes()).await.unwrap();
+        let started = Instant::now();
+        let mut buf = [0u8; 256];
+        let n = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf))
+            .await
+            .unwrap_or_else(|_| panic!("{label} stalled waiting to drain body"))
+            .unwrap();
+        let response = String::from_utf8_lossy(&buf[..n]);
+        assert!(response.starts_with(&format!("HTTP/1.1 {expected}")), "{label}: expected HTTP {expected}, got {response:?}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{label} took {:?}, should return immediately without draining",
+            started.elapsed()
+        );
+    }
+    bridge.dispose().await;
+}
+
+/// P1-SEC-1: `Connection::deliver` drops `self.state` before invoking the receive callback, so calling `dispose()` from inside
+/// the callback does not deadlock.
+#[tokio::test(flavor = "multi_thread")]
+async fn reentrant_dispose_inside_receive_callback_does_not_deadlock() {
+    let bridge = ModBridge::new();
+    let slot: Arc<Mutex<Option<Arc<mighty_run::mods::Connection>>>> = Arc::new(Mutex::new(None));
+    let slot_cb = slot.clone();
+    let connection = bridge
+        .register(
+            Box::new(move |_value| {
+                if let Some(conn) = slot_cb.lock().unwrap().as_ref() {
+                    conn.dispose();
+                }
+            }),
+            false,
+        )
+        .await
+        .unwrap();
+    *slot.lock().unwrap() = Some(connection.clone());
+
+    let body = json!({"version": 1, "runId": connection.id, "claudeSessionId": "s1", "event": "session.start"});
+    let status = tokio::time::timeout(Duration::from_secs(3), Post::new(&connection, &body).without_graph_header().send())
+        .await
+        .expect("re-entrant dispose must not deadlock");
+    assert_eq!(status, NO_CONTENT);
+    assert_eq!(
+        Post::new(&connection, &body).without_graph_header().send().await,
+        UNAUTHORIZED,
+        "connection disposed by callback must reject subsequent events"
+    );
+    bridge.dispose().await;
+}

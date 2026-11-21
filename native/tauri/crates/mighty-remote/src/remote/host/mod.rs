@@ -662,11 +662,7 @@ impl RemoteHost {
         match tokio::spawn(async move { host.route(&request, revision).await }).await {
             Ok(Ok(response)) => response,
             Ok(Err(failure)) => failure_response(failure.status, &failure.message),
-            Err(error) if error.is_panic() => {
-                let payload = error.into_panic();
-                let words = payload.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| payload.downcast_ref::<String>().cloned());
-                failure_response(500, &words.unwrap_or_default())
-            }
+            Err(error) if error.is_panic() => failure_response(500, &get("remote.host.error.badRequest")),
             Err(_) => failure_response(503, &get("remote.host.error.stopped")),
         }
     }

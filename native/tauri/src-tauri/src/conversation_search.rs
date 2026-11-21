@@ -183,7 +183,9 @@ async fn export(host: Arc<Host>, id: String) -> Result<Value, String> {
     let request =
         SaveRequest { suggested_name: conversation_search::file_name(&title), filter_name: "Markdown".into(), extension: "md".into() };
     let Some(path) = files.save.pick(request).await.map_err(|e| e.to_string())? else { return Ok(json!({"saved": false})) };
-    std::fs::write(&path, markdown)
+    tauri::async_runtime::spawn_blocking(move || std::fs::write(&path, markdown))
+        .await
+        .map_err(|error| locale.get_with("conversationSearch.exportFailed", &[("error", &error.to_string())]))?
         .map_err(|error| locale.get_with("conversationSearch.exportFailed", &[("error", &error.to_string())]))?;
     Ok(json!({"saved": true}))
 }

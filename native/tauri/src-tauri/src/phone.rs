@@ -38,7 +38,9 @@ use mighty_remote::phone::desk::{
 };
 use mighty_remote::phone::mighty::{self, MobileOut, ResultFilesMemo, RunsInputs};
 use mighty_remote::phone::router::{Router, RouterOptions};
-use mighty_remote::relay::connection::{MobileDevice, MobileReply, RequestHandler};
+use mighty_remote::relay::connection::RequestHandler;
+#[cfg(feature = "dev-harness")]
+use mighty_remote::relay::connection::{MobileDevice, MobileReply};
 use mighty_run::antigravity::permissions::PermissionRequest;
 use mighty_run::model::{ModelCatalog, StartRunRequest};
 use mighty_run::plan_mode::PlanDecision;
@@ -140,6 +142,7 @@ pub fn take_notifications(host: &Host) -> Vec<(String, i64)> {
 
 /// A request routed in-process (the smoke's phone part and the delegation smoke's `phone*` keys, W8 plan D16): what a phone's
 /// connection hands the router, from the smoke's own device.
+#[cfg(feature = "dev-harness")]
 pub async fn route(host: &Arc<Host>, method: &str, path: &str, body: Option<Value>) -> MobileReply {
     let body = body.and_then(|b| serde_json::value::RawValue::from_string(b.to_string()).ok());
     let device = MobileDevice { client_id: "smoke-phone".into(), name: "Smoke".into(), direct: false, desktop: false };

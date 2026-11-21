@@ -43,9 +43,10 @@ fn deliver(event: SessionEnding) {
     }
 }
 
-/// C#'s subclass procedure: the session's messages reported, every message passed on.
+/// C#'s subclass procedure: the session's messages reported, every message passed on. Wrapped in `catch_unwind` so a panicking
+/// subscriber never unwinds across the Win32 FFI boundary.
 unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, id: usize, _data: usize) -> LRESULT {
-    match message {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match message {
         WM_QUERYENDSESSION => deliver(SessionEnding::Query),
         WM_ENDSESSION => deliver(SessionEnding::End { ending: wparam != 0 }),
         WM_NCDESTROY => {
@@ -54,7 +55,7 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
             watchers().window = None;
         }
         _ => {}
-    }
+    }));
     // SAFETY: the message as it arrived, handed to the next procedure in the window's chain.
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
 }

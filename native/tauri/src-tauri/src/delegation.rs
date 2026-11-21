@@ -62,6 +62,7 @@ pub fn app() -> Option<Arc<DelegationApp>> {
 static SMOKE_READY: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// The delegation smoke's word that `provider`'s CLI is ready (smoke_delegation.rs).
+#[cfg(feature = "dev-harness")]
 pub fn set_smoke_agent_ready(provider: &str, ready: bool) {
     let mut ready_now = lock(&SMOKE_READY);
     ready_now.retain(|agent| agent != provider);
@@ -483,6 +484,7 @@ pub type SmokeDialog = Arc<dyn Fn(&Value) -> bool + Send + Sync>;
 static SMOKE_DIALOG: Mutex<Option<SmokeDialog>> = Mutex::new(None);
 
 /// The delegation smoke's dialog driver, or None to let the page answer again (smoke_delegation.rs).
+#[cfg(feature = "dev-harness")]
 pub fn set_smoke_dialog(driver: Option<SmokeDialog>) {
     *lock(&SMOKE_DIALOG) = driver;
 }

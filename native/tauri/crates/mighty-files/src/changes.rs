@@ -4,7 +4,7 @@
 //! untracked file read as empty).
 
 use std::collections::{HashMap, HashSet};
-use std::io::Read as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -27,7 +27,19 @@ pub const MAXIMUM_BYTES_PER_RUN: u64 = 16 * 1_048_576;
 pub const MAXIMUM_BYTES: u64 = 512 * 1_048_576;
 pub const MAXIMUM_RUNS_PER_PANE: usize = 20;
 pub const MAXIMUM_REFUSED_PER_RUN: usize = 1_024;
+pub const MAXIMUM_MANIFEST_BYTES: u64 = 1_048_576;
 pub const FOLDER_NAME: &str = "file-originals";
+
+#[cfg(windows)]
+fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    meta.file_attributes() & 0x0400 != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
+    false
+}
 
 /// Paths compare ignoring case where the OS's file system does (C# `PathComparer`: OrdinalIgnoreCase on Windows).
 fn ignores_case() -> bool {
@@ -93,7 +105,17 @@ struct Manifest {
 
 impl Manifest {
     fn read(folder: &Path) -> Option<Manifest> {
-        let bytes = std::fs::read(folder.join("run.json")).ok()?;
+        let path = folder.join("run.json");
+        let meta = std::fs::symlink_metadata(&path).ok()?;
+        if meta.file_type().is_symlink() || is_reparse_point(&meta) || !meta.file_type().is_file() || meta.len() > MAXIMUM_MANIFEST_BYTES {
+            return None;
+        }
+        let file = std::fs::File::open(&path).ok()?;
+        let mut bytes = Vec::new();
+        file.take(MAXIMUM_MANIFEST_BYTES + 1).read_to_end(&mut bytes).ok()?;
+        if bytes.len() as u64 > MAXIMUM_MANIFEST_BYTES {
+            return None;
+        }
         let value: Value = serde_json::from_slice(&bytes).ok()?;
         if value.get("version").and_then(Value::as_i64) != Some(1) {
             return None;
@@ -678,11 +700,29 @@ fn delete(folder: &Path) {
     }
 }
 
-/// C# `WriteAtomically`: to a temporary name beside it, then moved over.
+/// C# `WriteAtomically`: to a new private temporary file beside it (`create_new`, 0600 on Unix, `sync_all`), then moved over.
 fn write_atomically(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let temporary = PathBuf::from(format!("{}.{}.tmp", path.display(), uuid::Uuid::new_v4().simple()));
-    let written = std::fs::write(&temporary, data).and_then(|_| std::fs::rename(&temporary, path));
-    if temporary.exists() {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let written = (|| -> std::io::Result<()> {
+        let mut file = options.open(&temporary)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        }
+        file.write_all(data)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temporary, path)
+    })();
+    if written.is_err() {
         let _ = std::fs::remove_file(&temporary);
     }
     written
@@ -991,6 +1031,42 @@ mod tests {
             eprintln!("  (junction check skipped: no junction could be made here)");
         }
         let _ = std::fs::remove_dir(&junction);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// P1-SEC-2: `Manifest::read` rejects symlinks and oversized `run.json`, and `write_atomically` writes 0600 files on Unix.
+    #[test]
+    fn manifest_read_and_atomic_write_are_hardened() {
+        let base = std::env::temp_dir().join(format!("mighty-changes-sec2-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&base).unwrap();
+
+        // write_atomically sets 0o600 on Unix and writes exact content.
+        let out = base.join("run.json");
+        let valid = Manifest { session_id: "pane1".into(), run_id: "run1".into(), sequence: 1, files: vec![], root: None, refused: None };
+        write_atomically(&out, &valid.to_json()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(std::fs::metadata(&out).unwrap().permissions().mode() & 0o777, 0o600, "atomic write must set 0600 on Unix");
+        }
+        assert_eq!(Manifest::read(&base), Some(valid.clone()));
+
+        // Oversized run.json is rejected.
+        let oversized_dir = base.join("oversized");
+        std::fs::create_dir_all(&oversized_dir).unwrap();
+        let padding = " ".repeat((MAXIMUM_MANIFEST_BYTES as usize) + 64);
+        std::fs::write(oversized_dir.join("run.json"), format!("{}{padding}", String::from_utf8(valid.to_json()).unwrap())).unwrap();
+        assert!(Manifest::read(&oversized_dir).is_none(), "oversized run.json must be rejected");
+
+        // Symlinked run.json is rejected.
+        #[cfg(unix)]
+        {
+            let linked_dir = base.join("linked");
+            std::fs::create_dir_all(&linked_dir).unwrap();
+            std::os::unix::fs::symlink(&out, linked_dir.join("run.json")).unwrap();
+            assert!(Manifest::read(&linked_dir).is_none(), "symlinked run.json must be rejected");
+        }
+
         let _ = std::fs::remove_dir_all(&base);
     }
 }

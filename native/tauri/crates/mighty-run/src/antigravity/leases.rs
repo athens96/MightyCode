@@ -494,13 +494,21 @@ impl AntigravityRuleLeases {
     /// `RemoveLeftovers`: launch — what a previous run of the app added for a while and could not take out, recorded in this ledger or
     /// another place's ([`AntigravityRuleLeases::with_other_ledger`]).
     pub fn remove_leftovers(&self) {
+        let _ = self.remove_leftovers_checked();
+    }
+
+    /// Like [`AntigravityRuleLeases::remove_leftovers`], returning `Err` if retries are exhausted so callers can fail closed rather
+    /// than silently treating uncleared temporary rules as clean. Read-only ledgers (`writes: false`) never mutate `settings.json`
+    /// because they cannot clear their own entries.
+    pub fn remove_leftovers_checked(&self) -> Result<(), String> {
         let others = lock(&self.inner.others).clone();
         for other in others {
-            other.remove_leftovers();
+            other.remove_leftovers_checked()?;
         }
-        if self.inner.refuses {
-            return;
+        if self.inner.refuses || self.inner.reads_ledger_only {
+            return Ok(());
         }
+        self.inner.sweep_orphan_temporaries();
         let left: Vec<String> = {
             let state = lock(&self.inner.gate);
             let left: Vec<String> = self
@@ -511,11 +519,23 @@ impl AntigravityRuleLeases {
                 .collect();
             if left.is_empty() {
                 self.inner.prune_if_done(&state);
-                return;
+                return Ok(());
             }
             left
         };
-        self.remove(&left);
+        if self.remove_with_retries(&left) {
+            let mut state = lock(&self.inner.gate);
+            let still: Vec<String> = left.iter().filter(|rule| !state.counts.contains_key(*rule)).cloned().collect();
+            self.schedule_recheck(&mut state, still);
+            Ok(())
+        } else {
+            Err(SettingsError::of(
+                "writeFailed",
+                Some(&self.inner.settings_path),
+                Some("could not clear leftover temporary Antigravity permission rules"),
+            )
+            .message)
+        }
     }
 
     // Removing
@@ -827,11 +847,40 @@ impl Inner {
         rules
     }
 
+    /// Sweeps orphaned `.settings.json.mighty-*.tmp` files left beside `settings.json` after a prior crash. Only runs when the
+    /// settings file itself exists as a regular file, so a `KeptTemporary` (only remaining copy after a failed Windows swap) is never
+    /// deleted.
+    fn sweep_orphan_temporaries(&self) {
+        let target = self.target();
+        if !target.is_file() {
+            return;
+        }
+        let Some(folder) = target.parent() else { return };
+        let Some(name) = target.file_name().and_then(|n| n.to_str()) else { return };
+        let prefix = format!(".{name}.mighty-");
+        let Ok(entries) = std::fs::read_dir(folder) else { return };
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let Some(file_name) = file_name.to_str() else { continue };
+            if !file_name.starts_with(&prefix) || !file_name.ends_with(".tmp") {
+                continue;
+            }
+            let path = entry.path();
+            if let Ok(meta) = std::fs::symlink_metadata(&path)
+                && !meta.file_type().is_symlink()
+                && meta.file_type().is_file()
+            {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+
     fn write_ledger(&self, ledger: &Ledger) -> std::io::Result<()> {
         let Some(path) = self.ledger_path.as_ref().filter(|_| !self.reads_ledger_only) else { return Ok(()) };
         if ledger.is_empty() {
             if path.exists() {
                 std::fs::remove_file(path)?;
+                sync_parent_dir(path)?;
             }
             return Ok(());
         }
@@ -839,7 +888,21 @@ impl Inner {
             std::fs::create_dir_all(parent)?;
         }
         let temporary = PathBuf::from(format!("{}.{}.tmp", path.display(), wire::new_id().replace('-', "")));
-        let outcome = std::fs::write(&temporary, ledger.write()).and_then(|_| std::fs::rename(&temporary, path));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let outcome = (|| -> std::io::Result<()> {
+            let mut file = options.open(&temporary)?;
+            file.write_all(&ledger.write())?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(&temporary, path)?;
+            sync_parent_dir(path)
+        })();
         if outcome.is_err() {
             let _ = std::fs::remove_file(&temporary);
         }
@@ -876,6 +939,19 @@ impl Inner {
         ledger.entries.retain(|e| !(e.settings == self.settings_path && rules.contains(&e.rule)));
         self.write_ledger(&ledger)
     }
+}
+
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_parent_dir(_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]

@@ -559,14 +559,23 @@ mod git {
         assert!(copied.copied.is_empty(), "nothing a link leads to is copied: {copied:?}");
         assert_eq!(copied.why("linked"), Some("link"), "the link itself");
         assert_eq!(copied.why("linked/secret.env"), Some("outside"), "a file through a linked folder");
-        // A folder of the worktree that is a link out of it is never written through.
-        std::fs::create_dir_all(source.join("conf")).unwrap();
-        std::fs::write(source.join("conf").join("x.txt"), "x").unwrap();
+        // A folder of the worktree that is a link out of it is never written through — neither nested file subdirs nor empty dirs.
+        std::fs::create_dir_all(source.join("conf").join("nested")).unwrap();
+        std::fs::write(source.join("conf").join("nested").join("x.txt"), "x").unwrap();
+        std::fs::create_dir_all(source.join("conf").join("empty_sub")).unwrap();
         let elsewhere = base.join("elsewhere");
         std::fs::create_dir_all(&elsewhere).unwrap();
         junction(&destination.join("conf"), &elsewhere).await;
-        let through = pw::copy(&["conf/x.txt".to_string()], &source.to_string_lossy(), &destination.to_string_lossy(), &paths);
-        assert!(through.copied.is_empty() && !elsewhere.join("x.txt").exists(), "nothing lands through the link: {through:?}");
+        let through = pw::copy(
+            &["conf/nested/x.txt".to_string(), "conf/empty_sub".to_string()],
+            &source.to_string_lossy(),
+            &destination.to_string_lossy(),
+            &paths,
+        );
+        assert!(
+            through.copied.is_empty() && !elsewhere.join("nested").exists() && !elsewhere.join("empty_sub").exists(),
+            "neither nested directories nor empty directories may be created through a symlinked ancestor: {through:?}"
+        );
         // A file's diff never reads through a link in the worktree.
         let worktree = std::path::PathBuf::from(pane.worktree_path());
         junction(&worktree.join("lnk"), &outside).await;

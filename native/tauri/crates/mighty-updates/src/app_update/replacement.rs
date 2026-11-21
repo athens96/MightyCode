@@ -125,18 +125,39 @@ pub fn should_rollback(backup_taken: bool, installed: bool) -> bool {
 }
 
 /// C# `CopyDirectory`: the folder made, its files copied (an existing file is an error), then its folders copied the same way.
+/// Refuses symlinks and Windows reparse points instead of following them.
 pub fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
+    let source_meta = std::fs::symlink_metadata(source)?;
+    if source_meta.file_type().is_symlink() || super::stage::is_reparse_point(&source_meta) || !source_meta.is_dir() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "source is a symlink or not a directory"));
+    }
+    if let Ok(dest_meta) = std::fs::symlink_metadata(destination)
+        && (dest_meta.file_type().is_symlink() || super::stage::is_reparse_point(&dest_meta) || !dest_meta.is_dir())
+    {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "destination is a symlink or not a directory"));
+    }
     std::fs::create_dir_all(destination)?;
     let mut folders = Vec::new();
     for entry in std::fs::read_dir(source)? {
         let path = entry?.path();
         let Some(name) = path.file_name() else { continue };
+        let meta = std::fs::symlink_metadata(&path)?;
+        if meta.file_type().is_symlink() || super::stage::is_reparse_point(&meta) {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "refusing to copy symlink in update tree"));
+        }
         let target = destination.join(name);
-        if path.is_dir() {
+        if meta.is_dir() {
             folders.push((path, target));
+        } else if meta.is_file() {
+            let mut reader = std::fs::File::open(&path)?;
+            let mut writer = std::fs::OpenOptions::new().write(true).create_new(true).open(&target)?;
+            if let Err(error) = std::io::copy(&mut reader, &mut writer) {
+                drop(writer);
+                let _ = std::fs::remove_file(&target);
+                return Err(error);
+            }
         } else {
-            std::fs::OpenOptions::new().write(true).create_new(true).open(&target)?;
-            std::fs::copy(&path, &target)?;
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "refusing to copy non-regular file in update tree"));
         }
     }
     for (folder, target) in folders {
@@ -176,14 +197,33 @@ fn refused(error: String, started: bool) -> ReplacementResult {
     ReplacementResult { error: Some(error), started, ..ReplacementResult::default() }
 }
 
-/// C# `VerifyBeforeSwapAsync`: None when the package's SHA-256 matches (ignoring case), the refusal sentence otherwise; Err for a
+/// C# `VerifyBeforeSwapAsync`: None when the package's SHA-256 and the staged tree match, the refusal sentence otherwise; Err for a
 /// package that cannot be read (C# lets that exception out of `RunAsync`).
 fn verify_before_swap(plan: &InstallPlan, locale: &Locale) -> std::io::Result<Option<String>> {
-    if !plan.package_path.is_file() {
+    let Ok(pkg_meta) = std::fs::symlink_metadata(&plan.package_path) else {
+        return Ok(Some(locale.get("appUpdate.error.packageMissingBeforeSwap")));
+    };
+    if pkg_meta.file_type().is_symlink() || super::stage::is_reparse_point(&pkg_meta) || !pkg_meta.is_file() {
         return Ok(Some(locale.get("appUpdate.error.packageMissingBeforeSwap")));
     }
     let digest = super::service::sha256(&plan.package_path)?;
-    Ok((!digest.eq_ignore_ascii_case(&plan.sha256)).then(|| locale.get("appUpdate.error.packageRecheckFailed")))
+    if !digest.eq_ignore_ascii_case(&plan.sha256) {
+        return Ok(Some(locale.get("appUpdate.error.packageRecheckFailed")));
+    }
+    match std::fs::symlink_metadata(&plan.staged_directory) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+        Ok(meta) if meta.file_type().is_symlink() || super::stage::is_reparse_point(&meta) => {
+            Ok(Some(locale.get("appUpdate.error.packageRecheckFailed")))
+        }
+        Ok(meta) if !meta.is_dir() => Ok(None),
+        Ok(_) => {
+            if !super::stage::verify_staged_tree(&plan.staged_directory, &plan.package_path)? {
+                return Ok(Some(locale.get("appUpdate.error.packageRecheckFailed")));
+            }
+            Ok(None)
+        }
+    }
 }
 
 /// What the swap had done when it failed.

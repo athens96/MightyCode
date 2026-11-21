@@ -433,7 +433,16 @@ fn push_task(tasks: &mut Vec<TodoItem>, task: TodoItem) {
 impl TodoProgressTracker {
     /// `progress`: the pane's saved checklist, for a run that resumes it.
     pub fn new(progress: Option<&TodoProgress>) -> TodoProgressTracker {
-        let mut tracker = TodoProgressTracker::default();
+        Self::with_antigravity(progress, AntigravitySteps::default())
+    }
+
+    /// [`TodoProgressTracker::new`] with Antigravity `task.md` reads anchored under `home/.gemini/antigravity-cli/brain`.
+    pub fn with_antigravity_home(progress: Option<&TodoProgress>, home: &std::path::Path) -> TodoProgressTracker {
+        Self::with_antigravity(progress, AntigravitySteps::with_home(home))
+    }
+
+    fn with_antigravity(progress: Option<&TodoProgress>, antigravity: AntigravitySteps) -> TodoProgressTracker {
+        let mut tracker = TodoProgressTracker { antigravity, ..TodoProgressTracker::default() };
         let Some(progress) = progress else { return tracker };
         // An earlier request's tool calls are no checklist to continue.
         let items: Vec<TodoItem> = todos::items(progress).iter().filter(|i| !checklist::is_activity(i)).cloned().collect();

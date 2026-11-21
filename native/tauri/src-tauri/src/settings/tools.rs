@@ -74,6 +74,7 @@ impl Toolkit {
     }
 
     /// The smoke's own store in place of the app's (None: the app's again, made anew).
+    #[cfg(feature = "dev-harness")]
     pub fn replace_store(&self, store: Option<Arc<ToolkitStore>>) {
         *lock(&self.store) = store;
         *lock(&self.model) = ToolkitModel::default();
@@ -118,6 +119,7 @@ pub fn read(host: &Host) {
 static FIXTURE: Mutex<Option<Vec<CliAccountStatus>>> = Mutex::new(None);
 
 /// The smoke shows (Some) or stops showing (None) its fixture account statuses in 구성 요소' agent CLI rows.
+#[cfg(feature = "dev-harness")]
 pub fn show_fixture(statuses: Option<Vec<CliAccountStatus>>) {
     *lock(&FIXTURE) = statuses;
 }
@@ -169,7 +171,7 @@ async fn pick_json(host: &Host) -> Option<PathBuf> {
     use tauri_plugin_dialog::DialogExt;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let mut dialog = host.app.dialog().file().add_filter("JSON", &["json"]);
-    if let Some(window) = host.app.get_window(crate::host::WINDOW) {
+    if let Some(window) = host.app.get_webview_window(crate::host::WINDOW) {
         dialog = dialog.set_parent(&window);
     }
     dialog.pick_file(move |file| {
@@ -183,7 +185,7 @@ async fn pick_export(host: &Host) -> Option<PathBuf> {
     use tauri_plugin_dialog::DialogExt;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let mut dialog = host.app.dialog().file().set_file_name("toolkit").add_filter("JSON", &["json"]);
-    if let Some(window) = host.app.get_window(crate::host::WINDOW) {
+    if let Some(window) = host.app.get_webview_window(crate::host::WINDOW) {
         dialog = dialog.set_parent(&window);
     }
     dialog.save_file(move |path| {
@@ -200,23 +202,34 @@ fn read_text(path: &Path) -> Result<String, String> {
 /// C# `AddToolkitEntry`: the one entry a JSON file holds (a file that is no entry is said over the tools).
 async fn add(host: Arc<Host>) -> Result<(), String> {
     let Some(path) = pick_json(&host).await else { return Ok(()) };
-    let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-    let entry = toolkit::file::parse_added_entry(&read_text(&path)?)
-        .ok_or_else(|| strings::get_with("settings.toolkit.errorEntryFileTemplate", &[("name", &name)]))?;
-    toolkit_of(&host).store(&host).add(&entry)
+    let store = toolkit_of(&host).store(&host);
+    tauri::async_runtime::spawn_blocking(move || {
+        let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let entry = toolkit::file::parse_added_entry(&read_text(&path)?)
+            .ok_or_else(|| strings::get_with("settings.toolkit.errorEntryFileTemplate", &[("name", &name)]))?;
+        store.add(&entry)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// C# `ExportToolkit`: every entry, the other OS's too, without approvals.
 async fn export(host: Arc<Host>) -> Result<(), String> {
     let Some(path) = pick_export(&host).await else { return Ok(()) };
-    let text = toolkit_of(&host).store(&host).export();
-    std::fs::write(&path, text).map_err(|error| error.to_string())
+    let store = toolkit_of(&host).store(&host);
+    tauri::async_runtime::spawn_blocking(move || {
+        let text = store.export();
+        std::fs::write(&path, text).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 /// C# `ImportToolkit`: an exported list merged in.
 async fn import(host: Arc<Host>) -> Result<(), String> {
     let Some(path) = pick_json(&host).await else { return Ok(()) };
-    toolkit_of(&host).store(&host).import(&read_text(&path)?)
+    let store = toolkit_of(&host).store(&host);
+    tauri::async_runtime::spawn_blocking(move || store.import(&read_text(&path)?)).await.map_err(|error| error.to_string())?
 }
 
 /// C# `RunToolkitInstall`: nothing while one runs, nothing in a smoke; the plan (nothing when empty) in one confirmation (D7), then

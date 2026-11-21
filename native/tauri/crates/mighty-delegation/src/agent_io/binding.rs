@@ -271,7 +271,9 @@ impl AgentIoBinding {
                     }
                 }
             }
-            if let Some(exclude) = mcp_config::codex_shell_exclude(mcp_config::codex_home_config().as_deref()) {
+            let home = mcp_config::codex_home_config();
+            let project = mcp_config::codex_project_config(std::path::Path::new(&self.workspace_path));
+            if let Some(exclude) = mcp_config::codex_shell_exclude_with_project(home.as_deref(), project.as_deref()) {
                 arguments.extend(["-c".to_string(), format!("shell_environment_policy.exclude={exclude}")]);
             }
         }

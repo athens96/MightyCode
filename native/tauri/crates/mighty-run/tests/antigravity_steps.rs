@@ -121,7 +121,7 @@ fn task_md_replaces_the_activity_and_is_read_again() {
     std::fs::create_dir_all(&folder).unwrap();
     let task = folder.join("task.md");
     std::fs::write(&task, "- [/] 함수 추가\n- [ ] 테스트 작성\n").unwrap();
-    let mut tracker = TodoProgressTracker::new(None);
+    let mut tracker = TodoProgressTracker::with_antigravity_home(None, &home);
     let read = tracker.consume(&common::json(PROBE[2])).expect("an activity step first");
     assert_eq!(todos::items(&read).len(), 1);
     assert!(tracker.consume(&common::json(&write_line(5, "ACTIVE", &task))).is_none(), "a write still running is not read");
@@ -149,7 +149,8 @@ fn task_md_replaces_the_activity_and_is_read_again() {
 #[test]
 fn task_boundaries_are_the_steps_unless_there_is_a_task_md() {
     common::korean();
-    let mut steps = AntigravitySteps::default();
+    let home = common::temp("agy-boundary");
+    let mut steps = AntigravitySteps::with_home(&home);
     steps.consume(&common::json(PROBE[2])).unwrap();
     let first = r#"{"event":"step_update","step_update":{"step_index":3,"state":"DONE","step_type":"task_boundary","task_boundary":{"TaskName":"Reading the code","TaskStatus":"Reading calc.py","TaskSummary":"…"}}}"#;
     let list = steps.consume(&common::json(first)).unwrap();
@@ -163,13 +164,68 @@ fn task_boundaries_are_the_steps_unless_there_is_a_task_md() {
     assert_eq!(texts(&list), ["Reading the code", "Writing tests"]);
     assert_eq!(statuses(&list), ["completed", "in_progress"]);
     // task.md outranks the boundaries.
-    let home = common::temp("agy-boundary");
     let folder = home.join(".gemini").join("antigravity-cli").join("brain").join(CONVERSATION);
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(folder.join("task.md"), "- [ ] 하나\n").unwrap();
     let list = steps.consume(&common::json(&write_line(6, "DONE", &folder.join("task.md")))).unwrap();
     assert_eq!(texts(&list), ["하나"]);
     std::fs::remove_dir_all(&home).ok();
+}
+
+/// P1-SEC-1: `read_task_file` anchors to canonical brain root, rejects symlinks (file or conversation dir), and enforces 256 KiB cap.
+#[test]
+fn task_md_rejects_unanchored_paths_symlinks_and_oversized_files() {
+    let home = common::temp("agy-task-sec-home");
+    let outside = common::temp("agy-task-sec-outside");
+    let brain = home.join(".gemini").join("antigravity-cli").join("brain");
+    let conv = brain.join(CONVERSATION);
+    std::fs::create_dir_all(&conv).unwrap();
+
+    // 1. A path with the matching suffix outside the anchored brain root must be refused.
+    let fake_conv = outside.join(".gemini").join("antigravity-cli").join("brain").join(CONVERSATION);
+    std::fs::create_dir_all(&fake_conv).unwrap();
+    let fake_task = fake_conv.join("task.md");
+    std::fs::write(&fake_task, "- [ ] escaped\n").unwrap();
+    let mut steps = AntigravitySteps::with_home(&home);
+    assert!(
+        steps.consume(&common::json(&write_line(1, "DONE", &fake_task))).is_none(),
+        "task.md outside canonical brain root must be rejected"
+    );
+
+    // 2. Oversized task.md (> 256 KiB) must be refused.
+    let big_task = conv.join("task.md");
+    let mut big = String::from("- [ ] step\n");
+    big.push_str(&"x".repeat(256 * 1024 + 64));
+    std::fs::write(&big_task, &big).unwrap();
+    assert!(steps.consume(&common::json(&write_line(2, "DONE", &big_task))).is_none(), "oversized task.md (> 256 KiB) must be rejected");
+    std::fs::remove_file(&big_task).unwrap();
+
+    // 3. Symlinked task.md and symlinked conversation directory must be refused on Unix.
+    #[cfg(unix)]
+    {
+        let secret = outside.join("secret.md");
+        std::fs::write(&secret, "- [ ] secret\n").unwrap();
+        std::os::unix::fs::symlink(&secret, &big_task).unwrap();
+        assert!(steps.consume(&common::json(&write_line(3, "DONE", &big_task))).is_none(), "symlinked task.md must be rejected");
+        std::fs::remove_file(&big_task).unwrap();
+
+        let other_conv_id = "11111111-2222-4333-8444-555555555555";
+        let target_dir = outside.join("linked-dir");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join("task.md"), "- [ ] via dir symlink\n").unwrap();
+        let linked_conv = brain.join(other_conv_id);
+        std::os::unix::fs::symlink(&target_dir, &linked_conv).unwrap();
+        let line = write_line(4, "DONE", &linked_conv.join("task.md")).replace(CONVERSATION, other_conv_id);
+        assert!(steps.consume(&common::json(&line)).is_none(), "task.md inside symlinked conversation folder must be rejected");
+    }
+
+    // 4. Legitimate regular task.md inside the anchored brain root succeeds.
+    std::fs::write(&big_task, "- [ ] legitimate\n").unwrap();
+    let list = steps.consume(&common::json(&write_line(5, "DONE", &big_task))).expect("valid task.md");
+    assert_eq!(texts(&list), ["legitimate"]);
+
+    std::fs::remove_dir_all(&home).ok();
+    std::fs::remove_dir_all(&outside).ok();
 }
 
 /// "the instruction follows what agy is sent only when the switch is on, never a slash command".

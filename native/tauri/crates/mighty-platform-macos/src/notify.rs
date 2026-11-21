@@ -108,16 +108,22 @@ pub fn pane_of(info: &NSDictionary) -> Option<String> {
 
 struct MacNotifier;
 
+fn guarded(f: impl FnOnce()) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+}
+
 /// The user's answer to notifications (`getNotificationSettings`), when the centre gives it.
 fn authorization(center: &UNUserNotificationCenter) -> tokio::sync::oneshot::Receiver<UNAuthorizationStatus> {
     let (answer, asked) = tokio::sync::oneshot::channel();
     let answer = Mutex::new(Some(answer));
     let settings = RcBlock::new(move |settings: NonNull<UNNotificationSettings>| {
-        // SAFETY: the settings object the framework hands the handler, alive for the call.
-        let status = unsafe { settings.as_ref() }.authorizationStatus();
-        if let Some(answer) = lock(&answer).take() {
-            let _ = answer.send(status);
-        }
+        guarded(|| {
+            // SAFETY: the settings object the framework hands the handler, alive for the call.
+            let status = unsafe { settings.as_ref() }.authorizationStatus();
+            if let Some(answer) = lock(&answer).take() {
+                let _ = answer.send(status);
+            }
+        });
     });
     center.getNotificationSettingsWithCompletionHandler(&settings);
     asked
@@ -131,11 +137,13 @@ fn add(center: &UNUserNotificationCenter, notification: &Notification) -> tokio:
     let (added, adding) = tokio::sync::oneshot::channel();
     let added = Mutex::new(Some(added));
     let done = RcBlock::new(move |error: *mut NSError| {
-        // SAFETY: null, or the error the framework hands the handler, alive for the call.
-        let failure = unsafe { error.as_ref() }.map(|e| e.localizedDescription().to_string());
-        if let Some(added) = lock(&added).take() {
-            let _ = added.send(failure);
-        }
+        guarded(|| {
+            // SAFETY: null, or the error the framework hands the handler, alive for the call.
+            let failure = unsafe { error.as_ref() }.map(|e| e.localizedDescription().to_string());
+            if let Some(added) = lock(&added).take() {
+                let _ = added.send(failure);
+            }
+        });
     });
     center.addNotificationRequest_withCompletionHandler(&request, Some(&done));
     adding
@@ -205,7 +213,9 @@ define_class!(
             _notification: &UNNotification,
             completion: &block2::DynBlock<dyn Fn(UNNotificationPresentationOptions)>,
         ) {
-            completion.call((UNNotificationPresentationOptions::Banner | UNNotificationPresentationOptions::Sound,));
+            guarded(|| {
+                completion.call((UNNotificationPresentationOptions::Banner | UNNotificationPresentationOptions::Sound,));
+            });
         }
 
         /// A click: the pane named in `userInfo` is brought forward (Swift `didReceive`).
@@ -216,16 +226,18 @@ define_class!(
             response: &UNNotificationResponse,
             completion: &block2::DynBlock<dyn Fn()>,
         ) {
-            let pane = pane_of(&response.notification().request().content().userInfo());
-            let handler = lock(handlers()).clone();
-            // The framework is told at once; the focus runs on a thread of its own, so a slow or failing handler never holds or
-            // unwinds through AppKit's delegate call (review item 5).
-            completion.call(());
-            if let Some(handler) = handler
-                && pane.is_some()
-            {
-                let _ = std::thread::Builder::new().name("mighty-notification-click".into()).spawn(move || handler(pane));
-            }
+            guarded(|| {
+                let pane = pane_of(&response.notification().request().content().userInfo());
+                let handler = lock(handlers()).clone();
+                // The framework is told at once; the focus runs on a thread of its own, so a slow or failing handler never holds or
+                // unwinds through AppKit's delegate call (review item 5).
+                completion.call(());
+                if let Some(handler) = handler
+                    && pane.is_some()
+                {
+                    let _ = std::thread::Builder::new().name("mighty-notification-click".into()).spawn(move || handler(pane));
+                }
+            });
         }
     }
 );

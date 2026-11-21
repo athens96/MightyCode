@@ -218,14 +218,21 @@ impl GitTool {
     /// C# `MakeFolderAsync`: the folder made (it must not exist yet while its parent does), with `git init` in it when asked:
     /// (`made` | `madeButGitInitFailed` | `failed`, the reason).
     pub async fn make_folder(&self, path: &Path, git_init: bool, locale: &Locale) -> (&'static str, Option<String>) {
-        if path.exists() {
-            return ("failed", Some(locale.get("workspace.name.error.exists")));
-        }
-        if !rules::parent_folder(path).is_some_and(|parent| parent.is_dir()) {
-            return ("failed", Some(locale.get("workspace.location.error.missing")));
-        }
-        if let Err(error) = std::fs::create_dir(path) {
-            return ("failed", Some(error.to_string()));
+        let target = path.to_path_buf();
+        let locale_copy = *locale;
+        let created = tauri::async_runtime::spawn_blocking(move || {
+            if target.exists() {
+                return Err(locale_copy.get("workspace.name.error.exists"));
+            }
+            if !rules::parent_folder(&target).is_some_and(|parent| parent.is_dir()) {
+                return Err(locale_copy.get("workspace.location.error.missing"));
+            }
+            std::fs::create_dir(&target).map_err(|error| error.to_string())
+        })
+        .await
+        .unwrap_or_else(|error| Err(error.to_string()));
+        if let Err(reason) = created {
+            return ("failed", Some(reason));
         }
         if !git_init {
             return ("made", None);
@@ -316,11 +323,19 @@ impl CloneJob {
         }
         let Some(executable) = git.executable() else { return CloneResult::failed("gitMissing", None) };
         // Refused before anything is touched, so a folder that was there already is never removed below.
-        if self.target.exists() {
-            return CloneResult::failed("other", Some(locale.get("workspace.name.error.exists")));
-        }
-        let Some(parent) = rules::parent_folder(&self.target).filter(|p| p.is_dir()) else {
-            return CloneResult::failed("other", Some(locale.get("workspace.location.error.missing")));
+        let target_check = self.target.clone();
+        let locale_copy = *locale;
+        let parent = match tauri::async_runtime::spawn_blocking(move || {
+            if target_check.exists() {
+                return Err(locale_copy.get("workspace.name.error.exists"));
+            }
+            rules::parent_folder(&target_check).filter(|p| p.is_dir()).ok_or_else(|| locale_copy.get("workspace.location.error.missing"))
+        })
+        .await
+        {
+            Ok(Ok(parent)) => parent,
+            Ok(Err(message)) => return CloneResult::failed("other", Some(message)),
+            Err(error) => return CloneResult::failed("other", Some(error.to_string())),
         };
         let target = self.target.to_string_lossy().into_owned();
         let request = git.environment(SpawnRequest::new(executable, ["clone", "--progress", "--", &self.url, &target], &parent)).await;
@@ -419,11 +434,17 @@ pub async fn delete_folder(path: &Path) {
         }
     }
     for _ in 0..5 {
-        if !path.exists() {
-            return;
-        }
-        writable(path);
-        if std::fs::remove_dir_all(path).is_ok() {
+        let target = path.to_path_buf();
+        let gone = tauri::async_runtime::spawn_blocking(move || {
+            if !target.exists() {
+                return true;
+            }
+            writable(&target);
+            std::fs::remove_dir_all(&target).is_ok()
+        })
+        .await
+        .unwrap_or(false);
+        if gone {
             return;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -585,7 +606,8 @@ pub async fn show(host: &Arc<Host>, kind: &str) -> Result<(), String> {
     let (Some(path), Some(location)) = (result.get("path").and_then(Value::as_str), result.get("location").and_then(Value::as_str)) else {
         return Ok(());
     };
-    if !Path::new(path).is_dir() {
+    let check_path = PathBuf::from(path);
+    if !tauri::async_runtime::spawn_blocking(move || check_path.is_dir()).await.unwrap_or(false) {
         return Ok(());
     }
     let notice = result.get("notice").and_then(Value::as_str).map(str::to_string);

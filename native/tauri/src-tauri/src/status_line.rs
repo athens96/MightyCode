@@ -16,7 +16,9 @@
 //! Locks: the status lines' lock is taken after the state's (the cards read it with the state locked), never before.
 
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+#[cfg(feature = "dev-harness")]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -312,12 +314,14 @@ pub fn input(host: &Host, pane: &RunSession) -> Option<StatusLineInput> {
 }
 
 /// The smoke's home folder (its step's), or none again; the panes read their settings anew.
+#[cfg(feature = "dev-harness")]
 pub fn smoke_home(host: &Arc<Host>, folder: Option<&Path>) {
     *lock(&of(host).smoke_home) = folder.map(Path::to_path_buf);
     start(host);
 }
 
 /// What the smoke reads of a pane's status line: the command waiting for trust, and the rows' words.
+#[cfg(feature = "dev-harness")]
 pub fn smoke_state(host: &Host, pane: &str) -> serde_json::Value {
     let lines = of(host);
     let map = lock(&lines.lines);
@@ -337,6 +341,7 @@ pub fn smoke_state(host: &Host, pane: &str) -> serde_json::Value {
 }
 
 /// The smoke's pane read again at once (its step edited the workspace's command).
+#[cfg(feature = "dev-harness")]
 pub fn smoke_refresh(host: &Arc<Host>, pane: &str) {
     let line = lock(&of(host).lines).get(pane).map(|line| (line.refresher.clone(), line.folder.clone()));
     let session = host.view().snapshot.session(pane).cloned();

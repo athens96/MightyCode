@@ -384,6 +384,7 @@ pub fn firewall_remove_pressed(host: &Arc<Host>) {
 
 /// The smoke's seams (C# `RunMobileDirectSmoke` sets `firewallRunner` and `mobileDirectStatusOverride`, and puts both back in its
 /// `finally`): a recorder for the rule, a fixed status; `None` puts each back and forgets the rule's state.
+#[cfg(feature = "dev-harness")]
 pub fn smoke_use_firewall(firewall: Option<Arc<dyn Firewall>>, status: Option<MobileDirectStatus>) {
     let mut state = direct();
     let restoring = firewall.is_none();

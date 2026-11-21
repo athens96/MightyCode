@@ -21,14 +21,26 @@ use mighty_core::json::JsonOut;
 use mighty_core::model::{LogEntry, RunSession};
 use serde_json::{Map, Value};
 
+type CachedFields = (Arc<RunSession>, Arc<Map<String, Value>>);
+
 /// What the bridge last sent: the state's revision, the panes by id, their fields, the order, the state's text.
 #[derive(Default)]
 pub struct Bridge {
     sent_revision: Option<u64>,
     sent_sessions: HashMap<String, Arc<RunSession>>,
-    sent_fields: HashMap<String, (Arc<RunSession>, Map<String, Value>)>,
+    sent_fields: HashMap<String, CachedFields>,
     sent_order: Vec<String>,
     sent_state: Option<String>,
+    /// Copy of the non-session fields last sent (`sessions: None`), so pane-only ticks skip `state_json`.
+    sent_state_snapshot: Option<AppSnapshot>,
+    #[cfg(test)]
+    state_json_calls: usize,
+    #[cfg(test)]
+    fields_calls: usize,
+}
+
+fn without_sessions(state: &AppSnapshot) -> AppSnapshot {
+    AppSnapshot { sessions: None, ..state.clone() }
 }
 
 /// `WebBridge.StateJson`: every field of the state but the panes.
@@ -63,7 +75,9 @@ pub fn same_entry(a: &LogEntry, b: &LogEntry) -> bool {
 fn same_list<T>(a: Option<&[T]>, b: Option<&[T]>, same: impl Fn(&T, &T) -> bool) -> bool {
     match (a, b) {
         (None, None) => true,
-        (Some(x), Some(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same(p, q)),
+        (Some(x), Some(y)) => {
+            x.len() == y.len() && (std::ptr::eq(x.as_ptr(), y.as_ptr()) || x.iter().rev().zip(y.iter().rev()).all(|(p, q)| same(p, q)))
+        }
         _ => false,
     }
 }
@@ -128,41 +142,77 @@ impl<T> ListChange<'_, T> {
 /// `WebDelta.Diff` (delta.ts `diffList`): the usual changes (the last record streamed, records appended, the oldest trimmed) need
 /// no order; any other change sends the whole id order.
 pub fn diff<'a, T>(previous: &'a [T], next: &'a [T], id: impl Fn(&T) -> &str, same: impl Fn(&T, &T) -> bool) -> ListChange<'a, T> {
-    let mut change = ListChange { drop: 0, replaced: vec![], added: vec![], order: None };
-    let mut drop = previous.len();
-    if let Some(first) = next.first() {
-        let first = id(first);
-        if let Some(at) = previous.iter().position(|r| id(r) == first) {
-            drop = at;
-        }
+    if previous.is_empty() {
+        return ListChange { drop: 0, replaced: Vec::new(), added: next.iter().collect(), order: None };
     }
-    let kept = previous.len() - drop;
-    let mut simple = next.len() >= kept;
-    let mut index = 0;
-    while simple && index < kept {
-        simple = id(&next[index]) == id(&previous[drop + index]);
-        index += 1;
+    if next.is_empty() {
+        return ListChange { drop: previous.len(), replaced: Vec::new(), added: Vec::new(), order: None };
     }
-    if simple && drop > 0 && next.len() > kept {
-        // An added record must be new: one of the dropped ones coming back is a reordering.
-        let dropped: HashSet<&str> = previous[..drop].iter().map(&id).collect();
-        simple = next[kept..].iter().all(|r| !dropped.contains(id(r)));
+    if previous.len() == next.len() && std::ptr::eq(previous.as_ptr(), next.as_ptr()) {
+        return ListChange { drop: 0, replaced: Vec::new(), added: Vec::new(), order: None };
     }
-    if simple {
-        change.drop = drop;
-        for index in 0..kept {
-            if !same(&previous[drop + index], &next[index]) {
-                change.replaced.push(&next[index]);
+    let first = id(&next[0]);
+    // Fast path: append-only / tail-streaming (`drop == 0 && next.len() >= previous.len()`), single pass over `previous`.
+    if id(&previous[0]) == first {
+        if next.len() >= previous.len() {
+            let kept = previous.len();
+            let mut simple = true;
+            let mut replaced = Vec::new();
+            for (prev_item, next_item) in previous.iter().zip(&next[..kept]) {
+                if id(prev_item) != id(next_item) {
+                    simple = false;
+                    break;
+                }
+                if !same(prev_item, next_item) {
+                    replaced.push(next_item);
+                }
+            }
+            if simple {
+                let added = if next.len() > kept { next[kept..].iter().collect() } else { Vec::new() };
+                return ListChange { drop: 0, replaced, added, order: None };
             }
         }
-        change.added.extend(next[kept..].iter());
-        return change;
+    } else {
+        let drop = previous.iter().position(|r| id(r) == first).unwrap_or(previous.len());
+        let kept = previous.len() - drop;
+        if next.len() >= kept {
+            let mut simple = true;
+            for index in 0..kept {
+                if id(&next[index]) != id(&previous[drop + index]) {
+                    simple = false;
+                    break;
+                }
+            }
+            if simple && drop > 0 && next.len() > kept {
+                // An added record must be new: one of the dropped ones coming back is a reordering.
+                if drop <= 4 {
+                    simple = next[kept..].iter().all(|r| {
+                        let key = id(r);
+                        previous[..drop].iter().all(|d| id(d) != key)
+                    });
+                } else {
+                    let dropped: HashSet<&str> = previous[..drop].iter().map(&id).collect();
+                    simple = next[kept..].iter().all(|r| !dropped.contains(id(r)));
+                }
+            }
+            if simple {
+                let mut replaced = Vec::new();
+                for index in 0..kept {
+                    if !same(&previous[drop + index], &next[index]) {
+                        replaced.push(&next[index]);
+                    }
+                }
+                let added = next[kept..].iter().collect();
+                return ListChange { drop, replaced, added, order: None };
+            }
+        }
     }
     // C#: old[id(record)] = record — the last of a repeated id.
-    let mut old: HashMap<&str, &T> = HashMap::new();
+    let mut old: HashMap<&str, &T> = HashMap::with_capacity(previous.len());
     for record in previous {
         old.insert(id(record), record);
     }
+    let mut change = ListChange { drop: 0, replaced: Vec::new(), added: Vec::new(), order: None };
     let mut order = Vec::with_capacity(next.len());
     for record in next {
         let key = id(record);
@@ -232,6 +282,25 @@ pub fn write(out: &mut JsonOut, previous: &RunSession, before: &Map<String, Valu
     true
 }
 
+/// Fast path of [`write`] when every non-list field of `previous` and `next` is identical: skips `fields()` serialization/parsing.
+fn write_lists_only(out: &mut JsonOut, previous: &RunSession, next: &RunSession) -> bool {
+    let logs = diff(previous.logs(), next.logs(), LogEntry::id, same_entry);
+    let runs = diff(previous.graph_runs(), next.graph_runs(), MightyGraphRun::id, same_run);
+    if logs.empty() && runs.empty() {
+        return false;
+    }
+    out.begin_object();
+    out.prop_str("id", Some(next.id()));
+    if !logs.empty() {
+        write_list(out, "logs", &logs, |out, entry| mighty_core::Wire::write(entry, out));
+    }
+    if !runs.empty() {
+        write_list(out, "graphRuns", &runs, |out, run| run.write_with(out, false));
+    }
+    out.end_object();
+    true
+}
+
 impl Bridge {
     pub fn reset(&mut self) {
         *self = Bridge::default();
@@ -241,16 +310,50 @@ impl Bridge {
         self.sent_revision
     }
 
-    fn remember(&mut self, state: &AppSnapshot, revision: u64, order: Vec<String>, text: String) {
+    fn compute_state_json(&mut self, state: &AppSnapshot) -> String {
+        #[cfg(test)]
+        {
+            self.state_json_calls += 1;
+        }
+        state_json(state)
+    }
+
+    fn compute_fields(&mut self, session: &RunSession) -> Arc<Map<String, Value>> {
+        #[cfg(test)]
+        {
+            self.fields_calls += 1;
+        }
+        Arc::new(fields(session))
+    }
+
+    fn remember(&mut self, state: &AppSnapshot, revision: u64, order: Vec<String>, text: Option<String>) {
         self.sent_revision = Some(revision);
         self.sent_order = order;
-        self.sent_state = Some(text);
+        if let Some(text) = text {
+            self.sent_state = Some(text);
+            self.sent_state_snapshot = Some(without_sessions(state));
+        }
         self.sent_sessions.clear();
         for session in state.sessions() {
             self.sent_sessions.insert(session.id().to_string(), session.clone());
         }
         let present = &self.sent_sessions;
         self.sent_fields.retain(|id, _| present.contains_key(id));
+    }
+
+    fn remember_same_order(&mut self, state: &AppSnapshot, revision: u64, changed: &[&Arc<RunSession>], text: Option<String>) {
+        self.sent_revision = Some(revision);
+        if let Some(text) = text {
+            self.sent_state = Some(text);
+            self.sent_state_snapshot = Some(without_sessions(state));
+        }
+        for session in changed {
+            if let Some(slot) = self.sent_sessions.get_mut(session.id()) {
+                *slot = (*session).clone();
+            } else {
+                self.sent_sessions.insert(session.id().to_string(), (*session).clone());
+            }
+        }
     }
 
     /// `SendSnapshot`: the snapshot push, and the state remembered as sent.
@@ -261,7 +364,8 @@ impl Bridge {
         out.name("snapshot");
         out.raw(&page_snapshot(state));
         out.end_object();
-        self.remember(state, revision, state.sessions().iter().map(|s| s.id().to_string()).collect(), state_json(state));
+        let text = self.compute_state_json(state);
+        self.remember(state, revision, state.sessions().iter().map(|s| s.id().to_string()).collect(), Some(text));
         out.finish()
     }
 
@@ -270,28 +374,44 @@ impl Bridge {
         if self.sent_revision == Some(revision) {
             return None;
         }
-        let mut changed = vec![];
-        let mut order = Vec::with_capacity(state.sessions().len());
-        for session in state.sessions() {
-            order.push(session.id().to_string());
+        let sessions = state.sessions();
+        let order_same =
+            sessions.len() == self.sent_order.len() && sessions.iter().zip(&self.sent_order).all(|(s, id)| s.id() == id.as_str());
+        let mut changed = Vec::new();
+        for session in sessions {
             match self.sent_sessions.get(session.id()) {
                 Some(previous) if Arc::ptr_eq(previous, session) => {}
                 _ => changed.push(session),
             }
         }
-        let present: HashSet<&str> = order.iter().map(String::as_str).collect();
-        // The sent ids in no particular order, as C# enumerates its dictionary's keys: in the order they were added.
-        let mut removed: Vec<String> = vec![];
-        for id in self.sent_order.iter().filter(|id| !present.contains(id.as_str())) {
-            if self.sent_sessions.contains_key(id) && !removed.contains(id) {
-                removed.push(id.clone());
+        let (order, removed, order_changed) = if order_same {
+            (None, Vec::new(), false)
+        } else {
+            let order: Vec<String> = sessions.iter().map(|s| s.id().to_string()).collect();
+            let present: HashSet<&str> = order.iter().map(String::as_str).collect();
+            // The sent ids in no particular order, as C# enumerates its dictionary's keys: in the order they were added.
+            let mut removed: Vec<String> = Vec::new();
+            for id in self.sent_order.iter().filter(|id| !present.contains(id.as_str())) {
+                if self.sent_sessions.contains_key(id) && !removed.contains(id) {
+                    removed.push(id.clone());
+                }
             }
-        }
-        let text = state_json(state);
-        let state_changed = self.sent_state.as_deref() != Some(text.as_str());
-        let order_changed = order != self.sent_order;
+            let order_changed = order != self.sent_order;
+            (Some(order), removed, order_changed)
+        };
+        let (state_changed, next_state_text) = match &self.sent_state_snapshot {
+            Some(previous) if previous.same_non_session_fields(state) => (false, None),
+            _ => {
+                let text = self.compute_state_json(state);
+                let changed = self.sent_state.as_deref() != Some(text.as_str());
+                (changed, Some(text))
+            }
+        };
         if changed.is_empty() && removed.is_empty() && !state_changed && !order_changed {
-            self.remember(state, revision, order, text);
+            match order {
+                Some(order) => self.remember(state, revision, order, next_state_text),
+                None => self.remember_same_order(state, revision, &changed, next_state_text),
+            }
             return None;
         }
         let mut out = JsonOut::new();
@@ -300,7 +420,7 @@ impl Bridge {
         out.prop_str("kind", Some("delta"));
         out.name("sessions");
         out.begin_array();
-        for session in changed {
+        for &session in &changed {
             let Some(previous) = self.sent_sessions.get(session.id()).cloned() else {
                 out.begin_object();
                 out.prop_str("id", Some(session.id()));
@@ -310,11 +430,22 @@ impl Bridge {
                 panes += 1;
                 continue;
             };
+            if previous.same_non_list_fields(session) {
+                if write_lists_only(&mut out, &previous, session) {
+                    panes += 1;
+                }
+                if let Some((known, _)) = self.sent_fields.get_mut(session.id())
+                    && Arc::ptr_eq(known, &previous)
+                {
+                    *known = session.clone();
+                }
+                continue;
+            }
             let before = match self.sent_fields.get(session.id()) {
                 Some((known, fields)) if Arc::ptr_eq(known, &previous) => fields.clone(),
-                _ => fields(&previous),
+                _ => self.compute_fields(&previous),
             };
-            let after = fields(session);
+            let after = self.compute_fields(session);
             if write(&mut out, &previous, &before, session, &after) {
                 panes += 1;
             }
@@ -322,15 +453,18 @@ impl Bridge {
         }
         out.end_array();
         out.prop_strings("removed", Some(&removed));
-        if order_changed {
-            out.prop_strings("order", Some(&order));
+        if order_changed && let Some(order) = &order {
+            out.prop_strings("order", Some(order));
         }
-        if state_changed {
+        if state_changed && let Some(text) = &next_state_text {
             out.name("state");
-            out.raw(&text);
+            out.raw(text);
         }
         out.end_object();
-        self.remember(state, revision, order, text);
+        match order {
+            Some(order) => self.remember(state, revision, order, next_state_text),
+            None => self.remember_same_order(state, revision, &changed, next_state_text),
+        }
         // A pane made anew with the same values (a normalize) is no change to the page.
         if panes == 0 && removed.is_empty() && !state_changed && !order_changed {
             return None;
@@ -721,5 +855,164 @@ mod tests {
             assert_eq!(expected.len(), ours.len(), "seed {seed}");
         }
         std::fs::remove_dir_all(work).ok();
+    }
+
+    /// P1-PERF-2: pane-only streaming ticks skip both `state_json` and `fields()` reparsing while emitting identical deltas,
+    /// and a subsequent scalar field or top-level state change still emits the exact `set`/`unset`/`state` delta.
+    #[test]
+    fn streaming_ticks_skip_state_json_and_field_reparsing() {
+        let mut state = json!({
+            "version": 1,
+            "workspaces": [{"id": "w1", "name": "W", "path": "C:\\w", "createdAt": "t"}],
+            "paneLayoutModes": {"w1": "grid", "w2": "tabs"},
+            "sessions": [{
+                "id": "s1",
+                "workspaceId": "w1",
+                "title": "Agent",
+                "resumeId": "res-1",
+                "createdAt": "t",
+                "logs": [{"id": "e0", "kind": "user", "text": "hi", "timestamp": "t"}]
+            }]
+        });
+        let mut bridge = Bridge::default();
+        let initial = read(&state);
+        let pushed: Value = serde_json::from_str(&bridge.snapshot(&initial, 0)).unwrap();
+        let mut page = pushed["snapshot"].clone();
+        assert_eq!(bridge.state_json_calls, 1, "snapshot computes state_json once");
+        assert_eq!(bridge.fields_calls, 0);
+
+        // 25 streaming ticks: append entries and stream tokens onto the last entry.
+        for tick in 1..=25u64 {
+            let logs = state["sessions"][0]["logs"].as_array_mut().unwrap();
+            if tick % 2 == 1 {
+                logs.push(json!({"id": format!("e{tick}"), "kind": "assistant", "text": "tok", "timestamp": "t"}));
+            } else {
+                let last = logs.last_mut().unwrap();
+                last["text"] = json!(format!("{} + {tick}", last["text"].as_str().unwrap()));
+            }
+            let next = read(&state);
+            let text = bridge.flush(&next, tick).expect("streaming tick emits a delta");
+            let delta: Value = serde_json::from_str(&text).unwrap();
+            assert!(delta.get("state").is_none(), "pane-only tick omits top-level state");
+            assert!(delta["sessions"][0].get("set").is_none(), "pane-only tick omits set");
+            assert!(delta["sessions"][0].get("unset").is_none(), "pane-only tick omits unset");
+            page = apply(&page, &delta);
+            let expected: Value = serde_json::from_str(&page_snapshot(&next)).unwrap();
+            assert!(page_equal(&page, &expected), "tick {tick} mismatch");
+        }
+        assert_eq!(bridge.state_json_calls, 1, "zero extra state_json calls across 25 streaming ticks");
+        assert_eq!(bridge.fields_calls, 0, "zero fields() reparses across 25 streaming ticks");
+
+        // Now mutate a scalar field AND unset another: must detect and emit exact set/unset.
+        state["sessions"][0]["title"] = json!("Renamed");
+        state["sessions"][0].as_object_mut().unwrap().shift_remove("resumeId");
+        let next = read(&state);
+        let text = bridge.flush(&next, 26).unwrap();
+        let delta: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(delta["sessions"][0]["set"]["title"], json!("Renamed"));
+        assert_eq!(delta["sessions"][0]["unset"], json!(["resumeId"]));
+        assert_eq!(bridge.state_json_calls, 1, "scalar pane edit still skips state_json");
+        assert_eq!(bridge.fields_calls, 2, "fields() computed once for previous and once for next");
+        page = apply(&page, &delta);
+        assert!(page_equal(&page, &serde_json::from_str(&page_snapshot(&next)).unwrap()));
+
+        // Another streaming tick after `sent_fields` is warm: still zero extra `fields()` calls, and cache stays valid.
+        state["sessions"][0]["logs"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id": "e27", "kind": "assistant", "text": "more", "timestamp": "t"}));
+        let next = read(&state);
+        let text = bridge.flush(&next, 27).unwrap();
+        let delta: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(bridge.fields_calls, 2, "warm cache skips fields() on subsequent streaming tick");
+        page = apply(&page, &delta);
+        assert!(page_equal(&page, &serde_json::from_str(&page_snapshot(&next)).unwrap()));
+
+        // Scalar change right after warm streaming tick: reuses cached `before` so only 1 new `fields()` call!
+        state["sessions"][0]["title"] = json!("Renamed Again");
+        let next = read(&state);
+        let text = bridge.flush(&next, 28).unwrap();
+        let delta: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(delta["sessions"][0]["set"]["title"], json!("Renamed Again"));
+        assert_eq!(bridge.fields_calls, 3, "reused cached before fields via Arc pointer refresh");
+        page = apply(&page, &delta);
+        assert!(page_equal(&page, &serde_json::from_str(&page_snapshot(&next)).unwrap()));
+
+        // Reordering IndexMap keys on AppSnapshot MUST be detected (JSON key order differs!).
+        let mut reordered = read(&state);
+        let mut modes = indexmap::IndexMap::new();
+        modes.insert("w2".into(), Some("tabs".into()));
+        modes.insert("w1".into(), Some("grid".into()));
+        reordered.pane_layout_modes = Some(modes);
+        let text = bridge.flush(&reordered, 29).expect("reordered IndexMap emits state delta");
+        let delta: Value = serde_json::from_str(&text).unwrap();
+        assert!(delta.get("state").is_some(), "reordered map emits state");
+        assert_eq!(bridge.state_json_calls, 2);
+    }
+
+    /// P1-PERF-2: `diff` fast paths (empty, append-only, tail edit, small/large front-trim, dropped-id reappearance,
+    /// middle edits/insertions/deletions, reorders, duplicates) match `apply_list` identically.
+    #[test]
+    fn diff_fast_paths_match_all_list_transitions() {
+        let make = |items: &[(&str, &str)]| -> Vec<LogEntry> {
+            items.iter().map(|(id, text)| LogEntry::new((*id).into(), "assistant", (*text).into(), "t".into(), None)).collect()
+        };
+        let to_values = |entries: &[LogEntry]| -> Vec<Value> {
+            entries
+                .iter()
+                .map(|e| {
+                    let mut out = JsonOut::new();
+                    mighty_core::Wire::write(e, &mut out);
+                    serde_json::from_str(&out.finish()).unwrap()
+                })
+                .collect()
+        };
+        type DiffCase<'a> = (&'a str, Vec<(&'a str, &'a str)>, Vec<(&'a str, &'a str)>, bool);
+        let cases: Vec<DiffCase<'_>> = vec![
+            ("both empty", vec![], vec![], true),
+            ("empty to non-empty", vec![], vec![("e1", "a"), ("e2", "b")], true),
+            ("non-empty to empty", vec![("e1", "a"), ("e2", "b")], vec![], true),
+            ("identical", vec![("e1", "a"), ("e2", "b")], vec![("e1", "a"), ("e2", "b")], true),
+            ("append only", vec![("e1", "a")], vec![("e1", "a"), ("e2", "b"), ("e3", "c")], true),
+            ("tail stream + append", vec![("e1", "a"), ("e2", "b")], vec![("e1", "a"), ("e2", "b2"), ("e3", "c")], true),
+            ("middle edit", vec![("e1", "a"), ("e2", "b"), ("e3", "c")], vec![("e1", "a"), ("e2", "B"), ("e3", "c")], true),
+            ("small front trim + append", vec![("e1", "a"), ("e2", "b"), ("e3", "c")], vec![("e3", "c2"), ("e4", "d")], true),
+            (
+                "large front trim (>4) + append",
+                vec![("e1", "1"), ("e2", "2"), ("e3", "3"), ("e4", "4"), ("e5", "5"), ("e6", "6")],
+                vec![("e6", "6b"), ("e7", "7")],
+                true,
+            ),
+            (
+                "dropped id reappears (small drop)",
+                vec![("e1", "a"), ("e2", "b"), ("e3", "c")],
+                vec![("e2", "b"), ("e3", "c"), ("e1", "a")],
+                false,
+            ),
+            (
+                "dropped id reappears (large drop)",
+                vec![("e1", "1"), ("e2", "2"), ("e3", "3"), ("e4", "4"), ("e5", "5"), ("e6", "6")],
+                vec![("e6", "6"), ("e2", "2")],
+                false,
+            ),
+            ("middle delete", vec![("e1", "a"), ("e2", "b"), ("e3", "c")], vec![("e1", "a"), ("e3", "c")], false),
+            ("middle insert", vec![("e1", "a"), ("e3", "c")], vec![("e1", "a"), ("e2", "b"), ("e3", "c")], false),
+            ("shrink from end", vec![("e1", "a"), ("e2", "b")], vec![("e1", "a")], false),
+            ("swap", vec![("e1", "a"), ("e2", "b")], vec![("e2", "b"), ("e1", "a")], false),
+            ("complete replacement", vec![("e1", "a"), ("e2", "b")], vec![("e3", "c"), ("e4", "d")], true),
+        ];
+        for (name, prev_spec, next_spec, expect_simple) in cases {
+            let prev = make(&prev_spec);
+            let next = make(&next_spec);
+            let change = diff(&prev, &next, LogEntry::id, same_entry);
+            assert_eq!(change.order.is_none(), expect_simple, "case {name}: order presence");
+            let mut out = JsonOut::new();
+            out.begin_object();
+            write_list(&mut out, "list", &change, |out, e| mighty_core::Wire::write(e, out));
+            out.end_object();
+            let delta: Value = serde_json::from_str(&out.finish()).unwrap();
+            let applied = apply_list(&to_values(&prev), &delta["list"]);
+            assert_eq!(applied, to_values(&next), "case {name}: applied delta must match next");
+        }
     }
 }

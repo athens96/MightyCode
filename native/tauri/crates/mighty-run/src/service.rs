@@ -166,9 +166,9 @@ struct Shared {
     antigravity: Mutex<antigravity::Desk>,
     /// agy's settings (`AntigravityRules`), set once the runner's options are made.
     antigravity_rules: OnceLock<AntigravityRuleLeases>,
-    /// True once the leftovers a crash left in agy's settings are out (C# `InitializeAsync` awaits `RemoveLeftovers`): no agy run starts
-    /// before (C2).
-    leftovers_removed: tokio::sync::watch::Receiver<bool>,
+    /// State of startup leftover cleanup in agy's settings (C# `InitializeAsync` awaits `RemoveLeftovers`): no agy run starts
+    /// before cleanup succeeds, and if cleanup exhausts retries agy runs fail closed (P1-SEC-3).
+    leftovers_removed: tokio::sync::watch::Receiver<antigravity::LeftoversState>,
     /// Delegation's hooks ([`RunServiceOptions::delegation`]).
     delegation: Option<Arc<dyn DelegationRunHooks>>,
     /// The snapshots of the runs' folders ([`RunService::set_checkpoints`]); none until the app sets them.
@@ -353,7 +353,7 @@ impl RunService {
         options: RunServiceOptions,
     ) -> (RunService, mpsc::UnboundedReceiver<ServiceEvent>) {
         let (events, receiver) = mpsc::unbounded_channel();
-        let (leftovers_done, leftovers_removed) = tokio::sync::watch::channel(false);
+        let (leftovers_done, leftovers_removed) = tokio::sync::watch::channel(antigravity::LeftoversState::Pending);
         let shared = Arc::new(Shared {
             state: Mutex::new(State { snapshot, routes: HashMap::new(), closing: false }),
             events,

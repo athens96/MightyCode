@@ -284,8 +284,20 @@ pub fn cards_of(host: &Host, view: &mut View, id: &str) -> Option<(Vec<Card>, bo
 pub fn flush(host: &Host) {
     // A pane selected reads its model list again (models.rs, C# RefreshSelectedPaneModels).
     crate::models::follow_selection(host);
+    if !host.is_ready() {
+        return;
+    }
     let mut view = host.view();
     if !view.ready {
+        return;
+    }
+    let any_due = view.panes.iter().any(|(id, ui)| {
+        let Some(session) = view.snapshot.session(id) else { return true };
+        ui.dirty
+            || ui.ticks_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(1))
+            || !ui.seen.as_ref().is_some_and(|seen| Arc::ptr_eq(seen, session))
+    });
+    if !any_due {
         return;
     }
     let ids: Vec<String> = view.panes.keys().cloned().collect();

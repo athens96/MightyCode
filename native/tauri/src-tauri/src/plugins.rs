@@ -51,6 +51,7 @@ fn with_hooks<T>(f: impl FnOnce(&mut Hooks) -> T) -> T {
 }
 
 /// The smoke's list read for `provider` (None: the reader's).
+#[cfg(feature = "dev-harness")]
 pub fn set_smoke_read(provider: &str, read: Option<SmokeRead>) {
     with_hooks(|hooks| match read {
         Some(read) => {
@@ -63,11 +64,13 @@ pub fn set_smoke_read(provider: &str, read: Option<SmokeRead>) {
 }
 
 /// The smoke's reader factory (None: the app's readers).
+#[cfg(feature = "dev-harness")]
 pub fn set_smoke_reader(factory: Option<SmokeReaderFactory>) {
     with_hooks(|hooks| hooks.reader = factory);
 }
 
 /// The plugin window open now: its browser and its dialog's id.
+#[cfg(feature = "dev-harness")]
 pub fn open_window() -> Option<(Arc<ClaudePluginBrowser>, String)> {
     with_hooks(|hooks| hooks.open.clone())
 }

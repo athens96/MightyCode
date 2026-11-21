@@ -70,7 +70,7 @@ async fn pick_pet(host: &Host) -> Option<PathBuf> {
     use tauri_plugin_dialog::DialogExt;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let mut dialog = host.app.dialog().file().add_filter("Pet", &["json", "png", "webp"]);
-    if let Some(window) = host.app.get_window(crate::host::WINDOW) {
+    if let Some(window) = host.app.get_webview_window(crate::host::WINDOW) {
         dialog = dialog.set_parent(&window);
     }
     dialog.pick_file(move |file| {
@@ -85,6 +85,8 @@ fn change(host: &Arc<Host>, edit: impl FnOnce(&mut mighty_companion::prefs::Comp
     crate::native::act(&host.clone(), async move {
         if let Some(companion) = companion::app(&host) {
             edit(&mut lock_state(&companion).prefs);
+            companion.notify();
+            host.shell_dirty();
             companion.save(&host);
             if reload {
                 companion::reload(&host).await;

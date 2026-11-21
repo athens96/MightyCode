@@ -89,13 +89,37 @@ async fn accept(tcp: TcpStream, hub: Arc<Mutex<Hub>>) {
         *into.lock().unwrap() = request.uri().query().unwrap_or_default().to_string();
         Ok(response)
     };
-    let Ok(socket) = tokio_tungstenite::accept_hdr_async(tcp, callback).await else { return };
+    let Ok(mut socket) = tokio_tungstenite::accept_hdr_async(tcp, callback).await else { return };
     let params = query_of(&seen.lock().unwrap());
     let role = params.get("role").cloned().unwrap_or_default();
     let server_id = params.get("serverId").cloned().unwrap_or_default();
     let connection = params.get("connectionId").cloned();
     if role == "server" {
-        let token = params.get("hostToken").cloned().unwrap_or_default();
+        let token = match params.get("hostToken").cloned() {
+            Some(token) => token,
+            None => {
+                let frame = tokio::time::timeout(Duration::from_secs(5), socket.next()).await;
+                let Ok(Some(Ok(Message::Text(text)))) = frame else {
+                    close(socket, 4401).await;
+                    return;
+                };
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(text.as_str()) else {
+                    close(socket, 4400).await;
+                    return;
+                };
+                if value.get("type").and_then(serde_json::Value::as_str) != Some("host-auth") {
+                    close(socket, 4401).await;
+                    return;
+                }
+                match value.get("hostToken").and_then(serde_json::Value::as_str) {
+                    Some(token) => token.to_string(),
+                    None => {
+                        close(socket, 4401).await;
+                        return;
+                    }
+                }
+            }
+        };
         let hashed: String = Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
         if hashed != server_id {
             close(socket, 4401).await;

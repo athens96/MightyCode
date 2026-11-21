@@ -97,6 +97,7 @@ pub fn parse(url: &str) -> Option<DeepLink> {
 }
 
 /// Swift `DeepLink.url`: the link that opens `path`, with a prompt.
+#[cfg(any(feature = "dev-harness", test))]
 pub fn url(path: &str, prompt: Option<&str>) -> String {
     fn encode(text: &str) -> String {
         // URLComponents' query encoding: everything but the unreserved characters and the query's own safe ones.

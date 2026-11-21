@@ -199,6 +199,9 @@ fn projection(host: &Arc<Host>, view: &mut View, pane: &Arc<RunSession>) -> Opti
 
 /// One 120 ms tick of the Mighty pushes (C# `FlushWebMighty`).
 pub fn flush(host: &Arc<Host>) {
+    if !host.is_ready() {
+        return;
+    }
     let mut view = host.view();
     if !view.ready || view.mighty.shown().next().is_none() {
         return;

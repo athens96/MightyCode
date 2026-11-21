@@ -3,6 +3,7 @@
 //! with `BitmapTransform`, Fant, respecting EXIF orientation; here the image crate, Lanczos).
 
 use std::io::Cursor;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
@@ -48,11 +49,26 @@ pub fn svg_png(bytes: &[u8], maximum_edge: u32, enlarge: bool) -> Result<SvgRast
     let mut options = usvg::Options { fontdb: fonts(), ..usvg::Options::default() };
     // Only what the document holds is drawn: no file is read for an <image> (SafeSvgDocument let only data: pictures through).
     options.image_href_resolver.resolve_string = Box::new(|_, _| None);
-    // resvg decodes a data: picture whole to draw it: one whose header says more than MAXIMUM_EMBEDDED_PIXELS is left out.
+    // resvg decodes every data: picture whole to draw it: fail closed when `imagesize` cannot determine its dimensions, and enforce a
+    // cumulative pixel budget (`MAXIMUM_EMBEDDED_PIXELS`) across all embedded `<image>` elements in the SVG.
+    let cumulative_pixels = Arc::new(AtomicU64::new(0));
     let data_resolver = usvg::ImageHrefResolver::default_data_resolver();
     options.image_href_resolver.resolve_data = Box::new(move |mime, data, options| {
-        if imagesize::blob_size(&data).is_ok_and(|size| size.width as u64 * size.height as u64 > MAXIMUM_EMBEDDED_PIXELS) {
+        let size = imagesize::blob_size(&data).ok()?;
+        let pixels = (size.width as u64).checked_mul(size.height as u64)?;
+        if pixels == 0 || pixels > MAXIMUM_EMBEDDED_PIXELS {
             return None;
+        }
+        let mut used = cumulative_pixels.load(Ordering::SeqCst);
+        loop {
+            let next = used.checked_add(pixels)?;
+            if next > MAXIMUM_EMBEDDED_PIXELS {
+                return None;
+            }
+            match cumulative_pixels.compare_exchange_weak(used, next, Ordering::SeqCst, Ordering::SeqCst) {
+                Ok(_) => break,
+                Err(actual) => used = actual,
+            }
         }
         data_resolver(mime, data, options)
     });
@@ -81,15 +97,25 @@ pub struct BitmapSize {
 /// otherwise grow to gigabytes from a megabyte).
 pub const MAXIMUM_HEADER_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Maximum bitmap width or height decoded in memory by [`decode`].
+pub const MAXIMUM_DECODE_DIMENSION: u32 = 16_384;
+
+/// Maximum allocation permitted while decoding a single bitmap by [`decode`] (256 MiB).
+pub const MAXIMUM_DECODE_ALLOC_BYTES: u64 = 256 * 1024 * 1024;
+
 /// A decoder over the bytes; `measuring` reads the header only, bounded by [`MAXIMUM_HEADER_BYTES`] and with no limit on the
-/// picture's width or height; a decode keeps the image crate's limits.
+/// picture's width or height; a decode sets explicit `image::Limits` on width, height, and allocation.
 fn decoder(bytes: &[u8], measuring: bool) -> image::ImageResult<impl ImageDecoder + '_> {
     let mut reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
+    let mut limits = image::Limits::no_limits();
     if measuring {
-        let mut limits = image::Limits::no_limits();
         limits.max_alloc = Some(MAXIMUM_HEADER_BYTES);
-        reader.limits(limits);
+    } else {
+        limits.max_image_width = Some(MAXIMUM_DECODE_DIMENSION);
+        limits.max_image_height = Some(MAXIMUM_DECODE_DIMENSION);
+        limits.max_alloc = Some(MAXIMUM_DECODE_ALLOC_BYTES);
     }
+    reader.limits(limits);
     reader.into_decoder()
 }
 

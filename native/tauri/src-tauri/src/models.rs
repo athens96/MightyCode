@@ -9,6 +9,7 @@
 //! pane's list is read whatever its folder.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use mighty_core::model::AppSnapshot;
@@ -31,6 +32,7 @@ struct Models {
     /// Each pane's model and effort when a reading began: a choice made meanwhile is the user's and stays.
     selections: Mutex<HashMap<ModelContext, HashMap<String, Choice>>>,
     selected: Mutex<Option<String>>,
+    last_revision: AtomicU64,
 }
 
 /// `ModelRefreshes`, made on first use once the run engine is there; None in a smoke.
@@ -66,6 +68,7 @@ fn models(host: &Host) -> Option<Arc<Models>> {
         prior: Mutex::new(HashMap::new()),
         selections: Mutex::new(HashMap::new()),
         selected: Mutex::new(None),
+        last_revision: AtomicU64::new(u64::MAX),
     }));
     Some(host.app.state::<Arc<Models>>().inner().clone())
 }
@@ -182,10 +185,14 @@ async fn read_again(refresh: &ModelCatalogRefresh, key: &ModelContext) -> Option
 /// at by the pane clock (panes.rs).
 pub fn follow_selection(host: &Host) {
     let Some(models) = models(host) else { return };
-    // The pane clock asks every 30 ms: the selection is compared first, and its folder and provider are worked out only when
-    // it changed.
+    // The pane clock asks every 30 ms: skip lock acquisition altogether when state revision has not moved.
+    let rev = host.revision();
+    if models.last_revision.load(Ordering::Acquire) == rev {
+        return;
+    }
     let key = {
         let view = host.view();
+        models.last_revision.store(view.revision(), Ordering::Release);
         let selected = &view.snapshot.active_session_id;
         {
             let mut seen = lock(&models.selected);

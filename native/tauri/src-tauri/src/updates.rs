@@ -17,7 +17,9 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Local, Utc};
 use mighty_core::model::{AppSnapshot, RunSession, Workspace};
 use mighty_core::wire;
-use mighty_native::ui::{Env, Locals, Ui};
+#[cfg(feature = "dev-harness")]
+use mighty_native::ui::Env;
+use mighty_native::ui::{Locals, Ui};
 use mighty_platform::BoxFuture;
 use mighty_run::RunEvent;
 use mighty_updates::cli_update::coordinator::Updater;
@@ -148,6 +150,7 @@ impl Updates {
     }
 
     /// The smoke's stand-in for a queue's drain (None: the composer's drain).
+    #[cfg(feature = "dev-harness")]
     pub fn set_drain_hook(&self, hook: Option<DrainHook>) {
         let mut state = self.state();
         state.drain_hook = hook;
@@ -155,6 +158,7 @@ impl Updates {
     }
 
     /// The smoke's stand-in for the manual updater (None: the real service).
+    #[cfg(feature = "dev-harness")]
     pub fn set_smoke_updater(&self, updater: Option<SmokeUpdater>) {
         self.state().smoke_updater = updater;
     }
@@ -640,6 +644,7 @@ pub fn box_actions(host: &Arc<Host>) -> CliUpdateActions {
 
 /// Settings › 구성 요소 built with an environment of its own over `model` and `actions`, for a check that reads a built tab (the
 /// smoke): the updates' switches, 모두 업데이트 and results are its parts.
+#[cfg(feature = "dev-harness")]
 pub fn built_box(host: &Arc<Host>, model: &CliUpdateBox, actions: &CliUpdateActions) -> mighty_native::ui::El {
     let env: Env = crate::native::env(host);
     let mut locals = Locals::default();

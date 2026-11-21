@@ -449,7 +449,7 @@ pub async fn pick_folder_path(host: &Arc<Host>) -> Option<std::path::PathBuf> {
     use tauri_plugin_dialog::DialogExt;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let mut dialog = host.app.dialog().file();
-    if let Some(window) = host.app.get_window(crate::host::WINDOW) {
+    if let Some(window) = host.app.get_webview_window(crate::host::WINDOW) {
         dialog = dialog.set_parent(&window);
     }
     dialog.pick_folder(move |folder| {
@@ -541,6 +541,7 @@ fn renamed(host: &Arc<Host>, change: impl FnOnce(&AppSnapshot) -> Result<AppSnap
 }
 
 /// The smoke's reload step: a workspace's rename flow started as its menu starts it, left waiting on the page's answer.
+#[cfg(feature = "dev-harness")]
 pub fn start_rename_workspace(host: &Arc<Host>, id: String) {
     let host = host.clone();
     tauri::async_runtime::spawn(async move {
@@ -572,12 +573,18 @@ async fn rename_session(host: &Arc<Host>, id: &str) -> Result<(), String> {
 }
 
 /// C# `ShowWorkspaceInExplorer`: a local workspace's folder (its real path) in Explorer; a remote one's is on its host.
-fn show_in_explorer(host: &Arc<Host>, id: &str) -> Result<(), String> {
-    let folder = host.view().snapshot.workspace(id).filter(|w| w.remote.is_none()).map(|w| w.path().to_string());
-    let Some(path) = folder.and_then(|folder| mighty_core::workspace_files::real_path(Path::new(&folder))).filter(|p| p.is_dir()) else {
+async fn show_in_explorer(host: &Arc<Host>, id: &str) -> Result<(), String> {
+    let Some(folder) = host.view().snapshot.workspace(id).filter(|w| w.remote.is_none()).map(|w| w.path().to_string()) else {
         return Ok(());
     };
-    crate::platform::show_in_explorer(&path)
+    tauri::async_runtime::spawn_blocking(move || {
+        let Some(path) = mighty_core::workspace_files::real_path(Path::new(&folder)).filter(|p| p.is_dir()) else {
+            return Ok(());
+        };
+        crate::platform::show_in_explorer(&path)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 // ── the add menu ──
@@ -787,7 +794,7 @@ pub fn register(methods: &mut Registry) {
     });
     methods.add("showInExplorer", |host: Arc<Host>, args| async move {
         match id(&args) {
-            Some(id) => act(&host, async { show_in_explorer(&host, &id) }).await,
+            Some(id) => act(&host, show_in_explorer(&host, &id)).await,
             None => Ok(Value::Null),
         }
     });

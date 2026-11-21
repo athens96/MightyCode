@@ -215,6 +215,9 @@ impl InputPipe {
 type SharedSink = Arc<Mutex<Box<dyn GraphSink>>>;
 type Redact = Arc<dyn Fn(&str) -> String + Send + Sync>;
 
+/// What `Run::redacted` puts in `MIGHTY_CLAUDE_BRIDGE_TOKEN`'s place.
+const BRIDGE_TOKEN_REDACTED: &str = "<bridge-token-redacted>";
+
 /// One run (C# `RunManager.Run`).
 struct Run {
     request: StartRunRequest,
@@ -274,6 +277,14 @@ impl Run {
             Some(redact) => redact(text),
             None => text.to_string(),
         }
+    }
+
+    fn add_redactor(&self, next: Redact) {
+        let mut slot = lock(&self.redact);
+        *slot = Some(match slot.take() {
+            Some(previous) => Arc::new(move |text: &str| next(&previous(text))),
+            None => next,
+        });
     }
 
     fn touch(&self) {
@@ -1192,6 +1203,10 @@ impl Exec {
             Some(tracker) => Some(lock(tracker).run_id()),
             None => request.graph_run_id.clone().filter(|id| wire::identifier(id)),
         };
+        let todos = match &inner.options.antigravity_home {
+            Some(home) => TodoProgressTracker::with_antigravity_home(request.todo_progress.as_ref(), home),
+            None => TodoProgressTracker::new(request.todo_progress.as_ref()),
+        };
         let exec = Arc::new(Exec {
             inner: inner.clone(),
             run: run.clone(),
@@ -1200,7 +1215,7 @@ impl Exec {
             graph_dirty,
             graph_gate: Mutex::new(()),
             graph_stop: Cancel::new(),
-            todos: Mutex::new(TodoProgressTracker::new(request.todo_progress.as_ref())),
+            todos: Mutex::new(todos),
             background: Mutex::new(BackgroundTaskTracker::new(None)),
             plan_gate: Mutex::new(()),
             todo_run_id,
@@ -1801,6 +1816,8 @@ impl Exec {
                 environment.insert("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS".into(), "1".into());
                 environment.insert("MIGHTY_CLAUDE_BRIDGE_URL".into(), connection.url.clone());
                 environment.insert("MIGHTY_CLAUDE_BRIDGE_TOKEN".into(), connection.token.clone());
+                let bridge_token = connection.token.clone();
+                run.add_redactor(Arc::new(move |text: &str| text.replace(&bridge_token, BRIDGE_TOKEN_REDACTED)));
                 environment.insert("MIGHTY_CLAUDE_RUN_ID".into(), connection.id.clone());
                 for key in ["MIGHTY_CLAUDE_ACTIVITY", "MIGHTY_CLAUDE_USAGE", "MIGHTY_CLAUDE_GRAPH"] {
                     environment.insert(key.into(), "1".into());
@@ -1887,7 +1904,7 @@ impl Exec {
                 && let Some(factory) = &inner.options.binding
                 && let Some(binding) = factory(&request, &workspace)
             {
-                *lock(&run.redact) = Some(binding.redact.clone());
+                run.add_redactor(binding.redact.clone());
                 *lock(&run.binding_ended) = binding.ended;
                 environment.extend(binding.environment);
                 arguments.extend(binding.arguments);
@@ -2356,5 +2373,64 @@ mod tests {
         assert_eq!(utf16_chunks("abc😀d", 4), ["abc\u{FFFD}", "\u{FFFD}d"]);
         assert_eq!(utf16_chunks("ab😀d", 4), ["ab😀", "d"]);
         assert!(utf16_chunks("", 4).is_empty());
+    }
+
+    #[test]
+    fn run_redactor_composes_bridge_token_and_binding_redactors() {
+        let request = StartRunRequest::new("s", "w", "claude", "hi");
+        let run = Run {
+            request,
+            cancel: Cancel::new(),
+            accepted: Mutex::new(None),
+            child: Mutex::new(None),
+            input: Mutex::new(None),
+            input_gate: Mutex::new(()),
+            permissions: Mutex::new(None),
+            codex: Mutex::new(None),
+            pi_dialogs: Mutex::new(None),
+            pi_input_closed: AtomicBool::new(false),
+            acp: Mutex::new(None),
+            acp_ending: AtomicBool::new(false),
+            acp_input_closed: AtomicBool::new(false),
+            parser: Mutex::new(None),
+            tracker: Mutex::new(None),
+            redact: Mutex::new(None),
+            binding_ended: Mutex::new(None),
+            turn_reopened: Mutex::new(None),
+            workspace_root: Mutex::new(None),
+            bytes: AtomicUsize::new(0),
+            truncated: AtomicBool::new(false),
+            activity_id: wire::new_id(),
+            activity_bytes: AtomicUsize::new(0),
+            finalizing: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+            plan_cancelled: AtomicBool::new(false),
+            turn_result_seen: AtomicBool::new(false),
+            protocol_failed: AtomicBool::new(false),
+            authentication_failure: AtomicBool::new(false),
+            authentication_failure_text: Mutex::new(None),
+            cli_state: Mutex::new(None),
+            last_output: Mutex::new(Instant::now()),
+            node_gate: Mutex::new(()),
+            done: watch::channel(false).0,
+            antigravity_cards: Mutex::new(vec![]),
+            previous: Mutex::new(None),
+        };
+        let bridge_token = "a".repeat(64);
+        let pane_token = "b".repeat(64);
+        let bt = bridge_token.clone();
+        run.add_redactor(Arc::new(move |text: &str| text.replace(&bt, BRIDGE_TOKEN_REDACTED)));
+        assert_eq!(
+            run.redacted(&format!("leak {bridge_token} ok")),
+            format!("leak {BRIDGE_TOKEN_REDACTED} ok"),
+            "bridge token must be redacted even without an agent IO binding"
+        );
+        let pt = pane_token.clone();
+        run.add_redactor(Arc::new(move |text: &str| text.replace(&pt, "<pane-token-redacted>")));
+        assert_eq!(
+            run.redacted(&format!("bridge={bridge_token} pane={pane_token}")),
+            format!("bridge={BRIDGE_TOKEN_REDACTED} pane=<pane-token-redacted>"),
+            "binding redactor must compose with bridge token redactor instead of replacing it"
+        );
     }
 }

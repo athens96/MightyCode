@@ -916,10 +916,11 @@ pub fn copy(paths_to_copy: &[String], source: &str, destination: &str, paths: &D
         }
         let mut items: Vec<(PathBuf, PathBuf)> = vec![];
         let folder = meta.is_dir();
+        let mut limit_hit = false;
         let walked: std::io::Result<()> = (|| {
             if folder {
                 let mut pending = vec![PathBuf::from(&from)];
-                while let Some(current) = pending.pop() {
+                'walk: while let Some(current) = pending.pop() {
                     for entry in std::fs::read_dir(&current)? {
                         let child = entry?.path();
                         let inner = std::fs::symlink_metadata(&child)?;
@@ -930,45 +931,45 @@ pub fn copy(paths_to_copy: &[String], source: &str, destination: &str, paths: &D
                             pending.push(child);
                             continue;
                         }
+                        bytes = bytes.saturating_add(inner.len());
+                        files = files.saturating_add(1);
+                        if bytes > COPY_MAXIMUM_BYTES || files > COPY_MAXIMUM_FILES {
+                            limit_hit = true;
+                            break 'walk;
+                        }
                         let relative = child.strip_prefix(&from).map(Path::to_path_buf).unwrap_or_default();
-                        items.push((child.clone(), Path::new(&to).join(relative)));
-                        bytes += inner.len();
-                        files += 1;
+                        items.push((child, Path::new(&to).join(relative)));
                     }
                 }
             } else {
-                items.push((PathBuf::from(&from), PathBuf::from(&to)));
-                bytes += meta.len();
-                files += 1;
+                bytes = bytes.saturating_add(meta.len());
+                files = files.saturating_add(1);
+                if bytes > COPY_MAXIMUM_BYTES || files > COPY_MAXIMUM_FILES {
+                    limit_hit = true;
+                } else {
+                    items.push((PathBuf::from(&from), PathBuf::from(&to)));
+                }
             }
             Ok(())
         })();
+        if limit_hit {
+            result.skip(&path, "limit");
+            break;
+        }
         if walked.is_err() {
             result.skip(&path, "failed");
             continue;
         }
-        if bytes > COPY_MAXIMUM_BYTES || files > COPY_MAXIMUM_FILES {
-            result.skip(&path, "limit");
-            break;
-        }
+        let destination_path = Path::new(destination);
         let copied: std::io::Result<()> = (|| {
             for (item, target) in &items {
                 if let Some(parent) = target.parent() {
-                    std::fs::create_dir_all(parent)?;
-                    // Beyond C#: a folder of the worktree on the way may be a link out of it; nothing is written through one.
-                    let place = paths.canonical(&parent.to_string_lossy());
-                    if !same(&place, &destination_root) && !is_inside(&place, &destination_root) {
-                        return Err(std::io::Error::other("a folder on the way leads out of the worktree"));
-                    }
+                    ensure_safe_destination_dir(parent, destination_path, &destination_root, paths)?;
                 }
-                // `File.Copy(overwrite: false)`: never over a file that is there.
-                if std::fs::symlink_metadata(target).is_ok() {
-                    return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, target.to_string_lossy().into_owned()));
-                }
-                std::fs::copy(item, target)?;
+                copy_file_create_new(item, target)?;
             }
             if folder && items.is_empty() {
-                std::fs::create_dir_all(&to)?;
+                ensure_safe_destination_dir(Path::new(&to), destination_path, &destination_root, paths)?;
             }
             Ok(())
         })();
@@ -978,6 +979,71 @@ pub fn copy(paths_to_copy: &[String], source: &str, destination: &str, paths: &D
         }
     }
     result
+}
+
+/// Validates every ancestor component from `destination` down to `dir` for symlinks/reparse points and containment inside
+/// `destination_root` BEFORE creating each missing directory component.
+fn ensure_safe_destination_dir(dir: &Path, destination: &Path, destination_root: &str, paths: &DelegationPaths) -> std::io::Result<()> {
+    let relative = dir.strip_prefix(destination).map_err(|_| std::io::Error::other("destination target leaves worktree"))?;
+    let mut cursor = destination.to_path_buf();
+    let root_meta = std::fs::symlink_metadata(&cursor)?;
+    if is_link(&root_meta) || !root_meta.is_dir() {
+        return Err(std::io::Error::other("destination root is not a real directory"));
+    }
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(part) => {
+                cursor.push(part);
+                match std::fs::symlink_metadata(&cursor) {
+                    Ok(meta) => {
+                        if is_link(&meta) || !meta.is_dir() {
+                            return Err(std::io::Error::other("a folder on the way is a link or not a directory"));
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => match std::fs::create_dir(&cursor) {
+                        Ok(()) => {}
+                        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                            let meta = std::fs::symlink_metadata(&cursor)?;
+                            if is_link(&meta) || !meta.is_dir() {
+                                return Err(std::io::Error::other("a folder on the way is a link or not a directory"));
+                            }
+                        }
+                        Err(err) => return Err(err),
+                    },
+                    Err(error) => return Err(error),
+                }
+                let place = paths.canonical(&cursor.to_string_lossy());
+                if !same(&place, destination_root) && !is_inside(&place, destination_root) {
+                    return Err(std::io::Error::other("a folder on the way leads out of the worktree"));
+                }
+            }
+            std::path::Component::CurDir => {}
+            _ => return Err(std::io::Error::other("invalid destination component")),
+        }
+    }
+    let place = paths.canonical(&dir.to_string_lossy());
+    if !same(&place, destination_root) && !is_inside(&place, destination_root) {
+        return Err(std::io::Error::other("a folder on the way leads out of the worktree"));
+    }
+    Ok(())
+}
+
+/// Copies a regular non-link file `source` into a brand-new `target` using `OpenOptions::create_new(true)` (never following a
+/// symlink or overwriting an existing file).
+fn copy_file_create_new(source: &Path, target: &Path) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let meta = std::fs::symlink_metadata(source)?;
+    if is_link(&meta) || !meta.is_file() {
+        return Err(std::io::Error::other("source is not a regular file"));
+    }
+    let mut reader = std::fs::File::open(source)?;
+    let mut writer = std::fs::OpenOptions::new().write(true).create_new(true).open(target)?;
+    if let Err(error) = std::io::copy(&mut reader, &mut writer).and_then(|_| writer.flush()) {
+        drop(writer);
+        let _ = std::fs::remove_file(target);
+        return Err(error);
+    }
+    Ok(())
 }
 
 // ── the pull request (rule 11) ──────────────────────────────────────────────────────────────────────────────────────────

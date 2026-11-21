@@ -137,9 +137,33 @@ async fn page_view(window: &tauri::Window) -> Option<Retained<NSView>> {
     receiver.await.ok().flatten().map(|release| release.0)
 }
 
+/// Retains `window`'s content `NSView` synchronously on the main thread so no raw unretained view pointer ever crosses an `.await`.
+async fn content_view(window: &tauri::Window) -> Result<OnMain<NSView>> {
+    if MainThreadMarker::new().is_some() {
+        let raw = window.ns_view().map_err(|e| PlatformError::Refused(format!("the window has no view: {e}")))? as *mut NSView;
+        // SAFETY: Tauri's content view of `window`, synchronously retained on the main thread before any `.await`.
+        let retained = unsafe { Retained::retain(raw) }.ok_or_else(|| PlatformError::Refused("no content view".into()))?;
+        return Ok(OnMain::new(retained));
+    }
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let handle = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let result = handle.ns_view().map_err(|e| PlatformError::Refused(format!("the window has no view: {e}"))).and_then(|raw| {
+                // SAFETY: Tauri's content view of `handle`, retained synchronously on the main thread while `handle` is live.
+                unsafe { Retained::retain(raw as *mut NSView) }
+                    .map(OnMain::new)
+                    .ok_or_else(|| PlatformError::Refused("no content view".into()))
+            });
+            let _ = sender.send(result);
+        })
+        .map_err(|e| PlatformError::Refused(format!("the window has no main thread: {e}")))?;
+    receiver.await.map_err(|_| PlatformError::Invalid("the main thread did not answer".into()))?
+}
+
 /// Opens a view at `options.bounds` over `window`'s page (main thread work, awaited).
 pub async fn open(window: &tauri::Window, options: TerminalOptions) -> Result<Box<dyn TerminalSurface>> {
-    let content = window.ns_view().map_err(|e| PlatformError::Refused(format!("the window has no view: {e}")))? as usize;
+    let content = content_view(window).await?;
     let page = page_view(window).await.map(OnMain::new);
     let inner = ask(move || create(content, page, options)).await??;
     Ok(Box::new(MacTerminalSurface { inner: Arc::new(inner) }))
@@ -170,9 +194,13 @@ fn make_surface(app: ghostty_app_t, view: &TerminalView, scale: f64, font_size: 
         return Err(PlatformError::Refused("ghostty_surface_new gave nothing".into()));
     }
     if let Err(error) = view.shared().attach(surface) {
-        view.shared().close(app);
-        // SAFETY: the surface is freed: its userdata goes.
-        drop(unsafe { Arc::from_raw(userdata as *const Shared) });
+        if view.shared().close(app) {
+            // SAFETY: the surface is freed: its userdata goes.
+            drop(unsafe { Arc::from_raw(userdata as *const Shared) });
+        } else {
+            // Keep the view alive alongside any leaked surface/userdata.
+            std::mem::forget(view.retain());
+        }
         return Err(PlatformError::Io(error));
     }
     // SAFETY: the new surface on the main thread.
@@ -184,16 +212,15 @@ fn make_surface(app: ghostty_app_t, view: &TerminalView, scale: f64, font_size: 
 }
 
 /// Makes the view over the page and its surface (main thread).
-fn create(content: usize, page: Option<OnMain<NSView>>, options: TerminalOptions) -> Result<Inner> {
+fn create(content: OnMain<NSView>, page: Option<OnMain<NSView>>, options: TerminalOptions) -> Result<Inner> {
     let main = MainThreadMarker::new().ok_or_else(|| PlatformError::Invalid("not on the main thread".into()))?;
-    // SAFETY: Tauri's content view of the window, alive with the window; retained here on the main thread.
-    let content = unsafe { Retained::retain(content as *mut NSView) }.ok_or_else(|| PlatformError::Refused("no content view".into()))?;
+    let content_ref = content.get(main).ok_or_else(|| PlatformError::Refused("no content view".into()))?;
     let look = runtime::look();
     let app = runtime::app(&look).map_err(PlatformError::Refused)?;
     let shared = Arc::new(Shared::new(options.listener));
-    let view = TerminalView::new(main, frame_in(&content, options.bounds), shared.clone());
-    content.addSubview(&view);
-    let userdata = match make_surface(app, &view, scale_of(&content), look.size) {
+    let view = TerminalView::new(main, frame_in(content_ref, options.bounds), shared.clone());
+    content_ref.addSubview(&view);
+    let userdata = match make_surface(app, &view, scale_of(content_ref), look.size) {
         Ok(userdata) => userdata,
         Err(error) => {
             view.removeFromSuperview();
@@ -202,18 +229,12 @@ fn create(content: usize, page: Option<OnMain<NSView>>, options: TerminalOptions
     };
     runtime::register(&shared);
     runtime::owe();
-    Ok(Inner {
-        shared,
-        view: OnMain::new(view),
-        content: OnMain::new(content),
-        page,
-        userdata: userdata as usize,
-        closed: AtomicBool::new(false),
-    })
+    Ok(Inner { shared, view: OnMain::new(view), content, page, userdata: userdata as usize, closed: AtomicBool::new(false) })
 }
 
 /// Ends the surface (main thread, once): the keyboard back to the page, the view off the window, the writer stopped and the surface
-/// freed while the app keeps ticking, then the userdata.
+/// freed while the app keeps ticking, then the userdata. If the writer stalls and `Shared::close` returns `false`, `TerminalView` is
+/// kept alive (retained and leaked) alongside the unfreed `ghostty_surface_t` and `userdata`.
 fn free(inner: &Inner, main: MainThreadMarker) {
     runtime::unregister(&inner.shared);
     if let Some(view) = inner.view.get(main) {
@@ -225,6 +246,10 @@ fn free(inner: &Inner, main: MainThreadMarker) {
     if inner.shared.close(runtime::current_app()) {
         // SAFETY: the userdata kept at the making, released once, after the surface that used it.
         drop(unsafe { Arc::from_raw(inner.userdata as *const Shared) });
+    } else if let Some(view) = inner.view.get(main) {
+        // Writer stalled: keep `TerminalView` alive alongside the leaked `ghostty_surface_t` so libghostty's stored view pointer
+        // cannot dangle.
+        std::mem::forget(view.retain());
     }
 }
 
@@ -432,6 +457,9 @@ pub fn headless_round_trip(written: &str, flood: &str, typed: &str) -> std::resu
     if freed {
         // SAFETY: the surface is freed: the userdata it held goes.
         drop(unsafe { Arc::from_raw(userdata as *const Shared) });
+    } else {
+        // Writer stalled: keep `TerminalView` alive alongside the leaked `ghostty_surface_t` and `userdata`.
+        std::mem::forget(view);
     }
     let mut report = std::mem::take(&mut *seen.lock().unwrap_or_else(|p| p.into_inner()));
     report.text = text;

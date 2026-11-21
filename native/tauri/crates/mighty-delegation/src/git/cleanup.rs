@@ -423,19 +423,25 @@ fn reparse_point(meta: &std::fs::Metadata) -> bool {
 /// `Unlink`: removes the junction or link at `path` itself, never what it points to.
 fn unlink(path: &str) -> std::io::Result<()> {
     let meta = std::fs::symlink_metadata(path)?;
+    let remove_link = |meta: &std::fs::Metadata| {
+        if is_directory_link(Path::new(path), meta) {
+            // A junction (Windows) goes as a folder; a symbolic link to a folder elsewhere is refused by rmdir (ENOTDIR) and goes as a file.
+            std::fs::remove_dir(path).or_else(|_| std::fs::remove_file(path))
+        } else {
+            // A link whose target is gone or is no folder: a folder link as a folder, a file link as a file.
+            std::fs::remove_file(path).or_else(|_| std::fs::remove_dir(path))
+        }
+    };
+    if meta.file_type().is_symlink() || reparse_point(&meta) {
+        return remove_link(&meta);
+    }
     if meta.permissions().readonly() {
         let mut permissions = meta.permissions();
         #[allow(clippy::permissions_set_readonly_false)]
         permissions.set_readonly(false);
         std::fs::set_permissions(path, permissions)?;
     }
-    if is_directory_link(Path::new(path), &meta) {
-        // A junction (Windows) goes as a folder; a symbolic link to a folder elsewhere is refused by rmdir (ENOTDIR) and goes as a file.
-        std::fs::remove_dir(path).or_else(|_| std::fs::remove_file(path))
-    } else {
-        // A link whose target is gone or is no folder: a folder link as a folder, a file link as a file.
-        std::fs::remove_file(path).or_else(|_| std::fs::remove_dir(path))
-    }
+    remove_link(&meta)
 }
 
 /// `Remove`: the file or folder at `path` with everything in it, if it is there. A read-only file is made writable first (Windows
@@ -446,16 +452,16 @@ fn remove(path: &str) -> std::io::Result<()> {
 }
 
 fn remove_entry(path: &Path, meta: &std::fs::Metadata) -> std::io::Result<()> {
+    if meta.file_type().is_symlink() || reparse_point(meta) {
+        // A link, or any other reparse point (a cloud placeholder), is removed itself and never descended, as .NET's recursive
+        // delete does: a folder one as a folder, a file one as a file.
+        return std::fs::remove_dir(path).or_else(|_| std::fs::remove_file(path));
+    }
     if meta.permissions().readonly() {
         let mut permissions = meta.permissions();
         #[allow(clippy::permissions_set_readonly_false)]
         permissions.set_readonly(false);
         std::fs::set_permissions(path, permissions)?;
-    }
-    if meta.file_type().is_symlink() || reparse_point(meta) {
-        // A link, or any other reparse point (a cloud placeholder), is removed itself and never descended, as .NET's recursive
-        // delete does: a folder one as a folder, a file one as a file.
-        return std::fs::remove_dir(path).or_else(|_| std::fs::remove_file(path));
     }
     if !meta.is_dir() {
         return std::fs::remove_file(path);
@@ -507,4 +513,54 @@ pub fn workspace_removal_refusal<'a>(
 /// The app's `worktreeExists` for [`workspace_removal_refusal`]: `Directory.Exists(path) || File.Exists(path)`.
 pub fn worktree_exists(path: &str) -> bool {
     exists(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P1-SEC-2: `unlink` and `remove_entry` must not call `set_permissions` on symlinks (which follows symlinks on Unix and alters
+    /// the target's permissions).
+    #[cfg(unix)]
+    #[test]
+    fn unlink_and_remove_entry_do_not_chmod_symlink_targets() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let base = std::env::temp_dir().join(format!("mighty-cleanup-sec2-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&base).unwrap();
+
+        let target1 = base.join("readonly_target1.txt");
+        let target2 = base.join("readonly_target2.txt");
+        std::fs::write(&target1, "keep1").unwrap();
+        std::fs::write(&target2, "keep2").unwrap();
+        std::fs::set_permissions(&target1, std::fs::Permissions::from_mode(0o444)).unwrap();
+        std::fs::set_permissions(&target2, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        let link1 = base.join("link1");
+        let link2 = base.join("link2");
+        std::os::unix::fs::symlink(&target1, &link1).unwrap();
+        std::os::unix::fs::symlink(&target2, &link2).unwrap();
+
+        unlink(&link1.to_string_lossy()).unwrap();
+        assert!(!link1.exists() && std::fs::symlink_metadata(&link1).is_err(), "link1 unlinked");
+        assert_eq!(
+            std::fs::metadata(&target1).unwrap().permissions().mode() & 0o777,
+            0o444,
+            "unlink must not change symlink target permissions"
+        );
+
+        let meta2 = std::fs::symlink_metadata(&link2).unwrap();
+        remove_entry(&link2, &meta2).unwrap();
+        assert!(!link2.exists() && std::fs::symlink_metadata(&link2).is_err(), "link2 removed");
+        assert_eq!(
+            std::fs::metadata(&target2).unwrap().permissions().mode() & 0o777,
+            0o444,
+            "remove_entry must not change symlink target permissions"
+        );
+
+        // Clean up read-only targets.
+        let _ = std::fs::set_permissions(&target1, std::fs::Permissions::from_mode(0o644));
+        let _ = std::fs::set_permissions(&target2, std::fs::Permissions::from_mode(0o644));
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

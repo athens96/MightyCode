@@ -10,7 +10,7 @@
 //! 3. The main agent's own work: one step per tool call and sub-agent started, in order ("파일 읽기 · calc.py").
 
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use mighty_core::model::TodoItem;
 use serde_json::Value;
@@ -46,9 +46,20 @@ pub struct AntigravitySteps {
     activity: ActivityList,
     boundaries: Vec<TodoItem>,
     task_file: Option<Vec<TodoItem>>,
+    /// When set (tests / custom `antigravity_home`), anchors `task.md` reads to this brain folder instead of `~/.gemini/antigravity-cli/brain`.
+    brain_root: Option<PathBuf>,
 }
 
 impl AntigravitySteps {
+    /// Steps anchored to a specific brain folder (e.g. `<test_home>/.gemini/antigravity-cli/brain`).
+    pub fn with_brain_root(brain_root: PathBuf) -> AntigravitySteps {
+        AntigravitySteps { brain_root: Some(brain_root), ..AntigravitySteps::default() }
+    }
+
+    /// Steps anchored to `<home>/.gemini/antigravity-cli/brain`.
+    pub fn with_home(home: &Path) -> AntigravitySteps {
+        Self::with_brain_root(home.join(".gemini").join("antigravity-cli").join("brain"))
+    }
     /// One line of agy's stream; the request's checklist when this line changed it.
     pub fn consume(&mut self, frame: &Value) -> Option<Vec<TodoItem>> {
         if meta::text(frame, "event") != Some("step_update") {
@@ -162,10 +173,46 @@ impl AntigravitySteps {
         }
     }
 
+    fn resolve_brain_root(&self) -> Option<PathBuf> {
+        let root = self
+            .brain_root
+            .clone()
+            .or_else(|| super::permissions::user_profile().map(|home| home.join(".gemini").join("antigravity-cli").join("brain")))?;
+        std::fs::canonicalize(root).ok()
+    }
+
     fn read_task_file(&mut self, path: &Path) -> bool {
-        let Ok(file) = std::fs::File::open(path) else { return false };
+        let Some(canonical_root) = self.resolve_brain_root() else { return false };
+        let Some(parent) = path.parent() else { return false };
+        let Some(file_name) = path.file_name() else { return false };
+        if !file_name.to_str().is_some_and(|name| name.eq_ignore_ascii_case("task.md")) {
+            return false;
+        }
+        // Reject symlinks/reparse points on the conversation folder before canonicalizing.
+        let Ok(parent_meta) = std::fs::symlink_metadata(parent) else { return false };
+        if parent_meta.file_type().is_symlink() || is_reparse_point(&parent_meta) || !parent_meta.file_type().is_dir() {
+            return false;
+        }
+        let Ok(canonical_parent) = std::fs::canonicalize(parent) else { return false };
+        if canonical_parent.parent() != Some(canonical_root.as_path()) {
+            return false;
+        }
+        let safe_path = canonical_parent.join(file_name);
+        let Ok(file_meta) = std::fs::symlink_metadata(&safe_path) else { return false };
+        if file_meta.file_type().is_symlink()
+            || is_reparse_point(&file_meta)
+            || !file_meta.file_type().is_file()
+            || file_meta.len() > MAXIMUM_TASK_FILE_BYTES
+        {
+            return false;
+        }
+        let Ok(file) = std::fs::File::open(&safe_path) else { return false };
+        let Ok(opened_meta) = file.metadata() else { return false };
+        if !opened_meta.file_type().is_file() || !same_file(&file_meta, &opened_meta) {
+            return false;
+        }
         let mut bytes = Vec::new();
-        if file.take(MAXIMUM_TASK_FILE_BYTES).read_to_end(&mut bytes).is_err() {
+        if file.take(MAXIMUM_TASK_FILE_BYTES + 1).read_to_end(&mut bytes).is_err() || bytes.len() as u64 > MAXIMUM_TASK_FILE_BYTES {
             return false;
         }
         let list = parse_task_file(&String::from_utf8_lossy(&bytes));
@@ -175,6 +222,28 @@ impl AntigravitySteps {
         self.task_file = Some(list);
         true
     }
+}
+
+#[cfg(windows)]
+fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    meta.file_attributes() & 0x0400 != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn same_file(expected: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    expected.dev() == opened.dev() && expected.ino() == opened.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file(_expected: &std::fs::Metadata, _opened: &std::fs::Metadata) -> bool {
+    true
 }
 
 /// `TaskName` and its kind from the first place that has one; agy's `%SAME%` keeps the one before.

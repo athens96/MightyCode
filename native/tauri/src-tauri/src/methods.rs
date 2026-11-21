@@ -93,22 +93,28 @@ pub fn registry() -> Registry {
         Ok(Value::Null)
     });
     methods.add("selectSession", |host: Arc<Host>, args| async move {
-        change(&host, |view| match text(&args, "id").filter(|id| wire::identifier(id)) {
+        let reply = change(&host, |view| match text(&args, "id").filter(|id| wire::identifier(id)) {
             Some(id) => select_session(view, id),
             None => Ok(()),
-        })
+        })?;
+        crate::bodies::ensure_active(&host).await;
+        Ok(reply)
     });
     methods.add("activatePane", |host: Arc<Host>, args| async move {
-        change(&host, |view| match text(&args, "id") {
+        let reply = change(&host, |view| match text(&args, "id") {
             Some(id) => activate_pane(view, id),
             None => Ok(()),
-        })
+        })?;
+        crate::bodies::ensure_active(&host).await;
+        Ok(reply)
     });
     methods.add("selectWorkspace", |host: Arc<Host>, args| async move {
-        change(&host, |view| match text(&args, "id") {
+        let reply = change(&host, |view| match text(&args, "id") {
             Some(id) => select_workspace(view, id),
             None => Ok(()),
-        })
+        })?;
+        crate::bodies::ensure_active(&host).await;
+        Ok(reply)
     });
     methods.add("setTheme", |host: Arc<Host>, args| async move {
         let theme = if text(&args, "theme") == Some("light") { "light" } else { "dark" };
@@ -242,7 +248,7 @@ pub fn registry() -> Registry {
     methods.add("openUrl", |_host: Arc<Host>, args| async move {
         // C# `openUrl`: an http, https or mailto address, to the user's default handler; anything else does nothing.
         if let Some(url) = text(&args, "url").and_then(openable_url) {
-            crate::platform::open_url(&url)?;
+            tauri::async_runtime::spawn_blocking(move || crate::platform::open_url(&url)).await.map_err(|error| error.to_string())??;
         }
         Ok(Value::Null)
     });

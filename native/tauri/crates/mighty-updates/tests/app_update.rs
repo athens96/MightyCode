@@ -2544,3 +2544,76 @@ fn debug_output_leaves_addresses_and_folders_out() {
     let service = Service::new(Arc::new(FakeUpdateTransport::default()), Path::new("C:/Users/name/state"), None);
     assert!(!format!("{service:?}").contains("name"), "{service:?}");
 }
+
+/// P1-SEC-3: staging rejects symlink destinations and zip entry count bombs; replacement rejects symlinks in `copy_directory` and
+/// catches post-staging tampering of files inside `staged` (even if the digest sidecar is removed).
+#[test]
+fn app_update_stage_and_replacement_hardening() {
+    let root = Temp::new();
+
+    // 1. Entry count cap prevents zip entry bombs.
+    let too_many_path = root.path().join("many.zip");
+    {
+        let file = std::fs::File::create(&too_many_path).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for i in 0..=stage::MAX_ENTRIES {
+            writer.start_file(format!("f{i}.txt"), opts).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+    let staged_many = root.path().join("staged-many");
+    assert!(stage::stage(&too_many_path, &staged_many, "x64").is_err(), "zip exceeding MAX_ENTRIES must be rejected");
+
+    // 2. Symlink at staging destination must be rejected without deleting the link's target.
+    #[cfg(unix)]
+    {
+        let target_dir = root.path().join("do-not-delete");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        std::fs::write(target_dir.join("keep.txt"), "precious").unwrap();
+        let link_dest = root.path().join("staged-link");
+        std::os::unix::fs::symlink(&target_dir, &link_dest).unwrap();
+        let valid_zip = make_zip(root.path(), "valid-link.zip", &[Entry::File("MightyCode.exe", &fake_executable("x64"))]);
+        assert!(stage::stage(&valid_zip, &link_dest, "x64").is_err(), "symlink destination must be rejected");
+        assert!(target_dir.join("keep.txt").is_file(), "symlink destination target must remain untouched");
+    }
+
+    // 3. Staged tree tampering is caught by verify_before_swap (both with sidecar present and with sidecar deleted).
+    let install = root.path().join("install");
+    make_install(&install, "old");
+    let pkg_dir = root.path().join("pkg-tamper");
+    std::fs::create_dir_all(&pkg_dir).unwrap();
+    let pkg = make_zip(
+        &pkg_dir,
+        "MightyCode-windows.zip",
+        &[Entry::File("MightyCode.exe", &fake_executable("x64")), Entry::File("app.dll", b"good-dll")],
+    );
+    let pkg_bytes = std::fs::read(&pkg).unwrap();
+    let staged = stage::stage(&pkg, &pkg_dir.join("staged"), "x64").unwrap();
+    assert!(stage::staged_digest_path(&pkg).unwrap().is_file(), "stage writes staged tree digest sidecar outside staged/");
+    let plan = create_plan(&staged, &install, &pkg, &sha256_of(&pkg_bytes), pkg_bytes.len() as i64, 4242);
+
+    // Tamper with a staged file -> verify_before_swap must refuse before moving anything.
+    std::fs::write(staged.join("app.dll"), b"evil-dll").unwrap();
+    let tampered = replacement::run(&plan, &Fake::new(true, ok), &ko());
+    assert!(!tampered.replaced && tampered.moves.is_empty(), "tampered staged file must be rejected: {:?}", tampered.error);
+    assert_eq!(read(install.join("MightyCode.exe")), "old");
+
+    // Even deleting the sidecar cannot bypass verification against the SHA-256-verified zip package.
+    std::fs::remove_file(stage::staged_digest_path(&pkg).unwrap()).unwrap();
+    let still_tampered = replacement::run(&plan, &Fake::new(true, ok), &ko());
+    assert!(!still_tampered.replaced && still_tampered.moves.is_empty(), "deleting sidecar must not bypass zip-entry staged verification");
+
+    // 4. copy_directory rejects symlinks instead of following them.
+    #[cfg(unix)]
+    {
+        let src = root.path().join("copy-src");
+        let dst = root.path().join("copy-dst");
+        let outside = root.path().join("secret.txt");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(&outside, "secret").unwrap();
+        std::os::unix::fs::symlink(&outside, src.join("link.txt")).unwrap();
+        assert!(replacement::copy_directory(&src, &dst).is_err(), "copy_directory must reject symlinks");
+        assert!(!dst.join("link.txt").exists());
+    }
+}

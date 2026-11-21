@@ -13,7 +13,9 @@
 //!   mirror workspace made on its host, a mirrored pane's close on its host.
 
 use std::sync::{Arc, Mutex, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "dev-harness")]
+use std::time::Instant;
 
 use mighty_composer::pending::SubmitReceipt;
 use mighty_core::model::{AppSnapshot, MirrorReference, RunSession};
@@ -23,7 +25,9 @@ use mighty_remote::remote::mirror::desktop_host::DeskMirrorHost;
 use mighty_remote::remote::mirror::{MirrorQueued, protocol, support};
 use mighty_remote::remote::wire::RemoteConnectionStatus;
 use mighty_run::permissions::ToolPermissionRequest;
-use serde_json::{Value, json};
+use serde_json::Value;
+#[cfg(feature = "dev-harness")]
+use serde_json::json;
 
 use crate::host::{Host, Registry, lock};
 
@@ -400,207 +404,223 @@ fn strip(
 
 // ── the smoke's step ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/// The checks of the step's report.
-const KEYS: [(&str, &str); 4] =
-    [("listed", "mirrorListed"), ("frame", "mirrorFrame"), ("reconnected", "mirrorReconnected"), ("cleaned", "mirrorCleaned")];
+#[cfg(feature = "dev-harness")]
+mod smoke_step {
+    use super::*;
 
-fn must(holds: bool, why: impl FnOnce() -> String) -> Result<(), String> {
-    if holds { Ok(()) } else { Err(format!("mirror: {}", why())) }
-}
+    /// The checks of the step's report.
+    const KEYS: [(&str, &str); 4] =
+        [("listed", "mirrorListed"), ("frame", "mirrorFrame"), ("reconnected", "mirrorReconnected"), ("cleaned", "mirrorCleaned")];
 
-/// Polls `test` every 50 ms for up to `seconds`; Err with what was seen when it never held.
-async fn until(seconds: u64, mut test: impl FnMut() -> bool, seen: impl FnOnce() -> String) -> Result<(), String> {
-    let end = Instant::now() + Duration::from_secs(seconds);
-    while Instant::now() < end {
-        if test() {
-            return Ok(());
+    fn must(holds: bool, why: impl FnOnce() -> String) -> Result<(), String> {
+        if holds { Ok(()) } else { Err(format!("mirror: {}", why())) }
+    }
+
+    /// Polls `test` every 50 ms for up to `seconds`; Err with what was seen when it never held.
+    async fn until(seconds: u64, mut test: impl FnMut() -> bool, seen: impl FnOnce() -> String) -> Result<(), String> {
+        let end = Instant::now() + Duration::from_secs(seconds);
+        while Instant::now() < end {
+            if test() {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        must(test(), seen)
     }
-    must(test(), seen)
-}
 
-/// The smoke's mirror step (smoke.rs `Stage::Mirror`, after the remote step; on loopback inside this process): the app's own sharing host
-/// shares the smoke's local workspace on loopback port 0, the app's own client connects to it, and the mirror lists the workspace and its
-/// agent panes, the frame model carries the server, the mirror flags and the strips, a disconnect stops the mirror and a connect starts it
-/// again; everything it adds is taken away again. True when it started; it reports once through `Smoke::probed`.
-pub fn smoke_start(host: &Arc<Host>) -> bool {
-    if host.smoke.is_none() {
-        return false;
-    }
-    let Some(desk) = desk() else { return false };
-    host.log.line("smoke: mirror step");
-    desk.attach();
-    let host = host.clone();
-    tauri::async_runtime::spawn(async move {
-        let report = smoke_run(&host, &desk).await;
-        if let Some(smoke) = &host.smoke {
-            smoke.probed(&host, report);
+    /// The smoke's mirror step (smoke.rs `Stage::Mirror`, after the remote step; on loopback inside this process): the app's own sharing host
+    /// shares the smoke's local workspace on loopback port 0, the app's own client connects to it, and the mirror lists the workspace and its
+    /// agent panes, the frame model carries the server, the mirror flags and the strips, a disconnect stops the mirror and a connect starts it
+    /// again; everything it adds is taken away again. True when it started; it reports once through `Smoke::probed`.
+    pub fn smoke_start(host: &Arc<Host>) -> bool {
+        if host.smoke.is_none() {
+            return false;
         }
-    });
-    true
-}
-
-/// The step's checks from its report: each of its keys, and `mirror` (the window left as it was).
-pub fn smoke_checks(report: &Value) -> Vec<(&'static str, bool)> {
-    let mut checks: Vec<(&'static str, bool)> =
-        KEYS.iter().map(|(key, name)| (*name, report.get(*key) == Some(&Value::Bool(true)))).collect();
-    checks.push(("mirror", report.get("passed") == Some(&Value::Bool(true))));
-    checks
-}
-
-async fn smoke_run(host: &Arc<Host>, desk: &MirrorDesk) -> Value {
-    let mut checks = serde_json::Map::new();
-    let app = crate::remote::app(host);
-    let saved = host.view().snapshot.active_workspace_id.clone();
-    let mut made: Option<String> = None;
-    let outcome = smoke_checked(host, desk, &app, &mut checks, &mut made).await;
-    if let Some(sharing) = app.host().cloned()
-        && sharing.state().enabled
-    {
-        sharing.stop().await;
+        let Some(desk) = desk() else { return false };
+        host.log.line("smoke: mirror step");
+        desk.attach();
+        let host = host.clone();
+        tauri::async_runtime::spawn(async move {
+            let report = smoke_run(&host, &desk).await;
+            if let Some(smoke) = &host.smoke {
+                smoke.probed(&host, report);
+            }
+        });
+        true
     }
-    if let Some(id) = &made {
-        app.client.remove(id).await;
+
+    /// The step's checks from its report: each of its keys, and `mirror` (the window left as it was).
+    pub fn smoke_checks(report: &Value) -> Vec<(&'static str, bool)> {
+        let mut checks: Vec<(&'static str, bool)> =
+            KEYS.iter().map(|(key, name)| (*name, report.get(*key) == Some(&Value::Bool(true)))).collect();
+        checks.push(("mirror", report.get("passed") == Some(&Value::Bool(true))));
+        checks
     }
-    let left = async {
+
+    async fn smoke_run(host: &Arc<Host>, desk: &MirrorDesk) -> Value {
+        let mut checks = serde_json::Map::new();
+        let app = crate::remote::app(host);
+        let saved = host.view().snapshot.active_workspace_id.clone();
+        let mut made: Option<String> = None;
+        let outcome = smoke_checked(host, desk, &app, &mut checks, &mut made).await;
+        if let Some(sharing) = app.host().cloned()
+            && sharing.state().enabled
+        {
+            sharing.stop().await;
+        }
+        if let Some(id) = &made {
+            app.client.remove(id).await;
+        }
+        let left = async {
+            until(
+                10,
+                || {
+                    let view = host.view();
+                    !view.snapshot.workspaces().iter().any(|w| w.remote.is_some())
+                        && !view.snapshot.sessions().iter().any(|s| s.mirror.is_some())
+                },
+                || "the mirror's workspaces and panes must go with the connection".into(),
+            )
+            .await?;
+            if host.view().snapshot.active_workspace_id != saved
+                && let Some(front) = &saved
+            {
+                let _ = crate::frame::select_workspace(&mut host.view(), front);
+            }
+            let sharing = app.host().is_some_and(|h| h.state().enabled);
+            let connections = app.client.connections().len();
+            must(!sharing && connections == 0 && host.view().snapshot.active_workspace_id == saved, || {
+                format!("the window must be left as it was; sharing {sharing}, connections {connections}")
+            })
+        };
+        let left = left.await;
+        if left.is_ok() {
+            checks.insert("cleaned".into(), json!(true));
+        }
+        match (outcome, left) {
+            (Ok(()), Ok(())) => {
+                checks.insert("passed".into(), json!(true));
+            }
+            (Err(failure), Ok(())) | (Ok(()), Err(failure)) => {
+                checks.insert("error".into(), json!(failure));
+            }
+            (Err(failure), Err(left)) => {
+                checks.insert("error".into(), json!(format!("{failure} | {left}")));
+            }
+        }
+        Value::Object(checks)
+    }
+
+    async fn smoke_checked(
+        host: &Arc<Host>,
+        desk: &MirrorDesk,
+        app: &Arc<crate::remote::RemoteApp>,
+        checks: &mut serde_json::Map<String, Value>,
+        made: &mut Option<String>,
+    ) -> Result<(), String> {
+        let sharing = app.host().cloned().ok_or("mirror: remote::start made no sharing host")?;
+        let client = app.client.clone();
+        let (local, agents) = {
+            let view = host.view();
+            let snapshot = &view.snapshot;
+            let usable = snapshot
+                .workspaces()
+                .iter()
+                .find(|w| mighty_remote::remote::features::local_path(Some(w)).is_some_and(|p| std::path::Path::new(p).is_dir()));
+            let local = usable.map(|w| w.id().to_string()).ok_or("mirror: the smoke's profile has no local workspace with a folder")?;
+            let agents =
+                snapshot.sessions().iter().filter(|s| s.workspace_id() == local && s.kind() == "claude" && s.mirror.is_none()).count();
+            (local, agents)
+        };
+        must(!sharing.state().enabled && client.connections().is_empty(), || {
+            "the remote step must leave no sharing and no connection".into()
+        })?;
+        let state = sharing.start(std::slice::from_ref(&local), 0).await.map_err(|e| format!("mirror: sharing did not start: {e}"))?;
+        let address = format!("127.0.0.1:{}", state.port.unwrap_or(0));
+        let key = state.key.clone().unwrap_or_default();
+        let mut connection = None;
+        let mut refused = String::new();
+        for _ in 0..2 {
+            match client.connect("", &address, &key).await {
+                Ok(info) => {
+                    connection = Some(info);
+                    break;
+                }
+                Err(error) => refused = error.message(),
+            }
+        }
+        let connection = connection.ok_or_else(|| format!("mirror: the client could not reach the host at {address}: {refused}"))?;
+        *made = Some(connection.id.clone());
+        let id = connection.id.clone();
+        let workspace = support::client_id(&id, &local);
+        let mirrored = |host: &Host| {
+            host.view().snapshot.sessions().iter().filter(|s| s.mirror.as_ref().is_some_and(|m| m.connection_id == id)).count()
+        };
+        until(
+            15,
+            || {
+                host.view().snapshot.workspace(&workspace).is_some()
+                    && mirrored(host) == agents
+                    && desk.link(&id).is_some_and(|l| l.phase == "live")
+            },
+            || {
+                format!(
+                    "the mirror must list the shared workspace and its {agents} agent panes; panes {}, link {:?}",
+                    mirrored(host),
+                    desk.link(&id)
+                )
+            },
+        )
+        .await?;
+        let listed = host.view().snapshot.workspace(&workspace).cloned().unwrap_or_default();
+        must(listed.remote.as_ref().is_some_and(|r| r.mirror && r.connection_id.as_deref() == Some(id.as_str())), || {
+            "the shared workspace must be listed as a mirror of the connection".into()
+        })?;
+        checks.insert("listed".into(), json!(true));
+
+        let model = host.shell_model(&mut host.view());
+        let server = model.servers.iter().find(|s| s.id == id);
+        must(server.is_some_and(|s| s.connected && s.known && s.tone == "done"), || {
+            format!("the sidebar must list the server, connected: {server:?}")
+        })?;
+        let row = model.workspaces.iter().find(|w| w.id == workspace);
+        must(row.is_some_and(|w| w.mirror && w.server.as_deref() == Some(id.as_str()) && w.remote_host.is_none() && !w.local), || {
+            format!("the mirror workspace must sit under its server: {row:?}")
+        })?;
+        let strips = model.panes.iter().filter(|p| p.mirror.is_some()).count();
+        must(strips == agents, || format!("every mirrored pane must carry its strip: {strips} of {agents}"))?;
+        let saved = host.view().current().without_mirrors();
+        must(saved.workspace(&workspace).is_none() && !saved.sessions().iter().any(|s| s.mirror.is_some()), || {
+            "the mirror must never be saved".into()
+        })?;
+        checks.insert("frame".into(), json!(true));
+
+        // The server menu's 연결 끊기 stops the mirror (the panes stay), 연결 starts it again.
+        client.disconnect(&id).await;
+        until(
+            10,
+            || desk.link(&id).is_some_and(|l| l.phase == "off"),
+            || format!("a disconnect must stop the mirror: {:?}", desk.link(&id)),
+        )
+        .await?;
+        must(mirrored(host) == agents, || "the panes stay as last shown".into())?;
+        desk.connect(&id).await.map_err(|e| format!("mirror: the connect failed: {e}"))?;
         until(
             10,
             || {
-                let view = host.view();
-                !view.snapshot.workspaces().iter().any(|w| w.remote.is_some())
-                    && !view.snapshot.sessions().iter().any(|s| s.mirror.is_some())
+                desk.link(&id).is_some_and(|l| l.phase == "live")
+                    && client.connection(&id).is_some_and(|c| c.status == RemoteConnectionStatus::Connected)
             },
-            || "the mirror's workspaces and panes must go with the connection".into(),
+            || format!("a connect must start the mirror again: {:?}", desk.link(&id)),
         )
         .await?;
-        if host.view().snapshot.active_workspace_id != saved
-            && let Some(front) = &saved
-        {
-            let _ = crate::frame::select_workspace(&mut host.view(), front);
-        }
-        let sharing = app.host().is_some_and(|h| h.state().enabled);
-        let connections = app.client.connections().len();
-        must(!sharing && connections == 0 && host.view().snapshot.active_workspace_id == saved, || {
-            format!("the window must be left as it was; sharing {sharing}, connections {connections}")
-        })
-    };
-    let left = left.await;
-    if left.is_ok() {
-        checks.insert("cleaned".into(), json!(true));
+        checks.insert("reconnected".into(), json!(true));
+        Ok(())
     }
-    match (outcome, left) {
-        (Ok(()), Ok(())) => {
-            checks.insert("passed".into(), json!(true));
-        }
-        (Err(failure), Ok(())) | (Ok(()), Err(failure)) => {
-            checks.insert("error".into(), json!(failure));
-        }
-        (Err(failure), Err(left)) => {
-            checks.insert("error".into(), json!(format!("{failure} | {left}")));
-        }
-    }
-    Value::Object(checks)
 }
 
-async fn smoke_checked(
-    host: &Arc<Host>,
-    desk: &MirrorDesk,
-    app: &Arc<crate::remote::RemoteApp>,
-    checks: &mut serde_json::Map<String, Value>,
-    made: &mut Option<String>,
-) -> Result<(), String> {
-    let sharing = app.host().cloned().ok_or("mirror: remote::start made no sharing host")?;
-    let client = app.client.clone();
-    let (local, agents) = {
-        let view = host.view();
-        let snapshot = &view.snapshot;
-        let usable = snapshot
-            .workspaces()
-            .iter()
-            .find(|w| mighty_remote::remote::features::local_path(Some(w)).is_some_and(|p| std::path::Path::new(p).is_dir()));
-        let local = usable.map(|w| w.id().to_string()).ok_or("mirror: the smoke's profile has no local workspace with a folder")?;
-        let agents = snapshot.sessions().iter().filter(|s| s.workspace_id() == local && s.kind() == "claude" && s.mirror.is_none()).count();
-        (local, agents)
-    };
-    must(!sharing.state().enabled && client.connections().is_empty(), || "the remote step must leave no sharing and no connection".into())?;
-    let state = sharing.start(std::slice::from_ref(&local), 0).await.map_err(|e| format!("mirror: sharing did not start: {e}"))?;
-    let address = format!("127.0.0.1:{}", state.port.unwrap_or(0));
-    let key = state.key.clone().unwrap_or_default();
-    let mut connection = None;
-    let mut refused = String::new();
-    for _ in 0..2 {
-        match client.connect("", &address, &key).await {
-            Ok(info) => {
-                connection = Some(info);
-                break;
-            }
-            Err(error) => refused = error.message(),
-        }
-    }
-    let connection = connection.ok_or_else(|| format!("mirror: the client could not reach the host at {address}: {refused}"))?;
-    *made = Some(connection.id.clone());
-    let id = connection.id.clone();
-    let workspace = support::client_id(&id, &local);
-    let mirrored =
-        |host: &Host| host.view().snapshot.sessions().iter().filter(|s| s.mirror.as_ref().is_some_and(|m| m.connection_id == id)).count();
-    until(
-        15,
-        || {
-            host.view().snapshot.workspace(&workspace).is_some()
-                && mirrored(host) == agents
-                && desk.link(&id).is_some_and(|l| l.phase == "live")
-        },
-        || {
-            format!(
-                "the mirror must list the shared workspace and its {agents} agent panes; panes {}, link {:?}",
-                mirrored(host),
-                desk.link(&id)
-            )
-        },
-    )
-    .await?;
-    let listed = host.view().snapshot.workspace(&workspace).cloned().unwrap_or_default();
-    must(listed.remote.as_ref().is_some_and(|r| r.mirror && r.connection_id.as_deref() == Some(id.as_str())), || {
-        "the shared workspace must be listed as a mirror of the connection".into()
-    })?;
-    checks.insert("listed".into(), json!(true));
-
-    let model = host.shell_model(&mut host.view());
-    let server = model.servers.iter().find(|s| s.id == id);
-    must(server.is_some_and(|s| s.connected && s.known && s.tone == "done"), || {
-        format!("the sidebar must list the server, connected: {server:?}")
-    })?;
-    let row = model.workspaces.iter().find(|w| w.id == workspace);
-    must(row.is_some_and(|w| w.mirror && w.server.as_deref() == Some(id.as_str()) && w.remote_host.is_none() && !w.local), || {
-        format!("the mirror workspace must sit under its server: {row:?}")
-    })?;
-    let strips = model.panes.iter().filter(|p| p.mirror.is_some()).count();
-    must(strips == agents, || format!("every mirrored pane must carry its strip: {strips} of {agents}"))?;
-    let saved = host.view().current().without_mirrors();
-    must(saved.workspace(&workspace).is_none() && !saved.sessions().iter().any(|s| s.mirror.is_some()), || {
-        "the mirror must never be saved".into()
-    })?;
-    checks.insert("frame".into(), json!(true));
-
-    // The server menu's 연결 끊기 stops the mirror (the panes stay), 연결 starts it again.
-    client.disconnect(&id).await;
-    until(10, || desk.link(&id).is_some_and(|l| l.phase == "off"), || format!("a disconnect must stop the mirror: {:?}", desk.link(&id)))
-        .await?;
-    must(mirrored(host) == agents, || "the panes stay as last shown".into())?;
-    desk.connect(&id).await.map_err(|e| format!("mirror: the connect failed: {e}"))?;
-    until(
-        10,
-        || {
-            desk.link(&id).is_some_and(|l| l.phase == "live")
-                && client.connection(&id).is_some_and(|c| c.status == RemoteConnectionStatus::Connected)
-        },
-        || format!("a connect must start the mirror again: {:?}", desk.link(&id)),
-    )
-    .await?;
-    checks.insert("reconnected".into(), json!(true));
-    Ok(())
-}
+#[cfg(feature = "dev-harness")]
+pub use smoke_step::{smoke_checks, smoke_start};
 
 #[cfg(test)]
 mod tests {
@@ -632,6 +652,7 @@ mod tests {
     }
 
     /// The step's checks: each key, and `mirror` for the whole step; a step that did not report fails them all.
+    #[cfg(feature = "dev-harness")]
     #[test]
     fn the_smoke_step_reads_its_report() {
         let passed = json!({"listed": true, "frame": true, "reconnected": true, "cleaned": true, "passed": true});

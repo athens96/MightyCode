@@ -100,12 +100,18 @@ pub struct CompanionApp {
     surfaces: Mutex<Option<Arc<dyn SurfaceFactory>>>,
     generation: AtomicU64,
     clock: Instant,
+    wake: Arc<tokio::sync::Notify>,
     closing: AtomicBool,
 }
 
 impl CompanionApp {
     fn now(&self) -> f64 {
         self.clock.elapsed().as_secs_f64()
+    }
+
+    /// Wakes the companion clock task after a preference change or shutdown.
+    pub fn notify(&self) {
+        self.wake.notify_waiters();
     }
 
     /// The companion's state (never held while the view's lock is taken).
@@ -119,6 +125,7 @@ impl CompanionApp {
     }
 
     /// The main window's native views (the smoke opens its own test overlay through them).
+    #[cfg(feature = "dev-harness")]
     pub fn surfaces(&self) -> Option<Arc<dyn SurfaceFactory>> {
         lock(&self.surfaces).clone()
     }
@@ -160,8 +167,31 @@ pub fn may_show(host: &Host) -> bool {
     host.may_change_machine()
 }
 
+/// Parks while the companion pet is disabled (`!prefs.enabled`), waking immediately on prefs/toggle change or shutdown.
+/// Registers the `Notify` waiter via `enable()` before re-checking to eliminate lost wakeups.
+async fn wait_until_enabled(companion: &CompanionApp, host_closing: impl Fn() -> bool) -> bool {
+    loop {
+        if host_closing() || companion.closing.load(Ordering::SeqCst) {
+            return false;
+        }
+        if lock(&companion.state).prefs.enabled {
+            return true;
+        }
+        let notified = companion.wake.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if host_closing() || companion.closing.load(Ordering::SeqCst) {
+            return false;
+        }
+        if lock(&companion.state).prefs.enabled {
+            return true;
+        }
+        notified.await;
+    }
+}
+
 /// The companion's start with the app, once the main window's native views exist (its pet window is one): the settings read, the
-/// catalog read, the pet shown where it may be, and the 1/12 s clock.
+/// catalog read, the pet shown where it may be, and the 1/12 s clock (parked whenever the pet is disabled).
 pub fn start(host: &Arc<Host>, platform: &Platform, surfaces: Arc<dyn SurfaceFactory>) {
     let _ = platform;
     let preferences = prefs::load(&host.data_dir);
@@ -176,6 +206,7 @@ pub fn start(host: &Arc<Host>, platform: &Platform, surfaces: Arc<dyn SurfaceFac
         surfaces: Mutex::new(Some(surfaces)),
         generation: AtomicU64::new(0),
         clock: Instant::now(),
+        wake: Arc::new(tokio::sync::Notify::new()),
         closing: AtomicBool::new(false),
     });
     host.app.manage(companion.clone());
@@ -187,10 +218,33 @@ pub fn start(host: &Arc<Host>, platform: &Platform, surfaces: Arc<dyn SurfaceFac
         // A late tick is skipped, not made up for in a burst (review L5).
         clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut ticks = 0u64;
+        let mut was_parked = false;
         loop {
-            clock.tick().await;
+            if !lock(&companion.state).prefs.enabled {
+                was_parked = true;
+                if !wait_until_enabled(&companion, || host.closing()).await {
+                    break;
+                }
+            }
+            if was_parked {
+                was_parked = false;
+                clock.reset();
+                ticks = 0;
+            }
+            tokio::select! {
+                _ = clock.tick() => {}
+                _ = companion.wake.notified() => {
+                    if host.closing() || companion.closing.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    continue;
+                }
+            }
             if host.closing() || companion.closing.load(Ordering::SeqCst) {
                 break;
+            }
+            if !lock(&companion.state).prefs.enabled {
+                continue;
             }
             ticks += 1;
             // A tick that fails takes the pet down with what it holds and says why (C#'s catch in the timer, review L4).
@@ -224,6 +278,7 @@ pub fn shutdown(host: &Host) {
     let Some(companion) = app(host) else { return };
     companion.closing.store(true, Ordering::SeqCst);
     companion.generation.fetch_add(1, Ordering::SeqCst);
+    companion.notify();
     close_overlay(&companion);
 }
 
@@ -264,6 +319,8 @@ pub async fn reload(host: &Arc<Host>) {
         let selected = state.pets.iter().find(|p| p.id == state.prefs.selected_pet).or_else(|| state.pets.first()).cloned();
         (state.prefs.enabled, selected)
     };
+    companion.notify();
+    host.shell_dirty();
     if !enabled || !may_show(host) {
         return;
     }
@@ -404,7 +461,11 @@ pub fn refresh(host: &Host) {
     let standing = lock(&companion.overlay).is_some();
     let (card, visible, progress_pane) = {
         let mut state = lock(&companion.state);
-        state.busy = statuses.iter().filter(|s| busy(s)).count();
+        let next_busy = statuses.iter().filter(|s| busy(s)).count();
+        if state.busy != next_busy {
+            state.busy = next_busy;
+            host.shell_dirty();
+        }
         // The drafts and the error of requests seen waiting that wait no longer are let go (C# `ReceiveCompanionPermission`); a draft of
         // a request the companion never saw waiting (the smoke's own) is the caller's to let go.
         // New ones are taken in the panes' order, each pane's oldest first (review M4).
@@ -565,6 +626,7 @@ fn draft<'a>(state: &'a mut State, request: &ToolPermissionRequest) -> &'a mut Q
 }
 
 /// The card the app makes for a pane (C# `CompanionCard` as the smoke calls it: its own overlay shows the app's cards).
+#[cfg(feature = "dev-harness")]
 #[allow(clippy::too_many_arguments, reason = "C#'s CompanionCard takes these")]
 pub fn card_for(
     host: &Host,
@@ -583,6 +645,7 @@ pub fn card_for(
 }
 
 /// A choice tapped in a question's draft, as the bubble taps it (C#'s smoke: `CompanionBubble.Choose(label, form, draft)`).
+#[cfg(feature = "dev-harness")]
 pub fn choose_for(host: &Host, request: &ToolPermissionRequest, label: &str) {
     let Some(companion) = app(host) else { return };
     let Some(questionnaire) = UserQuestionnaire::parse(&request.input_json) else { return };
@@ -591,6 +654,7 @@ pub fn choose_for(host: &Host, request: &ToolPermissionRequest, label: &str) {
 }
 
 /// A request's draft let go (the smoke's `finally`).
+#[cfg(feature = "dev-harness")]
 pub fn forget_draft(host: &Host, request: &ToolPermissionRequest) {
     if let Some(companion) = app(host) {
         lock(&companion.state).drafts.remove(&follow::permission_key(&request.run_id, &request.id));
@@ -705,6 +769,8 @@ async fn press(host: &Arc<Host>, companion: &Arc<CompanionApp>, key: &str, actio
     match action {
         "hide" => {
             lock(&companion.state).prefs.enabled = false;
+            companion.notify();
+            host.shell_dirty();
             save(host, companion);
             close_overlay(companion);
             return;
@@ -898,6 +964,8 @@ pub async fn toggle_pet(host: &Arc<Host>) {
         state.prefs.enabled = !state.prefs.enabled;
         state.prefs.enabled
     };
+    companion.notify();
+    host.shell_dirty();
     save(host, &companion);
     if !enabled {
         close_overlay(&companion);
@@ -926,17 +994,33 @@ pub async fn toggle(host: Arc<Host>, args: Value) -> Reply {
 
 /// C# `WebCompanionControls` for the frame model, read with the state locked (never `host.view()`): the paw (on while the pet shows,
 /// "Toggle pet" its name, "Hide pet" or "Show pet" its help) and the capsule (the waveform and the count while agents work).
-pub fn frame_model(host: &Host) -> Option<CompanionFrame> {
+pub fn frame_model(host: &Host, snapshot: &AppSnapshot) -> Option<CompanionFrame> {
     let companion = app(host)?;
-    let state = lock(&companion.state);
+    let (pet_on, busy_agents) = {
+        let state = lock(&companion.state);
+        let pet_on = state.prefs.enabled;
+        let busy_agents = if pet_on {
+            state.busy
+        } else {
+            let requests = requests_of(host, snapshot);
+            let none: Vec<ToolPermissionRequest> = vec![];
+            snapshot
+                .sessions()
+                .iter()
+                .filter(|s| s.kind() == "claude")
+                .filter(|s| busy(&status_of(s, requests.get(s.id()).unwrap_or(&none))))
+                .count()
+        };
+        (pet_on, busy_agents)
+    };
     let locale = &host.locale;
-    let count = state.busy.to_string();
+    let count = busy_agents.to_string();
     Some(CompanionFrame {
-        pet_on: state.prefs.enabled,
+        pet_on,
         pet_label: locale.get("companion.status.togglePet"),
-        pet_help: Some(locale.get(if state.prefs.enabled { "menu.hidePet" } else { "companion.status.showPet" })),
-        busy: state.busy > 0,
-        count: (state.busy > 0).then(|| count.clone()),
+        pet_help: Some(locale.get(if pet_on { "menu.hidePet" } else { "companion.status.showPet" })),
+        busy: busy_agents > 0,
+        count: (busy_agents > 0).then(|| count.clone()),
         status_label: format!(
             "{} · {}",
             locale.get("companion.status.title"),
@@ -1133,6 +1217,7 @@ mod tests {
             surfaces: Mutex::new(None),
             generation: AtomicU64::new(1),
             clock: Instant::now(),
+            wake: Arc::new(tokio::sync::Notify::new()),
             closing: AtomicBool::new(false),
         }
     }
@@ -1182,5 +1267,29 @@ mod tests {
         let mut ran = false;
         guarded(&companion, || ran = true);
         assert!(ran);
+    }
+
+    /// P1-PERF-1: when `!prefs.enabled`, the companion clock parks on `Notify` instead of polling at 12 Hz,
+    /// waking immediately when enabled or when closing.
+    #[tokio::test]
+    async fn disabled_companion_parks_until_enabled_or_shutdown() {
+        let companion = Arc::new(companion(None));
+        lock(&companion.state).prefs.enabled = false;
+        let waiter = companion.clone();
+        let task = tokio::spawn(async move { wait_until_enabled(&waiter, || false).await });
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(!task.is_finished(), "disabled companion must remain parked");
+
+        lock(&companion.state).prefs.enabled = true;
+        companion.notify();
+        assert!(tokio::time::timeout(Duration::from_millis(200), task).await.unwrap().unwrap(), "woke when enabled");
+
+        lock(&companion.state).prefs.enabled = false;
+        let waiter = companion.clone();
+        let task = tokio::spawn(async move { wait_until_enabled(&waiter, || false).await });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        companion.closing.store(true, Ordering::SeqCst);
+        companion.notify();
+        assert!(!tokio::time::timeout(Duration::from_millis(200), task).await.unwrap().unwrap(), "exited on shutdown");
     }
 }

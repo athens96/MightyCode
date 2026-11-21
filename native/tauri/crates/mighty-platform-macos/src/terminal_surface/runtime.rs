@@ -209,7 +209,7 @@ impl Shared {
 
     /// Ends the surface (main thread): no more writes, the writer waited for while `app` keeps ticking (its write may wait for the
     /// mailbox), then the surface freed. False when the writer did not end in time: the surface is then left unfreed (never freed
-    /// under a write).
+    /// under a write), and the caller must keep `TerminalView` and `userdata` alive alongside it so libghostty pointers never dangle.
     pub fn close(&self, app: ghostty_app_t) -> bool {
         let Some(surface) = self.raw() else { return true };
         self.surface.store(std::ptr::null_mut(), Ordering::SeqCst);

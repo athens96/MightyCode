@@ -231,6 +231,7 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 /// The smoke's recorder (smoke_companion.rs): while set, a chosen item is recorded and not run.
+#[cfg(feature = "dev-harness")]
 pub fn set_recorder(recorder: Option<Recorder>) {
     *lock(&RECORDER) = recorder;
 }
@@ -367,7 +368,7 @@ async fn run(host: &Arc<Host>, id: &str) {
             match crate::platform::save_input_diagnostics(page.as_ref(), paths.data_dir()).await {
                 // Swift shows the file in Finder.
                 Ok(file) => {
-                    if let Err(error) = crate::platform::show_in_explorer(&file) {
+                    if let Ok(Err(error)) = tauri::async_runtime::spawn_blocking(move || crate::platform::show_in_explorer(&file)).await {
                         host.log.line(&format!("input method: diagnostics saved, not shown: {error}"));
                     }
                 }

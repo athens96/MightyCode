@@ -43,7 +43,14 @@ pub fn matches(root: &Path, pattern: &str) -> Vec<String> {
     }
     let normalized = pattern.replace('\\', "/");
     let parts: Vec<&str> = normalized.split('/').filter(|p| !p.is_empty()).collect();
-    let mut walk = Walk { root, parts: &parts, found: BTreeSet::new(), budget: 1024 };
+    // Precompile each non-`**` segment's glob matcher once per `matches()` call instead of recompiling inside every directory visit.
+    let matchers: Vec<Option<Regex>> = parts
+        .iter()
+        .map(|&key| {
+            if key == "**" { None } else { Regex::new(&format!("^{}$", regex::escape(key).replace("\\*", ".*").replace("\\?", "."))).ok() }
+        })
+        .collect();
+    let mut walk = Walk { root, parts: &parts, matchers: &matchers, found: BTreeSet::new(), budget: 1024 };
     walk.walk("", 0, 0);
     let mut found: Vec<String> = walk.found.into_iter().collect();
     found.sort_by(|a, b| ordinal(a, b));
@@ -53,6 +60,7 @@ pub fn matches(root: &Path, pattern: &str) -> Vec<String> {
 struct Walk<'a> {
     root: &'a Path,
     parts: &'a [&'a str],
+    matchers: &'a [Option<Regex>],
     found: BTreeSet<String>,
     budget: i64,
 }
@@ -76,7 +84,7 @@ impl Walk<'_> {
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
-        let shape = Regex::new(&format!("^{}$", regex::escape(key).replace("\\*", ".*").replace("\\?", "."))).ok();
+        let shape = self.matchers[part].as_ref();
         for name in entries {
             self.budget -= 1;
             if self.budget < 0 || self.found.len() >= 32 {
@@ -93,7 +101,7 @@ impl Walk<'_> {
                 }
                 continue;
             }
-            if !shape.as_ref().is_some_and(|s| s.is_match(&name)) {
+            if !shape.is_some_and(|s| s.is_match(&name)) {
                 continue;
             }
             if part == self.parts.len() - 1 {

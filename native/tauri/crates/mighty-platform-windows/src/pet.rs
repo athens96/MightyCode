@@ -414,6 +414,12 @@ fn run(text: Arc<Text>, ready: std::sync::mpsc::Sender<Result<Arc<Shared>>>) {
             }
         };
         let dc = CreateCompatibleDC(None);
+        if dc.is_invalid() {
+            let _ = DestroyWindow(hwnd);
+            let _ = UnregisterClassW(PCWSTR(name.as_ptr()), Some(instance()));
+            let _ = ready.send(Err(PlatformError::Io(std::io::Error::last_os_error())));
+            return;
+        }
         let shared = Arc::new(Shared {
             hwnd: AtomicIsize::new(hwnd.0 as isize),
             thread: windows_sys::Win32::System::Threading::GetCurrentThreadId(),
@@ -477,7 +483,9 @@ impl Window {
                 SelectObject(self.dc, self.old);
                 let _ = DeleteObject(self.bitmap.into());
             }
-            let _ = DeleteDC(self.dc);
+            if !self.dc.is_invalid() {
+                let _ = DeleteDC(self.dc);
+            }
         }
     }
 

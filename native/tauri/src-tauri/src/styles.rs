@@ -1540,6 +1540,7 @@ pub async fn remove(host: &Arc<Host>, style: RegisteredStyle) -> Result<(), Stri
 }
 
 /// Every id the panes keep a style for (the smoke's report).
+#[cfg(feature = "dev-harness")]
 pub fn loaded(id: &str) -> (bool, Option<String>, usize) {
     let all = panes();
     let entry = all.get(id);

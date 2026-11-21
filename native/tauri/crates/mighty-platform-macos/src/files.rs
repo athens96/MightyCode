@@ -231,6 +231,46 @@ fn png_in_pool(rgba: &[u8], width: usize, height: usize, bytes: usize) -> Option
     Some(data.to_vec())
 }
 
+/// RAII guard for a CoreGraphics `CGDataProviderRef`.
+struct DataProviderGuard(Ref);
+
+impl Drop for DataProviderGuard {
+    fn drop(&mut self) {
+        // SAFETY: non-null `CGDataProviderRef` created by `CGDataProviderCreateWithCFData`.
+        unsafe { CGDataProviderRelease(self.0) };
+    }
+}
+
+/// RAII guard for a CoreGraphics `CGPDFDocumentRef`.
+struct PdfDocumentGuard(Ref);
+
+impl Drop for PdfDocumentGuard {
+    fn drop(&mut self) {
+        // SAFETY: non-null `CGPDFDocumentRef` created by `CGPDFDocumentCreateWithProvider`.
+        unsafe { CGPDFDocumentRelease(self.0) };
+    }
+}
+
+/// RAII guard for a CoreGraphics `CGColorSpaceRef`.
+struct ColorSpaceGuard(Ref);
+
+impl Drop for ColorSpaceGuard {
+    fn drop(&mut self) {
+        // SAFETY: non-null `CGColorSpaceRef` created by `CGColorSpaceCreateDeviceRGB`.
+        unsafe { CGColorSpaceRelease(self.0) };
+    }
+}
+
+/// RAII guard for a CoreGraphics `CGContextRef`.
+struct ContextGuard(Ref);
+
+impl Drop for ContextGuard {
+    fn drop(&mut self) {
+        // SAFETY: non-null `CGContextRef` created by `CGBitmapContextCreate`.
+        unsafe { CGContextRelease(self.0) };
+    }
+}
+
 /// A PDF's first page drawn by CoreGraphics.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MacPdf;
@@ -241,29 +281,23 @@ impl PdfRaster for MacPdf {
         // The provider holds a CFData copy of its own (it retains it), never a borrow of `data` that CoreGraphics could outlive.
         let owned = CFData::from_buffer(data);
         // SAFETY: a valid CFData; the provider retains it.
-        let provider = unsafe { CGDataProviderCreateWithCFData(owned.as_concrete_TypeRef().cast()) };
-        if provider.is_null() {
+        let provider_raw = unsafe { CGDataProviderCreateWithCFData(owned.as_concrete_TypeRef().cast()) };
+        if provider_raw.is_null() {
             return Err(refused());
         }
-        let document = unsafe { CGPDFDocumentCreateWithProvider(provider) };
-        let release = || unsafe {
-            if !document.is_null() {
-                CGPDFDocumentRelease(document);
-            }
-            CGDataProviderRelease(provider);
-        };
-        if document.is_null() {
-            release();
+        let provider = DataProviderGuard(provider_raw);
+        let document_raw = unsafe { CGPDFDocumentCreateWithProvider(provider.0) };
+        if document_raw.is_null() {
             return Err(refused());
         }
+        let document = PdfDocumentGuard(document_raw);
         // SAFETY: a document CoreGraphics opened; its pages belong to it.
-        let page = if unsafe { CGPDFDocumentGetNumberOfPages(document) } == 0 {
+        let page = if unsafe { CGPDFDocumentGetNumberOfPages(document.0) } == 0 {
             std::ptr::null_mut()
         } else {
-            unsafe { CGPDFDocumentGetPage(document, 1) }
+            unsafe { CGPDFDocumentGetPage(document.0, 1) }
         };
         if page.is_null() {
-            release();
             return Ok(None);
         }
         let crop = unsafe { CGPDFPageGetBoxRect(page, CROP_BOX) };
@@ -273,33 +307,36 @@ impl PdfRaster for MacPdf {
             Some((pixels_wide, pixels_high)) if pixels_wide > 0 && pixels_high > 0 && points_wide > 0.0 && points_high > 0.0 => {
                 let (w, h) = (pixels_wide as usize, pixels_high as usize);
                 let Some(bytes) = pixel_bytes(w, h) else {
-                    release();
                     return Err(PlatformError::Refused(format!("the page is too large to draw at {w} × {h}")));
                 };
                 let mut pixels = vec![0u8; bytes];
-                // SAFETY: a bitmap context over `pixels` (w × h RGBA, its row length as given), released before `pixels` is read.
-                unsafe {
-                    let space = CGColorSpaceCreateDeviceRGB();
-                    let context = CGBitmapContextCreate(pixels.as_mut_ptr().cast(), w, h, 8, w * 4, space, RGBA);
-                    CGColorSpaceRelease(space);
-                    if context.is_null() {
-                        release();
+                {
+                    // SAFETY: a bitmap context over `pixels` (w × h RGBA, its row length as given), released via RAII before `pixels` is read.
+                    let space_raw = unsafe { CGColorSpaceCreateDeviceRGB() };
+                    if space_raw.is_null() {
+                        return Err(PlatformError::Refused("CGColorSpaceCreateDeviceRGB failed".into()));
+                    }
+                    let space = ColorSpaceGuard(space_raw);
+                    let context_raw = unsafe { CGBitmapContextCreate(pixels.as_mut_ptr().cast(), w, h, 8, w * 4, space.0, RGBA) };
+                    drop(space);
+                    if context_raw.is_null() {
                         return Err(PlatformError::Refused("CGBitmapContextCreate failed".into()));
                     }
-                    // White under the page, as Windows.Data.Pdf draws it.
-                    CGContextSetRGBFillColor(context, 1.0, 1.0, 1.0, 1.0);
-                    CGContextFillRect(context, Rect { x: 0.0, y: 0.0, width: w as f64, height: h as f64 });
-                    CGContextScaleCTM(context, w as f64 / points_wide, h as f64 / points_high);
-                    CGContextConcatCTM(context, turned(turn, crop.width, crop.height));
-                    CGContextTranslateCTM(context, -crop.x, -crop.y);
-                    CGContextDrawPDFPage(context, page);
-                    CGContextRelease(context);
+                    let context = ContextGuard(context_raw);
+                    unsafe {
+                        // White under the page, as Windows.Data.Pdf draws it.
+                        CGContextSetRGBFillColor(context.0, 1.0, 1.0, 1.0, 1.0);
+                        CGContextFillRect(context.0, Rect { x: 0.0, y: 0.0, width: w as f64, height: h as f64 });
+                        CGContextScaleCTM(context.0, w as f64 / points_wide, h as f64 / points_high);
+                        CGContextConcatCTM(context.0, turned(turn, crop.width, crop.height));
+                        CGContextTranslateCTM(context.0, -crop.x, -crop.y);
+                        CGContextDrawPDFPage(context.0, page);
+                    }
                 }
                 png_of(&pixels, w, h)
             }
             _ => None,
         };
-        release();
         Ok(Some(PdfPage { width, height, png }))
     }
 }

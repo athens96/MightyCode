@@ -249,13 +249,13 @@ pub fn close(host: &Arc<Host>) {
 
 /// C# `OpenHelp` (the sidebar's help symbol, F1, Settings › 앱 정보): the guide's folder in the language the app shows, in the user's
 /// browser. A smoke opens nothing (the browser would outlive it): the address is logged instead.
-pub fn open_help(host: &Host) -> Result<(), String> {
+pub async fn open_help(host: &Host) -> Result<(), String> {
     let address = help_site::current(&host.locale);
     if host.smoke.is_some() {
         host.log.line(&format!("smoke: help not opened: {address}"));
         return Ok(());
     }
-    crate::platform::open_url(&address)
+    tauri::async_runtime::spawn_blocking(move || crate::platform::open_url(&address)).await.map_err(|error| error.to_string())?
 }
 
 pub fn register(methods: &mut Registry) {
@@ -273,7 +273,7 @@ pub fn register(methods: &mut Registry) {
         .await
     });
     methods.add("openHelp", |host: Arc<Host>, _| async move {
-        open_help(&host)?;
+        open_help(&host).await?;
         Ok(Value::Null)
     });
 }

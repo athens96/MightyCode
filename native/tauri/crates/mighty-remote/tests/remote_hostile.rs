@@ -120,11 +120,11 @@ fn fixture_json_start() -> serde_json::Value {
     fixture("start.json")
 }
 
-/// "remote hostile: a host whose route panics answers 500 with what it said" (C# ServeAsync's last catch).
+/// P1-SEC-3: a host whose route panics answers 500 with a sanitized generic message, never leaking the internal panic payload.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_host_whose_route_panics_answers_500_with_what_it_said() {
+async fn a_host_whose_route_panics_answers_500_with_sanitized_message() {
     set_language("en");
-    let admission: mighty_remote::remote::host::Admission = Arc::new(|_| panic!("admission broke"));
+    let admission: mighty_remote::remote::host::Admission = Arc::new(|_| panic!("admission broke secret-internal-detail"));
     let fixture = make_host(MakeHost { admission: Some(admission), ..MakeHost::default() }).await;
     let state = fixture.host.start(&[fixture.shared.id().to_string()], 0).await.unwrap();
     let mut start = fixture_json_start();
@@ -135,6 +135,7 @@ async fn a_host_whose_route_panics_answers_500_with_what_it_said() {
         .await
         .unwrap_err();
     assert_eq!(refused.status(), Some(500), "{refused:?}");
-    assert_eq!(refused.message(), "admission broke");
+    assert_eq!(refused.message(), mighty_core::locale::Locale::new("en").get("remote.host.error.badRequest"));
+    assert!(!refused.message().contains("admission broke"), "internal panic payload must not leak");
     fixture.dispose().await;
 }

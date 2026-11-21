@@ -847,3 +847,146 @@ async fn mobile_host_a_wake_from_an_os_thread_still_redials() {
     host.dispose().await;
     let _ = std::fs::remove_dir_all(&directory);
 }
+
+/// P1-SEC-3: `RelayHost` sends `hostToken` in the first `{"type":"host-auth","hostToken":...}` WebSocket frame rather than the URL
+/// query string, and relays reject sockets whose first-frame `host-auth` has a bad token with 4401.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn relay_host_authenticates_via_first_frame_never_query_string() {
+    use futures_util::{SinkExt, StreamExt};
+    let directory = temp("first-frame-auth");
+    let phone_done = Arc::new(Notify::new());
+    let signal = phone_done.clone();
+    let relay = FakeRelay::start(
+        Arc::new(|_, socket| Box::pin(fake_relay::notice_then_listen(socket, "conn-firstframe-1"))),
+        Arc::new(move |_, socket| {
+            let signal = signal.clone();
+            Box::pin(async move {
+                let mut phone = ScriptedPhone::new(socket);
+                phone.hello().await;
+                signal.notify_one();
+            })
+        }),
+    )
+    .await;
+
+    let identity = identity_in(&directory);
+    let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(directory.join(identity_file::FILE)).unwrap()).unwrap();
+    let host_token = saved["hostToken"].as_str().unwrap().to_string();
+    let platform = fake::platform(&directory, Os::Windows);
+    let host = RelayHost::with_options(identity, MobileRemoteSettings::default(), Arc::new(Answer), platform, RelayOptions::default());
+    host.apply(on(&relay.address)).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), phone_done.notified())
+        .await
+        .expect("data socket authenticated via first-frame host-auth");
+    let queries = relay.queries();
+    assert!(queries.len() >= 2, "expected both control and data WS connections: {queries:?}");
+    for query in &queries {
+        assert!(!query.contains("hostToken"), "hostToken must never appear in WS URL query string: {query}");
+        assert!(!query.contains(&host_token), "raw token must never appear in WS URL query string: {query}");
+    }
+    host.dispose().await;
+
+    // A raw host socket connecting without query hostToken and sending a wrong first-frame host-auth token is closed 4401.
+    let proxy = fake::FakeProxy::default();
+    let mut bad = host::dial(&format!("{}/ws?serverId=abc&role=server&v=1", relay.address), &proxy).await.unwrap();
+    bad.send(tokio_tungstenite::tungstenite::Message::text(format!(r#"{{"type":"host-auth","hostToken":"{}"}}"#, "b".repeat(64))))
+        .await
+        .unwrap();
+    let closed = loop {
+        match bad.next().await {
+            Some(Ok(tokio_tungstenite::tungstenite::Message::Close(frame))) => break frame.map(|f| u16::from(f.code)),
+            Some(Ok(_)) => continue,
+            _ => break None,
+        }
+    };
+    assert_eq!(closed, Some(4401), "invalid first-frame host-auth must close with 4401");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+/// Review: a legacy relay deployed before `host-auth` (requiring `hostToken` in the URL query string and closing 4401 when omitted)
+/// triggers immediate query-string fallback on both control and data sockets, while `dial()` strips query parameters before asking
+/// `ProxyResolver` so PAC scripts never see `hostToken`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn relay_host_falls_back_to_query_auth_on_legacy_relays_and_strips_proxy_queries() {
+    use sha2::{Digest, Sha256};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+    use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+
+    struct RecordingProxy(Arc<Mutex<Vec<String>>>);
+    impl mighty_platform::ProxyResolver for RecordingProxy {
+        fn resolve(&self, url: &str) -> mighty_platform::BoxFuture<'_, mighty_platform::Result<mighty_platform::Proxy>> {
+            self.0.lock().unwrap().push(url.to_string());
+            Box::pin(async { Ok(mighty_platform::Proxy::Direct) })
+        }
+    }
+
+    let directory = temp("legacy-query-fallback");
+    let identity = identity_in(&directory);
+    let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(directory.join(identity_file::FILE)).unwrap()).unwrap();
+    let expected_token = saved["hostToken"].as_str().unwrap().to_string();
+    let expected_server: String = Sha256::digest(expected_token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let address = format!("ws://127.0.0.1:{}", listener.local_addr().unwrap().port());
+    let phone_done = Arc::new(Notify::new());
+    let signal = phone_done.clone();
+    let queries = Arc::new(Mutex::new(Vec::<String>::new()));
+    let seen_queries = queries.clone();
+    let accept = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let (seen_queries, expected_token, expected_server, signal) =
+                (seen_queries.clone(), expected_token.clone(), expected_server.clone(), signal.clone());
+            tokio::spawn(async move {
+                let mut query = String::new();
+                #[allow(clippy::result_large_err, reason = "tungstenite callback signature")]
+                let callback = |req: &Request, res: Response| {
+                    query = req.uri().query().unwrap_or("").to_string();
+                    Ok(res)
+                };
+                let Ok(mut socket) = tokio_tungstenite::accept_hdr_async(stream, callback).await else { return };
+                seen_queries.lock().unwrap().push(query.clone());
+                let has_valid_query_token =
+                    query.contains(&format!("serverId={expected_server}")) && query.contains(&format!("hostToken={expected_token}"));
+                if !has_valid_query_token {
+                    let _ = socket.close(Some(CloseFrame { code: CloseCode::from(4401), reason: "missing hostToken".into() })).await;
+                    return;
+                }
+                if query.contains("connectionId=") {
+                    let mut phone = ScriptedPhone::new(socket);
+                    phone.hello().await;
+                    signal.notify_one();
+                } else {
+                    fake_relay::notice_then_listen(socket, "conn-legacy-1").await;
+                }
+            });
+        }
+    });
+
+    let proxy_urls = Arc::new(Mutex::new(Vec::new()));
+    let mut platform = fake::platform(&directory, Os::Windows);
+    platform.proxy = Arc::new(RecordingProxy(proxy_urls.clone()));
+    let host = RelayHost::with_options(identity, MobileRemoteSettings::default(), Arc::new(Answer), platform, RelayOptions::default());
+    host.apply(on(&address)).await.unwrap();
+
+    tokio::time::timeout(Duration::from_secs(10), phone_done.notified())
+        .await
+        .expect("legacy relay fallback authenticated control and data sockets");
+
+    let recorded_queries = queries.lock().unwrap().clone();
+    assert!(recorded_queries.len() >= 3, "expected initial frame-auth attempt + fallback control + fallback data: {recorded_queries:?}");
+    assert!(!recorded_queries[0].contains("hostToken"), "first attempt tries query-less frame auth: {}", recorded_queries[0]);
+    assert!(recorded_queries[1].contains("hostToken="), "second attempt falls back to query-string auth: {}", recorded_queries[1]);
+
+    let resolved = proxy_urls.lock().unwrap().clone();
+    assert!(!resolved.is_empty());
+    for url in &resolved {
+        assert!(!url.contains('?'), "ProxyResolver must never receive query parameters: {url}");
+        assert!(!url.contains("hostToken"), "ProxyResolver must never see hostToken: {url}");
+    }
+
+    host.dispose().await;
+    accept.abort();
+    let _ = std::fs::remove_dir_all(&directory);
+}

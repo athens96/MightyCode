@@ -305,6 +305,7 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
     app.client.on_changed(Arc::new(move || {
         if let Some(host) = changed.upgrade().filter(|h| !h.closing()) {
             host.panes_changed();
+            host.shell_dirty();
             crate::native::touch(&host, crate::settings::SURFACE);
         }
     }));

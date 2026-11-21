@@ -73,8 +73,23 @@ pub type ControlScript = Arc<dyn Fn(usize, Socket) -> BoxFuture<'static, ()> + S
 /// What the phone does on one host data socket: the connection id and the socket.
 pub type PhoneScript = Arc<dyn Fn(String, Socket) -> BoxFuture<'static, ()> + Send + Sync>;
 
+/// Checks that `token` has valid hex length and hashes to `server_id`, else returns close code 4400/4401.
+fn verify_host_token(token: &str, server_id: &str) -> Result<(), u16> {
+    if !((32..=64).contains(&token.len()) && token.bytes().all(|c| c.is_ascii_hexdigit())) {
+        return Err(4400);
+    }
+    let hashed: String = Sha256::digest(token.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    if hashed != server_id {
+        return Err(4401);
+    }
+    Ok(())
+}
+
 /// A socket's validated query (`parseSocketParams`), or the close code it gets.
-fn validate(query: &str) -> Result<(String, Option<String>), u16> {
+/// Returns `(server_id, connection_id, needs_first_frame_auth)`: for `role=server`, if `hostToken` is absent from the query string,
+/// the host must authenticate with a first-frame `{"type":"host-auth","hostToken":...}` message; if `hostToken` is present in the
+/// query string, it is still validated for backwards compatibility with legacy query tests.
+fn validate(query: &str) -> Result<(String, Option<String>, bool), u16> {
     let mut params: HashMap<String, String> = HashMap::new();
     for pair in query.split('&').filter(|p| !p.is_empty()) {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
@@ -98,18 +113,27 @@ fn validate(query: &str) -> Result<(String, Option<String>), u16> {
     if connection.as_deref().is_some_and(|c| !connection_ok(c)) || !matches!(role, "server" | "client") {
         return Err(4400);
     }
+    let mut needs_frame_auth = false;
     if role == "server" {
-        let token = params.get("hostToken");
-        if token.is_some_and(|t| !((32..=64).contains(&t.len()) && t.bytes().all(|c| c.is_ascii_hexdigit()))) {
-            return Err(4400);
-        }
-        // `ownsServerId`: a host socket speaks for its server id only with the token that hashes to it.
-        let owns = token.is_some_and(|t| Sha256::digest(t.as_bytes()).iter().map(|b| format!("{b:02x}")).collect::<String>() == server_id);
-        if !owns {
-            return Err(4401);
+        match params.get("hostToken") {
+            Some(token) => verify_host_token(token, &server_id)?,
+            None => needs_frame_auth = true,
         }
     }
-    Ok((server_id, connection))
+    Ok((server_id, connection, needs_frame_auth))
+}
+
+async fn read_first_frame_auth(socket: &mut Socket, server_id: &str) -> Result<(), u16> {
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next()).await.map_err(|_| 4401u16)?;
+    let Some(Ok(Message::Text(text))) = frame else {
+        return Err(4401);
+    };
+    let value: Value = serde_json::from_str(text.as_str()).map_err(|_| 4400u16)?;
+    if value.get("type").and_then(Value::as_str) != Some("host-auth") {
+        return Err(4401);
+    }
+    let token = value.get("hostToken").and_then(Value::as_str).ok_or(4401u16)?;
+    verify_host_token(token, server_id)
 }
 
 fn percent_decode(text: &str) -> String {
@@ -140,6 +164,7 @@ pub struct FakeRelay {
     pub address: String,
     controls: Arc<AtomicUsize>,
     refused: Arc<std::sync::Mutex<Vec<u16>>>,
+    queries: Arc<std::sync::Mutex<Vec<String>>>,
     accept: JoinHandle<()>,
 }
 
@@ -156,10 +181,12 @@ impl FakeRelay {
         let address = format!("ws://127.0.0.1:{}", listener.local_addr().unwrap().port());
         let controls = Arc::new(AtomicUsize::new(0));
         let refused = Arc::new(std::sync::Mutex::new(vec![]));
-        let (counter, refusals) = (controls.clone(), refused.clone());
+        let queries = Arc::new(std::sync::Mutex::new(vec![]));
+        let (counter, refusals, seen_queries) = (controls.clone(), refused.clone(), queries.clone());
         let accept = tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
-                let (control, phone, counter, refusals) = (control.clone(), phone.clone(), counter.clone(), refusals.clone());
+                let (control, phone, counter, refusals, seen_queries) =
+                    (control.clone(), phone.clone(), counter.clone(), refusals.clone(), seen_queries.clone());
                 tokio::spawn(async move {
                     let mut query = String::new();
                     #[allow(clippy::result_large_err, reason = "tungstenite's own callback type")]
@@ -168,22 +195,33 @@ impl FakeRelay {
                         Ok(response)
                     };
                     let Ok(mut socket) = tokio_tungstenite::accept_hdr_async(stream, callback).await else { return };
-                    match validate(&query) {
+                    seen_queries.lock().unwrap().push(query.clone());
+                    let (server_id, connection, needs_frame_auth) = match validate(&query) {
+                        Ok(validated) => validated,
                         Err(code) => {
                             refusals.lock().unwrap().push(code);
                             let frame = CloseFrame { code: CloseCode::from(code), reason: "".into() };
                             let _ = socket.close(Some(frame)).await;
+                            return;
                         }
-                        Ok((_, None)) => {
+                    };
+                    if needs_frame_auth && let Err(code) = read_first_frame_auth(&mut socket, &server_id).await {
+                        refusals.lock().unwrap().push(code);
+                        let frame = CloseFrame { code: CloseCode::from(code), reason: "".into() };
+                        let _ = socket.close(Some(frame)).await;
+                        return;
+                    }
+                    match connection {
+                        None => {
                             let number = counter.fetch_add(1, Ordering::SeqCst) + 1;
                             control(number, socket).await;
                         }
-                        Ok((_, Some(connection))) => phone(connection, socket).await,
+                        Some(connection) => phone(connection, socket).await,
                     }
                 });
             }
         });
-        FakeRelay { address, controls, refused, accept }
+        FakeRelay { address, controls, refused, queries, accept }
     }
 
     /// How many control sockets were opened.
@@ -194,6 +232,12 @@ impl FakeRelay {
     /// The close codes sockets were refused with.
     pub fn refused(&self) -> Vec<u16> {
         self.refused.lock().unwrap().clone()
+    }
+
+    /// Every WebSocket query string received by this relay, in order.
+    #[allow(dead_code)]
+    pub fn queries(&self) -> Vec<String> {
+        self.queries.lock().unwrap().clone()
     }
 }
 

@@ -13,6 +13,12 @@ rust-version.workspace = true
 name = "MightyCode"
 path = "src/main.rs"
 
+[features]
+default = ["dev-harness"]
+# Smoke tests, help-capture, perf scenario, resource verifier, fake CLI modes, and Tauri's unstable `get_webview`.
+# Build a slim production binary with `--no-default-features`.
+dev-harness = ["tauri/unstable"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 # W9: build.rs checks the release stamp's update key (32 bytes of standard base64).
@@ -48,8 +54,7 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 sys-locale.workspace = true
-# unstable: the app's webviews found by label (`Manager::get_webview`: the smokes, the help capture, perf, native.rs).
-tauri = { workspace = true, features = ["unstable"] }
+tauri.workspace = true
 tokio = { workspace = true, features = ["sync", "io-util", "time", "macros"] }
 
 # The OS's implementation of the ports: chosen here and in src/platform.rs, nowhere else.
@@ -61,8 +66,3 @@ mighty-platform-macos.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["sync", "rt", "macros", "test-util"] }
-
-# W6 Step 0 lists mighty-native, mighty-tools, mighty-accounts and mighty-updates before any code uses them, W9 Step 0 mighty-styles;
-# this table goes once the app's code uses them all.
-[lints.cargo]
-unused_dependencies = "allow"

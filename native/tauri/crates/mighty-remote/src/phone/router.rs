@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use base64::Engine as _;
 use mighty_composer::pending::SubmitReceipt;
@@ -128,6 +128,7 @@ struct Inner {
     observing: Mutex<()>,
     sync: Mutex<Notes>,
     moved: AtomicBool,
+    notify: tokio::sync::Notify,
     submit_slots: Arc<Semaphore>,
     file_slots: Arc<Semaphore>,
     previews: PreviewSlot,
@@ -348,6 +349,7 @@ impl Router {
                 uploads,
                 sync: Mutex::new(Notes::default()),
                 moved: AtomicBool::new(true),
+                notify: tokio::sync::Notify::new(),
                 observing: Mutex::new(()),
                 submit_slots: Arc::new(Semaphore::new(2)),
                 file_slots: Arc::new(Semaphore::new(2)),
@@ -377,7 +379,7 @@ impl Router {
     /// `Changed`: something a phone may show moved (a run event, a permission, delegation, an Antigravity card); the panes are read again
     /// at the next [`Router::observe`]. Cheap: the host calls it from its change hook.
     pub fn changed(&self) {
-        self.inner.moved.store(true, Ordering::SeqCst);
+        self.inner.changed();
     }
 
     /// `Observe`: the panes read again when something moved, the revisions of what changed moved. A pass that fails (a desk that
@@ -480,6 +482,7 @@ impl Inner {
 
     fn changed(&self) {
         self.moved.store(true, Ordering::SeqCst);
+        self.notify.notify_waiters();
     }
 
     /// `Observe`: Err when the pass failed (it is made again at the next call).
@@ -520,9 +523,14 @@ impl Inner {
             let update = self.app_update_phone(&snapshot).map(|u| u.to_json()).unwrap_or_else(|| "null".into());
             let mut notes = self.notes();
             let moved = notes.revisions.observe(local_workspaces(&snapshot, allowed.as_deref()), &readings, &update);
+            let any_moved = !moved.is_empty();
             for note in moved {
                 notes.notifications.retain(|(scope, _)| *scope != note.0);
                 notes.notifications.push(note);
+            }
+            drop(notes);
+            if any_moved {
+                self.notify.notify_waiters();
             }
         }));
         if pass.is_err() {
@@ -939,9 +947,18 @@ impl Inner {
             .await
         };
         if current(self.clone(), id.clone()).await? <= since && wait > 0 {
-            let until = Instant::now() + Duration::from_secs(wait as u64);
-            while current(self.clone(), id.clone()).await? <= since && Instant::now() < until {
-                tokio::time::sleep(POLL_STEP).await;
+            let until = tokio::time::Instant::now() + Duration::from_secs(wait as u64);
+            loop {
+                // Register interest before checking the revision so no `changed()` notification between check and await is lost.
+                let notified = self.notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if current(self.clone(), id.clone()).await? > since || tokio::time::Instant::now() >= until {
+                    break;
+                }
+                if tokio::time::timeout_at(until, notified).await.is_err() {
+                    break;
+                }
             }
         }
         let inner = self.clone();

@@ -8,10 +8,10 @@ use std::io;
 use std::os::windows::io::{FromRawHandle, IntoRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use mighty_platform::{BoxFuture, Child, ChildControl, PlatformError, ProcessHost, Result, SpawnRequest};
 use tokio::io::AsyncWrite;
@@ -46,7 +46,6 @@ use crate::win::{active_processes, check, ended, environment_block, job_processe
 /// inheritable pipe ends exist are never interleaved with another launch's.
 static LAUNCH_GATE: Mutex<()> = Mutex::new(());
 static CONSOLE_READY: AtomicBool = AtomicBool::new(false);
-static PIPE_SERIAL: AtomicU64 = AtomicU64::new(0);
 
 /// UTF-8, the code page the hidden console is set to before every launch (ChildProcess.cs:137).
 const UTF8_CODE_PAGE: u32 = 65001;
@@ -191,11 +190,24 @@ struct Pipe {
     child: OwnedHandle,
 }
 
+fn random_hex_16() -> Result<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|error| PlatformError::Refused(format!("random pipe name: {error}")))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 fn pipe(app_reads: bool) -> Result<Pipe> {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|t| t.as_nanos()).unwrap_or_default();
-    let name = wide(format!(r"\\.\pipe\mighty-child-{}-{}-{nanos}", std::process::id(), PIPE_SERIAL.fetch_add(1, Ordering::Relaxed)));
+    let suffix = random_hex_16()?;
+    let name = wide(format!(r"\\.\pipe\mighty-child-{}-{suffix}", std::process::id()));
     let access = if app_reads { PIPE_ACCESS_INBOUND } else { PIPE_ACCESS_OUTBOUND };
-    // SAFETY: a NUL-terminated name; one instance; default security (the app's end is not inherited).
+    let owner = crate::agent_io::token_owner()?;
+    let descriptor = crate::agent_io::Descriptor::owner_only(&owner)?;
+    let server_security = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.as_ptr(),
+        bInheritHandle: 0,
+    };
+    // SAFETY: a NUL-terminated unpredictable name; one instance; owner-only SDDL security (the app's end is not inherited).
     let app = owned(unsafe {
         CreateNamedPipeW(
             name.as_ptr(),
@@ -205,7 +217,7 @@ fn pipe(app_reads: bool) -> Result<Pipe> {
             4096,
             4096,
             0,
-            std::ptr::null(),
+            &server_security,
         )
     })?;
     let inherit = SECURITY_ATTRIBUTES {
