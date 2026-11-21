@@ -10,7 +10,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.core.content.ContextCompat
-import expo.modules.interfaces.permissions.Permissions
+import expo.modules.interfaces.permissions.PermissionsStatus
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -52,6 +52,17 @@ class MightySpeechModule : Module() {
     }
 
     AsyncFunction("getPermissionStatus") { promise: Promise ->
+      val permissions = appContext.permissions
+      if (permissions != null) {
+        permissions.getPermissions(
+          { result ->
+            val status = result[Manifest.permission.RECORD_AUDIO]?.status ?: PermissionsStatus.UNDETERMINED
+            promise.resolve(status.status)
+          },
+          Manifest.permission.RECORD_AUDIO
+        )
+        return@AsyncFunction
+      }
       val context = appContext.reactContext
       if (context == null) {
         promise.resolve("denied")
@@ -70,18 +81,10 @@ class MightySpeechModule : Module() {
         promise.resolve("denied")
         return@AsyncFunction
       }
-      Permissions.askForPermissionsWithPermissionsManager(
-        permissions,
-        object : Promise {
-          override fun resolve(value: Any?) {
-            val map = value as? Map<*, *>
-            val status = map?.get("status") as? String
-            promise.resolve(if (status == "granted") "granted" else "denied")
-          }
-
-          override fun reject(code: String, message: String?, cause: Throwable?) {
-            promise.resolve("denied")
-          }
+      permissions.askForPermissions(
+        { result ->
+          val status = result[Manifest.permission.RECORD_AUDIO]?.status ?: PermissionsStatus.DENIED
+          promise.resolve(status.status)
         },
         Manifest.permission.RECORD_AUDIO
       )
