@@ -397,6 +397,12 @@ fn main() {
     } else {
         platform.paths.local_dir().join("file-originals").join(platform.paths.profile_key())
     };
+    // The snapshots of the runs' folders (mighty-run checkpoints.rs) likewise: the profile's `snapshots`, else this machine's own.
+    let snapshots_dir = if policy.writes {
+        platform.paths.data_dir().join("snapshots")
+    } else {
+        platform.paths.local_dir().join("snapshots").join(platform.paths.profile_key())
+    };
     // The page's web data (paths.rs `web_folders`, W9-F: C#'s own folder in a release build on the default profile, so the page's
     // storage survives the update; this machine's local one otherwise, as before W9).
     // Only a run that writes adopts them (review M1): never beside a C# app that may still hold them.
@@ -474,6 +480,10 @@ fn main() {
                 catalog_dir.clone(),
                 agy_rules,
             );
+            // Each request's start, steps, turns and end snapshotted, so its result lists the files every part changed (not in a smoke).
+            if host.smoke.is_none() {
+                runs::start_checkpoints(&host, snapshots_dir.clone(), workmap_folders.hooks.clone());
+            }
             // Terminal panes, the agents' terminals, terminal prompts and shell block runs (terminal.rs).
             terminal::Terminals::start(&host, &platform);
             // Delegation over the run service (delegation.rs, W7-D) and the agents' MCP listener (agent_io.rs, W7-C; not in a smoke).

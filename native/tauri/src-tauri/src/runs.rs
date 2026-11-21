@@ -152,6 +152,14 @@ fn agents_directory_among(beside: Option<PathBuf>, resources: Option<PathBuf>, r
     [beside, resources, repository].into_iter().flatten().map(|folder| folder.join("Agents")).find(|dir| dir.is_dir())
 }
 
+/// Starts the snapshots of the runs' folders (mighty-run checkpoints.rs) in `folder`, git pointed at `hooks` for hooks.
+pub fn start_checkpoints(host: &Arc<Host>, folder: PathBuf, hooks: PathBuf) {
+    let Some(runs) = host.runs() else { return };
+    let git = mighty_run::git::Git::new(host.processes.clone(), hooks);
+    let runtime = tauri::async_runtime::handle();
+    runs.service.set_checkpoints(mighty_run::checkpoints::Snapshots::new(folder, git), runtime.inner());
+}
+
 impl Runs {
     /// The service over the loaded state, its events pumped into the host, and the CLIs read once in the background.
     pub fn start(

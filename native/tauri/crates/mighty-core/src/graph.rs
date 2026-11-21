@@ -45,6 +45,9 @@ pub struct MightyGraphRun {
     pub configured_advisor: Option<String>,
     pub steps: Option<Vec<FlowStep>>,
     pub steps_carried: Option<Vec<String>>,
+    /// What the run's folder held as the request started and as each of its steps, turns and the run itself ended
+    /// ([`RunCheckpoint`]): git snapshots the app takes itself, so every agent's changes are seen, however it made them.
+    pub checkpoints: Option<Vec<RunCheckpoint>>,
     /// `[JsonIgnore] ShownFanOut`: the background blocks `MightyGraphRun.Shown` took out of `agents`, with the blocks under them, which
     /// the flow diagram alone still draws. Never read or written.
     pub shown_fan_out: Option<Vec<MightyGraphAgent>>,
@@ -133,6 +136,8 @@ impl Wire for MightyGraphRun {
                     Some(keys.into_iter().map(|k| k.ok_or_else(|| json::ReadError::crash("a null carried step"))).collect::<R<_>>()?)
                 }
             },
+            // A damaged checkpoint is left out; it never keeps the run from loading.
+            checkpoints: json::skipping_list(o.get("checkpoints"))?.filter(|list: &Vec<RunCheckpoint>| !list.is_empty()),
             shown_fan_out: None,
             shown_flow_order: None,
             shown_background_waiting: None,
@@ -180,7 +185,12 @@ impl MightyGraphRun {
         out.prop_str("configuredAdvisor", self.configured_advisor.as_deref());
         out.prop_list("steps", self.steps.as_ref());
         out.prop_strings("stepsCarried", self.steps_carried.as_ref());
+        out.prop_list("checkpoints", self.checkpoints.as_ref());
         out.end_object();
+    }
+
+    pub fn checkpoints(&self) -> &[RunCheckpoint] {
+        self.checkpoints.as_deref().unwrap_or(&[])
     }
 
     pub fn id(&self) -> &str {
@@ -613,6 +623,108 @@ impl Wire for FlowStep {
         out.prop_str("status", self.status.as_deref());
         out.prop_str("startedAt", self.started_at.as_deref());
         out.prop_str("endedAt", self.ended_at.as_deref());
+        out.end_object();
+    }
+}
+
+/// At most this many checkpoints are kept per run (the start and the end are always among them).
+pub const MAXIMUM_CHECKPOINTS: usize = 64;
+/// At most this many files are listed per checkpoint; the rest are counted in [`RunCheckpoint::more`].
+pub const MAXIMUM_CHECKPOINT_FILES: usize = 200;
+
+/// One snapshot of a run's folder: when, at what point of the run, the git tree it holds, and the files that differ from the
+/// snapshot before it (`base`). The files' contents stay in the snapshot store and are read when a change is opened.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RunCheckpoint {
+    /// `start` (the request began: the base of the first change), `step` (a step of its checklist was done), `turn` (a turn of the
+    /// request ended: the run's or a background notice's) or `end` (the run ended).
+    pub kind: String,
+    /// When it was taken (ISO 8601).
+    pub at: Option<String>,
+    /// The step's text for a `step`, the background task's title for a notice's `turn`.
+    pub label: Option<String>,
+    /// The step's key for a `step`.
+    pub step_key: Option<String>,
+    /// The git tree of the folder (its tracked and unignored files).
+    pub tree: String,
+    /// The tree the files are measured from: the snapshot before this one in the same request; None for a `start`.
+    pub base: Option<String>,
+    pub files: Vec<CheckpointFile>,
+    /// Files changed past [`MAXIMUM_CHECKPOINT_FILES`].
+    pub more: Option<i64>,
+}
+
+/// One file a checkpoint saw changed.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CheckpointFile {
+    /// The path from the repository's top folder, `/` between folders.
+    pub path: String,
+    /// A renamed file's path before.
+    pub old_path: Option<String>,
+    /// `A` added, `M` modified, `D` deleted, `R` renamed, `T` type changed.
+    pub status: String,
+    /// Lines added and removed; None for a binary file.
+    pub added: Option<i64>,
+    pub removed: Option<i64>,
+}
+
+impl Wire for RunCheckpoint {
+    fn read(value: &Value) -> R<Self> {
+        let o = Obj::of(value, "a checkpoint")?;
+        let tree = json::opt_string(o.get("tree"))?.unwrap_or_default();
+        if tree.is_empty() {
+            return json::fail("a checkpoint without a tree");
+        }
+        Ok(RunCheckpoint {
+            kind: json::opt_string(o.get("kind"))?.unwrap_or_else(|| "turn".into()),
+            at: json::opt_string(o.get("at"))?,
+            label: json::opt_string(o.get("label"))?,
+            step_key: json::opt_string(o.get("stepKey"))?,
+            tree,
+            base: json::opt_string(o.get("base"))?,
+            files: json::skipping_list(o.get("files"))?.unwrap_or_default(),
+            more: json::opt_int64(o.get("more"))?,
+        })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_str("kind", Some(&self.kind));
+        out.prop_str("at", self.at.as_deref());
+        out.prop_str("label", self.label.as_deref());
+        out.prop_str("stepKey", self.step_key.as_deref());
+        out.prop_str("tree", Some(&self.tree));
+        out.prop_str("base", self.base.as_deref());
+        out.name("files");
+        out.list(&self.files);
+        out.prop_opt_int("more", self.more);
+        out.end_object();
+    }
+}
+
+impl Wire for CheckpointFile {
+    fn read(value: &Value) -> R<Self> {
+        let o = Obj::of(value, "a checkpoint file")?;
+        let path = json::opt_string(o.get("path"))?.unwrap_or_default();
+        if path.is_empty() {
+            return json::fail("a checkpoint file without a path");
+        }
+        Ok(CheckpointFile {
+            path,
+            old_path: json::opt_string(o.get("oldPath"))?,
+            status: json::opt_string(o.get("status"))?.unwrap_or_else(|| "M".into()),
+            added: json::opt_int64(o.get("added"))?,
+            removed: json::opt_int64(o.get("removed"))?,
+        })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_str("path", Some(&self.path));
+        out.prop_str("oldPath", self.old_path.as_deref());
+        out.prop_str("status", Some(&self.status));
+        out.prop_opt_int("added", self.added);
+        out.prop_opt_int("removed", self.removed);
         out.end_object();
     }
 }

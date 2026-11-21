@@ -269,6 +269,10 @@ pub fn apply_session(session: &RunSession, event: &RunEvent, now: DateTimeOffset
                     if run.steps_carried.is_none() {
                         run.steps_carried = runs[at].steps_carried.clone();
                     }
+                    // The tracker never makes checkpoints: the run keeps the ones the snapshots added.
+                    if run.checkpoints.is_none() {
+                        run.checkpoints = runs[at].checkpoints.clone();
+                    }
                     runs[at] = run;
                 }
                 None => runs.push(run),
@@ -276,6 +280,21 @@ pub fn apply_session(session: &RunSession, event: &RunEvent, now: DateTimeOffset
             let skip = runs.len().saturating_sub(128);
             let bounded = bounded_live_history(runs.into_iter().skip(skip).collect());
             RunSession { graph_runs: (!bounded.is_empty()).then_some(bounded), ..value }
+        }
+        // A snapshot of the run's folder (checkpoints.rs): its checkpoints added to the run they belong to, whichever agent ran it.
+        "checkpoint" => {
+            let Some(added) = event.graph_run.as_ref() else { return value };
+            let Some(live) = value.graph_runs.as_ref() else { return value };
+            let Some(at) = live.iter().position(|r| r.id == added.id) else { return value };
+            let mut runs = live.clone();
+            let mut kept = runs[at].checkpoints.clone().unwrap_or_default();
+            for checkpoint in added.checkpoints() {
+                if !kept.iter().any(|c| c.tree == checkpoint.tree && c.kind == checkpoint.kind && c.step_key == checkpoint.step_key) {
+                    kept.push(checkpoint.clone());
+                }
+            }
+            runs[at].checkpoints = normalize::checkpoints(&kept);
+            RunSession { graph_runs: Some(runs), ..value }
         }
         _ => value,
     }

@@ -358,6 +358,7 @@ mod tests {
             antigravity_rules: OnceLock::from(rules),
             leftovers_removed,
             delegation: None,
+            checkpoints: OnceLock::new(),
         });
         (shared, done)
     }

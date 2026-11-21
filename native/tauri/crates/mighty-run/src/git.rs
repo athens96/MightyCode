@@ -209,6 +209,12 @@ impl Git {
         Box::pin(self.execute(Settings::WorkMap, arguments, directory, timeout, None)).await.ok()
     }
 
+    /// The work map's run with more variables laid over the cleaned environment (the snapshots' `GIT_INDEX_FILE`,
+    /// `GIT_OBJECT_DIRECTORY` and `GIT_ALTERNATE_OBJECT_DIRECTORIES`, checkpoints.rs).
+    pub async fn run_with(&self, arguments: &[&str], directory: &Path, timeout: f64, variables: &[(&str, String)]) -> Option<GitResult> {
+        Box::pin(self.execute_with(Settings::WorkMap, arguments, directory, timeout, None, variables)).await.ok()
+    }
+
     /// `DelegationGit.RunDetailed`: runs git with delegation's settings and says why it gave no result. `input` is written to git's
     /// standard input while its output is read, within the same deadline, and then closed; it is for a git that reads its standard
     /// input to its end (`--pathspec-from-file=-`, `--stdin`): one that exits first is [`GitFailure::BrokenPipe`]. `timeout` is in
@@ -219,6 +225,18 @@ impl Git {
     }
 
     async fn execute(&self, settings: Settings, arguments: &[&str], directory: &Path, timeout: f64, input: Option<&str>) -> GitRun {
+        self.execute_with(settings, arguments, directory, timeout, input, &[]).await
+    }
+
+    async fn execute_with(
+        &self,
+        settings: Settings,
+        arguments: &[&str],
+        directory: &Path,
+        timeout: f64,
+        input: Option<&str>,
+        variables: &[(&str, String)],
+    ) -> GitRun {
         let Some(program) = self.program().map(Path::to_path_buf) else { return GitRun::failed(GitFailure::NotStarted) };
         if !self.hooks_empty() {
             return GitRun::failed(GitFailure::NotStarted);
@@ -249,6 +267,9 @@ impl Git {
         request = request.env("GIT_OPTIONAL_LOCKS", "0").env("GIT_TERMINAL_PROMPT", "0").env("LC_ALL", "C");
         if settings == Settings::WorkMap {
             request = request.env("GIT_NO_LAZY_FETCH", "1");
+        }
+        for (key, value) in variables {
+            request = request.env(*key, value.as_str());
         }
         if let Some(file) = &self.global_config {
             request = request.env("GIT_CONFIG_GLOBAL", file.to_string_lossy()).env("GIT_CONFIG_NOSYSTEM", "1");

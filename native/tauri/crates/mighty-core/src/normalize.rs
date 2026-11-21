@@ -1004,6 +1004,7 @@ pub fn graph_runs(values: &[MightyGraphRun], restoring: bool, budget: &mut i64, 
                     .collect::<Vec<_>>()
             })
             .filter(|keys| !keys.is_empty());
+        r.checkpoints = checkpoints(run.checkpoints());
 
         let mut built = vec![];
         for agent in agents {
@@ -1974,6 +1975,53 @@ pub fn stored(snapshot: &AppSnapshot) -> AppSnapshot {
         pane_layouts: layouts,
         ..snapshot.clone()
     }
+}
+
+/// A run's checkpoints as kept: real trees only (hex object names), the latest [`crate::graph::MAXIMUM_CHECKPOINTS`] with the first (the
+/// request's start) always among them, at most [`crate::graph::MAXIMUM_CHECKPOINT_FILES`] files each (the rest counted), texts and paths cut
+/// short.
+pub fn checkpoints(saved: &[crate::graph::RunCheckpoint]) -> Option<Vec<crate::graph::RunCheckpoint>> {
+    let object = |name: &str| matches!(name.len(), 40 | 64) && name.bytes().all(|b| b.is_ascii_hexdigit());
+    let short = |text: &str, limit: usize| if wire::utf16_len(text) > limit { utf16_prefix(text, limit) } else { text.to_string() };
+    let mut kept: Vec<crate::graph::RunCheckpoint> = saved
+        .iter()
+        .filter(|c| object(&c.tree) && c.base.as_deref().is_none_or(object))
+        .map(|c| {
+            let listed = c.files.len().min(crate::graph::MAXIMUM_CHECKPOINT_FILES);
+            let more = c.more.unwrap_or(0).max(0) + (c.files.len() - listed) as i64;
+            crate::graph::RunCheckpoint {
+                kind: match c.kind.as_str() {
+                    k @ ("start" | "step" | "turn" | "end") => k.to_string(),
+                    _ => "turn".into(),
+                },
+                at: c.at.clone().filter(|t| time::parse(Some(t)).is_some()),
+                label: c.label.as_deref().map(|l| short(l, 1_024)),
+                step_key: c.step_key.as_deref().map(|k| short(k, 1_100)),
+                tree: c.tree.clone(),
+                base: c.base.clone(),
+                files: c.files[..listed]
+                    .iter()
+                    .map(|f| crate::graph::CheckpointFile {
+                        path: short(&f.path, 4_096),
+                        old_path: f.old_path.as_deref().map(|p| short(p, 4_096)),
+                        status: match f.status.as_str() {
+                            s @ ("A" | "M" | "D" | "R" | "T") => s.to_string(),
+                            _ => "M".into(),
+                        },
+                        added: f.added.filter(|n| *n >= 0),
+                        removed: f.removed.filter(|n| *n >= 0),
+                    })
+                    .collect(),
+                more: (more > 0).then_some(more),
+            }
+        })
+        .collect();
+    if kept.len() > crate::graph::MAXIMUM_CHECKPOINTS {
+        let first = kept.remove(0);
+        let skip = kept.len() + 1 - crate::graph::MAXIMUM_CHECKPOINTS;
+        kept = std::iter::once(first).chain(kept.into_iter().skip(skip)).collect();
+    }
+    (!kept.is_empty()).then_some(kept)
 }
 
 #[cfg(test)]

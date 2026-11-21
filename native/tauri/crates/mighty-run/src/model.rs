@@ -262,6 +262,9 @@ impl RunEvent {
             }),
             "activity" => self.activity.as_ref().is_some_and(|a| activity::normalized(a, false).is_some()),
             "usage" => true,
+            "checkpoint" => {
+                self.graph_run.as_ref().is_some_and(|run| wire::is_identifier(run.id.as_deref()) && !run.checkpoints().is_empty())
+            }
             "graph_run" => self.graph_run.as_ref().is_some_and(|run| wire::identifier(run.id())),
             "plan" => self
                 .plan

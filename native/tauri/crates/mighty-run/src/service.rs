@@ -21,7 +21,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use indexmap::IndexMap;
-use mighty_core::graph::GRAPH_PROVIDERS;
+use mighty_core::graph::{GRAPH_PROVIDERS, MightyGraphRun};
 use mighty_core::model::{AppSnapshot, PlanRecord, RunSession, Workspace};
 use mighty_core::normalize;
 use mighty_core::time::DateTimeOffset;
@@ -171,6 +171,8 @@ struct Shared {
     leftovers_removed: tokio::sync::watch::Receiver<bool>,
     /// Delegation's hooks ([`RunServiceOptions::delegation`]).
     delegation: Option<Arc<dyn DelegationRunHooks>>,
+    /// The snapshots of the runs' folders ([`RunService::set_checkpoints`]); none until the app sets them.
+    checkpoints: OnceLock<crate::checkpoints::Checkpoints>,
 }
 
 impl Shared {
@@ -202,6 +204,10 @@ impl Shared {
         let before = state.snapshot.session(&value.session_id).map(|s| s.graph_runs().to_vec()).unwrap_or_default();
         state.snapshot = apply::apply(&state.snapshot, value, DateTimeOffset::now());
         let after = state.snapshot.session(&value.session_id).map(|s| s.graph_runs().to_vec()).unwrap_or_default();
+        // A step's end comes with the checklist's events, a run's with its graph run's.
+        if value.kind != "checkpoint" {
+            self.ask_checkpoints(state, &value.session_id, &before, &after);
+        }
         let ended = value.kind == "status" && matches!(value.status.as_deref(), Some("stopped" | "completed" | "error"));
         let mut delegation_ended = false;
         if ended {
@@ -215,6 +221,28 @@ impl Shared {
             self.send(ServiceEvent::SaveSoon);
         }
         Received { delegation_ended, notice_turn_ended: apply::notice_turn_ended(&before, &after) }
+    }
+
+    /// The snapshots a run's step, turn or end just done is due (checkpoints.rs), asked of the worker with the folder the pane works in.
+    fn ask_checkpoints(&self, state: &State, session_id: &str, before: &[MightyGraphRun], after: &[MightyGraphRun]) {
+        let Some(checkpoints) = self.checkpoints.get() else { return };
+        let due = crate::checkpoints::due(before, after);
+        if due.is_empty() {
+            return;
+        }
+        let Some(folder) = checkpoint_folder(&state.snapshot, session_id) else { return };
+        for (run_id, kind, label, step_key) in due {
+            let base = crate::checkpoints::newest_tree(after, crate::checkpoints::request_of(&run_id));
+            checkpoints.ask(crate::checkpoints::Job {
+                session_id: session_id.to_string(),
+                run_id,
+                folder: folder.clone(),
+                kind,
+                label,
+                step_key,
+                base,
+            });
+        }
     }
 
     fn after_receive(&self, value: RunEvent, received: Received) {
@@ -334,6 +362,7 @@ impl RunService {
             antigravity_rules: OnceLock::new(),
             leftovers_removed,
             delegation: options.delegation,
+            checkpoints: OnceLock::new(),
         });
         let resolver = shared.clone();
         let resolve: crate::manager::ResolveWorkspace = Arc::new(move |id: String| {
@@ -418,6 +447,22 @@ impl RunService {
             }
             Err(_) => false,
         }
+    }
+
+    /// Starts the snapshots of the runs' folders on `runtime` (set once; a later call changes nothing): each request's start, each
+    /// step of its checklist done, each turn and the run's end (checkpoints.rs).
+    pub fn set_checkpoints(&self, snapshots: crate::checkpoints::Snapshots, runtime: &tokio::runtime::Handle) {
+        if self.shared.checkpoints.get().is_some() {
+            return;
+        }
+        let shared = Arc::downgrade(&self.shared);
+        let deliver: Arc<dyn Fn(RunEvent) + Send + Sync> = Arc::new(move |event| {
+            if let Some(shared) = shared.upgrade() {
+                shared.receive(event);
+            }
+        });
+        let _guard = runtime.enter();
+        let _ = self.shared.checkpoints.set(crate::checkpoints::Checkpoints::start(snapshots, deliver));
     }
 
     /// The app's reader of the panes' bodies the load left on disk (set once; a later call changes nothing).
@@ -748,6 +793,20 @@ impl RunService {
                 (!remote && request.kind != "shell" && GRAPH_PROVIDERS.contains(&request.provider.as_str())).then(wire::new_id);
             state.snapshot = apply::apply(&state.snapshot, &RunEvent::state(&request.session_id, "running", None), now);
             state.snapshot = apply::apply(&state.snapshot, &asked, now);
+            // The folder as the request starts: the base its first change is measured from.
+            if let (Some(checkpoints), Some(run_id)) = (self.shared.checkpoints.get(), request.graph_run_id.clone())
+                && let Some(folder) = checkpoint_folder(&state.snapshot, &request.session_id)
+            {
+                checkpoints.ask(crate::checkpoints::Job {
+                    session_id: request.session_id.clone(),
+                    run_id,
+                    folder,
+                    kind: "start".into(),
+                    label: None,
+                    step_key: None,
+                    base: None,
+                });
+            }
             if let Some(receipt) = &request.receipt {
                 let mut receipt = lock(receipt);
                 receipt.entry_id = asked.entry.as_ref().and_then(|e| e.id.clone());
@@ -1065,4 +1124,25 @@ fn with_additions(mut whole: RunSession, now: &RunSession) -> RunSession {
         stored_digest: None,
         ..now.clone()
     }
+}
+
+/// The folder a pane's runs work in, for its snapshots: its own working folder (a worktree), else its workspace's; none for a remote
+/// workspace or a mirrored pane.
+fn checkpoint_folder(snapshot: &AppSnapshot, session_id: &str) -> Option<std::path::PathBuf> {
+    let pane = snapshot.session(session_id)?;
+    if pane.mirror.is_some() {
+        return None;
+    }
+    let folder = match pane.working_folder.as_deref().filter(|f| !f.is_empty()) {
+        Some(folder) => folder.to_string(),
+        None => {
+            let workspace = snapshot.workspace(pane.workspace_id())?;
+            if workspace.remote.is_some() {
+                return None;
+            }
+            workspace.path.clone().filter(|p| !p.is_empty())?
+        }
+    };
+    let folder = std::path::PathBuf::from(folder);
+    folder.is_absolute().then_some(folder)
 }

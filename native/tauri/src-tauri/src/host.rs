@@ -472,7 +472,7 @@ impl Host {
                     let mut view = self.view();
                     view.sync();
                     // WebBridge.ReceiveRunEvent: a log line and a graph run go without their record, which the delta carries a frame later.
-                    let light = if matches!(event.kind.as_str(), "log" | "graph_run") {
+                    let light = if matches!(event.kind.as_str(), "log" | "graph_run" | "checkpoint") {
                         RunEvent { entry: None, graph_run: None, ..(*event).clone() }
                     } else {
                         (*event).clone()
