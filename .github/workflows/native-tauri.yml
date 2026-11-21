@@ -178,7 +178,7 @@ jobs:
           if ($failed) { throw ("parity-mac: " + ($failed -join ', ')) }
       - name: Keep the Mac stores' parity files
         if: always() && matrix.os == 'macos'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tauri-parity-mac
           # The state corpus and what Rust made of it; the pairing files hold only throwaway keys.
@@ -241,7 +241,7 @@ jobs:
           if ($changed) { $changed; throw 'the run changed frozen style files' }
       - name: Keep the smoke's result and logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tauri-smoke-${{ matrix.os }}
           path: ${{ runner.temp }}/tauri-smoke
@@ -438,7 +438,7 @@ jobs:
         timeout-minutes: 6
         run: ./scripts/test-windows-installer.ps1 -Setup ./release/MightyCode-windows-${{ matrix.architecture }}-setup.exe -Version ($env:CANDIDATE -split '-')[0] -Layout tauri
       - name: Upload distributable
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MightyCode-native-windows-${{ matrix.architecture }}
           path: |
@@ -449,7 +449,7 @@ jobs:
           if-no-files-found: error
       - name: Keep the packaged smoke's result and logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tauri-package-smoke-${{ matrix.architecture }}
           path: ${{ runner.temp }}/package-smoke
@@ -515,7 +515,7 @@ jobs:
         run: ./scripts/update-rehearsal.ps1 -From ${{ matrix.from }} -RustZip "$env:RUNNER_TEMP/rust-package/MightyCode-windows-x64.zip" -Work "$env:RUNNER_TEMP/rehearsal"
       - name: Keep the rehearsal's result and logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tauri-rehearsal-${{ matrix.from }}
           path: |
@@ -673,7 +673,7 @@ jobs:
           [ -z "${CODESIGN_SHA1:-}" ] || bounded sudo -n security delete-certificate -Z "$CODESIGN_SHA1" /Library/Keychains/System.keychain
           bounded security delete-keychain "$RUNNER_TEMP/hardened/throwaway.keychain-db"
       - name: Upload the candidate
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MightyCode-native-macos-candidate
           path: |
@@ -682,7 +682,7 @@ jobs:
           if-no-files-found: error
       - name: Keep the throwaway update key for the rehearsal
         # A key made for this run only (the candidate checks a loopback address); the real signing key is never on a runner.
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tauri-rehearsal-key-macos
           path: ${{ runner.temp }}/rehearsal-key
@@ -690,7 +690,7 @@ jobs:
           if-no-files-found: error
       - name: Keep the packaged smokes' results and logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tauri-package-smoke-macos
           path: ${{ runner.temp }}/package-smoke
@@ -750,7 +750,7 @@ jobs:
             --key "$RUNNER_TEMP/rehearsal-key/update.key" --work "$RUNNER_TEMP/rehearsal"
       - name: Keep the rehearsal's result and logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tauri-rehearsal-macos-${{ matrix.from }}
           path: |
@@ -798,7 +798,7 @@ jobs:
           MIGHTY_UPDATE_URL: ${{ vars.MIGHTY_UPDATE_URL || 'https://pub-b705901d18c940159d40f58683d758ad.r2.dev/mightycode/latest.json' }}
           MIGHTY_UPDATE_PUBLIC_KEY: ${{ vars.MIGHTY_UPDATE_PUBLIC_KEY || 'C02DD3qWG+A5gJdYwpaEnvpzYugo354CLtUtU+oXmZ4=' }}
         run: bash scripts/build-tauri-macos.sh --version "$CANDIDATE"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: MightyCode-macos-notarize-input
           path: release/MightyCode-macos.zip
@@ -889,7 +889,7 @@ jobs:
           exit $status
       - name: Keep the verdicts only (the repository is public; the signed app and dmg are never uploaded)
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: MightyCode-macos-notarize-dry-run-verdicts
           path: ${{ runner.temp }}/verdicts
