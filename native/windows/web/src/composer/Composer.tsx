@@ -18,6 +18,8 @@ import { Motion } from '../theme/tokens';
 import { appendingBlock } from '../mighty/runChangesModel';
 import { NoticeChip } from '../conversation/NoticeChip';
 import { parseDelegationNotice } from '../conversation/delegationNotice';
+import { VoiceMicButton, VoiceStatusBar, useComposerVoice } from './VoiceInput';
+import { insertDictatedText } from './voiceModel';
 
 /** The host on the Mac, where ⌘Enter is the second send (shell/menu.ts `macHost`). */
 const onMac = () => hostCapabilities()?.platform === 'macos';
@@ -114,6 +116,30 @@ export function Composer({ session }: { session: RunSession }) {
     if (draftTimer.current !== null) clearTimeout(draftTimer.current);
     draftTimer.current = setTimeout(flushDraft, draftRest);
   }, [flushDraft]);
+
+  const onDictated = useCallback((dictated: string) => {
+    const element = editor.current;
+    const currentVal = element?.value ?? text;
+    const inserted = insertDictatedText(
+      currentVal,
+      dictated,
+      element?.selectionStart,
+      element?.selectionEnd,
+      maximumDraft,
+    );
+    change(inserted.text);
+    if (element) {
+      element.focus();
+      requestAnimationFrame(() => element.setSelectionRange(inserted.cursor, inserted.cursor));
+    }
+  }, [text, change]);
+
+  const voice = useComposerVoice({
+    paneId,
+    mac: onMac(),
+    disabled: !!state?.blocked,
+    onDictated,
+  });
 
   const flashQueue = useCallback(() => {
     setFlashing(true);
@@ -212,6 +238,9 @@ export function Composer({ session }: { session: RunSession }) {
   };
 
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!event.nativeEvent.isComposing && event.keyCode !== 229 && voice.handleKeyDown(event)) {
+      return;
+    }
     if (palette.commands.length > 0 && !event.nativeEvent.isComposing && event.keyCode !== 229) {
       const key = paletteKey(event.key, event.shiftKey);
       if (key) {
@@ -291,7 +320,7 @@ export function Composer({ session }: { session: RunSession }) {
         <div className="composer-row composer-blocked" data-testid="composer-blocked" role="status">
           <strong>{t('composer.blocked.title')}</strong>
           <span>{state.blocked}</span>
-          {state.install && <button type="button" className="composer-text-button" onClick={() => call('installCli')}>{t('setup.blocked.install')}</button>}
+          {state.install && <button type="button" className="composer-text-button" title={t('tooltip.composer.installCli')} onClick={() => call('installCli')}>{t('setup.blocked.install')}</button>}
         </div>
       )}
       {state?.hold && <div className="composer-row composer-hold" role="status">{t('settings.cliUpdate.backgroundUpdateQueued', { provider: state.hold })}</div>}
@@ -299,7 +328,7 @@ export function Composer({ session }: { session: RunSession }) {
       {(state?.attachmentError ?? error) && (
         <div className="composer-row composer-error" data-testid="composer-error" role="alert">
           <span>{state?.attachmentError ?? error}</span>
-          <button type="button" className="composer-icon-button" aria-label={t('composer.attachment.dismissError')} onClick={() => { setError(null); if (state?.attachmentError) call('dismissAttachmentError'); }}>×</button>
+          <button type="button" className="composer-icon-button" title={t('composer.attachment.dismissError')} aria-label={t('composer.attachment.dismissError')} onClick={() => { setError(null); if (state?.attachmentError) call('dismissAttachmentError'); }}>×</button>
         </div>
       )}
       {palette.commands.length > 0 && (
@@ -310,6 +339,7 @@ export function Composer({ session }: { session: RunSession }) {
                 key={command.invocation}
                 role="option"
                 aria-selected={index === safeIndex(palette)}
+                title={'/' + command.invocation + (command.description ? ' — ' + command.description : '')}
                 className={'slash-row' + (index === safeIndex(palette) ? ' highlighted' : '')}
                 ref={index === safeIndex(palette) ? (row) => row?.scrollIntoView({ block: 'nearest' }) : undefined}
                 onMouseEnter={() => setPalette({ ...palette, index })}
@@ -338,11 +368,11 @@ export function Composer({ session }: { session: RunSession }) {
           <div className="composer-attachments">
             {state.attachments.map((file) => (
               <div className="composer-chip" key={file.id} data-attachment-id={file.id}>
-                <button type="button" className="composer-chip-face" title={`${file.name} · ${byteLabel(file.size)}`} aria-label={t('composer.attachment.preview', { name: file.name })} onClick={() => void openPreview(file.id)}>
+                <button type="button" className="composer-chip-face" title={t('tooltip.composer.attachmentPreview', { name: file.name, size: byteLabel(file.size) })} aria-label={t('composer.attachment.preview', { name: file.name })} onClick={() => void openPreview(file.id)}>
                   <span className="composer-chip-mark">{file.mediaType.startsWith('image/') ? '▣' : '▤'}</span>
                   <span className="composer-chip-words"><span className="composer-chip-name">{file.name}</span><span className="composer-chip-size">{byteLabel(file.size)}</span></span>
                 </button>
-                <button type="button" className="composer-icon-button" aria-label={t('composer.attachment.remove', { name: file.name })} onClick={() => call('removeAttachment', { id: file.id })}>×</button>
+                <button type="button" className="composer-icon-button" title={t('composer.attachment.remove', { name: file.name })} aria-label={t('composer.attachment.remove', { name: file.name })} onClick={() => call('removeAttachment', { id: file.id })}>×</button>
               </div>
             ))}
           </div>
@@ -374,11 +404,24 @@ export function Composer({ session }: { session: RunSession }) {
                   {item.attachments.length > 0 && <span className="composer-queue-files">{item.attachments.join(', ')}</span>}
                 </span>
                 <RunNowButton paneId={paneId} itemId={item.id} runNow={readRunNow(item.runNow)} held={queue.held.length} agents={agents} own={session.provider} />
-                <button type="button" className="composer-icon-button" aria-label={t('queue.remove')} onClick={() => call('queueRemove', { itemId: item.id })}>×</button>
+                <button type="button" className="composer-icon-button" title={t('tooltip.composer.queueRemove')} aria-label={t('queue.remove')} onClick={() => call('queueRemove', { itemId: item.id })}>×</button>
               </div>
             ))}
           </div>
         )}
+        <VoiceStatusBar
+          phase={voice.phase}
+          levels={voice.levels}
+          partial={voice.partial}
+          seconds={voice.seconds}
+          permissionDenied={voice.permissionDenied}
+          voiceError={voice.voiceError}
+          onStop={() => voice.stopVoice(false)}
+          onCancel={() => voice.stopVoice(true)}
+          onOpenSettings={voice.openPermissionSettings}
+          onDismissPermission={voice.dismissPermission}
+          onDismissError={voice.dismissError}
+        />
         <textarea
           ref={editor}
           className="composer-input"
@@ -396,7 +439,7 @@ export function Composer({ session }: { session: RunSession }) {
         <ComposerCard paneId={paneId} kind="login" />
         <div className="composer-toolbar">
           {state?.attachmentsAllowed !== false && (
-            <button type="button" className="composer-pill compact composer-attach" aria-label={t('composer.attach.name')} title={t('composer.attach.name')} disabled={state?.attachmentsLoading} onClick={() => call('pickAttachments')}><Icon name="paperclip" size={14} weight={1.75} /></button>
+            <button type="button" className="composer-pill compact composer-attach" aria-label={t('composer.attach.name')} title={t('tooltip.composer.attach')} disabled={state?.attachmentsLoading} onClick={() => call('pickAttachments')}><Icon name="paperclip" size={14} weight={1.75} /></button>
           )}
           {state?.pills ? <Toolbar paneId={paneId} pills={state.pills} busy={state.busy} showUsage={showUsage} onUsageShown={usageShown} resumed={state.resumed} worktreeAgents={agents} busySend={runsWith?.agent ?? null} />
             : <span className="composer-shell-title">{t('composer.shell.title')}</span>}
@@ -405,8 +448,15 @@ export function Composer({ session }: { session: RunSession }) {
               aria-label={t('composer.statusLine.name')} onClick={() => call('composerToggle', { which: 'statusLine' })}><Icon name="panel-bottom" size={13} weight={1.75} /></button>
           )}
           {(state?.primary === 'queue' || state?.primary === 'worktree') && (
-            <button type="button" className="composer-stop-small" aria-label={t('composer.stop.name')} disabled={state.stopping} onClick={() => call('stop')}><Icon name="square" size={9} weight={0} fill /></button>
+            <button type="button" className="composer-stop-small" aria-label={t('composer.stop.name')} title={t('composer.stop.tooltip')} disabled={state.stopping} onClick={() => call('stop')}><Icon name="square" size={9} weight={0} fill /></button>
           )}
+          <VoiceMicButton
+            phase={voice.phase}
+            mac={onMac()}
+            disabled={!!state?.blocked}
+            onPointerDown={voice.onMicPointerDown}
+            onPointerUp={voice.onMicPointerUp}
+          />
           {/* 실행 중 보내기: while the pane runs and words wait to go, Enter's target (대기열, or an agent's worktree) is chosen on the
               send button itself, one split control [target ▾ | ↑]; the separate worktree disc is there only while Enter queues, since in
               worktree mode the send button already does what it would. */}
@@ -433,7 +483,7 @@ export function Composer({ session }: { session: RunSession }) {
             <div className="composer-preview-title">{preview.name}</div>
             <div className="composer-preview-meta">{preview.mediaType} · {preview.size.toLocaleString()} bytes</div>
             {preview.image ? <img src={preview.image} alt={preview.name} /> : preview.text !== undefined ? <pre>{preview.text}</pre> : <p>{t('composer.attachment.sentAsFile')}</p>}
-            <button type="button" className="composer-text-button" onClick={() => setPreview(null)}>{t('settings.closeButton')}</button>
+            <button type="button" className="composer-text-button" title={t('tooltip.composer.closePreview')} onClick={() => setPreview(null)}>{t('settings.closeButton')}</button>
           </div>
         </div>
       )}

@@ -61,7 +61,7 @@ function Fold({ text, lines, className, onFold }: { text: string; lines: number;
   return (
     <div className="structure-fold">
       <div ref={ref} className={className} style={open ? undefined : { WebkitLineClamp: lines }} data-folded={open ? undefined : ''}>{text}</div>
-      {(cut || open) && <button type="button" className="structure-more" onClick={(event) => { onFold(event.currentTarget); setOpen((o) => !o); }}>{t(open ? 'graph.structure.less' : 'graph.structure.more')}</button>}
+      {(cut || open) && <button type="button" className="structure-more" title={t('tooltip.structure.toggleFold')} onClick={(event) => { onFold(event.currentTarget); setOpen((o) => !o); }}>{t(open ? 'graph.structure.less' : 'graph.structure.more')}</button>}
     </div>
   );
 }
@@ -174,7 +174,7 @@ const Card = memo(function Card({ card, onFold, onReveal }: { card: StructureCar
           {tail.length > 0 && <div className="structure-tail" data-testid="structure-node-output">{tail.map((line, index) => <div key={index}>{line === '' ? ' ' : line}</div>)}</div>}
           {reply && <div className="structure-reply" data-testid="structure-node-reply"><span className="structure-reply-title">{t('graph.background.reply')}</span><div className="structure-output">{reply}</div></div>}
           {last && <ActivityRow line={last} />}
-          {opens && <button type="button" className="structure-more" onClick={(event) => { onFold(event.currentTarget); setOpen((o) => !o); }}>{t(open ? 'graph.structure.less' : 'graph.structure.more')}</button>}
+          {opens && <button type="button" className="structure-more" title={t('tooltip.structure.toggleFold')} onClick={(event) => { onFold(event.currentTarget); setOpen((o) => !o); }}>{t(open ? 'graph.structure.less' : 'graph.structure.more')}</button>}
         </div>
       );
     }
@@ -448,7 +448,7 @@ export function Structure({ boards, onReveal, pending: sent, session, own = 0 }:
           {listOpen && (
             <div className="structure-list popover width-s" role="listbox" data-page-overlay="" aria-label={t('graph.structure.board.list')} data-testid="structure-list">
               {list.map((b, at) => (
-                <button key={b.id} type="button" role="option" aria-selected={at === index} className={'structure-entry' + (at === index ? ' chosen' : '')} data-board-id={b.id}
+                <button key={b.id} type="button" role="option" aria-selected={at === index} title={title(b, at) + ' · ' + summaries[at]} className={'structure-entry' + (at === index ? ' chosen' : '')} data-board-id={b.id}
                   onClick={() => { setListOpen(false); move(() => navigation.select(b.id, list)); }}>
                   <span className="structure-entry-number">{at + 1}</span>
                   <span className={'structure-entry-mark tone-' + b.tone} aria-hidden="true" />

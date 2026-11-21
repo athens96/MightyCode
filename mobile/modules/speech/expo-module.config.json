@@ -1,0 +1,9 @@
+{
+  "platforms": ["android", "ios"],
+  "android": {
+    "modules": ["dev.mightycode.speech.MightySpeechModule"]
+  },
+  "ios": {
+    "modules": ["MightySpeechModule"]
+  }
+}

@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 import type { TerminalPrompt, TerminalPromptAnswerKind } from '@/api/types';
 import { Button } from '@/components/ui';
+import { VoiceDictationBar, VoiceMicButton, useVoiceDictation } from '@/components/voice-dictation';
 import { t } from '@/lib/i18n';
 import { isMarkedOption, terminalPromptBody, yesIsPrimary } from '@/lib/terminal-prompt';
+import { appendDictatedMobileText } from '@/lib/voice';
 import { cardShadow, monoText, radius, spacing, typeScale, useStyles, usePalette, type Palette } from '@/theme';
 
 /**
@@ -23,6 +25,13 @@ export function TerminalPromptCard({
   const styles = useStyles(makeStyles);
   const palette = usePalette();
   const [typed, setTyped] = useState('');
+  const typedRef = useRef(typed);
+  typedRef.current = typed;
+  const allowVoice = prompt.kind === 'text';
+  const voice = useVoiceDictation({
+    disabled: busy || !allowVoice,
+    onDictated: (dictated) => setTyped(appendDictatedMobileText(typedRef.current, dictated)),
+  });
   const yesDefault = yesIsPrimary(prompt);
   const hasDefault = prompt.defaultYes !== undefined;
   const label = (key: 'terminalPrompt.yes' | 'terminalPrompt.no', isDefault: boolean) =>
@@ -80,21 +89,50 @@ export function TerminalPromptCard({
       ) : null}
 
       {prompt.kind === 'secret' || prompt.kind === 'text' ? (
-        <TextInput
-          testID="terminal-prompt-input"
-          style={styles.input}
-          editable={!busy}
-          secureTextEntry={prompt.kind === 'secret'}
-          autoCapitalize="none"
-          autoCorrect={false}
-          autoComplete="off"
-          value={typed}
-          onChangeText={setTyped}
-          onSubmitEditing={send}
-          placeholder={t(prompt.kind === 'secret' ? 'terminalPrompt.secretPlaceholder' : 'terminalPrompt.textPlaceholder')}
-          placeholderTextColor={palette.textFaint}
-          accessibilityLabel={t(prompt.kind === 'secret' ? 'terminalPrompt.secretPlaceholder' : 'terminalPrompt.textPlaceholder')}
-        />
+        <View style={styles.inputStack}>
+          {allowVoice ? (
+            <VoiceDictationBar
+              phase={voice.phase}
+              levels={voice.levels}
+              partial={voice.partial}
+              seconds={voice.seconds}
+              permissionDenied={voice.permissionDenied}
+              error={voice.error}
+              onStop={voice.stop}
+              onCancel={voice.cancel}
+              onOpenSettings={voice.openSettings}
+              onDismissPermission={voice.dismissPermission}
+              onDismissError={voice.dismissError}
+            />
+          ) : null}
+          <View style={styles.inputRow}>
+            <TextInput
+              testID="terminal-prompt-input"
+              style={styles.input}
+              editable={!busy}
+              secureTextEntry={prompt.kind === 'secret'}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="off"
+              value={typed}
+              onChangeText={setTyped}
+              onSubmitEditing={send}
+              placeholder={t(prompt.kind === 'secret' ? 'terminalPrompt.secretPlaceholder' : 'terminalPrompt.textPlaceholder')}
+              placeholderTextColor={palette.textFaint}
+              accessibilityLabel={t(prompt.kind === 'secret' ? 'terminalPrompt.secretPlaceholder' : 'terminalPrompt.textPlaceholder')}
+            />
+            {allowVoice ? (
+              <VoiceMicButton
+                phase={voice.phase}
+                disabled={busy}
+                compact
+                testID="terminal-prompt-mic"
+                onPressIn={voice.onPressIn}
+                onPressOut={voice.onPressOut}
+              />
+            ) : null}
+          </View>
+        </View>
       ) : null}
       {prompt.kind === 'secret' || prompt.kind === 'text' ? (
         <View style={styles.row}>
@@ -167,6 +205,8 @@ const makeStyles = (palette: Palette) =>
     },
     mono: { ...monoText, color: palette.text },
     marked: { fontWeight: '800' },
+    inputStack: { gap: spacing.xs },
+    inputRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
     input: {
       ...typeScale.body,
       backgroundColor: palette.surfaceRaised,
@@ -174,6 +214,7 @@ const makeStyles = (palette: Palette) =>
       borderRadius: radius.sm,
       borderWidth: 1,
       color: palette.text,
+      flex: 1,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.xs,
     },

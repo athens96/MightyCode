@@ -198,7 +198,15 @@ button { font: inherit; color: inherit; }
 .status-update { display: inline-flex; gap: var(--space-xs); border: 0; background: none; color: var(--accent); font-weight: 500; font-size: var(--type-small); padding: 0; }
 .status-divider { width: 1px; height: 12px; margin: 0 var(--space-xs); background: var(--line); }
 .status-chips { display: inline-flex; gap: var(--space-sm); border: 0; background: none; padding: 0; color: var(--ink2); font-size: var(--type-small); }
+.status-usage-group { display: inline-flex; align-items: center; gap: var(--space-xs); }
 .usage-chip { display: inline-flex; align-items: center; gap: var(--space-xs); height: 18px; padding: 0 var(--space-sm); border-radius: 9px; background: var(--card); font-variant-numeric: tabular-nums; }
+.status-usage-refresh {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; flex: none;
+  border: 0; border-radius: 9px; background: var(--card); color: var(--ink2); cursor: pointer;
+}
+.status-usage-refresh:hover:not(:disabled) { background: var(--card-raised); color: var(--ink); }
+.status-usage-refresh:disabled { color: var(--ink3); cursor: default; }
+.status-usage-refresh:focus-visible { outline: var(--stroke-focus) solid var(--accent); outline-offset: 1px; }
 /* The usage (kind D, the look of .popover in dialogs/dialog.css): 320 wide over the status bar's chips. */
 .usage-popover {
   position: absolute; right: var(--space-md); bottom: calc(100% + 4px); z-index: 20;
@@ -394,4 +402,29 @@ button { font: inherit; color: inherit; }
 .sidebar-server-names { display: flex; flex-direction: column; min-width: 0; flex: 1; gap: 1px; }
 .sidebar-server-title { font-size: var(--type-small); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-server-line { font-size: var(--type-small); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-server-actions { display: inline-flex; align-items: center; gap: var(--space-xxs); flex: none; }
+.sidebar-server-connect {
+  display: inline-flex; align-items: center; gap: var(--space-xs); flex: none;
+  height: 22px; padding: 0 var(--space-sm);
+  border: var(--stroke-line) solid color-mix(in srgb, var(--sidebar-accent) 32%, var(--line));
+  border-radius: var(--radius-segment);
+  background: var(--accent-soft); color: var(--sidebar-accent);
+  font-size: var(--type-small); font-weight: 600; white-space: nowrap; cursor: default;
+}
+.sidebar-server-connect:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--sidebar-accent) 20%, var(--card));
+  border-color: var(--sidebar-accent);
+}
+.sidebar-server-connect:focus-visible { outline: var(--stroke-focus) solid var(--accent); outline-offset: 1px; }
 .sidebar-server-menu { flex: none; }
+
+/* Floating hover tooltip (shell/autoTooltip.ts): theme-token surface, multi-line capable, never intercepts pointer events. */
+.ui-tooltip {
+  position: fixed; z-index: 120; max-width: 320px; padding: var(--space-xs) var(--space-sm); pointer-events: none;
+  border: var(--stroke-line) solid var(--line-strong); border-radius: var(--radius-segment);
+  background: var(--card); color: var(--ink); font-size: var(--type-small); line-height: 1.4; white-space: pre-line;
+  overflow-wrap: anywhere; box-shadow: 0 4px 14px rgba(0, 0, 0, .22);
+  opacity: 0; visibility: hidden; transition: opacity var(--motion-quick) var(--motion-easing);
+}
+.ui-tooltip.visible { opacity: 1; visibility: visible; }
+@media (prefers-reduced-motion: reduce) { .ui-tooltip { transition: none; } }

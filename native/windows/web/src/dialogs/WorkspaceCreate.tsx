@@ -58,7 +58,7 @@ function PathPreview({ labels, name, check }: { labels: CreateLabels; name: stri
 
 /** "새 폴더 만들기": a name, a location and an optional `git init`; the flow then adds the folder as Ctrl+O adds one. */
 export function NewFolder({ id, dialog, answer }: { id: number; dialog: Extract<DialogRequest, { type: 'newFolder' }>; answer: Answer }) {
-  const { bridge } = useServices();
+  const { bridge, t } = useServices();
   const { labels } = dialog;
   const fieldId = useId();
   const [name, setName] = useState('');
@@ -104,7 +104,7 @@ export function NewFolder({ id, dialog, answer }: { id: number; dialog: Extract<
         <span className="create-label">{labels.location}</span>
         <LocationRow labels={labels} location={location} onPick={setLocation} />
         <span />
-        <label className="create-check"><input type="checkbox" checked={gitInit} onChange={(event) => setGitInit(event.target.checked)} data-testid="workspace-new-folder-git-init" /> {labels.gitInit}</label>
+        <label className="create-check" title={t('tooltip.workspaceCreate.gitInit')}><input type="checkbox" title={t('tooltip.workspaceCreate.gitInit')} checked={gitInit} onChange={(event) => setGitInit(event.target.checked)} data-testid="workspace-new-folder-git-init" /> {labels.gitInit}</label>
       </fieldset>
       <PathPreview labels={labels} name={name} check={last} />
       {problem && <div className="sheet-caption tone-text-err" data-testid="workspace-create-problem">{problem}</div>}
@@ -127,7 +127,7 @@ function GitError({ kind, message, labels, onOpenSetup, testId }: { kind: string
  * 연결 확인), the folder name follows it until it is typed in, and 생성 clones with progress and cancel.
  */
 export function GitCreate({ id, dialog, answer }: { id: number; dialog: Extract<DialogRequest, { type: 'gitCreate' }>; answer: Answer }) {
-  const { bridge } = useServices();
+  const { bridge, t } = useServices();
   const { labels } = dialog;
   const urlId = useId();
   const nameId = useId();
@@ -216,7 +216,7 @@ export function GitCreate({ id, dialog, answer }: { id: number; dialog: Extract<
           {probe.state === 'reachable' && <span className="tone-text-done" data-testid="workspace-git-probe">{'✓ ' + labels.reachable}</span>}
           {probe.state === 'failed' && <GitError kind={probe.kind ?? null} message={probe.message ?? ''} labels={labels} onOpenSetup={openSetup} testId="workspace-git-probe" />}
           <span className="spacer" />
-          <button type="button" className="link-button" disabled={url.trim() === ''} data-testid="workspace-git-test"
+          <button type="button" className="link-button" title={t('tooltip.workspaceCreate.gitTest')} disabled={url.trim() === ''} data-testid="workspace-git-test"
             onClick={() => { probeNow.current = true; setProbeToken((token) => token + 1); }}>{labels.test}</button>
         </div>
         <span className="create-label">{labels.location}</span>

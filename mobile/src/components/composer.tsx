@@ -16,6 +16,8 @@ import { useBusyState } from '@/hooks/use-pending';
 import type { PendingState } from '@/lib/pending';
 import { busySendChoices } from '@/lib/send';
 import { formatBytes, type PickedFile, type UploadProgress } from '@/lib/uploads';
+import { appendDictatedMobileText } from '@/lib/voice';
+import { VoiceDictationBar, VoiceMicButton, useVoiceDictation } from '@/components/voice-dictation';
 import { cardShadow, radius, spacing, useStyles, usePalette, type Palette } from '@/theme';
 
 const IDLE_STATE: PendingState = { kind: 'idle' };
@@ -108,6 +110,12 @@ export function Composer({
   const stopState: PendingState = stopping ?? IDLE_STATE;
   const stopBars = usePendingShown(stopState);
   const stopLocked = stopState.kind === 'pending';
+  const textRef = useRef(text);
+  textRef.current = text;
+  const voice = useVoiceDictation({
+    disabled: disabled || sending,
+    onDictated: (dictated) => onChangeText(appendDictatedMobileText(textRef.current, dictated)),
+  });
 
   const matches = useMemo(() => {
     if (commands.length === 0) return [];
@@ -262,6 +270,20 @@ export function Composer({
       ) : null}
       {asking ? <Text style={styles.askWarning}>{t('composer.ask.unsandboxed', { name: ask?.name ?? '' })}</Text> : null}
 
+      <VoiceDictationBar
+        phase={voice.phase}
+        levels={voice.levels}
+        partial={voice.partial}
+        seconds={voice.seconds}
+        permissionDenied={voice.permissionDenied}
+        error={voice.error}
+        onStop={voice.stop}
+        onCancel={voice.cancel}
+        onOpenSettings={voice.openSettings}
+        onDismissPermission={voice.dismissPermission}
+        onDismissError={voice.dismissError}
+      />
+
       <View style={styles.row}>
         {attachments ? (
           <Pressable
@@ -289,6 +311,13 @@ export function Composer({
             style={styles.input}
             multiline
             editable={!disabled}
+          />
+          <VoiceMicButton
+            phase={voice.phase}
+            disabled={disabled || sending}
+            testID="composer-voice-mic"
+            onPressIn={voice.onPressIn}
+            onPressOut={voice.onPressOut}
           />
           {running ? (
             <Pressable

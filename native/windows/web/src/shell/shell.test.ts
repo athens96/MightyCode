@@ -6,9 +6,10 @@ import { translator } from '../i18n/locale';
 import { Store } from '../store/store';
 import { StatusBar } from './Chrome';
 import { filterWorkspaces } from './filter';
-import { isMenuPush } from './menu';
+import { isMenuPush, runAction } from './menu';
 import { nextMenuItem } from './parts';
 import { Shell } from './Shell';
+import { Sidebar } from './Sidebar';
 import { macShortcutAction, shortcutAction } from './shortcuts';
 import type { ShellModel } from './types';
 import { TerminalView } from '../panes/terminal/TerminalView';
@@ -75,8 +76,34 @@ describe("the Mac's shortcuts and menu (D9, the Rust host on macOS only)", () =>
   });
   it("takes only the menu's actions from the host", () => {
     expect(isMenuPush({ kind: 'menu', action: 'workMap' } as { kind: string })).toBe(true);
+    expect(isMenuPush({ kind: 'menu', action: 'newCodexPane' } as { kind: string })).toBe(true);
+    expect(isMenuPush({ kind: 'menu', action: 'newAntigravityPane' } as { kind: string })).toBe(true);
+    expect(isMenuPush({ kind: 'menu', action: 'dashboard' } as { kind: string })).toBe(true);
+    expect(isMenuPush({ kind: 'menu', action: 'layoutGrid' } as { kind: string })).toBe(true);
+    expect(isMenuPush({ kind: 'menu', action: 'layoutColumns' } as { kind: string })).toBe(true);
+    expect(isMenuPush({ kind: 'menu', action: 'layoutFocus' } as { kind: string })).toBe(true);
+    expect(isMenuPush({ kind: 'menu', action: 'layoutTabs' } as { kind: string })).toBe(true);
     expect(isMenuPush({ kind: 'menu', action: 'quit' } as { kind: string })).toBe(false);
     expect(isMenuPush({ kind: 'host' })).toBe(false);
+  });
+  it('routes agent creation, dashboard toggle, and layout presets from menu actions', () => {
+    const calls: Array<[string, unknown]> = [];
+    const call = (method: string, args?: unknown) => { calls.push([method, args]); return Promise.resolve(null); };
+    const snap = { sidebarCollapsed: false, activeWorkspaceId: 'ws-1', workspaces: [], sessions: [] } as unknown as Parameters<typeof runAction>[2];
+    runAction('newCodexPane', call, snap, () => {});
+    runAction('newAntigravityPane', call, snap, () => {});
+    runAction('dashboard', call, snap, () => {}, false);
+    runAction('dashboard', call, snap, () => {}, true);
+    runAction('layoutGrid', call, snap, () => {});
+    runAction('layoutTabs', call, snap, () => {});
+    expect(calls).toEqual([
+      ['newPane', { kind: 'claude', provider: 'codex' }],
+      ['newPane', { kind: 'claude', provider: 'gemini' }],
+      ['showDashboard', undefined],
+      ['hideDashboard', undefined],
+      ['applyLayoutPreset', { preset: 'grid' }],
+      ['applyLayoutPreset', { preset: 'tabs' }],
+    ]);
   });
 });
 
@@ -120,6 +147,34 @@ describe('usage reset link validation (Chrome.tsx)', () => {
     const invalid = renderStatus('javascript:alert(1)');
     expect(invalid).toMatch(/<button[^>]*disabled=""[^>]*>Open guide<\/button>/);
   });
+
+  it('renders a compact status-bar usage refresh button beside usage chips', () => {
+    const shell = {
+      status: {
+        machine: 'local',
+        panes: '1',
+        running: '0',
+        chips: [{ provider: 'codex', name: 'Codex 세션 20%', words: [{ text: '세션 20%', warning: false }] }],
+        chipsTitle: 'Account usage',
+        chipsTooltip: 'Show account usage',
+      },
+      usage: {
+        title: 'Usage',
+        refreshLabel: 'Refresh usage',
+        refreshTooltip: 'Refresh account usage now',
+        refreshing: false,
+        shared: '',
+        cards: [],
+      },
+    } as unknown as ShellModel;
+    const html = renderToStaticMarkup(
+      createElement(ServicesContext.Provider, { value: services },
+        createElement(StatusBar, { shell, usageOpen: false, setUsageOpen: () => {} })),
+    );
+    expect(html).toContain('data-testid="usage-chips"');
+    expect(html).toContain('data-testid="status-usage-refresh"');
+    expect(html).toContain('title="Refresh account usage now"');
+  });
 });
 
 describe('MenuHost keyboard navigation & unconditional hooks', () => {
@@ -153,5 +208,48 @@ describe('MenuHost keyboard navigation & unconditional hooks', () => {
       createElement(ServicesContext.Provider, { value: services }, createElement(TerminalView, { session })),
     );
     expect(termHtml).toContain('data-testid="terminal-pane"');
+  });
+});
+
+describe('Sidebar remote server connect button', () => {
+  it('renders an inline icon connect button for disconnected saved servers and hides it once connected', () => {
+    const store = new Store();
+    const counts = { questions: 0, permissions: 0, errors: 0, running: 0, done: 0, stopped: 0, idle: 0 };
+    store.dispatch({
+      kind: 'snapshot',
+      snapshot: { workspaces: [], sessions: [], theme: 'dark' } as unknown as Parameters<Store['dispatch']>[0] extends { kind: 'snapshot'; snapshot: infer S } ? S : never,
+    });
+    store.dispatch({
+      kind: 'shell',
+      shell: {
+        version: '0.5.8',
+        dialogOpen: false,
+        panes: [],
+        entry: counts,
+        workspaces: [],
+        servers: [
+          { id: 'studio', title: '원격 · studio', line: '100.64.0.2:43137 · 연결 전', state: '연결 전', tone: 'idle', connected: false, known: true, help: '' },
+          { id: 'laptop', title: '원격 · laptop', line: '100.64.0.3:43137 · 연결됨', state: '연결됨', tone: 'done', connected: true, known: true, help: '' },
+          { id: 'orphan', title: '원격 · orphan', line: '', state: '', tone: 'idle', connected: false, known: false, help: '' },
+        ],
+        status: { machine: 'local', panes: '0', running: '0', updateHelp: '', setup: false, chipsTitle: '', chipsTooltip: '' },
+        setupNeeded: false,
+      },
+    });
+    const services = {
+      bridge: { call: () => Promise.resolve(null) },
+      store,
+      t: translator([{ 'remote.mirror.connect': '연결', 'tooltip.sidebar.serverConnect': '{server} 연결' }]),
+    } as unknown as AppServices;
+
+    const html = renderToStaticMarkup(
+      createElement(ServicesContext.Provider, { value: services }, createElement(Sidebar)),
+    );
+    expect(html).toContain('data-testid="sidebar-remote-server-connect-studio"');
+    expect(html).toMatch(/data-testid="sidebar-remote-server-connect-studio"><svg class="icon"[^>]*>.*<span>연결<\/span><\/button>/);
+    expect(html).not.toContain('data-testid="sidebar-remote-server-connect-laptop"');
+    expect(html).not.toContain('data-testid="sidebar-remote-server-connect-orphan"');
+    expect(html).toContain('data-testid="sidebar-remote-server-menu-studio"');
+    expect(html).toContain('data-testid="sidebar-remote-server-menu-laptop"');
   });
 });

@@ -72,7 +72,7 @@ function useShortcuts(blocked: boolean) {
       // The Mac in the Rust host (D9): ⌘ is the modifier, and a Ctrl key is the text field's.
       const action = import.meta.env.MODE === 'tauri' && macHost() ? macShortcutAction(event) : shortcutAction(event);
       const snapshot = store.getState().snapshot;
-      if (!action || blockedRef.current || !snapshot) return;
+      if (!action || (blockedRef.current && action !== 'help') || !snapshot) return;
       event.preventDefault();
       switch (action) {
         case 'openFolder': return call('pickFolder');

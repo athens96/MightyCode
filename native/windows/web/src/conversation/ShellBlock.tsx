@@ -79,7 +79,7 @@ function ShellBlockAction({ paneId, runKey, command, record, busy }: { paneId: s
       </span>
       <span className={'shell-block-state' + (square === 'err' ? ' failed' : square === 'run' ? ' running' : '')} role="status" aria-live="polite">{word}</span>
       {record.state === 'running'
-        ? <button type="button" className="shell-block-link" onClick={stop}>{t('run.shellBlock.stop')}</button>
+        ? <button type="button" className="shell-block-link" title={t('tooltip.shellBlock.stop')} onClick={stop}>{t('run.shellBlock.stop')}</button>
         : again(t('run.shellBlock.again'))}
     </span>
   );

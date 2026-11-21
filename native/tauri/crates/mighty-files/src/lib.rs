@@ -15,6 +15,7 @@
 pub mod changes;
 pub mod classify;
 pub mod diff;
+pub mod edit;
 pub mod frames;
 pub mod listing;
 pub mod model;

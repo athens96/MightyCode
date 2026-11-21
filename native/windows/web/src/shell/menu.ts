@@ -9,8 +9,12 @@ import type { ShortcutAction } from './shortcuts';
 import { sidebarSearchId } from './Sidebar';
 import { toggleReview } from '../review/queue';
 
-/** The page's actions the menu reaches: its shortcuts' and the four items that have no key. */
-export type MenuAction = ShortcutAction | 'newFolder' | 'fromGit' | 'workMap' | 'usage';
+/** The page's actions the menu reaches: its shortcuts' and the menu-only items. */
+export type MenuAction =
+  | ShortcutAction
+  | 'newFolder' | 'fromGit' | 'newCodexPane' | 'newAntigravityPane'
+  | 'dashboard' | 'layoutGrid' | 'layoutColumns' | 'layoutFocus' | 'layoutTabs'
+  | 'workMap' | 'usage';
 
 /** host → page. */
 export interface MenuPush {
@@ -19,8 +23,9 @@ export interface MenuPush {
 }
 
 const actions: readonly string[] = [
-  'openFolder', 'newPane', 'search', 'toggleSidebar', 'newShell', 'settings', 'files', 'help', 'textLarger', 'textSmaller', 'textReset',
-  'conversationSearch', 'reviewQueue', 'newFolder', 'fromGit', 'workMap', 'usage',
+  'openFolder', 'newPane', 'newCodexPane', 'newAntigravityPane', 'search', 'toggleSidebar', 'newShell', 'settings', 'files', 'help',
+  'textLarger', 'textSmaller', 'textReset', 'conversationSearch', 'reviewQueue', 'newFolder', 'fromGit',
+  'dashboard', 'layoutGrid', 'layoutColumns', 'layoutFocus', 'layoutTabs', 'workMap', 'usage',
 ];
 
 export function isMenuPush(message: { kind: string }): message is MenuPush {
@@ -40,16 +45,23 @@ export function macHost(): boolean {
 
 type Call = (method: string, args?: unknown) => Promise<unknown>;
 
-/** One action, as the window's shortcut runs it (Shell.tsx's `useShortcuts`), and the menu's four more. */
-export function runAction(action: MenuAction, call: Call, snapshot: AppSnapshot, openUsage: () => void): void {
+/** One action, as the window's shortcut runs it (Shell.tsx's `useShortcuts`), and the menu's items without a key. */
+export function runAction(action: MenuAction, call: Call, snapshot: AppSnapshot, openUsage: () => void, showsDashboard = false): void {
   const run = (method: string, args?: unknown) => void call(method, args);
   switch (action) {
     case 'openFolder': return run('pickFolder');
     case 'newFolder': return run('workspaceCreate', { kind: 'newFolder' });
     case 'fromGit': return run('workspaceCreate', { kind: 'fromGit' });
     case 'newPane': return run('newPane', { kind: 'claude' });
+    case 'newCodexPane': return run('newPane', { kind: 'claude', provider: 'codex' });
+    case 'newAntigravityPane': return run('newPane', { kind: 'claude', provider: 'gemini' });
     case 'newShell': return run('newPane', { kind: 'shell' });
     case 'toggleSidebar': return run('setSidebarCollapsed', { collapsed: !snapshot.sidebarCollapsed });
+    case 'dashboard': return run(showsDashboard ? 'hideDashboard' : 'showDashboard');
+    case 'layoutGrid': return run('applyLayoutPreset', { preset: 'grid' });
+    case 'layoutColumns': return run('applyLayoutPreset', { preset: 'columns' });
+    case 'layoutFocus': return run('applyLayoutPreset', { preset: 'focus' });
+    case 'layoutTabs': return run('applyLayoutPreset', { preset: 'tabs' });
     case 'search': {
       const focus = () => { const field = document.getElementById(sidebarSearchId) as HTMLInputElement | null; field?.focus(); field?.select(); };
       if (snapshot.sidebarCollapsed) void call('setSidebarCollapsed', { collapsed: false }).then(() => requestAnimationFrame(focus));
@@ -69,7 +81,7 @@ export function runAction(action: MenuAction, call: Call, snapshot: AppSnapshot,
   }
 }
 
-/** The menu's pushes run while the shell is up; none while a sheet, a native view or the picture viewer is open, or before the state. */
+/** The menu's pushes run while the shell is up; none while a sheet, a native view or the picture viewer is open (except Help). */
 export function useMenu(blocked: boolean, setUsageOpen: (open: boolean) => void): void {
   const { bridge, store } = useServices();
   const state = useRef({ blocked, setUsageOpen });
@@ -78,10 +90,11 @@ export function useMenu(blocked: boolean, setUsageOpen: (open: boolean) => void)
     if (import.meta.env.MODE !== 'tauri' && import.meta.env.MODE !== 'test') return;
     const call: Call = (method, args) => bridge.call(method, args).catch(() => undefined);
     const listener = (action: MenuAction) => {
-      const current = store.getState().snapshot;
+      const storeState = store.getState();
+      const current = storeState.snapshot;
       const { blocked: held, setUsageOpen: usage } = state.current;
-      if (!macHost() || held || !current) return;
-      runAction(action, call, current, () => usage(true));
+      if (!macHost() || (held && action !== 'help') || !current) return;
+      runAction(action, call, current, () => usage(true), Boolean(storeState.shell?.dashboard));
     };
     listeners.add(listener);
     return () => { listeners.delete(listener); };

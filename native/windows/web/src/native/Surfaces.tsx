@@ -79,9 +79,10 @@ function useCollapse(element: RefObject<HTMLDivElement | null>, reset: unknown, 
 
 /** A pane's bar: its title (shown once the large one has scrolled away) and the window's ✕; its double-click fits the window. */
 function SettingsBar({ title, shown, onClose, closeLabel }: { title?: string; shown: boolean; onClose?: () => void; closeLabel?: string }) {
+  const { t } = useServices();
   const fit = useFitToggle();
   return (
-    <div className={'native-settings-bar' + (shown ? ' collapsed' : '')} onDoubleClick={(event) => { if (fit && !(event.target as Element).closest('button')) fit(); }}>
+    <div className={'native-settings-bar' + (shown ? ' collapsed' : '')} title={fit ? t('tooltip.dialog.doubleClickFit') : undefined} onDoubleClick={(event) => { if (fit && !(event.target as Element).closest('button')) fit(); }}>
       <span className="native-settings-bar-title" style={{ opacity: shown ? 1 : 0 }}>{title}</span>
       {onClose && <span className="native-settings-close" title={closeLabel}><CloseButton onClose={onClose} testId="settings-close" /></span>}
     </div>
@@ -96,6 +97,7 @@ function SettingsBar({ title, shown, onClose, closeLabel }: { title?: string; sh
  * pattern (native.css). Every control is the host's (NativeNode), restyled only.
  */
 function Settings({ open, view, call, top }: { open: NativeOpen; view: NativeView; call: (method: string, args?: object) => void; top: boolean }) {
+  const { t } = useServices();
   const form = useRef<HTMLDivElement>(null);
   // A new category starts at its top, as the WinUI form's scroll does.
   useEffect(() => { form.current?.scrollTo({ top: 0 }); }, [view.selected]);
@@ -112,7 +114,7 @@ function Settings({ open, view, call, top }: { open: NativeOpen; view: NativeVie
           {groupCategories(view.nav ?? []).map((group, index) => (
             <div key={index} className="native-settings-card">
               {group.map((item) => (
-                <button key={item.id} type="button" className={'native-nav-row' + (item.id === view.selected ? ' selected' : '')} aria-current={item.id === view.selected ? 'page' : undefined}
+                <button key={item.id} type="button" className={'native-nav-row' + (item.id === view.selected ? ' selected' : '')} title={t('tooltip.settings.category', { title: item.title })} aria-current={item.id === view.selected ? 'page' : undefined}
                   data-category={item.id} onClick={() => call('nativeNav', { view: open.id, id: item.id })}>
                   <span className="native-nav-tile" aria-hidden="true" style={{ background: categoryTone[item.id] ?? 'var(--accent)' }}>
                     {categorySymbol[item.id] ? <Icon name={categorySymbol[item.id]!} size={settings.navGlyph} weight={2} /> : glyphIcon(item.glyph) ? <Icon name={glyphIcon(item.glyph)!} size={settings.navGlyph} weight={2} /> : <span className="native-glyph">{item.glyph}</span>}

@@ -1,10 +1,12 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { MobilePermission, PlanDecisionKind } from '@/api/types';
 import { AssistantMarkdown } from '@/components/assistant-markdown';
 import { Button } from '@/components/ui';
+import { VoiceDictationBar, VoiceMicButton, useVoiceDictation } from '@/components/voice-dictation';
 import { t } from '@/lib/i18n';
 import { canSendRevise, feedbackTooLong, receivedText } from '@/lib/plan';
+import { appendDictatedMobileText } from '@/lib/voice';
 import { cardShadow, radius, spacing, typeScale, useStyles, usePalette, type Palette } from '@/theme';
 
 /**
@@ -29,6 +31,12 @@ export function PlanCard({
   const palette = usePalette();
   const [revising, setRevising] = useState(false);
   const [feedback, setFeedback] = useState('');
+  const feedbackRef = useRef(feedback);
+  feedbackRef.current = feedback;
+  const voice = useVoiceDictation({
+    disabled: busy,
+    onDictated: (dictated) => setFeedback(appendDictatedMobileText(feedbackRef.current, dictated)),
+  });
   const received = receivedText(permission.receivedAt);
 
   return (
@@ -43,17 +51,40 @@ export function PlanCard({
 
       {revising ? (
         <View style={styles.revise}>
-          <TextInput
-            testID="plan-revise-text"
-            style={styles.input}
-            multiline
-            editable={!busy}
-            value={feedback}
-            onChangeText={setFeedback}
-            placeholder={t('plan.card.revisePlaceholder')}
-            placeholderTextColor={palette.textFaint}
-            accessibilityLabel={t('plan.card.revisePlaceholder')}
+          <VoiceDictationBar
+            phase={voice.phase}
+            levels={voice.levels}
+            partial={voice.partial}
+            seconds={voice.seconds}
+            permissionDenied={voice.permissionDenied}
+            error={voice.error}
+            onStop={voice.stop}
+            onCancel={voice.cancel}
+            onOpenSettings={voice.openSettings}
+            onDismissPermission={voice.dismissPermission}
+            onDismissError={voice.dismissError}
           />
+          <View style={styles.inputRow}>
+            <TextInput
+              testID="plan-revise-text"
+              style={styles.input}
+              multiline
+              editable={!busy}
+              value={feedback}
+              onChangeText={setFeedback}
+              placeholder={t('plan.card.revisePlaceholder')}
+              placeholderTextColor={palette.textFaint}
+              accessibilityLabel={t('plan.card.revisePlaceholder')}
+            />
+            <VoiceMicButton
+              phase={voice.phase}
+              disabled={busy}
+              compact
+              testID="plan-revise-mic"
+              onPressIn={voice.onPressIn}
+              onPressOut={voice.onPressOut}
+            />
+          </View>
           {feedbackTooLong(feedback) ? (
             <Text style={styles.error} testID="plan-revise-too-long">
               {t('plan.error.feedbackTooLong')}
@@ -142,6 +173,7 @@ const makeStyles = (palette: Palette) =>
     },
     received: { color: palette.textMuted, fontSize: 12 },
     revise: { gap: spacing.sm },
+    inputRow: { alignItems: 'flex-end', flexDirection: 'row', gap: spacing.sm },
     input: {
       ...typeScale.body,
       backgroundColor: palette.surfaceRaised,
@@ -149,6 +181,7 @@ const makeStyles = (palette: Palette) =>
       borderRadius: radius.sm,
       borderWidth: 1,
       color: palette.text,
+      flex: 1,
       maxHeight: 120,
       minHeight: 56,
       paddingHorizontal: spacing.sm,

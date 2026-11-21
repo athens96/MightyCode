@@ -97,12 +97,13 @@ export function MightyView({ session }: { session: RunSession }) {
         <span className="mighty-switch" role="group" aria-label={t('graph.view.switch')}>
           {(['diagram', 'timeline', 'structure'] as const).map((mode) => (
             <button key={mode} type="button" className={mode === presentation ? 'on' : ''} data-presentation={mode}
+              title={t(mode === 'diagram' ? 'tooltip.mighty.modeDiagram' : mode === 'timeline' ? 'tooltip.mighty.modeTimeline' : 'tooltip.mighty.modeStructure')}
               onClick={() => { if (mode !== presentation) choose({ presentation: mode }); }}>
               <Icon name={mode === 'diagram' ? 'share-2' : mode === 'timeline' ? 'list' : 'columns-3'} size={12} weight={2} />{t('graph.view.' + mode)}
             </button>
           ))}
         </span>
-        <span className="mighty-header">{mighty.inputs?.header ?? t('graph.view.mighty')}</span>
+        <span className="mighty-header" title={t('tooltip.mighty.header')}>{mighty.inputs?.header ?? t('graph.view.mighty')}</span>
         <span className="mighty-summary" title={mighty.inputs?.summaryHelp} data-testid="mighty-summary">{mighty.inputs?.summary ?? ''}</span>
       </div>
       {presentation === 'diagram' ? <Diagram session={session} mighty={mighty} memory={memory} aim={aim} onAimed={aimed} pending={pending} own={own} />

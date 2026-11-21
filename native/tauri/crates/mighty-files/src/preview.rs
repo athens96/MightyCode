@@ -21,6 +21,7 @@ pub struct PreviewData {
     pub kind: PreviewKind,
     pub text: Option<String>,
     pub encoding: Option<TextEncodingKind>,
+    pub disk_hash: Option<String>,
     pub truncated: bool,
     pub markdown_renderable: bool,
     pub image_bytes: Option<Vec<u8>>,
@@ -39,6 +40,7 @@ impl PreviewData {
             kind,
             text: None,
             encoding: None,
+            disk_hash: None,
             truncated: false,
             markdown_renderable: false,
             image_bytes: None,
@@ -100,9 +102,15 @@ fn read(
         }
         PreviewKind::Source(_) | PreviewKind::Markdown => {
             let text = classify::read_text(file, classify::MAXIMUM_TEXT_BYTES)?;
+            let disk_hash = if !text.truncated && size <= classify::MAXIMUM_TEXT_BYTES as u64 {
+                classify::read_prefix(file, classify::MAXIMUM_TEXT_BYTES).ok().map(|raw| crate::edit::disk_hash(&raw))
+            } else {
+                None
+            };
             PreviewData {
                 text: Some(text.text),
                 encoding: Some(text.encoding),
+                disk_hash,
                 truncated: text.truncated,
                 markdown_renderable: kind == PreviewKind::Markdown && size <= classify::MAXIMUM_MARKDOWN_RENDER_BYTES,
                 ..PreviewData::new(name, relative, size, modified, kind)

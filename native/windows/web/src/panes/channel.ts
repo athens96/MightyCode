@@ -23,13 +23,25 @@ export interface FilesPush {
   path: string;
 }
 
-export type PanePush = TerminalPush | WorkMapPush | FilesPush;
+/** Live voice dictation events from `src-tauri/src/voice.rs` (`MC-4`). */
+export interface VoicePush {
+  kind: 'voice';
+  paneId: string;
+  state: 'recording' | 'level' | 'partial' | 'transcribing' | 'result' | 'cancelled' | 'permissionDenied' | 'error';
+  level?: number;
+  text?: string;
+  engine?: string;
+  error?: string;
+  permissionKind?: string;
+}
+
+export type PanePush = TerminalPush | WorkMapPush | FilesPush | VoicePush;
 
 type Listener = (message: PanePush) => void;
 const listeners = new Map<string, Set<Listener>>();
 
 export function isPanePush(message: { kind: string }): message is PanePush {
-  return message.kind === 'terminal' || message.kind === 'workmap' || message.kind === 'files';
+  return message.kind === 'terminal' || message.kind === 'workmap' || message.kind === 'files' || message.kind === 'voice';
 }
 
 /** Listens for one pane's pushes of one kind until the returned function is called. */

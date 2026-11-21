@@ -21,8 +21,8 @@ export function Banners({ shell }: { shell: ShellModel }) {
       {shell.countdown && (
         <div className="banner banner-update" data-testid="update-countdown">
           <span className="banner-text">{shell.countdown}</span>
-          <button type="button" className="plain-button" onClick={() => call('postponeUpdate')}>{t('appUpdate.countdown.later')}</button>
-          <button type="button" className="accent-button" onClick={() => call('restartForUpdate')}>{t('appUpdate.countdown.restartNow')}</button>
+          <button type="button" className="plain-button" title={t('tooltip.update.later')} onClick={() => call('postponeUpdate')}>{t('appUpdate.countdown.later')}</button>
+          <button type="button" className="accent-button" title={t('tooltip.update.restartNow')} onClick={() => call('restartForUpdate')}>{t('appUpdate.countdown.restartNow')}</button>
         </div>
       )}
       {shell.resource && (
@@ -63,16 +63,16 @@ export function WorkspaceHeader({ header, counts, layoutMode }: { header: Header
       <SidebarToggle />
       <div className="workspace-header-text">
         <div className="workspace-header-line">
-          <span className="workspace-header-name">{header.name}</span>
-          {header.remoteHost && <span className="capsule quiet">{header.remoteHost}</span>}
+          <span className="workspace-header-name" title={t('tooltip.header.workspaceName')}>{header.name}</span>
+          {header.remoteHost && <span className="capsule quiet" title={t('tooltip.header.remoteHost', { host: header.remoteHost })}>{header.remoteHost}</span>}
         </div>
         <div className="workspace-header-line">
-          <span onContextMenu={(event) => menu.atPointer(event, copy)} className="workspace-header-path-box"><MiddlePath path={header.path} className="workspace-header-path mono" /></span>
+          <span onContextMenu={(event) => menu.atPointer(event, copy)} className="workspace-header-path-box" title={header.path + '\n' + t('tooltip.header.workspacePath')}><MiddlePath path={header.path} className="workspace-header-path mono" /></span>
           {header.git && <GitCapsule git={header.git} />}
         </div>
       </div>
       {counts && <StatusCounts counts={counts} long />}
-      <button type="button" className="icon-button header-icon-button" title={layoutLabel} aria-label={layoutLabel} data-testid="layout-select"
+      <button type="button" className="icon-button header-icon-button" title={t('tooltip.header.layout', { mode: layoutLabel })} aria-label={layoutLabel} data-testid="layout-select"
         onClick={(event) => menu.under(event.currentTarget, presets)}><Icon name="layout-grid" size={15} weight={1.5} /></button>
       <button type="button" className="icon-button header-icon-button" disabled={!header.filesEnabled} title={header.filesHelp} aria-label={t('menu.showFiles')} data-testid="open-files"
         onClick={() => call('openFiles', { workspaceId: header.id })}><Icon name="folder" size={16} weight={1.5} /></button>
@@ -125,7 +125,7 @@ function UsagePopover({ usage, onClose }: { usage: UsageDetails; onClose: () => 
               <div className="usage-reset">
                 <div className="strong">{card.reset.title}</div>
                 {card.reset.rows.map((row) => <div key={row.program}><div className="quiet small">{row.label}</div><div>{row.text}</div></div>)}
-                <button type="button" className="link-button" disabled={!resetUrl} onClick={() => { if (resetUrl) call('openUrl', { url: resetUrl }); }}>{card.reset.link}</button>
+                <button type="button" className="link-button" title={resetUrl ?? undefined} disabled={!resetUrl} onClick={() => { if (resetUrl) call('openUrl', { url: resetUrl }); }}>{card.reset.link}</button>
               </div>
             )}
             {card.checkedAt && <div className="tertiary small">{card.checkedAt}</div>}
@@ -133,9 +133,9 @@ function UsagePopover({ usage, onClose }: { usage: UsageDetails; onClose: () => 
         );
       })}
       {usage.direct && (
-        <label className="usage-direct">
+        <label className="usage-direct" title={usage.direct.description}>
           <span><span>{usage.direct.label}</span><span className="quiet small">{usage.direct.description}</span></span>
-          <input type="checkbox" role="switch" checked={usage.direct.on} onChange={(event) => call('usageDirect', { on: event.target.checked })} />
+          <input type="checkbox" role="switch" title={usage.direct.description} checked={usage.direct.on} onChange={(event) => call('usageDirect', { on: event.target.checked })} />
         </label>
       )}
       <div className="quiet small">{usage.shared}</div>
@@ -153,31 +153,39 @@ export function StatusBar({ shell, usageOpen, setUsageOpen }: { shell: ShellMode
         ? <Icon name="monitor" size={12} weight={1.75} />
         : <span className={'status-remote-dot' + (status.remote ? ' connected' : '')} />}
       {/* A mirror workspace's words: "원격 · {host}에서 실행 중 · {state}" (M/WorkspaceView.swift status-remote-host). */}
-      <span className="status-machine" title={status.remote === undefined ? undefined : status.mirror ?? status.machine} data-testid="status-machine">{status.mirror ?? status.machine}</span>
+      <span className="status-machine" title={status.remote === undefined ? t('tooltip.status.localMachine') : status.mirror ?? status.machine} data-testid="status-machine">{status.mirror ?? status.machine}</span>
       <span className="spacer" />
-      <span data-testid="status-panes">{status.panes}</span>
+      <span data-testid="status-panes" title={t('tooltip.status.panes')}>{status.panes}</span>
       <span className="status-dot-sep">·</span>
-      <span data-testid="status-running">{status.running}</span>
+      <span data-testid="status-running" title={t('tooltip.status.running')}>{status.running}</span>
       {status.update && <button type="button" className="status-update" title={status.updateHelp} onClick={() => call('openSettings')}>{status.update}</button>}
       {status.staged && (
         <span className="status-update">
           {status.staged}
-          <button type="button" className="link-button" onClick={() => call('restartForUpdate')}>{t('window.status.updateRestartNow')}</button>
+          <button type="button" className="link-button" title={t('tooltip.update.restartNow')} onClick={() => call('restartForUpdate')}>{t('window.status.updateRestartNow')}</button>
         </span>
       )}
-      {status.setup && <button type="button" className="status-update" onClick={() => call('openSetup')}>{t('setup.finishedBadge')}</button>}
+      {status.setup && <button type="button" className="status-update" title={t('tooltip.status.setup')} onClick={() => call('openSetup')}>{t('setup.finishedBadge')}</button>}
       {status.chips && (
         <>
           <span className="status-divider" />
-          <button type="button" className="status-chips" data-usage-chips aria-label={status.chipsTitle} title={status.chipsTooltip} aria-expanded={usageOpen}
-            onClick={() => setUsageOpen(!usageOpen)} data-testid="usage-chips">
-            {status.chips.map((chip) => (
-              <span key={chip.provider} className="usage-chip" aria-label={chip.name}>
-                <ProviderMark provider={chip.provider} size={10} />
-                {chip.words.map((word, index) => <span key={index} className={word.warning ? 'tone-text-wait' : ''}>{word.text}</span>)}
-              </span>
-            ))}
-          </button>
+          <span className="status-usage-group">
+            <button type="button" className="status-chips" data-usage-chips aria-label={status.chipsTitle} title={status.chipsTooltip} aria-expanded={usageOpen}
+              onClick={() => setUsageOpen(!usageOpen)} data-testid="usage-chips">
+              {status.chips.map((chip) => (
+                <span key={chip.provider} className="usage-chip" aria-label={chip.name}>
+                  <ProviderMark provider={chip.provider} size={10} />
+                  {chip.words.map((word, index) => <span key={index} className={word.warning ? 'tone-text-wait' : ''}>{word.text}</span>)}
+                </span>
+              ))}
+            </button>
+            <button type="button" className="status-usage-refresh" data-usage-chips disabled={Boolean(shell.usage?.refreshing)}
+              aria-label={shell.usage?.refreshLabel ?? t('windows.accountUsage.refreshAccessibilityLabel')}
+              title={shell.usage?.refreshTooltip ?? t('windows.accountUsage.refreshTooltip')}
+              data-testid="status-usage-refresh" onClick={() => call('usageRefresh', { force: true })}>
+              {shell.usage?.refreshing ? <Pending busy showsLabel={false} /> : <Icon name="refresh-cw" size={11} weight={2} />}
+            </button>
+          </span>
         </>
       )}
       {shell.companion && (

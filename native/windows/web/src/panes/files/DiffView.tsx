@@ -95,11 +95,11 @@ export const DiffView = memo(function DiffView({ changes, name, onLine, onOpenLi
     <div className="files-diff" data-testid="files-diff">
       <div className="files-diff-caption">
         <span>{caption}</span>
-        <span className="files-diff-count added">+{changes.added}</span>
-        <span className="files-diff-count removed">−{changes.removed}</span>
+        <span className="files-diff-count added" title={t('tooltip.diff.counts', { added: changes.added, removed: changes.removed })}>+{changes.added}</span>
+        <span className="files-diff-count removed" title={t('tooltip.diff.counts', { added: changes.added, removed: changes.removed })}>−{changes.removed}</span>
         <span className="files-diff-layout" role="group" aria-label={t('files.changes.layout')}>
-          <button type="button" className={layout === 'unified' ? 'chosen' : ''} aria-pressed={layout === 'unified'} onClick={() => choose('unified')}>{t('files.changes.unified')}</button>
-          <button type="button" className={layout === 'split' ? 'chosen' : ''} aria-pressed={layout === 'split'} onClick={() => choose('split')}>{t('files.changes.split')}</button>
+          <button type="button" className={layout === 'unified' ? 'chosen' : ''} title={t('tooltip.diff.unified')} aria-pressed={layout === 'unified'} onClick={() => choose('unified')}>{t('files.changes.unified')}</button>
+          <button type="button" className={layout === 'split' ? 'chosen' : ''} title={t('tooltip.diff.split')} aria-pressed={layout === 'split'} onClick={() => choose('split')}>{t('files.changes.split')}</button>
         </span>
       </div>
       {changes.truncated && <div className="files-banner">{t('files.changes.truncated')}</div>}

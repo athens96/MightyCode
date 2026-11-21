@@ -103,9 +103,9 @@ export function RunSettingsPopover({ paneId, info, busy = info.held, close }: { 
         </section>
         {info.webSearch && (
           <section>
-            <label className="popover-field">
+            <label className="popover-field" title={t('tooltip.runSettings.webSearch')}>
               <span>{t('settings.run.webSearchLabel')}</span>
-              <select value={values.webSearch} onChange={(event) => set({ webSearch: event.target.value })}>
+              <select title={t('tooltip.runSettings.webSearch')} value={values.webSearch} onChange={(event) => set({ webSearch: event.target.value })}>
                 {[['default', 'settings.run.webSearchDefault'], ['disabled', 'settings.run.webSearchOff'], ['cached', 'settings.run.webSearchCached'], ['live', 'settings.run.webSearchLive']].map(([value, key]) => <option key={value} value={value}>{t(key!)}</option>)}
               </select>
             </label>
@@ -114,9 +114,9 @@ export function RunSettingsPopover({ paneId, info, busy = info.held, close }: { 
         )}
         {info.networkAccess && (
           <section>
-            <label className="popover-field">
+            <label className="popover-field" title={t('tooltip.runSettings.network')}>
               <span>{t('settings.run.shellNetworkToggle')}</span>
-              <input type="checkbox" role="switch" checked={values.networkAccess} disabled={!info.networkAllowed} onChange={(event) => set({ networkAccess: event.target.checked })} />
+              <input type="checkbox" role="switch" title={t('tooltip.runSettings.network')} checked={values.networkAccess} disabled={!info.networkAllowed} onChange={(event) => set({ networkAccess: event.target.checked })} />
             </label>
             <div className="popover-quiet">{info.networkNote}</div>
           </section>
@@ -124,15 +124,15 @@ export function RunSettingsPopover({ paneId, info, busy = info.held, close }: { 
         {(info.maxTurns || info.maxBudgetUsd) && (
           <section>
             <div className="popover-strong">{t('settings.run.limitsTitle')}</div>
-            {info.maxTurns && <label className="popover-stack"><span>{t('settings.run.maxTurnsLabel')}</span><input inputMode="numeric" value={values.maxTurns} placeholder={t('settings.run.unlimitedPlaceholder')} onChange={(event) => set({ maxTurns: event.target.value })} /></label>}
-            {info.maxBudgetUsd && <label className="popover-stack"><span>{t('settings.run.maxBudgetLabel')}</span><input inputMode="decimal" value={values.maxBudgetUsd} placeholder={t('settings.run.unlimitedPlaceholder')} onChange={(event) => set({ maxBudgetUsd: event.target.value })} /></label>}
+            {info.maxTurns && <label className="popover-stack" title={t('tooltip.runSettings.maxTurns')}><span>{t('settings.run.maxTurnsLabel')}</span><input inputMode="numeric" title={t('tooltip.runSettings.maxTurns')} value={values.maxTurns} placeholder={t('settings.run.unlimitedPlaceholder')} onChange={(event) => set({ maxTurns: event.target.value })} /></label>}
+            {info.maxBudgetUsd && <label className="popover-stack" title={t('tooltip.runSettings.maxBudget')}><span>{t('settings.run.maxBudgetLabel')}</span><input inputMode="decimal" title={t('tooltip.runSettings.maxBudget')} value={values.maxBudgetUsd} placeholder={t('settings.run.unlimitedPlaceholder')} onChange={(event) => set({ maxBudgetUsd: event.target.value })} /></label>}
             <div className="popover-quiet">{t('settings.run.limitsNote')}</div>
           </section>
         )}
         {unsupportedSettings(info, values) && (
           <section>
             <div className="popover-quiet">{t('settings.run.unsupportedNotice')}</div>
-            <button type="button" className="composer-text-button" onClick={() => setValues(clearUnsupported(info, values))}>{t('settings.run.unsupportedResetButton')}</button>
+            <button type="button" className="composer-text-button" title={t('tooltip.runSettings.resetUnsupported')} onClick={() => setValues(clearUnsupported(info, values))}>{t('settings.run.unsupportedResetButton')}</button>
           </section>
         )}
       </fieldset>
@@ -140,8 +140,8 @@ export function RunSettingsPopover({ paneId, info, busy = info.held, close }: { 
       {problem && <div className="popover-problem" role="alert">{problem}</div>}
       <div className="popover-foot popover-footer">
         <span className="dialog-status">{t('settings.run.appliesNextRequest')}</span>
-        <button type="button" className="btn" data-testid="run-settings-cancel" onClick={close}>{t('settings.run.cancelButton')}</button>
-        <button type="button" className="btn primary" data-testid="run-settings-apply" disabled={held} onClick={() => void apply()}>{t('settings.run.applyButton')}</button>
+        <button type="button" className="btn" title={t('tooltip.runSettings.cancel')} data-testid="run-settings-cancel" onClick={close}>{t('settings.run.cancelButton')}</button>
+        <button type="button" className="btn primary" title={t('tooltip.runSettings.apply')} data-testid="run-settings-apply" disabled={held} onClick={() => void apply()}>{t('settings.run.applyButton')}</button>
       </div>
     </div>
   );
@@ -190,7 +190,7 @@ function SessionInfoPopover({ info, close }: { info: SessionInfo; close: () => v
         {info.noUsage && <div className="popover-quiet">{t('composer.sessionInfo.noUsage')}</div>}
         {info.identifiers.length > 0 && (
           <div>
-            <button type="button" className="session-info-disclosure" aria-expanded={shown} onClick={() => setShown(!shown)}><Icon name={shown ? 'chevron-down' : 'chevron-right'} size={10} weight={3} />{t('composer.sessionInfo.sessionId')}</button>
+            <button type="button" className="session-info-disclosure" title={t('tooltip.sessionInfo.toggleIds')} aria-expanded={shown} onClick={() => setShown(!shown)}><Icon name={shown ? 'chevron-down' : 'chevron-right'} size={10} weight={3} />{t('composer.sessionInfo.sessionId')}</button>
             {shown && <dl className="session-info-rows">{info.identifiers.map((row) => <div key={row.label} className="session-info-row"><dt>{row.label}</dt><dd className="selectable">{row.value}</dd></div>)}</dl>}
           </div>
         )}
@@ -354,11 +354,11 @@ export function Toolbar({ paneId, pills, busy, showUsage, onUsageShown, resumed 
         <button type="button" className={'composer-pill compact' + (pills.unlocked || pills.fast ? ' on' : '')} data-pill="options" aria-haspopup="menu" disabled={busy}
           title={t('composer.effort.label') + ' · ' + t('composer.label.permission') + ' · ' + t('settings.run.title')} onClick={() => void openMenu('options')}><Icon name="sliders-horizontal" size={13} weight={1.75} /></button>
       ) : (
-        <button type="button" className={'composer-pill compact' + (pills.moreOn ? ' on' : '')} data-pill="more" aria-label={t('composer.more')} title={t('settings.run.title')} onClick={() => void openRunSettings()} onContextMenu={(event) => { event.preventDefault(); void openMenu('actions'); }}><Icon name="ellipsis" size={14} weight={2.4} /></button>
+        <button type="button" className={'composer-pill compact' + (pills.moreOn ? ' on' : '')} data-pill="more" aria-label={t('composer.more')} title={t('tooltip.composer.more')} onClick={() => void openRunSettings()} onContextMenu={(event) => { event.preventDefault(); void openMenu('actions'); }}><Icon name="ellipsis" size={14} weight={2.4} /></button>
       )}
       <span className="composer-pills-end">
         {resumed && <span className="composer-resume" title={t('composer.resume.help')} aria-label={t('composer.resume.name')}><Icon name="split" size={13} weight={1.75} /></span>}
-        <button type="button" className="context-ring" data-testid="context-ring" aria-label={t('composer.sessionInfo.title') + ' · ' + contextLabel(pills.contextPercent)} title={t(pills.contextPercent === null ? 'composer.context.unavailable' : 'composer.context.tooltip')} data-high={pills.contextPercent !== null && pills.contextPercent >= 95 ? '' : undefined} onClick={() => void openSessionInfo()}>
+        <button type="button" className="context-ring" data-testid="context-ring" aria-label={t('composer.sessionInfo.title') + ' · ' + contextLabel(pills.contextPercent)} title={pills.contextPercent === null ? t('tooltip.composer.contextUnavailable') : t('tooltip.composer.contextRing', { percent: contextLabel(pills.contextPercent) })} data-high={pills.contextPercent !== null && pills.contextPercent >= 95 ? '' : undefined} onClick={() => void openSessionInfo()}>
           <ContextRing percent={pills.contextPercent} size={24} />
         </button>
       </span>

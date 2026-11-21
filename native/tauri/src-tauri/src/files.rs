@@ -742,6 +742,96 @@ pub fn register(methods: &mut Registry) {
         with_tree(&files, &workspace, |tree| tree.preview_path = Some(path.clone()));
         Ok(file_preview(files, host.locale, root, path).await)
     });
+    methods.add("filesSave", |host: Arc<Host>, args| async move {
+        let (_, root) = require_files(&host, &args)?;
+        if !host.writes() && !host.may_touch_repo(Path::new(&root)) {
+            return Ok(json!({
+                "ok": false,
+                "reason": "readOnly",
+                "message": host.locale.get("files.editor.readOnly"),
+            }));
+        }
+        let Some(path) = path_arg(&args) else {
+            return Ok(json!({"ok": false, "reason": "missing", "message": host.locale.get("files.preview.missing")}));
+        };
+        let Some(content) = text(&args, "text").map(str::to_string) else {
+            return Ok(json!({"ok": false, "reason": "io", "message": host.locale.get("files.preview.failed")}));
+        };
+        let expected_hash = text(&args, "expectedHash").map(str::to_string);
+        let force = flag(&args, "force");
+        let files = state(&host)?;
+        let saving_root = root.clone();
+        let outcome = tauri::async_runtime::spawn_blocking(move || {
+            mighty_files::edit::save(Path::new(&saving_root), &path, &content, expected_hash.as_deref(), force)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok(match outcome {
+            Ok(saved) => {
+                host.shell_dirty();
+                json!({
+                    "ok": true,
+                    "diskHash": saved.disk_hash,
+                    "size": model::format_bytes(saved.size, files.formats.as_ref()),
+                    "modified": saved.modified.map(|at| files.formats.date_time(at)),
+                    "encoding": mighty_files::classify::display_name(saved.encoding),
+                    "eol": saved.eol,
+                })
+            }
+            Err(mighty_files::edit::SaveRefusal::Conflict { disk_hash }) => json!({
+                "ok": false,
+                "reason": "conflict",
+                "diskHash": disk_hash,
+                "message": host.locale.get("files.editor.conflictBanner"),
+            }),
+            Err(mighty_files::edit::SaveRefusal::Missing) => json!({
+                "ok": false,
+                "reason": "missing",
+                "message": host.locale.get("files.preview.missing"),
+            }),
+            Err(mighty_files::edit::SaveRefusal::TooLarge) => json!({
+                "ok": false,
+                "reason": "tooLarge",
+                "message": host.locale.get("files.preview.truncated"),
+            }),
+            Err(mighty_files::edit::SaveRefusal::EncodingUnsupported { encoding }) => json!({
+                "ok": false,
+                "reason": "encoding",
+                "message": host.locale.get_with("files.editor.encodingUnsupported", &[("encoding", encoding)]),
+            }),
+            Err(mighty_files::edit::SaveRefusal::Io(error)) => json!({
+                "ok": false,
+                "reason": "io",
+                "message": error,
+            }),
+        })
+    });
+    methods.add("filesCheckDisk", |host: Arc<Host>, args| async move {
+        let (_, root) = require_files(&host, &args)?;
+        let Some(path) = path_arg(&args) else { return Ok(json!({"status": "missing"})) };
+        let expected = text(&args, "expectedHash").unwrap_or("").to_string();
+        let status = tauri::async_runtime::spawn_blocking(move || mighty_files::edit::check_disk(Path::new(&root), &path, &expected))
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(match status {
+            mighty_files::edit::DiskStatus::Unchanged { disk_hash } => json!({"status": "unchanged", "diskHash": disk_hash}),
+            mighty_files::edit::DiskStatus::Modified { disk_hash } => json!({"status": "modified", "diskHash": disk_hash}),
+            mighty_files::edit::DiskStatus::Missing => json!({"status": "missing"}),
+        })
+    });
+    methods.add("filesChanges", |host: Arc<Host>, args| async move {
+        let (_, root) = require_files(&host, &args)?;
+        let Some(path) = path_arg(&args) else { return Ok(Value::Null) };
+        let resolving = root.clone();
+        let Some(target) = tauri::async_runtime::spawn_blocking(move || reference::resolve(&path, &resolving, None)).await.ok().flatten()
+        else {
+            return Ok(Value::Null);
+        };
+        let files = state(&host)?;
+        let changes =
+            changes::read(None, host.processes.as_ref(), files.ports.handles.as_ref(), &root, &target.relative_path, None, None).await;
+        Ok(changes.map_or(Value::Null, |c| c.to_json()))
+    });
     methods.add("filesShowInExplorer", |host: Arc<Host>, args| async move {
         let (_, root) = require_files(&host, &args)?;
         let files = state(&host)?;

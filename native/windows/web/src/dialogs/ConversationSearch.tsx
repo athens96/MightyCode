@@ -22,8 +22,9 @@ function Snippet({ text, query }: { text: string; query: string }) {
 export function Hit({ hit, query, selected, onSelect, onResume, onExport }: {
   hit: ConversationHit; query: string; selected: boolean; onSelect: () => void; onResume: () => void; onExport: () => void;
 }) {
+  const { t } = useServices();
   return (
-    <div className={'conversation-hit' + (selected ? ' selected' : '')} role="option" aria-selected={selected} data-testid="conversation-hit" data-hit-id={hit.id}
+    <div className={'conversation-hit' + (selected ? ' selected' : '')} role="option" aria-selected={selected} title={t('tooltip.conversationSearch.hit')} data-testid="conversation-hit" data-hit-id={hit.id}
       onClick={onSelect} onDoubleClick={onResume}>
       <ProviderMark provider={hit.provider} size={14} />
       <div className="conversation-hit-text">
@@ -46,12 +47,12 @@ export function Hit({ hit, query, selected, onSelect, onResume, onExport }: {
 
 function ExportButton({ onExport }: { onExport: () => void }) {
   const { t } = useServices();
-  return <button type="button" className="btn text small" tabIndex={-1} onClick={(event) => { event.stopPropagation(); onExport(); }}>{t('conversationSearch.export')}</button>;
+  return <button type="button" className="btn text small" title={t('tooltip.conversationSearch.export')} tabIndex={-1} onClick={(event) => { event.stopPropagation(); onExport(); }}>{t('conversationSearch.export')}</button>;
 }
 
 function ResumeButton({ id, onResume }: { id: string; onResume: () => void }) {
   const { t } = useServices();
-  return <button type="button" className="btn text small strong" tabIndex={-1} data-testid={'conversation-resume-' + id} onClick={(event) => { event.stopPropagation(); onResume(); }}>{t('conversationSearch.resume')}</button>;
+  return <button type="button" className="btn text small strong" title={t('tooltip.conversationSearch.resume')} tabIndex={-1} data-testid={'conversation-resume-' + id} onClick={(event) => { event.stopPropagation(); onResume(); }}>{t('conversationSearch.resume')}</button>;
 }
 
 export function ConversationSearch({ id, dialog, answer }: { id: number; dialog: Extract<DialogRequest, { type: 'conversationSearch' }>; answer: (value: unknown) => void }) {

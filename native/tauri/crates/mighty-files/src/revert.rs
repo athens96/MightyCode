@@ -156,24 +156,24 @@ pub fn apply(
 const MAXIMUM_BYTES: u64 = diff::MAXIMUM_SIDE_BYTES as u64;
 
 #[cfg(windows)]
-fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
+pub(crate) fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
     meta.file_attributes() & 0x0400 != 0
 }
 
 #[cfg(not(windows))]
-fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
+pub(crate) fn is_reparse_point(_meta: &std::fs::Metadata) -> bool {
     false
 }
 
 #[cfg(unix)]
-fn same_file(expected: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+pub(crate) fn same_file(expected: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     expected.dev() == opened.dev() && expected.ino() == opened.ino()
 }
 
 #[cfg(not(unix))]
-fn same_file(_expected: &std::fs::Metadata, _opened: &std::fs::Metadata) -> bool {
+pub(crate) fn same_file(_expected: &std::fs::Metadata, _opened: &std::fs::Metadata) -> bool {
     true
 }
 
@@ -211,7 +211,7 @@ fn later_paths(store: &FileOriginalStore, session_id: &str, run_id: &str, root: 
 }
 
 /// `text` in `encoding`, its byte order mark first; None when the encoding cannot hold it (CP949 and a character it has no code for).
-fn encode(text: &str, encoding: TextEncodingKind) -> Option<Vec<u8>> {
+pub(crate) fn encode(text: &str, encoding: TextEncodingKind) -> Option<Vec<u8>> {
     let mut out = byte_order_mark(encoding).to_vec();
     match encoding {
         TextEncodingKind::Utf8 | TextEncodingKind::Utf8Bom => out.extend_from_slice(text.as_bytes()),

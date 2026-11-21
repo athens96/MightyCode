@@ -134,6 +134,9 @@ fn a_source_preview_is_the_pages() {
     assert_eq!(page["banners"], json!([]));
     assert_eq!(page["renderedBanners"], json!([]));
     assert_eq!(page["markdown"], false);
+    assert_eq!(page["editable"], true);
+    assert_eq!(page["eol"], "crlf");
+    assert_eq!(page["diskHash"].as_str().map(str::len), Some(64));
     assert_eq!(page["size"], "60 B");
     assert!(page["modified"].is_string());
     let markdown =
@@ -308,6 +311,7 @@ fn preview_data(name: &str) -> preview::PreviewData {
         kind: mighty_files::classify::PreviewKind::Image,
         text: None,
         encoding: None,
+        disk_hash: None,
         truncated: false,
         markdown_renderable: false,
         image_bytes: None,

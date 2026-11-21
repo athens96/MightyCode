@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { emptyState, reduce } from '../store/store';
 import { textStyleSheet } from '../theme/text';
-import { NativeNode, rowParts } from './NativeNode';
+import { NativeNode, rowHintText, rowParts } from './NativeNode';
 import { groupCategories, orderedButtons } from './Surfaces';
 import { applyNative, boxStyle, edges, nodeText, type NativeNode as Node, type NativeView } from './types';
 
@@ -73,6 +73,9 @@ describe('settings rows and dialog buttons', () => {
     expect(html).not.toContain('grid-template-columns');
     expect(html).not.toContain('font-size:calc(13px');
     expect(html).not.toContain('margin:');
+    // The row's combined title and caption propagate as an explanatory tooltip onto the control.
+    expect(rowHintText(rowParts(row).label)).toBe('Theme — Follows the system');
+    expect(html).toContain('title="Theme — Follows the system"');
   });
 
   it('takes a pair of pop-ups for one pair and a wide row for the name over its field', () => {

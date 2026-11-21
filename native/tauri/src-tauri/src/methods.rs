@@ -125,9 +125,11 @@ pub fn registry() -> Registry {
     });
     methods.add("setSidebarCollapsed", |host: Arc<Host>, args| async move {
         let collapsed = flag(&args, "collapsed");
-        change(&host, |view| {
+        let reply = change(&host, |view| {
             if view.snapshot.sidebar_collapsed == collapsed { Ok(()) } else { view.update(|state| state.sidebar_collapsed = collapsed) }
-        })
+        })?;
+        crate::menu::sync_sidebar(&host);
+        Ok(reply)
     });
     methods.add("setSidebarWidth", |host: Arc<Host>, args| async move {
         change(&host, |view| match number(&args, "width").filter(|w| !w.is_nan()) {
@@ -217,6 +219,7 @@ pub fn registry() -> Registry {
     // W6: the native forms (native.rs) and Settings with the guide (settings/mod.rs).
     crate::native::register(&mut methods);
     crate::settings::register(&mut methods);
+    crate::voice::register(&mut methods);
     // W6's other page methods, each the C# handler's guard around its part's seam (setup.rs: W6-B; accounts.rs, usage.rs: W6-C;
     // plugins.rs: W6-D; composer.rs's session info: W6-A).
     methods.add("openSetup", |host: Arc<Host>, _| async move {

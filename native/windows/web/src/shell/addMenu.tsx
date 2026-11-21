@@ -11,6 +11,7 @@ import type { AddMenu } from './types';
 export interface WorkspaceAddChoice {
   key: 'existing' | 'newFolder' | 'fromGit';
   label: string;
+  tooltip: string;
   icon: IconName;
   run: () => void;
 }
@@ -20,9 +21,9 @@ export function useWorkspaceAddChoices(): WorkspaceAddChoice[] {
   const { bridge, t } = useServices();
   const call = (method: string, args?: unknown) => void bridge.call(method, args).catch(() => {});
   return [
-    { key: 'existing', label: t('workspace.add.existing'), icon: 'folder-open', run: () => call('pickFolder') },
-    { key: 'newFolder', label: t('workspace.add.newFolder'), icon: 'folder-plus', run: () => call('workspaceCreate', { kind: 'newFolder' }) },
-    { key: 'fromGit', label: t('workspace.add.fromGit'), icon: 'download', run: () => call('workspaceCreate', { kind: 'fromGit' }) },
+    { key: 'existing', label: t('workspace.add.existing'), tooltip: t('tooltip.workspace.addExisting'), icon: 'folder-open', run: () => call('pickFolder') },
+    { key: 'newFolder', label: t('workspace.add.newFolder'), tooltip: t('tooltip.workspace.addNewFolder'), icon: 'folder-plus', run: () => call('workspaceCreate', { kind: 'newFolder' }) },
+    { key: 'fromGit', label: t('workspace.add.fromGit'), tooltip: t('tooltip.workspace.addFromGit'), icon: 'download', run: () => call('workspaceCreate', { kind: 'fromGit' }) },
   ];
 }
 

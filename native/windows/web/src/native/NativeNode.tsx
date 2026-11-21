@@ -14,6 +14,21 @@ export const ActContext = createContext<Act>(() => {});
 /** True inside a row's name and caption, whose sizes and inks are the settings standard's, not the form's. */
 const RowLabelContext = createContext(false);
 
+/** The row's combined title and caption, offered as a fallback hover explanation for controls inside a settings row. */
+const RowHintContext = createContext<string | undefined>(undefined);
+
+/** Extracts a concise "Title — Description" summary from a settings row's label node. */
+export function rowHintText(label: Node | null): string | undefined {
+  if (!label) return undefined;
+  if (label.t === 'stack' || label.t === 'grid' || label.t === 'box') {
+    const parts = label.c.map((child) => nodeText(child).trim()).filter(Boolean);
+    if (parts.length >= 2) return `${parts[0]} — ${parts.slice(1).join(' ')}`;
+    return parts[0];
+  }
+  const text = nodeText(label).trim();
+  return text || undefined;
+}
+
 /** A pop-up, however many plain frames the form put around it. */
 const framedSelect = (n: Node): boolean => n.t === 'select' || ((n.t === 'grid' || n.t === 'box' || n.t === 'stack') && n.c.length === 1 && framedSelect(n.c[0]!));
 
@@ -34,16 +49,18 @@ export function rowParts(node: Node): { label: Node | null; controls: Node[]; pa
 function Row({ node }: { node: Node }) {
   const { label, controls, pair } = rowParts(node);
   const wide = node.role === 'wideRow';
+  const hint = node.help ?? rowHintText(label);
   return (
     <div className={'settings-row' + (wide ? ' wide' : '')}>
-      {label && <div className="settings-row-label"><RowLabelContext.Provider value={true}><NativeNode node={label} placed={false} /></RowLabelContext.Provider></div>}
-      {controls.length > 0 && <div className={'settings-row-control' + (pair ? ' pair' : '')}>{controls.map((child, index) => <NativeNode key={index} node={child} placed={false} />)}</div>}
+      {label && <div className="settings-row-label" title={hint}><RowLabelContext.Provider value={true}><NativeNode node={label} placed={false} /></RowLabelContext.Provider></div>}
+      {controls.length > 0 && <div className={'settings-row-control' + (pair ? ' pair' : '')}><RowHintContext.Provider value={hint}>{controls.map((child, index) => <NativeNode key={index} node={child} placed={false} />)}</RowHintContext.Provider></div>}
     </div>
   );
 }
 
 function Menu({ node }: { node: Extract<Node, { t: 'menu' }> }) {
   const act = useContext(ActContext);
+  const rowHint = useContext(RowHintContext);
   const [open, setOpen] = useState(false);
   const element = useRef<HTMLSpanElement>(null);
   useEffect(() => {
@@ -62,7 +79,8 @@ function Menu({ node }: { node: Extract<Node, { t: 'menu' }> }) {
     ));
   return (
     <span className="native-menu-host" ref={element}>
-      <button type="button" className={'native-button native-pull' + (node.accent ? ' accent' : '')} aria-haspopup="menu" aria-expanded={open} aria-label={node.name || undefined} disabled={node.disabled}
+      <button type="button" className={'native-button native-pull' + (node.accent ? ' accent' : '')} aria-haspopup="menu" aria-expanded={open} aria-label={node.name || undefined}
+        title={node.help ?? rowHint ?? (node.name || undefined)} disabled={node.disabled}
         data-native-id={node.id} onClick={() => setOpen(!open)}>
         {node.label ?? (node.c ?? []).map((child, i) => <NativeNode key={i} node={child} />)}
         <span className="native-chevron" aria-hidden="true">⌄</span>
@@ -74,6 +92,7 @@ function Menu({ node }: { node: Extract<Node, { t: 'menu' }> }) {
 
 function Field({ node }: { node: Extract<Node, { t: 'field' }> }) {
   const act = useContext(ActContext);
+  const rowHint = useContext(RowHintContext);
   const [text, setText] = useState(node.text);
   const focused = useRef(false);
   // The host's words win while the field is not being typed in (a section that fills it, a reset).
@@ -81,6 +100,7 @@ function Field({ node }: { node: Extract<Node, { t: 'field' }> }) {
   const change = (value: string) => { setText(value); act(node.id, 'text', value); };
   const common = {
     className: 'native-field' + (node.mono ? ' mono' : ''), value: text, placeholder: node.placeholder ?? undefined, readOnly: node.readonly, disabled: node.disabled,
+    title: node.help ?? rowHint ?? node.name ?? node.placeholder ?? undefined,
     'aria-label': node.name || node.placeholder || undefined, 'data-native-id': node.id,
     onFocus: () => { focused.current = true; }, onBlur: () => { focused.current = false; setText(node.text); },
   };
@@ -96,6 +116,7 @@ function Children({ nodes }: { nodes: readonly Node[] | null | undefined }) {
 function Inner({ node }: { node: Node }) {
   const act = useContext(ActContext);
   const rowLabel = useContext(RowLabelContext);
+  const rowHint = useContext(RowHintContext);
   if ((node.role === 'row' || node.role === 'wideRow') && (node.t === 'grid' || node.t === 'stack' || node.t === 'box')) return <Row node={node} />;
   switch (node.t) {
     case 'text': {
@@ -122,28 +143,28 @@ function Inner({ node }: { node: Node }) {
     case 'rule':
       return <span className={'native-rule' + (node.vertical ? ' vertical' : '')} style={{ background: ink(node.fill) }} />;
     case 'link':
-      return <button type="button" className="link-button" disabled={node.disabled} data-native-id={node.id} onClick={() => act(node.id, 'invoke')}>{node.label}</button>;
+      return <button type="button" className="link-button" title={node.help ?? rowHint ?? node.label} disabled={node.disabled} data-native-id={node.id} onClick={() => act(node.id, 'invoke')}>{node.label}</button>;
     case 'check':
-      return <label className="native-check"><input type="checkbox" checked={node.on} disabled={node.disabled} data-native-id={node.id} onChange={() => act(node.id, 'toggle')} /> {node.label}</label>;
+      return <label className="native-check" title={node.help ?? rowHint ?? node.label}><input type="checkbox" checked={node.on} disabled={node.disabled} data-native-id={node.id} onChange={() => act(node.id, 'toggle')} /> {node.label}</label>;
     case 'radio':
-      return <label className="native-check"><input type="radio" checked={node.on} disabled={node.disabled} data-native-id={node.id} onChange={() => act(node.id, 'toggle')} /> {node.label}</label>;
+      return <label className="native-check" title={node.help ?? rowHint ?? node.label}><input type="radio" checked={node.on} disabled={node.disabled} data-native-id={node.id} onChange={() => act(node.id, 'toggle')} /> {node.label}</label>;
     case 'switch':
       return (
-        <button type="button" role="switch" aria-checked={node.on} aria-label={node.name || undefined} className={'native-switch' + (node.on ? ' on' : '')} disabled={node.disabled}
+        <button type="button" role="switch" aria-checked={node.on} aria-label={node.name || undefined} title={node.help ?? rowHint ?? (node.name || undefined)} className={'native-switch' + (node.on ? ' on' : '')} disabled={node.disabled}
           data-native-id={node.id} onClick={() => act(node.id, 'toggle')}><span className="native-knob" /></button>
       );
     case 'segmented':
       return (
         <span className="native-segmented" role="radiogroup" aria-label={node.name || undefined}>
           {node.options.map((option) => (
-            <button key={option.id} type="button" role="radio" aria-checked={option.on} className={option.on ? 'on' : ''} disabled={node.disabled} data-native-id={option.id}
+            <button key={option.id} type="button" role="radio" aria-checked={option.on} title={node.help ?? (rowHint ? `${option.label} · ${rowHint}` : option.label)} className={option.on ? 'on' : ''} disabled={node.disabled} data-native-id={option.id}
               onClick={() => { if (!option.on) act(option.id, 'toggle'); }}>{option.label}</button>
           ))}
         </span>
       );
     case 'select':
       return (
-        <select className="native-select" value={node.index} aria-label={node.name || undefined} disabled={node.disabled} data-native-id={node.id}
+        <select className="native-select" value={node.index} aria-label={node.name || undefined} title={node.help ?? rowHint ?? (node.name || undefined)} disabled={node.disabled} data-native-id={node.id}
           onChange={(event) => act(node.id, 'select', Number(event.target.value))}>
           {node.index < 0 && <option value={-1} />}
           {node.items.map((item, index) => <option key={index} value={index}>{item}</option>)}
@@ -152,13 +173,13 @@ function Inner({ node }: { node: Node }) {
     case 'field':
       return <Field node={node} />;
     case 'slider':
-      return <input type="range" className="native-slider" min={node.min} max={node.max} step={node.step || 'any'} value={node.value} aria-label={node.name || undefined} disabled={node.disabled}
+      return <input type="range" className="native-slider" min={node.min} max={node.max} step={node.step || 'any'} value={node.value} aria-label={node.name || undefined} title={node.help ?? rowHint ?? (node.name || undefined)} disabled={node.disabled}
         data-native-id={node.id} onChange={(event) => act(node.id, 'value', Number(event.target.value))} />;
     case 'button': {
       const plain = node.c !== undefined && node.label === undefined;
       return (
         <button type="button" className={plain ? 'native-plain' + (node.expanded !== undefined ? ' native-disclosure' : '') : 'native-button' + (node.accent ? ' accent' : '') + (node.destructive ? ' destructive' : '')} disabled={node.disabled}
-          aria-label={node.name || undefined} aria-expanded={node.expanded} title={node.help ?? (plain && !nodeText(node) ? node.name : undefined)} data-native-id={node.id} onClick={() => act(node.id, 'invoke')}>
+          aria-label={node.name || undefined} aria-expanded={node.expanded} title={node.help ?? (plain && !nodeText(node) ? node.name : rowHint)} data-native-id={node.id} onClick={() => act(node.id, 'invoke')}>
           {node.label ?? <Children nodes={node.c} />}
         </button>
       );

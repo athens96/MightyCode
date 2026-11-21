@@ -13,8 +13,9 @@ export function SidebarToggle() {
   const call = useCall();
   const collapsed = useStoreSelector((state) => state.snapshot?.sidebarCollapsed ?? false);
   const label = t(collapsed ? 'sidebar.expand' : 'sidebar.collapse') + ' (Ctrl+B)';
+  const tip = t(collapsed ? 'tooltip.sidebar.expand' : 'tooltip.sidebar.collapse');
   return (
-    <button type="button" className="icon-button sidebar-toggle" title={label} aria-label={label} data-testid="sidebar-toggle"
+    <button type="button" className="icon-button sidebar-toggle" title={tip} aria-label={label} data-testid="sidebar-toggle"
       onClick={() => call('setSidebarCollapsed', { collapsed: !collapsed })}>
       <Icon name="panel-left" size={16} weight={1.5} />
     </button>
@@ -30,7 +31,11 @@ export function Dashboard({ model, onUsage }: { model: DashboardModel; onUsage: 
   const call = useCall();
   const panes = usePaneInfo();
   const addMenu = useAddMenu();
-  const tiles: [string, number, string][] = [['running', model.running, 'phone.dashboard.stat.running'], ['waiting', model.waiting, 'phone.dashboard.stat.waiting'], ['done', model.done, 'phone.dashboard.stat.done']];
+  const tiles: [string, number, string, string][] = [
+    ['running', model.running, 'phone.dashboard.stat.running', t('tooltip.dashboard.tileRunning')],
+    ['waiting', model.waiting, 'phone.dashboard.stat.waiting', t('tooltip.dashboard.tileWaiting')],
+    ['done', model.done, 'phone.dashboard.stat.done', t('tooltip.dashboard.tileDone')],
+  ];
   return (
     <div className="dashboard" data-testid="dashboard">
       <div className="dashboard-heading">
@@ -41,14 +46,14 @@ export function Dashboard({ model, onUsage }: { model: DashboardModel; onUsage: 
         </div>
       </div>
       <div className={'dashboard-tiles' + (model.usage ? ' with-usage' : '')}>
-        {tiles.map(([key, count, label]) => (
-          <div key={key} className={'dashboard-tile ' + key + (count === 0 ? ' zero' : '')} data-testid={'dashboard-stat-' + key}>
+        {tiles.map(([key, count, label, tip]) => (
+          <div key={key} className={'dashboard-tile ' + key + (count === 0 ? ' zero' : '')} title={tip} data-testid={'dashboard-stat-' + key}>
             <span className="dashboard-tile-count">{count}</span>
             <span className="dashboard-tile-label">{t(label)}</span>
           </div>
         ))}
         {model.usage && (
-          <button type="button" className="dashboard-usage" onClick={onUsage} data-testid="dashboard-usage">
+          <button type="button" className="dashboard-usage" title={t('tooltip.dashboard.usage')} onClick={onUsage} data-testid="dashboard-usage">
             <span className="dashboard-usage-top"><strong>{t('dashboard.usage.title')}</strong><span>{t('dashboard.usage.shared')}</span></span>
             {model.usage.map((card) => (
               <span key={card.provider} className="dashboard-usage-row">
@@ -65,11 +70,11 @@ export function Dashboard({ model, onUsage }: { model: DashboardModel; onUsage: 
       {model.workspaces.map((workspace) => (
         <section key={workspace.id} className="dashboard-workspace" data-testid="dashboard-workspace">
           <div className="dashboard-workspace-head">
-            <button type="button" className="dashboard-workspace-name" onClick={() => call('selectWorkspace', { id: workspace.id })}>{workspace.name}</button>
+            <button type="button" className="dashboard-workspace-name" title={t('tooltip.dashboard.openWorkspace', { workspace: workspace.name })} onClick={() => call('selectWorkspace', { id: workspace.id })}>{workspace.name}</button>
             <MiddlePath path={workspace.path} className="mono" />
             {workspace.git && <GitCapsule git={workspace.git} />}
             <span className="spacer" />
-            {workspace.local && <button type="button" className="dashboard-button" title={t('menu.showFiles')} onClick={() => call('openFiles', { workspaceId: workspace.id })}><Icon name="folder" size={13} weight={1.75} />{t('files.pane.title')}</button>}
+            {workspace.local && <button type="button" className="dashboard-button" title={t('tooltip.dashboard.openFiles')} onClick={() => call('openFiles', { workspaceId: workspace.id })}><Icon name="folder" size={13} weight={1.75} />{t('files.pane.title')}</button>}
             <button type="button" className="dashboard-button strong" title={t('workspace.addPaneHelp')} aria-label={t('workspace.addPaneAccessibility', { workspace: workspace.name })}
               onClick={(event) => addMenu(event.currentTarget, { workspaceId: workspace.id })}><Icon name="plus" size={13} weight={2.4} />{t('workspace.addPane')}</button>
           </div>
@@ -79,7 +84,7 @@ export function Dashboard({ model, onUsage }: { model: DashboardModel; onUsage: 
                 const info = panes.get(id);
                 if (!info) return null;
                 return (
-                  <button key={id} type="button" className="dashboard-row" data-session-id={id} onClick={() => { call('hideDashboard'); call('selectSession', { id }); }}>
+                  <button key={id} type="button" className="dashboard-row" data-session-id={id} title={t('tooltip.dashboard.openPane', { title: info.title })} onClick={() => { call('hideDashboard'); call('selectSession', { id }); }}>
                     <StatusGlyph tone={info.tone} size={18} kind={info.kind} />
                     <span className="dashboard-row-text">
                       <span className={'dashboard-row-title' + (info.settled ? '' : ' strong')}>{info.title}</span>
@@ -120,12 +125,12 @@ export function Welcome({ setupNeeded }: { setupNeeded: boolean }) {
       <div className="welcome-choices">
         <div className="welcome-buttons">
           {addChoices.map((choice) => choice.key === 'existing'
-            ? <button key={choice.key} type="button" className="accent-button with-icon" data-testid="welcome-open-folder" onClick={choice.run}><Icon name={choice.icon} size={15} />{t('layout.welcome.openProject')}</button>
-            : <button key={choice.key} type="button" className="plain-button with-icon" data-testid={'welcome-' + choice.key} onClick={choice.run}><Icon name={choice.icon} size={14} />{choice.label}</button>)}
+            ? <button key={choice.key} type="button" className="accent-button with-icon" title={choice.tooltip} data-testid="welcome-open-folder" onClick={choice.run}><Icon name={choice.icon} size={15} />{t('layout.welcome.openProject')}</button>
+            : <button key={choice.key} type="button" className="plain-button with-icon" title={choice.tooltip} data-testid={'welcome-' + choice.key} onClick={choice.run}><Icon name={choice.icon} size={14} />{choice.label}</button>)}
         </div>
         <div className="welcome-buttons">
-          <button type="button" className="plain-button with-icon" onClick={() => call('connectRemote')}><Icon name="globe" size={14} />{t('remote.menu.connect')}</button>
-          {setupNeeded && <button type="button" className="plain-button" onClick={() => call('openSetup')}>{t('setup.title')}</button>}
+          <button type="button" className="plain-button with-icon" title={t('tooltip.welcome.connectRemote')} onClick={() => call('connectRemote')}><Icon name="globe" size={14} />{t('remote.menu.connect')}</button>
+          {setupNeeded && <button type="button" className="plain-button" title={t('tooltip.welcome.openSetup')} onClick={() => call('openSetup')}>{t('setup.title')}</button>}
         </div>
       </div>
       <div className="welcome-note welcome-shortcuts">{t('layout.welcome.shortcuts' + mac)}</div>
@@ -143,7 +148,7 @@ export function EmptyPanes() {
     <div className="empty-panes" data-testid="empty-panes">
       <h2>{t('layout.empty.addPane')}</h2>
       <p>{t('layout.empty.addPaneDetail')}</p>
-      <button type="button" className="accent-button" onClick={() => call('newPane', { kind: 'claude' })}>{t('workspace.newAgentPane', { provider: 'Claude' })}</button>
+      <button type="button" className="accent-button" title={t('tooltip.emptyPanes.newAgent')} onClick={() => call('newPane', { kind: 'claude' })}>{t('workspace.newAgentPane', { provider: 'Claude' })}</button>
     </div>
   );
 }

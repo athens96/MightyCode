@@ -76,6 +76,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           <button
             type="button"
             className="btn error-boundary-retry"
+            title="Re-render this view and clear the error"
             data-testid="error-boundary-retry"
             onClick={this.retry}
           >

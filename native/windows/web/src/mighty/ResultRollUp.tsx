@@ -68,11 +68,11 @@ export const ResultRollUp = memo(function ResultRollUp({ paneId, runId, sections
       {sections.length > 0 && (
         <div className="mighty-rollup-bar">
           <span className="mighty-rollup-mode" role="group">
-            <button type="button" className={mode === 'steps' ? 'chosen' : ''} aria-pressed={mode === 'steps'} onClick={() => setMode('steps')}>{t('graph.rollUp.bySteps')}</button>
-            <button type="button" className={mode === 'files' ? 'chosen' : ''} aria-pressed={mode === 'files'} onClick={() => setMode('files')}>{t('graph.rollUp.byFiles')}</button>
+            <button type="button" className={mode === 'steps' ? 'chosen' : ''} title={t('tooltip.rollup.bySteps')} aria-pressed={mode === 'steps'} onClick={() => setMode('steps')}>{t('graph.rollUp.bySteps')}</button>
+            <button type="button" className={mode === 'files' ? 'chosen' : ''} title={t('tooltip.rollup.byFiles')} aria-pressed={mode === 'files'} onClick={() => setMode('files')}>{t('graph.rollUp.byFiles')}</button>
           </span>
           {total > SEARCH_FROM && (
-            <input className="mighty-rollup-search" type="search" value={query} placeholder={t('graph.rollUp.search')} aria-label={t('graph.rollUp.search')}
+            <input className="mighty-rollup-search" type="search" value={query} placeholder={t('graph.rollUp.search')} title={t('tooltip.rollup.search')} aria-label={t('graph.rollUp.search')}
               onChange={(event) => setQuery(event.target.value)} />
           )}
         </div>
@@ -84,7 +84,7 @@ export const ResultRollUp = memo(function ResultRollUp({ paneId, runId, sections
         const limit = searching || grown.has(section.key) ? shown.length : SECTION_ROWS;
         return (
           <section key={section.key} className="mighty-rollup-section" data-testid="mighty-rollup-section">
-            <button type="button" className="mighty-rollup-head" aria-expanded={isOpen} onClick={() => toggle(index)}>
+            <button type="button" className="mighty-rollup-head" title={t(isOpen ? 'tooltip.rollup.foldSection' : 'tooltip.rollup.unfoldSection')} aria-expanded={isOpen} onClick={() => toggle(index)}>
               <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12} weight={2} />
               <span className="mighty-rollup-index">{index + 1}</span>
               <span className="mighty-rollup-title" title={sectionTitle(t, section, alone)}>{sectionTitle(t, section, alone)}</span>
@@ -94,7 +94,7 @@ export const ResultRollUp = memo(function ResultRollUp({ paneId, runId, sections
               <div className="mighty-rollup-rows">
                 <Rows files={shown.slice(0, limit)} section={section} paneId={paneId} t={t} onOpen={open} />
                 {shown.length > limit && (
-                  <button type="button" className="mighty-rollup-more" onClick={() => grow(section.key)}>{t('graph.rollUp.more', { count: shown.length - limit })}</button>
+                  <button type="button" className="mighty-rollup-more" title={t('tooltip.rollup.showMore')} onClick={() => grow(section.key)}>{t('graph.rollUp.more', { count: shown.length - limit })}</button>
                 )}
                 {section.more > 0 && !searching && <div className="mighty-rollup-note">{t('graph.rollUp.unlisted', { count: section.more })}</div>}
               </div>

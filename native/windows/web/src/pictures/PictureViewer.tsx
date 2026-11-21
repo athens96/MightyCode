@@ -17,11 +17,11 @@ export function PictureViewer() {
   return picture ? <Viewer key={picture.url + JSON.stringify(picture.source)} picture={picture} /> : null;
 }
 
-const actions: { action: PictureAction; label: string; icon: IconName }[] = [
-  { action: 'copy', label: 'images.copy', icon: 'copy' },
-  { action: 'save', label: 'images.save', icon: 'download' },
-  { action: 'reveal', label: 'menu.showInExplorer', icon: 'folder-open' },
-  { action: 'openDefault', label: 'images.openDefault', icon: 'external-link' },
+const actions: { action: PictureAction; label: string; tip: string; icon: IconName }[] = [
+  { action: 'copy', label: 'images.copy', tip: 'tooltip.picture.copy', icon: 'copy' },
+  { action: 'save', label: 'images.save', tip: 'tooltip.picture.save', icon: 'download' },
+  { action: 'reveal', label: 'menu.showInExplorer', tip: 'tooltip.files.revealInExplorer', icon: 'folder-open' },
+  { action: 'openDefault', label: 'images.openDefault', tip: 'tooltip.picture.openDefault', icon: 'external-link' },
 ];
 
 /** The open viewer itself; exported for its markup test. */
@@ -90,13 +90,13 @@ export function Viewer({ picture }: { picture: OpenPicture }) {
       backdrop={{ 'data-page-overlay': '', 'data-testid': 'picture-viewer', onClick: (event: MouseEvent<HTMLDivElement>) => { if (event.target === event.currentTarget) close(); } }}
       status={<>
         <button type="button" className="btn icon" aria-label={t('files.image.zoomOut')} title={t('files.image.zoomOut')} disabled={zoom <= ZoomMin} onClick={() => zoomTo(stepZoom(zoom, -1))}><Icon name="zoom-out" size={15} weight={1.75} /></button>
-        <button type="button" className="btn" data-autofocus onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>{t('files.image.fit')}</button>
+        <button type="button" className="btn" title={t('tooltip.picture.fit')} data-autofocus onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}>{t('files.image.fit')}</button>
         <button type="button" className="btn icon" aria-label={t('files.image.zoomIn')} title={t('files.image.zoomIn')} disabled={zoom >= ZoomMax} onClick={() => zoomTo(stepZoom(zoom, 1))}><Icon name="zoom-in" size={15} weight={1.75} /></button>
-        <span className="picture-zoom" data-testid="picture-zoom">{zoomPercent(zoom)}</span>
+        <span className="picture-zoom" title={t('tooltip.picture.zoomHint')} data-testid="picture-zoom">{zoomPercent(zoom)}</span>
         {failure && <span className="picture-failure tone-text-err" role="alert" title={failure}>{failure}</span>}
       </>}
       buttons={actions.map((item) => (
-        <button key={item.action} type="button" className="btn picture-action" data-testid={'picture-' + item.action} disabled={busy} onClick={() => act(item.action)}>
+        <button key={item.action} type="button" className="btn picture-action" title={t(item.tip)} data-testid={'picture-' + item.action} disabled={busy} onClick={() => act(item.action)}>
           <Icon name={item.icon} size={13} weight={1.75} />{t(item.label)}
         </button>
       ))}>

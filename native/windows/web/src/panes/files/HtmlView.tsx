@@ -12,8 +12,8 @@ export function HtmlToggle({ source, onChoose }: { source: boolean; onChoose: (s
   const { t } = useServices();
   return (
     <div className="files-segment" role="group" aria-label={t('files.markdown.rendered') + ' / ' + t('files.markdown.source')} data-testid="html-toggle">
-      <button type="button" className={source ? '' : 'chosen'} aria-pressed={!source} onClick={() => onChoose(false)}>{t('files.markdown.rendered')}</button>
-      <button type="button" className={source ? 'chosen' : ''} aria-pressed={source} onClick={() => onChoose(true)}>{t('files.markdown.source')}</button>
+      <button type="button" className={source ? '' : 'chosen'} title={t('tooltip.files.showRendered')} aria-pressed={!source} onClick={() => onChoose(false)}>{t('files.markdown.rendered')}</button>
+      <button type="button" className={source ? 'chosen' : ''} title={t('tooltip.files.showSource')} aria-pressed={source} onClick={() => onChoose(true)}>{t('files.markdown.source')}</button>
     </div>
   );
 }

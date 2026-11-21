@@ -35,7 +35,7 @@ export function StepsPanel({ paneId, model, t }: { paneId: string; model: StepsM
       {!collapsed && (
         <ol className="mighty-steps-list">
           {model.rows.map((row, index) => (
-            <li key={index} className={'mighty-step ' + row.state} data-state={row.state} aria-label={row.text + ', ' + t(stateKey[row.state])}>
+            <li key={index} className={'mighty-step ' + row.state} data-state={row.state} title={row.text + ' · ' + t(stateKey[row.state])} aria-label={row.text + ', ' + t(stateKey[row.state])}>
               <span className={'mighty-step-mark' + (row.state === 'inProgress' && model.running ? ' live' : '')} aria-hidden="true">
                 {row.state === 'completed' ? <Icon name="check" size={12} weight={2.5} /> : null}
               </span>

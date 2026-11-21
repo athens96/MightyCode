@@ -91,14 +91,14 @@ export function TerminalView({ session, fallback }: { session: RunSession; fallb
         <div className="terminal-notice" data-testid="terminal-notice">
           <span className="terminal-notice-text">{footer.notice}</span>
           {footer.restart && (
-            <button type="button" className="terminal-restart" disabled={!footer.restartEnabled} onClick={() => void bridge.call('terminalRestart', { paneId }).catch(() => {})}>
+            <button type="button" className="terminal-restart" title={t('tooltip.terminal.restart')} disabled={!footer.restartEnabled} onClick={() => void bridge.call('terminalRestart', { paneId }).catch(() => {})}>
               {t('terminal.restart')}
             </button>
           )}
         </div>
       )}
       <div className="terminal-footer" data-testid="terminal-footer">
-        <span className="terminal-footer-name">
+        <span className="terminal-footer-name" title={t('tooltip.terminal.engine')}>
           <span className="terminal-footer-engine">{footer?.engine ?? ''}</span>
           {footer?.shell && footer.title && (
             <>
@@ -108,7 +108,7 @@ export function TerminalView({ session, fallback }: { session: RunSession; fallb
           )}
         </span>
         <MiddlePath className="terminal-footer-directory" path={footer?.directory ?? ''} />
-        <span className="terminal-footer-grid">{footer?.grid ?? ''}</span>
+        <span className="terminal-footer-grid" title={t('tooltip.terminal.grid')}>{footer?.grid ?? ''}</span>
       </div>
     </div>
   );

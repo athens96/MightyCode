@@ -245,7 +245,7 @@ function Images({ paneId, images }: { paneId: string; images: { runId: string; s
           );
         })}
       </div>
-      {images.count > 6 && <button className="mighty-link" onClick={() => setOpen((o) => !o)}>{t(open ? 'graph.images.collapse' : 'graph.images.expand')}</button>}
+      {images.count > 6 && <button className="mighty-link" title={t('tooltip.mighty.imagesToggle')} onClick={() => setOpen((o) => !o)}>{t(open ? 'graph.images.collapse' : 'graph.images.expand')}</button>}
     </div>
   );
 }
@@ -281,7 +281,7 @@ function Execution({ card, paneId, open }: { card: MightyExecutionCard; paneId: 
       )}
       <div className="mighty-execution-foot">
         <span className={card.openFailed ? 'mighty-execution-failed' : 'mighty-execution-id'}>{card.footer}</span>
-        <button className="mighty-link mighty-execution-open" data-testid="mighty-ouroboros-dashboard" disabled={card.opening}
+        <button className="mighty-link mighty-execution-open" title={t('tooltip.mighty.ouroborosDashboard')} data-testid="mighty-ouroboros-dashboard" disabled={card.opening}
           onClick={() => void bridge.call('mightyOpenDashboard', { paneId, key: card.key }).catch(() => {})}>{t('graph.ouroboros.openDashboard')}</button>
       </div>
     </div>
@@ -388,7 +388,7 @@ export const Block = memo(function Block(props: BlockProps) {
     const history = extra.history;
     return (
       <div className="mighty-history" data-block-id={id} data-kind="history" style={{ left: x, top: y, width: w, height: h }}>
-        {history?.acts ? <button className="mighty-link" onClick={actions.loadOlder}>{history.text}</button> : <span className="mighty-muted">{history?.text}</span>}
+        {history?.acts ? <button className="mighty-link" title={t('tooltip.mighty.loadOlder')} onClick={actions.loadOlder}>{history.text}</button> : <span className="mighty-muted">{history?.text}</span>}
       </div>
     );
   }

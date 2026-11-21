@@ -235,6 +235,12 @@ pub fn file_preview(path: &str, data: &PreviewData, locale: &Locale, formats: &d
         if let Some(encoding) = data.encoding {
             out.insert("encoding".into(), json!(classify::display_name(encoding)));
         }
+        let editable = !data.truncated && !source.render_capped;
+        out.insert("editable".into(), json!(editable));
+        out.insert("eol".into(), json!(if full.contains("\r\n") { "crlf" } else { "lf" }));
+        if editable && let Some(hash) = &data.disk_hash {
+            out.insert("diskHash".into(), json!(hash));
+        }
         out.insert("text".into(), json!(source.text));
         out.insert("tokens".into(), json!(source.tokens));
         out.insert("lines".into(), json!(source.lines));

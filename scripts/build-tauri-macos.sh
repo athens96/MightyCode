@@ -161,7 +161,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>NSBonjourServices</key><array><string>_mightyclaude._tcp</string></array>
 <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>dev.mightycode.native.link</string><key>CFBundleURLSchemes</key><array><string>mightycode</string><string>mightyclaude</string></array></dict></array>
 <key>NSAppleEventsUsageDescription</key><string>터미널에서 실행한 명령이 다른 앱을 제어하려고 합니다.</string>
-<key>NSMicrophoneUsageDescription</key><string>터미널에서 실행한 명령이 마이크를 사용하려고 합니다.</string>
+<key>NSMicrophoneUsageDescription</key><string>음성 지시 받아쓰기 및 터미널 명령에서 마이크를 사용합니다.</string>
+<key>NSSpeechRecognitionUsageDescription</key><string>음성 지시 및 받아쓰기를 텍스트로 변환하기 위해 온디바이스 음성 인식을 사용합니다.</string>
 <key>NSCameraUsageDescription</key><string>터미널에서 실행한 명령이 카메라를 사용하려고 합니다.</string>
 <key>MightyEngine</key><string>tauri</string>
 </dict></plist>

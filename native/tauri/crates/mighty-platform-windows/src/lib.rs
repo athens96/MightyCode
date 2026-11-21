@@ -70,6 +70,8 @@ pub mod setup_probe;
 #[cfg(windows)]
 pub mod shell_activity;
 #[cfg(windows)]
+pub mod speech;
+#[cfg(windows)]
 mod text;
 #[cfg(windows)]
 pub mod update;
@@ -116,6 +118,7 @@ mod imp {
     pub use crate::pty::WindowsPtyHost;
     pub use crate::session::WindowsSession;
     pub use crate::setup_files::WindowsSetupFiles;
+    pub use crate::speech::{WindowsSpeech, speech_recognizer};
     pub use crate::update::WindowsUpdates;
     pub use crate::update_transport::WinHttpUpdates;
     pub use crate::variables::Variables;

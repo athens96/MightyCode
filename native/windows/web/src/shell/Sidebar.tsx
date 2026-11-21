@@ -83,11 +83,12 @@ const PaneRow = memo(function PaneRow({ info, active, child }: { info: PaneInfo;
   if (child?.menu?.length) items.push({ separator: true }, ...childMenu(call, info.id, child.menu));
   return (
     <button type="button" className={'sidebar-pane' + (active ? ' active' : '')} data-session-id={info.id} data-testid="sidebar-pane" aria-current={active ? 'true' : undefined}
+      title={(info.help || info.title) + '\n' + t('tooltip.sidebar.paneRowHint')}
       onClick={() => choose(info.id)} onContextMenu={(event) => menu.atPointer(event, items)}>
       <StatusGlyph tone={info.tone} kind={info.kind} />
       <span className="sidebar-pane-text">
         <span className="sidebar-pane-line">
-          <span className={'sidebar-pane-title' + (info.settled ? '' : ' strong')} title={info.help}>{info.title}</span>
+          <span className={'sidebar-pane-title' + (info.settled ? '' : ' strong')}>{info.title}</span>
           {info.beta && <BetaBadge />}
           {info.worktree && <span className="sidebar-worktree-mark" title={info.worktree} aria-label={info.worktree} data-testid="sidebar-worktree-mark"><Icon name="git-branch" size={11} weight={2.2} /></span>}
         </span>
@@ -136,7 +137,7 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
   return (
     <section className={'sidebar-workspace' + (selected ? ' selected' : '')} data-workspace-id={workspace.id} data-testid="sidebar-workspace">
       <div className="sidebar-workspace-row" onContextMenu={(event) => items.length > 0 && menu.atPointer(event, items)}>
-        <button type="button" className="sidebar-workspace-select" title={workspace.path} onClick={() => call('selectWorkspace', { id: workspace.id })}>
+        <button type="button" className="sidebar-workspace-select" title={t('tooltip.sidebar.workspaceRow', { path: workspace.path })} onClick={() => call('selectWorkspace', { id: workspace.id })}>
           <Icon name={workspace.local ? 'folder' : 'monitor'} size={15} weight={1.5} className="sidebar-workspace-icon" />
           <span className="sidebar-workspace-names">
             <span className="sidebar-workspace-name">{workspace.name}</span>
@@ -165,9 +166,9 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
             );
             if (item.type === 'closedChild') return (
               <div key={item.id} className="sidebar-child" style={{ paddingLeft: 22 + item.depth * 16 }}>
-                <div className="sidebar-closed-child" data-testid={'sidebar-child-' + item.id} onContextMenu={(event) => item.menu.length > 0 && menu.atPointer(event, childMenu(call, item.id, item.menu))}>
+                <div className="sidebar-closed-child" title={item.title + ' — ' + t('tooltip.sidebar.closedChild')} data-testid={'sidebar-child-' + item.id} onContextMenu={(event) => item.menu.length > 0 && menu.atPointer(event, childMenu(call, item.id, item.menu))}>
                   <StatusGlyph tone={item.tone} />
-                  <span className="sidebar-pane-title" title={item.title}>{item.title}</span>
+                  <span className="sidebar-pane-title">{item.title}</span>
                   <span className={'sidebar-pane-wait tone-text-' + item.stateTone}>{item.stateWord}</span>
                 </div>
                 {item.card && <ChildCardLine id={item.id} card={item.card} />}
@@ -192,16 +193,16 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
   );
 }
 
-/** A server's header over its workspaces (M/RemoteMirrorViews.swift RemoteServerHeader): "원격 · 이름", "주소 · 상태", its dot, and its menu. */
+/** A server's header over its workspaces (M/RemoteMirrorViews.swift RemoteServerHeader): "원격 · 이름", "주소 · 상태", its dot, connect button and menu. */
 function ServerHeader({ server }: { server: RemoteServer }) {
   const { t } = useServices();
   const call = useCall();
   const menu = useMenu();
   const items: MenuItem[] = [];
-  if (server.known) items.push(server.connected
-    ? { label: t('remote.mirror.disconnect'), action: () => call('serverDisconnect', { id: server.id }) }
-    : { label: t('remote.mirror.connect'), action: () => call('serverConnect', { id: server.id }) });
-  items.push({ label: t('remote.mirror.settings'), action: () => call('connectRemote') });
+  if (server.known && server.connected) {
+    items.push({ label: t('remote.mirror.disconnect'), icon: <Icon name="circle-x" size={12} />, action: () => call('serverDisconnect', { id: server.id }) });
+  }
+  items.push({ label: t('remote.mirror.settings'), icon: <Icon name="settings" size={12} />, action: () => call('connectRemote') });
   return (
     <div className="sidebar-server" title={server.help} data-testid={'sidebar-remote-server-' + server.id} aria-label={server.title + (server.state ? ', ' + server.state : '')}>
       <span className={'sidebar-server-dot tone-bg-' + server.tone} aria-hidden="true" />
@@ -209,8 +210,18 @@ function ServerHeader({ server }: { server: RemoteServer }) {
         <span className="sidebar-server-title">{server.title}</span>
         {server.line && <span className="sidebar-server-line mono">{server.line}</span>}
       </span>
-      <button type="button" className="icon-button sidebar-server-menu" title={server.title} aria-label={server.title} data-testid={'sidebar-remote-server-menu-' + server.id}
-        onClick={(event) => menu.under(event.currentTarget, items)}><Icon name="ellipsis" size={13} weight={2.6} /></button>
+      <span className="sidebar-server-actions">
+        {server.known && !server.connected && (
+          <button type="button" className="sidebar-server-connect" title={t('tooltip.sidebar.serverConnect', { server: server.title })}
+            aria-label={`${server.title} ${t('remote.mirror.connect')}`} data-testid={'sidebar-remote-server-connect-' + server.id}
+            onClick={() => call('serverConnect', { id: server.id })}>
+            <Icon name="network" size={11} weight={2} />
+            <span>{t('remote.mirror.connect')}</span>
+          </button>
+        )}
+        <button type="button" className="icon-button sidebar-server-menu" title={t('tooltip.sidebar.serverMenu', { server: server.title })} aria-label={server.title} data-testid={'sidebar-remote-server-menu-' + server.id}
+          onClick={(event) => menu.under(event.currentTarget, items)}><Icon name="ellipsis" size={13} weight={2.6} /></button>
+      </span>
     </div>
   );
 }
@@ -241,7 +252,7 @@ export function Sidebar() {
     <nav className="sidebar" aria-label={t('sidebar.workspacesHeader')} data-testid="sidebar">
       <div className="sidebar-search">
         <Icon name="search" size={14} weight={2} />
-        <input id={sidebarSearchId} type="search" placeholder={t('sidebar.searchPlaceholder')} aria-label={t('sidebar.searchPlaceholder')} value={search}
+        <input id={sidebarSearchId} type="search" placeholder={t('sidebar.searchPlaceholder')} aria-label={t('sidebar.searchPlaceholder')} title={t('tooltip.sidebar.search')} value={search}
           onChange={(event) => setSearch(event.target.value)} />
       </div>
       <button type="button" className={'sidebar-entry' + (dashboard ? ' selected' : '')} title={t('dashboard.sidebarHelp')} data-testid="sidebar-dashboard"
@@ -253,10 +264,10 @@ export function Sidebar() {
       <ReviewEntry />
       <div className="sidebar-section">
         <span className="sidebar-section-title">{t('sidebar.workspacesHeader')}</span>
-        <span className="sidebar-section-count">{groups.ownCount}</span>
+        <span className="sidebar-section-count" title={t('tooltip.sidebar.workspaceCount', { count: groups.ownCount })}>{groups.ownCount}</span>
         <span className="spacer" />
         {/* The three ways to add a workspace, as the Mac's sidebar menu offers them (M/WorkspaceView.swift:132). */}
-        <button type="button" className="icon-button" title={t('workspace.add.menu')} aria-label={t('workspace.add.menu')} data-testid="sidebar-add-workspace"
+        <button type="button" className="icon-button" title={t('tooltip.sidebar.addWorkspace')} aria-label={t('workspace.add.menu')} data-testid="sidebar-add-workspace"
           onClick={(event) => menu.under(event.currentTarget, addChoices.map((choice) => ({ label: choice.label, icon: <Icon name={choice.icon} size={12} />, action: choice.run, testId: 'workspace-add-' + choice.key })))}>
           <Icon name="folder-plus" size={13} />
         </button>
@@ -284,7 +295,7 @@ export function Sidebar() {
       {listed.length === 0 && (
         <div className="sidebar-add-choices">
           {addChoices.map((choice) => (
-            <button key={choice.key} type="button" className="sidebar-open-folder" data-testid={choice.key === 'existing' ? 'sidebar-open-folder' : 'sidebar-empty-add-' + choice.key} onClick={choice.run}>
+            <button key={choice.key} type="button" className="sidebar-open-folder" title={choice.tooltip} data-testid={choice.key === 'existing' ? 'sidebar-open-folder' : 'sidebar-empty-add-' + choice.key} onClick={choice.run}>
               <Icon name={choice.icon} size={14} />{choice.label}
             </button>
           ))}
@@ -294,12 +305,12 @@ export function Sidebar() {
         <img className="sidebar-app-icon" src={appIcon} width={20} height={20} alt="" />
         <span className="sidebar-brand">
           <span className="sidebar-brand-line"><span className="sidebar-brand-name">Mighty Code</span><BetaBadge /></span>
-          <span className="sidebar-version mono">v{shell.version}</span>
+          <span className="sidebar-version mono" title={t('tooltip.sidebar.version', { version: shell.version })}>v{shell.version}</span>
         </span>
-        <button type="button" className="icon-button sidebar-footer-button" title={t('menu.help')} aria-label={t('menu.help')} onClick={() => call('openHelp')}><Icon name="circle-question-mark" size={15} /></button>
-        <button type="button" className="icon-button sidebar-footer-button" title={t('sidebar.toggleTheme')} aria-label={t('sidebar.toggleTheme')} data-testid="theme-toggle"
+        <button type="button" className="icon-button sidebar-footer-button" title={t('tooltip.sidebar.help')} aria-label={t('menu.help')} onClick={() => call('openHelp')}><Icon name="circle-question-mark" size={15} /></button>
+        <button type="button" className="icon-button sidebar-footer-button" title={t(theme === 'light' ? 'tooltip.sidebar.themeToDark' : 'tooltip.sidebar.themeToLight')} aria-label={t('sidebar.toggleTheme')} data-testid="theme-toggle"
           onClick={() => call('setTheme', { theme: theme === 'light' ? 'dark' : 'light' })}><Icon name={theme === 'light' ? 'moon' : 'sun'} size={15} /></button>
-        <button type="button" className="icon-button sidebar-footer-button" title={t('settings.settingsWindowTitle')} aria-label={t('settings.settingsWindowTitle')} data-testid="sidebar-settings" onClick={() => call('openSettings')}>
+        <button type="button" className="icon-button sidebar-footer-button" title={t('tooltip.sidebar.settings')} aria-label={t('settings.settingsWindowTitle')} data-testid="sidebar-settings" onClick={() => call('openSettings')}>
           <Icon name="settings" size={15} />
         </button>
       </footer>

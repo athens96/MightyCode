@@ -161,9 +161,9 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
         backdrop={{ 'data-page-overlay': '', onPointerDown: stop, onWheel: stop }}
         status={summary}
         buttons={<>
-          <button type="button" className="btn" data-testid="run-changes-revert" disabled={chosenItems.length === 0 || working}
+          <button type="button" className="btn" title={t('tooltip.runChanges.revertChosen')} data-testid="run-changes-revert" disabled={chosenItems.length === 0 || working}
             onClick={() => setConfirming(true)}>{t('runChanges.revertChosen', { count: chosenItems.length })}</button>
-          <button type="button" className="btn primary" data-testid="run-changes-send-notes" disabled={notes.length === 0 || working}
+          <button type="button" className="btn primary" title={t('tooltip.runChanges.sendNotes')} data-testid="run-changes-send-notes" disabled={notes.length === 0 || working}
             onClick={sendNotes}>{t('runChanges.notes.send', { count: notes.length })}</button>
         </>}>
         {!items ? <DialogLoading rows={3} />
@@ -173,7 +173,7 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
               <div className="run-changes-list">
                 <div className="run-changes-list-head">
                   <span>{t('runChanges.files', { count: items.length })}</span>
-                  <button type="button" className="btn text" disabled={canRevert.length === 0 || working}
+                  <button type="button" className="btn text" title={t('tooltip.runChanges.toggleAll')} disabled={canRevert.length === 0 || working}
                     onClick={() => setChosen(allChosen ? new Set() : new Set(canRevert.map((item) => item.path)))}>
                     {t(allChosen ? 'runChanges.chooseNone' : 'runChanges.chooseAll')}
                   </button>
@@ -183,7 +183,7 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
                     <div key={item.path} role="listitem" data-testid={'run-changes-row-' + item.path}
                       className={'run-changes-row' + (selected === item.path ? ' selected' : '') + (item.refusal ? ' refused' : '')}
                       onClick={() => setSelected(item.path)}>
-                      <input type="checkbox" aria-label={item.path} checked={chosen.has(item.path)} disabled={item.refusal !== undefined || working}
+                      <input type="checkbox" title={t('tooltip.runChanges.checkFile')} aria-label={item.path} checked={chosen.has(item.path)} disabled={item.refusal !== undefined || working}
                         onClick={stop}
                         onChange={(event) => setChosen((now) => { const next = new Set(now); if (event.target.checked) next.add(item.path); else next.delete(item.path); return next; })} />
                       <span className="run-changes-icon" aria-hidden="true"><Icon name={item.action === 'trash' ? 'plus' : 'file-text'} size={13} weight={1.75} /></span>
@@ -212,10 +212,10 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
                   <div className="run-changes-note-editor">
                     <span className="run-changes-note-on">{t('runChanges.notes.on', { place: notePlace(picked.path, placeOf) })}</span>
                     <div className="run-changes-note-line">
-                      <input ref={noteField} className="dialog-field" data-testid="run-changes-note-field" value={noteText} placeholder={t('runChanges.notes.placeholder')}
+                      <input ref={noteField} className="dialog-field" title={t('tooltip.runChanges.noteInput')} data-testid="run-changes-note-field" value={noteText} placeholder={t('runChanges.notes.placeholder')}
                         onChange={(event) => setNoteText(event.target.value)}
                         onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); addNote(); } }} />
-                      <button type="button" className="btn" disabled={noteText.trim() === ''} onClick={addNote}>{t('runChanges.notes.add')}</button>
+                      <button type="button" className="btn" title={t('tooltip.runChanges.noteAdd')} disabled={noteText.trim() === ''} onClick={addNote}>{t('runChanges.notes.add')}</button>
                       <button type="button" className="btn" onClick={() => { setPicked(null); setNoteText(''); }}>{t('runChanges.confirm.cancel')}</button>
                     </div>
                   </div>
@@ -226,7 +226,7 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
                     <div className="run-changes-notes-list">
                       {notes.map((note) => (
                         <div key={note.id} className="run-changes-note">
-                          <button type="button" className="run-changes-note-place" onClick={() => setSelected(note.path)}>{notePlace(note.path, note)}</button>
+                          <button type="button" className="run-changes-note-place" title={t('tooltip.runChanges.noteJump')} onClick={() => setSelected(note.path)}>{notePlace(note.path, note)}</button>
                           <span className="run-changes-note-text">{note.text}</span>
                           <button type="button" className="run-changes-note-remove" aria-label={t('runChanges.notes.remove')} title={t('runChanges.notes.remove')}
                             onClick={() => setNotes((now) => now.filter((n) => n.id !== note.id))}><Icon name="circle-x" size={13} weight={1.75} /></button>

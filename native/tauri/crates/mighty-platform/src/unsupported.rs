@@ -259,6 +259,28 @@ impl RemoteInput for Unsupported {
     }
 }
 
+impl SpeechRecognizer for Unsupported {
+    fn available(&self) -> bool {
+        false
+    }
+    fn engine_name(&self) -> &'static str {
+        "unavailable"
+    }
+    fn permission(&self) -> SpeechPermission {
+        SpeechPermission::Unavailable
+    }
+    fn start(
+        &self,
+        _request: SpeechRequest,
+        _on_event: std::sync::Arc<dyn Fn(SpeechEvent) + Send + Sync>,
+    ) -> Result<Box<dyn SpeechSession>> {
+        no("SpeechRecognizer", "start")
+    }
+    fn open_permission_settings(&self) -> Result<()> {
+        no("SpeechRecognizer", "open_permission_settings")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -56,12 +56,12 @@ function Spans({ nodes }: { nodes: readonly Inline[] }): ReactNode {
       case 'text':
         return node.text;
       case 'code':
-        if (node.url) return <code key={index} className="md-code md-link" data-url={node.url} role="link" tabIndex={0}>{node.text}</code>;
+        if (node.url) return <code key={index} className="md-code md-link" data-url={node.url} title={t('tooltip.markdown.openUrl', { url: node.url })} role="link" tabIndex={0}>{node.text}</code>;
         return node.path
-          ? <code key={index} className="md-code md-local" data-path={node.path} data-line={node.line ?? undefined} role="link" tabIndex={0}>{node.text}</code>
+          ? <code key={index} className="md-code md-local" data-path={node.path} data-line={node.line ?? undefined} title={t('tooltip.markdown.openFile', { path: node.path + (node.line ? ':' + node.line : '') })} role="link" tabIndex={0}>{node.text}</code>
           : <code key={index} className="md-code">{node.text}</code>;
       case 'path':
-        return <span key={index} className="md-local" data-path={node.path} data-line={node.line ?? undefined} role="link" tabIndex={0}>{node.text}</span>;
+        return <span key={index} className="md-local" data-path={node.path} data-line={node.line ?? undefined} title={t('tooltip.markdown.openFile', { path: node.path + (node.line ? ':' + node.line : '') })} role="link" tabIndex={0}>{node.text}</span>;
       case 'strong':
         return <strong key={index}><Spans nodes={node.children} /></strong>;
       case 'em':
@@ -71,35 +71,35 @@ function Spans({ nodes }: { nodes: readonly Inline[] }): ReactNode {
       case 'strike':
         return <s key={index}><Spans nodes={node.children} /></s>;
       case 'autolink':
-        return <span key={index} className="md-link" data-url={node.url} role="link" tabIndex={0}>{node.url}</span>;
+        return <span key={index} className="md-link" data-url={node.url} title={t('tooltip.markdown.openUrl', { url: node.url })} role="link" tabIndex={0}>{node.url}</span>;
       case 'link':
         // The page opens nothing by itself: a web address is shown after its label, as the WinUI transcript does.
         return node.kind === 'web' ? (
           <span key={index}>
-            <span className="md-link" data-url={node.target} role="link" tabIndex={0}><Spans nodes={node.children} /></span>
+            <span className="md-link" data-url={node.target} title={t('tooltip.markdown.openUrl', { url: node.target })} role="link" tabIndex={0}><Spans nodes={node.children} /></span>
             {' (' + node.target + ')'}
           </span>
         ) : (
-          <span key={index} className="md-local" data-path={node.target} role="link" tabIndex={0}>
+          <span key={index} className="md-local" data-path={node.target} title={t('tooltip.markdown.openFile', { path: node.target })} role="link" tabIndex={0}>
             <Spans nodes={node.children} />
             {' (' + node.target + ')'}
           </span>
         );
       case 'image':
-        return <Picture key={index} node={node} note={(key) => t(key)} />;
+        return <Picture key={index} node={node} note={t} />;
     }
   });
 }
 
 /** A Markdown picture: a data image drawn; a remote one never fetched; a file named for the reference preview; else refused. */
-function Picture({ node, note }: { node: Extract<Inline, { type: 'image' }>; note: (key: string) => string }) {
+function Picture({ node, note }: { node: Extract<Inline, { type: 'image' }>; note: (key: string, subs?: Readonly<Record<string, string | number>>) => string }) {
   switch (node.kind) {
     case 'data':
       return <img className="md-image" src={node.source} alt={node.alt} />;
     case 'remote':
       return (
         <span>
-          <span className="md-link" data-url={node.source} role="link" tabIndex={0}>{node.alt || node.source}</span>
+          <span className="md-link" data-url={node.source} title={note('tooltip.markdown.openUrl', { url: node.source })} role="link" tabIndex={0}>{node.alt || node.source}</span>
           {' (' + node.source + ')'}
           <span className="md-note">{' (' + note('images.remote') + ')'}</span>
         </span>
@@ -108,7 +108,7 @@ function Picture({ node, note }: { node: Extract<Inline, { type: 'image' }>; not
       return (
         <span>
           {node.alt && <span className="md-quiet">{node.alt + ' '}</span>}
-          <span className="md-local" data-path={node.source} role="link" tabIndex={0}>{'(' + node.source + ')'}</span>
+          <span className="md-local" data-path={node.source} title={note('tooltip.markdown.openFile', { path: node.source })} role="link" tabIndex={0}>{'(' + node.source + ')'}</span>
         </span>
       );
     case 'refused':

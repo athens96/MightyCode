@@ -61,6 +61,11 @@ pub fn clipboard() -> Arc<dyn mighty_platform::Clipboard> {
     os::clipboard()
 }
 
+/// Native OS speech recognition + microphone metering (`MC-4`), or an `Unsupported` port where the WebView handles dictation.
+pub fn speech_recognizer() -> Arc<dyn mighty_platform::SpeechRecognizer> {
+    os::speech_recognizer()
+}
+
 /// The agents' MCP listener (one per app, W7-C's agent_io.rs): Windows' named pipe (a random name); the Mac's Unix socket, under the
 /// profile's data folder `data_dir` (M-C: `<data>/agent-io/io.sock`, as the Swift app's).
 pub fn agent_io_listener(data_dir: &std::path::Path) -> Arc<dyn mighty_platform::AgentIoListener> {

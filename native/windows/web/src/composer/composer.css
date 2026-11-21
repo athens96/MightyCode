@@ -179,3 +179,55 @@
 @media (prefers-reduced-motion: reduce) { .guided-spinner { animation-duration: 2.4s; } }
 /* The guidance line: 10pt in the tertiary ink (M/GuidedPanel.swift:119). */
 .guided-guidance { font-size: var(--type-small); color: var(--ink3); }
+
+/* Voice dictation & Push-to-Talk controls (MC-4): token-only colours, live waveform and permission banner. */
+.composer-mic {
+  display: inline-grid; place-items: center; flex: none; width: var(--layout-toolbar); height: var(--layout-toolbar);
+  padding: 0; border: var(--stroke-line) solid var(--line); border-radius: 50%;
+  background: var(--subtle); color: var(--ink2); cursor: default;
+}
+.composer-mic:hover:not(:disabled) { background: var(--track); color: var(--ink); }
+.composer-mic:disabled { opacity: 0.45; }
+.composer-mic:focus-visible { outline: var(--stroke-focus) solid var(--accent); }
+.composer-mic.recording {
+  background: color-mix(in srgb, var(--err) 16%, transparent);
+  border-color: var(--err);
+  color: var(--err);
+}
+.composer-mic.transcribing {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.composer-mic-svg { fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+
+.composer-voice-bar {
+  display: flex; align-items: center; gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm); border-radius: var(--radius-row);
+  background: var(--subtle); border: var(--stroke-line) solid var(--line); font-size: var(--type-small);
+}
+.composer-voice-bar.recording { border-color: color-mix(in srgb, var(--err) 45%, transparent); }
+.composer-voice-bar.transcribing { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.composer-voice-dot {
+  flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--err);
+  animation: composer-voice-pulse 1.1s ease-in-out infinite;
+}
+@keyframes composer-voice-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.composer-voice-wave { display: inline-flex; align-items: center; gap: 2px; height: 18px; flex: none; }
+.composer-voice-wave-bar { width: 2.5px; min-height: 3px; border-radius: 2px; background: var(--accent); transition: height 75ms linear; }
+.composer-voice-bar.recording .composer-voice-wave-bar { background: var(--err); }
+.composer-voice-timer { flex: none; font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink2); }
+.composer-voice-partial { flex: 1; min-width: 0; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.composer-voice-permission {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm); border-radius: var(--radius-row);
+  background: var(--wait-soft); color: var(--ink); font-size: var(--type-small);
+}
+.composer-voice-permission > span { flex: 1; min-width: 140px; }
+.composer-voice-error {
+  display: flex; align-items: center; gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm); border-radius: var(--radius-row);
+  background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err-text); font-size: var(--type-small);
+}
+.composer-voice-error > span { flex: 1; }

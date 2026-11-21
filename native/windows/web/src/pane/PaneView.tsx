@@ -33,7 +33,8 @@ function Clock({ session }: { session: RunSession }) {
     return () => clearInterval(timer);
   }, [running]);
   if (!timing) return null;
-  return <span className="pane-clock" data-testid="pane-clock">{clockLabel(timing, now, t('dashboard.card.approximate'))}</span>;
+  const elapsed = clockLabel(timing, now, t('dashboard.card.approximate'));
+  return <span className="pane-clock" title={t(running ? 'pane.elapsed.runningAccessibility' : 'pane.elapsed.finishedAccessibility', { time: elapsed })} data-testid="pane-clock">{elapsed}</span>;
 }
 
 /**
@@ -62,7 +63,7 @@ function PaneMenu({ session }: { session: RunSession }) {
   if (session.kind !== 'shell') items.push({ label: t('pane.menu.newConversation'), disabled: session.status === 'running' || !session.resumeId, action: () => void bridge.call('newConversation', { paneId: session.id }).catch(() => {}) });
   items.push({ separator: true }, { label: t('menu.closePane'), action: () => call('closeSession', { id: session.id }) });
   return (
-    <button type="button" className="icon-button pane-menu-button" title={t('pane.menu.accessibility')} aria-label={t('pane.menu.accessibility')} data-testid="pane-menu"
+    <button type="button" className="icon-button pane-menu-button" title={t('tooltip.pane.menu')} aria-label={t('pane.menu.accessibility')} data-testid="pane-menu"
       onClick={(event) => menu.under(event.currentTarget, items)}><Icon name="ellipsis" size={15} weight={2.6} /></button>
   );
 }
@@ -128,7 +129,7 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
         <h1 className="visually-hidden" data-testid="pane-title">{session.title}</h1>
         <span className="pane-slim-words">{t('dashboard.kind.shell') + (remote ? '' : ' · ' + t('phone.card.localTerminal'))}</span>
         <span className="spacer" />
-        <span className="hero-status-pill" data-testid="pane-state">{word}</span>
+        <span className="hero-status-pill" title={t('tooltip.pane.status', { status: word })} data-testid="pane-state">{word}</span>
         <PaneMenu session={session} />
       </header>
       <TerminalView key={'terminal-' + session.id} session={session} fallback={body} />
@@ -140,7 +141,7 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
     <section className="pane" data-session-id={session.id}>
       <header className="pane-header">
         <h1 className="visually-hidden" data-testid="pane-title">{session.title}</h1>
-        <span className={'pane-status tone-' + (header?.tone ?? 'idle')} data-testid="pane-state">{word}</span>
+        <span className={'pane-status tone-' + (header?.tone ?? 'idle')} title={t('tooltip.pane.status', { status: word })} data-testid="pane-state">{word}</span>
         <span className="pane-figures" data-testid="pane-figures" title={header?.help}>
           {header?.timed && <Clock session={session} />}
           {header?.rest}

@@ -27,6 +27,11 @@ const actionWords: Record<ReviewAction, string> = {
   editor: 'editor.open', pr: 'review.action.pr', dismiss: 'review.action.dismiss', focus: 'review.action.focus',
 };
 
+const actionHelp: Record<ReviewAction, string> = {
+  changes: 'tooltip.review.changes', merge: 'tooltip.review.merge', commitMerge: 'tooltip.review.commitMerge', discard: 'tooltip.review.discard',
+  editor: 'tooltip.review.editor', pr: 'tooltip.review.pr', dismiss: 'review.action.dismissHelp', focus: 'tooltip.review.focus',
+};
+
 const actionIcons: Partial<Record<ReviewAction, IconName>> = {
   changes: 'file-search', merge: 'git-merge', commitMerge: 'git-merge', editor: 'file-code', pr: 'arrow-up-right', discard: 'trash',
   focus: 'square-arrow-out-up-right', dismiss: 'check',
@@ -60,7 +65,7 @@ export function ReviewRow({ item, t, working, onAction }: { item: ReviewItem; t:
         {itemActions(item).map((action) => (
           <button key={action} type="button" className={'btn small' + (action === 'discard' ? ' danger' : action === 'merge' || action === 'commitMerge' ? ' primary' : '')}
             data-testid={'review-' + action + '-' + item.key} disabled={busy && action !== 'focus' && action !== 'editor'}
-            title={action === 'dismiss' ? t('review.action.dismissHelp') : t(actionWords[action])} onClick={() => onAction(action)}>
+            title={t(actionHelp[action])} onClick={() => onAction(action)}>
             {actionIcons[action] && <Icon name={actionIcons[action]} size={12} weight={2} />}
             <span>{t(actionWords[action])}</span>
           </button>
@@ -107,7 +112,7 @@ function ReviewDialog() {
     <>
       <DialogShell kind="panel" panel="review" width={860} height={560} minWidth={560} minHeight={300} label={t('review.open')} testId="review-panel"
         layer="surface" top={dialogs === 0 && !runChanges} icon={<Icon name="list-checks" size={18} weight={1.8} />} title={t('review.open')}
-        tools={<button type="button" className="icon-button" data-testid="review-refresh" aria-label={t('review.refresh')} title={t('review.refresh')} disabled={refreshing}
+        tools={<button type="button" className="icon-button" data-testid="review-refresh" aria-label={t('review.refresh')} title={t('tooltip.review.refresh')} disabled={refreshing}
           onClick={refresh}><Icon name="refresh-cw" size={14} weight={2} /></button>}
         onCancel={close} closeTestId="review-close" bodyClassName="review-body" backdrop={{ 'data-page-overlay': '' }}
         status={queue ? t('review.summary', { count: queue.count }) : ''}>

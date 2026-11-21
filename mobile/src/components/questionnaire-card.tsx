@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { MobilePermission, Question, QuestionAnswers, Questionnaire } from '@/api/types';
 import { Button } from '@/components/ui';
+import { VoiceDictationBar, VoiceMicButton, useVoiceDictation } from '@/components/voice-dictation';
 import { t } from '@/lib/i18n';
+import { appendDictatedMobileText } from '@/lib/voice';
 import {
   buildAnswers,
   canGoBack,
@@ -253,6 +255,12 @@ function QuestionView({
   const palette = usePalette();
   const styles = useStyles(makeStyles);
   const pick = pickFor(state, question);
+  const customTextRef = useRef(pick.customText);
+  customTextRef.current = pick.customText;
+  const voice = useVoiceDictation({
+    disabled,
+    onDictated: (dictated) => onCustomText(appendDictatedMobileText(customTextRef.current, dictated)),
+  });
   return (
     <View style={styles.question}>
       <View style={styles.questionHead}>
@@ -286,18 +294,43 @@ function QuestionView({
         onPress={onToggleCustom}
       />
       {pick.customChosen ? (
-        <TextInput
-          accessibilityLabel={t('phone.questionnaire.customLabel', { header: question.header })}
-          editable={!disabled}
-          multiline
-          onChangeText={onCustomText}
-          onFocus={onCustomFocus}
-          placeholder={t('phone.questionnaire.customPlaceholder')}
-          placeholderTextColor={palette.textFaint}
-          ref={customInputRef}
-          style={styles.customInput}
-          value={pick.customText}
-        />
+        <View style={styles.customVoiceWrap}>
+          <VoiceDictationBar
+            phase={voice.phase}
+            levels={voice.levels}
+            partial={voice.partial}
+            seconds={voice.seconds}
+            permissionDenied={voice.permissionDenied}
+            error={voice.error}
+            onStop={voice.stop}
+            onCancel={voice.cancel}
+            onOpenSettings={voice.openSettings}
+            onDismissPermission={voice.dismissPermission}
+            onDismissError={voice.dismissError}
+          />
+          <View style={styles.customInputRow}>
+            <TextInput
+              accessibilityLabel={t('phone.questionnaire.customLabel', { header: question.header })}
+              editable={!disabled}
+              multiline
+              onChangeText={onCustomText}
+              onFocus={onCustomFocus}
+              placeholder={t('phone.questionnaire.customPlaceholder')}
+              placeholderTextColor={palette.textFaint}
+              ref={customInputRef}
+              style={styles.customInput}
+              value={pick.customText}
+            />
+            <VoiceMicButton
+              phase={voice.phase}
+              disabled={disabled}
+              compact
+              testID="questionnaire-custom-mic"
+              onPressIn={voice.onPressIn}
+              onPressOut={voice.onPressOut}
+            />
+          </View>
+        </View>
       ) : null}
     </View>
   );
@@ -434,12 +467,15 @@ const makeStyles = (palette: Palette) =>
     choiceLabel: { color: palette.text, fontSize: 14, fontWeight: '600' },
     choiceLabelSelected: { fontWeight: '700' },
     choiceDescription: { color: palette.textMuted, fontSize: 12, lineHeight: 17 },
+    customVoiceWrap: { gap: spacing.xs },
+    customInputRow: { alignItems: 'flex-end', flexDirection: 'row', gap: spacing.sm },
     customInput: {
       backgroundColor: palette.surfaceRaised,
       borderColor: palette.border,
       borderRadius: radius.md,
       borderWidth: StyleSheet.hairlineWidth,
       color: palette.text,
+      flex: 1,
       fontSize: 14,
       maxHeight: 96,
       minHeight: 40,

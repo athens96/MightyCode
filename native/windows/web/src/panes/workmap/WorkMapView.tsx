@@ -109,11 +109,11 @@ export function WorkMapView({ session }: { session: RunSession }) {
         <button type="button" className="icon-button" aria-label={t('files.tree.refresh')} title={t('files.tree.refresh')} onClick={load}><Icon name="refresh-cw" size={13} weight={1.75} /></button>
         <span className="workmap-spacer" />
         {chipLanes.map((lane) => (
-          <button key={lane} type="button" className={'workmap-chip' + (off.has(lane) ? '' : ' on')} aria-pressed={!off.has(lane)} data-lane={lane} onClick={() => toggleLane(lane)}>
+          <button key={lane} type="button" className={'workmap-chip' + (off.has(lane) ? '' : ' on')} title={t('tooltip.workMap.laneChip', { lane: t('workMap.lane.' + lane) })} aria-pressed={!off.has(lane)} data-lane={lane} onClick={() => toggleLane(lane)}>
             <LaneDot lane={lane} />{t('workMap.lane.' + lane)}
           </button>
         ))}
-        <button type="button" className={'workmap-chip' + (onlyRequests ? ' on' : '')} aria-pressed={onlyRequests} data-testid="workmap-only-requests" onClick={() => setOnlyRequests((value) => !value)}>
+        <button type="button" className={'workmap-chip' + (onlyRequests ? ' on' : '')} title={t('tooltip.workMap.onlyRequests')} aria-pressed={onlyRequests} data-testid="workmap-only-requests" onClick={() => setOnlyRequests((value) => !value)}>
           {t('workMap.filter.withRequests')}
         </button>
       </div>
@@ -122,7 +122,7 @@ export function WorkMapView({ session }: { session: RunSession }) {
         <div className="workmap-grid" style={{ gridTemplateColumns: `max-content repeat(${columns.length}, 72px)` }}>
           <span />
           {columns.map((column) => (
-            <button key={column.key} type="button" className={'workmap-col-head' + (column.key === version ? ' on' : '')} data-version-key={column.key} onClick={() => choose(column.key)}>{versionName(column, next)}</button>
+            <button key={column.key} type="button" className={'workmap-col-head' + (column.key === version ? ' on' : '')} title={t('tooltip.workMap.jumpVersion', { version: versionName(column, next) })} data-version-key={column.key} onClick={() => choose(column.key)}>{versionName(column, next)}</button>
           ))}
           {lanes.map((lane) => [
             <span key={lane} className="workmap-lane-label"><LaneDot lane={lane} />{t('workMap.lane.' + lane)}</span>,
@@ -149,7 +149,7 @@ export function WorkMapView({ session }: { session: RunSession }) {
             const showCommits = commitsOpen.has(entry.key);
             return (
               <section key={entry.key} className={'workmap-version' + (entry.key === version ? ' selected' : '')} data-version-key={entry.key} data-testid="workmap-version">
-                <header className="workmap-version-head" onClick={() => choose(entry.key)}>
+                <header className="workmap-version-head" title={t('tooltip.workMap.selectVersion', { version: versionName(entry, next) })} onClick={() => choose(entry.key)}>
                   <span className="workmap-version-name">{versionName(entry, next)}</span>
                   <span className={'workmap-status ' + statusTone[entry.status]}>{statusText(entry, t)}</span>
                   <span className="workmap-meta">{t('workMap.commits', { count: entry.total })}{entry.topics ? ' · ' + t('workMap.topicsCount', { count: entry.topics.length }) : ''}</span>
@@ -164,6 +164,7 @@ export function WorkMapView({ session }: { session: RunSession }) {
                         const requests = topicRequests(entry, card).length;
                         return (
                           <button key={index} type="button" className={'workmap-topic' + (topic?.key === entry.key && topic.index === index ? ' selected' : '') + (topicDimmed(card, off) ? ' dimmed' : '')}
+                            title={t('tooltip.workMap.selectTopic', { title: card.title })}
                             data-testid="workmap-topic" onClick={() => { setTopic({ key: entry.key, index }); setVersion(entry.key); }}>
                             <span className="workmap-topic-title">{card.title}</span>
                             {card.summary && <span className="workmap-topic-summary">{card.summary}</span>}
@@ -179,7 +180,7 @@ export function WorkMapView({ session }: { session: RunSession }) {
                       <div className="workmap-actions">
                         {entry.topicsStale && !running && <span className="workmap-stale">{t('workMap.stale')}</span>}
                         {running && <span className="workmap-running"><Icon name="loader-circle" size={13} weight={2} className="workmap-spin" />{t('workMap.summarizing')}</span>}
-                        {entry.topicsStale && !running && <button type="button" className="workmap-button" disabled={busy} onClick={() => summarize(entry.key)}>{t('workMap.summarizeAgain')}</button>}
+                        {entry.topicsStale && !running && <button type="button" className="workmap-button" title={t('tooltip.workMap.summarize')} disabled={busy} onClick={() => summarize(entry.key)}>{t('workMap.summarizeAgain')}</button>}
                         {entry.summaryError && !running && <span className="workmap-error" role="alert">{entry.summaryError}</span>}
                       </div>
                     )}
@@ -191,10 +192,10 @@ export function WorkMapView({ session }: { session: RunSession }) {
                     ) : (
                       <>
                         <span className="workmap-quiet">{t('workMap.noTopics')} · {t('workMap.commits', { count: entry.total })}</span>
-                        <button type="button" className="workmap-button" disabled={busy} data-testid="workmap-summarize" onClick={() => summarize(entry.key)}>{t('workMap.summarize')}</button>
+                        <button type="button" className="workmap-button" title={t('tooltip.workMap.summarize')} disabled={busy} data-testid="workmap-summarize" onClick={() => summarize(entry.key)}>{t('workMap.summarize')}</button>
                       </>
                     )}
-                    <button type="button" className="workmap-button" onClick={() => toggleCommits(entry.key)}>{t(showCommits ? 'workMap.hideCommits' : 'workMap.showCommits')}</button>
+                    <button type="button" className="workmap-button" title={t('tooltip.workMap.toggleCommits')} onClick={() => toggleCommits(entry.key)}>{t(showCommits ? 'workMap.hideCommits' : 'workMap.showCommits')}</button>
                     {entry.summaryError && !running && <span className="workmap-error" role="alert">{entry.summaryError}</span>}
                   </div>
                 )}
@@ -265,7 +266,7 @@ function TopicDetail({ version, topic, versionLabel, copied, onCopy, off, onFile
         <div>
           <h5>{t('workMap.detail.files')} · {t('workMap.detail.filesCount', { count: files.length })}</h5>
           <div className="workmap-files">
-            {files.map((path) => <button key={path} type="button" className="workmap-file" title={path} onClick={() => onFile(path)}>{path}</button>)}
+            {files.map((path) => <button key={path} type="button" className="workmap-file" title={t('tooltip.workMap.openFile', { path })} onClick={() => onFile(path)}>{path}</button>)}
           </div>
         </div>
       )}

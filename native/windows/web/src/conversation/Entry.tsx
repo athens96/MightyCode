@@ -101,7 +101,7 @@ function ToolChip({ entry, activity, live, expanded, onToggle }: EntryProps & { 
         {duration && <span className="tool-meta">{'· ' + duration}</span>}
         {state && <span className={'tool-meta tool-state ' + (failed ? 'failed' : activity.state === 'waiting' ? 'waiting' : 'running')}>{'· ' + state}</span>}
         {output && (
-          <button type="button" className="tool-disclosure" aria-expanded={expanded} onClick={() => onToggle(entry.id)}>
+          <button type="button" className="tool-disclosure" title={t('tooltip.entry.toolDetail')} aria-expanded={expanded} onClick={() => onToggle(entry.id)}>
             {t(expanded ? 'transcript.tool.hideDetail' : 'transcript.tool.showDetail')}
           </button>
         )}
@@ -165,7 +165,7 @@ function Thumbnail({ image, paneId }: { image: AgentImageRef; paneId: string }) 
   const size = image.width > 0 && image.height > 0 ? { width: Math.round(image.width * scale), height: Math.round(image.height * scale) } : undefined;
   const open = () => store.dispatch({ kind: 'picture', picture: { url: data, alt: image.source, source: { paneId, hash: image.hash } } });
   return (
-    <button type="button" className="thumbnail-button" data-testid="thumbnail" title={image.source} aria-label={t('images.entry.one', { source: image.source })} onClick={open}>
+    <button type="button" className="thumbnail-button" data-testid="thumbnail" title={t('tooltip.entry.openImage', { source: image.source })} aria-label={t('images.entry.one', { source: image.source })} onClick={open}>
       <img className="thumbnail" src={data} alt={image.source} style={size} draggable={false} />
     </button>
   );

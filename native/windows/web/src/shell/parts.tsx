@@ -60,7 +60,7 @@ export function StatusGlyph({ tone, size = 14, kind = 'claude' }: { tone: Tone; 
 
 export function BetaBadge() {
   const { t } = useServices();
-  return <span className="beta-badge" aria-label={t('badge.betaAccessibility')}>{t('badge.beta')}</span>;
+  return <span className="beta-badge" title={t('tooltip.betaBadge')} aria-label={t('badge.betaAccessibility')}>{t('badge.beta')}</span>;
 }
 
 /** StatusCountsView: the short form (waiting, running, error) or the long form with the settled states and their words. */
@@ -78,7 +78,7 @@ export function StatusCounts({ counts, long = false }: { counts: Counts; long?: 
   return (
     <span className="status-counts">
       {shown.map(([tone, count, word]) => (
-        <span key={tone} className="status-count" data-count-tone={tone} title={t('phone.dashboard.statLabel', { label: t(word), count })}>
+        <span key={tone} className="status-count" data-count-tone={tone} title={t('tooltip.statusCount', { label: t(word), count })}>
           <StatusGlyph tone={tone} size={12} />
           <span className="status-count-number">{count}</span>
           {long && <span className="status-count-word">{t(word)}</span>}

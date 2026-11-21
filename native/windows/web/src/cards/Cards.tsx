@@ -184,7 +184,7 @@ function NextActions({ paneId, card, call }: { paneId: string; card: NextActions
     <div className="next-actions" data-card="nextActions" aria-label={t('pane.nextActions.label')}>
       <div className="next-actions-label">{t('pane.nextActions.label')}</div>
       {card.actions.map((label, index) => (
-        <button type="button" key={index} className="next-action" title={label} aria-description={t('pane.nextActions.fillHint')} onClick={() => void fill(index)}>
+        <button type="button" key={index} className="next-action" title={t('tooltip.card.nextAction', { action: label })} onClick={() => void fill(index)}>
           <span>{label}</span><span className="next-action-arrow" aria-hidden="true">→</span>
         </button>
       ))}
@@ -194,7 +194,7 @@ function NextActions({ paneId, card, call }: { paneId: string; card: NextActions
 
 function Fold({ open, label, onClick, children }: { open: boolean; label: string; onClick(): void; children: ReactNode }) {
   return (
-    <button type="button" className="card-fold" aria-expanded={open} aria-label={label} onClick={onClick}>
+    <button type="button" className="card-fold" title={label} aria-expanded={open} aria-label={label} onClick={onClick}>
       {children}<Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} weight={2.4} className="card-chevron" />
     </button>
   );
@@ -304,6 +304,7 @@ function refused(result: Awaited<ReturnType<Reply>>, refusal: (words: string) =>
 }
 
 function Permission({ card, reply }: { card: PermissionCard; reply: Reply }) {
+  const { t } = useServices();
   const [json, setJson] = useState(false);
   // The answer locks the card while its call runs (natural submit A3); the card goes when the host has it.
   const { state, running, run } = usePendingAction();
@@ -327,7 +328,7 @@ function Permission({ card, reply }: { card: PermissionCard; reply: Reply }) {
         {card.summary && <div className="card-field-code">{card.summary}</div>}
         {card.path && <div className="card-path">{card.path}</div>}
         {card.reason && <div className="card-note">{card.reason}</div>}
-        <button type="button" className="card-fold small" aria-expanded={json} onClick={() => setJson(!json)}>
+        <button type="button" className="card-fold small" title={t('tooltip.card.rawJson')} aria-expanded={json} onClick={() => setJson(!json)}>
           <Icon name={json ? 'chevron-down' : 'chevron-right'} size={9} weight={2.6} className="card-chevron" />{card.rawJson}
         </button>
         {json && <pre className="card-json">{card.inputJson}</pre>}
@@ -336,8 +337,8 @@ function Permission({ card, reply }: { card: PermissionCard; reply: Reply }) {
       <div className="wait-card-footer">
         <span className="card-hint">{card.onceOnly}</span>
         <Pending state={state} showsFailure={false} />
-        <button type="button" className="card-button" data-answer="deny" disabled={running} onClick={() => answer(false)}>{card.deny}</button>
-        <button type="button" className="card-button prominent" data-answer="allow" disabled={running || !card.canAllow} onClick={() => answer(true)}>{card.allowOnce}</button>
+        <button type="button" className="card-button" title={t('tooltip.card.permissionDeny')} data-answer="deny" disabled={running} onClick={() => answer(false)}>{card.deny}</button>
+        <button type="button" className="card-button prominent" title={t('tooltip.card.permissionAllowOnce')} data-answer="allow" disabled={running || !card.canAllow} onClick={() => answer(true)}>{card.allowOnce}</button>
       </div>
     </div>
   );
@@ -383,6 +384,7 @@ export function Questionnaire({ card, reply }: { card: QuestionnaireCard; reply:
                 key={index}
                 data-answer={'step-' + index}
                 className={'question-dot' + (index === step ? ' now' : draftOf.answered(draft, questions, index) ? ' done' : '')}
+                title={t('phone.questionnaire.jump', { index: index + 1 })}
                 aria-label={t('phone.questionnaire.jump', { index: index + 1 })}
                 disabled={sending || !draftOf.canJump(draft, questions, index)}
                 onClick={() => change(draftOf.jump(draft, questions, index))}
@@ -412,6 +414,7 @@ export function Questionnaire({ card, reply }: { card: QuestionnaireCard; reply:
                   data-answer={`option-${step}-${index}`}
                   data-option={index}
                   className={'question-choice' + (on ? ' on' : '')}
+                  title={option.description ? option.label + ' — ' + option.description : option.label}
                   disabled={sending}
                   onClick={() => change(draftOf.pick(draft, question, option.label))}
                 >
@@ -455,9 +458,9 @@ export function Questionnaire({ card, reply }: { card: QuestionnaireCard; reply:
       <div className="wait-card-footer">
         <span className="card-hint">{t(last ? 'phone.questionnaire.hintSubmit' : 'phone.questionnaire.hintNext')}</span>
         <Pending state={state} showsFailure={false} />
-        <button type="button" className="card-button" data-answer="cancel" disabled={sending} onClick={() => void run(() => reply('permissionAnswer', { requestId: card.requestId, allow: false }))}>{t('phone.questionnaire.cancel')}</button>
-        {step > 0 && <button type="button" className="card-button" data-answer="back" disabled={sending} onClick={() => change(draftOf.back(draft))}>{t('phone.questionnaire.back')}</button>}
-        <button type="button" className="card-button prominent" data-answer={last ? 'submit' : 'next'} disabled={!enabled} onClick={forward}>
+        <button type="button" className="card-button" title={t('tooltip.card.questionCancel')} data-answer="cancel" disabled={sending} onClick={() => void run(() => reply('permissionAnswer', { requestId: card.requestId, allow: false }))}>{t('phone.questionnaire.cancel')}</button>
+        {step > 0 && <button type="button" className="card-button" title={t('tooltip.card.questionBack')} data-answer="back" disabled={sending} onClick={() => change(draftOf.back(draft))}>{t('phone.questionnaire.back')}</button>}
+        <button type="button" className="card-button prominent" title={t(last ? 'tooltip.card.questionSubmit' : 'tooltip.card.questionNext')} data-answer={last ? 'submit' : 'next'} disabled={!enabled} onClick={forward}>
           {t(last ? 'phone.questionnaire.submit' : 'phone.questionnaire.next')}
         </button>
       </div>
@@ -490,11 +493,12 @@ function Plan({ card, reply }: { card: PlanCard; reply: Reply }) {
     if (decision === 'revise' && feedbackState !== 'valid') return;
     void run(() => reply('planAnswer', { requestId: card.requestId, decision, feedback: decision === 'revise' ? feedback : undefined }));
   };
-  const tile = (key: string, decision: string | null, accent = false) => (
+  const tile = (key: string, decision: string | null, tip: string, accent = false) => (
     <button
       type="button"
       key={key}
       className={'card-button' + (accent ? ' accent' : '')}
+      title={tip}
       data-answer={'plan-' + (decision ?? 'revise-open')}
       disabled={sending || (decision === null && revising)}
       onClick={() => (decision ? answer(decision) : setRevising(true))}
@@ -508,7 +512,7 @@ function Plan({ card, reply }: { card: PlanCard; reply: Reply }) {
         <span className="card-waiting">{card.received}</span>
         <span className="card-spacer" />
         {card.count > 1 && <span className="card-waiting">{t('phone.questionnaire.waiting', { count: card.count })}</span>}
-        {!card.actionsOnly && <button type="button" className="card-button with-icon" data-answer="plan-expand" onClick={() => setFull(true)}><Icon name="maximize-2" size={13} weight={2} />{t('plan.card.expand')}</button>}
+        {!card.actionsOnly && <button type="button" className="card-button with-icon" title={t('plan.card.expand')} data-answer="plan-expand" onClick={() => setFull(true)}><Icon name="maximize-2" size={13} weight={2} />{t('plan.card.expand')}</button>}
       </div>
       {!card.actionsOnly && <div className="plan-document" data-testid="plan-text"><Markdown text={card.plan} /></div>}
       {revising && (
@@ -516,8 +520,8 @@ function Plan({ card, reply }: { card: PlanCard; reply: Reply }) {
           <textarea className="card-text" value={feedback} placeholder={t('plan.card.revisePlaceholder')} aria-label={t('plan.card.revisePlaceholder')} disabled={sending} autoFocus onChange={(event) => setFeedback(event.target.value)} />
           {feedbackState === 'tooLong' && <div className="card-error" data-testid="plan-revise-too-long" role="alert">{t('plan.error.feedbackTooLong')}</div>}
           <div className="plan-revise-actions">
-            <button type="button" className="card-button" data-answer="plan-revise-close" disabled={sending} onClick={() => setRevising(false)}>{t('plan.card.reviseClose')}</button>
-            <button type="button" className="card-button prominent" data-answer="plan-revise-send" disabled={sending || feedbackState !== 'valid'} onClick={() => answer('revise')}>{t('plan.card.reviseSend')}</button>
+            <button type="button" className="card-button" title={t('tooltip.card.planReviseClose')} data-answer="plan-revise-close" disabled={sending} onClick={() => setRevising(false)}>{t('plan.card.reviseClose')}</button>
+            <button type="button" className="card-button prominent" title={t('tooltip.card.planReviseSend')} data-answer="plan-revise-send" disabled={sending || feedbackState !== 'valid'} onClick={() => answer('revise')}>{t('plan.card.reviseSend')}</button>
           </div>
         </div>
       )}
@@ -532,12 +536,12 @@ function Plan({ card, reply }: { card: PlanCard; reply: Reply }) {
         {oneLine && <span className="card-hint-row"><Pending busy={sending} /><span className="card-hint">{t('plan.card.hint')}</span></span>}
         <span className="plan-answers-row">
           {!oneLine && <Pending busy={sending} />}
-          {tile('plan.card.cancel', 'cancel')}
-          {tile('plan.card.revise', null)}
+          {tile('plan.card.cancel', 'cancel', t('tooltip.card.planCancel'))}
+          {tile('plan.card.revise', null, t('tooltip.card.planRevise'))}
         </span>
         <span className="plan-answers-row">
-          {tile('plan.card.approveConfirm', 'approveConfirm')}
-          {tile('plan.card.approveAuto', 'approveAuto', true)}
+          {tile('plan.card.approveConfirm', 'approveConfirm', t('tooltip.card.planApproveConfirm'))}
+          {tile('plan.card.approveAuto', 'approveAuto', t('tooltip.card.planApproveAuto'), true)}
         </span>
       </div>
       {full && <PlanDocument title={t('plan.card.title')} subtitle={card.received} plan={card.plan} onClose={() => setFull(false)} />}
@@ -573,9 +577,9 @@ function Antigravity({ card, reply }: { card: AntigravityCard; reply: Reply }) {
       <div className="wait-card-footer">
         <span className="card-hint">{t('antigravity.permission.scopeNote')}</span>
         <Pending busy={busy} />
-        <button type="button" className="card-button" data-answer="deny" disabled={busy} onClick={() => void answer('Deny')}>{t('antigravity.permission.deny')}</button>
+        <button type="button" className="card-button" title={t('tooltip.card.permissionDeny')} data-answer="deny" disabled={busy} onClick={() => void answer('Deny')}>{t('antigravity.permission.deny')}</button>
         <button type="button" className="card-button" data-answer="always" title={card.alwaysTip} disabled={busy || !card.canAllowAlways} onClick={() => void answer('Always')}>{t('antigravity.permission.allowAlways')}</button>
-        <button type="button" className="card-button prominent" data-answer="once" disabled={busy || !card.canAllow} onClick={() => void answer('Once')}>{t('permission.allowOnce')}</button>
+        <button type="button" className="card-button prominent" title={t('tooltip.card.permissionAllowOnce')} data-answer="once" disabled={busy || !card.canAllow} onClick={() => void answer('Once')}>{t('permission.allowOnce')}</button>
       </div>
     </div>
   );
@@ -599,7 +603,7 @@ function TerminalPrompt({ card, reply }: { card: TerminalPromptCard; reply: Repl
       <div className="terminal-prompt-title">
         <span className="web-open-mark" aria-hidden="true">▣</span>
         <strong>{t('terminalPrompt.title')}</strong>
-        <button type="button" className="card-button small" onClick={() => void reply('terminalPromptShow', {})}>{t('terminalPrompt.showTerminal')}</button>
+        <button type="button" className="card-button small" title={t('tooltip.card.showTerminal')} onClick={() => void reply('terminalPromptShow', {})}>{t('terminalPrompt.showTerminal')}</button>
       </div>
       <div className="terminal-prompt-text">{card.text}</div>
       {card.input === 'choice' && (
@@ -623,8 +627,8 @@ function TerminalPrompt({ card, reply }: { card: TerminalPromptCard; reply: Repl
               onChange={(event) => setText(event.target.value)}
               onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); send(); } }}
             />
-            {card.input === 'text' && <button type="button" className="card-button small" onClick={() => answer('enter')}>{t('terminalPrompt.enterOnly')}</button>}
-            <button type="button" className="card-button small accent" disabled={text === ''} onClick={send}>{t('terminalPrompt.send')}</button>
+            {card.input === 'text' && <button type="button" className="card-button small" title={t('tooltip.card.terminalEnter')} onClick={() => answer('enter')}>{t('terminalPrompt.enterOnly')}</button>}
+            <button type="button" className="card-button small accent" title={t('tooltip.card.terminalSend')} disabled={text === ''} onClick={send}>{t('terminalPrompt.send')}</button>
           </>
         )}
         {card.input === 'choice' && (
@@ -660,7 +664,7 @@ function Login({ card, call }: { card: LoginCard; call: Call }) {
             <div className="login-line tone-ink2">{t('loginRecovery.codePrompt')}</div>
             <div className="login-code">
               <input type="password" maxLength={4096} value={code} placeholder={t('loginRecovery.codePlaceholder')} aria-label={t('loginRecovery.codePlaceholder')} onChange={(event) => setCode(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); submit(); } }} />
-              <button type="button" className="card-button small" onClick={submit}>{t('loginRecovery.codeSubmit')}</button>
+              <button type="button" className="card-button small" title={t('tooltip.card.loginCodeSubmit')} onClick={submit}>{t('loginRecovery.codeSubmit')}</button>
             </div>
           </>
         )}
@@ -671,7 +675,7 @@ function Login({ card, call }: { card: LoginCard; call: Call }) {
             {t(loginLabels[button] ?? button)}
           </button>
         ))}
-        <button type="button" className="card-icon-button" aria-label={t('loginRecovery.dismiss')} onClick={() => void call('loginAction', { action: 'dismiss' })}>×</button>
+        <button type="button" className="card-icon-button" title={t('loginRecovery.dismiss')} aria-label={t('loginRecovery.dismiss')} onClick={() => void call('loginAction', { action: 'dismiss' })}>×</button>
       </div>
     </div>
   );
@@ -679,6 +683,7 @@ function Login({ card, call }: { card: LoginCard; call: Call }) {
 
 /** The status line (StatusLine.cs): the trust question a workspace's command asks first, then at most six coloured rows. */
 function StatusLine({ card, call }: { card: StatusLineCard; call: Call }) {
+  const { t } = useServices();
   return (
     <div className="status-line" data-card="statusLine" aria-label={card.label} title={card.tip}>
       {card.trust && (
@@ -686,8 +691,8 @@ function StatusLine({ card, call }: { card: StatusLineCard; call: Call }) {
           <div className="status-trust-question"><span aria-hidden="true">›_</span>{card.trust.prompt}</div>
           <div className="status-trust-command">{card.trust.command}</div>
           <div className="status-trust-answers">
-            <button type="button" className="card-button small" onClick={() => void call('statusLineTrust', { allow: true })}>{card.trust.allow}</button>
-            <button type="button" className="card-button small" onClick={() => void call('statusLineTrust', { allow: false })}>{card.trust.deny}</button>
+            <button type="button" className="card-button small" title={t('tooltip.card.statusLineAllow')} onClick={() => void call('statusLineTrust', { allow: true })}>{card.trust.allow}</button>
+            <button type="button" className="card-button small" title={t('tooltip.card.statusLineDeny')} onClick={() => void call('statusLineTrust', { allow: false })}>{card.trust.deny}</button>
             <span className="status-trust-note">{card.trust.note}</span>
           </div>
         </div>

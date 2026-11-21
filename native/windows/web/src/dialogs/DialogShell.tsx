@@ -196,11 +196,12 @@ export interface DialogHeaderProps {
 }
 
 export function DialogHeader({ title, subtitle, icon, tools, onClose, busy = false, closeTestId }: DialogHeaderProps) {
+  const { t } = useServices();
   const fit = useFitToggle();
   return (
     <header className="dialog-header" onDoubleClick={(event) => { if (fit && !(event.target as Element).closest('button, input, select, a')) fit(); }}>
       {icon && <span className="dialog-icon" aria-hidden="true">{icon}</span>}
-      <div className="dialog-heading">
+      <div className="dialog-heading" title={fit ? t('tooltip.dialog.doubleClickFit') : undefined}>
         <strong className="dialog-title">{title}</strong>
         {subtitle && <span className="dialog-subtitle">{subtitle}</span>}
       </div>

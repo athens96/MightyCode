@@ -14,6 +14,8 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "호스트 페어링 QR 코드를 스캔하기 위해 카메라를 사용합니다.",
+        "NSMicrophoneUsageDescription": "프롬프트 및 승인 응답을 음성으로 받아쓰기 위해 마이크를 사용합니다.",
+        "NSSpeechRecognitionUsageDescription": "음성 지시를 텍스트로 변환하기 위해 온디바이스 음성 인식을 사용합니다.",
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         },
@@ -28,7 +30,8 @@
       },
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO"
       ],
       "predictiveBackGestureEnabled": false,
       "package": "xyz.woorizip.mightycode",
@@ -37,7 +40,6 @@
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.BLUETOOTH",
-        "android.permission.RECORD_AUDIO",
         "android.permission.SCHEDULE_EXACT_ALARM",
         "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.ACCESS_NOTIFICATION_POLICY",

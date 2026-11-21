@@ -80,8 +80,8 @@ function ResumeChoice({ id, dialog, answer }: { id: number; dialog: Extract<Dial
     <Sheet id={id} width={460} label={dialog.title} icon={<ProviderMark provider={dialog.provider} size={20} />} onCancel={() => answer(null)}
       buttons={<>
         <button type="button" className="btn" onClick={() => answer(null)}>{t('resume.cancel')}</button>
-        <button type="button" className="btn" disabled={dialog.checking} onClick={() => answer('resume')} data-testid="resume-choice-resume">{t('resume.choice.resume')}</button>
-        <button type="button" className="btn primary" data-autofocus onClick={() => answer('new')} data-testid="resume-choice-new">{t('resume.choice.startNew')}</button>
+        <button type="button" className="btn" title={t('tooltip.resume.resume')} disabled={dialog.checking} onClick={() => answer('resume')} data-testid="resume-choice-resume">{t('resume.choice.resume')}</button>
+        <button type="button" className="btn primary" title={t('tooltip.resume.startNew')} data-autofocus onClick={() => answer('new')} data-testid="resume-choice-new">{t('resume.choice.startNew')}</button>
       </>}>
       {dialog.checking ? <div className="quiet"><Pending busy showsLabel={false} /> {t('resume.loading')}</div> : <p className="dialog-message">{dialog.message}</p>}
     </Sheet>
@@ -124,7 +124,7 @@ function ResumeList({ id, dialog, answer }: { id: number; dialog: Extract<Dialog
             ))}
         </div>
         <div className="resume-footer">
-          <label className="small"><input type="checkbox" checked={all} onChange={(event) => setAll(event.target.checked)} /> {t('resume.showAll')}</label>
+          <label className="small" title={t('tooltip.resume.showAll')}><input type="checkbox" title={t('tooltip.resume.showAll')} checked={all} onChange={(event) => setAll(event.target.checked)} /> {t('resume.showAll')}</label>
           {rows?.hidden && <span className="quiet small">{rows.hidden}</span>}
         </div>
       </div>
@@ -194,7 +194,7 @@ function PaneWorktreeChanges({ id, dialog, answer }: { id: number; dialog: Extra
           ))}</ul>
           {picked ? diff === null ? <Pending busy showsLabel={false} /> : (
             <pre className="worktree-diff selectable">{diffLines(diff).map((line, index) => (
-              <div key={index} className={line.kind} onContextMenu={lines[index] ? (event) => { event.preventDefault(); editor(lines[index] ?? null); } : undefined}>{line.text || ' '}</div>
+              <div key={index} className={line.kind} title={lines[index] ? t('editor.lineHint') : undefined} onContextMenu={lines[index] ? (event) => { event.preventDefault(); editor(lines[index] ?? null); } : undefined}>{line.text || ' '}</div>
             ))}</pre>
           ) : <p className="quiet">{dialog.pick}</p>}
         </div>

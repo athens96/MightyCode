@@ -97,3 +97,80 @@
 
 /* The rendered page draws inline code in plain mono, as the Mac's Markdown view does (the conversation's accent chips are its transcript's). */
 .files-preview-body .md-code { color: var(--ink); background: transparent; padding: 0; }
+
+/* Lightweight code editor, search/replace bar, dirty dot and conflict guard (MC-6). */
+.files-preview-title-row { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+.files-dirty-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.files-row-dirty { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-left: auto; }
+.files-tool.active { background: var(--accent-soft); color: var(--accent); }
+.files-action-pill {
+  display: inline-flex; align-items: center; gap: var(--space-xs); height: 20px; padding: 0 var(--space-sm);
+  border: var(--stroke-line) solid var(--line); border-radius: var(--radius-file-row);
+  background: var(--card); color: var(--ink); font: inherit; font-size: var(--type-small); font-weight: 500; cursor: pointer; white-space: nowrap;
+}
+.files-action-pill:hover:not(:disabled) { background: var(--card-raised); }
+.files-action-pill:disabled { opacity: 0.45; cursor: default; }
+.files-action-pill.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.files-action-pill.primary:hover:not(:disabled) { filter: brightness(0.96); }
+.files-action-pill.accent-soft { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--accent); }
+
+.files-conflict-banner {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-md); background: var(--wait-soft); border-bottom: var(--stroke-line) solid var(--line);
+  color: var(--ink); font-size: var(--type-small);
+}
+.files-conflict-banner > span { flex: 1; min-width: 160px; }
+.files-conflict-actions { display: inline-flex; align-items: center; gap: var(--space-xs); }
+.files-error-banner {
+  flex: none; display: flex; align-items: center; gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-md); background: color-mix(in srgb, var(--err) 12%, transparent);
+  border-bottom: var(--stroke-line) solid var(--line); color: var(--err-text); font-size: var(--type-small);
+}
+.files-error-banner > span { flex: 1; }
+
+.files-find-bar {
+  flex: none; display: flex; flex-direction: column; gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-md); background: var(--card-raised); border-bottom: var(--stroke-line) solid var(--line);
+}
+.files-find-row { display: flex; align-items: center; gap: var(--space-xs); }
+.files-find-glyph { flex: none; color: var(--ink3); }
+.files-replace-spacer { flex: none; width: 30px; }
+.files-find-input {
+  flex: 1; min-width: 90px; height: 22px; padding: 0 var(--space-sm);
+  border: var(--stroke-line) solid var(--line); border-radius: var(--radius-file-row);
+  background: var(--card); color: var(--ink); font-family: var(--font-mono); font-size: var(--type-small); outline: none;
+}
+.files-find-input:focus { border-color: var(--accent); }
+.files-find-count { flex: none; font-family: var(--font-mono); font-size: var(--type-small); color: var(--ink2); font-variant-numeric: tabular-nums; padding: 0 var(--space-xs); }
+.files-find-count.empty { color: var(--err-text); }
+
+.files-editor {
+  flex: 1; min-height: 0; display: flex; background: var(--card);
+  font-family: var(--font-mono); font-size: 12px; line-height: 18px;
+}
+.files-editor-gutter {
+  flex: none; min-width: 44px; padding: var(--space-sm) var(--space-sm) var(--space-lg) var(--space-sm);
+  box-sizing: border-box; overflow: hidden; text-align: right; user-select: none;
+  background: var(--subtle); border-right: var(--stroke-line) solid var(--line); color: var(--ink3); font-variant-numeric: tabular-nums;
+}
+.files-editor-line-no { height: 18px; line-height: 18px; }
+.files-editor-line-no.active { color: var(--ink); font-weight: 600; }
+.files-editor-stage { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.files-editor-backdrop, .files-editor-textarea {
+  position: absolute; inset: 0; width: 100%; height: 100%; margin: 0;
+  padding: var(--space-sm) var(--space-md) var(--space-lg) var(--space-md); box-sizing: border-box;
+  border: 0; outline: none; font-family: var(--font-mono); font-size: 12px; line-height: 18px; tab-size: 2;
+  white-space: pre; overflow: auto;
+}
+.files-editor.wraps .files-editor-backdrop, .files-editor.wraps .files-editor-textarea {
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.files-editor-backdrop { pointer-events: none; color: var(--ink); background: transparent; overflow: hidden; }
+.files-editor-textarea { resize: none; background: transparent; color: transparent; caret-color: var(--ink); }
+.files-editor-textarea::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); color: transparent; }
+.files-editor-backdrop .tok-keyword { color: var(--accent); font-weight: 500; }
+.files-editor-backdrop .tok-string { color: var(--done-text); }
+.files-editor-backdrop .tok-comment { color: var(--ink3); font-style: italic; }
+.files-editor-backdrop .tok-number { color: var(--wait-text); }
+.files-find-mark { background: color-mix(in srgb, var(--wait-text) 28%, transparent); border-radius: 2px; }
+.files-find-mark.current { background: color-mix(in srgb, var(--accent) 42%, transparent); outline: 1px solid var(--accent); }

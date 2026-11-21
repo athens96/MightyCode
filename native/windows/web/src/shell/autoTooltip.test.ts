@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { AUTO_TITLE, applyTooltip, installAutoTooltips, PRESSABLE, tooltipFor } from './autoTooltip';
 
 /** The few Element calls the module makes, without a DOM (the page's tests run in node). */
@@ -32,9 +32,11 @@ function fakeDocument() {
 }
 
 describe('auto tooltips', () => {
-  it('reads a control’s aria-label first, then its visible text with the whitespace folded', () => {
+  it('reads a control’s aria-label first, then its visible text or placeholder, and appends aria-description', () => {
     expect(tooltipFor(el(new FakeControl('×', { 'aria-label': 'Close' })))).toBe('Close');
     expect(tooltipFor(el(new FakeControl('  Approve\n  and run ')))).toBe('Approve and run');
+    expect(tooltipFor(el(new FakeControl('', { placeholder: 'Search workspaces' })))).toBe('Search workspaces');
+    expect(tooltipFor(el(new FakeControl('Next step', { 'aria-description': 'Fills the composer' })))).toBe('Next step — Fills the composer');
     expect(tooltipFor(el(new FakeControl('')))).toBe('');
     expect(tooltipFor(el(new FakeControl('a'.repeat(400)))).length).toBe(160);
   });
@@ -78,5 +80,64 @@ describe('auto tooltips', () => {
     hover(plain);
     expect(plain.hasAttribute('title')).toBe(false);
     uninstall();
+  });
+
+  it('shows a floating tooltip bubble in a browser document, suppressing duplicate native title only while hovered', () => {
+    vi.useFakeTimers();
+    try {
+      const listeners = new Map<string, (event: Event) => void>();
+      const appended: unknown[] = [];
+      class DomBubble {
+        className = '';
+        textContent: string | null = '';
+        isConnected = true;
+        style: Record<string, string> = {};
+        offsetWidth = 140;
+        offsetHeight = 24;
+        attrs = new Map<string, string>();
+        classList = {
+          set: new Set<string>(),
+          add: (c: string) => { this.classList.set.add(c); },
+          remove: (c: string) => { this.classList.set.delete(c); },
+          contains: (c: string) => this.classList.set.has(c),
+        };
+        setAttribute(k: string, v: string) { this.attrs.set(k, v); }
+        remove() { this.isConnected = false; }
+      }
+      let createdBubble: DomBubble | null = null;
+      const doc = {
+        body: { appendChild: (node: unknown) => appended.push(node) },
+        createElement: () => { createdBubble = new DomBubble(); return createdBubble; },
+        addEventListener: (type: string, fn: (event: Event) => void) => listeners.set(type, fn),
+        removeEventListener: (type: string) => listeners.delete(type),
+      } as unknown as Document;
+
+      const target = new FakeControl('Flow', { title: 'Flow view — Inspect requests on a 2D diagram' });
+      Object.assign(target, {
+        isConnected: true,
+        contains: (other: unknown) => other === target,
+        getBoundingClientRect: () => ({ left: 100, top: 40, right: 160, bottom: 68, width: 60, height: 28 }),
+        closest: (selector: string) => (selector === PRESSABLE || selector.includes('[title]') ? target : null),
+      });
+
+      const uninstall = installAutoTooltips(doc);
+      listeners.get('pointerover')?.({ target } as unknown as Event);
+      // Native title is stashed while hovered so the OS does not show a duplicate tooltip.
+      expect(target.hasAttribute('title')).toBe(false);
+      vi.advanceTimersByTime(300);
+      expect(createdBubble).not.toBeNull();
+      expect(createdBubble!.textContent).toBe('Flow view — Inspect requests on a 2D diagram');
+      expect(createdBubble!.classList.contains('visible')).toBe(true);
+
+      // Pointer leaving restores native title immediately and hides the bubble.
+      listeners.get('pointerout')?.({ target, relatedTarget: null } as unknown as Event);
+      expect(target.getAttribute('title')).toBe('Flow view — Inspect requests on a 2D diagram');
+      expect(createdBubble!.classList.contains('visible')).toBe(false);
+
+      uninstall();
+      expect(listeners.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

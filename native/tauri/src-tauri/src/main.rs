@@ -112,6 +112,7 @@ mod updates;
 mod usage;
 #[cfg(feature = "dev-harness")]
 mod verify_resources;
+mod voice;
 mod workmap;
 mod workspace_create;
 
@@ -731,6 +732,7 @@ fn main() {
                 styles::shutdown(&host);
                 tails::shutdown(&host);
                 ouroboros::shutdown(&host);
+                voice::shutdown();
                 // Every run stopped and ended before delegation stops (C# DisposeAsync: `local.DisposeAsync`, then `StopDelegation`), so a
                 // child killed by quitting is recorded with its quit end; `host.close` below then makes the last save.
                 if let Some(runs) = host.runs() {

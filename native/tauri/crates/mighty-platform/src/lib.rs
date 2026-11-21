@@ -40,6 +40,7 @@ pub mod screen;
 pub mod secrets;
 pub mod session;
 pub mod setup;
+pub mod speech;
 pub mod surface;
 pub mod unsupported;
 pub mod update;
@@ -73,6 +74,7 @@ pub use screen::{RemoteInput, ScreenCapture};
 pub use secrets::SecretVault;
 pub use session::{SessionCallback, SessionEnding, SessionWatch};
 pub use setup::SetupFiles;
+pub use speech::{SpeechEvent, SpeechPermission, SpeechRecognizer, SpeechRequest, SpeechSession};
 pub use surface::{
     DeviceRect, Drawing, LogicalPoint, LogicalRect, NativeSurface, PetEvent, PetPointer, PetWindow, SurfaceFactory, SurfaceKind,
     SurfaceState, TerminalEvent, TerminalListener, TerminalOptions, TerminalSurface,

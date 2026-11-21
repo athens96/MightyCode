@@ -48,6 +48,7 @@ pub mod pty;
 pub mod secrets;
 pub mod session;
 pub mod setup;
+pub mod speech;
 /// The setup script in a Terminal.app window (the terminal launcher).
 pub mod terminal;
 pub mod terminal_surface;
@@ -73,6 +74,7 @@ pub use formats::{decimal_separator, long_time, number_grouping, short_date_time
 pub use http::https_get;
 pub use notify::{notifier, register_notifications};
 pub use process::process_host;
+pub use speech::speech_recognizer;
 pub use update::update_installer;
 
 /// The data folder's name before the rename (Swift `StateRepository`). M-B adds what Swift's `RenameMigration` also moves.

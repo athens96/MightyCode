@@ -175,7 +175,7 @@ async fn menu_installed(host: &Arc<Host>) -> Result<bool, String> {
     let workspace = host.locale.get("menu.workspace");
     require(entries.iter().any(|(menu, _, _, _)| *menu == workspace), "the menu bar has no Workspace menu")?;
     for item in crate::menu::items() {
-        let title = host.locale.get(item.key);
+        let title = crate::menu::item_title(host, item);
         let found = entries.iter().find(|(_, t, _, _)| *t == title).ok_or_else(|| format!("the menu bar has no item {title:?}"))?;
         if let Some(accelerator) = item.accelerator {
             require(

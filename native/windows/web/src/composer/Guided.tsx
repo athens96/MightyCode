@@ -36,7 +36,7 @@ export function Guided({ paneId, panel }: { paneId: string; panel: Panel | null 
         <span className="guided-approval-name">{name}</span>
         {source && <span className="composer-style-badge">{source}</span>}
         <span className="guided-approval-words">{t('guidedPanel.approvalRequired')}</span>
-        {canView && <button type="button" className="guided-small" data-testid="guided-view" onClick={() => run('view')}>{t('guidedPanel.viewContentsButton')}</button>}
+        {canView && <button type="button" className="guided-small" title={t('tooltip.guided.viewContents')} data-testid="guided-view" onClick={() => run('view')}>{t('guidedPanel.viewContentsButton')}</button>}
       </div>
     );
   }
@@ -64,7 +64,7 @@ export function Guided({ paneId, panel }: { paneId: string; panel: Panel | null 
         <div className="guided-phases" data-testid="guided-phases" aria-label={t('guidedPanel.phasesAccessibility')}>
           {panel.phases.map((phase, index) => (
             <span key={phase.id} className="guided-phase-step">
-              <span className={'guided-phase ' + phase.state} data-phase={phase.id}>{phase.title}</span>
+              <span className={'guided-phase ' + phase.state} title={t('tooltip.guided.phase', { title: phase.title })} data-phase={phase.id}>{phase.title}</span>
               {index < panel.phases!.length - 1 && <Icon name="chevron-right" size={7} weight={2.6} className="guided-phase-chevron" />}
             </span>
           ))}
@@ -80,8 +80,8 @@ export function Guided({ paneId, panel }: { paneId: string; panel: Panel | null 
               {panel.setup.hint && <div className="guided-setup-hint">{panel.setup.hint}</div>}
               {panel.setup.installCommand && <code className="guided-setup-command">{panel.setup.installCommand}</code>}
               <div className="guided-buttons">
-                {panel.setup.installCommand && <button type="button" className="guided-small" data-testid="guided-install" onClick={() => run('install')}>{t('guidedPanel.installButton')}</button>}
-                <button type="button" className="guided-small" data-testid="guided-recheck" onClick={() => run('recheck')}>{t('guidedPanel.recheckButton')}</button>
+                {panel.setup.installCommand && <button type="button" className="guided-small" title={t('tooltip.guided.install')} data-testid="guided-install" onClick={() => run('install')}>{t('guidedPanel.installButton')}</button>}
+                <button type="button" className="guided-small" title={t('tooltip.guided.recheck')} data-testid="guided-recheck" onClick={() => run('recheck')}>{t('guidedPanel.recheckButton')}</button>
               </div>
             </div>
           )}

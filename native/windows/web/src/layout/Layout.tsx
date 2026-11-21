@@ -160,17 +160,17 @@ const Tab = memo(function Tab({ info, selected, workspaceId, index }: TabProps) 
   ];
   return (
     <div className={'tab' + (selected ? ' selected' : '')} data-tab-id={info.id} data-tab-index={index} data-testid="tab">
-      <button type="button" className="tab-handle" title={t('layout.tab.dragTooltip', { title: info.title })} aria-selected={selected} role="tab"
+      <button type="button" className="tab-handle" title={t('tooltip.layout.tabHandle', { title: info.help || info.title })} aria-selected={selected} role="tab"
         onClick={(event) => { if (swallowClick && event.detail > 0) { swallowClick = false; return; } choose(info.id); }}
         onDoubleClick={() => call('renameSession', { id: info.id })} onContextMenu={(event) => menu.atPointer(event, items)}
         onPointerDown={(event) => pressTab(event, info.id, workspaceId, info.title, (target) => call('dockSession', dockArguments(info.id, workspaceId, target)))}>
         <KindIcon info={info} />
-        <span className="tab-title" title={info.help}>{info.title}</span>
+        <span className="tab-title">{info.title}</span>
         {info.beta && <BetaBadge />}
         {info.tabMark && <StatusGlyph tone={info.tone} size={12} />}
         {landing && <span className={'tab-landing ' + landing} data-testid="tab-landing" />}
       </button>
-      <button type="button" className="tab-close" aria-label={t('layout.tab.closeAccessibility', { title: info.title })} onClick={() => call('closeSession', { id: info.id })}>×</button>
+      <button type="button" className="tab-close" title={t('tooltip.layout.closeTab', { title: info.title })} aria-label={t('layout.tab.closeAccessibility', { title: info.title })} onClick={() => call('closeSession', { id: info.id })}>×</button>
     </div>
   );
 });

@@ -54,10 +54,32 @@ export interface FilePreview {
   banners: string[];
   renderedBanners?: string[];
   markdown?: boolean;
+  /** True when the file is non-truncated text within the lightweight editor's size cap. */
+  editable?: boolean;
+  /** SHA-256 hex of raw disk bytes when previewed, used to detect external agent modifications. */
+  diskHash?: string;
+  /** Line ending convention preserved on save. */
+  eol?: 'lf' | 'crlf';
   image?: FileImage;
   size?: string;
   modified?: string;
   reason?: string;
+}
+
+export interface FilesSaveResult {
+  ok: boolean;
+  diskHash?: string;
+  size?: string;
+  modified?: string;
+  encoding?: string;
+  eol?: 'lf' | 'crlf';
+  reason?: 'conflict' | 'missing' | 'tooLarge' | 'encoding' | 'readOnly' | 'io';
+  message?: string;
+}
+
+export interface FilesDiskCheckResult {
+  status: 'unchanged' | 'modified' | 'missing';
+  diskHash?: string;
 }
 
 /** One line of a hunk (Core FileDiff.cs): `" "` context, `"+"` added, `"-"` removed; `noNewline` marks a last line without a line break. */

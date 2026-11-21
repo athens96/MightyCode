@@ -31,7 +31,8 @@ export type IconName =
   | 'pipeline'
   | 'expand'
   | 'collapse'
-  | 'branch';
+  | 'branch'
+  | 'mic';
 
 export function Icon({
   name,
@@ -126,6 +127,11 @@ export function Icon({
           {...stroke}
           d="M6 3v12M15 6a3 3 0 1 0 6 0a3 3 0 1 0-6 0M3 18a3 3 0 1 0 6 0a3 3 0 1 0-6 0M18 9a9 9 0 0 1-9 9"
         />
+      ) : name === 'mic' ? (
+        <>
+          <Rect {...stroke} height={11} rx={3} width={6} x={9} y={2.5} />
+          <Path {...stroke} d="M5.5 10.5a6.5 6.5 0 0 0 13 0M12 17v4M8.5 21h7" />
+        </>
       ) : (
         <>
           <Path {...stroke} d="M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18z" />

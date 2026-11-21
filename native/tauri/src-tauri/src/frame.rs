@@ -828,10 +828,12 @@ pub fn register(methods: &mut Registry) {
         if text(&args, "kind") == Some("shell") {
             act(&host, async { add_pane(&host, "shell", "claude", None, |pane| pane).map(|_| ()) }).await
         } else {
-            act(&host, async {
-                crate::pane_worktree::add_new_agent_pane(&host, add_pane::NEW_PANE_SHORTCUT_PROVIDER, None).await.map(|_| ())
-            })
-            .await
+            let provider = match text(&args, "provider") {
+                Some("codex") => "codex",
+                Some("gemini") => "gemini",
+                _ => add_pane::NEW_PANE_SHORTCUT_PROVIDER,
+            };
+            act(&host, async { crate::pane_worktree::add_new_agent_pane(&host, provider, None).await.map(|_| ()) }).await
         }
     });
 }

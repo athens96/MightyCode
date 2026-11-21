@@ -77,6 +77,7 @@ function RowBody({ entries, paneId, provider, input }: { entries: readonly LogEn
 const Row = memo(function Row({ row, run, paneId, provider, open, onToggle, first, last, above }: {
   row: TimelineRow; run: MightyGraphRun | undefined; paneId: string; provider: string; open: boolean; onToggle: (id: string) => void; first: boolean; last: boolean; above?: string;
 }) {
+  const { t } = useServices();
   const entries = row.agentIndex !== undefined ? run?.agents[row.agentIndex]?.entries : row.kind === 'execution' ? run?.rootEntries : undefined;
   const meta = [row.kindLabel, row.capsule, row.duration].filter(Boolean).join(' · ');
   const symbol = rowSymbol(row.kind);
@@ -88,7 +89,7 @@ const Row = memo(function Row({ row, run, paneId, provider, open, onToggle, firs
         <span className={'timeline-node tone-' + row.tone + (row.ring ? ' ring' : '')}><Icon name={symbol} size={11} weight={2.4} /></span>
       </div>
       <div className={'timeline-card' + (row.tone === 'run' ? ' edge-run' : row.tone === 'wait' ? ' edge-wait' : '')}>
-        <button type="button" className="timeline-card-head" onClick={() => onToggle(row.nodeId)} disabled={!entries && !row.input}>
+        <button type="button" className="timeline-card-head" title={entries || row.input ? t(open ? 'tooltip.timeline.foldRow' : 'tooltip.timeline.unfoldRow') : row.title} onClick={() => onToggle(row.nodeId)} disabled={!entries && !row.input}>
           <span className="timeline-card-words">
             <span className="timeline-title">{row.title}</span>
             {/* The glyph in the block's role ink when it has one, as its diagram header wears it (M/MightyGraphView.swift timelineLook). */}
@@ -122,7 +123,7 @@ const Group = memo(function Group({ group, run, paneId, provider, onOpenRow, pen
   // M/MightyGraphView.swift timelineGroup: the header, the rows while the request is open, and its result card either way.
   return (
     <section className="timeline-group" data-run-id={group.runId} data-testid="timeline-group" data-pending-request={pending ? group.runId : undefined}>
-      <button type="button" className="timeline-head" aria-expanded={group.open} disabled={pending !== undefined}
+      <button type="button" className="timeline-head" title={pending ? undefined : t(group.open ? 'tooltip.timeline.foldGroup' : 'tooltip.timeline.unfoldGroup')} aria-expanded={group.open} disabled={pending !== undefined}
         onClick={() => void bridge.call('mightyTimelineFlip', { paneId, runId: group.runId })}>
         <span className="timeline-head-line">
           <span className="timeline-chevron"><Icon name={group.open ? 'chevron-down' : 'chevron-right'} size={10} weight={3} /></span>
@@ -154,7 +155,7 @@ const Group = memo(function Group({ group, run, paneId, provider, onOpenRow, pen
           {group.result && (
             <div className="timeline-result-body">
               <div className={'timeline-result-text' + (group.resultFolds && !full ? ' folded' : '')}>{group.result}</div>
-              {group.resultFolds && <button type="button" className="mighty-link" onClick={() => setFull((f) => !f)}>{t(full ? 'phone.blocks.resultLess' : 'phone.blocks.resultMore')}</button>}
+              {group.resultFolds && <button type="button" className="mighty-link" title={t('tooltip.timeline.toggleResult')} onClick={() => setFull((f) => !f)}>{t(full ? 'phone.blocks.resultLess' : 'phone.blocks.resultMore')}</button>}
             </div>
           )}
         </div>
@@ -282,7 +283,7 @@ export function Timeline({ session, groups: hostGroups, older, history, onOpenRo
       {/* The history card the diagram has at its top (M/MightyGraphView.swift historyCard), centred. */}
       {history && (
         <div className="timeline-history">
-          {history.acts ? <button type="button" className="mighty-link" onClick={() => void bridge.call('mightyLoadOlder', { paneId: session.id })}><Icon name="circle-arrow-up" size={13} weight={2} />{history.text}</button>
+          {history.acts ? <button type="button" className="mighty-link" title={t('tooltip.mighty.loadOlder')} onClick={() => void bridge.call('mightyLoadOlder', { paneId: session.id })}><Icon name="circle-arrow-up" size={13} weight={2} />{history.text}</button>
             : <span className="mighty-muted">{history.text}</span>}
         </div>
       )}
