@@ -298,6 +298,34 @@ pub fn result_title(run_status: &str, waiting: i32, awaiting: bool, locale: &Loc
     }
 }
 
+/// Whether a later run of the same request (a notice turn its background work opened) follows `run` in `runs`: its result is then
+/// the request's result so far, the last one its final result.
+pub fn followed(run: &MightyGraphRun, runs: &[MightyGraphRun]) -> bool {
+    let request = notice::original_run_id(run.id()).unwrap_or(run.id());
+    let Some(at) = runs.iter().position(|r| r.id == run.id) else { return false };
+    runs[at + 1..].iter().any(|later| notice::original_run_id(later.id()) == Some(request))
+}
+
+/// What a notice turn's result answers: its background task as its title names it (after the kind), else none.
+pub fn partial_name(run: &MightyGraphRun) -> Option<String> {
+    let title = run.notice_title.as_deref().map(str::trim).filter(|t| !t.is_empty())?;
+    let name = title.split_once(" · ").map_or(title, |(_, rest)| rest).trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// [`result_title`] within its request: a result a later notice turn of the same request follows is 중간 결과 (with the task it
+/// answered, for a notice turn), the request's last result its 최종 결과.
+pub fn result_title_in(run: &MightyGraphRun, runs: &[MightyGraphRun], waiting: i32, awaiting: bool, locale: &Locale) -> String {
+    let title = result_title(run.status(), waiting, awaiting, locale);
+    if title != locale.get("graph.block.result") || !followed(run, runs) {
+        return title;
+    }
+    match partial_name(run) {
+        Some(name) => locale.get_with("graph.block.resultPartial", &[("name", &name)]),
+        None => locale.get("graph.block.resultPartialPlain"),
+    }
+}
+
 /// `ResultState`: the result block's own state.
 pub fn result_state(run_status: &str) -> &'static str {
     match run_status {
@@ -516,7 +544,7 @@ fn make(
                 let mut block = MightyGraphBlock::new(
                     node,
                     "result",
-                    result_title(run.status(), waiting, awaiting.is_some(), locale),
+                    result_title_in(run, runs, waiting, awaiting.is_some(), locale),
                     state,
                     String::new(),
                 );
@@ -625,4 +653,36 @@ pub fn result_texts(run: &MightyGraphRun) -> Vec<String> {
 /// `LatestCompletedRun`: the newest run whose result is complete.
 pub fn latest_completed_run(runs: &[MightyGraphRun]) -> Option<&MightyGraphRun> {
     runs.iter().rev().find(|r| r.status() == "completed" && support::finished(r))
+}
+
+#[cfg(test)]
+mod partial_result_tests {
+    use super::*;
+
+    fn run(id: &str, title: Option<&str>) -> MightyGraphRun {
+        MightyGraphRun {
+            id: Some(id.into()),
+            status: Some("completed".into()),
+            notice_run: title.map(|_| true),
+            notice_title: title.map(str::to_string),
+            ..MightyGraphRun::default()
+        }
+    }
+
+    #[test]
+    fn a_result_a_later_turn_of_its_request_follows_is_the_result_so_far_named_by_its_task_and_the_last_is_final() {
+        let locale = Locale::new("ko");
+        let runs = vec![
+            run("r1", None),
+            run("r1:notice:1", Some("백그라운드 작업 완료 · 맥 빌드")),
+            run("r1:notice:2", Some("백그라운드 작업 완료 · CI")),
+            run("r2", None),
+        ];
+        assert_eq!(result_title_in(&runs[0], &runs, 0, false, &locale), "중간 결과");
+        assert_eq!(result_title_in(&runs[1], &runs, 0, false, &locale), "중간 결과 · 맥 빌드");
+        assert_eq!(result_title_in(&runs[2], &runs, 0, false, &locale), "최종 결과");
+        assert_eq!(result_title_in(&runs[3], &runs, 0, false, &locale), "최종 결과");
+        // A result still waiting on background work keeps its own title.
+        assert!(result_title_in(&runs[0], &runs, 2, false, &locale).contains("2"));
+    }
 }

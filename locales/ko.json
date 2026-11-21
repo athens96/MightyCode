@@ -305,6 +305,8 @@
   "graph.block.questionPrefix": "질문 · ",
   "graph.block.requestTitle": "요청 {ordinal} · {provider}",
   "graph.block.result": "최종 결과",
+  "graph.block.resultPartial": "중간 결과 · {name}",
+  "graph.block.resultPartialPlain": "중간 결과",
   "graph.block.resultError": "요청 실패",
   "graph.block.resultStopped": "요청 중단",
   "graph.block.resultSoFar": "현재까지의 결과 · 백그라운드 작업 {count}개 기다리는 중",

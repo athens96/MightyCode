@@ -792,13 +792,13 @@ fn a_request_awaiting_notices_is_the_awaiting_notice_block() {
             && card(&all).title == "알림 대기 중",
         "an unanswered notice turn keeps it awaiting",
     );
-    // The notice turn answered: the normal 최종 결과.
+    // The notice turn answered: the request's own result is now its result so far (중간 결과), the notice turn's the final one.
     all[2].status = Some("completed".into());
     all[2].final_output = Some("The build passed.".into());
     let answered = card(&all);
     check(
         notice::awaiting_notice(&all[0], &all, &ko).is_none()
-            && answered.title == "최종 결과"
+            && answered.title == "중간 결과"
             && answered.status == "completed"
             && answered.awaiting.is_none()
             && answered.outline == activity::NONE

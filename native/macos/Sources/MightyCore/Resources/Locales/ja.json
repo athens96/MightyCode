@@ -305,6 +305,8 @@
   "graph.block.questionPrefix": "質問 · ",
   "graph.block.requestTitle": "リクエスト {ordinal} · {provider}",
   "graph.block.result": "最終結果",
+  "graph.block.resultPartial": "途中の結果 · {name}",
+  "graph.block.resultPartialPlain": "途中の結果",
   "graph.block.resultError": "リクエスト失敗",
   "graph.block.resultStopped": "リクエスト停止",
   "graph.block.resultSoFar": "これまでの結果 · バックグラウンド作業 {count} 件を待機中",

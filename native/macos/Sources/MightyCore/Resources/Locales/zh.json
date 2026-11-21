@@ -305,6 +305,8 @@
   "graph.block.questionPrefix": "问题 · ",
   "graph.block.requestTitle": "请求 {ordinal} · {provider}",
   "graph.block.result": "最终结果",
+  "graph.block.resultPartial": "中间结果 · {name}",
+  "graph.block.resultPartialPlain": "中间结果",
   "graph.block.resultError": "请求失败",
   "graph.block.resultStopped": "请求已停止",
   "graph.block.resultSoFar": "目前的结果 · 正在等待 {count} 个后台任务",

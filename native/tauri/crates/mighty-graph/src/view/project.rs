@@ -689,7 +689,7 @@ fn web_timeline(
             result_caption: result.map(|_| caption),
             notice_run: group.notice_run.then_some(true),
             // How the request ended, or 알림 대기 중 while it awaits its background work's notices.
-            result_title: result.map(|r| view_model::result_title(run.status(), support::background_waiting(run), r.awaiting, locale)),
+            result_title: result.map(|r| view_model::result_title_in(run, runs, support::background_waiting(run), r.awaiting, locale)),
         });
     }
     groups
@@ -783,7 +783,8 @@ fn web_structure(
             background: node.filter(|n| n.background).map(|_| true),
             output_tail: node.filter(|n| n.kind == "task").and_then(|n| output_tail(sources.tails.get(&n.agent_id).map(Vec::as_slice))),
             notice_reply: node.and_then(|n| n.notice_reply.as_ref()).map(|e| e.text.clone()),
-            result_title: summary.then(|| view_model::result_title(&item.status, item.background_waiting, item.awaiting, locale)),
+            result_title: summary
+                .then(|| view_model::result_title_in(&runs[item.run_index], runs, item.background_waiting, item.awaiting, locale)),
             result_awaiting: (summary && item.awaiting && !ended).then_some(true),
             result_waiting: (summary && !item.awaiting && item.background_waiting > 0 && !ended).then_some(true),
         }
