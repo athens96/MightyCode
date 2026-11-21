@@ -252,7 +252,7 @@ export function busySendChoice(agents: readonly WorktreeAgent[], index: number):
  * The 실행 중 보내기 pill: what Enter does while the pane runs — queue the words (대기열) or run them now in a new worktree of the
  * chosen agent. Drawn only while the pane runs and offers a worktree; the choice is the pane's, kept by the host until changed.
  */
-export function BusySendPill({ paneId, agents, current, compact = false }: { paneId: string; agents: readonly WorktreeAgent[]; current: string | null; compact?: boolean }) {
+export function BusySendPill({ paneId, agents, current, compact = false, split = false }: { paneId: string; agents: readonly WorktreeAgent[]; current: string | null; compact?: boolean; split?: boolean }) {
   const { bridge, t } = useServices();
   const [open, setOpen] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -271,10 +271,10 @@ export function BusySendPill({ paneId, agents, current, compact = false }: { pan
   };
   return (
     <>
-      <button type="button" className={'composer-pill composer-busy-send' + (compact ? ' compact' : '') + (chosen ? ' on' : '')} data-pill="busySend" data-testid="composer-busy-send" aria-haspopup="menu"
+      <button type="button" className={(split ? 'composer-send-choose' : 'composer-pill') + ' composer-busy-send' + (compact && !split ? ' compact' : '') + (chosen ? ' on' : '')} data-pill="busySend" data-testid="composer-busy-send" aria-haspopup="menu"
         aria-label={t('composer.busySend.title') + ' · ' + name} title={t('composer.busySend.help') + '\n' + name} onClick={() => setOpen(!open)}>
         {chosen ? <span className="pill-glyph"><ProviderMark provider={chosen.agent} size={12} /></span> : <Icon name="list-plus" size={13} weight={1.75} className="pill-glyph" />}
-        {!compact && <span className="pill-text">{name}</span>}<Icon name="chevron-down" size={8} weight={3} className="pill-chevron" />
+        {!compact && !split && <span className="pill-text">{name}</span>}<Icon name="chevron-down" size={8} weight={3} className="pill-chevron" />
       </button>
       {problem && <span className="composer-pill-problem" role="alert">{problem}</span>}
       {open && (

@@ -267,6 +267,23 @@ export function Composer({ session }: { session: RunSession }) {
   const placeholder = t(secondSendWords(state?.placeholderKey ?? (session.kind === 'shell' ? 'composer.placeholder.shell' : 'composer.placeholder.idle'), onMac()), { agent: runsWith?.label ?? '' });
   const primaryName = state?.primary === 'worktree' ? t('queue.runNowAgent', { agent: runsWith?.label ?? '' }) : state?.primary === 'queue' ? t('queue.add') : state?.primary === 'stop' ? t('composer.stop.name') : t('composer.send.name');
   const primaryTip = state?.primary === 'worktree' ? t('queue.runNowAgentHint', { agent: runsWith?.label ?? '' }) : state?.primary === 'queue' ? t('queue.addHint') : state?.primary === 'stop' ? t('composer.stop.tooltip') : t('composer.send.tooltip');
+  // In the busy split control the send button says "send" (↑): the target beside it says where to.
+  const inSplit = !!state?.busy && !!state?.pills && (state?.worktreeAgents?.length ?? 0) > 0 && (state?.primary === 'queue' || state?.primary === 'worktree');
+  const primaryButton = (
+    <button
+      type="button"
+      className={'composer-primary mode-' + (state?.primary ?? 'send')}
+      data-testid="composer-primary"
+      aria-label={primaryName}
+      title={primaryTip}
+      disabled={!state?.primaryEnabled}
+      onClick={() => primary()}
+    >
+      {state?.primary === 'stop' ? <Icon name="square" size={11} weight={0} fill /> : inSplit ? <Icon name="arrow-up" size={15} weight={2.4} />
+        : state?.primary === 'queue' ? <Icon name="list-plus" size={14} weight={2.2} />
+        : state?.primary === 'worktree' ? <Icon name="split" size={14} weight={2.2} /> : <Icon name="arrow-up" size={15} weight={2.4} />}
+    </button>
+  );
 
   return (
     <div className="composer-region">
@@ -390,23 +407,23 @@ export function Composer({ session }: { session: RunSession }) {
           {(state?.primary === 'queue' || state?.primary === 'worktree') && (
             <button type="button" className="composer-stop-small" aria-label={t('composer.stop.name')} disabled={state.stopping} onClick={() => call('stop')}><Icon name="square" size={9} weight={0} fill /></button>
           )}
-          {/* 실행 중 보내기: what Enter does while the pane runs, beside the worktree button it chooses for (대기열, or an agent's worktree). */}
-          {state?.busy && state.pills && <BusySendPill paneId={paneId} agents={agents} current={runsWith?.agent ?? null} compact />}
-          {state?.worktree && (
+          {/* 실행 중 보내기: while the pane runs and words wait to go, Enter's target (대기열, or an agent's worktree) is chosen on the
+              send button itself, one split control [target ▾ | ↑]; the separate worktree disc is there only while Enter queues, since in
+              worktree mode the send button already does what it would. */}
+          {state?.worktree && !(state.busy && state.pills && state.primary === 'worktree') && (
             <button type="button" className="composer-worktree" data-testid="composer-worktree" aria-label={t('queue.worktree')} title={t(onMac() ? 'queue.worktreeHintMac' : 'queue.worktreeHint')} disabled={!state.worktreeEnabled} onClick={() => void send(true)}><Icon name="split" size={13} weight={2.2} /></button>
           )}
-          <button
-            type="button"
-            className={'composer-primary mode-' + (state?.primary ?? 'send')}
-            data-testid="composer-primary"
-            aria-label={primaryName}
-            title={primaryTip}
-            disabled={!state?.primaryEnabled}
-            onClick={primary}
-          >
-            {state?.primary === 'stop' ? <Icon name="square" size={11} weight={0} fill /> : state?.primary === 'queue' ? <Icon name="list-plus" size={14} weight={2.2} />
-              : state?.primary === 'worktree' ? <Icon name="split" size={14} weight={2.2} /> : <Icon name="arrow-up" size={15} weight={2.4} />}
-          </button>
+          {state?.busy && state.pills && agents.length > 0 && (state.primary === 'queue' || state.primary === 'worktree') ? (
+            <span className="composer-send-split" data-testid="composer-send-split">
+              <BusySendPill paneId={paneId} agents={agents} current={runsWith?.agent ?? null} split />
+              {primaryButton}
+            </span>
+          ) : (
+            <>
+              {state?.busy && state.pills && <BusySendPill paneId={paneId} agents={agents} current={runsWith?.agent ?? null} compact />}
+              {primaryButton}
+            </>
+          )}
         </div>
         <ComposerCard paneId={paneId} kind="statusLine" />
       </div>

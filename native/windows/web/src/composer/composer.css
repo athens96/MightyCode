@@ -43,6 +43,18 @@
 .composer-primary.mode-stop { border-radius: var(--radius-row); background: var(--err); color: var(--on-status); }
 .composer-primary:disabled, .composer-worktree:disabled { background: var(--track); color: var(--ink2); }
 .composer-stop-small { width: calc(var(--layout-toolbar) - 4px); height: calc(var(--layout-toolbar) - 4px); border-radius: 7px; background: var(--err); color: var(--on-status); }
+/* 실행 중 보내기 on the send button: one capsule [target ▾ | send disc], the target the queue's glyph or the chosen agent's mark, the disc
+   flush with the capsule's right end. Alone (nothing typed yet), the target is a capsule of its own, never squeezed into a disc. */
+.composer-send-split { position: relative; display: inline-flex; align-items: center; flex: none; height: var(--layout-toolbar); box-sizing: border-box;
+  padding-left: var(--space-sm); gap: 2px; border: var(--stroke-line) solid var(--line-strong); border-radius: calc(var(--layout-toolbar) / 2); background: var(--card); }
+.composer-send-split .composer-primary { margin: calc(-1 * var(--stroke-line)) calc(-1 * var(--stroke-line)) calc(-1 * var(--stroke-line)) 2px; }
+.composer-send-split .composer-popover { left: auto; right: 0; }
+.composer-send-choose { display: inline-flex; align-items: center; gap: 3px; height: calc(var(--layout-toolbar) - 4px); padding: 0 4px; border: 0; border-radius: var(--radius-file-row);
+  background: transparent; color: var(--ink); font: inherit; cursor: default; }
+.composer-send-choose:hover { background: var(--subtle); }
+.composer-send-choose.on { color: var(--accent); }
+.composer-send-choose:focus-visible { outline: var(--stroke-focus) solid var(--accent); }
+.composer-pill.composer-busy-send.compact { width: auto; padding: 0 7px 0 8px; gap: 3px; }
 
 .composer-attachments { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
 .composer-chip { display: flex; align-items: center; gap: var(--space-xs); padding: var(--space-sm); border-radius: 9px; border: var(--stroke-line) solid var(--line); background: var(--track); }

@@ -49,6 +49,16 @@ describe('the 실행 중 보내기 pill', () => {
     expect(html).toContain('data-provider="codex"');
   });
 
+  it('on the send button it is the split control\'s target: the mark and a chevron, never a squeezed disc or the agent\'s name', () => {
+    const html = renderToStaticMarkup(createElement(ServicesContext.Provider, { value: services },
+      createElement(BusySendPill, { paneId: 'p', agents, current: 'codex', split: true })));
+    expect(pill(html)).toContain('composer-send-choose composer-busy-send on');
+    expect(pill(html)).not.toContain('composer-pill');
+    expect(pill(html)).not.toContain(' compact');
+    expect(html).toContain('data-provider="codex"');
+    expect(html).not.toContain('>Worktree · Codex<');
+  });
+
   it('the old 보낼 대상 pill is gone', () => {
     expect(render({ busy: true, worktreeAgents: agents })).not.toContain('data-pill="ask"');
     expect(render()).not.toContain('data-pill="ask"');
