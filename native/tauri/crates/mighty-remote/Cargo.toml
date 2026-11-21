@@ -39,7 +39,7 @@ url = "2"
 unicode-segmentation.workspace = true
 # The relay's crypto (relay::cipher, W8-A; push::seal): X25519 -> HKDF-SHA256 -> ChaCha20-Poly1305, byte for byte as C#'s RelayCrypto
 # and MobilePush; fixed-time compares and secrets wiped after use.
-x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
+x25519-dalek = { version = "3", features = ["static_secrets", "zeroize"] }
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
 subtle = "2"
