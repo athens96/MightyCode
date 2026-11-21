@@ -2645,7 +2645,7 @@ dependencies = [
 
 [[package]]
 name = "mightycode"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "base64 0.22.1",
  "chrono",
