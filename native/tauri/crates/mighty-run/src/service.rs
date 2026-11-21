@@ -230,7 +230,7 @@ impl Shared {
         if due.is_empty() {
             return;
         }
-        let Some(folder) = checkpoint_folder(&state.snapshot, session_id) else { return };
+        let Some(folder) = crate::checkpoints::folder_of(&state.snapshot, session_id) else { return };
         for (run_id, kind, label, step_key) in due {
             let base = crate::checkpoints::newest_tree(after, crate::checkpoints::request_of(&run_id));
             checkpoints.ask(crate::checkpoints::Job {
@@ -795,7 +795,7 @@ impl RunService {
             state.snapshot = apply::apply(&state.snapshot, &asked, now);
             // The folder as the request starts: the base its first change is measured from.
             if let (Some(checkpoints), Some(run_id)) = (self.shared.checkpoints.get(), request.graph_run_id.clone())
-                && let Some(folder) = checkpoint_folder(&state.snapshot, &request.session_id)
+                && let Some(folder) = crate::checkpoints::folder_of(&state.snapshot, &request.session_id)
             {
                 checkpoints.ask(crate::checkpoints::Job {
                     session_id: request.session_id.clone(),
@@ -1124,25 +1124,4 @@ fn with_additions(mut whole: RunSession, now: &RunSession) -> RunSession {
         stored_digest: None,
         ..now.clone()
     }
-}
-
-/// The folder a pane's runs work in, for its snapshots: its own working folder (a worktree), else its workspace's; none for a remote
-/// workspace or a mirrored pane.
-fn checkpoint_folder(snapshot: &AppSnapshot, session_id: &str) -> Option<std::path::PathBuf> {
-    let pane = snapshot.session(session_id)?;
-    if pane.mirror.is_some() {
-        return None;
-    }
-    let folder = match pane.working_folder.as_deref().filter(|f| !f.is_empty()) {
-        Some(folder) => folder.to_string(),
-        None => {
-            let workspace = snapshot.workspace(pane.workspace_id())?;
-            if workspace.remote.is_some() {
-                return None;
-            }
-            workspace.path.clone().filter(|p| !p.is_empty())?
-        }
-    };
-    let folder = std::path::PathBuf::from(folder);
-    folder.is_absolute().then_some(folder)
 }

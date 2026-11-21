@@ -108,6 +108,7 @@ pub fn same_run(a: &MightyGraphRun, b: &MightyGraphRun) -> bool {
             && same_list(a.result_entries.as_deref(), b.result_entries.as_deref(), same_entry)
             && same_list(a.agents.as_deref(), b.agents.as_deref(), same_agent)
             && same_list(a.response_records.as_deref(), b.response_records.as_deref(), |x, y| x == y)
+            && a.checkpoints == b.checkpoints
 }
 
 /// `WebDelta.ListChange`.

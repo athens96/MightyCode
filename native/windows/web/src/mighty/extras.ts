@@ -5,6 +5,7 @@ import type { BlockExtra } from './Block';
 import { ImagesSuffix, PlanRecordSuffix, runOf, suffixOf, type Layout } from './layout';
 import { runSteps, stepEntries, stepSuffix } from './flow';
 import type { MightyInputs } from './types';
+import { rollUp } from './rollup';
 
 export function sameExtra(a: BlockExtra, b: BlockExtra): boolean {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof BlockExtra>;
@@ -57,6 +58,9 @@ export function blockExtras({ layout, runs, inputs, draft, planHistory, resultSi
       case 'result': {
         const files = filesOf(run);
         extra = { entries: run?.resultEntries, finalOutput: run?.finalOutput, files, filesOpen: inputs?.resultFilesRunID === run?.id, fitted: layout.fittedResultID === node.id && !resultSize, measure: node.id === latest };
+        // The request's last result gathers what each of its steps changed (its 결과물 list, rollup.ts).
+        const progress = run && run.status === 'completed' ? rollUp(runs, run) : [];
+        if (progress.length > 0) extra.progress = progress;
         if (run && changedRuns?.has(run.id)) extra.changes = true;
         if (emptyResults?.has(node.id)) { extra.empty = true; delete extra.measure; }
         break;
@@ -64,7 +68,11 @@ export function blockExtras({ layout, runs, inputs, draft, planHistory, resultSi
       case 'draft': extra = { draft: draft }; break;
       case 'plan': extra = { markdown: planText }; break;
       case 'planRecord': extra = { planRecord: planHistory?.find((r) => r.id === suffix.slice(PlanRecordSuffix.length)) }; break;
-      case 'resultFiles': extra = { files: filesOf(run) }; break;
+      case 'resultFiles': {
+        const progress = run ? rollUp(runs, run) : [];
+        extra = { files: filesOf(run), ...(progress.length > 0 ? { progress } : {}) };
+        break;
+      }
       case 'images': { const step = suffix.slice(ImagesSuffix.length); extra = { images: run ? { runId: run.id, step, count: inputs?.galleries.find((g) => g.runID === run.id && g.step === step)?.count ?? 0 } : undefined }; break; }
       case 'execution': extra = { execution: inputs?.executionCards[node.id] }; break;
       case 'history': extra = { history: inputs?.history }; break;
@@ -73,7 +81,7 @@ export function blockExtras({ layout, runs, inputs, draft, planHistory, resultSi
     // The host's pushed data (files, an execution's card, the history state, a gallery) arrives as new objects whenever any
     // part of the inputs changed: a part equal by value keeps the object the block was drawn with.
     if (before) {
-      for (const key of ['files', 'images', 'execution', 'history', 'planRecord'] as const) {
+      for (const key of ['files', 'images', 'execution', 'history', 'planRecord', 'progress'] as const) {
         if (extra[key] !== undefined && before[key] !== undefined && extra[key] !== before[key] && JSON.stringify(extra[key]) === JSON.stringify(before[key])) extra = { ...extra, [key]: before[key] };
       }
     }

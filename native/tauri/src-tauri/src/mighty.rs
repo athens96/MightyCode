@@ -297,6 +297,19 @@ pub fn register(methods: &mut Registry) {
         dirty(&mut view, &id);
         Ok(Value::Null)
     });
+    // A file's change in one step of a request, as its result's list shows it: a unified diff between the step's two snapshots
+    // (mighty-run checkpoints.rs), read from the app's own store; null when it cannot be read.
+    methods.add("mightyCheckpointDiff", |host: Arc<Host>, args| async move {
+        let folder = {
+            let view = host.view();
+            let id = text(&args, "paneId").unwrap_or_default().to_string();
+            mighty_run::checkpoints::folder_of(&view.snapshot, &id)
+        };
+        let (Some(folder), Some(snapshots)) = (folder, crate::runs::SNAPSHOTS.get()) else { return Ok(Value::Null) };
+        let (base, tree, path) = (text(&args, "base").unwrap_or(""), text(&args, "tree").unwrap_or(""), text(&args, "path").unwrap_or(""));
+        let diff = snapshots.file_diff(&folder, base, tree, path, text(&args, "oldPath")).await;
+        Ok(diff.map(Value::String).unwrap_or(Value::Null))
+    });
     // LoadOlderGraphHistory: the next older chunk of the session record, read off the page's thread (history.rs).
     methods.add("mightyLoadOlder", |host: Arc<Host>, args| async move {
         let mut view = host.view();

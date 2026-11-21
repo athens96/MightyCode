@@ -179,6 +179,37 @@
 .mighty-file-words { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .mighty-file-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mighty-file-path { font-family: var(--font-mono); font-size: var(--type-small); color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A request's 결과물 (ResultRollUp.tsx): the 단계별 | 파일별 switch and the search over a section per step, each folded or cut at five rows. */
+.mighty-rollup { display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-sm); }
+.mighty-rollup-bar { display: flex; align-items: center; gap: var(--space-sm); min-width: 0; }
+.mighty-rollup-mode { flex: none; display: inline-flex; border: var(--stroke-line) solid var(--line); border-radius: var(--radius-file-row); overflow: hidden; }
+.mighty-rollup-mode > button { border: 0; background: transparent; color: var(--ink2); font: inherit; font-size: var(--type-small); padding: 1px var(--space-sm); cursor: pointer; }
+.mighty-rollup-mode > button.chosen { background: var(--card-raised); color: var(--ink); }
+.mighty-rollup-search { flex: 1; min-width: 0; border: var(--stroke-line) solid var(--line); border-radius: var(--radius-file-row); background: var(--card); color: var(--ink); font: inherit; font-size: var(--type-small); padding: 2px var(--space-sm); }
+.mighty-rollup-section { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mighty-rollup-head { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: transparent; color: var(--ink); font: inherit; text-align: left; padding: 2px 0; cursor: pointer; min-width: 0; }
+.mighty-rollup-head.plain { cursor: default; }
+.mighty-rollup-head > svg { flex: none; color: var(--ink2); }
+.mighty-rollup-index { flex: none; display: inline-grid; place-items: center; min-width: 16px; height: 16px; border-radius: 8px; background: var(--card-raised); color: var(--ink2); font-size: var(--type-small); font-variant-numeric: tabular-nums; }
+.mighty-rollup-title { flex: 1; min-width: 0; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mighty-rollup-meta { flex: none; color: var(--ink2); font-size: var(--type-small); }
+.mighty-rollup-rows { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mighty-rollup-folder { display: flex; align-items: center; gap: 4px; color: var(--ink2); font-family: var(--font-mono); font-size: var(--type-small); padding: 2px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mighty-rollup-file { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mighty-rollup-status { flex: none; display: inline-grid; place-items: center; width: 16px; height: 16px; margin-top: 1px; border-radius: 4px; font-family: var(--font-mono); font-size: var(--type-small); font-weight: 700; color: var(--ink2); background: color-mix(in srgb, var(--ink2) 14%, transparent); }
+.mighty-rollup-status.s-a { color: var(--done-text); background: color-mix(in srgb, var(--done-text) 14%, transparent); }
+.mighty-rollup-status.s-d { color: var(--err-text); background: color-mix(in srgb, var(--err-text) 14%, transparent); }
+.mighty-rollup-status.s-m, .mighty-rollup-status.s-r { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.mighty-rollup-counts { flex: none; display: inline-flex; gap: 4px; margin-left: auto; font-family: var(--font-mono); font-size: var(--type-small); font-variant-numeric: tabular-nums; color: var(--ink2); }
+.mighty-rollup-counts .added { color: var(--done-text); }
+.mighty-rollup-counts .removed { color: var(--err-text); }
+.mighty-rollup-diff { flex: none; display: inline-flex; align-items: center; min-width: 44px; justify-content: flex-end; border: 0; border-radius: 8px; background: var(--card-raised); padding: 0 var(--space-sm); cursor: pointer; }
+.mighty-rollup-diff:hover, .mighty-rollup-diff.on { background: color-mix(in srgb, var(--accent) 12%, var(--card-raised)); }
+.mighty-rollup-tags { flex: none; display: inline-flex; align-items: center; gap: 2px; padding: 0 2px; }
+.mighty-rollup-tag { display: inline-grid; place-items: center; min-width: 16px; height: 16px; border-radius: 8px; background: var(--card-raised); color: var(--ink2); font-size: var(--type-small); font-variant-numeric: tabular-nums; }
+.mighty-rollup-more { align-self: flex-start; border: 0; background: transparent; color: var(--accent); font: inherit; font-size: var(--type-small); padding: 2px 0; cursor: pointer; }
+.mighty-rollup-note { color: var(--ink2); font-size: var(--type-small); padding: 2px 0; }
+.mighty-rollup-patch { max-height: 320px; overflow: auto; border: var(--stroke-line) solid var(--line); border-radius: 8px; font-size: 12px; }
 .mighty-title-count { margin-left: var(--space-sm); font-size: 11px; font-weight: 600; color: var(--ink2); }
 .mighty-block.kind-result .mighty-head .mighty-icon { display: inline-flex; align-items: center; gap: 3px; width: auto; padding: 0 4px; font-size: 11px; font-weight: 700; }
 .mighty-images { padding: var(--space-md); }

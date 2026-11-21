@@ -152,12 +152,17 @@ fn agents_directory_among(beside: Option<PathBuf>, resources: Option<PathBuf>, r
     [beside, resources, repository].into_iter().flatten().map(|folder| folder.join("Agents")).find(|dir| dir.is_dir())
 }
 
+/// The snapshot store, once [`start_checkpoints`] made it: a result's list reads a file's change from it (mighty.rs).
+pub static SNAPSHOTS: std::sync::OnceLock<mighty_run::checkpoints::Snapshots> = std::sync::OnceLock::new();
+
 /// Starts the snapshots of the runs' folders (mighty-run checkpoints.rs) in `folder`, git pointed at `hooks` for hooks.
 pub fn start_checkpoints(host: &Arc<Host>, folder: PathBuf, hooks: PathBuf) {
     let Some(runs) = host.runs() else { return };
     let git = mighty_run::git::Git::new(host.processes.clone(), hooks);
+    let snapshots = mighty_run::checkpoints::Snapshots::new(folder, git);
+    let _ = SNAPSHOTS.set(snapshots.clone());
     let runtime = tauri::async_runtime::handle();
-    runs.service.set_checkpoints(mighty_run::checkpoints::Snapshots::new(folder, git), runtime.inner());
+    runs.service.set_checkpoints(snapshots, runtime.inner());
 }
 
 impl Runs {

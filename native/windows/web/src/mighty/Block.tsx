@@ -5,7 +5,6 @@ import { useServices } from '../app/context';
 import { Entry } from '../conversation/Entry';
 import { HeightCache, estimateHeight, followsAfterScroll, layout, visibleRange, type ScrollPlace } from '../conversation/virtual';
 import { Markdown } from '../conversation/MarkdownView';
-import { editorClick } from '../conversation/referenceClick';
 import { ProviderMark } from '../conversation/ProviderMark';
 import type { LogEntry, PlanRecord } from '../store/models';
 import { PlanDocument, PlanRecordDetails } from '../cards/PlanDocument';
@@ -18,6 +17,8 @@ import type { PlanRecord as PresentedPlanRecord } from '../cards/types';
 import { BottomRight, type Edges } from './resize';
 import { headerFit } from './flow';
 import { inkVar, markIcon, ToneDot } from './FlowParts';
+import { ResultRollUp } from './ResultRollUp';
+import { byFile, type RollUpSection } from './rollup';
 import { useMenu } from '../shell/parts';
 import { Pending } from '../pending/Pending';
 import type { PendingState } from '../pending/display';
@@ -63,6 +64,15 @@ export interface BlockExtra {
   changes?: boolean;
   /** A settled result with nothing to show (layout emptyResultIds): its header alone, saying so, with nothing to resize or fit. */
   empty?: boolean;
+  /** The request's last result and its 결과물 list: what each step, background turn and the rest of the run changed (rollup.ts). */
+  progress?: readonly RollUpSection[];
+}
+
+/** How many files a result's list holds: each changed file once, then the ones the answer names that changed nothing. */
+export function listedCount(extra: BlockExtra): number {
+  const changed = byFile(extra.progress ?? []);
+  const paths = new Set(changed.map((file) => file.path));
+  return changed.length + (extra.files ?? []).filter((file) => !paths.has(file.path)).length;
 }
 
 export interface BlockProps {
@@ -305,29 +315,7 @@ function Body({ recorded, ...props }: BlockProps & { recorded?: PresentedPlanRec
         {recorded && <PlanRecordDetails record={recorded} expanded={props.expanded} />}
       </div></div>;
     case 'resultFiles':
-      return (
-        <div className="mighty-body">
-          {(extra.files ?? []).map((file) => (
-            // M/MightyGraphResultFiles.swift: a row per file, its glyph, its name over its path in mono.
-            <div key={file.path + ':' + (file.line ?? '')} className="mighty-file-row">
-              <button className="mighty-file" title={t('graph.resultFiles.openFile', { path: file.path })}
-                onClick={(event) => editorClick(event) && actions.openInEditor ? actions.openInEditor(file) : actions.openFile(file, runOf(id))}>
-                <Icon name="file-text" size={13} weight={1.6} className="mighty-file-glyph" />
-                <span className="mighty-file-words">
-                  <span className="mighty-file-name">{file.path.split(/[\\/]/).pop()}{file.line ? ':' + file.line : ''}</span>
-                  <span className="mighty-file-path">{file.path}</span>
-                </span>
-              </button>
-              {actions.openInEditor && (
-                <button className="mighty-file-editor" data-testid="mighty-file-editor" title={file.line ? t('editor.openLine', { line: file.line }) : t('editor.open')}
-                  aria-label={file.line ? t('editor.openLine', { line: file.line }) : t('editor.open')} onClick={() => actions.openInEditor?.(file)}>
-                  <Icon name="file-code" size={13} weight={1.7} />
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      );
+      return <ResultRollUp paneId={paneId} runId={runOf(id)} sections={extra.progress ?? []} mentioned={extra.files ?? []} actions={actions} />;
     case 'images':
       return <div className="mighty-body">{extra.images && <Images paneId={paneId} images={extra.images} />}</div>;
     case 'execution':
@@ -433,7 +421,7 @@ export const Block = memo(function Block(props: BlockProps) {
           {copy?.provider && (copy.title ?? '').lastIndexOf(providerLabel(copy.provider)) > 0
             ? <>{copy.title!.slice(0, copy.title!.lastIndexOf(providerLabel(copy.provider)))}<ProviderMark provider={copy.provider} size={12} />{copy.title!.slice(copy.title!.lastIndexOf(providerLabel(copy.provider)))}</>
             : <>{copy?.provider && <ProviderMark provider={copy.provider} size={12} />}{copy?.title ?? ''}</>}
-          {kind === 'resultFiles' && (extra.files?.length ?? 0) > 0 && <span className="mighty-title-count">{extra.files?.length}</span>}
+          {kind === 'resultFiles' && listedCount(extra) > 0 && <span className="mighty-title-count">{listedCount(extra)}</span>}
           {extra.empty && <span className="mighty-empty-note" data-testid={'mighty-empty-' + id}>{t('graph.block.noResponse')}</span>}
         </span>
         {role && fit?.showsMarks && role.marks.map((mark) => (
@@ -460,9 +448,10 @@ export const Block = memo(function Block(props: BlockProps) {
             <span className={'mighty-state tone-' + tone} data-testid={'mighty-result-state-' + id}>{copy.state}</span>
           )}
           {copy?.capsule && <span className="mighty-capsule" title={copy.help}>{copy.capsule}</span>}
-          {kind === 'result' && copy?.filesRunId && (extra.files?.length ?? 0) > 0 && (
-            <button className={'mighty-icon' + (extra.filesOpen ? ' on' : '')} title={t(extra.filesOpen ? 'graph.resultFiles.closeButton' : 'graph.resultFiles.openButton')}
-              onClick={() => actions.toggleFiles(copy.filesRunId!)}><Icon name="files" size={13} weight={1.75} /><span>{extra.files?.length}</span></button>
+          {kind === 'result' && copy?.filesRunId && listedCount(extra) > 0 && (
+            <button className={'mighty-icon' + (extra.filesOpen ? ' on' : '')} data-testid={'mighty-result-files-' + id}
+              title={t(extra.filesOpen ? 'graph.resultFiles.closeButton' : extra.progress ? 'graph.resultFiles.openRollUp' : 'graph.resultFiles.openButton')}
+              onClick={() => actions.toggleFiles(copy.filesRunId!)}><Icon name="files" size={13} weight={1.75} /><span>{listedCount(extra)}</span></button>
           )}
           {kind === 'result' && extra.changes && runOf(id) && (
             <button className="mighty-icon" data-testid={'mighty-run-changes-' + id} title={t('runChanges.openButton')} aria-label={t('runChanges.openButton')}

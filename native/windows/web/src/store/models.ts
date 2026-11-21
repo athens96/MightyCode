@@ -244,6 +244,33 @@ export interface MightyGraphRun {
   steps?: FlowStep[];
   /** The keys of the earlier request's done items, which are never this request's steps. */
   stepsCarried?: string[];
+  /** Snapshots of the run's folder as the request started and as its steps, turns and the run ended, with the files each saw
+   * change (Core checkpoints.rs, every agent); absent without a repository and in older saves. */
+  checkpoints?: RunCheckpoint[];
+}
+
+/** One snapshot of a run's folder (Core RunCheckpoint): `start`, `step`, `turn` or `end`; the files changed since `base`. */
+export interface RunCheckpoint {
+  kind: string;
+  at?: string;
+  /** The step's text, or the background task's name for a turn. */
+  label?: string;
+  stepKey?: string;
+  tree: string;
+  base?: string;
+  files: CheckpointFile[];
+  /** Files changed past the listed ones. */
+  more?: number;
+}
+
+/** One file a checkpoint saw changed: A added, M modified, D deleted, R renamed (from `oldPath`), T type changed. */
+export interface CheckpointFile {
+  path: string;
+  oldPath?: string;
+  status: string;
+  /** Lines added and removed; absent for a binary file. */
+  added?: number;
+  removed?: number;
 }
 
 /** One step of a request's checklist (Core/macOS FlowStep): times are ISO 8601, when the app saw it start and end. */

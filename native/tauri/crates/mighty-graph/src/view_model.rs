@@ -307,6 +307,18 @@ pub fn followed(run: &MightyGraphRun, runs: &[MightyGraphRun]) -> bool {
 }
 
 /// What a notice turn's result answers: its background task as its title names it (after the kind), else none.
+/// Whether `run` is its request's last result and the request's snapshots saw files change (the checkpoints of the request's own run
+/// and of its notice runs): its result lists them, by step.
+pub fn request_changed(run: &MightyGraphRun, runs: &[MightyGraphRun]) -> bool {
+    if followed(run, runs) {
+        return false;
+    }
+    let request = notice::original_run_id(run.id()).unwrap_or(run.id());
+    runs.iter()
+        .filter(|r| notice::original_run_id(r.id()).unwrap_or(r.id()) == request)
+        .any(|r| r.checkpoints().iter().any(|c| !c.files.is_empty()))
+}
+
 pub fn partial_name(run: &MightyGraphRun) -> Option<String> {
     let title = run.notice_title.as_deref().map(str::trim).filter(|t| !t.is_empty())?;
     let name = title.split_once(" · ").map_or(title, |(_, rest)| rest).trim();
@@ -573,8 +585,13 @@ fn make(
                 result.push(block);
             }
             ("resultFiles", Some(run)) => {
-                let mut block =
-                    MightyGraphBlock::new(node, "resultFiles", locale.get("graph.resultFiles.title"), String::new(), String::new());
+                // A request whose steps changed files lists what each changed: its 결과물, not only the files the answer names.
+                let title = if request_changed(run, runs) {
+                    locale.get("graph.resultFiles.rollUpTitle")
+                } else {
+                    locale.get("graph.resultFiles.title")
+                };
+                let mut block = MightyGraphBlock::new(node, "resultFiles", title, String::new(), String::new());
                 block.result_files_run_id = Some(run.id().into());
                 result.push(block);
             }
@@ -684,5 +701,23 @@ mod partial_result_tests {
         assert_eq!(result_title_in(&runs[3], &runs, 0, false, &locale), "최종 결과");
         // A result still waiting on background work keeps its own title.
         assert!(result_title_in(&runs[0], &runs, 2, false, &locale).contains("2"));
+    }
+
+    #[test]
+    fn only_a_requests_last_result_holds_what_its_steps_changed() {
+        use mighty_core::graph::{CheckpointFile, RunCheckpoint};
+        let changed = RunCheckpoint {
+            kind: "step".into(),
+            tree: "b".repeat(40),
+            base: Some("a".repeat(40)),
+            files: vec![CheckpointFile { path: "src/a.rs".into(), status: "M".into(), ..CheckpointFile::default() }],
+            ..RunCheckpoint::default()
+        };
+        let mut first = run("r1", None);
+        first.checkpoints = Some(vec![changed]);
+        let runs = vec![first, run("r1:notice:1", Some("백그라운드 작업 완료 · 빌드")), run("r2", None)];
+        assert!(!request_changed(&runs[0], &runs), "a result a notice turn follows");
+        assert!(request_changed(&runs[1], &runs), "the request's last result, its steps' changes on the first run");
+        assert!(!request_changed(&runs[2], &runs), "another request");
     }
 }

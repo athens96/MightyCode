@@ -172,7 +172,9 @@ impl Snapshots {
         if !repository.store.join("objects").is_dir() {
             return None;
         }
-        let variables = Self::variables(&repository);
+        let mut variables = Self::variables(&repository);
+        // A path is a path, never a pathspec's magic.
+        variables.push(("GIT_LITERAL_PATHSPECS", "1".to_string()));
         let mut arguments = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", base, tree, "--"];
         if let Some(old) = old_path.filter(|old| !old.is_empty() && *old != path) {
             arguments.push(old);
@@ -196,6 +198,27 @@ impl Snapshots {
             }
         }
     }
+}
+
+/// The folder a pane's runs work in, for its snapshots: its own working folder (a worktree), else its workspace's; none for a remote
+/// workspace or a mirrored pane.
+pub fn folder_of(snapshot: &mighty_core::model::AppSnapshot, session_id: &str) -> Option<PathBuf> {
+    let pane = snapshot.session(session_id)?;
+    if pane.mirror.is_some() {
+        return None;
+    }
+    let folder = match pane.working_folder.as_deref().filter(|f| !f.is_empty()) {
+        Some(folder) => folder.to_string(),
+        None => {
+            let workspace = snapshot.workspace(pane.workspace_id())?;
+            if workspace.remote.is_some() {
+                return None;
+            }
+            workspace.path.clone().filter(|p| !p.is_empty())?
+        }
+    };
+    let folder = PathBuf::from(folder);
+    folder.is_absolute().then_some(folder)
 }
 
 /// `git diff-tree --name-status -z`: `M\0path\0`, `R100\0old\0new\0`.

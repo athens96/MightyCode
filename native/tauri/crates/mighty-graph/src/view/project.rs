@@ -146,6 +146,9 @@ pub struct MightyPane {
     result_files_looking: HashSet<(String, u64)>,
     /// The results the last projection found still to look through.
     lookups: Vec<ResultFilesLookup>,
+    /// The finished results whose request changed files (its checkpoints, `view_model::request_changed`): their list opens too, with
+    /// what each step changed.
+    changed_results: HashSet<String>,
     /// `webTimelineFlipped`: the 기록 groups the user opened or folded against their default.
     pub timeline_flipped: HashSet<String>,
     /// `graphRecordSizes`: the dragged sizes of blocks read back from the record, kept while the pane shows (never saved).
@@ -311,7 +314,7 @@ impl MightyPane {
             None => self.result_files.close(),
             Some(id) => {
                 let named = self.result_files_by_run.get(id).is_some_and(|(_, files)| !files.is_empty());
-                self.result_files.toggle(id, named);
+                self.result_files.toggle(id, named || self.changed_results.contains(id));
             }
         }
     }
@@ -382,8 +385,20 @@ pub fn project(pane: &RunSession, state: &mut MightyPane, sources: &Sources, loc
     let presentation = timeline::mode(pane);
     // Each result card names its own request's files; the newest that names any opens its list by itself, once.
     let files = state.resolve_result_files(retained, sources.root);
-    let published: Vec<(String, bool)> =
-        retained.iter().filter_map(|r| files.get(r.id()).map(|f| (r.id().to_string(), !f.is_empty()))).collect();
+    // A request's last result also lists what its steps changed, so it has a list when they changed any file.
+    state.changed_results = retained
+        .iter()
+        .filter(|r| r.status() == "completed" && view_model::request_changed(r, retained))
+        .map(|r| r.id().to_string())
+        .collect();
+    let published: Vec<(String, bool)> = retained
+        .iter()
+        .filter_map(|r| {
+            let named = files.get(r.id()).map(|f| !f.is_empty());
+            let changed = state.changed_results.contains(r.id());
+            (named.is_some() || changed).then(|| (r.id().to_string(), named == Some(true) || changed))
+        })
+        .collect();
     state.result_files.publish(&published);
     let plan_run_id = diagram_plan_run_id(sources.pending_plan, true, runs);
     state.executions = sources.executions.to_vec();
