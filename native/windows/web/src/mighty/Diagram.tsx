@@ -703,6 +703,7 @@ export function Diagram({ session, mighty, memory, aim, onAimed, pending: reques
     measured(id, height) { setMeasured((m) => (Math.abs((m[id] ?? -1) - height) < 1 ? m : { ...m, [id]: height })); },
     foldToCard(id) { openCard(id, false); },
     openChanges(runId) { setChangesRun(runId); },
+    forkHere(runId) { void bridge.call('paneFork', { paneId, requestId: runId }).catch(() => {}); },
   }), [bridge, paneId, openCard, setMeasured]);
 
   const onKeyDown = (event: React.KeyboardEvent) => {

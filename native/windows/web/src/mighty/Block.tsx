@@ -41,6 +41,8 @@ export interface BlockActions {
   foldToCard(id: string): void;
   /** 요청 변경 검토 of the result's request (RunChanges.tsx). */
   openChanges(runId: string): void;
+  /** MC-28: 여기서 갈라내기: the conversation up to the result's request into a new pane in a new worktree (fork.rs). */
+  forkHere?(runId: string): void;
 }
 
 /** What only some kinds draw; each part keeps its object while it does not change. */
@@ -376,6 +378,7 @@ function Body({ recorded, ...props }: BlockProps & { recorded?: PresentedPlanRec
  */
 export const Block = memo(function Block(props: BlockProps) {
   const { t } = useServices();
+  const menu = useMenu();
   const [planOpen, setPlanOpen] = useState(false);
   const renders = useRef(0);
   renders.current += 1;
@@ -411,7 +414,10 @@ export const Block = memo(function Block(props: BlockProps) {
       data-block-id={id} data-kind={shownKind} data-renders={renders.current} data-changed={changed} data-visible={props.visible ? '1' : '0'} data-live={props.running ? '1' : undefined}
       data-pending-request={extra.pending ? id : undefined} data-empty={extra.empty ? '' : undefined}
       style={{ left: x, top: y, width: w, height: h }} title={copy?.fromRecord ? t('graph.history.tag') : undefined}>
-      <div className={'mighty-head' + (role ? ' with-role' : '')}>
+      <div className={'mighty-head' + (role ? ' with-role' : '')}
+        onContextMenu={kind === 'result' && actions.forkHere && runOf(id) && !copy?.soFar && !props.running ? (event) => menu.atPointer(event, [
+          { label: t('fork.menu.here'), icon: <Icon name="git-fork" size={13} />, action: () => actions.forkHere?.(runOf(id)!), testId: 'mighty-fork-here' },
+        ]) : undefined}>
         {/* The block's status as a small dot (⑨): its words are the header's (the title, the state in the meta), the role's summary its label. */}
         <span className={'mighty-symbol kind-' + (copy?.notice ? 'task' : shownKind)}
           aria-hidden={role ? undefined : 'true'} role={role ? 'img' : undefined} aria-label={role?.summary} title={role?.summary} data-testid={role ? 'mighty-role-' + id : undefined}>

@@ -386,8 +386,36 @@ export interface RunSession {
   /** Present on an agent pane that works in its own worktree (Core RunSession.PaneWorktree). */
   paneWorktree?: PaneWorktree | null;
   linkedTask?: LinkedTask | null;
+  /** MC-28: the pane this one was forked from (새 worktree로 갈라내기, 여기서 갈라내기). */
+  forkedFrom?: ForkedFrom | null;
+  /** MC-28: other agents' read-only opinions on the pane's work (/advisor, /committee), the newest last. */
+  opinions?: OpinionCard[];
   /** The shell blocks of the agent's replies the user ran (MightyCode.Core/ShellBlockRuns.cs), one per block key. */
   shellRuns?: ShellBlockRun[];
+}
+
+/** MC-28: where a pane was forked from: the source pane, the request the fork took the conversation up to, and how it came along. */
+export interface ForkedFrom {
+  paneId: string;
+  requestId?: string;
+  title?: string;
+  mode?: 'cli' | 'handoff';
+  forkPending?: boolean;
+  handoff?: string;
+}
+
+/** MC-28: another agent's opinion (agent, model, cost when known, body); cards of one /committee share `group`. */
+export interface OpinionCard {
+  id: string;
+  provider: string;
+  model?: string;
+  costUsd?: number;
+  tokens?: number;
+  question?: string;
+  body: string;
+  state: 'running' | 'done' | 'failed';
+  createdAt?: string;
+  group?: string;
 }
 
 export type ShellBlockRunState = 'running' | 'completed' | 'failed' | 'stopped' | 'interrupted';

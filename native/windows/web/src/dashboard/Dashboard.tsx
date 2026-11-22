@@ -98,6 +98,8 @@ export function Dashboard({ model, onUsage }: { model: DashboardModel; onUsage: 
                       <span className="dashboard-row-meta">
                         {info.kind === 'claude' && <><ProviderMark provider={info.provider} size={12} /><span>{info.agentLabel ?? info.provider}</span>{info.beta && <BetaBadge />}</>}
                         <span>{info.dashMeta}</span>
+                        {/* MC-28: a forked pane names its source (its title now, or as saved when it is closed). */}
+                        {info.forkedFrom && <span className="dashboard-row-fork"><Icon name="git-fork" size={11} weight={2.2} />{t('fork.label', { title: panes.get(info.forkedFrom.paneId)?.title ?? info.forkedFrom.title })}</span>}
                         {info.kind === 'shell' && <span className="tone-text-wait strong">{t('phone.card.localTerminal')}</span>}
                       </span>
                       {info.activity && <span className={'dashboard-row-activity mono' + (info.activityError ? ' tone-text-err' : '')}>{info.activity}</span>}

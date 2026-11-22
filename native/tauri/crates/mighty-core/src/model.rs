@@ -822,6 +822,130 @@ impl Wire for PaneWorktree {
     }
 }
 
+/// MC-28: where a pane forked from (`새 worktree로 갈라내기`, `여기서 갈라내기`): the source pane and the request the fork took the
+/// conversation up to, the source's title then (for when it is closed), and what the first request still has to do with the
+/// conversation. Lenient: damage loads as None.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ForkedFrom {
+    pub pane_id: String,
+    /// The graph run (request) the fork took the conversation up to; None for the whole conversation.
+    pub request_id: Option<String>,
+    pub title: Option<String>,
+    /// How the conversation came along: `cli` (the agent's own fork of the source session) or `handoff` (a summary in the first
+    /// request).
+    pub mode: Option<String>,
+    /// While true the pane's `resume_id` is still the source's session: the first run forks it (Claude `--fork-session`, Codex
+    /// `exec fork`) and never resumes it. Cleared when the run names its own session. Only true is kept.
+    pub fork_pending: Option<bool>,
+    /// The summary the first request carries in front of what was typed (always made, so a CLI fork that cannot run falls back to
+    /// it); None once sent or once the CLI fork took.
+    pub handoff: Option<String>,
+}
+
+/// MC-28: the most a handoff summary keeps, in characters.
+pub const FORK_HANDOFF_LIMIT: usize = 12_000;
+
+impl ForkedFrom {
+    pub const CLI: &'static str = "cli";
+    pub const HANDOFF: &'static str = "handoff";
+
+    pub fn pending(&self) -> bool {
+        self.fork_pending == Some(true)
+    }
+}
+
+impl Wire for ForkedFrom {
+    fn read(value: &Value) -> R<Self> {
+        let o = Obj::of(value, "a fork link")?;
+        let Some(pane_id) = json::opt_string(o.get("paneId"))?.filter(|id| !id.is_empty()) else {
+            return fail("a fork link without its pane");
+        };
+        Ok(ForkedFrom {
+            pane_id,
+            request_id: lenient_string(o.get("requestId")),
+            title: lenient_string(o.get("title")),
+            mode: lenient_string(o.get("mode")),
+            fork_pending: (lenient_bool(o.get("forkPending")) == Some(true)).then_some(true),
+            handoff: lenient_string(o.get("handoff")),
+        })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_str("paneId", Some(&self.pane_id));
+        out.prop_str("requestId", self.request_id.as_deref());
+        out.prop_str("title", self.title.as_deref());
+        out.prop_str("mode", self.mode.as_deref());
+        out.prop_opt_bool("forkPending", self.fork_pending.filter(|p| *p));
+        out.prop_str("handoff", self.handoff.as_deref());
+        out.end_object();
+    }
+}
+
+/// MC-28: another agent's opinion on the pane's work (`/advisor`): who answered, with what model and cost, and what. Cards of one
+/// committee share `group` and show side by side. Lenient: damage loads as None.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct OpinionCard {
+    pub id: String,
+    pub provider: String,
+    pub model: Option<String>,
+    pub cost_usd: Option<f64>,
+    pub tokens: Option<i64>,
+    /// The person's own question, when they asked one.
+    pub question: Option<String>,
+    pub body: String,
+    /// `running`, `done` or `failed` (the body then says why).
+    pub state: String,
+    pub created_at: Option<String>,
+    pub group: Option<String>,
+}
+
+/// MC-28: how many opinion cards a pane keeps (the newest), and how long each body may be.
+pub const OPINION_CARDS_KEPT: usize = 6;
+pub const OPINION_BODY_LIMIT: usize = 8_000;
+
+impl OpinionCard {
+    pub const RUNNING: &'static str = "running";
+    pub const DONE: &'static str = "done";
+    pub const FAILED: &'static str = "failed";
+}
+
+impl Wire for OpinionCard {
+    fn read(value: &Value) -> R<Self> {
+        let o = Obj::of(value, "an opinion card")?;
+        let Some(id) = json::opt_string(o.get("id"))?.filter(|id| !id.is_empty()) else {
+            return fail("an opinion card without its id");
+        };
+        Ok(OpinionCard {
+            id,
+            provider: lenient_string(o.get("provider")).unwrap_or_default(),
+            model: lenient_string(o.get("model")),
+            cost_usd: json::opt_float64(o.get("costUsd")).ok().flatten(),
+            tokens: json::opt_int64(o.get("tokens")).ok().flatten(),
+            question: lenient_string(o.get("question")),
+            body: lenient_string(o.get("body")).unwrap_or_default(),
+            state: lenient_string(o.get("state")).unwrap_or_else(|| OpinionCard::DONE.into()),
+            created_at: lenient_string(o.get("createdAt")),
+            group: lenient_string(o.get("group")),
+        })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_str("id", Some(&self.id));
+        out.prop_str("provider", Some(&self.provider));
+        out.prop_str("model", self.model.as_deref());
+        out.prop_opt_float("costUsd", self.cost_usd);
+        out.prop_opt_int("tokens", self.tokens);
+        out.prop_str("question", self.question.as_deref());
+        out.prop_str("body", Some(&self.body));
+        out.prop_str("state", Some(&self.state));
+        out.prop_str("createdAt", self.created_at.as_deref());
+        out.prop_str("group", self.group.as_deref());
+        out.end_object();
+    }
+}
+
 /// C# `KeptPaneWorktree`: a pane worktree kept after its pane closed with work still unmerged (or children still on its branch).
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeptPaneWorktree {
@@ -1212,6 +1336,10 @@ pub struct RunSession {
     pub pane_worktree: Option<PaneWorktree>,
     pub linked_task: Option<LinkedTask>,
     pub ask_target: Option<String>,
+    /// MC-28: the pane this one was forked from (`forkedFrom`).
+    pub forked_from: Option<ForkedFrom>,
+    /// MC-28: other agents' opinions on the pane's work (`/advisor`), the newest last.
+    pub opinions: Option<Vec<OpinionCard>>,
     /// `shellRuns` on the wire.
     pub shell_block_runs: Option<Vec<ShellBlockRun>>,
     /// `[JsonIgnore] Mirror`: the host pane a remote mirror pane shows (C# `RemoteMirrorReference`, W9-J): never read, written or saved.
@@ -1361,6 +1489,8 @@ impl Default for RunSession {
             pane_worktree: None,
             linked_task: None,
             ask_target: None,
+            forked_from: None,
+            opinions: None,
             shell_block_runs: None,
             mirror: None,
             body_on_disk: false,
@@ -1447,6 +1577,8 @@ impl Wire for RunSession {
             pane_worktree: lenient_record(o.get("paneWorktree")),
             linked_task: lenient_record(o.get("linkedTask")),
             ask_target: lenient_string(o.get("askTarget")),
+            forked_from: lenient_record(o.get("forkedFrom")),
+            opinions: lenient_list(o.get("opinions")),
             shell_block_runs: lenient_list(o.get("shellRuns")),
             mirror: None,
             body_on_disk: false,
@@ -1598,6 +1730,8 @@ impl RunSession {
         out.prop("paneWorktree", self.pane_worktree.as_ref());
         out.prop("linkedTask", self.linked_task.as_ref());
         out.prop_str("askTarget", self.ask_target.as_deref());
+        out.prop("forkedFrom", self.forked_from.as_ref());
+        out.prop_list("opinions", self.opinions.as_ref());
         if fields.body() {
             out.prop_list("shellRuns", self.shell_block_runs.as_ref());
         }
@@ -1748,6 +1882,8 @@ impl RunSession {
             pane_worktree,
             linked_task,
             ask_target,
+            forked_from,
+            opinions,
             shell_block_runs,
             mirror: _,
             body_on_disk: _,
@@ -1790,6 +1926,8 @@ impl RunSession {
             && background_work == &other.background_work
             && pane_worktree == &other.pane_worktree
             && linked_task == &other.linked_task
+            && forked_from == &other.forked_from
+            && opinions == &other.opinions
             && shell_block_runs == &other.shell_block_runs
     }
 }

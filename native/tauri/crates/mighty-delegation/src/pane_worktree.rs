@@ -88,6 +88,126 @@ pub async fn make_pane(maker: &Maker, session_id: &str, start: &ChildWorktreeBas
     })
 }
 
+// ── a fork's worktree (MC-28) ────────────────────────────────────────────────────────────────────────────────────────────
+
+/// MC-28: the name a forked pane gets, and so its worktree folder and branch (`mighty/fork-<short id>`): `fork-` and the first eight
+/// hex digits of `id` (a new id).
+pub fn fork_session_id(id: &str) -> String {
+    let short: String = id.chars().filter(|c| c.is_ascii_hexdigit()).take(8).collect::<String>().to_ascii_lowercase();
+    format!("fork-{short}")
+}
+
+/// MC-28: where a fork's worktree starts: at the source pane's HEAD (`source`, what [`Maker::check`] read in the source's run folder).
+/// A source in its own worktree hands on the checkout and the branch it merges into, so the fork merges where the source does; a
+/// source in the workspace folder is already that.
+pub fn fork_start(source: &ChildWorktreeBase, source_worktree: Option<&PaneWorktree>) -> ChildWorktreeBase {
+    match source_worktree.filter(|w| !w.checkout().is_empty() && !w.base_branch().is_empty()) {
+        Some(worktree) => ChildWorktreeBase {
+            repository: worktree.checkout().to_string(),
+            prefix: source.prefix.clone(),
+            parent_branch: worktree.base_branch().to_string(),
+            base_commit: source.base_commit.clone(),
+        },
+        None => source.clone(),
+    }
+}
+
+/// MC-28: what carrying a source's uncommitted changes into a fork's worktree did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CarryOutcome {
+    /// The source had nothing uncommitted.
+    Nothing,
+    /// The changed tracked files (as `git stash apply` put them) and the new files copied, by their paths in the run folder.
+    Carried { tracked: bool, copied: Vec<String> },
+    /// Nothing was carried, the new worktree is as it was made, and why (the source is never touched).
+    Failed(String),
+}
+
+/// The most a new (untracked) file may weigh to be copied into a fork.
+const CARRY_FILE_LIMIT: u64 = 8 * 1024 * 1024;
+
+/// MC-28: the source's uncommitted changes carried into the fork's new worktree without touching the source: `git stash create` in
+/// `source` (a commit object of its tracked changes; the source's files, index and stash list stay as they are), `git stash apply
+/// <sha>` in `target`, then its new files that git does not ignore copied over (gitignored files never come along; links and files
+/// over 8 MiB are left). A failed apply (a conflict, the fork made at another commit) puts `target` back as it was made.
+pub async fn carry_changes(git: &Git, source: &str, target: &str) -> CarryOutcome {
+    use CarryOutcome::{Carried, Failed, Nothing};
+    // The stash commit is only ever applied, never kept: a name of its own spares a computer with no git identity a refusal.
+    let identity = ["-c", "user.name=Mighty Code", "-c", "user.email=mighty-code@localhost", "stash", "create"];
+    let Some(created) = run(git, &identity, source, 60.0).await else { return Failed("Git did not finish.".into()) };
+    if created.exit_code != 0 {
+        return Failed(message(&created));
+    }
+    let sha = line(&created.stdout).to_string();
+    let Some(others) = run(git, &["ls-files", "-z", "--others", "--exclude-standard"], source, 60.0).await else {
+        return Failed("Git did not finish.".into());
+    };
+    if others.exit_code != 0 {
+        return Failed(message(&others));
+    }
+    let new_files: Vec<String> = others.stdout.split('\0').filter(|p| !p.is_empty()).map(str::to_string).collect();
+    if sha.is_empty() && new_files.is_empty() {
+        return Nothing;
+    }
+    if !sha.is_empty() {
+        if !is_object_name(&sha) {
+            return Failed(format!("Git named no stash: {sha}"));
+        }
+        let applied = run(git, &["stash", "apply", &sha], target, 120.0).await;
+        if applied.as_ref().is_none_or(|a| a.exit_code != 0) {
+            let why = applied.as_ref().map(message).unwrap_or_else(|| "Git did not finish.".into());
+            // Only the new worktree is put back, never the source: it was made a moment ago and holds nothing else yet.
+            let _ = run(git, &["reset", "-q", "--hard", "HEAD"], target, 60.0).await;
+            let _ = run(git, &["clean", "-fdq"], target, 60.0).await;
+            return Failed(why);
+        }
+    }
+    let mut copied = Vec::new();
+    for relative in new_files {
+        let (from, to) = (Path::new(source).join(&relative), Path::new(target).join(&relative));
+        let Ok(meta) = std::fs::symlink_metadata(&from) else { continue };
+        if !meta.is_file() || meta.len() > CARRY_FILE_LIMIT || to.exists() || !is_inside_folder(target, &to) {
+            continue;
+        }
+        if let Some(parent) = to.parent()
+            && std::fs::create_dir_all(parent).is_err()
+        {
+            continue;
+        }
+        if std::fs::copy(&from, &to).is_ok() {
+            copied.push(relative);
+        }
+    }
+    Carried { tracked: !sha.is_empty(), copied }
+}
+
+/// Whether `path` (a relative path joined to `folder`) stays inside `folder`: no `..` and no root.
+fn is_inside_folder(folder: &str, path: &Path) -> bool {
+    path.strip_prefix(folder).is_ok_and(|rest| rest.components().all(|c| matches!(c, std::path::Component::Normal(_))))
+}
+
+/// MC-28: the paths `folder`'s checkout has changed and not committed (tracked and new, gitignored left out), for a fork's summary.
+pub async fn uncommitted_paths(git: &Git, folder: &str) -> Vec<String> {
+    let Some(status) = run(git, &["status", "--porcelain=v1", "-z", "--untracked-files=all"], folder, 30.0).await else { return vec![] };
+    if status.exit_code != 0 {
+        return vec![];
+    }
+    let mut paths = Vec::new();
+    let mut fields = status.stdout.split('\0').filter(|f| !f.is_empty());
+    while let Some(field) = fields.next() {
+        if field.len() < 4 {
+            continue;
+        }
+        let (code, path) = field.split_at(3);
+        paths.push(path.to_string());
+        // A rename names its origin next.
+        if code.starts_with('R') || code.starts_with('C') {
+            fields.next();
+        }
+    }
+    paths
+}
+
 // ── the decision (rule 1) ───────────────────────────────────────────────────────────────────────────────────────────────
 
 /// `PaneWorktreeDecision`: where a new agent pane of a workspace works.

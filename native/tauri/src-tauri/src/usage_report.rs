@@ -92,6 +92,35 @@ pub fn on_run_finished(host: &Arc<Host>, session_id: &str) {
     }
 }
 
+/// MC-28: an `/advisor` opinion's cost and tokens in the ledger, under the workspace of the pane that asked (a one-off run: no
+/// per-pane baseline). Saved like a finished run's; a crossed daily budget says so the same way.
+pub fn record_advisor(host: &Arc<Host>, workspace_id: &str, provider: &str, model: &str, cost_usd: Option<f64>, tokens: Option<i64>) {
+    if host.closing() {
+        return;
+    }
+    let today_date = Local::now().date_naive();
+    let today_str = today_date.format("%Y-%m-%d").to_string();
+    let (to_save, crossed, spent_today, budget) = with_ledger(host, |ledger| {
+        let rec = ledger.record_once(workspace_id, provider, model, cost_usd, tokens, &today_str);
+        let budget = ledger.daily_budget_usd.unwrap_or(0.0);
+        let crossed = rec.as_ref().is_some_and(|r| ledger.crossed_budget(budget, r));
+        (rec.is_some().then(|| ledger.clone()), crossed, ledger.cost_on(&today_str), budget)
+    });
+    let Some(snapshot_ledger) = to_save else { return };
+    if host.writes() {
+        let dir = host.data_dir.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let _ = snapshot_ledger.save(&dir, today_date);
+        });
+    }
+    if crossed {
+        let body = host
+            .locale
+            .get_with("usage.budget.notificationBody", &[("spent", &format!("${spent_today:.2}")), ("budget", &format!("${budget:.2}"))]);
+        crate::notifications::notify_custom(host, host.locale.get("usage.budget.notificationTitle"), body);
+    }
+}
+
 pub fn forget_pane(host: &Host, pane_id: &str) {
     with_ledger(host, |ledger| ledger.forget(pane_id));
 }

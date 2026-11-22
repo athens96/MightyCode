@@ -62,6 +62,15 @@ Claude·Codex·Antigravity 창이 실행 중일 때 요청을 쓰고 {{kbd:⌘En
 - **닫기와 목록**: 병합하지 않은 작업이 없으면 창을 닫을 때 worktree도 지웁니다. 작업이 남아 있으면 남겨 두고, 워크스페이스 행 메뉴의 {{ui:paneWorktree.menu.list}}에서 다시 창으로 열거나 병합하거나 지울 수 있습니다.
 - **검토 대기열**: 일이 끝나 변경이 남은 worktree 창과 자식 창은 [{{ui:review.open}}](layout.md#review)에 모입니다. 막대의 메뉴에 있는 {{ui:editor.openFolder}}는 창이 일하는 폴더를 외부 편집기에서 엽니다.
 
+## 대화 갈라내기 {#fork}
+쌓아 온 맥락을 그대로 두고 다른 방법을 시도하고 싶을 때, 창의 대화를 이어받은 새 창을 새 worktree에서 엽니다. 원본 창의 대화와 파일은 그대로입니다.
+
+- **여는 곳**: 창의 ··· 메뉴 {{ui:fork.menu.pane}}, 또는 결과 블록 머리의 오른쪽 클릭 메뉴 {{ui:fork.menu.here}}(그 요청까지의 대화). 실행 중인 창은 끝난 뒤에 갈라낼 수 있습니다.
+- **worktree**: 원본 창의 HEAD에서 `mighty/fork-<짧은 id>` 브랜치와 worktree를 만듭니다. 원본이 worktree 창이면 원본과 같은 기준 브랜치로 병합합니다. 복사할 파일, 준비 명령, `.mighty.yaml`, [포트 범위](#mighty-yaml)는 다른 worktree 창과 같습니다.
+- **커밋 안 된 변경**: {{ui:fork.dialog.carry}}(기본 켬)를 두면 원본의 바뀐 파일과 새 파일을 새 worktree로 옮깁니다(`git stash create`로 원본을 건드리지 않고 만든 뒤 새 worktree에 적용합니다). gitignore에 걸린 파일은 옮기지 않습니다. 옮기지 못하면 원본은 그대로 두고, 새 창 기록에 이유를 남깁니다.
+- **대화 이어받기**: Claude와 Codex는 첫 요청에서 CLI가 원본 세션을 새 세션으로 복제합니다(Claude `--fork-session`, Codex `exec fork`). 원본 세션은 바뀌지 않습니다. Antigravity, opencode, Hermes, pi와 마지막이 아닌 요청에서 갈라낸 경우에는 첫 요청 앞에 마지막 요청, 계획, 마지막 결과, 바뀐 파일 목록을 담은 요약(최대 12,000자, 비밀값으로 보이는 줄은 지움)을 붙입니다. CLI가 원본 세션을 찾지 못하면 다음 요청에 요약을 붙입니다.
+- **표시**: 새 창은 사이드바에서 원본 아래에 들여 보이고, 창 위에 원본 이름과 원본 창으로 가는 단추가 있습니다. 휴대폰의 창 정보에도 `forkedFrom`으로 들어갑니다.
+
 ## 포트, 실행 액션, 정리 명령 {#mighty-yaml}
 저장소 맨 위의 `.mighty.yaml`에 worktree마다 쓸 포트, 실행 액션, worktree를 지울 때 돌릴 정리 명령을 적을 수 있습니다. 이 파일의 명령은 {{ui:projectTasks.title}} 창에서 {{ui:projectTasks.approve}}을 누른 뒤에만 실행되고, 파일이 바뀌면 다시 승인해야 합니다. 원격 워크스페이스에서는 쓰지 않습니다.
 

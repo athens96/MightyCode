@@ -62,6 +62,15 @@ So that several agent panes of one workspace can work at once, a workspace's age
 - **Closing and the list**: a pane closed with nothing unmerged takes its worktree with it. One with work left keeps it, and {{ui:paneWorktree.menu.list}} in the workspace row's menu opens it as a pane again, merges it or deletes it.
 - **Review queue**: worktree panes and child panes that finished with changes gather in the [{{ui:review.open}}](layout.md#review). {{ui:editor.openFolder}} in the bar's menu opens the folder the pane works in in your external editor.
 
+## Forking a conversation {#fork}
+To try another way without losing the context a pane built up, open a new pane in a new worktree that carries on its conversation. The source pane's conversation and files stay as they are.
+
+- **Where**: the pane's ··· menu {{ui:fork.menu.pane}}, or {{ui:fork.menu.here}} in a result block header's right-click menu (the conversation up to that request). A running pane can be forked once it is done.
+- **Worktree**: a `mighty/fork-<short id>` branch and worktree are made from the source pane's HEAD. When the source works in its own worktree, the fork merges into the same base branch. Copied files, the setup command, `.mighty.yaml` and the [port block](#mighty-yaml) work as for any worktree pane.
+- **Uncommitted changes**: with {{ui:fork.dialog.carry}} on (the default), the source's changed and new files come along (`git stash create` makes them without touching the source, then they are applied in the new worktree). Gitignored files never come along. If they cannot be carried, the source stays as it is and the new pane's log says why.
+- **The conversation**: for Claude and Codex the CLI copies the source session into a new one with the first request (Claude `--fork-session`, Codex `exec fork`); the source session is not changed. For Antigravity, opencode, Hermes and pi, and when you fork from a request that is not the last, the first request starts with a summary of the last request, the plan, the last result and the changed files (12,000 characters at most, lines that look like secrets removed). If the CLI cannot find the source session, the next request carries the summary.
+- **Where it shows**: the new pane is listed under its source in the sidebar, with the source's name and a button to it over the pane. The phone's pane summary carries it as `forkedFrom`.
+
 ## Ports, run actions and teardown {#mighty-yaml}
 A `.mighty.yaml` at the top of the repository can give each worktree its ports, run actions, and a teardown command that runs when the worktree is removed. Its commands run only after you press {{ui:projectTasks.approve}} in the {{ui:projectTasks.title}} panel, and again only after you approve a changed file. Remote workspaces do not use it.
 

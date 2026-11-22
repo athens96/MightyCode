@@ -117,6 +117,34 @@ impl UsageLedger {
         Some(entry)
     }
 
+    /// MC-28: a one-off run's cost and tokens (an `/advisor` opinion), recorded as they are under the pane's workspace, with no
+    /// per-pane baseline (each such run reports its own totals). None when it reported neither.
+    pub fn record_once(
+        &mut self,
+        workspace_id: &str,
+        provider: &str,
+        model: &str,
+        cost_usd: Option<f64>,
+        tokens: Option<i64>,
+        day: &str,
+    ) -> Option<UsageRecord> {
+        let cost = cost_usd.filter(|c| c.is_finite() && *c > 0.0).unwrap_or(0.0);
+        let tokens = tokens.filter(|t| *t > 0).unwrap_or(0);
+        if cost <= 0.0 && tokens <= 0 {
+            return None;
+        }
+        let entry = UsageRecord {
+            day: day.to_string(),
+            workspace_id: workspace_id.to_string(),
+            provider: provider.to_string(),
+            model: model.to_string(),
+            cost_usd: cost,
+            tokens,
+        };
+        self.records.push(entry.clone());
+        Some(entry)
+    }
+
     pub fn forget(&mut self, pane_id: &str) {
         self.last.remove(pane_id);
     }

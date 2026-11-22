@@ -1,0 +1,52 @@
+/* MC-28: a forked pane's strip (drawn as the worktree bar) and the opinion cards under the conversation (Opinions.tsx). */
+.fork-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm, 8px);
+  padding: 0 var(--space-md, 12px);
+  min-height: 26px;
+  font-size: 11px;
+  color: var(--ink2);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.fork-strip > svg { color: var(--accent); flex: none; }
+.fork-strip-text { color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.fork-strip-how { white-space: nowrap; }
+.fork-strip .spacer { flex: 1; }
+.fork-strip .btn.small { padding: 2px 8px; font-size: 11px; }
+
+.opinions {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm, 8px);
+  max-height: 40%;
+  overflow: auto;
+  padding: var(--space-sm, 8px) var(--space-md, 12px);
+  border-top: 1px solid var(--border);
+}
+.opinion-row { display: flex; gap: var(--space-sm, 8px); }
+.opinion-row > .opinion-card { flex: 1; min-width: 0; }
+.opinion-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs, 4px);
+  padding: var(--space-sm, 8px) var(--space-md, 12px);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--card);
+  font-size: 12px;
+}
+.opinion-card.state-failed { border-left-color: var(--err); }
+.opinion-head { display: flex; align-items: center; gap: var(--space-xs, 4px); color: var(--ink2); }
+.opinion-head .spacer { flex: 1; }
+.opinion-title { color: var(--ink); font-weight: 600; white-space: nowrap; }
+.opinion-figures { font-family: var(--font-mono); font-size: var(--type-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.opinion-question { color: var(--ink2); font-style: italic; }
+.opinion-body { max-height: 240px; overflow: auto; color: var(--ink); }
+.opinion-waiting, .opinion-failed { display: inline-flex; align-items: center; gap: var(--space-xs, 4px); color: var(--ink2); }
+.opinion-failed { color: var(--err-text); }
+.opinion-foot { display: flex; justify-content: flex-end; }
+.opinion-foot .btn.small { padding: 2px 8px; font-size: 11px; }

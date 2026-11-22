@@ -420,6 +420,18 @@ pub struct PaneInfo {
     /// MC-26: the pull request of the pane's worktree branch (src-tauri attention.rs).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr: Option<PanePr>,
+    /// MC-28: the pane this one was forked from: its id and title (as saved when the fork was made), for the row's label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<PaneFork>,
+}
+
+/// MC-28: where a pane was forked from, as its row and the pane's strip show it.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PaneFork {
+    pub pane_id: String,
+    pub request_id: Option<String>,
+    pub title: String,
 }
 
 /// The pull request of a pane's worktree branch as its row and bar show it (MC-26; the Git workbench's `query_pr_status_value`).
@@ -515,6 +527,11 @@ pub fn pane_info(locale: &Locale, s: &RunSession, attention: Attention, now: Dat
         attention: None,
         ports: Vec::new(),
         pr: None,
+        forked_from: s.forked_from.as_ref().map(|link| PaneFork {
+            pane_id: link.pane_id.clone(),
+            request_id: link.request_id.clone(),
+            title: link.title.clone().unwrap_or_default(),
+        }),
     }
 }
 

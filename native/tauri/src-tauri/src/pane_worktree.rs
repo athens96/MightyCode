@@ -46,11 +46,11 @@ use crate::methods::text as arg;
 /// The git, the worktree root and the maker the panes' worktrees use: delegation's own (the same root and hooks folder), made once at
 /// [`start`].
 #[derive(Clone)]
-struct Places {
-    git: Git,
-    root: String,
-    paths: DelegationPaths,
-    maker: Maker,
+pub(crate) struct Places {
+    pub(crate) git: Git,
+    pub(crate) root: String,
+    pub(crate) paths: DelegationPaths,
+    pub(crate) maker: Maker,
 }
 
 /// The window's state (C# `paneWorktreeBusy`, `paneWorktreeConflicts`) and the places, one per process as there is one host.
@@ -64,7 +64,7 @@ struct State {
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(Mutex::default);
 
-fn places() -> Option<Places> {
+pub(crate) fn places() -> Option<Places> {
     lock(&STATE).places.clone()
 }
 
@@ -182,7 +182,7 @@ pub(crate) async fn show_child_changes(host: &Arc<Host>, id: &str) {
     }
 }
 
-fn system_log(text: String, provider: Option<String>) -> mighty_core::model::LogEntry {
+pub(crate) fn system_log(text: String, provider: Option<String>) -> mighty_core::model::LogEntry {
     mighty_core::model::LogEntry::new(wire::new_id(), "system", text, time::now_o(), provider)
 }
 
@@ -224,19 +224,19 @@ fn update_workspace(host: &Arc<Host>, id: &str, change: impl FnOnce(&mut Workspa
 }
 
 /// C# `error.Text = …`: the banner.
-fn banner(host: &Arc<Host>, text: String) {
+pub(crate) fn banner(host: &Arc<Host>, text: String) {
     host.view().error = Some(text);
     host.schedule();
 }
 
 /// The PORTs the open panes hold.
-fn taken_ports(host: &Host) -> HashSet<i32> {
+pub(crate) fn taken_ports(host: &Host) -> HashSet<i32> {
     host.view().snapshot.sessions().iter().filter_map(|s| s.pane_worktree.as_ref().map(|p| p.port)).collect()
 }
 
 /// `PaneWorktreePorts.CanBind` as the PORT's search asks it: a smoke binds nothing but loopback port 0 (the part brief), so every port
 /// reads free there.
-fn port_free(host: &Host, port: i32) -> bool {
+pub(crate) fn port_free(host: &Host, port: i32) -> bool {
     host.smoke.is_some() || core::can_bind(port)
 }
 
@@ -246,13 +246,13 @@ fn still_active(host: &Host, workspace: &Workspace) -> bool {
 }
 
 /// Whether the git steps that write may touch `folders` (the workspace's checkout, a worktree, the root).
-fn may_write(host: &Host, folders: &[&str]) -> bool {
+pub(crate) fn may_write(host: &Host, folders: &[&str]) -> bool {
     folders.iter().all(|folder| crate::delegation::may_touch(host, Path::new(folder)))
 }
 
 /// A sheet in the page (C# `OpenWebDialog` with `dialogOpen`): the page's answer, null when cancelled or while another sheet is up;
 /// the smoke's driver answers instead when one is set.
-async fn ask(host: &Arc<Host>, dialog: Value) -> Value {
+pub(crate) async fn ask(host: &Arc<Host>, dialog: Value) -> Value {
     let dialog = crate::dialogs::without_nulls(dialog);
     if host.smoke.is_some()
         && let Some(answer) = lock(&SMOKE_ANSWER).clone()
@@ -340,7 +340,7 @@ fn locale_or(locale: &mighty_core::locale::Locale, key: &str, fallback: &str) ->
 /// Checks `.mighty.yaml` / `.mighty.local.yaml` in `workspace` before opening a worktree. When `interactive` is true and an
 /// unapproved config defines worktree actions (`share`, `copy`, `setup`, or `env`), prompts the user via `confirm` with the
 /// rules and short hash; on `phone_create` (`interactive == false`), never blocks on a desktop dialog.
-async fn resolve_worktree_repo_config(
+pub(crate) async fn resolve_worktree_repo_config(
     host: &Arc<Host>,
     workspace: &Workspace,
     interactive: bool,

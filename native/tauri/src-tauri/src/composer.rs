@@ -193,6 +193,28 @@ async fn send(host: &Arc<Host>, id: &str, second: bool) -> Result<SubmitReceipt,
     if !panes::alive(&host.view(), id) {
         return Ok(SubmitReceipt::new("none"));
     }
+    // MC-28: `/advisor` and `/committee` ask another agent for an opinion (advisor.rs): never a request of the pane's own, so they
+    // work while it runs too. The draft goes; the cards show the answers.
+    let advisor = {
+        let mut view = host.view();
+        let kind = session(&view, id)?.kind().to_string();
+        let ui = panes::ui(&mut view, id)?;
+        let command = (kind == "claude").then(|| crate::advisor::parse_command(&ui.view.draft)).flatten();
+        if command.is_some() {
+            ui.view.draft.clear();
+            ui.dirty = true;
+        }
+        command
+    };
+    if let Some(command) = advisor {
+        if let Some(runs) = host.runs() {
+            let _ = runs.service.update_draft(id, "");
+        }
+        host.view().sync();
+        let (host, id) = (host.clone(), id.to_string());
+        tauri::async_runtime::spawn(async move { crate::advisor::start(&host, &id, command).await });
+        return Ok(SubmitReceipt::new("none"));
+    }
     // DeferBusyComposer: a busy pane (running, starting) queues the draft as its next request, or runs it in a new worktree.
     let taken = {
         let mut view = host.view();
@@ -1191,6 +1213,20 @@ pub fn register(methods: &mut Registry) {
                     );
                     context_cmd.action = Some(SlashCommandAction::OpenAgentContext);
                     cat.builtins.push(menus::SlashRow::of(&context_cmd, &host.locale));
+                }
+
+                // MC-28: another agent's read-only opinion (advisor.rs), one or two side by side; the agent and question follow.
+                if !i.remote_session {
+                    for (name, key) in [("advisor", "slash.builtin.advisor"), ("committee", "slash.builtin.committee")] {
+                        let description = host.locale.get(key);
+                        let command = mighty_composer::slash::SlashCommand::new(
+                            name,
+                            &description,
+                            &app_source,
+                            mighty_composer::slash::SlashCommandOrigin::App,
+                        );
+                        cat.builtins.push(menus::SlashRow::of(&command, &host.locale));
+                    }
                 }
 
                 let memory_desc = host.locale.get("slash.builtin.memory");

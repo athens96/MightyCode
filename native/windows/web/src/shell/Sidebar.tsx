@@ -7,6 +7,7 @@ import { ProviderMark } from '../conversation/ProviderMark';
 import { activeSessionId } from '../store/store';
 import { useAddMenu, useWorkspaceAddChoices } from './addMenu';
 import { sidebarGroups } from './servers';
+import { nestForks } from './forks';
 import { BetaBadge, StatusCounts, StatusGlyph, useCall, useMenu, usePaneInfo, useShell, type MenuItem } from './parts';
 import type { CardAction, ChildCard, PaneInfo, RemoteServer, SidebarItem, SidebarWorkspace } from './types';
 import { Icon } from '../icons/Icon';
@@ -81,6 +82,8 @@ const PaneRow = memo(function PaneRow({ info, active, child }: { info: PaneInfo;
   const menu = useMenu();
   const choose = useChoosePane();
   const narrow = useStoreSelector((state) => (state.snapshot?.sidebarWidth ?? sidebarDefaultWidth) < narrowSidebar);
+  // MC-28: the source's title as it is now (its saved one when it is closed).
+  const forkTitle = useStoreSelector((state) => (info.forkedFrom ? state.shell?.panes.find((p) => p.id === info.forkedFrom?.paneId)?.title : undefined));
   // A mirrored pane carries its host's name; its close closes it on that computer.
   const items: MenuItem[] = [
     ...(info.mirror ? [] : [{ label: t('menu.rename'), action: () => call('renameSession', { id: info.id }) }]),
@@ -97,6 +100,8 @@ const PaneRow = memo(function PaneRow({ info, active, child }: { info: PaneInfo;
           <span className={'sidebar-pane-title' + (info.settled ? '' : ' strong')}>{info.title}</span>
           {info.beta && <BetaBadge />}
           {info.worktree && <span className="sidebar-worktree-mark" title={info.worktree} aria-label={info.worktree} data-testid="sidebar-worktree-mark"><Icon name="git-branch" size={11} weight={2.2} /></span>}
+          {/* MC-28: a forked pane carries the fork mark; its source is named on the meta line. */}
+          {info.forkedFrom && <span className="sidebar-fork-mark" title={t('fork.label', { title: forkTitle ?? info.forkedFrom.title })} aria-label={t('fork.label', { title: forkTitle ?? info.forkedFrom.title })} data-testid="sidebar-fork-mark"><Icon name="git-fork" size={11} weight={2.2} /></span>}
           {/* MC-26: its ports and pull request (icons only when the sidebar is narrow), and the dot of a pane waiting for the user. */}
           <PaneSignals info={info} compact={narrow} interactive={false} />
           {info.attention && <span className="sidebar-attention-dot" title={info.attention.help} aria-label={info.attention.help} data-testid="sidebar-attention" />}
@@ -104,7 +109,7 @@ const PaneRow = memo(function PaneRow({ info, active, child }: { info: PaneInfo;
         <span className="sidebar-pane-meta">
           {info.agent && <ProviderMark provider={info.agent} size={11} />}
           {info.agent && <span>{info.agentLabel}</span>}
-          <span className="sidebar-pane-detail">{info.meta}</span>
+          <span className="sidebar-pane-detail">{info.forkedFrom ? '↳ ' + (forkTitle ?? info.forkedFrom.title) + (info.meta ? ' ' + info.meta : '') : info.meta}</span>
         </span>
       </span>
       {child?.stateWord ? <span className={'sidebar-pane-wait tone-text-' + (child.stateTone ?? 'idle')}>{child.stateWord}</span>
@@ -173,7 +178,7 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
       </div>
       {workspace.expanded && (
         <div className="sidebar-workspace-panes">
-          {(workspace.items ?? []).map((item) => {
+          {nestForks(workspace.items ?? [], panes).map(({ item, indent }) => {
             if (item.type === 'parentClosed') return (
               <div key={'closed-' + item.id} className="sidebar-child" style={{ paddingLeft: 22 + item.depth * 16 }}>
                 <div className="sidebar-parent-closed" title={item.help} aria-label={item.name} data-testid={'sidebar-parent-closed-' + item.id}>
@@ -198,7 +203,7 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
             const info = panes.get(item.id);
             if (!info) return null;
             return (
-              <div key={item.id} className="sidebar-child" style={{ paddingLeft: 22 + item.depth * 16 }}>
+              <div key={item.id} className="sidebar-child" style={{ paddingLeft: 22 + (item.depth + indent) * 16 }}>
                 <PaneRow info={info} active={!dashboard && item.id === activeId} child={item.depth > 0 ? item : undefined} />
                 {item.card && <ChildCardLine id={item.id} card={item.card} />}
               </div>

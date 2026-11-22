@@ -989,6 +989,48 @@ impl RunService {
                     }
                 }
             }
+            // MC-28: a forked pane's first run. Its saved session is still the source's: the CLI forks it into one of its own, or, where
+            // it cannot (`cli_fork`), the source's session is never resumed and the handoff summary goes in front of the request
+            // instead. The transcript keeps the request as typed.
+            if !remote
+                && request.kind == "claude"
+                && let Some(link) = pane.forked_from.as_ref()
+            {
+                let mode = request.settings().permission_mode;
+                let forks = link.pending()
+                    && request.resume_id.is_some()
+                    && request.resume_id == pane.resume_id
+                    && providers::cli_fork(&request.provider, &mode);
+                let mut next = link.clone();
+                if forks {
+                    request.fork_session = true;
+                } else {
+                    if link.pending() {
+                        if request.resume_id.is_some() && request.resume_id == pane.resume_id {
+                            request.resume_id = None;
+                        }
+                        next.fork_pending = None;
+                        next.mode = Some(mighty_core::model::ForkedFrom::HANDOFF.into());
+                    }
+                    if let Some(handoff) = link.handoff.as_deref().filter(|_| !request.input.trim_start().starts_with('/')) {
+                        request.input = crate::fork::with_handoff(handoff, &request.input);
+                        next.handoff = None;
+                    }
+                }
+                if next != *link {
+                    let forgets_source = link.pending() && !forks;
+                    for session in state.snapshot.sessions_mut().iter_mut() {
+                        if session.id() == request.session_id {
+                            let mut held = RunSession::clone(session);
+                            held.forked_from = Some(next.clone());
+                            if forgets_source && held.resume_id == pane.resume_id {
+                                held.resume_id = None;
+                            }
+                            *session = Arc::new(held);
+                        }
+                    }
+                }
+            }
             // The run's diagram block is named here, so a send can answer with it before the runner's first event.
             request.graph_run_id =
                 (!remote && request.kind != "shell" && GRAPH_PROVIDERS.contains(&request.provider.as_str())).then(wire::new_id);

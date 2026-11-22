@@ -79,6 +79,10 @@ pub struct StartRunRequest {
     pub receipt: Option<Arc<Mutex<RunStartReceipt>>>,
     /// Formatted shared memory context (`MC-13`) injected into the agent prompt/system instructions without polluting transcripts.
     pub memory_context: Option<String>,
+    /// MC-28: `resume_id` is another pane's session that this run forks into a new one (Claude `--fork-session`, Codex `exec fork`),
+    /// never resumes. Set when the run is accepted for a forked pane's first run ([`crate::providers::cli_fork`]); never saved,
+    /// never read from a remote's JSON.
+    pub fork_session: bool,
 }
 
 /// Wraps non-empty shared memory markdown in `<shared-memory>...</shared-memory>` for agent prompt/instruction injection.
@@ -120,6 +124,7 @@ impl StartRunRequest {
             graph_run_id: None,
             receipt: None,
             memory_context: None,
+            fork_session: false,
         }
     }
 

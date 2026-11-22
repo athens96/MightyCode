@@ -130,8 +130,16 @@ Hermes(`hermes`)는 Nous Research의 오픈소스 에이전트 CLI(Hermes Agent)
 | `/config` | {{ui:slash.builtin.settings}} |
 | `/rename` | {{ui:slash.builtin.rename}} |
 | `/help` | {{ui:slash.builtin.help}} |
+| `/advisor` | {{ui:slash.builtin.advisor}} |
+| `/committee` | {{ui:slash.builtin.committee}} |
 
 Codex와 Antigravity는 이름이 조금 다릅니다(예: Codex `/new`, `/approvals`, `/status`, Antigravity `/usage`, `/config`). 목록에 없는 `/이름`은 CLI의 스킬·사용자 명령·플러그인 명령으로 그대로 전달됩니다. Antigravity의 스킬도 이렇게 실행되며, 목록에는 agy에 들어 있는 스킬, `~/.gemini/antigravity-cli/skills`의 내 스킬, 폴더의 `.agents/skills`가 나옵니다. pi는 `/new`, `/session`, `/settings`, opencode와 Hermes는 `/new`, `/usage`, `/settings`를 씁니다. `/help`는 어느 에이전트에서나 앱이 이 창에서 쓸 수 있는 명령을 직접 보여 줍니다. `/skills` 같은 Antigravity 자체의 조회 명령은 터미널에서 `agy -p "/skills"`처럼 따로 실행할 때만 답하므로, 앱에서는 agy의 오류로 끝납니다.
+
+### 다른 에이전트 의견 {#advisor}
+`/advisor`는 이 창의 마지막 계획(있으면), 마지막 결과, 마지막 요청이 바꾼 파일의 요약을 다른 에이전트에게 보내 의견을 받습니다. `/advisor codex 이 계획 괜찮을까?`처럼 에이전트와 질문을 붙일 수 있고, 에이전트를 빼면 이 창과 다른 에이전트 중 설치하고 로그인한 첫 번째(Claude, Codex, Antigravity, pi 순)에게 묻습니다. `/committee`는 두 에이전트에게 같은 질문을 보내 의견 두 개를 나란히 보여 주며, 공통점이나 차이를 요약하지는 않습니다.
+
+- 의견을 주는 에이전트는 한 번만, 읽기 전용으로 실행됩니다(Claude는 계획 모드와 읽기 도구만, Codex는 읽기 전용 샌드박스, Antigravity는 계획 모드와 샌드박스, pi는 읽기 도구만). 파일을 바꾸거나 명령을 실행하지 않고, 세션도 남기지 않습니다. opencode와 Hermes는 한 번 실행에서 승인을 스스로 넘기므로 고를 수 없습니다.
+- 보내는 내용은 크기를 줄이고 비밀값으로 보이는 줄을 지웁니다. 답은 창 아래에 의견 카드로 붙고(에이전트, 모델, 아는 경우 비용), {{ui:advisor.card.insert}}로 입력창에 넣어 이 창의 에이전트에게 반영을 요청할 수 있습니다. 비용은 사용량 장부에 이 창의 워크스페이스로 들어갑니다.
 
 ### 컨텍스트와 사용량 {#session-info}
 보내기 단추 옆의 동그란 고리는 대화가 컨텍스트를 얼마나 썼는지 보여 줍니다. 누르면 {{ui:composer.sessionInfo.contextUsage}}, 입력·출력·캐시 토큰, 비용, 쓴 모델, 세션 ID를 봅니다. CLI가 알려 준 값만 보여 주고, 모르는 값은 추정하지 않습니다.

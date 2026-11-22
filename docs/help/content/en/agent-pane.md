@@ -130,8 +130,16 @@ Type `/` in the composer to see the command list. Move with {{kbd:↑}}{{kbd:↓
 | `/config` | {{ui:slash.builtin.settings}} |
 | `/rename` | {{ui:slash.builtin.rename}} |
 | `/help` | {{ui:slash.builtin.help}} |
+| `/advisor` | {{ui:slash.builtin.advisor}} |
+| `/committee` | {{ui:slash.builtin.committee}} |
 
 Codex and Antigravity use slightly different names (Codex: `/new`, `/approvals`, `/status`; Antigravity: `/usage`, `/config`, for example). Any other `/name` is passed to the CLI as a skill, user command or plugin command. Antigravity expands its skills this way, and the list offers agy's built-in skills, yours in `~/.gemini/antigravity-cli/skills` and the folder's `.agents/skills`; pi uses `/new`, `/session` and `/settings`, and opencode and Hermes `/new`, `/usage` and `/settings`. `/help` in any agent pane shows the app's own list of the commands that pane takes. Antigravity's own read-only commands such as `/skills` answer only when you run them as `agy -p "/skills"` in a terminal, so in the app they end with agy's error.
+
+### Other agents' opinions {#advisor}
+`/advisor` sends this pane's last plan (if any), its last result and a summary of the files its last request changed to another agent and brings back its opinion. Add an agent and a question, as in `/advisor codex is this plan sound?`; without an agent it asks the first one other than this pane's that is installed and signed in (Claude, Codex, Antigravity, pi, in that order). `/committee` asks two agents the same question and shows their two opinions side by side, without summing up where they agree or differ.
+
+- The agent giving the opinion runs once, read-only (Claude in plan mode with read tools only, Codex in its read-only sandbox, Antigravity in plan mode in its sandbox, pi with read tools only). It changes no files, runs no commands and keeps no session. opencode and Hermes cannot be picked: their one-shot runs approve on their own.
+- What is sent is cut to size and lines that look like secrets are removed. The answer lands as an opinion card under the pane (agent, model, cost when known); {{ui:advisor.card.insert}} puts it into the composer so this pane's agent can act on it. Its cost goes into the usage ledger under this pane's workspace.
 
 ### Context and usage {#session-info}
 The ring beside the send button shows how much context the conversation has used. Click it for {{ui:composer.sessionInfo.contextUsage}}, input, output and cache tokens, cost, the model used and the session IDs. Only values the CLI reported are shown; nothing is estimated.

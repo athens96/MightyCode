@@ -174,6 +174,11 @@ pub fn apply_session(session: &RunSession, event: &RunEvent, now: DateTimeOffset
             let ended = matches!(status.as_str(), "completed" | "error" | "stopped");
             if status == "error" && resume::lost(&value) {
                 value.resume_id = None;
+                // MC-28: a fork whose source session the CLI could not find: the next request carries the summary instead.
+                if let Some(link) = value.forked_from.as_mut().filter(|l| l.pending()) {
+                    link.fork_pending = None;
+                    link.mode = Some(mighty_core::model::ForkedFrom::HANDOFF.into());
+                }
             }
             if ended {
                 value.current_activity = None;
@@ -198,7 +203,16 @@ pub fn apply_session(session: &RunSession, event: &RunEvent, now: DateTimeOffset
             value.status = Some(status);
             value
         }
-        "resume" => RunSession { resume_id: event.resume_id.clone(), ..value },
+        "resume" => {
+            // MC-28: a forked pane's first run named its own session: the fork took, the summary is not needed.
+            let forked_from = match value.forked_from.as_ref() {
+                Some(link) if link.pending() && event.resume_id.is_some() && event.resume_id != value.resume_id => {
+                    Some(mighty_core::model::ForkedFrom { fork_pending: None, handoff: None, ..link.clone() })
+                }
+                _ => value.forked_from.clone(),
+            };
+            RunSession { resume_id: event.resume_id.clone(), forked_from, ..value }
+        }
         "usage" => {
             let usage = event
                 .usage

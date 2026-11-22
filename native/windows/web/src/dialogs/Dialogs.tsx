@@ -147,6 +147,23 @@ function PaneWorktreeChoice({ id, dialog, answer }: { id: number; dialog: Extrac
   );
 }
 
+/** MC-28: 새 worktree로 갈라내기 / 여기서 갈라내기: what happens, and whether the uncommitted changes come along (on by default). */
+function PaneFork({ id, dialog, answer }: { id: number; dialog: Extract<DialogRequest, { type: 'paneFork' }>; answer: (value: unknown) => void }) {
+  const [carry, setCarry] = useState(dialog.canCarry);
+  return (
+    <Sheet id={id} width={480} label={dialog.title} icon={<Icon name="git-fork" size={18} />} onCancel={() => answer(null)}
+      buttons={<>
+        <button type="button" className="btn" onClick={() => answer(null)}>{dialog.cancel}</button>
+        <button type="button" className="btn primary" data-autofocus onClick={() => answer({ carry })} data-testid="pane-fork-go">{dialog.fork}</button>
+      </>}>
+      <p className="dialog-message">{dialog.message}</p>
+      {dialog.canCarry
+        ? <label className="small"><input type="checkbox" checked={carry} onChange={(event) => setCarry(event.target.checked)} data-testid="pane-fork-carry" /> {dialog.carry}</label>
+        : <p className="dialog-message small">{dialog.noChanges}</p>}
+    </Sheet>
+  );
+}
+
 /** A one-line worktree setting: the setup command or the files copied into new worktrees. */
 function PaneWorktreeText({ id, dialog, answer }: { id: number; dialog: Extract<DialogRequest, { type: 'paneWorktreeText' }>; answer: (value: unknown) => void }) {
   const [text, setText] = useState(dialog.current);
@@ -243,6 +260,7 @@ function DialogView({ open }: { open: OpenDialog }) {
     case 'paneWorktreeText': return <PaneWorktreeText id={open.id} dialog={dialog} answer={answer} />;
     case 'paneWorktreeChanges': return <PaneWorktreeChanges id={open.id} dialog={dialog} answer={answer} />;
     case 'paneWorktreeList': return <PaneWorktreeList id={open.id} dialog={dialog} answer={answer} />;
+    case 'paneFork': return <PaneFork id={open.id} dialog={dialog} answer={answer} />;
   }
 }
 

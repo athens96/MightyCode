@@ -62,6 +62,15 @@ section: delegation
 - **关闭与列表**:没有未合并工作的窗格关闭时会一并删除其 worktree。仍有工作的会保留,可在工作区行菜单的 {{ui:paneWorktree.menu.list}} 中重新作为窗格打开、合并或删除。
 - **审阅队列**：工作结束且留下更改的 worktree 窗格和子窗格会汇集到[{{ui:review.open}}](layout.md#review)。栏菜单中的{{ui:editor.openFolder}}会在外部编辑器中打开窗格工作的文件夹。
 
+## 分叉对话 {#fork}
+想保留已积累的上下文去尝试另一种做法时，可以在新的 worktree 中打开一个接续此窗格对话的新窗格。原窗格的对话和文件保持不变。
+
+- **入口**：窗格的 ··· 菜单 {{ui:fork.menu.pane}}，或结果块标题右键菜单中的 {{ui:fork.menu.here}}（到该请求为止的对话）。运行中的窗格需等结束后再分叉。
+- **worktree**：从原窗格的 HEAD 创建 `mighty/fork-<短 id>` 分支和 worktree。原窗格若在自己的 worktree 中工作，分叉会合并到同一个基准分支。复制的文件、准备命令、`.mighty.yaml` 和[端口范围](#mighty-yaml)与其他 worktree 窗格相同。
+- **未提交的更改**：勾选 {{ui:fork.dialog.carry}}（默认开启）时，原窗格改动的文件和新文件会带到新 worktree（用 `git stash create` 在不改动原窗格的情况下生成，再应用到新 worktree）。gitignore 的文件不会带上。无法带上时原窗格保持不变，并在新窗格的记录中说明原因。
+- **接续对话**：Claude 和 Codex 会在第一个请求时由 CLI 把原会话复制为新会话（Claude `--fork-session`，Codex `exec fork`），原会话不变。Antigravity、opencode、Hermes、pi，以及从非最后一个请求分叉时，第一个请求前会附上包含最后的请求、计划、最后的结果和改动文件列表的摘要（最多 12,000 字，看起来像密钥的行会被删除）。CLI 找不到原会话时，下一个请求会附上摘要。
+- **显示**：新窗格在侧边栏中缩进显示在原窗格下方，窗格上方有原窗格名称和跳转按钮。手机的窗格信息中也会以 `forkedFrom` 带上。
+
 ## 端口、运行操作和清理命令 {#mighty-yaml}
 仓库顶层的 `.mighty.yaml` 可以为每个 worktree 指定端口、运行操作，以及删除 worktree 时运行的清理命令。只有在 {{ui:projectTasks.title}} 面板中按下 {{ui:projectTasks.approve}} 之后，其中的命令才会运行；文件改变后需要重新批准。远程工作区不使用它。
 

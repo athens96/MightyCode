@@ -130,8 +130,16 @@ Hermes(`hermes`)は、Nous Researchのオープンソースのエージェント
 | `/config` | {{ui:slash.builtin.settings}} |
 | `/rename` | {{ui:slash.builtin.rename}} |
 | `/help` | {{ui:slash.builtin.help}} |
+| `/advisor` | {{ui:slash.builtin.advisor}} |
+| `/committee` | {{ui:slash.builtin.committee}} |
 
 CodexとAntigravityでは名前が少し異なります(例: Codexの`/new`、`/approvals`、`/status`、Antigravityの`/usage`、`/config`)。一覧にない`/名前`は、CLIのスキル、ユーザーコマンド、プラグインのコマンドとしてそのまま渡されます。Antigravityのスキルもこうして実行され、一覧にはagyに入っているスキル、`~/.gemini/antigravity-cli/skills`の自分のスキル、フォルダの`.agents/skills`が表示されます。piは`/new`、`/session`、`/settings`、opencodeとHermesは`/new`、`/usage`、`/settings`を使います。`/help`はどのエージェントでも、このペインで使えるコマンドをアプリが直接表示します。`/skills`のようなAntigravity自身の読み取り専用コマンドは、ターミナルで`agy -p "/skills"`のように別に実行したときだけ答えるため、アプリではagyのエラーで終わります。
+
+### ほかのエージェントの意見 {#advisor}
+`/advisor`は、この画面の最後の計画（あれば）、最後の結果、最後のリクエストで変わったファイルの要約を別のエージェントに送り、意見を受け取ります。`/advisor codex この計画で大丈夫？`のようにエージェントと質問を付けられます。エージェントを省くと、この画面とは別の、インストールしてログインした最初のエージェント（Claude、Codex、Antigravity、piの順）に聞きます。`/committee`は2つのエージェントに同じ質問を送り、意見を2つ並べて表示します。共通点や違いの要約はしません。
+
+- 意見を出すエージェントは1回だけ、読み取り専用で実行されます（Claudeは計画モードと読み取りツールのみ、Codexは読み取り専用サンドボックス、Antigravityは計画モードとサンドボックス、piは読み取りツールのみ）。ファイルを変えたりコマンドを実行したりせず、セッションも残しません。opencodeとHermesは1回の実行で承認を自分で通すため選べません。
+- 送る内容はサイズを減らし、秘密に見える行を削除します。答えは画面の下に意見カードとして付き（エージェント、モデル、分かれば費用）、{{ui:advisor.card.insert}}で入力欄に入れてこの画面のエージェントに反映を頼めます。費用は使用量の記録にこの画面のワークスペースとして入ります。
 
 ### コンテキストと使用量 {#session-info}
 送信ボタンの横の円形のリングは、会話がコンテキストをどれだけ使ったかを示します。クリックすると、{{ui:composer.sessionInfo.contextUsage}}、入力・出力・キャッシュのトークン、コスト、使用したモデル、セッションIDを確認できます。CLIが報告した値だけを表示し、不明な値は推定しません。

@@ -285,6 +285,59 @@ pub fn pane_worktree(pane: &PaneWorktree, session_id: &str, restoring: bool) -> 
     Some(copy)
 }
 
+/// MC-28: a fork link kept as it can be shown and acted on: the source a pane id other than the pane's own, the request an id, the
+/// mode one of the two words, the summary within its limit; the pending CLI fork only beside a summary or a known mode.
+pub fn forked_from(link: Option<&crate::model::ForkedFrom>, own_id: &str) -> Option<crate::model::ForkedFrom> {
+    let link = link?;
+    if !wire::identifier(&link.pane_id) || link.pane_id == own_id {
+        return None;
+    }
+    let mode = link.mode.as_deref().filter(|m| matches!(*m, crate::model::ForkedFrom::CLI | crate::model::ForkedFrom::HANDOFF));
+    Some(crate::model::ForkedFrom {
+        pane_id: link.pane_id.clone(),
+        request_id: link.request_id.clone().filter(|r| wire::identifier(r)),
+        title: link.title.as_deref().map(|t| wire::clean(t, 240)).filter(|t| !t.is_empty()),
+        mode: mode.map(str::to_string),
+        fork_pending: (link.pending() && mode == Some(crate::model::ForkedFrom::CLI)).then_some(true),
+        handoff: link
+            .handoff
+            .as_deref()
+            .map(|h| h.chars().take(crate::model::FORK_HANDOFF_LIMIT).collect::<String>())
+            .filter(|h| !h.trim().is_empty()),
+    })
+}
+
+/// MC-28: the opinion cards a pane keeps: the newest [`crate::model::OPINION_CARDS_KEPT`], each body within its limit, a known
+/// state; one still running when the app last closed is left out on restore (its run went with the app).
+pub fn opinions(cards: Option<&Vec<crate::model::OpinionCard>>, restoring: bool) -> Option<Vec<crate::model::OpinionCard>> {
+    use crate::model::OpinionCard;
+    let cards = cards?;
+    let kept: Vec<OpinionCard> = cards
+        .iter()
+        .filter(|c| wire::identifier(&c.id) && wire::PROVIDERS.contains(&c.provider.as_str()))
+        .filter(|c| !(restoring && c.state == OpinionCard::RUNNING))
+        .map(|c| OpinionCard {
+            id: c.id.clone(),
+            provider: c.provider.clone(),
+            model: c.model.as_deref().map(|m| wire::clean(m, 200)).filter(|m| !m.is_empty()),
+            cost_usd: c.cost_usd.filter(|v| v.is_finite() && *v >= 0.0),
+            tokens: c.tokens.filter(|t| *t >= 0),
+            question: c.question.as_deref().map(|q| q.chars().take(2_000).collect::<String>()).filter(|q| !q.trim().is_empty()),
+            body: c.body.chars().take(crate::model::OPINION_BODY_LIMIT).collect(),
+            state: if matches!(c.state.as_str(), OpinionCard::RUNNING | OpinionCard::DONE | OpinionCard::FAILED) {
+                c.state.clone()
+            } else {
+                OpinionCard::DONE.into()
+            },
+            created_at: c.created_at.clone(),
+            group: c.group.clone().filter(|g| wire::identifier(g)),
+        })
+        .collect();
+    let skip = kept.len().saturating_sub(crate::model::OPINION_CARDS_KEPT);
+    let kept: Vec<OpinionCard> = kept.into_iter().skip(skip).collect();
+    (!kept.is_empty()).then_some(kept)
+}
+
 fn linked_task(task: Option<&crate::model::LinkedTask>) -> Option<crate::model::LinkedTask> {
     let task = task?;
     let source = wire::clean(&task.source, 32);
@@ -1768,6 +1821,8 @@ fn normalize_session(s: &RunSession, restoring: bool, remote_ids: &HashSet<Strin
             .and_then(|pane| pane_worktree(pane, s.id(), restoring)),
         ask_target: if plan_mode && !remote_ids.contains(s.workspace_id()) { s.ask_target.clone() } else { None },
         linked_task: if kind == "claude" { linked_task(s.linked_task.as_ref()) } else { None },
+        forked_from: if kind == "claude" { forked_from(s.forked_from.as_ref(), s.id()) } else { None },
+        opinions: if kind == "claude" { opinions(s.opinions.as_ref(), restoring) } else { None },
         shell_block_runs: if kind == "claude" { shell_block_runs(s.shell_block_runs.as_ref(), restoring) } else { None },
         provider: Some(provider),
         ..s.clone()

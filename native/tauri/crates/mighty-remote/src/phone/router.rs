@@ -626,6 +626,15 @@ impl Inner {
         out.prop_str("titleMode", Some(pane.title_mode.as_deref().unwrap_or("auto")));
         out.prop_str("resolvedModel", resolved.as_deref());
         out.prop_bool("canSteer", false);
+        // MC-28: the pane this one was forked from (`forkedFrom { paneId, requestId }`).
+        if let Some(link) = &pane.forked_from {
+            out.name("forkedFrom");
+            out.begin_object();
+            out.prop_str("paneId", Some(&link.pane_id));
+            out.prop_str("requestId", link.request_id.as_deref());
+            out.prop_str("title", link.title.as_deref());
+            out.end_object();
+        }
         // MC-26: the desktop's mark on a pane waiting for the user (a terminal's notification or bell, a card, a failed setup).
         if let Some((kind, text, at)) = self.desk.attention(pane.id()) {
             out.name("attention");

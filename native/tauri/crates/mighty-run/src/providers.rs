@@ -101,6 +101,17 @@ pub fn capabilities(provider: &str, version: Option<&str>) -> ProviderCapabiliti
     }
 }
 
+/// MC-28: whether `provider`'s CLI forks a saved session into a new one without touching it, as a pane in `permission_mode` runs
+/// it: Claude (`--resume <id> --fork-session`) and Codex's `exec` (`codex exec fork <id>`; not its approval connection, which only
+/// resumes). Antigravity, opencode (over ACP), Hermes and pi get a handoff summary instead.
+pub fn cli_fork(provider: &str, permission_mode: &str) -> bool {
+    match provider {
+        "claude" => true,
+        "codex" => permission_mode != "onRequest",
+        _ => false,
+    }
+}
+
 /// `ProviderCatalog.NormalizeSettings`.
 pub fn normalize_settings(provider: &str, value: Option<&RunSettings>) -> RunSettings {
     normalize::settings(provider, value)
@@ -611,6 +622,10 @@ pub fn arguments(
                 args.push("--model".into());
                 args.push(claude_main.unwrap_or_else(|| "default".into()));
             }
+            // MC-28: a forked pane's first run takes the source's conversation into a session of its own (`--resume` comes last).
+            if request.fork_session && request.resume_id.is_some() {
+                args.push("--fork-session".into());
+            }
             args.push("--append-system-prompt".into());
             let mut system_prompt = String::from(crate::flow_steps::PLAN_INSTRUCTION);
             if let Some(mem) = crate::model::memory_block(request.memory_context.as_deref()) {
@@ -702,7 +717,8 @@ pub fn arguments(
             } else {
                 args.push("exec".into());
                 if let Some(resume) = &request.resume_id {
-                    args.push("resume".into());
+                    // MC-28: a forked pane's first run starts a new thread from the source's (`codex exec fork <id>`).
+                    args.push(if request.fork_session { "fork" } else { "resume" }.into());
                     args.push(resume.clone());
                 }
                 push(&mut args, &["--json", "--skip-git-repo-check"]);

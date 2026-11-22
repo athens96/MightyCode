@@ -14,6 +14,7 @@
 #![deny(clippy::significant_drop_in_scrutinee)]
 
 mod accounts;
+mod advisor;
 mod agent_context;
 mod agent_io;
 mod antigravity;
@@ -34,6 +35,7 @@ mod dialogs;
 mod direct;
 mod editor;
 mod files;
+mod fork;
 mod frame;
 mod git_workbench;
 #[cfg(feature = "dev-harness")]

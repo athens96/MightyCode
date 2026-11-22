@@ -595,4 +595,87 @@ mod git {
         unlink(&linked_place);
         unlink(&worktree.join("lnk"));
     }
+
+    /// MC-28: a fork's worktree starts at the source's HEAD and its uncommitted changes come along (tracked ones through `git stash
+    /// create` and `stash apply`, new ones copied, gitignored ones never), the source left exactly as it was.
+    #[tokio::test]
+    async fn a_fork_carries_the_sources_uncommitted_changes_without_touching_it() {
+        let _lane = lane::enter().await;
+        let place = DelegationPlace::new();
+        let git = place.git();
+        let source = pane_in(&place, "pane-src").await;
+        let src = std::path::PathBuf::from(source.worktree_path());
+        // A commit of the source's own, then work not committed: a change, a new file, an ignored file.
+        place.commit(source.worktree_path(), "committed.txt", "committed\n").await;
+        std::fs::write(src.join(".gitignore"), "secret.env\n").unwrap();
+        place.git_in(source.worktree_path(), &["add", ".gitignore"]).await;
+        place.git_in(source.worktree_path(), &["commit", "-q", "-m", "ignore"]).await;
+        std::fs::write(src.join("file-0.txt"), "changed in the source\n").unwrap();
+        std::fs::create_dir_all(src.join("new")).unwrap();
+        std::fs::write(src.join("new/added.txt"), "new file\n").unwrap();
+        std::fs::write(src.join("secret.env"), "TOKEN=1\n").unwrap();
+        let status_before = place.git_in(source.worktree_path(), &["status", "--porcelain"]).await;
+        let stash_before = place.git_in(source.worktree_path(), &["stash", "list"]).await;
+
+        let maker = place.maker();
+        let ChildWorktreeCheck::Ready(read) = maker.check(source.worktree_path()).await else { panic!("the source cannot be read") };
+        let start = pw::fork_start(&read, Some(&source));
+        assert_eq!(start.repository, source.checkout(), "the fork works in the source's checkout");
+        assert_eq!(start.parent_branch, "main", "and merges where the source does");
+        assert_eq!(start.base_commit, place.git_in(source.worktree_path(), &["rev-parse", "HEAD"]).await, "at the source's HEAD");
+        let id = pw::fork_session_id("ABCDEF12-3456-4789-8abc-def012345678");
+        assert_eq!(id, "fork-abcdef12");
+        let ChildWorktreeOutcome::Created(made) = pw::make_pane(&maker, &id, &start, 300.0).await else { panic!("no fork worktree") };
+        assert_eq!(made.branch, "mighty/fork-abcdef12");
+        let fork = std::path::PathBuf::from(&made.worktree_path);
+        assert!(fork.join("committed.txt").exists(), "the source's commits are there");
+
+        let carried = pw::carry_changes(&git, source.worktree_path(), &made.worktree_path).await;
+        assert_eq!(carried, pw::CarryOutcome::Carried { tracked: true, copied: vec!["new/added.txt".into()] });
+        assert_eq!(std::fs::read_to_string(fork.join("file-0.txt")).unwrap(), "changed in the source\n");
+        assert_eq!(std::fs::read_to_string(fork.join("new/added.txt")).unwrap(), "new file\n");
+        assert!(!fork.join("secret.env").exists(), "a gitignored file never comes along");
+        assert_eq!(place.git_in(source.worktree_path(), &["status", "--porcelain"]).await, status_before, "the source is untouched");
+        assert_eq!(place.git_in(source.worktree_path(), &["stash", "list"]).await, stash_before, "and so is its stash list");
+        let mut paths = pw::uncommitted_paths(&git, source.worktree_path()).await;
+        paths.sort();
+        assert_eq!(paths, ["file-0.txt", "new/added.txt"], "the summary's list leaves the ignored file out");
+        let clean = pane_in_other(&place, &maker, &start, "fork-0000clean").await;
+        assert_eq!(pw::carry_changes(&git, &clean, &clean).await, pw::CarryOutcome::Nothing, "nothing to carry from a clean checkout");
+    }
+
+    /// MC-28: a fork made at another commit than the changes were made on refuses them, says why and leaves the fork as it was made.
+    #[tokio::test]
+    async fn a_carry_that_conflicts_fails_and_puts_the_fork_back() {
+        let _lane = lane::enter().await;
+        let place = DelegationPlace::new();
+        let git = place.git();
+        let source = pane_in(&place, "pane-con").await;
+        let maker = place.maker();
+        let ChildWorktreeCheck::Ready(read) = maker.check(source.worktree_path()).await else { panic!("the source cannot be read") };
+        let start = pw::fork_start(&read, Some(&source));
+        let ChildWorktreeOutcome::Created(made) = pw::make_pane(&maker, "fork-c0ffee00", &start, 300.0).await else { panic!("no fork") };
+        // The fork moves on with a change of its own to the same line; the source changes it differently without committing.
+        std::fs::write(std::path::Path::new(&made.worktree_path).join("file-0.txt"), "the fork's line\n").unwrap();
+        place.git_in(&made.worktree_path, &["commit", "-q", "-am", "fork side"]).await;
+        let fork_head = place.git_in(&made.worktree_path, &["rev-parse", "HEAD"]).await;
+        std::fs::write(std::path::Path::new(source.worktree_path()).join("file-0.txt"), "the source's line\n").unwrap();
+        let before = place.git_in(source.worktree_path(), &["status", "--porcelain"]).await;
+        let carried = pw::carry_changes(&git, source.worktree_path(), &made.worktree_path).await;
+        assert!(matches!(&carried, pw::CarryOutcome::Failed(why) if !why.is_empty()), "{carried:?}");
+        assert_eq!(place.git_in(&made.worktree_path, &["status", "--porcelain"]).await, "", "the fork is clean again");
+        assert_eq!(place.git_in(&made.worktree_path, &["rev-parse", "HEAD"]).await, fork_head);
+        assert_eq!(place.git_in(source.worktree_path(), &["status", "--porcelain"]).await, before, "the source is untouched");
+    }
+
+    async fn pane_in_other(
+        place: &DelegationPlace,
+        maker: &mighty_delegation::git::worktree::Maker,
+        start: &mighty_delegation::git::worktree::ChildWorktreeBase,
+        id: &str,
+    ) -> String {
+        let _ = place;
+        let ChildWorktreeOutcome::Created(made) = pw::make_pane(maker, id, start, 300.0).await else { panic!("no worktree {id}") };
+        made.worktree_path
+    }
 }

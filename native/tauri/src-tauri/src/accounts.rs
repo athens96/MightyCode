@@ -149,6 +149,20 @@ pub fn of(host: &Host) -> Arc<Accounts> {
     host.app.state::<Arc<Accounts>>().inner().clone()
 }
 
+/// MC-28: whether `provider`'s CLI is signed in, as the accounts box last read it, read now (its status command, no model run) when it
+/// has not been yet. A smoke reads none.
+pub(crate) async fn signed_in(host: &Host, provider: &str) -> bool {
+    if host.smoke.is_some() {
+        return false;
+    }
+    let Some(coordinator) = coordinator(host) else { return false };
+    let status = match coordinator.status_of(provider) {
+        Some(status) => status,
+        None => coordinator.status(provider).await,
+    };
+    status.installed && mighty_accounts::terminal::terminal_login::signed_in(&status)
+}
+
 /// The coordinator, once the run engine (its catalog, its CLI environment) is there.
 fn coordinator(host: &Host) -> Option<Arc<CliAccountsCoordinator>> {
     let accounts = of(host);

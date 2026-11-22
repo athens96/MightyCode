@@ -17,6 +17,7 @@ import { drawsDiagram } from '../pending/requests';
 import { useCall, useMenu, type MenuItem } from '../shell/parts';
 import { WorktreeBar } from './WorktreeBar';
 import { MirrorStrip } from './MirrorStrip';
+import { ForkStrip, Opinions } from './Opinions';
 import { logText } from './log';
 
 const LazyReferenceBubble = lazy(() => import('./ReferenceBubble').then((m) => ({ default: m.ReferenceBubble })));
@@ -61,6 +62,8 @@ function PaneMenu({ session }: { session: RunSession }) {
   if (session.kind === 'shell') items.push({ label: t('pane.menu.terminalHistory'), action: () => call('terminalHistory', { paneId: session.id }) });
   else items.push({ label: t('pane.menu.copyLog'), disabled: session.logs.length === 0, action: () => void navigator.clipboard?.writeText(logText(session.logs, session.provider, t)).catch(() => {}) });
   if (session.kind !== 'shell') items.push({ label: t('pane.menu.newConversation'), disabled: session.status === 'running' || !session.resumeId, action: () => void bridge.call('newConversation', { paneId: session.id }).catch(() => {}) });
+  // MC-28: the conversation into a new pane in a new worktree (fork.rs); never a mirror's or while it runs.
+  if (session.kind === 'claude' && !mirrored) items.push({ label: t('fork.menu.pane'), disabled: session.status === 'running' || session.logs.length === 0, action: () => call('paneFork', { paneId: session.id }) });
   items.push({ separator: true }, { label: t('menu.closePane'), action: () => call('closeSession', { id: session.id }) });
   return (
     <button type="button" className="icon-button pane-menu-button" title={t('tooltip.pane.menu')} aria-label={t('pane.menu.accessibility')} data-testid="pane-menu"
@@ -117,6 +120,7 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
           )}
         </div>
       </ReferenceContext.Provider>
+      {session.kind === 'claude' && session.opinions && session.opinions.length > 0 && <Opinions paneId={session.id} cards={session.opinions} />}
       {session.kind === 'claude' && <Cards key={'cards-' + session.id} paneId={session.id} hideBackground={mighty} />}
       {agent && <Composer key={'composer-' + session.id} session={session} />}
     </>
@@ -163,6 +167,7 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
       </header>
       {mirror && <MirrorStrip id={session.id} strip={mirror} />}
       {session.paneWorktree && <WorktreeBar key={'worktree-' + session.id} session={session} />}
+      {session.forkedFrom && <ForkStrip link={session.forkedFrom} />}
       {body}
     </section>
   );

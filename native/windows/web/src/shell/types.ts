@@ -49,6 +49,15 @@ export interface PaneInfo {
   ports?: number[];
   /** MC-26: the pull request of the pane's worktree branch. */
   pr?: PanePr | null;
+  /** MC-28: the pane this one was forked from (its title as saved when the fork was made). */
+  forkedFrom?: PaneFork | null;
+}
+
+/** MC-28: where a pane was forked from, as its row and strip show it. */
+export interface PaneFork {
+  paneId: string;
+  requestId?: string | null;
+  title: string;
 }
 
 /** MC-26: a pane waiting for the user: a terminal's notification or bell, a card, a setup that failed. */
@@ -257,7 +266,8 @@ export type DialogRequest =
   | { type: 'paneWorktreeChoice'; title: string; message: string; canWorktree: boolean; worktree: string; always: string; sameFolder: string; cancel: string }
   | { type: 'paneWorktreeText'; title: string; message: string; current: string; placeholder: string; save: string; cancel: string }
   | { type: 'paneWorktreeChanges'; title: string; paneId: string; files: { path: string; status: string }[]; none: string; pick: string }
-  | { type: 'paneWorktreeList'; title: string; empty: string; close: string; rows: WorktreeListRow[] };
+  | { type: 'paneWorktreeList'; title: string; empty: string; close: string; rows: WorktreeListRow[] }
+  | { type: 'paneFork'; title: string; message: string; carry: string; canCarry: boolean; noChanges: string; fork: string; cancel: string };
 
 /** One row of a workspace's worktree list (MainWindow.PaneWorktree.cs ShowWorktreeList). */
 export interface WorktreeListRow {

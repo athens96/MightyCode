@@ -333,6 +333,10 @@ button { font: inherit; color: inherit; }
 .dashboard-row-title { font-size: var(--type-dash-row); font-weight: 500; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dashboard-row-title.strong { font-weight: 600; }
 .dashboard-row-meta { display: flex; gap: var(--space-xs); align-items: center; color: var(--ink2); font-size: 12.5px; white-space: nowrap; overflow: hidden; }
+/* MC-28: a forked pane's mark in the sidebar and its source on the dashboard row. */
+.sidebar-fork-mark { color: var(--accent); display: inline-flex; flex: none; }
+.dashboard-row-fork { display: inline-flex; align-items: center; gap: 3px; color: var(--ink2); overflow: hidden; text-overflow: ellipsis; }
+.dashboard-row-fork > svg { color: var(--accent); flex: none; }
 .dashboard-row-activity { color: var(--ink2); font-size: 11.3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: var(--space-xxs); }
 .dashboard-row-wait { font-size: 12px; font-weight: 700; line-height: 20px; margin-left: var(--space-md); }
 .welcome, .empty-panes { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-md); height: 100%; text-align: center; padding: var(--space-xl); }

@@ -503,6 +503,16 @@ async fn mobile_host_a_pane_travels_as_its_provider_runs() {
         with("switched", "claude", "sonnet", Some(reported("claude", "claude-opus-5-5", "opus")), "claude"),
         with("default", "claude", "default", None, "claude"),
         with("shell", "claude", "default", None, "shell"),
+        RunSession {
+            forked_from: Some(mighty_core::model::ForkedFrom {
+                pane_id: "opus".into(),
+                request_id: Some("r2".into()),
+                title: Some("Login fix".into()),
+                mode: Some("handoff".into()),
+                ..Default::default()
+            }),
+            ..with("fork-abcdef12", "claude", "default", None, "claude")
+        },
     ]);
     async fn panes(world: &World) -> std::collections::HashMap<String, Value> {
         let (_, state) = world.route("GET", "/m1/state", None).await;
@@ -516,6 +526,12 @@ async fn mobile_host_a_pane_travels_as_its_provider_runs() {
         "MC-26: the desktop's mark on a waiting pane"
     );
     assert!(found["opus"].get("attention").is_none(), "a pane that does not wait carries none");
+    assert_eq!(
+        found["fork-abcdef12"]["forkedFrom"],
+        serde_json::json!({"paneId": "opus", "requestId": "r2", "title": "Login fix"}),
+        "MC-28: a forked pane names its source"
+    );
+    assert!(found["opus"].get("forkedFrom").is_none(), "a pane that was not forked carries none");
     assert!(
         found["agy"]["provider"] == "gemini" && found["agy"]["model"] == "default" && found["agy"].get("resolvedModel").is_none(),
         "an Antigravity pane on default names no model"

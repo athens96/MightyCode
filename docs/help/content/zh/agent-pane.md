@@ -130,8 +130,16 @@ Hermes（`hermes`）是 Nous Research 的开源智能体 CLI（Hermes Agent）�
 | `/config` | {{ui:slash.builtin.settings}} |
 | `/rename` | {{ui:slash.builtin.rename}} |
 | `/help` | {{ui:slash.builtin.help}} |
+| `/advisor` | {{ui:slash.builtin.advisor}} |
+| `/committee` | {{ui:slash.builtin.committee}} |
 
 Codex 和 Antigravity 的命令名称略有不同（例如 Codex 的 `/new`、`/approvals`、`/status`，Antigravity 的 `/usage`、`/config`）。列表中没有的 `/名称` 会作为 CLI 的技能、用户命令或插件命令原样传递。Antigravity 的技能也是这样运行的，列表中会显示 agy 自带的技能、`~/.gemini/antigravity-cli/skills` 中你的技能以及文件夹的 `.agents/skills`；pi 使用 `/new`、`/session`、`/settings`，opencode 和 Hermes 使用 `/new`、`/usage`、`/settings`。在任何智能体窗格中，`/help` 都由应用直接显示此窗格可用的命令。`/skills` 等 Antigravity 自身的只读命令只有在终端中以 `agy -p "/skills"` 单独运行时才会回答，因此在应用中会以 agy 的错误结束。
+
+### 其他代理的意见 {#advisor}
+`/advisor` 会把此窗格最后的计划（如有）、最后的结果以及最后一个请求改动的文件摘要发给另一个代理并取回意见。可以像 `/advisor codex 这个计划可行吗？` 这样附上代理和问题；不写代理时，会询问与此窗格不同、已安装并登录的第一个代理（按 Claude、Codex、Antigravity、pi 的顺序）。`/committee` 向两个代理提出同一个问题，并排显示两份意见，不汇总异同。
+
+- 给出意见的代理只运行一次，且为只读（Claude 用计划模式且只有读取工具，Codex 用只读沙箱，Antigravity 用计划模式和沙箱，pi 只有读取工具）。它不会改文件、不运行命令，也不保留会话。opencode 和 Hermes 在单次运行中会自行批准，因此不能选择。
+- 发送的内容会缩减大小并删除看起来像密钥的行。回答以意见卡片的形式附在窗格下方（代理、模型、已知时的费用），点 {{ui:advisor.card.insert}} 可放入输入框，请此窗格的代理采纳。费用计入用量账本中此窗格的工作区。
 
 ### 上下文与用量 {#session-info}
 发送按钮旁的圆环显示对话已使用了多少上下文。点击它可以查看{{ui:composer.sessionInfo.contextUsage}}、输入/输出/缓存 token、费用、所用模型和会话 ID。只显示 CLI 报告的值，不会估算未知的值。
