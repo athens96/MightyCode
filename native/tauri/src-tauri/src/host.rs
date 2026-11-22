@@ -909,6 +909,8 @@ impl Host {
         crate::terminal::mark_agent_terminals(self, &mut model);
         // MC-26: the panes waiting for the user, their ports and pull requests (attention.rs).
         crate::attention::decorate(self, snapshot, *shows_dashboard, &mut model);
+        // MC-29: the compare runs' cards under the panes that started them (compare.rs).
+        crate::compare::decorate(snapshot, &mut model);
         model
     }
 

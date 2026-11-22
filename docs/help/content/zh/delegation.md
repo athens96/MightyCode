@@ -71,6 +71,17 @@ section: delegation
 - **接续对话**：Claude 和 Codex 会在第一个请求时由 CLI 把原会话复制为新会话（Claude `--fork-session`，Codex `exec fork`），原会话不变。Antigravity、opencode、Hermes、pi，以及从非最后一个请求分叉时，第一个请求前会附上包含最后的请求、计划、最后的结果和改动文件列表的摘要（最多 12,000 字，看起来像密钥的行会被删除）。CLI 找不到原会话时，下一个请求会附上摘要。
 - **显示**：新窗格在侧边栏中缩进显示在原窗格下方，窗格上方有原窗格名称和跳转按钮。手机的窗格信息中也会以 `forkedFrom` 带上。
 
+## 对比运行 {#compare}
+困难的任务往往值得多试几种做法，再选出最好的。把同一个请求从同一基准提交同时交给多个代理（或同一代理多次，例如 3 个 Claude），并排对比结果，然后合并其中一个。
+
+- **开始**：在输入框中写下请求，空闲窗格从发送按钮的右键菜单、运行中的窗格从 {{ui:composer.busySend.title}} 菜单中选择 {{ui:compare.menu}}。在选择窗口中选好代理和模型的行（{{ui:compare.picker.add}}，同一代理可以出现多次）、{{ui:compare.picker.base}}（默认 HEAD，或此分支最近的提交），需要时再选 {{ui:compare.picker.test}}（`.mighty.yaml` 中的运行操作或任务），然后按 {{ui:compare.picker.start}}。
+- **可选的代理**：只显示现在能创建子任务的代理（Claude、Codex、Antigravity 中已安装、已登录且有可修改文件的模式的）。最多 4 行，但一个窗格最多有 3 个由你开启的子任务，所以只能选剩余的名额。
+- **运行**：每一行都会像 [在新 worktree 中运行](#worktree) 那样同时打开一个子窗格，使用同一请求、同一基准提交和各自的 [端口范围](#mighty-yaml)。行中选了模型时，该子任务使用该模型。某一行无法开始时，该列会写明原因，其余照常进行。
+- **预算**：设置了每日预算且今天的花费加上预计费用可能超出时，开始前会先提醒。预计费用是粗略值：对每个子任务，取用量账本最近 30 天中同一代理和模型单次运行的平均费用相加（没有该模型时取代理的平均值，都没有时按每个子任务 $1）。
+- **分组卡片和{{ui:compare.view.title}}**：开始的窗格下方，侧栏会出现一张卡片，点按即可打开 {{ui:compare.view.title}}。每一列显示代理和模型、状态、相对基准变更的文件数和 +/− 行数（`git diff --shortstat <基准>...<分支>`）、用时、用量账本中的费用，以及所选测试的结果（子任务报告后在其 worktree 中运行一次），并有 {{ui:compare.action.open}}、{{ui:compare.action.diff}}、{{ui:compare.action.merge}}、{{ui:compare.action.discard}} 按钮。分组保存在窗格状态中，重启应用后仍可打开。
+- **选出一个**：{{ui:compare.action.merge}} 只适用于已报告的子任务，遵循卡片合并的规则和合并前检查。合并完成后会询问是否一并丢弃其余子任务。撤销合并仍在子任务卡片上进行。{{ui:compare.view.dismiss}} 只移除卡片，子任务保持不变。
+- 手机的窗格信息中以 `compareRuns` 包含该分组，但手机界面暂不显示。
+
 ## 端口、运行操作和清理命令 {#mighty-yaml}
 仓库顶层的 `.mighty.yaml` 可以为每个 worktree 指定端口、运行操作，以及删除 worktree 时运行的清理命令。只有在 {{ui:projectTasks.title}} 面板中按下 {{ui:projectTasks.approve}} 之后，其中的命令才会运行；文件改变后需要重新批准。远程工作区不使用它。
 

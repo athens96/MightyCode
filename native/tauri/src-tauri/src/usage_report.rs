@@ -64,12 +64,12 @@ pub fn on_run_finished(host: &Arc<Host>, session_id: &str) {
         let crossed = rec.as_ref().is_some_and(|r| ledger.crossed_budget(budget, r));
         let spent = ledger.cost_on(&today_str);
         let clone_for_save = rec.is_some().then(|| ledger.clone());
-        (rec.is_some(), crossed, spent, budget, clone_for_save)
+        (rec.map(|r| r.cost_usd), crossed, spent, budget, clone_for_save)
     });
 
-    if !recorded {
-        return;
-    }
+    let Some(recorded_cost) = recorded else { return };
+    // MC-29: a compare run's child adds what this run cost to its column.
+    crate::compare::add_cost(host, session_id, recorded_cost);
 
     if host.writes()
         && let Some(snapshot_ledger) = to_save
@@ -119,6 +119,16 @@ pub fn record_advisor(host: &Arc<Host>, workspace_id: &str, provider: &str, mode
             .get_with("usage.budget.notificationBody", &[("spent", &format!("${spent_today:.2}")), ("budget", &format!("${budget:.2}"))]);
         crate::notifications::notify_custom(host, host.locale.get("usage.budget.notificationTitle"), body);
     }
+}
+
+/// MC-29: what the compare run's budget warning reads of the ledger: the records of the last 30 days, what was spent today and the
+/// daily budget (None when none is set).
+pub fn budget_reading(host: &Host) -> (Vec<mighty_core::usage_ledger::UsageRecord>, f64, Option<f64>) {
+    let today = Local::now().date_naive();
+    let today_str = today.format("%Y-%m-%d").to_string();
+    with_ledger(host, |ledger| {
+        (ledger.recent(30, today), ledger.cost_on(&today_str), ledger.daily_budget_usd.filter(|b| b.is_finite() && *b > 0.0))
+    })
 }
 
 pub fn forget_pane(host: &Host, pane_id: &str) {

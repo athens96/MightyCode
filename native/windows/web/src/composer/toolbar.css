@@ -88,3 +88,4 @@
 .status-dot.tone-err { background: var(--err); }
 .status-dot.tone-wait { background: var(--wait-text); }
 .status-dot.tone-idle { background: var(--ink3); }
+.composer-send-menu { left: auto; right: 0; }

@@ -423,6 +423,24 @@ pub struct PaneInfo {
     /// MC-28: the pane this one was forked from: its id and title (as saved when the fork was made), for the row's label.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<PaneFork>,
+    /// MC-29: the compare runs this pane started, each summed up for its card (src-tauri compare.rs fills the children's states).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub compares: Vec<PaneCompare>,
+}
+
+/// MC-29: a compare run as its card under the pane's row shows it: the group, the request's first line, how many children and how
+/// many of them run, reported, failed, merged or were discarded.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PaneCompare {
+    pub id: String,
+    pub title: String,
+    pub total: usize,
+    pub running: usize,
+    pub reported: usize,
+    pub failed: usize,
+    pub merged: usize,
+    pub discarded: usize,
 }
 
 /// MC-28: where a pane was forked from, as its row and the pane's strip show it.
@@ -532,6 +550,7 @@ pub fn pane_info(locale: &Locale, s: &RunSession, attention: Attention, now: Dat
             request_id: link.request_id.clone(),
             title: link.title.clone().unwrap_or_default(),
         }),
+        compares: Vec::new(),
     }
 }
 

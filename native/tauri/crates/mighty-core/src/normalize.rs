@@ -338,6 +338,95 @@ pub fn opinions(cards: Option<&Vec<crate::model::OpinionCard>>, restoring: bool)
     (!kept.is_empty()).then_some(kept)
 }
 
+/// MC-29: the compare runs a pane keeps: the newest [`crate::model::COMPARE_RUNS_KEPT`], each with an id, its children known agents
+/// with ids (at most [`crate::model::COMPARE_MAXIMUM_ROWS`]), the request and test output within their limits. A test still running
+/// when the app last closed is dropped on restore (its process went with the app), so it can run again.
+pub fn compare_runs(runs: Option<&Vec<crate::model::CompareRun>>, restoring: bool) -> Option<Vec<crate::model::CompareRun>> {
+    use crate::model::{
+        COMPARE_MAXIMUM_ROWS, COMPARE_REQUEST_LIMIT, COMPARE_RUNS_KEPT, COMPARE_TEST_OUTPUT_LIMIT, CompareChild, CompareRun,
+    };
+    let runs = runs?;
+    let kept: Vec<CompareRun> = runs
+        .iter()
+        .filter(|run| wire::identifier(&run.id))
+        .map(|run| CompareRun {
+            id: run.id.clone(),
+            request: run.request.chars().take(COMPARE_REQUEST_LIMIT).collect(),
+            base_commit: Some(run.base_commit.as_str())
+                .filter(|c| c.len() <= 64 && c.bytes().all(|b| b.is_ascii_hexdigit()))
+                .unwrap_or("")
+                .to_string(),
+            base_branch: run.base_branch.as_deref().map(|b| wire::clean(b, 240)).filter(|b| !b.is_empty()),
+            test: run.test.as_deref().map(|t| wire::clean(t, 240)).filter(|t| !t.is_empty()),
+            test_name: run.test_name.as_deref().map(|t| wire::clean(t, 240)).filter(|t| !t.is_empty()),
+            created_at: run.created_at.clone(),
+            children: run
+                .children
+                .iter()
+                .filter(|c| wire::identifier(&c.id) && wire::PROVIDERS.contains(&c.provider.as_str()))
+                .take(COMPARE_MAXIMUM_ROWS)
+                .map(|c| {
+                    let running = c.test_state.as_deref() == Some(CompareChild::TEST_RUNNING);
+                    let state = c
+                        .test_state
+                        .clone()
+                        .filter(|s| {
+                            matches!(s.as_str(), CompareChild::TEST_RUNNING | CompareChild::TEST_PASSED | CompareChild::TEST_FAILED)
+                        })
+                        .filter(|_| !(restoring && running));
+                    CompareChild {
+                        id: c.id.clone(),
+                        provider: c.provider.clone(),
+                        model: c.model.as_deref().map(|m| wire::clean(m, 200)).filter(|m| !m.is_empty()),
+                        failure: c.failure.as_deref().map(|f| wire::clean(f, 1_000)).filter(|f| !f.is_empty()),
+                        started_at: c.started_at.clone(),
+                        finished_at: c.finished_at.clone(),
+                        cost_usd: c.cost_usd.filter(|v| v.is_finite() && *v >= 0.0),
+                        port_base: c.port_base.filter(|p| (1..=65_535).contains(p)),
+                        port_count: c.port_count.filter(|n| (1..=1_000).contains(n)),
+                        test_exit_code: if state.is_some() { c.test_exit_code } else { None },
+                        test_output: if state.is_some() {
+                            c.test_output.as_deref().map(|o| tail_chars(o, COMPARE_TEST_OUTPUT_LIMIT)).filter(|o| !o.trim().is_empty())
+                        } else {
+                            None
+                        },
+                        test_state: state,
+                    }
+                })
+                .collect(),
+        })
+        .filter(|run| !run.children.is_empty())
+        .collect();
+    let skip = kept.len().saturating_sub(COMPARE_RUNS_KEPT);
+    let kept: Vec<CompareRun> = kept.into_iter().skip(skip).collect();
+    (!kept.is_empty()).then_some(kept)
+}
+
+/// The last `limit` characters of `text`.
+fn tail_chars(text: &str, limit: usize) -> String {
+    let count = text.chars().count();
+    text.chars().skip(count.saturating_sub(limit)).collect()
+}
+
+/// MC-29: a child's compare link, kept only on a delegated child (`parent` is its parent link) whose group and parent are ids and
+/// the parent is that parent; a port block only when it is a real one.
+pub fn compare_member(member: Option<&crate::model::CompareMember>, parent: Option<&str>) -> Option<crate::model::CompareMember> {
+    let member = member?;
+    if !wire::identifier(&member.group) || parent != Some(member.parent_id.as_str()) {
+        return None;
+    }
+    let block = match (member.port_base, member.port_count) {
+        (Some(base), Some(count)) if (1..=65_535).contains(&base) && (1..=1_000).contains(&count) => (Some(base), Some(count)),
+        _ => (None, None),
+    };
+    Some(crate::model::CompareMember {
+        group: member.group.clone(),
+        parent_id: member.parent_id.clone(),
+        port_base: block.0,
+        port_count: block.1,
+    })
+}
+
 fn linked_task(task: Option<&crate::model::LinkedTask>) -> Option<crate::model::LinkedTask> {
     let task = task?;
     let source = wire::clean(&task.source, 32);
@@ -1823,6 +1912,8 @@ fn normalize_session(s: &RunSession, restoring: bool, remote_ids: &HashSet<Strin
         linked_task: if kind == "claude" { linked_task(s.linked_task.as_ref()) } else { None },
         forked_from: if kind == "claude" { forked_from(s.forked_from.as_ref(), s.id()) } else { None },
         opinions: if kind == "claude" { opinions(s.opinions.as_ref(), restoring) } else { None },
+        compare_runs: if kind == "claude" { compare_runs(s.compare_runs.as_ref(), restoring) } else { None },
+        compare_member: if kind == "claude" { compare_member(s.compare_member.as_ref(), s.parent_session_id.as_deref()) } else { None },
         shell_block_runs: if kind == "claude" { shell_block_runs(s.shell_block_runs.as_ref(), restoring) } else { None },
         provider: Some(provider),
         ..s.clone()

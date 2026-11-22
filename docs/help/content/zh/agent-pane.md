@@ -30,6 +30,8 @@ section: agent-pane
 ## 输入框工具 {#composer}
 输入框下方一行从左到右依次是附件、模型、思考强度、权限和更多运行设置（…）。窗格较窄时，部分项目会收进一个菜单。运行期间无法更改，更改后的值从下一个请求起生效。
 
+{{ui:compare.menu}}：空闲窗格在发送按钮的右键菜单中，运行中的窗格在 {{ui:composer.busySend.title}} 菜单中。它把输入框中的请求从同一基准提交同时交给多个代理，并排对比结果（[对比运行](delegation.md#compare)）。
+
 ### 模型 {#model}
 点击模型按钮，可以选择{{ui:composer.label.runner}}（Claude、Codex、Antigravity、pi、opencode、Hermes）和{{ui:composer.label.model}}。如果列表不对，请点击{{ui:composer.model.refresh}}。切换智能体会开始新的对话。
 

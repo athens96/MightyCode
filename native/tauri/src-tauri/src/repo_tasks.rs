@@ -1193,7 +1193,7 @@ fn runs_for_workspace(host: &Host, workspace_id: &str, pane_id: Option<&str>) ->
     list
 }
 
-fn resolve_task_cwd(target_folder: &Path, rel_cwd: Option<&str>) -> Result<PathBuf, String> {
+pub(crate) fn resolve_task_cwd(target_folder: &Path, rel_cwd: Option<&str>) -> Result<PathBuf, String> {
     let Some(rel) = rel_cwd.map(str::trim).filter(|s| !s.is_empty() && *s != ".") else {
         return Ok(target_folder.to_path_buf());
     };

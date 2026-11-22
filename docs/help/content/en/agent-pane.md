@@ -30,6 +30,8 @@ Stopping the task cancels the queued requests too, except in a pane whose turn o
 ## Composer tools {#composer}
 The row under the composer has, from the left: attach, model, thinking effort, permission and more run settings (…). In a narrow pane some of them fold into one menu. They can't be changed while a task runs, and a change applies from the next request.
 
+{{ui:compare.menu}}: on the send button's right-click menu of an idle pane, and on the {{ui:composer.busySend.title}} menu of a running one. It hands the request in the composer to several agents at once from the same base commit and sets their results side by side ([Compare run](delegation.md#compare)).
+
 ### Model {#model}
 Click the model chip to choose the {{ui:composer.label.runner}} (Claude, Codex, Antigravity, pi, opencode or Hermes) and the {{ui:composer.label.model}}. If the list looks wrong, click {{ui:composer.model.refresh}}. Switching agents starts a new conversation.
 

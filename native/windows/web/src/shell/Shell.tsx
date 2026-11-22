@@ -24,6 +24,8 @@ const LazyGitWorkbenchPanel = lazy(() => import('../git/GitWorkbenchPanel').then
 const LazyTaskRunnerPanel = lazy(() => import('../tasks/TaskRunnerPanel').then((m) => ({ default: m.TaskRunnerPanel })));
 const LazyAgentContextPanel = lazy(() => import('../context/AgentContextPanel').then((m) => ({ default: m.AgentContextPanel })));
 const LazySharedMemoryPanel = lazy(() => import('../memory/SharedMemoryPanel').then((m) => ({ default: m.SharedMemoryPanel })));
+const LazyComparePicker = lazy(() => import('../compare/ComparePicker').then((m) => ({ default: m.ComparePicker })));
+const LazyComparePanel = lazy(() => import('../compare/ComparePanel').then((m) => ({ default: m.ComparePanel })));
 
 function Grip({ width, setLive }: { width: number; setLive: (width: number | null) => void }) {
   const { t, bridge } = useServices();
@@ -153,6 +155,25 @@ export function Shell() {
     open: false,
     workspaceId: null,
   });
+  // MC-29: 비교 실행's picker (from the composer's send menus) and its compare view (the picker's start, a sidebar card).
+  const [comparePicker, setComparePicker] = useState<{ paneId: string; text: string } | null>(null);
+  const [compareView, setCompareView] = useState<{ paneId: string; compareId: string } | null>(null);
+  useEffect(() => {
+    const onPicker = (event: Event) => {
+      const detail = (event as CustomEvent<{ paneId?: string; text?: string }>).detail;
+      if (detail?.paneId) setComparePicker({ paneId: detail.paneId, text: detail.text ?? '' });
+    };
+    const onView = (event: Event) => {
+      const detail = (event as CustomEvent<{ paneId?: string; compareId?: string }>).detail;
+      if (detail?.paneId && detail.compareId) setCompareView({ paneId: detail.paneId, compareId: detail.compareId });
+    };
+    window.addEventListener('mighty:open-compare-picker', onPicker);
+    window.addEventListener('mighty:open-compare', onView);
+    return () => {
+      window.removeEventListener('mighty:open-compare-picker', onPicker);
+      window.removeEventListener('mighty:open-compare', onView);
+    };
+  }, []);
   const activeWorkspaceId = useStoreSelector((state) => state.snapshot?.activeWorkspaceId ?? null);
   const activePaneId = useStoreSelector((state) => {
     const id = state.snapshot?.activeSessionId;
@@ -228,7 +249,7 @@ export function Shell() {
     if (!selected) return;
     document.querySelector('.sidebar [data-session-id="' + escapeCssAttr(selected.paneId) + '"]')?.scrollIntoView({ block: 'nearest' });
   }, [selected]);
-  const modalPanelOpen = usageReportOpen || issuePickerState.open || gitWorkbenchState.open || taskRunnerState.open || agentContextState.open || sharedMemoryState.open;
+  const modalPanelOpen = usageReportOpen || issuePickerState.open || gitWorkbenchState.open || taskRunnerState.open || agentContextState.open || sharedMemoryState.open || comparePicker !== null || compareView !== null;
   useShortcuts(blocked || modalPanelOpen);
   // The Mac's menu bar (D9): Workspace › Show usage opens the cumulative Usage Report dashboard.
   useMenu(blocked || modalPanelOpen, openUsageReportFromMenu);
@@ -256,6 +277,13 @@ export function Shell() {
       </div>
       {hasNatives && <Suspense fallback={null}><LazySurfaces skipInitialSync /></Suspense>}
       {reviewOpen && <Suspense fallback={null}><LazyReviewPanel /></Suspense>}
+      {comparePicker && (
+        <Suspense fallback={null}>
+          <LazyComparePicker paneId={comparePicker.paneId} text={comparePicker.text} onClose={() => setComparePicker(null)}
+            onStarted={(compareId) => { const paneId = comparePicker.paneId; setComparePicker(null); setCompareView({ paneId, compareId }); }} />
+        </Suspense>
+      )}
+      {compareView && <Suspense fallback={null}><LazyComparePanel paneId={compareView.paneId} compareId={compareView.compareId} onClose={() => setCompareView(null)} /></Suspense>}
       {usageReportOpen && <Suspense fallback={null}><LazyUsageReportPanel open={usageReportOpen} onClose={() => setUsageReportOpen(false)} /></Suspense>}
       {issuePickerState.open && (
         <Suspense fallback={null}>

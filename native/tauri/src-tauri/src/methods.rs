@@ -216,6 +216,7 @@ pub fn registry() -> Registry {
     crate::styles::register(&mut methods);
     crate::pane_worktree::register(&mut methods);
     crate::fork::register(&mut methods);
+    crate::compare::register(&mut methods);
     crate::mirror::register(&mut methods);
     // W6: the native forms (native.rs) and Settings with the guide (settings/mod.rs).
     crate::native::register(&mut methods);

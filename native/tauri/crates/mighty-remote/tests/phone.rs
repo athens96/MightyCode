@@ -513,6 +513,29 @@ async fn mobile_host_a_pane_travels_as_its_provider_runs() {
             }),
             ..with("fork-abcdef12", "claude", "default", None, "claude")
         },
+        RunSession {
+            compare_runs: Some(vec![mighty_core::model::CompareRun {
+                id: "cmp1".into(),
+                request: "Make it faster".into(),
+                base_commit: "abc1234".into(),
+                children: vec![
+                    mighty_core::model::CompareChild {
+                        id: "c1".into(),
+                        provider: "claude".into(),
+                        model: Some("opus".into()),
+                        ..Default::default()
+                    },
+                    mighty_core::model::CompareChild {
+                        id: "c2".into(),
+                        provider: "codex".into(),
+                        failure: Some("signed out".into()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }]),
+            ..with("compare-parent", "claude", "default", None, "claude")
+        },
     ]);
     async fn panes(world: &World) -> std::collections::HashMap<String, Value> {
         let (_, state) = world.route("GET", "/m1/state", None).await;
@@ -532,6 +555,15 @@ async fn mobile_host_a_pane_travels_as_its_provider_runs() {
         "MC-28: a forked pane names its source"
     );
     assert!(found["opus"].get("forkedFrom").is_none(), "a pane that was not forked carries none");
+    let compare = &found["compare-parent"]["compareRuns"][0];
+    assert!(
+        compare["id"] == "cmp1"
+            && compare["children"][0]["provider"] == "claude"
+            && compare["children"][0]["model"] == "opus"
+            && compare["children"][1]["failure"] == "signed out",
+        "MC-29: a pane's compare runs, each child with its agent, model and failure: {compare}"
+    );
+    assert!(found["opus"].get("compareRuns").is_none(), "a pane that started none carries none");
     assert!(
         found["agy"]["provider"] == "gemini" && found["agy"]["model"] == "default" && found["agy"].get("resolvedModel").is_none(),
         "an Antigravity pane on default names no model"

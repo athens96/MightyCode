@@ -9,7 +9,7 @@ import { useAddMenu, useWorkspaceAddChoices } from './addMenu';
 import { sidebarGroups } from './servers';
 import { nestForks } from './forks';
 import { BetaBadge, StatusCounts, StatusGlyph, useCall, useMenu, usePaneInfo, useShell, type MenuItem } from './parts';
-import type { CardAction, ChildCard, PaneInfo, RemoteServer, SidebarItem, SidebarWorkspace } from './types';
+import type { CardAction, ChildCard, PaneCompare, PaneInfo, RemoteServer, SidebarItem, SidebarWorkspace } from './types';
 import { Icon } from '../icons/Icon';
 import appIcon from '../assets/app-icon.png';
 import { Pending } from '../pending/Pending';
@@ -68,6 +68,38 @@ function ChildCardLine({ id, card }: { id: string; card: ChildCard }) {
       {card.note && <div className={'child-card-note tone-text-' + (card.noteTone ?? 'idle')}>{card.note}</div>}
       {card.kept && <div className="child-card-note tone-text-wait">{card.kept}</div>}
     </div>
+  );
+}
+
+/** MC-29: the words of a compare run's card: how many children, then how many of them run, reported, failed, merged, were discarded. */
+export function compareCardWords(card: PaneCompare, t: (key: string, subs?: Readonly<Record<string, string | number>>) => string): { title: string; counts: string } {
+  const counts = [
+    card.running > 0 ? t('compare.card.running', { count: card.running }) : null,
+    card.reported > 0 ? t('compare.card.reported', { count: card.reported }) : null,
+    card.failed > 0 ? t('compare.card.failed', { count: card.failed }) : null,
+    card.merged > 0 ? t('compare.card.merged', { count: card.merged }) : null,
+    card.discarded > 0 ? t('compare.card.discarded', { count: card.discarded }) : null,
+  ].filter((part): part is string => part !== null);
+  return { title: t('compare.card.title', { count: card.total }), counts: counts.join(' · ') };
+}
+
+/** MC-29: a compare run's card under the pane that started it; pressed, the compare view opens. */
+function CompareCards({ paneId, cards }: { paneId: string; cards: readonly PaneCompare[] }) {
+  const { t } = useServices();
+  return (
+    <>
+      {cards.map((card) => {
+        const words = compareCardWords(card, t);
+        return (
+          <button key={card.id} type="button" className="compare-card" data-testid={'compare-card-' + card.id} title={card.title + '\n' + t('compare.card.open')}
+            onClick={() => window.dispatchEvent(new CustomEvent('mighty:open-compare', { detail: { paneId, compareId: card.id } }))}>
+            <Icon name="columns-3" size={11} weight={2.2} />
+            <span className="compare-card-title">{words.title}</span>
+            <span className="compare-card-counts">{words.counts}</span>
+          </button>
+        );
+      })}
+    </>
   );
 }
 
@@ -206,6 +238,7 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
               <div key={item.id} className="sidebar-child" style={{ paddingLeft: 22 + (item.depth + indent) * 16 }}>
                 <PaneRow info={info} active={!dashboard && item.id === activeId} child={item.depth > 0 ? item : undefined} />
                 {item.card && <ChildCardLine id={item.id} card={item.card} />}
+                {info.compares && info.compares.length > 0 && <CompareCards paneId={item.id} cards={info.compares} />}
               </div>
             );
           })}

@@ -1,0 +1,49 @@
+/* 비교 실행 (MC-29): the picker (ComparePicker.tsx), the compare view's columns (ComparePanel.tsx) and the group card under a pane's
+   row in the sidebar (shell/Sidebar.tsx). */
+.compare-picker { display: flex; flex-direction: column; gap: var(--space-md); }
+.compare-section { display: flex; flex-direction: column; gap: var(--space-xs); }
+.compare-two { flex-direction: row; gap: var(--space-md); }
+.compare-two > .compare-field { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-xs); }
+.compare-label { display: flex; align-items: baseline; gap: var(--space-sm); color: var(--ink2); font-size: var(--type-small); font-weight: 600; }
+.compare-hint { color: var(--ink3, var(--ink2)); font-weight: 400; }
+.compare-request {
+  max-height: 72px; overflow: auto; padding: var(--space-xs) var(--space-sm); border-radius: var(--radius-row); background: var(--card-raised);
+  color: var(--ink); font-size: var(--type-small); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.compare-row { display: flex; align-items: center; gap: var(--space-xs); }
+.compare-row-number { flex: none; width: 18px; color: var(--ink2); font-size: var(--type-pill); font-variant-numeric: tabular-nums; text-align: center; }
+.compare-agent { flex: none; width: 150px; }
+.compare-model { flex: 1; min-width: 0; }
+.compare-add { align-self: flex-start; display: inline-flex; align-items: center; gap: var(--space-xxs); }
+.compare-note { font-size: var(--type-pill); overflow-wrap: anywhere; }
+.compare-budget { display: flex; align-items: center; gap: var(--space-xs); color: var(--ink2); font-size: var(--type-small); }
+.compare-budget.warn { color: var(--err-text); }
+.compare-unavailable { margin: auto; padding: var(--space-lg); max-width: 440px; color: var(--ink2); font-size: var(--type-small); text-align: center; }
+
+.compare-body { overflow: hidden; display: flex; flex-direction: column; }
+.compare-columns { flex: 1; min-height: 0; overflow: auto; display: grid; gap: var(--space-sm); align-items: start; }
+.compare-column {
+  display: flex; flex-direction: column; gap: var(--space-xs); min-width: 0; padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-row); background: var(--card-raised);
+}
+.compare-column.phase-discarded, .compare-column.phase-merged { opacity: .8; }
+.compare-column-head { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+.compare-column-agent { flex: none; font-weight: 600; color: var(--ink); }
+.compare-column-model { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink2); font-size: var(--type-pill); }
+.compare-phase { align-self: flex-start; padding: 0 var(--space-xs); border-radius: 999px; background: var(--subtle); font-size: var(--type-pill); font-weight: 600; }
+.compare-facts { display: grid; grid-template-columns: auto 1fr; column-gap: var(--space-sm); row-gap: var(--space-xxs); margin: 0; font-size: var(--type-pill); }
+.compare-facts dt { color: var(--ink2); }
+.compare-facts dd { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.compare-facts .added { color: var(--done-text); }
+.compare-facts .removed { color: var(--err-text); }
+.compare-actions { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.compare-actions .btn.small { height: 24px; padding: 0 var(--space-sm); font-size: var(--type-pill); gap: var(--space-xxs); }
+
+.compare-card {
+  display: flex; align-items: center; gap: var(--space-xs); width: 100%; min-width: 0; margin-top: var(--space-xxs); padding: var(--space-xxs) var(--space-sm);
+  border: 0; border-radius: var(--radius-row); background: var(--subtle); color: var(--sidebar-ink2); font: inherit; font-size: var(--type-pill); text-align: left; cursor: default;
+}
+.compare-card:hover { background: var(--accent-soft); }
+.compare-card > svg { flex: none; color: var(--accent); }
+.compare-card-title { flex: none; font-weight: 600; color: var(--sidebar-ink, var(--ink)); }
+.compare-card-counts { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

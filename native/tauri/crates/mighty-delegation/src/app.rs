@@ -175,6 +175,15 @@ impl DelegationHost for HostLink {
     }
 }
 
+/// MC-29's extras to a human's child ([`DelegationApp::start_human_child_with`]): `base_commit`, the head or an earlier commit of the
+/// parent's branch the child starts from (None: the head); `prepare`, called with the child's id once its pane exists and before its
+/// first run starts.
+#[derive(Clone, Default)]
+pub struct HumanChildExtras {
+    pub base_commit: Option<String>,
+    pub prepare: Option<Arc<dyn Fn(String) + Send + Sync>>,
+}
+
 /// What the app keeps of its cards, its merge queue, its closes and its human children; one lock, never held across an await.
 #[derive(Default)]
 struct Cards {
@@ -670,6 +679,23 @@ impl DelegationApp {
         agent: Option<&str>,
         quiet: bool,
     ) -> HumanChildStart {
+        self.start_human_child_with(parent_id, text, attachments, plan_first, failed, agent, quiet, HumanChildExtras::default()).await
+    }
+
+    /// [`DelegationApp::start_human_child`] with MC-29's extras: the commit the child starts from, and what the app does to the
+    /// child's pane once it exists and before its first run starts (a compare run's model and port block).
+    #[allow(clippy::too_many_arguments, reason = "start_human_child's arguments and the extras")]
+    pub async fn start_human_child_with(
+        &self,
+        parent_id: &str,
+        text: &str,
+        attachments: Vec<RunAttachment>,
+        plan_first: bool,
+        failed: Arc<dyn Fn(String) -> BoxFuture<'static, ()> + Send + Sync>,
+        agent: Option<&str>,
+        quiet: bool,
+        extras: HumanChildExtras,
+    ) -> HumanChildStart {
         let Some(coordinator) = self.coordinator() else {
             return HumanChildStart::Failed(self.locale().get("delegation.human.error.switchedOff"));
         };
@@ -690,12 +716,17 @@ impl DelegationApp {
         let (me, started_token, parent) = (self.me.clone(), token.clone(), parent_id.to_string());
         let (failed_me, failed_token, failed_parent) = (self.me.clone(), token.clone(), parent_id.to_string());
         let files = Arc::new(attachments);
+        let prepare = extras.prepare.clone();
         let starter = HumanChildStarter {
             start: Arc::new(move |child_id: String, run: HumanChildFirstRun| {
-                let (me, token, parent, files) = (me.clone(), started_token.clone(), parent.clone(), files.clone());
+                let (me, token, parent, files, prepare) =
+                    (me.clone(), started_token.clone(), parent.clone(), files.clone(), prepare.clone());
                 Box::pin(async move {
                     let app = me.upgrade()?;
                     app.end_quiet_child(&parent, token.as_deref());
+                    if let Some(prepare) = &prepare {
+                        prepare(child_id.clone());
+                    }
                     // Kept before the run starts, so a command that ends at once still finds its note.
                     if let Some(note) = &run.following_note {
                         lock(&app.cards).following_notes.insert(child_id.clone(), note.clone());
@@ -717,7 +748,7 @@ impl DelegationApp {
                 })
             }),
         };
-        let answer = coordinator.start_human_child(text, parent_id, starter, plan_first, agent).await;
+        let answer = coordinator.start_human_child_at(text, parent_id, starter, plan_first, agent, extras.base_commit.as_deref()).await;
         // A refused or failed answer made no child: nothing waits for its pane.
         if !matches!(answer, HumanChildStart::Started(_)) {
             self.end_quiet_child(parent_id, token.as_deref());

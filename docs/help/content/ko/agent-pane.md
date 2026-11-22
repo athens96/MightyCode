@@ -30,6 +30,8 @@ section: agent-pane
 ## 입력창 도구 {#composer}
 입력창 아래 줄에는 왼쪽부터 첨부, 모델, 사고 강도, 권한, 추가 실행 설정(…)이 있습니다. 창이 좁으면 일부가 메뉴 하나로 접힙니다. 실행 중에는 바꿀 수 없고, 바꾼 값은 다음 요청부터 적용됩니다.
 
+{{ui:compare.menu}}: 쉬고 있는 창은 보내기 단추의 오른쪽 클릭 메뉴, 실행 중인 창은 {{ui:composer.busySend.title}} 메뉴에 있습니다. 입력창의 요청을 여러 에이전트에 같은 기준 커밋에서 동시에 맡기고 결과를 나란히 비교합니다([비교 실행](delegation.md#compare)).
+
 ### 모델 {#model}
 모델 칩을 누르면 {{ui:composer.label.runner}}(Claude, Codex, Antigravity, pi, opencode, Hermes)와 {{ui:composer.label.model}} 항목을 고를 수 있습니다. 목록이 맞지 않으면 {{ui:composer.model.refresh}}을 누르세요. 에이전트를 바꾸면 대화가 새로 시작됩니다.
 

@@ -173,6 +173,28 @@ impl Maker {
         })
     }
 
+    /// MC-29 (비교 실행): `start` with its base moved to `commit`, an earlier commit of the parent's branch (the head itself or one of its
+    /// ancestors), so every child of one compare run starts from the same commit. None when git cannot name it or it is not on the
+    /// branch: a child from a commit off the branch would bring that history into the merge.
+    pub async fn at_commit(&self, start: &ChildWorktreeBase, commit: &str) -> Option<ChildWorktreeBase> {
+        let commit = commit.trim();
+        if commit.is_empty() || commit.starts_with('-') || commit.len() > 64 || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let verified = run(&self.git, &["rev-parse", "-q", "--verify", &format!("{commit}^{{commit}}")], &start.repository, 10.0).await?;
+        let sha = line(&verified.stdout).to_string();
+        if verified.exit_code != 0 || !is_object_name(&sha) {
+            return None;
+        }
+        if sha != start.base_commit {
+            let ancestor = run(&self.git, &["merge-base", "--is-ancestor", &sha, &start.base_commit], &start.repository, 10.0).await?;
+            if ancestor.exit_code != 0 {
+                return None;
+            }
+        }
+        Some(ChildWorktreeBase { base_commit: sha, ..start.clone() })
+    }
+
     /// `Make`: the branch `mighty/<session id>` at the recorded base commit and its worktree (`worktree add -b`), then TASK.md with
     /// `task` and an empty REPORT.md. Never replaces an existing branch, folder or file. `timeout` in seconds (C#'s default is 300).
     pub async fn make(&self, session_id: &str, start: &ChildWorktreeBase, task: &str, timeout: f64) -> ChildWorktreeOutcome {

@@ -650,9 +650,24 @@ impl Coordinator {
         plan_first: bool,
         agent: Option<&str>,
     ) -> crate::tools::delegate::HumanChildStart {
-        let (text, parent_id, agent) = (text.to_string(), parent_id.to_string(), agent.map(str::to_string));
+        self.start_human_child_at(text, parent_id, starter, plan_first, agent, None).await
+    }
+
+    /// [`Coordinator::start_human_child`] from `base_commit` (MC-29's compare run): the head or an earlier commit of the parent's
+    /// branch; None is the head, as the second send has it.
+    pub async fn start_human_child_at(
+        &self,
+        text: &str,
+        parent_id: &str,
+        starter: crate::tools::delegate::HumanChildStarter,
+        plan_first: bool,
+        agent: Option<&str>,
+        base_commit: Option<&str>,
+    ) -> crate::tools::delegate::HumanChildStart {
+        let (text, parent_id, agent, base) =
+            (text.to_string(), parent_id.to_string(), agent.map(str::to_string), base_commit.map(str::to_string));
         self.isolated(crate::tools::delegate::HumanChildStart::Failed, move |coordinator| async move {
-            coordinator.start_human_child_now(&text, &parent_id, starter, plan_first, agent.as_deref()).await
+            coordinator.start_human_child_now(&text, &parent_id, starter, plan_first, agent.as_deref(), base.as_deref()).await
         })
         .await
     }

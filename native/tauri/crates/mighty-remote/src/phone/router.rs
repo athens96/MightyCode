@@ -635,6 +635,38 @@ impl Inner {
             out.prop_str("title", link.title.as_deref());
             out.end_object();
         }
+        // MC-29: the compare runs this pane started (`compareRuns [{ id, request, baseCommit, test, children [{ id, provider, model,
+        // failure, costUsd, testState }] }]`), and a child's group (`compareId`). The phone draws none of it yet.
+        if let Some(runs) = pane.compare_runs.as_ref().filter(|runs| !runs.is_empty()) {
+            out.name("compareRuns");
+            out.begin_array();
+            for run in runs {
+                out.begin_object();
+                out.prop_str("id", Some(&run.id));
+                out.prop_str("request", Some(&run.request.chars().take(400).collect::<String>()));
+                out.prop_str("baseCommit", Some(&run.base_commit));
+                out.prop_str("test", run.test_name.as_deref());
+                out.prop_str("createdAt", run.created_at.as_deref());
+                out.name("children");
+                out.begin_array();
+                for child in &run.children {
+                    out.begin_object();
+                    out.prop_str("id", Some(&child.id));
+                    out.prop_str("provider", Some(&child.provider));
+                    out.prop_str("model", child.model.as_deref());
+                    out.prop_str("failure", child.failure.as_deref());
+                    out.prop_opt_float("costUsd", child.cost_usd);
+                    out.prop_str("testState", child.test_state.as_deref());
+                    out.end_object();
+                }
+                out.end_array();
+                out.end_object();
+            }
+            out.end_array();
+        }
+        if let Some(member) = &pane.compare_member {
+            out.prop_str("compareId", Some(&member.group));
+        }
         // MC-26: the desktop's mark on a pane waiting for the user (a terminal's notification or bell, a card, a failed setup).
         if let Some((kind, text, at)) = self.desk.attention(pane.id()) {
             out.name("attention");

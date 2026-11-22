@@ -51,6 +51,20 @@ export interface PaneInfo {
   pr?: PanePr | null;
   /** MC-28: the pane this one was forked from (its title as saved when the fork was made). */
   forkedFrom?: PaneFork | null;
+  /** MC-29: the compare runs this pane started, newest first, each summed up for its card. */
+  compares?: PaneCompare[];
+}
+
+/** MC-29: a compare run as its card under the pane's row shows it. */
+export interface PaneCompare {
+  id: string;
+  title: string;
+  total: number;
+  running: number;
+  reported: number;
+  failed: number;
+  merged: number;
+  discarded: number;
 }
 
 /** MC-28: where a pane was forked from, as its row and strip show it. */

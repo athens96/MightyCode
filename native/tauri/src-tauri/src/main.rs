@@ -26,6 +26,7 @@ mod bodies;
 mod build_info;
 mod cards;
 mod companion;
+mod compare;
 mod composer;
 mod conversation_search;
 mod deep_link;

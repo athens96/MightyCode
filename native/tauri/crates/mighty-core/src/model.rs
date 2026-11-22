@@ -946,6 +946,185 @@ impl Wire for OpinionCard {
     }
 }
 
+/// MC-29 (비교 실행): one request run by several agents (or one agent several times) side by side, each in its own delegated child
+/// worktree from the same base commit, kept on the pane that started it so the compare view opens again after a restart.
+/// Lenient: damage loads as None.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CompareRun {
+    /// The group id (`compareId`).
+    pub id: String,
+    /// The request every child got (at most [`COMPARE_REQUEST_LIMIT`] characters kept).
+    pub request: String,
+    /// The commit every child started from, and the branch it was on.
+    pub base_commit: String,
+    pub base_branch: Option<String>,
+    /// The test chosen to run in each child once it reports: its task id (`run:<name>` or `mighty:<name>`) and name.
+    pub test: Option<String>,
+    pub test_name: Option<String>,
+    pub created_at: Option<String>,
+    pub children: Vec<CompareChild>,
+}
+
+/// MC-29: one child of a compare run, in the order the rows were picked.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CompareChild {
+    /// The delegated child's session id (its branch is `mighty/<id>`); for a row that never made a child, an id of its own.
+    pub id: String,
+    pub provider: String,
+    pub model: Option<String>,
+    /// Why the child could not be started (refused, or its worktree, pane or first run failed); None while it is fine.
+    pub failure: Option<String>,
+    pub started_at: Option<String>,
+    /// When it was first seen done (reported, ended or failed), for its elapsed time.
+    pub finished_at: Option<String>,
+    /// What its runs cost, summed from the usage ledger's records of its pane.
+    pub cost_usd: Option<f64>,
+    /// Its port block (`MIGHTY_PORT`, `MIGHTY_PORT_COUNT`).
+    pub port_base: Option<i32>,
+    pub port_count: Option<i32>,
+    /// The chosen test: `running`, `passed` or `failed`; None before it ran.
+    pub test_state: Option<String>,
+    pub test_exit_code: Option<i32>,
+    /// The end of the test's output (at most [`COMPARE_TEST_OUTPUT_LIMIT`] characters).
+    pub test_output: Option<String>,
+}
+
+/// MC-29: a delegated child's link to its compare run, kept on the child's pane: the group and parent, and its port block (its runs
+/// get `PORT`, `MIGHTY_PORT`, `MIGHTY_PORT_COUNT` and the worktree's names, as a pane worktree's do).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CompareMember {
+    pub group: String,
+    pub parent_id: String,
+    pub port_base: Option<i32>,
+    pub port_count: Option<i32>,
+}
+
+/// MC-29: the most rows a compare run takes, the groups a pane keeps (the newest), and how much of the request and a test's output.
+pub const COMPARE_MAXIMUM_ROWS: usize = 4;
+pub const COMPARE_RUNS_KEPT: usize = 5;
+pub const COMPARE_REQUEST_LIMIT: usize = 4_000;
+pub const COMPARE_TEST_OUTPUT_LIMIT: usize = 2_000;
+
+impl CompareChild {
+    pub const TEST_RUNNING: &'static str = "running";
+    pub const TEST_PASSED: &'static str = "passed";
+    pub const TEST_FAILED: &'static str = "failed";
+}
+
+impl CompareMember {
+    /// The values every run of the child gets: `PORT` (the block's first port) with the block and the worktree's names
+    /// ([`worktree_variables`]); `folder` is the child's working folder, `root` the workspace folder. None without a block.
+    pub fn environment(&self, folder: &str, root: &str) -> Option<Vec<(String, String)>> {
+        let (base, count) = match (self.port_base, self.port_count) {
+            (Some(base), Some(count)) if base > 0 && count > 0 => (base, count),
+            _ => return None,
+        };
+        let trimmed = folder.trim_end_matches(['/', '\\']);
+        let name = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
+        let mut values = vec![("PORT".to_string(), base.to_string())];
+        values.extend(worktree_variables(Some((base, count)), name, root, folder));
+        Some(values)
+    }
+}
+
+impl Wire for CompareRun {
+    fn read(value: &Value) -> R<Self> {
+        let o = Obj::of(value, "a compare run")?;
+        let Some(id) = json::opt_string(o.get("id"))?.filter(|id| !id.is_empty()) else {
+            return fail("a compare run without its id");
+        };
+        Ok(CompareRun {
+            id,
+            request: lenient_string(o.get("request")).unwrap_or_default(),
+            base_commit: lenient_string(o.get("baseCommit")).unwrap_or_default(),
+            base_branch: lenient_string(o.get("baseBranch")),
+            test: lenient_string(o.get("test")),
+            test_name: lenient_string(o.get("testName")),
+            created_at: lenient_string(o.get("createdAt")),
+            children: lenient_list(o.get("children")).unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_str("id", Some(&self.id));
+        out.prop_str("request", Some(&self.request));
+        out.prop_str("baseCommit", Some(&self.base_commit));
+        out.prop_str("baseBranch", self.base_branch.as_deref());
+        out.prop_str("test", self.test.as_deref());
+        out.prop_str("testName", self.test_name.as_deref());
+        out.prop_str("createdAt", self.created_at.as_deref());
+        out.prop_list("children", Some(&self.children));
+        out.end_object();
+    }
+}
+
+impl Wire for CompareChild {
+    fn read(value: &Value) -> R<Self> {
+        let o = Obj::of(value, "a compare child")?;
+        let Some(id) = json::opt_string(o.get("id"))?.filter(|id| !id.is_empty()) else {
+            return fail("a compare child without its id");
+        };
+        Ok(CompareChild {
+            id,
+            provider: lenient_string(o.get("provider")).unwrap_or_default(),
+            model: lenient_string(o.get("model")),
+            failure: lenient_string(o.get("failure")),
+            started_at: lenient_string(o.get("startedAt")),
+            finished_at: lenient_string(o.get("finishedAt")),
+            cost_usd: lenient_double(o.get("costUsd")),
+            port_base: json::opt_int32(o.get("portBase")).ok().flatten(),
+            port_count: json::opt_int32(o.get("portCount")).ok().flatten(),
+            test_state: lenient_string(o.get("testState")),
+            test_exit_code: json::opt_int32(o.get("testExitCode")).ok().flatten(),
+            test_output: lenient_string(o.get("testOutput")),
+        })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_str("id", Some(&self.id));
+        out.prop_str("provider", Some(&self.provider));
+        out.prop_str("model", self.model.as_deref());
+        out.prop_str("failure", self.failure.as_deref());
+        out.prop_str("startedAt", self.started_at.as_deref());
+        out.prop_str("finishedAt", self.finished_at.as_deref());
+        out.prop_opt_float("costUsd", self.cost_usd);
+        out.prop_opt_int("portBase", self.port_base.map(i64::from));
+        out.prop_opt_int("portCount", self.port_count.map(i64::from));
+        out.prop_str("testState", self.test_state.as_deref());
+        out.prop_opt_int("testExitCode", self.test_exit_code.map(i64::from));
+        out.prop_str("testOutput", self.test_output.as_deref());
+        out.end_object();
+    }
+}
+
+impl Wire for CompareMember {
+    fn read(value: &Value) -> R<Self> {
+        let o = Obj::of(value, "a compare member")?;
+        let (Some(group), Some(parent_id)) =
+            (json::opt_string(o.get("group"))?.filter(|g| !g.is_empty()), json::opt_string(o.get("parentId"))?.filter(|p| !p.is_empty()))
+        else {
+            return fail("a compare member without its group");
+        };
+        Ok(CompareMember {
+            group,
+            parent_id,
+            port_base: json::opt_int32(o.get("portBase")).ok().flatten(),
+            port_count: json::opt_int32(o.get("portCount")).ok().flatten(),
+        })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_str("group", Some(&self.group));
+        out.prop_str("parentId", Some(&self.parent_id));
+        out.prop_opt_int("portBase", self.port_base.map(i64::from));
+        out.prop_opt_int("portCount", self.port_count.map(i64::from));
+        out.end_object();
+    }
+}
+
 /// C# `KeptPaneWorktree`: a pane worktree kept after its pane closed with work still unmerged (or children still on its branch).
 #[derive(Debug, Clone, PartialEq)]
 pub struct KeptPaneWorktree {
@@ -1340,6 +1519,10 @@ pub struct RunSession {
     pub forked_from: Option<ForkedFrom>,
     /// MC-28: other agents' opinions on the pane's work (`/advisor`), the newest last.
     pub opinions: Option<Vec<OpinionCard>>,
+    /// MC-29: the compare runs this pane started (`compareRuns`), the newest last.
+    pub compare_runs: Option<Vec<CompareRun>>,
+    /// MC-29: this delegated child's compare run (`compareMember`).
+    pub compare_member: Option<CompareMember>,
     /// `shellRuns` on the wire.
     pub shell_block_runs: Option<Vec<ShellBlockRun>>,
     /// `[JsonIgnore] Mirror`: the host pane a remote mirror pane shows (C# `RemoteMirrorReference`, W9-J): never read, written or saved.
@@ -1491,6 +1674,8 @@ impl Default for RunSession {
             ask_target: None,
             forked_from: None,
             opinions: None,
+            compare_runs: None,
+            compare_member: None,
             shell_block_runs: None,
             mirror: None,
             body_on_disk: false,
@@ -1579,6 +1764,8 @@ impl Wire for RunSession {
             ask_target: lenient_string(o.get("askTarget")),
             forked_from: lenient_record(o.get("forkedFrom")),
             opinions: lenient_list(o.get("opinions")),
+            compare_runs: lenient_list(o.get("compareRuns")),
+            compare_member: lenient_record(o.get("compareMember")),
             shell_block_runs: lenient_list(o.get("shellRuns")),
             mirror: None,
             body_on_disk: false,
@@ -1732,6 +1919,8 @@ impl RunSession {
         out.prop_str("askTarget", self.ask_target.as_deref());
         out.prop("forkedFrom", self.forked_from.as_ref());
         out.prop_list("opinions", self.opinions.as_ref());
+        out.prop_list("compareRuns", self.compare_runs.as_ref());
+        out.prop("compareMember", self.compare_member.as_ref());
         if fields.body() {
             out.prop_list("shellRuns", self.shell_block_runs.as_ref());
         }
@@ -1884,6 +2073,8 @@ impl RunSession {
             ask_target,
             forked_from,
             opinions,
+            compare_runs,
+            compare_member,
             shell_block_runs,
             mirror: _,
             body_on_disk: _,
@@ -1928,6 +2119,8 @@ impl RunSession {
             && linked_task == &other.linked_task
             && forked_from == &other.forked_from
             && opinions == &other.opinions
+            && compare_runs == &other.compare_runs
+            && compare_member == &other.compare_member
             && shell_block_runs == &other.shell_block_runs
     }
 }

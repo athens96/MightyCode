@@ -937,8 +937,14 @@ impl RunService {
             // C# `DelegationWorktreeRoot(pane)`: the child's worktree as delegation made it, never what the caller says.
             request.delegation_worktree_root = self.shared.delegation.as_ref().and_then(|hooks| hooks.worktree_root(&pane));
             // A pane worktree's own PORT and folders (C# `PaneWorktree.Environment`), never for a remote workspace's pane.
+            // MC-29: a compare run's child gets its own port block the same way, from its compare link.
             request.pane_environment = (pane.kind() == "claude" && !remote)
-                .then(|| pane.pane_worktree.as_ref().map(|worktree| worktree.environment(workspace.path()).into_iter().collect()))
+                .then(|| {
+                    pane.pane_worktree.as_ref().map(|worktree| worktree.environment(workspace.path()).into_iter().collect()).or_else(|| {
+                        let member = pane.compare_member.as_ref()?;
+                        member.environment(pane.working_folder.as_deref()?, workspace.path()).map(|values| values.into_iter().collect())
+                    })
+                })
                 .flatten();
             if state.routes.contains_key(&request.session_id) {
                 return Err(RunError::State(strings::get("run.error.alreadyRunning")));

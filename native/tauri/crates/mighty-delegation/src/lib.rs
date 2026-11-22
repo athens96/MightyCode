@@ -36,6 +36,7 @@ pub mod agent_io;
 pub mod app;
 pub mod app_host;
 pub mod cards;
+pub mod compare;
 pub mod coordinator;
 pub mod copy;
 pub mod delivery;

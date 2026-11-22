@@ -5,7 +5,7 @@ import type { RunSession, Workspace } from '../store/models';
 import { attachmentRefusal, byteLabel, toBase64 } from './attachments';
 import { enterAction, maximumDraft, secondSendWords } from './keys';
 import { choose, closed, move, paletteDraft, paletteKey, paletteState, safeIndex, type PaletteState, type SlashCatalog, type SlashCommand } from './slash';
-import { BusySendPill, MenuList, StyleRow, Toolbar, usePopover } from './Toolbar';
+import { BusySendPill, MenuList, SendMenu, StyleRow, Toolbar, usePopover } from './Toolbar';
 import { Guided } from './Guided';
 import { readRunNow, rowAgent, runNowBranches, runNowTip, runNowWaits, type RunNow } from './queue';
 import { Icon } from '../icons/Icon';
@@ -382,6 +382,10 @@ export function Composer({ session }: { session: RunSession }) {
   const primaryTip = state?.primary === 'worktree' ? t('queue.runNowAgentHint', { agent: runsWith?.label ?? '' }) : state?.primary === 'queue' ? t('queue.addHint') : state?.primary === 'stop' ? t('composer.stop.tooltip') : t('composer.send.tooltip');
   // In the busy split control the send button says "send" (↑): the target beside it says where to.
   const inSplit = !!state?.busy && !!state?.pills && (state?.worktreeAgents?.length ?? 0) > 0 && (state?.primary === 'queue' || state?.primary === 'worktree');
+  // MC-29: 비교 실행… — an agent pane that is no delegated child offers it on its send menus; the picker takes the editor's words.
+  const comparable = session.kind !== 'shell' && !!state?.pills && !session.parentSessionId;
+  const openCompare = comparable ? () => window.dispatchEvent(new CustomEvent('mighty:open-compare-picker', { detail: { paneId, text } })) : undefined;
+  const [sendMenu, setSendMenu] = useState(false);
   const primaryButton = (
     <button
       type="button"
@@ -391,6 +395,7 @@ export function Composer({ session }: { session: RunSession }) {
       title={primaryTip}
       disabled={!state?.primaryEnabled}
       onClick={() => primary()}
+      onContextMenu={openCompare && state?.primary === 'send' ? (event) => { event.preventDefault(); setSendMenu(true); } : undefined}
     >
       {state?.primary === 'stop' ? <Icon name="square" size={11} weight={0} fill /> : inSplit ? <Icon name="arrow-up" size={15} weight={2.4} />
         : state?.primary === 'queue' ? <Icon name="list-plus" size={14} weight={2.2} />
@@ -589,15 +594,16 @@ export function Composer({ session }: { session: RunSession }) {
           )}
           {state?.busy && state.pills && agents.length > 0 && (state.primary === 'queue' || state.primary === 'worktree') ? (
             <span className="composer-send-split" data-testid="composer-send-split">
-              <BusySendPill paneId={paneId} agents={agents} current={runsWith?.agent ?? null} split />
+              <BusySendPill paneId={paneId} agents={agents} current={runsWith?.agent ?? null} split onCompare={openCompare} />
               {primaryButton}
             </span>
           ) : (
             <>
-              {state?.busy && state.pills && <BusySendPill paneId={paneId} agents={agents} current={runsWith?.agent ?? null} compact />}
+              {state?.busy && state.pills && <BusySendPill paneId={paneId} agents={agents} current={runsWith?.agent ?? null} compact onCompare={openCompare} />}
               {primaryButton}
             </>
           )}
+          {sendMenu && openCompare && <SendMenu onCompare={openCompare} onClose={() => setSendMenu(false)} />}
         </div>
         <ComposerCard paneId={paneId} kind="statusLine" />
       </div>

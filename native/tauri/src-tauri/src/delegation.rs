@@ -172,10 +172,12 @@ impl DelegationWindow for Window {
         host.schedule();
     }
 
-    /// C# `DelegationChanged`: the sidebar and every composer's held rows and second send are drawn again.
+    /// C# `DelegationChanged`: the sidebar and every composer's held rows and second send are drawn again; MC-29's compare runs
+    /// note their children that finished and start their tests.
     fn changed(&self) {
         let Some(host) = self.host.upgrade() else { return };
         host.panes_changed();
+        crate::compare::delegation_changed(&host);
         host.schedule();
     }
 
@@ -774,24 +776,7 @@ pub async fn child_action(host: Arc<Host>, args: Value) -> Reply {
     }
     match action {
         DelegationCardAction::Merge => {
-            // 머지 전 점검 (merge_checks.rs): what still warns is asked once more; it never blocks.
-            if let Some(record) = crate::pane_worktree::child_record(&id)
-                && let Some(reasons) =
-                    crate::merge_checks::merge_warning_text(&host, &crate::merge_checks::target_of(&id, &record), false).await
-            {
-                let locale = host.locale;
-                let dialog = json!({
-                    "type": "confirm", "title": locale.get("git.checks.merge.title"), "message": reasons,
-                    "primary": locale.get("git.checks.merge.confirm"), "close": locale.get("resume.cancel"),
-                    "defaultPrimary": false, "destructive": false,
-                });
-                if !confirm(&host, dialog).await || host.closing() {
-                    host.schedule();
-                    return Ok(Value::Null);
-                }
-            }
-            let note = app.merge_child(&id).await;
-            if note.is_some_and(|note| note.result == DelegationCardResult::Done) {
+            if merge_after_checks(&host, &app, &id).await == Some(DelegationCardResult::Done) {
                 offer_discard_after_merge(&host, &app, &id).await;
             }
         }
@@ -802,6 +787,84 @@ pub async fn child_action(host: Arc<Host>, args: Value) -> Reply {
     }
     host.schedule();
     Ok(Value::Null)
+}
+
+/// A card's merge after 머지 전 점검 (merge_checks.rs): what still warns is asked once more (it never blocks), then the merge as the
+/// card makes it; its result, None when it was not asked for or the person kept it. The caller checked the card and the gating.
+async fn merge_after_checks(host: &Arc<Host>, app: &DelegationApp, id: &str) -> Option<DelegationCardResult> {
+    if let Some(record) = crate::pane_worktree::child_record(id)
+        && let Some(reasons) = crate::merge_checks::merge_warning_text(host, &crate::merge_checks::target_of(id, &record), false).await
+    {
+        let locale = host.locale;
+        let dialog = json!({
+            "type": "confirm", "title": locale.get("git.checks.merge.title"), "message": reasons,
+            "primary": locale.get("git.checks.merge.confirm"), "close": locale.get("resume.cancel"),
+            "defaultPrimary": false, "destructive": false,
+        });
+        if !confirm(host, dialog).await || host.closing() {
+            return None;
+        }
+    }
+    app.merge_child(id).await.map(|note| note.result)
+}
+
+/// MC-29: a card's action the compare view asks for, with the card's own gating: ignored while the card is busy or a dialog is open,
+/// refused (saying why) without `--allow-state-write` or where git may not go. A merge goes through 머지 전 점검 and answers whether
+/// it went in now (the compare view then asks about the other children, not about this one); a discard confirms as the card's does.
+pub(crate) async fn compare_card_action(host: &Arc<Host>, id: &str, merge: bool) -> Option<DelegationCardResult> {
+    let app = app()?;
+    if app.is_card_busy(id) || host.view().dialog_open {
+        return None;
+    }
+    if !host.delegation_live() || !child_may_be_touched(host, &app, id) {
+        host.view().error = Some(crate::setup::verification_mode());
+        host.schedule();
+        return None;
+    }
+    if merge {
+        return merge_after_checks(host, &app, id).await;
+    }
+    discard_child(host, &app, id).await;
+    None
+}
+
+/// MC-29: after one child of a compare run was merged, the others the person agreed to discard, each without a confirmation of its
+/// own unless worktrees nested in it changed meanwhile (then it asks as the card does). True when every one went.
+pub(crate) async fn discard_confirmed(host: &Arc<Host>, ids: &[String]) -> bool {
+    let Some(app) = app() else { return false };
+    let mut all = true;
+    for id in ids {
+        if !child_may_be_touched(host, &app, id) {
+            all = false;
+            continue;
+        }
+        let Some(mut pending) = app.merged_discard_offer(id).await else {
+            all = false;
+            continue;
+        };
+        loop {
+            match app.discard_child(&pending).await.map(|note| note.result) {
+                Some(DelegationCardResult::Done) => break,
+                Some(DelegationCardResult::Reconfirm(nested)) => {
+                    pending.nested = Some(nested);
+                    if !confirm_discard(host, &pending).await {
+                        all = false;
+                        break;
+                    }
+                }
+                _ => {
+                    all = false;
+                    break;
+                }
+            }
+        }
+    }
+    all
+}
+
+/// Asks the person (a confirmation over the page, the smoke's driver in a smoke): true for its primary button.
+pub(crate) async fn ask_confirm(host: &Arc<Host>, dialog: Value) -> bool {
+    confirm(host, dialog).await
 }
 
 /// Every folder a card's git may change for the child — its worktree and its parent's checkout — is one delegation may touch

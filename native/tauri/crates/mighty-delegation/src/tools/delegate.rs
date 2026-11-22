@@ -363,6 +363,7 @@ impl Coordinator {
         starter: HumanChildStarter,
         plan_first: bool,
         agent: Option<&str>,
+        base_commit: Option<&str>,
     ) -> HumanChildStart {
         let locale = self.locale();
         if !(self.inner.switch_on)() {
@@ -408,6 +409,14 @@ impl Coordinator {
         let start = match self.inner.worktrees.check(&parent.folder).await {
             ChildWorktreeCheck::Ready(start) => start,
             ChildWorktreeCheck::Refused(reason) => return HumanChildStart::Refused(reason),
+        };
+        // MC-29: a compare run's children all start from the commit it chose, the head or an earlier commit of the parent's branch.
+        let start = match base_commit {
+            None => start,
+            Some(commit) => match self.inner.worktrees.at_commit(&start, commit).await {
+                Some(moved) => moved,
+                None => return HumanChildStart::Failed(locale.get("compare.error.base")),
+            },
         };
         let context = self.prune_context().await;
         let child = {

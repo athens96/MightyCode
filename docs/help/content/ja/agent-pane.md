@@ -30,6 +30,8 @@ section: agent-pane
 ## 入力欄のツール {#composer}
 入力欄の下の行には、左から添付、モデル、思考レベル、権限、その他の実行設定(…)が並んでいます。ペインの幅が狭いと、一部が1つのメニューにまとめられます。実行中は変更できず、変更した値は次のリクエストから適用されます。
 
+{{ui:compare.menu}}: 待機中のペインでは送信ボタンの右クリックメニュー、実行中のペインでは {{ui:composer.busySend.title}} メニューにあります。入力欄の依頼を同じ基準コミットから複数のエージェントに同時に任せ、結果を並べて比べます([比較実行](delegation.md#compare))。
+
 ### モデル {#model}
 モデルのチップをクリックすると、{{ui:composer.label.runner}}(Claude、Codex、Antigravity、pi、opencode、Hermes)と{{ui:composer.label.model}}を選べます。一覧が正しくない場合は{{ui:composer.model.refresh}}をクリックしてください。エージェントを変更すると、会話は新しく始まります。
 
