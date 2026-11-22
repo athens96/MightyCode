@@ -84,6 +84,8 @@ pub struct WorktreeSeed {
     pub title: String,
     pub agent: String,
     pub workspace: String,
+    /// The workspace's id (a child's is its parent pane's): the Git workbench's 점검 tab opens on it.
+    pub workspace_id: String,
     pub branch: String,
     pub base: String,
     /// Its agent still works (a pane's run, a child that is creating, running or waiting): not ready yet.
@@ -94,6 +96,8 @@ pub struct WorktreeSeed {
     pub busy: bool,
     /// What git said; None when it could not (the worktree is gone).
     pub reading: Option<(Status, DiffStat)>,
+    /// 머지 전 점검's warnings (merge_checks.rs `queue_warnings`); None when not read (its agent works); a merged item carries none.
+    pub warnings: Option<Vec<crate::merge_checks::Warning>>,
 }
 
 /// One pane's newest finished request with captured changes.
@@ -150,7 +154,8 @@ pub fn model(worktrees: &[WorktreeSeed], requests: &[RequestSeed], dismissed: &H
                 "files": stat.files, "added": stat.added, "removed": stat.removed, "ahead": status.ahead, "behind": status.behind,
                 "uncommitted": status.changed_files, "canMerge": shown != Shown::Merged,
                 "canCommitMerge": seed.kind == Kind::Worktree && shown != Shown::Merged && status.changed_files > 0,
-                "canPr": seed.kind == Kind::Worktree && shown != Shown::Merged,
+                "canPr": seed.kind == Kind::Worktree && shown != Shown::Merged, "workspaceId": seed.workspace_id,
+                "warnings": if shown == Shown::Merged { None } else { seed.warnings.clone() },
             }),
         ));
     }
@@ -197,6 +202,7 @@ fn seeds(host: &Host) -> Seeds {
                 title,
                 agent,
                 workspace: workspace.name().to_string(),
+                workspace_id: workspace.id().to_string(),
                 branch: record.branch().to_string(),
                 base: record.base_branch().to_string(),
                 working: session.status() == "running",
@@ -204,6 +210,7 @@ fn seeds(host: &Host) -> Seeds {
                 conflict: false,
                 busy: false,
                 reading: None,
+                warnings: None,
             };
             panes.push((seed, record));
             continue;
@@ -260,6 +267,9 @@ pub async fn refresh(host: &Arc<Host>) -> Value {
     for (mut seed, record) in panes {
         if !seed.working {
             seed.reading = crate::pane_worktree::review_reading(&record).await;
+            seed.warnings = seed.reading.map(|(status, _)| {
+                crate::merge_checks::queue_warnings(host, &seed.id, &record, usize::try_from(status.changed_files).unwrap_or(0))
+            });
         }
         (seed.conflict, seed.busy) = crate::pane_worktree::review_flags(&seed.id);
         worktrees.push(seed);
@@ -279,6 +289,7 @@ pub async fn refresh(host: &Arc<Host>) -> Value {
                 title: open.or_else(|| row.task.clone()).unwrap_or_else(|| agent.clone()),
                 agent,
                 workspace: String::new(),
+                workspace_id: String::new(),
                 branch: record.branch().to_string(),
                 base: record.base_branch().to_string(),
                 working,
@@ -286,15 +297,22 @@ pub async fn refresh(host: &Arc<Host>) -> Value {
                 conflict,
                 busy: app.is_card_busy(&row.id),
                 reading: None,
+                warnings: None,
             };
             if !working && row.state != ChildState::Merged {
                 seed.reading = crate::pane_worktree::review_reading(&record).await;
+                seed.warnings = seed.reading.map(|(status, _)| {
+                    crate::merge_checks::queue_warnings(host, &row.id, &record, usize::try_from(status.changed_files).unwrap_or(0))
+                });
             }
             // The child's workspace is its parent pane's (read under one lock).
-            seed.workspace = {
+            (seed.workspace, seed.workspace_id) = {
                 let view = host.view();
                 let parent = view.snapshot.session(&row.parent_session_id);
-                parent.and_then(|p| view.snapshot.workspace(p.workspace_id())).map(|w| w.name().to_string()).unwrap_or_default()
+                parent
+                    .and_then(|p| view.snapshot.workspace(p.workspace_id()))
+                    .map(|w| (w.name().to_string(), w.id().to_string()))
+                    .unwrap_or_default()
             };
             worktrees.push(seed);
         }
@@ -384,6 +402,7 @@ mod tests {
             title: format!("pane {id}"),
             agent: "Claude".into(),
             workspace: "app".into(),
+            workspace_id: "ws".into(),
             branch: format!("mighty/{id}"),
             base: "main".into(),
             working: false,
@@ -393,6 +412,7 @@ mod tests {
             reading: reading.map(|(ahead, files)| {
                 (Status { ahead, behind: 0, changed_files: 1 }, DiffStat { files, added: files * 3, removed: files })
             }),
+            warnings: None,
         }
     }
 
@@ -413,9 +433,10 @@ mod tests {
 
     #[test]
     fn the_model_puts_conflicts_first_counts_what_is_not_merged_and_leaves_out_what_was_dismissed() {
+        let warned = vec![crate::merge_checks::Warning { code: "checksFailed", count: 1 }];
         let worktrees = vec![
-            WorktreeSeed { merged: true, ..worktree(Kind::Worktree, "m", Some((0, 0))) },
-            worktree(Kind::Worktree, "r", Some((1, 2))),
+            WorktreeSeed { merged: true, warnings: Some(warned.clone()), ..worktree(Kind::Worktree, "m", Some((0, 0))) },
+            WorktreeSeed { warnings: Some(warned), ..worktree(Kind::Worktree, "r", Some((1, 2))) },
             WorktreeSeed { conflict: true, ..worktree(Kind::Child, "c", Some((1, 1))) },
             WorktreeSeed { working: true, ..worktree(Kind::Child, "w", Some((1, 1))) },
         ];
@@ -444,6 +465,10 @@ mod tests {
         );
         assert_eq!((items[2]["runId"].as_str(), items[2]["canMerge"].as_bool()), (Some("run-1"), Some(false)));
         assert_eq!(items[3]["canMerge"].as_bool(), Some(false));
+        assert_eq!(ready["warnings"][0]["code"], "checksFailed", "the pre-merge checks summary");
+        assert_eq!(ready["workspaceId"], "ws");
+        assert!(items[3]["warnings"].is_null(), "a merged item carries none");
+        assert!(items[0]["warnings"].is_null(), "not read");
 
         let dismissed: HashSet<String> = [ready["key"].as_str().unwrap().to_string(), "request:p:run-1".to_string()].into();
         let again = model(&worktrees, &requests, &dismissed);

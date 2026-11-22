@@ -979,7 +979,17 @@ async fn pane_action(host: &Arc<Host>, id: &str, action: &str) {
                 return;
             }
             let commit_first = action == "commitMerge";
-            busy(host, id, merge_pane(host, id, &pane, commit_first)).await;
+            busy(host, id, async {
+                // 머지 전 점검 (merge_checks.rs): what still warns is asked once more; it never blocks.
+                let target = crate::merge_checks::target_of(id, &pane);
+                if let Some(reasons) = crate::merge_checks::merge_warning_text(host, &target, commit_first).await
+                    && !confirm(host, locale.get("git.checks.merge.title"), reasons, locale.get("git.checks.merge.confirm")).await
+                {
+                    return;
+                }
+                merge_pane(host, id, &pane, commit_first).await;
+            })
+            .await;
         }
         "resolve" => ask_to_resolve(host, &session, &pane).await,
         "undo" => {

@@ -49,6 +49,25 @@ section: layout
 - 단추: {{ui:review.action.changes}}, {{ui:review.action.merge}}(커밋하지 않은 파일이 있는 worktree 창은 {{ui:review.action.commitMerge}}), {{ui:editor.open}}, {{ui:review.action.pr}}(worktree 창), {{ui:review.action.discard}}, {{ui:review.action.focus}}, {{ui:review.action.dismiss}}. 병합·버리기·PR은 창 위 막대나 자식 카드의 같은 동작이라 같은 확인을 거칩니다. 요청의 {{ui:review.action.changes}}는 요청 변경 검토 창을 엽니다.
 - {{ui:review.action.dismiss}}를 누르면 그 항목은 작업이 다시 바뀔 때까지 숨겨집니다.
 - 목록은 실행이 끝날 때, 패널을 열 때, {{ui:review.refresh}}을 누를 때 git을 다시 읽습니다. 화면을 그릴 때마다 읽지는 않습니다.
+- worktree 창과 자식 창의 줄에는 머지 전 점검 요약({{ui:review.checks.ok}} 또는 경고 개수)이 붙습니다. 누르면 그 창의 {{ui:git.checks.tab}} 탭이 열립니다([점검](#checks)). 요약은 마지막으로 읽은 점검과 앱이 이미 아는 것(커밋 안 된 파일, 남은 할 일, 창의 PR 상태)으로 만들고, 이 목록 때문에 gh를 따로 부르지는 않습니다.
+
+## 커밋·PR {#git}
+워크스페이스의 git 작업을 한 패널에서 합니다. 사이드바 워크스페이스 메뉴의 {{ui:git.workbench.open}} 항목, 워크스페이스 머리의 브랜치 표시, 입력창의 `/git`으로 엽니다. worktree 창에서 열면 그 창의 worktree에서 일합니다.
+- {{ui:git.checks.changesTab}} 탭: 바뀐 파일과 diff, 파일·청크 단위 스테이징, 브랜치 전환, 커밋 메시지 초안, 커밋, push, PR 만들기, 실패한 CI 고치기 요청이 있습니다. 기본 브랜치에서는 PR을 만들지 않습니다.
+- {{ui:git.checks.tab}} 탭: 병합이나 머지 전에 확인할 것을 한 화면에 모읍니다([점검](#checks)).
+
+### 점검 {#checks}
+worktree 창(그 밖의 창은 지금 브랜치)에 대해 다섯 가지를 보여 줍니다.
+- {{ui:git.checks.git.title}}: 커밋 안 된 변경 수와, 기준 브랜치보다 앞선(↑)·뒤처진(↓) 커밋 수.
+- {{ui:git.checks.pr.title}}: PR(GitLab은 MR) 번호, 상태, 초안 여부, 충돌, 리뷰 결과(승인, 변경 요청).
+- {{ui:git.checks.ci.title}}: 검사마다 결과. 실패한 검사가 있으면 {{ui:git.pr.fixChecks}} 단추로 실패 로그와 함께 에이전트에게 맡깁니다.
+- {{ui:git.checks.threads.title}}: 해결 안 된 리뷰 스레드의 파일과 줄, 작성자, 첫 댓글, 답글 수, 링크.
+- {{ui:git.checks.checklist.title}}: 그 창 마지막 요청의 체크리스트에서 끝나지 않은 항목.
+
+- 탭을 열 때와, 열려 있는 동안 30초마다 다시 읽습니다. 닫혀 있으면 읽지 않습니다.
+- 항목마다 따로 읽으므로, gh·glab이 없거나 로그인하지 않았거나 PR이 없으면 그 항목만 {{ui:git.checks.unknown}}으로 나옵니다.
+- 스레드를 골라 {{ui:git.checks.threads.toComposer}} 단추를 누르면 "PR #42 리뷰 의견을 반영해 주세요." 아래에 `파일:줄 (작성자): 댓글` 목록이 그 창의 입력창에 들어갑니다. 바로 보내지는 않습니다. 비밀값처럼 보이는 줄은 가리고 링크의 계정 정보는 지우며, 2,000자까지만 넣습니다.
+- 병합 전 확인: 실패하거나 진행 중인 검사, 해결 안 된 스레드, 남은 할 일, 커밋 안 된 변경(커밋하고 병합은 빼고), 초안, 충돌, 변경 요청 중 하나라도 있으면 worktree 막대, 자식 카드, 검토 대기열의 병합 단추가 이유를 보여 주고 한 번 더 묻습니다. {{ui:git.checks.merge.confirm}}을 누르면 그대로 병합합니다. 막지는 않습니다.
 
 ## 실행 창 추가 {#add-pane}
 실행 창은 AI 에이전트(Claude, Codex, Antigravity, pi, opencode, Hermes), 터미널, 파일 중 하나입니다.

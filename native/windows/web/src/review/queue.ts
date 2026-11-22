@@ -2,6 +2,7 @@
 // panel's open state, and what each item's actions call. The host reads git only when the queue is refreshed (a run ended, the panel
 // opened, its refresh button, after an action), so the page holds the last model and draws it.
 import { useSyncExternalStore } from 'react';
+import type { ChecksWarning } from '../git/checksModel';
 
 export type ReviewKind = 'worktree' | 'child' | 'request';
 export type ReviewStatus = 'ready' | 'conflict' | 'merged';
@@ -34,6 +35,10 @@ export interface ReviewItem {
   canMerge: boolean;
   canCommitMerge: boolean;
   canPr: boolean;
+  /** A worktree's workspace (the Git workbench's 점검 tab opens on it). */
+  workspaceId?: string;
+  /** 머지 전 점검 (merge_checks.rs): the reasons to look again before merging; absent when not read (a request, a merged item). */
+  warnings?: ChecksWarning[] | null;
 }
 
 export interface ReviewQueue {
@@ -144,4 +149,10 @@ export async function runReviewAction(call: Call, item: ReviewItem, action: Revi
       return false;
     }
   }
+}
+
+/** The item's 점검 summary was pressed: the queue closes and the Git workbench opens on its 점검 tab for the item's pane. */
+export function openChecks(item: ReviewItem, dispatch: (event: Event) => void = (event) => window.dispatchEvent(event)): void {
+  setReviewOpen(false);
+  dispatch(new CustomEvent('mighty:open-git-workbench', { detail: { workspaceId: item.workspaceId ?? null, paneId: item.paneId, tab: 'checks' } }));
 }

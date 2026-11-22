@@ -134,10 +134,11 @@ export function Shell() {
     paneId: null,
     settingsOpen: false,
   });
-  const [gitWorkbenchState, setGitWorkbenchState] = useState<{ open: boolean; workspaceId: string | null; paneId: string | null }>({
+  const [gitWorkbenchState, setGitWorkbenchState] = useState<{ open: boolean; workspaceId: string | null; paneId: string | null; tab: 'changes' | 'checks' }>({
     open: false,
     workspaceId: null,
     paneId: null,
+    tab: 'changes',
   });
   const [taskRunnerState, setTaskRunnerState] = useState<{ open: boolean; workspaceId: string | null; paneId: string | null }>({
     open: false,
@@ -171,11 +172,12 @@ export function Shell() {
       });
     };
     const onOpenGit = (event: Event) => {
-      const detail = (event as CustomEvent<{ workspaceId?: string | null; paneId?: string | null }>).detail;
+      const detail = (event as CustomEvent<{ workspaceId?: string | null; paneId?: string | null; tab?: 'changes' | 'checks' }>).detail;
       setGitWorkbenchState({
         open: true,
         workspaceId: detail?.workspaceId ?? activeWorkspaceId,
         paneId: detail?.paneId ?? activePaneId,
+        tab: detail?.tab === 'checks' ? 'checks' : 'changes',
       });
     };
     const onOpenTasks = (event: Event) => {
@@ -276,6 +278,7 @@ export function Shell() {
             open={gitWorkbenchState.open}
             workspaceId={gitWorkbenchState.workspaceId ?? activeWorkspaceId}
             paneId={gitWorkbenchState.paneId ?? activePaneId}
+            initialTab={gitWorkbenchState.tab}
             onClose={() => setGitWorkbenchState((prev) => ({ ...prev, open: false }))}
           />
         </Suspense>

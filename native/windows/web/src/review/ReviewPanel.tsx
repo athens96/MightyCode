@@ -8,8 +8,9 @@ import { useServices, useStoreSelector } from '../app/context';
 import { DialogLoading, DialogShell } from '../dialogs/DialogShell';
 import { Icon, type IconName } from '../icons/Icon';
 import { usePageOverlay } from '../shell/overlay';
+import { warningLines } from '../git/checksModel';
 import {
-  itemActions, runReviewAction, setReviewOpen, setReviewQueue, useReviewOpen, useReviewQueue,
+  itemActions, openChecks, runReviewAction, setReviewOpen, setReviewQueue, useReviewOpen, useReviewQueue,
   type ReviewAction, type ReviewItem, type ReviewKind, type ReviewQueue, type ReviewStatus,
 } from './queue';
 import './review.css';
@@ -40,8 +41,11 @@ const actionIcons: Partial<Record<ReviewAction, IconName>> = {
 const statusIcons: Record<ReviewItem['status'], IconName> = { ready: 'circle-check', conflict: 'triangle-alert', merged: 'git-merge' };
 
 /** One row: the pane's title over its agent, kind, workspace and branch; its size and state; its actions. */
-export function ReviewRow({ item, t, working, onAction }: { item: ReviewItem; t: Translate; working: boolean; onAction: (action: ReviewAction) => void }) {
+export function ReviewRow({ item, t, working, onAction, onChecks }: {
+  item: ReviewItem; t: Translate; working: boolean; onAction: (action: ReviewAction) => void; onChecks?: () => void;
+}) {
   const busy = working || item.busy;
+  const warnings = item.warnings ?? null;
   const place = [item.agent, t(kindKey[item.kind]), item.workspace].filter((part) => part !== '').join(' · ');
   return (
     <div className={'review-row status-' + item.status} role="listitem" data-testid={'review-row-' + item.key} data-kind={item.kind} data-status={item.status}>
@@ -52,6 +56,13 @@ export function ReviewRow({ item, t, working, onAction }: { item: ReviewItem; t:
         <div className="review-title-line">
           <span className="review-title" title={item.title}>{item.title}</span>
           <span className={'review-status status-' + item.status}>{t(statusKey[item.status])}</span>
+          {warnings && (
+            <button type="button" className={'review-checks ' + (warnings.length > 0 ? 'warn' : 'ok')} data-testid={'review-checks-' + item.key}
+              title={[t('review.checks.help'), ...warningLines(warnings, t)].join('\n')} onClick={onChecks}>
+              <Icon name={warnings.length > 0 ? 'triangle-alert' : 'circle-check'} size={11} weight={2.2} />
+              <span>{warnings.length > 0 ? t('review.checks.warn', { count: warnings.length }) : t('review.checks.ok')}</span>
+            </button>
+          )}
         </div>
         <span className="review-place">{place}</span>
         {item.branch && <span className="review-branch mono" title={item.branch + (item.base ? ' → ' + item.base : '')}><Icon name="git-branch" size={11} weight={2.2} />{item.branch}{item.base ? ' → ' + item.base : ''}</span>}
@@ -76,12 +87,16 @@ export function ReviewRow({ item, t, working, onAction }: { item: ReviewItem; t:
 }
 
 /** The list (or why it is empty, or its wait while the first reading comes). */
-export function ReviewList({ queue, t, working, onAction }: { queue: ReviewQueue | null; t: Translate; working: string | null; onAction: (item: ReviewItem, action: ReviewAction) => void }) {
+export function ReviewList({ queue, t, working, onAction, onChecks }: {
+  queue: ReviewQueue | null; t: Translate; working: string | null; onAction: (item: ReviewItem, action: ReviewAction) => void; onChecks?: (item: ReviewItem) => void;
+}) {
   if (!queue) return <DialogLoading rows={3} />;
   if (queue.items.length === 0) return <div className="review-empty" data-testid="review-empty">{t('review.empty')}</div>;
   return (
     <div className="review-list" role="list" data-testid="review-list">
-      {queue.items.map((item) => <ReviewRow key={item.key} item={item} t={t} working={working === item.key} onAction={(action) => onAction(item, action)} />)}
+      {queue.items.map((item) => (
+        <ReviewRow key={item.key} item={item} t={t} working={working === item.key} onAction={(action) => onAction(item, action)} onChecks={onChecks && (() => onChecks(item))} />
+      ))}
     </div>
   );
 }
@@ -116,7 +131,7 @@ function ReviewDialog() {
           onClick={refresh}><Icon name="refresh-cw" size={14} weight={2} /></button>}
         onCancel={close} closeTestId="review-close" bodyClassName="review-body" backdrop={{ 'data-page-overlay': '' }}
         status={queue ? t('review.summary', { count: queue.count }) : ''}>
-        <ReviewList queue={queue} t={t} working={working} onAction={act} />
+        <ReviewList queue={queue} t={t} working={working} onAction={act} onChecks={(item) => openChecks(item)} />
       </DialogShell>
       {runChanges && (
         <Suspense fallback={null}>

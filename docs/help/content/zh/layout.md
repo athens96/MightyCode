@@ -49,6 +49,25 @@ section: layout
 - 按钮：{{ui:review.action.changes}}、{{ui:review.action.merge}}(有未提交文件的 worktree 窗格为{{ui:review.action.commitMerge}})、{{ui:editor.open}}、{{ui:review.action.pr}}(worktree 窗格)、{{ui:review.action.discard}}、{{ui:review.action.focus}}、{{ui:review.action.dismiss}}。合并、丢弃和 PR 与窗格栏或子窗格卡片上的操作相同，会经过同样的确认。请求的{{ui:review.action.changes}}会打开请求更改审阅。
 - 点击{{ui:review.action.dismiss}}后，该项会隐藏，直到其工作再次变化。
 - 列表在运行结束、打开面板和点击{{ui:review.refresh}}时重新读取 git，不会在每次重绘时读取。
+- worktree 窗格和子窗格的行会附上合并前检查摘要({{ui:review.checks.ok}}或警告数量)。点击即可打开该窗格的{{ui:git.checks.tab}}标签页([检查](#checks))。摘要来自上次读取的检查结果和应用已知的信息(未提交的文件、剩余待办、窗格的 PR 状态)，列表本身不会另外调用 gh。
+
+## 提交与 PR {#git}
+在一个面板中完成工作区的 git 操作。可从侧边栏工作区菜单中的{{ui:git.workbench.open}}、工作区标题中的分支显示，或输入框中的 `/git` 打开。从 worktree 窗格打开时，它在该窗格的 worktree 中工作。
+- {{ui:git.checks.changesTab}}标签页：更改的文件及其 diff、按文件或代码块暂存、切换分支、草拟提交信息、提交、push、创建 PR 以及请求修复失败的 CI。不会从默认分支创建 PR。
+- {{ui:git.checks.tab}}标签页：把合并前需要确认的内容集中在一个画面([检查](#checks))。
+
+### 检查 {#checks}
+针对 worktree 窗格(其他窗格为当前分支)显示五项内容。
+- {{ui:git.checks.git.title}}：未提交的更改数，以及比基础分支领先(↑)、落后(↓)的提交数。
+- {{ui:git.checks.pr.title}}：PR(GitLab 为 MR)编号、状态、是否为草稿、冲突、审查结果(已批准、请求更改)。
+- {{ui:git.checks.ci.title}}：每项检查的结果。有失败的检查时，可用{{ui:git.pr.fixChecks}}按钮连同失败日志交给代理处理。
+- {{ui:git.checks.threads.title}}：未解决审查讨论的文件和行、作者、第一条评论、回复数和链接。
+- {{ui:git.checks.checklist.title}}：该窗格最近一次请求的清单中尚未完成的项目。
+
+- 打开标签页时以及打开期间每 30 秒重新读取，关闭时不读取。
+- 各项分别读取，因此没有 gh 或 glab、未登录或没有 PR 时，只有该项显示{{ui:git.checks.unknown}}。
+- 选中讨论后点击{{ui:git.checks.threads.toComposer}}按钮，会在“请处理 PR #42 的审查意见。”下方把 `文件:行 (作者): 评论` 列表放入该窗格的输入框，不会立即发送。看起来像密钥的行会被隐藏，链接中的账户信息会被去掉，最多放入 2,000 个字符。
+- 合并前确认：只要有失败或进行中的检查、未解决的讨论、剩余待办、未提交的更改(“提交并合并”除外)、草稿、冲突或请求更改中的任何一项，worktree 栏、子窗格卡片和审阅队列上的合并按钮就会显示原因并再确认一次。点击{{ui:git.checks.merge.confirm}}即照常合并，不会阻止。
 
 ## 添加窗格 {#add-pane}
 窗格可以是 AI 智能体（Claude、Codex、Antigravity、pi、opencode、Hermes）、终端或文件中的一种。

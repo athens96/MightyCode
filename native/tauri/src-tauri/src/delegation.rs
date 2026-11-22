@@ -774,6 +774,22 @@ pub async fn child_action(host: Arc<Host>, args: Value) -> Reply {
     }
     match action {
         DelegationCardAction::Merge => {
+            // 머지 전 점검 (merge_checks.rs): what still warns is asked once more; it never blocks.
+            if let Some(record) = crate::pane_worktree::child_record(&id)
+                && let Some(reasons) =
+                    crate::merge_checks::merge_warning_text(&host, &crate::merge_checks::target_of(&id, &record), false).await
+            {
+                let locale = host.locale;
+                let dialog = json!({
+                    "type": "confirm", "title": locale.get("git.checks.merge.title"), "message": reasons,
+                    "primary": locale.get("git.checks.merge.confirm"), "close": locale.get("resume.cancel"),
+                    "defaultPrimary": false, "destructive": false,
+                });
+                if !confirm(&host, dialog).await || host.closing() {
+                    host.schedule();
+                    return Ok(Value::Null);
+                }
+            }
             let note = app.merge_child(&id).await;
             if note.is_some_and(|note| note.result == DelegationCardResult::Done) {
                 offer_discard_after_merge(&host, &app, &id).await;

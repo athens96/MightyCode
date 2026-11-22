@@ -29,3 +29,11 @@
   flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; display: inline-grid; place-items: center;
   background: var(--accent); color: var(--on-primary); font-size: var(--type-pill); font-weight: 700; font-variant-numeric: tabular-nums;
 }
+
+/* 머지 전 점검's summary on a worktree's row (MC-27): pressed, the Git workbench opens on its 점검 tab. */
+.review-checks {
+  flex: none; display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border: 0; border-radius: 999px;
+  background: var(--subtle); color: var(--done-text); font: inherit; font-size: var(--type-pill); font-weight: 600; cursor: default;
+}
+.review-checks.warn { color: var(--err-text); }
+.review-checks:hover { background: var(--accent-soft); }

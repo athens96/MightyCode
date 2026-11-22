@@ -49,6 +49,25 @@ section: layout
 - ボタン: {{ui:review.action.changes}}、{{ui:review.action.merge}}(コミットしていないファイルがあるworktreeペインは{{ui:review.action.commitMerge}})、{{ui:editor.open}}、{{ui:review.action.pr}}(worktreeペイン)、{{ui:review.action.discard}}、{{ui:review.action.focus}}、{{ui:review.action.dismiss}}。マージ・破棄・PRはペインのバーや子のカードと同じ操作なので、同じ確認を経ます。リクエストの{{ui:review.action.changes}}はリクエストの変更レビューを開きます。
 - {{ui:review.action.dismiss}}を押すと、その項目は作業が再び変わるまで隠れます。
 - 一覧は実行が終わったとき、パネルを開いたとき、{{ui:review.refresh}}を押したときにgitを読み直します。描画のたびには読みません。
+- worktreeペインと子ペインの行には、マージ前チェックの要約({{ui:review.checks.ok}}または警告の数)が付きます。押すとそのペインの{{ui:git.checks.tab}}タブが開きます([チェック](#checks))。要約は最後に読んだチェックとアプリがすでに知っていること(未コミットのファイル、残りのやること、ペインのPR状態)から作り、この一覧のためにghを呼ぶことはありません。
+
+## コミット・PR {#git}
+ワークスペースのgit作業を一つのパネルで行います。サイドバーのワークスペースメニューの{{ui:git.workbench.open}}、ワークスペースのヘッダーのブランチ表示、入力欄の`/git`で開きます。worktreeペインから開くと、そのペインのworktreeで作業します。
+- {{ui:git.checks.changesTab}}タブ: 変更したファイルとdiff、ファイル・ハンク単位のステージング、ブランチの切り替え、コミットメッセージの下書き、コミット、push、PRの作成、失敗したCIの修正依頼があります。デフォルトブランチからはPRを作りません。
+- {{ui:git.checks.tab}}タブ: マージ前に確認することを一つの画面にまとめます([チェック](#checks))。
+
+### チェック {#checks}
+worktreeペイン(ほかのペインは現在のブランチ)について五つを表示します。
+- {{ui:git.checks.git.title}}: 未コミットの変更の数と、ベースブランチより進んでいる(↑)・遅れている(↓)コミットの数。
+- {{ui:git.checks.pr.title}}: PR(GitLabはMR)の番号、状態、ドラフトかどうか、競合、レビュー結果(承認、変更リクエスト)。
+- {{ui:git.checks.ci.title}}: チェックごとの結果。失敗したチェックがあれば{{ui:git.pr.fixChecks}}ボタンで失敗ログと一緒にエージェントに任せます。
+- {{ui:git.checks.threads.title}}: 未解決のレビュースレッドのファイルと行、作成者、最初のコメント、返信数、リンク。
+- {{ui:git.checks.checklist.title}}: そのペインの最後のリクエストのチェックリストで終わっていない項目。
+
+- タブを開いたときと、開いている間は30秒ごとに読み直します。閉じている間は読みません。
+- 項目ごとに読むので、gh・glabがない、ログインしていない、PRがない場合はその項目だけ{{ui:git.checks.unknown}}と表示されます。
+- スレッドを選んで{{ui:git.checks.threads.toComposer}}ボタンを押すと、「PR #42 のレビューコメントを反映してください。」の下に`ファイル:行 (作成者): コメント`の一覧がそのペインの入力欄に入ります。すぐには送信しません。秘密情報に見える行は隠し、リンクのアカウント情報は取り除き、2,000文字までしか入れません。
+- マージ前の確認: 失敗または実行中のチェック、未解決のスレッド、残りのやること、未コミットの変更(コミットしてマージは除く)、ドラフト、競合、変更リクエストのどれかがあると、worktreeバー、子のカード、レビュー待ちのマージボタンが理由を示してもう一度確認します。{{ui:git.checks.merge.confirm}}を押すとそのままマージします。止めはしません。
 
 ## ペインを追加する {#add-pane}
 ペインは、AIエージェント(Claude、Codex、Antigravity、pi、opencode、Hermes)、ターミナル、ファイルのいずれかです。

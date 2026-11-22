@@ -43,6 +43,7 @@ mod host;
 mod integrations;
 mod logfile;
 mod menu;
+mod merge_checks;
 mod methods;
 mod mighty;
 mod mirror;

@@ -495,3 +495,222 @@
   align-items: center;
   gap: var(--space-xs);
 }
+
+/* Changes | Checks (MC-27): the panel's two tabs. */
+.git-wb-tabs {
+  flex: none;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 2px;
+  border-radius: var(--radius-row);
+  background: var(--segment-track);
+}
+
+.git-wb-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  height: 26px;
+  padding: 0 var(--space-md);
+  border: 0;
+  border-radius: var(--radius-segment);
+  background: transparent;
+  color: var(--ink2);
+  font: inherit;
+  font-size: var(--type-row);
+  font-weight: 600;
+  cursor: default;
+}
+
+.git-wb-tab.active {
+  background: var(--segment-on);
+  color: var(--ink);
+}
+
+/* The Checks tab (ChecksTab.tsx): a summary line, then one card per part; only the list scrolls. */
+.git-ck-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.git-ck-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: 24px;
+}
+
+.git-ck-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+  font-size: var(--type-row);
+  font-weight: 600;
+}
+
+.git-ck-note,
+.git-ck-error {
+  color: var(--ink2);
+  font-size: var(--type-small);
+}
+
+.git-ck-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.git-ck-part {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-row);
+  background: var(--card-raised);
+  border: var(--stroke-line) solid var(--line);
+}
+
+.git-ck-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  min-height: 24px;
+  color: var(--ink2);
+}
+
+.git-ck-glyph {
+  display: inline-flex;
+}
+
+.git-ck-title {
+  color: var(--ink);
+  font-size: var(--type-row);
+  white-space: nowrap;
+}
+
+.git-ck-line {
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+  color: var(--ink2);
+  font-size: var(--type-small);
+}
+
+.git-ck-pr-title {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+
+.git-ck-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.git-ck-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: 24px;
+  padding: 0 var(--space-xs);
+  border-radius: var(--radius-file-row);
+  font-size: var(--type-small);
+  color: var(--ink);
+}
+
+.git-ck-row:hover {
+  background: var(--subtle);
+}
+
+.git-ck-row input[type='checkbox'] {
+  accent-color: var(--accent);
+}
+
+.git-ck-row-main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-ck-row-side {
+  flex: none;
+  color: var(--ink2);
+  font-size: var(--type-badge);
+}
+
+.git-ck-thread {
+  align-items: flex-start;
+  padding-top: var(--space-xxs);
+  padding-bottom: var(--space-xxs);
+}
+
+.git-ck-thread input[type='checkbox'] {
+  margin-top: 3px;
+}
+
+.git-ck-thread-words {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.git-ck-thread-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.git-ck-place {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent);
+  font-size: var(--type-small);
+}
+
+.git-ck-author {
+  flex: none;
+  font-weight: 600;
+}
+
+.git-ck-badge {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--subtle);
+  color: var(--ink2);
+  font-size: var(--type-badge);
+}
+
+.git-ck-thread-body {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink2);
+}

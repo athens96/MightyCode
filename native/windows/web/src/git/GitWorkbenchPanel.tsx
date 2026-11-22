@@ -9,6 +9,7 @@ import { Icon } from '../icons/Icon';
 import { appendingBlock } from '../mighty/runChangesModel';
 import { pickTargetAgentSession } from '../panes/files/editorModel';
 import { usePageOverlay } from '../shell/overlay';
+import { ChecksTab } from './ChecksTab';
 import {
   checkBadgeMeta,
   countStagedFiles,
@@ -34,10 +35,14 @@ import {
 } from './gitWorkbenchModel';
 import './GitWorkbenchPanel.css';
 
+export type GitWorkbenchTab = 'changes' | 'checks';
+
 export interface GitWorkbenchPanelProps {
   open: boolean;
   workspaceId?: string | null;
   paneId?: string | null;
+  /** The tab it opens on (the review queue's checks summary opens Checks). */
+  initialTab?: GitWorkbenchTab;
   onClose: () => void;
 }
 
@@ -49,7 +54,7 @@ function renderInBodyPortal(node: ReactNode) {
 }
 
 export function GitWorkbenchPanel(props: GitWorkbenchPanelProps) {
-  const { open, workspaceId: propWorkspaceId, paneId: propPaneId, onClose } = props;
+  const { open, workspaceId: propWorkspaceId, paneId: propPaneId, initialTab, onClose } = props;
   const { bridge, store, t } = useServices();
   usePageOverlay(open);
 
@@ -83,6 +88,8 @@ export function GitWorkbenchPanel(props: GitWorkbenchPanelProps) {
   const [secretFindings, setSecretFindings] = useState<SecretFinding[]>([]);
   const [pendingCommitMode, setPendingCommitMode] = useState<{ stagedOnly: boolean; paths: string[] } | null>(null);
   const [diffRefreshNonce, setDiffRefreshNonce] = useState(0);
+  const [tab, setTab] = useState<GitWorkbenchTab>(initialTab ?? 'changes');
+  const [checksNonce, setChecksNonce] = useState(0);
 
   const loadAll = useCallback(
     async (silent = false) => {
@@ -143,9 +150,10 @@ export function GitWorkbenchPanel(props: GitWorkbenchPanelProps) {
     }
     setError(null);
     setNote(null);
-    void loadAll(false);
+    // The Checks tab reads its own model; the changes are read when their tab shows.
+    if (tab === 'changes') void loadAll(false);
     return undefined;
-  }, [open, resolvedWorkspaceId, resolvedPaneId, loadAll]);
+  }, [open, tab, resolvedWorkspaceId, resolvedPaneId, loadAll]);
 
   const activeFile: GitWorkbenchFile | null = useMemo(() => {
     if (!status || !activeFilePath) return null;
@@ -391,9 +399,9 @@ export function GitWorkbenchPanel(props: GitWorkbenchPanelProps) {
     injectPromptIntoTargetAgent(prompt);
   };
 
-  const handleFixFailedChecks = async () => {
-    if (busy || !prStatus?.pr) return;
-    const prUrl = prStatus.pr.url;
+  const handleFixFailedChecks = async (urlOverride?: string) => {
+    const prUrl = urlOverride ?? prStatus?.pr?.url;
+    if (busy || !prUrl) return;
     setBusy(true);
     setError(null);
     try {
@@ -462,14 +470,15 @@ export function GitWorkbenchPanel(props: GitWorkbenchPanelProps) {
           title={t('git.workbench.refresh')}
           disabled={busy || statusLoading}
           onClick={() => {
-            void loadAll(false);
+            if (tab === 'checks') setChecksNonce((n) => n + 1);
+            else void loadAll(false);
           }}
         >
           <Icon name="refresh-cw" size={14} weight={2} />
         </button>
       }
       status={statusNode}
-      buttons={
+      buttons={tab === 'checks' ? undefined : (
         <>
           <button
             type="button"
@@ -518,8 +527,32 @@ export function GitWorkbenchPanel(props: GitWorkbenchPanelProps) {
             <span>{t('git.commit.button', { count: orderedSelectedPaths.length })}</span>
           </button>
         </>
-      }
+      )}
     >
+      <div className="git-wb-tabs" role="tablist" aria-label={t('git.workbench.title')}>
+        <button type="button" role="tab" aria-selected={tab === 'changes'} className={'git-wb-tab' + (tab === 'changes' ? ' active' : '')}
+          data-testid="git-tab-changes" onClick={() => setTab('changes')}>
+          <Icon name="file-code" size={13} weight={2} />
+          <span>{t('git.checks.changesTab')}</span>
+        </button>
+        <button type="button" role="tab" aria-selected={tab === 'checks'} className={'git-wb-tab' + (tab === 'checks' ? ' active' : '')}
+          data-testid="git-tab-checks" onClick={() => setTab('checks')}>
+          <Icon name="list-checks" size={13} weight={2} />
+          <span>{t('git.checks.tab')}</span>
+        </button>
+      </div>
+
+      {tab === 'checks' ? (
+        <ChecksTab
+          workspaceId={resolvedWorkspaceId ?? null}
+          paneId={resolvedPaneId}
+          active={open}
+          refreshNonce={checksNonce}
+          busy={busy}
+          onFixChecks={(url) => { void handleFixFailedChecks(url); }}
+          onToComposer={(text) => { if (text) injectPromptIntoTargetAgent(text); }}
+        />
+      ) : (<>
       {/* Branch bar + PR/CI strip */}
       <div className="git-wb-topstrip">
         <div className="git-wb-branch-bar">
@@ -626,7 +659,7 @@ export function GitWorkbenchPanel(props: GitWorkbenchPanelProps) {
                   data-testid="git-pr-fix-checks"
                   disabled={busy}
                   onClick={() => {
-                    void handleFixFailedChecks();
+                    void handleFixFailedChecks(undefined);
                   }}
                 >
                   <Icon name="wrench" size={12} weight={2} />
@@ -966,6 +999,7 @@ export function GitWorkbenchPanel(props: GitWorkbenchPanelProps) {
           </div>
         </section>
       </div>
+      </>)}
     </DialogShell>
   );
 

@@ -49,6 +49,25 @@ Everything ready to review, in one place. Click {{ui:review.sidebar}} under {{ui
 - Buttons: {{ui:review.action.changes}}, {{ui:review.action.merge}} ({{ui:review.action.commitMerge}} for a worktree pane with files not committed), {{ui:editor.open}}, {{ui:review.action.pr}} (worktree panes), {{ui:review.action.discard}}, {{ui:review.action.focus}} and {{ui:review.action.dismiss}}. Merge, discard and PR are the same actions as the pane's bar or the child's card, with the same confirmations. A request's {{ui:review.action.changes}} opens the request's changes review.
 - {{ui:review.action.dismiss}} hides an item until its work changes again.
 - The list reads git again when a run ends, when the panel opens and when you click {{ui:review.refresh}}, never on every redraw.
+- Worktree and child pane rows carry a pre-merge checks summary ({{ui:review.checks.ok}} or the number of warnings). Click it to open the pane's {{ui:git.checks.tab}} tab ([Checks](#checks)). The summary comes from the last checks reading and what the app already knows (uncommitted files, remaining to-dos, the pane's PR status); the list never calls gh on its own.
+
+## Commit & PR {#git}
+Do a workspace's git work in one panel. Open it from {{ui:git.workbench.open}} in the sidebar's workspace menu, the branch in the workspace header, or `/git` in the composer. Opened from a worktree pane, it works in that pane's worktree.
+- {{ui:git.checks.changesTab}} tab: changed files and their diffs, staging by file or hunk, switching branches, a drafted commit message, commit, push, creating a PR and asking to fix failed CI. No PR is made from the default branch.
+- {{ui:git.checks.tab}} tab: everything to look at before a merge, on one screen ([Checks](#checks)).
+
+### Checks {#checks}
+For a worktree pane (or the current branch for other panes) it shows five things.
+- {{ui:git.checks.git.title}}: how many changes are not committed, and how many commits it is ahead (↑) of and behind (↓) its base branch.
+- {{ui:git.checks.pr.title}}: the PR (MR on GitLab) number, state, whether it is a draft, conflicts, and the review result (approved, changes requested).
+- {{ui:git.checks.ci.title}}: each check and its result. With a failed check, {{ui:git.pr.fixChecks}} hands it to the agent with the failed log.
+- {{ui:git.checks.threads.title}}: each unresolved review thread's file and line, author, first comment, reply count and link.
+- {{ui:git.checks.checklist.title}}: the items not done in the checklist of the pane's last request.
+
+- It reads again when the tab opens and every 30 seconds while it stays open, never while it is closed.
+- Each part is read on its own: without gh or glab, signed out, or with no PR, only that part shows {{ui:git.checks.unknown}}.
+- Pick threads and click {{ui:git.checks.threads.toComposer}}: a list of `file:line (author): comment` under "Please address the review comments on PR #42." goes into the pane's composer. Nothing is sent yet. Lines that look like secrets are hidden, account details leave links, and at most 2,000 characters go in.
+- Before a merge: if any check failed or is still running, a thread is unresolved, to-dos remain, changes are not committed (except for commit and merge), the PR is a draft, has conflicts or has changes requested, the merge buttons on the worktree bar, the child cards and the review queue show the reasons and ask once more. {{ui:git.checks.merge.confirm}} merges as usual; nothing is blocked.
 
 ## Add a pane {#add-pane}
 A pane is an AI agent (Claude, Codex, Antigravity, pi, opencode or Hermes), a terminal or a files pane.

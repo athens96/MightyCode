@@ -336,6 +336,11 @@ fn read_prs(host: &Arc<Host>, shown: &[Shown]) {
     }
 }
 
+/// The pull request of the worktree at `folder` as the pane chips last read it (the review queue's cards, merge_checks.rs).
+pub fn cached_pr(folder: &str) -> Option<PanePr> {
+    lock(&state().prs).get(folder).and_then(|(_, pr)| pr.clone())
+}
+
 /// The Git workbench's answer (`{hosting, pr}`) as a pane's pull request and its words.
 fn pane_pr(host: &Host, value: &Value) -> Option<PanePr> {
     let pr = value.get("pr").filter(|pr| pr.is_object())?;

@@ -224,6 +224,7 @@ pub fn registry() -> Registry {
     crate::usage_report::register(&mut methods);
     crate::integrations::register(&mut methods);
     crate::git_workbench::register(&mut methods);
+    crate::merge_checks::register(&mut methods);
     crate::attention::register(&mut methods);
     crate::repo_tasks::register(&mut methods);
     crate::retention_gc::register(&mut methods);

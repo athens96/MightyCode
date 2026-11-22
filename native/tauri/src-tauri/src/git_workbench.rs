@@ -128,7 +128,7 @@ static HUNK_HEADER_RE: LazyLock<Regex> =
 static ANSI_ESCAPE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)").expect("valid ansi regex"));
 
-fn resolve_local_workspace_root(host: &Host, requested_id: Option<&str>) -> Result<(Workspace, PathBuf), String> {
+pub(crate) fn resolve_local_workspace_root(host: &Host, requested_id: Option<&str>) -> Result<(Workspace, PathBuf), String> {
     let ws = {
         let view = host.view();
         let target_id = requested_id.filter(|id| !id.trim().is_empty()).or(view.snapshot.active_workspace_id.as_deref());
@@ -333,7 +333,7 @@ fn build_git_request(git: PathBuf, root: &Path, args: &[String], read_only: bool
     request
 }
 
-async fn run_git_capture(
+pub(crate) async fn run_git_capture(
     host: &Host,
     root: &Path,
     args: &[&str],
@@ -371,7 +371,7 @@ pub fn strip_url_credentials(text: &str) -> String {
     URL_USERINFO_RE.replace_all(text, "$1").into_owned()
 }
 
-fn format_git_failure(captured: &mighty_platform::process::Captured) -> String {
+pub(crate) fn format_git_failure(captured: &mighty_platform::process::Captured) -> String {
     let stderr = String::from_utf8_lossy(&captured.stderr);
     let trimmed = stderr.trim();
     if !trimmed.is_empty() {
@@ -385,12 +385,12 @@ fn format_git_failure(captured: &mighty_platform::process::Captured) -> String {
     format!("Git exited with code {}.", captured.exit_code)
 }
 
-fn find_hosting_cli(host: &Host, tool: &str) -> Option<PathBuf> {
+pub(crate) fn find_hosting_cli(host: &Host, tool: &str) -> Option<PathBuf> {
     let env = host.runs().map(|r| r.catalog.environment().current().values).unwrap_or_default();
     crate::platform::cli_copies(tool, &env).into_iter().next().map(PathBuf::from)
 }
 
-async fn run_hosting_cli(
+pub(crate) async fn run_hosting_cli(
     host: &Host,
     tool: &str,
     root: &Path,
@@ -551,7 +551,7 @@ pub fn parse_porcelain_v2_status(bytes: &[u8]) -> ParsedPorcelainStatus {
     ParsedPorcelainStatus { head, detached, upstream, ahead, behind, files }
 }
 
-async fn read_origin_url(host: &Host, root: &Path) -> Option<String> {
+pub(crate) async fn read_origin_url(host: &Host, root: &Path) -> Option<String> {
     let captured = run_git_capture(host, root, &["remote", "get-url", "origin"], None, 5, true).await.ok()?;
     if captured.exit_code != 0 {
         return None;
@@ -566,7 +566,7 @@ async fn head_exists(host: &Host, root: &Path) -> bool {
 
 /// The branch a pull request is made against by default: `origin`'s HEAD (`origin/main` is `main`), else `main` or `master` when the
 /// repository has one. None when it cannot be told.
-async fn default_branch(host: &Host, root: &Path) -> Option<String> {
+pub(crate) async fn default_branch(host: &Host, root: &Path) -> Option<String> {
     if let Ok(cap) = run_git_capture(host, root, &["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], None, 5, true).await
         && cap.exit_code == 0
     {
@@ -868,11 +868,24 @@ pub fn scan_text_secrets(text: &str, path: &str, first_line: usize) -> Vec<Secre
 /// `diff` with every line that matches a secret pattern replaced by a marker: the excerpt goes to a model, and a token a file holds
 /// must not.
 pub fn redact_secret_lines(diff: &str) -> String {
-    let mut out = String::with_capacity(diff.len());
-    for line in diff.lines() {
+    redact_lines(diff, true)
+}
+
+/// `text` (prose: a review comment, not a diff) with every line that matches a secret pattern replaced by `[redacted: kind]`.
+pub fn redact_secret_text(text: &str) -> String {
+    let mut out = redact_lines(text, false);
+    out.truncate(out.trim_end().len());
+    out
+}
+
+fn redact_lines(text: &str, diff: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
         match SECRET_PATTERNS.iter().find(|(_, pattern)| pattern.is_match(line)) {
             Some((kind, _)) => {
-                out.push(line.chars().next().filter(|c| matches!(c, '+' | '-' | ' ')).unwrap_or('+'));
+                if diff {
+                    out.push(line.chars().next().filter(|c| matches!(c, '+' | '-' | ' ')).unwrap_or('+'));
+                }
                 out.push_str(&format!("[redacted: {kind}]"));
             }
             None => out.push_str(line),
