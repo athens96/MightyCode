@@ -120,6 +120,8 @@ struct ManagedRunInner {
     started_at: String,
     ended_at: Option<String>,
     control: Option<Arc<dyn ChildControl>>,
+    /// The process id while it runs (0 for none): its pane's ports are read from it and what it started (MC-26).
+    pid: u32,
     /// The repository (normalized main checkout) and folder the run works in, as `ports.json` keys them.
     repo: String,
     folder: String,
@@ -150,6 +152,7 @@ impl ManagedRunInner {
             started_at: now.clone(),
             ended_at: Some(now),
             control: None,
+            pid: 0,
             repo: String::new(),
             folder: String::new(),
             action: None,
@@ -480,12 +483,15 @@ pub fn record_setup_failure(host: &Host, workspace_id: &str, pane_id: &str, comm
     };
     let st = state(host);
     lock(&st.setup_failures).insert(pane_id.to_string(), snapshot);
+    // MC-26: the pane waits for the user.
+    crate::attention::setup_failed(host, pane_id, command, exit_code);
 }
 
 /// Clears any stored setup failure when a pane's worktree setup succeeds.
 pub fn clear_setup_failure(host: &Host, pane_id: &str) {
     let st = state(host);
     lock(&st.setup_failures).remove(pane_id);
+    crate::attention::setup_passed(host, pane_id);
 }
 
 /// Keeps `handle` in the runs list, dropping the oldest finished runs past [`MAXIMUM_KEPT_RUNS`].
@@ -1153,6 +1159,19 @@ async fn make_room_for_action(host: &Host, action: &str, concurrent: bool, place
     Ok(())
 }
 
+/// The process ids of the runs (tasks and run actions) still running in `pane` (MC-26: the pane's ports).
+pub fn running_pids(host: &Host, pane: &str) -> Vec<u32> {
+    let st = state(host);
+    let handles: Vec<Arc<ManagedRunHandle>> = lock(&st.runs).values().cloned().collect();
+    handles
+        .iter()
+        .filter_map(|handle| {
+            let inner = lock(&handle.inner);
+            (inner.status == "running" && inner.pid > 0 && inner.pane_id.as_deref() == Some(pane)).then_some(inner.pid)
+        })
+        .collect()
+}
+
 fn runs_for_workspace(host: &Host, workspace_id: &str, pane_id: Option<&str>) -> Vec<TaskRunSnapshot> {
     let st = state(host);
     let handles: Vec<Arc<ManagedRunHandle>> = {
@@ -1315,6 +1334,7 @@ async fn start_managed_task(
 
     let mut child = host.processes.spawn(request).await.map_err(|err| err.to_string())?;
     let control = child.control();
+    let pid = child.id;
     drop(child.stdin.take());
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -1344,6 +1364,7 @@ async fn start_managed_task(
             started_at,
             ended_at: None,
             control: Some(control.clone()),
+            pid,
             repo: place.repo,
             folder: place.folder,
             action: is_action.then(|| task_name.clone()),

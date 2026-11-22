@@ -508,7 +508,14 @@ async fn mobile_host_a_pane_travels_as_its_provider_runs() {
         let (_, state) = world.route("GET", "/m1/state", None).await;
         state["sessions"].as_array().unwrap().iter().map(|p| (p["id"].as_str().unwrap().to_string(), p.clone())).collect()
     }
+    world.desk.calls().attention.insert("shell".into(), ("notify".into(), "빌드 끝".into(), "2026-11-23T00:00:00+00:00".into()));
     let found = panes(&world).await;
+    assert_eq!(
+        found["shell"]["attention"],
+        serde_json::json!({"kind": "notify", "text": "빌드 끝", "at": "2026-11-23T00:00:00+00:00"}),
+        "MC-26: the desktop's mark on a waiting pane"
+    );
+    assert!(found["opus"].get("attention").is_none(), "a pane that does not wait carries none");
     assert!(
         found["agy"]["provider"] == "gemini" && found["agy"]["model"] == "default" && found["agy"].get("resolvedModel").is_none(),
         "an Antigravity pane on default names no model"

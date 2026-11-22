@@ -37,6 +37,8 @@ describe('shortcuts (spec section 8)', () => {
     expect(shortcutAction(key('KeyT'))).toBe('newShell');
     expect(shortcutAction(key('Comma'))).toBe('settings');
     expect(shortcutAction(key('KeyE', { shiftKey: true }))).toBe('files');
+    expect(shortcutAction(key('KeyU', { shiftKey: true }))).toBe('nextAttention');
+    expect(shortcutAction(key('KeyU'))).toBeNull();
     expect(shortcutAction(key('F1', { key: 'F1', ctrlKey: false }))).toBe('help');
     expect(shortcutAction(key('Equal'))).toBe('textLarger');
     expect(shortcutAction(key('Minus'))).toBe('textSmaller');
@@ -59,6 +61,7 @@ describe("the Mac's shortcuts and menu (D9, the Rust host on macOS only)", () =>
     expect(macShortcutAction(mac('KeyT'))).toBe('newShell');
     expect(macShortcutAction(mac('Comma'))).toBe('settings');
     expect(macShortcutAction(mac('KeyE', { shiftKey: true }))).toBe('files');
+    expect(macShortcutAction(mac('KeyU', { shiftKey: true }))).toBe('nextAttention');
     expect(macShortcutAction(mac('Slash', { key: '?', shiftKey: true }))).toBe('help');
     // A layout whose ? is elsewhere (French: ⇧, on the M key's place) still reaches help.
     expect(macShortcutAction(mac('KeyM', { key: '?', shiftKey: true }))).toBe('help');
@@ -96,6 +99,8 @@ describe("the Mac's shortcuts and menu (D9, the Rust host on macOS only)", () =>
     runAction('dashboard', call, snap, () => {}, true);
     runAction('layoutGrid', call, snap, () => {});
     runAction('layoutTabs', call, snap, () => {});
+    runAction('nextAttention', call, snap, () => {});
+    expect(isMenuPush({ kind: 'menu', action: 'nextAttention' } as { kind: string })).toBe(true);
     expect(calls).toEqual([
       ['newPane', { kind: 'claude', provider: 'codex' }],
       ['newPane', { kind: 'claude', provider: 'gemini' }],
@@ -103,6 +108,7 @@ describe("the Mac's shortcuts and menu (D9, the Rust host on macOS only)", () =>
       ['hideDashboard', undefined],
       ['applyLayoutPreset', { preset: 'grid' }],
       ['applyLayoutPreset', { preset: 'tabs' }],
+      ['attentionNext', undefined],
     ]);
   });
 });

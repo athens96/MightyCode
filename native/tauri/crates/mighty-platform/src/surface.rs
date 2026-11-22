@@ -157,6 +157,9 @@ pub enum TerminalEvent {
     Focused(bool),
     /// The terminal rang its bell.
     Bell,
+    /// A program asked for a desktop notification (libghostty's `DESKTOP_NOTIFICATION`: OSC 9 and OSC 777), its title (empty when it
+    /// gave none) and body as written: the host makes them safe to show (MC-26).
+    Notification { title: String, body: String },
 }
 
 /// Where a terminal view sends its [`TerminalEvent`]s.

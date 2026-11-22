@@ -1399,6 +1399,9 @@ impl PhoneDesk for Desk {
             Ok(())
         })
     }
+    fn attention(&self, session_id: &str) -> Option<(String, String, String)> {
+        crate::attention::phone(session_id)
+    }
     fn queue_count(&self, session_id: &str) -> Option<i32> {
         let host = self.host().ok()?;
         let count = host.view().panes.get(session_id).map_or(0, |u| u.queue.items().len() as i32);

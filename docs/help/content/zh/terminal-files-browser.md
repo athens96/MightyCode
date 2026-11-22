@@ -14,6 +14,19 @@ Shell 退出后，请点击{{ui:terminal.restart}}。之前的命令记录可以
 
 ![[terminal-pane]]
 
+### 通知与响铃 {#terminal-signals}
+终端窗格里的程序或应用不解析的 CLI 发送通知或响铃时，会在该窗格上标记。通知支持 OSC 9（`printf '\e]9;构建完成\a'`）、OSC 777（`notify;标题;正文`）和 OSC 99（kitty，仅标题和正文）。报告进度的 `9;4;…` 不算通知。正文去掉控制字符后最多显示 200 个字符，每个窗格每秒只接收一条。
+- 当你在看其他窗格或应用在后台时，侧边栏中该窗格的行和标签页会出现圆点，窗格边框会高亮。如果是通知，还会发送系统通知；响铃只做标记。
+- 智能体窗格等待批准或回答问题时，以及 worktree 的 setup 失败时，也会出现同样的标记。{{ui:phone.dashboard.title}}会显示等待中的窗格数量，点击即可前往。
+- 按 {{kbd:⇧⌘U}}（Windows：{{kbd:Ctrl+Shift+U}}）会前往最近发出提醒的窗格。再按一次前往下一个。菜单栏{{ui:menu.workspace}}菜单中的{{ui:attention.next}}也一样。
+- 查看该窗格后标记会消失。你正在看的窗格的通知既不标记也不发送系统通知。
+- 如不想接收，请在[设置](settings.md#companion)中关闭{{ui:terminalNotifications.toggle}}。
+
+### 打开的端口与 PR {#pane-ports}
+每 10 秒读取一次窗格的 shell、智能体、run 操作以及其下运行的程序打开的 TCP 端口，并显示在侧边栏的窗格行和 worktree 栏中。仅在应用窗口可见时读取当前工作区的窗格。点击 worktree 栏中的端口会在浏览器中打开 `localhost`。
+
+worktree 窗格还会显示该分支 PR 的编号、状态（打开、草稿、已合并、已关闭）和检查结果（通过、失败、进行中）。PR 每 2 分钟重新读取一次，点击会打开 PR 页面。侧边栏较窄时，端口和 PR 只显示图标。
+
 ### 智能体终端 {#agent-terminal}
 当 Claude 或 Codex 运行需要你查看的命令（开发服务器、登录等）时，智能体窗格右侧会出现专用的终端窗格。你可以直接向运行中的命令输入内容。关闭该窗格后，命令仍会继续运行，直到退出应用；可以用窗格标题栏中的{{ui:agentTerminal.terminalPane.open}}按钮重新打开。
 

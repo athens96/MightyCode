@@ -626,6 +626,15 @@ impl Inner {
         out.prop_str("titleMode", Some(pane.title_mode.as_deref().unwrap_or("auto")));
         out.prop_str("resolvedModel", resolved.as_deref());
         out.prop_bool("canSteer", false);
+        // MC-26: the desktop's mark on a pane waiting for the user (a terminal's notification or bell, a card, a failed setup).
+        if let Some((kind, text, at)) = self.desk.attention(pane.id()) {
+            out.name("attention");
+            out.begin_object();
+            out.prop_str("kind", Some(&kind));
+            out.prop_str("text", Some(&text));
+            out.prop_str("at", Some(&at));
+            out.end_object();
+        }
         // A Mighty Orchestration child: its sidebar row's parent and state, waiting while it asks for a human's answer
         // (`DelegationSidebar.shownState`, the sidebar's own test). A pane the delegation file does not list carries neither.
         if let Some(row) = children.iter().find(|row| row.id == pane.id()) {

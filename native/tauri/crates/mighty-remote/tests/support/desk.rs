@@ -68,6 +68,8 @@ pub struct Calls {
     pub catalog: Of<Option<ModelCatalog>>,
     pub structure: Of<Option<Built>>,
     pub queue_count: Option<CountFn>,
+    /// MC-26: the panes the desktop marks as waiting (kind, words, time).
+    pub attention: std::collections::HashMap<String, (String, String, String)>,
     pub image_preview: Option<ImageFn>,
     pub app_update: Option<Option<app_update_view::State>>,
     pub app_acts: Vec<bool>,
@@ -380,6 +382,9 @@ impl PhoneDesk for Desk {
     fn app_update_act(&self, install: bool) -> BoxFuture<'_, Result<(), MobileError>> {
         self.calls().app_acts.push(install);
         Box::pin(async { Ok(()) })
+    }
+    fn attention(&self, session_id: &str) -> Option<(String, String, String)> {
+        self.calls().attention.get(session_id).cloned()
     }
     fn queue_count(&self, session_id: &str) -> Option<i32> {
         let count = self.calls().queue_count.clone();

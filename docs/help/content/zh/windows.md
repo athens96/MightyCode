@@ -35,6 +35,7 @@ section: windows
 | {{kbd:⇧⌘E}} | {{kbd:Ctrl+Shift+E}} | {{ui:menu.showFiles}} |
 | {{kbd:⇧⌘F}} | {{kbd:Ctrl+Shift+F}} | {{ui:conversationSearch.open}} |
 | {{kbd:⇧⌘R}} | {{kbd:Ctrl+Shift+R}} | {{ui:review.open}} |
+| {{kbd:⇧⌘U}} | {{kbd:Ctrl+Shift+U}} | {{ui:attention.next}} |
 | {{kbd:⌘K}} | {{kbd:Ctrl+K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{kbd:Ctrl+B}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{kbd:Ctrl+,}} | {{ui:menu.settings}} |

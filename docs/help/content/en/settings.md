@@ -65,6 +65,7 @@ The {{ui:settings.nav.companion}} tab sets up Mighty Pet and the completion noti
 - {{ui:companion.settings.pet}}: choose the pet. Add more with {{ui:companion.settings.import}}, read the pets again with {{ui:companion.settings.reload}}, and put Mighty Pet and its bubble size back where they started with {{ui:companion.settings.resetPosition}}.
 - {{ui:companion.settings.motion}}: less movement.
 - {{ui:companion.settings.macNotifications}} ({{ui:windows.notifications.toggleLabel}} on Windows): a Mac notification when a request finishes successfully. Clicking it opens that pane. The notification never contains the request or its result.
+- {{ui:terminalNotifications.toggle}}: marks a pane when its terminal or CLI sends a notification or rings the bell. An OS notification is sent only while the app is in the background or you are looking at another pane. On at first ([Notifications and the bell](terminal-files-browser.md#terminal-signals)).
 - Under it, the system's notification permission is shown, and {{ui:windows.notifications.settingsButton}} opens the system's notification settings.
 
 ![[settings-companion]]

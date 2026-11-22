@@ -40,3 +40,8 @@
 .mirror-strip-state, .mirror-strip-branch { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .mirror-strip-branch { display: inline-flex; align-items: center; gap: 4px; font-size: var(--type-small); }
 .mirror-strip-queued { font-size: var(--type-small); font-weight: 500; white-space: nowrap; }
+/* MC-26: a pane's ports and pull request (PaneSignals.tsx), and the sidebar's dot on a pane waiting for the user. */
+.pane-signal { display: inline-flex; align-items: center; gap: var(--space-xxs); flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sidebar-pane .pane-signal { font-size: var(--type-small); }
+.sidebar-pane .pane-port { color: var(--sidebar-ink2); }
+.sidebar-attention-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }

@@ -14,6 +14,19 @@ If the shell exits, click {{ui:terminal.restart}}. Earlier command history is un
 
 ![[terminal-pane]]
 
+### Notifications and the bell {#terminal-signals}
+When a program in a terminal pane, or a CLI the app does not read, sends a notification or rings the bell, its pane is marked. Notifications come as OSC 9 (`printf '\e]9;Build done\a'`), OSC 777 (`notify;title;body`) and OSC 99 (kitty's, title and body only). The `9;4;…` progress report is not a notification. The text shows without control characters, up to 200 characters, and a pane takes at most one a second.
+- While you look at another pane or the app is in the background, the pane's sidebar row and tab get a dot and its border is highlighted. A notification also sends an OS notification; the bell only marks the pane.
+- An agent pane waiting for an approval or an answer, and a worktree whose setup failed, are marked the same way. {{ui:phone.dashboard.title}} shows how many panes are waiting; click it to go there.
+- Press {{kbd:⇧⌘U}} (Windows: {{kbd:Ctrl+Shift+U}}) to go to the pane that asked most recently. Press it again for the next one. {{ui:attention.next}} in the menu bar's {{ui:menu.workspace}} menu does the same.
+- Looking at the pane clears the mark. The pane you are looking at gets neither a mark nor an OS notification.
+- To stop them, turn off {{ui:terminalNotifications.toggle}} in [Settings](settings.md#companion).
+
+### Open ports and pull requests {#pane-ports}
+Every 10 seconds the TCP ports opened by a pane's shell, agent and run actions, and anything running under them, are read and shown in its sidebar row and on its worktree bar. Only the current workspace's panes are read, while the app's window is showing. Click a port on the worktree bar to open `localhost` in the browser.
+
+A worktree pane also shows its branch's pull request: its number, state (open, draft, merged, closed) and checks (passed, failed, running). It is read again every 2 minutes; click it to open the pull request. When the sidebar is narrow, the ports and pull request show as icons only.
+
 ### Agent terminals {#agent-terminal}
 When Claude or Codex runs a command you should see (a dev server, a sign-in and so on), a terminal pane of its own opens to the right of the agent pane. You can type into the running command. Closing the pane leaves the command running until the app quits; reopen it with {{ui:agentTerminal.terminalPane.open}} in the pane header.
 

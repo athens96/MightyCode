@@ -24,7 +24,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -229,6 +229,8 @@ struct Run {
     cancel: Cancel,
     accepted: Mutex<Option<oneshot::Sender<std::result::Result<(), RunError>>>>,
     child: Mutex<Option<Arc<dyn ChildControl>>>,
+    /// The CLI's process id once it started (0 before): the pane's ports are read from it and what it started (MC-26).
+    child_pid: AtomicU32,
     input: Mutex<Option<Arc<InputPipe>>>,
     input_gate: Mutex<()>,
     permissions: Mutex<Option<Arc<ClaudePermissionChannel>>>,
@@ -402,6 +404,11 @@ impl RunManager {
         lock(&self.inner.runs).contains_key(id)
     }
 
+    /// The process id of the CLI running for pane `id` (MC-26: its ports); None while none runs or it has not started.
+    pub fn process_id(&self, id: &str) -> Option<u32> {
+        lock(&self.inner.runs).get(id).map(|run| run.child_pid.load(Ordering::SeqCst)).filter(|&pid| pid > 0)
+    }
+
     /// `StartAsync`: the run begins; a request with attachments returns once its process is up (or why it never got there).
     pub async fn start(&self, request: StartRunRequest) -> Result<()> {
         self.begin(request, false).await
@@ -452,6 +459,7 @@ impl RunManager {
                 cancel: Cancel::new(),
                 accepted: Mutex::new(waits.then_some(sender)),
                 child: Mutex::new(None),
+                child_pid: AtomicU32::new(0),
                 input: Mutex::new(None),
                 input_gate: Mutex::new(()),
                 permissions: Mutex::new(None),
@@ -1958,6 +1966,7 @@ impl Exec {
         let mut child = providers.processes().spawn(launch).await.map_err(|e| Failure::Error(e.to_string()))?;
         let control = child.control();
         *lock(&run.child) = Some(control.clone());
+        run.child_pid.store(child.id, Ordering::SeqCst);
         self.cancelled()?;
         let pipe = Arc::new(InputPipe::new(child.stdin.take()));
         *lock(&run.input) = Some(pipe.clone());
@@ -2414,6 +2423,7 @@ mod tests {
             cancel: Cancel::new(),
             accepted: Mutex::new(None),
             child: Mutex::new(None),
+            child_pid: AtomicU32::new(0),
             input: Mutex::new(None),
             input_gate: Mutex::new(()),
             permissions: Mutex::new(None),

@@ -42,6 +42,8 @@ pub mod fonts;
 #[cfg(windows)]
 pub mod http;
 #[cfg(windows)]
+pub mod listening;
+#[cfg(windows)]
 mod net;
 #[cfg(windows)]
 pub mod notify;

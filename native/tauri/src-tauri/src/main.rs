@@ -20,6 +20,7 @@ mod antigravity;
 mod app_update;
 mod args;
 mod ask;
+mod attention;
 mod bodies;
 mod build_info;
 mod cards;
@@ -605,6 +606,8 @@ fn main() {
             if host.smoke.is_none() {
                 notifications::start(&host, &platform);
             }
+            // MC-26: the window's focus for the panes waiting for the user, and the shown panes' ports and pull requests.
+            attention::start(&host);
             let dispatcher = host.clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(message) = calls.recv().await {

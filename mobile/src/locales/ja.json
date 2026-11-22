@@ -4186,5 +4186,18 @@
   "sharedMemory.settings.save": "同期設定を保存",
   "agentContext.syncConfirm": "{files} の内容が編集中のテキストに置き換わります。上書きしますか?",
   "agentContext.removeConfirm": "もう一度押すと {providers} から {name} を削除します ({target})",
-  "sharedMemory.deleteConfirm": "もう一度押すと削除します(同期した端末からも削除)"
+  "sharedMemory.deleteConfirm": "もう一度押すと削除します(同期した端末からも削除)",
+  "attention.kind.notify": "通知",
+  "attention.kind.bell": "ベル",
+  "attention.kind.approval": "承認待ち",
+  "attention.kind.question": "回答待ち",
+  "attention.kind.setupFailed": "setup 失敗",
+  "attention.next": "注意が必要なペインへ移動",
+  "attention.dashboard": "あなたを待っているペイン {count} 個",
+  "attention.dashboardHelp": "最後に知らせたペインへ移動します。",
+  "terminalNotifications.toggle": "ターミナル通知を受け取る",
+  "terminalNotifications.description": "ターミナルペインや CLI が通知(OSC 9・777・99)やベルを送ると、そのペインに表示します。OS の通知は、アプリが背面にあるときか別のペインを見ているときだけ送ります。",
+  "panePorts.help": "このペインで開いているポート: {ports}",
+  "panePorts.open": "localhost:{port} を開く",
+  "panePr.draft": "ドラフト"
 }

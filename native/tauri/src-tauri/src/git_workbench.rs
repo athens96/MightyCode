@@ -1254,7 +1254,7 @@ async fn push_workspace_branch(host: &Arc<Host>, root: &Path) -> Result<(), Stri
     Ok(())
 }
 
-async fn query_pr_status_value(host: &Host, root: &Path) -> Value {
+pub(crate) async fn query_pr_status_value(host: &Host, root: &Path) -> Value {
     let origin = read_origin_url(host, root).await;
     let hosting = detect_hosting(origin.as_deref());
     if hosting == "none" {

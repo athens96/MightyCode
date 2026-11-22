@@ -24,7 +24,7 @@ export interface MenuPush {
 
 const actions: readonly string[] = [
   'openFolder', 'newPane', 'newCodexPane', 'newAntigravityPane', 'search', 'toggleSidebar', 'newShell', 'settings', 'files', 'help',
-  'textLarger', 'textSmaller', 'textReset', 'conversationSearch', 'reviewQueue', 'newFolder', 'fromGit',
+  'textLarger', 'textSmaller', 'textReset', 'conversationSearch', 'reviewQueue', 'nextAttention', 'newFolder', 'fromGit',
   'dashboard', 'layoutGrid', 'layoutColumns', 'layoutFocus', 'layoutTabs', 'workMap', 'usage',
 ];
 
@@ -72,6 +72,7 @@ export function runAction(action: MenuAction, call: Call, snapshot: AppSnapshot,
     case 'files': return run('openFiles', {});
     case 'conversationSearch': return run('openConversationSearch', {});
     case 'reviewQueue': return toggleReview();
+    case 'nextAttention': return run('attentionNext');
     case 'workMap': return snapshot.activeWorkspaceId ? run('openWorkMap', { workspaceId: snapshot.activeWorkspaceId }) : undefined;
     case 'usage': return openUsage();
     case 'help': return run('openHelp');

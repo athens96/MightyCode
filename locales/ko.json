@@ -4186,5 +4186,18 @@
   "sharedMemory.settings.save": "동기화 설정 저장",
   "agentContext.syncConfirm": "{files}의 내용이 지금 편집 중인 글로 바뀝니다. 덮어쓸까요?",
   "agentContext.removeConfirm": "한 번 더 누르면 {providers}의 {name} 서버를 지웁니다 ({target})",
-  "sharedMemory.deleteConfirm": "한 번 더 누르면 지웁니다 (동기화된 기기에서도 지워짐)"
+  "sharedMemory.deleteConfirm": "한 번 더 누르면 지웁니다 (동기화된 기기에서도 지워짐)",
+  "attention.kind.notify": "알림",
+  "attention.kind.bell": "벨",
+  "attention.kind.approval": "승인 대기",
+  "attention.kind.question": "답변 대기",
+  "attention.kind.setupFailed": "setup 실패",
+  "attention.next": "주의가 필요한 창으로 이동",
+  "attention.dashboard": "나를 기다리는 창 {count}개",
+  "attention.dashboardHelp": "가장 최근에 알린 창으로 갑니다.",
+  "terminalNotifications.toggle": "터미널 알림 받기",
+  "terminalNotifications.description": "터미널 창이나 CLI가 알림(OSC 9·777·99)이나 벨을 보내면 그 창에 표시합니다. OS 알림은 앱이 뒤에 있거나 다른 창을 보고 있을 때만 보냅니다.",
+  "panePorts.help": "이 창에서 열린 포트: {ports}",
+  "panePorts.open": "localhost:{port} 열기",
+  "panePr.draft": "초안"
 }

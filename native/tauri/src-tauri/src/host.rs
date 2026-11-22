@@ -907,6 +907,8 @@ impl Host {
         crate::mirror::frame(self, snapshot, &mut model);
         // The agent panes with a terminal (terminal.rs): the header's button that reopens its pane.
         crate::terminal::mark_agent_terminals(self, &mut model);
+        // MC-26: the panes waiting for the user, their ports and pull requests (attention.rs).
+        crate::attention::decorate(self, snapshot, *shows_dashboard, &mut model);
         model
     }
 

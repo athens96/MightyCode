@@ -95,6 +95,7 @@ function useShortcuts(blocked: boolean) {
         case 'files': return call('openFiles', {});
         case 'conversationSearch': return call('openConversationSearch', {});
         case 'reviewQueue': return toggleReview();
+        case 'nextAttention': return call('attentionNext');
         case 'help': return call('openHelp');
         case 'textLarger': return call('textSize', { step: 1 });
         case 'textSmaller': return call('textSize', { step: -1 });

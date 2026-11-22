@@ -287,6 +287,13 @@ impl PaneEvents for HostEvents {
         }
     }
 
+    /// MC-26: the terminal's notification or bell marks the pane (and may notify) unless it is the one being looked at.
+    fn signal(&self, pane: &str, signal: mighty_terminal::signals::Signal) {
+        if let Some(host) = self.host.upgrade() {
+            crate::attention::signal(&host, pane, signal);
+        }
+    }
+
     fn light(&self) -> bool {
         self.host.upgrade().is_some_and(|host| host.view().snapshot.theme() == "light")
     }
@@ -982,6 +989,13 @@ pub fn mark_agent_terminals(host: &Host, model: &mut mighty_core::shell::ShellMo
     for pane in &mut model.panes {
         pane.agent_terminal = agents.contains_key(&pane.id);
     }
+}
+
+/// The processes of `pane`'s terminal (its shell and what runs under it), for its ports (attention.rs, MC-26).
+pub fn process_ids(host: &Host, pane: &str) -> Vec<u32> {
+    let Ok(terminals) = terminals(host) else { return Vec::new() };
+    let pane = lock(&terminals.panes).get(pane).cloned();
+    pane.map(|pane| pane.process_ids()).unwrap_or_default()
 }
 
 /// The theme or the text setting changed (methods.rs's `setTheme`, frame.rs's `textSize`): every terminal takes its look again.

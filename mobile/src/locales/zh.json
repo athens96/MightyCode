@@ -4186,5 +4186,18 @@
   "sharedMemory.settings.save": "保存同步设置",
   "agentContext.syncConfirm": "{files} 的内容将替换为正在编辑的文本。要覆盖吗?",
   "agentContext.removeConfirm": "再次点击将从 {providers} 删除 {name}（{target}）",
-  "sharedMemory.deleteConfirm": "再次点击删除（同步的设备上也会删除）"
+  "sharedMemory.deleteConfirm": "再次点击删除（同步的设备上也会删除）",
+  "attention.kind.notify": "通知",
+  "attention.kind.bell": "响铃",
+  "attention.kind.approval": "等待批准",
+  "attention.kind.question": "等待回答",
+  "attention.kind.setupFailed": "setup 失败",
+  "attention.next": "转到需要注意的窗格",
+  "attention.dashboard": "{count} 个窗格在等你",
+  "attention.dashboardHelp": "转到最近发出提醒的窗格。",
+  "terminalNotifications.toggle": "接收终端通知",
+  "terminalNotifications.description": "终端窗格或 CLI 发送通知（OSC 9、777、99）或响铃时，会在该窗格上标记。仅当应用在后台或你正在看其他窗格时才发送系统通知。",
+  "panePorts.help": "此窗格打开的端口：{ports}",
+  "panePorts.open": "打开 localhost:{port}",
+  "panePr.draft": "草稿"
 }

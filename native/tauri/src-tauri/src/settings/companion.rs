@@ -271,6 +271,15 @@ pub fn companion(host: &Arc<Host>, ui: &mut Ui) -> El {
         crate::native::act(&to, async move { host.view().update(|state| state.completion_notifications_enabled = on) });
     });
     rows.add(ui.settings_labeled(ui.settings_text(&label, TextStyle::default()), toggle, false));
+    // MC-26: a terminal's notification or bell marks its pane, and notifies while the app is behind or another pane is shown.
+    let terminal_label = locale.get("terminalNotifications.toggle");
+    let to = host.clone();
+    let terminal_toggle =
+        ui.settings_switch(&terminal_label, crate::attention::enabled(host), Some("settings-terminal-notifications"), move |on| {
+            crate::attention::set_enabled(&to, on)
+        });
+    rows.add(ui.settings_labeled(ui.settings_text(&terminal_label, TextStyle::default()), terminal_toggle, false));
+    rows.add(ui.settings_text(locale.get("terminalNotifications.description"), TextStyle::size(11.0).ink(Token::Ink2)));
     let words = crate::notifications::permission_text(&locale, crate::notifications::permission(host));
     let to = host.clone();
     let open = ui.settings_push(

@@ -43,6 +43,30 @@ export interface PaneInfo {
   mirror?: MirrorStrip | null;
   /** An agent pane whose terminal is open, its pane shown or closed: the header's 터미널 창 열기 button. */
   agentTerminal?: boolean;
+  /** MC-26: why the pane waits for the user (the sidebar's dot, the pane's border); absent when it does not. */
+  attention?: PaneAttention | null;
+  /** MC-26: the TCP ports the pane's processes listen on (read while it shows). */
+  ports?: number[];
+  /** MC-26: the pull request of the pane's worktree branch. */
+  pr?: PanePr | null;
+}
+
+/** MC-26: a pane waiting for the user: a terminal's notification or bell, a card, a setup that failed. */
+export interface PaneAttention {
+  kind: 'notify' | 'bell' | 'approval' | 'question' | 'setupFailed';
+  text: string;
+  /** "{word}: {text}". */
+  help: string;
+}
+
+/** MC-26: the pull request of a pane's worktree branch. */
+export interface PanePr {
+  number: number;
+  state: 'open' | 'draft' | 'merged' | 'closed';
+  checks: 'passed' | 'failed' | 'pending' | 'none';
+  url: string;
+  /** "PR #12 · 열림 · 검사 통과" over its title. */
+  help: string;
 }
 
 /** The strip over a mirrored pane (M/RemoteMirrorViews.swift MirrorPaneBanner): "원격 창 · ● {host}에서 실행 중 · {state}", branch and queue. */
@@ -183,6 +207,8 @@ export interface DashboardModel {
   done: number;
   usage?: { provider: string; name: string; bars: { label: string; percent: string; fraction: number; warning: boolean }[] }[];
   workspaces: { id: string; name: string; path: string; local: boolean; git?: GitInfo; rows: string[] }[];
+  /** MC-26: "나를 기다리는 창 n개" while a pane waits; a click goes there. */
+  attention?: string | null;
 }
 
 export interface ShellModel {

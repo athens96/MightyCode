@@ -65,6 +65,7 @@ Mac에서는 보기 메뉴의 {{ui:menu.textBigger}}({{kbd:⌘=}}), {{ui:menu.te
 - {{ui:companion.settings.pet}}: 펫을 고릅니다. {{ui:companion.settings.import}}로 다른 펫을 더하고, {{ui:companion.settings.reload}} 단추로 펫 목록을 다시 읽고, {{ui:companion.settings.resetPosition}} 단추로 Mighty Pet의 위치와 말풍선 크기를 처음대로 돌립니다.
 - {{ui:companion.settings.motion}}: 움직임을 줄입니다.
 - {{ui:companion.settings.macNotifications}}(Windows는 {{ui:windows.notifications.toggleLabel}}): 요청이 성공적으로 끝나면 Mac 알림을 보냅니다. 알림을 누르면 그 실행 창이 열립니다. 알림에는 요청이나 결과 내용이 들어가지 않습니다.
+- {{ui:terminalNotifications.toggle}}: 터미널 창이나 CLI가 보낸 알림과 벨을 그 창에 표시합니다. OS 알림은 앱이 뒤에 있거나 다른 창을 보고 있을 때만 보냅니다. 처음에는 켜져 있습니다([알림과 벨](terminal-files-browser.md#terminal-signals)).
 - 그 아래에 운영체제의 알림 허용 상태가 보이고, {{ui:windows.notifications.settingsButton}} 단추로 시스템의 알림 설정을 엽니다.
 
 ![[settings-companion]]

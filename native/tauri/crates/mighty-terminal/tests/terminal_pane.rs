@@ -13,6 +13,7 @@ use common::*;
 use mighty_platform::Clipboard;
 use mighty_platform::fake::KILLED;
 use mighty_terminal::pane::{COPY_LIMIT, PASTE_LIMIT, directory_from_url};
+use mighty_terminal::signals::Signal;
 use mighty_terminal::{AgentTerminal, PaneEvents, PaneKind, PaneOptions, TerminalFont, TerminalMessage, TerminalPane};
 use serde_json::json;
 
@@ -86,6 +87,14 @@ async fn a_shell_pane_starts_with_the_pages_terminal_and_echoes_its_input() {
 
     pane.handle_message(&json!({"type": "pressed"})).await;
     assert_eq!(*fixture.window.pressed.lock().unwrap(), ["pane"], "a press makes the pane the active one");
+
+    // MC-26: the terminal's notification and bell reach the window, the words made safe.
+    pane.handle_message(&json!({"type": "notify", "title": "Build", "body": "done\u{1b}[31m\n ok"})).await;
+    pane.handle_message(&json!({"type": "bell"})).await;
+    assert_eq!(
+        *fixture.window.signals.lock().unwrap(),
+        [("pane".to_string(), Signal::Notify { title: "Build".into(), body: "done [31m ok".into() }), ("pane".to_string(), Signal::Bell)]
+    );
 
     pane.handle_message(&json!({"type": "copy", "text": "selected"})).await;
     assert_eq!(fixture.clipboard.text().as_deref(), Some("selected"), "copied");

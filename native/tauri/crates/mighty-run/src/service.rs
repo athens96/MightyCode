@@ -864,6 +864,11 @@ impl RunService {
         })
     }
 
+    /// The process id of the CLI running on this computer for pane `id` (MC-26: the pane's ports).
+    pub fn process_id(&self, id: &str) -> Option<u32> {
+        self.manager.process_id(id)
+    }
+
     pub fn is_session_running(&self, id: &str) -> bool {
         self.manager.is_running(id) || self.remote.as_ref().is_some_and(|r| r.is_running(id))
     }

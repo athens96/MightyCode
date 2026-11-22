@@ -250,6 +250,14 @@ pub fn install_locations() -> Vec<PathBuf> {
     return os::update::install_locations();
 }
 
+/// MC-26: every process's parent and every listening TCP socket's owner, for a pane's ports (blocking: off the async runtime).
+pub fn process_net() -> Option<mighty_platform::listening::ProcessNet> {
+    #[cfg(windows)]
+    return os::listening::snapshot();
+    #[cfg(target_os = "macos")]
+    return os::listening::snapshot();
+}
+
 /// The registry RenameMigration reads and writes (C# `CurrentUserRegistry`): HKEY_CURRENT_USER on Windows; a registry without keys
 /// on the Mac, whose half of the migration (folders, the defaults domain) is M-B's seams of `mighty-core`'s `rename_migration`.
 pub fn rename_registry() -> Arc<dyn mighty_core::rename_migration::RegistryStore> {

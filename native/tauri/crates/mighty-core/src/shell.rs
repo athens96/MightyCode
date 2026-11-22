@@ -410,6 +410,30 @@ pub struct PaneInfo {
     /// pane back (M/SessionPaneView.swift `agentTerminals[session.id] != nil`); the host fills it (src-tauri terminal.rs).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub agent_terminal: bool,
+    /// MC-26: why the pane waits for the user (a terminal's notification or bell, a card, a failed setup): the sidebar's dot and the
+    /// pane's border; the host fills it (src-tauri attention.rs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attention: Option<crate::attention::AttentionInfo>,
+    /// MC-26: the TCP ports the pane's processes listen on, read while it shows (src-tauri attention.rs).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<u16>,
+    /// MC-26: the pull request of the pane's worktree branch (src-tauri attention.rs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr: Option<PanePr>,
+}
+
+/// The pull request of a pane's worktree branch as its row and bar show it (MC-26; the Git workbench's `query_pr_status_value`).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PanePr {
+    pub number: i64,
+    /// "open", "draft", "merged" or "closed".
+    pub state: String,
+    /// "passed", "failed", "pending" or "none".
+    pub checks: String,
+    pub url: String,
+    /// "PR #12 · 열림 · 검사 통과" and the title under it.
+    pub help: String,
 }
 
 /// C# `WebMirrorStrip` (M/RemoteMirrorViews.swift `MirrorPaneBanner`): the strip over a mirrored pane, "원격 창 · ● {host}에서 실행 중 ·
@@ -488,6 +512,9 @@ pub fn pane_info(locale: &Locale, s: &RunSession, attention: Attention, now: Dat
             .map(|pane| locale.get_with("paneWorktree.marker", &[("branch", pane.branch()), ("base", pane.base_branch())])),
         mirror: None,
         agent_terminal: false,
+        attention: None,
+        ports: Vec::new(),
+        pr: None,
     }
 }
 
@@ -993,6 +1020,9 @@ pub struct Dashboard {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<Vec<UsageBars>>,
     pub workspaces: Vec<DashboardWorkspace>,
+    /// MC-26: "나를 기다리는 창 n개" while a pane waits for the user (the host fills it, src-tauri attention.rs); a click jumps there.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attention: Option<String>,
 }
 
 // ── account usage (AccountUsageStatus as the page draws it, MainWindow.WebShell.Shell.cs:422-452, :508-511) ─────────────────
@@ -1381,6 +1411,7 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
                     .collect(),
                 })
                 .collect(),
+            attention: None,
         }
     });
     let workspaces = state

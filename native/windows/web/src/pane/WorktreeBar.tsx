@@ -1,12 +1,13 @@
 // The bar over an agent pane in its own worktree (pane/worktree.ts): branch → base, how far it is (↑ ↓ ±), its PORT and port block,
-// the run actions running in it (MC-25), its setup, and Merge / Commit and merge, Ask to resolve and the rest in its menu. The host
+// the ports it listens on and its pull request (MC-26), the run actions running in it (MC-25), its setup, and Merge / Commit and merge, Ask to resolve and the rest in its menu. The host
 // does the git (MainWindow.PaneWorktree.cs).
 import { useCallback, useEffect, useState } from 'react';
-import { useServices } from '../app/context';
+import { useServices, useStoreSelector } from '../app/context';
 import { Icon } from '../icons/Icon';
 import { useMenu } from '../shell/parts';
 import type { RunSession } from '../store/models';
 import { worktreeBar, type WorktreeStatus } from './worktree';
+import { PaneSignals } from './PaneSignals';
 import './worktree.css';
 
 export function WorktreeBar({ session }: { session: RunSession }) {
@@ -15,6 +16,8 @@ export function WorktreeBar({ session }: { session: RunSession }) {
   const pane = session.paneWorktree!;
   const [status, setStatus] = useState<WorktreeStatus | null>(null);
   const [working, setWorking] = useState(false);
+  // MC-26: the ports its processes listen on and its branch's pull request, as the host read them.
+  const info = useStoreSelector((state) => state.shell?.panes.find((p) => p.id === session.id));
   const refresh = useCallback(() => {
     void bridge.call<WorktreeStatus | null>('paneWorktreeStatus', { id: session.id }).then((value) => setStatus(value ?? null), () => {});
   }, [bridge, session.id]);
@@ -47,6 +50,7 @@ export function WorktreeBar({ session }: { session: RunSession }) {
       {model.changed && <button type="button" className="worktree-bar-count link" title={model.changed.help} onClick={() => act('changes')}>{model.changed.text}</button>}
       <button type="button" className="worktree-bar-port link" title={model.port.help} onClick={() => act('port')}>{model.port.text}</button>
       {model.portBlock && <span className="worktree-bar-port mono" data-testid="pane-worktree-port-block" title={model.portBlock.help}>{model.portBlock.text}</span>}
+      {info && <PaneSignals info={info} compact={false} interactive />}
       {model.actions.map((action) => (
         <button
           key={action.name}

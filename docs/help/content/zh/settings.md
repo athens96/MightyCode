@@ -65,6 +65,7 @@ section: settings
 - {{ui:companion.settings.pet}}：选择宠物。可以用{{ui:companion.settings.import}}添加其他宠物，用{{ui:companion.settings.reload}}重新读取宠物列表，用{{ui:companion.settings.resetPosition}}把 Mighty Pet 位置和气泡大小恢复为初始状态。
 - {{ui:companion.settings.motion}}：减少动作。
 - {{ui:companion.settings.macNotifications}}（Windows 上为{{ui:windows.notifications.toggleLabel}}）：请求成功完成时发送 Mac 通知。点击通知会打开对应的窗格。通知中不包含请求或结果的内容。
+- {{ui:terminalNotifications.toggle}}：在窗格上标记其终端或 CLI 发送的通知与响铃。仅当应用在后台或你正在看其他窗格时才发送系统通知。默认开启（[通知与响铃](terminal-files-browser.md#terminal-signals)）。
 - 下方显示操作系统的通知权限状态，{{ui:windows.notifications.settingsButton}}按钮会打开系统的通知设置。
 
 ![[settings-companion]]

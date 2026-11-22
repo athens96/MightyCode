@@ -36,4 +36,7 @@ export type TerminalInput =
   | { type: 'title'; title: string }
   | { type: 'directory'; url: string }
   | { type: 'copy'; text: string }
-  | { type: 'paste' };
+  | { type: 'paste' }
+  // MC-26: a program's notification (OSC 9, 777, 99) and the bell.
+  | { type: 'notify'; title: string; body: string }
+  | { type: 'bell' };

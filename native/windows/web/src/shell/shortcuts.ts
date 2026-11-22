@@ -3,7 +3,7 @@
 
 export type ShortcutAction =
   | 'openFolder' | 'newPane' | 'search' | 'toggleSidebar' | 'newShell' | 'settings' | 'files' | 'help'
-  | 'textLarger' | 'textSmaller' | 'textReset' | 'conversationSearch' | 'reviewQueue';
+  | 'textLarger' | 'textSmaller' | 'textReset' | 'conversationSearch' | 'reviewQueue' | 'nextAttention';
 
 export interface ShortcutKey {
   key: string;
@@ -21,6 +21,8 @@ export function shortcutAction(event: ShortcutKey): ShortcutAction | null {
     if (event.code === 'KeyE') return 'files';
     if (event.code === 'KeyF') return 'conversationSearch';
     if (event.code === 'KeyR') return 'reviewQueue';
+    // MC-26: the newest pane waiting for the user, then the next.
+    if (event.code === 'KeyU') return 'nextAttention';
     // Ctrl++ on the main keyboard is Ctrl+Shift+=.
     return event.code === 'Equal' ? 'textLarger' : null;
   }
@@ -40,7 +42,7 @@ export function shortcutAction(event: ShortcutKey): ShortcutAction | null {
 
 /**
  * The Mac's shortcuts in the Rust host's build (plan D9; `import.meta.env.MODE === 'tauri'` and the host's `macos` only): ⌘ is the
- * modifier where Windows has Ctrl (M/MightyCodeApp.swift's menu keys: ⌘O ⌘N ⌘K ⌘T ⇧⌘E ⇧⌘F ⇧⌘R ⌘, ⌘= ⌘- ⌘0, ⌃⌘S for the sidebar, ⌘? for help by its character),
+ * modifier where Windows has Ctrl (M/MightyCodeApp.swift's menu keys: ⌘O ⌘N ⌘K ⌘T ⇧⌘E ⇧⌘F ⇧⌘R ⇧⌘U ⌘, ⌘= ⌘- ⌘0, ⌃⌘S for the sidebar, ⌘? for help by its character),
  * and a Ctrl key is left to the text fields (⌃K, ⌃T edit text on a Mac). The menu bar has the same keys: what the page takes here
  * the menu does not see, and what it leaves the menu runs.
  */
@@ -53,6 +55,7 @@ export function macShortcutAction(event: ShortcutKey): ShortcutAction | null {
     if (event.code === 'KeyE') return 'files';
     if (event.code === 'KeyF') return 'conversationSearch';
     if (event.code === 'KeyR') return 'reviewQueue';
+    if (event.code === 'KeyU') return 'nextAttention';
     return event.code === 'Equal' ? 'textLarger' : null;
   }
   switch (event.code) {

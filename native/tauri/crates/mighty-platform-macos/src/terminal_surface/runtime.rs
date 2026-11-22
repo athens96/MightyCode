@@ -578,6 +578,14 @@ unsafe extern "C" fn action(_app: ghostty_app_t, target: ghostty_target_s, actio
                 shared.send(TerminalEvent::Bell);
                 true
             }
+            ACTION_DESKTOP_NOTIFICATION => {
+                // `ghostty_action_desktop_notification_s { const char* title; const char* body; }`, both owned by libghostty for the
+                // call (MC-26: the host marks the pane and decides on the OS notification).
+                // SAFETY: the action's payload for the call.
+                let (title, body) = unsafe { (action_text(action.payload[0]), action_text(action.payload[1])) };
+                shared.send(TerminalEvent::Notification { title: title.unwrap_or_default(), body: body.unwrap_or_default() });
+                true
+            }
             ACTION_MOUSE_SHAPE => {
                 // The payload's first member is the shape (a C enum).
                 shared.mouse_shape.store(action.payload[0] as u32 as i32, Ordering::SeqCst);

@@ -85,8 +85,10 @@ pub const VIEW: [Item; 11] = [
 ];
 
 /// Workspace (Swift's `CommandMenu(L("menu.workspace"))`, grouped by navigation, tools/panels, CLI setup, and IME diagnostics).
-pub const WORKSPACE: [Item; 12] = [
+pub const WORKSPACE: [Item; 13] = [
     page("search", "menu.searchWorkspaces", Some("Cmd+K")),
+    // MC-26: the newest pane waiting for the user (a terminal's notification or bell, a card, a failed setup), then the next.
+    page("nextAttention", "attention.next", Some("Shift+Cmd+U")),
     SEPARATOR,
     page("files", "menu.showFiles", Some("Shift+Cmd+E")),
     page("conversationSearch", "conversationSearch.open", Some("Shift+Cmd+F")),
@@ -132,6 +134,7 @@ pub fn label(locale: &Locale, key: &str) -> String {
         "menu.textSmaller" => locale.get("menu.textSmaller"),
         "menu.textActualSize" => locale.get("menu.textActualSize"),
         "menu.searchWorkspaces" => locale.get("menu.searchWorkspaces"),
+        "attention.next" => locale.get("attention.next"),
         "menu.showFiles" => locale.get("menu.showFiles"),
         "conversationSearch.open" => locale.get("conversationSearch.open"),
         "review.open" => locale.get("review.open"),
@@ -516,6 +519,7 @@ mod tests {
                 ("textSmaller", "Cmd+-"),
                 ("textReset", "Cmd+0"),
                 ("search", "Cmd+K"),
+                ("nextAttention", "Shift+Cmd+U"),
                 ("files", "Shift+Cmd+E"),
                 ("conversationSearch", "Shift+Cmd+F"),
                 ("reviewQueue", "Shift+Cmd+R"),

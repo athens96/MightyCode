@@ -277,6 +277,8 @@ button { font: inherit; color: inherit; }
 .pane-slot.hidden { visibility: hidden; content-visibility: hidden; pointer-events: none; }
 .pane-slot > .pane { border: 0; border-radius: 0; }
 .pane-slot.active > .pane { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent); }
+/* MC-26: a pane waiting for the user (a terminal's notification or bell, a card, a failed setup). */
+.pane-slot.attention > .pane { box-shadow: inset 0 0 0 2px var(--accent); }
 .drop-hint {
   position: absolute; inset: 5px; display: grid; place-items: center; pointer-events: none; border-radius: 9px;
   background: color-mix(in srgb, var(--accent) 16%, transparent); outline: 2px dashed var(--accent); outline-offset: -2px; z-index: 5;
@@ -312,6 +314,9 @@ button { font: inherit; color: inherit; }
 .dashboard-usage-window { display: inline-flex; gap: var(--space-sm); align-items: center; flex: 1; color: var(--ink2); }
 .dashboard-usage-window strong { color: var(--ink); min-width: 30px; text-align: right; }
 .dashboard-empty, .dashboard-none { margin-top: var(--space-lg); color: var(--ink2); }
+/* MC-26: "나를 기다리는 창 n개", a click to the newest. */
+.dashboard-attention { display: inline-flex; align-items: center; gap: var(--space-sm); margin-top: var(--space-md); padding: var(--space-xs) var(--space-md); border: 0; border-radius: var(--radius-file-row); background: var(--card); color: var(--ink); font-weight: 600; cursor: default; }
+.dashboard-attention:hover { background: var(--subtle); }
 .dashboard-workspace { display: flex; flex-direction: column; gap: var(--space-sm); margin-top: var(--space-lg); }
 .dashboard-workspace-head { display: flex; align-items: center; gap: var(--space-md); padding: 0 2px; min-width: 0; }
 .dashboard-workspace-head .middle-path { font-size: 11.5px; }

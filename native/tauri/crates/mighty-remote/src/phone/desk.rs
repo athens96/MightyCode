@@ -269,6 +269,12 @@ pub trait PhoneDesk: Send + Sync {
     fn direct_endpoints(&self) -> Vec<String>;
     /// `ExtraCapabilities`: capabilities beside `Capabilities`.
     fn extra_capabilities(&self) -> Vec<String>;
+    /// MC-26: why the pane waits for the user, as the desktop marks it — its kind (`notify`, `bell`, `approval`, `question`,
+    /// `setupFailed`), words and time (RFC 3339) — for the pane summary's `attention`; None when it does not wait.
+    fn attention(&self, session_id: &str) -> Option<(String, String, String)> {
+        let _ = session_id;
+        None
+    }
     /// Saved prompts offered in `workspace_id` (`GET /m1/sessions/{id}/prompts`); empty by default.
     fn saved_prompts(&self, workspace_id: &str) -> Vec<mighty_core::saved_prompts::SavedPrompt> {
         let _ = workspace_id;

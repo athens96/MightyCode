@@ -66,6 +66,13 @@ export function Dashboard({ model, onUsage }: { model: DashboardModel; onUsage: 
           </button>
         )}
       </div>
+      {/* MC-26: the panes waiting for the user; a click goes to the newest. */}
+      {model.attention && (
+        <button type="button" className="dashboard-attention" title={t('attention.dashboardHelp')} onClick={() => call('attentionNext')} data-testid="dashboard-attention">
+          <span className="sidebar-attention-dot" aria-hidden="true" />
+          <span>{model.attention}</span>
+        </button>
+      )}
       {model.workspaces.length === 0 && <div className="dashboard-empty">{t('dashboard.empty')}</div>}
       {model.workspaces.map((workspace) => (
         <section key={workspace.id} className="dashboard-workspace" data-testid="dashboard-workspace">

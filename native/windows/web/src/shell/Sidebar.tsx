@@ -12,6 +12,7 @@ import type { CardAction, ChildCard, PaneInfo, RemoteServer, SidebarItem, Sideba
 import { Icon } from '../icons/Icon';
 import appIcon from '../assets/app-icon.png';
 import { Pending } from '../pending/Pending';
+import { PaneSignals } from '../pane/PaneSignals';
 import { setReviewQueue, toggleReview, useReviewOpen, useReviewQueue, type ReviewQueue } from '../review/queue';
 
 export const sidebarSearchId = 'sidebar-search';
@@ -70,11 +71,16 @@ function ChildCardLine({ id, card }: { id: string; card: ChildCard }) {
 }
 
 /** A pane's row (SessionIndicator): glyph, title in its weight, beta, meta line, waiting words; a delegated child's state word instead. */
+/** The sidebar width (px) under which a row's ports and pull request show as icons alone (MC-26). */
+const narrowSidebar = 240;
+const sidebarDefaultWidth = 252;
+
 const PaneRow = memo(function PaneRow({ info, active, child }: { info: PaneInfo; active: boolean; child?: Extract<SidebarItem, { type: 'pane' }> }) {
   const { t } = useServices();
   const call = useCall();
   const menu = useMenu();
   const choose = useChoosePane();
+  const narrow = useStoreSelector((state) => (state.snapshot?.sidebarWidth ?? sidebarDefaultWidth) < narrowSidebar);
   // A mirrored pane carries its host's name; its close closes it on that computer.
   const items: MenuItem[] = [
     ...(info.mirror ? [] : [{ label: t('menu.rename'), action: () => call('renameSession', { id: info.id }) }]),
@@ -91,6 +97,9 @@ const PaneRow = memo(function PaneRow({ info, active, child }: { info: PaneInfo;
           <span className={'sidebar-pane-title' + (info.settled ? '' : ' strong')}>{info.title}</span>
           {info.beta && <BetaBadge />}
           {info.worktree && <span className="sidebar-worktree-mark" title={info.worktree} aria-label={info.worktree} data-testid="sidebar-worktree-mark"><Icon name="git-branch" size={11} weight={2.2} /></span>}
+          {/* MC-26: its ports and pull request (icons only when the sidebar is narrow), and the dot of a pane waiting for the user. */}
+          <PaneSignals info={info} compact={narrow} interactive={false} />
+          {info.attention && <span className="sidebar-attention-dot" title={info.attention.help} aria-label={info.attention.help} data-testid="sidebar-attention" />}
         </span>
         <span className="sidebar-pane-meta">
           {info.agent && <ProviderMark provider={info.agent} size={11} />}

@@ -57,6 +57,7 @@ pub const GHOSTTY_MOUSE_SHAPE_NS_RESIZE: c_int = 29;
 /// `ghostty_action_tag_e` values the view answers.
 pub const ACTION_CELL_SIZE: c_int = 25;
 pub const ACTION_RENDER: c_int = 27;
+pub const ACTION_DESKTOP_NOTIFICATION: c_int = 32;
 pub const ACTION_SET_TITLE: c_int = 33;
 pub const ACTION_PWD: c_int = 37;
 pub const ACTION_MOUSE_SHAPE: c_int = 38;

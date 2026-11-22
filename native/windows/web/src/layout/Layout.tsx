@@ -166,6 +166,7 @@ const Tab = memo(function Tab({ info, selected, workspaceId, index }: TabProps) 
         onPointerDown={(event) => pressTab(event, info.id, workspaceId, info.title, (target) => call('dockSession', dockArguments(info.id, workspaceId, target)))}>
         <KindIcon info={info} />
         <span className="tab-title">{info.title}</span>
+        {info.attention && <span className="sidebar-attention-dot" title={info.attention.help} aria-label={info.attention.help} data-testid="tab-attention" />}
         {info.beta && <BetaBadge />}
         {info.tabMark && <StatusGlyph tone={info.tone} size={12} />}
         {landing && <span className={'tab-landing ' + landing} data-testid="tab-landing" />}
@@ -228,9 +229,11 @@ const PaneSlot = memo(function PaneSlot({
   onHeaderContextMenu: (event: ReactMouseEvent, id: string) => void;
 }) {
   const session = useStoreSelector((state) => state.snapshot?.sessions.find((s) => s.id === paneId));
+  // MC-26: a pane waiting for the user carries the accent round its border until it is looked at.
+  const attention = useStoreSelector((state) => Boolean(state.shell?.panes.find((p) => p.id === paneId)?.attention));
   if (!session) return null;
   return (
-    <div className={'pane-slot' + (shown ? '' : ' hidden') + (active ? ' active' : '')} data-pane-id={paneId} aria-hidden={!shown}
+    <div className={'pane-slot' + (shown ? '' : ' hidden') + (active ? ' active' : '') + (attention ? ' attention' : '')} data-pane-id={paneId} aria-hidden={!shown}
       onPointerDownCapture={() => { if (!active) onActivate(paneId); }}
       onContextMenu={(event) => { if ((event.target as Element).closest('.pane-header')) onHeaderContextMenu(event, paneId); }}>
       <PaneShownContext.Provider value={shown}>

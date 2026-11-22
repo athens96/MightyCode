@@ -4186,5 +4186,18 @@
   "sharedMemory.settings.save": "Save sync settings",
   "agentContext.syncConfirm": "{files} will be replaced with the text you are editing. Overwrite them?",
   "agentContext.removeConfirm": "Click again to remove {name} from {providers} ({target})",
-  "sharedMemory.deleteConfirm": "Click again to delete (also removed on synced devices)"
+  "sharedMemory.deleteConfirm": "Click again to delete (also removed on synced devices)",
+  "attention.kind.notify": "Notification",
+  "attention.kind.bell": "Bell",
+  "attention.kind.approval": "Waiting for approval",
+  "attention.kind.question": "Waiting for an answer",
+  "attention.kind.setupFailed": "Setup failed",
+  "attention.next": "Go to Pane Needing Attention",
+  "attention.dashboard": "{count} panes waiting for you",
+  "attention.dashboardHelp": "Go to the pane that asked most recently.",
+  "terminalNotifications.toggle": "Terminal notifications",
+  "terminalNotifications.description": "When a terminal pane or a CLI sends a notification (OSC 9, 777, 99) or rings the bell, its pane is marked. An OS notification is sent only while the app is in the background or you are looking at another pane.",
+  "panePorts.help": "Ports open in this pane: {ports}",
+  "panePorts.open": "Open localhost:{port}",
+  "panePr.draft": "Draft"
 }

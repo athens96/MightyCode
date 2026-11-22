@@ -10,6 +10,7 @@
 //! - [`shell_blocks`]: a transcript's shell block runs (C# ShellBlockRuns.cs, ShellBlockScan.cs).
 //! - [`activity`]: a shell pane's status from its terminal (C# `ShellActivity.NextStatus`, `DesktopService.SetShellStatus`).
 //! - [`history`]: the shell pane's history dialog's content (C# `ShowTerminalHistory`; the native dialog is W6's).
+//! - [`signals`]: the notifications (OSC 9, 777, 99) and the bell a terminal sends (MC-26), found in its output as it comes.
 //! - [`cleaner`]: escape sequences removed from a stream (C# `TerminalTextCleaner`); [`text`]: UTF-16 lengths and UTF-8 decoding.
 
 pub mod activity;
@@ -19,6 +20,7 @@ pub mod history;
 pub mod pane;
 pub mod prompt;
 pub mod shell_blocks;
+pub mod signals;
 pub mod text;
 
 pub use agent::{AgentTerminal, AgentTerminalError, AgentTerminalResult};

@@ -34,6 +34,7 @@ pub mod fonts;
 pub mod formats;
 pub mod http;
 pub mod input_method;
+pub mod listening;
 /// M-F: the menu bar read back and a key equivalent pressed through it (the smoke).
 pub mod menu;
 pub mod net;

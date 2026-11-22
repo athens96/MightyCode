@@ -18,6 +18,7 @@ pub struct Window {
     pub status: Mutex<String>,
     pub errors: Mutex<Vec<String>>,
     pub pressed: Mutex<Vec<String>>,
+    pub signals: Mutex<Vec<(String, mighty_terminal::signals::Signal)>>,
     pub agents: Mutex<HashMap<String, Arc<AgentTerminal>>>,
     pub light: Mutex<bool>,
     pub font: Mutex<TerminalFont>,
@@ -78,6 +79,9 @@ impl PaneEvents for Window {
     }
     fn agent_terminal(&self, owner: &str) -> Option<Arc<AgentTerminal>> {
         self.agents.lock().unwrap().get(owner).cloned()
+    }
+    fn signal(&self, pane: &str, signal: mighty_terminal::signals::Signal) {
+        self.signals.lock().unwrap().push((pane.to_string(), signal));
     }
 }
 

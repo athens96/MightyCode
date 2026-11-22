@@ -108,6 +108,7 @@ Right-clicking a pane's header offers {{ui:menu.rename}}, {{ui:session.menu.focu
 | {{kbd:⇧⌘E}} | {{ui:menu.showFiles}} |
 | {{kbd:⇧⌘F}} | {{ui:conversationSearch.open}} |
 | {{kbd:⇧⌘R}} | {{ui:review.open}} |
+| {{kbd:⇧⌘U}} | {{ui:attention.next}} |
 | {{kbd:⌘K}} | {{ui:menu.searchWorkspaces}} |
 | {{kbd:⌃⌘S}} | {{ui:sidebar.collapse}} / {{ui:sidebar.expand}} |
 | {{kbd:⌘,}} | {{ui:menu.settings}} |

@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use base64::Engine;
 use mighty_platform::{BoxFuture, DeviceRect, SurfaceFactory, TerminalEvent, TerminalListener, TerminalOptions, TerminalSurface};
 use mighty_terminal::TerminalMessage;
+use mighty_terminal::signals::{Kinds, OscScanner, Signal};
 use serde_json::{Value, json};
 
 /// Where a view's messages go: its pane's `terminalMessage` (terminal.rs connects it when the terminals start). Each is awaited
@@ -41,6 +42,9 @@ pub struct NativeTerminals {
     /// The panes whose view could not open: not tried again until the pane is forgotten (the platform said why once).
     failed: Mutex<HashSet<String>>,
     to_pane: Mutex<Option<ToPane>>,
+    /// MC-26: each view's way back to its pane and the scanner reading its output for the kitty notifications (OSC 99) Ghostty does
+    /// not report itself (it reports the bell and OSC 9/777 as [`TerminalEvent`]s).
+    scans: Mutex<HashMap<String, (tokio::sync::mpsc::UnboundedSender<Value>, OscScanner)>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -61,6 +65,7 @@ impl NativeTerminals {
             return None;
         }
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let scan_sender = sender.clone();
         let ready = AtomicBool::new(false);
         let listener = TerminalListener::new(move |event| {
             for message in message(&ready, event) {
@@ -84,6 +89,7 @@ impl NativeTerminals {
             }
         };
         lock(&self.views).insert(pane.to_string(), view.clone());
+        lock(&self.scans).insert(pane.to_string(), (scan_sender, OscScanner::new(Kinds::KITTY)));
         let owner = pane.to_string();
         tokio::spawn(async move {
             while let Some(message) = receiver.recv().await {
@@ -102,6 +108,7 @@ impl NativeTerminals {
     pub fn forget(&self, pane: &str) {
         lock(&self.views).remove(pane);
         lock(&self.failed).remove(pane);
+        lock(&self.scans).remove(pane);
     }
 
     /// A message the pane would push to the page's terminal, given to its view instead; false when the pane has no view (or the
@@ -115,10 +122,18 @@ impl NativeTerminals {
         // A view that closed meanwhile refuses: the pane is going too.
         let _ = match message {
             TerminalMessage::Output { data } => match base64::engine::general_purpose::STANDARD.decode(data) {
-                Ok(bytes) => view.feed(&bytes),
+                Ok(bytes) => {
+                    self.scan(pane, &bytes);
+                    view.feed(&bytes)
+                }
                 Err(_) => Ok(()),
             },
-            TerminalMessage::Reset => view.feed(RESET),
+            TerminalMessage::Reset => {
+                if let Some((_, scanner)) = lock(&self.scans).get_mut(pane) {
+                    scanner.reset();
+                }
+                view.feed(RESET)
+            }
             TerminalMessage::Focus => view.focus(),
             TerminalMessage::Font { size, family } => view.set_font(family.as_deref().unwrap_or(""), *size),
             TerminalMessage::Theme { light } => view.set_theme(*light),
@@ -128,9 +143,27 @@ impl NativeTerminals {
         };
         true
     }
+
+    /// The kitty notifications in output going to `pane`'s view, handed to the pane as the page's xterm would send them.
+    fn scan(&self, pane: &str, bytes: &[u8]) {
+        let mut scans = lock(&self.scans);
+        let Some((sender, scanner)) = scans.get_mut(pane) else { return };
+        for signal in scanner.feed(bytes) {
+            let _ = sender.send(signal_message(&signal));
+        }
+    }
 }
 
-/// The `terminalMessage`s one view event is, as the page's xterm would have sent them (none for the bell or a lost keyboard):
+/// A signal as the pane's `terminalMessage` (`notify` with its title and body, or `bell`), as the page's xterm sends it.
+pub fn signal_message(signal: &Signal) -> Value {
+    match signal {
+        Signal::Notify { title, body } => json!({"type": "notify", "title": title, "body": body}),
+        Signal::Bell => json!({"type": "bell"}),
+    }
+}
+
+/// The `terminalMessage`s one view event is, as the page's xterm would have sent them (none for a lost keyboard; the bell and a
+/// notification are `bell` and `notify`, MC-26):
 /// `ready` once (`ready` turns true), `resize` after, the input in chunks of at most [`INPUT_CHUNK`] characters (bytes that are not
 /// UTF-8 as `inputBytes`, base64, so they reach the PTY as they were).
 pub fn message(ready: &AtomicBool, event: TerminalEvent) -> Vec<Value> {
@@ -165,7 +198,9 @@ pub fn message(ready: &AtomicBool, event: TerminalEvent) -> Vec<Value> {
             directory_url(&folder).map(|url| json!({"type": "directory", "url": url})).into_iter().collect()
         }
         TerminalEvent::Focused(true) => vec![json!({"type": "pressed"})],
-        TerminalEvent::Focused(false) | TerminalEvent::Bell => Vec::new(),
+        TerminalEvent::Bell => vec![signal_message(&Signal::Bell)],
+        TerminalEvent::Notification { title, body } => vec![signal_message(&Signal::Notify { title, body })],
+        TerminalEvent::Focused(false) => Vec::new(),
     }
 }
 
@@ -227,7 +262,8 @@ mod tests {
     }
 
     /// The view's grid is the pane's `ready` once, then `resize`; typing is `input`; a title and a working folder are the page's own
-    /// messages; the view taking the keyboard is a press in the pane; the bell and a lost keyboard say nothing.
+    /// messages; the view taking the keyboard is a press in the pane; the bell and a notification are the page's `bell` and `notify`;
+    /// a lost keyboard says nothing.
     #[test]
     fn a_views_events_are_the_pages_terminal_messages() {
         let ready = AtomicBool::new(false);
@@ -246,7 +282,12 @@ mod tests {
         );
         assert!(message(&ready, TerminalEvent::WorkingDirectory("relative/folder".into())).is_empty(), "no folder of this computer");
         assert_eq!(message(&ready, TerminalEvent::Focused(true)), [json!({"type": "pressed"})]);
-        assert!(message(&ready, TerminalEvent::Focused(false)).is_empty() && message(&ready, TerminalEvent::Bell).is_empty());
+        assert!(message(&ready, TerminalEvent::Focused(false)).is_empty());
+        assert_eq!(message(&ready, TerminalEvent::Bell), [json!({"type": "bell"})]);
+        assert_eq!(
+            message(&ready, TerminalEvent::Notification { title: "Build".into(), body: "done".into() }),
+            [json!({"type": "notify", "title": "Build", "body": "done"})]
+        );
     }
 
     /// A long paste reaches the PTY as several writes, each a whole number of characters, nothing lost.
@@ -332,6 +373,20 @@ mod tests {
         );
         natives.forget("pane");
         assert!(!natives.post("pane", &TerminalMessage::Reset), "a forgotten pane's messages are the page's again");
+    }
+
+    /// MC-26: a kitty notification (OSC 99) in the output, split between two writes, reaches the pane as `notify`; OSC 9 and the bell
+    /// are left to Ghostty, which reports them itself.
+    #[tokio::test]
+    async fn a_kitty_notification_in_the_output_reaches_the_pane() {
+        let (natives, surfaces, log) = natives_with_log();
+        let factory: Arc<dyn SurfaceFactory> = surfaces.clone();
+        natives.open(&factory, "pane", RECT).await.unwrap();
+        let output = |text: &str| TerminalMessage::Output { data: base64::engine::general_purpose::STANDARD.encode(text.as_bytes()) };
+        assert!(natives.post("pane", &output("\x07\x1b]9;left to Ghostty\x07\x1b]99;i=1:p=body;빌")));
+        assert!(natives.post("pane", &output("드 끝\x1b\\")));
+        until(|| !lock(&log).is_empty()).await;
+        assert_eq!(*lock(&log), [("pane".to_string(), json!({"type": "notify", "title": "", "body": "빌드 끝"}))]);
     }
 
     /// A shell pane over a loopback PTY (each write comes back as output) drawn by a native view: the pane, its view's registry

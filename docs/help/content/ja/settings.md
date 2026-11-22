@@ -65,6 +65,7 @@ Mac では表示メニューの {{ui:menu.textBigger}}（{{kbd:⌘=}}）、{{ui:
 - {{ui:companion.settings.pet}}: ペットを選びます。{{ui:companion.settings.import}}でほかのペットを追加し、{{ui:companion.settings.reload}}でペットの一覧を読み直し、{{ui:companion.settings.resetPosition}}でMighty Petの位置と吹き出しのサイズを最初の状態に戻します。
 - {{ui:companion.settings.motion}}: 動きを減らします。
 - {{ui:companion.settings.macNotifications}}(Windowsでは{{ui:windows.notifications.toggleLabel}}): リクエストが正常に終わると、Macの通知を送ります。通知をクリックすると、そのペインが開きます。通知にはリクエストや結果の内容は含まれません。
+- {{ui:terminalNotifications.toggle}}: ターミナルペインや CLI が送った通知とベルを、そのペインに表示します。OS の通知は、アプリが背面にあるときか別のペインを見ているときだけ送ります。最初はオンです([通知とベル](terminal-files-browser.md#terminal-signals))。
 - その下にOSの通知の許可状態が表示され、{{ui:windows.notifications.settingsButton}}ボタンでシステムの通知設定を開きます。
 
 ![[settings-companion]]

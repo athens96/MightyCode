@@ -148,6 +148,11 @@ pub trait PaneEvents: Send + Sync {
     fn font(&self) -> TerminalFont;
     /// The agent terminal of an agent pane (C# `agentTerminals[owner]`).
     fn agent_terminal(&self, owner: &str) -> Option<Arc<AgentTerminal>>;
+    /// A notification (OSC 9, 777, 99) or the bell from the pane's terminal (MC-26), its words already made safe
+    /// ([`crate::signals::sanitize`]); the window decides whether it marks the pane and notifies.
+    fn signal(&self, pane: &str, signal: crate::signals::Signal) {
+        let _ = (pane, signal);
+    }
 }
 
 /// A started shell: its control, which start it was, and whether its output has all been read.
@@ -502,6 +507,18 @@ impl TerminalPane {
                 self.events.pressed(&self.options.id);
                 Ok(())
             }
+            // MC-26: what the terminal's program asked for (the page's xterm, or the Mac's Ghostty through surface_terminal.rs); its
+            // words never reach the window unsanitized.
+            "notify" => {
+                let title = crate::signals::sanitize(text("title").unwrap_or(""));
+                let body = crate::signals::sanitize(text("body").unwrap_or(""));
+                self.events.signal(&self.options.id, crate::signals::Signal::Notify { title, body });
+                Ok(())
+            }
+            "bell" => {
+                self.events.signal(&self.options.id, crate::signals::Signal::Bell);
+                Ok(())
+            }
             "copy" => match text("text").filter(|t| utf16_len(t) <= COPY_LIMIT) {
                 Some(selection) => self.ports.clipboard.write_text(selection).map_err(|error| error.to_string()),
                 None => Ok(()),
@@ -528,6 +545,12 @@ impl TerminalPane {
     }
 
     /// The running shell's control, while it has one (exited or not).
+    /// The processes running in the pane's terminal now (its shell and everything under it; none for an agent's terminal pane), for
+    /// the ports it listens on (MC-26).
+    pub fn process_ids(&self) -> Vec<u32> {
+        self.control().and_then(|control| control.process_ids()).unwrap_or_default()
+    }
+
     fn control(&self) -> Option<Arc<dyn PtyControl>> {
         lock(&self.state).running.as_ref().map(|running| running.control.clone())
     }

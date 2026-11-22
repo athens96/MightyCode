@@ -26,6 +26,7 @@ pub mod files;
 pub mod firewall;
 pub mod fonts;
 pub mod http;
+pub mod listening;
 pub mod net;
 pub mod notify;
 pub mod pairing;

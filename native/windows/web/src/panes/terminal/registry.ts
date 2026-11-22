@@ -8,6 +8,7 @@ import { listenPane } from '../channel';
 import { base64Bytes, clipboardKey, defaultFamily, terminalFamily, terminalSize, terminalThemes } from './rules';
 import type { TerminalInput } from './types';
 import { entries, fitShown, outputs, type TerminalEntry } from './entries';
+import { KittyNotifications, osc777, osc9, signalLimiter, type TerminalSignal } from './signals';
 
 /** The pane's terminal, made the first time; its output and notices come as `terminal` pushes. */
 export function ensureTerminal(paneId: string, bridge: Bridge): TerminalEntry {
@@ -20,6 +21,13 @@ export function ensureTerminal(paneId: string, bridge: Bridge): TerminalEntry {
   root.className = 'terminal-surface';
   root.dataset.terminalPane = paneId;
   const send = (message: TerminalInput) => void bridge.call('terminalMessage', { paneId, message }).catch(() => {});
+  // MC-26: a program's notification (OSC 9, 777, 99) or bell, at most one a second; the host decides whether the pane is marked.
+  const allow = signalLimiter();
+  const kitty = new KittyNotifications();
+  const signal = (found: TerminalSignal | null) => {
+    if (found && allow(Date.now())) send(found);
+    return true;
+  };
   const disposers = [
     terminal.onData((text) => send({ type: 'input', text })),
     terminal.onResize((size) => send({ type: 'resize', columns: size.cols, rows: size.rows })),
@@ -28,6 +36,14 @@ export function ensureTerminal(paneId: string, bridge: Bridge): TerminalEntry {
       if (url.length <= 8192) send({ type: 'directory', url });
       return true;
     }),
+    terminal.parser.registerOscHandler(9, (data) => signal(data.length <= 4096 ? osc9(data) : null)),
+    terminal.parser.registerOscHandler(777, (data) => signal(data.length <= 4096 ? osc777(data) : null)),
+    terminal.parser.registerOscHandler(99, (data) => {
+      // Every chunk is read (a kitty notification may come in several); only a whole one is sent.
+      const found = data.length <= 4096 ? kitty.take(data) : null;
+      return found ? signal(found) : true;
+    }),
+    terminal.onBell(() => signal({ type: 'bell' })),
   ];
   terminal.attachCustomKeyEventHandler((event) => {
     const key = clipboardKey(event, terminal.hasSelection());
