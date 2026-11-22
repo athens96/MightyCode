@@ -90,6 +90,7 @@ async fn get(host: &Arc<Host>, path: &str) -> Result<Value, String> {
 async fn run(host: &Arc<Host>, checks: &mut Map<String, Value>) -> Result<(), String> {
     let info = get(host, "/m1/info").await?;
     let capabilities: Vec<&str> = info["capabilities"].as_array().map(|c| c.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    let expected_capabilities = crate::phone::host_capabilities();
     let platform = if cfg!(windows) { "win32" } else { "darwin" };
     checks.insert(
         "info".into(),
@@ -97,7 +98,7 @@ async fn run(host: &Arc<Host>, checks: &mut Map<String, Value>) -> Result<(), St
             info["protocol"] == 1
                 && info["platform"] == platform
                 && info["appVersion"] == host.version.as_str()
-                && capabilities == mighty_remote::phone::router::CAPABILITIES
+                && capabilities.iter().copied().eq(expected_capabilities.iter().map(String::as_str))
                 && !capabilities.contains(&"screenShare")
         ),
     );

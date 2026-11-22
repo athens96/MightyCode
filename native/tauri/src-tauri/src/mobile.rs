@@ -146,7 +146,7 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
     let options = RelayOptions {
         host_name: name.clone(),
         app_version: host.version.clone(),
-        capabilities: mighty_remote::phone::router::CAPABILITIES.iter().map(|c| c.to_string()).collect(),
+        capabilities: crate::phone::host_capabilities(),
         // auth_ok's `direct[]` and the pairing link's `&direct=`: W8-C's direct path.
         direct_endpoints: Some({
             let weak = Arc::downgrade(host);

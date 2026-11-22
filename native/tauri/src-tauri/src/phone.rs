@@ -71,6 +71,14 @@ struct Desk {
     kept: Arc<Mutex<Kept>>,
 }
 
+/// Extra `/m1/info` capabilities offered by the Tauri desktop host beyond `mighty_remote`'s C# baseline.
+pub const EXTRA_CAPABILITIES: &[&str] = &["savedPrompts"];
+
+/// Full capability list advertised by `/m1/info` and relay `auth_ok`.
+pub fn host_capabilities() -> Vec<String> {
+    mighty_remote::phone::router::CAPABILITIES.iter().chain(EXTRA_CAPABILITIES.iter()).map(|c| (*c).to_string()).collect()
+}
+
 /// `/m1/info`'s `platform`: this OS's `PlatformProfile::m1_platform` ("win32", "darwin").
 fn m1_platform() -> &'static str {
     crate::platform::profile().m1_platform
@@ -1415,7 +1423,7 @@ impl PhoneDesk for Desk {
         self.host().map(|h| crate::direct::endpoints(&h)).unwrap_or_default()
     }
     fn extra_capabilities(&self) -> Vec<String> {
-        vec!["savedPrompts".to_string()]
+        EXTRA_CAPABILITIES.iter().map(|c| (*c).to_string()).collect()
     }
     fn saved_prompts(&self, workspace_id: &str) -> Vec<mighty_core::saved_prompts::SavedPrompt> {
         self.host().map(|h| crate::saved_prompts::offered(&h, Some(workspace_id))).unwrap_or_default()
