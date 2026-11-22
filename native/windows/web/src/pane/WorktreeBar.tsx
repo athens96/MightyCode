@@ -1,5 +1,6 @@
-// The bar over an agent pane in its own worktree (pane/worktree.ts): branch → base, how far it is (↑ ↓ ±), its PORT, its setup,
-// and Merge / Commit and merge, Ask to resolve and the rest in its menu. The host does the git (MainWindow.PaneWorktree.cs).
+// The bar over an agent pane in its own worktree (pane/worktree.ts): branch → base, how far it is (↑ ↓ ±), its PORT and port block,
+// the run actions running in it (MC-25), its setup, and Merge / Commit and merge, Ask to resolve and the rest in its menu. The host
+// does the git (MainWindow.PaneWorktree.cs).
 import { useCallback, useEffect, useState } from 'react';
 import { useServices } from '../app/context';
 import { Icon } from '../icons/Icon';
@@ -45,6 +46,23 @@ export function WorktreeBar({ session }: { session: RunSession }) {
       {model.behind && <span className="worktree-bar-count tone-text-wait" title={model.behind.help}>{model.behind.text}</span>}
       {model.changed && <button type="button" className="worktree-bar-count link" title={model.changed.help} onClick={() => act('changes')}>{model.changed.text}</button>}
       <button type="button" className="worktree-bar-port link" title={model.port.help} onClick={() => act('port')}>{model.port.text}</button>
+      {model.portBlock && <span className="worktree-bar-port mono" data-testid="pane-worktree-port-block" title={model.portBlock.help}>{model.portBlock.text}</span>}
+      {model.actions.map((action) => (
+        <button
+          key={action.name}
+          type="button"
+          className="worktree-bar-action link"
+          data-testid={'pane-worktree-action-' + action.name}
+          title={action.help}
+          onClick={() => {
+            if (action.url) void bridge.call('openUrl', { url: action.url }).catch(() => {});
+            else window.dispatchEvent(new CustomEvent('mighty:open-tasks', { detail: { workspaceId: session.workspaceId, paneId: session.id } }));
+          }}
+        >
+          <Icon name="play" size={9} weight={2.4} />
+          <span>{action.name}</span>
+        </button>
+      ))}
       {model.setup && (
         model.setup.tone === 'err' && import.meta.env.MODE === 'tauri' ? (
           <button

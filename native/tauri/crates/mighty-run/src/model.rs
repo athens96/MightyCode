@@ -17,8 +17,17 @@ use crate::plan_mode::outcome;
 use crate::strings;
 use crate::{Result, RunError};
 
-/// C# `StartRunRequest.PaneEnvironmentKeys`: the only keys a pane worktree's environment may set.
-pub const PANE_ENVIRONMENT_KEYS: [&str; 3] = ["PORT", "MIGHTY_WORKSPACE_FOLDER", "MIGHTY_WORKTREE"];
+/// C# `StartRunRequest.PaneEnvironmentKeys`: the only keys a pane worktree's environment may set, with the port block and names of MC-25.
+pub const PANE_ENVIRONMENT_KEYS: [&str; 8] = [
+    "PORT",
+    "MIGHTY_WORKSPACE_FOLDER",
+    "MIGHTY_WORKTREE",
+    "MIGHTY_PORT",
+    "MIGHTY_PORT_COUNT",
+    "MIGHTY_WORKTREE_NAME",
+    "MIGHTY_ROOT_PATH",
+    "MIGHTY_WORKTREE_PATH",
+];
 
 /// The ids a start made (C# `RunStartReceipt`): the user entry the transcript shows and the graph run whose block appears at once.
 #[derive(Debug, Default)]

@@ -58,9 +58,34 @@ Claude·Codex·Antigravity 창이 실행 중일 때 요청을 쓰고 {{kbd:⌘En
 - **막대**: 창 위에 브랜치와 기준 브랜치, 기준에 없는 커밋 수(↑), 그새 기준이 앞서간 커밋 수(↓), 커밋하지 않은 변경 파일 수(±, 누르면 변경 보기), PORT(누르면 localhost를 엽니다)가 보입니다. 변경이 남아 있으면 단추가 {{ui:paneWorktree.bar.commitMerge}}으로 바뀌어, 새 파일까지 커밋한 뒤 병합합니다. 비밀번호처럼 보이는 새 파일이나 5MB가 넘는 새 파일은 커밋하지 않고 알려 줍니다.
 - **충돌**: 병합이 충돌로 막히면 {{ui:paneWorktree.bar.resolve}} 단추가 생깁니다. 누르면 에이전트에게 기준 브랜치를 가져와 충돌을 풀고 커밋하라고 요청합니다.
 - **막대의 메뉴**: {{ui:paneWorktree.bar.changes}}(기준 대비 바뀐 파일과 diff), {{ui:paneWorktree.bar.terminal}}, {{ui:paneWorktree.bar.finder}} (Windows: {{ui:menu.showInExplorer}}), 마지막 병합 되돌리기(워크스페이스 폴더가 그 뒤로 바뀌지 않았을 때만), {{ui:paneWorktree.bar.pr}}(확인 후 브랜치를 origin에 올리고, GitHub이면 PR 만들기 화면을 엽니다. 강제로 덮어쓰지 않습니다), {{ui:paneWorktree.bar.discard}}(자식 창이 이 창의 브랜치에서 갈라져 있으면 거절합니다).
-- **준비**: 워크스페이스 행 메뉴의 {{ui:paneWorktree.menu.copy}}에 적은 파일(예: `.env`)을 새 worktree에 복사하고, {{ui:paneWorktree.menu.setup}}을 한 번 실행합니다. 창의 실행에는 `PORT`, `MIGHTY_WORKSPACE_FOLDER`, `MIGHTY_WORKTREE` 환경 변수가 들어갑니다.
+- **준비**: 워크스페이스 행 메뉴의 {{ui:paneWorktree.menu.copy}}에 적은 파일(예: `.env`)을 새 worktree에 복사하고, {{ui:paneWorktree.menu.setup}}을 한 번 실행합니다. 창의 실행에는 `PORT`, `MIGHTY_WORKSPACE_FOLDER`, `MIGHTY_WORKTREE` 환경 변수와 [포트 범위](#mighty-yaml)의 변수가 들어갑니다.
 - **닫기와 목록**: 병합하지 않은 작업이 없으면 창을 닫을 때 worktree도 지웁니다. 작업이 남아 있으면 남겨 두고, 워크스페이스 행 메뉴의 {{ui:paneWorktree.menu.list}}에서 다시 창으로 열거나 병합하거나 지울 수 있습니다.
 - **검토 대기열**: 일이 끝나 변경이 남은 worktree 창과 자식 창은 [{{ui:review.open}}](layout.md#review)에 모입니다. 막대의 메뉴에 있는 {{ui:editor.openFolder}}는 창이 일하는 폴더를 외부 편집기에서 엽니다.
+
+## 포트, 실행 액션, 정리 명령 {#mighty-yaml}
+저장소 맨 위의 `.mighty.yaml`에 worktree마다 쓸 포트, 실행 액션, worktree를 지울 때 돌릴 정리 명령을 적을 수 있습니다. 이 파일의 명령은 {{ui:projectTasks.title}} 창에서 {{ui:projectTasks.approve}}을 누른 뒤에만 실행되고, 파일이 바뀌면 다시 승인해야 합니다. 원격 워크스페이스에서는 쓰지 않습니다.
+
+```yaml
+version: 1
+worktree:
+  setup: npm ci
+  teardown: docker compose down -v
+  teardownTimeoutSeconds: 60
+  ports: 10
+run:
+  dev:
+    command: npm run dev -- --port $MIGHTY_PORT
+  e2e:
+    command: npm run test:e2e
+    concurrent: false
+    url: off
+```
+
+- **포트 범위**: worktree마다(메인 체크아웃도) 다른 곳과 겹치지 않는 포트를 `ports`개(기본 10개) 41000번부터 배정합니다. 다른 프로그램이 이미 듣고 있는 포트는 건너뜁니다. 배정은 앱 데이터 폴더의 `ports.json`에 남고, worktree를 지우면 돌려받습니다. 앱이 꺼진 사이 사라진 worktree의 포트는 다음 시작 때 돌려받습니다. `ports: 0`이면 배정하지 않습니다. 막대에 `:41010–41019`처럼 보입니다.
+- **환경 변수**: 준비 명령, 정리 명령, 실행 액션, 작업, worktree 창의 에이전트에 `MIGHTY_PORT`(첫 포트), `MIGHTY_PORT_COUNT`, `MIGHTY_WORKTREE_NAME`, `MIGHTY_ROOT_PATH`(메인 체크아웃), `MIGHTY_WORKTREE_PATH`가 들어갑니다. 명령의 `$MIGHTY_PORT`는 셸이 풉니다(Windows의 cmd는 `%MIGHTY_PORT%`). `worktree.env`에서는 이 이름을 쓸 수 없습니다.
+- **실행 액션(`run`)**: {{ui:projectTasks.title}} 창의 {{ui:projectTasks.runActions}} 절에 액션마다 상태와 {{ui:projectTasks.start}}·{{ui:projectTasks.stop}} 단추가 보입니다. 출력에서 `http://localhost:<포트>` 같은 주소를 찾으면 링크로 보여 주고(`url: auto`, 기본), 그 포트가 이 worktree의 범위 밖이면 {{ui:projectTasks.urlOutside}}이라고 알립니다. `url`에 주소를 적으면 그 주소를, `off`면 아무것도 보여 주지 않습니다. `concurrent: false`인 액션에는 {{ui:projectTasks.notConcurrent}} 표시가 붙고, 시작하면 같은 저장소의 다른 worktree에서 도는 같은 액션을 먼저 멈춥니다. 실행 중인 액션은 막대에도 보입니다.
+- **정리 명령(`teardown`)**: worktree를 버리거나, 병합한 창을 닫아 worktree를 지울 때 먼저 그 worktree의 실행 액션을 멈추고 worktree 폴더에서 정리 명령을 실행합니다. `teardownTimeoutSeconds`(기본 60초) 안에 끝나지 않으면 멈춥니다. 실패하거나 멈춰도 worktree는 지우고, 결과는 창 기록과 {{ui:projectTasks.title}} 창에 남습니다.
+- **개인 설정**: `.mighty.local.yaml`에 같은 키를 적으면 그 값이 우선합니다. 실행 액션은 이름별로 덮어씁니다.
 
 ## Claude에게 나눠 맡기기 {#delegate}
 Claude나 Codex 창(부모)이 일을 나눠 다른 창(자식)에게 맡길 수도 있습니다. 다른 에이전트를 지정하지 않으면 자식은 부모와 같은 에이전트입니다. 자식이 보고하면 부모가 알림을 받아 보고서를 읽고, 결과를 병합할지 정합니다. Claude와 Codex 부모 모두 Mac 앱과 Windows 앱에서 됩니다.

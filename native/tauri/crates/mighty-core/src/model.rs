@@ -642,6 +642,24 @@ pub struct PaneWorktree {
     pub note_given: Option<bool>,
     /// Optional task/issue linked to this worktree (`"mightywork"` or `"github"`).
     pub linked_task: Option<LinkedTask>,
+    /// The first port of the worktree's port block (`MIGHTY_PORT`, `MC-25`); None when no block is assigned.
+    pub port_base: Option<i32>,
+    /// The ports in that block (`MIGHTY_PORT_COUNT`).
+    pub port_count: Option<i32>,
+}
+
+/// The variables a worktree's scripts, tasks, run actions and agent get (`MC-25`): its port block (when one is assigned), its name,
+/// the repository's main checkout and its own top folder.
+pub fn worktree_variables(block: Option<(i32, i32)>, name: &str, root: &str, worktree: &str) -> Vec<(String, String)> {
+    let mut values = Vec::with_capacity(5);
+    if let Some((base, count)) = block.filter(|(base, count)| *base > 0 && *count > 0) {
+        values.push(("MIGHTY_PORT".to_string(), base.to_string()));
+        values.push(("MIGHTY_PORT_COUNT".to_string(), count.to_string()));
+    }
+    values.push(("MIGHTY_WORKTREE_NAME".to_string(), name.to_string()));
+    values.push(("MIGHTY_ROOT_PATH".to_string(), root.to_string()));
+    values.push(("MIGHTY_WORKTREE_PATH".to_string(), worktree.to_string()));
+    values
 }
 
 impl Default for PaneWorktree {
@@ -662,6 +680,8 @@ impl Default for PaneWorktree {
             working_folder: None,
             note_given: None,
             linked_task: None,
+            port_base: None,
+            port_count: None,
         }
     }
 }
@@ -694,20 +714,46 @@ impl PaneWorktree {
     }
 
     /// `Environment(workspaceFolder)`: the values every run of the pane (and its setup command) gets: its PORT, the workspace folder it
-    /// was made from and its own worktree, in C#'s order.
+    /// was made from and its own worktree, in C#'s order; then its port block and names ([`worktree_variables`], `MC-25`).
     pub fn environment(&self, workspace_folder: &str) -> IndexMap<String, String> {
-        IndexMap::from([
+        let mut values = IndexMap::from([
             ("PORT".to_string(), self.port.to_string()),
             ("MIGHTY_WORKSPACE_FOLDER".to_string(), workspace_folder.to_string()),
             ("MIGHTY_WORKTREE".to_string(), self.run_folder().to_string()),
-        ])
+        ]);
+        values.extend(worktree_variables(self.port_block(), &self.name(), self.checkout(), self.worktree_path()));
+        values
+    }
+
+    /// The worktree's port block as `(first port, count)`; None when none is assigned.
+    pub fn port_block(&self) -> Option<(i32, i32)> {
+        match (self.port_base, self.port_count) {
+            (Some(base), Some(count)) if base > 0 && count > 0 => Some((base, count)),
+            _ => None,
+        }
+    }
+
+    /// `MIGHTY_WORKTREE_NAME`: the worktree's folder name (the pane's id).
+    pub fn name(&self) -> String {
+        let path = self.worktree_path().trim_end_matches(['/', '\\']);
+        path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()
     }
 
     /// `PaneWorktreeNote.Text`: what the pane's agent is told once, with its first request (rule 3).
     pub fn note(&self) -> String {
         let (folder, branch, base, port) = (self.run_folder(), self.branch(), self.base_branch(), self.port);
+        // MC-25: a worktree with a port block names it too, for servers that need more than one port.
+        let block = self
+            .port_block()
+            .map(|(first, count)| {
+                format!(
+                    " This worktree also holds the ports {first} to {} (MIGHTY_PORT and MIGHTY_PORT_COUNT, also set).",
+                    first + count - 1
+                )
+            })
+            .unwrap_or_default();
         format!(
-            "[Mighty Code] This pane works in its own git worktree ({folder}) on the branch {branch}, made from {base} so that the other panes of this workspace keep working undisturbed. Dev servers you start here use PORT={port} (already set in the environment); start them on that port. When you are done, commit your work on {branch}, leaving no uncommitted changes and no new files outside a commit. The person who sent this merges your branch into {base} from the app. Do not merge, push, rebase or switch branches."
+            "[Mighty Code] This pane works in its own git worktree ({folder}) on the branch {branch}, made from {base} so that the other panes of this workspace keep working undisturbed. Dev servers you start here use PORT={port} (already set in the environment); start them on that port.{block} When you are done, commit your work on {branch}, leaving no uncommitted changes and no new files outside a commit. The person who sent this merges your branch into {base} from the app. Do not merge, push, rebase or switch branches."
         )
     }
 
@@ -749,6 +795,8 @@ impl Wire for PaneWorktree {
             working_folder: json::opt_string(o.get("workingFolder"))?,
             note_given: json::opt_boolean(o.get("noteGiven"))?,
             linked_task: lenient_record(o.get("linkedTask")),
+            port_base: json::opt_int32(o.get("portBase")).ok().flatten(),
+            port_count: json::opt_int32(o.get("portCount")).ok().flatten(),
         })
     }
 
@@ -768,6 +816,8 @@ impl Wire for PaneWorktree {
         out.prop_str("workingFolder", self.working_folder.as_deref());
         out.prop_opt_bool("noteGiven", self.note_given);
         out.prop("linkedTask", self.linked_task.as_ref());
+        out.prop_opt_int("portBase", self.port_base.map(i64::from));
+        out.prop_opt_int("portCount", self.port_count.map(i64::from));
         out.end_object();
     }
 }

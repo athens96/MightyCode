@@ -58,9 +58,34 @@ Claude・Codex・Antigravityペインの実行中にリクエストを書いて{
 - **バー**: ペインの上に、ブランチとベース、ベースにないコミット数(↑)、その後ベースが進んだコミット数(↓)、コミットしていない変更ファイル数(±、クリックで表示)、PORT(クリックで localhost を開く)を表示します。変更が残っているとボタンが {{ui:paneWorktree.bar.commitMerge}} になり、新しいファイルも含めてコミットしてからマージします。秘密情報らしい新しいファイルや 5 MB を超える新しいファイルはコミットせず、知らせます。
 - **競合**: マージが競合で止まると {{ui:paneWorktree.bar.resolve}} ボタンが現れます。押すとエージェントにベースブランチを取り込み、競合を解決してコミットするよう依頼します。
 - **バーのメニュー**: {{ui:paneWorktree.bar.changes}}(ベースとの差分のあるファイルと diff)、{{ui:paneWorktree.bar.terminal}}、{{ui:paneWorktree.bar.finder}} (Windows: {{ui:menu.showInExplorer}})、直近のマージの取り消し(その後ワークスペースフォルダーが変わっていない場合のみ)、{{ui:paneWorktree.bar.pr}}(確認後にブランチを origin にプッシュし、強制はしません。GitHub ならプルリクエスト作成ページを開きます)、{{ui:paneWorktree.bar.discard}}(このペインのブランチから分かれた子ペインがあると拒否します)。
-- **準備**: ワークスペース行のメニュー {{ui:paneWorktree.menu.copy}} に書いたファイル(例: `.env`)を新しい worktree にコピーし、{{ui:paneWorktree.menu.setup}} を 1 回実行します。ペインの実行には `PORT`、`MIGHTY_WORKSPACE_FOLDER`、`MIGHTY_WORKTREE` 環境変数が入ります。
+- **準備**: ワークスペース行のメニュー {{ui:paneWorktree.menu.copy}} に書いたファイル(例: `.env`)を新しい worktree にコピーし、{{ui:paneWorktree.menu.setup}} を 1 回実行します。ペインの実行には `PORT`、`MIGHTY_WORKSPACE_FOLDER`、`MIGHTY_WORKTREE` 環境変数と[ポート範囲](#mighty-yaml)の変数が入ります。
 - **閉じるときと一覧**: マージしていない作業がなければ、ペインを閉じると worktree も削除します。作業が残っていれば保持し、ワークスペース行のメニュー {{ui:paneWorktree.menu.list}} からペインとして開き直す、マージする、削除することができます。
 - **レビュー待ち**: 作業が終わって変更が残ったworktreeペインと子ペインは[{{ui:review.open}}](layout.md#review)に集まります。バーのメニューの{{ui:editor.openFolder}}は、ペインが作業するフォルダを外部エディタで開きます。
+
+## ポート・実行アクション・後片付け {#mighty-yaml}
+リポジトリの最上位にある `.mighty.yaml` に、worktree ごとのポート、実行アクション、worktree を消すときに動かす後片付けコマンドを書けます。このファイルのコマンドは {{ui:projectTasks.title}} パネルで {{ui:projectTasks.approve}} を押した後にだけ実行され、ファイルが変わると再び承認が必要です。リモートのワークスペースでは使いません。
+
+```yaml
+version: 1
+worktree:
+  setup: npm ci
+  teardown: docker compose down -v
+  teardownTimeoutSeconds: 60
+  ports: 10
+run:
+  dev:
+    command: npm run dev -- --port $MIGHTY_PORT
+  e2e:
+    command: npm run test:e2e
+    concurrent: false
+    url: off
+```
+
+- **ポート範囲**: worktree ごと(メインのチェックアウトも)に、ほかと重ならないポートを `ports` 個(既定 10 個)41000 番から割り当てます。ほかのプログラムがすでに待ち受けているポートは飛ばします。割り当てはアプリのデータフォルダーの `ports.json` に残り、worktree を消すと返されます。アプリを閉じている間に消えた worktree のポートは次の起動時に返されます。`ports: 0` なら割り当てません。バーに `:41010–41019` のように表示されます。
+- **環境変数**: 準備コマンド、後片付けコマンド、実行アクション、タスク、worktree ペインのエージェントに `MIGHTY_PORT`(最初のポート)、`MIGHTY_PORT_COUNT`、`MIGHTY_WORKTREE_NAME`、`MIGHTY_ROOT_PATH`(メインのチェックアウト)、`MIGHTY_WORKTREE_PATH` が入ります。コマンド中の `$MIGHTY_PORT` はシェルが展開します(Windows の cmd では `%MIGHTY_PORT%`)。`worktree.env` ではこれらの名前を使えません。
+- **実行アクション(`run`)**: {{ui:projectTasks.title}} パネルの {{ui:projectTasks.runActions}} 欄に、アクションごとの状態と {{ui:projectTasks.start}}・{{ui:projectTasks.stop}} ボタンが表示されます。出力に `http://localhost:<ポート>` のようなアドレスが見つかるとリンクで表示し(`url: auto`、既定)、そのポートが worktree の範囲外なら {{ui:projectTasks.urlOutside}} と知らせます。`url` にアドレスを書くとそのアドレスを、`off` なら何も表示しません。`concurrent: false` のアクションには {{ui:projectTasks.notConcurrent}} の印が付き、開始すると同じリポジトリのほかの worktree で動いている同じアクションを先に止めます。実行中のアクションはバーにも表示されます。
+- **後片付け(`teardown`)**: worktree を破棄するとき、またはマージしたペインを閉じて worktree を消すとき、まずその worktree の実行アクションを止め、worktree フォルダーで後片付けコマンドを実行します。`teardownTimeoutSeconds`(既定 60 秒)以内に終わらなければ止めます。失敗しても止めても worktree は消し、結果はペインの記録と {{ui:projectTasks.title}} パネルに残ります。
+- **個人設定**: `.mighty.local.yaml` に同じキーを書くとその値が優先されます。実行アクションは名前ごとに上書きします。
 
 ## Claudeに分けて任せる {#delegate}
 ClaudeかCodexのペイン(親)が作業を分けて、ほかのペイン(子)に任せることもできます。別のエージェントを指定しなければ、子は親と同じエージェントです。子がレポートすると、親が通知を受け取ってレポートを読み、結果をマージするかどうかを決めます。ClaudeとCodexの親は、MacアプリとWindowsアプリの両方で使えます。

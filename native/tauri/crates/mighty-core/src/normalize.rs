@@ -271,6 +271,13 @@ pub fn pane_worktree(pane: &PaneWorktree, session_id: &str, restoring: bool) -> 
             copy.working_folder = None;
         }
     }
+    // A port block (MC-25) inside the TCP range, at most 100 ports; anything else is dropped (the app assigns a new one).
+    let block_ok = matches!((pane.port_base, pane.port_count), (Some(base), Some(count))
+        if base > 0 && (1..=100).contains(&count) && base.checked_add(count - 1).is_some_and(|last| last <= 65_535));
+    if !block_ok {
+        copy.port_base = None;
+        copy.port_count = None;
+    }
     if copy.note_given != Some(true) {
         copy.note_given = None;
     }

@@ -19,6 +19,9 @@ import {
   hasRunningTasks,
   isTaskBlockedByTrust,
   latestRunByTaskId,
+  portBlockLabel,
+  runLink,
+  splitRunActions,
   tailLines,
   type RepoConfigStatus,
   type RepoTaskItem,
@@ -326,5 +329,32 @@ describe('TaskRunnerPanel rendering and design/locale guardrails', () => {
       expect(source, `${name} must not contain raw color literals`).not.toMatch(rawColorPattern);
       expect(source, `${name} must not contain hardcoded Hangul`).not.toMatch(hangulPattern);
     }
+  });
+});
+
+describe('run actions (MC-25)', () => {
+  const action = (name: string, extra: Partial<RepoTaskItem> = {}): RepoTaskItem => ({
+    id: 'run:' + name, name, command: 'npm run ' + name, source: 'run', requiresTrust: true, concurrent: true, url: 'auto', ...extra,
+  });
+  const run = (extra: Partial<RepoTaskRun>): RepoTaskRun => ({
+    runId: 'r', taskId: 'run:dev', name: 'dev', command: 'npm run dev', source: 'run', status: 'running', output: '', startedAt: 't', ...extra,
+  });
+
+  it('splits run actions from the project commands and keeps their order', () => {
+    const lint: RepoTaskItem = { id: 'mighty:lint', name: 'lint', command: 'npm run lint', source: 'mighty' };
+    const split = splitRunActions([action('dev'), lint, action('e2e', { concurrent: false })]);
+    expect(split.actions.map((a) => a.name)).toEqual(['dev', 'e2e']);
+    expect(split.commands).toEqual([lint]);
+    expect(isTaskBlockedByTrust(action('dev'), null)).toBe(true);
+  });
+
+  it('labels a port block and links only a running http address', () => {
+    expect(portBlockLabel(41010, 10)).toBe(':41010\u201341019');
+    expect(portBlockLabel(41010, 1)).toBe(':41010');
+    expect(portBlockLabel(0, 10)).toBe('');
+    expect(runLink(run({ url: 'http://localhost:41010/' }))).toBe('http://localhost:41010/');
+    expect(runLink(run({ url: 'http://localhost:41010/', status: 'stopped' }))).toBeNull();
+    expect(runLink(run({ url: 'javascript:alert(1)' }))).toBeNull();
+    expect(runLink(null)).toBeNull();
   });
 });

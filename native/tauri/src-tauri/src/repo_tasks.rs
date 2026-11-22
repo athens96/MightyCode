@@ -12,6 +12,8 @@ use mighty_core::model::Workspace;
 use mighty_core::{time, wire};
 use mighty_delegation::git::paths::{DelegationPaths, is_inside, same};
 use mighty_delegation::mighty_yaml::{self, LoadedRepoConfig};
+use mighty_delegation::run_actions::{self, RunningAction, ScriptOutcome};
+use mighty_delegation::worktree_ports::{self, PortBlock};
 use mighty_platform::{ChildControl, SpawnRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -55,6 +57,12 @@ pub struct DiscoveredTask {
     pub cwd: Option<String>,
     pub source: String,
     pub requires_trust: bool,
+    /// A run action's `concurrent` (`MC-25`); None for every other task.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub concurrent: Option<bool>,
+    /// A run action's `url` (`auto`, `off` or a fixed address); None for every other task.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 /// Loaded `.mighty.yaml` / `.mighty.local.yaml` along with its current trust status for the workspace.
@@ -83,6 +91,20 @@ pub struct TaskRunSnapshot {
     pub started_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
+    /// The dev-server address of a run action (found in its output, or its fixed `url`) and its port (`MC-25`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url_port: Option<u16>,
+    /// The address's port lies outside the port block of the worktree it runs in.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub url_outside_block: bool,
+    /// Whether something listens on that port now (read when the panel lists the runs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url_listening: Option<bool>,
+    /// A run action's `concurrent`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub concurrent: Option<bool>,
 }
 
 struct ManagedRunInner {
@@ -98,6 +120,57 @@ struct ManagedRunInner {
     started_at: String,
     ended_at: Option<String>,
     control: Option<Arc<dyn ChildControl>>,
+    /// The repository (normalized main checkout) and folder the run works in, as `ports.json` keys them.
+    repo: String,
+    folder: String,
+    /// The run action's name; None for a task.
+    action: Option<String>,
+    concurrent: Option<bool>,
+    /// `auto`, `off` or a fixed address (run actions only).
+    url_mode: Option<String>,
+    url: Option<String>,
+    url_port: Option<u16>,
+    block: Option<PortBlock>,
+}
+
+impl ManagedRunInner {
+    /// A finished run recorded without a process (a worktree's teardown).
+    fn finished(task_id: &str, name: &str, command: &str, workspace_id: &str, pane_id: Option<&str>) -> ManagedRunInner {
+        let now = time::now_o();
+        ManagedRunInner {
+            task_id: task_id.into(),
+            name: name.into(),
+            command: command.into(),
+            source: "mighty".into(),
+            workspace_id: workspace_id.into(),
+            pane_id: pane_id.map(str::to_string),
+            status: "failed".into(),
+            exit_code: None,
+            ring: OutputRing::default(),
+            started_at: now.clone(),
+            ended_at: Some(now),
+            control: None,
+            repo: String::new(),
+            folder: String::new(),
+            action: None,
+            concurrent: None,
+            url_mode: None,
+            url: None,
+            url_port: None,
+            block: None,
+        }
+    }
+
+    /// Reads the dev-server address from the output once (`url: auto`).
+    fn detect_url(&mut self) {
+        if self.url.is_none()
+            && self.url_mode.as_deref() == Some("auto")
+            && let Some(found) = run_actions::detect_dev_url(&self.ring.text())
+        {
+            self.url = Some(found.url);
+            self.url_port = Some(found.port);
+        }
+    }
 }
 
 struct ManagedRunHandle {
@@ -122,6 +195,11 @@ impl ManagedRunHandle {
             output: guard.ring.text(),
             started_at: guard.started_at.clone(),
             ended_at: guard.ended_at.clone(),
+            url: guard.url.clone(),
+            url_port: guard.url_port,
+            url_outside_block: matches!((guard.url_port, guard.block), (Some(port), Some(block)) if !block.contains(port)),
+            url_listening: None,
+            concurrent: guard.concurrent,
         }
     }
 }
@@ -394,6 +472,11 @@ pub fn record_setup_failure(host: &Host, workspace_id: &str, pane_id: &str, comm
         output: ring.text(),
         started_at: now.clone(),
         ended_at: Some(now),
+        url: None,
+        url_port: None,
+        url_outside_block: false,
+        url_listening: None,
+        concurrent: None,
     };
     let st = state(host);
     lock(&st.setup_failures).insert(pane_id.to_string(), snapshot);
@@ -403,6 +486,72 @@ pub fn record_setup_failure(host: &Host, workspace_id: &str, pane_id: &str, comm
 pub fn clear_setup_failure(host: &Host, pane_id: &str) {
     let st = state(host);
     lock(&st.setup_failures).remove(pane_id);
+}
+
+/// Keeps `handle` in the runs list, dropping the oldest finished runs past [`MAXIMUM_KEPT_RUNS`].
+fn keep_run(host: &Host, handle: Arc<ManagedRunHandle>) {
+    let st = state(host);
+    let mut runs = lock(&st.runs);
+    runs.insert(handle.run_id.clone(), handle);
+    while runs.len() > MAXIMUM_KEPT_RUNS {
+        let finished_key = runs.iter().find(|(_, item)| lock(&item.inner).status != "running").map(|(k, _)| k.clone());
+        if let Some(key) = finished_key {
+            runs.shift_remove(&key);
+        } else {
+            break;
+        }
+    }
+}
+
+/// Records how a worktree's `teardown` ended (`MC-25`) as a finished run of its workspace, so the task panel shows its output.
+pub fn record_teardown(host: &Host, workspace_id: &str, pane_id: &str, command: &str, outcome: &ScriptOutcome, timeout_seconds: u64) {
+    let mut inner = ManagedRunInner::finished("worktree:teardown", "worktree.teardown", command, workspace_id, Some(pane_id));
+    inner.ring.push_text(&outcome.output);
+    if outcome.timed_out {
+        inner.ring.push_text(&format!("\n[teardown stopped after {timeout_seconds}s]\n"));
+    }
+    if let Some(error) = &outcome.error {
+        inner.ring.push_text(&format!("\n{error}\n"));
+    }
+    inner.status = if outcome.succeeded() { "succeeded" } else { "failed" }.into();
+    inner.exit_code = Some(outcome.exit_code.unwrap_or(-1));
+    keep_run(
+        host,
+        Arc::new(ManagedRunHandle { run_id: wire::new_id(), stopped_by_user: AtomicBool::new(false), inner: Mutex::new(inner) }),
+    );
+}
+
+/// Stops every managed run working in the folder `folder_key` (a worktree about to be removed); how many were stopped.
+pub async fn stop_runs_in(host: &Host, folder_key: &str) -> usize {
+    let ids: Vec<String> = {
+        let st = state(host);
+        let runs = lock(&st.runs);
+        runs.values()
+            .filter(|handle| {
+                let inner = lock(&handle.inner);
+                inner.status == "running" && inner.folder == folder_key
+            })
+            .map(|handle| handle.run_id.clone())
+            .collect()
+    };
+    for id in &ids {
+        let _ = stop_managed_task(host, id).await;
+    }
+    ids.len()
+}
+
+/// The run actions running in the folder `folder_key`, for the worktree bar: `{ name, url }`.
+pub fn running_actions_in(host: &Host, folder_key: &str) -> Vec<Value> {
+    let st = state(host);
+    let runs = lock(&st.runs);
+    runs.values()
+        .filter_map(|handle| {
+            let inner = lock(&handle.inner);
+            (inner.status == "running" && inner.folder == folder_key)
+                .then(|| inner.action.clone().map(|name| json!({ "name": name, "url": inner.url, "runId": handle.run_id })))
+                .flatten()
+        })
+        .collect()
 }
 
 // ── ANSI stripping & 80-line ring buffer ────────────────────────────────────────────────────────────────────────────────
@@ -603,6 +752,8 @@ fn scan_package_json(target_folder: &Path, workspace_folder: &Path) -> Vec<Disco
             cwd: None,
             source: "package.json".into(),
             requires_trust: false,
+            concurrent: None,
+            url: None,
         });
     }
     out
@@ -621,6 +772,8 @@ fn scan_cargo_toml(target_folder: &Path) -> Vec<DiscoveredTask> {
             cwd: None,
             source: "Cargo.toml".into(),
             requires_trust: false,
+            concurrent: None,
+            url: None,
         },
         DiscoveredTask {
             id: "Cargo.toml:test".into(),
@@ -630,6 +783,8 @@ fn scan_cargo_toml(target_folder: &Path) -> Vec<DiscoveredTask> {
             cwd: None,
             source: "Cargo.toml".into(),
             requires_trust: false,
+            concurrent: None,
+            url: None,
         },
         DiscoveredTask {
             id: "Cargo.toml:build".into(),
@@ -639,6 +794,8 @@ fn scan_cargo_toml(target_folder: &Path) -> Vec<DiscoveredTask> {
             cwd: None,
             source: "Cargo.toml".into(),
             requires_trust: false,
+            concurrent: None,
+            url: None,
         },
         DiscoveredTask {
             id: "Cargo.toml:clippy".into(),
@@ -648,6 +805,8 @@ fn scan_cargo_toml(target_folder: &Path) -> Vec<DiscoveredTask> {
             cwd: None,
             source: "Cargo.toml".into(),
             requires_trust: false,
+            concurrent: None,
+            url: None,
         },
     ];
 
@@ -693,6 +852,8 @@ fn scan_cargo_toml(target_folder: &Path) -> Vec<DiscoveredTask> {
                     source: "Cargo.toml".into(),
                     // An arbitrary shell command from the repository: only once `.mighty.yaml` is approved.
                     requires_trust: true,
+                    concurrent: None,
+                    url: None,
                 };
                 if let Some(existing) = out.iter_mut().find(|t| t.id == id) {
                     *existing = item;
@@ -738,6 +899,8 @@ fn scan_makefile(target_folder: &Path) -> Vec<DiscoveredTask> {
                 cwd: None,
                 source: "Makefile".into(),
                 requires_trust: false,
+                concurrent: None,
+                url: None,
             });
             if out.len() >= 64 {
                 return out;
@@ -803,6 +966,8 @@ fn scan_justfile(target_folder: &Path) -> Vec<DiscoveredTask> {
             cwd: None,
             source: "justfile".into(),
             requires_trust: false,
+            concurrent: None,
+            url: None,
         });
         if out.len() >= 64 {
             break;
@@ -816,6 +981,19 @@ pub fn scan_folder_tasks(target_folder: &Path, workspace_folder: &Path) -> (Resu
     let config_res = mighty_yaml::load_from_folder_with_local_fallback(target_folder, workspace_folder);
     let mut tasks = Vec::new();
     if let Ok(Some(loaded)) = &config_res {
+        for (name, spec) in &loaded.config.run {
+            tasks.push(DiscoveredTask {
+                id: format!("run:{name}"),
+                name: name.clone(),
+                command: spec.command.clone(),
+                description: None,
+                cwd: None,
+                source: "run".into(),
+                requires_trust: true,
+                concurrent: Some(spec.concurrent),
+                url: Some(spec.url.clone()),
+            });
+        }
         for (name, spec) in &loaded.config.tasks {
             tasks.push(DiscoveredTask {
                 id: format!("mighty:{name}"),
@@ -825,6 +1003,8 @@ pub fn scan_folder_tasks(target_folder: &Path, workspace_folder: &Path) -> (Resu
                 cwd: spec.cwd.clone(),
                 source: "mighty".into(),
                 requires_trust: true,
+                concurrent: None,
+                url: None,
             });
         }
     }
@@ -896,6 +1076,8 @@ fn config_json(config_res: &Result<Option<LoadedRepoConfig>, String>, workspace_
                 "sharePaths": share_paths,
                 "copyRules": copy_rules,
                 "setupCommand": loaded.config.worktree.setup,
+                "teardownCommand": loaded.config.worktree.teardown,
+                "ports": loaded.config.worktree.port_count(),
                 "envKeys": env_keys,
                 "envLines": env_lines,
                 "files": loaded.files,
@@ -918,6 +1100,57 @@ fn config_json(config_res: &Result<Option<LoadedRepoConfig>, String>, workspace_
             "error": error,
         }),
     }
+}
+
+/// Where a task or run action works (`MC-25`): its repository and folder (as `ports.json` keys them), the port block of that worktree,
+/// and the variables the main checkout's runs get (a worktree pane's come from its record).
+struct RunPlace {
+    repo: String,
+    folder: String,
+    block: Option<PortBlock>,
+    variables: Vec<(String, String)>,
+}
+
+fn run_place(host: &Host, resolved: &ResolvedTarget, config: Option<&LoadedRepoConfig>) -> RunPlace {
+    let folder = crate::worktree_lifecycle::path_key(&resolved.target_folder.to_string_lossy());
+    match &resolved.pane_worktree {
+        Some(worktree) => RunPlace {
+            repo: crate::worktree_lifecycle::path_key(worktree.checkout()),
+            folder,
+            block: crate::worktree_lifecycle::block_of(worktree),
+            variables: Vec::new(),
+        },
+        None => {
+            let count = crate::worktree_lifecycle::port_count(config);
+            let (repo, block, variables) = crate::worktree_lifecycle::main_place(host, &resolved.workspace_folder, count);
+            RunPlace { repo, folder, block, variables }
+        }
+    }
+}
+
+/// Before a run action starts (`MC-25`): refused while the same action runs in this folder; with `concurrent: false`, the same action
+/// running in the repository's other worktrees is stopped first.
+async fn make_room_for_action(host: &Host, action: &str, concurrent: bool, place: &RunPlace) -> Result<(), String> {
+    let running: Vec<(String, String, String, String)> = {
+        let st = state(host);
+        let runs = lock(&st.runs);
+        runs.values()
+            .filter_map(|handle| {
+                let inner = lock(&handle.inner);
+                let name = inner.action.clone()?;
+                (inner.status == "running").then(|| (handle.run_id.clone(), name, inner.repo.clone(), inner.folder.clone()))
+            })
+            .collect()
+    };
+    if running.iter().any(|(_, name, repo, folder)| name == action && *repo == place.repo && *folder == place.folder) {
+        return Err(format!("The run action '{action}' is already running here."));
+    }
+    let views: Vec<RunningAction<'_>> =
+        running.iter().map(|(_, name, repo, folder)| RunningAction { action: name, repo, folder }).collect();
+    for index in run_actions::runs_to_stop(&views, action, &place.repo, &place.folder, concurrent) {
+        let _ = stop_managed_task(host, &running[index].0).await;
+    }
+    Ok(())
 }
 
 fn runs_for_workspace(host: &Host, workspace_id: &str, pane_id: Option<&str>) -> Vec<TaskRunSnapshot> {
@@ -1053,6 +1286,7 @@ async fn start_managed_task(
     resolved: &ResolvedTarget,
     task: DiscoveredTask,
     approved_config: Option<&LoadedRepoConfig>,
+    place: RunPlace,
 ) -> Result<TaskRunSnapshot, String> {
     let run_cwd = resolve_task_cwd(&resolved.target_folder, task.cwd.as_deref())?;
     if host.smoke.is_some() && !crate::delegation::may_touch(host, &run_cwd) {
@@ -1070,6 +1304,9 @@ async fn start_managed_task(
             request = request.env(k.clone(), v.clone());
         }
     }
+    for (k, v) in &place.variables {
+        request = request.env(k.clone(), v.clone());
+    }
     if let Some(wt) = &resolved.pane_worktree {
         for (k, v) in wt.environment(resolved.workspace.path()) {
             request = request.env(k, v);
@@ -1083,6 +1320,12 @@ async fn start_managed_task(
     let stderr = child.stderr.take();
 
     let task_name = task.name.clone();
+    let is_action = task.source == "run";
+    let url_mode = if is_action { task.url.clone() } else { None };
+    let (fixed_url, fixed_port) = match url_mode.as_deref() {
+        Some("auto" | "off") | None => (None, None),
+        Some(fixed) => (Some(fixed.to_string()), run_actions::url_port(fixed)),
+    };
     let run_id = wire::new_id();
     let started_at = time::now_o();
     let handle = Arc::new(ManagedRunHandle {
@@ -1101,26 +1344,23 @@ async fn start_managed_task(
             started_at,
             ended_at: None,
             control: Some(control.clone()),
+            repo: place.repo,
+            folder: place.folder,
+            action: is_action.then(|| task_name.clone()),
+            concurrent: task.concurrent.filter(|_| is_action),
+            url_mode,
+            url: fixed_url,
+            url_port: fixed_port,
+            block: place.block,
         }),
     });
 
-    {
-        let st = state(host);
-        let mut runs = lock(&st.runs);
-        runs.insert(run_id, handle.clone());
-        while runs.len() > MAXIMUM_KEPT_RUNS {
-            let finished_key = runs.iter().find(|(_, item)| lock(&item.inner).status != "running").map(|(k, _)| k.clone());
-            if let Some(key) = finished_key {
-                runs.shift_remove(&key);
-            } else {
-                break;
-            }
-        }
-    }
+    keep_run(host, handle.clone());
 
     let initial_snapshot = handle.snapshot();
     let runner_handle = handle;
-    let unlimited = runs_until_stopped(&task_name);
+    // A run action is a server or a suite that runs until it ends or is stopped: never cut off at the limit.
+    let unlimited = is_action || runs_until_stopped(&task_name);
     tauri::async_runtime::spawn(async move {
         let pump_stream = |mut reader: Option<mighty_platform::process::ChildReader>, target: Arc<ManagedRunHandle>| async move {
             use tokio::io::AsyncReadExt as _;
@@ -1132,6 +1372,7 @@ async fn start_managed_task(
                 }
                 let mut inner = lock(&target.inner);
                 inner.ring.push_bytes(&buffer[..read]);
+                inner.detect_url();
             }
         };
 
@@ -1218,7 +1459,21 @@ pub fn register(methods: &mut Registry) {
         let (config_res, tasks) =
             tauri::async_runtime::spawn_blocking(move || scan_folder_tasks(&target_dir, &ws_dir)).await.map_err(|err| err.to_string())?;
         let cfg_value = config_json(&config_res, resolved.workspace.path(), &host);
-        let runs = runs_for_workspace(&host, resolved.workspace.id(), resolved.pane_id.as_deref());
+        let loaded = config_res.as_ref().ok().and_then(Option::as_ref);
+        let place = run_place(&host, &resolved, loaded);
+        let mut runs = runs_for_workspace(&host, resolved.workspace.id(), resolved.pane_id.as_deref());
+        let ports: Vec<u16> = runs.iter().filter(|r| r.status == "running").filter_map(|r| r.url_port).collect();
+        if !ports.is_empty() && host.smoke.is_none() {
+            let listening: HashMap<u16, bool> = tauri::async_runtime::spawn_blocking(move || {
+                ports.into_iter().map(|port| (port, worktree_ports::port_in_use(port))).collect()
+            })
+            .await
+            .unwrap_or_default();
+            for run in runs.iter_mut().filter(|r| r.status == "running") {
+                run.url_listening = run.url_port.and_then(|port| listening.get(&port).copied());
+            }
+        }
+        let port_block = place.block.map(|b| json!({ "base": b.base, "count": b.count, "label": b.label() }));
         Ok(json!({
             "workspaceId": resolved.workspace.id(),
             "paneId": resolved.pane_id,
@@ -1226,6 +1481,7 @@ pub fn register(methods: &mut Registry) {
             "config": cfg_value,
             "tasks": tasks,
             "runs": runs,
+            "portBlock": port_block,
         }))
     });
 
@@ -1279,12 +1535,14 @@ pub fn register(methods: &mut Registry) {
             return Err("Approve .mighty.yaml before running tasks defined in the repository.".into());
         }
 
+        let place = run_place(&host, &resolved, loaded_cfg.as_ref());
         if in_terminal {
             let run_cwd = resolve_task_cwd(&resolved.target_folder, task.cwd.as_deref())?;
             let mut env: Vec<(String, String)> = vec![];
             if let Some(cfg) = approved_cfg {
                 env.extend(cfg.config.worktree.env.iter().map(|(k, v)| (k.clone(), v.clone())));
             }
+            env.extend(place.variables.iter().cloned());
             if let Some(wt) = &resolved.pane_worktree {
                 env.extend(wt.environment(resolved.workspace.path()));
             }
@@ -1294,7 +1552,10 @@ pub fn register(methods: &mut Registry) {
             return Ok(json!({ "inTerminal": true }));
         }
 
-        let snapshot = start_managed_task(&host, &resolved, task, approved_cfg).await?;
+        if task.source == "run" {
+            make_room_for_action(&host, &task.name, task.concurrent.unwrap_or(true), &place).await?;
+        }
+        let snapshot = start_managed_task(&host, &resolved, task, approved_cfg, place).await?;
         Ok(json!({ "run": snapshot }))
     });
 
@@ -1390,6 +1651,78 @@ mod tests {
         );
         assert_eq!(TerminalShell::of(Path::new(r"C:\Windows\System32\cmd.exe"), true), TerminalShell::Cmd);
         assert_eq!(TerminalShell::of(Path::new("/bin/zsh"), false), TerminalShell::Posix);
+    }
+
+    #[test]
+    fn a_terminal_line_carries_the_worktree_variables_the_same_way_in_every_shell() {
+        let env = vec![
+            ("MIGHTY_PORT".to_string(), "41010".to_string()),
+            ("MIGHTY_PORT_COUNT".to_string(), "10".to_string()),
+            ("MIGHTY_WORKTREE_PATH".to_string(), r"C:\Users\me\.mightycode\worktrees\p1".to_string()),
+        ];
+        let command = "npm run dev -- --port $MIGHTY_PORT";
+        let posix = terminal_command_line(Path::new("/wt/p1"), &env, command, TerminalShell::Posix).unwrap();
+        assert_eq!(
+            posix,
+            r"cd '/wt/p1' && export MIGHTY_PORT='41010' && export MIGHTY_PORT_COUNT='10' && export MIGHTY_WORKTREE_PATH='C:\Users\me\.mightycode\worktrees\p1' && npm run dev -- --port $MIGHTY_PORT"
+        );
+        let cmd = terminal_command_line(Path::new(r"C:\wt\p1"), &env, "npm run dev -- --port %MIGHTY_PORT%", TerminalShell::Cmd).unwrap();
+        assert_eq!(
+            cmd,
+            r#"cd /d "C:\wt\p1" && set "MIGHTY_PORT=41010" && set "MIGHTY_PORT_COUNT=10" && set "MIGHTY_WORKTREE_PATH=C:\Users\me\.mightycode\worktrees\p1" && npm run dev -- --port %MIGHTY_PORT%"#
+        );
+        // PowerShell sets the same variables in its own syntax and hands the command to cmd.exe, as the managed run does.
+        let ps =
+            terminal_command_line(Path::new(r"C:\wt\p1"), &env, "npm run dev -- --port %MIGHTY_PORT%", TerminalShell::PowerShell).unwrap();
+        assert_eq!(
+            ps,
+            r"Set-Location -LiteralPath 'C:\wt\p1'; $env:MIGHTY_PORT = '41010'; $env:MIGHTY_PORT_COUNT = '10'; $env:MIGHTY_WORKTREE_PATH = 'C:\Users\me\.mightycode\worktrees\p1'; & cmd.exe /d /s /c 'npm run dev -- --port %MIGHTY_PORT%'"
+        );
+        // A teardown of several lines runs as one line in cmd, joined like `&&` would on POSIX (`sh -ec`).
+        assert_eq!(
+            shell_invocation("docker compose down\nrm -rf tmp").1.last().map(String::as_str),
+            Some(if cfg!(windows) { "docker compose down && rm -rf tmp" } else { "docker compose down\nrm -rf tmp" })
+        );
+    }
+
+    #[test]
+    fn run_actions_are_listed_first_and_need_trust() {
+        let dir = temp_dir("run-actions");
+        std::fs::write(
+            dir.join(".mighty.yaml"),
+            "version: 1\nrun:\n  dev: npm run dev\n  e2e:\n    command: npm run e2e\n    concurrent: false\n    url: off\ntasks:\n  lint: npm run lint\n",
+        )
+        .unwrap();
+        let (_, tasks) = scan_folder_tasks(&dir, &dir);
+        assert_eq!(tasks[0].id, "run:dev");
+        assert_eq!((tasks[0].source.as_str(), tasks[0].requires_trust, tasks[0].concurrent), ("run", true, Some(true)));
+        assert_eq!(tasks[0].url.as_deref(), Some("auto"));
+        assert_eq!((tasks[1].id.as_str(), tasks[1].concurrent, tasks[1].url.as_deref()), ("run:e2e", Some(false), Some("off")));
+        assert_eq!((tasks[2].id.as_str(), tasks[2].concurrent), ("mighty:lint", None));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_run_finds_its_address_once_and_flags_a_port_outside_its_block() {
+        let mut inner = ManagedRunInner::finished("run:dev", "dev", "npm run dev", "w", None);
+        inner.status = "running".into();
+        inner.url_mode = Some("auto".into());
+        inner.block = Some(PortBlock { base: 41_010, count: 10 });
+        inner.ring.push_text("\x1b[32m  ➜  Local:   http://localhost:5173/\x1b[0m\n");
+        inner.detect_url();
+        inner.ring.push_text("  ➜  Local:   http://localhost:41010/\n");
+        inner.detect_url();
+        assert_eq!(inner.url.as_deref(), Some("http://localhost:5173/"), "the first address stays");
+        let handle = ManagedRunHandle { run_id: "r".into(), stopped_by_user: AtomicBool::new(false), inner: Mutex::new(inner) };
+        let snapshot = handle.snapshot();
+        assert_eq!(snapshot.url_port, Some(5173));
+        assert!(snapshot.url_outside_block, "5173 lies outside 41010-41019");
+
+        let mut off = ManagedRunInner::finished("run:e2e", "e2e", "npm run e2e", "w", None);
+        off.url_mode = Some("off".into());
+        off.ring.push_text("http://localhost:41011\n");
+        off.detect_url();
+        assert_eq!(off.url, None, "url: off shows no address");
     }
 
     #[test]

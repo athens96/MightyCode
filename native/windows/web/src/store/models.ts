@@ -72,6 +72,10 @@ export interface PaneWorktree {
   workingFolder?: string | null;
   noteGiven?: boolean | null;
   linkedTask?: LinkedTask | null;
+  /** The first port of the worktree's port block (`MIGHTY_PORT`, MC-25). */
+  portBase?: number | null;
+  /** The ports in that block (`MIGHTY_PORT_COUNT`). */
+  portCount?: number | null;
 }
 
 /** RunSettingsJsonConverter: maxTurns and maxBudgetUsd are always written (null when unset); the Codex-only ones only when not default. */

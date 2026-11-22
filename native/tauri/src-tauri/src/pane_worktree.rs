@@ -95,6 +95,7 @@ pub fn start(host: &Arc<Host>) {
     let maker = Maker::new(&root, git.clone(), disk);
     let paths = DelegationPaths::new(crate::platform::file_ports().handles);
     lock(&STATE).places = Some(Places { git, root: maker.root().to_string(), paths, maker });
+    crate::worktree_lifecycle::start(host);
 }
 
 /// The page's calls for pane worktrees (C# `RegisterPaneWorktreeMethods`).
@@ -415,7 +416,13 @@ async fn open_in_worktree(
     let id = reuse.as_ref().map_or_else(wire::new_id, |r| r.id.clone());
     let reopened = reuse.is_some();
     let (record, title, approved_repo_cfg, repo_cfg_note) = match reuse {
-        Some(reuse) => (reuse.record, reuse.title, None, None),
+        Some(reuse) => {
+            let mut record = reuse.record;
+            if record.port_block().is_none() {
+                crate::worktree_lifecycle::assign_worktree(host, &mut record, crate::worktree_lifecycle::port_count(None));
+            }
+            (record, reuse.title, None, None)
+        }
         None => {
             let (approved_cfg, cfg_note) = resolve_worktree_repo_config(host, workspace, true).await;
             let (made, checkout, reason) = make(host, workspace, &id).await;
@@ -439,7 +446,9 @@ async fn open_in_worktree(
                 approved_cfg.as_ref().and_then(|c| c.config.worktree.setup.as_deref()),
                 workspace.worktree_setup_command.as_deref(),
             );
-            (core::from_made(&made, &checkout, port, effective_setup), None, approved_cfg, cfg_note)
+            let mut record = core::from_made(&made, &checkout, port, effective_setup);
+            crate::worktree_lifecycle::assign_worktree(host, &mut record, crate::worktree_lifecycle::port_count(approved_cfg.as_ref()));
+            (record, None, approved_cfg, cfg_note)
         }
     };
     // The make can take minutes: the pane goes into its own workspace whichever one is active by then, in the group only when it is.
@@ -460,9 +469,10 @@ async fn open_in_worktree(
         pane
     });
     if host.view().snapshot.session(&id).is_none() {
-        // The pane could not be added (the pane limit): a worktree made for it goes again; a kept one stays kept.
+        // The pane could not be added (the pane limit): a worktree made for it goes again (its ports with it); a kept one stays kept.
         if !reopened && let Some(places) = places() {
             core::discard(&places.git, &places.paths, &record, &id, &places.root, &locale).await;
+            crate::worktree_lifecycle::release_worktree(host, &record);
         }
         return added.map(|_| false);
     }
@@ -510,6 +520,7 @@ pub(crate) async fn open_task_in_worktree(
     );
     let mut record = core::from_made(&made, &checkout, port, effective_setup);
     record.linked_task = linked_task.clone();
+    crate::worktree_lifecycle::assign_worktree(host, &mut record, crate::worktree_lifecycle::port_count(approved_cfg.as_ref()));
 
     let port_text = record.port.to_string();
     let words = [("branch", record.branch()), ("base", record.base_branch()), ("port", port_text.as_str())];
@@ -532,6 +543,7 @@ pub(crate) async fn open_task_in_worktree(
     if host.view().snapshot.session(&session_id).is_none() {
         if let Some(places) = places() {
             core::discard(&places.git, &places.paths, &record, &session_id, &places.root, &locale).await;
+            crate::worktree_lifecycle::release_worktree(host, &record);
         }
         return added.map(|_| false);
     }
@@ -597,12 +609,9 @@ pub async fn worktree_without_asking(host: &Arc<Host>, workspace: &Workspace, id
                 approved_cfg.as_ref().and_then(|c| c.config.worktree.setup.as_deref()),
                 workspace.worktree_setup_command.as_deref(),
             );
-            PhoneWorktree {
-                record: Some(core::from_made(&made, &start.repository, port, effective_setup)),
-                fell_back: None,
-                approved_cfg,
-                cfg_note,
-            }
+            let mut record = core::from_made(&made, &start.repository, port, effective_setup);
+            crate::worktree_lifecycle::assign_worktree(host, &mut record, crate::worktree_lifecycle::port_count(approved_cfg.as_ref()));
+            PhoneWorktree { record: Some(record), fell_back: None, approved_cfg, cfg_note }
         }
         ChildWorktreeOutcome::Refused(reason) => fell_back(&text::reason(reason, &locale)),
         ChildWorktreeOutcome::Failed(message) => fell_back(&message),
@@ -676,6 +685,7 @@ pub async fn phone_create(host: Arc<Host>, workspace_id: String, created: RunSes
     if let Err(refused) = added {
         if let (Some(worktree), Some(places)) = (&worktree, places()) {
             core::discard(&places.git, &places.paths, worktree, &id, &places.root, &host.locale).await;
+            crate::worktree_lifecycle::release_worktree(&host, worktree);
         }
         return Err(refused);
     }
@@ -950,10 +960,11 @@ async fn status_model(host: &Arc<Host>, id: &str) -> Value {
         let state = lock(&STATE);
         (state.busy.contains(id), state.conflicts.contains(id))
     };
+    let actions = crate::repo_tasks::running_actions_in(host, &crate::worktree_lifecycle::path_key(pane.run_folder()));
     json!({
         "ahead": status.map_or(0, |s| s.ahead), "behind": status.map_or(0, |s| s.behind),
         "changed": status.map_or(0, |s| s.changed_files), "known": status.is_some(), "busy": busy, "conflict": conflict,
-        "canUndo": pane.merged_commit.is_some() && pane.pre_merge_commit.is_some(),
+        "canUndo": pane.merged_commit.is_some() && pane.pre_merge_commit.is_some(), "actions": actions,
     })
 }
 
@@ -1204,8 +1215,11 @@ async fn discard_pane_worktree(host: &Arc<Host>, session: &RunSession, pane: &Pa
         {
             let _ = runs.service.stop(&id).await;
         }
+        // Its run actions stop and its teardown runs first; a failed teardown does not keep the worktree (MC-25).
+        crate::worktree_lifecycle::before_remove(host, session.workspace_id(), &id, pane).await;
         match core::discard(&places.git, &places.paths, pane, &id, &places.root, &locale).await {
             ChildDiscardOutcome::Discarded => {
+                crate::worktree_lifecycle::release_worktree(host, pane);
                 // Gone already: the close must not keep it.
                 let _ = host.view().update(|state| {
                     if let Some(found) = state.sessions_mut().iter_mut().find(|p| p.id() == id) {
@@ -1255,10 +1269,12 @@ pub async fn closed(host: &Arc<Host>, closed: &RunSession) {
         && may_write(host, &[pane.checkout(), pane.worktree_path()])
         && !core::kept_on_close(&places.git, &pane, children).await
     {
-        if let ChildDiscardOutcome::Failed(message) =
-            core::discard(&places.git, &places.paths, &pane, closed.id(), &places.root, &locale).await
-        {
-            banner(host, locale.get_with("paneWorktree.error.discardFailed", &[("reason", &message)]));
+        crate::worktree_lifecycle::before_remove(host, closed.workspace_id(), closed.id(), &pane).await;
+        match core::discard(&places.git, &places.paths, &pane, closed.id(), &places.root, &locale).await {
+            ChildDiscardOutcome::Failed(message) => {
+                banner(host, locale.get_with("paneWorktree.error.discardFailed", &[("reason", &message)]));
+            }
+            ChildDiscardOutcome::Discarded => crate::worktree_lifecycle::release_worktree(host, &pane),
         }
         return;
     }
@@ -1539,11 +1555,13 @@ async fn row_action(host: &Arc<Host>, workspace: &Workspace, row: &Row, action: 
             if writes_refused(host, &row.worktree) {
                 return true;
             }
+            crate::worktree_lifecycle::before_remove(host, workspace.id(), &row.session_id, &row.worktree).await;
             match core::discard(&places.git, &places.paths, &row.worktree, &row.session_id, &places.root, &locale).await {
                 ChildDiscardOutcome::Failed(message) => {
                     banner(host, locale.get_with("paneWorktree.error.discardFailed", &[("reason", &message)]));
                 }
                 ChildDiscardOutcome::Discarded => {
+                    crate::worktree_lifecycle::release_worktree(host, &row.worktree);
                     let id = row.session_id.clone();
                     update_workspace(host, workspace.id(), |w| {
                         if let Some(kept) = w.kept_pane_worktrees.as_mut() {

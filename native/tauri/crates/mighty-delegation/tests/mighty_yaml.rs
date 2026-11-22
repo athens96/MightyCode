@@ -7,7 +7,8 @@ use mighty_core::locale::Locale;
 use mighty_delegation::git::cleanup::ChildDiscardOutcome;
 use mighty_delegation::git::worktree::{ChildWorktreeCheck, ChildWorktreeOutcome};
 use mighty_delegation::mighty_yaml::{
-    self, CopyRule, MAXIMUM_CONFIG_BYTES, RepoTaskSpec, load_from_folder, load_from_folder_with_local_fallback, parse_config,
+    self, CopyRule, DEFAULT_TEARDOWN_TIMEOUT_SECONDS, DEFAULT_WORKTREE_PORTS, MAXIMUM_CONFIG_BYTES, RepoTaskSpec, RunActionSpec, RunUrl,
+    load_from_folder, load_from_folder_with_local_fallback, parse_config,
 };
 use mighty_delegation::pane_worktree as pw;
 
@@ -318,4 +319,129 @@ fn a_quote_inside_a_plain_scalar_opens_no_string_and_a_block_script_keeps_its_li
     assert_eq!(cfg.tasks["guard"].command, "if [ -f a ]; then\necho yes\nfi\necho done");
     assert_eq!(cfg.tasks["chain"].command, "a && b");
     assert_eq!(mighty_yaml::flatten_script("a\nb"), "a && b");
+}
+
+#[test]
+fn parses_teardown_ports_and_named_run_actions() {
+    let yaml = r#"
+version: 1
+worktree:
+  setup: npm ci
+  teardown: |
+    docker compose down -v
+    rm -rf .cache/tmp
+  teardownTimeoutSeconds: 90
+  ports: 4
+run:
+  dev:
+    command: npm run dev -- --port $MIGHTY_PORT
+  e2e:
+    command: npm run test:e2e
+    concurrent: false
+    url: off
+  docs:
+    cmd: mkdocs serve
+    url: "http://localhost:8000/docs"
+  storybook: npm run storybook
+"#;
+    let cfg = parse_config(yaml).expect("valid run and teardown keys");
+    assert_eq!(cfg.worktree.teardown.as_deref(), Some("docker compose down -v\nrm -rf .cache/tmp"));
+    assert_eq!(cfg.worktree.teardown_timeout_seconds, Some(90));
+    assert_eq!(cfg.worktree.teardown_timeout(), std::time::Duration::from_secs(90));
+    assert_eq!(cfg.worktree.port_count(), 4);
+    assert!(cfg.has_worktree_actions());
+
+    let names: Vec<&str> = cfg.run.keys().map(String::as_str).collect();
+    assert_eq!(names, ["dev", "e2e", "docs", "storybook"], "run actions keep the file's order");
+    let dev = &cfg.run["dev"];
+    assert_eq!(
+        dev,
+        &RunActionSpec { command: "npm run dev -- --port $MIGHTY_PORT".into(), concurrent: true, url: "auto".into() },
+        "$MIGHTY_PORT stays for the shell to expand"
+    );
+    assert_eq!(dev.url_mode(), RunUrl::Auto);
+    assert!(!cfg.run["e2e"].concurrent);
+    assert_eq!(cfg.run["e2e"].url_mode(), RunUrl::Off);
+    assert_eq!(cfg.run["docs"].url_mode(), RunUrl::Fixed("http://localhost:8000/docs"));
+    assert_eq!(cfg.run["storybook"].command, "npm run storybook");
+
+    // Defaults: 60 seconds and 10 ports; `ports: 0` turns the assignment off; a file with only `teardown` has worktree actions.
+    let plain = parse_config("worktree:\n  teardown: make clean\n").unwrap();
+    assert_eq!(plain.worktree.teardown_timeout(), std::time::Duration::from_secs(DEFAULT_TEARDOWN_TIMEOUT_SECONDS.into()));
+    assert_eq!(plain.worktree.port_count(), DEFAULT_WORKTREE_PORTS);
+    assert!(plain.has_worktree_actions());
+    assert_eq!(parse_config("worktree:\n  ports: 0\n").unwrap().worktree.port_count(), 0);
+    assert!(!parse_config("worktree:\n  ports: 0\n").unwrap().has_worktree_actions(), "a port block size alone runs nothing");
+}
+
+#[test]
+fn rejects_invalid_teardown_ports_and_run_values() {
+    for invalid in [
+        "worktree:\n  ports: -1\n",
+        "worktree:\n  ports: 101\n",
+        "worktree:\n  ports: ten\n",
+        "worktree:\n  teardownTimeoutSeconds: 0\n",
+        "worktree:\n  teardownTimeoutSeconds: 3601\n",
+        "worktree:\n  teardown: [\"a\", {x: 1}]\n",
+        "worktree:\n  teardown: \"rm -rf \u{202E}x\"\n",
+        "worktree:\n  env:\n    MIGHTY_PORT: \"3000\"\n",
+        "worktree:\n  env:\n    mighty_root_path: /tmp\n",
+        "run: [dev]\n",
+        "run:\n  dev:\n",
+        "run:\n  dev:\n    concurrent: false\n",
+        "run:\n  dev:\n    command: npm run dev\n    concurrent: maybe\n",
+        "run:\n  dev:\n    command: npm run dev\n    url: ftp://localhost:21\n",
+        "run:\n  dev:\n    command: npm run dev\n    url: \"http://local host:3000\"\n",
+        "run:\n  dev:\n    command: npm run dev\n    url: \"http://localhost:3000/\u{200B}\"\n",
+        "run:\n  dev:\n    command: npm run dev\n    env: {A: b}\n",
+        "run:\n  \" dev\": npm run dev\n",
+    ] {
+        assert!(parse_config(invalid).is_err(), "expected error for:\n{invalid}");
+    }
+    let long = format!("run:\n  dev: \"{}\"\n", "x".repeat(mighty_yaml::MAXIMUM_COMMAND_CHARS + 1));
+    assert!(parse_config(&long).is_err(), "a run command keeps the command length limit");
+    let many: String = (0..=mighty_yaml::MAXIMUM_RUN_ACTIONS).map(|i| format!("  a{i}: echo {i}\n")).collect();
+    assert!(parse_config(&format!("run:\n{many}")).is_err(), "at most {} run actions", mighty_yaml::MAXIMUM_RUN_ACTIONS);
+}
+
+#[test]
+fn the_new_keys_change_the_content_hash_and_a_file_without_them_keeps_its_hash() {
+    let folder = support::place::temp("mighty-yaml-lifecycle-hash");
+    let hash_of = |text: &str| {
+        std::fs::write(folder.join(".mighty.yaml"), text).unwrap();
+        load_from_folder(&folder).unwrap().unwrap().content_hash
+    };
+    let base = "version: 1\nworktree:\n  setup: npm ci\n";
+    let before = hash_of(base);
+    // The normalized config without the new keys serializes as it did, so approvals made before stay valid.
+    let json = serde_json::to_string(&parse_config(base).unwrap()).unwrap();
+    assert!(!json.contains("teardown") && !json.contains("ports") && !json.contains("\"run\""), "{json}");
+
+    let mut seen = vec![before.clone()];
+    for changed in [
+        "version: 1\nworktree:\n  setup: npm ci\n  teardown: docker compose down\n",
+        "version: 1\nworktree:\n  setup: npm ci\n  teardown: docker compose down\n  teardownTimeoutSeconds: 30\n",
+        "version: 1\nworktree:\n  setup: npm ci\n  ports: 20\n",
+        "version: 1\nworktree:\n  setup: npm ci\nrun:\n  dev: npm run dev\n",
+        "version: 1\nworktree:\n  setup: npm ci\nrun:\n  dev:\n    command: npm run dev\n    concurrent: false\n",
+    ] {
+        let hash = hash_of(changed);
+        assert!(!seen.contains(&hash), "every change of the new keys asks for approval again:\n{changed}");
+        seen.push(hash);
+    }
+    assert_eq!(hash_of(base), before, "the same file gives the same hash");
+
+    // `.mighty.local.yaml` overrides teardown, its limit and the port count, and adds run actions by name.
+    std::fs::write(
+        folder.join(".mighty.yaml"),
+        "worktree:\n  teardown: make clean\n  ports: 10\nrun:\n  dev: npm run dev\n  e2e:\n    command: npm run e2e\n    concurrent: false\n",
+    )
+    .unwrap();
+    std::fs::write(folder.join(".mighty.local.yaml"), "worktree:\n  teardown: ~\n  ports: 3\nrun:\n  dev: pnpm dev\n").unwrap();
+    let merged = load_from_folder(&folder).unwrap().unwrap().config;
+    assert_eq!(merged.worktree.teardown, None, "a local `teardown: ~` turns the shared one off");
+    assert_eq!(merged.worktree.ports, Some(3));
+    assert_eq!(merged.run["dev"].command, "pnpm dev");
+    assert!(!merged.run["e2e"].concurrent);
+    support::place::remove_folder(&folder);
 }

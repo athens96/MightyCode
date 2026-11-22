@@ -424,3 +424,73 @@
   font-size: var(--type-small);
   text-align: center;
 }
+
+/* The `.mighty.yaml` run actions (MC-25): their own section over the project commands. */
+.task-runner-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding-bottom: var(--space-sm);
+  border-bottom: var(--stroke-line) solid var(--line);
+  max-height: 45%;
+  overflow-y: auto;
+}
+
+.task-runner-actions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+}
+
+.task-runner-port-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--space-xs);
+  border-radius: 999px;
+  background: var(--subtle);
+  color: var(--ink2);
+  font-size: var(--type-badge);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-runner-solo-pill {
+  background: var(--wait-soft);
+  color: var(--wait-text);
+}
+
+.task-runner-url-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.task-runner-url {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: var(--type-mono);
+  cursor: pointer;
+}
+
+.task-runner-url:hover {
+  text-decoration: underline;
+}
+
+.task-runner-url-note {
+  flex: none;
+  font-size: var(--type-badge);
+  color: var(--ink3);
+  white-space: nowrap;
+}
+
+.task-runner-url-note.outside {
+  color: var(--wait-text);
+}

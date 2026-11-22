@@ -23,6 +23,32 @@ pub const MAXIMUM_WORKTREE_RULES: usize = 64;
 /// Maximum tasks accepted in `tasks`.
 pub const MAXIMUM_TASKS: usize = 128;
 
+/// Maximum named actions accepted in `run`.
+pub const MAXIMUM_RUN_ACTIONS: usize = 32;
+
+/// `worktree.teardownTimeoutSeconds` when the file names none, and the most it may name.
+pub const DEFAULT_TEARDOWN_TIMEOUT_SECONDS: u32 = 60;
+pub const MAXIMUM_TEARDOWN_TIMEOUT_SECONDS: u32 = 3_600;
+
+/// `worktree.ports` (the size of each worktree's port block) when the file names none, and the most it may name; `0` turns the
+/// assignment off.
+pub const DEFAULT_WORKTREE_PORTS: u32 = 10;
+pub const MAXIMUM_WORKTREE_PORTS: u32 = 100;
+
+/// Maximum characters of a fixed `run.<name>.url`.
+pub const MAXIMUM_URL_CHARS: usize = 2_048;
+
+/// The variables the app sets for a worktree's scripts, tasks and agent: `worktree.env` may not set them.
+pub const RESERVED_ENV_NAMES: [&str; 7] = [
+    "MIGHTY_PORT",
+    "MIGHTY_PORT_COUNT",
+    "MIGHTY_WORKTREE_NAME",
+    "MIGHTY_ROOT_PATH",
+    "MIGHTY_WORKTREE_PATH",
+    "MIGHTY_WORKSPACE_FOLDER",
+    "MIGHTY_WORKTREE",
+];
+
 /// Maximum nesting depth accepted by the YAML subset parser.
 const MAXIMUM_YAML_DEPTH: usize = 16;
 
@@ -55,7 +81,9 @@ impl CopyRule {
     }
 }
 
-/// Worktree cache sharing, file copy, setup command, and environment rules from `.mighty.yaml`.
+/// Worktree cache sharing, file copy, setup/teardown commands, port block size, and environment rules from `.mighty.yaml`.
+/// The keys added later (`teardown`, `teardownTimeoutSeconds`, `ports`) serialize only when set, so a file without them keeps the
+/// `content_hash` it was approved with.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorktreeConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -66,6 +94,67 @@ pub struct WorktreeConfig {
     pub setup: Option<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub env: IndexMap<String, String>,
+    /// Run in the worktree folder before it is discarded or cleaned up after a merge (`MC-25`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teardown: Option<String>,
+    #[serde(default, rename = "teardownTimeoutSeconds", skip_serializing_if = "Option::is_none")]
+    pub teardown_timeout_seconds: Option<u32>,
+    /// Ports in each worktree's block (`MIGHTY_PORT` .. `MIGHTY_PORT + ports - 1`); `0` turns the assignment off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ports: Option<u32>,
+}
+
+impl WorktreeConfig {
+    /// How long `teardown` may run before it is stopped.
+    pub fn teardown_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.teardown_timeout_seconds.unwrap_or(DEFAULT_TEARDOWN_TIMEOUT_SECONDS)))
+    }
+
+    /// The size of each worktree's port block (`0`: none is assigned).
+    pub fn port_count(&self) -> u32 {
+        self.ports.unwrap_or(DEFAULT_WORKTREE_PORTS)
+    }
+}
+
+/// Where a run action's dev-server address comes from (`run.<name>.url`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunUrl<'a> {
+    /// The first `http://localhost:<port>`-style address in the action's output.
+    Auto,
+    /// No address is shown.
+    Off,
+    /// This address, as written.
+    Fixed(&'a str),
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_url() -> String {
+    "auto".into()
+}
+
+/// One named action under `run` in `.mighty.yaml` (`MC-25`): a long-running command (a dev server, an end-to-end suite) started
+/// and stopped from the task panel. `concurrent: false` stops the same action in the repository's other worktrees first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunActionSpec {
+    pub command: String,
+    #[serde(default = "default_true")]
+    pub concurrent: bool,
+    /// `auto`, `off` or a fixed `http(s)://` address.
+    #[serde(default = "default_url")]
+    pub url: String,
+}
+
+impl RunActionSpec {
+    pub fn url_mode(&self) -> RunUrl<'_> {
+        match self.url.as_str() {
+            "auto" => RunUrl::Auto,
+            "off" => RunUrl::Off,
+            fixed => RunUrl::Fixed(fixed),
+        }
+    }
 }
 
 /// One shared task/script entry under `tasks` (or `scripts`) in `.mighty.yaml`.
@@ -86,18 +175,25 @@ pub struct MightyRepoConfig {
     pub worktree: WorktreeConfig,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub tasks: IndexMap<String, RepoTaskSpec>,
+    /// Named run actions (`MC-25`).
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub run: IndexMap<String, RunActionSpec>,
 }
 
 impl Default for MightyRepoConfig {
     fn default() -> Self {
-        Self { version: 1, worktree: WorktreeConfig::default(), tasks: IndexMap::new() }
+        Self { version: 1, worktree: WorktreeConfig::default(), tasks: IndexMap::new(), run: IndexMap::new() }
     }
 }
 
 impl MightyRepoConfig {
-    /// Whether this configuration defines any worktree creation actions (`share`, `copy`, `setup`, or `env`).
+    /// Whether this configuration defines any worktree actions (`share`, `copy`, `setup`, `teardown`, or `env`).
     pub fn has_worktree_actions(&self) -> bool {
-        !self.worktree.share.is_empty() || !self.worktree.copy.is_empty() || self.worktree.setup.is_some() || !self.worktree.env.is_empty()
+        !self.worktree.share.is_empty()
+            || !self.worktree.copy.is_empty()
+            || self.worktree.setup.is_some()
+            || self.worktree.teardown.is_some()
+            || !self.worktree.env.is_empty()
     }
 }
 
@@ -115,7 +211,7 @@ impl LoadedRepoConfig {
         &self.content_hash[..self.content_hash.len().min(12)]
     }
 
-    /// Whether this configuration defines any worktree creation actions (`share`, `copy`, `setup`, or `env`).
+    /// Whether this configuration defines any worktree actions (`share`, `copy`, `setup`, `teardown`, or `env`).
     pub fn has_worktree_actions(&self) -> bool {
         self.config.has_worktree_actions()
     }
@@ -125,6 +221,7 @@ impl LoadedRepoConfig {
 struct ParsedLayer {
     config: MightyRepoConfig,
     setup_specified: bool,
+    teardown_specified: bool,
 }
 
 // ── YAML subset AST & parser ────────────────────────────────────────────────────────────────────────────────────────────
@@ -867,8 +964,10 @@ fn parse_layer(input: &str) -> Result<ParsedLayer, String> {
     let mut version = 1u32;
     let mut worktree = WorktreeConfig::default();
     let mut setup_specified = false;
+    let mut teardown_specified = false;
     let mut tasks = IndexMap::new();
     let mut saw_tasks = false;
+    let mut run = IndexMap::new();
 
     for (key, value) in map {
         match key.as_str() {
@@ -881,9 +980,10 @@ fn parse_layer(input: &str) -> Result<ParsedLayer, String> {
                 version = parsed;
             }
             "worktree" => {
-                let (wt, has_setup) = decode_worktree(&value)?;
+                let (wt, has_setup, has_teardown) = decode_worktree(&value)?;
                 worktree = wt;
                 setup_specified = has_setup;
+                teardown_specified = has_teardown;
             }
             "tasks" | "scripts" => {
                 if saw_tasks {
@@ -892,16 +992,19 @@ fn parse_layer(input: &str) -> Result<ParsedLayer, String> {
                 saw_tasks = true;
                 tasks = decode_tasks(&value)?;
             }
+            "run" => {
+                run = decode_run_actions(&value)?;
+            }
             other => return Err(format!("Unknown top-level key '{other}' in .mighty.yaml.")),
         }
     }
 
-    Ok(ParsedLayer { config: MightyRepoConfig { version, worktree, tasks }, setup_specified })
+    Ok(ParsedLayer { config: MightyRepoConfig { version, worktree, tasks, run }, setup_specified, teardown_specified })
 }
 
-fn decode_worktree(value: &YamlValue) -> Result<(WorktreeConfig, bool), String> {
+fn decode_worktree(value: &YamlValue) -> Result<(WorktreeConfig, bool, bool), String> {
     let map = match value {
-        YamlValue::Null => return Ok((WorktreeConfig::default(), false)),
+        YamlValue::Null => return Ok((WorktreeConfig::default(), false, false)),
         YamlValue::Map(map) => map,
         _ => return Err("'worktree' must be a mapping.".into()),
     };
@@ -912,6 +1015,10 @@ fn decode_worktree(value: &YamlValue) -> Result<(WorktreeConfig, bool), String> 
     let mut setup = None;
     let mut setup_specified = false;
     let mut env = IndexMap::new();
+    let mut teardown = None;
+    let mut teardown_specified = false;
+    let mut teardown_timeout_seconds = None;
+    let mut ports = None;
 
     for (key, item) in map {
         match key.as_str() {
@@ -935,11 +1042,121 @@ fn decode_worktree(value: &YamlValue) -> Result<(WorktreeConfig, bool), String> 
             "env" => {
                 env = decode_env_map(item)?;
             }
+            "teardown" => {
+                teardown_specified = true;
+                teardown = decode_command_value(item, "worktree.teardown", true)?;
+            }
+            "teardownTimeoutSeconds" => {
+                teardown_timeout_seconds =
+                    Some(decode_bounded_u32(item, "worktree.teardownTimeoutSeconds", 1, MAXIMUM_TEARDOWN_TIMEOUT_SECONDS)?);
+            }
+            "ports" => {
+                ports = Some(decode_bounded_u32(item, "worktree.ports", 0, MAXIMUM_WORKTREE_PORTS)?);
+            }
             other => return Err(format!("Unknown key 'worktree.{other}' in .mighty.yaml.")),
         }
     }
 
-    Ok((WorktreeConfig { share, copy, setup, env }, setup_specified))
+    Ok((WorktreeConfig { share, copy, setup, env, teardown, teardown_timeout_seconds, ports }, setup_specified, teardown_specified))
+}
+
+/// A whole number from `min` to `max` (`ports: 10`, `teardownTimeoutSeconds: "90"`).
+fn decode_bounded_u32(value: &YamlValue, field: &str, min: u32, max: u32) -> Result<u32, String> {
+    let raw = expect_scalar(value, field)?;
+    let trimmed = raw.trim();
+    let parsed: u32 = trimmed.parse().map_err(|_| format!("'{field}' must be a whole number from {min} to {max}."))?;
+    if parsed < min || parsed > max {
+        return Err(format!("'{field}' must be a whole number from {min} to {max}."));
+    }
+    Ok(parsed)
+}
+
+/// `true`/`false` (also `yes`/`no`, `on`/`off`).
+fn decode_bool(value: &YamlValue, field: &str) -> Result<bool, String> {
+    let raw = expect_scalar(value, field)?;
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" => Ok(true),
+        "false" | "no" | "off" => Ok(false),
+        _ => Err(format!("'{field}' must be true or false.")),
+    }
+}
+
+/// `auto` (also empty), `off` (also `false`, `none`), or a fixed `http://` / `https://` address without spaces or invisible
+/// characters.
+fn decode_run_url(value: &YamlValue, field: &str) -> Result<String, String> {
+    let raw = match value {
+        YamlValue::Null => return Ok("auto".into()),
+        _ => expect_scalar(value, field)?,
+    };
+    let trimmed = raw.trim();
+    match trimmed.to_ascii_lowercase().as_str() {
+        "" | "auto" => return Ok("auto".into()),
+        "off" | "false" | "none" | "no" => return Ok("off".into()),
+        _ => {}
+    }
+    if trimmed.chars().count() > MAXIMUM_URL_CHARS {
+        return Err(format!("'{field}' exceeds maximum length of {MAXIMUM_URL_CHARS} characters."));
+    }
+    if has_invisible_format_chars(trimmed) || trimmed.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err(format!("'{field}' must not contain spaces, control or invisible characters."));
+    }
+    let parsed = url::Url::parse(trimmed).map_err(|_| format!("'{field}' must be auto, off, or an http(s) address."))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none_or(str::is_empty) {
+        return Err(format!("'{field}' must be auto, off, or an http(s) address."));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn decode_run_actions(value: &YamlValue) -> Result<IndexMap<String, RunActionSpec>, String> {
+    let map = match value {
+        YamlValue::Null => return Ok(IndexMap::new()),
+        YamlValue::Map(map) => map,
+        _ => return Err("'run' must be a mapping of action names to commands.".into()),
+    };
+    if map.len() > MAXIMUM_RUN_ACTIONS {
+        return Err(format!("'run' exceeds maximum of {MAXIMUM_RUN_ACTIONS} actions."));
+    }
+    let mut actions = IndexMap::new();
+    for (name, spec_val) in map {
+        if !is_valid_task_name(name) {
+            return Err(format!("Invalid run action name '{name}'."));
+        }
+        let field = format!("run.{name}");
+        let spec = match spec_val {
+            YamlValue::Scalar(_) | YamlValue::Seq(_) => {
+                let command = decode_command_value(spec_val, &field, false)?.ok_or_else(|| format!("'{field}' cannot be empty."))?;
+                RunActionSpec { command, concurrent: true, url: default_url() }
+            }
+            YamlValue::Map(spec_map) => {
+                let mut command = None;
+                let mut concurrent = true;
+                let mut url = default_url();
+                for (k, v) in spec_map {
+                    match k.as_str() {
+                        "command" | "cmd" => {
+                            if command.is_some() {
+                                return Err(format!("Duplicate command key in '{field}'."));
+                            }
+                            command = Some(
+                                decode_command_value(v, &format!("{field}.{k}"), false)?
+                                    .ok_or_else(|| format!("'{field}.{k}' cannot be empty."))?,
+                            );
+                        }
+                        "concurrent" => concurrent = decode_bool(v, &format!("{field}.concurrent"))?,
+                        "url" => url = decode_run_url(v, &format!("{field}.url"))?,
+                        other => return Err(format!("Unknown key '{other}' in '{field}'.")),
+                    }
+                }
+                let Some(command) = command else {
+                    return Err(format!("Run action '{name}' must define 'command'."));
+                };
+                RunActionSpec { command, concurrent, url }
+            }
+            YamlValue::Null => return Err(format!("Run action '{name}' cannot be empty.")),
+        };
+        actions.insert(name.clone(), spec);
+    }
+    Ok(actions)
 }
 
 fn normalize_single_rel_path(raw: &str, field: &str) -> Result<String, String> {
@@ -1213,6 +1430,9 @@ fn decode_env_map(value: &YamlValue) -> Result<IndexMap<String, String>, String>
                 "Environment variable '{key}' in 'worktree.env' is not allowed: it changes which programs a command runs."
             ));
         }
+        if RESERVED_ENV_NAMES.contains(&key.to_ascii_uppercase().as_str()) {
+            return Err(format!("Environment variable '{key}' in 'worktree.env' is set by the app for each worktree."));
+        }
         let val = match item {
             YamlValue::Null => String::new(),
             YamlValue::Scalar(s) => {
@@ -1318,10 +1538,15 @@ fn expect_scalar(value: &YamlValue, field: &str) -> Result<String, String> {
 
 /// Merges a `.mighty.local.yaml` config over a base `.mighty.yaml` config.
 pub fn merge_configs(base: &MightyRepoConfig, local: &MightyRepoConfig) -> MightyRepoConfig {
-    merge_layers(base, local, local.worktree.setup.is_some())
+    merge_layers(base, local, local.worktree.setup.is_some(), local.worktree.teardown.is_some())
 }
 
-fn merge_layers(base: &MightyRepoConfig, local: &MightyRepoConfig, local_setup_specified: bool) -> MightyRepoConfig {
+fn merge_layers(
+    base: &MightyRepoConfig,
+    local: &MightyRepoConfig,
+    local_setup_specified: bool,
+    local_teardown_specified: bool,
+) -> MightyRepoConfig {
     let mut share = base.worktree.share.clone();
     for entry in &local.worktree.share {
         if !share.contains(entry) && share.len() < MAXIMUM_WORKTREE_RULES {
@@ -1348,7 +1573,23 @@ fn merge_layers(base: &MightyRepoConfig, local: &MightyRepoConfig, local_setup_s
         tasks.insert(k.clone(), v.clone());
     }
 
-    MightyRepoConfig { version: local.version.max(base.version), worktree: WorktreeConfig { share, copy, setup, env }, tasks }
+    let teardown = if local_teardown_specified { local.worktree.teardown.clone() } else { base.worktree.teardown.clone() };
+    let teardown_timeout_seconds = local.worktree.teardown_timeout_seconds.or(base.worktree.teardown_timeout_seconds);
+    let ports = local.worktree.ports.or(base.worktree.ports);
+
+    let mut run = base.run.clone();
+    for (k, v) in &local.run {
+        if run.contains_key(k) || run.len() < MAXIMUM_RUN_ACTIONS {
+            run.insert(k.clone(), v.clone());
+        }
+    }
+
+    MightyRepoConfig {
+        version: local.version.max(base.version),
+        worktree: WorktreeConfig { share, copy, setup, env, teardown, teardown_timeout_seconds, ports },
+        tasks,
+        run,
+    }
 }
 
 #[cfg(windows)]
@@ -1446,7 +1687,7 @@ pub fn load_from_folder_with_local_fallback(target_folder: &Path, workspace_fold
             raw_files.push((name, bytes));
             parsed
         }
-        None => ParsedLayer { config: MightyRepoConfig::default(), setup_specified: false },
+        None => ParsedLayer { config: MightyRepoConfig::default(), setup_specified: false, teardown_specified: false },
     };
 
     let merged = match local_raw {
@@ -1454,7 +1695,7 @@ pub fn load_from_folder_with_local_fallback(target_folder: &Path, workspace_fold
             let text = std::str::from_utf8(&bytes).map_err(|_| format!("{name} is not valid UTF-8."))?;
             let local_layer = parse_layer(text).map_err(|err| format!("{name}: {err}"))?;
             raw_files.push((name, bytes));
-            merge_layers(&base_layer.config, &local_layer.config, local_layer.setup_specified)
+            merge_layers(&base_layer.config, &local_layer.config, local_layer.setup_specified, local_layer.teardown_specified)
         }
         None => base_layer.config,
     };

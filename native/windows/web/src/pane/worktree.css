@@ -16,6 +16,8 @@
 .worktree-bar .link { background: none; border: 0; padding: 0; color: inherit; cursor: pointer; font: inherit; }
 .worktree-bar .link:hover { color: var(--ink); text-decoration: underline; }
 .worktree-bar-setup { white-space: nowrap; }
+.worktree-bar .worktree-bar-action { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; color: var(--done-text); }
+.worktree-bar .worktree-bar-action > svg { flex: none; }
 .worktree-bar .spacer { flex: 1; }
 .worktree-bar .btn.small { padding: 2px 8px; font-size: 11px; }
 .sidebar-worktree-mark { color: var(--accent); display: inline-flex; flex: none; }

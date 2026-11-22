@@ -58,9 +58,34 @@ section: delegation
 - **栏**:窗格上方显示分支和基础分支、基础分支没有的提交数(↑)、之后基础分支前进的提交数(↓)、未提交的更改文件数(±,点击查看)和 PORT(点击打开 localhost)。有未提交的更改时按钮变为 {{ui:paneWorktree.bar.commitMerge}},会连同新文件一起提交后合并。看起来像密钥的新文件或超过 5 MB 的新文件不会提交,并会提示。
 - **冲突**:合并因冲突被拒绝时会出现 {{ui:paneWorktree.bar.resolve}} 按钮,点击后请代理合入基础分支、解决冲突并提交。
 - **栏的菜单**:{{ui:paneWorktree.bar.changes}}(相对基础分支更改的文件及差异)、{{ui:paneWorktree.bar.terminal}}、{{ui:paneWorktree.bar.finder}} (Windows: {{ui:menu.showInExplorer}})、撤销最近一次合并(仅当工作区文件夹此后没有变化时)、{{ui:paneWorktree.bar.pr}}(确认后将分支推送到 origin,从不强制;如果是 GitHub 则打开创建拉取请求的页面)、{{ui:paneWorktree.bar.discard}}(有子窗格基于此窗格的分支时会拒绝)。
-- **准备**:工作区行菜单中 {{ui:paneWorktree.menu.copy}} 列出的文件(如 `.env`)会复制到新 worktree,然后运行一次 {{ui:paneWorktree.menu.setup}}。窗格的运行会获得 `PORT`、`MIGHTY_WORKSPACE_FOLDER` 和 `MIGHTY_WORKTREE` 环境变量。
+- **准备**:工作区行菜单中 {{ui:paneWorktree.menu.copy}} 列出的文件(如 `.env`)会复制到新 worktree,然后运行一次 {{ui:paneWorktree.menu.setup}}。窗格的运行会获得 `PORT`、`MIGHTY_WORKSPACE_FOLDER` 和 `MIGHTY_WORKTREE` 环境变量，以及[端口范围](#mighty-yaml)的变量。
 - **关闭与列表**:没有未合并工作的窗格关闭时会一并删除其 worktree。仍有工作的会保留,可在工作区行菜单的 {{ui:paneWorktree.menu.list}} 中重新作为窗格打开、合并或删除。
 - **审阅队列**：工作结束且留下更改的 worktree 窗格和子窗格会汇集到[{{ui:review.open}}](layout.md#review)。栏菜单中的{{ui:editor.openFolder}}会在外部编辑器中打开窗格工作的文件夹。
+
+## 端口、运行操作和清理命令 {#mighty-yaml}
+仓库顶层的 `.mighty.yaml` 可以为每个 worktree 指定端口、运行操作，以及删除 worktree 时运行的清理命令。只有在 {{ui:projectTasks.title}} 面板中按下 {{ui:projectTasks.approve}} 之后，其中的命令才会运行；文件改变后需要重新批准。远程工作区不使用它。
+
+```yaml
+version: 1
+worktree:
+  setup: npm ci
+  teardown: docker compose down -v
+  teardownTimeoutSeconds: 60
+  ports: 10
+run:
+  dev:
+    command: npm run dev -- --port $MIGHTY_PORT
+  e2e:
+    command: npm run test:e2e
+    concurrent: false
+    url: off
+```
+
+- **端口范围**:每个 worktree(包括主检出)会从 41000 起分配 `ports` 个(默认 10 个)不与其他 worktree 重叠的端口，并跳过其他程序已在监听的端口。分配记录在应用数据文件夹的 `ports.json` 中，删除 worktree 时归还；应用关闭期间消失的 worktree 的端口会在下次启动时归还。`ports: 0` 表示不分配。工具栏会显示 `:41010–41019` 这样的范围。
+- **环境变量**:准备命令、清理命令、运行操作、任务以及 worktree 窗格中的代理会获得 `MIGHTY_PORT`(第一个端口)、`MIGHTY_PORT_COUNT`、`MIGHTY_WORKTREE_NAME`、`MIGHTY_ROOT_PATH`(主检出)和 `MIGHTY_WORKTREE_PATH`。命令中的 `$MIGHTY_PORT` 由 shell 展开(Windows 的 cmd 中为 `%MIGHTY_PORT%`)。`worktree.env` 不能设置这些名称。
+- **运行操作(`run`)**:{{ui:projectTasks.title}} 面板的 {{ui:projectTasks.runActions}} 部分会显示每个操作的状态以及 {{ui:projectTasks.start}}、{{ui:projectTasks.stop}} 按钮。在输出中找到 `http://localhost:<端口>` 这样的地址时会显示为链接(`url: auto`，默认)，端口不在该 worktree 范围内时会标出 {{ui:projectTasks.urlOutside}}。`url` 写成地址时显示该地址，写成 `off` 时不显示。`concurrent: false` 的操作带有 {{ui:projectTasks.notConcurrent}} 标记，启动时会先停止同一仓库其他 worktree 中运行的同一操作。运行中的操作也会显示在工具栏上。
+- **清理命令(`teardown`)**:放弃 worktree，或关闭已合并的窗格而删除 worktree 时，会先停止该 worktree 的运行操作，然后在 worktree 文件夹中运行清理命令。超过 `teardownTimeoutSeconds`(默认 60 秒)仍未结束则停止。即使清理失败或被停止，worktree 也会删除，结果保留在窗格记录和 {{ui:projectTasks.title}} 面板中。
+- **个人设置**:在 `.mighty.local.yaml` 中写相同的键时以它为准；运行操作按名称覆盖。
 
 ## 让 Claude 分工 {#delegate}
 Claude 或 Codex 窗格（父窗格）也可以把工作拆开，交给其他窗格（子窗格）；除非它指定别的代理，子窗格运行它自己的代理。子窗格报告后，父窗格收到通知，阅读报告，再决定是否合并结果。Claude 和 Codex 父窗格在 Mac 应用和 Windows 应用中都可使用。

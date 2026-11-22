@@ -1,6 +1,14 @@
 // The bar over an agent pane that works in its own worktree (the Mac's PaneWorktreeBar, docs/devtool-features.md §12): what it
 // says and which actions it offers, from the pane's record and the status the host reads with git (paneWorktreeStatus).
 import type { PaneWorktree } from '../store/models';
+import { portBlockLabel } from '../tasks/taskRunnerModel';
+
+/** A run action running in the worktree (MC-25). */
+export interface WorktreeAction {
+  name: string;
+  url?: string | null;
+  runId?: string;
+}
 
 export interface WorktreeStatus {
   ahead: number;
@@ -10,6 +18,7 @@ export interface WorktreeStatus {
   busy: boolean;
   conflict: boolean;
   canUndo: boolean;
+  actions?: WorktreeAction[];
 }
 
 export interface BarAction {
@@ -25,6 +34,10 @@ export interface WorktreeBarModel {
   behind?: { text: string; help: string };
   changed?: { text: string; help: string };
   port: { text: string; help: string };
+  /** The worktree's port block (`:41010–41019`), when one is assigned. */
+  portBlock?: { text: string; help: string };
+  /** Run actions running in it, each with its address when one was found. */
+  actions: { name: string; url: string | null; help: string }[];
   setup?: { tone: 'run' | 'done' | 'err'; text: string };
   primary: BarAction;
   resolve?: BarAction;
@@ -52,7 +65,15 @@ export function worktreeBar(pane: PaneWorktree, status: WorktreeStatus | null, t
       { action: 'editor', label: t('editor.openFolder') },
       { action: 'port', label: t('paneWorktree.bar.openPort', { port: pane.port }) },
     ],
+    actions: (status?.actions ?? []).map((action) => {
+      const url = action.url && /^https?:\/\//i.test(action.url) ? action.url : null;
+      return { name: action.name, url, help: url ? t('paneWorktree.bar.actionAt', { name: action.name, url }) : t('paneWorktree.bar.actionRunning', { name: action.name }) };
+    }),
   };
+  const block = portBlockLabel(pane.portBase ?? 0, pane.portCount ?? 0);
+  if (block) {
+    model.portBlock = { text: block, help: t('paneWorktree.bar.portBlockHelp', { range: block, port: pane.portBase ?? 0, count: pane.portCount ?? 0 }) };
+  }
   if (status?.known) {
     model.ahead = { text: '↑' + status.ahead, help: t('paneWorktree.bar.ahead', { count: status.ahead, base }) };
     if (status.behind > 0) model.behind = { text: '↓' + status.behind, help: t('paneWorktree.bar.behind', { count: status.behind, base }) };

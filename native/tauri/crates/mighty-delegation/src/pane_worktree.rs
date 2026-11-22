@@ -51,6 +51,8 @@ pub fn from_made(made: &ChildWorktree, checkout: &str, port: i32, setup_command:
         working_folder: Some(made.working_folder.clone()),
         note_given: None,
         linked_task: None,
+        port_base: None,
+        port_count: None,
     }
 }
 

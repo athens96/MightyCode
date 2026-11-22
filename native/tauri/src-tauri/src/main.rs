@@ -124,6 +124,7 @@ mod voice;
 mod workmap;
 mod workspace_create;
 mod workspace_mcp;
+mod worktree_lifecycle;
 
 use std::path::Path;
 use std::sync::Arc;

@@ -7,7 +7,7 @@ import type { Store } from '../store/store';
 export const TASK_POLL_INTERVAL_MS = 1200;
 export const FAILURE_TAIL_LINES = 80;
 
-export type TaskSource = 'mighty' | 'package.json' | 'Cargo.toml' | 'Makefile' | 'justfile' | string;
+export type TaskSource = 'mighty' | 'run' | 'package.json' | 'Cargo.toml' | 'Makefile' | 'justfile' | string;
 export type TaskRunStatus = 'running' | 'succeeded' | 'failed' | 'stopped';
 
 export interface RepoConfigStatus {
@@ -20,6 +20,10 @@ export interface RepoConfigStatus {
   sharePaths?: string[];
   copyRules?: string[];
   setupCommand: string | null;
+  /** `worktree.teardown` (`MC-25`): run before a worktree is discarded. */
+  teardownCommand?: string | null;
+  /** `worktree.ports`: the size of each worktree's port block (0: none). */
+  ports?: number;
   envKeys?: string[];
   /** `KEY=value` for each variable `worktree.env` sets: what is approved is shown whole. */
   envLines?: string[];
@@ -35,6 +39,10 @@ export interface RepoTaskItem {
   cwd?: string | null;
   source: TaskSource;
   requiresTrust?: boolean;
+  /** A run action's `concurrent` (`MC-25`): false stops the same action in the repository's other worktrees first. */
+  concurrent?: boolean;
+  /** A run action's `url`: `auto`, `off` or a fixed address. */
+  url?: string;
 }
 
 export interface RepoTaskRun {
@@ -50,6 +58,21 @@ export interface RepoTaskRun {
   output: string;
   startedAt: string;
   endedAt?: string | null;
+  /** A run action's dev-server address (`MC-25`). */
+  url?: string | null;
+  urlPort?: number | null;
+  /** The address's port lies outside the worktree's port block. */
+  urlOutsideBlock?: boolean;
+  /** Whether something listens on that port now. */
+  urlListening?: boolean | null;
+  concurrent?: boolean | null;
+}
+
+/** A worktree's (or the main checkout's) port block. */
+export interface PortBlock {
+  base: number;
+  count: number;
+  label?: string;
 }
 
 export interface RepoTasksListResponse {
@@ -59,6 +82,32 @@ export interface RepoTasksListResponse {
   config: RepoConfigStatus | null;
   tasks: RepoTaskItem[];
   runs: RepoTaskRun[];
+  portBlock?: PortBlock | null;
+}
+
+/** Whether `task` is a `.mighty.yaml` run action (`run:` section). */
+export function isRunAction(task: RepoTaskItem): boolean {
+  return task.source === 'run';
+}
+
+/** Splits the listed tasks into run actions (the "run" section) and the other project commands. */
+export function splitRunActions(tasks: readonly RepoTaskItem[]): { actions: RepoTaskItem[]; commands: RepoTaskItem[] } {
+  const actions: RepoTaskItem[] = [];
+  const commands: RepoTaskItem[] = [];
+  for (const task of tasks) (isRunAction(task) ? actions : commands).push(task);
+  return { actions, commands };
+}
+
+/** `:41010–41019` for a block of ten from 41010 (`:41010` for a block of one). */
+export function portBlockLabel(base: number, count: number): string {
+  if (!(base > 0) || !(count > 0)) return '';
+  return count === 1 ? `:${base}` : `:${base}\u2013${base + count - 1}`;
+}
+
+/** The address a run action shows as a link: only a running run's, and only `http(s)` (never a script address). */
+export function runLink(run: RepoTaskRun | undefined | null): string | null {
+  if (!run || run.status !== 'running' || !run.url) return null;
+  return /^https?:\/\//i.test(run.url) ? run.url : null;
 }
 
 /** Whether polling should stay active (`1.2s` interval ONLY while at least one run is currently `'running'`). */

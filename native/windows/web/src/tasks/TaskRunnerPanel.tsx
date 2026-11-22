@@ -1,4 +1,4 @@
-// Task Runner & `.mighty.yaml` trust/worktree inspector panel (`MC-8`).
+// Task Runner & `.mighty.yaml` trust/worktree inspector panel (`MC-8`), with the `run:` actions of `MC-25` in their own section.
 // Lists `.mighty.yaml`, `package.json`, `Cargo.toml`, `Makefile`, and `justfile` tasks, manages `.mighty.yaml` content-hash
 // trust, streams managed background runs (polling at 1.2s only while running), and sends failures to the active agent pane.
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -15,8 +15,12 @@ import {
   hasRunningTasks,
   isTaskBlockedByTrust,
   latestRunByTaskId,
+  portBlockLabel,
+  runLink,
   sourceBadgeLabel,
+  splitRunActions,
   tailLines,
+  type PortBlock,
   type RepoConfigStatus,
   type RepoTaskItem,
   type RepoTaskRun,
@@ -87,6 +91,7 @@ export function TaskRunnerPanel({
   const [tasks, setTasks] = useState<RepoTaskItem[]>([]);
   const [runs, setRuns] = useState<RepoTaskRun[]>([]);
   const [folder, setFolder] = useState<string | null>(null);
+  const [portBlock, setPortBlock] = useState<PortBlock | null>(null);
   const [loading, setLoading] = useState(false);
   const [acting, setActing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,6 +107,7 @@ export function TaskRunnerPanel({
     setTasks(nextTasks);
     setRuns(nextRuns);
     setFolder(res.folder ?? null);
+    setPortBlock(res.portBlock ?? null);
     setSelectedTaskId((current) => {
       if (current && nextTasks.some((item) => item.id === current)) return current;
       const runningOrFailed = nextRuns.find((r) => r.status === 'running' || r.status === 'failed');
@@ -166,7 +172,9 @@ export function TaskRunnerPanel({
   }, [open, anyRunning, bridge, workspaceId, paneId, applyResponse]);
 
   const latestByTask = useMemo(() => latestRunByTaskId(runs), [runs]);
-  const visibleTasks = useMemo(() => filterTasks(tasks, query), [tasks, query]);
+  const { actions: runActions, commands } = useMemo(() => splitRunActions(tasks), [tasks]);
+  const visibleTasks = useMemo(() => filterTasks(commands, query), [commands, query]);
+  const blockLabel = portBlock ? portBlockLabel(portBlock.base, portBlock.count) : '';
 
   const activeRun: RepoTaskRun | null = useMemo(() => {
     if (selectedRunId) {
@@ -294,6 +302,12 @@ export function TaskRunnerPanel({
     }
     if (config.setupCommand) {
       worktreeRuleChips.push(`setup: ${config.setupCommand}`);
+    }
+    if (config.teardownCommand) {
+      worktreeRuleChips.push(`teardown: ${config.teardownCommand}`);
+    }
+    if (typeof config.ports === 'number' && config.ports !== 10) {
+      worktreeRuleChips.push(`ports: ${config.ports}`);
     }
     const envLines = config.envLines ?? config.envKeys ?? [];
     if (envLines.length > 0) {
@@ -427,9 +441,120 @@ export function TaskRunnerPanel({
 
       <div className="task-runner-columns">
         <aside className="task-runner-sidebar">
+          {runActions.length > 0 && (
+            <section className="task-runner-actions" data-testid="task-runner-actions" aria-label={t('projectTasks.runActions')}>
+              <div className="task-runner-actions-head">
+                <span className="task-runner-section-label">{t('projectTasks.runActions')}</span>
+                {blockLabel && portBlock && (
+                  <span
+                    className="task-runner-port-pill mono"
+                    data-testid="task-runner-port-block"
+                    title={t('projectTasks.portBlockHelp', { port: portBlock.base, count: portBlock.count })}
+                  >
+                    {t('projectTasks.portBlock', { range: blockLabel })}
+                  </span>
+                )}
+              </div>
+              {runActions.map((task) => {
+                const run = latestByTask.get(task.id);
+                const isRunning = run?.status === 'running';
+                const blockedByTrust = isTaskBlockedByTrust(task, config);
+                const link = runLink(run);
+                const isSelected = selectedTaskId === task.id && selectedRunId === null;
+                return (
+                  <div
+                    key={task.id}
+                    className={'task-runner-row task-runner-action-row' + (isSelected ? ' selected' : '')}
+                    data-testid={'run-action-' + task.name}
+                    onClick={() => {
+                      setSelectedTaskId(task.id);
+                      setSelectedRunId(null);
+                    }}
+                  >
+                    <div className="task-runner-row-top">
+                      <span className="task-runner-row-name mono">{task.name}</span>
+                      {task.concurrent === false && (
+                        <span
+                          className="task-runner-source-pill task-runner-solo-pill"
+                          data-testid={'run-action-solo-' + task.name}
+                          title={t('projectTasks.notConcurrentHelp')}
+                        >
+                          {t('projectTasks.notConcurrent')}
+                        </span>
+                      )}
+                    </div>
+                    <div className="task-runner-row-cmd mono" title={task.command}>
+                      {task.command}
+                    </div>
+                    {link && (
+                      <div className="task-runner-url-line" onClick={(event) => event.stopPropagation()}>
+                        <button
+                          type="button"
+                          className="task-runner-url mono"
+                          data-testid={'run-action-url-' + task.name}
+                          title={link}
+                          onClick={() => {
+                            void bridge.call('openUrl', { url: link }).catch(() => {});
+                          }}
+                        >
+                          {link}
+                        </button>
+                        {run?.urlOutsideBlock && (
+                          <span
+                            className="task-runner-url-note outside"
+                            title={t('projectTasks.urlOutsideHelp', { range: blockLabel })}
+                          >
+                            {t('projectTasks.urlOutside')}
+                          </span>
+                        )}
+                        {run?.urlListening === false && (
+                          <span className="task-runner-url-note" title={t('projectTasks.urlNotListeningHelp')}>
+                            {t('projectTasks.urlNotListening')}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    <div className="task-runner-row-foot" onClick={(event) => event.stopPropagation()}>
+                      {run ? <RunStatusBadge run={run} t={t} /> : <span />}
+                      <div className="task-runner-row-btns">
+                        {isRunning && run ? (
+                          <button
+                            type="button"
+                            className="btn small danger"
+                            data-testid={'run-action-stop-' + task.name}
+                            disabled={acting}
+                            onClick={() => {
+                              void handleStopRun(run.runId);
+                            }}
+                          >
+                            <Icon name="circle-stop" size={12} weight={2} />
+                            <span>{t('projectTasks.stop')}</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn small primary"
+                            data-testid={'run-action-start-' + task.name}
+                            disabled={acting || blockedByTrust}
+                            title={blockedByTrust ? t('projectTasks.trustPending') : t('projectTasks.start')}
+                            onClick={() => {
+                              void handleRunTask(task, false);
+                            }}
+                          >
+                            <Icon name="play" size={11} weight={2.2} />
+                            <span>{t('projectTasks.start')}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </section>
+          )}
           <div className="task-runner-sidebar-head">
             <span className="task-runner-section-label">{t('projectTasks.tasks')}</span>
-            {tasks.length > 4 && (
+            {commands.length > 4 && (
               <div className="task-runner-search">
                 <Icon name="search" size={12} weight={2} />
                 <input
@@ -445,7 +570,7 @@ export function TaskRunnerPanel({
           </div>
 
           <div className="task-runner-list" role="listbox" aria-label={t('projectTasks.tasks')}>
-            {loading && tasks.length === 0 ? (
+            {loading && commands.length === 0 ? (
               <DialogLoading rows={3} />
             ) : visibleTasks.length === 0 ? (
               <div className="task-runner-empty" data-testid="task-runner-empty">

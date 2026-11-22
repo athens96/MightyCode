@@ -32,3 +32,21 @@ describe('the worktree bar', () => {
     expect(newSideLines('')).toEqual([null]);
   });
 });
+
+describe('the worktree bar port block and run actions (MC-25)', () => {
+  it('shows the block when one is assigned and each running action with its address', () => {
+    const none = worktreeBar(pane, null, t);
+    expect(none.portBlock).toBeUndefined();
+    expect(none.actions).toEqual([]);
+    const status = {
+      ahead: 0, behind: 0, changed: 0, known: true, busy: false, conflict: false, canUndo: false,
+      actions: [{ name: 'dev', url: 'http://localhost:41010/' }, { name: 'e2e', url: null }, { name: 'bad', url: 'javascript:alert(1)' }],
+    };
+    const model = worktreeBar({ ...pane, portBase: 41010, portCount: 10 }, status, t);
+    expect(model.portBlock?.text).toBe(':41010–41019');
+    expect(model.portBlock?.help).toContain('paneWorktree.bar.portBlockHelp');
+    expect(model.actions.map((a) => [a.name, a.url])).toEqual([['dev', 'http://localhost:41010/'], ['e2e', null], ['bad', null]]);
+    expect(model.actions[0]?.help).toContain('paneWorktree.bar.actionAt');
+    expect(model.actions[1]?.help).toContain('paneWorktree.bar.actionRunning');
+  });
+});

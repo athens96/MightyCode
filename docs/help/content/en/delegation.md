@@ -58,9 +58,34 @@ So that several agent panes of one workspace can work at once, a workspace's age
 - **The bar**: over the pane: its branch and base, commits the base lacks (↑), commits the base moved ahead by since (↓), changed files not committed (±, click to review them), and its PORT (click to open localhost). While changes are left the button reads {{ui:paneWorktree.bar.commitMerge}}: it commits them, new files too, then merges. New files that look like secrets or are over 5 MB are not committed, and the pane says which.
 - **Conflicts**: when a merge is refused for a conflict, an {{ui:paneWorktree.bar.resolve}} button appears. It asks the agent to bring the base branch in, resolve the conflict and commit.
 - **The bar's menu**: {{ui:paneWorktree.bar.changes}} (files changed against the base, with their diff), {{ui:paneWorktree.bar.terminal}}, {{ui:paneWorktree.bar.finder}} (Windows: {{ui:menu.showInExplorer}}), undo the last merge (only while the workspace folder has not changed since), {{ui:paneWorktree.bar.pr}} (after asking, pushes the branch to origin, never forced, and on GitHub opens the page to create the pull request), and {{ui:paneWorktree.bar.discard}} (refused while child panes branch from this pane's branch).
-- **Preparing**: the files listed in the workspace row's {{ui:paneWorktree.menu.copy}} (such as `.env`) are copied into a new worktree, then {{ui:paneWorktree.menu.setup}} runs once. The pane's runs get the `PORT`, `MIGHTY_WORKSPACE_FOLDER` and `MIGHTY_WORKTREE` environment variables.
+- **Preparing**: the files listed in the workspace row's {{ui:paneWorktree.menu.copy}} (such as `.env`) are copied into a new worktree, then {{ui:paneWorktree.menu.setup}} runs once. The pane's runs get the `PORT`, `MIGHTY_WORKSPACE_FOLDER` and `MIGHTY_WORKTREE` environment variables and those of its [port range](#mighty-yaml).
 - **Closing and the list**: a pane closed with nothing unmerged takes its worktree with it. One with work left keeps it, and {{ui:paneWorktree.menu.list}} in the workspace row's menu opens it as a pane again, merges it or deletes it.
 - **Review queue**: worktree panes and child panes that finished with changes gather in the [{{ui:review.open}}](layout.md#review). {{ui:editor.openFolder}} in the bar's menu opens the folder the pane works in in your external editor.
+
+## Ports, run actions and teardown {#mighty-yaml}
+A `.mighty.yaml` at the top of the repository can give each worktree its ports, run actions, and a teardown command that runs when the worktree is removed. Its commands run only after you press {{ui:projectTasks.approve}} in the {{ui:projectTasks.title}} panel, and again only after you approve a changed file. Remote workspaces do not use it.
+
+```yaml
+version: 1
+worktree:
+  setup: npm ci
+  teardown: docker compose down -v
+  teardownTimeoutSeconds: 60
+  ports: 10
+run:
+  dev:
+    command: npm run dev -- --port $MIGHTY_PORT
+  e2e:
+    command: npm run test:e2e
+    concurrent: false
+    url: off
+```
+
+- **Port range**: each worktree (and the main checkout) gets `ports` ports (10 by default) from 41000 that no other one holds. Ports another program already listens on are skipped. The assignment is kept in `ports.json` in the app's data folder and given back when the worktree is removed; the ports of worktrees removed while the app was closed are given back at the next start. `ports: 0` assigns none. The bar shows the range, such as `:41010–41019`.
+- **Environment variables**: the setup and teardown commands, run actions, tasks and the agent of a worktree pane get `MIGHTY_PORT` (the first port), `MIGHTY_PORT_COUNT`, `MIGHTY_WORKTREE_NAME`, `MIGHTY_ROOT_PATH` (the main checkout) and `MIGHTY_WORKTREE_PATH`. The shell expands `$MIGHTY_PORT` in a command (`%MIGHTY_PORT%` in cmd on Windows). `worktree.env` cannot set these names.
+- **Run actions (`run`)**: the {{ui:projectTasks.runActions}} section of the {{ui:projectTasks.title}} panel shows each action's state with {{ui:projectTasks.start}} and {{ui:projectTasks.stop}}. An address such as `http://localhost:<port>` found in its output shows as a link (`url: auto`, the default), marked {{ui:projectTasks.urlOutside}} when its port is not in the worktree's range. A `url` address is shown as written; `off` shows none. An action with `concurrent: false` is marked {{ui:projectTasks.notConcurrent}}, and starting it first stops the same action in the repository's other worktrees. Running actions also show on the bar.
+- **Teardown (`teardown`)**: when a worktree is discarded, or removed as its merged pane closes, its run actions stop first and the teardown command runs in the worktree folder. It is stopped after `teardownTimeoutSeconds` (60 by default). The worktree is removed even when the teardown fails or is stopped; the result stays in the pane's transcript and in the {{ui:projectTasks.title}} panel.
+- **Personal settings**: the same keys in `.mighty.local.yaml` take precedence; run actions are replaced by name.
 
 ## Let Claude hand work over {#delegate}
 A Claude or Codex pane (the parent) can also split its work and hand parts of it to other panes (its children), of its own agent unless it names another. When a child reports, the parent gets a notice, reads the report and decides whether to merge the result. Claude and Codex parents work in the Mac app and the Windows app.
