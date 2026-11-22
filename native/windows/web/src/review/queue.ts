@@ -29,6 +29,8 @@ export interface ReviewItem {
   files: number;
   added: number;
   removed: number;
+  /** A request's files 검토됨 (바뀐 부분별 받기·버리기: every hunk taken or put back); it leaves the queue once all are. */
+  reviewed?: number;
   ahead?: number;
   behind?: number;
   uncommitted?: number;

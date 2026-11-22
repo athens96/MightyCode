@@ -109,8 +109,8 @@ pub struct RequestSeed {
     pub request: String,
     pub agent: String,
     pub workspace: String,
-    /// Files, lines the request added, lines it removed.
-    pub counts: (usize, usize, usize),
+    /// Files, lines the request added, lines it removed, and the files 검토됨 (바뀐 부분별 받기·버리기: every hunk taken or put back).
+    pub counts: crate::files::RequestCounts,
 }
 
 /// Whether a worktree is listed and as what: never while its agent works or with nothing to review; a conflict before anything; work
@@ -136,7 +136,7 @@ fn worktree_key(seed: &WorktreeSeed, shown: Shown) -> String {
 }
 
 /// The queue's model: `{items, count}`, conflicts first, then the ready ones, then the merged ones (each group in the order given);
-/// `count` is what is not merged. Dismissed items are left out.
+/// `count` is what is not merged. Dismissed items are left out, and so is a request whose every file is 검토됨.
 pub fn model(worktrees: &[WorktreeSeed], requests: &[RequestSeed], dismissed: &HashSet<String>) -> Value {
     let mut items: Vec<(Shown, Value)> = vec![];
     for seed in worktrees {
@@ -164,13 +164,17 @@ pub fn model(worktrees: &[WorktreeSeed], requests: &[RequestSeed], dismissed: &H
         if dismissed.contains(&key) {
             continue;
         }
-        let (files, added, removed) = seed.counts;
+        let crate::files::RequestCounts { files, added, removed, reviewed } = seed.counts;
+        if reviewed >= files {
+            continue;
+        }
         items.push((
             Shown::Ready,
             json!({
                 "key": key, "kind": "request", "id": seed.pane_id, "paneId": seed.pane_id, "runId": seed.run_id, "title": seed.title,
                 "request": seed.request, "agent": seed.agent, "workspace": seed.workspace, "status": "ready", "busy": false,
-                "files": files, "added": added, "removed": removed, "canMerge": false, "canCommitMerge": false, "canPr": false,
+                "files": files, "added": added, "removed": removed, "reviewed": reviewed, "canMerge": false, "canCommitMerge": false,
+                "canPr": false,
             }),
         ));
     }
@@ -239,7 +243,7 @@ fn seeds(host: &Host) -> Seeds {
             request: String::new(),
             agent,
             workspace: workspace.name().to_string(),
-            counts: (0, 0, 0),
+            counts: crate::files::RequestCounts::default(),
         };
         requests.push((seed, root, candidates));
     }
@@ -447,7 +451,7 @@ mod tests {
             request: "fix the bug".into(),
             agent: "Codex".into(),
             workspace: "app".into(),
-            counts: (2, 10, 4),
+            counts: crate::files::RequestCounts { files: 2, added: 10, removed: 4, reviewed: 1 },
         }];
         let built = model(&worktrees, &requests, &HashSet::new());
         let items = built["items"].as_array().unwrap();
@@ -477,5 +481,25 @@ mod tests {
         let mut more = worktrees.clone();
         more[1] = worktree(Kind::Worktree, "r", Some((2, 5)));
         assert_eq!(model(&more, &requests, &dismissed)["count"], 2);
+    }
+
+    /// 바뀐 부분별 받기·버리기: a request counts until every file it changed is 검토됨; the item says how many are.
+    #[test]
+    fn a_request_whose_files_are_all_reviewed_leaves_the_queue() {
+        let request = |reviewed| RequestSeed {
+            pane_id: "p".into(),
+            run_id: "run-1".into(),
+            title: "pane p".into(),
+            request: "fix".into(),
+            agent: "Claude".into(),
+            workspace: "app".into(),
+            counts: crate::files::RequestCounts { files: 3, added: 5, removed: 1, reviewed },
+        };
+        let partly = model(&[], &[request(2)], &HashSet::new());
+        assert_eq!(partly["count"], 1);
+        assert_eq!(partly["items"][0]["reviewed"], 2);
+        let done = model(&[], &[request(3)], &HashSet::new());
+        assert_eq!(done["count"], 0);
+        assert!(done["items"].as_array().unwrap().is_empty());
     }
 }

@@ -554,6 +554,25 @@ impl FileOriginalStore {
         manifest.files.iter().filter(|f| !manifest.refuses(&f.path)).map(|f| f.path.clone()).collect()
     }
 
+    /// 바뀐 부분별 받기·버리기: the book of the hunks taken and put back in the run's files, kept in the run's folder (`review.json`), so
+    /// it goes when the run's originals go; None when the run is unknown or was recorded under another root than `root`.
+    pub fn review_book(&self, session_id: &str, run_id: &str, root: &str) -> Option<crate::hunks::ReviewBook> {
+        let run_id = source_run(run_id);
+        let real_root = workspace_files::real_path(Path::new(root))?;
+        if !wire::identifier(session_id) || !wire::identifier(run_id) {
+            return None;
+        }
+        let folder = self.run_folder(session_id, run_id);
+        let manifest = {
+            let _guard = lock(&self.inner);
+            Manifest::read(&folder)?
+        };
+        (manifest.session_id == session_id
+            && manifest.run_id == run_id
+            && manifest.root.as_deref().is_some_and(|kept| same_path(kept, &real_root.to_string_lossy())))
+        .then(|| crate::hunks::ReviewBook::at(folder.join("review.json")))
+    }
+
     /// C# `Runs`: the run ids the store holds for a session, newest first.
     pub fn runs(&self, session_id: &str) -> Vec<String> {
         if !wire::identifier(session_id) {
@@ -701,7 +720,7 @@ fn delete(folder: &Path) {
 }
 
 /// C# `WriteAtomically`: to a new private temporary file beside it (`create_new`, 0600 on Unix, `sync_all`), then moved over.
-fn write_atomically(path: &Path, data: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomically(path: &Path, data: &[u8]) -> std::io::Result<()> {
     let temporary = PathBuf::from(format!("{}.{}.tmp", path.display(), uuid::Uuid::new_v4().simple()));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -821,24 +840,55 @@ async fn run_git(
     Some((exit.ok()?, output, over, String::from_utf8_lossy(&error).into_owned()))
 }
 
+/// Whether `root` and `relative` are what [`git_head`] and [`git_blob`] read: a full folder path that exists, and a '/' separated
+/// path inside it with no empty, `.` or `..` part.
+fn readable_place(root: &str, relative: &str) -> bool {
+    normalize::fully_qualified(root)
+        && Path::new(root).is_dir()
+        && !relative.is_empty()
+        && !relative.contains('\0')
+        && !relative.contains('\\')
+        && !relative.split('/').any(|c| matches!(c, "" | "." | ".."))
+}
+
+/// git on the PATH.
+fn git_binary() -> Option<PathBuf> {
+    let name = if ignores_case() { "git.exe" } else { "git" };
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).map(|p| PathBuf::from(p.to_string_lossy().trim_matches('"')).join(name)).find(|p| p.is_file())
+}
+
+/// A commit's copy of `relative` (바뀐 부분별 받기·버리기 in a worktree: the commit it shares with its base), read as [`git_head`]
+/// reads HEAD's: `untracked` when the commit has no such file. None when `commit` is no full object name, git is missing or fails for
+/// any other reason, or the copy is over `maximum_bytes`.
+pub async fn git_blob(processes: &dyn ProcessHost, root: &str, commit: &str, relative: &str, maximum_bytes: usize) -> Option<HeadContent> {
+    let full = (40..=64).contains(&commit.len()) && commit.bytes().all(|b| b.is_ascii_hexdigit());
+    if !full || !readable_place(root, relative) {
+        return None;
+    }
+    let binary = git_binary()?;
+    let short = commit[..7].to_ascii_lowercase();
+    let spec = format!("{commit}:./{relative}");
+    let (exit, data, over, error) = run_git(processes, &binary, root, &["cat-file", "blob", &spec], maximum_bytes).await?;
+    if over {
+        return None;
+    }
+    if exit == 0 {
+        return Some(HeadContent { data, short_sha: Some(short), untracked: false });
+    }
+    let missing = error.contains("does not exist in '") || error.contains("exists on disk, but not in '");
+    missing.then_some(HeadContent { data: vec![], short_sha: Some(short), untracked: true })
+}
+
 /// C# `GitHeadFile.ReadAsync`: HEAD's copy of `relative` (relative to the real `root`, '/' separated), read as `WorkspaceGitInfo`
 /// reads status (no hooks, no fsmonitor, no optional locks, no GIT_* from the app's environment, output bounded, 2 s per command;
 /// only `rev-parse` and `cat-file blob HEAD:./path`, which applies no filters). None when the folder is in no repository, git is
 /// missing or fails for any reason but the path not being in HEAD, or the copy is over `maximum_bytes`.
 pub async fn git_head(processes: &dyn ProcessHost, root: &str, relative: &str, maximum_bytes: usize) -> Option<HeadContent> {
-    if !normalize::fully_qualified(root)
-        || !Path::new(root).is_dir()
-        || relative.is_empty()
-        || relative.contains('\0')
-        || relative.contains('\\')
-        || relative.split('/').any(|c| matches!(c, "" | "." | ".."))
-    {
+    if !readable_place(root, relative) {
         return None;
     }
-    let name = if ignores_case() { "git.exe" } else { "git" };
-    let path = std::env::var_os("PATH")?;
-    let binary =
-        std::env::split_paths(&path).map(|p| PathBuf::from(p.to_string_lossy().trim_matches('"')).join(name)).find(|p| p.is_file())?;
+    let binary = git_binary()?;
     let (exit, inside, _, _) = run_git(processes, &binary, root, &["rev-parse", "--is-inside-work-tree"], 64).await?;
     if exit != 0 || String::from_utf8_lossy(&inside).trim() != "true" {
         return None;

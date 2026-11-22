@@ -581,7 +581,7 @@ pub async fn status(git: &Git, pane: &PaneWorktree) -> Option<Status> {
 }
 
 /// `MergeBase`: the commit the pane shares with its base.
-async fn merge_base(git: &Git, pane: &PaneWorktree) -> Option<String> {
+pub async fn merge_base(git: &Git, pane: &PaneWorktree) -> Option<String> {
     let base = format!("refs/heads/{}", pane.base_branch());
     let found = run(git, &["merge-base", &base, "HEAD"], pane.worktree_path(), STEP_TIMEOUT).await.filter(|r| r.exit_code == 0)?;
     let commit = line(&found.stdout);

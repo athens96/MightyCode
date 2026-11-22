@@ -134,3 +134,156 @@ fn the_kept_files_leave_out_refused_paths_and_other_folders() {
     assert!(store.files("pane", "run1", &elsewhere.to_string_lossy()).is_empty());
     assert!(revert::plan(&store, "pane", "run1", &elsewhere.to_string_lossy()).is_empty());
 }
+
+// ---- 바뀐 부분별 받기·버리기 (MC-30) ----------------------------------------------------------------------------------------------
+
+fn numbered(count: usize, ending: &str) -> String {
+    (1..=count).map(|n| format!("line {n}{ending}")).collect()
+}
+
+/// The fingerprints of the file's hunks as the review reads them now.
+fn prints(store: &FileOriginalStore, run: &str, root: &str, path: &str) -> Vec<String> {
+    let review = revert::hunk_review(store, "pane", run, root, path).expect("a kept file");
+    review["hunks"].as_array().unwrap().iter().map(|h| h["fingerprint"].as_str().unwrap().to_string()).collect()
+}
+
+fn refusals(store: &FileOriginalStore, run: &str, root: &str, path: &str) -> Vec<Option<String>> {
+    let review = revert::hunk_review(store, "pane", run, root, path).unwrap();
+    review["hunks"].as_array().unwrap().iter().map(|h| h["refusal"].as_str().map(str::to_string)).collect()
+}
+
+fn discard(store: &FileOriginalStore, run: &str, root: &str, path: &str, fingerprint: &str) -> Outcome {
+    revert::discard_hunk(store, "pane", run, root, path, fingerprint, None, &remove)
+}
+
+#[test]
+fn one_hunk_of_three_goes_back_and_the_file_stays_crlf_with_its_mark() {
+    let (_base, root, store) = setup("hunk-one");
+    let original = numbered(40, "\r\n");
+    let now = original.replace("line 5\r\n", "FIVE\r\n").replace("line 20\r\n", "line 20\r\nadded\r\n").replace("line 35\r\n", "");
+    write(Path::new(&root), "a.cs", &[b"\xEF\xBB\xBF".as_slice(), now.as_bytes()].concat());
+    assert!(capture(&store, "run1", &root, "a.cs", Some(&original)));
+    let names = prints(&store, "run1", &root, "a.cs");
+    assert_eq!(names.len(), 3);
+    assert_eq!(discard(&store, "run1", &root, "a.cs", &names[1]), Outcome::Reverted);
+    let expected = original.replace("line 5\r\n", "FIVE\r\n").replace("line 35\r\n", "");
+    assert_eq!(read(&root, "a.cs").unwrap(), [b"\xEF\xBB\xBF".as_slice(), expected.as_bytes()].concat());
+    assert_eq!(prints(&store, "run1", &root, "a.cs"), [names[0].clone(), names[2].clone()], "the others keep their names");
+    // The same hunk again: it is no longer there.
+    assert_eq!(discard(&store, "run1", &root, "a.cs", &names[1]), Outcome::Refused(Refusal::Conflict));
+}
+
+#[test]
+fn a_cp949_file_without_a_last_line_break_stays_so() {
+    let (_base, root, store) = setup("hunk-cp949");
+    let original = format!("{}한글 끝", numbered(30, "\n"));
+    let now = original.replace("line 2\n", "둘째 줄\n").replace("한글 끝", "한글 끝 바뀜");
+    let (bytes, _, unmappable) = encoding_rs::EUC_KR.encode(&now);
+    assert!(!unmappable);
+    write(Path::new(&root), "k.txt", &bytes);
+    assert!(capture(&store, "run1", &root, "k.txt", Some(&original)));
+    let names = prints(&store, "run1", &root, "k.txt");
+    assert_eq!(names.len(), 2);
+    assert_eq!(discard(&store, "run1", &root, "k.txt", &names[1]), Outcome::Reverted);
+    let expected = original.replace("line 2\n", "둘째 줄\n");
+    assert_eq!(read(&root, "k.txt").unwrap(), encoding_rs::EUC_KR.encode(&expected).0.into_owned());
+}
+
+#[test]
+fn a_hunk_changed_after_the_review_read_it_is_refused() {
+    let (_base, root, store) = setup("hunk-conflict");
+    let original = numbered(20, "\n");
+    write(Path::new(&root), "a.txt", original.replace("line 10\n", "TEN\n").as_bytes());
+    assert!(capture(&store, "run1", &root, "a.txt", Some(&original)));
+    let review = revert::hunk_review(&store, "pane", "run1", &root, "a.txt").unwrap();
+    let shown = mighty_files::diff::Hunk::from_json(&review["changes"]["hunks"][0]).unwrap();
+    let name = review["hunks"][0]["fingerprint"].as_str().unwrap().to_string();
+    // The person edits the hunk's line after the review was read.
+    let edited = original.replace("line 10\n", "TEN!\n");
+    write(Path::new(&root), "a.txt", edited.as_bytes());
+    assert_eq!(
+        revert::discard_hunk(&store, "pane", "run1", &root, "a.txt", &name, Some(&shown), &remove),
+        Outcome::Refused(Refusal::Conflict)
+    );
+    assert_eq!(read(&root, "a.txt").unwrap(), edited.as_bytes(), "nothing written");
+    // Lines added above it only move it: the hunk as shown is still found and put back.
+    let moved = format!("new top\n{}", original.replace("line 10\n", "TEN\n"));
+    write(Path::new(&root), "a.txt", moved.as_bytes());
+    assert_eq!(revert::discard_hunk(&store, "pane", "run1", &root, "a.txt", "not-a-name", Some(&shown), &remove), Outcome::Reverted);
+    assert_eq!(read(&root, "a.txt").unwrap(), format!("new top\n{original}").as_bytes());
+}
+
+#[test]
+fn a_later_run_blocks_only_the_hunks_whose_lines_it_changed() {
+    let (_base, root, store) = setup("hunk-later");
+    let original = numbered(40, "\n");
+    let after_one = original.replace("line 5\n", "FIVE\n").replace("line 30\n", "THIRTY\n");
+    write(Path::new(&root), "a.txt", after_one.as_bytes());
+    assert!(capture(&store, "run1", &root, "a.txt", Some(&original)));
+    assert!(capture(&store, "run2", &root, "a.txt", Some(&after_one)));
+    write(Path::new(&root), "a.txt", after_one.replace("line 31\n", "thirty-one\n").as_bytes());
+    assert_eq!(refusals(&store, "run1", &root, "a.txt"), [None, Some("laterRun".to_string())]);
+    let names = prints(&store, "run1", &root, "a.txt");
+    assert_eq!(discard(&store, "run1", &root, "a.txt", &names[1]), Outcome::Refused(Refusal::LaterRun));
+    assert_eq!(discard(&store, "run1", &root, "a.txt", &names[0]), Outcome::Reverted);
+    assert_eq!(read(&root, "a.txt").unwrap(), original.replace("line 30\n", "THIRTY\n").replace("line 31\n", "thirty-one\n").as_bytes());
+    // The next run kept no original of the file: what it changed is unknown, so the whole file is blocked.
+    let c = original.replace("line 5\n", "FIVE\n").replace("line 30\n", "THIRTY\n");
+    write(Path::new(&root), "c.txt", c.as_bytes());
+    assert!(capture(&store, "run1", &root, "c.txt", Some(&original)));
+    store.capture("pane", "run2", &root, &Path::new(&root).join("c.txt").to_string_lossy(), &FileEdit::unknown());
+    assert_eq!(refusals(&store, "run1", &root, "c.txt"), [Some("laterRun".to_string()), Some("laterRun".to_string())]);
+}
+
+#[test]
+fn every_hunk_put_back_restores_the_original_and_a_new_file_goes_to_the_trash() {
+    let (_base, root, store) = setup("hunk-all");
+    let original = numbered(40, "\r\n");
+    let now = original.replace("line 3\r\n", "x\n").replace("line 33\r\n", "y\n");
+    write(Path::new(&root), "a.txt", now.as_bytes());
+    assert!(capture(&store, "run1", &root, "a.txt", Some(&original)));
+    for name in prints(&store, "run1", &root, "a.txt") {
+        assert_eq!(discard(&store, "run1", &root, "a.txt", &name), Outcome::Reverted);
+    }
+    assert_eq!(read(&root, "a.txt").unwrap(), original.as_bytes(), "byte for byte, as reverting the file");
+    let item = &revert::plan(&store, "pane", "run1", &root)[0];
+    assert_eq!((item.progress.handled, item.progress.total, item.reviewed()), (2, 2, true));
+
+    write(Path::new(&root), "new.txt", b"one\ntwo\n");
+    assert!(capture(&store, "run1", &root, "new.txt", None));
+    let trashed = std::sync::Mutex::new(0);
+    let names = prints(&store, "run1", &root, "new.txt");
+    assert_eq!(names.len(), 1);
+    let outcome = revert::discard_hunk(&store, "pane", "run1", &root, "new.txt", &names[0], None, &|path| {
+        *trashed.lock().unwrap() += 1;
+        remove(path)
+    });
+    assert_eq!(outcome, Outcome::Reverted);
+    assert_eq!(*trashed.lock().unwrap(), 1);
+    assert!(read(&root, "new.txt").is_none());
+}
+
+#[test]
+fn taken_hunks_are_kept_across_a_restart_and_make_the_file_reviewed() {
+    let (base, root, store) = setup("hunk-accept");
+    let original = numbered(40, "\n");
+    write(Path::new(&root), "a.txt", original.replace("line 5\n", "FIVE\n").replace("line 30\n", "THIRTY\n").as_bytes());
+    write(Path::new(&root), "b.txt", b"b now\n");
+    assert!(capture(&store, "run1", &root, "a.txt", Some(&original)));
+    assert!(capture(&store, "run1", &root, "b.txt", Some("b then\n")));
+    let names = prints(&store, "run1", &root, "a.txt");
+    assert!(revert::accept_hunks(&store, "pane", "run1", &root, &["a.txt".to_string()], Some(&names[..1])));
+    let progress = |store: &FileOriginalStore| -> Vec<(usize, usize, bool)> {
+        revert::plan(store, "pane", "run1", &root).iter().map(|i| (i.progress.handled, i.progress.total, i.reviewed())).collect()
+    };
+    assert_eq!(progress(&store), [(1, 2, false), (0, 1, false)]);
+    // The app starts again: a new store over the same folder reads the same decisions.
+    let again = FileOriginalStore::new(base.path().join("originals"), changes::MAXIMUM_BYTES, common::handles());
+    let review = revert::hunk_review(&again, "pane", "run1", &root, "a.txt").unwrap();
+    assert_eq!(review["hunks"][0]["decision"], "accepted");
+    assert!(review["hunks"][1].get("decision").is_none());
+    assert_eq!((review["handled"].as_u64(), review["total"].as_u64()), (Some(1), Some(2)));
+    // 남은 부분 모두 받기: every file's remaining hunks.
+    assert!(revert::accept_hunks(&again, "pane", "run1", &root, &["a.txt".to_string(), "b.txt".to_string()], None));
+    assert_eq!(progress(&again), [(2, 2, true), (1, 1, true)]);
+}

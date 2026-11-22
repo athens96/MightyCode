@@ -66,6 +66,15 @@
 .files-diff-body { flex: 1; min-height: 0; overflow: auto; font-size: 12px; --diffs-font-size: 12px; --diffs-line-height: 18px; --diffs-font-family: var(--font-mono); --diffs-tab-size: 4; --diffs-bg-context-override: var(--card); }
 .files-diff-body.notable { cursor: pointer; }
 .files-diff-note-mark { margin: 2px 0 2px 6ch; padding: 1px var(--space-sm); display: inline-block; border-radius: var(--radius-file-row); background: var(--card-raised); color: var(--ink2); font-size: var(--type-small); }
+/* 바뀐 부분별 받기·버리기 (DiffView HunkList): each hunk under its own head; a hunk taken is dimmed and folded, the current one outlined. */
+.files-diff-hunk { border-bottom: var(--stroke-line) solid var(--line); }
+.files-diff-hunk.current { box-shadow: inset 2px 0 0 var(--accent); }
+.files-diff-hunk-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: var(--space-sm); padding: var(--space-xs) var(--space-md); background: var(--card-raised); color: var(--ink2); font-size: var(--type-small); cursor: pointer; }
+.files-diff-hunk-place { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); }
+.files-diff-hunk-state { color: var(--done-text); }
+.files-diff-hunk-refusal { color: var(--ink3); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-diff-hunk.handled .files-diff-hunk-head { opacity: 0.6; }
+.files-diff-hunk.handled > :not(.files-diff-hunk-head) { opacity: 0.6; }
 .files-html { flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; }
 .files-markdown { flex: 1; min-height: 0; overflow: auto; padding: var(--space-lg); }
 .files-markdown > * { max-width: 860px; }

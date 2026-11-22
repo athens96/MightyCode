@@ -3,8 +3,8 @@
 import type { MightyGraphRun } from '../store/models';
 import type { DiffRow } from '../panes/files/diff';
 
-/** Why a file cannot be put back now (mighty-files revert.rs `Refusal`). */
-export type RunChangesRefusal = 'laterRun' | 'missing' | 'unreadable' | 'unchanged';
+/** Why a file (or one hunk of it, `conflict`) cannot be put back now (mighty-files revert.rs `Refusal`). */
+export type RunChangesRefusal = 'laterRun' | 'missing' | 'unreadable' | 'unchanged' | 'conflict';
 
 /** One file the request changed, as reverting it would go (`runChanges`'s items). */
 export interface RunChangesItem {
@@ -15,6 +15,11 @@ export interface RunChangesItem {
   restored: number;
   removed: number;
   refusal?: RunChangesRefusal;
+  /** 바뀐 부분별 받기·버리기: the file's hunks (now and put back) and how many were taken or put back. */
+  hunks?: number;
+  handled?: number;
+  /** 검토됨: every hunk taken or put back, or nothing left to review. */
+  reviewed?: boolean;
 }
 
 export interface RunChangesPlan { root: string; items: RunChangesItem[] }
@@ -34,6 +39,16 @@ export function settledRunsKey(runs: readonly Pick<MightyGraphRun, 'id' | 'statu
 
 export function revertible(items: readonly RunChangesItem[]): RunChangesItem[] {
   return items.filter((item) => item.refusal === undefined);
+}
+
+/** 남은 부분 모두 받기: the files with hunks not taken or put back yet. */
+export function unreviewedPaths(items: readonly RunChangesItem[]): string[] {
+  return items.filter((item) => !item.reviewed && (item.hunks ?? 0) > (item.handled ?? 0)).map((item) => item.path);
+}
+
+/** The request's progress: files 검토됨 of all. */
+export function reviewedCount(items: readonly RunChangesItem[]): number {
+  return items.filter((item) => item.reviewed).length;
 }
 
 /** A remark the person left on one line of a request's diff, sent back to the agent as a follow-up request. */

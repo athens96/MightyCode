@@ -45,3 +45,9 @@
 .sidebar-pane .pane-signal { font-size: var(--type-small); }
 .sidebar-pane .pane-port { color: var(--sidebar-ink2); }
 .sidebar-attention-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+/* 바뀐 부분별 받기·버리기 in the changes sheet: the picked file's hunks (DiffView), each file's progress beside its name. */
+.worktree-hunks { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.worktree-changes li button { display: flex; align-items: center; gap: var(--space-xs); }
+.worktree-changes-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.worktree-changes-progress { flex: none; font-family: var(--font-mono); color: var(--ink3); font-variant-numeric: tabular-nums; }
+.worktree-changes li button.reviewed .worktree-changes-progress { color: var(--done-text); }

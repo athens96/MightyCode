@@ -17,6 +17,11 @@
 .run-changes-counts { flex: none; font-family: var(--font-mono); font-size: var(--type-pill); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .run-changes-counts .added { color: var(--done-text); }
 .run-changes-counts .removed { color: var(--err-text); }
+/* 바뀐 부분별 받기·버리기: a file's hunks handled of all (n/m), ✓ once 검토됨. */
+.run-changes-list-head { gap: var(--space-xs); }
+.run-changes-list-head > span:first-child { flex: 1; min-width: 0; }
+.run-changes-progress { flex: none; font-family: var(--font-mono); font-size: var(--type-pill); font-variant-numeric: tabular-nums; color: var(--ink3); white-space: nowrap; }
+.run-changes-progress.reviewed { color: var(--done-text); }
 .run-changes-review { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: var(--space-sm); }
 .run-changes-diff { flex: 1; min-height: 0; display: flex; flex-direction: column; border: var(--stroke-line) solid var(--line); border-radius: var(--radius-row); background: var(--card); overflow: hidden; }
 .run-changes-placeholder { margin: auto; padding: var(--space-lg); color: var(--ink2); font-size: var(--type-small); text-align: center; }

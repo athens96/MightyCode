@@ -69,7 +69,7 @@ export function ReviewRow({ item, t, working, onAction, onChecks }: {
         {item.request && <span className="review-request" title={item.request}>{item.request}</span>}
       </div>
       <span className="review-counts" title={t('review.files', { count: item.files })}>
-        <span className="review-files">{t('review.files', { count: item.files })}</span>
+        <span className="review-files">{item.reviewed ? t('review.filesReviewed', { count: item.files, reviewed: item.reviewed }) : t('review.files', { count: item.files })}</span>
         <span className="added">+{item.added}</span> <span className="removed">−{item.removed}</span>
       </span>
       <div className="review-actions">

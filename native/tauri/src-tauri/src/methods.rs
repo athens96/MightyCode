@@ -215,6 +215,7 @@ pub fn registry() -> Registry {
     crate::app_update::register(&mut methods);
     crate::styles::register(&mut methods);
     crate::pane_worktree::register(&mut methods);
+    crate::worktree_hunks::register(&mut methods);
     crate::fork::register(&mut methods);
     crate::compare::register(&mut methods);
     crate::mirror::register(&mut methods);

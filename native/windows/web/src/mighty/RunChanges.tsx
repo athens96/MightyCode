@@ -5,13 +5,17 @@ import { DialogLoading, DialogShell } from '../dialogs/DialogShell';
 import { Icon } from '../icons/Icon';
 import { DiffView } from '../panes/files/DiffView';
 import { diffRows, editorLine, type DiffRow } from '../panes/files/diff';
+import { progressText, RefusalText, reviewable, useHunkReview, type HunkAction, type HunkOutcome, type HunkReview } from '../panes/files/hunkReview';
 import type { FileChanges } from '../panes/files/types';
 import { usePageOverlay } from '../shell/overlay';
 import {
-  noteTarget, notePlace, notedRows, revertible, reviewPrompt,
+  noteTarget, notePlace, notedRows, revertible, reviewPrompt, reviewedCount, unreviewedPaths,
   type ReviewNote, type RunChangesItem, type RunChangesOutcome, type RunChangesPlan, type RunChangesReverted,
 } from './runChangesModel';
 import './runChanges.css';
+
+/** `runChangesHunk`'s answer: a discard's outcome, the file's review now and the request's items. */
+interface HunkAnswer { outcome?: HunkOutcome; review?: HunkReview | null; items?: RunChangesItem[] }
 
 export interface RunChangesProps {
   paneId: string;
@@ -42,6 +46,10 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
   const [revision, setRevision] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
   const [changes, setChanges] = useState<FileChanges | null>(null);
+  /** 바뀐 부분별 받기·버리기: the selected file's hunks, a hunk action running, and the last refusal's words. */
+  const [review, setReview] = useState<HunkReview | null>(null);
+  const [hunkBusy, setHunkBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
   const [loadingDiff, setLoadingDiff] = useState(false);
   const [notes, setNotes] = useState<ReviewNote[]>([]);
   const [picked, setPicked] = useState<{ row: DiffRow; index: number; path: string } | null>(null);
@@ -70,15 +78,47 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
   }, [bridge, paneId, runId, take]);
 
   useEffect(() => {
-    setChanges(null); setPicked(null);
+    setChanges(null); setReview(null); setPicked(null); setMessage(null);
     if (selected === null) { setLoadingDiff(false); return undefined; }
     let live = true;
     setLoadingDiff(true);
-    bridge.call<FileChanges | null>('referenceChanges', { paneId, path: selected, runId }).then(
-      (value) => { if (live) { setChanges(value ?? null); setLoadingDiff(false); } },
+    bridge.call<HunkReview | null>('runChangesHunks', { paneId, path: selected, runId }).then(
+      (value) => { if (live) { setReview(value ?? null); setChanges(value?.changes ?? null); setLoadingDiff(false); } },
       () => { if (live) setLoadingDiff(false); });
     return () => { live = false; };
   }, [bridge, paneId, runId, selected, revision]);
+
+  /** A hunk answer applied: the file's review as it is now, the request's items with their progress. */
+  const takeHunks = useCallback((answer: HunkAnswer) => {
+    if (answer.review !== undefined) { setReview(answer.review); setChanges(answer.review?.changes ?? null); setPicked(null); }
+    if (answer.items) take({ root: plan?.root ?? '', items: answer.items });
+    const outcome = answer.outcome;
+    if (outcome?.kind === 'refused') setMessage(t(RefusalText[outcome.refusal]));
+    else if (outcome?.kind === 'failed') setMessage(t('runChanges.outcome.failed', { error: outcome.error }));
+    else setMessage(null);
+  }, [plan?.root, take, t]);
+
+  /** 받기 ✓ (only recorded) or 버리기 ↶ (the hunk's lines put back) of one hunk of the selected file. */
+  const actOnHunk = useCallback((action: HunkAction, index: number) => {
+    const state = review?.hunks[index];
+    const hunk = review?.changes?.hunks[index];
+    if (selected === null || !state || !hunk || hunkBusy) return;
+    setHunkBusy(true);
+    void bridge.call<HunkAnswer | null>('runChangesHunk', {
+      paneId, runId, path: selected, action, fingerprints: [state.fingerprint], ...(action === 'discard' ? { hunk } : {}),
+    }).then((answer) => { if (answer) takeHunks(answer); }, () => {}).finally(() => setHunkBusy(false));
+  }, [bridge, paneId, runId, selected, review, hunkBusy, takeHunks]);
+
+  /** 남은 부분 모두 받기: every hunk not handled yet in every file. */
+  const acceptRest = () => {
+    const paths = unreviewedPaths(items ?? []);
+    if (paths.length === 0 || hunkBusy) return;
+    setHunkBusy(true);
+    void bridge.call<HunkAnswer | null>('runChangesHunk', { paneId, runId, action: 'acceptAll', paths, ...(selected !== null ? { path: selected } : {}) })
+      .then((answer) => { if (answer) takeHunks(answer); }, () => {}).finally(() => setHunkBusy(false));
+  };
+
+  const { current: currentHunk, setCurrent: setCurrentHunk, onKeyDown: hunkKeys } = useHunkReview(selected, review, actOnHunk);
 
   useEffect(() => { if (picked) noteField.current?.focus(); }, [picked]);
 
@@ -139,18 +179,23 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
   };
 
   const done = [...outcomes.values()].filter((o) => o.kind === 'reverted').length;
-  const summary = !items ? '' : done > 0 ? t('runChanges.summary.done', { count: done })
-    : t('runChanges.summary', { count: items.length, revertible: canRevert.length });
+  const summary = !items ? '' : message ?? (done > 0 ? t('runChanges.summary.done', { count: done })
+    : t('runChanges.summary', { count: items.length, revertible: canRevert.length }) + ' · ' + t('hunks.summary', { reviewed: reviewedCount(items), count: items.length }));
+  const rest = unreviewedPaths(items ?? []);
   const allChosen = canRevert.length > 0 && chosenItems.length === canRevert.length;
   const placeOf = picked ? noteTarget(picked.row) : null;
   const stop = (event: { stopPropagation(): void }) => event.stopPropagation();
   const key = (event: KeyboardEvent) => event.stopPropagation();
+  const panelKey = (event: KeyboardEvent) => { if (!confirming) hunkKeys(event); event.stopPropagation(); };
+  const hunkControls = reviewable(review) ? {
+    states: review.hunks, current: currentHunk, busy: hunkBusy || working, onCurrent: setCurrentHunk, onAct: actOnHunk,
+  } : undefined;
 
   return (
     <>
       <DialogShell kind="panel" panel="runChanges" width={1000} height={640} minWidth={640} minHeight={360} label={t('runChanges.title')}
         testId="run-changes" icon={<Icon name="file-search" size={18} weight={1.8} />} title={t('runChanges.title')}
-        subtitle={plan?.root || undefined} busy={working} top={!confirming} closeTestId="run-changes-close" onCancel={onClose} onKeyDown={key}
+        subtitle={plan?.root || undefined} busy={working} top={!confirming} closeTestId="run-changes-close" onCancel={onClose} onKeyDown={panelKey}
         tools={selected !== null ? (
           <button type="button" className="icon-button" data-testid="run-changes-editor" onClick={() => openInEditor(editorAt)}
             aria-label={editorAt ? t('editor.openLine', { line: editorAt }) : t('editor.open')} title={editorAt ? t('editor.openLine', { line: editorAt }) : t('editor.open')}>
@@ -173,6 +218,8 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
               <div className="run-changes-list">
                 <div className="run-changes-list-head">
                   <span>{t('runChanges.files', { count: items.length })}</span>
+                  <button type="button" className="btn text" title={t('tooltip.hunks.acceptRest')} data-testid="run-changes-accept-rest"
+                    disabled={rest.length === 0 || hunkBusy || working} onClick={acceptRest}>{t('hunks.acceptRest')}</button>
                   <button type="button" className="btn text" title={t('tooltip.runChanges.toggleAll')} disabled={canRevert.length === 0 || working}
                     onClick={() => setChosen(allChosen ? new Set() : new Set(canRevert.map((item) => item.path)))}>
                     {t(allChosen ? 'runChanges.chooseNone' : 'runChanges.chooseAll')}
@@ -191,6 +238,12 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
                         <span className="run-changes-path" title={item.path}>{item.path}</span>
                         <span className="run-changes-detail">{detail(item)}</span>
                       </span>
+                      {progressText({ handled: item.handled ?? 0, total: item.hunks ?? 0 }) && (
+                        <span className={'run-changes-progress' + (item.reviewed ? ' reviewed' : '')} data-testid={'run-changes-progress-' + item.path}
+                          title={item.reviewed ? t('hunks.reviewed') : t('hunks.progress', { handled: item.handled ?? 0, total: item.hunks ?? 0 })}>
+                          {item.reviewed ? '✓ ' : ''}{progressText({ handled: item.handled ?? 0, total: item.hunks ?? 0 })}
+                        </span>
+                      )}
                       {(item.restored > 0 || item.removed > 0) && (
                         <span className="run-changes-counts" title={detail(item)}>
                           <span className="added">+{item.restored}</span> <span className="removed">−{item.removed}</span>
@@ -204,7 +257,7 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
                 <div className="run-changes-diff">
                   {changes ? (changes.unchanged ? <div className="run-changes-placeholder">{t('runChanges.diff.unchanged')}</div>
                     : <DiffView changes={changes} name={selected ?? undefined} noted={noted} picked={picked?.path === selected ? picked.index : null}
-                      onOpenLine={onOpenLine} onLine={onLine} />)
+                      onOpenLine={onOpenLine} onLine={onLine} hunks={hunkControls} />)
                     : loadingDiff ? <DialogLoading rows={2} />
                     : <div className="run-changes-placeholder">{t(selected === null ? 'runChanges.diff.pick' : 'runChanges.diff.none')}</div>}
                 </div>
@@ -219,7 +272,7 @@ export function RunChangesDialog({ paneId, runId, onClose }: RunChangesProps) {
                       <button type="button" className="btn" onClick={() => { setPicked(null); setNoteText(''); }}>{t('runChanges.confirm.cancel')}</button>
                     </div>
                   </div>
-                ) : changes && !changes.unchanged ? <div className="run-changes-hint">{t('runChanges.notes.hint')} {t('editor.lineHint')}</div> : null}
+                ) : changes && !changes.unchanged ? <div className="run-changes-hint">{t('runChanges.notes.hint')} {t('editor.lineHint')} {hunkControls ? t('hunks.keysHint') : ''}</div> : null}
                 {notes.length > 0 && (
                   <div className="run-changes-notes" data-testid="run-changes-notes">
                     <span className="run-changes-note-on">{t('runChanges.notes.title', { count: notes.length })}</span>

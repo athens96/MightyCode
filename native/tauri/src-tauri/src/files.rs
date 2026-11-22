@@ -70,6 +70,35 @@ pub struct Files {
     kept: Mutex<HashMap<String, HashSet<String>>>,
     /// The paths the frames protocol served last (the smoke's check), at most 256.
     pub served: Mutex<Vec<String>>,
+    /// 바뀐 부분별 받기·버리기: the worktrees' books of hunks taken and put back (a request's are kept beside its originals).
+    pub reviews: PathBuf,
+}
+
+/// How long a worktree's book of hunk decisions is kept after it was last written.
+const REVIEW_BOOK_DAYS: u64 = 30;
+
+impl Files {
+    /// The book of the hunks taken and put back in the worktree of the pane (or delegated child) `id`.
+    pub(crate) fn worktree_book(&self, id: &str) -> mighty_files::hunks::ReviewBook {
+        mighty_files::hunks::ReviewBook::at(self.reviews.join(mighty_files::hunks::book_name(id)))
+    }
+}
+
+/// The worktrees' books not written for [`REVIEW_BOOK_DAYS`] go (their worktrees are long merged or discarded).
+fn prune_review_books(folder: &Path) {
+    let limit = Duration::from_secs(REVIEW_BOOK_DAYS * 24 * 60 * 60);
+    for item in std::fs::read_dir(folder).into_iter().flatten().flatten() {
+        let old = item
+            .metadata()
+            .ok()
+            .filter(|m| m.is_file())
+            .and_then(|m| m.modified().ok())
+            .and_then(|at| at.elapsed().ok())
+            .is_some_and(|age| age > limit);
+        if old {
+            let _ = std::fs::remove_file(item.path());
+        }
+    }
 }
 
 /// The user's number and date formats, from the OS where it says (C# `CultureInfo.CurrentCulture`).
@@ -114,6 +143,7 @@ pub fn start(host: &Arc<Host>, originals_dir: PathBuf) {
     let ports = crate::platform::file_ports();
     // Every reader of the user's files (pictures, HTML assets, the files pane) asks the open handle where it is.
     mighty_composer::files::use_file_handles(ports.handles.clone());
+    let reviews = originals_dir.parent().map_or_else(|| originals_dir.join("hunk-reviews"), |p| p.join("hunk-reviews"));
     let originals = Arc::new(FileOriginalStore::new(originals_dir, changes::MAXIMUM_BYTES, ports.handles.clone()));
     let (snapshot, mut last_revision) = {
         let view = host.view();
@@ -129,10 +159,14 @@ pub fn start(host: &Arc<Host>, originals_dir: PathBuf) {
         formats: Arc::new(HostFormats),
         kept: Mutex::new(kept.clone()),
         served: Mutex::new(Vec::new()),
+        reviews: reviews.clone(),
     });
     host.app.manage(files.clone());
     // C# DesktopService.InitializeAsync: what the saved state no longer names goes.
-    std::thread::spawn(move || originals.prune(&kept));
+    std::thread::spawn(move || {
+        originals.prune(&kept);
+        prune_review_books(&reviews);
+    });
     let watcher = Arc::downgrade(host);
     std::thread::Builder::new()
         .name("file-originals".into())
@@ -205,7 +239,7 @@ pub async fn bounded<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'stati
     bounded_by(RENDER_TIME, work).await
 }
 
-fn state(host: &Host) -> Result<Arc<Files>, String> {
+pub(crate) fn state(host: &Host) -> Result<Arc<Files>, String> {
     host.app.try_state::<Arc<Files>>().map(|s| s.inner().clone()).ok_or_else(|| "the files pane is not ready".to_string())
 }
 
@@ -298,14 +332,30 @@ pub(crate) fn editor_root(host: &Host, args: &Value, reference: bool) -> Result<
 
 /// The review queue's reading of one request (review.rs): the files the run `run` (as the originals keep it) of the pane changed under
 /// `root`, with the lines it added and removed (요청 변경 검토's items, whose counts are the revert's: what it puts back the request
-/// removed); None when the store kept nothing for it. Reads the store: off the page's thread.
-pub(crate) fn request_changes(host: &Host, pane: &str, run: &str, root: &str) -> Option<(usize, usize, usize)> {
+/// removed) and how many of the files are 검토됨 (every hunk taken or put back); None when the store kept nothing for it. Reads the
+/// store: off the page's thread.
+pub(crate) fn request_changes(host: &Host, pane: &str, run: &str, root: &str) -> Option<RequestCounts> {
     let files = state(host).ok()?;
     let items = mighty_files::revert::plan(&files.originals, pane, run, root);
     if items.is_empty() {
         return None;
     }
-    Some((items.len(), items.iter().map(|item| item.removed).sum(), items.iter().map(|item| item.restored).sum()))
+    Some(RequestCounts {
+        files: items.len(),
+        added: items.iter().map(|item| item.removed).sum(),
+        removed: items.iter().map(|item| item.restored).sum(),
+        reviewed: items.iter().filter(|item| item.reviewed()).count(),
+    })
+}
+
+/// [`request_changes`]' reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RequestCounts {
+    pub files: usize,
+    pub added: usize,
+    pub removed: usize,
+    /// Files whose every hunk was taken or put back.
+    pub reviewed: usize,
 }
 
 /// C# `DesktopService.OriginalsRun`: a graph run's `sourceRunID` (else its id); an id no graph run of the pane has stays as it is.
@@ -329,6 +379,16 @@ fn run_changes_target<T>(host: &Host, args: &Value, pick: impl FnOnce(&View, &st
 /// The run a review is of (`runId`, a graph run's id), as the originals keep it ([`originals_run`]).
 fn run_arg(view: &View, pane: &str, args: &Value) -> Option<String> {
     text(args, "runId").filter(|r| wire::identifier(r)).map(|r| originals_run(view, pane, r))
+}
+
+/// A list of strings the page sent under `key`, at most `limit` of them.
+pub(crate) fn string_list(args: &Value, key: &str, limit: usize) -> Vec<String> {
+    args.get(key)
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter().filter_map(Value::as_str).filter(|s| s.len() <= MAXIMUM_PATH_UNITS * 3).take(limit).map(str::to_string).collect()
+        })
+        .unwrap_or_default()
 }
 
 /// C# `WorkspaceFiles.Resolve(path, root)` read off the page's thread.
@@ -960,6 +1020,77 @@ pub fn register(methods: &mut Registry) {
             })
             .collect();
         Ok(json!({"outcomes": outcomes, "items": items.iter().map(mighty_files::revert::Item::to_json).collect::<Vec<_>>()}))
+    });
+    // 바뀐 부분별 받기·버리기 (MC-30): one file of the request, its diff against the original and each hunk's fingerprint, decision and
+    // refusal (`RunRevert.hunk_review`); null when the run kept no original of it.
+    methods.add("runChangesHunks", |host: Arc<Host>, args| async move {
+        let Some((root, pane, run)) = run_changes_target(&host, &args, run_arg) else { return Ok(Value::Null) };
+        let Some(path) = path_arg(&args) else { return Ok(Value::Null) };
+        let files = state(&host)?;
+        let review =
+            tauri::async_runtime::spawn_blocking(move || mighty_files::revert::hunk_review(&files.originals, &pane, &run, &root, &path))
+                .await
+                .map_err(|e| e.to_string())?;
+        Ok(review.unwrap_or(Value::Null))
+    });
+    // One hunk put back (`discard`: `fingerprint`, and the hunk as shown in case it moved), hunks taken (`accept`: `fingerprints`), or
+    // every hunk left in the files taken (`acceptAll`: `paths`, else `path`). Answers the outcome of a discard, the file's review as it
+    // is now and the request's items (their progress).
+    methods.add("runChangesHunk", |host: Arc<Host>, args| async move {
+        let Some((root, pane, run)) = run_changes_target(&host, &args, run_arg) else { return Ok(Value::Null) };
+        let Some(action) = text(&args, "action").filter(|a| matches!(*a, "discard" | "accept" | "acceptAll")).map(str::to_string) else {
+            return Ok(Value::Null);
+        };
+        let path = path_arg(&args);
+        let fingerprints = string_list(&args, "fingerprints", 1_000);
+        let mut paths = string_list(&args, "paths", changes::MAXIMUM_FILES_PER_RUN);
+        if paths.is_empty() {
+            paths.extend(path.clone());
+        }
+        let shown = args.get("hunk").and_then(mighty_files::diff::Hunk::from_json);
+        let files = state(&host)?;
+        let answer = tauri::async_runtime::spawn_blocking(move || {
+            let originals = &files.originals;
+            let mut answer = json!({});
+            match (action.as_str(), &path) {
+                ("discard", Some(path)) => {
+                    let Some(fingerprint) = fingerprints.first() else { return Value::Null };
+                    let desktop = files.ports.desktop.clone();
+                    let trash = move |file: &Path| desktop.trash(file).map_err(|e| e.to_string());
+                    let outcome =
+                        mighty_files::revert::discard_hunk(originals, &pane, &run, &root, path, fingerprint, shown.as_ref(), &trash);
+                    answer["outcome"] = outcome.to_json();
+                }
+                ("accept", Some(path)) => {
+                    answer["saved"] = json!(mighty_files::revert::accept_hunks(
+                        originals,
+                        &pane,
+                        &run,
+                        &root,
+                        std::slice::from_ref(path),
+                        Some(&fingerprints)
+                    ));
+                }
+                ("acceptAll", _) => {
+                    answer["saved"] = json!(mighty_files::revert::accept_hunks(originals, &pane, &run, &root, &paths, None));
+                }
+                _ => return Value::Null,
+            }
+            if let Some(path) = &path {
+                answer["review"] = mighty_files::revert::hunk_review(originals, &pane, &run, &root, path).unwrap_or(Value::Null);
+            }
+            answer["items"] = json!(
+                mighty_files::revert::plan(originals, &pane, &run, &root)
+                    .iter()
+                    .map(mighty_files::revert::Item::to_json)
+                    .collect::<Vec<_>>()
+            );
+            answer
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        crate::review::changed(&host);
+        Ok(answer)
     });
     // Resolved again at the click: the workspace or the file may have changed while the bubble was open.
     methods.add("referenceOpen", |host: Arc<Host>, args| async move {

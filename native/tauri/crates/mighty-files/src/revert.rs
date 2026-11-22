@@ -9,10 +9,16 @@
 //! - the file is no longer text the diff can read ([`Refusal::Unreadable`]): over 1 MiB, binary or undecodable;
 //! - it already reads as the original ([`Refusal::Unchanged`]).
 //!
+//! One hunk at a time (바뀐 부분별 받기·버리기, [`hunk_review`], [`discard_hunk`], [`accept_hunks`]; the rules in [`crate::hunks`]): a
+//! hunk is refused when its lines changed after the review read them ([`Refusal::Conflict`]) or when a later run of the pane changed
+//! lines it touches ([`Refusal::LaterRun`], narrowed from the file to those lines; the whole file when that run kept no original of
+//! it). Putting back the last hunk does what reverting the file does: the original written back, or a file the run made trashed.
+//!
 //! A file the run created is moved to the Trash (the Recycle Bin) through the caller's `trash`, never deleted. A restored file keeps the
 //! encoding it is in now (its byte order mark too: the store keeps originals without one) and its permissions; its line endings are the
 //! original's, which the store kept as they were.
 
+use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
@@ -21,7 +27,8 @@ use mighty_core::workspace_files;
 use serde_json::{Map, Value, json};
 
 use crate::changes::{FileOriginal, FileOriginalStore, same_path, source_run};
-use crate::diff;
+use crate::diff::{self, DiffResult, Hunk};
+use crate::hunks::{self, Decision, HunkState, Progress, ReviewBook};
 
 /// Why a path cannot be reverted now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +37,8 @@ pub enum Refusal {
     Missing,
     Unreadable,
     Unchanged,
+    /// 바뀐 부분별 버리기: the hunk's lines are no longer in the file as the review read them.
+    Conflict,
 }
 
 impl Refusal {
@@ -39,6 +48,7 @@ impl Refusal {
             Refusal::Missing => "missing",
             Refusal::Unreadable => "unreadable",
             Refusal::Unchanged => "unchanged",
+            Refusal::Conflict => "conflict",
         }
     }
 }
@@ -61,6 +71,8 @@ pub struct Item {
     pub restored: usize,
     pub removed: usize,
     pub refusal: Option<Refusal>,
+    /// 바뀐 부분별 받기·버리기: of the file's hunks (now and put back), how many were taken or put back.
+    pub progress: Progress,
 }
 
 impl Item {
@@ -68,13 +80,25 @@ impl Item {
         self.refusal.is_none()
     }
 
-    /// `{path, action, restored, removed, refusal?}` for the page.
+    /// 검토됨: every hunk was taken or put back, or nothing is left to review (the file reads as its original, or is gone).
+    pub fn reviewed(&self) -> bool {
+        match self.refusal {
+            Some(Refusal::Unchanged | Refusal::Missing) => true,
+            Some(Refusal::Unreadable) => false,
+            _ => self.progress.reviewed(),
+        }
+    }
+
+    /// `{path, action, restored, removed, hunks, handled, reviewed, refusal?}` for the page.
     pub fn to_json(&self) -> Value {
         let mut out = Map::new();
         out.insert("path".into(), json!(self.path));
         out.insert("action".into(), json!(if self.action == Action::Trash { "trash" } else { "restore" }));
         out.insert("restored".into(), json!(self.restored));
         out.insert("removed".into(), json!(self.removed));
+        out.insert("hunks".into(), json!(self.progress.total));
+        out.insert("handled".into(), json!(self.progress.handled));
+        out.insert("reviewed".into(), json!(self.reviewed()));
         if let Some(refusal) = self.refusal {
             out.insert("refusal".into(), json!(refusal.word()));
         }
@@ -106,12 +130,14 @@ impl Outcome {
 pub fn plan(store: &FileOriginalStore, session_id: &str, run_id: &str, root: &str) -> Vec<Item> {
     let run_id = source_run(run_id);
     let later = later_paths(store, session_id, run_id, root);
+    let book = store.review_book(session_id, run_id, root).map(|b| b.read()).unwrap_or_default();
     store
         .files(session_id, run_id, root)
         .into_iter()
         .filter_map(|path| {
             let original = store.find(session_id, Some(run_id), &path, Some(root))?;
-            Some(item(store, &path, &original, root, later.iter().any(|p| same_path(p, &path))))
+            let decisions = hunks::decisions_of(&book, &path);
+            Some(item(store, &path, &original, root, later.iter().any(|p| same_path(p, &path)), &decisions))
         })
         .collect()
 }
@@ -134,7 +160,7 @@ pub fn apply(
             continue;
         }
         let Some(original) = store.find(session_id, Some(run_id), &path, Some(root)) else { continue };
-        let planned = item(store, &path, &original, root, later.iter().any(|p| same_path(p, &path)));
+        let planned = item(store, &path, &original, root, later.iter().any(|p| same_path(p, &path)), &HashMap::new());
         if let Some(refusal) = planned.refusal {
             outcomes.push((path, Outcome::Refused(refusal)));
             continue;
@@ -145,11 +171,237 @@ pub fn apply(
         };
         let done = match planned.action {
             Action::Trash => trash(&file),
-            Action::Restore => write(&original.text, &file).map_err(|e| e.to_string()),
+            Action::Restore => write_if(&original.text, &file, None).map(|_| ()).map_err(|e| e.to_string()),
         };
         outcomes.push((path, done.map_or_else(Outcome::Failed, |()| Outcome::Reverted)));
     }
     outcomes
+}
+
+// ---- 바뀐 부분별 받기·버리기 ----------------------------------------------------------------------------------------------------
+
+/// A file's base for a hunk review: its text before (a run's original, a worktree's merge base) and whether the file is new.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Base {
+    pub text: String,
+    pub created: bool,
+}
+
+/// What later changes of the file a hunk must keep clear of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Later {
+    Nothing,
+    /// A later run changed the file and kept no original of it: every hunk is refused.
+    File,
+    /// The stretches later runs changed (0-based lines of the file now, end exclusive).
+    Stretches(Vec<(usize, usize)>),
+}
+
+impl Later {
+    fn blocks(&self, hunk: &Hunk, at: Option<usize>) -> bool {
+        match self {
+            Later::Nothing => false,
+            Later::File => true,
+            Later::Stretches(stretches) => hunks::touches(hunk, at, stretches),
+        }
+    }
+}
+
+/// One file's hunk review: the diff, each hunk's state and the file's progress.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileHunks {
+    pub changes: DiffResult,
+    pub hunks: Vec<HunkState>,
+    pub progress: Progress,
+}
+
+/// The hunk review of a file whose base is `base` and whose text now is `current`; None when there is no diff (over the caps). A hunk
+/// cut short by the diff's cap cannot be put back (`unreadable`).
+pub fn file_hunks(base: &str, current: &str, decisions: &HashMap<String, Decision>, later: &Later) -> Option<FileHunks> {
+    let (changes, prints) = hunks::hunks(base, current)?;
+    let last = changes.hunks.len().saturating_sub(1);
+    let states = changes
+        .hunks
+        .iter()
+        .zip(&prints)
+        .enumerate()
+        .map(|(index, (hunk, print))| HunkState {
+            fingerprint: print.clone(),
+            decision: decisions.get(print).copied().filter(|d| *d == Decision::Accepted),
+            refusal: if changes.truncated && index == last {
+                Some(Refusal::Unreadable)
+            } else {
+                later.blocks(hunk, None).then_some(Refusal::LaterRun)
+            },
+        })
+        .collect();
+    Some(FileHunks { progress: hunks::progress(&prints, decisions), changes, hunks: states })
+}
+
+/// `{changes, hunks: [{fingerprint, decision?, refusal?}], handled, total, refusal?}` for the page: `changes` as the 변경사항 view
+/// reads it (`ChangeSet`'s JSON with `base`), `refusal` when the file cannot be reviewed now (`missing`, `unreadable`).
+pub fn file_hunks_json(review: Result<FileHunks, Refusal>, base: &'static str, run_id: Option<&str>, created: bool) -> Value {
+    match review {
+        Err(refusal) => json!({"hunks": [], "handled": 0, "total": 0, "refusal": refusal.word()}),
+        Ok(review) => {
+            let changes = crate::changes::ChangeSet {
+                base,
+                hunks: review.changes.hunks.clone(),
+                added: review.changes.added,
+                removed: review.changes.removed,
+                truncated: review.changes.truncated,
+                unchanged: review.changes.unchanged,
+                run_id: run_id.map(str::to_string),
+                head_sha: None,
+                created: created.then_some(true),
+            };
+            json!({
+                "changes": changes.to_json(),
+                "hunks": review.hunks.iter().map(HunkState::to_json).collect::<Vec<_>>(),
+                "handled": review.progress.handled,
+                "total": review.progress.total,
+            })
+        }
+    }
+}
+
+/// Puts back one hunk of the file `path` under `root` whose base is `base` and whose text now is `current`: the hunk named
+/// `fingerprint` as the diff reads it now, else `shown` (the hunk as the page showed it) where its new side still stands. The file is
+/// read again just before it is written and nothing is written when it changed since. A file that then reads as its base is
+/// reverted as a whole (a new one trashed). The decision goes in `book`.
+#[allow(clippy::too_many_arguments)]
+pub fn discard_in(
+    root: &str,
+    path: &str,
+    base: &Base,
+    current: Option<String>,
+    later: impl FnOnce(&str) -> Later,
+    fingerprint: &str,
+    shown: Option<&Hunk>,
+    book: Option<&ReviewBook>,
+    trash: &dyn Fn(&Path) -> Result<(), String>,
+) -> Outcome {
+    let Some(file) = regular_file(path, root) else { return Outcome::Refused(Refusal::Missing) };
+    let Some(current) = current else { return Outcome::Refused(Refusal::Unreadable) };
+    let Some((changes, prints)) = hunks::hunks(&base.text, &current) else { return Outcome::Refused(Refusal::Unreadable) };
+    let hunk = match prints.iter().position(|p| p == fingerprint) {
+        Some(index) if changes.truncated && index + 1 == changes.hunks.len() => return Outcome::Refused(Refusal::Unreadable),
+        Some(index) => changes.hunks[index].clone(),
+        None => match shown {
+            Some(hunk) => hunk.clone(),
+            None => return Outcome::Refused(Refusal::Conflict),
+        },
+    };
+    let Some(at) = hunks::place(&current, &hunk) else { return Outcome::Refused(Refusal::Conflict) };
+    if later(&current).blocks(&hunk, Some(at)) {
+        return Outcome::Refused(Refusal::LaterRun);
+    }
+    let Some(next) = hunks::discard(&current, &hunk, &base.text) else { return Outcome::Refused(Refusal::Conflict) };
+    let whole = hunks::same_text(&next, &base.text);
+    let done = if whole && base.created {
+        trash(&file).map(|()| true)
+    } else {
+        write_if(if whole { &base.text } else { &next }, &file, Some(&current)).map_err(|e| e.to_string())
+    };
+    match done {
+        Ok(true) => {
+            if let Some(book) = book {
+                let _ = book.record(path, &[fingerprint.to_string()], Decision::Discarded);
+            }
+            Outcome::Reverted
+        }
+        Ok(false) => Outcome::Refused(Refusal::Conflict),
+        Err(error) => Outcome::Failed(error),
+    }
+}
+
+/// The run's path as the store spells it, with its original; None when the run kept no original of it under `root`.
+fn kept(store: &FileOriginalStore, session_id: &str, run_id: &str, root: &str, path: &str) -> Option<(String, FileOriginal)> {
+    let path = store.files(session_id, run_id, root).into_iter().find(|p| same_path(p, path))?;
+    let original = store.find(session_id, Some(run_id), &path, Some(root))?;
+    Some((path, original))
+}
+
+/// The stretches of `path` (as it reads now, `current`) that runs of the pane newer than `run_id` changed: everything after the oldest
+/// of them that touched it, from the original it kept (the file as `run_id` and anything before left it); the whole file when it
+/// kept none or the diff cannot be read.
+fn later_changes(store: &FileOriginalStore, session_id: &str, run_id: &str, root: &str, path: &str, current: &str) -> Later {
+    let runs = store.runs(session_id);
+    let Some(index) = runs.iter().position(|r| r == run_id) else { return Later::Nothing };
+    let Some(next) = runs[..index].iter().rev().find(|r| store.paths(session_id, r, root).iter().any(|p| same_path(p, path))) else {
+        return Later::Nothing;
+    };
+    let Some(before) = store.find(session_id, Some(next), path, Some(root)) else { return Later::File };
+    match diff::compute(&before.text, current) {
+        Some(changes) if !changes.truncated => Later::Stretches(hunks::changed_stretches(&changes.hunks)),
+        _ => Later::File,
+    }
+}
+
+/// The hunk review of one file `run_id` (a notice run: the run it came from) of the pane changed (`runChangesHunks`); None when the
+/// run kept no original of it under `root`.
+pub fn hunk_review(store: &FileOriginalStore, session_id: &str, run_id: &str, root: &str, path: &str) -> Option<Value> {
+    let run_id = source_run(run_id);
+    let (path, original) = kept(store, session_id, run_id, root, path)?;
+    let review = (|| {
+        regular_file(&path, root).ok_or(Refusal::Missing)?;
+        let current = store.current(&path, Path::new(root)).ok_or(Refusal::Unreadable)?;
+        let decisions = store.review_book(session_id, run_id, root).map(|b| b.decisions(&path)).unwrap_or_default();
+        let later = later_changes(store, session_id, run_id, root, &path, &current);
+        file_hunks(&original.text, &current, &decisions, &later).ok_or(Refusal::Unreadable)
+    })();
+    Some(file_hunks_json(review, "run", Some(&original.run_id), original.created))
+}
+
+/// Puts back one hunk of a file `run_id` changed ([`discard_in`] with the run's original as the base and its later runs' stretches
+/// kept clear of); refused as `missing` when the run kept no original of it.
+#[allow(clippy::too_many_arguments)]
+pub fn discard_hunk(
+    store: &FileOriginalStore,
+    session_id: &str,
+    run_id: &str,
+    root: &str,
+    path: &str,
+    fingerprint: &str,
+    shown: Option<&Hunk>,
+    trash: &dyn Fn(&Path) -> Result<(), String>,
+) -> Outcome {
+    let run_id = source_run(run_id);
+    let Some((path, original)) = kept(store, session_id, run_id, root, path) else { return Outcome::Refused(Refusal::Missing) };
+    let base = Base { text: original.text, created: original.created };
+    let book = store.review_book(session_id, run_id, root);
+    let current = store.current(&path, Path::new(root));
+    let later = |now: &str| later_changes(store, session_id, run_id, root, &path, now);
+    discard_in(root, &path, &base, current, later, fingerprint, shown, book.as_ref(), trash)
+}
+
+/// Records the hunks of `paths` as taken (받기; nothing is written to the files): those named by `fingerprints`, else every hunk each
+/// file has now (남은 부분 모두 받기). False when the run has no book under `root` or it could not be written.
+pub fn accept_hunks(
+    store: &FileOriginalStore,
+    session_id: &str,
+    run_id: &str,
+    root: &str,
+    paths: &[String],
+    fingerprints: Option<&[String]>,
+) -> bool {
+    let run_id = source_run(run_id);
+    let Some(book) = store.review_book(session_id, run_id, root) else { return false };
+    let mut written = true;
+    for wanted in paths {
+        let Some((path, original)) = kept(store, session_id, run_id, root, wanted) else { continue };
+        let prints = match fingerprints {
+            Some(given) => given.to_vec(),
+            None => match store.current(&path, Path::new(root)).and_then(|now| hunks::hunks(&original.text, &now)) {
+                Some((_, prints)) => prints,
+                None => continue,
+            },
+        };
+        if !prints.is_empty() {
+            written &= book.record(&path, &prints, Decision::Accepted).is_ok();
+        }
+    }
+    written
 }
 
 /// Maximum file size read during revert (matches [`diff::MAXIMUM_SIDE_BYTES`]).
@@ -178,20 +430,30 @@ pub(crate) fn same_file(_expected: &std::fs::Metadata, _opened: &std::fs::Metada
 }
 
 /// The real path of the regular file at `relative` inside `root`; None when it is gone, a link, a folder or leaves the root.
-fn regular_file(relative: &str, root: &str) -> Option<PathBuf> {
+pub fn regular_file(relative: &str, root: &str) -> Option<PathBuf> {
     let real = workspace_files::resolve(relative, Path::new(root))?;
     let meta = std::fs::symlink_metadata(&real).ok()?;
     (!meta.file_type().is_symlink() && !is_reparse_point(&meta) && meta.file_type().is_file()).then_some(real)
 }
 
-fn item(store: &FileOriginalStore, path: &str, original: &FileOriginal, root: &str, touched_later: bool) -> Item {
+fn item(
+    store: &FileOriginalStore,
+    path: &str,
+    original: &FileOriginal,
+    root: &str,
+    touched_later: bool,
+    decisions: &HashMap<String, Decision>,
+) -> Item {
     let action = if original.created { Action::Trash } else { Action::Restore };
-    let refused = |refusal| Item { path: path.to_string(), action, restored: 0, removed: 0, refusal: Some(refusal) };
+    let gone = hunks::progress(&[], decisions);
+    let refused = |refusal| Item { path: path.to_string(), action, restored: 0, removed: 0, refusal: Some(refusal), progress: gone };
     if regular_file(path, root).is_none() {
         return refused(Refusal::Missing);
     }
     let Some(current) = store.current(path, Path::new(root)) else { return refused(Refusal::Unreadable) };
-    let changes = diff::compute(&original.text, &current);
+    let reviewed = hunks::hunks(&original.text, &current);
+    let progress = reviewed.as_ref().map_or(gone, |(_, prints)| hunks::progress(prints, decisions));
+    let changes = reviewed.map(|(changes, _)| changes);
     let (restored, removed) = changes.as_ref().map_or((0, 0), |c| (c.removed, c.added));
     let refusal = if touched_later {
         Some(Refusal::LaterRun)
@@ -200,7 +462,7 @@ fn item(store: &FileOriginalStore, path: &str, original: &FileOriginal, root: &s
     } else {
         None
     };
-    Item { path: path.to_string(), action, restored, removed, refusal }
+    Item { path: path.to_string(), action, restored, removed, refusal, progress }
 }
 
 /// Paths a run of the pane newer than `run_id` changed too (kept or refused: either way that run's work is in the file).
@@ -232,8 +494,8 @@ pub(crate) fn encode(text: &str, encoding: TextEncodingKind) -> Option<Vec<u8>> 
 
 /// Writes `text` in place of the file at `path` in the encoding the file is in now, keeping its permissions: to a temporary name beside
 /// it, then moved over. Refused, the file untouched, when `path` is a symlink/non-regular file, exceeds [`MAXIMUM_BYTES`], or when the
-/// bytes would not read back as `text`.
-fn write(text: &str, path: &Path) -> std::io::Result<()> {
+/// bytes would not read back as `text`. With `expected`, nothing is written either (`Ok(false)`) when the file no longer reads as it.
+pub(crate) fn write_if(text: &str, path: &Path, expected: Option<&str>) -> std::io::Result<bool> {
     let meta = std::fs::symlink_metadata(path)?;
     if meta.file_type().is_symlink() || is_reparse_point(&meta) || !meta.file_type().is_file() {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "revert target is not a regular file"));
@@ -252,7 +514,13 @@ fn write(text: &str, path: &Path) -> std::io::Result<()> {
     if current.len() as u64 > MAXIMUM_BYTES {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "revert target exceeds maximum size"));
     }
-    let encoding = decode_text(&current, false).map_or(TextEncodingKind::Utf8, |d| d.encoding);
+    let decoded = decode_text(&current, false);
+    if let Some(expected) = expected
+        && decoded.as_ref().is_none_or(|d| d.text != expected)
+    {
+        return Ok(false);
+    }
+    let encoding = decoded.map_or(TextEncodingKind::Utf8, |d| d.encoding);
     let refused = || std::io::Error::new(std::io::ErrorKind::InvalidData, "the original does not fit the file's encoding");
     let bytes = encode(text, encoding).ok_or_else(refused)?;
     // An empty original reads back as nothing whatever the encoding; anything else must read back as itself.
@@ -272,7 +540,7 @@ fn write(text: &str, path: &Path) -> std::io::Result<()> {
     if written.is_err() {
         let _ = std::fs::remove_file(&temporary);
     }
-    written
+    written.map(|()| true)
 }
 
 #[cfg(test)]
@@ -307,7 +575,7 @@ mod tests {
         // Oversized target (> 1 MiB) is refused.
         let huge = base.join("huge.txt");
         std::fs::write(&huge, vec![b'a'; (MAXIMUM_BYTES as usize) + 16]).unwrap();
-        assert!(write("small\n", &huge).is_err(), "files exceeding MAXIMUM_BYTES must be rejected");
+        assert!(write_if("small\n", &huge, None).is_err(), "files exceeding MAXIMUM_BYTES must be rejected");
         assert_eq!(std::fs::metadata(&huge).unwrap().len(), MAXIMUM_BYTES + 16, "oversized file left untouched");
 
         // Symlink target is refused without touching the pointed-to file.
@@ -317,7 +585,7 @@ mod tests {
             let link = base.join("link.txt");
             std::fs::write(&target, "secret\n").unwrap();
             std::os::unix::fs::symlink(&target, &link).unwrap();
-            assert!(write("overwritten\n", &link).is_err(), "symlink target must be rejected");
+            assert!(write_if("overwritten\n", &link, None).is_err(), "symlink target must be rejected");
             assert_eq!(std::fs::read_to_string(&target).unwrap(), "secret\n", "symlink target content untouched");
         }
 
