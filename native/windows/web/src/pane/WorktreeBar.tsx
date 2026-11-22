@@ -25,10 +25,22 @@ export function WorktreeBar({ session }: { session: RunSession }) {
   };
   const model = worktreeBar(pane, status, t);
   const busy = working || !!status?.busy;
+  const linked = pane.linkedTask ?? session.linkedTask ?? null;
   return (
     <div className="worktree-bar" data-testid={'pane-worktree-bar-' + session.id}>
       <Icon name="git-branch" size={12} weight={2.2} />
       <span className="worktree-bar-branch" title={model.help}>{model.branch}</span>
+      {linked && (
+        <button
+          type="button"
+          className="worktree-bar-port link mono"
+          data-testid="pane-worktree-linked-task"
+          title={linked.title ? `${linked.key} · ${linked.title}` : linked.key}
+          onClick={() => { if (linked.url) void bridge.call('openUrl', { url: linked.url }).catch(() => {}); }}
+        >
+          {linked.key}
+        </button>
+      )}
       {model.ahead && <span className="worktree-bar-count" title={model.ahead.help}>{model.ahead.text}</span>}
       {model.behind && <span className="worktree-bar-count tone-text-wait" title={model.behind.help}>{model.behind.text}</span>}
       {model.changed && <button type="button" className="worktree-bar-count link" title={model.changed.help} onClick={() => act('changes')}>{model.changed.text}</button>}

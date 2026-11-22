@@ -232,6 +232,22 @@ pub fn on_status(host: &Arc<Host>, session_id: &str, status: Option<&str>) {
     });
 }
 
+/// Sends a non-pane system notification (e.g. daily budget exceeded) when OS notifications are allowed.
+pub fn notify_custom(host: &Arc<Host>, title: String, body: String) {
+    if host.closing() || permission(host) != NotificationPermission::Allowed {
+        return;
+    }
+    let Some(ports) = host.app.try_state::<crate::platform::Ports>() else { return };
+    let notifier = ports.notifier.clone();
+    let notification = Notification { title, body, pane_id: None };
+    let log = host.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(error) = notifier.notify(notification).await {
+            log.log.line(&format!("notifications: not shown: {error}"));
+        }
+    });
+}
+
 /// The completion notification of a pane (C# `HandleRunEventForNotification`'s toast): the localized title over "{title} has
 /// finished.", the pane's id for its click, nothing of its prompt or folder.
 pub fn completion(locale: &Locale, session_id: &str, run_title: &str) -> Notification {

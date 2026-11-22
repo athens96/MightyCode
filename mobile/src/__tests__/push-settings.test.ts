@@ -21,10 +21,19 @@ function memoryStore(): SecretStore & { items: Map<string, string> } {
 describe('push settings', () => {
   it('turns everything on by default and reads a partial file', () => {
     expect(parsePushSettings(null)).toEqual(DEFAULT_PUSH_SETTINGS);
-    expect(enabledKinds(DEFAULT_PUSH_SETTINGS)).toEqual(['completed', 'failed', 'permission', 'question', 'plan', 'signin']);
+    expect(enabledKinds(DEFAULT_PUSH_SETTINGS)).toEqual([
+      'completed',
+      'failed',
+      'permission',
+      'question',
+      'plan',
+      'signin',
+      'budget',
+    ]);
     const partial = parsePushSettings(JSON.stringify({ kinds: { completed: false }, crashReports: false }));
     expect(partial.kinds.completed).toBe(false);
     expect(partial.kinds.permission).toBe(true);
+    expect(partial.kinds.budget).toBe(true);
     expect(partial.crashReports).toBe(false);
     expect(parsePushSettings('{broken')).toEqual(DEFAULT_PUSH_SETTINGS);
   });
@@ -65,7 +74,7 @@ describe('push settings', () => {
     const first = settings.update((now) => ({ ...now, kinds: { ...now.kinds, completed: false } }));
     const second = settings.update((now) => ({ ...now, kinds: { ...now.kinds, plan: false } }));
     await Promise.all([first, second]);
-    expect(enabledKinds(settings.get())).toEqual(['failed', 'permission', 'question', 'signin']);
+    expect(enabledKinds(settings.get())).toEqual(['failed', 'permission', 'question', 'signin', 'budget']);
     expect(parsePushSettings(store.items.get(PUSH_SETTINGS_KEY)!)).toEqual(settings.get());
   });
 

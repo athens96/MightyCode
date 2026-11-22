@@ -14,7 +14,15 @@ export interface PushSettings {
 }
 
 export const DEFAULT_PUSH_SETTINGS: PushSettings = {
-  kinds: { completed: true, failed: true, permission: true, question: true, plan: true, signin: true },
+  kinds: {
+    completed: true,
+    failed: true,
+    permission: true,
+    question: true,
+    plan: true,
+    signin: true,
+    budget: true,
+  },
   crashReports: true,
 };
 

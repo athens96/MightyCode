@@ -18,7 +18,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use mighty_delegation::agent_io::binding::AgentIoBinding;
-use mighty_delegation::agent_io::server::{AgentIo, DelegationLink, TerminalCall, TerminalHandler, logged_binding_factory};
+use mighty_delegation::agent_io::server::{
+    AgentIo, DelegationLink, TerminalCall, TerminalHandler, WorkspaceLink, logged_binding_factory_with_workspace,
+};
 use mighty_delegation::agent_io::tools::absolute_uri;
 use mighty_delegation::request::DelegationHandler;
 use mighty_platform::BoxFuture;
@@ -133,13 +135,19 @@ pub fn factory(host: &Arc<Host>) -> Option<BindingFactory> {
             let enabled = link_host.upgrade().is_some_and(|host| crate::settings::general::delegation_on(&host) && host.delegation_live());
             (handler, enabled)
         });
+        let ws_host = Arc::downgrade(&host);
+        let ws_handler = crate::workspace_mcp::handler(&host);
+        let workspace_link: WorkspaceLink = Arc::new(move || {
+            let enabled = ws_host.upgrade().is_some_and(|host| host.view().snapshot.cross_workspace_lookup_on());
+            (Some(ws_handler.clone()), enabled)
+        });
         let log_host = Arc::downgrade(&host);
         let log = Arc::new(move |line: &str| {
             if let Some(host) = log_host.upgrade() {
                 host.log.line(line);
             }
         });
-        logged_binding_factory(io, executable.clone(), link, log)(request, workspace)
+        logged_binding_factory_with_workspace(io, executable.clone(), link, workspace_link, log)(request, workspace)
     }))
 }
 

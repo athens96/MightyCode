@@ -18,6 +18,8 @@ import { toggleReview, useReviewOpen } from '../review/queue';
 const LazySurfaces = lazy(() => import('../native/Surfaces').then((m) => ({ default: m.Surfaces })));
 const LazyReviewPanel = lazy(() => import('../review/ReviewPanel').then((m) => ({ default: m.ReviewPanel })));
 const LazyPictureViewer = lazy(() => import('../pictures/PictureViewer').then((m) => ({ default: m.PictureViewer })));
+const LazyUsageReportPanel = lazy(() => import('./UsageReportPanel').then((m) => ({ default: m.UsageReportPanel })));
+const LazyIssuePickerPanel = lazy(() => import('../integrations/IssuePickerPanel').then((m) => ({ default: m.IssuePickerPanel })));
 
 function Grip({ width, setLive }: { width: number; setLive: (width: number | null) => void }) {
   const { t, bridge } = useServices();
@@ -120,7 +122,39 @@ export function Shell() {
   const reviewOpen = useReviewOpen();
   const [live, setLive] = useState<number | null>(null);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [usageReportOpen, setUsageReportOpen] = useState(false);
+  const [issuePickerState, setIssuePickerState] = useState<{ open: boolean; workspaceId: string | null; paneId: string | null; settingsOpen: boolean }>({
+    open: false,
+    workspaceId: null,
+    paneId: null,
+    settingsOpen: false,
+  });
+  const activeWorkspaceId = useStoreSelector((state) => state.snapshot?.activeWorkspaceId ?? null);
+  const activePaneId = useStoreSelector((state) => {
+    const id = state.snapshot?.activeSessionId;
+    const pane = id ? state.snapshot?.sessions.find((s) => s.id === id) : undefined;
+    return pane && pane.kind !== 'shell' ? pane.id : null;
+  });
   const closeUsage = useCallback((open: boolean) => setUsageOpen(open), []);
+  const openUsageReportFromMenu = useCallback((open: boolean) => setUsageReportOpen(open), []);
+  useEffect(() => {
+    const onOpenIssues = (event: Event) => {
+      const detail = (event as CustomEvent<{ workspaceId?: string | null; paneId?: string | null; settingsOpen?: boolean }>).detail;
+      setIssuePickerState({
+        open: true,
+        workspaceId: detail?.workspaceId ?? activeWorkspaceId,
+        paneId: detail?.paneId ?? activePaneId,
+        settingsOpen: Boolean(detail?.settingsOpen),
+      });
+    };
+    const onOpenReport = () => setUsageReportOpen(true);
+    window.addEventListener('mighty:open-issues', onOpenIssues);
+    window.addEventListener('mighty:open-usage-report', onOpenReport);
+    return () => {
+      window.removeEventListener('mighty:open-issues', onOpenIssues);
+      window.removeEventListener('mighty:open-usage-report', onOpenReport);
+    };
+  }, [activeWorkspaceId, activePaneId]);
   useEffect(() => {
     void bridge.call('shellState').then((value) => { if (value) store.dispatch({ kind: 'shell', shell: value as NonNullable<typeof shell> }); }, () => {});
     // Views open before the page loaded (or loaded again) are sent again without eagerly loading Surfaces.
@@ -131,9 +165,9 @@ export function Shell() {
     if (!selected) return;
     document.querySelector('.sidebar [data-session-id="' + escapeCssAttr(selected.paneId) + '"]')?.scrollIntoView({ block: 'nearest' });
   }, [selected]);
-  useShortcuts(blocked);
-  // The Mac's menu bar (D9): its items that are page UI arrive as `menu` pushes (gated inside the hook outside Tauri).
-  useMenu(blocked, closeUsage);
+  useShortcuts(blocked || usageReportOpen || issuePickerState.open);
+  // The Mac's menu bar (D9): Workspace › Show usage opens the cumulative Usage Report dashboard.
+  useMenu(blocked || usageReportOpen || issuePickerState.open, openUsageReportFromMenu);
   if (!hasSnapshot || !shell) return <div className="shell-loading" data-testid="loading">{t('launch.preparing')}</div>;
   const width = live ?? savedWidth;
   const header = shell.dashboard ? undefined : shell.header;
@@ -158,6 +192,22 @@ export function Shell() {
       </div>
       {hasNatives && <Suspense fallback={null}><LazySurfaces skipInitialSync /></Suspense>}
       {reviewOpen && <Suspense fallback={null}><LazyReviewPanel /></Suspense>}
+      {usageReportOpen && <Suspense fallback={null}><LazyUsageReportPanel open={usageReportOpen} onClose={() => setUsageReportOpen(false)} /></Suspense>}
+      {issuePickerState.open && (
+        <Suspense fallback={null}>
+          <LazyIssuePickerPanel
+            open={issuePickerState.open}
+            workspaceId={issuePickerState.workspaceId ?? activeWorkspaceId}
+            paneId={issuePickerState.paneId ?? activePaneId}
+            initialSettingsOpen={issuePickerState.settingsOpen}
+            onClose={() => setIssuePickerState((prev) => ({ ...prev, open: false }))}
+            onAttachToComposer={(text) => {
+              const targetPane = issuePickerState.paneId ?? activePaneId;
+              if (targetPane) store.dispatch({ kind: 'fill', paneId: targetPane, text, append: true });
+            }}
+          />
+        </Suspense>
+      )}
       <Dialogs />
       {hasPicture && <Suspense fallback={null}><LazyPictureViewer /></Suspense>}
     </MenuHost>

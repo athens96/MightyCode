@@ -404,6 +404,59 @@ async fn open_in_worktree(
     added
 }
 
+/// Appends a system note to `pane_id`'s log (used by MightyWork stage sync notifications).
+pub(crate) fn append_system_note(host: &Arc<Host>, pane_id: &str, text: String) {
+    note_pane(host, pane_id, text);
+}
+
+/// Creates a dedicated git worktree pane seeded with a linked task/issue, fixed title, and optional draft.
+pub(crate) async fn open_task_in_worktree(
+    host: &Arc<Host>,
+    workspace: &Workspace,
+    provider: &str,
+    session_id: String,
+    title: String,
+    draft: String,
+    linked_task: Option<mighty_core::model::LinkedTask>,
+) -> Result<bool, String> {
+    let locale = host.locale;
+    let (made, checkout, reason) = make(host, workspace, &session_id).await;
+    let Some(made) = made else {
+        let reason = reason.unwrap_or_default();
+        return Err(locale.get_with("paneWorktree.error.cannotMake", &[("reason", &reason)]));
+    };
+    let port = core::port(&session_id, &taken_ports(host), |port| port_free(host, port));
+    let mut record = core::from_made(&made, &checkout, port, workspace.worktree_setup_command.clone());
+    record.linked_task = linked_task.clone();
+
+    let port_text = record.port.to_string();
+    let words = [("branch", record.branch()), ("base", record.base_branch()), ("port", port_text.as_str())];
+    let line = locale.get_with("paneWorktree.log.made", &words);
+    let (shaped_id, shaped_record, provider_name) = (session_id.clone(), record.clone(), provider.to_string());
+    let added = frame::add_pane_to(host, Some(workspace.id()), "claude", provider, None, move |pane| {
+        let mut pane = RunSession {
+            id: Some(shaped_id),
+            title: Some(title),
+            title_mode: Some("fixed".into()),
+            draft: Some(draft),
+            working_folder: Some(shaped_record.run_folder().to_string()),
+            pane_worktree: Some(shaped_record),
+            linked_task,
+            ..pane
+        };
+        pane.logs.get_or_insert_with(Vec::new).push(system_log(line, Some(provider_name)));
+        pane
+    });
+    if host.view().snapshot.session(&session_id).is_none() {
+        if let Some(places) = places() {
+            core::discard(&places.git, &places.paths, &record, &session_id, &places.root, &locale).await;
+        }
+        return added.map(|_| false);
+    }
+    prepare(host, &session_id, workspace, record);
+    added
+}
+
 /// The worktree made for the session `id` of `workspace` (C# `maker.Check` then `MakePane`): it, the checkout it was made from, or why
 /// not. Only where the git that writes may touch the workspace and the root.
 async fn make(
@@ -814,6 +867,7 @@ async fn merge_pane(host: &Arc<Host>, id: &str, pane: &PaneWorktree, commit_firs
             let short: String = commit.chars().take(8).collect();
             let words = [("branch", pane.branch()), ("base", pane.base_branch()), ("commit", short.as_str())];
             note_pane(host, id, locale.get_with("paneWorktree.log.merged", &words));
+            crate::integrations::on_worktree_merged(host, id, pane, &commit);
         }
         MergeOutcome::Refused(reason) => {
             {
@@ -890,11 +944,15 @@ async fn create_pull_request(host: &Arc<Host>, id: &str, pane: &PaneWorktree) {
             Some(repository) => {
                 note_pane(host, id, locale.get_with("paneWorktree.pr.pushedOpening", &[("branch", pane.branch())]));
                 let url = core::compare_url(&repository, pane.base_branch(), pane.branch());
+                crate::integrations::on_worktree_pr(host, id, pane, Some(&url));
                 if let Ok(Err(error)) = tauri::async_runtime::spawn_blocking(move || crate::platform::open_url(&url)).await {
                     banner(host, error);
                 }
             }
-            None => note_pane(host, id, locale.get_with("paneWorktree.pr.pushed", &[("branch", pane.branch())])),
+            None => {
+                note_pane(host, id, locale.get_with("paneWorktree.pr.pushed", &[("branch", pane.branch())]));
+                crate::integrations::on_worktree_pr(host, id, pane, None);
+            }
         }
     })
     .await;
@@ -1239,6 +1297,7 @@ async fn row_action(host: &Arc<Host>, workspace: &Workspace, row: &Row, action: 
                     let short: String = commit.chars().take(8).collect();
                     let words = [("branch", row.worktree.branch()), ("base", row.worktree.base_branch()), ("commit", short.as_str())];
                     banner(host, locale.get_with("paneWorktree.log.merged", &words));
+                    crate::integrations::on_kept_worktree_merged(host, workspace.id(), &row.worktree, &commit);
                     let id = row.session_id.clone();
                     update_workspace(host, workspace.id(), |w| {
                         for kept in w.kept_pane_worktrees.iter_mut().flatten() {

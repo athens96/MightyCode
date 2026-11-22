@@ -28,8 +28,8 @@ import {
   channelName,
   notificationData,
   notificationFor,
+  notificationPath,
   outcomeUpdate,
-  sessionPath,
   type PushAction,
   type PushNotificationSpec,
 } from '@/lib/push/notification';
@@ -174,7 +174,7 @@ export function openNotification(notification: Notification | undefined, open?: 
     if (lastOpened !== null && lastOpened.id === id && now - lastOpened.at < OPEN_DEDUPE_MS) return;
     lastOpened = { id, at: now };
   }
-  const path = sessionPath(data);
+  const path = notificationPath(data);
   const target = open ?? opener;
   if (target === null) pendingPath = path;
   else target(path);

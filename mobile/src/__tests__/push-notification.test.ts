@@ -8,6 +8,7 @@ import {
   CHANNEL_WORK,
   notificationData,
   notificationFor,
+  notificationPath,
   outcomeUpdate,
   sessionPath,
   type PushNotificationData,
@@ -52,8 +53,53 @@ describe('notificationFor', () => {
     expect(notificationFor(message({ kind: 'question', permission: undefined }), 'host-a', HANDLE).actions).toEqual([]);
   });
 
-  it('opens the session the notification is about', () => {
+  it('formats a daily budget alert on the attention channel with a unique id and fallback body', () => {
+    const budgetWithSummary = notificationFor(
+      message({
+        id: 'budget:2026-11-22',
+        kind: 'budget',
+        workspace: '',
+        title: '$12.50 / $10.00',
+        summary: 'Daily budget exceeded',
+        sessionId: 'budget',
+        permission: undefined,
+      }),
+      'host-a',
+      HANDLE,
+    );
+    expect(budgetWithSummary.id).toBe(`${HANDLE}:budget:2026-11-22`);
+    expect(budgetWithSummary.channelId).toBe(CHANNEL_ATTENTION);
+    expect(budgetWithSummary.title).toBe(t('phone.push.title.budget', { title: '$12.50 / $10.00' }));
+    expect(budgetWithSummary.body).toBe('Daily budget exceeded');
+    expect(budgetWithSummary.subText).toBe('Test Mac');
+    expect(budgetWithSummary.actions).toEqual([]);
+    expect(notificationData(budgetWithSummary.data)).toEqual({
+      storageId: 'host-a',
+      sessionId: 'budget',
+      kind: 'budget',
+    });
+
+    const budgetFallback = notificationFor(
+      message({
+        id: 'budget:2026-11-23',
+        kind: 'budget',
+        workspace: '',
+        title: '$10.00',
+        summary: '',
+        sessionId: 'budget',
+        permission: undefined,
+      }),
+      'host-a',
+      HANDLE,
+    );
+    expect(budgetFallback.body).toBe(t('phone.push.body.budget'));
+  });
+
+  it('opens the session the notification is about, or the host overview for budget alerts', () => {
     expect(sessionPath({ storageId: 'host a', sessionId: 'pane/1', kind: 'question' })).toBe('/host/host%20a/session/pane%2F1');
+    expect(notificationPath({ storageId: 'host a', sessionId: 'budget', kind: 'budget' })).toBe('/host/host%20a');
+    expect(sessionPath({ storageId: 'host a', sessionId: 'pane-1', kind: 'budget' })).toBe('/host/host%20a');
+    expect(sessionPath({ storageId: 'host a', sessionId: 'budget', kind: 'completed' })).toBe('/host/host%20a');
     expect(notificationData({ storageId: 'a' })).toBeNull();
   });
 

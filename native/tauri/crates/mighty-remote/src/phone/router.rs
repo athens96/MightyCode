@@ -1278,6 +1278,25 @@ impl Inner {
             let (inner, locale) = (self.clone(), *l);
             return blocking(move || inner.commands(&pane, &locale)).await;
         }
+        if method == "GET" && route.len() == 4 && route[3] == "prompts" && query.is_empty() {
+            let prompts = self.desk.saved_prompts(pane.workspace_id());
+            let mut out = JsonOut::new();
+            out.begin_object();
+            out.prop_int("protocol", 1);
+            out.name("prompts");
+            out.begin_array();
+            for p in &prompts {
+                out.begin_object();
+                out.prop_str("id", Some(&p.id));
+                out.prop_str("name", Some(&p.name));
+                out.prop_str("text", Some(&p.text));
+                out.prop_str("scope", Some(if p.workspace_id.is_some() { "workspace" } else { "all" }));
+                out.end_object();
+            }
+            out.end_array();
+            out.end_object();
+            return Ok(reply(200, out.finish()));
+        }
         if method == "POST" && route.len() == 4 {
             let operation = route[3];
             if operation == "permission" {
@@ -1437,6 +1456,50 @@ impl Inner {
                 .map_err(|_| MobileError::Failed("the submit stopped".into()))??;
                 return Ok(reply(202, submit_reply(&result)));
             }
+            if operation == "prompt-send" {
+                let value = body_object(body, MAXIMUM_BODY)?;
+                let prompt_id = required(&value, "promptId")?.to_string();
+                if !wire::identifier(&prompt_id) {
+                    return Err(request(400, "Invalid saved prompt id."));
+                }
+                if let Some(mode) = text(&value, "mode")
+                    && !matches!(mode, "queue" | "steer")
+                {
+                    return Err(request(400, "Unknown submit mode."));
+                }
+                let permit = self.submit_slots.clone().acquire_owned().await.map_err(|_| MobileError::Failed("closed".into()))?;
+                let inner = self.clone();
+                let answer = tokio::spawn(async move {
+                    let _slot = permit;
+                    let result = inner
+                        .desk
+                        .action(MobileDesktopAction {
+                            session_id: id,
+                            action: "prompt-send".into(),
+                            body: Value::Object(value),
+                            attachments: None,
+                        })
+                        .await;
+                    if result.is_ok() {
+                        inner.changed();
+                    }
+                    result
+                })
+                .await
+                .map_err(|_| MobileError::Failed("the prompt send stopped".into()))??;
+                let payload = answer_value(&answer);
+                return Ok(reply(
+                    202,
+                    object(|o| {
+                        let outcome = payload.get("outcome").and_then(Value::as_str).unwrap_or("started");
+                        o.prop_str("accepted", Some(outcome));
+                        o.prop_str("outcome", Some(outcome));
+                        o.prop_str("text", payload.get("text").and_then(Value::as_str).or(Some("")));
+                        o.prop_str("entryId", payload.get("entryId").and_then(Value::as_str));
+                        o.prop_str("runId", payload.get("runId").and_then(Value::as_str));
+                    }),
+                ));
+            }
             if operation == "setAskTarget" {
                 // The pane's "send to" choice: a target id it offers, or null for Claude. Which ids it offers is the desktop's.
                 let value = body_object(body, MAXIMUM_BODY)?;
@@ -1533,6 +1596,9 @@ impl Inner {
                         | SlashCommandAction::OpenSettings
                         | SlashCommandAction::SetModel
                         | SlashCommandAction::SetPermission
+                        | SlashCommandAction::ManagePrompts
+                        | SlashCommandAction::InsertPrompt
+                        | SlashCommandAction::OpenIssues
                 )
             )
         }) {

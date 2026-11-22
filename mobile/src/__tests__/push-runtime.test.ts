@@ -111,7 +111,11 @@ function sealFixtureMessage(
   const nonce = new Uint8Array(12).fill(options.nonceByte ?? 0x42);
   const key = pushKey(seal.deviceToken, seal.clientId);
   const baseMessage = JSON.parse(seal.plaintext) as Record<string, unknown>;
-  const plaintext = utf8Encode(JSON.stringify({ ...baseMessage, ...overrides }));
+  const merged: Record<string, unknown> = { ...baseMessage, ...overrides };
+  if ('permission' in overrides && overrides['permission'] === undefined) {
+    delete merged['permission'];
+  }
+  const plaintext = utf8Encode(JSON.stringify(merged));
   const ciphertext = chacha20poly1305(key, nonce, utf8Encode(`${PUSH_INFO}:${handle}`)).encrypt(plaintext);
   const out = new Uint8Array(1 + nonce.length + ciphertext.length);
   out[0] = PUSH_VERSION;
@@ -321,6 +325,43 @@ describe('handleNotificationEvent', () => {
     expect(later).toHaveBeenCalledWith('/host/pair-b/session/pane-1');
   });
 
+  it('shows a sealed budget push unless muted by kind, and routes a tap to the host overview', async () => {
+    const { runtime, m } = load();
+    pair(m, 'pair-b', true);
+    const budgetEnvelope = sealFixtureMessage({
+      id: 'budget:2026-11-22',
+      kind: 'budget',
+      workspace: '',
+      title: '$15.00',
+      summary: 'Daily limit reached',
+      sessionId: 'budget',
+      permission: undefined,
+    });
+    await runtime.showPush({ data: { v: '1', h: seal.handle, p: budgetEnvelope } });
+    expect(m.notifee.displayNotification).toHaveBeenCalledTimes(1);
+    const shown = m.notifee.displayNotification.mock.calls[0][0];
+    expect(shown.data).toEqual({ storageId: 'pair-b', sessionId: 'budget', kind: 'budget' });
+    expect(shown.android.channelId).toBe('attention');
+
+    const open = jest.fn();
+    await runtime.handleNotificationEvent({ type: 1, detail: { notification: shown } } as never, open);
+    expect(open).toHaveBeenCalledWith('/host/pair-b');
+
+    const { pushSettings } = require('@/lib/push/settings') as typeof import('@/lib/push/settings');
+    await pushSettings.update((now) => ({ ...now, kinds: { ...now.kinds, budget: false } }));
+    const nextBudget = sealFixtureMessage({
+      id: 'budget:2026-11-23',
+      kind: 'budget',
+      workspace: '',
+      title: '$16.00',
+      summary: 'Daily limit reached',
+      sessionId: 'budget',
+      permission: undefined,
+    });
+    await runtime.showPush({ data: { v: '1', h: seal.handle, p: nextBudget } });
+    expect(m.notifee.displayNotification).toHaveBeenCalledTimes(1);
+  });
+
   it('answers a button on the notification pairing and says so without buttons', async () => {
     const { runtime, m } = load();
     const respondPermission = jest.fn(async () => ({ ok: true }));
@@ -388,7 +429,10 @@ describe('syncing with the hosts', () => {
     expect(await runtime.syncAllHosts()).toBe(true);
     expect(m.messaging['setAutoInitEnabled']).toHaveBeenCalledWith(expect.anything(), true);
     expect(registerPush).toHaveBeenCalledWith(
-      { handle: seal.handle, kinds: ['completed', 'failed', 'permission', 'question', 'plan', 'signin'] },
+      {
+        handle: seal.handle,
+        kinds: ['completed', 'failed', 'permission', 'question', 'plan', 'signin', 'budget'],
+      },
       expect.any(AbortSignal),
     );
     expect(info).toHaveBeenCalledTimes(1);

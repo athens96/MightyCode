@@ -240,7 +240,24 @@ pub fn pane_worktree(pane: &PaneWorktree, session_id: &str, restoring: bool) -> 
     if copy.note_given != Some(true) {
         copy.note_given = None;
     }
+    copy.linked_task = linked_task(pane.linked_task.as_ref());
     Some(copy)
+}
+
+fn linked_task(task: Option<&crate::model::LinkedTask>) -> Option<crate::model::LinkedTask> {
+    let task = task?;
+    let source = wire::clean(&task.source, 32);
+    let key = wire::clean(&task.key, 128);
+    if !matches!(source.as_str(), "mightywork" | "github") || key.is_empty() {
+        return None;
+    }
+    Some(crate::model::LinkedTask {
+        source,
+        project: task.project.as_deref().map(|p| wire::clean(p, 128)).filter(|p| !p.is_empty()),
+        key,
+        title: task.title.as_deref().map(|t| wire::clean(t, 240)).filter(|t| !t.is_empty()),
+        url: task.url.as_deref().map(|u| wire::clean(u, 512)).filter(|u| !u.is_empty()),
+    })
 }
 
 /// `KeptPaneWorktree.Normalized`: the records worth keeping from a saved list: valid ids and worktrees, one per session (the last),
@@ -1662,6 +1679,7 @@ fn normalize_session(s: &RunSession, restoring: bool, remote_ids: &HashSet<Strin
             })
             .and_then(|pane| pane_worktree(pane, s.id(), restoring)),
         ask_target: if plan_mode && !remote_ids.contains(s.workspace_id()) { s.ask_target.clone() } else { None },
+        linked_task: if kind == "claude" { linked_task(s.linked_task.as_ref()) } else { None },
         shell_block_runs: if kind == "claude" { shell_block_runs(s.shell_block_runs.as_ref(), restoring) } else { None },
         provider: Some(provider),
         ..s.clone()

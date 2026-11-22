@@ -16,11 +16,14 @@ use crate::agent_io::client;
 use crate::mcp::delegation::{DelegationServer, DelegationTransport};
 use crate::mcp::serve::{self, Handle};
 use crate::mcp::terminal::{TerminalServer, TerminalTransport};
+use crate::mcp::workspace::{WorkspaceServer, WorkspaceTransport};
 
 /// `--agent-io-mcp` (exactly this one argument).
 pub const AGENT_IO_MCP_ARGUMENT: &str = "--agent-io-mcp";
 /// `DelegationMcp.HeadlessArgument`: `--agent-delegation-mcp` (exactly this one argument).
 pub const DELEGATION_MCP_ARGUMENT: &str = "--agent-delegation-mcp";
+/// `--agent-workspace-mcp`: read-only cross-workspace lookup MCP server (`mighty-workspace`).
+pub const WORKSPACE_MCP_ARGUMENT: &str = "--agent-workspace-mcp";
 
 /// C# Program.cs:146, `Locale.PreferredLanguages = WindowsPreferredLanguages` before any mode: the process's language read from the
 /// OS's preferred languages once, so whatever copy a mode reads follows them as the app's "system" does.
@@ -71,5 +74,22 @@ pub fn delegation_transport(connector: Arc<dyn AgentIoConnector>, pipe: String, 
     Arc::new(move |request| {
         let (connector, pipe, token) = (connector.clone(), pipe.clone(), token.clone());
         Box::pin(async move { client::call_delegation(connector.as_ref(), &pipe, &token, &request).await })
+    })
+}
+
+/// `--agent-workspace-mcp`: the `mighty-workspace` server over stdio until stdin ends; the process's exit code.
+pub fn workspace_mcp(connector: Arc<dyn AgentIoConnector>) -> i32 {
+    locale_first();
+    let pipe = std::env::var(connector.transport().env_key()).unwrap_or_default();
+    let token = std::env::var(TOKEN_KEY).unwrap_or_default();
+    let transport = (!pipe.is_empty() && !token.is_empty()).then(|| workspace_transport(connector, pipe, token));
+    run(WorkspaceServer::new(transport).handler())
+}
+
+///Forwards a `WorkspaceRequest` over this pane's pipe and token.
+pub fn workspace_transport(connector: Arc<dyn AgentIoConnector>, pipe: String, token: String) -> WorkspaceTransport {
+    Arc::new(move |request| {
+        let (connector, pipe, token) = (connector.clone(), pipe.clone(), token.clone());
+        Box::pin(async move { client::call_workspace(connector.as_ref(), &pipe, &token, &request).await })
     })
 }

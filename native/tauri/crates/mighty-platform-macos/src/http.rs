@@ -214,6 +214,18 @@ async fn connect(target: &Target, route: &Proxy) -> Result<(Box<dyn Io>, bool)> 
 }
 
 async fn send(proxy: &dyn ProxyResolver, target: Target, request: HttpsRequest, body: Vec<u8>, max_body: usize) -> Result<HttpsResponse> {
+    let (resp, _) = send_inner(proxy, target, request, body, max_body, false).await?;
+    Ok(resp)
+}
+
+async fn send_inner(
+    proxy: &dyn ProxyResolver,
+    target: Target,
+    request: HttpsRequest,
+    body: Vec<u8>,
+    max_body: usize,
+    read_post_body: bool,
+) -> Result<(HttpsResponse, Option<String>)> {
     let headers = headers(&request)?;
     // A system proxy that cannot be read is no proxy (URLSession goes straight then).
     let route = proxy.resolve(&target.origin()).await.unwrap_or(Proxy::Direct);
@@ -242,10 +254,12 @@ async fn send(proxy: &dyn ProxyResolver, target: Target, request: HttpsRequest, 
     let status = answer.status().as_u16();
     let text = |name: &str| answer.headers().get(name).map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned());
     let retry_after = text("retry-after");
+    let mcp_session = text("mcp-session-id");
     let redirect_location =
         (300..400).contains(&status).then(|| text("location").filter(|l| !l.is_empty()).unwrap_or_else(|| "refused".into()));
     let mut read = Vec::new();
-    if (200..300).contains(&status) && !target.post {
+    let should_read = if read_post_body { (200..500).contains(&status) } else { (200..300).contains(&status) && !target.post };
+    if should_read {
         let mut incoming = answer.into_body();
         while let Some(frame) = incoming.frame().await {
             let frame = frame.map_err(|_| PlatformError::Refused("the answer ended early".into()))?;
@@ -259,7 +273,7 @@ async fn send(proxy: &dyn ProxyResolver, target: Target, request: HttpsRequest, 
         }
     }
     driver.abort();
-    Ok(HttpsResponse { status, body: String::from_utf8_lossy(&read).into_owned(), retry_after, redirect_location })
+    Ok((HttpsResponse { status, body: String::from_utf8_lossy(&read).into_owned(), retry_after, redirect_location }, mcp_session))
 }
 
 /// The whole request given up on once `timeout` passes (C#'s `HttpClient.Timeout`, Swift's `timeoutIntervalForResource`).
@@ -313,6 +327,14 @@ impl HttpsSend for MacHttps {
             let target = split_post(&request.url)?;
             let timeout = request.timeout;
             within(timeout, send(self.proxy.as_ref(), target, request, body, max_body)).await
+        })
+    }
+
+    fn post_json(&self, request: HttpsRequest, body: Vec<u8>, max_body: usize) -> BoxFuture<'_, Result<(HttpsResponse, Option<String>)>> {
+        Box::pin(async move {
+            let target = split_post(&request.url)?;
+            let timeout = request.timeout;
+            within(timeout, send_inner(self.proxy.as_ref(), target, request, body, max_body, true)).await
         })
     }
 }
@@ -583,5 +605,15 @@ mod tests {
         assert!(matches!(read, Err(PlatformError::TooLarge(4))), "{read:?}");
         let read = send(&FakeProxy::default(), target, request("https://unused.example/", &[]), vec![], 64).await.unwrap();
         assert_eq!((read.status, read.body.as_str()), (200, "0123456789"));
+
+        let (mcp_port, _) = server(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nMcp-Session-Id: sess-42\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}",
+        )
+        .await;
+        let (mcp_resp, sid) = https
+            .post_json(request(&format!("http://127.0.0.1:{mcp_port}/mcp"), &[("Content-Type", "application/json")]), b"{}".to_vec(), 1024)
+            .await
+            .unwrap();
+        assert_eq!((mcp_resp.status, mcp_resp.body.as_str(), sid.as_deref()), (200, "{\"ok\":true}", Some("sess-42")));
     }
 }

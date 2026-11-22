@@ -822,8 +822,11 @@ fn slash_action(host: &Arc<Host>, view: &mut View, id: &str, action: SlashComman
             let (host, provider) = (host.clone(), session(view, id)?.provider().to_string());
             tauri::async_runtime::spawn(async move { crate::plugins::open(&host, &provider).await });
         }
-        // `ShowContext`: the session info popover, which the page opens itself (`sessionInfo`).
-        SlashCommandAction::ShowUsage => return Ok(false),
+        // `ShowContext` / `ManagePrompts` / `OpenIssues` / `InsertPrompt`: handled by the page or async `slashAction` RPC.
+        SlashCommandAction::ShowUsage
+        | SlashCommandAction::ManagePrompts
+        | SlashCommandAction::OpenIssues
+        | SlashCommandAction::InsertPrompt => return Ok(false),
     }
     Ok(true)
 }
@@ -1127,13 +1130,56 @@ pub fn register(methods: &mut Registry) {
             crate::ask::set_catalog(&host, pane.provider(), path.as_deref(), scanned.clone());
         }
         let scanned = scanned.unwrap_or_default();
+        let mut combined_scanned = crate::saved_prompts::slash_commands(&host, Some(pane.workspace_id()), &host.locale);
+        combined_scanned.extend(scanned);
         let view = host.view();
-        Ok(with_menu_inputs(&host, &view, &pane, |i| serde_json::to_value(menus::slash_catalog(i, &scanned)).unwrap_or(Value::Null)))
+        Ok(with_menu_inputs(&host, &view, &pane, |i| {
+            let mut cat = menus::slash_catalog(i, &combined_scanned);
+            if pane.kind() != "shell" {
+                let app_source = mighty_composer::slash::strings::app_source(&host.locale);
+                let prompts_desc = host.locale.get("slash.builtin.prompts");
+                let mut prompts_cmd = mighty_composer::slash::SlashCommand::new(
+                    "prompts",
+                    &prompts_desc,
+                    &app_source,
+                    mighty_composer::slash::SlashCommandOrigin::App,
+                );
+                prompts_cmd.action = Some(SlashCommandAction::ManagePrompts);
+                cat.builtins.push(menus::SlashRow::of(&prompts_cmd, &host.locale));
+
+                let issues_desc = host.locale.get("slash.builtin.issues");
+                let mut issues_cmd = mighty_composer::slash::SlashCommand::new(
+                    "issues",
+                    &issues_desc,
+                    &app_source,
+                    mighty_composer::slash::SlashCommandOrigin::App,
+                );
+                issues_cmd.action = Some(SlashCommandAction::OpenIssues);
+                cat.builtins.push(menus::SlashRow::of(&issues_cmd, &host.locale));
+            }
+            serde_json::to_value(cat).unwrap_or(Value::Null)
+        }))
     });
     methods.add("slashAction", |host: Arc<Host>, args| async move {
+        let Some(action) = text(&args, "action").and_then(SlashCommandAction::parse) else { return Err("Unknown action.".into()) };
+        if action == SlashCommandAction::InsertPrompt {
+            let id = {
+                let mut view = host.view();
+                ensure(&mut view, pane_id(&args))?
+            };
+            let expanded = crate::saved_prompts::expand_for_pane(&host, Some(&id), text(&args, "arg"), None).await?;
+            let mut view = host.view();
+            let ui = panes::ui(&mut view, &id)?;
+            ui.view.draft = expanded.clone();
+            ui.dirty = true;
+            if let Some(runs) = host.runs() {
+                let _ = runs.service.update_draft(&id, &expanded);
+            }
+            view.sync();
+            return Ok(json!(expanded));
+        }
         let mut view = host.view();
         let id = ensure(&mut view, pane_id(&args))?;
-        let Some(action) = text(&args, "action").and_then(SlashCommandAction::parse) else { return Err("Unknown action.".into()) };
         if slash_action(&host, &mut view, &id, action, text(&args, "arg"))? {
             let ui = panes::ui(&mut view, &id)?;
             ui.view.draft.clear();

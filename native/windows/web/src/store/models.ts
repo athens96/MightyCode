@@ -30,6 +30,14 @@ export interface ModelDefaultsConfig {
   codex: ProviderModeDefaults;
 }
 
+export interface LinkedTask {
+  source: string;
+  project?: string | null;
+  key: string;
+  title?: string | null;
+  url?: string | null;
+}
+
 export interface Workspace {
   id: string;
   name: string;
@@ -42,6 +50,10 @@ export interface Workspace {
   worktreeSetupCommand?: string;
   worktreeCopyPaths?: string[];
   keptPaneWorktrees?: { sessionId: string; title: string; provider: string; worktree: PaneWorktree; keptAt: string }[];
+  mightyworkProject?: string | null;
+  mightyworkUrl?: string | null;
+  githubRepo?: string | null;
+  mightyworkAutoSync?: boolean | null;
 }
 
 /** A workspace agent pane's own worktree (Core PaneWorktree.cs, the Mac's PaneWorktree). */
@@ -59,6 +71,7 @@ export interface PaneWorktree {
   preMergeCommit?: string | null;
   workingFolder?: string | null;
   noteGiven?: boolean | null;
+  linkedTask?: LinkedTask | null;
 }
 
 /** RunSettingsJsonConverter: maxTurns and maxBudgetUsd are always written (null when unset); the Codex-only ones only when not default. */
@@ -368,6 +381,7 @@ export interface RunSession {
   workingFolder?: string;
   /** Present on an agent pane that works in its own worktree (Core RunSession.PaneWorktree). */
   paneWorktree?: PaneWorktree | null;
+  linkedTask?: LinkedTask | null;
   /** The shell blocks of the agent's replies the user ran (MightyCode.Core/ShellBlockRuns.cs), one per block key. */
   shellRuns?: ShellBlockRun[];
 }
@@ -439,6 +453,8 @@ export interface AppSnapshot {
   autoLoginCLIs?: boolean;
   backgroundWorkOpen?: boolean;
   antigravityMigrated?: boolean;
+  agentChecklist?: boolean;
+  crossWorkspaceLookup?: boolean;
   referenceBubbleWidth?: number;
   referenceBubbleHeight?: number;
   claudeDirectUsageLookupEnabled: boolean;

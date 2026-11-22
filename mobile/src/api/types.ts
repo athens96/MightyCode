@@ -106,7 +106,9 @@ export type Capability =
    * Claude pane's background work fanned out under its request as compact rows, the delegate lines, the way back, the advisor
    * and the session log's status line. A phone asks only a host that lists it (an older host answers 400 to the name).
    */
-  | 'roles';
+  | 'roles'
+  /** The host exposes saved prompts (`GET /m1/sessions/{id}/prompts`, `POST /m1/sessions/{id}/prompt-send`). */
+  | 'savedPrompts';
 
 export const CAPABILITIES: readonly Capability[] = [
   'submit-mode',
@@ -130,6 +132,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'opencode',
   'hermes',
   'roles',
+  'savedPrompts',
 ] as const;
 
 export interface HostInfo {
@@ -1067,6 +1070,27 @@ export interface CommandResponse {
   ok: boolean;
   /** Body of `usage` / `help`. */
   message?: string;
+}
+
+export interface MobileSavedPrompt {
+  id: string;
+  name: string;
+  text: string;
+  scope: 'workspace' | 'all';
+}
+
+export interface MobileSavedPromptsResponse {
+  protocol: number;
+  prompts: MobileSavedPrompt[];
+}
+
+export interface MobilePromptSendResponse {
+  protocol: number;
+  accepted: 'started' | 'queued';
+  outcome: 'started' | 'queued';
+  text: string;
+  entryId?: string;
+  runId?: string;
 }
 
 /**

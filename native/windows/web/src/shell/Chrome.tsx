@@ -80,15 +80,21 @@ export function WorkspaceHeader({ header, counts, layoutMode }: { header: Header
         onClick={() => call('openWorkMap', { workspaceId: header.id })}><Icon name="map" size={16} weight={1.5} /></button>
       {/* 대화 검색 (the Rust host's): this computer's session records, so not for a remote workspace (M/WorkspaceView.swift). */}
       {import.meta.env.MODE === 'tauri' && (
-        <button type="button" className="icon-button header-icon-button" disabled={Boolean(header.remoteHost)} aria-label={t('conversationSearch.open')} data-testid="open-conversation-search"
-          title={header.remoteHost ? t('conversationSearch.remote') : t('conversationSearch.open') + (hostCapabilities()?.platform === 'macos' ? ' (⇧⌘F)' : ' (Ctrl+Shift+F)')}
-          onClick={() => call('openConversationSearch', { workspaceId: header.id })}><Icon name="search" size={16} weight={1.5} /></button>
+        <>
+          <button type="button" className="icon-button header-icon-button" disabled={Boolean(header.remoteHost)} aria-label={t('integrations.open')} data-testid="open-issue-picker"
+            title={t('integrations.open')}
+            onClick={() => window.dispatchEvent(new CustomEvent('mighty:open-issues', { detail: { workspaceId: header.id, settingsOpen: false } }))}><Icon name="list-todo" size={16} weight={1.5} /></button>
+          <button type="button" className="icon-button header-icon-button" disabled={Boolean(header.remoteHost)} aria-label={t('conversationSearch.open')} data-testid="open-conversation-search"
+            title={header.remoteHost ? t('conversationSearch.remote') : t('conversationSearch.open') + (hostCapabilities()?.platform === 'macos' ? ' (⇧⌘F)' : ' (Ctrl+Shift+F)')}
+            onClick={() => call('openConversationSearch', { workspaceId: header.id })}><Icon name="search" size={16} weight={1.5} /></button>
+        </>
       )}
     </header>
   );
 }
 
 function UsagePopover({ usage, onClose }: { usage: UsageDetails; onClose: () => void }) {
+  const { t } = useServices();
   const call = useCall();
   const element = useRef<HTMLDivElement>(null);
   usePageOverlay(true);
@@ -139,6 +145,19 @@ function UsagePopover({ usage, onClose }: { usage: UsageDetails; onClose: () => 
         </label>
       )}
       <div className="quiet small">{usage.shared}</div>
+      {import.meta.env.MODE === 'tauri' && (
+        <button
+          type="button"
+          className="link-button"
+          data-testid="open-usage-report"
+          onClick={() => {
+            onClose();
+            window.dispatchEvent(new CustomEvent('mighty:open-usage-report'));
+          }}
+        >
+          {t('usage.openDashboard')}
+        </button>
+      )}
     </div>
   );
 }

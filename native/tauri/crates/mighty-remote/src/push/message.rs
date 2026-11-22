@@ -10,7 +10,7 @@ use mighty_run::questionnaire::UserQuestionnaire;
 use crate::push::seal::MAXIMUM_PLAINTEXT;
 
 /// `MobilePushKinds.All`, in the host's order.
-pub const KINDS: [&str; 6] = ["completed", "failed", "permission", "question", "plan", "signin"];
+pub const KINDS: [&str; 7] = ["completed", "failed", "permission", "question", "plan", "signin", "budget"];
 /// `permission.buttons`.
 pub const BUTTONS: [&str; 4] = ["claude", "antigravity", "antigravityOnce", "none"];
 
@@ -20,6 +20,7 @@ pub const PERMISSION: &str = "permission";
 pub const QUESTION: &str = "question";
 pub const PLAN: &str = "plan";
 pub const SIGNIN: &str = "signin";
+pub const BUDGET: &str = "budget";
 
 pub const BUTTONS_CLAUDE: &str = "claude";
 pub const BUTTONS_ANTIGRAVITY: &str = "antigravity";

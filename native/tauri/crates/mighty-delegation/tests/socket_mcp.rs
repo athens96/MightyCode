@@ -15,7 +15,11 @@ use delegation_io::{executable, os_transport, request, temp};
 use mighty_delegation::agent_io::binding::{SERVER_NAME, TOKEN_KEY};
 use mighty_delegation::agent_io::client;
 use mighty_delegation::agent_io::server::{AgentIo, TerminalCall, TerminalHandler};
-use mighty_delegation::modes::{AGENT_IO_MCP_ARGUMENT, DELEGATION_MCP_ARGUMENT};
+use mighty_delegation::mcp::workspace::{
+    DETACHED_MESSAGE as WORKSPACE_DETACHED_MESSAGE, SERVER_NAME as WORKSPACE_SERVER_NAME, WorkspaceCaller, WorkspaceHandler,
+    WorkspaceRequest, WorkspaceResponse,
+};
+use mighty_delegation::modes::{AGENT_IO_MCP_ARGUMENT, DELEGATION_MCP_ARGUMENT, WORKSPACE_MCP_ARGUMENT};
 use mighty_delegation::request::{DETACHED_MESSAGE, DelegationResponse};
 use mighty_platform::BoxFuture;
 use serde_json::{Value, json};
@@ -192,5 +196,65 @@ async fn terminal_calls_on_the_shared_socket_are_served_as_before() {
     let terminal: Value = serde_json::from_str(&terminal).unwrap();
     assert!(terminal["ok"] == true && terminal["result"]["output"] == "hi\n", "{terminal}");
     assert_eq!(calls.lock().unwrap().iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["claude"], "only the terminal call reached it");
+    io.close().await;
+}
+
+struct StubWorkspace(Arc<Mutex<Vec<(String, String)>>>);
+
+impl WorkspaceHandler for StubWorkspace {
+    fn handle(&self, request: WorkspaceRequest, caller: WorkspaceCaller) -> BoxFuture<'static, WorkspaceResponse> {
+        self.0.lock().unwrap().push((caller.pane_id, request.tool.clone()));
+        Box::pin(async move {
+            match request.tool.as_str() {
+                "list_workspaces" => WorkspaceResponse::ok("1. api (@workspace:api)"),
+                _ => WorkspaceResponse::failure("unknown workspace tool"),
+            }
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn workspace_mcp_server_over_pipes_reaches_the_real_socket_server_and_honors_disable() {
+    let calls = Arc::new(Mutex::new(vec![]));
+    let seen = Arc::new(Mutex::new(vec![]));
+    let io = AgentIo::start(os_transport().0, Arc::new(EchoTerminal(calls))).unwrap();
+    let binding = io.bind("pane-w", "ws-1", &temp(), "claude", &executable()).unwrap();
+    let mut mcp = PipedServer::start(WORKSPACE_MCP_ARGUMENT, &binding.environment());
+
+    mcp.send(json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "0"}}}));
+    let initialized = mcp.next().await;
+    assert!(
+        initialized["id"] == 1
+            && initialized["result"]["protocolVersion"] == "2025-06-18"
+            && initialized["result"]["serverInfo"]["name"] == WORKSPACE_SERVER_NAME,
+        "{initialized}"
+    );
+    mcp.send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+    mcp.send(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}));
+    let listed = mcp.next().await;
+    let names: Vec<&str> = listed["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["list_workspaces", "search_workspace", "read_workspace_file", "recent_workspace_activity"]);
+
+    // Disabled by default until `connect_workspace(..., true)` is attached.
+    mcp.send(json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "list_workspaces", "arguments": {}}}));
+    let disabled = mcp.next().await;
+    assert!(
+        disabled["id"] == 3
+            && disabled["result"]["isError"] == true
+            && disabled["result"]["content"][0]["text"] == WORKSPACE_DETACHED_MESSAGE,
+        "{disabled}"
+    );
+
+    // Enabling cross-workspace lookup on the live binding immediately routes calls over the shared pipe.
+    binding.connect_workspace(Some(Arc::new(StubWorkspace(seen.clone()))), true);
+    mcp.send(json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "list_workspaces", "arguments": {}}}));
+    let enabled = mcp.next().await;
+    assert!(
+        enabled["id"] == 4 && enabled["result"]["isError"] != true && enabled["result"]["content"][0]["text"] == "1. api (@workspace:api)",
+        "{enabled}"
+    );
+    assert_eq!(*seen.lock().unwrap(), [("pane-w".to_string(), "list_workspaces".to_string())]);
+
+    assert!(mcp.close().await);
     io.close().await;
 }

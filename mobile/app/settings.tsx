@@ -15,6 +15,7 @@ const KIND_LABEL: Record<PushKind, string> = {
   question: 'phone.settings.kind.question',
   plan: 'phone.settings.kind.plan',
   signin: 'phone.settings.kind.signin',
+  budget: 'phone.settings.kind.budget',
 };
 
 /** Whether Android lets this app post notifications (Android 13 and later ask for it). */

@@ -45,6 +45,11 @@ describe('parseCapabilities', () => {
     expect(hasCapability(older, 'style')).toBe(false);
   });
 
+  it('knows "savedPrompts", so the saved prompt strip turns on only where the host lists it', () => {
+    expect(hasCapability(parseCapabilities(info(['commands', 'savedPrompts'])), 'savedPrompts')).toBe(true);
+    expect(hasCapability(parseCapabilities(info(['commands'])), 'savedPrompts')).toBe(false);
+  });
+
   it('drops anything that is not a name we know', () => {
     expect(parseCapabilities(info(['queue', 'teleport', '', 7, null, { name: 'pane' }]))).toEqual([
       'queue',

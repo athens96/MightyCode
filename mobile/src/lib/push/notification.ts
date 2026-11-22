@@ -4,7 +4,7 @@ import { PUSH_BUTTONS, PUSH_KINDS, type PushButtons, type PushKind, type PushMes
 export const CHANNEL_ATTENTION = 'attention';
 export const CHANNEL_WORK = 'work';
 
-const ATTENTION: readonly PushKind[] = ['permission', 'question', 'plan'];
+const ATTENTION: readonly PushKind[] = ['permission', 'question', 'plan', 'budget'];
 
 // Literal keys, so the locale checker sees every one in use.
 const TITLE: Record<PushKind, string> = {
@@ -14,6 +14,7 @@ const TITLE: Record<PushKind, string> = {
   question: 'phone.push.title.question',
   plan: 'phone.push.title.plan',
   signin: 'phone.push.title.signin',
+  budget: 'phone.push.title.budget',
 };
 const BODY: Record<PushKind, string> = {
   completed: 'phone.push.body.completed',
@@ -22,6 +23,7 @@ const BODY: Record<PushKind, string> = {
   question: 'phone.push.body.question',
   plan: 'phone.push.body.plan',
   signin: 'phone.push.body.signin',
+  budget: 'phone.push.body.budget',
 };
 
 export type PushAction = 'allow' | 'deny' | 'once' | 'always';
@@ -97,8 +99,15 @@ export function notificationData(data: Record<string, unknown> | undefined): Pus
   return parsed;
 }
 
-export function sessionPath(data: PushNotificationData): string {
+export function notificationPath(data: PushNotificationData): string {
+  if (data.kind === 'budget' || data.sessionId === 'budget') {
+    return `/host/${encodeURIComponent(data.storageId)}`;
+  }
   return `/host/${encodeURIComponent(data.storageId)}/session/${encodeURIComponent(data.sessionId)}`;
+}
+
+export function sessionPath(data: PushNotificationData): string {
+  return notificationPath(data);
 }
 
 export type PushOutcome = 'allowed' | 'denied' | 'already' | 'locked' | 'failed';

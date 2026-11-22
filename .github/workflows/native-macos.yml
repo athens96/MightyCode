@@ -252,8 +252,8 @@ jobs:
         with:
           workspaces: native/tauri -> target
           key: macos-smoke
-      - name: Delegation server lists its six tools headlessly; mighty-terminal keeps its four tools
-        # The app binary as the two stdio MCP servers a run can launch.
+      - name: Delegation, workspace and terminal MCP servers list their tools headlessly
+        # The app binary as the three stdio MCP servers a run can launch.
         if: (success() || failure()) && steps.unpack.outcome == 'success'
         timeout-minutes: 2
         run: |
@@ -272,14 +272,18 @@ jobs:
               return run.returncode, answers.get(1, {}).get("serverInfo", {}).get("name"), [t.get("name") for t in answers.get(2, {}).get("tools", [])]
           terminal = ask("--agent-io-mcp")
           delegation = ask("--agent-delegation-mcp")
-          print(json.dumps({"terminal": terminal, "delegation": delegation}))
+          workspace = ask("--agent-workspace-mcp")
+          print(json.dumps({"terminal": terminal, "delegation": delegation, "workspace": workspace}))
           four = ["run_in_terminal", "read_latest_output", "stop", "open_url"]
           six = ["delegate", "list_children", "child_status", "merge", "follow_up", "discard"]
+          ws_four = ["list_workspaces", "search_workspace", "read_workspace_file", "recent_workspace_activity"]
           problems = []
           if terminal != (0, "mighty-terminal", four):
               problems.append(f"--agent-io-mcp answered {terminal}")
           if delegation != (0, "mighty-delegation", six):
               problems.append(f"--agent-delegation-mcp answered {delegation}")
+          if workspace != (0, "mighty-workspace", ws_four):
+              problems.append(f"--agent-workspace-mcp answered {workspace}")
           for problem in problems:
               print(f"::error title=macOS MCP servers::{problem}", flush=True)
           sys.exit(1 if problems else 0)

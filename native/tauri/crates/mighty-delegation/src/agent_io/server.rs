@@ -21,9 +21,12 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use super::binding::{AgentIoBinding, AgentIoBindings, InvalidBinding, Revocation};
-use super::client::{DELEGATION_SECONDS, TERMINAL_SECONDS, response_bytes};
+use super::client::{DELEGATION_SECONDS, TERMINAL_SECONDS, response_bytes, workspace_response_bytes};
 use super::tools::validate_in;
 use super::wire::{self, Lenient};
+use crate::mcp::workspace::{
+    DETACHED_MESSAGE as WORKSPACE_DETACHED_MESSAGE, WorkspaceCaller, WorkspaceHandler, WorkspaceRequest, WorkspaceResponse,
+};
 use crate::request::{DETACHED_MESSAGE, DelegationCaller, DelegationRequest, DelegationResponse};
 
 /// `IDelegationRequestHandler` (the coordinator implements it): defined beside the request it serves.
@@ -223,6 +226,10 @@ impl AgentIo {
                 let call = request.get("delegation").cloned().unwrap_or(Value::Null);
                 self.answer_delegation(&document, request, &call, &mut deadline).await.map(|response| response_bytes(&response))
             }
+            Value::Object(request) if request.contains_key("workspace") => {
+                let call = request.get("workspace").cloned().unwrap_or(Value::Null);
+                self.answer_workspace(&document, request, &call, deadline).await.map(|response| workspace_response_bytes(&response))
+            }
             request => self.answer_terminal(&document, request, deadline).await,
         };
         let Some(answer) = answer else { return };
@@ -338,7 +345,49 @@ impl AgentIo {
             _ = self.shutdown.cancelled() => None,
         }
     }
+
+    async fn answer_workspace(
+        &self,
+        document: &Lenient,
+        packet: &Map<String, Value>,
+        call: &Value,
+        deadline: Instant,
+    ) -> Option<WorkspaceResponse> {
+        let Ok(token) = document.text(packet.get("token")).map(|token| token.unwrap_or("").to_string()) else {
+            return Some(WorkspaceResponse::failure(MALFORMED_MESSAGE));
+        };
+        let Some(request) = read_workspace_request(document, call) else {
+            return Some(WorkspaceResponse::failure(MALFORMED_MESSAGE));
+        };
+        let Some(binding) = self.bindings.resolve(&token) else {
+            return Some(WorkspaceResponse::failure(UNKNOWN_TOKEN_MESSAGE));
+        };
+        if binding.is_revoked() || !binding.workspace() {
+            return Some(WorkspaceResponse::failure(WORKSPACE_DETACHED_MESSAGE));
+        }
+        let Some(handler) = binding.workspace_handler() else {
+            return Some(WorkspaceResponse::failure(WORKSPACE_DETACHED_MESSAGE));
+        };
+        let caller = WorkspaceCaller {
+            pane_id: binding.pane_id.clone(),
+            workspace_id: binding.workspace_id.clone(),
+            workspace_path: binding.workspace_path.clone(),
+            provider: binding.provider.clone(),
+        };
+        let handled = tokio::spawn(async move { handler.handle(request, caller).await });
+        tokio::select! {
+            answered = tokio::time::timeout_at(deadline, handled) => Some(match answered {
+                Ok(Ok(response)) => response,
+                _ => WorkspaceResponse::failure(NO_ANSWER_MESSAGE),
+            }),
+            _ = binding.revoked().cancelled() => Some(WorkspaceResponse::failure(UNKNOWN_TOKEN_MESSAGE)),
+            _ = self.shutdown.cancelled() => None,
+        }
+    }
 }
+
+/// What the run path reads of cross-workspace lookup as it binds a run: who answers `mighty-workspace` calls and whether the switch is on.
+pub type WorkspaceLink = Arc<dyn Fn() -> (Option<Arc<dyn WorkspaceHandler>>, bool) + Send + Sync>;
 
 /// What the run path reads of delegation as it binds a run (C# `RunManager.DelegationHandler` and `DelegationEnabled()`): who answers
 /// the run's delegation calls (None while delegation is not running), and whether the switch is on and delegation may act.
@@ -362,6 +411,17 @@ pub fn logged_binding_factory(
     delegation: DelegationLink,
     log: Arc<dyn Fn(&str) + Send + Sync>,
 ) -> mighty_run::manager::BindingFactory {
+    logged_binding_factory_with_workspace(io, executable, delegation, Arc::new(|| (None, false)), log)
+}
+
+/// [`logged_binding_factory`] that also connects the optional read-only `mighty-workspace` MCP server when `workspace` says so.
+pub fn logged_binding_factory_with_workspace(
+    io: Arc<AgentIo>,
+    executable: String,
+    delegation: DelegationLink,
+    workspace_link: WorkspaceLink,
+    log: Arc<dyn Fn(&str) + Send + Sync>,
+) -> mighty_run::manager::BindingFactory {
     Arc::new(move |request: &mighty_run::model::StartRunRequest, workspace: &mighty_core::model::Workspace| {
         if workspace.remote.is_some() || workspace.path().is_empty() || !matches!(request.provider.as_str(), "claude" | "codex") {
             return None;
@@ -379,6 +439,8 @@ pub fn logged_binding_factory(
         let mode = request.permission_mode_override.clone().unwrap_or(settings.permission_mode);
         let attached = super::binding::attaches_delegation(&request.kind, &request.provider, &mode) && enabled;
         binding.connect_delegation(handler, attached, &mode);
+        let (ws_handler, ws_enabled) = workspace_link();
+        binding.connect_workspace(ws_handler, ws_enabled && request.kind == "claude");
         Some(binding.run_binding())
     })
 }
@@ -420,6 +482,11 @@ fn read_request(document: &Lenient, call: &Value) -> Option<DelegationRequest> {
         values.insert(key.clone(), document.read(text).ok()?.to_string());
     }
     Some(DelegationRequest { tool, arguments: values })
+}
+
+fn read_workspace_request(document: &Lenient, call: &Value) -> Option<WorkspaceRequest> {
+    let parsed = read_request(document, call)?;
+    Some(WorkspaceRequest { tool: parsed.tool, arguments: parsed.arguments })
 }
 
 #[cfg(test)]

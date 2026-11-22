@@ -283,6 +283,30 @@ impl PushHub {
         vec![tokio::spawn(async move { hub.send(messages, now, seams).await })]
     }
 
+    /// Sends a standalone host-level encrypted push alert (e.g. `kind = "budget"`, `session_id = "budget"`) to subscribed devices.
+    pub fn send_custom(self: &Arc<Self>, kind: &str, title: &str, summary: &str, session_id: &str) -> Option<JoinHandle<()>> {
+        let seams = self.seams();
+        if self.stopped() || !(seams.remote_on)() {
+            return None;
+        }
+        let now = (seams.clock)();
+        let msg = PushMessage {
+            v: 1,
+            id: format!("host:{kind}:{now}"),
+            kind: kind.to_string(),
+            host_id: self.identity.host_id(),
+            host_name: self.host_name.clone(),
+            workspace: String::new(),
+            title: title.to_string(),
+            summary: summary.to_string(),
+            session_id: session_id.to_string(),
+            permission: None,
+            at: at_text(now),
+        };
+        let hub = self.clone();
+        Some(tokio::spawn(async move { hub.send(vec![msg], now, seams).await }))
+    }
+
     async fn send(self: Arc<Self>, messages: Vec<PushMessage>, now: i64, seams: PushSeams) {
         let devices = self.identity.push_devices();
         if devices.is_empty() {

@@ -325,6 +325,40 @@ describe('the m1 capability extension routes', () => {
     expect(fake.calls[2]?.body).toEqual({ dataBase64: 'AAEC' });
   });
 
+  it('lists saved prompts, falls back to empty on 404, and sends a saved prompt with optional mode', async () => {
+    const prompts = [{ id: 'p1', name: 'review', text: 'Review changes', scope: 'workspace' as const }];
+    const listedFake = fakeChannel({ status: 200, body: { protocol: 1, prompts } });
+    const listed = await createClient(listedFake.channel).savedPrompts('s/1');
+    expect(listed).toEqual(prompts);
+    expect(listedFake.calls[0]).toEqual({
+      method: 'GET',
+      path: '/m1/sessions/s%2F1/prompts',
+      body: undefined,
+    });
+
+    const missingFake = fakeChannel({ status: 404, body: { protocol: 1, error: 'not found' } });
+    await expect(createClient(missingFake.channel).savedPrompts('s1')).resolves.toEqual([]);
+
+    const sendFake = fakeChannel({
+      status: 200,
+      body: {
+        protocol: 1,
+        accepted: 'started',
+        outcome: 'started',
+        text: 'Review changes',
+        entryId: 'e1',
+        runId: 'r1',
+      },
+    });
+    const sendClient = createClient(sendFake.channel);
+    await sendClient.sendSavedPrompt('s/1', 'p1');
+    await sendClient.sendSavedPrompt('s/1', 'p1', 'queue');
+    expect(sendFake.calls).toEqual([
+      { method: 'POST', path: '/m1/sessions/s%2F1/prompt-send', body: { promptId: 'p1' } },
+      { method: 'POST', path: '/m1/sessions/s%2F1/prompt-send', body: { promptId: 'p1', mode: 'queue' } },
+    ]);
+  });
+
   it('maps every new route’s host error onto ApiError', async () => {
     const cases: Array<[number, string, (client: MobileClient) => Promise<unknown>]> = [
       [404, '없는 항목입니다', (client) => client.removeQueued('s1', 'q1')],

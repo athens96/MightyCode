@@ -2,7 +2,18 @@
 // Draft/Rows/State, SlashPaletteState). The rows themselves are the host's (`slashCommands`: built-ins, scanned skills and
 // commands, each argument's choices), so only the filtering, ranking and keys run here, on every keystroke.
 
-export type SlashAction = 'OpenPlugins' | 'NewConversation' | 'ShowUsage' | 'OpenSettings' | 'Rename' | 'Help' | 'SetModel' | 'SetPermission';
+export type SlashAction =
+  | 'OpenPlugins'
+  | 'NewConversation'
+  | 'ShowUsage'
+  | 'OpenSettings'
+  | 'Rename'
+  | 'Help'
+  | 'SetModel'
+  | 'SetPermission'
+  | 'ManagePrompts'
+  | 'InsertPrompt'
+  | 'OpenIssues';
 
 export interface SlashCommand {
   invocation: string;

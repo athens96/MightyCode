@@ -22,6 +22,9 @@ pub enum SlashCommandAction {
     Help,
     SetModel,
     SetPermission,
+    ManagePrompts,
+    InsertPrompt,
+    OpenIssues,
 }
 
 impl SlashCommandAction {
@@ -36,6 +39,9 @@ impl SlashCommandAction {
             SlashCommandAction::Help => "Help",
             SlashCommandAction::SetModel => "SetModel",
             SlashCommandAction::SetPermission => "SetPermission",
+            SlashCommandAction::ManagePrompts => "ManagePrompts",
+            SlashCommandAction::InsertPrompt => "InsertPrompt",
+            SlashCommandAction::OpenIssues => "OpenIssues",
         }
     }
 
@@ -50,6 +56,9 @@ impl SlashCommandAction {
             SlashCommandAction::Help,
             SlashCommandAction::SetModel,
             SlashCommandAction::SetPermission,
+            SlashCommandAction::ManagePrompts,
+            SlashCommandAction::InsertPrompt,
+            SlashCommandAction::OpenIssues,
         ]
         .into_iter()
         .find(|a| a.name() == value)

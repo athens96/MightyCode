@@ -50,6 +50,7 @@ pub fn from_made(made: &ChildWorktree, checkout: &str, port: i32, setup_command:
         pre_merge_commit: None,
         working_folder: Some(made.working_folder.clone()),
         note_given: None,
+        linked_task: None,
     }
 }
 

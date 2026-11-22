@@ -269,4 +269,9 @@ pub trait PhoneDesk: Send + Sync {
     fn direct_endpoints(&self) -> Vec<String>;
     /// `ExtraCapabilities`: capabilities beside `Capabilities`.
     fn extra_capabilities(&self) -> Vec<String>;
+    /// Saved prompts offered in `workspace_id` (`GET /m1/sessions/{id}/prompts`); empty by default.
+    fn saved_prompts(&self, workspace_id: &str) -> Vec<mighty_core::saved_prompts::SavedPrompt> {
+        let _ = workspace_id;
+        vec![]
+    }
 }

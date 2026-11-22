@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react';
 import { shallowEqual, useServices, useStoreSelector } from '../app/context';
 import { ComposerCard } from '../cards/Cards';
-import type { RunSession } from '../store/models';
+import type { RunSession, Workspace } from '../store/models';
 import { attachmentRefusal, byteLabel, toBase64 } from './attachments';
 import { enterAction, maximumDraft, secondSendWords } from './keys';
 import { choose, closed, move, paletteDraft, paletteKey, paletteState, safeIndex, type PaletteState, type SlashCatalog, type SlashCommand } from './slash';
@@ -20,6 +20,8 @@ import { NoticeChip } from '../conversation/NoticeChip';
 import { parseDelegationNotice } from '../conversation/delegationNotice';
 import { VoiceMicButton, VoiceStatusBar, useComposerVoice } from './VoiceInput';
 import { insertDictatedText } from './voiceModel';
+import { applyWorkspaceMention, filterMentionWorkspaces, mentionQuery, workspaceFolderName, workspaceMentionSlug } from './workspaceMention';
+import { SavedPromptsPanel } from './SavedPromptsPanel';
 
 /** The host on the Mac, where ⌘Enter is the second send (shell/menu.ts `macHost`). */
 const onMac = () => hostCapabilities()?.platform === 'macos';
@@ -38,11 +40,19 @@ const draftRest = 300;
  */
 export function Composer({ session }: { session: RunSession }) {
   const { bridge, store, t } = useServices();
-  const { state, fill } = useStoreSelector(
-    (stored) => ({ state: stored.composers[session.id], fill: stored.fills[session.id] }),
+  const { state, fill, workspaces, crossWorkspaceOn } = useStoreSelector(
+    (stored) => ({
+      state: stored.composers[session.id],
+      fill: stored.fills[session.id],
+      workspaces: stored.snapshot?.workspaces,
+      crossWorkspaceOn: stored.snapshot?.crossWorkspaceLookup !== false,
+    }),
     shallowEqual,
   );
   const [text, setText] = useState(() => session.draft ?? '');
+  const [caret, setCaret] = useState(() => (session.draft ?? '').length);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [dismissedMention, setDismissedMention] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<AttachmentPreview | null>(null);
   const [dropping, setDropping] = useState(false);
@@ -61,9 +71,19 @@ export function Composer({ session }: { session: RunSession }) {
   const [catalog, setCatalog] = useState<{ value: SlashCatalog; read: number } | null>(null);
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
   const [palette, setPalette] = useState<PaletteState>(closed);
-  usePageOverlay(palette.commands.length > 0 || preview !== null);
+  const activeMention = session.kind !== 'shell' && crossWorkspaceOn && palette.commands.length === 0
+    ? mentionQuery(text, caret)
+    : null;
+  const mentionKey = activeMention ? `${activeMention.start}:${activeMention.query}` : null;
+  const mentionRows = activeMention && mentionKey !== dismissedMention && workspaces
+    ? filterMentionWorkspaces(workspaces, session.workspaceId, activeMention.query).slice(0, 12)
+    : [];
+  const safeMentionIndex = mentionRows.length === 0 ? 0 : Math.min(Math.max(mentionIndex, 0), mentionRows.length - 1);
+  usePageOverlay(palette.commands.length > 0 || mentionRows.length > 0 || preview !== null);
   const reading = useRef(false);
   const [showUsage, setShowUsage] = useState(false);
+  const [showSavedPrompts, setShowSavedPrompts] = useState(false);
+  const [savedPromptsSeed, setSavedPromptsSeed] = useState('');
   const usageShown = useCallback(() => setShowUsage(false), []);
   const paneId = session.id;
 
@@ -226,15 +246,43 @@ export function Composer({ session }: { session: RunSession }) {
       return;
     }
     setDismissedFor(null);
-    // The usage popover is the page's own (the context ring's); every other action is the host's, notes included.
+    // The usage popover, saved prompts manager, and issue picker are page panels; every other action is the host's.
     if (choice.action === 'ShowUsage') { change(''); setShowUsage(true); return; }
+    if (choice.action === 'ManagePrompts') {
+      const current = text;
+      change('');
+      setSavedPromptsSeed(current);
+      setShowSavedPrompts(true);
+      return;
+    }
+    if (choice.action === 'OpenIssues') {
+      change('');
+      window.dispatchEvent(new CustomEvent('mighty:open-issues', { detail: { workspaceId: session.workspaceId, paneId, settingsOpen: false } }));
+      return;
+    }
     try {
       const draft = await bridge.call<string>('slashAction', { paneId, action: choice.action, arg: choice.actionArg });
-      setText(draft ?? '');
+      const next = draft ?? '';
+      setText(next);
+      setCaret(next.length);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
     }
     editor.current?.focus();
+  };
+
+  const pickMention = (ws: Workspace) => {
+    if (!activeMention) return;
+    const inserted = applyWorkspaceMention(text, activeMention.start, activeMention.end, ws.name, maximumDraft);
+    setDismissedMention(null);
+    setMentionIndex(0);
+    change(inserted.text);
+    setCaret(inserted.cursor);
+    const element = editor.current;
+    if (element) {
+      element.focus();
+      requestAnimationFrame(() => element.setSelectionRange(inserted.cursor, inserted.cursor));
+    }
   };
 
   const keyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -248,6 +296,22 @@ export function Composer({ session }: { session: RunSession }) {
         if (key === 'up' || key === 'down') setPalette(move(palette, key === 'up' ? -1 : 1));
         else if (key === 'dismiss') setDismissedFor(text);
         else if (!event.repeat) { const chosen = palette.commands[safeIndex(palette)]; if (chosen) void pick(chosen); }
+        return;
+      }
+    }
+    if (mentionRows.length > 0 && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+      const key = paletteKey(event.key, event.shiftKey);
+      if (key) {
+        event.preventDefault();
+        if (key === 'up' || key === 'down') {
+          const count = mentionRows.length;
+          setMentionIndex((safeMentionIndex + (key === 'up' ? -1 : 1) + count) % count);
+        } else if (key === 'dismiss') {
+          setDismissedMention(mentionKey);
+        } else if (!event.repeat) {
+          const chosen = mentionRows[safeMentionIndex];
+          if (chosen) pickMention(chosen);
+        }
         return;
       }
     }
@@ -354,6 +418,33 @@ export function Composer({ session }: { session: RunSession }) {
           <div className="slash-count">{t('slash.palette.count', { count: palette.commands.length })}</div>
         </div>
       )}
+      {mentionRows.length > 0 && (
+        <div className="slash-palette" data-testid="workspace-mention-palette" role="listbox" data-page-overlay="">
+          <div className="slash-rows">
+            {mentionRows.map((ws, index) => {
+              const slug = workspaceMentionSlug(ws.name);
+              const folder = workspaceFolderName(ws.path);
+              return (
+                <div
+                  key={ws.id}
+                  role="option"
+                  aria-selected={index === safeMentionIndex}
+                  title={`@workspace:${slug} — ${ws.path}`}
+                  className={'slash-row' + (index === safeMentionIndex ? ' highlighted' : '')}
+                  ref={index === safeMentionIndex ? (row) => row?.scrollIntoView({ block: 'nearest' }) : undefined}
+                  onMouseEnter={() => setMentionIndex(index)}
+                  onMouseDown={(event) => { event.preventDefault(); pickMention(ws); }}
+                >
+                  <span className="slash-name">@workspace:{slug}</span>
+                  <span className="slash-source">{ws.name}</span>
+                  <span className="slash-description">{t('composer.workspaceMention.hint', { folder })}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="slash-count">{t('composer.workspaceMention.count', { count: mentionRows.length })}</div>
+        </div>
+      )}
       <div
         className={'composer-card' + (dropping ? ' dropping' : '')}
         data-testid="composer"
@@ -432,7 +523,8 @@ export function Composer({ session }: { session: RunSession }) {
           placeholder={placeholder}
           aria-label={t('composer.input.name')}
           title={t('composer.inputShortcuts')}
-          onChange={(event) => change(event.target.value)}
+          onChange={(event) => { setCaret(event.target.selectionStart ?? event.target.value.length); change(event.target.value); }}
+          onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
           onKeyDown={keyDown}
           onPaste={paste}
         />
@@ -440,6 +532,18 @@ export function Composer({ session }: { session: RunSession }) {
         <div className="composer-toolbar">
           {state?.attachmentsAllowed !== false && (
             <button type="button" className="composer-pill compact composer-attach" aria-label={t('composer.attach.name')} title={t('tooltip.composer.attach')} disabled={state?.attachmentsLoading} onClick={() => call('pickAttachments')}><Icon name="paperclip" size={14} weight={1.75} /></button>
+          )}
+          {session.kind !== 'shell' && (
+            <button
+              type="button"
+              className="composer-pill compact"
+              data-testid="composer-open-issues"
+              aria-label={t('integrations.open')}
+              title={t('integrations.open')}
+              onClick={() => window.dispatchEvent(new CustomEvent('mighty:open-issues', { detail: { workspaceId: session.workspaceId, paneId, settingsOpen: false } }))}
+            >
+              <Icon name="list-todo" size={14} weight={1.75} />
+            </button>
           )}
           {state?.pills ? <Toolbar paneId={paneId} pills={state.pills} busy={state.busy} showUsage={showUsage} onUsageShown={usageShown} resumed={state.resumed} worktreeAgents={agents} busySend={runsWith?.agent ?? null} />
             : <span className="composer-shell-title">{t('composer.shell.title')}</span>}
@@ -477,6 +581,31 @@ export function Composer({ session }: { session: RunSession }) {
         </div>
         <ComposerCard paneId={paneId} kind="statusLine" />
       </div>
+      {showSavedPrompts && (
+        <SavedPromptsPanel
+          open={showSavedPrompts}
+          paneId={paneId}
+          workspaceId={session.workspaceId || null}
+          initialDraft={savedPromptsSeed}
+          onClose={() => setShowSavedPrompts(false)}
+          onChanged={() => setCatalog(null)}
+          onPutInComposer={(expanded, sendNow) => {
+            if (sendNow) {
+              store.dispatch({ kind: 'fill', paneId, text: expanded, append: false });
+              setTimeout(() => {
+                void bridge.call('send', { paneId, text: expanded, second: false }).then(() => {
+                  change('');
+                }, () => {});
+              }, 0);
+            } else {
+              const merged = text.trim().length > 0 ? `${text.trimEnd()}\n\n${expanded}` : expanded;
+              change(merged);
+              setCaret(merged.length);
+              editor.current?.focus();
+            }
+          }}
+        />
+      )}
       {preview && (
         <div className="composer-preview" role="dialog" data-page-overlay="" aria-label={preview.name} onClick={() => setPreview(null)}>
           <div className="composer-preview-card" onClick={(event) => event.stopPropagation()}>

@@ -1,6 +1,6 @@
 import { utf8Decode } from '@/api/relay/crypto';
 
-export const PUSH_KINDS = ['completed', 'failed', 'permission', 'question', 'plan', 'signin'] as const;
+export const PUSH_KINDS = ['completed', 'failed', 'permission', 'question', 'plan', 'signin', 'budget'] as const;
 export type PushKind = (typeof PUSH_KINDS)[number];
 export const PUSH_BUTTONS = ['claude', 'antigravity', 'antigravityOnce', 'none'] as const;
 export type PushButtons = (typeof PUSH_BUTTONS)[number];

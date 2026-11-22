@@ -8,6 +8,7 @@ use mighty_platform::{AgentIoConnector, McpTransport};
 use serde_json::Value;
 
 use super::wire::{self, Lenient, MAXIMUM_BYTES};
+use crate::mcp::workspace::{WorkspaceRequest, WorkspaceResponse};
 use crate::request::{DelegationRequest, DelegationResponse};
 
 /// `AgentIOPipe.DelegationSeconds`: a delegation call's limit at both ends (it covers the coordinator's 45 s).
@@ -125,6 +126,67 @@ pub fn read_response(bytes: &[u8]) -> Option<DelegationResponse> {
 
 /// `JsonSerializer.SerializeToUtf8Bytes(response, Wire.Json)`: the answer as the app writes it on the pipe.
 pub fn response_bytes(response: &DelegationResponse) -> Vec<u8> {
+    let value = serde_json::to_value(response).unwrap_or(Value::Null);
+    let mut out = JsonOut::new();
+    out.value(&value);
+    out.finish().into_bytes()
+}
+
+/// Calls the app's read-only workspace lookup handler on the same pipe and token, within 30 s.
+pub async fn call_workspace(connector: &dyn AgentIoConnector, pipe: &str, token: &str, request: &WorkspaceRequest) -> WorkspaceResponse {
+    let transport = connector.transport();
+    if !is_pipe_name(pipe, transport) {
+        return WorkspaceResponse::failure("Mighty Code's agent socket path is invalid.");
+    }
+    let bytes = workspace_packet(token, request);
+    if bytes.len() >= MAXIMUM_BYTES {
+        return WorkspaceResponse::failure("The request is too large.");
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(TERMINAL_SECONDS);
+    let not_running = || WorkspaceResponse::failure("Mighty Code is not running or not accepting agent tool calls.");
+    let no_answer = || WorkspaceResponse::failure("Mighty Code did not answer the request.");
+    let mut stream = match tokio::time::timeout_at(deadline, connector.connect(pipe, Duration::from_secs(TERMINAL_SECONDS))).await {
+        Ok(Ok(stream)) => stream,
+        _ => return not_running(),
+    };
+    match tokio::time::timeout_at(deadline, wire::write_packet(&mut stream, &bytes, transport)).await {
+        Ok(Ok(())) => {}
+        _ => return WorkspaceResponse::failure("Could not send the request to Mighty Code."),
+    }
+    match tokio::time::timeout_at(deadline, wire::read_packet(&mut stream, transport)).await {
+        Ok(Ok(answer)) => read_workspace_response(&answer).unwrap_or_else(no_answer),
+        _ => no_answer(),
+    }
+}
+
+/// `{"token":…,"workspace":{"tool":…,"arguments":{…}}}` as Wire.Json writes it.
+pub fn workspace_packet(token: &str, request: &WorkspaceRequest) -> Vec<u8> {
+    let mut out = JsonOut::new();
+    out.begin_object();
+    out.prop_str("token", Some(token));
+    out.name("workspace");
+    out.begin_object();
+    out.prop_str("tool", Some(&request.tool));
+    out.name("arguments");
+    out.begin_object();
+    for (key, value) in &request.arguments {
+        out.prop_str(key, Some(value));
+    }
+    out.end_object();
+    out.end_object();
+    out.end_object();
+    out.finish().into_bytes()
+}
+
+pub fn read_workspace_response(bytes: &[u8]) -> Option<WorkspaceResponse> {
+    let value: Value = serde_json::from_slice(bytes).ok()?;
+    if value.is_null() {
+        return None;
+    }
+    serde_json::from_value(value).ok()
+}
+
+pub fn workspace_response_bytes(response: &WorkspaceResponse) -> Vec<u8> {
     let value = serde_json::to_value(response).unwrap_or(Value::Null);
     let mut out = JsonOut::new();
     out.value(&value);

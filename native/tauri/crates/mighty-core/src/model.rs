@@ -59,6 +59,9 @@ pub struct AppSnapshot {
     /// 에이전트 창's "에이전트에게 진행 체크리스트 요청": a request asks Antigravity, Codex, opencode and Hermes to keep a plan (on
     /// unless false; [`AppSnapshot::agent_checklist_on`]). Saved as `agentChecklist`; 0.5.4's `antigravityChecklist` is read too.
     pub agent_checklist: Option<bool>,
+    /// 에이전트 창's "다른 워크스페이스 온디맨드 참조": attaches the read-only `mighty-workspace` MCP server so agents can query other
+    /// local workspaces on demand (on unless false; [`AppSnapshot::cross_workspace_lookup_on`]). Saved as `crossWorkspaceLookup`.
+    pub cross_workspace_lookup: Option<bool>,
     pub reference_bubble_width: Option<f64>,
     pub reference_bubble_height: Option<f64>,
     pub claude_direct_usage_lookup_enabled: bool,
@@ -99,6 +102,7 @@ impl Default for AppSnapshot {
             last_create_location: None,
             antigravity_migrated: None,
             agent_checklist: None,
+            cross_workspace_lookup: None,
             reference_bubble_width: None,
             reference_bubble_height: None,
             claude_direct_usage_lookup_enabled: false,
@@ -187,6 +191,7 @@ impl Wire for AppSnapshot {
             last_create_location: lenient_string(o.get("lastCreateLocation")),
             antigravity_migrated: lenient_bool(o.get("antigravityMigrated")),
             agent_checklist: lenient_bool(o.get("agentChecklist")).or_else(|| lenient_bool(o.get("antigravityChecklist"))),
+            cross_workspace_lookup: lenient_bool(o.get("crossWorkspaceLookup")),
             reference_bubble_width: lenient_double(o.get("referenceBubbleWidth")),
             reference_bubble_height: lenient_double(o.get("referenceBubbleHeight")),
             claude_direct_usage_lookup_enabled: json::boolean(o.get("claudeDirectUsageLookupEnabled"), false)?,
@@ -214,6 +219,11 @@ impl AppSnapshot {
     /// never named it (every one before the switch) asks.
     pub fn agent_checklist_on(&self) -> bool {
         self.agent_checklist != Some(false)
+    }
+
+    /// Whether local agent runs get the read-only `mighty-workspace` MCP server for on-demand cross-workspace lookup: on unless false.
+    pub fn cross_workspace_lookup_on(&self) -> bool {
+        self.cross_workspace_lookup != Some(false)
     }
 
     /// Written with or without its `sessions` (the bridge's state text leaves them out), and with or without the graph agents'
@@ -287,6 +297,7 @@ impl AppSnapshot {
         out.prop_str("lastCreateLocation", self.last_create_location.as_deref());
         out.prop_opt_bool("antigravityMigrated", self.antigravity_migrated);
         out.prop_opt_bool("agentChecklist", self.agent_checklist);
+        out.prop_opt_bool("crossWorkspaceLookup", self.cross_workspace_lookup);
         write_lenient_double(out, "referenceBubbleWidth", self.reference_bubble_width);
         write_lenient_double(out, "referenceBubbleHeight", self.reference_bubble_height);
         out.prop_bool("claudeDirectUsageLookupEnabled", self.claude_direct_usage_lookup_enabled);
@@ -360,6 +371,7 @@ impl AppSnapshot {
             last_create_location,
             antigravity_migrated,
             agent_checklist,
+            cross_workspace_lookup,
             reference_bubble_width,
             reference_bubble_height,
             claude_direct_usage_lookup_enabled,
@@ -388,6 +400,7 @@ impl AppSnapshot {
             && last_create_location == &other.last_create_location
             && antigravity_migrated == &other.antigravity_migrated
             && agent_checklist == &other.agent_checklist
+            && cross_workspace_lookup == &other.cross_workspace_lookup
             && same_opt_f64(*reference_bubble_width, other.reference_bubble_width)
             && same_opt_f64(*reference_bubble_height, other.reference_bubble_height)
             && *claude_direct_usage_lookup_enabled == other.claude_direct_usage_lookup_enabled
@@ -480,6 +493,14 @@ pub struct Workspace {
     pub worktree_copy_paths: Option<Vec<String>>,
     /// Pane worktrees kept after their pane closed with work in them; damage drops that record only.
     pub kept_pane_worktrees: Option<Vec<KeptPaneWorktree>>,
+    /// Optional MightyWork project key mapped to this workspace (e.g. `"MC"`).
+    pub mightywork_project: Option<String>,
+    /// Optional MightyWork MCP endpoint URL override for this workspace.
+    pub mightywork_url: Option<String>,
+    /// Optional GitHub `owner/repo` mapped to this workspace.
+    pub github_repo: Option<String>,
+    /// Whether starting/PR/merging a linked task automatically updates its MightyWork stage (`None` = true).
+    pub mightywork_auto_sync: Option<bool>,
 }
 
 impl Default for Workspace {
@@ -496,6 +517,10 @@ impl Default for Workspace {
             worktree_setup_command: None,
             worktree_copy_paths: None,
             kept_pane_worktrees: None,
+            mightywork_project: None,
+            mightywork_url: None,
+            github_repo: None,
+            mightywork_auto_sync: None,
         }
     }
 }
@@ -514,6 +539,10 @@ impl Wire for Workspace {
             worktree_setup_command: lenient_string(o.get("worktreeSetupCommand")),
             worktree_copy_paths: lenient_strings(o.get("worktreeCopyPaths")),
             kept_pane_worktrees: lenient_list(o.get("keptPaneWorktrees")),
+            mightywork_project: lenient_string(o.get("mightyworkProject")),
+            mightywork_url: lenient_string(o.get("mightyworkUrl")),
+            github_repo: lenient_string(o.get("githubRepo")),
+            mightywork_auto_sync: lenient_bool(o.get("mightyworkAutoSync")),
         })
     }
 
@@ -529,11 +558,59 @@ impl Wire for Workspace {
         out.prop_str("worktreeSetupCommand", self.worktree_setup_command.as_deref());
         out.prop_strings("worktreeCopyPaths", self.worktree_copy_paths.as_ref());
         out.prop_list("keptPaneWorktrees", self.kept_pane_worktrees.as_ref());
+        out.prop_str("mightyworkProject", self.mightywork_project.as_deref());
+        out.prop_str("mightyworkUrl", self.mightywork_url.as_deref());
+        out.prop_str("githubRepo", self.github_repo.as_deref());
+        out.prop_opt_bool("mightyworkAutoSync", self.mightywork_auto_sync);
         out.end_object();
     }
 }
 
+impl Workspace {
+    pub fn mightywork_auto_sync_on(&self) -> bool {
+        self.mightywork_auto_sync != Some(false)
+    }
+}
+
 // ── PaneWorktree ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/// External task or issue linked to an agent pane / worktree (`"mightywork"` or `"github"`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedTask {
+    pub source: String,
+    pub project: Option<String>,
+    pub key: String,
+    pub title: Option<String>,
+    pub url: Option<String>,
+}
+
+impl Wire for LinkedTask {
+    fn read(value: &Value) -> R<Self> {
+        let o = Obj::of(value, "a linked task")?;
+        let source = lenient_string(o.get("source")).unwrap_or_default();
+        let key = lenient_string(o.get("key")).unwrap_or_default();
+        if source.is_empty() || key.is_empty() {
+            return json::fail("linked task requires source and key");
+        }
+        Ok(LinkedTask {
+            source,
+            project: lenient_string(o.get("project")),
+            key,
+            title: lenient_string(o.get("title")),
+            url: lenient_string(o.get("url")),
+        })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_str("source", Some(&self.source));
+        out.prop_str("project", self.project.as_deref());
+        out.prop_str("key", Some(&self.key));
+        out.prop_str("title", self.title.as_deref());
+        out.prop_str("url", self.url.as_deref());
+        out.end_object();
+    }
+}
 
 /// C# `PaneWorktree` (Core/PaneWorktree.cs): a workspace's agent pane that works in its own git worktree, branch `mighty/<session id>`
 /// at the workspace branch's head, in the same place as a delegated child's. Its rules (normalize, environment) are in `normalize.rs`
@@ -563,6 +640,8 @@ pub struct PaneWorktree {
     pub working_folder: Option<String>,
     /// Whether the pane's agent was told it works in this worktree (`PaneWorktreeNote`); only true is kept.
     pub note_given: Option<bool>,
+    /// Optional task/issue linked to this worktree (`"mightywork"` or `"github"`).
+    pub linked_task: Option<LinkedTask>,
 }
 
 impl Default for PaneWorktree {
@@ -582,6 +661,7 @@ impl Default for PaneWorktree {
             pre_merge_commit: None,
             working_folder: None,
             note_given: None,
+            linked_task: None,
         }
     }
 }
@@ -668,6 +748,7 @@ impl Wire for PaneWorktree {
             pre_merge_commit: json::opt_string(o.get("preMergeCommit"))?,
             working_folder: json::opt_string(o.get("workingFolder"))?,
             note_given: json::opt_boolean(o.get("noteGiven"))?,
+            linked_task: lenient_record(o.get("linkedTask")),
         })
     }
 
@@ -686,6 +767,7 @@ impl Wire for PaneWorktree {
         out.prop_str("preMergeCommit", self.pre_merge_commit.as_deref());
         out.prop_str("workingFolder", self.working_folder.as_deref());
         out.prop_opt_bool("noteGiven", self.note_given);
+        out.prop("linkedTask", self.linked_task.as_ref());
         out.end_object();
     }
 }
@@ -1078,6 +1160,7 @@ pub struct RunSession {
     pub working_folder: Option<String>,
     /// Present only on a workspace's agent pane that works in its own worktree (`PaneWorktree.cs`). Lenient: damage loads as None.
     pub pane_worktree: Option<PaneWorktree>,
+    pub linked_task: Option<LinkedTask>,
     pub ask_target: Option<String>,
     /// `shellRuns` on the wire.
     pub shell_block_runs: Option<Vec<ShellBlockRun>>,
@@ -1210,6 +1293,7 @@ impl Default for RunSession {
             parent_session_id: None,
             working_folder: None,
             pane_worktree: None,
+            linked_task: None,
             ask_target: None,
             shell_block_runs: None,
             mirror: None,
@@ -1294,6 +1378,7 @@ impl Wire for RunSession {
             parent_session_id: lenient_string(o.get("parentSessionId")),
             working_folder: lenient_string(o.get("workingFolder")),
             pane_worktree: lenient_record(o.get("paneWorktree")),
+            linked_task: lenient_record(o.get("linkedTask")),
             ask_target: lenient_string(o.get("askTarget")),
             shell_block_runs: lenient_list(o.get("shellRuns")),
             mirror: None,
@@ -1438,6 +1523,7 @@ impl RunSession {
         out.prop_str("parentSessionId", self.parent_session_id.as_deref());
         out.prop_str("workingFolder", self.working_folder.as_deref());
         out.prop("paneWorktree", self.pane_worktree.as_ref());
+        out.prop("linkedTask", self.linked_task.as_ref());
         out.prop_str("askTarget", self.ask_target.as_deref());
         if fields.body() {
             out.prop_list("shellRuns", self.shell_block_runs.as_ref());
@@ -1564,6 +1650,7 @@ impl RunSession {
             parent_session_id,
             working_folder,
             pane_worktree,
+            linked_task,
             ask_target,
             shell_block_runs,
             mirror: _,
@@ -1605,6 +1692,7 @@ impl RunSession {
             && todo_progress == &other.todo_progress
             && background_work == &other.background_work
             && pane_worktree == &other.pane_worktree
+            && linked_task == &other.linked_task
             && shell_block_runs == &other.shell_block_runs
     }
 }

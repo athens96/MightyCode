@@ -31,6 +31,7 @@ fn main() {
     let code = match args.as_slice() {
         [only] if only == modes::AGENT_IO_MCP_ARGUMENT => modes::agent_io_mcp(connector),
         [only] if only == modes::DELEGATION_MCP_ARGUMENT => modes::delegation_mcp(connector),
+        [only] if only == modes::WORKSPACE_MCP_ARGUMENT => modes::workspace_mcp(connector),
         [first, root, rest @ ..] if first == fake_claude::ARGUMENT && Path::new(root).is_absolute() => {
             fake_claude::run(Path::new(root), rest, processes)
         }

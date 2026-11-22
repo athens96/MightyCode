@@ -23,6 +23,7 @@ use tokio::sync::Notify;
 
 use super::mcp_config;
 use crate::mcp::delegation::{HEADLESS_ARGUMENT, SERVER_NAME as DELEGATION_SERVER};
+use crate::mcp::workspace::{HEADLESS_ARGUMENT as WORKSPACE_HEADLESS_ARGUMENT, SERVER_NAME as WORKSPACE_SERVER, WorkspaceHandler};
 use crate::modes::AGENT_IO_MCP_ARGUMENT;
 use crate::request::DelegationHandler;
 
@@ -75,12 +76,15 @@ impl Revocation {
 /// `DelegationProviders.CodexApprovesTools` and `AttachesDelegation`: the delegation core's rules (W7-A's [`crate::providers`]).
 pub use crate::providers::{attaches_delegation, codex_approves_tools};
 
-/// What `ConnectDelegation` set: who answers the run's delegation calls, the mode it started in, whether it got the server.
+/// What `ConnectDelegation` (and `ConnectWorkspace`) set: who answers the run's delegation/workspace calls, the mode it started in,
+/// and whether each optional server was attached.
 #[derive(Default)]
 struct Link {
     handler: Option<Arc<dyn DelegationHandler>>,
+    workspace_handler: Option<Arc<dyn WorkspaceHandler>>,
     permission_mode: String,
     delegation: bool,
+    workspace: bool,
 }
 
 /// `AgentIOBinding`: one agent run's pane binding. Never part of saved state; its token is never shown.
@@ -187,7 +191,28 @@ impl AgentIoBinding {
     /// `ConnectDelegation(handler, attached, permissionMode)`: the run path connects a new binding before its CLI starts.
     pub fn connect_delegation(&self, handler: Option<Arc<dyn DelegationHandler>>, attached: bool, permission_mode: &str) {
         let delegation = attached && attaches_delegation(self.kind(), &self.provider, permission_mode);
-        *lock(&self.link) = Link { handler, permission_mode: permission_mode.into(), delegation };
+        let mut link = lock(&self.link);
+        link.handler = handler;
+        link.permission_mode = permission_mode.into();
+        link.delegation = delegation;
+    }
+
+    /// Whether this run also gets the read-only `mighty-workspace` server on the same token.
+    pub fn workspace(&self) -> bool {
+        lock(&self.link).workspace
+    }
+
+    /// Who answers this run's `mighty-workspace` calls; None answers them as detached.
+    pub fn workspace_handler(&self) -> Option<Arc<dyn WorkspaceHandler>> {
+        lock(&self.link).workspace_handler.clone()
+    }
+
+    /// Connects the optional read-only `mighty-workspace` MCP server before the CLI starts.
+    pub fn connect_workspace(&self, handler: Option<Arc<dyn WorkspaceHandler>>, enabled: bool) {
+        let attached = enabled && handler.is_some() && matches!(self.provider.as_str(), "claude" | "codex");
+        let mut link = lock(&self.link);
+        link.workspace_handler = handler;
+        link.workspace = attached;
     }
 
     /// `Environment`: the token and the transport's name, what the MCP servers' processes are started with: Claude's config file names
@@ -206,6 +231,7 @@ impl AgentIoBinding {
     /// Codex's `-c` settings per mode with `shell_environment_policy.exclude`.
     pub fn append_arguments(&self, arguments: &mut Vec<String>) {
         let delegation = self.delegation();
+        let workspace = self.workspace();
         let mode = self.permission_mode();
         let environment = self.environment();
         if self.provider == "claude" {
@@ -214,9 +240,12 @@ impl AgentIoBinding {
             out.name("mcpServers");
             out.begin_object();
             let mut servers = vec![(SERVER_NAME, AGENT_IO_MCP_ARGUMENT)];
-            // The delegation server is its own entry, so mighty-terminal keeps its four tools.
+            // The delegation and workspace servers are their own entries, so mighty-terminal keeps its four tools.
             if delegation {
                 servers.push((DELEGATION_SERVER, HEADLESS_ARGUMENT));
+            }
+            if workspace {
+                servers.push((WORKSPACE_SERVER, WORKSPACE_HEADLESS_ARGUMENT));
             }
             for (name, argument) in servers {
                 out.name(name);
@@ -242,12 +271,16 @@ impl AgentIoBinding {
             }
         } else if self.provider == "codex" {
             // By the run's mode, some tools are approved ahead: codex exec (no asking) otherwise fails every MCP call that needs an
-            // approval it cannot ask for. fullAccess approves both servers' tools; acceptEdits approves the delegation server's and,
-            // of mighty-terminal's, only reading output; manual approves none, onRequest leaves it to the human. The servers get the
-            // token from Codex's environment by name; its shell tool's commands do not (`shell_environment_policy.exclude`).
+            // approval it cannot ask for. fullAccess approves all servers' tools; acceptEdits approves the delegation server's, the
+            // read-only workspace server's, and of mighty-terminal's only reading output; manual approves none, onRequest leaves it to
+            // the human. The servers get the token from Codex's environment by name; its shell tool's commands do not
+            // (`shell_environment_policy.exclude`).
             let mut servers = vec![(SERVER_NAME, AGENT_IO_MCP_ARGUMENT)];
             if delegation {
                 servers.push((DELEGATION_SERVER, HEADLESS_ARGUMENT));
+            }
+            if workspace {
+                servers.push((WORKSPACE_SERVER, WORKSPACE_HEADLESS_ARGUMENT));
             }
             let json = |write: &dyn Fn(&mut JsonOut)| {
                 let mut out = JsonOut::new();
@@ -263,7 +296,7 @@ impl AgentIoBinding {
                 for (key, value) in pairs {
                     arguments.extend(["-c".to_string(), format!("mcp_servers.{name}.{key}={value}")]);
                 }
-                if mode == "fullAccess" || name == DELEGATION_SERVER && codex_approves_tools(&mode) {
+                if mode == "fullAccess" || (name == DELEGATION_SERVER || name == WORKSPACE_SERVER) && codex_approves_tools(&mode) {
                     arguments.extend(["-c".to_string(), format!("mcp_servers.{name}.default_tools_approval_mode=\"approve\"")]);
                 } else if name == SERVER_NAME && mode == "acceptEdits" {
                     for tool in CODEX_APPROVED_IN_ACCEPT_EDITS {

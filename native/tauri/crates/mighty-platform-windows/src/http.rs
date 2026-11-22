@@ -18,10 +18,10 @@ use windows_sys::Win32::Networking::WinHttp::{
     ERROR_WINHTTP_HEADER_NOT_FOUND, INTERNET_DEFAULT_HTTPS_PORT, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_ADDREQ_FLAG_ADD,
     WINHTTP_ADDREQ_FLAG_REPLACE, WINHTTP_AUTOLOGON_SECURITY_LEVEL_HIGH, WINHTTP_DISABLE_COOKIES, WINHTTP_DISABLE_REDIRECTS,
     WINHTTP_FLAG_SECURE, WINHTTP_OPTION_AUTOLOGON_POLICY, WINHTTP_OPTION_DISABLE_FEATURE, WINHTTP_OPTION_REDIRECT_POLICY,
-    WINHTTP_OPTION_REDIRECT_POLICY_NEVER, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_LOCATION, WINHTTP_QUERY_RETRY_AFTER,
-    WINHTTP_QUERY_STATUS_CODE, WinHttpAddRequestHeaders, WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest,
-    WinHttpQueryDataAvailable, WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetOption,
-    WinHttpSetTimeouts,
+    WINHTTP_OPTION_REDIRECT_POLICY_NEVER, WINHTTP_QUERY_CUSTOM, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_LOCATION,
+    WINHTTP_QUERY_RETRY_AFTER, WINHTTP_QUERY_STATUS_CODE, WinHttpAddRequestHeaders, WinHttpCloseHandle, WinHttpConnect, WinHttpOpen,
+    WinHttpOpenRequest, WinHttpQueryDataAvailable, WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest,
+    WinHttpSetOption, WinHttpSetTimeouts,
 };
 
 use crate::win::{check, last_error, wide};
@@ -96,6 +96,37 @@ fn header(request: *mut c_void, level: u32) -> Result<Option<String>> {
     Ok(Some(String::from_utf16_lossy(&buffer[..length as usize / 2])))
 }
 
+/// Custom response header by name (e.g. `mcp-session-id`), `None` when absent.
+fn header_named(request: *mut c_void, name: &str) -> Result<Option<String>> {
+    let wide_name = wide(name);
+    let mut size = 0u32;
+    // SAFETY: `wide_name` is NUL-terminated; null output buffer queries byte size.
+    let ok = unsafe {
+        WinHttpQueryHeaders(request, WINHTTP_QUERY_CUSTOM, wide_name.as_ptr(), std::ptr::null_mut(), &mut size, std::ptr::null_mut())
+    };
+    if ok != 0 {
+        return Ok(Some(String::new()));
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(ERROR_WINHTTP_HEADER_NOT_FOUND as i32) {
+        return Ok(None);
+    }
+    let mut buffer = vec![0u16; size as usize / 2 + 1];
+    let mut length = (buffer.len() * 2) as u32;
+    // SAFETY: `buffer` holds `length` writable bytes.
+    check(unsafe {
+        WinHttpQueryHeaders(
+            request,
+            WINHTTP_QUERY_CUSTOM,
+            wide_name.as_ptr(),
+            buffer.as_mut_ptr().cast(),
+            &mut length,
+            std::ptr::null_mut(),
+        )
+    })?;
+    Ok(Some(String::from_utf16_lossy(&buffer[..length as usize / 2])))
+}
+
 fn validate(request: &HttpsRequest) -> Result<()> {
     let bad = |text: &str| text.chars().any(|c| c.is_control());
     // An IPv6 address (a relay's push route, review L5) is the one host with colons; WinHTTP takes it without brackets.
@@ -118,9 +149,10 @@ struct Target<'a> {
     secure: bool,
     port: u16,
     body: &'a [u8],
+    read_post_body: bool,
 }
 
-const GET: Target<'static> = Target { verb: "GET", secure: true, port: INTERNET_DEFAULT_HTTPS_PORT, body: &[] };
+const GET: Target<'static> = Target { verb: "GET", secure: true, port: INTERNET_DEFAULT_HTTPS_PORT, body: &[], read_post_body: false };
 
 fn send(request: &HttpsRequest, target: &Target<'_>, max_body: usize) -> Result<HttpsResponse> {
     let mut handles = Handles(vec![]);
@@ -180,10 +212,13 @@ fn send(request: &HttpsRequest, target: &Target<'_>, max_body: usize) -> Result<
         .then(|| header(handle, WINHTTP_QUERY_LOCATION))
         .transpose()?
         .map(|location| location.filter(|l| !l.is_empty()).unwrap_or_else(|| "refused".into()));
+    let mcp_session = header_named(handle, "mcp-session-id")?;
     let mut body = Vec::new();
-    // A POST's answer is its status and headers only (the push reads no body, review L6: a large 2xx body is still Sent, never a
-    // retry that would push twice).
-    if (200..300).contains(&status) && target.verb == "GET" {
+    // A POST's answer is its status and headers only unless `read_post_body` is asked (the push reads no body, review L6: a large 2xx
+    // body is still Sent, never a retry that would push twice).
+    let should_read =
+        if target.read_post_body { (200..500).contains(&status) } else { (200..300).contains(&status) && target.verb == "GET" };
+    if should_read {
         loop {
             let mut available = 0u32;
             // SAFETY: `available` is writable.
@@ -205,7 +240,10 @@ fn send(request: &HttpsRequest, target: &Target<'_>, max_body: usize) -> Result<
             }
         }
     }
-    Ok(HttpsResponse { status: status as u16, body: String::from_utf8_lossy(&body).into_owned(), retry_after, redirect_location })
+    Ok((
+        HttpsResponse { status: status as u16, body: String::from_utf8_lossy(&body).into_owned(), retry_after, redirect_location },
+        mcp_session,
+    ))
 }
 
 /// Sends `request` on a blocking thread and gives its answer; a body past `max_body` bytes is refused (`TooLarge`). The whole request
@@ -213,14 +251,31 @@ fn send(request: &HttpsRequest, target: &Target<'_>, max_body: usize) -> Result<
 pub async fn get(request: HttpsRequest, max_body: usize) -> Result<HttpsResponse> {
     validate(&request)?;
     let timeout = request.timeout;
-    within(timeout, move || send(&request, &GET, max_body)).await
+    let (resp, _) = within(timeout, move || send(&request, &GET, max_body)).await?;
+    Ok(resp)
 }
 
 /// One POST of `body` to `request`'s host on `port`, over TLS when `secure`, on a blocking thread, within the request's timeout.
 pub async fn post(request: HttpsRequest, secure: bool, port: u16, body: Vec<u8>, max_body: usize) -> Result<HttpsResponse> {
     validate(&request)?;
     let timeout = request.timeout;
-    within(timeout, move || send(&request, &Target { verb: "POST", secure, port, body: &body }, max_body)).await
+    let (resp, _) =
+        within(timeout, move || send(&request, &Target { verb: "POST", secure, port, body: &body, read_post_body: false }, max_body))
+            .await?;
+    Ok(resp)
+}
+
+/// One JSON POST that reads back the response body and optional `mcp-session-id` header.
+pub async fn post_json(
+    request: HttpsRequest,
+    secure: bool,
+    port: u16,
+    body: Vec<u8>,
+    max_body: usize,
+) -> Result<(HttpsResponse, Option<String>)> {
+    validate(&request)?;
+    let timeout = request.timeout;
+    within(timeout, move || send(&request, &Target { verb: "POST", secure, port, body: &body, read_post_body: true }, max_body)).await
 }
 
 /// `work` on a blocking thread, its answer given up on once `timeout` passes (the thread itself ends with WinHTTP's phase timeouts).
@@ -312,6 +367,19 @@ impl mighty_platform::HttpsSend for WinHttpGet {
             let (secure, host, port, path_and_query) = split_post(&request.url)?;
             let request = HttpsRequest { host, path_and_query, headers: request.headers, timeout: request.timeout };
             post(request, secure, port, body, max_body).await
+        })
+    }
+
+    fn post_json(
+        &self,
+        request: mighty_platform::http::HttpsRequest,
+        body: Vec<u8>,
+        max_body: usize,
+    ) -> BoxFuture<'_, Result<(HttpsResponse, Option<String>)>> {
+        Box::pin(async move {
+            let (secure, host, port, path_and_query) = split_post(&request.url)?;
+            let request = HttpsRequest { host, path_and_query, headers: request.headers, timeout: request.timeout };
+            post_json(request, secure, port, body, max_body).await
         })
     }
 }

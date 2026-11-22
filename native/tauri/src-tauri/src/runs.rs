@@ -334,6 +334,9 @@ impl Runs {
                 pump.service_event(event);
                 if let Some((session, status)) = &status {
                     crate::notifications::on_status(&pump, session, status.as_deref());
+                    if matches!(status.as_deref(), Some("completed" | "stopped" | "error")) {
+                        crate::usage_report::on_run_finished(&pump, session);
+                    }
                 }
                 // C# `RefreshModels(sessionId, invalidate: true)` through the model lists' own refresh (models.rs), which reconciles the
                 // pane with the new list and asks no CLI in a smoke.

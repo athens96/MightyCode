@@ -220,6 +220,9 @@ pub fn registry() -> Registry {
     crate::native::register(&mut methods);
     crate::settings::register(&mut methods);
     crate::voice::register(&mut methods);
+    crate::saved_prompts::register(&mut methods);
+    crate::usage_report::register(&mut methods);
+    crate::integrations::register(&mut methods);
     // W6's other page methods, each the C# handler's guard around its part's seam (setup.rs: W6-B; accounts.rs, usage.rs: W6-C;
     // plugins.rs: W6-D; composer.rs's session info: W6-A).
     methods.add("openSetup", |host: Arc<Host>, _| async move {

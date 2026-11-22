@@ -188,6 +188,14 @@ pub fn agents(host: &Arc<Host>, ui: &mut Ui) -> El {
     let words = ui.settings_titled(&label, locale.get("settings.agents.checklistDescription"));
     rows.add(ui.settings_labeled(words, switch, true));
 
+    let label = locale.get("settings.agents.crossWorkspaceToggle");
+    let cross_workspace = host.view().snapshot.cross_workspace_lookup_on();
+    let to = host.clone();
+    let switch =
+        ui.settings_switch(&label, cross_workspace, Some("settings-cross-workspace"), move |on| set_cross_workspace_lookup(&to, on));
+    let words = ui.settings_titled(&label, locale.get("settings.agents.crossWorkspaceDescription"));
+    rows.add(ui.settings_labeled(words, switch, true));
+
     // 외부 편집기: what 편집기에서 열기 starts (editor.rs): 자동, each editor found (looked for as Settings opened), 시스템 기본.
     let label = locale.get("settings.editor.label");
     let (choices, chosen) =
@@ -234,6 +242,11 @@ fn set_status_line(host: &Arc<Host>, on: bool) {
 fn set_agent_checklist(host: &Arc<Host>, on: bool) {
     let host = host.clone();
     crate::native::act(&host.clone(), async move { host.view().update(|state| state.agent_checklist = Some(on)) });
+}
+
+fn set_cross_workspace_lookup(host: &Arc<Host>, on: bool) {
+    let host = host.clone();
+    crate::native::act(&host.clone(), async move { host.view().update(|state| state.cross_workspace_lookup = Some(on)) });
 }
 
 /// 글자 (C# `BuildTextSection`): the size from 85% to 150%, the interface, conversation and code fonts each over a line of words in

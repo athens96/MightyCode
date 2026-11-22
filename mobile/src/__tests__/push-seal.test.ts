@@ -73,6 +73,9 @@ describe('parsePushMessage', () => {
   it('reads a message without buttons', () => {
     expect(parse(base)).toEqual(base);
     expect(parse({ ...base, kind: 'signin', id: 'signin:p:1' })).toEqual({ ...base, kind: 'signin', id: 'signin:p:1' });
+    expect(
+      parse({ ...base, kind: 'budget', id: 'budget:2026-11-22', sessionId: 'budget', workspace: '' }),
+    ).toEqual({ ...base, kind: 'budget', id: 'budget:2026-11-22', sessionId: 'budget', workspace: '' });
   });
 
   it('reads a permission with its buttons and ignores fields it does not know', () => {
@@ -98,6 +101,7 @@ describe('parsePushMessage', () => {
     expect(parse({ ...base, kind: 'permission', permission: { ...permission, runId: 3 } })).toBeNull();
     expect(parse({ ...base, kind: 'permission', permission: null })).toBeNull();
     expect(parse({ ...base, kind: 'permission' })).toBeNull();
+    expect(parse({ ...base, kind: 'budget', permission })).toBeNull();
     expect(parse({ ...base, permission })).toBeNull();
     expect(parse([base])).toBeNull();
     expect(parse(null)).toBeNull();

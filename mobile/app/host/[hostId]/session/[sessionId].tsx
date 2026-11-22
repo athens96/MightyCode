@@ -27,6 +27,7 @@ import {
   type MobileCommand,
   type MobilePermission,
   type MobileResultFile,
+  type MobileSavedPrompt,
   type MobileSessionDetail,
   type PlanDecisionKind,
   type QueuedItem,
@@ -125,7 +126,7 @@ import {
   type PaneSnapshot,
   type PendingRequest,
 } from '@/lib/pending-requests';
-import type { PendingState } from '@/lib/pending';
+import { parseSubmitResponse, type PendingState } from '@/lib/pending';
 import { structureBoards } from '@/lib/pipeline-board';
 import { sendWithAttachments, type SendRequest } from '@/lib/send';
 import { submitScroll, submitViewFor } from '@/lib/submit-scroll';
@@ -344,6 +345,9 @@ export default function SessionScreen() {
   // know the name and would refuse it, so it is asked only here.
   const canRoles = hasCapability(capabilities, 'roles');
   const canPush = hasCapability(capabilities, 'push');
+  const canSavedPrompts = hasCapability(capabilities, 'savedPrompts');
+  const canSubmitMode = hasCapability(capabilities, 'submit-mode');
+  const [savedPrompts, setSavedPrompts] = useState<MobileSavedPrompt[]>([]);
 
   /** Back to where we came from, or to the host when this screen was deep-linked into. */
   const leavePane = useCallback(() => {
@@ -448,6 +452,7 @@ export default function SessionScreen() {
     heldStructureRef.current = undefined;
     setHeldStructure(undefined);
     setText('');
+    setSavedPrompts([]);
     sentDraft.current = undefined;
     pendingRef.current = [];
     setPendingRequests([]);
@@ -491,6 +496,21 @@ export default function SessionScreen() {
         .catch(() => undefined);
       return () => controller.abort();
     }, [canCommands, client, hostId, sessionId, setCommands]),
+  );
+
+  // Saved prompts are fetched when connected and refreshed on focus or workspace change.
+  useFocusEffect(
+    useCallback(() => {
+      if (!client || !sessionId || !canSavedPrompts) return undefined;
+      const controller = new AbortController();
+      void client
+        .savedPrompts(sessionId, controller.signal)
+        .then((prompts) => {
+          if (!controller.signal.aborted) setSavedPrompts(prompts);
+        })
+        .catch(() => undefined);
+      return () => controller.abort();
+    }, [canSavedPrompts, client, session?.workspaceId, sessionId]),
   );
 
   // The host does not push about the session the phone is showing (docs/mobile-remote.md "푸시 알림").
@@ -676,6 +696,73 @@ export default function SessionScreen() {
       })();
     },
     [attachFiles.length, clearAttachments, client, poll, sendsFiles, sessionId, updatePending, uploadAttachments],
+  );
+
+  const sendSavedPrompt = useCallback(
+    (prompt: MobileSavedPrompt) => {
+      if (!client || !sessionId || sendingRef.current) return;
+      sendingRef.current = true;
+      const mode: SubmitMode | undefined = runningRef.current && canSubmitMode ? 'queue' : undefined;
+      const promptText = prompt.text;
+      const clientId = newClientId();
+      const at = Date.now();
+      const drawn = drawsStandIn(promptText, { running: runningRef.current, ...(mode ? { mode } : {}) });
+      updatePending((previous) => [
+        ...beforeSend(previous),
+        newPendingRequest(snapshotRef.current, clientId, promptText, at, drawn),
+      ]);
+      if (drawn) setOwnMove((count) => count + 1);
+      setSending(true);
+      void (async () => {
+        const fail = (message: string) => {
+          if (drawn) updatePending((previous) => failRequest(previous, clientId, message, Date.now()));
+          else updatePending((previous) => dropRequest(previous, clientId));
+          const inBlock = pendingRef.current.some(
+            (pending) => pending.clientId === clientId && pending.drawn && pending.phase === 'failed',
+          );
+          if (!inBlock) showToast(message, 'error');
+        };
+        try {
+          const res = await client.sendSavedPrompt(sessionId, prompt.id, mode);
+          if (shownSession.current !== sessionId) return;
+          const answer = parseSubmitResponse(res);
+          if (!answer.accepted) {
+            fail(t('remote.error.startFailed'));
+            return;
+          }
+          const resolvedText = typeof res.text === 'string' && res.text.length > 0 ? res.text : promptText;
+          updatePending((previous) =>
+            applyAnswer(
+              resolvedText !== promptText
+                ? previous.map((item) => (item.clientId === clientId ? { ...item, text: resolvedText } : item))
+                : previous,
+              clientId,
+              answer,
+              Date.now(),
+            ),
+          );
+          setSettleTick((count) => count + 1);
+          if (res.outcome === 'queued' || answer.outcome === 'queued') {
+            setQueueFlash((count) => count + 1);
+          }
+          showToast(
+            t(res.outcome === 'queued' ? 'phone.prompts.queued' : 'phone.prompts.sent', { name: prompt.name }),
+            'success',
+          );
+          if (answer.outcome === 'started' || answer.outcome === 'steered') {
+            setOwnMove((count) => count + 1);
+          }
+          poll.refresh();
+        } catch (error) {
+          if (shownSession.current !== sessionId) return;
+          fail(describeError(error));
+        } finally {
+          sendingRef.current = false;
+          setSending(false);
+        }
+      })();
+    },
+    [canSubmitMode, client, poll, sessionId, updatePending],
   );
 
   // Stop can be pressed on a picture of the pane that is out of date — the run ended
@@ -1275,6 +1362,14 @@ export default function SessionScreen() {
     },
     [changeText, text],
   );
+  const insertSavedPrompt = useCallback(
+    (prompt: MobileSavedPrompt) => {
+      if (sentDraft.current) sentDraft.current.edited = true;
+      setText(prompt.text);
+      setFilled({ end: prompt.text.length });
+    },
+    [],
+  );
   // Once the filled text is on screen: focus and put the caret after it, one time only,
   // so the box stays uncontrolled for selection and typing behaves normally.
   useEffect(() => {
@@ -1617,8 +1712,9 @@ export default function SessionScreen() {
           terminal={session?.terminal ?? false}
           running={running}
           sending={sending}
-          submitModes={hasCapability(capabilities, 'submit-mode')}
+          submitModes={canSubmitMode}
           commands={canCommands ? commands : []}
+          savedPrompts={canSavedPrompts ? savedPrompts : []}
           attachments={canAttach && session?.kind === 'claude' ? attachments : undefined}
           {...(askView.targets.length > 0
             ? {
@@ -1632,6 +1728,8 @@ export default function SessionScreen() {
               }
             : {})}
           onSend={send}
+          onSendSavedPrompt={sendSavedPrompt}
+          onInsertSavedPrompt={insertSavedPrompt}
           stopping={stopAction.state}
           {...(commandRun ? { command: commandRun } : {})}
           onStop={stop}

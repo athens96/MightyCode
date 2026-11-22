@@ -37,6 +37,7 @@ mod frame;
 mod help_capture;
 mod history;
 mod host;
+mod integrations;
 mod logfile;
 mod menu;
 mod methods;
@@ -57,6 +58,7 @@ mod plugins;
 mod remote;
 mod review;
 mod runs;
+mod saved_prompts;
 mod settings;
 mod settings_place;
 mod setup;
@@ -110,11 +112,13 @@ mod terminal;
 mod update_helper;
 mod updates;
 mod usage;
+mod usage_report;
 #[cfg(feature = "dev-harness")]
 mod verify_resources;
 mod voice;
 mod workmap;
 mod workspace_create;
+mod workspace_mcp;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -273,6 +277,7 @@ fn exe_mode(args: &[String]) -> Option<i32> {
     match args {
         [only] if only == modes::AGENT_IO_MCP_ARGUMENT => Some(modes::agent_io_mcp(platform::agent_io_connector())),
         [only] if only == modes::DELEGATION_MCP_ARGUMENT => Some(modes::delegation_mcp(platform::agent_io_connector())),
+        [only] if only == modes::WORKSPACE_MCP_ARGUMENT => Some(modes::workspace_mcp(platform::agent_io_connector())),
         #[cfg(feature = "dev-harness")]
         [first, root, rest @ ..] if first == mighty_delegation::fake_claude::ARGUMENT && mighty_core::normalize::fully_qualified(root) => {
             Some(mighty_delegation::fake_claude::run(Path::new(root), rest, platform::process_host()))

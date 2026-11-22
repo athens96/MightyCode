@@ -985,6 +985,18 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
         "submit" => ActionAnswer::Receipt(
             submit(&host, &id, &text("text").unwrap_or_default(), request_.attachments.unwrap_or_default(), false, None).await?,
         ),
+        "prompt-send" => {
+            let prompt_id = text("promptId").unwrap_or_default();
+            let expanded =
+                crate::saved_prompts::expand_for_pane(&host, Some(&id), Some(&prompt_id), None).await.map_err(|e| request(404, e))?;
+            let receipt = submit(&host, &id, &expanded, vec![], false, None).await?;
+            ActionAnswer::Value(json!({
+                "outcome": receipt.outcome,
+                "text": expanded,
+                "entryId": receipt.entry_id,
+                "runId": receipt.run_id,
+            }))
+        }
         "stop" => {
             let was = running(&host, &id);
             stop_queue(&host, &id);
@@ -1046,6 +1058,7 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
             }
             let closed = host.view().snapshot.session(&id).cloned();
             host.view().update(|state| state.sessions_mut().retain(|p| p.id() != id)).map_err(|e| request(409, e))?;
+            crate::usage_report::forget_pane(&host, &id);
             host.schedule();
             // C# `ClosePane`'s tail, as the window's close (W9-I): a worktree pane's worktree goes with it or is kept on the workspace.
             crate::pane_worktree::after_close(&host, &id, closed).await;
@@ -1350,6 +1363,7 @@ impl PhoneDesk for Desk {
             // A background run's output lines live in the host's memory, not in the runs: they move the pane through their revision, which
             // moves at most once per 3 s a pane (tails.rs).
             crate::tails::phone_revision_for(pane.id()).hash(h);
+            crate::saved_prompts::revision(&host).hash(h);
             // The custom agents read for the phone's role view: their colours and models.
             let definitions = PHONE_DEFINITIONS.peek(pane.id());
             let mut kinds: Vec<&String> = definitions.keys().collect();
@@ -1401,8 +1415,10 @@ impl PhoneDesk for Desk {
         self.host().map(|h| crate::direct::endpoints(&h)).unwrap_or_default()
     }
     fn extra_capabilities(&self) -> Vec<String> {
-        // `ExtraCapabilities`: screen share's, never while it is off (W8-F).
-        vec![]
+        vec!["savedPrompts".to_string()]
+    }
+    fn saved_prompts(&self, workspace_id: &str) -> Vec<mighty_core::saved_prompts::SavedPrompt> {
+        self.host().map(|h| crate::saved_prompts::offered(&h, Some(workspace_id))).unwrap_or_default()
     }
 }
 

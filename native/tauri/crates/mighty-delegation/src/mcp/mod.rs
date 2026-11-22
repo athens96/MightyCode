@@ -3,3 +3,4 @@
 pub mod delegation;
 pub mod serve;
 pub mod terminal;
+pub mod workspace;

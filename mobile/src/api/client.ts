@@ -38,6 +38,9 @@ import {
   type HostInfo,
   type MessageCommandAction,
   type MobileAppUpdate,
+  type MobilePromptSendResponse,
+  type MobileSavedPrompt,
+  type MobileSavedPromptsResponse,
   type MobileSessionDetail,
   type MobileState,
   type OkResponse,
@@ -49,6 +52,7 @@ import {
   type SessionKind,
   type SettingsPatch,
   type StopResponse,
+  type SubmitMode,
   type SubmitOptions,
   type SubmitResponse,
   type UploadTicket,
@@ -273,6 +277,15 @@ export interface MobileClient {
     action: MessageCommandAction,
     signal?: AbortSignal,
   ): Promise<CommandResponse>;
+  /** Saved prompts offered for this pane ("savedPrompts"); empty when unsupported. */
+  savedPrompts(sessionId: string, signal?: AbortSignal): Promise<MobileSavedPrompt[]>;
+  /** Sends one saved prompt by id ("savedPrompts"). */
+  sendSavedPrompt(
+    sessionId: string,
+    promptId: string,
+    mode?: SubmitMode,
+    signal?: AbortSignal,
+  ): Promise<MobilePromptSendResponse>;
   /** Sends one guided style action ("mighty"); the host builds the prompt. */
   guided(sessionId: string, input: GuidedRequest, signal?: AbortSignal): Promise<SubmitResponse>;
   /** Opens an upload and learns the host's chunk size ("attachments"). */
@@ -572,6 +585,36 @@ export function createClient(channel: RelayChannel): MobileClient {
         { action },
         signal,
       ),
+
+    savedPrompts: async (sessionId, signal) => {
+      try {
+        const res = await request<MobileSavedPromptsResponse>(
+          'GET',
+          `/m1/sessions/${encodeURIComponent(sessionId)}/prompts`,
+          undefined,
+          signal,
+        );
+        return Array.isArray(res.prompts) ? res.prompts : [];
+      } catch (error) {
+        if (
+          error instanceof ApiError &&
+          (error.status === 404 || error.status === 405 || error.status === 501)
+        ) {
+          return [];
+        }
+        throw error;
+      }
+    },
+
+    sendSavedPrompt: (sessionId, promptId, mode, signal) => {
+      const body: Record<string, unknown> = { promptId, ...(mode ? { mode } : {}) };
+      return request<MobilePromptSendResponse>(
+        'POST',
+        `/m1/sessions/${encodeURIComponent(sessionId)}/prompt-send`,
+        body,
+        signal,
+      );
+    },
 
     guided: (sessionId, input, signal) => {
       const actionId = input.actionId.trim();

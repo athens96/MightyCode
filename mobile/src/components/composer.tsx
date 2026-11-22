@@ -7,7 +7,12 @@ import { CommandList } from '@/components/command-list';
 import { Pending, PendingBars, usePendingShown } from '@/components/pending';
 import { BottomSheet, SheetRow } from '@/components/sheets';
 import { byteLength } from '@/api/client';
-import { MAX_TEXT_BYTES, type MobileCommand, type SubmitMode } from '@/api/types';
+import {
+  MAX_TEXT_BYTES,
+  type MobileCommand,
+  type MobileSavedPrompt,
+  type SubmitMode,
+} from '@/api/types';
 import { pickAfterSheet, type PickKind } from '@/lib/attach-picks';
 import { draftIsEmpty } from '@/lib/ask-targets';
 import { commandInsertion, commandQuery, filterCommands } from '@/lib/commands';
@@ -41,11 +46,14 @@ export function Composer({
   sending,
   submitModes,
   commands,
+  savedPrompts,
   attachments,
   ask,
   stopping,
   command,
   onSend,
+  onSendSavedPrompt,
+  onInsertSavedPrompt,
   onStop,
   onCommand,
   inputRef,
@@ -61,6 +69,8 @@ export function Composer({
   submitModes: boolean;
   /** "commands": what `/` offers; empty on a host without the capability. */
   commands: MobileCommand[];
+  /** "savedPrompts": saved `/prompt:<name>` pills for one-tap send or long-press edit. */
+  savedPrompts?: readonly MobileSavedPrompt[];
   /** "attachments": absent when the host or the pane cannot take files. */
   attachments?: ComposerAttachments;
   /**
@@ -75,6 +85,10 @@ export function Composer({
    * and untouched. Further sends wait while `sending`.
    */
   onSend: (text: string, mode?: SubmitMode) => void;
+  /** One-tap send for a saved prompt chip. */
+  onSendSavedPrompt?: (prompt: MobileSavedPrompt) => void;
+  /** Long-press insert into the composer box so the user can edit before sending. */
+  onInsertSavedPrompt?: (prompt: MobileSavedPrompt) => void;
   /** The stop call on its way: stop locks and shows the pending mark (A3). */
   stopping?: PendingState;
   /** A slash command the phone runs (`/usage`, `/help`…) on its way, with its name. */
@@ -154,6 +168,9 @@ export function Composer({
   // While a new "send to" choice is being saved, a send waits: the host could still wrap it for the old one.
   const askSaving = ask?.busy === true;
   const blocked = disabled || tooLong || empty || askSaving;
+  const promptSendBusy = sending || askSaving || Boolean(attachments?.uploading);
+  const showSavedPrompts =
+    Boolean(savedPrompts && savedPrompts.length > 0) && !disabled && voice.phase === 'idle';
   // A draft on a running pane always queues as the next request, files or not.
   const busyChoices = busySendChoices({ submitModes });
   // While a run is busy the round buttons show only for a draft with something in it,
@@ -283,6 +300,53 @@ export function Composer({
         onDismissPermission={voice.dismissPermission}
         onDismissError={voice.dismissError}
       />
+
+      {showSavedPrompts && savedPrompts ? (
+        <View
+          accessibilityLabel={t('phone.prompts.label')}
+          accessibilityRole="toolbar"
+          style={styles.promptsWrap}
+        >
+          <ScrollView
+            horizontal
+            keyboardShouldPersistTaps="handled"
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.promptsRow}
+          >
+            <Text style={styles.promptsLabel}>{t('phone.prompts.label')}</Text>
+            {savedPrompts.map((prompt) => (
+              <Pressable
+                key={prompt.id}
+                accessibilityHint={t('phone.prompts.hint')}
+                accessibilityLabel={`/prompt:${prompt.name}`}
+                accessibilityRole="button"
+                accessibilityState={{ busy: sending, disabled: promptSendBusy }}
+                disabled={promptSendBusy}
+                hitSlop={spacing.md}
+                onPress={() => {
+                  if (!onSendSavedPrompt) return;
+                  void Haptics.selectionAsync();
+                  onSendSavedPrompt(prompt);
+                }}
+                onLongPress={() => {
+                  if (!onInsertSavedPrompt) return;
+                  void Haptics.selectionAsync();
+                  onInsertSavedPrompt(prompt);
+                }}
+                style={({ pressed }) => [
+                  styles.promptChip,
+                  promptSendBusy && styles.promptChipDisabled,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text numberOfLines={1} style={styles.promptChipText}>
+                  {`/prompt:${prompt.name}`}
+                </Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      ) : null}
 
       <View style={styles.row}>
         {attachments ? (
@@ -471,6 +535,27 @@ const makeStyles = (palette: Palette) =>
     askPillOn: { backgroundColor: palette.accentMuted },
     askText: { color: palette.textMuted, fontSize: 12, fontWeight: '600' },
     askTextOn: { color: palette.accent },
+    promptsWrap: { justifyContent: 'center' },
+    promptsRow: {
+      alignItems: 'center',
+      flexDirection: 'row',
+      gap: spacing.sm,
+      paddingVertical: spacing.xs,
+    },
+    promptsLabel: { color: palette.textFaint, fontSize: 11, fontWeight: '600' },
+    promptChip: {
+      alignItems: 'center',
+      backgroundColor: palette.surface,
+      borderColor: palette.border,
+      borderRadius: radius.round,
+      borderWidth: StyleSheet.hairlineWidth,
+      flexDirection: 'row',
+      maxWidth: 220,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.xs,
+    },
+    promptChipText: { color: palette.accent, fontSize: 12, fontWeight: '600' },
+    promptChipDisabled: { opacity: 0.4 },
     uploadRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm },
     hint: { color: palette.textFaint, flex: 1, fontSize: 11 },
     askWarning: { color: palette.textFaint, fontSize: 11 },

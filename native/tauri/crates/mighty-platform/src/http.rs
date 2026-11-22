@@ -47,4 +47,10 @@ pub trait HttpsSend: Send + Sync {
         let _ = (request, body, max_body);
         Box::pin(async { Err(crate::PlatformError::unsupported("HttpsSend", "post")) })
     }
+
+    /// One JSON/RPC POST whose response body (up to `max_body` bytes) and optional `mcp-session-id` header are read back.
+    fn post_json(&self, request: HttpsRequest, body: Vec<u8>, max_body: usize) -> BoxFuture<'_, Result<(HttpsResponse, Option<String>)>> {
+        let _ = (request, body, max_body);
+        Box::pin(async { Err(crate::PlatformError::unsupported("HttpsSend", "post_json")) })
+    }
 }

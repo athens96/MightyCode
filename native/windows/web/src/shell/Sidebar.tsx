@@ -121,7 +121,11 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
     { label: t('menu.showFiles'), action: () => call('openFiles', { workspaceId: workspace.id }) },
     { label: t('workMap.open'), action: () => call('openWorkMap', { workspaceId: workspace.id }) },
     // 대화 검색 is the Rust host's (conversation_search.rs).
-    ...(import.meta.env.MODE === 'tauri' ? [{ label: t('conversationSearch.open'), action: () => call('openConversationSearch', { workspaceId: workspace.id }) }] : []),
+    ...(import.meta.env.MODE === 'tauri' ? [
+      { label: t('conversationSearch.open'), action: () => call('openConversationSearch', { workspaceId: workspace.id }) },
+      { label: t('integrations.menu.browse'), action: () => window.dispatchEvent(new CustomEvent('mighty:open-issues', { detail: { workspaceId: workspace.id, paneId: null, settingsOpen: false } })) },
+      { label: t('integrations.menu.settings'), action: () => window.dispatchEvent(new CustomEvent('mighty:open-issues', { detail: { workspaceId: workspace.id, paneId: null, settingsOpen: true } })) },
+    ] : []),
     // Where its agent panes work and what each new worktree gets (MainWindow.PaneWorktree.cs WorkspaceWorktreeAction).
     { separator: true },
     { label: t('paneWorktree.menu.mode'), disabled: true },
