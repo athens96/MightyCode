@@ -1172,6 +1172,9 @@ pub struct RunSession {
     /// The summary the split state's index keeps of the pane's body, as read with the index: what lists read of a pane whose body is
     /// on disk. Never written as such: the index's summary is made from the body each save.
     pub stored_digest: Option<Arc<SessionDigest>>,
+    /// Monotonic revision of the pane's split body file (`bodyRevision`), kept in memory across hot/cold transitions and never emitted
+    /// by `Wire::write` or `write_page` (C# parity).
+    pub body_revision: Option<u64>,
 }
 
 /// What lists need of a pane's body without the body (the phone's and the mirror's pane lists, the dashboard card, the review's kept
@@ -1189,24 +1192,37 @@ pub struct SessionDigest {
 pub const DIGEST_TAIL: usize = 8;
 pub const DIGEST_TEXT: usize = 1000;
 
+/// Clamps a transcript entry for inclusion in a [`SessionDigest`] (shortened text, stripped tool output and images).
+pub fn clamp_for_digest(entry: &LogEntry) -> LogEntry {
+    LogEntry {
+        text: entry.text.as_deref().map(|t| crate::wire::clean(t, DIGEST_TEXT)),
+        activity: entry.activity.clone().map(|a| AgentActivity { output: None, ..a }),
+        images: None,
+        ..entry.clone()
+    }
+}
+
 impl SessionDigest {
-    /// The summary of `pane`'s body as it is. The latest request comes along when it is older than the last entries: a pane titled by
-    /// its requests is titled by it, and its timing is read from it, before its body is read.
+    /// The summary of `pane`'s body as it is. Both the latest `"user"` request and the latest `"assistant"` reply come along in
+    /// chronological order when older than `logs[from..]`, so cold panes still title themselves, infer run timing, and answer
+    /// cross-workspace activity summaries without disk I/O.
     pub fn of(pane: &RunSession) -> SessionDigest {
         let logs = pane.logs();
         let from = logs.len().saturating_sub(DIGEST_TAIL);
-        let request = logs[..from].iter().rposition(|e| e.kind() == "user").filter(|_| !logs[from..].iter().any(|e| e.kind() == "user"));
-        let tail = request
-            .map(|at| &logs[at])
-            .into_iter()
-            .chain(logs[from..].iter())
-            .map(|entry| LogEntry {
-                text: entry.text.as_deref().map(|t| crate::wire::clean(t, DIGEST_TEXT)),
-                activity: entry.activity.clone().map(|a| AgentActivity { output: None, ..a }),
-                images: None,
-                ..entry.clone()
-            })
-            .collect();
+        let latest_before = |kind: &str| -> Option<usize> {
+            let in_tail_non_empty = logs[from..].iter().any(|e| e.kind() == kind && !e.text().trim().is_empty());
+            if in_tail_non_empty {
+                return None;
+            }
+            if let Some(at) = logs[..from].iter().rposition(|e| e.kind() == kind && !e.text().trim().is_empty()) {
+                return Some(at);
+            }
+            (!logs[from..].iter().any(|e| e.kind() == kind)).then(|| logs[..from].iter().rposition(|e| e.kind() == kind)).flatten()
+        };
+        let mut earlier: Vec<usize> = [latest_before("user"), latest_before("assistant")].into_iter().flatten().collect();
+        earlier.sort_unstable();
+        earlier.dedup();
+        let tail = earlier.into_iter().map(|at| &logs[at]).chain(logs[from..].iter()).map(clamp_for_digest).collect();
         SessionDigest { log_count: logs.len() as i64, tail, run_ids: kept_run_ids(pane.graph_runs()) }
     }
 
@@ -1299,6 +1315,7 @@ impl Default for RunSession {
             mirror: None,
             body_on_disk: false,
             stored_digest: None,
+            body_revision: None,
         }
     }
 }
@@ -1384,6 +1401,7 @@ impl Wire for RunSession {
             mirror: None,
             body_on_disk: false,
             stored_digest: None,
+            body_revision: None,
         })
     }
 
@@ -1430,9 +1448,14 @@ pub const BODY_FIELDS: [&str; 6] = ["logs", "graphRuns", "planHistory", "todoPro
 
 impl RunSession {
     /// Written with or without its two lists (the delta's fields leave `logs` and `graphRuns` out), and with or without the graph
-    /// agents' output files (`WebDelta.PageRuns`).
+    /// agents' output files (`WebDelta.PageRuns`). Never emits `bodyRevision` or `digest` (C# page parity).
     pub fn write_with(&self, out: &mut JsonOut, lists: bool, output_files: bool) {
         self.write_fields(out, if lists { PaneFields::All } else { PaneFields::WithoutLists }, output_files, None);
+    }
+
+    /// Writes the pane for the web page (`for_page == true`), omitting `outputFile`, `bodyRevision`, and `digest` for C# parity.
+    pub fn write_page(&self, out: &mut JsonOut) {
+        self.write_with(out, true, false);
     }
 
     /// The pane's entry in the split state's index: its fields but the body's, and the revision of the body file written for it.
@@ -1579,11 +1602,34 @@ impl RunSession {
     pub fn created_at(&self) -> Option<&str> {
         self.created_at.as_deref()
     }
+    pub fn started_at(&self) -> Option<DateTimeOffset> {
+        self.run_timing.filter(AgentRunTiming::is_valid).map(|t| t.started_at)
+    }
     pub fn logs(&self) -> &[LogEntry] {
         self.logs.as_deref().unwrap_or(&[])
     }
     pub fn graph_runs(&self) -> &[MightyGraphRun] {
         self.graph_runs.as_deref().unwrap_or(&[])
+    }
+
+    /// Builds a cold (`body_on_disk: true`) copy of this pane, replacing the full body fields with `SessionDigest`'s tail while
+    /// preserving `body_revision`, `graph_block_sizes`, and all other non-body fields.
+    pub fn evicted_to_disk(&self) -> RunSession {
+        let digest = match (&self.stored_digest, self.body_on_disk) {
+            (Some(stored), true) => (**stored).clone(),
+            _ => SessionDigest::of(self),
+        };
+        RunSession {
+            logs: Some(digest.tail.clone()),
+            graph_runs: None,
+            plan_history: None,
+            todo_progress: None,
+            background_work: None,
+            shell_block_runs: None,
+            body_on_disk: true,
+            stored_digest: Some(Arc::new(digest)),
+            ..self.clone()
+        }
     }
 
     /// The summary of the pane's body: the saved one while the body is on disk, else made from the body.
@@ -1656,6 +1702,7 @@ impl RunSession {
             mirror: _,
             body_on_disk: _,
             stored_digest: _,
+            body_revision: _,
         } = self;
         id == &other.id
             && workspace_id == &other.workspace_id

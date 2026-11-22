@@ -13,7 +13,11 @@ export type SlashAction =
   | 'SetPermission'
   | 'ManagePrompts'
   | 'InsertPrompt'
-  | 'OpenIssues';
+  | 'OpenIssues'
+  | 'OpenGitWorkbench'
+  | 'OpenProjectTasks'
+  | 'OpenAgentContext'
+  | 'OpenSharedMemory';
 
 export interface SlashCommand {
   invocation: string;

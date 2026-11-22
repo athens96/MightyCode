@@ -88,14 +88,26 @@ export function StatusCounts({ counts, long = false }: { counts: Counts; long?: 
   );
 }
 
-export function GitCapsule({ git }: { git: GitInfo }) {
-  return (
-    <span className="git-capsule" title={git.help} aria-label={git.help} data-testid="git-capsule">
+export function GitCapsule({ git, onClick }: { git: GitInfo; onClick?: () => void }) {
+  const inner = (
+    <>
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="2.6" cy="1.9" r="1.3" fill="none" stroke="currentColor" /><circle cx="2.6" cy="8.1" r="1.3" fill="none" stroke="currentColor" /><circle cx="7.4" cy="2.9" r="1.3" fill="none" stroke="currentColor" /><path d="M2.6 3.2v3.6M7.4 4.2v.7L5.9 6.1H2.6" fill="none" stroke="currentColor" /></svg>
       <span className="git-label">{git.label}</span>
       {git.dirty && <span className="git-dirty" />}
       {git.ahead > 0 && <span>↑{git.ahead}</span>}
       {git.behind > 0 && <span>↓{git.behind}</span>}
+    </>
+  );
+  if (onClick) {
+    return (
+      <button type="button" className="git-capsule git-capsule-button" title={git.help} aria-label={git.help} data-testid="git-capsule" onClick={onClick}>
+        {inner}
+      </button>
+    );
+  }
+  return (
+    <span className="git-capsule" title={git.help} aria-label={git.help} data-testid="git-capsule">
+      {inner}
     </span>
   );
 }

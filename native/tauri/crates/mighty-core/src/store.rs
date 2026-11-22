@@ -25,7 +25,10 @@ use crate::locale::Locale;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::model::{AppSnapshot, RemoteWorkspaceReference, RunSession, Workspace};
+use crate::graph::MightyGraphRun;
+use crate::model::{
+    AppSnapshot, BackgroundWork, LogEntry, PlanRecord, RemoteWorkspaceReference, RunSession, ShellBlockRun, TodoProgress, Workspace,
+};
 use crate::normalize;
 use crate::wire::{self, new_id};
 
@@ -403,6 +406,420 @@ pub fn body_file_name(id: &str) -> String {
     format!("h-{hash:016x}.json")
 }
 
+/// A pane's incremental append-only journal file name inside `sessions/` (`<stem>.jsonl` where `<stem>.json == body_file_name(id)`).
+pub fn journal_file_name(id: &str) -> String {
+    let body = body_file_name(id);
+    let stem = body.strip_suffix(".json").unwrap_or(&body);
+    format!("{stem}.jsonl")
+}
+
+pub const JOURNAL_MAX_LINE_BYTES: usize = 256 * 1024;
+pub const JOURNAL_MAX_FILE_BYTES: u64 = 512 * 1024;
+pub const JOURNAL_MAX_RECORDS: usize = 128;
+
+/// Incremental mutation operation recorded in `sessions/<stem>.jsonl` while a pane is `"running"`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BodyJournalOp {
+    LogAppend {
+        entry: LogEntry,
+    },
+    LogReplaceLast {
+        index: usize,
+        entry: LogEntry,
+    },
+    GraphRunUpsert {
+        run: Box<MightyGraphRun>,
+    },
+    Meta {
+        plan_history: Option<Vec<PlanRecord>>,
+        todo_progress: Option<TodoProgress>,
+        background_work: Option<BackgroundWork>,
+        shell_runs: Option<Vec<ShellBlockRun>>,
+    },
+}
+
+impl Wire for BodyJournalOp {
+    fn read(value: &Value) -> json::R<Self> {
+        let o = json::Obj::of(value, "a body journal op")?;
+        let kind = o.text("op").unwrap_or("");
+        match kind {
+            "logAppend" => {
+                let entry_val = o.get("entry").ok_or_else(|| json::ReadError("missing journal entry".into()))?;
+                Ok(BodyJournalOp::LogAppend { entry: LogEntry::read(entry_val)? })
+            }
+            "logReplaceLast" => {
+                let idx = o
+                    .get("index")
+                    .and_then(json::as_integer)
+                    .and_then(|n| usize::try_from(n).ok())
+                    .ok_or_else(|| json::ReadError("invalid journal index".into()))?;
+                let entry_val = o.get("entry").ok_or_else(|| json::ReadError("missing journal entry".into()))?;
+                Ok(BodyJournalOp::LogReplaceLast { index: idx, entry: LogEntry::read(entry_val)? })
+            }
+            "graphRunUpsert" => {
+                let run_val = o.get("run").ok_or_else(|| json::ReadError("missing journal graph run".into()))?;
+                Ok(BodyJournalOp::GraphRunUpsert { run: Box::new(MightyGraphRun::read(run_val)?) })
+            }
+            "meta" => {
+                let plan_history = match o.get("planHistory") {
+                    Some(Value::Array(items)) => {
+                        Some(items.iter().filter(|i| !i.is_null()).filter_map(|i| PlanRecord::read(i).ok()).collect())
+                    }
+                    _ => None,
+                };
+                let todo_progress = o.get("todoProgress").filter(|v| !v.is_null()).and_then(|v| TodoProgress::read(v).ok());
+                let background_work = o.get("backgroundWork").filter(|v| !v.is_null()).and_then(|v| BackgroundWork::read(v).ok());
+                let shell_runs = match o.get("shellRuns") {
+                    Some(Value::Array(items)) => {
+                        Some(items.iter().filter(|i| !i.is_null()).filter_map(|i| ShellBlockRun::read(i).ok()).collect())
+                    }
+                    _ => None,
+                };
+                Ok(BodyJournalOp::Meta { plan_history, todo_progress, background_work, shell_runs })
+            }
+            other => json::fail(format!("unknown body journal op: {other}")),
+        }
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        match self {
+            BodyJournalOp::LogAppend { entry } => {
+                out.prop_str("op", Some("logAppend"));
+                out.prop("entry", Some(entry));
+            }
+            BodyJournalOp::LogReplaceLast { index, entry } => {
+                out.prop_str("op", Some("logReplaceLast"));
+                out.prop_int("index", *index as i64);
+                out.prop("entry", Some(entry));
+            }
+            BodyJournalOp::GraphRunUpsert { run } => {
+                out.prop_str("op", Some("graphRunUpsert"));
+                out.name("run");
+                run.write_with(out, true);
+            }
+            BodyJournalOp::Meta { plan_history, todo_progress, background_work, shell_runs } => {
+                out.prop_str("op", Some("meta"));
+                out.prop_list("planHistory", plan_history.as_ref());
+                out.prop("todoProgress", todo_progress.as_ref());
+                out.prop("backgroundWork", background_work.as_ref());
+                out.prop_list("shellRuns", shell_runs.as_ref());
+            }
+        }
+        out.end_object();
+    }
+}
+
+/// One append-only journal record in `sessions/<stem>.jsonl`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BodyJournalRecord {
+    pub rev: u64,
+    pub session_id: String,
+    pub ops: Vec<BodyJournalOp>,
+}
+
+impl Wire for BodyJournalRecord {
+    fn read(value: &Value) -> json::R<Self> {
+        let o = json::Obj::of(value, "a body journal record")?;
+        let rev = o.get("rev").and_then(Value::as_u64).ok_or_else(|| json::ReadError("missing journal rev".into()))?;
+        let session_id =
+            o.text("sessionId").filter(|s| !s.is_empty()).ok_or_else(|| json::ReadError("missing journal sessionId".into()))?.to_string();
+        let ops_arr = o.get("ops").and_then(Value::as_array).ok_or_else(|| json::ReadError("missing journal ops".into()))?;
+        let mut ops = Vec::with_capacity(ops_arr.len());
+        for item in ops_arr {
+            ops.push(BodyJournalOp::read(item)?);
+        }
+        Ok(BodyJournalRecord { rev, session_id, ops })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_int("rev", self.rev as i64);
+        out.prop_str("sessionId", Some(&self.session_id));
+        out.prop_list("ops", Some(&self.ops));
+        out.end_object();
+    }
+}
+
+impl serde::Serialize for BodyJournalOp {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let value: Value = serde_json::from_str(&self.to_json()).map_err(serde::ser::Error::custom)?;
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BodyJournalOp {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        BodyJournalOp::read(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+impl serde::Serialize for BodyJournalRecord {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let value: Value = serde_json::from_str(&self.to_json()).map_err(serde::ser::Error::custom)?;
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BodyJournalRecord {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        BodyJournalRecord::read(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// Computes purely incremental body operations from `prev` to `current`; returns `None` if front-trimming, reordering, or bulk
+/// replacement happened (signalling compaction back into `sessions/<stem>.json`).
+pub fn diff_body(prev: &RunSession, current: &RunSession) -> Option<Vec<BodyJournalOp>> {
+    let prev_logs = prev.logs();
+    let curr_logs = current.logs();
+    if curr_logs.len() < prev_logs.len() {
+        return None;
+    }
+    let tail_window_start = prev_logs.len().saturating_sub(8);
+    let mut ops = Vec::new();
+    let mut replaced_logs = 0usize;
+    for i in 0..prev_logs.len() {
+        if prev_logs[i].id != curr_logs[i].id {
+            return None;
+        }
+        if prev_logs[i] != curr_logs[i] {
+            if i < tail_window_start || replaced_logs >= 4 {
+                return None;
+            }
+            replaced_logs += 1;
+            ops.push(BodyJournalOp::LogReplaceLast { index: i, entry: curr_logs[i].clone() });
+        }
+    }
+    for entry in &curr_logs[prev_logs.len()..] {
+        ops.push(BodyJournalOp::LogAppend { entry: entry.clone() });
+    }
+
+    let prev_runs = prev.graph_runs();
+    let curr_runs = current.graph_runs();
+    if curr_runs.len() < prev_runs.len() {
+        return None;
+    }
+    let mut upserted_runs = 0usize;
+    for i in 0..prev_runs.len() {
+        if prev_runs[i].id != curr_runs[i].id {
+            return None;
+        }
+        if prev_runs[i] != curr_runs[i] {
+            upserted_runs += 1;
+            if upserted_runs > 4 {
+                return None;
+            }
+            ops.push(BodyJournalOp::GraphRunUpsert { run: Box::new(curr_runs[i].clone()) });
+        }
+    }
+    for run in &curr_runs[prev_runs.len()..] {
+        upserted_runs += 1;
+        if upserted_runs > 4 {
+            return None;
+        }
+        ops.push(BodyJournalOp::GraphRunUpsert { run: Box::new(run.clone()) });
+    }
+
+    if prev.plan_history != current.plan_history
+        || prev.todo_progress != current.todo_progress
+        || prev.background_work != current.background_work
+        || prev.shell_block_runs != current.shell_block_runs
+    {
+        ops.push(BodyJournalOp::Meta {
+            plan_history: current.plan_history.clone(),
+            todo_progress: current.todo_progress.clone(),
+            background_work: current.background_work.clone(),
+            shell_runs: current.shell_block_runs.clone(),
+        });
+    }
+
+    Some(ops)
+}
+
+#[derive(Default)]
+struct PaneBody {
+    body_revision: u64,
+    logs: Vec<LogEntry>,
+    graph_runs: Option<Vec<MightyGraphRun>>,
+    plan_history: Option<Vec<PlanRecord>>,
+    todo_progress: Option<TodoProgress>,
+    background_work: Option<BackgroundWork>,
+    shell_runs: Option<Vec<ShellBlockRun>>,
+}
+
+impl PaneBody {
+    fn from_map(body: &Map<String, Value>, revision: u64) -> Option<Self> {
+        let mut root = Map::new();
+        root.insert("id".into(), Value::String("pane".into()));
+        for field in crate::model::BODY_FIELDS {
+            if let Some(val) = body.get(field) {
+                root.insert(field.into(), val.clone());
+            }
+        }
+        let session = RunSession::read(&Value::Object(root)).ok()?;
+        Some(PaneBody {
+            body_revision: revision,
+            logs: session.logs.unwrap_or_default(),
+            graph_runs: session.graph_runs,
+            plan_history: session.plan_history,
+            todo_progress: session.todo_progress,
+            background_work: session.background_work,
+            shell_runs: session.shell_block_runs,
+        })
+    }
+
+    fn apply(&mut self, record: BodyJournalRecord) {
+        if record.rev <= self.body_revision {
+            return;
+        }
+        for op in record.ops {
+            match op {
+                BodyJournalOp::LogAppend { entry } => self.logs.push(entry),
+                // The entry is found by its id: the writer's `index` is its place in the body the writer had, which the base read here
+                // may not be (trimmed at the front, or the `.bak` of an older save). An entry the base does not hold is left out, never
+                // laid over another one; `index` stands only for an entry that has no id.
+                BodyJournalOp::LogReplaceLast { index, entry } => {
+                    if entry.id().is_empty() {
+                        if index < self.logs.len() {
+                            self.logs[index] = entry;
+                        }
+                    } else if let Some(at) = self.logs.iter().rposition(|log| log.id() == entry.id()) {
+                        self.logs[at] = entry;
+                    }
+                }
+                BodyJournalOp::GraphRunUpsert { run } => {
+                    let run = *run;
+                    let runs = self.graph_runs.get_or_insert_with(Vec::new);
+                    match runs.iter().position(|r| r.id == run.id) {
+                        Some(at) => runs[at] = run,
+                        None => runs.push(run),
+                    }
+                }
+                BodyJournalOp::Meta { plan_history, todo_progress, background_work, shell_runs } => {
+                    self.plan_history = plan_history;
+                    self.todo_progress = todo_progress;
+                    self.background_work = background_work;
+                    self.shell_runs = shell_runs;
+                }
+            }
+        }
+        self.body_revision = record.rev;
+    }
+
+    fn into_map_and_rev(self) -> Option<(Map<String, Value>, u64)> {
+        let rev = self.body_revision;
+        let carrier = RunSession {
+            logs: Some(self.logs),
+            graph_runs: self.graph_runs,
+            plan_history: self.plan_history,
+            todo_progress: self.todo_progress,
+            background_work: self.background_work,
+            shell_block_runs: self.shell_runs,
+            ..RunSession::default()
+        };
+        let mut out = JsonOut::new();
+        carrier.write_body(&mut out, rev);
+        let Value::Object(mut obj) = serde_json::from_str::<Value>(&out.finish()).ok()? else { return None };
+        obj.retain(|name, _| crate::model::BODY_FIELDS.contains(&name.as_str()));
+        Some((obj, rev))
+    }
+}
+
+fn read_journal_records(journal_path: &Path, id: &str) -> Vec<BodyJournalRecord> {
+    let Ok(meta) = fs::metadata(journal_path) else { return Vec::new() };
+    if !meta.is_file() || meta.len() > JOURNAL_MAX_FILE_BYTES * 4 {
+        return Vec::new();
+    }
+    let Ok(bytes) = fs::read(journal_path) else { return Vec::new() };
+    let mut records = Vec::new();
+    for raw_line in bytes.split(|b| *b == b'\n') {
+        let line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
+        if line.is_empty() {
+            continue;
+        }
+        // Stop cleanly at any torn/corrupted trailing line left by a power cut.
+        if damaged(line) {
+            break;
+        }
+        let Ok(text) = std::str::from_utf8(line) else { break };
+        let Ok(value) = parse_document(text) else { break };
+        let Ok(record) = BodyJournalRecord::read(&value) else { break };
+        if record.session_id != id {
+            break;
+        }
+        records.push(record);
+    }
+    records
+}
+
+fn replay_journal_if_present(folder: &Path, id: &str, body: Map<String, Value>, revision: u64) -> (Map<String, Value>, u64) {
+    let journal_path = folder.join(journal_file_name(id));
+    if !journal_path.exists() {
+        return (body, revision);
+    }
+    let records = read_journal_records(&journal_path, id);
+    if !records.iter().any(|r| r.rev > revision) {
+        return (body, revision);
+    }
+    let Some(mut pane_body) = PaneBody::from_map(&body, revision) else {
+        return (body, revision);
+    };
+    for record in records {
+        pane_body.apply(record);
+    }
+    pane_body.into_map_and_rev().unwrap_or((body, revision))
+}
+
+/// Reads the full transcript logs of a cold (`body_on_disk`) pane from `<dir>/sessions/<stem>.json` (plus any `.jsonl` replay)
+/// without mutating any `Store` state or disk files.
+pub fn read_cold_body_logs(dir: &Path, id: &str) -> Option<Vec<LogEntry>> {
+    let folder = dir.join(SESSIONS_DIR);
+    let name = body_file_name(id);
+    let primary = folder.join(&name);
+    let backup = folder.join(format!("{name}.bak"));
+    let (body, revision) = if primary.exists() {
+        read_body_file(&primary, id).ok().or_else(|| backup.exists().then(|| read_body_file(&backup, id).ok()).flatten())?
+    } else if backup.exists() {
+        read_body_file(&backup, id).ok()?
+    } else {
+        return None;
+    };
+    let (replayed, rev) = replay_journal_if_present(&folder, id, body, revision);
+    Some(PaneBody::from_map(&replayed, rev)?.logs)
+}
+
+/// Reads contiguous incremental `BodyJournalRecord` deltas after `since_rev` for `id` (`MC-13` remote delta sync).
+/// Returns `Some(vec![])` when the pane is already at `since_rev`, `Some(records)` when `.jsonl` contiguously covers
+/// `(since_rev + 1)..=latest`, or `None` when the requested range was already compacted into `<stem>.json` (or does not exist).
+pub fn read_body_deltas_since(dir: &Path, id: &str, since_rev: u64) -> Option<Vec<BodyJournalRecord>> {
+    let folder = dir.join(SESSIONS_DIR);
+    let name = body_file_name(id);
+    let primary = folder.join(&name);
+    let (_body, base_rev) = read_body_file(&primary, id).ok()?;
+    let journal_path = folder.join(journal_file_name(id));
+    let records = read_journal_records(&journal_path, id);
+    let latest_rev = records.last().map(|r| r.rev).unwrap_or(base_rev).max(base_rev);
+    if since_rev == latest_rev {
+        return Some(Vec::new());
+    }
+    if since_rev > latest_rev {
+        return None;
+    }
+    let after: Vec<BodyJournalRecord> = records.into_iter().filter(|r| r.rev > since_rev).collect();
+    if after.is_empty() {
+        return None;
+    }
+    // Ensure contiguous coverage starting immediately at `since_rev + 1` (and check monotonicity).
+    for (expected, rec) in (since_rev + 1..).zip(after.iter()) {
+        if rec.rev != expected {
+            return None;
+        }
+    }
+    Some(after)
+}
+
 /// A pane's body file bytes (`{version, sessionId, bodyRevision, ...}`), at most [`MAXIMUM_BODY_BYTES`]: a pane that outgrows it keeps
 /// its newest requests (then its newest log entries) in the written copy, as the one state file did.
 pub fn encode_body(pane: &RunSession, revision: u64) -> Result<Vec<u8>, StateError> {
@@ -433,21 +850,25 @@ pub fn encode_body(pane: &RunSession, revision: u64) -> Result<Vec<u8>, StateErr
     Err(StateError::StateTooLarge(last))
 }
 
-/// `copy` (the state written and read back) with the panes whose body `loaded` left on disk marked so again: the mark and the summary
-/// are never written, and a pane holding only its summary's entries must never pass for one read whole.
+/// `copy` (the state written and read back) with the panes whose body `loaded` left on disk marked so again (and each pane's
+/// in-memory `body_revision` kept): the mark and the summary are never written, and a pane holding only its summary's entries must
+/// never pass for one read whole.
 fn with_bodies_on_disk(mut copy: AppSnapshot, loaded: &AppSnapshot) -> AppSnapshot {
-    let on_disk: HashMap<&str, &Arc<RunSession>> = loaded.sessions().iter().filter(|s| s.body_on_disk).map(|s| (s.id(), s)).collect();
-    if on_disk.is_empty() {
+    let originals: HashMap<&str, &Arc<RunSession>> = loaded.sessions().iter().map(|s| (s.id(), s)).collect();
+    if originals.is_empty() {
         return copy;
     }
     let panes = copy
         .sessions()
         .iter()
-        .map(|pane| match on_disk.get(pane.id()) {
-            Some(original) => {
-                Arc::new(RunSession { body_on_disk: true, stored_digest: original.stored_digest.clone(), ..(**pane).clone() })
-            }
-            None => pane.clone(),
+        .map(|pane| match originals.get(pane.id()) {
+            Some(original) if original.body_on_disk || original.body_revision.is_some() => Arc::new(RunSession {
+                body_on_disk: original.body_on_disk,
+                stored_digest: if original.body_on_disk { original.stored_digest.clone() } else { None },
+                body_revision: original.body_revision,
+                ..(**pane).clone()
+            }),
+            _ => pane.clone(),
         })
         .collect();
     copy.sessions = Some(panes);
@@ -522,14 +943,18 @@ pub fn lay_body(entry: &mut Map<String, Value>, body: Map<String, Value>, split:
     }
 }
 
-/// Removes the body files (and their `.bak`) of panes the index no longer lists: a closed pane's data goes as it always did. A file
-/// set aside as unreadable stays for the person to look at.
+/// Removes the body files (and their `.bak` / `.jsonl`) of panes the index no longer lists: a closed pane's data goes as it always
+/// did. A file set aside as unreadable stays for the person to look at.
 fn remove_unlisted_bodies(folder: &Path, listed: &HashSet<String>) {
     let Ok(entries) = fs::read_dir(folder) else { return };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         let body = name.strip_suffix(".bak").unwrap_or(&name);
         if body.ends_with(".json") && !listed.contains(body) {
+            let _ = fs::remove_file(entry.path());
+        } else if let Some(stem) = name.strip_suffix(".jsonl")
+            && !listed.contains(&format!("{stem}.json"))
+        {
             let _ = fs::remove_file(entry.path());
         }
     }
@@ -584,6 +1009,10 @@ pub struct Store {
     split: bool,
     /// Each pane's body revision as last read or written.
     revisions: HashMap<String, u64>,
+    /// Monotonic last-written body revision per pane, retained even when `written` drops an evicted pane's `Arc<RunSession>`.
+    written_revisions: HashMap<String, u64>,
+    /// Count of records currently appended to `sessions/<stem>.jsonl` per pane.
+    journal_records: HashMap<String, usize>,
     /// Each pane's normalized state as its body was last written: a save writes a pane's file only when its pane is another object.
     written: HashMap<String, Arc<RunSession>>,
     /// The index bytes last written (an unchanged index is not written again).
@@ -615,6 +1044,8 @@ impl Store {
             replace: portable_replace,
             split: false,
             revisions: HashMap::new(),
+            written_revisions: HashMap::new(),
+            journal_records: HashMap::new(),
             written: HashMap::new(),
             written_index: None,
             cache: normalize::PaneCache::default(),
@@ -649,15 +1080,179 @@ impl Store {
         let remote = self.snapshot.workspace(pane.workspace_id()).is_some_and(|w| w.remote.is_some());
         let read = RunSession::read(&Value::Object(entry)).ok().and_then(|read| normalize::restored_pane(&read, remote).ok());
         let Some(read) = read else { return Some(whole()) };
-        let loaded = RunSession { body_on_disk: false, stored_digest: None, ..read };
-        let known = self.revisions.get(pane.id()).copied().unwrap_or(0);
-        self.revisions.insert(pane.id().to_string(), known.max(revision));
+        let known = self.body_revision(pane.id()).max(revision);
+        if known > 0 {
+            self.revisions.insert(pane.id().to_string(), known);
+            self.written_revisions.insert(pane.id().to_string(), known);
+        }
+        let loaded = RunSession { body_on_disk: false, stored_digest: None, body_revision: (known > 0).then_some(known), ..read };
         // What the file holds now: the next save writes the pane again only when its body changes from this (only when the primary
-        // file exists; if we recovered from `.bak`, leave `written` unset so the next save re-creates the primary file).
-        if self.sessions_dir().join(body_file_name(pane.id())).exists() {
+        // file exists and no uncompacted `.jsonl` sits beside it; otherwise leave `written` unset so the next save compacts/recreates).
+        let sessions = self.sessions_dir();
+        if sessions.join(body_file_name(pane.id())).exists() && !sessions.join(journal_file_name(pane.id())).exists() {
             self.written.insert(pane.id().to_string(), Arc::new(loaded.clone()));
         }
+        if let Some(at) = self.snapshot.sessions().iter().position(|s| s.id() == pane.id()) {
+            self.snapshot.sessions_mut()[at] = Arc::new(loaded.clone());
+        }
         Some(loaded)
+    }
+
+    /// Compacts `sessions/<stem>.jsonl` into the canonical `sessions/<stem>.json` and deletes the `.jsonl` file.
+    /// Returns `true` if a journal existed and was compacted.
+    pub fn compact_pane_journal(&mut self, id: &str) -> bool {
+        if !self.writes || !self.loaded {
+            return false;
+        }
+        let folder = self.sessions_dir();
+        let journal_path = folder.join(journal_file_name(id));
+        if !journal_path.exists() {
+            self.journal_records.remove(id);
+            return false;
+        }
+        let body_name = body_file_name(id);
+        let body_path = folder.join(&body_name);
+        let backup_path = folder.join(format!("{body_name}.bak"));
+
+        let hot_pane = self.snapshot.session(id).filter(|s| !s.body_on_disk && !self.on_disk.contains(id)).cloned();
+        let (target_pane, rev) = if let Some(pane) = hot_pane {
+            let same = self.written.get(id).is_some_and(|w| Arc::ptr_eq(w, &pane) || same_body(w, &pane));
+            let base = self.body_revision(id).max(pane.body_revision.unwrap_or(0));
+            let rev = if same && base > 0 { base } else { base + 1 };
+            ((*pane).clone(), rev)
+        } else {
+            let mut notes = Vec::new();
+            let Some((body_map, rev)) = self.read_body(id, &Locale::new("en"), &mut notes) else {
+                return false;
+            };
+            let Some(pane_body) = PaneBody::from_map(&body_map, rev) else { return false };
+            let carrier = RunSession {
+                id: Some(id.to_string()),
+                logs: Some(pane_body.logs),
+                graph_runs: pane_body.graph_runs,
+                plan_history: pane_body.plan_history,
+                todo_progress: pane_body.todo_progress,
+                background_work: pane_body.background_work,
+                shell_block_runs: pane_body.shell_runs,
+                ..RunSession::default()
+            };
+            (carrier, rev.max(1))
+        };
+
+        if private_folder(&folder).is_err() {
+            return false;
+        }
+        let Ok(bytes) = encode_body(&target_pane, rev) else { return false };
+        if atomic_write(&body_path, &bytes, Some(&backup_path), self.replace).is_err() {
+            return false;
+        }
+        let _ = fs::remove_file(&journal_path);
+        self.journal_records.remove(id);
+        self.revisions.insert(id.to_string(), rev);
+        self.written_revisions.insert(id.to_string(), rev);
+        if let Some(at) = self.snapshot.sessions().iter().position(|s| s.id() == id) {
+            let existing = &self.snapshot.sessions()[at];
+            if !existing.body_on_disk && !self.on_disk.contains(id) {
+                let updated = Arc::new(RunSession { body_revision: Some(rev), ..target_pane });
+                self.written.insert(id.to_string(), updated.clone());
+                self.snapshot.sessions_mut()[at] = updated;
+            }
+        }
+        true
+    }
+
+    /// Evicts a loaded pane's full body from memory, leaving only `SessionDigest`'s tail in `self.snapshot` (`body_on_disk: true`).
+    /// - When `!self.writes`, evicts only if `<stem>.json` already exists on disk without an uncompacted `.jsonl` or unsaved diff.
+    /// - When `self.writes`, flushes any unsaved body diff and compacts any `.jsonl` into `<stem>.json` before dropping the hot body.
+    pub fn evict_loaded_body(&mut self, id: &str) -> Option<RunSession> {
+        let pane = self.snapshot.sessions().iter().find(|s| s.id() == id)?.clone();
+        self.evict_live_body(&pane)
+    }
+
+    /// [`Store::evict_loaded_body`] for the pane as its owner (the run service) holds it now, which may be ahead of this store's last
+    /// saved copy: that exact pane's body is what gets flushed and what the cold copy is built from, so nothing unsaved (log entries,
+    /// status, title, draft, usage) is lost to the eviction. Without writes it evicts only when the file already holds that body.
+    pub fn evict_live_body(&mut self, live: &Arc<RunSession>) -> Option<RunSession> {
+        let id = live.id();
+        let at = self.snapshot.sessions().iter().position(|s| s.id() == id)?;
+        let pane = live.clone();
+        if pane.body_on_disk || self.snapshot.sessions()[at].body_on_disk || self.on_disk.contains(id) {
+            return None;
+        }
+        if !matches!(pane.kind(), "claude" | "shell") || pane.mirror.is_some() {
+            return None;
+        }
+        let folder = self.sessions_dir();
+        let body_name = body_file_name(id);
+        let body_path = folder.join(&body_name);
+        let journal_path = folder.join(journal_file_name(id));
+
+        if !self.writes {
+            if !body_path.exists() || journal_path.exists() {
+                return None;
+            }
+            if let Some(last) = self.written.get(id) {
+                if !Arc::ptr_eq(last, &pane) && !same_body(last, &pane) {
+                    return None;
+                }
+            } else {
+                let (disk_map, disk_rev) = read_body_file(&body_path, id).ok()?;
+                let disk_body = PaneBody::from_map(&disk_map, disk_rev)?;
+                let disk_session = RunSession {
+                    logs: Some(disk_body.logs),
+                    graph_runs: disk_body.graph_runs,
+                    plan_history: disk_body.plan_history,
+                    todo_progress: disk_body.todo_progress,
+                    background_work: disk_body.background_work,
+                    shell_block_runs: disk_body.shell_runs,
+                    ..(*pane).clone()
+                };
+                let remote = self.snapshot.workspace(pane.workspace_id()).is_some_and(|w| w.remote.is_some());
+                let normalized_disk = normalize::restored_pane(&disk_session, remote).unwrap_or(disk_session);
+                if !same_body(&normalized_disk, &pane) {
+                    return None;
+                }
+            }
+        } else {
+            let needs_flush = !body_path.exists()
+                || journal_path.exists()
+                || self.written.get(id).is_none_or(|last| !Arc::ptr_eq(last, &pane) && !same_body(last, &pane));
+            if needs_flush {
+                private_folder(&folder).ok()?;
+                let same_as_written =
+                    body_path.exists() && self.written.get(id).is_some_and(|last| Arc::ptr_eq(last, &pane) || same_body(last, &pane));
+                let base = self.body_revision(id).max(pane.body_revision.unwrap_or(0));
+                let rev = if same_as_written && base > 0 { base } else { base + 1 };
+                let bytes = encode_body(&pane, rev).ok()?;
+                let backup_path = folder.join(format!("{body_name}.bak"));
+                atomic_write(&body_path, &bytes, Some(&backup_path), self.replace).ok()?;
+                if journal_path.exists() {
+                    let _ = fs::remove_file(&journal_path);
+                }
+                self.journal_records.remove(id);
+                self.revisions.insert(id.to_string(), rev);
+                self.written_revisions.insert(id.to_string(), rev);
+            } else {
+                let rev = self.body_revision(id).max(pane.body_revision.unwrap_or(0));
+                if rev > 0 {
+                    self.revisions.insert(id.to_string(), rev);
+                    self.written_revisions.insert(id.to_string(), rev);
+                }
+            }
+        }
+
+        let rev = self.body_revision(id).max(pane.body_revision.unwrap_or(0));
+        let mut with_rev = (*pane).clone();
+        if rev > 0 {
+            with_rev.body_revision = Some(rev);
+        }
+        let cold = with_rev.evicted_to_disk();
+        self.digests.insert(id.to_string(), cold.body_digest());
+        self.snapshot.sessions_mut()[at] = Arc::new(cold.clone());
+        self.written.remove(id);
+        self.cache.remove(id);
+        self.on_disk.insert(id.to_string());
+        Some(cold)
     }
 
     /// A pane the load left on disk, as a save writes it: unchanged (only its summary's entries, no other body field), nothing to
@@ -702,7 +1297,7 @@ impl Store {
 
     /// A pane's body revision as last read or written (0 for none): what a remote reader can ask "changed since" with.
     pub fn body_revision(&self, id: &str) -> u64 {
-        self.revisions.get(id).copied().unwrap_or(0)
+        self.revisions.get(id).copied().or_else(|| self.written_revisions.get(id).copied()).unwrap_or(0)
     }
 
     /// A pane's summary as the index held it when the state loaded.
@@ -730,6 +1325,8 @@ impl Store {
         let mut value = parse_document(&text_of(bytes))?;
         self.split = false;
         self.revisions.clear();
+        self.written_revisions.clear();
+        self.journal_records.clear();
         self.digests.clear();
         self.on_disk.clear();
         self.written.clear();
@@ -753,14 +1350,18 @@ impl Store {
                     let Some(id) = entry.get("id").and_then(Value::as_str).map(str::to_string) else { continue };
                     if let Some(revision) = revision {
                         self.revisions.insert(id.clone(), revision);
+                        self.written_revisions.insert(id.clone(), revision);
                     }
-                    // Outside the active workspace, a pane with a summary and a body file keeps its body on disk: what it holds is
-                    // the summary's entries until something reads it.
+                    // Outside the active workspace, a pane with a summary and a compacted body file keeps its body on disk: what it
+                    // holds is the summary's entries until something reads it. If an uncompacted `.jsonl` exists from a crash, read
+                    // and replay it now so its recovery and revision are up to date.
                     let elsewhere = entry.get("workspaceId").and_then(Value::as_str) != active.as_deref();
+                    let sessions = self.sessions_dir();
                     if lazy
                         && elsewhere
                         && let Some(digest) = self.digests.get(&id)
-                        && self.sessions_dir().join(body_file_name(&id)).exists()
+                        && sessions.join(body_file_name(&id)).exists()
+                        && !sessions.join(journal_file_name(&id)).exists()
                     {
                         let tail: Vec<Value> =
                             digest.tail.iter().filter_map(|e| serde_json::from_str(&crate::json::Wire::to_json(e)).ok()).collect();
@@ -770,8 +1371,9 @@ impl Store {
                         continue;
                     }
                     if let Some((body, revision)) = self.read_body(&id, locale, &mut notes) {
-                        let known = self.revisions.get(&id).copied().unwrap_or(0);
-                        self.revisions.insert(id.clone(), known.max(revision));
+                        let known = self.revisions.get(&id).copied().unwrap_or(0).max(revision);
+                        self.revisions.insert(id.clone(), known);
+                        self.written_revisions.insert(id.clone(), known);
                         lay_body(entry, body, self.split);
                     }
                 }
@@ -783,15 +1385,22 @@ impl Store {
             self.load_notice = Some(all.join("\n"));
         }
         let mut snapshot = read_state_value(value, locale)?;
-        if !on_disk.is_empty() {
+        if !on_disk.is_empty() || !self.revisions.is_empty() {
             let panes = snapshot
                 .sessions()
                 .iter()
-                .map(|pane| match self.digests.get(pane.id()).filter(|_| on_disk.contains(pane.id())) {
-                    Some(digest) => {
-                        Arc::new(RunSession { body_on_disk: true, stored_digest: Some(Arc::new(digest.clone())), ..(**pane).clone() })
+                .map(|pane| {
+                    let rev = self.revisions.get(pane.id()).copied().filter(|r| *r > 0);
+                    match self.digests.get(pane.id()).filter(|_| on_disk.contains(pane.id())) {
+                        Some(digest) => Arc::new(RunSession {
+                            body_on_disk: true,
+                            stored_digest: Some(Arc::new(digest.clone())),
+                            body_revision: rev,
+                            ..(**pane).clone()
+                        }),
+                        None if rev.is_some() => Arc::new(RunSession { body_revision: rev, ..(**pane).clone() }),
+                        None => pane.clone(),
                     }
-                    None => pane.clone(),
                 })
                 .collect();
             snapshot.sessions = Some(panes);
@@ -800,28 +1409,31 @@ impl Store {
     }
 
     /// `id`'s body file, or its `.bak` when the primary file is missing or does not read (a corrupt primary is moved aside first,
-    /// with writing on); none when neither exists or decodes.
+    /// with writing on), with any `sessions/<stem>.jsonl` records newer than the base `bodyRevision` replayed onto it; none when
+    /// neither exists or decodes.
     fn read_body(&self, id: &str, locale: &Locale, notes: &mut Vec<String>) -> Option<(Map<String, Value>, u64)> {
         let folder = self.sessions_dir();
         let name = body_file_name(id);
         let path = folder.join(&name);
         let backup = folder.join(format!("{name}.bak"));
-        if !path.exists() {
-            return backup.exists().then(|| read_body_file(&backup, id).ok()).flatten();
-        }
-        match read_body_file(&path, id) {
-            Ok(body) => Some(body),
-            Err(_) => {
-                let aside = format!("{name}.unreadable-{}-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"), &new_id()[..8]);
-                if self.writes {
-                    let _ = fs::rename(&path, folder.join(&aside));
+        let base = if !path.exists() {
+            backup.exists().then(|| read_body_file(&backup, id).ok()).flatten()
+        } else {
+            match read_body_file(&path, id) {
+                Ok(body) => Some(body),
+                Err(_) => {
+                    let aside = format!("{name}.unreadable-{}-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"), &new_id()[..8]);
+                    if self.writes {
+                        let _ = fs::rename(&path, folder.join(&aside));
+                    }
+                    let restored = read_body_file(&backup, id).ok();
+                    let key = if restored.is_some() { "store.notice.paneRestoredBackup" } else { "store.notice.paneStartedEmpty" };
+                    notes.push(locale.get_with(key, &[("file", &format!("{SESSIONS_DIR}/{aside}"))]));
+                    restored
                 }
-                let restored = read_body_file(&backup, id).ok();
-                let key = if restored.is_some() { "store.notice.paneRestoredBackup" } else { "store.notice.paneStartedEmpty" };
-                notes.push(locale.get_with(key, &[("file", &format!("{SESSIONS_DIR}/{aside}"))]));
-                restored
             }
-        }
+        }?;
+        Some(replay_journal_if_present(&folder, id, base.0, base.1))
     }
 
     /// Reads `workspace-state.json.bak` if it exists and is valid; restores store metadata on corrupt/unreadable backup.
@@ -841,6 +1453,8 @@ impl Store {
             Err(StateError::Json(_) | StateError::InvalidFormat(_) | StateError::TooLarge(_)) => {
                 self.split = false;
                 self.revisions.clear();
+                self.written_revisions.clear();
+                self.journal_records.clear();
                 self.digests.clear();
                 self.on_disk.clear();
                 self.written.clear();
@@ -1011,22 +1625,29 @@ impl Store {
         Some(item)
     }
 
-    /// C# `SaveAsync`: normalized, checked, written, as the split state: the body file of each pane that changed since its last
-    /// write, then the index, then the body files of panes no longer listed removed. A crash between leaves bodies newer than the
-    /// index, which loads. The normalized state is kept as the store's.
+    /// C# `SaveAsync`: normalized, checked, written, as the split state: the body file (or incremental `.jsonl` line while
+    /// `"running"`) of each pane that changed since its last write, then the index, then the body/journal files of panes no longer
+    /// listed removed. A crash between leaves bodies/journals newer than the index, which loads. The normalized state is kept as the
+    /// store's.
     pub fn save(&mut self, snapshot: &AppSnapshot) -> Result<(), StateError> {
+        enum BodyPlan {
+            Canonical(Vec<u8>),
+            JournalAppend(Vec<u8>),
+        }
+
         if !self.loaded {
             return Err(StateError::NotLoaded);
         }
         // The remote mirror's workspaces and panes are another computer's, held while connected: never written.
-        let normalized = normalize::normalize_with(&snapshot.without_mirrors(), false, Some(&mut self.cache)).map_err(state_error)?;
+        let mut normalized = normalize::normalize_with(&snapshot.without_mirrors(), false, Some(&mut self.cache)).map_err(state_error)?;
         for workspace in normalized.workspaces() {
             if !self.approves(workspace) {
                 return Err(StateError::PathNotApproved);
             }
         }
         let stored = normalize::stored(&normalized);
-        let mut bodies: Vec<(Arc<RunSession>, u64, Vec<u8>)> = vec![];
+        let folder = self.sessions_dir();
+        let mut bodies: Vec<(Arc<RunSession>, u64, BodyPlan)> = vec![];
         // A pane whose body was never read: its index entry keeps the summary it had, and its file is written only when something was
         // added to it meanwhile (laid over the file's body, never in place of it).
         let mut whole_of: HashMap<String, RunSession> = HashMap::new();
@@ -1047,23 +1668,62 @@ impl Store {
         }
         let mut merged: HashMap<String, crate::model::SessionDigest> = HashMap::new();
         for pane in stored.sessions() {
-            if pane.body_on_disk || self.on_disk.contains(pane.id()) {
-                let Some(whole) = whole_of.remove(pane.id()) else { continue };
-                merged.insert(pane.id().to_string(), crate::model::SessionDigest::of(&whole));
-                let revision = self.revisions.get(pane.id()).copied().unwrap_or(0) + 1;
+            let id = pane.id();
+            if pane.body_on_disk || self.on_disk.contains(id) {
+                let Some(whole) = whole_of.remove(id) else { continue };
+                merged.insert(id.to_string(), crate::model::SessionDigest::of(&whole));
+                let revision = self.body_revision(id).max(pane.body_revision.unwrap_or(0)) + 1;
                 let bytes = encode_body(&whole, revision)?;
                 // Kept as the pane the app holds, so the next save finds it written.
-                bodies.push((pane.clone(), revision, bytes));
+                bodies.push((pane.clone(), revision, BodyPlan::Canonical(bytes)));
                 continue;
             }
+
+            let journal_path = folder.join(journal_file_name(id));
+            let journal_exists = journal_path.exists() || self.journal_records.get(id).copied().unwrap_or(0) > 0;
             // Every change the window makes normalizes the whole state, so an untouched pane is often another object with the same
-            // body: compared by its body's fields then, and written only when they differ.
-            if self.written.get(pane.id()).is_some_and(|last| Arc::ptr_eq(last, pane) || same_body(last, pane)) {
-                self.written.insert(pane.id().to_string(), pane.clone());
+            // body: compared by its body's fields then, and written only when they differ (or compacted when a run just ended with an
+            // open `.jsonl`).
+            if self.written.get(id).is_some_and(|last| Arc::ptr_eq(last, pane) || same_body(last, pane)) {
+                if pane.status() != "running" && journal_exists {
+                    let revision = self.body_revision(id).max(pane.body_revision.unwrap_or(0)).max(1);
+                    bodies.push((pane.clone(), revision, BodyPlan::Canonical(encode_body(pane, revision)?)));
+                } else {
+                    self.written.insert(id.to_string(), pane.clone());
+                }
                 continue;
             }
-            let revision = self.revisions.get(pane.id()).copied().unwrap_or(0) + 1;
-            bodies.push((pane.clone(), revision, encode_body(pane, revision)?));
+
+            let revision = self.body_revision(id).max(pane.body_revision.unwrap_or(0)) + 1;
+            let body_path = folder.join(body_file_name(id));
+            let append_line = if pane.status() == "running"
+                && body_path.exists()
+                && let Some(prev) = self.written.get(id)
+                && let Some(ops) = diff_body(prev, pane).filter(|ops| !ops.is_empty())
+            {
+                let record = BodyJournalRecord { rev: revision, session_id: id.to_string(), ops };
+                let mut line = record.to_json().into_bytes();
+                line.push(b'\n');
+                let existing_meta = fs::metadata(&journal_path).ok();
+                let existing_bytes = existing_meta.as_ref().map_or(0, fs::Metadata::len);
+                let existing_lines = match self.journal_records.get(id).copied() {
+                    Some(count) => count,
+                    None if existing_bytes > 0 => read_journal_records(&journal_path, id).len(),
+                    None => 0,
+                };
+                (line.len() < JOURNAL_MAX_LINE_BYTES
+                    && existing_bytes < JOURNAL_MAX_FILE_BYTES
+                    && existing_bytes + line.len() as u64 <= JOURNAL_MAX_FILE_BYTES
+                    && existing_lines < JOURNAL_MAX_RECORDS)
+                    .then_some(line)
+            } else {
+                None
+            };
+
+            match append_line {
+                Some(line) => bodies.push((pane.clone(), revision, BodyPlan::JournalAppend(line))),
+                None => bodies.push((pane.clone(), revision, BodyPlan::Canonical(encode_body(pane, revision)?))),
+            }
         }
         // A pane whose body was laid over its file names its new summary in the index.
         let mut stored = stored;
@@ -1079,7 +1739,7 @@ impl Store {
             stored.sessions = Some(panes);
         }
         let fresh: HashMap<&str, u64> = bodies.iter().map(|(pane, revision, _)| (pane.id(), *revision)).collect();
-        let index = encode_index(&stored, &|id| fresh.get(id).or_else(|| self.revisions.get(id)).copied().unwrap_or(0));
+        let index = encode_index(&stored, &|id| fresh.get(id).copied().unwrap_or_else(|| self.body_revision(id)));
         if index.len() as u64 > MAXIMUM_STATE_BYTES {
             return Err(StateError::StateTooLarge(index.len()));
         }
@@ -1099,15 +1759,35 @@ impl Store {
                 }
             }
         }
-        let folder = self.sessions_dir();
         if !bodies.is_empty() || !folder.exists() {
             private_folder(&folder)?;
         }
-        for (pane, revision, bytes) in bodies {
-            let name = body_file_name(pane.id());
-            atomic_write(&folder.join(&name), &bytes, Some(&folder.join(format!("{name}.bak"))), self.replace)?;
-            self.revisions.insert(pane.id().to_string(), revision);
-            self.written.insert(pane.id().to_string(), pane);
+        for (pane, revision, plan) in bodies {
+            let id = pane.id().to_string();
+            let name = body_file_name(&id);
+            let journal_path = folder.join(journal_file_name(&id));
+            match plan {
+                BodyPlan::JournalAppend(line) => {
+                    append_journal_line(&journal_path, &line)?;
+                    let count = self.journal_records.entry(id.clone()).or_insert(0);
+                    *count += 1;
+                }
+                BodyPlan::Canonical(bytes) => {
+                    atomic_write(&folder.join(&name), &bytes, Some(&folder.join(format!("{name}.bak"))), self.replace)?;
+                    if journal_path.exists() {
+                        let _ = fs::remove_file(&journal_path);
+                    }
+                    self.journal_records.remove(&id);
+                }
+            }
+            self.revisions.insert(id.clone(), revision);
+            self.written_revisions.insert(id.clone(), revision);
+            let with_rev = if pane.body_revision == Some(revision) {
+                pane
+            } else {
+                Arc::new(RunSession { body_revision: Some(revision), ..(*pane).clone() })
+            };
+            self.written.insert(id, with_rev);
         }
         if self.written_index.as_deref() != Some(index.as_slice()) || !state.exists() {
             atomic_write(&state, &index, Some(&self.backup_path()), self.replace)?;
@@ -1117,11 +1797,50 @@ impl Store {
         let listed: HashSet<String> = stored.sessions().iter().map(|s| body_file_name(s.id())).collect();
         self.written.retain(|id, _| listed.contains(&body_file_name(id)));
         self.revisions.retain(|id, _| listed.contains(&body_file_name(id)));
+        self.written_revisions.retain(|id, _| listed.contains(&body_file_name(id)));
+        self.journal_records.retain(|id, _| listed.contains(&body_file_name(id)));
         self.on_disk.retain(|id| listed.contains(&body_file_name(id)));
         remove_unlisted_bodies(&folder, &listed);
+        let stamped: Vec<Arc<RunSession>> = normalized
+            .sessions()
+            .iter()
+            .map(|pane| {
+                let rev = self.body_revision(pane.id());
+                if rev > 0 && pane.body_revision != Some(rev) {
+                    Arc::new(RunSession { body_revision: Some(rev), ..(**pane).clone() })
+                } else {
+                    pane.clone()
+                }
+            })
+            .collect();
+        normalized.sessions = Some(stamped);
         self.snapshot = normalized;
         Ok(())
     }
+}
+
+/// Appends one compact JSON line (`O_APPEND`, `0o600` on Unix, `sync_data()`) to `sessions/<stem>.jsonl`.
+fn append_journal_line(path: &Path, line: &[u8]) -> io::Result<()> {
+    #[cfg(unix)]
+    let created = !path.exists();
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path)?;
+    #[cfg(unix)]
+    if created {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
+    }
+    file.write_all(line)?;
+    file.sync_data()?;
+    drop(file);
+    #[cfg(unix)]
+    if created {
+        sync_parent(path);
+    }
+    Ok(())
 }
 
 /// `File.Copy(from, to, overwrite: false)`, owner-only on Unix and synced to disk.
@@ -1178,12 +1897,35 @@ fn write_private_atomic(target: &Path, bytes: &[u8]) -> io::Result<()> {
     written
 }
 
-/// Crash-safe file replacement on Unix: if `destination` exists, copy its contents into `backup` atomically via a `0o600` synced
-/// temporary file (leaving `destination` untouched throughout), then perform a single atomic `fs::rename(source, destination)` and
-/// `fsync` the parent directory so `destination` never disappears in any crash window.
+/// Creates/refreshes `backup` from `existing` on Unix: when `existing` already carries owner-only `0o600` permissions (as every
+/// `atomic_write` output does), attempts a zero-copy `hard_link` + atomic `rename`, falling back to `write_private_atomic` byte copy.
 #[cfg(not(windows))]
-pub fn portable_replace(source: &Path, destination: &Path, backup: &Path) -> io::Result<()> {
-    match fs::read(destination) {
+fn copy_as_backup(existing: &Path, backup: &Path) -> io::Result<()> {
+    let meta = match fs::metadata(existing) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if (meta.permissions().mode() & 0o777) == 0o600 {
+            if let Some(parent) = backup.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let backup_tmp = PathBuf::from(format!("{}.{}.tmp", backup.display(), new_id()));
+            if fs::hard_link(existing, &backup_tmp).is_ok() {
+                if fs::rename(&backup_tmp, backup).is_ok() {
+                    sync_parent(backup);
+                    return Ok(());
+                }
+                let _ = fs::remove_file(&backup_tmp);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = meta;
+    match fs::read(existing) {
         Ok(previous) => {
             write_private_atomic(backup, &previous)?;
             #[cfg(unix)]
@@ -1192,6 +1934,15 @@ pub fn portable_replace(source: &Path, destination: &Path, backup: &Path) -> io:
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
     }
+    Ok(())
+}
+
+/// Crash-safe file replacement on Unix: if `destination` exists, refresh `backup` atomically via [`copy_as_backup`] (hard-linking an
+/// already `0o600` file or copying bytes into a synced `0o600` temporary file, leaving `destination` untouched throughout), then perform
+/// a single atomic `fs::rename(source, destination)` and `fsync` the parent directory so `destination` never disappears in any crash window.
+#[cfg(not(windows))]
+pub fn portable_replace(source: &Path, destination: &Path, backup: &Path) -> io::Result<()> {
+    copy_as_backup(destination, backup)?;
     fs::rename(source, destination)?;
     #[cfg(unix)]
     sync_parent(destination);
@@ -1472,6 +2223,34 @@ mod tests {
             |_| {},
         );
         (saver, written)
+    }
+
+    fn journal_entry(id: &str, text: &str) -> LogEntry {
+        LogEntry::new(id.to_string(), "assistant", text.to_string(), "2026-11-22T00:00:00Z".to_string(), None)
+    }
+
+    /// A replace record finds its entry by id: a base trimmed at the front (or an older `.bak`) puts it at another index than the
+    /// writer's, and an entry the base does not hold is left out instead of landing on another one.
+    #[test]
+    fn a_journal_replace_finds_its_entry_by_id_not_by_the_writers_index() {
+        let mut body = PaneBody {
+            body_revision: 1,
+            logs: vec![journal_entry("b", "b0"), journal_entry("c", "c0"), journal_entry("d", "d0")],
+            ..PaneBody::default()
+        };
+        // The writer had [a, b, c, d]: `c` was at 2, `a` at 0, and `a` is gone from this base.
+        body.apply(BodyJournalRecord {
+            rev: 2,
+            session_id: "s".into(),
+            ops: vec![
+                BodyJournalOp::LogReplaceLast { index: 2, entry: journal_entry("c", "c1") },
+                BodyJournalOp::LogReplaceLast { index: 0, entry: journal_entry("a", "a1") },
+                BodyJournalOp::LogReplaceLast { index: 9, entry: journal_entry("d", "d1") },
+            ],
+        });
+        let texts: Vec<(&str, &str)> = body.logs.iter().map(|e| (e.id(), e.text())).collect();
+        assert_eq!(texts, [("b", "b0"), ("c", "c1"), ("d", "d1")]);
+        assert_eq!(body.body_revision, 2);
     }
 
     #[test]

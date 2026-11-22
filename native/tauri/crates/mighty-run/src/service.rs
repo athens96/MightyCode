@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 use mighty_core::graph::{GRAPH_PROVIDERS, MightyGraphRun};
@@ -62,6 +63,8 @@ pub enum ServiceEvent {
     RememberSession(String),
     /// A pane's Antigravity card came, went, or its answer moved (C# `AntigravityCardChanged`): the pane's id.
     AntigravityCard(String),
+    /// In-memory session bodies changed without requiring an immediate disk save (e.g. idle bodies evicted to disk).
+    Changed,
 }
 
 /// How a pane changed by [`RunService::update_pane`] is saved.
@@ -286,14 +289,25 @@ pub struct RunService {
     manager: RunManager,
     remote: Option<Arc<dyn RemoteRunner>>,
     admitting: Option<Admitting>,
+    /// Per-pane normalize cache reused across `new`, `mirror_update`, and `try_update` so unchanged panes skip re-normalization.
+    normalize_cache: Mutex<normalize::PaneCache>,
+    /// Monotonic last-access timestamps per pane for idle body eviction.
+    last_touched: Arc<Mutex<HashMap<String, Instant>>>,
     /// The remote mirror's panes (W9-J), set once by the app ([`RunService::set_mirror`]).
     mirror: OnceLock<Arc<dyn MirrorRunner>>,
     /// Reads the body of a pane the load left on disk (the store's `load_pane_body`), set once by the app.
     body_loader: OnceLock<BodyLoader>,
+    /// Flushes/compacts and evicts a loaded pane's body to disk (the store's `evict_loaded_body`), set once by the app.
+    body_evictor: OnceLock<BodyEvictor>,
 }
 
 /// Reads a pane's body from its file: the pane whole, or None when there is nothing to read (it is whole already).
 pub type BodyLoader = Arc<dyn Fn(&RunSession) -> Option<RunSession> + Send + Sync>;
+
+/// Evicts a loaded pane's body to disk: the cold pane with `body_on_disk: true`, or None if it could not be evicted.
+/// It is given the pane as the service holds it now (which may be ahead of the store's last saved copy), and the cold copy it gives
+/// back is built from that very pane.
+pub type BodyEvictor = Arc<dyn Fn(&Arc<RunSession>) -> Option<RunSession> + Send + Sync>;
 
 /// How the service is made.
 pub struct RunServiceOptions {
@@ -354,6 +368,12 @@ impl RunService {
     ) -> (RunService, mpsc::UnboundedReceiver<ServiceEvent>) {
         let (events, receiver) = mpsc::unbounded_channel();
         let (leftovers_done, leftovers_removed) = tokio::sync::watch::channel(antigravity::LeftoversState::Pending);
+        let mut initial_cache = normalize::PaneCache::default();
+        let _ = normalize::normalize_with(&snapshot, false, Some(&mut initial_cache));
+        let now = Instant::now();
+        let initial_touched: HashMap<String, Instant> =
+            snapshot.sessions().iter().filter(|s| !s.body_on_disk).map(|s| (s.id().to_string(), now)).collect();
+        let last_touched = Arc::new(Mutex::new(initial_touched));
         let shared = Arc::new(Shared {
             state: Mutex::new(State { snapshot, routes: HashMap::new(), closing: false }),
             events,
@@ -370,7 +390,13 @@ impl RunService {
             Box::pin(async move { resolve_local(&shared, &id) })
         });
         let receiver_shared = shared.clone();
-        let emit: crate::manager::Emit = Arc::new(move |event| receiver_shared.receive(event));
+        let emit_touched = last_touched.clone();
+        let emit: crate::manager::Emit = Arc::new(move |event| {
+            if event.kind == "status" && matches!(event.status.as_deref(), Some("stopped" | "completed" | "error")) {
+                lock(&emit_touched).insert(event.session_id.clone(), Instant::now());
+            }
+            receiver_shared.receive(event);
+        });
         let mut manager_options = RunManagerOptions::new(&options.plugin_directory, resolve, emit);
         if options.permission_card {
             let permissions = shared.clone();
@@ -380,8 +406,14 @@ impl RunService {
         // C# `AttachRemote`: the client's events and tool requests arrive as a local run's do.
         if let Some(remote) = &options.remote {
             let (events, permissions) = (shared.clone(), shared.clone());
+            let remote_touched = last_touched.clone();
             remote.attach(RemoteSinks {
-                event: Arc::new(move |value| events.receive(value)),
+                event: Arc::new(move |value| {
+                    if value.kind == "status" && matches!(value.status.as_deref(), Some("stopped" | "completed" | "error")) {
+                        lock(&remote_touched).insert(value.session_id.clone(), Instant::now());
+                    }
+                    events.receive(value);
+                }),
                 permission: Arc::new(move |value| permissions.tool_permission(value)),
             });
         }
@@ -400,11 +432,29 @@ impl RunService {
                 manager,
                 remote: options.remote,
                 admitting: options.admitting,
+                normalize_cache: Mutex::new(initial_cache),
+                last_touched,
                 mirror: OnceLock::new(),
                 body_loader: OnceLock::new(),
+                body_evictor: OnceLock::new(),
             },
             receiver,
         )
+    }
+
+    fn touch_pane(&self, id: &str) {
+        lock(&self.last_touched).insert(id.to_string(), Instant::now());
+    }
+
+    fn touch_panes(&self, ids: &[&str]) {
+        if ids.is_empty() {
+            return;
+        }
+        let now = Instant::now();
+        let mut map = lock(&self.last_touched);
+        for id in ids {
+            map.insert((*id).to_string(), now);
+        }
     }
 
     pub fn manager(&self) -> &RunManager {
@@ -440,7 +490,8 @@ impl RunService {
             return false;
         }
         let Some(changed) = change(&state.snapshot) else { return false };
-        match normalize::normalize(&changed, false) {
+        let mut cache = lock(&self.normalize_cache);
+        match normalize::normalize_with(&changed, false, Some(&mut cache)) {
             Ok(next) => {
                 state.snapshot = next;
                 true
@@ -470,9 +521,15 @@ impl RunService {
         let _ = self.body_loader.set(loader);
     }
 
+    /// The app's evictor of loaded pane bodies back to disk (set once; a later call changes nothing).
+    pub fn set_body_evictor(&self, evictor: BodyEvictor) {
+        let _ = self.body_evictor.set(evictor);
+    }
+
     /// Reads the bodies of the panes in `ids` the load left on disk, so whatever reads or changes them next has them whole. The files
     /// are read with the lock let go; a pane changed meanwhile keeps its change (read again under the lock). True when a pane changed.
     pub fn ensure_bodies(&self, ids: &[&str]) -> bool {
+        self.touch_panes(ids);
         let Some(loader) = self.body_loader.get().cloned() else { return false };
         let waiting: Vec<Arc<RunSession>> = {
             let state = lock(&self.shared.state);
@@ -500,17 +557,143 @@ impl RunService {
 
     /// The panes of `workspace` whose body is still on disk, read ([`RunService::ensure_bodies`]).
     pub fn ensure_workspace_bodies(&self, workspace: &str) -> bool {
-        let ids: Vec<String> = {
+        let (all_ws_ids, cold_ids): (Vec<String>, Vec<String>) = {
             let state = lock(&self.shared.state);
-            state
-                .snapshot
-                .sessions()
-                .iter()
-                .filter(|s| s.body_on_disk && s.workspace_id() == workspace)
-                .map(|s| s.id().to_string())
-                .collect()
+            let mut all_ws = Vec::new();
+            let mut cold = Vec::new();
+            for s in state.snapshot.sessions().iter().filter(|s| s.workspace_id() == workspace) {
+                all_ws.push(s.id().to_string());
+                if s.body_on_disk {
+                    cold.push(s.id().to_string());
+                }
+            }
+            (all_ws, cold)
         };
-        self.ensure_bodies(&ids.iter().map(String::as_str).collect::<Vec<_>>())
+        self.touch_panes(&all_ws_ids.iter().map(String::as_str).collect::<Vec<_>>());
+        self.ensure_bodies(&cold_ids.iter().map(String::as_str).collect::<Vec<_>>())
+    }
+
+    /// Evicts loaded inactive-workspace pane bodies that are neither `"running"`, routed, awaiting tool permissions, nor `is_pinned`,
+    /// when idle `>= idle_ttl` or when inactive hot panes exceed `max_hot_inactive` (oldest `last_touched` first).
+    pub fn evict_idle_bodies(&self, idle_ttl: Duration, max_hot_inactive: usize, is_pinned: impl Fn(&RunSession) -> bool) -> Vec<String> {
+        let (active_ws, sessions, routed_ids): (Option<String>, Vec<Arc<RunSession>>, std::collections::HashSet<String>) = {
+            let state = lock(&self.shared.state);
+            if state.closing {
+                return Vec::new();
+            }
+            (state.snapshot.active_workspace_id.clone(), state.snapshot.sessions().to_vec(), state.routes.keys().cloned().collect())
+        };
+        let pending_ids: std::collections::HashSet<String> = {
+            let pending = lock(&self.shared.pending);
+            pending.iter().filter(|(_, reqs)| !reqs.is_empty()).map(|(id, _)| id.clone()).collect()
+        };
+        let now = Instant::now();
+        // A pane nobody has touched since the service started counts as touched now (it ages from here), never as already idle.
+        let touched_snapshot: HashMap<String, Instant> = {
+            let mut touched = lock(&self.last_touched);
+            for pane in &sessions {
+                touched.entry(pane.id().to_string()).or_insert(now);
+            }
+            touched.clone()
+        };
+
+        // Evaluate `is_pinned` outside `self.shared.state` to avoid any lock-order inversion with host UI locks.
+        let mut eligible: Vec<(Arc<RunSession>, Instant)> = Vec::new();
+        for pane in sessions {
+            if pane.body_on_disk || !matches!(pane.kind(), "claude" | "shell") || pane.mirror.is_some() {
+                continue;
+            }
+            if active_ws.as_deref() == Some(pane.workspace_id()) {
+                continue;
+            }
+            if pane.status() == "running"
+                || routed_ids.contains(pane.id())
+                || pending_ids.contains(pane.id())
+                || self.antigravity_card(pane.id()).is_some()
+                || is_pinned(&pane)
+            {
+                continue;
+            }
+            let touched = touched_snapshot.get(pane.id()).copied().unwrap_or(now);
+            eligible.push((pane, touched));
+        }
+        if eligible.is_empty() {
+            return Vec::new();
+        }
+        // Oldest `last_touched` first.
+        eligible.sort_by_key(|(_, touched)| *touched);
+        let overflow = eligible.len().saturating_sub(max_hot_inactive);
+        let mut to_evict: Vec<Arc<RunSession>> = Vec::new();
+        for (idx, (pane, touched)) in eligible.into_iter().enumerate() {
+            if idx < overflow || now.saturating_duration_since(touched) >= idle_ttl {
+                to_evict.push(pane);
+            }
+        }
+        if to_evict.is_empty() {
+            return Vec::new();
+        }
+
+        let evictor = self.body_evictor.get().cloned();
+        let mut prepared: Vec<(Arc<RunSession>, RunSession)> = Vec::new();
+        for pane in to_evict {
+            let cold = match &evictor {
+                Some(evict) => evict(&pane),
+                None => Some(pane.evicted_to_disk()),
+            };
+            if let Some(cold) = cold {
+                prepared.push((pane, cold));
+            }
+        }
+        if prepared.is_empty() {
+            return Vec::new();
+        }
+
+        let mut evicted_ids = Vec::new();
+        let mut raced_ids = Vec::new();
+        {
+            let mut state = lock(&self.shared.state);
+            let closing = state.closing;
+            let mut cache = lock(&self.normalize_cache);
+            let mut touched = lock(&self.last_touched);
+            for (before, cold) in prepared {
+                let id = before.id().to_string();
+                let Some(at) = state.snapshot.sessions().iter().position(|s| s.id() == id) else { continue };
+                if closing {
+                    // The store already moved the body to disk; the service keeps its pane, so the store is rehydrated below.
+                    raced_ids.push(id);
+                    continue;
+                }
+                let current = &state.snapshot.sessions()[at];
+                let still_evictable = Arc::ptr_eq(current, &before)
+                    && state.snapshot.active_workspace_id.as_deref() != Some(current.workspace_id())
+                    && current.status() != "running"
+                    && !state.routes.contains_key(&id);
+                if still_evictable {
+                    state.snapshot.sessions_mut()[at] = Arc::new(cold);
+                    cache.remove(&id);
+                    touched.remove(&id);
+                    evicted_ids.push(id);
+                } else {
+                    raced_ids.push(id);
+                }
+            }
+        }
+        // If a pane changed, became active or the service closed while the store's eviction was running, re-hydrate the store so its
+        // `on_disk` agrees with the service's pane.
+        if !raced_ids.is_empty()
+            && let Some(loader) = self.body_loader.get().cloned()
+        {
+            for id in raced_ids {
+                let current = lock(&self.shared.state).snapshot.session(&id).cloned();
+                if let Some(pane) = current {
+                    let _ = loader(&pane);
+                }
+            }
+        }
+        if !evicted_ids.is_empty() {
+            self.shared.send(ServiceEvent::Changed);
+        }
+        evicted_ids
     }
 
     /// The state as the service has it now.
@@ -538,8 +721,16 @@ impl RunService {
                 return Err(RunError::State("the service is closing".into()));
             }
             let Some(changed) = change(&state.snapshot) else { return Ok(false) };
-            let next = normalize::normalize(&changed, false).map_err(|e| RunError::Invalid(e.to_string()))?;
-            let closed = state.snapshot.sessions().iter().filter(|before| next.session(before.id()).is_none()).cloned().collect();
+            let mut cache = lock(&self.normalize_cache);
+            let next = normalize::normalize_with(&changed, false, Some(&mut cache)).map_err(|e| RunError::Invalid(e.to_string()))?;
+            let closed: Vec<Arc<RunSession>> =
+                state.snapshot.sessions().iter().filter(|before| next.session(before.id()).is_none()).cloned().collect();
+            if !closed.is_empty() {
+                let mut touched = lock(&self.last_touched);
+                for gone in &closed {
+                    touched.remove(gone.id());
+                }
+            }
             let moved = next.active_workspace_id != state.snapshot.active_workspace_id
                 || next.active_session_id != state.snapshot.active_session_id;
             let looking = if moved { next.active_workspace_id.clone() } else { None };
@@ -567,6 +758,9 @@ impl RunService {
     /// hidden from the docs, as C#'s is private.
     #[doc(hidden)]
     pub fn receive_for_perf(&self, value: RunEvent) {
+        if value.kind == "status" && matches!(value.status.as_deref(), Some("stopped" | "completed" | "error")) {
+            self.touch_pane(&value.session_id);
+        }
         self.shared.receive(value);
     }
 
@@ -608,6 +802,7 @@ impl RunService {
     /// the service is closing, the pane is gone or `change` changed nothing.
     pub fn update_pane(&self, session_id: &str, change: impl FnOnce(&RunSession) -> Option<(RunSession, PaneSave)>) -> bool {
         self.ensure_bodies(&[session_id]);
+        self.touch_pane(session_id);
         let save = {
             let mut state = lock(&self.shared.state);
             if state.closing {
@@ -690,6 +885,7 @@ impl RunService {
     pub async fn launch(&self, value: StartRunRequest, title_from: Option<&str>, reach: bool) -> Result<Option<String>> {
         // A run adds to its pane's history: the pane's body is read first if the load left it on disk.
         self.ensure_bodies(&[value.session_id.as_str()]);
+        self.touch_pane(&value.session_id);
         // A mirrored pane's request is the host pane's next one, as the phone's send: nothing runs or changes here.
         if let Some(mirror) = self.mirror_of(&value.session_id) {
             let mirror = mirror?;
@@ -945,6 +1141,9 @@ impl RunService {
             }
         }
         for (value, applied) in received {
+            if value.kind == "status" && matches!(value.status.as_deref(), Some("stopped" | "completed" | "error")) {
+                self.touch_pane(&value.session_id);
+            }
             self.shared.after_receive(value, applied);
         }
     }
@@ -1123,5 +1322,169 @@ fn with_additions(mut whole: RunSession, now: &RunSession) -> RunSession {
         body_on_disk: false,
         stored_digest: None,
         ..now.clone()
+    }
+}
+
+#[cfg(test)]
+mod memory_policy_tests {
+    use super::*;
+    use mighty_core::model::LogEntry;
+
+    fn make_pane(id: &str, ws: &str, status: &str) -> Arc<RunSession> {
+        Arc::new(RunSession {
+            id: Some(id.into()),
+            workspace_id: Some(ws.into()),
+            title: Some(id.into()),
+            kind: Some("claude".into()),
+            provider: Some("claude".into()),
+            status: Some(status.into()),
+            logs: Some(vec![
+                LogEntry::new(format!("{id}-u"), "user", "hello".into(), "2026-11-22T00:00:00Z".into(), Some("claude".into())),
+                LogEntry::new(format!("{id}-a"), "assistant", "world".into(), "2026-11-22T00:01:00Z".into(), Some("claude".into())),
+            ]),
+            ..RunSession::default()
+        })
+    }
+
+    #[test]
+    fn evict_idle_bodies_skips_active_running_and_pinned_panes_and_evicts_oldest_inactive() {
+        let env = Arc::new(mighty_platform::fake::FakeShellEnvironment::new(Default::default()));
+        let catalog = Arc::new(ProviderCatalog::new(Arc::new(mighty_platform::fake::FakeProcessHost::default()), env, None));
+        let root_a = if cfg!(windows) { r"C:\a" } else { "/a" };
+        let root_b = if cfg!(windows) { r"C:\b" } else { "/b" };
+        let snapshot = AppSnapshot {
+            workspaces: Some(vec![
+                Workspace { id: Some("w-active".into()), path: Some(root_a.into()), ..Workspace::default() },
+                Workspace { id: Some("w-idle".into()), path: Some(root_b.into()), ..Workspace::default() },
+            ]),
+            sessions: Some(vec![
+                make_pane("p-active", "w-active", "idle"),
+                make_pane("p-running", "w-idle", "running"),
+                make_pane("p-pinned", "w-idle", "idle"),
+                make_pane("p-old", "w-idle", "completed"),
+                make_pane("p-recent", "w-idle", "completed"),
+            ]),
+            active_workspace_id: Some("w-active".into()),
+            active_session_id: Some("p-active".into()),
+            ..AppSnapshot::default()
+        };
+        let (service, mut events) = RunService::new(
+            snapshot,
+            catalog,
+            RunServiceOptions {
+                plugin_directory: String::new(),
+                permission_card: false,
+                remote: None,
+                configure: None,
+                admitting: None,
+                binding: None,
+                delegation: None,
+            },
+        );
+
+        // Age `p-old` beyond `idle_ttl` (300s), while keeping `p-recent` fresh; with `max_hot_inactive = 1`, `p-old` evicts and `p-recent` stays.
+        {
+            let mut touched = lock(&service.last_touched);
+            touched.insert("p-old".into(), Instant::now() - Duration::from_secs(600));
+            touched.insert("p-recent".into(), Instant::now());
+        }
+
+        let evicted = service.evict_idle_bodies(Duration::from_secs(300), 1, |pane| pane.id() == "p-pinned");
+        assert_eq!(evicted, vec!["p-old".to_string()]);
+
+        let after = service.snapshot();
+        assert!(!after.session("p-active").unwrap().body_on_disk, "active workspace pane stays hot");
+        assert!(!after.session("p-running").unwrap().body_on_disk, "running pane stays hot");
+        assert!(!after.session("p-pinned").unwrap().body_on_disk, "pinned pane stays hot");
+        assert!(!after.session("p-recent").unwrap().body_on_disk, "recent pane within max_hot_inactive stays hot");
+        assert!(after.session("p-old").unwrap().body_on_disk, "idle inactive pane evicted to disk");
+        assert!(matches!(events.try_recv(), Ok(ServiceEvent::Changed)), "ServiceEvent::Changed emitted");
+    }
+
+    fn idle_service(panes: Vec<Arc<RunSession>>) -> (RunService, tokio::sync::mpsc::UnboundedReceiver<ServiceEvent>) {
+        let env = Arc::new(mighty_platform::fake::FakeShellEnvironment::new(Default::default()));
+        let catalog = Arc::new(ProviderCatalog::new(Arc::new(mighty_platform::fake::FakeProcessHost::default()), env, None));
+        let root = |name: &str| if cfg!(windows) { format!(r"C:\{name}") } else { format!("/{name}") };
+        let snapshot = AppSnapshot {
+            workspaces: Some(vec![
+                Workspace { id: Some("w-active".into()), path: Some(root("a")), ..Workspace::default() },
+                Workspace { id: Some("w-idle".into()), path: Some(root("b")), ..Workspace::default() },
+            ]),
+            sessions: Some(panes),
+            active_workspace_id: Some("w-active".into()),
+            ..AppSnapshot::default()
+        };
+        RunService::new(
+            snapshot,
+            catalog,
+            RunServiceOptions {
+                plugin_directory: String::new(),
+                permission_card: false,
+                remote: None,
+                configure: None,
+                admitting: None,
+                binding: None,
+                delegation: None,
+            },
+        )
+    }
+
+    /// A pane nobody touched since the service started is not idle: it ages from the first look, so a fresh launch does not evict
+    /// every inactive pane at once.
+    #[test]
+    fn a_pane_without_a_last_touched_entry_is_not_idle() {
+        let (service, _events) = idle_service(vec![make_pane("p-new", "w-idle", "completed")]);
+        // The service stamps the panes it starts with; a pane that arrives later (a restored or created one) has no stamp.
+        lock(&service.last_touched).remove("p-new");
+        let evicted = service.evict_idle_bodies(Duration::from_secs(300), 8, |_| false);
+        assert!(evicted.is_empty(), "never-touched is not idle");
+        assert!(lock(&service.last_touched).contains_key("p-new"), "it is recorded as touched now, so it ages from here");
+        assert!(!service.snapshot().session("p-new").unwrap().body_on_disk);
+    }
+
+    /// The evictor is given the pane the service holds now (not an id the store looks up in its older copy), and the pane that goes
+    /// cold is the one it built from that.
+    #[test]
+    fn the_evictor_gets_the_live_pane_and_what_it_builds_replaces_it() {
+        let live = Arc::new(RunSession {
+            title: Some("changed since the last save".into()),
+            ..(*make_pane("p-live", "w-idle", "completed")).clone()
+        });
+        let (service, _events) = idle_service(vec![live]);
+        lock(&service.last_touched).insert("p-live".into(), Instant::now() - Duration::from_secs(900));
+        let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = seen.clone();
+        service.set_body_evictor(Arc::new(move |pane: &Arc<RunSession>| {
+            lock(&sink).push(pane.title().to_string());
+            Some(pane.evicted_to_disk())
+        }));
+        let evicted = service.evict_idle_bodies(Duration::from_secs(300), 8, |_| false);
+        assert_eq!(evicted, vec!["p-live".to_string()]);
+        assert_eq!(*lock(&seen), vec!["changed since the last save".to_string()]);
+        let cold = service.snapshot().session("p-live").unwrap().clone();
+        assert!(cold.body_on_disk && cold.title() == "changed since the last save");
+    }
+
+    /// The service began to close while the store was evicting: the service keeps its hot pane and the store is read back, so the two
+    /// agree about where the body is.
+    #[test]
+    fn a_service_that_closes_during_an_eviction_makes_the_store_load_the_body_again() {
+        let (service, _events) = idle_service(vec![make_pane("p-race", "w-idle", "completed")]);
+        lock(&service.last_touched).insert("p-race".into(), Instant::now() - Duration::from_secs(900));
+        let shared = service.shared.clone();
+        service.set_body_evictor(Arc::new(move |pane: &Arc<RunSession>| {
+            lock(&shared.state).closing = true;
+            Some(pane.evicted_to_disk())
+        }));
+        let reloaded: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = reloaded.clone();
+        service.set_body_loader(Arc::new(move |pane: &RunSession| {
+            lock(&sink).push(pane.id().to_string());
+            None
+        }));
+        let evicted = service.evict_idle_bodies(Duration::from_secs(300), 8, |_| false);
+        assert!(evicted.is_empty());
+        assert_eq!(*lock(&reloaded), vec!["p-race".to_string()]);
+        assert!(!service.snapshot().session("p-race").unwrap().body_on_disk);
     }
 }

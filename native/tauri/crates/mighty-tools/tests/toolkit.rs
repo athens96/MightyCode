@@ -31,7 +31,7 @@ use serde_json::Value;
 fn kind_for(install: &ToolkitInstallSpec) -> &'static str {
     match install {
         ToolkitInstallSpec::Plugin { .. } => "plugin",
-        ToolkitInstallSpec::Mcp { .. } => "mcp",
+        ToolkitInstallSpec::Mcp { .. } | ToolkitInstallSpec::McpHttp { .. } => "mcp",
         ToolkitInstallSpec::Skill { .. } => "skill",
         ToolkitInstallSpec::Package { .. } => "package",
         ToolkitInstallSpec::RepoScript { .. } => "repoScript",
@@ -1247,6 +1247,176 @@ fn a_skill_folder_never_escapes_the_skills_folder() {
     let error = ToolkitRunner::new(&store, fake_context(&home)).plan().expect_err("the plan says why");
     assert!(error.contains(&folder_reason), "{error}");
     assert!(runner::install_commands(&make_entry("e", skill("https://github.com/x/D:evil")), None, &fake_context(&home)).is_empty());
+    common::remove(&dir);
+    common::remove(&home);
+}
+
+#[test]
+fn mcp_http_parses_validates_roundtrips_and_keeps_stdio_mcp_parity() {
+    let valid_json = r#"{
+      "version": 1,
+      "entries": [
+        {
+          "id": "mightywork",
+          "displayName": "MightyWork MCP",
+          "install": { "kind": "mcp", "name": "mightywork", "url": "https://mightywork.duckdns.org/mcp" }
+        },
+        {
+          "id": "authed-http",
+          "displayName": "Authed HTTP MCP",
+          "install": { "kind": "mcp", "name": "authed", "url": "http://127.0.0.1:8787/mcp", "bearerTokenEnvVar": "MCP_API_TOKEN" }
+        },
+        {
+          "id": "localhost-http",
+          "displayName": "Localhost HTTP MCP",
+          "install": { "kind": "mcp", "name": "local_mcp", "url": "http://localhost:3001/sse" }
+        }
+      ]
+    }"#;
+    let parsed = file::parse(valid_json).expect("valid HTTP MCP entries parse");
+    assert_eq!(parsed.entries.len(), 3);
+    assert_eq!(
+        parsed.entries[0].install,
+        ToolkitInstallSpec::McpHttp {
+            name: "mightywork".into(),
+            url: "https://mightywork.duckdns.org/mcp".into(),
+            bearer_token_env_var: None,
+        }
+    );
+    assert_eq!(
+        parsed.entries[1].install,
+        ToolkitInstallSpec::McpHttp {
+            name: "authed".into(),
+            url: "http://127.0.0.1:8787/mcp".into(),
+            bearer_token_env_var: Some("MCP_API_TOKEN".into()),
+        }
+    );
+    assert!(!file::is_macos_only(&parsed.entries[0]) && file::is_windows_platform(&parsed.entries[0]));
+
+    // Canonical ASCII-sorted JSON and deterministic SHA-256 hash.
+    assert_eq!(
+        store::build_canonical_json(&parsed.entries[0]),
+        r#"{"displayName":"MightyWork MCP","id":"mightywork","install":{"kind":"mcp","name":"mightywork","url":"https://mightywork.duckdns.org/mcp"}}"#
+    );
+    assert_eq!(
+        store::build_canonical_json(&parsed.entries[1]),
+        r#"{"displayName":"Authed HTTP MCP","id":"authed-http","install":{"bearerTokenEnvVar":"MCP_API_TOKEN","kind":"mcp","name":"authed","url":"http://127.0.0.1:8787/mcp"}}"#
+    );
+    let h0 = store::canonical_hash(&parsed.entries[0]);
+    let h1 = store::canonical_hash(&parsed.entries[1]);
+    assert_eq!(h0.len(), 64);
+    assert_ne!(h0, h1);
+    assert_eq!(h0, store::canonical_hash(&parsed.entries[0]), "deterministic canonical hash");
+
+    // View summary exposes endpoint cleanly while keeping other specs unchanged.
+    assert_eq!(mighty_tools::view::install_summary(&parsed.entries[0].install).as_deref(), Some("https://mightywork.duckdns.org/mcp"));
+    assert_eq!(
+        mighty_tools::view::install_summary(&parsed.entries[1].install).as_deref(),
+        Some("http://127.0.0.1:8787/mcp ($MCP_API_TOKEN)")
+    );
+    assert_eq!(mighty_tools::view::install_summary(&mcp("plain", "npx")), None);
+
+    // Invalid URLs, invalid identifiers, invalid env var names, and raw secret fields are rejected.
+    let invalid_cases = [
+        r#"{"id":"bad1","displayName":"Bad","install":{"kind":"mcp","name":"bad1","url":"http://example.com/mcp"}}"#,
+        r#"{"id":"bad2","displayName":"Bad","install":{"kind":"mcp","name":"bad2","url":"ftp://example.com/mcp"}}"#,
+        r#"{"id":"bad3","displayName":"Bad","install":{"kind":"mcp","name":"bad3","url":"https://"}}"#,
+        r#"{"id":"bad4","displayName":"Bad","install":{"kind":"mcp","name":"../escape","url":"https://example.com/mcp"}}"#,
+        r#"{"id":"bad5","displayName":"Bad","install":{"kind":"mcp","name":"bad5","url":"https://example.com/mcp","bearerTokenEnvVar":"sk-secret-raw-token"}}"#,
+        r#"{"id":"bad6","displayName":"Bad","install":{"kind":"mcp","name":"bad6","url":"https://example.com/mcp","bearerTokenEnvVar":"123INVALID"}}"#,
+        r#"{"id":"bad7","displayName":"Bad","install":{"kind":"mcp","name":"bad7","url":"https://example.com/mcp","bearerTokenEnvVar":""}}"#,
+        r#"{"id":"bad8","displayName":"Bad","install":{"kind":"mcp","name":"bad8","url":"https://example.com/mcp","bearerToken":"raw-secret"}}"#,
+        r#"{"id":"bad9","displayName":"Bad","install":{"kind":"mcp","name":"bad9","url":"https://example.com/mcp","headers":{"Authorization":"Bearer secret"}}}"#,
+        r#"{"id":"bad10","displayName":"Bad","install":{"kind":"mcp","name":"bad10","url":"https://example.com/mcp","args":["--bad"]}}"#,
+    ];
+    for raw in invalid_cases {
+        let doc = format!(r#"{{"version":1,"entries":[{raw}]}}"#);
+        assert!(file::parse(&doc).unwrap().entries.is_empty(), "must reject invalid McpHttp entry: {raw}");
+    }
+
+    // Store roundtrip save + reload + approval binding.
+    let dir = common::temp("mcp-http-store");
+    let store = ToolkitStore::new(&dir);
+    store.add(&parsed.entries[0]).unwrap();
+    store.add(&parsed.entries[1]).unwrap();
+    store.approve("mightywork", None).unwrap();
+    let reloaded = ToolkitStore::new(&dir);
+    let (listed, err) = reloaded.list();
+    assert!(err.is_none());
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].install, parsed.entries[0].install);
+    assert_eq!(listed[1].install, parsed.entries[1].install);
+    assert_eq!(reloaded.get_approval(&listed[0]).map(|a| a.content_hash), Some(h0));
+    common::remove(&dir);
+}
+
+#[tokio::test]
+async fn mcp_http_probe_and_runner_generate_user_http_command_without_fetch_retry() {
+    let dir = common::temp("mcp-http-run");
+    let home = common::temp("mcp-http-home");
+    let ctx = fake_context(&home);
+    let entry = ToolkitFileEntry::new(
+        "mightywork",
+        "MightyWork MCP",
+        "mcp",
+        ToolkitInstallSpec::McpHttp {
+            name: "mightywork".into(),
+            url: "https://mightywork.duckdns.org/mcp".into(),
+            bearer_token_env_var: Some("MW_TOKEN".into()),
+        },
+    );
+
+    assert_eq!(probe::probe(&entry, None, &ctx), ProbeResult::Missing);
+    let cmds = runner::install_commands(&entry, None, &ctx);
+    assert_eq!(
+        cmds,
+        vec![vec![
+            "claude".to_string(),
+            "mcp".to_string(),
+            "add".to_string(),
+            "--scope".to_string(),
+            "user".to_string(),
+            "--transport".to_string(),
+            "http".to_string(),
+            "mightywork".to_string(),
+            "https://mightywork.duckdns.org/mcp".to_string(),
+            "--header".to_string(),
+            "Authorization: Bearer ${MW_TOKEN}".to_string(),
+        ]],
+        "the env var the UI shows as `($MW_TOKEN)` is passed as an Authorization header, never its value"
+    );
+    let plain = ToolkitFileEntry::new(
+        "plain",
+        "Plain",
+        "mcp",
+        ToolkitInstallSpec::McpHttp { name: "plain".into(), url: "https://example.com/mcp".into(), bearer_token_env_var: None },
+    );
+    assert!(!runner::install_commands(&plain, None, &ctx)[0].iter().any(|a| a == "--header"));
+    assert_eq!(cmds[0][0], "claude");
+    assert!(!runner::is_fetch_step(&cmds[0]), "claude mcp add is not a fetch step");
+
+    let store = ToolkitStore::new(&dir);
+    store.add(&entry).unwrap();
+    store.approve("mightywork", None).unwrap();
+    let runner_instance = ToolkitRunner::new(&store, ctx.clone());
+    let plan = runner_instance.plan().expect("plan succeeds");
+    assert_eq!(plan.len(), 1);
+    assert_eq!(plan[0].action, PlanAction::Run);
+
+    let net_fail = NetworkFailExecutor::default();
+    let failed_run = runner_instance.run(&plan, &net_fail).await;
+    assert_eq!(failed_run[0].verdict, Verdict::Failed);
+    assert_eq!(net_fail.counts.lock().unwrap().get("claude mcp").copied().unwrap_or(0), 1, "not retried as fetch step");
+
+    std::fs::write(
+        home.join(".claude.json"),
+        r#"{"mcpServers":{"mightywork":{"type":"http","url":"https://mightywork.duckdns.org/mcp"}}}"#,
+    )
+    .unwrap();
+    assert_eq!(probe::probe(&entry, None, &ctx), ProbeResult::Installed);
+    let ok_run = runner_instance.run(&plan, &FakeExecutor::default()).await;
+    assert_eq!(ok_run[0].verdict, Verdict::Installed);
+
     common::remove(&dir);
     common::remove(&home);
 }

@@ -276,4 +276,39 @@ impl RemoteClient {
             self.fail(connection_id, message, None).await;
         }
     }
+
+    /// Sends an authenticated `/v2/memory/*` request over either Tailscale HTTP or E2EE Paired Computer Relay,
+    /// returning `(http_status, body_bytes)` when the host answered or `Err` on transport/connection failure (`MC-13`).
+    pub async fn memory_request(
+        &self,
+        connection_id: &str,
+        method: &str,
+        path_and_query: &str,
+        body: Option<Vec<u8>>,
+    ) -> Result<(u16, Vec<u8>), String> {
+        let parsed_method = match method {
+            "GET" => Method::Get,
+            "POST" => Method::Post,
+            _ => return Err("Unsupported HTTP method for memory sync.".into()),
+        };
+        if let Some(payload) = &body {
+            if payload.len() > remote_protocol::MAXIMUM_REQUEST_BYTES {
+                return Err(get("remote.run.error.tooLarge"));
+            }
+            if self.is_paired(connection_id) && payload.len() > RELAY_BODY_BYTES {
+                return Err(get("remote.run.error.tooLarge"));
+            }
+        }
+        match self.mirror_request(connection_id, parsed_method, path_and_query, body, None).await {
+            Ok(bytes) => Ok((200, bytes)),
+            Err(ClientError::Transport(TransportError::Status(failure))) => {
+                let err_json = serde_json::json!({
+                    "protocol": remote_protocol::VERSION,
+                    "error": failure.message,
+                });
+                Ok((failure.status, to_bytes(&err_json)))
+            }
+            Err(error) => Err(error.message()),
+        }
+    }
 }

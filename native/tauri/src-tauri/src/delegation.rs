@@ -52,6 +52,7 @@ use crate::panes;
 /// The app's delegation (C# `DesktopService`'s delegation half), made with the run service's hooks (runs.rs) and attached to the
 /// service at [`start`]. One app per process, as there is one host.
 static APP: Mutex<Option<Arc<DelegationApp>>> = Mutex::new(None);
+static HOST: Mutex<Option<Weak<Host>>> = Mutex::new(None);
 
 /// The app's delegation, once runs.rs made it.
 pub fn app() -> Option<Arc<DelegationApp>> {
@@ -102,6 +103,7 @@ impl DelegationWindow for Window {
             if host.closing() {
                 return Err(CLOSING.into());
             }
+            let mut workspace_for_memory = None;
             {
                 let view = host.view();
                 if let Some(pane) = view.snapshot.session(&request.session_id).filter(|pane| pane.kind() == "claude") {
@@ -109,7 +111,11 @@ impl DelegationWindow for Window {
                     request.model = pane.model().to_string();
                     request.settings = pane.settings.clone();
                     request.registered_models = crate::runs::registered_models_for(pane.provider(), workspace.as_ref(), &view.snapshot);
+                    workspace_for_memory = workspace;
                 }
+            }
+            if request.kind == "claude" && request.memory_context.is_none() {
+                request.memory_context = crate::shared_memory::context_for_pane(&host, workspace_for_memory.as_ref());
             }
             // C# `PrepareStyleRunRequest`: a styled pane's grants and plan-mode launch (styles.rs). When the style needs a yes again it
             // throws and the delegated run does not start (never without its style, so never out of its plan mode).
@@ -351,6 +357,7 @@ pub fn shutdown(host: &Host) {
 /// `DelegationRunEnded`, the end of `Receive`, `PaneClosed`), read once as runs.rs makes the service: the app's delegation, made here.
 pub fn run_hooks(host: &Arc<Host>) -> Option<Arc<dyn DelegationRunHooks>> {
     let app = DelegationApp::new(tauri::async_runtime::handle().inner().clone(), Arc::new(Window { host: Arc::downgrade(host) }));
+    *lock(&HOST) = Some(Arc::downgrade(host));
     *lock(&APP) = Some(app.clone());
     Some(app)
 }
@@ -455,7 +462,15 @@ pub fn removal_refusal(host: &Host, workspace: &str) -> Option<String> {
 
 /// C# `SendAsync` (the composer's send and the queue's start): with items held for the pane they go first, all of them, in the one run
 /// the human's words start; otherwise the request starts as the run service starts it. None when no run started.
-pub async fn send(runs: &crate::runs::Runs, request: StartRunRequest) -> Result<Option<()>, mighty_run::RunError> {
+pub async fn send(runs: &crate::runs::Runs, mut request: StartRunRequest) -> Result<Option<()>, mighty_run::RunError> {
+    if request.kind == "claude" && request.memory_context.is_none() {
+        let host = lock(&HOST).as_ref().and_then(Weak::upgrade);
+        if let Some(host) = host {
+            let snapshot = runs.service.snapshot();
+            let workspace = snapshot.workspace(&request.workspace_id);
+            request.memory_context = crate::shared_memory::context_for_pane(&host, workspace);
+        }
+    }
     match app() {
         Some(app) => Ok(match app.send(request).await? {
             DelegationRelease::NotStarted => None,

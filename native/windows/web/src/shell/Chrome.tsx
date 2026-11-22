@@ -68,7 +68,12 @@ export function WorkspaceHeader({ header, counts, layoutMode }: { header: Header
         </div>
         <div className="workspace-header-line">
           <span onContextMenu={(event) => menu.atPointer(event, copy)} className="workspace-header-path-box" title={header.path + '\n' + t('tooltip.header.workspacePath')}><MiddlePath path={header.path} className="workspace-header-path mono" /></span>
-          {header.git && <GitCapsule git={header.git} />}
+          {header.git && (
+            <GitCapsule
+              git={header.git}
+              onClick={import.meta.env.MODE === 'tauri' && !header.remoteHost ? () => window.dispatchEvent(new CustomEvent('mighty:open-git-workbench', { detail: { workspaceId: header.id } })) : undefined}
+            />
+          )}
         </div>
       </div>
       {counts && <StatusCounts counts={counts} long />}
@@ -81,6 +86,15 @@ export function WorkspaceHeader({ header, counts, layoutMode }: { header: Header
       {/* 대화 검색 (the Rust host's): this computer's session records, so not for a remote workspace (M/WorkspaceView.swift). */}
       {import.meta.env.MODE === 'tauri' && (
         <>
+          <button type="button" className="icon-button header-icon-button" disabled={Boolean(header.remoteHost)} aria-label={t('projectTasks.open')} data-testid="open-task-runner"
+            title={t('projectTasks.open')}
+            onClick={() => window.dispatchEvent(new CustomEvent('mighty:open-tasks', { detail: { workspaceId: header.id } }))}><Icon name="play" size={15} weight={1.5} /></button>
+          <button type="button" className="icon-button header-icon-button" disabled={Boolean(header.remoteHost)} aria-label={t('agentContext.open')} data-testid="open-agent-context"
+            title={t('agentContext.open')}
+            onClick={() => window.dispatchEvent(new CustomEvent('mighty:open-agent-context', { detail: { workspaceId: header.id } }))}><Icon name="brain" size={16} weight={1.5} /></button>
+          <button type="button" className="icon-button header-icon-button" aria-label={t('sharedMemory.open')} data-testid="open-shared-memory"
+            title={t('sharedMemory.open')}
+            onClick={() => window.dispatchEvent(new CustomEvent('mighty:open-shared-memory', { detail: { workspaceId: header.id } }))}><Icon name="brain-circuit" size={16} weight={1.5} /></button>
           <button type="button" className="icon-button header-icon-button" disabled={Boolean(header.remoteHost)} aria-label={t('integrations.open')} data-testid="open-issue-picker"
             title={t('integrations.open')}
             onClick={() => window.dispatchEvent(new CustomEvent('mighty:open-issues', { detail: { workspaceId: header.id, settingsOpen: false } }))}><Icon name="list-todo" size={16} weight={1.5} /></button>

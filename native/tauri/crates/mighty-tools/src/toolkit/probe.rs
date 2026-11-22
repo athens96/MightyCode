@@ -50,7 +50,7 @@ pub fn probe(entry: &ToolkitFileEntry, _approval: Option<&ToolkitApproval>, ctx:
                 ProbeResult::Missing
             }
         }
-        ToolkitInstallSpec::Mcp { name, .. } => probe_mcp(name, &ctx.home_directory),
+        ToolkitInstallSpec::Mcp { name, .. } | ToolkitInstallSpec::McpHttp { name, .. } => probe_mcp(name, &ctx.home_directory),
         ToolkitInstallSpec::Skill { url } => probe_skill(url, &ctx.home_directory),
         ToolkitInstallSpec::Package { manager, name, .. } if manager == "npm" => probe_npm(name, &ctx.path_directories),
         ToolkitInstallSpec::Package { manager, executable: Some(executable), .. } if manager == "winget" => {

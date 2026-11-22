@@ -68,6 +68,20 @@ pub struct StartRunRequest {
     /// The id this run's diagram block carries (`DesktopService.Launch` names it); None lets the runner pick one.
     pub graph_run_id: Option<String>,
     pub receipt: Option<Arc<Mutex<RunStartReceipt>>>,
+    /// Formatted shared memory context (`MC-13`) injected into the agent prompt/system instructions without polluting transcripts.
+    pub memory_context: Option<String>,
+}
+
+/// Wraps non-empty shared memory markdown in `<shared-memory>...</shared-memory>` for agent prompt/instruction injection.
+pub fn memory_block(memory_context: Option<&str>) -> Option<String> {
+    let trimmed = memory_context?.trim();
+    if trimmed.is_empty() { None } else { Some(format!("<shared-memory>\n{trimmed}\n</shared-memory>")) }
+}
+
+impl Default for StartRunRequest {
+    fn default() -> Self {
+        StartRunRequest::new("", "", "claude", "")
+    }
 }
 
 impl StartRunRequest {
@@ -96,6 +110,7 @@ impl StartRunRequest {
             checklist: false,
             graph_run_id: None,
             receipt: None,
+            memory_context: None,
         }
     }
 

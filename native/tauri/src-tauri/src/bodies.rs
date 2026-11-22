@@ -6,10 +6,12 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use mighty_core::retention::RetentionPolicy;
 use mighty_core::store::Store;
 use mighty_run::RunService;
-use mighty_run::service::BodyLoader;
+use mighty_run::service::{BodyEvictor, BodyLoader};
 use tokio::sync::watch;
 
 use crate::host::{FlushWake, Host, View, lock};
@@ -23,6 +25,11 @@ pub struct BodyLoads {
 /// The run service's reader of a pane's body: the store's, under its lock (a save waits, or the read waits for a save).
 pub fn loader(store: Arc<Mutex<Store>>) -> BodyLoader {
     Arc::new(move |pane| lock(&store).load_pane_body(pane))
+}
+
+/// The run service's evictor of an idle loaded pane's body back to disk: compacts any journal and drops the full body under the store lock.
+pub fn evictor(store: Arc<Mutex<Store>>) -> BodyEvictor {
+    Arc::new(move |pane| lock(&store).evict_live_body(pane))
 }
 
 /// Returns a non-blocking callback for `View::sync` that loads any lazy pane bodies for a workspace off `host.view()` and off
@@ -98,6 +105,32 @@ pub fn ensure(host: &Arc<Host>, ids: &[&str]) {
     if runs.service.ensure_bodies(ids) {
         host.view().sync();
     }
+}
+
+/// Evicts idle inactive-workspace pane bodies according to [`RetentionPolicy::default`], freeing their older graph history and
+/// UI `seen` references and scheduling a bridge flush when any pane moved back to disk.
+pub fn evict_idle(host: &Arc<Host>) -> usize {
+    evict_idle_with_policy(host, &RetentionPolicy::default())
+}
+
+pub fn evict_idle_with_policy(host: &Arc<Host>, policy: &RetentionPolicy) -> usize {
+    if host.closing() {
+        return 0;
+    }
+    let Some(runs) = host.runs().cloned() else { return 0 };
+    runs.service.set_body_evictor(evictor(host.store_handle()));
+    let service = runs.service.clone();
+    let evicted = service.evict_idle_bodies(Duration::from_secs(policy.idle_body_ttl_secs), policy.max_hot_inactive_panes, |pane| {
+        let id = pane.id();
+        service.antigravity_card(id).is_some() || !crate::panes::queued(host, id).is_empty()
+    });
+    if !evicted.is_empty() {
+        crate::history::evict_panes(host, &evicted);
+        crate::panes::prune_inactive_seen(host, &evicted);
+        host.view().sync();
+        host.schedule();
+    }
+    evicted.len()
 }
 
 #[cfg(test)]

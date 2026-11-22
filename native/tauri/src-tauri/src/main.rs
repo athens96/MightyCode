@@ -14,6 +14,7 @@
 #![deny(clippy::significant_drop_in_scrutinee)]
 
 mod accounts;
+mod agent_context;
 mod agent_io;
 mod antigravity;
 mod app_update;
@@ -33,6 +34,7 @@ mod direct;
 mod editor;
 mod files;
 mod frame;
+mod git_workbench;
 #[cfg(feature = "dev-harness")]
 mod help_capture;
 mod history;
@@ -56,12 +58,15 @@ mod phone;
 mod platform;
 mod plugins;
 mod remote;
+mod repo_tasks;
+mod retention_gc;
 mod review;
 mod runs;
 mod saved_prompts;
 mod settings;
 mod settings_place;
 mod setup;
+mod shared_memory;
 mod shell_command;
 mod sign_in_pane;
 #[cfg(feature = "dev-harness")]
@@ -574,6 +579,7 @@ fn main() {
             styles::start(&host, &platform);
             tails::start(&host);
             ouroboros::start(&host);
+            retention_gc::start_background_tasks(&host);
             app_update::start(&host, &platform);
             host.start_clocks();
             // Mac stage: the menu bar (menu.rs, M-F; nothing on Windows, Tauri's default macOS menu until then).

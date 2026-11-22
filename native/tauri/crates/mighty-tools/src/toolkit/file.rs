@@ -33,6 +33,11 @@ pub enum ToolkitInstallSpec {
         executable: String,
         args: Vec<String>,
     },
+    McpHttp {
+        name: String,
+        url: String,
+        bearer_token_env_var: Option<String>,
+    },
     Skill {
         url: String,
     },
@@ -204,24 +209,52 @@ fn parse_plugin(el: &Value) -> Option<ToolkitInstallSpec> {
 
 fn parse_mcp(el: &Value) -> Option<ToolkitInstallSpec> {
     let name = text(el, "name")?;
-    let executable = text(el, "executable")?;
-    if !valid_identifier(name) || !valid_executable(executable) {
+    if !valid_identifier(name) {
         return None;
     }
-    let mut args = Vec::new();
-    if let Some(Value::Array(items)) = el.get("args") {
-        if items.len() > 64 {
+    if let Some(executable) = text(el, "executable") {
+        if !valid_executable(executable) {
             return None;
         }
-        for arg in items {
-            let arg = arg.as_str()?;
-            if arg.contains('\0') {
+        let mut args = Vec::new();
+        if let Some(Value::Array(items)) = el.get("args") {
+            if items.len() > 64 {
                 return None;
             }
-            args.push(arg.to_string());
+            for arg in items {
+                let arg = arg.as_str()?;
+                if arg.contains('\0') {
+                    return None;
+                }
+                args.push(arg.to_string());
+            }
         }
+        return Some(ToolkitInstallSpec::Mcp { name: name.into(), executable: executable.into(), args });
     }
-    Some(ToolkitInstallSpec::Mcp { name: name.into(), executable: executable.into(), args })
+    if el.get("executable").is_some()
+        || el.get("args").is_some()
+        || el.get("bearerToken").is_some()
+        || el.get("accessToken").is_some()
+        || el.get("token").is_some()
+        || el.get("headers").is_some()
+    {
+        return None;
+    }
+    let url = text(el, "url")?;
+    if !valid_mcp_url(url) {
+        return None;
+    }
+    let bearer_token_env_var = match el.get("bearerTokenEnvVar") {
+        None | Some(Value::Null) => None,
+        Some(raw) => {
+            let var = raw.as_str()?;
+            if !valid_env_var_name(var) {
+                return None;
+            }
+            Some(var.to_string())
+        }
+    };
+    Some(ToolkitInstallSpec::McpHttp { name: name.into(), url: url.into(), bearer_token_env_var })
 }
 
 fn parse_skill(el: &Value) -> Option<ToolkitInstallSpec> {
@@ -272,6 +305,7 @@ struct Patterns {
     scoped_package: Regex,
     winget_name: Regex,
     commit: Regex,
+    env_var: Regex,
 }
 
 fn patterns() -> &'static Patterns {
@@ -284,6 +318,7 @@ fn patterns() -> &'static Patterns {
             scoped_package: r(r"^@[A-Za-z0-9][A-Za-z0-9._\-]*/[A-Za-z0-9][A-Za-z0-9._\-]*\n?\z"),
             winget_name: r(r"^[A-Za-z0-9][A-Za-z0-9._+\-]*\n?\z"),
             commit: r(r"^[0-9a-f]{40}\n?\z"),
+            env_var: r(r"^[A-Za-z_][A-Za-z0-9_]{0,127}\z"),
         }
     })
 }
@@ -331,6 +366,23 @@ fn valid_winget_executable(value: &str) -> bool {
 
 fn valid_https_url(value: &str) -> bool {
     value.starts_with("https://") && !value.contains('\0') && value.len() <= 2048
+}
+
+pub fn valid_mcp_url(value: &str) -> bool {
+    if value.is_empty() || value.len() > 2048 || value.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return false;
+    }
+    let Ok(parsed) = url::Url::parse(value) else { return false };
+    let Some(host) = parsed.host_str().filter(|h| !h.is_empty()) else { return false };
+    match parsed.scheme() {
+        "https" => valid_https_url(value),
+        "http" => matches!(host, "127.0.0.1" | "localhost" | "[::1]"),
+        _ => false,
+    }
+}
+
+pub fn valid_env_var_name(value: &str) -> bool {
+    patterns().env_var.is_match(value)
 }
 
 fn valid_ref(value: &str) -> bool {

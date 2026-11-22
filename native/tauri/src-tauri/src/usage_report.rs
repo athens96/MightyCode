@@ -1,7 +1,7 @@
 //! Cumulative token & cost ledger (`<data>/usage-ledger.json`), 7/30-day breakdown report, and daily budget exceeded alerts across
 //! desktop toast and mobile E2EE push (`MC-11`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use chrono::Local;
@@ -94,6 +94,18 @@ pub fn on_run_finished(host: &Arc<Host>, session_id: &str) {
 
 pub fn forget_pane(host: &Host, pane_id: &str) {
     with_ledger(host, |ledger| ledger.forget(pane_id));
+}
+
+/// Drops the deduplication baselines of panes that are no longer open from the ledger this module owns, and saves it when any went
+/// (under the ledger's lock, so no older copy of it can land over a newer save). Returns how many went.
+pub fn prune_closed_panes(host: &Host, live_session_ids: &HashSet<String>) -> usize {
+    with_ledger(host, |ledger| {
+        let pruned = ledger.prune_closed_sessions(live_session_ids);
+        if pruned > 0 && host.writes() {
+            let _ = ledger.save(&host.data_dir, Local::now().date_naive());
+        }
+        pruned
+    })
 }
 
 fn provider_display_name(provider: &str) -> &str {

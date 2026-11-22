@@ -331,6 +331,75 @@ struct Reuse {
     title: Option<String>,
 }
 
+fn locale_or(locale: &mighty_core::locale::Locale, key: &str, fallback: &str) -> String {
+    let text = locale.get(key);
+    if text == key { fallback.to_string() } else { text }
+}
+
+/// Checks `.mighty.yaml` / `.mighty.local.yaml` in `workspace` before opening a worktree. When `interactive` is true and an
+/// unapproved config defines worktree actions (`share`, `copy`, `setup`, or `env`), prompts the user via `confirm` with the
+/// rules and short hash; on `phone_create` (`interactive == false`), never blocks on a desktop dialog.
+async fn resolve_worktree_repo_config(
+    host: &Arc<Host>,
+    workspace: &Workspace,
+    interactive: bool,
+) -> (Option<mighty_delegation::mighty_yaml::LoadedRepoConfig>, Option<String>) {
+    let status = match crate::repo_tasks::load_workspace_config(host, workspace).await {
+        Ok(Some(status)) => status,
+        Ok(None) => return (None, None),
+        Err(error) => {
+            return (None, Some(format!("[.mighty.yaml] Skipped invalid repository config: {error}")));
+        }
+    };
+    if status.approved {
+        return (Some(status.loaded), None);
+    }
+    if !status.loaded.has_worktree_actions() {
+        return (None, None);
+    }
+    if !interactive {
+        let note = format!(
+            "[.mighty.yaml] Skipped unapproved repository config ({}); approve it on desktop to enable shared caches and worktree setup.",
+            status.loaded.short_hash()
+        );
+        return (None, Some(note));
+    }
+
+    let mut summary_lines = vec![format!("Files: {} ({})", status.loaded.files.join(", "), status.loaded.short_hash())];
+    if !status.loaded.config.worktree.share.is_empty() {
+        summary_lines.push(format!(
+            "Share directories (linked to the main checkout's own folders, so what a worktree writes there changes the main checkout too): {}",
+            status.loaded.config.worktree.share.join(", ")
+        ));
+    }
+    if !status.loaded.config.worktree.copy.is_empty() {
+        let rules: Vec<String> =
+            status.loaded.config.worktree.copy.iter().map(mighty_delegation::mighty_yaml::CopyRule::display_label).collect();
+        summary_lines.push(format!("Copy files: {}", rules.join(", ")));
+    }
+    if let Some(setup) = &status.loaded.config.worktree.setup {
+        summary_lines.push(format!("Setup command: {setup}"));
+    }
+    if !status.loaded.config.worktree.env.is_empty() {
+        summary_lines.push(format!(
+            "Environment variables (set for the setup command and every task of the pane):\n{}",
+            crate::repo_tasks::describe_env(&status.loaded.config.worktree.env).join("\n")
+        ));
+    }
+
+    let title = locale_or(&host.locale, "projectTasks.mightyConfig", "Repository configuration (.mighty.yaml)");
+    let primary = locale_or(&host.locale, "projectTasks.approve", "Approve");
+    if confirm(host, title, summary_lines.join("\n"), primary).await {
+        match crate::repo_tasks::approve_workspace_config(host, workspace, &status.loaded.content_hash).await {
+            Ok(approved) => (Some(approved.loaded), None),
+            Err(error) => (None, Some(format!("[.mighty.yaml] {error}"))),
+        }
+    } else {
+        let note = format!("[.mighty.yaml] Unapproved repository config ({}) was skipped for this worktree.", status.loaded.short_hash());
+        (None, Some(note))
+    }
+}
+
 /// C# `OpenAgentPaneInWorktree`: makes the worktree first (branch `mighty/<id>` at the workspace branch's head), then the pane that
 /// works in it. A worktree the person chose that cannot be made opens no pane; one the workspace's mode chose (`fall_back`) opens the
 /// pane in the folder and says why.
@@ -345,9 +414,10 @@ async fn open_in_worktree(
     let locale = host.locale;
     let id = reuse.as_ref().map_or_else(wire::new_id, |r| r.id.clone());
     let reopened = reuse.is_some();
-    let (record, title) = match reuse {
-        Some(reuse) => (reuse.record, reuse.title),
+    let (record, title, approved_repo_cfg, repo_cfg_note) = match reuse {
+        Some(reuse) => (reuse.record, reuse.title, None, None),
         None => {
+            let (approved_cfg, cfg_note) = resolve_worktree_repo_config(host, workspace, true).await;
             let (made, checkout, reason) = make(host, workspace, &id).await;
             let Some(made) = made else {
                 let reason = reason.unwrap_or_default();
@@ -365,7 +435,11 @@ async fn open_in_worktree(
                 return Ok(false);
             };
             let port = core::port(&id, &taken_ports(host), |port| port_free(host, port));
-            (core::from_made(&made, &checkout, port, workspace.worktree_setup_command.clone()), None)
+            let effective_setup = crate::repo_tasks::combine_setup_commands(
+                approved_cfg.as_ref().and_then(|c| c.config.worktree.setup.as_deref()),
+                workspace.worktree_setup_command.as_deref(),
+            );
+            (core::from_made(&made, &checkout, port, effective_setup), None, approved_cfg, cfg_note)
         }
     };
     // The make can take minutes: the pane goes into its own workspace whichever one is active by then, in the group only when it is.
@@ -392,6 +466,9 @@ async fn open_in_worktree(
         }
         return added.map(|_| false);
     }
+    if let Some(note) = repo_cfg_note {
+        note_pane(host, &id, note);
+    }
     if reopened {
         update_workspace(host, workspace.id(), |w| {
             if let Some(kept) = w.kept_pane_worktrees.as_mut() {
@@ -399,7 +476,7 @@ async fn open_in_worktree(
             }
         });
     } else {
-        prepare(host, &id, workspace, record);
+        prepare(host, &id, workspace, record, approved_repo_cfg);
     }
     added
 }
@@ -420,13 +497,18 @@ pub(crate) async fn open_task_in_worktree(
     linked_task: Option<mighty_core::model::LinkedTask>,
 ) -> Result<bool, String> {
     let locale = host.locale;
+    let (approved_cfg, cfg_note) = resolve_worktree_repo_config(host, workspace, true).await;
     let (made, checkout, reason) = make(host, workspace, &session_id).await;
     let Some(made) = made else {
         let reason = reason.unwrap_or_default();
         return Err(locale.get_with("paneWorktree.error.cannotMake", &[("reason", &reason)]));
     };
     let port = core::port(&session_id, &taken_ports(host), |port| port_free(host, port));
-    let mut record = core::from_made(&made, &checkout, port, workspace.worktree_setup_command.clone());
+    let effective_setup = crate::repo_tasks::combine_setup_commands(
+        approved_cfg.as_ref().and_then(|c| c.config.worktree.setup.as_deref()),
+        workspace.worktree_setup_command.as_deref(),
+    );
+    let mut record = core::from_made(&made, &checkout, port, effective_setup);
     record.linked_task = linked_task.clone();
 
     let port_text = record.port.to_string();
@@ -453,7 +535,10 @@ pub(crate) async fn open_task_in_worktree(
         }
         return added.map(|_| false);
     }
-    prepare(host, &session_id, workspace, record);
+    if let Some(note) = cfg_note {
+        note_pane(host, &session_id, note);
+    }
+    prepare(host, &session_id, workspace, record, approved_cfg);
     added
 }
 
@@ -483,32 +568,55 @@ async fn make(
 
 /// C# `WorktreeWithoutAsking`: the worktree a pane added where nobody can be asked (the phone) works in, when the workspace's mode says
 /// so: its record, or why the pane works in the folder instead; (None, None) for the folder by the rule.
-pub async fn worktree_without_asking(host: &Arc<Host>, workspace: &Workspace, id: &str) -> (Option<PaneWorktree>, Option<String>) {
+pub async fn worktree_without_asking(host: &Arc<Host>, workspace: &Workspace, id: &str) -> PhoneWorktree {
     let decision = {
         let view = host.view();
         core::decide_without_asking(workspace, view.snapshot.sessions().iter().map(|s| s.as_ref()), None)
     };
     if decision != PaneWorktreeDecision::Worktree {
-        return (None, None);
+        return PhoneWorktree::default();
     }
     let locale = host.locale;
-    let fell_back = |reason: &str| Some(locale.get_with("paneWorktree.log.fellBack", &[("reason", reason)]));
-    let Some(places) = places() else { return (None, fell_back(&text::reason(DelegationReasonCode::NotGit, &locale))) };
+    let fell_back = |reason: &str| PhoneWorktree {
+        fell_back: Some(locale.get_with("paneWorktree.log.fellBack", &[("reason", reason)])),
+        ..PhoneWorktree::default()
+    };
+    let Some(places) = places() else { return fell_back(&text::reason(DelegationReasonCode::NotGit, &locale)) };
     let folder = local_folder(workspace);
     let ChildWorktreeCheck::Ready(start) = places.maker.check(&folder).await else {
-        return (None, fell_back(&text::reason(DelegationReasonCode::NotGit, &locale)));
+        return fell_back(&text::reason(DelegationReasonCode::NotGit, &locale));
     };
     if !may_write(host, &[&folder, &start.repository, &places.root]) {
-        return (None, fell_back(&crate::setup::verification_mode()));
+        return fell_back(&crate::setup::verification_mode());
     }
+    let (approved_cfg, cfg_note) = resolve_worktree_repo_config(host, workspace, false).await;
     match core::make_pane(&places.maker, id, &start, 300.0).await {
         ChildWorktreeOutcome::Created(made) => {
             let port = core::port(id, &taken_ports(host), |port| port_free(host, port));
-            (Some(core::from_made(&made, &start.repository, port, workspace.worktree_setup_command.clone())), None)
+            let effective_setup = crate::repo_tasks::combine_setup_commands(
+                approved_cfg.as_ref().and_then(|c| c.config.worktree.setup.as_deref()),
+                workspace.worktree_setup_command.as_deref(),
+            );
+            PhoneWorktree {
+                record: Some(core::from_made(&made, &start.repository, port, effective_setup)),
+                fell_back: None,
+                approved_cfg,
+                cfg_note,
+            }
         }
-        ChildWorktreeOutcome::Refused(reason) => (None, fell_back(&text::reason(reason, &locale))),
-        ChildWorktreeOutcome::Failed(message) => (None, fell_back(&message)),
+        ChildWorktreeOutcome::Refused(reason) => fell_back(&text::reason(reason, &locale)),
+        ChildWorktreeOutcome::Failed(message) => fell_back(&message),
     }
+}
+
+/// What [`worktree_without_asking`] decided for the phone's pane: its worktree record, or why the pane works in the folder, with the
+/// `.mighty.yaml` approved for it (read once, here) and the note about one that was skipped.
+#[derive(Default)]
+pub struct PhoneWorktree {
+    pub record: Option<PaneWorktree>,
+    pub fell_back: Option<String>,
+    pub approved_cfg: Option<mighty_delegation::mighty_yaml::LoadedRepoConfig>,
+    pub cfg_note: Option<String>,
 }
 
 /// The phone's new pane (C# MainWindow.MobileRemote.cs `create`) with its worktree, or with the line saying why it works in the folder.
@@ -549,9 +657,9 @@ pub async fn phone_create(host: Arc<Host>, workspace_id: String, created: RunSes
         }
         view.snapshot.workspace(&workspace_id).cloned()
     };
-    let (worktree, fell_back) = match &workspace {
+    let PhoneWorktree { record: worktree, fell_back, approved_cfg, cfg_note } = match &workspace {
         Some(workspace) => worktree_without_asking(&host, workspace, created.id()).await,
-        None => (None, None),
+        None => PhoneWorktree::default(),
     };
     let created = with_worktree(created, worktree.as_ref(), fell_back.as_deref(), &host);
     let id = created.id().to_string();
@@ -572,18 +680,62 @@ pub async fn phone_create(host: Arc<Host>, workspace_id: String, created: RunSes
         return Err(refused);
     }
     host.schedule();
+    if let Some(note) = cfg_note {
+        host.log.line(&format!("phone worktree create ({id}): {note}"));
+        note_pane(&host, &id, note);
+    }
     if let (Some(worktree), Some(workspace)) = (worktree, workspace) {
-        prepare(&host, &id, &workspace, worktree);
+        prepare(&host, &id, &workspace, worktree, approved_cfg);
     }
     Ok(id)
 }
 
-/// C# `PreparePaneWorktree`: the workspace's files copied into the new worktree (`PaneWorktreeCopy`), then its setup command once, in
+/// C# `PreparePaneWorktree`: shares cache directories and copies files into the new worktree, then runs its setup command once in
 /// the pane's run folder; on a task of its own.
-pub fn prepare(host: &Arc<Host>, id: &str, workspace: &Workspace, record: PaneWorktree) {
+pub fn prepare(
+    host: &Arc<Host>,
+    id: &str,
+    workspace: &Workspace,
+    record: PaneWorktree,
+    approved_cfg: Option<mighty_delegation::mighty_yaml::LoadedRepoConfig>,
+) {
     let (host, id, workspace) = (host.clone(), id.to_string(), workspace.clone());
     tauri::async_runtime::spawn(async move {
         let locale = host.locale;
+        let verified_cfg = match approved_cfg {
+            Some(expected) => match crate::repo_tasks::load_workspace_config(&host, &workspace).await {
+                Ok(Some(fresh)) if fresh.approved && fresh.loaded.content_hash == expected.content_hash => Some(fresh.loaded),
+                _ => {
+                    note_pane(&host, &id, "[.mighty.yaml] Repository config changed before worktree setup; skipped.".into());
+                    None
+                }
+            },
+            None => None,
+        };
+
+        if let (Some(cfg), Some(places)) = (&verified_cfg, places())
+            && !cfg.config.worktree.share.is_empty()
+        {
+            let source = local_folder(&workspace);
+            let destination = record.run_folder().to_string();
+            let shared = core::share_directories(
+                &cfg.config.worktree.share,
+                &source,
+                &destination,
+                &places.paths,
+                &places.git,
+                host.processes.as_ref(),
+            )
+            .await;
+            if !shared.shared.is_empty() {
+                note_pane(&host, &id, format!("[.mighty.yaml] Shared cache directories: {}", shared.shared.join(", ")));
+            }
+            if !shared.skipped.is_empty() {
+                let skipped: Vec<String> = shared.skipped.iter().map(|(p, why)| format!("{p} ({why})")).collect();
+                note_pane(&host, &id, format!("[.mighty.yaml] Skipped shared directories: {}", skipped.join(", ")));
+            }
+        }
+
         if let Some(paths) = workspace.worktree_copy_paths.clone().filter(|paths| !paths.is_empty())
             && let Some(places) = places()
         {
@@ -604,12 +756,67 @@ pub fn prepare(host: &Arc<Host>, id: &str, workspace: &Workspace, record: PaneWo
                 note_pane(&host, &id, locale.get_with("paneWorktree.log.copySkipped", &[("paths", &skipped.join(", "))]));
             }
         }
-        let Some(command) = record.setup_command.clone() else { return };
-        note_pane(&host, &id, locale.get_with("paneWorktree.log.setupStarted", &[("command", &command)]));
-        let environment = record.environment(&local_folder(&workspace));
-        let (code, tail) = run_setup_command(&host, &command, record.run_folder(), &environment).await;
-        if host.view().snapshot.session(&id).is_none() {
+
+        if let (Some(cfg), Some(places)) = (&verified_cfg, places())
+            && !cfg.config.worktree.copy.is_empty()
+        {
+            let rules = cfg.config.worktree.copy.clone();
+            let (source, destination) = (local_folder(&workspace), record.run_folder().to_string());
+            let handles = places.paths.clone();
+            let Ok(copied) =
+                tauri::async_runtime::spawn_blocking(move || core::copy_mapped_rules(&rules, &source, &destination, &handles)).await
+            else {
+                return;
+            };
+            if !copied.copied.is_empty() {
+                note_pane(&host, &id, locale.get_with("paneWorktree.log.copied", &[("paths", &copied.copied.join(", "))]));
+            }
+            if !copied.skipped.is_empty() {
+                let skipped: Vec<String> = copied
+                    .skipped
+                    .iter()
+                    .map(|(path, why)| format!("{path} ({})", locale.get(&format!("paneWorktree.copy.skip.{why}"))))
+                    .collect();
+                note_pane(&host, &id, locale.get_with("paneWorktree.log.copySkipped", &[("paths", &skipped.join(", "))]));
+            }
+        }
+
+        let effective_command = crate::repo_tasks::combine_setup_commands(
+            verified_cfg.as_ref().and_then(|c| c.config.worktree.setup.as_deref()),
+            workspace.worktree_setup_command.as_deref(),
+        );
+        let Some(command) = effective_command else {
+            if record.setup_status.as_deref() == Some(PaneWorktree::RUNNING) {
+                update_pane_worktree(&host, &id, |pane| {
+                    pane.setup_command = None;
+                    pane.setup_status = None;
+                });
+            }
             return;
+        };
+
+        note_pane(&host, &id, locale.get_with("paneWorktree.log.setupStarted", &[("command", &command)]));
+        let ws_folder = local_folder(&workspace);
+        let shell_env = crate::repo_tasks::login_shell_env(&host, Some(Path::new(&ws_folder))).await;
+        let mut environment: indexmap::IndexMap<String, String> = shell_env.into_iter().collect();
+        if let Some(cfg) = &verified_cfg {
+            for (k, v) in &cfg.config.worktree.env {
+                environment.insert(k.clone(), v.clone());
+            }
+        }
+        for (k, v) in record.environment(&ws_folder) {
+            environment.insert(k, v);
+        }
+
+        let (code, tail, full_tail) = run_setup_command(&host, &command, record.run_folder(), &environment).await;
+        let session_exists = host.view().snapshot.session(&id).is_some();
+        if !session_exists {
+            return;
+        }
+        if code == 0 {
+            crate::repo_tasks::clear_setup_failure(&host, &id);
+        } else {
+            crate::repo_tasks::record_setup_failure(&host, workspace.id(), &id, &command, code, &full_tail);
         }
         update_pane_worktree(&host, &id, |pane| {
             pane.setup_status = Some(if code == 0 { PaneWorktree::DONE } else { PaneWorktree::FAILED }.into());
@@ -631,21 +838,24 @@ fn utf16_suffix(text: &str, units: usize) -> String {
 }
 
 /// C# `RunSetupCommand`: the setup command through `cmd /d /s /c` (`%ComSpec%`; `/bin/sh -c` elsewhere), 30 minutes at most: its exit
-/// code and last 12 lines (at most 8,000 characters). -1 with why when it could not run or ran out of time.
-async fn run_setup_command(host: &Host, command: &str, folder: &str, environment: &indexmap::IndexMap<String, String>) -> (i32, String) {
-    let (shell, args): (String, Vec<String>) = if cfg!(windows) {
-        let shell = std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
-        (shell, vec!["/d".into(), "/s".into(), "/c".into(), command.into()])
-    } else {
-        ("/bin/sh".into(), vec!["-c".into(), command.into()])
-    };
+/// code, last 12 lines (at most 8,000 characters) for the pane note, and last 80 lines for the Task Runner failure handoff.
+async fn run_setup_command(
+    host: &Host,
+    command: &str,
+    folder: &str,
+    environment: &indexmap::IndexMap<String, String>,
+) -> (i32, String, String) {
+    let (shell, args) = crate::repo_tasks::shell_invocation(command);
     let mut request = SpawnRequest::new(shell, args, folder);
     for (key, value) in environment {
         request = request.env(key.clone(), value.clone());
     }
     let mut child = match host.processes.spawn(request).await {
         Ok(child) => child,
-        Err(error) => return (-1, error.to_string()),
+        Err(error) => {
+            let msg = error.to_string();
+            return (-1, msg.clone(), msg);
+        }
     };
     let control = child.control();
     // `process.Input.Close()`.
@@ -670,7 +880,9 @@ async fn run_setup_command(host: &Host, command: &str, folder: &str, environment
         }
     };
     let _ = control.close().await;
-    (code, setup_tail(&out.text(), &err.text()))
+    let out_text = out.text();
+    let err_text = err.text();
+    (code, setup_tail(&out_text, &err_text), setup_lines_tail(&out_text, &err_text, 80))
 }
 
 /// `RunSetupCommand`'s 30 minutes.
@@ -714,9 +926,13 @@ impl OutputTail {
 
 /// `RunSetupCommand`'s tail: the output, then the errors, as their last 12 lines that are not empty, at most the last 8,000 characters.
 fn setup_tail(output: &str, errors: &str) -> String {
+    setup_lines_tail(output, errors, 12)
+}
+
+fn setup_lines_tail(output: &str, errors: &str, max_lines: usize) -> String {
     let text = format!("{output}\n{errors}").replace("\r\n", "\n");
     let lines: Vec<&str> = text.split('\n').filter(|line| !line.is_empty()).collect();
-    let tail = lines[lines.len().saturating_sub(12)..].join("\n");
+    let tail = lines[lines.len().saturating_sub(max_lines)..].join("\n");
     if tail.encode_utf16().count() > 8000 { utf16_suffix(&tail, 8000) } else { tail }
 }
 

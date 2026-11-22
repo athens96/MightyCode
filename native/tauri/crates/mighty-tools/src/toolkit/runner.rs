@@ -239,6 +239,15 @@ pub fn install_commands(entry: &ToolkitFileEntry, _approval: Option<&ToolkitAppr
             command.extend(args.iter().cloned());
             vec![command]
         }
+        // mcp (HTTP transport): one command. A bearer token comes as `--header "Authorization: Bearer ${VAR}"` (the CLI's own header
+        // syntax; Claude Code expands `${VAR}` when it connects), so the token itself is never in this argv, a config file or a log.
+        ToolkitInstallSpec::McpHttp { name, url, bearer_token_env_var } => {
+            let mut command = argv(&["claude", "mcp", "add", "--scope", "user", "--transport", "http", name, url]);
+            if let Some(var) = bearer_token_env_var {
+                command.extend(["--header".to_string(), format!("Authorization: Bearer ${{{var}}}")]);
+            }
+            vec![command]
+        }
         // skill: git clone into %USERPROFILE%\.claude\skills\<name>.
         ToolkitInstallSpec::Skill { url } => skill_commands(url, &ctx.home_directory),
         ToolkitInstallSpec::Package { manager, name, .. } if manager == "npm" => vec![argv(&["npm", "install", "-g", name])],

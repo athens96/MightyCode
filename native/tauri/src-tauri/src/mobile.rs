@@ -431,8 +431,21 @@ pub async fn reconnect(host: &Arc<Host>) -> Result<(), String> {
         return Ok(());
     }
     relay.reconnect().await.map_err(|error| error.to_string())?;
+    crate::shared_memory::on_connections_changed(host);
     touch(host);
     Ok(())
+}
+
+/// Resolves shared memory prompt context (`MC-13`) for a mobile/relay-initiated session run.
+#[allow(dead_code)]
+pub fn memory_context_for_session(host: &Host, session_id: &str) -> Option<String> {
+    let snapshot = host.runs().map(|r| r.service.snapshot()).unwrap_or_else(|| {
+        let view = host.view();
+        view.snapshot.clone()
+    });
+    let pane = snapshot.session(session_id).filter(|s| s.kind() == "claude")?;
+    let workspace = snapshot.workspace(pane.workspace_id());
+    crate::shared_memory::context_for_pane(host, workspace)
 }
 
 /// C#'s `Revoke(id)` after its confirmation: with no device a new key (every phone and computer unpaired); with one, only that device

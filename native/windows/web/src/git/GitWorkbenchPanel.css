@@ -1,0 +1,497 @@
+/* GitWorkbenchPanel layout and diff styling using shared design tokens exclusively. */
+.git-wb-body {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.git-wb-topstrip {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.git-wb-branch-bar,
+.git-wb-pr-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  min-height: 34px;
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-row);
+  background: var(--card-raised);
+  border: var(--stroke-line) solid var(--line);
+}
+
+.git-wb-branch-select {
+  min-width: 160px;
+  max-width: 260px;
+  height: 24px;
+  padding: 0 var(--space-sm);
+  font-size: var(--type-small);
+}
+
+.git-wb-sync-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 20px;
+  padding: 0 var(--space-xs);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--type-badge);
+  font-weight: 600;
+}
+
+.git-wb-compact-btn {
+  height: 24px;
+  padding: 0 var(--space-sm);
+  font-size: var(--type-small);
+  gap: var(--space-xs);
+}
+
+.git-wb-compact-btn.active-toggle {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.git-wb-new-branch-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.git-wb-new-branch-input {
+  width: 170px;
+  height: 24px;
+  padding: 0 var(--space-sm);
+  font-size: var(--type-small);
+}
+
+.git-wb-pr-label {
+  font-size: var(--type-row);
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.git-wb-pr-title {
+  font-size: var(--type-small);
+  color: var(--ink2);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-wb-pr-muted {
+  font-size: var(--type-small);
+  color: var(--ink2);
+}
+
+.git-wb-check-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  height: 20px;
+  padding: 0 var(--space-sm);
+  border-radius: 999px;
+  font-size: var(--type-badge);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.git-wb-check-pill.tone-done {
+  background: var(--done-soft);
+  color: var(--done-text);
+}
+
+.git-wb-check-pill.tone-err {
+  background: var(--err-soft);
+  color: var(--err-text);
+}
+
+.git-wb-check-pill.tone-wait {
+  background: var(--wait-soft);
+  color: var(--wait-text);
+}
+
+.git-wb-fix-btn {
+  background: var(--err-soft);
+  color: var(--err-text);
+  font-weight: 600;
+}
+
+.git-wb-secret-alert {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-row);
+  background: var(--err-soft);
+  border: var(--stroke-line) solid var(--err);
+  color: var(--ink);
+}
+
+.git-wb-secret-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--err-text);
+  font-size: var(--type-row);
+}
+
+.git-wb-secret-list {
+  margin: 0;
+  padding-left: var(--space-lg);
+  font-size: var(--type-small);
+  color: var(--ink);
+}
+
+.git-wb-secret-msg {
+  margin: 0;
+  font-size: var(--type-small);
+  color: var(--ink2);
+}
+
+.git-wb-secret-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+}
+
+.git-wb-columns {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 310px minmax(0, 1fr);
+  gap: var(--space-md);
+}
+
+.git-wb-files-pane {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding-right: var(--space-sm);
+  border-right: var(--stroke-line) solid var(--line);
+}
+
+.git-wb-files-head,
+.git-wb-commit-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+}
+
+.git-wb-section-label {
+  font-size: var(--type-small);
+  font-weight: 600;
+  color: var(--ink2);
+}
+
+.git-wb-staged-pill,
+.git-wb-staged-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--space-xs);
+  border-radius: 999px;
+  background: var(--done-soft);
+  color: var(--done-text);
+  font-size: var(--type-badge);
+  font-weight: 600;
+  white-space: nowrap;
+  flex: none;
+}
+
+.git-wb-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xxs);
+  font-size: var(--type-small);
+  color: var(--ink2);
+  user-select: none;
+}
+
+.git-wb-select-all input[type='checkbox'],
+.git-wb-file-check {
+  accent-color: var(--accent);
+}
+
+.git-wb-files-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.git-wb-file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 28px;
+  padding: 2px var(--space-xs);
+  border-radius: var(--radius-file-row);
+  border: var(--stroke-line) solid transparent;
+  background: transparent;
+  cursor: default;
+}
+
+.git-wb-file-row:hover {
+  background: var(--card-raised);
+}
+
+.git-wb-file-row.active {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.git-wb-file-mark {
+  width: 14px;
+  text-align: center;
+  font-weight: 700;
+  flex: none;
+}
+
+.git-wb-file-mark.tone-done {
+  color: var(--done-text);
+}
+
+.git-wb-file-mark.tone-err {
+  color: var(--err-text);
+}
+
+.git-wb-file-mark.tone-wait {
+  color: var(--wait-text);
+}
+
+.git-wb-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--type-small);
+  color: var(--ink);
+}
+
+.git-wb-file-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+
+.git-wb-row-icon {
+  min-width: 20px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+}
+
+.git-wb-right-pane {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.git-wb-diff-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-row);
+  border: var(--stroke-line) solid var(--line);
+  background: var(--card-raised);
+  overflow: hidden;
+}
+
+.git-wb-diff-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: 32px;
+  padding: 0 var(--space-sm);
+  border-bottom: var(--stroke-line) solid var(--line);
+  background: var(--card);
+}
+
+.git-wb-diff-path {
+  font-size: var(--type-small);
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-wb-diff-counts {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--type-small);
+  font-weight: 600;
+  flex: none;
+}
+
+.git-wb-diff-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-segment);
+  background: var(--segment-track);
+}
+
+.git-wb-diff-tab {
+  height: 20px;
+  padding: 0 var(--space-sm);
+  border: 0;
+  border-radius: var(--radius-file-row);
+  background: transparent;
+  color: var(--ink2);
+  font-size: var(--type-badge);
+  font-weight: 600;
+  cursor: default;
+}
+
+.git-wb-diff-tab.active {
+  background: var(--segment-on);
+  color: var(--ink);
+}
+
+.git-wb-diff-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-xs);
+}
+
+.git-wb-hunk {
+  border-radius: var(--radius-file-row);
+  border: var(--stroke-line) solid var(--line);
+  background: var(--card);
+  overflow: hidden;
+}
+
+.git-wb-hunk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  min-height: 26px;
+  padding: 2px var(--space-sm);
+  background: var(--subtle);
+  border-bottom: var(--stroke-line) solid var(--line);
+}
+
+.git-wb-hunk-header {
+  font-size: var(--type-badge);
+  color: var(--ink2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-wb-hunk-btn {
+  height: 20px;
+  padding: 0 var(--space-xs);
+  font-size: var(--type-badge);
+  gap: 3px;
+}
+
+.git-wb-hunk-lines {
+  display: flex;
+  flex-direction: column;
+  font-size: var(--type-mono);
+  line-height: 1.45;
+  overflow-x: auto;
+}
+
+.git-wb-diff-line {
+  display: grid;
+  grid-template-columns: 38px 38px 14px minmax(0, 1fr);
+  align-items: baseline;
+  padding: 0 var(--space-xs);
+  white-space: pre;
+}
+
+.git-wb-diff-line.kind-add {
+  background: var(--done-soft);
+  color: var(--done-text);
+}
+
+.git-wb-diff-line.kind-del {
+  background: var(--err-soft);
+  color: var(--err-text);
+}
+
+.git-wb-diff-line.kind-context {
+  color: var(--ink);
+}
+
+.git-wb-gutter {
+  color: var(--ink3);
+  text-align: right;
+  padding-right: var(--space-xs);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.git-wb-op {
+  user-select: none;
+  color: var(--ink2);
+}
+
+.git-wb-code {
+  min-width: 0;
+}
+
+.git-wb-commit-box {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.git-wb-commit-textarea {
+  width: 100%;
+  min-height: 74px;
+  max-height: 150px;
+  padding: var(--space-xs) var(--space-sm);
+  resize: vertical;
+  line-height: 1.4;
+}
+
+.git-wb-empty {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  min-height: 100px;
+  padding: var(--space-md);
+  color: var(--ink2);
+  font-size: var(--type-row);
+  text-align: center;
+}
+
+.git-wb-footer-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+}

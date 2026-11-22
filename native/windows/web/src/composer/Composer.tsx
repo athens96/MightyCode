@@ -260,6 +260,26 @@ export function Composer({ session }: { session: RunSession }) {
       window.dispatchEvent(new CustomEvent('mighty:open-issues', { detail: { workspaceId: session.workspaceId, paneId, settingsOpen: false } }));
       return;
     }
+    if (choice.action === 'OpenGitWorkbench') {
+      change('');
+      window.dispatchEvent(new CustomEvent('mighty:open-git-workbench', { detail: { workspaceId: session.workspaceId, paneId } }));
+      return;
+    }
+    if (choice.action === 'OpenProjectTasks') {
+      change('');
+      window.dispatchEvent(new CustomEvent('mighty:open-tasks', { detail: { workspaceId: session.workspaceId, paneId } }));
+      return;
+    }
+    if (choice.action === 'OpenAgentContext') {
+      change('');
+      window.dispatchEvent(new CustomEvent('mighty:open-agent-context', { detail: { workspaceId: session.workspaceId, paneId } }));
+      return;
+    }
+    if (choice.action === 'OpenSharedMemory') {
+      change('');
+      window.dispatchEvent(new CustomEvent('mighty:open-shared-memory', { detail: { workspaceId: session.workspaceId, paneId } }));
+      return;
+    }
     try {
       const draft = await bridge.call<string>('slashAction', { paneId, action: choice.action, arg: choice.actionArg });
       const next = draft ?? '';

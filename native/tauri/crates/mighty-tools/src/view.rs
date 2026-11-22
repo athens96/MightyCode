@@ -21,7 +21,7 @@ use mighty_run::strings;
 use crate::setup::catalog::{SetupCatalog, SetupGroup, SetupItem, SetupPlatform, SetupRecipe};
 use crate::setup::probe::{SetupProbeState, SetupRowState, SetupRows};
 use crate::setup::screen::{Confirmation, SetupScreen, WINDOW_HEIGHT, WINDOW_WIDTH};
-use crate::toolkit::file::{ToolkitEntrySource, ToolkitFileEntry};
+use crate::toolkit::file::{ToolkitEntrySource, ToolkitFileEntry, ToolkitInstallSpec};
 use crate::toolkit::runner::{ToolkitRunItem, Verdict, presentation};
 
 pub mod components;
@@ -394,6 +394,15 @@ pub trait ToolkitActions: Send + Sync {
     fn remove(&self, id: &str);
 }
 
+/// Optional secondary summary line for toolkit entries that carry an HTTP endpoint (`McpHttp`).
+pub fn install_summary(install: &ToolkitInstallSpec) -> Option<String> {
+    match install {
+        ToolkitInstallSpec::McpHttp { url, bearer_token_env_var: None, .. } => Some(url.clone()),
+        ToolkitInstallSpec::McpHttp { url, bearer_token_env_var: Some(var), .. } => Some(format!("{url} (${var})")),
+        _ => None,
+    }
+}
+
 /// C# `FillToolkitList`'s row: the mark, the 13pt medium name and the bundled or approved capsule, the probe's word at the trailing
 /// edge; a user's tool its approve (while unapproved) and remove buttons.
 fn toolkit_row(ui: &Ui, row: &ToolkitRow, running: bool, actions: &Arc<dyn ToolkitActions>) -> El {
@@ -433,6 +442,9 @@ fn toolkit_row(ui: &Ui, row: &ToolkitRow, running: bool, actions: &Arc<dyn Toolk
         ..Grid::default()
     });
     let mut parts = vec![header];
+    if let Some(summary) = install_summary(&entry.install) {
+        parts.push(text(ui, summary, TextStyle::size(11.0).ink(Token::Ink2).mono()));
+    }
     if !bundled {
         let mut buttons = vec![];
         if !row.approved {

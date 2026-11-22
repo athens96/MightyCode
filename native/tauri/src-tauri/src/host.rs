@@ -797,6 +797,10 @@ impl Host {
             // before its status event comes through).
             ServiceEvent::SaveNow => self.saver.queue(self.current()),
             ServiceEvent::SaveSoon => self.saver.schedule(),
+            ServiceEvent::Changed => {
+                self.view().sync();
+                self.schedule();
+            }
             // A request starting needs nothing more here.
             ServiceEvent::RequestStarting(_) => {}
             // The resume list never hides a session the app's own pane started or resumed (history.rs).
@@ -1047,7 +1051,7 @@ impl Host {
 
     /// C# `RefreshGitInfo`: the active local workspace's git read once for its folder (again when `force`); a remote workspace's
     /// is its host's and is never read here.
-    fn refresh_git(self: &Arc<Self>, force: bool) {
+    pub(crate) fn refresh_git(self: &Arc<Self>, force: bool) {
         let (key, folder) = {
             let mut view = self.view();
             let Some(key) = active_git_key(&view.snapshot) else {

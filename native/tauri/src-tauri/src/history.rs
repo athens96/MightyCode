@@ -147,6 +147,22 @@ pub fn forget(host: &Host, pane_id: &str) {
     }
 }
 
+/// Drops in-memory `SessionHistoryState` and `retained` `Arc<RunSession>` entries for panes whose bodies were evicted to disk.
+pub fn evict_panes(host: &Host, ids: &[String]) {
+    if ids.is_empty() {
+        return;
+    }
+    let history = of(host);
+    let mut panes = lock(&history.panes);
+    for id in ids {
+        if let Some(entry) = panes.remove(id)
+            && let Some(load) = entry.load
+        {
+            load.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
 /// The older runs a pane holds now (for `mightyImages` and a block's size), without following a trim; shared, not copied.
 pub fn loaded(host: &Host, pane: &RunSession) -> Arc<Vec<MightyGraphRun>> {
     let history = of(host);
@@ -168,6 +184,18 @@ fn folder_of(view: &View, pane: &RunSession) -> Option<String> {
 /// `LoadOlderGraphHistory`: reads the next older chunk off the page's thread and puts its requests above the ones already shown. A load
 /// in flight, or a record whose start is on screen, does nothing; a record replaced under the cursor starts over from its end.
 pub fn load_older(host: &Arc<Host>, view: &mut View, pane_id: &str) {
+    // A pane whose body is still on disk is read off the view's lock (the caller holds it), then asked again.
+    if view.snapshot.session(pane_id).is_some_and(|s| s.body_on_disk) {
+        let (host, id) = (host.clone(), pane_id.to_string());
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::bodies::ensure(&host, &[id.as_str()]);
+            let mut view = host.view();
+            if view.snapshot.session(&id).is_some_and(|s| !s.body_on_disk) {
+                load_older(&host, &mut view, &id);
+            }
+        });
+        return;
+    }
     let Some(pane) = view.snapshot.session(pane_id).cloned() else { return };
     let Some(request) = MightyPane::load_older(&pane, folder_of(view, &pane).as_deref()) else { return };
     let history = of(host);

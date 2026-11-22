@@ -45,6 +45,7 @@ pub mod help_demo_cli;
 pub mod host;
 pub mod json;
 pub mod mcp;
+pub mod mighty_yaml;
 pub mod model;
 pub mod modes;
 pub mod pane_worktree;

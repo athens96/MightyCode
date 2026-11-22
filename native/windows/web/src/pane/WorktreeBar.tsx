@@ -45,7 +45,20 @@ export function WorktreeBar({ session }: { session: RunSession }) {
       {model.behind && <span className="worktree-bar-count tone-text-wait" title={model.behind.help}>{model.behind.text}</span>}
       {model.changed && <button type="button" className="worktree-bar-count link" title={model.changed.help} onClick={() => act('changes')}>{model.changed.text}</button>}
       <button type="button" className="worktree-bar-port link" title={model.port.help} onClick={() => act('port')}>{model.port.text}</button>
-      {model.setup && <span className={'worktree-bar-setup tone-text-' + model.setup.tone}>{model.setup.text}</span>}
+      {model.setup && (
+        model.setup.tone === 'err' && import.meta.env.MODE === 'tauri' ? (
+          <button
+            type="button"
+            className={'worktree-bar-setup link tone-text-' + model.setup.tone}
+            title={t('projectTasks.askAgentFix')}
+            onClick={() => window.dispatchEvent(new CustomEvent('mighty:open-tasks', { detail: { workspaceId: session.workspaceId, paneId: session.id } }))}
+          >
+            {model.setup.text}
+          </button>
+        ) : (
+          <span className={'worktree-bar-setup tone-text-' + model.setup.tone}>{model.setup.text}</span>
+        )
+      )}
       <span className="spacer" />
       {model.resolve && <button type="button" className="btn small" title={model.resolve.help} disabled={busy} onClick={() => act('resolve')} data-testid="pane-worktree-resolve">{model.resolve.label}</button>}
       <button type="button" className="btn small primary" title={model.primary.help} disabled={busy} onClick={() => act(model.primary.action)} data-testid="pane-worktree-merge">{model.primary.label}</button>

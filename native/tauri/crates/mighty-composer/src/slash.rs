@@ -25,6 +25,10 @@ pub enum SlashCommandAction {
     ManagePrompts,
     InsertPrompt,
     OpenIssues,
+    OpenGitWorkbench,
+    OpenProjectTasks,
+    OpenAgentContext,
+    OpenSharedMemory,
 }
 
 impl SlashCommandAction {
@@ -42,6 +46,10 @@ impl SlashCommandAction {
             SlashCommandAction::ManagePrompts => "ManagePrompts",
             SlashCommandAction::InsertPrompt => "InsertPrompt",
             SlashCommandAction::OpenIssues => "OpenIssues",
+            SlashCommandAction::OpenGitWorkbench => "OpenGitWorkbench",
+            SlashCommandAction::OpenProjectTasks => "OpenProjectTasks",
+            SlashCommandAction::OpenAgentContext => "OpenAgentContext",
+            SlashCommandAction::OpenSharedMemory => "OpenSharedMemory",
         }
     }
 
@@ -59,6 +67,10 @@ impl SlashCommandAction {
             SlashCommandAction::ManagePrompts,
             SlashCommandAction::InsertPrompt,
             SlashCommandAction::OpenIssues,
+            SlashCommandAction::OpenGitWorkbench,
+            SlashCommandAction::OpenProjectTasks,
+            SlashCommandAction::OpenAgentContext,
+            SlashCommandAction::OpenSharedMemory,
         ]
         .into_iter()
         .find(|a| a.name() == value)

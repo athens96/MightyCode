@@ -121,6 +121,13 @@ impl UsageLedger {
         self.last.remove(pane_id);
     }
 
+    /// Removes per-pane deduplication baselines in `self.last` for panes no longer present in `live_session_ids`.
+    pub fn prune_closed_sessions(&mut self, live_session_ids: &std::collections::HashSet<String>) -> usize {
+        let before = self.last.len();
+        self.last.retain(|pane_id, _| live_session_ids.contains(pane_id));
+        before - self.last.len()
+    }
+
     /// Inclusive `[today - (days - 1) ..= today]` filter.
     pub fn recent(&self, days: i64, today: NaiveDate) -> Vec<UsageRecord> {
         let days = days.max(1);

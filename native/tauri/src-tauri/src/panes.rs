@@ -117,6 +117,26 @@ pub fn requests(host: &Host, id: &str) -> Vec<ToolPermissionRequest> {
     host.runs().map(|r| r.service.pending_permissions(id).into_iter().filter(crate::styles::shows).collect()).unwrap_or_default()
 }
 
+/// Queued composer submissions waiting on `id` (used to pin panes with pending queued inputs from idle body eviction).
+pub fn queued(host: &Host, id: &str) -> Vec<mighty_composer::queue::QueuedComposerInput> {
+    host.view().panes.get(id).map(|ui| ui.queue.items().to_vec()).unwrap_or_default()
+}
+
+/// Clears cached `PaneUi.seen` references for evicted inactive-workspace panes so `PaneUi` releases its hot `Arc<RunSession>`.
+pub fn prune_inactive_seen(host: &Host, ids: &[String]) {
+    if ids.is_empty() {
+        return;
+    }
+    let mut view = host.view();
+    let active_ws = view.snapshot.active_workspace_id.clone();
+    for id in ids {
+        let inactive = view.snapshot.session(id).is_none_or(|s| active_ws.as_deref() != Some(s.workspace_id()));
+        if inactive && let Some(ui) = view.panes.get_mut(id) {
+            ui.seen = None;
+        }
+    }
+}
+
 /// What the window knows of the pane that the composer reads (C# `owner.*` members); the later stages' stay at rest. The update holds are W6-D's (updates.rs: `BackgroundUpdateHolds`, `ManualMutationBlockReason`, `ManualUpdateReason`), the missing
 /// CLI's install W6-B's (setup.rs: `SetupItemForMissingCli`), each read with the state locked.
 fn window_rules(host: &Host, snapshot: &AppSnapshot, pane: &RunSession, pending: usize) -> WindowRules {
@@ -291,8 +311,12 @@ pub fn flush(host: &Host) {
     if !view.ready {
         return;
     }
+    let active_ws = view.snapshot.active_workspace_id.clone();
     let any_due = view.panes.iter().any(|(id, ui)| {
         let Some(session) = view.snapshot.session(id) else { return true };
+        if session.body_on_disk && active_ws.as_deref() != Some(session.workspace_id()) {
+            return ui.seen.is_some();
+        }
         ui.dirty
             || ui.ticks_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(1))
             || !ui.seen.as_ref().is_some_and(|seen| Arc::ptr_eq(seen, session))
@@ -309,6 +333,10 @@ pub fn flush(host: &Host) {
             continue;
         };
         let Some(ui) = view.panes.get_mut(&id) else { continue };
+        if session.body_on_disk && active_ws.as_deref() != Some(session.workspace_id()) {
+            ui.seen = None;
+            continue;
+        }
         let ticked = ui.ticks_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(1));
         if !ui.dirty && !ticked && ui.seen.as_ref().is_some_and(|seen| Arc::ptr_eq(seen, &session)) {
             continue;

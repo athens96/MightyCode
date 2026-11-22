@@ -95,6 +95,8 @@ pub type PiSessions = Arc<dyn Fn(&str, &str, &BTreeMap<String, String>) -> bool 
 /// of `HermesSessions.StateDatabase(environment)`): given the run's CLI environment and the session id, its message count and whether it
 /// started with `--yolo`, each None when it cannot be read (a pane that asks then starts a new session: `agents::hermes_resume`).
 pub type HermesSessionReader = Arc<dyn Fn(&BTreeMap<String, String>, &str) -> (Option<i32>, Option<bool>) + Send + Sync>;
+/// Shared memory lookup (`MC-13`) returning formatted `<shared-memory>` content for a workspace when configured.
+pub type WorkspaceMemoryReader = Arc<dyn Fn(&Workspace) -> Option<String> + Send + Sync>;
 
 /// `RunManager`'s constructor arguments and settable properties.
 #[derive(Clone)]
@@ -128,6 +130,8 @@ pub struct RunManagerOptions {
     /// system folder, `-NoProfile -NonInteractive -Command <text>`, with `NoDefaultCurrentDirectoryInExePath=1` (C#
     /// `RemoteCommandShell.Launch`); None (and off Windows) the shell as for a local pane.
     pub powershell_commands: Option<String>,
+    /// Optional shared memory lookup (`MC-13`) resolved per workspace when `StartRunRequest::memory_context` was not pre-populated.
+    pub memory_for_workspace: Option<WorkspaceMemoryReader>,
 }
 
 impl RunManagerOptions {
@@ -148,6 +152,7 @@ impl RunManagerOptions {
             antigravity_home: None,
             hermes_session: None,
             powershell_commands: None,
+            memory_for_workspace: None,
         }
     }
 }
@@ -920,14 +925,17 @@ impl Exec {
                 )
             })
             .collect();
-        // Hermes's clarify note and the checklist switch's words follow the request in the prompt alone (the transcript keeps the request).
-        let notes: Vec<&str> = [
-            (hermes && questions.asks).then_some(agents::HERMES_PROMPT_NOTE),
-            crate::checklist::instruction(&request.provider).filter(|_| crate::checklist::wanted(request)),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+        // Hermes's clarify note, checklist words, and shared memory follow the request in the prompt alone (the transcript keeps the request).
+        let mut notes: Vec<String> = Vec::new();
+        if hermes && questions.asks {
+            notes.push(agents::HERMES_PROMPT_NOTE.into());
+        }
+        if let Some(instr) = crate::checklist::instruction(&request.provider).filter(|_| crate::checklist::wanted(request)) {
+            notes.push(instr.into());
+        }
+        if let Some(mem) = crate::model::memory_block(request.memory_context.as_deref()) {
+            notes.push(mem);
+        }
         let note = (!notes.is_empty()).then(|| notes.join("\n\n"));
         let prompt = acp::prompt_text(&request.input, &references, note.as_deref());
         let images = files
@@ -1679,6 +1687,12 @@ impl Exec {
         if workspace.remote.is_some() {
             return Err(Failure::Error(strings::get("run.error.approvedWorkspaceOnly")));
         }
+        if request.kind == "claude"
+            && request.memory_context.is_none()
+            && let Some(lookup) = &inner.options.memory_for_workspace
+        {
+            request.memory_context = lookup(&workspace);
+        }
         if let Some(folder) = &request.working_folder {
             if !Path::new(folder).is_dir() {
                 return Err(Failure::Error(strings::get("run.blocked.worktreeMissing")));
@@ -1828,31 +1842,48 @@ impl Exec {
                 }
                 *mod_connection = Some(connection);
             }
+            let pi_mem_block = if provider == "pi" { crate::model::memory_block(request.memory_context.as_deref()) } else { None };
             if let Some(files) = request.attachment_list() {
                 let files = files.to_vec();
                 let attachments = tokio::task::spawn_blocking(move || StagedAttachments::create(&files))
                     .await
                     .map_err(|e| Failure::Error(e.to_string()))??;
                 // Kept before the stop is looked at, so a stop right after the staging still removes the copies.
-                input = attachments.input_for(&request);
+                if let Some(mem) = &pi_mem_block {
+                    let mut pi_req = request.clone();
+                    pi_req.input = format!("{}\n\n{mem}", request.input);
+                    input = attachments.input_for(&pi_req);
+                } else {
+                    input = attachments.input_for(&request);
+                }
                 *staged = Some(attachments);
                 self.cancelled()?;
             }
             if provider == "pi" && staged.is_none() {
+                if let Some(mem) = &pi_mem_block {
+                    input = format!("{input}\n\n{mem}");
+                }
                 input = ProviderInput::pi_startup(&input, &[]);
             }
             // pi exits on a session it cannot find (one that never got an answer is not written): such a pane starts a new session.
             let mut launch = request.clone();
-            // The checklist switch's words: agy's after its stdin line; Codex's as its developer instructions (providers::arguments),
-            // or after the prompt when the user's own Codex config sets those, which `-c` would replace.
-            if provider == "gemini"
-                || provider == "codex" && crate::checklist::wanted(&request) && {
+            let codex_user_dev_instructions = provider == "codex"
+                && (crate::checklist::wanted(&request) || crate::model::memory_block(request.memory_context.as_deref()).is_some())
+                && {
                     let home = crate::antigravity::permissions::user_profile();
                     crate::checklist::codex_sets_developer_instructions(&environment, home.as_deref(), Path::new(&workspace_path))
-                }
-            {
+                };
+            // The checklist switch's words: agy's after its stdin line; Codex's as its developer instructions (providers::arguments),
+            // or after the prompt when the user's own Codex config sets those, which `-c` would replace.
+            if provider == "gemini" || codex_user_dev_instructions {
                 input = crate::checklist::with_instruction(&input, &request);
                 launch.checklist = false;
+            }
+            if (provider == "gemini" || codex_user_dev_instructions)
+                && let Some(mem) = crate::model::memory_block(request.memory_context.as_deref())
+            {
+                input = format!("{input}\n\n{mem}");
+                launch.memory_context = None;
             }
             if provider == "pi"
                 && let (Some(resume), Some(sessions)) = (&request.resume_id, &inner.options.pi_sessions)

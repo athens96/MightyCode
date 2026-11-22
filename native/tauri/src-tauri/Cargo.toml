@@ -49,10 +49,12 @@ mighty-styles.workspace = true
 indexmap.workspace = true
 base64 = "0.22"
 sha2.workspace = true
+regex.workspace = true
 percent-encoding.workspace = true
 uuid.workspace = true
 url = "2"
 toml = "0.9"
+toml_edit = "0.23"
 # pickAttachments: the OS's file picker (C# FileOpenPicker), Rust-side only (no page permission).
 tauri-plugin-dialog = "2"
 serde.workspace = true

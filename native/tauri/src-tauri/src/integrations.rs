@@ -751,6 +751,10 @@ pub fn spawn_stage_sync(
 
 /// Hooked from `pane_worktree.rs` when a worktree's PR push succeeds.
 pub fn on_worktree_pr(host: &Arc<Host>, pane_id: &str, pane: &PaneWorktree, compare_url: Option<&str>) {
+    // Only a pane that works on a worktree branch of its own moves its task: a record without one is no pull request of that task.
+    if pane.branch.as_deref().is_none_or(str::is_empty) {
+        return;
+    }
     let (ws_id, linked) = {
         let view = host.view();
         let session = view.snapshot.session(pane_id);

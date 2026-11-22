@@ -122,6 +122,10 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
     { label: t('workMap.open'), action: () => call('openWorkMap', { workspaceId: workspace.id }) },
     // 대화 검색 is the Rust host's (conversation_search.rs).
     ...(import.meta.env.MODE === 'tauri' ? [
+      { label: t('git.workbench.open'), action: () => window.dispatchEvent(new CustomEvent('mighty:open-git-workbench', { detail: { workspaceId: workspace.id, paneId: null } })) },
+      { label: t('projectTasks.open'), action: () => window.dispatchEvent(new CustomEvent('mighty:open-tasks', { detail: { workspaceId: workspace.id, paneId: null } })) },
+      { label: t('agentContext.open'), action: () => window.dispatchEvent(new CustomEvent('mighty:open-agent-context', { detail: { workspaceId: workspace.id, paneId: null } })) },
+      { label: t('sharedMemory.open'), action: () => window.dispatchEvent(new CustomEvent('mighty:open-shared-memory', { detail: { workspaceId: workspace.id, paneId: null } })) },
       { label: t('conversationSearch.open'), action: () => call('openConversationSearch', { workspaceId: workspace.id }) },
       { label: t('integrations.menu.browse'), action: () => window.dispatchEvent(new CustomEvent('mighty:open-issues', { detail: { workspaceId: workspace.id, paneId: null, settingsOpen: false } })) },
       { label: t('integrations.menu.settings'), action: () => window.dispatchEvent(new CustomEvent('mighty:open-issues', { detail: { workspaceId: workspace.id, paneId: null, settingsOpen: true } })) },
@@ -136,6 +140,10 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
     { label: t('paneWorktree.menu.setup'), action: () => call('workspaceWorktree', { workspaceId: workspace.id, action: 'setup' }) },
     { label: t('paneWorktree.menu.copy'), action: () => call('workspaceWorktree', { workspaceId: workspace.id, action: 'copy' }) },
     { label: t('paneWorktree.menu.list'), action: () => call('workspaceWorktree', { workspaceId: workspace.id, action: 'list' }) },
+  );
+  else if (import.meta.env.MODE === 'tauri') items.push(
+    ...(items.length > 0 ? [{ separator: true }] : []),
+    { label: t('sharedMemory.open'), action: () => window.dispatchEvent(new CustomEvent('mighty:open-shared-memory', { detail: { workspaceId: workspace.id, paneId: null } })) },
   );
   const disclosure = t(workspace.expanded ? 'workspace.collapseAccessibility' : 'workspace.expandAccessibility', { workspace: workspace.name });
   return (

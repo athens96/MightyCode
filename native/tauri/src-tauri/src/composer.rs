@@ -822,10 +822,14 @@ fn slash_action(host: &Arc<Host>, view: &mut View, id: &str, action: SlashComman
             let (host, provider) = (host.clone(), session(view, id)?.provider().to_string());
             tauri::async_runtime::spawn(async move { crate::plugins::open(&host, &provider).await });
         }
-        // `ShowContext` / `ManagePrompts` / `OpenIssues` / `InsertPrompt`: handled by the page or async `slashAction` RPC.
+        // `ShowContext` / `ManagePrompts` / `OpenIssues` / `OpenGitWorkbench` / `OpenProjectTasks` / `InsertPrompt`: handled by the page or async `slashAction` RPC.
         SlashCommandAction::ShowUsage
         | SlashCommandAction::ManagePrompts
         | SlashCommandAction::OpenIssues
+        | SlashCommandAction::OpenGitWorkbench
+        | SlashCommandAction::OpenProjectTasks
+        | SlashCommandAction::OpenAgentContext
+        | SlashCommandAction::OpenSharedMemory
         | SlashCommandAction::InsertPrompt => return Ok(false),
     }
     Ok(true)
@@ -1156,6 +1160,48 @@ pub fn register(methods: &mut Registry) {
                 );
                 issues_cmd.action = Some(SlashCommandAction::OpenIssues);
                 cat.builtins.push(menus::SlashRow::of(&issues_cmd, &host.locale));
+
+                if !i.remote_session {
+                    let git_desc = host.locale.get("slash.builtin.git");
+                    let mut git_cmd = mighty_composer::slash::SlashCommand::new(
+                        "git",
+                        &git_desc,
+                        &app_source,
+                        mighty_composer::slash::SlashCommandOrigin::App,
+                    );
+                    git_cmd.action = Some(SlashCommandAction::OpenGitWorkbench);
+                    cat.builtins.push(menus::SlashRow::of(&git_cmd, &host.locale));
+
+                    let tasks_desc = host.locale.get("slash.builtin.tasks");
+                    let mut tasks_cmd = mighty_composer::slash::SlashCommand::new(
+                        "tasks",
+                        &tasks_desc,
+                        &app_source,
+                        mighty_composer::slash::SlashCommandOrigin::App,
+                    );
+                    tasks_cmd.action = Some(SlashCommandAction::OpenProjectTasks);
+                    cat.builtins.push(menus::SlashRow::of(&tasks_cmd, &host.locale));
+
+                    let context_desc = host.locale.get("slash.builtin.context");
+                    let mut context_cmd = mighty_composer::slash::SlashCommand::new(
+                        "context",
+                        &context_desc,
+                        &app_source,
+                        mighty_composer::slash::SlashCommandOrigin::App,
+                    );
+                    context_cmd.action = Some(SlashCommandAction::OpenAgentContext);
+                    cat.builtins.push(menus::SlashRow::of(&context_cmd, &host.locale));
+                }
+
+                let memory_desc = host.locale.get("slash.builtin.memory");
+                let mut memory_cmd = mighty_composer::slash::SlashCommand::new(
+                    "memory",
+                    &memory_desc,
+                    &app_source,
+                    mighty_composer::slash::SlashCommandOrigin::App,
+                );
+                memory_cmd.action = Some(SlashCommandAction::OpenSharedMemory);
+                cat.builtins.push(menus::SlashRow::of(&memory_cmd, &host.locale));
             }
             serde_json::to_value(cat).unwrap_or(Value::Null)
         }))

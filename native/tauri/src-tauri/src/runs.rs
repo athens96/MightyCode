@@ -276,9 +276,11 @@ impl Runs {
         // The CLIs' own records are read, never written: a Codex run's session files, pi's session list.
         let home = history::user_home();
         let pi_home = home.clone();
+        let memory_host = Arc::downgrade(host);
         // Temporary Antigravity rules a crash left in agy's settings go first (C# `InitializeAsync`, M/AppStore.swift:433-434): the run
         // service takes them out as it starts and no agy run starts before (C2).
         let configure: Configure = Box::new(move |options| {
+            let lookup_host = memory_host.clone();
             options.graph =
                 Some(Arc::new(TrackerFactory { codex_sessions: Some(codex_sessions::watcher_factory(home)), ..TrackerFactory::default() }));
             options.pi_sessions = Some(Arc::new(move |id, workspace, environment| {
@@ -289,6 +291,10 @@ impl Runs {
             options.file_originals = originals;
             options.antigravity_rules = Some(antigravity);
             options.hermes_session = Some(Arc::new(hermes_session));
+            options.memory_for_workspace = Some(Arc::new(move |workspace| {
+                let host = lookup_host.upgrade()?;
+                crate::shared_memory::context_for_pane(&host, Some(workspace))
+            }));
         });
         let snapshot = host.view().snapshot.clone();
         let (service, mut events) = RunService::new(
@@ -307,6 +313,7 @@ impl Runs {
             },
         );
         service.set_body_loader(crate::bodies::loader(host.store_handle()));
+        service.set_body_evictor(crate::bodies::evictor(host.store_handle()));
         let runs = Arc::new(Runs { service: Arc::new(service), catalog, images, runtime: Mutex::new(HashMap::new()) });
         host.attach(runs.clone());
         let pump = host.clone();

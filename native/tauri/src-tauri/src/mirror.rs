@@ -58,6 +58,9 @@ impl MirrorStage for HostStage {
         }
         host.view().sync();
         host.schedule();
+        if host.writes() && host.smoke.is_none() {
+            crate::shared_memory::cache_mirrored_snapshot(&host, desk());
+        }
         true
     }
 

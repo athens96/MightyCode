@@ -172,6 +172,11 @@ pub fn app_if_made() -> Option<Arc<RemoteApp>> {
     existing()
 }
 
+/// Returns the secret vault shared by remote connections (in-memory in read-only/smoke runs, OS vault with `--allow-state-write`).
+pub fn secret_vault(host: &Arc<Host>) -> Arc<dyn SecretVault> {
+    app(host).vault.clone()
+}
+
 impl RemoteApp {
     /// `TailscaleAddresses.Current()`: this PC's Tailscale addresses now (empty while Tailscale is off), Err when no adapter could be
     /// read; loopback in a smoke.
@@ -307,6 +312,7 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
             host.panes_changed();
             host.shell_dirty();
             crate::native::touch(&host, crate::settings::SURFACE);
+            crate::shared_memory::on_connections_changed(&host);
         }
     }));
     let reading = app.client.clone();
@@ -379,6 +385,10 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
     };
     let _ = app.host.set(RemoteHost::new(options));
     restore_sharing(host);
+    if let Some(sharing) = app.host() {
+        sharing.set_memory(Some(crate::shared_memory::memory_host(host)));
+        sharing.set_memory_for_workspace(Some(crate::shared_memory::remote_workspace_context_hook(host)));
+    }
 }
 
 /// Where this PC's sharing choice is kept between launches: whether it shared, what and on which port, and whether paired computers

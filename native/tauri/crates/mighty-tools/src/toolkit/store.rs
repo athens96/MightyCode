@@ -350,6 +350,13 @@ fn install_json(entry: &ToolkitFileEntry) -> String {
             let args = format!("[{}]", args.iter().map(|arg| escape(arg)).collect::<Vec<_>>().join(","));
             format!("{{\"args\":{args},\"executable\":{},\"kind\":\"mcp\",\"name\":{}}}", escape(executable), escape(name))
         }
+        // Sorted keys: (bearerTokenEnvVar,) kind, name, url.
+        ToolkitInstallSpec::McpHttp { name, url, bearer_token_env_var } => match bearer_token_env_var {
+            None => format!("{{\"kind\":\"mcp\",\"name\":{},\"url\":{}}}", escape(name), escape(url)),
+            Some(var) => {
+                format!("{{\"bearerTokenEnvVar\":{},\"kind\":\"mcp\",\"name\":{},\"url\":{}}}", escape(var), escape(name), escape(url))
+            }
+        },
         // Sorted keys: kind, url.
         ToolkitInstallSpec::Skill { url } => format!("{{\"kind\":\"skill\",\"url\":{}}}", escape(url)),
         // Sorted keys: executable, kind, manager, name (winget has an executable).

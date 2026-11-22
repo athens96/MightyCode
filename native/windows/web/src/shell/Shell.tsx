@@ -20,6 +20,10 @@ const LazyReviewPanel = lazy(() => import('../review/ReviewPanel').then((m) => (
 const LazyPictureViewer = lazy(() => import('../pictures/PictureViewer').then((m) => ({ default: m.PictureViewer })));
 const LazyUsageReportPanel = lazy(() => import('./UsageReportPanel').then((m) => ({ default: m.UsageReportPanel })));
 const LazyIssuePickerPanel = lazy(() => import('../integrations/IssuePickerPanel').then((m) => ({ default: m.IssuePickerPanel })));
+const LazyGitWorkbenchPanel = lazy(() => import('../git/GitWorkbenchPanel').then((m) => ({ default: m.GitWorkbenchPanel })));
+const LazyTaskRunnerPanel = lazy(() => import('../tasks/TaskRunnerPanel').then((m) => ({ default: m.TaskRunnerPanel })));
+const LazyAgentContextPanel = lazy(() => import('../context/AgentContextPanel').then((m) => ({ default: m.AgentContextPanel })));
+const LazySharedMemoryPanel = lazy(() => import('../memory/SharedMemoryPanel').then((m) => ({ default: m.SharedMemoryPanel })));
 
 function Grip({ width, setLive }: { width: number; setLive: (width: number | null) => void }) {
   const { t, bridge } = useServices();
@@ -129,6 +133,24 @@ export function Shell() {
     paneId: null,
     settingsOpen: false,
   });
+  const [gitWorkbenchState, setGitWorkbenchState] = useState<{ open: boolean; workspaceId: string | null; paneId: string | null }>({
+    open: false,
+    workspaceId: null,
+    paneId: null,
+  });
+  const [taskRunnerState, setTaskRunnerState] = useState<{ open: boolean; workspaceId: string | null; paneId: string | null }>({
+    open: false,
+    workspaceId: null,
+    paneId: null,
+  });
+  const [agentContextState, setAgentContextState] = useState<{ open: boolean; workspaceId: string | null }>({
+    open: false,
+    workspaceId: null,
+  });
+  const [sharedMemoryState, setSharedMemoryState] = useState<{ open: boolean; workspaceId: string | null }>({
+    open: false,
+    workspaceId: null,
+  });
   const activeWorkspaceId = useStoreSelector((state) => state.snapshot?.activeWorkspaceId ?? null);
   const activePaneId = useStoreSelector((state) => {
     const id = state.snapshot?.activeSessionId;
@@ -147,11 +169,49 @@ export function Shell() {
         settingsOpen: Boolean(detail?.settingsOpen),
       });
     };
+    const onOpenGit = (event: Event) => {
+      const detail = (event as CustomEvent<{ workspaceId?: string | null; paneId?: string | null }>).detail;
+      setGitWorkbenchState({
+        open: true,
+        workspaceId: detail?.workspaceId ?? activeWorkspaceId,
+        paneId: detail?.paneId ?? activePaneId,
+      });
+    };
+    const onOpenTasks = (event: Event) => {
+      const detail = (event as CustomEvent<{ workspaceId?: string | null; paneId?: string | null }>).detail;
+      setTaskRunnerState({
+        open: true,
+        workspaceId: detail?.workspaceId ?? activeWorkspaceId,
+        paneId: detail?.paneId ?? activePaneId,
+      });
+    };
+    const onOpenContext = (event: Event) => {
+      const detail = (event as CustomEvent<{ workspaceId?: string | null }>).detail;
+      setAgentContextState({
+        open: true,
+        workspaceId: detail?.workspaceId ?? activeWorkspaceId,
+      });
+    };
+    const onOpenMemory = (event: Event) => {
+      const detail = (event as CustomEvent<{ workspaceId?: string | null }>).detail;
+      setSharedMemoryState({
+        open: true,
+        workspaceId: detail?.workspaceId ?? activeWorkspaceId,
+      });
+    };
     const onOpenReport = () => setUsageReportOpen(true);
     window.addEventListener('mighty:open-issues', onOpenIssues);
+    window.addEventListener('mighty:open-git-workbench', onOpenGit);
+    window.addEventListener('mighty:open-tasks', onOpenTasks);
+    window.addEventListener('mighty:open-agent-context', onOpenContext);
+    window.addEventListener('mighty:open-shared-memory', onOpenMemory);
     window.addEventListener('mighty:open-usage-report', onOpenReport);
     return () => {
       window.removeEventListener('mighty:open-issues', onOpenIssues);
+      window.removeEventListener('mighty:open-git-workbench', onOpenGit);
+      window.removeEventListener('mighty:open-tasks', onOpenTasks);
+      window.removeEventListener('mighty:open-agent-context', onOpenContext);
+      window.removeEventListener('mighty:open-shared-memory', onOpenMemory);
       window.removeEventListener('mighty:open-usage-report', onOpenReport);
     };
   }, [activeWorkspaceId, activePaneId]);
@@ -165,9 +225,10 @@ export function Shell() {
     if (!selected) return;
     document.querySelector('.sidebar [data-session-id="' + escapeCssAttr(selected.paneId) + '"]')?.scrollIntoView({ block: 'nearest' });
   }, [selected]);
-  useShortcuts(blocked || usageReportOpen || issuePickerState.open);
+  const modalPanelOpen = usageReportOpen || issuePickerState.open || gitWorkbenchState.open || taskRunnerState.open || agentContextState.open || sharedMemoryState.open;
+  useShortcuts(blocked || modalPanelOpen);
   // The Mac's menu bar (D9): Workspace › Show usage opens the cumulative Usage Report dashboard.
-  useMenu(blocked || usageReportOpen || issuePickerState.open, openUsageReportFromMenu);
+  useMenu(blocked || modalPanelOpen, openUsageReportFromMenu);
   if (!hasSnapshot || !shell) return <div className="shell-loading" data-testid="loading">{t('launch.preparing')}</div>;
   const width = live ?? savedWidth;
   const header = shell.dashboard ? undefined : shell.header;
@@ -205,6 +266,44 @@ export function Shell() {
               const targetPane = issuePickerState.paneId ?? activePaneId;
               if (targetPane) store.dispatch({ kind: 'fill', paneId: targetPane, text, append: true });
             }}
+          />
+        </Suspense>
+      )}
+      {gitWorkbenchState.open && (
+        <Suspense fallback={null}>
+          <LazyGitWorkbenchPanel
+            open={gitWorkbenchState.open}
+            workspaceId={gitWorkbenchState.workspaceId ?? activeWorkspaceId}
+            paneId={gitWorkbenchState.paneId ?? activePaneId}
+            onClose={() => setGitWorkbenchState((prev) => ({ ...prev, open: false }))}
+          />
+        </Suspense>
+      )}
+      {taskRunnerState.open && (
+        <Suspense fallback={null}>
+          <LazyTaskRunnerPanel
+            open={taskRunnerState.open}
+            workspaceId={taskRunnerState.workspaceId ?? activeWorkspaceId}
+            paneId={taskRunnerState.paneId ?? activePaneId}
+            onClose={() => setTaskRunnerState((prev) => ({ ...prev, open: false }))}
+          />
+        </Suspense>
+      )}
+      {agentContextState.open && (
+        <Suspense fallback={null}>
+          <LazyAgentContextPanel
+            open={agentContextState.open}
+            workspaceId={agentContextState.workspaceId ?? activeWorkspaceId}
+            onClose={() => setAgentContextState((prev) => ({ ...prev, open: false }))}
+          />
+        </Suspense>
+      )}
+      {sharedMemoryState.open && (
+        <Suspense fallback={null}>
+          <LazySharedMemoryPanel
+            open={sharedMemoryState.open}
+            workspaceId={sharedMemoryState.workspaceId ?? activeWorkspaceId}
+            onClose={() => setSharedMemoryState((prev) => ({ ...prev, open: false }))}
           />
         </Suspense>
       )}

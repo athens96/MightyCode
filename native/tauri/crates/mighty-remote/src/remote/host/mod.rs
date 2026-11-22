@@ -180,6 +180,10 @@ pub(crate) struct Gate {
     pub reported_rules: HashMap<String, (HashSet<String>, Duration)>,
     /// The app's panes for the remote mirror (W9-J, `remote::mirror::host`); None answers its routes 404.
     pub mirror: Option<Arc<dyn crate::remote::mirror::host::MirrorHost>>,
+    /// Incremental shared memory sync service (`MC-13`, `remote::memory::MemoryHost`); None answers `/v2/memory/*` 404.
+    pub memory: Option<Arc<dyn crate::remote::memory::MemoryHost>>,
+    /// Resolves formatted shared memory context for a shared workspace id when a remote client starts a run (`POST /v2/runs`).
+    pub memory_for_workspace: Option<crate::remote::memory::WorkspaceMemoryLookup>,
     /// Computers paired through the relay are served while sharing is on (the user's switch; kept across a stop and a start).
     pub relay: bool,
 }
@@ -260,6 +264,8 @@ impl RemoteHost {
                 jobs: HashMap::new(),
                 reported_rules: HashMap::new(),
                 mirror: None,
+                memory: None,
+                memory_for_workspace: None,
                 relay: false,
             }),
             announcing: Mutex::new(()),
@@ -428,7 +434,7 @@ impl RemoteHost {
             return Err(StartFailure::Message(strings::host_no_tailscale()));
         }
         let key = new_key().ok_or_else(|| StartFailure::Message(get("remote.host.error.keyFailed")))?;
-        let created = (options.create_runner)(self.sinks(revision));
+        let created = crate::remote::memory::wrap_runner((options.create_runner)(self.sinks(revision)), self.clone());
         let current = {
             let mut gate = lock(&self.0.gate);
             let current = gate.generation == revision && !gate.closed;
@@ -742,6 +748,10 @@ impl RemoteHost {
         // The remote mirror's routes (W9-J, `remote::mirror::host`).
         if route[0] == "mirror" {
             return self.serve_mirror(request, &route[1..], query, revision, relay).await;
+        }
+        // Incremental shared memory sync routes (`MC-13`, `remote::memory`).
+        if route.first() == Some(&"memory") {
+            return self.serve_memory(request, &route[1..], query, revision);
         }
         if relay {
             return Err(HostFailure::new(404, get("remote.relay.error.runsNotCarried")));

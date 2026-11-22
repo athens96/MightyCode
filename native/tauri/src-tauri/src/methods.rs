@@ -223,6 +223,11 @@ pub fn registry() -> Registry {
     crate::saved_prompts::register(&mut methods);
     crate::usage_report::register(&mut methods);
     crate::integrations::register(&mut methods);
+    crate::git_workbench::register(&mut methods);
+    crate::repo_tasks::register(&mut methods);
+    crate::retention_gc::register(&mut methods);
+    crate::agent_context::register(&mut methods);
+    crate::shared_memory::register(&mut methods);
     // W6's other page methods, each the C# handler's guard around its part's seam (setup.rs: W6-B; accounts.rs, usage.rs: W6-C;
     // plugins.rs: W6-D; composer.rs's session info: W6-A).
     methods.add("openSetup", |host: Arc<Host>, _| async move {

@@ -138,16 +138,48 @@ pub fn saved_pane_worktree_mode(mode: Option<&str>) -> Option<String> {
 
 /// `PaneWorktreeSetup.NormalizedCommand`: one line, at most 1,000 UTF-16 units; empty is none.
 pub fn worktree_setup_command(raw: Option<&str>) -> Option<String> {
+    one_line_command(raw, 1000)
+}
+
+/// What a pane's record shows of the setup that runs for it: `.mighty.yaml`'s (up to 2,000 characters) and the workspace's (up to
+/// 1,000) together, so what is shown is never less than what runs.
+const PANE_SETUP_DISPLAY_UNITS: usize = 4200;
+
+fn one_line_command(raw: Option<&str>, units: usize) -> Option<String> {
     let line = raw?.replace(['\r', '\n'], " ");
     let line = line.trim();
     if line.is_empty() || line.contains('\0') {
         return None;
     }
-    Some(if wire::utf16_len(line) > 1000 { utf16_prefix(line, 1000) } else { line.to_string() })
+    Some(if wire::utf16_len(line) > units { utf16_prefix(line, units) } else { line.to_string() })
 }
 
 /// `PaneWorktreeCopy.MaximumEntries`.
 pub const WORKTREE_COPY_MAXIMUM_ENTRIES: usize = 32;
+
+/// Characters a copy or share path never holds: a path from a cloned repo's `.mighty.yaml` must not be able to reach a shell on any
+/// platform (the Windows junction was once made with `cmd /c mklink`), nor expand in a pasted command.
+const SHELL_METACHARACTERS: &str = "&|^<>%!\"";
+
+/// A format character that changes how text reads without showing (bidi controls, zero-width spaces, the soft hyphen, the BOM): a
+/// command or label with one is not what the person approves.
+pub fn is_invisible_format_char(c: char) -> bool {
+    matches!(c, '\u{00AD}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
+pub fn has_invisible_format_chars(text: &str) -> bool {
+    text.chars().any(is_invisible_format_char)
+}
+
+/// Whether a path component names git's own folder on a case-insensitive or Windows file system: `.git` in any case, with the
+/// trailing dots and spaces Windows ignores, or the 8.3 alias `GIT~1`.
+fn is_git_admin_name(part: &str) -> bool {
+    let folded = part.trim_end_matches(['.', ' ']).to_lowercase();
+    if folded == ".git" {
+        return true;
+    }
+    folded.strip_prefix("git~").is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+}
 
 /// `PaneWorktreeCopy.NormalizedPaths`: the list as saved: relative paths without `..`, a leading separator, `~`, `:` or `.git`, each
 /// once, at most 32; None when none is left.
@@ -167,7 +199,8 @@ pub fn worktree_copy_paths<'a>(raw: impl IntoIterator<Item = Option<&'a str>>) -
             || path.starts_with('~')
             || path.contains('\0')
             || path.contains(':')
-            || path.split('/').any(|part| matches!(part, ".." | "." | ".git" | ""))
+            || path.chars().any(|c| c.is_control() || is_invisible_format_char(c) || SHELL_METACHARACTERS.contains(c))
+            || path.split('/').any(|part| matches!(part, ".." | "." | "") || is_git_admin_name(part))
             || !seen.insert(path.clone())
         {
             continue;
@@ -215,7 +248,8 @@ pub fn pane_worktree(pane: &PaneWorktree, session_id: &str, restoring: bool) -> 
     {
         return None;
     }
-    let mut copy = PaneWorktree { setup_command: worktree_setup_command(pane.setup_command.as_deref()), ..pane.clone() };
+    let mut copy =
+        PaneWorktree { setup_command: one_line_command(pane.setup_command.as_deref(), PANE_SETUP_DISPLAY_UNITS), ..pane.clone() };
     if copy.setup_command.is_none() {
         copy.setup_status = None;
         copy.setup_exit_code = None;
@@ -1114,6 +1148,47 @@ pub fn splitting_execution(values: Option<&BlockSizes>) -> Option<BlockSizes> {
     (!result.is_empty()).then_some(result)
 }
 
+/// Extracts `(run_id, suffix)` from a length-prefixed graph node id `<utf8_len>:<run_id>:<suffix>`.
+fn node_run_id(node_id: &str) -> Option<(&str, &str)> {
+    let colon = node_id.find(':')?;
+    if colon == 0 || !node_id[..colon].bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let count: usize = node_id[..colon].parse().ok()?;
+    let separator = colon.checked_add(1)?.checked_add(count)?;
+    if separator >= node_id.len() || node_id.as_bytes()[separator] != b':' {
+        return None;
+    }
+    Some((node_id.get(colon + 1..separator)?, node_id.get(separator + 1..)?))
+}
+
+/// Preserves up to 256 validated `graphBlockSizes` entries for a cold (`body_on_disk`) pane against `kept_run_ids` + `"pending-input"`.
+pub fn cold_block_sizes(values: Option<&BlockSizes>, kept_ids: &[String]) -> Option<BlockSizes> {
+    let values = values.filter(|v| !v.is_empty())?;
+    let kept_set: HashSet<&str> = kept_ids.iter().map(String::as_str).collect();
+    let mut result = BlockSizes::new();
+    for (id, raw) in values {
+        if result.len() >= 256 {
+            break;
+        }
+        let Some(raw) = raw.as_ref().filter(|sz| sz.width.is_finite() && sz.width > 0.0 && sz.height.is_finite() && sz.height > 0.0) else {
+            continue;
+        };
+        let valid_owner = id == graph::PENDING_NODE_ID
+            || node_run_id(id).is_some_and(|(run_id, suffix)| !suffix.is_empty() && kept_set.contains(run_id))
+            || kept_ids
+                .iter()
+                .any(|rid| id == rid.as_str() || id.strip_prefix(rid.as_str()).is_some_and(|rest| rest.starts_with(':') && rest.len() > 1));
+        if !valid_owner {
+            continue;
+        }
+        if let Some(size) = clean_size(id, Some(raw)) {
+            result.insert(id.clone(), Some(size));
+        }
+    }
+    (!result.is_empty()).then_some(result)
+}
+
 /// `GraphBlockPreferences.Normalize(values, runs)`: only the pane's own blocks, its newest turns first.
 pub fn block_sizes(values: Option<&BlockSizes>, runs: &[MightyGraphRun]) -> Option<BlockSizes> {
     let values = values.filter(|v| !v.is_empty())?;
@@ -1655,7 +1730,13 @@ fn normalize_session(s: &RunSession, restoring: bool, remote_ids: &HashSet<Strin
         graph_result_size: if shell { None } else { s.graph_result_size.as_ref().and_then(GraphBlockSize::normalized) },
         graph_plan_size: if shell { None } else { s.graph_plan_size.as_ref().and_then(GraphBlockSize::normalized) },
         graph_sizes_layout: Some(graph::SPLIT_LAYOUT),
-        graph_block_sizes: if shell { None } else { block_sizes(sizes.as_ref(), graph_runs.as_deref().unwrap_or(&[])) },
+        graph_block_sizes: if shell {
+            None
+        } else if s.body_on_disk {
+            cold_block_sizes(sizes.as_ref(), &s.kept_run_ids())
+        } else {
+            block_sizes(sizes.as_ref(), graph_runs.as_deref().unwrap_or(&[]))
+        },
         graph_runs,
         title_mode: title_mode(s.title_mode.as_deref()),
         plan_history: if plan_mode { plan_history(s.plan_history.as_ref()) } else { None },
@@ -1702,7 +1783,11 @@ pub struct PaneCache {
 impl PaneCache {
     fn take(&self, pane: &Arc<RunSession>) -> Option<Arc<RunSession>> {
         let (input, output) = self.panes.get(pane.id())?;
-        (Arc::ptr_eq(input, pane) && pane.status() != "running").then(|| output.clone())
+        (Arc::ptr_eq(input, pane) && (pane.status() != "running" || pane.started_at().is_some())).then(|| output.clone())
+    }
+
+    pub fn remove(&mut self, id: &str) {
+        self.panes.remove(id);
     }
 }
 
@@ -2044,6 +2129,32 @@ pub fn checkpoints(saved: &[crate::graph::RunCheckpoint]) -> Option<Vec<crate::g
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn copy_paths_refuse_git_folder_aliases_and_shell_metacharacters() {
+        for bad in [
+            ".git/config",
+            ".GIT/config",
+            ".Git",
+            ".git.",
+            ".git ",
+            "a/.git./b",
+            "GIT~1/config",
+            "git~12",
+            "x&calc",
+            "a|b",
+            "a^b",
+            "a<b",
+            "a>b",
+            "a%PATH%",
+            "a!b",
+            "a\"b",
+            "a\nb",
+        ] {
+            assert_eq!(worktree_copy_paths([Some(bad)]), None, "{bad:?} must be refused");
+        }
+        assert_eq!(worktree_copy_paths([Some(".env"), Some("node_modules"), Some("gitignore.txt"), Some("git~x")]).unwrap().len(), 4);
+    }
 
     fn todo(content: &str, status: &str) -> TodoItem {
         TodoItem { content: Some(content.into()), status: Some(status.into()), active_form: None, id: Some(content.into()) }

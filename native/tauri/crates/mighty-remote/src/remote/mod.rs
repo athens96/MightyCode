@@ -10,6 +10,7 @@ pub mod events;
 pub mod features;
 pub mod host;
 pub mod http_server;
+pub mod memory;
 pub mod mirror;
 pub mod paired;
 pub mod saved;

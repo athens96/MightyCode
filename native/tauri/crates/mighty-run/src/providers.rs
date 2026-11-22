@@ -612,7 +612,12 @@ pub fn arguments(
                 args.push(claude_main.unwrap_or_else(|| "default".into()));
             }
             args.push("--append-system-prompt".into());
-            args.push(crate::flow_steps::PLAN_INSTRUCTION.into());
+            let mut system_prompt = String::from(crate::flow_steps::PLAN_INSTRUCTION);
+            if let Some(mem) = crate::model::memory_block(request.memory_context.as_deref()) {
+                system_prompt.push_str("\n\n");
+                system_prompt.push_str(&mem);
+            }
+            args.push(system_prompt);
             if let Some(turns) = settings.max_turns {
                 args.push("--max-turns".into());
                 args.push(turns.to_string());
@@ -654,10 +659,17 @@ pub fn arguments(
                 args.push("-c".into());
                 args.push(format!("model_reasoning_effort=\"{}\"", settings.effort));
             }
-            // The checklist switch's words, as instructions only Codex reads (a TOML basic string: JSON's escapes are TOML's).
+            // The checklist switch's words and shared memory, as instructions only Codex reads (a TOML basic string: JSON's escapes are TOML's).
+            let mut dev_instructions: Vec<String> = Vec::new();
             if crate::checklist::wanted(&request) {
+                dev_instructions.push(crate::checklist::CODEX_INSTRUCTION.into());
+            }
+            if let Some(mem) = crate::model::memory_block(request.memory_context.as_deref()) {
+                dev_instructions.push(mem);
+            }
+            if !dev_instructions.is_empty() {
                 args.push("-c".into());
-                args.push(format!("developer_instructions={}", text_json::wire(&json!(crate::checklist::CODEX_INSTRUCTION))));
+                args.push(format!("developer_instructions={}", text_json::wire(&json!(dev_instructions.join("\n\n")))));
             }
             if let Some(phase) = &phase {
                 let review = model_or_default(&phase.codex_review_model);
@@ -1495,5 +1507,30 @@ mod tests {
         assert_eq!(slashes(hermes_install_folder(&env)).as_deref(), Some("C:/Users/me/AppData/Local/hermes/bin"));
         let custom = BTreeMap::from([("hermes_home".to_string(), r"D:\hermes".to_string())]);
         assert_eq!(slashes(hermes_install_folder(&custom)).as_deref(), Some("D:/hermes/bin"));
+    }
+
+    #[test]
+    fn shared_memory_context_appends_to_claude_and_codex_arguments() {
+        let mut claude_req = StartRunRequest::new("s-1", "ws-1", "claude", "Ship MC-13");
+        let base_args = arguments(&claude_req, "/plugins", None).unwrap();
+        let idx = base_args.iter().position(|a| a == "--append-system-prompt").unwrap();
+        assert!(!base_args[idx + 1].contains("<shared-memory>"));
+
+        claude_req.memory_context = Some("- [project:arch]: Use hexagonal ports.".into());
+        let mem_args = arguments(&claude_req, "/plugins", None).unwrap();
+        let mem_idx = mem_args.iter().position(|a| a == "--append-system-prompt").unwrap();
+        assert!(mem_args[mem_idx + 1].ends_with("\n\n<shared-memory>\n- [project:arch]: Use hexagonal ports.\n</shared-memory>"));
+
+        let mut codex_req = StartRunRequest::new("s-2", "ws-1", "claude", "Ship MC-13");
+        codex_req.provider = "codex".into();
+        let codex_plain = arguments(&codex_req, "", None).unwrap();
+        assert!(!codex_plain.iter().any(|a| a.starts_with("developer_instructions=")));
+
+        codex_req.memory_context = Some("- [user:style]: Prefer explicit errors.".into());
+        let codex_args = arguments(&codex_req, "", None).unwrap();
+        let dev_arg =
+            codex_args.iter().find_map(|a| a.strip_prefix("developer_instructions=")).expect("codex developer_instructions must be set");
+        let decoded: String = serde_json::from_str(dev_arg).unwrap();
+        assert_eq!(decoded, "<shared-memory>\n- [user:style]: Prefer explicit errors.\n</shared-memory>");
     }
 }

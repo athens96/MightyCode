@@ -11,7 +11,7 @@
 //! The snapshots run one at a time on a task of their own, in the order they were asked for; a checkpoint goes to its run as a
 //! `checkpoint` event ([`crate::apply`]). A store not used for [`KEEP_DAYS`] days is removed.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -109,7 +109,8 @@ impl Snapshots {
     /// The tree of the folder's repository as it is now; None outside a repository or when git failed.
     pub async fn snapshot(&self, folder: &Path) -> Option<(Repository, String)> {
         let repository = self.repository(folder).await?;
-        std::fs::create_dir_all(repository.store.join("objects")).ok()?;
+        // Held to the end: the sweep leaves a store alone while one is being written (and one the sweep is removing is made anew).
+        let _lock = lock_store(&repository.store).await?;
         let index = repository.store.join("index");
         // Snapshots run one at a time: a lock left behind is a crash's.
         let _ = std::fs::remove_file(repository.store.join("index.lock"));
@@ -186,18 +187,203 @@ impl Snapshots {
 
     /// Removes the stores not used for [`KEEP_DAYS`] days.
     pub fn prune(&self) {
-        let Ok(entries) = std::fs::read_dir(&self.root) else { return };
-        let limit = Duration::from_secs(KEEP_DAYS * 24 * 3600);
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let used =
-                std::fs::metadata(path.join("used")).and_then(|m| m.modified()).or_else(|_| entry.metadata().and_then(|m| m.modified()));
-            let old = used.ok().and_then(|at| SystemTime::now().duration_since(at).ok()).is_some_and(|age| age > limit);
-            if old && path.is_dir() {
-                let _ = std::fs::remove_dir_all(&path);
+        let _ = sweep_with_caps(&self.root, KEEP_DAYS, 0, 0, &HashSet::new());
+    }
+
+    /// The names of the stores of the repositories `folders` are in (what [`sweep_with_caps`] is asked to leave alone for the panes
+    /// that are open).
+    pub async fn store_names(&self, folders: &[PathBuf]) -> HashSet<String> {
+        let mut names = HashSet::new();
+        for folder in folders {
+            if let Some(name) = self.repository(folder).await.and_then(|r| r.store.file_name().map(|n| n.to_string_lossy().into_owned())) {
+                names.insert(name);
+            }
+        }
+        names
+    }
+}
+
+/// The file in a store that says a snapshot or the sweep is working in it.
+const STORE_LOCK: &str = "gc.lock";
+/// A lock this old is a crash's.
+const STALE_LOCK: Duration = Duration::from_secs(10 * 60);
+/// How long a snapshot waits for the sweep to finish with its store.
+const LOCK_WAIT: Duration = Duration::from_secs(120);
+
+/// A store's lock, released when dropped.
+struct StoreLock(PathBuf);
+
+impl Drop for StoreLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Takes the lock of `store` if nothing holds it: Ok(None) when something does, Err when the store's folder is not there.
+fn try_lock_store(store: &Path) -> std::io::Result<Option<StoreLock>> {
+    let path = store.join(STORE_LOCK);
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+        Ok(_) => Ok(Some(StoreLock(path))),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let age = std::fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|at| SystemTime::now().duration_since(at).ok());
+            if age.is_some_and(|age| age > STALE_LOCK) {
+                let _ = std::fs::remove_file(&path);
+            }
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// The lock of `store` (its folder made first), waiting while the sweep holds it; None when it could not be had.
+async fn lock_store(store: &Path) -> Option<StoreLock> {
+    let started = std::time::Instant::now();
+    loop {
+        std::fs::create_dir_all(store.join("objects")).ok()?;
+        match try_lock_store(store) {
+            Ok(Some(lock)) => return Some(lock),
+            // The sweep removed the folder between the two: made again.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return None,
+            Ok(None) => {}
+        }
+        if started.elapsed() > LOCK_WAIT {
+            return None;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+const ACTIVE_STORE_GRACE: Duration = Duration::from_secs(5 * 60);
+
+fn dir_bytes(root: &Path) -> u64 {
+    let Ok(meta) = std::fs::symlink_metadata(root) else { return 0 };
+    if meta.file_type().is_symlink() {
+        return 0;
+    }
+    if meta.is_file() {
+        return meta.len();
+    }
+    if !meta.is_dir() {
+        return 0;
+    }
+    let mut total = 0u64;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&dir) else { continue };
+        for entry in read.flatten() {
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
+                stack.push(entry.path());
+            } else if ft.is_file()
+                && let Ok(m) = entry.metadata()
+            {
+                total += m.len();
             }
         }
     }
+    total
+}
+
+/// When a store was last in use: the newest of `used` (its folder's own time when it has none: the folder changes with every lock
+/// taken in it, which is no use), `index` and `index.lock`.
+fn store_latest(path: &Path, dir_mtime: SystemTime) -> SystemTime {
+    let at = |name: &str| std::fs::metadata(path.join(name)).and_then(|m| m.modified()).ok();
+    [at("used").or(Some(dir_mtime)), at("index"), at("index.lock")].into_iter().flatten().max().unwrap_or(dir_mtime)
+}
+
+/// Removes `path` (a store) unless a snapshot holds its lock or it was used within the grace period by the time the lock is ours
+/// (a snapshot may have started since the sweep looked). True when removed.
+fn remove_store(path: &Path, dir_mtime: SystemTime) -> bool {
+    let Ok(Some(_lock)) = try_lock_store(path) else { return false };
+    let recent = SystemTime::now().duration_since(store_latest(path, dir_mtime)).unwrap_or(Duration::ZERO) < ACTIVE_STORE_GRACE;
+    !recent && std::fs::remove_dir_all(path).is_ok()
+}
+
+/// Sweeps git checkpoint snapshot stores under `base` (`<data>/snapshots`):
+/// - Never touches any store modified within the last 5 minutes (or holding a fresh `index.lock`), nor one a snapshot holds the lock
+///   of ([`Snapshots::snapshot`]), so active runs stay safe.
+/// - Removes stores unused for more than `keep_days` days.
+/// - Resets/removes idle stores exceeding `max_repo_bytes` (when `> 0`) and, oldest-`used` first, idle stores while the total bytes
+///   across `base` exceed `max_total_bytes` (when `> 0`): the size caps never remove a store named in `protected` (the repositories
+///   of panes that are open), which may stay over a cap.
+///
+/// Returns `(stores_swept, bytes_reclaimed)`.
+pub fn sweep_with_caps(
+    base: &Path,
+    keep_days: u64,
+    max_repo_bytes: u64,
+    max_total_bytes: u64,
+    protected: &HashSet<String>,
+) -> (usize, u64) {
+    let Ok(entries) = std::fs::read_dir(base) else { return (0, 0) };
+    let now = SystemTime::now();
+    let keep_limit = Duration::from_secs(keep_days.saturating_mul(24 * 3600));
+
+    struct StoreEntry {
+        path: PathBuf,
+        dir_mtime: SystemTime,
+        used: SystemTime,
+        bytes: u64,
+        protected: bool,
+    }
+
+    let mut remaining: Vec<StoreEntry> = Vec::new();
+    let mut swept = 0usize;
+    let mut reclaimed = 0u64;
+
+    for entry in entries.flatten() {
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_symlink() || !ft.is_dir() {
+            continue;
+        }
+        let path = entry.path();
+        let named_protected = protected.contains(entry.file_name().to_string_lossy().as_ref());
+        let dir_mtime = entry.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
+        let used_mtime = std::fs::metadata(path.join("used")).and_then(|m| m.modified()).unwrap_or(dir_mtime);
+
+        let latest = store_latest(&path, dir_mtime);
+        let recent = now.duration_since(latest).unwrap_or(Duration::ZERO) < ACTIVE_STORE_GRACE;
+        let bytes = dir_bytes(&path);
+        if recent {
+            remaining.push(StoreEntry { path, dir_mtime, used: used_mtime, bytes, protected: true });
+            continue;
+        }
+
+        let too_old = now.duration_since(used_mtime).unwrap_or(Duration::ZERO) > keep_limit;
+        let too_large_repo = max_repo_bytes > 0 && bytes > max_repo_bytes && !named_protected;
+        if (too_old || too_large_repo) && remove_store(&path, dir_mtime) {
+            swept += 1;
+            reclaimed += bytes;
+        } else {
+            remaining.push(StoreEntry { path, dir_mtime, used: used_mtime, bytes, protected: named_protected });
+        }
+    }
+
+    if max_total_bytes > 0 {
+        let mut total: u64 = remaining.iter().map(|s| s.bytes).sum();
+        if total > max_total_bytes {
+            remaining.sort_by_key(|s| s.used);
+            for store in remaining {
+                if total <= max_total_bytes {
+                    break;
+                }
+                if store.protected {
+                    continue;
+                }
+                if remove_store(&store.path, store.dir_mtime) {
+                    total = total.saturating_sub(store.bytes);
+                    swept += 1;
+                    reclaimed += store.bytes;
+                }
+            }
+        }
+    }
+
+    (swept, reclaimed)
 }
 
 /// The folder a pane's runs work in, for its snapshots: its own working folder (a worktree), else its workspace's; none for a remote
@@ -341,6 +527,18 @@ impl Checkpoints {
     pub fn ask(&self, job: Job) {
         let _ = self.jobs.send(job);
     }
+
+    /// Sweeps snapshot stores under `base` enforcing age (`keep_days`), per-repo byte cap, and total byte cap (the caps spare the
+    /// stores in `protected`).
+    pub fn sweep_with_caps(
+        base: &Path,
+        keep_days: u64,
+        max_repo_bytes: u64,
+        max_total_bytes: u64,
+        protected: &HashSet<String>,
+    ) -> (usize, u64) {
+        sweep_with_caps(base, keep_days, max_repo_bytes, max_total_bytes, protected)
+    }
 }
 
 /// What the worker remembers between snapshots.
@@ -450,5 +648,113 @@ mod tests {
         };
         let running = MightyGraphRun { status: Some("running".into()), ..notice.clone() };
         assert_eq!(due(&[running], std::slice::from_ref(&notice)), vec![("r:notice:1".into(), "turn".into(), Some("build".into()), None)]);
+    }
+
+    #[test]
+    fn sweep_with_caps_respects_grace_period_and_enforces_age_repo_and_total_caps() {
+        let nanos = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos();
+        let base = std::env::temp_dir().join(format!("mighty-ckpt-sweep-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+
+        let make_store = |name: &str, size: usize, age: Option<Duration>| -> PathBuf {
+            let store = base.join(name);
+            std::fs::create_dir_all(store.join("objects")).unwrap();
+            let blob = store.join("objects/pack.bin");
+            std::fs::write(&blob, vec![b'z'; size]).unwrap();
+            let used = store.join("used");
+            std::fs::write(&used, "2026-11-22T00:00:00Z").unwrap();
+            if let Some(ago) = age {
+                let target = SystemTime::now().checked_sub(ago).unwrap();
+                for p in [&blob, &used] {
+                    std::fs::File::options().write(true).open(p).unwrap().set_modified(target).unwrap();
+                }
+                if let Ok(dir_f) = std::fs::File::open(&store) {
+                    let _ = dir_f.set_modified(target);
+                }
+            }
+            store
+        };
+
+        // 1) Active store (< 5 min old) exceeding repo cap must NEVER be touched!
+        let active = make_store("active-hot", 2_000, None);
+        // 2) Aged store (> 14 days) -> swept.
+        let aged = make_store("aged-repo", 200, Some(Duration::from_secs(20 * 86_400)));
+        // 3) Oversize idle store (> max_repo_bytes = 1_000) -> swept.
+        let huge = make_store("huge-repo", 1_500, Some(Duration::from_secs(3600)));
+        // 4) Two normal idle stores (600 bytes each); with active (2_000), total = 3_200 > max_total_bytes (2_700),
+        //    so the older one (`older-idle`) is evicted while `newer-idle` and `active` stay!
+        let older_idle = make_store("older-idle", 600, Some(Duration::from_secs(7200)));
+        let newer_idle = make_store("newer-idle", 600, Some(Duration::from_secs(1800)));
+
+        let (swept, reclaimed) = Checkpoints::sweep_with_caps(&base, 14, 1_000, 2_700, &HashSet::new());
+        assert_eq!(swept, 3, "aged + huge + older_idle swept");
+        assert!(reclaimed >= 2_300);
+        assert!(active.exists(), "active store modified within 5m is protected");
+        assert!(newer_idle.exists(), "newest idle store within total cap stays");
+        assert!(!aged.exists() && !huge.exists() && !older_idle.exists());
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    fn aged_store(base: &Path, name: &str, size: usize, age: Duration) -> PathBuf {
+        let store = base.join(name);
+        std::fs::create_dir_all(store.join("objects")).unwrap();
+        let blob = store.join("objects/pack.bin");
+        std::fs::write(&blob, vec![b'z'; size]).unwrap();
+        let used = store.join("used");
+        std::fs::write(&used, "2026-11-22T00:00:00Z").unwrap();
+        let target = SystemTime::now().checked_sub(age).unwrap();
+        for p in [&blob, &used] {
+            std::fs::File::options().write(true).open(p).unwrap().set_modified(target).unwrap();
+        }
+        if let Ok(dir) = std::fs::File::open(&store) {
+            let _ = dir.set_modified(target);
+        }
+        store
+    }
+
+    fn sweep_base(name: &str) -> PathBuf {
+        let nanos = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos();
+        let base = std::env::temp_dir().join(format!("mighty-ckpt-{name}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        base
+    }
+
+    /// The size caps never remove the store of a repository a live pane works in, even when it is idle and over both caps.
+    #[test]
+    fn size_caps_spare_the_stores_of_open_panes_but_the_age_rule_still_applies() {
+        let base = sweep_base("protected");
+        let live = aged_store(&base, "live-repo", 5_000, Duration::from_secs(3600));
+        let idle = aged_store(&base, "idle-repo", 900, Duration::from_secs(7200));
+        let live_old = aged_store(&base, "live-old", 100, Duration::from_secs(20 * 86_400));
+        let protected: HashSet<String> = ["live-repo".to_string(), "live-old".to_string()].into();
+
+        let (swept, _) = sweep_with_caps(&base, 14, 1_000, 1_500, &protected);
+        assert!(live.exists(), "an open pane's store survives the per-repo and total caps");
+        assert!(!idle.exists(), "an idle store over the total cap is still removed");
+        assert!(!live_old.exists(), "the age rule still removes a store unused for more than the keep days");
+        assert_eq!(swept, 2);
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// A store a snapshot holds the lock of is never removed by the sweep; once the lock is gone it can be.
+    #[test]
+    fn a_locked_store_is_not_swept_and_a_snapshot_waits_for_the_sweep() {
+        let base = sweep_base("locked");
+        let store = aged_store(&base, "busy", 100, Duration::from_secs(20 * 86_400));
+        let lock = try_lock_store(&store).unwrap().expect("the lock is free");
+        assert!(try_lock_store(&store).unwrap().is_none(), "a second taker finds it held");
+        assert_eq!(sweep_with_caps(&base, 14, 0, 0, &HashSet::new()).0, 0);
+        assert!(store.exists(), "a store with a snapshot in it stays");
+        drop(lock);
+        assert!(try_lock_store(&store).unwrap().is_some(), "the lock is released on drop");
+        assert_eq!(sweep_with_caps(&base, 14, 0, 0, &HashSet::new()).0, 1);
+        assert!(!store.exists());
+
+        // A snapshot after the sweep made the folder anew gets its lock.
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let again = runtime.block_on(lock_store(&store));
+        assert!(again.is_some() && store.join("objects").is_dir());
+        std::fs::remove_dir_all(base).unwrap();
     }
 }
