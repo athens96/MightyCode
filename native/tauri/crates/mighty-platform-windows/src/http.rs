@@ -154,7 +154,7 @@ struct Target<'a> {
 
 const GET: Target<'static> = Target { verb: "GET", secure: true, port: INTERNET_DEFAULT_HTTPS_PORT, body: &[], read_post_body: false };
 
-fn send(request: &HttpsRequest, target: &Target<'_>, max_body: usize) -> Result<HttpsResponse> {
+fn send(request: &HttpsRequest, target: &Target<'_>, max_body: usize) -> Result<(HttpsResponse, Option<String>)> {
     let mut handles = Handles(vec![]);
     let agent = wide("MightyCode");
     // SAFETY: `agent` is a NUL-terminated wide string; no proxy names are given, so the system's (WPAD, PAC, settings) are used.
