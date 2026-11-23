@@ -35,9 +35,11 @@ use crate::host::{Host, WINDOW};
 /// The app's argument that starts it without a window.
 pub const ARGUMENT: &str = "--server";
 
-/// This process: whether it started without a window, its `--profile`, when it started.
+/// This process: whether it started without a window (and whether the OS started it for schedules, MC-39), its `--profile`, when
+/// it started.
 struct Run {
     headless: bool,
+    for_schedules: bool,
     profile: Option<PathBuf>,
     at: Instant,
 }
@@ -51,8 +53,13 @@ static OPENING: AtomicBool = AtomicBool::new(false);
 static ASKING: AtomicBool = AtomicBool::new(false);
 
 /// main.rs, first thing after the arguments: how this process runs.
-pub fn begin(headless: bool, profile: Option<PathBuf>) {
-    let _ = RUN.set(Run { headless, profile, at: Instant::now() });
+pub fn begin(headless: bool, for_schedules: bool, profile: Option<PathBuf>) {
+    let _ = RUN.set(Run { headless, for_schedules: headless && for_schedules, profile, at: Instant::now() });
+}
+
+/// Whether the OS started this process for a schedule (`--server --for-schedules`, MC-39): it quits once idle (automation/wake.rs).
+pub fn started_for_schedules() -> bool {
+    RUN.get().is_some_and(|run| run.for_schedules)
 }
 
 /// Whether this process started without a window (`--server`).
@@ -73,7 +80,8 @@ pub fn uptime_seconds() -> u64 {
 /// the normal quit, and the log says so.
 pub fn started(host: &Arc<Host>) {
     crate::attention::set_front(false);
-    host.log.line(&format!("headless: started (pid {}, profile {})", std::process::id(), host.data_dir.display()));
+    let why = if started_for_schedules() { ", for schedules" } else { "" };
+    host.log.line(&format!("headless: started (pid {}, profile {}{why})", std::process::id(), host.data_dir.display()));
     let watcher = host.clone();
     tauri::async_runtime::spawn(async move {
         stopped_by_signal().await;
@@ -276,6 +284,7 @@ pub fn status(host: &Host) -> Value {
         "running": true,
         "mode": if shown { "windowed" } else { "headless" },
         "startedHeadless": started_headless(),
+        "forSchedules": started_for_schedules(),
         "window": window_word(host),
         "version": host.version,
         "pid": std::process::id(),
@@ -301,9 +310,14 @@ pub fn phase_name(phase: &Phase) -> &'static str {
 /// `mighty server start`: this exe started detached (it outlives the CLI; the Mac a session of its own, Windows outside the CLI's
 /// job) as `--server`, with the profile when one was given. Its pid.
 pub fn launch_detached(profile: Option<&Path>) -> Result<u32, String> {
+    launch_detached_with(arguments(profile), DetachedEnvironment::Inherit)
+}
+
+/// This exe started detached with `args` and `environment` (also MC-39's hand-over from launchd, automation/wake.rs). Its pid.
+pub fn launch_detached_with(args: Vec<String>, environment: DetachedEnvironment) -> Result<u32, String> {
     let program = std::env::current_exe().map_err(|e| e.to_string())?;
     let cwd = crate::platform::detached_cwd(&program);
-    let request = DetachedRequest { program, args: arguments(profile), cwd, environment: DetachedEnvironment::Inherit, hidden: true };
+    let request = DetachedRequest { program, args, cwd, environment, hidden: true };
     crate::platform::process_host().start_detached(request).map_err(|e| e.to_string())
 }
 

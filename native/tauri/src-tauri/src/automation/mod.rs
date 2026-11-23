@@ -6,8 +6,10 @@
 //!   at most every [`RELOAD`] when the scheduler wakes.
 //! - **The scheduler** ([`scheduler`]): one task that sleeps until the next fire (`mighty_core::automation::plan`), woken early by a
 //!   change or the computer's resume, never a polling loop. At the start it finds the fires a closed app missed and applies each
-//!   schedule's `catchUp` (default `once`: the most recent missed fire runs once). While the app is closed nothing fires: the
-//!   background daemon (MC-3) keeps runs going but cannot start one, so a missed fire runs (or is skipped) at the next start.
+//!   schedule's `catchUp` (default `once`: the most recent missed fire runs once). While the app is closed nothing fires (the
+//!   background daemon, MC-3, keeps runs going but cannot start one), unless 앱이 꺼져 있어도 예약 실행 is on ([`wake`], MC-39): then
+//!   the OS starts the app without a window at the next fire, and it quits once idle; otherwise a missed fire runs (or is skipped)
+//!   at the next start.
 //! - **Triggers** ([`triggers`]): GitHub (`gh api` with ETags) and Linear (the MC-31 tracker) looked at every 5 minutes at most, only
 //!   for workspaces that have one, backing off while idle or offline; standing orders (a shell check every few minutes that wakes the
 //!   agent only when its output changes, at most its daily cap); and the signed webhook listener on 127.0.0.1 ([`webhook`]).
@@ -21,6 +23,7 @@ pub mod fire;
 pub mod github;
 pub mod store;
 pub mod triggers;
+pub mod wake;
 pub mod webhook;
 
 use std::collections::{HashMap, HashSet};
@@ -203,6 +206,8 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
     *lock(&automation().settings) = store::load_settings(&host.data_dir);
     *lock(&automation().state) = store::load_state(&host.data_dir);
     *lock(&automation().history) = History::load(&store::history_path(&host.data_dir));
+    // MC-39's record read here, so Settings draws from memory.
+    let _ = wake::record(host);
     // The computer woke: fires due while it slept are looked for now.
     let subscription = platform.network.on_resume(mighty_platform::net::NetworkCallback::new(|| automation().wake.notify_one()));
     if let Ok(subscription) = subscription {
@@ -211,13 +216,18 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
     follow_bus(host);
     let weak = Arc::downgrade(host);
     tauri::async_runtime::spawn(scheduler(weak));
+    // MC-39: a server the OS started for schedules quits once idle.
+    wake::watch_idle(host);
 }
 
 /// The app quits: the watches and the listener stop (the files are already saved).
 pub fn shutdown(host: &Host) {
-    let _ = host;
     triggers::stop_all();
     lock(&automation().resume).take();
+    // MC-39: the OS wake-up left right for the next fire (only when on, or when one is still registered).
+    if automation().started.load(Ordering::SeqCst) {
+        wake::at_quit(host);
+    }
 }
 
 // ── the jobs ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -338,7 +348,7 @@ fn save_settings(host: &Arc<Host>) {
 }
 
 /// Settings changed: saved, and the jobs read again.
-fn settings_changed(host: &Arc<Host>) {
+pub(crate) fn settings_changed(host: &Arc<Host>) {
     save_settings(host);
     let host = host.clone();
     tauri::async_runtime::spawn(async move { reload(&host).await });
@@ -460,6 +470,13 @@ fn slots(jobs: &[Job]) -> Vec<Slot> {
         .collect()
 }
 
+/// The earliest next fire across all schedules (MC-39's OS wake-up).
+pub fn next_wake() -> Option<DateTime<Utc>> {
+    let jobs = jobs();
+    let state = lock(&automation().state);
+    plan::next_wake(&slots(&jobs), &state.slots, Utc::now(), &LocalZone)
+}
+
 /// Each schedule's next fire, by key.
 pub fn next_fires() -> HashMap<String, DateTime<Utc>> {
     let jobs = jobs();
@@ -505,15 +522,21 @@ async fn scheduler(weak: Weak<Host>) {
                 Due::Fire { at, late, .. } => {
                     let reason = l.get(if late { "automation.reason.catchUp" } else { "automation.reason.schedule" });
                     let host = host.clone();
+                    // MC-39: a server the OS started waits for the fire to make its pane and send its prompt.
+                    let firing = wake::Firing::begin();
                     tauri::async_runtime::spawn(async move {
                         fire::fire(&host, fire::FireRequest { job, reason, scheduled_for: Some(at), event: None, retry_of: None }).await;
+                        drop(firing);
                     });
                 }
                 Due::Skip { at, .. } => fire::skip(&host, &job, l.get("automation.reason.missed"), Some(at)),
             }
         }
-        let wake = with_state(|state| plan::next_wake(&slots, &state.slots, Utc::now(), &LocalZone));
-        let until_next = wake.and_then(|at| (at - Utc::now()).to_std().ok()).unwrap_or(RELOAD);
+        wake::first_pass_done();
+        let next = with_state(|state| plan::next_wake(&slots, &state.slots, Utc::now(), &LocalZone));
+        // MC-39: the OS wake-up follows the next fire (registered, moved after a fire or a change, or removed).
+        wake::sync_later(&host, next, wake::Urgency::Normal);
+        let until_next = next.and_then(|at| (at - Utc::now()).to_std().ok()).unwrap_or(RELOAD);
         drop(host);
         // Woken at the next fire, at the reload's time at the latest, or early by a change or the computer's resume.
         tokio::select! {

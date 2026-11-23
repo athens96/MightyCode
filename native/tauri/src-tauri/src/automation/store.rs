@@ -1,5 +1,5 @@
 //! MC-32's files under `<data>/automation/`: `settings.json` (the app's own schedules and triggers per workspace, and the webhook
-//! listener's switch and port), `state.json` (each schedule's last fire, the triggers' seen ids, ETags, standing orders and Linear
+//! listener's switch and port, MC-39's 앱이 꺼져 있어도 예약 실행), `state.json` (each schedule's last fire, the triggers' seen ids, ETags, standing orders and Linear
 //! states) and `history.json` (the run records, `mighty_core::automation::records`). Each is written whole (a temporary file renamed
 //! over it), only where the app writes its profile.
 
@@ -67,6 +67,9 @@ pub struct Settings {
     pub workspaces: BTreeMap<String, WorkspaceJobs>,
     #[serde(default)]
     pub listener: Listener,
+    /// MC-39: 앱이 꺼져 있어도 예약 실행 (off until turned on): the OS starts the app without a window at the next fire.
+    #[serde(default, rename = "wakeWhenClosed")]
+    pub wake_when_closed: bool,
 }
 
 /// What the scheduler and the watches keep between runs, by job key.
@@ -149,7 +152,10 @@ mod tests {
             },
         );
         settings.listener = Listener { enabled: true, port: 50_000 };
+        assert!(!settings.wake_when_closed, "MC-39's wake is off until turned on");
+        settings.wake_when_closed = true;
         save_settings(&dir, &settings).unwrap();
+        assert!(std::fs::read_to_string(settings_path(&dir)).unwrap().contains("\"wakeWhenClosed\": true"));
         assert_eq!(load_settings(&dir), settings);
         assert_eq!(load_settings(&dir.join("missing")).listener, Listener::default());
 

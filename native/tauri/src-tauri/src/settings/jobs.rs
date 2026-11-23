@@ -1,7 +1,8 @@
 //! 예약과 트리거 (MC-32), after 자동화 in Mighty Pet과 알림: today's digest and the daily budget, a workspace's schedules and
 //! triggers (the app's own with their switch, edit and removal; `.mighty.yaml`'s read-only, with 승인 while their configuration is not
 //! approved), each with its next fire, its last result and 지금 실행; the form that adds or edits the app's own; the webhook listener's
-//! switch and port; and the workspace's run history with 다시 실행 and 이어서 하기. Built from the automation module's memory only;
+//! switch and port; MC-39's 앱이 꺼져 있어도 예약 실행 with the OS wake-up's state, the last start by the OS and 지금 다시 등록;
+//! and the workspace's run history with 다시 실행 and 이어서 하기. Built from the automation module's memory only;
 //! every change runs on a task.
 
 use std::sync::Arc;
@@ -314,6 +315,30 @@ pub fn jobs(host: &Arc<Host>, ui: &mut Ui) -> El {
     rows.add(caption(ui, state).aid("settings-jobs-listener-state"));
     rows.add(caption(ui, locale.get("automation.listener.note")));
 
+    // MC-39: while the app is closed — the OS starts it without a window at the next fire.
+    rows.add(sub_heading(ui, locale.get("automation.wake.title")));
+    let changeable = host.may_change_machine() && automation::wake::supported();
+    let label = locale.get("automation.wake.toggle");
+    let to = host.clone();
+    let switch = ui
+        .settings_switch(&label, automation::wake::enabled(), Some("settings-jobs-wake"), move |on| automation::wake::set_enabled(&to, on))
+        .enabled(changeable);
+    let words = ui.settings_titled(&label, locale.get("automation.wake.description"));
+    rows.add(ui.settings_labeled(words, switch, true));
+    let to = host.clone();
+    let again = small(ui, locale.get("automation.wake.again"), Box::new(move || automation::wake::register_again(&to)))
+        .aid("settings-jobs-wake-again")
+        .enabled(changeable);
+    let state = ui.settings_text(automation::wake::state_words(host), TextStyle::size(12.0)).aid("settings-jobs-wake-state");
+    rows.add(ui.settings_labeled(state, again, false));
+    if let Some(error) = automation::wake::error_words(host) {
+        rows.add(caption(ui, error).aid("settings-jobs-wake-error"));
+    }
+    if let Some(last) = automation::wake::last_words(host) {
+        rows.add(caption(ui, last).aid("settings-jobs-wake-last"));
+    }
+    rows.add(caption(ui, locale.get("automation.jobs.closedNote")));
+
     // The history.
     rows.add(sub_heading(ui, locale.get("automation.history.title")));
     let records = automation::recent(Some(&workspace), HISTORY_ROWS);
@@ -323,7 +348,6 @@ pub fn jobs(host: &Arc<Host>, ui: &mut Ui) -> El {
     for (index, record) in records.iter().enumerate() {
         rows.add(history_row(host, ui, record, index));
     }
-    rows.add(caption(ui, locale.get("automation.jobs.closedNote")));
     rows.finish()
 }
 

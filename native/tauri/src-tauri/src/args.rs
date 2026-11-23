@@ -24,6 +24,8 @@
 //!                                relay, the control API, the mirror, the schedules and the daemon link run; a window shows when
 //!                                asked (the Dock, a second start, `mighty server show`). Not `--daemon --headless`, the process
 //!                                daemon (daemon/entry.rs), which main.rs serves before this parser and which runs no host at all
+//! `--for-schedules`              MC-39: with `--server`, the OS started the app for a schedule (the LaunchAgent, the scheduled task;
+//!                                automation/wake.rs): it ends when an app already runs for the profile, and quits once idle
 //! `-psn_…`                       Mac stage: the process serial number older LaunchServices passed; accepted and ignored on the Mac
 //!                                (a refused argument would quit an app 0.4.x's updater relaunched with `open -n`; plan §1.1)
 //!
@@ -61,6 +63,8 @@ pub struct Options {
     pub embedding: bool,
     /// MC-3: `--server`, the app without a window (server.rs).
     pub server: bool,
+    /// MC-39: `--for-schedules` (with `--server`): started by the OS for a schedule.
+    pub for_schedules: bool,
 }
 
 fn absolute(flag: &str, value: Option<String>) -> Result<PathBuf, String> {
@@ -112,6 +116,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
             }
             "-Embedding" => options.embedding = true,
             crate::server::ARGUMENT => options.server = true,
+            mighty_core::automation::wake::SWITCH => options.for_schedules = true,
             other if other.starts_with(APP_SDK_ACTIVATION) => {}
             other if mac_launch_argument(other) => {}
             other => return Err(format!("Unsupported argument: {other}")),
@@ -141,6 +146,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     // The headless server draws nothing a smoke could read, and opens no DevTools port.
     if options.server && (options.smoke_test || options.remote_debugging_port.is_some()) {
         return Err("--server does not go with --smoke-test or --remote-debugging-port.".into());
+    }
+    if options.for_schedules && !options.server {
+        return Err("--for-schedules goes with --server.".into());
     }
     if options.smoke_test && options.profile.is_none() {
         return Err("--smoke-test needs --profile.".into());
@@ -237,6 +245,12 @@ mod tests {
         assert_eq!(parsed(&["--server", "--smoke-test", "--profile", root, "--remote-debugging-port", "9222"]).unwrap_err(), refusal);
         assert_eq!(parsed(&["--headless"]).unwrap_err(), "Unsupported argument: --headless", "the daemon's switch is not the app's");
         assert_eq!(parsed(&["--daemon"]).unwrap_err(), "Unsupported argument: --daemon");
+        // MC-39: the OS's start for a schedule is a server start.
+        let woken = parsed(&["--server", "--for-schedules", "--profile", root]).unwrap();
+        assert!(woken.server && woken.for_schedules);
+        assert!(!parsed(&["--server"]).unwrap().for_schedules);
+        assert_eq!(parsed(&["--for-schedules"]).unwrap_err(), "--for-schedules goes with --server.");
+        assert_eq!(parsed(&["--server", "--for-schedules", "--smoke-test", "--profile", root]).unwrap_err(), refusal);
     }
 
     /// Mac stage (plan §1.1): an app the 0.4.x updater relaunched with `open -n` may get LaunchServices' `-psn_…`; the Mac ignores it,

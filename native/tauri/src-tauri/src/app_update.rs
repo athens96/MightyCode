@@ -1097,6 +1097,17 @@ pub fn write_automatic(host: &Host, on: bool) {
 /// C# `CollectIdleFacts(now)`: one source per row of the idle table (M/AppStore+AppUpdate.swift appIdleFacts). What the state's lock
 /// covers is read under it (every source there takes only its own lock); the rest after.
 fn collect_idle_facts(host: &Arc<Host>, session: &dyn mighty_platform::SessionWatch, now: DateTime<Utc>) -> IdleFacts {
+    let mut facts = work_facts(host);
+    // A failed read is input just now: the app never restarts on it.
+    facts.last_user_input = Some(match session.since_last_input() {
+        Ok(since) => now - chrono::Duration::from_std(since).unwrap_or(chrono::TimeDelta::zero()),
+        Err(_) => now,
+    });
+    facts
+}
+
+/// The idle facts but the person's input (also MC-39's server started for schedules, which quits once none of them holds it).
+pub(crate) fn work_facts(host: &Arc<Host>) -> IdleFacts {
     let runs = host.runs().cloned();
     let running = |id: &str| runs.as_ref().is_some_and(|runs| runs.service.is_session_running(id));
     let delegation = crate::delegation::app();
@@ -1154,11 +1165,6 @@ fn collect_idle_facts(host: &Arc<Host>, session: &dyn mighty_platform::SessionWa
         || crate::dialogs::of(host).open_count() > 0
         || crate::native::is_open(host, crate::settings::SURFACE)
         || crate::native::is_open(host, mighty_tools::view::SETUP_SURFACE);
-    // A failed read is input just now: the app never restarts on it.
-    facts.last_user_input = Some(match session.since_last_input() {
-        Ok(since) => now - chrono::Duration::from_std(since).unwrap_or(chrono::TimeDelta::zero()),
-        Err(_) => now,
-    });
     facts
 }
 

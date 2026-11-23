@@ -56,6 +56,12 @@ pub enum Handoff {
     ShowThere,
 }
 
+/// How `options` start: `--server` (also `--server --for-schedules`, MC-39: the OS's start for a schedule, which an app already
+/// running for the profile ends at once) or with a window.
+pub fn launch_of(options: &Options) -> Launch {
+    if options.server { Launch::Server } else { Launch::Window }
+}
+
 pub fn decide(launch: Launch, running: Option<Running>) -> Handoff {
     match (launch, running) {
         (_, None) => Handoff::Start,
@@ -82,12 +88,13 @@ pub fn at_start(options: &Options) -> Option<i32> {
     let connector = crate::platform::control_connector();
     let ask =
         |command: Command| tauri::async_runtime::block_on(crate::control::client::request(&data_dir, connector.as_ref(), command, ASK));
-    let launch = if options.server { Launch::Server } else { Launch::Window };
+    let launch = launch_of(options);
     let answer = ask(Command::ServerStatus);
     let pid = answer.as_ref().ok().and_then(|status| status.get("pid")).and_then(Value::as_u64).unwrap_or(0);
     match decide(launch, Running::from_answer(&answer)) {
         Handoff::Start => None,
         Handoff::AlreadyRunning => {
+            // MC-39: a start for schedules leaves the fire to the app that runs (its own timer fires it).
             eprintln!("Mighty Code is already running for this profile (pid {pid}); this start ends.");
             Some(0)
         }

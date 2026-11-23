@@ -434,8 +434,13 @@ fn main() {
     };
     // MC-3: a second start of a profile whose app already runs without a window asks that app for its window and ends; a `--server`
     // start where one already runs ends at once (two apps never write one profile's state). Not in a smoke.
-    server::begin(options.server, options.profile.clone());
+    server::begin(options.server, options.for_schedules, options.profile.clone());
     if let Some(code) = server::handoff::at_start(&options) {
+        std::process::exit(code);
+    }
+    // MC-39: the Mac's start by launchd for a schedule hands over to a detached copy (registering the next wake boots launchd's job
+    // out, which would end this process).
+    if let Some(code) = automation::wake::leave_launchd(options.server, options.for_schedules, options.profile.as_deref()) {
         std::process::exit(code);
     }
     // What this run may write (W9: a release build's default, `--allow-state-write`, `--read-only`; startup.rs, W9-F).

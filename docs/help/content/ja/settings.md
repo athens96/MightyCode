@@ -142,8 +142,10 @@ mighty server start                             # ウィンドウなしで起動
 - **通知**: 自動で始めた作業が承認や回答を待つと、スマートフォンと OS の通知ですぐに知らせます。それ以外は実行履歴と今日のまとめに集めます。すべての実行は `automation.fired`、`automation.skipped`、`automation.blocked`、`automation.finished` イベントとして `mighty events` でも見られ、{{ui:automation.settings.events}} で {{ui:automation.event.automation}} をオンにすると Webhook と状態コマンドも従います。
 - {{ui:automation.history.title}}: 実行ごとに時刻、状態、費用 (使用量台帳による)、結果リンク (ペインが開いた PR)、エラーが残ります。{{ui:automation.history.retry}} ボタンで再実行し、{{ui:automation.history.continue}} ボタンでそのペインを開きます。
 
+**アプリが閉じているとき**: {{ui:automation.wake.toggle}} をオンにすると (既定はオフ)、次のスケジュール時刻にコンピューターが Mighty Code をウィンドウなしで起動します (Mac は LaunchAgent、Windows はタスク スケジューラ。管理者権限なしで自分のアカウントで)。起動したアプリは逃したスケジュールを処理し、実行と承認・質問の待ちがすべて終わってから 5 分間何もなければ、次のスケジュールを登録し直して自分で終了します。コンピューターがスリープ中や電源オフだった場合は、復帰後に起動します。アプリがすでに開いていれば、開いているアプリが実行します。ボックスで登録の有無、次の起動時刻、前回の起動の結果を確認でき、{{ui:automation.wake.again}} ボタンで登録し直せます。[{{ui:server.settings.loginToggle}}](#background) をオンにしていれば、そのサーバーが実行を続けます。
+
 > [!warning]
-> スケジュールとトリガーは **アプリが開いている間だけ** 実行します。アプリを閉じると止まり、[バックグラウンド作業](#background) をオンにしても実行中の作業が続くだけで新しい作業は始まりません。閉じている間に逃したスケジュールは、次にアプリを開いたとき最新の 1 回だけ実行します。{{ui:automation.form.skipMissed}} をオンにすると実行せず「スキップ」として記録します。
+> **トリガー** (GitHub、Linear、常時チェック、Webhook) はアプリの実行中だけ動きます。ウィンドウなしで起動したサーバーも実行中に含みます。コンピューターが起こすのはスケジュールだけなので、アプリを閉じている間もトリガーを使うには [{{ui:server.settings.loginToggle}}](#background) をオンにしてください。{{ui:automation.wake.toggle}} をオフにしたままアプリを閉じるとスケジュールも止まり ([バックグラウンド作業](#background) をオンにしても実行中の作業が続くだけ)、逃したスケジュールは次にアプリを開いたとき最新の 1 回だけ実行します。{{ui:automation.form.skipMissed}} をオンにすると実行せず「スキップ」として記録します。
 
 **Webhook の受信**: {{ui:automation.listener.toggle}} をオンにすると、このコンピューターの `127.0.0.1:<ポート>` でだけリクエストを受けます (既定はオフ)。Webhook トリガーごとにアドレス (`http://127.0.0.1:<ポート>/hooks/<id>`) とシークレットがあり、シークレットはシステムのキーチェーンに保存されます。リクエスト本文をシークレットで HMAC-SHA256 署名し、`X-Mighty-Signature-256: sha256=<hex>` (GitHub の `X-Hub-Signature-256` も可) ヘッダーで送ってください。256KB を超える本文、署名が違うリクエスト、同じ配信 ID (`X-Mighty-Delivery`) は捨てます。外部 (GitHub や他のサービス) から受けるには、ngrok や Cloudflare Tunnel などのトンネルを自分で前に置いてください。アプリがトンネルを開くことはありません。
 

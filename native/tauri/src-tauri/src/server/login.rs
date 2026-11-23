@@ -31,7 +31,7 @@ pub struct LoginItem {
 }
 
 /// A profile's mark in names: 16 hex digits of its path (FNV-1a), so two profiles never share an item.
-fn profile_mark(profile: &Path) -> String {
+pub(crate) fn profile_mark(profile: &Path) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in profile.to_string_lossy().as_bytes() {
         hash ^= u64::from(*byte);
@@ -153,9 +153,9 @@ impl LoginStore for LaunchAgents {
     }
 }
 
-/// A file launchd reads: the owner writes it, nobody else (0644).
+/// A file launchd reads: the owner writes it, nobody else (0644). Also MC-39's schedule wake (automation/wake.rs).
 #[cfg_attr(windows, allow(dead_code, reason = "the Mac's store"))]
-fn write_readable(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_readable(path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write as _;
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);

@@ -135,9 +135,59 @@ pub fn open_upload_count(host: &Host) -> usize {
     state(host).map_or(0, |state| state.router.open_upload_count())
 }
 
-/// The m1 router as a connection's handler (W8-A's relay host and direct connections).
+/// The m1 router as a connection's handler (W8-A's relay host and direct connections), each request counted (MC-39: a server the OS
+/// started for schedules never quits under a phone's request).
 pub fn handler(host: &Arc<Host>) -> Option<Arc<dyn RequestHandler>> {
-    Some(Arc::new(router(host)))
+    Some(Arc::new(Counted(router(host))))
+}
+
+/// The phone's requests under way, and when the last one came.
+static IN_FLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static LAST_REQUEST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+/// The router, its requests counted.
+struct Counted(Router);
+
+/// One request under way.
+struct InFlight;
+
+impl InFlight {
+    fn begin() -> InFlight {
+        IN_FLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        *LAST_REQUEST.lock().unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
+        InFlight
+    }
+}
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        IN_FLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        *LAST_REQUEST.lock().unwrap_or_else(|p| p.into_inner()) = Some(std::time::Instant::now());
+    }
+}
+
+impl RequestHandler for Counted {
+    fn handle(
+        &self,
+        device: MobileDevice,
+        method: String,
+        path: String,
+        body: Option<Box<serde_json::value::RawValue>>,
+    ) -> BoxFuture<'static, MobileReply> {
+        let request = InFlight::begin();
+        let reply = self.0.handle(device, method, path, body);
+        Box::pin(async move {
+            let reply = reply.await;
+            drop(request);
+            reply
+        })
+    }
+}
+
+/// Whether a phone's request is under way or ended less than `recent` ago.
+pub fn requests_recent(recent: std::time::Duration) -> bool {
+    IN_FLIGHT.load(std::sync::atomic::Ordering::SeqCst) > 0
+        || LAST_REQUEST.lock().unwrap_or_else(|p| p.into_inner()).is_some_and(|at| at.elapsed() < recent)
 }
 
 /// The router's `Changed`, `Observe` then `TakeNotifications` (W8-A's 250 ms tick, C#'s `mobileNotify.Tick`): the scopes whose revision

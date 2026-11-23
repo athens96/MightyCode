@@ -142,8 +142,10 @@ mighty server start                             # 창 없이 시작 (status, sho
 - **알림**: 자동으로 시작한 작업이 승인이나 답을 기다리면 휴대폰과 OS 알림으로 바로 알립니다. 나머지는 실행 기록과 오늘 요약에 모읍니다. 모든 실행은 `automation.fired`, `automation.skipped`, `automation.blocked`, `automation.finished` 이벤트로 `mighty events`에서도 볼 수 있고, {{ui:automation.settings.events}}에서 {{ui:automation.event.automation}} 항목을 켜면 웹훅과 상태 명령도 따릅니다.
 - {{ui:automation.history.title}}: 실행마다 시각, 상태, 비용(사용량 장부 기준), 결과 링크(창이 연 PR), 오류가 남습니다. {{ui:automation.history.retry}} 단추로 다시 실행하고, {{ui:automation.history.continue}} 단추로 그 창을 엽니다.
 
+**앱이 꺼져 있을 때**: {{ui:automation.wake.toggle}}을 켜면(기본 꺼짐) 다음 예약 시각에 컴퓨터가 Mighty Code를 창 없이 시작합니다(Mac은 LaunchAgent, Windows는 작업 스케줄러, 관리자 권한 없이 내 계정으로). 시작한 앱은 놓친 예약을 처리하고, 실행과 승인·질문 대기가 모두 끝난 뒤 5분 동안 할 일이 없으면 다음 예약을 다시 등록하고 스스로 닫힙니다. 컴퓨터가 잠자거나 꺼져 있었으면 깨어난 뒤에 시작합니다. 앱이 이미 열려 있으면 열린 앱이 실행합니다. 상자에서 등록 여부, 다음 깨우기 시각, 마지막 깨우기 결과를 보고, {{ui:automation.wake.again}} 단추로 다시 등록할 수 있습니다. [{{ui:server.settings.loginToggle}}](#background)를 켜 두었다면 그 서버가 계속 실행됩니다.
+
 > [!warning]
-> 예약과 트리거는 **앱이 열려 있을 때만** 실행합니다. 앱을 닫으면 멈추고, [백그라운드 작업](#background)을 켜 두어도 이미 실행 중인 작업만 이어질 뿐 새 작업은 시작하지 않습니다. 앱을 닫아 둔 동안 놓친 예약은 다음에 앱을 열 때 가장 최근 것 하나만 실행합니다. {{ui:automation.form.skipMissed}}를 켜면 실행하지 않고 "건너뜀"으로만 남깁니다.
+> **트리거**(GitHub, Linear, 상시 점검, 웹훅)는 앱이 실행 중일 때만 동작합니다. 창 없이 시작한 서버도 실행 중으로 칩니다. 컴퓨터가 깨우는 것은 예약뿐이므로, 앱을 닫아 둔 동안에도 트리거를 쓰려면 [{{ui:server.settings.loginToggle}}](#background)를 켜 두세요. {{ui:automation.wake.toggle}}을 끈 채 앱을 닫으면 예약도 멈추고([백그라운드 작업](#background)을 켜도 이미 실행 중인 작업만 이어짐), 놓친 예약은 다음에 앱을 열 때 가장 최근 것 하나만 실행합니다. {{ui:automation.form.skipMissed}}를 켜면 실행하지 않고 "건너뜀"으로만 남깁니다.
 
 **웹훅 받기**: {{ui:automation.listener.toggle}}를 켜면 이 컴퓨터의 `127.0.0.1:<포트>`에서만 요청을 받습니다(기본 꺼짐). 웹훅 트리거마다 주소(`http://127.0.0.1:<포트>/hooks/<id>`)와 비밀 키가 있고, 비밀 키는 시스템 키체인에 저장됩니다. 요청 본문을 비밀 키로 HMAC-SHA256 서명해 `X-Mighty-Signature-256: sha256=<hex>`(GitHub의 `X-Hub-Signature-256`도 됨) 헤더로 보내야 합니다. 256KB를 넘는 본문, 서명이 틀린 요청, 같은 전달 ID(`X-Mighty-Delivery`)는 버립니다. 밖(GitHub, 다른 서비스)에서 받으려면 ngrok이나 Cloudflare Tunnel 같은 터널을 직접 앞에 두세요. 앱이 터널을 열지는 않습니다.
 

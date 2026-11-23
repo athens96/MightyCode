@@ -282,7 +282,10 @@ jobs:
                  # and its arguments as they are, a .exe only on Windows; mighty-tools' editor.rs builds them).
                  'src-tauri/src/editor.rs',
                  # MC-3: the background daemon (the app's own exe as `--daemon`), which must outlive the app to keep its work running.
-                 'src-tauri/src/daemon/mod.rs') + $port + $routed },
+                 'src-tauri/src/daemon/mod.rs',
+                 # MC-3: `mighty server start` (the app's own exe as `--server`); MC-39: the Mac's start by launchd for a schedule handing
+                 # over to a detached copy of itself (automation/wake.rs calls it through server::launch_detached_with).
+                 'src-tauri/src/server/mod.rs') + $port + $routed },
             @{ what = 'ProcessHost::start_detached_waitable called'; pattern = '\bstart_detached_waitable\s*\('; skip = '\bfn\s+start_detached_waitable'
                allowed = @(
                  # The Ouroboros dashboard daemon, which C# leaves running (W9-E), and the Windows implementation's own contract test.

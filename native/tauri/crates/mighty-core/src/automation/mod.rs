@@ -6,6 +6,8 @@
 //! - [`engine`]: what a fire does to the history (its record, pane, card, end, cost, result link) and which job a retry fires.
 //! - [`plan`]: which schedules are due with the clock given, the catch-up rule for fires the app missed, and when to wake next.
 //! - [`records`]: the run history, capped by count and size, and a pane's result link.
+//! - [`wake`]: MC-39's OS wake-up for the next fire while the app is closed (the LaunchAgent, the scheduled task), when to register
+//!   it again, and when a server the OS started for schedules quits.
 //! - [`watch`]: what the triggers keep between looks — seen delivery ids, the poll's back-off and ETags, a standing order's output
 //!   and daily cap, Linear issues' states — and the prompt a trigger's event makes.
 
@@ -14,6 +16,7 @@ pub mod plan;
 pub mod records;
 pub mod recurrence;
 pub mod spec;
+pub mod wake;
 pub mod watch;
 
 use std::path::Path;

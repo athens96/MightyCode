@@ -142,8 +142,10 @@ mighty server start                             # 无窗口启动 (status, show,
 - **通知**：自动启动的工作在等待批准或回答时，会立即通过手机和系统通知告诉你。其他情况汇总到运行记录和今日摘要中。每次运行也会作为 `automation.fired`、`automation.skipped`、`automation.blocked`、`automation.finished` 事件出现在 `mighty events` 中；在 {{ui:automation.settings.events}} 中打开 {{ui:automation.event.automation}} 后，Webhook 和状态命令也会跟随。
 - {{ui:automation.history.title}}：每次运行都会记录时间、状态、费用（来自用量账本）、结果链接（窗格打开的 PR）和错误。用 {{ui:automation.history.retry}} 按钮重新运行，用 {{ui:automation.history.continue}} 按钮打开该窗格。
 
+**应用关闭时**：打开 {{ui:automation.wake.toggle}}（默认关闭）后，电脑会在下一个计划时间以无窗口方式启动 Mighty Code（Mac 用 LaunchAgent，Windows 用任务计划程序，以你自己的账户运行，无需管理员权限）。启动的应用会处理错过的计划；运行和等待中的批准、提问都结束后 5 分钟内没有事情，就会重新注册下一个计划并自行退出。如果电脑当时处于睡眠或关机状态，会在唤醒后启动。如果应用已经打开，则由已打开的应用运行。框中会显示是否已注册、下次唤醒时间和上次唤醒的结果，用 {{ui:automation.wake.again}} 按钮可以重新注册。如果开启了 [{{ui:server.settings.loginToggle}}](#background)，该服务器会继续运行。
+
 > [!warning]
-> 计划和触发器**只在应用打开时**运行。关闭应用后会停止；即使开启了[后台工作](#background)，也只会继续正在运行的工作，不会启动新工作。应用关闭期间错过的计划，会在下次打开应用时只运行最近的一次。打开 {{ui:automation.form.skipMissed}} 后则不运行，只记录为“已跳过”。
+> **触发器**（GitHub、Linear、常驻检查、Webhook）只在应用运行时工作，无窗口启动的服务器也算在运行。电脑只为计划唤醒应用，所以要在应用关闭期间使用触发器，请开启 [{{ui:server.settings.loginToggle}}](#background)。在 {{ui:automation.wake.toggle}} 关闭时退出应用，计划也会停止（即使开启了[后台工作](#background)，也只会继续正在运行的工作），应用关闭期间错过的计划会在下次打开应用时只运行最近的一次。打开 {{ui:automation.form.skipMissed}} 后则不运行，只记录为“已跳过”。
 
 **接收 Webhook**：打开 {{ui:automation.listener.toggle}} 后，应用只在这台电脑的 `127.0.0.1:<端口>` 上接收请求（默认关闭）。每个 Webhook 触发器都有自己的地址（`http://127.0.0.1:<端口>/hooks/<id>`）和密钥，密钥保存在系统钥匙串中。请用密钥对请求正文做 HMAC-SHA256 签名，并通过 `X-Mighty-Signature-256: sha256=<hex>` 请求头发送（也支持 GitHub 的 `X-Hub-Signature-256`）。超过 256KB 的正文、签名错误的请求和重复的投递 ID（`X-Mighty-Delivery`）会被丢弃。要从外部（GitHub 或其他服务）接收，请自行在前面放置 ngrok 或 Cloudflare Tunnel 等隧道；应用不会打开隧道。
 
