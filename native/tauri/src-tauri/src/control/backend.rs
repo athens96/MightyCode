@@ -167,4 +167,26 @@ impl Backend for HostBackend {
     fn redact(&self, text: &str) -> String {
         crate::git_workbench::redact_secret_text(text)
     }
+
+    fn server_status(&self) -> Result<Value, ControlError> {
+        let host = self.host()?;
+        Ok(crate::server::status(&host))
+    }
+
+    /// Answered first; the quit begins a moment later, so this answer reaches the CLI before the listener closes.
+    fn server_stop(&self, stop_all: bool) -> Result<Value, ControlError> {
+        let host = self.host()?;
+        let keeps = !stop_all && crate::daemon::enabled(&host) && matches!(crate::daemon::phase(), crate::daemon::Phase::Connected);
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            crate::server::stop(&host, stop_all, "mighty server stop");
+        });
+        Ok(json!({ "stopping": true, "pid": std::process::id(), "keptDaemonWork": keeps }))
+    }
+
+    fn show_window(&self) -> Result<Value, ControlError> {
+        let host = self.host()?;
+        let done = crate::server::show_window(&host);
+        Ok(json!({ "window": done, "pid": std::process::id() }))
+    }
 }

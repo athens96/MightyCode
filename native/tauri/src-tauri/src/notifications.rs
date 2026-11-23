@@ -263,11 +263,8 @@ pub fn focus(host: &Arc<Host>, pane: &str) {
     if host.view().snapshot.session(pane).is_none() {
         return;
     }
-    if let Some(window) = host.app.get_webview_window(crate::host::WINDOW) {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
+    // MC-3: an app running without a window shows it (made first when it has none).
+    crate::server::bring_forward(host);
     let mut view = host.view();
     let pane_json = serde_json::to_string(pane).unwrap_or_default();
     host.push(&view, "select", format!("{{\"kind\":\"select\",\"paneId\":{pane_json}}}"));

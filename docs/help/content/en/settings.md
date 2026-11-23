@@ -42,6 +42,17 @@ Turn on {{ui:daemon.settings.toggle}} in the {{ui:daemon.settings.sectionTitle}}
 > [!note]
 > What continues is Claude agent runs and terminal panes. Other agents' runs (Codex, Gemini and others) run in the daemon too but stop when the app closes. A Claude run that was picked up may not reach the Mighty connection (delegation tools, activity) until its turn ends. If the daemon ends abnormally, its work ends with it and the panes show as stopped. When an update leaves the daemon and the app on different versions, the app does not attach and asks whether to stop the earlier daemon's work. Only the same user on this computer can connect to the daemon (on a Mac a socket with permissions 0600, on Windows a named pipe only the current user opens, with the token in the data folder's `daemon/token`).
 
+### Running without a window (server) {#server}
+You can run all of Mighty Code (the phone link, the remote mirror, the `mighty` command, schedules and triggers, the background daemon link) without opening its window. This suits a signed-in Mac or PC you use from your phone or from scripts.
+- `mighty server start` starts the app without a window (`MightyCode --server`, not the daemon's `--daemon --headless`), waits until it answers and prints its status as JSON. On the Mac there is no Dock icon and no menu bar.
+- Commands such as `mighty status`, `mighty agent new`, `send` and `wait` work as usual. `mighty server status` shows whether a window is open, the version, the PID and the uptime.
+- To get a window, open the app again (on the Mac from the Dock or Finder, on Windows by starting it once more). A second app never runs on the same data folder: the running server opens its window. `mighty server show` does the same. Closing that window keeps the server running without one, and ⌘Q asks you to choose {{ui:server.quit.closeWindow}} or {{ui:server.quit.stop}}.
+- `mighty server stop` quits the app as usual. With {{ui:daemon.settings.toggle}} on, the daemon's work keeps running; `--stop-all` stops it too. SIGTERM on the Mac and closing the console on Windows quit the same way.
+- Turn on {{ui:server.settings.loginToggle}} in {{ui:daemon.settings.sectionTitle}} to start the server when you log in (on the Mac a LaunchAgent in `~/Library/LaunchAgents`, on Windows the current user's Run registry key). It is off at first and takes effect from the next login.
+
+> [!note]
+> A terminal pane's shell starts when a window first shows that pane (as on a start with a window). Closing the window keeps shells that already run going, and `mighty pane read` reads them. When something needs you, such as approving a phone, the window opens.
+
 ## Models {#models}
 {{ui:settings.phaseModels.sectionTitle}} on the {{ui:settings.nav.models}} tab sets which model each phase of work uses, for this whole computer. The phases are {{ui:settings.phaseModels.phase.planning}}, {{ui:settings.phaseModels.phase.execution}}, {{ui:settings.phaseModels.phase.review}} and {{ui:settings.phaseModels.phase.subagents}}.
 - Leave a phase at {{ui:settings.phaseModels.defaultOption}} and the CLI decides.
@@ -112,6 +123,7 @@ mighty agent send <pane> "fix the tests"
 mighty agent wait <pane> --until done --timeout 600
 mighty pane wait-output <pane> --regex "passed|failed" --timeout 300
 mighty events --type pane.state
+mighty server start                             # start without a window (status, show, stop [--stop-all])
 ```
 
 - Pane ids are the app's own and never change. States are `idle`, `running`, `blocked` (waiting for an approval or an answer), `done`, `failed` and `stopped`.

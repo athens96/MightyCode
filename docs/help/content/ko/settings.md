@@ -42,6 +42,17 @@ Mac에서는 보기 메뉴의 {{ui:menu.textBigger}}({{kbd:⌘=}}), {{ui:menu.te
 > [!note]
 > 이어지는 것은 Claude 에이전트 실행과 터미널 창입니다. 다른 에이전트(Codex, Gemini 등)의 실행은 데몬에서 돌아도 앱을 닫을 때 멈춥니다. 다시 붙은 Claude 실행은 그 턴이 끝날 때까지 Mighty 연결(위임 도구, 활동 표시)을 쓰지 못할 수 있습니다. 데몬이 비정상으로 끝나면 그 안의 작업도 끝나고 창은 멈춤으로 바뀝니다. 업데이트로 데몬과 앱의 버전이 달라지면 앱은 연결하지 않고, 이전 데몬의 작업을 멈출지 묻습니다. 데몬 연결은 이 컴퓨터의 같은 사용자만 할 수 있습니다(Mac은 권한 0600의 소켓, Windows는 현재 사용자만 여는 named pipe, 데이터 폴더 `daemon/token`의 토큰).
 
+### 창 없이 실행 (서버) {#server}
+창을 열지 않고 Mighty Code 전체(휴대폰 연결, 원격 미러, `mighty` 명령, 예약과 트리거, 백그라운드 데몬 연결)를 실행할 수 있습니다. 로그인해 둔 Mac이나 PC를 휴대폰이나 스크립트로 쓸 때 알맞습니다.
+- `mighty server start`는 앱을 창 없이 시작하고(`MightyCode --server`, 데몬의 `--daemon --headless`와 다릅니다), 앱이 답할 때까지 기다린 뒤 상태를 JSON으로 보여 줍니다. Mac에서는 Dock 아이콘과 메뉴 막대가 보이지 않습니다.
+- `mighty status`, `mighty agent new`, `send`, `wait` 같은 명령은 그대로 씁니다. `mighty server status`는 창이 있는지, 버전, PID, 실행 시간을 보여 줍니다.
+- 창이 필요하면 앱을 다시 엽니다(Mac은 Dock이나 Finder에서, Windows는 앱을 한 번 더 실행). 같은 데이터 폴더의 앱이 둘 실행되지 않고, 실행 중인 서버가 창을 엽니다. `mighty server show`도 같습니다. 이 창을 닫으면 서버는 창 없이 계속 실행되고, ⌘Q를 누르면 {{ui:server.quit.closeWindow}}와 {{ui:server.quit.stop}} 중에서 고릅니다.
+- `mighty server stop`은 평소처럼 앱을 종료합니다. {{ui:daemon.settings.toggle}}이 켜져 있으면 데몬의 작업은 계속 두고, `--stop-all`을 주면 함께 멈춥니다. Mac의 SIGTERM과 Windows의 콘솔 닫기도 같은 종료입니다.
+- {{ui:daemon.settings.sectionTitle}}의 {{ui:server.settings.loginToggle}}을 켜면 로그인할 때 서버로 시작합니다(Mac은 `~/Library/LaunchAgents`의 LaunchAgent, Windows는 현재 사용자의 Run 레지스트리 키). 처음에는 꺼져 있고 다음 로그인부터 적용됩니다.
+
+> [!note]
+> 터미널 창의 셸은 창이 그 창을 처음 보일 때 시작합니다(창과 함께 시작할 때와 같습니다). 창을 닫아도 이미 실행 중인 셸은 계속 돌고 `mighty pane read`로 읽을 수 있습니다. 휴대폰 연결 승인처럼 사람의 확인이 필요한 일이 생기면 창이 열립니다.
+
 ## 모델 {#models}
 {{ui:settings.nav.models}} 탭의 {{ui:settings.phaseModels.sectionTitle}}에서 작업 단계별로 쓸 모델을 이 컴퓨터 전체에 정합니다. 단계는 {{ui:settings.phaseModels.phase.planning}}, {{ui:settings.phaseModels.phase.execution}}, {{ui:settings.phaseModels.phase.review}}, {{ui:settings.phaseModels.phase.subagents}}입니다.
 - {{ui:settings.phaseModels.defaultOption}}으로 두면 CLI가 정합니다.
@@ -112,6 +123,7 @@ mighty agent send <pane> "테스트를 고쳐 줘"
 mighty agent wait <pane> --until done --timeout 600
 mighty pane wait-output <pane> --regex "passed|failed" --timeout 300
 mighty events --type pane.state
+mighty server start                             # 창 없이 시작 (status, show, stop [--stop-all])
 ```
 
 - 창 id는 앱이 쓰는 그대로이고 바뀌지 않습니다. 상태는 `idle`, `running`, `blocked`(승인·질문 대기), `done`, `failed`, `stopped`입니다.

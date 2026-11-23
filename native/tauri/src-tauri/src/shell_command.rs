@@ -17,7 +17,7 @@ pub const NAME: &str = "mighty";
 /// cannot be read as flags or injected into `osascript`; its file ends with one more newline). MC-9: its control commands (`status`,
 /// `workspace`, `pane`, `agent`, `events`, and `--profile`/`--help` before them) run the app's exe as `<exe> --cli …` ([`APP`] is
 /// replaced by the exe's path as it installs, `MIGHTY_CODE_APP` overrides it); anything else opens a folder as before (a folder named
-/// like a command opens as `mighty ./status`).
+/// like a command opens as `mighty ./status`). MC-3 adds `server` (start, status, show, stop the app without a window).
 pub const SCRIPT: &str = r#"#!/bin/sh
 # Mighty Code: open a folder (default: the current one) as a workspace,
 # with an optional request put in the composer (never sent).
@@ -26,7 +26,7 @@ pub const SCRIPT: &str = r#"#!/bin/sh
 #   mighty "fix the tests" open this folder with a request
 #   mighty status          control the running app (mighty --help)
 app="${MIGHTY_CODE_APP:-@APP@}"
-case "$1" in status|workspace|pane|agent|events|--profile|--help|-h)
+case "$1" in status|workspace|pane|agent|events|server|--profile|--help|-h)
   [ -x "$app" ] || { echo "mighty: $app is not there; install the shell command again from Mighty Code" >&2; exit 1; }
   exec "$app" --cli "$@" ;;
 esac
@@ -280,6 +280,7 @@ mod tests {
         assert_eq!(run(&["status", "--json"], &fake_app), (true, "app:--cli|app:status|app:--json|".into()));
         assert_eq!(run(&["agent", "send", "p1", "fix it"], &fake_app).1, "app:--cli|app:agent|app:send|app:p1|app:fix it|");
         assert_eq!(run(&["--profile", "/tmp/p", "pane", "list"], &fake_app).1, "app:--cli|app:--profile|app:/tmp/p|app:pane|app:list|");
+        assert_eq!(run(&["server", "start"], &fake_app).1, "app:--cli|app:server|app:start|", "MC-3: the server's commands too");
         let (_, opened) = run(&["fix the tests"], &fake_app);
         assert!(opened.starts_with("open:mightycode://open?path="), "a request still opens: {opened}");
         let (ok, _) = run(&["status"], &root.join("missing"));

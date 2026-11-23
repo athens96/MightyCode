@@ -93,13 +93,44 @@ impl std::fmt::Display for ControlError {
 pub enum Command {
     Status,
     WorkspaceList,
-    PaneList { workspace: Option<String> },
-    PaneRead { pane: String, lines: usize },
-    AgentSend { pane: String, text: String },
-    AgentNew { workspace: String, agent: String, worktree: bool },
-    AgentWait { pane: String, until: WaitUntil, timeout: Option<Duration> },
-    PaneWaitOutput { pane: String, regex: String, timeout: Option<Duration> },
-    Events { pane: Option<String>, types: Vec<String> },
+    PaneList {
+        workspace: Option<String>,
+    },
+    PaneRead {
+        pane: String,
+        lines: usize,
+    },
+    AgentSend {
+        pane: String,
+        text: String,
+    },
+    AgentNew {
+        workspace: String,
+        agent: String,
+        worktree: bool,
+    },
+    AgentWait {
+        pane: String,
+        until: WaitUntil,
+        timeout: Option<Duration>,
+    },
+    PaneWaitOutput {
+        pane: String,
+        regex: String,
+        timeout: Option<Duration>,
+    },
+    Events {
+        pane: Option<String>,
+        types: Vec<String>,
+    },
+    /// MC-3 headless server: how this app runs (started without a window or not, its window now, version, pid, uptime).
+    ServerStatus,
+    /// The app quits through its normal quit (the background daemon's work kept as its setting says; `stop_all` ends it too).
+    ServerStop {
+        stop_all: bool,
+    },
+    /// The app's window shown (made first when the app started without one).
+    AppShow,
 }
 
 impl Command {
@@ -114,6 +145,9 @@ impl Command {
             Command::AgentWait { .. } => "agent.wait",
             Command::PaneWaitOutput { .. } => "pane.waitOutput",
             Command::Events { .. } => "events.subscribe",
+            Command::ServerStatus => "server.status",
+            Command::ServerStop { .. } => "server.stop",
+            Command::AppShow => "app.show",
         }
     }
 
@@ -125,7 +159,10 @@ impl Command {
             }
         };
         match self {
-            Command::Status | Command::WorkspaceList => {}
+            Command::Status | Command::WorkspaceList | Command::ServerStatus | Command::AppShow => {}
+            Command::ServerStop { stop_all } => {
+                out.insert("stopAll".into(), json!(stop_all));
+            }
             Command::PaneList { workspace } => {
                 if let Some(w) = workspace {
                     out.insert("workspace".into(), json!(w));
@@ -305,6 +342,9 @@ pub fn parse_request(line: &[u8]) -> Result<Request, ControlError> {
                 types,
             }
         }
+        "server.status" => Command::ServerStatus,
+        "server.stop" => Command::ServerStop { stop_all: object.get("stopAll").and_then(Value::as_bool).unwrap_or(false) },
+        "app.show" => Command::AppShow,
         other => return Err(ControlError::bad(format!("unknown command '{}'", other.chars().take(40).collect::<String>()))),
     };
     Ok(Request { id, token, command })
@@ -418,6 +458,10 @@ mod tests {
             Command::PaneWaitOutput { pane: "p-1".into(), regex: "^ok\\b".into(), timeout: Some(Duration::from_secs(2)) },
             Command::Events { pane: Some("p-1".into()), types: vec!["pane.state".into()] },
             Command::Events { pane: None, types: vec![] },
+            Command::ServerStatus,
+            Command::ServerStop { stop_all: false },
+            Command::ServerStop { stop_all: true },
+            Command::AppShow,
         ];
         for command in commands {
             assert_eq!(round(command.clone()), command);
@@ -437,6 +481,9 @@ mod tests {
         assert_eq!(parse(r#"{"cmd":"agent.wait","pane":"p","until":"soon"}"#).unwrap_err().code, ErrorCode::BadRequest);
         assert_eq!(parse(r#"{"cmd":"events.subscribe","types":["secrets"]}"#).unwrap_err().code, ErrorCode::BadRequest);
         assert_eq!(parse(r#"{"cmd":"agent.wait","pane":"p","until":"idle","timeoutMs":-1}"#).unwrap_err().code, ErrorCode::BadRequest);
+        // A stop without `stopAll` keeps what the daemon setting keeps.
+        assert_eq!(parse(r#"{"cmd":"server.stop"}"#).unwrap(), Command::ServerStop { stop_all: false });
+        assert_eq!(parse(r#"{"cmd":"server.stop","stopAll":"yes"}"#).unwrap(), Command::ServerStop { stop_all: false });
     }
 
     #[test]

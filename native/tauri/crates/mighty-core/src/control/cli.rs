@@ -12,7 +12,7 @@ pub const EXIT_ERROR: i32 = 1;
 pub const EXIT_TIMEOUT: i32 = 2;
 
 /// The words that make `mighty` a control command rather than a folder or a request to open.
-pub const SUBCOMMANDS: [&str; 5] = ["status", "workspace", "pane", "agent", "events"];
+pub const SUBCOMMANDS: [&str; 6] = ["status", "workspace", "pane", "agent", "events", "server"];
 
 pub const USAGE: &str = "\
 usage: mighty <command> [options]
@@ -26,6 +26,10 @@ usage: mighty <command> [options]
   mighty agent new --workspace <id> [--agent <name>] [--worktree]
   mighty agent wait <pane> --until idle|blocked|done [--timeout S]
   mighty events [--pane <id>] [--type pane.state|attention|run.completed]…
+  mighty server start                             the app without a window (its phone link, schedules and this API)
+  mighty server status                            headless or windowed, version, pid, uptime
+  mighty server show                              open the window of the running app
+  mighty server stop [--stop-all]                 quit it (--stop-all also ends the background daemon's work)
 
   --profile <folder>   the app's data folder when it runs with --profile
   Output is JSON. Exit codes: 0 ok, 1 error, 2 timeout.
@@ -38,6 +42,8 @@ pub enum Invocation {
     Help,
     /// One request; `stdin_text` when `agent send`'s text is `-` (read from standard input by the caller).
     Run { command: Command, profile: Option<PathBuf>, stdin_text: bool },
+    /// `server start`: the app started without a window (`--server`), unless one already runs for the profile.
+    ServerStart { profile: Option<PathBuf> },
 }
 
 /// A usage error: its message, printed with the usage.
@@ -96,7 +102,7 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
                     } else {
                         options.push((name, Some(value)));
                     }
-                } else if name == "--worktree" {
+                } else if name == "--worktree" || name == "--stop-all" {
                     options.push((name, None));
                 } else {
                     return Err(usage(format!("unknown option {name}")));
@@ -185,6 +191,28 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
             }
             Command::Events { pane: option("--pane").map(str::to_string), types }
         }
+        ["server", "start", ..] => {
+            allowed(&[])?;
+            extra(2)?;
+            return Ok(Invocation::ServerStart { profile });
+        }
+        ["server", "status", ..] => {
+            allowed(&[])?;
+            extra(2)?;
+            Command::ServerStatus
+        }
+        ["server", "show", ..] => {
+            allowed(&[])?;
+            extra(2)?;
+            Command::AppShow
+        }
+        ["server", "stop", ..] => {
+            allowed(&["--stop-all"])?;
+            extra(2)?;
+            Command::ServerStop { stop_all: flag("--stop-all") }
+        }
+        ["server"] => return Err(usage("server takes start, status, show or stop")),
+        ["server", other, ..] => return Err(usage(format!("unknown server command '{other}': use start, status, show or stop"))),
         [first, ..] => return Err(usage(format!("unknown command '{first}'"))),
     };
     Ok(Invocation::Run { command, profile, stdin_text })
@@ -206,7 +234,7 @@ mod tests {
     fn command(args: &[&str]) -> Command {
         match run(args).unwrap() {
             Invocation::Run { command, .. } => command,
-            Invocation::Help => panic!("help"),
+            Invocation::Help | Invocation::ServerStart { .. } => panic!("not a request"),
         }
     }
 
@@ -250,6 +278,31 @@ mod tests {
         assert!(stdin_text);
         assert_eq!(run(&["--help"]).unwrap(), Invocation::Help);
         assert_eq!(run(&[]).unwrap(), Invocation::Help);
+    }
+
+    /// MC-3's headless server: `server start` is the CLI's own (it starts the app), the others are requests to the running app.
+    #[test]
+    fn the_server_commands_read() {
+        assert_eq!(run(&["server", "start"]).unwrap(), Invocation::ServerStart { profile: None });
+        assert_eq!(
+            run(&["--profile", "/tmp/p", "server", "start"]).unwrap(),
+            Invocation::ServerStart { profile: Some(PathBuf::from("/tmp/p")) }
+        );
+        assert_eq!(
+            run(&["server", "start", "--profile=/tmp/q"]).unwrap(),
+            Invocation::ServerStart { profile: Some(PathBuf::from("/tmp/q")) }
+        );
+        assert_eq!(command(&["server", "status", "--json"]), Command::ServerStatus);
+        assert_eq!(command(&["server", "show"]), Command::AppShow);
+        assert_eq!(command(&["server", "stop"]), Command::ServerStop { stop_all: false });
+        assert_eq!(command(&["server", "stop", "--stop-all"]), Command::ServerStop { stop_all: true });
+        let error = |args: &[&str]| run(args).unwrap_err().0;
+        assert_eq!(error(&["server"]), "server takes start, status, show or stop");
+        assert_eq!(error(&["server", "restart"]), "unknown server command 'restart': use start, status, show or stop");
+        assert_eq!(error(&["server", "start", "--stop-all"]), "--stop-all does not go with this command");
+        assert_eq!(error(&["server", "status", "now"]), "unexpected 'now'");
+        assert_eq!(error(&["agent", "new", "--workspace", "w", "--stop-all"]), "--stop-all does not go with this command");
+        assert!(SUBCOMMANDS.contains(&"server") && USAGE.contains("mighty server start"));
     }
 
     #[test]

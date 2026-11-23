@@ -228,11 +228,8 @@ async fn ask(host: &Arc<Host>, request: ApprovalRequest) -> bool {
             let _ = notifier.notify(notification).await;
         });
     }
-    if let Some(window) = host.app.get_webview_window(crate::host::WINDOW) {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
+    // MC-3: an app running without a window shows it, the person must answer here.
+    crate::server::bring_forward(host);
     let mut text = format!("{line}\n\n{}", locale.get("settings.mobileRemote.approval.explanation"));
     if request.replaces {
         text.push_str("\n\n");

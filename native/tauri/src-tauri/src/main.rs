@@ -72,6 +72,7 @@ mod review;
 mod runs;
 mod sandbox;
 mod saved_prompts;
+mod server;
 mod settings;
 mod settings_place;
 mod setup;
@@ -272,6 +273,100 @@ fn surfaces(app: &tauri::AppHandle) -> Option<Arc<SurfaceManager>> {
     app.try_state::<Arc<SurfaceManager>>().map(|state| state.inner().clone())
 }
 
+/// What the main window is made with, kept by the setup so that a window can also be made later (MC-3's headless server: an app
+/// started with `--server` makes it when it is asked to show one).
+struct WindowParts {
+    platform: mighty_platform::Platform,
+    webview_data: std::path::PathBuf,
+    origin_url: tauri::Url,
+    nonce_script: String,
+    debugging_port: Option<u16>,
+    adopted: bool,
+}
+
+/// The main window made, then what hangs on it: the session-ending watch, the focus watch, the native views over its page and the
+/// pet. On the main thread only (the setup, or `run_on_main_thread`); nothing when the window is there already. `theme` is the
+/// state's, for the window's first colour.
+fn open_main_window(app: &tauri::AppHandle, theme: &str) -> Result<(), String> {
+    if app.get_webview_window(WINDOW).is_some() {
+        return Ok(());
+    }
+    let (Some(host), Some(parts)) = (app.try_state::<Arc<Host>>(), app.try_state::<WindowParts>()) else {
+        return Err("the host has not started".into());
+    };
+    let (host, parts) = (host.inner().clone(), parts.inner());
+    let (r, g, b) = if theme == "light" { (0xEC, 0xEE, 0xF3) } else { (0x0B, 0x0F, 0x19) };
+    // Made again while another process still holds the data folder with other options (C#'s WebView2 right after the update
+    // swap; startup.rs, review M1), at most about 10 s; the setup runs before the event loop, so the wait blocks nothing else.
+    let window = startup::retry_while_held(
+        || {
+            let page = host.clone();
+            let navigation = AppOrigin(parts.origin_url.clone());
+            let loaded = AppOrigin(parts.origin_url.clone());
+            let mut window = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("index.html".into()))
+                // The host's nonce: the script defines it in the top frame on the app's origin only (wry runs it in every
+                // frame on Windows).
+                .initialization_script(parts.nonce_script.clone())
+                .title("Mighty Code")
+                .inner_size(1440.0, 920.0)
+                .min_inner_size(940.0, 650.0)
+                .background_color(tauri::window::Color(r, g, b, 255))
+                .data_directory(parts.webview_data.clone())
+                // The page takes dropped files itself (HTML5 drop → addAttachments), as C#'s WebView2 does; Tauri's own handler
+                // would swallow the drop on Windows.
+                .disable_drag_drop_handler()
+                // C# WebShell: the page never leaves the app's own origin (a stray drop or link would navigate it away), and it
+                // opens no window of its own.
+                .on_navigation(move |url| navigation.may_navigate(url))
+                .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
+                .on_page_load(move |webview, payload| {
+                    if payload.event() == PageLoadEvent::Started {
+                        // Off Windows a frame host may be navigated to (`may_navigate`): the top page itself never stays there.
+                        if !cfg!(windows) && !loaded.trusts(payload.url()) {
+                            if let Some(home) = loaded.home() {
+                                tauri::async_runtime::spawn(async move {
+                                    let _ = webview.navigate(home);
+                                });
+                            }
+                            return;
+                        }
+                        page.page_started();
+                        // On the UI thread: the views hide from a task, never here (a view may be waiting for this thread).
+                        if let Some(surfaces) = surfaces(&page.app) {
+                            tauri::async_runtime::spawn(async move { surfaces.page_started().await });
+                        }
+                    }
+                });
+            if let Some(port) = parts.debugging_port {
+                // These replace wry's own arguments, which are kept.
+                window = window.additional_browser_args(&format!(
+                    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"
+                ));
+            } else if parts.adopted {
+                // C#'s folder opens with C#'s options: no browser arguments (review M1).
+                window = window.additional_browser_args(startup::CSHARP_BROWSER_ARGUMENTS);
+            }
+            window.build()
+        },
+        std::thread::sleep,
+        |line| host.log.line(line),
+    )
+    .map_err(|error| error.to_string())?;
+    // W9-C: the session-ending watch on the main window, from its own thread (an install on quit waits while Windows ends it).
+    app_update::watch_window(&host, &window.as_ref().window());
+    // MC-26: the window's focus, for the panes waiting for the user.
+    attention::watch_window(&host, &window);
+    // MC-3: an app started without a window keeps running when this window closes (it hides instead).
+    server::watch_window(&host, &window);
+    // The native views over the page (the Mac's terminal, the pet), in the OS's implementation.
+    let factory = platform::surfaces(window.as_ref().window());
+    // The companion pet (companion.rs, W8-E): its window is one of the main window's native views.
+    companion::start(&host, &parts.platform, factory.clone());
+    let push = surface::page_push(app.clone());
+    app.manage(Arc::new(SurfaceManager::new(factory, parts.platform.profile.os, push)));
+    Ok(())
+}
+
 fn source_name(source: &LoadSource) -> String {
     match source {
         LoadSource::State => "state".into(),
@@ -337,8 +432,20 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // MC-3: a second start of a profile whose app already runs without a window asks that app for its window and ends; a `--server`
+    // start where one already runs ends at once (two apps never write one profile's state). Not in a smoke.
+    server::begin(options.server, options.profile.clone());
+    if let Some(code) = server::handoff::at_start(&options) {
+        std::process::exit(code);
+    }
     // What this run may write (W9: a release build's default, `--allow-state-write`, `--read-only`; startup.rs, W9-F).
     let context = tauri::generate_context!();
+    // A `--server` start beside another copy of the app that did not answer above (the Mac's LaunchServices sees it): never a
+    // server that writes nothing.
+    if options.server && platform::another_instance_running(&context.config().identifier) {
+        eprintln!("Mighty Code is already running; this start without a window ends.");
+        std::process::exit(0);
+    }
     let policy = startup::write_policy(&options, &context.config().identifier);
     // The OS's ports (platform.rs). Their paths are the data folder (`--profile` or %APPDATA%\MightyCode) and, for the default
     // profile only, the folders from before the rename (C# Program.cs).
@@ -449,6 +556,8 @@ fn main() {
     let theme = snapshot.theme().to_string();
     let mut parts = Some((state, banner, log, smoke));
     let debugging_port = options.remote_debugging_port;
+    // MC-3: `--server`, the app without a window (server.rs).
+    let headless = options.server;
     let native_dump = options.native_dump.clone();
     // The smoke's stand-in Claude records what it was sent beside the smoke's logs.
     #[cfg(feature = "dev-harness")]
@@ -669,76 +778,22 @@ fn main() {
             // folder per profile (Paths::webview_dir); W9-F: C#'s own in a release build on the default profile (`web_folders`).
             let webview_data = web_folders.page.clone();
             host.log.line(&format!("webview data {}", webview_data.display()));
-            let (r, g, b) = if theme == "light" { (0xEC, 0xEE, 0xF3) } else { (0x0B, 0x0F, 0x19) };
             let origin = AppOrigin::new(app.config());
             let origin_url = origin.0.clone();
             app.manage(origin);
             let nonce = HostNonce::new();
             let nonce_script = nonce.script(&origin_url);
             app.manage(nonce);
-            // Made again while another process still holds the data folder with other options (C#'s WebView2 right after the update
-            // swap; startup.rs, review M1), at most about 10 s; the setup runs before the event loop, so the wait blocks nothing else.
-            let window = startup::retry_while_held(
-                || {
-                    let page = host.clone();
-                    let navigation = AppOrigin(origin_url.clone());
-                    let loaded = AppOrigin(origin_url.clone());
-                    let mut window = WebviewWindowBuilder::new(app.handle(), WINDOW, WebviewUrl::App("index.html".into()))
-                        // The host's nonce: the script defines it in the top frame on the app's origin only (wry runs it in every
-                        // frame on Windows).
-                        .initialization_script(nonce_script.clone())
-                        .title("Mighty Code")
-                        .inner_size(1440.0, 920.0)
-                        .min_inner_size(940.0, 650.0)
-                        .background_color(tauri::window::Color(r, g, b, 255))
-                        .data_directory(webview_data.clone())
-                        // The page takes dropped files itself (HTML5 drop → addAttachments), as C#'s WebView2 does; Tauri's own handler
-                        // would swallow the drop on Windows.
-                        .disable_drag_drop_handler()
-                        // C# WebShell: the page never leaves the app's own origin (a stray drop or link would navigate it away), and it
-                        // opens no window of its own.
-                        .on_navigation(move |url| navigation.may_navigate(url))
-                        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
-                        .on_page_load(move |webview, payload| {
-                            if payload.event() == PageLoadEvent::Started {
-                                // Off Windows a frame host may be navigated to (`may_navigate`): the top page itself never stays there.
-                                if !cfg!(windows) && !loaded.trusts(payload.url()) {
-                                    if let Some(home) = loaded.home() {
-                                        tauri::async_runtime::spawn(async move {
-                                            let _ = webview.navigate(home);
-                                        });
-                                    }
-                                    return;
-                                }
-                                page.page_started();
-                                // On the UI thread: the views hide from a task, never here (a view may be waiting for this thread).
-                                if let Some(surfaces) = surfaces(&page.app) {
-                                    tauri::async_runtime::spawn(async move { surfaces.page_started().await });
-                                }
-                            }
-                        });
-                    if let Some(port) = debugging_port {
-                        // These replace wry's own arguments, which are kept.
-                        window = window.additional_browser_args(&format!(
-                            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"
-                        ));
-                    } else if adopted {
-                        // C#'s folder opens with C#'s options: no browser arguments (review M1).
-                        window = window.additional_browser_args(startup::CSHARP_BROWSER_ARGUMENTS);
-                    }
-                    window.build()
-                },
-                std::thread::sleep,
-                |line| host.log.line(line),
-            )?;
-            // W9-C: the session-ending watch on the main window, from its own thread (an install on quit waits while Windows ends it).
-            app_update::watch_window(&host, &window.as_ref().window());
-            // The native views over the page (the Mac's terminal, the pet), in the OS's implementation.
-            let factory = platform::surfaces(window.as_ref().window());
-            // The companion pet (companion.rs, W8-E): its window is one of the main window's native views.
-            companion::start(&host, &platform, factory.clone());
-            let push = surface::page_push(app.handle().clone());
-            app.manage(Arc::new(SurfaceManager::new(factory, platform.profile.os, push)));
+            app.manage(WindowParts { platform: platform.clone(), webview_data, origin_url, nonce_script, debugging_port, adopted });
+            if headless {
+                // MC-3's headless server: no window, no native views, no pet until one is asked for (server.rs); on the Mac no Dock
+                // icon and no menu bar meanwhile.
+                #[cfg(target_os = "macos")]
+                app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                server::started(&host);
+            } else {
+                open_main_window(app.handle(), &theme)?;
+            }
             Ok(())
         })
         .build(context)
@@ -751,7 +806,20 @@ fn main() {
         // MC-3: ⌘Q with work the daemon holds asks first whether to keep it running (daemon.rs).
         RunEvent::ExitRequested { code: None, api, .. } => {
             if let Some(host) = app.try_state::<Arc<Host>>() {
-                daemon::on_exit_requested(&host, || api.prevent_exit());
+                // MC-3: ⌘Q in the window of an app started without one asks whether the server stops or only the window closes.
+                if !server::on_exit_requested(&host, || api.prevent_exit()) {
+                    daemon::on_exit_requested(&host, || api.prevent_exit());
+                }
+            }
+        }
+        // MC-3: an app started without a window gives the keyboard back once launched (the Mac activates every app at launch).
+        #[cfg(target_os = "macos")]
+        RunEvent::Ready => server::launched(app),
+        // MC-3: opening the app again (the Dock, Finder) while it runs without a window shows its window.
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { has_visible_windows, .. } => {
+            if let Some(host) = app.try_state::<Arc<Host>>() {
+                server::reopened(&host, has_visible_windows);
             }
         }
         // Mac stage: an address the OS opened the app with (mightycode://, deep_link.rs, M-F).

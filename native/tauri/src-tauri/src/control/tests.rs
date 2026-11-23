@@ -20,16 +20,36 @@ use super::bus::{Bus, BusEvent};
 use super::server::{self, Backend};
 use super::{client, endpoint};
 
+/// What the fake app's quit takes down: its listener and endpoint (as `control::shutdown` does).
+type Quit = (Arc<dyn mighty_platform::AgentIoListener>, PathBuf, String);
+
 struct Fake {
     bus: Bus,
     states: Mutex<HashMap<String, PaneState>>,
     sent: Mutex<Vec<(String, String)>>,
+    /// MC-3: it started without a window; its window shown since; the stops it was asked for; what its quit closes.
+    headless: bool,
+    shown: Mutex<bool>,
+    stops: Mutex<Vec<bool>>,
+    quit: Mutex<Option<Quit>>,
 }
 
 impl Fake {
     fn new() -> Arc<Fake> {
+        Fake::started(false)
+    }
+
+    fn started(headless: bool) -> Arc<Fake> {
         let states = HashMap::from([("p1".to_string(), PaneState::Idle), ("p2".to_string(), PaneState::Running)]);
-        Arc::new(Fake { bus: Bus::default(), states: Mutex::new(states), sent: Mutex::default() })
+        Arc::new(Fake {
+            bus: Bus::default(),
+            states: Mutex::new(states),
+            sent: Mutex::default(),
+            headless,
+            shown: Mutex::new(!headless),
+            stops: Mutex::default(),
+            quit: Mutex::default(),
+        })
     }
 
     fn pane(&self, id: &str) -> Value {
@@ -89,6 +109,28 @@ impl Backend for Fake {
     fn redact(&self, text: &str) -> String {
         text.replace("sk-secret", "[redacted]")
     }
+    fn server_status(&self) -> Result<Value, ControlError> {
+        let shown = *self.shown.lock().unwrap();
+        Ok(json!({ "running": true, "mode": if shown { "windowed" } else { "headless" }, "startedHeadless": self.headless,
+                   "window": if shown { "shown" } else { "none" }, "version": "test", "pid": 4242, "uptimeSeconds": 1 }))
+    }
+    /// As the app does: answered first, the listener closed and the endpoint removed a moment later.
+    fn server_stop(&self, stop_all: bool) -> Result<Value, ControlError> {
+        self.stops.lock().unwrap().push(stop_all);
+        let quit = self.quit.lock().unwrap().take();
+        if let Some((listener, data, address)) = quit {
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+                listener.close();
+                endpoint::remove_endpoint(&data, &address);
+            });
+        }
+        Ok(json!({ "stopping": true, "pid": 4242, "keptDaemonWork": false }))
+    }
+    fn show_window(&self) -> Result<Value, ControlError> {
+        let was = std::mem::replace(&mut *self.shown.lock().unwrap(), true);
+        Ok(json!({ "window": if was { "shown" } else { "opening" }, "pid": 4242 }))
+    }
 }
 
 /// A short profile folder under /tmp (a socket path must fit 104 bytes).
@@ -114,9 +156,13 @@ impl Drop for Served {
 }
 
 fn serve(name: &str) -> Served {
-    let data = profile(name);
+    serve_in(profile(name), Fake::new())
+}
+
+/// A fake app serving `data`'s control API.
+fn serve_in(data: PathBuf, fake: Arc<Fake>) -> Served {
     let (listener, address, auth) = super::open(&data, "test").unwrap();
-    let fake = Fake::new();
+    *fake.quit.lock().unwrap() = Some((listener.clone(), data.clone(), address.clone()));
     let backend: Arc<dyn Backend> = fake.clone();
     tokio::spawn(server::serve(listener.clone(), backend, auth.clone()));
     Served { data, fake, auth, address, listener }
@@ -285,4 +331,107 @@ async fn the_cli_says_when_the_app_is_not_running_and_a_second_app_does_not_take
     let (code, _) = cli_call(&data, &["status"]).await;
     assert_eq!(code, cli::EXIT_ERROR);
     let _ = std::fs::remove_dir_all(&data);
+}
+
+/// MC-3: `mighty server status|start|show|stop` against the profile's app: nothing running is told apart from an error, a start
+/// launches once and waits for the app to answer (or times out), a second start finds it, show asks for its window and stop waits
+/// until the app has quit.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_server_commands_start_show_and_stop_the_app() {
+    let data = profile("server");
+    let (code, out) = cli_call(&data, &["server", "status"]).await;
+    assert_eq!((code, parsed(&out)["running"].as_bool()), (cli::EXIT_ERROR, Some(false)), "{out}");
+    let (code, out) = cli_call(&data, &["server", "stop"]).await;
+    assert_eq!((code, parsed(&out)["stopped"].as_bool()), (cli::EXIT_OK, Some(false)), "stopping nothing is no error: {out}");
+
+    // A launch that never answers times out (exit 2) and says which process.
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let code =
+        client::server_start(&data, crate::platform::control_connector(), || Ok(77), Duration::from_millis(600), &mut out, &mut err).await;
+    assert_eq!(code, cli::EXIT_TIMEOUT);
+    assert!(parsed(&String::from_utf8(out).unwrap())["error"]["message"].as_str().unwrap().contains("pid 77"));
+
+    // The launch starts the app (here a fake one serving the profile), the CLI waits for its answer.
+    let served: Arc<Mutex<Option<Served>>> = Arc::default();
+    let launched = served.clone();
+    let folder = data.clone();
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let launch = move || {
+        let slow = folder.clone();
+        let into = launched.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            *into.lock().unwrap() = Some(serve_in(slow, Fake::started(true)));
+        });
+        Ok(4242)
+    };
+    let code = client::server_start(&data, crate::platform::control_connector(), launch, Duration::from_secs(10), &mut out, &mut err).await;
+    let started = parsed(&String::from_utf8(out).unwrap());
+    assert_eq!(code, cli::EXIT_OK, "{started}");
+    assert_eq!((started["started"].as_bool(), started["alreadyRunning"].as_bool()), (Some(true), Some(false)));
+    assert_eq!((started["mode"].as_str(), started["startedHeadless"].as_bool()), (Some("headless"), Some(true)));
+
+    // A second start finds it and launches nothing.
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let again = client::server_start(
+        &data,
+        crate::platform::control_connector(),
+        || -> Result<u32, String> { panic!("a running app is never started twice") },
+        Duration::from_secs(5),
+        &mut out,
+        &mut err,
+    )
+    .await;
+    assert_eq!((again, parsed(&String::from_utf8(out).unwrap())["alreadyRunning"].as_bool()), (cli::EXIT_OK, Some(true)));
+
+    let (code, out) = cli_call(&data, &["server", "status"]).await;
+    assert_eq!((code, parsed(&out)["window"].as_str()), (cli::EXIT_OK, Some("none")));
+    assert_eq!(parsed(&cli_call(&data, &["server", "show"]).await.1)["window"], "opening");
+    assert_eq!(parsed(&cli_call(&data, &["server", "status"]).await.1)["mode"], "windowed");
+    assert_eq!(parsed(&cli_call(&data, &["server", "show"]).await.1)["window"], "shown", "a shown window is only brought forward");
+
+    // The stop: answered, then waited for until nobody answers and the process has ended.
+    let fake = served.lock().unwrap().as_ref().unwrap().fake.clone();
+    let waited: Arc<Mutex<Vec<u32>>> = Arc::default();
+    let seen = waited.clone();
+    let exited = move |pid: u32, _: Duration| {
+        seen.lock().unwrap().push(pid);
+        true
+    };
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let code =
+        client::server_stop(&data, crate::platform::control_connector(), true, Duration::from_secs(10), &exited, &mut out, &mut err).await;
+    let stopped = parsed(&String::from_utf8(out).unwrap());
+    assert_eq!((code, stopped["stopped"].as_bool(), stopped["pid"].as_u64()), (cli::EXIT_OK, Some(true), Some(4242)), "{stopped}");
+    assert_eq!(*fake.stops.lock().unwrap(), vec![true], "--stop-all reached the app");
+    assert_eq!(*waited.lock().unwrap(), vec![4242], "the process's end was waited for");
+    assert!(endpoint::read_endpoint(&data).is_none());
+    assert_eq!(cli_call(&data, &["server", "status"]).await.0, cli::EXIT_ERROR);
+    drop(served.lock().unwrap().take());
+}
+
+/// MC-3: a start of a profile whose app runs without a window hands over to it (its window shown there) and ends; a `--server` start
+/// ends when any app runs; a start beside an app with its own window goes on as before; nothing is asked of an empty profile.
+#[test]
+fn a_start_hands_over_to_the_running_server() {
+    let options = |data: &Path, server: bool| crate::args::Options { profile: Some(data.to_path_buf()), server, ..Default::default() };
+    let empty = profile("handoff-none");
+    assert_eq!(crate::server::handoff::at_start(&options(&empty, false)), None);
+    assert_eq!(crate::server::handoff::at_start(&options(&empty, true)), None);
+
+    let headless = profile("handoff-server");
+    let server = tauri::async_runtime::block_on(async { serve_in(headless.clone(), Fake::started(true)) });
+    assert_eq!(crate::server::handoff::at_start(&options(&headless, true)), Some(0), "never a second server");
+    assert!(!*server.fake.shown.lock().unwrap());
+    assert_eq!(crate::server::handoff::at_start(&options(&headless, false)), Some(0), "the window is shown there");
+    assert!(*server.fake.shown.lock().unwrap());
+    let smoke = crate::args::Options { smoke_test: true, ..options(&headless, false) };
+    assert_eq!(crate::server::handoff::at_start(&smoke), None, "a smoke never asks");
+
+    let windowed = profile("handoff-window");
+    let app = tauri::async_runtime::block_on(async { serve_in(windowed.clone(), Fake::started(false)) });
+    assert_eq!(crate::server::handoff::at_start(&options(&windowed, false)), None, "as before the server existed");
+    assert_eq!(crate::server::handoff::at_start(&options(&windowed, true)), Some(0), "a server never starts beside it");
+    drop((server, app));
+    let _ = std::fs::remove_dir_all(&empty);
 }

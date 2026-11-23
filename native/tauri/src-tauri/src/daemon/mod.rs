@@ -405,7 +405,12 @@ async fn running(client: &DaemonClient) -> usize {
 
 /// The update's restart keeps the daemon's work whatever the person chose before.
 pub fn keep_for_update() {
-    *lock(&app().quit) = Some(Quit::Keep);
+    quit_as(Quit::Keep);
+}
+
+/// The quit's choice made without asking (the update's restart; MC-3's headless server stopping, server.rs `stop_choice`).
+pub fn quit_as(choice: Quit) {
+    *lock(&app().quit) = Some(choice);
 }
 
 /// ⌘Q (or the window's close) with the setting on and something running: the quit waits for the person's answer — keep it running,
@@ -419,9 +424,10 @@ pub fn on_exit_requested(host: &Arc<Host>, hold: impl FnOnce()) -> bool {
         return true;
     }
     let Some(client) = lock(&app().client).clone().filter(|c| !c.is_closed()) else { return false };
-    let alive = host.app.get_webview_window(crate::host::WINDOW).is_some();
+    // A window that shows (MC-3: the hidden window of an app started without one does not).
+    let alive = crate::server::window_shown(host);
     if !alive {
-        // No window left to ask in (Windows' last window closed): the setting's own meaning, keep.
+        // No window left to ask in (Windows' last window closed, the headless server): the setting's own meaning, keep.
         *lock(&app().quit) = Some(Quit::Keep);
         return false;
     }

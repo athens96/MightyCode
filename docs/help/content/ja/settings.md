@@ -42,6 +42,17 @@ Mac では表示メニューの {{ui:menu.textBigger}}（{{kbd:⌘=}}）、{{ui:
 > [!note]
 > 続くのは Claude エージェントの実行とターミナルペインです。ほかのエージェント(Codex、Gemini など)の実行はデーモンで動いていても、アプリを閉じると止まります。続きから再接続した Claude の実行は、そのターンが終わるまで Mighty との連携(委任ツール、アクティビティ表示)を使えないことがあります。デーモンが異常終了すると中の作業も終わり、ペインは停止になります。更新でデーモンとアプリのバージョンが異なる場合、アプリは接続せず、以前のデーモンの作業を停止するか確認します。デーモンに接続できるのはこのコンピューターの同じユーザーだけです(Mac は権限 0600 のソケット、Windows は現在のユーザーだけが開ける名前付きパイプ、データフォルダーの `daemon/token` のトークン)。
 
+### ウィンドウなしで実行 (サーバー) {#server}
+ウィンドウを開かずに Mighty Code 全体(スマートフォン連携、リモートミラー、`mighty` コマンド、スケジュールとトリガー、バックグラウンドのデーモンとの接続)を実行できます。ログインしたままの Mac や PC をスマートフォンやスクリプトから使うときに向いています。
+- `mighty server start` はアプリをウィンドウなしで起動し(`MightyCode --server`、デーモンの `--daemon --headless` とは別です)、応答するまで待ってから状態を JSON で表示します。Mac では Dock アイコンとメニューバーが表示されません。
+- `mighty status`、`mighty agent new`、`send`、`wait` などのコマンドはそのまま使えます。`mighty server status` はウィンドウの有無、バージョン、PID、稼働時間を表示します。
+- ウィンドウが必要なときはアプリをもう一度開きます(Mac は Dock や Finder から、Windows はアプリをもう一度起動)。同じデータフォルダーのアプリが 2 つ動くことはなく、実行中のサーバーがウィンドウを開きます。`mighty server show` も同じです。このウィンドウを閉じてもサーバーはウィンドウなしで実行を続け、⌘Q を押すと{{ui:server.quit.closeWindow}}と{{ui:server.quit.stop}}から選びます。
+- `mighty server stop` は通常どおりアプリを終了します。{{ui:daemon.settings.toggle}}がオンならデーモンの作業は続け、`--stop-all` を付けると一緒に停止します。Mac の SIGTERM と Windows のコンソールを閉じる操作も同じ終了です。
+- {{ui:daemon.settings.sectionTitle}}の{{ui:server.settings.loginToggle}}をオンにすると、ログイン時にサーバーとして起動します(Mac は `~/Library/LaunchAgents` の LaunchAgent、Windows は現在のユーザーの Run レジストリキー)。最初はオフで、次回のログインから有効になります。
+
+> [!note]
+> ターミナルペインのシェルは、ウィンドウがそのペインを初めて表示したときに起動します(ウィンドウ付きで起動したときと同じです)。ウィンドウを閉じても実行中のシェルは動き続け、`mighty pane read` で読めます。スマートフォンの接続承認のように確認が必要なことが起きると、ウィンドウが開きます。
+
 ## モデル {#models}
 {{ui:settings.nav.models}}タブの{{ui:settings.phaseModels.sectionTitle}}で、作業の段階ごとに使うモデルをこのコンピュータ全体で設定します。段階は{{ui:settings.phaseModels.phase.planning}}、{{ui:settings.phaseModels.phase.execution}}、{{ui:settings.phaseModels.phase.review}}、{{ui:settings.phaseModels.phase.subagents}}です。
 - {{ui:settings.phaseModels.defaultOption}}のままにすると、CLIが決めます。
@@ -112,6 +123,7 @@ mighty agent send <pane> "テストを直して"
 mighty agent wait <pane> --until done --timeout 600
 mighty pane wait-output <pane> --regex "passed|failed" --timeout 300
 mighty events --type pane.state
+mighty server start                             # ウィンドウなしで起動 (status, show, stop [--stop-all])
 ```
 
 - ペイン id はアプリが使うものそのままで、変わりません。状態は `idle`、`running`、`blocked`（承認・質問待ち）、`done`、`failed`、`stopped` です。

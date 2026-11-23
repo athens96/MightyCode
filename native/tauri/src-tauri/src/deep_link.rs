@@ -259,10 +259,9 @@ pub async fn open(host: &Arc<Host>, link: &DeepLink, activate: bool) -> Result<O
         host.view().error = Some(host.locale.get_with("deepLink.error.noFolder", &[("path", &link.path)]));
         return Ok(None);
     }
-    if activate && let Some(window) = host.app.get_webview_window(crate::host::WINDOW) {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
+    if activate {
+        // MC-3: an app running without a window shows it (made first when it has none).
+        crate::server::bring_forward(host);
     }
     let existing = {
         let view = host.view();

@@ -20,6 +20,10 @@
 //! `--perf-scenario`              W9-H: the timing scenario in the smoke's place (needs `--smoke-test`, not with `--help-capture`)
 //! `-Embedding`                   W9-F: COM started the app for a toast's activation (the app starts as usual; COM calls it)
 //! `----AppNotificationActivated:…`  W9-F: a toast left by C#'s Windows App SDK registration; accepted and ignored
+//! `--server`                     MC-3: the app without a window (the headless server, server.rs): the host, the run engine, the phone
+//!                                relay, the control API, the mirror, the schedules and the daemon link run; a window shows when
+//!                                asked (the Dock, a second start, `mighty server show`). Not `--daemon --headless`, the process
+//!                                daemon (daemon/entry.rs), which main.rs serves before this parser and which runs no host at all
 //! `-psn_…`                       Mac stage: the process serial number older LaunchServices passed; accepted and ignored on the Mac
 //!                                (a refused argument would quit an app 0.4.x's updater relaunched with `open -n`; plan §1.1)
 //!
@@ -55,6 +59,8 @@ pub struct Options {
     pub perf_scenario: bool,
     /// W9-F: started by COM for a toast's activation (`-Embedding`).
     pub embedding: bool,
+    /// MC-3: `--server`, the app without a window (server.rs).
+    pub server: bool,
 }
 
 fn absolute(flag: &str, value: Option<String>) -> Result<PathBuf, String> {
@@ -105,6 +111,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
                 options.help_language = Some(language);
             }
             "-Embedding" => options.embedding = true,
+            crate::server::ARGUMENT => options.server = true,
             other if other.starts_with(APP_SDK_ACTIVATION) => {}
             other if mac_launch_argument(other) => {}
             other => return Err(format!("Unsupported argument: {other}")),
@@ -130,6 +137,10 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> 
     }
     if options.remote_debugging_port.is_some() && !debugging_port_allowed(cfg!(debug_assertions), options.smoke_test) {
         return Err("--remote-debugging-port works only in a development build or with --smoke-test.".into());
+    }
+    // The headless server draws nothing a smoke could read, and opens no DevTools port.
+    if options.server && (options.smoke_test || options.remote_debugging_port.is_some()) {
+        return Err("--server does not go with --smoke-test or --remote-debugging-port.".into());
     }
     if options.smoke_test && options.profile.is_none() {
         return Err("--smoke-test needs --profile.".into());
@@ -209,6 +220,23 @@ mod tests {
         assert!(parsed(&["----AppNotificationActivated:sessionId=abc"]).is_ok());
         assert!(parsed(&["-embedding"]).is_err(), "COM's switch as COM writes it");
         assert!(parsed(&["--update-helper", "--staged", root]).is_err());
+    }
+
+    /// MC-3: `--server` starts the app without a window, alone or with a profile and the write switches; never in a smoke, never with
+    /// the daemon's own `--headless` (the process daemon is `--daemon --headless`, served before this parser).
+    #[test]
+    fn the_server_switch_reads_and_keeps_out_of_the_smoke() {
+        let root = if cfg!(windows) { "C:\\p" } else { "/p" };
+        assert!(parsed(&["--server"]).unwrap().server);
+        assert!(!parsed(&[]).unwrap().server, "a window unless asked");
+        let with_profile = parsed(&["--server", "--profile", root, "--allow-state-write"]).unwrap();
+        assert!(with_profile.server && with_profile.allow_state_write && with_profile.profile.is_some());
+        let refusal = "--server does not go with --smoke-test or --remote-debugging-port.";
+        assert_eq!(parsed(&["--server", "--smoke-test", "--profile", root]).unwrap_err(), refusal);
+        assert_eq!(parsed(&["--server", "--help-capture", "--profile", root]).unwrap_err(), refusal);
+        assert_eq!(parsed(&["--server", "--smoke-test", "--profile", root, "--remote-debugging-port", "9222"]).unwrap_err(), refusal);
+        assert_eq!(parsed(&["--headless"]).unwrap_err(), "Unsupported argument: --headless", "the daemon's switch is not the app's");
+        assert_eq!(parsed(&["--daemon"]).unwrap_err(), "Unsupported argument: --daemon");
     }
 
     /// Mac stage (plan §1.1): an app the 0.4.x updater relaunched with `open -n` may get LaunchServices' `-psn_…`; the Mac ignores it,

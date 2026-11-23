@@ -837,12 +837,7 @@ async fn press(host: &Arc<Host>, companion: &Arc<CompanionApp>, key: &str, actio
             // window is asked (review H2: focusing takes the view's lock, which the shell clock holds while it reads the state's).
             with_shown(companion, |shown| match shown {
                 Some(shown) => crate::notifications::focus(host, &shown),
-                None => {
-                    if let Some(window) = host.app.get_webview_window(crate::host::WINDOW) {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                }
+                None => crate::server::bring_forward(host),
             });
             return;
         }

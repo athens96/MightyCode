@@ -42,6 +42,17 @@ section: settings
 > [!note]
 > 会继续的是 Claude 代理运行和终端窗格。其他代理（Codex、Gemini 等）的运行即使在守护进程中运行，也会在关闭应用时停止。重新接上的 Claude 运行在本轮结束前可能无法使用 Mighty 连接（委派工具、活动显示）。守护进程异常结束时，其中的任务也会结束，窗格显示为已停止。更新后守护进程与应用版本不同时，应用不会连接，而是询问是否停止早期守护进程的任务。只有这台电脑上的同一用户才能连接守护进程（Mac 上是权限为 0600 的套接字，Windows 上是只有当前用户能打开的命名管道，令牌位于数据文件夹的 `daemon/token`）。
 
+### 无窗口运行（服务器） {#server}
+可以不打开窗口而运行完整的 Mighty Code（手机连接、远程镜像、`mighty` 命令、计划和触发器、后台守护进程连接）。适合从手机或脚本使用一台保持登录的 Mac 或 PC。
+- `mighty server start` 以无窗口方式启动应用（`MightyCode --server`，与守护进程的 `--daemon --headless` 不同），等待应用响应后以 JSON 显示状态。在 Mac 上不显示 Dock 图标和菜单栏。
+- `mighty status`、`mighty agent new`、`send`、`wait` 等命令照常使用。`mighty server status` 显示是否有窗口、版本、PID 和运行时间。
+- 需要窗口时再次打开应用（Mac 上从 Dock 或 Finder，Windows 上再启动一次应用）。同一数据文件夹不会同时运行两个应用，正在运行的服务器会打开它的窗口。`mighty server show` 也一样。关闭这个窗口后服务器仍以无窗口方式继续运行，按 ⌘Q 会让你在{{ui:server.quit.closeWindow}}和{{ui:server.quit.stop}}之间选择。
+- `mighty server stop` 像平常一样退出应用。打开{{ui:daemon.settings.toggle}}时守护进程中的任务继续运行，加上 `--stop-all` 则一并停止。Mac 上的 SIGTERM 和 Windows 上关闭控制台也是同样的退出。
+- 打开{{ui:daemon.settings.sectionTitle}}中的{{ui:server.settings.loginToggle}}后，登录时会以服务器方式启动（Mac 上是 `~/Library/LaunchAgents` 中的 LaunchAgent，Windows 上是当前用户的 Run 注册表项）。默认关闭，从下次登录起生效。
+
+> [!note]
+> 终端窗格的 shell 在窗口第一次显示该窗格时启动（与带窗口启动时相同）。关闭窗口后已在运行的 shell 会继续运行，可以用 `mighty pane read` 读取。遇到需要你确认的事（例如批准手机连接）时会打开窗口。
+
 ## 模型 {#models}
 在{{ui:settings.nav.models}}标签页的{{ui:settings.phaseModels.sectionTitle}}中，为整台电脑设置各工作阶段使用的模型。阶段包括{{ui:settings.phaseModels.phase.planning}}、{{ui:settings.phaseModels.phase.execution}}、{{ui:settings.phaseModels.phase.review}}和{{ui:settings.phaseModels.phase.subagents}}。
 - 保持{{ui:settings.phaseModels.defaultOption}}时，由 CLI 决定。
@@ -112,6 +123,7 @@ mighty agent send <pane> "修复测试"
 mighty agent wait <pane> --until done --timeout 600
 mighty pane wait-output <pane> --regex "passed|failed" --timeout 300
 mighty events --type pane.state
+mighty server start                             # 无窗口启动 (status, show, stop [--stop-all])
 ```
 
 - 窗格 id 就是应用自己的 id，不会改变。状态为 `idle`、`running`、`blocked`（等待批准或回答）、`done`、`failed`、`stopped`。

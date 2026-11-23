@@ -398,21 +398,27 @@ fn pr_help(locale: &mighty_core::locale::Locale, number: i64, state: &str, check
     help
 }
 
-/// The window's focus followed, and the ports and pull requests read while it shows (main.rs, once the host started; never in a
-/// smoke).
-pub fn start(host: &Arc<Host>) {
-    if let Some(window) = host.app.get_webview_window(crate::host::WINDOW) {
-        let weak = Arc::downgrade(host);
-        window.on_window_event(move |event| {
-            if let tauri::WindowEvent::Focused(front) = event {
-                FRONT.store(*front, Ordering::SeqCst);
-                // Coming back to the pane that was marked clears it.
-                if *front && let Some(host) = weak.upgrade() {
-                    host.shell_dirty();
-                }
+/// The window's focus followed (main.rs, as the main window is made: at the start, or later in an app started without one).
+pub fn watch_window(host: &Arc<Host>, window: &tauri::WebviewWindow) {
+    let weak = Arc::downgrade(host);
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::Focused(front) = event {
+            FRONT.store(*front, Ordering::SeqCst);
+            // Coming back to the pane that was marked clears it.
+            if *front && let Some(host) = weak.upgrade() {
+                host.shell_dirty();
             }
-        });
-    }
+        }
+    });
+}
+
+/// MC-3: whether the app is in front, as the headless server says it (no window, or its window hidden: nobody looks at any pane).
+pub fn set_front(front: bool) {
+    FRONT.store(front, Ordering::SeqCst);
+}
+
+/// The ports and pull requests read while the window shows (main.rs, once the host started; never in a smoke).
+pub fn start(host: &Arc<Host>) {
     if host.smoke.is_some() {
         return;
     }

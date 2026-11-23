@@ -44,6 +44,18 @@ pub trait Backend: Send + Sync + 'static {
     fn redact(&self, text: &str) -> String {
         text.to_string()
     }
+    /// MC-3: how the app runs (`server.status`).
+    fn server_status(&self) -> Result<Value, ControlError> {
+        Err(ControlError::new(ErrorCode::Failed, "this app has no server status"))
+    }
+    /// MC-3: the app quits through its normal quit, after this answer (`server.stop`).
+    fn server_stop(&self, _stop_all: bool) -> Result<Value, ControlError> {
+        Err(ControlError::new(ErrorCode::Failed, "this app cannot be stopped from here"))
+    }
+    /// MC-3: the app's window shown, made first when it has none (`app.show`).
+    fn show_window(&self) -> Result<Value, ControlError> {
+        Err(ControlError::new(ErrorCode::Failed, "this app has no window to show"))
+    }
 }
 
 /// The token every request must carry, and its generation (a new token closes what the old one opened).
@@ -195,6 +207,9 @@ async fn answer(connection: &mut Connection, backend: &dyn Backend, auth: &Auth,
             }
         }
         Command::Events { pane, types } => return stream(connection, backend, auth, generation, id, EventFilter { pane, types }).await,
+        Command::ServerStatus => backend.server_status(),
+        Command::ServerStop { stop_all } => backend.server_stop(stop_all),
+        Command::AppShow => backend.show_window(),
     };
     let line = match &result {
         Ok(value) => ok_line(id, value.clone()),

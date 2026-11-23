@@ -9,8 +9,8 @@ use std::os::windows::ffi::OsStrExt;
 
 use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
 use windows_sys::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_OPTION_NON_VOLATILE, RegCloseKey, RegCreateKeyExW, RegDeleteKeyW, RegDeleteTreeW,
-    RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryInfoKeyW, RegSetKeyValueW,
+    HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_OPTION_NON_VOLATILE, RegCloseKey, RegCreateKeyExW, RegDeleteKeyValueW, RegDeleteKeyW,
+    RegDeleteTreeW, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, RegQueryInfoKeyW, RegSetKeyValueW,
 };
 
 fn wide(text: &str) -> Vec<u16> {
@@ -227,6 +227,17 @@ impl CurrentUserRegistry {
         if status == ERROR_SUCCESS { Ok(()) } else { Err(failed(status)) }
     }
 
+    /// One value removed from a key (MC-3's start-at-login Run value); a missing key or value is no error.
+    pub fn delete_value(&self, path: &str, name: &str) -> io::Result<()> {
+        let (path, name) = (wide(&self.path(path)), wide(name));
+        // SAFETY: NUL-terminated names under HKCU.
+        let status = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, path.as_ptr(), name.as_ptr()) };
+        match status {
+            ERROR_SUCCESS | ERROR_FILE_NOT_FOUND => Ok(()),
+            code => Err(failed(code)),
+        }
+    }
+
     /// A text value (`REG_SZ`), as C#'s `SetValue(name, string)` writes it.
     pub fn set_text(&self, path: &str, name: &str, text: &str) -> io::Result<()> {
         self.set_os_text(path, name, std::ffi::OsStr::new(text))
@@ -301,6 +312,12 @@ pub(crate) mod tests {
         children.sort();
         assert_eq!(children, ["Child", "Empty"]);
         registry.set_text("Old", "text", "again").unwrap();
+        // MC-3: one value removed, the others kept; a value or key that is not there is no error.
+        registry.delete_value("Old", "dword").unwrap();
+        assert!(registry.values("Old").unwrap().iter().all(|value| value.name != "dword"));
+        assert!(registry.values("Old").unwrap().iter().any(|value| value.name == "qword"));
+        registry.delete_value("Old", "dword").unwrap();
+        registry.delete_value("Missing", "dword").unwrap();
         assert!(registry.values("Old").unwrap().iter().any(|value| value.name == "text" && value.data == utf16("again")));
         // A path that is no valid Unicode (a lone surrogate) is written unit for unit.
         use std::os::windows::ffi::OsStringExt;

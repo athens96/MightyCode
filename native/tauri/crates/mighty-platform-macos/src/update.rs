@@ -83,8 +83,25 @@ impl UpdateInstaller for MacUpdateInstaller {
         Err(unsupported("helper_mutex"))
     }
 
-    fn wait_for_exit(&self, _pid: u32, _timeout: std::time::Duration) -> Result<bool> {
-        Err(unsupported("wait_for_exit"))
+    /// MC-3 (`mighty server stop` waits for the app it stopped): `kill(pid, 0)` asked every 50 ms until no such process (an id this
+    /// user may not signal still runs), at most `timeout`.
+    fn wait_for_exit(&self, pid: u32, timeout: std::time::Duration) -> Result<bool> {
+        let Ok(pid) = libc::pid_t::try_from(pid) else { return Ok(true) };
+        if pid <= 0 {
+            return Ok(true);
+        }
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            // SAFETY: signal 0 only asks whether the process exists.
+            let gone = unsafe { libc::kill(pid, 0) } != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            if gone {
+                return Ok(true);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
 
     fn running_from(&self, _folder: &Path, _except_self: bool) -> Result<bool> {
@@ -339,6 +356,21 @@ mod tests {
 
     fn mode(path: &Path) -> u32 {
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    /// MC-3: the wait for an app's exit answers false while the process runs and true once it has gone (a reaped child's id).
+    #[allow(clippy::disallowed_methods, reason = "a short-lived child of the test's own, reaped here, so its id is gone")]
+    #[test]
+    fn the_wait_for_exit_tells_a_running_process_from_a_gone_one() {
+        let installer = MacUpdateInstaller::new(crate::process::process_host());
+        assert!(!installer.wait_for_exit(std::process::id(), Duration::from_millis(60)).unwrap(), "this process runs");
+        let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        let started = Instant::now();
+        assert!(installer.wait_for_exit(pid, Duration::from_secs(5)).unwrap(), "an exited and reaped child has exited");
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(installer.wait_for_exit(0, Duration::ZERO).unwrap(), "no process group is waited on");
     }
 
     fn wait_for(path: &Path, text: &str) -> String {
