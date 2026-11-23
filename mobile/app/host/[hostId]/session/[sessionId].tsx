@@ -29,6 +29,7 @@ import {
   type MobileResultFile,
   type MobileSavedPrompt,
   type MobileSessionDetail,
+  type MobileSessionSummary,
   type PlanDecisionKind,
   type QueuedItem,
   type QuestionAnswers,
@@ -54,6 +55,9 @@ import { TerminalPromptCard } from '@/components/terminal-prompt-card';
 import { QuestionnaireCard } from '@/components/questionnaire-card';
 import { QueuedList } from '@/components/queued-list';
 import { PaneWorktreeBar } from '@/components/pane-worktree-bar';
+import { PaneMarks } from '@/components/pane-marks';
+import { CompareRunsCards } from '@/components/compare-runs';
+import { compareRunsOf } from '@/lib/compare';
 import {
   SessionHeader,
   SessionTitle,
@@ -135,6 +139,7 @@ import { useForgetRefusedSecret } from '@/store/hosts';
 import {
   useDetailReceivedAt,
   useHostClient,
+  useHostState,
   useLiveStore,
   useSessionCommands,
   useSessionDetail,
@@ -165,6 +170,8 @@ function acceptedMessage(accepted: string): string {
 }
 
 const NO_ENTRIES: LogEntry[] = [];
+/** Stable reference for a host whose pane list has not arrived. */
+const NO_SESSIONS: MobileSessionSummary[] = [];
 
 /** Index 1 is the first row: index 0 is the list header. */
 const HOLD_FIRST_ROW = { minIndexForVisible: 1 };
@@ -347,6 +354,8 @@ export default function SessionScreen() {
   const canPush = hasCapability(capabilities, 'push');
   const canSavedPrompts = hasCapability(capabilities, 'savedPrompts');
   const canSubmitMode = hasCapability(capabilities, 'submit-mode');
+  const canMergeChecks = hasCapability(capabilities, 'mergeChecks');
+  const canCompare = hasCapability(capabilities, 'compare');
   const [savedPrompts, setSavedPrompts] = useState<MobileSavedPrompt[]>([]);
 
   /** Back to where we came from, or to the host when this screen was deep-linked into. */
@@ -433,6 +442,9 @@ export default function SessionScreen() {
   useForgetRefusedSecret(hostId, poll.needsRepair, poll.error);
 
   const session = detail?.session;
+  const hostState = useHostState(hostId);
+  const hostSessions = hostState?.sessions ?? NO_SESSIONS;
+  const compareRuns = useMemo(() => compareRunsOf(session), [session]);
   const live = detail?.entries ?? NO_ENTRIES;
   const liveRef = useRef(live);
   liveRef.current = live;
@@ -1540,7 +1552,23 @@ export default function SessionScreen() {
           worktree={session.worktree}
           client={client}
           running={running}
+          canCheck={canMergeChecks}
           onDiscarded={worktreeDiscarded}
+        />
+      ) : null}
+
+      {!closed && hostId ? (
+        <PaneMarks hostId={hostId} session={session} detail={detail} sessions={hostSessions} />
+      ) : null}
+
+      {!closed && hostId && sessionId && compareRuns.length > 0 ? (
+        <CompareRunsCards
+          hostId={hostId}
+          sessionId={sessionId}
+          runs={compareRuns}
+          sessions={hostSessions}
+          client={client}
+          canAct={canCompare}
         />
       ) : null}
 

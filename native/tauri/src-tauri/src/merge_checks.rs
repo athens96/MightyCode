@@ -676,19 +676,58 @@ pub async fn read(host: &Arc<Host>, target: &Target) -> Model {
 /// The confirmation's words when a merge of `target` should be asked once more (None when nothing warns, and always in a smoke):
 /// a reading of the last minute, else a new one.
 pub async fn merge_warning_text(host: &Arc<Host>, target: &Target, commit_first: bool) -> Option<String> {
-    if host.smoke.is_some() {
+    let found = merge_warnings(host, target, commit_first).await;
+    if found.is_empty() {
         return None;
+    }
+    Some(format!("{}\n\n{}", host.locale.get("git.checks.merge.message"), warning_lines(&host.locale, &found).join("\n")))
+}
+
+/// What a merge of `target` should be asked once more for (empty when nothing warns, and always in a smoke): a reading of the last
+/// minute, else a new one. The phone's merge gets them as codes (`confirm.warnings`) and words them in its own language.
+pub async fn merge_warnings(host: &Arc<Host>, target: &Target, commit_first: bool) -> Vec<Warning> {
+    if host.smoke.is_some() {
+        return vec![];
     }
     let kept = lock(&KEPT).get(&key_of(&target.folder)).filter(|(at, _)| at.elapsed() < MERGE_READING_FOR).map(|(_, model)| model.clone());
     let model = match kept {
         Some(model) => model,
         None => read(host, target).await,
     };
-    let found = warnings(&model, commit_first);
-    if found.is_empty() {
-        return None;
+    warnings(&model, commit_first)
+}
+
+/// The longest review comment start the phone gets (it shows the count and a line of each).
+const PHONE_BODY_CHARS: usize = 300;
+
+/// The phone's `GET /m1/sessions/{id}/checks` (MC-27, read-only): the same reading as the 점검 tab for the pane's worktree (a worktree
+/// pane's, or a delegated child's), read now, with each review comment cut to its start. Err: the status and why.
+pub async fn phone(host: &Arc<Host>, pane_id: &str) -> Result<Value, (u16, String)> {
+    let locale = host.locale;
+    let record = {
+        let view = host.view();
+        let Some(session) = view.snapshot.session(pane_id) else { return Err((404, locale.get("remote.error.paneNotFound"))) };
+        if view.snapshot.workspace(session.workspace_id()).is_none_or(|w| w.remote.is_some()) {
+            return Err((409, locale.get("phone.worktree.none")));
+        }
+        session.pane_worktree.clone()
+    };
+    let Some(record) = record.or_else(|| crate::pane_worktree::child_record(pane_id)) else {
+        return Err((409, locale.get("phone.worktree.none")));
+    };
+    let target = target_of(pane_id, &record);
+    if !target.folder.is_dir() {
+        return Err((409, locale.get("phone.worktree.none")));
     }
-    Some(format!("{}\n\n{}", host.locale.get("git.checks.merge.message"), warning_lines(&host.locale, &found).join("\n")))
+    let mut model = read(host, &target).await;
+    if let Ok(threads) = model.threads.as_mut() {
+        for thread in threads.iter_mut() {
+            if thread.body.chars().count() > PHONE_BODY_CHARS {
+                thread.body = thread.body.chars().take(PHONE_BODY_CHARS).collect::<String>() + "…";
+            }
+        }
+    }
+    Ok(to_json(&model))
 }
 
 /// A review queue card's warnings, never a new `gh` call: the reading of the last ten minutes when there is one (its git and

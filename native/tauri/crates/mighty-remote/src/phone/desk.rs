@@ -124,6 +124,36 @@ pub struct MobileSandboxBlock {
     pub at: String,
 }
 
+/// A worktree pane's bar as the phone draws it (the pane summary's `worktree`, the Swift Mac host's `MobilePaneWorktree` and more):
+/// its branch, the branch it merges into, its PORT, its port block (MC-25), how far it is from its base as the desktop last read it
+/// (absent until read), its setup, whether the last merge can be undone or conflicted, whether an action runs now, the open children
+/// on its branch, and the run actions running in it with the dev-server address each printed (MC-25). No path, no commit id.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MobilePaneWorktree {
+    pub branch: String,
+    pub base: String,
+    pub port: i32,
+    pub port_base: Option<i32>,
+    pub port_count: Option<i32>,
+    pub ahead: Option<i64>,
+    pub behind: Option<i64>,
+    pub changed: Option<i64>,
+    /// `running`, `done` or `failed`; None without a setup command.
+    pub setup: Option<String>,
+    pub can_undo: bool,
+    pub conflict: bool,
+    pub busy: bool,
+    pub children: i64,
+    pub actions: Vec<MobileRunAction>,
+}
+
+/// MC-25: one run action running in a worktree (its `.mighty.yaml` name) and the address its output named, when one did.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MobileRunAction {
+    pub name: String,
+    pub url: Option<String>,
+}
+
 /// C# `MobileDesktopAction(SessionId, Action, Body, Attachments?)`: a mutating route handed to the window (WinUI `MobileAction`,
 /// MainWindow.MobileRemote.cs:503-545): `create`, `submit`, `stop`, `queue-remove`, `queue-next`, `queue-run-now`, `rename`, `close`,
 /// `settings`, `setAskTarget`, `guided`, `terminal-prompt`, `antigravityPermission`, `command`.
@@ -286,6 +316,18 @@ pub trait PhoneDesk: Send + Sync {
     fn attention(&self, session_id: &str) -> Option<(String, String, String)> {
         let _ = session_id;
         None
+    }
+    /// The bar of a pane that works in its own worktree (the summary's `worktree`); None for any other pane. `children` is the
+    /// sidebar's child list read once for the pass. Cheap: no git (the counts are the desktop's last reading).
+    fn pane_worktree(&self, pane: &RunSession, snapshot: &AppSnapshot, children: &[DelegationChildRow]) -> Option<MobilePaneWorktree> {
+        let _ = (pane, snapshot, children);
+        None
+    }
+    /// MC-34: the pane's agent runs in the OS sandbox (its workspace has it on, on a computer that has one): the summary's
+    /// `sandboxed`.
+    fn sandboxed(&self, pane: &RunSession, snapshot: &AppSnapshot) -> bool {
+        let _ = (pane, snapshot);
+        false
     }
     /// Saved prompts offered in `workspace_id` (`GET /m1/sessions/{id}/prompts`); empty by default.
     fn saved_prompts(&self, workspace_id: &str) -> Vec<mighty_core::saved_prompts::SavedPrompt> {

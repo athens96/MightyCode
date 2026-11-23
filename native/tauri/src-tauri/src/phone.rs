@@ -72,7 +72,8 @@ struct Desk {
 }
 
 /// Extra `/m1/info` capabilities offered by the Tauri desktop host beyond `mighty_remote`'s C# baseline.
-pub const EXTRA_CAPABILITIES: &[&str] = &["savedPrompts"];
+/// `mergeChecks`: `GET /m1/sessions/{id}/checks` (MC-27); `compare`: `GET`/`POST /m1/sessions/{id}/compare/{compareId}` (MC-29).
+pub const EXTRA_CAPABILITIES: &[&str] = &["savedPrompts", "mergeChecks", "compare"];
 
 /// Full capability list advertised by `/m1/info` and relay `auth_ok`.
 pub fn host_capabilities() -> Vec<String> {
@@ -1190,6 +1191,42 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
                 ActionAnswer::Value(Value::Null)
             }
         },
+        // The worktree bar's actions (MC-25, MC-27): the phone confirmed what needs it; a merge that still warns asks it back.
+        "worktree" => {
+            let confirmed = body.get("confirmed").and_then(Value::as_bool).unwrap_or(false);
+            let action = text("action").unwrap_or_default();
+            let value =
+                crate::pane_worktree::phone_action(&host, &id, &action, confirmed).await.map_err(|(status, why)| request(status, why))?;
+            ActionAnswer::Value(value)
+        }
+        // MC-27: the pane's worktree's pre-merge checks, read now.
+        "checks" => ActionAnswer::Value(crate::merge_checks::phone(&host, &id).await.map_err(|(status, why)| request(status, why))?),
+        // MC-29: one of the pane's compare runs, and the compare view's actions on its children.
+        "compare-view" => {
+            let group = text("compareId").unwrap_or_default();
+            ActionAnswer::Value(crate::compare::phone_view(&host, &id, &group).await)
+        }
+        "compare-action" => {
+            let group = text("compareId").unwrap_or_default();
+            let ids: Vec<String> = body
+                .get("ids")
+                .and_then(Value::as_array)
+                .map(|l| l.iter().filter_map(Value::as_str).map(str::to_string).collect())
+                .unwrap_or_default();
+            let confirmed = body.get("confirmed").and_then(Value::as_bool).unwrap_or(false);
+            let value = crate::compare::phone_action(
+                &host,
+                &id,
+                &group,
+                text("childId").as_deref(),
+                &text("action").unwrap_or_default(),
+                &ids,
+                confirmed,
+            )
+            .await
+            .map_err(|(status, why)| request(status, why))?;
+            ActionAnswer::Value(value)
+        }
         _ => return Err(request(404, "Unknown desktop action.")),
     };
     host.schedule();
@@ -1463,6 +1500,21 @@ impl PhoneDesk for Desk {
     }
     fn attention(&self, session_id: &str) -> Option<(String, String, String)> {
         crate::attention::phone(session_id)
+    }
+    fn pane_worktree(
+        &self,
+        pane: &RunSession,
+        snapshot: &AppSnapshot,
+        children: &[mighty_core::shell::DelegationChildRow],
+    ) -> Option<mighty_remote::phone::desk::MobilePaneWorktree> {
+        pane.pane_worktree.as_ref()?;
+        let host = self.host().ok()?;
+        crate::pane_worktree::phone_bar(&host, pane, snapshot, children)
+    }
+    fn sandboxed(&self, pane: &RunSession, snapshot: &AppSnapshot) -> bool {
+        pane.kind() == "claude"
+            && mighty_run::sandbox::supported()
+            && snapshot.workspace(pane.workspace_id()).is_some_and(|w| w.sandbox_on().is_some())
     }
     fn queue_count(&self, session_id: &str) -> Option<i32> {
         let host = self.host().ok()?;

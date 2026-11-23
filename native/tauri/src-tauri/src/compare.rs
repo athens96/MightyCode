@@ -659,6 +659,112 @@ async fn merge(host: &Arc<Host>, run: &CompareRun, child: &str) {
     }
 }
 
+// ── the phone ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/// The longest end of a child's test output the phone gets.
+const PHONE_TEST_OUTPUT: usize = 600;
+
+/// The phone's `GET /m1/sessions/{id}/compare/{compareId}`: the compare view's group read now (each child's agent, model, phase,
+/// shortstat, time, cost, test result, what may be done), the test output cut to its end. `{ gone: true }` once the group is gone.
+pub async fn phone_view(host: &Arc<Host>, pane: &str, group: &str) -> Value {
+    check_groups(host);
+    let mut value = view(host, pane, group).await;
+    if let Some(children) = value.get_mut("children").and_then(Value::as_array_mut) {
+        for child in children {
+            if let Some(output) = child.pointer_mut("/test/output")
+                && let Some(text) = output.as_str()
+            {
+                let count = text.chars().count();
+                let end: String = text.chars().skip(count.saturating_sub(PHONE_TEST_OUTPUT)).collect();
+                *output = Value::String(end);
+            }
+            if let Some(child) = child.as_object_mut() {
+                child.remove("branch");
+            }
+        }
+    }
+    value
+}
+
+/// The phone's `POST /m1/sessions/{id}/compare/{compareId}` (the compare view's actions, without the window's sheets — the phone asked
+/// first): `merge` a reported child (what the pre-merge checks still warn about answers `confirm { warnings }` until asked again with
+/// `confirmed`; once in, `rest` lists the other children still open, for the phone to offer their discard), `discard` one child, or
+/// `discardRest` the children `ids` of that list. `{ done, message?, confirm?, rest? }`. Err: the status and why.
+pub async fn phone_action(
+    host: &Arc<Host>,
+    pane: &str,
+    group: &str,
+    child: Option<&str>,
+    action: &str,
+    ids: &[String],
+    confirmed: bool,
+) -> Result<Value, (u16, String)> {
+    let locale = host.locale;
+    let Some(run) = group_of(&host.view().snapshot, pane, group) else { return Err((404, locale.get("compare.view.gone"))) };
+    let in_group = |id: &str| run.children.iter().any(|c| c.id == id);
+    match action {
+        "merge" => {
+            let Some(child) = child.filter(|c| in_group(c)) else { return Err((404, locale.get("compare.view.gone"))) };
+            let states = child_states();
+            let Some(entry) = run.children.iter().find(|c| c.id == child) else { return Err((404, locale.get("compare.view.gone"))) };
+            if !rules::can_merge(entry, states.get(child).copied()) {
+                return Ok(json!({ "done": false, "message": locale.get("compare.action.mergeHelp") }));
+            }
+            if !confirmed && let Some(record) = crate::pane_worktree::child_record(child) {
+                let target = crate::merge_checks::target_of(child, &record);
+                let warnings = crate::merge_checks::merge_warnings(host, &target, false).await;
+                if !warnings.is_empty() {
+                    let lines = crate::merge_checks::warning_lines(&locale, &warnings).join("\n");
+                    let message =
+                        format!("{}\n\n{}\n\n{lines}", locale.get("git.checks.merge.title"), locale.get("git.checks.merge.message"));
+                    return Ok(json!({ "done": false, "message": message, "confirm": { "warnings": warnings } }));
+                }
+            }
+            let words = match crate::delegation::phone_merge_child(host, child).await {
+                crate::delegation::PhoneCard::Done(words) => words,
+                crate::delegation::PhoneCard::Refused(why) => return Ok(json!({ "done": false, "message": why })),
+            };
+            let rest: Vec<Value> = rules::rest_to_discard(&run, child, &child_states())
+                .iter()
+                .filter_map(|id| run.children.iter().find(|c| &c.id == id))
+                .map(|c| {
+                    let label = mighty_composer::runtime::provider_label(&c.provider);
+                    let name = c.model.as_deref().map_or_else(|| label.to_string(), |m| format!("{label} {m}"));
+                    json!({ "id": c.id, "label": name })
+                })
+                .collect();
+            host.schedule();
+            Ok(json!({ "done": true, "message": words, "rest": rest }))
+        }
+        "discard" => {
+            let Some(child) = child.filter(|c| in_group(c)) else { return Err((404, locale.get("compare.view.gone"))) };
+            Ok(discarded(crate::delegation::phone_discard_children(host, &[child.to_string()]).await))
+        }
+        "discardRest" => {
+            // Only children of this group that are still open: the list the merge answered, as it stands now.
+            let open = child_states();
+            let chosen: Vec<String> = ids
+                .iter()
+                .filter(|id| in_group(id))
+                .filter(|id| open.get(id.as_str()).is_some_and(|s| !matches!(s, ChildState::Merged | ChildState::Discarded)))
+                .cloned()
+                .collect();
+            if chosen.is_empty() {
+                return Ok(json!({ "done": true }));
+            }
+            Ok(discarded(crate::delegation::phone_discard_children(host, &chosen).await))
+        }
+        _ => Err((400, "Unknown compare action.".into())),
+    }
+}
+
+fn discarded(card: crate::delegation::PhoneCard) -> Value {
+    match card {
+        crate::delegation::PhoneCard::Done(words) => json!({ "done": true, "message": words }),
+        crate::delegation::PhoneCard::Refused(why) => json!({ "done": false, "message": why }),
+    }
+}
+
 // ── the sidebar's cards ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 /// The frame model's compare cards (host.rs' `shell_model_with`, the view locked): each pane's groups summed up from delegation's

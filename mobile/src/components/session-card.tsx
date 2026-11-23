@@ -14,12 +14,13 @@ import {
 import { t } from '@/lib/i18n';
 import { childStateLabel, rowMark, rowMeta, rowNote, waitLabel } from '@/lib/session-row';
 import { worktreeMarker } from '@/lib/pane-worktree';
+import { attentionKindWord, attentionLine, attentionOfPane } from '@/lib/pane-marks';
 import { Icon } from '@/components/icons';
 import { statusWord } from '@/lib/status-glyph';
 import { useRunsAntigravity } from '@/hooks/use-capabilities';
 import { useNow } from '@/hooks/use-now';
 import { useDetailReceivedAt, useSessionDetail } from '@/store/live';
-import { monoText, spacing, toneColors, usePalette, useStyles, type Palette } from '@/theme';
+import { monoText, radius, spacing, toneColors, usePalette, useStyles, type Palette } from '@/theme';
 
 const AGE_KEYS: Record<AgeUnit, string> = {
   now: 'resume.time.now',
@@ -54,7 +55,8 @@ const MARK_SIZE = 12;
  * first draw a hairline rule from the title's edge. A Mighty Orchestration child pane
  * (`nested`) sits one step in under its parent and always ends in its state, as the Mac
  * sidebar draws it; merging and discarding a child stay on the Mac. A pane that works in its own worktree adds a line
- * with a branch mark, its branch and the branch it merges into.
+ * with a branch mark, its branch and the branch it merges into. A pane the desktop marks as waiting for you (MC-26,
+ * `attention`) gets an amber dot after its title and, when nothing else is said at the right, the mark's kind there.
  */
 export function SessionRow({
   hostId,
@@ -93,7 +95,10 @@ export function SessionRow({
   const child = childStateLabel(session);
   const word = child?.text ?? (attention > 0 ? t('phone.card.attention', { count: attention }) : statusWord(status));
   const worktree = session.worktree;
-  const spokenStatus = note?.kind === 'reason' ? `${word}, ${note.text}` : word;
+  const marked = attentionOfPane(session);
+  const markLine = attentionLine(session);
+  const spokenWord = note?.kind === 'reason' ? `${word}, ${note.text}` : word;
+  const spokenStatus = markLine ? `${spokenWord}, ${markLine}` : spokenWord;
 
   return (
     <Pressable
@@ -110,9 +115,12 @@ export function SessionRow({
         <StatusGlyph status={status} kind={session.kind} size={ROW_GLYPH} decorative />
       </View>
       <View style={styles.texts}>
-        <Text numberOfLines={1} style={[styles.title, settled && styles.titleSettled]}>
-          {title}
-        </Text>
+        <View style={styles.titleRow}>
+          <Text numberOfLines={1} style={[styles.title, settled && styles.titleSettled]}>
+            {title}
+          </Text>
+          {marked ? <View testID="attention-dot" style={styles.markDot} /> : null}
+        </View>
         {beta || mark ? (
           <View style={styles.metaRow}>
             {mark ? <ProviderMark provider={mark} size={MARK_SIZE} /> : null}
@@ -153,6 +161,8 @@ export function SessionRow({
         </Text>
       ) : ask ? (
         <Text style={styles.ask}>{ask}</Text>
+      ) : marked ? (
+        <Text style={styles.ask}>{attentionKindWord(marked.kind)}</Text>
       ) : null}
     </Pressable>
   );
@@ -179,7 +189,9 @@ const makeStyles = (palette: Palette) =>
     },
     glyph: { marginTop: 1 },
     texts: { flex: 1, minWidth: 0 },
-    title: { color: palette.text, fontSize: 15, fontWeight: '600', lineHeight: 20 },
+    titleRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.md },
+    title: { color: palette.text, flexShrink: 1, fontSize: 15, fontWeight: '600', lineHeight: 20 },
+    markDot: { backgroundColor: palette.warning, borderRadius: radius.round, height: 7, width: 7 },
     titleSettled: { fontWeight: '500' },
     metaRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, marginTop: 1 },
     meta: { color: palette.textMuted, fontSize: 12.5, lineHeight: 17 },

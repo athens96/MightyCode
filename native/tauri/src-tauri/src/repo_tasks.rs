@@ -164,15 +164,17 @@ impl ManagedRunInner {
         }
     }
 
-    /// Reads the dev-server address from the output once (`url: auto`).
-    fn detect_url(&mut self) {
+    /// Reads the dev-server address from the output once (`url: auto`); true when it was found now.
+    fn detect_url(&mut self) -> bool {
         if self.url.is_none()
             && self.url_mode.as_deref() == Some("auto")
             && let Some(found) = run_actions::detect_dev_url(&self.ring.text())
         {
             self.url = Some(found.url);
             self.url_port = Some(found.port);
+            return true;
         }
+        false
     }
 }
 
@@ -544,6 +546,16 @@ pub async fn stop_runs_in(host: &Host, folder_key: &str) -> usize {
         let _ = stop_managed_task(host, id).await;
     }
     ids.len()
+}
+
+/// Whether any run action runs now (the phone's bars skip reading the folders' keys when none does).
+pub fn any_action_running(host: &Host) -> bool {
+    let st = state(host);
+    let runs = lock(&st.runs);
+    runs.values().any(|handle| {
+        let inner = lock(&handle.inner);
+        inner.status == "running" && inner.action.is_some()
+    })
 }
 
 /// The run actions running in the folder `folder_key`, for the worktree bar: `{ name, url }`.
@@ -1382,8 +1394,13 @@ async fn start_managed_task(
     let runner_handle = handle;
     // A run action is a server or a suite that runs until it ends or is stopped: never cut off at the limit.
     let unlimited = is_action || runs_until_stopped(&task_name);
+    // A run action's start, its address and its end move the phone's worktree bar (MC-25).
+    if is_action {
+        crate::phone::changed(host);
+    }
+    let told = host.clone();
     tauri::async_runtime::spawn(async move {
-        let pump_stream = |mut reader: Option<mighty_platform::process::ChildReader>, target: Arc<ManagedRunHandle>| async move {
+        let pump_stream = |mut reader: Option<mighty_platform::process::ChildReader>, target: Arc<ManagedRunHandle>, host: Arc<Host>| async move {
             use tokio::io::AsyncReadExt as _;
             let Some(mut pipe) = reader.take() else { return };
             let mut buffer = [0u8; 4096];
@@ -1391,14 +1408,19 @@ async fn start_managed_task(
                 if read == 0 {
                     break;
                 }
-                let mut inner = lock(&target.inner);
-                inner.ring.push_bytes(&buffer[..read]);
-                inner.detect_url();
+                let found = {
+                    let mut inner = lock(&target.inner);
+                    inner.ring.push_bytes(&buffer[..read]);
+                    inner.detect_url()
+                };
+                if found {
+                    crate::phone::changed(&host);
+                }
             }
         };
 
-        let mut out_pump = tauri::async_runtime::spawn(pump_stream(stdout, runner_handle.clone()));
-        let mut err_pump = tauri::async_runtime::spawn(pump_stream(stderr, runner_handle.clone()));
+        let mut out_pump = tauri::async_runtime::spawn(pump_stream(stdout, runner_handle.clone(), told.clone()));
+        let mut err_pump = tauri::async_runtime::spawn(pump_stream(stderr, runner_handle.clone(), told.clone()));
         // The run ends with the task's own process: a grandchild that holds the pipes open (a dev server the task left running)
         // must not keep it "running", so the pipes get a moment to drain once the process is gone and are dropped after it.
         let outcome = if unlimited { Ok(control.wait().await) } else { tokio::time::timeout(MANAGED_TASK_TIMEOUT, control.wait()).await };
@@ -1436,6 +1458,11 @@ async fn start_managed_task(
         } else {
             "failed".into()
         };
+        let action = inner.action.is_some();
+        drop(inner);
+        if action {
+            crate::phone::changed(&told);
+        }
     });
 
     Ok(initial_snapshot)

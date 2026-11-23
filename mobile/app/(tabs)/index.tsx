@@ -8,6 +8,7 @@ import { HostWorkspaces } from '@/components/host-workspaces';
 import { Icon } from '@/components/icons';
 import { EmptyState, ErrorBanner, ScreenTitle } from '@/components/ui';
 import { countStats, sumStats } from '@/lib/dashboard';
+import { countMarked, newestMarked } from '@/lib/pane-marks';
 import { t } from '@/lib/i18n';
 import { refreshHostPoll, useDashboardStore } from '@/store/dashboard';
 import { useHostsStore, type PairedHost } from '@/store/hosts';
@@ -130,6 +131,9 @@ export default function DashboardTab() {
     hosts.some((host) => store.polls[host.id]?.loading === true),
   );
   const stats = useMemo(() => sumStats(hosts.map((host) => countStats(states[host.id]))), [hosts, states]);
+  // MC-26: the panes the desktops mark as waiting for you; the line opens the one marked last.
+  const marked = useMemo(() => hosts.reduce((total, host) => total + countMarked(states[host.id]), 0), [hosts, states]);
+  const newest = useMemo(() => newestMarked(hosts, states), [hosts, states]);
 
   return (
     <View style={styles.screen}>
@@ -169,6 +173,20 @@ export default function DashboardTab() {
           </View>
         ) : null}
 
+        {marked > 0 ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityHint={t('attention.dashboardHelp')}
+            disabled={!newest}
+            onPress={() => newest && router.push(`/host/${newest.hostId}/session/${newest.sessionId}`)}
+            style={({ pressed }) => [styles.marked, pressed && styles.pressed]}
+          >
+            <View style={styles.markedDot} />
+            <Text style={styles.markedText}>{t('attention.dashboard', { count: marked })}</Text>
+            <Icon name="chevronRight" color={palette.textMuted} size={16} />
+          </Pressable>
+        ) : null}
+
         {hosts.length > 0 ? (
           hosts.map((host) => <HostSection key={host.id} host={host} />)
         ) : loaded ? (
@@ -201,6 +219,17 @@ const makeStyles = (palette: Palette) =>
     },
     pressed: { opacity: 0.75 },
     stats: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.xs },
+    marked: {
+      alignItems: 'center',
+      backgroundColor: palette.waitSoft,
+      borderRadius: radius.md,
+      flexDirection: 'row',
+      gap: spacing.lg,
+      paddingHorizontal: spacing.xl,
+      paddingVertical: spacing.lg,
+    },
+    markedDot: { backgroundColor: palette.warning, borderRadius: radius.round, height: 8, width: 8 },
+    markedText: { color: palette.text, flex: 1, fontSize: 14, fontWeight: '600' },
     tile: {
       borderRadius: 18,
       flex: 1,

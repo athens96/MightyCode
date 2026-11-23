@@ -94,6 +94,21 @@ describe('createClient over a relay channel', () => {
     expect(result).toEqual({ protocol: 1, done: false, message: '충돌합니다.' });
   });
 
+  it('sends a confirmed merge, reads the checks and the compare routes', async () => {
+    const fake = fakeChannel({ status: 200, body: { protocol: 1, done: true } });
+    const client = createClient(fake.channel);
+    await client.paneWorktree('p1', 'merge', undefined, true);
+    await client.mergeChecks('p1');
+    await client.compareView('p1', 'cmp1');
+    await client.compareAction('p1', 'cmp1', { action: 'discardRest', ids: ['c2'] });
+    expect(fake.calls).toEqual([
+      { method: 'POST', path: '/m1/sessions/p1/worktree', body: { action: 'merge', confirmed: true } },
+      { method: 'GET', path: '/m1/sessions/p1/checks', body: undefined },
+      { method: 'GET', path: '/m1/sessions/p1/compare/cmp1', body: undefined },
+      { method: 'POST', path: '/m1/sessions/p1/compare/cmp1', body: { action: 'discardRest', ids: ['c2'] } },
+    ]);
+  });
+
   it('asks for the structure view only when told to, with the tag it holds', async () => {
     const fake = fakeChannel({ status: 200, body: { protocol: 1, ok: true } });
     const client = createClient(fake.channel);

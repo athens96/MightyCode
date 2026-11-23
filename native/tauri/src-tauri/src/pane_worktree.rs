@@ -60,6 +60,9 @@ struct State {
     busy: HashSet<String>,
     /// The panes whose last merge was refused for a conflict: their bar offers to ask the agent to resolve it.
     conflicts: HashSet<String>,
+    /// How far each pane's worktree was from its base when the bar (the window's or the phone's) last read it: the phone's
+    /// `worktree` counts.
+    statuses: std::collections::HashMap<String, Status>,
 }
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(Mutex::default);
@@ -197,6 +200,7 @@ fn note_pane(host: &Arc<Host>, id: &str, text: String) {
         }
     });
     host.schedule();
+    crate::phone::changed(host);
 }
 
 /// C# `UpdatePaneWorktree`.
@@ -211,6 +215,7 @@ fn update_pane_worktree(host: &Arc<Host>, id: &str, change: impl FnOnce(&mut Pan
         }
     });
     host.schedule();
+    crate::phone::changed(host);
 }
 
 /// C# `UpdateWorkspace`.
@@ -1032,10 +1037,17 @@ async fn status_model(host: &Arc<Host>, id: &str) -> Value {
         Some(places) => own_status(&places, &pane).await,
         None => None,
     };
-    let (busy, conflict) = {
-        let state = lock(&STATE);
-        (state.busy.contains(id), state.conflicts.contains(id))
+    let (busy, conflict, moved) = {
+        let mut state = lock(&STATE);
+        let moved = match status {
+            Some(status) => state.statuses.insert(id.to_string(), status) != Some(status),
+            None => state.statuses.remove(id).is_some(),
+        };
+        (state.busy.contains(id), state.conflicts.contains(id), moved)
     };
+    if moved {
+        crate::phone::changed(host);
+    }
     let actions = crate::repo_tasks::running_actions_in(host, &crate::worktree_lifecycle::path_key(pane.run_folder()));
     json!({
         "ahead": status.map_or(0, |s| s.ahead), "behind": status.map_or(0, |s| s.behind),
@@ -1067,12 +1079,17 @@ async fn pane_action(host: &Arc<Host>, id: &str, action: &str) {
             })
             .await;
         }
-        "resolve" => ask_to_resolve(host, &session, &pane).await,
+        "resolve" => {
+            ask_to_resolve(host, &session, &pane).await;
+        }
         "undo" => {
             if writes_refused(host, &pane) {
                 return;
             }
-            busy(host, id, undo_pane_merge(host, id, &pane)).await;
+            busy(host, id, async {
+                undo_pane_merge(host, id, &pane).await;
+            })
+            .await;
         }
         "pr" => create_pull_request(host, id, &pane).await,
         "discard" => discard_pane_worktree(host, &session, &pane).await,
@@ -1113,15 +1130,24 @@ async fn pane_action(host: &Arc<Host>, id: &str, action: &str) {
 /// Without the write policy (or outside the smoke's fixture) a git step that writes does nothing and says why (W7 plan D2).
 /// A worktree that is not its own place under the root (or is a link) is never written in either (W7's place rules, beyond C#).
 fn writes_refused(host: &Arc<Host>, pane: &PaneWorktree) -> bool {
+    match write_refusal(host, pane) {
+        Some(why) => {
+            banner(host, why);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Why a git step that writes may not touch the pane's worktree now ([`writes_refused`]'s words), None when it may.
+fn write_refusal(host: &Arc<Host>, pane: &PaneWorktree) -> Option<String> {
     if !may_write(host, &[pane.checkout(), pane.worktree_path()]) {
-        banner(host, crate::setup::verification_mode());
-        return true;
+        return Some(crate::setup::verification_mode());
     }
     if !places().is_some_and(|places| core::in_own_place(&places.paths, pane, &places.root)) {
-        banner(host, host.locale.get("delegation.card.error.worktreeMisplaced"));
-        return true;
+        return Some(host.locale.get("delegation.card.error.worktreeMisplaced"));
     }
-    false
+    None
 }
 
 /// `PaneWorktreeGit.Status` of a worktree in its own place; None (unknown) for one that is not.
@@ -1144,28 +1170,39 @@ async fn busy(host: &Arc<Host>, id: &str, work: impl std::future::Future<Output 
     if !lock(&STATE).busy.insert(id.to_string()) {
         return;
     }
-    let _busy = Busy(id.to_string());
+    let busy = Busy(id.to_string());
     host.schedule();
+    crate::phone::changed(host);
     work.await;
+    drop(busy);
+    crate::phone::changed(host);
 }
 
-/// C# `MergePane`: the pane's branch into its base, its changes committed first for Commit and merge.
-async fn merge_pane(host: &Arc<Host>, id: &str, pane: &PaneWorktree, commit_first: bool) {
-    let Some(places) = places() else { return };
+/// What a bar action said in the pane, and whether it did what it was asked: the phone's answer (`done`, `message`).
+type Said = (bool, Option<String>);
+
+/// C# `MergePane`: the pane's branch into its base, its changes committed first for Commit and merge. What it said in the pane, and
+/// whether it merged.
+async fn merge_pane(host: &Arc<Host>, id: &str, pane: &PaneWorktree, commit_first: bool) -> Said {
+    let Some(places) = places() else { return (false, None) };
     let locale = host.locale;
+    let say = |text: String, done: bool| -> Said {
+        note_pane(host, id, text.clone());
+        (done, Some(text))
+    };
     if commit_first {
         let left_out = |left: &[String]| locale.get_with("paneWorktree.log.leftOut", &[("paths", &left.join(", "))]);
         match core::commit_all(&places.git, pane, &locale).await {
-            CommitOutcome::Unmerged => return note_pane(host, id, locale.get("paneWorktree.refused.unmerged")),
+            CommitOutcome::Unmerged => return say(locale.get("paneWorktree.refused.unmerged"), false),
             CommitOutcome::Failed(message) => {
-                return note_pane(host, id, locale.get_with("paneWorktree.error.commitFailed", &[("reason", &message)]));
+                return say(locale.get_with("paneWorktree.error.commitFailed", &[("reason", &message)]), false);
             }
             CommitOutcome::Committed { left_out: left } if left.is_empty() => note_pane(host, id, locale.get("paneWorktree.log.committed")),
             CommitOutcome::Committed { left_out: left } => {
                 note_pane(host, id, locale.get("paneWorktree.log.committed"));
-                return note_pane(host, id, left_out(&left));
+                return say(left_out(&left), false);
             }
-            CommitOutcome::Nothing { left_out: left } if !left.is_empty() => return note_pane(host, id, left_out(&left)),
+            CommitOutcome::Nothing { left_out: left } if !left.is_empty() => return say(left_out(&left), false),
             CommitOutcome::Nothing { .. } => {}
         }
     }
@@ -1179,8 +1216,9 @@ async fn merge_pane(host: &Arc<Host>, id: &str, pane: &PaneWorktree, commit_firs
             });
             let short: String = commit.chars().take(8).collect();
             let words = [("branch", pane.branch()), ("base", pane.base_branch()), ("commit", short.as_str())];
-            note_pane(host, id, locale.get_with("paneWorktree.log.merged", &words));
+            let said = say(locale.get_with("paneWorktree.log.merged", &words), true);
             crate::integrations::on_worktree_merged(host, id, pane, &commit);
+            said
         }
         MergeOutcome::Refused(reason) => {
             {
@@ -1191,34 +1229,38 @@ async fn merge_pane(host: &Arc<Host>, id: &str, pane: &PaneWorktree, commit_firs
                     state.conflicts.remove(id);
                 }
             }
-            note_pane(host, id, refusal::text(reason, pane.base_branch(), &locale));
+            say(refusal::text(reason, pane.base_branch(), &locale), false)
         }
-        MergeOutcome::Failed(message) => note_pane(host, id, locale.get_with("paneWorktree.error.mergeFailed", &[("reason", &message)])),
+        MergeOutcome::Failed(message) => say(locale.get_with("paneWorktree.error.mergeFailed", &[("reason", &message)]), false),
     }
 }
 
-/// C# `UndoPaneMerge`.
-async fn undo_pane_merge(host: &Arc<Host>, id: &str, pane: &PaneWorktree) {
-    let Some(places) = places() else { return };
+/// C# `UndoPaneMerge`: what it said in the pane, and whether it undid the merge.
+async fn undo_pane_merge(host: &Arc<Host>, id: &str, pane: &PaneWorktree) -> Said {
+    let Some(places) = places() else { return (false, None) };
     let locale = host.locale;
+    let say = |text: String, done: bool| -> Said {
+        note_pane(host, id, text.clone());
+        (done, Some(text))
+    };
     match core::undo_merge(&places.git, pane, &locale).await {
         UndoOutcome::Undone => {
             update_pane_worktree(host, id, |p| {
                 p.merged_commit = None;
                 p.pre_merge_commit = None;
             });
-            note_pane(host, id, locale.get_with("paneWorktree.log.undone", &[("base", pane.base_branch())]));
+            say(locale.get_with("paneWorktree.log.undone", &[("base", pane.base_branch())]), true)
         }
         UndoOutcome::Refused(reason) => {
-            note_pane(host, id, locale.get_with(&format!("paneWorktree.undo.refused.{reason}"), &[("base", pane.base_branch())]));
+            say(locale.get_with(&format!("paneWorktree.undo.refused.{reason}"), &[("base", pane.base_branch())]), false)
         }
-        UndoOutcome::Failed(message) => note_pane(host, id, locale.get_with("paneWorktree.error.undoFailed", &[("reason", &message)])),
+        UndoOutcome::Failed(message) => say(locale.get_with("paneWorktree.error.undoFailed", &[("reason", &message)]), false),
     }
 }
 
 /// C# `AskToResolve`: the conflict request as the pane's next run (`PaneWorktreeNote.ConflictPrompt`); a pane that cannot take a run
 /// now says why.
-async fn ask_to_resolve(host: &Arc<Host>, session: &RunSession, pane: &PaneWorktree) {
+async fn ask_to_resolve(host: &Arc<Host>, session: &RunSession, pane: &PaneWorktree) -> Said {
     let mut request = StartRunRequest::new(session.id(), session.workspace_id(), "claude", &pane.conflict_prompt());
     request.model = session.model().to_string();
     request.provider = session.provider().to_string();
@@ -1231,8 +1273,14 @@ async fn ask_to_resolve(host: &Arc<Host>, session: &RunSession, pane: &PaneWorkt
     match started {
         Ok(_) => {
             lock(&STATE).conflicts.remove(session.id());
+            crate::phone::changed(host);
+            (true, None)
         }
-        Err(reason) => note_pane(host, session.id(), host.locale.get_with("paneWorktree.conflict.notSent", &[("reason", &reason)])),
+        Err(reason) => {
+            let text = host.locale.get_with("paneWorktree.conflict.notSent", &[("reason", &reason)]);
+            note_pane(host, session.id(), text.clone());
+            (false, Some(text))
+        }
     }
 }
 
@@ -1279,11 +1327,7 @@ fn delegation_children() -> Vec<mighty_core::shell::DelegationChildRow> {
 /// C# `DiscardPaneWorktree`: asks, then removes the worktree and branch and closes the pane; refused while children branch from it.
 async fn discard_pane_worktree(host: &Arc<Host>, session: &RunSession, pane: &PaneWorktree) {
     let locale = host.locale;
-    let blocked = {
-        let view = host.view();
-        core::discard_blocker(session.id(), view.snapshot.sessions().iter().map(|s| s.as_ref()), &delegation_children(), &locale)
-    };
-    if let Some(blocked) = blocked {
+    if let Some(blocked) = discard_blocked(host, session.id()) {
         return note_pane(host, session.id(), blocked);
     }
     let detail = locale.get_with("paneWorktree.discard.detail", &[("branch", pane.branch())]);
@@ -1293,8 +1337,22 @@ async fn discard_pane_worktree(host: &Arc<Host>, session: &RunSession, pane: &Pa
     if writes_refused(host, pane) {
         return;
     }
-    let Some(places) = places() else { return };
+    discard_confirmed(host, session, pane).await;
+}
+
+/// Why the pane may not be discarded now (children still branch from it), said in the pane by the caller; None when it may.
+fn discard_blocked(host: &Host, id: &str) -> Option<String> {
+    let view = host.view();
+    core::discard_blocker(id, view.snapshot.sessions().iter().map(|s| s.as_ref()), &delegation_children(), &host.locale)
+}
+
+/// The discard the person confirmed (in the window or on the phone): the pane's run stopped, its run actions and teardown, the
+/// worktree and branch removed and the pane closed. What it said in the pane, and whether it went.
+async fn discard_confirmed(host: &Arc<Host>, session: &RunSession, pane: &PaneWorktree) -> Said {
+    let locale = host.locale;
+    let Some(places) = places() else { return (false, None) };
     let id = session.id().to_string();
+    let mut said: Said = (false, None);
     busy(host, &id, async {
         if session.status() == "running"
             && let Some(runs) = host.runs()
@@ -1306,6 +1364,7 @@ async fn discard_pane_worktree(host: &Arc<Host>, session: &RunSession, pane: &Pa
         match core::discard(&places.git, &places.paths, pane, &id, &places.root, &locale).await {
             ChildDiscardOutcome::Discarded => {
                 crate::worktree_lifecycle::release_worktree(host, pane);
+                lock(&STATE).statuses.remove(&id);
                 // Gone already: the close must not keep it.
                 let _ = host.view().update(|state| {
                     if let Some(found) = state.sessions_mut().iter_mut().find(|p| p.id() == id) {
@@ -1313,15 +1372,143 @@ async fn discard_pane_worktree(host: &Arc<Host>, session: &RunSession, pane: &Pa
                     }
                 });
                 if let Err(error) = frame::close_session(host, &id).await {
-                    banner(host, error);
+                    banner(host, error.clone());
+                    said = (true, Some(error));
+                } else {
+                    said = (true, None);
                 }
             }
             ChildDiscardOutcome::Failed(message) => {
-                note_pane(host, &id, locale.get_with("paneWorktree.error.discardFailed", &[("reason", &message)]));
+                let text = locale.get_with("paneWorktree.error.discardFailed", &[("reason", &message)]);
+                note_pane(host, &id, text.clone());
+                said = (false, Some(text));
             }
         }
     })
     .await;
+    said
+}
+
+// ── the phone's bar ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/// The phone's bar over a worktree pane (the pane summary's `worktree`): its record, the counts the last reading left, whether an
+/// action runs or the last merge conflicted, its open children, and the run actions running in it (MC-25). No git here: it is read
+/// for every pane of every pass.
+pub(crate) fn phone_bar(
+    host: &Host,
+    pane: &RunSession,
+    snapshot: &mighty_core::model::AppSnapshot,
+    children: &[mighty_core::shell::DelegationChildRow],
+) -> Option<mighty_remote::phone::desk::MobilePaneWorktree> {
+    use mighty_core::shell::ChildState;
+    let record = pane.pane_worktree.as_ref()?;
+    let id = pane.id();
+    let (status, busy, conflict) = {
+        let state = lock(&STATE);
+        (state.statuses.get(id).copied(), state.busy.contains(id), state.conflicts.contains(id))
+    };
+    let panes = snapshot.sessions().iter().filter(|s| s.parent_session_id.as_deref() == Some(id)).count();
+    let rows = children
+        .iter()
+        .filter(|c| c.parent_session_id == id && !matches!(c.state, ChildState::Failed | ChildState::Closed | ChildState::Discarded))
+        .count();
+    let actions = if crate::repo_tasks::any_action_running(host) {
+        crate::repo_tasks::running_actions_in(host, &crate::worktree_lifecycle::path_key(record.run_folder()))
+            .iter()
+            .filter_map(|action| {
+                let name = action.get("name")?.as_str()?.to_string();
+                let url = action.get("url").and_then(Value::as_str).map(str::to_string);
+                Some(mighty_remote::phone::desk::MobileRunAction { name, url })
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+    Some(mighty_remote::phone::desk::MobilePaneWorktree {
+        branch: record.branch().to_string(),
+        base: record.base_branch().to_string(),
+        port: record.port,
+        port_base: record.port_base,
+        port_count: record.port_count,
+        ahead: status.map(|s| i64::from(s.ahead)),
+        behind: status.map(|s| i64::from(s.behind)),
+        changed: status.map(|s| i64::from(s.changed_files)),
+        setup: record.setup_status.clone(),
+        can_undo: record.merged_commit.is_some() && record.pre_merge_commit.is_some(),
+        conflict,
+        busy,
+        children: panes.max(rows) as i64,
+        actions,
+    })
+}
+
+/// The phone's `POST /m1/sessions/{id}/worktree` (the Swift Mac host's `mobilePaneWorktree`): the bar's action without the window's
+/// sheets — the phone asked first. `refresh` reads the counts again; a merge that something still warns about (MC-27, 머지 전 점검)
+/// answers `confirm { warnings }` and merges only when asked again with `confirmed`; a discard was confirmed on the phone and is
+/// refused while children branch from the pane. `{ done, message? }`: the words it wrote in the pane. Err: the status and why.
+pub async fn phone_action(host: &Arc<Host>, id: &str, action: &str, confirmed: bool) -> Result<Value, (u16, String)> {
+    let locale = host.locale;
+    let Some(session) = host.view().snapshot.session(id).cloned() else { return Err((404, locale.get("remote.error.paneNotFound"))) };
+    let Some(pane) = session.pane_worktree.clone() else { return Err((409, locale.get("phone.worktree.none"))) };
+    if action == "refresh" {
+        status_model(host, id).await;
+        return Ok(json!({ "done": true }));
+    }
+    if lock(&STATE).busy.contains(id) {
+        return Err((409, locale.get("phone.worktree.busy")));
+    }
+    if host.view().dialog_open {
+        return Err((409, locale.get("phone.worktree.dialogOpen")));
+    }
+    let answer = |(done, message): Said| json!({ "done": done, "message": message });
+    let said = match action {
+        "merge" | "commitMerge" => {
+            if let Some(why) = write_refusal(host, &pane) {
+                return Ok(answer((false, Some(why))));
+            }
+            let commit_first = action == "commitMerge";
+            if !confirmed {
+                let target = crate::merge_checks::target_of(id, &pane);
+                let warnings = crate::merge_checks::merge_warnings(host, &target, commit_first).await;
+                if !warnings.is_empty() {
+                    let lines = crate::merge_checks::warning_lines(&locale, &warnings).join("\n");
+                    let message =
+                        format!("{}\n\n{}\n\n{lines}", locale.get("git.checks.merge.title"), locale.get("git.checks.merge.message"));
+                    return Ok(json!({ "done": false, "message": message, "confirm": { "warnings": warnings } }));
+                }
+            }
+            let mut said: Said = (false, None);
+            busy(host, id, async {
+                said = merge_pane(host, id, &pane, commit_first).await;
+            })
+            .await;
+            said
+        }
+        "undo" => {
+            if let Some(why) = write_refusal(host, &pane) {
+                return Ok(answer((false, Some(why))));
+            }
+            let mut said: Said = (false, None);
+            busy(host, id, async {
+                said = undo_pane_merge(host, id, &pane).await;
+            })
+            .await;
+            said
+        }
+        "resolveConflict" => ask_to_resolve(host, &session, &pane).await,
+        "discard" => {
+            if let Some(blocked) = discard_blocked(host, id) {
+                note_pane(host, id, blocked.clone());
+                return Ok(answer((false, Some(blocked))));
+            }
+            if let Some(why) = write_refusal(host, &pane) {
+                return Ok(answer((false, Some(why))));
+            }
+            discard_confirmed(host, &session, &pane).await
+        }
+        _ => return Err((400, "Unknown worktree action.".into())),
+    };
+    Ok(answer(said))
 }
 
 /// The tail every close of a pane shares (C# `ClosePane`: the window's close, frame.rs, and the phone's, phone.rs): `closed` is the pane

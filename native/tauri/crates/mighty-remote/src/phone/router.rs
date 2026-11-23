@@ -579,7 +579,6 @@ impl Inner {
     /// `Summary(pane, revision)`: one pane as the phone's list shows it. `children` is the sidebar's child list
     /// ([`PhoneDesk::child_rows`]), read once for every pane of a pass.
     fn summary(&self, pane: &RunSession, revision: i64, snapshot: &AppSnapshot, children: &[DelegationChildRow]) -> String {
-        let _ = snapshot;
         let l = locale();
         let pending = self.pending(pane.id());
         let tail = pane.logs().iter().rev().find(|e| matches!(e.kind(), "assistant" | "user" | "error" | "output"));
@@ -675,6 +674,14 @@ impl Inner {
             out.prop_str("text", Some(&text));
             out.prop_str("at", Some(&at));
             out.end_object();
+        }
+        // A pane in its own worktree: the bar the phone draws over it (branch, PORT and port block, counts, run actions; MC-25).
+        if let Some(bar) = self.desk.pane_worktree(pane, snapshot, children) {
+            write_worktree(&mut out, &bar);
+        }
+        // MC-34: the pane's agent runs in the OS sandbox (the phone's 샌드박스 badge).
+        if self.desk.sandboxed(pane, snapshot) {
+            out.prop_bool("sandboxed", true);
         }
         // A Mighty Orchestration child: its sidebar row's parent and state, waiting while it asks for a human's answer
         // (`DelegationSidebar.shownState`, the sidebar's own test). A pane the delegation file does not list carries neither.
@@ -1360,6 +1367,70 @@ impl Inner {
             out.end_object();
             return Ok(reply(200, out.finish()));
         }
+        // The worktree bar's actions (the Swift Mac host's route, now the Rust host's too): `{ protocol, done, message?, confirm? }`.
+        // A merge that something still warns about answers `confirm { title, message, warnings }` until the phone asks again with
+        // `confirmed: true` (MC-27: asked once more, never blocked).
+        if method == "POST" && route.len() == 4 && route[3] == "worktree" {
+            let value = body_object(body, MAXIMUM_BODY)?;
+            let action = required(&value, "action")?;
+            if !matches!(action, "refresh" | "merge" | "commitMerge" | "undo" | "resolveConflict" | "discard") {
+                return Err(request(400, "Unknown worktree action."));
+            }
+            let confirmed = matches!(value.get("confirmed"), Some(Value::Bool(true)));
+            let answer = self.act(&id, "worktree", json!({"action": action, "confirmed": confirmed})).await?;
+            self.changed();
+            return Ok(value_reply(200, &answer_value(&answer)));
+        }
+        // MC-27: the pre-merge checks of the pane's worktree (`mergeChecks`), read now.
+        if method == "GET" && route.len() == 4 && route[3] == "checks" {
+            if !query.is_empty() {
+                return Err(request(400, "Unexpected query argument."));
+            }
+            let answer = self.act(&id, "checks", json!({})).await?;
+            return Ok(value_reply(200, &answer_value(&answer)));
+        }
+        // MC-29: one compare run of the pane (`compare`): its children read now, and the compare view's actions on them.
+        if route.len() == 5 && route[3] == "compare" {
+            let group = route[4];
+            if !wire::identifier(group) {
+                return Err(request(404, "Compare run not found."));
+            }
+            if method == "GET" {
+                if !query.is_empty() {
+                    return Err(request(400, "Unexpected query argument."));
+                }
+                let answer = self.act(&id, "compare-view", json!({"compareId": group})).await?;
+                return Ok(value_reply(200, &answer_value(&answer)));
+            }
+            if method == "POST" {
+                let value = body_object(body, MAXIMUM_BODY)?;
+                let action = required(&value, "action")?;
+                if !matches!(action, "merge" | "discard" | "discardRest") {
+                    return Err(request(400, "Unknown compare action."));
+                }
+                let child = text(&value, "childId");
+                if child.is_some_and(|c| !wire::identifier(c)) || (action != "discardRest" && child.is_none()) {
+                    return Err(request(400, "Invalid childId."));
+                }
+                let ids: Vec<&str> = match value.get("ids") {
+                    None | Some(Value::Null) => vec![],
+                    Some(Value::Array(list)) if list.len() <= 16 => list
+                        .iter()
+                        .map(|v| v.as_str().filter(|s| wire::identifier(s)))
+                        .collect::<Option<_>>()
+                        .ok_or_else(|| request(400, "Invalid ids."))?,
+                    Some(_) => return Err(request(400, "Invalid ids.")),
+                };
+                if action == "discardRest" && ids.is_empty() {
+                    return Err(request(400, "Invalid ids."));
+                }
+                let confirmed = matches!(value.get("confirmed"), Some(Value::Bool(true)));
+                let forwarded = json!({"compareId": group, "action": action, "childId": child, "ids": ids, "confirmed": confirmed});
+                let answer = self.act(&id, "compare-action", forwarded).await?;
+                self.changed();
+                return Ok(value_reply(200, &answer_value(&answer)));
+            }
+        }
         if method == "POST" && route.len() == 4 {
             let operation = route[3];
             if operation == "permission" {
@@ -1719,6 +1790,69 @@ fn write_queued(out: &mut JsonOut, rows: &[crate::phone::desk::MobileQueuedItem]
         out.end_object();
     }
     out.end_array();
+}
+
+/// A pane summary's `worktree` (`MobilePaneWorktree`, as the Swift Mac host writes it, with the Rust host's additions): branch and base
+/// at most 200 characters, the counts only once read (0…99,999), the flags only when true, the port block and the running run actions
+/// only when there are any (`portBase`, `portCount`, `actions [{ name, url? }]`, MC-25).
+fn write_worktree(out: &mut JsonOut, bar: &crate::phone::desk::MobilePaneWorktree) {
+    let short = |text: &str| text.chars().take(200).collect::<String>();
+    let count = |value: Option<i64>| value.map(|v| v.clamp(0, 99_999));
+    out.name("worktree");
+    out.begin_object();
+    out.prop_str("branch", Some(&short(&bar.branch)));
+    out.prop_str("base", Some(&short(&bar.base)));
+    out.prop_int("port", i64::from(bar.port));
+    out.prop_opt_int("ahead", count(bar.ahead));
+    out.prop_opt_int("behind", count(bar.behind));
+    out.prop_opt_int("changed", count(bar.changed));
+    out.prop_str("setup", bar.setup.as_deref());
+    if bar.can_undo {
+        out.prop_bool("canUndo", true);
+    }
+    if bar.conflict {
+        out.prop_bool("conflict", true);
+    }
+    if bar.busy {
+        out.prop_bool("busy", true);
+    }
+    out.prop_int("children", bar.children.max(0));
+    if let (Some(base), Some(count)) = (bar.port_base, bar.port_count)
+        && base > 0
+        && count > 0
+    {
+        out.prop_int("portBase", i64::from(base));
+        out.prop_int("portCount", i64::from(count));
+    }
+    if !bar.actions.is_empty() {
+        out.name("actions");
+        out.begin_array();
+        for action in bar.actions.iter().take(20) {
+            out.begin_object();
+            out.prop_str("name", Some(&action.name.chars().take(80).collect::<String>()));
+            out.prop_str("url", action.url.as_deref().filter(|u| u.starts_with("http://") || u.starts_with("https://")));
+            out.end_object();
+        }
+        out.end_array();
+    }
+    out.end_object();
+}
+
+/// A desk's answer written as a reply object: `protocol` first, then its own members (an answer that is no object is `ok: true`).
+fn value_reply(status: u16, value: &Value) -> MobileReply {
+    reply(
+        status,
+        object(|o| match value {
+            Value::Object(map) => {
+                for (key, member) in map {
+                    if key != "protocol" {
+                        prop_value(o, key, Some(member));
+                    }
+                }
+            }
+            _ => o.prop_bool("ok", true),
+        }),
+    )
 }
 
 /// `Mighty(mighty, structure, tag)`: the payload with the structure fields a phone asked for — the tag always, the value when it travels.

@@ -1,4 +1,4 @@
-import type { MobilePaneWorktree, MobileSessionSummary, PaneWorktreeAction } from '@/api/types';
+import type { MobilePaneWorktree, MobileRunAction, MobileSessionSummary, PaneWorktreeAction } from '@/api/types';
 import { t } from '@/lib/i18n';
 
 /**
@@ -88,4 +88,25 @@ export function menuOffers(worktree: MobilePaneWorktree): WorktreeOffer[] {
 /** The pane's worktree, from its summary; undefined for every other pane and for an older host. */
 export function paneWorktreeOf(session: MobileSessionSummary | undefined): MobilePaneWorktree | undefined {
   return session?.worktree;
+}
+
+/** MC-25: the worktree's port block as the desktop's bar writes it (`:41010–41019`, one port `:41010`); nothing without one. */
+export function worktreePortBlock(worktree: MobilePaneWorktree): string | undefined {
+  const base = worktree.portBase ?? 0;
+  const count = worktree.portCount ?? 0;
+  if (!(base > 0) || !(count > 0)) return undefined;
+  return count === 1 ? `:${base}` : `:${base}\u2013${base + count - 1}`;
+}
+
+/**
+ * MC-25: the run actions running in the worktree, each with the address its output named — only an `http(s)` one, which is
+ * the desktop's own (`localhost`), so the phone offers it to copy rather than to open.
+ */
+export function worktreeActions(worktree: MobilePaneWorktree): MobileRunAction[] {
+  if (!Array.isArray(worktree.actions)) return [];
+  return worktree.actions
+    .filter((action) => typeof action?.name === 'string' && action.name.length > 0)
+    .map((action) =>
+      typeof action.url === 'string' && /^https?:\/\//i.test(action.url) ? { name: action.name, url: action.url } : { name: action.name },
+    );
 }

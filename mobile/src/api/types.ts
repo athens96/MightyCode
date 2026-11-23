@@ -108,7 +108,11 @@ export type Capability =
    */
   | 'roles'
   /** The host exposes saved prompts (`GET /m1/sessions/{id}/prompts`, `POST /m1/sessions/{id}/prompt-send`). */
-  | 'savedPrompts';
+  | 'savedPrompts'
+  /** The host reads a worktree pane's pre-merge checks for the phone (`GET /m1/sessions/{id}/checks`, MC-27). */
+  | 'mergeChecks'
+  /** The host shows and acts on a pane's compare runs (`GET`/`POST /m1/sessions/{id}/compare/{compareId}`, MC-29). */
+  | 'compare';
 
 export const CAPABILITIES: readonly Capability[] = [
   'submit-mode',
@@ -133,6 +137,8 @@ export const CAPABILITIES: readonly Capability[] = [
   'hermes',
   'roles',
   'savedPrompts',
+  'mergeChecks',
+  'compare',
 ] as const;
 
 export interface HostInfo {
@@ -204,10 +210,57 @@ export interface MobileSessionSummary {
   childState?: string;
   /**
    * The pane works in its own git worktree: its branch, the branch it merges into, its PORT and where it stands. Sent by
-   * the Swift Mac host (0.4.61+), which takes `POST …/worktree` for it; the Rust host (Mac and Windows) does not send it
-   * yet, as it has no such route. Absent on every other pane and from older hosts.
+   * the Swift Mac host (0.4.61+) and the Rust host (Mac and Windows, 0.6.0+), which take `POST …/worktree` for it.
+   * Absent on every other pane and from older hosts.
    */
   worktree?: MobilePaneWorktree;
+  /** MC-26: why the desktop marks the pane as waiting for you (a terminal's notification or bell, a card, a failed setup). */
+  attention?: MobilePaneAttention;
+  /** MC-28: the pane this one was forked from (its id, the request it forked at, its title then). */
+  forkedFrom?: MobileForkedFrom;
+  /** MC-29: the compare runs this pane started, newest last. */
+  compareRuns?: MobileCompareRun[];
+  /** MC-29: the compare run this pane is a child of. */
+  compareId?: string;
+  /** MC-34: the pane's agent runs in the desktop's OS sandbox. */
+  sandboxed?: boolean;
+}
+
+/** MC-26: the desktop's mark on a pane waiting for you. `kind` is an open string (`notify`, `bell`, `approval`, `question`, `setupFailed`). */
+export interface MobilePaneAttention {
+  kind: string;
+  text: string;
+  /** RFC 3339. */
+  at: string;
+}
+
+/** MC-28: where a forked pane came from. */
+export interface MobileForkedFrom {
+  paneId: string;
+  requestId?: string;
+  title?: string;
+}
+
+/** MC-29: one compare run as the pane summary carries it. */
+export interface MobileCompareRun {
+  id: string;
+  /** The request, at most 400 characters. */
+  request: string;
+  baseCommit: string;
+  test?: string;
+  createdAt?: string;
+  children: MobileCompareChild[];
+}
+
+export interface MobileCompareChild {
+  id: string;
+  provider: string;
+  model?: string;
+  /** Why it could not start. */
+  failure?: string;
+  costUsd?: number;
+  /** `running`, `passed` or `failed`. */
+  testState?: string;
 }
 
 /** A pane's own worktree as the Mac's bar shows it (no path). Counts are absent until the Mac has read them. */
@@ -233,6 +286,16 @@ export interface MobilePaneWorktree {
   busy?: boolean;
   /** Open children on the pane's branch: the Mac refuses a discard while there are any. */
   children?: number;
+  /** MC-25: the worktree's port block (`MIGHTY_PORT`, `MIGHTY_PORT_COUNT`), both or neither. */
+  portBase?: number;
+  portCount?: number;
+  /** MC-25: the run actions running in the worktree, with the address each printed (the desktop's localhost). */
+  actions?: MobileRunAction[];
+}
+
+export interface MobileRunAction {
+  name: string;
+  url?: string;
 }
 
 /** What `POST /m1/sessions/{id}/worktree` does. The phone confirms `discard` itself. */
@@ -243,6 +306,134 @@ export interface PaneWorktreeResult {
   protocol: number;
   done: boolean;
   message?: string;
+  /**
+   * MC-27 (Rust host): the merge was not made because the pre-merge checks still warn; asked once more, the phone sends the same
+   * action with `confirmed: true`. `message` holds the warnings in the desktop's words for a phone that does not know this.
+   */
+  confirm?: { warnings: MergeWarning[] };
+}
+
+/** MC-27: one reason to look again before merging (`git.checks.warn.<code>`), and how many. */
+export interface MergeWarning {
+  code: string;
+  count: number;
+}
+
+/** MC-27: one part of the pre-merge checks, or why it could not be read. */
+export type ChecksPart<T> = { ok: true; value: T } | { ok: false; reason: string; cli?: string; detail?: string };
+
+export interface ChecksGit {
+  head: string;
+  base?: string | null;
+  uncommitted: number;
+  conflicted: number;
+  ahead: number;
+  behind: number;
+}
+
+export interface ChecksPr {
+  hosting: string;
+  number: number;
+  url: string;
+  /** `open`, `merged` or `closed`. */
+  state: string;
+  title: string;
+  isDraft: boolean;
+  /** `mergeable`, `conflicting` or `unknown`. */
+  mergeable: string;
+  /** `approved`, `changesRequested`, `reviewRequired` or empty. */
+  reviewDecision: string;
+}
+
+export interface ChecksCiItem {
+  name: string;
+  /** `passed`, `failed`, `pending` or `skipped`. */
+  state: string;
+  url: string;
+}
+
+export interface ChecksThread {
+  id: string;
+  path: string;
+  line: number | null;
+  outdated: boolean;
+  author: string;
+  /** The first comment's start, redacted by the host. */
+  body: string;
+  url: string;
+  replies: number;
+}
+
+export interface ChecksChecklist {
+  total: number;
+  remaining: string[];
+}
+
+/** `GET /m1/sessions/{id}/checks` ("mergeChecks"): the desktop's 점검 tab for the pane's worktree, read now. */
+export interface MergeChecks {
+  protocol: number;
+  git: ChecksPart<ChecksGit>;
+  pr: ChecksPart<ChecksPr>;
+  checks: ChecksPart<ChecksCiItem[]>;
+  threads: ChecksPart<ChecksThread[]>;
+  checklist: ChecksPart<ChecksChecklist>;
+  warnings: MergeWarning[];
+}
+
+/** MC-29: a compare child's phase as the desktop's compare view words it (an open string). */
+export type ComparePhase = 'starting' | 'running' | 'reported' | 'ended' | 'failed' | 'merged' | 'discarded';
+
+/** One column of the compare view (`GET /m1/sessions/{id}/compare/{compareId}`, "compare"). */
+export interface CompareColumn {
+  id: string;
+  agent: string;
+  agentLabel?: string;
+  model?: string | null;
+  phase: ComparePhase | string;
+  failure?: string | null;
+  files?: number | null;
+  added?: number | null;
+  removed?: number | null;
+  elapsed?: number | null;
+  running?: boolean;
+  costUsd?: number | null;
+  portBase?: number | null;
+  portCount?: number | null;
+  test?: { state: string; exitCode?: number | null; output?: string | null } | null;
+  canOpen?: boolean;
+  canMerge?: boolean;
+  canDiscard?: boolean;
+}
+
+export interface CompareView {
+  protocol: number;
+  /** The group is no longer on its pane. */
+  gone?: boolean;
+  id?: string;
+  request?: string;
+  baseShort?: string;
+  baseBranch?: string | null;
+  test?: string | null;
+  testName?: string | null;
+  createdAt?: string | null;
+  children?: CompareColumn[];
+}
+
+/** Body of `POST /m1/sessions/{id}/compare/{compareId}`. */
+export interface CompareActionRequest {
+  action: 'merge' | 'discard' | 'discardRest';
+  childId?: string;
+  ids?: string[];
+  confirmed?: boolean;
+}
+
+/** A compare action's answer: like a worktree action's, and after a merge the other children still open (`rest`). */
+export interface CompareActionResult {
+  protocol: number;
+  done: boolean;
+  message?: string;
+  confirm?: { warnings: MergeWarning[] };
+  rest?: { id: string; label: string }[];
 }
 
 export interface MobileState {
@@ -1037,6 +1228,16 @@ export interface MobileSessionDetail {
   /** How many of the pane's background tasks ended, as the Mac's strip counts them; sent with the strip (0 included),
    *  absent when it does not show and from older hosts. Read through `parseBackgroundDone`. */
   backgroundDone?: number;
+  /** MC-34: what the pane's sandbox refused lately, oldest first; absent when nothing was. */
+  sandboxBlocked?: MobileSandboxBlock[];
+}
+
+/** MC-34: one refusal of the pane's sandbox: `network` (a host off the allow list) or `tool` (the reviewer's deny). */
+export interface MobileSandboxBlock {
+  kind: string;
+  what: string;
+  reason: string;
+  at: string;
 }
 
 export interface AskTargetOption {

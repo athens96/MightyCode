@@ -64,15 +64,20 @@ MobileSessionSummary {
   canSteer?: boolean,                  // 0.4.35부터 언제나 false(구버전 휴대폰용으로 남김). 구버전 호스트에서는 Claude 에이전트 창만 true
   parentSessionId?: string,            // 마이티 오케스트레이션 자식 창의 부모 창 id(Mac 호스트가 싣는다. Windows 호스트는 아직 싣지 않는다); 자식이 아니면 없음
   childState?: string,                 // 그 자식의 상태(Mac 사이드바 자식 행과 같은 ChildState 값); parentSessionId와 함께만
-  worktree?: MobilePaneWorktree        // 창이 자기 git worktree에서 일함(Mac 0.4.61+, 아래 "창마다 worktree"); 다른 창과 구버전·Windows 호스트는 없음
+  worktree?: MobilePaneWorktree,       // 창이 자기 git worktree에서 일함(Swift Mac 0.4.61+, Rust 호스트 Mac·Windows 0.6.0+, 아래 "창마다 worktree"); 다른 창과 구버전 호스트는 없음
+  attention?: { kind, text, at },      // MC-26: 데스크톱이 "나를 기다리는 창"으로 표시한 창(아래 "창 표시")
+  forkedFrom?: { paneId, requestId?, title? },   // MC-28: 갈라낸 창의 원본
+  compareRuns?: [MobileCompareRun],    // MC-29: 이 창이 시작한 비교 실행(아래 "비교 실행")
+  compareId?: string,                  // MC-29: 이 창이 자식으로 속한 비교 실행
+  sandboxed?: true                     // MC-34: 이 창의 에이전트가 OS 샌드박스에서 실행됨
 }
 ```
 
 `canSteer`(선택)는 예전에 호스트가 그 창에서 조정(실행 중인 턴에 글을 합류시키기)을 할 수 있는지를 창마다 알려 주던 필드다. 0.4.35부터 데스크톱 입력창이 사람이 보낸 글을 실행 중인 턴에 넣지 않으므로(바쁜 창의 Enter는 언제나 대기열, ⌘Enter·Ctrl+Enter는 새 worktree 자식 아니면 대기열), 호스트는 모든 창에 `canSteer: false`를 싣는다. 필드는 구버전 휴대폰이 "바로 전달" 버튼을 숨기도록 남겨 둔다. 지금 휴대폰은 이 필드를 읽지 않고, 바쁜 창에는 "대기열에 추가"만 보이며 언제나 `mode: "queue"`를 보낸다. 구버전 호스트(0.4.34 이하)는 Claude 에이전트 창(`kind: "claude"`, `provider: "claude"`)에만 `true`를 싣고 `mode: "steer"`를 받으면 조정해 `steered`로 답했다. 휴대폰은 그때를 위해 `steered` 라벨을 계속 그린다.
 
-### 창마다 worktree (Mac 0.4.61+)
+### 창마다 worktree (Swift Mac 0.4.61+, Rust 호스트 0.6.0+)
 
-Mac에서 자기 git worktree에서 일하는 워크스페이스 창(`PaneWorktree`, docs/devtool-features.md §12)은 요약에 `worktree`를 싣는다(`MobileRemoteSupport.paneWorktree`):
+자기 git worktree에서 일하는 워크스페이스 창(`PaneWorktree`, docs/devtool-features.md §12)은 요약에 `worktree`를 싣는다(Swift Mac `MobileRemoteSupport.paneWorktree`, Rust 호스트 `pane_worktree::phone_bar`):
 
 ```
 MobilePaneWorktree {
@@ -86,15 +91,22 @@ MobilePaneWorktree {
   canUndo?: true,      // 마지막 병합을 되돌릴 기록이 있음(Mac이 조건을 다시 확인한다)
   conflict?: true,     // 마지막 병합이 충돌로 거절됨: resolveConflict를 보일 때
   busy?: true,         // 병합·되돌리기·버리기가 진행 중
-  children?: number    // 그 창 브랜치에서 갈라진 열린 자식 수: 0보다 크면 Mac이 버리기를 거절한다
+  children?: number,   // 그 창 브랜치에서 갈라진 열린 자식 수: 0보다 크면 Mac이 버리기를 거절한다
+  portBase?: number,   // MC-25(Rust 호스트): worktree의 포트 블록 첫 포트(MIGHTY_PORT)와 ┐ 둘 다 있거나 둘 다 없다
+  portCount?: number,  //                     블록의 포트 수(MIGHTY_PORT_COUNT)          ┘
+  actions?: [{ name, url? }]   // MC-25(Rust 호스트): 그 worktree에서 실행 중인 실행 동작(.mighty.yaml run:)과 출력에서 찾은 개발 서버 주소(http·https만); 없으면 없음
 }
 ```
 
-경로(worktree 폴더, 저장소 폴더)와 커밋 id는 싣지 않는다. `worktree`가 바뀌면(개수, busy, conflict) 요약이 바뀌어 상태와 세션 리비전이 오른다.
+경로(worktree 폴더, 저장소 폴더)와 커밋 id는 싣지 않는다. `worktree`가 바뀌면(개수, busy, conflict, 실행 동작의 시작·주소·끝) 요약이 바뀌어 상태와 세션 리비전이 오른다. Rust 호스트의 개수(`ahead`·`behind`·`changed`)는 데스크톱 막대나 휴대폰의 `refresh`가 마지막으로 읽은 값이고 그 전에는 없다(요약을 만들 때 git을 부르지 않는다).
 
 `POST /m1/sessions/{id}/worktree`는 Mac 막대의 동작을 그대로 한다(`AppStore.mobilePaneWorktree`, 막대와 같은 `runPaneWorktreeMerge`·`runPaneWorktreeUndo`·`runPaneConflictRequest`·`runPaneWorktreeDiscard`): `refresh`는 개수를 다시 읽기만 하고 `{ done: true }`, `merge`·`commitMerge`·`undo`는 결과를 창 기록에 쓰고 같은 글을 `message`로 돌려준다(거절·실패는 `done: false`), `resolveConflict`는 창의 에이전트에게 충돌 해결 요청을 다음 실행으로 보내고 시작되면 `{ done: true }`, 창이 지금 실행을 받을 수 없으면 이유와 함께 `done: false`, `discard`는 휴대폰이 먼저 확인을 받은 뒤 부르며 Mac은 확인 창 없이 자식이 남았으면 거절하고(`message`가 이유) 아니면 실행을 멈추고 worktree와 브랜치를 지운 뒤 창을 닫는다. 목록에 없는 동작은 400, 없는 창은 404, worktree가 없는 창과 같은 창의 다른 동작이 진행 중이면 409, Mac에 막는 창이 떠 있으면 409(`remote.error.closeMacWindow`). 글은 모두 Mac의 언어다.
 
-휴대폰은 창 목록 행에 브랜치 표시와 `mighty/… → base` 한 줄을 더하고(`SessionRow`, 읽기 이름에 `paneWorktree.marker`), 창 화면 맨 위에 막대를 둔다(`PaneWorktreeBar`): 브랜치 → base, PORT, 개수와 준비 상태, 주 단추(변경이 있으면 커밋하고 병합, 아니면 병합; 충돌로 거절된 뒤에는 충돌 해결 요청이 앞에), ⋯ 메뉴(다른 병합, 되돌릴 수 있을 때 되돌리기, 버리기 — 자식이 있으면 이유와 함께 흐리게). 결과는 Mac이 준 `message`를 토스트로 보이고, 버리기가 되면 창을 떠난다. 창을 열 때와 실행이 끝날 때 `refresh`를 한 번 보낸다. 휴대폰에서 연 새 창은 워크스페이스 설정(`decideWithoutAsking`, 묻기는 폴더)을 따르고, 만들기 응답의 `notice`(worktree에서 열었음과 그 브랜치·PORT, 또는 설정이 고른 worktree를 못 만들어 폴더에서 연 이유)를 토스트로 보인다. 문구는 모두 기존 `paneWorktree.*` 키다. Windows 호스트는 아직 `worktree`를 싣지 않고 이 경로가 없다(`routeNotFound`).
+Rust 호스트(Mac·Windows 0.6.0+)도 같은 라우트를 같은 규칙으로 받는다(`pane_worktree::phone_action`, 데스크톱 막대와 같은 병합·되돌리기·충돌 해결 요청·버리기를 확인 창 없이). 다른 점: 같은 창의 다른 동작이 진행 중이면 409(`phone.worktree.busy`), 데스크톱에 확인 창이 떠 있으면 409(`phone.worktree.dialogOpen`), worktree가 없는 창은 409(`phone.worktree.none`). **병합 전 점검(MC-27)**: `merge`·`commitMerge`에 `confirmed: true`가 없고 데스크톱의 병합 전 점검(`merge_checks::merge_warnings`, 1분 안의 읽기면 그것, 아니면 새로 읽음)에 경고가 남아 있으면 병합하지 않고 `{ done: false, message, confirm: { warnings: [{ code, count }] } }`로 답한다. `code`는 `uncommitted`·`draft`·`conflicts`·`changesRequested`·`checksFailed`·`checksPending`·`threads`·`checklist`(`commitMerge`에는 `uncommitted`가 없다)이고, `message`는 같은 경고를 데스크톱 언어로 적은 글이다(이 필드를 모르는 휴대폰은 그것을 토스트로 보이고 병합은 데스크톱에서 한다). 새 휴대폰은 `git.checks.merge.title` 확인 창에 경고를 휴대폰 언어(`git.checks.warn.*`)로 한 줄씩 보이고, "그래도 병합"을 누르면 같은 동작을 `confirmed: true`로 다시 보낸다. 막지는 않는다(데스크톱의 "한 번 더 묻기"와 같다). Swift Mac 호스트는 `confirmed`를 무시하고 `confirm`을 보내지 않으므로 그 흐름은 예전과 같다.
+
+휴대폰 막대는 `portBase`·`portCount`가 있으면 PORT 옆에 블록(`:41010–41019`)을, `actions`가 있으면 그 아래에 실행 동작 칩(▶ 이름과 주소)을 보인다. 주소는 컴퓨터의 `localhost`라 휴대폰에서 열지 않고, 누르면 복사한다(`phone.worktree.addressCopied`). 실행 동작의 시작·멈춤은 휴대폰에 없다. 호스트가 `"mergeChecks"`를 알리면 막대에 **점검** 단추가 생긴다(아래 "병합 전 점검").
+
+휴대폰은 창 목록 행에 브랜치 표시와 `mighty/… → base` 한 줄을 더하고(`SessionRow`, 읽기 이름에 `paneWorktree.marker`), 창 화면 맨 위에 막대를 둔다(`PaneWorktreeBar`): 브랜치 → base, PORT, 개수와 준비 상태, 주 단추(변경이 있으면 커밋하고 병합, 아니면 병합; 충돌로 거절된 뒤에는 충돌 해결 요청이 앞에), ⋯ 메뉴(다른 병합, 되돌릴 수 있을 때 되돌리기, 버리기 — 자식이 있으면 이유와 함께 흐리게). 결과는 Mac이 준 `message`를 토스트로 보이고, 버리기가 되면 창을 떠난다. 창을 열 때와 실행이 끝날 때 `refresh`를 한 번 보낸다. 휴대폰에서 연 새 창은 워크스페이스 설정(`decideWithoutAsking`, 묻기는 폴더)을 따르고, 만들기 응답의 `notice`(worktree에서 열었음과 그 브랜치·PORT, 또는 설정이 고른 worktree를 못 만들어 폴더에서 연 이유)를 토스트로 보인다. 문구는 모두 기존 `paneWorktree.*` 키다. 0.6.0 이전의 Windows·Rust 호스트는 `worktree`를 싣지 않고 이 경로가 없다(`routeNotFound`).
 
 마이티 오케스트레이션 자식 창은 Mac 호스트에서는 Mac의 위임 파일이 자식으로 적어 둔 창만 `parentSessionId`·`childState`를 싣는다(`MobileRemoteSupport.childLink`). `childState`는 사이드바 자식 행이 보이는 그대로다(`creating`·`running`·`waiting`·`reported`·`merged`·`ended`·`interrupted`·`failed`·`closed`·`discarded`, 사람이 답해야 하는 요청을 기다리는 실행 중 자식은 `waiting`). 휴대폰은 같은 워크스페이스 목록에 부모 창이 있고 그 부모가 자식이 아니면 자식 행을 부모 바로 아래 한 단 들여 그리고 오른쪽에 상태 낱말을 보인다(`groupSessionsByWorkspace`·`childStateLabel`). 부모가 닫혔거나 목록에 없으면 보통 창처럼 둔다. 병합·버리기·되돌리기는 휴대폰에 없고 데스크톱 앱의 자식 카드에서만 한다. 지금 이 두 필드는 Mac 호스트만 싣는다: Windows 호스트의 `MobileDesktopRouter`는 아직 `parentSessionId`·`childState`를 보내지 않아서, Windows 호스트의 자식 창은 휴대폰 목록에서 평범한 창으로 보인다. 구버전 휴대폰은 두 필드를 무시하고, 구버전 Mac에서는 필드가 없어 목록이 지금처럼 평평하다.
 
@@ -131,11 +143,64 @@ MobilePermission {
 
 제한: 요청 본문 64 KiB, `text` 32 KiB, 요청 경로(질의 포함) 16 KiB, 세션당 대기열 16개, 롱폴 `wait` 최대 10초, 연결당 동시 요청 8개, 호스트당 휴대폰 32대. 경로가 16 KiB를 넘는 요청은 버리지 않고 414 `{ protocol: 1, error, code: "badPath" }`로 답한다(휴대폰이 제한 시간까지 기다리지 않도록). 16 KiB는 파일 라우트의 4,096바이트 경로를 퍼센트 인코딩한 최대 길이(3배)에 라우트를 더하고도 남는다.
 
+### 창 표시 (MC-26, MC-28, MC-34)
+
+요약의 `attention { kind, text, at }`은 데스크톱이 그 창을 "나를 기다리는 창"으로 표시했다는 뜻이다(터미널의 OSC 9·777·99 알림과 벨, 승인·질문 카드, 실패한 setup; `kind`는 `notify`·`bell`·`approval`·`question`·`setupFailed`의 열린 문자열, `at`은 RFC 3339). 휴대폰은 창 목록 행의 제목 뒤에 주황 점을 찍고, 오른쪽에 다른 말(자식 상태, 질문·권한 수)이 없으면 표시 종류(`attention.kind.*`)를 쓴다. 현황 탭은 숫자 타일 아래에 "나를 기다리는 창 n개"(`attention.dashboard`, 에이전트 전용 터미널 제외) 한 줄을 보이고, 누르면 가장 늦게 표시된 창을 연다. 표시는 데스크톱에서 그 창을 보면 지워진다.
+
+`forkedFrom { paneId, requestId?, title? }`가 있는 창(MC-28로 갈라낸 창)은 창 화면 막대 아래에 "갈라낸 곳: {제목}"(`phone.session.forkedFrom`)을 보인다. 원본이 목록에 있으면 그 제목을 쓰고 누르면 원본 창을 열며, 없으면 갈라낼 때의 제목과 "닫힌 창"(`fork.strip.closed`)을 쓴다.
+
+`sandboxed: true`인 창(워크스페이스의 샌드박스가 켜져 있고 이 컴퓨터가 지원하는 Mac)은 같은 자리에 "샌드박스" 배지를, 상세의 `sandboxBlocked`가 있으면 마지막 거절 한 줄(네트워크 `sandbox.network.blocked`, 심사 에이전트의 거부 `sandbox.review.denied`)을 보인다.
+
+### 병합 전 점검 (MC-27, `"mergeChecks"`)
+
+`GET /m1/sessions/{id}/checks`는 데스크톱 Git 작업대 **점검** 탭과 같은 읽기(`merge_checks::phone`)를 돌려준다. 각 부분은 따로 실패한다.
+
+```
+MergeChecks {
+  protocol: 1,
+  git:       { ok: true, value: { head, base?, uncommitted, conflicted, ahead, behind } } | Unknown,
+  pr:        { ok: true, value: { hosting, number, url, state: "open"|"merged"|"closed", title, isDraft,
+                                  mergeable: "mergeable"|"conflicting"|"unknown", reviewDecision } } | Unknown,
+  checks:    { ok: true, value: [{ name, state: "passed"|"failed"|"pending"|"skipped", url }] } | Unknown,
+  threads:   { ok: true, value: [{ id, path, line, outdated, author, body, url, replies }] } | Unknown,   // body는 가린 뒤 300자
+  checklist: { ok: true, value: { total, remaining: [string] } } | Unknown,
+  warnings:  [{ code, count }]
+}
+Unknown { ok: false, reason: "noRemote"|"cliMissing"|"notLoggedIn"|"noPr"|"failed", cli?, detail? }
+```
+
+휴대폰은 호스트가 이 기능을 알릴 때 worktree 막대에 **점검** 단추를 두고, 누르면 시트(`phone.checks.title`)에서 다섯 부분(로컬 변경과 base 기준 ↑↓, PR 상태·초안·충돌·리뷰 결정, CI 검사 수와 실패한 검사 이름, 해결 안 된 리뷰 스레드 수와 앞 다섯 개, 남은 할 일)을 읽기 전용으로 보인다. 시트를 열 때와 "다시 읽기"에만 읽는다. 읽을 수 없는 부분은 "확인할 수 없음 · 이유"다. 스레드를 입력창에 넣는 일은 데스크톱에서 한다.
+
+### 비교 실행 (MC-29, `"compare"`)
+
+요약의 `compareRuns`는 그 창이 시작한 비교 실행이다.
+
+```
+MobileCompareRun { id, request /* 400자 */, baseCommit, test?, createdAt?,
+                   children: [{ id, provider, model?, failure?, costUsd?, testState? }] }
+CompareView      { protocol, gone?: true, id, request, baseCommit, baseShort, baseBranch?, test?, testName?, createdAt?,
+                   children: [{ id, agent, agentLabel, model?, phase: "starting"|"running"|"reported"|"ended"|"failed"|"merged"|"discarded",
+                                failure?, files?, added?, removed?, elapsed?, running, costUsd?, portBase?, portCount?,
+                                test?: { state, exitCode?, output? /* 끝 600자 */ }, canOpen, canDiff, canMerge, canDiscard }] }
+```
+
+휴대폰은 부모 창 화면 막대 아래에 최근 비교 실행 세 개를 카드로 보인다("비교 실행 · n개", 요청 첫 줄, 자식 창의 사이드바 상태로 센 실행 중·보고·실패·병합·폐기). 카드를 누르면 비교 결과 패널이 열리고, 호스트가 `"compare"`를 알리면 `GET …/compare/{compareId}`로 자식마다 에이전트·모델, 상태, 바꾼 파일과 줄 수, 걸린 시간, 비용, 테스트 결과를 읽어 보인다. 단추는 **창 보기**(휴대폰 목록에 있는 자식 창을 연다), **병합**(보고를 마친 자식만; 아니면 흐리게, 누르면 `compare.action.mergeHelp`), **폐기**(먼저 묻는다)다.
+
+`POST …/compare/{compareId}`(`compare::phone_action`)는 데스크톱 비교 보기의 동작을 확인 창 없이 한다(휴대폰이 먼저 물었다):
+
+- `merge` + `childId`: 보고를 마친 자식이 아니면 `{ done: false, message }`. `confirmed`가 없고 그 자식 worktree의 병합 전 점검에 경고가 있으면 `{ done: false, message, confirm: { warnings } }`(위 worktree와 같다). 아니면 자식 카드의 병합을 한다(기다려야 하면 카드처럼 대기열에 넣고 그 문구를 `message`로, `done: false`). 병합되면 `{ done: true, message?, rest: [{ id, label }] }` — `rest`는 아직 열린 나머지 자식이다. 휴대폰은 `rest`가 있으면 "나머지 폐기"(`compare.rest.*`) 확인 창을 띄우고, 폐기를 고르면 `discardRest`를 보낸다.
+- `discard` + `childId`, `discardRest` + `ids`: 고른 자식을 카드의 폐기처럼 지운다. 그 그룹의 자식이 아니거나 이미 병합·폐기된 id는 뺀다. 자식 안에 다른 worktree가 있거나(`phone.compare.nested`) 그것을 나열할 수 없으면 지우지 않고 그 이유를 `message`로(`done: false`) 돌려준다. 그런 자식은 데스크톱에서 확인을 받고 지운다.
+- 카드가 바쁘면 `phone.worktree.busy`, 데스크톱에 확인 창이 떠 있으면 `phone.worktree.dialogOpen`, 상태 쓰기가 허용되지 않은 빌드면 검증 모드 문구로 `done: false`.
+
+`"compare"`가 없는 호스트에서는 패널이 요약만으로 자식을 그리고(git 수치는 "—"), 병합·폐기는 데스크톱에서 하라고 적는다(`phone.compare.desktopOnly`).
+
 ## m1 확장 (capabilities)
 
 기존 라우트와 필드는 그대로다. 아래는 모두 **추가**이며, 새 필드는 전부 선택(optional)이다. 업데이트하지 않은 휴대폰 앱은 모르는 필드를 무시하고 지금처럼 동작한다. 휴대폰은 `/m1/info`의 `capabilities`에 이름이 있을 때만 해당 기능을 보여 준다(없으면 구버전 호스트).
 
-`MobileInfo.capabilities: string[]` — 허용 값: `"submit-mode"`, `"queue"`, `"pane"`, `"history"`, `"settings"`, `"commands"`, `"mighty"`, `"status"`, `"attachments"`, `"style"`, `"files"`, `"screenShare"`, `"structure"`, `"direct"`, `"push"`, `"fileChanges"`, `"workMap"`, `"appUpdate"`, `"pi"`, `"opencode"`, `"hermes"`, `"roles"`.
+`MobileInfo.capabilities: string[]` — 허용 값: `"submit-mode"`, `"queue"`, `"pane"`, `"history"`, `"settings"`, `"commands"`, `"mighty"`, `"status"`, `"attachments"`, `"style"`, `"files"`, `"screenShare"`, `"structure"`, `"direct"`, `"push"`, `"fileChanges"`, `"workMap"`, `"appUpdate"`, `"pi"`, `"opencode"`, `"hermes"`, `"roles"`, `"savedPrompts"`, `"mergeChecks"`, `"compare"`.
+
+`"mergeChecks"`와 `"compare"`는 Rust 호스트(Mac·Windows 0.6.0+)가 `GET /m1/sessions/{id}/checks`와 `GET`·`POST /m1/sessions/{id}/compare/{compareId}`를 안다는 뜻이다(아래 "병합 전 점검", "비교 실행"). 이 이름이 없는 호스트에는 휴대폰이 점검 단추를 보이지 않고, 비교 실행 카드는 요약만으로 그리며 병합·폐기는 데스크톱에서 하라고 적는다.
 
 `"roles"`는 호스트가 세션 상세의 `roles=1`을 알고, 그렇게 물은 휴대폰에게 마이티 페이로드의 역할 보기(블록의 `role`·`card`·`delegate`, 실행의 `returning`·`advisor`, 페이로드의 `fanOut`·`log`)를 보낸다는 뜻이다(Mac·Windows). 이 이름이 없는 호스트에 `roles`를 보내면 400이다. 아래 "역할 보기".
 
@@ -187,7 +252,10 @@ MobilePermission {
 | POST | `/m1/sessions/{id}/setAskTarget` | `{ target: string \| null }` | `{ protocol, ok }` — 이 창의 보낼 대상. 세부 정보의 `askTargets`에 있는 id이거나 Claude를 뜻하는 `null`(`target`을 빼도 Claude)이다. 그 창이 내놓지 않는 id, 문자열도 `null`도 아닌 `target`, 객체가 아닌 본문은 400(`remote.error.badBody`). 알 수 없는 창은 404, Mac은 셸·로컬 터미널 창에도 409. 아래 "보낼 대상" 절 |
 | GET | `/m1/sessions/{id}/commands` | | `{ protocol, commands: [MobileCommand] }` |
 | POST | `/m1/sessions/{id}/command` | `{ action }` (`clear` `usage` `help`만) | `{ protocol, ok, message? }` — `usage`·`help`는 `message`에 본문 |
-| POST | `/m1/sessions/{id}/worktree` | `{ action }` (`refresh` `merge` `commitMerge` `undo` `resolveConflict` `discard`만) | `{ protocol, done, message? }` — 창의 `worktree`가 있을 때만. 아래 "창마다 worktree" |
+| POST | `/m1/sessions/{id}/worktree` | `{ action, confirmed? }` (`refresh` `merge` `commitMerge` `undo` `resolveConflict` `discard`만) | `{ protocol, done, message?, confirm? }` — 창의 `worktree`가 있을 때만. `confirm`은 Rust 호스트가 병합 전 점검 경고를 되묻는 답. 위 "창마다 worktree" |
+| GET | `/m1/sessions/{id}/checks` | | `MergeChecks` — `"mergeChecks"` 기능. 그 창 worktree(자기 worktree 창 또는 위임 자식)의 병합 전 점검을 지금 읽는다. worktree가 없는 창 409(`phone.worktree.none`), 질의가 있으면 400. 아래 "병합 전 점검" |
+| GET | `/m1/sessions/{id}/compare/{compareId}` | | `CompareView` — `"compare"` 기능. 그 창이 시작한 비교 실행 하나를 지금 읽는다. 이미 없으면 `{ protocol, gone: true }`, id 형식이 아니면 404. 아래 "비교 실행" |
+| POST | `/m1/sessions/{id}/compare/{compareId}` | `{ action: "merge" \| "discard" \| "discardRest", childId?, ids?, confirmed? }` | `{ protocol, done, message?, confirm?, rest? }` — `"compare"` 기능. `merge`·`discard`는 `childId`가, `discardRest`는 `ids`(1~16개)가 있어야 한다(없거나 id 형식이 아니면 400). 아래 "비교 실행" |
 | POST | `/m1/sessions/{id}/guided` | 새 형식 `{ styleId, actionId, text? }` · 레거시 `{ style: "ouroboros", skill, text? }` | 202 `{ protocol, accepted }` — 호스트가 Mac과 같은 함수로 프롬프트를 만든다(`/ouroboros:seed`, `/re0 docs/spec.md`). 스타일을 모르거나 승인되지 않음 400, 이 창이 그 스타일이 아님 409, 행동(스킬)을 모름 400. 자세한 값은 아래 "스타일" 절 |
 | POST | `/m1/sessions/{id}/uploads` | `{ name, size, mimeType? }` | 201 `{ protocol, uploadId, chunkSize }` · 크기·개수 한도 초과 413 · 열어 둔 업로드가 너무 많으면 429(실행 창당 16개, 호스트 전체 64개) |
 | POST | `/m1/uploads/{uploadId}/chunks/{index}` | `{ dataBase64 }` | `{ protocol, ok, received }` — 순서대로 0부터. 이 라우트만 본문 한도 300 KiB |
@@ -209,7 +277,8 @@ MobilePermission {
 MobileInfo            { …, capabilities?: string[], direct?: string[] }   // direct: "direct" 기능과 함께, `host:port` 목록
 MobileSessionSummary  { …, agentViewMode?: "plain" | "mighty", mightyStyle?: "cli" | "ouroboros",
                         styleId?: string }
-MobileSessionDetail   { …, hasOlder?: boolean,
+MobileSessionDetail   { …, sandboxBlocked?: [{ kind: "network" | "tool", what, reason, at }],   // MC-34, 오래된 것부터
+                        hasOlder?: boolean,
                         settings?: MobileSettings, mighty?: MobileMighty,
                         statusLine?: { lines: [[{ text, fg?: "#RRGGBB", bold?: boolean }]] },   // 최대 6줄
                         rateLimits?: [{ label, usedPercent, resetsAt?: ISO-8601 }],

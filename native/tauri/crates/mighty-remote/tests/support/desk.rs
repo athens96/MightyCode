@@ -70,6 +70,10 @@ pub struct Calls {
     pub queue_count: Option<CountFn>,
     /// MC-26: the panes the desktop marks as waiting (kind, words, time).
     pub attention: std::collections::HashMap<String, (String, String, String)>,
+    /// The worktree panes' bars (the summary's `worktree`).
+    pub worktrees: HashMap<String, mighty_remote::phone::desk::MobilePaneWorktree>,
+    /// MC-34: the panes whose agent runs in the sandbox.
+    pub sandboxed: HashSet<String>,
     pub image_preview: Option<ImageFn>,
     pub app_update: Option<Option<app_update_view::State>>,
     pub app_acts: Vec<bool>,
@@ -385,6 +389,17 @@ impl PhoneDesk for Desk {
     }
     fn attention(&self, session_id: &str) -> Option<(String, String, String)> {
         self.calls().attention.get(session_id).cloned()
+    }
+    fn pane_worktree(
+        &self,
+        pane: &RunSession,
+        _snapshot: &AppSnapshot,
+        _children: &[DelegationChildRow],
+    ) -> Option<mighty_remote::phone::desk::MobilePaneWorktree> {
+        self.calls().worktrees.get(pane.id()).cloned()
+    }
+    fn sandboxed(&self, pane: &RunSession, _snapshot: &AppSnapshot) -> bool {
+        self.calls().sandboxed.contains(pane.id())
     }
     fn queue_count(&self, session_id: &str) -> Option<i32> {
         let count = self.calls().queue_count.clone();

@@ -862,6 +862,95 @@ pub(crate) async fn discard_confirmed(host: &Arc<Host>, ids: &[String]) -> bool 
     all
 }
 
+/// What a child card's action from the phone came to: it went (with the card's words, if any), or why not.
+pub(crate) enum PhoneCard {
+    Done(Option<String>),
+    Refused(String),
+}
+
+/// The card's gating for an action from the phone, said instead of shown: Some(why) while the card is busy, a sheet is open on the
+/// desktop, or git may not go to the child's folders.
+fn phone_card_refusal(host: &Arc<Host>, app: &DelegationApp, id: &str) -> Option<String> {
+    if app.is_card_busy(id) {
+        return Some(host.locale.get("phone.worktree.busy"));
+    }
+    if host.view().dialog_open {
+        return Some(host.locale.get("phone.worktree.dialogOpen"));
+    }
+    if !host.delegation_live() || !child_may_be_touched(host, app, id) {
+        return Some(crate::setup::verification_mode());
+    }
+    None
+}
+
+/// The card's line for a note of the child `id` (its sidebar row), as the card shows it.
+fn phone_note(host: &Host, app: &DelegationApp, id: &str, note: &mighty_delegation::cards::DelegationCardNote) -> Option<String> {
+    let row = app.rows().into_iter().find(|row| row.id == id)?;
+    text::note(note, &row, &host.locale).map(|(words, _)| words)
+}
+
+/// MC-29: a compare child's merge from the phone, after the phone asked about the pre-merge checks itself: the card's merge (queued
+/// as the card's is when it must wait), never a sheet on the desktop.
+pub(crate) async fn phone_merge_child(host: &Arc<Host>, id: &str) -> PhoneCard {
+    let Some(app) = app() else { return PhoneCard::Refused(host.locale.get("phone.compare.unavailable")) };
+    if let Some(why) = phone_card_refusal(host, &app, id) {
+        return PhoneCard::Refused(why);
+    }
+    let Some(note) = app.merge_child(id).await else { return PhoneCard::Refused(host.locale.get("phone.worktree.busy")) };
+    let words = phone_note(host, &app, id, &note);
+    match note.result {
+        DelegationCardResult::Done | DelegationCardResult::DoneUnsaved(_) => PhoneCard::Done(words),
+        _ => PhoneCard::Refused(words.unwrap_or_else(|| host.locale.get("phone.compare.notMerged"))),
+    }
+}
+
+/// MC-29: a discard of compare children the person confirmed on the phone (one child, or the rest after a merge): each goes as the
+/// card's discard does without a sheet; one with worktrees nested in it, or one whose nested worktrees could not be listed, is left
+/// for the desktop, which asks about them. The words of the first that did not go, if any.
+pub(crate) async fn phone_discard_children(host: &Arc<Host>, ids: &[String]) -> PhoneCard {
+    let Some(app) = app() else { return PhoneCard::Refused(host.locale.get("phone.compare.unavailable")) };
+    let mut refused: Option<String> = None;
+    for id in ids {
+        if let Some(why) = phone_card_refusal(host, &app, id) {
+            refused.get_or_insert(why);
+            continue;
+        }
+        let Some(pending) = app.ask_to_discard_child(id).await else {
+            refused.get_or_insert(host.locale.get("phone.worktree.busy"));
+            continue;
+        };
+        match &pending.nested {
+            None => {
+                refused.get_or_insert(text::discard_message(&pending, &host.locale));
+                continue;
+            }
+            Some(nested) if !nested.is_empty() => {
+                refused.get_or_insert(host.locale.get("phone.compare.nested"));
+                continue;
+            }
+            Some(_) => {}
+        }
+        match app.discard_child(&pending).await {
+            Some(note) if matches!(note.result, DelegationCardResult::Done | DelegationCardResult::DoneUnsaved(_)) => {}
+            Some(note) if matches!(note.result, DelegationCardResult::Reconfirm(_)) => {
+                refused.get_or_insert(host.locale.get("phone.compare.nested"));
+            }
+            Some(note) => {
+                let words = phone_note(host, &app, id, &note).unwrap_or_else(|| host.locale.get("phone.compare.notDiscarded"));
+                refused.get_or_insert(words);
+            }
+            None => {
+                refused.get_or_insert(host.locale.get("phone.worktree.busy"));
+            }
+        }
+    }
+    host.schedule();
+    match refused {
+        Some(why) => PhoneCard::Refused(why),
+        None => PhoneCard::Done(None),
+    }
+}
+
 /// Asks the person (a confirmation over the page, the smoke's driver in a smoke): true for its primary button.
 pub(crate) async fn ask_confirm(host: &Arc<Host>, dialog: Value) -> bool {
     confirm(host, dialog).await

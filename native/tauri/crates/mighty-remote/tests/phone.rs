@@ -1631,3 +1631,106 @@ async fn the_summary_carries_a_childs_parent_and_state() {
         "the session reply's summary says the same"
     );
 }
+
+/// MC-25/MC-34: a worktree pane carries its bar (`worktree`: branch, base, PORT, port block, counts, flags, running run actions with
+/// their address) and a sandboxed pane `sandboxed`; other panes carry neither. The bar's route goes to the window with the phone's
+/// `confirmed`, and a merge that still warns comes back as `confirm` with the warnings' codes.
+#[tokio::test]
+async fn the_phone_sees_a_worktree_panes_bar_and_its_sandbox() {
+    use mighty_remote::phone::desk::{MobilePaneWorktree, MobileRunAction};
+    let world = World::new("mobile-worktree");
+    world.desk.set_sessions(vec![pane("wt", "w"), pane("plain", "w")]);
+    world.desk.calls().worktrees.insert(
+        "wt".into(),
+        MobilePaneWorktree {
+            branch: "mighty/wt".into(),
+            base: "main".into(),
+            port: 4123,
+            port_base: Some(41_010),
+            port_count: Some(10),
+            ahead: Some(3),
+            behind: Some(0),
+            changed: Some(120_000),
+            setup: Some("done".into()),
+            conflict: true,
+            children: 1,
+            actions: vec![
+                MobileRunAction { name: "dev".into(), url: Some("http://localhost:41010/".into()) },
+                MobileRunAction { name: "e2e".into(), url: Some("file:///etc/passwd".into()) },
+            ],
+            ..MobilePaneWorktree::default()
+        },
+    );
+    world.desk.calls().sandboxed.insert("wt".into());
+    let (_, state) = world.route("GET", "/m1/state", None).await;
+    let sessions = state["sessions"].as_array().unwrap();
+    let wt = sessions.iter().find(|s| s["id"] == "wt").unwrap();
+    let plain = sessions.iter().find(|s| s["id"] == "plain").unwrap();
+    assert_eq!(
+        wt["worktree"],
+        json!({
+            "branch": "mighty/wt", "base": "main", "port": 4123, "ahead": 3, "behind": 0, "changed": 99_999, "setup": "done",
+            "conflict": true, "children": 1, "portBase": 41_010, "portCount": 10,
+            "actions": [{"name": "dev", "url": "http://localhost:41010/"}, {"name": "e2e"}],
+        }),
+        "the bar, counts capped, a link that is no web address left out"
+    );
+    assert_eq!(wt["sandboxed"], true);
+    assert!(plain.get("worktree").is_none() && plain.get("sandboxed").is_none(), "other panes carry neither");
+
+    world.desk.calls().action = Some(Arc::new(|action| {
+        Ok(ActionAnswer::Value(if action.body["confirmed"] == true {
+            json!({"done": true, "message": "merged"})
+        } else {
+            json!({"done": false, "message": "check first", "confirm": {"warnings": [{"code": "checksFailed", "count": 2}]}})
+        }))
+    }));
+    let (status, asked) = world.route("POST", "/m1/sessions/wt/worktree", Some(json!({"action": "merge"}))).await;
+    assert!(status == 200 && asked["done"] == false && asked["confirm"]["warnings"][0]["code"] == "checksFailed", "{asked}");
+    let (_, merged) = world.route("POST", "/m1/sessions/wt/worktree", Some(json!({"action": "merge", "confirmed": true}))).await;
+    assert!(merged["protocol"] == 1 && merged["done"] == true && merged["message"] == "merged", "{merged}");
+    let (status, _) = world.route("POST", "/m1/sessions/wt/worktree", Some(json!({"action": "push"}))).await;
+    assert_eq!(status, 400, "an action the bar does not have");
+    let sent: Vec<(String, Value)> = world.desk.actions().iter().map(|a| (a.action.clone(), a.body.clone())).collect();
+    assert_eq!(
+        sent,
+        [
+            ("worktree".to_string(), json!({"action": "merge", "confirmed": false})),
+            ("worktree".to_string(), json!({"action": "merge", "confirmed": true})),
+        ]
+    );
+}
+
+/// MC-27/MC-29: the pre-merge checks and a compare run's view are read through the window; the compare actions check their ids.
+#[tokio::test]
+async fn the_phone_reads_checks_and_compare_runs() {
+    let world = World::new("mobile-checks");
+    world.desk.set_sessions(vec![pane("p", "w")]);
+    world.desk.calls().action = Some(Arc::new(|action| {
+        Ok(ActionAnswer::Value(match action.action.as_str() {
+            "checks" => json!({"git": {"ok": true, "value": {"uncommitted": 0}}, "warnings": []}),
+            "compare-view" => json!({"id": action.body["compareId"], "children": []}),
+            _ => json!({"done": true, "rest": [{"id": "c2", "label": "Codex"}]}),
+        }))
+    }));
+    let (status, checks) = world.route("GET", "/m1/sessions/p/checks", None).await;
+    assert!(status == 200 && checks["protocol"] == 1 && checks["git"]["ok"] == true, "{checks}");
+    let (status, _) = world.route("GET", "/m1/sessions/p/checks?x=1", None).await;
+    assert_eq!(status, 400);
+    let (_, view) = world.route("GET", "/m1/sessions/p/compare/cmp1", None).await;
+    assert_eq!(view["id"], "cmp1");
+    let (status, _) = world.route("GET", "/m1/sessions/p/compare/..bad", None).await;
+    assert_eq!(status, 404, "a compare id that is no id");
+    let (_, merged) =
+        world.route("POST", "/m1/sessions/p/compare/cmp1", Some(json!({"action": "merge", "childId": "c1", "confirmed": true}))).await;
+    assert_eq!(merged["rest"][0]["id"], "c2");
+    let (status, _) = world.route("POST", "/m1/sessions/p/compare/cmp1", Some(json!({"action": "merge"}))).await;
+    assert_eq!(status, 400, "a merge names its child");
+    let (status, _) = world.route("POST", "/m1/sessions/p/compare/cmp1", Some(json!({"action": "discardRest", "ids": []}))).await;
+    assert_eq!(status, 400, "the rest names its children");
+    let (status, _) = world.route("POST", "/m1/sessions/p/compare/cmp1", Some(json!({"action": "discardRest", "ids": ["c2", "c3"]}))).await;
+    assert_eq!(status, 200);
+    let last = world.desk.actions().last().cloned().unwrap();
+    assert_eq!(last.action, "compare-action");
+    assert_eq!(last.body, json!({"compareId": "cmp1", "action": "discardRest", "childId": null, "ids": ["c2", "c3"], "confirmed": false}));
+}

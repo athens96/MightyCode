@@ -30,6 +30,10 @@ import {
   type CreateSessionResponse,
   type PaneWorktreeAction,
   type PaneWorktreeResult,
+  type MergeChecks,
+  type CompareView,
+  type CompareActionRequest,
+  type CompareActionResult,
   type EntriesPage,
   type FileChangesRequest,
   type FileListing,
@@ -349,7 +353,23 @@ export interface MobileClient {
    * One of the Mac's worktree actions on a pane whose summary carries `worktree` (host 0.4.61+): the Mac does the git
    * work and answers what it wrote in the pane.
    */
-  paneWorktree(sessionId: string, action: PaneWorktreeAction, signal?: AbortSignal): Promise<PaneWorktreeResult>;
+  paneWorktree(
+    sessionId: string,
+    action: PaneWorktreeAction,
+    signal?: AbortSignal,
+    confirmed?: boolean,
+  ): Promise<PaneWorktreeResult>;
+  /** The pane's worktree's pre-merge checks, read now ("mergeChecks", MC-27). */
+  mergeChecks(sessionId: string, signal?: AbortSignal): Promise<MergeChecks>;
+  /** One of the pane's compare runs, its children read now ("compare", MC-29). */
+  compareView(sessionId: string, compareId: string, signal?: AbortSignal): Promise<CompareView>;
+  /** The compare view's merge and discards ("compare"); a merge that still warns answers `confirm` until sent `confirmed`. */
+  compareAction(
+    sessionId: string,
+    compareId: string,
+    input: CompareActionRequest,
+    signal?: AbortSignal,
+  ): Promise<CompareActionResult>;
   /** One folder of a workspace, read-only ("files"); `""` is the workspace root. */
   listFiles(workspaceId: string, path: string, signal?: AbortSignal): Promise<FileListing>;
   /**
@@ -726,11 +746,27 @@ export function createClient(channel: RelayChannel): MobileClient {
         input,
         signal,
       ),
-    paneWorktree: (sessionId, action, signal) =>
+    paneWorktree: (sessionId, action, signal, confirmed) =>
       request<PaneWorktreeResult>(
         'POST',
         `/m1/sessions/${encodeURIComponent(sessionId)}/worktree`,
-        { action },
+        confirmed ? { action, confirmed: true } : { action },
+        signal,
+      ),
+    mergeChecks: (sessionId, signal) =>
+      request<MergeChecks>('GET', `/m1/sessions/${encodeURIComponent(sessionId)}/checks`, undefined, signal),
+    compareView: (sessionId, compareId, signal) =>
+      request<CompareView>(
+        'GET',
+        `/m1/sessions/${encodeURIComponent(sessionId)}/compare/${encodeURIComponent(compareId)}`,
+        undefined,
+        signal,
+      ),
+    compareAction: (sessionId, compareId, input, signal) =>
+      request<CompareActionResult>(
+        'POST',
+        `/m1/sessions/${encodeURIComponent(sessionId)}/compare/${encodeURIComponent(compareId)}`,
+        input,
         signal,
       ),
 
