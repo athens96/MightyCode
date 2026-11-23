@@ -56,6 +56,20 @@ export interface Workspace {
   mightyworkUrl?: string | null;
   githubRepo?: string | null;
   mightyworkAutoSync?: boolean | null;
+  /** MC-34: the OS sandbox of the workspace's agent runs (Mac only; off when absent). */
+  sandbox?: SandboxConfig | null;
+}
+
+/** MC-34: a workspace's sandbox settings as the host saves them (Core SandboxConfig). */
+export interface SandboxConfig {
+  enabled: boolean;
+  limitNetwork?: boolean;
+  allowedHosts?: string[];
+  protectInstructions?: boolean;
+  readOnlyPaths?: string[];
+  reviewer?: boolean;
+  reviewerAgent?: string | null;
+  reviewerModel?: string | null;
 }
 
 /** A workspace agent pane's own worktree (Core PaneWorktree.cs, the Mac's PaneWorktree). */

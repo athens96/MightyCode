@@ -507,6 +507,8 @@ pub struct Workspace {
     /// MC-33: set when the folder is on an SSH machine (nothing installed there). `path` is then a local empty folder of the app's own
     /// (`<data>/ssh/workspaces/<id>`), so every local reader sees an empty folder; panes reach the remote folder through ssh.
     pub ssh: Option<SshWorkspaceRef>,
+    /// MC-34: the OS sandbox of this workspace's agent runs (Mac Seatbelt, the network allow list, the reviewer). None is off.
+    pub sandbox: Option<SandboxConfig>,
 }
 
 /// MC-33: which SSH machine and remote folder a workspace opens.
@@ -559,6 +561,7 @@ impl Default for Workspace {
             mightywork_auto_sync: None,
             issue_trackers: None,
             ssh: None,
+            sandbox: None,
         }
     }
 }
@@ -583,6 +586,7 @@ impl Wire for Workspace {
             mightywork_auto_sync: lenient_bool(o.get("mightyworkAutoSync")),
             issue_trackers: lenient_list(o.get("issueTrackers")),
             ssh: lenient_record(o.get("ssh")),
+            sandbox: lenient_record(o.get("sandbox")),
         })
     }
 
@@ -604,6 +608,7 @@ impl Wire for Workspace {
         out.prop_opt_bool("mightyworkAutoSync", self.mightywork_auto_sync);
         out.prop_list("issueTrackers", self.issue_trackers.as_ref());
         out.prop("ssh", self.ssh.as_ref());
+        out.prop("sandbox", self.sandbox.as_ref());
         out.end_object();
     }
 }
@@ -621,6 +626,11 @@ impl Workspace {
 
     pub fn mightywork_auto_sync_on(&self) -> bool {
         self.mightywork_auto_sync != Some(false)
+    }
+
+    /// MC-34: the workspace's sandbox when it is turned on (an SSH or remote workspace never has one: its runs are not on this computer).
+    pub fn sandbox_on(&self) -> Option<&SandboxConfig> {
+        self.sandbox.as_ref().filter(|s| s.enabled && self.is_local())
     }
 
     /// MC-31: the workspace's record for `tracker` (`"linear"`, `"jira"`, `"gitlab"`), when it has one.
@@ -712,6 +722,69 @@ impl Wire for IssueTrackerConfig {
         out.prop_opt_bool("writePr", self.write_pr);
         out.prop_opt_bool("writeMerge", self.write_merge);
         out.prop_opt_bool("commentPr", self.comment_pr);
+        out.end_object();
+    }
+}
+
+// ── the sandbox of a workspace's runs (MC-34) ───────────────────────────────────────────────────────────────────────────
+
+/// MC-34: a workspace's sandbox settings. Everything is off until the person turns it on; the switches inside default to the safe side.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SandboxConfig {
+    /// Agent runs start under the OS sandbox (Mac only; Windows keeps it off).
+    pub enabled: bool,
+    /// Outbound connections only through the app's allow-list proxy (None = true).
+    pub limit_network: Option<bool>,
+    /// The person's own allowed hosts beside the agent's API hosts: `host` (port 443), `host:port`, `*.host`.
+    pub allowed_hosts: Vec<String>,
+    /// `.mighty.yaml`, `AGENTS.md`, `CLAUDE.md` and the agents' project settings stay read-only (None = true).
+    pub protect_instructions: Option<bool>,
+    /// More workspace files kept read-only, relative to the workspace folder.
+    pub read_only_paths: Vec<String>,
+    /// A read-only reviewer agent judges what crosses the boundary (None = false).
+    pub reviewer: Option<bool>,
+    /// The reviewer's agent (`claude`, `codex`; None = claude) and model (None = the agent's cheap one).
+    pub reviewer_agent: Option<String>,
+    pub reviewer_model: Option<String>,
+}
+
+impl SandboxConfig {
+    pub fn limit_network_on(&self) -> bool {
+        self.limit_network != Some(false)
+    }
+    pub fn protect_instructions_on(&self) -> bool {
+        self.protect_instructions != Some(false)
+    }
+    pub fn reviewer_on(&self) -> bool {
+        self.reviewer == Some(true)
+    }
+}
+
+impl Wire for SandboxConfig {
+    fn read(value: &Value) -> R<Self> {
+        let o = Obj::of(value, "a sandbox")?;
+        Ok(SandboxConfig {
+            enabled: lenient_bool(o.get("enabled")).unwrap_or(false),
+            limit_network: lenient_bool(o.get("limitNetwork")),
+            allowed_hosts: lenient_strings(o.get("allowedHosts")).unwrap_or_default(),
+            protect_instructions: lenient_bool(o.get("protectInstructions")),
+            read_only_paths: lenient_strings(o.get("readOnlyPaths")).unwrap_or_default(),
+            reviewer: lenient_bool(o.get("reviewer")),
+            reviewer_agent: lenient_string(o.get("reviewerAgent")),
+            reviewer_model: lenient_string(o.get("reviewerModel")),
+        })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_bool("enabled", self.enabled);
+        out.prop_opt_bool("limitNetwork", self.limit_network);
+        out.prop_strings("allowedHosts", Some(&self.allowed_hosts));
+        out.prop_opt_bool("protectInstructions", self.protect_instructions);
+        out.prop_strings("readOnlyPaths", Some(&self.read_only_paths));
+        out.prop_opt_bool("reviewer", self.reviewer);
+        out.prop_str("reviewerAgent", self.reviewer_agent.as_deref());
+        out.prop_str("reviewerModel", self.reviewer_model.as_deref());
         out.end_object();
     }
 }

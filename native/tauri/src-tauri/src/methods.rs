@@ -220,6 +220,7 @@ pub fn registry() -> Registry {
     crate::compare::register(&mut methods);
     crate::mirror::register(&mut methods);
     crate::ssh::register(&mut methods);
+    crate::sandbox::register(&mut methods);
     // W6: the native forms (native.rs) and Settings with the guide (settings/mod.rs).
     crate::native::register(&mut methods);
     crate::settings::register(&mut methods);

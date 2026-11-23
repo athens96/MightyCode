@@ -823,6 +823,19 @@ impl Inner {
             out.prop_opt_bool("defaultYes", prompt.default_yes);
             out.end_object();
         }
+        if let Some(blocked) = detail.sandbox_blocked.as_ref().filter(|b| !b.is_empty()) {
+            out.name("sandboxBlocked");
+            out.begin_array();
+            for block in blocked {
+                out.begin_object();
+                out.prop_str("kind", Some(&block.kind));
+                out.prop_str("what", Some(&block.what));
+                out.prop_str("reason", Some(&block.reason));
+                out.prop_str("at", Some(&block.at));
+                out.end_object();
+            }
+            out.end_array();
+        }
         out.end_object();
         out.finish()
     }

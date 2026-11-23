@@ -457,6 +457,39 @@ fn web_cards_cs391_in_the_composers_order() {
     assert_eq!(busy.first().map(|c| c.kind()), Some("planHistory"));
 }
 
+/// MC-34: the sandbox's card for a host off the allow list asks "이 접속을 허용할까요?" with the host and port and offers 이번만,
+/// 항상 and 거부.
+#[test]
+fn the_sandbox_asks_about_a_blocked_host() {
+    let l = ko();
+    let mut world = CardWorld::new(pane("claude", "running"));
+    let mut request = PermissionRequest::new(
+        "net-1",
+        "p1",
+        "net-1",
+        mighty_core::permission::SANDBOX_NETWORK_TOOL,
+        r#"{"host":"example.com","port":8443}"#,
+        "example.com:8443",
+    );
+    request.reason = Some("허용 목록에 없는 곳입니다.".into());
+    world.requests = vec![request];
+    let card = serde_json::to_value(cards::request_card(&world.inputs(true, false, false, false)).unwrap()).unwrap();
+    assert_eq!(card["kind"], "permission");
+    assert_eq!(card["title"], l.get("sandbox.network.cardTitle"));
+    assert_eq!(card["title"], "이 접속을 허용할까요?");
+    assert_eq!(card["headline"], "example.com:8443");
+    assert_eq!(card["fields"][0]["value"], "example.com");
+    assert_eq!(card["fields"][1]["value"], "8443");
+    assert_eq!(card["allowOnce"], l.get("sandbox.network.allowOnce"));
+    assert_eq!(card["allowAlways"], l.get("sandbox.network.allowAlways"));
+    assert_eq!(card["deny"], l.get("sandbox.network.deny"));
+    assert_eq!(card["reason"], "허용 목록에 없는 곳입니다.");
+    // Any other request's card has no 항상.
+    world.requests = vec![PermissionRequest::new("perm-1", "p1", "tu-1", "Read", r#"{"file_path":"a.txt"}"#, "Read")];
+    let card = serde_json::to_value(cards::request_card(&world.inputs(true, false, false, false)).unwrap()).unwrap();
+    assert!(card.get("allowAlways").is_none());
+}
+
 /// MainWindow.WebShell.Cards.cs:476-485 and :460: a plan's card is its answers only while the diagram draws it, and under a style
 /// the waiting question is drawn first.
 #[test]
@@ -842,6 +875,8 @@ fn the_cards_have_the_pages_field_names() {
     let mut permission = card("permission");
     permission["headline"] = json!("h");
     permission["summary"] = json!("s");
+    // MC-34: only the sandbox's network card offers 항상.
+    permission["allowAlways"] = json!("a");
     same_keys(&types, "PermissionCard", &permission);
     same_keys(&types, "PermissionField", &permission["fields"][0]);
     same_keys(&types, "LoginCard", &card("login"));

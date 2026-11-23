@@ -175,6 +175,8 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
       { label: t('conversationSearch.open'), action: () => call('openConversationSearch', { workspaceId: workspace.id }) },
       { label: t('integrations.menu.browse'), action: () => window.dispatchEvent(new CustomEvent('mighty:open-issues', { detail: { workspaceId: workspace.id, paneId: null, settingsOpen: false } })) },
       { label: t('integrations.menu.settings'), action: () => window.dispatchEvent(new CustomEvent('mighty:open-issues', { detail: { workspaceId: workspace.id, paneId: null, settingsOpen: true } })) },
+      // MC-34: the workspace's sandbox (on the Mac; Windows says it is not supported yet).
+      { label: t('sandbox.menu.settings'), action: () => window.dispatchEvent(new CustomEvent('mighty:open-sandbox', { detail: { workspaceId: workspace.id } })) },
     ] : []),
     // Where its agent panes work and what each new worktree gets (MainWindow.PaneWorktree.cs WorkspaceWorktreeAction).
     { separator: true },

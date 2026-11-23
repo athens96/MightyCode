@@ -93,3 +93,36 @@ Claude sometimes runs long commands or sub-agents in the background. Then work i
 - Folding the progress panel folds the background group with it.
 
 ![[background-work]]
+
+## Sandbox {#sandbox}
+{{platform:mac}} Each workspace can run its agents in the macOS sandbox. It is off by default. Right-click the workspace in the sidebar, choose {{ui:sandbox.menu.settings}}, turn on {{ui:sandbox.settings.enabled}} and press {{ui:sandbox.settings.save}}. It applies from the next run, and the pane's header shows a {{ui:sandbox.badge}} badge. Click the badge to open the settings.
+
+### What it blocks {#sandbox-blocked}
+- **Writes**: only in the workspace (or the pane's worktree) folder, the agent's own settings folders, the temporary folders and package caches.
+- **git**: commits, branches, merges and rebases work. `.git/config`, `.git/hooks` and `.git/info` cannot be changed.
+- **Instruction files**: with {{ui:sandbox.settings.instructions}} on (the default), `.mighty.yaml`, `AGENTS.md`, `CLAUDE.md` and the agents' project settings cannot be changed. Add more paths under {{ui:sandbox.settings.readOnly}}.
+- **Reads**: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, browser cookies, the app's data folder and the other agents' sign-in files cannot be read. Each agent reads only its own sign-in.
+- **Connections**: with {{ui:sandbox.settings.network}} on (the default), the agent goes out only through the app's proxy. Only the agent's API hosts and what you list under {{ui:sandbox.settings.hosts}} pass at once.
+
+### Allowing a connection {#sandbox-allow}
+When the agent connects somewhere not on the list, the **{{ui:sandbox.network.cardTitle}}** card appears above the composer.
+- {{ui:sandbox.network.allowOnce}}: allowed until this run ends.
+- {{ui:sandbox.network.allowAlways}}: added to the workspace's allow list and allowed.
+- {{ui:sandbox.network.deny}}: blocked. No answer within 5 minutes also blocks it.
+
+A blocked action stays as a line in the progress, and shows with its reason in the same pane on the phone and in the settings' {{ui:sandbox.settings.blocked}} list. You can answer the card on the phone too ({{ui:sandbox.network.allowAlways}} only on the Mac).
+
+### Reviewer agent {#sandbox-reviewer}
+With {{ui:sandbox.settings.reviewer}} on, a read-only agent (Claude's haiku by default) looks first whenever an approval or connection card appears.
+- It allows only safe actions on its own: reading files, editing files inside the workspace, build and test commands, package registries.
+- It cannot allow writes outside the workspace or dangerous commands. It denies them or leaves them to you.
+- No answer within 20 seconds, or an error, is never an allow: you are asked.
+- Each decision leaves a line in the pane. The card stays up meanwhile, so you can answer first, and your answer wins.
+- Only your own words are permission. The reviewer's text never counts as permission. Reviewer runs cost money and show in the usage.
+
+### Limits {#sandbox-limits}
+- Shell panes' commands, SSH workspaces (the agent runs on the remote machine) and remote workspaces are not sandboxed.
+- {{platform:windows}} {{ui:sandbox.settings.windows}}.
+- A sandboxed run ends when the app closes. It does not keep running in the background.
+- macOS's `sandbox-exec` is deprecated by Apple. Without it, a run in a sandboxed workspace is refused; turn the sandbox off to run.
+- Agents that keep their sign-in in the keychain (Claude, Codex, Antigravity) can read the login keychain. macOS asks separately for other apps' items.

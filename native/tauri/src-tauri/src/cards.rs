@@ -59,6 +59,13 @@ pub fn register(methods: &mut Registry) {
         if allow && !request.can_allow {
             return Ok(Value::Null);
         }
+        // MC-34: the sandbox's network card's 항상: the host joins the workspace's allow list, then this run's answer is 허용.
+        if allow
+            && flag(&args, "always")
+            && let Some(target) = host.engine()?.service.sandbox_target(&id, &request.id)
+        {
+            crate::sandbox::allow_always(&host, &id, &target);
+        }
         let answered = host.engine()?.service.respond_to_tool_permission(&id, &request.id, allow).await;
         if let Err(error) = answered {
             host.view().error = Some(error.message().to_string());

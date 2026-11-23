@@ -279,6 +279,8 @@ impl Runs {
         let memory_host = Arc::downgrade(host);
         // MC-33: an SSH workspace's runs start the CLI on the far side through the system ssh (ssh.rs).
         let ssh_resolver = crate::ssh::resolver(host);
+        // MC-34: a workspace's agent runs under the OS sandbox when it has it on (sandbox.rs).
+        let sandbox_host = crate::sandbox::host_hooks(host);
         // Temporary Antigravity rules a crash left in agy's settings go first (C# `InitializeAsync`, M/AppStore.swift:433-434): the run
         // service takes them out as it starts and no agy run starts before (C2).
         let configure: Configure = Box::new(move |options| {
@@ -294,6 +296,7 @@ impl Runs {
             options.antigravity_rules = Some(antigravity);
             options.hermes_session = Some(Arc::new(hermes_session));
             options.ssh = Some(ssh_resolver.clone());
+            options.sandbox = Some(sandbox_host.clone());
             options.memory_for_workspace = Some(Arc::new(move |workspace| {
                 let host = lookup_host.upgrade()?;
                 crate::shared_memory::context_for_pane(&host, Some(workspace))

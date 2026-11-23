@@ -552,6 +552,18 @@ pub async fn start(host: &Arc<Host>, pane_id: &str, command: AdvisorCommand) {
 /// One advisor run: the CLI found, started in the pane's folder (read only) with the checked arguments, the prompt written, its output
 /// read to the end or [`TIME_LIMIT`].
 async fn ask(host: &Arc<Host>, provider: &str, model: Option<&str>, prompt: &str, folder: &str) -> Result<Answer, String> {
+    ask_within(host, provider, model, prompt, folder, TIME_LIMIT).await
+}
+
+/// [`ask`] bounded by `limit` (MC-34's reviewer gets its answer in seconds, not minutes).
+pub async fn ask_within(
+    host: &Arc<Host>,
+    provider: &str,
+    model: Option<&str>,
+    prompt: &str,
+    folder: &str,
+    limit: Duration,
+) -> Result<Answer, String> {
     let locale = host.locale;
     let name = mighty_run::providers::name(provider);
     let failed = |reason: &str| locale.get_with("advisor.error.failed", &[("agent", name), ("reason", reason)]);
@@ -608,7 +620,7 @@ async fn ask(host: &Arc<Host>, provider: &str, model: Option<&str>, prompt: &str
         }
         String::from_utf8_lossy(&output).into_owned()
     };
-    let outcome = tokio::time::timeout(TIME_LIMIT, work).await;
+    let outcome = tokio::time::timeout(limit, work).await;
     control.kill();
     let _ = control.close().await;
     let error_text = match errors {

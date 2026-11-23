@@ -308,7 +308,7 @@ function Permission({ card, reply }: { card: PermissionCard; reply: Reply }) {
   const [json, setJson] = useState(false);
   // The answer locks the card while its call runs (natural submit A3); the card goes when the host has it.
   const { state, running, run } = usePendingAction();
-  const answer = (allow: boolean) => void run(() => reply('permissionAnswer', { requestId: card.requestId, allow }));
+  const answer = (allow: boolean, always = false) => void run(() => reply('permissionAnswer', { requestId: card.requestId, allow, ...(always ? { always: true } : {}) }));
   return (
     <div className="wait-card" data-card="permission" data-request-id={card.requestId}>
       <div className="wait-card-title">
@@ -338,6 +338,7 @@ function Permission({ card, reply }: { card: PermissionCard; reply: Reply }) {
         <span className="card-hint">{card.onceOnly}</span>
         <Pending state={state} showsFailure={false} />
         <button type="button" className="card-button" title={t('tooltip.card.permissionDeny')} data-answer="deny" disabled={running} onClick={() => answer(false)}>{card.deny}</button>
+        {card.allowAlways && <button type="button" className="card-button" title={t('sandbox.network.alwaysHelp')} data-answer="always" disabled={running || !card.canAllow} onClick={() => answer(true, true)}>{card.allowAlways}</button>}
         <button type="button" className="card-button prominent" title={t('tooltip.card.permissionAllowOnce')} data-answer="allow" disabled={running || !card.canAllow} onClick={() => answer(true)}>{card.allowOnce}</button>
       </div>
     </div>

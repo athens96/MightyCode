@@ -70,6 +70,7 @@ mod repo_tasks;
 mod retention_gc;
 mod review;
 mod runs;
+mod sandbox;
 mod saved_prompts;
 mod settings;
 mod settings_place;

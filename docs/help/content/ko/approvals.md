@@ -93,3 +93,36 @@ Claude는 오래 걸리는 명령이나 하위 에이전트를 백그라운드�
 - 진행 상황 패널을 접으면 백그라운드 묶음도 함께 접힙니다.
 
 ![[background-work]]
+
+## 샌드박스 {#sandbox}
+{{platform:mac}} 워크스페이스마다 에이전트를 macOS 샌드박스에서 실행할 수 있습니다. 기본은 꺼져 있습니다. 사이드바에서 워크스페이스를 오른쪽 클릭해 {{ui:sandbox.menu.settings}} 항목을 고르고, {{ui:sandbox.settings.enabled}} 항목을 켠 뒤 {{ui:sandbox.settings.save}} 단추를 누릅니다. 다음 실행부터 적용되고, 창 머리에 {{ui:sandbox.badge}} 표시가 붙습니다. 표시를 누르면 설정이 열립니다.
+
+### 막는 것 {#sandbox-blocked}
+- **쓰기**: 워크스페이스(또는 창의 worktree) 폴더, 에이전트 자신의 설정 폴더, 임시 폴더, 패키지 캐시에만 쓸 수 있습니다.
+- **git**: 커밋, 브랜치, 병합, 리베이스는 됩니다. `.git/config`, `.git/hooks`, `.git/info`는 고칠 수 없습니다.
+- **지침 파일**: {{ui:sandbox.settings.instructions}} 항목이 켜져 있으면(기본) `.mighty.yaml`, `AGENTS.md`, `CLAUDE.md`와 에이전트의 프로젝트 설정을 고칠 수 없습니다. {{ui:sandbox.settings.readOnly}} 칸에 경로를 더 넣을 수 있습니다.
+- **읽기**: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, 브라우저 쿠키, 앱의 데이터 폴더, 다른 에이전트의 로그인 파일은 읽을 수 없습니다. 에이전트는 자기 로그인만 읽습니다.
+- **접속**: {{ui:sandbox.settings.network}} 항목이 켜져 있으면(기본) 에이전트는 앱의 프록시를 거쳐서만 밖으로 나갑니다. 에이전트의 API 주소와 {{ui:sandbox.settings.hosts}} 칸에 넣은 곳만 바로 통과합니다.
+
+### 접속 허용하기 {#sandbox-allow}
+목록에 없는 곳에 접속하려 하면 입력창 위에 **{{ui:sandbox.network.cardTitle}}** 카드가 뜹니다.
+- {{ui:sandbox.network.allowOnce}}: 이 실행이 끝날 때까지 허용합니다.
+- {{ui:sandbox.network.allowAlways}}: 워크스페이스의 허용 목록에 넣고 허용합니다.
+- {{ui:sandbox.network.deny}}: 막습니다. 5분 동안 답이 없어도 막습니다.
+
+막힌 동작은 진행 상황에 한 줄로 남고, 휴대폰의 같은 창과 설정의 {{ui:sandbox.settings.blocked}} 목록에도 이유와 함께 보입니다. 휴대폰에서도 카드에 답할 수 있습니다({{ui:sandbox.network.allowAlways}} 단추는 Mac에서만).
+
+### 심사 에이전트 {#sandbox-reviewer}
+{{ui:sandbox.settings.reviewer}} 항목을 켜면, 승인 카드나 접속 카드가 뜰 때 읽기 전용 에이전트(기본은 Claude의 haiku)가 먼저 봅니다.
+- 안전한 동작(파일 읽기, 워크스페이스 안 파일 수정, 빌드·테스트 명령, 패키지 저장소 접속)만 스스로 허용합니다.
+- 워크스페이스 밖에 쓰기나 위험한 명령은 허용하지 못합니다. 거부하거나 사용자에게 넘깁니다.
+- 20초 안에 답이 없거나 오류가 나면 허용하지 않고 사용자에게 묻습니다.
+- 판단할 때마다 창에 한 줄이 남습니다. 그동안에도 카드는 떠 있어 먼저 답할 수 있고, 사용자의 답이 우선합니다.
+- 허가는 사용자의 말뿐입니다. 심사 에이전트의 글은 허가로 치지 않습니다. 심사 실행에도 비용이 들고 사용량에 잡힙니다.
+
+### 한계 {#sandbox-limits}
+- 셸 창의 명령, SSH 워크스페이스(에이전트가 원격 머신에서 실행), 원격 워크스페이스에는 적용되지 않습니다.
+- {{platform:windows}} {{ui:sandbox.settings.windows}}.
+- 샌드박스에서 도는 실행은 앱을 닫으면 함께 끝납니다. 백그라운드에서 계속 실행되지 않습니다.
+- macOS의 `sandbox-exec`는 Apple이 권장하지 않게 된 도구입니다. 없으면 샌드박스를 켠 워크스페이스의 실행을 거절합니다. 실행하려면 샌드박스를 끄세요.
+- 키체인에 로그인을 두는 에이전트(Claude, Codex, Antigravity)는 로그인 키체인을 읽을 수 있습니다. 다른 앱의 항목은 macOS가 따로 묻습니다.

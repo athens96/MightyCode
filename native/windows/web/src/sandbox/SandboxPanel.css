@@ -1,0 +1,18 @@
+/* MC-34: the sandbox settings box, on the shared design tokens only. */
+.sandbox-body { display: flex; flex-direction: column; }
+.sandbox-form { display: flex; flex-direction: column; gap: var(--space-md); }
+.sandbox-intro { margin: 0; color: var(--ink2); font-size: var(--type-body); }
+.sandbox-notice { margin: 0; padding: var(--space-sm) var(--space-md); border-radius: var(--dialog-button-radius); background: var(--wait-soft); color: var(--ink); font-size: var(--type-body); }
+.sandbox-group { display: flex; flex-direction: column; gap: var(--space-md); margin: 0; padding: 0; border: 0; min-width: 0; }
+.sandbox-group:disabled { opacity: .55; }
+.sandbox-check { display: flex; align-items: flex-start; gap: var(--space-sm); font-size: var(--type-body); }
+.sandbox-check input { margin-top: var(--space-xxs); }
+.sandbox-check-words { display: flex; flex-direction: column; gap: var(--space-xxs); }
+.sandbox-field { display: flex; flex-direction: column; gap: var(--space-xs); font-size: var(--type-row); }
+.sandbox-lines { height: auto; padding: var(--space-xs) var(--space-sm); resize: vertical; line-height: 1.4; }
+.sandbox-help { color: var(--ink3); font-size: var(--type-row); }
+.sandbox-row { display: flex; gap: var(--space-md); align-items: flex-end; }
+.sandbox-grow { flex: 1; min-width: 0; }
+.sandbox-blocked { display: flex; flex-direction: column; gap: var(--space-xs); padding-top: var(--space-sm); border-top: var(--stroke-line) solid var(--line); font-size: var(--type-row); }
+.sandbox-blocked ul { margin: 0; padding-left: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-xxs); }
+.sandbox-badge { cursor: default; }

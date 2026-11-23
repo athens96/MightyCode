@@ -1315,6 +1315,31 @@ async fn ask_targets_the_phone_sees_the_switch_only_where_it_is_offered() {
     );
 }
 
+/// MC-34: what a pane's sandbox refused reaches the phone as `sandboxBlocked`, with the reason; a pane with none has no field.
+#[tokio::test]
+async fn the_phone_sees_what_the_sandbox_blocked() {
+    use mighty_remote::phone::desk::MobileSandboxBlock;
+    let world = World::new("mobile-sandbox");
+    world.desk.set_sessions(vec![pane("boxed", "w"), pane("plain", "w")]);
+    world.desk.calls().extras = Some(Arc::new(|p: &RunSession| MobilePaneExtras {
+        sandbox_blocked: (p.id() == "boxed").then(|| {
+            vec![MobileSandboxBlock {
+                kind: "network".into(),
+                what: "example.com:443".into(),
+                reason: "허용 목록에 없는 곳입니다.".into(),
+                at: "2026-11-23T10:00:00.000+09:00".into(),
+            }]
+        }),
+        ..MobilePaneExtras::default()
+    }));
+    let (_, boxed) = world.route("GET", "/m1/sessions/boxed", None).await;
+    assert_eq!(boxed["sandboxBlocked"][0]["what"], "example.com:443");
+    assert_eq!(boxed["sandboxBlocked"][0]["kind"], "network");
+    assert_eq!(boxed["sandboxBlocked"][0]["reason"], "허용 목록에 없는 곳입니다.");
+    let (_, plain) = world.route("GET", "/m1/sessions/plain", None).await;
+    assert!(plain.get("sandboxBlocked").is_none());
+}
+
 /// PiVerification.cs:455, the host's half (L570): the phone is told the host runs pi, and may make a pane of it.
 #[tokio::test]
 async fn pi_advertised_to_the_phone() {

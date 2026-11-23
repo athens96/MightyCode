@@ -110,6 +110,18 @@ pub struct MobilePaneExtras {
     pub background_work: Option<Vec<MobileBackgroundWork>>,
     pub background_done: Option<i32>,
     pub terminal_prompt: Option<TerminalPrompt>,
+    /// MC-34: what the pane's sandbox refused lately (`sandboxBlocked`), oldest first; absent when nothing was.
+    pub sandbox_blocked: Option<Vec<MobileSandboxBlock>>,
+}
+
+/// MC-34: one thing a pane's sandbox refused: `network` (a host off the allow list) or `tool` (a request its reviewer denied), what
+/// it was (`example.com:443`), why, and when.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MobileSandboxBlock {
+    pub kind: String,
+    pub what: String,
+    pub reason: String,
+    pub at: String,
 }
 
 /// C# `MobileDesktopAction(SessionId, Action, Body, Attachments?)`: a mutating route handed to the window (WinUI `MobileAction`,

@@ -1338,6 +1338,14 @@ impl RunService {
         self.manager.respond_to_tool_permission(session_id, request_id, allow)
     }
 
+    /// MC-34: the connection a waiting network card of a local pane asks about (None for any other request).
+    pub fn sandbox_target(&self, session_id: &str, request_id: &str) -> Option<crate::sandbox::hosts::Target> {
+        if self.mirror_of(session_id).is_some() || self.remote_pane(session_id) {
+            return None;
+        }
+        self.manager.sandbox_target(session_id, request_id)
+    }
+
     /// `AnswerQuestionnaire`.
     pub async fn answer_questionnaire(
         &self,

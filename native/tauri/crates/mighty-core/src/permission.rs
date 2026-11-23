@@ -9,6 +9,10 @@ use crate::json::JsonOut;
 /// `ClaudePlanMode.ToolName`: the tool whose request carries a plan.
 pub const PLAN_TOOL: &str = "ExitPlanMode";
 
+/// MC-34: the tool name of the sandbox's network card ("이 접속을 허용할까요?"): its input is `{"host": …, "port": …}` and it may be
+/// allowed for the run or always (saved to the workspace's allow list). Never a CLI's own tool name.
+pub const SANDBOX_NETWORK_TOOL: &str = "SandboxNetwork";
+
 /// C# `ToolPermissionRequest(Id, RunId, ToolUseId, ToolName, InputJson, Summary, Reason?, BlockedPath?, State, CanAllow,
 /// CanAnswerQuestions, CanAnswerPlan, ReceivedAt?)`.
 #[derive(Debug, Clone, PartialEq, Eq)]

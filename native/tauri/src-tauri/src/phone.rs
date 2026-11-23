@@ -34,7 +34,7 @@ use mighty_graph::structure::mobile::{Built, MobileStructureCache, Naming};
 use mighty_platform::BoxFuture;
 use mighty_remote::phone::desk::{
     ActionAnswer, MobileAskTarget, MobileBackgroundWork, MobileDesktopAction, MobileError, MobileImageResult, MobilePaneDigest,
-    MobilePaneExtras, MobileQueuedItem, PhoneDesk,
+    MobilePaneExtras, MobileQueuedItem, MobileSandboxBlock, PhoneDesk,
 };
 use mighty_remote::phone::mighty::{self, MobileOut, ResultFilesMemo, RunsInputs};
 use mighty_remote::phone::router::{Router, RouterOptions};
@@ -393,6 +393,9 @@ impl Desk {
             background_work: background,
             background_done: mighty::mobile_background_done(pane.background_work.as_ref()),
             terminal_prompt: crate::terminal::terminals(&host).ok().and_then(|t| t.prompt(pane.id())),
+            sandbox_blocked: Some(crate::sandbox::blocked_in(pane.id()))
+                .filter(|b| !b.is_empty())
+                .map(|b| b.into_iter().map(|b| MobileSandboxBlock { kind: b.kind, what: b.what, reason: b.reason, at: b.at }).collect()),
         }
     }
 }

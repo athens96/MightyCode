@@ -149,6 +149,7 @@ fn extras(pane: &mighty_core::model::RunSession) -> mighty_remote::phone::desk::
             .map(|rows| rows.into_iter().map(MobileBackgroundWork::from).collect()),
         background_done: mighty::mobile_background_done(pane.background_work.as_ref()),
         terminal_prompt: None,
+        sandbox_blocked: None,
     }
 }
 

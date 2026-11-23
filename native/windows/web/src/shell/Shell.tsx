@@ -23,6 +23,7 @@ const LazyIssuePickerPanel = lazy(() => import('../integrations/IssuePickerPanel
 const LazyGitWorkbenchPanel = lazy(() => import('../git/GitWorkbenchPanel').then((m) => ({ default: m.GitWorkbenchPanel })));
 const LazyTaskRunnerPanel = lazy(() => import('../tasks/TaskRunnerPanel').then((m) => ({ default: m.TaskRunnerPanel })));
 const LazyAgentContextPanel = lazy(() => import('../context/AgentContextPanel').then((m) => ({ default: m.AgentContextPanel })));
+const LazySandboxPanel = lazy(() => import('../sandbox/SandboxPanel').then((m) => ({ default: m.SandboxPanel })));
 const LazySharedMemoryPanel = lazy(() => import('../memory/SharedMemoryPanel').then((m) => ({ default: m.SharedMemoryPanel })));
 const LazyComparePicker = lazy(() => import('../compare/ComparePicker').then((m) => ({ default: m.ComparePicker })));
 const LazyComparePanel = lazy(() => import('../compare/ComparePanel').then((m) => ({ default: m.ComparePanel })));
@@ -151,6 +152,7 @@ export function Shell() {
     open: false,
     workspaceId: null,
   });
+  const [sandboxState, setSandboxState] = useState<{ open: boolean; workspaceId: string | null }>({ open: false, workspaceId: null });
   const [sharedMemoryState, setSharedMemoryState] = useState<{ open: boolean; workspaceId: string | null }>({
     open: false,
     workspaceId: null,
@@ -223,6 +225,10 @@ export function Shell() {
         workspaceId: detail?.workspaceId ?? activeWorkspaceId,
       });
     };
+    const onOpenSandbox = (event: Event) => {
+      const detail = (event as CustomEvent<{ workspaceId?: string | null }>).detail;
+      setSandboxState({ open: true, workspaceId: detail?.workspaceId ?? activeWorkspaceId });
+    };
     const onOpenReport = () => setUsageReportOpen(true);
     window.addEventListener('mighty:open-issues', onOpenIssues);
     window.addEventListener('mighty:open-git-workbench', onOpenGit);
@@ -230,7 +236,9 @@ export function Shell() {
     window.addEventListener('mighty:open-agent-context', onOpenContext);
     window.addEventListener('mighty:open-shared-memory', onOpenMemory);
     window.addEventListener('mighty:open-usage-report', onOpenReport);
+    window.addEventListener('mighty:open-sandbox', onOpenSandbox);
     return () => {
+      window.removeEventListener('mighty:open-sandbox', onOpenSandbox);
       window.removeEventListener('mighty:open-issues', onOpenIssues);
       window.removeEventListener('mighty:open-git-workbench', onOpenGit);
       window.removeEventListener('mighty:open-tasks', onOpenTasks);
@@ -249,7 +257,7 @@ export function Shell() {
     if (!selected) return;
     document.querySelector('.sidebar [data-session-id="' + escapeCssAttr(selected.paneId) + '"]')?.scrollIntoView({ block: 'nearest' });
   }, [selected]);
-  const modalPanelOpen = usageReportOpen || issuePickerState.open || gitWorkbenchState.open || taskRunnerState.open || agentContextState.open || sharedMemoryState.open || comparePicker !== null || compareView !== null;
+  const modalPanelOpen = usageReportOpen || issuePickerState.open || gitWorkbenchState.open || taskRunnerState.open || agentContextState.open || sharedMemoryState.open || sandboxState.open || comparePicker !== null || compareView !== null;
   useShortcuts(blocked || modalPanelOpen);
   // The Mac's menu bar (D9): Workspace › Show usage opens the cumulative Usage Report dashboard.
   useMenu(blocked || modalPanelOpen, openUsageReportFromMenu);
@@ -337,6 +345,12 @@ export function Shell() {
             workspaceId={sharedMemoryState.workspaceId ?? activeWorkspaceId}
             onClose={() => setSharedMemoryState((prev) => ({ ...prev, open: false }))}
           />
+        </Suspense>
+      )}
+      {sandboxState.open && (
+        <Suspense fallback={null}>
+          <LazySandboxPanel open={sandboxState.open} workspaceId={sandboxState.workspaceId ?? activeWorkspaceId}
+            onClose={() => setSandboxState((prev) => ({ ...prev, open: false }))} />
         </Suspense>
       )}
       <Dialogs />

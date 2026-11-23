@@ -134,6 +134,8 @@ pub struct RunManagerOptions {
     pub memory_for_workspace: Option<WorkspaceMemoryReader>,
     /// MC-33: how an SSH workspace's folder is reached (the app's machine list). None: an SSH workspace's run is refused.
     pub ssh: Option<crate::ssh::SshResolver>,
+    /// MC-34: the app's side of the OS sandbox (which runs are sandboxed, where refusals go, the reviewer). None: nothing is.
+    pub sandbox: Option<Arc<dyn crate::sandbox::SandboxHost>>,
 }
 
 impl RunManagerOptions {
@@ -156,6 +158,7 @@ impl RunManagerOptions {
             powershell_commands: None,
             memory_for_workspace: None,
             ssh: None,
+            sandbox: None,
         }
     }
 }
@@ -254,6 +257,8 @@ struct Run {
     redact: Mutex<Option<Redact>>,
     /// The binding's [`RunBinding::ended`], called when the run's task ends ([`RunEnd`]).
     binding_ended: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// MC-34: the run's sandbox (its profile, proxy and network gate), closed when the run's task ends.
+    sandbox: Mutex<Option<Arc<crate::sandbox::RunSandbox>>>,
     turn_reopened: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     /// The folder the run works in, once resolved.
     workspace_root: Mutex<Option<String>>,
@@ -307,6 +312,14 @@ impl Run {
 
     fn codex(&self) -> Option<Arc<CodexApprovalChannel>> {
         lock(&self.codex).clone()
+    }
+
+    fn sandboxed(&self) -> Option<Arc<crate::sandbox::RunSandbox>> {
+        lock(&self.sandbox).clone()
+    }
+
+    fn network_gate(&self) -> Option<Arc<crate::sandbox::gate::NetworkGate>> {
+        self.sandboxed().and_then(|sandbox| sandbox.gate.clone())
     }
 
     fn pi_dialogs(&self) -> Option<Arc<PiDialogChannel>> {
@@ -387,16 +400,90 @@ fn utf16_chunks(text: &str, units: usize) -> Vec<String> {
 }
 
 impl RunManager {
-    pub fn new(providers: Arc<ProviderCatalog>, options: RunManagerOptions) -> RunManager {
-        RunManager {
-            inner: Arc::new(Inner {
-                options,
-                providers,
-                runs: Mutex::new(HashMap::new()),
-                disposed: Mutex::new(false),
-                bridge: ModBridge::new(),
-            }),
+    pub fn new(providers: Arc<ProviderCatalog>, mut options: RunManagerOptions) -> RunManager {
+        let inner = Arc::new_cyclic(|weak: &std::sync::Weak<Inner>| {
+            // MC-34: a sandboxed run's requests also go to its reviewer (when it has one) while their cards wait.
+            if options.sandbox.is_some()
+                && let Some(sink) = options.permission_requested.clone()
+            {
+                let weak = weak.clone();
+                options.permission_requested = Some(Arc::new(move |value: ToolPermissionRequest| {
+                    let pending = value.state == "pending";
+                    let reviewed = pending.then(|| value.clone());
+                    sink(value);
+                    if let (Some(value), Some(inner)) = (reviewed, weak.upgrade()) {
+                        Self::review(&inner, value);
+                    }
+                }));
+            }
+            Inner { options, providers, runs: Mutex::new(HashMap::new()), disposed: Mutex::new(false), bridge: ModBridge::new() }
+        });
+        RunManager { inner }
+    }
+
+    /// MC-34: the reviewer's turn on one waiting request of a sandboxed run with the reviewer on: it may settle a safe one or deny;
+    /// anything else (and a late or failed answer) stays the person's. Every decision is a line in the pane.
+    fn review(inner: &Arc<Inner>, value: ToolPermissionRequest) {
+        use crate::sandbox::{gate, reviewer};
+        if value.can_answer_questions || value.can_answer_plan || !value.can_allow {
+            return;
         }
+        let Some(host) = inner.options.sandbox.clone() else { return };
+        let Some(run) = lock(&inner.runs).get(&value.run_id).cloned() else { return };
+        let Some(sandbox) = run.sandboxed().filter(|s| s.reviewer_on()) else { return };
+        let Ok(handle) = tokio::runtime::Handle::try_current() else { return };
+        let target = if value.tool_name == gate::NETWORK_TOOL { run.network_gate().and_then(|g| g.target_of(&value.id)) } else { None };
+        let review = reviewer::Review {
+            pane: value.run_id.clone(),
+            provider: run.request.provider.clone(),
+            folder: sandbox.folder.clone(),
+            tool: value.tool_name.clone(),
+            input_json: value.input_json.clone(),
+            summary: value.summary.clone(),
+            blocked_path: value.blocked_path.clone(),
+            task: run.request.input.clone(),
+            target,
+        };
+        let category = reviewer::category(&review);
+        let answer = host.review(&sandbox.config, review);
+        let manager = RunManager { inner: inner.clone() };
+        handle.spawn(async move {
+            let answer = match answer {
+                Some(answer) => reviewer::within(answer, reviewer::TIME_LIMIT).await,
+                None => Err(strings::get("sandbox.review.unavailable")),
+            };
+            let outcome = reviewer::decide(category, answer);
+            let what = value.summary.clone();
+            let (allow, reason) = match &outcome {
+                reviewer::Outcome::Allow(reason) => (Some(true), reason),
+                reviewer::Outcome::Deny(reason) => (Some(false), reason),
+                reviewer::Outcome::Ask(reason) => (None, reason),
+            };
+            let reason = if reason == "timeout" { strings::get("sandbox.review.timedOut") } else { reason.clone() };
+            if let Some(allow) = allow
+                && manager.respond_to_tool_permission(&value.run_id, &value.id, allow).is_err()
+            {
+                // The person answered first: theirs stands.
+                return;
+            }
+            let Some(run) = manager.run(&value.run_id) else { return };
+            let words = [("what", what.as_str()), ("reason", reason.as_str())];
+            let line = match allow {
+                Some(true) => strings::get_with("sandbox.review.allowed", &words),
+                Some(false) => strings::get_with("sandbox.review.denied", &words),
+                None => strings::get_with("sandbox.review.asked", &words),
+            };
+            Exec::log(&run, &manager.inner.options.emit, "system", &line);
+            if allow == Some(false) && value.tool_name != gate::NETWORK_TOOL {
+                let block = crate::sandbox::Block { kind: "tool".into(), what, reason, at: time::now_o() };
+                host.blocked(&value.run_id, &block);
+            }
+        });
+    }
+
+    /// MC-34: the connection a waiting network card of pane `session_id` asks about (its 항상 허용 saves it to the workspace's list).
+    pub fn sandbox_target(&self, session_id: &str, request_id: &str) -> Option<crate::sandbox::hosts::Target> {
+        self.run(session_id)?.network_gate()?.target_of(request_id)
     }
 
     pub fn providers(&self) -> Arc<ProviderCatalog> {
@@ -476,6 +563,7 @@ impl RunManager {
                 tracker: Mutex::new(None),
                 redact: Mutex::new(None),
                 binding_ended: Mutex::new(None),
+                sandbox: Mutex::new(None),
                 turn_reopened: Mutex::new(None),
                 workspace_root: Mutex::new(None),
                 bytes: AtomicUsize::new(0),
@@ -515,6 +603,10 @@ impl RunManager {
         let Some(run) = self.run(session_id).filter(|run| !run.cancel.is_cancelled()) else {
             return Err(RunError::State(copy::already_settled()));
         };
+        // MC-34: the sandbox's network card.
+        if let Some(gate) = run.network_gate().filter(|gate| gate.owns(request_id)) {
+            return gate.respond(request_id, allow).map_err(RunError::State);
+        }
         if let Some(codex) = run.codex() {
             return codex.respond(request_id, allow);
         }
@@ -696,6 +788,9 @@ impl Drop for RunEnd {
         }
         if let Some(ended) = lock(&run.binding_ended).take() {
             ended();
+        }
+        if let Some(sandbox) = lock(&run.sandbox).take() {
+            sandbox.close();
         }
         {
             let mut runs = lock(&self.inner.runs);
@@ -1724,6 +1819,63 @@ impl Exec {
         ssh.run_request(providers::executable(provider), &arguments, environment).map_err(Failure::Error)
     }
 
+    /// MC-34: the run's sandbox, when its workspace has it on: its proxy and gate started, its profile written and `launch` wrapped.
+    /// Whether the run is sandboxed. A Mac without `sandbox-exec` runs it as before with a warning; a sandbox that cannot be made
+    /// refuses the run.
+    async fn sandbox(
+        self: &Arc<Self>,
+        workspace: &Workspace,
+        request: &StartRunRequest,
+        folder: &str,
+        launch: &mut mighty_platform::SpawnRequest,
+    ) -> std::result::Result<bool, Failure> {
+        use crate::sandbox::{self, Block, gate};
+        let Some(host) = self.inner.options.sandbox.clone() else { return Ok(false) };
+        let Some(setup) = host.setup(workspace, request) else { return Ok(false) };
+        // The person turned the sandbox on: without sandbox-exec the run is refused rather than started unsandboxed.
+        if !sandbox::available() {
+            return Err(Failure::Error(strings::get("sandbox.warning.unavailable")));
+        }
+        let run = Arc::downgrade(&self.run);
+        let (emit, session) = (self.emit.clone(), request.session_id.clone());
+        let permission = self.inner.options.permission_requested.clone();
+        let card_run = run.clone();
+        let hooks = gate::GateHooks {
+            card: Arc::new(move |value| {
+                if let Some(sink) = &permission
+                    && card_run.upgrade().is_some()
+                {
+                    sink(value);
+                }
+            }),
+            blocked: Arc::new(move |target, reason| {
+                let what = target.label();
+                let block = Block { kind: "network".into(), what: what.clone(), reason: reason.to_string(), at: time::now_o() };
+                host.blocked(&session, &block);
+                if let Some(run) = run.upgrade() {
+                    let summary = strings::get_with("sandbox.network.blocked", &[("what", &what), ("reason", reason)]);
+                    let row = activity::make(&wire::new_id(), &run.request.provider, "web", "error", &summary);
+                    Self::activity(&run, &emit, &AgentActivity { tool_name: Some("Sandbox".into()), ..row });
+                }
+            }),
+        };
+        let prepared = sandbox::prepare(&setup, &request.provider, &request.session_id, Path::new(folder), launch, hooks).await;
+        match prepared {
+            Ok(prepared) => {
+                if self.inner.options.permission_requested.is_none()
+                    && let Some(gate) = &prepared.gate
+                {
+                    // No card can be shown: a host off the list is refused at once.
+                    gate.refuse_unlisted();
+                }
+                *lock(&self.run.sandbox) = Some(Arc::new(prepared));
+                Self::log(&self.run, &self.emit, "system", &strings::get("sandbox.started"));
+                Ok(true)
+            }
+            Err(reason) => Err(Failure::Error(strings::get_with("sandbox.error.prepare", &[("reason", &reason)]))),
+        }
+    }
+
     async fn execute(
         self: &Arc<Self>,
         mod_connection: &mut Option<Arc<Connection>>,
@@ -2026,10 +2178,18 @@ impl Exec {
                 .map_err(|e| Failure::Error(e.to_string()))?
         };
         self.cancelled()?;
+        let mut launch = launch;
+        // MC-34: an agent run of a workspace with the sandbox on starts under it (never a shell pane's command, never an SSH run).
+        let sandboxed = if ssh.is_none() && request.kind != "shell" {
+            self.sandbox(&workspace, &request, &workspace_path, &mut launch).await?
+        } else {
+            false
+        };
+        self.cancelled()?;
         // MC-3: keyed by its pane, so the app's process host can hand it to the background daemon (where the person keeps work running
         // after the app closes). Only a Claude run with its approval channel, of a pane that is no delegated child, can be taken back by
-        // a later app, so only it is kept then.
-        let keep = interactive && request.delegation_worktree_root.is_none();
+        // a later app, so only it is kept then. A sandboxed run is not: its proxy and gate are this app's (it ends with the app).
+        let keep = interactive && request.delegation_worktree_root.is_none() && !sandboxed;
         let key = crate::daemon::owner::run_key(&request.session_id, keep);
         let mut child = providers.processes().spawn_keyed(launch, &key).await.map_err(|e| Failure::Error(e.to_string()))?;
         let control = child.control();
@@ -2506,6 +2666,7 @@ mod tests {
             tracker: Mutex::new(None),
             redact: Mutex::new(None),
             binding_ended: Mutex::new(None),
+            sandbox: Mutex::new(None),
             turn_reopened: Mutex::new(None),
             workspace_root: Mutex::new(None),
             bytes: AtomicUsize::new(0),

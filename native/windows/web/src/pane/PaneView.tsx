@@ -20,6 +20,7 @@ import { MirrorStrip } from './MirrorStrip';
 import { SshBar } from './SshBar';
 import { ForkStrip, Opinions } from './Opinions';
 import { logText } from './log';
+import { sandboxed } from '../sandbox/sandboxModel';
 
 const LazyReferenceBubble = lazy(() => import('./ReferenceBubble').then((m) => ({ default: m.ReferenceBubble })));
 
@@ -81,7 +82,7 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
   // A view switch clicked a moment ago shows at once (natural submit B4); the same object while none waits for the host.
   const session = useShownSession(saved);
   // Another computer's pane (the remote mirror): its strip under the header; a remote pane's files are on its host: no bubble opens there.
-  const { header, mirror, agentTerminal, remote, ssh } = useStoreSelector(
+  const { header, mirror, agentTerminal, remote, ssh, boxed } = useStoreSelector(
     (state) => {
       const info = state.shell?.panes.find((p) => p.id === session.id);
       const workspace = state.snapshot?.workspaces.find((w) => w.id === session.workspaceId);
@@ -92,6 +93,8 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
         // An SSH machine's files are read through the files pane only (MC-33): no reference bubble reads them here.
         remote: Boolean(workspace?.remote || workspace?.ssh),
         ssh: info?.ssh,
+        // MC-34: the workspace's agent runs are sandboxed (its badge in the header).
+        boxed: sandboxed(workspace),
       };
     },
     shallowEqual,
@@ -155,6 +158,11 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
           {header?.rest}
         </span>
         <span className="pane-header-controls">
+          {boxed && (
+            <button type="button" className="beta-badge sandbox-badge" data-testid="pane-sandbox" title={t('sandbox.badgeHelp')} aria-label={t('sandbox.badgeHelp')}
+              onClick={() => window.dispatchEvent(new CustomEvent('mighty:open-sandbox', { detail: { workspaceId: session.workspaceId } }))}>
+              <Icon name="shield" size={10} weight={2.4} />{t('sandbox.badge')}</button>
+          )}
           {mighty && (session.provider === 'claude' || session.provider === 'codex') && (
             <button type="button" className="icon-button pane-plugins-button" data-testid="pane-plugins" title={t('pane.plugins.help', { provider: providerLabel(session.provider) })}
               aria-label={t('plugins.titleTemplate', { provider: providerLabel(session.provider) })} onClick={() => void bridge.call('openPlugins', { id: session.id }).catch(() => {})}>

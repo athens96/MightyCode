@@ -93,3 +93,36 @@ Claude 有时会在后台运行耗时较长的命令或子智能体。这时即�
 - 折叠进度面板时，后台组也会一起折叠。
 
 ![[background-work]]
+
+## 沙盒 {#sandbox}
+{{platform:mac}} 每个工作区都可以让代理在 macOS 沙盒中运行。默认关闭。在侧边栏右键点击工作区，选择 {{ui:sandbox.menu.settings}}，打开 {{ui:sandbox.settings.enabled}}，然后按 {{ui:sandbox.settings.save}}。从下一次运行开始生效，窗格标题会显示 {{ui:sandbox.badge}} 标记。点击标记可打开设置。
+
+### 阻止的内容 {#sandbox-blocked}
+- **写入**：只能写入工作区（或窗格的 worktree）文件夹、代理自己的设置文件夹、临时文件夹和包缓存。
+- **git**：可以提交、建分支、合并和变基。不能修改 `.git/config`、`.git/hooks` 和 `.git/info`。
+- **指令文件**：{{ui:sandbox.settings.instructions}} 打开时（默认），不能修改 `.mighty.yaml`、`AGENTS.md`、`CLAUDE.md` 以及代理的项目设置。可以在 {{ui:sandbox.settings.readOnly}} 中添加更多路径。
+- **读取**：不能读取 `~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.config/gh`、浏览器 Cookie、应用的数据文件夹以及其他代理的登录文件。每个代理只读取自己的登录信息。
+- **连接**：{{ui:sandbox.settings.network}} 打开时（默认），代理只能通过应用的代理服务器访问外部。只有代理的 API 地址和您在 {{ui:sandbox.settings.hosts}} 中填写的地址会直接通过。
+
+### 允许连接 {#sandbox-allow}
+代理要连接不在列表中的地址时，输入框上方会出现 **{{ui:sandbox.network.cardTitle}}** 卡片。
+- {{ui:sandbox.network.allowOnce}}：在本次运行结束前允许。
+- {{ui:sandbox.network.allowAlways}}：加入工作区的允许列表并允许。
+- {{ui:sandbox.network.deny}}：阻止。5 分钟内未答复也会阻止。
+
+被阻止的操作会在进度中留下一行，并在手机上的同一窗格和设置的 {{ui:sandbox.settings.blocked}} 列表中连同原因一起显示。手机上也可以答复卡片（{{ui:sandbox.network.allowAlways}} 仅限 Mac）。
+
+### 审查代理 {#sandbox-reviewer}
+打开 {{ui:sandbox.settings.reviewer}} 后，每当出现批准卡片或连接卡片时，只读代理（默认为 Claude 的 haiku）会先查看。
+- 它只会自行允许安全的操作：读取文件、修改工作区内的文件、构建和测试命令、连接包仓库。
+- 它不能允许写入工作区之外或危险的命令，只能拒绝或交给您。
+- 20 秒内未答复或出错时不会允许，而是询问您。
+- 每次判断都会在窗格中留下一行。期间卡片仍然显示，您可以先答复，您的答复优先。
+- 只有您自己的话才算许可。审查代理的文字从不算作许可。审查运行也会产生费用，并计入用量。
+
+### 限制 {#sandbox-limits}
+- 终端窗格的命令、SSH 工作区（代理在远程机器上运行）和远程工作区不使用沙盒。
+- {{platform:windows}} {{ui:sandbox.settings.windows}}。
+- 在沙盒中的运行会随应用关闭而结束，不会在后台继续。
+- macOS 的 `sandbox-exec` 已被 Apple 弃用。没有它时，开启了沙盒的工作区会拒绝运行；关闭沙盒后即可运行。
+- 将登录信息保存在钥匙串中的代理（Claude、Codex、Antigravity）可以读取登录钥匙串。其他应用的项目由 macOS 另行询问。

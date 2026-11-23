@@ -331,6 +331,9 @@ pub struct PermissionCard {
     pub once_only: String,
     pub deny: String,
     pub allow_once: String,
+    /// MC-34: the sandbox's network card also offers 항상 (the host saved to the workspace's allow list).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_always: Option<String>,
     pub kind: &'static str,
 }
 
@@ -571,6 +574,9 @@ pub fn request_card(i: &CardInputs) -> Option<Card> {
             kind: "questionnaire",
         }));
     }
+    if current.tool_name == mighty_core::permission::SANDBOX_NETWORK_TOOL {
+        return Some(Card::Permission(Box::new(network_card(current, pending.len(), l))));
+    }
     let pres = ToolPermissionPresentation::make(&current.tool_name, &current.input_json, l);
     let bare = pres.fields.is_empty() && pres.headline.is_none();
     Some(Card::Permission(Box::new(PermissionCard {
@@ -590,8 +596,37 @@ pub fn request_card(i: &CardInputs) -> Option<Card> {
         once_only: bar::once_only_note(l),
         deny: bar::button_deny(l),
         allow_once: bar::button_allow_once(l),
+        allow_always: None,
         kind: "permission",
     })))
+}
+
+/// MC-34: the sandbox's card for a connection off the allow list: "이 접속을 허용할까요?", the host and port, and 이번만 / 항상 / 거부.
+fn network_card(current: &PermissionRequest, waiting: usize, l: &Locale) -> PermissionCard {
+    let input: serde_json::Value = serde_json::from_str(&current.input_json).unwrap_or_default();
+    let host = input.get("host").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+    let port = input.get("port").and_then(serde_json::Value::as_u64).map(|p| p.to_string()).unwrap_or_default();
+    let field = |key: &str, value: String| PermissionField { label: l.get(key), value, code: true };
+    PermissionCard {
+        request_id: current.id.clone(),
+        title: l.get("sandbox.network.cardTitle"),
+        tool: l.get("sandbox.badge"),
+        waiting: (waiting > 1).then(|| bar::waiting_count_template(l).replace("{count}", &waiting.to_string())),
+        headline: Some(current.summary.clone()),
+        fields: vec![field("sandbox.network.host", host), field("sandbox.network.port", port)],
+        summary: None,
+        path: None,
+        reason: current.reason.clone().filter(|r| !r.is_empty()),
+        cannot_allow: (!current.can_allow).then(|| bar::cannot_allow_here(l)),
+        can_allow: current.can_allow,
+        input_json: current.input_json.clone(),
+        raw_json: bar::raw_json(l),
+        once_only: l.get("sandbox.network.cardHint"),
+        deny: l.get("sandbox.network.deny"),
+        allow_once: l.get("sandbox.network.allowOnce"),
+        allow_always: current.can_allow.then(|| l.get("sandbox.network.allowAlways")),
+        kind: "permission",
+    }
 }
 
 /// C# `CliTerminalSignIn.Table` (CliLoginRecovery.cs:325): the providers that sign in in a terminal, with the words it waits with.

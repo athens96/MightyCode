@@ -74,6 +74,8 @@ export interface PermissionCard {
   onceOnly: string;
   deny: string;
   allowOnce: string;
+  /** MC-34: the sandbox's network card also offers 항상 (the host is added to the workspace's allow list). */
+  allowAlways?: string;
 }
 
 export interface QuestionOption {
