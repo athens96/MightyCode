@@ -4604,6 +4604,7 @@
   "ssh.terminal.lost": "SSH 连接已断开。",
   "sandbox.started": "在沙盒中运行。",
   "sandbox.warning.unavailable": "此 Mac 没有 sandbox-exec，无法在沙盒中运行。关闭此工作区的沙盒后即可运行。",
+  "sandbox.warning.unsupported": "此电脑暂不支持沙盒，因此未运行。关闭此工作区的沙盒后即可运行。",
   "sandbox.error.prepare": "无法准备沙盒，因此未运行：{reason}",
   "sandbox.network.notListed": "此地址不在允许列表中。",
   "sandbox.network.settled": "此连接请求已答复。",

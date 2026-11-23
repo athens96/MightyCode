@@ -48,10 +48,8 @@ struct AppSandbox {
 
 impl SandboxHost for AppSandbox {
     fn setup(&self, workspace: &Workspace, _: &StartRunRequest) -> Option<SandboxSetup> {
+        // Off the Mac the setup still goes back: the run engine refuses a sandboxed run it cannot sandbox (never runs it unsandboxed).
         let config = workspace.sandbox_on()?.clone();
-        if !sandbox::supported() {
-            return None;
-        }
         let host = self.host.upgrade()?;
         Some(SandboxSetup {
             config,

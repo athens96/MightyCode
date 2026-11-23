@@ -1832,7 +1832,10 @@ impl Exec {
         use crate::sandbox::{self, Block, gate};
         let Some(host) = self.inner.options.sandbox.clone() else { return Ok(false) };
         let Some(setup) = host.setup(workspace, request) else { return Ok(false) };
-        // The person turned the sandbox on: without sandbox-exec the run is refused rather than started unsandboxed.
+        // The person turned the sandbox on: off the Mac, or without sandbox-exec, the run is refused rather than started unsandboxed.
+        if !sandbox::supported() {
+            return Err(Failure::Error(strings::get("sandbox.warning.unsupported")));
+        }
         if !sandbox::available() {
             return Err(Failure::Error(strings::get("sandbox.warning.unavailable")));
         }

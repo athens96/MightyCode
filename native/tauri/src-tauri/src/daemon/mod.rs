@@ -180,7 +180,7 @@ fn launch(host: &Host) -> Result<u32, String> {
         args.push("--profile".into());
         args.push(profile.to_string_lossy().into_owned());
     }
-    let cwd = program.parent().map(PathBuf::from).unwrap_or_else(|| host.data_dir.clone());
+    let cwd = crate::platform::detached_cwd(&program);
     let request = DetachedRequest { program, args, cwd, environment: DetachedEnvironment::Inherit, hidden: true };
     host.processes.start_detached(request).map_err(|e| e.to_string())
 }

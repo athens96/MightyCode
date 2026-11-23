@@ -4604,6 +4604,7 @@
   "ssh.terminal.lost": "SSH 연결이 끊겼습니다.",
   "sandbox.started": "샌드박스에서 실행합니다.",
   "sandbox.warning.unavailable": "이 Mac에 sandbox-exec가 없어 샌드박스 안에서 실행할 수 없습니다. 이 워크스페이스의 샌드박스를 끄면 실행됩니다.",
+  "sandbox.warning.unsupported": "이 컴퓨터에서는 아직 샌드박스를 쓸 수 없어 실행하지 않았습니다. 이 워크스페이스의 샌드박스를 끄면 실행됩니다.",
   "sandbox.error.prepare": "샌드박스를 준비하지 못해 실행하지 않았습니다: {reason}",
   "sandbox.network.notListed": "허용 목록에 없는 곳입니다.",
   "sandbox.network.settled": "이미 답한 접속 요청입니다.",

@@ -14,7 +14,6 @@ use std::time::Duration;
 use chrono::Local;
 use mighty_core::automation::spec::{GitHubEvent, TriggerSource};
 use mighty_core::automation::watch::{Backoff, Observed, PollOutcome, TriggerEvent};
-use mighty_platform::process::SpawnRequest;
 
 use super::{Item, Job, lock, store, webhook};
 use crate::host::Host;
@@ -126,10 +125,7 @@ async fn standing(host: &Arc<Host>, job: &Job, command: &str, cap: u32) {
     if !folder.is_dir() {
         return;
     }
-    let mut request = {
-        let (shell, args) = crate::repo_tasks::shell_invocation(command);
-        SpawnRequest::new(shell, args, folder)
-    };
+    let mut request = crate::repo_tasks::shell_request(command, folder);
     for (key, value) in crate::repo_tasks::login_shell_env(host, Some(folder)).await {
         request = request.env(key, value);
     }

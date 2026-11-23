@@ -137,6 +137,20 @@ pub fn daemon_ports() -> (Arc<dyn mighty_platform::ProcessHost>, Arc<dyn mighty_
     return (os::process_host(), os::pty::pty_host());
 }
 
+/// MC-3: the working folder of a copy of the app's exe started detached (the background daemon, `mighty server start`'s app): the
+/// exe's folder on the Mac, as before; never the install folder on Windows, where a process's working folder cannot be renamed while
+/// it runs and the update's swap renames that folder (the temporary folder instead, as the update helper's).
+pub fn detached_cwd(program: &std::path::Path) -> PathBuf {
+    detached_cwd_for(program, cfg!(windows), std::env::temp_dir())
+}
+
+fn detached_cwd_for(program: &std::path::Path, windows: bool, temp: PathBuf) -> PathBuf {
+    match program.parent() {
+        Some(folder) if !windows && !folder.as_os_str().is_empty() => folder.to_path_buf(),
+        _ => temp,
+    }
+}
+
 /// The app's identifier (tauri.conf.json's), for code that runs without Tauri's context (the `mighty` CLI).
 pub const IDENTIFIER: &str = "dev.mightycode.native";
 
@@ -667,4 +681,21 @@ pub fn set_menu_character_key(app: &tauri::AppHandle, title: &str, key: &str) {
     }
     #[cfg(windows)]
     let _ = (app, title, key);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MC-3: a detached copy of the app works in the exe's folder on the Mac, never in the install folder on Windows (its update
+    /// renames that folder, which a running process's working folder blocks).
+    #[test]
+    fn a_detached_copy_works_outside_the_install_folder_on_windows() {
+        let temp = PathBuf::from(r"C:\Users\me\AppData\Local\Temp");
+        let exe = std::path::Path::new(r"C:\Users\me\AppData\Local\Programs\MightyCode\MightyCode.exe");
+        assert_eq!(detached_cwd_for(exe, true, temp.clone()), temp);
+        let mac = std::path::Path::new("/Applications/Mighty Code.app/Contents/MacOS/MightyCode");
+        assert_eq!(detached_cwd_for(mac, false, temp.clone()), PathBuf::from("/Applications/Mighty Code.app/Contents/MacOS"));
+        assert_eq!(detached_cwd_for(std::path::Path::new("MightyCode"), false, temp.clone()), temp, "no folder: the temporary one");
+    }
 }

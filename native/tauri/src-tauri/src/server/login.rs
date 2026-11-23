@@ -59,10 +59,15 @@ impl LoginItem {
         }
     }
 
-    /// The command line the Run key holds: each path in double quotes (a Windows path never holds one).
+    /// The command line the Run key holds: each path in double quotes (a Windows path never holds one), its trailing backslashes
+    /// doubled so the closing quote is not read as an escaped one (`--profile "D:\work\"` would swallow the quote).
     #[cfg_attr(not(windows), allow(dead_code, reason = "Windows' store"))]
     pub fn run_value(&self) -> String {
-        let quoted = |path: &Path| format!("\"{}\"", path.to_string_lossy());
+        let quoted = |path: &Path| {
+            let text = path.to_string_lossy();
+            let trailing = text.len() - text.trim_end_matches('\\').len();
+            format!("\"{text}{}\"", "\\".repeat(trailing))
+        };
         let mut line = format!("{} {}", quoted(&self.program), super::ARGUMENT);
         if let Some(profile) = &self.profile {
             line.push_str(&format!(" --profile {}", quoted(profile)));
@@ -205,7 +210,7 @@ impl RunValues for CurrentUserRun {
     fn read(&self, name: &str) -> Option<String> {
         let values = self.0.values(RUN_KEY).ok()?;
         let value = values.into_iter().find(|value| value.name.eq_ignore_ascii_case(name))?;
-        let units: Vec<u16> = value.data.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+        let units: Vec<u16> = value.data.as_chunks::<2>().0.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
         Some(String::from_utf16_lossy(&units).trim_end_matches('\0').to_string())
     }
 
@@ -340,6 +345,12 @@ mod tests {
             r#""C:\Users\me\AppData\Local\Programs\MightyCode\MightyCode.exe" --server --profile "D:\work\my profile""#
         );
         assert!(with_profile.run_name().starts_with("Mighty Code (server ") && with_profile.run_name() != item.run_name());
+        // A folder typed with a trailing backslash keeps its closing quote (CommandLineToArgvW reads `\"` as a quote).
+        let trailing = LoginItem { profile: Some(PathBuf::from(r"D:\work\")), ..item.clone() };
+        assert_eq!(
+            trailing.run_value(),
+            r#""C:\Users\me\AppData\Local\Programs\MightyCode\MightyCode.exe" --server --profile "D:\work\\""#
+        );
     }
 
     #[derive(Default)]

@@ -175,7 +175,9 @@ pub async fn request(data_dir: &Path, connector: &dyn AgentIoConnector, command:
     let endpoint = endpoint::read_endpoint(data_dir).ok_or_else(not_running)?;
     let token = endpoint::read_token(data_dir).ok_or_else(not_running)?;
     let exchange = async {
-        let connection = connector.connect(&endpoint.address, within).await.map_err(|_| not_running())?;
+        // Half the time for the connection: Windows' connector keeps retrying a missing pipe (a crashed app's endpoint) until its own
+        // deadline, which must come before the whole request's so that nobody listening reads as "not running", not as "no answer".
+        let connection = connector.connect(&endpoint.address, within / 2).await.map_err(|_| not_running())?;
         let (mut reader, mut writer) = tokio::io::split(connection);
         let request = Request { id: 1, token, command };
         super::server::write_line(&mut writer, &request.line())
@@ -305,5 +307,43 @@ pub async fn server_start(
             }
             _ => tokio::time::sleep(POLL).await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mighty_platform::{AgentIoConnection, BoxFuture, PlatformError};
+
+    use super::*;
+
+    /// Windows' connector before a missing pipe: it retries until its own deadline and fails after its last try (a moment past it).
+    struct NobodyListening;
+
+    impl AgentIoConnector for NobodyListening {
+        fn connect(&self, _name: &str, timeout: Duration) -> BoxFuture<'_, mighty_platform::Result<AgentIoConnection>> {
+            Box::pin(async move {
+                tokio::time::sleep(timeout + Duration::from_millis(20)).await;
+                Err(PlatformError::TimedOut("the Agent IO pipe"))
+            })
+        }
+    }
+
+    /// A crashed app's endpoint file names a pipe nobody serves: on Windows the connection is retried until its deadline, which comes
+    /// before the request's own, so the CLI and a second start read "not running" (and start the server) rather than "no answer".
+    #[tokio::test]
+    async fn a_left_over_endpoint_that_nobody_serves_reads_as_not_running() {
+        let data = std::env::temp_dir().join(format!("mc-control-left-over-{}", mighty_core::wire::new_id()));
+        endpoint::write_token(&data, &endpoint::new_token()).unwrap();
+        let left = endpoint::Endpoint {
+            transport: "pipe".into(),
+            address: format!("mighty-control-{}", "0".repeat(32)),
+            pid: 4242,
+            version: "0.6.0".into(),
+        };
+        endpoint::write_endpoint(&data, &left).unwrap();
+        let answer = request(&data, &NobodyListening, Command::ServerStatus, Duration::from_millis(400)).await;
+        let error = answer.unwrap_err();
+        assert!(is_not_running(&error), "{error:?}");
+        let _ = std::fs::remove_dir_all(&data);
     }
 }

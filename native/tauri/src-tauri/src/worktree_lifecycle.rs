@@ -17,7 +17,6 @@ use mighty_core::model::{PaneWorktree, Workspace, worktree_variables};
 use mighty_delegation::mighty_yaml::{DEFAULT_WORKTREE_PORTS, LoadedRepoConfig, MAXIMUM_WORKTREE_PORTS};
 use mighty_delegation::run_actions;
 use mighty_delegation::worktree_ports::{self, DEFAULT_START, PortBlock, PortsFile};
-use mighty_platform::SpawnRequest;
 
 use crate::host::{Host, lock};
 
@@ -185,10 +184,7 @@ async fn run_teardown(
     timeout: std::time::Duration,
 ) -> run_actions::ScriptOutcome {
     let ws_folder = workspace.path().to_string();
-    let mut request = {
-        let (shell, args) = crate::repo_tasks::shell_invocation(command);
-        SpawnRequest::new(shell, args, record.run_folder())
-    };
+    let mut request = crate::repo_tasks::shell_request(command, record.run_folder());
     for (key, value) in crate::repo_tasks::login_shell_env(host, Some(Path::new(&ws_folder))).await {
         request = request.env(key, value);
     }

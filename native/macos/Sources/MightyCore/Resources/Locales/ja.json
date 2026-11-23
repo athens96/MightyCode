@@ -4604,6 +4604,7 @@
   "ssh.terminal.lost": "SSH 接続が切れました。",
   "sandbox.started": "サンドボックスで実行します。",
   "sandbox.warning.unavailable": "この Mac には sandbox-exec がないため、サンドボックス内で実行できません。このワークスペースのサンドボックスをオフにすると実行できます。",
+  "sandbox.warning.unsupported": "このコンピューターではまだサンドボックスを使えないため、実行しませんでした。このワークスペースのサンドボックスをオフにすると実行できます。",
   "sandbox.error.prepare": "サンドボックスを準備できなかったため実行しませんでした: {reason}",
   "sandbox.network.notListed": "許可リストにない接続先です。",
   "sandbox.network.settled": "この接続リクエストには回答済みです。",

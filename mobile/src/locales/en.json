@@ -4604,6 +4604,7 @@
   "ssh.terminal.lost": "The SSH connection was lost.",
   "sandbox.started": "Running in the sandbox.",
   "sandbox.warning.unavailable": "This Mac has no sandbox-exec, so the run can't start in the sandbox. Turn the sandbox off for this workspace to run it.",
+  "sandbox.warning.unsupported": "The sandbox isn't available on this computer yet, so the run didn't start. Turn the sandbox off for this workspace to run it.",
   "sandbox.error.prepare": "The sandbox could not be set up, so the agent did not start: {reason}",
   "sandbox.network.notListed": "This address is not on the allow list.",
   "sandbox.network.settled": "This connection request was already answered.",

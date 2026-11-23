@@ -302,7 +302,7 @@ pub fn phase_name(phase: &Phase) -> &'static str {
 /// job) as `--server`, with the profile when one was given. Its pid.
 pub fn launch_detached(profile: Option<&Path>) -> Result<u32, String> {
     let program = std::env::current_exe().map_err(|e| e.to_string())?;
-    let cwd = program.parent().map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    let cwd = crate::platform::detached_cwd(&program);
     let request = DetachedRequest { program, args: arguments(profile), cwd, environment: DetachedEnvironment::Inherit, hidden: true };
     crate::platform::process_host().start_detached(request).map_err(|e| e.to_string())
 }

@@ -32,7 +32,6 @@ use mighty_delegation::pane_worktree::{
 };
 use mighty_delegation::request::DelegationReasonCode;
 use mighty_delegation::text;
-use mighty_platform::SpawnRequest;
 use mighty_platform::fake::FixedDiskSpace;
 use mighty_run::model::StartRunRequest;
 #[cfg(feature = "dev-harness")]
@@ -936,8 +935,7 @@ async fn run_setup_command(
     folder: &str,
     environment: &indexmap::IndexMap<String, String>,
 ) -> (i32, String, String) {
-    let (shell, args) = crate::repo_tasks::shell_invocation(command);
-    let mut request = SpawnRequest::new(shell, args, folder);
+    let mut request = crate::repo_tasks::shell_request(command, folder);
     for (key, value) in environment {
         request = request.env(key.clone(), value.clone());
     }

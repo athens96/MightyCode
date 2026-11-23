@@ -36,7 +36,7 @@ use mighty_delegation::cards::DelegationCardResult;
 use mighty_delegation::compare::{self as rules, ComparePhase, CompareRow, CompareRowsError};
 use mighty_delegation::git::worktree::ChildWorktreeCheck;
 use mighty_delegation::tools::delegate::HumanChildStart;
-use mighty_platform::{BoxFuture, SpawnRequest};
+use mighty_platform::BoxFuture;
 use serde_json::{Value, json};
 
 use crate::host::{Host, Registry, lock};
@@ -890,8 +890,7 @@ async fn run_test(host: &Arc<Host>, pane: &str, child: &str, test: &str) -> (boo
         Ok(cwd) => cwd,
         Err(error) => return (false, None, error),
     };
-    let (shell, arguments) = crate::repo_tasks::shell_invocation(&task.command);
-    let mut request = SpawnRequest::new(shell, arguments, cwd.to_string_lossy().into_owned());
+    let mut request = crate::repo_tasks::shell_request(&task.command, cwd.to_string_lossy().into_owned());
     for (key, value) in crate::repo_tasks::login_shell_env(host, Some(Path::new(workspace.path()))).await {
         request = request.env(key, value);
     }

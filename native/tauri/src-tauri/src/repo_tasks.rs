@@ -433,15 +433,26 @@ pub fn combine_setup_commands(mighty_setup: Option<&str>, workspace_setup: Optio
     }
 }
 
-/// The program and arguments that run `command` through the platform shell: `cmd /d /s /c` on Windows (a script of several lines
-/// joined with `&&`), `/bin/sh -c` elsewhere, `-ec` for a script of several lines so that a failing line ends it like `&&` would.
-pub fn shell_invocation(command: &str) -> (String, Vec<String>) {
-    if cfg!(windows) {
-        let comspec = std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
-        (comspec, vec!["/d".into(), "/s".into(), "/c".into(), mighty_yaml::flatten_script(command)])
+/// The request that runs `command` in `cwd` through the platform shell (tasks, run actions, worktree setup and teardown, hooks,
+/// standing orders, compare tests): `cmd /d /s /c "<command>"` on Windows (a script of several lines joined with `&&`), `/bin/sh -c`
+/// elsewhere, `-ec` for a script of several lines so that a failing line ends it like `&&` would.
+pub fn shell_request(command: &str, cwd: impl Into<PathBuf>) -> SpawnRequest {
+    shell_request_for(command, cwd, cfg!(windows), std::env::var("ComSpec").ok())
+}
+
+/// [`shell_request`] for either OS (`windows`, with `%ComSpec%` as `comspec`), so the Windows form is checked everywhere. On Windows
+/// the command goes to cmd.exe as written (`shell_command`, as the run engine's shell runs and C#'s `ChildProcess` do): quoted as
+/// one C-runtime argument instead, every `"` in it would reach cmd.exe as `\"`, which cmd does not read as an escape.
+pub fn shell_request_for(command: &str, cwd: impl Into<PathBuf>, windows: bool, comspec: Option<String>) -> SpawnRequest {
+    if windows {
+        let comspec = comspec.filter(|c| !c.trim().is_empty()).unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into());
+        let line = mighty_yaml::flatten_script(command);
+        let mut request = SpawnRequest::new(comspec, ["/d", "/s", "/c", line.as_str()], cwd);
+        request.shell_command = Some(line);
+        request
     } else {
         let flag = if command.contains('\n') { "-ec" } else { "-c" };
-        ("/bin/sh".into(), vec![flag.into(), command.to_string()])
+        SpawnRequest::new("/bin/sh", [flag, command], cwd)
     }
 }
 
@@ -1325,8 +1336,7 @@ async fn start_managed_task(
     }
 
     let shell_env = login_shell_env(host, Some(&resolved.workspace_folder)).await;
-    let (shell, args) = shell_invocation(&task.command);
-    let mut request = SpawnRequest::new(shell, args, &run_cwd);
+    let mut request = shell_request(&task.command, &run_cwd);
     for (k, v) in shell_env {
         request = request.env(k, v);
     }
@@ -1728,9 +1738,84 @@ mod tests {
         );
         // A teardown of several lines runs as one line in cmd, joined like `&&` would on POSIX (`sh -ec`).
         assert_eq!(
-            shell_invocation("docker compose down\nrm -rf tmp").1.last().map(String::as_str),
+            shell_request("docker compose down\nrm -rf tmp", "/wt").args.last().map(String::as_str),
             Some(if cfg!(windows) { "docker compose down && rm -rf tmp" } else { "docker compose down\nrm -rf tmp" })
         );
+    }
+
+    /// MC-25 on Windows (checked on every OS): a task, run action, setup or teardown goes to `%ComSpec%` as `/d /s /c "<command>"`
+    /// with the command exactly as written (the host's `shell_command`), so its own double quotes reach cmd.exe unescaped; a script of
+    /// several lines (CRLF or LF, blank lines skipped) is one `&&` line; no `%ComSpec%` falls back to System32's cmd.exe.
+    #[test]
+    fn windows_shell_requests_hand_the_command_to_cmd_as_written() {
+        let comspec = Some(r"C:\WINDOWS\system32\cmd.exe".to_string());
+        let command = r#"npm run dev -- --host "127.0.0.1" --port %MIGHTY_PORT% | findstr /i "ready""#;
+        let request = shell_request_for(command, r"C:\Users\me\.mightycode\worktrees\p 1", true, comspec.clone());
+        assert_eq!(request.program, PathBuf::from(r"C:\WINDOWS\system32\cmd.exe"));
+        assert_eq!(request.args, ["/d", "/s", "/c", command]);
+        assert_eq!(request.shell_command.as_deref(), Some(command), "cmd.exe gets the command itself, never C-runtime quoting");
+        assert_eq!(request.cwd, PathBuf::from(r"C:\Users\me\.mightycode\worktrees\p 1"));
+
+        let teardown = shell_request_for("docker compose down\r\n\r\nrmdir /s /q tmp\r\n", r"C:\wt", true, comspec);
+        assert_eq!(teardown.shell_command.as_deref(), Some("docker compose down && rmdir /s /q tmp"));
+        let operators = shell_request_for("npm ci &&\nnpm test", r"C:\wt", true, Some(String::new()));
+        assert_eq!(operators.shell_command.as_deref(), Some("npm ci && npm test"), "no second && after one that ends a line");
+        assert_eq!(operators.program, PathBuf::from(r"C:\Windows\System32\cmd.exe"), "a blank %ComSpec% falls back");
+        assert_eq!(shell_request_for("make", r"C:\wt", true, None).program, PathBuf::from(r"C:\Windows\System32\cmd.exe"));
+
+        // The Mac (and Linux): sh with the command as one argument, `-ec` for a script; never a Windows shell command.
+        let posix = shell_request_for(command, "/wt/p1", false, comspec_never());
+        assert_eq!((posix.program, posix.args, posix.shell_command), (PathBuf::from("/bin/sh"), vec!["-c".into(), command.into()], None));
+        let script = shell_request_for("npm ci\nnpm test", "/wt/p1", false, None);
+        assert_eq!(script.args, ["-ec", "npm ci\nnpm test"]);
+    }
+
+    /// `%ComSpec%` is never read off Windows.
+    fn comspec_never() -> Option<String> {
+        Some(r"C:\nowhere\cmd.exe".into())
+    }
+
+    /// MC-25: the worktree's variables (Windows paths with a drive letter and spaces) reach a terminal task the same way in cmd.exe
+    /// and PowerShell; PowerShell keeps a command's double quotes and pipes inside its single-quoted literal for cmd.exe, and cmd.exe
+    /// refuses what it would expand rather than running it.
+    #[test]
+    fn windows_terminal_lines_carry_the_worktree_variables_and_the_command_whole() {
+        let env = mighty_core::model::worktree_variables(
+            Some((41010, 10)),
+            "p 1",
+            r"D:\src\My App",
+            r"C:\Users\me\.mightycode\worktrees\My App\p 1",
+        );
+        let command = r#"npm run dev -- --host "127.0.0.1" | findstr ready"#;
+        let folder = Path::new(r"C:\Users\me\.mightycode\worktrees\My App\p 1\web");
+        let cmd = terminal_command_line(folder, &env, command, TerminalShell::Cmd).unwrap();
+        assert_eq!(
+            cmd,
+            r#"cd /d "C:\Users\me\.mightycode\worktrees\My App\p 1\web" && set "MIGHTY_PORT=41010" && set "MIGHTY_PORT_COUNT=10" && set "MIGHTY_WORKTREE_NAME=p 1" && set "MIGHTY_ROOT_PATH=D:\src\My App" && set "MIGHTY_WORKTREE_PATH=C:\Users\me\.mightycode\worktrees\My App\p 1" && npm run dev -- --host "127.0.0.1" | findstr ready"#
+        );
+        let ps = terminal_command_line(folder, &env, command, TerminalShell::PowerShell).unwrap();
+        assert_eq!(
+            ps,
+            r#"Set-Location -LiteralPath 'C:\Users\me\.mightycode\worktrees\My App\p 1\web'; $env:MIGHTY_PORT = '41010'; $env:MIGHTY_PORT_COUNT = '10'; $env:MIGHTY_WORKTREE_NAME = 'p 1'; $env:MIGHTY_ROOT_PATH = 'D:\src\My App'; $env:MIGHTY_WORKTREE_PATH = 'C:\Users\me\.mightycode\worktrees\My App\p 1'; & cmd.exe /d /s /c 'npm run dev -- --host "127.0.0.1" | findstr ready'"#
+        );
+        // A UNC folder, a script of several CRLF lines.
+        let unc =
+            terminal_command_line(Path::new(r"\\server\share\repo"), &[], "npm ci\r\nnpm test\r\n", TerminalShell::PowerShell).unwrap();
+        assert_eq!(unc, r"Set-Location -LiteralPath '\\server\share\repo'; & cmd.exe /d /s /c 'npm ci && npm test'");
+        let unc = terminal_command_line(Path::new(r"\\server\share\repo"), &[], "npm ci\r\nnpm test\r\n", TerminalShell::Cmd).unwrap();
+        assert_eq!(unc, r#"cd /d "\\server\share\repo" && npm ci && npm test"#);
+        // What cmd.exe would expand or end early on is refused for it (the task panel runs it instead); PowerShell takes it literally.
+        for value in ["50%", "a!b", "say \"hi\"", "two\nlines"] {
+            let env = [("NOTE".to_string(), value.to_string())];
+            assert!(terminal_command_line(Path::new(r"C:\wt"), &env, "x", TerminalShell::Cmd).is_err(), "{value}");
+        }
+        let env = [("NOTE".to_string(), "50% a!b it's".to_string())];
+        assert_eq!(
+            terminal_command_line(Path::new(r"C:\wt"), &env, "x", TerminalShell::PowerShell).unwrap(),
+            r"Set-Location -LiteralPath 'C:\wt'; $env:NOTE = '50% a!b it''s'; & cmd.exe /d /s /c 'x'"
+        );
+        assert!(terminal_command_line(Path::new(r"C:\wt"), &[("NOTE".into(), "a\r\nb".into())], "x", TerminalShell::PowerShell).is_err());
+        assert_eq!(TerminalShell::of(Path::new(r"C:\Program Files\PowerShell\7\pwsh.EXE"), true), TerminalShell::PowerShell);
     }
 
     #[test]

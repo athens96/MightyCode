@@ -9,7 +9,6 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use mighty_core::control::events::{ControlEvent, StateEvent};
-use mighty_platform::process::SpawnRequest;
 use tokio::sync::Semaphore;
 
 use crate::host::Host;
@@ -68,10 +67,7 @@ async fn run(host: &Arc<Host>, event: &ControlEvent, command: &str, folder: &str
         host.log.line(&format!("status hook ({from}) skipped: {AT_ONCE} already run"));
         return;
     };
-    let mut request = {
-        let (shell, args) = crate::repo_tasks::shell_invocation(command);
-        SpawnRequest::new(shell, args, folder)
-    };
+    let mut request = crate::repo_tasks::shell_request(command, folder);
     for (key, value) in crate::repo_tasks::login_shell_env(host, Some(Path::new(workspace_path))).await {
         request = request.env(key, value);
     }

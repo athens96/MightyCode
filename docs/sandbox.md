@@ -201,7 +201,7 @@ to the socket, both opened), and the reviewer's real answers.
 
 ## Windows (research only; nothing implemented)
 
-The switch is shown off with "Windows에서는 아직 지원하지 않습니다" and `sandboxSave` refuses to turn it on.
+The switch is shown off with "Windows에서는 아직 지원하지 않습니다" and `sandboxSave` refuses to turn it on. A workspace that arrives with the sandbox on (another machine's state) does not run unsandboxed: the run engine refuses it with `sandbox.warning.unsupported`.
 
 | Option | What it gives | What it costs | Verdict |
 |---|---|---|---|
