@@ -9,6 +9,8 @@ section: remote
 - {{ui:settings.remote.viaPairing}}：像手机一样配对一次，然后经由 Mighty 中继连接，不需要 Tailscale。请参阅[通过配对连接](#pair)。
 - {{ui:settings.remote.viaTailscale}}：在同一个 [Tailscale](https://tailscale.com/kb/1017/install) 网络（tailnet）内，用地址和连接密钥直接连接。在那台电脑上运行本机窗格的远程窗格以及大附件只能通过 Tailscale。
 
+如果另一台电脑无法运行 Mighty Code，可以把它作为 [SSH 主机](#ssh)在其文件夹中工作。
+
 这些都在 {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} 标签中进行。标签顶部有一行说明，下方有 {{ui:settings.remote.shareTitle}} | {{ui:settings.remote.connectTitle}} | {{ui:settings.remote.phoneTab}} 三个标签。内部标签只在应用运行期间被记住。连接手机请参阅[手机远程](phone.md)。
 
 ## 准备 {#prepare}
@@ -113,3 +115,35 @@ pi、opencode 和 Hermes 窗格暂时还不能在远程工作区中打开。远�
 - {{ui:settings.remote.disconnectButton}} 会停止该连接的运行并保留连接信息。要再次使用，请点按 {{ui:settings.remote.refreshButton}} 或在远程窗格中发送。要连同连接信息一起删除，请点按该行的删除图标。
 - 如果 Tailscale 主机重新开始共享，就需要新的密钥。用新密钥连接同一个地址，会替换已保存连接的密钥。
 - 主机电脑休眠或其 Mighty Code 退出时，无法发送新的任务。
+
+## SSH 主机 {#ssh}
+无需在另一台电脑上安装任何东西，也无需配对，就能通过 SSH 在其文件夹中运行终端和代理。适合开发服务器、云虚拟机和装有 Linux 专用工具的主机。
+
+**准备**
+- 这台电脑需要 OpenSSH 客户端。Mac 自带；Windows 请开启"OpenSSH 客户端"功能。
+- 登录由这台电脑的 OpenSSH 完成，直接使用 `~/.ssh/config`、ssh-agent 和密钥，应用不保存密码或密钥。请确保无需密码即可 `ssh 主机` 登录。
+- 第一次使用的主机，请先在终端中运行一次 `ssh 主机`，确认并接受主机密钥。应用不会替你接受主机密钥。
+
+**添加主机**
+1. 打开 {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} 标签页中的 {{ui:ssh.settings.sectionTitle}} 框。
+2. 在 {{ui:ssh.settings.fromConfig}} 菜单中选择 `~/.ssh/config` 里的 Host，或输入 `user@host:端口` 后按 {{ui:ssh.settings.addButton}}。通配符 Host 和 `Match` 块不会列出。
+3. {{ui:ssh.settings.test}} 会在不询问密码的情况下登录，读取操作系统、登录 shell 以及是否有 tmux。它会分别提示"无法连接""登录被拒绝"和"未知主机密钥"。
+4. 输入远程文件夹（以 `~` 或 `/` 开头，例如 `~/src/app` 或 `/srv/app`）并按 {{ui:ssh.settings.open}}，该文件夹会作为工作区打开，并新建一个终端窗格。
+
+主机在侧边栏中显示为"SSH · 名称"标题，下面是它的工作区。标题的 … 菜单中可以 {{ui:ssh.menu.test}}。
+
+**可以做的**
+- 终端窗格：在该文件夹中打开该主机的登录 shell。
+- 代理窗格：Claude、Codex、Antigravity 和 pi 使用该主机上安装的 CLI 和该主机上的账号运行。批准和提问卡片显示在这个应用中。如果该主机上没有 CLI，运行会以错误结束。
+- 文件窗格：只读。预览每个文件最多读取 1 MiB。
+- 在 Mac 上，同一主机的窗格共用一个 SSH 连接。Windows 的 OpenSSH 不支持，因此每个窗格单独连接。
+- 连接到本地：窗格输出中出现 `localhost:3000` 之类的开发服务器地址时，窗格上方的 SSH 栏会出现连接按钮。它会转发到这台电脑的空闲端口，点击地址即可在浏览器中打开。关闭窗格时转发也会结束。
+- 开启[后台工作](settings.md#general)后，关闭应用后 SSH 窗格的工作也会继续。
+
+**连接断开时**
+- 终端窗格会显示"SSH 连接已断开。"和 {{ui:ssh.terminal.reconnect}} 按钮。
+- 如果该主机有 tmux，{{ui:ssh.settings.tmux}} 开关会打开，终端窗格在 tmux 会话中运行。连接断开后工作仍在主机上继续，重新连接会回到同一个会话。可以按主机关闭此开关。
+
+**暂不支持**
+- 编辑远程文件、查看远程 git 更改、工作地图、工作树、Mighty 编排、附件，以及 opencode 和 Hermes 窗格。
+- 在主机上安装 Mighty Code 无头服务器的方式将在以后的版本中提供。

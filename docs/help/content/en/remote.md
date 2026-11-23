@@ -9,6 +9,8 @@ There are two ways to link them.
 - {{ui:settings.remote.viaPairing}}: pair once, as a phone does, and connect through the Mighty relay. No Tailscale is needed. See [Connect by pairing](#pair).
 - {{ui:settings.remote.viaTailscale}}: connect straight to the other computer with its address and key inside the same [Tailscale](https://tailscale.com/kb/1017/install) network (tailnet). Remote panes that run this computer's panes there, and large attachments, need Tailscale.
 
+When the other computer can't run Mighty Code, work in its folders as an [SSH machine](#ssh).
+
 Everything happens in {{ui:menu.settings}} → the {{ui:settings.remote.navTitle}} tab. A line of introduction sits at the top, with the {{ui:settings.remote.shareTitle}} | {{ui:settings.remote.connectTitle}} | {{ui:settings.remote.phoneTab}} tabs below it. The inner tab you chose is remembered only while the app runs. For phones, see [Phone remote](phone.md).
 
 ## Before you start {#prepare}
@@ -113,3 +115,35 @@ pi, opencode and Hermes panes cannot be opened in a remote workspace yet. Remote
 - {{ui:settings.remote.disconnectButton}} stops that connection's runs and keeps the connection. Press {{ui:settings.remote.refreshButton}} or send from a remote pane to use it again. To remove the connection too, click the delete icon on its row.
 - If a Tailscale host restarted sharing, you need its new key. Connecting to the same address with the new key replaces the saved connection's key.
 - While the host computer sleeps or Mighty Code is closed there, no new work can be sent.
+
+## SSH machines {#ssh}
+Run terminals and agents in another computer's folders over SSH, with nothing installed there and no pairing. It suits dev servers, cloud VMs and machines with Linux-only tools.
+
+**Before you start**
+- This computer needs the OpenSSH client. Macs have it; on Windows, turn on the "OpenSSH Client" feature.
+- Your OpenSSH signs in: `~/.ssh/config`, ssh-agent and your keys as they are. The app never stores passwords or keys. Make sure `ssh host` gets in without a password.
+- For a machine you haven't used before, run `ssh host` once in a terminal to check and accept its host key. The app never accepts a host key for you.
+
+**Adding a machine**
+1. Go to {{ui:menu.settings}} → the {{ui:settings.remote.navTitle}} tab → the {{ui:ssh.settings.sectionTitle}} box.
+2. Pick a Host from `~/.ssh/config` in the {{ui:ssh.settings.fromConfig}} menu, or type `user@host:port` and press {{ui:ssh.settings.addButton}}. Wildcard Hosts and `Match` blocks aren't listed.
+3. {{ui:ssh.settings.test}} signs in without asking for a password and reads the OS, the login shell and whether tmux is there. It tells "can't reach", "sign-in refused" and "unknown host key" apart.
+4. Type a remote folder (starting with `~` or `/`, such as `~/src/app` or `/srv/app`) and press {{ui:ssh.settings.open}}. The folder opens as a workspace with one terminal pane.
+
+The machine shows in the sidebar under an "SSH · name" header, with its workspaces below. The header's … menu has {{ui:ssh.menu.test}}.
+
+**What works**
+- Terminal panes: the machine's login shell in that folder.
+- Agent panes: Claude, Codex, Antigravity and pi run with the CLI installed on that machine and its account there. Approval and question cards show in this app. If the CLI isn't on the machine, the run ends with an error.
+- Files pane: read-only. Previews read up to 1 MiB per file.
+- On a Mac, the panes of one machine share one SSH connection. Windows' OpenSSH can't, so each pane connects on its own.
+- Connect locally: when a pane's output names a dev server such as `localhost:3000`, the SSH bar over the pane offers to connect it. It forwards to a free port on this computer; click the address to open it in the browser. Closing the pane ends the forward.
+- With [background work](settings.md#general) on, SSH panes keep working after the app closes.
+
+**When the connection drops**
+- The terminal pane says "The SSH connection was lost." with a {{ui:ssh.terminal.reconnect}} button.
+- If the machine has tmux, the {{ui:ssh.settings.tmux}} switch is on and terminal panes run inside a tmux session. The work keeps going on the machine, and reconnecting attaches to the same session. You can turn the switch off per machine.
+
+**Not yet**
+- Editing remote files, remote git changes, the work map, worktrees, Mighty orchestration, attachments, and opencode and Hermes panes.
+- Installing a Mighty Code headless server on the machine is planned for a later version.

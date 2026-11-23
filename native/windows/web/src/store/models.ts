@@ -45,6 +45,8 @@ export interface Workspace {
   createdAt: string;
   modelDefaults?: ModelDefaultsConfig;
   remote?: RemoteWorkspaceReference;
+  /** MC-33: the folder is on an SSH machine (`path` is then the app's empty stand-in). */
+  ssh?: { machine: string; dir: string; host: string };
   /** Where the workspace's agent panes work (Core PaneWorktreeMode): absent is ask, else further or every. */
   paneWorktreeMode?: string;
   worktreeSetupCommand?: string;

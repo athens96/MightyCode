@@ -92,7 +92,7 @@ export function TerminalView({ session, fallback }: { session: RunSession; fallb
           <span className="terminal-notice-text">{footer.notice}</span>
           {footer.restart && (
             <button type="button" className="terminal-restart" title={t('tooltip.terminal.restart')} disabled={!footer.restartEnabled} onClick={() => void bridge.call('terminalRestart', { paneId }).catch(() => {})}>
-              {t('terminal.restart')}
+              {t(footer.reconnect ? 'ssh.terminal.reconnect' : 'terminal.restart')}
             </button>
           )}
         </div>

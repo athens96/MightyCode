@@ -25,5 +25,5 @@ pub mod text;
 
 pub use agent::{AgentTerminal, AgentTerminalError, AgentTerminalResult};
 pub use cleaner::TerminalTextCleaner;
-pub use pane::{PaneEvents, PaneKind, PaneOptions, Ports, TerminalFont, TerminalFooter, TerminalMessage, TerminalPane};
+pub use pane::{PaneEvents, PaneKind, PaneOptions, Ports, RemoteShell, TerminalFont, TerminalFooter, TerminalMessage, TerminalPane};
 pub use prompt::{PromptRead, PromptTerminal, TerminalPrompt, TerminalPromptAnswer, TerminalPromptMonitor};

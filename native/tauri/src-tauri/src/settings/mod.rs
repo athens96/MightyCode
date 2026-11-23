@@ -20,6 +20,7 @@ pub mod mobile;
 pub mod mobile_direct;
 pub mod models;
 pub mod remote;
+pub mod ssh;
 pub mod styles;
 pub mod tools;
 
@@ -66,7 +67,9 @@ pub fn groups(locale: &Locale, category: &str) -> Vec<Group> {
         ],
         "models" => vec![slot(sections::PHASE_MODELS, models::phase_models)],
         "styles" => vec![slot(sections::STYLES, styles::styles)],
-        "remote" => vec![slot(sections::REMOTE_WORKSPACES, remote::remote_workspaces)],
+        "remote" => {
+            vec![slot(sections::REMOTE_WORKSPACES, remote::remote_workspaces), titled("ssh.settings.sectionTitle", ssh::ssh_machines)]
+        }
         "companion" => {
             vec![
                 slot(sections::COMPANION, companion::companion),
@@ -314,7 +317,7 @@ mod tests {
         assert_eq!(titles("tools"), vec![locale.get("settings.components.sectionTitle"), locale.get("settings.toolkit.sectionTitle")]);
         assert!(groups(&locale, "cli").is_empty(), "the CLI tab's accounts and updates are 구성 요소' rows");
         assert_eq!(shown_category("cli"), "tools", "a saved CLI tab opens 구성 요소");
-        assert_eq!(titles("remote"), vec!["원격 연결".to_string()]);
+        assert_eq!(titles("remote"), vec!["원격 연결".to_string(), locale.get("ssh.settings.sectionTitle")]);
         assert_eq!(titles("about"), vec![locale.get("settings.appUpdate.sectionTitle"), "앱 정보".to_string()]);
         assert!(groups(&locale, "mobile").is_empty(), "모바일 리모트 is 원격 연결's 휴대폰 tab");
         assert!(groups(&locale, "elsewhere").is_empty());

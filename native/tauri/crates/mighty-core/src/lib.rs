@@ -32,6 +32,7 @@ pub mod settings_sections;
 pub mod settings_words;
 pub mod shared_memory;
 pub mod shell;
+pub mod ssh;
 pub mod store;
 pub mod text_appearance;
 pub mod time;

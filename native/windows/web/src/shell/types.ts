@@ -53,6 +53,8 @@ export interface PaneInfo {
   forkedFrom?: PaneFork | null;
   /** MC-29: the compare runs this pane started, newest first, each summed up for its card. */
   compares?: PaneCompare[];
+  /** MC-33: an SSH machine's pane: its machine and folder, the ports its output named and the forwards open. */
+  ssh?: PaneSsh;
 }
 
 /** MC-29: a compare run as its card under the pane's row shows it. */
@@ -116,6 +118,23 @@ export interface RemoteServer {
   /** A saved connection (one that can be connected or disconnected from here). */
   known: boolean;
   help: string;
+  /** MC-33: an SSH machine's header (its menu tests the connection and opens the SSH settings). */
+  ssh?: boolean;
+}
+
+/** MC-33: a far side's port: offered (no `local`), or forwarded to this computer's `local`. */
+export interface PaneSshPort {
+  remote: number;
+  local?: number;
+}
+
+/** MC-33: the SSH bar over an SSH machine's pane. */
+export interface PaneSsh {
+  host: string;
+  dir: string;
+  ports: PaneSshPort[];
+  /** The terminal's connection went (its notice offers 다시 연결). */
+  lost?: boolean;
 }
 
 export interface CardAction {
@@ -148,6 +167,8 @@ export interface SidebarWorkspace {
   server?: string | null;
   /** A remote mirror's workspace: the host's own, named and shared there. */
   mirror?: boolean;
+  /** MC-33: a folder on an SSH machine (listed under that machine's header). */
+  ssh?: boolean;
   counts: Counts;
   expanded: boolean;
   items?: SidebarItem[];

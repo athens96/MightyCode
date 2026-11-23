@@ -40,6 +40,9 @@ pub fn entries() -> Vec<String> {
     entries
 }
 
+/// MC-33: the agents an SSH workspace offers (their CLI speaks over plain stdin and stdout; mighty-run `ssh::supported_provider`).
+pub const SSH_PROVIDERS: [&str; 4] = ["claude", "codex", "gemini", "pi"];
+
 /// `ProviderCatalog.IsLocalOnly`: pi, opencode and Hermes run on this computer only.
 pub fn is_local_only(provider: &str) -> bool {
     matches!(provider, "pi" | "opencode" | "hermes")
@@ -48,6 +51,13 @@ pub fn is_local_only(provider: &str) -> bool {
 /// `RemoteWorkspaceFeatures.AddPaneEntries`: a remote workspace's menu offers its agents, a remote command and the three ways to add
 /// a workspace.
 pub fn entries_for(workspace: Option<&Workspace>) -> Vec<String> {
+    // MC-33: an SSH machine's folder: the agents whose CLI can run there over ssh, a terminal (ssh), the files pane (read-only).
+    if workspace.is_some_and(Workspace::is_ssh) {
+        let mut entries: Vec<String> =
+            wire::PROVIDERS.iter().filter(|p| SSH_PROVIDERS.contains(p)).map(|p| format!("{AGENT_PREFIX}{p}")).collect();
+        entries.extend([SEPARATOR, SHELL, SEPARATOR, FILES, SEPARATOR, OPEN_PROJECT, NEW_FOLDER, FROM_GIT].map(str::to_string));
+        return entries;
+    }
     let Some(remote) = workspace.and_then(|w| w.remote.as_ref()) else {
         return entries();
     };
@@ -230,6 +240,21 @@ pub fn add_to_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MC-33: an SSH workspace offers the agents that run over ssh, a terminal and the files pane.
+    #[test]
+    fn an_ssh_workspace_offers_what_runs_over_ssh() {
+        let workspace = Workspace {
+            ssh: Some(crate::model::SshWorkspaceRef { machine: "m".into(), dir: "~/app".into(), host: "devbox".into() }),
+            ..Workspace::default()
+        };
+        let entries = entries_for(Some(&workspace));
+        let agents: Vec<&str> = entries.iter().filter_map(|e| agent_provider(e)).collect();
+        assert!(agents.contains(&"claude") && agents.contains(&"codex"));
+        assert!(!agents.contains(&"opencode") && !agents.contains(&"hermes"), "ACP agents do not run over ssh yet");
+        assert!(entries.iter().any(|e| e == SHELL) && entries.iter().any(|e| e == FILES));
+        assert_eq!(title(SHELL, false, &Locale::new("ko")).as_deref(), Some(Locale::new("ko").get("workspace.newTerminal").as_str()));
+    }
 
     /// `AddPaneMenuVerification.TheMenuEndsWithTheThreeWaysToAddAWorkspace`.
     #[test]

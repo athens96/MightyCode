@@ -94,9 +94,9 @@ impl TerminalWindow for Opened {
 /// Where the sign-in pane goes: the active workspace when it is on this computer, else the first that is (Swift `startCLILogin`);
 /// None when there is none.
 pub fn local_workspace(snapshot: &mighty_core::AppSnapshot) -> Option<String> {
-    let local = |id: &str| snapshot.workspace(id).is_some_and(|w| w.remote.is_none());
+    let local = |id: &str| snapshot.workspace(id).is_some_and(|w| w.is_local());
     let active = snapshot.active_workspace_id.clone().filter(|id| local(id));
-    active.or_else(|| snapshot.workspaces().iter().find(|w| w.remote.is_none()).map(|w| w.id().to_string()))
+    active.or_else(|| snapshot.workspaces().iter().find(|w| w.is_local()).map(|w| w.id().to_string()))
 }
 
 impl TerminalLauncher for PaneSignIn {

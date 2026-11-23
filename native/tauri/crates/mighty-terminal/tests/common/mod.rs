@@ -117,7 +117,7 @@ impl Fixture {
     }
 
     pub fn pane(&self, kind: PaneKind, folder: Option<PathBuf>) -> Arc<TerminalPane> {
-        let options = PaneOptions { id: "pane".into(), kind, folder, enabled: true, no_profile: true };
+        let options = PaneOptions { id: "pane".into(), kind, folder, enabled: true, no_profile: true, remote: None };
         TerminalPane::new(options, self.ports(), self.window.clone())
     }
 

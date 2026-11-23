@@ -132,6 +132,8 @@ pub struct RunManagerOptions {
     pub powershell_commands: Option<String>,
     /// Optional shared memory lookup (`MC-13`) resolved per workspace when `StartRunRequest::memory_context` was not pre-populated.
     pub memory_for_workspace: Option<WorkspaceMemoryReader>,
+    /// MC-33: how an SSH workspace's folder is reached (the app's machine list). None: an SSH workspace's run is refused.
+    pub ssh: Option<crate::ssh::SshResolver>,
 }
 
 impl RunManagerOptions {
@@ -153,6 +155,7 @@ impl RunManagerOptions {
             hermes_session: None,
             powershell_commands: None,
             memory_for_workspace: None,
+            ssh: None,
         }
     }
 }
@@ -1674,6 +1677,53 @@ impl Exec {
         self.parser.receive_mod(value);
     }
 
+    /// MC-33: an agent run of an SSH workspace: the provider's CLI by its bare name on the far side's login `PATH`, with the arguments
+    /// a local run has minus what only this computer has (the Mods plugin folder and its bridge, the per-pane MCP servers, attachments'
+    /// local copies). Claude's approval channel works through ssh's pipes as it does locally.
+    fn ssh_launch(
+        &self,
+        ssh: &crate::ssh::SshLaunch,
+        request: &StartRunRequest,
+        environment: &mut BTreeMap<String, String>,
+        input: &mut String,
+        interactive: &mut bool,
+    ) -> std::result::Result<mighty_platform::SpawnRequest, Failure> {
+        let provider = request.provider.as_str();
+        if !crate::ssh::supported_provider(provider) {
+            return Err(Failure::Error(strings::get_with("ssh.run.error.provider", &[("name", providers::name(provider))])));
+        }
+        if request.attachment_list().is_some_and(|files| !files.is_empty()) {
+            return Err(Failure::Error(strings::get("ssh.run.error.attachments")));
+        }
+        let mut launch = request.clone();
+        if provider == "gemini" {
+            *input = crate::checklist::with_instruction(input, request);
+            launch.checklist = false;
+            if let Some(mem) = crate::model::memory_block(request.memory_context.as_deref()) {
+                *input = format!("{input}\n\n{mem}");
+                launch.memory_context = None;
+            }
+        }
+        if provider == "pi" {
+            if let Some(mem) = crate::model::memory_block(request.memory_context.as_deref()) {
+                *input = format!("{input}\n\n{mem}");
+            }
+            *input = ProviderInput::pi_startup(input, &[]);
+        }
+        let mut arguments = providers::arguments(&launch, "", None)?;
+        crate::ssh::without_local_plugin(&mut arguments);
+        *interactive = self.inner.options.permission_requested.is_some() && provider == "claude";
+        if *interactive {
+            ProviderInput::host_prompts(&mut arguments);
+            environment.insert("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS".into(), "1".into());
+        }
+        let effort = request.settings().effort;
+        if provider == "claude" && effort != "default" {
+            environment.insert("CLAUDE_CODE_EFFORT_LEVEL".into(), effort);
+        }
+        ssh.run_request(providers::executable(provider), &arguments, environment).map_err(Failure::Error)
+    }
+
     async fn execute(
         self: &Arc<Self>,
         mod_connection: &mut Option<Arc<Connection>>,
@@ -1695,13 +1745,19 @@ impl Exec {
         if workspace.remote.is_some() {
             return Err(Failure::Error(strings::get("run.error.approvedWorkspaceOnly")));
         }
+        // MC-33: an SSH workspace's CLI runs on the far side; this computer owns the `ssh` that carries it.
+        let ssh = match (&workspace.ssh, &inner.options.ssh) {
+            (None, _) => None,
+            (Some(_), None) => return Err(Failure::Error(strings::get("ssh.run.error.unavailable"))),
+            (Some(_), Some(resolve)) => Some(resolve(&workspace).map_err(Failure::Error)?),
+        };
         if request.kind == "claude"
             && request.memory_context.is_none()
             && let Some(lookup) = &inner.options.memory_for_workspace
         {
             request.memory_context = lookup(&workspace);
         }
-        if let Some(folder) = &request.working_folder {
+        if let Some(folder) = request.working_folder.as_ref().filter(|_| ssh.is_none()) {
             if !Path::new(folder).is_dir() {
                 return Err(Failure::Error(strings::get("run.blocked.worktreeMissing")));
             }
@@ -1759,7 +1815,8 @@ impl Exec {
         let mut hermes_notice: Option<String> = None;
         let mut hermes_questions = QuestionTool::default();
         // Read once: the launch below must quote the arguments PowerShell was given, never hand its text to cmd /s /c.
-        let power_shell = inner.options.powershell_commands.as_deref().filter(|_| request.kind == "shell" && os::windows());
+        let power_shell =
+            inner.options.powershell_commands.as_deref().filter(|_| request.kind == "shell" && os::windows() && ssh.is_none());
         let launch: mighty_platform::SpawnRequest = if let Some(system) = power_shell {
             let (binary, arguments) = power_shell_launch(&request.input, system).map_err(Failure::Error)?;
             // The command runs in the shared folder: nothing there may stand in for a program it names.
@@ -1769,6 +1826,12 @@ impl Exec {
                 .processes()
                 .cli_request(Path::new(&binary), &arguments, Path::new(&workspace_path), &shell_environment)
                 .map_err(|e| Failure::Error(e.to_string()))?
+        } else if let Some(ssh) = &ssh {
+            if request.kind == "shell" {
+                ssh.shell_request(&request.input, &environment)
+            } else {
+                self.ssh_launch(ssh, &request, &mut environment, &mut input, &mut interactive)?
+            }
         } else if request.kind == "shell" {
             providers.processes().shell_request(&request.input, Path::new(&workspace_path), &environment)
         } else {

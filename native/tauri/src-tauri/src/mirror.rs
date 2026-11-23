@@ -362,6 +362,7 @@ pub fn frame(host: &Host, snapshot: &AppSnapshot, model: &mut ShellModel) {
                 connected,
                 known: connections.iter().any(|c| c.id == id),
                 help: error.or(detail).unwrap_or_else(|| l.get_with("remote.mirror.serverHelp", &[("name", &name)])),
+                ssh: false,
                 id,
             }
         })

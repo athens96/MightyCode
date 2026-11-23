@@ -187,6 +187,11 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
     { label: t('paneWorktree.menu.copy'), action: () => call('workspaceWorktree', { workspaceId: workspace.id, action: 'copy' }) },
     { label: t('paneWorktree.menu.list'), action: () => call('workspaceWorktree', { workspaceId: workspace.id, action: 'list' }) },
   );
+  else if (workspace.ssh) items.push(
+    { separator: true },
+    // MC-33: an SSH machine's files, read through ssh (read-only).
+    { label: t('menu.showFiles'), action: () => call('openFiles', { workspaceId: workspace.id }) },
+  );
   else if (import.meta.env.MODE === 'tauri') items.push(
     ...(items.length > 0 ? [{ separator: true }] : []),
     { label: t('sharedMemory.open'), action: () => window.dispatchEvent(new CustomEvent('mighty:open-shared-memory', { detail: { workspaceId: workspace.id, paneId: null } })) },
@@ -258,10 +263,14 @@ function ServerHeader({ server }: { server: RemoteServer }) {
   const call = useCall();
   const menu = useMenu();
   const items: MenuItem[] = [];
-  if (server.known && server.connected) {
+  // MC-33: an SSH machine: its connection test and the SSH settings (where a folder of it is opened).
+  if (server.ssh) {
+    if (server.known) items.push({ label: t('ssh.menu.test'), icon: <Icon name="refresh-cw" size={12} />, action: () => call('sshMachineTest', { id: server.id }) });
+    items.push({ label: t('ssh.menu.settings'), icon: <Icon name="settings" size={12} />, action: () => call('sshSettings') });
+  } else if (server.known && server.connected) {
     items.push({ label: t('remote.mirror.disconnect'), icon: <Icon name="circle-x" size={12} />, action: () => call('serverDisconnect', { id: server.id }) });
   }
-  items.push({ label: t('remote.mirror.settings'), icon: <Icon name="settings" size={12} />, action: () => call('connectRemote') });
+  if (!server.ssh) items.push({ label: t('remote.mirror.settings'), icon: <Icon name="settings" size={12} />, action: () => call('connectRemote') });
   return (
     <div className="sidebar-server" title={server.help} data-testid={'sidebar-remote-server-' + server.id} aria-label={server.title + (server.state ? ', ' + server.state : '')}>
       <span className={'sidebar-server-dot tone-bg-' + server.tone} aria-hidden="true" />
@@ -270,7 +279,7 @@ function ServerHeader({ server }: { server: RemoteServer }) {
         {server.line && <span className="sidebar-server-line mono">{server.line}</span>}
       </span>
       <span className="sidebar-server-actions">
-        {server.known && !server.connected && (
+        {server.known && !server.connected && !server.ssh && (
           <button type="button" className="sidebar-server-connect" title={t('tooltip.sidebar.serverConnect', { server: server.title })}
             aria-label={`${server.title} ${t('remote.mirror.connect')}`} data-testid={'sidebar-remote-server-connect-' + server.id}
             onClick={() => call('serverConnect', { id: server.id })}>

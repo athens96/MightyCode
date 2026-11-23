@@ -358,6 +358,7 @@ mod tests {
             title: String::new(),
             directory: String::new(),
             grid: String::new(),
+            reconnect: false,
         };
         assert!(!natives.post("pane", &TerminalMessage::Footer { footer }), "the page draws the footer");
         let pane = || "pane".to_string();
@@ -440,6 +441,7 @@ mod tests {
                 folder: Some(std::env::temp_dir()),
                 enabled: true,
                 no_profile: true,
+                remote: None,
             };
             let pane = mighty_terminal::TerminalPane::new(options, ports, Arc::new(ToView(natives.clone())));
             let target = pane.clone();

@@ -304,8 +304,14 @@ async fn output_taken_before_a_restart_never_follows_its_reset() {
     let (entered_sender, entered) = mpsc::channel();
     let (release, release_receiver) = mpsc::channel();
     let held = Arc::new(Held { window: fixture.window.clone(), hold: Mutex::new(None) });
-    let options =
-        PaneOptions { id: "pane".into(), kind: PaneKind::Shell, folder: Some(fixture.folder.clone()), enabled: true, no_profile: true };
+    let options = PaneOptions {
+        id: "pane".into(),
+        kind: PaneKind::Shell,
+        folder: Some(fixture.folder.clone()),
+        enabled: true,
+        no_profile: true,
+        remote: None,
+    };
     let pane = TerminalPane::new(options, fixture.ports(), held.clone());
     pane.handle_message(&json!({"type": "ready", "columns": 80, "rows": 24})).await;
     pane.handle_message(&json!({"type": "input", "text": "old shell output"})).await;
@@ -372,8 +378,14 @@ async fn a_resize_while_the_shell_starts_reaches_its_terminal() {
     let release = Arc::new(tokio::sync::Notify::new());
     let mut ports = fixture.ports();
     ports.ptys = Arc::new(SlowOpen { inner: fixture.ptys.clone(), release: release.clone() });
-    let options =
-        PaneOptions { id: "pane".into(), kind: PaneKind::Shell, folder: Some(fixture.folder.clone()), enabled: true, no_profile: true };
+    let options = PaneOptions {
+        id: "pane".into(),
+        kind: PaneKind::Shell,
+        folder: Some(fixture.folder.clone()),
+        enabled: true,
+        no_profile: true,
+        remote: None,
+    };
     let pane = TerminalPane::new(options, ports, fixture.window.clone());
     pane.open();
     let starting = {
@@ -388,4 +400,65 @@ async fn a_resize_while_the_shell_starts_reaches_its_terminal() {
     assert_eq!((opened.len(), opened[0].size.rows), (1, 27), "opened at the first grid");
     assert_eq!(fixture.ptys.sizes().last().map(|s| (s.columns, s.rows)), Some((106, 29)), "then set to the grid the view settled on");
     assert_eq!(pane.footer().grid, "106×29");
+}
+
+/// MC-33: an SSH pane's terminal runs the host's ssh instead of the local shell, offers the dev-server ports its output names, and a
+/// lost connection (ssh's 255) reads as such with the restart button turned into 다시 연결.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_ssh_pane_runs_ssh_and_says_when_the_connection_went() {
+    let fixture = Fixture::new("ssh-pane");
+    let remote = mighty_terminal::RemoteShell {
+        program: "/usr/bin/ssh".into(),
+        args: vec!["-tt".into(), "--".into(), "devbox".into(), "cd '/srv/app' && exec $SHELL -l".into()],
+        title: "ssh · devbox".into(),
+        directory: "devbox:/srv/app".into(),
+    };
+    let options = PaneOptions {
+        id: "pane".into(),
+        kind: PaneKind::Shell,
+        folder: Some(fixture.folder.clone()),
+        enabled: true,
+        no_profile: true,
+        remote: Some(remote.clone()),
+    };
+    let pane = TerminalPane::new(options, fixture.ports(), fixture.window.clone());
+    assert_eq!(pane.footer().title, "ssh · devbox");
+    assert_eq!(pane.footer().directory, "devbox:/srv/app");
+    pane.handle_message(&json!({"type": "ready", "columns": 80, "rows": 24})).await;
+    until(|| !fixture.ptys.opened().is_empty(), 5_000, "the terminal opens").await;
+    let opened = fixture.ptys.opened()[0].clone();
+    assert_eq!(opened.program, remote.program, "the local ssh runs, not the local shell");
+    assert_eq!(opened.args, remote.args);
+    assert_eq!(opened.cwd, fixture.folder, "in the workspace's stand-in folder");
+
+    pane.handle_message(&json!({"type": "input", "text": "  Local:   http://localhost:\u{1b}[1m5173\u{1b}[22m/"})).await;
+    until(
+        || {
+            pane.flush();
+            pane.seen_ports() == [5173]
+        },
+        5_000,
+        "the dev server's port is read through its colours",
+    )
+    .await;
+
+    fixture.ptys.exit(0, 255);
+    until(|| pane.lost(), 5_000, "the lost connection").await;
+    let footer = pane.footer();
+    assert!(footer.reconnect && footer.restart, "the restart button reads 다시 연결");
+    assert_eq!(footer.notice.as_deref(), Some(mighty_core::locale::Locale::new("en").get("ssh.terminal.lost").as_str()));
+    pane.dispose().await;
+}
+
+/// A local shell's exit code 255 is only an exit code.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_local_shells_255_is_no_lost_connection() {
+    let fixture = Fixture::new("local-255");
+    let pane = fixture.pane(PaneKind::Shell, Some(fixture.folder.clone()));
+    pane.handle_message(&json!({"type": "ready", "columns": 80, "rows": 24})).await;
+    until(|| !fixture.ptys.opened().is_empty(), 5_000, "the terminal opens").await;
+    fixture.ptys.exit(0, 255);
+    until(|| pane.footer().restart_enabled, 5_000, "the exit").await;
+    assert!(!pane.lost() && !pane.footer().reconnect);
+    pane.dispose().await;
 }

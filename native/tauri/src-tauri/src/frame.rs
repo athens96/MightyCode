@@ -384,6 +384,8 @@ pub(crate) async fn close_session(host: &Arc<Host>, id: &str) -> Result<(), Stri
     host.view().update(|state| state.sessions_mut().retain(|pane| pane.id() != id))?;
     // A worktree pane's worktree goes with it, or is kept on the workspace when work or children are left (W9-I, C# `ClosePane`).
     crate::pane_worktree::after_close(host, id, closed).await;
+    // MC-33: the pane's port forwards go with it.
+    crate::ssh::forward::close(host, id, None).await;
     Ok(())
 }
 

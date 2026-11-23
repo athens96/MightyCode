@@ -67,6 +67,7 @@ pub mod questionnaire;
 pub mod resume;
 pub mod run_log;
 pub mod service;
+pub mod ssh;
 pub mod stream;
 pub mod strings;
 pub mod text_json;

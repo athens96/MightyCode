@@ -426,6 +426,31 @@ pub struct PaneInfo {
     /// MC-29: the compare runs this pane started, each summed up for its card (src-tauri compare.rs fills the children's states).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub compares: Vec<PaneCompare>,
+    /// MC-33: an SSH workspace's pane: its machine and folder, the dev-server ports its output named and the forwards open (src-tauri
+    /// ssh/forward.rs fills it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<PaneSsh>,
+}
+
+/// MC-33: the SSH bar over a pane.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PaneSsh {
+    pub host: String,
+    pub dir: String,
+    pub ports: Vec<PaneSshPort>,
+    /// The terminal's connection went (its notice offers 다시 연결).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub lost: bool,
+}
+
+/// MC-33: a far side's port: offered (no `local`), or forwarded to this computer's `local`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PaneSshPort {
+    pub remote: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local: Option<u16>,
 }
 
 /// MC-29: a compare run as its card under the pane's row shows it: the group, the request's first line, how many children and how
@@ -499,6 +524,9 @@ pub struct RemoteServer {
     /// A saved connection (one that can be connected or disconnected from here).
     pub known: bool,
     pub help: String,
+    /// MC-33: an SSH machine's header (its menu tests the connection and opens the SSH settings).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ssh: bool,
 }
 
 /// C# `MainWindow.WebPaneInfo`.
@@ -551,6 +579,7 @@ pub fn pane_info(locale: &Locale, s: &RunSession, attention: Attention, now: Dat
             title: link.title.clone().unwrap_or_default(),
         }),
         compares: Vec::new(),
+        ssh: None,
     }
 }
 
@@ -1004,6 +1033,9 @@ pub struct SidebarWorkspace {
     pub server: Option<String>,
     /// A remote mirror's workspace: the host's own, named and shared there (W9-J).
     pub mirror: bool,
+    /// MC-33: a folder on an SSH machine (listed under that machine's header).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ssh: bool,
     pub counts: Counts,
     pub expanded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1464,6 +1496,7 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
                 local: w.remote.is_none(),
                 server: w.remote.as_ref().and_then(|r| r.connection_id.clone()),
                 mirror: w.remote.as_ref().is_some_and(|r| r.mirror),
+                ssh: w.ssh.is_some(),
                 counts: badges(sessions.iter().copied().filter(|s| s.workspace_id() == w.id()), &attention),
                 expanded: is_open,
                 items: is_open.then(|| sidebar_items(locale, state, w.id(), context.children, &attention)),

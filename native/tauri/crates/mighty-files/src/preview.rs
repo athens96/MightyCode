@@ -75,6 +75,48 @@ pub fn load(root: &Path, relative: &str, handles: &dyn FileHandles, locale: &Loc
     }
 }
 
+/// MC-33: a file read on an SSH machine (its first bytes, up to the remote read's cap) classified and shown as [`load`] shows a local
+/// one. `longer` says the file went on past what was read: its text is marked cut, a picture is too large to show. No disk hash: the
+/// remote preview is read-only.
+pub fn from_bytes(relative: &str, bytes: Vec<u8>, longer: bool, locale: &Locale) -> PreviewData {
+    let name = relative.rsplit('/').next().unwrap_or("").to_string();
+    let size = bytes.len() as u64;
+    let mut cursor = std::io::Cursor::new(bytes);
+    let read = (|| -> std::io::Result<PreviewData> {
+        let kind = classify::classify(&name, &classify::read_head(&mut cursor)?);
+        Ok(match kind {
+            PreviewKind::Image => {
+                let mut data = PreviewData::new(&name, relative, size, None, PreviewKind::Unsupported);
+                if longer {
+                    data.reason = Some(locale.get("files.preview.tooLargeImage"));
+                    return Ok(data);
+                }
+                let bytes = classify::read_prefix(&mut cursor, classify::MAXIMUM_IMAGE_BYTES as usize)?;
+                if classify::file_extension(&name) == "svg" && classify::svg_loads_external_content(&bytes) {
+                    data.reason = Some(locale.get("files.preview.svgExternal"));
+                    return Ok(data);
+                }
+                PreviewData { image_bytes: Some(bytes), ..PreviewData::new(&name, relative, size, None, kind) }
+            }
+            PreviewKind::Source(_) | PreviewKind::Markdown => {
+                let text = classify::read_text(&mut cursor, classify::MAXIMUM_TEXT_BYTES)?;
+                PreviewData {
+                    text: Some(text.text),
+                    encoding: Some(text.encoding),
+                    truncated: text.truncated || longer,
+                    markdown_renderable: kind == PreviewKind::Markdown && !longer && size <= classify::MAXIMUM_MARKDOWN_RENDER_BYTES,
+                    ..PreviewData::new(&name, relative, size, None, kind)
+                }
+            }
+            PreviewKind::Unsupported => PreviewData::new(&name, relative, size, None, PreviewKind::Unsupported),
+        })
+    })();
+    read.unwrap_or_else(|_| PreviewData {
+        failure: Some(locale.get("files.preview.failed")),
+        ..PreviewData::new(&name, relative, size, None, PreviewKind::Unsupported)
+    })
+}
+
 /// The opened file classified and read.
 fn read(
     file: &mut std::fs::File,
@@ -118,4 +160,24 @@ fn read(
         }
         PreviewKind::Unsupported => PreviewData::new(name, relative, size, modified, PreviewKind::Unsupported),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MC-33: a remote file's bytes are shown as a local file's: text decoded, a cut file marked, a picture past the cap refused.
+    #[test]
+    fn remote_bytes_are_classified_like_a_local_file() {
+        let locale = Locale::new("en");
+        let text = from_bytes("src/main.rs", b"fn main() {}\n".to_vec(), false, &locale);
+        assert!(matches!(text.kind, PreviewKind::Source(_)));
+        assert_eq!(text.text.as_deref(), Some("fn main() {}\n"));
+        assert!(!text.truncated && text.disk_hash.is_none() && text.name == "main.rs");
+        let cut = from_bytes("README.md", b"# Title\n".to_vec(), true, &locale);
+        assert!(cut.truncated && !cut.markdown_renderable);
+        let picture = from_bytes("a.png", b"\x89PNG\r\n\x1a\n0000".to_vec(), true, &locale);
+        assert_eq!(picture.kind, PreviewKind::Unsupported);
+        assert!(picture.reason.is_some());
+    }
 }

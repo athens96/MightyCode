@@ -298,6 +298,12 @@ impl PaneEvents for HostEvents {
         }
     }
 
+    fn ssh_changed(&self, _pane: &str) {
+        if let Some(host) = self.host.upgrade() {
+            host.shell_dirty();
+        }
+    }
+
     fn light(&self) -> bool {
         self.host.upgrade().is_some_and(|host| host.view().snapshot.theme() == "light")
     }
@@ -431,6 +437,26 @@ fn local_folder(state: &AppSnapshot, workspace: &str) -> Option<PathBuf> {
     (workspace.remote.is_none() && !workspace.path().is_empty()).then(|| PathBuf::from(workspace.path()))
 }
 
+/// MC-33: an SSH workspace's terminal: its stand-in folder and the ssh that runs the far side's shell; no terminal (the pane says
+/// why) when the machine cannot be reached from here (gone, no local ssh).
+fn ssh_shell(
+    host: &Host,
+    workspace: &mighty_core::model::Workspace,
+    pane: &str,
+) -> (Option<PathBuf>, Option<mighty_terminal::RemoteShell>) {
+    let Ok(launch) = crate::ssh::launch_for(host, workspace) else { return (None, None) };
+    let shell = crate::ssh::shell_for(host, workspace, pane);
+    let request = launch.pty_request(&shell, Default::default(), Default::default());
+    let host_name = workspace.ssh.as_ref().map(|r| r.host.clone()).unwrap_or_default();
+    let remote = mighty_terminal::RemoteShell {
+        program: request.program,
+        args: request.args,
+        title: format!("ssh · {host_name}"),
+        directory: format!("{host_name}:{}", launch.dir),
+    };
+    (Some(launch.local), Some(remote))
+}
+
 /// C# `DelegationPanes.IsWorkingFolder`: a delegated child's worktree, a full path of at most 4,096 characters.
 fn is_working_folder(path: &str) -> bool {
     wire::utf16_len(path) <= 4096 && !path.contains('\0') && Path::new(path).is_absolute()
@@ -561,31 +587,47 @@ impl Terminals {
     pub fn pane(&self, host: &Host, id: Option<&str>) -> Result<Arc<TerminalPane>, String> {
         let not_found = || "Session not found.".to_string();
         let id = id.ok_or_else(not_found)?;
-        let (kind, folder) = {
+        let (kind, folder, remote) = {
             let view = host.view();
             let session = view.snapshot.session(id).filter(|s| matches!(s.kind(), "shell" | AGENT_TERMINAL)).ok_or_else(not_found)?;
             let kind =
                 if session.kind() == "shell" { PaneKind::Shell } else { PaneKind::Agent { owner: session.owner_session_id.clone() } };
-            // A terminal opened "in this worktree" starts in the pane's folder (W9-I, C# PaneWorktree.cs); one whose folder is gone
-            // starts in the workspace.
-            let folder = match session.working_folder.as_deref() {
-                Some(path) if kind == PaneKind::Shell && is_working_folder(path) && Path::new(path).is_dir() => Some(PathBuf::from(path)),
-                _ => local_folder(&view.snapshot, session.workspace_id()),
-            };
-            (kind, folder)
+            // MC-33: an SSH workspace's terminal is the local ssh running the far side's shell (or tmux) in the remote folder.
+            if kind == PaneKind::Shell
+                && let Some(workspace) = view.snapshot.workspace(session.workspace_id()).filter(|w| w.is_ssh()).cloned()
+            {
+                drop(view);
+                let (folder, remote) = ssh_shell(host, &workspace, id);
+                (kind, folder, remote)
+            } else {
+                // A terminal opened "in this worktree" starts in the pane's folder (W9-I, C# PaneWorktree.cs); one whose folder is gone
+                // starts in the workspace.
+                let folder = match session.working_folder.as_deref() {
+                    Some(path) if kind == PaneKind::Shell && is_working_folder(path) && Path::new(path).is_dir() => {
+                        Some(PathBuf::from(path))
+                    }
+                    _ => local_folder(&view.snapshot, session.workspace_id()),
+                };
+                (kind, folder, None)
+            }
         };
         let mut panes = lock(&self.panes);
         if let Some(pane) = panes.get(id).filter(|pane| *pane.kind() == kind) {
             return Ok(pane.clone());
         }
         let enabled = host.smoke.is_none() || lock(&self.smoke_allowed).contains(id);
-        let options = PaneOptions { id: id.to_string(), kind, folder, enabled, no_profile: host.smoke.is_some() };
+        let options = PaneOptions { id: id.to_string(), kind, folder, enabled, no_profile: host.smoke.is_some(), remote };
         let pane = TerminalPane::new(options, self.ports.clone(), self.events.clone());
         if let Some(earlier) = panes.insert(id.to_string(), pane.clone()) {
             self.close_later(async move { earlier.dispose().await });
         }
         self.wake.set_panes(panes.len());
         Ok(pane)
+    }
+
+    /// MC-33: a shell pane's terminal when it was made (never makes one).
+    pub fn existing(&self, id: &str) -> Option<Arc<TerminalPane>> {
+        lock(&self.panes).get(id).cloned()
     }
 
     /// An agent pane's terminal, made the first time in `directory` (C# `agentTerminals`; Agent IO's `run_in_terminal` makes it too,

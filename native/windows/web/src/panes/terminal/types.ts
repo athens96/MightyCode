@@ -16,6 +16,8 @@ export interface TerminalFooter {
   title: string;
   directory: string;
   grid: string;
+  /** MC-33: an SSH pane whose connection went: the restart button reads 다시 연결. */
+  reconnect?: boolean;
 }
 
 /** host → page. */

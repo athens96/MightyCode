@@ -17,6 +17,7 @@ import { drawsDiagram } from '../pending/requests';
 import { useCall, useMenu, type MenuItem } from '../shell/parts';
 import { WorktreeBar } from './WorktreeBar';
 import { MirrorStrip } from './MirrorStrip';
+import { SshBar } from './SshBar';
 import { ForkStrip, Opinions } from './Opinions';
 import { logText } from './log';
 
@@ -80,14 +81,17 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
   // A view switch clicked a moment ago shows at once (natural submit B4); the same object while none waits for the host.
   const session = useShownSession(saved);
   // Another computer's pane (the remote mirror): its strip under the header; a remote pane's files are on its host: no bubble opens there.
-  const { header, mirror, agentTerminal, remote } = useStoreSelector(
+  const { header, mirror, agentTerminal, remote, ssh } = useStoreSelector(
     (state) => {
       const info = state.shell?.panes.find((p) => p.id === session.id);
+      const workspace = state.snapshot?.workspaces.find((w) => w.id === session.workspaceId);
       return {
         header: state.composers[session.id]?.header,
         mirror: info?.mirror,
         agentTerminal: Boolean(info?.agentTerminal),
-        remote: Boolean(state.snapshot?.workspaces.find((w) => w.id === session.workspaceId)?.remote),
+        // An SSH machine's files are read through the files pane only (MC-33): no reference bubble reads them here.
+        remote: Boolean(workspace?.remote || workspace?.ssh),
+        ssh: info?.ssh,
       };
     },
     shallowEqual,
@@ -166,6 +170,7 @@ export const PaneView = memo(function PaneView({ session: saved }: { session: Ru
         </span>
       </header>
       {mirror && <MirrorStrip id={session.id} strip={mirror} />}
+      {ssh && <SshBar paneId={session.id} ssh={ssh} />}
       {session.paneWorktree && <WorktreeBar key={'worktree-' + session.id} session={session} />}
       {session.forkedFrom && <ForkStrip link={session.forkedFrom} />}
       {body}

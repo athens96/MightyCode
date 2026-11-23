@@ -270,14 +270,26 @@ fn require_files(host: &Host, args: &Value) -> Result<(String, String), String> 
     files_target(host, args)?.ok_or_else(|| host.locale.get("remote.windows.workspace.paneUnavailable"))
 }
 
-/// C# `WebLoadFolder`: one folder's listing, read off the page's thread, applied to the workspace's tree.
-async fn load_folder(files: &Files, locale: Locale, workspace: &str, root: &str, path: &str) {
-    let (root, folder) = (PathBuf::from(root), path.to_string());
-    let listing: Result<Listing, ListError> =
-        tauri::async_runtime::spawn_blocking(move || listing::list(&folder, &root, listing::MAXIMUM_ENUMERATED_NAMES))
-            .await
-            .unwrap_or(Err(ListError::Unreadable));
+/// C# `WebLoadFolder`: one folder's listing, read off the page's thread, applied to the workspace's tree. An SSH workspace's folder
+/// is read through ssh (MC-33, read-only).
+async fn load_folder(host: &Host, files: &Files, workspace: &str, root: &str, path: &str) {
+    let locale = host.locale;
+    let listing: Result<Listing, ListError> = match crate::ssh::files::launch(host, workspace) {
+        Some(Ok(launch)) => crate::ssh::files::list(host, &launch, path).await,
+        Some(Err(_)) => Err(ListError::Unreadable),
+        None => {
+            let (root, folder) = (PathBuf::from(root), path.to_string());
+            tauri::async_runtime::spawn_blocking(move || listing::list(&folder, &root, listing::MAXIMUM_ENUMERATED_NAMES))
+                .await
+                .unwrap_or(Err(ListError::Unreadable))
+        }
+    };
     lock(&files.trees).entry(workspace.to_string()).or_default().apply(path, listing, &locale);
+}
+
+/// MC-33: the files pane's workspace is an SSH machine's: its files are read-only here.
+fn is_ssh(host: &Host, workspace: &str) -> bool {
+    host.view().snapshot.workspace(workspace).is_some_and(|w| w.is_ssh())
 }
 
 fn files_model(files: &Files, locale: &Locale, workspace: &str) -> Value {
@@ -735,10 +747,10 @@ pub fn register(methods: &mut Registry) {
             (tree.children.contains_key(""), wanted)
         });
         if !loaded {
-            load_folder(&files, host.locale, &workspace, &root, "").await;
+            load_folder(&host, &files, &workspace, &root, "").await;
         }
         for path in wanted {
-            load_folder(&files, host.locale, &workspace, &root, &path).await;
+            load_folder(&host, &files, &workspace, &root, &path).await;
         }
         Ok(files_model(&files, &host.locale, &workspace))
     });
@@ -757,7 +769,7 @@ pub fn register(methods: &mut Registry) {
             }
         });
         if opened {
-            load_folder(&files, host.locale, &workspace, &root, &path).await;
+            load_folder(&host, &files, &workspace, &root, &path).await;
         }
         Ok(files_model(&files, &host.locale, &workspace))
     });
@@ -771,7 +783,7 @@ pub fn register(methods: &mut Registry) {
         });
         folders.sort_by_key(|p| p.len());
         for folder in folders {
-            load_folder(&files, host.locale, &workspace, &root, &folder).await;
+            load_folder(&host, &files, &workspace, &root, &folder).await;
         }
         Ok(files_model(&files, &host.locale, &workspace))
     });
@@ -791,7 +803,7 @@ pub fn register(methods: &mut Registry) {
         let (workspace, root) = require_files(&host, &args)?;
         let files = state(&host)?;
         let targets = with_tree(&files, &workspace, FilePaneTree::refresh_targets);
-        let loads = targets.iter().map(|path| load_folder(&files, host.locale, &workspace, &root, path));
+        let loads = targets.iter().map(|path| load_folder(&host, &files, &workspace, &root, path));
         futures_join(loads).await;
         Ok(files_model(&files, &host.locale, &workspace))
     });
@@ -800,11 +812,22 @@ pub fn register(methods: &mut Registry) {
         let files = state(&host)?;
         let path = text(&args, "path").unwrap_or("").to_string();
         with_tree(&files, &workspace, |tree| tree.preview_path = Some(path.clone()));
+        if let Some(launch) = crate::ssh::files::launch(&host, &workspace) {
+            let locale = host.locale;
+            let data = match launch {
+                Ok(launch) => crate::ssh::files::preview(&host, &launch, &path, &locale).await,
+                Err(message) => mighty_files::preview::PreviewData {
+                    failure: Some(message),
+                    ..mighty_files::preview::from_bytes(&path, Vec::new(), false, &locale)
+                },
+            };
+            return Ok(model::file_preview(&path, &data, &locale, files.formats.as_ref(), files.ports.pdf.as_ref()));
+        }
         Ok(file_preview(files, host.locale, root, path).await)
     });
     methods.add("filesSave", |host: Arc<Host>, args| async move {
-        let (_, root) = require_files(&host, &args)?;
-        if !host.writes() && !host.may_touch_repo(Path::new(&root)) {
+        let (workspace, root) = require_files(&host, &args)?;
+        if is_ssh(&host, &workspace) || (!host.writes() && !host.may_touch_repo(Path::new(&root))) {
             return Ok(json!({
                 "ok": false,
                 "reason": "readOnly",
@@ -867,9 +890,12 @@ pub fn register(methods: &mut Registry) {
         })
     });
     methods.add("filesCheckDisk", |host: Arc<Host>, args| async move {
-        let (_, root) = require_files(&host, &args)?;
+        let (workspace, root) = require_files(&host, &args)?;
         let Some(path) = path_arg(&args) else { return Ok(json!({"status": "missing"})) };
         let expected = text(&args, "expectedHash").unwrap_or("").to_string();
+        if is_ssh(&host, &workspace) {
+            return Ok(json!({"status": "unchanged", "diskHash": expected}));
+        }
         let status = tauri::async_runtime::spawn_blocking(move || mighty_files::edit::check_disk(Path::new(&root), &path, &expected))
             .await
             .map_err(|e| e.to_string())?;
@@ -880,7 +906,10 @@ pub fn register(methods: &mut Registry) {
         })
     });
     methods.add("filesChanges", |host: Arc<Host>, args| async move {
-        let (_, root) = require_files(&host, &args)?;
+        let (workspace, root) = require_files(&host, &args)?;
+        if is_ssh(&host, &workspace) {
+            return Ok(Value::Null);
+        }
         let Some(path) = path_arg(&args) else { return Ok(Value::Null) };
         let resolving = root.clone();
         let Some(target) = tauri::async_runtime::spawn_blocking(move || reference::resolve(&path, &resolving, None)).await.ok().flatten()
@@ -893,7 +922,10 @@ pub fn register(methods: &mut Registry) {
         Ok(changes.map_or(Value::Null, |c| c.to_json()))
     });
     methods.add("filesShowInExplorer", |host: Arc<Host>, args| async move {
-        let (_, root) = require_files(&host, &args)?;
+        let (workspace, root) = require_files(&host, &args)?;
+        if is_ssh(&host, &workspace) {
+            return Ok(Value::Null);
+        }
         let files = state(&host)?;
         if let Some(path) = resolve(text(&args, "path").unwrap_or("").to_string(), root).await
             && let Some(Err(error)) = desktop(&files, move |desktop| desktop.reveal(&path)).await
@@ -904,7 +936,10 @@ pub fn register(methods: &mut Registry) {
     });
     // Its default app, as Windows' launcher opens it (refusing programs), only for a file that still resolves inside the workspace.
     methods.add("filesOpen", |host: Arc<Host>, args| async move {
-        let (_, root) = require_files(&host, &args)?;
+        let (workspace, root) = require_files(&host, &args)?;
+        if is_ssh(&host, &workspace) {
+            return Ok(json!(false));
+        }
         let files = state(&host)?;
         let Some(path) = resolve_file(text(&args, "path").unwrap_or("").to_string(), root).await else {
             return Ok(json!(false));
@@ -1206,7 +1241,7 @@ pub async fn open_file_in_pane(host: &Arc<Host>, workspace_id: &str, path: &str)
     }
     folders.sort_by_key(|p| p.len());
     for folder in folders {
-        load_folder(&files, host.locale, workspace_id, &root, &folder).await;
+        load_folder(host, &files, workspace_id, &root, &folder).await;
     }
     let message = json!({"kind": "files", "paneId": pane::pane_id(workspace_id), "path": path});
     host.push(&host.view(), "files", message.to_string());

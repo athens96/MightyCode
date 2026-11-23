@@ -645,6 +645,17 @@ impl Host {
         lock(&self.store).approve_remote(connection_id, workspace_id, name, path, host_name)
     }
 
+    /// MC-33: a folder on an SSH machine, as a workspace a save may write (ssh.rs); `local` makes its empty stand-in folder.
+    pub fn approve_ssh(
+        &self,
+        machine: &str,
+        host_name: &str,
+        dir: &str,
+        local: impl FnOnce(&str) -> String,
+    ) -> Option<mighty_core::model::Workspace> {
+        lock(&self.store).approve_ssh(machine, host_name, dir, local)
+    }
+
     /// Whether the app may write its profile: the write policy main.rs gave the store (startup.rs `write_policy`; W9: a release build by
     /// default, a development build only with `--allow-state-write`, never with `--read-only`).
     pub fn writes(&self) -> bool {
@@ -905,6 +916,9 @@ impl Host {
         let mut model = shell_model(snapshot, &context, layout_defaults);
         // The remote mirror's servers, strips and status words (mirror.rs, W9-J), read with the state locked.
         crate::mirror::frame(self, snapshot, &mut model);
+        // MC-33: the SSH machines' headers and their workspaces' rows (ssh.rs).
+        crate::ssh::frame(self, snapshot, &mut model);
+        crate::ssh::forward::decorate(self, snapshot, &mut model);
         // The agent panes with a terminal (terminal.rs): the header's button that reopens its pane.
         crate::terminal::mark_agent_terminals(self, &mut model);
         // MC-26: the panes waiting for the user, their ports and pull requests (attention.rs).

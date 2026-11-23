@@ -9,6 +9,8 @@ Mac이나 Windows 컴퓨터 두 대의 Mighty Code를 이으면, 한쪽에서 �
 - {{ui:settings.remote.viaPairing}}: 휴대폰처럼 한 번 페어링하고 Mighty 릴레이를 거쳐 연결합니다. Tailscale이 필요 없습니다. [페어링으로 연결](#pair)을 보세요.
 - {{ui:settings.remote.viaTailscale}}: 같은 [Tailscale](https://tailscale.com/kb/1017/install) 네트워크(tailnet) 안에서 주소와 연결 키로 바로 연결합니다. 이 컴퓨터의 창을 그 컴퓨터에서 실행하는 원격 창과 큰 첨부는 Tailscale로만 됩니다.
 
+상대 컴퓨터에 Mighty Code를 설치할 수 없다면 [SSH 머신](#ssh)으로 그 컴퓨터의 폴더에서 작업할 수 있습니다.
+
 모두 {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} 탭에서 합니다. 탭 맨 위에 안내 한 줄이 있고, 그 아래에 {{ui:settings.remote.shareTitle}} | {{ui:settings.remote.connectTitle}} | {{ui:settings.remote.phoneTab}} 탭이 있습니다. 안쪽 탭은 앱이 실행되는 동안만 기억합니다. 휴대폰 연결은 [휴대폰 원격](phone.md)을 보세요.
 
 ## 준비 {#prepare}
@@ -113,3 +115,35 @@ pi, opencode, Hermes 창은 아직 원격 워크스페이스에서 열 수 없�
 - {{ui:settings.remote.disconnectButton}} 단추는 그 연결의 실행을 멈추고 연결 정보는 남깁니다. 다시 쓰려면 {{ui:settings.remote.refreshButton}} 단추를 누르거나 원격 창에서 보냅니다. 연결 정보까지 지우려면 그 줄의 지우기 아이콘을 누릅니다.
 - Tailscale 호스트가 공유를 다시 시작했다면 새 키가 필요합니다. 같은 주소로 새 키를 넣어 연결하면 저장된 연결의 키가 바뀝니다.
 - 호스트 컴퓨터가 잠들거나 Mighty Code가 종료되면 새 작업을 보낼 수 없습니다.
+
+## SSH 머신 {#ssh}
+상대 컴퓨터에 아무것도 설치하지 않고 페어링도 없이, SSH로 그 컴퓨터의 폴더에서 터미널과 에이전트를 실행합니다. 개발 서버나 클라우드 VM, Linux 전용 도구가 있는 머신에 맞습니다.
+
+**준비**
+- 이 컴퓨터에 OpenSSH 클라이언트가 있어야 합니다. Mac에는 기본으로 있고, Windows는 "OpenSSH 클라이언트" 기능을 켭니다.
+- 로그인은 이 컴퓨터의 OpenSSH가 합니다. `~/.ssh/config`, ssh-agent, 키를 그대로 쓰고, 앱은 비밀번호나 키를 저장하지 않습니다. 비밀번호 없이 `ssh 호스트`로 들어갈 수 있게 해 두세요.
+- 처음 접속하는 머신은 터미널에서 `ssh 호스트`로 한 번 접속해 호스트 키를 확인하고 받아 둡니다. 앱은 호스트 키를 대신 받지 않습니다.
+
+**머신 추가**
+1. {{ui:menu.settings}} → {{ui:settings.remote.navTitle}} 탭의 {{ui:ssh.settings.sectionTitle}} 상자로 갑니다.
+2. {{ui:ssh.settings.fromConfig}} 메뉴에서 `~/.ssh/config`의 Host를 고르거나, `user@host:포트`를 입력하고 {{ui:ssh.settings.addButton}} 단추를 누릅니다. 와일드카드 Host와 `Match` 블록은 목록에 나오지 않습니다.
+3. {{ui:ssh.settings.test}} 단추를 누르면 비밀번호를 묻지 않고 접속해 OS, 로그인 셸, tmux 여부를 확인합니다. 연결할 수 없음, 로그인 거부, 모르는 호스트 키를 따로 알려 줍니다.
+4. 원격 폴더(`~/src/app`이나 `/srv/app`처럼 `~`나 `/`로 시작)를 입력하고 {{ui:ssh.settings.open}} 단추를 누르면 그 폴더가 워크스페이스로 열리고 터미널 창이 하나 생깁니다.
+
+머신은 사이드바에 "SSH · 이름" 머리글로 보이고, 그 아래에 그 머신의 워크스페이스가 있습니다. 머리글의 … 메뉴에서 {{ui:ssh.menu.test}}를 할 수 있습니다.
+
+**되는 것**
+- 터미널 창: 그 머신의 로그인 셸이 그 폴더에서 열립니다.
+- 에이전트 창: Claude, Codex, Antigravity, pi는 그 머신에 설치된 CLI가 그 머신의 계정으로 실행합니다. 승인·질문 카드는 이 앱에 나타납니다. CLI가 그 머신에 없으면 실행이 오류로 끝납니다.
+- 파일 창: 그 머신의 파일을 읽기만 합니다. 파일당 1 MiB까지 미리 봅니다.
+- 같은 머신의 창들은 Mac에서 SSH 연결 하나를 함께 씁니다. Windows의 OpenSSH는 이를 지원하지 않아 창마다 따로 연결합니다.
+- 로컬로 연결: 창의 출력에 `localhost:3000` 같은 개발 서버 주소가 나오면 창 위 SSH 띠에 로컬로 연결 단추가 생깁니다. 누르면 이 컴퓨터의 빈 포트로 이어 주고, 그 주소를 눌러 브라우저에서 엽니다. 창을 닫으면 연결도 끊깁니다.
+- [백그라운드 작업](settings.md#general)을 켜 두면 앱을 닫아도 SSH 창의 작업이 이어집니다.
+
+**연결이 끊기면**
+- 터미널 창에 "SSH 연결이 끊겼습니다"와 {{ui:ssh.terminal.reconnect}} 단추가 나옵니다.
+- 그 머신에 tmux가 있으면 {{ui:ssh.settings.tmux}} 스위치가 켜지고, 터미널 창은 tmux 세션 안에서 실행됩니다. 연결이 끊겨도 작업은 그 머신에서 계속되고, 다시 연결하면 같은 세션에 이어 붙습니다. 스위치는 머신마다 끌 수 있습니다.
+
+**아직 안 되는 것**
+- 원격 파일 편집, 원격 git 변경 보기, 작업 지도, 워크트리, 마이티 오케스트레이션, 첨부, opencode·Hermes 창.
+- 그 머신에 Mighty Code 헤드리스 서버를 설치하는 방식은 다음 버전에서 다룹니다.

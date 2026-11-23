@@ -504,6 +504,39 @@ pub struct Workspace {
     /// MC-31: the issue trackers this workspace uses beyond MightyWork and GitHub (Linear, Jira, GitLab), one record each. Never a
     /// token: tokens live only in the OS keychain. Lenient list.
     pub issue_trackers: Option<Vec<IssueTrackerConfig>>,
+    /// MC-33: set when the folder is on an SSH machine (nothing installed there). `path` is then a local empty folder of the app's own
+    /// (`<data>/ssh/workspaces/<id>`), so every local reader sees an empty folder; panes reach the remote folder through ssh.
+    pub ssh: Option<SshWorkspaceRef>,
+}
+
+/// MC-33: which SSH machine and remote folder a workspace opens.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SshWorkspaceRef {
+    /// The machine's id in the app's SSH machine list.
+    pub machine: String,
+    /// The remote folder: absolute or under `~`.
+    pub dir: String,
+    /// The machine's name as it was when opened (`devbox`, `me@box:2222`), shown when the machine is gone.
+    pub host: String,
+}
+
+impl Wire for SshWorkspaceRef {
+    fn read(value: &Value) -> R<Self> {
+        let o = Obj::of(value, "an ssh reference")?;
+        Ok(SshWorkspaceRef {
+            machine: lenient_string(o.get("machine")).unwrap_or_default(),
+            dir: lenient_string(o.get("dir")).unwrap_or_default(),
+            host: lenient_string(o.get("host")).unwrap_or_default(),
+        })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_str("machine", Some(&self.machine));
+        out.prop_str("dir", Some(&self.dir));
+        out.prop_str("host", Some(&self.host));
+        out.end_object();
+    }
 }
 
 impl Default for Workspace {
@@ -525,6 +558,7 @@ impl Default for Workspace {
             github_repo: None,
             mightywork_auto_sync: None,
             issue_trackers: None,
+            ssh: None,
         }
     }
 }
@@ -548,6 +582,7 @@ impl Wire for Workspace {
             github_repo: lenient_string(o.get("githubRepo")),
             mightywork_auto_sync: lenient_bool(o.get("mightyworkAutoSync")),
             issue_trackers: lenient_list(o.get("issueTrackers")),
+            ssh: lenient_record(o.get("ssh")),
         })
     }
 
@@ -568,11 +603,22 @@ impl Wire for Workspace {
         out.prop_str("githubRepo", self.github_repo.as_deref());
         out.prop_opt_bool("mightyworkAutoSync", self.mightywork_auto_sync);
         out.prop_list("issueTrackers", self.issue_trackers.as_ref());
+        out.prop("ssh", self.ssh.as_ref());
         out.end_object();
     }
 }
 
 impl Workspace {
+    /// MC-33: the folder is on an SSH machine.
+    pub fn is_ssh(&self) -> bool {
+        self.ssh.is_some()
+    }
+
+    /// The folder is on this computer: neither another Mighty Code's (`remote`) nor an SSH machine's.
+    pub fn is_local(&self) -> bool {
+        self.remote.is_none() && self.ssh.is_none()
+    }
+
     pub fn mightywork_auto_sync_on(&self) -> bool {
         self.mightywork_auto_sync != Some(false)
     }

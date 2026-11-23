@@ -88,6 +88,14 @@ pub fn valid_workspace(w: &Workspace) -> bool {
     if !is_identifier(w.id.as_deref()) || length == 0 || length > 4096 || path.contains('\0') {
         return false;
     }
+    if let Some(ssh) = &w.ssh {
+        // MC-33: the local folder is the app's empty stand-in; the remote folder and the machine are checked.
+        return w.remote.is_none()
+            && fully_qualified(path)
+            && is_identifier(Some(ssh.machine.as_str()))
+            && crate::ssh::valid_remote_dir(&ssh.dir)
+            && !wire::clean(&ssh.host, 120).trim().is_empty();
+    }
     match &w.remote {
         None => fully_qualified(path),
         Some(r) => {
@@ -473,7 +481,7 @@ pub fn kept_pane_worktrees(list: Option<&Vec<KeptPaneWorktree>>, restoring: bool
 
 /// The pane worktree settings of a workspace (`StateStore.Normalize`): a remote workspace drops them all (they are a local folder's).
 fn workspace_worktree_settings(w: Workspace, restoring: bool) -> Workspace {
-    if w.remote.is_some() {
+    if !w.is_local() {
         return Workspace {
             pane_worktree_mode: None,
             worktree_setup_command: None,
@@ -1985,6 +1993,7 @@ pub fn normalize_with(value: &AppSnapshot, restoring: bool, mut cache: Option<&m
                 host_name: Some(wire::clean(r.host_name.as_deref().unwrap_or(""), 120)),
                 ..r.clone()
             }),
+            ssh: w.ssh.as_ref().map(|r| crate::model::SshWorkspaceRef { host: wire::clean(&r.host, 120), ..r.clone() }),
             ..w.clone()
         })
         .map(|w| workspace_worktree_settings(w, restoring))

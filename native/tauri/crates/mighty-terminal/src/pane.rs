@@ -54,6 +54,9 @@ pub struct TerminalFooter {
     pub title: String,
     pub directory: String,
     pub grid: String,
+    /// MC-33: an SSH pane whose connection went: the restart button reads 다시 연결.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub reconnect: bool,
 }
 
 /// host → page, the `terminal` push's `message` (page `TerminalMessage`).
@@ -116,6 +119,19 @@ pub struct PaneOptions {
     pub enabled: bool,
     /// The shell starts without the user's profile (the smoke).
     pub no_profile: bool,
+    /// MC-33: the pane is an SSH machine's: the local `ssh` (in `folder`, the workspace's empty stand-in) runs the far side's shell.
+    pub remote: Option<RemoteShell>,
+}
+
+/// MC-33: what an SSH pane's terminal runs instead of the local shell: `ssh -tt … 'cd <dir> && exec $SHELL -l'` (or tmux), built by
+/// the host (mighty-run's `SshLaunch::pty_request`), and what its footer says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteShell {
+    pub program: PathBuf,
+    pub args: Vec<String>,
+    /// The footer's title (`ssh · devbox`) and folder (`devbox:~/app`).
+    pub title: String,
+    pub directory: String,
 }
 
 /// The ports and words a pane works with.
@@ -153,6 +169,11 @@ pub trait PaneEvents: Send + Sync {
     fn signal(&self, pane: &str, signal: crate::signals::Signal) {
         let _ = (pane, signal);
     }
+    /// MC-33: an SSH pane's output named a dev-server port it had not named before, or its connection went: the window redraws its
+    /// SSH bar.
+    fn ssh_changed(&self, pane: &str) {
+        let _ = pane;
+    }
 }
 
 /// A started shell: its control, which start it was, and whether its output has all been read.
@@ -187,6 +208,10 @@ struct State {
     inputs: u64,
     posts: u64,
     tail: String,
+    /// MC-33: an SSH pane's ssh ended with 255 (the connection went).
+    lost: bool,
+    /// MC-33: the dev-server ports an SSH pane's output named, newest last.
+    seen_ports: Vec<u16>,
 }
 
 pub struct TerminalPane {
@@ -233,6 +258,41 @@ pub fn directory_from_url(location: &str) -> Option<String> {
     (!text.starts_with("\\\\")).then_some(text)
 }
 
+/// Text without its terminal escape sequences (CSI `ESC [ … letter` and OSC `ESC ] … BEL/ST`), for reading words out of output.
+fn strip_escapes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            Some('[') => {
+                chars.next();
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                chars.next();
+                while let Some(c) = chars.next() {
+                    if c == '\u{7}' || (c == '\u{1b}' && chars.peek() == Some(&'\\')) {
+                        if c == '\u{1b}' {
+                            chars.next();
+                        }
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// The shell's name as the footer gives it (`Path.GetFileNameWithoutExtension(DefaultShell)`).
 fn shell_name(shell: &Path) -> String {
     shell.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default()
@@ -244,6 +304,8 @@ struct Effects {
     posts: Vec<TerminalMessage>,
     status: Option<&'static str>,
     error: Option<String>,
+    /// MC-33: the SSH bar's ports or connection changed.
+    ssh: bool,
 }
 
 impl TerminalPane {
@@ -263,8 +325,16 @@ impl TerminalPane {
             notice_visible: available,
             restart_visible: available && shell,
             restart_enabled: false,
-            title: if available { shell_name(&ports.ptys.default_shell()) } else { String::new() },
-            directory: if available { options.folder.as_ref().map(|f| f.display().to_string()).unwrap_or_default() } else { String::new() },
+            title: match (&options.remote, available) {
+                (_, false) => String::new(),
+                (Some(remote), true) => remote.title.clone(),
+                (None, true) => shell_name(&ports.ptys.default_shell()),
+            },
+            directory: match (&options.remote, available) {
+                (_, false) => String::new(),
+                (Some(remote), true) => remote.directory.clone(),
+                (None, true) => options.folder.as_ref().map(|f| f.display().to_string()).unwrap_or_default(),
+            },
             grid: String::new(),
             columns: 100,
             rows: 30,
@@ -272,6 +342,8 @@ impl TerminalPane {
             inputs: 0,
             posts: 0,
             tail: String::new(),
+            lost: false,
+            seen_ports: Vec::new(),
         };
         Arc::new_cyclic(|weak| TerminalPane {
             options,
@@ -314,6 +386,7 @@ impl TerminalPane {
             title: state.title.clone(),
             directory: state.directory.clone(),
             grid: state.grid.clone(),
+            reconnect: available && state.lost && state.restart_visible,
         }
     }
 
@@ -339,6 +412,9 @@ impl TerminalPane {
         }
         if let Some(error) = effects.error {
             self.events.error(error);
+        }
+        if effects.ssh {
+            self.events.ssh_changed(&self.options.id);
         }
     }
 
@@ -382,7 +458,7 @@ impl TerminalPane {
                 None
             }
         };
-        self.emit(Effects { posts: vec![], status, error: Some(error) });
+        self.emit(Effects { posts: vec![], status, error: Some(error), ssh: false });
     }
 
     /// One `terminalMessage` from the page's terminal.
@@ -603,17 +679,30 @@ impl TerminalPane {
     /// notice goes, the output flows, and the pane is idle until a reading says a command runs.
     async fn start_shell(&self) -> Result<(), String> {
         let folder = self.options.folder.clone().ok_or("A local workspace directory is required.")?;
-        let shell = self.ports.ptys.default_shell();
         let size = {
-            let state = lock(&self.state);
+            let mut state = lock(&self.state);
+            state.lost = false;
             PtySize { columns: state.columns as u16, rows: state.rows as u16 }
         };
-        let request = PtyRequest {
-            args: self.ports.ptys.shell_arguments(&shell, None, self.options.no_profile),
-            program: shell,
-            cwd: folder,
-            env: self.ports.environment.current().values,
-            size,
+        let request = match &self.options.remote {
+            // MC-33: the far side's shell through the local ssh, in the stand-in folder.
+            Some(remote) => PtyRequest {
+                program: remote.program.clone(),
+                args: remote.args.clone(),
+                cwd: folder,
+                env: self.ports.environment.current().values,
+                size,
+            },
+            None => {
+                let shell = self.ports.ptys.default_shell();
+                PtyRequest {
+                    args: self.ports.ptys.shell_arguments(&shell, None, self.options.no_profile),
+                    program: shell,
+                    cwd: folder,
+                    env: self.ports.environment.current().values,
+                    size,
+                }
+            }
         };
         // Keyed by the pane (MC-3): where work keeps running after the app closes, the background daemon owns the shell and gives a
         // pane that opens again the shell it left.
@@ -705,7 +794,10 @@ impl TerminalPane {
         let effects = {
             let mut state = lock(&pane.state);
             state.flushing = false;
+            // MC-33: an SSH pane's ssh ending with 255 is a lost connection, not its shell's exit.
+            state.lost = pane.options.remote.is_some() && matches!(&code, Ok(c) if mighty_core::ssh::failure::lost_connection(*c));
             state.notice = match (&failure, &code) {
+                _ if state.lost => pane.ports.locale.get("ssh.terminal.lost"),
                 (None, Ok(code)) => pane.ports.locale.get_with("terminal.exited", &[("code", &code.to_string())]),
                 _ => format!("{}\n{}", pane.ports.locale.get("terminal.failed"), failure.unwrap_or_default()),
             };
@@ -713,7 +805,7 @@ impl TerminalPane {
             state.restart_visible = true;
             state.restart_enabled = true;
             let failed = code.is_err() || closed.is_err();
-            Effects { posts: vec![], status: Some(if failed { "error" } else { "completed" }), error: None }
+            Effects { posts: vec![], status: Some(if failed { "error" } else { "completed" }), error: None, ssh: state.lost }
         };
         pane.emit(effects);
     }
@@ -765,7 +857,7 @@ impl TerminalPane {
                         state.notice = format!("{}\n{error}", self.ports.locale.get("terminal.failed"));
                         state.restart_visible = true;
                         state.restart_enabled = true;
-                        Effects { posts: vec![], status: Some("error"), error: None }
+                        Effects { posts: vec![], status: Some("error"), error: None, ssh: false }
                     }
                 };
                 self.emit(effects);
@@ -790,6 +882,17 @@ impl TerminalPane {
             }
             state.posts += 1;
             let tail = format!("{}{text}", state.tail);
+            if self.options.remote.is_some() {
+                // MC-33: a dev server the far side started, offered for 로컬로 연결 (escape sequences out, so a coloured port reads).
+                for port in mighty_core::ssh::dev_server_ports(&strip_escapes(&tail)) {
+                    if !state.seen_ports.contains(&port) {
+                        effects.ssh = true;
+                        state.seen_ports.push(port);
+                    }
+                }
+                let over = state.seen_ports.len().saturating_sub(mighty_core::ssh::MAXIMUM_OFFERED_PORTS);
+                state.seen_ports.drain(..over);
+            }
             state.tail = last_units(&tail, TAIL).to_string();
             let data = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
             TerminalPane::post(&state, &mut effects, TerminalMessage::Output { data });
@@ -845,6 +948,16 @@ impl TerminalPane {
     }
 
     /// Whether the pane's shell started and has neither exited nor been closed with the pane.
+    /// MC-33: the dev-server ports an SSH pane's output named (newest last).
+    pub fn seen_ports(&self) -> Vec<u16> {
+        lock(&self.state).seen_ports.clone()
+    }
+
+    /// MC-33: an SSH pane whose connection went (its notice offers 다시 연결).
+    pub fn lost(&self) -> bool {
+        lock(&self.state).lost
+    }
+
     pub fn is_running(&self) -> bool {
         let state = lock(&self.state);
         !state.closed && state.running.as_ref().is_some_and(|running| !running.exited)

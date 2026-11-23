@@ -1577,7 +1577,37 @@ impl Store {
 
     /// Whether a save may write `workspace` as it is: the load or the user approved it with this path (and remote reference).
     pub fn approves(&self, workspace: &Workspace) -> bool {
-        self.approved.get(workspace.id()).is_some_and(|original| original.path == workspace.path && original.remote == workspace.remote)
+        self.approved
+            .get(workspace.id())
+            .is_some_and(|original| original.path == workspace.path && original.remote == workspace.remote && original.ssh == workspace.ssh)
+    }
+
+    /// MC-33: a folder on an SSH machine, as a workspace a save may write (the one listed for that machine and folder, if any). `local`
+    /// is the app's empty stand-in folder for it (made by the caller). None when a name is not one the store keeps.
+    pub fn approve_ssh(&mut self, machine: &str, host: &str, dir: &str, local: impl FnOnce(&str) -> String) -> Option<Workspace> {
+        let host = wire::clean(host, 120).trim().to_string();
+        if !wire::identifier(machine) || !crate::ssh::valid_remote_dir(dir) || host.is_empty() {
+            return None;
+        }
+        if let Some(existing) =
+            self.approved.values().find(|w| w.ssh.as_ref().is_some_and(|r| r.machine == machine && r.dir == dir)).cloned()
+        {
+            return Some(existing);
+        }
+        let id = new_id();
+        let path = local(&id);
+        if !normalize::fully_qualified(&path) {
+            return None;
+        }
+        let item = Workspace {
+            id: Some(id),
+            name: Some(wire::clean(&crate::ssh::dir_name(dir, &host), 120)),
+            path: Some(path),
+            ssh: Some(crate::model::SshWorkspaceRef { machine: machine.into(), dir: dir.into(), host }),
+            ..Workspace::default()
+        };
+        self.approved.insert(item.id().to_string(), item.clone());
+        Some(item)
     }
 
     /// C# `ApproveRemote`: a workspace another computer shares.

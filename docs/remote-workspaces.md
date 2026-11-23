@@ -203,3 +203,30 @@ Windows 앱도 같은 `/v2/` 프로토콜로 공유하고 연결한다. 그래�
 - Tailscale 인터페이스 규칙(fd7a 주소가 없는 WARP 같은 utun은 버림), 받는 순간의 상대 거절과 상대마다 연결 수, 키 없는 요청의 본문을 읽지 않음, 실행 중 경로가 터널을 벗어날 때(검사 함수 주입), 전체 권한·명령 스위치, 대기 권한 요청 상한, 쓸 수 없는 이벤트 하나만 건너뛰기
 - 원격 미러(`RemoteMirrorTests.swift`): 공유 픽스처 `remote-mirror/`의 해석·검사·왕복, 클라이언트가 거절하는 목록·상세, 클라이언트 id, 창 revision이 움직이는 경우, 상세의 한도(기록 80·그래프 20·그림과 호스트 경로 뺌·기다리는 요청만·대기열 16×500자·1.5 MiB 안), 클라이언트 창 합치기, 미러가 저장되지 않음, 루프백으로 호스트 경로(미러 없음 404, 키, 공유 밖 404·403, `since`, 상세, 보내기·멈추기·답·닫기·새 창, 전체 권한 403, 앱 거절 409)와 클라이언트 서비스 왕복(CI에서는 끔: 연결이 호스트의 CLI 확인을 기다린다)
 - Windows: 같은 파일을 읽는 Mac `RemoteWireFixtureTests`(공유 픽스처 `native/contracts/fixtures/remote-v2/`)와 Windows Core 검사 `RemoteWorkspaceStateVerification`·`RemoteWireFixtureVerification`·`RemoteClientVerification`·`RemoteHostVerification`·`RemoteLoopbackVerification`·`RemoteDesktopVerification`(Mac에서 `dotnet run`으로 돌린다. Windows에서만 되는 검사 9개는 Mac에서 실패한다). 실제 WinUI는 GUI 스모크 키 `remoteWorkspaces`가 한 프로세스에서 루프백으로 공유하고 연결해 설정 탭·사이드바·머리글·상태 막대·세션 정보와 원격 명령 창을 확인한다.
+
+## SSH 머신 (상대 쪽 설치·페어링 없이, MC-33)
+
+상대 컴퓨터에 Mighty Code가 없어도, 사용자의 OpenSSH로 그 컴퓨터의 폴더에서 터미널과 에이전트를 실행한다(0.6.0, 최소 모드: PTY와 파이프만 쓰고 원격에 아무것도 설치하지 않는다). 사용 안내는 도움말 [원격 연결 › SSH 머신](help/content/ko/remote.md#ssh).
+
+- **구현**: 순수 부분은 `native/tauri/crates/mighty-core/src/ssh/`(`target` 이름 검사, `config` ssh_config의 Host 읽기, `command` 원격 명령과 ssh 인자 배열, `failure` stderr 분류, `files` 읽기 전용 원격 파일 명령), 실행 엔진의 원격 소유자는 `crates/mighty-run/src/ssh.rs`(`SshLaunch`, 포트 전달 `Forwards`), 앱 쪽은 `src-tauri/src/ssh/`(머신 목록·연결 테스트·워크스페이스 열기·사이드바, `files.rs` 파일 창, `forward.rs` 로컬로 연결)와 `src-tauri/src/settings/ssh.rs`(설정 상자). 워크스페이스 모델은 `Workspace.ssh`(`machine`, `dir`, `host`).
+- **머신**: 설정 › 원격 연결 › **SSH 머신**에서 `~/.ssh/config`의 Host(와일드카드·`!` 패턴은 빼고, `Include`는 따라가며 `Match` 블록 안은 무시)를 고르거나 `user@host[:port]`를 입력한다. `-`로 시작하는 이름, 공백·따옴표·`%`·셸 문자, `ProxyCommand` 같은 옵션은 받지 않는다. 목록은 `<data>/ssh/machines.json`(0700 폴더의 0600 파일; 이름, 마지막 테스트 결과, tmux 스위치만). 비밀번호·키는 앱에 없다.
+- **연결 테스트**: `ssh -o BatchMode=yes -o ConnectTimeout=10 -T -- <host> 'uname -sm; echo "$SHELL"; command -v tmux || echo no-tmux'`, 전체 20초. 공유 연결을 쓰지 않는다(새 로그인을 시험). 연결할 수 없음·로그인 거부·모르는 호스트 키·바뀐 호스트 키를 따로 알린다. `StrictHostKeyChecking`을 바꾸지 않으므로 처음 보는 호스트 키는 사용자가 터미널에서 받아야 한다.
+- **워크스페이스**: 원격 폴더(`/`나 `~`로 시작)를 열면 `Workspace.ssh`가 붙은 워크스페이스가 생기고, 그 `path`는 앱의 빈 로컬 폴더(`<data>/ssh/workspaces/<id>`)다. 그래서 로컬 폴더를 읽는 기능(git 배지, 상태 줄, 스타일, 작업 지도)은 빈 폴더를 볼 뿐 원격을 건드리지 않는다. 사이드바에는 머신마다 "SSH · 이름" 머리글(상태 점, 마지막 테스트 결과, … 메뉴의 연결 테스트·SSH 머신 설정)과 그 워크스페이스(경로 `host:dir`)가 나온다. 폴링은 없다.
+- **터미널 창**: 로컬 PTY에서 `ssh -tt … -- <host> 'cd <dir> && exec $SHELL -l'`(tmux를 켜면 `cd <dir> && exec tmux new-session -A -s mighty-<창 id>`). 프롬프트(비밀번호, 새 호스트 키)는 창 안에서 사용자가 답한다. 키가 있는 `open_keyed`라 백그라운드 데몬(MC-3)이 켜져 있으면 데몬이 ssh를 소유한다.
+- **에이전트 창**: 실행 엔진의 `spawn_keyed`가 받는 요청을 `SshLaunch::run_request`가 만든다: `ssh -o BatchMode=yes -T … -- <host> 'cd <dir> && exec $SHELL -lc '\''exec env NO_COLOR=1 … claude …'\'''`. CLI는 원격 로그인 셸의 `PATH`에서 찾고, 로컬 CLI는 찾지 않는다. Claude의 승인 채널(stdio)은 ssh 파이프로 그대로 오간다. 로컬에만 있는 것(Mods 플러그인 폴더와 브리지, 창별 MCP 서버, 첨부 사본)은 넘기지 않는다. 원격으로 가는 환경 변수는 `NO_COLOR`, `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`, `CLAUDE_CODE_EFFORT_LEVEL`뿐이다(값은 명령줄에 들어가므로 비밀은 넘기지 않는다). Claude·Codex·Antigravity·pi만 되고 ACP 에이전트(opencode, Hermes)는 문장과 함께 거절한다. 셸 명령 창(kind `shell`)도 원격 로그인 셸로 실행한다.
+- **파일 창(읽기 전용)**: 목록은 `cd <dir> && LC_ALL=C ls -1Apq ./'<경로>' | head -n 5001`, 미리 보기는 `test -f ./'<경로>' && head -c 1048577 ./'<경로>'`. `..`·절대 경로·제어 문자는 거절하고 경로는 늘 `./'…'`로 넘긴다. 저장·디스크 확인·기본 앱으로 열기·Finder에서 보기는 하지 않는다.
+- **공유 연결**: Mac은 `-o ControlMaster=auto -o ControlPath=<폴더>/cm-%C -o ControlPersist=10m`으로 한 머신의 창이 연결 하나를 쓴다. 폴더는 0700이고 `<data>/ssh`가 유닉스 소켓 길이(104바이트, ssh가 만들 때 붙이는 17자 포함)를 넘으면 `/tmp/mc-<uid>-ssh`(이 사용자 소유·링크 아님을 확인)를 쓴다. Windows의 OpenSSH는 ControlMaster가 없어 창마다 연결한다. ssh는 `%SystemRoot%\System32\OpenSSH\ssh.exe`(없으면 `PATH`의 `ssh.exe`), Mac은 `/usr/bin/ssh`.
+- **끊김**: 모든 연결에 `ServerAliveInterval=15`, `ServerAliveCountMax=3`. 터미널 창의 ssh가 255로 끝나면 "SSH 연결이 끊겼습니다"와 **다시 연결** 단추(다시 시작과 같은 동작)가 나오고 창 위 SSH 띠에 "연결 끊김"이 붙는다. tmux가 있으면(테스트가 찾으면 기본 켜짐, 머신마다 끌 수 있음) 작업은 원격에서 계속되고 다시 연결하면 같은 세션에 붙는다. 에이전트 실행은 ssh가 끊기면 오류로 끝난다(데몬이 켜져 있으면 앱을 닫아도 ssh가 계속 돈다).
+- **로컬로 연결**: 창의 출력(터미널 출력, 에이전트의 최근 기록)에 `localhost:3000`, `127.0.0.1:5173`, `0.0.0.0:8000`, `[::1]:8080` 같은 주소가 나오면(1024 이상, 최근 4개) 창 위 SSH 띠에 **로컬로 연결 :포트**가 생긴다. 누르면 MC-25 포트 블록과 쓰는 중인 포트를 피한 로컬 포트로 `ssh -N -T -o ExitOnForwardFailure=yes -L 127.0.0.1:<로컬>:localhost:<원격>`을 띄운다. 띠의 `:원격 → localhost:로컬`은 브라우저로 열고 ×는 끊는다. 끊을 때는 그 ssh를 끝내고, 공유 연결이면 `-O cancel -L …`로 마스터에서도 거둔다. 창을 닫거나 머신을 지우거나 앱을 끝내면 모두 거둔다.
+- **휴대폰**: SSH 워크스페이스의 창은 이 컴퓨터의 다른 창처럼 휴대폰 목록에 나온다(따로 한 일 없음).
+- **보안**: 로컬에서는 늘 인자 배열로 ssh를 띄우고(셸 문자열 없음), 모든 배열은 `-- <검증한 대상>`으로 끝난다. 원격 명령의 경로·프로그램·인자는 POSIX 작은따옴표로 감싼다(`~`는 따옴표 밖). 명령줄은 로그에 남기지 않는다.
+
+### 한계와 후속
+
+- 원격 파일 편집, 원격 git 변경(diff) 보기, 워크트리, 작업 지도, 마이티 오케스트레이션, 첨부, ACP 에이전트는 아직 없다. 원격 로그인 셸은 POSIX 계열(bash, zsh, sh)을 전제로 한다(fish·csh에서는 따옴표 규칙이 달라 경로에 따라 실패할 수 있다).
+- **원격 헤드리스 데몬(후속)**: 원격에 `MightyCode --daemon --headless`를 올려 두고 MC-3 프로토콜로 붙는 방식(원격에서 출력 링을 보관하고 끊긴 동안의 출력을 정확히 이어 받기, 원격에서 출력 파싱)은 MC-3의 헤드리스 모드가 MC-9 명령을 직접 받게 된 뒤에 한다. 그때 설치·업데이트(아키텍처별 바이너리 업로드, 버전 확인)와 원격 파일 쓰기도 함께 다룬다.
+
+### 검사
+
+- `cargo test -p mighty-core --lib ssh`: 이름 검사(옵션처럼 보이는 이름 거절), ssh_config(Include·와일드카드·Match), 인자 배열(ControlMaster, `-tt`, cd/exec 따옴표), 실제 `/bin/sh`로 따옴표 확인, stderr 분류, 포트 전달 인자, tmux, 개발 서버 주소 읽기. `cargo test -p mighty-core --test ssh_workspace`: 저장·불러오기와 승인.
+- `cargo test -p mighty-run --lib ssh`: 원격 소유자 요청, 포트 전달 열기·닫기(가짜 프로세스 호스트). `cargo test -p mighty-run --test ssh_run`: 가짜 `ssh` 스크립트(받은 원격 명령을 깨끗한 환경의 `/bin/sh`로 실행)와 가짜 Claude CLI로 승인 카드가 있는 실행을 처음부터 끝까지, 셸 명령, 끊긴 연결(255), 거절되는 경우. 실제 호스트에는 접속하지 않는다.

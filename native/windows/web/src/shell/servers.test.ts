@@ -35,4 +35,12 @@ describe('the sidebar server groups', () => {
     expect(groups.servers).toHaveLength(1);
     expect(groups.servers[0]?.server).toMatchObject({ id: 'gone', title: 'old-host', known: false });
   });
+
+  it('lists an SSH machine after the servers, with its workspaces under it and out of the own count (MC-33)', () => {
+    const ssh = server('ssh-m1', { title: 'SSH · devbox', line: 'devbox · 연결됨', ssh: true });
+    const groups = sidebarGroups([workspace('mine'), workspace('app', { local: false, server: 'ssh-m1', ssh: true, path: 'devbox:~/app' })], [server('studio'), ssh], '');
+    expect(groups.servers.map((g) => [g.server.id, g.workspaces.map((w) => w.id)])).toEqual([['studio', []], ['ssh-m1', ['app']]]);
+    expect(groups.servers[1]?.server.ssh).toBe(true);
+    expect(groups.ownCount).toBe(1);
+  });
 });

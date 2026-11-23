@@ -1431,7 +1431,7 @@ async fn ask_text(host: &Arc<Host>, title: String, detail: String, current: Stri
 /// C# `WorkspaceWorktreeAction`: the workspace row's worktree items: its mode, its setup command, the files it copies, its worktree
 /// list. A remote workspace has none.
 async fn workspace_action(host: &Arc<Host>, workspace_id: &str, action: &str, value: Option<String>) -> Result<(), String> {
-    let Some(workspace) = host.view().snapshot.workspace(workspace_id).filter(|w| w.remote.is_none()).cloned() else { return Ok(()) };
+    let Some(workspace) = host.view().snapshot.workspace(workspace_id).filter(|w| w.is_local()).cloned() else { return Ok(()) };
     let locale = host.locale;
     match action {
         "mode" => update_workspace(host, workspace_id, |w| w.pane_worktree_mode = core::saved_mode(value.as_deref())),

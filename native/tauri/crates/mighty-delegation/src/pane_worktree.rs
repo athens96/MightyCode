@@ -250,7 +250,8 @@ pub fn decide<'a>(
     sessions: impl IntoIterator<Item = &'a RunSession>,
     closing: Option<&HashSet<String>>,
 ) -> PaneWorktreeDecision {
-    if workspace.remote.is_some() {
+    // Another computer's folder (a remote or SSH workspace, MC-33) has no worktree here.
+    if !workspace.is_local() {
         return PaneWorktreeDecision::SameFolder;
     }
     let mode = mode_of(workspace.pane_worktree_mode.as_deref());

@@ -115,6 +115,7 @@ mod smoke_styles;
 mod smoke_terminal;
 #[cfg(feature = "dev-harness")]
 mod smoke_updates;
+mod ssh;
 mod startup;
 mod status_line;
 mod styles;
@@ -785,6 +786,8 @@ fn main() {
                 remote::shutdown(&host);
                 // W9: the mirror (W9-J), the style watcher (W9-D), the tails poller and the dashboard's polling (W9-E).
                 mirror::shutdown(&host);
+                // MC-33: the SSH port forwards taken back (their ssh ended, the shared connections let them go).
+                tauri::async_runtime::block_on(ssh::forward::close_all(&host));
                 styles::shutdown(&host);
                 tails::shutdown(&host);
                 ouroboros::shutdown(&host);
