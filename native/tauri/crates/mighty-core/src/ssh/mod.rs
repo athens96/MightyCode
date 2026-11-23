@@ -18,6 +18,7 @@ pub mod config;
 pub mod failure;
 pub mod files;
 pub mod held;
+pub mod review;
 pub mod server;
 pub mod target;
 

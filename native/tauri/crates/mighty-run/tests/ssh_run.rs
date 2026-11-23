@@ -249,6 +249,47 @@ async fn a_claude_run_survives_a_dropped_connection_with_its_card_waiting() {
     common::remove_when_free(&machine.root).await;
 }
 
+/// MC-40: a Claude run with attachments: the files go up through ssh's standard input into a 0700 folder on the machine, the run
+/// names that folder (`--add-dir`) and the text file's copy there, the picture goes inline in its first message as locally, and
+/// the folder is gone once the run ended. No file's bytes are on a command line.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_claude_run_takes_its_attachments_to_the_machine() {
+    common::korean();
+    let machine = Machine::new("ssh-attach");
+    let workspace = machine.workspace();
+    let events = Events::default();
+    let mut options = machine.options(&workspace, &events);
+    let cell: Cell = Arc::default();
+    let answer = cell.clone();
+    options.permission_requested = Some(Arc::new(move |value: ToolPermissionRequest| {
+        if value.state == "pending" {
+            answer.get().and_then(Weak::upgrade).unwrap().respond_to_tool_permission("attach", &value.id, false).unwrap();
+        }
+    }));
+    let manager = Arc::new(RunManager::new(common::absent_catalog(), options));
+    cell.set(Arc::downgrade(&manager)).ok();
+    let png = b"\x89PNG\r\n\x1a\n0000-fixture-picture".to_vec();
+    let picture = mighty_run::attachments::make("shot.png", &png).unwrap();
+    let text = mighty_run::attachments::make("notes.txt", "secret-free notes 한글".as_bytes()).unwrap();
+    let mut request = StartRunRequest::new("attach", workspace.id(), "claude", "fixture prompt");
+    request.attachments = Some(vec![picture, text]);
+    manager.start(request).await.unwrap();
+    common::until(|| !manager.is_running("attach"), 20_000, "the run ends").await;
+    manager.dispose().await;
+
+    let launched = common::recorded_args(&machine.record);
+    let folder = common::after(&launched, "--add-dir");
+    let home = std::fs::canonicalize(&machine.home).unwrap();
+    assert!(folder.starts_with(&home.join(".cache/mighty-code/attachments").to_string_lossy().into_owned()), "{folder}");
+    let written = std::fs::read_to_string(format!("{}.input", machine.record.display())).unwrap();
+    assert!(written.contains(&format!("{folder}/1-")), "the text file is named by its copy over there: {written}");
+    assert!(written.contains("\"type\":\"image\""), "the picture goes inline");
+    assert!(!std::path::Path::new(&folder).exists(), "the copies went with the run");
+    let sent = machine.read("ssh.args");
+    assert!(!sent.contains("secret-free notes"), "no file's bytes on a command line");
+    common::remove_when_free(&machine.root).await;
+}
+
 /// A shell pane's command runs in the remote folder; a lost connection (ssh's 255) ends the run as an error.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_shell_command_runs_remotely_and_a_lost_connection_is_an_error() {

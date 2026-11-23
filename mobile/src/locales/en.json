@@ -4618,7 +4618,7 @@
   "ssh.failure.other": "Couldn't connect to {host} over SSH.",
   "ssh.run.error.unavailable": "Can't reach this SSH machine.",
   "ssh.run.error.provider": "{name} can't run on an SSH machine yet.",
-  "ssh.run.error.attachments": "Attachments aren't supported on SSH machines yet.",
+  "ssh.attachments.error.upload": "Couldn't upload the attachments to the SSH machine.",
   "ssh.held.error.gone": "This run's folder is gone on the SSH machine, so no more of its output can be read.",
   "ssh.held.error.lost": "The SSH connection didn't come back for 30 minutes, so this run ended here. It may keep running on the machine until it finishes.",
   "ssh.terminal.lost": "The SSH connection was lost.",

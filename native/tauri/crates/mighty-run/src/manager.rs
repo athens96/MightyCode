@@ -1818,6 +1818,7 @@ impl Exec {
     /// MC-33: an agent run of an SSH workspace: the provider's CLI by its bare name on the far side's login `PATH`, with the arguments
     /// a local run has minus what only this computer has (the Mods plugin folder and its bridge, the per-pane MCP servers, attachments'
     /// local copies). Claude's approval channel works through ssh's pipes as it does locally.
+    #[allow(clippy::too_many_arguments, reason = "the launch's parts the run engine reads back after it")]
     fn ssh_launch(
         &self,
         ssh: &crate::ssh::SshLaunch,
@@ -1826,13 +1827,22 @@ impl Exec {
         input: &mut String,
         interactive: &mut bool,
         held: &mut Option<String>,
+        staged: Option<&StagedAttachments>,
     ) -> std::result::Result<mighty_platform::SpawnRequest, Failure> {
         let provider = request.provider.as_str();
         if !crate::ssh::supported_provider(provider) {
             return Err(Failure::Error(strings::get_with("ssh.run.error.provider", &[("name", providers::name(provider))])));
         }
-        if request.attachment_list().is_some_and(|files| !files.is_empty()) {
-            return Err(Failure::Error(strings::get("ssh.run.error.attachments")));
+        // MC-40: the attachments were uploaded to the machine; the prompt and the arguments name its copies as a local run's name
+        // the local ones (Claude's pictures and PDFs go inline in its first message, as locally).
+        if let Some(staged) = staged {
+            let mut asked = request.clone();
+            if provider == "pi"
+                && let Some(mem) = crate::model::memory_block(request.memory_context.as_deref())
+            {
+                asked.input = format!("{}\n\n{mem}", request.input);
+            }
+            *input = staged.input_for(&asked);
         }
         let mut launch = request.clone();
         if provider == "gemini" {
@@ -1843,13 +1853,16 @@ impl Exec {
                 launch.memory_context = None;
             }
         }
-        if provider == "pi" {
+        if provider == "pi" && staged.is_none() {
             if let Some(mem) = crate::model::memory_block(request.memory_context.as_deref()) {
                 *input = format!("{input}\n\n{mem}");
             }
             *input = ProviderInput::pi_startup(input, &[]);
         }
-        let mut arguments = providers::arguments(&launch, "", None)?;
+        let mut arguments = match staged {
+            Some(staged) => staged.arguments_for(&launch, "")?,
+            None => providers::arguments(&launch, "", None)?,
+        };
         crate::ssh::without_local_plugin(&mut arguments);
         *interactive = self.inner.options.permission_requested.is_some() && provider == "claude";
         if *interactive {
@@ -2010,6 +2023,7 @@ impl Exec {
         }
         let mut interactive = false;
         let mut held: Option<String> = None;
+        let mut held_attachments: Option<String> = None;
         let mut input = request.input.clone();
         // An ACP run's request as launched (a Hermes session that cannot be continued is started anew), Hermes's notice about its
         // session and its clarify tool.
@@ -2032,7 +2046,23 @@ impl Exec {
             if request.kind == "shell" {
                 ssh.shell_request(&request.input, &environment)
             } else {
-                self.ssh_launch(ssh, &request, &mut environment, &mut input, &mut interactive, &mut held)?
+                // MC-40: the attachments go up to the machine first (each through ssh's standard input), kept as the run's copies.
+                let mut uploaded = None;
+                if let Some(files) = request.attachment_list() {
+                    let processes = providers.processes();
+                    let (copies, tag) = tokio::select! {
+                        done = crate::ssh_held::upload(processes.as_ref(), ssh, files) => done.map_err(Failure::Error)?,
+                        _ = run.cancel.cancelled() => return Err(Failure::Cancelled),
+                    };
+                    held_attachments = Some(tag);
+                    uploaded = Some(copies);
+                }
+                let launch =
+                    self.ssh_launch(ssh, &request, &mut environment, &mut input, &mut interactive, &mut held, uploaded.as_ref())?;
+                if uploaded.is_some() {
+                    *staged = uploaded;
+                }
+                launch
             }
         } else if request.kind == "shell" {
             providers.processes().shell_request(&request.input, Path::new(&workspace_path), &environment)
@@ -2259,7 +2289,10 @@ impl Exec {
             }
         } else if let (Some(script), Some(ssh)) = (&held, &ssh) {
             // MC-40: held on the far side; a machine that cannot hold it runs it directly as before.
-            match crate::ssh_held::spawn(providers.processes(), ssh.clone(), script, &key).await {
+            // MC-40: snapshotted around the CLI as the request its graph run is (the review's key, as the originals' locally).
+            let graph_run = self.tracker.as_ref().map(|t| lock(t).run_id());
+            let snapshots = graph_run.as_deref().map(|run| (request.session_id.as_str(), run));
+            match crate::ssh_held::spawn(providers.processes(), ssh.clone(), script, &key, snapshots, held_attachments.as_deref()).await {
                 Ok(child) => Ok(child),
                 Err(crate::ssh_held::Refused::Ssh(words)) => {
                     let failure = mighty_core::ssh::failure::classify(&words);

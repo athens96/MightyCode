@@ -125,19 +125,103 @@ impl Outcome {
     }
 }
 
+// ---- where a review reads and writes ----------------------------------------------------------------------------------------
+
+/// The originals a pane's runs kept, as a review reads them: the local store ([`LocalOriginals`]) or an SSH machine's snapshots
+/// (MC-40, [`crate::remote_review::RemoteReview`]). Paths are relative to the run's folder, `/`-separated.
+pub trait ReviewOriginals {
+    /// The files `run_id` changed whose originals were kept, in the order it changed them.
+    fn files(&self, run_id: &str) -> Vec<String>;
+    /// Every path `run_id` touched (kept or refused).
+    fn paths(&self, run_id: &str) -> Vec<String>;
+    /// The original of `path` that `run_id` kept.
+    fn original(&self, run_id: &str, path: &str) -> Option<FileOriginal>;
+    /// The pane's runs, newest first.
+    fn runs(&self) -> Vec<String>;
+    /// The book of `run_id`'s hunk decisions.
+    fn book(&self, run_id: &str) -> Option<ReviewBook>;
+}
+
+/// The files of a run's folder as a review reads and writes them: a local folder ([`FolderFiles`]) or an SSH machine's (MC-40).
+pub trait ReviewFiles {
+    /// `path` is a regular file inside the folder (no link, no folder).
+    fn regular(&self, path: &str) -> bool;
+    /// The file as text now: None when over 1 MiB, binary or undecodable.
+    fn current(&self, path: &str) -> Option<String>;
+    /// `text` written in place of `path` in the encoding it is in now, its permissions kept; with `expected`, nothing is written
+    /// (`Ok(false)`) when the file no longer reads as it.
+    fn write_if(&self, path: &str, text: &str, expected: Option<&str>) -> Result<bool, String>;
+    /// A file the run made, moved out of the way (the Trash locally).
+    fn trash(&self, path: &str) -> Result<(), String>;
+}
+
+/// The local store's originals of one pane under one folder.
+pub struct LocalOriginals<'a> {
+    pub store: &'a FileOriginalStore,
+    pub session_id: &'a str,
+    pub root: &'a str,
+}
+
+impl ReviewOriginals for LocalOriginals<'_> {
+    fn files(&self, run_id: &str) -> Vec<String> {
+        self.store.files(self.session_id, run_id, self.root)
+    }
+    fn paths(&self, run_id: &str) -> Vec<String> {
+        self.store.paths(self.session_id, run_id, self.root)
+    }
+    fn original(&self, run_id: &str, path: &str) -> Option<FileOriginal> {
+        self.store.find(self.session_id, Some(run_id), path, Some(self.root))
+    }
+    fn runs(&self) -> Vec<String> {
+        self.store.runs(self.session_id)
+    }
+    fn book(&self, run_id: &str) -> Option<ReviewBook> {
+        self.store.review_book(self.session_id, run_id, self.root)
+    }
+}
+
+/// A local folder's files: read through the store's open (`current`), written with [`write_if`], a file the run made moved by `trash`.
+pub struct FolderFiles<'a> {
+    pub root: &'a str,
+    pub store: Option<&'a FileOriginalStore>,
+    pub trash: &'a dyn Fn(&Path) -> Result<(), String>,
+}
+
+impl ReviewFiles for FolderFiles<'_> {
+    fn regular(&self, path: &str) -> bool {
+        regular_file(path, self.root).is_some()
+    }
+    fn current(&self, path: &str) -> Option<String> {
+        self.store?.current(path, Path::new(self.root))
+    }
+    fn write_if(&self, path: &str, text: &str, expected: Option<&str>) -> Result<bool, String> {
+        let file = regular_file(path, self.root).ok_or_else(|| "revert target is not a regular file".to_string())?;
+        write_if(text, &file, expected).map_err(|e| e.to_string())
+    }
+    fn trash(&self, path: &str) -> Result<(), String> {
+        let file = regular_file(path, self.root).ok_or_else(|| "revert target is not a regular file".to_string())?;
+        (self.trash)(&file)
+    }
+}
+
 /// What reverting `run_id` (a notice run: the run it came from) of the pane `session_id` would do to each file it changed under `root`,
 /// in the order the run changed them.
 pub fn plan(store: &FileOriginalStore, session_id: &str, run_id: &str, root: &str) -> Vec<Item> {
+    let none = |_: &Path| Ok(());
+    plan_on(&LocalOriginals { store, session_id, root }, &FolderFiles { root, store: Some(store), trash: &none }, run_id)
+}
+
+/// [`plan`] over any originals and files.
+pub fn plan_on(kept: &dyn ReviewOriginals, files: &dyn ReviewFiles, run_id: &str) -> Vec<Item> {
     let run_id = source_run(run_id);
-    let later = later_paths(store, session_id, run_id, root);
-    let book = store.review_book(session_id, run_id, root).map(|b| b.read()).unwrap_or_default();
-    store
-        .files(session_id, run_id, root)
+    let later = later_paths(kept, run_id);
+    let book = kept.book(run_id).map(|b| b.read()).unwrap_or_default();
+    kept.files(run_id)
         .into_iter()
         .filter_map(|path| {
-            let original = store.find(session_id, Some(run_id), &path, Some(root))?;
+            let original = kept.original(run_id, &path)?;
             let decisions = hunks::decisions_of(&book, &path);
-            Some(item(store, &path, &original, root, later.iter().any(|p| same_path(p, &path)), &decisions))
+            Some(item(files, &path, &original, later.iter().any(|p| same_path(p, &path)), &decisions))
         })
         .collect()
 }
@@ -152,28 +236,37 @@ pub fn apply(
     paths: Option<&[String]>,
     trash: &dyn Fn(&Path) -> Result<(), String>,
 ) -> Vec<(String, Outcome)> {
+    apply_on(&LocalOriginals { store, session_id, root }, &FolderFiles { root, store: Some(store), trash }, run_id, paths)
+}
+
+/// [`apply`] over any originals and files. A write the files refuse because the file changed since it was read is a conflict.
+pub fn apply_on(kept: &dyn ReviewOriginals, files: &dyn ReviewFiles, run_id: &str, paths: Option<&[String]>) -> Vec<(String, Outcome)> {
     let run_id = source_run(run_id);
-    let later = later_paths(store, session_id, run_id, root);
+    let later = later_paths(kept, run_id);
     let mut outcomes = Vec::new();
-    for path in store.files(session_id, run_id, root) {
+    for path in kept.files(run_id) {
         if paths.is_some_and(|wanted| !wanted.iter().any(|w| same_path(w, &path))) {
             continue;
         }
-        let Some(original) = store.find(session_id, Some(run_id), &path, Some(root)) else { continue };
-        let planned = item(store, &path, &original, root, later.iter().any(|p| same_path(p, &path)), &HashMap::new());
+        let Some(original) = kept.original(run_id, &path) else { continue };
+        let planned = item(files, &path, &original, later.iter().any(|p| same_path(p, &path)), &HashMap::new());
         if let Some(refusal) = planned.refusal {
             outcomes.push((path, Outcome::Refused(refusal)));
             continue;
         }
-        let Some(file) = regular_file(&path, root) else {
+        if !files.regular(&path) {
             outcomes.push((path, Outcome::Refused(Refusal::Missing)));
             continue;
+        }
+        let outcome = match planned.action {
+            Action::Trash => files.trash(&path).map_or_else(Outcome::Failed, |()| Outcome::Reverted),
+            Action::Restore => match files.write_if(&path, &original.text, None) {
+                Ok(true) => Outcome::Reverted,
+                Ok(false) => Outcome::Refused(Refusal::Conflict),
+                Err(error) => Outcome::Failed(error),
+            },
         };
-        let done = match planned.action {
-            Action::Trash => trash(&file),
-            Action::Restore => write_if(&original.text, &file, None).map(|_| ()).map_err(|e| e.to_string()),
-        };
-        outcomes.push((path, done.map_or_else(Outcome::Failed, |()| Outcome::Reverted)));
+        outcomes.push((path, outcome));
     }
     outcomes
 }
@@ -281,7 +374,24 @@ pub fn discard_in(
     book: Option<&ReviewBook>,
     trash: &dyn Fn(&Path) -> Result<(), String>,
 ) -> Outcome {
-    let Some(file) = regular_file(path, root) else { return Outcome::Refused(Refusal::Missing) };
+    discard_on(&FolderFiles { root, store: None, trash }, path, base, current, later, fingerprint, shown, book)
+}
+
+/// [`discard_in`] over any files.
+#[allow(clippy::too_many_arguments)]
+pub fn discard_on(
+    files: &dyn ReviewFiles,
+    path: &str,
+    base: &Base,
+    current: Option<String>,
+    later: impl FnOnce(&str) -> Later,
+    fingerprint: &str,
+    shown: Option<&Hunk>,
+    book: Option<&ReviewBook>,
+) -> Outcome {
+    if !files.regular(path) {
+        return Outcome::Refused(Refusal::Missing);
+    }
     let Some(current) = current else { return Outcome::Refused(Refusal::Unreadable) };
     let Some((changes, prints)) = hunks::hunks(&base.text, &current) else { return Outcome::Refused(Refusal::Unreadable) };
     let hunk = match prints.iter().position(|p| p == fingerprint) {
@@ -299,9 +409,9 @@ pub fn discard_in(
     let Some(next) = hunks::discard(&current, &hunk, &base.text) else { return Outcome::Refused(Refusal::Conflict) };
     let whole = hunks::same_text(&next, &base.text);
     let done = if whole && base.created {
-        trash(&file).map(|()| true)
+        files.trash(path).map(|()| true)
     } else {
-        write_if(if whole { &base.text } else { &next }, &file, Some(&current)).map_err(|e| e.to_string())
+        files.write_if(path, if whole { &base.text } else { &next }, Some(&current))
     };
     match done {
         Ok(true) => {
@@ -315,23 +425,23 @@ pub fn discard_in(
     }
 }
 
-/// The run's path as the store spells it, with its original; None when the run kept no original of it under `root`.
-fn kept(store: &FileOriginalStore, session_id: &str, run_id: &str, root: &str, path: &str) -> Option<(String, FileOriginal)> {
-    let path = store.files(session_id, run_id, root).into_iter().find(|p| same_path(p, path))?;
-    let original = store.find(session_id, Some(run_id), &path, Some(root))?;
+/// The run's path as the originals spell it, with its original; None when the run kept no original of it.
+fn kept(originals: &dyn ReviewOriginals, run_id: &str, path: &str) -> Option<(String, FileOriginal)> {
+    let path = originals.files(run_id).into_iter().find(|p| same_path(p, path))?;
+    let original = originals.original(run_id, &path)?;
     Some((path, original))
 }
 
 /// The stretches of `path` (as it reads now, `current`) that runs of the pane newer than `run_id` changed: everything after the oldest
 /// of them that touched it, from the original it kept (the file as `run_id` and anything before left it); the whole file when it
 /// kept none or the diff cannot be read.
-fn later_changes(store: &FileOriginalStore, session_id: &str, run_id: &str, root: &str, path: &str, current: &str) -> Later {
-    let runs = store.runs(session_id);
+fn later_changes(originals: &dyn ReviewOriginals, run_id: &str, path: &str, current: &str) -> Later {
+    let runs = originals.runs();
     let Some(index) = runs.iter().position(|r| r == run_id) else { return Later::Nothing };
-    let Some(next) = runs[..index].iter().rev().find(|r| store.paths(session_id, r, root).iter().any(|p| same_path(p, path))) else {
+    let Some(next) = runs[..index].iter().rev().find(|r| originals.paths(r).iter().any(|p| same_path(p, path))) else {
         return Later::Nothing;
     };
-    let Some(before) = store.find(session_id, Some(next), path, Some(root)) else { return Later::File };
+    let Some(before) = originals.original(next, path) else { return Later::File };
     match diff::compute(&before.text, current) {
         Some(changes) if !changes.truncated => Later::Stretches(hunks::changed_stretches(&changes.hunks)),
         _ => Later::File,
@@ -341,13 +451,21 @@ fn later_changes(store: &FileOriginalStore, session_id: &str, run_id: &str, root
 /// The hunk review of one file `run_id` (a notice run: the run it came from) of the pane changed (`runChangesHunks`); None when the
 /// run kept no original of it under `root`.
 pub fn hunk_review(store: &FileOriginalStore, session_id: &str, run_id: &str, root: &str, path: &str) -> Option<Value> {
+    let none = |_: &Path| Ok(());
+    hunk_review_on(&LocalOriginals { store, session_id, root }, &FolderFiles { root, store: Some(store), trash: &none }, run_id, path)
+}
+
+/// [`hunk_review`] over any originals and files.
+pub fn hunk_review_on(originals: &dyn ReviewOriginals, files: &dyn ReviewFiles, run_id: &str, path: &str) -> Option<Value> {
     let run_id = source_run(run_id);
-    let (path, original) = kept(store, session_id, run_id, root, path)?;
+    let (path, original) = kept(originals, run_id, path)?;
     let review = (|| {
-        regular_file(&path, root).ok_or(Refusal::Missing)?;
-        let current = store.current(&path, Path::new(root)).ok_or(Refusal::Unreadable)?;
-        let decisions = store.review_book(session_id, run_id, root).map(|b| b.decisions(&path)).unwrap_or_default();
-        let later = later_changes(store, session_id, run_id, root, &path, &current);
+        if !files.regular(&path) {
+            return Err(Refusal::Missing);
+        }
+        let current = files.current(&path).ok_or(Refusal::Unreadable)?;
+        let decisions = originals.book(run_id).map(|b| b.decisions(&path)).unwrap_or_default();
+        let later = later_changes(originals, run_id, &path, &current);
         file_hunks(&original.text, &current, &decisions, &later).ok_or(Refusal::Unreadable)
     })();
     Some(file_hunks_json(review, "run", Some(&original.run_id), original.created))
@@ -366,13 +484,32 @@ pub fn discard_hunk(
     shown: Option<&Hunk>,
     trash: &dyn Fn(&Path) -> Result<(), String>,
 ) -> Outcome {
+    discard_hunk_on(
+        &LocalOriginals { store, session_id, root },
+        &FolderFiles { root, store: Some(store), trash },
+        run_id,
+        path,
+        fingerprint,
+        shown,
+    )
+}
+
+/// [`discard_hunk`] over any originals and files.
+pub fn discard_hunk_on(
+    originals: &dyn ReviewOriginals,
+    files: &dyn ReviewFiles,
+    run_id: &str,
+    path: &str,
+    fingerprint: &str,
+    shown: Option<&Hunk>,
+) -> Outcome {
     let run_id = source_run(run_id);
-    let Some((path, original)) = kept(store, session_id, run_id, root, path) else { return Outcome::Refused(Refusal::Missing) };
+    let Some((path, original)) = kept(originals, run_id, path) else { return Outcome::Refused(Refusal::Missing) };
     let base = Base { text: original.text, created: original.created };
-    let book = store.review_book(session_id, run_id, root);
-    let current = store.current(&path, Path::new(root));
-    let later = |now: &str| later_changes(store, session_id, run_id, root, &path, now);
-    discard_in(root, &path, &base, current, later, fingerprint, shown, book.as_ref(), trash)
+    let book = originals.book(run_id);
+    let current = files.current(&path);
+    let later = |now: &str| later_changes(originals, run_id, &path, now);
+    discard_on(files, &path, &base, current, later, fingerprint, shown, book.as_ref())
 }
 
 /// Records the hunks of `paths` as taken (받기; nothing is written to the files): those named by `fingerprints`, else every hunk each
@@ -385,14 +522,32 @@ pub fn accept_hunks(
     paths: &[String],
     fingerprints: Option<&[String]>,
 ) -> bool {
+    let none = |_: &Path| Ok(());
+    accept_hunks_on(
+        &LocalOriginals { store, session_id, root },
+        &FolderFiles { root, store: Some(store), trash: &none },
+        run_id,
+        paths,
+        fingerprints,
+    )
+}
+
+/// [`accept_hunks`] over any originals and files.
+pub fn accept_hunks_on(
+    originals: &dyn ReviewOriginals,
+    files: &dyn ReviewFiles,
+    run_id: &str,
+    paths: &[String],
+    fingerprints: Option<&[String]>,
+) -> bool {
     let run_id = source_run(run_id);
-    let Some(book) = store.review_book(session_id, run_id, root) else { return false };
+    let Some(book) = originals.book(run_id) else { return false };
     let mut written = true;
     for wanted in paths {
-        let Some((path, original)) = kept(store, session_id, run_id, root, wanted) else { continue };
+        let Some((path, original)) = kept(originals, run_id, wanted) else { continue };
         let prints = match fingerprints {
             Some(given) => given.to_vec(),
-            None => match store.current(&path, Path::new(root)).and_then(|now| hunks::hunks(&original.text, &now)) {
+            None => match files.current(&path).and_then(|now| hunks::hunks(&original.text, &now)) {
                 Some((_, prints)) => prints,
                 None => continue,
             },
@@ -436,21 +591,14 @@ pub fn regular_file(relative: &str, root: &str) -> Option<PathBuf> {
     (!meta.file_type().is_symlink() && !is_reparse_point(&meta) && meta.file_type().is_file()).then_some(real)
 }
 
-fn item(
-    store: &FileOriginalStore,
-    path: &str,
-    original: &FileOriginal,
-    root: &str,
-    touched_later: bool,
-    decisions: &HashMap<String, Decision>,
-) -> Item {
+fn item(files: &dyn ReviewFiles, path: &str, original: &FileOriginal, touched_later: bool, decisions: &HashMap<String, Decision>) -> Item {
     let action = if original.created { Action::Trash } else { Action::Restore };
     let gone = hunks::progress(&[], decisions);
     let refused = |refusal| Item { path: path.to_string(), action, restored: 0, removed: 0, refusal: Some(refusal), progress: gone };
-    if regular_file(path, root).is_none() {
+    if !files.regular(path) {
         return refused(Refusal::Missing);
     }
-    let Some(current) = store.current(path, Path::new(root)) else { return refused(Refusal::Unreadable) };
+    let Some(current) = files.current(path) else { return refused(Refusal::Unreadable) };
     let reviewed = hunks::hunks(&original.text, &current);
     let progress = reviewed.as_ref().map_or(gone, |(_, prints)| hunks::progress(prints, decisions));
     let changes = reviewed.map(|(changes, _)| changes);
@@ -466,10 +614,10 @@ fn item(
 }
 
 /// Paths a run of the pane newer than `run_id` changed too (kept or refused: either way that run's work is in the file).
-fn later_paths(store: &FileOriginalStore, session_id: &str, run_id: &str, root: &str) -> Vec<String> {
-    let runs = store.runs(session_id);
+fn later_paths(originals: &dyn ReviewOriginals, run_id: &str) -> Vec<String> {
+    let runs = originals.runs();
     let Some(index) = runs.iter().position(|r| r == run_id) else { return vec![] };
-    runs[..index].iter().flat_map(|r| store.paths(session_id, r, root)).collect()
+    runs[..index].iter().flat_map(|r| originals.paths(r)).collect()
 }
 
 /// `text` in `encoding`, its byte order mark first; None when the encoding cannot hold it (CP949 and a character it has no code for).

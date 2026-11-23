@@ -4618,7 +4618,7 @@
   "ssh.failure.other": "{host} に SSH で接続できませんでした。",
   "ssh.run.error.unavailable": "この SSH マシンに接続できません。",
   "ssh.run.error.provider": "{name} はまだ SSH マシンで実行できません。",
-  "ssh.run.error.attachments": "SSH マシンのペインにはまだファイルを添付できません。",
+  "ssh.attachments.error.upload": "添付ファイルを SSH マシンにアップロードできませんでした。",
   "ssh.held.error.gone": "SSH マシン上でこの実行のフォルダーが見つかりません。これ以上出力を読み取れません。",
   "ssh.held.error.lost": "SSH 接続が 30 分間戻らなかったため、この実行はここで終了しました。リモートでは終わるまで続く場合があります。",
   "ssh.terminal.lost": "SSH 接続が切れました。",

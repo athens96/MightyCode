@@ -4618,7 +4618,7 @@
   "ssh.failure.other": "无法通过 SSH 连接到 {host}。",
   "ssh.run.error.unavailable": "无法连接此 SSH 主机。",
   "ssh.run.error.provider": "{name} 暂时无法在 SSH 主机上运行。",
-  "ssh.run.error.attachments": "SSH 主机的窗格暂不支持附件。",
+  "ssh.attachments.error.upload": "无法将附件上传到 SSH 机器。",
   "ssh.held.error.gone": "在 SSH 机器上找不到此运行的文件夹，无法继续读取其输出。",
   "ssh.held.error.lost": "SSH 连接 30 分钟内没有恢复，此运行已在这里结束。它可能会在远程机器上继续运行直到完成。",
   "ssh.terminal.lost": "SSH 连接已断开。",

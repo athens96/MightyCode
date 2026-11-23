@@ -25,6 +25,7 @@ pub mod patch;
 pub mod preview;
 pub mod raster;
 pub mod reference;
+pub mod remote_review;
 pub mod revert;
 pub mod source;
 pub mod tree;

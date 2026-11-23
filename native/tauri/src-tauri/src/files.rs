@@ -348,7 +348,11 @@ pub(crate) fn editor_root(host: &Host, args: &Value, reference: bool) -> Result<
 /// store: off the page's thread.
 pub(crate) fn request_changes(host: &Host, pane: &str, run: &str, root: &str) -> Option<RequestCounts> {
     let files = state(host).ok()?;
-    let items = mighty_files::revert::plan(&files.originals, pane, run, root);
+    counts(&mighty_files::revert::plan(&files.originals, pane, run, root))
+}
+
+/// A request's counts from its review items; None when it changed nothing the review can show.
+pub(crate) fn counts(items: &[mighty_files::revert::Item]) -> Option<RequestCounts> {
     if items.is_empty() {
         return None;
     }
@@ -770,6 +774,41 @@ fn save_answer(host: &Host, files: &Files, outcome: Result<mighty_files::edit::S
     }
 }
 
+/// MC-40: the pane of a `runChanges*` call when it is a pane of an SSH workspace (its review reads the far side's snapshots).
+fn ssh_pane(host: &Host, args: &Value) -> Option<String> {
+    text(args, "paneId").filter(|pane| crate::ssh::review::is_ssh_pane(host, pane)).map(str::to_string)
+}
+
+/// MC-40: `work` over the SSH pane's review (None when its machine cannot be reached or it kept no snapshots), off the page's thread.
+async fn with_remote<T: Send + 'static>(
+    host: &Arc<Host>,
+    pane: &str,
+    work: impl FnOnce(Option<&mighty_files::remote_review::RemoteReview>) -> T + Send + 'static,
+) -> Result<T, String> {
+    let (host, pane, handle) = (host.clone(), pane.to_string(), tokio::runtime::Handle::current());
+    tauri::async_runtime::spawn_blocking(move || {
+        let review = crate::ssh::review::load(&host, &pane, handle).flatten();
+        work(review.as_ref())
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+fn items_json(items: &[mighty_files::revert::Item]) -> Vec<Value> {
+    items.iter().map(mighty_files::revert::Item::to_json).collect()
+}
+
+fn outcomes_json(outcomes: &[(String, mighty_files::revert::Outcome)]) -> Vec<Value> {
+    outcomes
+        .iter()
+        .map(|(path, outcome)| {
+            let mut value = outcome.to_json();
+            value["path"] = json!(path);
+            value
+        })
+        .collect()
+}
+
 pub fn register(methods: &mut Registry) {
     methods.add("openFiles", |host: Arc<Host>, args| async move {
         let mut view = host.view();
@@ -1016,6 +1055,23 @@ pub fn register(methods: &mut Registry) {
     // 요청 변경 검토 (M/RunChangesSheet.swift): of the graph runs named, those whose originals the store kept for a file under the pane's
     // run folder; a result block of one gets the review's button.
     methods.add("runChangesRuns", |host: Arc<Host>, args| async move {
+        if let Some(pane) = ssh_pane(&host, &args) {
+            let runs: Vec<(String, String)> = {
+                let view = host.view();
+                let ids = args.get("runIds").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
+                ids.iter()
+                    .filter_map(Value::as_str)
+                    .filter(|r| wire::identifier(r))
+                    .take(500)
+                    .map(|r| (r.to_string(), originals_run(&view, &pane, r)))
+                    .collect()
+            };
+            return with_remote(&host, &pane, move |review| {
+                let changed = review.map(|r| r.changed_runs()).unwrap_or_default();
+                json!(runs.into_iter().filter(|(_, kept)| changed.contains(kept)).map(|(id, _)| id).collect::<Vec<_>>())
+            })
+            .await;
+        }
         let Some((root, pane, runs)) = run_changes_target(&host, &args, |view, pane, args| {
             let ids = args.get("runIds").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
             Some(
@@ -1039,6 +1095,16 @@ pub fn register(methods: &mut Registry) {
     });
     // The files one request changed, as reverting each would go (`RunRevert.plan`); null for a remote or unknown pane.
     methods.add("runChanges", |host: Arc<Host>, args| async move {
+        if let Some(pane) = ssh_pane(&host, &args) {
+            let Some(run) = run_arg(&host.view(), &pane, &args) else { return Ok(Value::Null) };
+            let shown = crate::ssh::review::shown_root(&host, &pane);
+            return with_remote(&host, &pane, move |review| {
+                let Some(review) = review else { return Value::Null };
+                review.prefetch(&run);
+                json!({"root": shown, "items": items_json(&mighty_files::revert::plan_on(review, review, &run))})
+            })
+            .await;
+        }
         let Some((root, pane, run)) = run_changes_target(&host, &args, run_arg) else { return Ok(Value::Null) };
         let files = state(&host)?;
         let shown = root.clone();
@@ -1050,6 +1116,23 @@ pub fn register(methods: &mut Registry) {
     // The chosen paths put back (`RunRevert.apply`), each checked again just before it is written; a file the request made goes to the
     // Trash. Answers each path's outcome and the review as it is now.
     methods.add("runChangesRevert", |host: Arc<Host>, args| async move {
+        if let Some(pane) = ssh_pane(&host, &args) {
+            let Some(run) = run_arg(&host.view(), &pane, &args) else { return Ok(Value::Null) };
+            let paths = string_list(&args, "paths", changes::MAXIMUM_FILES_PER_RUN);
+            if paths.is_empty() {
+                return Ok(Value::Null);
+            }
+            let answer = with_remote(&host, &pane, move |review| {
+                let Some(review) = review else { return Value::Null };
+                review.prefetch(&run);
+                let outcomes = mighty_files::revert::apply_on(review, review, &run, Some(&paths));
+                let items = mighty_files::revert::plan_on(review, review, &run);
+                json!({"outcomes": outcomes_json(&outcomes), "items": items_json(&items)})
+            })
+            .await?;
+            crate::review::changed(&host);
+            return Ok(answer);
+        }
         let Some((root, pane, run)) = run_changes_target(&host, &args, run_arg) else { return Ok(Value::Null) };
         let paths: Vec<String> = args
             .get("paths")
@@ -1081,6 +1164,16 @@ pub fn register(methods: &mut Registry) {
     // 바뀐 부분별 받기·버리기 (MC-30): one file of the request, its diff against the original and each hunk's fingerprint, decision and
     // refusal (`RunRevert.hunk_review`); null when the run kept no original of it.
     methods.add("runChangesHunks", |host: Arc<Host>, args| async move {
+        if let Some(pane) = ssh_pane(&host, &args) {
+            let Some(run) = run_arg(&host.view(), &pane, &args) else { return Ok(Value::Null) };
+            let Some(path) = path_arg(&args) else { return Ok(Value::Null) };
+            return with_remote(&host, &pane, move |review| {
+                let Some(review) = review else { return Value::Null };
+                review.prefetch(&run);
+                mighty_files::revert::hunk_review_on(review, review, &run, &path).unwrap_or(Value::Null)
+            })
+            .await;
+        }
         let Some((root, pane, run)) = run_changes_target(&host, &args, run_arg) else { return Ok(Value::Null) };
         let Some(path) = path_arg(&args) else { return Ok(Value::Null) };
         let files = state(&host)?;
@@ -1094,6 +1187,46 @@ pub fn register(methods: &mut Registry) {
     // every hunk left in the files taken (`acceptAll`: `paths`, else `path`). Answers the outcome of a discard, the file's review as it
     // is now and the request's items (their progress).
     methods.add("runChangesHunk", |host: Arc<Host>, args| async move {
+        if let Some(pane) = ssh_pane(&host, &args) {
+            let Some(run) = run_arg(&host.view(), &pane, &args) else { return Ok(Value::Null) };
+            let Some(action) = text(&args, "action").filter(|a| matches!(*a, "discard" | "accept" | "acceptAll")).map(str::to_string)
+            else {
+                return Ok(Value::Null);
+            };
+            let path = path_arg(&args);
+            let fingerprints = string_list(&args, "fingerprints", 1_000);
+            let mut paths = string_list(&args, "paths", changes::MAXIMUM_FILES_PER_RUN);
+            if paths.is_empty() {
+                paths.extend(path.clone());
+            }
+            let shown = args.get("hunk").and_then(mighty_files::diff::Hunk::from_json);
+            let answer = with_remote(&host, &pane, move |review| {
+                use mighty_files::revert;
+                let Some(review) = review else { return Value::Null };
+                review.prefetch(&run);
+                let mut answer = json!({});
+                match (action.as_str(), &path) {
+                    ("discard", Some(path)) => {
+                        let Some(fingerprint) = fingerprints.first() else { return Value::Null };
+                        answer["outcome"] = revert::discard_hunk_on(review, review, &run, path, fingerprint, shown.as_ref()).to_json();
+                    }
+                    ("accept", Some(path)) => {
+                        answer["saved"] =
+                            json!(revert::accept_hunks_on(review, review, &run, std::slice::from_ref(path), Some(&fingerprints)));
+                    }
+                    ("acceptAll", _) => answer["saved"] = json!(revert::accept_hunks_on(review, review, &run, &paths, None)),
+                    _ => return Value::Null,
+                }
+                if let Some(path) = &path {
+                    answer["review"] = revert::hunk_review_on(review, review, &run, path).unwrap_or(Value::Null);
+                }
+                answer["items"] = json!(items_json(&revert::plan_on(review, review, &run)));
+                answer
+            })
+            .await?;
+            crate::review::changed(&host);
+            return Ok(answer);
+        }
         let Some((root, pane, run)) = run_changes_target(&host, &args, run_arg) else { return Ok(Value::Null) };
         let Some(action) = text(&args, "action").filter(|a| matches!(*a, "discard" | "accept" | "acceptAll")).map(str::to_string) else {
             return Ok(Value::Null);

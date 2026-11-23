@@ -194,6 +194,9 @@ pub fn extension(attachment: &RunAttachment) -> String {
 pub struct StagedAttachments {
     pub directory: PathBuf,
     pub files: Vec<(RunAttachment, PathBuf)>,
+    /// MC-40: the copies are on an SSH machine (`directory` and the paths are its POSIX paths): nothing here is removed; the far side
+    /// removes them when the run's CLI ends.
+    remote: bool,
 }
 
 fn random_hex(bytes: usize) -> String {
@@ -224,11 +227,20 @@ impl StagedAttachments {
             Ok(files)
         })();
         match staged {
-            Ok(files) => Ok(StagedAttachments { directory, files }),
+            Ok(files) => Ok(StagedAttachments { directory, files, remote: false }),
             Err(error) => {
                 let _ = std::fs::remove_dir_all(&directory);
                 Err(error)
             }
+        }
+    }
+
+    /// MC-40: copies uploaded to an SSH machine (`directory` and `files` as that machine's paths): never removed here.
+    pub fn remote(directory: String, files: Vec<(RunAttachment, String)>) -> StagedAttachments {
+        StagedAttachments {
+            directory: PathBuf::from(directory),
+            files: files.into_iter().map(|(attachment, path)| (attachment, PathBuf::from(path))).collect(),
+            remote: true,
         }
     }
 
@@ -303,6 +315,9 @@ impl StagedAttachments {
 
     /// `StagedAttachments.DisposeAsync`: the folder and the copies in it.
     pub fn dispose(&self) -> std::io::Result<()> {
+        if self.remote {
+            return Ok(());
+        }
         if self.directory.exists() { std::fs::remove_dir_all(&self.directory) } else { Ok(()) }
     }
 

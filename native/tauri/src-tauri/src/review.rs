@@ -325,7 +325,12 @@ pub async fn refresh(host: &Arc<Host>) -> Value {
     for (mut seed, root, candidates) in requests {
         let reader = host.clone();
         let pane = seed.pane_id.clone();
+        let handle = tokio::runtime::Handle::current();
         let changed = tauri::async_runtime::spawn_blocking(move || {
+            // MC-40: an SSH pane's requests are read from the far side's snapshots.
+            if crate::ssh::review::is_ssh_pane(&reader, &pane) {
+                return crate::ssh::review::request_changes(&reader, &pane, &candidates, handle);
+            }
             candidates.iter().find_map(|run| crate::files::request_changes(&reader, &pane, run, &root).map(|counts| (run.clone(), counts)))
         })
         .await

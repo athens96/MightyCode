@@ -179,7 +179,7 @@ async fn a_held_run_works_through_a_non_posix_login_shell_and_is_stopped() {
     let launch = machine.launch();
     let script = mighty_core::ssh::command::run_script(&launch.dir, "mcprobe", &["one".into()], &BTreeMap::new()).unwrap();
     let cat = format!("cd {} || exit 1\nprintf 'ready\\n'; cat; exit 4", mighty_core::ssh::command::quote_dir(&launch.dir));
-    let mut child = mighty_run::ssh_held::spawn(common::processes(), launch.clone(), &cat, "test").await.unwrap();
+    let mut child = mighty_run::ssh_held::spawn(common::processes(), launch.clone(), &cat, "test", None, None).await.unwrap();
     let mut stdin = child.stdin.take().unwrap();
     stdin.write_all(b"echoed\n").await.unwrap();
     drop(stdin);
@@ -188,13 +188,13 @@ async fn a_held_run_works_through_a_non_posix_login_shell_and_is_stopped() {
     assert_eq!(out, "ready\nechoed\n");
     assert_eq!(child.wait().await.unwrap(), 4);
 
-    let probe = mighty_run::ssh_held::spawn(common::processes(), launch.clone(), &script, "test").await.unwrap();
+    let probe = mighty_run::ssh_held::spawn(common::processes(), launch.clone(), &script, "test", None, None).await.unwrap();
     let mut text = String::new();
     let mut stdout = probe.stdout.unwrap();
     stdout.read_to_string(&mut text).await.unwrap();
     assert_eq!(text, format!("one|{}\n", machine.dir.display()));
 
-    let waiting = mighty_run::ssh_held::spawn(common::processes(), launch, "exec sleep 600", "test").await.unwrap();
+    let waiting = mighty_run::ssh_held::spawn(common::processes(), launch, "exec sleep 600", "test", None, None).await.unwrap();
     let control = waiting.control();
     tokio::time::timeout(Duration::from_secs(30), control.close()).await.unwrap().unwrap();
     assert_ne!(control.wait().await.unwrap(), 0);

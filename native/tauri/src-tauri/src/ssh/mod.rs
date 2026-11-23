@@ -16,6 +16,7 @@
 
 pub mod files;
 pub mod forward;
+pub mod review;
 pub mod server;
 
 use std::collections::{BTreeMap, HashSet};

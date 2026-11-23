@@ -32,8 +32,10 @@ use crate::ssh::SshLaunch;
 const GAPS: [u64; 6] = [2, 5, 15, 30, 60, 120];
 /// How long a run waits for its machine before it ends here as an error.
 pub const GIVE_UP: Duration = Duration::from_secs(30 * 60);
-/// How long the start, a drain and a stop may take.
+/// How long a drain and a stop may take.
 const SHORT: Duration = Duration::from_secs(30);
+/// How long the start may take (its first snapshot reads the whole folder once).
+const START: Duration = Duration::from_secs(120);
 /// How long an attach may take to say how much input arrived (a new sign-in included).
 const HEADER: Duration = Duration::from_secs(60);
 /// The most input kept to send again (an agent's input is prompts and answers; past this the oldest is forgotten).
@@ -92,11 +94,20 @@ impl Shared {
 
 /// Starts `script` (mighty-core `command::run_script`) as a held run on `launch`'s machine; `key` is the run's keyed-spawn key (its
 /// attaches go through [`ProcessHost::spawn_keyed`]).
-pub async fn spawn(processes: Arc<dyn ProcessHost>, launch: SshLaunch, script: &str, key: &str) -> std::result::Result<Child, Refused> {
+pub async fn spawn(
+    processes: Arc<dyn ProcessHost>,
+    launch: SshLaunch,
+    script: &str,
+    key: &str,
+    snapshots: Option<(&str, &str)>,
+    attachments: Option<&str>,
+) -> std::result::Result<Child, Refused> {
     let id = mighty_core::wire::new_id().replace('-', "").to_ascii_lowercase();
-    let start = held::start_script(&id, script).ok_or_else(|| Refused::Unsupported("id".into()))?;
+    // MC-40: the request's snapshots (its pane and request), for the review of what it changed.
+    let snapshots = snapshots.map(|(pane, run)| held::Snapshots { dir: launch.dir.clone(), pane: pane.to_string(), run: run.to_string() });
+    let start = held::start_script_with(&id, script, snapshots.as_ref(), attachments).ok_or_else(|| Refused::Unsupported("id".into()))?;
     let request = launch.exec_request(start, &BTreeMap::new());
-    let started = mighty_platform::process::capture(processes.as_ref(), request, None, SHORT, 64 * 1024)
+    let started = mighty_platform::process::capture(processes.as_ref(), request, None, START, 64 * 1024)
         .await
         .map_err(|e| Refused::Ssh(e.to_string()))?;
     let stderr = String::from_utf8_lossy(&started.stderr).trim().to_string();
@@ -369,4 +380,40 @@ impl ChildControl for HeldControl {
             current.leave(state);
         }
     }
+}
+
+/// MC-40: a run's attachments uploaded to the SSH machine (mighty-core `ssh::held::upload_script`: each file through ssh's standard
+/// input into a new 0700 folder, its `cksum` checked there), as the run's staged copies with that machine's paths, and the folder's
+/// tag (the held run removes it when its CLI ends; else a later upload after a week). Err with the sentence to show.
+pub async fn upload(
+    processes: &dyn ProcessHost,
+    launch: &SshLaunch,
+    attachments: &[mighty_core::attachment::RunAttachment],
+) -> std::result::Result<(crate::attachments::StagedAttachments, String), String> {
+    let failed = || crate::strings::get("ssh.attachments.error.upload");
+    let files = crate::attachments::validate(Some(attachments)).map_err(|e| e.to_string())?.ok_or_else(failed)?;
+    let tag = mighty_core::wire::new_id().replace('-', "").to_ascii_lowercase();
+    let mut folder: Option<String> = None;
+    let mut uploaded = Vec::new();
+    for (index, attachment) in files.iter().enumerate() {
+        let bytes = crate::attachments::decode(attachment).map_err(|e| e.to_string())?;
+        let suffix = mighty_core::wire::new_id().replace('-', "").to_ascii_lowercase();
+        let name = format!("{index}-{}{}", &suffix[..16], crate::attachments::extension(attachment));
+        let script = held::upload_script(&tag, &name, mighty_core::ssh::files::cksum(&bytes), index == 0).ok_or_else(failed)?;
+        let request = launch.exec_request(script, &BTreeMap::new());
+        let captured = mighty_platform::process::capture(processes, request, Some(bytes), Duration::from_secs(120), 64 * 1024)
+            .await
+            .map_err(|_| failed())?;
+        if captured.exit_code != 0 {
+            return Err(failed());
+        }
+        let printed = String::from_utf8_lossy(&captured.stdout).lines().last().unwrap_or_default().trim().to_string();
+        if !printed.starts_with('/') || printed.chars().any(char::is_control) || folder.as_ref().is_some_and(|f| *f != printed) {
+            return Err(failed());
+        }
+        uploaded.push((attachment.clone(), format!("{printed}/{name}")));
+        folder = Some(printed);
+    }
+    let folder = folder.ok_or_else(failed)?;
+    Ok((crate::attachments::StagedAttachments::remote(folder, uploaded), tag))
 }

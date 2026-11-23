@@ -136,6 +136,8 @@ The machine shows in the sidebar under an "SSH · name" header, with its workspa
 - Terminal panes: the machine's login shell in that folder.
 - Agent panes: Claude, Codex, Antigravity and pi run with the CLI installed on that machine and its account there. Approval and question cards show in this app. If the CLI isn't on the machine, the run ends with an error.
 - The machine's login shell may be fish, csh or tcsh as well as bash or zsh.
+- Reviewing a request's changes, hunk by hunk: what an agent pane's request changed on the machine is reviewed as on this computer. The machine's folder is snapshotted before and after each request (git is needed there; the repository itself is never written), so requests of Codex, Antigravity and pi work as well as Claude's. Putting back writes the machine's file in one step and never overwrites a file that changed meanwhile. A file the request made is moved into Mighty Code's keeping folder on the machine, not deleted.
+- Attachments: dropped files go up to a temporary folder on the machine that only you can read, and are removed when the run ends.
 - Files pane: open, edit and save the machine's files (up to 1 MiB each). A save replaces the file there in one step and keeps its encoding, line endings and permissions. If an agent or someone else changed the file after you opened it, nothing is overwritten: you're told and choose to reload or overwrite.
 - On a Mac, the panes of one machine share one SSH connection. Windows' OpenSSH can't, so each pane connects on its own.
 - Connect locally: when a pane's output names a dev server such as `localhost:3000`, the SSH bar over the pane offers to connect it. It forwards to a free port on this computer; click the address to open it in the browser. Closing the pane ends the forward.
@@ -147,7 +149,7 @@ The machine shows in the sidebar under an "SSH · name" header, with its workspa
 - Agent runs keep going on the machine. This app reconnects after 2, 5, 15, 30, 60 and 120 seconds (then every 120 seconds) and reads on from where it stopped; a waiting approval card stays, and an answer you give while the connection is down reaches the CLI once it's back. If the connection doesn't come back within 30 minutes, the run ends here with an error and may keep running on the machine until it finishes.
 
 **Not yet**
-- Reviewing a request's changes (accepting or discarding hunks), remote git changes, the work map, worktrees, Mighty orchestration, attachments, and opencode and Hermes panes.
+- Remote git changes, the work map, worktrees, Mighty orchestration, and opencode and Hermes panes.
 
 **Mighty Code server (remote Mac)**
 When the machine is a Mac, Mighty Code can run there without a window, and you use that Mac's workspaces and agent panes here [as they are](#mirror). Only this machine's SSH is used: no Tailscale, no pairing link. Linux and Windows machines can't get one (there is no Linux build); use them the way above, with nothing installed.
