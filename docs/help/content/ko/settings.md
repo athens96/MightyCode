@@ -73,6 +73,44 @@ Mac에서는 보기 메뉴의 {{ui:menu.textBigger}}({{kbd:⌘=}}), {{ui:menu.te
 
 ![[companion-pet]]
 
+## 자동화와 명령줄 {#automation}
+{{ui:settings.nav.companion}} 탭의 {{ui:automation.settings.sectionTitle}} 상자에서 에이전트 창의 상태가 바뀔 때 알릴 곳을 정합니다. 요청 글, 파일 내용, 토큰은 어디에도 보내지 않습니다.
+- {{ui:automation.settings.events}}: {{ui:automation.event.started}}, {{ui:automation.event.blocked}}, {{ui:automation.event.done}}, {{ui:automation.event.failed}}, {{ui:automation.event.stopped}} 중에서 고릅니다. 처음에는 승인·질문 대기, 완료, 실패가 켜져 있습니다. 웹훅과 상태 명령이 함께 따릅니다.
+- {{ui:automation.webhooks.title}}: Slack, Discord, 다른 HTTPS 주소를 다섯 개까지 넣습니다. 주소는 시스템 키체인(Windows는 자격 증명 관리자)에 저장되고 화면에는 일부만 보입니다. 보내는 내용은 제목, 상태, 워크스페이스와 창 이름뿐입니다. {{ui:automation.webhooks.test}} 단추로 시험 메시지를 보냅니다. 같은 창의 같은 상태는 5초에 한 번, 주소마다 1분에 여섯 번까지 보내고, 서버 오류가 나면 한 번 더 보냅니다.
+- {{ui:automation.hook.title}}: 고른 상태가 되면 이 명령을 그 창의 폴더에서 실행합니다. 상태는 인자가 아니라 `MIGHTY_EVENT`, `MIGHTY_STATE`, `MIGHTY_PREVIOUS_STATE`, `MIGHTY_REASON`, `MIGHTY_PANE_ID`, `MIGHTY_PANE_TITLE`, `MIGHTY_AGENT`, `MIGHTY_WORKSPACE_ID`, `MIGHTY_WORKSPACE_NAME`, `MIGHTY_WORKSPACE_PATH` 환경 변수로 받습니다. 20초가 지나면 멈춥니다.
+- {{ui:automation.api.title}}: 실행 중인 앱을 `mighty` 명령으로 다룰 수 있는지 보여 줍니다. {{ui:automation.api.rotate}} 단추는 토큰을 바꾸고 열려 있던 연결을 끊습니다.
+
+저장소마다 상태 명령을 두려면 `.mighty.local.yaml`에 적습니다. [다른 설정처럼](delegation.md#mighty-yaml) 승인한 뒤에만 실행되고, 함께 쓰는 `.mighty.yaml`에는 넣을 수 없습니다.
+
+```yaml
+hooks:
+  command: ./scripts/notify.sh
+  on: [blocked, done, failed]   # started, blocked, done, failed, stopped
+  timeoutSeconds: 20            # 1-300
+```
+
+### mighty 명령 {#cli}
+Mac에서는 {{ui:menu.workspace}} 메뉴의 {{ui:shellCommand.install}} 항목으로 `~/.local/bin/mighty`를 설치합니다. `mighty`, `mighty 폴더`, `mighty "요청"`은 예전처럼 폴더를 엽니다. 이름이 명령과 같은 폴더는 `mighty ./status`처럼 엽니다. 아래 명령은 실행 중인 앱에 연결하고 JSON으로 답합니다. 0.6.0 전에 설치했다면 한 번 다시 설치하세요. Windows에서는 `MightyCode.exe --cli status`처럼 씁니다.
+
+```sh
+mighty status                                   # 워크스페이스, 창, 상태, 주의 표시, worktree, 포트 범위
+mighty workspace list
+mighty pane list --workspace <id>
+mighty pane read <pane> --lines 100
+mighty agent new --workspace <id> --agent codex --worktree
+mighty agent send <pane> "테스트를 고쳐 줘"
+mighty agent wait <pane> --until done --timeout 600
+mighty pane wait-output <pane> --regex "passed|failed" --timeout 300
+mighty events --type pane.state
+```
+
+- 창 id는 앱이 쓰는 그대로이고 바뀌지 않습니다. 상태는 `idle`, `running`, `blocked`(승인·질문 대기), `done`, `failed`, `stopped`입니다.
+- `agent send`는 입력창에서 보낸 것과 같습니다. 실행 중이면 대기열에 들어갑니다. `-`를 주면 표준 입력에서 읽습니다.
+- `agent wait`와 `pane wait-output`은 상태와 출력이 바뀔 때만 깨어납니다. `pane wait-output`은 기다리기 시작한 뒤의 새 줄을 한 줄씩 봅니다.
+- `pane read`와 출력에서 비밀값처럼 보이는 줄은 가려집니다. `events`는 한 줄에 사건 하나를 씁니다(`pane.state`, `attention`, `run.completed`와 비용).
+- 끝 코드는 성공 0, 오류 1, 시간 초과 2입니다.
+- 연결은 이 컴퓨터의 같은 사용자만 할 수 있습니다(Mac은 권한 0600의 소켓, Windows는 현재 사용자만 여는 named pipe). 요청마다 데이터 폴더 `control/token`의 토큰이 필요합니다. `--profile`로 실행한 앱에는 `mighty --profile <폴더> status`로 연결합니다.
+
 ## 구성 요소 {#components}
 {{ui:settings.nav.tools}} 탭은 앱에 필요한 것이 준비됐는지 보여 주고, 에이전트 CLI의 설치, 로그인, 업데이트를 한곳에서 관리합니다. 이 컴퓨터의 운영체제에 맞는 항목만 보입니다.
 

@@ -9,6 +9,7 @@ pub mod add_pane;
 pub mod app_update_view;
 pub mod attachment;
 pub mod attention;
+pub mod control;
 pub mod demo;
 pub mod design_tokens;
 pub mod graph;

@@ -85,6 +85,34 @@ pub fn agent_io_connector() -> Arc<dyn mighty_platform::AgentIoConnector> {
     os::agent_io_connector()
 }
 
+/// MC-9: the local control API's listener: the Mac's Unix socket `<data>/control/mighty.sock` (0600 in a 0700 folder), Windows' owner-
+/// only named pipe `mighty-control-<32 hex>` that refuses remote clients.
+pub fn control_listener(data_dir: &std::path::Path) -> Arc<dyn mighty_platform::AgentIoListener> {
+    #[cfg(windows)]
+    {
+        let _ = data_dir;
+        os::control_listener()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        os::control_listener(data_dir)
+    }
+}
+
+/// MC-9: the `mighty` CLI's client of that listener.
+pub fn control_connector() -> Arc<dyn mighty_platform::AgentIoConnector> {
+    os::control_connector()
+}
+
+/// The app's identifier (tauri.conf.json's), for code that runs without Tauri's context (the `mighty` CLI).
+pub const IDENTIFIER: &str = "dev.mightycode.native";
+
+/// The profile's data folder as the app resolves it (`--profile`, else the OS's default), without the other ports (the CLI).
+pub fn data_dir(profile: Option<PathBuf>) -> std::result::Result<PathBuf, String> {
+    use mighty_platform::Paths as _;
+    os::paths(profile, IDENTIFIER).map(|paths| paths.data_dir().to_path_buf()).map_err(|e| e.to_string())
+}
+
 /// A volume's free space (delegation's worktree check, W7-B; the smoke gives unlimited space instead).
 #[allow(dead_code, reason = "delegation.rs (W7-D) hands it to mighty-delegation's worktree maker")]
 pub fn disk_space() -> Arc<dyn mighty_platform::DiskSpace> {

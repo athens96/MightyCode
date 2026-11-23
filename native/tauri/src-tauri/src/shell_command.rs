@@ -14,19 +14,51 @@ use crate::host::Host;
 pub const NAME: &str = "mighty";
 
 /// The `mighty` shell command (hardened version of Swift `ShellCommand.script`, with `--` guards so dash-prefixed folders or prompts
-/// cannot be read as flags or injected into `osascript`; its file ends with one more newline).
+/// cannot be read as flags or injected into `osascript`; its file ends with one more newline). MC-9: its control commands (`status`,
+/// `workspace`, `pane`, `agent`, `events`, and `--profile`/`--help` before them) run the app's exe as `<exe> --cli …` ([`APP`] is
+/// replaced by the exe's path as it installs, `MIGHTY_CODE_APP` overrides it); anything else opens a folder as before (a folder named
+/// like a command opens as `mighty ./status`).
 pub const SCRIPT: &str = r#"#!/bin/sh
 # Mighty Code: open a folder (default: the current one) as a workspace,
 # with an optional request put in the composer (never sent).
 #   mighty                 open this folder
 #   mighty ../other        open another folder
 #   mighty "fix the tests" open this folder with a request
+#   mighty status          control the running app (mighty --help)
+app="${MIGHTY_CODE_APP:-@APP@}"
+case "$1" in status|workspace|pane|agent|events|--profile|--help|-h)
+  [ -x "$app" ] || { echo "mighty: $app is not there; install the shell command again from Mighty Code" >&2; exit 1; }
+  exec "$app" --cli "$@" ;;
+esac
 dir="$PWD"
 if [ $# -gt 0 ] && [ -d "$1" ]; then case "$1" in -*) dir="$(CDPATH= cd -- "./$1" && pwd)" ;; *) dir="$(CDPATH= cd -- "$1" && pwd)" ;; esac; shift; fi
 enc() { osascript -l JavaScript -e 'function run(a) { return encodeURIComponent(a[0]) }' -- "$1"; }
 url="mightycode://open?path=$(enc "$dir")"
 if [ $# -gt 0 ]; then url="$url&prompt=$(enc "$*")"; fi
 exec open "$url""#;
+
+/// The placeholder [`SCRIPT`] holds for the app's exe.
+pub const APP: &str = "@APP@";
+
+/// Where the app is when its own path cannot be read.
+const DEFAULT_APP: &str = "/Applications/Mighty Code.app/Contents/MacOS/MightyCode";
+
+/// The script for the app at `app`: its path inside the script's double quotes (`"`, `$`, `` ` `` and `\` escaped).
+pub fn script(app: &Path) -> String {
+    let mut quoted = String::new();
+    for c in app.to_string_lossy().chars() {
+        if "\"$`\\".contains(c) {
+            quoted.push('\\');
+        }
+        quoted.push(c);
+    }
+    SCRIPT.replace(APP, &quoted)
+}
+
+/// This app's exe, which the command's control commands run.
+fn app_path() -> PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from(DEFAULT_APP))
+}
 
 /// `~/.local/bin`, the folder the command goes in (no administrator needed).
 pub fn folder(home: &Path) -> PathBuf {
@@ -61,7 +93,7 @@ pub fn install(home: &Path, replace: bool) -> Result<Installed, String> {
     }
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
     let staged = folder.join(format!(".{NAME}.{}.{stamp}.tmp", std::process::id()));
-    crate::platform::write_new_executable(&staged, format!("{SCRIPT}\n").as_bytes()).map_err(|e| e.to_string())?;
+    crate::platform::write_new_executable(&staged, format!("{}\n", script(&app_path())).as_bytes()).map_err(|e| e.to_string())?;
     if let Err(error) = std::fs::rename(&staged, &path) {
         let _ = std::fs::remove_file(&staged);
         return Err(error.to_string());
@@ -207,6 +239,52 @@ mod tests {
             SCRIPT.contains("osascript -l JavaScript -e 'function run(a) { return encodeURIComponent(a[0]) }' -- \"$1\""),
             "osascript must terminate flags with -- before \"$1\": {SCRIPT}"
         );
+    }
+
+    /// MC-9: the app's path goes into the script quoted, whatever it holds.
+    #[test]
+    fn the_apps_path_goes_into_the_script_quoted() {
+        let text = script(Path::new("/Apps/My \"odd\" $HOME `x`/MightyCode"));
+        assert!(text.contains(r#"app="${MIGHTY_CODE_APP:-/Apps/My \"odd\" \$HOME \`x\`/MightyCode}""#), "{text}");
+        assert!(!text.contains(APP));
+    }
+
+    /// MC-9: the control commands run the app's exe with `--cli`; a folder or a request still opens as before.
+    #[cfg(target_os = "macos")]
+    #[allow(clippy::disallowed_methods, reason = "the test runs the installed shell script itself, no child of the app")]
+    #[test]
+    fn control_commands_go_to_the_apps_cli() {
+        use std::os::unix::fs::PermissionsExt as _;
+        use std::process::Command;
+
+        let root = std::env::temp_dir().join(format!("mighty-cli-{}-{}", std::process::id(), mighty_core::wire::new_id()));
+        let (home, bin) = (root.join("home"), root.join("bin"));
+        std::fs::create_dir_all(&bin).unwrap();
+        let fake_app = bin.join("MightyCode");
+        std::fs::write(&fake_app, "#!/bin/sh\nprintf 'app:%s|' \"$@\"\n").unwrap();
+        std::fs::set_permissions(&fake_app, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let fake_open = bin.join("open");
+        std::fs::write(&fake_open, "#!/bin/sh\nprintf 'open:%s' \"$1\"\n").unwrap();
+        std::fs::set_permissions(&fake_open, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let Installed::Written(mighty) = install(&home, false).unwrap() else { panic!("written") };
+        let run = |args: &[&str], app: &Path| -> (bool, String) {
+            let output = Command::new(&mighty)
+                .args(args)
+                .current_dir(&root)
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .env("MIGHTY_CODE_APP", app)
+                .output()
+                .unwrap();
+            (output.status.success(), String::from_utf8_lossy(&output.stdout).into_owned())
+        };
+        assert_eq!(run(&["status", "--json"], &fake_app), (true, "app:--cli|app:status|app:--json|".into()));
+        assert_eq!(run(&["agent", "send", "p1", "fix it"], &fake_app).1, "app:--cli|app:agent|app:send|app:p1|app:fix it|");
+        assert_eq!(run(&["--profile", "/tmp/p", "pane", "list"], &fake_app).1, "app:--cli|app:--profile|app:/tmp/p|app:pane|app:list|");
+        let (_, opened) = run(&["fix the tests"], &fake_app);
+        assert!(opened.starts_with("open:mightycode://open?path="), "a request still opens: {opened}");
+        let (ok, _) = run(&["status"], &root.join("missing"));
+        assert!(!ok, "an app that is not there is an error");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[cfg(target_os = "macos")]

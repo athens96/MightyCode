@@ -73,6 +73,44 @@ The {{ui:settings.nav.companion}} tab sets up Mighty Pet and the completion noti
 
 ![[companion-pet]]
 
+## Automation and the command line {#automation}
+The {{ui:automation.settings.sectionTitle}} box of the {{ui:settings.nav.companion}} tab sets where to tell when an agent pane's state changes. Requests, file contents and tokens are never sent anywhere.
+- {{ui:automation.settings.events}}: choose from {{ui:automation.event.started}}, {{ui:automation.event.blocked}}, {{ui:automation.event.done}}, {{ui:automation.event.failed}} and {{ui:automation.event.stopped}}. Waiting, done and failed are on at first. The webhooks and the status command both follow them.
+- {{ui:automation.webhooks.title}}: up to five Slack, Discord or other HTTPS addresses. They are kept in the system keychain (Credential Manager on Windows) and shown only in part. A post carries the title, the state and the workspace and pane names, nothing else. {{ui:automation.webhooks.test}} sends a test message. The same state of the same pane posts once in 5 seconds, each address at most six times a minute, and a server error is tried once more.
+- {{ui:automation.hook.title}}: runs this command in the pane's folder when it reaches a chosen state. The state comes in environment variables, never arguments: `MIGHTY_EVENT`, `MIGHTY_STATE`, `MIGHTY_PREVIOUS_STATE`, `MIGHTY_REASON`, `MIGHTY_PANE_ID`, `MIGHTY_PANE_TITLE`, `MIGHTY_AGENT`, `MIGHTY_WORKSPACE_ID`, `MIGHTY_WORKSPACE_NAME`, `MIGHTY_WORKSPACE_PATH`. It is stopped after 20 seconds.
+- {{ui:automation.api.title}}: whether the `mighty` command can control the running app. {{ui:automation.api.rotate}} replaces the token and closes the connections that were open.
+
+For a status command per repository, write it in `.mighty.local.yaml`. Like [the other settings there](delegation.md#mighty-yaml) it runs only once approved, and the shared `.mighty.yaml` may not hold one.
+
+```yaml
+hooks:
+  command: ./scripts/notify.sh
+  on: [blocked, done, failed]   # started, blocked, done, failed, stopped
+  timeoutSeconds: 20            # 1-300
+```
+
+### The mighty command {#cli}
+On the Mac, {{ui:shellCommand.install}} in the {{ui:menu.workspace}} menu installs `~/.local/bin/mighty`. `mighty`, `mighty folder` and `mighty "request"` open a folder as before; a folder named like a command opens as `mighty ./status`. The commands below talk to the running app and answer in JSON. If you installed it before 0.6.0, install it once more. On Windows, run `MightyCode.exe --cli status` and so on.
+
+```sh
+mighty status                                   # workspaces, panes, state, attention, worktree, port block
+mighty workspace list
+mighty pane list --workspace <id>
+mighty pane read <pane> --lines 100
+mighty agent new --workspace <id> --agent codex --worktree
+mighty agent send <pane> "fix the tests"
+mighty agent wait <pane> --until done --timeout 600
+mighty pane wait-output <pane> --regex "passed|failed" --timeout 300
+mighty events --type pane.state
+```
+
+- Pane ids are the app's own and never change. States are `idle`, `running`, `blocked` (waiting for an approval or an answer), `done`, `failed` and `stopped`.
+- `agent send` is the same as sending from the composer: a busy pane queues it. Give `-` to read the text from standard input.
+- `agent wait` and `pane wait-output` wake only when a state or output changes. `pane wait-output` looks at each new line after the wait began.
+- Lines that look like secrets are hidden in `pane read` and in output. `events` writes one event per line (`pane.state`, `attention`, and `run.completed` with its cost).
+- Exit codes: 0 ok, 1 error, 2 timeout.
+- Only the same user on this computer can connect (a 0600 socket on the Mac, a named pipe only the current user opens on Windows), and every request needs the token in the data folder's `control/token`. Reach an app started with `--profile` with `mighty --profile <folder> status`.
+
 ## Components {#components}
 The {{ui:settings.nav.tools}} tab shows whether everything the app needs is ready, and is where you install, sign in to and update the agent CLIs. Only the items for this computer's system are shown.
 

@@ -37,6 +37,9 @@ use crate::win::wide;
 
 /// `AgentIOPipe.Prefix`.
 const PREFIX: &str = "mighty-agent-io-";
+/// MC-9: the local control API's pipe, `mighty-control-` + 32 hex digits (a new name each run, written to the profile's
+/// `control/endpoint.json` for the `mighty` CLI).
+pub const CONTROL_PREFIX: &str = "mighty-control-";
 /// How often a busy or missing pipe is tried again while connecting.
 const RETRY: Duration = Duration::from_millis(50);
 
@@ -49,8 +52,14 @@ fn refused(why: &str) -> PlatformError {
 }
 
 /// `mighty-agent-io-` and exactly 32 hex digits (the client's `IsPipeName`).
+#[cfg(test)]
 fn is_pipe_name(name: &str) -> bool {
-    name.strip_prefix(PREFIX).is_some_and(|hex| hex.len() == 32 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+    is_pipe_name_with(PREFIX, name)
+}
+
+/// `prefix` and exactly 32 hex digits.
+fn is_pipe_name_with(prefix: &str, name: &str) -> bool {
+    name.strip_prefix(prefix).is_some_and(|hex| hex.len() == 32 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 fn path(name: &str) -> String {
@@ -182,8 +191,9 @@ struct State {
 }
 
 /// The app's listener (one per app).
-#[derive(Default)]
 pub struct NamedPipeListener {
+    /// The names' prefix: the agents' pipe, or the control API's (MC-9).
+    prefix: &'static str,
     state: Mutex<State>,
     closed: AtomicBool,
     close: Notify,
@@ -195,9 +205,20 @@ impl std::fmt::Debug for NamedPipeListener {
     }
 }
 
+impl Default for NamedPipeListener {
+    fn default() -> NamedPipeListener {
+        NamedPipeListener { prefix: PREFIX, state: Mutex::default(), closed: AtomicBool::new(false), close: Notify::new() }
+    }
+}
+
 impl NamedPipeListener {
     pub fn new() -> NamedPipeListener {
         NamedPipeListener::default()
+    }
+
+    /// MC-9: the local control API's listener: the same owner-only pipe, remote clients refused, under [`CONTROL_PREFIX`].
+    pub fn control() -> NamedPipeListener {
+        NamedPipeListener { prefix: CONTROL_PREFIX, ..NamedPipeListener::default() }
     }
 
     /// Ends once [`AgentIoListener::close`] was called.
@@ -276,10 +297,11 @@ impl NamedPipeListener {
 impl AgentIoListener for NamedPipeListener {
     /// A random name and its first instance (inside a tokio runtime: the instance is registered with it).
     fn bind(&self) -> Result<String> {
+        let prefix = self.prefix;
         self.bind_with(|| {
             let mut bytes = [0u8; 16];
             getrandom::fill(&mut bytes).map_err(|_| refused("no random numbers"))?;
-            Ok(format!("{PREFIX}{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+            Ok(format!("{prefix}{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
         })
     }
 
@@ -300,32 +322,46 @@ pub struct NamedPipeConnector;
 
 impl NamedPipeConnector {
     async fn connect_one(name: String, timeout: Duration) -> Result<AgentIoConnection> {
-        if !is_pipe_name(&name) {
-            return Err(PlatformError::Invalid("not an Agent IO pipe name".into()));
-        }
-        let deadline = tokio::time::Instant::now() + timeout;
-        let client = loop {
-            match ClientOptions::new().open(path(&name)) {
-                Ok(client) => break client,
-                Err(error)
-                    if error.raw_os_error() == Some(ERROR_PIPE_BUSY as i32)
-                        || error.raw_os_error() == Some(ERROR_FILE_NOT_FOUND as i32) =>
-                {
-                    let now = tokio::time::Instant::now();
-                    if now >= deadline {
-                        return Err(PlatformError::TimedOut("the Agent IO pipe"));
-                    }
-                    tokio::time::sleep(RETRY.min(deadline - now)).await;
-                }
-                Err(error) => return Err(PlatformError::Io(error)),
-            }
-        };
-        let owner = object_owner(&client)?;
-        if !same_sid(&owner, &token_owner()?) {
-            return Err(refused("the pipe is not owned by the current user"));
-        }
-        Ok(Box::new(client))
+        connect_with(PREFIX, name, timeout).await
     }
+}
+
+/// MC-9: the `mighty` CLI's client of the control API's pipe: only a [`CONTROL_PREFIX`] name, the owner checked as for Agent IO.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ControlPipeConnector;
+
+impl AgentIoConnector for ControlPipeConnector {
+    fn connect(&self, name: &str, timeout: Duration) -> BoxFuture<'_, Result<AgentIoConnection>> {
+        Box::pin(connect_with(CONTROL_PREFIX, name.to_string(), timeout))
+    }
+}
+
+/// Opens the pipe `name` (which must be `prefix` and 32 hex digits) within `timeout` and checks that this user owns it.
+async fn connect_with(prefix: &'static str, name: String, timeout: Duration) -> Result<AgentIoConnection> {
+    if !is_pipe_name_with(prefix, &name) {
+        return Err(PlatformError::Invalid("not an Agent IO pipe name".into()));
+    }
+    let deadline = tokio::time::Instant::now() + timeout;
+    let client = loop {
+        match ClientOptions::new().open(path(&name)) {
+            Ok(client) => break client,
+            Err(error)
+                if error.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) || error.raw_os_error() == Some(ERROR_FILE_NOT_FOUND as i32) =>
+            {
+                let now = tokio::time::Instant::now();
+                if now >= deadline {
+                    return Err(PlatformError::TimedOut("the Agent IO pipe"));
+                }
+                tokio::time::sleep(RETRY.min(deadline - now)).await;
+            }
+            Err(error) => return Err(PlatformError::Io(error)),
+        }
+    };
+    let owner = object_owner(&client)?;
+    if !same_sid(&owner, &token_owner()?) {
+        return Err(refused("the pipe is not owned by the current user"));
+    }
+    Ok(Box::new(client))
 }
 
 impl AgentIoConnector for NamedPipeConnector {
@@ -388,5 +424,19 @@ mod tests {
         let all_held = NamedPipeListener::new();
         let _taken = ServerOptions::new().create(path(&free)).unwrap();
         assert!(all_held.bind_with(|| Ok(free.clone())).is_err() && all_held.accept().await.is_err(), "no free name, no listener");
+    }
+
+    /// MC-9: the control API's pipe is the same owner-only pipe under its own prefix; each connector takes only its own names.
+    #[tokio::test]
+    async fn the_control_pipe_is_the_current_users_alone_under_its_own_prefix() {
+        let listener = NamedPipeListener::control();
+        let name = listener.bind().unwrap();
+        assert!(is_pipe_name_with(CONTROL_PREFIX, &name) && !is_pipe_name(&name), "{name}");
+        let (server, client) = tokio::join!(listener.accept(), ControlPipeConnector.connect(&name, Duration::from_secs(5)));
+        assert!(server.is_ok() && client.is_ok());
+        assert!(matches!(NamedPipeConnector.connect(&name, Duration::from_secs(1)).await, Err(PlatformError::Invalid(_))));
+        let agents = format!("{PREFIX}{}", "0".repeat(32));
+        assert!(matches!(ControlPipeConnector.connect(&agents, Duration::from_secs(1)).await, Err(PlatformError::Invalid(_))));
+        listener.close();
     }
 }

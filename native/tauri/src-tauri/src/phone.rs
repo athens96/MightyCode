@@ -420,6 +420,47 @@ fn hash_of(write: impl FnOnce(&mut DefaultHasher)) -> i32 {
 
 // ── the actions ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/// MC-9: `mighty agent send` (the local control API): the phone's own send — a busy pane queues it, the pane's style and "send to"
+/// choice apply, an idle pane starts through delegation's send — for a local agent pane. Its outcome (`started`, `queued`) or the
+/// refusal's status and words.
+pub(crate) async fn control_send(host: &Arc<Host>, id: &str, text: &str) -> Result<String, (u16, String)> {
+    let refusal = |error: MobileError| match error {
+        MobileError::Request { status, message, .. } => (status, message),
+        MobileError::Invalid => (400, "Invalid request.".into()),
+        MobileError::Changed => (409, "The pane changed; try again.".into()),
+        MobileError::Unavailable => (403, "Unavailable.".into()),
+        MobileError::Failed(message) => (500, message),
+    };
+    mobile_pane(host, id).map_err(refusal)?;
+    submit(host, id, text, vec![], false, None).await.map(|receipt| receipt.outcome).map_err(refusal)
+}
+
+/// MC-9: `mighty agent new`: a new agent pane of `provider` in the local workspace `workspace_id`, as the phone's `create` makes one
+/// (in its own worktree where the workspace's mode says so, or always with `worktree`); its id.
+pub(crate) async fn control_create(
+    host: Arc<Host>,
+    workspace_id: String,
+    provider: String,
+    worktree: bool,
+) -> Result<String, (u16, String)> {
+    let created = {
+        let view = host.view();
+        let template = RunSession {
+            id: Some(wire::new_id()),
+            workspace_id: Some(workspace_id.clone()),
+            provider: Some(provider.clone()),
+            kind: Some("claude".into()),
+            title: Some(mighty_run::providers::name(&provider).into()),
+            created_at: Some(time::now_o()),
+            ..RunSession::default()
+        };
+        mighty_core::add_pane::inherit(template, view.snapshot.sessions())
+    };
+    // On a task of its own, as the phone's: a dropped request never leaves a worktree without its pane.
+    let making = tauri::async_runtime::spawn(crate::pane_worktree::create_without_asking(host, workspace_id, created, worktree));
+    making.await.map_err(|error| (500, error.to_string()))?
+}
+
 /// `MobileSubmit(text, files, prepared, queueId)`: a phone's send, and a queued request run from the phone. Only the phone's own words
 /// are wrapped for the pane's "send to" choice; a busy pane always queues; an idle one starts through delegation's send.
 async fn submit(

@@ -178,11 +178,56 @@ pub struct MightyRepoConfig {
     /// Named run actions (`MC-25`).
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub run: IndexMap<String, RunActionSpec>,
+    /// The status hook (`MC-9`), read from `.mighty.local.yaml` only.
+    #[serde(default, skip_serializing_if = "HooksConfig::is_empty")]
+    pub hooks: HooksConfig,
+}
+
+/// The pane states a hook follows when `hooks.on` names none.
+pub const DEFAULT_HOOK_EVENTS: [&str; 3] = ["blocked", "done", "failed"];
+/// The states `hooks.on` may name.
+pub const HOOK_EVENTS: [&str; 5] = ["started", "blocked", "done", "failed", "stopped"];
+/// `hooks.timeoutSeconds` when the file names none, and the most it may name.
+pub const DEFAULT_HOOK_TIMEOUT_SECONDS: u32 = 20;
+pub const MAXIMUM_HOOK_TIMEOUT_SECONDS: u32 = 300;
+
+/// `hooks` in `.mighty.local.yaml` (`MC-9`): a command run when one of this workspace's agent panes moves to a state in `on`, the
+/// event in `MIGHTY_*` variables, never a prompt. Personal: a `hooks` key in the shared `.mighty.yaml` is refused. Serialized only
+/// when set, so a file without it keeps its `content_hash`; runs only once the configuration is approved.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HooksConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub on: Vec<String>,
+    #[serde(default, rename = "timeoutSeconds", skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u32>,
+}
+
+impl HooksConfig {
+    pub fn is_empty(&self) -> bool {
+        self.command.is_none() && self.on.is_empty() && self.timeout_seconds.is_none()
+    }
+
+    /// The states the hook follows: `on`, else [`DEFAULT_HOOK_EVENTS`].
+    pub fn events(&self) -> Vec<String> {
+        if self.on.is_empty() { DEFAULT_HOOK_EVENTS.iter().map(|e| e.to_string()).collect() } else { self.on.clone() }
+    }
+
+    pub fn timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.timeout_seconds.unwrap_or(DEFAULT_HOOK_TIMEOUT_SECONDS)))
+    }
 }
 
 impl Default for MightyRepoConfig {
     fn default() -> Self {
-        Self { version: 1, worktree: WorktreeConfig::default(), tasks: IndexMap::new(), run: IndexMap::new() }
+        Self {
+            version: 1,
+            worktree: WorktreeConfig::default(),
+            tasks: IndexMap::new(),
+            run: IndexMap::new(),
+            hooks: HooksConfig::default(),
+        }
     }
 }
 
@@ -968,6 +1013,7 @@ fn parse_layer(input: &str) -> Result<ParsedLayer, String> {
     let mut tasks = IndexMap::new();
     let mut saw_tasks = false;
     let mut run = IndexMap::new();
+    let mut hooks = HooksConfig::default();
 
     for (key, value) in map {
         match key.as_str() {
@@ -995,11 +1041,49 @@ fn parse_layer(input: &str) -> Result<ParsedLayer, String> {
             "run" => {
                 run = decode_run_actions(&value)?;
             }
+            "hooks" => {
+                hooks = decode_hooks(&value)?;
+            }
             other => return Err(format!("Unknown top-level key '{other}' in .mighty.yaml.")),
         }
     }
 
-    Ok(ParsedLayer { config: MightyRepoConfig { version, worktree, tasks, run }, setup_specified, teardown_specified })
+    Ok(ParsedLayer { config: MightyRepoConfig { version, worktree, tasks, run, hooks }, setup_specified, teardown_specified })
+}
+
+/// `hooks`: `command` (a string or a list, as `worktree.setup`), `on` (a list or a comma-separated string of [`HOOK_EVENTS`]) and
+/// `timeoutSeconds` (1 to 300).
+fn decode_hooks(value: &YamlValue) -> Result<HooksConfig, String> {
+    let map = match value {
+        YamlValue::Null => return Ok(HooksConfig::default()),
+        YamlValue::Map(map) => map,
+        _ => return Err("'hooks' must be a mapping.".into()),
+    };
+    let mut hooks = HooksConfig::default();
+    for (key, item) in map {
+        match key.as_str() {
+            "command" => hooks.command = decode_command_value(item, "hooks.command", true)?,
+            "on" => {
+                let names: Vec<String> = match item {
+                    YamlValue::Null => vec![],
+                    YamlValue::Scalar(text) => text.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect(),
+                    YamlValue::Seq(items) => {
+                        items.iter().map(|i| expect_scalar(i, "hooks.on").map(|t| t.trim().to_string())).collect::<Result<_, _>>()?
+                    }
+                    YamlValue::Map(_) => return Err("'hooks.on' must be a list of states.".into()),
+                };
+                if let Some(unknown) = names.iter().find(|n| !HOOK_EVENTS.contains(&n.as_str())) {
+                    return Err(format!("'hooks.on' names '{unknown}': use {}.", HOOK_EVENTS.join(", ")));
+                }
+                hooks.on = HOOK_EVENTS.iter().filter(|e| names.iter().any(|n| n == *e)).map(|e| e.to_string()).collect();
+            }
+            "timeoutSeconds" => {
+                hooks.timeout_seconds = Some(decode_bounded_u32(item, "hooks.timeoutSeconds", 1, MAXIMUM_HOOK_TIMEOUT_SECONDS)?);
+            }
+            other => return Err(format!("Unknown key 'hooks.{other}' in .mighty.yaml.")),
+        }
+    }
+    Ok(hooks)
 }
 
 fn decode_worktree(value: &YamlValue) -> Result<(WorktreeConfig, bool, bool), String> {
@@ -1589,6 +1673,8 @@ fn merge_layers(
         worktree: WorktreeConfig { share, copy, setup, env, teardown, teardown_timeout_seconds, ports },
         tasks,
         run,
+        // Personal only: the shared file's are refused as it loads.
+        hooks: local.hooks.clone(),
     }
 }
 
@@ -1684,6 +1770,9 @@ pub fn load_from_folder_with_local_fallback(target_folder: &Path, workspace_fold
         Some((name, bytes)) => {
             let text = std::str::from_utf8(&bytes).map_err(|_| format!("{name} is not valid UTF-8."))?;
             let parsed = parse_layer(text).map_err(|err| format!("{name}: {err}"))?;
+            if !parsed.config.hooks.is_empty() {
+                return Err(format!("{name}: 'hooks' runs a command on this computer; put it in .mighty.local.yaml."));
+            }
             raw_files.push((name, bytes));
             parsed
         }

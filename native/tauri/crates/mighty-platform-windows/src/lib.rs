@@ -100,7 +100,7 @@ mod imp {
     };
 
     pub use crate::activator::ComActivator;
-    pub use crate::agent_io::{NamedPipeConnector, NamedPipeListener};
+    pub use crate::agent_io::{ControlPipeConnector, NamedPipeConnector, NamedPipeListener};
     pub use crate::cli::{CliRunResult, CliRunner};
     pub use crate::clipboard::WindowsClipboard;
     pub use crate::console::WindowsTerminalLauncher;
@@ -329,6 +329,16 @@ mod imp {
     /// The Agent IO client of the exe's MCP modes (`--agent-io-mcp`, `--agent-delegation-mcp`, W7-C): the named pipe.
     pub fn agent_io_connector() -> Arc<dyn mighty_platform::AgentIoConnector> {
         Arc::new(NamedPipeConnector)
+    }
+
+    /// MC-9: the local control API's listener: an owner-only named pipe `mighty-control-<32 hex>`, remote clients refused.
+    pub fn control_listener() -> Arc<dyn mighty_platform::AgentIoListener> {
+        Arc::new(NamedPipeListener::control())
+    }
+
+    /// MC-9: the `mighty` CLI's client of that pipe.
+    pub fn control_connector() -> Arc<dyn mighty_platform::AgentIoConnector> {
+        Arc::new(ControlPipeConnector)
     }
 
     /// A volume's free space (delegation's worktree check, W7-B).

@@ -642,8 +642,12 @@ async fn make_on(
 
 /// C# `WorktreeWithoutAsking`: the worktree a pane added where nobody can be asked (the phone) works in, when the workspace's mode says
 /// so: its record, or why the pane works in the folder instead; (None, None) for the folder by the rule.
-pub async fn worktree_without_asking(host: &Arc<Host>, workspace: &Workspace, id: &str) -> PhoneWorktree {
-    let decision = {
+/// With `force` (MC-9's `mighty agent new --worktree`) a worktree is made whatever the workspace's mode says; either way the pane
+/// works in the folder, with the reason, where none can be made.
+pub async fn worktree_without_asking(host: &Arc<Host>, workspace: &Workspace, id: &str, force: bool) -> PhoneWorktree {
+    let decision = if force {
+        PaneWorktreeDecision::Worktree
+    } else {
         let view = host.view();
         core::decide_without_asking(workspace, view.snapshot.sessions().iter().map(|s| s.as_ref()), None)
     };
@@ -714,6 +718,16 @@ pub fn with_worktree(created: RunSession, worktree: Option<&PaneWorktree>, fell_
 /// run after. A missing workspace (404) or a full app (409) refuses before any worktree is made; a worktree made for a pane that then
 /// cannot be added goes again. The pane's id, or the phone's status and words. Run on a task of its own (phone.rs).
 pub async fn phone_create(host: Arc<Host>, workspace_id: String, created: RunSession) -> Result<String, (u16, String)> {
+    create_without_asking(host, workspace_id, created, false).await
+}
+
+/// [`phone_create`], with a worktree whatever the workspace's mode says when `force_worktree` (MC-9's `mighty agent new`).
+pub async fn create_without_asking(
+    host: Arc<Host>,
+    workspace_id: String,
+    created: RunSession,
+    force_worktree: bool,
+) -> Result<String, (u16, String)> {
     let limit = || (409, host.locale.get("workspace.paneLimit"));
     let refusal = |view: &crate::host::View| {
         if !view.snapshot.workspaces().iter().any(|w| w.id() == workspace_id && w.remote.is_none()) {
@@ -729,7 +743,7 @@ pub async fn phone_create(host: Arc<Host>, workspace_id: String, created: RunSes
         view.snapshot.workspace(&workspace_id).cloned()
     };
     let PhoneWorktree { record: worktree, fell_back, approved_cfg, cfg_note } = match &workspace {
-        Some(workspace) => worktree_without_asking(&host, workspace, created.id()).await,
+        Some(workspace) => worktree_without_asking(&host, workspace, created.id(), force_worktree).await,
         None => PhoneWorktree::default(),
     };
     let created = with_worktree(created, worktree.as_ref(), fell_back.as_deref(), &host);

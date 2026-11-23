@@ -246,6 +246,10 @@ struct HostEvents {
 
 impl PaneEvents for HostEvents {
     fn post(&self, pane: &str, message: &TerminalMessage) {
+        // MC-9: the output kept as plain lines for `mighty pane read` and `pane wait-output`, whoever draws the terminal.
+        if let TerminalMessage::Output { data } = message {
+            crate::control::terminal_output(pane, data);
+        }
         // The Mac feed (M-D): a pane drawn by a native view (Ghostty) gets its output, reset, theme and font there; Windows never
         // opens one, so everything goes to the page's xterm as before.
         if crate::surface_terminal::post(pane, message) {
@@ -324,6 +328,8 @@ fn change_shell_status(host: &Arc<Host>, pane: &str, change: impl FnOnce(&RunSes
     if changed {
         host.view().sync();
         host.schedule();
+        // MC-9: a shell's run beginning or ending is a state move scripts hear.
+        crate::control::touch(host, pane);
         // C# `ShellStatusChanged` (MainWindow.Terminal.cs:62): the push hub hears a shell's run begin (`Began`) or move (`Changed`), and
         // the phone router that the pane moved; a shell's status never comes through the run service's events.
         crate::mobile::noted(host, Some(shell_push_note(pane, status.as_deref())));

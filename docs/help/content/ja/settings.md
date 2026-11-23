@@ -73,6 +73,44 @@ Mac では表示メニューの {{ui:menu.textBigger}}（{{kbd:⌘=}}）、{{ui:
 
 ![[companion-pet]]
 
+## 自動化とコマンドライン {#automation}
+{{ui:settings.nav.companion}} タブの {{ui:automation.settings.sectionTitle}} ボックスで、エージェントペインの状態が変わったときに知らせる先を決めます。依頼の文面、ファイルの内容、トークンはどこにも送りません。
+- {{ui:automation.settings.events}}: {{ui:automation.event.started}}、{{ui:automation.event.blocked}}、{{ui:automation.event.done}}、{{ui:automation.event.failed}}、{{ui:automation.event.stopped}} から選びます。最初は承認・質問待ち、完了、失敗がオンです。Webhook と状態コマンドの両方がこれに従います。
+- {{ui:automation.webhooks.title}}: Slack、Discord、ほかの HTTPS アドレスを五つまで追加します。アドレスはシステムのキーチェーン（Windows は資格情報マネージャー）に保存し、画面には一部だけ表示します。送るのはタイトル、状態、ワークスペースとペインの名前だけです。{{ui:automation.webhooks.test}} ボタンでテストメッセージを送ります。同じペインの同じ状態は 5 秒に一度、アドレスごとに 1 分に六回まで送り、サーバーエラーのときはもう一度送ります。
+- {{ui:automation.hook.title}}: ペインが選んだ状態になると、そのペインのフォルダーでこのコマンドを実行します。状態は引数ではなく環境変数で渡します: `MIGHTY_EVENT`、`MIGHTY_STATE`、`MIGHTY_PREVIOUS_STATE`、`MIGHTY_REASON`、`MIGHTY_PANE_ID`、`MIGHTY_PANE_TITLE`、`MIGHTY_AGENT`、`MIGHTY_WORKSPACE_ID`、`MIGHTY_WORKSPACE_NAME`、`MIGHTY_WORKSPACE_PATH`。20 秒で止めます。
+- {{ui:automation.api.title}}: 実行中のアプリを `mighty` コマンドで操作できるかを表示します。{{ui:automation.api.rotate}} ボタンはトークンを替え、開いていた接続を切ります。
+
+リポジトリごとに状態コマンドを置くには `.mighty.local.yaml` に書きます。[ほかの設定と同じく](delegation.md#mighty-yaml)承認した後にだけ実行され、共有の `.mighty.yaml` には書けません。
+
+```yaml
+hooks:
+  command: ./scripts/notify.sh
+  on: [blocked, done, failed]   # started, blocked, done, failed, stopped
+  timeoutSeconds: 20            # 1-300
+```
+
+### mighty コマンド {#cli}
+Mac では {{ui:menu.workspace}} メニューの {{ui:shellCommand.install}} で `~/.local/bin/mighty` を入れます。`mighty`、`mighty フォルダー`、`mighty "依頼"` はこれまでどおりフォルダーを開きます。コマンドと同じ名前のフォルダーは `mighty ./status` のように開きます。下のコマンドは実行中のアプリに接続し、JSON で答えます。0.6.0 より前に入れた場合は一度入れ直してください。Windows では `MightyCode.exe --cli status` のように使います。
+
+```sh
+mighty status                                   # ワークスペース、ペイン、状態、注意表示、worktree、ポート範囲
+mighty workspace list
+mighty pane list --workspace <id>
+mighty pane read <pane> --lines 100
+mighty agent new --workspace <id> --agent codex --worktree
+mighty agent send <pane> "テストを直して"
+mighty agent wait <pane> --until done --timeout 600
+mighty pane wait-output <pane> --regex "passed|failed" --timeout 300
+mighty events --type pane.state
+```
+
+- ペイン id はアプリが使うものそのままで、変わりません。状態は `idle`、`running`、`blocked`（承認・質問待ち）、`done`、`failed`、`stopped` です。
+- `agent send` は入力欄から送るのと同じです。実行中なら待ち行列に入ります。`-` を渡すと標準入力から読みます。
+- `agent wait` と `pane wait-output` は状態や出力が変わったときだけ動きます。`pane wait-output` は待ち始めた後の新しい行を一行ずつ見ます。
+- `pane read` と出力では、秘密情報に見える行は隠します。`events` は一行に一つのイベントを書きます（`pane.state`、`attention`、費用つきの `run.completed`）。
+- 終了コードは成功 0、エラー 1、タイムアウト 2 です。
+- 接続できるのはこのコンピュータの同じユーザーだけです（Mac は権限 0600 のソケット、Windows は現在のユーザーだけが開ける名前付きパイプ）。リクエストごとにデータフォルダーの `control/token` のトークンが要ります。`--profile` で起動したアプリには `mighty --profile <フォルダー> status` で接続します。
+
 ## コンポーネント {#components}
 {{ui:settings.nav.tools}}タブでは、アプリに必要なものが準備できているかを確認し、エージェントCLIのインストール、サインイン、アップデートをまとめて管理します。このコンピュータのOS向けの項目だけが表示されます。
 

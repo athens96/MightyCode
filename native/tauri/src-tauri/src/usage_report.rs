@@ -41,18 +41,19 @@ fn with_ledger<T>(host: &Host, run: impl FnOnce(&mut UsageLedger) -> T) -> T {
     run(&mut book.ledger)
 }
 
-/// Called from `runs.rs` whenever a run reaches `completed`, `stopped`, or `error`.
-pub fn on_run_finished(host: &Arc<Host>, session_id: &str) {
+/// Called from `runs.rs` whenever a run reaches `completed`, `stopped`, or `error`; what the run cost, when the ledger recorded it
+/// (MC-9's `run.completed` event carries it).
+pub fn on_run_finished(host: &Arc<Host>, session_id: &str) -> Option<f64> {
     if host.closing() {
-        return;
+        return None;
     }
     let sample = {
         let view = host.view();
-        let Some(pane) = view.snapshot.session(session_id) else { return };
+        let pane = view.snapshot.session(session_id)?;
         if pane.kind() != "claude" {
-            return;
+            return None;
         }
-        let Some(usage) = pane.session_usage.clone() else { return };
+        let usage = pane.session_usage.clone()?;
         (pane.id().to_string(), pane.workspace_id().to_string(), pane.provider().to_string(), pane.model().to_string(), usage)
     };
 
@@ -67,7 +68,7 @@ pub fn on_run_finished(host: &Arc<Host>, session_id: &str) {
         (rec.map(|r| r.cost_usd), crossed, spent, budget, clone_for_save)
     });
 
-    let Some(recorded_cost) = recorded else { return };
+    let recorded_cost = recorded?;
     // MC-29: a compare run's child adds what this run cost to its column.
     crate::compare::add_cost(host, session_id, recorded_cost);
 
@@ -90,6 +91,7 @@ pub fn on_run_finished(host: &Arc<Host>, session_id: &str) {
             let _ = push.send_custom(mighty_remote::push::message::BUDGET, &host.locale.get("usage.title"), &body, "budget");
         }
     }
+    Some(recorded_cost)
 }
 
 /// MC-28: an `/advisor` opinion's cost and tokens in the ledger, under the workspace of the pane that asked (a one-off run: no

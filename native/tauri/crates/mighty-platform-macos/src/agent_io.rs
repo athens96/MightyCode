@@ -42,20 +42,43 @@ pub fn fits(path: &str) -> bool {
 /// Swift `AgentIOWire.socketPath(dataDirectory:temporaryDirectory:)`: `<data>/agent-io/io.sock` when it fits `sun_path`, else
 /// `<temp>/mc-<uid>/<%08x>.sock`, the low 32 bits of the FNV-1a 64 hash of the data folder's path (trailing slashes aside).
 pub fn socket_path(data_dir: &Path, temp_dir: &Path) -> PathBuf {
-    let preferred = data_dir.join("agent-io").join("io.sock");
-    if fits(&preferred.to_string_lossy()) {
-        return preferred;
+    Place::AgentIo.path(data_dir, temp_dir)
+}
+
+/// MC-9: the local control API's socket, `<data>/control/mighty.sock`, or `<temp>/mc-<uid>/<%08x>-control.sock` (the same hash) when
+/// that does not fit.
+pub fn control_socket_path(data_dir: &Path, temp_dir: &Path) -> PathBuf {
+    Place::Control.path(data_dir, temp_dir)
+}
+
+/// Which socket a listener serves: the agents' MCP servers' or the control API's (MC-9). Both live the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    AgentIo,
+    Control,
+}
+
+impl Place {
+    fn path(self, data_dir: &Path, temp_dir: &Path) -> PathBuf {
+        let (folder, file, suffix) = match self {
+            Place::AgentIo => ("agent-io", "io.sock", ""),
+            Place::Control => ("control", "mighty.sock", "-control"),
+        };
+        let preferred = data_dir.join(folder).join(file);
+        if fits(&preferred.to_string_lossy()) {
+            return preferred;
+        }
+        let text = data_dir.to_string_lossy();
+        let text = match text.trim_end_matches('/') {
+            "" => "/",
+            trimmed => trimmed,
+        };
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in text.bytes() {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        temp_dir.join(format!("mc-{}", user())).join(format!("{:08x}{suffix}.sock", hash as u32))
     }
-    let text = data_dir.to_string_lossy();
-    let text = match text.trim_end_matches('/') {
-        "" => "/",
-        trimmed => trimmed,
-    };
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in text.bytes() {
-        hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    temp_dir.join(format!("mc-{}", user())).join(format!("{:08x}.sock", hash as u32))
 }
 
 /// The socket's folder, made if missing and set to 0700; refused unless it is a real folder (not a link) owned by this user.
@@ -83,6 +106,7 @@ struct State {
 
 /// The app's listener (one per app and profile).
 pub struct UnixSocketListener {
+    place: Place,
     data_dir: PathBuf,
     temp_dir: PathBuf,
     state: Mutex<State>,
@@ -104,13 +128,29 @@ impl UnixSocketListener {
 
     /// As [`UnixSocketListener::new`], with the fallback under `temp_dir`.
     pub fn in_folders(data_dir: &Path, temp_dir: &Path) -> UnixSocketListener {
+        UnixSocketListener::at(Place::AgentIo, data_dir, temp_dir)
+    }
+
+    fn at(place: Place, data_dir: &Path, temp_dir: &Path) -> UnixSocketListener {
         UnixSocketListener {
+            place,
             data_dir: data_dir.to_path_buf(),
             temp_dir: temp_dir.to_path_buf(),
             state: Mutex::new(State::default()),
             closed: AtomicBool::new(false),
             close: Notify::new(),
         }
+    }
+
+    /// MC-9: the local control API's listener for the profile whose data folder is `data_dir` ([`control_socket_path`]), private as
+    /// the agents' one is.
+    pub fn control(data_dir: &Path) -> UnixSocketListener {
+        UnixSocketListener::control_in_folders(data_dir, &std::env::temp_dir())
+    }
+
+    /// As [`UnixSocketListener::control`], with the fallback under `temp_dir`.
+    pub fn control_in_folders(data_dir: &Path, temp_dir: &Path) -> UnixSocketListener {
+        UnixSocketListener::at(Place::Control, data_dir, temp_dir)
     }
 
     /// Ends once [`AgentIoListener::close`] was called.
@@ -178,7 +218,7 @@ impl AgentIoListener for UnixSocketListener {
         if self.closed.load(Ordering::SeqCst) {
             return Err(PlatformError::Io(std::io::ErrorKind::BrokenPipe.into()));
         }
-        let path = socket_path(&self.data_dir, &self.temp_dir);
+        let path = self.place.path(&self.data_dir, &self.temp_dir);
         let text = path.to_string_lossy().into_owned();
         if !fits(&text) {
             return Err(PlatformError::Invalid("the agent IO socket path does not fit sun_path".into()));
@@ -310,6 +350,16 @@ pub fn agent_io_listener(data_dir: &Path) -> Arc<dyn AgentIoListener> {
 
 /// The exe's MCP modes' client (`--agent-io-mcp`, `--agent-delegation-mcp`).
 pub fn agent_io_connector() -> Arc<dyn AgentIoConnector> {
+    Arc::new(UnixSocketConnector)
+}
+
+/// MC-9: the app's local control API listener (`<data>/control/mighty.sock`).
+pub fn control_listener(data_dir: &Path) -> Arc<dyn AgentIoListener> {
+    Arc::new(UnixSocketListener::control(data_dir))
+}
+
+/// MC-9: the `mighty` CLI's client of that listener (the same checks: an absolute path that fits, served by this user).
+pub fn control_connector() -> Arc<dyn AgentIoConnector> {
     Arc::new(UnixSocketConnector)
 }
 
@@ -449,6 +499,30 @@ mod tests {
         assert!(Path::new(&name).exists(), "the newer socket is not the first listener's to remove");
         third.close();
         assert!(!Path::new(&name).exists());
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// MC-9: the control API's socket lives beside the agents' one, as private, under its own name; both serve at once.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_control_socket_is_private_and_apart_from_the_agents_one() {
+        let folder = short_folder("control");
+        let temp = Path::new("/var/folders/xy/abcdefgh/T/");
+        assert_eq!(control_socket_path(&folder, temp), folder.join("control").join("mighty.sock"));
+        let long = folder.join("p".repeat(120));
+        let fallback = control_socket_path(&long, temp).to_string_lossy().into_owned();
+        assert!(fits(&fallback) && fallback.ends_with("-control.sock"), "{fallback}");
+        assert_ne!(PathBuf::from(&fallback), socket_path(&long, temp), "never the agents' socket");
+        let agents = UnixSocketListener::new(&folder);
+        let control = UnixSocketListener::control(&folder);
+        let (agents_name, control_name) = (agents.bind().unwrap(), control.bind().unwrap());
+        assert_ne!(agents_name, control_name);
+        assert_eq!(mode(Path::new(&control_name)), 0o600, "the socket is the user's alone");
+        assert_eq!(mode(Path::new(&control_name).parent().unwrap()), 0o700, "so is its folder");
+        let (server, client) = tokio::join!(control.accept(), UnixSocketConnector.connect(&control_name, Duration::from_secs(5)));
+        assert!(server.is_ok() && client.is_ok());
+        control.close();
+        agents.close();
+        assert!(!Path::new(&control_name).exists());
         let _ = std::fs::remove_dir_all(&folder);
     }
 

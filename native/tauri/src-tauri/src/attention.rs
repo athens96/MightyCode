@@ -133,6 +133,8 @@ pub fn signal(host: &Arc<Host>, pane: &str, signal: Signal) {
     host.shell_dirty();
     host.schedule();
     crate::phone::changed(host);
+    // MC-9: scripts hear that the pane waits (its kind only, never the terminal's words).
+    crate::control::attention(host, pane, kind);
     if kind == AttentionKind::Notify {
         notify(host, pane, &title, &text);
     }
@@ -160,6 +162,7 @@ pub fn setup_failed(host: &Host, pane: &str, command: &str, exit_code: i32) {
     let text = sanitize(&format!("{command} ({exit_code})"));
     if lock(&state().board).raise(pane, AttentionKind::SetupFailed, &text, now_ms()) {
         host.shell_dirty();
+        crate::control::attention(host, pane, AttentionKind::SetupFailed);
     }
 }
 
@@ -171,7 +174,7 @@ pub fn setup_passed(host: &Host, pane: &str) {
 }
 
 /// The newest card of `pane` waiting on the user (a question or an approval) and its words.
-fn latest_request(host: &Host, pane: &str) -> Option<(AttentionKind, String, String)> {
+pub(crate) fn latest_request(host: &Host, pane: &str) -> Option<(AttentionKind, String, String)> {
     let requests = host.runs()?.service.pending_permissions(pane);
     let request = requests.into_iter().rfind(|r| r.state == "pending" && crate::styles::shows(r))?;
     let kind = if request.can_answer_questions { AttentionKind::Question } else { AttentionKind::Approval };

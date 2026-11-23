@@ -326,6 +326,16 @@ impl Runs {
                 // Only what the notification needs is kept past the pane's taking the event (never the whole event: its logs and
                 // usage are not copied for every event).
                 let mut status = None;
+                // MC-9: the pane the event is about (its state is read again once the window took it) and a log entry's text (new
+                // output for `mighty pane wait-output`).
+                let touched: Option<(String, Option<String>)> = match &event {
+                    ServiceEvent::Run { event: run, .. } => {
+                        let text = (run.kind == "log").then(|| run.entry.as_ref().map(|e| e.text().to_string())).flatten();
+                        Some((run.session_id.clone(), text))
+                    }
+                    ServiceEvent::ToolPermission(request) => Some((request.run_id.clone(), None)),
+                    _ => None,
+                };
                 if let ServiceEvent::Run { event: run, .. } = &event {
                     crate::updates::on_run_event(&pump, run);
                     crate::accounts::on_run_event(&pump, run);
@@ -339,10 +349,14 @@ impl Runs {
                     crate::accounts::on_request_starting(&pump, request);
                 }
                 pump.service_event(event);
+                if let Some((pane, text)) = &touched {
+                    crate::control::on_run_event(&pump, pane, text.as_deref());
+                }
                 if let Some((session, status)) = &status {
                     crate::notifications::on_status(&pump, session, status.as_deref());
-                    if matches!(status.as_deref(), Some("completed" | "stopped" | "error")) {
-                        crate::usage_report::on_run_finished(&pump, session);
+                    if let Some(ended @ ("completed" | "stopped" | "error")) = status.as_deref() {
+                        let cost = crate::usage_report::on_run_finished(&pump, session);
+                        crate::control::run_finished(&pump, session, ended, cost);
                     }
                 }
                 // C# `RefreshModels(sessionId, invalidate: true)` through the model lists' own refresh (models.rs), which reconciles the

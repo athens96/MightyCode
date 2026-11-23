@@ -73,6 +73,44 @@ section: settings
 
 ![[companion-pet]]
 
+## 自动化与命令行 {#automation}
+在 {{ui:settings.nav.companion}} 标签页的 {{ui:automation.settings.sectionTitle}} 框中，设置智能体窗格状态变化时要通知的地方。请求内容、文件内容和令牌不会发送到任何地方。
+- {{ui:automation.settings.events}}：从 {{ui:automation.event.started}}、{{ui:automation.event.blocked}}、{{ui:automation.event.done}}、{{ui:automation.event.failed}}、{{ui:automation.event.stopped}} 中选择。默认打开等待、完成和失败。Webhook 和状态命令都按此通知。
+- {{ui:automation.webhooks.title}}：最多添加五个 Slack、Discord 或其他 HTTPS 地址。地址保存在系统钥匙串中（Windows 为凭据管理器），界面上只显示一部分。发送的内容只有标题、状态以及工作区和窗格名称。{{ui:automation.webhooks.test}} 按钮发送测试消息。同一窗格的同一状态 5 秒内只发送一次，每个地址每分钟最多六次，服务器出错时会再试一次。
+- {{ui:automation.hook.title}}：窗格进入所选状态时，在该窗格的文件夹中运行此命令。状态通过环境变量而不是参数传入：`MIGHTY_EVENT`、`MIGHTY_STATE`、`MIGHTY_PREVIOUS_STATE`、`MIGHTY_REASON`、`MIGHTY_PANE_ID`、`MIGHTY_PANE_TITLE`、`MIGHTY_AGENT`、`MIGHTY_WORKSPACE_ID`、`MIGHTY_WORKSPACE_NAME`、`MIGHTY_WORKSPACE_PATH`。20 秒后停止。
+- {{ui:automation.api.title}}：显示能否用 `mighty` 命令控制正在运行的应用。{{ui:automation.api.rotate}} 按钮更换令牌并断开已打开的连接。
+
+要为每个仓库设置状态命令，请写在 `.mighty.local.yaml` 中。和[其中的其他设置](delegation.md#mighty-yaml)一样，批准后才会运行，共享的 `.mighty.yaml` 中不能写。
+
+```yaml
+hooks:
+  command: ./scripts/notify.sh
+  on: [blocked, done, failed]   # started, blocked, done, failed, stopped
+  timeoutSeconds: 20            # 1-300
+```
+
+### mighty 命令 {#cli}
+在 Mac 上，用 {{ui:menu.workspace}} 菜单中的 {{ui:shellCommand.install}} 安装 `~/.local/bin/mighty`。`mighty`、`mighty 文件夹`、`mighty "请求"` 仍像以前一样打开文件夹；与命令同名的文件夹用 `mighty ./status` 打开。下面的命令连接正在运行的应用，并以 JSON 回答。如果在 0.6.0 之前安装过，请重新安装一次。在 Windows 上使用 `MightyCode.exe --cli status` 等。
+
+```sh
+mighty status                                   # 工作区、窗格、状态、提醒、worktree、端口范围
+mighty workspace list
+mighty pane list --workspace <id>
+mighty pane read <pane> --lines 100
+mighty agent new --workspace <id> --agent codex --worktree
+mighty agent send <pane> "修复测试"
+mighty agent wait <pane> --until done --timeout 600
+mighty pane wait-output <pane> --regex "passed|failed" --timeout 300
+mighty events --type pane.state
+```
+
+- 窗格 id 就是应用自己的 id，不会改变。状态为 `idle`、`running`、`blocked`（等待批准或回答）、`done`、`failed`、`stopped`。
+- `agent send` 与在输入框中发送相同：窗格忙时会进入队列。给出 `-` 时从标准输入读取。
+- `agent wait` 和 `pane wait-output` 只在状态或输出变化时唤醒。`pane wait-output` 逐行查看开始等待之后的新输出。
+- `pane read` 和输出中看起来像密钥的行会被隐藏。`events` 每行写一个事件（`pane.state`、`attention`、带费用的 `run.completed`）。
+- 退出码：成功 0，错误 1，超时 2。
+- 只有这台电脑上的同一用户可以连接（Mac 上是权限 0600 的套接字，Windows 上是只有当前用户能打开的命名管道），每个请求都需要数据文件夹中 `control/token` 的令牌。连接用 `--profile` 启动的应用时，使用 `mighty --profile <文件夹> status`。
+
 ## 组件 {#components}
 {{ui:settings.nav.tools}}标签页显示应用所需的内容是否已准备就绪，智能体 CLI 的安装、登录和更新也都在这里管理。只显示适用于这台电脑系统的项目。
 
