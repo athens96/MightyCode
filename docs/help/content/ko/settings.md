@@ -30,6 +30,7 @@ Mac에서는 보기 메뉴의 {{ui:menu.textBigger}}({{kbd:⌘=}}), {{ui:menu.te
 - {{ui:settings.agents.checklistToggle}}: 기본으로 켜져 있습니다. 켜져 있으면 Gemini, Codex, opencode, Hermes에게 작업하는 동안 계획(체크리스트)을 남겨 달라는 짧은 지시를 함께 보내, 진행 상황 패널에 실제 계획 단계가 보입니다. 창의 요청에는 입력한 내용만 남습니다. 끄거나 계획이 오지 않으면 에이전트가 하는 일이 단계로 보입니다([마이티 보기](agent-pane.md#diagram)).
 - {{ui:settings.editor.label}}: {{ui:editor.open}}가 시작할 편집기입니다. 자동(찾은 것 중 첫 번째), 이 컴퓨터에서 찾은 편집기, {{ui:settings.editor.system}} 중에서 고릅니다. 설정을 열 때마다 다시 찾습니다([편집기에서 열기](terminal-files-browser.md#open-in-editor)).
 - 아래에 키 안내가 있습니다. {{kbd:Enter}}로 보내고 {{kbd:Shift+Enter}}로 줄을 바꿉니다. 탭을 끌어 다른 탭과 합치거나 가장자리로 옮겨 나눕니다. 명령 실행 창은 Mac에서는 로그인 셸, Windows에서는 PowerShell(없으면 cmd)을 여는 대화형 터미널입니다.
+- 이슈 트래커(MightyWork, GitHub, Linear, Jira, GitLab) 연결은 설정 창이 아니라 워크스페이스마다 사이드바 워크스페이스 메뉴의 {{ui:integrations.menu.settings}}에서 합니다. [이슈에서 시작하기](delegation.md#issues)를 보세요.
 
 ## 모델 {#models}
 {{ui:settings.nav.models}} 탭의 {{ui:settings.phaseModels.sectionTitle}}에서 작업 단계별로 쓸 모델을 이 컴퓨터 전체에 정합니다. 단계는 {{ui:settings.phaseModels.phase.planning}}, {{ui:settings.phaseModels.phase.execution}}, {{ui:settings.phaseModels.phase.review}}, {{ui:settings.phaseModels.phase.subagents}}입니다.

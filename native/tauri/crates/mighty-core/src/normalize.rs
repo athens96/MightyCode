@@ -242,7 +242,7 @@ pub fn pane_worktree(pane: &PaneWorktree, session_id: &str, restoring: bool) -> 
     let base = pane.base_branch.as_deref();
     if !absolute(pane.worktree_path.as_deref())
         || !absolute(pane.checkout.as_deref())
-        || pane.branch.as_deref() != Some(format!("mighty/{session_id}").as_str())
+        || !pane.branch.as_deref().is_some_and(|branch| crate::model::is_pane_branch(branch, session_id))
         || base.is_none_or(|base| base.is_empty() || base.contains('\0'))
         || !pane_worktree_port(pane.port)
     {
@@ -2282,6 +2282,26 @@ pub fn checkpoints(saved: &[crate::graph::RunCheckpoint]) -> Option<Vec<crate::g
 
 #[cfg(test)]
 mod tests {
+
+    /// MC-31: a pane on an issue keeps its record when its branch is the one its id names, and only that one.
+    #[test]
+    fn a_pane_worktree_on_an_issue_branch_is_kept_only_for_its_own_id() {
+        let folder = if windows_paths() { "C:\\w\\lin-ENG-1-fix" } else { "/w/lin-ENG-1-fix" };
+        let checkout = if windows_paths() { "C:\\repo" } else { "/repo" };
+        let record = |branch: &str| crate::model::PaneWorktree {
+            worktree_path: Some(folder.into()),
+            checkout: Some(checkout.into()),
+            branch: Some(branch.into()),
+            base_branch: Some("main".into()),
+            port: PANE_WORKTREE_LOWEST_PORT,
+            ..crate::model::PaneWorktree::default()
+        };
+        assert!(pane_worktree(&record("lin/ENG-1-fix"), "lin-ENG-1-fix", false).is_some());
+        assert!(pane_worktree(&record("mighty/lin-ENG-1-fix"), "lin-ENG-1-fix", false).is_some());
+        assert!(pane_worktree(&record("lin/ENG-2-other"), "lin-ENG-1-fix", false).is_none());
+        assert!(pane_worktree(&record("mw/ENG-1-fix"), "mw-ENG-1-fix", false).is_none());
+        assert!(pane_worktree(&record("mighty/lin-ENG-1-fix"), "other", false).is_none());
+    }
 
     #[test]
     fn copy_paths_refuse_git_folder_aliases_and_shell_metacharacters() {

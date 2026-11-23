@@ -3,6 +3,8 @@
 //! - Browsing & searching MightyWork tasks, MightyWork wiki pages, and GitHub issues
 //! - Attaching rich context to the composer or launching directly in a new pane / isolated git worktree
 //! - Optional automatic MightyWork pipeline stage sync (`in_progress` on start, `review` on PR, `done` on merge)
+//! - MC-31: tasks and issues go through `trackers.rs` (MightyWork, GitHub, Linear, Jira, GitLab); Linear, Jira and GitLab issues
+//!   start on their own branch and write back as each workspace's switches say
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -11,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
-use mighty_core::model::{LinkedTask, PaneWorktree, RunSession, Workspace};
+use mighty_core::model::{IssueTrackerConfig, LinkedTask, PaneWorktree, RunSession, Workspace};
 use mighty_platform::SpawnRequest;
 use mighty_platform::http::HttpsRequest;
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
@@ -24,6 +26,7 @@ use tokio::net::TcpListener;
 
 use crate::host::{Host, Registry, lock};
 use crate::methods::{flag, text};
+use crate::trackers::IssueTracker as _;
 
 const DEFAULT_MIGHTYWORK_URL: &str = "https://mightywork.duckdns.org/mcp";
 const AUTH_FILE_NAME: &str = "mightywork-auth.json";
@@ -354,7 +357,7 @@ fn extract_tool_result(rpc: &Value) -> Result<Value, String> {
     Ok(result.clone())
 }
 
-async fn mcp_call_tool(
+pub(crate) async fn mcp_call_tool(
     host: &Host,
     workspace_path: Option<&str>,
     override_url: Option<&str>,
@@ -609,7 +612,7 @@ pub fn detect_mightywork_project(workspace_path: &Path) -> Option<String> {
     None
 }
 
-async fn detect_github_repo(host: &Host, workspace_path: &Path) -> Option<String> {
+pub(crate) async fn detect_github_repo(host: &Host, workspace_path: &Path) -> Option<String> {
     let git = crate::workspace_create::git_executable()?;
     if !workspace_path.is_dir() {
         return None;
@@ -623,7 +626,7 @@ async fn detect_github_repo(host: &Host, workspace_path: &Path) -> Option<String
     mighty_delegation::pane_worktree::github_repository(&origin)
 }
 
-fn gh_executable(host: &Host) -> Option<PathBuf> {
+pub(crate) fn gh_executable(host: &Host) -> Option<PathBuf> {
     let env = host.runs().map(|r| r.catalog.environment().current().values).unwrap_or_default();
     crate::platform::cli_copies("gh", &env).into_iter().next().map(PathBuf::from)
 }
@@ -660,6 +663,9 @@ pub fn format_item_context(
         "mightywork_task" => format!("[MightyWork {key}]"),
         "mightywork_wiki" => "[MightyWork Wiki]".to_string(),
         "github_issue" => format!("[GitHub {key}]"),
+        "linear_issue" => format!("[Linear {key}]"),
+        "jira_issue" => format!("[Jira {key}]"),
+        "gitlab_issue" => format!("[GitLab {key}]"),
         _ => format!("[{key}]"),
     };
     lines.push(format!("{header_tag} {title}"));
@@ -710,30 +716,18 @@ pub fn spawn_stage_sync(
         if project.is_empty() {
             return;
         }
-        (project, ws.path().to_string(), ws.mightywork_url.clone())
+        (project, ws.clone())
     };
 
+    let Some(state) = crate::trackers::mightywork::state_of_stage(stage) else { return };
+    let (project, ws) = cfg;
+    let Ok(tracker) = crate::trackers::mightywork::MightyWorkTracker::with_project(host, &ws, project) else { return };
     let host = host.clone();
     let task_key = linked.key.clone();
     tauri::async_runtime::spawn(async move {
-        let (project, ws_path, mw_url) = cfg;
-        let updated = mcp_call_tool(
-            &host,
-            Some(&ws_path),
-            mw_url.as_deref(),
-            "update_task",
-            json!({ "project": project, "task": task_key, "stage": stage }),
-        )
-        .await;
+        let updated = tracker.set_state(&task_key, state).await;
         if let Some(body) = comment.filter(|b| !b.is_empty()) {
-            let _ = mcp_call_tool(
-                &host,
-                Some(&ws_path),
-                mw_url.as_deref(),
-                "add_comment",
-                json!({ "project": project, "task": task_key, "body": body }),
-            )
-            .await;
+            let _ = tracker.comment(&task_key, &body).await;
         }
         if updated.is_ok()
             && let Some(pane_id) = pane_id_for_note
@@ -763,6 +757,10 @@ pub fn on_worktree_pr(host: &Arc<Host>, pane_id: &str, pane: &PaneWorktree, comp
         (ws_id, linked)
     };
     let Some(linked) = linked else { return };
+    if crate::trackers::EXTERNAL_TRACKERS.contains(&linked.source.as_str()) {
+        let event = crate::trackers::WorkEvent::PullRequest(compare_url.map(str::to_string));
+        return crate::trackers::spawn_write_back(host, &ws_id, &linked, event, Some(pane_id.to_string()));
+    }
     let comment = match compare_url {
         Some(url) => format!("Pushed worktree branch `{}` (base `{}`) for PR review: {url}", pane.branch(), pane.base_branch()),
         None => format!("Pushed worktree branch `{}` (base `{}`) for review.", pane.branch(), pane.base_branch()),
@@ -780,6 +778,9 @@ pub fn on_worktree_merged(host: &Arc<Host>, pane_id: &str, pane: &PaneWorktree, 
         (ws_id, linked)
     };
     let Some(linked) = linked else { return };
+    if crate::trackers::EXTERNAL_TRACKERS.contains(&linked.source.as_str()) {
+        return crate::trackers::spawn_write_back(host, &ws_id, &linked, crate::trackers::WorkEvent::Merged, Some(pane_id.to_string()));
+    }
     let short: String = commit.chars().take(8).collect();
     let comment = format!("Merged worktree branch `{}` into `{}` (`{short}`).", pane.branch(), pane.base_branch());
     spawn_stage_sync(host, &ws_id, &linked, "done", Some(comment), Some(pane_id.to_string()));
@@ -788,6 +789,9 @@ pub fn on_worktree_merged(host: &Arc<Host>, pane_id: &str, pane: &PaneWorktree, 
 /// Hooked from `pane_worktree.rs` when a kept (closed) worktree merges from the Worktree List sheet.
 pub fn on_kept_worktree_merged(host: &Arc<Host>, workspace_id: &str, pane: &PaneWorktree, commit: &str) {
     let Some(linked) = pane.linked_task.as_ref() else { return };
+    if crate::trackers::EXTERNAL_TRACKERS.contains(&linked.source.as_str()) {
+        return crate::trackers::spawn_write_back(host, workspace_id, linked, crate::trackers::WorkEvent::Merged, None);
+    }
     let short: String = commit.chars().take(8).collect();
     let comment = format!("Merged kept worktree branch `{}` into `{}` (`{short}`).", pane.branch(), pane.base_branch());
     spawn_stage_sync(host, workspace_id, linked, "done", Some(comment), None);
@@ -833,7 +837,10 @@ async fn build_status(host: &Arc<Host>, ws: &Workspace) -> Value {
         }
     }
 
+    let trackers = tracker_statuses(host, ws).await;
+
     json!({
+        "trackers": trackers,
         "workspaceId": ws.id(),
         "workspaceName": ws.name(),
         "isGitRepo": is_git,
@@ -848,76 +855,37 @@ async fn build_status(host: &Arc<Host>, ws: &Workspace) -> Value {
     })
 }
 
-async fn fetch_detail(host: &Arc<Host>, ws: &Workspace, source: &str, key: &str) -> Result<(Value, LinkedTask, String), String> {
-    let mw_project = ws
-        .mightywork_project
-        .clone()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| detect_mightywork_project(Path::new(ws.path())))
-        .unwrap_or_default();
+/// MC-31: each external tracker's settings for the page, with whether a token is kept (never the token).
+async fn tracker_statuses(host: &Arc<Host>, ws: &Workspace) -> Vec<Value> {
+    let mut out = Vec::new();
+    for tracker in crate::trackers::EXTERNAL_TRACKERS {
+        let config = ws
+            .issue_tracker(tracker)
+            .cloned()
+            .unwrap_or_else(|| IssueTrackerConfig { tracker: tracker.to_string(), ..IssueTrackerConfig::default() });
+        let has_token = crate::trackers::load_token(host, &config).await.is_some();
+        let extra = if tracker == "gitlab" {
+            let detected = crate::trackers::gitlab::detect(host, ws).await;
+            let glab = ws.remote.is_none() && crate::trackers::gitlab::glab_signed_in(host, ws, &config).await;
+            json!({
+                "glab": glab,
+                "connected": has_token || glab,
+                "detectedProject": detected.as_ref().map(|(_, p)| p.clone()).unwrap_or_default(),
+                "detectedSite": detected.map(|(h, _)| format!("https://{h}")).unwrap_or_default(),
+                "defaultFilter": crate::trackers::default_filter(&config),
+            })
+        } else {
+            json!({ "defaultFilter": crate::trackers::default_filter(&config) })
+        };
+        out.push(crate::trackers::config_json(&config, has_token, extra));
+    }
+    out
+}
 
+async fn fetch_detail(host: &Arc<Host>, ws: &Workspace, source: &str, key: &str) -> Result<(Value, LinkedTask, String), String> {
     match source {
-        "mightywork_task" => {
-            if mw_project.is_empty() {
-                return Err("MightyWork project key is not configured.".into());
-            }
-            let raw = mcp_call_tool(
-                host,
-                ws.path.as_deref(),
-                ws.mightywork_url.as_deref(),
-                "get_task",
-                json!({ "project": mw_project, "task": key }),
-            )
-            .await?;
-            let item_key = raw.get("key").and_then(Value::as_str).unwrap_or(key).to_string();
-            let title = raw.get("title").and_then(Value::as_str).unwrap_or(&item_key).to_string();
-            let stage = raw.get("stage").and_then(Value::as_str).map(str::to_string);
-            let priority = raw.get("priority").and_then(Value::as_str).map(str::to_string);
-            let url = raw.get("url").and_then(Value::as_str).map(str::to_string);
-            let body = raw.get("description").and_then(Value::as_str).unwrap_or("").to_string();
-            let tags: Vec<String> = raw
-                .get("tags")
-                .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
-                .unwrap_or_default();
-            let checklist: Vec<(String, bool)> = raw
-                .get("checklist")
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|c| {
-                            Some((c.get("text")?.as_str()?.to_string(), c.get("done").and_then(Value::as_bool).unwrap_or(false)))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            let formatted = format_item_context(source, &item_key, &title, stage.as_deref(), url.as_deref(), &body, &checklist);
-            let checklist_json: Vec<Value> = checklist.iter().map(|(t, d)| json!({ "text": t, "done": d })).collect();
-            let linked = LinkedTask {
-                source: "mightywork".into(),
-                project: Some(mw_project),
-                key: item_key.clone(),
-                title: Some(title.clone()),
-                url: url.clone(),
-            };
-            Ok((
-                json!({
-                    "source": source,
-                    "key": item_key,
-                    "title": title,
-                    "stage": stage,
-                    "priority": priority,
-                    "tags": tags,
-                    "url": url,
-                    "body": body,
-                    "checklist": checklist_json,
-                    "formattedContext": formatted,
-                }),
-                linked,
-                formatted,
-            ))
-        }
         "mightywork_wiki" => {
+            let mw_project = mightywork_project_of(ws);
             if mw_project.is_empty() {
                 return Err("MightyWork project key is not configured.".into());
             }
@@ -958,70 +926,44 @@ async fn fetch_detail(host: &Arc<Host>, ws: &Workspace, source: &str, key: &str)
                 formatted,
             ))
         }
-        "github_issue" => {
-            let repo = match ws.github_repo.clone().filter(|r| !r.trim().is_empty()) {
-                Some(r) => r,
-                None => detect_github_repo(host, Path::new(ws.path())).await.unwrap_or_default(),
+        _ => {
+            let Some(tracker_id) = crate::trackers::tracker_of_source(source) else {
+                return Err("Unknown integration item source.".into());
             };
-            if repo.is_empty() {
-                return Err("GitHub repository is not configured.".into());
-            }
-            let Some(gh) = gh_executable(host) else {
-                return Err("GitHub CLI (gh) is not installed.".into());
+            let tracker = crate::trackers::tracker_for(host, ws, tracker_id).await?;
+            let project = match &tracker {
+                crate::trackers::AnyTracker::MightyWork(t) => Some(t.project().to_string()),
+                crate::trackers::AnyTracker::GitHub(t) => Some(t.repo().to_string()),
+                _ => linked_project(host, ws, tracker_id).await,
             };
-            let num = key.trim_start_matches('#');
-            let cwd = if ws.path().is_empty() { std::env::temp_dir() } else { PathBuf::from(ws.path()) };
-            let req = SpawnRequest::new(
-                gh,
-                ["issue", "view", num, "--repo", &repo, "--json", "number,title,body,state,labels,url,updatedAt"],
-                cwd,
-            )
-            .env("GH_PROMPT_DISABLED", "1")
-            .env("NO_COLOR", "1");
-            let captured = mighty_platform::process::capture(host.processes.as_ref(), req, None, Duration::from_secs(10), 512_000)
-                .await
-                .map_err(|e| e.to_string())?;
-            if captured.exit_code != 0 {
-                return Err(String::from_utf8_lossy(&captured.stderr).trim().to_string());
-            }
-            let raw: Value = serde_json::from_slice(&captured.stdout).map_err(|e| e.to_string())?;
-            let issue_key =
-                format!("#{}", raw.get("number").and_then(Value::as_i64).map(|n| n.to_string()).unwrap_or_else(|| num.to_string()));
-            let title = raw.get("title").and_then(Value::as_str).unwrap_or(&issue_key).to_string();
-            let stage = raw.get("state").and_then(Value::as_str).map(|s| s.to_ascii_lowercase());
-            let url = raw.get("url").and_then(Value::as_str).map(str::to_string);
-            let body = raw.get("body").and_then(Value::as_str).unwrap_or("").to_string();
-            let tags: Vec<String> = raw
-                .get("labels")
-                .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(|l| l.get("name").and_then(Value::as_str)).map(str::to_string).collect())
-                .unwrap_or_default();
-            let formatted = format_item_context(source, &issue_key, &title, stage.as_deref(), url.as_deref(), &body, &[]);
-            let linked = LinkedTask {
-                source: "github".into(),
-                project: Some(repo),
-                key: issue_key.clone(),
-                title: Some(title.clone()),
-                url: url.clone(),
-            };
-            Ok((
-                json!({
-                    "source": source,
-                    "key": issue_key,
-                    "title": title,
-                    "stage": stage,
-                    "tags": tags,
-                    "url": url,
-                    "body": body,
-                    "checklist": [],
-                    "formattedContext": formatted,
-                }),
-                linked,
-                formatted,
-            ))
+            let detail = tracker.get(key).await?;
+            let s = &detail.summary;
+            let formatted =
+                format_item_context(source, &s.key, &s.title, s.state.as_deref(), s.url.as_deref(), &detail.body, &detail.checklist);
+            let linked =
+                LinkedTask { source: tracker.id().into(), project, key: s.key.clone(), title: Some(s.title.clone()), url: s.url.clone() };
+            Ok((crate::trackers::detail_json(source, &detail, &formatted), linked, formatted))
         }
-        _ => Err("Unknown integration item source.".into()),
     }
+}
+
+/// The team, project key or project path an external tracker's linked issue records.
+async fn linked_project(host: &Host, ws: &Workspace, tracker: &str) -> Option<String> {
+    let configured = ws.issue_tracker(tracker).and_then(|c| c.project.clone()).filter(|p| !p.trim().is_empty());
+    match (configured, tracker) {
+        (Some(p), _) => Some(p),
+        (None, "gitlab") => crate::trackers::gitlab::detect(host, ws).await.map(|(_, p)| p),
+        _ => None,
+    }
+}
+
+/// The wiki branch needs the workspace's MightyWork project.
+fn mightywork_project_of(ws: &Workspace) -> String {
+    ws.mightywork_project
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| detect_mightywork_project(Path::new(ws.path())))
+        .unwrap_or_default()
 }
 
 pub fn register(methods: &mut Registry) {
@@ -1098,49 +1040,26 @@ pub fn register(methods: &mut Registry) {
         let filter = text(&args, "filter").unwrap_or("all");
 
         match tab {
-            "tasks" => {
-                let project = ws
-                    .mightywork_project
-                    .clone()
-                    .filter(|s| !s.trim().is_empty())
-                    .or_else(|| detect_mightywork_project(Path::new(ws.path())))
-                    .unwrap_or_default();
-                if project.is_empty() {
-                    return Ok(json!({ "items": [], "unconfigured": "mightywork" }));
+            "tasks" | "github" | "linear" | "jira" | "gitlab" => {
+                let tracker_id = if tab == "tasks" { "mightywork" } else { tab };
+                let source = crate::trackers::source_of_tracker(tracker_id).unwrap_or_default();
+                if crate::trackers::EXTERNAL_TRACKERS.contains(&tracker_id) && !ws.issue_tracker(tracker_id).is_some_and(|c| c.enabled) {
+                    return Ok(json!({ "items": [], "unconfigured": tracker_id }));
                 }
-                let mut call_args = json!({ "project": project, "limit": 80 });
-                if matches!(filter, "todo" | "in_progress" | "backlog" | "review" | "qa" | "done") {
-                    call_args["stage"] = Value::String(filter.into());
-                }
-                match mcp_call_tool(&host, ws.path.as_deref(), ws.mightywork_url.as_deref(), "list_tasks", call_args).await {
-                    Ok(res) => {
-                        let empty = Vec::new();
-                        let list = res.get("tasks").and_then(Value::as_array).unwrap_or(&empty);
-                        let items: Vec<Value> = list
-                            .iter()
-                            .filter_map(|t| {
-                                let key = t.get("key")?.as_str()?.to_string();
-                                let title = t.get("title")?.as_str()?.to_string();
-                                let stage = t.get("stage").and_then(Value::as_str).unwrap_or("");
-                                if filter == "all" && stage == "done" && query.is_empty() {
-                                    // Keep active tasks prominent by default when browsing all without a search query, or include all:
-                                }
-                                if !query.is_empty() && !key.to_lowercase().contains(&query) && !title.to_lowercase().contains(&query) {
-                                    return None;
-                                }
-                                Some(json!({
-                                    "source": "mightywork_task",
-                                    "key": key,
-                                    "title": title,
-                                    "stage": stage,
-                                    "priority": t.get("priority").and_then(Value::as_str),
-                                    "tags": t.get("tags").cloned().unwrap_or_else(|| json!([])),
-                                }))
-                            })
-                            .collect();
+                let tracker = match crate::trackers::tracker_for(&host, &ws, tracker_id).await {
+                    Ok(t) => t,
+                    Err(crate::trackers::TrackerError::NotConfigured(_)) => return Ok(json!({ "items": [], "unconfigured": tracker_id })),
+                    // GitHub without gh read as unconfigured before the tracker layer, and still does.
+                    Err(_) if tracker_id == "github" => return Ok(json!({ "items": [], "unconfigured": "github" })),
+                    Err(err) => return Ok(json!({ "items": [], "error": err.to_string() })),
+                };
+                let issue_query = crate::trackers::IssueQuery { filter: filter.to_string(), text: query.clone() };
+                match tracker.list(&issue_query).await {
+                    Ok(rows) => {
+                        let items: Vec<Value> = rows.iter().map(|s| crate::trackers::summary_json(source, s)).collect();
                         Ok(json!({ "items": items }))
                     }
-                    Err(err) => Ok(json!({ "items": [], "error": err })),
+                    Err(err) => Ok(json!({ "items": [], "error": err.to_string() })),
                 }
             }
             "wiki" => {
@@ -1195,68 +1114,69 @@ pub fn register(methods: &mut Registry) {
                     Err(err) => Ok(json!({ "items": [], "error": err })),
                 }
             }
-            "github" => {
-                let repo = match ws.github_repo.clone().filter(|r| !r.trim().is_empty()) {
-                    Some(r) => r,
-                    None => detect_github_repo(&host, Path::new(ws.path())).await.unwrap_or_default(),
-                };
-                if repo.is_empty() {
-                    return Ok(json!({ "items": [], "unconfigured": "github" }));
-                }
-                let Some(gh) = gh_executable(&host) else {
-                    return Ok(json!({ "items": [], "unconfigured": "github" }));
-                };
-                let state_arg = if filter == "all" { "all" } else { "open" };
-                let cwd = if ws.path().is_empty() { std::env::temp_dir() } else { PathBuf::from(ws.path()) };
-                let mut cmd_args = vec![
-                    "issue".to_string(),
-                    "list".to_string(),
-                    "--repo".to_string(),
-                    repo,
-                    "--state".to_string(),
-                    state_arg.to_string(),
-                    "--limit".to_string(),
-                    "50".to_string(),
-                    "--json".to_string(),
-                    "number,title,state,labels,url,updatedAt".to_string(),
-                ];
-                if !query.is_empty() {
-                    cmd_args.push("--search".to_string());
-                    cmd_args.push(query);
-                }
-                let req = SpawnRequest::new(gh, cmd_args, cwd).env("GH_PROMPT_DISABLED", "1").env("NO_COLOR", "1");
-                match mighty_platform::process::capture(host.processes.as_ref(), req, None, Duration::from_secs(10), 512_000).await {
-                    Ok(captured) if captured.exit_code == 0 => {
-                        let list: Vec<Value> = serde_json::from_slice(&captured.stdout).unwrap_or_default();
-                        let items: Vec<Value> = list
-                            .iter()
-                            .filter_map(|i| {
-                                let num = i.get("number")?.as_i64()?;
-                                let title = i.get("title")?.as_str()?.to_string();
-                                let tags: Vec<String> = i
-                                    .get("labels")
-                                    .and_then(Value::as_array)
-                                    .map(|a| a.iter().filter_map(|l| l.get("name").and_then(Value::as_str)).map(str::to_string).collect())
-                                    .unwrap_or_default();
-                                Some(json!({
-                                    "source": "github_issue",
-                                    "key": format!("#{num}"),
-                                    "title": title,
-                                    "stage": i.get("state").and_then(Value::as_str).map(|s| s.to_ascii_lowercase()),
-                                    "tags": tags,
-                                    "url": i.get("url").and_then(Value::as_str),
-                                    "updatedAt": i.get("updatedAt").and_then(Value::as_str),
-                                }))
-                            })
-                            .collect();
-                        Ok(json!({ "items": items }))
-                    }
-                    Ok(captured) => Ok(json!({ "items": [], "error": String::from_utf8_lossy(&captured.stderr).trim() })),
-                    Err(err) => Ok(json!({ "items": [], "error": err.to_string() })),
-                }
-            }
             _ => Err("Unknown tab.".into()),
         }
+    });
+
+    methods.add("integrationsTrackerSave", |host: Arc<Host>, args| async move {
+        let ws = workspace_snapshot(&host, text(&args, "workspaceId"))?;
+        let tracker = text(&args, "tracker").unwrap_or("");
+        if !crate::trackers::EXTERNAL_TRACKERS.contains(&tracker) {
+            return Err("Unknown issue tracker.".into());
+        }
+        let config = crate::trackers::config_from_args(tracker, ws.issue_tracker(tracker), &args)?;
+        if let Some(token) = text(&args, "token").map(str::trim).filter(|t| !t.is_empty()) {
+            crate::trackers::save_token(&host, &config, token).await?;
+        }
+        let ws_id = ws.id().to_string();
+        host.view().update(|snapshot| {
+            if let Some(ws) = snapshot.workspaces_mut().iter_mut().find(|w| w.id() == ws_id) {
+                let list = ws.issue_trackers.get_or_insert_with(Vec::new);
+                match list.iter_mut().find(|c| c.tracker == config.tracker) {
+                    Some(existing) => *existing = config.clone(),
+                    None => list.push(config.clone()),
+                }
+            }
+        })?;
+        host.schedule();
+        let ws = workspace_snapshot(&host, Some(&ws_id))?;
+        Ok(build_status(&host, &ws).await)
+    });
+
+    methods.add("integrationsTrackerDisconnect", |host: Arc<Host>, args| async move {
+        let ws = workspace_snapshot(&host, text(&args, "workspaceId"))?;
+        let tracker = text(&args, "tracker").unwrap_or("");
+        if !crate::trackers::EXTERNAL_TRACKERS.contains(&tracker) {
+            return Err("Unknown issue tracker.".into());
+        }
+        let config = ws
+            .issue_tracker(tracker)
+            .cloned()
+            .unwrap_or_else(|| IssueTrackerConfig { tracker: tracker.to_string(), ..IssueTrackerConfig::default() });
+        crate::trackers::delete_token(&host, &config).await?;
+        Ok(build_status(&host, &ws).await)
+    });
+
+    methods.add("integrationsTrackerTest", |host: Arc<Host>, args| async move {
+        let ws = workspace_snapshot(&host, text(&args, "workspaceId"))?;
+        let tracker = text(&args, "tracker").unwrap_or("");
+        if !crate::trackers::EXTERNAL_TRACKERS.contains(&tracker) {
+            return Err("Unknown issue tracker.".into());
+        }
+        let checked = match crate::trackers::tracker_for(&host, &ws, tracker).await {
+            Ok(crate::trackers::AnyTracker::Linear(t)) => t.viewer().await.map(|user| (user, "token")),
+            Ok(crate::trackers::AnyTracker::Jira(t)) => t.myself().await.map(|user| (user, "token")),
+            Ok(crate::trackers::AnyTracker::GitLab(t)) => {
+                let via = if t.uses_glab() { "glab" } else { "token" };
+                t.user().await.map(|user| (user, via))
+            }
+            Ok(_) => Err(crate::trackers::TrackerError::NotConfigured("issue tracker")),
+            Err(error) => Err(error),
+        };
+        Ok(match checked {
+            Ok((user, via)) => json!({ "ok": true, "user": user, "via": via }),
+            Err(error) => json!({ "ok": false, "error": error.to_string() }),
+        })
     });
 
     methods.add("integrationsDetail", |host: Arc<Host>, args| async move {
@@ -1291,8 +1211,17 @@ pub fn register(methods: &mut Registry) {
                 .unwrap_or_else(|| "claude".to_string())
         };
 
-        let session_id = make_task_session_id(item_key);
-        let persist_linked = matches!(linked.source.as_str(), "mightywork" | "github").then(|| linked.clone());
+        let external = crate::trackers::EXTERNAL_TRACKERS.contains(&linked.source.as_str());
+        // MC-31: an external tracker's issue gets its own branch, `<prefix>/<KEY>-<slug>`; MightyWork and GitHub keep `mighty/<id>`.
+        let issue_session = if mode == "worktree" && external {
+            crate::pane_worktree::free_issue_session_id(&host, &ws, &linked.source, item_key, item_title).await
+        } else {
+            None
+        };
+        let on_issue_branch = issue_session.is_some();
+        let session_id = issue_session.unwrap_or_else(|| make_task_session_id(item_key));
+        let persist_linked =
+            matches!(linked.source.as_str(), "mightywork" | "github" | "linear" | "jira" | "gitlab").then(|| linked.clone());
         let initial_draft = if auto_send { String::new() } else { prompt.clone() };
 
         let created = if mode == "worktree" {
@@ -1304,6 +1233,7 @@ pub fn register(methods: &mut Registry) {
                 pane_title,
                 initial_draft,
                 persist_linked.clone(),
+                on_issue_branch,
             )
             .await?
         } else {
@@ -1330,7 +1260,11 @@ pub fn register(methods: &mut Registry) {
         }
         host.schedule();
 
-        if let Some(ref task_link) = persist_linked {
+        if let Some(ref task_link) = persist_linked
+            && external
+        {
+            crate::trackers::spawn_write_back(&host, ws.id(), task_link, crate::trackers::WorkEvent::Started, Some(session_id.clone()));
+        } else if let Some(ref task_link) = persist_linked {
             let comment = if mode == "worktree" {
                 Some(format!("Started implementation in Mighty Code worktree branch `mighty/{session_id}`."))
             } else {

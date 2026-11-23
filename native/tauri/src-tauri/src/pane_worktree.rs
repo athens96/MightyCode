@@ -496,7 +496,9 @@ pub(crate) fn append_system_note(host: &Arc<Host>, pane_id: &str, text: String) 
     note_pane(host, pane_id, text);
 }
 
-/// Creates a dedicated git worktree pane seeded with a linked task/issue, fixed title, and optional draft.
+/// Creates a dedicated git worktree pane seeded with a linked task/issue, fixed title, and optional draft; on the issue branch the
+/// session id names when `on_issue_branch` (MC-31, `free_issue_session_id`).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn open_task_in_worktree(
     host: &Arc<Host>,
     workspace: &Workspace,
@@ -505,10 +507,11 @@ pub(crate) async fn open_task_in_worktree(
     title: String,
     draft: String,
     linked_task: Option<mighty_core::model::LinkedTask>,
+    on_issue_branch: bool,
 ) -> Result<bool, String> {
     let locale = host.locale;
     let (approved_cfg, cfg_note) = resolve_worktree_repo_config(host, workspace, true).await;
-    let (made, checkout, reason) = make(host, workspace, &session_id).await;
+    let (made, checkout, reason) = make_on(host, workspace, &session_id, on_issue_branch).await;
     let Some(made) = made else {
         let reason = reason.unwrap_or_default();
         return Err(locale.get_with("paneWorktree.error.cannotMake", &[("reason", &reason)]));
@@ -561,6 +564,60 @@ async fn make(
     workspace: &Workspace,
     id: &str,
 ) -> (Option<mighty_delegation::git::worktree::ChildWorktree>, String, Option<String>) {
+    make_on(host, workspace, id, false).await
+}
+
+/// MC-31: a session id for a pane on an issue of `tracker` whose branch (`lin/ENG-123-fix-login`) and worktree folder are both free:
+/// no pane or kept worktree has the id, its folder does not exist, and the workspace's repository has no such branch (`-2` … `-9`
+/// otherwise). None when the tracker names no branch or nothing is free.
+pub(crate) async fn free_issue_session_id(
+    host: &Arc<Host>,
+    workspace: &Workspace,
+    tracker: &str,
+    key: &str,
+    title: &str,
+) -> Option<String> {
+    let places = places()?;
+    let folder = local_folder(workspace);
+    for n in 1..=9 {
+        let id = crate::trackers::issue_session_id(tracker, key, title, n)?;
+        let taken = {
+            let view = host.view();
+            view.snapshot.session(&id).is_some()
+                || view.snapshot.workspaces().iter().any(|w| {
+                    w.kept_pane_worktrees.as_ref().is_some_and(|kept| kept.iter().any(|k| k.session_id().eq_ignore_ascii_case(&id)))
+                })
+        };
+        if taken || Path::new(&places.maker.worktree_path(&id)).exists() {
+            continue;
+        }
+        let branch = mighty_core::model::issue_pane_branch(&id)?;
+        let reference = format!("refs/heads/{branch}");
+        let exists = crate::git_workbench::run_git_capture(
+            host,
+            Path::new(&folder),
+            &["show-ref", "--verify", "--quiet", &reference],
+            None,
+            5,
+            true,
+        )
+        .await
+        .map(|c| c.exit_code == 0)
+        .unwrap_or(false);
+        if !exists {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// [`make`], on the issue branch the id names when `on_issue_branch` (MC-31).
+async fn make_on(
+    host: &Arc<Host>,
+    workspace: &Workspace,
+    id: &str,
+    on_issue_branch: bool,
+) -> (Option<mighty_delegation::git::worktree::ChildWorktree>, String, Option<String>) {
     let Some(places) = places() else { return (None, String::new(), Some(text::reason(DelegationReasonCode::NotGit, &host.locale))) };
     let folder = local_folder(workspace);
     match places.maker.check(&folder).await {
@@ -568,7 +625,12 @@ async fn make(
             if !may_write(host, &[&folder, &start.repository, &places.root]) {
                 return (None, String::new(), Some(crate::setup::verification_mode()));
             }
-            match core::make_pane(&places.maker, id, &start, 300.0).await {
+            let outcome = if on_issue_branch {
+                core::make_issue_pane(&places.maker, id, &start, 300.0).await
+            } else {
+                core::make_pane(&places.maker, id, &start, 300.0).await
+            };
+            match outcome {
                 ChildWorktreeOutcome::Created(made) => (Some(made), start.repository, None),
                 ChildWorktreeOutcome::Refused(reason) => (None, String::new(), Some(text::reason(reason, &host.locale))),
                 ChildWorktreeOutcome::Failed(message) => (None, String::new(), Some(message)),

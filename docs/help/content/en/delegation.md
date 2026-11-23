@@ -62,6 +62,19 @@ So that several agent panes of one workspace can work at once, a workspace's age
 - **Closing and the list**: a pane closed with nothing unmerged takes its worktree with it. One with work left keeps it, and {{ui:paneWorktree.menu.list}} in the workspace row's menu opens it as a pane again, merges it or deletes it.
 - **Review queue**: worktree panes and child panes that finished with changes gather in the [{{ui:review.open}}](layout.md#review). {{ui:editor.openFolder}} in the bar's menu opens the folder the pane works in in your external editor.
 
+## Start from an issue {#issues}
+Pick a MightyWork task, a GitHub issue, or a Linear, Jira or GitLab issue and start working on it. Open the list with {{ui:integrations.menu.browse}} in a workspace's right-click menu in the sidebar.
+
+- **Connecting**: in {{ui:integrations.menu.settings}} in the same menu. MightyWork signs in or takes a token; GitHub uses `gh`. Under {{ui:integrations.tracker.section}}, pick Linear, Jira or GitLab and turn on {{ui:integrations.tracker.enabled}}.
+  - Linear: a {{ui:integrations.tracker.linearToken}} and the {{ui:integrations.tracker.linearTeam}} (empty for all teams).
+  - Jira Cloud: the {{ui:integrations.tracker.jiraSite}} (`https://your-team.atlassian.net`), the {{ui:integrations.tracker.email}}, an {{ui:integrations.tracker.jiraToken}} and the {{ui:integrations.tracker.jiraProject}}.
+  - GitLab: `glab` when it is installed and signed in, else a {{ui:integrations.tracker.gitlabToken}}. Left empty, the {{ui:integrations.tracker.gitlabProject}} and address are read from `origin`.
+  - Tokens are kept only in the OS keychain (the Mac keychain, Windows Credential Manager), never on screen, in logs or in state files. {{ui:integrations.tracker.test}} checks one; {{ui:integrations.auth.logout}} deletes it.
+- **The list**: each tracker you turn on gets a tab. Filter with {{ui:integrations.filter.mine}}, {{ui:integrations.filter.open}} and {{ui:integrations.filter.all}}; the chip picked first follows the {{ui:integrations.tracker.filter}} ({{ui:integrations.tracker.filterMine}}, {{ui:integrations.tracker.filterOpen}}). The list is read only when it opens and when you refresh it.
+- **{{ui:integrations.action.startWorktree}}**: opens a pane in [its own worktree](#pane-worktree) for the issue. A Linear, Jira or GitLab issue's branch is `<prefix>/<key>-<title>` (such as `lin/ENG-123-fix-login`, `jira/PROJ-7-…`, `gl/12-…`); MightyWork tasks and GitHub issues keep `mighty/<pane id>`. The issue's title, body (a Jira body is turned into Markdown), sub-items and link go into the first request. The worktree bar shows the linked issue's chip; click it to open the issue.
+- **Pull requests**: a pull request made from the Git workbench gets the issue's link at the end of its body (with the commits' subjects when you leave the body empty).
+- **{{ui:integrations.tracker.writeBack}}**: one switch each per tracker: {{ui:integrations.tracker.writeStart}}, {{ui:integrations.tracker.writePr}}, {{ui:integrations.tracker.writeMerge}} and {{ui:integrations.tracker.commentPr}} (on by default). Linear moves to the team's started or completed state, Jira takes the transition with the matching name, and GitLab uses the `In Progress` and `In Review` labels and closes. What was written shows in the pane's log. MightyWork follows the single {{ui:integrations.settings.autoSync}} switch, and nothing is written to GitHub.
+
 ## Forking a conversation {#fork}
 To try another way without losing the context a pane built up, open a new pane in a new worktree that carries on its conversation. The source pane's conversation and files stay as they are.
 

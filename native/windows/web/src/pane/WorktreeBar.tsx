@@ -5,10 +5,31 @@ import { useCallback, useEffect, useState } from 'react';
 import { useServices, useStoreSelector } from '../app/context';
 import { Icon } from '../icons/Icon';
 import { useMenu } from '../shell/parts';
-import type { RunSession } from '../store/models';
+import type { LinkedTask, RunSession } from '../store/models';
 import { worktreeBar, type WorktreeStatus } from './worktree';
 import { PaneSignals } from './PaneSignals';
 import './worktree.css';
+
+const TRACKER_SHORT: Record<string, string> = {
+  mightywork: 'MightyWork',
+  github: 'GitHub',
+  linear: 'Linear',
+  jira: 'Jira',
+  gitlab: 'GitLab',
+};
+
+/** MC-31: the linked-issue chip's text: the key, and the tracker's name for Linear, Jira and GitLab (their keys alone look alike). */
+export function linkedIssueLabel(linked: LinkedTask): string {
+  return linked.source === 'linear' || linked.source === 'jira' || linked.source === 'gitlab'
+    ? `${TRACKER_SHORT[linked.source]} ${linked.key}`
+    : linked.key;
+}
+
+/** The chip's tooltip: tracker · key · title. */
+export function linkedIssueTitle(linked: LinkedTask): string {
+  const tracker = TRACKER_SHORT[linked.source];
+  return [tracker, linked.key, linked.title].filter((part): part is string => Boolean(part)).join(' · ');
+}
 
 export function WorktreeBar({ session }: { session: RunSession }) {
   const { t, bridge } = useServices();
@@ -39,10 +60,11 @@ export function WorktreeBar({ session }: { session: RunSession }) {
           type="button"
           className="worktree-bar-port link mono"
           data-testid="pane-worktree-linked-task"
-          title={linked.title ? `${linked.key} · ${linked.title}` : linked.key}
+          data-tracker={linked.source}
+          title={linkedIssueTitle(linked)}
           onClick={() => { if (linked.url) void bridge.call('openUrl', { url: linked.url }).catch(() => {}); }}
         >
-          {linked.key}
+          {linkedIssueLabel(linked)}
         </button>
       )}
       {model.ahead && <span className="worktree-bar-count" title={model.ahead.help}>{model.ahead.text}</span>}

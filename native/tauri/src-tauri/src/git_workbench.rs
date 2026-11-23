@@ -1308,6 +1308,22 @@ fn extract_first_url_or_line(output: &str) -> Option<String> {
     output.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string)
 }
 
+/// MC-31: the subjects of the commits on HEAD since `base`, newest first, as a Markdown list (30 at most); empty when git cannot say.
+async fn commit_subjects(host: &Host, root: &Path, base: &str) -> String {
+    let Ok(base) = validate_branch_name(base) else { return String::new() };
+    let range = format!("{base}..HEAD");
+    match run_git_capture(host, root, &["log", "--format=%s", "-n", "30", &range, "--"], None, 10, true).await {
+        Ok(cap) if cap.exit_code == 0 => String::from_utf8_lossy(&cap.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(|l| format!("- {l}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
 /// The worktree pane whose branch is `branch` and which has a linked task: its id and record. A pane that merely has a linked task
 /// but works on another branch is not the one this pull request is for.
 fn find_linked_task_pane(host: &Host, workspace_id: &str, branch: &str) -> Option<(String, PaneWorktree)> {
@@ -1779,6 +1795,22 @@ pub fn register(methods: &mut Registry) {
 
         let custom_title = text(&args, "title").map(str::trim).filter(|s| !s.is_empty());
         let custom_body = text(&args, "body").map(str::trim).filter(|s| !s.is_empty());
+        // MC-31: a pull request of a pane with a linked issue names that issue at the end of its body (the commits' subjects when
+        // no body was written).
+        let linked_body = match find_linked_task_pane(&host, ws.id(), &head) {
+            Some((_, record)) => match record.linked_task.as_ref() {
+                Some(linked) => {
+                    let body = match custom_body {
+                        Some(body) => body.to_string(),
+                        None => commit_subjects(&host, &root, record.base_branch()).await,
+                    };
+                    Some(crate::trackers::pr_body_with_issue(&body, linked))
+                }
+                None => None,
+            },
+            None => None,
+        };
+        let custom_body = linked_body.as_deref().or(custom_body);
 
         let create_args: Vec<String> = if hosting == "github" {
             let mut cmd = vec!["pr".to_string(), "create".to_string()];

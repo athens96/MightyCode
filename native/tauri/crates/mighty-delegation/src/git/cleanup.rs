@@ -268,7 +268,7 @@ pub async fn remove_own_worktree(
         return failed(locale.get("delegation.card.error.worktreeMisplaced"));
     }
     // Only the child's own branch is ever deleted by force.
-    if branch != branch_name(id) {
+    if branch != branch_name(id) && !mighty_core::model::is_pane_branch(branch, id) {
         return failed(locale.get("delegation.card.error.branchMisplaced"));
     }
     if !git.available() {

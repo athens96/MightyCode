@@ -14,6 +14,8 @@ import {
   type IntegrationItem,
   type WorkspaceIntegrationStatus,
 } from './IssuePickerPanel';
+import { enabledTrackers, testFailureText, trackerStatus, type TrackerStatus } from './TrackerSettings';
+import { linkedIssueLabel, linkedIssueTitle } from '../pane/WorktreeBar';
 
 const services = {
   bridge: { call: () => Promise.resolve(null) },
@@ -35,6 +37,9 @@ const services = {
       'integrations.filter.inProgress': 'In Progress',
       'integrations.filter.backlog': 'Backlog',
       'integrations.refresh': 'Refresh',
+      'integrations.tracker.section': 'Other issue trackers',
+      'integrations.tracker.authRequired': 'No token',
+      'integrations.tracker.testFailed': 'Could not connect: {reason}',
     },
   ]),
 } as unknown as AppServices;
@@ -185,5 +190,95 @@ describe('IssuePickerPanel rendering', () => {
     expect(openHtml).toContain('Wiki');
     expect(openHtml).toContain('GitHub Issues');
     expect(openHtml).toContain('data-testid="issue-picker-settings"');
+  });
+});
+
+const LINEAR: TrackerStatus = {
+  tracker: 'linear',
+  name: 'Linear',
+  enabled: true,
+  connected: true,
+  project: 'ENG',
+  site: '',
+  email: '',
+  filterMine: false,
+  filterOpen: true,
+  writeStart: false,
+  writePr: false,
+  writeMerge: false,
+  commentPr: true,
+  defaultFilter: 'open',
+};
+
+describe('MC-31 external trackers', () => {
+  const status = {
+    workspaceId: 'w1',
+    workspaceName: 'MightyCode',
+    isGitRepo: true,
+    mightyworkProject: '',
+    detectedMightyworkProject: '',
+    mightyworkUrl: '',
+    mightyworkConnected: false,
+    mightyworkProjects: [],
+    githubRepo: '',
+    detectedGithubRepo: '',
+    mightyworkAutoSync: false,
+    trackers: [LINEAR, { ...LINEAR, tracker: 'jira', name: 'Jira', enabled: false, defaultFilter: 'mine' }],
+  } as WorkspaceIntegrationStatus;
+
+  it('shows a tab only for trackers turned on, with the default filter from the settings', () => {
+    expect(enabledTrackers(status)).toEqual(['linear']);
+    expect(enabledTrackers(null)).toEqual([]);
+    expect(defaultFilterForTab('linear', status)).toBe('open');
+    expect(defaultFilterForTab('jira', status)).toBe('mine');
+    // A tracker without settings yet: assigned to me, not done.
+    expect(defaultFilterForTab('gitlab', status)).toBe('mine');
+    expect(trackerStatus(status, 'gitlab')).toMatchObject({ enabled: false, connected: false, commentPr: true });
+    // A workspace with a tracker on needs no settings drawer on first open.
+    expect(shouldAutoExpandSettings(status, false)).toBe(false);
+  });
+
+  it('leaves the tracker-side filters to the tracker and still searches', () => {
+    const items: IntegrationItem[] = [
+      { source: 'linear_issue', key: 'ENG-1', title: 'Fix login', stage: 'Todo' },
+      { source: 'linear_issue', key: 'ENG-2', title: 'Docs', stage: 'In Progress' },
+      { source: 'jira_issue', key: 'P-1', title: 'Other tracker' },
+    ];
+    expect(filterIntegrationItems(items, { tab: 'linear', filter: 'mine' })).toEqual(items.slice(0, 2));
+    expect(filterIntegrationItems(items, { tab: 'linear', filter: 'all', query: 'login' })).toEqual([items[0]]);
+  });
+
+  it('words a failed connection test without the token', () => {
+    const t = services.t;
+    expect(testFailureText('AUTH_REQUIRED', t)).toBe('Could not connect: No token');
+    expect(testFailureText('HTTP 404', t)).toBe('Could not connect: HTTP 404');
+  });
+
+  it('labels the linked-issue chip with its tracker', () => {
+    expect(linkedIssueLabel({ source: 'linear', key: 'ENG-123' })).toBe('Linear ENG-123');
+    expect(linkedIssueLabel({ source: 'mightywork', key: 'MC-31' })).toBe('MC-31');
+    expect(linkedIssueTitle({ source: 'jira', key: 'P-1', title: 'Crash' })).toBe('Jira · P-1 · Crash');
+    expect(linkedIssueTitle({ source: 'github', key: '#4', title: null })).toBe('GitHub · #4');
+  });
+
+  it('renders the tracker settings in the settings drawer', () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        ServicesContext.Provider,
+        { value: services },
+        createElement(IssuePickerPanel, {
+          open: true,
+          workspaceId: 'w1',
+          paneId: 'p1',
+          initialSettingsOpen: true,
+          onClose: () => {},
+          onAttachToComposer: () => {},
+        }),
+      ),
+    );
+    expect(html).toContain('data-testid="issue-picker-trackers"');
+    expect(html).toContain('data-testid="tracker-settings-tab-jira"');
+    expect(html).toContain('data-testid="tracker-test-linear"');
+    expect(html).toContain('type="password"');
   });
 });

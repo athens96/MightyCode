@@ -62,6 +62,19 @@ Claude・Codex・Antigravityペインの実行中にリクエストを書いて{
 - **閉じるときと一覧**: マージしていない作業がなければ、ペインを閉じると worktree も削除します。作業が残っていれば保持し、ワークスペース行のメニュー {{ui:paneWorktree.menu.list}} からペインとして開き直す、マージする、削除することができます。
 - **レビュー待ち**: 作業が終わって変更が残ったworktreeペインと子ペインは[{{ui:review.open}}](layout.md#review)に集まります。バーのメニューの{{ui:editor.openFolder}}は、ペインが作業するフォルダを外部エディタで開きます。
 
+## Issue から始める {#issues}
+MightyWork のタスク、GitHub の Issue、Linear・Jira・GitLab の Issue を選んで、すぐに作業を始めます。サイドバーのワークスペースの右クリックメニュー {{ui:integrations.menu.browse}} で一覧を開きます。
+
+- **接続**: 同じメニューの {{ui:integrations.menu.settings}} で行います。MightyWork はログインするかトークンを入れ、GitHub は `gh` を使います。{{ui:integrations.tracker.section}} で Linear、Jira、GitLab を選び、{{ui:integrations.tracker.enabled}} をオンにします。
+  - Linear: {{ui:integrations.tracker.linearToken}} と {{ui:integrations.tracker.linearTeam}}(空欄ですべてのチーム)。
+  - Jira Cloud: {{ui:integrations.tracker.jiraSite}}(`https://チーム.atlassian.net`)、{{ui:integrations.tracker.email}}、{{ui:integrations.tracker.jiraToken}}、{{ui:integrations.tracker.jiraProject}}。
+  - GitLab: `glab` がインストールされログイン済みならそれを使い、なければ {{ui:integrations.tracker.gitlabToken}} を入れます。{{ui:integrations.tracker.gitlabProject}} とアドレスは空欄なら `origin` から読みます。
+  - トークンは OS のキーチェーン(Mac のキーチェーン、Windows の資格情報マネージャー)にだけ保存され、画面、ログ、状態ファイルには残りません。{{ui:integrations.tracker.test}} で確認し、{{ui:integrations.auth.logout}} で削除します。
+- **一覧**: オンにしたトラッカーごとにタブができます。{{ui:integrations.filter.mine}}、{{ui:integrations.filter.open}}、{{ui:integrations.filter.all}} で絞り込み、最初に選ばれるチップは {{ui:integrations.tracker.filter}}({{ui:integrations.tracker.filterMine}}、{{ui:integrations.tracker.filterOpen}})に従います。一覧は開いたときと更新したときだけ読みます。
+- **{{ui:integrations.action.startWorktree}}**: Issue ごとに[専用の worktree](#pane-worktree) を持つペインを開きます。Linear・Jira・GitLab の Issue のブランチは `<接頭辞>/<キー>-<タイトル>`(例: `lin/ENG-123-fix-login`、`jira/PROJ-7-…`、`gl/12-…`)で、MightyWork のタスクと GitHub の Issue は `mighty/<ペイン id>` のままです。Issue のタイトル、本文(Jira の本文は Markdown に変換)、子項目、リンクが最初の依頼に入ります。worktree バーに連携した Issue のチップが表示され、クリックで Issue を開きます。
+- **PR**: Git ワークベンチで PR を作ると、本文の末尾に Issue のリンクが付きます(本文が空ならコミットの件名一覧と一緒に)。
+- **{{ui:integrations.tracker.writeBack}}**: トラッカーごとにスイッチでオンにします。{{ui:integrations.tracker.writeStart}}、{{ui:integrations.tracker.writePr}}、{{ui:integrations.tracker.writeMerge}}、{{ui:integrations.tracker.commentPr}}(既定でオン)。Linear はチームの started・completed の状態へ、Jira は名前の合う遷移で、GitLab は `In Progress`・`In Review` ラベルとクローズで動かします。書き込んだ結果はペインの記録に残ります。MightyWork は {{ui:integrations.settings.autoSync}} ひとつで決まり、GitHub には書き込みません。
+
 ## 会話の分岐 {#fork}
 積み上げた文脈をそのままに別の方法を試したいとき、画面の会話を引き継いだ新しい画面を新しいworktreeで開きます。元の画面の会話とファイルはそのままです。
 

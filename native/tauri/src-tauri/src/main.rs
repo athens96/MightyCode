@@ -119,6 +119,7 @@ mod surface;
 mod surface_terminal;
 mod tails;
 mod terminal;
+mod trackers;
 mod update_helper;
 mod updates;
 mod usage;

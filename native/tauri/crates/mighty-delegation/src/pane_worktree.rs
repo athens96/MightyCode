@@ -60,12 +60,25 @@ pub fn from_made(made: &ChildWorktree, checkout: &str, port: i32, setup_command:
 /// the branch `mighty/<session id>` at the base commit in the same place as a child's, without a child's TASK.md and REPORT.md.
 /// `timeout` in seconds (C#'s default is 300).
 pub async fn make_pane(maker: &Maker, session_id: &str, start: &ChildWorktreeBase, timeout: f64) -> ChildWorktreeOutcome {
+    make_pane_on(maker, session_id, &branch_name(session_id), start, timeout).await
+}
+
+/// MC-31: [`make_pane`] on the issue branch the session id names (`lin-ENG-1-x` → `lin/ENG-1-x`,
+/// `mighty_core::model::issue_pane_branch`); refused for an id that names none.
+pub async fn make_issue_pane(maker: &Maker, session_id: &str, start: &ChildWorktreeBase, timeout: f64) -> ChildWorktreeOutcome {
+    match mighty_core::model::issue_pane_branch(session_id) {
+        Some(branch) => make_pane_on(maker, session_id, &branch, start, timeout).await,
+        None => ChildWorktreeOutcome::Failed("The session id names no issue branch.".into()),
+    }
+}
+
+async fn make_pane_on(maker: &Maker, session_id: &str, branch: &str, start: &ChildWorktreeBase, timeout: f64) -> ChildWorktreeOutcome {
     use ChildWorktreeOutcome::Failed;
-    if !is_safe_session_id(session_id) {
+    if !is_safe_session_id(session_id) || !mighty_core::model::is_pane_branch(branch, session_id) {
         return Failed("The session id cannot name a branch and a folder.".into());
     }
     let worktree = maker.worktree_path(session_id);
-    let branch = branch_name(session_id);
+    let branch = branch.to_string();
     if let Err(error) = std::fs::create_dir_all(maker.root()) {
         return Failed(error.to_string());
     }
@@ -531,7 +544,8 @@ pub async fn kept_on_close(git: &Git, pane: &PaneWorktree, children: bool) -> bo
 /// `mighty/<id>` names, and not itself a link or junction. Git that writes in the worktree (a commit, a merge's reads of it) goes only
 /// where this holds; the discard checks the same ([`remove_own_worktree`]).
 pub fn in_own_place(paths: &DelegationPaths, pane: &PaneWorktree, root: &str) -> bool {
-    let Some(id) = pane.branch().strip_prefix("mighty/").filter(|id| is_safe_session_id(id)) else { return false };
+    let Some(id) = mighty_core::model::pane_session_of_branch(pane.branch()).filter(|id| is_safe_session_id(id)) else { return false };
+    let id = id.as_str();
     let worktree = pane.worktree_path();
     !crate::git::paths::is_link(worktree) && same(&paths.canonical_place(worktree), &os::combine(&paths.canonical(root), id))
 }
@@ -896,7 +910,7 @@ pub fn parse(text: &str, root: &str, paths: &DelegationPaths) -> Vec<OnDisk> {
         let Some(parent) = place.parent().filter(|parent| !parent.as_os_str().is_empty()) else { continue };
         if !same(&real_path(&parent.to_string_lossy(), paths), &root_path)
             || !mighty_core::wire::identifier(&id)
-            || branch != branch_name(&id)
+            || !mighty_core::model::is_pane_branch(branch, &id)
         {
             continue;
         }

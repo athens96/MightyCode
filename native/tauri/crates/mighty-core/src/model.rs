@@ -501,6 +501,9 @@ pub struct Workspace {
     pub github_repo: Option<String>,
     /// Whether starting/PR/merging a linked task automatically updates its MightyWork stage (`None` = true).
     pub mightywork_auto_sync: Option<bool>,
+    /// MC-31: the issue trackers this workspace uses beyond MightyWork and GitHub (Linear, Jira, GitLab), one record each. Never a
+    /// token: tokens live only in the OS keychain. Lenient list.
+    pub issue_trackers: Option<Vec<IssueTrackerConfig>>,
 }
 
 impl Default for Workspace {
@@ -521,6 +524,7 @@ impl Default for Workspace {
             mightywork_url: None,
             github_repo: None,
             mightywork_auto_sync: None,
+            issue_trackers: None,
         }
     }
 }
@@ -543,6 +547,7 @@ impl Wire for Workspace {
             mightywork_url: lenient_string(o.get("mightyworkUrl")),
             github_repo: lenient_string(o.get("githubRepo")),
             mightywork_auto_sync: lenient_bool(o.get("mightyworkAutoSync")),
+            issue_trackers: lenient_list(o.get("issueTrackers")),
         })
     }
 
@@ -562,6 +567,7 @@ impl Wire for Workspace {
         out.prop_str("mightyworkUrl", self.mightywork_url.as_deref());
         out.prop_str("githubRepo", self.github_repo.as_deref());
         out.prop_opt_bool("mightyworkAutoSync", self.mightywork_auto_sync);
+        out.prop_list("issueTrackers", self.issue_trackers.as_ref());
         out.end_object();
     }
 }
@@ -570,6 +576,125 @@ impl Workspace {
     pub fn mightywork_auto_sync_on(&self) -> bool {
         self.mightywork_auto_sync != Some(false)
     }
+
+    /// MC-31: the workspace's record for `tracker` (`"linear"`, `"jira"`, `"gitlab"`), when it has one.
+    pub fn issue_tracker(&self, tracker: &str) -> Option<&IssueTrackerConfig> {
+        self.issue_trackers.as_ref()?.iter().find(|c| c.tracker == tracker)
+    }
+}
+
+/// MC-31: one external issue tracker a workspace uses (Linear, Jira Cloud or GitLab): which team or project, the default filter and
+/// the write-back switches. Its token is never here (the OS keychain only).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct IssueTrackerConfig {
+    /// `"linear"`, `"jira"` or `"gitlab"`.
+    pub tracker: String,
+    pub enabled: bool,
+    /// The Linear team key (`ENG`), the Jira project key (`PROJ`) or the GitLab project path (`group/app`).
+    pub project: Option<String>,
+    /// The Jira site (`https://team.atlassian.net`) or the GitLab address (`https://gitlab.com`).
+    pub site: Option<String>,
+    /// The Jira account's email (Basic auth's user name; not a secret).
+    pub email: Option<String>,
+    /// Default filter: assigned to me (None = true).
+    pub filter_mine: Option<bool>,
+    /// Default filter: not done (None = true).
+    pub filter_open: Option<bool>,
+    /// Write back: starting work moves the issue to in progress (None = false).
+    pub write_start: Option<bool>,
+    /// Write back: a pull request moves the issue to in review (None = false).
+    pub write_pr: Option<bool>,
+    /// Write back: a merge moves the issue to done (None = false).
+    pub write_merge: Option<bool>,
+    /// Write back: a pull request's link is posted on the issue (None = true).
+    pub comment_pr: Option<bool>,
+}
+
+impl IssueTrackerConfig {
+    pub fn filter_mine_on(&self) -> bool {
+        self.filter_mine != Some(false)
+    }
+    pub fn filter_open_on(&self) -> bool {
+        self.filter_open != Some(false)
+    }
+    pub fn write_start_on(&self) -> bool {
+        self.write_start == Some(true)
+    }
+    pub fn write_pr_on(&self) -> bool {
+        self.write_pr == Some(true)
+    }
+    pub fn write_merge_on(&self) -> bool {
+        self.write_merge == Some(true)
+    }
+    pub fn comment_pr_on(&self) -> bool {
+        self.comment_pr != Some(false)
+    }
+}
+
+impl Wire for IssueTrackerConfig {
+    fn read(value: &Value) -> R<Self> {
+        let o = Obj::of(value, "an issue tracker")?;
+        let tracker = lenient_string(o.get("tracker")).unwrap_or_default();
+        if !matches!(tracker.as_str(), "linear" | "jira" | "gitlab") {
+            return json::fail("issue tracker must be linear, jira or gitlab");
+        }
+        Ok(IssueTrackerConfig {
+            tracker,
+            enabled: lenient_bool(o.get("enabled")).unwrap_or(false),
+            project: lenient_string(o.get("project")),
+            site: lenient_string(o.get("site")),
+            email: lenient_string(o.get("email")),
+            filter_mine: lenient_bool(o.get("filterMine")),
+            filter_open: lenient_bool(o.get("filterOpen")),
+            write_start: lenient_bool(o.get("writeStart")),
+            write_pr: lenient_bool(o.get("writePr")),
+            write_merge: lenient_bool(o.get("writeMerge")),
+            comment_pr: lenient_bool(o.get("commentPr")),
+        })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_str("tracker", Some(&self.tracker));
+        out.prop_bool("enabled", self.enabled);
+        out.prop_str("project", self.project.as_deref());
+        out.prop_str("site", self.site.as_deref());
+        out.prop_str("email", self.email.as_deref());
+        out.prop_opt_bool("filterMine", self.filter_mine);
+        out.prop_opt_bool("filterOpen", self.filter_open);
+        out.prop_opt_bool("writeStart", self.write_start);
+        out.prop_opt_bool("writePr", self.write_pr);
+        out.prop_opt_bool("writeMerge", self.write_merge);
+        out.prop_opt_bool("commentPr", self.comment_pr);
+        out.end_object();
+    }
+}
+
+// ── a pane worktree's branch (MC-31) ───────────────────────────────────────────────────────────────────────────────────────
+
+/// MC-31: the prefixes an issue's worktree branch may start with (`lin/ENG-123-fix-login`, `jira/PROJ-7-…`, `gl/12-…`). A pane whose
+/// session id is `<prefix>-<rest>` with one of these may work on the branch `<prefix>/<rest>` instead of `mighty/<session id>`: the
+/// branch still follows from the id alone, so no two panes can claim one branch, and `mighty/…` never reads as an issue branch.
+pub const ISSUE_BRANCH_PREFIXES: [&str; 3] = ["lin", "jira", "gl"];
+
+/// MC-31: the issue branch the session id `id` names (`lin-ENG-1-x` → `lin/ENG-1-x`), or None when it names none.
+pub fn issue_pane_branch(id: &str) -> Option<String> {
+    let (prefix, rest) = id.split_once('-')?;
+    (ISSUE_BRANCH_PREFIXES.contains(&prefix) && !rest.is_empty()).then(|| format!("{prefix}/{rest}"))
+}
+
+/// MC-31: whether `branch` is one the pane `id`'s own worktree may work on: `mighty/<id>`, or the issue branch its id names.
+pub fn is_pane_branch(branch: &str, id: &str) -> bool {
+    branch.strip_prefix("mighty/") == Some(id) || issue_pane_branch(id).as_deref() == Some(branch)
+}
+
+/// MC-31: the session id whose own branch `branch` is (`mighty/<id>`, or `<prefix>/<rest>` for `<prefix>-<rest>`), or None.
+pub fn pane_session_of_branch(branch: &str) -> Option<String> {
+    if let Some(id) = branch.strip_prefix("mighty/") {
+        return Some(id.to_string());
+    }
+    let (prefix, rest) = branch.split_once('/')?;
+    (ISSUE_BRANCH_PREFIXES.contains(&prefix) && !rest.is_empty() && !rest.contains('/')).then(|| format!("{prefix}-{rest}"))
 }
 
 // ── PaneWorktree ────────────────────────────────────────────────────────────────────────────────────────────────────────

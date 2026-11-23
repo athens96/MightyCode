@@ -62,6 +62,19 @@ section: delegation
 - **关闭与列表**:没有未合并工作的窗格关闭时会一并删除其 worktree。仍有工作的会保留,可在工作区行菜单的 {{ui:paneWorktree.menu.list}} 中重新作为窗格打开、合并或删除。
 - **审阅队列**：工作结束且留下更改的 worktree 窗格和子窗格会汇集到[{{ui:review.open}}](layout.md#review)。栏菜单中的{{ui:editor.openFolder}}会在外部编辑器中打开窗格工作的文件夹。
 
+## 从 Issue 开始 {#issues}
+选择 MightyWork 任务、GitHub Issue 或 Linear、Jira、GitLab Issue，直接开始工作。在侧边栏工作区的右键菜单中用 {{ui:integrations.menu.browse}} 打开列表。
+
+- **连接**：在同一菜单的 {{ui:integrations.menu.settings}} 中进行。MightyWork 登录或填入令牌，GitHub 使用 `gh`。在 {{ui:integrations.tracker.section}} 中选择 Linear、Jira 或 GitLab，并打开 {{ui:integrations.tracker.enabled}}。
+  - Linear：{{ui:integrations.tracker.linearToken}} 和 {{ui:integrations.tracker.linearTeam}}(留空为所有团队)。
+  - Jira Cloud：{{ui:integrations.tracker.jiraSite}}(`https://团队.atlassian.net`)、{{ui:integrations.tracker.email}}、{{ui:integrations.tracker.jiraToken}}、{{ui:integrations.tracker.jiraProject}}。
+  - GitLab：已安装并登录 `glab` 时使用它，否则填入 {{ui:integrations.tracker.gitlabToken}}。{{ui:integrations.tracker.gitlabProject}} 和地址留空时从 `origin` 读取。
+  - 令牌只保存在操作系统的钥匙串(Mac 钥匙串、Windows 凭据管理器)中，不会出现在界面、日志或状态文件里。用 {{ui:integrations.tracker.test}} 检查，用 {{ui:integrations.auth.logout}} 删除。
+- **列表**：每个启用的跟踪器都有一个标签页。用 {{ui:integrations.filter.mine}}、{{ui:integrations.filter.open}}、{{ui:integrations.filter.all}} 筛选，首先选中的筛选项取决于 {{ui:integrations.tracker.filter}}({{ui:integrations.tracker.filterMine}}、{{ui:integrations.tracker.filterOpen}})。列表只在打开和刷新时读取。
+- **{{ui:integrations.action.startWorktree}}**：为 Issue 打开一个拥有[自己 worktree](#pane-worktree) 的窗格。Linear、Jira、GitLab Issue 的分支是 `<前缀>/<键>-<标题>`(例如 `lin/ENG-123-fix-login`、`jira/PROJ-7-…`、`gl/12-…`)，MightyWork 任务和 GitHub Issue 仍为 `mighty/<窗格 id>`。Issue 的标题、正文(Jira 正文转换为 Markdown)、子项和链接会放进第一个请求。worktree 栏显示关联 Issue 的标签，点击即可打开 Issue。
+- **PR**：在 Git 工作台创建 PR 时，正文末尾会附上 Issue 链接(正文留空时连同提交标题列表)。
+- **{{ui:integrations.tracker.writeBack}}**：每个跟踪器用开关分别启用：{{ui:integrations.tracker.writeStart}}、{{ui:integrations.tracker.writePr}}、{{ui:integrations.tracker.writeMerge}}、{{ui:integrations.tracker.commentPr}}(默认开启)。Linear 移到团队的 started 或 completed 状态，Jira 使用名称匹配的转换，GitLab 使用 `In Progress`、`In Review` 标签并关闭。写入结果会留在窗格记录中。MightyWork 由 {{ui:integrations.settings.autoSync}} 一个开关决定，不会写入 GitHub。
+
 ## 分叉对话 {#fork}
 想保留已积累的上下文去尝试另一种做法时，可以在新的 worktree 中打开一个接续此窗格对话的新窗格。原窗格的对话和文件保持不变。
 
