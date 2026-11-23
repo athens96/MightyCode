@@ -95,7 +95,7 @@ Claude 有时会在后台运行耗时较长的命令或子智能体。这时即�
 ![[background-work]]
 
 ## 沙盒 {#sandbox}
-{{platform:mac}} 每个工作区都可以让代理在 macOS 沙盒中运行。默认关闭。在侧边栏右键点击工作区，选择 {{ui:sandbox.menu.settings}}，打开 {{ui:sandbox.settings.enabled}}，然后按 {{ui:sandbox.settings.save}}。从下一次运行开始生效，窗格标题会显示 {{ui:sandbox.badge}} 标记。点击标记可打开设置。
+每个工作区都可以在沙盒中运行代理：Mac 使用 macOS 沙盒，Windows 使用[实验性的 Windows 沙盒](#sandbox-windows)。默认关闭。在侧边栏右键点击工作区，选择 {{ui:sandbox.menu.settings}}，打开 {{ui:sandbox.settings.enabled}}，然后按 {{ui:sandbox.settings.save}}。从下一次运行开始生效，窗格标题会显示 {{ui:sandbox.badge}} 标记。点击标记可打开设置。
 
 ### 阻止的内容 {#sandbox-blocked}
 - **写入**：只能写入工作区（或窗格的 worktree）文件夹、代理自己的设置文件夹、临时文件夹和包缓存。
@@ -103,6 +103,20 @@ Claude 有时会在后台运行耗时较长的命令或子智能体。这时即�
 - **指令文件**：{{ui:sandbox.settings.instructions}} 打开时（默认），不能修改 `.mighty.yaml`、`AGENTS.md`、`CLAUDE.md` 以及代理的项目设置。可以在 {{ui:sandbox.settings.readOnly}} 中添加更多路径。
 - **读取**：不能读取 `~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.config/gh`、浏览器 Cookie、应用的数据文件夹以及其他代理的登录文件。每个代理只读取自己的登录信息。
 - **连接**：{{ui:sandbox.settings.network}} 打开时（默认），代理只能通过应用的代理服务器访问外部。只有代理的 API 地址和您在 {{ui:sandbox.settings.hosts}} 中填写的地址会直接通过。
+
+### Windows（实验性） {#sandbox-windows}
+{{platform:windows}} 无需管理员权限。代理的 CLI 使用低完整性 (Low integrity)、写入受限的令牌，在无法触及其他窗口和剪贴板的作业对象中运行。设置框会显示 {{ui:sandbox.settings.experimental}} 标记和 {{ui:sandbox.settings.guarantees}} 列表。
+
+**开启前批准**：打开 {{ui:sandbox.settings.enabled}} 并点击 {{ui:sandbox.settings.save}} 后，会先列出要更改的文件夹权限。工作区文件夹会添加低完整性标签和写入条目，`.git/config`、`.git/hooks`、`.git/info` 和指令文件会添加写入拒绝条目，`~/.ssh`、`~/.aws` 等机密文件夹会添加禁止读取标签，各代理的文件夹（`~/.claude`、`~/.codex` 等）只允许该代理写入。点击 {{ui:sandbox.windows.approve}} 之前不会更改任何内容。所有更改都会记录；关闭沙盒并保存会撤销该工作区的更改（多个工作区共用的机密文件夹标签在最后一个工作区关闭时撤销）。卸载应用前请点击 {{ui:sandbox.windows.undoAll}}。
+
+**无法阻止的内容**：
+- 连接允许列表仅为建议级别。只有遵循代理设置的程序会经过列表和卡片，忽略代理直接连接的程序无法阻止。
+- 开启时不存在的指令文件（新建的 `AGENTS.md` 等）可以被修改。
+- 可以读取其他代理的登录文件（写入会被阻止）。浏览器配置文件不关闭。
+- 带低完整性标签的文件夹也可被此电脑上其他低完整性程序写入。
+- 位于网络文件夹（`\\server\share`）或非 NTFS 驱动器上的工作区无法开启沙盒。
+
+**代理**：Claude、Codex、Antigravity、OpenCode 和 pi 在沙盒中运行。Hermes 的程序和设置在同一个文件夹中，因此拒绝运行（绝不在沙盒外运行）。软件包缓存和临时文件使用 `%USERPROFILE%\AppData\LocalLow\MightyCode\sandbox` 下该工作区专用的文件夹。
 
 ### 允许连接 {#sandbox-allow}
 代理要连接不在列表中的地址时，输入框上方会出现 **{{ui:sandbox.network.cardTitle}}** 卡片。
@@ -122,7 +136,7 @@ Claude 有时会在后台运行耗时较长的命令或子智能体。这时即�
 
 ### 限制 {#sandbox-limits}
 - 终端窗格的命令、SSH 工作区（代理在远程机器上运行）和远程工作区不使用沙盒。
-- {{platform:windows}} {{ui:sandbox.settings.windows}}。
+- {{platform:windows}} Windows 沙盒比 Mac 的弱。请参阅 [Windows](#sandbox-windows)。
 - 在沙盒中的运行会随应用关闭而结束，不会在后台继续。
 - macOS 的 `sandbox-exec` 已被 Apple 弃用。没有它时，开启了沙盒的工作区会拒绝运行；关闭沙盒后即可运行。
 - 将登录信息保存在钥匙串中的代理（Claude、Codex、Antigravity）可以读取登录钥匙串。其他应用的项目由 macOS 另行询问。

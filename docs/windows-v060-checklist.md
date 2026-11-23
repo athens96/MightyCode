@@ -75,8 +75,41 @@ v0.6.0 작업은 macOS에서만 만들고 시험했습니다. Mac에서는 모�
 - [ ] `<data>\ssh\machines.json`과 `ssh` 폴더의 ACL이 현재 사용자 하나뿐이다.
 
 ## MC-34 샌드박스
-- [ ] Windows에서 작업 공간 메뉴의 샌드박스 켜기가 "Windows 미지원"으로 거절되고, 휴대폰에도 샌드박스 배지가 나오지 않는다.
-- [ ] 다른 기기에서 옮겨 온 상태에 샌드박스가 켜져 있으면 실행이 시작되지 않고 "이 컴퓨터에서는 아직 샌드박스를 쓸 수 없어…"가 창에 보인다(샌드박스 없이 실행하지 않음).
+- (MC-42로 바뀜: Windows에서도 켤 수 있다. 아래 MC-42 항목으로 확인한다.)
+- [ ] 다른 기기에서 옮겨 온 상태에 샌드박스가 켜져 있고 이 PC에서 승인한 적이 없으면 실행이 시작되지 않고 "샌드박스 승인 밖의 변경이 필요해…"가 창에 보인다(샌드박스 없이 실행하지 않음).
+
+## MC-42 Windows 샌드박스 (실험적, 관리자 권한 없음)
+설계와 근거는 [sandbox.md](sandbox.md)의 "Windows". 아래는 Mac에서 확인할 수 없는 것들이다. 일반 사용자 계정(관리자 아님)과 관리자 계정 둘 다에서 본다.
+
+승인과 되돌리기
+- [ ] 샌드박스를 켜고 저장하면 바꿀 폴더 목록(워크스페이스, git, 지침 파일, 에이전트 폴더, 비밀 폴더, 앱 데이터, LocalLow 전용 폴더)이 먼저 나오고, 승인하기 전에는 `icacls <폴더>`의 출력이 바뀌지 않는다.
+- [ ] **승인하고 켜기** 뒤 `icacls`에 워크스페이스의 `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`와 `S-1-15-3-1024-…:(OI)(CI)(M)`(쓰기 허용, `WDAC`/`WO`/`DC` 없음), `.git\config`·`.git\hooks`·`.git\info`·`AGENTS.md`에 거부 항목과 `Medium Mandatory Level:(NW)`, `~\.ssh`에 `Medium Mandatory Level:(OI)(CI)(NR,NW)`가 보인다. UAC 창이 뜨지 않는다.
+- [ ] node_modules가 큰 워크스페이스에서 승인(레이블 전파)에 걸리는 시간이 견딜 만하고, 그동안 앱이 멈추지 않는다.
+- [ ] 샌드박스를 끄고 저장하면 위 항목이 모두 사라지고(에이전트가 샌드박스에서 만든 파일의 Low 레이블까지), 다른 워크스페이스가 아직 켜 둔 동안은 `~\.ssh` 레이블이 남는다. `<data>\sandbox\windows-changes.json`이 그에 맞게 줄어든다.
+- [ ] **모든 변경 되돌리기**가 모든 워크스페이스의 샌드박스를 끄고 기록된 변경을 모두 되돌린다. 승인 뒤 워크스페이스를 앱에서 지운 경우에도 이 단추로 되돌려진다.
+- [ ] 네트워크 폴더(`\\server\share`)·FAT/exFAT 드라이브의 워크스페이스는 켜지지 않고 이유가 보인다.
+
+토큰과 격리
+- [ ] 샌드박스 실행의 CLI가 Process Explorer에서 무결성 Low, 제한된 SID(작업 공간 SID, 에이전트 SID, Everyone, 로그온 SID), 특권은 SeChangeNotify만으로 보이고, 작업 개체에 UI 제한이 걸려 있다.
+- [ ] 에이전트에게 시켜서: 워크스페이스 밖(`~\Documents`, `%TEMP%`, `~\.gitconfig`, `~\.bashrc` 새로 만들기, HKCU 쓰기)에 쓰면 거부된다. 워크스페이스와 자기 폴더(`~\.claude`)에는 쓰인다. 다른 에이전트 폴더(`~\.codex`)에는 쓰기가 거부된다.
+- [ ] `git commit -am`이 되고, `.git\hooks\pre-commit` 만들기, `.git\config` 고치기, **`.git\config` 지우고 새로 만들기**(폴더의 삭제 권한으로 바꿔치기), `.git` 폴더 이름 바꾸기, `.git\info\attributes` 만들기가 모두 거부된다(쓰기 제한 토큰이 DELETE·FILE_DELETE_CHILD도 검사하는지, 명시 Medium 레이블이 상속된 Low 레이블보다 앞서는지 여기서 확인).
+- [ ] 있던 `AGENTS.md`·`CLAUDE.md` 수정은 거부되고, 없던 하위 폴더에 새 `AGENTS.md`를 만드는 것은 되는 것(알려진 빈틈)을 확인한다.
+- [ ] `type %USERPROFILE%\.ssh\id_ed25519`, `%APPDATA%\MightyCode` 아래 파일 읽기가 거부되고, 같은 파일을 평소 셸(Medium)에서는 그대로 읽는다. 평소 `ssh`·`git push`·Docker·`gh`가 레이블 뒤에도 정상 동작한다.
+- [ ] 샌드박스 프로세스가 다른 앱 창에 SendInput/SendMessage를 못 하고, 클립보드를 읽고 쓰지 못한다. `schtasks /create`, `wmic process call create`, `Start-Process`(셸 COM)로 샌드박스 밖에 프로세스를 띄우지 못한다(브로커 탈출 경로).
+- [ ] 앱을 닫으면 샌드박스 실행과 그 자식이 함께 끝나고, "앱을 닫아도 작업 계속"이 켜져 있어도 데몬으로 넘어가지 않는다.
+
+네트워크(권고 수준)
+- [ ] 허용 목록을 켜면 프록시를 따르는 요청(Claude·Codex의 API, `npm install`, `curl`)은 목록과 카드(이번만/항상/거부)를 거친다.
+- [ ] 프록시를 무시한 직접 접속(`curl --noproxy "*" https://example.com`, Python 소켓)은 **막히지 않는다** — 설정 상자와 도움말이 이것을 "권고"라고 말하는 것과 일치한다.
+- [ ] 샌드박스 실행의 Mighty MCP 서버(`--agent-io-mcp`)가 에이전트 파이프에 붙어 위임·터미널 도구가 동작한다(파이프의 로그온 SID 항목과 Low 레이블). 다른 사용자 계정에서는 이 파이프를 열 수 없다.
+
+에이전트별
+- [ ] Claude: 실제 턴, `~/.claude.json` 저장(홈 폴더에 임시 파일을 못 만들 때 제자리 쓰기로 넘어가는지), Bash 도구(Git Bash/MSYS2가 Low에서 도는지, `/tmp`가 전용 TEMP로 가는지), 로그인 유지.
+- [ ] Codex: 실제 턴, 자체 Windows 샌드박스가 우리 안에서 겹쳐 동작하거나 분명한 오류를 내는지, `auth.json`/키링 읽기, `CODEX_HOME`을 바꾼 경우의 "승인 밖" 거절 문구.
+- [ ] Antigravity(`agy`), OpenCode(Bun), pi(`pi.cmd`를 cmd.exe로): 실제 턴과 로그인 유지. 없는 에이전트 폴더가 첫 실행 때 만들어지고 레이블이 붙는다.
+- [ ] Hermes: 샌드박스를 켠 워크스페이스에서 Hermes 창이 "Hermes는 Windows 샌드박스에서 실행할 수 없습니다…"로 거절되고 샌드박스 없이 돌지 않는다.
+- [ ] node·Python·git 자식 프로세스와 `npm install`·`pip install`(전용 캐시 폴더), `cargo build`(`~\.cargo\registry`에 못 씀: 실패 문구 확인)를 샌드박스에서 돌려 본다.
+- [ ] 휴대폰에서 Windows 호스트의 샌드박스 창에 배지와 마지막으로 막은 일이 보인다.
 
 ## 휴대폰 화면 (MC-25, MC-27, MC-29)
 - [ ] Windows 호스트에 붙은 휴대폰에서 포트 블록, 실행 동작 칩, 점검 시트, 병합 경고, 비교 카드가 Mac 호스트와 같게 보이고 동작한다.

@@ -95,7 +95,7 @@ Claude는 오래 걸리는 명령이나 하위 에이전트를 백그라운드�
 ![[background-work]]
 
 ## 샌드박스 {#sandbox}
-{{platform:mac}} 워크스페이스마다 에이전트를 macOS 샌드박스에서 실행할 수 있습니다. 기본은 꺼져 있습니다. 사이드바에서 워크스페이스를 오른쪽 클릭해 {{ui:sandbox.menu.settings}} 항목을 고르고, {{ui:sandbox.settings.enabled}} 항목을 켠 뒤 {{ui:sandbox.settings.save}} 단추를 누릅니다. 다음 실행부터 적용되고, 창 머리에 {{ui:sandbox.badge}} 표시가 붙습니다. 표시를 누르면 설정이 열립니다.
+워크스페이스마다 에이전트를 샌드박스에서 실행할 수 있습니다. Mac은 macOS 샌드박스를, Windows는 [실험적인 Windows 샌드박스](#sandbox-windows)를 씁니다. 기본은 꺼져 있습니다. 사이드바에서 워크스페이스를 오른쪽 클릭해 {{ui:sandbox.menu.settings}} 항목을 고르고, {{ui:sandbox.settings.enabled}} 항목을 켠 뒤 {{ui:sandbox.settings.save}} 단추를 누릅니다. 다음 실행부터 적용되고, 창 머리에 {{ui:sandbox.badge}} 표시가 붙습니다. 표시를 누르면 설정이 열립니다.
 
 ### 막는 것 {#sandbox-blocked}
 - **쓰기**: 워크스페이스(또는 창의 worktree) 폴더, 에이전트 자신의 설정 폴더, 임시 폴더, 패키지 캐시에만 쓸 수 있습니다.
@@ -103,6 +103,20 @@ Claude는 오래 걸리는 명령이나 하위 에이전트를 백그라운드�
 - **지침 파일**: {{ui:sandbox.settings.instructions}} 항목이 켜져 있으면(기본) `.mighty.yaml`, `AGENTS.md`, `CLAUDE.md`와 에이전트의 프로젝트 설정을 고칠 수 없습니다. {{ui:sandbox.settings.readOnly}} 칸에 경로를 더 넣을 수 있습니다.
 - **읽기**: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, 브라우저 쿠키, 앱의 데이터 폴더, 다른 에이전트의 로그인 파일은 읽을 수 없습니다. 에이전트는 자기 로그인만 읽습니다.
 - **접속**: {{ui:sandbox.settings.network}} 항목이 켜져 있으면(기본) 에이전트는 앱의 프록시를 거쳐서만 밖으로 나갑니다. 에이전트의 API 주소와 {{ui:sandbox.settings.hosts}} 칸에 넣은 곳만 바로 통과합니다.
+
+### Windows (실험적) {#sandbox-windows}
+{{platform:windows}} 관리자 권한 없이 동작합니다. 에이전트 CLI는 낮은 무결성(Low integrity)에 쓰기가 제한된 토큰으로, 다른 창과 클립보드를 건드릴 수 없는 작업 개체 안에서 실행됩니다. 설정 상자에 {{ui:sandbox.settings.experimental}} 표시와 {{ui:sandbox.settings.guarantees}} 목록이 보입니다.
+
+**켜기 전 승인**: {{ui:sandbox.settings.enabled}} 항목을 켜고 {{ui:sandbox.settings.save}} 단추를 누르면 바꿀 폴더 권한 목록이 먼저 나옵니다. 워크스페이스 폴더에는 낮은 무결성 레이블과 쓰기 항목, `.git/config`·`.git/hooks`·`.git/info`와 지침 파일에는 쓰기 거부 항목, `~/.ssh`·`~/.aws` 같은 비밀 폴더에는 읽기 금지 레이블이 붙고, 에이전트 폴더(`~/.claude`, `~/.codex` 등)는 그 에이전트만 쓸 수 있게 됩니다. {{ui:sandbox.windows.approve}} 단추를 눌러야 바뀝니다. 바꾼 것은 모두 기록되고, 샌드박스를 끄고 저장하면 그 워크스페이스의 변경을 되돌립니다(다른 워크스페이스가 함께 쓰는 비밀 폴더 레이블은 마지막 워크스페이스를 끌 때). 앱을 지우기 전에는 {{ui:sandbox.windows.undoAll}} 단추를 누르세요.
+
+**막지 못하는 것**:
+- 접속 허용 목록은 권고 수준입니다. 프록시 설정을 따르는 프로그램만 목록과 카드를 거치고, 프록시를 무시하고 직접 접속하는 프로그램은 막지 못합니다.
+- 켤 때 없던 지침 파일(새로 만든 `AGENTS.md` 등)은 고칠 수 있습니다.
+- 다른 에이전트의 로그인 파일은 읽을 수 있습니다(쓰기는 막습니다). 브라우저 프로필은 닫지 않습니다.
+- 낮은 무결성 레이블이 붙은 폴더는 이 컴퓨터의 다른 낮은 무결성 프로그램도 쓸 수 있습니다.
+- 네트워크 폴더(`\\server\share`)와 NTFS가 아닌 드라이브의 워크스페이스는 샌드박스를 켤 수 없습니다.
+
+**에이전트**: Claude, Codex, Antigravity, OpenCode, pi가 샌드박스에서 실행됩니다. Hermes는 프로그램과 설정이 한 폴더에 있어 실행을 거절합니다(샌드박스 없이 실행하지 않습니다). 패키지 캐시와 임시 파일은 `%USERPROFILE%\AppData\LocalLow\MightyCode\sandbox` 아래 워크스페이스 전용 폴더를 씁니다.
 
 ### 접속 허용하기 {#sandbox-allow}
 목록에 없는 곳에 접속하려 하면 입력창 위에 **{{ui:sandbox.network.cardTitle}}** 카드가 뜹니다.
@@ -122,7 +136,7 @@ Claude는 오래 걸리는 명령이나 하위 에이전트를 백그라운드�
 
 ### 한계 {#sandbox-limits}
 - 셸 창의 명령, SSH 워크스페이스(에이전트가 원격 머신에서 실행), 원격 워크스페이스에는 적용되지 않습니다.
-- {{platform:windows}} {{ui:sandbox.settings.windows}}.
+- {{platform:windows}} Windows 샌드박스는 Mac보다 약합니다. [Windows](#sandbox-windows)를 보세요.
 - 샌드박스에서 도는 실행은 앱을 닫으면 함께 끝납니다. 백그라운드에서 계속 실행되지 않습니다.
 - macOS의 `sandbox-exec`는 Apple이 권장하지 않게 된 도구입니다. 없으면 샌드박스를 켠 워크스페이스의 실행을 거절합니다. 실행하려면 샌드박스를 끄세요.
 - 키체인에 로그인을 두는 에이전트(Claude, Codex, Antigravity)는 로그인 키체인을 읽을 수 있습니다. 다른 앱의 항목은 macOS가 따로 묻습니다.

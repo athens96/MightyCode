@@ -30,6 +30,17 @@ pub struct SpawnRequest {
     /// Windows only: run `program` (cmd.exe) as `cmd.exe /d /s /c "<command>"` — how a `.cmd`/`.bat` shim starts. Elsewhere the
     /// spawn answers `Invalid`.
     pub shell_command: Option<String>,
+    /// MC-42, Windows only: start the child with a restricted copy of this process's token (the agent sandbox). A host that cannot
+    /// make one refuses the spawn (`Invalid`) rather than start it unrestricted; such a request is never handed to the daemon.
+    pub restricted: Option<RestrictedLaunch>,
+}
+
+/// MC-42: the token a sandboxed run starts with on Windows: this process's own, write-restricted to `restricting_sids` (plus the
+/// logon session's SID, which the host adds), every privilege but traverse removed, at low integrity, in a job with UI limits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestrictedLaunch {
+    /// SDDL SIDs (`S-1-…`) a write must also be granted to.
+    pub restricting_sids: Vec<String>,
 }
 
 impl SpawnRequest {
@@ -44,6 +55,7 @@ impl SpawnRequest {
             env,
             env_remove: Vec::new(),
             shell_command: None,
+            restricted: None,
         }
     }
 
@@ -69,6 +81,7 @@ impl fmt::Debug for SpawnRequest {
             .field("env", &self.env.keys().collect::<Vec<_>>())
             .field("env_remove", &self.env_remove)
             .field("shell_command", &self.shell_command.is_some())
+            .field("restricted", &self.restricted.is_some())
             .finish()
     }
 }

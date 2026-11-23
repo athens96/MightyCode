@@ -454,6 +454,14 @@ fn start(request: &SpawnRequest) -> Result<Child> {
         }
     };
     let job = kill_on_close_job()?;
+    // MC-42: a sandboxed run's token (made before anything starts: no token, no run) and its job's UI limits.
+    let token = match &request.restricted {
+        Some(restricted) => {
+            crate::sandbox::limit_ui(raw(&job))?;
+            Some(crate::sandbox::restricted_token(&restricted.restricting_sids)?)
+        }
+        None => None,
+    };
 
     let program = text(&request.program);
     let mut command = wide(command_line(&program, &request.args, request.shell_command.as_deref()));
@@ -492,21 +500,42 @@ fn start(request: &SpawnRequest) -> Result<Child> {
     startup.lpAttributeList = attributes.as_ptr();
     // SAFETY: a zeroed plain-data struct CreateProcessW fills.
     let mut child: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-    // SAFETY: NUL-terminated strings, a mutable command line, a double-NUL UTF-16 environment block, a valid startup struct.
-    check(unsafe {
-        CreateProcessW(
-            application.as_ptr(),
-            command.as_mut_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            1,
-            CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
-            environment.as_ptr().cast(),
-            directory.as_ptr(),
-            &startup.StartupInfo,
-            &mut child,
-        )
-    })?;
+    let flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
+    match &token {
+        // MC-42: a restricted copy of this process's own primary token needs no privilege to start a process with.
+        // SAFETY: as below, plus a primary token handle this launch owns.
+        Some(token) => check(unsafe {
+            windows_sys::Win32::System::Threading::CreateProcessAsUserW(
+                raw(token),
+                application.as_ptr(),
+                command.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+                flags,
+                environment.as_ptr().cast(),
+                directory.as_ptr(),
+                &startup.StartupInfo,
+                &mut child,
+            )
+        })?,
+        // SAFETY: NUL-terminated strings, a mutable command line, a double-NUL UTF-16 environment block, a valid startup struct.
+        None => check(unsafe {
+            CreateProcessW(
+                application.as_ptr(),
+                command.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+                flags,
+                environment.as_ptr().cast(),
+                directory.as_ptr(),
+                &startup.StartupInfo,
+                &mut child,
+            )
+        })?,
+    }
+    drop(token);
     // SAFETY: the handles CreateProcessW just returned, owned here.
     let (process, thread) = unsafe { (OwnedHandle::from_raw_handle(child.hProcess), OwnedHandle::from_raw_handle(child.hThread)) };
     // Already in the job (the attribute above), so everything it starts is in the job too: its first instruction may run.

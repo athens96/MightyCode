@@ -696,6 +696,94 @@ pub fn set_menu_character_key(app: &tauri::AppHandle, title: &str, key: &str) {
     let _ = (app, title, key);
 }
 
+/// MC-42: what changes the labels and access lists of the person's folders for the Windows sandbox (sandbox.rs, through the approval
+/// record). On the Mac nothing does: every change is refused.
+pub fn sandbox_acl() -> std::sync::Arc<dyn mighty_run::sandbox::windows::AclWriter> {
+    std::sync::Arc::new(SandboxAcl)
+}
+
+struct SandboxAcl;
+
+/// The folders `path` needs that are missing, outermost first.
+#[cfg(windows)]
+fn missing_folders(path: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut missing: Vec<std::path::PathBuf> = path.ancestors().take_while(|p| !p.exists()).map(|p| p.to_path_buf()).collect();
+    missing.reverse();
+    missing
+}
+
+#[cfg(windows)]
+impl mighty_run::sandbox::windows::AclWriter for SandboxAcl {
+    fn apply(&self, change: &mighty_run::sandbox::windows::Change) -> std::result::Result<mighty_run::sandbox::windows::Done, String> {
+        use mighty_run::sandbox::windows::{Done, section};
+        let path = change.path.as_path();
+        let mut created = Vec::new();
+        if change.create && !path.exists() {
+            created = missing_folders(path);
+            std::fs::create_dir_all(path).map_err(|e| e.to_string())?;
+        }
+        if !os::sandbox::labels_supported(path) {
+            return Err("this drive keeps no access lists or integrity labels (not NTFS)".into());
+        }
+        if change.is_label() {
+            let current = os::sandbox::read_label(path).map_err(|e| e.to_string())?;
+            let before = section(&current, 'S').and_then(|s| s.label());
+            os::sandbox::write_label(path, Some(&change.ace())).map_err(|e| e.to_string())?;
+            return Ok(Done { before, created });
+        }
+        let current = os::sandbox::read_dacl(path).map_err(|e| e.to_string())?;
+        let dacl = section(&current, 'D').ok_or_else(|| "the access list could not be read".to_string())?;
+        os::sandbox::write_dacl(path, &dacl.with(&change.ace()).render('D')).map_err(|e| e.to_string())?;
+        Ok(Done { before: None, created })
+    }
+
+    fn undo(&self, applied: &mighty_run::sandbox::windows::Applied) -> std::result::Result<(), String> {
+        use mighty_run::sandbox::windows::{Op, section};
+        let change = &applied.change;
+        let path = change.path.as_path();
+        if path.exists() {
+            if change.is_label() {
+                let result = if change.tree && change.op == Op::LowLabel {
+                    // What a low process made under it carries a low label of its own: every label below inherits again.
+                    os::sandbox::reset_child_labels(path, applied.before.as_deref())
+                } else {
+                    os::sandbox::write_label(path, applied.before.as_deref())
+                };
+                result.map_err(|e| e.to_string())?;
+            } else {
+                let current = os::sandbox::read_dacl(path).map_err(|e| e.to_string())?;
+                let dacl = section(&current, 'D').ok_or_else(|| "the access list could not be read".to_string())?;
+                os::sandbox::write_dacl(path, &dacl.without_entry(&change.ace()).render('D')).map_err(|e| e.to_string())?;
+            }
+        }
+        // Folders made for it go again when nothing was put in them.
+        for folder in applied.created.iter().rev() {
+            let _ = std::fs::remove_dir(folder);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+impl mighty_run::sandbox::windows::AclWriter for SandboxAcl {
+    fn apply(&self, _: &mighty_run::sandbox::windows::Change) -> std::result::Result<mighty_run::sandbox::windows::Done, String> {
+        Err("the Windows sandbox's changes are made on Windows only".into())
+    }
+
+    fn undo(&self, _: &mighty_run::sandbox::windows::Applied) -> std::result::Result<(), String> {
+        Err("the Windows sandbox's changes are made on Windows only".into())
+    }
+}
+
+/// MC-42: whether the agents' pipe lets a sandboxed run's processes in (some workspace's Windows sandbox approved). The Mac's agents'
+/// socket needs nothing: its sandbox profile allows the socket by path.
+pub fn agent_pipe_for_sandbox(open: bool) {
+    #[cfg(windows)]
+    os::sandbox::set_agent_pipe_for_sandbox(open);
+    #[cfg(not(windows))]
+    let _ = open;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

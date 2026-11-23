@@ -95,7 +95,7 @@ Claude sometimes runs long commands or sub-agents in the background. Then work i
 ![[background-work]]
 
 ## Sandbox {#sandbox}
-{{platform:mac}} Each workspace can run its agents in the macOS sandbox. It is off by default. Right-click the workspace in the sidebar, choose {{ui:sandbox.menu.settings}}, turn on {{ui:sandbox.settings.enabled}} and press {{ui:sandbox.settings.save}}. It applies from the next run, and the pane's header shows a {{ui:sandbox.badge}} badge. Click the badge to open the settings.
+Each workspace can run its agents in a sandbox: the macOS sandbox on the Mac, the [experimental Windows sandbox](#sandbox-windows) on Windows. It is off by default. Right-click the workspace in the sidebar, choose {{ui:sandbox.menu.settings}}, turn on {{ui:sandbox.settings.enabled}} and press {{ui:sandbox.settings.save}}. It applies from the next run, and the pane's header shows a {{ui:sandbox.badge}} badge. Click the badge to open the settings.
 
 ### What it blocks {#sandbox-blocked}
 - **Writes**: only in the workspace (or the pane's worktree) folder, the agent's own settings folders, the temporary folders and package caches.
@@ -103,6 +103,20 @@ Claude sometimes runs long commands or sub-agents in the background. Then work i
 - **Instruction files**: with {{ui:sandbox.settings.instructions}} on (the default), `.mighty.yaml`, `AGENTS.md`, `CLAUDE.md` and the agents' project settings cannot be changed. Add more paths under {{ui:sandbox.settings.readOnly}}.
 - **Reads**: `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.config/gh`, browser cookies, the app's data folder and the other agents' sign-in files cannot be read. Each agent reads only its own sign-in.
 - **Connections**: with {{ui:sandbox.settings.network}} on (the default), the agent goes out only through the app's proxy. Only the agent's API hosts and what you list under {{ui:sandbox.settings.hosts}} pass at once.
+
+### Windows (experimental) {#sandbox-windows}
+{{platform:windows}} It works without administrator rights. The agent's CLI runs with a low-integrity, write-restricted token, inside a job that cannot touch other windows or the clipboard. The settings box shows the {{ui:sandbox.settings.experimental}} mark and the {{ui:sandbox.settings.guarantees}} list.
+
+**Approval before it turns on**: turn on {{ui:sandbox.settings.enabled}} and press {{ui:sandbox.settings.save}}, and the list of folder permission changes comes first. The workspace folder gets a low integrity label and a write entry, `.git/config`, `.git/hooks`, `.git/info` and the instruction files get a write-deny entry, secret folders such as `~/.ssh` and `~/.aws` get a no-read-up label, and each agent's folders (`~/.claude`, `~/.codex`…) become writable for that agent only. Nothing changes until you press {{ui:sandbox.windows.approve}}. Every change is recorded; turning the sandbox off and saving undoes the workspace's changes (a secret folder's label, shared by workspaces, when the last one turns it off). Before removing the app, press {{ui:sandbox.windows.undoAll}}.
+
+**What it does not stop**:
+- The connection allow list is advisory. Only programs that follow the proxy setting go through the list and the cards; a program that ignores the proxy and connects directly is not stopped.
+- Instruction files that did not exist when it was turned on (a new `AGENTS.md`) can be changed.
+- Another agent's sign-in file can be read (writing to it is stopped). Browser profiles are not closed.
+- A folder with a low integrity label can also be written by other low-integrity programs on this computer.
+- A workspace on a network folder (`\\server\share`) or a drive that is not NTFS cannot be sandboxed.
+
+**Agents**: Claude, Codex, Antigravity, OpenCode and pi run in the sandbox. Hermes is refused (its program and settings share one folder); it is never run unsandboxed. Package caches and temporary files go to a folder of the workspace's own under `%USERPROFILE%\AppData\LocalLow\MightyCode\sandbox`.
 
 ### Allowing a connection {#sandbox-allow}
 When the agent connects somewhere not on the list, the **{{ui:sandbox.network.cardTitle}}** card appears above the composer.
@@ -122,7 +136,7 @@ With {{ui:sandbox.settings.reviewer}} on, a read-only agent (Claude's haiku by d
 
 ### Limits {#sandbox-limits}
 - Shell panes' commands, SSH workspaces (the agent runs on the remote machine) and remote workspaces are not sandboxed.
-- {{platform:windows}} {{ui:sandbox.settings.windows}}.
+- {{platform:windows}} The Windows sandbox is weaker than the Mac's. See [Windows](#sandbox-windows).
 - A sandboxed run ends when the app closes. It does not keep running in the background.
 - macOS's `sandbox-exec` is deprecated by Apple. Without it, a run in a sandboxed workspace is refused; turn the sandbox off to run.
 - Agents that keep their sign-in in the keychain (Claude, Codex, Antigravity) can read the login keychain. macOS asks separately for other apps' items.

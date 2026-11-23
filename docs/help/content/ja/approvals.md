@@ -95,7 +95,7 @@ Claudeは、時間のかかるコマンドやサブエージェントをバッ�
 ![[background-work]]
 
 ## サンドボックス {#sandbox}
-{{platform:mac}} ワークスペースごとにエージェントを macOS のサンドボックスで実行できます。既定ではオフです。サイドバーでワークスペースを右クリックして {{ui:sandbox.menu.settings}} を選び、{{ui:sandbox.settings.enabled}} をオンにして {{ui:sandbox.settings.save}} を押します。次の実行から適用され、ペインのヘッダーに {{ui:sandbox.badge}} の表示が付きます。表示を押すと設定が開きます。
+ワークスペースごとにエージェントをサンドボックスで実行できます。Mac は macOS のサンドボックスを、Windows は[実験的な Windows サンドボックス](#sandbox-windows)を使います。既定ではオフです。サイドバーでワークスペースを右クリックして {{ui:sandbox.menu.settings}} を選び、{{ui:sandbox.settings.enabled}} をオンにして {{ui:sandbox.settings.save}} を押します。次の実行から適用され、ペインのヘッダーに {{ui:sandbox.badge}} の表示が付きます。表示を押すと設定が開きます。
 
 ### ブロックするもの {#sandbox-blocked}
 - **書き込み**: ワークスペース（またはペインの worktree）フォルダー、エージェント自身の設定フォルダー、一時フォルダー、パッケージキャッシュにだけ書き込めます。
@@ -103,6 +103,20 @@ Claudeは、時間のかかるコマンドやサブエージェントをバッ�
 - **指示ファイル**: {{ui:sandbox.settings.instructions}} がオン（既定）なら、`.mighty.yaml`、`AGENTS.md`、`CLAUDE.md` とエージェントのプロジェクト設定は変更できません。{{ui:sandbox.settings.readOnly}} にパスを追加できます。
 - **読み取り**: `~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.config/gh`、ブラウザーの Cookie、アプリのデータフォルダー、他のエージェントのログインファイルは読めません。エージェントは自分のログインだけを読みます。
 - **接続**: {{ui:sandbox.settings.network}} がオン（既定）なら、エージェントはアプリのプロキシ経由でのみ外に出ます。エージェントの API アドレスと {{ui:sandbox.settings.hosts}} に入れた接続先だけがそのまま通ります。
+
+### Windows（実験的） {#sandbox-windows}
+{{platform:windows}} 管理者権限なしで動きます。エージェントの CLI は、低い整合性 (Low integrity) で書き込みを制限したトークンを使い、他のウィンドウやクリップボードに触れられないジョブの中で実行されます。設定ボックスに {{ui:sandbox.settings.experimental}} の表示と {{ui:sandbox.settings.guarantees}} の一覧が出ます。
+
+**オンにする前の承認**: {{ui:sandbox.settings.enabled}} をオンにして {{ui:sandbox.settings.save}} を押すと、変更するフォルダー権限の一覧が先に表示されます。ワークスペースのフォルダーには低い整合性ラベルと書き込みエントリ、`.git/config`・`.git/hooks`・`.git/info` と指示ファイルには書き込み拒否エントリ、`~/.ssh`・`~/.aws` などの秘密フォルダーには読み取り禁止ラベルが付き、エージェントのフォルダー (`~/.claude`、`~/.codex` など) はそのエージェントだけが書けるようになります。{{ui:sandbox.windows.approve}} を押すまで何も変わりません。変更はすべて記録され、サンドボックスをオフにして保存するとそのワークスペースの変更を元に戻します (複数のワークスペースで共有する秘密フォルダーのラベルは、最後のワークスペースをオフにしたとき)。アプリを削除する前に {{ui:sandbox.windows.undoAll}} を押してください。
+
+**防げないこと**:
+- 接続の許可リストは助言レベルです。プロキシ設定に従うプログラムだけが一覧とカードを通り、プロキシを無視して直接接続するプログラムは防げません。
+- オンにしたときに無かった指示ファイル (新しく作った `AGENTS.md` など) は変更できます。
+- 他のエージェントのログインファイルは読めます (書き込みは防ぎます)。ブラウザーのプロファイルは閉じません。
+- 低い整合性ラベルが付いたフォルダーには、このコンピューターの他の低整合性プログラムも書き込めます。
+- ネットワークフォルダー (`\\server\share`) や NTFS でないドライブのワークスペースではオンにできません。
+
+**エージェント**: Claude、Codex、Antigravity、OpenCode、pi はサンドボックスで実行されます。Hermes はプログラムと設定が同じフォルダーにあるため実行を拒否します (サンドボックスなしでは実行しません)。パッケージキャッシュと一時ファイルは `%USERPROFILE%\AppData\LocalLow\MightyCode\sandbox` の下のワークスペース専用フォルダーを使います。
 
 ### 接続を許可する {#sandbox-allow}
 リストにない接続先に接続しようとすると、入力欄の上に **{{ui:sandbox.network.cardTitle}}** カードが表示されます。
@@ -122,7 +136,7 @@ Claudeは、時間のかかるコマンドやサブエージェントをバッ�
 
 ### 制限 {#sandbox-limits}
 - シェルペインのコマンド、SSH ワークスペース（エージェントはリモートマシンで実行）、リモートワークスペースには適用されません。
-- {{platform:windows}} {{ui:sandbox.settings.windows}}。
+- {{platform:windows}} Windows のサンドボックスは Mac より弱いものです。[Windows](#sandbox-windows) を参照してください。
 - サンドボックスで動く実行はアプリを閉じると一緒に終わります。バックグラウンドでは続きません。
 - macOS の `sandbox-exec` は Apple が非推奨にしたツールです。ない場合、サンドボックスを有効にしたワークスペースでは実行を拒否します。実行するにはサンドボックスをオフにしてください。
 - キーチェーンにログインを保存するエージェント（Claude、Codex、Antigravity）はログインキーチェーンを読めます。他のアプリの項目は macOS が別に確認します。

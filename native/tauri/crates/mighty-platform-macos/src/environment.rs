@@ -238,6 +238,7 @@ impl Inner {
             env: base,
             env_remove: removed,
             shell_command: None,
+            restricted: None,
         };
         let mut child = self.processes.spawn(request).await.ok()?;
         let guard = CloseOnDrop(Some(child.control()));

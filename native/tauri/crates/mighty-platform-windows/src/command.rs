@@ -201,6 +201,7 @@ pub fn launch(
         env,
         env_remove: Vec::new(),
         shell_command: if batch { Some(batch_command_line(resolved, arguments)?) } else { None },
+        restricted: None,
     })
 }
 

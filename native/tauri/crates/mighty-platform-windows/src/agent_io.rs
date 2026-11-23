@@ -7,6 +7,9 @@
 //!   has one entry, full control (`PipeAccessRights.FullControl`, 0x1F019F) for that owner. Remote clients are refused. The first
 //!   instance is made by `bind` itself with `FILE_FLAG_FIRST_PIPE_INSTANCE` and kept for the first `accept`, so a name another process
 //!   already holds is never served (`bind` picks another name) and none can slip in between the name's choice and its first instance.
+//!   MC-42: the agents' pipe (not the control or daemon pipe) has a second entry, full control for the logon session's SID, and a low
+//!   integrity label, so a sandboxed run's MCP server (a low-integrity, write-restricted process of the same user) can connect; every
+//!   request still needs its pane's token.
 //! - The client opens with `SECURITY_IDENTIFICATION` (the server can identify it but never act as it), retries a busy or missing
 //!   pipe until its deadline (`ConnectAsync`), then checks that the pipe's owner is its own token's owner and refuses it otherwise
 //!   (`ValidateRemotePipeUser`).
@@ -171,6 +174,24 @@ impl Descriptor {
         Ok(Descriptor(descriptor))
     }
 
+    /// MC-42: [`Descriptor::owner_only`], plus full control for the logon session's SID (a write-restricted token names it) and a low
+    /// integrity label (a low process may write it).
+    pub(crate) fn owner_and_sandbox(owner: &[u8], logon: &str) -> Result<Descriptor> {
+        let sid = sid_text(owner)?;
+        if !logon.starts_with("S-1-5-5-") || logon.chars().any(|c| !(c.is_ascii_digit() || c == '-' || c == 'S')) {
+            return Err(refused("the logon session's SID"));
+        }
+        let sddl = wide(format!("O:{sid}D:(A;;0x1f019f;;;{sid})(A;;0x1f019f;;;{logon})S:(ML;;NW;;;LW)"));
+        let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+        // SAFETY: a NUL-terminated SDDL string; the descriptor is allocated with LocalAlloc and freed on drop.
+        let ok =
+            unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), SDDL_REVISION_1, &mut descriptor, null_mut()) };
+        if ok == 0 {
+            return Err(refused("the pipe's access list"));
+        }
+        Ok(Descriptor(descriptor))
+    }
+
     pub(crate) fn as_ptr(&self) -> PSECURITY_DESCRIPTOR {
         self.0
     }
@@ -251,9 +272,19 @@ impl NamedPipeListener {
         }
     }
 
-    /// One server instance of `name`, with the owner-only descriptor (made and freed here, before any await).
+    /// One server instance of `name`, with the owner-only descriptor (made and freed here, before any await). MC-42: the agents'
+    /// pipe also lets the logon session's low-integrity, write-restricted processes in (a sandboxed run's MCP server) once a workspace's
+    /// Windows sandbox is approved; its requests still need the pane's token.
     fn create(name: &str, first: bool) -> Result<NamedPipeServer> {
-        let descriptor = Descriptor::owner_only(&token_owner()?)?;
+        let owner = token_owner()?;
+        let descriptor = if name.starts_with(PREFIX) && crate::sandbox::agent_pipe_for_sandbox() {
+            match crate::sandbox::logon_sid() {
+                Ok(logon) => Descriptor::owner_and_sandbox(&owner, &logon)?,
+                Err(_) => Descriptor::owner_only(&owner)?,
+            }
+        } else {
+            Descriptor::owner_only(&owner)?
+        };
         let mut attributes =
             SECURITY_ATTRIBUTES { nLength: size_of::<SECURITY_ATTRIBUTES>() as u32, lpSecurityDescriptor: descriptor.0, bInheritHandle: 0 };
         // SAFETY: the attributes and their descriptor live until the call returns; the handle is not inheritable.

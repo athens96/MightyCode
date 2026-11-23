@@ -731,7 +731,7 @@ impl Wire for IssueTrackerConfig {
 /// MC-34: a workspace's sandbox settings. Everything is off until the person turns it on; the switches inside default to the safe side.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SandboxConfig {
-    /// Agent runs start under the OS sandbox (Mac only; Windows keeps it off).
+    /// Agent runs start under the OS sandbox (the Mac's Seatbelt; Windows' experimental one since MC-42).
     pub enabled: bool,
     /// Outbound connections only through the app's allow-list proxy (None = true).
     pub limit_network: Option<bool>,

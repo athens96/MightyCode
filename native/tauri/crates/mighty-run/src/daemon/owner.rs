@@ -248,6 +248,10 @@ impl ProcessHost for RoutedProcesses {
     }
 
     fn spawn_keyed(&self, request: SpawnRequest, key: &str) -> BoxFuture<'_, Result<Child>> {
+        // MC-42: the daemon cannot carry a restricted token; a sandboxed run starts here (and ends with the app).
+        if request.restricted.is_some() {
+            return self.local.spawn_keyed(request, key);
+        }
         match self.route.client() {
             Some(client) => {
                 let (route, key) = (self.route.clone(), key.to_string());

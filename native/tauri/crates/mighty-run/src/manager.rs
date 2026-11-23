@@ -1878,9 +1878,9 @@ impl Exec {
         ssh.run_request(providers::executable(provider), &arguments, environment).map_err(Failure::Error)
     }
 
-    /// MC-34: the run's sandbox, when its workspace has it on: its proxy and gate started, its profile written and `launch` wrapped.
-    /// Whether the run is sandboxed. A Mac without `sandbox-exec` runs it as before with a warning; a sandbox that cannot be made
-    /// refuses the run.
+    /// MC-34: the run's sandbox, when its workspace has it on: its proxy and gate started, its profile written and `launch` wrapped
+    /// (MC-42 on Windows: the approved changes checked and `launch` given the restricted token). Whether the run is sandboxed. A Mac
+    /// without `sandbox-exec`, or a sandbox that cannot be made, refuses the run.
     async fn sandbox(
         self: &Arc<Self>,
         workspace: &Workspace,
@@ -1901,6 +1901,7 @@ impl Exec {
         let run = Arc::downgrade(&self.run);
         let (emit, session) = (self.emit.clone(), request.session_id.clone());
         let permission = self.inner.options.permission_requested.clone();
+        let windows_host = host.clone();
         let card_run = run.clone();
         let hooks = gate::GateHooks {
             card: Arc::new(move |value| {
@@ -1921,7 +1922,12 @@ impl Exec {
                 }
             }),
         };
-        let prepared = sandbox::prepare(&setup, &request.provider, &request.session_id, Path::new(folder), launch, hooks).await;
+        // MC-42: Windows has its own preparation (the approved changes, the restricted token); the Mac's profile is unchanged.
+        let prepared = if cfg!(windows) {
+            sandbox::prepare_windows(&setup, windows_host, &request.provider, &request.session_id, Path::new(folder), launch, hooks).await
+        } else {
+            sandbox::prepare(&setup, &request.provider, &request.session_id, Path::new(folder), launch, hooks).await
+        };
         match prepared {
             Ok(prepared) => {
                 if self.inner.options.permission_requested.is_none()

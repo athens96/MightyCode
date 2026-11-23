@@ -383,6 +383,7 @@ exit 0
             home: place.at("home"),
             data_dir: Some(place.at("data")),
             profile_dir: place.at("profiles/runs"),
+            windows: None,
         },
         blocked: Mutex::new(vec![]),
         verdict,

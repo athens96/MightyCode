@@ -653,6 +653,7 @@ impl Daemon {
             env: spec.env,
             env_remove: spec.env_remove,
             shell_command: spec.shell_command,
+            restricted: None,
         };
         let mut child = self.processes.spawn(request).await.map_err(|e| failed(e.to_string()))?;
         let (stdin, stdin_rx) = mpsc::unbounded_channel();

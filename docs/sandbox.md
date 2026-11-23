@@ -1,4 +1,4 @@
-# The agent sandbox (MC-34)
+# The agent sandbox (MC-34, Windows MC-42)
 
 An opt-in, per-workspace OS sandbox for agent runs, a network allow list behind a local proxy, and an optional reviewer agent
 that may settle safe requests. Everything is **off by default**. The user help is `docs/help/content/<lang>/approvals.md#sandbox`.
@@ -15,16 +15,19 @@ that may settle safe requests. Everything is **off by default**. The user help i
 | App side (setup, refusals, reviewer run, methods) | `src-tauri/src/sandbox.rs`; `cards.rs` (`permissionAnswer` `always`); `phone.rs` (`sandboxBlocked`) |
 | Card | `mighty-composer` `cards.rs` `network_card` (`allowAlways`) |
 | Page | `native/windows/web/src/sandbox/` (settings box), pane badge in `pane/PaneView.tsx`, workspace menu in `shell/Sidebar.tsx` |
+| Windows (MC-42): plan, access-list texts, approval record, guarantees | `crates/mighty-run/src/sandbox/windows.rs`; `sandbox/mod.rs` `prepare_windows` |
+| Windows calls (labels, access lists, the token, job UI limits) | `crates/mighty-platform-windows/src/sandbox.rs`; `process.rs` (`CreateProcessAsUserW`); `agent_io.rs` (the agents' pipe) |
+| Windows approval and undo (app) | `src-tauri/src/sandbox.rs` (`sandboxSave` `approve`, `sandboxUndoAll`, `windows_ready`), `platform.rs` `sandbox_acl` |
 | Checks | `mighty-run` `sandbox::*` unit tests, `tests/sandbox_mac.rs` (real `sandbox-exec`), `mighty-composer` `page_models.rs`, `mighty-remote` `phone.rs`, `src-tauri` `sandbox::tests`, web `sandbox/sandbox.test.ts` |
 
 ## What is sandboxed
 
-An **agent run** (`kind != "shell"`) of a **local** workspace whose sandbox is on, **on the Mac**. Not sandboxed:
+An **agent run** (`kind != "shell"`) of a **local** workspace whose sandbox is on, on the Mac (Seatbelt, below) or on Windows (MC-42,
+"Windows" below: a different mechanism with weaker promises). Not sandboxed:
 
 - shell panes (the person's own commands) and terminal panes;
 - SSH workspaces (MC-33): the CLI runs on the far machine; the switch refuses to turn on there and the box says so;
 - remote (mirrored) workspaces: their runs are on their host;
-- Windows: the switch shows "Windows에서는 아직 지원하지 않습니다" and cannot be saved on (see the research below);
 - the `/advisor` and reviewer runs themselves (they are read-only by their CLI flags, `advisor::read_only`).
 
 A Mac without `/usr/bin/sandbox-exec` refuses a sandboxed run with `sandbox.warning.unavailable`: a run the person asked to be sandboxed never starts unsandboxed. A profile that
@@ -199,24 +202,131 @@ Not verified (no paid runs): a real model turn of each CLI through the proxy, to
 keychain read under the profile, the Mighty exe's `--agent-io-mcp` mode under the profile (it reads `<data>/agent-io` and connects
 to the socket, both opened), and the reviewer's real answers.
 
-## Windows (research only; nothing implemented)
+## Windows (MC-42, experimental)
 
-The switch is shown off with "Windows에서는 아직 지원하지 않습니다" and `sandboxSave` refuses to turn it on. A workspace that arrives with the sandbox on (another machine's state) does not run unsandboxed: the run engine refuses it with `sandbox.warning.unsupported`.
+Off by default, per workspace, as on the Mac; the settings box marks it **실험적** and lists what it enforces
+(`sandbox::windows::guarantees`). It needs **no administrator rights**: no AppContainer loopback exemption, no firewall rule, no
+second user account. A sandboxed run that cannot be sandboxed is refused, never run unsandboxed (MC-35's rule): an agent the
+sandbox cannot hold (Hermes), a program inside a writable folder, a change outside the approval, a change that fails, a network or
+non-NTFS folder, or a host that cannot make the token (`ProcessHost::spawn` answers `Invalid`; the daemon never gets such a run).
 
-| Option | What it gives | What it costs | Verdict |
+### The options and the decision
+
+| Option | Writes | Secret reads | Network allow list | Admin | Verdict |
+|---|---|---|---|---|---|
+| **AppContainer** (with `internetClient`) | Only where the container SID is granted | Closed by default (the profile does not grant `ALL APPLICATION PACKAGES`) | **Cannot be enforced**: the container cannot reach our `127.0.0.1` proxy without a loopback exemption (`CheckNetIsolation LoopbackExempt` / `NetworkIsolationSetAppContainerConfig`, which needs elevation), so the proxy would have to be dropped and `internetClient` lets the run reach any host directly | Exemption: yes | Rejected: no proxy, no cards; every tool's install, `node`, Python, Git for Windows, `~/.gitconfig` need read grants ("the wrong shape" for open-ended tools, as OpenAI found for Codex) |
+| AppContainer without network + a named-pipe proxy | As above | As above | A container may open a named pipe whose DACL names it, but no CLI speaks HTTP proxy over a pipe; an in-container TCP→pipe shim would need loopback inside the container, unverified | No | Rejected: unprovable without a Windows machine, and still needs the read grants |
+| **Restricted token, write-restricted** (Codex's unelevated sandbox) + **low integrity** + **Job Object** | Two walls: the integrity check and the restricting SIDs | Closable with a medium **no-read-up** label on the secret folders (a label change on the person's folders, approved) | **Advisory**: a low-integrity process may use loopback, so the proxy and its cards work, but a program that ignores `HTTPS_PROXY` connects directly (WFP filters or firewall rules would need admin) | No | **Chosen** |
+| Windows Sandbox (Hyper-V) | VM | VM | VM | Feature to enable; Pro only | Not per run |
+| WSL2 + bubblewrap | Linux namespaces | Yes | Yes (`--unshare-net` + socket) | WSL to install | Later: the CLIs would have to live in WSL |
+
+**The loopback question, answered:** an AppContainer cannot connect to `127.0.0.1` unless an administrator exempts it, so the Mac's
+loopback proxy is unreachable from one; a low-integrity (non-AppContainer) process *can* reach loopback, so the chosen design keeps
+the proxy, the gate and the 이번만/항상/거부 cards — but nothing forces a program through them. The UI says so
+(`sandbox.settings.networkHelpWindows`, the guarantee list's 권고), and so does the help.
+
+### How a run is started (`prepare_windows`)
+
+1. `cli_refusal`: Hermes (its program, Python and state are one folder, `%LOCALAPPDATA%\hermes`: opening it would let a run rewrite
+   the program its next, unsandboxed run starts) and unknown agents are refused (`sandbox.windows.hermes`, `unknownAgent`).
+2. `windows::plan` for the run (below). A program (or the batch file cmd.exe runs) inside a writable folder of the plan is refused
+   (`sandbox.windows.programWritable`).
+3. `SandboxHost::windows_ready`: the app checks the plan against the workspace's approval in the record and makes the changes within
+   it (a new pane worktree, a newly found instruction file, an approved agent's folder at that agent's first run); anything outside
+   it refuses the run (`sandbox.windows.notApproved`), a failed change too (`changeFailed`).
+4. The proxy and gate as on the Mac; the run's own `TEMP`/`TMP`/`TMPDIR` and the package caches (`npm_config_cache`,
+   `YARN_CACHE_FOLDER`, `BUN_INSTALL_CACHE_DIR`, `PIP_CACHE_DIR`, `UV_CACHE_DIR`, `GOCACHE`, `GOMODCACHE`) in the workspace's private
+   folder `%USERPROFILE%\AppData\LocalLow\MightyCode\sandbox\<16 hex>` (the person's `%TEMP%` is not writable at low integrity);
+   `SSH_AUTH_SOCK` removed, `MIGHTY_SANDBOX=1`.
+5. `SpawnRequest::restricted` = the restricting SIDs. The Windows process host (`process.rs`) then: `OpenProcessToken` →
+   `CreateRestrictedToken(DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED, [workspace SID, agent SID, Everyone, logon session SID])` →
+   `SetTokenInformation(TokenIntegrityLevel, Low)` → a default DACL naming the user, SYSTEM, the logon SID and the synthetic SIDs →
+   `CreateProcessAsUserW` (a restricted copy of the caller's own primary token needs no privilege) into the kill-on-close job, which
+   also gets UI limits (`HANDLES`, both clipboards, `SYSTEMPARAMETERS`, `DISPLAYSETTINGS`, `GLOBALATOMS`, `DESKTOP`, `EXITWINDOWS`).
+   Such a request never goes to the background daemon (`RoutedProcesses::spawn_keyed` keeps it local); the run ends with the app.
+6. At the end: the proxy stops, the run's temporary folder is removed.
+
+The synthetic SIDs are `S-1-15-3-1024-<8 × u32 of SHA-256("MightyCode.Sandbox/<kind>/<value>")>` (the shape of a capability SID
+derived from a name): one per workspace (`workspace_sid`), one per agent (`agent_sid`). No account has them; only the restricting list
+and the entries made for them name them, so an undo removes exactly what was added.
+
+### The plan (`windows::plan`) — what changes on which folder
+
+| Kind | Paths | Change |
+|---|---|---|
+| Workspace (and a pane worktree of its repository) | the folder | low label `(ML;OICI;NW;;;LW)` + allow `(A;OICI;0x1301bf;;;<workspace SID>)` (modify without `WRITE_DAC`, `WRITE_OWNER`, `FILE_DELETE_CHILD`) |
+| Git | each git folder inside the approved folders: `config`, `config.worktree`, `commondir`, `gitdir`, `hooks\`, `info\` (also under `worktrees\*`, `modules\*`; a missing `hooks`/`info` is made first), a worktree's `.git` file; the git folder itself | deny `(D;OICI;0xd0156;;;<workspace SID>)` (write, append, EA, attributes, delete, delete child, `WRITE_DAC`, `WRITE_OWNER`) + medium label `(ML;;NW;;;ME)` as a second wall; the git folder: deny delete only |
+| Instructions (switch on) | the root's `INSTRUCTION_FILES` and every `AGENTS.md`/`CLAUDE.md`/`CLAUDE.local.md`/`GEMINI.md` found (any case; `.git` and `node_modules` skipped; 20,000 entries at most) **that exist** | as git |
+| Read-only paths | the person's `readOnlyPaths` that exist | as git |
+| Agent | `~/.claude` + `~/.claude.json`, `~/.codex` (+ `CODEX_HOME`), `~/.gemini`, opencode's four XDG folders, `~/.pi` | low label + allow for **that agent's** SID (one agent's run cannot write another's folders); a missing folder is made at that agent's first run |
+| Secret | `.ssh`, `.aws`, `.gnupg`, `AppData\Roaming\gnupg`, `.config\gh`, `AppData\Roaming\GitHub CLI`, `.config\gcloud`, `AppData\Roaming\gcloud`, `.azure`, `.kube`, `.docker`, `.netrc`, `_netrc`, `.git-credentials`, `.password-store` (relative to home) **that exist** | medium label with no-read-up `(ML;OICI;NRNW;;;ME)`: the person's medium programs read them as before, a low process cannot |
+| App data (the app's own) | `%APPDATA%\MightyCode` (or the profile's) | the same no-read-up label (its state, tokens, record) |
+| Private (the app's own) | `…\LocalLow\MightyCode\sandbox\<key>` | allow for the workspace SID |
+
+Refused folders: a drive root, the home folder or one holding it, one inside the data folder or a secret place, a network path
+(`\\server\share`: labels are not kept), a volume without persistent ACLs (`labels_supported`: NTFS/ReFS only).
+
+### Approval, record and undo
+
+- `sandboxSave` with `enabled` on Windows computes the plan for every agent (`provider: None`). Unless the workspace's approval in the
+  record already covers it, nothing is saved: the answer carries `needsApproval` and the box lists every change grouped by kind
+  (`groupChanges`), with "the folder's other low-integrity programs can write it too" said in the approval text. **승인하고 켜기**
+  sends `approve: true`: `Record::approve` makes each change (an agent folder that does not exist waits), keeps what each label
+  replaced (`before`) and the folders it made, and keeps the approval (the ids of every listed change); a failure takes back what that
+  approval made and saves nothing.
+- The record is `<data>\sandbox\windows-changes.json` (inside the closed data folder: a sandboxed run cannot read or rewrite it), one
+  writer at a time, written through a temporary file. Shared changes (agent folders, secret labels, the data folder) carry their
+  users: they are made once and undone when the last workspace using them lets go.
+- Turning the sandbox off (`sandboxSave` with `enabled: false`) undoes the workspace's changes, the last made first: a label is put
+  back as it was (a low label on a folder with `TreeResetNamedSecurityInfoW`, so the low labels a low process gave the files it made
+  go too), an entry is taken out by its type and SID only (Windows may write the rights in other words), folders it made are removed
+  when empty. A change that cannot be undone stays recorded for the next try, and the box shows the failures.
+- **모든 변경 되돌리기** (`sandboxUndoAll`, offered in the box "before you remove the app") undoes every recorded change and turns
+  the sandbox off in every workspace. The Inno uninstaller does not run it (the app is not started at uninstall); the help says to
+  press it first.
+
+### What is enforced and what is not
+
+| Promise | Mac | Windows | Why |
 |---|---|---|---|
-| **AppContainer** (`CreateProcess` with `SECURITY_CAPABILITIES`, an AppContainer SID; LPAC for less) | Strongest native isolation: the process reaches only objects whose ACL names its SID (or `ALL APPLICATION PACKAGES`); network only with capabilities (`internetClient`…) | The workspace, the CLI's install and state folders, `node`, `git` and every tool must get ACEs for the SID (changing the person's ACLs); loopback to our proxy is blocked unless the container is exempted (`NetworkIsolationSetAppContainerConfig`, admin); many CLIs (node, Python, Git for Windows) misbehave inside; per-run setup and clean-up of ACEs | Possible later, as an opt-in with an explicit "grant this folder" step; risky to retrofit |
-| **Restricted token + low integrity + Job Object** (`CreateRestrictedToken`, `SetTokenInformation(TokenIntegrityLevel, Low)`, `AssignProcessToJobObject`) | Writes only where the label is Low (no write-up); the job limits process count, memory, UI and kills the tree on close | The workspace must be relabelled Low (`icacls /setintegritylevel`), which every other low process could then write; reads are not limited (no way to hide `~/.ssh` without deny ACEs); no network control (WFP filters need admin); tools that write to `%APPDATA%` break | Write containment only; not the same promise as the Mac's |
-| **Windows Sandbox** (`.wsb`, Hyper-V) | A throwaway VM with mapped folders; full isolation | Pro/Enterprise only, a feature to enable, tens of seconds to start, the CLIs and their sign-ins installed inside every time, one instance at a time | Not for per-run use |
-| **WSL2 + bubblewrap** (Linux namespaces, seccomp; Anthropic's `sandbox-runtime` and Happy use it on Linux) | The Linux equivalent of this design: a read-only bind of `/`, writable workspace, `--unshare-net` and the proxy through a socket | Needs WSL2 and the CLIs installed in it; the Windows file system across `/mnt/c` is slow | The most promising path to parity: reuse the profile rules as bwrap arguments and the same proxy and gate |
+| Writes only in the run folder, the agent's folders, temp, caches | enforced | **enforced** | integrity check + write-restricted check, both needed |
+| `.git/config`, hooks, info read-only; commits work | enforced | **enforced** | deny entries for the workspace SID; the grant has no `FILE_DELETE_CHILD`, so `config` cannot be replaced through its folder |
+| Instruction files read-only | enforced | **partial** | only files that exist at the approval or a run's start; a new `AGENTS.md` (or `.mcp.json`) in a folder without one is not refused |
+| Secret folders and app data unreadable | enforced | **partial** | the listed folders that exist (one made after the approval is closed at the next run's start); browser profiles are not closed (their own sandboxes run at low integrity and would break) |
+| Other agents' folders | closed | **partial** | writes refused (per-agent SID); another agent's sign-in file stays readable (a label cannot tell one low process from another) |
+| Network only through the allow list | enforced | **advisory** | the proxy and cards work for programs that honour `HTTPS_PROXY`; direct connections are not stopped |
+| No input to other apps, no clipboard, no system settings | enforced | **enforced** | low integrity (UIPI) + the job's UI limits |
+| Children stay inside | enforced | **enforced** | the token is inherited; the kill-on-close job allows no breakaway |
 
-Recommendation: no Windows sandbox until WSL2 + bubblewrap is prototyped; AppContainer only with an explicit folder grant and a
-loopback exemption the person approves.
+Also unlike the Mac: a low-labelled workspace can be written by **any** low-integrity process of the computer (not only ours) —
+the "low-integrity sink" OpenAI named when it rejected integrity labels for Codex; we accept it, for the read-side protection and
+UIPI it buys, and say so in the approval text. The agents' pipe (`mighty-agent-io-…`) now also admits the logon session's low,
+write-restricted processes (a sandboxed run's MCP server), but only while some workspace's Windows sandbox is approved (the app
+reads its change record at start and on every approval or undo); a machine that never approved it keeps the pipe owner-only. Its
+requests still need the pane's token. A pipe instance already waiting when the first approval is made stays owner-only, so the
+very first sandboxed run right after approving may start without the Mighty tools once.
+
+### Per agent (expected; none checked on a real Windows machine yet)
+
+| Agent | Writable | Expected | Known risks |
+|---|---|---|---|
+| Claude | `~/.claude`, `~/.claude.json` | runs | `~/.claude.json` is replaced through a temporary file beside it in the home folder, which is not writable: Claude must fall back to writing in place, else its settings are not saved; its Bash tool runs Git Bash (MSYS2) at low integrity |
+| Codex | `~/.codex` (`CODEX_HOME`) | runs | its own Windows sandbox nested inside ours (it cannot grant ACLs: no `WRITE_DAC`); the keyring store, if used, may be refused |
+| Antigravity (`agy`) | `~/.gemini` | runs | its Google sign-in if kept outside `~/.gemini` |
+| OpenCode | `~/.config/opencode`, `~/.local/share/opencode`, `~/.local/state/opencode`, `~/.cache/opencode` | runs | Bun at low integrity |
+| pi | `~/.pi` | runs | npm's `pi.cmd` through cmd.exe |
+| Hermes | — | **refused** | program and state share `%LOCALAPPDATA%\hermes` |
+
+For every agent: node, git (MinGW) and Python are expected to work at low integrity with the private `TEMP` and caches; npm/pip
+caches go to the private folder (re-downloads); `git` over SSH cannot read `~/.ssh` (closed) and HTTPS credential helpers may be
+refused; anything writing `%APPDATA%`, `%LOCALAPPDATA%` or `HKCU` outside its own folder fails. A workspace that is a folder inside a larger repository cannot commit sandboxed: that repository's `.git` lies outside the approved folder and is left unchanged (not writable). A CLI that cannot run sandboxed this
+way shows its own error in the pane; it is never retried unsandboxed. What must be checked on Windows is listed in
+[windows-v060-checklist.md](windows-v060-checklist.md) under MC-42.
 
 ## Limits and known gaps
 
-- `sandbox-exec` is deprecated by Apple (still shipped and used by Codex, Claude Code's own sandbox and others). If it goes, the
-  runs degrade to unsandboxed with the warning; there is no replacement API for third-party apps.
+- `sandbox-exec` is deprecated by Apple (still shipped and used by Codex, Claude Code's own sandbox and others). If it goes, a
+  sandboxed workspace's runs are refused (`sandbox.warning.unavailable`); there is no replacement API for third-party apps.
 - The keychain providers can read the login keychain's (encrypted) file and ask `securityd`; per-item access is macOS's.
 - Processes an agent starts (sub-agents, MCP servers, build tools) inherit the sandbox. Those that honour `HTTPS_PROXY` go through
   the proxy (unlisted hosts raise cards); those that do not cannot connect at all.

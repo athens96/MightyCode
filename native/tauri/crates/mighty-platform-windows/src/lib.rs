@@ -64,6 +64,8 @@ pub mod pty;
 #[cfg(windows)]
 pub mod registry;
 #[cfg(windows)]
+pub mod sandbox;
+#[cfg(windows)]
 pub mod session;
 #[cfg(windows)]
 pub mod setup_files;

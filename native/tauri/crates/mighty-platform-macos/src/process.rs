@@ -75,7 +75,13 @@ impl MacProcessHost {
 
 impl ProcessHost for MacProcessHost {
     fn spawn(&self, request: SpawnRequest) -> BoxFuture<'_, Result<Child>> {
-        Box::pin(async move { start(&request) })
+        Box::pin(async move {
+            // MC-42: a Windows token restriction cannot be made here; the run is refused rather than started without it.
+            if request.restricted.is_some() {
+                return Err(mighty_platform::PlatformError::Invalid("a restricted token is a Windows launch".into()));
+            }
+            start(&request)
+        })
     }
 
     /// The update's `/bin/sh install.sh` and the relaunched app (Swift `AppUpdate.swift:408-425`): see the module.

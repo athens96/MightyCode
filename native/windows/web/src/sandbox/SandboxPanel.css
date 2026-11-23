@@ -16,3 +16,13 @@
 .sandbox-blocked { display: flex; flex-direction: column; gap: var(--space-xs); padding-top: var(--space-sm); border-top: var(--stroke-line) solid var(--line); font-size: var(--type-row); }
 .sandbox-blocked ul { margin: 0; padding-left: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-xxs); }
 .sandbox-badge { cursor: default; }
+.sandbox-guarantees, .sandbox-approval { display: flex; flex-direction: column; gap: var(--space-xs); font-size: var(--type-row); }
+.sandbox-guarantees ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--space-xxs); }
+.sandbox-guarantees li { display: flex; gap: var(--space-sm); align-items: baseline; }
+.sandbox-level { flex: none; min-width: 5em; font-weight: 600; }
+.sandbox-level-ok { color: var(--done-text); }
+.sandbox-level-warn { color: var(--wait-text); }
+.sandbox-level-err { color: var(--err-text); }
+.sandbox-approval { padding: var(--space-sm) var(--space-md); border-radius: var(--dialog-button-radius); background: var(--wait-soft); }
+.sandbox-changes { margin: 0; padding-left: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-xs); max-height: 220px; overflow: auto; }
+.sandbox-changes ul { margin: 0; padding-left: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-xxs); word-break: break-all; }
