@@ -221,6 +221,12 @@ impl Service {
         package_name(self.package)
     }
 
+    /// The package this service downloads, whatever this machine is (MC-33: a Windows app downloads the Mac's for an SSH machine).
+    pub fn with_package(mut self, package: UpdatePackage) -> Service {
+        self.package = package;
+        self
+    }
+
     /// The same service with another stall time ([`DOWNLOAD_STALL`]; tests use a short one).
     pub fn with_stall_timeout(mut self, stall: Duration) -> Service {
         self.stall = stall;

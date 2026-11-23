@@ -9,6 +9,7 @@
 //!   has it.
 //! - [`failure`]: what ssh's stderr says went wrong (not reachable, sign-in refused, host key unknown or changed).
 //! - [`files`]: the remote file listing's parsing and the relative paths a read may name.
+//! - [`server`]: a Mighty Code server on a remote Mac: the detection, the install's steps, the pairing and the removal as scripts.
 //!
 //! Authentication stays with OpenSSH (`~/.ssh/config`, ssh-agent, keys): the app never sees a password or a key.
 
@@ -16,6 +17,7 @@ pub mod command;
 pub mod config;
 pub mod failure;
 pub mod files;
+pub mod server;
 pub mod target;
 
 pub use command::{Mux, quote};

@@ -1,6 +1,7 @@
 //! SSH 머신 (MC-33), in 원격 연결 after the remote box: each machine with its state, 연결 테스트 and 지우기, the tmux switch (on
 //! where the test found tmux), a remote folder field with 열기; then a `Host` picked from `~/.ssh/config` or `user@host[:port]` typed.
-//! Built from the ssh module's memory only (the config's aliases are read on a task); every change runs on a task.
+//! Built from the ssh module's memory only (the config's aliases are read on a task); every change runs on a task. Under each machine,
+//! MC-33's Mighty Code 서버 ([`server_rows`]): its state, 확인, 설치 or 원격 서버 업데이트, 서버 시작, 연결 / 연결 끊기, 서버 지우기.
 
 use std::sync::Arc;
 
@@ -90,6 +91,7 @@ pub fn ssh_machines(host: &Arc<Host>, ui: &mut Ui) -> El {
         .aid(format!("settings-ssh-open-{id}"))
         .enabled(mighty_core::ssh::valid_remote_dir(typed.get().trim()));
         rows.add(El::stack(true, metrics::SPACING_SM, vec![field, open]));
+        server_rows(host, ui, &mut rows, &id);
     }
 
     // Adding a machine.
@@ -136,4 +138,76 @@ pub fn ssh_machines(host: &Arc<Host>, ui: &mut Ui) -> El {
         rows.add(caption(ui, message).aid("settings-ssh-message"));
     }
     rows.finish()
+}
+
+/// A machine's Mighty Code 서버 rows (ssh::server's memory only): the state and its notes, the buttons the state offers, the work's
+/// progress and the last outcome.
+fn server_rows(host: &Arc<Host>, ui: &mut Ui, rows: &mut mighty_native::kit::SettingsRows, id: &str) {
+    let locale = ui.locale();
+    let view = ssh::server::view(host, id);
+    let words = ui.settings_titled(locale.get("ssh.server.title"), ssh::server::state_words(host, &view));
+    rows.add(words.aid(format!("settings-ssh-server-state-{id}")));
+    for note in ssh::server::notes(host, &view) {
+        rows.add(caption(ui, note));
+    }
+    type Work = fn(Arc<Host>, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+    let button = |ui: &Ui, key: &str, aid: &str, destructive: bool, work: Work| {
+        let (host, machine) = (host.clone(), id.to_string());
+        let pressed = ui.button(
+            locale.get(key),
+            Box::new(move || {
+                let (task, machine) = (host.clone(), machine.clone());
+                crate::native::act(&host, async move {
+                    work(task, machine).await;
+                    Ok(())
+                });
+            }),
+        );
+        ui.settings_push(pressed, ControlSize::Small, false, destructive)
+            .aid(format!("settings-ssh-server-{aid}-{id}"))
+            .enabled(!view.working)
+    };
+    let mut buttons =
+        vec![button(ui, "ssh.server.detect", "detect", false, |h, m| Box::pin(async move { ssh::server::detect(&h, &m).await }))];
+    if let Some(offer) = view.offer.as_ref().filter(|o| o.minimal_only.is_none()) {
+        let installs = ssh::server::can_install(host);
+        if !offer.installed {
+            buttons.push(
+                button(ui, "ssh.server.install", "install", false, |h, m| Box::pin(async move { ssh::server::install(&h, &m).await }))
+                    .enabled(installs && !view.working),
+            );
+        } else if offer.update {
+            buttons.push(
+                button(ui, "ssh.server.update", "update", false, |h, m| Box::pin(async move { ssh::server::install(&h, &m).await }))
+                    .enabled(installs && !view.working),
+            );
+        }
+        if offer.installed && !offer.running {
+            buttons.push(button(ui, "ssh.server.start", "start", false, |h, m| Box::pin(async move { ssh::server::start(&h, &m).await })));
+        }
+        if offer.running && !view.connected {
+            buttons.push(button(ui, "ssh.server.connect", "connect", false, |h, m| {
+                Box::pin(async move { ssh::server::connect(&h, &m).await })
+            }));
+        }
+        if view.connection && (view.connected || view.reconnecting) {
+            buttons.push(button(ui, "ssh.server.disconnect", "disconnect", false, |h, m| {
+                Box::pin(async move { ssh::server::disconnect(&h, &m).await })
+            }));
+        }
+        if offer.removable {
+            buttons
+                .push(button(ui, "ssh.server.remove", "remove", true, |h, m| Box::pin(async move { ssh::server::remove(&h, &m).await })));
+        }
+        if !installs && (!offer.installed || offer.update) {
+            rows.add(caption(ui, locale.get("ssh.server.error.noKey")));
+        }
+    }
+    rows.add(El::stack(true, metrics::SPACING_SM, buttons));
+    if let Some(progress) = &view.progress {
+        rows.add(caption(ui, progress.clone()).aid(format!("settings-ssh-server-progress-{id}")));
+    }
+    if let Some((message, _)) = &view.message {
+        rows.add(caption(ui, message.clone()).aid(format!("settings-ssh-server-message-{id}")));
+    }
 }

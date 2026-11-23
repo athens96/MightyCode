@@ -751,7 +751,10 @@ triggers:
 <p><b>接続が切れたら</b></p>
 <ul><li>ターミナルペインに「SSH 接続が切れました。」と <span class="ui" title="ssh.terminal.reconnect">再接続</span> ボタンが表示されます。</li><li>マシンに tmux があれば <span class="ui" title="ssh.settings.tmux">tmux 内で実行</span> スイッチがオンになり、ターミナルペインは tmux セッション内で動きます。接続が切れても作業はマシン上で続き、再接続すると同じセッションに戻ります。スイッチはマシンごとにオフにできます。</li></ul>
 <p><b>まだできないこと</b></p>
-<ul><li>リモートファイルの編集、リモートの git 変更表示、作業マップ、ワークツリー、マイティオーケストレーション、添付、opencode と Hermes のペイン。</li><li>マシンに Mighty Code のヘッドレスサーバーをインストールする方式は、今後のバージョンで扱います。</li></ul>
+<ul><li>リモートファイルの編集、リモートの git 変更表示、作業マップ、ワークツリー、マイティオーケストレーション、添付、opencode と Hermes のペイン。</li></ul>
+<p><b>Mighty Code サーバー(リモートの Mac)</b> マシンが Mac なら、Mighty Code をウィンドウなしで動かしておき、その Mac のワークスペースとエージェントペインをこのコンピューターで<a href="#remote-mirror">そのまま</a>使えます。Tailscale やペアリングのリンクは使わず、このマシンの SSH だけを使います。Linux・Windows のマシンにはインストールできません(Linux 用のビルドはありません)。上のインストールなしの方式で使います。</p>
+<ol><li>マシンの下の <span class="ui" title="ssh.server.title">Mighty Code サーバー</span> で <span class="ui" title="ssh.server.detect">確認</span> ボタンを押すと、macOS のバージョン、インストール済みのアプリ(<code>~/Applications</code>、なければ <code>/Applications</code>)とそのバージョン、サーバーが動いているかを確認します。</li><li><span class="ui" title="ssh.server.install">インストール</span> ボタン: このアプリがアップデート情報からこのアプリと同じバージョンの Mac 用パッケージをダウンロードし(そのバージョンがなければ最新版を使い、確認画面で知らせます)、アップデート署名を確認してから SSH でその Mac の <code>~/Applications/MightyCode.app</code> にインストールし、ウィンドウなしで起動します。その Mac でもコード署名を確認し、管理者権限(sudo)は使いません。</li><li>インストールが終わるとすぐ接続します。サイドバーに「リモート · 名前」が現れ、その Mac のワークスペースが表示されます。あとで <span class="ui" title="ssh.server.connect">接続</span> ボタンやサイドバーの接続で再接続できます。</li></ol>
+<ul><li>その Mac のサーバーのバージョンがこのアプリと違うと <span class="ui" title="ssh.server.update">リモートサーバーを更新</span> ボタンが表示されます。実行中のサーバーを停止し、新しいバージョンに置き換えて再起動します。</li><li>アプリはその Mac の画面に同じユーザーがログインしているときだけ起動します。モニターのない Mac では、その Mac で自動ログインをオンにしておいてください。</li><li>SSH 接続が切れてもサーバーはその Mac で動き続け、このアプリが何度か再接続します。</li><li><span class="ui" title="ssh.server.remove">サーバーを削除</span> ボタンはサーバーを停止して <code>~/Applications/MightyCode.app</code> を削除します(先に確認します)。その Mac の Mighty Code のデータは残り、<code>/Applications</code> のアプリには触れません。</li></ul>
 </section>
 <section id="windows" class="sec">
 <h2><span class="num">11</span>Windowsでの違い</h2>

@@ -751,7 +751,10 @@ triggers:
 <p><b>连接断开时</b></p>
 <ul><li>终端窗格会显示&quot;SSH 连接已断开。&quot;和 <span class="ui" title="ssh.terminal.reconnect">重新连接</span> 按钮。</li><li>如果该主机有 tmux，<span class="ui" title="ssh.settings.tmux">在 tmux 中运行</span> 开关会打开，终端窗格在 tmux 会话中运行。连接断开后工作仍在主机上继续，重新连接会回到同一个会话。可以按主机关闭此开关。</li></ul>
 <p><b>暂不支持</b></p>
-<ul><li>编辑远程文件、查看远程 git 更改、工作地图、工作树、Mighty 编排、附件，以及 opencode 和 Hermes 窗格。</li><li>在主机上安装 Mighty Code 无头服务器的方式将在以后的版本中提供。</li></ul>
+<ul><li>编辑远程文件、查看远程 git 更改、工作地图、工作树、Mighty 编排、附件，以及 opencode 和 Hermes 窗格。</li></ul>
+<p><b>Mighty Code 服务器（远程 Mac）</b> 如果该主机是 Mac，可以让 Mighty Code 在那里无窗口运行，并在这台电脑上<a href="#remote-mirror">原样</a>使用那台 Mac 的工作区和代理窗格。只使用这台主机的 SSH，不需要 Tailscale 或配对链接。Linux 和 Windows 主机无法安装（没有 Linux 版本），请继续使用上面无需安装的方式。</p>
+<ol><li>在主机下方的 <span class="ui" title="ssh.server.title">Mighty Code 服务器</span> 中按 <span class="ui" title="ssh.server.detect">检查</span>，会读取 macOS 版本、已安装的应用（<code>~/Applications</code>，没有则 <code>/Applications</code>）及其版本，以及服务器是否在运行。</li><li><span class="ui" title="ssh.server.install">安装</span>：本应用从更新信息中下载与本应用相同版本的 Mac 安装包（没有该版本时使用最新版本，并在确认窗口中说明），检查更新签名后通过 SSH 安装到那台 Mac 的 <code>~/Applications/MightyCode.app</code>，然后以无窗口方式启动。那台 Mac 会再次检查代码签名，不使用管理员权限（sudo）。</li><li>安装完成后立即连接。侧边栏会出现“远程 · 名称”，显示那台 Mac 的工作区。以后可以用 <span class="ui" title="ssh.server.connect">连接</span> 或侧边栏的连接重新连接。</li></ol>
+<ul><li>当那台 Mac 的服务器版本与本应用不同时，会出现 <span class="ui" title="ssh.server.update">更新远程服务器</span>。它会停止运行中的服务器，换成新版本后重新启动。</li><li>只有当同一用户已登录那台 Mac 的屏幕时应用才能启动。对于没有显示器的 Mac，请在那台 Mac 上开启自动登录。</li><li>SSH 连接断开时服务器仍在那台 Mac 上运行，本应用会尝试重新连接几次。</li><li><span class="ui" title="ssh.server.remove">删除服务器</span> 会停止服务器并删除 <code>~/Applications/MightyCode.app</code>（会先确认）。那台 Mac 上的 Mighty Code 数据会保留，<code>/Applications</code> 中的应用不会被改动。</li></ul>
 </section>
 <section id="windows" class="sec">
 <h2><span class="num">11</span>Windows 上的不同之处</h2>

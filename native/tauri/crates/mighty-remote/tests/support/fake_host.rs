@@ -369,6 +369,8 @@ pub struct MakeHost {
     /// `HostOptions::graph_runs` (default: Windows', true).
     pub graph_runs: Option<bool>,
     pub runtime: Option<&'static str>,
+    /// MC-33: the SSH tunnel's host (`RemoteHost::new_ssh_tunnel`).
+    pub ssh_tunnel: bool,
 }
 
 /// C# `MakeHost`: a store with a shared and a private local workspace and a remote one, and a host over it on loopback.
@@ -388,6 +390,7 @@ pub async fn make_host(make: MakeHost) -> HostFixture {
     let host_cell: Arc<Mutex<Option<RemoteHost>>> = Arc::new(Mutex::new(None));
     let (workspaces_store, resolve_store, made, cell) = (store.clone(), store.clone(), runner.clone(), host_cell.clone());
     let factory = make.runner.clone();
+    let tunnel = make.ssh_tunnel;
     let runtime_name = make.runtime.unwrap_or("info.json");
     let options = HostOptions {
         workspaces: Arc::new(move || workspaces_store.lock().unwrap().snapshot.workspaces().to_vec()),
@@ -422,7 +425,7 @@ pub async fn make_host(make: MakeHost) -> HostFixture {
         system_folder: None,
         network: Arc::new(network.clone()),
     };
-    let host = RemoteHost::new(options);
+    let host = if tunnel { RemoteHost::new_ssh_tunnel(options) } else { RemoteHost::new(options) };
     *host_cell.lock().unwrap() = Some(host.clone());
     HostFixture { directory, store, shared, private: hidden, remote, host, runner, network }
 }

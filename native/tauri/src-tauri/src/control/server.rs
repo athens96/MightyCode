@@ -56,6 +56,10 @@ pub trait Backend: Send + Sync + 'static {
     fn show_window(&self) -> Result<Value, ControlError> {
         Err(ControlError::new(ErrorCode::Failed, "this app has no window to show"))
     }
+    /// MC-33: the loopback listener another computer reaches over SSH started, and a one-time code for it (`server.sshPair`).
+    fn ssh_pair(&self) -> BoxFuture<'_, Result<Value, ControlError>> {
+        Box::pin(async { Err(ControlError::new(ErrorCode::Failed, "this app takes no SSH pairing")) })
+    }
 }
 
 /// The token every request must carry, and its generation (a new token closes what the old one opened).
@@ -210,6 +214,7 @@ async fn answer(connection: &mut Connection, backend: &dyn Backend, auth: &Auth,
         Command::ServerStatus => backend.server_status(),
         Command::ServerStop { stop_all } => backend.server_stop(stop_all),
         Command::AppShow => backend.show_window(),
+        Command::ServerSshPair => backend.ssh_pair().await,
     };
     let line = match &result {
         Ok(value) => ok_line(id, value.clone()),

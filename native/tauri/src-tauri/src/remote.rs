@@ -99,9 +99,13 @@ pub struct RemoteApp {
     /// The system's proxy for paired connections' relay links; set at start.
     proxy: OnceLock<Arc<dyn ProxyResolver>>,
     host: OnceLock<RemoteHost>,
+    /// MC-33: the SSH tunnel's host (loopback only), made with the sharing host and started by the first `server.sshPair`.
+    tunnel: OnceLock<RemoteHost>,
     runtime: OnceLock<Arc<HostRuntime>>,
     /// `remoteHostRuns`: another computer's runs going on this PC; while any does, this PC's CLIs and plugins are not updated.
     host_runs: AtomicUsize,
+    /// The same through the SSH tunnel.
+    tunnel_runs: AtomicUsize,
     smoke: bool,
     pub page: Mutex<Page>,
     /// The key last copied while it may still be on the clipboard (emptied at quit if it is). Never logged.
@@ -124,6 +128,15 @@ pub fn app(host: &Arc<Host>) -> Arc<RemoteApp> {
             Ok(mighty_remote::remote::address::through_tailscale(ip, &|| app.tailscale()))
         });
         let local_addresses: LocalAddresses = Arc::new(move || local.upgrade().ok_or_else(|| "closing".to_string())?.tailscale());
+        // MC-33: an SSH machine's server is reached through the ssh module's forward and a pairing over ssh.
+        let tunnel_host = Arc::downgrade(host);
+        let ssh_tunnel: mighty_remote::remote::ssh_tunnel::SshTunnel = Arc::new(move |machine: String| {
+            let host = tunnel_host.upgrade();
+            Box::pin(async move {
+                let host = host.filter(|h| !h.closing()).ok_or_else(|| mighty_run::strings::get("common.appClosing"))?;
+                crate::ssh::server::open_tunnel(&host, &machine).await
+            })
+        });
         let options = ClientOptions {
             // Only a smoke run passes loopback in place of Tailscale (and then asks no adapter).
             allow_loopback_for_tests: smoke,
@@ -133,6 +146,7 @@ pub fn app(host: &Arc<Host>) -> Arc<RemoteApp> {
             // A paired connection's relay link goes through the system's proxy, as the phone remote's does.
             relay_proxy: Some(Arc::new(AppProxy(proxy))),
             client_name: client_name(),
+            ssh_tunnel: (!smoke).then_some(ssh_tunnel),
             ..ClientOptions::default()
         };
         let approving = Arc::downgrade(host);
@@ -150,8 +164,10 @@ pub fn app(host: &Arc<Host>) -> Arc<RemoteApp> {
             network: OnceLock::new(),
             proxy: OnceLock::new(),
             host: OnceLock::new(),
+            tunnel: OnceLock::new(),
             runtime: OnceLock::new(),
             host_runs: AtomicUsize::new(0),
+            tunnel_runs: AtomicUsize::new(0),
             smoke,
             page: Mutex::new(Page::default()),
             copied: Arc::default(),
@@ -196,6 +212,11 @@ impl RemoteApp {
     /// The sharing host, once [`start`] made it.
     pub fn host(&self) -> Option<&RemoteHost> {
         self.host.get()
+    }
+
+    /// MC-33: the SSH tunnel's host, once [`start`] made it.
+    pub fn tunnel(&self) -> Option<&RemoteHost> {
+        self.tunnel.get()
     }
 
     /// The page's Tailscale reading, read again off the window's thread when it is older than three seconds (C# `Poll`).
@@ -331,7 +352,7 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
     ));
     let _ = app.runtime.set(runtime.clone());
     let me = Arc::downgrade(host);
-    let (workspaces, resolving, admitting, counting) = (me.clone(), me.clone(), me.clone(), me);
+    let (workspaces, resolving, admitting, counting) = (me.clone(), me.clone(), me.clone(), me.clone());
     let (catalog, plugins, system) = (runs.catalog.clone(), crate::runs::plugin_directory(), system_folder(platform));
     let addresses: Option<Addresses> = (!smoke).then(|| {
         let app = Arc::downgrade(&app);
@@ -383,6 +404,20 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
         system_folder: system_folder(platform),
         network: ports.network,
     };
+    // MC-33: the SSH tunnel's host: the same options, its own count of another computer's runs.
+    let mut tunnel_options = options.clone();
+    tunnel_options.runs_changed = Arc::new(move |count| {
+        if let Some(app) = existing() {
+            app.tunnel_runs.store(count, Ordering::SeqCst);
+        }
+        if let Some(host) = me.upgrade().filter(|h| !h.closing()) {
+            tauri::async_runtime::spawn(async move {
+                crate::native::touch(&host, crate::settings::SURFACE);
+                crate::updates::notify(&host);
+            });
+        }
+    });
+    let _ = app.tunnel.set(RemoteHost::new_ssh_tunnel(tunnel_options));
     let _ = app.host.set(RemoteHost::new(options));
     restore_sharing(host);
     if let Some(sharing) = app.host() {
@@ -544,6 +579,9 @@ pub fn shutdown(host: &Host) {
     if let Some(sharing) = app.host.get().cloned() {
         tauri::async_runtime::block_on(sharing.dispose());
     }
+    if let Some(tunnel) = app.tunnel.get().cloned() {
+        tauri::async_runtime::block_on(tunnel.dispose());
+    }
     let copied = lock(&app.copied).take();
     if let Some(key) = copied
         && host.smoke.is_none()
@@ -637,7 +675,32 @@ pub fn sharing_port(host: &Host) -> Option<u16> {
 /// `remoteHostRuns > 0` reads it: another computer's runs going on this PC (CLI updates and plugin changes wait while any does).
 pub fn host_runs(host: &Host) -> usize {
     let _ = host;
-    existing().map_or(0, |app| app.host_runs.load(Ordering::SeqCst))
+    existing().map_or(0, |app| app.host_runs.load(Ordering::SeqCst) + app.tunnel_runs.load(Ordering::SeqCst))
+}
+
+/// MC-33 `server.sshPair` (the control API, asked by `mighty server ssh-pair` that another computer's app runs here over ssh): the
+/// SSH tunnel's loopback listener started when it is not (every local workspace, on a port the system picks), and a one-time code
+/// for its pairing route. The answer goes back only to the control API's caller; nothing of it is logged.
+pub async fn ssh_pair(host: &Arc<Host>) -> Result<Value, String> {
+    if !host.may_listen() || host.smoke.is_some() {
+        return Err("this app does not listen for other computers (read-only profile)".into());
+    }
+    let tunnel = app(host).tunnel().cloned().ok_or_else(|| mighty_run::strings::get("common.appClosing"))?;
+    let mut state = tunnel.state();
+    if !state.enabled {
+        state = match tunnel.start(&[], 0).await {
+            Ok(state) => {
+                host.log.line("remote: the SSH tunnel listens on loopback");
+                state
+            }
+            // Two asks at once: the other one is starting it.
+            Err(_) if tunnel.state().enabled => tunnel.state(),
+            Err(error) => return Err(error),
+        };
+    }
+    let port = state.port.ok_or_else(|| mighty_run::strings::get("remote.host.error.stopped"))?;
+    let code = tunnel.issue_ssh_code().ok_or_else(|| mighty_run::strings::get("remote.host.error.keyFailed"))?;
+    Ok(serde_json::json!({ "port": port, "code": code, "version": host.version }))
 }
 
 /// `remoteHost?.Current()`: what "이 컴퓨터 공유" shows now (a sharing whose listener died ends first); off before the host is made.

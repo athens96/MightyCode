@@ -131,6 +131,9 @@ pub enum Command {
     },
     /// The app's window shown (made first when the app started without one).
     AppShow,
+    /// MC-33: the app's loopback listener for another computer's Mighty Code reaching it over SSH started (when it is not), and a
+    /// one-time pairing code for it: `{port, code, version}`. Asked by that computer through `mighty server ssh-pair` over ssh.
+    ServerSshPair,
 }
 
 impl Command {
@@ -148,6 +151,7 @@ impl Command {
             Command::ServerStatus => "server.status",
             Command::ServerStop { .. } => "server.stop",
             Command::AppShow => "app.show",
+            Command::ServerSshPair => "server.sshPair",
         }
     }
 
@@ -159,7 +163,7 @@ impl Command {
             }
         };
         match self {
-            Command::Status | Command::WorkspaceList | Command::ServerStatus | Command::AppShow => {}
+            Command::Status | Command::WorkspaceList | Command::ServerStatus | Command::AppShow | Command::ServerSshPair => {}
             Command::ServerStop { stop_all } => {
                 out.insert("stopAll".into(), json!(stop_all));
             }
@@ -345,6 +349,7 @@ pub fn parse_request(line: &[u8]) -> Result<Request, ControlError> {
         "server.status" => Command::ServerStatus,
         "server.stop" => Command::ServerStop { stop_all: object.get("stopAll").and_then(Value::as_bool).unwrap_or(false) },
         "app.show" => Command::AppShow,
+        "server.sshPair" => Command::ServerSshPair,
         other => return Err(ControlError::bad(format!("unknown command '{}'", other.chars().take(40).collect::<String>()))),
     };
     Ok(Request { id, token, command })
@@ -462,6 +467,7 @@ mod tests {
             Command::ServerStop { stop_all: false },
             Command::ServerStop { stop_all: true },
             Command::AppShow,
+            Command::ServerSshPair,
         ];
         for command in commands {
             assert_eq!(round(command.clone()), command);

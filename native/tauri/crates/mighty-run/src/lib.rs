@@ -69,6 +69,7 @@ pub mod run_log;
 pub mod sandbox;
 pub mod service;
 pub mod ssh;
+pub mod ssh_server;
 pub mod stream;
 pub mod strings;
 pub mod text_json;

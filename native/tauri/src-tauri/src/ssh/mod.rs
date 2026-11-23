@@ -16,6 +16,7 @@
 
 pub mod files;
 pub mod forward;
+pub mod server;
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -215,6 +216,7 @@ pub async fn remove(host: &Arc<Host>, id: &str) {
         Some(machine)
     });
     if let Some(machine) = removed {
+        server::forget(host, &machine.id).await;
         forward::close_machine(host, &machine.id).await;
         if let (Some(target), Some(program)) = (machine.parsed(), ssh_program()) {
             let mux = mux(&host.data_dir);
@@ -350,6 +352,15 @@ pub fn launch_for(host: &Host, workspace: &Workspace) -> Result<SshLaunch, Strin
     }
     let local = if local.is_dir() { local } else { home_or(&host.data_dir) };
     Ok(SshLaunch { program, target, mux: mux(&host.data_dir), dir: reference.dir.clone(), local })
+}
+
+/// How to reach a machine itself (no workspace): its ssh in the remote home, started in this computer's home folder (MC-33's server
+/// steps); Err with the sentence to show.
+pub fn launch_for_machine(host: &Host, machine_id: &str) -> Result<SshLaunch, String> {
+    let machine = machine(host, machine_id).ok_or_else(|| host.locale.get("ssh.error.machineGoneShort"))?;
+    let target = machine.parsed().ok_or_else(|| host.locale.get("ssh.target.error.invalid"))?;
+    let program = ssh_program().ok_or_else(|| host.locale.get(Failure::NoSsh.key()))?;
+    Ok(SshLaunch { program, target, mux: mux(&host.data_dir), dir: "~".into(), local: home_or(&host.data_dir) })
 }
 
 /// What a terminal pane of `workspace` runs: tmux (named by the pane) where the machine has it and the switch is on, else the login

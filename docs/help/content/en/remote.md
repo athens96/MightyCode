@@ -146,4 +146,14 @@ The machine shows in the sidebar under an "SSH · name" header, with its workspa
 
 **Not yet**
 - Editing remote files, remote git changes, the work map, worktrees, Mighty orchestration, attachments, and opencode and Hermes panes.
-- Installing a Mighty Code headless server on the machine is planned for a later version.
+
+**Mighty Code server (remote Mac)**
+When the machine is a Mac, Mighty Code can run there without a window, and you use that Mac's workspaces and agent panes here [as they are](#mirror). Only this machine's SSH is used: no Tailscale, no pairing link. Linux and Windows machines can't get one (there is no Linux build); use them the way above, with nothing installed.
+
+1. Under the machine, in {{ui:ssh.server.title}}, press {{ui:ssh.server.detect}}: it reads the macOS version, the installed app (`~/Applications`, else `/Applications`) and its version, and whether the server runs.
+2. {{ui:ssh.server.install}}: this app downloads the Mac package of its own version from the update information (the latest when its version isn't there; the confirmation says so), checks the update signature, installs it over SSH in `~/Applications/MightyCode.app` on that Mac and starts it without a window. That Mac checks the code signature again. No administrator rights (sudo) are used.
+3. When it's installed it connects at once: "Remote · name" appears in the sidebar with that Mac's workspaces. Later, {{ui:ssh.server.connect}} or the sidebar's connect joins again.
+- When the server's version differs from this app's, {{ui:ssh.server.update}} appears. It stops the running server, puts the new version in place and starts it again.
+- The app starts only while the same user is logged in at that Mac's screen. For a Mac without a display, turn on automatic login there.
+- When the SSH connection drops the server keeps running on that Mac, and this app reconnects a few times.
+- {{ui:ssh.server.remove}} stops the server and deletes `~/Applications/MightyCode.app` (it asks first). Mighty Code's data on that Mac stays, and an app in `/Applications` is never touched.

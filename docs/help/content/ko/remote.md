@@ -146,4 +146,14 @@ pi, opencode, Hermes 창은 아직 원격 워크스페이스에서 열 수 없�
 
 **아직 안 되는 것**
 - 원격 파일 편집, 원격 git 변경 보기, 작업 지도, 워크트리, 마이티 오케스트레이션, 첨부, opencode·Hermes 창.
-- 그 머신에 Mighty Code 헤드리스 서버를 설치하는 방식은 다음 버전에서 다룹니다.
+
+**Mighty Code 서버 (원격 Mac)**
+그 머신이 Mac이면 Mighty Code를 창 없이 실행해 두고, 그 Mac의 워크스페이스와 에이전트 창을 이 컴퓨터에서 [그 컴퓨터의 창 그대로](#mirror) 씁니다. Tailscale이나 페어링 링크 없이 이 머신의 SSH만 씁니다. Linux·Windows 머신에는 설치할 수 없고(Linux용 빌드가 없습니다) 위의 설치 없는 방식으로 씁니다.
+
+1. 머신 아래의 {{ui:ssh.server.title}}에서 {{ui:ssh.server.detect}} 단추를 누르면 macOS 버전, 설치된 앱(`~/Applications`, 없으면 `/Applications`)과 버전, 서버가 실행 중인지 봅니다.
+2. {{ui:ssh.server.install}} 단추: 이 앱이 업데이트 정보에서 이 앱과 같은 버전의 Mac 패키지를 내려받아(그 버전이 없으면 최신 버전을 쓰고 확인 창에 알립니다) 업데이트 서명을 확인하고, SSH로 그 Mac의 `~/Applications/MightyCode.app`에 설치한 뒤 창 없이 시작합니다. 그 Mac에서 다시 코드 서명을 확인하고, 관리자 권한(sudo)은 쓰지 않습니다.
+3. 설치가 끝나면 바로 연결합니다. 사이드바에 "원격 · 이름"이 생기고 그 Mac의 워크스페이스가 나옵니다. 나중에는 {{ui:ssh.server.connect}} 단추나 사이드바의 연결로 다시 잇습니다.
+- 그 Mac의 서버 버전이 이 앱과 다르면 {{ui:ssh.server.update}} 단추가 나옵니다. 실행 중인 서버를 멈추고 새 버전으로 바꾼 뒤 다시 시작합니다.
+- 앱은 그 Mac의 화면에 같은 사용자가 로그인해 있어야 시작됩니다. 모니터 없는 Mac이면 그 Mac에서 자동 로그인을 켜 두세요.
+- SSH 연결이 끊기면 서버는 그 Mac에서 계속 돌고, 이 앱이 몇 번 다시 연결합니다.
+- {{ui:ssh.server.remove}} 단추는 서버를 멈추고 `~/Applications/MightyCode.app`을 지웁니다(확인을 먼저 묻습니다). 그 Mac의 Mighty Code 데이터는 남고, `/Applications`의 앱은 건드리지 않습니다.

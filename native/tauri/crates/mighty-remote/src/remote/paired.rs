@@ -43,9 +43,10 @@ pub fn is_relay_address(address: &str) -> bool {
         .is_some_and(|name| (1..=ADDRESS_NAME).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_digit() || b.is_ascii_lowercase()))
 }
 
-/// A saved address in its shown form: a paired connection's as it is, a Tailscale one parsed; None when it is neither.
+/// A saved address in its shown form: a paired connection's (or an SSH machine's, MC-33) as it is, a Tailscale one parsed; None when it
+/// is none of these.
 pub fn display_address(address: &str) -> Option<String> {
-    if is_relay_address(address) {
+    if is_relay_address(address) || crate::remote::ssh_tunnel::is_ssh_address(address) {
         return Some(address.to_string());
     }
     RemoteAddress::parse(address).ok().map(|parsed| parsed.display())

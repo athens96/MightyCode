@@ -844,6 +844,8 @@ fn connection_row(host: &Arc<Host>, ui: &mut Ui, connection: &RemoteConnectionIn
     };
     let via = locale.get(if paired::is_relay_address(&connection.address) {
         "settings.remote.viaPairing"
+    } else if mighty_remote::remote::ssh_tunnel::is_ssh_address(&connection.address) {
+        "settings.remote.viaSsh"
     } else {
         "settings.remote.viaTailscale"
     });
@@ -860,7 +862,13 @@ fn connection_row(host: &Arc<Host>, ui: &mut Ui, connection: &RemoteConnectionIn
     let words = El::stack(
         false,
         metrics::SPACING_XXS,
-        vec![name_line, one_line(ui.settings_text(connection.address.clone(), TextStyle::size(10.0).ink(Token::Ink2).mono()))],
+        vec![
+            name_line,
+            one_line(ui.settings_text(
+                crate::ssh::server::shown_address(host, &connection.address),
+                TextStyle::size(10.0).ink(Token::Ink2).mono(),
+            )),
+        ],
     )
     .cell(0, 1);
     let id = connection.id.clone();

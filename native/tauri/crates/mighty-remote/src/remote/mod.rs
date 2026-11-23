@@ -1,7 +1,8 @@
 //! Remote workspaces v2 (C# R\Remote*.cs but the mirror and the key vault, Core\DesktopService.Remote.cs; docs/remote-workspaces.md;
 //! plan §1.6, `native/contracts/fixtures/remote-v2/`): the wire, the events, validation, the strict HTTP/1.1 server and client over
 //! tokio TCP (D7), the sharing host and the client that runs a remote workspace's panes (`mighty_run::service::RemoteRunner`). The
-//! remote mirror ([`mirror`]) is W9-J's; [`paired`] carries it through the relay for computers paired without Tailscale. Owner: W8-D.
+//! remote mirror ([`mirror`]) is W9-J's; [`paired`] carries it through the relay for computers paired without Tailscale, [`ssh_tunnel`] through an ssh forward to a
+//! Mighty Code server on an SSH machine (MC-33). Owner: W8-D.
 
 pub mod address;
 pub mod client;
@@ -14,6 +15,7 @@ pub mod memory;
 pub mod mirror;
 pub mod paired;
 pub mod saved;
+pub mod ssh_tunnel;
 pub mod strings;
 pub mod text;
 pub mod transport;

@@ -146,4 +146,14 @@ pi、opencode 和 Hermes 窗格暂时还不能在远程工作区中打开。远�
 
 **暂不支持**
 - 编辑远程文件、查看远程 git 更改、工作地图、工作树、Mighty 编排、附件，以及 opencode 和 Hermes 窗格。
-- 在主机上安装 Mighty Code 无头服务器的方式将在以后的版本中提供。
+
+**Mighty Code 服务器（远程 Mac）**
+如果该主机是 Mac，可以让 Mighty Code 在那里无窗口运行，并在这台电脑上[原样](#mirror)使用那台 Mac 的工作区和代理窗格。只使用这台主机的 SSH，不需要 Tailscale 或配对链接。Linux 和 Windows 主机无法安装（没有 Linux 版本），请继续使用上面无需安装的方式。
+
+1. 在主机下方的 {{ui:ssh.server.title}} 中按 {{ui:ssh.server.detect}}，会读取 macOS 版本、已安装的应用（`~/Applications`，没有则 `/Applications`）及其版本，以及服务器是否在运行。
+2. {{ui:ssh.server.install}}：本应用从更新信息中下载与本应用相同版本的 Mac 安装包（没有该版本时使用最新版本，并在确认窗口中说明），检查更新签名后通过 SSH 安装到那台 Mac 的 `~/Applications/MightyCode.app`，然后以无窗口方式启动。那台 Mac 会再次检查代码签名，不使用管理员权限（sudo）。
+3. 安装完成后立即连接。侧边栏会出现“远程 · 名称”，显示那台 Mac 的工作区。以后可以用 {{ui:ssh.server.connect}} 或侧边栏的连接重新连接。
+- 当那台 Mac 的服务器版本与本应用不同时，会出现 {{ui:ssh.server.update}}。它会停止运行中的服务器，换成新版本后重新启动。
+- 只有当同一用户已登录那台 Mac 的屏幕时应用才能启动。对于没有显示器的 Mac，请在那台 Mac 上开启自动登录。
+- SSH 连接断开时服务器仍在那台 Mac 上运行，本应用会尝试重新连接几次。
+- {{ui:ssh.server.remove}} 会停止服务器并删除 `~/Applications/MightyCode.app`（会先确认）。那台 Mac 上的 Mighty Code 数据会保留，`/Applications` 中的应用不会被改动。

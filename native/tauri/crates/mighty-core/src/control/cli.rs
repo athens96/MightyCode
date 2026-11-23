@@ -30,6 +30,7 @@ usage: mighty <command> [options]
   mighty server status                            headless or windowed, version, pid, uptime
   mighty server show                              open the window of the running app
   mighty server stop [--stop-all]                 quit it (--stop-all also ends the background daemon's work)
+  mighty server ssh-pair                          a one-time code for another computer's Mighty Code over SSH
 
   --profile <folder>   the app's data folder when it runs with --profile
   Output is JSON. Exit codes: 0 ok, 1 error, 2 timeout.
@@ -211,6 +212,11 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
             extra(2)?;
             Command::ServerStop { stop_all: flag("--stop-all") }
         }
+        ["server", "ssh-pair", ..] => {
+            allowed(&[])?;
+            extra(2)?;
+            Command::ServerSshPair
+        }
         ["server"] => return Err(usage("server takes start, status, show or stop")),
         ["server", other, ..] => return Err(usage(format!("unknown server command '{other}': use start, status, show or stop"))),
         [first, ..] => return Err(usage(format!("unknown command '{first}'"))),
@@ -296,6 +302,7 @@ mod tests {
         assert_eq!(command(&["server", "show"]), Command::AppShow);
         assert_eq!(command(&["server", "stop"]), Command::ServerStop { stop_all: false });
         assert_eq!(command(&["server", "stop", "--stop-all"]), Command::ServerStop { stop_all: true });
+        assert_eq!(command(&["server", "ssh-pair"]), Command::ServerSshPair);
         let error = |args: &[&str]| run(args).unwrap_err().0;
         assert_eq!(error(&["server"]), "server takes start, status, show or stop");
         assert_eq!(error(&["server", "restart"]), "unknown server command 'restart': use start, status, show or stop");

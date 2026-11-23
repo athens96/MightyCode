@@ -7,6 +7,13 @@
 //! sharing starts without Tailscale too, on no address, for them alone. Runs go through this PC's own runner ([`runs`]); a run its client
 //! stops polling for the heartbeat is stopped. Sharing never survives the app. Started only from the Start button when the app may
 //! listen (`Host::may_listen`). Owner: W8-D.
+//!
+//! MC-33, the SSH tunnel ([`RemoteHost::new_ssh_tunnel`]): a second host of the same app that another computer's Mighty Code reaches
+//! through an `ssh -L` forward. It listens on `127.0.0.1` only (any port), lets in loopback peers only, shares every local workspace
+//! (the person on the other end signed in over SSH as this Mac's user, who can already reach all of them) with full access on, and
+//! answers one route before the key: `POST /v2/ssh/pair` with a one-time code ([`RemoteHost::issue_ssh_code`], asked through the
+//! control API by `mighty server ssh-pair` over that same ssh) as its bearer gives the sharing's key. A code lives a minute and works
+//! once; a newer one replaces it.
 
 pub mod runs;
 
@@ -25,6 +32,7 @@ use mighty_run::model::{RuntimeInfo, StartRunRequest};
 use mighty_run::strings::get;
 use serde_json::Value;
 use tokio::sync::watch;
+use zeroize::Zeroizing;
 
 use crate::remote::address::{RemoteAddress, peer_allowed, peer_ip_allowed};
 use crate::remote::http_server::{Failed, HttpListener, HttpRequest, HttpResponse, ListenerOptions};
@@ -201,6 +209,25 @@ pub(crate) struct HostInner {
     pub before_bind: Mutex<Option<Hook<String>>>,
     /// Awaited at the start of each launch (checks only): a stop let in here must keep the run from the runner.
     pub before_launch: Mutex<Option<Hook<runs::Cancel>>>,
+    /// MC-33: the SSH tunnel's host (loopback only, every local workspace, the pairing route).
+    pub tunnel: bool,
+    /// The SSH tunnel's one outstanding pairing code and when it runs out (on the host's clock).
+    pub ssh_code: Mutex<Option<(Zeroizing<String>, Duration)>>,
+}
+
+/// How long a pairing code of the SSH tunnel may be used.
+pub const SSH_CODE_LIFETIME: Duration = Duration::from_secs(60);
+/// The SSH tunnel's pairing route (under [`protocol::PATH_PREFIX`]).
+pub const SSH_PAIR_ROUTE: &str = "ssh/pair";
+
+/// A peer of the SSH tunnel: loopback only (`127.0.0.0/8`, `::1`, an IPv4-mapped loopback), never a Tailscale or other address.
+pub fn tunnel_peer(address: &str) -> bool {
+    let unscoped = address.split('%').next().unwrap_or_default().trim_matches(['[', ']']);
+    match unscoped.parse::<IpAddr>() {
+        Ok(IpAddr::V4(v4)) => v4.is_loopback(),
+        Ok(IpAddr::V6(v6)) => v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback()),
+        Err(_) => false,
+    }
 }
 
 /// The sharing host.
@@ -249,6 +276,38 @@ fn target_text(target: &str) -> bool {
 
 impl RemoteHost {
     pub fn new(options: HostOptions) -> RemoteHost {
+        RemoteHost::make(options, false)
+    }
+
+    /// MC-33: the SSH tunnel's host (see the module's notes): `addresses` and `allow_loopback_for_tests` are not read; it listens on
+    /// `127.0.0.1` alone.
+    pub fn new_ssh_tunnel(options: HostOptions) -> RemoteHost {
+        RemoteHost::make(options, true)
+    }
+
+    /// Whether this is the SSH tunnel's host.
+    pub fn is_ssh_tunnel(&self) -> bool {
+        self.0.tunnel
+    }
+
+    /// A new one-time pairing code for the SSH tunnel (the one before it no longer works); None for any other host or when no random
+    /// bytes could be had. Never logged: it goes back only to the control API's caller.
+    pub fn issue_ssh_code(&self) -> Option<String> {
+        if !self.0.tunnel {
+            return None;
+        }
+        let code = new_key()?;
+        let until = (self.0.options.clock)() + SSH_CODE_LIFETIME;
+        *lock(&self.0.ssh_code) = Some((Zeroizing::new(code.clone()), until));
+        Some(code)
+    }
+
+    /// A peer this host lets in: loopback alone for the SSH tunnel, else a Tailscale address (or loopback where the checks inject it).
+    fn peer_ok(&self, address: &str) -> bool {
+        if self.0.tunnel { tunnel_peer(address) } else { peer_allowed(address, self.0.options.allow_loopback_for_tests) }
+    }
+
+    fn make(options: HostOptions, tunnel: bool) -> RemoteHost {
         let rates = RateLimiter::new(options.clock.clone());
         RemoteHost(Arc::new(HostInner {
             options,
@@ -275,6 +334,8 @@ impl RemoteHost {
             serials: AtomicU64::new(1),
             before_bind: Mutex::new(None),
             before_launch: Mutex::new(None),
+            tunnel,
+            ssh_code: Mutex::new(None),
         }))
     }
 
@@ -369,14 +430,15 @@ impl RemoteHost {
                 return Err(get("remote.host.error.busy"));
             }
             let distinct: HashSet<&String> = workspace_ids.iter().collect();
-            if workspace_ids.is_empty()
+            // The SSH tunnel shares every local workspace: it is started with none named.
+            if (workspace_ids.is_empty() && !self.0.tunnel)
                 || workspace_ids.len() > protocol::MAXIMUM_SHARED_WORKSPACES
                 || distinct.len() != workspace_ids.len()
                 || !workspace_ids.iter().all(|id| wire::identifier(id))
             {
                 return Err(get("remote.host.error.pickWorkspace"));
             }
-            if !(port >= 1024 || self.0.options.allow_loopback_for_tests && port == 0) {
+            if !(port >= 1024 || (self.0.options.allow_loopback_for_tests || self.0.tunnel) && port == 0) {
                 return Err(get("remote.connect.error.badPort"));
             }
             if gate.closed {
@@ -486,7 +548,8 @@ impl RemoteHost {
             addresses: addresses.iter().map(|a| RemoteAddress { host: a.clone(), port: bound }.display()).collect(),
             ..RemoteHostState::default()
         };
-        gate.allows_full_access = false;
+        // Over the SSH tunnel the person is this Mac's own user, signed in over SSH: nothing here is more than they can already do.
+        gate.allows_full_access = self.0.tunnel;
         let (stop, stopping) = watch::channel(false);
         gate.lease = Some(stop);
         let host = self.clone();
@@ -505,12 +568,15 @@ impl RemoteHost {
                 }
             })
         });
-        let loopback = self.0.options.allow_loopback_for_tests;
+        let tunnel = self.0.tunnel;
+        let loopback = self.0.options.allow_loopback_for_tests || tunnel;
         let key = key.to_string();
         let decodes = self.0.options.decodes_paths;
         let body_limit: crate::remote::http_server::BodyLimit =
             Arc::new(move |head: &HttpRequest| Ok(body_limit_for(head, &key, loopback, decodes)));
-        let accept_peer: crate::remote::http_server::AcceptPeer = Arc::new(move |peer: IpAddr| Ok(peer_ip_allowed(peer, loopback)));
+        let accept_peer: crate::remote::http_server::AcceptPeer = Arc::new(move |peer: IpAddr| {
+            Ok(if tunnel { tunnel_peer(&crate::tailscale::peer(peer).to_string()) } else { peer_ip_allowed(peer, loopback) })
+        });
         let options = ListenerOptions {
             body_limit: Some(body_limit),
             accept_peer: Some(accept_peer),
@@ -522,6 +588,9 @@ impl RemoteHost {
 
     /// This PC's Tailscale addresses (or the injected ones), each once; never any other address.
     fn listen_addresses(&self) -> Result<Vec<String>, StartFailure> {
+        if self.0.tunnel {
+            return Ok(vec!["127.0.0.1".into()]);
+        }
         let options = &self.0.options;
         let found = match &options.addresses {
             Some(addresses) => addresses().map_err(|_| StartFailure::Message(strings::host_no_tailscale()))?,
@@ -644,7 +713,7 @@ impl RemoteHost {
                 _ => return Err(stopped()),
             }
         };
-        if request.headers.contains_key("origin") || !peer_allowed(&request.remote_address, self.0.options.allow_loopback_for_tests) {
+        if request.headers.contains_key("origin") || !self.peer_ok(&request.remote_address) {
             return Err(HostFailure::new(403, get("remote.host.error.tailscaleOnly")));
         }
         if !self.0.rates.allow_peer(&request.remote_address) {
@@ -674,8 +743,46 @@ impl RemoteHost {
     }
 
     async fn route(&self, request: &HttpRequest, revision: u64) -> Result<HttpResponse, HostFailure> {
+        if self.0.tunnel && request.target == format!("{}{SSH_PAIR_ROUTE}", protocol::PATH_PREFIX) {
+            return self.ssh_pair(request, revision);
+        }
         self.authorize(request, revision)?;
         self.dispatch(request, revision, false).await
+    }
+
+    /// `POST /v2/ssh/pair` on the SSH tunnel: sharing on, no browser origin, a loopback peer, the per-peer rate, then the one
+    /// outstanding code as the bearer (spent when it is right), the protocol version: the sharing's key.
+    fn ssh_pair(&self, request: &HttpRequest, revision: u64) -> Result<HttpResponse, HostFailure> {
+        let key = {
+            let gate = lock(&self.0.gate);
+            match &gate.state.key {
+                Some(key) if gate.state.enabled && gate.generation == revision => key.clone(),
+                _ => return Err(stopped()),
+            }
+        };
+        if request.method != "POST" {
+            return Err(HostFailure::new(405, get("remote.host.error.badRequest")));
+        }
+        if request.headers.contains_key("origin") || !tunnel_peer(&request.remote_address) {
+            return Err(HostFailure::new(403, get("remote.host.error.tailscaleOnly")));
+        }
+        if !self.0.rates.allow_peer(&request.remote_address) {
+            return Err(HostFailure::new(429, get("remote.host.error.tooMany")));
+        }
+        // Spent only by the right code: a wrong one (another local user's guess at a 256-bit code) cannot take it from its owner.
+        let now = (self.0.options.clock)();
+        let spent = {
+            let mut outstanding = lock(&self.0.ssh_code);
+            let right = outstanding.as_ref().is_some_and(|(code, until)| now <= *until && key_presented(&request.headers, code));
+            if right { outstanding.take() } else { None }
+        };
+        if spent.is_none() {
+            return Err(HostFailure::new(401, get("remote.host.error.badKey")));
+        }
+        if request.headers.get(protocol::HEADER).map(String::as_str) != Some("2") {
+            return Err(HostFailure::new(426, get("remote.host.error.version")));
+        }
+        Ok(reply(200, &serde_json::json!({ "key": key })))
     }
 
     /// A paired computer's request through the relay (`remote::paired::DesktopRouter`; `device` its client id, for the rate limit):
@@ -761,11 +868,12 @@ impl RemoteHost {
 
     pub(crate) fn shared_workspaces(&self) -> Vec<Workspace> {
         let ids = lock(&self.0.gate).state.workspace_ids.clone();
+        let tunnel = self.0.tunnel;
         (self.0.options.workspaces)()
             .into_iter()
             .filter(|w| {
                 w.remote.is_none()
-                    && ids.iter().any(|id| id == w.id())
+                    && (if tunnel { w.ssh.is_none() } else { ids.iter().any(|id| id == w.id()) })
                     && validation::shared_workspace(&RemoteSharedWorkspace {
                         id: w.id().into(),
                         name: w.name().into(),

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use mighty_core::control::cli;
 use mighty_core::control::events::{EventBody, PaneRef, PaneState, StateEvent, transition};
-use mighty_core::control::protocol::{ControlError, MAX_LINE_BYTES};
+use mighty_core::control::protocol::{ControlError, ErrorCode, MAX_LINE_BYTES};
 use mighty_platform::BoxFuture;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -131,7 +131,20 @@ impl Backend for Fake {
         let was = std::mem::replace(&mut *self.shown.lock().unwrap(), true);
         Ok(json!({ "window": if was { "shown" } else { "opening" }, "pid": 4242 }))
     }
+    /// A headless fake pairs; one with its window refuses as an app without the SSH tunnel does.
+    fn ssh_pair(&self) -> BoxFuture<'_, Result<Value, ControlError>> {
+        let headless = self.headless;
+        Box::pin(async move {
+            if headless {
+                Ok(json!({ "port": 50123, "code": SSH_CODE, "version": "test" }))
+            } else {
+                Err(ControlError::new(ErrorCode::Failed, "this app takes no SSH pairing"))
+            }
+        })
+    }
 }
+
+const SSH_CODE: &str = "ssh-pairing-code-ssh-pairing-code-ssh-pairing";
 
 /// A short profile folder under /tmp (a socket path must fit 104 bytes).
 fn profile(name: &str) -> PathBuf {
@@ -408,6 +421,31 @@ async fn the_server_commands_start_show_and_stop_the_app() {
     assert!(endpoint::read_endpoint(&data).is_none());
     assert_eq!(cli_call(&data, &["server", "status"]).await.0, cli::EXIT_ERROR);
     drop(served.lock().unwrap().take());
+}
+
+/// MC-33: `mighty server ssh-pair` (what another computer's app runs here over ssh) prints the app's one-time code on standard output
+/// only — the one channel back to that app — and nothing of it on standard error; an app that takes no pairing says so as an error.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_ssh_pairing_code_goes_only_to_the_cli_caller() {
+    let data = profile("sshpair");
+    let served = serve_in(data.clone(), Fake::started(true));
+    let args: Vec<String> = ["server", "ssh-pair"].iter().map(|a| a.to_string()).collect();
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let code =
+        client::run_with(cli::parse(&args).unwrap(), &data, crate::platform::control_connector(), || Ok(String::new()), &mut out, &mut err)
+            .await;
+    assert_eq!(code, cli::EXIT_OK);
+    let pairing = mighty_core::ssh::server::parse_pairing(&String::from_utf8(out).unwrap()).expect("the CLI prints the pairing");
+    assert_eq!((pairing.port, pairing.code.as_str()), (50123, SSH_CODE));
+    assert!(!String::from_utf8(err).unwrap().contains(SSH_CODE), "never on standard error");
+    drop(served);
+
+    let data = profile("sshpair-refused");
+    let served = serve_in(data.clone(), Fake::started(false));
+    let (code, out) = cli_call(&data, &["server", "ssh-pair"]).await;
+    assert_eq!(code, cli::EXIT_ERROR);
+    assert_eq!(parsed(&out)["error"]["message"], "this app takes no SSH pairing");
+    drop(served);
 }
 
 /// MC-3: a start of a profile whose app runs without a window hands over to it (its window shown there) and ends; a `--server` start

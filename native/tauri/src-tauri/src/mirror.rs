@@ -130,7 +130,7 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
     let Some(sharing) = app.host() else { return };
     let (snapshot_of, router_of, queued_of, card_of) =
         (Arc::downgrade(host), Arc::downgrade(host), Arc::downgrade(host), Arc::downgrade(host));
-    sharing.set_mirror(Some(Arc::new(DeskMirrorHost::new(
+    let mirror: Arc<dyn mighty_remote::remote::mirror::host::MirrorHost> = Arc::new(DeskMirrorHost::new(
         Arc::new(move || snapshot_of.upgrade().and_then(|h| h.runs().map(|r| r.service.snapshot())).unwrap_or_default()),
         // None while the window closes: every action is answered as unavailable.
         Arc::new(move || router_of.upgrade().filter(|h| !h.closing()).map(|h| crate::phone::router(&h))),
@@ -145,7 +145,19 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
         Arc::new(move |id: &str| {
             card_of.upgrade().and_then(|h| h.runs().map(|r| r.service.antigravity_card(id).is_some())).unwrap_or(false)
         }),
-    ))));
+    ));
+    sharing.set_mirror(Some(mirror.clone()));
+    // MC-33: the SSH tunnel's host hands out the same panes.
+    if let Some(tunnel) = app.tunnel() {
+        tunnel.set_mirror(Some(mirror));
+    }
+}
+
+/// MC-33: `connection_id` connected again (the sidebar's 연결: the client's refresh, which for an SSH machine's server opens the
+/// forward and pairs again) and its mirror started.
+pub async fn connect(connection_id: &str) -> Result<(), String> {
+    let desk = desk().ok_or_else(|| mighty_run::strings::get("common.appClosing"))?;
+    desk.connect(connection_id).await
 }
 
 /// At quit (main.rs), with the other W8 shutdowns: every poll ends, and the sharing host gives this PC's panes back.
@@ -153,8 +165,12 @@ pub fn shutdown(host: &Arc<Host>) {
     if let Some(desk) = desk() {
         desk.dispose();
     }
-    if let Some(sharing) = crate::remote::app(host).host() {
+    let app = crate::remote::app(host);
+    if let Some(sharing) = app.host() {
         sharing.set_mirror(None);
+    }
+    if let Some(tunnel) = app.tunnel() {
+        tunnel.set_mirror(None);
     }
 }
 
@@ -335,7 +351,7 @@ pub fn frame(host: &Host, snapshot: &AppSnapshot, model: &mut ShellModel) {
         .map(|c| Server {
             id: c.id.clone(),
             name: c.name.clone(),
-            address: Some(c.address.clone()),
+            address: Some(crate::ssh::server::shown_address(host, &c.address)),
             connected: c.status == RemoteConnectionStatus::Connected,
             detail: c.detail.clone(),
         })

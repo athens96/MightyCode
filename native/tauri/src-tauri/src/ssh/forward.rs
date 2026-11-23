@@ -71,6 +71,53 @@ pub async fn close(host: &Host, pane: &str, remote: Option<u16>) {
     }
 }
 
+/// MC-33: the forward of `machine`'s Mighty Code server (its loopback listener's `remote` port on the far side), held under a pane
+/// name of its own (no pane shows it); one that is open to that port already is kept, one to another port (the server restarted) is
+/// closed first. `ended` runs if its ssh ends by itself (the connection went). The local port it listens on.
+pub async fn open_server(
+    host: &Arc<Host>,
+    machine: &str,
+    launch: mighty_run::ssh::SshLaunch,
+    remote: u16,
+    ended: Box<dyn FnOnce() + Send>,
+) -> Result<u16, String> {
+    let pane = server_pane(machine);
+    if let Some(open) = forwards().list().into_iter().find(|f| f.pane == pane && f.remote == remote) {
+        return Ok(open.local);
+    }
+    forwards().close_where(host.processes.as_ref(), |f| f.pane == pane).await;
+    let data_dir = host.data_dir.clone();
+    let taken_locals: Vec<u16> = forwards().list().iter().map(|f| f.local).collect();
+    let local = tauri::async_runtime::spawn_blocking(move || {
+        let mut taken = worktree_ports::load(&data_dir).assigned();
+        taken.extend(taken_locals.iter().map(|&base| worktree_ports::PortBlock { base, count: 1 }));
+        worktree_ports::find_free_block(&taken, 1, worktree_ports::DEFAULT_START, worktree_ports::port_in_use).map(|b| b.base)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| host.locale.get("ssh.forward.error.noPort"))?;
+    let info = ForwardInfo { pane, machine: machine.to_string(), remote, local };
+    forwards().open(host.processes.as_ref(), launch, info, ended).await?;
+    Ok(local)
+}
+
+/// Whether `machine`'s server forward is open now.
+pub fn server_open(machine: &str) -> bool {
+    let pane = server_pane(machine);
+    forwards().list().iter().any(|f| f.pane == pane)
+}
+
+/// The forward of `machine`'s server closed (its server removed).
+pub async fn close_server(host: &Host, machine: &str) {
+    let pane = server_pane(machine);
+    forwards().close_where(host.processes.as_ref(), |f| f.pane == pane).await;
+}
+
+/// The pane name the server forward is held under (never a pane id: those are uuids).
+fn server_pane(machine: &str) -> String {
+    format!("server:{machine}")
+}
+
 /// Every forward of a removed machine.
 pub async fn close_machine(host: &Host, machine: &str) {
     forwards().close_where(host.processes.as_ref(), |f| f.machine == machine).await;

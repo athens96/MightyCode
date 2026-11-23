@@ -189,4 +189,12 @@ impl Backend for HostBackend {
         let done = crate::server::show_window(&host);
         Ok(json!({ "window": done, "pid": std::process::id() }))
     }
+
+    /// The answer carries the code: it goes back to the CLI's caller (another computer's app, over its ssh) and nowhere else.
+    fn ssh_pair(&self) -> BoxFuture<'_, Result<Value, ControlError>> {
+        Box::pin(async move {
+            let host = self.host()?;
+            crate::remote::ssh_pair(&host).await.map_err(|message| ControlError::new(ErrorCode::Failed, message))
+        })
+    }
 }

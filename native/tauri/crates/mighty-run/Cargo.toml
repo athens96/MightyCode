@@ -23,7 +23,7 @@ serde.workspace = true
 indexmap.workspace = true
 chrono.workspace = true
 sys-locale.workspace = true
-tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "io-util", "net"] }
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "io-util", "net", "fs"] }
 regex = "1"
 url = "2"
 sha2 = "0.10"

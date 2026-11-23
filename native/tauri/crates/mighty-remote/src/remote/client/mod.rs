@@ -5,7 +5,9 @@
 //! order the list changes. A connection's requests leave only through this PC's Tailscale tunnel (the route is asked before each one).
 //! A lost connection ends its runs with `remote.run.error.connectionLost`; a 401 on a start fails the connection. A connection paired
 //! through the relay ([`RemoteClient::pair`], `remote::paired`) has no Tailscale target: its link is a [`RelayClient`] and its key in the
-//! vault the pairing's secret; it carries the remote mirror only (the runs' polls outgrow a relay frame). Owner: W8-D.
+//! vault the pairing's secret; it carries the remote mirror only (the runs' polls outgrow a relay frame). A connection to an SSH
+//! machine's server ([`RemoteClient::connect_ssh`], `remote::ssh_tunnel`, MC-33) goes through an ssh forward to loopback: no route to
+//! ask, and its key comes from a fresh pairing at every connect, never from the vault. Owner: W8-D.
 
 pub mod runs;
 
@@ -27,6 +29,7 @@ use crate::remote::address::RemoteAddress;
 use crate::remote::events::PendingPermissions;
 use crate::remote::paired::{self, PairedSecret};
 use crate::remote::saved::{self, SavedConnection};
+use crate::remote::ssh_tunnel::{self, SshTunnel};
 use crate::remote::strings;
 use crate::remote::text;
 use crate::remote::transport::{self, Method, RemoteTarget, Request, TransportError};
@@ -67,6 +70,8 @@ pub struct ClientOptions {
     /// How a host this computer pairs with names it in its device list.
     pub client_name: String,
     pub relay_timings: ClientTimings,
+    /// MC-33: how an SSH machine's server is reached (the app's forward and pairing); None refuses such a connection.
+    pub ssh_tunnel: Option<SshTunnel>,
 }
 
 impl Default for ClientOptions {
@@ -81,6 +86,7 @@ impl Default for ClientOptions {
             relay_proxy: None,
             client_name: String::new(),
             relay_timings: ClientTimings::default(),
+            ssh_tunnel: None,
         }
     }
 }
@@ -287,6 +293,42 @@ impl RemoteClient {
         self.connect_reached(label, trimmed, &display, existing, id, Link::Http(target), info).await
     }
 
+    /// MC-33 "Mighty Code 서버에 연결": connects to the server on SSH machine `machine` (its id) through the app's forward
+    /// ([`ClientOptions::ssh_tunnel`]), saved under `ssh:<machine>`; a connection to that machine already listed is connected again
+    /// under its id. The key lives in memory only.
+    pub async fn connect_ssh(&self, name: &str, machine: &str) -> Result<RemoteConnectionInfo, ClientError> {
+        let label = name.trim();
+        if text::count(label, saved::MAXIMUM_NAME + 1) > saved::MAXIMUM_NAME || !wire::identifier(machine) {
+            return Err(message(get("remote.ssh.error.unavailable")));
+        }
+        let display = ssh_tunnel::ssh_address(machine);
+        self.saved_read().await?;
+        let existing = {
+            let mut gate = lock(&self.0.gate);
+            if gate.closing {
+                return Err(message(get("common.appClosing")));
+            }
+            let existing =
+                gate.connections.values().find(|c| c.info.address == display).map(|c| (c.info.id.clone(), c.info.name.clone(), c.serial));
+            if existing.is_none() && gate.connections.len() >= protocol::MAXIMUM_CONNECTIONS {
+                return Err(too_many());
+            }
+            if !gate.connecting.insert(display.clone()) {
+                return Err(message(get("remote.connect.error.busy")));
+            }
+            existing
+        };
+        let _connecting = Connecting { client: self.clone(), address: display.clone() };
+        let (target, key, info) = self.reach_ssh(machine).await?;
+        let id = existing.as_ref().map(|(id, _, _)| id.clone()).unwrap_or_else(wire::new_id);
+        self.connect_reached(label, &key, &display, existing, id, Link::Http(target), info).await
+    }
+
+    /// Whether `id` is a connection to an SSH machine's server (saved under an `ssh:` address).
+    pub fn is_ssh(&self, id: &str) -> bool {
+        lock(&self.0.gate).connections.get(id).is_some_and(|c| ssh_tunnel::is_ssh_address(&c.info.address))
+    }
+
     /// `PairAsync(name, link)` ("페어링 코드로 연결"): pairs with the host of a pasted pairing link through its relay (its key checked,
     /// this computer registered with a new client id, the host's token kept), reads its /info there, and saves the connection with the
     /// pairing's secret in the vault; a link for a host paired before replaces that connection's pairing.
@@ -367,8 +409,10 @@ impl RemoteClient {
                     return Err(too_many());
                 }
             }
-            // A vault that cannot keep the key leaves it in memory for this launch, and any key it kept before stays.
-            let saved = self.vault_save(&id, key).await;
+            // A vault that cannot keep the key leaves it in memory for this launch, and any key it kept before stays. An SSH machine's
+            // key is never kept: every connect pairs again over ssh.
+            let ssh = ssh_tunnel::is_ssh_address(display);
+            let saved = !ssh && self.vault_save(&id, key).await;
             let name = saved::name_of(Some(if !label.is_empty() {
                 label
             } else if let Some((_, old, _)) = &existing {
@@ -384,7 +428,13 @@ impl RemoteClient {
                 host_name: Some(info.host_name.clone()),
                 workspaces: Some(info.workspaces.clone()),
                 runtime: Some(info.runtime.clone()),
-                detail: Some(if saved { strings::connected_saved() } else { strings::connected_memory() }),
+                detail: Some(if ssh {
+                    get("remote.connect.detail.connected")
+                } else if saved {
+                    strings::connected_saved()
+                } else {
+                    strings::connected_memory()
+                }),
             };
             {
                 let mut gate = lock(&self.0.gate);
@@ -418,6 +468,9 @@ impl RemoteClient {
             let current = gate.connections.get(id).ok_or_else(|| message(get("remote.connect.error.unknown")))?;
             (current.serial, current.key.is_none() && current.key_pending)
         };
+        if let Some(machine) = self.connection(id).and_then(|c| ssh_tunnel::ssh_machine(&c.address).map(str::to_string)) {
+            return self.refresh_ssh(id, &machine, serial).await;
+        }
         if pending {
             // Read off the caller's task and outside the lock; whatever changed meanwhile is looked at again below.
             let read = self.vault_load(id).await;
@@ -482,6 +535,53 @@ impl RemoteClient {
                         link.close();
                         return Err(message(get("remote.connect.error.changed")));
                     }
+                }
+            };
+            self.tell_changed();
+            Ok(result)
+        }
+        .await;
+        if let Err(error) = &result {
+            self.fail(id, &error.message(), Some((serial, revision))).await;
+        }
+        result
+    }
+
+    /// [`RemoteClient::refresh`] of an SSH machine's connection: the way there opened again by the app, a new pairing, its /info.
+    async fn refresh_ssh(&self, id: &str, machine: &str, serial: u64) -> Result<RemoteConnectionInfo, ClientError> {
+        let (address, revision) = {
+            let mut gate = lock(&self.0.gate);
+            if gate.closing {
+                return Err(message(get("common.appClosing")));
+            }
+            let Some(current) = gate.connections.get(id).filter(|c| c.serial == serial) else {
+                return Err(message(get("remote.connect.error.changed")));
+            };
+            let (address, revision) = (current.info.address.clone(), current.revision);
+            if !gate.connecting.insert(address.clone()) {
+                return Err(message(get("remote.connect.error.busy")));
+            }
+            (address, revision)
+        };
+        let _connecting = Connecting { client: self.clone(), address };
+        let result = async {
+            let (target, key, info) = self.reach_ssh(machine).await?;
+            let result = {
+                let mut gate = lock(&self.0.gate);
+                let current_now = !gate.closing && unchanged(&gate, id, serial, revision);
+                match gate.connections.get_mut(id) {
+                    Some(current) if current_now => {
+                        current.target = Some(target);
+                        current.key = Some(key.to_string());
+                        current.key_pending = false;
+                        current.info.status = RemoteConnectionStatus::Connected;
+                        current.info.host_name = Some(info.host_name.clone());
+                        current.info.workspaces = Some(info.workspaces.clone());
+                        current.info.runtime = Some(info.runtime.clone());
+                        current.info.detail = Some(get("remote.connect.detail.connected"));
+                        current.info.clone()
+                    }
+                    _ => return Err(message(get("remote.connect.error.changed"))),
                 }
             };
             self.tell_changed();
@@ -722,6 +822,10 @@ impl RemoteClient {
     /// `EnsureRouteAsync`: before each request to the host the route still goes through the tunnel, or the connection is lost (never
     /// retried). When the connection changed since `revision`, that newer state stands and only this request is refused.
     pub(crate) async fn ensure_route(&self, id: &str, serial: u64, revision: u64, target: &RemoteTarget) -> Result<(), ClientError> {
+        // An SSH machine's server is reached through the ssh forward on loopback: there is no tunnel route to ask.
+        if self.is_ssh(id) && target.allow_loopback && ssh_tunnel::loopback_target(target.port) == *target {
+            return Ok(());
+        }
         let client = self.clone();
         let ip = target.ip.clone();
         // The check may block (it reads this PC's adapters): off the caller's task.
