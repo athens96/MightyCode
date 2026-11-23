@@ -917,11 +917,19 @@ pub fn start(host: &Arc<Host>, platform: &mighty_platform::Platform) {
     // and quitting fail with `noInstallPlan` or install nothing.
     if host.may_change_machine() {
         let launch: LaunchHelper = match package {
-            UpdatePackage::WindowsZip => Arc::new(move |plan| launch_helper(processes.as_ref(), &locale, plan, &|| app.exit(0))),
+            UpdatePackage::WindowsZip => Arc::new(move |plan| {
+                launch_helper(processes.as_ref(), &locale, plan, &|| {
+                    // MC-3: the update's restart keeps the background daemon's work running.
+                    crate::daemon::keep_for_update();
+                    app.exit(0)
+                })
+            }),
             UpdatePackage::MacBundle => {
                 let (installer, recheck, trees) = (installer.clone(), profile.update_rechecks_sha256, staged_trees.clone());
                 Arc::new(move |plan| {
                     let quit = || {
+                        // MC-3: the update's restart keeps the background daemon's work running.
+                        crate::daemon::keep_for_update();
                         app.exit(0);
                         let _ = std::thread::Builder::new().name("app-update-quit-watchdog".into()).spawn(|| {
                             std::thread::sleep(QUIT_WATCHDOG);

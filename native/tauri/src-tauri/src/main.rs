@@ -30,6 +30,7 @@ mod compare;
 mod composer;
 mod control;
 mod conversation_search;
+mod daemon;
 mod deep_link;
 mod delegation;
 mod delta;
@@ -294,6 +295,8 @@ fn exe_mode(args: &[String]) -> Option<i32> {
         [only] if only == modes::WORKSPACE_MCP_ARGUMENT => Some(modes::workspace_mcp(platform::agent_io_connector())),
         // MC-9: the `mighty` CLI (the installed script runs `<exe> --cli <command> …`): one request to the running app, no window.
         [first, rest @ ..] if first == control::client::ARGUMENT => Some(control::client::run(rest)),
+        // MC-3: the background daemon (`<exe> --daemon [--headless] [--profile …]`): owns runs and terminals, no window, no webview.
+        [first, rest @ ..] if first == daemon::ARGUMENT => Some(daemon::entry::run(rest)),
         #[cfg(feature = "dev-harness")]
         [first, root, rest @ ..] if first == mighty_delegation::fake_claude::ARGUMENT && mighty_core::normalize::fully_qualified(root) => {
             Some(mighty_delegation::fake_claude::run(Path::new(root), rest, platform::process_host()))
@@ -343,6 +346,8 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // MC-3: a run's child and a terminal pane's shell go to the background daemon while one is connected (daemon.rs); nothing else.
+    let platform = daemon::wrap(platform, options.profile.clone());
     // C# `MigrateRenamedIdentifiers`: the data from before the rename moved before anything reads it (W9-F).
     startup::before_ui(&options, &platform, policy);
     // What a crash of an earlier run left running is ended, and this run's children written down, before the first child starts.
@@ -619,6 +624,8 @@ fn main() {
             attention::start(&host);
             // MC-9: the local control API (the `mighty` CLI's), the status hooks and the webhooks; not in a smoke.
             control::start(&host);
+            // MC-3: the background daemon, when the person keeps work running after the app closes; not in a smoke.
+            daemon::start(&host);
             let dispatcher = host.clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(message) = calls.recv().await {
@@ -736,6 +743,12 @@ fn main() {
     let mut exit_code = 0;
     app.run(move |app, event| match event {
         RunEvent::ExitRequested { code: Some(code), .. } => exit_code = code,
+        // MC-3: ⌘Q with work the daemon holds asks first whether to keep it running (daemon.rs).
+        RunEvent::ExitRequested { code: None, api, .. } => {
+            if let Some(host) = app.try_state::<Arc<Host>>() {
+                daemon::on_exit_requested(&host, || api.prevent_exit());
+            }
+        }
         // Mac stage: an address the OS opened the app with (mightycode://, deep_link.rs, M-F).
         #[cfg(target_os = "macos")]
         RunEvent::Opened { urls } => deep_link::opened(app, &urls),
@@ -750,6 +763,8 @@ fn main() {
                 // The accounts' sign-ins and reads let go, and the account usage's pending reads cancelled (accounts.rs, usage.rs, W6-C).
                 accounts::shutdown(&host);
                 tauri::async_runtime::block_on(usage::shutdown(&host));
+                // MC-3: kept work let go of first, so closing the terminals and stopping the runs leaves it running in the daemon.
+                daemon::before_shutdown(&host);
                 // Every terminal closed first (C# CloseTerminalsAsync), the wait bounded.
                 terminal::close_all(app);
                 // The CLI updates and plugin operations cancelled, the wait bounded (updates.rs, W6-D).
@@ -774,6 +789,8 @@ fn main() {
                 if let Some(runs) = host.runs() {
                     tauri::async_runtime::block_on(runs.service.dispose());
                 }
+                // MC-3: when the quit stopped everything, the daemon goes too.
+                daemon::after_shutdown(&host);
                 delegation::shutdown(&host);
                 // The last save (C# DesktopService.DisposeAsync), written only with --allow-state-write.
                 host.close();

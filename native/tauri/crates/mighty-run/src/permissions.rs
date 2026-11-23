@@ -103,6 +103,9 @@ pub struct ClaudePermissionChannel {
     pane_mode: String,
     hooks: ChannelHooks,
     state: Mutex<State>,
+    /// MC-3: a run taken back from the background daemon: its prompt went long ago, so the handshake writes none, and a CLI that
+    /// does not answer it (or refuses a second one) does not stop the run.
+    adopted: bool,
 }
 
 pub const MAXIMUM_INPUT_BYTES: usize = 65_536;
@@ -118,7 +121,15 @@ impl ClaudePermissionChannel {
             pane_mode: pane_mode.into(),
             hooks,
             state: Mutex::new(State::default()),
+            adopted: false,
         }
+    }
+
+    /// MC-3: the channel of a run taken back from the background daemon ([`ClaudePermissionChannel::adopted`]): its `initialize` asks
+    /// the CLI for the requests still waiting (`pending_permission_requests`), so their cards come back, and writes no prompt.
+    pub fn adopted(mut self) -> ClaudePermissionChannel {
+        self.adopted = true;
+        self
     }
 
     pub fn initialized(&self) -> bool {
@@ -173,7 +184,12 @@ impl ClaudePermissionChannel {
         {
             let mut state = lock(&self.state);
             if !state.closed && !state.initialized {
-                self.fail_closed(&mut state, &mut effects, &copy::initialize_timed_out());
+                if self.adopted {
+                    // A kept run keeps going; its waiting requests come as the CLI sends them again.
+                    state.initialized = true;
+                } else {
+                    self.fail_closed(&mut state, &mut effects, &copy::initialize_timed_out());
+                }
             }
         }
         self.run(effects);
@@ -207,6 +223,10 @@ impl ClaudePermissionChannel {
                 return Ok(());
             }
             if meta::text(response, "subtype") != Some("success") {
+                if self.adopted {
+                    state.initialized = true;
+                    return Ok(());
+                }
                 self.fail_closed(state, effects, &copy::initialize_failed());
                 return Ok(());
             }
@@ -219,7 +239,7 @@ impl ClaudePermissionChannel {
                     }
                 }
             }
-            if !state.closed {
+            if !state.closed && !self.adopted {
                 (self.hooks.write)(&self.prompt).map_err(|e| RunError::Io(e.to_string()))?;
             }
             return Ok(());

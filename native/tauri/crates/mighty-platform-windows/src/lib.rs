@@ -100,7 +100,7 @@ mod imp {
     };
 
     pub use crate::activator::ComActivator;
-    pub use crate::agent_io::{ControlPipeConnector, NamedPipeConnector, NamedPipeListener};
+    pub use crate::agent_io::{ControlPipeConnector, DaemonPipeConnector, NamedPipeConnector, NamedPipeListener, lock_exclusive};
     pub use crate::cli::{CliRunResult, CliRunner};
     pub use crate::clipboard::WindowsClipboard;
     pub use crate::console::WindowsTerminalLauncher;
@@ -339,6 +339,16 @@ mod imp {
     /// MC-9: the `mighty` CLI's client of that pipe.
     pub fn control_connector() -> Arc<dyn mighty_platform::AgentIoConnector> {
         Arc::new(ControlPipeConnector)
+    }
+
+    /// MC-3: the background daemon's listener: an owner-only named pipe `mighty-daemon-<32 hex>`, remote clients refused.
+    pub fn daemon_listener() -> Arc<dyn mighty_platform::AgentIoListener> {
+        Arc::new(NamedPipeListener::daemon())
+    }
+
+    /// MC-3: the app's client of that pipe.
+    pub fn daemon_connector() -> Arc<dyn mighty_platform::AgentIoConnector> {
+        Arc::new(DaemonPipeConnector)
     }
 
     /// A volume's free space (delegation's worktree check, W7-B).

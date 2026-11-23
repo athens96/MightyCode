@@ -399,12 +399,19 @@ fn after_silence(record: &str) {
 /// A Claude launched with host permission prompts (Verification.cs:56-167).
 fn claude_with_prompts(record: &str) {
     let mut plan_fixture = false;
+    // The tool request waiting for its answer: a later `initialize` (an app taking the run back, MC-3) gets it in
+    // `pending_permission_requests`, as the CLI does.
+    let mut waiting: Option<Value> = None;
     while let Some(line) = read_line() {
         append(&format!("{record}.input"), &format!("{line}\n"));
         let Ok(root) = serde_json::from_str::<Value>(&line) else { continue };
         match text(&root, "type") {
             Some("control_request") => {
-                say(&json!({"type": "control_response", "response": {"subtype": "success", "request_id": text(&root, "request_id"), "response": {}}}).to_string());
+                let mut answer = json!({"type": "control_response", "response": {"subtype": "success", "request_id": text(&root, "request_id"), "response": {}}});
+                if let Some(waiting) = waiting.as_ref().filter(|_| root["request"]["subtype"] == "initialize") {
+                    answer["response"]["pending_permission_requests"] = json!([waiting]);
+                }
+                say(&answer.to_string());
             }
             Some("user") if line.contains("sign-in fixture") => {
                 let words = if line.contains("expired sign-in fixture") {
@@ -515,12 +522,13 @@ fn claude_with_prompts(record: &str) {
                         "{\"type\":\"control_request\",\"request_id\":\"plan-1\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"ExitPlanMode\",\"tool_use_id\":\"toolu_plan\",\"input\":{\"plan\":\"# Plan\\n1. Do it\",\"planFilePath\":\"/tmp/plan.md\"},\"requires_user_interaction\":true}}",
                     );
                 } else {
-                    say(
-                        "{\"type\":\"control_request\",\"request_id\":\"ask-1\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"Read\",\"tool_use_id\":\"tool-ask-1\",\"input\":{\"file_path\":\"~/.claude/CLAUDE.md\"},\"blocked_path\":\"~/.claude/CLAUDE.md\"}}",
-                    );
+                    let ask = "{\"type\":\"control_request\",\"request_id\":\"ask-1\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"Read\",\"tool_use_id\":\"tool-ask-1\",\"input\":{\"file_path\":\"~/.claude/CLAUDE.md\"},\"blocked_path\":\"~/.claude/CLAUDE.md\"}}";
+                    waiting = serde_json::from_str(ask).ok();
+                    say(ask);
                 }
             }
             Some("control_response") => {
+                waiting.take();
                 let _ = std::fs::write(format!("{record}.decision"), &line);
                 if plan_fixture {
                     let _ =

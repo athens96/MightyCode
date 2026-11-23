@@ -1963,7 +1963,12 @@ impl Exec {
                 .map_err(|e| Failure::Error(e.to_string()))?
         };
         self.cancelled()?;
-        let mut child = providers.processes().spawn(launch).await.map_err(|e| Failure::Error(e.to_string()))?;
+        // MC-3: keyed by its pane, so the app's process host can hand it to the background daemon (where the person keeps work running
+        // after the app closes). Only a Claude run with its approval channel, of a pane that is no delegated child, can be taken back by
+        // a later app, so only it is kept then.
+        let keep = interactive && request.delegation_worktree_root.is_none();
+        let key = crate::daemon::owner::run_key(&request.session_id, keep);
+        let mut child = providers.processes().spawn_keyed(launch, &key).await.map_err(|e| Failure::Error(e.to_string()))?;
         let control = child.control();
         *lock(&run.child) = Some(control.clone());
         run.child_pid.store(child.id, Ordering::SeqCst);
@@ -2015,6 +2020,7 @@ impl Exec {
             // Attachments.swift `prepare`): it goes as it is; plain text is wrapped in one.
             let prompt = if staged.is_some() { input.clone() } else { ProviderInput::prompt_frame(&input) };
             let channel = ClaudePermissionChannel::new(&request.session_id, &prompt, hooks, &request.settings().permission_mode);
+            let channel = if request.adopted { channel.adopted() } else { channel };
             *lock(&run.permissions) = Some(Arc::new(channel));
         }
         if codex_approvals {

@@ -134,6 +134,15 @@ pub trait PtyHost: Send + Sync {
     /// Starts `request` in a new terminal. Its processes die with the session (Windows: a kill-on-close job; the Mac: the session's
     /// process group) and never inherit the app's redirected standard handles.
     fn open(&self, request: PtyRequest) -> BoxFuture<'_, Result<PtySession>>;
+
+    /// MC-3: a terminal pane's shell, `key` naming the pane. Where the person keeps work running after the app closes, the app's PTY
+    /// host hands this one to the background daemon, which owns the terminal and keeps its scrollback (and, after the app restarts,
+    /// gives the pane back the terminal it left); every other host, and the app's while that setting is off, opens it as
+    /// [`PtyHost::open`] does.
+    fn open_keyed(&self, request: PtyRequest, key: &str) -> BoxFuture<'_, Result<PtySession>> {
+        let _ = key;
+        self.open(request)
+    }
 }
 
 #[cfg(test)]

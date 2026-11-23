@@ -32,6 +32,16 @@ Mac에서는 보기 메뉴의 {{ui:menu.textBigger}}({{kbd:⌘=}}), {{ui:menu.te
 - 아래에 키 안내가 있습니다. {{kbd:Enter}}로 보내고 {{kbd:Shift+Enter}}로 줄을 바꿉니다. 탭을 끌어 다른 탭과 합치거나 가장자리로 옮겨 나눕니다. 명령 실행 창은 Mac에서는 로그인 셸, Windows에서는 PowerShell(없으면 cmd)을 여는 대화형 터미널입니다.
 - 이슈 트래커(MightyWork, GitHub, Linear, Jira, GitLab) 연결은 설정 창이 아니라 워크스페이스마다 사이드바 워크스페이스 메뉴의 {{ui:integrations.menu.settings}}에서 합니다. [이슈에서 시작하기](delegation.md#issues)를 보세요.
 
+### 백그라운드 작업 {#background}
+같은 탭의 {{ui:daemon.settings.sectionTitle}} 항목에서 {{ui:daemon.settings.toggle}} 스위치를 켜면, 앱을 종료하거나 자동 업데이트로 다시 시작해도 에이전트 실행과 터미널이 멈추지 않습니다. 처음에는 꺼져 있습니다.
+- 켜면 앱이 같은 실행 파일을 창 없는 백그라운드 데몬으로 띄웁니다(`MightyCode --daemon`). 데이터 폴더마다 하나만 실행되고, 그 뒤에 시작하는 Claude 실행과 터미널 창의 셸은 데몬이 맡습니다. 화면, 기록, 승인 카드는 그대로 앱이 그립니다.
+- 실행 중인 작업이 있을 때 앱을 종료하면 {{ui:daemon.quit.keep}}와 {{ui:daemon.quit.stopAll}} 중에서 고릅니다. 자동 업데이트로 다시 시작할 때는 늘 계속 둡니다.
+- 앱을 다시 열면 이어집니다. Claude 창은 앱을 닫은 동안 나온 출력부터 이어서 보여 주고, 그사이 승인·질문을 기다리게 된 카드도 다시 나옵니다. 터미널 창은 창을 열 때 셸과 화면 기록(최근 2MB)이 그대로 돌아옵니다. 데몬은 실행마다 출력의 최근 8MB를 보관합니다.
+- 상태 줄에는 데몬의 PID, 실행 중인 작업 수, 보관 중인 출력의 크기가 보입니다. {{ui:daemon.settings.stop}} 단추는 데몬과 그 안의 작업을 모두 끝냅니다. 실행 중인 작업도 연결된 앱도 없으면 데몬은 10분 뒤 스스로 종료합니다.
+
+> [!note]
+> 이어지는 것은 Claude 에이전트 실행과 터미널 창입니다. 다른 에이전트(Codex, Gemini 등)의 실행은 데몬에서 돌아도 앱을 닫을 때 멈춥니다. 다시 붙은 Claude 실행은 그 턴이 끝날 때까지 Mighty 연결(위임 도구, 활동 표시)을 쓰지 못할 수 있습니다. 데몬이 비정상으로 끝나면 그 안의 작업도 끝나고 창은 멈춤으로 바뀝니다. 업데이트로 데몬과 앱의 버전이 달라지면 앱은 연결하지 않고, 이전 데몬의 작업을 멈출지 묻습니다. 데몬 연결은 이 컴퓨터의 같은 사용자만 할 수 있습니다(Mac은 권한 0600의 소켓, Windows는 현재 사용자만 여는 named pipe, 데이터 폴더 `daemon/token`의 토큰).
+
 ## 모델 {#models}
 {{ui:settings.nav.models}} 탭의 {{ui:settings.phaseModels.sectionTitle}}에서 작업 단계별로 쓸 모델을 이 컴퓨터 전체에 정합니다. 단계는 {{ui:settings.phaseModels.phase.planning}}, {{ui:settings.phaseModels.phase.execution}}, {{ui:settings.phaseModels.phase.review}}, {{ui:settings.phaseModels.phase.subagents}}입니다.
 - {{ui:settings.phaseModels.defaultOption}}으로 두면 CLI가 정합니다.

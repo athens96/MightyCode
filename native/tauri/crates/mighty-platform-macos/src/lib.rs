@@ -65,8 +65,10 @@ use mighty_platform::{
     TerminalSurface,
 };
 
-pub use agent_io::{agent_io_connector, agent_io_listener, control_connector, control_listener};
-pub use child_groups::record_child_groups;
+pub use agent_io::{
+    agent_io_connector, agent_io_listener, control_connector, control_listener, daemon_connector, daemon_listener, lock_exclusive,
+};
+pub use child_groups::{reap_child_groups, record_child_groups};
 pub use clipboard::clipboard;
 pub use disk::{disk_space, names_ignore_case};
 pub use files::{file_ports, open_url, show_in_explorer};

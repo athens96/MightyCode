@@ -32,6 +32,16 @@ section: settings
 - 下方是按键说明：按 {{kbd:Enter}} 发送，按 {{kbd:Shift+Enter}} 换行。拖动标签页可与其他标签页合并，拖到边缘可拆分。命令运行窗格是交互式终端，在 Mac 上打开登录 shell，在 Windows 上打开 PowerShell（没有时为 cmd）。
 - Issue 跟踪器(MightyWork、GitHub、Linear、Jira、GitLab)不在设置窗口中连接，而是按工作区在侧边栏工作区菜单的 {{ui:integrations.menu.settings}} 中连接。参见[从 Issue 开始](delegation.md#issues)。
 
+### 后台任务 {#background}
+在同一标签页的{{ui:daemon.settings.sectionTitle}}中打开{{ui:daemon.settings.toggle}}后，退出应用或因自动更新重启时，代理运行和终端都不会停止。默认关闭。
+- 打开后，应用会把自己的可执行文件作为没有窗口的后台守护进程启动（`MightyCode --daemon`）。每个数据文件夹只运行一个，之后启动的 Claude 运行和终端窗格的 shell 由它负责。窗格、记录和批准卡片仍由应用绘制。
+- 有任务在运行时退出应用，会让你在{{ui:daemon.quit.keep}}和{{ui:daemon.quit.stopAll}}之间选择。因自动更新重启时总是继续运行。
+- 重新打开应用即可接着使用。Claude 窗格会从应用关闭期间的输出接着显示，期间出现的等待批准或提问的卡片也会再次显示。终端窗格打开时会取回原来的 shell 和屏幕记录（最近 2MB）。守护进程为每次运行保留最近 8MB 的输出。
+- 状态行显示守护进程的 PID、正在运行的任务数和保留的输出大小。{{ui:daemon.settings.stop}}按钮会结束守护进程及其中的全部任务。没有运行中的任务也没有连接的应用时，守护进程会在 10 分钟后自行退出。
+
+> [!note]
+> 会继续的是 Claude 代理运行和终端窗格。其他代理（Codex、Gemini 等）的运行即使在守护进程中运行，也会在关闭应用时停止。重新接上的 Claude 运行在本轮结束前可能无法使用 Mighty 连接（委派工具、活动显示）。守护进程异常结束时，其中的任务也会结束，窗格显示为已停止。更新后守护进程与应用版本不同时，应用不会连接，而是询问是否停止早期守护进程的任务。只有这台电脑上的同一用户才能连接守护进程（Mac 上是权限为 0600 的套接字，Windows 上是只有当前用户能打开的命名管道，令牌位于数据文件夹的 `daemon/token`）。
+
 ## 模型 {#models}
 在{{ui:settings.nav.models}}标签页的{{ui:settings.phaseModels.sectionTitle}}中，为整台电脑设置各工作阶段使用的模型。阶段包括{{ui:settings.phaseModels.phase.planning}}、{{ui:settings.phaseModels.phase.execution}}、{{ui:settings.phaseModels.phase.review}}和{{ui:settings.phaseModels.phase.subagents}}。
 - 保持{{ui:settings.phaseModels.defaultOption}}时，由 CLI 决定。

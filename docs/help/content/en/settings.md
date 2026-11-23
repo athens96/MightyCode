@@ -32,6 +32,16 @@ The {{ui:settings.agents.sectionTitle}} group on the same tab holds the settings
 - The tips below them: {{kbd:Enter}} sends and {{kbd:Shift+Enter}} starts a new line. Drag a tab onto another to merge them, or to an edge to split. The command pane is an interactive terminal that opens your login shell on a Mac, and PowerShell (or cmd if it is missing) on Windows.
 - Issue trackers (MightyWork, GitHub, Linear, Jira, GitLab) are connected per workspace, not here: {{ui:integrations.menu.settings}} in the workspace's menu in the sidebar. See [Start from an issue](delegation.md#issues).
 
+### Background work {#background}
+Turn on {{ui:daemon.settings.toggle}} in the {{ui:daemon.settings.sectionTitle}} group on the same tab, and agent runs and terminals no longer stop when you quit the app or it restarts for an automatic update. It is off at first.
+- While on, the app starts its own executable as a background daemon with no window (`MightyCode --daemon`). One runs per data folder, and the Claude runs and terminal panes' shells started from then on belong to it. The app still draws the panes, the transcript and the approval cards.
+- Quitting with work running asks you to choose {{ui:daemon.quit.keep}} or {{ui:daemon.quit.stopAll}}. A restart for an automatic update always keeps it.
+- Reopen the app to pick up. A Claude pane continues from the output that came while the app was closed, and approval or question cards that came up meanwhile show again. A terminal pane gets its shell and its scrollback (the last 2 MB) back when it opens. The daemon keeps the last 8 MB of output of each run.
+- The status line shows the daemon's PID, how many tasks run and how much output it keeps. {{ui:daemon.settings.stop}} ends the daemon and all the work in it. With nothing running and no app attached, the daemon exits on its own after 10 minutes.
+
+> [!note]
+> What continues is Claude agent runs and terminal panes. Other agents' runs (Codex, Gemini and others) run in the daemon too but stop when the app closes. A Claude run that was picked up may not reach the Mighty connection (delegation tools, activity) until its turn ends. If the daemon ends abnormally, its work ends with it and the panes show as stopped. When an update leaves the daemon and the app on different versions, the app does not attach and asks whether to stop the earlier daemon's work. Only the same user on this computer can connect to the daemon (on a Mac a socket with permissions 0600, on Windows a named pipe only the current user opens, with the token in the data folder's `daemon/token`).
+
 ## Models {#models}
 {{ui:settings.phaseModels.sectionTitle}} on the {{ui:settings.nav.models}} tab sets which model each phase of work uses, for this whole computer. The phases are {{ui:settings.phaseModels.phase.planning}}, {{ui:settings.phaseModels.phase.execution}}, {{ui:settings.phaseModels.phase.review}} and {{ui:settings.phaseModels.phase.subagents}}.
 - Leave a phase at {{ui:settings.phaseModels.defaultOption}} and the CLI decides.

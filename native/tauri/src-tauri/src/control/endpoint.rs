@@ -71,8 +71,8 @@ fn create_private_folder(folder: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Reads a small file that must be a plain file (not a link) of this user's.
-fn read_small(path: &Path) -> Option<String> {
+/// Reads a small file that must be a plain file (not a link) of this user's (also the daemon's files, MC-3).
+pub(crate) fn read_small(path: &Path) -> Option<String> {
     let meta = std::fs::symlink_metadata(path).ok()?;
     if !meta.is_file() || meta.len() > MAX_FILE_BYTES {
         return None;

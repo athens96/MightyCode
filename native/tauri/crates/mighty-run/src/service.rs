@@ -1124,6 +1124,77 @@ impl RunService {
         }
     }
 
+    /// MC-3: a run an earlier app kept running in the background daemon, handed back to its pane. The pane shows it running again and
+    /// the run engine reads the child's output from where that app stopped reading (the app's process host attaches the daemon's
+    /// process instead of starting one, mighty-run `daemon::owner`); no user entry, no new title, and nothing is written to the agent
+    /// before the person answers (its approval channel asks for the requests still waiting and writes no prompt). Only a local Claude
+    /// agent pane that is no delegated child.
+    pub async fn adopt(&self, value: StartRunRequest) -> Result<()> {
+        self.ensure_bodies(&[value.session_id.as_str()]);
+        let mut request = StartRunRequest { adopted: true, attachments: None, ..value }.validate()?;
+        {
+            let mut state = lock(&self.shared.state);
+            if state.closing {
+                return Err(RunError::State("the service is closing".into()));
+            }
+            let workspace = state
+                .snapshot
+                .workspace(&request.workspace_id)
+                .cloned()
+                .ok_or_else(|| RunError::Invalid(strings::get("run.error.workspaceNotRegistered")))?;
+            let pane = state
+                .snapshot
+                .sessions()
+                .iter()
+                .find(|s| s.id() == request.session_id && s.workspace_id() == request.workspace_id && s.kind() == "claude")
+                .cloned()
+                .ok_or_else(|| RunError::Invalid(strings::get("run.error.sessionNotInWorkspace")))?;
+            if workspace.remote.is_some() || request.kind != "claude" || request.provider != "claude" || pane.parent_session_id.is_some() {
+                return Err(RunError::Invalid("only a local Claude agent pane takes back a kept run".into()));
+            }
+            if pane.working_folder.as_deref().is_some_and(|f| !Path::new(f).is_dir()) {
+                return Err(RunError::State(strings::get("run.blocked.worktreeMissing")));
+            }
+            if state.routes.contains_key(&request.session_id) {
+                return Err(RunError::State(strings::get("run.error.alreadyRunning")));
+            }
+            request.phase_models = phase_models::normalized(state.snapshot.phase_models.as_ref());
+            request.working_folder = pane.working_folder.clone();
+            request.pane_environment =
+                pane.pane_worktree.as_ref().map(|worktree| worktree.environment(workspace.path()).into_iter().collect());
+            let holder = antigravity::next_holder();
+            state.routes.insert(request.session_id.clone(), Route { holder, started: true, cancelled: false });
+            let now = DateTimeOffset::now();
+            for session in state.snapshot.sessions_mut().iter_mut() {
+                if session.id() == request.session_id {
+                    let mut next = RunSession::clone(session);
+                    next.provider = Some(request.provider.clone());
+                    next.current_activity = None;
+                    next.run_timing = Some(timing::begin(Some(now)));
+                    *session = Arc::new(next);
+                }
+            }
+            state.snapshot = apply::apply(&state.snapshot, &RunEvent::state(&request.session_id, "running", None), now);
+        }
+        self.shared.send(ServiceEvent::SaveNow);
+        self.shared
+            .send(ServiceEvent::Run { event: Box::new(RunEvent::state(&request.session_id, "running", None)), notice_turn_ended: false });
+        let session_id = request.session_id.clone();
+        let admitted = {
+            let _state = lock(&self.shared.state);
+            self.manager.admit(request, false)
+        };
+        let started = match admitted {
+            Ok(admitted) => admitted.reached().await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = &started {
+            self.shared.receive(RunEvent::log(&session_id, "error", error.message(), None));
+            self.shared.receive(RunEvent::state(&session_id, "error", None));
+        }
+        started
+    }
+
     /// The rest of `Launch` for a remote pane: its last word is said only while the route is still its own (a stop already ended it, and
     /// a newer send's route is never ended here).
     async fn launch_remote(&self, request: StartRunRequest, workspace: Workspace, run_id: String, holder: u64) -> Result<Option<String>> {

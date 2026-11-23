@@ -51,11 +51,19 @@ pub fn control_socket_path(data_dir: &Path, temp_dir: &Path) -> PathBuf {
     Place::Control.path(data_dir, temp_dir)
 }
 
-/// Which socket a listener serves: the agents' MCP servers' or the control API's (MC-9). Both live the same way.
+/// MC-3: the background daemon's socket, `<data>/daemon/mighty.sock`, or `<temp>/mc-<uid>/<%08x>-daemon.sock` (the same hash) when
+/// that does not fit.
+pub fn daemon_socket_path(data_dir: &Path, temp_dir: &Path) -> PathBuf {
+    Place::Daemon.path(data_dir, temp_dir)
+}
+
+/// Which socket a listener serves: the agents' MCP servers', the control API's (MC-9) or the background daemon's (MC-3). All live
+/// the same way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Place {
     AgentIo,
     Control,
+    Daemon,
 }
 
 impl Place {
@@ -63,6 +71,7 @@ impl Place {
         let (folder, file, suffix) = match self {
             Place::AgentIo => ("agent-io", "io.sock", ""),
             Place::Control => ("control", "mighty.sock", "-control"),
+            Place::Daemon => ("daemon", "mighty.sock", "-daemon"),
         };
         let preferred = data_dir.join(folder).join(file);
         if fits(&preferred.to_string_lossy()) {
@@ -151,6 +160,12 @@ impl UnixSocketListener {
     /// As [`UnixSocketListener::control`], with the fallback under `temp_dir`.
     pub fn control_in_folders(data_dir: &Path, temp_dir: &Path) -> UnixSocketListener {
         UnixSocketListener::at(Place::Control, data_dir, temp_dir)
+    }
+
+    /// MC-3: the background daemon's listener for the profile whose data folder is `data_dir` ([`daemon_socket_path`]), private as
+    /// the agents' one is.
+    pub fn daemon(data_dir: &Path) -> UnixSocketListener {
+        UnixSocketListener::at(Place::Daemon, data_dir, &std::env::temp_dir())
     }
 
     /// Ends once [`AgentIoListener::close`] was called.
@@ -363,6 +378,37 @@ pub fn control_connector() -> Arc<dyn AgentIoConnector> {
     Arc::new(UnixSocketConnector)
 }
 
+/// MC-3: the background daemon's listener, `<data>/daemon/mighty.sock` (0600 in a 0700 folder).
+pub fn daemon_listener(data_dir: &Path) -> Arc<dyn AgentIoListener> {
+    Arc::new(UnixSocketListener::daemon(data_dir))
+}
+
+/// MC-3: the app's client of the daemon's socket (an absolute path that fits, served by this user).
+pub fn daemon_connector() -> Arc<dyn AgentIoConnector> {
+    Arc::new(UnixSocketConnector)
+}
+
+/// MC-3: the background daemon's single-instance lock: `path` opened (0600, never through a link) and locked exclusively without
+/// waiting (`flock`); the lock holds while the file stays open and goes with the process, a crash included. `WouldBlock` while another
+/// process holds it.
+pub fn lock_exclusive(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::fd::AsRawFd as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)?;
+    // SAFETY: an open descriptor this function owns.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(file)
+}
+
 #[cfg(test)]
 mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -523,6 +569,41 @@ mod tests {
         control.close();
         agents.close();
         assert!(!Path::new(&control_name).exists());
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// MC-3: the daemon's socket lives beside the control API's, as private, under its own name; one daemon per profile (a second
+    /// listener is refused while the first serves) and one lock holder.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_daemon_socket_and_lock_are_private_and_single() {
+        let folder = short_folder("daemon");
+        let temp = Path::new("/var/folders/xy/abcdefgh/T/");
+        assert_eq!(daemon_socket_path(&folder, temp), folder.join("daemon").join("mighty.sock"));
+        let long = folder.join("p".repeat(120));
+        let fallback = daemon_socket_path(&long, temp).to_string_lossy().into_owned();
+        assert!(fits(&fallback) && fallback.ends_with("-daemon.sock"), "{fallback}");
+        assert_ne!(PathBuf::from(&fallback), control_socket_path(&long, temp), "never the control API's socket");
+        let daemon = UnixSocketListener::daemon(&folder);
+        let name = daemon.bind().unwrap();
+        assert_eq!(mode(Path::new(&name)), 0o600, "the socket is the user's alone");
+        assert_eq!(mode(Path::new(&name).parent().unwrap()), 0o700, "so is its folder");
+        let (server, client) = tokio::join!(daemon.accept(), UnixSocketConnector.connect(&name, Duration::from_secs(5)));
+        assert!(server.is_ok() && client.is_ok());
+        let second = UnixSocketListener::daemon(&folder);
+        assert!(matches!(second.bind(), Err(PlatformError::Refused(_))), "a second daemon of the profile does not serve");
+        // The lock: one holder; a second open is refused until the first goes; never through a link.
+        let lock_path = folder.join("daemon").join("daemon.lock");
+        let held = lock_exclusive(&lock_path).unwrap();
+        assert_eq!(mode(&lock_path), 0o600);
+        assert_eq!(lock_exclusive(&lock_path).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        drop(held);
+        let again = lock_exclusive(&lock_path).unwrap();
+        drop(again);
+        let link = folder.join("daemon").join("linked.lock");
+        std::os::unix::fs::symlink(&lock_path, &link).unwrap();
+        assert!(lock_exclusive(&link).is_err(), "a link is not followed");
+        daemon.close();
+        assert!(!Path::new(&name).exists());
         let _ = std::fs::remove_dir_all(&folder);
     }
 

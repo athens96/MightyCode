@@ -83,6 +83,10 @@ pub struct StartRunRequest {
     /// never resumes. Set when the run is accepted for a forked pane's first run ([`crate::providers::cli_fork`]); never saved,
     /// never read from a remote's JSON.
     pub fork_session: bool,
+    /// MC-3: the pane takes back a run an earlier app kept running in the background daemon ([`crate::service::RunService::adopt`]):
+    /// the child is the daemon's (attached, not started), its output read from where that app stopped reading, and nothing is written
+    /// to it before the person answers (no prompt, no handshake's prompt). Never saved, never read from a remote's JSON.
+    pub adopted: bool,
 }
 
 /// Wraps non-empty shared memory markdown in `<shared-memory>...</shared-memory>` for agent prompt/instruction injection.
@@ -125,6 +129,7 @@ impl StartRunRequest {
             receipt: None,
             memory_context: None,
             fork_session: false,
+            adopted: false,
         }
     }
 

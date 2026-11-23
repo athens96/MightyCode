@@ -62,7 +62,8 @@ serde_json.workspace = true
 chrono.workspace = true
 sys-locale.workspace = true
 tauri.workspace = true
-tokio = { workspace = true, features = ["sync", "io-util", "time", "macros", "net"] }
+# `signal`: the background daemon (MC-3) ends its children when the OS asks it to end.
+tokio = { workspace = true, features = ["sync", "io-util", "time", "macros", "net", "signal"] }
 
 # The OS's implementation of the ports: chosen here and in src/platform.rs, nowhere else.
 [target.'cfg(windows)'.dependencies]

@@ -268,6 +268,8 @@ jobs:
             'crates/mighty-platform-windows/src/process.rs', 'crates/mighty-platform/tests/ports.rs',
             # Mac stage M-A: the Mac implementation and its contract test of both detached starts.
             'crates/mighty-platform-macos/src/process.rs', 'crates/mighty-platform-macos/tests/detached.rs')
+          # MC-3: the app's process host wrapped for the background daemon passes every detached start through to the platform's.
+          $routed = @('crates/mighty-run/src/daemon/owner.rs')
           $rules = @(
             @{ what = 'ProcessHost::start_detached / start_detached_or_in_job called'; pattern = '\bstart_detached(_or_in_job)?\s*\('; skip = '\bfn\s+start_detached'
                allowed = @(
@@ -278,11 +280,13 @@ jobs:
                  'crates/mighty-platform-macos/src/update.rs',
                  # 편집기에서 열기: the user's external editor, which must outlive the app and never sit in its children's job (a program
                  # and its arguments as they are, a .exe only on Windows; mighty-tools' editor.rs builds them).
-                 'src-tauri/src/editor.rs') + $port },
+                 'src-tauri/src/editor.rs',
+                 # MC-3: the background daemon (the app's own exe as `--daemon`), which must outlive the app to keep its work running.
+                 'src-tauri/src/daemon/mod.rs') + $port + $routed },
             @{ what = 'ProcessHost::start_detached_waitable called'; pattern = '\bstart_detached_waitable\s*\('; skip = '\bfn\s+start_detached_waitable'
                allowed = @(
                  # The Ouroboros dashboard daemon, which C# leaves running (W9-E), and the Windows implementation's own contract test.
-                 'src-tauri/src/ouroboros.rs', 'crates/mighty-platform-windows/tests/detached_waitable.rs') + $port },
+                 'src-tauri/src/ouroboros.rs', 'crates/mighty-platform-windows/tests/detached_waitable.rs') + $port + $routed },
             # Any other detached start the port grows is named in this guard, with its callers, before anything calls it.
             @{ what = 'another ProcessHost::start_detached_* called'; pattern = '\bstart_detached_(?!or_in_job\b|waitable\b)\w+\s*\('; skip = '\bfn\s+start_detached_'
                allowed = $port },

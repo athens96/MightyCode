@@ -12,6 +12,7 @@
 pub mod about;
 pub mod app_update;
 pub mod automation;
+pub mod background;
 pub mod companion;
 pub mod general;
 pub mod mobile;
@@ -60,6 +61,7 @@ pub fn groups(locale: &Locale, category: &str) -> Vec<Group> {
             slot(sections::DISPLAY, general::display),
             titled("settings.text.sectionTitle", general::text),
             titled("settings.agents.sectionTitle", general::agents),
+            titled("daemon.settings.sectionTitle", background::background),
         ],
         "models" => vec![slot(sections::PHASE_MODELS, models::phase_models)],
         "styles" => vec![slot(sections::STYLES, styles::styles)],
@@ -297,7 +299,12 @@ mod tests {
         }
         assert_eq!(
             titles("general"),
-            vec!["화면".to_string(), locale.get("settings.text.sectionTitle"), locale.get("settings.agents.sectionTitle")]
+            vec![
+                "화면".to_string(),
+                locale.get("settings.text.sectionTitle"),
+                locale.get("settings.agents.sectionTitle"),
+                locale.get("daemon.settings.sectionTitle")
+            ]
         );
         assert_eq!(titles("tools"), vec![locale.get("settings.components.sectionTitle"), locale.get("settings.toolkit.sectionTitle")]);
         assert!(groups(&locale, "cli").is_empty(), "the CLI tab's accounts and updates are 구성 요소' rows");

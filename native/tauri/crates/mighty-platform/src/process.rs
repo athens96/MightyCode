@@ -191,6 +191,14 @@ pub trait DetachedChild: Send + Sync {
 pub trait ProcessHost: Send + Sync {
     fn spawn(&self, request: SpawnRequest) -> BoxFuture<'_, Result<Child>>;
 
+    /// MC-3: an agent run's child, `key` naming what it belongs to (its pane). Where the person keeps work running after the app
+    /// closes, the app's process host hands this one to the background daemon, which owns the child and keeps its output; every other
+    /// host, and the app's while that setting is off, starts it as [`ProcessHost::spawn`] does.
+    fn spawn_keyed(&self, request: SpawnRequest, key: &str) -> BoxFuture<'_, Result<Child>> {
+        let _ = key;
+        self.spawn(request)
+    }
+
     /// W9 (plan D6, owner W9-B): starts `request` so it outlives this process and answers its process id once it runs. Unlike
     /// [`ProcessHost::spawn`]: no job object (Windows: `CREATE_BREAKAWAY_FROM_JOB`, failing loudly rather than starting inside the
     /// job when breakaway is not allowed), no pipes and no inherited handle, the environment exactly as given (no `NO_COLOR`), the

@@ -38,6 +38,7 @@ pub mod checkpoints;
 pub mod claude_tasks;
 pub mod codex_approval;
 pub mod compaction;
+pub mod daemon;
 pub mod failure;
 pub mod flow_steps;
 pub mod fork;

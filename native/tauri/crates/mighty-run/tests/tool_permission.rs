@@ -150,6 +150,54 @@ fn handshake_failure_and_timeout_fail_closed() {
     assert!(!timed.writes().contains(&"never".to_string()), "a closed channel never sends the prompt");
 }
 
+/// MC-3: a run a later app takes back from the background daemon. Its prompt went long ago: the handshake asks for the requests still
+/// waiting and writes nothing else, a repeat of one the CLI also printed shows once, and a CLI that refuses or ignores a second
+/// handshake does not stop the run.
+#[test]
+fn a_taken_back_run_writes_no_prompt_and_gets_its_waiting_requests_back() {
+    let mut channel = Channel::new(PROMPT);
+    channel.value = channel.value.adopted();
+    channel.value.start().unwrap();
+    assert_eq!(channel.writes().len(), 1, "the handshake only");
+    let id = channel.value.initialization_id.clone();
+    let waiting = ask_read("ask-9");
+    channel
+        .value
+        .receive(&format!(
+            "{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"success\",\"request_id\":\"{id}\",\"response\":{{}},\"pending_permission_requests\":[{waiting}]}}}}"
+        ))
+        .unwrap();
+    assert!(channel.value.initialized());
+    assert_eq!(channel.writes().len(), 1, "no prompt is written for a run taken back");
+    assert_eq!(channel.displays().len(), 1, "the waiting request's card comes back");
+    assert_eq!(channel.displays()[0].state, "pending");
+    channel.value.receive(&waiting).unwrap();
+    assert_eq!(channel.displays().len(), 1, "the same request printed again shows once");
+    channel.value.respond("ask-9", true).unwrap();
+    assert_eq!(subtype(&channel.last()), "success", "and it is answered as any other");
+
+    let mut refused = Channel::new(PROMPT);
+    refused.value = refused.value.adopted();
+    refused.value.start().unwrap();
+    let id = refused.value.initialization_id.clone();
+    refused
+        .value
+        .receive(&format!(
+            "{{\"type\":\"control_response\",\"response\":{{\"subtype\":\"error\",\"request_id\":\"{id}\",\"error\":\"already initialized\"}}}}"
+        ))
+        .unwrap();
+    assert!(!refused.value.failed() && refused.failures().is_empty(), "a refused second handshake does not stop the run");
+    refused.value.receive(&ask_read("ask-10")).unwrap();
+    assert_eq!(refused.displays().len(), 1, "requests the CLI prints still show");
+
+    let mut silent = Channel::new(PROMPT);
+    silent.value = silent.value.adopted();
+    silent.value.start().unwrap();
+    silent.value.initialization_timed_out();
+    assert!(!silent.value.failed() && silent.value.initialized(), "an unanswered second handshake does not stop the run");
+    assert!(!silent.writes().contains(&PROMPT.to_string()));
+}
+
 #[test]
 fn allow_once_returns_the_original_input() {
     let input = r#"{"query":"official documentation","allowed_domains":["example.com"],"nested":{"unchanged":true}}"#;

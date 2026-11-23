@@ -32,6 +32,16 @@ Mac では表示メニューの {{ui:menu.textBigger}}（{{kbd:⌘=}}）、{{ui:
 - その下にキーの案内があります。{{kbd:Enter}}で送信し、{{kbd:Shift+Enter}}で改行します。タブをドラッグしてほかのタブとまとめたり、端へ移して分割したりします。コマンド実行ペインは、Macではログインシェル、WindowsではPowerShell(ない場合はcmd)を開く対話型ターミナルです。
 - Issue トラッカー(MightyWork、GitHub、Linear、Jira、GitLab)の接続は設定ウィンドウではなく、ワークスペースごとにサイドバーのワークスペースメニューの {{ui:integrations.menu.settings}} で行います。[Issue から始める](delegation.md#issues)を参照してください。
 
+### バックグラウンド作業 {#background}
+同じタブの{{ui:daemon.settings.sectionTitle}}で{{ui:daemon.settings.toggle}}をオンにすると、アプリを終了したり自動更新で再起動したりしても、エージェントの実行とターミナルが止まりません。最初はオフです。
+- オンにすると、アプリは同じ実行ファイルをウィンドウのないバックグラウンドのデーモンとして起動します(`MightyCode --daemon`)。データフォルダーごとに 1 つだけ実行され、その後に始めた Claude の実行とターミナルペインのシェルはデーモンが受け持ちます。画面、履歴、承認カードはこれまでどおりアプリが描きます。
+- 実行中の作業があるときにアプリを終了すると、{{ui:daemon.quit.keep}}と{{ui:daemon.quit.stopAll}}から選びます。自動更新での再起動では常に続けます。
+- アプリを再び開くと続きから始まります。Claude ペインはアプリを閉じていた間の出力から続けて表示し、その間に承認・質問待ちになったカードも再び表示します。ターミナルペインは開いたときにシェルと画面の履歴(直近 2MB)が戻ります。デーモンは実行ごとに出力の直近 8MB を保持します。
+- 状態の行には、デーモンの PID、実行中の作業の数、保持中の出力のサイズが表示されます。{{ui:daemon.settings.stop}}ボタンはデーモンと中の作業をすべて終了します。実行中の作業も接続中のアプリもなければ、デーモンは 10 分後に自動で終了します。
+
+> [!note]
+> 続くのは Claude エージェントの実行とターミナルペインです。ほかのエージェント(Codex、Gemini など)の実行はデーモンで動いていても、アプリを閉じると止まります。続きから再接続した Claude の実行は、そのターンが終わるまで Mighty との連携(委任ツール、アクティビティ表示)を使えないことがあります。デーモンが異常終了すると中の作業も終わり、ペインは停止になります。更新でデーモンとアプリのバージョンが異なる場合、アプリは接続せず、以前のデーモンの作業を停止するか確認します。デーモンに接続できるのはこのコンピューターの同じユーザーだけです(Mac は権限 0600 のソケット、Windows は現在のユーザーだけが開ける名前付きパイプ、データフォルダーの `daemon/token` のトークン)。
+
 ## モデル {#models}
 {{ui:settings.nav.models}}タブの{{ui:settings.phaseModels.sectionTitle}}で、作業の段階ごとに使うモデルをこのコンピュータ全体で設定します。段階は{{ui:settings.phaseModels.phase.planning}}、{{ui:settings.phaseModels.phase.execution}}、{{ui:settings.phaseModels.phase.review}}、{{ui:settings.phaseModels.phase.subagents}}です。
 - {{ui:settings.phaseModels.defaultOption}}のままにすると、CLIが決めます。

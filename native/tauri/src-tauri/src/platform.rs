@@ -104,6 +104,39 @@ pub fn control_connector() -> Arc<dyn mighty_platform::AgentIoConnector> {
     os::control_connector()
 }
 
+/// MC-3: the background daemon's listener: the Mac's Unix socket `<data>/daemon/mighty.sock` (0600 in a 0700 folder), Windows' owner-
+/// only named pipe `mighty-daemon-<32 hex>` that refuses remote clients.
+pub fn daemon_listener(data_dir: &std::path::Path) -> Arc<dyn mighty_platform::AgentIoListener> {
+    #[cfg(windows)]
+    {
+        let _ = data_dir;
+        os::daemon_listener()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        os::daemon_listener(data_dir)
+    }
+}
+
+/// MC-3: the app's client of the daemon's listener.
+pub fn daemon_connector() -> Arc<dyn mighty_platform::AgentIoConnector> {
+    os::daemon_connector()
+}
+
+/// MC-3: the daemon's single-instance lock (`flock` on the Mac, a file opened without sharing on Windows): held while the file stays
+/// open, gone with the process.
+pub fn daemon_lock(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    os::lock_exclusive(path)
+}
+
+/// MC-3: the process and PTY hosts the daemon owns its children through (the app's own, unwrapped).
+pub fn daemon_ports() -> (Arc<dyn mighty_platform::ProcessHost>, Arc<dyn mighty_platform::PtyHost>) {
+    #[cfg(windows)]
+    return (Arc::new(os::WindowsProcessHost::new()), Arc::new(os::WindowsPtyHost::new()));
+    #[cfg(target_os = "macos")]
+    return (os::process_host(), os::pty::pty_host());
+}
+
 /// The app's identifier (tauri.conf.json's), for code that runs without Tauri's context (the `mighty` CLI).
 pub const IDENTIFIER: &str = "dev.mightycode.native";
 
@@ -129,6 +162,27 @@ pub fn record_child_groups(local_dir: &std::path::Path) {
     if let Err(error) = os::record_child_groups(&local_dir.join("child-groups")) {
         eprintln!("child groups: {error}");
     }
+}
+
+/// MC-3: the background daemon's own process at its start: on the Mac, ends what an earlier daemon of the profile left running when it
+/// crashed and writes this daemon's children's process groups down in `folder` (the profile's `daemon/child-groups`) until it exits.
+/// Windows needs none: the daemon's job objects end its children when its handles close, a crash included.
+pub fn record_daemon_groups(folder: &std::path::Path) {
+    #[cfg(windows)]
+    let _ = folder;
+    #[cfg(target_os = "macos")]
+    if let Err(error) = os::record_child_groups(folder) {
+        eprintln!("daemon child groups: {error}");
+    }
+}
+
+/// MC-3: at the app's start, what a crashed daemon of the profile left running is ended (the Mac; the groups it wrote down in `folder`);
+/// a running daemon's are left alone.
+pub fn reap_daemon_groups(folder: &std::path::Path) {
+    #[cfg(windows)]
+    let _ = folder;
+    #[cfg(target_os = "macos")]
+    os::reap_child_groups(folder);
 }
 
 /// Whether names on the volume holding `path` compare ignoring case (a run's result files are looked up and listed once by it): the

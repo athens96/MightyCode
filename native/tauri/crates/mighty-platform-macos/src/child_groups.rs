@@ -161,6 +161,15 @@ pub fn record_child_groups(folder: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// MC-3: what a background daemon that crashed left running, ended from another process (the app at its start): the record files in
+/// `folder` of daemons no longer running are read and their groups ended as [`record_child_groups`] ends an app's; a running daemon's
+/// file stays. Nothing is recorded for the caller.
+pub fn reap_child_groups(folder: &Path) {
+    // SAFETY: getpid has no preconditions.
+    let me = unsafe { libc::getpid() };
+    reap_leftovers(folder, &System, me);
+}
+
 /// `process`'s start: the group `group` its new child leads, written down while the app records.
 pub(crate) fn started_group(group: libc::pid_t) {
     let mut record = lock(&RECORD);

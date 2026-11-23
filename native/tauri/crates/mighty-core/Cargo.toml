@@ -15,3 +15,5 @@ chrono.workspace = true
 dirs.workspace = true
 unicode-segmentation.workspace = true
 indexmap.workspace = true
+# MC-3: the daemon protocol carries process output as base64.
+base64 = "0.22"

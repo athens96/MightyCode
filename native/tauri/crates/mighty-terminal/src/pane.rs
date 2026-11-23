@@ -615,7 +615,9 @@ impl TerminalPane {
             env: self.ports.environment.current().values,
             size,
         };
-        let session = self.ports.ptys.open(request).await.map_err(|error| error.to_string())?;
+        // Keyed by the pane (MC-3): where work keeps running after the app closes, the background daemon owns the shell and gives a
+        // pane that opens again the shell it left.
+        let session = self.ports.ptys.open_keyed(request, &self.options.id).await.map_err(|error| error.to_string())?;
         let control = session.control.clone();
         let (drained_sender, drained) = watch::channel(false);
         let look = self.look();

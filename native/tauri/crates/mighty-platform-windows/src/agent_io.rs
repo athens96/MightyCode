@@ -40,6 +40,9 @@ const PREFIX: &str = "mighty-agent-io-";
 /// MC-9: the local control API's pipe, `mighty-control-` + 32 hex digits (a new name each run, written to the profile's
 /// `control/endpoint.json` for the `mighty` CLI).
 pub const CONTROL_PREFIX: &str = "mighty-control-";
+/// MC-3: the background daemon's pipe, `mighty-daemon-` + 32 hex digits (a new name each daemon, written to the profile's
+/// `daemon/endpoint.json` for the app).
+pub const DAEMON_PREFIX: &str = "mighty-daemon-";
 /// How often a busy or missing pipe is tried again while connecting.
 const RETRY: Duration = Duration::from_millis(50);
 
@@ -221,6 +224,11 @@ impl NamedPipeListener {
         NamedPipeListener { prefix: CONTROL_PREFIX, ..NamedPipeListener::default() }
     }
 
+    /// MC-3: the background daemon's listener: the same owner-only pipe, remote clients refused, under [`DAEMON_PREFIX`].
+    pub fn daemon() -> NamedPipeListener {
+        NamedPipeListener { prefix: DAEMON_PREFIX, ..NamedPipeListener::default() }
+    }
+
     /// Ends once [`AgentIoListener::close`] was called.
     async fn closed(&self) {
         loop {
@@ -336,6 +344,32 @@ impl AgentIoConnector for ControlPipeConnector {
     }
 }
 
+/// MC-3: the app's client of the background daemon's pipe: only a [`DAEMON_PREFIX`] name, the owner checked as for Agent IO.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DaemonPipeConnector;
+
+impl AgentIoConnector for DaemonPipeConnector {
+    fn connect(&self, name: &str, timeout: Duration) -> BoxFuture<'_, Result<AgentIoConnection>> {
+        Box::pin(connect_with(DAEMON_PREFIX, name.to_string(), timeout))
+    }
+}
+
+/// MC-3: the background daemon's single-instance lock: `path` opened with no sharing at all, so a second open (another daemon of
+/// the profile) fails with a sharing violation while this handle is open; the OS closes it with the process, a crash included.
+pub fn lock_exclusive(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    // FILE_FLAG_OPEN_REPARSE_POINT: a link is opened as itself, never followed.
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .share_mode(0)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
 /// Opens the pipe `name` (which must be `prefix` and 32 hex digits) within `timeout` and checks that this user owns it.
 async fn connect_with(prefix: &'static str, name: String, timeout: Duration) -> Result<AgentIoConnection> {
     if !is_pipe_name_with(prefix, &name) {
@@ -424,6 +458,26 @@ mod tests {
         let all_held = NamedPipeListener::new();
         let _taken = ServerOptions::new().create(path(&free)).unwrap();
         assert!(all_held.bind_with(|| Ok(free.clone())).is_err() && all_held.accept().await.is_err(), "no free name, no listener");
+    }
+
+    /// MC-3: the daemon's pipe is the same owner-only pipe under its own prefix; its lock has one holder at a time.
+    #[tokio::test]
+    async fn the_daemon_pipe_and_lock_are_the_current_users_alone() {
+        let listener = NamedPipeListener::daemon();
+        let name = listener.bind().unwrap();
+        assert!(is_pipe_name_with(DAEMON_PREFIX, &name) && !is_pipe_name_with(CONTROL_PREFIX, &name), "{name}");
+        let (server, client) = tokio::join!(listener.accept(), DaemonPipeConnector.connect(&name, Duration::from_secs(5)));
+        assert!(server.is_ok() && client.is_ok());
+        assert!(matches!(ControlPipeConnector.connect(&name, Duration::from_secs(1)).await, Err(PlatformError::Invalid(_))));
+        listener.close();
+        let folder = std::env::temp_dir().join(format!("mc-daemon-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("daemon.lock");
+        let held = lock_exclusive(&path).unwrap();
+        assert!(lock_exclusive(&path).is_err(), "a second holder is refused");
+        drop(held);
+        assert!(lock_exclusive(&path).is_ok());
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     /// MC-9: the control API's pipe is the same owner-only pipe under its own prefix; each connector takes only its own names.
