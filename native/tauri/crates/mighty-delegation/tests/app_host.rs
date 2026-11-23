@@ -194,6 +194,7 @@ async fn child_panes_the_run_ledger_and_the_panes_snapshot_keys() {
                 tokio::time::sleep(Duration::from_millis(5)).await;
                 handled.lock().unwrap().push(match change {
                     DelegationRunEvent::Started { run_id, .. } => format!("start {run_id}"),
+                    DelegationRunEvent::Adopted { run_id, .. } => format!("adopted {run_id}"),
                     DelegationRunEvent::Ended { run_id, end, .. } => format!("end {run_id} {end:?}"),
                 });
                 inside.fetch_sub(1, Ordering::SeqCst);

@@ -326,6 +326,12 @@ mod imp {
         Arc::new(NamedPipeListener::new())
     }
 
+    /// MC-38: the agents' listener on an earlier app's pipe name, for the runs it kept running in the background daemon; None for a
+    /// name that is not an agents' pipe.
+    pub fn agent_io_listener_named(name: &str) -> Option<Arc<dyn mighty_platform::AgentIoListener>> {
+        NamedPipeListener::agent_io_named(name).map(|listener| Arc::new(listener) as Arc<dyn mighty_platform::AgentIoListener>)
+    }
+
     /// The Agent IO client of the exe's MCP modes (`--agent-io-mcp`, `--agent-delegation-mcp`, W7-C): the named pipe.
     pub fn agent_io_connector() -> Arc<dyn mighty_platform::AgentIoConnector> {
         Arc::new(NamedPipeConnector)

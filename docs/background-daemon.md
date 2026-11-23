@@ -30,9 +30,9 @@ MC-9 제어 API와 같은 방식이다(`mighty_core::daemon::protocol`, 응답·
 ## 앱 종료와 다시 시작
 
 - 설정이 켜져 있고 데몬이 무언가 실행 중일 때 ⌘Q(`ExitRequested`)는 종료를 멈추고 묻는다: "실행 중인 작업 n개를 계속 둘까요?" — **계속 두고 종료**, **모두 멈추고 종료**, **취소**. 창이 이미 없으면(Windows에서 마지막 창을 닫음) 설정의 뜻대로 계속 둔다. 자동 업데이트의 재시작(`app_update`의 `launch_helper`)은 늘 계속 둔다(`keep_for_update`).
-- **계속 두기**: 터미널을 닫고 실행을 정리하기 전에 `Route::detach`가 먼저 돈다. 다시 붙을 수 있는 실행(`run:` 키 = 승인 채널을 쓰는 Claude 실행)은 읽던 쪽이 받은 것을 다 읽기를 기다린 뒤 "다음 앱이 이어 받을 위치"(`resumeAt`, 앱이 읽은 stdout의 마지막 온전한 줄 바로 뒤)를 데몬의 meta에 남기고 놓는다. 다시 붙을 수 없는 실행(`run-stop:` 키, 다른 에이전트와 셸 명령)은 끝낸다. 터미널은 놓는다. 그 뒤 엔진의 정리는 kill/close 대신 "놓기"가 되어, 읽기가 끝나고 대기는 바로 답한다(종료 코드 −2). 놓은 뒤에는 stdin에 쓰기와 닫기도 데몬에 보내지 않는다(엔진의 정리가 입력을 닫아 계속 둔 실행을 끝내지 않도록). 창은 앱이 닫힐 때 "멈춤"으로 저장된다.
+- **계속 두기**: 터미널을 닫고 실행을 정리하기 전에 `Route::detach`가 먼저 돈다. 다시 붙을 수 있는 실행(`run:` 키 = 모든 에이전트의 실행, 위임된 자식 창 포함, MC-38)은 읽던 쪽이 받은 것을 다 읽고, 실행 엔진이 그 줄들을 끝까지 처리한 뒤 "다음 앱이 이어 받을 상태"(`keptState`, 아래 "모든 에이전트 이어 받기")를 남기기를 기다려(각 2초까지), "다음 앱이 이어 받을 위치"(`resumeAt`, 앱이 읽은 stdout의 마지막 온전한 줄 바로 뒤)와 함께 데몬의 meta에 남기고 놓는다. meta를 남기지 못한 실행은 끝낸다(다음 앱이 안전하게 이어 받을 수 없다). 다시 붙을 수 없는 실행(`run-stop:` 키, 셸 명령과 샌드박스 실행)은 끝낸다. 터미널은 놓는다. 그 뒤 엔진의 정리는 kill/close 대신 "놓기"가 되어, 읽기가 끝나고 대기는 바로 답한다(종료 코드 −2). 엔진은 놓은 실행을 실패로 읽지 않고 멈춤으로 끝낸다(채널의 "일찍 끝남" 오류도 종료 코드도 적지 않는다). 실행 서비스는 놓기 전에 "놓는 중"이 되어(`RunService::letting_go`), 그때 끝나는 실행은 앱 종료의 것이다: 위임은 자식의 실행을 사람이 멈춘 것이 아니라 "앱 종료로 끊김"으로 기록한다. stdout은 온전한 줄만 엔진에 넘어간다(마지막 줄바꿈 뒤는 다음 줄바꿈이나 종료까지 기다린다): 놓을 때 앱이 읽은 것이 정확히 `resumeAt`까지다. 놓는 동안 엔진이 마지막 줄들에 답해 쓴 것(프로토콜의 일부)은 그대로 가고, 엔진이 상태를 남긴 뒤에는 입력 파이프가 쓰기를 버리며, 놓기가 끝나면 데몬에도 쓰기를 보내지 않는다. stdin 닫기는 놓는 동안 언제나 보내지 않는다(엔진의 정리가 입력을 닫아 계속 둔 실행을 끝내지 않도록). 창은 앱이 닫힐 때 "멈춤"으로 저장된다.
 - **모두 멈추기**: 이전처럼 실행과 터미널을 끝내고, 마지막에 데몬에 `shutdown`을 보내 바로 끝낸다.
-- **다시 시작**: 앱이 데몬에 붙으면 `list`로 이전 앱이 남긴 것을 받는다(`take_back`). 셸 창의 터미널은 그 창에 "제안"해 두었다가, 창이 셸을 열 때(`open_keyed`) 새로 띄우지 않고 offset 0부터 붙여 화면 기록을 다시 그리고 창 크기로 맞춘다. Claude 창의 실행은 `RunService::adopt`가 창을 다시 실행 중으로 만들고(사용자 기록·제목은 건드리지 않는다), 실행 엔진의 `spawn_keyed`가 그 키의 실행을 `resumeAt`부터 붙인다(아무것도 새로 띄우지 않는다). 승인 채널은 "다시 붙은" 모드로 만들어져 `initialize`만 보내고 프롬프트는 쓰지 않는다. Claude의 `initialize` 답의 `pending_permission_requests`와 이어 받은 출력의 `control_request`로 기다리던 승인·질문 카드가 다시 나온다(같은 요청 id는 한 번만). 창이 없어졌거나 받을 수 없는 프로세스는 끝내고 버린다.
+- **다시 시작**: 앱이 데몬에 붙으면 `list`로 이전 앱이 남긴 것을 받는다(`take_back`). 셸 창의 터미널은 그 창에 "제안"해 두었다가, 창이 셸을 열 때(`open_keyed`) 새로 띄우지 않고 offset 0부터 붙여 화면 기록을 다시 그리고 창 크기로 맞춘다. 에이전트 창의 실행은 `RunService::adopt`가 창을 다시 실행 중으로 만들고(사용자 기록·제목은 건드리지 않는다; 창의 에이전트가 남긴 상태의 `provider`와 다르면 받지 않는다), 남긴 상태를 요청(`StartRunRequest::kept`)에 실어 실행 엔진에 넘기며, 실행 엔진이 그 키의 실행을 `resumeAt`부터 붙인다(`ProcessHost::attach_keyed`; 아무것도 새로 띄우지 않으며, 데몬이 그 실행을 더는 가지지 않으면 `run.error.keptRunGone`으로 끝난다). 아래는 Claude의 경우이고, 다른 에이전트는 "모든 에이전트 이어 받기"를 본다. 승인 채널은 "다시 붙은" 모드로 만들어져 `initialize`만 보내고 프롬프트는 쓰지 않는다. Claude의 `initialize` 답의 `pending_permission_requests`와 이어 받은 출력의 `control_request`로 기다리던 승인·질문 카드가 다시 나온다(같은 요청 id는 한 번만). 창이 없어졌거나 받을 수 없는 프로세스는 끝내고 버린다.
 - 데몬은 실행 중인 프로세스도 붙은 앱도 없이 10분이 지나면 스스로 끝난다(`IdleClock`; `--headless`는 끝나지 않는다). 끝난 프로세스의 출력은 앱이 끝까지 읽고 `release`하거나 데몬이 끝날 때까지 보관한다.
 
 ## 실패와 안전
@@ -46,10 +46,28 @@ MC-9 제어 API와 같은 방식이다(`mighty_core::daemon::protocol`, 응답·
 | 너무 큰 줄·요청 | 1MiB를 넘는 줄은 `too_large`로 답하고 연결을 끊는다. |
 | 끊긴 엔드포인트 파일 | 600ms 안에 답이 없으면 없는 것으로 보고 새로 띄운다. |
 
+## 모든 에이전트 이어 받기 (MC-38)
+
+> 구현: `mighty-run`의 `daemon/owner.rs`(온전한 줄, `keptState`, 놓기 순서), `manager.rs`(`Exec::kept_state`, 다시 붙은 실행의 시작), 각 채널의 `kept`/`restore`(`codex_approval.rs`, `acp.rs`, `pi_dialogs.rs`, `parser/pi.rs`), `mods.rs`(`ModBridge::adopt`), `model.rs`(`KeptState`); `mighty-delegation`의 `agent_io/binding.rs`·`server.rs`(`AgentIoBindings::adopt`, `AgentIo::adopt`, 이전 앱의 파이프 이름), `reports.rs`(`ChildRecord::carrying_on`, `child_run_adopted`); 앱의 `daemon/mod.rs`(`take_back`), `agent_io.rs`·`platform.rs`(Windows의 이전 파이프). `mighty-platform`의 `ChildControl::let_go`/`leave`.
+
+실행 엔진은 데몬에 둔 실행을 읽다가 앱이 놓으면(`ChildControl::let_go`), `resumeAt`까지의 줄을 다 처리한 뒤 다음 앱이 필요한 것을 JSON 하나로 남긴다(`ChildControl::leave` → meta의 `keptState`, 64KiB 안; 대기 중인 요청은 48KiB까지). 다시 쓰기 어려운 내부 구조 대신 **에이전트가 보낸 요청 그대로**를 남기고, 다음 앱의 채널이 그 요청을 평소처럼 다시 받아 카드를 다시 만든다(카드 id는 새로 정해진다). 한도에 들지 않는 대기 요청은 놓는 앱이 그 자리에서 거부·취소로 답하고 창에 `run.notice.keptRequestDeclined`를 남긴다: 어떤 앱도 보일 수 없는 카드를 에이전트가 기다리지 않게 하려는 것이다. `keptState`에는 실행의 토큰이 들어 있어 저장하지 않고 보이지 않는다(`KeptState`의 `Debug`는 내용을 숨긴다; 데몬 로그는 meta를 적지 않는다). 데몬 meta는 같은 사용자의 0600 소켓·토큰으로만 읽힌다.
+
+| 에이전트 | 이전 앱이 남기는 것 | 다음 앱이 하는 일 |
+|---|---|---|
+| Claude (승인 채널) | 턴 감시(`turnResultSeen`, CLI 상태), 모드 브리지 등록, 바인딩 | 이전과 같다: `initialize`만 보내고 `pending_permission_requests`와 이어 받은 `control_request`로 카드를 다시 낸다. |
+| Codex app-server (`onRequest`) | thread·turn id, 답을 기다리는 호출(`rpc`)과 번호, 대기 중인 승인 요청 원문, 승인에 쓸 파일 변경, 사용량, 바인딩 | `initialize`·`thread/*`·`turn/start`를 다시 보내지 않는다. 요청 원문을 다시 받아 카드를 내고, 답은 같은 JSON-RPC id로 간다. 시작 시간 초과(15초)는 아직 준비되지 않은 턴에만 적용된다. |
+| Codex `exec --json` | 바인딩 | 프롬프트를 다시 쓰지 않고(이전 앱이 쓰고 닫았다) 이어 받은 출력만 읽는다. 이 모드에는 카드가 없다. |
+| ACP (opencode, Hermes) | 세션 id, 답을 기다리는 호출과 번호, 남은 설정·설정 목록(한도 안), `session/cancel` 원문, 열린 도구 호출, 대기 중인 권한·질문(`session/request_permission`, `elicitation/create`) 원문 | `initialize`·세션·설정·프롬프트를 다시 보내지 않는다. Hermes의 세션 읽기와 clarify 설정(`hermes config`)도 하지 않는다. 요청 원문으로 카드를 다시 낸다. 중지는 남긴 `session/cancel`을 쓴다. |
+| pi | 턴 상태(`agent_start`~`agent_end`, 압축·재시도, 진행 중인 `ask_user` 호출), 대기 중인 대화 상자 원문, 입력을 이미 닫았는지 | `get_state`와 프롬프트를 다시 쓰지 않는다. 대화 상자를 카드로 다시 내고, 턴이 끝나고 조용해지면 입력을 닫는다(이미 닫혔으면 다시 쓰지 않는다). |
+| Antigravity (`agy -p`) | (없음) | 프롬프트를 다시 쓰지 않고 이어 받은 출력만 읽는다. 턴이 끝난 뒤의 권한 카드는 이어 받은 출력에서 거절된 작업만 담는다. |
+
+- **Mighty 연결**: 바인딩(`mighty-terminal`·위임·`mighty-workspace` MCP, Claude와 Codex)은 같은 토큰으로 새 앱에 다시 묶인다(`AgentIoBindings::adopt`: 같은 창·워크스페이스·에이전트, 64자리 소문자 16진수, 다른 창이 쥔 토큰이 아니어야 한다; 이전 바인딩처럼 다음 실행·창 닫기·앱 종료에 철회된다). 새 앱은 CLI 인자도 설정 파일도 새로 만들지 않는다(CLI와 MCP 서버가 이미 가지고 있다). 맥의 Agent IO 소켓은 데이터 폴더로 정해져 같고, Windows는 앱마다 새 파이프 이름을 쓰므로 새 앱이 이전 앱의 이름도 함께 듣는다(`NamedPipeListener::agent_io_named`, 첫 인스턴스만 — 다른 프로세스가 가진 이름은 거절되고 그 실행은 도구 없이 이어진다). Claude의 모드 브리지(활동·사용량·다이어그램)는 같은 id·토큰·URL로 다시 등록되고, 새 앱은 그 루프백 포트를 다시 연다(`ModBridge::adopt`; 이미 다른 포트로 시작했으면 그 옆에 하나 더; 포트를 열 수 없으면 그 실행은 브리지 없이 이어진다). 토큰은 데몬 meta로만 건네지고, 다른 토큰 검사는 그대로다.
+- **위임된 자식 창**: 계속 두고, 다음 앱이 `DelegationRunHooks::adopted`로 위임에 알린다. 코디네이터는 이를 같은 실행이 이어지는 것으로 기록한다(`child_run_adopted`): 시작할 때의 "앱 종료로 끊긴 실행" 정리가 먼저 와서 자식이 중단되었으면 다시 실행 중으로, 부모가 기다리던 실행이었으면 계속 기다린다; 이어 받기가 먼저 오면 그 정리가 이 자식을 건너뛴다. 끝나면 평소처럼 보고(REPORT.md)·자동 커밋·알림·worktree 흐름을 탄다. Codex·Antigravity 자식의 worktree 루트도 다시 정한다.
+- **한계**: 앱을 닫기 직전에 시작된 도구 줄이나 메시지는 다음 앱에서 끝부분만 보일 수 있다(출력 파서는 `resumeAt`부터 새로 읽는다). Antigravity가 앱을 닫기 전에 거절된 작업은 턴 뒤의 권한 카드에 나오지 않는다. 대기 요청의 카드 id는 새로 정해진다. 셸 명령 실행과 샌드박스 실행(프록시·게이트가 앱의 것)은 여전히 끝난다. 실제 각 CLI로는 확인하지 않았다(가짜 CLI로만 확인).
+
 ## 한계(0.6.0)
 
-- 다시 붙는 실행은 승인 채널을 쓰는 로컬 Claude 에이전트 창뿐이다(위임된 자식 창 제외). Codex·Antigravity·pi·opencode·Hermes와 셸 명령 실행도 데몬에서 돌지만 계속 두기로 앱을 닫으면 끝난다. 각 실행기의 채널(Codex 승인 app-server, ACP, pi 대화)이 "다시 붙은" 모드를 갖추면 넓힐 수 있다.
-- 다시 붙은 Claude 실행의 Mighty 연결은 그 턴 동안 옛 앱의 것을 가리킨다: 모드 브리지(활동·사용량·다이어그램)와 위임 MCP 바인딩 토큰이 새 앱과 맞지 않아 그 턴이 끝날 때까지 쓰지 못할 수 있다. 다음 요청부터는 새로 띄운 프로세스라 정상이다.
+- 다시 붙는 실행은 로컬 에이전트 창의 실행이다(MC-38부터 모든 에이전트, 위임된 자식 창 포함). 셸 명령 실행과 샌드박스 실행은 데몬에서 돌아도 계속 두기로 앱을 닫으면 끝난다.
 - 실제 Claude CLI가 실행 도중의 두 번째 `initialize`에 `pending_permission_requests`로 답하는지는 유료 실행으로 확인하지 않았다. 답하지 않거나 거부해도 다시 붙은 채널은 실패로 끝내지 않고, 이어 받은 출력의 `control_request`로 카드가 나온다.
 - 터미널은 창을 처음 열 때 돌려받는다. 앱을 다시 연 뒤 한 번도 보이지 않은 셸 창의 터미널은 그때까지 데몬에서 계속 돈다.
 - 데몬의 `--headless`는 데몬을 끝나지 않게 띄울 뿐이다(호스트·실행 엔진이 없어 MC-9 명령을 받지 않는다). 창 없이 앱 전체를 돌리는 것은 아래의 헤드리스 서버(`MightyCode --server`)다.
@@ -84,6 +102,7 @@ MC-9 제어 API와 같은 방식이다(`mighty_core::daemon::protocol`, 응답·
 - 헤드리스 서버: `cargo test -p mighty-core --lib control`(`server.status`·`server.stop`·`app.show` 왕복, `mighty server …` 인자), `cargo test -p mightycode --bin MightyCode -- server:: args:: control::`(`--server` 인자, 넘겨주기 결정, 멈출 때 데몬 작업의 선택, LaunchAgent plist 글자와 임시 폴더의 쓰기·지우기, Run 키 값과 가짜 레지스트리, 실제 소켓과 가짜 앱으로 `server start`(시간 초과·이미 실행 중)·`status`·`show`·`stop`(pid 끝 대기), 실행 중인 서버로의 넘겨주기). 실제 앱 실행 파일은 띄우지 않는다.
 - `cargo test -p mighty-run --test daemon`: 메모리 전송과 가짜 호스트로 서버·클라이언트·소유자 전환. 토큰·hello·다른 프로토콜 거부, 줄 한도, 실행 출력과 종료와 release, stdin·kill, 놓은 터미널이 다음 앱에 한 번만 다시 그려짐, 작은 링의 잃은 바이트, 데몬이 죽으면 자식이 끝남으로 읽히고 새 작업은 앱 안에서 돎, 데몬 없을 때 이전과 같음, 유휴 종료, shutdown, 계속 두기에서 다시 붙을 실행만 남기고 `resumeAt` 남기기.
 - `cargo test -p mighty-run --test daemon_adopt`: 실제 자식(가짜 CLI, 운영체제의 프로세스 호스트)을 메모리 데몬이 소유한 채로, 첫 앱의 Claude 실행이 답하지 않은 승인을 기다리는 동안 계속 두기로 놓고, 다음 앱이 `RunService::adopt`로 받아 승인 카드를 다시 받고 답하며, 프롬프트는 한 번만 갔고(첫 앱) 사용자 기록도 새로 붙지 않으며 창이 완료로 끝나는지 본다. 놓은 뒤 엔진의 정리가 stdin을 닫아 실행을 끝내지 않는 것도 여기서 확인한다.
+- `cargo test -p mighty-run --test daemon_adopt_agents`(MC-38): 같은 방식으로(첫 앱의 실행은 오류 없이 멈춤으로 끝난다) Codex 승인 app-server(카드가 돌아오고 답하며, 다음 앱은 핸드셰이크·thread·turn을 다시 쓰지 않고, 바인딩이 다음 앱의 팩토리에 넘어간다), 위임된 자식의 Codex `exec --json`(이전 앱이 멈춘 곳부터 읽고, 프롬프트는 한 번, 위임이 `adopted`와 끝을 듣는다), Antigravity 스트림, opencode의 승인과 질문(다음 앱은 `initialize`·세션·프롬프트를 다시 쓰지 않고 답은 한 번), pi의 `ask_user` 대화 상자(`get_state`·프롬프트 한 번, 턴 뒤 입력 닫기), 그리고 데몬이 더는 가지지 않은 실행은 새로 띄우지 않고 오류(`run.error.keptRunGone`)로 끝남. `cargo test -p mighty-run --test mod_bridge a_later_bridge`: 다음 앱의 브리지가 이전 등록을 같은 포트로 다시 받고 잘못된 등록은 거절. `cargo test -p mighty-delegation --test agent_io a_kept_runs_binding`: 같은 토큰으로 다시 묶고 이전 파이프 이름도 들으며, 다른 워크스페이스·에이전트·창의 토큰과 형식이 틀린 토큰은 거절, 철회는 그대로. `cargo test -p mighty-delegation --test coordinator a_childs_run`: 자식의 이어 받은 실행이 정리 순서와 상관없이 실행 중으로, 부모가 기다리던 것으로 남음.
 - `cargo test -p mighty-run --test tool_permission`: 다시 붙은 채널이 프롬프트를 쓰지 않고, `pending_permission_requests`의 카드를 한 번만 보이고, 두 번째 `initialize`를 거부하거나 답하지 않는 CLI에도 실패로 끝내지 않음.
 - `cargo test -p mighty-platform-macos --lib agent_io`: 소켓 경로·권한, 두 번째 리스너 거부, 잠금(한 명만, 링크 따라가지 않음). Windows는 같은 검사가 `mighty-platform-windows`에 있다.
 - `cargo test -p mightycode --test daemon`(맥): 빌드한 `MightyCode --daemon --profile <임시 폴더>`를 실제로 띄워, 파일 권한, 두 번째 데몬, 실제 소켓으로 `/bin/sh` 실행, 앱이 놓은 사이 나온 출력이 다음 앱에 정확히 한 번 이어짐, 다른 프로토콜 거부, shutdown 뒤 엔드포인트 정리, SIGKILL로 죽은 데몬의 자식을 다음 데몬이 끝냄을 본다. 사용자의 데이터 폴더는 쓰지 않는다.

@@ -193,6 +193,58 @@ async fn authenticated_pipe_rejects_revocation_over(listener: Arc<dyn AgentIoLis
     host.close().await;
 }
 
+/// MC-38: a run an earlier app kept running in the background daemon is bound again in the later app with the token its CLI's MCP
+/// servers already hold, on the transport name they were started with (served beside the later app's own when it differs, as a
+/// Windows pipe does), and its calls are taken and checked as every call is: revoked as any binding is. A kept binding of another
+/// workspace or agent, a token another pane holds, one that is not 64 hex digits, or a name the platform cannot listen on is refused.
+#[tokio::test]
+async fn a_kept_runs_binding_is_taken_back_with_its_token() {
+    let received = Arc::new(Mutex::new(vec![]));
+    let earlier_io = FakeAgentIo::default();
+    let earlier = AgentIo::start(Arc::new(earlier_io.clone()), Arc::new(Owner(received.clone()))).unwrap();
+    let binding = earlier.bind("mine", "workspace", &temp(), "codex", &executable("app.exe")).unwrap();
+    let kept = binding.kept();
+    let token = binding.environment()[TOKEN_KEY].clone();
+    let old_name = earlier.name().to_string();
+    earlier.close().await;
+    drop(binding);
+
+    let later_io = FakeAgentIo::default();
+    let later = AgentIo::start(Arc::new(later_io.clone()), Arc::new(Owner(received.clone()))).unwrap();
+    assert_ne!(later.name(), old_name, "the later app listens on a name of its own");
+    assert!(
+        later.adopt("mine", "workspace", &temp(), "codex", &executable("app.exe"), &kept).is_err(),
+        "no listener for the earlier name: refused"
+    );
+    let served: Arc<Mutex<Option<FakeAgentIo>>> = Arc::default();
+    let made = served.clone();
+    later.set_earlier_listener(Some(Arc::new(move |name: &str| {
+        let io = FakeAgentIo::named(name);
+        *made.lock().unwrap() = Some(io.clone());
+        Some(Arc::new(io) as Arc<dyn AgentIoListener>)
+    })));
+    for (workspace, provider) in [("other", "codex"), ("workspace", "claude")] {
+        assert!(later.adopt("mine", workspace, &temp(), provider, &executable("app.exe"), &kept).is_err(), "{workspace} {provider}");
+    }
+    let mut short = kept.clone();
+    short["token"] = json!("abc");
+    assert!(later.adopt("mine", "workspace", &temp(), "codex", &executable("app.exe"), &short).is_err(), "not a token");
+    let taken = later.adopt("mine", "workspace", &temp(), "codex", &executable("app.exe"), &kept).unwrap();
+    assert_eq!(taken.environment()[TOKEN_KEY], token, "the token the CLI holds");
+    assert!(later.adopt("other-pane", "workspace", &temp(), "codex", &executable("app.exe"), &kept).is_err(), "one pane's token only");
+    let connector = served.lock().unwrap().clone().expect("the earlier name is served");
+    let arguments = json!({"command": "echo fixture"});
+    let answer: Value =
+        serde_json::from_str(&client::call(&connector, &old_name, &token, "run_in_terminal", &arguments).await.unwrap()).unwrap();
+    assert!(answer["ok"] == true && answer["result"]["owner"] == "mine", "the kept run's call is taken: {answer}");
+    later.revoke("mine");
+    let refused: Value =
+        serde_json::from_str(&client::call(&connector, &old_name, &token, "run_in_terminal", &arguments).await.unwrap()).unwrap();
+    assert!(refused["ok"] == false, "and revoked as any binding is");
+    later.close().await;
+    assert!(client::call(&connector, &old_name, &token, "run_in_terminal", &arguments).await.is_err(), "closed with the app");
+}
+
 /// "Agent IO AuthenticatedPipeRejectsRevocation", over the in-memory transport.
 #[tokio::test]
 async fn authenticated_pipe_rejects_revocation() {

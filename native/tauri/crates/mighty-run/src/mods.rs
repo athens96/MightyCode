@@ -230,6 +230,8 @@ struct Host {
 pub struct ModBridge {
     inner: Arc<Inner>,
     host: tokio::sync::Mutex<Option<Host>>,
+    /// MC-38: the loopback ports an earlier app served, served again for the runs it kept running ([`ModBridge::adopt`]).
+    earlier: tokio::sync::Mutex<Vec<Host>>,
     disposed: AtomicBool,
 }
 
@@ -266,6 +268,7 @@ impl ModBridge {
         ModBridge {
             inner: Arc::new(Inner { connections: Mutex::new(HashMap::new()), clock }),
             host: tokio::sync::Mutex::new(None),
+            earlier: tokio::sync::Mutex::new(Vec::new()),
             disposed: AtomicBool::new(false),
         }
     }
@@ -277,13 +280,64 @@ impl ModBridge {
             return Err(RunError::State("the Mods bridge is closed".into()));
         }
         if host.is_none() {
-            *host = Some(start(self.inner.clone()).await.map_err(|e| RunError::Io(e.to_string()))?);
+            *host = Some(start(self.inner.clone(), 0).await.map_err(|e| RunError::Io(e.to_string()))?);
         }
         let address = host.as_ref().map(|h| h.address).expect("started");
         let connection = Arc::new(Connection {
             id: wire::new_id(),
             token: random_token(),
             url: format!("http://{address}/events"),
+            graph_enabled,
+            receive,
+            state: Mutex::new(ConnectionState { window: (self.inner.clock)(), count: 0, received: 0, released: false }),
+            bridge: Arc::downgrade(&self.inner),
+        });
+        lock(&self.inner.connections).insert(connection.id.clone(), connection.clone());
+        Ok(connection)
+    }
+
+    /// MC-38: a Claude run an earlier app kept running in the background daemon, registered again as that app registered it: the
+    /// id, token and URL its hooks already post to. The URL's loopback port is served again (this app's server when it is that port or
+    /// none runs yet, else a server of its own); Err when the id, token or URL is not one this bridge hands out, the id or token is
+    /// taken, or the port cannot be served now (the run's hooks then reach no app, as before MC-38). Only the run engine calls it, with
+    /// what the earlier app left in the daemon for that run.
+    pub async fn adopt(&self, receive: Receive, graph_enabled: bool, id: &str, token: &str, url: &str) -> crate::Result<Arc<Connection>> {
+        let invalid = || RunError::Invalid("not a Mods bridge registration".into());
+        if !wire::identifier(id) || token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(invalid());
+        }
+        let port = url
+            .strip_prefix("http://127.0.0.1:")
+            .and_then(|rest| rest.strip_suffix("/events"))
+            .and_then(|port| port.parse::<u16>().ok())
+            .filter(|port| *port != 0)
+            .ok_or_else(invalid)?;
+        let mut host = self.host.lock().await;
+        if self.disposed.load(Ordering::SeqCst) {
+            return Err(RunError::State("the Mods bridge is closed".into()));
+        }
+        let serves = |h: &Host| h.address.port() == port;
+        if !host.as_ref().is_some_and(serves) {
+            let mut earlier = self.earlier.lock().await;
+            if !earlier.iter().any(serves) {
+                let started = start(self.inner.clone(), port).await.map_err(|e| RunError::Io(e.to_string()))?;
+                if host.is_none() {
+                    *host = Some(started);
+                } else {
+                    earlier.push(started);
+                }
+            }
+        }
+        {
+            let connections = lock(&self.inner.connections);
+            if connections.contains_key(id) || connections.values().any(|c| fixed_time_equals(c.token.as_bytes(), token.as_bytes())) {
+                return Err(RunError::State("the Mods bridge registration is taken".into()));
+            }
+        }
+        let connection = Arc::new(Connection {
+            id: id.to_string(),
+            token: token.to_string(),
+            url: url.to_string(),
             graph_enabled,
             receive,
             state: Mutex::new(ConnectionState { window: (self.inner.clock)(), count: 0, received: 0, released: false }),
@@ -304,12 +358,15 @@ impl ModBridge {
         if let Some(host) = host.take() {
             host.stop.send_replace(true);
         }
+        for host in self.earlier.lock().await.drain(..) {
+            host.stop.send_replace(true);
+        }
     }
 }
 
-/// `HttpHost.StartAsync` on loopback: an accept loop, at most 64 connections at once, 8 KiB of headers sent within 5 s.
-async fn start(inner: Arc<Inner>) -> std::io::Result<Host> {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+/// `HttpHost.StartAsync` on loopback (`port` 0: any free one): an accept loop, at most 64 connections at once, 8 KiB of headers sent within 5 s.
+async fn start(inner: Arc<Inner>, port: u16) -> std::io::Result<Host> {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
     let address = listener.local_addr()?;
     let (stop, mut stopping) = tokio::sync::watch::channel(false);
     let slots = Arc::new(Semaphore::new(64));

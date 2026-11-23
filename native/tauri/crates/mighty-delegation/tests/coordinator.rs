@@ -1054,6 +1054,67 @@ mod checks {
         .await;
     }
 
+    /// MC-38: a child's run an earlier app kept running in the background daemon and this launch took back is the same run going on:
+    /// whether the launch's sweep came first (the child interrupted) or the take-back did (the sweep leaves it running), the child runs
+    /// it, and what its parent awaited of the earlier run it still awaits (its end without a report tells the parent).
+    #[tokio::test]
+    async fn a_childs_run_taken_back_from_the_daemon_goes_on() {
+        Box::pin(a_childs_run_taken_back_from_the_daemon_goes_on_body()).await;
+    }
+
+    async fn a_childs_run_taken_back_from_the_daemon_goes_on_body() {
+        let _lane = lane::enter().await;
+        Box::pin(async {
+            // The quit recorded the run as killed (the child interrupted); the later app takes it back.
+            let fixture = reports(None).await;
+            let started = running_child(&fixture).await;
+            let id = started.id.clone();
+            let first = format!("first-{id}");
+            assert_eq!(started.awaited_run_id.as_deref(), Some(first.as_str()));
+            assert!(fixture.coordinator.child_run_ended(&id, &first, ChildRunEnd::Quit).await.is_none());
+            assert_eq!(fixture.child(&id).state, ChildState::Interrupted);
+            fixture.coordinator.child_run_adopted(&id, "kept-2").await;
+            let child = fixture.child(&id);
+            assert!(
+                child.state == ChildState::Running
+                    && child.run_id.as_deref() == Some("kept-2")
+                    && child.awaited_run_id.as_deref() == Some("kept-2"),
+                "the same run goes on, still awaited: {child:?}"
+            );
+            assert!(fixture.coordinator.interrupt_runs_killed_by_quit().await.is_empty(), "the sweep leaves it running");
+            assert_eq!(
+                fixture.coordinator.child_run_ended(&id, "kept-2", ChildRunEnd::Finished).await.map(|n| n.kind),
+                Some(NoticeKind::EndedWithoutReport),
+                "its end tells the parent as the first run's would have"
+            );
+            drop(fixture);
+        })
+        .await;
+
+        Box::pin(async {
+            // Taken back before the launch's sweep: the sweep leaves it running, a child of no kept run is interrupted as before.
+            let file = DelegationFile::of(
+                vec![
+                    ChildRecord { awaited_run_id: Some("r".into()), ..with_run(record("kept", ChildState::Running, "parent"), "r") },
+                    with_run(record("killed", ChildState::Running, "parent"), "k"),
+                ],
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+            );
+            let fixture = reports(Some(file)).await;
+            fixture.coordinator.child_run_adopted("kept", "r2").await;
+            assert_eq!(fixture.coordinator.interrupt_runs_killed_by_quit().await, ["killed"], "only the run nobody took back");
+            let kept = fixture.child("kept");
+            assert!(
+                kept.state == ChildState::Running && kept.run_id.as_deref() == Some("r2") && kept.awaited_run_id.as_deref() == Some("r2"),
+                "the kept run goes on, still awaited: {kept:?}"
+            );
+        })
+        .await;
+    }
+
     /// "delegation: the gates, discard_human_only, the status tools and the server's protocol" (the server's protocol and an answer's
     /// rendering are W7-C's `mcp::delegation` checks)
     #[tokio::test]

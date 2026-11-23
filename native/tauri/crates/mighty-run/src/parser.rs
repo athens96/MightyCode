@@ -299,6 +299,16 @@ impl OutputParser {
         lock(&self.inner).pi.turn_ended()
     }
 
+    /// MC-38: pi's turn as this parser read it, for a later app that takes the run up.
+    pub fn pi_kept(&self) -> Value {
+        lock(&self.inner).pi.kept()
+    }
+
+    /// MC-38: pi's turn as an earlier app read it ([`OutputParser::pi_kept`]).
+    pub fn restore_pi(&self, kept: &Value) {
+        lock(&self.inner).pi.restore(kept);
+    }
+
     /// Sets `PiDialogs`.
     pub fn set_pi_dialogs(&self, dialogs: Option<Arc<PiDialogChannel>>) {
         *lock(&self.pi_dialogs) = dialogs;

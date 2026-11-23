@@ -26,8 +26,8 @@ use mighty_native::surface::{DefaultButton, DialogButton, DialogResult, DialogSp
 use mighty_native::ui::Content;
 use mighty_platform::{DetachedEnvironment, DetachedRequest, Platform, PrefValue, PrefsStore};
 use mighty_run::daemon::client::DaemonClient;
-use mighty_run::daemon::owner::{Adoption, RESUME_AT, Route, RoutedProcesses, RoutedPtys, parse_run_key};
-use mighty_run::model::StartRunRequest;
+use mighty_run::daemon::owner::{Adoption, KEPT_STATE, RESUME_AT, Route, RoutedProcesses, RoutedPtys, parse_run_key};
+use mighty_run::model::{KeptState, StartRunRequest};
 use serde_json::{Value, json};
 use tauri::Manager;
 
@@ -256,7 +256,7 @@ fn watch(host: &Arc<Host>, client: Arc<DaemonClient>) {
 }
 
 /// What an earlier app left in the daemon, handed back: each terminal to the shell pane it belongs to (given when the pane opens),
-/// each kept Claude run to its agent pane (read on from where that app stopped). A process whose pane is gone, or that no pane here
+/// each kept agent run to its agent pane (read on from where that app stopped, with what that app left for it, MC-38). A process whose pane is gone, or that no pane here
 /// can take back, is ended.
 async fn take_back(host: &Arc<Host>, client: &Arc<DaemonClient>, processes: &[ProcInfo]) {
     let route = &app().route;
@@ -277,7 +277,17 @@ async fn take_back(host: &Arc<Host>, client: &Arc<DaemonClient>, processes: &[Pr
                 }
                 (Kind::Run, Some(key)) => match parse_run_key(key) {
                     Some((id, true)) => match pane(id) {
-                        Some(session) if session.kind() == "claude" && session.provider() == "claude" => {
+                        // MC-38: an agent pane of any agent takes its run back, a delegated child's too; the run is the agent the
+                        // pane names, as the earlier app left it.
+                        Some(session)
+                            if session.kind() == "claude"
+                                && info
+                                    .meta
+                                    .get(KEPT_STATE)
+                                    .and_then(|kept| kept.get("provider"))
+                                    .and_then(Value::as_str)
+                                    .is_none_or(|provider| provider == session.provider()) =>
+                        {
                             let workspace = snapshot.workspace(session.workspace_id()).cloned();
                             let mut request = StartRunRequest::new(session.id(), session.workspace_id(), "claude", "(continue)");
                             request.registered_models =
@@ -286,6 +296,7 @@ async fn take_back(host: &Arc<Host>, client: &Arc<DaemonClient>, processes: &[Pr
                             request.provider = session.provider().to_string();
                             request.settings = session.settings.clone();
                             request.resume_id = session.resume_id.clone();
+                            request.kept = info.meta.get(KEPT_STATE).cloned().map(KeptState);
                             let from = info.meta.get(RESUME_AT).and_then(Value::as_u64).unwrap_or(info.start);
                             adopt.push((key.to_string(), Adoption { proc: info.proc.clone(), pid: info.pid, from }, request));
                             true
@@ -470,6 +481,11 @@ pub fn before_shutdown(host: &Host) {
     let keep = *lock(&app().quit) == Some(Quit::Keep);
     if keep && app().route.connected() {
         host.log.line("daemon: the app quits, its work keeps running");
+        // MC-38: the runs let go of end here as the quit's: delegation records a kept child's run as killed by quitting (the next app
+        // carries it on), never as stopped by a human.
+        if let Some(runs) = host.runs() {
+            runs.service.letting_go();
+        }
         tauri::async_runtime::block_on(async {
             let _ = tokio::time::timeout(Duration::from_secs(5), app().route.detach()).await;
         });

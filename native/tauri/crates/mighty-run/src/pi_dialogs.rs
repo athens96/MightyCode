@@ -62,6 +62,8 @@ struct Pending {
     method: String,
     asking: Option<Asking>,
     display: ToolPermissionRequest,
+    /// MC-38: the dialog as pi sent it, so a later app that takes the run up asks it again ([`PiDialogChannel::kept`]).
+    value: Value,
 }
 
 #[derive(Default)]
@@ -158,9 +160,10 @@ impl PiDialogChannel {
         let Some(request) = agent::request(&wire::new_id(), &self.run_id, &tool_use_id, &[item]) else { return false };
         let display = ToolPermissionRequest { received_at: Some(time::now_o()), ..request };
         let has_asking = asking.is_some();
-        state
-            .pending
-            .insert(display.id.clone(), Pending { dialog_id: dialog_id.into(), method: method.into(), asking, display: display.clone() });
+        state.pending.insert(
+            display.id.clone(),
+            Pending { dialog_id: dialog_id.into(), method: method.into(), asking, display: display.clone(), value: value.clone() },
+        );
         if has_asking {
             effects.push(Effect::Activity(display.clone(), "waiting".into()));
         }
@@ -169,6 +172,48 @@ impl PiDialogChannel {
             effects.push(Effect::Timer(display.id, milliseconds / 1_000.0));
         }
         true
+    }
+
+    /// MC-38: the dialogs still waiting as pi sent them (and the `ask_user` call each belongs to), within `budget` bytes, for a later
+    /// app that takes the run up. One that does not fit is answered as dismissed here, so pi never waits on a card no app can show.
+    pub fn kept(&self, budget: usize) -> Value {
+        let mut effects = Vec::new();
+        let kept = {
+            let mut state = lock(&self.state);
+            let mut used = 0usize;
+            let mut dialogs = Vec::new();
+            let ids: Vec<String> = state.pending.keys().cloned().collect();
+            for id in ids {
+                let pending = &state.pending[&id];
+                let asking = pending.asking.as_ref().map(|a| json!({"toolCallId": a.tool_call_id, "multiple": a.multiple}));
+                let dialog = json!({"value": pending.value, "asking": asking});
+                let size = dialog.to_string().len();
+                if used + size <= budget {
+                    used += size;
+                    dialogs.push(dialog);
+                } else if let Some(ask) = state.pending.shift_remove(&id) {
+                    self.send(&json!({"type": "extension_ui_response", "id": ask.dialog_id, "cancelled": true}));
+                    effects.push(Effect::Warning(strings::get("run.notice.keptRequestDeclined")));
+                }
+            }
+            Value::Array(dialogs)
+        };
+        self.run(effects);
+        kept
+    }
+
+    /// MC-38: the dialogs an earlier app left waiting ([`PiDialogChannel::kept`]), asked again on their cards.
+    pub fn restore(&self, kept: &Value) {
+        for dialog in kept.as_array().into_iter().flatten() {
+            let Some(value) = dialog.get("value").filter(|v| v.is_object()) else { continue };
+            let asking = dialog.get("asking").and_then(|a| {
+                Some(Asking {
+                    tool_call_id: a.get("toolCallId")?.as_str()?.to_string(),
+                    multiple: a.get("multiple").and_then(Value::as_bool).unwrap_or(false),
+                })
+            });
+            self.receive(value, asking);
+        }
     }
 
     /// `AnswerQuestions`: the card's answer as the dialog's value (`confirmed` for a confirm).

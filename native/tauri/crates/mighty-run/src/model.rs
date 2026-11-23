@@ -87,6 +87,27 @@ pub struct StartRunRequest {
     /// the child is the daemon's (attached, not started), its output read from where that app stopped reading, and nothing is written
     /// to it before the person answers (no prompt, no handshake's prompt). Never saved, never read from a remote's JSON.
     pub adopted: bool,
+    /// MC-38: what the earlier app left for an adopted run ([`KeptState`]); None for every other run.
+    pub kept: Option<KeptState>,
+}
+
+/// MC-38: what an app that let go of a run (the background daemon keeps it) left for the app that takes it back: its protocol's state
+/// (a JSON-RPC channel's ids and the requests still waiting, pi's turn), and the run's Agent IO binding and Mods bridge registration,
+/// which hold the run's tokens. Never saved, never shown: its `Debug` hides it.
+#[derive(Clone, Default, PartialEq)]
+pub struct KeptState(pub serde_json::Value);
+
+impl KeptState {
+    /// One part of it (`Value::Null` when absent).
+    pub fn part(&self, name: &str) -> &serde_json::Value {
+        self.0.get(name).unwrap_or(&serde_json::Value::Null)
+    }
+}
+
+impl std::fmt::Debug for KeptState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("KeptState(<hidden>)")
+    }
 }
 
 /// Wraps non-empty shared memory markdown in `<shared-memory>...</shared-memory>` for agent prompt/instruction injection.
@@ -130,6 +151,7 @@ impl StartRunRequest {
             memory_context: None,
             fork_session: false,
             adopted: false,
+            kept: None,
         }
     }
 

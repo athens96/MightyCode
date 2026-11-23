@@ -131,6 +131,22 @@ impl AgentIoBinding {
     ) -> AgentIoBinding {
         let mut bytes = [0u8; 32];
         getrandom::fill(&mut bytes).expect("the OS's random numbers");
+        let token = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        AgentIoBinding::with_token(pane_id, workspace_id, workspace_path, provider, pipe_name, executable, transport, config_folder, token)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn with_token(
+        pane_id: &str,
+        workspace_id: &str,
+        workspace_path: &str,
+        provider: &str,
+        pipe_name: &str,
+        executable: &str,
+        transport: McpTransport,
+        config_folder: PathBuf,
+        token: String,
+    ) -> AgentIoBinding {
         AgentIoBinding {
             pane_id: pane_id.into(),
             workspace_id: workspace_id.into(),
@@ -139,7 +155,7 @@ impl AgentIoBinding {
             pipe_name: pipe_name.into(),
             executable: executable.into(),
             transport_key: transport.env_key(),
-            token: bytes.iter().map(|b| format!("{b:02x}")).collect(),
+            token,
             revoked: Revocation::default(),
             link: Mutex::new(Link::default()),
             config_folder,
@@ -323,6 +339,31 @@ impl AgentIoBinding {
             arguments,
             redact: Arc::new(move |line: &str| binding.redact(line)),
             ended: Some(Box::new(move || ending.remove_config())),
+            kept: Some(self.kept()),
+        }
+    }
+
+    /// MC-38: what a later app needs to bind this run again after this app let go of it (the background daemon keeps the CLI and its
+    /// MCP servers running, which hold this token and this transport's name): [`AgentIoBindings::adopt`] reads it.
+    pub fn kept(&self) -> serde_json::Value {
+        serde_json::json!({
+            "token": self.token,
+            "pipe": self.pipe_name,
+            "provider": self.provider,
+            "workspaceId": self.workspace_id,
+        })
+    }
+
+    /// MC-38: the binding of a run taken back from the background daemon: the token its CLI's MCP servers already hold, no new config
+    /// file and no new arguments (the CLI was started with them), the same redaction and the same end.
+    pub fn adopted_run_binding(self: &Arc<Self>) -> RunBinding {
+        let (binding, ending) = (self.clone(), self.clone());
+        RunBinding {
+            environment: BTreeMap::new(),
+            arguments: Vec::new(),
+            redact: Arc::new(move |line: &str| binding.redact(line)),
+            ended: Some(Box::new(move || ending.remove_config())),
+            kept: Some(self.kept()),
         }
     }
 }
@@ -391,6 +432,63 @@ impl AgentIoBindings {
         let folder = self.config_folder();
         let value = Arc::new(AgentIoBinding::new(pane, workspace_id, workspace_path, provider, pipe, executable, self.transport, folder));
         let previous = lock(&self.bindings).insert(pane.to_string(), value.clone());
+        if let Some(previous) = previous {
+            previous.revoked.cancel();
+            previous.remove_config();
+        }
+        Ok(value)
+    }
+
+    /// MC-38: the pane's binding again for a run an earlier app kept running in the background daemon, with the token that app gave
+    /// it (`kept`, what [`AgentIoBinding::kept`] left with the run): the CLI's MCP servers already hold that token, so their calls are
+    /// taken again, checked as every call is. Revokes the pane's binding before it, as [`AgentIoBindings::bind`] does. Refused as `bind`
+    /// refuses, and when the kept token is not 64 lowercase hex digits, another pane holds it, or it was this pane's for another
+    /// workspace or provider. Only the run engine's adoption hands it a kept token, read from the daemon (the same user's private
+    /// socket).
+    #[allow(clippy::too_many_arguments)]
+    pub fn adopt(
+        &self,
+        pane: &str,
+        workspace_id: &str,
+        workspace_path: &str,
+        provider: &str,
+        pipe: &str,
+        executable: &str,
+        kept: &serde_json::Value,
+    ) -> Result<Arc<AgentIoBinding>, InvalidBinding> {
+        let text = |name: &str| kept.get(name).and_then(serde_json::Value::as_str);
+        let token = text("token").filter(|t| t.len() == 64 && t.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+        let Some(token) = token else { return Err(InvalidBinding) };
+        if text("provider") != Some(provider) || text("workspaceId") != Some(workspace_id) {
+            return Err(InvalidBinding);
+        }
+        if !identifier(pane)
+            || !identifier(workspace_id)
+            || !fully_qualified(workspace_path)
+            || !fully_qualified(executable)
+            || !matches!(provider, "claude" | "codex")
+        {
+            return Err(InvalidBinding);
+        }
+        let folder = self.config_folder();
+        let value = Arc::new(AgentIoBinding::with_token(
+            pane,
+            workspace_id,
+            workspace_path,
+            provider,
+            pipe,
+            executable,
+            self.transport,
+            folder,
+            token.to_string(),
+        ));
+        let previous = {
+            let mut bindings = lock(&self.bindings);
+            if bindings.iter().any(|(other, held)| other != pane && fixed_time_equals(held.token.as_bytes(), token.as_bytes())) {
+                return Err(InvalidBinding);
+            }
+            bindings.insert(pane.to_string(), value.clone())
+        };
         if let Some(previous) = previous {
             previous.revoked.cancel();
             previous.remove_config();

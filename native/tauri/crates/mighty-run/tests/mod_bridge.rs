@@ -627,3 +627,48 @@ async fn reentrant_dispose_inside_receive_callback_does_not_deadlock() {
     );
     bridge.dispose().await;
 }
+
+/// MC-38: a later app takes back a Claude run an earlier app kept running: its bridge registers the run again with the id, token and
+/// URL the run's hooks already post to, serving that loopback port again (as its own first server, or beside one it already has), and
+/// takes the run's events; an id, token or URL it does not hand out, or a registration already taken, is refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_later_bridge_takes_back_a_kept_runs_registration() {
+    let earlier = ModBridge::new();
+    let (_unused, sink) = counting();
+    let kept = earlier.register(sink, true).await.unwrap();
+    let (id, token, url) = (kept.id.clone(), kept.token.clone(), kept.url.clone());
+    let other = earlier.register(Box::new(|_| {}), true).await.unwrap();
+    let (other_id, other_token, other_url) = (other.id.clone(), other.token.clone(), other.url.clone());
+    earlier.dispose().await;
+    drop((kept, other));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // The later app's bridge already serves a port of its own: the kept run's port is served beside it.
+    let later = ModBridge::new();
+    let (_own, own_sink) = counting();
+    let own = later.register(own_sink, true).await.unwrap();
+    assert_ne!(own.url, url, "a new port of its own");
+    let (received, sink) = counting();
+    let taken = later.adopt(sink, true, &id, &token, &url).await.unwrap();
+    assert_eq!((taken.id.as_str(), taken.url.as_str()), (id.as_str(), url.as_str()), "the registration the hooks post to");
+    let body = json!({"version": 1, "runId": id, "claudeSessionId": "claude-session", "event": "session.start"});
+    assert_eq!(Post::new(&taken, &body).without_graph_header().send().await, NO_CONTENT);
+    assert_eq!(received.load(Ordering::SeqCst), 1, "the kept run's event reached the later app");
+    let mine = json!({"version": 1, "runId": own.id, "claudeSessionId": "claude-session", "event": "session.start"});
+    assert_eq!(Post::new(&own, &mine).without_graph_header().send().await, NO_CONTENT, "its own run still posts to its own port");
+
+    let (_refused, refused) = counting();
+    assert!(later.adopt(refused, true, &id, &token, &url).await.is_err(), "a registration is taken once");
+    for (bad_id, bad_token, bad_url) in [
+        ("not an id!", token.as_str(), url.as_str()),
+        (other_id.as_str(), "short", other_url.as_str()),
+        (other_id.as_str(), other_token.as_str(), "http://example.com:80/events"),
+        (other_id.as_str(), other_token.as_str(), "http://127.0.0.1:0/events"),
+    ] {
+        assert!(later.adopt(Box::new(|_| {}), true, bad_id, bad_token, bad_url).await.is_err(), "refused: {bad_id} {bad_url}");
+    }
+    later.dispose().await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let address = url.trim_start_matches("http://").split('/').next().unwrap().to_string();
+    assert!(TcpStream::connect(&address).await.is_err(), "the earlier port is let go of with the bridge");
+}

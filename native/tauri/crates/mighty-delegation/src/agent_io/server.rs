@@ -84,8 +84,15 @@ pub trait TerminalHandler: Send + Sync {
 }
 
 /// `AgentIOPipe`: the app's listener and the bindings its calls are checked against.
+/// MC-38: a listener for an earlier app's transport name (Windows: its `mighty-agent-io-` pipe, which a new app does not reuse), so a
+/// run that app kept running reaches this one; None when the platform cannot listen on it (the Mac's socket path stays the same).
+pub type EarlierListener = Arc<dyn Fn(&str) -> Option<Arc<dyn AgentIoListener>> + Send + Sync>;
+
 pub struct AgentIo {
     listener: Arc<dyn AgentIoListener>,
+    /// MC-38: the earlier apps' names served as well, with their listeners.
+    earlier: Mutex<Vec<(String, Arc<dyn AgentIoListener>)>>,
+    earlier_listener: Mutex<Option<EarlierListener>>,
     transport: McpTransport,
     name: String,
     bindings: Arc<AgentIoBindings>,
@@ -111,7 +118,9 @@ impl AgentIo {
         }
         bindings.set_config_folder(folder);
         let io = Arc::new(AgentIo {
-            listener,
+            listener: listener.clone(),
+            earlier: Mutex::new(Vec::new()),
+            earlier_listener: Mutex::new(None),
             transport,
             name,
             bindings,
@@ -122,7 +131,7 @@ impl AgentIo {
             listeners: Mutex::new(vec![]),
             serving: Mutex::new(vec![]),
         });
-        let tasks = (0..WAITING_LISTENERS).map(|_| tokio::spawn(io.clone().listen())).collect();
+        let tasks = (0..WAITING_LISTENERS).map(|_| tokio::spawn(io.clone().listen(listener.clone()))).collect();
         *lock(&io.listeners) = tasks;
         Ok(io)
     }
@@ -153,6 +162,51 @@ impl AgentIo {
         self.bindings.bind(pane, workspace_id, workspace_path, provider, &self.name, executable)
     }
 
+    /// MC-38: how this platform listens on an earlier app's name ([`EarlierListener`]).
+    pub fn set_earlier_listener(&self, listener: Option<EarlierListener>) {
+        *lock(&self.earlier_listener) = listener;
+    }
+
+    /// MC-38: the pane's binding again for a run an earlier app kept running in the background daemon ([`AgentIoBindings::adopt`]):
+    /// the run's token and its transport's name as that app left them. A name other than this listener's is served as well when the
+    /// platform can listen on it ([`AgentIo::set_earlier_listener`]; refused otherwise: the run's MCP servers could not reach this app).
+    pub fn adopt(
+        self: &Arc<Self>,
+        pane: &str,
+        workspace_id: &str,
+        workspace_path: &str,
+        provider: &str,
+        executable: &str,
+        kept: &Value,
+    ) -> Result<Arc<AgentIoBinding>, InvalidBinding> {
+        let pipe = kept.get("pipe").and_then(Value::as_str).filter(|pipe| super::client::is_pipe_name(pipe, self.transport));
+        let Some(pipe) = pipe else { return Err(InvalidBinding) };
+        if pipe != self.name && !self.serve_earlier(pipe) {
+            return Err(InvalidBinding);
+        }
+        self.bindings.adopt(pane, workspace_id, workspace_path, provider, pipe, executable, kept)
+    }
+
+    /// `name` served as well (once), on a listener of the platform's; false when it cannot be.
+    fn serve_earlier(self: &Arc<Self>, name: &str) -> bool {
+        if self.shutdown.is_cancelled() {
+            return false;
+        }
+        if lock(&self.earlier).iter().any(|(served, _)| served == name) {
+            return true;
+        }
+        let Some(make) = lock(&self.earlier_listener).clone() else { return false };
+        let Some(listener) = make(name) else { return false };
+        if listener.bind().ok().as_deref() != Some(name) || listener.transport() != self.transport {
+            listener.close();
+            return false;
+        }
+        lock(&self.earlier).push((name.to_string(), listener.clone()));
+        let tasks: Vec<JoinHandle<()>> = (0..WAITING_LISTENERS).map(|_| tokio::spawn(self.clone().listen(listener.clone()))).collect();
+        lock(&self.listeners).extend(tasks);
+        true
+    }
+
     /// `Bindings.Revoke(pane)`: its calls waiting on the terminal end, no new one is taken.
     pub fn revoke(&self, pane: &str) {
         self.bindings.revoke(pane);
@@ -168,6 +222,9 @@ impl AgentIo {
         self.bindings.clear();
         self.shutdown.cancel();
         self.listener.close();
+        for (_, listener) in lock(&self.earlier).drain(..) {
+            listener.close();
+        }
         let listeners: Vec<_> = lock(&self.listeners).drain(..).collect();
         for task in listeners {
             let _ = task.await;
@@ -179,14 +236,14 @@ impl AgentIo {
     }
 
     /// `Listen`: waits for clients one at a time, each on a connection slot of its own, and serves each on its own task.
-    async fn listen(self: Arc<Self>) {
+    async fn listen(self: Arc<Self>, listener: Arc<dyn AgentIoListener>) {
         while !self.shutdown.is_cancelled() {
             let permit = tokio::select! {
                 permit = self.connections.clone().acquire_owned() => match permit { Ok(permit) => permit, Err(_) => return },
                 _ = self.shutdown.cancelled() => return,
             };
             let accepted = tokio::select! {
-                accepted = self.listener.accept() => accepted,
+                accepted = listener.accept() => accepted,
                 _ = self.shutdown.cancelled() => return,
             };
             match accepted {
@@ -426,7 +483,16 @@ pub fn logged_binding_factory_with_workspace(
         if workspace.remote.is_some() || workspace.path().is_empty() || !matches!(request.provider.as_str(), "claude" | "codex") {
             return None;
         }
-        let binding = match io.bind(&request.session_id, workspace.id(), workspace.path(), &request.provider, &executable) {
+        // MC-38: a run taken back from the background daemon keeps the binding its CLI was started with, or has none.
+        let kept = request.kept.as_ref().map(|kept| kept.part("binding")).filter(|kept| !kept.is_null());
+        if request.adopted && kept.is_none() {
+            return None;
+        }
+        let bound = match (request.adopted, kept) {
+            (true, Some(kept)) => io.adopt(&request.session_id, workspace.id(), workspace.path(), &request.provider, &executable, kept),
+            _ => io.bind(&request.session_id, workspace.id(), workspace.path(), &request.provider, &executable),
+        };
+        let binding = match bound {
             Ok(binding) => binding,
             Err(refused) => {
                 let pane: String = request.session_id.chars().take(128).collect();
@@ -441,7 +507,7 @@ pub fn logged_binding_factory_with_workspace(
         binding.connect_delegation(handler, attached, &mode);
         let (ws_handler, ws_enabled) = workspace_link();
         binding.connect_workspace(ws_handler, ws_enabled && request.kind == "claude");
-        Some(binding.run_binding())
+        Some(if request.adopted { binding.adopted_run_binding() } else { binding.run_binding() })
     })
 }
 

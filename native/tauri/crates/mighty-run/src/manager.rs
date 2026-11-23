@@ -33,7 +33,7 @@ use mighty_core::model::{AgentActivity, LogEntry, Workspace};
 use mighty_core::{time, wire};
 use mighty_platform::process::{ChildReader, ChildWriter};
 use mighty_platform::{BoxFuture, ChildControl};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -62,6 +62,10 @@ use crate::stream;
 use crate::strings;
 use crate::{Result, RunError, lock};
 
+/// MC-38: the most a run's waiting requests (and what they name) take in what is left with the background daemon for a later app; the
+/// daemon keeps at most 64 KiB of a process's meta.
+const KEPT_REQUEST_BYTES: usize = 48 * 1024;
+
 /// How long a run admitted right after the pane's last one waits for that one's task to end (its process tree, pumps and Mods connection;
 /// as long as a stop waits for a run's end).
 const PREVIOUS_WAIT: Duration = Duration::from_secs(10);
@@ -80,6 +84,10 @@ pub struct RunBinding {
     pub redact: Arc<dyn Fn(&str) -> String + Send + Sync>,
     /// Called once when the run's task ends, however it ends (W7's binding deletes the private MCP config file it wrote).
     pub ended: Option<Box<dyn FnOnce() + Send>>,
+    /// MC-38: what the factory of a later app needs to bind this same run again, should this app let go of it while it runs (the
+    /// background daemon keeps it): left in the daemon with the run ([`crate::model::KeptState`]'s `binding`), handed back to the
+    /// factory in the adopted run's request.
+    pub kept: Option<Value>,
 }
 
 pub type BindingFactory = Arc<dyn Fn(&StartRunRequest, &Workspace) -> Option<RunBinding> + Send + Sync>;
@@ -185,18 +193,34 @@ impl Cancel {
 /// A child's stdin as C# writes it (`Write`, `Flush`, `Close`), in order, from any thread: writes are queued to a task that owns
 /// the pipe. A write after the close, or after the pipe broke, fails.
 struct InputPipe {
-    sender: Mutex<Option<mpsc::UnboundedSender<Vec<u8>>>>,
+    sender: Mutex<Option<mpsc::UnboundedSender<Input>>>,
     broken: Arc<AtomicBool>,
+    /// MC-38: the app let go of the run (the background daemon keeps it): what the engine writes from now on is dropped, so its own
+    /// teardown never reaches a run a later app takes up.
+    held: AtomicBool,
+}
+
+/// What the pipe's task is handed: bytes, or a mark answered once everything before it was written.
+enum Input {
+    Bytes(Vec<u8>),
+    Mark(oneshot::Sender<()>),
 }
 
 impl InputPipe {
     fn new(stdin: Option<ChildWriter>) -> InputPipe {
-        let (sender, mut receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (sender, mut receiver) = mpsc::unbounded_channel::<Input>();
         let broken = Arc::new(AtomicBool::new(false));
         let flag = broken.clone();
         tokio::spawn(async move {
             let Some(mut stdin) = stdin else { return };
-            while let Some(bytes) = receiver.recv().await {
+            while let Some(input) = receiver.recv().await {
+                let bytes = match input {
+                    Input::Bytes(bytes) => bytes,
+                    Input::Mark(written) => {
+                        let _ = written.send(());
+                        continue;
+                    }
+                };
                 if stdin.write_all(&bytes).await.is_err() || stdin.flush().await.is_err() {
                     flag.store(true, Ordering::SeqCst);
                     break;
@@ -204,15 +228,18 @@ impl InputPipe {
             }
             let _ = stdin.shutdown().await;
         });
-        InputPipe { sender: Mutex::new(Some(sender)), broken }
+        InputPipe { sender: Mutex::new(Some(sender)), broken, held: AtomicBool::new(false) }
     }
 
     fn write(&self, text: &str) -> std::io::Result<()> {
         if self.broken.load(Ordering::SeqCst) {
             return Err(std::io::ErrorKind::BrokenPipe.into());
         }
+        if self.held.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         match lock(&self.sender).as_ref() {
-            Some(sender) => sender.send(text.as_bytes().to_vec()).map_err(|_| std::io::ErrorKind::BrokenPipe.into()),
+            Some(sender) => sender.send(Input::Bytes(text.as_bytes().to_vec())).map_err(|_| std::io::ErrorKind::BrokenPipe.into()),
             None => Err(std::io::ErrorKind::BrokenPipe.into()),
         }
     }
@@ -220,6 +247,16 @@ impl InputPipe {
     /// `Input.Close()`: what was written still reaches the child, then its stdin ends.
     fn close(&self) {
         lock(&self.sender).take();
+    }
+
+    /// MC-38: nothing more is written, and what was written before has gone (within a second).
+    async fn hold(&self) {
+        self.held.store(true, Ordering::SeqCst);
+        let (written, done) = oneshot::channel();
+        let sent = lock(&self.sender).as_ref().is_some_and(|sender| sender.send(Input::Mark(written)).is_ok());
+        if sent {
+            let _ = tokio::time::timeout(Duration::from_secs(1), done).await;
+        }
     }
 }
 
@@ -257,6 +294,10 @@ struct Run {
     redact: Mutex<Option<Redact>>,
     /// The binding's [`RunBinding::ended`], called when the run's task ends ([`RunEnd`]).
     binding_ended: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// MC-38: the binding's [`RunBinding::kept`] and the Mods bridge registration (id, token, URL), left in the background daemon
+    /// for a later app should this one let go of the run ([`Exec::kept_state`]).
+    kept_binding: Mutex<Option<Value>>,
+    kept_bridge: Mutex<Option<Value>>,
     /// MC-34: the run's sandbox (its profile, proxy and network gate), closed when the run's task ends.
     sandbox: Mutex<Option<Arc<crate::sandbox::RunSandbox>>>,
     turn_reopened: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
@@ -563,6 +604,8 @@ impl RunManager {
                 tracker: Mutex::new(None),
                 redact: Mutex::new(None),
                 binding_ended: Mutex::new(None),
+                kept_binding: Mutex::new(None),
+                kept_bridge: Mutex::new(None),
                 sandbox: Mutex::new(None),
                 turn_reopened: Mutex::new(None),
                 workspace_root: Mutex::new(None),
@@ -2006,7 +2049,7 @@ impl Exec {
                 return Err(Failure::Error(strings::get_with("run.error.opencodeV1", &[("version", &version)])));
             }
             // Hermes asks questions only with its clarify tool on for editor sessions: looked at once per launch.
-            if provider == "hermes" {
+            if provider == "hermes" && !request.adopted {
                 hermes_questions = tokio::select! {
                     found = agents::hermes_ensure_question_tool(&providers, &command, &environment, &workspace_path) => found,
                     _ = run.cancel.cancelled() => return Err(Failure::Cancelled),
@@ -2042,23 +2085,30 @@ impl Exec {
                     return Err(Failure::Error(strings::get("run.error.modsResourceMissing")));
                 }
                 let exec = Arc::downgrade(self);
-                let connection = inner
-                    .bridge
-                    .register(
-                        Box::new(move |value| {
-                            if let Some(exec) = exec.upgrade() {
-                                exec.receive_mod(value);
-                            }
-                        }),
-                        true,
-                    )
-                    .await?;
+                let receive: crate::mods::Receive = Box::new(move |value| {
+                    if let Some(exec) = exec.upgrade() {
+                        exec.receive_mod(value);
+                    }
+                });
+                // MC-38: a run taken back from the background daemon posts to the registration its CLI was started with.
+                let kept_bridge = request.kept.as_ref().map(|kept| kept.part("bridge").clone()).filter(|kept| !kept.is_null());
+                let connection = match (request.adopted, kept_bridge) {
+                    (true, Some(kept)) => {
+                        let text = |name: &str| kept.get(name).and_then(Value::as_str).unwrap_or_default().to_string();
+                        inner.bridge.adopt(receive, true, &text("id"), &text("token"), &text("url")).await.ok()
+                    }
+                    (true, None) => None,
+                    (false, _) => Some(inner.bridge.register(receive, true).await?),
+                };
                 environment.insert("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS".into(), "1".into());
-                environment.insert("MIGHTY_CLAUDE_BRIDGE_URL".into(), connection.url.clone());
-                environment.insert("MIGHTY_CLAUDE_BRIDGE_TOKEN".into(), connection.token.clone());
-                let bridge_token = connection.token.clone();
-                run.add_redactor(Arc::new(move |text: &str| text.replace(&bridge_token, BRIDGE_TOKEN_REDACTED)));
-                environment.insert("MIGHTY_CLAUDE_RUN_ID".into(), connection.id.clone());
+                if let Some(connection) = &connection {
+                    environment.insert("MIGHTY_CLAUDE_BRIDGE_URL".into(), connection.url.clone());
+                    environment.insert("MIGHTY_CLAUDE_BRIDGE_TOKEN".into(), connection.token.clone());
+                    let bridge_token = connection.token.clone();
+                    run.add_redactor(Arc::new(move |text: &str| text.replace(&bridge_token, BRIDGE_TOKEN_REDACTED)));
+                    environment.insert("MIGHTY_CLAUDE_RUN_ID".into(), connection.id.clone());
+                    *lock(&run.kept_bridge) = Some(json!({"id": connection.id, "token": connection.token, "url": connection.url}));
+                }
                 for key in ["MIGHTY_CLAUDE_ACTIVITY", "MIGHTY_CLAUDE_USAGE", "MIGHTY_CLAUDE_GRAPH"] {
                     environment.insert(key.into(), "1".into());
                 }
@@ -2066,7 +2116,7 @@ impl Exec {
                 if effort != "default" {
                     environment.insert("CLAUDE_CODE_EFFORT_LEVEL".into(), effort);
                 }
-                *mod_connection = Some(connection);
+                *mod_connection = connection;
             }
             let pi_mem_block = if provider == "pi" { crate::model::memory_block(request.memory_context.as_deref()) } else { None };
             if let Some(files) = request.attachment_list() {
@@ -2124,6 +2174,7 @@ impl Exec {
                 // continued (it keeps the provider it was made with and fails again); a pane that asks does not continue one whose
                 // receipt cannot be read. `state.db` is read on a blocking thread.
                 if provider == "hermes"
+                    && !request.adopted
                     && let Some(resume) = launch.resume_id.clone()
                 {
                     let (count, full) = match inner.options.hermes_session.clone() {
@@ -2163,6 +2214,7 @@ impl Exec {
             {
                 run.add_redactor(binding.redact.clone());
                 *lock(&run.binding_ended) = binding.ended;
+                *lock(&run.kept_binding) = binding.kept;
                 environment.extend(binding.environment);
                 arguments.extend(binding.arguments);
             }
@@ -2182,19 +2234,29 @@ impl Exec {
         };
         self.cancelled()?;
         let mut launch = launch;
-        // MC-34: an agent run of a workspace with the sandbox on starts under it (never a shell pane's command, never an SSH run).
-        let sandboxed = if ssh.is_none() && request.kind != "shell" {
+        // MC-34: an agent run of a workspace with the sandbox on starts under it (never a shell pane's command, never an SSH run, never a
+        // run taken back: a sandboxed run is never kept, so its CLI was started without one).
+        let sandboxed = if ssh.is_none() && request.kind != "shell" && !request.adopted {
             self.sandbox(&workspace, &request, &workspace_path, &mut launch).await?
         } else {
             false
         };
         self.cancelled()?;
         // MC-3: keyed by its pane, so the app's process host can hand it to the background daemon (where the person keeps work running
-        // after the app closes). Only a Claude run with its approval channel, of a pane that is no delegated child, can be taken back by
-        // a later app, so only it is kept then. A sandboxed run is not: its proxy and gate are this app's (it ends with the app).
-        let keep = interactive && request.delegation_worktree_root.is_none() && !sandboxed;
+        // after the app closes). MC-38: every agent's run can be taken back by a later app (a delegated child's too), so each is kept
+        // then; a shell pane's command is not, nor a sandboxed run: its proxy and gate are this app's (it ends with the app).
+        let keep = request.kind != "shell" && !sandboxed;
         let key = crate::daemon::owner::run_key(&request.session_id, keep);
-        let mut child = providers.processes().spawn_keyed(launch, &key).await.map_err(|e| Failure::Error(e.to_string()))?;
+        // MC-38: a run taken back is the daemon's child attached where the earlier app let go of it, never one started anew.
+        let child = if request.adopted {
+            match providers.processes().attach_keyed(&key) {
+                Some(attaching) => attaching.await,
+                None => return Err(Failure::Error(strings::get("run.error.keptRunGone"))),
+            }
+        } else {
+            providers.processes().spawn_keyed(launch, &key).await
+        };
+        let mut child = child.map_err(|e| Failure::Error(e.to_string()))?;
         let control = child.control();
         *lock(&run.child) = Some(control.clone());
         run.child_pid.store(child.id, Ordering::SeqCst);
@@ -2248,6 +2310,11 @@ impl Exec {
             let channel = ClaudePermissionChannel::new(&request.session_id, &prompt, hooks, &request.settings().permission_mode);
             let channel = if request.adopted { channel.adopted() } else { channel };
             *lock(&run.permissions) = Some(Arc::new(channel));
+            // MC-38: where the earlier app's watch on the CLI's turn was.
+            if let Some(kept) = request.kept.as_ref().map(|kept| kept.part("claude")).filter(|_| request.adopted) {
+                run.turn_result_seen.store(kept.get("turnResultSeen").and_then(Value::as_bool).unwrap_or(false), Ordering::SeqCst);
+                *lock(&run.cli_state) = kept.get("cliState").and_then(Value::as_str).map(str::to_string);
+            }
         }
         if codex_approvals {
             let images: Vec<String> = staged
@@ -2290,14 +2357,21 @@ impl Exec {
                 fail: Arc::new(move |message| Exec::fail_protocol(&fail_run, &fail_emit, message)),
                 completed: Arc::new(move || completed_pipe.close()),
             };
-            *lock(&run.codex) = Some(Arc::new(CodexApprovalChannel::new(&request, &workspace_path, &input, images, hooks)));
+            let channel = Arc::new(CodexApprovalChannel::new(&request, &workspace_path, &input, images, hooks));
+            *lock(&run.codex) = Some(channel.clone());
+            if request.adopted {
+                channel.restore(request.kept.as_ref().map(|kept| kept.part("codex")).unwrap_or(&Value::Null));
+            }
         }
         if let Some(notice) = &hermes_notice {
             Self::log(&run, &self.emit, "system", notice);
         }
         if let Some(launch) = &acp_launch {
             let channel = self.start_acp(launch, &workspace_path, staged.as_ref(), &hermes_questions, &pipe, &control);
-            *lock(&run.acp) = Some(channel);
+            *lock(&run.acp) = Some(channel.clone());
+            if request.adopted {
+                channel.restore(request.kept.as_ref().map(|kept| kept.part("acp")).unwrap_or(&Value::Null));
+            }
         }
         (self.emit)(RunEvent::state(&request.session_id, "running", None));
         if request.kind != "shell" {
@@ -2320,7 +2394,9 @@ impl Exec {
         let error = tokio::spawn(Self::pump_error(self.clone(), child.stderr.take()));
         let hermes = provider == "hermes";
         if let Some(channel) = run.acp() {
-            channel.start();
+            if !request.adopted {
+                channel.start();
+            }
             // An ACP agent boots its own server (and may refresh its model list) before it answers; Hermes may have to start its gateway
             // first.
             let exec = self.clone();
@@ -2376,8 +2452,11 @@ impl Exec {
                 }
             });
         } else if let Some(codex) = run.codex() {
-            // The channel writes the request itself, once its thread and turn are open; a turn not started in 15 s fails closed.
-            codex.start();
+            // The channel writes the request itself, once its thread and turn are open; a turn not started in 15 s fails closed. A turn
+            // taken back from the background daemon had its handshake.
+            if !request.adopted {
+                codex.start();
+            }
             let exec = self.clone();
             tokio::spawn(async move {
                 tokio::select! {
@@ -2391,9 +2470,22 @@ impl Exec {
                 }
             });
         } else {
-            if request.kind != "shell" {
+            // MC-38: a run taken back from the background daemon had its request (and pi its `get_state`) from the earlier app.
+            if request.kind != "shell" && !request.adopted {
                 let first = if provider == "gemini" { ProviderInput::antigravity_user_message(&input) } else { input.clone() };
                 let _ = pipe.write(&first);
+            }
+            if provider == "pi"
+                && request.adopted
+                && let Some(kept) = request.kept.as_ref().map(|kept| kept.part("pi")).filter(|kept| !kept.is_null())
+            {
+                self.parser.restore_pi(kept.get("turn").unwrap_or(&Value::Null));
+                if let Some(dialogs) = run.pi_dialogs() {
+                    dialogs.restore(kept.get("dialogs").unwrap_or(&Value::Null));
+                }
+                if kept.get("inputClosed").and_then(Value::as_bool) == Some(true) {
+                    run.pi_input_closed.store(true, Ordering::SeqCst);
+                }
             }
             // pi reads get_state and the prompt, then keeps reading for a steer: stdin stays open until its turn ended and went quiet.
             if provider == "pi" {
@@ -2429,6 +2521,12 @@ impl Exec {
                 }
             }
             _ = run.cancel.cancelled() => return Err(Failure::Cancelled),
+        }
+        // MC-38: let go of (the background daemon keeps it for a later app): no end of the run, so nothing of it reads as a failure here
+        // (no channel's "exited early", no exit code); the pane shows it stopped until a later app takes it back.
+        if control.let_go() {
+            self.end("stopped").await;
+            return Ok(());
         }
         // What the ACP channel queued from the agent's last lines reaches the parser before its flush.
         if let Some(acp) = run.acp() {
@@ -2576,6 +2674,52 @@ impl Exec {
                 }
             }
         }
+        // MC-38: the app let go of the run (the background daemon keeps it): every line up to where a later app takes it up was read, so
+        // what that app needs is left with the daemon now, after anything this app wrote for those lines went and before its own
+        // teardown could write more.
+        let control = lock(&exec.run.child).clone();
+        if let Some(control) = control.filter(|control| control.let_go()) {
+            let kept = exec.kept_state();
+            let input = lock(&exec.run.input).clone();
+            if let Some(input) = input {
+                input.hold().await;
+            }
+            control.leave(kept.to_string());
+        }
+    }
+
+    /// MC-38: what a later app needs to take this run up ([`crate::model::KeptState`]): each channel's state and the requests still
+    /// waiting, pi's turn, Claude's turn watch, the binding and the Mods bridge registration.
+    fn kept_state(&self) -> Value {
+        let run = &self.run;
+        let mut kept = json!({"provider": run.request.provider});
+        if let Some(codex) = run.codex() {
+            kept["codex"] = codex.kept(KEPT_REQUEST_BYTES);
+        }
+        if let Some(acp) = run.acp() {
+            kept["acp"] = acp.kept(KEPT_REQUEST_BYTES);
+        }
+        if run.request.provider == "pi" && run.request.kind != "shell" {
+            let dialogs = run.pi_dialogs().map(|dialogs| dialogs.kept(KEPT_REQUEST_BYTES)).unwrap_or(Value::Null);
+            kept["pi"] = json!({
+                "turn": self.parser.pi_kept(),
+                "dialogs": dialogs,
+                "inputClosed": run.pi_input_closed.load(Ordering::SeqCst),
+            });
+        }
+        if run.channel().is_some() {
+            kept["claude"] = json!({
+                "turnResultSeen": run.turn_result_seen.load(Ordering::SeqCst),
+                "cliState": *lock(&run.cli_state),
+            });
+        }
+        if let Some(binding) = lock(&run.kept_binding).clone() {
+            kept["binding"] = binding;
+        }
+        if let Some(bridge) = lock(&run.kept_bridge).clone() {
+            kept["bridge"] = bridge;
+        }
+        kept
     }
 
     async fn pump_error(exec: Arc<Exec>, reader: Option<ChildReader>) {
@@ -2669,6 +2813,8 @@ mod tests {
             tracker: Mutex::new(None),
             redact: Mutex::new(None),
             binding_ended: Mutex::new(None),
+            kept_binding: Mutex::new(None),
+            kept_bridge: Mutex::new(None),
             sandbox: Mutex::new(None),
             turn_reopened: Mutex::new(None),
             workspace_root: Mutex::new(None),

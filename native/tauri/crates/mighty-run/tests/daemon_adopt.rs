@@ -12,7 +12,7 @@ use mighty_core::model::{AppSnapshot, RunSession, Workspace};
 use mighty_platform::AgentIoListener;
 use mighty_platform::fake::{FakeAgentIo, FakePtyHost};
 use mighty_run::daemon::client::DaemonClient;
-use mighty_run::daemon::owner::{Adoption, RESUME_AT, Route, RoutedProcesses, run_key};
+use mighty_run::daemon::owner::{Adoption, KEPT_STATE, RESUME_AT, Route, RoutedProcesses, run_key};
 use mighty_run::daemon::server::{Daemon, Options};
 use mighty_run::manager::{Emit, ResolveWorkspace};
 use mighty_run::model::{RunEvent, StartRunRequest};
@@ -83,6 +83,11 @@ async fn a_kept_claude_run_is_taken_back_with_its_waiting_card_and_no_second_pro
     let kept = listed.iter().find(|p| p.key.as_deref() == Some(run_key("kept", true).as_str())).expect("the run is kept").clone();
     assert!(kept.running, "the CLI still runs in the daemon");
     let from = kept.meta[RESUME_AT].as_u64().expect("where the later app takes it up");
+    // MC-38: what the later app needs is left beside it: the CLI's turn watch and its Mods bridge registration.
+    let state = &kept.meta[KEPT_STATE];
+    assert_eq!(state["provider"], "claude");
+    assert!(state["claude"].is_object(), "the turn watch is left");
+    assert!(state["bridge"]["url"].as_str().is_some_and(|url| url.starts_with("http://127.0.0.1:")), "the bridge registration is left");
 
     // The later app takes it back: attached where the first one stopped, the card comes back, its answer reaches the CLI.
     let route = Route::new();
@@ -129,7 +134,8 @@ async fn a_kept_claude_run_is_taken_back_with_its_waiting_card_and_no_second_pro
             }
         }
     });
-    let request = StartRunRequest::new("kept", &workspace_id, "claude", "(continue)").with_provider("claude");
+    let mut request = StartRunRequest::new("kept", &workspace_id, "claude", "(continue)").with_provider("claude");
+    request.kept = Some(mighty_run::model::KeptState(state.clone()));
     service.adopt(request).await.unwrap();
     let status = || service.snapshot().session("kept").and_then(|s| s.status.clone());
     common::until(|| !service.is_session_running("kept") && status().as_deref() != Some("running"), 20000, "the taken-back run ends").await;

@@ -141,6 +141,8 @@ struct Pending {
     asked: Option<Question>,
     /// False for a form without a tool call of its own (Hermes's): no activity row to mark.
     row: bool,
+    /// MC-38: the request as the agent sent it, so a later app that takes the run up asks it again ([`AcpChannel::kept`]).
+    frame: Value,
 }
 
 /// What a channel tells its owner, after its lock is released.
@@ -659,8 +661,9 @@ impl AcpChannel {
         // One the card cannot show is skipped and named instead of answered by guess.
         if options.iter().filter(allow_once).count() > 1 {
             if state.pending.len() < MAXIMUM_PENDING
-                && let Some(ask) = self.choice_question(raw_id, &request_key, call, &options, reject.clone())
+                && let Some(mut ask) = self.choice_question(raw_id, &request_key, call, &options, reject.clone())
             {
+                ask.frame = request_frame(raw_id, method, parameters);
                 let display = ask.display.clone();
                 state.pending.insert(display.id.clone(), ask);
                 effects.push(Effect::Activity(display.clone(), "waiting"));
@@ -705,7 +708,15 @@ impl AcpChannel {
         value.received_at = Some(time::now_o());
         state.pending.insert(
             value.id.clone(),
-            Pending { rpc_id: raw_id.clone(), allow_option: allow, reject_option: reject, display: value.clone(), asked: None, row: true },
+            Pending {
+                rpc_id: raw_id.clone(),
+                allow_option: allow,
+                reject_option: reject,
+                display: value.clone(),
+                asked: None,
+                row: true,
+                frame: request_frame(raw_id, method, parameters),
+            },
         );
         effects.push(Effect::Activity(value.clone(), "waiting"));
         effects.push(Effect::Emit(value));
@@ -748,6 +759,7 @@ impl AcpChannel {
             display,
             asked: Some(Question { form: None, choices: Some(choices) }),
             row: true,
+            frame: Value::Null,
         })
     }
 
@@ -795,12 +807,110 @@ impl AcpChannel {
                 display: value.clone(),
                 asked: Some(Question { form: Some(form), choices: None }),
                 row,
+                frame: request_frame(raw_id, "elicitation/create", parameters),
             },
         );
         if row {
             effects.push(Effect::Activity(value.clone(), "waiting"));
         }
         effects.push(Effect::Emit(value));
+    }
+
+    /// MC-38: what a later app needs to take this turn up where this app let go of it (the background daemon keeps the agent
+    /// running): the session, the calls still unanswered, the settings still to send, and the requests still waiting as the agent sent
+    /// them, within `budget` bytes. A waiting request that does not fit is refused here (a permission's reject, a form declined), so the
+    /// agent never waits on a card no app can show. Called once the run's last line was read.
+    pub fn kept(&self, budget: usize) -> Value {
+        self.with(|this, state, effects| {
+            let mut used = 0usize;
+            let mut requests = Vec::new();
+            let ids: Vec<String> = state.pending.keys().cloned().collect();
+            for id in ids {
+                let frame = state.pending[&id].frame.to_string();
+                if used + frame.len() <= budget && !state.pending[&id].frame.is_null() {
+                    used += frame.len();
+                    requests.push(Value::String(frame));
+                } else if let Some(ask) = state.pending.shift_remove(&id) {
+                    if ask.asked.as_ref().is_some_and(|asked| asked.form.is_some()) {
+                        this.reply(&ask.rpc_id, json!({"action": "decline"}));
+                    } else {
+                        this.answer(&ask.rpc_id, ask.reject_option.as_deref());
+                    }
+                    effects.push(Effect::Warning(strings::get("run.notice.keptRequestDeclined")));
+                }
+            }
+            let options = Value::Array(state.config_options.clone());
+            let options = if used + options.to_string().len() <= budget { options } else { Value::Array(Vec::new()) };
+            json!({
+                "sessionId": state.session_id,
+                "sequence": state.sequence,
+                "rpc": state.rpc,
+                "started": state.started,
+                "initialized": state.initialized,
+                "ready": state.ready,
+                "turnCompleted": state.turn_completed,
+                "turnCancelled": state.turn_cancelled,
+                "closed": state.closed,
+                "canResume": state.can_resume,
+                "canLoad": state.can_load,
+                "replaying": state.replaying,
+                "openCall": state.open_call,
+                "queuedConfig": state.queued_config.iter().map(|(id, value)| json!([id, value])).collect::<Vec<_>>(),
+                "configOptions": options,
+                "cancellation": lock(&this.cancellation.0).clone(),
+                "requests": requests,
+            })
+        })
+    }
+
+    /// MC-38: the turn an earlier app let go of, taken up where it stopped ([`AcpChannel::kept`]): nothing is written for the handshake
+    /// (the agent had it), and each request still waiting is asked again on its card.
+    pub fn restore(&self, kept: &Value) {
+        self.with(|this, state, effects| {
+            let flag = |name: &str| kept.get(name).and_then(Value::as_bool).unwrap_or(false);
+            state.session_id = kept.get("sessionId").and_then(Value::as_str).filter(|id| wire::session_identifier(id)).map(str::to_string);
+            state.sequence = kept.get("sequence").and_then(Value::as_u64).unwrap_or(0);
+            if let Some(Value::Object(rpc)) = kept.get("rpc") {
+                state.rpc = rpc.iter().filter_map(|(key, method)| Some((key.clone(), method.as_str()?.to_string()))).collect();
+            }
+            // Never started again: the agent had its `initialize`.
+            state.started = true;
+            state.initialized = flag("initialized");
+            state.ready = flag("ready");
+            state.turn_completed = flag("turnCompleted");
+            state.turn_cancelled = flag("turnCancelled");
+            state.closed = flag("closed");
+            state.can_resume = flag("canResume");
+            state.can_load = flag("canLoad");
+            state.replaying = flag("replaying");
+            state.open_call = kept.get("openCall").and_then(Value::as_str).filter(|c| !c.is_empty() && c.len() <= 256).map(str::to_string);
+            state.queued_config = kept
+                .get("queuedConfig")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|pair| Some((pair.get(0)?.as_str()?.to_string(), pair.get(1)?.as_str()?.to_string())))
+                .collect();
+            if let Some(Value::Array(options)) = kept.get("configOptions") {
+                state.config_options = options.clone();
+            }
+            if let Some(frame) = kept.get("cancellation").and_then(Value::as_str) {
+                *lock(&this.cancellation.0) = Some(frame.to_string());
+            }
+            for frame in kept.get("requests").and_then(Value::as_array).into_iter().flatten() {
+                let Some(Value::Object(root)) = frame.as_str().and_then(|f| serde_json::from_str::<Value>(f).ok()) else { continue };
+                let (Some(id), Some(method)) = (root.get("id"), text(root.get("method"))) else { continue };
+                if state.closed {
+                    break;
+                }
+                let empty = Map::new();
+                let parameters = match root.get("params") {
+                    Some(Value::Object(parameters)) => parameters,
+                    _ => &empty,
+                };
+                this.agent_request(state, effects, id, method, parameters);
+            }
+        })
     }
 
     /// `AnswerQuestions`: the question card's answers, sent as the form's content or the picked choice's option. An answer the form
@@ -978,6 +1088,11 @@ impl AcpChannel {
     fn event(&self, effects: &mut Vec<Effect>, value: Value) {
         effects.push(Effect::Consume(text_json::relaxed(&value, false)));
     }
+}
+
+/// A request of the agent's as it sent it (kept for a later app, MC-38).
+fn request_frame(id: &Value, method: &str, parameters: &Map<String, Value>) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "method": method, "params": parameters})
 }
 
 /// `Key`: a JSON-RPC id as a key — a string (1–256 bytes) or a whole number; 0 is an id like any other.

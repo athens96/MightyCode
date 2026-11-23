@@ -163,6 +163,17 @@ pub trait ChildControl: Send + Sync {
     /// `kill`, then waits up to 3 s for the exit and, on Windows, up to 3 s more until the job holds no process, so no descendant
     /// still has the workspace's files open (C# `ChildProcess.DisposeAsync`). `TimedOut` when descendants remain.
     fn close(&self) -> BoxFuture<'_, Result<()>>;
+    /// MC-38: the app let go of this child while it runs on (the background daemon keeps it for a later app to take up). Only a
+    /// daemon's child is ever let go of.
+    fn let_go(&self) -> bool {
+        false
+    }
+    /// MC-38: what a later app needs to take this child up where this app stopped (a run's protocol state, as JSON text), left by the
+    /// run engine once it has read the child's output to its end after [`ChildControl::let_go`]. A child that cannot be let go of
+    /// ignores it.
+    fn leave(&self, state: String) {
+        let _ = state;
+    }
 }
 
 /// A detached process the app waits on ([`ProcessHost::start_detached_waitable`]): it outlives the app, but the app can still read its
@@ -197,6 +208,13 @@ pub trait ProcessHost: Send + Sync {
     fn spawn_keyed(&self, request: SpawnRequest, key: &str) -> BoxFuture<'_, Result<Child>> {
         let _ = key;
         self.spawn(request)
+    }
+
+    /// MC-38: the child of `key` an earlier app left running in the background daemon, attached where that app stopped reading
+    /// (never started again); None when this host holds none for `key` (every host but the app's, and the app's without a daemon).
+    fn attach_keyed(&self, key: &str) -> Option<BoxFuture<'_, Result<Child>>> {
+        let _ = key;
+        None
     }
 
     /// W9 (plan D6, owner W9-B): starts `request` so it outlives this process and answers its process id once it runs. Unlike

@@ -365,6 +365,7 @@ impl DelegationApp {
     async fn hand_on(&self, coordinator: &Coordinator, change: DelegationRunEvent) {
         match change {
             DelegationRunEvent::Started { child_id, run_id } => coordinator.child_run_started(&child_id, &run_id).await,
+            DelegationRunEvent::Adopted { child_id, run_id } => coordinator.child_run_adopted(&child_id, &run_id).await,
             DelegationRunEvent::Ended { child_id, run_id, end } => {
                 coordinator.child_run_ended(&child_id, &run_id, end).await;
                 self.window.changed();
@@ -1310,6 +1311,19 @@ impl DelegationRunHooks for DelegationApp {
             lock(&self.child_runs).insert(pane.id().to_string());
             if let Some(loaded) = lock(&self.loaded).as_ref() {
                 loaded.pump.send(DelegationRunEvent::Started { child_id: pane.id().to_string(), run_id: run_id.clone() });
+            }
+        }
+        run_id
+    }
+
+    /// MC-38: a run an earlier app kept running goes on in the pane: its new id in the ledger; a child's run reaches the coordinator as
+    /// the same run carried on.
+    fn adopted(&self, pane: &RunSession) -> String {
+        let run_id = self.runs.begin(pane.id());
+        if pane.parent_session_id.is_some() && self.window.live() {
+            lock(&self.child_runs).insert(pane.id().to_string());
+            if let Some(loaded) = lock(&self.loaded).as_ref() {
+                loaded.pump.send(DelegationRunEvent::Adopted { child_id: pane.id().to_string(), run_id: run_id.clone() });
             }
         }
         run_id

@@ -49,6 +49,35 @@ impl PiState {
     pub(super) fn take_error(&mut self) -> Option<String> {
         self.error.take()
     }
+
+    /// MC-38: the turn as the stream said it so far, for a later app that takes the run up.
+    pub(super) fn kept(&self) -> Value {
+        let asking: Vec<Value> = self.asking.iter().map(|(id, (question, multiple))| json!([id, question, multiple])).collect();
+        json!({
+            "agentOpen": self.agent_open,
+            "compacting": self.compacting,
+            "retrying": self.retrying,
+            "ended": self.ended,
+            "error": self.error,
+            "asking": asking,
+        })
+    }
+
+    /// MC-38: the turn an earlier app read up to here ([`PiState::kept`]).
+    pub(super) fn restore(&mut self, kept: &Value) {
+        let flag = |name: &str| kept.get(name).and_then(Value::as_bool).unwrap_or(false);
+        self.agent_open = flag("agentOpen");
+        self.compacting = flag("compacting");
+        self.retrying = flag("retrying");
+        self.ended = flag("ended");
+        self.error = kept.get("error").and_then(Value::as_str).map(str::to_string);
+        for entry in kept.get("asking").and_then(Value::as_array).into_iter().flatten().take(64) {
+            if let (Some(id), Some(question)) = (entry.get(0).and_then(Value::as_str), entry.get(1).and_then(Value::as_str)) {
+                let multiple = entry.get(2).and_then(Value::as_bool).unwrap_or(false);
+                self.asking.insert(id.to_string(), (question.to_string(), multiple));
+            }
+        }
+    }
 }
 
 /// What a frame leaves for after the parser's lock.

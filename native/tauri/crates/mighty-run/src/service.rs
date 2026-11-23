@@ -153,6 +153,8 @@ struct State {
     snapshot: AppSnapshot,
     routes: HashMap<String, Route>,
     closing: bool,
+    /// MC-38: the app quits keeping its work ([`RunService::letting_go`]): a run that ends now ends as the quit's.
+    letting_go: bool,
 }
 
 /// What a service the host gave no Antigravity settings has (C5): leases that refuse every grant.
@@ -215,10 +217,9 @@ impl Shared {
         let mut delegation_ended = false;
         if ended {
             state.routes.remove(&value.session_id);
-            delegation_ended = self
-                .delegation
-                .as_ref()
-                .is_some_and(|hooks| hooks.ended(&value.session_id, value.status.as_deref().unwrap_or_default(), state.closing));
+            delegation_ended = self.delegation.as_ref().is_some_and(|hooks| {
+                hooks.ended(&value.session_id, value.status.as_deref().unwrap_or_default(), state.closing || state.letting_go)
+            });
             self.send(ServiceEvent::SaveNow);
         } else {
             self.send(ServiceEvent::SaveSoon);
@@ -339,6 +340,12 @@ pub trait DelegationRunHooks: Send + Sync {
     fn worktree_root(&self, pane: &RunSession) -> Option<String>;
     /// C# `DelegationRunBegan(pane)`: a run starts in the pane; the run's id in delegation's ledger (`"run-" + guid`).
     fn began(&self, pane: &RunSession) -> String;
+    /// MC-38: a run an earlier app kept running in the background daemon goes on in the pane ([`RunService::adopt`]): for a delegated
+    /// child it is the run that app recorded, carried on (what the parent awaited of it still awaited). Called under the service's
+    /// lock, as [`DelegationRunHooks::began`] is.
+    fn adopted(&self, pane: &RunSession) -> String {
+        self.began(pane)
+    }
     /// C# `DelegationRunEnded(sessionId, status)`: a run of the pane ended with `status` (`closing`: the app quits); false when no run of
     /// this launch was going there.
     fn ended(&self, session_id: &str, status: &str, closing: bool) -> bool;
@@ -375,7 +382,7 @@ impl RunService {
             snapshot.sessions().iter().filter(|s| !s.body_on_disk).map(|s| (s.id().to_string(), now)).collect();
         let last_touched = Arc::new(Mutex::new(initial_touched));
         let shared = Arc::new(Shared {
-            state: Mutex::new(State { snapshot, routes: HashMap::new(), closing: false }),
+            state: Mutex::new(State { snapshot, routes: HashMap::new(), closing: false, letting_go: false }),
             events,
             pending: Mutex::new(HashMap::new()),
             antigravity: Mutex::new(antigravity::Desk::default()),
@@ -1127,8 +1134,9 @@ impl RunService {
     /// MC-3: a run an earlier app kept running in the background daemon, handed back to its pane. The pane shows it running again and
     /// the run engine reads the child's output from where that app stopped reading (the app's process host attaches the daemon's
     /// process instead of starting one, mighty-run `daemon::owner`); no user entry, no new title, and nothing is written to the agent
-    /// before the person answers (its approval channel asks for the requests still waiting and writes no prompt). Only a local Claude
-    /// agent pane that is no delegated child.
+    /// before the person answers (its channel asks again for the requests still waiting and writes no prompt). MC-38: a local agent
+    /// pane of any agent, a delegated child's included (delegation hears that its run goes on, [`DelegationRunHooks::adopted`]); the
+    /// request carries what the earlier app left ([`crate::model::KeptState`]).
     pub async fn adopt(&self, value: StartRunRequest) -> Result<()> {
         self.ensure_bodies(&[value.session_id.as_str()]);
         let mut request = StartRunRequest { adopted: true, attachments: None, ..value }.validate()?;
@@ -1149,10 +1157,12 @@ impl RunService {
                 .find(|s| s.id() == request.session_id && s.workspace_id() == request.workspace_id && s.kind() == "claude")
                 .cloned()
                 .ok_or_else(|| RunError::Invalid(strings::get("run.error.sessionNotInWorkspace")))?;
-            if workspace.remote.is_some() || request.kind != "claude" || request.provider != "claude" || pane.parent_session_id.is_some() {
-                return Err(RunError::Invalid("only a local Claude agent pane takes back a kept run".into()));
+            if workspace.remote.is_some() || request.kind != "claude" || pane.provider() != request.provider {
+                return Err(RunError::Invalid("only a local agent pane takes back a kept run of its own agent".into()));
             }
-            if pane.working_folder.as_deref().is_some_and(|f| !Path::new(f).is_dir()) {
+            if (pane.parent_session_id.is_some() || pane.working_folder.is_some())
+                && !pane.working_folder.as_deref().is_some_and(|f| Path::new(f).is_dir())
+            {
                 return Err(RunError::State(strings::get("run.blocked.worktreeMissing")));
             }
             if state.routes.contains_key(&request.session_id) {
@@ -1160,10 +1170,18 @@ impl RunService {
             }
             request.phase_models = phase_models::normalized(state.snapshot.phase_models.as_ref());
             request.working_folder = pane.working_folder.clone();
+            request.delegation_worktree_root = self.shared.delegation.as_ref().and_then(|hooks| hooks.worktree_root(&pane));
             request.pane_environment =
-                pane.pane_worktree.as_ref().map(|worktree| worktree.environment(workspace.path()).into_iter().collect());
+                pane.pane_worktree.as_ref().map(|worktree| worktree.environment(workspace.path()).into_iter().collect()).or_else(|| {
+                    let member = pane.compare_member.as_ref()?;
+                    member.environment(pane.working_folder.as_deref()?, workspace.path()).map(|values| values.into_iter().collect())
+                });
             let holder = antigravity::next_holder();
             state.routes.insert(request.session_id.clone(), Route { holder, started: true, cancelled: false });
+            // After the route is added, as a launch tells delegation: a child's run goes on, recorded running before anything else of it.
+            if let Some(hooks) = &self.shared.delegation {
+                hooks.adopted(&pane);
+            }
             let now = DateTimeOffset::now();
             for session in state.snapshot.sessions_mut().iter_mut() {
                 if session.id() == request.session_id {
@@ -1386,6 +1404,13 @@ impl RunService {
         }
         self.shared.receive(RunEvent::log(session_id, "user", text, Some("claude")));
         true
+    }
+
+    /// MC-38: the app quits keeping its work: a run that ends from now on (one let go of to the background daemon among them) ends as
+    /// the quit's, so delegation records a child's as killed by quitting (a later app carries it on), never as a human's stop.
+    /// [`RunService::dispose`] follows.
+    pub fn letting_go(&self) {
+        lock(&self.shared.state).letting_go = true;
     }
 
     /// `DisposeAsync`'s run part: every run stopped, then one more save.

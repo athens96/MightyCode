@@ -369,7 +369,7 @@ mod tests {
         let initial = if removed { LeftoversState::Clean } else { LeftoversState::Pending };
         let (done, leftovers_removed) = tokio::sync::watch::channel(initial);
         let shared = Arc::new(Shared {
-            state: Mutex::new(State { snapshot: AppSnapshot::default(), routes: HashMap::new(), closing: false }),
+            state: Mutex::new(State { snapshot: AppSnapshot::default(), routes: HashMap::new(), closing: false, letting_go: false }),
             events,
             pending: Mutex::new(HashMap::new()),
             antigravity: Mutex::new(Desk::default()),

@@ -236,6 +236,9 @@ pub(crate) struct Inner {
     /// A run event of a child's pane (its start, its end, the parent awaiting it, or the launch's sweep): each is recorded whole before
     /// the next.
     pub(crate) run_turns: tokio::sync::Mutex<()>,
+    /// MC-38: the children whose run an earlier app kept running and this launch took back: the launch's sweep of runs quitting
+    /// killed leaves them running.
+    pub(crate) adopted_runs: Mutex<std::collections::HashSet<String>>,
     rows: watch::Sender<Vec<DelegationChildRow>>,
     held_rows: watch::Sender<IndexMap<String, Vec<DelegationDeliveryItem>>>,
 }
@@ -294,6 +297,7 @@ impl Coordinator {
                 ending_runs: ChildRunsEnding::default(),
                 merge_turns: tokio::sync::Mutex::new(()),
                 run_turns: tokio::sync::Mutex::new(()),
+                adopted_runs: Mutex::new(std::collections::HashSet::new()),
                 rows,
                 held_rows,
             }),
@@ -602,6 +606,12 @@ impl Coordinator {
     pub async fn child_run_started(&self, id: &str, run_id: &str) {
         let (id, run_id) = (id.to_string(), run_id.to_string());
         self.isolated(|_| (), move |coordinator| async move { coordinator.child_run_started_now(&id, &run_id).await }).await
+    }
+
+    /// MC-38: a run an earlier app kept running goes on in the child `id`'s pane as `run_id` ([`crate::reports`]).
+    pub async fn child_run_adopted(&self, id: &str, run_id: &str) {
+        let (id, run_id) = (id.to_string(), run_id.to_string());
+        self.isolated(|_| (), move |coordinator| async move { coordinator.child_run_adopted_now(&id, &run_id).await }).await
     }
 
     /// `ChildRunEnded` ([`crate::reports`]).

@@ -197,6 +197,8 @@ struct State {
 pub struct NamedPipeListener {
     /// The names' prefix: the agents' pipe, or the control API's (MC-9).
     prefix: &'static str,
+    /// MC-38: the one name this listener takes (an earlier app's agents' pipe), instead of a new one.
+    fixed: Option<String>,
     state: Mutex<State>,
     closed: AtomicBool,
     close: Notify,
@@ -210,13 +212,20 @@ impl std::fmt::Debug for NamedPipeListener {
 
 impl Default for NamedPipeListener {
     fn default() -> NamedPipeListener {
-        NamedPipeListener { prefix: PREFIX, state: Mutex::default(), closed: AtomicBool::new(false), close: Notify::new() }
+        NamedPipeListener { prefix: PREFIX, fixed: None, state: Mutex::default(), closed: AtomicBool::new(false), close: Notify::new() }
     }
 }
 
 impl NamedPipeListener {
     pub fn new() -> NamedPipeListener {
         NamedPipeListener::default()
+    }
+
+    /// MC-38: the agents' listener on an earlier app's pipe name (`mighty-agent-io-` and 32 hex digits), so the runs that app kept
+    /// running in the background daemon reach this app; the same owner-only pipe, remote clients refused, first instance only (a name
+    /// another process holds is refused). None for any other name.
+    pub fn agent_io_named(name: &str) -> Option<NamedPipeListener> {
+        is_pipe_name_with(PREFIX, name).then(|| NamedPipeListener { fixed: Some(name.to_string()), ..NamedPipeListener::default() })
     }
 
     /// MC-9: the local control API's listener: the same owner-only pipe, remote clients refused, under [`CONTROL_PREFIX`].
@@ -306,6 +315,9 @@ impl AgentIoListener for NamedPipeListener {
     /// A random name and its first instance (inside a tokio runtime: the instance is registered with it).
     fn bind(&self) -> Result<String> {
         let prefix = self.prefix;
+        if let Some(name) = self.fixed.clone() {
+            return self.bind_with(move || Ok(name.clone()));
+        }
         self.bind_with(|| {
             let mut bytes = [0u8; 16];
             getrandom::fill(&mut bytes).map_err(|_| refused("no random numbers"))?;

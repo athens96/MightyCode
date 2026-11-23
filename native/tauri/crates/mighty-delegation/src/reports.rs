@@ -50,6 +50,23 @@ impl ChildRecord {
     }
 }
 
+impl ChildRecord {
+    /// MC-38: the record brought to `run_id`, the run an earlier app kept running in the background daemon and this launch took back:
+    /// the same run going on, so a child the launch's sweep interrupted runs again and what its parent awaited of the earlier run it
+    /// still awaits. Any other record is brought to it as a new run is ([`ChildRecord::noting_run`]).
+    pub fn carrying_on(&self, run_id: &str) -> Option<ChildRecord> {
+        if self.state != ChildState::Interrupted || self.run_id.as_deref() == Some(run_id) {
+            return self.noting_run(run_id);
+        }
+        let mut next = self.applying(ChildStateEvent::StartRun)?;
+        if self.run_id.is_some() && self.awaited_run_id == self.run_id {
+            next.awaited_run_id = Some(run_id.to_string());
+        }
+        next.run_id = Some(run_id.to_string());
+        Some(next)
+    }
+}
+
 /// `IsIdleBetweenRuns`: a child in `state` is idle in an open pane after a run, so a new run there moves it to running.
 pub fn is_idle_between_runs(state: ChildState) -> bool {
     matches!(state, ChildState::Reported | ChildState::Ended | ChildState::Interrupted | ChildState::Merged)
@@ -81,6 +98,26 @@ impl Coordinator {
             return;
         }
         let Some(running) = state.file.children[index].noting_run(run_id) else { return };
+        let next = state.file.setting_child(index, running);
+        self.save_or_keep(&mut state, next, &context);
+    }
+
+    /// MC-38: a run an earlier app kept running goes on in the child `id`'s pane as `run_id` ([`ChildRecord::carrying_on`]); the launch's
+    /// sweep leaves the child running from now on.
+    pub(crate) async fn child_run_adopted_now(&self, id: &str, run_id: &str) {
+        let _turn = self.inner.run_turns.lock().await;
+        self.inner.adopted_runs.lock().unwrap_or_else(|p| p.into_inner()).insert(id.to_string());
+        match self.file().child(id) {
+            Some(found) if found.run_id.as_deref() != Some(run_id) => {}
+            _ => return,
+        }
+        let context = self.prune_context().await;
+        let mut state = self.lock();
+        let Some(index) = state.file.child_index(id) else { return };
+        if state.file.children[index].run_id.as_deref() == Some(run_id) {
+            return;
+        }
+        let Some(running) = state.file.children[index].carrying_on(run_id) else { return };
         let next = state.file.setting_child(index, running);
         self.save_or_keep(&mut state, next, &context);
     }
@@ -284,8 +321,9 @@ impl Coordinator {
         let mut state = self.lock();
         let mut next = crate::store::DelegationFile::clone(&state.file);
         let mut ids = vec![];
+        let adopted = self.inner.adopted_runs.lock().unwrap_or_else(|p| p.into_inner()).clone();
         for child in next.children.iter_mut() {
-            if !matches!(child.state, ChildState::Running | ChildState::Waiting) {
+            if !matches!(child.state, ChildState::Running | ChildState::Waiting) || adopted.contains(&child.id) {
                 continue;
             }
             let answered =

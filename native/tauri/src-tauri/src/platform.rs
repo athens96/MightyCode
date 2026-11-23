@@ -80,6 +80,19 @@ pub fn agent_io_listener(data_dir: &std::path::Path) -> Arc<dyn mighty_platform:
     }
 }
 
+/// MC-38: how this platform listens on an earlier app's Agent IO name, for the runs it kept running in the background daemon: Windows
+/// makes a new pipe name each launch, so that app's is served as well; the Mac's socket path stays the same (nothing to add).
+pub fn agent_io_earlier_listener() -> Option<mighty_delegation::agent_io::server::EarlierListener> {
+    #[cfg(windows)]
+    {
+        Some(Arc::new(|name: &str| os::agent_io_listener_named(name)))
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 /// The exe's MCP modes' client of that listener (`--agent-io-mcp`, `--agent-delegation-mcp`, main.rs).
 pub fn agent_io_connector() -> Arc<dyn mighty_platform::AgentIoConnector> {
     os::agent_io_connector()

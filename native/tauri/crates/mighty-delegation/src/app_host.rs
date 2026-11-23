@@ -291,8 +291,20 @@ impl DelegationRunLedger {
 /// C# `DelegationRunEvent`: a run event of a child's pane, as the host reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DelegationRunEvent {
-    Started { child_id: String, run_id: String },
-    Ended { child_id: String, run_id: String, end: ChildRunEnd },
+    Started {
+        child_id: String,
+        run_id: String,
+    },
+    /// MC-38: the run an earlier app kept running goes on as `run_id`.
+    Adopted {
+        child_id: String,
+        run_id: String,
+    },
+    Ended {
+        child_id: String,
+        run_id: String,
+        end: ChildRunEnd,
+    },
 }
 
 /// What the pump hands each event to, one at a time.
@@ -328,6 +340,7 @@ impl DelegationRunEventPump {
                 Box::pin(async move {
                     match change {
                         DelegationRunEvent::Started { child_id, run_id } => coordinator.child_run_started(&child_id, &run_id).await,
+                        DelegationRunEvent::Adopted { child_id, run_id } => coordinator.child_run_adopted(&child_id, &run_id).await,
                         DelegationRunEvent::Ended { child_id, run_id, end } => {
                             coordinator.child_run_ended(&child_id, &run_id, end).await;
                         }

@@ -59,6 +59,12 @@ const STOPPED_RUN: &str = "run-stop:";
 /// The meta a detaching app leaves on a kept run: where in its stream a later app takes it up (just after the last whole line of
 /// stdout this app read).
 pub const RESUME_AT: &str = "resumeAt";
+/// MC-38: the meta a detaching app leaves beside [`RESUME_AT`]: what its run engine needs to take the run up again (the protocol's
+/// state: a JSON-RPC channel's ids and the requests still waiting, the run's binding), as the run engine left it
+/// ([`ChildControl::leave`]).
+pub const KEPT_STATE: &str = "keptState";
+/// The most stdout held back after a run's last newline (a line is read whole; a longer one goes on in pieces).
+const MAXIMUM_TAIL: usize = mighty_core::daemon::protocol::RUN_RING_BYTES;
 
 /// A kept run a later app takes back: the daemon's process and where to read from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,11 +74,24 @@ pub struct Adoption {
     pub from: u64,
 }
 
-/// A remote child the app reads: its key, where its stdout's last whole line ends, and whether its reader has ended.
+/// A remote child the app reads: its key, where its stdout's last whole line ends, whether its reader has ended, what its run engine
+/// left for a later app once it read everything ([`ChildControl::leave`]), and whether nothing more may be written to it.
 struct Tracked {
     key: String,
     resume_at: Arc<AtomicU64>,
     ended: watch::Receiver<bool>,
+    left: watch::Receiver<Option<Value>>,
+    frozen: Arc<AtomicBool>,
+}
+
+/// One remote child as [`Route::detach`] lets go of it.
+struct Letting {
+    proc: String,
+    key: String,
+    resume_at: Arc<AtomicU64>,
+    ended: watch::Receiver<bool>,
+    left: watch::Receiver<Option<Value>>,
+    frozen: Arc<AtomicBool>,
 }
 
 /// Where keyed processes go: the daemon while one is connected and the app has not let go, else in-process.
@@ -113,30 +132,42 @@ impl Route {
     }
 
     /// The app quits keeping its work: from now on a kill or close of a remote process lets go of it instead. Each kept run is let go
-    /// of once its reader has taken what came, and told where a later app takes it up ([`RESUME_AT`]); a run that cannot be taken back
-    /// is ended; every terminal is let go of. Bounded: a reader that does not end within two seconds is left as it is.
+    /// of once its reader has taken what came and its run engine has read that to the end and left what a later app needs
+    /// ([`KEPT_STATE`]); then nothing more is written to it, and the daemon is told where a later app takes it up ([`RESUME_AT`]). A
+    /// kept run whose place cannot be left with the daemon is ended (a later app could not take it up safely). A run that cannot be
+    /// taken back is ended; every terminal is let go of. Bounded: a reader or engine that does not finish within two seconds is left as
+    /// it is.
     pub async fn detach(&self) {
         self.detaching.store(true, Ordering::SeqCst);
         let Some(client) = lock(&self.client).clone() else { return };
-        let children: Vec<(String, String, Arc<AtomicU64>, watch::Receiver<bool>)> = lock(&self.children)
+        let children: Vec<Letting> = lock(&self.children)
             .iter()
-            .map(|(proc, tracked)| (proc.clone(), tracked.key.clone(), tracked.resume_at.clone(), tracked.ended.clone()))
+            .map(|(proc, tracked)| Letting {
+                proc: proc.clone(),
+                key: tracked.key.clone(),
+                resume_at: tracked.resume_at.clone(),
+                ended: tracked.ended.clone(),
+                left: tracked.left.clone(),
+                frozen: tracked.frozen.clone(),
+            })
             .collect();
-        for (proc, key, resume_at, mut ended) in children {
-            let keep = parse_run_key(&key).is_some_and(|(_, keep)| keep);
+        let mut letting = Vec::new();
+        for child in children {
+            let keep = parse_run_key(&child.key).is_some_and(|(_, keep)| keep);
             if !keep {
-                client.send(Command::Kill { proc: proc.clone() });
-                client.detach(&proc);
+                child.frozen.store(true, Ordering::SeqCst);
+                client.send(Command::Kill { proc: child.proc.clone() });
+                client.detach(&child.proc);
                 continue;
             }
-            client.detach(&proc);
-            let _ = tokio::time::timeout(Duration::from_secs(2), ended.wait_for(|ended| *ended)).await;
-            let meta = json!({ RESUME_AT: resume_at.load(Ordering::SeqCst) });
-            let _ = tokio::time::timeout(Duration::from_secs(2), client.request(Command::Meta { proc, meta })).await;
+            client.detach(&child.proc);
+            letting.push(tokio::spawn(let_go(client.clone(), child)));
+        }
+        for task in letting {
+            let _ = task.await;
         }
         client.detach_all();
     }
-
     /// The kept run of `key` that the next keyed spawn of that key attaches to instead of starting.
     pub fn expect(&self, key: &str, adoption: Adoption) {
         lock(&self.adoptions).insert(key.to_string(), adoption);
@@ -146,8 +177,8 @@ impl Route {
         lock(&self.adoptions).remove(key)
     }
 
-    fn track(&self, proc: &str, key: &str, resume_at: Arc<AtomicU64>, ended: watch::Receiver<bool>) {
-        lock(&self.children).insert(proc.to_string(), Tracked { key: key.to_string(), resume_at, ended });
+    fn track(&self, proc: &str, tracked: Tracked) {
+        lock(&self.children).insert(proc.to_string(), tracked);
     }
 
     fn forget(&self, proc: &str) {
@@ -177,6 +208,23 @@ impl Route {
     /// The panes whose terminal is still offered (none opened it yet).
     pub fn offered_keys(&self) -> Vec<String> {
         lock(&self.offered).keys().cloned().collect()
+    }
+}
+
+/// One kept run let go of ([`Route::detach`]): its reader's end, then its engine's state, then the meta; a run whose meta the daemon
+/// would not take is ended.
+async fn let_go(client: Arc<DaemonClient>, mut child: Letting) {
+    let _ = tokio::time::timeout(Duration::from_secs(2), child.ended.wait_for(|ended| *ended)).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), child.left.wait_for(Option::is_some)).await;
+    child.frozen.store(true, Ordering::SeqCst);
+    let mut meta = json!({ RESUME_AT: child.resume_at.load(Ordering::SeqCst) });
+    if let Some(state) = child.left.borrow().clone().filter(|state| !state.is_null()) {
+        meta[KEPT_STATE] = state;
+    }
+    let proc = child.proc.clone();
+    let kept = tokio::time::timeout(Duration::from_secs(2), client.request(Command::Meta { proc, meta })).await;
+    if !matches!(kept, Ok(Ok(_))) {
+        client.send(Command::Kill { proc: child.proc });
     }
 }
 
@@ -214,6 +262,16 @@ impl ProcessHost for RoutedProcesses {
             }
             None => self.local.spawn_keyed(request, key),
         }
+    }
+
+    fn attach_keyed(&self, key: &str) -> Option<BoxFuture<'_, Result<Child>>> {
+        let client = self.route.client()?;
+        let adoption = self.route.take_adoption(key)?;
+        let (route, key) = (self.route.clone(), key.to_string());
+        Some(Box::pin(async move {
+            let (events, _) = client.attach(&adoption.proc, adoption.from).await.map_err(platform)?;
+            Ok(adopt_child(client, route, adoption.proc, adoption.pid, &key, adoption.from, events))
+        }))
     }
 
     fn start_detached(&self, request: DetachedRequest) -> Result<u32> {
@@ -307,6 +365,8 @@ async fn spawn_remote(client: Arc<DaemonClient>, route: Arc<Route>, request: Spa
 }
 
 /// A run's child in the daemon as the app's run engine reads it: two output pipes and a control fed by `events` (read from `from`).
+/// Its stdout goes on in whole lines (what follows the last newline waits for the next one, or the exit), so an app that lets go of
+/// the run has read exactly up to where a later app takes it up.
 fn adopt_child(
     client: Arc<DaemonClient>,
     route: Arc<Route>,
@@ -322,30 +382,49 @@ fn adopt_child(
     let releasing = (client.clone(), proc.clone());
     let resume_at = Arc::new(AtomicU64::new(from));
     let (ended_tx, ended) = watch::channel(false);
-    route.track(&proc, key, resume_at.clone(), ended);
+    let (left_tx, left) = watch::channel(None);
+    let frozen = Arc::new(AtomicBool::new(false));
+    route.track(&proc, Tracked { key: key.to_string(), resume_at: resume_at.clone(), ended, left, frozen: frozen.clone() });
     let forgetting = route.clone();
     tokio::spawn(async move {
+        let mut tail: Vec<u8> = Vec::new();
         let ended = loop {
             match events.recv().await {
                 Some(ProcEvent::Output { stream: Stream::Err, data, .. }) => {
                     let _ = err.send(data);
                 }
-                Some(ProcEvent::Output { offset, data, .. }) => {
-                    if let Some(at) = data.iter().rposition(|b| *b == b'\n') {
+                Some(ProcEvent::Output { offset, data, .. }) => match data.iter().rposition(|b| *b == b'\n') {
+                    Some(at) => {
+                        let mut whole = std::mem::take(&mut tail);
+                        whole.extend_from_slice(&data[..=at]);
+                        tail.extend_from_slice(&data[at + 1..]);
                         resume_at.store(offset + at as u64 + 1, Ordering::SeqCst);
+                        let _ = out.send(whole);
                     }
-                    let _ = out.send(data);
-                }
+                    None => {
+                        tail.extend_from_slice(&data);
+                        if tail.len() > MAXIMUM_TAIL {
+                            let _ = out.send(std::mem::take(&mut tail));
+                        }
+                    }
+                },
                 Some(ProcEvent::Replayed) => {}
                 Some(ProcEvent::Exit { code, error }) => {
                     // Every byte has come: the daemon may forget it.
                     releasing.0.send(Command::Release { proc: releasing.1.clone() });
                     break code.ok_or_else(|| error.unwrap_or_else(|| "the exit code could not be read".into()));
                 }
-                Some(ProcEvent::Detached) => break Ok(DETACHED),
+                // What follows the last newline is a later app's to read.
+                Some(ProcEvent::Detached) => {
+                    tail.clear();
+                    break Ok(DETACHED);
+                }
                 Some(ProcEvent::Gone) | None => break Err("the background daemon went away".to_string()),
             }
         };
+        if !tail.is_empty() {
+            let _ = out.send(tail);
+        }
         drop(out);
         drop(err);
         ended_tx.send_replace(true);
@@ -354,10 +433,10 @@ fn adopt_child(
         }
         exit.send_replace(Some(ended));
     });
-    let control = Arc::new(RemoteChild { client: client.clone(), route: route.clone(), proc: proc.clone(), exit: exit_rx });
+    let control = Arc::new(RemoteChild { client: client.clone(), route: route.clone(), proc: proc.clone(), exit: exit_rx, left: left_tx });
     Child::new(
         pid,
-        Box::new(RemoteStdin { client, route, proc }),
+        Box::new(RemoteStdin { client, route, proc, frozen }),
         Box::new(ChannelReader::new(out_rx)),
         Box::new(ChannelReader::new(err_rx)),
         control,
@@ -369,6 +448,8 @@ struct RemoteChild {
     route: Arc<Route>,
     proc: String,
     exit: ExitWatch,
+    /// What the run engine left for a later app ([`ChildControl::leave`]).
+    left: watch::Sender<Option<Value>>,
 }
 
 async fn exited(exit: &ExitWatch) -> Result<i32> {
@@ -405,20 +486,32 @@ impl ChildControl for RemoteChild {
             }
         })
     }
+
+    fn let_go(&self) -> bool {
+        self.route.detaching()
+    }
+
+    fn leave(&self, state: String) {
+        if self.route.detaching() {
+            self.left.send_replace(Some(serde_json::from_str(&state).unwrap_or(Value::Null)));
+        }
+    }
 }
 
-/// A run's stdin in the daemon: each write goes as one or more `write` requests, the shutdown as `stdin.close`. Once the app let go
-/// of its work (quitting, keeping it), nothing more is written and the stdin stays open: the run engine's own teardown must not end a
-/// run the daemon keeps.
+/// A run's stdin in the daemon: each write goes as one or more `write` requests, the shutdown as `stdin.close`. Once the app lets go
+/// of its work (quitting, keeping it) the stdin stays open: the run engine's own teardown must not end a run the daemon keeps. What
+/// the engine writes while it reads the run's last lines still goes (an answer the protocol gives to one of them is part of the state
+/// a later app takes up); once the run is let go of ([`Route::detach`]) nothing more is written.
 struct RemoteStdin {
     client: Arc<DaemonClient>,
     route: Arc<Route>,
     proc: String,
+    frozen: Arc<AtomicBool>,
 }
 
 impl AsyncWrite for RemoteStdin {
     fn poll_write(self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
-        if self.route.detaching() {
+        if self.frozen.load(Ordering::SeqCst) {
             return Poll::Ready(Ok(buf.len()));
         }
         let take = buf.len().min(MAX_CHUNK_BYTES);

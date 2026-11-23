@@ -22,6 +22,7 @@ use crate::os;
 use crate::permissions::{ActivityHook, Emit, Message, ToolPermissionRequest};
 use crate::plan_mode::MAXIMUM_TODO_ITEMS;
 use crate::presentation::strings as copy;
+use crate::strings;
 use crate::text_json;
 use crate::{Result, RunError, lock};
 
@@ -62,6 +63,8 @@ enum Effect {
 struct Pending {
     rpc_id: Value,
     display: ToolPermissionRequest,
+    /// MC-38: the request as the CLI sent it, so a later app that takes the run up asks it again ([`CodexApprovalChannel::kept`]).
+    frame: Value,
 }
 
 struct State {
@@ -634,9 +637,99 @@ impl CodexApprovalChannel {
             "The full command or diff is unavailable, or this request does not support a one-time approval.".into()
         });
         value.can_allow = can_allow;
-        state.pending.insert(value.id.clone(), Pending { rpc_id: raw_id.clone(), display: value.clone() });
+        let frame = json!({"id": raw_id, "method": method, "params": parameters});
+        state.pending.insert(value.id.clone(), Pending { rpc_id: raw_id.clone(), display: value.clone(), frame });
         effects.push(Effect::Activity(value.clone(), "waiting".into()));
         effects.push(Effect::Emit(value));
+    }
+
+    /// MC-38: what a later app needs to take this turn up where this app let go of it (the background daemon keeps the CLI running):
+    /// the thread and turn, the calls still unanswered, the requests still waiting as the CLI sent them, and the file changes a later
+    /// approval may name, within `budget` bytes. A waiting request that does not fit is declined here, so the CLI never waits on a card
+    /// no app can show. Called once the run's last line was read.
+    pub fn kept(&self, budget: usize) -> Value {
+        let mut effects = Vec::new();
+        let kept = {
+            let mut state = lock(&self.state);
+            let mut used = 0usize;
+            let mut requests = Vec::new();
+            let ids: Vec<String> = state.pending.keys().cloned().collect();
+            for id in ids {
+                let frame = state.pending[&id].frame.to_string();
+                if used + frame.len() <= budget {
+                    used += frame.len();
+                    requests.push(Value::String(frame));
+                } else if let Some(ask) = state.pending.shift_remove(&id) {
+                    self.reply(&ask.rpc_id, json!({"decision": "decline"}));
+                    effects.push(Effect::Warning(strings::get("run.notice.keptRequestDeclined")));
+                }
+            }
+            let mut files = Map::new();
+            for (item, value) in &state.files {
+                let size = value.to_string().len();
+                if used + size <= budget {
+                    used += size;
+                    files.insert(item.clone(), value.clone());
+                }
+            }
+            json!({
+                "threadId": state.thread_id,
+                "turnId": state.turn_id,
+                "sequence": state.sequence,
+                "rpc": state.rpc,
+                "started": state.started,
+                "initialized": state.initialized,
+                "ready": state.ready,
+                "awaitingTurn": state.awaiting_turn,
+                "turnCompleted": state.turn_completed,
+                "closed": state.closed,
+                "usage": state.usage,
+                "files": files,
+                "requests": requests,
+            })
+        };
+        self.run(effects);
+        kept
+    }
+
+    /// MC-38: the turn an earlier app let go of, taken up where it stopped ([`CodexApprovalChannel::kept`]): nothing is written for
+    /// the handshake (the CLI had it), and each request still waiting is asked again on its card.
+    pub fn restore(&self, kept: &Value) {
+        let mut effects = Vec::new();
+        {
+            let mut state = lock(&self.state);
+            let text = |name: &str| kept.get(name).and_then(Value::as_str).filter(|t| wire::identifier(t)).map(str::to_string);
+            let flag = |name: &str| kept.get(name).and_then(Value::as_bool).unwrap_or(false);
+            state.thread_id = text("threadId");
+            state.turn_id = text("turnId");
+            state.sequence = kept.get("sequence").and_then(Value::as_u64).unwrap_or(0);
+            if let Some(Value::Object(rpc)) = kept.get("rpc") {
+                state.rpc = rpc.iter().filter_map(|(key, method)| Some((key.clone(), method.as_str()?.to_string()))).collect();
+            }
+            // Never started again: the CLI had its `initialize`.
+            state.started = true;
+            state.initialized = flag("initialized");
+            state.ready = flag("ready");
+            state.awaiting_turn = flag("awaitingTurn");
+            state.turn_completed = flag("turnCompleted");
+            state.closed = flag("closed");
+            if let Some(usage) = kept.get("usage").filter(|u| u.is_object()) {
+                state.usage = usage.clone();
+            }
+            if let Some(Value::Object(files)) = kept.get("files") {
+                for (item, value) in files.iter().take(128) {
+                    state.files.insert(item.clone(), value.clone());
+                }
+            }
+            for frame in kept.get("requests").and_then(Value::as_array).into_iter().flatten() {
+                let Some(root) = frame.as_str().and_then(|f| serde_json::from_str::<Value>(f).ok()) else { continue };
+                if state.closed {
+                    break;
+                }
+                self.receive_frame(&mut state, &mut effects, &root);
+            }
+        }
+        self.run(effects);
     }
 
     /// `Respond`: 이번만 허용 / 거부 for one waiting request; only the single displayed command or diff is granted.

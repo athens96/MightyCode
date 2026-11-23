@@ -1561,6 +1561,13 @@ impl FakeAgentIo {
     /// Each connection's buffer: a whole packet of the transport's largest (1 MiB and its header) fits.
     pub const BUFFER: usize = 2 * 1_048_576;
 
+    /// A listener that binds `name` (an earlier app's, MC-38) instead of a new one.
+    pub fn named(name: &str) -> FakeAgentIo {
+        let io = FakeAgentIo::default();
+        *lock(&io.inner.name) = Some(name.to_string());
+        io
+    }
+
     /// The listener belongs to another user from now on (`true`): every `connect` is refused.
     pub fn set_foreign(&self, foreign: bool) {
         self.inner.foreign.store(foreign, std::sync::atomic::Ordering::SeqCst);

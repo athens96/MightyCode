@@ -385,10 +385,14 @@ async fn a_detaching_app_keeps_runs_it_can_take_back_and_ends_the_rest() {
     let mut out = kept.stdout.take().unwrap();
     let mut first = [0u8; 64];
     let mut got = 0;
-    while got < 31 {
+    while got < 18 {
         got += tokio::time::timeout(WAIT, out.read(&mut first[got..])).await.unwrap().unwrap();
     }
+    // MC-38: the run engine reads whole lines only; the half line waits for its newline (or the exit).
+    assert!(tokio::time::timeout(Duration::from_millis(300), out.read(&mut first[got..])).await.is_err(), "the half line is held");
+    assert_eq!(&first[..got], b"{\"type\":\"system\"}\n");
     route.detach().await;
+    assert_eq!(tokio::time::timeout(WAIT, out.read(&mut first[got..])).await.unwrap().unwrap(), 0, "let go: the half line is not read");
     assert_eq!(tokio::time::timeout(WAIT, kept.wait()).await.unwrap().unwrap(), DETACHED);
     assert_eq!(tokio::time::timeout(WAIT, stopped.wait()).await.unwrap().unwrap(), DETACHED);
     let infos = running.client().await.list().await.unwrap();
@@ -420,9 +424,10 @@ async fn a_detaching_app_keeps_runs_it_can_take_back_and_ends_the_rest() {
     assert_eq!(running.processes.spawned().len(), 2, "nothing started again");
     let mut out = back.stdout.take().unwrap();
     let mut read = [0u8; 64];
-    let n = tokio::time::timeout(WAIT, out.read(&mut read)).await.unwrap().unwrap();
-    assert_eq!(&read[..n], b"{\"type\":\"assi", "from the line the earlier app did not finish");
+    // It ends, so the half line it never finished is read as it is.
     back.kill();
     assert_eq!(tokio::time::timeout(WAIT, back.wait()).await.unwrap().unwrap(), mighty_platform::fake::KILLED);
+    let n = tokio::time::timeout(WAIT, out.read(&mut read)).await.unwrap().unwrap();
+    assert_eq!(&read[..n], b"{\"type\":\"assi", "from the line the earlier app did not finish");
     running.daemon.stop();
 }

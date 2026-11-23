@@ -91,6 +91,7 @@ pub fn listen(host: &Arc<Host>) -> Option<Arc<AgentIo>> {
     match AgentIo::start(listener, tools) {
         Ok(io) => {
             host.log.line("agent io: listening");
+            io.set_earlier_listener(crate::platform::agent_io_earlier_listener());
             *current = Some(io.clone());
             Some(io)
         }

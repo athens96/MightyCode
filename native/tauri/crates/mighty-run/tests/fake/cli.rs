@@ -17,6 +17,9 @@
 //! - `--fake-acp <state> <fixture> [--fake-linger|--fake-stall|--fake-await-answers] [args…]` (C# AcpRunVerification.FakeAcpAsync): an ACP agent that answers
 //!   the channel's requests with a recorded opencode or Hermes session (each `mighty-…` answer only after one request line), records its
 //!   argv, its environment and its stdin in `<state>`, and plays Hermes's `config get/set` over `<state>/hermes-config.json`.
+//! - `--kept-stream <codex|agy> <record> [args…]` (MC-38): Codex's `exec --json` or agy's stream for a run the app lets go of: reads
+//!   stdin to its end (appended to `<record>.prompt`), says the first half of its answer, waits (up to 30 s) for `<record>.go`, then
+//!   says the second half and its end.
 //! - `--hermes-acp-cli <state> <mode> [args…]` (C# AcpAgentAccountVerification.FakeHermesAsync): `hermes acp` as 0.23.1 answers the
 //!   sign-in probe, by `<mode>` (`answer`, `unconfigured`, `error`, `missing`, `silent`; `file` reads it from `<state>/mode.txt`).
 
@@ -68,6 +71,7 @@ fn main() {
         Some("--codex-approval-fixture") => codex_approval_fixture(&args[1..]),
         Some("--fake-acp") if args.len() >= 3 => fake_acp(&args[1], &args[2], &args[3..]),
         Some("--hermes-acp-cli") if args.len() >= 3 => fake_hermes(&args[1], &args[2], &args[3..]),
+        Some("--kept-stream") if args.len() >= 3 => kept_stream(&args[1], &args[2]),
         // C# `--long-child <pid file>`: a shell pane's command that writes its id and runs until it is stopped.
         Some("--long-child") if args.len() >= 2 => {
             let _ = std::fs::write(&args[1], std::process::id().to_string());
@@ -814,6 +818,48 @@ fn fake_acp(state: &str, fixture_path: &str, rest: &[String]) {
     }
     if linger || stall {
         std::thread::sleep(Duration::from_secs(60));
+    }
+}
+
+/// MC-38: a Codex `exec --json` or agy stream that waits between the halves of its answer (`--kept-stream`).
+fn kept_stream(kind: &str, record: &str) {
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    append(&format!("{record}.prompt"), &format!("{input}\n--\n"));
+    let (first, second): (Vec<Value>, Vec<Value>) = if kind == "agy" {
+        (
+            vec![
+                json!({"event": "init", "conversation_id": "11111111-2222-4333-8444-555555555555", "init": {"model": "gemini-3.8-flash-low"}}),
+                json!({"event": "step_update", "step_update": {"step_index": 1, "state": "DONE", "step_type": "agent_response", "text_delta": "FIRST_HALF\n"}}),
+            ],
+            vec![
+                json!({"event": "step_update", "step_update": {"step_index": 2, "state": "DONE", "step_type": "agent_response", "text_delta": "SECOND_HALF\n"}}),
+                json!({"event": "result", "result": {"status": "SUCCESS", "response": "FIRST_HALF\nSECOND_HALF\n"}}),
+            ],
+        )
+    } else {
+        (
+            vec![
+                json!({"type": "thread.started", "thread_id": "fixture-thread"}),
+                json!({"type": "turn.started"}),
+                json!({"type": "item.completed", "item": {"id": "first", "type": "agent_message", "text": "FIRST_HALF"}}),
+            ],
+            vec![
+                json!({"type": "item.completed", "item": {"id": "second", "type": "agent_message", "text": "SECOND_HALF"}}),
+                json!({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 5}}),
+            ],
+        )
+    };
+    for line in first {
+        say(&line.to_string());
+    }
+    let go = format!("{record}.go");
+    let until = std::time::Instant::now() + Duration::from_secs(30);
+    while !Path::new(&go).exists() && std::time::Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    for line in second {
+        say(&line.to_string());
     }
 }
 
