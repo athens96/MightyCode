@@ -443,6 +443,18 @@ pub(crate) async fn control_create(
     provider: String,
     worktree: bool,
 ) -> Result<String, (u16, String)> {
+    automation_create(host, workspace_id, provider, None, None, worktree).await
+}
+
+/// MC-32: a schedule's or trigger's new agent pane, as [`control_create`] makes one, with its own title and model when given.
+pub(crate) async fn automation_create(
+    host: Arc<Host>,
+    workspace_id: String,
+    provider: String,
+    model: Option<String>,
+    title: Option<String>,
+    worktree: bool,
+) -> Result<String, (u16, String)> {
     let created = {
         let view = host.view();
         let template = RunSession {
@@ -450,11 +462,17 @@ pub(crate) async fn control_create(
             workspace_id: Some(workspace_id.clone()),
             provider: Some(provider.clone()),
             kind: Some("claude".into()),
-            title: Some(mighty_run::providers::name(&provider).into()),
+            // A schedule's pane keeps the name it was given (a heartbeat finds its pane by it).
+            title_mode: title.as_ref().filter(|t| !t.trim().is_empty()).map(|_| mighty_core::rename::FIXED.to_string()),
+            title: Some(title.filter(|t| !t.trim().is_empty()).unwrap_or_else(|| mighty_run::providers::name(&provider).into())),
             created_at: Some(time::now_o()),
             ..RunSession::default()
         };
-        mighty_core::add_pane::inherit(template, view.snapshot.sessions())
+        let mut created = mighty_core::add_pane::inherit(template, view.snapshot.sessions());
+        if let Some(model) = model.filter(|m| !m.trim().is_empty()) {
+            created.model = Some(model);
+        }
+        created
     };
     // On a task of its own, as the phone's: a dropped request never leaves a worktree without its pane.
     let making = tauri::async_runtime::spawn(crate::pane_worktree::create_without_asking(host, workspace_id, created, worktree));

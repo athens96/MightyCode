@@ -15,6 +15,7 @@ pub mod automation;
 pub mod background;
 pub mod companion;
 pub mod general;
+pub mod jobs;
 pub mod mobile;
 pub mod mobile_direct;
 pub mod models;
@@ -67,7 +68,11 @@ pub fn groups(locale: &Locale, category: &str) -> Vec<Group> {
         "styles" => vec![slot(sections::STYLES, styles::styles)],
         "remote" => vec![slot(sections::REMOTE_WORKSPACES, remote::remote_workspaces)],
         "companion" => {
-            vec![slot(sections::COMPANION, companion::companion), titled("automation.settings.sectionTitle", automation::automation)]
+            vec![
+                slot(sections::COMPANION, companion::companion),
+                titled("automation.settings.sectionTitle", automation::automation),
+                titled("automation.jobs.sectionTitle", jobs::jobs),
+            ]
         }
         "tools" => vec![slot(sections::COMPONENTS, tools::components), titled("settings.toolkit.sectionTitle", tools::toolkit)],
         "about" => vec![slot(sections::APP_UPDATE, about::app_update), slot(sections::APP_INFO, about::app_info)],

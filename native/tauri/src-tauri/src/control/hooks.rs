@@ -27,7 +27,7 @@ fn slots() -> &'static Arc<Semaphore> {
 /// A bus event: the hooks that follow its state run.
 pub fn on_event(host: &Arc<Host>, event: &Arc<ControlEvent>, settings_command: Option<String>, chosen: Vec<StateEvent>) {
     let Some(state_event) = event.state_event() else { return };
-    if !event.pane.is_agent() || host.smoke.is_some() || host.closing() {
+    if !(event.pane.is_agent() || event.is_automation()) || host.smoke.is_some() || host.closing() {
         return;
     }
     let (host, event) = (host.clone(), event.clone());

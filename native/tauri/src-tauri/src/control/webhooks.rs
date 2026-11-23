@@ -121,6 +121,19 @@ pub struct Note {
 
 /// The note of `event` in `locale`'s words.
 pub fn note_of(locale: &Locale, event: &ControlEvent, state: StateEvent) -> Note {
+    // MC-32: an automation run's end names the schedule or trigger and how it ended.
+    if let mighty_core::control::events::EventBody::Automation(note) = &event.body {
+        let state_text = crate::automation::state_word(locale, &note.state);
+        return Note {
+            title: locale.get_with("automation.webhook.automationTitle", &[("name", &clean_name(&note.name)), ("state", &state_text)]),
+            state: format!("automation.{}", note.state),
+            state_text,
+            workspace: clean_name(&event.pane.workspace_name),
+            pane: clean_name(&event.pane.title),
+            agent: event.pane.agent.clone(),
+            at: event.at.clone(),
+        };
+    }
     let state_text = event_word(locale, state);
     Note {
         title: locale.get_with("automation.webhook.title", &[("state", &state_text)]),
@@ -141,6 +154,7 @@ pub fn event_word(locale: &Locale, state: StateEvent) -> String {
         StateEvent::Done => "automation.event.done",
         StateEvent::Failed => "automation.event.failed",
         StateEvent::Stopped => "automation.event.stopped",
+        StateEvent::Automation => "automation.event.automation",
     })
 }
 
@@ -321,14 +335,17 @@ async fn send(host: &Arc<Host>, url: &str, note: &Note) -> Result<u16, String> {
 /// A bus event: an agent pane reaching a chosen state posts to every address (once per pane and state in 5 s).
 pub fn on_event(host: &Arc<Host>, event: &ControlEvent, chosen: &[StateEvent]) {
     let Some(state_event) = event.state_event().filter(|e| chosen.contains(e)) else { return };
-    if !event.pane.is_agent() || host.smoke.is_some() {
+    if !(event.pane.is_agent() || event.is_automation()) || host.smoke.is_some() {
         return;
     }
     let list = urls();
     if list.is_empty() {
         return;
     }
-    let key = format!("{}:{}", event.pane.pane, state_event.name());
+    let key = match &event.body {
+        mighty_core::control::events::EventBody::Automation(note) => format!("automation:{}", note.record),
+        _ => format!("{}:{}", event.pane.pane, state_event.name()),
+    };
     if !lock(&state().debounce).get_or_insert_with(|| Debouncer::new(DEBOUNCE)).allow(&key, Instant::now()) {
         return;
     }

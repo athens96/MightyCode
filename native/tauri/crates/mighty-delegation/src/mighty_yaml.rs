@@ -6,6 +6,7 @@ use std::io::Read as _;
 use std::path::Path;
 
 use indexmap::IndexMap;
+use mighty_core::automation::spec::{self as automation, Action, CatchUp, FireMode, GitHubEvent, ScheduleSpec, TriggerSource, TriggerSpec};
 use mighty_core::normalize::worktree_copy_paths;
 pub use mighty_core::normalize::{has_invisible_format_chars, is_invisible_format_char};
 use serde::{Deserialize, Serialize};
@@ -181,12 +182,18 @@ pub struct MightyRepoConfig {
     /// The status hook (`MC-9`), read from `.mighty.local.yaml` only.
     #[serde(default, skip_serializing_if = "HooksConfig::is_empty")]
     pub hooks: HooksConfig,
+    /// Schedules (`MC-32`): agent work started by a cron line or an RRULE, once the configuration is approved.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub schedules: IndexMap<String, ScheduleSpec>,
+    /// Event triggers (`MC-32`): GitHub, Linear, a signed webhook or a standing order's shell check, once approved.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub triggers: IndexMap<String, TriggerSpec>,
 }
 
 /// The pane states a hook follows when `hooks.on` names none.
 pub const DEFAULT_HOOK_EVENTS: [&str; 3] = ["blocked", "done", "failed"];
 /// The states `hooks.on` may name.
-pub const HOOK_EVENTS: [&str; 5] = ["started", "blocked", "done", "failed", "stopped"];
+pub const HOOK_EVENTS: [&str; 6] = ["started", "blocked", "done", "failed", "stopped", "automation"];
 /// `hooks.timeoutSeconds` when the file names none, and the most it may name.
 pub const DEFAULT_HOOK_TIMEOUT_SECONDS: u32 = 20;
 pub const MAXIMUM_HOOK_TIMEOUT_SECONDS: u32 = 300;
@@ -227,6 +234,8 @@ impl Default for MightyRepoConfig {
             tasks: IndexMap::new(),
             run: IndexMap::new(),
             hooks: HooksConfig::default(),
+            schedules: IndexMap::new(),
+            triggers: IndexMap::new(),
         }
     }
 }
@@ -1014,6 +1023,8 @@ fn parse_layer(input: &str) -> Result<ParsedLayer, String> {
     let mut saw_tasks = false;
     let mut run = IndexMap::new();
     let mut hooks = HooksConfig::default();
+    let mut schedules = IndexMap::new();
+    let mut triggers = IndexMap::new();
 
     for (key, value) in map {
         match key.as_str() {
@@ -1044,11 +1055,190 @@ fn parse_layer(input: &str) -> Result<ParsedLayer, String> {
             "hooks" => {
                 hooks = decode_hooks(&value)?;
             }
+            "schedules" => {
+                schedules = decode_schedules(&value)?;
+            }
+            "triggers" => {
+                triggers = decode_triggers(&value)?;
+            }
             other => return Err(format!("Unknown top-level key '{other}' in .mighty.yaml.")),
         }
     }
 
-    Ok(ParsedLayer { config: MightyRepoConfig { version, worktree, tasks, run, hooks }, setup_specified, teardown_specified })
+    Ok(ParsedLayer {
+        config: MightyRepoConfig { version, worktree, tasks, run, hooks, schedules, triggers },
+        setup_specified,
+        teardown_specified,
+    })
+}
+
+/// A schedule's or trigger's action keys (`prompt`, `agent`, `model`, `worktree`, `mode`, `pane`) into `action`; false for any
+/// other key.
+fn decode_action_key(action: &mut Action, key: &str, item: &YamlValue, field: &str) -> Result<bool, String> {
+    let text = |item: &YamlValue| -> Result<Option<String>, String> {
+        let raw = expect_scalar(item, &format!("{field}.{key}"))?;
+        let trimmed = raw.trim();
+        if has_invisible_format_chars(trimmed) {
+            return Err(format!("'{field}.{key}' contains invisible formatting characters."));
+        }
+        Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
+    };
+    match key {
+        "prompt" => action.prompt = text(item)?.unwrap_or_default(),
+        "agent" => action.agent = text(item)?,
+        "model" => action.model = text(item)?,
+        "worktree" => action.worktree = decode_bool(item, &format!("{field}.worktree"))?,
+        "mode" => {
+            let raw = expect_scalar(item, &format!("{field}.mode"))?;
+            action.mode = FireMode::parse(&raw).ok_or_else(|| format!("'{field}.mode' must be new or heartbeat."))?;
+        }
+        "pane" => action.pane = text(item)?,
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// A named entry of `schedules` or `triggers`: its name and its fields.
+type NamedEntry<'a> = (&'a String, &'a IndexMap<String, YamlValue>);
+
+fn named_entries<'a>(value: &'a YamlValue, key: &str, max: usize) -> Result<Vec<NamedEntry<'a>>, String> {
+    let map = match value {
+        YamlValue::Null => return Ok(vec![]),
+        YamlValue::Map(map) => map,
+        _ => return Err(format!("'{key}' must be a mapping of names to settings.")),
+    };
+    if map.len() > max {
+        return Err(format!("'{key}' exceeds maximum of {max} entries."));
+    }
+    map.iter()
+        .map(|(name, item)| {
+            automation::valid_name(name).map_err(|_| format!("Invalid name '{name}' in '{key}'."))?;
+            match item {
+                YamlValue::Map(fields) => Ok((name, fields)),
+                _ => Err(format!("'{key}.{name}' must be a mapping.")),
+            }
+        })
+        .collect()
+}
+
+/// `schedules`: `name: { cron | rrule, prompt, agent, model, worktree, mode, pane, catchUp, enabled }`.
+fn decode_schedules(value: &YamlValue) -> Result<IndexMap<String, ScheduleSpec>, String> {
+    let mut out = IndexMap::new();
+    for (name, fields) in named_entries(value, "schedules", automation::MAX_SCHEDULES)? {
+        let field = format!("schedules.{name}");
+        let mut spec = ScheduleSpec { name: name.clone(), enabled: true, ..ScheduleSpec::default() };
+        for (key, item) in fields {
+            match key.as_str() {
+                "cron" => spec.cron = Some(expect_scalar(item, &format!("{field}.cron"))?.trim().to_string()),
+                "rrule" => spec.rrule = Some(expect_scalar(item, &format!("{field}.rrule"))?.trim().to_string()),
+                "catchUp" => {
+                    let raw = expect_scalar(item, &format!("{field}.catchUp"))?;
+                    spec.catch_up = CatchUp::parse(&raw).ok_or_else(|| format!("'{field}.catchUp' must be skip or once."))?;
+                }
+                "enabled" => spec.enabled = decode_bool(item, &format!("{field}.enabled"))?,
+                other => {
+                    if !decode_action_key(&mut spec.action, other, item, &field)? {
+                        return Err(format!("Unknown key '{field}.{other}' in .mighty.yaml."));
+                    }
+                }
+            }
+        }
+        spec.validate(&mighty_core::wire::PROVIDERS).map_err(|e| format!("'{field}': {e}."))?;
+        out.insert(name.clone(), spec);
+    }
+    Ok(out)
+}
+
+/// A list (or a comma-separated string) of names.
+fn decode_name_list(item: &YamlValue, field: &str) -> Result<Vec<String>, String> {
+    let names: Vec<String> = match item {
+        YamlValue::Null => vec![],
+        YamlValue::Scalar(text) => text.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect(),
+        YamlValue::Seq(items) => items.iter().map(|i| expect_scalar(i, field).map(|t| t.trim().to_string())).collect::<Result<_, _>>()?,
+        YamlValue::Map(_) => return Err(format!("'{field}' must be a list.")),
+    };
+    if names.len() > 16 || names.iter().any(|n| n.chars().count() > 80 || has_invisible_format_chars(n)) {
+        return Err(format!("'{field}' has too many or invalid names."));
+    }
+    Ok(names)
+}
+
+/// `triggers`: `name: { github: [pr_opened, review_requested, ci_failed] | linear: [states] | webhook: true | standing: <command>
+/// (everyMinutes, dailyCap), prompt, agent, model, worktree, mode, pane, enabled }`.
+fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, String> {
+    let mut out = IndexMap::new();
+    for (name, fields) in named_entries(value, "triggers", automation::MAX_TRIGGERS)? {
+        let field = format!("triggers.{name}");
+        let mut action = Action::default();
+        let mut enabled = true;
+        let mut source: Option<TriggerSource> = None;
+        let mut every = None;
+        let mut cap = None;
+        let mut set_source = |next: TriggerSource| -> Result<(), String> {
+            if source.replace(next).is_some() {
+                return Err(format!("'{field}' names more than one of github, linear, webhook, standing."));
+            }
+            Ok(())
+        };
+        for (key, item) in fields {
+            match key.as_str() {
+                "github" => {
+                    let names = decode_name_list(item, &format!("{field}.github"))?;
+                    let events = names
+                        .iter()
+                        .map(|n| {
+                            GitHubEvent::parse(n)
+                                .ok_or_else(|| format!("'{field}.github' names '{n}': use pr_opened, review_requested, ci_failed."))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let events = GitHubEvent::ALL.into_iter().filter(|e| events.contains(e)).collect();
+                    set_source(TriggerSource::Github { events })?;
+                }
+                "linear" => set_source(TriggerSource::Linear { states: decode_name_list(item, &format!("{field}.linear"))? })?,
+                "webhook" => {
+                    if decode_bool(item, &format!("{field}.webhook"))? {
+                        set_source(TriggerSource::Webhook)?;
+                    }
+                }
+                "standing" => {
+                    let command = decode_command_value(item, &format!("{field}.standing"), false)?
+                        .ok_or_else(|| format!("'{field}.standing' cannot be empty."))?;
+                    set_source(TriggerSource::Standing { command, every_minutes: 0, daily_cap: 0 })?;
+                }
+                "everyMinutes" => {
+                    every = Some(decode_bounded_u32(
+                        item,
+                        &format!("{field}.everyMinutes"),
+                        automation::MIN_EVERY_MINUTES,
+                        automation::MAX_EVERY_MINUTES,
+                    )?)
+                }
+                "dailyCap" => cap = Some(decode_bounded_u32(item, &format!("{field}.dailyCap"), 1, automation::MAX_DAILY_CAP)?),
+                "enabled" => enabled = decode_bool(item, &format!("{field}.enabled"))?,
+                other => {
+                    if !decode_action_key(&mut action, other, item, &field)? {
+                        return Err(format!("Unknown key '{field}.{other}' in .mighty.yaml."));
+                    }
+                }
+            }
+        }
+        let on = match source {
+            Some(TriggerSource::Standing { command, .. }) => TriggerSource::Standing {
+                command,
+                every_minutes: every.unwrap_or(automation::DEFAULT_EVERY_MINUTES),
+                daily_cap: cap.unwrap_or(automation::DEFAULT_DAILY_CAP),
+            },
+            Some(_) if every.is_some() || cap.is_some() => {
+                return Err(format!("'{field}': everyMinutes and dailyCap are for a standing order."));
+            }
+            Some(other) => other,
+            None => return Err(format!("'{field}' needs one of github, linear, webhook, standing.")),
+        };
+        let spec = TriggerSpec { name: name.clone(), on, enabled, action };
+        spec.validate(&mighty_core::wire::PROVIDERS).map_err(|e| format!("'{field}': {e}."))?;
+        out.insert(name.clone(), spec);
+    }
+    Ok(out)
 }
 
 /// `hooks`: `command` (a string or a list, as `worktree.setup`), `on` (a list or a comma-separated string of [`HOOK_EVENTS`]) and
@@ -1668,6 +1858,20 @@ fn merge_layers(
         }
     }
 
+    // A local schedule or trigger of the same name replaces the shared one.
+    let mut schedules = base.schedules.clone();
+    for (k, v) in &local.schedules {
+        if schedules.contains_key(k) || schedules.len() < automation::MAX_SCHEDULES {
+            schedules.insert(k.clone(), v.clone());
+        }
+    }
+    let mut triggers = base.triggers.clone();
+    for (k, v) in &local.triggers {
+        if triggers.contains_key(k) || triggers.len() < automation::MAX_TRIGGERS {
+            triggers.insert(k.clone(), v.clone());
+        }
+    }
+
     MightyRepoConfig {
         version: local.version.max(base.version),
         worktree: WorktreeConfig { share, copy, setup, env, teardown, teardown_timeout_seconds, ports },
@@ -1675,6 +1879,8 @@ fn merge_layers(
         run,
         // Personal only: the shared file's are refused as it loads.
         hooks: local.hooks.clone(),
+        schedules,
+        triggers,
     }
 }
 

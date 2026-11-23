@@ -1,0 +1,31 @@
+//! MC-32: schedules and event triggers that start agent work on their own. Pure parts only; the app (src-tauri `automation`) runs
+//! the timer, the watches and the fires.
+//!
+//! - [`recurrence`]: a 5-field cron line or an RRULE subset, and the next instant it names in a time zone (DST, month ends).
+//! - [`spec`]: what a schedule and a trigger are (the same shapes from `.mighty.yaml` and from settings) and their checks.
+//! - [`engine`]: what a fire does to the history (its record, pane, card, end, cost, result link) and which job a retry fires.
+//! - [`plan`]: which schedules are due with the clock given, the catch-up rule for fires the app missed, and when to wake next.
+//! - [`records`]: the run history, capped by count and size, and a pane's result link.
+//! - [`watch`]: what the triggers keep between looks — seen delivery ids, the poll's back-off and ETags, a standing order's output
+//!   and daily cap, Linear issues' states — and the prompt a trigger's event makes.
+
+pub mod engine;
+pub mod plan;
+pub mod records;
+pub mod recurrence;
+pub mod spec;
+pub mod watch;
+
+use std::path::Path;
+
+/// Writes `bytes` to `path` whole: a temporary file beside it, then renamed over it (the folder made first).
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
+    std::fs::write(&temporary, bytes)?;
+    std::fs::rename(&temporary, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temporary);
+    })
+}

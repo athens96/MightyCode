@@ -486,3 +486,110 @@ fn a_status_hook_is_personal_and_its_states_are_checked() {
     assert!(refused.contains(".mighty.local.yaml"), "{refused}");
     support::place::remove_folder(&folder);
 }
+
+/// MC-32: schedules and triggers are read, checked, merged by name and hashed, so a change asks for approval again; a file without
+/// them keeps its hash.
+#[test]
+fn schedules_and_triggers_are_read_checked_and_hashed() {
+    use mighty_core::automation::spec::{CatchUp, FireMode, GitHubEvent, TriggerSource};
+
+    let folder = support::place::temp("mighty-yaml-automation");
+    std::fs::write(folder.join(".mighty.yaml"), "version: 1\nworktree:\n  setup: npm ci\n").unwrap();
+    let before = load_from_folder(&folder).unwrap().unwrap().content_hash;
+    let json = serde_json::to_string(&parse_config("version: 1\n").unwrap()).unwrap();
+    assert!(!json.contains("schedules") && !json.contains("triggers"), "{json}");
+
+    let shared = r#"version: 1
+worktree:
+  setup: npm ci
+schedules:
+  의존성 점검:
+    cron: "0 9 * * *"
+    prompt: |
+      Check the dependencies and open a PR.
+    worktree: true
+    model: sonnet
+  nightly:
+    rrule: FREQ=DAILY;BYHOUR=22
+    mode: heartbeat
+    pane: Night watch
+    prompt: keep going
+    catchUp: skip
+    agent: codex
+triggers:
+  ci:
+    github: [ci_failed, pr_opened]
+    prompt: Fix CI
+    worktree: yes
+  ready:
+    linear: Ready, In Review
+    prompt: Start it
+  deploy:
+    webhook: true
+    prompt: Look at the deploy
+    enabled: false
+  flaky:
+    standing: npm test 2>&1 | tail -3
+    everyMinutes: 30
+    prompt: Tests changed
+"#;
+    std::fs::write(folder.join(".mighty.yaml"), shared).unwrap();
+    let loaded = load_from_folder(&folder).unwrap().unwrap();
+    assert_ne!(loaded.content_hash, before, "a schedule asks for approval again");
+    let config = &loaded.config;
+    let deps = &config.schedules["의존성 점검"];
+    assert_eq!((deps.cron.as_deref(), deps.catch_up, deps.action.worktree), (Some("0 9 * * *"), CatchUp::Once, true));
+    assert_eq!(deps.action.prompt, "Check the dependencies and open a PR.");
+    assert_eq!((deps.action.agent(), deps.action.model.as_deref()), ("claude", Some("sonnet")));
+    let nightly = &config.schedules["nightly"];
+    assert_eq!(
+        (nightly.action.mode, nightly.action.pane.as_deref(), nightly.catch_up),
+        (FireMode::Heartbeat, Some("Night watch"), CatchUp::Skip)
+    );
+    assert_eq!(config.triggers["ci"].on, TriggerSource::Github { events: vec![GitHubEvent::PrOpened, GitHubEvent::CiFailed] });
+    assert_eq!(config.triggers["ready"].on, TriggerSource::Linear { states: vec!["Ready".into(), "In Review".into()] });
+    assert!(!config.triggers["deploy"].enabled && config.triggers["deploy"].on == TriggerSource::Webhook);
+    assert_eq!(
+        config.triggers["flaky"].on,
+        TriggerSource::Standing { command: "npm test 2>&1 | tail -3".into(), every_minutes: 30, daily_cap: 5 }
+    );
+
+    // Any change to a prompt or a check changes the hash, so an earlier approval no longer holds.
+    let approved = loaded.content_hash.clone();
+    std::fs::write(folder.join(".mighty.yaml"), shared.replace("Tests changed", "Tests changed!")).unwrap();
+    assert_ne!(load_from_folder(&folder).unwrap().unwrap().content_hash, approved);
+    std::fs::write(folder.join(".mighty.yaml"), shared).unwrap();
+    assert_eq!(load_from_folder(&folder).unwrap().unwrap().content_hash, approved, "the same file, the same hash");
+
+    // The personal file replaces a shared schedule of the same name and adds its own.
+    std::fs::write(
+        folder.join(".mighty.local.yaml"),
+        "schedules:\n  nightly:\n    cron: '30 23 * * *'\n    prompt: mine\n  extra:\n    cron: '@hourly'\n    prompt: hi\n",
+    )
+    .unwrap();
+    let merged = load_from_folder(&folder).unwrap().unwrap();
+    assert_eq!(merged.config.schedules["nightly"].action.prompt, "mine");
+    assert_eq!(merged.config.schedules.len(), 3);
+    assert_eq!(merged.config.triggers.len(), 4);
+
+    for bad in [
+        "schedules:\n  a:\n    prompt: p\n",
+        "schedules:\n  a:\n    cron: '0 9 * *'\n    prompt: p\n",
+        "schedules:\n  a:\n    cron: '0 9 * * *'\n    rrule: FREQ=DAILY\n    prompt: p\n",
+        "schedules:\n  a:\n    cron: '0 9 * * *'\n",
+        "schedules:\n  a:\n    cron: '0 9 * * *'\n    prompt: p\n    agent: robot\n",
+        "schedules:\n  a:\n    cron: '0 9 * * *'\n    prompt: p\n    mode: heartbeat\n",
+        "schedules:\n  a:\n    cron: '0 9 * * *'\n    prompt: p\n    catchUp: all\n",
+        "schedules:\n  a:\n    cron: '0 9 * * *'\n    prompt: p\n    color: red\n",
+        "schedules: [a]\n",
+        "triggers:\n  t:\n    prompt: p\n",
+        "triggers:\n  t:\n    github: [pushed]\n    prompt: p\n",
+        "triggers:\n  t:\n    github: [ci_failed]\n    webhook: true\n    prompt: p\n",
+        "triggers:\n  t:\n    standing: make check\n    everyMinutes: 1\n    prompt: p\n",
+        "triggers:\n  t:\n    standing: make check\n    dailyCap: 0\n    prompt: p\n",
+        "triggers:\n  t:\n    github: [ci_failed]\n    everyMinutes: 10\n    prompt: p\n",
+    ] {
+        assert!(parse_config(bad).is_err(), "{bad}");
+    }
+    support::place::remove_folder(&folder);
+}

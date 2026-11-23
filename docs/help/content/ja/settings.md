@@ -121,6 +121,54 @@ mighty events --type pane.state
 - 終了コードは成功 0、エラー 1、タイムアウト 2 です。
 - 接続できるのはこのコンピュータの同じユーザーだけです（Mac は権限 0600 のソケット、Windows は現在のユーザーだけが開ける名前付きパイプ）。リクエストごとにデータフォルダーの `control/token` のトークンが要ります。`--profile` で起動したアプリには `mighty --profile <フォルダー> status` で接続します。
 
+### スケジュールとトリガー {#schedules}
+{{ui:settings.nav.companion}} タブの {{ui:automation.jobs.sectionTitle}} ボックスで、決めた時刻やイベントでエージェントの作業を始めます。ワークスペースを選ぶと、そのスケジュールとトリガー、次回の実行時刻、前回の結果が表示されます。上部には今日の使用額、1日の予算、今日の自動化のまとめがあります。
+- **スケジュール**: 5 項目の cron (`0 9 * * 1-5`) か RRULE の一部 (`FREQ=DAILY|WEEKLY|HOURLY`、`BYHOUR`、`BYMINUTE`、`BYDAY`) で決めます。このコンピューターのタイムゾーンに従い、夏時間で飛ばされた時刻は直後に 1 回、2 回来る時刻は最初の 1 回だけ実行します。
+- **トリガー**: GitHub (PR の作成、レビュー依頼、CI 失敗)、Linear (イシューが選んだ状態になる)、Webhook、常時チェック (シェルコマンドを数分ごとに実行し、出力が変わったときだけエージェントを起こす。1 日の上限まで)。GitHub は `gh` でログインしたアカウントで 5 分に 1 回まで確認し、変化がないときや接続が切れたときはもっと間隔を空けます。Linear はワークスペースに接続した Linear を使います。
+- **実行方法**: 新しいペイン (必要ならワークツリー) にプロンプトを送るか、{{ui:automation.form.heartbeat}} をオンにすると同じ名前のペインに同じ会話として送ります。エージェントとモデルを選べます。
+- **予算**: 今日の使用額にこの実行の見込み費用を足して 1 日の予算を超えるときは、実行せず「スキップ」として記録します。
+- **通知**: 自動で始めた作業が承認や回答を待つと、スマートフォンと OS の通知ですぐに知らせます。それ以外は実行履歴と今日のまとめに集めます。すべての実行は `automation.fired`、`automation.skipped`、`automation.blocked`、`automation.finished` イベントとして `mighty events` でも見られ、{{ui:automation.settings.events}} で {{ui:automation.event.automation}} をオンにすると Webhook と状態コマンドも従います。
+- {{ui:automation.history.title}}: 実行ごとに時刻、状態、費用 (使用量台帳による)、結果リンク (ペインが開いた PR)、エラーが残ります。{{ui:automation.history.retry}} ボタンで再実行し、{{ui:automation.history.continue}} ボタンでそのペインを開きます。
+
+> [!warning]
+> スケジュールとトリガーは **アプリが開いている間だけ** 実行します。アプリを閉じると止まり、[バックグラウンド作業](#background) をオンにしても実行中の作業が続くだけで新しい作業は始まりません。閉じている間に逃したスケジュールは、次にアプリを開いたとき最新の 1 回だけ実行します。{{ui:automation.form.skipMissed}} をオンにすると実行せず「スキップ」として記録します。
+
+**Webhook の受信**: {{ui:automation.listener.toggle}} をオンにすると、このコンピューターの `127.0.0.1:<ポート>` でだけリクエストを受けます (既定はオフ)。Webhook トリガーごとにアドレス (`http://127.0.0.1:<ポート>/hooks/<id>`) とシークレットがあり、シークレットはシステムのキーチェーンに保存されます。リクエスト本文をシークレットで HMAC-SHA256 署名し、`X-Mighty-Signature-256: sha256=<hex>` (GitHub の `X-Hub-Signature-256` も可) ヘッダーで送ってください。256KB を超える本文、署名が違うリクエスト、同じ配信 ID (`X-Mighty-Delivery`) は捨てます。外部 (GitHub や他のサービス) から受けるには、ngrok や Cloudflare Tunnel などのトンネルを自分で前に置いてください。アプリがトンネルを開くことはありません。
+
+リポジトリで共有するスケジュールとトリガーは `.mighty.yaml` に書きます。[他の設定と同じく](delegation.md#mighty-yaml) 承認した後だけ実行され、ボックスでは読み取り専用で表示され、承認前は {{ui:automation.jobs.approve}} ボタンが出ます。
+
+```yaml
+schedules:
+  deps-check:
+    cron: "0 9 * * 1-5"        # または rrule: FREQ=DAILY;BYHOUR=9
+    prompt: 依存関係を点検し、必要なら PR を開いてください。
+    agent: claude              # codex, gemini, pi, opencode, hermes
+    model: sonnet
+    worktree: true
+    catchUp: once              # once (既定) または skip
+  night-watch:
+    rrule: FREQ=DAILY;BYHOUR=22
+    mode: heartbeat
+    pane: 夜間チェック
+    prompt: 続けてください。
+triggers:
+  fix-ci:
+    github: [ci_failed]        # pr_opened, review_requested, ci_failed
+    prompt: CI の失敗を直してください。
+    worktree: true
+  ready-issues:
+    linear: [Ready]
+    prompt: このイシューを始めてください。
+  deploy:
+    webhook: true
+    prompt: デプロイ結果を確認してください。
+  flaky-tests:
+    standing: npm test 2>&1 | tail -5
+    everyMinutes: 30           # 5-1440
+    dailyCap: 3                # 1-50
+    prompt: テスト結果が変わりました。原因を見つけて直してください。
+```
+
 ## コンポーネント {#components}
 {{ui:settings.nav.tools}}タブでは、アプリに必要なものが準備できているかを確認し、エージェントCLIのインストール、サインイン、アップデートをまとめて管理します。このコンピュータのOS向けの項目だけが表示されます。
 

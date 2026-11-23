@@ -486,6 +486,14 @@ impl El {
         El::new(Kind::CheckBox { on, content: content.into() })
     }
 
+    /// A TextBox that takes several lines (`AcceptsReturn`; the page draws a text area).
+    pub fn multiline(mut self) -> El {
+        if let Kind::TextBox { multiline, .. } = &mut self.kind {
+            *multiline = true;
+        }
+        self
+    }
+
     /// A TextBox's or PasswordBox's `PlaceholderText`.
     pub fn placeholder(mut self, text: impl Into<String>) -> El {
         if let Kind::TextBox { placeholder, .. } | Kind::PasswordBox { placeholder, .. } = &mut self.kind {

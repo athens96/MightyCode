@@ -28,6 +28,14 @@ pub fn env(event: &ControlEvent, workspace_path: &str) -> Vec<(String, String)> 
         put("MIGHTY_PREVIOUS_STATE", from.name());
         put("MIGHTY_REASON", reason.map_or("", |r| r.name()));
     }
+    // MC-32: an automation run's end or skip: `MIGHTY_EVENT` is `automation.finished` or `automation.skipped`.
+    if let EventBody::Automation(note) = &event.body {
+        put("MIGHTY_EVENT", &format!("automation.{}", note.event));
+        put("MIGHTY_STATE", &note.state);
+        put("MIGHTY_AUTOMATION_NAME", &note.name);
+        put("MIGHTY_AUTOMATION_KIND", &note.kind);
+        put("MIGHTY_AUTOMATION_URL", note.url.as_deref().unwrap_or(""));
+    }
     put("MIGHTY_PANE_ID", &event.pane.pane);
     put("MIGHTY_PANE_TITLE", &event.pane.title);
     put("MIGHTY_PANE_KIND", &event.pane.kind);
@@ -76,5 +84,21 @@ mod tests {
         assert_eq!(get("MIGHTY_WORKSPACE_PATH"), Some("/Users/me/my  app"));
         assert!(values.iter().all(|(k, v)| k.starts_with("MIGHTY_") && !v.contains(prompt) && !v.contains("AWS_SECRET")));
         assert_eq!(clean(&"x".repeat(500)).len(), 200);
+        let automation = ControlEvent {
+            body: EventBody::Automation(crate::control::events::AutomationNote {
+                event: "finished".into(),
+                name: "deps check".into(),
+                kind: "schedule".into(),
+                state: "done".into(),
+                url: Some("https://github.com/a/b/pull/9".into()),
+                ..Default::default()
+            }),
+            ..event
+        };
+        let values = env(&automation, "/w");
+        let get = |key: &str| values.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+        assert_eq!(get("MIGHTY_EVENT"), Some("automation.finished"));
+        assert_eq!(get("MIGHTY_AUTOMATION_NAME"), Some("deps check"));
+        assert_eq!(get("MIGHTY_AUTOMATION_URL"), Some("https://github.com/a/b/pull/9"));
     }
 }

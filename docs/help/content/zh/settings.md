@@ -121,6 +121,54 @@ mighty events --type pane.state
 - 退出码：成功 0，错误 1，超时 2。
 - 只有这台电脑上的同一用户可以连接（Mac 上是权限 0600 的套接字，Windows 上是只有当前用户能打开的命名管道），每个请求都需要数据文件夹中 `control/token` 的令牌。连接用 `--profile` 启动的应用时，使用 `mighty --profile <文件夹> status`。
 
+### 计划与触发器 {#schedules}
+在 {{ui:settings.nav.companion}} 标签页的 {{ui:automation.jobs.sectionTitle}} 框中，可以在设定的时间或事件发生时启动代理工作。选择工作区后，会显示它的计划和触发器、下次运行时间和上次结果。顶部显示今日花费、每日预算和今日自动化摘要。
+- **计划**：用 5 字段 cron（`0 9 * * 1-5`）或 RRULE 子集（`FREQ=DAILY|WEEKLY|HOURLY`、`BYHOUR`、`BYMINUTE`、`BYDAY`）设定。使用这台电脑的时区；因夏令时被跳过的时间会在切换后立即运行一次，出现两次的时间只在第一次运行。
+- **触发器**：GitHub（PR 打开、请求审查、CI 失败）、Linear（问题进入所选状态）、Webhook，以及常驻检查（每隔几分钟运行一个 shell 命令，只有输出变化时才唤醒代理，最多到每日上限）。GitHub 通过已登录的 `gh` 账号最多每 5 分钟检查一次，没有变化或断网时会降低频率。Linear 使用工作区已连接的 Linear。
+- **运行方式**：把提示词发送到新窗格（需要时在工作树中），或打开 {{ui:automation.form.heartbeat}} 后发送到同名窗格的同一对话中。可以选择代理和模型。
+- **预算**：如果今日花费加上本次运行的预计费用会超过每日预算，就不运行，并记录为“已跳过”。
+- **通知**：自动启动的工作在等待批准或回答时，会立即通过手机和系统通知告诉你。其他情况汇总到运行记录和今日摘要中。每次运行也会作为 `automation.fired`、`automation.skipped`、`automation.blocked`、`automation.finished` 事件出现在 `mighty events` 中；在 {{ui:automation.settings.events}} 中打开 {{ui:automation.event.automation}} 后，Webhook 和状态命令也会跟随。
+- {{ui:automation.history.title}}：每次运行都会记录时间、状态、费用（来自用量账本）、结果链接（窗格打开的 PR）和错误。用 {{ui:automation.history.retry}} 按钮重新运行，用 {{ui:automation.history.continue}} 按钮打开该窗格。
+
+> [!warning]
+> 计划和触发器**只在应用打开时**运行。关闭应用后会停止；即使开启了[后台工作](#background)，也只会继续正在运行的工作，不会启动新工作。应用关闭期间错过的计划，会在下次打开应用时只运行最近的一次。打开 {{ui:automation.form.skipMissed}} 后则不运行，只记录为“已跳过”。
+
+**接收 Webhook**：打开 {{ui:automation.listener.toggle}} 后，应用只在这台电脑的 `127.0.0.1:<端口>` 上接收请求（默认关闭）。每个 Webhook 触发器都有自己的地址（`http://127.0.0.1:<端口>/hooks/<id>`）和密钥，密钥保存在系统钥匙串中。请用密钥对请求正文做 HMAC-SHA256 签名，并通过 `X-Mighty-Signature-256: sha256=<hex>` 请求头发送（也支持 GitHub 的 `X-Hub-Signature-256`）。超过 256KB 的正文、签名错误的请求和重复的投递 ID（`X-Mighty-Delivery`）会被丢弃。要从外部（GitHub 或其他服务）接收，请自行在前面放置 ngrok 或 Cloudflare Tunnel 等隧道；应用不会打开隧道。
+
+要与仓库共享的计划和触发器写在 `.mighty.yaml` 中。[与其他设置一样](delegation.md#mighty-yaml)，只有批准后才会运行；框中以只读方式显示，批准前会出现 {{ui:automation.jobs.approve}} 按钮。
+
+```yaml
+schedules:
+  deps-check:
+    cron: "0 9 * * 1-5"        # 或 rrule: FREQ=DAILY;BYHOUR=9
+    prompt: 检查依赖，必要时打开 PR。
+    agent: claude              # codex, gemini, pi, opencode, hermes
+    model: sonnet
+    worktree: true
+    catchUp: once              # once（默认）或 skip
+  night-watch:
+    rrule: FREQ=DAILY;BYHOUR=22
+    mode: heartbeat
+    pane: 夜间检查
+    prompt: 请继续。
+triggers:
+  fix-ci:
+    github: [ci_failed]        # pr_opened, review_requested, ci_failed
+    prompt: 修复 CI 失败。
+    worktree: true
+  ready-issues:
+    linear: [Ready]
+    prompt: 开始处理这个问题。
+  deploy:
+    webhook: true
+    prompt: 检查部署结果。
+  flaky-tests:
+    standing: npm test 2>&1 | tail -5
+    everyMinutes: 30           # 5-1440
+    dailyCap: 3                # 1-50
+    prompt: 测试结果变了。找到原因并修复。
+```
+
 ## 组件 {#components}
 {{ui:settings.nav.tools}}标签页显示应用所需的内容是否已准备就绪，智能体 CLI 的安装、登录和更新也都在这里管理。只显示适用于这台电脑系统的项目。
 

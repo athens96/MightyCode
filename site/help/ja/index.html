@@ -553,6 +553,41 @@ mighty agent wait &lt;pane&gt; --until done --timeout 600
 mighty pane wait-output &lt;pane&gt; --regex &quot;passed|failed&quot; --timeout 300
 mighty events --type pane.state</code></pre>
 <ul><li>ペイン id はアプリが使うものそのままで、変わりません。状態は <code>idle</code>、<code>running</code>、<code>blocked</code>（承認・質問待ち）、<code>done</code>、<code>failed</code>、<code>stopped</code> です。</li><li><code>agent send</code> は入力欄から送るのと同じです。実行中なら待ち行列に入ります。<code>-</code> を渡すと標準入力から読みます。</li><li><code>agent wait</code> と <code>pane wait-output</code> は状態や出力が変わったときだけ動きます。<code>pane wait-output</code> は待ち始めた後の新しい行を一行ずつ見ます。</li><li><code>pane read</code> と出力では、秘密情報に見える行は隠します。<code>events</code> は一行に一つのイベントを書きます（<code>pane.state</code>、<code>attention</code>、費用つきの <code>run.completed</code>）。</li><li>終了コードは成功 0、エラー 1、タイムアウト 2 です。</li><li>接続できるのはこのコンピュータの同じユーザーだけです（Mac は権限 0600 のソケット、Windows は現在のユーザーだけが開ける名前付きパイプ）。リクエストごとにデータフォルダーの <code>control/token</code> のトークンが要ります。<code>--profile</code> で起動したアプリには <code>mighty --profile &lt;フォルダー&gt; status</code> で接続します。</li></ul>
+<h4 id="settings-schedules" class="minor"><a class="hash" href="#settings-schedules">#</a>スケジュールとトリガー</h4>
+<p><span class="ui" title="settings.nav.companion">Mighty Petと通知</span> タブの <span class="ui" title="automation.jobs.sectionTitle">スケジュールとトリガー</span> ボックスで、決めた時刻やイベントでエージェントの作業を始めます。ワークスペースを選ぶと、そのスケジュールとトリガー、次回の実行時刻、前回の結果が表示されます。上部には今日の使用額、1日の予算、今日の自動化のまとめがあります。</p>
+<ul><li><b>スケジュール</b>: 5 項目の cron (<code>0 9 * * 1-5</code>) か RRULE の一部 (<code>FREQ=DAILY|WEEKLY|HOURLY</code>、<code>BYHOUR</code>、<code>BYMINUTE</code>、<code>BYDAY</code>) で決めます。このコンピューターのタイムゾーンに従い、夏時間で飛ばされた時刻は直後に 1 回、2 回来る時刻は最初の 1 回だけ実行します。</li><li><b>トリガー</b>: GitHub (PR の作成、レビュー依頼、CI 失敗)、Linear (イシューが選んだ状態になる)、Webhook、常時チェック (シェルコマンドを数分ごとに実行し、出力が変わったときだけエージェントを起こす。1 日の上限まで)。GitHub は <code>gh</code> でログインしたアカウントで 5 分に 1 回まで確認し、変化がないときや接続が切れたときはもっと間隔を空けます。Linear はワークスペースに接続した Linear を使います。</li><li><b>実行方法</b>: 新しいペイン (必要ならワークツリー) にプロンプトを送るか、<span class="ui" title="automation.form.heartbeat">既存のペインを起こす (heartbeat)</span> をオンにすると同じ名前のペインに同じ会話として送ります。エージェントとモデルを選べます。</li><li><b>予算</b>: 今日の使用額にこの実行の見込み費用を足して 1 日の予算を超えるときは、実行せず「スキップ」として記録します。</li><li><b>通知</b>: 自動で始めた作業が承認や回答を待つと、スマートフォンと OS の通知ですぐに知らせます。それ以外は実行履歴と今日のまとめに集めます。すべての実行は <code>automation.fired</code>、<code>automation.skipped</code>、<code>automation.blocked</code>、<code>automation.finished</code> イベントとして <code>mighty events</code> でも見られ、<span class="ui" title="automation.settings.events">知らせる状態</span> で <span class="ui" title="automation.event.automation">自動化の実行結果</span> をオンにすると Webhook と状態コマンドも従います。</li><li><span class="ui" title="automation.history.title">実行履歴</span>: 実行ごとに時刻、状態、費用 (使用量台帳による)、結果リンク (ペインが開いた PR)、エラーが残ります。<span class="ui" title="automation.history.retry">再実行</span> ボタンで再実行し、<span class="ui" title="automation.history.continue">続ける</span> ボタンでそのペインを開きます。</li></ul>
+<div class="callout warning"><b class="callout-label">注意</b><p>スケジュールとトリガーは <b>アプリが開いている間だけ</b> 実行します。アプリを閉じると止まり、<a href="#settings-background">バックグラウンド作業</a> をオンにしても実行中の作業が続くだけで新しい作業は始まりません。閉じている間に逃したスケジュールは、次にアプリを開いたとき最新の 1 回だけ実行します。<span class="ui" title="automation.form.skipMissed">逃した実行をスキップ</span> をオンにすると実行せず「スキップ」として記録します。</p></div>
+<p><b>Webhook の受信</b>: <span class="ui" title="automation.listener.toggle">Webhook リスナーをオン</span> をオンにすると、このコンピューターの <code>127.0.0.1:&lt;ポート&gt;</code> でだけリクエストを受けます (既定はオフ)。Webhook トリガーごとにアドレス (<code>http://127.0.0.1:&lt;ポート&gt;/hooks/&lt;id&gt;</code>) とシークレットがあり、シークレットはシステムのキーチェーンに保存されます。リクエスト本文をシークレットで HMAC-SHA256 署名し、<code>X-Mighty-Signature-256: sha256=&lt;hex&gt;</code> (GitHub の <code>X-Hub-Signature-256</code> も可) ヘッダーで送ってください。256KB を超える本文、署名が違うリクエスト、同じ配信 ID (<code>X-Mighty-Delivery</code>) は捨てます。外部 (GitHub や他のサービス) から受けるには、ngrok や Cloudflare Tunnel などのトンネルを自分で前に置いてください。アプリがトンネルを開くことはありません。</p>
+<p>リポジトリで共有するスケジュールとトリガーは <code>.mighty.yaml</code> に書きます。<a href="#delegation-mighty-yaml">他の設定と同じく</a> 承認した後だけ実行され、ボックスでは読み取り専用で表示され、承認前は <span class="ui" title="automation.jobs.approve">承認</span> ボタンが出ます。</p>
+<pre><code>schedules:
+  deps-check:
+    cron: &quot;0 9 * * 1-5&quot;        # または rrule: FREQ=DAILY;BYHOUR=9
+    prompt: 依存関係を点検し、必要なら PR を開いてください。
+    agent: claude              # codex, gemini, pi, opencode, hermes
+    model: sonnet
+    worktree: true
+    catchUp: once              # once (既定) または skip
+  night-watch:
+    rrule: FREQ=DAILY;BYHOUR=22
+    mode: heartbeat
+    pane: 夜間チェック
+    prompt: 続けてください。
+triggers:
+  fix-ci:
+    github: [ci_failed]        # pr_opened, review_requested, ci_failed
+    prompt: CI の失敗を直してください。
+    worktree: true
+  ready-issues:
+    linear: [Ready]
+    prompt: このイシューを始めてください。
+  deploy:
+    webhook: true
+    prompt: デプロイ結果を確認してください。
+  flaky-tests:
+    standing: npm test 2&gt;&amp;1 | tail -5
+    everyMinutes: 30           # 5-1440
+    dailyCap: 3                # 1-50
+    prompt: テスト結果が変わりました。原因を見つけて直してください。</code></pre>
 <h3 id="settings-components" class="sub"><a class="hash" href="#settings-components">#</a>コンポーネント</h3>
 <p><span class="ui" title="settings.nav.tools">コンポーネント</span>タブでは、アプリに必要なものが準備できているかを確認し、エージェントCLIのインストール、サインイン、アップデートをまとめて管理します。このコンピュータのOS向けの項目だけが表示されます。</p>
 <p>一番上の行には、表示の切り替えとボタンが2つあります。</p>

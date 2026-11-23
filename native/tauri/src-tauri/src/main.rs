@@ -22,6 +22,7 @@ mod app_update;
 mod args;
 mod ask;
 mod attention;
+mod automation;
 mod bodies;
 mod build_info;
 mod cards;
@@ -624,6 +625,8 @@ fn main() {
             attention::start(&host);
             // MC-9: the local control API (the `mighty` CLI's), the status hooks and the webhooks; not in a smoke.
             control::start(&host);
+            // MC-32: schedules and triggers (the one timer, the watches, the webhook listener); not in a smoke.
+            automation::start(&host, &platform);
             // MC-3: the background daemon, when the person keeps work running after the app closes; not in a smoke.
             daemon::start(&host);
             let dispatcher = host.clone();
@@ -773,6 +776,8 @@ fn main() {
                 agent_io::shutdown(&host);
                 // MC-9: the control API's listener closed and its endpoint file removed.
                 control::shutdown(&host);
+                // MC-32: the trigger watches and the webhook listener stopped.
+                automation::shutdown(&host);
                 // W8: the pet closed, the phone's relay and direct listeners and remote sharing ended before the runs are disposed.
                 companion::shutdown(&host);
                 mobile::shutdown(&host);

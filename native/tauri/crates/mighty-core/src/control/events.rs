@@ -89,10 +89,14 @@ pub enum StateEvent {
     Done,
     Failed,
     Stopped,
+    /// MC-32: a schedule's or trigger's run settled, or a fire was skipped (`automation.finished`, `automation.skipped`). Off until
+    /// chosen.
+    Automation,
 }
 
 impl StateEvent {
-    pub const ALL: [StateEvent; 5] = [StateEvent::Started, StateEvent::Blocked, StateEvent::Done, StateEvent::Failed, StateEvent::Stopped];
+    pub const ALL: [StateEvent; 6] =
+        [StateEvent::Started, StateEvent::Blocked, StateEvent::Done, StateEvent::Failed, StateEvent::Stopped, StateEvent::Automation];
     /// What settings choose until the person changes it: the moments that need someone.
     pub const DEFAULT: [StateEvent; 3] = [StateEvent::Blocked, StateEvent::Done, StateEvent::Failed];
 
@@ -103,6 +107,7 @@ impl StateEvent {
             StateEvent::Done => "done",
             StateEvent::Failed => "failed",
             StateEvent::Stopped => "stopped",
+            StateEvent::Automation => "automation",
         }
     }
 
@@ -221,6 +226,30 @@ pub enum EventBody {
         cost_usd: Option<f64>,
         duration_ms: Option<i64>,
     },
+    /// MC-32: a schedule or trigger fired, was skipped, waits for the person, or its run settled. Names and states only, never the
+    /// prompt or what the event carried.
+    Automation(AutomationNote),
+}
+
+/// What an `automation.*` event says.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AutomationNote {
+    /// `fired`, `skipped`, `blocked` or `finished`.
+    pub event: String,
+    /// The schedule's or trigger's name.
+    pub name: String,
+    /// `schedule`, `github`, `linear`, `webhook` or `standing`.
+    pub kind: String,
+    /// The run record's id.
+    pub record: String,
+    /// The record's state (`running`, `done`, `failed`, `skipped`, …).
+    pub state: String,
+    pub cost_usd: Option<f64>,
+    pub url: Option<String>,
+}
+
+impl AutomationNote {
+    pub const EVENTS: [&'static str; 4] = ["fired", "skipped", "blocked", "finished"];
 }
 
 /// One event of the bus.
@@ -235,22 +264,35 @@ pub struct ControlEvent {
 }
 
 impl ControlEvent {
-    pub const TYPES: [&'static str; 3] = ["pane.state", "attention", "run.completed"];
+    pub const TYPES: [&'static str; 7] =
+        ["pane.state", "attention", "run.completed", "automation.fired", "automation.skipped", "automation.blocked", "automation.finished"];
 
     pub fn type_name(&self) -> &'static str {
-        match self.body {
+        match &self.body {
             EventBody::State { .. } => "pane.state",
             EventBody::Attention { .. } => "attention",
             EventBody::RunCompleted { .. } => "run.completed",
+            EventBody::Automation(note) => match note.event.as_str() {
+                "fired" => "automation.fired",
+                "skipped" => "automation.skipped",
+                "blocked" => "automation.blocked",
+                _ => "automation.finished",
+            },
         }
     }
 
-    /// The state event this announces, if it is one.
+    /// The state event this announces, if it is one (an automation run's end or skip announces [`StateEvent::Automation`]).
     pub fn state_event(&self) -> Option<StateEvent> {
-        match self.body {
-            EventBody::State { event, .. } => event,
+        match &self.body {
+            EventBody::State { event, .. } => *event,
+            EventBody::Automation(note) if matches!(note.event.as_str(), "finished" | "skipped") => Some(StateEvent::Automation),
             _ => None,
         }
+    }
+
+    /// Whether this is an automation event (MC-32), which may name no pane.
+    pub fn is_automation(&self) -> bool {
+        matches!(self.body, EventBody::Automation(_))
     }
 
     /// The JSON scripts read: the type, the time, the pane's ids and names, then what happened.
@@ -279,6 +321,14 @@ impl ControlEvent {
                 out.insert("status".into(), json!(status));
                 out.insert("costUsd".into(), cost_usd.map_or(Value::Null, |c| json!(c)));
                 out.insert("durationMs".into(), duration_ms.map_or(Value::Null, |d| json!(d)));
+            }
+            EventBody::Automation(note) => {
+                out.insert("name".into(), json!(note.name));
+                out.insert("kind".into(), json!(note.kind));
+                out.insert("record".into(), json!(note.record));
+                out.insert("state".into(), json!(note.state));
+                out.insert("costUsd".into(), note.cost_usd.map_or(Value::Null, |c| json!(c)));
+                out.insert("url".into(), note.url.as_ref().map_or(Value::Null, |u| json!(u)));
             }
         }
         Value::Object(out)
@@ -412,5 +462,24 @@ mod tests {
         assert!(filter.admits(&done) && !filter.admits(&event));
         assert!(!EventFilter { pane: Some("p2".into()), types: vec![] }.admits(&done));
         assert!(EventFilter::default().admits(&event));
+        let fired = ControlEvent {
+            body: EventBody::Automation(AutomationNote {
+                event: "finished".into(),
+                name: "deps".into(),
+                kind: "schedule".into(),
+                record: "r1".into(),
+                state: "done".into(),
+                cost_usd: Some(0.5),
+                url: Some("https://github.com/a/b/pull/1".into()),
+            }),
+            ..event.clone()
+        };
+        assert_eq!(fired.type_name(), "automation.finished");
+        assert_eq!(fired.state_event(), Some(StateEvent::Automation));
+        assert!(fired.is_automation() && !event.is_automation());
+        let value = fired.to_json();
+        assert_eq!((value["name"].as_str(), value["state"].as_str(), value["costUsd"].as_f64()), (Some("deps"), Some("done"), Some(0.5)));
+        assert!(ControlEvent::TYPES.contains(&fired.type_name()));
+        assert!(EventFilter { pane: None, types: vec!["automation.finished".into()] }.admits(&fired));
     }
 }

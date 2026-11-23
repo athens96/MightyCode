@@ -121,6 +121,54 @@ mighty events --type pane.state
 - Exit codes: 0 ok, 1 error, 2 timeout.
 - Only the same user on this computer can connect (a 0600 socket on the Mac, a named pipe only the current user opens on Windows), and every request needs the token in the data folder's `control/token`. Reach an app started with `--profile` with `mighty --profile <folder> status`.
 
+### Schedules and triggers {#schedules}
+The {{ui:automation.jobs.sectionTitle}} box in the {{ui:settings.nav.companion}} tab starts agent work at set times or on events. Pick a workspace to see its schedules and triggers, each with its next run and last result. At the top are today's spend, the daily budget and today's automation digest.
+- **Schedules**: a 5-field cron line (`0 9 * * 1-5`) or an RRULE subset (`FREQ=DAILY|WEEKLY|HOURLY`, `BYHOUR`, `BYMINUTE`, `BYDAY`). They follow this computer's time zone; a time skipped by daylight saving runs once right after the change, and a time that happens twice runs once, the first time.
+- **Triggers**: GitHub (PR opened, review requested, CI failed), Linear (an issue moving into a chosen state), a webhook, and standing orders (a shell command run every few minutes that wakes the agent only when its output changes, up to a daily limit). GitHub is checked through `gh` with your own sign-in, at most every 5 minutes, and less often while nothing changes or you are offline. Linear uses the workspace's connected Linear.
+- **What runs**: the prompt goes to a new pane (in a worktree if you like) or, with {{ui:automation.form.heartbeat}} on, into the pane of that name in the same conversation. You choose the agent and model.
+- **Budget**: when today's spend plus this run's estimated cost would pass the daily budget, the run does not start and is recorded as skipped.
+- **Notifications**: when automated work waits for an approval or an answer, your phone and the OS are told at once. Everything else goes into the run history and today's digest. Every run is also an `automation.fired`, `automation.skipped`, `automation.blocked` or `automation.finished` event in `mighty events`; turn on {{ui:automation.event.automation}} under {{ui:automation.settings.events}} and webhooks and the status command follow them too.
+- {{ui:automation.history.title}}: each run keeps its time, state, cost (from the usage ledger), result link (a PR the pane opened) and error. {{ui:automation.history.retry}} runs it again and {{ui:automation.history.continue}} opens its pane.
+
+> [!warning]
+> Schedules and triggers run **only while the app is open**. They stop when you quit; with [background work](#background) on, work already running continues but nothing new starts. A schedule missed while the app was closed runs once, for its latest time, the next time the app opens. Turn on {{ui:automation.form.skipMissed}} to record it as skipped instead.
+
+**Incoming webhooks**: with {{ui:automation.listener.toggle}} on, the app listens on `127.0.0.1:<port>` only (off by default). Each webhook trigger has its own address (`http://127.0.0.1:<port>/hooks/<id>`) and secret, kept in the system keychain. Sign the request body with the secret (HMAC-SHA256) and send it as `X-Mighty-Signature-256: sha256=<hex>` (GitHub's `X-Hub-Signature-256` works too). Bodies over 256 KB, wrong signatures and repeated delivery IDs (`X-Mighty-Delivery`) are dropped. To receive from outside (GitHub, other services), put your own tunnel such as ngrok or Cloudflare Tunnel in front; the app never opens one.
+
+Schedules and triggers shared with the repository go in `.mighty.yaml`. [Like its other keys](delegation.md#mighty-yaml) they run only once approved; the box shows them read-only, with an {{ui:automation.jobs.approve}} button until then.
+
+```yaml
+schedules:
+  deps-check:
+    cron: "0 9 * * 1-5"        # or rrule: FREQ=DAILY;BYHOUR=9
+    prompt: Check the dependencies and open a PR if needed.
+    agent: claude              # codex, gemini, pi, opencode, hermes
+    model: sonnet
+    worktree: true
+    catchUp: once              # once (default) or skip
+  night-watch:
+    rrule: FREQ=DAILY;BYHOUR=22
+    mode: heartbeat
+    pane: Night watch
+    prompt: Keep going.
+triggers:
+  fix-ci:
+    github: [ci_failed]        # pr_opened, review_requested, ci_failed
+    prompt: Fix the CI failure.
+    worktree: true
+  ready-issues:
+    linear: [Ready]
+    prompt: Start this issue.
+  deploy:
+    webhook: true
+    prompt: Check the deploy.
+  flaky-tests:
+    standing: npm test 2>&1 | tail -5
+    everyMinutes: 30           # 5-1440
+    dailyCap: 3                # 1-50
+    prompt: The test results changed. Find the cause and fix it.
+```
+
 ## Components {#components}
 The {{ui:settings.nav.tools}} tab shows whether everything the app needs is ready, and is where you install, sign in to and update the agent CLIs. Only the items for this computer's system are shown.
 

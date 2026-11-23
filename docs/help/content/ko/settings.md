@@ -121,6 +121,54 @@ mighty events --type pane.state
 - 끝 코드는 성공 0, 오류 1, 시간 초과 2입니다.
 - 연결은 이 컴퓨터의 같은 사용자만 할 수 있습니다(Mac은 권한 0600의 소켓, Windows는 현재 사용자만 여는 named pipe). 요청마다 데이터 폴더 `control/token`의 토큰이 필요합니다. `--profile`로 실행한 앱에는 `mighty --profile <폴더> status`로 연결합니다.
 
+### 예약과 트리거 {#schedules}
+{{ui:settings.nav.companion}} 탭의 {{ui:automation.jobs.sectionTitle}} 상자에서 정한 시간이나 이벤트에 에이전트 작업을 시작합니다. 워크스페이스를 고르면 그 워크스페이스의 예약과 트리거, 다음 실행 시각, 마지막 결과가 보입니다. 맨 위에는 오늘 쓴 금액과 하루 예산, 오늘의 자동화 요약이 있습니다.
+- **예약**: 5칸 cron(`0 9 * * 1-5`) 또는 RRULE 일부(`FREQ=DAILY|WEEKLY|HOURLY`, `BYHOUR`, `BYMINUTE`, `BYDAY`)로 정합니다. 이 컴퓨터의 시간대를 따르고, 서머타임으로 건너뛴 시각은 바로 다음에 한 번, 두 번 오는 시각은 처음에 한 번 실행합니다.
+- **트리거**: GitHub(PR 열림, 리뷰 요청, CI 실패), Linear(이슈가 고른 상태로 바뀜), 웹훅, 상시 점검(셸 명령을 몇 분마다 돌려 출력이 바뀔 때만 에이전트를 깨우고, 하루 상한까지만 깨움). GitHub는 `gh`로 로그인한 계정으로 5분에 한 번까지만 확인하고, 바뀐 것이 없거나 연결이 끊기면 더 드물게 확인합니다. Linear는 워크스페이스에 연결한 Linear를 씁니다.
+- **실행 방식**: 새 창(필요하면 워크트리에서)에 프롬프트를 보내거나, {{ui:automation.form.heartbeat}}를 켜면 같은 이름의 창에 같은 대화로 보냅니다. 에이전트와 모델을 고를 수 있습니다.
+- **예산**: 오늘 쓴 금액에 이 실행의 예상 비용을 더해 하루 예산을 넘으면 실행하지 않고 "건너뜀"으로 남깁니다.
+- **알림**: 자동으로 시작한 작업이 승인이나 답을 기다리면 휴대폰과 OS 알림으로 바로 알립니다. 나머지는 실행 기록과 오늘 요약에 모읍니다. 모든 실행은 `automation.fired`, `automation.skipped`, `automation.blocked`, `automation.finished` 이벤트로 `mighty events`에서도 볼 수 있고, {{ui:automation.settings.events}}에서 {{ui:automation.event.automation}} 항목을 켜면 웹훅과 상태 명령도 따릅니다.
+- {{ui:automation.history.title}}: 실행마다 시각, 상태, 비용(사용량 장부 기준), 결과 링크(창이 연 PR), 오류가 남습니다. {{ui:automation.history.retry}} 단추로 다시 실행하고, {{ui:automation.history.continue}} 단추로 그 창을 엽니다.
+
+> [!warning]
+> 예약과 트리거는 **앱이 열려 있을 때만** 실행합니다. 앱을 닫으면 멈추고, [백그라운드 작업](#background)을 켜 두어도 이미 실행 중인 작업만 이어질 뿐 새 작업은 시작하지 않습니다. 앱을 닫아 둔 동안 놓친 예약은 다음에 앱을 열 때 가장 최근 것 하나만 실행합니다. {{ui:automation.form.skipMissed}}를 켜면 실행하지 않고 "건너뜀"으로만 남깁니다.
+
+**웹훅 받기**: {{ui:automation.listener.toggle}}를 켜면 이 컴퓨터의 `127.0.0.1:<포트>`에서만 요청을 받습니다(기본 꺼짐). 웹훅 트리거마다 주소(`http://127.0.0.1:<포트>/hooks/<id>`)와 비밀 키가 있고, 비밀 키는 시스템 키체인에 저장됩니다. 요청 본문을 비밀 키로 HMAC-SHA256 서명해 `X-Mighty-Signature-256: sha256=<hex>`(GitHub의 `X-Hub-Signature-256`도 됨) 헤더로 보내야 합니다. 256KB를 넘는 본문, 서명이 틀린 요청, 같은 전달 ID(`X-Mighty-Delivery`)는 버립니다. 밖(GitHub, 다른 서비스)에서 받으려면 ngrok이나 Cloudflare Tunnel 같은 터널을 직접 앞에 두세요. 앱이 터널을 열지는 않습니다.
+
+저장소에 함께 둘 예약과 트리거는 `.mighty.yaml`에 적습니다. [다른 설정처럼](delegation.md#mighty-yaml) 승인한 뒤에만 실행되고, 상자에서는 읽기 전용으로 보이며 승인 전이면 {{ui:automation.jobs.approve}} 단추가 나옵니다.
+
+```yaml
+schedules:
+  deps-check:
+    cron: "0 9 * * 1-5"        # 또는 rrule: FREQ=DAILY;BYHOUR=9
+    prompt: 의존성을 점검하고 필요하면 PR을 여세요.
+    agent: claude              # codex, gemini, pi, opencode, hermes
+    model: sonnet
+    worktree: true
+    catchUp: once              # once(기본) 또는 skip
+  night-watch:
+    rrule: FREQ=DAILY;BYHOUR=22
+    mode: heartbeat
+    pane: 야간 점검
+    prompt: 이어서 진행하세요.
+triggers:
+  fix-ci:
+    github: [ci_failed]        # pr_opened, review_requested, ci_failed
+    prompt: CI 실패를 고치세요.
+    worktree: true
+  ready-issues:
+    linear: [Ready]
+    prompt: 이 이슈를 시작하세요.
+  deploy:
+    webhook: true
+    prompt: 배포 결과를 확인하세요.
+  flaky-tests:
+    standing: npm test 2>&1 | tail -5
+    everyMinutes: 30           # 5-1440
+    dailyCap: 3                # 1-50
+    prompt: 테스트 결과가 바뀌었습니다. 원인을 찾아 고치세요.
+```
+
 ## 구성 요소 {#components}
 {{ui:settings.nav.tools}} 탭은 앱에 필요한 것이 준비됐는지 보여 주고, 에이전트 CLI의 설치, 로그인, 업데이트를 한곳에서 관리합니다. 이 컴퓨터의 운영체제에 맞는 항목만 보입니다.
 
