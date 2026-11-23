@@ -1825,6 +1825,7 @@ impl Exec {
         environment: &mut BTreeMap<String, String>,
         input: &mut String,
         interactive: &mut bool,
+        held: &mut Option<String>,
     ) -> std::result::Result<mighty_platform::SpawnRequest, Failure> {
         let provider = request.provider.as_str();
         if !crate::ssh::supported_provider(provider) {
@@ -1859,6 +1860,8 @@ impl Exec {
         if provider == "claude" && effort != "default" {
             environment.insert("CLAUDE_CODE_EFFORT_LEVEL".into(), effort);
         }
+        // MC-40: the CLI runs held on the far side (it outlives a dropped connection); the direct request is the fallback.
+        *held = Some(ssh.run_script(providers::executable(provider), &arguments, environment).map_err(Failure::Error)?);
         ssh.run_request(providers::executable(provider), &arguments, environment).map_err(Failure::Error)
     }
 
@@ -2006,6 +2009,7 @@ impl Exec {
             }));
         }
         let mut interactive = false;
+        let mut held: Option<String> = None;
         let mut input = request.input.clone();
         // An ACP run's request as launched (a Hermes session that cannot be continued is started anew), Hermes's notice about its
         // session and its clarify tool.
@@ -2028,7 +2032,7 @@ impl Exec {
             if request.kind == "shell" {
                 ssh.shell_request(&request.input, &environment)
             } else {
-                self.ssh_launch(ssh, &request, &mut environment, &mut input, &mut interactive)?
+                self.ssh_launch(ssh, &request, &mut environment, &mut input, &mut interactive, &mut held)?
             }
         } else if request.kind == "shell" {
             providers.processes().shell_request(&request.input, Path::new(&workspace_path), &environment)
@@ -2252,6 +2256,16 @@ impl Exec {
             match providers.processes().attach_keyed(&key) {
                 Some(attaching) => attaching.await,
                 None => return Err(Failure::Error(strings::get("run.error.keptRunGone"))),
+            }
+        } else if let (Some(script), Some(ssh)) = (&held, &ssh) {
+            // MC-40: held on the far side; a machine that cannot hold it runs it directly as before.
+            match crate::ssh_held::spawn(providers.processes(), ssh.clone(), script, &key).await {
+                Ok(child) => Ok(child),
+                Err(crate::ssh_held::Refused::Ssh(words)) => {
+                    let failure = mighty_core::ssh::failure::classify(&words);
+                    return Err(Failure::Error(strings::get_with(failure.key(), &[("host", &ssh.target.to_string())])));
+                }
+                Err(crate::ssh_held::Refused::Unsupported(_)) => providers.processes().spawn_keyed(launch, &key).await,
             }
         } else {
             providers.processes().spawn_keyed(launch, &key).await

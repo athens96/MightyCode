@@ -15,13 +15,16 @@
 //!   the shared connection), and the remote client's SSH connection made (`connect_ssh`: the code spent for the key through the
 //!   forward): the remote Mac's workspaces and panes come in as any mirrored computer's. The code is never logged or shown.
 //! - **끊김**: the forward's ssh ending by itself (the network went) starts a reconnect a few times with growing gaps: the forward
-//!   opened again, a new pairing, the mirror connected again. The remote server keeps running meanwhile.
+//!   opened again, a new pairing, the mirror connected again. The remote server keeps running meanwhile. MC-40: so does the server
+//!   going while ssh stays up (the far side's app restarted on another port, or no longer knows the key): the remote client tells
+//!   [`lost`] once the mirror's requests fail past their retries (or are answered 401), and the same reconnect pairs again, moves the
+//!   forward to the new port and connects again — no click needed.
 //! - **서버 지우기** (confirmed first): the connection forgotten, the forward closed, the server stopped and `~/Applications/
 //!   MightyCode.app` deleted (the far side's data stays; an app in `/Applications` is never touched).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mighty_core::ssh::server::{AppPlace, Detection, version_core};
 use mighty_native::surface::{DefaultButton, DialogButton, DialogResult, DialogSpec};
@@ -44,6 +47,9 @@ struct Entry {
     /// The last outcome's sentence, and whether it is an error.
     message: Option<(String, bool)>,
     reconnecting: bool,
+    /// When the last reconnect brought the connection back, and the gap (its index) that did: a loss soon after goes on from the
+    /// next gap rather than the first.
+    came_back: Option<(Instant, usize)>,
 }
 
 static STATE: Mutex<Option<HashMap<String, Entry>>> = Mutex::new(None);
@@ -492,7 +498,7 @@ pub async fn open_tunnel(host: &Arc<Host>, machine: &str) -> Result<SshOpening, 
         let (host, machine) = (Arc::downgrade(host), machine.to_string());
         Box::new(move || {
             if let Some(host) = host.upgrade().filter(|h| !h.closing()) {
-                tauri::async_runtime::spawn(async move { forward_ended(&host, &machine).await });
+                tauri::async_runtime::spawn(async move { reconnect(&host, &machine).await });
             }
         })
     };
@@ -511,32 +517,92 @@ pub async fn open_tunnel(host: &Arc<Host>, machine: &str) -> Result<SshOpening, 
     Ok(SshOpening::new(local, pairing.code))
 }
 
-/// The gaps between reconnects after a lost forward.
+/// The gaps between reconnects after a lost forward or server.
 const RECONNECT_GAPS: [u64; 6] = [2, 5, 15, 30, 60, 120];
 
-/// The forward's ssh ended by itself: the connection is made again a few times with growing gaps while the machine and its
-/// connection are still listed and it is not connected through a forward again; the server on the far side keeps running.
-async fn forward_ended(host: &Arc<Host>, machine: &str) {
+/// A connection back for this long (the longest gap) counts as settled: a loss after it starts from the first gap again.
+const SETTLED: Duration = Duration::from_secs(RECONNECT_GAPS[RECONNECT_GAPS.len() - 1]);
+
+/// MC-40: a connected SSH machine's connection was lost by its own requests (the remote client's `ssh_lost`): the server behind the
+/// forward is gone or no longer knows the key, while the forward's ssh may still be up (the far side's app restarted on another
+/// port). The same reconnect as a lost forward's: a new code over ssh, the forward moved to the server's new port (the old one
+/// closed) when it changed, the mirror connected again.
+pub fn lost(host: &Arc<Host>, machine: String) {
+    let host = host.clone();
+    tauri::async_runtime::spawn(async move { reconnect(&host, &machine).await });
+}
+
+/// One round of a reconnect: stopped, back, or failed (the next gap follows).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Round {
+    Stop,
+    Back,
+    Failed,
+}
+
+/// The gap a reconnect starts at: the first, unless the last reconnect brought the connection back less than [`SETTLED`] ago (a
+/// server lost again right after it was reached): then the gap after the one that brought it back, so rounds never come faster than
+/// the gaps; past the last gap none is tried (the person's 연결 still works).
+fn first_gap(came_back: Option<(Instant, usize)>, now: Instant) -> usize {
+    match came_back {
+        Some((at, step)) if now.saturating_duration_since(at) < SETTLED => step + 1,
+        _ => 0,
+    }
+}
+
+/// The reconnect's rounds from gap `first` on, each after its gap (`wait`): the index of the gap whose round brought the connection
+/// back; None when a round stopped it or none did.
+async fn gaps<W: Future<Output = ()>, R: Future<Output = Round>>(
+    first: usize,
+    wait: impl Fn(Duration) -> W,
+    mut round: impl FnMut() -> R,
+) -> Option<usize> {
+    for (step, gap) in RECONNECT_GAPS.iter().enumerate().skip(first) {
+        wait(Duration::from_secs(*gap)).await;
+        match round().await {
+            Round::Stop => return None,
+            Round::Back => return Some(step),
+            Round::Failed => {}
+        }
+    }
+    None
+}
+
+/// The forward's ssh ended by itself, or the server behind it was lost ([`lost`]): the connection is made again a few times with
+/// growing gaps while the machine and its connection are still listed, the person has not pressed 연결 끊기 and it is not connected
+/// through a forward again; the server on the far side keeps running. One reconnect per machine at a time.
+async fn reconnect(host: &Arc<Host>, machine: &str) {
     if connection_of(host, machine).is_none() || with(machine, |e| std::mem::replace(&mut e.reconnecting, true)) {
         return;
     }
     redraw(host);
-    for gap in RECONNECT_GAPS {
-        tokio::time::sleep(Duration::from_secs(gap)).await;
-        if host.closing() || super::machine(host, machine).is_none() || !entry(machine).reconnecting {
-            break;
+    let first = with(machine, |e| first_gap(e.came_back, Instant::now()));
+    let back = gaps(first, tokio::time::sleep, || round(host, machine)).await;
+    with(machine, |e| {
+        e.reconnecting = false;
+        if let Some(step) = back {
+            e.came_back = Some((Instant::now(), step));
         }
-        let Some(connection) = connection_of(host, machine) else { break };
-        if super::forward::server_open(machine) && connection.status == RemoteConnectionStatus::Connected {
-            break;
-        }
-        if crate::mirror::connect(&connection.id).await.is_ok() {
-            host.log.line("ssh: the server connection is back after a lost forward");
-            break;
-        }
-    }
-    with(machine, |e| e.reconnecting = false);
+    });
     redraw(host);
+}
+
+/// One try of [`reconnect`]: stopped when the app closes, the machine or its connection went, 연결 끊기 was pressed (it clears
+/// `reconnecting`) or it is connected through a forward already; else the sidebar's 연결 (the client's refresh: a new code over ssh,
+/// the forward opened or moved, the pairing, the mirror).
+async fn round(host: &Arc<Host>, machine: &str) -> Round {
+    if host.closing() || super::machine(host, machine).is_none() || !entry(machine).reconnecting {
+        return Round::Stop;
+    }
+    let Some(connection) = connection_of(host, machine) else { return Round::Stop };
+    if super::forward::server_open(machine) && connection.status == RemoteConnectionStatus::Connected {
+        return Round::Stop;
+    }
+    if crate::mirror::connect(&connection.id).await.is_ok() {
+        host.log.line("ssh: the server connection is back after a lost forward or server");
+        return Round::Back;
+    }
+    Round::Failed
 }
 
 /// A connection's address as shown: an SSH machine's server as `ssh · <machine>` (its saved `ssh:<id>` names nobody), any other as it
@@ -681,6 +747,65 @@ mod tests {
 
         let newer_bundle = offer("0.6.0", &mac(Some(AppPlace::System), Some("0.6.2"), None));
         assert!(newer_bundle.update && !newer_bundle.removable, "an app in /Applications is used, never removed");
+    }
+
+    /// MC-40: a reconnect waits 2, 5, 15, 30, 60 and 120 s between its tries and stops at the first that is back or told to stop.
+    #[tokio::test]
+    async fn a_reconnect_keeps_its_gaps_and_stops_when_told() {
+        let waited = std::sync::Mutex::new(vec![]);
+        let wait = |gap: Duration| {
+            waited.lock().unwrap().push(gap.as_secs());
+            std::future::ready(())
+        };
+        let mut tries = 0;
+        assert_eq!(
+            gaps(0, wait, || {
+                tries += 1;
+                std::future::ready(Round::Failed)
+            })
+            .await,
+            None
+        );
+        assert_eq!((tries, std::mem::take(&mut *waited.lock().unwrap())), (6, vec![2, 5, 15, 30, 60, 120]));
+
+        let mut tries = 0;
+        let back = gaps(0, wait, || {
+            tries += 1;
+            std::future::ready(if tries == 3 { Round::Back } else { Round::Failed })
+        })
+        .await;
+        assert_eq!(back, Some(2));
+        assert_eq!(std::mem::take(&mut *waited.lock().unwrap()), [2, 5, 15]);
+
+        // Removed, 연결 끊기 or connected already: no further try.
+        let mut tries = 0;
+        assert_eq!(
+            gaps(0, wait, || {
+                tries += 1;
+                std::future::ready(Round::Stop)
+            })
+            .await,
+            None
+        );
+        assert_eq!((tries, std::mem::take(&mut *waited.lock().unwrap())), (1, vec![2]));
+
+        // Going on from a later gap; past the last, nothing is tried.
+        assert_eq!(gaps(4, wait, || std::future::ready(Round::Failed)).await, None);
+        assert_eq!(std::mem::take(&mut *waited.lock().unwrap()), [60, 120]);
+        assert_eq!(gaps(RECONNECT_GAPS.len(), wait, || -> std::future::Ready<Round> { panic!("no try past the last gap") }).await, None);
+        assert!(waited.lock().unwrap().is_empty());
+    }
+
+    /// MC-40: a server lost again soon after a reconnect brought it back goes on from the next gap (never faster than the gaps); once
+    /// the connection stayed up as long as the longest gap, a loss starts from the first again.
+    #[test]
+    fn a_loss_soon_after_coming_back_goes_on_from_the_next_gap() {
+        let now = Instant::now();
+        assert_eq!(first_gap(None, now), 0);
+        assert_eq!(first_gap(Some((now, 0)), now + Duration::from_secs(3)), 1);
+        assert_eq!(first_gap(Some((now, 2)), now + Duration::from_secs(119)), 3);
+        assert_eq!(first_gap(Some((now, 5)), now + Duration::from_secs(1)), RECONNECT_GAPS.len(), "past the last gap: none tried");
+        assert_eq!(first_gap(Some((now, 5)), now + SETTLED), 0, "settled: from the first again");
     }
 
     #[test]

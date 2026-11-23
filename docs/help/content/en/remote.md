@@ -135,7 +135,8 @@ The machine shows in the sidebar under an "SSH · name" header, with its workspa
 **What works**
 - Terminal panes: the machine's login shell in that folder.
 - Agent panes: Claude, Codex, Antigravity and pi run with the CLI installed on that machine and its account there. Approval and question cards show in this app. If the CLI isn't on the machine, the run ends with an error.
-- Files pane: read-only. Previews read up to 1 MiB per file.
+- The machine's login shell may be fish, csh or tcsh as well as bash or zsh.
+- Files pane: open, edit and save the machine's files (up to 1 MiB each). A save replaces the file there in one step and keeps its encoding, line endings and permissions. If an agent or someone else changed the file after you opened it, nothing is overwritten: you're told and choose to reload or overwrite.
 - On a Mac, the panes of one machine share one SSH connection. Windows' OpenSSH can't, so each pane connects on its own.
 - Connect locally: when a pane's output names a dev server such as `localhost:3000`, the SSH bar over the pane offers to connect it. It forwards to a free port on this computer; click the address to open it in the browser. Closing the pane ends the forward.
 - With [background work](settings.md#general) on, SSH panes keep working after the app closes.
@@ -143,9 +144,10 @@ The machine shows in the sidebar under an "SSH · name" header, with its workspa
 **When the connection drops**
 - The terminal pane says "The SSH connection was lost." with a {{ui:ssh.terminal.reconnect}} button.
 - If the machine has tmux, the {{ui:ssh.settings.tmux}} switch is on and terminal panes run inside a tmux session. The work keeps going on the machine, and reconnecting attaches to the same session. You can turn the switch off per machine.
+- Agent runs keep going on the machine. This app reconnects after 2, 5, 15, 30, 60 and 120 seconds (then every 120 seconds) and reads on from where it stopped; a waiting approval card stays, and an answer you give while the connection is down reaches the CLI once it's back. If the connection doesn't come back within 30 minutes, the run ends here with an error and may keep running on the machine until it finishes.
 
 **Not yet**
-- Editing remote files, remote git changes, the work map, worktrees, Mighty orchestration, attachments, and opencode and Hermes panes.
+- Reviewing a request's changes (accepting or discarding hunks), remote git changes, the work map, worktrees, Mighty orchestration, attachments, and opencode and Hermes panes.
 
 **Mighty Code server (remote Mac)**
 When the machine is a Mac, Mighty Code can run there without a window, and you use that Mac's workspaces and agent panes here [as they are](#mirror). Only this machine's SSH is used: no Tailscale, no pairing link. Linux and Windows machines can't get one (there is no Linux build); use them the way above, with nothing installed.
@@ -155,5 +157,5 @@ When the machine is a Mac, Mighty Code can run there without a window, and you u
 3. When it's installed it connects at once: "Remote · name" appears in the sidebar with that Mac's workspaces. Later, {{ui:ssh.server.connect}} or the sidebar's connect joins again.
 - When the server's version differs from this app's, {{ui:ssh.server.update}} appears. It stops the running server, puts the new version in place and starts it again.
 - The app starts only while the same user is logged in at that Mac's screen. For a Mac without a display, turn on automatic login there.
-- When the SSH connection drops the server keeps running on that Mac, and this app reconnects a few times.
+- When the SSH connection drops the server keeps running on that Mac, and this app reconnects a few times. If only the server on that Mac restarted while SSH stayed up, this app pairs again and reconnects by itself.
 - {{ui:ssh.server.remove}} stops the server and deletes `~/Applications/MightyCode.app` (it asks first). Mighty Code's data on that Mac stays, and an app in `/Applications` is never touched.

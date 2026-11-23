@@ -287,7 +287,7 @@ async fn load_folder(host: &Host, files: &Files, workspace: &str, root: &str, pa
     lock(&files.trees).entry(workspace.to_string()).or_default().apply(path, listing, &locale);
 }
 
-/// MC-33: the files pane's workspace is an SSH machine's: its files are read-only here.
+/// MC-33: the files pane's workspace is an SSH machine's (no default app, no file manager; MC-40 saves it over ssh).
 fn is_ssh(host: &Host, workspace: &str) -> bool {
     host.view().snapshot.workspace(workspace).is_some_and(|w| w.is_ssh())
 }
@@ -727,6 +727,49 @@ pub fn protocol(
 
 // ---- the page's methods -----------------------------------------------------------------------------------------------------
 
+/// `filesSave`'s answer for the page: the saved file's hash, size, time, encoding and line endings, or the refusal and its sentence.
+fn save_answer(host: &Host, files: &Files, outcome: Result<mighty_files::edit::SaveOutcome, mighty_files::edit::SaveRefusal>) -> Value {
+    match outcome {
+        Ok(saved) => {
+            host.shell_dirty();
+            json!({
+                "ok": true,
+                "diskHash": saved.disk_hash,
+                "size": model::format_bytes(saved.size, files.formats.as_ref()),
+                "modified": saved.modified.map(|at| files.formats.date_time(at)),
+                "encoding": mighty_files::classify::display_name(saved.encoding),
+                "eol": saved.eol,
+            })
+        }
+        Err(mighty_files::edit::SaveRefusal::Conflict { disk_hash }) => json!({
+            "ok": false,
+            "reason": "conflict",
+            "diskHash": disk_hash,
+            "message": host.locale.get("files.editor.conflictBanner"),
+        }),
+        Err(mighty_files::edit::SaveRefusal::Missing) => json!({
+            "ok": false,
+            "reason": "missing",
+            "message": host.locale.get("files.preview.missing"),
+        }),
+        Err(mighty_files::edit::SaveRefusal::TooLarge) => json!({
+            "ok": false,
+            "reason": "tooLarge",
+            "message": host.locale.get("files.preview.truncated"),
+        }),
+        Err(mighty_files::edit::SaveRefusal::EncodingUnsupported { encoding }) => json!({
+            "ok": false,
+            "reason": "encoding",
+            "message": host.locale.get_with("files.editor.encodingUnsupported", &[("encoding", encoding)]),
+        }),
+        Err(mighty_files::edit::SaveRefusal::Io(error)) => json!({
+            "ok": false,
+            "reason": "io",
+            "message": error,
+        }),
+    }
+}
+
 pub fn register(methods: &mut Registry) {
     methods.add("openFiles", |host: Arc<Host>, args| async move {
         let mut view = host.view();
@@ -827,7 +870,12 @@ pub fn register(methods: &mut Registry) {
     });
     methods.add("filesSave", |host: Arc<Host>, args| async move {
         let (workspace, root) = require_files(&host, &args)?;
-        if is_ssh(&host, &workspace) || (!host.writes() && !host.may_touch_repo(Path::new(&root))) {
+        let remote = crate::ssh::files::launch(&host, &workspace);
+        let read_only = match &remote {
+            Some(_) => !host.writes(),
+            None => !host.writes() && !host.may_touch_repo(Path::new(&root)),
+        };
+        if read_only {
             return Ok(json!({
                 "ok": false,
                 "reason": "readOnly",
@@ -843,58 +891,32 @@ pub fn register(methods: &mut Registry) {
         let expected_hash = text(&args, "expectedHash").map(str::to_string);
         let force = flag(&args, "force");
         let files = state(&host)?;
-        let saving_root = root.clone();
-        let outcome = tauri::async_runtime::spawn_blocking(move || {
-            mighty_files::edit::save(Path::new(&saving_root), &path, &content, expected_hash.as_deref(), force)
-        })
-        .await
-        .map_err(|e| e.to_string())?;
-        Ok(match outcome {
-            Ok(saved) => {
-                host.shell_dirty();
-                json!({
-                    "ok": true,
-                    "diskHash": saved.disk_hash,
-                    "size": model::format_bytes(saved.size, files.formats.as_ref()),
-                    "modified": saved.modified.map(|at| files.formats.date_time(at)),
-                    "encoding": mighty_files::classify::display_name(saved.encoding),
-                    "eol": saved.eol,
+        // MC-40: an SSH workspace's file is saved over ssh, atomically on the far side.
+        let outcome = match remote {
+            Some(Ok(launch)) => crate::ssh::files::save(&host, &launch, &path, &content, expected_hash.as_deref(), force).await,
+            Some(Err(message)) => Err(mighty_files::edit::SaveRefusal::Io(message)),
+            None => {
+                let saving_root = root.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    mighty_files::edit::save(Path::new(&saving_root), &path, &content, expected_hash.as_deref(), force)
                 })
+                .await
+                .map_err(|e| e.to_string())?
             }
-            Err(mighty_files::edit::SaveRefusal::Conflict { disk_hash }) => json!({
-                "ok": false,
-                "reason": "conflict",
-                "diskHash": disk_hash,
-                "message": host.locale.get("files.editor.conflictBanner"),
-            }),
-            Err(mighty_files::edit::SaveRefusal::Missing) => json!({
-                "ok": false,
-                "reason": "missing",
-                "message": host.locale.get("files.preview.missing"),
-            }),
-            Err(mighty_files::edit::SaveRefusal::TooLarge) => json!({
-                "ok": false,
-                "reason": "tooLarge",
-                "message": host.locale.get("files.preview.truncated"),
-            }),
-            Err(mighty_files::edit::SaveRefusal::EncodingUnsupported { encoding }) => json!({
-                "ok": false,
-                "reason": "encoding",
-                "message": host.locale.get_with("files.editor.encodingUnsupported", &[("encoding", encoding)]),
-            }),
-            Err(mighty_files::edit::SaveRefusal::Io(error)) => json!({
-                "ok": false,
-                "reason": "io",
-                "message": error,
-            }),
-        })
+        };
+        Ok(save_answer(&host, &files, outcome))
     });
     methods.add("filesCheckDisk", |host: Arc<Host>, args| async move {
         let (workspace, root) = require_files(&host, &args)?;
         let Some(path) = path_arg(&args) else { return Ok(json!({"status": "missing"})) };
         let expected = text(&args, "expectedHash").unwrap_or("").to_string();
-        if is_ssh(&host, &workspace) {
-            return Ok(json!({"status": "unchanged", "diskHash": expected}));
+        if let Some(remote) = crate::ssh::files::launch(&host, &workspace) {
+            let Ok(launch) = remote else { return Ok(json!({"status": "unchanged", "diskHash": expected})) };
+            return Ok(match crate::ssh::files::check_disk(&host, &launch, &workspace, &path, &expected).await {
+                crate::ssh::files::Check::Unchanged(hash) => json!({"status": "unchanged", "diskHash": hash}),
+                crate::ssh::files::Check::Modified(hash) => json!({"status": "modified", "diskHash": hash}),
+                crate::ssh::files::Check::Missing => json!({"status": "missing"}),
+            });
         }
         let status = tauri::async_runtime::spawn_blocking(move || mighty_files::edit::check_disk(Path::new(&root), &path, &expected))
             .await

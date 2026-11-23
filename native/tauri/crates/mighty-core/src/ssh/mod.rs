@@ -17,6 +17,7 @@ pub mod command;
 pub mod config;
 pub mod failure;
 pub mod files;
+pub mod held;
 pub mod server;
 pub mod target;
 

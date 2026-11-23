@@ -137,6 +137,13 @@ pub fn app(host: &Arc<Host>) -> Arc<RemoteApp> {
                 crate::ssh::server::open_tunnel(&host, &machine).await
             })
         });
+        // MC-40: the server behind a live forward went (it restarted on another port, or forgot the key): paired again over ssh.
+        let lost_host = Arc::downgrade(host);
+        let ssh_lost: mighty_remote::remote::ssh_tunnel::SshLost = Arc::new(move |machine: String| {
+            if let Some(host) = lost_host.upgrade().filter(|h| !h.closing()) {
+                crate::ssh::server::lost(&host, machine);
+            }
+        });
         let options = ClientOptions {
             // Only a smoke run passes loopback in place of Tailscale (and then asks no adapter).
             allow_loopback_for_tests: smoke,
@@ -147,6 +154,7 @@ pub fn app(host: &Arc<Host>) -> Arc<RemoteApp> {
             relay_proxy: Some(Arc::new(AppProxy(proxy))),
             client_name: client_name(),
             ssh_tunnel: (!smoke).then_some(ssh_tunnel),
+            ssh_lost: (!smoke).then_some(ssh_lost),
             ..ClientOptions::default()
         };
         let approving = Arc::downgrade(host);
@@ -420,9 +428,11 @@ pub fn start(host: &Arc<Host>, platform: &Platform) {
     let _ = app.tunnel.set(RemoteHost::new_ssh_tunnel(tunnel_options));
     let _ = app.host.set(RemoteHost::new(options));
     restore_sharing(host);
-    if let Some(sharing) = app.host() {
-        sharing.set_memory(Some(crate::shared_memory::memory_host(host)));
-        sharing.set_memory_for_workspace(Some(crate::shared_memory::remote_workspace_context_hook(host)));
+    // MC-13 shared memory on both hosts. MC-40: the SSH tunnel's too — its `/v2/memory/*` behind the same key check as its other
+    // routes, scoped to what it shares (every local workspace: the SSH user is this Mac's own user, who reads those already).
+    for shared in [app.host(), app.tunnel()].into_iter().flatten() {
+        shared.set_memory(Some(crate::shared_memory::memory_host(host)));
+        shared.set_memory_for_workspace(Some(crate::shared_memory::remote_workspace_context_hook(host)));
     }
 }
 

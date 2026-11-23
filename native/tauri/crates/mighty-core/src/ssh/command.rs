@@ -1,8 +1,9 @@
 //! The far side's command lines and the local `ssh` argument arrays.
 //!
 //! Locally ssh always starts from an argument array (never a shell string). The one string is the remote command ssh hands to the far
-//! side's login shell; every path, program and argument in it is single-quoted for a POSIX shell ([`quote`]), and a folder under the
-//! remote home keeps its `~` outside the quotes so the far side expands it. Every array ends `-- <destination> <command>`, the
+//! side's login shell, always `/bin/sh -c '<script>'` ([`sh`]): one word every login shell (bash, zsh, fish, csh, tcsh) reads the
+//! same, so the script is POSIX whatever that shell is. In the script every path, program and argument is single-quoted for a POSIX
+//! shell ([`quote`]), and a folder under the remote home keeps its `~` outside the quotes so the far side expands it. Every array ends `-- <destination> <command>`, the
 //! destination validated ([`Target`]), so nothing the user typed can be an ssh option.
 //!
 //! Where the local ssh has ControlMaster ([`Mux`], not Windows' OpenSSH), every pane of a machine shares one connection:
@@ -69,6 +70,54 @@ pub fn quote(text: &str) -> String {
     out
 }
 
+/// Whether `script` may go to the far side as it is inside [`word`]: no line break or other control character, no backslash and no
+/// `!`. fish reads `\\` and `\'` inside single quotes, csh refuses a line break inside them and may read `!` as history; a script
+/// with none of these reads the same in every login shell.
+fn plain(script: &str) -> bool {
+    !script.chars().any(|c| c.is_control() || c == '\\' || c == '!')
+}
+
+/// `text` single-quoted so that a POSIX shell, fish and csh/tcsh all read one word with exactly this text: a `'` is closed, written
+/// as `"'"` and opened again (no backslash, which fish would read inside the quotes). Only for text [`plain`] allows.
+fn word(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\"'\"'"))
+}
+
+/// The far side's decoding of a script sent as hex: `awk` (POSIX, in every system's base) turns the digits back into the script's
+/// bytes (`LC_ALL=C`: one byte for each code), which `eval` runs in the same `/bin/sh`.
+fn boot(script: &str) -> String {
+    let hex: String = script.bytes().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "eval \"$(LC_ALL=C awk -v s={hex} 'BEGIN{{h=\"0123456789abcdef\";n=length(s);for(i=1;i<n;i+=2)printf \"%c\",\
+         (index(h,substr(s,i,1))-1)*16+index(h,substr(s,i+1,1))-1}}')\""
+    )
+}
+
+/// `script` as the far side's login shell runs it, whatever that shell is (bash, zsh, fish, csh, tcsh): `/bin/sh -c '<script>'`, one
+/// word with no line break, backslash or `!` in it. A script with any of those (most have line breaks) goes as hex that the far
+/// side's `/bin/sh` decodes with `awk` and `eval`s, so its text never meets the login shell's quoting rules.
+pub fn sh(script: &str) -> String {
+    let body = if plain(script) { script.to_string() } else { boot(script) };
+    format!("/bin/sh -c {}", word(&body))
+}
+
+/// The script inside a remote command [`sh`] made (for the checks' stand-in `ssh` and for reading what was sent); None for anything
+/// else.
+pub fn unwrap_sh(command: &str) -> Option<String> {
+    let quoted = command.strip_prefix("/bin/sh -c '")?.strip_suffix('\'')?;
+    let body = quoted.replace("'\"'\"'", "'");
+    if body.contains('\'') && body.matches('\'').count() % 2 != 0 {
+        return None;
+    }
+    let Some(rest) = body.strip_prefix("eval \"$(LC_ALL=C awk -v s=") else { return Some(body) };
+    let hex = rest.split(' ').next()?;
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let bytes: Option<Vec<u8>> = (0..hex.len()).step_by(2).map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok()).collect();
+    String::from_utf8(bytes?).ok()
+}
+
 /// A remote folder for `cd`: `~` and `~/rest` keep the tilde outside the quotes so the far side expands it; anything else is quoted
 /// whole.
 pub fn quote_dir(dir: &str) -> String {
@@ -106,24 +155,61 @@ pub fn tmux_session(pane: &str) -> String {
 /// What a terminal pane runs on the far side.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Shell {
-    /// The login shell in the folder: `cd <dir> && exec $SHELL -l`.
+    /// The login shell in the folder: `cd <dir> && exec "$SHELL" -l`.
     Login,
     /// Inside tmux, so the work survives a lost connection and a reconnect attaches again:
     /// `cd <dir> && exec tmux new-session -A -s <session>`.
     Tmux(String),
 }
 
-/// The remote command of a terminal pane.
-pub fn shell_command(dir: &str, shell: &Shell) -> String {
+/// The script of a terminal pane (under [`sh`]).
+pub fn shell_script(dir: &str, shell: &Shell) -> String {
     match shell {
-        Shell::Login => format!("cd {} && exec $SHELL -l", quote_dir(dir)),
+        Shell::Login => format!("cd {} && exec \"${{SHELL:-/bin/sh}}\" -l", quote_dir(dir)),
         Shell::Tmux(session) => format!("cd {} && exec tmux new-session -A -s {}", quote_dir(dir), quote(session)),
     }
 }
 
-/// The remote command of a run: the program found on the login shell's `PATH` (`$SHELL -lc`), started in the folder with `env`'s
-/// values. Err when the program or a name is not one the far side may be given.
-pub fn run_command(dir: &str, program: &str, args: &[String], env: &BTreeMap<String, String>) -> Result<String, &'static str> {
+/// The remote command of a terminal pane.
+pub fn shell_command(dir: &str, shell: &Shell) -> String {
+    sh(&shell_script(dir, shell))
+}
+
+/// The login shells that read POSIX quoting (`$SHELL -lc '<POSIX command>'`). Any other (fish, csh, tcsh, nushell, …) is never handed
+/// a POSIX command: its `PATH` is read from it and `/bin/sh` runs the command.
+const POSIX_SHELLS: &str = "sh|bash|zsh|dash|ksh|ksh93|mksh|pdksh|ash|yash|busybox";
+
+/// The lines that run `inner` (a POSIX command) the way the person's login shell would find its program: through a POSIX login shell
+/// itself (`-lc`, so its profile's environment applies), else with the `PATH` that shell reports (csh and tcsh take no `-l` with
+/// `-c`) and `/bin/sh` running `inner`.
+fn login_exec(inner: &str) -> String {
+    format!(
+        "s=${{SHELL:-/bin/sh}}\n\
+         case \"${{s##*/}}\" in\n\
+         {POSIX_SHELLS}) exec \"$s\" -lc {quoted} ;;\n\
+         csh|tcsh) f=-c ;;\n\
+         *) f=-lc ;;\n\
+         esac\n\
+         p=$(\"$s\" \"$f\" 'printf \"MIGHTYPATH=%s\" \"$PATH\"' </dev/null 2>/dev/null)\n\
+         case \"$p\" in *MIGHTYPATH=*) PATH=${{p##*MIGHTYPATH=}}; export PATH ;; esac\n\
+         {inner}",
+        quoted = quote(inner)
+    )
+}
+
+/// The script of a shell pane's one-shot command: the person's text, written for their login shell, run by it in the folder (csh and
+/// tcsh with `-c`, which take no `-l` beside it).
+pub fn shell_command_script(dir: &str, text: &str) -> String {
+    format!(
+        "cd {} || exit 1\ns=${{SHELL:-/bin/sh}}\ncase \"${{s##*/}}\" in csh|tcsh) exec \"$s\" -c {text} ;; esac\nexec \"$s\" -lc {text}",
+        quote_dir(dir),
+        text = quote(text)
+    )
+}
+
+/// The script of a run (under [`sh`]): the program found on the login shell's `PATH`, started in the folder with `env`'s values.
+/// Err when the program or a name is not one the far side may be given.
+pub fn run_script(dir: &str, program: &str, args: &[String], env: &BTreeMap<String, String>) -> Result<String, &'static str> {
     if !valid_program(program) {
         return Err("program");
     }
@@ -147,11 +233,17 @@ pub fn run_command(dir: &str, program: &str, args: &[String], env: &BTreeMap<Str
         inner.push(' ');
         inner.push_str(&quote(arg));
     }
-    Ok(format!("cd {} && exec $SHELL -lc {}", quote_dir(dir), quote(&inner)))
+    Ok(format!("cd {} || exit 1\n{}", quote_dir(dir), login_exec(&inner)))
 }
 
-/// The connection test's remote command: the OS and machine, the login shell, and whether tmux is there.
-pub const PROBE_COMMAND: &str = "uname -sm; echo \"$SHELL\"; command -v tmux || echo no-tmux";
+/// The remote command of a run ([`run_script`] under [`sh`]).
+pub fn run_command(dir: &str, program: &str, args: &[String], env: &BTreeMap<String, String>) -> Result<String, &'static str> {
+    run_script(dir, program, args, env).map(|script| sh(&script))
+}
+
+/// The connection test's remote command: the OS and machine, the login shell, and whether tmux is there (under `/bin/sh`, so a csh or
+/// fish login shell answers the same).
+pub const PROBE_COMMAND: &str = "/bin/sh -c 'uname -sm; echo \"$SHELL\"; command -v tmux || echo no-tmux'";
 
 /// The options every connection has: keep-alives and, for a run or a read, no prompt at all (batch mode: no password, no host-key
 /// question; an unknown host key fails rather than being accepted).
@@ -306,7 +398,7 @@ mod tests {
         let mux = Mux::Shared("/data/ssh".into());
         let args = terminal_args(&alias(), &mux, "/srv/my 'app'", &Shell::Login);
         assert_eq!(
-            args,
+            args[..args.len() - 1],
             [
                 "-o",
                 "ServerAliveInterval=15",
@@ -321,13 +413,16 @@ mod tests {
                 "-tt",
                 "--",
                 "devbox",
-                "cd '/srv/my '\\''app'\\''' && exec $SHELL -l",
             ]
         );
+        assert_eq!(unwrap_sh(args.last().unwrap()).unwrap(), "cd '/srv/my '\\''app'\\''' && exec \"${SHELL:-/bin/sh}\" -l");
         let direct = Target::parse("me@box:2222").unwrap();
         let args = terminal_args(&direct, &Mux::None, "~", &Shell::Tmux(tmux_session("ab-12")));
         assert!(!args.iter().any(|a| a.starts_with("ControlMaster")), "no ControlMaster where ssh has none");
-        assert_eq!(&args[args.len() - 6..], ["-p", "2222", "-tt", "--", "me@box", "cd ~ && exec tmux new-session -A -s 'mighty-ab12'"]);
+        assert_eq!(
+            &args[args.len() - 6..],
+            ["-p", "2222", "-tt", "--", "me@box", "/bin/sh -c 'cd ~ && exec tmux new-session -A -s '\"'\"'mighty-ab12'\"'\"''"]
+        );
     }
 
     #[test]
@@ -340,11 +435,17 @@ mod tests {
     fn run_commands_quote_every_word_twice_over() {
         let mut env = BTreeMap::new();
         env.insert("NO_COLOR".to_string(), "1".to_string());
-        let command = run_command("~/my app", "claude", &["--print".into(), "it's".into()], &env).unwrap();
-        assert_eq!(
-            command,
-            "cd ~/'my app' && exec $SHELL -lc 'exec env '\\''NO_COLOR=1'\\'' '\\''claude'\\'' '\\''--print'\\'' '\\''it'\\''\\'\\'''\\''s'\\'''"
+        let script = run_script("~/my app", "claude", &["--print".into(), "it's".into()], &env).unwrap();
+        assert!(script.starts_with("cd ~/'my app' || exit 1\n"), "{script}");
+        assert!(
+            script.contains(
+                "exec \"$s\" -lc 'exec env '\\''NO_COLOR=1'\\'' '\\''claude'\\'' '\\''--print'\\'' '\\''it'\\''\\'\\'''\\''s'\\'''"
+            ),
+            "a POSIX login shell gets the command quoted once more: {script}"
         );
+        assert!(script.ends_with("\nexec env 'NO_COLOR=1' 'claude' '--print' 'it'\\''s'"), "any other gets it from /bin/sh: {script}");
+        let command = run_command("~/my app", "claude", &["--print".into(), "it's".into()], &env).unwrap();
+        assert_eq!(unwrap_sh(&command).unwrap(), script);
         assert_eq!(run_command("/x", "../claude", &[], &BTreeMap::new()), Err("program"));
         assert_eq!(run_command("/x", "-oops", &[], &BTreeMap::new()), Err("program"));
         let mut bad = BTreeMap::new();
@@ -355,27 +456,202 @@ mod tests {
         assert!(args.contains(&"-T".to_string()) && !args.contains(&"-tt".to_string()));
     }
 
-    /// The run command through two real shells (the outer one ssh's far side starts, the inner `$SHELL -lc`): the CLI gets its
-    /// arguments exactly.
+    /// The sent word never holds what a login shell other than a POSIX one reads differently.
+    #[test]
+    fn the_sent_word_is_one_every_login_shell_reads_alike() {
+        for script in ["echo plain", "echo 'q'", "printf '%s\\n' a\nif true; then echo b; fi", "echo hi!", "echo 한글 $HOME `x`"] {
+            let command = sh(script);
+            let body = command.strip_prefix("/bin/sh -c ").unwrap();
+            assert!(!body.contains('\\') && !body.contains('\n') && !body.contains('!'), "{command}");
+            assert_eq!(unwrap_sh(&command).unwrap(), script);
+            let posix = posix_words(&command);
+            assert_eq!(posix.len(), 3, "{command}");
+            assert_eq!(fish_words(&command).unwrap(), posix, "fish reads {command}");
+            assert_eq!(csh_words(&command).unwrap(), posix, "csh reads {command}");
+        }
+        assert_eq!(sh("echo plain"), "/bin/sh -c 'echo plain'");
+        assert_eq!(sh("echo 'q'"), "/bin/sh -c 'echo '\"'\"'q'\"'\"''");
+        assert!(sh("a\nb").starts_with("/bin/sh -c 'eval \"$(LC_ALL=C awk -v s=610a62 "));
+        assert_eq!(unwrap_sh("cd x && y"), None);
+    }
+
+    /// A stand-in for how fish splits a command line into words (fish 3): single quotes take `\\` and `\'` as escapes, double quotes
+    /// take `\\`, `\"`, `\$` and expand `$`, a backslash outside quotes escapes the next character. None where fish would expand
+    /// something or fail.
+    fn fish_words(line: &str) -> Option<Vec<String>> {
+        let mut words = Vec::new();
+        let mut current: Option<String> = None;
+        let mut chars = line.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                ' ' => words.extend(current.take()),
+                '\'' => {
+                    let word = current.get_or_insert_with(String::new);
+                    loop {
+                        match chars.next()? {
+                            '\'' => break,
+                            '\\' if matches!(chars.peek(), Some('\\' | '\'')) => word.push(chars.next()?),
+                            other => word.push(other),
+                        }
+                    }
+                }
+                '"' => {
+                    let word = current.get_or_insert_with(String::new);
+                    loop {
+                        match chars.next()? {
+                            '"' => break,
+                            '$' => return None,
+                            '\\' if matches!(chars.peek(), Some('\\' | '"' | '$')) => word.push(chars.next()?),
+                            other => word.push(other),
+                        }
+                    }
+                }
+                '\\' => current.get_or_insert_with(String::new).push(chars.next()?),
+                '$' | '(' | ')' | '*' | '?' | '{' | '}' | '~' | '#' | ';' | '|' | '&' | '<' | '>' => return None,
+                other => current.get_or_insert_with(String::new).push(other),
+            }
+        }
+        words.extend(current);
+        Some(words)
+    }
+
+    /// A stand-in for how csh/tcsh split a command line: single quotes literal but never across a line break, double quotes literal
+    /// but for `$`, `!` and backquotes, `!` anywhere a history event. None where csh would fail or expand.
+    fn csh_words(line: &str) -> Option<Vec<String>> {
+        if line.contains('!') || line.contains('\n') {
+            return None;
+        }
+        let mut words = Vec::new();
+        let mut current: Option<String> = None;
+        let mut chars = line.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                ' ' => words.extend(current.take()),
+                '\'' => {
+                    let word = current.get_or_insert_with(String::new);
+                    loop {
+                        match chars.next()? {
+                            '\'' => break,
+                            other => word.push(other),
+                        }
+                    }
+                }
+                '"' => {
+                    let word = current.get_or_insert_with(String::new);
+                    loop {
+                        match chars.next()? {
+                            '"' => break,
+                            '$' | '`' => return None,
+                            other => word.push(other),
+                        }
+                    }
+                }
+                '\\' | '$' | '`' | '*' | '?' | '[' | '{' | '~' | ';' | '|' | '&' | '<' | '>' | '(' | ')' => return None,
+                other => current.get_or_insert_with(String::new).push(other),
+            }
+        }
+        words.extend(current);
+        Some(words)
+    }
+
+    /// The words a POSIX shell reads from what [`sh`] writes (single quotes and `"'"` only, so csh's reading is the same).
+    fn posix_words(line: &str) -> Vec<String> {
+        csh_words(line).expect("a word sh() writes has nothing csh would refuse")
+    }
+
+    /// Every login shell this computer has reads the sent word as the script itself: what each prints is what `/bin/sh` prints for
+    /// the script.
+    #[cfg(unix)]
+    #[test]
+    fn real_login_shells_run_the_script_as_written() {
+        #[allow(clippy::disallowed_methods, reason = "a test reads how real shells parse the sent word")]
+        fn run(shell: &str, command: &str) -> (String, bool) {
+            let output = std::process::Command::new(shell)
+                .arg("-c")
+                .arg(command)
+                .env("HOME", "/tmp")
+                .env("SHELL", shell)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap();
+            (String::from_utf8_lossy(&output.stdout).into_owned(), output.status.success())
+        }
+        let scripts = [
+            "printf '%s|' \"it's\" 'a\\b' 'c\\\\d' \"$HOME\"\nif [ -n \"$HOME\" ]; then echo yes; fi",
+            "echo 한글 '폴더'; echo hi!",
+            "x='a \"b\" $c `d`'; printf '%s\\n' \"$x\"",
+        ];
+        let mut shells: Vec<&str> = vec!["/bin/sh", "/bin/bash", "/bin/zsh", "/bin/dash", "/bin/csh", "/bin/tcsh"];
+        shells.extend(["/opt/homebrew/bin/fish", "/usr/local/bin/fish", "/usr/bin/fish"]);
+        let mut tried = 0;
+        for shell in shells.into_iter().filter(|s| std::path::Path::new(s).is_file()) {
+            tried += 1;
+            for script in scripts {
+                let (expected, ok) = run("/bin/sh", script);
+                assert!(ok, "{script}");
+                assert_eq!(run(shell, &sh(script)), (expected, true), "{shell} runs {script:?}");
+            }
+        }
+        assert!(tried >= 1);
+    }
+
+    /// The run's script through the login shells: a POSIX one runs the program itself (its profile's environment), fish and csh only
+    /// say their `PATH` and `/bin/sh` runs it. The program gets its arguments, folder and values exactly.
     #[cfg(unix)]
     #[test]
     fn run_commands_reach_the_program_unchanged() {
+        use std::os::unix::fs::PermissionsExt as _;
         let dir = std::env::temp_dir().join(format!("mc-ssh-quote-{}", std::process::id()));
         let folder = dir.join("it's a \"dir\"");
+        let bin = dir.join("bin");
         std::fs::create_dir_all(&folder).unwrap();
-        let mut env = BTreeMap::new();
-        env.insert("MC_VALUE".to_string(), "a 'b' $c".to_string());
-        let args = vec!["one two".to_string(), "it's".to_string(), "$HOME".to_string(), String::new()];
-        let command = run_command(&folder.to_string_lossy(), "printf", &args, &env).unwrap();
-        // printf's format is the first argument: print it and the rest one per line, then the folder and the value.
-        let command = command.replace(
-            "'\\''printf'\\''",
-            "'\\''sh'\\'' '\\''-c'\\'' '\\''printf \"%s|\" \"$@\"; pwd; printf %s \"$MC_VALUE\"'\\'' '\\''x'\\''",
+        std::fs::create_dir_all(&bin).unwrap();
+        let executable = |path: &std::path::Path, text: &str| {
+            std::fs::write(path, text).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        };
+        executable(&bin.join("mcprobe"), "#!/bin/sh\nprintf '%s|' \"$@\"; pwd; printf %s \"$MC_VALUE\"\n");
+        // A fish-like login shell: it runs only the one-word `/bin/sh -c '…'` (refusing a backslash or a line break in it, which fish's
+        // quoting reads differently), answers the `PATH` question after a greeting, and refuses to be handed a POSIX command.
+        let fish = dir.join("fish");
+        executable(
+            &fish,
+            &format!(
+                "#!/bin/sh\ncase \"$1\" in\n-c) case \"$2\" in '/bin/sh -c '*) ;; *) exit 97;; esac\n\
+                 case \"$2\" in *\"\\\\\"*) exit 98;; esac\n\
+                 [ \"$(printf '%s' \"$2\" | wc -l | tr -d ' ')\" = 0 ] || exit 98\nexec /bin/sh -c \"$2\";;\n\
+                 -lc) [ \"$2\" = 'printf \"MIGHTYPATH=%s\" \"$PATH\"' ] || exit 96; echo 'Welcome to fish'; printf 'MIGHTYPATH=%s' '{bin}:/usr/bin:/bin';;\n\
+                 *) exit 95;;\nesac\n",
+                bin = bin.display()
+            ),
         );
-        #[allow(clippy::disallowed_methods, reason = "a test reads how /bin/sh parses the quoting")]
-        let output = std::process::Command::new("/bin/sh").env("SHELL", "/bin/sh").arg("-c").arg(&command).output().unwrap();
-        let text = String::from_utf8(output.stdout).unwrap();
-        assert_eq!(text, format!("one two|it's|$HOME||{}\na 'b' $c", folder.display()));
+        let mut env = BTreeMap::new();
+        env.insert("MC_VALUE".to_string(), "a 'b' $c\nline\\".to_string());
+        let args = vec!["one two".to_string(), "it's".to_string(), "$HOME".to_string(), String::new(), "back\\slash\nnew".to_string()];
+        let command = run_command(&folder.to_string_lossy(), "mcprobe", &args, &env).unwrap();
+        let expected = format!("one two|it's|$HOME||back\\slash\nnew|{}\na 'b' $c\nline\\", folder.display());
+        let with_bin = format!("{}:/usr/bin:/bin", bin.display());
+        let mut shells =
+            vec![("/bin/sh".to_string(), with_bin.clone()), (fish.to_string_lossy().into_owned(), "/usr/bin:/bin".to_string())];
+        for csh in ["/bin/csh", "/bin/tcsh"] {
+            if std::path::Path::new(csh).is_file() {
+                shells.push((csh.to_string(), with_bin.clone()));
+            }
+        }
+        for (shell, path) in shells {
+            #[allow(clippy::disallowed_methods, reason = "a test reads how the login shells run the sent word")]
+            let output = std::process::Command::new(&shell)
+                .arg("-c")
+                .arg(&command)
+                .env_clear()
+                .env("SHELL", &shell)
+                .env("PATH", &path)
+                .env("HOME", &dir)
+                .output()
+                .unwrap();
+            let text = String::from_utf8(output.stdout).unwrap();
+            assert_eq!(text, expected, "{shell}: {}", String::from_utf8_lossy(&output.stderr));
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -437,7 +713,10 @@ mod tests {
     fn tmux_sessions_are_named_by_the_pane() {
         assert_eq!(tmux_session("3f2a-77"), "mighty-3f2a77");
         assert_eq!(tmux_session("x'; rm -rf /"), "mighty-xrmrf");
-        assert_eq!(shell_command("/srv/a b", &Shell::Tmux("mighty-1".into())), "cd '/srv/a b' && exec tmux new-session -A -s 'mighty-1'");
+        assert_eq!(
+            unwrap_sh(&shell_command("/srv/a b", &Shell::Tmux("mighty-1".into()))).unwrap(),
+            "cd '/srv/a b' && exec tmux new-session -A -s 'mighty-1'"
+        );
     }
 
     #[test]

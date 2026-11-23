@@ -57,9 +57,13 @@ impl Machine {
                  while [ \"$#\" -gt 0 ]; do if [ \"$1\" = \"--\" ]; then shift; break; fi; shift; done\n\
                  shift\n\
                  if [ -f '{root}/lost' ]; then echo 'ssh: connect to host devbox port 22: Connection refused' >&2; exit 255; fi\n\
-                 command=$(printf '%s' \"$1\" | sed -e 's|PATH=/usr/bin:/bin:/usr/sbin:/sbin|PATH={fake}:/usr/bin:/bin:/usr/sbin:/sbin|' \
-                 -e 's|HOME/Applications/|HOME/@HOMEAPPS@/|g' -e 's|/Applications/MightyCode.app|{system}|g' -e 's|@HOMEAPPS@|Applications|g')\n\
+                 {decode}\n\
+                 command=$(decode \"$1\" | sed -e 's|PATH=/usr/bin:/bin:/usr/sbin:/sbin|PATH={fake}:/usr/bin:/bin:/usr/sbin:/sbin|' \
+                 -e 's|HOME/Applications/|HOME/@HOMEAPPS@/|g' -e 's|/Applications/MightyCode.app|{system}|g')\n\
+                 case \"$command\" in *'/Applications/MightyCode'*|*MightyCode-local*) echo 'the installed app is never run' >&2; exit 99;; esac\n\
+                 command=$(printf '%s' \"$command\" | sed -e 's|@HOMEAPPS@|Applications|g')\n\
                  exec /usr/bin/env -i HOME='{home}' PATH=/usr/bin:/bin SHELL=/bin/zsh /bin/sh -c \"$command\"\n",
+                decode = common::DECODE_REMOTE,
                 root = root.display(),
                 fake = fake.display(),
                 system = root.join("system").join("MightyCode.app").display(),
@@ -106,7 +110,7 @@ impl Machine {
                  'server status') if [ -f '{state}' ]; then printf '{{\\n  \"running\": true,\\n  \"mode\": \"headless\",\\n  \"version\": \"%s\"\\n}}\\n' \"$(cat '{state}')\"; exit 0; fi; printf '{{\"running\": false}}\\n'; exit 1;;\n\
                  'server stop') echo stop-{version} >> '{calls}'; rm -f '{state}'; printf '{{\"stopped\": true}}\\n';;\n\
                  'server start') echo start-{version} >> '{calls}'; if [ -f '{root}/no-gui' ]; then printf '{{\"ok\": false, \"error\": {{\"code\": \"timeout\", \"message\": \"the app (pid 9) started but its control API did not answer\"}}}}\\n'; exit 2; fi; printf '{version}' > '{state}'; printf '{{\\n  \"running\": true,\\n  \"mode\": \"headless\",\\n  \"version\": \"{version}\",\\n  \"pid\": 77\\n}}\\n';;\n\
-                 'server ssh-pair') [ -f '{state}' ] || {{ printf '{{\"ok\": false, \"error\": {{\"message\": \"Mighty Code is not running\"}}}}\\n'; exit 1; }}; printf '{{\\n  \"port\": 50123,\\n  \"code\": \"{CODE}\",\\n  \"version\": \"{version}\"\\n}}\\n';;\n\
+                 'server ssh-pair') [ -f '{state}' ] || {{ printf '{{\"ok\": false, \"error\": {{\"message\": \"Mighty Code is not running\"}}}}\\n'; exit 1; }}; if [ -f '{root}/pairing' ]; then cat '{root}/pairing'; exit 0; fi; printf '{{\\n  \"port\": 50123,\\n  \"code\": \"{CODE}\",\\n  \"version\": \"{version}\"\\n}}\\n';;\n\
                  *) exit 9;;\n\
                  esac\n",
                 state = state.display(),
@@ -263,5 +267,35 @@ async fn a_refused_step_leaves_the_installed_app_alone() {
 
     std::fs::write(machine.root.join("lost"), "").unwrap();
     assert_eq!(server.detect().await.unwrap_err(), ServerError::Ssh(Failure::Unreachable));
+    common::remove_when_free(&machine.root).await;
+}
+
+/// MC-40: the far side's app restarted on another port while ssh stayed up: the reconnect's pairing over the same ssh gives the new
+/// port and a new code, each only on ssh's standard output — never on a command line (the stand-in ssh records every argument).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_restarted_on_another_port_is_paired_again_over_the_same_ssh() {
+    let machine = Machine::new("ssh-server-repair");
+    let server = machine.server();
+    let (_, progress) = recorder();
+    server.install(&machine.plan("0.6.0", false), &progress).await.unwrap();
+    let before = server.pair(AppPlace::Home).await.unwrap();
+    assert_eq!((before.port, before.code.as_str()), (50123, CODE));
+
+    // The app started again: another port, another code (as its control API's `server.sshPair` answers).
+    let renewed = "f00d-f00d-f00d-f00d-f00d-f00d-f00d-f00d-f00d";
+    std::fs::write(
+        machine.root.join("pairing"),
+        format!("{{\n  \"port\": 50777,\n  \"code\": \"{renewed}\",\n  \"version\": \"0.6.0\"\n}}\n"),
+    )
+    .unwrap();
+    let after = server.pair(AppPlace::Home).await.unwrap();
+    assert_eq!((after.port, after.code.as_str()), (50777, renewed));
+
+    let recorded = machine.read("ssh.args");
+    assert!(!recorded.contains(CODE) && !recorded.contains(renewed), "no code is ever on a command line");
+    // Never the installed app's CLI: the stand-in ssh points the far side's apps at the check's own folders, and only the stand-in
+    // app writes its calls there.
+    assert_eq!(machine.read("calls").lines().collect::<Vec<_>>(), ["start-0.6.0"]);
+    assert!(machine.home.join(HOME_APP).exists());
     common::remove_when_free(&machine.root).await;
 }

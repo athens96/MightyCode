@@ -120,20 +120,7 @@ pub fn save(root: &Path, relative: &str, text: &str, expected_hash: Option<&str>
         return Err(SaveRefusal::Conflict { disk_hash: current_hash });
     }
 
-    let decoded = decode_text(&current, false);
-    let encoding = decoded.as_ref().map_or(TextEncodingKind::Utf8, |d| d.encoding);
-    let use_crlf = decoded.as_ref().is_some_and(|d| d.text.contains("\r\n"));
-    let normalized = text.replace("\r\n", "\n");
-    let target_text = if use_crlf { normalized.replace('\n', "\r\n") } else { normalized };
-
-    let unsupported = || SaveRefusal::EncodingUnsupported { encoding: classify::display_name(encoding) };
-    let bytes = encode(&target_text, encoding).ok_or_else(unsupported)?;
-    if bytes.len() > classify::MAXIMUM_TEXT_BYTES {
-        return Err(SaveRefusal::TooLarge);
-    }
-    if !target_text.is_empty() && decode_text(&bytes, false).is_none_or(|d| d.text != target_text) {
-        return Err(unsupported());
-    }
+    let Prepared { bytes, encoding, eol } = prepare(&current, text)?;
 
     let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let temporary = real.with_file_name(format!(".{name}.{}.edit.tmp", uuid::Uuid::new_v4().simple()));
@@ -151,13 +138,39 @@ pub fn save(root: &Path, relative: &str, text: &str, expected_hash: Option<&str>
     }
 
     let modified = std::fs::metadata(&real).ok().and_then(|m| m.modified().ok());
-    Ok(SaveOutcome {
-        disk_hash: disk_hash(&bytes),
-        size: bytes.len() as u64,
-        modified,
-        encoding,
-        eol: if use_crlf { "crlf" } else { "lf" },
-    })
+    Ok(SaveOutcome { disk_hash: disk_hash(&bytes), size: bytes.len() as u64, modified, encoding, eol })
+}
+
+/// The bytes a save writes in place of `current`: `text` in the encoding (and byte order mark) `current` is in, its line endings
+/// `\r\n` when `current` has them, refused when the encoding cannot hold `text` or the result passes the text cap. The local save and
+/// an SSH workspace's (MC-40) share it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prepared {
+    pub bytes: Vec<u8>,
+    pub encoding: TextEncodingKind,
+    pub eol: &'static str,
+}
+
+/// [`Prepared`] for `text` over `current`.
+pub fn prepare(current: &[u8], text: &str) -> Result<Prepared, SaveRefusal> {
+    if text.len() > classify::MAXIMUM_TEXT_BYTES || utf16::units(text).len() > MAXIMUM_SOURCE_UNITS {
+        return Err(SaveRefusal::TooLarge);
+    }
+    let decoded = decode_text(current, false);
+    let encoding = decoded.as_ref().map_or(TextEncodingKind::Utf8, |d| d.encoding);
+    let use_crlf = decoded.as_ref().is_some_and(|d| d.text.contains("\r\n"));
+    let normalized = text.replace("\r\n", "\n");
+    let target_text = if use_crlf { normalized.replace('\n', "\r\n") } else { normalized };
+
+    let unsupported = || SaveRefusal::EncodingUnsupported { encoding: classify::display_name(encoding) };
+    let bytes = encode(&target_text, encoding).ok_or_else(unsupported)?;
+    if bytes.len() > classify::MAXIMUM_TEXT_BYTES {
+        return Err(SaveRefusal::TooLarge);
+    }
+    if !target_text.is_empty() && decode_text(&bytes, false).is_none_or(|d| d.text != target_text) {
+        return Err(unsupported());
+    }
+    Ok(Prepared { bytes, encoding, eol: if use_crlf { "crlf" } else { "lf" } })
 }
 
 #[cfg(test)]

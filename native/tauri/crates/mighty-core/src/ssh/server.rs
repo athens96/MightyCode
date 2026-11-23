@@ -37,10 +37,9 @@ pub const INSTALL_FOLDER_PREFIX: &str = ".mighty-install-";
 /// Every script's first line: the system's tools only, nothing readable by other users.
 const PRELUDE: &str = "PATH=/usr/bin:/bin:/usr/sbin:/sbin; export PATH; umask 077";
 
-/// `script` as the far side's login shell runs it: `/bin/sh -c '<script>'`, whatever that shell is.
-pub fn sh(script: &str) -> String {
-    format!("/bin/sh -c {}", quote(script))
-}
+/// `script` as the far side's login shell runs it: `/bin/sh -c '<script>'`, whatever that shell is (one word with no line break or
+/// backslash: [`super::command::sh`]).
+pub use super::command::sh;
 
 /// The two places an app is looked for, home first, as a shell list.
 const PLACES: &str = "\"$HOME/Applications/MightyCode.app\" /Applications/MightyCode.app";

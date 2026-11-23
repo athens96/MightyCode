@@ -49,6 +49,7 @@ struct Machine {
     ssh: PathBuf,
     remote_dir: PathBuf,
     record: PathBuf,
+    home: PathBuf,
 }
 
 impl Machine {
@@ -81,14 +82,29 @@ impl Machine {
                  while [ \"$#\" -gt 0 ]; do if [ \"$1\" = \"--\" ]; then shift; break; fi; shift; done\n\
                  shift\n\
                  if [ -f '{root}/lost' ]; then echo 'Connection to devbox closed by remote host.' >&2; exit 255; fi\n\
+                 {decode}\n\
+                 script=$(decode \"$1\")\n\
+                 case \"$script\" in *'/Applications/MightyCode'*|*MightyCode-local*) echo 'the installed app is never run' >&2; exit 99;; esac\n\
+                 case \"$script\" in *mighty-attach*) echo attach >> '{root}/attaches';; esac\n\
+                 case \"$script\" in *mighty-attach*) if [ -f '{root}/cut-attaches' ]; then\n\
+                 set -m\n\
+                 /usr/bin/env -i SHELL='{shell}' PATH='{bin}':/usr/bin:/bin HOME='{home}' /bin/sh -c \"$1\" <&0 &\n\
+                 p=$!\n\
+                 while kill -0 \"$p\" 2>/dev/null; do\n\
+                 if [ -f '{root}/cut' ]; then rm -f '{root}/cut'; kill -- -\"$p\" 2>/dev/null; echo 'Connection to devbox closed by remote host.' >&2; exit 255; fi\n\
+                 sleep 0.2\n\
+                 done\n\
+                 wait \"$p\"; exit $?\n\
+                 fi;; esac\n\
                  exec /usr/bin/env -i SHELL='{shell}' PATH='{bin}':/usr/bin:/bin HOME='{home}' /bin/sh -c \"$1\"\n",
+                decode = common::DECODE_REMOTE,
                 root = root.display(),
                 shell = shell.display(),
                 bin = bin.display(),
                 home = home.display()
             ),
         );
-        Machine { root, ssh, remote_dir, record }
+        Machine { root, ssh, remote_dir, record, home }
     }
 
     fn workspace(&self) -> Workspace {
@@ -185,6 +201,51 @@ async fn a_claude_run_goes_through_ssh_with_its_approval_card() {
     assert_eq!(seen.last().unwrap().state, "denied");
     let decision = common::json(&std::fs::read_to_string(format!("{}.decision", machine.record.display())).unwrap());
     assert_eq!(decision["response"]["response"]["behavior"], "deny", "the answer reached the CLI through ssh");
+    common::remove_when_free(&machine.root).await;
+}
+
+/// MC-40: the connection goes while the CLI waits on its approval card; the run goes on over there, the next attach reads on from
+/// where this computer stopped, the answer given meanwhile reaches the CLI, and the run's folder is gone once it ended.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_claude_run_survives_a_dropped_connection_with_its_card_waiting() {
+    common::korean();
+    let machine = Machine::new("ssh-held");
+    std::fs::write(machine.root.join("cut-attaches"), "").unwrap();
+    let workspace = machine.workspace();
+    let events = Events::default();
+    let mut options = machine.options(&workspace, &events);
+    let seen: Arc<Mutex<Vec<ToolPermissionRequest>>> = Arc::default();
+    let cell: Cell = Arc::default();
+    let (sink, answer, root) = (seen.clone(), cell.clone(), machine.root.clone());
+    options.permission_requested = Some(Arc::new(move |value: ToolPermissionRequest| {
+        sink.lock().unwrap().push(value.clone());
+        if value.state == "pending" {
+            // The connection goes now; the person answers while it is away.
+            std::fs::write(root.join("cut"), "").unwrap();
+            let (answer, id) = (answer.clone(), value.id.clone());
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                answer.get().and_then(Weak::upgrade).unwrap().respond_to_tool_permission("remote", &id, false).unwrap();
+            });
+        }
+    }));
+    let manager = Arc::new(RunManager::new(common::absent_catalog(), options));
+    cell.set(Arc::downgrade(&manager)).ok();
+    manager.start(StartRunRequest::new("remote", workspace.id(), "claude", "fixture prompt")).await.unwrap();
+    common::until(|| !manager.is_running("remote"), 60_000, "the run ends").await;
+    manager.dispose().await;
+
+    let attaches = std::fs::read_to_string(machine.root.join("attaches")).unwrap_or_default().lines().count();
+    assert!(attaches >= 2, "the run was attached again after the connection went ({attaches})");
+    let seen = seen.lock().unwrap().clone();
+    assert!(seen.first().is_some_and(|r| r.state == "pending" && r.tool_name == "Read"), "the card reached the host");
+    assert_eq!(seen.last().unwrap().state, "denied", "{seen:?}");
+    let decision = common::json(&std::fs::read_to_string(format!("{}.decision", machine.record.display())).unwrap());
+    assert_eq!(decision["response"]["response"]["behavior"], "deny", "the answer reached the CLI after the reconnect");
+    assert_ne!(events.last_status("remote").as_deref(), Some("error"), "{}", events.text("remote"));
+    let runs = machine.home.join(".cache/mighty-code/runs");
+    let left: Vec<_> = std::fs::read_dir(&runs).map(|r| r.flatten().collect()).unwrap_or_default();
+    assert!(left.is_empty(), "the ended run's folder is removed: {left:?}");
     common::remove_when_free(&machine.root).await;
 }
 

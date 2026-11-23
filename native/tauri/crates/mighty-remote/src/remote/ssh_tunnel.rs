@@ -47,6 +47,13 @@ impl std::fmt::Debug for SshOpening {
 /// The app's way to a machine's server (its id): the forward and a code; Err with the words to show.
 pub type SshTunnel = Arc<dyn Fn(String) -> BoxFuture<'static, Result<SshOpening, String>> + Send + Sync>;
 
+/// MC-40: told (with the machine's id) when a connected SSH machine's connection was lost by its own requests — the server behind
+/// the forward is gone or no longer knows the key (the mirror's or a run's request failed past its retries, or was answered 401),
+/// while the ssh forward itself may still be up (the far side's app restarted on another port). The app pairs again over ssh and
+/// reconnects with its reconnect's gaps. Never told for a person's 연결 끊기 or removal, for a connect or refresh that failed (the
+/// reconnect's own tries among them), or while the client closes. Called outside every lock; brief (it only starts the app's work).
+pub type SshLost = Arc<dyn Fn(String) + Send + Sync>;
+
 /// The address an SSH machine's server connection is saved and shown under: `ssh:` and the machine's id.
 pub fn ssh_address(machine: &str) -> String {
     format!("{SSH_ADDRESS_PREFIX}{machine}")

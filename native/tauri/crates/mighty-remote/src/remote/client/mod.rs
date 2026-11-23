@@ -29,7 +29,7 @@ use crate::remote::address::RemoteAddress;
 use crate::remote::events::PendingPermissions;
 use crate::remote::paired::{self, PairedSecret};
 use crate::remote::saved::{self, SavedConnection};
-use crate::remote::ssh_tunnel::{self, SshTunnel};
+use crate::remote::ssh_tunnel::{self, SshLost, SshTunnel};
 use crate::remote::strings;
 use crate::remote::text;
 use crate::remote::transport::{self, Method, RemoteTarget, Request, TransportError};
@@ -72,6 +72,8 @@ pub struct ClientOptions {
     pub relay_timings: ClientTimings,
     /// MC-33: how an SSH machine's server is reached (the app's forward and pairing); None refuses such a connection.
     pub ssh_tunnel: Option<SshTunnel>,
+    /// MC-40: told when a connected SSH machine's connection is lost by its own requests (see [`SshLost`]).
+    pub ssh_lost: Option<SshLost>,
 }
 
 impl Default for ClientOptions {
@@ -87,6 +89,7 @@ impl Default for ClientOptions {
             client_name: String::new(),
             relay_timings: ClientTimings::default(),
             ssh_tunnel: None,
+            ssh_lost: None,
         }
     }
 }
@@ -588,8 +591,9 @@ impl RemoteClient {
             Ok(result)
         }
         .await;
+        // A refresh that fails is never told as lost: the app's reconnect makes its own tries, and a person's 연결 says its words.
         if let Err(error) = &result {
-            self.fail(id, &error.message(), Some((serial, revision))).await;
+            self.fail_as(id, &error.message(), Some((serial, revision)), false).await;
         }
         result
     }
@@ -843,13 +847,23 @@ impl RemoteClient {
     /// `FailAsync(id, message, expected, revision)`: the network or the host failed: the connection shows the error and its runs end in
     /// error. With `expected`, only while the connection is still that entry at that revision; false when it was not.
     pub(crate) async fn fail(&self, id: &str, words: &str, expected: Option<(u64, u64)>) -> bool {
-        let taken = {
+        self.fail_as(id, words, expected, true).await
+    }
+
+    /// [`RemoteClient::fail`]; `lost`: a request of a connected connection failed (not a connect or refresh), so an SSH machine's
+    /// connection that was connected is told to the app ([`ClientOptions::ssh_lost`]) once it is failed.
+    async fn fail_as(&self, id: &str, words: &str, expected: Option<(u64, u64)>, lost: bool) -> bool {
+        let (taken, machine) = {
             let mut gate = lock(&self.0.gate);
             if expected.is_some_and(|(serial, revision)| !unchanged(&gate, id, serial, revision)) {
                 return false;
             }
             let serial = self.next_serial();
+            let closing = gate.closing;
             let Some(entry) = gate.connections.get_mut(id) else { return false };
+            let machine = (lost && !closing && entry.info.status == RemoteConnectionStatus::Connected)
+                .then(|| ssh_tunnel::ssh_machine(&entry.info.address).map(str::to_string))
+                .flatten();
             entry.revision = serial;
             entry.target = None;
             if let Some(relay) = entry.relay.take() {
@@ -858,10 +872,13 @@ impl RemoteClient {
             entry.info.status = RemoteConnectionStatus::Disconnected;
             entry.info.detail = Some(text::cut(words, text::DEFAULT_CUT));
             // Taken with the revision: a poll that lands in between finds its run gone and leaves the pane's last word to this.
-            self.take_runs(&mut gate, id)
+            (self.take_runs(&mut gate, id), machine)
         };
         self.end_runs(taken, Some(words)).await;
         self.tell_changed();
+        if let (Some(machine), Some(lost)) = (machine, self.0.options.ssh_lost.as_ref()) {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lost(machine)));
+        }
         true
     }
 

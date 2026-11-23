@@ -222,3 +222,10 @@ pub fn absent_catalog() -> std::sync::Arc<mighty_run::providers::ProviderCatalog
     let finder: mighty_run::providers::Finder = std::sync::Arc::new(|_provider: String| Box::pin(async { None }));
     std::sync::Arc::new(mighty_run::providers::ProviderCatalog::new(host, environment(), Some(finder)))
 }
+
+/// MC-40: a POSIX shell function for the checks' stand-in `ssh`: `decode "$1"` prints the script inside the remote command the app
+/// sent (`/bin/sh -c '<script>'`, the script itself or as hex the far side's `awk` decodes: mighty-core `ssh::command::sh`), so a
+/// stand-in can look at or rewrite the script before it runs it.
+#[allow(dead_code, reason = "not every check that shares this module has a stand-in ssh")]
+pub const DECODE_REMOTE: &str = "decode() { w=${1#/bin/sh -c }; if [ \"$w\" = \"$1\" ]; then printf '%s' \"$1\"; return; fi; \
+    b=$(eval \"printf %s $w\"); case \"$b\" in 'eval \"$(LC_ALL=C awk'*) eval \"printf %s ${b#eval }\";; *) printf '%s' \"$b\";; esac; }";

@@ -9,7 +9,7 @@
 //!   prompt; not reachable, sign-in refused and an unknown host key are told apart, and a host key is never accepted for the person.
 //! - **Workspaces**: a remote folder opened as a workspace whose local folder is an empty one of the app's own
 //!   (`<data>/ssh/workspaces/<id>`); terminal panes are `ssh -tt` in a local PTY (terminal.rs), agent panes start the CLI on the far
-//!   side (mighty-run's remote owner, [`resolver`]), the files pane reads through `ssh` (`files`, read-only).
+//!   side (mighty-run's remote owner, [`resolver`]; MC-40: held on the far side, so a dropped connection is reconnected), the files pane reads and (MC-40) saves through `ssh` (`files`).
 //! - **Shared connection**: on the Mac every pane of a machine shares one connection (ControlMaster, sockets in a 0700 folder);
 //!   Windows' OpenSSH has no ControlMaster, so each pane has its own.
 //! - Nothing polls a machine: a lost connection is ssh's own keep-alive ending the pane's ssh.
@@ -605,8 +605,20 @@ pub fn register(methods: &mut crate::host::Registry) {
 
 /// The text of a short remote command's output, capped; Err with the failure.
 pub async fn exec(host: &Host, launch: &SshLaunch, remote: String, cap: usize) -> Result<(i32, Vec<u8>), Failure> {
+    exec_input(host, launch, remote, None, cap, Duration::from_secs(30)).await
+}
+
+/// [`exec`] with bytes for the remote command's standard input (a file being written, MC-40) and a limit of its own.
+pub async fn exec_input(
+    host: &Host,
+    launch: &SshLaunch,
+    remote: String,
+    input: Option<Vec<u8>>,
+    cap: usize,
+    limit: Duration,
+) -> Result<(i32, Vec<u8>), Failure> {
     let request = launch.exec_request(remote, &BTreeMap::new());
-    match mighty_platform::process::capture(host.processes.as_ref(), request, None, Duration::from_secs(30), cap + 64 * 1024).await {
+    match mighty_platform::process::capture(host.processes.as_ref(), request, input, limit, cap + 64 * 1024).await {
         Ok(captured) if captured.exit_code == command::SSH_FAILED => Err(failure::classify(&String::from_utf8_lossy(&captured.stderr))),
         Ok(captured) => Ok((captured.exit_code, captured.stdout)),
         Err(mighty_platform::PlatformError::TimedOut(_)) => Err(Failure::TimedOut),

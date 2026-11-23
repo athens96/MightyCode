@@ -47,15 +47,21 @@ impl SshLaunch {
     /// A run of `program` (a bare name the far side finds on its login `PATH`) with `args`. `env` is the run's whole environment:
     /// only [`FORWARDED_ENV`] names reach the far side, and the local ssh keeps the rest (its agent socket, `HOME`, `PATH`).
     pub fn run_request(&self, program: &str, args: &[String], env: &BTreeMap<String, String>) -> Result<SpawnRequest, String> {
+        let remote = command::sh(&self.run_script(program, args, env)?);
+        Ok(self.request(command::run_args(&self.target, &self.mux, remote), env))
+    }
+
+    /// The far side's script of a run (what [`SshLaunch::run_request`] sends under `/bin/sh -c`; MC-40's held run starts it
+    /// detached): only [`FORWARDED_ENV`] names of `env` go into it.
+    pub fn run_script(&self, program: &str, args: &[String], env: &BTreeMap<String, String>) -> Result<String, String> {
         let forwarded: BTreeMap<String, String> =
             env.iter().filter(|(name, _)| FORWARDED_ENV.contains(&name.as_str())).map(|(n, v)| (n.clone(), v.clone())).collect();
-        let remote = command::run_command(&self.dir, program, args, &forwarded).map_err(|what| format!("ssh: invalid {what}"))?;
-        Ok(self.request(command::run_args(&self.target, &self.mux, remote), env))
+        command::run_script(&self.dir, program, args, &forwarded).map_err(|what| format!("ssh: invalid {what}"))
     }
 
     /// A shell pane's one-shot command, run by the far side's login shell in the folder.
     pub fn shell_request(&self, text: &str, env: &BTreeMap<String, String>) -> SpawnRequest {
-        let remote = format!("cd {} && exec $SHELL -lc {}", command::quote_dir(&self.dir), command::quote(text));
+        let remote = command::sh(&command::shell_command_script(&self.dir, text));
         self.request(command::run_args(&self.target, &self.mux, remote), env)
     }
 
@@ -213,7 +219,7 @@ mod tests {
         let request = launch().run_request("claude", &["--print".into()], &env).unwrap();
         assert_eq!(request.program, PathBuf::from("/usr/bin/ssh"));
         assert_eq!(request.cwd, PathBuf::from("/data/ssh/workspaces/w1"));
-        let remote = request.args.last().unwrap();
+        let remote = command::unwrap_sh(request.args.last().unwrap()).unwrap();
         assert!(
             remote.contains("NO_COLOR=1") && !remote.contains("sk-secret") && !remote.contains("token") && !remote.contains("agent.sock")
         );
@@ -280,7 +286,7 @@ mod tests {
         let request = launch().pty_request(&Shell::Login, BTreeMap::new(), PtySize::default());
         assert_eq!(request.program, PathBuf::from("/usr/bin/ssh"));
         assert!(request.args.contains(&"-tt".to_string()));
-        assert_eq!(request.args.last().unwrap(), "cd ~/'app' && exec $SHELL -l");
+        assert_eq!(command::unwrap_sh(request.args.last().unwrap()).unwrap(), "cd ~/'app' && exec \"${SHELL:-/bin/sh}\" -l");
         assert!(supported_provider("claude") && !supported_provider("opencode"));
     }
 }

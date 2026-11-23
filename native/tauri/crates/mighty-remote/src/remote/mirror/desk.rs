@@ -28,7 +28,7 @@ use tokio::sync::Notify;
 use super::client::{bad_data, refusal_status, transient};
 use super::{MirrorPane, MirrorState, MirrorSummary, protocol, support};
 use crate::remote::client::{ClientError, RemoteClient};
-use crate::remote::wire::{RemoteConnectionStatus, protocol as remote_protocol};
+use crate::remote::wire::RemoteConnectionStatus;
 
 /// The app's state as the mirror reads and changes it.
 ///
@@ -465,9 +465,10 @@ impl MirrorDesk {
                     self.0.stage.changed();
                     break;
                 }
-                // A busy host or a stumbling network is asked again for ten seconds, as a remote run's poll is.
+                // A busy host or a stumbling network is asked again for ten seconds (the client's retry window), as a remote run's poll is.
                 let now = Instant::now();
-                if transient(&error) && now.duration_since(failing_since.unwrap_or(now)) < remote_protocol::POLL_RETRY_WINDOW {
+                let window = self.0.client.0.options.poll_retry_window;
+                if transient(&error) && now.duration_since(failing_since.unwrap_or(now)) < window {
                     failing_since.get_or_insert(now);
                     self.with_poll(id, serial, |poll| poll.link.phase = "reconnecting");
                     self.0.stage.changed();
