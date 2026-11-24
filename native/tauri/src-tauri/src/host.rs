@@ -928,6 +928,11 @@ impl Host {
         crate::attention::decorate(self, snapshot, *shows_dashboard, &mut model);
         // MC-29: the compare runs' cards under the panes that started them (compare.rs).
         crate::compare::decorate(snapshot, &mut model);
+        // MC-64: each bot's schedules and triggers and its next run (automation).
+        for bot in &mut model.bots {
+            bot.jobs = crate::automation::jobs_of_bot(&bot.handle).len();
+            bot.next_run = crate::automation::next_fire_of_bot(&bot.handle).map(|at| at.to_rfc3339());
+        }
         model
     }
 

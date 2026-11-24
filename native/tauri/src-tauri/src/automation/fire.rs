@@ -73,10 +73,12 @@ fn fail(host: &Host, id: &str, error: String) {
 /// Fires `request`: its record's id.
 pub async fn fire(host: &Arc<Host>, request: FireRequest) -> String {
     let FireRequest { job, reason, scheduled_for, event, retry_of } = request;
+    // MC-64: a bot asleep or past its own daily budget skips, as a run past the daily budget does.
+    let unavailable = job.action().bot().and_then(|handle| super::bot_unavailable(host, &handle));
     let start = engine::Begin {
         reason,
         scheduled_for,
-        over_budget: over_budget(host, &job),
+        over_budget: unavailable.or_else(|| over_budget(host, &job)),
         retry_of,
         event_url: event.as_ref().and_then(|e| e.url.clone()),
     };

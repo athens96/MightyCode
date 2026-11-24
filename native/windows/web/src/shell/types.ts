@@ -266,6 +266,11 @@ export interface SidebarBot {
   /** The workspace it works in (none for an independent bot): a double click selects it. */
   workspaceId?: string;
   folder?: string;
+  /** MC-64: it sleeps: its schedules and triggers skip and others' requests are refused. */
+  asleep?: boolean;
+  /** MC-64: how many schedules and triggers are sent to it, and the soonest next fire (RFC 3339). */
+  jobs?: number;
+  nextRun?: string;
 }
 
 export interface ShellModel {

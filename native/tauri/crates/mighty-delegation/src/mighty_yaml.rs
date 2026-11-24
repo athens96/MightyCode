@@ -1271,6 +1271,7 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
         let mut source: Option<TriggerSource> = None;
         let mut every = None;
         let mut cap = None;
+        let mut repo: Option<String> = None;
         let mut set_source = |next: TriggerSource| -> Result<(), String> {
             if source.replace(next).is_some() {
                 return Err(format!("'{field}' names more than one of github, linear, webhook, standing."));
@@ -1289,7 +1290,7 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     let events = GitHubEvent::ALL.into_iter().filter(|e| events.contains(e)).collect();
-                    set_source(TriggerSource::Github { events })?;
+                    set_source(TriggerSource::Github { events, repo: None })?;
                 }
                 "linear" => set_source(TriggerSource::Linear { states: decode_name_list(item, &format!("{field}.linear"))? })?,
                 "webhook" => {
@@ -1311,6 +1312,8 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
                     )?)
                 }
                 "dailyCap" => cap = Some(decode_bounded_u32(item, &format!("{field}.dailyCap"), 1, automation::MAX_DAILY_CAP)?),
+                // MC-64: the repository a GitHub trigger watches, when not the workspace's own.
+                "repo" => repo = Some(expect_scalar(item, &format!("{field}.repo"))?.trim().to_string()),
                 "enabled" => enabled = decode_bool(item, &format!("{field}.enabled"))?,
                 other => {
                     if !decode_action_key(&mut action, other, item, &field)? {
@@ -1328,9 +1331,13 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
             Some(_) if every.is_some() || cap.is_some() => {
                 return Err(format!("'{field}': everyMinutes and dailyCap are for a standing order."));
             }
+            Some(TriggerSource::Github { events, .. }) => TriggerSource::Github { events, repo: repo.take() },
             Some(other) => other,
             None => return Err(format!("'{field}' needs one of github, linear, webhook, standing.")),
         };
+        if repo.is_some() {
+            return Err(format!("'{field}': repo is for a GitHub trigger."));
+        }
         let spec = TriggerSpec { name: name.clone(), on, enabled, action };
         spec.validate(&mighty_core::wire::PROVIDERS).map_err(|e| format!("'{field}': {e}."))?;
         out.insert(name.clone(), spec);

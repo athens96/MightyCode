@@ -1037,6 +1037,19 @@ pub struct SidebarBot {
     pub workspace_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
+    /// MC-64: it sleeps (its schedules and triggers skip, others' requests are refused).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub asleep: bool,
+    /// MC-64: how many schedules and triggers are sent to it, and the soonest next fire (RFC 3339): filled by the app, which runs
+    /// them.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub jobs: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_run: Option<String>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// MC-59: the 봇 group's rows: the bots' home's (independent) bots first, then each workspace's in the sidebar's order.
@@ -1049,6 +1062,9 @@ pub fn sidebar_bots(state: &AppSnapshot) -> Vec<SidebarBot> {
             workspace: (!independent).then(|| state.workspace(s.workspace_id()).map(|w| w.name().to_string()).unwrap_or_default()),
             workspace_id: (!independent).then(|| s.workspace_id().to_string()),
             folder: independent.then(|| s.working_folder.clone()).flatten(),
+            asleep: bot.is_asleep(),
+            jobs: 0,
+            next_run: None,
         })
     };
     let independent = state.bots().filter(|s| home(s)).filter_map(|s| row(s, true));

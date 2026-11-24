@@ -66,6 +66,13 @@ pub fn register(methods: &mut Registry) {
         open_new(&host);
         Ok(Value::Null)
     });
+    methods.add("botSleep", |host: Arc<Host>, args| async move {
+        if let Some(id) = arg(&args, "paneId") {
+            let on = args.get("asleep").and_then(Value::as_bool).unwrap_or(true);
+            set_asleep(&host, id, on).await;
+        }
+        Ok(Value::Null)
+    });
     methods.add("paneBot", |host: Arc<Host>, args| async move {
         if let Some(id) = arg(&args, "paneId") {
             open(&host, id.to_string());
@@ -87,8 +94,9 @@ fn refusal(host: &Host, id: &str, handle: &str, instructions: &str) -> Option<St
     view.snapshot.bot_pane(&handle).filter(|pane| pane.id() != id).map(|_| locale.get_with("bot.error.taken", &[("handle", &handle)]))
 }
 
-/// The pane menu's bot sheet: the handle and the instructions, saved on the pane (봇 해제 takes the bot off it). An agent pane of
-/// this computer only, never a delegated child.
+/// The pane menu's bot sheet: the name and the instructions; MC-64: the permission its runs take, its own daily budget, whether
+/// it sleeps, and its schedules and triggers (일정·트리거 추가… saves and opens them in Settings with the form filled for it). An
+/// agent pane of this computer only, never a delegated child.
 pub fn open(host: &Arc<Host>, id: String) {
     let Some(pane) = host.view().snapshot.session(&id).cloned() else { return };
     if !can_be_bot(host, &pane) {
@@ -96,18 +104,33 @@ pub fn open(host: &Arc<Host>, id: String) {
     }
     let locale = host.locale;
     let current = pane.bot.clone();
+    let provider = pane.provider().to_string();
+    let modes: Vec<&'static str> = mighty_core::normalize::permission_modes(&provider).to_vec();
+    let mode_now = pane.settings.as_ref().map(|s| s.permission_mode.clone()).unwrap_or_else(|| "manual".into());
     let handle = Local::new(current.as_ref().map(|b| b.handle.clone()).unwrap_or_default());
     let instructions = Local::new(current.as_ref().and_then(|b| b.instructions.clone()).unwrap_or_default());
+    let budget = Local::new(current.as_ref().and_then(|b| b.budget_per_day).map(|b| format!("{b:.2}")).unwrap_or_default());
+    let asleep = Local::new(current.as_ref().is_some_and(PaneBot::is_asleep));
+    let mode = Local::new(modes.iter().position(|m| *m == mode_now).unwrap_or(0));
     let note = Local::new(String::new());
+    let jobs_lines = current.as_ref().map(|b| job_lines(host, &b.handle)).unwrap_or_default();
     let (handle_field, instructions_field, note_text) = (handle.clone(), instructions.clone(), note.clone());
+    let (budget_field, asleep_field, mode_field) = (budget.clone(), asleep.clone(), mode.clone());
+    let mode_words: Vec<String> = modes.iter().map(|m| mighty_composer::runtime::permission_label(&provider, m, &locale)).collect();
     let title = locale.get("bot.dialog.titleEdit");
     let mut spec = DialogSpec::new(title, move |_| {
+        let wrapped = |words: String| {
+            let mut block = El::text_block(words);
+            if let Some(text) = block.text_mut() {
+                text.wrapping = Wrapping::Wrap;
+            }
+            block
+        };
         let into_handle = handle_field.clone();
         let into_instructions = instructions_field.clone();
-        let mut intro = El::text_block(locale.get("bot.dialog.message"));
-        if let Some(text) = intro.text_mut() {
-            text.wrapping = Wrapping::Wrap;
-        }
+        let into_budget = budget_field.clone();
+        let into_asleep = asleep_field.clone();
+        let into_mode = mode_field.clone();
         let name = El::text_box(handle_field.get())
             .header(locale.get("bot.dialog.handle"))
             .placeholder(locale.get("bot.dialog.handleHint"))
@@ -117,21 +140,44 @@ pub fn open(host: &Arc<Host>, id: String) {
             .header(locale.get("bot.dialog.instructions"))
             .placeholder(locale.get("bot.dialog.instructionsHint"))
             .on_text(move |words| into_instructions.set(words));
-        let mut validation = El::text_block(note_text.get());
-        if let Some(text) = validation.text_mut() {
-            text.wrapping = Wrapping::Wrap;
+        let permission = El::combo_box(mode_field.get() as i32, mode_words.iter().map(|w| w.clone().into()).collect())
+            .named(locale.get("bot.dialog.permission"))
+            .on_select(move |i| into_mode.set(usize::try_from(i).unwrap_or(0)));
+        let money = El::text_box(budget_field.get())
+            .header(locale.get("bot.dialog.budget"))
+            .placeholder(locale.get("bot.dialog.budgetHint"))
+            .on_text(move |words| into_budget.set(words));
+        let sleep = El::check_box(asleep_field.get(), locale.get("bot.dialog.asleep")).on_toggle(move |on| into_asleep.set(on));
+        let mut parts = vec![
+            wrapped(locale.get("bot.dialog.message")),
+            name,
+            words,
+            wrapped(locale.get("bot.dialog.permission")),
+            permission,
+            money,
+            sleep,
+            wrapped(locale.get("bot.dialog.jobs")),
+        ];
+        if jobs_lines.is_empty() {
+            parts.push(wrapped(locale.get("bot.dialog.noJobs")));
         }
-        Content::El(Box::new(El::stack(false, mighty_core::design_tokens::metrics::SPACING_SM, vec![intro, name, words, validation])))
+        parts.extend(jobs_lines.iter().map(|line| wrapped(line.clone())));
+        parts.push(wrapped(note_text.get()));
+        Content::El(Box::new(El::stack(false, mighty_core::design_tokens::metrics::SPACING_SM, parts)))
     })
     .styled(None, None);
     spec.primary = Some(DialogButton::new(locale.get("bot.dialog.save")));
+    spec.secondary = Some(DialogButton::new(locale.get("bot.dialog.addJob")));
     spec.close = Some(locale.get("bot.dialog.cancel"));
-    let (checked_handle, checked_instructions, checker, pane_id) = (handle.clone(), instructions.clone(), host.clone(), id.clone());
+    let (checked_handle, checked_instructions, checked_budget, checker, pane_id) =
+        (handle.clone(), instructions.clone(), budget.clone(), host.clone(), id.clone());
     spec.accept = Some(Box::new(move |answer| {
-        if answer != DialogResult::Primary {
+        if answer == DialogResult::None {
             return true;
         }
-        match refusal(&checker, &pane_id, checked_handle.get().trim(), &checked_instructions.get()) {
+        let refused = refusal(&checker, &pane_id, checked_handle.get().trim(), &checked_instructions.get())
+            .or_else(|| budget_of(&checked_budget.get()).err().map(|_| checker.locale.get("bot.error.budget")));
+        match refused {
             Some(words) => {
                 note.set(words);
                 false
@@ -141,31 +187,95 @@ pub fn open(host: &Arc<Host>, id: String) {
     }));
     let host = host.clone();
     tauri::async_runtime::spawn(async move {
-        let bot = match crate::native::show_dialog(&host, spec).await {
-            DialogResult::Primary => {
-                let typed = handle.get();
-                let Some(handle) = PaneBot::handle_of(&typed) else { return };
-                if refusal(&host, &id, &handle, &instructions.get()).is_some() {
-                    return;
-                }
-                let words = instructions.get().trim().to_string();
-                Some(PaneBot { handle, instructions: (!words.is_empty()).then_some(words), auto: Some(false) })
-            }
-            DialogResult::Secondary | DialogResult::None => return,
+        let answer = crate::native::show_dialog(&host, spec).await;
+        if answer == DialogResult::None {
+            return;
+        }
+        let Some(name) = PaneBot::handle_of(&handle.get()) else { return };
+        if refusal(&host, &id, &name, &instructions.get()).is_some() {
+            return;
+        }
+        let Ok(budget_per_day) = budget_of(&budget.get()) else { return };
+        let words = instructions.get().trim().to_string();
+        let chosen = PaneBot {
+            handle: name.clone(),
+            instructions: (!words.is_empty()).then_some(words),
+            auto: Some(false),
+            asleep: asleep.get().then_some(true),
+            budget_per_day,
         };
+        let permission = modes.get(mode.get()).map(|m| m.to_string());
+        let old = current.as_ref().map(|b| b.handle.clone());
+        let workspace = pane.workspace_id().to_string();
         let _ = crate::frame::act(&host, async {
             let mut view = host.view();
             // MC-61: a name the user kept stays the app's (it may be named again only if it never was marked); any other is theirs.
-            let bot = |pane: &RunSession| {
-                bot.clone().map(|chosen| {
-                    let kept = pane.bot.as_ref().filter(|old| PaneBot::key(&old.handle) == PaneBot::key(&chosen.handle));
-                    PaneBot { auto: if kept.is_some_and(|old| old.auto == Some(true)) { Some(true) } else { Some(false) }, ..chosen }
-                })
-            };
-            crate::composer::change(&mut view, &id, |pane| RunSession { bot: bot(pane), ..pane.clone() })
+            crate::composer::change(&mut view, &id, |pane| {
+                let kept = pane.bot.as_ref().filter(|old| PaneBot::key(&old.handle) == PaneBot::key(&chosen.handle));
+                let auto = if kept.is_some_and(|old| old.auto == Some(true)) { Some(true) } else { Some(false) };
+                let mut settings = pane.settings.clone().unwrap_or_default();
+                if let Some(permission) = &permission {
+                    settings.permission_mode = permission.clone();
+                }
+                RunSession { bot: Some(PaneBot { auto, ..chosen.clone() }), settings: Some(settings), ..pane.clone() }
+            })
         })
         .await;
+        // MC-64: the jobs sent to the bot follow its new name.
+        if let Some(old) = old.filter(|old| PaneBot::key(old) != PaneBot::key(&name)) {
+            crate::automation::rename_bot(&host, &old, &name);
+        }
+        if answer == DialogResult::Secondary {
+            crate::settings::jobs::preset_for_bot(&host, &workspace, &name, &provider);
+        }
     });
+}
+
+/// MC-64: a daily budget as typed: none when empty, else a positive number of dollars (a `$` and spaces aside).
+fn budget_of(text: &str) -> Result<Option<f64>, ()> {
+    let text = text.trim().trim_start_matches('$').trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    match text.parse::<f64>() {
+        Ok(value) if value.is_finite() && value > 0.0 => Ok(Some(value)),
+        _ => Err(()),
+    }
+}
+
+/// MC-64: the sheet's lines of the bot's schedules and triggers: name, kind, when, the next fire or why it does not run.
+fn job_lines(host: &Host, handle: &str) -> Vec<String> {
+    let locale = host.locale;
+    let next = crate::automation::next_fires();
+    crate::automation::jobs_of_bot(handle)
+        .iter()
+        .map(|job| {
+            let what = match &job.item {
+                crate::automation::Item::Schedule(s) => s.when().to_string(),
+                crate::automation::Item::Trigger(t) => crate::automation::trigger_words(&locale, &t.on),
+            };
+            let mut line = format!("• {} · {} · {what}", job.name(), crate::automation::kind_word(&locale, job.kind()));
+            if !job.runnable() {
+                line.push_str(&format!(" · {}", locale.get("automation.jobs.off")));
+            } else if let Some(at) = next.get(&job.key) {
+                let at = at.with_timezone(&chrono::Local).format("%m-%d %H:%M").to_string();
+                line.push_str(&format!(" · {}", locale.get_with("automation.jobs.next", &[("at", &at)])));
+            }
+            line
+        })
+        .collect()
+}
+
+/// MC-64: the sidebar's 재우기 / 깨우기 on a bot (and `mighty bot pause|resume`).
+pub async fn set_asleep(host: &Arc<Host>, id: &str, on: bool) {
+    let _ = crate::frame::act(host, async {
+        let mut view = host.view();
+        crate::composer::change(&mut view, id, |pane| match &pane.bot {
+            Some(bot) => RunSession { bot: Some(PaneBot { asleep: on.then_some(true), ..bot.clone() }), ..pane.clone() },
+            None => pane.clone(),
+        })
+    })
+    .await;
 }
 
 /// Whether `pane` may be a bot: an agent pane of a workspace on this computer (or reached over SSH), not a delegated child, not a
@@ -205,20 +315,35 @@ impl AskRefusal {
 
 /// The handles of the bots another pane may ask (never the caller itself), with each one's pane title and state.
 pub fn list(host: &Host, caller: &str) -> Vec<Value> {
-    let view = host.view();
-    view.snapshot
-        .bots()
-        .filter(|pane| pane.id() != caller)
-        .filter_map(|pane| {
-            let bot = pane.bot.as_ref()?;
-            let workspace = view.snapshot.workspace(pane.workspace_id()).map(|w| w.name().to_string());
-            Some(json!({
-                "bot": format!("@{}", bot.handle),
-                "title": pane.title(),
-                "workspace": workspace,
-                "status": pane.status(),
-                "about": bot.instructions.as_deref().map(|t| first_line(t, 160)),
-            }))
+    let rows: Vec<(String, Value)> = {
+        let view = host.view();
+        view.snapshot
+            .bots()
+            .filter(|pane| pane.id() != caller)
+            .filter_map(|pane| {
+                let bot = pane.bot.as_ref()?;
+                let workspace = view.snapshot.workspace(pane.workspace_id()).map(|w| w.name().to_string());
+                Some((
+                    bot.handle.clone(),
+                    json!({
+                        "bot": format!("@{}", bot.handle),
+                        "title": pane.title(),
+                        "workspace": workspace,
+                        "status": pane.status(),
+                        "about": bot.instructions.as_deref().map(|t| first_line(t, 160)),
+                        "agent": pane.provider(),
+                        "asleep": bot.is_asleep(),
+                    }),
+                ))
+            })
+            .collect()
+    };
+    // MC-64: each bot's schedules and triggers, and its next run.
+    rows.into_iter()
+        .map(|(handle, mut row)| {
+            row["jobs"] = json!(crate::automation::jobs_of_bot(&handle).iter().map(|j| j.name().to_string()).collect::<Vec<_>>());
+            row["nextRun"] = json!(crate::automation::next_fire_of_bot(&handle).map(|at| at.to_rfc3339()));
+            row
         })
         .collect()
 }
@@ -243,6 +368,10 @@ pub async fn ask(host: &Arc<Host>, caller: &str, handle: &str, prompt: &str) -> 
     // MC-61: every agent pane is a bot (MC-59), so "a bot cannot ask a bot" means a pane working on what a bot asked it.
     if answering_a_bot(&lock(&ASKED), caller, caller_request.as_deref()) {
         return Err(AskRefusal::FromBot);
+    }
+    // MC-64: a bot asleep or past its own daily budget takes no request.
+    if let Some(words) = crate::automation::bot_unavailable(host, handle) {
+        return Err(AskRefusal::Failed(words));
     }
     let (_, spent, budget) = crate::usage_report::budget_reading(host);
     if let Some(budget) = budget.filter(|b| spent >= *b) {
@@ -394,7 +523,7 @@ pub fn open_new(host: &Arc<Host>) {
         };
         let words = instructions.get().trim().to_string();
         let provider = providers.get(agent.get()).copied().unwrap_or("claude").to_string();
-        let bot = PaneBot { handle: name, instructions: (!words.is_empty()).then_some(words), auto: Some(false) };
+        let bot = PaneBot { handle: name, instructions: (!words.is_empty()).then_some(words), auto: Some(false), ..PaneBot::default() };
         if let Err(error) = create_independent(&host, bot, &provider, &folder).await {
             host.log.line(&format!("bot: an independent bot was not made: {error}"));
             let mut view = host.view();
@@ -481,6 +610,17 @@ mod tests {
         assert!(!answering_a_bot(&asked, "b", None));
         let logs = vec![entry("user", " first "), entry("assistant", "ok"), entry("user", "  check the build \n"), entry("assistant", "…")];
         assert_eq!(latest_request(&logs), Some("check the build"));
+    }
+
+    /// MC-64: a daily budget as typed in the bot sheet.
+    #[test]
+    fn a_daily_budget_is_empty_or_a_positive_number_of_dollars() {
+        assert_eq!(budget_of(""), Ok(None));
+        assert_eq!(budget_of(" $2.50 "), Ok(Some(2.5)));
+        assert_eq!(budget_of("10"), Ok(Some(10.0)));
+        for bad in ["0", "-1", "free", "NaN", "inf"] {
+            assert!(budget_of(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

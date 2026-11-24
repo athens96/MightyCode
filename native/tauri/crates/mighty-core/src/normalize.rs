@@ -335,7 +335,13 @@ pub fn bot(bot: Option<&crate::model::PaneBot>) -> Option<crate::model::PaneBot>
         }
         t[..end].to_string()
     });
-    Some(crate::model::PaneBot { handle, instructions, auto: bot.auto })
+    Some(crate::model::PaneBot {
+        handle,
+        instructions,
+        auto: bot.auto,
+        asleep: bot.asleep.filter(|on| *on),
+        budget_per_day: bot.budget_per_day.filter(|b| b.is_finite() && *b > 0.0),
+    })
 }
 
 /// MC-58: one pane per bot name: a later pane (in the saved order) with a name already taken loses it ([`name_bots`] names it again).
@@ -392,7 +398,7 @@ pub fn name_bots(state: &mut AppSnapshot, language: impl FnOnce(&AppSnapshot) ->
         if unnamed.iter().any(|id| id == pane.id()) {
             let handle = crate::bot_names::pick(pane.id(), language, &seen);
             seen.insert(crate::model::PaneBot::key(&handle));
-            pane.bot = Some(crate::model::PaneBot { handle, instructions: None, auto: Some(true) });
+            pane.bot = Some(crate::model::PaneBot { handle, auto: Some(true), ..Default::default() });
         }
     }
 }
@@ -2641,7 +2647,7 @@ mod tests {
         ));
         let page = normalize(&s, true).unwrap();
         let bot = |id: &str| page.session(id).and_then(|p| p.bot.clone());
-        assert_eq!(bot("s1"), Some(crate::model::PaneBot { handle: "reviewer".into(), instructions: Some("Review.".into()), auto: None }));
+        assert_eq!(bot("s1"), Some(crate::model::PaneBot { handle: "reviewer".into(), instructions: Some("Review.".into()), ..Default::default() }));
         assert_eq!(bot("s2"), None, "a handle already taken");
         assert_eq!(bot("s3"), None, "not a handle");
         assert_eq!(bot("s4"), None, "a terminal pane is no bot");
@@ -2741,6 +2747,26 @@ mod tests {
             Some(one),
             "a name stays, whatever the title or the language"
         );
+    }
+
+    /// MC-64: a bot's sleep and its own daily budget survive a write and a read; a budget of zero or less, and `asleep: false`, are
+    /// not kept.
+    #[test]
+    fn a_bot_keeps_its_sleep_and_its_daily_budget() {
+        let s = state(&format!(
+            r#"{{"version":1,"workspaces":[{{"id":"w1","name":"A","path":"{}"}}],"sessions":[
+                {{"id":"s1","workspaceId":"w1","titleMode":"fixed","title":"T","bot":{{"handle":"콩이","auto":true,"asleep":true,"budgetPerDay":2.5}}}},
+                {{"id":"s2","workspaceId":"w1","titleMode":"fixed","title":"T","bot":{{"handle":"보리","asleep":false,"budgetPerDay":0}}}}]}}"#,
+            root()
+        ));
+        let page = normalize(&s, true).unwrap();
+        let bot = |id: &str| page.session(id).and_then(|p| p.bot.clone()).unwrap();
+        assert!(bot("s1").is_asleep() && bot("s1").budget_per_day == Some(2.5));
+        assert!(!bot("s2").is_asleep() && bot("s2").budget_per_day.is_none());
+        let json = crate::json::Wire::to_json(&page);
+        assert!(json.contains("\"asleep\":true") && json.contains("\"budgetPerDay\":2.5"));
+        let again = AppSnapshot::read(&serde_json::from_str(&json).unwrap()).unwrap();
+        assert_eq!(again.session("s1").and_then(|p| p.bot.clone()), Some(bot("s1")));
     }
 
     /// MC-61: a name an earlier build made from the title (no `auto` mark, no instructions, in a workspace) is replaced once by a

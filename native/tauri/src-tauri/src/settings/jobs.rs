@@ -48,6 +48,8 @@ struct Form {
     skip_missed: bool,
     every: String,
     cap: String,
+    /// MC-64: a GitHub trigger's repository (`owner/name`), empty for the workspace's own.
+    repo: String,
 }
 
 impl Form {
@@ -74,7 +76,10 @@ impl Form {
             Item::Trigger(t) => {
                 form.kind = KINDS.iter().position(|k| *k == t.on.kind()).unwrap_or(0);
                 match &t.on {
-                    TriggerSource::Github { events } => form.when = events.iter().map(|e| e.name()).collect::<Vec<_>>().join(", "),
+                    TriggerSource::Github { events, repo } => {
+                        form.when = events.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ");
+                        form.repo = repo.clone().unwrap_or_default();
+                    }
                     TriggerSource::Linear { states } => form.when = states.join(", "),
                     TriggerSource::Webhook => {}
                     TriggerSource::Standing { command, every_minutes, daily_cap } => {
@@ -126,7 +131,8 @@ impl Form {
                     .iter()
                     .map(|n| GitHubEvent::parse(n).ok_or_else(|| host.locale.get_with("automation.form.badEvent", &[("name", n)])))
                     .collect::<Result<Vec<_>, _>>()?;
-                TriggerSource::Github { events }
+                let repo = Some(self.repo.trim().to_string()).filter(|r| !r.is_empty());
+                TriggerSource::Github { events, repo }
             }
             "linear" => TriggerSource::Linear { states: list(&self.when) },
             "webhook" => TriggerSource::Webhook,
@@ -147,6 +153,25 @@ impl Form {
 
 fn redraw(host: &Host) {
     crate::native::touch(host, crate::settings::SURFACE);
+}
+
+/// MC-64: a workspace and a form the box takes on its next drawing (a bot sheet's 일정·트리거 추가…).
+static PRESET: std::sync::Mutex<Option<(String, Form)>> = std::sync::Mutex::new(None);
+
+/// MC-64: Settings opened on 예약과 트리거 with the bot's workspace chosen and a new schedule's form filled for it: sent to
+/// `@handle` (a heartbeat), with its agent.
+pub fn preset_for_bot(host: &Arc<Host>, workspace: &str, handle: &str, agent: &str) {
+    let form = Form {
+        heartbeat: true,
+        pane: format!("@{handle}"),
+        agent: PROVIDERS.iter().position(|p| *p == agent).unwrap_or(0),
+        every: DEFAULT_EVERY_MINUTES.to_string(),
+        cap: DEFAULT_DAILY_CAP.to_string(),
+        ..Form::default()
+    };
+    *PRESET.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((workspace.to_string(), form));
+    crate::settings::open(host, Some("companion"));
+    redraw(host);
 }
 
 /// A time as the box shows it: local, to the minute.
@@ -207,6 +232,13 @@ pub fn jobs(host: &Arc<Host>, ui: &mut Ui) -> El {
     }
     let active = host.view().snapshot.active_workspace_id.clone();
     let chosen = ui.local("automation-jobs-workspace", || active.clone().unwrap_or_default());
+    let form = ui.local("automation-jobs-form", || None::<Form>);
+    // MC-64: a bot sheet's 일정·트리거 추가…: its workspace and its form.
+    let preset = PRESET.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+    if let Some((preset_workspace, preset_form)) = preset {
+        chosen.set(preset_workspace);
+        form.set(Some(preset_form));
+    }
     let index = workspaces.iter().position(|(id, _)| *id == chosen.get()).unwrap_or(0);
     let workspace = workspaces[index].0.clone();
     let ids: Vec<String> = workspaces.iter().map(|(id, _)| id.clone()).collect();
@@ -254,7 +286,6 @@ pub fn jobs(host: &Arc<Host>, ui: &mut Ui) -> El {
     let all = automation::jobs();
     let mine: Vec<&Job> = all.iter().filter(|j| j.workspace == workspace).collect();
     let next = automation::next_fires();
-    let form = ui.local("automation-jobs-form", || None::<Form>);
     rows.add(sub_heading(ui, locale.get("automation.jobs.listTitle")));
     if mine.is_empty() {
         rows.add(caption(ui, locale.get("automation.jobs.empty")));
@@ -594,6 +625,17 @@ fn form_body(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opti
     if kind != "webhook" {
         parts.push(field(ui, when_label, current.when.clone(), placeholder, "settings-jobs-form-when", Box::new(|f, t| f.when = t)));
     }
+    if kind == "github" {
+        parts.push(field(
+            ui,
+            locale.get("automation.form.repo"),
+            current.repo.clone(),
+            "owner/name",
+            "settings-jobs-form-repo",
+            Box::new(|f, t| f.repo = t),
+        ));
+        parts.push(caption(ui, locale.get("automation.form.repoNote")));
+    }
     if kind == "schedule" {
         parts.push(caption(ui, locale.get("automation.form.whenNote")));
         let to = form.clone();
@@ -671,7 +713,7 @@ fn form_body(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opti
             ui,
             locale.get("automation.form.pane"),
             current.pane.clone(),
-            "",
+            &locale.get("automation.form.paneHint"),
             "settings-jobs-form-pane",
             Box::new(|f, t| f.pane = t),
         ));

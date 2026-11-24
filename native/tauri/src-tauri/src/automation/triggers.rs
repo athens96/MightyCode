@@ -100,7 +100,7 @@ async fn watch(weak: Weak<Host>, job: Job) {
                 standing(&host, &job, command, *daily_cap).await;
                 Duration::from_secs(u64::from(*every_minutes) * 60)
             }
-            TriggerSource::Github { events } => backoff.after(github(&host, &job, events).await),
+            TriggerSource::Github { events, repo } => backoff.after(github(&host, &job, events, repo.as_deref()).await),
             TriggerSource::Linear { states } => backoff.after(linear(&host, &job, states).await),
             TriggerSource::Webhook => return,
         };
@@ -164,9 +164,16 @@ fn workspace(host: &Host, id: &str) -> Option<mighty_core::model::Workspace> {
     host.view().snapshot.workspace(id).cloned()
 }
 
-async fn github(host: &Arc<Host>, job: &Job, events: &[GitHubEvent]) -> PollOutcome {
-    let Some(found) = workspace(host, &job.workspace) else { return PollOutcome::Failed };
-    let gh = match super::github::Gh::for_workspace(host, &found).await {
+async fn github(host: &Arc<Host>, job: &Job, events: &[GitHubEvent], repo: Option<&str>) -> PollOutcome {
+    let gh = match repo {
+        // MC-64: a named repository (a bot's own), whatever the workspace's folder is.
+        Some(repo) => super::github::Gh::for_repo(host, repo),
+        None => match workspace(host, &job.workspace) {
+            Some(found) => super::github::Gh::for_workspace(host, &found).await,
+            None => return PollOutcome::Failed,
+        },
+    };
+    let gh = match gh {
         Ok(gh) => gh,
         Err(error) => {
             host.log.line(&format!("automation: GitHub trigger '{}': {error}", job.name()));

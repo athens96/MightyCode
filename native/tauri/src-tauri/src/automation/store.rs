@@ -85,6 +85,33 @@ pub struct State {
     pub standing: HashMap<String, StandingState>,
     #[serde(default)]
     pub linear: HashMap<String, IssueStates>,
+    /// MC-64: what each bot spent today (by its name's key), for its own daily budget.
+    #[serde(default, rename = "botSpend")]
+    pub bot_spend: HashMap<String, BotSpend>,
+}
+
+/// MC-64: a bot's spend on one day (local), in US dollars.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BotSpend {
+    pub day: String,
+    pub usd: f64,
+}
+
+impl BotSpend {
+    /// What was spent on `day` (nothing when the record is of another day).
+    pub fn on(&self, day: &str) -> f64 {
+        if self.day == day { self.usd } else { 0.0 }
+    }
+
+    /// `usd` more on `day` (the count starts again on a new day).
+    pub fn add(&mut self, day: &str, usd: f64) {
+        if self.day != day {
+            *self = BotSpend { day: day.to_string(), usd: 0.0 };
+        }
+        if usd.is_finite() && usd > 0.0 {
+            self.usd += usd;
+        }
+    }
 }
 
 impl State {
@@ -167,6 +194,13 @@ mod tests {
         save_state(&dir, &state).unwrap();
         let mut back = load_state(&dir);
         assert!(!back.seen.get_mut("w1:app:t:hook").unwrap().first("d1"));
+        // MC-64: a bot's spend counts on its day only.
+        let mut spend = BotSpend::default();
+        spend.add("2026-11-25", 1.25);
+        spend.add("2026-11-25", 0.5);
+        assert_eq!((spend.on("2026-11-25"), spend.on("2026-11-26")), (1.75, 0.0));
+        spend.add("2026-11-26", f64::NAN);
+        assert_eq!(spend.on("2026-11-26"), 0.0, "a new day starts again, a bad cost adds nothing");
         std::fs::write(state_path(&dir), b"[").unwrap();
         assert_eq!(load_state(&dir), State::default());
         let _ = std::fs::remove_dir_all(dir);

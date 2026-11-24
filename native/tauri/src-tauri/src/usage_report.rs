@@ -71,6 +71,11 @@ pub fn on_run_finished(host: &Arc<Host>, session_id: &str) -> Option<f64> {
     let recorded_cost = recorded?;
     // MC-29: a compare run's child adds what this run cost to its column.
     crate::compare::add_cost(host, session_id, recorded_cost);
+    // MC-64: a bot's run counts toward its own daily budget.
+    let handle = host.view().snapshot.session(session_id).and_then(|p| p.bot.as_ref().map(|b| b.handle.clone()));
+    if let Some(handle) = handle {
+        crate::automation::add_bot_spend(host, &handle, &today_str, recorded_cost);
+    }
 
     if host.writes()
         && let Some(snapshot_ledger) = to_save

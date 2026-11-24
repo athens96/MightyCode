@@ -38,7 +38,7 @@ use mighty_core::automation::recurrence::{LocalZone, Recurrence};
 use mighty_core::automation::spec::{Action, ScheduleSpec, TriggerSource, TriggerSpec};
 use mighty_core::control::events::{AutomationNote, EventBody, PaneRef};
 use mighty_core::locale::Locale;
-use mighty_core::model::Workspace;
+use mighty_core::model::{PaneBot, Workspace};
 
 use crate::host::Host;
 
@@ -684,10 +684,80 @@ pub fn kind_word(locale: &Locale, kind: &str) -> String {
     }
 }
 
+// ── MC-64: a bot's own jobs ──────────────────────────────────────────────────────────────────────────────────────────
+
+/// The jobs sent to the bot `handle` (heartbeats to `@handle`, of any workspace), in the list's order.
+pub fn jobs_of_bot(handle: &str) -> Vec<Job> {
+    let key = PaneBot::key(handle);
+    jobs().into_iter().filter(|j| j.action().bot().is_some_and(|b| PaneBot::key(&b) == key)).collect()
+}
+
+/// The soonest next fire of the bot's runnable schedules.
+pub fn next_fire_of_bot(handle: &str) -> Option<DateTime<Utc>> {
+    let next = next_fires();
+    jobs_of_bot(handle).iter().filter(|j| j.runnable()).filter_map(|j| next.get(&j.key).copied()).min()
+}
+
+/// The bot's name changed: the app's own jobs sent to it follow (a `.mighty.yaml` job keeps what its file says).
+pub fn rename_bot(host: &Arc<Host>, old: &str, new: &str) {
+    let (old_key, to) = (PaneBot::key(old), format!("@{new}"));
+    let changed = {
+        let mut settings = lock(&automation().settings);
+        let mut changed = false;
+        for jobs in settings.workspaces.values_mut() {
+            let actions = jobs.schedules.iter_mut().map(|s| &mut s.action).chain(jobs.triggers.iter_mut().map(|t| &mut t.action));
+            for action in actions {
+                if action.bot().is_some_and(|b| PaneBot::key(&b) == old_key) {
+                    action.pane = Some(to.clone());
+                    changed = true;
+                }
+            }
+        }
+        changed
+    };
+    if changed {
+        settings_changed(host);
+    }
+}
+
+/// What the bot `handle` spent today (local day).
+pub fn bot_spent_today(handle: &str) -> f64 {
+    let day = Local::now().date_naive().format("%Y-%m-%d").to_string();
+    with_state(|state| state.bot_spend.get(&PaneBot::key(handle)).map(|s| s.on(&day)).unwrap_or(0.0))
+}
+
+/// A bot's finished run: its cost on `day` added to the bot's count.
+pub fn add_bot_spend(host: &Host, handle: &str, day: &str, usd: f64) {
+    with_state(|state| state.bot_spend.entry(PaneBot::key(handle)).or_default().add(day, usd));
+    save_state(host);
+}
+
+/// Why the bot `handle` may not take work now: asleep, or its own daily budget spent. The words saying so.
+pub fn bot_unavailable(host: &Host, handle: &str) -> Option<String> {
+    let bot = host.view().snapshot.bot_pane(handle).and_then(|p| p.bot.clone())?;
+    if bot.is_asleep() {
+        return Some(host.locale.get_with("bot.asleep.refused", &[("handle", &bot.handle)]));
+    }
+    let budget = bot.budget_per_day?;
+    let spent = bot_spent_today(&bot.handle);
+    (spent >= budget).then(|| {
+        host.locale.get_with(
+            "bot.budget.spent",
+            &[("handle", &bot.handle), ("spent", &format!("${spent:.2}")), ("budget", &format!("${budget:.2}"))],
+        )
+    })
+}
+
 /// What a trigger listens to, in a few words.
 pub fn trigger_words(locale: &Locale, source: &TriggerSource) -> String {
     match source {
-        TriggerSource::Github { events } => events.iter().map(|e| e.name()).collect::<Vec<_>>().join(", "),
+        TriggerSource::Github { events, repo } => {
+            let names = events.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ");
+            match repo {
+                Some(repo) => format!("{names} · {repo}"),
+                None => names,
+            }
+        }
         TriggerSource::Linear { states } => states.join(", "),
         TriggerSource::Webhook => locale.get("automation.kind.webhook"),
         TriggerSource::Standing { command, every_minutes, daily_cap } => {

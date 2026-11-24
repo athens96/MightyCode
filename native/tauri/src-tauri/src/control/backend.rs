@@ -56,6 +56,11 @@ impl Backend for HostBackend {
         view.snapshot.bot_pane(pane).map(|p| p.id().to_string()).ok_or_else(|| ControlError::not_found("bot"))
     }
 
+    fn bot_refusal(&self, handle: &str) -> Option<String> {
+        let host = self.host().ok()?;
+        crate::automation::bot_unavailable(&host, handle)
+    }
+
     fn status(&self) -> Result<Value, ControlError> {
         let host = self.host()?;
         let view = host.view();

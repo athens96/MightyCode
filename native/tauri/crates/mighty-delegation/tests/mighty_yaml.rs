@@ -547,7 +547,7 @@ triggers:
         (nightly.action.mode, nightly.action.pane.as_deref(), nightly.catch_up),
         (FireMode::Heartbeat, Some("Night watch"), CatchUp::Skip)
     );
-    assert_eq!(config.triggers["ci"].on, TriggerSource::Github { events: vec![GitHubEvent::PrOpened, GitHubEvent::CiFailed] });
+    assert_eq!(config.triggers["ci"].on, TriggerSource::Github { events: vec![GitHubEvent::PrOpened, GitHubEvent::CiFailed], repo: None });
     assert_eq!(config.triggers["ready"].on, TriggerSource::Linear { states: vec!["Ready".into(), "In Review".into()] });
     assert!(!config.triggers["deploy"].enabled && config.triggers["deploy"].on == TriggerSource::Webhook);
     assert_eq!(

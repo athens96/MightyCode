@@ -9,6 +9,7 @@ import { chooseKeyboard } from '../panes/terminal/focus';
 import { useAddMenu, useWorkspaceAddChoices } from './addMenu';
 import { sidebarGroups } from './servers';
 import { nestForks } from './forks';
+import { nextRunWords } from './botTime';
 import { BetaBadge, StatusCounts, StatusGlyph, useCall, useMenu, usePaneInfo, useShell, type MenuItem } from './parts';
 import type { CardAction, ChildCard, PaneCompare, PaneInfo, RemoteServer, SidebarBot, SidebarItem, SidebarWorkspace } from './types';
 import { Icon } from '../icons/Icon';
@@ -393,17 +394,24 @@ function BotGroup({ bots, panes, activeId, search, workspaces }: { bots: Sidebar
     const detail = bot.workspaceId ? info?.title ?? '' : t('bot.sidebar.independent');
     const items: MenuItem[] = [
       { label: t('bot.menu.edit'), action: () => call('paneBot', { paneId: bot.id }) },
+      // MC-64: 재우기 / 깨우기.
+      { label: t(bot.asleep ? 'bot.menu.wake' : 'bot.menu.sleep'), action: () => call('botSleep', { paneId: bot.id, asleep: !bot.asleep }) },
       { label: t('menu.closePane'), action: () => call('closeSession', { id: bot.id }) },
     ];
+    const next = nextRunWords(bot.nextRun);
+    const jobsLine = bot.jobs ? '\n' + t('bot.sidebar.jobs', { count: String(bot.jobs) }) + (next ? ' · ' + t('bot.sidebar.nextRun', { at: next }) : '') : '';
     return (
-      <button key={bot.id} type="button" className={'sidebar-pane sidebar-bot' + (bot.id === activeId ? ' active' : '') + (bot.id === flashed ? ' flashed' : '')} data-testid="sidebar-bot" data-session-id={bot.id}
-        title={t('bot.label', { handle: bot.handle }) + (bot.folder ? '\n' + bot.folder : '') + (bot.workspaceId ? '\n' + t('bot.sidebar.doubleClick') : '')}
+      <button key={bot.id} type="button" className={'sidebar-pane sidebar-bot' + (bot.id === activeId ? ' active' : '') + (bot.id === flashed ? ' flashed' : '') + (bot.asleep ? ' asleep' : '')} data-testid="sidebar-bot" data-session-id={bot.id}
+        title={t('bot.label', { handle: bot.handle }) + (bot.asleep ? '\n' + t('bot.sidebar.asleep') : '') + jobsLine + (bot.folder ? '\n' + bot.folder : '') + (bot.workspaceId ? '\n' + t('bot.sidebar.doubleClick') : '')}
         onClick={() => choose(bot.id)} onDoubleClick={() => showWorkspace(bot.workspaceId)} onContextMenu={(event) => menu.atPointer(event, items)}>
         <StatusGlyph tone={info?.tone ?? 'idle'} kind={info?.kind ?? 'claude'} />
         <span className="sidebar-pane-text">
           <span className="sidebar-pane-line">
             <span className={'sidebar-pane-title' + (info?.settled === false ? ' strong' : '')}>@{bot.handle}</span>
             {bot.workspaceId && bot.workspace && <span className="sidebar-bot-workspace" data-testid="sidebar-bot-workspace">{bot.workspace}</span>}
+            {/* MC-64: asleep, or the next scheduled run. */}
+            {bot.asleep && <span className="sidebar-bot-sleep" aria-label={t('bot.sidebar.asleep')} data-testid="sidebar-bot-asleep">💤</span>}
+            {!bot.asleep && next && <span className="sidebar-bot-next" data-testid="sidebar-bot-next">⏰ {next}</span>}
             {info?.attention && <span className="sidebar-attention-dot" title={info.attention.help} aria-label={info.attention.help} />}
           </span>
           <span className="sidebar-pane-meta">

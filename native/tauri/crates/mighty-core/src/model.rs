@@ -1163,6 +1163,11 @@ pub struct PaneBot {
     /// MC-61: who chose the name: `Some(true)` the app (a friendly name in the app's language), `Some(false)` the user; None a name
     /// saved before this mark, which the app names again unless it carries instructions ([`crate::normalize::name_bots`]).
     pub auto: Option<bool>,
+    /// MC-64: asleep: its schedules and triggers skip and other agents' and the CLI's requests are refused until it wakes (written
+    /// only when true).
+    pub asleep: Option<bool>,
+    /// MC-64: what the bot may spend a day, in US dollars: its schedules and triggers skip and `ask_bot` is refused once it has.
+    pub budget_per_day: Option<f64>,
 }
 
 /// MC-58: the longest bot handle, in characters.
@@ -1194,6 +1199,11 @@ impl PaneBot {
         handle.trim().trim_start_matches('@').nfc().collect::<String>().to_lowercase()
     }
 
+    /// MC-64: whether it sleeps.
+    pub fn is_asleep(&self) -> bool {
+        self.asleep == Some(true)
+    }
+
     /// Whether this bot answers to `text` (`@name` or `name`).
     pub fn answers_to(&self, text: &str) -> bool {
         Self::handle_of(text).is_some_and(|name| Self::key(&name) == Self::key(&self.handle))
@@ -1211,7 +1221,13 @@ impl Wire for PaneBot {
         let Some(handle) = json::opt_string(o.get("handle"))?.and_then(|h| PaneBot::handle_of(&h)) else {
             return fail("a bot without a handle");
         };
-        Ok(PaneBot { handle, instructions: lenient_string(o.get("instructions")), auto: lenient_bool(o.get("auto")) })
+        Ok(PaneBot {
+            handle,
+            instructions: lenient_string(o.get("instructions")),
+            auto: lenient_bool(o.get("auto")),
+            asleep: lenient_bool(o.get("asleep")).filter(|on| *on),
+            budget_per_day: lenient_double(o.get("budgetPerDay")).filter(|b| *b > 0.0),
+        })
     }
 
     fn write(&self, out: &mut JsonOut) {
@@ -1219,6 +1235,10 @@ impl Wire for PaneBot {
         out.prop_str("handle", Some(&self.handle));
         out.prop_str("instructions", self.instructions.as_deref());
         out.prop_opt_bool("auto", self.auto);
+        out.prop_opt_bool("asleep", self.asleep.filter(|on| *on));
+        if let Some(budget) = self.budget_per_day {
+            out.prop_float("budgetPerDay", budget);
+        }
         out.end_object();
     }
 }

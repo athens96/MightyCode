@@ -145,6 +145,12 @@ impl Gh {
         Ok(Gh { gh, cwd, repo: tracker.repo().to_string() })
     }
 
+    /// MC-64: for a named repository (`owner/name`): `gh` only, run in the temporary folder.
+    pub fn for_repo(host: &Arc<Host>, repo: &str) -> Result<Gh, String> {
+        let gh = crate::integrations::gh_executable(host).ok_or("GitHub CLI (gh) is not installed.")?;
+        Ok(Gh { gh, cwd: std::env::temp_dir(), repo: repo.to_string() })
+    }
+
     /// One look at `endpoint`, with the last ETag.
     pub async fn look(&self, host: &Host, endpoint: &str, etag: Option<&str>) -> Result<Answer, String> {
         let mut args: Vec<String> = vec!["api".into(), "-i".into(), "-H".into(), "Accept: application/vnd.github+json".into()];

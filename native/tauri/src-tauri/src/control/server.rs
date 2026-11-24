@@ -44,6 +44,10 @@ pub trait Backend: Send + Sync + 'static {
     fn resolve(&self, pane: &str) -> Result<String, ControlError> {
         Ok(pane.to_string())
     }
+    /// MC-64: why the bot `handle` takes no request now (asleep, its own budget spent); None when it does.
+    fn bot_refusal(&self, _handle: &str) -> Option<String> {
+        None
+    }
     /// A line of output as it may leave the app (secrets redacted).
     fn redact(&self, text: &str) -> String {
         text.to_string()
@@ -194,7 +198,15 @@ fn resolved(backend: &dyn Backend, command: Command) -> Result<Command, ControlE
     let pane = |pane: String| if pane.starts_with('@') { backend.resolve(&pane) } else { Ok(pane) };
     Ok(match command {
         Command::PaneRead { pane: p, lines } => Command::PaneRead { pane: pane(p)?, lines },
-        Command::AgentSend { pane: p, text } => Command::AgentSend { pane: pane(p)?, text },
+        // MC-64: a bot asleep or past its own budget takes nothing sent by its name.
+        Command::AgentSend { pane: p, text } => {
+            if p.starts_with('@')
+                && let Some(words) = backend.bot_refusal(&p)
+            {
+                return Err(ControlError::new(ErrorCode::Failed, words));
+            }
+            Command::AgentSend { pane: pane(p)?, text }
+        }
         Command::AgentWait { pane: p, until, timeout } => Command::AgentWait { pane: pane(p)?, until, timeout },
         Command::PaneWaitOutput { pane: p, regex, timeout } => Command::PaneWaitOutput { pane: pane(p)?, regex, timeout },
         Command::Events { pane: p, types } => Command::Events { pane: p.map(pane).transpose()?, types },

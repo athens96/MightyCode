@@ -105,6 +105,15 @@ pub struct Action {
 }
 
 impl Action {
+    /// MC-64: the bot this action is sent to (a heartbeat to `@name`): the job is that bot's. Its handle, without the `@`.
+    pub fn bot(&self) -> Option<String> {
+        if self.mode != FireMode::Heartbeat {
+            return None;
+        }
+        let pane = self.pane.as_deref()?.trim();
+        pane.starts_with('@').then(|| crate::model::PaneBot::handle_of(pane)).flatten()
+    }
+
     pub fn agent(&self) -> &str {
         self.agent.as_deref().filter(|a| !a.is_empty()).unwrap_or("claude")
     }
@@ -197,9 +206,13 @@ impl GitHubEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum TriggerSource {
-    /// The workspace's GitHub repository, watched through `gh api`.
+    /// The workspace's GitHub repository (MC-64: or `repo`, `owner/name`, for a bot of no repository), watched through `gh api`.
     #[serde(rename_all = "camelCase")]
-    Github { events: Vec<GitHubEvent> },
+    Github {
+        events: Vec<GitHubEvent>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repo: Option<String>,
+    },
     /// Linear issues (the workspace's MC-31 tracker) entering one of these states.
     #[serde(rename_all = "camelCase")]
     Linear { states: Vec<String> },
@@ -242,7 +255,10 @@ impl TriggerSpec {
     pub fn validate(&self, providers: &[&str]) -> Result<(), String> {
         valid_name(&self.name)?;
         match &self.on {
-            TriggerSource::Github { events } if events.is_empty() => return Err("name at least one GitHub event".into()),
+            TriggerSource::Github { events, .. } if events.is_empty() => return Err("name at least one GitHub event".into()),
+            TriggerSource::Github { repo: Some(repo), .. } if !valid_repo(repo) => {
+                return Err(format!("'{repo}' is not a GitHub repository: owner/name"));
+            }
             TriggerSource::Linear { states } if states.iter().all(|s| s.trim().is_empty()) => {
                 return Err("name at least one Linear state".into());
             }
@@ -261,6 +277,12 @@ impl TriggerSpec {
         }
         self.action.validate(providers)
     }
+}
+
+/// MC-64: a GitHub repository as `owner/name`: letters, digits, `-`, `_` and `.` on each side, nothing else.
+pub fn valid_repo(repo: &str) -> bool {
+    let part = |p: &str| !p.is_empty() && p.len() <= 100 && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) && p != "." && p != "..";
+    matches!(repo.split('/').collect::<Vec<_>>().as_slice(), [owner, name] if part(owner) && part(name))
 }
 
 /// A schedule's or trigger's name: 1 to 80 characters, no control or invisible formatting character, no slash.
@@ -339,7 +361,7 @@ mod tests {
         assert_eq!(serde_json::from_value::<TriggerSpec>(value).unwrap(), trigger);
         let github: TriggerSpec =
             serde_json::from_str(r#"{"name":"g","on":{"type":"github","events":["ci_failed"]},"prompt":"p"}"#).unwrap();
-        assert_eq!(github.on, TriggerSource::Github { events: vec![GitHubEvent::CiFailed] });
+        assert_eq!(github.on, TriggerSource::Github { events: vec![GitHubEvent::CiFailed], repo: None });
         assert!(github.enabled && github.validate(&PROVIDERS).is_ok());
     }
 
@@ -354,10 +376,35 @@ mod tests {
         assert!(trigger.validate(&PROVIDERS).unwrap_err().contains("everyMinutes"));
         trigger.on = TriggerSource::Standing { command: "true".into(), every_minutes: 5, daily_cap: 0 };
         assert!(trigger.validate(&PROVIDERS).unwrap_err().contains("dailyCap"));
-        trigger.on = TriggerSource::Github { events: vec![] };
+        trigger.on = TriggerSource::Github { events: vec![], repo: None };
         assert!(trigger.validate(&PROVIDERS).is_err());
         trigger.on = TriggerSource::Linear { states: vec!["Ready".into()] };
         assert!(trigger.validate(&PROVIDERS).is_ok());
         assert!(TriggerSource::Webhook.kind() == "webhook" && !TriggerSource::Webhook.polled());
+    }
+
+    /// MC-64: a heartbeat to `@name` is that bot's job; a GitHub trigger may name its repository, `owner/name` only.
+    #[test]
+    fn a_job_sent_to_a_bot_is_its_own_and_a_repository_is_owner_slash_name() {
+        let to = |mode: FireMode, pane: &str| Action { prompt: "p".into(), mode, pane: Some(pane.into()), ..Action::default() };
+        assert_eq!(to(FireMode::Heartbeat, " @콩이 ").bot().as_deref(), Some("콩이"));
+        assert_eq!(to(FireMode::Heartbeat, "야간 점검").bot(), None, "a pane by its title");
+        assert_eq!(to(FireMode::New, "@콩이").bot(), None, "a fresh pane");
+        for good in ["athens96/MightyCode", "a-b/c.d_e"] {
+            assert!(valid_repo(good), "{good}");
+        }
+        for bad in ["MightyCode", "a/b/c", "/b", "a/", "a b/c", "a/..", "https://github.com/a/b"] {
+            assert!(!valid_repo(bad), "{bad}");
+        }
+        let trigger = TriggerSpec {
+            name: "pr".into(),
+            on: TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("owner/repo".into()) },
+            enabled: true,
+            action: Action { prompt: "p".into(), ..Action::default() },
+        };
+        assert!(trigger.validate(&PROVIDERS).is_ok());
+        assert_eq!(serde_json::to_value(&trigger).unwrap()["on"], serde_json::json!({"type": "github", "events": ["pr_opened"], "repo": "owner/repo"}));
+        let bad = TriggerSpec { on: TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("nope".into()) }, ..trigger };
+        assert!(bad.validate(&PROVIDERS).unwrap_err().contains("owner/name"));
     }
 }
