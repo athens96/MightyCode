@@ -120,6 +120,8 @@ const PaneRow = memo(function PaneRow({ info, active, child }: { info: PaneInfo;
   // A mirrored pane carries its host's name; its close closes it on that computer.
   const items: MenuItem[] = [
     ...(info.mirror ? [] : [{ label: t('menu.rename'), action: () => call('renameSession', { id: info.id }) }]),
+    // MC-58: a top-level agent pane of this computer may be a bot (bot.rs).
+    ...(info.kind === 'claude' && !info.mirror && !child ? [{ label: t(info.bot ? 'bot.menu.edit' : 'bot.menu.make'), action: () => call('paneBot', { paneId: info.id }) }] : []),
     { label: t('menu.closePane'), action: () => call('closeSession', { id: info.id }) },
   ];
   if (child?.menu?.length) items.push({ separator: true }, ...childMenu(call, info.id, child.menu));
@@ -132,6 +134,8 @@ const PaneRow = memo(function PaneRow({ info, active, child }: { info: PaneInfo;
         <span className="sidebar-pane-line">
           <span className={'sidebar-pane-title' + (info.settled ? '' : ' strong')}>{info.title}</span>
           {info.beta && <BetaBadge />}
+          {/* MC-58: a bot's handle, the name it is called by. */}
+          {info.bot && <span className="sidebar-bot-mark" title={t('bot.label', { handle: info.bot })} data-testid="sidebar-bot-mark">@{info.bot}</span>}
           {info.worktree && <span className="sidebar-worktree-mark" title={info.worktree} aria-label={info.worktree} data-testid="sidebar-worktree-mark"><Icon name="git-branch" size={11} weight={2.2} /></span>}
           {/* MC-28: a forked pane carries the fork mark; its source is named on the meta line. */}
           {info.forkedFrom && <span className="sidebar-fork-mark" title={t('fork.label', { title: forkTitle ?? info.forkedFrom.title })} aria-label={t('fork.label', { title: forkTitle ?? info.forkedFrom.title })} data-testid="sidebar-fork-mark"><Icon name="git-fork" size={11} weight={2.2} /></span>}

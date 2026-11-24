@@ -1046,6 +1046,17 @@ impl RunService {
                     }
                 }
             }
+            // MC-58: a bot's new conversation (it resumes no session, and forks none) is told its standing instructions after the
+            // request. The transcript keeps the request as sent.
+            if !remote
+                && request.kind == "claude"
+                && request.resume_id.is_none()
+                && !request.fork_session
+                && request.antigravity_grant.is_none()
+                && let Some(bot) = pane.bot.as_ref()
+            {
+                request.input = crate::bot::with_note(bot, &request.input);
+            }
             // The run's diagram block is named here, so a send can answer with it before the runner's first event.
             request.graph_run_id =
                 (!remote && request.kind != "shell" && GRAPH_PROVIDERS.contains(&request.provider.as_str())).then(wire::new_id);

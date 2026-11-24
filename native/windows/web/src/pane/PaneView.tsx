@@ -67,6 +67,8 @@ function PaneMenu({ session }: { session: RunSession }) {
   if (session.kind !== 'shell') items.push({ label: t('pane.menu.newConversation'), disabled: session.status === 'running' || !session.resumeId, action: () => void bridge.call('newConversation', { paneId: session.id }).catch(() => {}) });
   // MC-28: the conversation into a new pane in a new worktree (fork.rs); never a mirror's or while it runs.
   if (session.kind === 'claude' && !mirrored) items.push({ label: t('fork.menu.pane'), disabled: session.status === 'running' || session.logs.length === 0, action: () => call('paneFork', { paneId: session.id }) });
+  // MC-58: a top-level agent pane of this computer may be a bot (bot.rs).
+  if (session.kind === 'claude' && !mirrored && !session.parentSessionId) items.push({ label: t(session.bot ? 'bot.menu.edit' : 'bot.menu.make'), action: () => call('paneBot', { paneId: session.id }) });
   items.push({ separator: true }, { label: t('menu.closePane'), action: () => call('closeSession', { id: session.id }) });
   return (
     <button type="button" className="icon-button pane-menu-button" title={t('tooltip.pane.menu')} aria-label={t('pane.menu.accessibility')} data-testid="pane-menu"

@@ -333,6 +333,19 @@ impl AppSnapshot {
     pub fn session(&self, id: &str) -> Option<&Arc<RunSession>> {
         self.sessions().iter().find(|s| s.id() == id)
     }
+    /// MC-58: the pane that is the bot `text` names (`@reviewer` or `reviewer`); a mirror's panes are the host's and never answer.
+    pub fn bot_pane(&self, text: &str) -> Option<&Arc<RunSession>> {
+        let handle = PaneBot::handle_of(text)?;
+        self.sessions().iter().find(|s| s.mirror.is_none() && s.bot.as_ref().is_some_and(|b| b.handle == handle))
+    }
+    /// MC-58: the pane `text` names: a pane id, or a bot's `@handle`.
+    pub fn pane_or_bot(&self, text: &str) -> Option<&Arc<RunSession>> {
+        if text.trim_start().starts_with('@') { self.bot_pane(text) } else { self.session(text) }
+    }
+    /// MC-58: the panes that are bots, in the snapshot's order (a mirror's left out).
+    pub fn bots(&self) -> impl Iterator<Item = &Arc<RunSession>> {
+        self.sessions().iter().filter(|s| s.mirror.is_none() && s.bot.is_some())
+    }
     /// The ids of a workspace's panes, in the snapshot's order.
     pub fn pane_ids(&self, workspace_id: &str) -> Vec<String> {
         self.sessions().iter().filter(|s| s.workspace_id() == workspace_id).map(|s| s.id().to_string()).collect()
@@ -1126,6 +1139,56 @@ impl Wire for ForkedFrom {
     }
 }
 
+/// MC-58: the bot an agent pane is (`bot`): the name other panes, the command line, schedules and other agents call it by
+/// (`@handle`), and the standing instructions a new conversation of the pane starts with. Lenient: damage loads as None.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PaneBot {
+    /// Lowercase letters, digits and `-`, 1 to [`BOT_HANDLE_LIMIT`] characters, starting with a letter or a digit; one pane per
+    /// handle in a profile.
+    pub handle: String,
+    /// What the bot is for and how it works, put in front of a new conversation's first request; at most
+    /// [`BOT_INSTRUCTIONS_LIMIT`] bytes.
+    pub instructions: Option<String>,
+}
+
+/// MC-58: the longest bot handle, in characters.
+pub const BOT_HANDLE_LIMIT: usize = 32;
+/// MC-58: the most a bot's instructions keep, in bytes.
+pub const BOT_INSTRUCTIONS_LIMIT: usize = 16 * 1024;
+
+impl PaneBot {
+    /// Whether `handle` is a bot handle as written (no `@`).
+    pub fn valid_handle(handle: &str) -> bool {
+        let mut chars = handle.chars();
+        chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+            && handle.chars().count() <= BOT_HANDLE_LIMIT
+            && handle.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    }
+
+    /// The handle `text` names: `@reviewer` or `reviewer`, case and surrounding space aside; None when it is not one.
+    pub fn handle_of(text: &str) -> Option<String> {
+        let handle = text.trim().trim_start_matches('@').to_ascii_lowercase();
+        Self::valid_handle(&handle).then_some(handle)
+    }
+}
+
+impl Wire for PaneBot {
+    fn read(value: &Value) -> R<Self> {
+        let o = Obj::of(value, "a bot")?;
+        let Some(handle) = json::opt_string(o.get("handle"))?.filter(|h| PaneBot::valid_handle(h)) else {
+            return fail("a bot without a handle");
+        };
+        Ok(PaneBot { handle, instructions: lenient_string(o.get("instructions")) })
+    }
+
+    fn write(&self, out: &mut JsonOut) {
+        out.begin_object();
+        out.prop_str("handle", Some(&self.handle));
+        out.prop_str("instructions", self.instructions.as_deref());
+        out.end_object();
+    }
+}
+
 /// MC-28: another agent's opinion on the pane's work (`/advisor`): who answered, with what model and cost, and what. Cards of one
 /// committee share `group` and show side by side. Lenient: damage loads as None.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1769,6 +1832,8 @@ pub struct RunSession {
     pub ask_target: Option<String>,
     /// MC-28: the pane this one was forked from (`forkedFrom`).
     pub forked_from: Option<ForkedFrom>,
+    /// MC-58: the bot this agent pane is (`bot`).
+    pub bot: Option<PaneBot>,
     /// MC-28: other agents' opinions on the pane's work (`/advisor`), the newest last.
     pub opinions: Option<Vec<OpinionCard>>,
     /// MC-29: the compare runs this pane started (`compareRuns`), the newest last.
@@ -1925,6 +1990,7 @@ impl Default for RunSession {
             linked_task: None,
             ask_target: None,
             forked_from: None,
+            bot: None,
             opinions: None,
             compare_runs: None,
             compare_member: None,
@@ -2015,6 +2081,7 @@ impl Wire for RunSession {
             linked_task: lenient_record(o.get("linkedTask")),
             ask_target: lenient_string(o.get("askTarget")),
             forked_from: lenient_record(o.get("forkedFrom")),
+            bot: lenient_record(o.get("bot")),
             opinions: lenient_list(o.get("opinions")),
             compare_runs: lenient_list(o.get("compareRuns")),
             compare_member: lenient_record(o.get("compareMember")),
@@ -2170,6 +2237,7 @@ impl RunSession {
         out.prop("linkedTask", self.linked_task.as_ref());
         out.prop_str("askTarget", self.ask_target.as_deref());
         out.prop("forkedFrom", self.forked_from.as_ref());
+        out.prop("bot", self.bot.as_ref());
         out.prop_list("opinions", self.opinions.as_ref());
         out.prop_list("compareRuns", self.compare_runs.as_ref());
         out.prop("compareMember", self.compare_member.as_ref());
@@ -2324,6 +2392,7 @@ impl RunSession {
             linked_task,
             ask_target,
             forked_from,
+            bot,
             opinions,
             compare_runs,
             compare_member,
@@ -2370,6 +2439,7 @@ impl RunSession {
             && pane_worktree == &other.pane_worktree
             && linked_task == &other.linked_task
             && forked_from == &other.forked_from
+            && bot == &other.bot
             && opinions == &other.opinions
             && compare_runs == &other.compare_runs
             && compare_member == &other.compare_member

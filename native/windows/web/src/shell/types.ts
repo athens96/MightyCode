@@ -51,6 +51,8 @@ export interface PaneInfo {
   pr?: PanePr | null;
   /** MC-28: the pane this one was forked from (its title as saved when the fork was made). */
   forkedFrom?: PaneFork | null;
+  /** MC-58: the bot this pane is: its handle (without the `@`). */
+  bot?: string;
   /** MC-29: the compare runs this pane started, newest first, each summed up for its card. */
   compares?: PaneCompare[];
   /** MC-33: an SSH machine's pane: its machine and folder, the ports its output named and the forwards open. */

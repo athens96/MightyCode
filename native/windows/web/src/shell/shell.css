@@ -335,6 +335,8 @@ button { font: inherit; color: inherit; }
 .dashboard-row-meta { display: flex; gap: var(--space-xs); align-items: center; color: var(--ink2); font-size: 12.5px; white-space: nowrap; overflow: hidden; }
 /* MC-28: a forked pane's mark in the sidebar and its source on the dashboard row. */
 .sidebar-fork-mark { color: var(--accent); display: inline-flex; flex: none; }
+/* MC-58: a bot's handle beside its pane's title. */
+.sidebar-bot-mark { color: var(--accent); flex: none; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .dashboard-row-fork { display: inline-flex; align-items: center; gap: 3px; color: var(--ink2); overflow: hidden; text-overflow: ellipsis; }
 .dashboard-row-fork > svg { color: var(--accent); flex: none; }
 .dashboard-row-activity { color: var(--ink2); font-size: 11.3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: var(--space-xxs); }

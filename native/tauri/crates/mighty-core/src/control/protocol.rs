@@ -252,10 +252,12 @@ fn optional_text(object: &Map<String, Value>, name: &str) -> Option<String> {
     object.get(name).and_then(Value::as_str).map(str::to_string).filter(|t| !t.trim().is_empty())
 }
 
-/// A pane or workspace id: what the app makes (letters, digits, `-`, `_`, `.`, `:`), at most 200 characters.
+/// A pane or workspace id: what the app makes (letters, digits, `-`, `_`, `.`, `:`), at most 200 characters; MC-58: or a bot's
+/// `@handle` in place of a pane's id (the app finds its pane).
 fn id_field(object: &Map<String, Value>, name: &str) -> Result<String, ControlError> {
     let id = text_field(object, name)?;
-    if id.len() > 200 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':')) {
+    let bare = id.strip_prefix('@').unwrap_or(&id);
+    if id.len() > 200 || bare.is_empty() || !bare.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':')) {
         return Err(ControlError::bad(format!("'{name}' is not an id")));
     }
     Ok(id)

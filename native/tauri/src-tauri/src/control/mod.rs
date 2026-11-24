@@ -251,6 +251,7 @@ pub fn pane_json(host: &Host, view: &View, session: &RunSession) -> Value {
         "active": snapshot.active_session_id.as_deref() == Some(session.id()),
         "worktree": worktree,
         "parent": session.parent_session_id,
+        "bot": session.bot.as_ref().map(|b| format!("@{}", b.handle)),
     })
 }
 

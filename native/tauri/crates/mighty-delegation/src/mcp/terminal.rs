@@ -142,6 +142,23 @@ impl TerminalServer {
                         out.end_object();
                         out.end_object();
                         out.end_object();
+                    } else if tool.name == tools::LIST_BOTS {
+                        // MC-58: no arguments.
+                        out.end_object();
+                    } else if tool.name == tools::ASK_BOT || tool.name == tools::BOT_ANSWER {
+                        // MC-58: the bot's @handle and its request, or whether to wait for its answer.
+                        let second = if tool.name == tools::ASK_BOT { ("prompt", "string") } else { ("wait", "boolean") };
+                        for (name, kind) in [("bot", "string"), second] {
+                            out.name(name);
+                            out.begin_object();
+                            out.prop_str("type", Some(kind));
+                            out.end_object();
+                        }
+                        out.end_object();
+                        out.name("required");
+                        let required: &[String] =
+                            if tool.name == tools::ASK_BOT { &["bot".to_string(), "prompt".to_string()] } else { &["bot".to_string()] };
+                        out.strings(required);
                     } else {
                         out.name(tool.argument);
                         out.begin_object();

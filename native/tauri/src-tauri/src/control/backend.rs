@@ -50,6 +50,12 @@ fn workspace_json(snapshot: &mighty_core::model::AppSnapshot, workspace: &mighty
 }
 
 impl Backend for HostBackend {
+    fn resolve(&self, pane: &str) -> Result<String, ControlError> {
+        let host = self.host()?;
+        let view = host.view();
+        view.snapshot.bot_pane(pane).map(|p| p.id().to_string()).ok_or_else(|| ControlError::not_found("bot"))
+    }
+
     fn status(&self) -> Result<Value, ControlError> {
         let host = self.host()?;
         let view = host.view();

@@ -131,11 +131,19 @@ async fn stdio_mcp_contract() {
     assert_eq!(hello["result"]["protocolVersion"], "2025-11-25", "protocol negotiates a supported revision");
     let tools = parse(server.handle(r#"{"jsonrpc":"2.0","id":"list","method":"tools/list"}"#).await);
     let listed = tools["result"]["tools"].as_array().unwrap();
-    assert_eq!(listed.len(), 5, "the Mac terminal/web tool set and MC-48's browser check");
+    assert_eq!(listed.len(), 8, "the Mac terminal/web tool set, MC-48's browser check and MC-58's bot tools");
     let check = &listed[4];
     assert_eq!(check["name"], "mighty_browser_check");
     assert!(check["inputSchema"]["required"].is_null(), "url and paths are optional: {check}");
     assert_eq!(check["inputSchema"]["properties"]["paths"]["type"], "array");
+    // MC-58: list_bots takes nothing; ask_bot a bot and a prompt; bot_answer a bot and an optional wait.
+    assert_eq!(listed[5]["name"], "list_bots");
+    assert!(listed[5]["inputSchema"]["required"].is_null() && listed[5]["inputSchema"]["properties"] == serde_json::json!({}));
+    assert_eq!(listed[6]["name"], "ask_bot");
+    assert_eq!(listed[6]["inputSchema"]["required"], serde_json::json!(["bot", "prompt"]));
+    assert_eq!(listed[7]["name"], "bot_answer");
+    assert_eq!(listed[7]["inputSchema"]["properties"]["wait"]["type"], "boolean");
+    assert_eq!(listed[7]["inputSchema"]["required"], serde_json::json!(["bot"]));
     assert!(
         server.handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).await.is_none(),
         "notifications receive no protocol reply"

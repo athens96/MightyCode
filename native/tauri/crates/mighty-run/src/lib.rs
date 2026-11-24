@@ -33,6 +33,7 @@ pub mod antigravity;
 pub mod apply;
 pub mod attachments;
 pub mod background_output;
+pub mod bot;
 pub mod checklist;
 pub mod checkpoints;
 pub mod claude_tasks;

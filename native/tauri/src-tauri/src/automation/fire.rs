@@ -49,9 +49,13 @@ fn over_budget(host: &Arc<Host>, job: &Job) -> Option<String> {
     })
 }
 
-/// The pane a heartbeat wakes: the workspace's agent pane with that title.
+/// The pane a heartbeat wakes: the workspace's agent pane with that title; MC-58: or, for `@handle`, the bot of that name in any
+/// workspace.
 fn heartbeat_pane(host: &Host, workspace: &str, title: &str) -> Option<String> {
     let view = host.view();
+    if title.trim_start().starts_with('@') {
+        return view.snapshot.bot_pane(title).map(|s| s.id().to_string());
+    }
     view.snapshot
         .sessions()
         .iter()
@@ -94,6 +98,13 @@ pub async fn fire(host: &Arc<Host>, request: FireRequest) -> String {
         FireMode::Heartbeat => action.pane.as_deref().and_then(|title| heartbeat_pane(host, &job.workspace, title)),
         FireMode::New => None,
     };
+    // MC-58: a bot is never made by a schedule: a heartbeat to a bot no pane is fails.
+    let bot_gone = action.mode == FireMode::Heartbeat && action.pane.as_deref().is_some_and(|t| t.trim_start().starts_with('@'));
+    if found.is_none() && bot_gone {
+        let handle = action.pane.as_deref().unwrap_or_default().trim().trim_start_matches('@').to_string();
+        fail(host, &id, host.locale.get_with("bot.ask.noBot", &[("handle", &handle)]));
+        return id;
+    }
     let pane = match found {
         Some(pane) => pane,
         None => {

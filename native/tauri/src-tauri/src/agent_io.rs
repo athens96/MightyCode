@@ -227,6 +227,15 @@ async fn handle_tool(host: &Arc<Host>, call: &TerminalCall) -> Result<Value, Str
     if call.tool == "open_url" {
         return open_url(host, call).await;
     }
+    if matches!(
+        call.tool.as_str(),
+        mighty_delegation::agent_io::tools::LIST_BOTS
+            | mighty_delegation::agent_io::tools::ASK_BOT
+            | mighty_delegation::agent_io::tools::BOT_ANSWER
+    ) {
+        // MC-58: bots, asked by another agent.
+        return crate::bot::tool(host, &call.pane_id, &call.tool, &call.value).await;
+    }
     if call.tool == mighty_delegation::agent_io::tools::BROWSER_CHECK {
         // MC-48: the pane's own dev server in a headless local browser.
         return crate::verify::tool(host, &call.pane_id, &call.value).await;

@@ -423,6 +423,9 @@ pub struct PaneInfo {
     /// MC-28: the pane this one was forked from: its id and title (as saved when the fork was made), for the row's label.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from: Option<PaneFork>,
+    /// MC-58: the bot this pane is: its handle (without the `@`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bot: Option<String>,
     /// MC-29: the compare runs this pane started, each summed up for its card (src-tauri compare.rs fills the children's states).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub compares: Vec<PaneCompare>,
@@ -578,6 +581,7 @@ pub fn pane_info(locale: &Locale, s: &RunSession, attention: Attention, now: Dat
             request_id: link.request_id.clone(),
             title: link.title.clone().unwrap_or_default(),
         }),
+        bot: s.bot.as_ref().map(|b| b.handle.clone()),
         compares: Vec::new(),
         ssh: None,
     }

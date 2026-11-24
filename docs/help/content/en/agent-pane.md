@@ -145,6 +145,21 @@ Codex and Antigravity use slightly different names (Codex: `/new`, `/approvals`,
 - The agent giving the opinion runs once, read-only (Claude in plan mode with read tools only, Codex in its read-only sandbox, Antigravity in plan mode in its sandbox, pi with read tools only). It changes no files, runs no commands and keeps no session. opencode and Hermes cannot be picked: their one-shot runs approve on their own.
 - What is sent is cut to size and lines that look like secrets are removed. The answer lands as an opinion card under the pane (agent, model, cost when known); {{ui:advisor.card.insert}} puts it into the composer so this pane's agent can act on it. Its cost goes into the usage ledger under this pane's workspace.
 
+### Bots {#bots}
+Give an agent pane a name and it becomes a bot. Choose {{ui:bot.menu.make}} from the pane header's ··· menu or by right-clicking the pane in the sidebar, then write its name and instructions. The sidebar shows `@name` beside the pane's title. A bot is still an ordinary pane: approval and question cards, the queue, the phone and remote mirrors work as usual.
+
+- **Name**: 1 to 32 lowercase letters, digits or `-`. Only one pane in a profile uses a name. Only a top-level agent pane on this computer can be a bot (not a delegated child pane or a remote mirror's pane).
+- **Instructions**: what the bot is for and how it works (up to 16 KB). They go after the first request of every new conversation, to the agent only; the request block on screen shows just the request you sent. Changed instructions apply from the next new conversation.
+- **Calling it**: use `@name` in place of a pane id.
+  - `mighty agent send @reviewer "look at PR 12"`, `mighty agent wait @reviewer --until done`, `mighty pane read @reviewer`
+  - A schedule's heartbeat: `pane: "@reviewer"`. It can call a bot in another workspace; when no bot has that name, no new pane is made and the run is recorded as failed.
+  - Other agents (Claude and Codex panes): the mighty-terminal tools `list_bots`, `ask_bot` and `bot_answer`. `ask_bot` sends and returns at once; `bot_answer` returns the state and the last answer (secrets redacted; with `wait: true` it waits up to 20 seconds).
+- **Safety rules**
+  - A request always runs with the bot pane's own settings and permissions. The caller cannot widen them.
+  - A bot cannot ask another bot or itself.
+  - Nothing is sent once the daily budget is spent.
+- To stop a pane being a bot, choose {{ui:bot.dialog.remove}} in {{ui:bot.menu.edit}}. The pane and its conversation stay.
+
 ### Context and usage {#session-info}
 The ring beside the send button shows how much context the conversation has used. Click it for {{ui:composer.sessionInfo.contextUsage}}, input, output and cache tokens, cost, the model used and the session IDs. Only values the CLI reported are shown; nothing is estimated.
 

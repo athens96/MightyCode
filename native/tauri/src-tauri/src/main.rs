@@ -24,6 +24,7 @@ mod ask;
 mod attention;
 mod automation;
 mod bodies;
+mod bot;
 mod build_info;
 mod cards;
 mod companion;

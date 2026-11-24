@@ -324,6 +324,31 @@ pub fn pane_worktree_on(pane: &PaneWorktree, session_id: &str, restoring: bool, 
     Some(copy)
 }
 
+/// MC-58: a bot kept as it can be called: a valid handle, its instructions trimmed within their limit (on a character boundary).
+pub fn bot(bot: Option<&crate::model::PaneBot>) -> Option<crate::model::PaneBot> {
+    let bot = bot.filter(|b| crate::model::PaneBot::valid_handle(&b.handle))?;
+    let instructions = bot.instructions.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(|t| {
+        let mut end = t.len().min(crate::model::BOT_INSTRUCTIONS_LIMIT);
+        while !t.is_char_boundary(end) {
+            end -= 1;
+        }
+        t[..end].to_string()
+    });
+    Some(crate::model::PaneBot { handle: bot.handle.clone(), instructions })
+}
+
+/// MC-58: one pane per bot handle: a later pane (in the saved order) with a handle already taken is no bot. A mirror's panes are
+/// the host's and never count.
+fn unique_bots(sessions: &mut [Arc<RunSession>]) {
+    let mut seen = HashSet::new();
+    for pane in sessions.iter_mut().filter(|p| p.mirror.is_none()) {
+        let Some(handle) = pane.bot.as_ref().map(|b| b.handle.clone()) else { continue };
+        if !seen.insert(handle) {
+            Arc::make_mut(pane).bot = None;
+        }
+    }
+}
+
 /// MC-28: a fork link kept as it can be shown and acted on: the source a pane id other than the pane's own, the request an id, the
 /// mode one of the two words, the summary within its limit; the pending CLI fork only beside a summary or a known mode.
 pub fn forked_from(link: Option<&crate::model::ForkedFrom>, own_id: &str) -> Option<crate::model::ForkedFrom> {
@@ -1971,6 +1996,11 @@ fn normalize_session(
         ask_target: if plan_mode && !remote_ids.contains(s.workspace_id()) { s.ask_target.clone() } else { None },
         linked_task: if kind == "claude" { linked_task(s.linked_task.as_ref()) } else { None },
         forked_from: if kind == "claude" { forked_from(s.forked_from.as_ref(), s.id()) } else { None },
+        bot: if kind == "claude" && s.parent_session_id.is_none() && !remote_ids.contains(s.workspace_id()) {
+            bot(s.bot.as_ref())
+        } else {
+            None
+        },
         opinions: if kind == "claude" { opinions(s.opinions.as_ref(), restoring) } else { None },
         compare_runs: if kind == "claude" { compare_runs(s.compare_runs.as_ref(), restoring) } else { None },
         compare_member: if kind == "claude" {
@@ -2121,7 +2151,8 @@ pub fn normalize_with(value: &AppSnapshot, restoring: bool, mut cache: Option<&m
     {
         normalized.insert(s.id().to_string(), Arc::new(normalize_session(s, restoring, &remote_ids, &ssh_ids, &mut mirror_budget)?));
     }
-    let sessions: Vec<Arc<RunSession>> = listed.iter().filter_map(|s| normalized.remove(s.id())).collect();
+    let mut sessions: Vec<Arc<RunSession>> = listed.iter().filter_map(|s| normalized.remove(s.id())).collect();
+    unique_bots(&mut sessions);
     let workspace_id = match &value.active_workspace_id {
         Some(id) if ids.contains(id) => Some(id.clone()),
         _ => workspaces.first().map(|w| w.id().to_string()),
@@ -2512,6 +2543,38 @@ mod tests {
         assert_eq!(page.active_session_id.as_deref(), Some("s1"));
         assert_eq!(page.pane_layout_modes.as_ref().unwrap()["w1"].as_deref(), Some("grid"));
         assert_eq!(page.sidebar_width, 252.0);
+    }
+
+    /// MC-58: a bot is kept on a top-level agent pane with a valid handle, one pane per handle (the first in order), its
+    /// instructions trimmed; it survives a write and a read; `@handle` finds its pane.
+    #[test]
+    fn a_bot_is_kept_valid_and_unique_and_found_by_its_handle() {
+        let long = "x".repeat(crate::model::BOT_INSTRUCTIONS_LIMIT + 10);
+        let s = state(&format!(
+            r#"{{"version":1,"workspaces":[{{"id":"w1","name":"A","path":"{}"}}],"sessions":[
+                {{"id":"s1","workspaceId":"w1","title":"One","bot":{{"handle":"reviewer","instructions":"  Review.  "}}}},
+                {{"id":"s2","workspaceId":"w1","title":"Two","bot":{{"handle":"reviewer"}}}},
+                {{"id":"s3","workspaceId":"w1","title":"Three","bot":{{"handle":"Bad Name"}}}},
+                {{"id":"s4","workspaceId":"w1","kind":"shell","title":"Four","bot":{{"handle":"shell"}}}},
+                {{"id":"s5","workspaceId":"w1","title":"Five","parentSessionId":"s1","bot":{{"handle":"child"}}}},
+                {{"id":"s6","workspaceId":"w1","title":"Six","bot":{{"handle":"ci-fixer","instructions":"{long}"}}}}]}}"#,
+            root()
+        ));
+        let page = normalize(&s, true).unwrap();
+        let bot = |id: &str| page.session(id).and_then(|p| p.bot.clone());
+        assert_eq!(bot("s1"), Some(crate::model::PaneBot { handle: "reviewer".into(), instructions: Some("Review.".into()) }));
+        assert_eq!(bot("s2"), None, "a handle already taken");
+        assert_eq!(bot("s3"), None, "not a handle");
+        assert_eq!(bot("s4"), None, "a terminal pane is no bot");
+        assert_eq!(bot("s5"), None, "a delegated child is no bot");
+        assert_eq!(bot("s6").and_then(|b| b.instructions).map(|t| t.len()), Some(crate::model::BOT_INSTRUCTIONS_LIMIT));
+        assert_eq!(page.bot_pane("@Reviewer").map(|p| p.id()), Some("s1"));
+        assert_eq!(page.pane_or_bot("@ci-fixer").map(|p| p.id()), Some("s6"));
+        assert_eq!(page.pane_or_bot("s2").map(|p| p.id()), Some("s2"));
+        assert!(page.bot_pane("@nobody").is_none());
+        assert_eq!(page.bots().count(), 2);
+        let again = AppSnapshot::read(&serde_json::from_str(&crate::json::Wire::to_json(&page)).unwrap()).unwrap();
+        assert_eq!(again.session("s1").and_then(|p| p.bot.clone()), bot("s1"), "a write and a read keep it");
     }
 
     /// 0.5 has no browser pane: a state an older version saved with one (and an agent's browser pane, and the browser's settings)

@@ -404,6 +404,8 @@ export interface RunSession {
   linkedTask?: LinkedTask | null;
   /** MC-28: the pane this one was forked from (새 worktree로 갈라내기, 여기서 갈라내기). */
   forkedFrom?: ForkedFrom | null;
+  /** MC-58: the bot this agent pane is: its handle and standing instructions. */
+  bot?: { handle: string; instructions?: string } | null;
   /** MC-28: other agents' read-only opinions on the pane's work (/advisor, /committee), the newest last. */
   opinions?: OpinionCard[];
   /** The shell blocks of the agent's replies the user ran (MightyCode.Core/ShellBlockRuns.cs), one per block key. */

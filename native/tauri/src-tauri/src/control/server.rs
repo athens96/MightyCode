@@ -40,6 +40,10 @@ pub trait Backend: Send + Sync + 'static {
     /// The pane's state now; None when there is no such pane.
     fn state(&self, pane: &str) -> Option<PaneState>;
     fn subscribe(&self) -> broadcast::Receiver<BusEvent>;
+    /// MC-58: the pane id `pane` names: a bot's `@handle` becomes its pane's id; anything else is the id as given.
+    fn resolve(&self, pane: &str) -> Result<String, ControlError> {
+        Ok(pane.to_string())
+    }
     /// A line of output as it may leave the app (secrets redacted).
     fn redact(&self, text: &str) -> String {
         text.to_string()
@@ -185,11 +189,29 @@ async fn serve_connection(connection: AgentIoConnection, backend: Arc<dyn Backen
     }
 }
 
+/// The command with a bot's `@handle` replaced by its pane's id (MC-58).
+fn resolved(backend: &dyn Backend, command: Command) -> Result<Command, ControlError> {
+    let pane = |pane: String| if pane.starts_with('@') { backend.resolve(&pane) } else { Ok(pane) };
+    Ok(match command {
+        Command::PaneRead { pane: p, lines } => Command::PaneRead { pane: pane(p)?, lines },
+        Command::AgentSend { pane: p, text } => Command::AgentSend { pane: pane(p)?, text },
+        Command::AgentWait { pane: p, until, timeout } => Command::AgentWait { pane: pane(p)?, until, timeout },
+        Command::PaneWaitOutput { pane: p, regex, timeout } => Command::PaneWaitOutput { pane: pane(p)?, regex, timeout },
+        Command::Events { pane: p, types } => Command::Events { pane: p.map(pane).transpose()?, types },
+        other => other,
+    })
+}
+
 /// Answers one request; false when the connection is done.
 async fn answer(connection: &mut Connection, backend: &dyn Backend, auth: &Auth, request: Request) -> bool {
     let id = request.id;
     let generation = auth.generation();
-    let result = match request.command {
+    // MC-58: a bot's `@handle` stands for its pane's id in every pane command.
+    let command = match resolved(backend, request.command) {
+        Ok(command) => command,
+        Err(error) => return connection.write(&error_line(id, &error)).await,
+    };
+    let result = match command {
         Command::Status => backend.status(),
         Command::WorkspaceList => backend.workspaces(),
         Command::PaneList { workspace } => backend.panes(workspace.as_deref()),

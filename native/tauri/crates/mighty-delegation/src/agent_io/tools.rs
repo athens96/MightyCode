@@ -21,8 +21,16 @@ pub const GUIDANCE: &str = "Use run_in_terminal for user-visible or long-running
 /// MC-48: the browser check of the pane's own dev server.
 pub const BROWSER_CHECK: &str = "mighty_browser_check";
 
-/// `AgentIOTools.All`, in this order (MC-48's browser check last).
-pub const ALL: [AgentIoTool; 5] = [
+/// MC-58: the bots another agent may ask, their request, and a bot's answer.
+pub const LIST_BOTS: &str = "list_bots";
+pub const ASK_BOT: &str = "ask_bot";
+pub const BOT_ANSWER: &str = "bot_answer";
+
+/// MC-58: the longest prompt `ask_bot` sends, in bytes.
+pub const BOT_PROMPT_BYTES: usize = 65_536;
+
+/// `AgentIOTools.All`, in this order (MC-48's browser check, then MC-58's bot tools).
+pub const ALL: [AgentIoTool; 8] = [
     AgentIoTool {
         name: "run_in_terminal",
         argument: "command",
@@ -47,6 +55,21 @@ pub const ALL: [AgentIoTool; 5] = [
         name: BROWSER_CHECK,
         argument: "url",
         description: "Check this worktree's running dev server in a headless local Chrome/Edge/Chromium/Brave: visits each path (default /) and returns console errors, uncaught exceptions, failed requests (4xx/5xx, network errors), an accessibility-tree summary and a saved screenshot's name. Arguments are optional: url (http://localhost or 127.0.0.1 within this worktree's port block or its run action's address; default: the running run action's address) and paths (a list, or one string of paths separated by spaces). Other addresses are refused. Says so plainly when no browser is installed.",
+    },
+    AgentIoTool {
+        name: LIST_BOTS,
+        argument: "",
+        description: "List the bots the person set up in Mighty Code: other agent panes, each with a name (@handle), what it is for, its workspace and whether it is busy. Ask one with ask_bot.",
+    },
+    AgentIoTool {
+        name: ASK_BOT,
+        argument: "prompt",
+        description: "Send a request to a bot (an agent pane the person named, see list_bots): bot is its @handle, prompt the request. The bot works on it with its own settings and permissions, in its own pane; when it is busy the request waits in its queue. Returns at once; read the answer with bot_answer. A bot cannot ask another bot.",
+    },
+    AgentIoTool {
+        name: BOT_ANSWER,
+        argument: "bot",
+        description: "Read a bot's state and the answer to its last request: status (running, blocked while it waits for the person, or done) and its answer, secrets redacted. With wait: true it waits up to 20 seconds for the bot to finish first; call it again while it is still running.",
     },
 ];
 
@@ -99,6 +122,9 @@ pub(crate) fn validate_in(document: &Lenient, tool: &str, arguments: &Value) -> 
     let Value::Object(map) = arguments else { return Err(Invalid::NotOneString) };
     if tool == BROWSER_CHECK {
         return browser_check_arguments(document, map);
+    }
+    if matches!(tool, LIST_BOTS | ASK_BOT | BOT_ANSWER) {
+        return bot_arguments(document, tool, map);
     }
     if map.len() != 1 {
         return Err(Invalid::NotOneString);
@@ -166,6 +192,42 @@ fn browser_check_arguments(document: &Lenient, map: &serde_json::Map<String, Val
         return Err(Invalid::NotOneString);
     }
     Ok(serde_json::json!({ "url": url, "paths": paths }).to_string())
+}
+
+/// MC-58: the bot tools' arguments as compact JSON: `list_bots` takes none; `ask_bot` a `bot` (at most 40 characters) and a
+/// `prompt` (at most [`BOT_PROMPT_BYTES`], no NUL); `bot_answer` a `bot` and an optional boolean `wait`. The app finds the bot.
+fn bot_arguments(document: &Lenient, tool: &str, map: &serde_json::Map<String, Value>) -> Result<String, Invalid> {
+    let allowed: &[&str] = match tool {
+        LIST_BOTS => &[],
+        ASK_BOT => &["bot", "prompt"],
+        _ => &["bot", "wait"],
+    };
+    if map.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return Err(Invalid::NotOneString);
+    }
+    if tool == LIST_BOTS {
+        return Ok("{}".into());
+    }
+    let bot = document.text(map.get("bot"))?.map(str::trim).filter(|b| !b.is_empty()).ok_or(Invalid::NotOneString)?;
+    if bot.chars().count() > 40 || bot.chars().any(char::is_control) {
+        return Err(Invalid::TooLong);
+    }
+    if tool == ASK_BOT {
+        let prompt = document.text(map.get("prompt"))?.ok_or(Invalid::NotOneString)?;
+        if prompt.trim().is_empty() || prompt.contains('\0') {
+            return Err(Invalid::NotOneString);
+        }
+        if prompt.len() > BOT_PROMPT_BYTES {
+            return Err(Invalid::TooLong);
+        }
+        return Ok(serde_json::json!({ "bot": bot, "prompt": prompt }).to_string());
+    }
+    let wait = match map.get("wait") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(wait)) => *wait,
+        Some(_) => return Err(Invalid::NotOneString),
+    };
+    Ok(serde_json::json!({ "bot": bot, "wait": wait }).to_string())
 }
 
 /// `Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" && uri.UserInfo.Length == 0 &&
@@ -254,7 +316,29 @@ mod tests {
         assert!(!web_address("https://:@example.com") && web_address("https://@example.com/") && web_address("HTTPS://Example.com"));
         assert!(!web_address("http:///path") && !web_address("ftp://example.com") && !web_address("https://exa mple.com"));
         assert_eq!(absolute_uri("http://localhost:3000"), "http://localhost:3000/");
-        assert_eq!(ALL.map(|tool| tool.name), ["run_in_terminal", "read_latest_output", "stop", "open_url", "mighty_browser_check"]);
+        assert_eq!(
+            ALL.map(|tool| tool.name),
+            ["run_in_terminal", "read_latest_output", "stop", "open_url", "mighty_browser_check", "list_bots", "ask_bot", "bot_answer"]
+        );
         assert!(ALL[0].description.starts_with(GUIDANCE));
+    }
+
+    /// MC-58: the bot tools' arguments come out as compact JSON, with anything else refused.
+    #[test]
+    fn the_bot_tools_take_their_own_arguments_only() {
+        assert_eq!(validate(LIST_BOTS, &json!({})).unwrap(), "{}");
+        assert_eq!(validate(LIST_BOTS, &json!({"bot": "x"})), Err(Invalid::NotOneString));
+        let sent: Value = serde_json::from_str(&validate(ASK_BOT, &json!({"bot": " @reviewer ", "prompt": "look"})).unwrap()).unwrap();
+        assert_eq!(sent, json!({"bot": "@reviewer", "prompt": "look"}));
+        assert_eq!(validate(ASK_BOT, &json!({"bot": "@r"})), Err(Invalid::NotOneString), "no prompt");
+        assert_eq!(validate(ASK_BOT, &json!({"bot": "@r", "prompt": "  "})), Err(Invalid::NotOneString));
+        assert_eq!(validate(ASK_BOT, &json!({"bot": "@r", "prompt": "x", "mode": "fullAccess"})), Err(Invalid::NotOneString));
+        assert_eq!(validate(ASK_BOT, &json!({"bot": "@r", "prompt": "x".repeat(BOT_PROMPT_BYTES + 1)})), Err(Invalid::TooLong));
+        assert_eq!(validate(ASK_BOT, &json!({"bot": "x".repeat(41), "prompt": "x"})), Err(Invalid::TooLong));
+        let read: Value = serde_json::from_str(&validate(BOT_ANSWER, &json!({"bot": "@r", "wait": true})).unwrap()).unwrap();
+        assert_eq!(read, json!({"bot": "@r", "wait": true}));
+        let read: Value = serde_json::from_str(&validate(BOT_ANSWER, &json!({"bot": "@r"})).unwrap()).unwrap();
+        assert_eq!(read["wait"], false);
+        assert_eq!(validate(BOT_ANSWER, &json!({"bot": "@r", "wait": "yes"})), Err(Invalid::NotOneString));
     }
 }

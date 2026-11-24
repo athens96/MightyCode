@@ -48,7 +48,7 @@ pub const CODEX_CHECKLIST_START: &str = codex_checklist_start!();
 
 /// How each note the app may add after a request starts: the words every instruction is built from, so the writer and
 /// [`without_app_notes`] cannot drift apart.
-pub const APPENDED_NOTE_STARTS: [&str; 3] = [ACP_NOTE_START, AGY_CHECKLIST_START, CODEX_CHECKLIST_START];
+pub const APPENDED_NOTE_STARTS: [&str; 4] = [ACP_NOTE_START, AGY_CHECKLIST_START, CODEX_CHECKLIST_START, crate::bot::NOTE_START];
 
 /// A stored user message without the notes the app added after it (each its own paragraph at the end, starting with one of
 /// [`APPENDED_NOTE_STARTS`]), trimmed; a message with none is returned as it is. The same words inside what the user wrote, or in a
