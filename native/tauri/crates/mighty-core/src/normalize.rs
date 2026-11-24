@@ -326,7 +326,8 @@ pub fn pane_worktree_on(pane: &PaneWorktree, session_id: &str, restoring: bool, 
 
 /// MC-58: a bot kept as it can be called: a valid handle, its instructions trimmed within their limit (on a character boundary).
 pub fn bot(bot: Option<&crate::model::PaneBot>) -> Option<crate::model::PaneBot> {
-    let bot = bot.filter(|b| crate::model::PaneBot::valid_handle(&b.handle))?;
+    let bot = bot?;
+    let handle = crate::model::PaneBot::handle_of(&bot.handle)?;
     let instructions = bot.instructions.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(|t| {
         let mut end = t.len().min(crate::model::BOT_INSTRUCTIONS_LIMIT);
         while !t.is_char_boundary(end) {
@@ -334,7 +335,7 @@ pub fn bot(bot: Option<&crate::model::PaneBot>) -> Option<crate::model::PaneBot>
         }
         t[..end].to_string()
     });
-    Some(crate::model::PaneBot { handle: bot.handle.clone(), instructions })
+    Some(crate::model::PaneBot { handle, instructions })
 }
 
 /// MC-58: one pane per bot handle: a later pane (in the saved order) with a handle already taken is no bot. A mirror's panes are
@@ -342,7 +343,7 @@ pub fn bot(bot: Option<&crate::model::PaneBot>) -> Option<crate::model::PaneBot>
 fn unique_bots(sessions: &mut [Arc<RunSession>]) {
     let mut seen = HashSet::new();
     for pane in sessions.iter_mut().filter(|p| p.mirror.is_none()) {
-        let Some(handle) = pane.bot.as_ref().map(|b| b.handle.clone()) else { continue };
+        let Some(handle) = pane.bot.as_ref().map(|b| crate::model::PaneBot::key(&b.handle)) else { continue };
         if !seen.insert(handle) {
             Arc::make_mut(pane).bot = None;
         }
@@ -2575,6 +2576,34 @@ mod tests {
         assert_eq!(page.bots().count(), 2);
         let again = AppSnapshot::read(&serde_json::from_str(&crate::json::Wire::to_json(&page)).unwrap()).unwrap();
         assert_eq!(again.session("s1").and_then(|p| p.bot.clone()), bot("s1"), "a write and a read keep it");
+    }
+
+    /// MC-58: a bot's name may be 한글 or any script, with capitals and `-`, `_`, `.` inside; it is kept composed and as written,
+    /// compared without case, so `@Reviewer` and `@reviewer` are one bot and a 한글 name typed decomposed finds the composed one.
+    #[test]
+    fn a_bot_name_may_be_korean_or_any_script_and_is_compared_without_case() {
+        use crate::model::PaneBot;
+        for name in ["리뷰어", "코드_리뷰.v2", "Reviewer", "審查", "ci-fixer", "a"] {
+            assert!(PaneBot::handle_of(name).is_some(), "{name}");
+        }
+        for name in ["", "@", "코드 리뷰", "-x", "_x", ".x", "a/b", "a@b", "a:b", "x\u{0}", &"가".repeat(33)] {
+            assert!(PaneBot::handle_of(name).is_none(), "{name:?}");
+        }
+        let decomposed = "\u{1105}\u{1175}\u{1107}\u{1172}\u{110B}\u{1165}"; // 리뷰어, as macOS may hand it over
+        assert_eq!(PaneBot::handle_of(decomposed).as_deref(), Some("리뷰어"));
+        let s = state(&format!(
+            r#"{{"version":1,"workspaces":[{{"id":"w1","name":"A","path":"{}"}}],"sessions":[
+                {{"id":"s1","workspaceId":"w1","title":"One","bot":{{"handle":"리뷰어"}}}},
+                {{"id":"s2","workspaceId":"w1","title":"Two","bot":{{"handle":"Reviewer"}}}},
+                {{"id":"s3","workspaceId":"w1","title":"Three","bot":{{"handle":"reviewer"}}}}]}}"#,
+            root()
+        ));
+        let page = normalize(&s, true).unwrap();
+        assert_eq!(page.session("s2").and_then(|p| p.bot.clone()).map(|b| b.handle).as_deref(), Some("Reviewer"), "kept as written");
+        assert!(page.session("s3").is_some_and(|p| p.bot.is_none()), "the same name without case is taken");
+        assert_eq!(page.bot_pane("@리뷰어").map(|p| p.id()), Some("s1"));
+        assert_eq!(page.bot_pane(&format!("@{decomposed}")).map(|p| p.id()), Some("s1"));
+        assert_eq!(page.bot_pane("@REVIEWER").map(|p| p.id()), Some("s2"));
     }
 
     /// 0.5 has no browser pane: a state an older version saved with one (and an agent's browser pane, and the browser's settings)

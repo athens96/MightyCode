@@ -5006,12 +5006,13 @@
   "bot.dialog.save": "Save",
   "bot.dialog.remove": "Stop Being a Bot",
   "bot.dialog.cancel": "Cancel",
-  "bot.error.handle": "A name is 1 to 32 lowercase letters, digits or -, starting with a letter or a digit.",
+  "bot.error.handle": "A name is 1 to 32 letters (any language) and digits, with - _ or . between them; no spaces, starting with a letter or a digit.",
   "bot.error.taken": "@{handle} is already another pane's name.",
   "bot.error.instructions": "Instructions can be up to 16 KB.",
   "bot.ask.noBot": "There is no bot named @{handle}. See the bots with list_bots.",
   "bot.ask.fromBot": "A bot cannot ask another bot.",
   "bot.ask.itself": "A bot cannot ask itself.",
   "bot.ask.overBudget": "Not sent: today's budget is spent ({spent} of {budget}).",
-  "bot.label": "Bot @{handle}: other agents, schedules and the mighty command call it by this name"
+  "bot.label": "Bot @{handle}: other agents, schedules and the mighty command call it by this name",
+  "bot.dialog.handleHint": "reviewer"
 }

@@ -256,8 +256,8 @@ fn optional_text(object: &Map<String, Value>, name: &str) -> Option<String> {
 /// `@handle` in place of a pane's id (the app finds its pane).
 fn id_field(object: &Map<String, Value>, name: &str) -> Result<String, ControlError> {
     let id = text_field(object, name)?;
-    let bare = id.strip_prefix('@').unwrap_or(&id);
-    if id.len() > 200 || bare.is_empty() || !bare.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':')) {
+    let named = id.strip_prefix('@').is_some_and(|name| crate::model::PaneBot::handle_of(name).is_some());
+    if !named && (id.len() > 200 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b':'))) {
         return Err(ControlError::bad(format!("'{name}' is not an id")));
     }
     Ok(id)
@@ -486,6 +486,13 @@ mod tests {
         assert_eq!(parse(r#"{"v":2,"cmd":"status"}"#).unwrap_err().code, ErrorCode::BadRequest);
         assert_eq!(parse(r#"{"cmd":"pane.read"}"#).unwrap_err().message, "'pane' is missing");
         assert_eq!(parse(r#"{"cmd":"pane.read","pane":"../x"}"#).unwrap_err().message, "'pane' is not an id");
+        // MC-58: a bot's @name (any script) stands for a pane; anything else after @ is no id.
+        for named in ["@리뷰어", "@Reviewer", "@ci-fixer"] {
+            let line = format!(r#"{{"cmd":"pane.read","pane":"{named}"}}"#);
+            assert!(matches!(parse(&line).unwrap(), Command::PaneRead { ref pane, .. } if pane == named), "{named}");
+        }
+        assert_eq!(parse(r#"{"cmd":"pane.read","pane":"@a b"}"#).unwrap_err().message, "'pane' is not an id");
+        assert_eq!(parse(r#"{"cmd":"pane.read","pane":"@"}"#).unwrap_err().message, "'pane' is not an id");
         assert_eq!(parse(r#"{"cmd":"agent.wait","pane":"p","until":"soon"}"#).unwrap_err().code, ErrorCode::BadRequest);
         assert_eq!(parse(r#"{"cmd":"events.subscribe","types":["secrets"]}"#).unwrap_err().code, ErrorCode::BadRequest);
         assert_eq!(parse(r#"{"cmd":"agent.wait","pane":"p","until":"idle","timeoutMs":-1}"#).unwrap_err().code, ErrorCode::BadRequest);

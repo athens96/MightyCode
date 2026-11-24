@@ -51,9 +51,9 @@ pub async fn tool(host: &Arc<Host>, caller: &str, tool: &str, value: &str) -> Re
     }
 }
 
-/// A handle as the agent sees it: `@reviewer`.
+/// A name as the agent sees it: `@리뷰어` (as the bot's own name says it when there is one).
 fn shown(handle: &str) -> String {
-    format!("@{}", handle.trim().trim_start_matches('@').to_ascii_lowercase())
+    format!("@{}", PaneBot::handle_of(handle).unwrap_or_else(|| handle.trim().trim_start_matches('@').to_string()))
 }
 
 pub fn register(methods: &mut Registry) {
@@ -68,14 +68,14 @@ pub fn register(methods: &mut Registry) {
 /// Why a handle cannot be saved on pane `id`: not a handle, or another pane's.
 fn refusal(host: &Host, id: &str, handle: &str, instructions: &str) -> Option<String> {
     let locale = host.locale;
-    let Some(handle) = PaneBot::valid_handle(handle.trim_start_matches('@')).then(|| handle.trim_start_matches('@')) else {
+    let Some(handle) = PaneBot::handle_of(handle) else {
         return Some(locale.get("bot.error.handle"));
     };
     if instructions.trim().len() > BOT_INSTRUCTIONS_LIMIT {
         return Some(locale.get("bot.error.instructions"));
     }
     let view = host.view();
-    view.snapshot.bot_pane(handle).filter(|pane| pane.id() != id).map(|_| locale.get_with("bot.error.taken", &[("handle", handle)]))
+    view.snapshot.bot_pane(&handle).filter(|pane| pane.id() != id).map(|_| locale.get_with("bot.error.taken", &[("handle", &handle)]))
 }
 
 /// The pane menu's bot sheet: the handle and the instructions, saved on the pane (봇 해제 takes the bot off it). An agent pane of
@@ -101,7 +101,7 @@ pub fn open(host: &Arc<Host>, id: String) {
         }
         let name = El::text_box(handle_field.get())
             .header(locale.get("bot.dialog.handle"))
-            .placeholder("reviewer")
+            .placeholder(locale.get("bot.dialog.handleHint"))
             .on_text(move |words| into_handle.set(words));
         let words = El::text_box(instructions_field.get())
             .multiline()

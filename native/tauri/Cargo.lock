@@ -2314,6 +2314,7 @@ dependencies = [
  "indexmap 2.14.2",
  "serde",
  "serde_json",
+ "unicode-normalization",
  "unicode-segmentation",
  "uuid",
 ]

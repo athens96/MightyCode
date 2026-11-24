@@ -5006,12 +5006,13 @@
   "bot.dialog.save": "保存",
   "bot.dialog.remove": "取消机器人",
   "bot.dialog.cancel": "取消",
-  "bot.error.handle": "名字由 1 到 32 个小写字母、数字或 - 组成，并以字母或数字开头。",
+  "bot.error.handle": "名字由 1 到 32 个文字（任何语言）和数字组成，中间可用 - _ .；不能有空格，以文字或数字开头。",
   "bot.error.taken": "@{handle} 已被另一个窗格使用。",
   "bot.error.instructions": "说明最多 16 KB。",
   "bot.ask.noBot": "没有名为 @{handle} 的机器人。请用 list_bots 查看机器人列表。",
   "bot.ask.fromBot": "机器人不能向另一个机器人发送请求。",
   "bot.ask.itself": "机器人不能向自己发送请求。",
   "bot.ask.overBudget": "今天的预算已用完，未发送（今天 {spent} / 预算 {budget}）。",
-  "bot.label": "机器人 @{handle}：其他代理、计划任务和 mighty 命令用这个名字调用它"
+  "bot.label": "机器人 @{handle}：其他代理、计划任务和 mighty 命令用这个名字调用它",
+  "bot.dialog.handleHint": "审查员"
 }

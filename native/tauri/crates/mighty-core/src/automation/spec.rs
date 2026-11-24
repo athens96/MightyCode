@@ -130,7 +130,7 @@ impl Action {
         if let Some(bot) = self.pane.as_deref().map(str::trim).filter(|p| p.starts_with('@'))
             && crate::model::PaneBot::handle_of(bot).is_none()
         {
-            return Err(format!("'{bot}' is not a bot's name: @ and 1 to 32 lowercase letters, digits or -"));
+            return Err(format!("'{bot}' is not a bot's name: @ and 1 to 32 letters or digits (-, _ and . between them)"));
         }
         Ok(())
     }

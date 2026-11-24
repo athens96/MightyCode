@@ -5006,12 +5006,13 @@
   "bot.dialog.save": "保存",
   "bot.dialog.remove": "ボットを解除",
   "bot.dialog.cancel": "キャンセル",
-  "bot.error.handle": "名前は英小文字・数字・- の 1〜32 文字で、英小文字か数字で始めます。",
+  "bot.error.handle": "名前は 1〜32 文字の文字（どの言語でも）と数字で、間に - _ . を使えます。空白は使えず、文字か数字で始めます。",
   "bot.error.taken": "@{handle} はすでに別のペインの名前です。",
   "bot.error.instructions": "指示は 16 KB までです。",
   "bot.ask.noBot": "@{handle} というボットはありません。list_bots で一覧を確認してください。",
   "bot.ask.fromBot": "ボットはほかのボットにリクエストできません。",
   "bot.ask.itself": "ボットは自分自身にリクエストできません。",
   "bot.ask.overBudget": "今日の予算を使い切ったため送りませんでした（今日 {spent} / 予算 {budget}）。",
-  "bot.label": "ボット @{handle}：ほかのエージェント、スケジュール、mighty コマンドがこの名前で呼びます"
+  "bot.label": "ボット @{handle}：ほかのエージェント、スケジュール、mighty コマンドがこの名前で呼びます",
+  "bot.dialog.handleHint": "レビュアー"
 }

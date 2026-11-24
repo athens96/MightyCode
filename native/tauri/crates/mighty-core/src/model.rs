@@ -335,8 +335,8 @@ impl AppSnapshot {
     }
     /// MC-58: the pane that is the bot `text` names (`@reviewer` or `reviewer`); a mirror's panes are the host's and never answer.
     pub fn bot_pane(&self, text: &str) -> Option<&Arc<RunSession>> {
-        let handle = PaneBot::handle_of(text)?;
-        self.sessions().iter().find(|s| s.mirror.is_none() && s.bot.as_ref().is_some_and(|b| b.handle == handle))
+        PaneBot::handle_of(text)?;
+        self.sessions().iter().find(|s| s.mirror.is_none() && s.bot.as_ref().is_some_and(|b| b.answers_to(text)))
     }
     /// MC-58: the pane `text` names: a pane id, or a bot's `@handle`.
     pub fn pane_or_bot(&self, text: &str) -> Option<&Arc<RunSession>> {
@@ -1143,8 +1143,8 @@ impl Wire for ForkedFrom {
 /// (`@handle`), and the standing instructions a new conversation of the pane starts with. Lenient: damage loads as None.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PaneBot {
-    /// Lowercase letters, digits and `-`, 1 to [`BOT_HANDLE_LIMIT`] characters, starting with a letter or a digit; one pane per
-    /// handle in a profile.
+    /// Letters of any script (한글 included) and digits, with `-`, `_` and `.` between them, 1 to [`BOT_HANDLE_LIMIT`] characters,
+    /// starting with a letter or a digit, kept as written (composed); one pane per name in a profile, compared without case.
     pub handle: String,
     /// What the bot is for and how it works, put in front of a new conversation's first request; at most
     /// [`BOT_INSTRUCTIONS_LIMIT`] bytes.
@@ -1157,25 +1157,44 @@ pub const BOT_HANDLE_LIMIT: usize = 32;
 pub const BOT_INSTRUCTIONS_LIMIT: usize = 16 * 1024;
 
 impl PaneBot {
-    /// Whether `handle` is a bot handle as written (no `@`).
+    /// Whether `handle` is a bot name as written (no `@`): letters of any script, digits (and a decomposed 한글's marks), `-`, `_`
+    /// and `.`, starting with a letter or a digit, at most [`BOT_HANDLE_LIMIT`] characters.
     pub fn valid_handle(handle: &str) -> bool {
         let mut chars = handle.chars();
-        chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        chars.next().is_some_and(char::is_alphanumeric)
             && handle.chars().count() <= BOT_HANDLE_LIMIT
-            && handle.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            && handle.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.') || is_mark(c))
     }
 
-    /// The handle `text` names: `@reviewer` or `reviewer`, case and surrounding space aside; None when it is not one.
+    /// The name `text` gives: `@리뷰어`, `리뷰어` or `@Reviewer`, surrounding space aside, composed (NFC) and otherwise as written;
+    /// None when it is not one.
     pub fn handle_of(text: &str) -> Option<String> {
-        let handle = text.trim().trim_start_matches('@').to_ascii_lowercase();
+        use unicode_normalization::UnicodeNormalization as _;
+        let handle: String = text.trim().trim_start_matches('@').nfc().collect();
         Self::valid_handle(&handle).then_some(handle)
     }
+
+    /// What two names are compared by: composed and without case (`Reviewer` and `reviewer` are one bot).
+    pub fn key(handle: &str) -> String {
+        use unicode_normalization::UnicodeNormalization as _;
+        handle.trim().trim_start_matches('@').nfc().collect::<String>().to_lowercase()
+    }
+
+    /// Whether this bot answers to `text` (`@name` or `name`).
+    pub fn answers_to(&self, text: &str) -> bool {
+        Self::handle_of(text).is_some_and(|name| Self::key(&name) == Self::key(&self.handle))
+    }
+}
+
+/// A combining mark (a decomposed 한글 syllable's vowel or final, an accent): kept inside a name, never first.
+fn is_mark(c: char) -> bool {
+    matches!(c as u32, 0x0300..=0x036F | 0x1160..=0x11FF | 0x302E..=0x302F | 0xD7B0..=0xD7FF)
 }
 
 impl Wire for PaneBot {
     fn read(value: &Value) -> R<Self> {
         let o = Obj::of(value, "a bot")?;
-        let Some(handle) = json::opt_string(o.get("handle"))?.filter(|h| PaneBot::valid_handle(h)) else {
+        let Some(handle) = json::opt_string(o.get("handle"))?.and_then(|h| PaneBot::handle_of(&h)) else {
             return fail("a bot without a handle");
         };
         Ok(PaneBot { handle, instructions: lenient_string(o.get("instructions")) })

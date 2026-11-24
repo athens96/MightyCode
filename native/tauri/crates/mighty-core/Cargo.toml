@@ -14,6 +14,8 @@ uuid.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 unicode-segmentation.workspace = true
+# MC-58: a bot's name is compared composed (NFC), so 한글 typed either way is one name.
+unicode-normalization = "0.1"
 indexmap.workspace = true
 # MC-3: the daemon protocol carries process output as base64.
 base64 = "0.22"
