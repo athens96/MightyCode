@@ -6,12 +6,12 @@ use std::sync::Arc;
 use mighty_core::model_label::provider_label;
 use mighty_platform::BoxFuture;
 
-use crate::coordinator::{Coordinator, MAXIMUM_DEPTH, MAXIMUM_OPEN_CHILDREN, host_task};
+use crate::coordinator::{Coordinator, MAXIMUM_DEPTH, host_task};
 use crate::copy::{DelegationCopy, DelegationCopyKind, MAXIMUM_COPY_BYTES};
 use crate::git::worktree::{ChildWorktree, ChildWorktreeBase, ChildWorktreeCheck, ChildWorktreeOutcome};
 use crate::host::{DelegationAgentAvailability, DelegationChildPane, DelegationPaneState};
 use crate::model::{
-    ChildRecord, ChildRecordOptions, ChildState, ChildStateEvent, ChildStates, DeliveryLane, Notice, NoticeKind, request_key,
+    ChildKind, ChildRecord, ChildRecordOptions, ChildState, ChildStateEvent, ChildStates, DeliveryLane, Notice, NoticeKind, request_key,
 };
 use crate::providers;
 use crate::pruning::DelegationAdmission;
@@ -47,6 +47,15 @@ pub struct HumanChildFirstRun {
 pub struct HumanChildStarter {
     pub start: Arc<dyn Fn(String, HumanChildFirstRun) -> BoxFuture<'static, Option<String>> + Send + Sync>,
     pub failed: Arc<dyn Fn(String) -> BoxFuture<'static, ()> + Send + Sync>,
+}
+
+/// Where a human's child starts and which cap it counts against: `base_commit` (MC-29), the head or an earlier commit of the parent's
+/// branch (None: the head); `compare_group` (MC-45), the compare run it is one row of, so it counts against the compare runs' cap of
+/// four instead of the human children's three (None: a child of the composer's send or worktree menu).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HumanChildAt {
+    pub base_commit: Option<String>,
+    pub compare_group: Option<String>,
 }
 
 /// `Unavailable`: why the `provider` agent cannot run a child, naming it, or None when it can.
@@ -189,7 +198,7 @@ impl Coordinator {
             if let Some(same) = same_call(&state.file.children, &key, parent_id) {
                 return DelegationResponse::delegated(same);
             }
-            if let Some(reason) = delegate_refusal(&state.file.children, parent_id, &parent, mode, &child_agent, false) {
+            if let Some(reason) = delegate_refusal(&state.file.children, parent_id, &parent, mode, &child_agent, ChildKind::Delegated) {
                 return DelegationResponse::refusal(reason);
             }
         }
@@ -209,7 +218,7 @@ impl Coordinator {
             if let Some(repeated) = same_call(&state.file.children, &key, parent_id) {
                 return DelegationResponse::delegated(repeated);
             }
-            if let Some(late) = delegate_refusal(&state.file.children, parent_id, &parent, mode, &child_agent, false) {
+            if let Some(late) = delegate_refusal(&state.file.children, parent_id, &parent, mode, &child_agent, ChildKind::Delegated) {
                 return DelegationResponse::refusal(late);
             }
             let id = mighty_core::wire::new_id();
@@ -346,7 +355,8 @@ impl Coordinator {
     /// `StartHumanChild`: the human's run of `text` in a new child of the Claude, Codex or Antigravity pane `parent_id`, from its
     /// composer's second send or its worktree button's menu, which names the child's `agent`. The child runs the parent's agent unless
     /// `agent` names another, in [`providers::human_child_mode`]. It is marked started by the human, so it sends the parent no notices
-    /// and the parent's tools neither list it nor act on it; it has its own cap of 3 open children started by the human. The first rule
+    /// and the parent's tools neither list it nor act on it; it has its own cap of 3 open children started by the human, or (MC-45) of 4 a
+    /// compare run started (`at.compare_group`). The first rule
     /// that applies answers, and nothing is made by any but the last:
     /// 1. delegation switched off, or `text` is no task (empty, with a NUL character or over 64 KiB): a failure in the app's language;
     /// 2. parent_closed, claude_only, agent_unknown, another agent whose CLI is not installed or signed out, or no mode in which the child
@@ -363,9 +373,10 @@ impl Coordinator {
         starter: HumanChildStarter,
         plan_first: bool,
         agent: Option<&str>,
-        base_commit: Option<&str>,
+        at: HumanChildAt,
     ) -> HumanChildStart {
         let locale = self.locale();
+        let kind = if at.compare_group.is_some() { ChildKind::Compare } else { ChildKind::Human };
         if !(self.inner.switch_on)() {
             return HumanChildStart::Failed(locale.get("delegation.human.error.switchedOff"));
         }
@@ -403,7 +414,7 @@ impl Coordinator {
                 locale.get_with("delegation.human.error.agentNoMode", &[("agent", label)])
             });
         };
-        if let Some(reason) = delegate_refusal(&self.lock().file.children, parent_id, &parent, &mode, &child_agent, true) {
+        if let Some(reason) = delegate_refusal(&self.lock().file.children, parent_id, &parent, &mode, &child_agent, kind) {
             return HumanChildStart::Refused(reason);
         }
         let start = match self.inner.worktrees.check(&parent.folder).await {
@@ -411,7 +422,7 @@ impl Coordinator {
             ChildWorktreeCheck::Refused(reason) => return HumanChildStart::Refused(reason),
         };
         // MC-29: a compare run's children all start from the commit it chose, the head or an earlier commit of the parent's branch.
-        let start = match base_commit {
+        let start = match at.base_commit.as_deref() {
             None => start,
             Some(commit) => match self.inner.worktrees.at_commit(&start, commit).await {
                 Some(moved) => moved,
@@ -422,7 +433,7 @@ impl Coordinator {
         let child = {
             // Nothing below suspends until the record is saved, so two sends at once cannot both pass the width cap.
             let mut state = self.lock();
-            if let Some(late) = delegate_refusal(&state.file.children, parent_id, &parent, &mode, &child_agent, true) {
+            if let Some(late) = delegate_refusal(&state.file.children, parent_id, &parent, &mode, &child_agent, kind) {
                 return HumanChildStart::Refused(late);
             }
             let id = mighty_core::wire::new_id();
@@ -440,6 +451,7 @@ impl Coordinator {
                     parent_checkout: Some(start.repository.clone()),
                     started_by_human: Some(true),
                     provider: Some(child_agent.clone()),
+                    compare_group: at.compare_group.clone(),
                     ..Default::default()
                 },
             );
@@ -482,32 +494,33 @@ impl Drop for StartingGuard<'_> {
     }
 }
 
+/// MC-45: the open children of `kind` the pane `parent_id` has (what [`ChildKind::cap`] limits).
+pub fn open_children(children: &[ChildRecord], parent_id: &str, kind: ChildKind) -> usize {
+    children.iter().filter(|record| record.parent_session_id == parent_id && record.state.is_open() && record.kind() == kind).count()
+}
+
 /// `SameCall`: the parent's child made by the same call (the same request key).
 fn same_call<'a>(children: &'a [ChildRecord], key: &str, parent_id: &str) -> Option<&'a ChildRecord> {
     children.iter().find(|child| child.parent_session_id == parent_id && child.request_key == key)
 }
 
 /// `DelegateRefusal`: why the pane `parent_id`, now `parent`, may not have a new child of the `child` agent in `mode`, or None when it
-/// may. The cap counts the open children of the same kind, of every agent: those its delegate made, or (`by_human`) those the human
-/// started, so neither kind blocks the other.
+/// may. The cap counts the open children of the same `kind`, of every agent: those its delegate made, those the human started, or
+/// (MC-45) those a compare run started, so no kind blocks another; each kind has its own cap ([`ChildKind::cap`]).
 fn delegate_refusal(
     children: &[ChildRecord],
     parent_id: &str,
     parent: &DelegationPaneState,
     mode: &str,
     child: &str,
-    by_human: bool,
+    kind: ChildKind,
 ) -> Option<DelegationReasonCode> {
     // A pane with a parent link is already one layer down.
     let depth = usize::from(parent.parent_session_id.is_some() || children.iter().any(|record| record.id == parent_id));
     if depth >= MAXIMUM_DEPTH {
         return Some(DelegationReasonCode::ChildCannotDelegate);
     }
-    let open = children
-        .iter()
-        .filter(|record| record.parent_session_id == parent_id && record.state.is_open() && record.notifies_parent() != by_human)
-        .count();
-    if open >= MAXIMUM_OPEN_CHILDREN {
+    if open_children(children, parent_id, kind) >= kind.cap() {
         return Some(DelegationReasonCode::WidthCap);
     }
     (!providers::is_no_wider_across(mode, child, &parent.permission_mode, &parent.provider)).then_some(DelegationReasonCode::WiderMode)

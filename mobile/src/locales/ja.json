@@ -4399,7 +4399,7 @@
   "compare.reason.notAgent": "エージェントのペインでのみできます。",
   "compare.reason.remote": "リモートのワークスペースではできません。",
   "compare.reason.child": "委任された子のペインではできません。",
-  "compare.reason.room": "子をあと 2 つ以上開けません。人が開いた子は 1 つのペインに {cap} 個までです。",
+  "compare.reason.room": "比較実行の子をあと 2 つ以上開けません。比較実行の子は、自分で開いた子とは別に 1 つのペインに {cap} 個まで開けます。先にいくつかをマージ、破棄、または閉じてください。",
   "compare.reason.agents": "子を作れるエージェントがありません。インストール、ログイン、権限モードを確認してください。",
   "compare.error.base": "基準コミットがこのブランチにありません。",
   "compare.error.rows": "2 行以上選んでください。",

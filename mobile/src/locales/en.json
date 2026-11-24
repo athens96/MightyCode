@@ -4399,7 +4399,7 @@
   "compare.reason.notAgent": "Only an agent pane can do this.",
   "compare.reason.remote": "Not in a remote workspace.",
   "compare.reason.child": "Not in a delegated child's pane.",
-  "compare.reason.room": "Two more children cannot be opened. A pane may have up to {cap} children you started.",
+  "compare.reason.room": "Two more compare children cannot be opened. A pane may have up to {cap} compare-run children open, apart from the children you start yourself; merge, discard or close some first.",
   "compare.reason.agents": "No agent can start a child now. Check that one is installed and signed in, and the permission mode.",
   "compare.error.base": "The base commit is not on this branch.",
   "compare.error.rows": "Pick at least two rows.",

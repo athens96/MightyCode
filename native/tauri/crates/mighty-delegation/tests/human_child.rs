@@ -350,12 +350,12 @@ mod git {
     use mighty_delegation::git::worktree::report_file_in;
     use mighty_delegation::git::{self, auto_commit};
     use mighty_delegation::host::{DelegationChildPane, DelegationPaneActivity, DelegationPaneState};
-    use mighty_delegation::model::{ChildRecord, ChildRecordOptions, ChildState};
+    use mighty_delegation::model::{ChildKind, ChildRecord, ChildRecordOptions, ChildState};
     use mighty_delegation::reports::ChildRunEnd;
     use mighty_delegation::request::{DelegationCaller, DelegationReasonCode, DelegationResponse};
     use mighty_delegation::sidebar;
     use mighty_delegation::store::{DelegationFile, DelegationFileStore};
-    use mighty_delegation::tools::delegate::HumanChildStart;
+    use mighty_delegation::tools::delegate::{HumanChildAt, HumanChildStart};
 
     use super::support::host::{self, TestHost, caller, eventually, locale, request};
     use super::support::lane;
@@ -728,6 +728,89 @@ mod git {
                 );
                 fixture.nothing_made(&bytes, true).await;
             }
+        })
+        .await;
+    }
+
+    /// MC-45: a compare run's children count against their own cap of four, apart from the human's three and the delegate's three.
+    #[tokio::test]
+    async fn a_compare_runs_children_have_their_own_cap_of_four() {
+        let _lane = lane::enter().await;
+        let compare = |group: &str| HumanChildAt { base_commit: None, compare_group: Some(group.into()) };
+        let compare_child = |id: &str| ChildRecord { compare_group: Some("g0".into()), ..open_child(id, true) };
+        Box::pin(async {
+            // Three of the human's and three of the delegate's open: a compare run's children still start, up to four.
+            let open: Vec<ChildRecord> = ["h1", "h2", "h3"]
+                .iter()
+                .map(|id| open_child(id, true))
+                .chain(["a1", "a2", "a3"].iter().map(|id| open_child(id, false)))
+                .collect();
+            let fixture = make(
+                Some(1),
+                Some(DelegationFile::of(open, vec![], vec![], vec![], vec![])),
+                "acceptEdits",
+                "claude",
+                50_000_000_000,
+                true,
+            )
+            .await;
+            let mut ids = vec![];
+            for _ in 0..4 {
+                let start =
+                    fixture.coordinator.start_human_child_at("Try it.", "parent", fixture.sends.starter(), false, None, compare("g")).await;
+                let child = started(start);
+                assert!(child.compare_group.as_deref() == Some("g") && child.kind() == ChildKind::Compare && !child.notifies_parent());
+                assert!(fixture.wait_for(&child.id, ChildState::Running).await, "it runs");
+                ids.push(child.id);
+            }
+            assert_eq!(
+                (
+                    fixture.coordinator.open_children("parent", ChildKind::Compare),
+                    fixture.coordinator.open_children("parent", ChildKind::Human)
+                ),
+                (4, 3)
+            );
+            assert_eq!(
+                fixture.coordinator.start_human_child_at("Try it.", "parent", fixture.sends.starter(), false, None, compare("g2")).await,
+                HumanChildStart::Refused(DelegationReasonCode::WidthCap),
+                "a fifth compare child is refused"
+            );
+            assert_eq!(
+                fixture.send("One more.", "parent", false).await,
+                HumanChildStart::Refused(DelegationReasonCode::WidthCap),
+                "the human's own cap is still three"
+            );
+            let saved = fixture.store().load().unwrap();
+            assert!(
+                ids.iter().all(|id| saved.child(id).and_then(|c| c.compare_group.as_deref()) == Some("g")),
+                "the group is saved with each record"
+            );
+            assert!(String::from_utf8(fixture.bytes()).unwrap().contains("\"compareGroup\":\"g\""));
+        })
+        .await;
+
+        Box::pin(async {
+            // Four compare children open: the human's send and the delegate still have their room.
+            let open: Vec<ChildRecord> = ["c1", "c2", "c3", "c4"].iter().map(|id| compare_child(id)).collect();
+            let fixture = make(
+                Some(1),
+                Some(DelegationFile::of(open, vec![], vec![], vec![], vec![])),
+                "acceptEdits",
+                "claude",
+                50_000_000_000,
+                true,
+            )
+            .await;
+            let bytes = fixture.bytes();
+            assert_eq!(
+                fixture.coordinator.start_human_child_at("Try it.", "parent", fixture.sends.starter(), false, None, compare("g1")).await,
+                HumanChildStart::Refused(DelegationReasonCode::WidthCap)
+            );
+            fixture.nothing_made(&bytes, true).await;
+            let child = started(fixture.send("Mine.", "parent", false).await);
+            assert!(child.compare_group.is_none() && child.kind() == ChildKind::Human);
+            assert!(fixture.wait_for(&child.id, ChildState::Running).await);
+            assert!(fixture.call("delegate", &[("task", "Split this."), ("mode", "plan")]).await.child.is_some(), "the delegate's room");
         })
         .await;
     }

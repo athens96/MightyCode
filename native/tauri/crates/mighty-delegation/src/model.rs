@@ -139,6 +139,8 @@ impl ChildStates for ChildState {
 /// - `started_by_human`: the human started it from its parent's composer (only `Some(true)` is ever written by the app); it sends its
 ///   parent no notices.
 /// - `provider`: the agent CLI the child runs; None is Claude.
+/// - `compare_group`: MC-45, the compare run (비교 실행) the human started it in, written once with `started_by_human`; such a child
+///   counts against the compare runs' own cap ([`ChildKind::Compare`]), not the human children's. None in a record kept before MC-45.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChildRecord {
@@ -172,6 +174,28 @@ pub struct ChildRecord {
     pub provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report_run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compare_group: Option<String>,
+}
+
+/// MC-45: which cap of its parent an open child counts against. Each kind has its own, so none blocks another: the children the
+/// parent's `delegate` made ([`crate::coordinator::MAXIMUM_OPEN_CHILDREN`]), those the human started from the composer (the same
+/// number), and those a compare run started ([`mighty_core::model::COMPARE_MAXIMUM_ROWS`], the most rows one run may have).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildKind {
+    Delegated,
+    Human,
+    Compare,
+}
+
+impl ChildKind {
+    /// The open children of this kind one parent may have at once.
+    pub fn cap(self) -> usize {
+        match self {
+            ChildKind::Delegated | ChildKind::Human => crate::coordinator::MAXIMUM_OPEN_CHILDREN,
+            ChildKind::Compare => mighty_core::model::COMPARE_MAXIMUM_ROWS,
+        }
+    }
 }
 
 /// `ChildRecord.Make`'s optional arguments.
@@ -185,6 +209,8 @@ pub struct ChildRecordOptions {
     pub parent_checkout: Option<String>,
     pub started_by_human: Option<bool>,
     pub provider: Option<String>,
+    /// MC-45: the compare run it belongs to (kept only with `started_by_human`).
+    pub compare_group: Option<String>,
 }
 
 impl ChildRecord {
@@ -243,6 +269,7 @@ impl ChildRecord {
             started_by_human: options.started_by_human,
             provider: options.provider.filter(|provider| provider != "claude"),
             report_run_id: None,
+            compare_group: options.compare_group.filter(|_| options.started_by_human == Some(true)),
         }
     }
 
@@ -254,6 +281,15 @@ impl ChildRecord {
     /// `NotifiesParent`: only a child its parent's delegate call made sends its parent notices.
     pub fn notifies_parent(&self) -> bool {
         self.started_by_human != Some(true)
+    }
+
+    /// MC-45: the cap it counts against: a compare run's, the human's, or its parent's delegate's.
+    pub fn kind(&self) -> ChildKind {
+        match (self.notifies_parent(), self.compare_group.is_some()) {
+            (true, _) => ChildKind::Delegated,
+            (false, true) => ChildKind::Compare,
+            (false, false) => ChildKind::Human,
+        }
     }
 
     /// `Agent`: the agent CLI the child runs.

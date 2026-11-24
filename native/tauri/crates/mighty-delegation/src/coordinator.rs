@@ -39,7 +39,8 @@ use crate::tools::{self, Tool};
 
 /// `DelegationCoordinator.AnswerSeconds`: the longest any call takes to answer, well inside the limit of a tool call's transport.
 pub const ANSWER_SECONDS: f64 = 45.0;
-/// `MaximumOpenChildren`: the open children one parent may have at once (of each kind: its delegate's, and the human's).
+/// `MaximumOpenChildren`: the open children one parent may have at once (of each kind: its delegate's, and the human's; MC-45: a
+/// compare run's children have their own cap, [`crate::model::ChildKind::cap`]).
 pub const MAXIMUM_OPEN_CHILDREN: usize = 3;
 /// `MaximumDepth`: a parent's children cannot delegate.
 pub const MAXIMUM_DEPTH: usize = 1;
@@ -660,11 +661,11 @@ impl Coordinator {
         plan_first: bool,
         agent: Option<&str>,
     ) -> crate::tools::delegate::HumanChildStart {
-        self.start_human_child_at(text, parent_id, starter, plan_first, agent, None).await
+        self.start_human_child_at(text, parent_id, starter, plan_first, agent, crate::tools::delegate::HumanChildAt::default()).await
     }
 
-    /// [`Coordinator::start_human_child`] from `base_commit` (MC-29's compare run): the head or an earlier commit of the parent's
-    /// branch; None is the head, as the second send has it.
+    /// [`Coordinator::start_human_child`] at `at` (a compare run's row): from its base commit (MC-29), the head or an earlier commit
+    /// of the parent's branch (None is the head, as the second send has it), and in its compare group (MC-45: the compare cap).
     pub async fn start_human_child_at(
         &self,
         text: &str,
@@ -672,14 +673,18 @@ impl Coordinator {
         starter: crate::tools::delegate::HumanChildStarter,
         plan_first: bool,
         agent: Option<&str>,
-        base_commit: Option<&str>,
+        at: crate::tools::delegate::HumanChildAt,
     ) -> crate::tools::delegate::HumanChildStart {
-        let (text, parent_id, agent, base) =
-            (text.to_string(), parent_id.to_string(), agent.map(str::to_string), base_commit.map(str::to_string));
+        let (text, parent_id, agent) = (text.to_string(), parent_id.to_string(), agent.map(str::to_string));
         self.isolated(crate::tools::delegate::HumanChildStart::Failed, move |coordinator| async move {
-            coordinator.start_human_child_now(&text, &parent_id, starter, plan_first, agent.as_deref(), base.as_deref()).await
+            coordinator.start_human_child_now(&text, &parent_id, starter, plan_first, agent.as_deref(), at).await
         })
         .await
+    }
+
+    /// MC-45: the open children of `kind` the pane `parent_id` has now, as its cap counts them.
+    pub fn open_children(&self, parent_id: &str, kind: crate::model::ChildKind) -> usize {
+        crate::tools::delegate::open_children(&self.lock().file.children, parent_id, kind)
     }
 }
 

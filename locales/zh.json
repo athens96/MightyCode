@@ -4399,7 +4399,7 @@
   "compare.reason.notAgent": "只能在代理窗格中进行。",
   "compare.reason.remote": "远程工作区中无法进行。",
   "compare.reason.child": "委派子窗格中无法进行。",
-  "compare.reason.room": "无法再打开两个以上的子任务。一个窗格最多有 {cap} 个由你开启的子任务。",
+  "compare.reason.room": "无法再打开两个以上的比较运行子任务。一个窗格最多可同时打开 {cap} 个比较运行子任务，与你自己开启的子任务分开计算；请先合并、丢弃或关闭一些。",
   "compare.reason.agents": "没有代理能创建子任务。请检查安装、登录和权限模式。",
   "compare.error.base": "基准提交不在此分支上。",
   "compare.error.rows": "请至少选择两行。",

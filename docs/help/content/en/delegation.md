@@ -90,7 +90,7 @@ To try another way without losing the context a pane built up, open a new pane i
 For a hard task it is often quicker to try several approaches and keep the best. Hand one request to several agents at once (or the same agent several times, say three Claude children) from the same base commit, compare the results side by side and merge one.
 
 - **Start**: write the request in the composer, then choose {{ui:compare.menu}} from the send button's right-click menu on an idle pane, or from the {{ui:composer.busySend.title}} menu on a running one. In the picker, pick rows of agent and model ({{ui:compare.picker.add}}; the same agent may appear more than once), the {{ui:compare.picker.base}} (HEAD by default, or a recent commit of this branch) and, if you like, a {{ui:compare.picker.test}} (a run action or task from `.mighty.yaml`), then press {{ui:compare.picker.start}}.
-- **Which agents**: only agents that can start a child now are offered (Claude, Codex and Antigravity, when installed, signed in and with a mode that can change files). Up to four rows, but a pane may have at most three children you started, so only the room left can be picked.
+- **Which agents**: only agents that can start a child now are offered (Claude, Codex and Antigravity, when installed, signed in and with a mode that can change files). Up to four rows. A compare run's children are counted apart from the three children you start yourself and the three `delegate` makes: a pane may have up to four of them open (of all its compare runs, in an SSH workspace too), so a second compare run can use only the room the first one left until its children are merged, discarded or closed.
 - **Run**: each row opens a child pane as [Run in a new worktree](#worktree) does, all at once, with the same request, the same base commit and its own [port block](#mighty-yaml). A row with a model runs that model. When one row cannot start, its column says why and the others go on.
 - **Budget**: with a daily budget set, a start that would likely pass it (today's spend plus the estimate) is warned about first. The estimate is rough: for each child, the average cost of one run of the same agent and model in the last 30 days of the usage ledger (the agent's average without that model, $1 per child without either).
 - **Group card and {{ui:compare.view.title}}**: a card appears under the pane in the sidebar; press it to open {{ui:compare.view.title}}. Each column shows the agent and model, the state, the files and +/− lines against the base (`git diff --shortstat <base>...<branch>`), the time taken, the cost from the usage ledger and the chosen test's result (run once in the child's worktree after it reports), with {{ui:compare.action.open}}, {{ui:compare.action.diff}}, {{ui:compare.action.merge}} and {{ui:compare.action.discard}}. The group is saved with the pane, so it opens again after a restart.
@@ -270,7 +270,7 @@ reg add "HKCU\Software\MightyCode" /v delegation.enabled /t REG_DWORD /d 0 /f
 ## Limits and support {#limits}
 | Item | Limit |
 |---|---|
-| Open children per parent | 3 you start yourself, 3 made by `delegate` |
+| Open children per parent | 3 you start yourself, 3 made by `delegate`, 4 of compare runs |
 | Delegation depth | One level (children cannot make children) |
 | Follow-ups per child (`follow_up`) | 2, up to 48 KiB each |
 | Task (TASK.md, a request you start yourself) | 64 KiB |

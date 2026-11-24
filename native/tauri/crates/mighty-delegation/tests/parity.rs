@@ -146,6 +146,7 @@ fn generated() -> Vec<DelegationFile> {
                     parent_checkout: (index % 3 != 1).then(|| format!("C:{slash}repo")),
                     started_by_human: (index % 4 == 0).then_some(true),
                     provider: Some(["claude", "codex", "gemini"][index % 3].to_string()),
+                    compare_group: None,
                 },
             );
             child.closed_head = (*state == ChildState::Closed).then(|| "m2".to_string());
