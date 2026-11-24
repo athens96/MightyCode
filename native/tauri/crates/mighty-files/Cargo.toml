@@ -22,7 +22,7 @@ percent-encoding.workspace = true
 uuid.workspace = true
 # 요청 되돌리기 writes an original back in the file's CP949 (revert.rs); mighty-composer reads it with the same crate.
 encoding_rs = "0.8"
-base64 = "0.22"
+base64 = "0.23"
 tokio = { workspace = true, features = ["io-util", "time", "macros", "rt"] }
 # SVG drawn to PNG (C# NativeSvgRaster, Win2D's CanvasSvgDocument): the safe, canonical document only.
 resvg = "0.50"

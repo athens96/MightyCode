@@ -22,7 +22,7 @@ dev-harness = ["tauri/unstable"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 # W9: build.rs checks the release stamp's update key (32 bytes of standard base64).
-base64 = "0.22"
+base64 = "0.23"
 
 [dependencies]
 mighty-core.workspace = true
@@ -47,7 +47,7 @@ mighty-companion.workspace = true
 # W9-D: the style engine (styles.rs, settings/styles.rs, the phone's style parts).
 mighty-styles.workspace = true
 indexmap.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 sha2.workspace = true
 regex.workspace = true
 percent-encoding.workspace = true
