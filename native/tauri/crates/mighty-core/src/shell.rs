@@ -1023,6 +1023,40 @@ fn sidebar_items(
 
 // ── the model ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/// MC-59: one row of the sidebar's 봇 group: the bot's pane, its name, and the workspace it works in (none for an independent bot,
+/// which works in its own folder, `folder`).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SidebarBot {
+    pub id: String,
+    pub handle: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+}
+
+/// MC-59: the 봇 group's rows: the bots' home's (independent) bots first, then each workspace's in the sidebar's order.
+pub fn sidebar_bots(state: &AppSnapshot) -> Vec<SidebarBot> {
+    let home = |s: &RunSession| state.workspace(s.workspace_id()).is_some_and(Workspace::is_bot_home);
+    let row = |s: &RunSession, independent: bool| {
+        s.bot.as_ref().map(|bot| SidebarBot {
+            id: s.id().into(),
+            handle: bot.handle.clone(),
+            workspace: (!independent).then(|| state.workspace(s.workspace_id()).map(|w| w.name().to_string()).unwrap_or_default()),
+            folder: independent.then(|| s.working_folder.clone()).flatten(),
+        })
+    };
+    let independent = state.bots().filter(|s| home(s)).filter_map(|s| row(s, true));
+    let workspace_bots = state
+        .workspaces()
+        .iter()
+        .filter(|w| !w.is_bot_home())
+        .flat_map(|w| state.bots().filter(move |s| s.workspace_id() == w.id()))
+        .filter_map(|s| row(s, false));
+    independent.chain(workspace_bots).collect()
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SidebarWorkspace {
@@ -1248,6 +1282,8 @@ pub struct ShellModel {
     pub panes: Vec<PaneInfo>,
     pub entry: Counts,
     pub workspaces: Vec<SidebarWorkspace>,
+    /// MC-59: the sidebar's 봇 group under the workspaces: every bot of this computer, the independent ones (the bots' home) first.
+    pub bots: Vec<SidebarBot>,
     /// The servers whose workspaces the sidebar lists under this PC's own (C# `WebRemoteServers`, W9-J; the host fills them, src-tauri
     /// mirror.rs).
     pub servers: Vec<RemoteServer>,
@@ -1489,6 +1525,8 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
     let workspaces = state
         .workspaces()
         .iter()
+        // MC-59: the bots' home is listed as the 봇 group, never as a workspace.
+        .filter(|w| !w.is_bot_home())
         .map(|w| {
             let is_open = open.contains(w.id());
             SidebarWorkspace {
@@ -1559,6 +1597,7 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
         panes: sessions.iter().map(|s| pane_info(locale, s, attention(s.id()), now)).collect(),
         entry: badges(sessions.iter().copied(), &attention),
         workspaces,
+        bots: sidebar_bots(state),
         servers: vec![],
         header,
         layout,
@@ -1588,6 +1627,27 @@ pub fn shell_model(state: &AppSnapshot, context: &ShellContext, defaults: &mut H
 
 #[cfg(test)]
 mod tests {
+
+    /// MC-59: the 봇 group lists the bots' home's (independent) bots first, then each workspace's, and the home is no workspace row.
+    #[test]
+    fn the_bot_group_lists_independent_bots_first_and_hides_their_home() {
+        use crate::json::Wire as _;
+        let root = if cfg!(windows) { "C:\\\\work" } else { "/work" };
+        let text = format!(
+            r#"{{"version":1,"workspaces":[{{"id":"w1","name":"Shop","path":"{root}/shop"}},{{"id":"home","name":"봇","path":"{root}/bots","botHome":true}}],
+              "sessions":[
+                {{"id":"s1","workspaceId":"w1","titleMode":"fixed","title":"Claude","bot":{{"handle":"shop-bot"}}}},
+                {{"id":"s2","workspaceId":"home","titleMode":"fixed","title":"리뷰어","bot":{{"handle":"리뷰어"}},"workingFolder":"{root}/bots/리뷰어"}},
+                {{"id":"s3","workspaceId":"w1","kind":"shell","title":"Shell"}}]}}"#
+        );
+        let state = crate::normalize::normalize(&AppSnapshot::read(&serde_json::from_str(&text).unwrap()).unwrap(), true).unwrap();
+        let bots = sidebar_bots(&state);
+        assert_eq!(bots.iter().map(|b| b.handle.as_str()).collect::<Vec<_>>(), ["리뷰어", "shop-bot"]);
+        assert_eq!(bots[0].workspace, None, "an independent bot");
+        assert_eq!(bots[0].folder.as_deref(), Some(format!("{root}/bots/리뷰어").as_str()));
+        assert_eq!(bots[1].workspace.as_deref(), Some("Shop"));
+        assert!(state.workspace("home").is_some_and(Workspace::is_bot_home), "the mark survives normalize");
+    }
     use super::*;
     use crate::json::Wire;
     use serde_json::json;

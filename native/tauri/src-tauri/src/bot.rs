@@ -57,6 +57,11 @@ fn shown(handle: &str) -> String {
 }
 
 pub fn register(methods: &mut Registry) {
+    // MC-59: the sidebar 봇 group's + (an independent bot).
+    methods.add("botNew", |host: Arc<Host>, _args| async move {
+        open_new(&host);
+        Ok(Value::Null)
+    });
     methods.add("paneBot", |host: Arc<Host>, args| async move {
         if let Some(id) = arg(&args, "paneId") {
             open(&host, id.to_string());
@@ -91,7 +96,7 @@ pub fn open(host: &Arc<Host>, id: String) {
     let instructions = Local::new(current.as_ref().and_then(|b| b.instructions.clone()).unwrap_or_default());
     let note = Local::new(String::new());
     let (handle_field, instructions_field, note_text) = (handle.clone(), instructions.clone(), note.clone());
-    let title = locale.get(if current.is_some() { "bot.dialog.titleEdit" } else { "bot.dialog.title" });
+    let title = locale.get("bot.dialog.titleEdit");
     let mut spec = DialogSpec::new(title, move |_| {
         let into_handle = handle_field.clone();
         let into_instructions = instructions_field.clone();
@@ -116,9 +121,6 @@ pub fn open(host: &Arc<Host>, id: String) {
     })
     .styled(None, None);
     spec.primary = Some(DialogButton::new(locale.get("bot.dialog.save")));
-    if current.is_some() {
-        spec.secondary = Some(DialogButton::new(locale.get("bot.dialog.remove")));
-    }
     spec.close = Some(locale.get("bot.dialog.cancel"));
     let (checked_handle, checked_instructions, checker, pane_id) = (handle.clone(), instructions.clone(), host.clone(), id.clone());
     spec.accept = Some(Box::new(move |answer| {
@@ -145,8 +147,7 @@ pub fn open(host: &Arc<Host>, id: String) {
                 let words = instructions.get().trim().to_string();
                 Some(PaneBot { handle, instructions: (!words.is_empty()).then_some(words) })
             }
-            DialogResult::Secondary => None,
-            DialogResult::None => return,
+            DialogResult::Secondary | DialogResult::None => return,
         };
         let _ = crate::frame::act(&host, async {
             let mut view = host.view();
@@ -281,6 +282,137 @@ fn answer_of(logs: &[mighty_core::model::LogEntry]) -> String {
         .filter(|t| !t.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+// ── MC-59: independent bots ──────────────────────────────────────────────────────────────────────────────────────────────
+
+/// The sidebar 봇 group's +: a bot of no workspace. Its name, instructions and agent are asked in a sheet; 만들기 makes its folder
+/// in the app's data (`bots/<name>`), 폴더 골라 만들기… lets the person pick one. The bot is a pane of the bots' home (a workspace
+/// the sidebar never lists as one) working in that folder.
+pub fn open_new(host: &Arc<Host>) {
+    let locale = host.locale;
+    let providers: Vec<&'static str> = mighty_core::wire::PROVIDERS.to_vec();
+    let handle = Local::new(String::new());
+    let instructions = Local::new(String::new());
+    let agent = Local::new(0usize);
+    let note = Local::new(String::new());
+    let (handle_field, instructions_field, agent_field, note_text) = (handle.clone(), instructions.clone(), agent.clone(), note.clone());
+    let names: Vec<String> = providers.iter().map(|p| mighty_run::providers::name(p).to_string()).collect();
+    let mut spec = DialogSpec::new(locale.get("bot.new.title"), move |_| {
+        let into_handle = handle_field.clone();
+        let into_instructions = instructions_field.clone();
+        let into_agent = agent_field.clone();
+        let mut intro = El::text_block(locale.get("bot.new.message"));
+        if let Some(text) = intro.text_mut() {
+            text.wrapping = Wrapping::Wrap;
+        }
+        let name = El::text_box(handle_field.get())
+            .header(locale.get("bot.dialog.handle"))
+            .placeholder(locale.get("bot.dialog.handleHint"))
+            .on_text(move |words| into_handle.set(words));
+        let items: Vec<Content> = names.iter().map(|n| n.clone().into()).collect();
+        let picker = El::combo_box(agent_field.get() as i32, items)
+            .header(locale.get("bot.new.agent"))
+            .on_select(move |chosen| into_agent.set(usize::try_from(chosen).unwrap_or(0)));
+        let words = El::text_box(instructions_field.get())
+            .multiline()
+            .header(locale.get("bot.dialog.instructions"))
+            .placeholder(locale.get("bot.dialog.instructionsHint"))
+            .on_text(move |words| into_instructions.set(words));
+        let mut validation = El::text_block(note_text.get());
+        if let Some(text) = validation.text_mut() {
+            text.wrapping = Wrapping::Wrap;
+        }
+        Content::El(Box::new(El::stack(
+            false,
+            mighty_core::design_tokens::metrics::SPACING_SM,
+            vec![intro, name, picker, words, validation],
+        )))
+    })
+    .styled(None, None);
+    spec.primary = Some(DialogButton::new(locale.get("bot.new.create")));
+    spec.secondary = Some(DialogButton::new(locale.get("bot.new.pickFolder")));
+    spec.close = Some(locale.get("bot.dialog.cancel"));
+    let (checked_handle, checked_instructions, checker) = (handle.clone(), instructions.clone(), host.clone());
+    spec.accept = Some(Box::new(move |answer| {
+        if answer == DialogResult::None {
+            return true;
+        }
+        match refusal(&checker, "", checked_handle.get().trim(), &checked_instructions.get()) {
+            Some(words) => {
+                note.set(words);
+                false
+            }
+            None => true,
+        }
+    }));
+    let host = host.clone();
+    tauri::async_runtime::spawn(async move {
+        let answer = crate::native::show_dialog(&host, spec).await;
+        if answer == DialogResult::None {
+            return;
+        }
+        let Some(name) = PaneBot::handle_of(&handle.get()) else { return };
+        let folder = if answer == DialogResult::Secondary {
+            match crate::frame::pick_folder_path(&host).await {
+                Some(folder) => folder,
+                None => return,
+            }
+        } else {
+            host.data_dir.join("bots").join(&name)
+        };
+        let words = instructions.get().trim().to_string();
+        let provider = providers.get(agent.get()).copied().unwrap_or("claude").to_string();
+        let bot = PaneBot { handle: name, instructions: (!words.is_empty()).then_some(words) };
+        if let Err(error) = create_independent(&host, bot, &provider, &folder).await {
+            host.log.line(&format!("bot: an independent bot was not made: {error}"));
+            let mut view = host.view();
+            view.error = Some(error);
+            host.schedule();
+        }
+    });
+}
+
+/// Makes the independent bot: its folder (when missing), the bots' home, an agent pane there working in `folder`, named and
+/// instructed, then selected.
+pub async fn create_independent(host: &Arc<Host>, bot: PaneBot, provider: &str, folder: &std::path::Path) -> Result<String, String> {
+    std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
+    let folder = std::path::absolute(folder).map_err(|error| error.to_string())?.to_string_lossy().to_string();
+    let home = home(host)?;
+    let pane = crate::phone::automation_create(host.clone(), home, provider.to_string(), None, Some(bot.handle.clone()), false)
+        .await
+        .map_err(|(_, words)| words)?;
+    let id = pane.clone();
+    let _ = crate::frame::act(host, async {
+        let mut view = host.view();
+        crate::composer::change(&mut view, &id, |p| RunSession {
+            working_folder: Some(folder.clone()),
+            bot: Some(bot.clone()),
+            ..p.clone()
+        })?;
+        crate::frame::activate_pane(&mut view, &id)
+    })
+    .await;
+    Ok(pane)
+}
+
+/// The bots' home (`<data>/bots`, a workspace marked `botHome`), listed (approved) and made when there is none yet; its id.
+fn home(host: &Arc<Host>) -> Result<String, String> {
+    if let Some(found) = host.view().snapshot.workspaces().iter().find(|w| w.is_bot_home()) {
+        return Ok(found.id().to_string());
+    }
+    let dir = host.data_dir.join("bots");
+    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    let mut workspace = host.approve_local(&dir).map_err(|error| error.to_string())?;
+    workspace.bot_home = Some(true);
+    workspace.name = Some(host.locale.get("bot.home.name"));
+    let id = workspace.id().to_string();
+    let mut view = host.view();
+    view.update(|state| match state.workspaces_mut().iter_mut().find(|w| w.id() == id) {
+        Some(listed) => *listed = workspace.clone(),
+        None => state.workspaces_mut().push(workspace.clone()),
+    })?;
+    Ok(id)
 }
 
 #[cfg(test)]

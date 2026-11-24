@@ -10,7 +10,7 @@ import { useAddMenu, useWorkspaceAddChoices } from './addMenu';
 import { sidebarGroups } from './servers';
 import { nestForks } from './forks';
 import { BetaBadge, StatusCounts, StatusGlyph, useCall, useMenu, usePaneInfo, useShell, type MenuItem } from './parts';
-import type { CardAction, ChildCard, PaneCompare, PaneInfo, RemoteServer, SidebarItem, SidebarWorkspace } from './types';
+import type { CardAction, ChildCard, PaneCompare, PaneInfo, RemoteServer, SidebarBot, SidebarItem, SidebarWorkspace } from './types';
 import { Icon } from '../icons/Icon';
 import appIcon from '../assets/app-icon.png';
 import { Pending } from '../pending/Pending';
@@ -121,7 +121,7 @@ const PaneRow = memo(function PaneRow({ info, active, child }: { info: PaneInfo;
   const items: MenuItem[] = [
     ...(info.mirror ? [] : [{ label: t('menu.rename'), action: () => call('renameSession', { id: info.id }) }]),
     // MC-58: a top-level agent pane of this computer may be a bot (bot.rs).
-    ...(info.kind === 'claude' && !info.mirror && !child ? [{ label: t(info.bot ? 'bot.menu.edit' : 'bot.menu.make'), action: () => call('paneBot', { paneId: info.id }) }] : []),
+    ...(info.kind === 'claude' && !info.mirror && !child ? [{ label: t('bot.menu.edit'), action: () => call('paneBot', { paneId: info.id }) }] : []),
     { label: t('menu.closePane'), action: () => call('closeSession', { id: info.id }) },
   ];
   if (child?.menu?.length) items.push({ separator: true }, ...childMenu(call, info.id, child.menu));
@@ -313,6 +313,70 @@ function ServerHeader({ server }: { server: RemoteServer }) {
   );
 }
 
+/** MC-59: the open state of the 봇 group, kept in this window's storage (open unless closed). */
+const botsOpenKey = 'mighty.sidebar.botsOpen';
+
+/**
+ * MC-59: the 봇 group under the workspaces: every bot (each agent pane of this computer; the independent ones first), its state,
+ * name and where it works; a click selects its pane, + makes an independent bot (bot.rs), the row's menu opens its settings.
+ */
+function BotGroup({ bots, panes, activeId, search }: { bots: SidebarBot[]; panes: Map<string, PaneInfo>; activeId: string | undefined; search: string }) {
+  const { t } = useServices();
+  const call = useCall();
+  const menu = useMenu();
+  const choose = useChoosePane();
+  const [open, setOpen] = useState(() => {
+    try { return window.localStorage.getItem(botsOpenKey) !== 'false'; } catch { return true; }
+  });
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    try { window.localStorage.setItem(botsOpenKey, String(next)); } catch { /* storage off: this session only */ }
+  };
+  const words = search.trim().toLowerCase();
+  const shown = words.length === 0 ? bots : bots.filter((bot) => [bot.handle, bot.workspace ?? '', panes.get(bot.id)?.title ?? ''].some((text) => text.toLowerCase().includes(words)));
+  return (
+    <div className="sidebar-bots" data-testid="sidebar-bots">
+      <div className="sidebar-section sidebar-bots-header">
+        <button type="button" className="icon-button" title={t(open ? 'bot.sidebar.collapse' : 'bot.sidebar.expand')} aria-expanded={open} onClick={toggle}>
+          <Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} weight={2.6} />
+        </button>
+        <span className="sidebar-section-title">{t('bot.sidebar.title')}</span>
+        <span className="sidebar-section-count">{bots.length}</span>
+        <span className="spacer" />
+        <button type="button" className="icon-button" title={t('bot.sidebar.add')} aria-label={t('bot.sidebar.add')} data-testid="sidebar-add-bot" onClick={() => call('botNew')}>
+          <Icon name="plus" size={13} />
+        </button>
+      </div>
+      {open && shown.map((bot) => {
+        const info = panes.get(bot.id);
+        const where = bot.workspace ?? t('bot.sidebar.independent');
+        const items: MenuItem[] = [
+          { label: t('bot.menu.edit'), action: () => call('paneBot', { paneId: bot.id }) },
+          { label: t('menu.closePane'), action: () => call('closeSession', { id: bot.id }) },
+        ];
+        return (
+          <button key={bot.id} type="button" className={'sidebar-pane sidebar-bot' + (bot.id === activeId ? ' active' : '')} data-testid="sidebar-bot" data-session-id={bot.id}
+            title={t('bot.label', { handle: bot.handle }) + (bot.folder ? '\n' + bot.folder : '')}
+            onClick={() => choose(bot.id)} onContextMenu={(event) => menu.atPointer(event, items)}>
+            <StatusGlyph tone={info?.tone ?? 'idle'} kind={info?.kind ?? 'claude'} />
+            <span className="sidebar-pane-text">
+              <span className="sidebar-pane-line">
+                <span className={'sidebar-pane-title' + (info?.settled === false ? ' strong' : '')}>@{bot.handle}</span>
+                {info?.attention && <span className="sidebar-attention-dot" title={info.attention.help} aria-label={info.attention.help} />}
+              </span>
+              <span className="sidebar-pane-meta">
+                {info?.agent && <ProviderMark provider={info.agent} size={11} />}
+                <span className="sidebar-pane-detail">{where}</span>
+              </span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function Sidebar() {
   const { t } = useServices();
   const { hasSnapshot, activeWorkspaceId, theme, activeId } = useStoreSelector(
@@ -377,6 +441,8 @@ export function Sidebar() {
             ))}
           </div>
         ))}
+        {/* MC-59: the bots, under the workspaces. */}
+        <BotGroup bots={shell.bots ?? []} panes={panes} activeId={dashboard ? undefined : activeId} search={search} />
       </div>
       {/* With no workspace listed (none yet, or none matching the search) these are the sidebar's ways in (M/WorkspaceView.swift:164-171). */}
       {listed.length === 0 && (

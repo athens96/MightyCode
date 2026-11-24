@@ -219,6 +219,8 @@ impl View {
                 .update(|current| {
                     let mut next = current.clone();
                     change(&mut next);
+                    // MC-59: every agent pane of this computer is a bot; a new one is named before the change is normalized.
+                    normalize::name_bots(&mut next);
                     next
                 })
                 .map_err(|e| e.to_string())?;
@@ -227,6 +229,7 @@ impl View {
         }
         let mut next = self.snapshot.clone();
         change(&mut next);
+        normalize::name_bots(&mut next);
         let next = normalize::normalize(&next, false).map_err(|e| e.to_string())?;
         self.snapshot = next;
         self.bump_revision();

@@ -146,9 +146,11 @@ Codex and Antigravity use slightly different names (Codex: `/new`, `/approvals`,
 - What is sent is cut to size and lines that look like secrets are removed. The answer lands as an opinion card under the pane (agent, model, cost when known); {{ui:advisor.card.insert}} puts it into the composer so this pane's agent can act on it. Its cost goes into the usage ledger under this pane's workspace.
 
 ### Bots {#bots}
-Give an agent pane a name and it becomes a bot. Choose {{ui:bot.menu.make}} from the pane header's ··· menu or by right-clicking the pane in the sidebar, then write its name and instructions. The sidebar shows `@name` beside the pane's title. A bot is still an ordinary pane: approval and question cards, the queue, the phone and remote mirrors work as usual.
+Every agent pane on this computer is a bot. A new pane gets a name (`@name`) from its title, and other agents, schedules and the `mighty` command can send it requests by that name. Change the name and the instructions in {{ui:bot.menu.edit}}, from the pane header's ··· menu or by right-clicking the pane in the sidebar. The sidebar shows `@name` beside the pane's title. A bot is still an ordinary pane: approval and question cards, the queue, the phone and remote mirrors work as usual.
 
-- **Name**: 1 to 32 letters (any language, 한글 included) and digits, with `-`, `_` or `.` between them (no spaces). Case does not matter: `@Reviewer` and `@reviewer` are one bot. Only one pane in a profile uses a name. Only a top-level agent pane on this computer can be a bot (not a delegated child pane or a remote mirror's pane).
+- **The bot list**: the {{ui:bot.sidebar.title}} group under the sidebar's workspaces lists every bot, the independent ones first, then each workspace's. Each row shows the state, the name and its workspace ({{ui:bot.sidebar.independent}} for an independent bot); a click opens its pane. The group folds.
+- **Independent bots**: a bot of no workspace that works in a folder of its own. Press + on the {{ui:bot.sidebar.title}} group and set its name, agent and instructions. {{ui:bot.new.create}} works in a `bots/name` folder inside the app's data folder; {{ui:bot.new.pickFolder}} works in a folder you choose. Independent bots are not listed among the sidebar's workspaces.
+- **Name**: 1 to 32 letters (any language, 한글 included) and digits, with `-`, `_` or `.` between them (no spaces). Case does not matter: `@Reviewer` and `@reviewer` are one bot. Only one pane in a profile uses a name.
 - **Instructions**: what the bot is for and how it works (up to 16 KB). They go after the first request of every new conversation, to the agent only; the request block on screen shows just the request you sent. Changed instructions apply from the next new conversation.
 - **Calling it**: use `@name` in place of a pane id.
   - `mighty agent send @reviewer "look at PR 12"`, `mighty agent wait @reviewer --until done`, `mighty pane read @reviewer`
@@ -158,7 +160,6 @@ Give an agent pane a name and it becomes a bot. Choose {{ui:bot.menu.make}} from
   - A request always runs with the bot pane's own settings and permissions. The caller cannot widen them.
   - A bot cannot ask another bot or itself.
   - Nothing is sent once the daily budget is spent.
-- To stop a pane being a bot, choose {{ui:bot.dialog.remove}} in {{ui:bot.menu.edit}}. The pane and its conversation stay.
 
 ### Context and usage {#session-info}
 The ring beside the send button shows how much context the conversation has used. Click it for {{ui:composer.sessionInfo.contextUsage}}, input, output and cache tokens, cost, the model used and the session IDs. Only values the CLI reported are shown; nothing is estimated.

@@ -335,6 +335,9 @@ button { font: inherit; color: inherit; }
 .dashboard-row-meta { display: flex; gap: var(--space-xs); align-items: center; color: var(--ink2); font-size: 12.5px; white-space: nowrap; overflow: hidden; }
 /* MC-28: a forked pane's mark in the sidebar and its source on the dashboard row. */
 .sidebar-fork-mark { color: var(--accent); display: inline-flex; flex: none; }
+/* MC-59: the 봇 group under the workspaces. */
+.sidebar-bots { display: flex; flex-direction: column; gap: var(--inset-list-gap); margin-top: var(--space-sm); }
+.sidebar-bots-header { padding-left: 0; padding-right: 0; }
 /* MC-58: a bot's handle beside its pane's title. */
 .sidebar-bot-mark { color: var(--accent); flex: none; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .dashboard-row-fork { display: inline-flex; align-items: center; gap: 3px; color: var(--ink2); overflow: hidden; text-overflow: ellipsis; }

@@ -338,8 +338,8 @@ pub fn bot(bot: Option<&crate::model::PaneBot>) -> Option<crate::model::PaneBot>
     Some(crate::model::PaneBot { handle, instructions })
 }
 
-/// MC-58: one pane per bot handle: a later pane (in the saved order) with a handle already taken is no bot. A mirror's panes are
-/// the host's and never count.
+/// MC-58: one pane per bot name: a later pane (in the saved order) with a name already taken loses it ([`name_bots`] names it again).
+/// A mirror's panes are the host's and never count.
 fn unique_bots(sessions: &mut [Arc<RunSession>]) {
     let mut seen = HashSet::new();
     for pane in sessions.iter_mut().filter(|p| p.mirror.is_none()) {
@@ -348,6 +348,70 @@ fn unique_bots(sessions: &mut [Arc<RunSession>]) {
             Arc::make_mut(pane).bot = None;
         }
     }
+}
+
+/// MC-59: every top-level agent pane of this computer is a bot: one without a name (new, saved before bots, or whose name another
+/// pane took) gets one made from its title ([`bot_name`]), kept from then on. The app runs this before it normalizes a change;
+/// [`normalize`] itself never names a pane, so it saves what the C# app saves.
+pub fn name_bots(state: &mut AppSnapshot) {
+    let remote_ids: HashSet<String> = state.workspaces().iter().filter(|w| w.remote.is_some()).map(|w| w.id().to_string()).collect();
+    let mut seen = HashSet::new();
+    let mut taken_twice = HashSet::new();
+    for pane in state.sessions().iter().filter(|p| p.mirror.is_none()) {
+        if let Some(bot) = pane.bot.as_ref()
+            && !seen.insert(crate::model::PaneBot::key(&bot.handle))
+        {
+            taken_twice.insert(pane.id().to_string());
+        }
+    }
+    let sessions = state.sessions_mut();
+    for pane in sessions.iter_mut() {
+        let unusable = pane.bot.as_ref().is_some_and(|b| crate::model::PaneBot::handle_of(&b.handle).is_none());
+        if taken_twice.contains(pane.id()) || unusable {
+            Arc::make_mut(pane).bot = None;
+        }
+        let bot_able = pane.mirror.is_none()
+            && pane.kind() == "claude"
+            && pane.parent_session_id.is_none()
+            && !remote_ids.contains(pane.workspace_id());
+        if !bot_able || pane.bot.is_some() {
+            continue;
+        }
+        let handle = bot_name(pane.title(), &seen);
+        seen.insert(crate::model::PaneBot::key(&handle));
+        Arc::make_mut(pane).bot = Some(crate::model::PaneBot { handle, instructions: None });
+    }
+}
+
+/// MC-59: a bot name made from a pane's title: its letters and digits, spaces and other marks as `-` (one at a time, none at the
+/// ends), cut to fit, `bot` when nothing is left; `-2`, `-3`, … after it while the name is `taken` (compared as [`PaneBot::key`]).
+pub fn bot_name(title: &str, taken: &HashSet<String>) -> String {
+    use crate::model::{BOT_HANDLE_LIMIT, PaneBot};
+    let mut base = String::new();
+    for c in title.chars() {
+        if c.is_alphanumeric() || matches!(c, '_' | '.') && !base.is_empty() {
+            base.push(c);
+        } else if !base.is_empty() && !base.ends_with('-') {
+            base.push('-');
+        }
+    }
+    let base: String = base.trim_end_matches(['-', '_', '.']).chars().take(BOT_HANDLE_LIMIT).collect();
+    let base = match PaneBot::handle_of(base.trim_end_matches(['-', '_', '.'])) {
+        Some(name) => name,
+        None => "bot".to_string(),
+    };
+    if !taken.contains(&PaneBot::key(&base)) {
+        return base;
+    }
+    (2..)
+        .map(|n| {
+            let suffix = format!("-{n}");
+            let room = BOT_HANDLE_LIMIT - suffix.chars().count();
+            let stem: String = base.chars().take(room).collect();
+            format!("{}{suffix}", stem.trim_end_matches(['-', '_', '.']))
+        })
+        .find(|name| !taken.contains(&PaneBot::key(name)))
+        .expect("an unused number")
 }
 
 /// MC-28: a fork link kept as it can be shown and acted on: the source a pane id other than the pane's own, the request an id, the
@@ -2553,12 +2617,12 @@ mod tests {
         let long = "x".repeat(crate::model::BOT_INSTRUCTIONS_LIMIT + 10);
         let s = state(&format!(
             r#"{{"version":1,"workspaces":[{{"id":"w1","name":"A","path":"{}"}}],"sessions":[
-                {{"id":"s1","workspaceId":"w1","title":"One","bot":{{"handle":"reviewer","instructions":"  Review.  "}}}},
-                {{"id":"s2","workspaceId":"w1","title":"Two","bot":{{"handle":"reviewer"}}}},
-                {{"id":"s3","workspaceId":"w1","title":"Three","bot":{{"handle":"Bad Name"}}}},
-                {{"id":"s4","workspaceId":"w1","kind":"shell","title":"Four","bot":{{"handle":"shell"}}}},
-                {{"id":"s5","workspaceId":"w1","title":"Five","parentSessionId":"s1","bot":{{"handle":"child"}}}},
-                {{"id":"s6","workspaceId":"w1","title":"Six","bot":{{"handle":"ci-fixer","instructions":"{long}"}}}}]}}"#,
+                {{"id":"s1","workspaceId":"w1","titleMode":"fixed","title":"One","bot":{{"handle":"reviewer","instructions":"  Review.  "}}}},
+                {{"id":"s2","workspaceId":"w1","titleMode":"fixed","title":"Two","bot":{{"handle":"reviewer"}}}},
+                {{"id":"s3","workspaceId":"w1","titleMode":"fixed","title":"Three","bot":{{"handle":"Bad Name"}}}},
+                {{"id":"s4","workspaceId":"w1","kind":"shell","titleMode":"fixed","title":"Four","bot":{{"handle":"shell"}}}},
+                {{"id":"s5","workspaceId":"w1","titleMode":"fixed","title":"Five","parentSessionId":"s1","bot":{{"handle":"child"}}}},
+                {{"id":"s6","workspaceId":"w1","titleMode":"fixed","title":"Six","bot":{{"handle":"ci-fixer","instructions":"{long}"}}}}]}}"#,
             root()
         ));
         let page = normalize(&s, true).unwrap();
@@ -2574,6 +2638,14 @@ mod tests {
         assert_eq!(page.pane_or_bot("s2").map(|p| p.id()), Some("s2"));
         assert!(page.bot_pane("@nobody").is_none());
         assert_eq!(page.bots().count(), 2);
+        // MC-59: the app's naming pass gives the others names from their titles.
+        let mut named = s.clone();
+        name_bots(&mut named);
+        let named = normalize(&named, true).unwrap();
+        let handle = |id: &str| named.session(id).and_then(|p| p.bot.clone()).map(|b| b.handle);
+        assert_eq!((handle("s2").as_deref(), handle("s3").as_deref()), (Some("Two"), Some("Three")));
+        assert_eq!((handle("s4"), handle("s5")), (None, None), "a terminal and a child are no bots");
+        assert_eq!(named.bots().count(), 4);
         let again = AppSnapshot::read(&serde_json::from_str(&crate::json::Wire::to_json(&page)).unwrap()).unwrap();
         assert_eq!(again.session("s1").and_then(|p| p.bot.clone()), bot("s1"), "a write and a read keep it");
     }
@@ -2593,9 +2665,9 @@ mod tests {
         assert_eq!(PaneBot::handle_of(decomposed).as_deref(), Some("리뷰어"));
         let s = state(&format!(
             r#"{{"version":1,"workspaces":[{{"id":"w1","name":"A","path":"{}"}}],"sessions":[
-                {{"id":"s1","workspaceId":"w1","title":"One","bot":{{"handle":"리뷰어"}}}},
-                {{"id":"s2","workspaceId":"w1","title":"Two","bot":{{"handle":"Reviewer"}}}},
-                {{"id":"s3","workspaceId":"w1","title":"Three","bot":{{"handle":"reviewer"}}}}]}}"#,
+                {{"id":"s1","workspaceId":"w1","titleMode":"fixed","title":"One","bot":{{"handle":"리뷰어"}}}},
+                {{"id":"s2","workspaceId":"w1","titleMode":"fixed","title":"Two","bot":{{"handle":"Reviewer"}}}},
+                {{"id":"s3","workspaceId":"w1","titleMode":"fixed","title":"Three","bot":{{"handle":"reviewer"}}}}]}}"#,
             root()
         ));
         let page = normalize(&s, true).unwrap();
@@ -2604,6 +2676,52 @@ mod tests {
         assert_eq!(page.bot_pane("@리뷰어").map(|p| p.id()), Some("s1"));
         assert_eq!(page.bot_pane(&format!("@{decomposed}")).map(|p| p.id()), Some("s1"));
         assert_eq!(page.bot_pane("@REVIEWER").map(|p| p.id()), Some("s2"));
+    }
+
+    /// MC-59: a pane's bot name made from its title: letters and digits kept, the rest one `-`, cut to 32, numbered while taken.
+    #[test]
+    fn a_bot_name_is_made_from_the_title_and_numbered_while_taken() {
+        let none = HashSet::new();
+        assert_eq!(bot_name("Claude", &none), "Claude");
+        assert_eq!(bot_name("코드 리뷰 (2)", &none), "코드-리뷰-2");
+        assert_eq!(bot_name("  fix the build!! ", &none), "fix-the-build");
+        assert_eq!(bot_name("…", &none), "bot");
+        assert_eq!(bot_name(&"가".repeat(40), &none).chars().count(), 32);
+        let taken: HashSet<String> = ["claude".to_string(), "claude-2".to_string()].into();
+        assert_eq!(bot_name("Claude", &taken), "Claude-3");
+        let long: HashSet<String> = [crate::model::PaneBot::key(&"a".repeat(32))].into();
+        let numbered = bot_name(&"a".repeat(40), &long);
+        assert!(numbered.ends_with("-2") && numbered.chars().count() == 32, "{numbered}");
+    }
+
+    /// MC-59: agent panes saved before bots get names from the naming pass, kept once given; a terminal and a child do not; normalize
+    /// alone names nothing (it saves what the C# app saves).
+    #[test]
+    fn every_top_level_agent_pane_becomes_a_bot_on_load() {
+        let s = state(&format!(
+            r#"{{"version":1,"workspaces":[{{"id":"w1","name":"A","path":"{}"}}],"sessions":[
+                {{"id":"s1","workspaceId":"w1","titleMode":"fixed","title":"Claude"}},
+                {{"id":"s2","workspaceId":"w1","titleMode":"fixed","title":"Claude"}},
+                {{"id":"s3","workspaceId":"w1","kind":"shell","titleMode":"fixed","title":"Shell"}},
+                {{"id":"s4","workspaceId":"w1","titleMode":"fixed","title":"Child","parentSessionId":"s1"}}]}}"#,
+            root()
+        ));
+        assert_eq!(normalize(&s, true).unwrap().bots().count(), 0, "normalize names nothing");
+        let mut s = s;
+        name_bots(&mut s);
+        let page = normalize(&s, true).unwrap();
+        let name = |id: &str| page.session(id).and_then(|p| p.bot.clone()).map(|b| b.handle);
+        assert_eq!((name("s1").as_deref(), name("s2").as_deref()), (Some("Claude"), Some("Claude-2")));
+        assert_eq!((name("s3"), name("s4")), (None, None));
+        let mut renamed = page.clone();
+        let pane = renamed.sessions_mut().iter_mut().find(|p| p.id() == "s1").unwrap();
+        Arc::make_mut(pane).title = Some("Something else".into());
+        name_bots(&mut renamed);
+        assert_eq!(
+            normalize(&renamed, false).unwrap().session("s1").and_then(|p| p.bot.clone()).map(|b| b.handle).as_deref(),
+            Some("Claude"),
+            "a name stays"
+        );
     }
 
     /// 0.5 has no browser pane: a state an older version saved with one (and an agent's browser pane, and the browser's settings)

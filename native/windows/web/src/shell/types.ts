@@ -257,6 +257,15 @@ export interface DashboardModel {
   attention?: string | null;
 }
 
+/** MC-59: a row of the sidebar's 봇 group: the bot's pane, its name, and its workspace (none for an independent bot, which works in
+ * `folder`). */
+export interface SidebarBot {
+  id: string;
+  handle: string;
+  workspace?: string;
+  folder?: string;
+}
+
 export interface ShellModel {
   version: string;
   dialogOpen: boolean;
@@ -264,6 +273,8 @@ export interface ShellModel {
   panes: PaneInfo[];
   entry: Counts;
   workspaces: SidebarWorkspace[];
+  /** MC-59: the sidebar's 봇 group: every bot, the independent ones first. */
+  bots?: SidebarBot[];
   /** The servers whose workspaces the sidebar lists under this PC's own. */
   servers?: RemoteServer[];
   header?: HeaderModel;

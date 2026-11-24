@@ -522,6 +522,9 @@ pub struct Workspace {
     pub ssh: Option<SshWorkspaceRef>,
     /// MC-34: the OS sandbox of this workspace's agent runs (Mac Seatbelt, the network allow list, the reviewer). None is off.
     pub sandbox: Option<SandboxConfig>,
+    /// MC-59: the app's own home of the independent bots (`<data>/bots`): each of its panes is a bot working in a folder of its own
+    /// (`working_folder`); the sidebar lists them under 봇, never as a workspace. Only true is kept.
+    pub bot_home: Option<bool>,
 }
 
 /// MC-33: which SSH machine and remote folder a workspace opens.
@@ -575,6 +578,7 @@ impl Default for Workspace {
             issue_trackers: None,
             ssh: None,
             sandbox: None,
+            bot_home: None,
         }
     }
 }
@@ -600,6 +604,7 @@ impl Wire for Workspace {
             issue_trackers: lenient_list(o.get("issueTrackers")),
             ssh: lenient_record(o.get("ssh")),
             sandbox: lenient_record(o.get("sandbox")),
+            bot_home: (lenient_bool(o.get("botHome")) == Some(true)).then_some(true),
         })
     }
 
@@ -622,6 +627,7 @@ impl Wire for Workspace {
         out.prop_list("issueTrackers", self.issue_trackers.as_ref());
         out.prop("ssh", self.ssh.as_ref());
         out.prop("sandbox", self.sandbox.as_ref());
+        out.prop_opt_bool("botHome", self.bot_home.filter(|home| *home));
         out.end_object();
     }
 }
@@ -635,6 +641,11 @@ impl Workspace {
     /// The folder is on this computer: neither another Mighty Code's (`remote`) nor an SSH machine's.
     pub fn is_local(&self) -> bool {
         self.remote.is_none() && self.ssh.is_none()
+    }
+
+    /// MC-59: whether this is the independent bots' home.
+    pub fn is_bot_home(&self) -> bool {
+        self.bot_home == Some(true)
     }
 
     pub fn mightywork_auto_sync_on(&self) -> bool {
