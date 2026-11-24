@@ -238,3 +238,11 @@ CLIを最初にインストールした方法(npm、Homebrewなど)をそのま�
 - {{ui:settings.appInfo.sectionTitle}}: {{ui:settings.appInfo.openHelpButton}}ボタンと{{ui:settings.appInfo.stateLocationLabel}}があります。{{ui:settings.appInfo.stateLocationLabel}}はアプリの設定と履歴があるフォルダで、Macでは{{ui:menu.showInFinder}}、Windowsでは{{ui:menu.showInExplorer}}ボタンで開きます。
 
 ![[settings-about]]
+
+### 診断パッケージ {#diagnostics}
+バグを報告するときは、{{ui:diagnostics.settings.sectionTitle}}ボックスの{{ui:diagnostics.settings.export}}ボタンで診断パッケージを作成して添付してください。保存先を選ぶと zip ファイルが 1 つ作られ、完了するとファイル名と Finder（Windows ではエクスプローラー）で表示するボタンが現れます。
+
+- 含まれるもの: アプリのログ（アプリのログとその前のファイル、バックグラウンドデーモン、起動段階、パフォーマンス記録のそれぞれ最後の 2 MB）、アプリのバージョン、インストール済み CLI のバージョン、OS とアーキテクチャ、設定の概要（オンの機能とワークスペース・ペインの数）、そして何が含まれたかを記した `manifest.json`。
+- 取り除くもの: API キー、トークン、パスワード、ペアリングキー、Authorization ヘッダー、アドレス内のユーザー名とパスワード、メールアドレス、パス内のユーザー名（ホームフォルダーは `~`）。`manifest.json` にファイルごとに取り除いた値の数が記されます。
+- 含めないもの: 会話、リクエストと返答、ファイルの内容、ワークスペースとペインの名前、パス、環境変数。
+- アプリはパッケージをどこにも送信しません。送る前に zip を開いて確認できます。

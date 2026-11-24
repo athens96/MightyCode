@@ -78,7 +78,11 @@ pub fn groups(locale: &Locale, category: &str) -> Vec<Group> {
             ]
         }
         "tools" => vec![slot(sections::COMPONENTS, tools::components), titled("settings.toolkit.sectionTitle", tools::toolkit)],
-        "about" => vec![slot(sections::APP_UPDATE, about::app_update), slot(sections::APP_INFO, about::app_info)],
+        "about" => vec![
+            slot(sections::APP_UPDATE, about::app_update),
+            slot(sections::APP_INFO, about::app_info),
+            titled("diagnostics.settings.sectionTitle", about::diagnostics),
+        ],
         _ => vec![],
     }
 }
@@ -318,7 +322,10 @@ mod tests {
         assert!(groups(&locale, "cli").is_empty(), "the CLI tab's accounts and updates are 구성 요소' rows");
         assert_eq!(shown_category("cli"), "tools", "a saved CLI tab opens 구성 요소");
         assert_eq!(titles("remote"), vec!["원격 연결".to_string(), locale.get("ssh.settings.sectionTitle")]);
-        assert_eq!(titles("about"), vec![locale.get("settings.appUpdate.sectionTitle"), "앱 정보".to_string()]);
+        assert_eq!(
+            titles("about"),
+            vec![locale.get("settings.appUpdate.sectionTitle"), "앱 정보".to_string(), locale.get("diagnostics.settings.sectionTitle")]
+        );
         assert!(groups(&locale, "mobile").is_empty(), "모바일 리모트 is 원격 연결's 휴대폰 tab");
         assert!(groups(&locale, "elsewhere").is_empty());
         assert!(available(&locale).iter().flat_map(|c| groups(&locale, c.id)).all(|g| !g.beta), "no box is a paused beta");

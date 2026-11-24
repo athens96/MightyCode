@@ -45,6 +45,9 @@ export interface BlockActions {
   openChanges(runId: string): void;
   /** MC-28: 여기서 갈라내기: the conversation up to the result's request into a new pane in a new worktree (fork.rs). */
   forkHere?(runId: string): void;
+  /** MC-54: 감사 기록 of the result's request (AuditPanel.tsx), and the same audit copied as Markdown. */
+  openAudit?(runId: string): void;
+  copyAudit?(runId: string): void;
 }
 
 /** What only some kinds draw; each part keeps its object while it does not change. */
@@ -417,15 +420,21 @@ export const Block = memo(function Block(props: BlockProps) {
   const showsPill = !extra.pending && !!copy?.state && status !== '' && kind !== 'result';
   const buttons = (resizable && !extra.fitted ? 1 : 0) + (props.foldable ? 1 : 0);
   const fit = role ? headerFit(w, copy?.title ?? '', showsPill ? copy?.state ?? null : null, copy?.capsule ?? null, buttons, role) : null;
+  // A result's header menu: 여기서 갈라내기 once its request settled, and its request's 감사 기록 (MC-54) to open or copy as Markdown.
+  const resultRun = kind === 'result' ? runOf(id) : null;
+  const headMenu = !resultRun ? [] : [
+    ...(actions.forkHere && !copy?.soFar && !props.running
+      ? [{ label: t('fork.menu.here'), icon: <Icon name="git-fork" size={13} />, action: () => actions.forkHere?.(resultRun), testId: 'mighty-fork-here' }] : []),
+    ...(actions.openAudit ? [{ label: t('turnAudit.open'), icon: <Icon name="scroll-text" size={13} />, action: () => actions.openAudit?.(resultRun), testId: 'mighty-audit-open' }] : []),
+    ...(actions.copyAudit ? [{ label: t('turnAudit.copyMarkdown'), icon: <Icon name="copy" size={13} />, action: () => actions.copyAudit?.(resultRun), testId: 'mighty-audit-copy' }] : []),
+  ];
   return (
     <div className={`mighty-block kind-${shownKind} tone-${tone}${copy?.soFar ? ' so-far' : ''}${selected ? ' selected' : ''}${copy?.outline === 'marching' || copy?.outline === 'solid' ? ' halo' : ''}`}
       data-block-id={id} data-kind={shownKind} data-renders={renders.current} data-changed={changed} data-visible={props.visible ? '1' : '0'} data-live={props.running ? '1' : undefined}
       data-pending-request={extra.pending ? id : undefined} data-empty={extra.empty ? '' : undefined}
       style={{ left: x, top: y, width: w, height: h }} title={copy?.fromRecord ? t('graph.history.tag') : undefined}>
       <div className={'mighty-head' + (role ? ' with-role' : '')}
-        onContextMenu={kind === 'result' && actions.forkHere && runOf(id) && !copy?.soFar && !props.running ? (event) => menu.atPointer(event, [
-          { label: t('fork.menu.here'), icon: <Icon name="git-fork" size={13} />, action: () => actions.forkHere?.(runOf(id)!), testId: 'mighty-fork-here' },
-        ]) : undefined}>
+        onContextMenu={headMenu.length > 0 ? (event) => menu.atPointer(event, headMenu) : undefined}>
         {/* The block's status as a small dot (⑨): its words are the header's (the title, the state in the meta), the role's summary its label. */}
         <span className={'mighty-symbol kind-' + (copy?.notice ? 'task' : shownKind)}
           aria-hidden={role ? undefined : 'true'} role={role ? 'img' : undefined} aria-label={role?.summary} title={role?.summary} data-testid={role ? 'mighty-role-' + id : undefined}>
@@ -470,6 +479,10 @@ export const Block = memo(function Block(props: BlockProps) {
           {kind === 'result' && extra.changes && runOf(id) && (
             <button className="mighty-icon" data-testid={'mighty-run-changes-' + id} title={t('runChanges.openButton')} aria-label={t('runChanges.openButton')}
               onClick={() => actions.openChanges(runOf(id)!)}><Icon name="file-search" size={13} weight={1.75} /></button>
+          )}
+          {resultRun && actions.openAudit && !extra.empty && (
+            <button className="mighty-icon" data-testid={'mighty-audit-' + id} title={t('turnAudit.open')} aria-label={t('turnAudit.open')}
+              onClick={() => actions.openAudit?.(resultRun)}><Icon name="scroll-text" size={13} weight={1.75} /></button>
           )}
           {kind === 'result' && !extra.fitted && extra.measure && (
             <button className="mighty-icon" data-fit="" title={t('graph.result.fitToWindow')} onClick={() => actions.fitResult(id)}>⤢</button>

@@ -238,3 +238,11 @@ CLI를 처음 설치한 방법(npm, Homebrew 등)을 그대로 씁니다. CLI마
 - {{ui:settings.appInfo.sectionTitle}}: {{ui:settings.appInfo.openHelpButton}} 단추와 {{ui:settings.appInfo.stateLocationLabel}}가 있습니다. {{ui:settings.appInfo.stateLocationLabel}}는 앱의 설정과 기록이 있는 폴더이고, Mac에서는 {{ui:menu.showInFinder}}, Windows에서는 {{ui:menu.showInExplorer}} 단추로 엽니다.
 
 ![[settings-about]]
+
+### 진단 묶음 {#diagnostics}
+버그를 알릴 때는 {{ui:diagnostics.settings.sectionTitle}} 상자의 {{ui:diagnostics.settings.export}} 단추로 진단 묶음을 만들어 첨부하세요. 저장할 곳을 고르면 zip 파일 하나가 만들어지고, 다 되면 파일 이름과 Finder(Windows는 탐색기)에서 보는 단추가 나옵니다.
+
+- 들어가는 것: 앱 로그(앱 로그와 그 앞 파일, 백그라운드 작업, 시작 단계, 성능 기록의 각 마지막 2MB), 앱 버전, 설치된 CLI 버전, OS와 아키텍처, 설정 요약(켜진 기능과 워크스페이스·창 수), 그리고 무엇이 들어갔는지 적은 `manifest.json`.
+- 지우는 것: API 키, 토큰, 비밀번호, 페어링 키, Authorization 헤더, 주소 속 아이디·비밀번호, 이메일, 경로 속 사용자 이름(홈 폴더는 `~`). `manifest.json`에 파일마다 몇 개를 지웠는지 나옵니다.
+- 넣지 않는 것: 대화, 요청과 답, 파일 내용, 워크스페이스와 창의 이름, 경로, 환경 변수.
+- 앱은 묶음을 어디로도 보내지 않습니다. 보내기 전에 zip을 열어 확인할 수 있습니다.

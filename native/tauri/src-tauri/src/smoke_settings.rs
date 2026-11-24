@@ -674,11 +674,15 @@ mod tests {
             settings_sections::smoke_run(&locale, &shown, &[], &[], || switch.get(), |value| switch.set(value)).is_ok()
         };
         assert!(check(groups.clone()), "the page as Settings builds it");
+        // The last registered heading (정보 ends with 진단, MC-54, a box of its own the registration does not list).
         let mut dropped = groups.clone();
-        dropped.last_mut().unwrap().pop();
+        let last = dropped.iter_mut().rev().find(|g| g.iter().any(|t| registered.contains(t))).expect("a registered heading");
+        let at = last.iter().rposition(|t| registered.contains(t)).expect("a registered heading");
+        last.remove(at);
         assert!(!check(dropped), "a heading dropped");
         let mut swapped = groups.clone();
-        let about = swapped.iter_mut().find(|g| g.len() == 2 && g.iter().all(|t| registered.contains(t))).expect("앱 정보's two boxes");
+        let about =
+            swapped.iter_mut().find(|g| g.len() >= 2 && g[..2].iter().all(|t| registered.contains(t))).expect("앱 정보's two boxes");
         about.swap(0, 1);
         assert!(!check(swapped), "out of its category's order");
         let mut twice = groups.clone();

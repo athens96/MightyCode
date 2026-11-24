@@ -238,3 +238,11 @@ The {{ui:settings.nav.about}} tab updates the app and shows where its data is ke
 - {{ui:settings.appInfo.sectionTitle}}: the {{ui:settings.appInfo.openHelpButton}} button and the {{ui:settings.appInfo.stateLocationLabel}}. The {{ui:settings.appInfo.stateLocationLabel}} is the folder with the app's settings and history; open it with {{ui:menu.showInFinder}} on a Mac or {{ui:menu.showInExplorer}} on Windows.
 
 ![[settings-about]]
+
+### Diagnostics bundle {#diagnostics}
+When you report a bug, make a diagnostics bundle with the {{ui:diagnostics.settings.export}} button in the {{ui:diagnostics.settings.sectionTitle}} box and attach it. Choose where to save it and one zip file is made; once it is done, its name and a button that shows it in Finder (Explorer on Windows) appear.
+
+- What goes in: the app's logs (the last 2 MB each of the app's log and its previous file, the background daemon, the start-up stages and the performance log), the app's version, the installed CLI versions, the OS and architecture, a settings summary (which features are on and how many workspaces and panes there are), and `manifest.json`, which lists what went in.
+- What is taken out: API keys, tokens, passwords, pairing keys, Authorization headers, user names and passwords in addresses, e-mail addresses and user names in paths (the home folder becomes `~`). `manifest.json` says how many values were taken out of each file.
+- What never goes in: conversations, requests and replies, file contents, workspace and pane names, paths and environment variables.
+- The app sends the bundle nowhere. You can open the zip and look before you send it.
