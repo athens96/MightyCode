@@ -35,7 +35,9 @@ LOCK_PATH="/tmp/mightycode-install-${UID}-${LOCK_KEY}.lock"
 exec 9>"$LOCK_PATH"
 /usr/bin/lockf -t 0 9
 
-running() { ps -axo command | grep -F "$BINARY" | grep -v grep >/dev/null; }
+# The app itself (a window or the headless `--server`); the background daemon (`--daemon`, which may keep running after
+# 앱만 종료) and the agents' MCP helpers are its children and do not hold the swap back.
+running() { ps -axo command | grep -F "$BINARY" | grep -v grep | grep -Ev -- ' --(daemon|agent-[a-z-]+-mcp)( |$)' >/dev/null; }
 # The helper runs as `/bin/sh <updates>/<version>/install.sh`. No single grep
 # in this pipeline carries both strings, so it never matches itself.
 update_helper_running() { ps -axo command | grep -F "$UPDATES/" | grep -F "/install.sh" >/dev/null; }
