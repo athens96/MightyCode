@@ -5022,5 +5022,6 @@
   "bot.new.message": "워크스페이스에 속하지 않고 자기 폴더에서 일하는 봇입니다. 만들기를 누르면 앱 데이터 폴더 안에 봇 폴더를 만들고, 폴더 골라 만들기를 누르면 일할 폴더를 직접 고릅니다.",
   "bot.new.agent": "에이전트",
   "bot.new.create": "만들기",
-  "bot.new.pickFolder": "폴더 골라 만들기…"
+  "bot.new.pickFolder": "폴더 골라 만들기…",
+  "bot.sidebar.doubleClick": "두 번 누르면 이 봇의 워크스페이스를 엽니다"
 }

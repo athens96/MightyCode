@@ -1032,6 +1032,9 @@ pub struct SidebarBot {
     pub handle: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    /// The id of the workspace it works in (none for an independent bot): a double click selects that workspace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
 }
@@ -1044,6 +1047,7 @@ pub fn sidebar_bots(state: &AppSnapshot) -> Vec<SidebarBot> {
             id: s.id().into(),
             handle: bot.handle.clone(),
             workspace: (!independent).then(|| state.workspace(s.workspace_id()).map(|w| w.name().to_string()).unwrap_or_default()),
+            workspace_id: (!independent).then(|| s.workspace_id().to_string()),
             folder: independent.then(|| s.working_folder.clone()).flatten(),
         })
     };
@@ -1646,6 +1650,7 @@ mod tests {
         assert_eq!(bots[0].workspace, None, "an independent bot");
         assert_eq!(bots[0].folder.as_deref(), Some(format!("{root}/bots/리뷰어").as_str()));
         assert_eq!(bots[1].workspace.as_deref(), Some("Shop"));
+        assert_eq!((bots[0].workspace_id.as_deref(), bots[1].workspace_id.as_deref()), (None, Some("w1")));
         assert!(state.workspace("home").is_some_and(Workspace::is_bot_home), "the mark survives normalize");
     }
     use super::*;

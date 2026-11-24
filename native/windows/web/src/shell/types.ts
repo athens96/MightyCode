@@ -263,6 +263,8 @@ export interface SidebarBot {
   id: string;
   handle: string;
   workspace?: string;
+  /** The workspace it works in (none for an independent bot): a double click selects it. */
+  workspaceId?: string;
   folder?: string;
 }
 

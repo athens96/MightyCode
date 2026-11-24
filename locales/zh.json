@@ -5022,5 +5022,6 @@
   "bot.new.message": "不属于任何工作区、在自己文件夹中工作的机器人。点击“创建”会在应用数据文件夹中建立机器人的文件夹；点击“选择文件夹并创建”可自行选择工作文件夹。",
   "bot.new.agent": "代理",
   "bot.new.create": "创建",
-  "bot.new.pickFolder": "选择文件夹并创建…"
+  "bot.new.pickFolder": "选择文件夹并创建…",
+  "bot.sidebar.doubleClick": "双击打开此机器人的工作区"
 }

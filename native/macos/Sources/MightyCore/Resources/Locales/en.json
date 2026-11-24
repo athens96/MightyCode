@@ -5022,5 +5022,6 @@
   "bot.new.message": "A bot of no workspace that works in a folder of its own. Create makes its folder in the app's data folder; Pick Folder and Create lets you choose where it works.",
   "bot.new.agent": "Agent",
   "bot.new.create": "Create",
-  "bot.new.pickFolder": "Pick Folder and Create…"
+  "bot.new.pickFolder": "Pick Folder and Create…",
+  "bot.sidebar.doubleClick": "Double-click to open this bot's workspace"
 }

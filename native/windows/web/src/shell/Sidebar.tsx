@@ -318,9 +318,10 @@ const botsOpenKey = 'mighty.sidebar.botsOpen';
 
 /**
  * MC-59: the 봇 group under the workspaces: every bot (each agent pane of this computer; the independent ones first), its state,
- * name and where it works; a click selects its pane, + makes an independent bot (bot.rs), the row's menu opens its settings.
+ * name and where it works; a click selects its pane, a double click selects its workspace (opened and brought into view in the
+ * list above; an independent bot has none), + makes an independent bot (bot.rs), the row's menu opens its settings.
  */
-function BotGroup({ bots, panes, activeId, search }: { bots: SidebarBot[]; panes: Map<string, PaneInfo>; activeId: string | undefined; search: string }) {
+function BotGroup({ bots, panes, activeId, search, workspaces }: { bots: SidebarBot[]; panes: Map<string, PaneInfo>; activeId: string | undefined; search: string; workspaces: SidebarWorkspace[] }) {
   const { t } = useServices();
   const call = useCall();
   const menu = useMenu();
@@ -332,6 +333,13 @@ function BotGroup({ bots, panes, activeId, search }: { bots: SidebarBot[]; panes
     const next = !open;
     setOpen(next);
     try { window.localStorage.setItem(botsOpenKey, String(next)); } catch { /* storage off: this session only */ }
+  };
+  const showWorkspace = (id: string | undefined) => {
+    if (!id) return;
+    call('selectWorkspace', { id });
+    if (workspaces.some((w) => w.id === id && !w.expanded)) call('toggleDisclosure', { id });
+    // Once the list has drawn the workspace's open group, its row is brought into view.
+    window.requestAnimationFrame(() => document.querySelector(`[data-workspace-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
   };
   const words = search.trim().toLowerCase();
   const shown = words.length === 0 ? bots : bots.filter((bot) => [bot.handle, bot.workspace ?? '', panes.get(bot.id)?.title ?? ''].some((text) => text.toLowerCase().includes(words)));
@@ -357,8 +365,8 @@ function BotGroup({ bots, panes, activeId, search }: { bots: SidebarBot[]; panes
         ];
         return (
           <button key={bot.id} type="button" className={'sidebar-pane sidebar-bot' + (bot.id === activeId ? ' active' : '')} data-testid="sidebar-bot" data-session-id={bot.id}
-            title={t('bot.label', { handle: bot.handle }) + (bot.folder ? '\n' + bot.folder : '')}
-            onClick={() => choose(bot.id)} onContextMenu={(event) => menu.atPointer(event, items)}>
+            title={t('bot.label', { handle: bot.handle }) + (bot.folder ? '\n' + bot.folder : '') + (bot.workspaceId ? '\n' + t('bot.sidebar.doubleClick') : '')}
+            onClick={() => choose(bot.id)} onDoubleClick={() => showWorkspace(bot.workspaceId)} onContextMenu={(event) => menu.atPointer(event, items)}>
             <StatusGlyph tone={info?.tone ?? 'idle'} kind={info?.kind ?? 'claude'} />
             <span className="sidebar-pane-text">
               <span className="sidebar-pane-line">
@@ -442,7 +450,7 @@ export function Sidebar() {
           </div>
         ))}
         {/* MC-59: the bots, under the workspaces. */}
-        <BotGroup bots={shell.bots ?? []} panes={panes} activeId={dashboard ? undefined : activeId} search={search} />
+        <BotGroup bots={shell.bots ?? []} panes={panes} activeId={dashboard ? undefined : activeId} search={search} workspaces={shell.workspaces} />
       </div>
       {/* With no workspace listed (none yet, or none matching the search) these are the sidebar's ways in (M/WorkspaceView.swift:164-171). */}
       {listed.length === 0 && (
