@@ -335,7 +335,7 @@ pub fn bot(bot: Option<&crate::model::PaneBot>) -> Option<crate::model::PaneBot>
         }
         t[..end].to_string()
     });
-    Some(crate::model::PaneBot { handle, instructions })
+    Some(crate::model::PaneBot { handle, instructions, auto: bot.auto })
 }
 
 /// MC-58: one pane per bot name: a later pane (in the saved order) with a name already taken loses it ([`name_bots`] names it again).
@@ -351,39 +351,53 @@ fn unique_bots(sessions: &mut [Arc<RunSession>]) {
 }
 
 /// MC-59: every top-level agent pane of this computer is a bot: one without a name (new, saved before bots, or whose name another
-/// pane took) gets one made from its title ([`bot_name`]), kept from then on. The app runs this before it normalizes a change;
-/// [`normalize`] itself never names a pane, so it saves what the C# app saves.
-pub fn name_bots(state: &mut AppSnapshot) {
+/// pane took) gets one, kept from then on. MC-61: the name is a friendly one in the app's language ([`crate::bot_names::pick`],
+/// `language` asked only when a pane needs one), marked as the app's (`auto`); a name saved before that mark, in a workspace and
+/// without instructions (one made from the pane's title), is replaced once the same way. The app runs this before it normalizes a
+/// change; [`normalize`] itself never names a pane, so it saves what the C# app saves.
+pub fn name_bots(state: &mut AppSnapshot, language: impl FnOnce(&AppSnapshot) -> &'static str) {
     let remote_ids: HashSet<String> = state.workspaces().iter().filter(|w| w.remote.is_some()).map(|w| w.id().to_string()).collect();
+    let home_ids: HashSet<String> = state.workspaces().iter().filter(|w| w.is_bot_home()).map(|w| w.id().to_string()).collect();
+    let bot_able = |pane: &RunSession| {
+        pane.mirror.is_none() && pane.kind() == "claude" && pane.parent_session_id.is_none() && !remote_ids.contains(pane.workspace_id())
+    };
+    // A title-made name of an earlier build: the app's, but not yet marked so.
+    let renamed = |pane: &RunSession| {
+        pane.bot.as_ref().is_some_and(|b| b.auto.is_none() && b.instructions.is_none()) && bot_able(pane) && !home_ids.contains(pane.workspace_id())
+    };
     let mut seen = HashSet::new();
-    let mut taken_twice = HashSet::new();
+    let mut dropped = HashSet::new();
     for pane in state.sessions().iter().filter(|p| p.mirror.is_none()) {
-        if let Some(bot) = pane.bot.as_ref()
-            && !seen.insert(crate::model::PaneBot::key(&bot.handle))
-        {
-            taken_twice.insert(pane.id().to_string());
+        let Some(bot) = pane.bot.as_ref() else { continue };
+        if crate::model::PaneBot::handle_of(&bot.handle).is_none() || renamed(pane) || !seen.insert(crate::model::PaneBot::key(&bot.handle)) {
+            dropped.insert(pane.id().to_string());
         }
     }
-    let sessions = state.sessions_mut();
-    for pane in sessions.iter_mut() {
-        let unusable = pane.bot.as_ref().is_some_and(|b| crate::model::PaneBot::handle_of(&b.handle).is_none());
-        if taken_twice.contains(pane.id()) || unusable {
-            Arc::make_mut(pane).bot = None;
-        }
-        let bot_able = pane.mirror.is_none()
-            && pane.kind() == "claude"
-            && pane.parent_session_id.is_none()
-            && !remote_ids.contains(pane.workspace_id());
-        if !bot_able || pane.bot.is_some() {
+    let unnamed: Vec<String> = state
+        .sessions()
+        .iter()
+        .filter(|p| bot_able(p) && (p.bot.is_none() || dropped.contains(p.id())))
+        .map(|p| p.id().to_string())
+        .collect();
+    if dropped.is_empty() && unnamed.is_empty() {
+        return;
+    }
+    let language = if unnamed.is_empty() { "en" } else { language(state) };
+    for pane in state.sessions_mut().iter_mut() {
+        if !dropped.contains(pane.id()) && !unnamed.iter().any(|id| id == pane.id()) {
             continue;
         }
-        let handle = bot_name(pane.title(), &seen);
-        seen.insert(crate::model::PaneBot::key(&handle));
-        Arc::make_mut(pane).bot = Some(crate::model::PaneBot { handle, instructions: None });
+        let pane = Arc::make_mut(pane);
+        pane.bot = None;
+        if unnamed.iter().any(|id| id == pane.id()) {
+            let handle = crate::bot_names::pick(pane.id(), language, &seen);
+            seen.insert(crate::model::PaneBot::key(&handle));
+            pane.bot = Some(crate::model::PaneBot { handle, instructions: None, auto: Some(true) });
+        }
     }
 }
 
-/// MC-59: a bot name made from a pane's title: its letters and digits, spaces and other marks as `-` (one at a time, none at the
+/// MC-59: a bot name made from a text (MC-61: a friendly name that is taken): its letters and digits, spaces and other marks as `-` (one at a time, none at the
 /// ends), cut to fit, `bot` when nothing is left; `-2`, `-3`, … after it while the name is `taken` (compared as [`PaneBot::key`]).
 pub fn bot_name(title: &str, taken: &HashSet<String>) -> String {
     use crate::model::{BOT_HANDLE_LIMIT, PaneBot};
@@ -2627,7 +2641,7 @@ mod tests {
         ));
         let page = normalize(&s, true).unwrap();
         let bot = |id: &str| page.session(id).and_then(|p| p.bot.clone());
-        assert_eq!(bot("s1"), Some(crate::model::PaneBot { handle: "reviewer".into(), instructions: Some("Review.".into()) }));
+        assert_eq!(bot("s1"), Some(crate::model::PaneBot { handle: "reviewer".into(), instructions: Some("Review.".into()), auto: None }));
         assert_eq!(bot("s2"), None, "a handle already taken");
         assert_eq!(bot("s3"), None, "not a handle");
         assert_eq!(bot("s4"), None, "a terminal pane is no bot");
@@ -2638,12 +2652,14 @@ mod tests {
         assert_eq!(page.pane_or_bot("s2").map(|p| p.id()), Some("s2"));
         assert!(page.bot_pane("@nobody").is_none());
         assert_eq!(page.bots().count(), 2);
-        // MC-59: the app's naming pass gives the others names from their titles.
+        // MC-59: the app's naming pass gives the others names (MC-61: friendly ones in the app's language).
         let mut named = s.clone();
-        name_bots(&mut named);
+        name_bots(&mut named, |_| "ko");
         let named = normalize(&named, true).unwrap();
         let handle = |id: &str| named.session(id).and_then(|p| p.bot.clone()).map(|b| b.handle);
-        assert_eq!((handle("s2").as_deref(), handle("s3").as_deref()), (Some("Two"), Some("Three")));
+        let korean = crate::bot_names::names("ko");
+        assert!(["s2", "s3"].iter().all(|id| handle(id).is_some_and(|h| korean.contains(&h.as_str()))), "{:?}", (handle("s2"), handle("s3")));
+        assert_eq!(handle("s1").as_deref(), Some("reviewer"), "a name with instructions stays");
         assert_eq!((handle("s4"), handle("s5")), (None, None), "a terminal and a child are no bots");
         assert_eq!(named.bots().count(), 4);
         let again = AppSnapshot::read(&serde_json::from_str(&crate::json::Wire::to_json(&page)).unwrap()).unwrap();
@@ -2694,8 +2710,8 @@ mod tests {
         assert!(numbered.ends_with("-2") && numbered.chars().count() == 32, "{numbered}");
     }
 
-    /// MC-59: agent panes saved before bots get names from the naming pass, kept once given; a terminal and a child do not; normalize
-    /// alone names nothing (it saves what the C# app saves).
+    /// MC-59: agent panes saved before bots get names from the naming pass (MC-61: friendly ones in the app's language, marked as the
+    /// app's), kept once given; a terminal and a child do not; normalize alone names nothing (it saves what the C# app saves).
     #[test]
     fn every_top_level_agent_pane_becomes_a_bot_on_load() {
         let s = state(&format!(
@@ -2708,20 +2724,46 @@ mod tests {
         ));
         assert_eq!(normalize(&s, true).unwrap().bots().count(), 0, "normalize names nothing");
         let mut s = s;
-        name_bots(&mut s);
+        name_bots(&mut s, |_| "en");
         let page = normalize(&s, true).unwrap();
         let name = |id: &str| page.session(id).and_then(|p| p.bot.clone()).map(|b| b.handle);
-        assert_eq!((name("s1").as_deref(), name("s2").as_deref()), (Some("Claude"), Some("Claude-2")));
+        let english = crate::bot_names::names("en");
+        let (one, two) = (name("s1").unwrap(), name("s2").unwrap());
+        assert!(english.contains(&one.as_str()) && english.contains(&two.as_str()) && one != two, "{one} {two}");
+        assert_eq!(page.session("s1").and_then(|p| p.bot.clone()).and_then(|b| b.auto), Some(true));
         assert_eq!((name("s3"), name("s4")), (None, None));
         let mut renamed = page.clone();
         let pane = renamed.sessions_mut().iter_mut().find(|p| p.id() == "s1").unwrap();
         Arc::make_mut(pane).title = Some("Something else".into());
-        name_bots(&mut renamed);
+        name_bots(&mut renamed, |_| "ko");
         assert_eq!(
-            normalize(&renamed, false).unwrap().session("s1").and_then(|p| p.bot.clone()).map(|b| b.handle).as_deref(),
-            Some("Claude"),
-            "a name stays"
+            normalize(&renamed, false).unwrap().session("s1").and_then(|p| p.bot.clone()).map(|b| b.handle),
+            Some(one),
+            "a name stays, whatever the title or the language"
         );
+    }
+
+    /// MC-61: a name an earlier build made from the title (no `auto` mark, no instructions, in a workspace) is replaced once by a
+    /// friendly one; the user's name (`auto: false`), a bot with instructions and an independent bot keep theirs.
+    #[test]
+    fn a_name_made_from_the_title_is_replaced_by_a_friendly_one() {
+        let s = state(&format!(
+            r#"{{"version":1,"workspaces":[{{"id":"w1","name":"A","path":"{0}"}},{{"id":"home","name":"Bots","path":"{0}/bots","botHome":true}}],"sessions":[
+                {{"id":"s1","workspaceId":"w1","titleMode":"fixed","title":"이창은 봇이 아니야","bot":{{"handle":"이창은-봇이-아니야"}}}},
+                {{"id":"s2","workspaceId":"w1","titleMode":"fixed","title":"T","bot":{{"handle":"테스트","auto":false}}}},
+                {{"id":"s3","workspaceId":"w1","titleMode":"fixed","title":"T","bot":{{"handle":"reviewer","instructions":"Review."}}}},
+                {{"id":"s4","workspaceId":"home","titleMode":"fixed","title":"T","bot":{{"handle":"helper"}}}}]}}"#,
+            root()
+        ));
+        let mut s = s;
+        name_bots(&mut s, |_| "ko");
+        let page = normalize(&s, true).unwrap();
+        let name = |id: &str| page.session(id).and_then(|p| p.bot.clone()).map(|b| b.handle).unwrap();
+        assert!(crate::bot_names::names("ko").contains(&name("s1").as_str()), "{}", name("s1"));
+        assert_eq!((name("s2"), name("s3"), name("s4")), ("테스트".into(), "reviewer".into(), "helper".into()));
+        let mut again = page.clone();
+        name_bots(&mut again, |_| "en");
+        assert_eq!(normalize(&again, false).unwrap().session("s1").and_then(|p| p.bot.clone()).map(|b| b.handle), Some(name("s1")));
     }
 
     /// 0.5 has no browser pane: a state an older version saved with one (and an agent's browser pane, and the browser's settings)

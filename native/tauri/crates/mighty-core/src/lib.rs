@@ -10,6 +10,7 @@ pub mod app_update_view;
 pub mod attachment;
 pub mod attention;
 pub mod automation;
+pub mod bot_names;
 pub mod control;
 pub mod daemon;
 pub mod demo;

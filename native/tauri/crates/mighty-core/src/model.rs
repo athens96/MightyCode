@@ -1160,6 +1160,9 @@ pub struct PaneBot {
     /// What the bot is for and how it works, put in front of a new conversation's first request; at most
     /// [`BOT_INSTRUCTIONS_LIMIT`] bytes.
     pub instructions: Option<String>,
+    /// MC-61: who chose the name: `Some(true)` the app (a friendly name in the app's language), `Some(false)` the user; None a name
+    /// saved before this mark, which the app names again unless it carries instructions ([`crate::normalize::name_bots`]).
+    pub auto: Option<bool>,
 }
 
 /// MC-58: the longest bot handle, in characters.
@@ -1208,13 +1211,14 @@ impl Wire for PaneBot {
         let Some(handle) = json::opt_string(o.get("handle"))?.and_then(|h| PaneBot::handle_of(&h)) else {
             return fail("a bot without a handle");
         };
-        Ok(PaneBot { handle, instructions: lenient_string(o.get("instructions")) })
+        Ok(PaneBot { handle, instructions: lenient_string(o.get("instructions")), auto: lenient_bool(o.get("auto")) })
     }
 
     fn write(&self, out: &mut JsonOut) {
         out.begin_object();
         out.prop_str("handle", Some(&self.handle));
         out.prop_str("instructions", self.instructions.as_deref());
+        out.prop_opt_bool("auto", self.auto);
         out.end_object();
     }
 }

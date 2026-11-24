@@ -360,7 +360,8 @@ function BotGroup({ bots, panes, activeId, search, workspaces }: { bots: Sidebar
   };
   const row = (bot: SidebarBot) => {
     const info = panes.get(bot.id);
-    const where = bot.workspace ?? t('bot.sidebar.independent');
+    // MC-61: a workspace bot shows its workspace after its name, and what its pane is on below; any other bot where it lives.
+    const detail = bot.workspaceId ? info?.title ?? '' : t('bot.sidebar.independent');
     const items: MenuItem[] = [
       { label: t('bot.menu.edit'), action: () => call('paneBot', { paneId: bot.id }) },
       { label: t('menu.closePane'), action: () => call('closeSession', { id: bot.id }) },
@@ -373,11 +374,12 @@ function BotGroup({ bots, panes, activeId, search, workspaces }: { bots: Sidebar
         <span className="sidebar-pane-text">
           <span className="sidebar-pane-line">
             <span className={'sidebar-pane-title' + (info?.settled === false ? ' strong' : '')}>@{bot.handle}</span>
+            {bot.workspaceId && bot.workspace && <span className="sidebar-bot-workspace" data-testid="sidebar-bot-workspace">{bot.workspace}</span>}
             {info?.attention && <span className="sidebar-attention-dot" title={info.attention.help} aria-label={info.attention.help} />}
           </span>
           <span className="sidebar-pane-meta">
             {info?.agent && <ProviderMark provider={info.agent} size={11} />}
-            <span className="sidebar-pane-detail">{where}</span>
+            <span className="sidebar-pane-detail">{detail}</span>
           </span>
         </span>
       </button>

@@ -30,7 +30,7 @@ mod tests {
     use crate::checklist::without_app_notes;
 
     fn reviewer(instructions: Option<&str>) -> PaneBot {
-        PaneBot { handle: "reviewer".into(), instructions: instructions.map(str::to_string) }
+        PaneBot { handle: "reviewer".into(), instructions: instructions.map(str::to_string), auto: None }
     }
 
     #[test]

@@ -347,6 +347,11 @@ button { font: inherit; color: inherit; }
 .sidebar-bot-category-header:hover { color: var(--ink); }
 .sidebar-bot-category-title { font-weight: 500; }
 /* MC-58: a bot's handle beside its pane's title. */
+/* MC-61: the workspace a bot of 워크스페이스 봇 works in, after its name: a small muted tag that gives way first. */
+.sidebar-bot-workspace {
+  flex: 0 10 auto; min-width: 2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 0 var(--space-xs); border-radius: var(--radius-search); background: var(--subtle); color: var(--sidebar-ink2); font-size: var(--type-small);
+}
 .sidebar-bot-mark { color: var(--accent); flex: none; font-size: 11px; font-weight: 600; white-space: nowrap; }
 .dashboard-row-fork { display: inline-flex; align-items: center; gap: 3px; color: var(--ink2); overflow: hidden; text-overflow: ellipsis; }
 .dashboard-row-fork > svg { color: var(--accent); flex: none; }

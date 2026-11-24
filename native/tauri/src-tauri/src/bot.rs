@@ -145,13 +145,20 @@ pub fn open(host: &Arc<Host>, id: String) {
                     return;
                 }
                 let words = instructions.get().trim().to_string();
-                Some(PaneBot { handle, instructions: (!words.is_empty()).then_some(words) })
+                Some(PaneBot { handle, instructions: (!words.is_empty()).then_some(words), auto: Some(false) })
             }
             DialogResult::Secondary | DialogResult::None => return,
         };
         let _ = crate::frame::act(&host, async {
             let mut view = host.view();
-            crate::composer::change(&mut view, &id, |pane| RunSession { bot: bot.clone(), ..pane.clone() })
+            // MC-61: a name the user kept stays the app's (it may be named again only if it never was marked); any other is theirs.
+            let bot = |pane: &RunSession| {
+                bot.clone().map(|chosen| {
+                    let kept = pane.bot.as_ref().filter(|old| PaneBot::key(&old.handle) == PaneBot::key(&chosen.handle));
+                    PaneBot { auto: if kept.is_some_and(|old| old.auto == Some(true)) { Some(true) } else { Some(false) }, ..chosen }
+                })
+            };
+            crate::composer::change(&mut view, &id, |pane| RunSession { bot: bot(pane), ..pane.clone() })
         })
         .await;
     });
@@ -363,7 +370,7 @@ pub fn open_new(host: &Arc<Host>) {
         };
         let words = instructions.get().trim().to_string();
         let provider = providers.get(agent.get()).copied().unwrap_or("claude").to_string();
-        let bot = PaneBot { handle: name, instructions: (!words.is_empty()).then_some(words) };
+        let bot = PaneBot { handle: name, instructions: (!words.is_empty()).then_some(words), auto: Some(false) };
         if let Err(error) = create_independent(&host, bot, &provider, &folder).await {
             host.log.line(&format!("bot: an independent bot was not made: {error}"));
             let mut view = host.view();
