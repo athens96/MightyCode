@@ -8,13 +8,13 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use mighty_core::locale::Locale;
-use mighty_run::os;
 
 use super::merge::{checked_out_head, has_tracked_changes, head};
 use super::paths::{DelegationPaths, is_inside, is_link, same};
 use super::worktree::is_safe_session_id;
 use super::{ChildGit, Git, branch_name, exists, is_folder, is_object_name, line, message, run, usable_folder};
 use crate::host::DelegationPaneActivity;
+use crate::machine::Machine;
 use crate::model::{ChildState, MergeRecord};
 use crate::request::{DelegationReasonCode, delegation_names};
 
@@ -260,80 +260,88 @@ pub async fn remove_own_worktree(
     worktree_root: &str,
     locale: &Locale,
 ) -> ChildDiscardOutcome {
+    let here = crate::machine::Local::new(git.clone(), paths.clone(), None);
+    remove_own_worktree_on(&here, id, worktree_path, branch, parent_checkout, worktree_root, locale).await
+}
+
+/// [`remove_own_worktree`] on the machine the worktree is on (MC-47: an SSH workspace's pane worktree over there), every step the
+/// same; a question the machine could not answer stops the discard.
+#[allow(clippy::too_many_arguments)]
+pub async fn remove_own_worktree_on(
+    machine: &dyn Machine,
+    id: &str,
+    worktree_path: &str,
+    branch: &str,
+    parent_checkout: &str,
+    worktree_root: &str,
+    locale: &Locale,
+) -> ChildDiscardOutcome {
     let failed = |text: String| ChildDiscardOutcome::Failed(text);
     // Only the child's own place is ever forced away, never a folder a record names elsewhere. Its last name is compared as written
     // (beyond C#): a place that is now a link to another folder is still this place, not the folder it points to.
-    let own = paths.canonical_place(worktree_path);
-    if !is_safe_session_id(id) || !same(&own, &os::combine(&paths.canonical(worktree_root), id)) {
+    let own = machine.canonical_place(worktree_path);
+    if !is_safe_session_id(id) || !machine.same(&own, &machine.combine(&machine.canonical(worktree_root), id)) {
         return failed(locale.get("delegation.card.error.worktreeMisplaced"));
     }
     // Only the child's own branch is ever deleted by force.
     if branch != branch_name(id) && !mighty_core::model::is_pane_branch(branch, id) {
         return failed(locale.get("delegation.card.error.branchMisplaced"));
     }
-    if !git.available() {
+    if !machine.git_available() {
         return failed(locale.get("delegation.card.error.gitMissing"));
     }
-    if !usable_folder(parent_checkout) {
+    if !machine.usable_folder(parent_checkout).await {
         return failed(locale.get("delegation.card.error.parentCheckoutUnreachable"));
     }
     // The place itself replaced by a link or junction (beyond C#): only the link goes, by itself, before git is asked anything, so no
     // git step ever reaches through it to the folder it points to (another worktree among them).
-    if is_link(worktree_path) {
-        let link = worktree_path.to_string();
-        if let Err(error) = blocking(move || unlink(&link)).await {
-            return failed(error.to_string());
+    match machine.is_link(worktree_path).await {
+        Ok(true) => {
+            if let Err(error) = machine.unlink(worktree_path).await {
+                return failed(error);
+            }
         }
+        Ok(false) => {}
+        Err(error) => return failed(error),
     }
-    let Some(listed) = worktrees(git, paths, parent_checkout).await else {
+    let Some(listed) = worktrees_on(machine, parent_checkout).await else {
         return failed(locale.get("delegation.card.error.parentCheckoutUnreachable"));
     };
     // A directory link inside goes first, by itself: git's forced remove must never reach what it points to. Looked for again right
     // before git, a link made meanwhile (the place itself among them) stops the discard with nothing removed by git.
-    let folder = worktree_path.to_string();
-    let unlinked = blocking(move || {
-        // A place that became a link again is never walked: the walk would be the folder it points to.
-        if is_link(&folder) {
-            return Ok(true);
-        }
-        for link in links(&folder)? {
-            unlink(&link)?;
-        }
-        Ok(is_link(&folder) || has_links(&folder)?)
-    })
-    .await;
-    match unlinked {
+    match machine.clear_links(worktree_path).await {
         Ok(false) => {}
         Ok(true) => return failed(locale.get("delegation.card.error.linkAppeared")),
-        Err(error) => return failed(error.to_string()),
+        Err(error) => return failed(error),
     }
-    let mut order = nested(&listed, &own);
-    order.extend(listed.iter().filter(|path| same(path, &own)).cloned());
+    let mut order = nested_on(machine, &listed, &own);
+    order.extend(listed.iter().filter(|path| machine.same(path, &own)).cloned());
     for path in &order {
-        let Some(removed) = run(git, &["worktree", "remove", "--force", "--force", path], parent_checkout, GIT_TIMEOUT).await else {
+        let Some(removed) = run(machine, &["worktree", "remove", "--force", "--force", path], parent_checkout, GIT_TIMEOUT).await else {
             return failed(locale.get("delegation.card.error.gitUnfinished"));
         };
         if removed.exit_code != 0 {
             return failed(message(&removed));
         }
     }
-    let folder = worktree_path.to_string();
-    if let Err(error) = blocking(move || remove(&folder)).await {
-        return failed(error.to_string());
+    if let Err(error) = machine.remove(worktree_path).await {
+        return failed(error);
     }
     // The OS may only have marked the folder for removal while another program still holds it open: it is not gone yet.
-    if exists(worktree_path) {
-        return failed(os_message(303));
+    match machine.exists(worktree_path).await {
+        Ok(false) => {}
+        Ok(true) => return failed(os_message(303)),
+        Err(error) => return failed(error),
     }
     let reference = format!("refs/heads/{branch}");
-    let Some(found) = run(git, &["rev-parse", "-q", "--verify", &reference], parent_checkout, STEP_TIMEOUT)
+    let Some(found) = run(machine, &["rev-parse", "-q", "--verify", &reference], parent_checkout, STEP_TIMEOUT)
         .await
         .filter(|found| matches!(found.exit_code, 0 | 1))
     else {
         return failed(locale.get("delegation.card.error.childBranchUnread"));
     };
     if found.exit_code == 0 {
-        let Some(deleted) = run(git, &["branch", "-D", branch], parent_checkout, STEP_TIMEOUT).await else {
+        let Some(deleted) = run(machine, &["branch", "-D", branch], parent_checkout, STEP_TIMEOUT).await else {
             return failed(locale.get("delegation.card.error.gitUnfinished"));
         };
         if deleted.exit_code != 0 {
@@ -341,6 +349,45 @@ pub async fn remove_own_worktree(
         }
     }
     ChildDiscardOutcome::Discarded
+}
+
+/// [`worktrees`] on any machine.
+async fn worktrees_on(machine: &dyn Machine, folder: &str) -> Option<Vec<String>> {
+    if !machine.usable_folder(folder).await {
+        return None;
+    }
+    let list = run(machine, &["worktree", "list", "--porcelain", "-z"], folder, STEP_TIMEOUT).await.filter(|list| list.exit_code == 0)?;
+    Some(list.stdout.split('\0').filter_map(|entry| entry.strip_prefix("worktree ")).map(|path| machine.canonical_place(path)).collect())
+}
+
+/// [`nested`] with the machine's path rules.
+fn nested_on(machine: &dyn Machine, listed: &[String], own: &str) -> Vec<String> {
+    let mut inside: Vec<String> = listed.iter().filter(|path| machine.is_inside(path, own)).cloned().collect();
+    inside.sort_by_key(|path| std::cmp::Reverse(path.chars().count()));
+    inside
+}
+
+/// The local machine's `clear_links` (`crate::machine::Local`): the directory links inside `folder` unlinked, then whether the place is
+/// a link or one is still inside (`remove_own_worktree`'s walk, unchanged).
+pub(crate) fn clear_links(folder: &str) -> std::io::Result<bool> {
+    // A place that became a link again is never walked: the walk would be the folder it points to.
+    if is_link(folder) {
+        return Ok(true);
+    }
+    for link in links(folder)? {
+        unlink(&link)?;
+    }
+    Ok(is_link(folder) || has_links(folder)?)
+}
+
+/// The local machine's `unlink`.
+pub(crate) fn unlink_path(path: &str) -> std::io::Result<()> {
+    unlink(path)
+}
+
+/// The local machine's `remove`.
+pub(crate) fn remove_path(path: &str) -> std::io::Result<()> {
+    remove(path)
 }
 
 /// `new Win32Exception(code).Message`: the OS's words for an error number, without the number std adds.

@@ -443,8 +443,13 @@ fn ssh_shell(
     host: &Host,
     workspace: &mighty_core::model::Workspace,
     pane: &str,
+    folder: Option<&str>,
 ) -> (Option<PathBuf>, Option<mighty_terminal::RemoteShell>) {
-    let Ok(launch) = crate::ssh::launch_for(host, workspace) else { return (None, None) };
+    let Ok(mut launch) = crate::ssh::launch_for(host, workspace) else { return (None, None) };
+    // MC-47: a terminal opened "in this worktree" of an SSH pane starts in that worktree on the machine.
+    if let Some(folder) = folder.filter(|f| mighty_core::ssh::valid_remote_dir(f)) {
+        launch.dir = folder.to_string();
+    }
     let shell = crate::ssh::shell_for(host, workspace, pane);
     let request = launch.pty_request(&shell, Default::default(), Default::default());
     let host_name = workspace.ssh.as_ref().map(|r| r.host.clone()).unwrap_or_default();
@@ -596,8 +601,9 @@ impl Terminals {
             if kind == PaneKind::Shell
                 && let Some(workspace) = view.snapshot.workspace(session.workspace_id()).filter(|w| w.is_ssh()).cloned()
             {
+                let working = session.working_folder.clone();
                 drop(view);
-                let (folder, remote) = ssh_shell(host, &workspace, id);
+                let (folder, remote) = ssh_shell(host, &workspace, id, working.as_deref());
                 (kind, folder, remote)
             } else {
                 // A terminal opened "in this worktree" starts in the pane's folder (W9-I, C# PaneWorktree.cs); one whose folder is gone

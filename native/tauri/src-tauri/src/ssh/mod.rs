@@ -18,6 +18,7 @@ pub mod files;
 pub mod forward;
 pub mod review;
 pub mod server;
+pub mod worktrees;
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -582,8 +583,9 @@ pub fn frame(host: &Host, snapshot: &mighty_core::AppSnapshot, model: &mut might
     {
         header.path = format!("{}:{}", reference.host, reference.dir);
         header.git = None;
-        header.work_map_enabled = false;
-        header.work_map_help = l.get("ssh.workMap.unavailable");
+        // MC-47: the work map reads the folder's history on the machine.
+        header.work_map_enabled = true;
+        header.work_map_help = l.get("workMap.open");
         header.remote_host = Some(l.get_with("ssh.sidebar.server", &[("name", &reference.host)]));
         model.status.machine = l.get_with("ssh.status.machine", &[("host", &reference.host)]);
     }

@@ -19,6 +19,8 @@ describe('the worktree bar', () => {
     expect(model.behind).toBeUndefined();
     expect(model.setup?.tone).toBe('err');
     expect(model.menu.map((m) => m.action)).toEqual(['changes', 'terminal', 'reveal', 'editor', 'port', 'undo', 'pr', 'discard']);
+    const remote = worktreeBar(pane, { ahead: 0, behind: 0, changed: 0, known: true, busy: false, conflict: false, canUndo: false, remote: true }, t);
+    expect(remote.menu.map((m) => m.action)).toEqual(['changes', 'terminal', 'port', 'pr', 'discard']);
   });
 
   it('reads a diff line by line', () => {

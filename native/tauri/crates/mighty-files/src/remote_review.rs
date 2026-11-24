@@ -227,61 +227,151 @@ impl ReviewFiles for RemoteReview {
     }
 
     fn write_if(&self, path: &str, text: &str, expected: Option<&str>) -> Result<bool, String> {
-        let Some(Current::File { mode, bytes }) = self.file(path) else {
-            return Err("revert target is not a regular file".into());
-        };
-        if bytes.len() > crate::diff::MAXIMUM_SIDE_BYTES {
-            return Err("revert target exceeds maximum size".into());
-        }
-        let decoded = decode_text(&bytes, false);
-        if let Some(expected) = expected
-            && decoded.as_ref().is_none_or(|d| d.text != expected)
-        {
-            return Ok(false);
-        }
-        let encoding = decoded.map_or(TextEncodingKind::Utf8, |d| d.encoding);
-        let refused = || "the original does not fit the file's encoding".to_string();
-        let new = encode(text, encoding).ok_or_else(refused)?;
-        if !text.is_empty() && decode_text(&new, false).is_none_or(|d| d.text != text) {
-            return Err(refused());
-        }
-        let write = remote_files::Write {
-            relative: path.to_string(),
-            tag: uuid::Uuid::new_v4().simple().to_string(),
-            mode,
-            expected: Some(remote_files::cksum(&bytes)),
-            written: remote_files::cksum(&new),
-        };
-        let command = remote_files::write_command(&self.dir, &write).ok_or_else(|| "the path cannot be written".to_string())?;
-        let (code, _) = self.exec.exec(command, Some(new.clone()))?;
-        match Ended::of(code) {
-            Ended::Done => {
-                lock(&self.currents).insert(path.to_string(), Current::File { mode, bytes: new });
-                Ok(true)
-            }
-            Ended::Changed => {
-                lock(&self.currents).remove(path);
-                Ok(false)
-            }
-            Ended::NotAFile | Ended::FolderGone => Err("revert target is not a regular file".into()),
-            Ended::Incomplete | Ended::Failed(_) => Err(format!("the SSH machine did not write the file ({code})")),
-        }
+        write_current(self.exec.as_ref(), &self.dir, &self.currents, self.file(path), path, text, expected)
     }
 
     fn trash(&self, path: &str) -> Result<(), String> {
-        let Some(Current::File { bytes, .. }) = self.file(path) else { return Err("revert target is not a regular file".into()) };
-        let tag = uuid::Uuid::new_v4().simple().to_string();
-        let command = snapshots::trash_script(&self.dir, path, &tag, remote_files::cksum(&bytes))
-            .ok_or_else(|| "the path cannot be moved".to_string())?;
-        let (code, _) = self.exec.exec(command, None)?;
-        lock(&self.currents).remove(path);
-        match code {
-            0 => {
-                lock(&self.currents).insert(path.to_string(), Current::Missing);
-                Ok(())
-            }
-            7 => Err("the file changed on the SSH machine".into()),
-            other => Err(format!("the SSH machine did not move the file ({other})")),
+        trash_current(self.exec.as_ref(), &self.dir, &self.currents, self.file(path), path)
+    }
+}
+
+/// [`ReviewFiles::write_if`] over the far side: `text` written in place of `path` (as it was last read, `read`) with the editor's
+/// atomic write, only while it is still what was read (its `cksum`), in the encoding it is in, its permissions kept.
+fn write_current(
+    exec: &dyn RemoteExec,
+    dir: &str,
+    currents: &Mutex<HashMap<String, Current>>,
+    read: Option<Current>,
+    path: &str,
+    text: &str,
+    expected: Option<&str>,
+) -> Result<bool, String> {
+    let Some(Current::File { mode, bytes }) = read else {
+        return Err("revert target is not a regular file".into());
+    };
+    if bytes.len() > crate::diff::MAXIMUM_SIDE_BYTES {
+        return Err("revert target exceeds maximum size".into());
+    }
+    let decoded = decode_text(&bytes, false);
+    if let Some(expected) = expected
+        && decoded.as_ref().is_none_or(|d| d.text != expected)
+    {
+        return Ok(false);
+    }
+    let encoding = decoded.map_or(TextEncodingKind::Utf8, |d| d.encoding);
+    let refused = || "the original does not fit the file's encoding".to_string();
+    let new = encode(text, encoding).ok_or_else(refused)?;
+    if !text.is_empty() && decode_text(&new, false).is_none_or(|d| d.text != text) {
+        return Err(refused());
+    }
+    let write = remote_files::Write {
+        relative: path.to_string(),
+        tag: uuid::Uuid::new_v4().simple().to_string(),
+        mode,
+        expected: Some(remote_files::cksum(&bytes)),
+        written: remote_files::cksum(&new),
+    };
+    let command = remote_files::write_command(dir, &write).ok_or_else(|| "the path cannot be written".to_string())?;
+    let (code, _) = exec.exec(command, Some(new.clone()))?;
+    match Ended::of(code) {
+        Ended::Done => {
+            lock(currents).insert(path.to_string(), Current::File { mode, bytes: new });
+            Ok(true)
         }
+        Ended::Changed => {
+            lock(currents).remove(path);
+            Ok(false)
+        }
+        Ended::NotAFile | Ended::FolderGone => Err("revert target is not a regular file".into()),
+        Ended::Incomplete | Ended::Failed(_) => Err(format!("the SSH machine did not write the file ({code})")),
+    }
+}
+
+/// [`ReviewFiles::trash`] over the far side: a file the run made moved into the folder's store's trash over there, only while it is
+/// still what was read.
+fn trash_current(
+    exec: &dyn RemoteExec,
+    dir: &str,
+    currents: &Mutex<HashMap<String, Current>>,
+    read: Option<Current>,
+    path: &str,
+) -> Result<(), String> {
+    let Some(Current::File { bytes, .. }) = read else { return Err("revert target is not a regular file".into()) };
+    let tag = uuid::Uuid::new_v4().simple().to_string();
+    let command =
+        snapshots::trash_script(dir, path, &tag, remote_files::cksum(&bytes)).ok_or_else(|| "the path cannot be moved".to_string())?;
+    let (code, _) = exec.exec(command, None)?;
+    lock(currents).remove(path);
+    match code {
+        0 => {
+            lock(currents).insert(path.to_string(), Current::Missing);
+            Ok(())
+        }
+        7 => Err("the file changed on the SSH machine".into()),
+        other => Err(format!("the SSH machine did not move the file ({other})")),
+    }
+}
+
+/// MC-47: a folder on an SSH machine as a hunk review reads and writes it, with no request snapshots: a worktree's files against the
+/// commit it shares with its base (MC-30's 바뀐 부분별 받기·버리기 for an SSH pane's worktree). The same reads, atomic writes and
+/// trash as [`RemoteReview`]'s.
+pub struct RemoteFolder {
+    exec: Arc<dyn RemoteExec>,
+    dir: String,
+    currents: Mutex<HashMap<String, Current>>,
+}
+
+impl RemoteFolder {
+    pub fn new(exec: Arc<dyn RemoteExec>, dir: &str) -> RemoteFolder {
+        RemoteFolder { exec, dir: dir.to_string(), currents: Mutex::new(HashMap::new()) }
+    }
+
+    fn file(&self, path: &str) -> Option<Current> {
+        if !lock(&self.currents).contains_key(path) {
+            let command = mighty_core::ssh::worktree::current_script(&self.dir, &[path.to_string()])?;
+            let Ok((0, stdout)) = self.exec.exec(command, None) else { return None };
+            let got = snapshots::parse_reads(&stdout, 1)?.pop()?;
+            let current = match got {
+                Got::None => Current::Missing,
+                Got::TooLarge(_) => Current::TooLarge,
+                Got::Bytes(mode, bytes) => Current::File { mode: mode.unwrap_or(0o644), bytes },
+            };
+            lock(&self.currents).insert(path.to_string(), current);
+        }
+        lock(&self.currents).get(path).cloned()
+    }
+
+    /// The file's bytes now; None when it is no regular file or is too large.
+    pub fn bytes(&self, path: &str) -> Option<Vec<u8>> {
+        match self.file(path)? {
+            Current::File { bytes, .. } => Some(bytes),
+            _ => None,
+        }
+    }
+
+    /// Forgets what was read, so the next question reads the far side again.
+    pub fn forget(&self) {
+        lock(&self.currents).clear();
+    }
+}
+
+impl ReviewFiles for RemoteFolder {
+    fn regular(&self, path: &str) -> bool {
+        matches!(self.file(path), Some(Current::File { .. } | Current::TooLarge))
+    }
+
+    fn current(&self, path: &str) -> Option<String> {
+        match self.file(path)? {
+            Current::File { bytes, .. } => text(&bytes),
+            _ => None,
+        }
+    }
+
+    fn write_if(&self, path: &str, text: &str, expected: Option<&str>) -> Result<bool, String> {
+        write_current(self.exec.as_ref(), &self.dir, &self.currents, self.file(path), path, text, expected)
+    }
+
+    fn trash(&self, path: &str) -> Result<(), String> {
+        trash_current(self.exec.as_ref(), &self.dir, &self.currents, self.file(path), path)
     }
 }

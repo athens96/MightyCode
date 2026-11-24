@@ -54,6 +54,7 @@ Claude·Codex·Antigravity 창이 실행 중일 때 요청을 쓰고 {{kbd:⌘En
 
 - **언제 worktree에서 열리나**: 같은 워크스페이스에 워크스페이스 폴더에서 일하는 에이전트 창이 이미 열려 있으면 새 에이전트 창을 열 때 {{ui:paneWorktree.choice.worktree}}, {{ui:paneWorktree.choice.always}}, {{ui:paneWorktree.choice.sameFolder}} 중에서 고릅니다. 사이드바 워크스페이스 행의 오른쪽 클릭 메뉴 {{ui:paneWorktree.menu.mode}}에서 {{ui:paneWorktree.mode.ask}}, {{ui:paneWorktree.mode.further}}, {{ui:paneWorktree.mode.every}} 중 하나로 정해 둘 수 있습니다. {{ui:paneWorktree.mode.every}}로 두면 첫 창도 worktree에서 일해서, 워크스페이스 폴더는 병합만 받습니다(다른 창이 워크스페이스 폴더에서 일하는 중이면 병합이 막히기 때문입니다). 폰에서 연 창은 이 설정을 따르고, 묻는 설정이면 워크스페이스 폴더에서 열립니다. 이어 하기로 연 창은 언제나 워크스페이스 폴더입니다.
 - **만드는 방식**: 자식과 같은 규칙입니다. 워크스페이스 브랜치의 마지막 커밋에서 `mighty/<창 id>` 브랜치가 생기고 worktree는 `~/.mightycode/worktrees/<창 id>`에 생깁니다. git 저장소가 아니라서 만들 수 없으면 그 이유와 함께 같은 폴더에서만 열 수 있습니다.
+- **SSH 워크스페이스**: worktree는 그 머신의 `~/.mightycode/worktrees/<창 id>`에 생기고, 병합·커밋·되돌리기·버리기와 복사·준비 명령도 그 머신에서 같은 규칙으로 합니다([SSH 머신](remote.md#ssh)).
 - **에이전트에게 알림**: 창의 첫 요청에 앱이 한 단락을 붙여, 에이전트가 자기 worktree와 브랜치, PORT를 알고 끝나면 커밋하도록 합니다. 병합은 사람이 앱에서 합니다.
 - **막대**: 창 위에 브랜치와 기준 브랜치, 기준에 없는 커밋 수(↑), 그새 기준이 앞서간 커밋 수(↓), 커밋하지 않은 변경 파일 수(±, 누르면 변경 보기), PORT(누르면 localhost를 엽니다)가 보입니다. 변경이 남아 있으면 단추가 {{ui:paneWorktree.bar.commitMerge}}으로 바뀌어, 새 파일까지 커밋한 뒤 병합합니다. 비밀번호처럼 보이는 새 파일이나 5MB가 넘는 새 파일은 커밋하지 않고 알려 줍니다.
 - **충돌**: 병합이 충돌로 막히면 {{ui:paneWorktree.bar.resolve}} 단추가 생깁니다. 누르면 에이전트에게 기준 브랜치를 가져와 충돌을 풀고 커밋하라고 요청합니다.

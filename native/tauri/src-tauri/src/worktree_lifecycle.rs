@@ -87,6 +87,23 @@ pub fn release_worktree(host: &Host, record: &PaneWorktree) {
     with_ports(host, |file| file.release(&repo, &worktree));
 }
 
+/// MC-47: [`assign_worktree`] at the worktree's place: on an SSH machine the block is kept under the machine's own keys and skips
+/// the ports something listens on over there (read now), not this computer's.
+pub async fn assign_worktree_at(host: &Host, place: &crate::pane_worktree::Place, record: &mut PaneWorktree, count: u16) {
+    let Some(ssh) = &place.ssh else { return assign_worktree(host, record, count) };
+    let listening = if count > 0 { crate::ssh::worktrees::listening(host, &ssh.launch).await } else { Default::default() };
+    let (repo, worktree) = (place.port_key(record.checkout()), place.port_key(record.worktree_path()));
+    let block = with_ports(host, |file| file.assign(&repo, &worktree, count, DEFAULT_START, |port| listening.contains(&port)));
+    record.port_base = block.map(|b| i32::from(b.base));
+    record.port_count = block.map(|b| i32::from(b.count));
+}
+
+/// MC-47: [`release_worktree`] at the worktree's place.
+pub fn release_worktree_at(host: &Host, place: &crate::pane_worktree::Place, record: &PaneWorktree) {
+    let (repo, worktree) = (place.port_key(record.checkout()), place.port_key(record.worktree_path()));
+    with_ports(host, |file| file.release(&repo, &worktree));
+}
+
 /// The main checkout's place for tasks and run actions: its repository key, its block (assigned on first use) and the variables its
 /// runs get. Outside a git checkout: the folder's key, no block, no variables.
 pub fn main_place(host: &Host, workspace_folder: &Path, count: u16) -> (String, Option<PortBlock>, Vec<(String, String)>) {
@@ -113,7 +130,8 @@ pub fn start(host: &Arc<Host>) {
     let host = host.clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_ports(&host, |file| {
-            let released = file.prune(|path| Path::new(path).is_dir());
+            // An SSH machine's blocks (MC-47) are its own keys, never a folder here: they go when their worktree is removed.
+            let released = file.prune(|path| worktree_ports::is_remote_key(path) || Path::new(path).is_dir());
             if !released.is_empty() {
                 host.log.line(&format!("ports.json: released {} block(s) of removed worktrees", released.len()));
             }
@@ -129,16 +147,26 @@ pub fn start(host: &Arc<Host>) {
 }
 
 /// Before the worktree `record` of the pane `session_id` (of `workspace_id`) is removed: its managed runs stop, then the approved
-/// `worktree.teardown` runs in its folder within its time limit. Never blocks the removal.
-pub async fn before_remove(host: &Arc<Host>, workspace_id: &str, session_id: &str, record: &PaneWorktree) {
+/// `worktree.teardown` runs in its folder within its time limit. Never blocks the removal. MC-47: an SSH workspace's teardown runs on
+/// its machine, in the worktree there (`place`).
+pub async fn before_remove(
+    host: &Arc<Host>,
+    workspace_id: &str,
+    session_id: &str,
+    record: &PaneWorktree,
+    place: Option<&crate::pane_worktree::Place>,
+) {
     let folder = record.run_folder().to_string();
-    crate::repo_tasks::stop_runs_in(host, &path_key(&folder)).await;
+    let ssh = place.and_then(|place| place.ssh.clone());
+    if ssh.is_none() {
+        crate::repo_tasks::stop_runs_in(host, &path_key(&folder)).await;
+    }
 
     let Some(workspace) = host.view().snapshot.workspace(workspace_id).cloned() else { return };
-    if workspace.remote.is_some() || !Path::new(&folder).is_dir() {
+    if workspace.remote.is_some() || ssh.is_none() && !Path::new(&folder).is_dir() || ssh.is_some() && workspace.ssh.is_none() {
         return;
     }
-    let status = match crate::repo_tasks::load_workspace_config(host, &workspace).await {
+    let status = match crate::repo_tasks::load_worktree_config(host, &workspace).await {
         Ok(Some(status)) => status,
         _ => return,
     };
@@ -148,7 +176,9 @@ pub async fn before_remove(host: &Arc<Host>, workspace_id: &str, session_id: &st
         crate::pane_worktree::append_system_note(host, session_id, locale.get("paneWorktree.log.teardownSkipped"));
         return;
     }
-    if host.smoke.is_some() && !crate::delegation::may_touch(host, Path::new(&folder)) {
+    if ssh.is_some() && !host.may_change_machine()
+        || ssh.is_none() && host.smoke.is_some() && !crate::delegation::may_touch(host, Path::new(&folder))
+    {
         return;
     }
     let timeout = status.loaded.config.worktree.teardown_timeout();
@@ -158,7 +188,7 @@ pub async fn before_remove(host: &Arc<Host>, workspace_id: &str, session_id: &st
         locale.get_with("paneWorktree.log.teardownStarted", &[("command", &command)]),
     );
 
-    let outcome = run_teardown(host, &workspace, record, &status.loaded, &command, timeout).await;
+    let outcome = run_teardown(host, &workspace, record, &status.loaded, &command, timeout, ssh.as_ref()).await;
     crate::repo_tasks::record_teardown(host, workspace.id(), session_id, &command, &outcome, timeout.as_secs());
     let text = if outcome.succeeded() {
         locale.get_with("paneWorktree.log.teardownDone", &[("command", &command)])
@@ -182,7 +212,20 @@ async fn run_teardown(
     config: &LoadedRepoConfig,
     command: &str,
     timeout: std::time::Duration,
+    ssh: Option<&crate::ssh::worktrees::SshPlace>,
 ) -> run_actions::ScriptOutcome {
+    if let (Some(ssh), Some(reference)) = (ssh, &workspace.ssh) {
+        // On the machine, in the worktree, with the worktree's values (never this computer's environment).
+        let mut values: Vec<(String, String)> = config.config.worktree.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        for (key, value) in record.environment(&reference.dir) {
+            values.retain(|(k, _)| *k != key);
+            values.push((key, value));
+        }
+        return match crate::ssh::worktrees::command_request(&ssh.launch, record.run_folder(), command, &values) {
+            Ok(request) => run_actions::run_bounded(host.processes.as_ref(), request, timeout).await,
+            Err(error) => run_actions::ScriptOutcome { exit_code: None, timed_out: false, output: String::new(), error: Some(error) },
+        };
+    }
     let ws_folder = workspace.path().to_string();
     let mut request = crate::repo_tasks::shell_request(command, record.run_folder());
     for (key, value) in crate::repo_tasks::login_shell_env(host, Some(Path::new(&ws_folder))).await {

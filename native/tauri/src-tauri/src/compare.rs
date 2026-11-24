@@ -138,6 +138,10 @@ fn unavailable(host: &Host, snapshot: &AppSnapshot, pane: &RunSession) -> Option
     if snapshot.workspace(pane.workspace_id()).is_some_and(|w| w.remote.is_some()) {
         return Some(locale.get("compare.reason.remote"));
     }
+    // MC-47: a compare run's children are delegation's worktrees on this computer; an SSH workspace's folder is on its machine.
+    if snapshot.workspace(pane.workspace_id()).is_some_and(|w| w.is_ssh()) {
+        return Some(locale.get("compare.reason.ssh"));
+    }
     if pane.parent_session_id.is_some() {
         return Some(locale.get("compare.reason.child"));
     }

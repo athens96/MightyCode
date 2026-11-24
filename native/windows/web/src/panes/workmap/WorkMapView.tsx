@@ -43,6 +43,14 @@ const statusTone = { released: 'done', releasing: 'wait', unreleased: 'none' } a
  * platform, the versions newest first with their topics, and the chosen topic's requests, commits and files on the right. The
  * host builds the model (Core WorkMap.cs); the choices here are remembered only while the pane is open.
  */
+/** Why a map is not drawn, in words (MC-47: an SSH machine that could not be reached). */
+const UNAVAILABLE: Record<string, string> = {
+  notGit: 'workMap.unavailable.notGit',
+  remote: 'workMap.unavailable.remote',
+  gitFailed: 'workMap.unavailable.gitFailed',
+  sshUnreachable: 'workMap.unavailable.sshUnreachable',
+};
+
 export function WorkMapView({ session }: { session: RunSession }) {
   const { bridge, t } = useServices();
   const workspaceId = session.workspaceId;
@@ -72,7 +80,7 @@ export function WorkMapView({ session }: { session: RunSession }) {
 
   if (!model) return <div className="workmap" data-testid="workmap" />;
   if (!model.available) {
-    return <div className="workmap workmap-unavailable" data-testid="workmap"><p>{t('workMap.unavailable.' + (model.reason ?? 'gitFailed'))}</p></div>;
+    return <div className="workmap workmap-unavailable" data-testid="workmap"><p>{t(UNAVAILABLE[model.reason ?? 'gitFailed'] ?? 'workMap.unavailable.gitFailed')}</p></div>;
   }
 
   const next = t('workMap.version.next');

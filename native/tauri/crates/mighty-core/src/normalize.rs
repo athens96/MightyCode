@@ -113,6 +113,20 @@ pub fn is_working_folder(path: Option<&str>) -> bool {
     path.is_some_and(|p| wire::utf16_len(p) <= 4096 && !p.contains('\0') && fully_qualified(p))
 }
 
+/// MC-47: [`is_working_folder`] of a pane of an SSH workspace (`ssh`): a folder on its machine, an absolute POSIX path whatever this
+/// computer is.
+pub fn is_working_folder_on(path: Option<&str>, ssh: bool) -> bool {
+    if !ssh {
+        return is_working_folder(path);
+    }
+    path.is_some_and(posix_folder)
+}
+
+/// An absolute POSIX path of at most 4,096 UTF-16 units with no control character (an SSH machine's folder).
+fn posix_folder(path: &str) -> bool {
+    (1..=4096).contains(&wire::utf16_len(path)) && path.starts_with('/') && !path.chars().any(char::is_control)
+}
+
 // ── pane worktrees (C# Core/PaneWorktree.cs: the saved records' rules) ──────────────────────────────────────────────────────
 
 /// `PaneWorktreePorts.Lowest` and `Highest`: the PORTs pane worktrees get.
@@ -244,8 +258,20 @@ fn inside_path(path: &str, folder: &str) -> bool {
 /// `PaneWorktree.Normalized`: a saved record, or None when it is not one this app made for `session_id`. A setup still running when
 /// the app quit reads as failed (`restoring`).
 pub fn pane_worktree(pane: &PaneWorktree, session_id: &str, restoring: bool) -> Option<PaneWorktree> {
+    pane_worktree_on(pane, session_id, restoring, false)
+}
+
+/// [`pane_worktree`] of a pane of an SSH workspace when `ssh` (MC-47): its paths are the machine's, absolute POSIX paths whatever
+/// this computer is.
+pub fn pane_worktree_on(pane: &PaneWorktree, session_id: &str, restoring: bool, ssh: bool) -> Option<PaneWorktree> {
     let absolute = |path: Option<&str>| {
-        path.is_some_and(|path| (1..=4096).contains(&wire::utf16_len(path)) && !path.contains('\0') && fully_qualified(path))
+        path.is_some_and(|path| {
+            if ssh {
+                posix_folder(path)
+            } else {
+                (1..=4096).contains(&wire::utf16_len(path)) && !path.contains('\0') && fully_qualified(path)
+            }
+        })
     };
     let base = pane.base_branch.as_deref();
     if !absolute(pane.worktree_path.as_deref())
@@ -275,7 +301,12 @@ pub fn pane_worktree(pane: &PaneWorktree, session_id: &str, restoring: bool) -> 
     }
     if let Some(folder) = pane.working_folder.as_deref() {
         let worktree = pane.worktree_path();
-        if !absolute(Some(folder)) || !(same_path(folder, worktree) || inside_path(folder, worktree)) {
+        let inside = if ssh {
+            folder == worktree || folder.starts_with(&format!("{}/", worktree.trim_end_matches('/')))
+        } else {
+            same_path(folder, worktree) || inside_path(folder, worktree)
+        };
+        if !absolute(Some(folder)) || !inside {
             copy.working_folder = None;
         }
     }
@@ -454,6 +485,11 @@ fn linked_task(task: Option<&crate::model::LinkedTask>) -> Option<crate::model::
 /// `KeptPaneWorktree.Normalized`: the records worth keeping from a saved list: valid ids and worktrees, one per session (the last),
 /// the newest 50; None when none is left.
 pub fn kept_pane_worktrees(list: Option<&Vec<KeptPaneWorktree>>, restoring: bool) -> Option<Vec<KeptPaneWorktree>> {
+    kept_pane_worktrees_on(list, restoring, false)
+}
+
+/// [`kept_pane_worktrees`] of an SSH workspace when `ssh` (MC-47).
+pub fn kept_pane_worktrees_on(list: Option<&Vec<KeptPaneWorktree>>, restoring: bool, ssh: bool) -> Option<Vec<KeptPaneWorktree>> {
     let list = list?;
     let mut seen = HashSet::new();
     let mut kept: Vec<KeptPaneWorktree> = list
@@ -464,7 +500,7 @@ pub fn kept_pane_worktrees(list: Option<&Vec<KeptPaneWorktree>>, restoring: bool
             if !is_identifier(id) || !seen.insert(record.session_id().to_string()) {
                 return None;
             }
-            let worktree = pane_worktree(record.worktree.as_ref()?, record.session_id(), restoring)?;
+            let worktree = pane_worktree_on(record.worktree.as_ref()?, record.session_id(), restoring, ssh)?;
             let title = record.title.as_deref().unwrap_or("");
             Some(KeptPaneWorktree {
                 worktree: Some(worktree),
@@ -479,9 +515,10 @@ pub fn kept_pane_worktrees(list: Option<&Vec<KeptPaneWorktree>>, restoring: bool
     (!kept.is_empty()).then_some(kept)
 }
 
-/// The pane worktree settings of a workspace (`StateStore.Normalize`): a remote workspace drops them all (they are a local folder's).
+/// The pane worktree settings of a workspace (`StateStore.Normalize`): a remote workspace drops them all (they are another Mighty
+/// Code's folder's); an SSH workspace keeps them (MC-47: its worktrees are on its machine).
 fn workspace_worktree_settings(w: Workspace, restoring: bool) -> Workspace {
-    if !w.is_local() {
+    if w.remote.is_some() {
         return Workspace {
             pane_worktree_mode: None,
             worktree_setup_command: None,
@@ -494,7 +531,7 @@ fn workspace_worktree_settings(w: Workspace, restoring: bool) -> Workspace {
         pane_worktree_mode: saved_pane_worktree_mode(w.pane_worktree_mode.as_deref()),
         worktree_setup_command: worktree_setup_command(w.worktree_setup_command.as_deref()),
         worktree_copy_paths: w.worktree_copy_paths.as_ref().and_then(|paths| worktree_copy_paths(paths.iter().map(|p| Some(p.as_str())))),
-        kept_pane_worktrees: kept_pane_worktrees(w.kept_pane_worktrees.as_ref(), restoring),
+        kept_pane_worktrees: kept_pane_worktrees_on(w.kept_pane_worktrees.as_ref(), restoring, w.ssh.is_some()),
         ..w
     }
 }
@@ -1811,7 +1848,14 @@ fn normalize_log(log: &LogEntry, restoring: bool, budget: &mut Budget) -> LogEnt
     }
 }
 
-fn normalize_session(s: &RunSession, restoring: bool, remote_ids: &HashSet<String>, budget: &mut Budget) -> R<RunSession> {
+fn normalize_session(
+    s: &RunSession,
+    restoring: bool,
+    remote_ids: &HashSet<String>,
+    ssh_ids: &HashSet<String>,
+    budget: &mut Budget,
+) -> R<RunSession> {
+    let ssh = ssh_ids.contains(s.workspace_id());
     let kind = s.kind();
     // A files pane runs nothing and keeps nothing but its title.
     if is_files(kind) || is_work_map(kind) {
@@ -1904,7 +1948,7 @@ fn normalize_session(s: &RunSession, restoring: bool, remote_ids: &HashSet<Strin
         working_folder: s
             .working_folder
             .clone()
-            .filter(|_| matches!(kind, "claude" | "shell") && is_working_folder(s.working_folder.as_deref())),
+            .filter(|_| matches!(kind, "claude" | "shell") && is_working_folder_on(s.working_folder.as_deref(), ssh)),
         // A pane worktree belongs to a top-level agent pane that works in its folder; never a child's, never a remote workspace's.
         pane_worktree: s
             .pane_worktree
@@ -1913,9 +1957,9 @@ fn normalize_session(s: &RunSession, restoring: bool, remote_ids: &HashSet<Strin
                 kind == "claude"
                     && !remote_ids.contains(s.workspace_id())
                     && s.parent_session_id.is_none()
-                    && is_working_folder(s.working_folder.as_deref())
+                    && is_working_folder_on(s.working_folder.as_deref(), ssh)
             })
-            .and_then(|pane| pane_worktree(pane, s.id(), restoring)),
+            .and_then(|pane| pane_worktree_on(pane, s.id(), restoring, ssh)),
         ask_target: if plan_mode && !remote_ids.contains(s.workspace_id()) { s.ask_target.clone() } else { None },
         linked_task: if kind == "claude" { linked_task(s.linked_task.as_ref()) } else { None },
         forked_from: if kind == "claude" { forked_from(s.forked_from.as_ref(), s.id()) } else { None },
@@ -1939,6 +1983,7 @@ pub const PANE_TEXT_BUDGET: i64 = 2 * 1024 * 1024;
 pub struct PaneCache {
     panes: HashMap<String, (Arc<RunSession>, Arc<RunSession>)>,
     remote_ids: HashSet<String>,
+    ssh_ids: HashSet<String>,
 }
 
 impl PaneCache {
@@ -1955,8 +2000,14 @@ impl PaneCache {
 /// One pane normalized as a load normalizes it (`restoring`), with a budget of its own: a pane whose body is read after the state
 /// loaded. `remote` says its workspace is another computer's.
 pub fn restored_pane(pane: &RunSession, remote: bool) -> R<RunSession> {
+    restored_pane_in(pane, remote, false)
+}
+
+/// [`restored_pane`] of a pane whose workspace is an SSH workspace when `ssh` (MC-47: its folders are the machine's).
+pub fn restored_pane_in(pane: &RunSession, remote: bool, ssh: bool) -> R<RunSession> {
     let remote_ids: HashSet<String> = if remote { [pane.workspace_id().to_string()].into() } else { HashSet::new() };
-    normalize_session(pane, true, &remote_ids, &mut Budget { text: PANE_TEXT_BUDGET })
+    let ssh_ids: HashSet<String> = if ssh { [pane.workspace_id().to_string()].into() } else { HashSet::new() };
+    normalize_session(pane, true, &remote_ids, &ssh_ids, &mut Budget { text: PANE_TEXT_BUDGET })
 }
 
 /// C# `StateStore.Normalize(value, restoring)`.
@@ -2000,6 +2051,7 @@ pub fn normalize_with(value: &AppSnapshot, restoring: bool, mut cache: Option<&m
         .collect();
     let ids: HashSet<String> = workspaces.iter().map(|w| w.id().to_string()).collect();
     let remote_ids: HashSet<String> = workspaces.iter().filter(|w| w.remote.is_some()).map(|w| w.id().to_string()).collect();
+    let ssh_ids: HashSet<String> = workspaces.iter().filter(|w| w.ssh.is_some()).map(|w| w.id().to_string()).collect();
     let all = value.sessions();
     let mut seen = HashSet::new();
     let mut listed: Vec<&Arc<RunSession>> = vec![];
@@ -2031,16 +2083,17 @@ pub fn normalize_with(value: &AppSnapshot, restoring: bool, mut cache: Option<&m
     let mirror_ids: HashSet<&str> = workspaces.iter().filter(|w| w.remote.as_ref().is_some_and(|r| r.mirror)).map(|w| w.id()).collect();
     let mut normalized: HashMap<String, Arc<RunSession>> = HashMap::new();
     if let Some(cache) = cache.as_deref_mut()
-        && cache.remote_ids != remote_ids
+        && (cache.remote_ids != remote_ids || cache.ssh_ids != ssh_ids)
     {
         cache.panes.clear();
         cache.remote_ids = remote_ids.clone();
+        cache.ssh_ids = ssh_ids.clone();
     }
     let mut kept: HashMap<String, (Arc<RunSession>, Arc<RunSession>)> = HashMap::new();
     for s in listed.iter().filter(|s| s.mirror.is_none() && !mirror_ids.contains(s.workspace_id())).take(layout::MAXIMUM_SESSIONS) {
         let pane = match cache.as_deref().filter(|_| !restoring).and_then(|c| c.take(s)) {
             Some(pane) => pane,
-            None => Arc::new(normalize_session(s, restoring, &remote_ids, &mut Budget { text: PANE_TEXT_BUDGET })?),
+            None => Arc::new(normalize_session(s, restoring, &remote_ids, &ssh_ids, &mut Budget { text: PANE_TEXT_BUDGET })?),
         };
         kept.insert(s.id().to_string(), ((*s).clone(), pane.clone()));
         normalized.insert(s.id().to_string(), pane);
@@ -2054,7 +2107,7 @@ pub fn normalize_with(value: &AppSnapshot, restoring: bool, mut cache: Option<&m
         .filter(|s| s.mirror.is_some() && mirror_ids.contains(s.workspace_id()) && s.kind() == "claude")
         .take(MAXIMUM_MIRROR_SESSIONS)
     {
-        normalized.insert(s.id().to_string(), Arc::new(normalize_session(s, restoring, &remote_ids, &mut mirror_budget)?));
+        normalized.insert(s.id().to_string(), Arc::new(normalize_session(s, restoring, &remote_ids, &ssh_ids, &mut mirror_budget)?));
     }
     let sessions: Vec<Arc<RunSession>> = listed.iter().filter_map(|s| normalized.remove(s.id())).collect();
     let workspace_id = match &value.active_workspace_id {
@@ -2310,6 +2363,44 @@ mod tests {
         assert!(pane_worktree(&record("lin/ENG-2-other"), "lin-ENG-1-fix", false).is_none());
         assert!(pane_worktree(&record("mw/ENG-1-fix"), "mw-ENG-1-fix", false).is_none());
         assert!(pane_worktree(&record("mighty/lin-ENG-1-fix"), "other", false).is_none());
+    }
+
+    /// MC-47: an SSH workspace's pane worktree is kept with the machine's POSIX paths whatever this computer is, and the workspace
+    /// keeps its worktree settings; a POSIX path is never taken for a local pane's on Windows.
+    #[test]
+    fn an_ssh_workspaces_pane_worktree_keeps_its_machines_paths() {
+        let record = crate::model::PaneWorktree {
+            worktree_path: Some("/home/me/.mightycode/worktrees/p1".into()),
+            checkout: Some("/srv/app".into()),
+            branch: Some("mighty/p1".into()),
+            base_branch: Some("main".into()),
+            port: PANE_WORKTREE_LOWEST_PORT,
+            working_folder: Some("/home/me/.mightycode/worktrees/p1/sub".into()),
+            ..crate::model::PaneWorktree::default()
+        };
+        let kept = pane_worktree_on(&record, "p1", false, true).unwrap();
+        assert_eq!(kept.working_folder.as_deref(), Some("/home/me/.mightycode/worktrees/p1/sub"));
+        let outside = crate::model::PaneWorktree { working_folder: Some("/home/me/other".into()), ..record.clone() };
+        assert_eq!(pane_worktree_on(&outside, "p1", false, true).unwrap().working_folder, None);
+        assert!(
+            pane_worktree_on(&crate::model::PaneWorktree { checkout: Some("~/app".into()), ..record.clone() }, "p1", false, true).is_none()
+        );
+        assert_eq!(pane_worktree(&record, "p1", false).is_some(), !windows_paths(), "a local pane reads paths with this computer's rules");
+        assert!(is_working_folder_on(Some("/srv/app"), true) && !is_working_folder_on(Some("relative"), true));
+        let ssh = crate::model::Workspace {
+            id: Some("w".into()),
+            ssh: Some(crate::model::SshWorkspaceRef { machine: "m".into(), dir: "/srv/app".into(), host: "box".into() }),
+            pane_worktree_mode: Some(PANE_WORKTREE_EVERY.into()),
+            kept_pane_worktrees: Some(vec![crate::model::KeptPaneWorktree {
+                session_id: Some("p1".into()),
+                worktree: Some(record.clone()),
+                ..crate::model::KeptPaneWorktree::default()
+            }]),
+            ..crate::model::Workspace::default()
+        };
+        let normalized = workspace_worktree_settings(ssh, false);
+        assert_eq!(normalized.pane_worktree_mode.as_deref(), Some(PANE_WORKTREE_EVERY));
+        assert_eq!(normalized.kept_pane_worktrees.map(|k| k.len()), Some(1));
     }
 
     #[test]

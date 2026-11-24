@@ -108,6 +108,8 @@ export function unknownReason(unknown: ChecksUnknown, t: Translate): string {
     case 'cliMissing': return t(unknown.cli === 'glab' ? 'git.pr.error.glabMissing' : 'git.pr.error.ghMissing');
     case 'notLoggedIn': return t('git.checks.reason.notLoggedIn', { cli: unknown.cli ?? 'gh' });
     case 'noPr': return t('git.pr.none');
+    // MC-47: an SSH workspace's pull request is not looked up from this computer.
+    case 'ssh': return t('git.checks.reason.ssh');
     default: return t('git.checks.reason.failed');
   }
 }

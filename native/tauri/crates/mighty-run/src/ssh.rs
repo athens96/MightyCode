@@ -54,8 +54,12 @@ impl SshLaunch {
     /// The far side's script of a run (what [`SshLaunch::run_request`] sends under `/bin/sh -c`; MC-40's held run starts it
     /// detached): only [`FORWARDED_ENV`] names of `env` go into it.
     pub fn run_script(&self, program: &str, args: &[String], env: &BTreeMap<String, String>) -> Result<String, String> {
-        let forwarded: BTreeMap<String, String> =
-            env.iter().filter(|(name, _)| FORWARDED_ENV.contains(&name.as_str())).map(|(n, v)| (n.clone(), v.clone())).collect();
+        // MC-47: a pane worktree's own values (its PORT, port block and folders on the machine) go too; none is a secret.
+        let forwarded: BTreeMap<String, String> = env
+            .iter()
+            .filter(|(name, _)| FORWARDED_ENV.contains(&name.as_str()) || crate::model::PANE_ENVIRONMENT_KEYS.contains(&name.as_str()))
+            .map(|(n, v)| (n.clone(), v.clone()))
+            .collect();
         command::run_script(&self.dir, program, args, &forwarded).map_err(|what| format!("ssh: invalid {what}"))
     }
 
@@ -225,6 +229,22 @@ mod tests {
         );
         assert_eq!(request.env.get("SSH_AUTH_SOCK").map(String::as_str), Some("/tmp/agent.sock"), "the local ssh keeps its agent");
         assert!(launch().run_request("../bin/claude", &[], &env).is_err());
+    }
+
+    /// MC-47: a pane worktree's run on the machine goes into its worktree with its PORT, port block and folders (none a secret).
+    #[test]
+    fn a_worktree_panes_run_takes_its_folder_and_values() {
+        let mut env = BTreeMap::new();
+        env.insert("PORT".to_string(), "3456".to_string());
+        env.insert("MIGHTY_PORT".to_string(), "41010".to_string());
+        env.insert("MIGHTY_WORKTREE".to_string(), "/home/me/.mightycode/worktrees/p1".to_string());
+        env.insert("ANTHROPIC_API_KEY".to_string(), "sk-secret".to_string());
+        let worktree = SshLaunch { dir: "/home/me/.mightycode/worktrees/p1".into(), ..launch() };
+        let request = worktree.run_request("claude", &[], &env).unwrap();
+        let remote = command::unwrap_sh(request.args.last().unwrap()).unwrap();
+        assert!(remote.starts_with("cd '/home/me/.mightycode/worktrees/p1' || exit 1"), "{remote}");
+        assert!(remote.contains("PORT=3456") && remote.contains("MIGHTY_PORT=41010") && remote.contains("MIGHTY_WORKTREE="));
+        assert!(!remote.contains("sk-secret"));
     }
 
     #[test]

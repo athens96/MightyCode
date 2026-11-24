@@ -50,7 +50,7 @@ export interface WorkMapVersion {
 
 export interface WorkMapModel {
   available: boolean;
-  reason?: 'notGit' | 'remote' | 'gitFailed' | null;
+  reason?: 'notGit' | 'remote' | 'gitFailed' | 'sshUnreachable' | null;
   head?: string | null;
   lanes: string[];
   summarizing?: string | null;

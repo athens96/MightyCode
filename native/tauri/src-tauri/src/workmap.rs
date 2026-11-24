@@ -82,6 +82,15 @@ pub fn service(host: &Arc<Host>) -> Result<Arc<WorkMapService>, String> {
         .try_state::<Arc<crate::files::Files>>()
         .map_or_else(|| host.data_dir.join("file-originals"), |files| files.originals.directory().to_path_buf());
     let service = WorkMapService::new(store, git, Arc::new(move || state.view().snapshot.clone()), originals, finder, runner, host.locale);
+    // MC-47: an SSH workspace's map reads its folder on its machine (its history and release files; the summary runs here).
+    let reaching = Arc::downgrade(host);
+    service.on_ssh(Arc::new(move |workspace: &Workspace| {
+        let found = reaching
+            .upgrade()
+            .ok_or_else(|| "the app is closing".to_string())
+            .and_then(|host| crate::ssh::worktrees::repository(&host, workspace));
+        Box::pin(async move { found.map(|repository| Arc::new(repository) as Arc<dyn mighty_workmap::Repository>) })
+    }));
     // A summary that ends (done or failed) is pushed to the page.
     let pushing = Arc::downgrade(host);
     service.on_changed(Arc::new(move |workspace_id: &str| {

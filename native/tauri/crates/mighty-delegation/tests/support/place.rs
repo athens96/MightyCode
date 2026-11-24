@@ -228,6 +228,11 @@ impl DelegationPlace {
         paths()
     }
 
+    /// MC-47: this computer as the pane worktree code reaches it (the fixture's git and paths, 50 GB free).
+    pub fn machine(&self) -> mighty_delegation::machine::Local {
+        mighty_delegation::machine::Local::new(self.git(), self.paths(), Some(Arc::new(FixedDiskSpace(50_000_000_000))))
+    }
+
     /// `Maker`: under `<Base>\worktrees`, with 50 GB free.
     pub fn maker(&self) -> Maker {
         Maker::new(&self.root(), self.git(), Arc::new(FixedDiskSpace(50_000_000_000)))
@@ -412,4 +417,9 @@ impl DelegationPlace {
     pub async fn mighty_branches(&self) -> String {
         self.fixture_git(&["for-each-ref", "--format=%(refname)", "refs/heads/mighty/"]).await
     }
+}
+
+/// MC-47: the pane worktrees `maker` makes, on this computer (its root, the fixture's paths, 50 GB free).
+pub fn panes(maker: &Maker) -> mighty_delegation::pane_worktree::Worktrees {
+    mighty_delegation::pane_worktree::Worktrees::local(maker, &paths(), Arc::new(FixedDiskSpace(50_000_000_000)))
 }

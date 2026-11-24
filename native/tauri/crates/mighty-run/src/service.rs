@@ -928,9 +928,10 @@ impl RunService {
                 .find(|s| s.id() == request.session_id && s.workspace_id() == request.workspace_id && s.kind() == request.kind)
                 .cloned()
                 .ok_or_else(|| RunError::Invalid(strings::get("run.error.sessionNotInWorkspace")))?;
-            // A delegated child runs only in its own worktree, never in its parent's checkout.
+            // A delegated child runs only in its own worktree, never in its parent's checkout. MC-47: an SSH pane's worktree is on its
+            // machine; the run's own `cd` there refuses one that is gone.
             if (pane.parent_session_id.is_some() || pane.working_folder.is_some())
-                && !pane.working_folder.as_deref().is_some_and(|f| Path::new(f).is_dir())
+                && !pane.working_folder.as_deref().is_some_and(|f| worktree_reachable(&workspace, f))
             {
                 return Err(RunError::State(strings::get("run.blocked.worktreeMissing")));
             }
@@ -947,9 +948,10 @@ impl RunService {
             // MC-29: a compare run's child gets its own port block the same way, from its compare link.
             request.pane_environment = (pane.kind() == "claude" && !remote)
                 .then(|| {
-                    pane.pane_worktree.as_ref().map(|worktree| worktree.environment(workspace.path()).into_iter().collect()).or_else(|| {
+                    let folder = workspace_folder(&workspace);
+                    pane.pane_worktree.as_ref().map(|worktree| worktree.environment(&folder).into_iter().collect()).or_else(|| {
                         let member = pane.compare_member.as_ref()?;
-                        member.environment(pane.working_folder.as_deref()?, workspace.path()).map(|values| values.into_iter().collect())
+                        member.environment(pane.working_folder.as_deref()?, &folder).map(|values| values.into_iter().collect())
                     })
                 })
                 .flatten();
@@ -1161,7 +1163,7 @@ impl RunService {
                 return Err(RunError::Invalid("only a local agent pane takes back a kept run of its own agent".into()));
             }
             if (pane.parent_session_id.is_some() || pane.working_folder.is_some())
-                && !pane.working_folder.as_deref().is_some_and(|f| Path::new(f).is_dir())
+                && !pane.working_folder.as_deref().is_some_and(|f| worktree_reachable(&workspace, f))
             {
                 return Err(RunError::State(strings::get("run.blocked.worktreeMissing")));
             }
@@ -1171,10 +1173,11 @@ impl RunService {
             request.phase_models = phase_models::normalized(state.snapshot.phase_models.as_ref());
             request.working_folder = pane.working_folder.clone();
             request.delegation_worktree_root = self.shared.delegation.as_ref().and_then(|hooks| hooks.worktree_root(&pane));
+            let folder = workspace_folder(&workspace);
             request.pane_environment =
-                pane.pane_worktree.as_ref().map(|worktree| worktree.environment(workspace.path()).into_iter().collect()).or_else(|| {
+                pane.pane_worktree.as_ref().map(|worktree| worktree.environment(&folder).into_iter().collect()).or_else(|| {
                     let member = pane.compare_member.as_ref()?;
-                    member.environment(pane.working_folder.as_deref()?, workspace.path()).map(|values| values.into_iter().collect())
+                    member.environment(pane.working_folder.as_deref()?, &folder).map(|values| values.into_iter().collect())
                 });
             let holder = antigravity::next_holder();
             state.routes.insert(request.session_id.clone(), Route { holder, started: true, cancelled: false });
@@ -1480,6 +1483,20 @@ fn with_additions(mut whole: RunSession, now: &RunSession) -> RunSession {
         stored_digest: None,
         ..now.clone()
     }
+}
+
+/// MC-47: whether a pane's own folder can take a run: a folder here, or a remote folder an SSH workspace's run goes into (its machine's
+/// `cd` says whether it is there).
+fn worktree_reachable(workspace: &mighty_core::model::Workspace, folder: &str) -> bool {
+    match &workspace.ssh {
+        Some(_) => mighty_core::ssh::valid_remote_dir(folder),
+        None => Path::new(folder).is_dir(),
+    }
+}
+
+/// The workspace's folder as its runs name it (`MIGHTY_WORKSPACE_FOLDER`): an SSH workspace's remote folder (MC-47), else its path.
+fn workspace_folder(workspace: &mighty_core::model::Workspace) -> String {
+    workspace.ssh.as_ref().map_or_else(|| workspace.path().to_string(), |reference| reference.dir.clone())
 }
 
 #[cfg(test)]

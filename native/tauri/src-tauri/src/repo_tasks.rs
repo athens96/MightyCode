@@ -384,6 +384,39 @@ pub async fn approve_config_in(
     if loaded.content_hash != expected_hash {
         return Err("Repository configuration changed on disk; please review and approve again.".into());
     }
+    store_approval(host, workspace, loaded).await
+}
+
+/// MC-47: the repository config a workspace's pane worktrees follow, with its approval: an SSH workspace's read in its folder on its
+/// machine (approved under its own workspace's key, as a local one), any other's as [`load_workspace_config`] reads it.
+pub async fn load_worktree_config(host: &Host, workspace: &Workspace) -> Result<Option<WorkspaceConfigStatus>, String> {
+    if workspace.ssh.is_none() {
+        return load_workspace_config(host, workspace).await;
+    }
+    let Some(loaded) = crate::ssh::worktrees::load_config(host, workspace).await? else { return Ok(None) };
+    let approved = is_config_approved(host, workspace.path(), &loaded.content_hash);
+    Ok(Some(WorkspaceConfigStatus { loaded, approved }))
+}
+
+/// MC-47: [`approve_workspace_config`] for the config [`load_worktree_config`] showed: an SSH workspace's read again over there and
+/// approved only while it is still what the person saw.
+pub async fn approve_worktree_config(host: &Host, workspace: &Workspace, expected_hash: &str) -> Result<WorkspaceConfigStatus, String> {
+    if workspace.ssh.is_none() {
+        return approve_workspace_config(host, workspace, expected_hash).await;
+    }
+    if !is_valid_sha256_hex(expected_hash) {
+        return Err("Invalid configuration hash.".into());
+    }
+    let loaded =
+        crate::ssh::worktrees::load_config(host, workspace).await?.ok_or_else(|| "No .mighty.yaml found in workspace.".to_string())?;
+    if loaded.content_hash != expected_hash {
+        return Err("Repository configuration changed on disk; please review and approve again.".into());
+    }
+    store_approval(host, workspace, loaded).await
+}
+
+/// `loaded` approved for `workspace` and kept (the profile's trust file where the app writes).
+async fn store_approval(host: &Host, workspace: &Workspace, loaded: LoadedRepoConfig) -> Result<WorkspaceConfigStatus, String> {
     let key = canonical_workspace_key(workspace.path());
     let snapshot = with_trust(host, |map| {
         map.insert(key, loaded.content_hash.clone());

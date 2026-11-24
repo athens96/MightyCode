@@ -171,6 +171,48 @@ fn a_remote_request_is_reviewed_hunk_by_hunk_with_the_local_rules() {
     std::fs::remove_dir_all(&machine.root).unwrap();
 }
 
+/// MC-47 (MC-30 for an SSH pane's worktree): a worktree's file against the commit it shares with its base, its hunks put back over
+/// there with the local rules: one hunk put back (CRLF and permissions kept), a file changed since it was read refused (`conflict`),
+/// a new file's last hunk moved to the store's trash, never deleted.
+#[test]
+fn a_remote_worktrees_hunks_go_back_with_the_local_rules() {
+    use mighty_files::remote_review::RemoteFolder;
+    use mighty_files::revert::{Base, Later, ReviewFiles};
+    let machine = Machine::new("worktree-hunks");
+    let file = machine.folder.join("a.txt");
+    let base = lines(0..40, &[]);
+    std::fs::write(&file, lines(0..40, &[2, 30]).replace('\n', "\r\n")).unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o640)).unwrap();
+    std::fs::write(machine.folder.join("made.txt"), "new file\n").unwrap();
+    let folder = RemoteFolder::new(machine.here.clone(), &machine.dir());
+    assert!(folder.regular("a.txt") && !folder.regular("missing.txt"));
+    let now = folder.current("a.txt").unwrap();
+    let (_, prints) = mighty_files::hunks::hunks(&base, &now).unwrap();
+    assert_eq!(prints.len(), 2);
+    let base_text = Base { text: base.clone(), created: false };
+    let outcome = revert::discard_on(&folder, "a.txt", &base_text, Some(now.clone()), |_| Later::Nothing, &prints[0], None, None);
+    assert_eq!(outcome, Outcome::Reverted);
+    assert_eq!(machine.read("a.txt"), lines(0..40, &[30]).replace('\n', "\r\n"), "only that hunk went back, CRLF kept");
+    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o640, "permissions kept");
+    // Changed over there after it was read: nothing is written.
+    let fresh = RemoteFolder::new(machine.here.clone(), &machine.dir());
+    let now = fresh.current("a.txt").unwrap();
+    let (_, prints) = mighty_files::hunks::hunks(&base, &now).unwrap();
+    std::fs::write(&file, "someone else\n").unwrap();
+    let outcome = revert::discard_on(&fresh, "a.txt", &base_text, Some(now), |_| Later::Nothing, &prints[0], None, None);
+    assert_eq!(outcome, Outcome::Refused(Refusal::Conflict));
+    assert_eq!(machine.read("a.txt"), "someone else\n");
+    // A new file's last hunk: moved to the store's trash.
+    let created = Base { text: String::new(), created: true };
+    let now = fresh.current("made.txt").unwrap();
+    let (_, prints) = mighty_files::hunks::hunks("", &now).unwrap();
+    let outcome = revert::discard_on(&fresh, "made.txt", &created, Some(now), |_| Later::Nothing, &prints[0], None, None);
+    assert_eq!(outcome, Outcome::Reverted);
+    assert!(!machine.folder.join("made.txt").exists());
+    assert!(walk(&machine.here.home).into_iter().any(|p| p.ends_with("made.txt")), "kept in the store's trash");
+    std::fs::remove_dir_all(&machine.root).unwrap();
+}
+
 fn walk(folder: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     for entry in std::fs::read_dir(folder).into_iter().flatten().flatten() {

@@ -12,17 +12,21 @@ use crate::host::Host;
 /// The review of `pane` when it is a pane of an SSH workspace: Some(None) when its machine cannot be reached or it has no snapshots,
 /// None for any other pane. Reads the far side: call it off the page's thread (it waits on ssh).
 pub fn load(host: &Arc<Host>, pane: &str, handle: tokio::runtime::Handle) -> Option<Option<RemoteReview>> {
-    let workspace = {
+    let (workspace, working) = {
         let view = host.view();
         let session = view.snapshot.session(pane)?;
-        view.snapshot.workspace(session.workspace_id()).filter(|w| w.is_ssh()).cloned()?
+        (view.snapshot.workspace(session.workspace_id()).filter(|w| w.is_ssh()).cloned()?, session.working_folder.clone())
     };
     let reference = workspace.ssh.clone()?;
-    let Ok(launch) = super::launch_for(host, &workspace) else { return Some(None) };
+    let Ok(mut launch) = super::launch_for(host, &workspace) else { return Some(None) };
+    // MC-47: a pane in its own worktree on the machine keeps its requests' snapshots under that worktree's folder.
+    if let Some(folder) = working.filter(|f| mighty_core::ssh::valid_remote_dir(f)) {
+        launch.dir = folder;
+    }
     let Ok(files) = crate::files::state(host) else { return Some(None) };
     let dir = launch.dir.clone();
     let exec = Arc::new(SshExec { processes: host.processes.clone(), launch, handle });
-    let scope = format!("ssh\n{}\n{}\n{pane}", reference.machine, reference.dir);
+    let scope = format!("ssh\n{}\n{}\n{pane}", reference.machine, dir);
     Some(RemoteReview::load(exec, &dir, pane, files.reviews.clone(), scope))
 }
 
@@ -37,9 +41,11 @@ pub fn shown_root(host: &Host, pane: &str) -> String {
     let view = host.view();
     view.snapshot
         .session(pane)
-        .and_then(|s| view.snapshot.workspace(s.workspace_id()))
-        .and_then(|w| w.ssh.as_ref())
-        .map(|r| format!("{}:{}", r.host, r.dir))
+        .and_then(|s| {
+            let reference = view.snapshot.workspace(s.workspace_id())?.ssh.as_ref()?;
+            let dir = s.working_folder.as_deref().filter(|f| mighty_core::ssh::valid_remote_dir(f)).unwrap_or(&reference.dir);
+            Some(format!("{}:{dir}", reference.host))
+        })
         .unwrap_or_default()
 }
 

@@ -13,7 +13,7 @@ use mighty_platform::DiskSpace;
 use mighty_run::os;
 
 use super::paths::standardized;
-use super::{Git, branch_name, is_object_name, line, message, run};
+use super::{Git, GitRunner, branch_name, is_object_name, line, message, run};
 use crate::request::DelegationReasonCode;
 
 /// `ChildWorktree.NotesFolder`.
@@ -129,48 +129,8 @@ impl Maker {
 
     /// `Check`: the workspace and the free space, making nothing. Quick, so a delegate call can answer with its refusal.
     pub async fn check(&self, workspace: &str) -> ChildWorktreeCheck {
-        use ChildWorktreeCheck::Refused;
-        if !fully_qualified(workspace) || workspace.contains('\0') {
-            return Refused(DelegationReasonCode::NotGit);
-        }
-        let Some(place) = run(&self.git, &["rev-parse", "--is-inside-work-tree", "--show-toplevel", "--show-prefix"], workspace, 10.0)
-            .await
-            .filter(|place| place.exit_code == 0)
-        else {
-            return Refused(DelegationReasonCode::NotGit);
-        };
-        let lines: Vec<&str> = place.stdout.split('\n').map(|line| line.trim_end_matches('\r')).collect();
-        if lines.len() < 2 || lines[0] != "true" || !fully_qualified(lines[1]) {
-            return Refused(DelegationReasonCode::NotGit);
-        }
-        let Some(head) = run(&self.git, &["symbolic-ref", "-q", "HEAD"], workspace, 10.0).await else {
-            return Refused(DelegationReasonCode::NotGit);
-        };
-        let reference = line(&head.stdout);
-        if head.exit_code != 0 || !reference.starts_with("refs/heads/") || reference.len() <= 11 {
-            return Refused(if matches!(head.exit_code, 0 | 1) {
-                DelegationReasonCode::DetachedHead
-            } else {
-                DelegationReasonCode::NotGit
-            });
-        }
-        let Some(commit) = run(&self.git, &["rev-parse", "-q", "--verify", "HEAD^{commit}"], workspace, 10.0).await else {
-            return Refused(DelegationReasonCode::NotGit);
-        };
-        let sha = line(&commit.stdout);
-        if commit.exit_code != 0 || !is_object_name(sha) {
-            return Refused(DelegationReasonCode::UnbornBranch);
-        }
-        if !self.disk.available_bytes(Path::new(&self.root)).is_ok_and(|free| free >= MINIMUM_FREE_BYTES) {
-            return Refused(DelegationReasonCode::LowDisk);
-        }
-        // Git names the folder with forward slashes; the rest of the app reads it the Windows way.
-        ChildWorktreeCheck::Ready(ChildWorktreeBase {
-            repository: standardized(lines[1]),
-            prefix: lines.get(2).copied().unwrap_or("").to_string(),
-            parent_branch: reference[11..].to_string(),
-            base_commit: sha.to_string(),
-        })
+        let enough = || async { self.disk.available_bytes(Path::new(&self.root)).is_ok_and(|free| free >= MINIMUM_FREE_BYTES) };
+        check_with(&self.git, workspace, &fully_qualified, &standardized, enough).await
     }
 
     /// MC-29 (비교 실행): `start` with its base moved to `commit`, an earlier commit of the parent's branch (the head itself or one of its
@@ -236,6 +196,60 @@ impl Maker {
             ChildWorktreeCheck::Refused(reason) => ChildWorktreeOutcome::Refused(reason),
         }
     }
+}
+
+/// [`Maker::check`] on any machine (MC-47: a pane worktree of an SSH workspace too): `qualified` and `standardize` are its path rules,
+/// `enough` says whether the worktree root's volume has [`MINIMUM_FREE_BYTES`] free (asked last, only once git said yes).
+pub(crate) async fn check_with<G, F, Fut>(
+    git: &G,
+    workspace: &str,
+    qualified: &(dyn Fn(&str) -> bool + Sync),
+    standardize: &(dyn Fn(&str) -> String + Sync),
+    enough: F,
+) -> ChildWorktreeCheck
+where
+    G: GitRunner + ?Sized,
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    use ChildWorktreeCheck::Refused;
+    if !qualified(workspace) || workspace.contains('\0') {
+        return Refused(DelegationReasonCode::NotGit);
+    }
+    let Some(place) = run(git, &["rev-parse", "--is-inside-work-tree", "--show-toplevel", "--show-prefix"], workspace, 10.0)
+        .await
+        .filter(|place| place.exit_code == 0)
+    else {
+        return Refused(DelegationReasonCode::NotGit);
+    };
+    let lines: Vec<&str> = place.stdout.split('\n').map(|line| line.trim_end_matches('\r')).collect();
+    if lines.len() < 2 || lines[0] != "true" || !qualified(lines[1]) {
+        return Refused(DelegationReasonCode::NotGit);
+    }
+    let Some(head) = run(git, &["symbolic-ref", "-q", "HEAD"], workspace, 10.0).await else {
+        return Refused(DelegationReasonCode::NotGit);
+    };
+    let reference = line(&head.stdout);
+    if head.exit_code != 0 || !reference.starts_with("refs/heads/") || reference.len() <= 11 {
+        return Refused(if matches!(head.exit_code, 0 | 1) { DelegationReasonCode::DetachedHead } else { DelegationReasonCode::NotGit });
+    }
+    let Some(commit) = run(git, &["rev-parse", "-q", "--verify", "HEAD^{commit}"], workspace, 10.0).await else {
+        return Refused(DelegationReasonCode::NotGit);
+    };
+    let sha = line(&commit.stdout);
+    if commit.exit_code != 0 || !is_object_name(sha) {
+        return Refused(DelegationReasonCode::UnbornBranch);
+    }
+    if !enough().await {
+        return Refused(DelegationReasonCode::LowDisk);
+    }
+    // Git names the folder with forward slashes; the rest of the app reads it the Windows way.
+    ChildWorktreeCheck::Ready(ChildWorktreeBase {
+        repository: standardize(lines[1]),
+        prefix: lines.get(2).copied().unwrap_or("").to_string(),
+        parent_branch: reference[11..].to_string(),
+        base_commit: sha.to_string(),
+    })
 }
 
 /// The notes folder with its `.gitignore` (`*\n`), TASK.md (`task` as UTF-8, no BOM) and an empty REPORT.md, each created new.

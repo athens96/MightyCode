@@ -164,6 +164,17 @@ impl PortsFile {
     }
 }
 
+/// MC-47: the key an SSH machine's folder has in `ports.json`: `ssh://<machine id><absolute path>`. Never a local path, so a block on
+/// that machine stays apart from this computer's paths, and the start's prune (which looks for local folders) never reads it as gone.
+pub fn remote_key(machine: &str, path: &str) -> String {
+    format!("ssh://{machine}{}", mighty_core::ssh::worktree::posix::standardized(path))
+}
+
+/// Whether `key` names a folder on an SSH machine ([`remote_key`]).
+pub fn is_remote_key(key: &str) -> bool {
+    key.starts_with("ssh://")
+}
+
 /// The lowest block of `count` ports from `start` that overlaps none of `taken` and holds no port `in_use`; None when none fits below
 /// [`HIGHEST_PORT`].
 pub fn find_free_block(taken: &[PortBlock], count: u16, start: u16, in_use: impl Fn(u16) -> bool) -> Option<PortBlock> {

@@ -16,6 +16,7 @@
 
 use std::path::Path;
 
+pub use mighty_platform::BoxFuture;
 pub use mighty_run::git::{Git, GitFailure, GitResult, GitRun, is_object_name, line};
 
 use crate::model::ChildState;
@@ -48,10 +49,29 @@ pub struct ChildGit<'a> {
     pub parent_checkout: Option<&'a str>,
 }
 
+/// The git a step runs through: the app's own here ([`Git`], every child's and a local pane's), or an SSH machine's for a pane
+/// worktree of an SSH workspace (MC-47, [`crate::machine::Remote`]). The steps are the same code either way.
+pub trait GitRunner: Send + Sync {
+    /// Whether git was found.
+    fn git_available(&self) -> bool;
+    /// [`Git::run_detailed`] in `directory` (a folder of the machine git runs on).
+    fn git_run<'a>(&'a self, arguments: &'a [&'a str], directory: &'a str, timeout: f64, input: Option<&'a str>) -> BoxFuture<'a, GitRun>;
+}
+
+impl GitRunner for Git {
+    fn git_available(&self) -> bool {
+        self.available()
+    }
+
+    fn git_run<'a>(&'a self, arguments: &'a [&'a str], directory: &'a str, timeout: f64, input: Option<&'a str>) -> BoxFuture<'a, GitRun> {
+        Box::pin(self.run_detailed(arguments, Path::new(directory), timeout, input))
+    }
+}
+
 /// `DelegationGit.Run`: [`Git::run_detailed`] without input, its result only when nothing failed. `timeout` in seconds (C#'s default
 /// is 10).
-pub async fn run(git: &Git, arguments: &[&str], directory: &str, timeout: f64) -> Option<GitResult> {
-    git.run_detailed(arguments, Path::new(directory), timeout, None).await.ok()
+pub async fn run<G: GitRunner + ?Sized>(git: &G, arguments: &[&str], directory: &str, timeout: f64) -> Option<GitResult> {
+    git.git_run(arguments, directory, timeout, None).await.ok()
 }
 
 /// `DelegationGit.Message`: git's own error text, at most 500 text elements, or `Git exited with <code>.` when it wrote none.

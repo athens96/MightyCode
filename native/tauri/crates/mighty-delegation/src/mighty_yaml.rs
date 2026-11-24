@@ -1967,6 +1967,15 @@ pub fn load_from_folder_with_local_fallback(target_folder: &Path, workspace_fold
         None => None,
     };
 
+    load_from_bytes(base_raw, local_raw)
+}
+
+/// The config of the files already read: `base` (`.mighty.yaml`) and `local` (`.mighty.local.yaml`), each its name and bytes (MC-47:
+/// an SSH workspace's, read on its machine with the same rules). None when there is neither.
+pub fn load_from_bytes(
+    base_raw: Option<(String, Vec<u8>)>,
+    local_raw: Option<(String, Vec<u8>)>,
+) -> Result<Option<LoadedRepoConfig>, String> {
     if base_raw.is_none() && local_raw.is_none() {
         return Ok(None);
     }

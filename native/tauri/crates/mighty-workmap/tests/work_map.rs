@@ -810,3 +810,130 @@ mod real {
         remove(&parent);
     }
 }
+
+// ── MC-47: an SSH workspace's map, read over a stand-in `ssh` (this computer's `/bin/sh` and git, never a real host) ────────────
+
+#[cfg(unix)]
+mod ssh {
+    use std::collections::HashMap;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::{Path, PathBuf};
+
+    use super::*;
+    use mighty_core::ssh::{Mux, Target};
+    use mighty_run::ssh::SshLaunch;
+    use mighty_run::ssh_git::SshFolder;
+    use mighty_workmap::{RemoteRepository, Repository, WorkMapService};
+
+    const DECODE: &str = "decode() { w=${1#/bin/sh -c }; if [ \"$w\" = \"$1\" ]; then printf '%s' \"$1\"; return; fi; \
+        b=$(eval \"printf %s $w\"); case \"$b\" in 'eval \"$(LC_ALL=C awk'*) eval \"printf %s ${b#eval }\";; *) printf '%s' \"$b\";; esac; }";
+
+    /// The stand-in `ssh`: decodes and logs the one word, refuses (99) anything naming the installed app, runs the rest in `/bin/sh`
+    /// with a home of its own; `lost` makes it fail as a dropped connection does.
+    fn stand_in(parent: &Path) -> PathBuf {
+        let (home, ssh) = (parent.join("home"), parent.join("ssh"));
+        std::fs::create_dir_all(&home).unwrap();
+        let git_folder = mighty_workmap::git::executable().and_then(|g| g.parent().map(Path::to_path_buf)).unwrap();
+        std::fs::write(
+            &ssh,
+            format!(
+                "#!/bin/sh\n{DECODE}\n\
+                 while [ \"$#\" -gt 0 ]; do if [ \"$1\" = \"--\" ]; then shift; break; fi; shift; done\nshift\n\
+                 if [ -f '{root}/lost' ]; then echo 'Connection to devbox closed by remote host.' >&2; exit 255; fi\n\
+                 script=$(decode \"$1\")\n\
+                 printf '%s\\n----\\n' \"$script\" >> '{root}/remote.log'\n\
+                 case \"$script\" in *'/Applications/MightyCode'*|*MightyCode-local*) exit 99;; esac\n\
+                 exec /usr/bin/env -i SHELL=/bin/sh PATH='{git}':/usr/bin:/bin HOME='{home}' GIT_CONFIG_NOSYSTEM=1 /bin/sh -c \"$1\"\n",
+                root = parent.display(),
+                git = git_folder.display(),
+                home = home.display(),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        ssh
+    }
+
+    fn repository(ssh: &Path, dir: &Path) -> RemoteRepository {
+        let launch = SshLaunch {
+            program: ssh.to_path_buf(),
+            target: Target::parse("devbox").unwrap(),
+            mux: Mux::None,
+            dir: dir.to_string_lossy().into_owned(),
+            local: dir.parent().unwrap().to_path_buf(),
+        };
+        RemoteRepository { folder: SshFolder::new(processes(), launch), dir: dir.to_string_lossy().into_owned() }
+    }
+
+    /// The map of a folder on an SSH machine is the local map of the same folder: the same versions, commits, lanes, release state
+    /// and HEAD, every git with the work map's settings (no program, no transport) over there; a machine that cannot be reached has
+    /// no map (`sshUnreachable`), never an empty one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn work_map_an_ssh_workspaces_history_reads_as_the_local_one() {
+        if mighty_workmap::git::executable().is_none() {
+            return;
+        }
+        let parent = std::fs::canonicalize(temp("ssh")).unwrap();
+        let git = git(&parent);
+        let folder = make_repository(&git, &parent).await;
+        let ssh = stand_in(&parent);
+        let (empty, none) = (IndexMap::new(), HashMap::new());
+        let here = mighty_workmap::build(&git, &folder, &[], &empty, None, &none).await;
+        let remote = repository(&ssh, &folder);
+        let there = mighty_workmap::build_on(&remote, &[], &empty, None, &none).await;
+        assert!(here.available && here.versions.len() == 3);
+        assert_eq!(there.to_value(), here.to_value(), "the same map over ssh");
+        assert_eq!(
+            mighty_workmap::read_text_of(&remote, "VERSION", mighty_workmap::VERSION_BYTES).await,
+            mighty_workmap::read_text(&folder, "VERSION", mighty_workmap::VERSION_BYTES)
+        );
+        assert_eq!(remote.read_first("../outside", 10).await, None);
+        let log = std::fs::read_to_string(parent.join("remote.log")).unwrap();
+        let gits: Vec<&str> = log.split("\n----\n").filter(|s| s.contains("\ngit -c ")).collect();
+        assert!(gits.len() >= 5, "each git went over ssh");
+        for script in gits {
+            assert!(
+                script.contains("'protocol.allow=never'")
+                    && script.contains("'core.hooksPath=/dev/null'")
+                    && script.contains("GIT_NO_LAZY_FETCH=1")
+                    && script.contains("'log.showSignature=false'"),
+                "{script}"
+            );
+        }
+        // Through the service: an SSH workspace's map is its machine's; unreachable is said, not drawn empty.
+        let snapshot = AppSnapshot::default();
+        let service = WorkMapService::new(
+            parent.join("store"),
+            git.clone(),
+            Arc::new(move || snapshot.clone()),
+            parent.join("originals"),
+            Arc::new(|| Box::pin(async { None })),
+            Arc::new(|_, _, _| Box::pin(async { Err(SummaryError::Cli) })),
+            ko(),
+        );
+        let (ssh_for, folder_for) = (ssh.clone(), folder.clone());
+        service.on_ssh(Arc::new(move |_workspace: &Workspace| {
+            let repository: Arc<dyn Repository> = Arc::new(repository(&ssh_for, &folder_for));
+            Box::pin(async move { Ok(repository) })
+        }));
+        let workspace = Workspace {
+            id: Some("ssh-ws".into()),
+            name: Some("r".into()),
+            path: Some(parent.join("stand-in").to_string_lossy().into_owned()),
+            ssh: Some(mighty_core::model::SshWorkspaceRef {
+                machine: "0123456789abcdef0123456789abcdef".into(),
+                dir: folder.to_string_lossy().into_owned(),
+                host: "devbox".into(),
+            }),
+            ..Workspace::default()
+        };
+        let model = service.model(&workspace).await;
+        assert_eq!(model.to_value()["versions"], here.to_value()["versions"]);
+        std::fs::write(parent.join("lost"), "").unwrap();
+        let lost = mighty_workmap::build_on(&repository(&ssh, &folder), &[], &empty, None, &none).await;
+        assert!(!lost.available && lost.reason.as_deref() == Some("gitFailed"), "no answer is no map");
+        service.on_ssh(Arc::new(|_workspace: &Workspace| Box::pin(async { Err("unreachable".to_string()) })));
+        assert_eq!(service.model(&workspace).await.reason.as_deref(), Some("sshUnreachable"));
+        remove(&parent);
+    }
+}

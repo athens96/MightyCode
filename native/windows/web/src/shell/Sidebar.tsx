@@ -193,6 +193,18 @@ function WorkspaceGroup({ workspace, selected, activeId, panes, dashboard }: { w
     { separator: true },
     // MC-33: an SSH machine's files, read through ssh (read-only).
     { label: t('menu.showFiles'), action: () => call('openFiles', { workspaceId: workspace.id }) },
+    // MC-47: its history by version, read on the machine.
+    { label: t('workMap.open'), action: () => call('openWorkMap', { workspaceId: workspace.id }) },
+    // MC-47: its agent panes' worktrees, on the machine.
+    { separator: true },
+    { label: t('paneWorktree.menu.mode'), disabled: true },
+    ...(['ask', 'further', 'every'] as const).map((mode) => ({
+      label: (worktreeMode === mode ? '✓ ' : '    ') + t('paneWorktree.mode.' + mode),
+      action: () => call('workspaceWorktree', { workspaceId: workspace.id, action: 'mode', mode }),
+    })),
+    { label: t('paneWorktree.menu.setup'), action: () => call('workspaceWorktree', { workspaceId: workspace.id, action: 'setup' }) },
+    { label: t('paneWorktree.menu.copy'), action: () => call('workspaceWorktree', { workspaceId: workspace.id, action: 'copy' }) },
+    { label: t('paneWorktree.menu.list'), action: () => call('workspaceWorktree', { workspaceId: workspace.id, action: 'list' }) },
   );
   else if (import.meta.env.MODE === 'tauri') items.push(
     ...(items.length > 0 ? [{ separator: true }] : []),

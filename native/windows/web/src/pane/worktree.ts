@@ -19,6 +19,8 @@ export interface WorktreeStatus {
   conflict: boolean;
   canUndo: boolean;
   actions?: WorktreeAction[];
+  /** MC-47: the worktree is on an SSH machine (nothing here to show in the file manager or open in an editor). */
+  remote?: boolean;
 }
 
 export interface BarAction {
@@ -60,9 +62,12 @@ export function worktreeBar(pane: PaneWorktree, status: WorktreeStatus | null, t
     menu: [
       { action: 'changes', label: t('paneWorktree.bar.changes') },
       { action: 'terminal', label: t('paneWorktree.bar.terminal') },
-      { action: 'reveal', label: t('menu.showInExplorer') },
-      // 편집기에서 열기: the folder the pane's runs work in (src-tauri editor.rs).
-      { action: 'editor', label: t('editor.openFolder') },
+      // An SSH pane's worktree is on its machine: no file manager or editor here (MC-47).
+      ...(status?.remote ? [] : [
+        { action: 'reveal', label: t('menu.showInExplorer') },
+        // 편집기에서 열기: the folder the pane's runs work in (src-tauri editor.rs).
+        { action: 'editor', label: t('editor.openFolder') },
+      ]),
       { action: 'port', label: t('paneWorktree.bar.openPort', { port: pane.port }) },
     ],
     actions: (status?.actions ?? []).map((action) => {

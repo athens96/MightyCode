@@ -1966,11 +1966,18 @@ impl Exec {
             return Err(Failure::Error(strings::get("run.error.approvedWorkspaceOnly")));
         }
         // MC-33: an SSH workspace's CLI runs on the far side; this computer owns the `ssh` that carries it.
-        let ssh = match (&workspace.ssh, &inner.options.ssh) {
+        let mut ssh = match (&workspace.ssh, &inner.options.ssh) {
             (None, _) => None,
             (Some(_), None) => return Err(Failure::Error(strings::get("ssh.run.error.unavailable"))),
             (Some(_), Some(resolve)) => Some(resolve(&workspace).map_err(Failure::Error)?),
         };
+        // MC-47: an SSH pane in its own worktree runs in that worktree's folder on the machine.
+        if let (Some(launch), Some(folder)) = (ssh.as_mut(), request.working_folder.as_ref()) {
+            if !mighty_core::ssh::valid_remote_dir(folder) {
+                return Err(Failure::Error(strings::get("run.blocked.worktreeMissing")));
+            }
+            launch.dir = folder.clone();
+        }
         if request.kind == "claude"
             && request.memory_context.is_none()
             && let Some(lookup) = &inner.options.memory_for_workspace

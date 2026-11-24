@@ -27,8 +27,9 @@ use mighty_delegation::git::Git;
 use mighty_delegation::git::cleanup::ChildDiscardOutcome;
 use mighty_delegation::git::paths::DelegationPaths;
 use mighty_delegation::git::worktree::{self, ChildWorktreeCheck, ChildWorktreeOutcome, Maker};
+use mighty_delegation::machine::Machine;
 use mighty_delegation::pane_worktree::{
-    self as core, CommitOutcome, MergeOutcome, PaneWorktreeDecision, Row, Status, UndoOutcome, refusal,
+    self as core, CommitOutcome, MergeOutcome, PaneWorktreeDecision, Row, Status, UndoOutcome, Worktrees, refusal,
 };
 use mighty_delegation::request::DelegationReasonCode;
 use mighty_delegation::text;
@@ -48,8 +49,85 @@ use crate::methods::text as arg;
 pub(crate) struct Places {
     pub(crate) git: Git,
     pub(crate) root: String,
-    pub(crate) paths: DelegationPaths,
     pub(crate) maker: Maker,
+    /// This computer's pane worktrees (the same root, git and paths, through mighty-delegation's `machine::Local`).
+    pub(crate) local: Worktrees,
+}
+
+/// MC-47: where a workspace's pane worktrees live and how the app reaches them: this computer ([`Places::local`]), or an SSH
+/// workspace's machine (`~/.mightycode/worktrees` over there, through its ssh: `ssh::worktrees`). Every git step and every file the
+/// worktree code reads or writes goes to the place's machine.
+#[derive(Clone)]
+pub(crate) struct Place {
+    pub(crate) worktrees: Worktrees,
+    pub(crate) ssh: Option<crate::ssh::worktrees::SshPlace>,
+}
+
+impl Place {
+    pub(crate) fn machine(&self) -> &dyn Machine {
+        self.worktrees.machine.as_ref()
+    }
+
+    pub(crate) fn root(&self) -> &str {
+        &self.worktrees.root
+    }
+
+    /// The workspace's folder on the place's machine: its path here, its remote folder on an SSH machine.
+    pub(crate) fn folder(&self, workspace: &Workspace) -> String {
+        match (&self.ssh, &workspace.ssh) {
+            (Some(_), Some(reference)) => reference.dir.clone(),
+            _ => local_folder(workspace),
+        }
+    }
+
+    /// Whether the git steps that write may touch `folders`: the write policy (and a smoke's own fixture here); an SSH machine's
+    /// folders only with the write policy, never in a smoke.
+    pub(crate) fn may_write(&self, host: &Host, folders: &[&str]) -> bool {
+        match &self.ssh {
+            Some(_) => host.may_change_machine(),
+            None => may_write(host, folders),
+        }
+    }
+
+    /// `ports.json`'s key of `path` (MC-25): this computer's normalized path, or the machine's own key.
+    pub(crate) fn port_key(&self, path: &str) -> String {
+        match &self.ssh {
+            Some(ssh) => mighty_delegation::worktree_ports::remote_key(&ssh.machine, path),
+            None => crate::worktree_lifecycle::path_key(path),
+        }
+    }
+
+    /// The PORT a new worktree pane `id` gets: free of every open pane's and of what listens on the place's machine.
+    pub(crate) async fn port(&self, host: &Host, id: &str) -> i32 {
+        match &self.ssh {
+            Some(ssh) => {
+                let listening = crate::ssh::worktrees::listening(host, &ssh.launch).await;
+                core::port(id, &taken_ports(host), |port| u16::try_from(port).is_ok_and(|port| !listening.contains(&port)))
+            }
+            None => core::port(id, &taken_ports(host), |port| port_free(host, port)),
+        }
+    }
+}
+
+/// The place `workspace`'s pane worktrees live (MC-47); Err with the sentence to show.
+pub(crate) async fn place_for(host: &Arc<Host>, workspace: &Workspace) -> Result<Place, String> {
+    if workspace.ssh.is_some() {
+        return crate::ssh::worktrees::place(host, workspace).await;
+    }
+    let places = places().ok_or_else(|| text::reason(DelegationReasonCode::NotGit, &host.locale))?;
+    Ok(Place { worktrees: places.local.clone(), ssh: None })
+}
+
+/// The place of the worktree pane `id` names (its workspace's); this computer's for a delegated child or a pane that is gone.
+pub(crate) async fn place_of(host: &Arc<Host>, id: &str) -> Option<Place> {
+    let workspace = {
+        let view = host.view();
+        view.snapshot.session(id).filter(|s| s.pane_worktree.is_some()).and_then(|s| view.snapshot.workspace(s.workspace_id())).cloned()
+    };
+    match workspace {
+        Some(workspace) => place_for(host, &workspace).await.ok(),
+        None => places().map(|places| Place { worktrees: places.local.clone(), ssh: None }),
+    }
 }
 
 /// The window's state (C# `paneWorktreeBusy`, `paneWorktreeConflicts`) and the places, one per process as there is one host.
@@ -94,9 +172,10 @@ pub fn start(host: &Arc<Host>) {
         }
         None => (worktree::default_root(&crate::composer::dirs_home().to_string_lossy()), crate::platform::disk_space()),
     };
-    let maker = Maker::new(&root, git.clone(), disk);
+    let maker = Maker::new(&root, git.clone(), disk.clone());
     let paths = DelegationPaths::new(crate::platform::file_ports().handles);
-    lock(&STATE).places = Some(Places { git, root: maker.root().to_string(), paths, maker });
+    let local = Worktrees::local(&maker, &paths, disk);
+    lock(&STATE).places = Some(Places { git, root: maker.root().to_string(), maker, local });
     crate::worktree_lifecycle::start(host);
 }
 
@@ -118,8 +197,9 @@ pub fn register(methods: &mut Registry) {
     });
     methods.add("paneWorktreeDiff", |host: Arc<Host>, args| async move {
         let (Some(id), Some(path)) = (arg(&args, "id"), arg(&args, "path")) else { return Ok(Value::Null) };
-        let (Some(places), Some(pane)) = (places(), review_record(&host, id)) else { return Ok(Value::Null) };
-        Ok(core::file_diff(&places.git, &places.paths, &pane, path).await.map_or(Value::Null, Value::String))
+        let Some(pane) = review_record(&host, id) else { return Ok(Value::Null) };
+        let Some(place) = place_of(&host, id).await else { return Ok(Value::Null) };
+        Ok(core::file_diff(place.machine(), &pane, path).await.map_or(Value::Null, Value::String))
     });
     methods.add("workspaceWorktree", |host: Arc<Host>, args| async move {
         let (Some(workspace), Some(action)) = (arg(&args, "workspaceId"), arg(&args, "action")) else { return Ok(Value::Null) };
@@ -163,10 +243,10 @@ pub(crate) fn review_record(host: &Host, id: &str) -> Option<PaneWorktree> {
 
 /// What the review queue reads of one worktree (review.rs): how far it is from its base and the size of its work; None when git
 /// cannot say (a worktree gone, git failing). Reading git is always allowed.
-pub(crate) async fn review_reading(pane: &PaneWorktree) -> Option<(Status, core::DiffStat)> {
-    let places = places()?;
-    let status = core::status(&places.git, pane).await?;
-    let stat = core::diff_stat(&places.git, pane).await?;
+pub(crate) async fn review_reading(host: &Arc<Host>, id: &str, pane: &PaneWorktree) -> Option<(Status, core::DiffStat)> {
+    let place = place_of(host, id).await?;
+    let status = core::status(place.machine(), pane).await?;
+    let stat = core::diff_stat(place.machine(), pane).await?;
     Some((status, stat))
 }
 
@@ -295,12 +375,12 @@ pub async fn add_new_agent_pane(host: &Arc<Host>, provider: &str, group: Option<
         PaneWorktreeDecision::Worktree => return open_in_worktree(host, &workspace, provider, group, true, None).await,
         PaneWorktreeDecision::Ask => {}
     }
-    let refusal = match places() {
-        Some(places) => match places.maker.check(&local_folder(&workspace)).await {
+    let refusal = match place_for(host, &workspace).await {
+        Ok(place) => match place.worktrees.check(&place.folder(&workspace)).await {
             ChildWorktreeCheck::Refused(reason) => Some(text::reason(reason, &host.locale)),
             ChildWorktreeCheck::Ready(_) => None,
         },
-        None => Some(text::reason(DelegationReasonCode::NotGit, &host.locale)),
+        Err(reason) => Some(reason),
     };
     match (ask_choice(host, refusal.as_deref()).await.as_deref(), refusal.is_none()) {
         (Some("worktree"), true) => open_in_worktree(host, &workspace, provider, group, false, None).await,
@@ -349,7 +429,7 @@ pub(crate) async fn resolve_worktree_repo_config(
     workspace: &Workspace,
     interactive: bool,
 ) -> (Option<mighty_delegation::mighty_yaml::LoadedRepoConfig>, Option<String>) {
-    let status = match crate::repo_tasks::load_workspace_config(host, workspace).await {
+    let status = match crate::repo_tasks::load_worktree_config(host, workspace).await {
         Ok(Some(status)) => status,
         Ok(None) => return (None, None),
         Err(error) => {
@@ -395,7 +475,7 @@ pub(crate) async fn resolve_worktree_repo_config(
     let title = locale_or(&host.locale, "projectTasks.mightyConfig", "Repository configuration (.mighty.yaml)");
     let primary = locale_or(&host.locale, "projectTasks.approve", "Approve");
     if confirm(host, title, summary_lines.join("\n"), primary).await {
-        match crate::repo_tasks::approve_workspace_config(host, workspace, &status.loaded.content_hash).await {
+        match crate::repo_tasks::approve_worktree_config(host, workspace, &status.loaded.content_hash).await {
             Ok(approved) => (Some(approved.loaded), None),
             Err(error) => (None, Some(format!("[.mighty.yaml] {error}"))),
         }
@@ -419,17 +499,35 @@ async fn open_in_worktree(
     let locale = host.locale;
     let id = reuse.as_ref().map_or_else(wire::new_id, |r| r.id.clone());
     let reopened = reuse.is_some();
+    let place = match place_for(host, workspace).await {
+        Ok(place) => Some(place),
+        Err(reason) if fall_back && reuse.is_none() => {
+            let line = locale.get_with("paneWorktree.log.fellBack", &[("reason", &reason)]);
+            let provider_name = provider.to_string();
+            let group = still_active(host, workspace).then_some(group).flatten();
+            return frame::add_pane_to(host, Some(workspace.id()), "claude", provider, group, move |pane| {
+                let mut pane = pane;
+                pane.logs.get_or_insert_with(Vec::new).push(system_log(line, Some(provider_name)));
+                pane
+            });
+        }
+        Err(reason) => {
+            banner(host, locale.get_with("paneWorktree.error.cannotMake", &[("reason", &reason)]));
+            return Ok(false);
+        }
+    };
+    let Some(place) = place else { return Ok(false) };
     let (record, title, approved_repo_cfg, repo_cfg_note) = match reuse {
         Some(reuse) => {
             let mut record = reuse.record;
             if record.port_block().is_none() {
-                crate::worktree_lifecycle::assign_worktree(host, &mut record, crate::worktree_lifecycle::port_count(None));
+                crate::worktree_lifecycle::assign_worktree_at(host, &place, &mut record, crate::worktree_lifecycle::port_count(None)).await;
             }
             (record, reuse.title, None, None)
         }
         None => {
             let (approved_cfg, cfg_note) = resolve_worktree_repo_config(host, workspace, true).await;
-            let (made, checkout, reason) = make(host, workspace, &id).await;
+            let (made, checkout, reason) = make_on(host, &place, workspace, &id, false).await;
             let Some(made) = made else {
                 let reason = reason.unwrap_or_default();
                 if fall_back {
@@ -445,13 +543,19 @@ async fn open_in_worktree(
                 banner(host, locale.get_with("paneWorktree.error.cannotMake", &[("reason", &reason)]));
                 return Ok(false);
             };
-            let port = core::port(&id, &taken_ports(host), |port| port_free(host, port));
+            let port = place.port(host, &id).await;
             let effective_setup = crate::repo_tasks::combine_setup_commands(
                 approved_cfg.as_ref().and_then(|c| c.config.worktree.setup.as_deref()),
                 workspace.worktree_setup_command.as_deref(),
             );
             let mut record = core::from_made(&made, &checkout, port, effective_setup);
-            crate::worktree_lifecycle::assign_worktree(host, &mut record, crate::worktree_lifecycle::port_count(approved_cfg.as_ref()));
+            crate::worktree_lifecycle::assign_worktree_at(
+                host,
+                &place,
+                &mut record,
+                crate::worktree_lifecycle::port_count(approved_cfg.as_ref()),
+            )
+            .await;
             (record, None, approved_cfg, cfg_note)
         }
     };
@@ -474,9 +578,9 @@ async fn open_in_worktree(
     });
     if host.view().snapshot.session(&id).is_none() {
         // The pane could not be added (the pane limit): a worktree made for it goes again (its ports with it); a kept one stays kept.
-        if !reopened && let Some(places) = places() {
-            core::discard(&places.git, &places.paths, &record, &id, &places.root, &locale).await;
-            crate::worktree_lifecycle::release_worktree(host, &record);
+        if !reopened {
+            core::discard(place.machine(), &record, &id, place.root(), &locale).await;
+            crate::worktree_lifecycle::release_worktree_at(host, &place, &record);
         }
         return added.map(|_| false);
     }
@@ -490,7 +594,7 @@ async fn open_in_worktree(
             }
         });
     } else {
-        prepare(host, &id, workspace, record, approved_repo_cfg);
+        prepare(host, &id, workspace, &place, record, approved_repo_cfg);
     }
     added
 }
@@ -514,20 +618,23 @@ pub(crate) async fn open_task_in_worktree(
     on_issue_branch: bool,
 ) -> Result<bool, String> {
     let locale = host.locale;
+    let place =
+        place_for(host, workspace).await.map_err(|reason| locale.get_with("paneWorktree.error.cannotMake", &[("reason", &reason)]))?;
     let (approved_cfg, cfg_note) = resolve_worktree_repo_config(host, workspace, true).await;
-    let (made, checkout, reason) = make_on(host, workspace, &session_id, on_issue_branch).await;
+    let (made, checkout, reason) = make_on(host, &place, workspace, &session_id, on_issue_branch).await;
     let Some(made) = made else {
         let reason = reason.unwrap_or_default();
         return Err(locale.get_with("paneWorktree.error.cannotMake", &[("reason", &reason)]));
     };
-    let port = core::port(&session_id, &taken_ports(host), |port| port_free(host, port));
+    let port = place.port(host, &session_id).await;
     let effective_setup = crate::repo_tasks::combine_setup_commands(
         approved_cfg.as_ref().and_then(|c| c.config.worktree.setup.as_deref()),
         workspace.worktree_setup_command.as_deref(),
     );
     let mut record = core::from_made(&made, &checkout, port, effective_setup);
     record.linked_task = linked_task.clone();
-    crate::worktree_lifecycle::assign_worktree(host, &mut record, crate::worktree_lifecycle::port_count(approved_cfg.as_ref()));
+    crate::worktree_lifecycle::assign_worktree_at(host, &place, &mut record, crate::worktree_lifecycle::port_count(approved_cfg.as_ref()))
+        .await;
 
     let port_text = record.port.to_string();
     let words = [("branch", record.branch()), ("base", record.base_branch()), ("port", port_text.as_str())];
@@ -548,27 +655,15 @@ pub(crate) async fn open_task_in_worktree(
         pane
     });
     if host.view().snapshot.session(&session_id).is_none() {
-        if let Some(places) = places() {
-            core::discard(&places.git, &places.paths, &record, &session_id, &places.root, &locale).await;
-            crate::worktree_lifecycle::release_worktree(host, &record);
-        }
+        core::discard(place.machine(), &record, &session_id, place.root(), &locale).await;
+        crate::worktree_lifecycle::release_worktree_at(host, &place, &record);
         return added.map(|_| false);
     }
     if let Some(note) = cfg_note {
         note_pane(host, &session_id, note);
     }
-    prepare(host, &session_id, workspace, record, approved_cfg);
+    prepare(host, &session_id, workspace, &place, record, approved_cfg);
     added
-}
-
-/// The worktree made for the session `id` of `workspace` (C# `maker.Check` then `MakePane`): it, the checkout it was made from, or why
-/// not. Only where the git that writes may touch the workspace and the root.
-async fn make(
-    host: &Arc<Host>,
-    workspace: &Workspace,
-    id: &str,
-) -> (Option<mighty_delegation::git::worktree::ChildWorktree>, String, Option<String>) {
-    make_on(host, workspace, id, false).await
 }
 
 /// MC-31: a session id for a pane on an issue of `tracker` whose branch (`lin/ENG-123-fix-login`) and worktree folder are both free:
@@ -581,8 +676,8 @@ pub(crate) async fn free_issue_session_id(
     key: &str,
     title: &str,
 ) -> Option<String> {
-    let places = places()?;
-    let folder = local_folder(workspace);
+    let place = place_for(host, workspace).await.ok()?;
+    let folder = place.folder(workspace);
     for n in 1..=9 {
         let id = crate::trackers::issue_session_id(tracker, key, title, n)?;
         let taken = {
@@ -592,22 +687,28 @@ pub(crate) async fn free_issue_session_id(
                     w.kept_pane_worktrees.as_ref().is_some_and(|kept| kept.iter().any(|k| k.session_id().eq_ignore_ascii_case(&id)))
                 })
         };
-        if taken || Path::new(&places.maker.worktree_path(&id)).exists() {
+        // A folder or branch that cannot be read counts as taken.
+        if taken || place.machine().exists(&place.worktrees.worktree_path(&id)).await != Ok(false) {
             continue;
         }
         let branch = mighty_core::model::issue_pane_branch(&id)?;
         let reference = format!("refs/heads/{branch}");
-        let exists = crate::git_workbench::run_git_capture(
-            host,
-            Path::new(&folder),
-            &["show-ref", "--verify", "--quiet", &reference],
-            None,
-            5,
-            true,
-        )
-        .await
-        .map(|c| c.exit_code == 0)
-        .unwrap_or(false);
+        let exists = match &place.ssh {
+            None => crate::git_workbench::run_git_capture(
+                host,
+                Path::new(&folder),
+                &["show-ref", "--verify", "--quiet", &reference],
+                None,
+                5,
+                true,
+            )
+            .await
+            .map(|c| c.exit_code == 0)
+            .unwrap_or(false),
+            Some(_) => mighty_delegation::git::run(place.machine(), &["show-ref", "--verify", "--quiet", &reference], &folder, 5.0)
+                .await
+                .is_none_or(|r| r.exit_code != 1),
+        };
         if !exists {
             return Some(id);
         }
@@ -615,24 +716,26 @@ pub(crate) async fn free_issue_session_id(
     None
 }
 
-/// [`make`], on the issue branch the id names when `on_issue_branch` (MC-31).
+/// The worktree made for the session `id` of `workspace` at `place` (C# `maker.Check` then `MakePane`), on the issue branch the id
+/// names when `on_issue_branch` (MC-31): it, the checkout it was made from, or why not. Only where the git that writes may touch the
+/// workspace and the root.
 async fn make_on(
     host: &Arc<Host>,
+    place: &Place,
     workspace: &Workspace,
     id: &str,
     on_issue_branch: bool,
 ) -> (Option<mighty_delegation::git::worktree::ChildWorktree>, String, Option<String>) {
-    let Some(places) = places() else { return (None, String::new(), Some(text::reason(DelegationReasonCode::NotGit, &host.locale))) };
-    let folder = local_folder(workspace);
-    match places.maker.check(&folder).await {
+    let folder = place.folder(workspace);
+    match place.worktrees.check(&folder).await {
         ChildWorktreeCheck::Ready(start) => {
-            if !may_write(host, &[&folder, &start.repository, &places.root]) {
+            if !place.may_write(host, &[&folder, &start.repository, place.root()]) {
                 return (None, String::new(), Some(crate::setup::verification_mode()));
             }
             let outcome = if on_issue_branch {
-                core::make_issue_pane(&places.maker, id, &start, 300.0).await
+                core::make_issue_pane(&place.worktrees, id, &start, 300.0).await
             } else {
-                core::make_pane(&places.maker, id, &start, 300.0).await
+                core::make_pane(&place.worktrees, id, &start, 300.0).await
             };
             match outcome {
                 ChildWorktreeOutcome::Created(made) => (Some(made), start.repository, None),
@@ -663,25 +766,34 @@ pub async fn worktree_without_asking(host: &Arc<Host>, workspace: &Workspace, id
         fell_back: Some(locale.get_with("paneWorktree.log.fellBack", &[("reason", reason)])),
         ..PhoneWorktree::default()
     };
-    let Some(places) = places() else { return fell_back(&text::reason(DelegationReasonCode::NotGit, &locale)) };
-    let folder = local_folder(workspace);
-    let ChildWorktreeCheck::Ready(start) = places.maker.check(&folder).await else {
+    let place = match place_for(host, workspace).await {
+        Ok(place) => place,
+        Err(reason) => return fell_back(&reason),
+    };
+    let folder = place.folder(workspace);
+    let ChildWorktreeCheck::Ready(start) = place.worktrees.check(&folder).await else {
         return fell_back(&text::reason(DelegationReasonCode::NotGit, &locale));
     };
-    if !may_write(host, &[&folder, &start.repository, &places.root]) {
+    if !place.may_write(host, &[&folder, &start.repository, place.root()]) {
         return fell_back(&crate::setup::verification_mode());
     }
     let (approved_cfg, cfg_note) = resolve_worktree_repo_config(host, workspace, false).await;
-    match core::make_pane(&places.maker, id, &start, 300.0).await {
+    match core::make_pane(&place.worktrees, id, &start, 300.0).await {
         ChildWorktreeOutcome::Created(made) => {
-            let port = core::port(id, &taken_ports(host), |port| port_free(host, port));
+            let port = place.port(host, id).await;
             let effective_setup = crate::repo_tasks::combine_setup_commands(
                 approved_cfg.as_ref().and_then(|c| c.config.worktree.setup.as_deref()),
                 workspace.worktree_setup_command.as_deref(),
             );
             let mut record = core::from_made(&made, &start.repository, port, effective_setup);
-            crate::worktree_lifecycle::assign_worktree(host, &mut record, crate::worktree_lifecycle::port_count(approved_cfg.as_ref()));
-            PhoneWorktree { record: Some(record), fell_back: None, approved_cfg, cfg_note }
+            crate::worktree_lifecycle::assign_worktree_at(
+                host,
+                &place,
+                &mut record,
+                crate::worktree_lifecycle::port_count(approved_cfg.as_ref()),
+            )
+            .await;
+            PhoneWorktree { record: Some(record), fell_back: None, approved_cfg, cfg_note, place: Some(place) }
         }
         ChildWorktreeOutcome::Refused(reason) => fell_back(&text::reason(reason, &locale)),
         ChildWorktreeOutcome::Failed(message) => fell_back(&message),
@@ -696,6 +808,8 @@ pub struct PhoneWorktree {
     pub fell_back: Option<String>,
     pub approved_cfg: Option<mighty_delegation::mighty_yaml::LoadedRepoConfig>,
     pub cfg_note: Option<String>,
+    /// Where the worktree was made (MC-47).
+    pub(crate) place: Option<Place>,
 }
 
 /// The phone's new pane (C# MainWindow.MobileRemote.cs `create`) with its worktree, or with the line saying why it works in the folder.
@@ -746,7 +860,7 @@ pub async fn create_without_asking(
         }
         view.snapshot.workspace(&workspace_id).cloned()
     };
-    let PhoneWorktree { record: worktree, fell_back, approved_cfg, cfg_note } = match &workspace {
+    let PhoneWorktree { record: worktree, fell_back, approved_cfg, cfg_note, place } = match &workspace {
         Some(workspace) => worktree_without_asking(&host, workspace, created.id(), force_worktree).await,
         None => PhoneWorktree::default(),
     };
@@ -763,9 +877,9 @@ pub async fn create_without_asking(
         }
     };
     if let Err(refused) = added {
-        if let (Some(worktree), Some(places)) = (&worktree, places()) {
-            core::discard(&places.git, &places.paths, worktree, &id, &places.root, &host.locale).await;
-            crate::worktree_lifecycle::release_worktree(&host, worktree);
+        if let (Some(worktree), Some(place)) = (&worktree, &place) {
+            core::discard(place.machine(), worktree, &id, place.root(), &host.locale).await;
+            crate::worktree_lifecycle::release_worktree_at(&host, place, worktree);
         }
         return Err(refused);
     }
@@ -774,26 +888,27 @@ pub async fn create_without_asking(
         host.log.line(&format!("phone worktree create ({id}): {note}"));
         note_pane(&host, &id, note);
     }
-    if let (Some(worktree), Some(workspace)) = (worktree, workspace) {
-        prepare(&host, &id, &workspace, worktree, approved_cfg);
+    if let (Some(worktree), Some(workspace), Some(place)) = (worktree, workspace, place) {
+        prepare(&host, &id, &workspace, &place, worktree, approved_cfg);
     }
     Ok(id)
 }
 
 /// C# `PreparePaneWorktree`: shares cache directories and copies files into the new worktree, then runs its setup command once in
-/// the pane's run folder; on a task of its own.
-pub fn prepare(
+/// the pane's run folder; on a task of its own. MC-47: on the worktree's machine (an SSH workspace's over there).
+pub(crate) fn prepare(
     host: &Arc<Host>,
     id: &str,
     workspace: &Workspace,
+    place: &Place,
     record: PaneWorktree,
     approved_cfg: Option<mighty_delegation::mighty_yaml::LoadedRepoConfig>,
 ) {
-    let (host, id, workspace) = (host.clone(), id.to_string(), workspace.clone());
+    let (host, id, workspace, place) = (host.clone(), id.to_string(), workspace.clone(), place.clone());
     tauri::async_runtime::spawn(async move {
         let locale = host.locale;
         let verified_cfg = match approved_cfg {
-            Some(expected) => match crate::repo_tasks::load_workspace_config(&host, &workspace).await {
+            Some(expected) => match crate::repo_tasks::load_worktree_config(&host, &workspace).await {
                 Ok(Some(fresh)) if fresh.approved && fresh.loaded.content_hash == expected.content_hash => Some(fresh.loaded),
                 _ => {
                     note_pane(&host, &id, "[.mighty.yaml] Repository config changed before worktree setup; skipped.".into());
@@ -802,21 +917,12 @@ pub fn prepare(
             },
             None => None,
         };
+        let (source, destination) = (place.folder(&workspace), record.run_folder().to_string());
 
-        if let (Some(cfg), Some(places)) = (&verified_cfg, places())
+        if let Some(cfg) = &verified_cfg
             && !cfg.config.worktree.share.is_empty()
         {
-            let source = local_folder(&workspace);
-            let destination = record.run_folder().to_string();
-            let shared = core::share_directories(
-                &cfg.config.worktree.share,
-                &source,
-                &destination,
-                &places.paths,
-                &places.git,
-                host.processes.as_ref(),
-            )
-            .await;
+            let shared = place.machine().share(&cfg.config.worktree.share, &source, &destination).await;
             if !shared.shared.is_empty() {
                 note_pane(&host, &id, format!("[.mighty.yaml] Shared cache directories: {}", shared.shared.join(", ")));
             }
@@ -826,14 +932,7 @@ pub fn prepare(
             }
         }
 
-        if let Some(paths) = workspace.worktree_copy_paths.clone().filter(|paths| !paths.is_empty())
-            && let Some(places) = places()
-        {
-            let (source, destination) = (local_folder(&workspace), record.run_folder().to_string());
-            let handles = places.paths.clone();
-            let Ok(copied) = tauri::async_runtime::spawn_blocking(move || core::copy(&paths, &source, &destination, &handles)).await else {
-                return;
-            };
+        let say_copied = |copied: core::CopyResult| {
             if !copied.copied.is_empty() {
                 note_pane(&host, &id, locale.get_with("paneWorktree.log.copied", &[("paths", &copied.copied.join(", "))]));
             }
@@ -845,30 +944,14 @@ pub fn prepare(
                     .collect();
                 note_pane(&host, &id, locale.get_with("paneWorktree.log.copySkipped", &[("paths", &skipped.join(", "))]));
             }
+        };
+        if let Some(paths) = workspace.worktree_copy_paths.clone().filter(|paths| !paths.is_empty()) {
+            say_copied(place.machine().copy_paths(&paths, &source, &destination).await);
         }
-
-        if let (Some(cfg), Some(places)) = (&verified_cfg, places())
+        if let Some(cfg) = &verified_cfg
             && !cfg.config.worktree.copy.is_empty()
         {
-            let rules = cfg.config.worktree.copy.clone();
-            let (source, destination) = (local_folder(&workspace), record.run_folder().to_string());
-            let handles = places.paths.clone();
-            let Ok(copied) =
-                tauri::async_runtime::spawn_blocking(move || core::copy_mapped_rules(&rules, &source, &destination, &handles)).await
-            else {
-                return;
-            };
-            if !copied.copied.is_empty() {
-                note_pane(&host, &id, locale.get_with("paneWorktree.log.copied", &[("paths", &copied.copied.join(", "))]));
-            }
-            if !copied.skipped.is_empty() {
-                let skipped: Vec<String> = copied
-                    .skipped
-                    .iter()
-                    .map(|(path, why)| format!("{path} ({})", locale.get(&format!("paneWorktree.copy.skip.{why}"))))
-                    .collect();
-                note_pane(&host, &id, locale.get_with("paneWorktree.log.copySkipped", &[("paths", &skipped.join(", "))]));
-            }
+            say_copied(place.machine().copy_rules(&cfg.config.worktree.copy, &source, &destination).await);
         }
 
         let effective_command = crate::repo_tasks::combine_setup_commands(
@@ -886,19 +969,45 @@ pub fn prepare(
         };
 
         note_pane(&host, &id, locale.get_with("paneWorktree.log.setupStarted", &[("command", &command)]));
-        let ws_folder = local_folder(&workspace);
-        let shell_env = crate::repo_tasks::login_shell_env(&host, Some(Path::new(&ws_folder))).await;
-        let mut environment: indexmap::IndexMap<String, String> = shell_env.into_iter().collect();
-        if let Some(cfg) = &verified_cfg {
-            for (k, v) in &cfg.config.worktree.env {
-                environment.insert(k.clone(), v.clone());
+        let request = match &place.ssh {
+            // MC-47: on the machine, in the worktree, with the worktree's values (never this computer's environment).
+            Some(ssh) => {
+                let mut environment: indexmap::IndexMap<String, String> = indexmap::IndexMap::new();
+                if let Some(cfg) = &verified_cfg {
+                    for (k, v) in &cfg.config.worktree.env {
+                        environment.insert(k.clone(), v.clone());
+                    }
+                }
+                for (k, v) in record.environment(&source) {
+                    environment.insert(k, v);
+                }
+                let values: Vec<(String, String)> = environment.into_iter().collect();
+                crate::ssh::worktrees::command_request(&ssh.launch, record.run_folder(), &command, &values)
             }
-        }
-        for (k, v) in record.environment(&ws_folder) {
-            environment.insert(k, v);
-        }
+            None => {
+                let ws_folder = local_folder(&workspace);
+                let shell_env = crate::repo_tasks::login_shell_env(&host, Some(Path::new(&ws_folder))).await;
+                let mut environment: indexmap::IndexMap<String, String> = shell_env.into_iter().collect();
+                if let Some(cfg) = &verified_cfg {
+                    for (k, v) in &cfg.config.worktree.env {
+                        environment.insert(k.clone(), v.clone());
+                    }
+                }
+                for (k, v) in record.environment(&ws_folder) {
+                    environment.insert(k, v);
+                }
+                let mut request = crate::repo_tasks::shell_request(&command, record.run_folder());
+                for (key, value) in &environment {
+                    request = request.env(key.clone(), value.clone());
+                }
+                Ok(request)
+            }
+        };
 
-        let (code, tail, full_tail) = run_setup_command(&host, &command, record.run_folder(), &environment).await;
+        let (code, tail, full_tail) = match request {
+            Ok(request) => run_setup_command(&host, request).await,
+            Err(error) => (-1, error.clone(), error),
+        };
         let session_exists = host.view().snapshot.session(&id).is_some();
         if !session_exists {
             return;
@@ -927,18 +1036,10 @@ fn utf16_suffix(text: &str, units: usize) -> String {
     String::from_utf16_lossy(&all[all.len().saturating_sub(units)..])
 }
 
-/// C# `RunSetupCommand`: the setup command through `cmd /d /s /c` (`%ComSpec%`; `/bin/sh -c` elsewhere), 30 minutes at most: its exit
-/// code, last 12 lines (at most 8,000 characters) for the pane note, and last 80 lines for the Task Runner failure handoff.
-async fn run_setup_command(
-    host: &Host,
-    command: &str,
-    folder: &str,
-    environment: &indexmap::IndexMap<String, String>,
-) -> (i32, String, String) {
-    let mut request = crate::repo_tasks::shell_request(command, folder);
-    for (key, value) in environment {
-        request = request.env(key.clone(), value.clone());
-    }
+/// C# `RunSetupCommand`: the setup command through `cmd /d /s /c` (`%ComSpec%`; `/bin/sh -c` elsewhere; MC-47: over ssh on an SSH
+/// machine), 30 minutes at most: its exit code, last 12 lines (at most 8,000 characters) for the pane note, and last 80 lines for the
+/// Task Runner failure handoff.
+async fn run_setup_command(host: &Host, request: mighty_platform::SpawnRequest) -> (i32, String, String) {
     let mut child = match host.processes.spawn(request).await {
         Ok(child) => child,
         Err(error) => {
@@ -1031,8 +1132,8 @@ fn setup_lines_tail(output: &str, errors: &str, max_lines: usize) -> String {
 /// action runs, whether the last merge conflicted. Null for a pane without a worktree.
 async fn status_model(host: &Arc<Host>, id: &str) -> Value {
     let Some(pane) = pane_record(host, id) else { return Value::Null };
-    let status = match places() {
-        Some(places) => own_status(&places, &pane).await,
+    let status = match place_of(host, id).await {
+        Some(place) => own_status(&place, &pane).await,
         None => None,
     };
     let (busy, conflict, moved) = {
@@ -1051,6 +1152,7 @@ async fn status_model(host: &Arc<Host>, id: &str) -> Value {
         "ahead": status.map_or(0, |s| s.ahead), "behind": status.map_or(0, |s| s.behind),
         "changed": status.map_or(0, |s| s.changed_files), "known": status.is_some(), "busy": busy, "conflict": conflict,
         "canUndo": pane.merged_commit.is_some() && pane.pre_merge_commit.is_some(), "actions": actions,
+        "remote": is_ssh_pane(host, id),
     })
 }
 
@@ -1061,7 +1163,7 @@ async fn pane_action(host: &Arc<Host>, id: &str, action: &str) {
     let locale = host.locale;
     match action {
         "merge" | "commitMerge" => {
-            if writes_refused(host, &pane) {
+            if writes_refused(host, id, &pane).await {
                 return;
             }
             let commit_first = action == "commitMerge";
@@ -1081,7 +1183,7 @@ async fn pane_action(host: &Arc<Host>, id: &str, action: &str) {
             ask_to_resolve(host, &session, &pane).await;
         }
         "undo" => {
-            if writes_refused(host, &pane) {
+            if writes_refused(host, id, &pane).await {
                 return;
             }
             busy(host, id, async {
@@ -1104,11 +1206,25 @@ async fn pane_action(host: &Arc<Host>, id: &str, action: &str) {
             }
         }
         "port" => {
-            let url = format!("http://localhost:{}", pane.port);
+            // MC-47: an SSH pane's PORT is on its machine: forwarded here first (로컬로 연결, MC-33), then opened.
+            let local = if is_ssh_pane(host, id) {
+                match u16::try_from(pane.port) {
+                    Ok(remote) => match crate::ssh::forward::open(host, id, remote).await {
+                        Ok(local) => local,
+                        Err(error) => return banner(host, error),
+                    },
+                    Err(_) => return,
+                }
+            } else {
+                u16::try_from(pane.port).unwrap_or(0)
+            };
+            let url = format!("http://localhost:{local}");
             if let Ok(Err(error)) = tauri::async_runtime::spawn_blocking(move || crate::platform::open_url(&url)).await {
                 banner(host, error);
             }
         }
+        // An SSH pane's folder is on its machine: there is nothing here to show or open in an editor.
+        "reveal" | "editor" if is_ssh_pane(host, id) => banner(host, locale.get("ssh.worktree.error.localOnly")),
         "reveal" => {
             let folder = std::path::PathBuf::from(pane.run_folder());
             if let Ok(Err(error)) = tauri::async_runtime::spawn_blocking(move || crate::platform::show_in_explorer(&folder)).await {
@@ -1125,10 +1241,16 @@ async fn pane_action(host: &Arc<Host>, id: &str, action: &str) {
     }
 }
 
+/// Whether the pane `id` is one of an SSH workspace's (MC-47).
+fn is_ssh_pane(host: &Host, id: &str) -> bool {
+    let view = host.view();
+    view.snapshot.session(id).and_then(|s| view.snapshot.workspace(s.workspace_id())).is_some_and(|w| w.is_ssh())
+}
+
 /// Without the write policy (or outside the smoke's fixture) a git step that writes does nothing and says why (W7 plan D2).
 /// A worktree that is not its own place under the root (or is a link) is never written in either (W7's place rules, beyond C#).
-fn writes_refused(host: &Arc<Host>, pane: &PaneWorktree) -> bool {
-    match write_refusal(host, pane) {
+async fn writes_refused(host: &Arc<Host>, id: &str, pane: &PaneWorktree) -> bool {
+    match write_refusal(host, id, pane).await {
         Some(why) => {
             banner(host, why);
             true
@@ -1137,23 +1259,33 @@ fn writes_refused(host: &Arc<Host>, pane: &PaneWorktree) -> bool {
     }
 }
 
-/// Why a git step that writes may not touch the pane's worktree now ([`writes_refused`]'s words), None when it may.
-fn write_refusal(host: &Arc<Host>, pane: &PaneWorktree) -> Option<String> {
-    if !may_write(host, &[pane.checkout(), pane.worktree_path()]) {
+/// Why a git step that writes may not touch the worktree `pane` of the pane or kept row `id` now ([`writes_refused`]'s words), None
+/// when it may. MC-47: its place is asked on its machine (a link or a misplaced folder over there refuses too).
+async fn write_refusal(host: &Arc<Host>, id: &str, pane: &PaneWorktree) -> Option<String> {
+    let place = match place_of(host, id).await {
+        Some(place) => place,
+        None => return Some(host.locale.get("delegation.card.error.worktreeMisplaced")),
+    };
+    write_refusal_at(host, &place, pane).await
+}
+
+/// [`write_refusal`] at a known place.
+async fn write_refusal_at(host: &Arc<Host>, place: &Place, pane: &PaneWorktree) -> Option<String> {
+    if !place.may_write(host, &[pane.checkout(), pane.worktree_path()]) {
         return Some(crate::setup::verification_mode());
     }
-    if !places().is_some_and(|places| core::in_own_place(&places.paths, pane, &places.root)) {
+    if !core::in_own_place(place.machine(), pane, place.root()).await {
         return Some(host.locale.get("delegation.card.error.worktreeMisplaced"));
     }
     None
 }
 
 /// `PaneWorktreeGit.Status` of a worktree in its own place; None (unknown) for one that is not.
-async fn own_status(places: &Places, pane: &PaneWorktree) -> Option<Status> {
-    if !core::in_own_place(&places.paths, pane, &places.root) {
+async fn own_status(place: &Place, pane: &PaneWorktree) -> Option<Status> {
+    if !core::in_own_place(place.machine(), pane, place.root()).await {
         return None;
     }
-    core::status(&places.git, pane).await
+    core::status(place.machine(), pane).await
 }
 
 /// C# `Busy`: one action at a time on a pane; the bar reads it busy meanwhile.
@@ -1182,7 +1314,7 @@ type Said = (bool, Option<String>);
 /// C# `MergePane`: the pane's branch into its base, its changes committed first for Commit and merge. What it said in the pane, and
 /// whether it merged.
 async fn merge_pane(host: &Arc<Host>, id: &str, pane: &PaneWorktree, commit_first: bool) -> Said {
-    let Some(places) = places() else { return (false, None) };
+    let Some(place) = place_of(host, id).await else { return (false, None) };
     let locale = host.locale;
     let say = |text: String, done: bool| -> Said {
         note_pane(host, id, text.clone());
@@ -1190,7 +1322,7 @@ async fn merge_pane(host: &Arc<Host>, id: &str, pane: &PaneWorktree, commit_firs
     };
     if commit_first {
         let left_out = |left: &[String]| locale.get_with("paneWorktree.log.leftOut", &[("paths", &left.join(", "))]);
-        match core::commit_all(&places.git, pane, &locale).await {
+        match core::commit_all(place.machine(), pane, &locale).await {
             CommitOutcome::Unmerged => return say(locale.get("paneWorktree.refused.unmerged"), false),
             CommitOutcome::Failed(message) => {
                 return say(locale.get_with("paneWorktree.error.commitFailed", &[("reason", &message)]), false);
@@ -1204,7 +1336,7 @@ async fn merge_pane(host: &Arc<Host>, id: &str, pane: &PaneWorktree, commit_firs
             CommitOutcome::Nothing { .. } => {}
         }
     }
-    match core::merge(&places.git, pane, &locale).await {
+    match core::merge(place.machine(), pane, &locale).await {
         MergeOutcome::Merged { commit, pre_merge } => {
             lock(&STATE).conflicts.remove(id);
             let (merged, before) = (commit.clone(), pre_merge.clone());
@@ -1235,13 +1367,13 @@ async fn merge_pane(host: &Arc<Host>, id: &str, pane: &PaneWorktree, commit_firs
 
 /// C# `UndoPaneMerge`: what it said in the pane, and whether it undid the merge.
 async fn undo_pane_merge(host: &Arc<Host>, id: &str, pane: &PaneWorktree) -> Said {
-    let Some(places) = places() else { return (false, None) };
+    let Some(place) = place_of(host, id).await else { return (false, None) };
     let locale = host.locale;
     let say = |text: String, done: bool| -> Said {
         note_pane(host, id, text.clone());
         (done, Some(text))
     };
-    match core::undo_merge(&places.git, pane, &locale).await {
+    match core::undo_merge(place.machine(), pane, &locale).await {
         UndoOutcome::Undone => {
             update_pane_worktree(host, id, |p| {
                 p.merged_commit = None;
@@ -1284,9 +1416,11 @@ async fn ask_to_resolve(host: &Arc<Host>, session: &RunSession, pane: &PaneWorkt
 
 /// C# `CreatePullRequest`: asks, then pushes the branch to `origin` and opens GitHub's compare page, or says it was pushed.
 async fn create_pull_request(host: &Arc<Host>, id: &str, pane: &PaneWorktree) {
-    let Some(places) = places() else { return };
+    let Some(place) = place_of(host, id).await else { return };
     let locale = host.locale;
-    let Some(origin) = core::origin(&places.git, pane).await else { return note_pane(host, id, locale.get("paneWorktree.pr.noOrigin")) };
+    let Some(origin) = core::origin(place.machine(), pane).await else {
+        return note_pane(host, id, locale.get("paneWorktree.pr.noOrigin"));
+    };
     let detail = locale.get_with("paneWorktree.pr.detail", &[("branch", pane.branch()), ("base", pane.base_branch())]);
     if !confirm(host, locale.get("paneWorktree.pr.title"), detail, locale.get("paneWorktree.pr.confirm")).await {
         return;
@@ -1296,7 +1430,7 @@ async fn create_pull_request(host: &Arc<Host>, id: &str, pane: &PaneWorktree) {
         return banner(host, crate::setup::verification_mode());
     }
     busy(host, id, async {
-        if let Some(failed) = core::push(&places.git, pane, &locale).await {
+        if let Some(failed) = core::push(place.machine(), pane, &locale).await {
             return note_pane(host, id, locale.get_with("paneWorktree.pr.failed", &[("reason", &failed)]));
         }
         match core::github_repository(&origin) {
@@ -1332,7 +1466,7 @@ async fn discard_pane_worktree(host: &Arc<Host>, session: &RunSession, pane: &Pa
     if !confirm(host, locale.get("paneWorktree.discard.title"), detail, locale.get("paneWorktree.discard.confirm")).await {
         return;
     }
-    if writes_refused(host, pane) {
+    if writes_refused(host, session.id(), pane).await {
         return;
     }
     discard_confirmed(host, session, pane).await;
@@ -1348,7 +1482,7 @@ fn discard_blocked(host: &Host, id: &str) -> Option<String> {
 /// worktree and branch removed and the pane closed. What it said in the pane, and whether it went.
 async fn discard_confirmed(host: &Arc<Host>, session: &RunSession, pane: &PaneWorktree) -> Said {
     let locale = host.locale;
-    let Some(places) = places() else { return (false, None) };
+    let Some(place) = place_of(host, session.id()).await else { return (false, None) };
     let id = session.id().to_string();
     let mut said: Said = (false, None);
     busy(host, &id, async {
@@ -1358,10 +1492,10 @@ async fn discard_confirmed(host: &Arc<Host>, session: &RunSession, pane: &PaneWo
             let _ = runs.service.stop(&id).await;
         }
         // Its run actions stop and its teardown runs first; a failed teardown does not keep the worktree (MC-25).
-        crate::worktree_lifecycle::before_remove(host, session.workspace_id(), &id, pane).await;
-        match core::discard(&places.git, &places.paths, pane, &id, &places.root, &locale).await {
+        crate::worktree_lifecycle::before_remove(host, session.workspace_id(), &id, pane, Some(&place)).await;
+        match core::discard(place.machine(), pane, &id, place.root(), &locale).await {
             ChildDiscardOutcome::Discarded => {
-                crate::worktree_lifecycle::release_worktree(host, pane);
+                crate::worktree_lifecycle::release_worktree_at(host, &place, pane);
                 lock(&STATE).statuses.remove(&id);
                 // Gone already: the close must not keep it.
                 let _ = host.view().update(|state| {
@@ -1461,7 +1595,7 @@ pub async fn phone_action(host: &Arc<Host>, id: &str, action: &str, confirmed: b
     let answer = |(done, message): Said| json!({ "done": done, "message": message });
     let said = match action {
         "merge" | "commitMerge" => {
-            if let Some(why) = write_refusal(host, &pane) {
+            if let Some(why) = write_refusal(host, id, &pane).await {
                 return Ok(answer((false, Some(why))));
             }
             let commit_first = action == "commitMerge";
@@ -1483,7 +1617,7 @@ pub async fn phone_action(host: &Arc<Host>, id: &str, action: &str, confirmed: b
             said
         }
         "undo" => {
-            if let Some(why) = write_refusal(host, &pane) {
+            if let Some(why) = write_refusal(host, id, &pane).await {
                 return Ok(answer((false, Some(why))));
             }
             let mut said: Said = (false, None);
@@ -1499,7 +1633,7 @@ pub async fn phone_action(host: &Arc<Host>, id: &str, action: &str, confirmed: b
                 note_pane(host, id, blocked.clone());
                 return Ok(answer((false, Some(blocked))));
             }
-            if let Some(why) = write_refusal(host, &pane) {
+            if let Some(why) = write_refusal(host, id, &pane).await {
                 return Ok(answer((false, Some(why))));
             }
             discard_confirmed(host, &session, &pane).await
@@ -1536,16 +1670,23 @@ pub async fn closed(host: &Arc<Host>, closed: &RunSession) {
                         | mighty_core::shell::ChildState::Discarded
                 )
         });
-    if let Some(places) = places()
-        && may_write(host, &[pane.checkout(), pane.worktree_path()])
-        && !core::kept_on_close(&places.git, &pane, children).await
+    // MC-47: the pane is gone already; its worktree's place is its workspace's (an SSH workspace's machine, asked again here: a
+    // machine that cannot be reached keeps the worktree, as an answer git cannot give does).
+    let workspace = host.view().snapshot.workspace(closed.workspace_id()).cloned();
+    let place = match &workspace {
+        Some(workspace) => place_for(host, workspace).await.ok(),
+        None => places().map(|places| Place { worktrees: places.local.clone(), ssh: None }),
+    };
+    if let Some(place) = place
+        && place.may_write(host, &[pane.checkout(), pane.worktree_path()])
+        && !core::kept_on_close(place.machine(), &pane, children).await
     {
-        crate::worktree_lifecycle::before_remove(host, closed.workspace_id(), closed.id(), &pane).await;
-        match core::discard(&places.git, &places.paths, &pane, closed.id(), &places.root, &locale).await {
+        crate::worktree_lifecycle::before_remove(host, closed.workspace_id(), closed.id(), &pane, Some(&place)).await;
+        match core::discard(place.machine(), &pane, closed.id(), place.root(), &locale).await {
             ChildDiscardOutcome::Failed(message) => {
                 banner(host, locale.get_with("paneWorktree.error.discardFailed", &[("reason", &message)]));
             }
-            ChildDiscardOutcome::Discarded => crate::worktree_lifecycle::release_worktree(host, &pane),
+            ChildDiscardOutcome::Discarded => crate::worktree_lifecycle::release_worktree_at(host, &place, &pane),
         }
         return;
     }
@@ -1582,9 +1723,9 @@ async fn show_changes(host: &Arc<Host>, pane: &PaneWorktree) {
 /// The changes sheet of the worktree `pane` that `pane_id` names (a worktree pane, or a delegated child for the review queue): each
 /// file's diff is asked of `paneWorktreeDiff` with that id.
 async fn show_changes_of(host: &Arc<Host>, pane_id: &str, pane: &PaneWorktree) {
-    let Some(places) = places() else { return };
+    let Some(place) = place_of(host, pane_id).await else { return };
     let locale = host.locale;
-    let files = core::changed_files(&places.git, pane).await.unwrap_or_default();
+    let files = core::changed_files(place.machine(), pane).await.unwrap_or_default();
     let title = locale.get_with("paneWorktree.changes.title", &[("branch", pane.branch()), ("base", pane.base_branch())]);
     if host.view().dialog_open {
         return;
@@ -1616,7 +1757,8 @@ async fn ask_text(host: &Arc<Host>, title: String, detail: String, current: Stri
 /// C# `WorkspaceWorktreeAction`: the workspace row's worktree items: its mode, its setup command, the files it copies, its worktree
 /// list. A remote workspace has none.
 async fn workspace_action(host: &Arc<Host>, workspace_id: &str, action: &str, value: Option<String>) -> Result<(), String> {
-    let Some(workspace) = host.view().snapshot.workspace(workspace_id).filter(|w| w.is_local()).cloned() else { return Ok(()) };
+    // MC-47: an SSH workspace has the same items (its worktrees are on its machine); another computer's workspace has none.
+    let Some(workspace) = host.view().snapshot.workspace(workspace_id).filter(|w| w.remote.is_none()).cloned() else { return Ok(()) };
     let locale = host.locale;
     match action {
         "mode" => update_workspace(host, workspace_id, |w| w.pane_worktree_mode = core::saved_mode(value.as_deref())),
@@ -1712,7 +1854,7 @@ fn row_actions(host: &Host, row: &Row, status: Option<Status>) -> Value {
 /// C# `WorktreeRows`: the rows with their status: open panes, kept ones, and those git has under the root (delegated children's left
 /// out).
 async fn worktree_rows(host: &Arc<Host>, workspace: &Workspace) -> Vec<(Row, Option<Status>)> {
-    let Some(places) = places() else { return vec![] };
+    let Ok(place) = place_for(host, workspace).await else { return vec![] };
     let open: Vec<RunSession> = host
         .view()
         .snapshot
@@ -1721,15 +1863,15 @@ async fn worktree_rows(host: &Arc<Host>, workspace: &Workspace) -> Vec<(Row, Opt
         .filter(|s| s.workspace_id() == workspace.id() && s.pane_worktree.is_some())
         .map(|s| RunSession::clone(s))
         .collect();
-    let check = places.maker.check(&local_folder(workspace)).await;
+    let check = place.worktrees.check(&place.folder(workspace)).await;
     let (checkout, base_branch) = match &check {
         ChildWorktreeCheck::Ready(start) => (start.repository.clone(), Some(start.parent_branch.clone())),
         ChildWorktreeCheck::Refused(_) => (
-            open.first().and_then(|s| s.pane_worktree.as_ref()).map_or_else(|| local_folder(workspace), |p| p.checkout().to_string()),
+            open.first().and_then(|s| s.pane_worktree.as_ref()).map_or_else(|| place.folder(workspace), |p| p.checkout().to_string()),
             None,
         ),
     };
-    let on_disk = core::worktrees(&places.git, &places.paths, &checkout, &places.root).await.unwrap_or_default();
+    let on_disk = core::worktrees(place.machine(), &checkout, place.root()).await.unwrap_or_default();
     let (children, taken) = {
         let view = host.view();
         // Delegated children, and every open pane (beyond C#: another workspace's open pane on the same repository is no "found" row
@@ -1740,12 +1882,17 @@ async fn worktree_rows(host: &Arc<Host>, workspace: &Workspace) -> Vec<(Row, Opt
         (children, taken)
     };
     let kept = workspace.kept_pane_worktrees.clone().unwrap_or_default();
-    let rows = core::rows(&open, &kept, &on_disk, &children, &checkout, base_branch.as_deref(), |id| {
-        core::port(id, &taken, |port| port_free(host, port))
+    let listening = match &place.ssh {
+        Some(ssh) => Some(crate::ssh::worktrees::listening(host, &ssh.launch).await),
+        None => None,
+    };
+    let rows = core::rows(&open, &kept, &on_disk, &children, &checkout, base_branch.as_deref(), |id| match &listening {
+        Some(listening) => core::port(id, &taken, |port| u16::try_from(port).is_ok_and(|port| !listening.contains(&port))),
+        None => core::port(id, &taken, |port| port_free(host, port)),
     });
     let mut result = vec![];
     for row in rows {
-        let status = own_status(&places, &row.worktree).await;
+        let status = own_status(&place, &row.worktree).await;
         result.push((row, status));
     }
     result
@@ -1754,7 +1901,13 @@ async fn worktree_rows(host: &Arc<Host>, workspace: &Workspace) -> Vec<(Row, Opt
 /// C# `WorktreeRowAction`: a list row's action; true when the list should open again.
 async fn row_action(host: &Arc<Host>, workspace: &Workspace, row: &Row, action: &str) -> bool {
     let locale = host.locale;
-    let Some(places) = places() else { return false };
+    let place = match place_for(host, workspace).await {
+        Ok(place) => place,
+        Err(error) => {
+            banner(host, error);
+            return false;
+        }
+    };
     match action {
         "show" => {
             let _ = frame::activate_pane(&mut host.view(), &row.session_id);
@@ -1781,11 +1934,12 @@ async fn row_action(host: &Arc<Host>, workspace: &Workspace, row: &Row, action: 
             false
         }
         "merge" | "commitMerge" => {
-            if writes_refused(host, &row.worktree) {
+            if let Some(why) = write_refusal_at(host, &place, &row.worktree).await {
+                banner(host, why);
                 return true;
             }
             if action == "commitMerge" {
-                let committed = core::commit_all(&places.git, &row.worktree, &locale).await;
+                let committed = core::commit_all(place.machine(), &row.worktree, &locale).await;
                 let blocked = match &committed {
                     CommitOutcome::Committed { left_out } | CommitOutcome::Nothing { left_out } => !left_out.is_empty(),
                     CommitOutcome::Unmerged | CommitOutcome::Failed(_) => true,
@@ -1795,7 +1949,7 @@ async fn row_action(host: &Arc<Host>, workspace: &Workspace, row: &Row, action: 
                     return true;
                 }
             }
-            match core::merge(&places.git, &row.worktree, &locale).await {
+            match core::merge(place.machine(), &row.worktree, &locale).await {
                 MergeOutcome::Merged { commit, pre_merge } => {
                     let short: String = commit.chars().take(8).collect();
                     let words = [("branch", row.worktree.branch()), ("base", row.worktree.base_branch()), ("commit", short.as_str())];
@@ -1823,16 +1977,17 @@ async fn row_action(host: &Arc<Host>, workspace: &Workspace, row: &Row, action: 
             if !confirm(host, locale.get("paneWorktree.list.delete"), detail, locale.get("paneWorktree.list.delete")).await {
                 return true;
             }
-            if writes_refused(host, &row.worktree) {
+            if let Some(why) = write_refusal_at(host, &place, &row.worktree).await {
+                banner(host, why);
                 return true;
             }
-            crate::worktree_lifecycle::before_remove(host, workspace.id(), &row.session_id, &row.worktree).await;
-            match core::discard(&places.git, &places.paths, &row.worktree, &row.session_id, &places.root, &locale).await {
+            crate::worktree_lifecycle::before_remove(host, workspace.id(), &row.session_id, &row.worktree, Some(&place)).await;
+            match core::discard(place.machine(), &row.worktree, &row.session_id, place.root(), &locale).await {
                 ChildDiscardOutcome::Failed(message) => {
                     banner(host, locale.get_with("paneWorktree.error.discardFailed", &[("reason", &message)]));
                 }
                 ChildDiscardOutcome::Discarded => {
-                    crate::worktree_lifecycle::release_worktree(host, &row.worktree);
+                    crate::worktree_lifecycle::release_worktree_at(host, &place, &row.worktree);
                     let id = row.session_id.clone();
                     update_workspace(host, workspace.id(), |w| {
                         if let Some(kept) = w.kept_pane_worktrees.as_mut() {
@@ -2029,7 +2184,7 @@ mod smoke_step {
         let status = status_model(host, &id).await;
         checks.insert("paneWorktreeStatus".into(), json!(status["known"] == json!(true) && status["changed"] == json!(0)));
         std::fs::write(worktree.join("feature.txt"), "feature\n").map_err(|e| e.to_string())?;
-        let diff = core::file_diff(git, &places.paths, &set_up, "feature.txt").await;
+        let diff = core::file_diff(places.local.machine.as_ref(), &set_up, "feature.txt").await;
         let changed = status_model(host, &id).await;
         checks
             .insert("paneWorktreeDiff".into(), json!(diff.is_some_and(|diff| diff.contains("+feature")) && changed["changed"] == json!(1)));
@@ -2179,7 +2334,7 @@ mod smoke_step {
                     let _ = runs.service.stop(id).await;
                 }
                 if let Some(record) = record {
-                    core::discard(&places.git, &places.paths, record, id, &places.root, &host.locale).await;
+                    core::discard(places.local.machine.as_ref(), record, id, &places.root, &host.locale).await;
                 }
             }
         }

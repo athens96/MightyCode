@@ -27,6 +27,54 @@ use serde_json::Value;
 
 pub use git::Git;
 pub use service::{WorkMapService, WorkMapStart};
+
+/// MC-47: where a work map reads a repository's history and files: this computer's folder ([`LocalRepository`], the app's git
+/// runner and the workspace reader, as always) or an SSH workspace's folder on its machine ([`RemoteRepository`]: the same git
+/// commands over ssh with the work map's settings, no transport, and the files read with the same rules over there).
+pub trait Repository: Send + Sync {
+    /// One git in the repository's folder ([`Git::run`]'s answer).
+    fn run<'a>(&'a self, arguments: &'a [&'a str], timeout: f64) -> mighty_platform::BoxFuture<'a, Option<git::GitResult>>;
+    /// The first `limit` bytes of the file `relative` (`/`-separated) of the folder: a regular file, no link, nothing outside it.
+    fn read_first<'a>(&'a self, relative: &'a str, limit: usize) -> mighty_platform::BoxFuture<'a, Option<Vec<u8>>>;
+}
+
+/// A folder of this computer through the app's git runner and the workspace reader (mighty-composer `read_under`).
+pub struct LocalRepository<'a> {
+    pub git: &'a Git,
+    pub root: &'a Path,
+}
+
+impl Repository for LocalRepository<'_> {
+    fn run<'a>(&'a self, arguments: &'a [&'a str], timeout: f64) -> mighty_platform::BoxFuture<'a, Option<git::GitResult>> {
+        Box::pin(self.git.run(arguments, self.root, timeout))
+    }
+
+    fn read_first<'a>(&'a self, relative: &'a str, limit: usize) -> mighty_platform::BoxFuture<'a, Option<Vec<u8>>> {
+        Box::pin(async move { mighty_composer::files::read_under(relative, self.root, limit).ok().map(|(_, bytes)| bytes) })
+    }
+}
+
+/// An SSH workspace's folder on its machine (MC-47). Each git a separate ssh, as each git is a separate process here.
+pub struct RemoteRepository {
+    pub folder: mighty_run::ssh_git::SshFolder,
+    pub dir: String,
+}
+
+impl Repository for RemoteRepository {
+    fn run<'a>(&'a self, arguments: &'a [&'a str], timeout: f64) -> mighty_platform::BoxFuture<'a, Option<git::GitResult>> {
+        Box::pin(
+            async move { self.folder.git(mighty_core::ssh::worktree::GitKind::WorkMap, arguments, &self.dir, timeout, None).await.ok() },
+        )
+    }
+
+    fn read_first<'a>(&'a self, relative: &'a str, limit: usize) -> mighty_platform::BoxFuture<'a, Option<Vec<u8>>> {
+        Box::pin(async move {
+            let script = mighty_core::ssh::worktree::read_first_script(&self.dir, relative, limit)?;
+            let ended = self.folder.exec(&script, None, std::time::Duration::from_secs(30), limit + 64).await.ok()?;
+            (ended.code == 0).then(|| ended.stdout.into_iter().take(limit).collect())
+        })
+    }
+}
 pub use summary::{SummaryError, WorkMapSummaryStore};
 
 /// `WorkMapCommit(Sha, Date, Lanes, Scope, Subject, Files, FilesCount)`.
@@ -432,11 +480,22 @@ pub fn read_start(root: &Path, relative: &str, limit: usize) -> Option<String> {
     mighty_composer::files::read_under(relative, root, limit).ok().map(|(_, bytes)| text_of(&bytes))
 }
 
+/// [`read_text`] of any [`Repository`].
+pub async fn read_text_of(repository: &dyn Repository, relative: &str, limit: usize) -> Option<String> {
+    let bytes = repository.read_first(relative, limit + 1).await?;
+    (bytes.len() <= limit).then(|| text_of(&bytes))
+}
+
+/// [`read_start`] of any [`Repository`].
+pub async fn read_start_of(repository: &dyn Repository, relative: &str, limit: usize) -> Option<String> {
+    repository.read_first(relative, limit).await.map(|bytes| text_of(&bytes))
+}
+
 /// `ReadCommitsAsync`: a version's commits (at most [`MAXIMUM_COMMITS_PER_VERSION`]) and how many it has. None when git failed —
 /// including a log past git's 1 MiB of output (one commit that names a great many files can do it): the whole map then reads
 /// `gitFailed`, as C#'s does (`DelegationGit.Run` gives null past `MaximumBytes`, WorkMap.cs `ReadCommitsAsync`): kept for parity, no
 /// version is shown in part.
-async fn read_commits(git: &Git, root: &Path, range: &str) -> Option<(Vec<WorkMapCommit>, i32)> {
+async fn read_commits(git: &dyn Repository, range: &str) -> Option<(Vec<WorkMapCommit>, i32)> {
     let limit = MAXIMUM_COMMITS_PER_VERSION.to_string();
     let log = git
         .run(
@@ -453,7 +512,6 @@ async fn read_commits(git: &Git, root: &Path, range: &str) -> Option<(Vec<WorkMa
                 range,
                 "--",
             ],
-            root,
             GIT_TIMEOUT_SECONDS,
         )
         .await
@@ -462,7 +520,7 @@ async fn read_commits(git: &Git, root: &Path, range: &str) -> Option<(Vec<WorkMa
     let mut total = commits.len() as i32;
     if commits.len() >= MAXIMUM_COMMITS_PER_VERSION {
         let count =
-            git.run(&["rev-list", "--count", "--no-merges", range, "--"], root, GIT_TIMEOUT_SECONDS).await.filter(|r| r.exit_code == 0)?;
+            git.run(&["rev-list", "--count", "--no-merges", range, "--"], GIT_TIMEOUT_SECONDS).await.filter(|r| r.exit_code == 0)?;
         total = git::line(&count.stdout).parse().ok().filter(|_| git::line(&count.stdout).bytes().all(|b| b.is_ascii_digit()))?;
     }
     Some((commits, total))
@@ -477,7 +535,18 @@ pub async fn build(
     summarizing: Option<&str>,
     errors: &HashMap<String, String>,
 ) -> WorkMapModel {
-    let Some(inside) = git.run(&["rev-parse", "--is-inside-work-tree"], root, GIT_TIMEOUT_SECONDS).await else {
+    build_on(&LocalRepository { git, root }, requests, stored, summarizing, errors).await
+}
+
+/// [`build`] of any [`Repository`] (MC-47: an SSH workspace's folder on its machine).
+pub async fn build_on(
+    git: &dyn Repository,
+    requests: &[WorkMapRequestInput],
+    stored: &IndexMap<String, WorkMapStoredSummary>,
+    summarizing: Option<&str>,
+    errors: &HashMap<String, String>,
+) -> WorkMapModel {
+    let Some(inside) = git.run(&["rev-parse", "--is-inside-work-tree"], GIT_TIMEOUT_SECONDS).await else {
         return WorkMapModel::unavailable("gitFailed");
     };
     if inside.exit_code != 0 {
@@ -487,7 +556,7 @@ pub async fn build(
             "gitFailed"
         });
     }
-    let Some(head) = git.run(&["rev-parse", "HEAD"], root, GIT_TIMEOUT_SECONDS).await else {
+    let Some(head) = git.run(&["rev-parse", "HEAD"], GIT_TIMEOUT_SECONDS).await else {
         return WorkMapModel::unavailable("gitFailed");
     };
     // A repository with no commit yet has nothing to show, and nothing has failed.
@@ -505,7 +574,6 @@ pub async fn build(
     let Some(refs) = git
         .run(
             &["for-each-ref", "refs/tags", "--format=%(refname:short)%1f%(creatordate:iso-strict)%1f%(*objectname)%1f%(objectname)"],
-            root,
             GIT_TIMEOUT_SECONDS,
         )
         .await
@@ -534,7 +602,7 @@ pub async fn build(
             Some(below) => format!("{below}..{tag}"),
             None => tag.clone(),
         };
-        let Some(read) = read_commits(git, root, &range).await else { return WorkMapModel::unavailable("gitFailed") };
+        let Some(read) = read_commits(git, &range).await else { return WorkMapModel::unavailable("gitFailed") };
         results.push(read);
     }
     let newest = tags.first().cloned();
@@ -542,15 +610,15 @@ pub async fn build(
         Some(tag) => format!("{tag}..HEAD"),
         None => "HEAD".to_string(),
     };
-    let Some((next_commits, next_total)) = read_commits(git, root, &next_range).await else {
+    let Some((next_commits, next_total)) = read_commits(git, &next_range).await else {
         return WorkMapModel::unavailable("gitFailed");
     };
 
     let mut versions = vec![];
     if !next_commits.is_empty() {
-        let name = version_name(read_text(root, "VERSION", VERSION_BYTES).as_deref(), newest.as_deref());
+        let name = version_name(read_text_of(git, "VERSION", VERSION_BYTES).await.as_deref(), newest.as_deref());
         let status = match &name {
-            Some(name) => release_status(read_text(root, &format!("release/{name}/state.json"), RELEASE_FILE_BYTES).as_deref()),
+            Some(name) => release_status(read_text_of(git, &format!("release/{name}/state.json"), RELEASE_FILE_BYTES).await.as_deref()),
             None => ("unreleased".to_string(), None),
         };
         let date = Some(&next_commits[0].date).filter(|d| d.encode_utf16().count() >= 10).map(|d| d.chars().take(10).collect());

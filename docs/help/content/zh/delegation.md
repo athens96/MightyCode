@@ -54,6 +54,7 @@ section: delegation
 
 - **何时在 worktree 中打开**:当同一工作区已有在工作区文件夹中工作的代理窗格时,新代理窗格会询问:{{ui:paneWorktree.choice.worktree}}、{{ui:paneWorktree.choice.always}} 或 {{ui:paneWorktree.choice.sameFolder}}。也可以在侧边栏工作区行的右键菜单 {{ui:paneWorktree.menu.mode}} 中预先设置为 {{ui:paneWorktree.mode.ask}}、{{ui:paneWorktree.mode.further}} 或 {{ui:paneWorktree.mode.every}}。设为 {{ui:paneWorktree.mode.every}} 时第一个窗格也在 worktree 中工作,工作区文件夹只接收合并(否则在工作区文件夹中工作的窗格会阻止合并)。从手机打开的窗格遵循此设置,设置为询问时在工作区文件夹中打开。继续之前会话的窗格总是在工作区文件夹中工作。
 - **创建方式**:与子窗格规则相同。从工作区分支的最新提交创建分支 `mighty/<窗格 id>`,worktree 位于 `~/.mightycode/worktrees/<窗格 id>`。无法创建时(例如不是 git 仓库)会说明原因,只能在同一文件夹中打开。
+- **SSH 工作区**:worktree 建在该主机的 `~/.mightycode/worktrees/<窗格 id>`,合并、提交、撤销、丢弃以及复制和准备命令也在该主机上按相同规则进行([SSH 主机](remote.md#ssh))。
 - **告知代理**:窗格的第一个请求会附上应用的说明,让代理知道自己的 worktree、分支和 PORT,并在完成后提交。合并由你在应用中进行。
 - **栏**:窗格上方显示分支和基础分支、基础分支没有的提交数(↑)、之后基础分支前进的提交数(↓)、未提交的更改文件数(±,点击查看)和 PORT(点击打开 localhost)。有未提交的更改时按钮变为 {{ui:paneWorktree.bar.commitMerge}},会连同新文件一起提交后合并。看起来像密钥的新文件或超过 5 MB 的新文件不会提交,并会提示。
 - **冲突**:合并因冲突被拒绝时会出现 {{ui:paneWorktree.bar.resolve}} 按钮,点击后请代理合入基础分支、解决冲突并提交。

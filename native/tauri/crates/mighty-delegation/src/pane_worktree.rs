@@ -8,9 +8,13 @@
 //! (W7's [`crate::git`]: `merge`, `cleanup::remove_own_worktree`), every command through mighty-run's runner. The saved records
 //! ([`PaneWorktree`], [`KeptPaneWorktree`]) and their normalize rules are mighty-core's (`model.rs`, `normalize.rs`), re-exported here.
 //! Writes are the host's to gate (`Host::may_touch_repo`, src-tauri's `pane_worktree.rs`).
+//!
+//! MC-47: every step runs against a [`Machine`] (`crate::machine`): this computer's (`Local`, the runner and file system calls these
+//! steps always made) or an SSH workspace's machine (`Remote`), so an SSH pane's worktree follows the same rules on its machine.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use mighty_core::locale::Locale;
 pub use mighty_core::model::{KeptPaneWorktree, PaneWorktree};
@@ -25,11 +29,14 @@ use mighty_core::shell::{ChildState, DelegationChildRow};
 use mighty_run::os;
 
 use crate::git::auto_commit::{MAXIMUM_NEW_FILE_BYTES, looks_secret};
-use crate::git::cleanup::{ChildDiscardOutcome, remove_own_worktree};
-use crate::git::merge::{checked_out_head, has_tracked_changes, head};
+use crate::git::cleanup::{ChildDiscardOutcome, remove_own_worktree_on};
+use crate::git::merge::{checked_out_head_in, has_tracked_changes, head};
 use crate::git::paths::{DelegationPaths, is_inside, same, standardized};
-use crate::git::worktree::{ChildWorktree, ChildWorktreeBase, ChildWorktreeOutcome, Maker, is_safe_session_id};
-use crate::git::{Git, branch_name, is_folder, is_object_name, line, message, run};
+use crate::git::worktree::{
+    ChildWorktree, ChildWorktreeBase, ChildWorktreeCheck, ChildWorktreeOutcome, MINIMUM_FREE_BYTES, Maker, check_with, is_safe_session_id,
+};
+use crate::git::{Git, GitRunner, branch_name, is_object_name, line, message, run};
+use crate::machine::Machine;
 
 /// `PaneWorktreeMode.All`, in the menu's order.
 pub const MODES: [&str; 3] = [PANE_WORKTREE_ASK, PANE_WORKTREE_FURTHER, PANE_WORKTREE_EVERY];
@@ -56,41 +63,84 @@ pub fn from_made(made: &ChildWorktree, checkout: &str, port: i32, setup_command:
     }
 }
 
+/// MC-47: where a workspace's pane worktrees live: the machine (this computer, or an SSH workspace's machine) and the root folder on
+/// it (`<home>/.mightycode/worktrees` either way). [`Worktrees::check`] and [`make_pane`] are `ChildWorktreeMaker`'s check and make
+/// on that machine.
+#[derive(Clone)]
+pub struct Worktrees {
+    pub machine: Arc<dyn Machine>,
+    pub root: String,
+}
+
+impl Worktrees {
+    /// The panes' worktrees on `machine` under `root` (standardized with the machine's rules, as `Maker::new` does).
+    pub fn new(machine: Arc<dyn Machine>, root: &str) -> Worktrees {
+        let root = machine.standardized(root);
+        Worktrees { machine, root }
+    }
+
+    /// This computer's, under `maker`'s root.
+    pub fn local(maker: &Maker, paths: &DelegationPaths, disk: Arc<dyn mighty_platform::DiskSpace>) -> Worktrees {
+        let machine = crate::machine::Local::new(maker.git().clone(), paths.clone(), Some(disk));
+        Worktrees { machine: Arc::new(machine), root: maker.root().to_string() }
+    }
+
+    /// `WorktreePath`: `<root>/<session id>`.
+    pub fn worktree_path(&self, session_id: &str) -> String {
+        self.machine.combine(&self.root, session_id)
+    }
+
+    /// `Maker::check` on the machine: the workspace folder and the free space, making nothing.
+    pub async fn check(&self, workspace: &str) -> ChildWorktreeCheck {
+        let machine = self.machine.as_ref();
+        let enough = || async { machine.free_bytes(&self.root).await.is_some_and(|free| free >= MINIMUM_FREE_BYTES) };
+        let qualified = |path: &str| machine.qualified(path);
+        let standardize = |path: &str| machine.standardized(path);
+        check_with(machine, workspace, &qualified, &standardize, enough).await
+    }
+}
+
 /// `ChildWorktreeMaker.MakePane` (C# Core/DelegationWorktree.cs; M/DelegationWorktree.swift makePane): a workspace pane's own worktree,
 /// the branch `mighty/<session id>` at the base commit in the same place as a child's, without a child's TASK.md and REPORT.md.
 /// `timeout` in seconds (C#'s default is 300).
-pub async fn make_pane(maker: &Maker, session_id: &str, start: &ChildWorktreeBase, timeout: f64) -> ChildWorktreeOutcome {
-    make_pane_on(maker, session_id, &branch_name(session_id), start, timeout).await
+pub async fn make_pane(worktrees: &Worktrees, session_id: &str, start: &ChildWorktreeBase, timeout: f64) -> ChildWorktreeOutcome {
+    make_pane_on(worktrees, session_id, &branch_name(session_id), start, timeout).await
 }
 
 /// MC-31: [`make_pane`] on the issue branch the session id names (`lin-ENG-1-x` → `lin/ENG-1-x`,
 /// `mighty_core::model::issue_pane_branch`); refused for an id that names none.
-pub async fn make_issue_pane(maker: &Maker, session_id: &str, start: &ChildWorktreeBase, timeout: f64) -> ChildWorktreeOutcome {
+pub async fn make_issue_pane(worktrees: &Worktrees, session_id: &str, start: &ChildWorktreeBase, timeout: f64) -> ChildWorktreeOutcome {
     match mighty_core::model::issue_pane_branch(session_id) {
-        Some(branch) => make_pane_on(maker, session_id, &branch, start, timeout).await,
+        Some(branch) => make_pane_on(worktrees, session_id, &branch, start, timeout).await,
         None => ChildWorktreeOutcome::Failed("The session id names no issue branch.".into()),
     }
 }
 
-async fn make_pane_on(maker: &Maker, session_id: &str, branch: &str, start: &ChildWorktreeBase, timeout: f64) -> ChildWorktreeOutcome {
+async fn make_pane_on(
+    worktrees: &Worktrees,
+    session_id: &str,
+    branch: &str,
+    start: &ChildWorktreeBase,
+    timeout: f64,
+) -> ChildWorktreeOutcome {
     use ChildWorktreeOutcome::Failed;
     if !is_safe_session_id(session_id) || !mighty_core::model::is_pane_branch(branch, session_id) {
         return Failed("The session id cannot name a branch and a folder.".into());
     }
-    let worktree = maker.worktree_path(session_id);
+    let machine = worktrees.machine.as_ref();
+    let worktree = worktrees.worktree_path(session_id);
     let branch = branch.to_string();
-    if let Err(error) = std::fs::create_dir_all(maker.root()) {
-        return Failed(error.to_string());
+    if let Err(error) = machine.make_folders(&worktrees.root).await {
+        return Failed(error);
     }
-    let Some(added) =
-        run(maker.git(), &["worktree", "add", "-b", &branch, &worktree, &start.base_commit], &start.repository, timeout).await
+    let Some(added) = run(machine, &["worktree", "add", "-b", &branch, &worktree, &start.base_commit], &start.repository, timeout).await
     else {
         return Failed("Git did not finish.".into());
     };
     if added.exit_code != 0 {
         return Failed(message(&added));
     }
-    let folder = if start.prefix.is_empty() { worktree.clone() } else { standardized(&os::combine(&worktree, &start.prefix)) };
+    let folder = if start.prefix.is_empty() { worktree.clone() } else { machine.standardized(&machine.combine(&worktree, &start.prefix)) };
     ChildWorktreeOutcome::Created(ChildWorktree {
         session_id: session_id.to_string(),
         worktree_path: worktree,
@@ -200,7 +250,7 @@ fn is_inside_folder(folder: &str, path: &Path) -> bool {
 }
 
 /// MC-28: the paths `folder`'s checkout has changed and not committed (tracked and new, gitignored left out), for a fork's summary.
-pub async fn uncommitted_paths(git: &Git, folder: &str) -> Vec<String> {
+pub async fn uncommitted_paths<G: GitRunner + ?Sized>(git: &G, folder: &str) -> Vec<String> {
     let Some(status) = run(git, &["status", "--porcelain=v1", "-z", "--untracked-files=all"], folder, 30.0).await else { return vec![] };
     if status.exit_code != 0 {
         return vec![];
@@ -226,7 +276,7 @@ pub async fn uncommitted_paths(git: &Git, folder: &str) -> Vec<String> {
 /// `PaneWorktreeDecision`: where a new agent pane of a workspace works.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneWorktreeDecision {
-    /// In the workspace folder: the first agent pane, a remote workspace, a resumed pane.
+    /// In the workspace folder: the first agent pane, another Mighty Code's workspace, a resumed pane.
     SameFolder,
     /// In a new worktree, without asking: the workspace's mode says so.
     Worktree,
@@ -250,8 +300,9 @@ pub fn decide<'a>(
     sessions: impl IntoIterator<Item = &'a RunSession>,
     closing: Option<&HashSet<String>>,
 ) -> PaneWorktreeDecision {
-    // Another computer's folder (a remote or SSH workspace, MC-33) has no worktree here.
-    if !workspace.is_local() {
+    // Another Mighty Code's folder (a remote workspace) has no worktree here. An SSH workspace's panes get theirs on its machine
+    // (MC-47), by the same rule.
+    if workspace.remote.is_some() {
         return PaneWorktreeDecision::SameFolder;
     }
     let mode = mode_of(workspace.pane_worktree_mode.as_deref());
@@ -413,15 +464,17 @@ const STEP_TIMEOUT: f64 = 10.0;
 /// `PaneWorktreeGit.Merge`: the pane's commits into the branch the workspace folder was on (rule 6). Every refusal comes before any git
 /// write: the worktree gone, changes in it, nothing to merge, the base branch not checked out, tracked changes in the workspace folder,
 /// a conflict. The base moves by fast-forward when it can, else by exactly one merge commit, through one `merge --ff-only`.
-pub async fn merge(git: &Git, pane: &PaneWorktree, locale: &Locale) -> MergeOutcome {
+pub async fn merge(git: &dyn Machine, pane: &PaneWorktree, locale: &Locale) -> MergeOutcome {
     use MergeOutcome::{Failed, Refused};
     let unfinished = || Failed(locale.get("delegation.card.error.gitUnfinished"));
-    if !git.available() {
+    if !git.git_available() {
         return Failed(locale.get("delegation.card.error.gitMissing"));
     }
     let (worktree, checkout) = (pane.worktree_path(), pane.checkout());
-    if !is_folder(worktree) {
-        return Refused(refusal::WORKTREE_MISSING);
+    match git.is_folder(worktree).await {
+        Ok(true) => {}
+        Ok(false) => return Refused(refusal::WORKTREE_MISSING),
+        Err(_) => return unfinished(),
     }
     match has_any_changes(git, worktree).await {
         None => return unfinished(),
@@ -429,7 +482,7 @@ pub async fn merge(git: &Git, pane: &PaneWorktree, locale: &Locale) -> MergeOutc
         Some(false) => {}
     }
     let Some(branch_head) = branch_head(git, pane).await else { return Refused(refusal::WORKTREE_MISSING) };
-    let Some(pre_merge) = checked_out_head(git, pane.base_branch(), checkout).await else {
+    let Some(pre_merge) = checked_out_head_on(git, pane.base_branch(), checkout).await else {
         return Refused(refusal::BRANCH_NOT_CHECKED_OUT);
     };
     let Some(contained) = run(git, &["merge-base", "--is-ancestor", &branch_head, &pre_merge], checkout, STEP_TIMEOUT).await else {
@@ -484,8 +537,16 @@ pub async fn merge(git: &Git, pane: &PaneWorktree, locale: &Locale) -> MergeOutc
     MergeOutcome::Merged { commit: target, pre_merge }
 }
 
+/// `ChildMerge.CheckedOutHead` on the pane's machine.
+async fn checked_out_head_on(machine: &dyn Machine, branch: &str, folder: &str) -> Option<String> {
+    if !machine.usable_folder(folder).await {
+        return None;
+    }
+    checked_out_head_in(machine, branch, folder).await
+}
+
 /// `BranchHead`: the head of the pane's branch, read in the checkout.
-async fn branch_head(git: &Git, pane: &PaneWorktree) -> Option<String> {
+async fn branch_head<G: GitRunner + ?Sized>(git: &G, pane: &PaneWorktree) -> Option<String> {
     let verify = format!("refs/heads/{}^{{commit}}", pane.branch());
     let found = run(git, &["rev-parse", "-q", "--verify", &verify], pane.checkout(), STEP_TIMEOUT).await.filter(|r| r.exit_code == 0)?;
     let sha = line(&found.stdout);
@@ -494,7 +555,7 @@ async fn branch_head(git: &Git, pane: &PaneWorktree) -> Option<String> {
 
 /// `PaneWorktreeGit.HasAnyChanges`: whether `folder` has changes git would show: tracked or new files, ignored ones aside. None when
 /// git could not tell.
-pub async fn has_any_changes(git: &Git, folder: &str) -> Option<bool> {
+pub async fn has_any_changes<G: GitRunner + ?Sized>(git: &G, folder: &str) -> Option<bool> {
     run(git, &["status", "--porcelain", "--untracked-files=normal"], folder, STEP_TIMEOUT)
         .await
         .filter(|status| status.exit_code == 0)
@@ -503,9 +564,10 @@ pub async fn has_any_changes(git: &Git, folder: &str) -> Option<bool> {
 
 /// `PaneWorktreeGit.HasUnmergedWork`: whether the pane holds work the base branch does not; None when git could not tell (counts as
 /// work).
-pub async fn has_unmerged_work(git: &Git, pane: &PaneWorktree) -> Option<bool> {
+pub async fn has_unmerged_work(git: &dyn Machine, pane: &PaneWorktree) -> Option<bool> {
     let (worktree, checkout) = (pane.worktree_path(), pane.checkout());
-    if !is_folder(worktree) {
+    // A machine that cannot be asked holds work as far as anyone knows (MC-47).
+    if !git.is_folder(worktree).await.ok()? {
         return Some(false);
     }
     let status = run(git, &["status", "--porcelain"], worktree, STEP_TIMEOUT).await.filter(|r| r.exit_code == 0)?;
@@ -537,47 +599,37 @@ pub async fn has_unmerged_work(git: &Git, pane: &PaneWorktree) -> Option<bool> {
 
 /// C# `PaneWorktreeClosed`'s question: whether a closed pane's worktree is kept on its workspace rather than discarded: kept while
 /// children branch from it (`children`), or while git says it holds unmerged work or cannot tell (rule 9).
-pub async fn kept_on_close(git: &Git, pane: &PaneWorktree, children: bool) -> bool {
+pub async fn kept_on_close(git: &dyn Machine, pane: &PaneWorktree, children: bool) -> bool {
     children || has_unmerged_work(git, pane).await != Some(false)
 }
 
 /// Beyond C# (W7's place rules for a pane's own worktree): whether `pane`'s worktree is its own place `<root>\<id>` for the id its branch
 /// `mighty/<id>` names, and not itself a link or junction. Git that writes in the worktree (a commit, a merge's reads of it) goes only
 /// where this holds; the discard checks the same ([`remove_own_worktree`]).
-pub fn in_own_place(paths: &DelegationPaths, pane: &PaneWorktree, root: &str) -> bool {
+pub async fn in_own_place(machine: &dyn Machine, pane: &PaneWorktree, root: &str) -> bool {
     let Some(id) = mighty_core::model::pane_session_of_branch(pane.branch()).filter(|id| is_safe_session_id(id)) else { return false };
     let id = id.as_str();
     let worktree = pane.worktree_path();
-    !crate::git::paths::is_link(worktree) && same(&paths.canonical_place(worktree), &os::combine(&paths.canonical(root), id))
+    machine.is_link(worktree).await == Ok(false)
+        && machine.same(&machine.canonical_place(worktree), &machine.combine(&machine.canonical(root), id))
 }
 
 /// `PaneWorktreeGit.Discard`: the worktree, every worktree nested in it, a leftover folder at its place and its branch
 /// ([`remove_own_worktree`]).
-pub async fn discard(
-    git: &Git,
-    paths: &DelegationPaths,
-    pane: &PaneWorktree,
-    session_id: &str,
-    root: &str,
-    locale: &Locale,
-) -> ChildDiscardOutcome {
-    let shared_top = resolve_worktree_git_dirs(Path::new(pane.worktree_path()))
-        .map(|(top, git_dir, common_dir)| (paths.canonical(&top.to_string_lossy()), git_dir, common_dir));
-    let outcome = remove_own_worktree(git, paths, session_id, pane.worktree_path(), pane.branch(), pane.checkout(), root, locale).await;
+pub async fn discard(machine: &dyn Machine, pane: &PaneWorktree, session_id: &str, root: &str, locale: &Locale) -> ChildDiscardOutcome {
+    let shared_top = machine.exclude_place(pane.worktree_path()).await;
+    let outcome = remove_own_worktree_on(machine, session_id, pane.worktree_path(), pane.branch(), pane.checkout(), root, locale).await;
     if matches!(outcome, ChildDiscardOutcome::Discarded)
-        && let Some((top, git_dir, common_dir)) = shared_top
+        && let Some(place) = shared_top
     {
-        remove_exclude_entries(&common_dir, &top);
-        if common_dir != git_dir {
-            remove_exclude_entries(&git_dir, &top);
-        }
+        machine.remove_excludes(&place).await;
     }
     outcome
 }
 
 /// `PaneWorktreeGit.Status`: commits ahead of the base, commits the base moved ahead, and changed files; None when git could not tell.
-pub async fn status(git: &Git, pane: &PaneWorktree) -> Option<Status> {
-    if !is_folder(pane.worktree_path()) {
+pub async fn status(git: &dyn Machine, pane: &PaneWorktree) -> Option<Status> {
+    if !git.is_folder(pane.worktree_path()).await.ok()? {
         return None;
     }
     let range = format!("refs/heads/{}...refs/heads/{}", pane.base_branch(), pane.branch());
@@ -596,7 +648,7 @@ pub async fn status(git: &Git, pane: &PaneWorktree) -> Option<Status> {
 }
 
 /// `MergeBase`: the commit the pane shares with its base.
-pub async fn merge_base(git: &Git, pane: &PaneWorktree) -> Option<String> {
+pub async fn merge_base<G: GitRunner + ?Sized>(git: &G, pane: &PaneWorktree) -> Option<String> {
     let base = format!("refs/heads/{}", pane.base_branch());
     let found = run(git, &["merge-base", &base, "HEAD"], pane.worktree_path(), STEP_TIMEOUT).await.filter(|r| r.exit_code == 0)?;
     let commit = line(&found.stdout);
@@ -605,7 +657,7 @@ pub async fn merge_base(git: &Git, pane: &PaneWorktree) -> Option<String> {
 
 /// `PaneWorktreeGit.ChangedFiles`: the files the pane changed against the commit it shares with its base: its commits and what is not
 /// committed yet, in ordinal order of their paths.
-pub async fn changed_files(git: &Git, pane: &PaneWorktree) -> Option<Vec<ChangedFile>> {
+pub async fn changed_files<G: GitRunner + ?Sized>(git: &G, pane: &PaneWorktree) -> Option<Vec<ChangedFile>> {
     let since = merge_base(git, pane).await?;
     let worktree = pane.worktree_path();
     let diff = run(git, &["diff", "--name-status", "-z", "--no-renames", &since], worktree, 30.0).await.filter(|r| r.exit_code == 0)?;
@@ -658,7 +710,7 @@ pub fn parse_numstat(text: &str) -> (DiffStat, Vec<String>) {
 
 /// The commit a worktree's work is measured from: the one it shares with its base branch, else the commit it was made at (a base
 /// branch that is gone, or a detached base).
-async fn review_base(git: &Git, pane: &PaneWorktree) -> Option<String> {
+async fn review_base<G: GitRunner + ?Sized>(git: &G, pane: &PaneWorktree) -> Option<String> {
     if !pane.base_branch().is_empty()
         && let Some(found) = merge_base(git, pane).await
     {
@@ -670,8 +722,8 @@ async fn review_base(git: &Git, pane: &PaneWorktree) -> Option<String> {
 
 /// [`DiffStat`] of the pane's worktree (two git reads: `diff --numstat` and the untracked files); None when the worktree is gone or
 /// git fails.
-pub async fn diff_stat(git: &Git, pane: &PaneWorktree) -> Option<DiffStat> {
-    if !is_folder(pane.worktree_path()) {
+pub async fn diff_stat(git: &dyn Machine, pane: &PaneWorktree) -> Option<DiffStat> {
+    if !git.is_folder(pane.worktree_path()).await.ok()? {
         return None;
     }
     let since = review_base(git, pane).await?;
@@ -720,7 +772,7 @@ fn read_text(bytes: &[u8]) -> String {
 
 /// `PaneWorktreeGit.FileDiff`: the unified diff of `path` against the commit the pane shares with its base (a new file: all added);
 /// None when git could not tell, or the path leaves the worktree.
-pub async fn file_diff(git: &Git, paths: &DelegationPaths, pane: &PaneWorktree, path: &str) -> Option<String> {
+pub async fn file_diff(git: &dyn Machine, pane: &PaneWorktree, path: &str) -> Option<String> {
     if path.is_empty() || path.contains('\0') || rooted(path) || path.split(['/', '\\']).any(|part| part == "..") {
         return None;
     }
@@ -737,35 +789,29 @@ pub async fn file_diff(git: &Git, paths: &DelegationPaths, pane: &PaneWorktree, 
             .filter(|r| r.exit_code == 0)
             .map(|shown| shown.stdout);
     }
-    // Untracked: shown whole as added lines.
-    let full = Path::new(worktree).join(path);
-    let meta = std::fs::symlink_metadata(&full).ok()?;
-    if !meta.is_file() || meta.file_type().is_symlink() || meta.len() > 1_000_000 {
-        return None;
-    }
-    // Beyond C#: a folder on the way may be a link out of the worktree; the file read must still lie inside it.
-    if !is_inside(&paths.canonical(&full.to_string_lossy()), &paths.canonical(worktree)) {
-        return None;
-    }
-    let text = read_text(&std::fs::read(&full).ok()?).replace("\r\n", "\n");
+    // Untracked: shown whole as added lines (a plain file inside the worktree, no link on the way out of it, at most 1,000,000 bytes).
+    let bytes = git.read_inside(worktree, path, 1_000_000).await?;
+    let text = read_text(&bytes).replace("\r\n", "\n");
     let lines: Vec<String> = text.split('\n').map(|line| format!("+{line}")).collect();
     Some(format!("+++ b/{path}\n{}", lines.join("\n")))
 }
 
 /// `Size`: a plain file's length, 0 for a link, a folder or what cannot be read.
-fn size(path: &Path) -> u64 {
+pub(crate) fn size(path: &Path) -> u64 {
     std::fs::symlink_metadata(path).ok().filter(|meta| meta.is_file() && !meta.file_type().is_symlink()).map_or(0, |meta| meta.len())
 }
 
 /// `PaneWorktreeGit.CommitAll`: commits everything the worktree changed, new files too, except secret-looking or over-5-MB new files
 /// (rule 7), on the pane's branch, never signed, never through hooks.
-pub async fn commit_all(git: &Git, pane: &PaneWorktree, locale: &Locale) -> CommitOutcome {
+pub async fn commit_all(git: &dyn Machine, pane: &PaneWorktree, locale: &Locale) -> CommitOutcome {
     use CommitOutcome::Failed;
     let folder = pane.worktree_path();
-    if !is_folder(folder) {
-        return Failed(locale.get("paneWorktree.refused.worktreeMissing"));
-    }
     let unfinished = || Failed(locale.get("delegation.card.error.gitUnfinished"));
+    match git.is_folder(folder).await {
+        Ok(true) => {}
+        Ok(false) => return Failed(locale.get("paneWorktree.refused.worktreeMissing")),
+        Err(_) => return unfinished(),
+    }
     let Some(unmerged) = run(git, &["ls-files", "-u"], folder, 60.0).await.filter(|r| r.exit_code == 0) else { return unfinished() };
     let Some(others) = run(git, &["ls-files", "-z", "--others", "--exclude-standard"], folder, 60.0).await.filter(|r| r.exit_code == 0)
     else {
@@ -775,16 +821,22 @@ pub async fn commit_all(git: &Git, pane: &PaneWorktree, locale: &Locale) -> Comm
         return CommitOutcome::Unmerged;
     }
     let fresh: Vec<String> = others.stdout.split('\0').filter(|p| !p.is_empty()).map(str::to_string).collect();
+    // The sizes asked of the machine at once (here a file's length each, as `Size` reads it).
+    let unsecret: Vec<String> = fresh.iter().filter(|path| !looks_secret(path)).cloned().collect();
+    let Ok(sizes) = git.sizes(folder, &unsecret).await else { return unfinished() };
     let left_out: Vec<String> = fresh
         .iter()
-        .filter(|path| looks_secret(path) || size(&Path::new(folder).join(path.as_str())) > MAXIMUM_NEW_FILE_BYTES)
+        .filter(|path| {
+            looks_secret(path)
+                || unsecret.iter().position(|p| p == *path).and_then(|at| sizes.get(at)).is_some_and(|size| *size > MAXIMUM_NEW_FILE_BYTES)
+        })
         .cloned()
         .collect();
     let mut seen = HashSet::new();
     let taken: Vec<&str> = fresh.iter().filter(|path| !left_out.contains(path) && seen.insert(path.as_str())).map(String::as_str).collect();
     let write = |arguments: Vec<String>, input: Option<String>| async move {
         let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
-        match git.run_detailed(&arguments, Path::new(folder), 300.0, input.as_deref()).await.ok() {
+        match git.git_run(&arguments, folder, 300.0, input.as_deref()).await.ok() {
             None => Some(locale.get("delegation.card.error.gitUnfinished")),
             Some(result) if result.exit_code == 0 => None,
             Some(result) => Some(message(&result)),
@@ -815,16 +867,16 @@ pub async fn commit_all(git: &Git, pane: &PaneWorktree, locale: &Locale) -> Comm
 
 /// `PaneWorktreeGit.UndoMerge`: puts the base branch back where it was before the pane's last merge (rule 8): `read-tree -m -u`, then
 /// compare-and-swap; the files go back when the branch cannot.
-pub async fn undo_merge(git: &Git, pane: &PaneWorktree, locale: &Locale) -> UndoOutcome {
+pub async fn undo_merge(git: &dyn Machine, pane: &PaneWorktree, locale: &Locale) -> UndoOutcome {
     use UndoOutcome::{Failed, Refused};
     let merged = pane.merged_commit.as_deref().map(str::to_lowercase).filter(|m| is_object_name(m));
     let pre_merge = pane.pre_merge_commit.as_deref().map(str::to_lowercase).filter(|p| is_object_name(p));
     let (Some(merged), Some(pre_merge)) = (merged, pre_merge) else { return Refused("notMerged") };
-    if !git.available() {
+    if !git.git_available() {
         return Failed(locale.get("delegation.card.error.gitMissing"));
     }
     let checkout = pane.checkout();
-    let Some(current) = checked_out_head(git, pane.base_branch(), checkout).await else { return Refused("branchNotCheckedOut") };
+    let Some(current) = checked_out_head_on(git, pane.base_branch(), checkout).await else { return Refused("branchNotCheckedOut") };
     if current != merged {
         return Refused("baseMoved");
     }
@@ -848,9 +900,9 @@ pub async fn undo_merge(git: &Git, pane: &PaneWorktree, locale: &Locale) -> Undo
 }
 
 /// `PaneWorktreeGit.Worktrees`: the pane worktrees `checkout` has under `root`; delegated children's ids are left out by the caller.
-pub async fn worktrees(git: &Git, paths: &DelegationPaths, checkout: &str, root: &str) -> Option<Vec<OnDisk>> {
+pub async fn worktrees(git: &dyn Machine, checkout: &str, root: &str) -> Option<Vec<OnDisk>> {
     let listed = run(git, &["worktree", "list", "--porcelain"], checkout, 30.0).await.filter(|r| r.exit_code == 0)?;
-    Some(parse(&listed.stdout, root, paths))
+    Some(parse_on(&listed.stdout, root, git))
 }
 
 // ── the list (rule 10) ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -872,7 +924,7 @@ pub struct Row {
 
 /// `RealPath`: the path with its links resolved, as git names a worktree: Windows' final path name ([`DelegationPaths::canonical`]),
 /// elsewhere every linked folder on the way followed (a temp folder under `/var` is `/private/var` to git on a Mac).
-fn real_path(path: &str, paths: &DelegationPaths) -> String {
+pub(crate) fn real_path(path: &str, paths: &DelegationPaths) -> String {
     if os::windows() {
         return paths.canonical(path);
     }
@@ -893,6 +945,43 @@ fn real_path(path: &str, paths: &DelegationPaths) -> String {
 pub fn parse(text: &str, root: &str, paths: &DelegationPaths) -> Vec<OnDisk> {
     let root_path = real_path(root, paths);
     let mut found = vec![];
+    for (path, head, branch) in porcelain(text) {
+        let folder = standardized(&path);
+        let place = Path::new(&folder);
+        let id = place.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let Some(parent) = place.parent().filter(|parent| !parent.as_os_str().is_empty()) else { continue };
+        if !same(&real_path(&parent.to_string_lossy(), paths), &root_path)
+            || !mighty_core::wire::identifier(&id)
+            || !mighty_core::model::is_pane_branch(&branch, &id)
+        {
+            continue;
+        }
+        found.push(OnDisk { session_id: id, worktree_path: folder.clone(), branch, head });
+    }
+    found
+}
+
+/// [`parse`] with the machine's path rules (MC-47: an SSH machine's worktrees).
+pub fn parse_on(text: &str, root: &str, machine: &dyn Machine) -> Vec<OnDisk> {
+    let root_path = machine.real_path(root);
+    let mut found = vec![];
+    for (path, head, branch) in porcelain(text) {
+        let folder = machine.standardized(&path);
+        let Some((parent, id)) = machine.split(&folder) else { continue };
+        if !machine.same(&machine.real_path(&parent), &root_path)
+            || !mighty_core::wire::identifier(&id)
+            || !mighty_core::model::is_pane_branch(&branch, &id)
+        {
+            continue;
+        }
+        found.push(OnDisk { session_id: id, worktree_path: folder.clone(), branch, head });
+    }
+    found
+}
+
+/// `git worktree list --porcelain`'s blocks that name a path, a head and a branch.
+fn porcelain(text: &str) -> Vec<(String, String, String)> {
+    let mut found = vec![];
     for block in text.replace("\r\n", "\n").split("\n\n") {
         let (mut path, mut head, mut branch) = (None, None, None);
         for line in block.split('\n') {
@@ -905,17 +994,7 @@ pub fn parse(text: &str, root: &str, paths: &DelegationPaths) -> Vec<OnDisk> {
             }
         }
         let (Some(path), Some(head), Some(branch)) = (path, head, branch) else { continue };
-        let folder = standardized(path);
-        let place = Path::new(&folder);
-        let id = place.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-        let Some(parent) = place.parent().filter(|parent| !parent.as_os_str().is_empty()) else { continue };
-        if !same(&real_path(&parent.to_string_lossy(), paths), &root_path)
-            || !mighty_core::wire::identifier(&id)
-            || !mighty_core::model::is_pane_branch(branch, &id)
-        {
-            continue;
-        }
-        found.push(OnDisk { session_id: id, worktree_path: folder.clone(), branch: branch.to_string(), head: head.to_string() });
+        found.push((path.to_string(), head.to_string(), branch.to_string()));
     }
     found
 }
@@ -1003,6 +1082,14 @@ impl CopyResult {
     fn skip(&mut self, path: &str, why: &'static str) {
         self.skipped.retain(|(entry, _)| entry != path);
         self.skipped.push((path.to_string(), why));
+    }
+
+    /// An entry copied (`why` None) or skipped, as the machine said (MC-47's remote copy).
+    pub(crate) fn record(&mut self, path: &str, why: Option<&'static str>) {
+        match why {
+            None => self.copied.push(path.to_string()),
+            Some(why) => self.skip(path, why),
+        }
     }
 
     /// Why `path` was skipped, if it was.
@@ -1197,27 +1284,74 @@ fn copy_file_create_new(source: &Path, target: &Path) -> std::io::Result<()> {
 
 /// Copies mapped `{ from, to }` rules from `source` into `destination` with the exact same 50 MB / 2,000 files / no-symlink /
 /// inside-root / `create_new(true)` safety invariants as [`copy`], never overwriting an existing file in the worktree.
-pub fn copy_mapped_rules(rules: &[crate::mighty_yaml::CopyRule], source: &str, destination: &str, paths: &DelegationPaths) -> CopyResult {
-    let mut result = CopyResult::default();
-    let source_root = paths.canonical(source);
-    let destination_root = paths.canonical(destination);
-    let (mut bytes, mut files) = (0u64, 0usize);
-    let mut seen_targets = HashSet::new();
+/// One `{ from, to }` rule as a copy reads it: its label and its normalized paths, or why it is refused before anything is read
+/// (`outside`); a rule whose target an earlier rule took is left out. In the rules' order, at most
+/// [`crate::mighty_yaml::MAXIMUM_WORKTREE_RULES`].
+pub(crate) struct PlannedCopy {
+    pub label: String,
+    pub paths: Result<(String, String), &'static str>,
+}
 
+/// The rules [`copy_mapped_rules`] reads, here and on an SSH machine (MC-47).
+pub(crate) fn plan_rules(rules: &[crate::mighty_yaml::CopyRule]) -> Vec<PlannedCopy> {
+    let mut planned = vec![];
+    let mut seen_targets = HashSet::new();
     for rule in rules.iter().take(crate::mighty_yaml::MAXIMUM_WORKTREE_RULES) {
         let raw_label = rule.display_label();
         let Some(from_norm) = normalized_copy_paths([Some(rule.from.as_str())]).and_then(|mut v| v.pop()) else {
-            result.skip(&raw_label, "outside");
+            planned.push(PlannedCopy { label: raw_label, paths: Err("outside") });
             continue;
         };
         let Some(to_norm) = normalized_copy_paths([Some(rule.to.as_str())]).and_then(|mut v| v.pop()) else {
-            result.skip(&raw_label, "outside");
+            planned.push(PlannedCopy { label: raw_label, paths: Err("outside") });
             continue;
         };
         if !seen_targets.insert(to_norm.clone()) {
             continue;
         }
         let label = if from_norm == to_norm { from_norm.clone() } else { format!("{from_norm} -> {to_norm}") };
+        planned.push(PlannedCopy { label, paths: Ok((from_norm, to_norm)) });
+    }
+    planned
+}
+
+/// The folders [`share_directories`] reads, here and on an SSH machine (MC-47): each entry's label and its normalized path (None:
+/// refused as `outside`), empty entries and repeats left out, at most [`crate::mighty_yaml::MAXIMUM_WORKTREE_RULES`] read.
+pub(crate) fn plan_shares(paths_to_share: &[String]) -> Vec<(String, Option<String>)> {
+    let mut planned = vec![];
+    let mut seen = HashSet::new();
+    for raw in paths_to_share.iter().take(crate::mighty_yaml::MAXIMUM_WORKTREE_RULES) {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(path) = normalized_copy_paths([Some(trimmed)]).and_then(|mut v| v.pop()) else {
+            planned.push((trimmed.to_string(), None));
+            continue;
+        };
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        planned.push((path.clone(), Some(path)));
+    }
+    planned
+}
+
+pub fn copy_mapped_rules(rules: &[crate::mighty_yaml::CopyRule], source: &str, destination: &str, paths: &DelegationPaths) -> CopyResult {
+    let mut result = CopyResult::default();
+    let source_root = paths.canonical(source);
+    let destination_root = paths.canonical(destination);
+    let (mut bytes, mut files) = (0u64, 0usize);
+
+    for step in plan_rules(rules) {
+        let (from_norm, to_norm) = match step.paths {
+            Ok(paths) => paths,
+            Err(why) => {
+                result.skip(&step.label, why);
+                continue;
+            }
+        };
+        let label = step.label;
         let from = under(source, &from_norm);
         let Ok(meta) = std::fs::symlink_metadata(&from) else {
             result.skip(&label, "missing");
@@ -1317,6 +1451,14 @@ impl ShareResult {
         self.skipped.push((path.to_string(), why));
     }
 
+    /// An entry shared (`why` None) or skipped, as the machine said (MC-47's remote share).
+    pub(crate) fn record(&mut self, path: &str, why: Option<&'static str>) {
+        match why {
+            None => self.shared.push(path.to_string()),
+            Some(why) => self.skip(path, why),
+        }
+    }
+
     /// Why `path` was skipped, if it was.
     pub fn why(&self, path: &str) -> Option<&'static str> {
         self.skipped.iter().find(|(entry, _)| entry == path).map(|(_, why)| *why)
@@ -1332,7 +1474,18 @@ pub async fn share_directories(
     destination: &str,
     paths: &DelegationPaths,
     git: &Git,
-    processes: &dyn mighty_platform::ProcessHost,
+    _processes: &dyn mighty_platform::ProcessHost,
+) -> ShareResult {
+    share_directories_in(paths_to_share, source, destination, paths, git).await
+}
+
+/// [`share_directories`] (the local machine's share, `crate::machine::Local`).
+pub(crate) async fn share_directories_in(
+    paths_to_share: &[String],
+    source: &str,
+    destination: &str,
+    paths: &DelegationPaths,
+    git: &Git,
 ) -> ShareResult {
     let mut result = ShareResult::default();
     let source_root = paths.canonical(source);
@@ -1348,19 +1501,11 @@ pub async fn share_directories(
         return result;
     }
 
-    let mut seen = HashSet::new();
-    for raw in paths_to_share.iter().take(crate::mighty_yaml::MAXIMUM_WORKTREE_RULES) {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Some(path) = normalized_copy_paths([Some(trimmed)]).and_then(|mut v| v.pop()) else {
-            result.skip(trimmed, "outside");
+    for (label, path) in plan_shares(paths_to_share) {
+        let Some(path) = path else {
+            result.skip(&label, "outside");
             continue;
         };
-        if !seen.insert(path.clone()) {
-            continue;
-        }
         let from = under(source, &path);
         let Ok(meta) = std::fs::symlink_metadata(&from) else {
             result.skip(&path, "missing");
@@ -1406,7 +1551,7 @@ pub async fn share_directories(
             continue;
         }
 
-        if create_directory_link(&canonical_from, to_path, processes).await.is_err() {
+        if create_directory_link(&canonical_from, to_path).await.is_err() {
             result.skip(&path, "failed");
             continue;
         }
@@ -1417,11 +1562,7 @@ pub async fn share_directories(
 }
 
 #[cfg(not(windows))]
-async fn create_directory_link(
-    canonical_target: &str,
-    link_path: &Path,
-    _processes: &dyn mighty_platform::ProcessHost,
-) -> std::io::Result<()> {
+async fn create_directory_link(canonical_target: &str, link_path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(canonical_target, link_path)
@@ -1467,11 +1608,7 @@ fn junction_reparse_buffer(target: &str) -> Vec<u8> {
 /// A directory junction made directly with `FSCTL_SET_REPARSE_POINT`; never through `cmd /c mklink`, whose command line a path such
 /// as `x&calc` from a cloned repository would escape.
 #[cfg(windows)]
-async fn create_directory_link(
-    canonical_target: &str,
-    link_path: &Path,
-    _processes: &dyn mighty_platform::ProcessHost,
-) -> std::io::Result<()> {
+async fn create_directory_link(canonical_target: &str, link_path: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt as _;
     use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_WRITE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{
@@ -1553,7 +1690,7 @@ fn ensure_git_info_exclude(destination: &Path, shared_rel_path: &str, paths: &De
     }
 }
 
-fn resolve_worktree_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
+pub(crate) fn resolve_worktree_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
     let mut cursor = Some(start);
     let mut worktree_top = None;
     let mut dot_git = None;
@@ -1596,12 +1733,12 @@ fn resolve_worktree_git_dirs(start: &Path) -> Option<(PathBuf, PathBuf, PathBuf)
 }
 
 /// The comment line that owns the entry after it: a discard removes exactly the entries its own worktree added.
-fn exclude_marker(worktree_top: &str) -> String {
+pub(crate) fn exclude_marker(worktree_top: &str) -> String {
     format!("# mighty-code shared {}", worktree_top.replace(['\r', '\n'], " "))
 }
 
 /// A path as one gitignore pattern with no glob in it: `\ * ? [ ]` escaped, and a trailing space kept.
-fn escape_exclude_glob(path: &str) -> String {
+pub(crate) fn escape_exclude_glob(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     for c in path.chars() {
         if matches!(c, '\\' | '*' | '?' | '[' | ']') {
@@ -1671,7 +1808,7 @@ fn append_exclude_pattern(git_admin_dir: &Path, marker: &str, pattern: &str) {
 }
 
 /// Takes out every entry [`append_exclude_pattern`] made under `worktree_top`'s marker (the marker line and the pattern after it).
-fn remove_exclude_entries(git_admin_dir: &Path, worktree_top: &str) {
+pub(crate) fn remove_exclude_entries(git_admin_dir: &Path, worktree_top: &str) {
     let Some((exclude_path, text)) = read_exclude(git_admin_dir) else { return };
     let marker = exclude_marker(worktree_top);
     let mut kept: Vec<&str> = vec![];
@@ -1728,7 +1865,7 @@ pub fn compare_url(repository: &str, base_branch: &str, branch: &str) -> String 
 }
 
 /// `PaneWorktreePR.Origin`: the `origin` remote of the checkout, None without one.
-pub async fn origin(git: &Git, pane: &PaneWorktree) -> Option<String> {
+pub async fn origin<G: GitRunner + ?Sized>(git: &G, pane: &PaneWorktree) -> Option<String> {
     let found = run(git, &["remote", "get-url", "origin"], pane.checkout(), STEP_TIMEOUT).await.filter(|r| r.exit_code == 0)?;
     let url = line(&found.stdout);
     (!url.is_empty()).then(|| url.to_string())
@@ -1736,7 +1873,7 @@ pub async fn origin(git: &Git, pane: &PaneWorktree) -> Option<String> {
 
 /// `PaneWorktreePR.Push`: pushes the pane's branch to `origin` under the same name, never forced. None when it went; git's words
 /// otherwise.
-pub async fn push(git: &Git, pane: &PaneWorktree, locale: &Locale) -> Option<String> {
+pub async fn push<G: GitRunner + ?Sized>(git: &G, pane: &PaneWorktree, locale: &Locale) -> Option<String> {
     let reference = format!("refs/heads/{}", pane.branch());
     let spec = format!("{reference}:{reference}");
     let Some(pushed) = run(git, &["push", "--porcelain", "origin", &spec], pane.checkout(), 180.0).await else {

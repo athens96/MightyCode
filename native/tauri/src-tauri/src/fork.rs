@@ -91,6 +91,10 @@ async fn fork(host: &Arc<Host>, source_id: &str, request: Option<&str>) -> Resul
     if workspace.remote.is_some() || crate::mirror::is_mirror_workspace(&host.view().snapshot, workspace.id()) {
         return Err(locale.get("fork.error.remote"));
     }
+    // MC-47: an SSH workspace's pane is not forked into a worktree (its uncommitted changes and conversation are on its machine).
+    if workspace.is_ssh() {
+        return Err(locale.get("fork.error.ssh"));
+    }
     if source.status() == "running" || host.runs().is_some_and(|r| r.service.is_session_running(source_id)) {
         return Err(locale.get("fork.error.running"));
     }
@@ -117,7 +121,7 @@ async fn fork(host: &Arc<Host>, source_id: &str, request: Option<&str>) -> Resul
             break candidate;
         }
     };
-    let made = match core::make_pane(&places.maker, &id, &start, 300.0).await {
+    let made = match core::make_pane(&places.local, &id, &start, 300.0).await {
         ChildWorktreeOutcome::Created(made) => made,
         ChildWorktreeOutcome::Refused(reason) => {
             return Err(locale.get_with("fork.error.cannotMake", &[("reason", &text::reason(reason, &locale))]));
@@ -186,14 +190,15 @@ async fn fork(host: &Arc<Host>, source_id: &str, request: Option<&str>) -> Resul
     });
     if host.view().snapshot.session(&id).is_none() {
         // The pane could not be added (the pane limit): the worktree made for it goes again, its ports with it.
-        core::discard(&places.git, &places.paths, &record, &id, &places.root, &locale).await;
+        core::discard(places.local.machine.as_ref(), &record, &id, &places.root, &locale).await;
         crate::worktree_lifecycle::release_worktree(host, &record);
         return added.map(|_| ());
     }
     if let Some(note) = cfg_note {
         worktrees::append_system_note(host, &id, note);
     }
-    worktrees::prepare(host, &id, &workspace, record, approved_cfg);
+    let here = worktrees::Place { worktrees: places.local.clone(), ssh: None };
+    worktrees::prepare(host, &id, &workspace, &here, record, approved_cfg);
     host.schedule();
     Ok(())
 }

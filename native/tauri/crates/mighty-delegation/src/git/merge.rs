@@ -4,7 +4,7 @@
 
 use mighty_core::locale::Locale;
 
-use super::{ChildGit, Git, is_folder, is_object_name, line, message, run, usable_folder};
+use super::{ChildGit, Git, GitRunner, is_folder, is_object_name, line, message, run, usable_folder};
 use crate::host::DelegationPaneActivity;
 use crate::model::{ChildState, MergeKind, MergeRecord};
 use crate::request::DelegationReasonCode;
@@ -340,6 +340,11 @@ pub async fn checked_out_head(git: &Git, branch: &str, folder: &str) -> Option<S
     if !usable_folder(folder) {
         return None;
     }
+    checked_out_head_in(git, branch, folder).await
+}
+
+/// [`checked_out_head`]'s git, once `folder` is known to be a usable folder (MC-47: of any machine).
+pub(crate) async fn checked_out_head_in<G: GitRunner + ?Sized>(git: &G, branch: &str, folder: &str) -> Option<String> {
     let current = run(git, &["symbolic-ref", "-q", "HEAD"], folder, STEP_TIMEOUT).await.filter(|r| r.exit_code == 0)?;
     if line(&current.stdout) != format!("refs/heads/{branch}") {
         return None;
@@ -348,7 +353,7 @@ pub async fn checked_out_head(git: &Git, branch: &str, folder: &str) -> Option<S
 }
 
 /// `ChildMerge.Head`: the commit checked out in `folder`, or None.
-pub async fn head(git: &Git, folder: &str) -> Option<String> {
+pub async fn head<G: GitRunner + ?Sized>(git: &G, folder: &str) -> Option<String> {
     let result = run(git, &["rev-parse", "-q", "--verify", "HEAD^{commit}"], folder, STEP_TIMEOUT).await.filter(|r| r.exit_code == 0)?;
     let sha = line(&result.stdout);
     is_object_name(sha).then(|| sha.to_string())
@@ -357,7 +362,7 @@ pub async fn head(git: &Git, folder: &str) -> Option<String> {
 /// `ChildMerge.HasTrackedChanges`: whether tracked files in `folder`'s checkout differ from its HEAD, staged or not; untracked and
 /// ignored files do not count. None when git failed. Git compares through the checkout's own line-ending settings, so files it wrote
 /// with CRLF read as unchanged.
-pub async fn has_tracked_changes(git: &Git, folder: &str) -> Option<bool> {
+pub async fn has_tracked_changes<G: GitRunner + ?Sized>(git: &G, folder: &str) -> Option<bool> {
     run(git, &["status", "--porcelain", "--untracked-files=no"], folder, STEP_TIMEOUT)
         .await
         .filter(|status| status.exit_code == 0)

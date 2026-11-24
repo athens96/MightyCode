@@ -182,7 +182,7 @@ const POSIX_SHELLS: &str = "sh|bash|zsh|dash|ksh|ksh93|mksh|pdksh|ash|yash|busyb
 /// The lines that run `inner` (a POSIX command) the way the person's login shell would find its program: through a POSIX login shell
 /// itself (`-lc`, so its profile's environment applies), else with the `PATH` that shell reports (csh and tcsh take no `-l` with
 /// `-c`) and `/bin/sh` running `inner`.
-fn login_exec(inner: &str) -> String {
+pub(crate) fn login_exec(inner: &str) -> String {
     format!(
         "s=${{SHELL:-/bin/sh}}\n\
          case \"${{s##*/}}\" in\n\

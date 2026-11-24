@@ -237,7 +237,8 @@ async fn share_directories_and_mapped_copy_keep_git_status_clean_and_survive_wor
 
     let maker = place.maker();
     let ChildWorktreeCheck::Ready(start) = maker.check(&place.repo()).await else { panic!("repo not ready") };
-    let ChildWorktreeOutcome::Created(made) = pw::make_pane(&maker, "pane-share", &start, 300.0).await else {
+    let ChildWorktreeOutcome::Created(made) = pw::make_pane(&crate::support::place::panes(&maker), "pane-share", &start, 300.0).await
+    else {
         panic!("worktree not created");
     };
     let pane = pw::from_made(&made, &start.repository, 4141, None);
@@ -296,7 +297,7 @@ async fn share_directories_and_mapped_copy_keep_git_status_clean_and_survive_wor
     assert_eq!(pw::has_any_changes(&git, pane.worktree_path()).await, Some(false));
 
     // Discard unlinks `node_modules` safely without touching the workspace's real `node_modules/pkg/index.js`!
-    let discarded = pw::discard(&git, &place.paths(), &pane, "pane-share", &place.root(), &locale).await;
+    let discarded = pw::discard(&place.machine(), &pane, "pane-share", &place.root(), &locale).await;
     assert_eq!(discarded, ChildDiscardOutcome::Discarded);
     assert!(!wt_path.exists());
     let after = std::fs::read_to_string(&exclude_path).unwrap();

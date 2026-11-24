@@ -566,6 +566,50 @@ async fn git_part(host: &Host, folder: &Path, base: Option<&str>) -> Result<GitF
     Ok(facts)
 }
 
+/// MC-47: [`git_part`] of a folder on an SSH machine, the same reads through the machine's git (the base is the worktree's; a workspace
+/// folder's own default branch is not looked up over there).
+async fn git_part_on(machine: &dyn mighty_delegation::machine::Machine, folder: &str, base: Option<&str>) -> Result<GitFacts, Unknown> {
+    use mighty_delegation::git::run;
+    let failed = |detail: Option<String>| Unknown { reason: "failed".into(), cli: None, detail };
+    let status = run(machine, &["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"], folder, 15.0)
+        .await
+        .ok_or_else(|| failed(None))?;
+    if status.exit_code != 0 {
+        return Err(failed(Some(status.stderr.trim().chars().take(500).collect())));
+    }
+    let parsed = parse_porcelain_v2_status(status.stdout.as_bytes());
+    let mut facts = GitFacts {
+        head: parsed.head.clone(),
+        base: None,
+        uncommitted: parsed.files.len(),
+        conflicted: parsed.files.iter().filter(|f| f.conflicted).count(),
+        ahead: i64::from(parsed.ahead),
+        behind: i64::from(parsed.behind),
+    };
+    if let Some(base) = base.and_then(|b| validate_branch_name(b).ok()).filter(|b| *b != parsed.head) {
+        let range = format!("{base}...HEAD");
+        if let Some(counted) = run(machine, &["rev-list", "--left-right", "--count", &range, "--"], folder, 10.0).await
+            && counted.exit_code == 0
+        {
+            let mut parts = counted.stdout.split_whitespace().map(|n| n.parse::<i64>().unwrap_or(0));
+            facts.behind = parts.next().unwrap_or(0);
+            facts.ahead = parts.next().unwrap_or(0);
+            facts.base = Some(base);
+        }
+    }
+    Ok(facts)
+}
+
+/// MC-47: the place of `target`'s folder when it is on an SSH machine (the pane's workspace is an SSH workspace).
+async fn ssh_place(host: &Arc<Host>, target: &Target) -> Option<crate::pane_worktree::Place> {
+    let workspace = {
+        let view = host.view();
+        let session = view.snapshot.session(target.pane_id.as_deref()?)?;
+        view.snapshot.workspace(session.workspace_id()).filter(|w| w.is_ssh()).cloned()?
+    };
+    crate::pane_worktree::place_for(host, &workspace).await.ok()
+}
+
 type HostingParts = (Result<PrFacts, Unknown>, Result<Vec<CheckItem>, Unknown>, Result<Vec<ReviewThread>, Unknown>);
 
 fn all_unknown(unknown: Unknown) -> HostingParts {
@@ -656,8 +700,14 @@ fn key_of(folder: &Path) -> String {
 
 /// Reads everything for `target` and keeps it; the review queue is read again when its warnings changed.
 pub async fn read(host: &Arc<Host>, target: &Target) -> Model {
-    let (git, (pr, checks, threads)) =
-        tokio::join!(git_part(host, &target.folder, target.base.as_deref()), hosting_parts(host, &target.folder));
+    // MC-47: an SSH pane's git is read on its machine; its pull request is not looked up from here (`ssh`).
+    let (git, (pr, checks, threads)) = match ssh_place(host, target).await {
+        Some(place) => {
+            let folder = target.folder.to_string_lossy().into_owned();
+            (git_part_on(place.machine(), &folder, target.base.as_deref()).await, all_unknown(Unknown::new("ssh")))
+        }
+        None => tokio::join!(git_part(host, &target.folder, target.base.as_deref()), hosting_parts(host, &target.folder)),
+    };
     let checklist = pane_checklist(host, target.pane_id.as_deref());
     let model = Model { git, pr, checks, threads, checklist };
     let changed = {
@@ -704,19 +754,20 @@ const PHONE_BODY_CHARS: usize = 300;
 /// pane's, or a delegated child's), read now, with each review comment cut to its start. Err: the status and why.
 pub async fn phone(host: &Arc<Host>, pane_id: &str) -> Result<Value, (u16, String)> {
     let locale = host.locale;
-    let record = {
+    let (record, ssh) = {
         let view = host.view();
         let Some(session) = view.snapshot.session(pane_id) else { return Err((404, locale.get("remote.error.paneNotFound"))) };
-        if view.snapshot.workspace(session.workspace_id()).is_none_or(|w| w.remote.is_some()) {
+        let Some(workspace) = view.snapshot.workspace(session.workspace_id()).filter(|w| w.remote.is_none()) else {
             return Err((409, locale.get("phone.worktree.none")));
-        }
-        session.pane_worktree.clone()
+        };
+        (session.pane_worktree.clone(), workspace.is_ssh())
     };
     let Some(record) = record.or_else(|| crate::pane_worktree::child_record(pane_id)) else {
         return Err((409, locale.get("phone.worktree.none")));
     };
     let target = target_of(pane_id, &record);
-    if !target.folder.is_dir() {
+    // An SSH pane's folder is on its machine: its reading says whether it is there.
+    if !ssh && !target.folder.is_dir() {
         return Err((409, locale.get("phone.worktree.none")));
     }
     let mut model = read(host, &target).await;
@@ -791,11 +842,13 @@ fn resolve_target(host: &Host, args: &Value) -> Result<(String, Target), String>
         };
         if let Some((Some(workspace), record)) = found {
             let record = record.or_else(|| crate::pane_worktree::child_record(pane_id));
+            // MC-47: an SSH workspace's folder is its remote one, on its machine.
+            let folder = workspace.ssh.as_ref().map_or_else(|| workspace.path().to_string(), |reference| reference.dir.clone());
             let target = match record {
                 Some(record) => target_of(pane_id, &record),
-                None => Target { folder: PathBuf::from(workspace.path()), base: None, pane_id: Some(pane_id.to_string()) },
+                None => Target { folder: PathBuf::from(folder), base: None, pane_id: Some(pane_id.to_string()) },
             };
-            if !target.folder.is_dir() {
+            if !workspace.is_ssh() && !target.folder.is_dir() {
                 return Err("The pane's worktree folder does not exist on disk.".into());
             }
             return Ok((workspace.id().to_string(), target));

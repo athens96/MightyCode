@@ -1078,7 +1078,8 @@ impl Store {
         }
         lay_body(&mut entry, body, true);
         let remote = self.snapshot.workspace(pane.workspace_id()).is_some_and(|w| w.remote.is_some());
-        let read = RunSession::read(&Value::Object(entry)).ok().and_then(|read| normalize::restored_pane(&read, remote).ok());
+        let ssh = self.snapshot.workspace(pane.workspace_id()).is_some_and(|w| w.ssh.is_some());
+        let read = RunSession::read(&Value::Object(entry)).ok().and_then(|read| normalize::restored_pane_in(&read, remote, ssh).ok());
         let Some(read) = read else { return Some(whole()) };
         let known = self.body_revision(pane.id()).max(revision);
         if known > 0 {
@@ -1208,7 +1209,8 @@ impl Store {
                     ..(*pane).clone()
                 };
                 let remote = self.snapshot.workspace(pane.workspace_id()).is_some_and(|w| w.remote.is_some());
-                let normalized_disk = normalize::restored_pane(&disk_session, remote).unwrap_or(disk_session);
+                let ssh = self.snapshot.workspace(pane.workspace_id()).is_some_and(|w| w.ssh.is_some());
+                let normalized_disk = normalize::restored_pane_in(&disk_session, remote, ssh).unwrap_or(disk_session);
                 if !same_body(&normalized_disk, &pane) {
                     return None;
                 }

@@ -21,6 +21,7 @@ pub mod held;
 pub mod review;
 pub mod server;
 pub mod target;
+pub mod worktree;
 
 pub use command::{Mux, quote};
 pub use failure::Failure;

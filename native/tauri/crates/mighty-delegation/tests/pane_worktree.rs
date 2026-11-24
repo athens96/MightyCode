@@ -90,6 +90,19 @@ fn policy_ports_note_and_records() {
         ..workspace.clone()
     };
     assert_eq!(pw::decide(&remote, &none, None), PaneWorktreeDecision::SameFolder, "a remote workspace works in its folder");
+    // MC-47: an SSH workspace's panes follow its mode (their worktrees are on its machine).
+    let ssh = Workspace {
+        ssh: Some(mighty_core::model::SshWorkspaceRef {
+            machine: "0123456789abcdef0123456789abcdef".into(),
+            dir: "/srv/app".into(),
+            host: "devbox".into(),
+        }),
+        pane_worktree_mode: Some("every".into()),
+        ..workspace.clone()
+    };
+    assert_eq!(pw::decide(&ssh, &none, None), PaneWorktreeDecision::Worktree, "an SSH workspace in every mode makes a worktree");
+    let ssh_ask = Workspace { pane_worktree_mode: None, ..ssh.clone() };
+    assert_eq!(pw::decide(&ssh_ask, &one, None), PaneWorktreeDecision::Ask, "and asks for a second pane");
     let locale = Locale::new("en");
     let children = vec![agent("c", "w", Some("a"), None)];
     assert!(
@@ -355,7 +368,9 @@ mod git {
         place.repository_default().await;
         let maker = place.maker();
         let ChildWorktreeCheck::Ready(start) = maker.check(&place.repo()).await else { panic!("the repository cannot host a worktree") };
-        let ChildWorktreeOutcome::Created(made) = pw::make_pane(&maker, id, &start, 300.0).await else { panic!("no pane worktree") };
+        let ChildWorktreeOutcome::Created(made) = pw::make_pane(&crate::support::place::panes(&maker), id, &start, 300.0).await else {
+            panic!("no pane worktree")
+        };
         assert!(!std::path::Path::new(&made.worktree_path).join(NOTES_FOLDER).exists(), "a pane worktree has no TASK and REPORT");
         pw::from_made(&made, &start.repository, 4141, None)
     }
@@ -369,20 +384,28 @@ mod git {
         let pane = pane_in(&place, "pane-a").await;
         let worktree = std::path::PathBuf::from(pane.worktree_path());
         let repo = std::path::PathBuf::from(place.repo());
-        assert_eq!(pw::merge(&git, &pane, &locale).await, MergeOutcome::Refused(refusal::NOTHING_TO_MERGE), "nothing to merge yet");
+        assert_eq!(
+            pw::merge(&place.machine(), &pane, &locale).await,
+            MergeOutcome::Refused(refusal::NOTHING_TO_MERGE),
+            "nothing to merge yet"
+        );
         // A new file blocks the merge; commit-and-merge commits it, leaving a secret-looking one out.
         std::fs::write(worktree.join("feature.txt"), "feature\n").unwrap();
         std::fs::write(worktree.join("id_rsa"), "secret\n").unwrap();
         assert_eq!(
-            pw::merge(&git, &pane, &locale).await,
+            pw::merge(&place.machine(), &pane, &locale).await,
             MergeOutcome::Refused(refusal::UNCOMMITTED_CHANGES),
             "an untracked file blocks the merge"
         );
-        assert_eq!(pw::status(&git, &pane).await, Some(pw::Status { ahead: 0, behind: 0, changed_files: 2 }), "two changed files");
-        let committed = pw::commit_all(&git, &pane, &locale).await;
+        assert_eq!(
+            pw::status(&place.machine(), &pane).await,
+            Some(pw::Status { ahead: 0, behind: 0, changed_files: 2 }),
+            "two changed files"
+        );
+        let committed = pw::commit_all(&place.machine(), &pane, &locale).await;
         assert_eq!(committed, CommitOutcome::Committed { left_out: vec!["id_rsa".into()] }, "the secret-looking file is left out");
         assert_eq!(
-            pw::merge(&git, &pane, &locale).await,
+            pw::merge(&place.machine(), &pane, &locale).await,
             MergeOutcome::Refused(refusal::UNCOMMITTED_CHANGES),
             "the left-out file still blocks"
         );
@@ -393,11 +416,11 @@ mod git {
             "the changed files against the base: {files:?}"
         );
         assert!(
-            pw::file_diff(&git, &place.paths(), &pane, "feature.txt").await.is_some_and(|diff| diff.contains("+feature")),
+            pw::file_diff(&place.machine(), &pane, "feature.txt").await.is_some_and(|diff| diff.contains("+feature")),
             "the file's diff"
         );
         let before = place.fixture_git(&["rev-parse", "HEAD"]).await;
-        let MergeOutcome::Merged { commit, pre_merge } = pw::merge(&git, &pane, &locale).await else { panic!("not merged") };
+        let MergeOutcome::Merged { commit, pre_merge } = pw::merge(&place.machine(), &pane, &locale).await else { panic!("not merged") };
         assert!(
             pre_merge == before && place.fixture_git(&["rev-parse", "HEAD"]).await == commit && repo.join("feature.txt").exists(),
             "a fast-forward into main"
@@ -405,20 +428,26 @@ mod git {
         // Undo puts main back and keeps the pane's commits.
         let recorded = PaneWorktree { merged_commit: Some(commit.clone()), pre_merge_commit: Some(pre_merge.clone()), ..pane.clone() };
         assert!(
-            pw::undo_merge(&git, &recorded, &locale).await == UndoOutcome::Undone
+            pw::undo_merge(&place.machine(), &recorded, &locale).await == UndoOutcome::Undone
                 && place.fixture_git(&["rev-parse", "HEAD"]).await == before
                 && !repo.join("feature.txt").exists(),
             "the merge is undone"
         );
-        assert_eq!(pw::undo_merge(&git, &recorded, &locale).await, UndoOutcome::Refused("baseMoved"), "a second undo finds the base moved");
-        assert_eq!(pw::undo_merge(&git, &pane, &locale).await, UndoOutcome::Refused("notMerged"), "no merge on record");
+        assert_eq!(
+            pw::undo_merge(&place.machine(), &recorded, &locale).await,
+            UndoOutcome::Refused("baseMoved"),
+            "a second undo finds the base moved"
+        );
+        assert_eq!(pw::undo_merge(&place.machine(), &pane, &locale).await, UndoOutcome::Refused("notMerged"), "no merge on record");
         // The base moves: one merge commit; a conflict is refused before any write.
         std::fs::write(repo.join("base.txt"), "base\n").unwrap();
         place.fixture_git(&["add", "-A"]).await;
         place.fixture_git(&["commit", "-q", "-m", "base"]).await;
-        let status = pw::status(&git, &pane).await.unwrap();
+        let status = pw::status(&place.machine(), &pane).await.unwrap();
         assert!(status.ahead == 1 && status.behind == 1, "ahead and behind: {status:?}");
-        let MergeOutcome::Merged { commit: second, .. } = pw::merge(&git, &pane, &locale).await else { panic!("no merge commit") };
+        let MergeOutcome::Merged { commit: second, .. } = pw::merge(&place.machine(), &pane, &locale).await else {
+            panic!("no merge commit")
+        };
         assert_eq!(
             place.fixture_git(&["rev-list", "--parents", "-n", "1", &second]).await.split(' ').count(),
             3,
@@ -435,29 +464,32 @@ mod git {
         place.git_in(pane.worktree_path(), &["commit", "-q", "-am", "pane side"]).await;
         let head = place.fixture_git(&["rev-parse", "HEAD"]).await;
         assert!(
-            pw::merge(&git, &pane, &locale).await == MergeOutcome::Refused(refusal::MERGE_CONFLICT)
+            pw::merge(&place.machine(), &pane, &locale).await == MergeOutcome::Refused(refusal::MERGE_CONFLICT)
                 && place.fixture_git(&["rev-parse", "HEAD"]).await == head,
             "a conflict changes nothing"
         );
         // Tracked changes in the workspace folder refuse; so does another branch checked out.
         std::fs::write(repo.join("file-0.txt"), "dirty\n").unwrap();
         assert!(
-            matches!(pw::merge(&git, &pane, &locale).await, MergeOutcome::Refused(refusal::TRACKED_CHANGES | refusal::MERGE_CONFLICT)),
+            matches!(
+                pw::merge(&place.machine(), &pane, &locale).await,
+                MergeOutcome::Refused(refusal::TRACKED_CHANGES | refusal::MERGE_CONFLICT)
+            ),
             "a dirty workspace folder refuses"
         );
         place.fixture_git(&["checkout", "-q", "--", "file-0.txt"]).await;
         place.fixture_git(&["checkout", "-q", "-b", "other"]).await;
         assert_eq!(
-            pw::merge(&git, &pane, &locale).await,
+            pw::merge(&place.machine(), &pane, &locale).await,
             MergeOutcome::Refused(refusal::BRANCH_NOT_CHECKED_OUT),
             "another branch checked out refuses"
         );
         place.fixture_git(&["checkout", "-q", "main"]).await;
         // The list finds the worktree; unmerged work keeps it; discard removes it and its branch.
-        let listed = pw::worktrees(&git, &place.paths(), &place.repo(), &place.root()).await.unwrap();
+        let listed = pw::worktrees(&place.machine(), &place.repo(), &place.root()).await.unwrap();
         assert!(listed.len() == 1 && listed[0].session_id == "pane-a", "git lists the pane worktree: {listed:?}");
-        assert_eq!(pw::has_unmerged_work(&git, &pane).await, Some(true), "unmerged commits are work");
-        let discarded = pw::discard(&git, &place.paths(), &pane, "pane-a", &place.root(), &locale).await;
+        assert_eq!(pw::has_unmerged_work(&place.machine(), &pane).await, Some(true), "unmerged commits are work");
+        let discarded = pw::discard(&place.machine(), &pane, "pane-a", &place.root(), &locale).await;
         assert!(
             discarded == ChildDiscardOutcome::Discarded && !worktree.exists() && place.mighty_branches().await.is_empty(),
             "discard removes the worktree and its branch: {discarded:?}"
@@ -473,20 +505,24 @@ mod git {
         let (git, locale) = (place.git(), Locale::new("en"));
         let pane = pane_in(&place, "pane-b").await;
         let worktree = std::path::PathBuf::from(pane.worktree_path());
-        assert_eq!(pw::has_unmerged_work(&git, &pane).await, Some(false), "a fresh pane has no work");
+        assert_eq!(pw::has_unmerged_work(&place.machine(), &pane).await, Some(false), "a fresh pane has no work");
         std::fs::write(worktree.join("new.txt"), "one\r\ntwo").unwrap();
         assert_eq!(
-            pw::file_diff(&git, &place.paths(), &pane, "new.txt").await.as_deref(),
+            pw::file_diff(&place.machine(), &pane, "new.txt").await.as_deref(),
             Some("+++ b/new.txt\n+one\n+two"),
             "an untracked file is all added"
         );
         for outside in ["../x", "", "/abs", "a/../../b"] {
-            assert!(pw::file_diff(&git, &place.paths(), &pane, outside).await.is_none(), "no diff of {outside:?}");
+            assert!(pw::file_diff(&place.machine(), &pane, outside).await.is_none(), "no diff of {outside:?}");
         }
-        assert_eq!(pw::has_unmerged_work(&git, &pane).await, Some(true), "a new file is work");
-        assert_eq!(pw::commit_all(&git, &pane, &locale).await, CommitOutcome::Committed { left_out: vec![] });
+        assert_eq!(pw::has_unmerged_work(&place.machine(), &pane).await, Some(true), "a new file is work");
+        assert_eq!(pw::commit_all(&place.machine(), &pane, &locale).await, CommitOutcome::Committed { left_out: vec![] });
         assert_eq!(place.git_in(pane.worktree_path(), &["log", "-1", "--format=%s"]).await, "mighty: commit mighty/pane-b for its merge");
-        assert_eq!(pw::commit_all(&git, &pane, &locale).await, CommitOutcome::Nothing { left_out: vec![] }, "nothing more to commit");
+        assert_eq!(
+            pw::commit_all(&place.machine(), &pane, &locale).await,
+            CommitOutcome::Nothing { left_out: vec![] },
+            "nothing more to commit"
+        );
         let files = pw::changed_files(&git, &pane).await.unwrap();
         assert!(files.len() == 1 && files[0].path == "new.txt" && files[0].status == "A");
         assert!(pw::origin(&git, &pane).await.is_none(), "no origin");
@@ -521,20 +557,19 @@ mod git {
     async fn a_closed_pane_keeps_its_worktree_with_work_children_or_an_unknown_answer() {
         let _lane = lane::enter().await;
         let place = DelegationPlace::new();
-        let git = place.git();
         let pane = pane_in(&place, "pane-c").await;
         let worktree = std::path::PathBuf::from(pane.worktree_path());
-        assert!(!pw::kept_on_close(&git, &pane, false).await, "a clean pane's worktree goes");
-        assert!(pw::kept_on_close(&git, &pane, true).await, "children keep it");
+        assert!(!pw::kept_on_close(&place.machine(), &pane, false).await, "a clean pane's worktree goes");
+        assert!(pw::kept_on_close(&place.machine(), &pane, true).await, "children keep it");
         std::fs::write(worktree.join("new.txt"), "work\n").unwrap();
-        assert!(pw::kept_on_close(&git, &pane, false).await, "a new file is work");
+        assert!(pw::kept_on_close(&place.machine(), &pane, false).await, "a new file is work");
         std::fs::remove_file(worktree.join("new.txt")).unwrap();
         let gone = PaneWorktree { checkout: Some(place.join("no-such-checkout")), ..pane.clone() };
-        assert!(pw::kept_on_close(&git, &gone, false).await, "an answer git cannot give keeps it");
+        assert!(pw::kept_on_close(&place.machine(), &gone, false).await, "an answer git cannot give keeps it");
         // A commit on a detached HEAD is on no branch: the branch alone says nothing is unmerged, the worktree's HEAD says otherwise.
         place.git_in(pane.worktree_path(), &["checkout", "-q", "--detach"]).await;
         place.commit(pane.worktree_path(), "detached.txt", "detached\n").await;
-        assert!(pw::kept_on_close(&git, &pane, false).await, "a commit on a detached HEAD is work");
+        assert!(pw::kept_on_close(&place.machine(), &pane, false).await, "a commit on a detached HEAD is work");
     }
 
     /// Beyond C# (review M3, L1-L3): the copy never takes a link or what one leads to, nor writes through a link in the worktree; a
@@ -543,7 +578,6 @@ mod git {
     async fn links_never_lead_a_copy_a_diff_or_a_write_out_of_place() {
         let _lane = lane::enter().await;
         let place = DelegationPlace::new();
-        let git = place.git();
         let paths = place.paths();
         let pane = pane_in(&place, "pane-d").await;
         let base = std::path::PathBuf::from(place.base());
@@ -579,11 +613,11 @@ mod git {
         // A file's diff never reads through a link in the worktree.
         let worktree = std::path::PathBuf::from(pane.worktree_path());
         junction(&worktree.join("lnk"), &outside).await;
-        assert!(pw::file_diff(&git, &paths, &pane, "lnk/secret.env").await.is_none(), "no diff through a link");
+        assert!(pw::file_diff(&place.machine(), &pane, "lnk/secret.env").await.is_none(), "no diff through a link");
         // Its own place only, never a link.
-        assert!(pw::in_own_place(&paths, &pane, &place.root()), "the pane's worktree is its own place");
+        assert!(pw::in_own_place(&place.machine(), &pane, &place.root()).await, "the pane's worktree is its own place");
         let misplaced = PaneWorktree { worktree_path: Some(place.repo()), ..pane.clone() };
-        assert!(!pw::in_own_place(&paths, &misplaced, &place.root()), "a worktree elsewhere is not");
+        assert!(!pw::in_own_place(&place.machine(), &misplaced, &place.root()).await, "a worktree elsewhere is not");
         let linked_place = std::path::PathBuf::from(place.root()).join("pane-e");
         junction(&linked_place, &outside).await;
         let linked = PaneWorktree {
@@ -591,7 +625,7 @@ mod git {
             branch: Some("mighty/pane-e".into()),
             ..pane.clone()
         };
-        assert!(!pw::in_own_place(&paths, &linked, &place.root()), "a link at the place is not");
+        assert!(!pw::in_own_place(&place.machine(), &linked, &place.root()).await, "a link at the place is not");
         unlink(&linked_place);
         unlink(&worktree.join("lnk"));
     }
@@ -625,7 +659,9 @@ mod git {
         assert_eq!(start.base_commit, place.git_in(source.worktree_path(), &["rev-parse", "HEAD"]).await, "at the source's HEAD");
         let id = pw::fork_session_id("ABCDEF12-3456-4789-8abc-def012345678");
         assert_eq!(id, "fork-abcdef12");
-        let ChildWorktreeOutcome::Created(made) = pw::make_pane(&maker, &id, &start, 300.0).await else { panic!("no fork worktree") };
+        let ChildWorktreeOutcome::Created(made) = pw::make_pane(&crate::support::place::panes(&maker), &id, &start, 300.0).await else {
+            panic!("no fork worktree")
+        };
         assert_eq!(made.branch, "mighty/fork-abcdef12");
         let fork = std::path::PathBuf::from(&made.worktree_path);
         assert!(fork.join("committed.txt").exists(), "the source's commits are there");
@@ -654,7 +690,11 @@ mod git {
         let maker = place.maker();
         let ChildWorktreeCheck::Ready(read) = maker.check(source.worktree_path()).await else { panic!("the source cannot be read") };
         let start = pw::fork_start(&read, Some(&source));
-        let ChildWorktreeOutcome::Created(made) = pw::make_pane(&maker, "fork-c0ffee00", &start, 300.0).await else { panic!("no fork") };
+        let ChildWorktreeOutcome::Created(made) =
+            pw::make_pane(&crate::support::place::panes(&maker), "fork-c0ffee00", &start, 300.0).await
+        else {
+            panic!("no fork")
+        };
         // The fork moves on with a change of its own to the same line; the source changes it differently without committing.
         std::fs::write(std::path::Path::new(&made.worktree_path).join("file-0.txt"), "the fork's line\n").unwrap();
         place.git_in(&made.worktree_path, &["commit", "-q", "-am", "fork side"]).await;
@@ -675,7 +715,9 @@ mod git {
         id: &str,
     ) -> String {
         let _ = place;
-        let ChildWorktreeOutcome::Created(made) = pw::make_pane(maker, id, start, 300.0).await else { panic!("no worktree {id}") };
+        let ChildWorktreeOutcome::Created(made) = pw::make_pane(&crate::support::place::panes(maker), id, start, 300.0).await else {
+            panic!("no worktree {id}")
+        };
         made.worktree_path
     }
 }

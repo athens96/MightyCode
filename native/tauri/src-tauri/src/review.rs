@@ -270,7 +270,7 @@ pub async fn refresh(host: &Arc<Host>) -> Value {
     let mut worktrees = vec![];
     for (mut seed, record) in panes {
         if !seed.working {
-            seed.reading = crate::pane_worktree::review_reading(&record).await;
+            seed.reading = crate::pane_worktree::review_reading(host, &seed.id, &record).await;
             seed.warnings = seed.reading.map(|(status, _)| {
                 crate::merge_checks::queue_warnings(host, &seed.id, &record, usize::try_from(status.changed_files).unwrap_or(0))
             });
@@ -304,7 +304,7 @@ pub async fn refresh(host: &Arc<Host>) -> Value {
                 warnings: None,
             };
             if !working && row.state != ChildState::Merged {
-                seed.reading = crate::pane_worktree::review_reading(&record).await;
+                seed.reading = crate::pane_worktree::review_reading(host, &seed.id, &record).await;
                 seed.warnings = seed.reading.map(|(status, _)| {
                     crate::merge_checks::queue_warnings(host, &row.id, &record, usize::try_from(status.changed_files).unwrap_or(0))
                 });
