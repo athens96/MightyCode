@@ -408,7 +408,7 @@ function BotGroup({ bots, panes, activeId, search, workspaces }: { bots: Sidebar
               <span className="sidebar-bot-category-title">{t(category.label)}</span>
               <span className="sidebar-section-count">{category.bots.length}</span>
             </button>
-            {!folded && category.bots.map(row)}
+            {!folded && <div className="sidebar-bot-category-rows">{category.bots.map(row)}</div>}
           </div>
         );
       })}
