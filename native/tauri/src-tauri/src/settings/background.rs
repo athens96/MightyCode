@@ -1,4 +1,4 @@
-//! 백그라운드 작업 (MC-3), in 일반 after the agents' box: the switch that keeps work running after the app closes (off unless set),
+//! 백그라운드 작업 (MC-3), in 일반 after the agents' box: the switch that keeps work running after the app closes (on unless switched off),
 //! the daemon's state (its process, what runs, the output it keeps) and 데몬 중지; then the headless server's switch, 로그인할 때 창
 //! 없이 시작 (a LaunchAgent or the Run key, off unless set; server/login.rs), and how this app runs now. Built from the daemon
 //! module's memory and the login item's file or value only (a status older than a moment is read again on a task, then this box
