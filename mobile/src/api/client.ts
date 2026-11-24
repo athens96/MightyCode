@@ -30,6 +30,8 @@ import {
   type CreateSessionResponse,
   type PaneWorktreeAction,
   type PaneWorktreeResult,
+  type RunActionResult,
+  type RunActionVerb,
   type MergeChecks,
   type CompareView,
   type CompareActionRequest,
@@ -364,6 +366,11 @@ export interface MobileClient {
     signal?: AbortSignal,
     confirmed?: boolean,
   ): Promise<PaneWorktreeResult>;
+  /**
+   * MC-44 ("runActions"): start or stop one of the worktree's run actions. The host starts only a name of its approved
+   * `.mighty.yaml` (403 while it is not approved, 404 for a name it does not have, 409 when it cannot now).
+   */
+  runAction(sessionId: string, name: string, action: RunActionVerb, signal?: AbortSignal): Promise<RunActionResult>;
   /** The pane's worktree's pre-merge checks, read now ("mergeChecks", MC-27). */
   mergeChecks(sessionId: string, signal?: AbortSignal): Promise<MergeChecks>;
   /** One of the pane's compare runs, its children read now ("compare", MC-29). */
@@ -772,6 +779,13 @@ export function createClient(channel: RelayChannel): MobileClient {
         'POST',
         `/m1/sessions/${encodeURIComponent(sessionId)}/worktree`,
         confirmed ? { action, confirmed: true } : { action },
+        signal,
+      ),
+    runAction: (sessionId, name, action, signal) =>
+      request<RunActionResult>(
+        'POST',
+        `/m1/sessions/${encodeURIComponent(sessionId)}/run-actions`,
+        { name, action },
         signal,
       ),
     mergeChecks: (sessionId, signal) =>

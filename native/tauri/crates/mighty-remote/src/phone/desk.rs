@@ -152,6 +152,9 @@ pub struct MobilePaneWorktree {
     pub busy: bool,
     pub children: i64,
     pub actions: Vec<MobileRunAction>,
+    /// MC-44 (`runActions`): the run actions the phone may start in this worktree — the names in its `.mighty.yaml` while that config
+    /// is approved on this computer; empty when it is not, when there is none, or where run actions do not run (SSH, remote).
+    pub run_actions: Vec<String>,
 }
 
 /// MC-25: one run action running in a worktree (its `.mighty.yaml` name) and the address its output named, when one did.
@@ -159,6 +162,9 @@ pub struct MobilePaneWorktree {
 pub struct MobileRunAction {
     pub name: String,
     pub url: Option<String>,
+    /// MC-44: the same server at this computer's Tailscale address (`http://100.x.y.z:<port>/…`), only when the server answers there
+    /// — never a public address; the phone opens it when it is on the same tailnet.
+    pub private_url: Option<String>,
 }
 
 /// C# `MobileDesktopAction(SessionId, Action, Body, Attachments?)`: a mutating route handed to the window (WinUI `MobileAction`,

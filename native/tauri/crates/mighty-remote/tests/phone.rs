@@ -1748,8 +1748,8 @@ async fn the_phone_sees_a_worktree_panes_bar_and_its_sandbox() {
             conflict: true,
             children: 1,
             actions: vec![
-                MobileRunAction { name: "dev".into(), url: Some("http://localhost:41010/".into()) },
-                MobileRunAction { name: "e2e".into(), url: Some("file:///etc/passwd".into()) },
+                MobileRunAction { name: "dev".into(), url: Some("http://localhost:41010/".into()), private_url: None },
+                MobileRunAction { name: "e2e".into(), url: Some("file:///etc/passwd".into()), private_url: None },
             ],
             ..MobilePaneWorktree::default()
         },
@@ -1791,6 +1791,107 @@ async fn the_phone_sees_a_worktree_panes_bar_and_its_sandbox() {
             ("worktree".to_string(), json!({"action": "merge", "confirmed": false})),
             ("worktree".to_string(), json!({"action": "merge", "confirmed": true})),
         ]
+    );
+}
+
+/// MC-44 (`runActions`): the bar carries the run actions the phone may start and a running server's private (Tailscale) address,
+/// never another; `run-actions {name, action}` goes to the window exactly as sent, a body outside the rules is refused before it is
+/// asked, the window's refusal (not approved, unknown) is the phone's, and the revision moves when the bar does.
+#[tokio::test]
+async fn the_phone_starts_and_stops_a_worktrees_run_actions() {
+    use mighty_remote::phone::desk::{MobilePaneWorktree, MobileRunAction};
+    let world = World::new("mobile-run-actions");
+    world.desk.set_sessions(vec![pane("wt", "w")]);
+    world.desk.calls().worktrees.insert(
+        "wt".into(),
+        MobilePaneWorktree {
+            branch: "mighty/wt".into(),
+            base: "main".into(),
+            port: 4123,
+            actions: vec![
+                MobileRunAction {
+                    name: "dev".into(),
+                    url: Some("http://localhost:41010/".into()),
+                    private_url: Some("http://100.101.102.103:41010/".into()),
+                },
+                MobileRunAction {
+                    name: "api".into(),
+                    url: Some("http://localhost:41011/".into()),
+                    private_url: Some("http://203.0.113.7:41011/".into()),
+                },
+            ],
+            run_actions: vec!["dev".into(), "api".into(), "bad\nname".into()],
+            ..MobilePaneWorktree::default()
+        },
+    );
+    let (_, state) = world.route("GET", "/m1/state", None).await;
+    let wt = state["sessions"].as_array().unwrap().iter().find(|s| s["id"] == "wt").unwrap().clone();
+    assert_eq!(
+        wt["worktree"]["actions"],
+        json!([
+            {"name": "dev", "url": "http://localhost:41010/", "privateUrl": "http://100.101.102.103:41010/"},
+            {"name": "api", "url": "http://localhost:41011/"},
+        ]),
+        "a private address only when it is a Tailscale one"
+    );
+    assert_eq!(wt["worktree"]["runActions"], json!(["dev", "api"]), "a name the phone could not send back is left out");
+
+    // The revision moves when the bar does (an action stopped, so no longer listed).
+    world.router.changed();
+    world.router.observe();
+    let before = world.router.session_revision("wt");
+    world.desk.calls().worktrees.get_mut("wt").unwrap().actions.clear();
+    world.router.changed();
+    world.router.observe();
+    assert_eq!(world.router.session_revision("wt"), before + 1, "the bar moved, so the pane's revision did");
+    world.desk.calls().worktrees.get_mut("wt").unwrap().run_actions.pop();
+    world.router.changed();
+    world.router.observe();
+    assert_eq!(world.router.session_revision("wt"), before + 1, "a name the phone is not shown moves nothing");
+    world.desk.calls().worktrees.get_mut("wt").unwrap().run_actions.pop();
+    world.router.changed();
+    world.router.observe();
+    assert_eq!(world.router.session_revision("wt"), before + 2, "a run action no longer offered does");
+
+    world.desk.calls().action = Some(Arc::new(|a| match a.body["name"].as_str() {
+        Some("secret") => Err(MobileError::request(403, "Approve .mighty.yaml on the computer first.", None)),
+        Some("nope") => Err(MobileError::request(404, "No run action nope.", None)),
+        _ => Ok(ActionAnswer::Value(json!({"done": true, "message": format!("{} {}", a.body["action"], a.body["name"])}))),
+    }));
+    let post = |body: Value| {
+        let world = &world;
+        async move { world.route("POST", "/m1/sessions/wt/run-actions", Some(body)).await }
+    };
+    let (status, started) = post(json!({"name": "dev", "action": "start"})).await;
+    assert!(status == 200 && started["protocol"] == 1 && started["done"] == true, "{started}");
+    assert_eq!(post(json!({"name": "dev", "action": "stop"})).await.0, 200);
+    let (status, body) = post(json!({"name": "secret", "action": "start"})).await;
+    assert!(status == 403 && body["error"] == "Approve .mighty.yaml on the computer first.", "{body}");
+    assert_eq!(post(json!({"name": "nope", "action": "start"})).await.0, 404);
+    for bad in [
+        json!({}),
+        json!({"name": "dev"}),
+        json!({"action": "start"}),
+        json!({"name": "dev", "action": "restart"}),
+        json!({"name": "dev", "action": "start", "command": "rm -rf /"}),
+        json!({"name": 3, "action": "start"}),
+        json!({"name": "", "action": "start"}),
+        json!({"name": "a\nb", "action": "start"}),
+        json!({"name": "x".repeat(81), "action": "start"}),
+    ] {
+        assert_eq!(post(bad.clone()).await.0, 400, "{bad}");
+    }
+    let seen: Vec<String> = world.desk.actions().iter().map(|a| format!("{} {}", a.action, a.body)).collect();
+    assert_eq!(
+        seen,
+        [
+            r#"run-action {"name":"dev","action":"start"}"#,
+            r#"run-action {"name":"dev","action":"stop"}"#,
+            r#"run-action {"name":"secret","action":"start"}"#,
+            r#"run-action {"name":"nope","action":"start"}"#,
+        ]
+        .map(String::from),
+        "nothing outside the rules reached the desktop"
     );
 }
 

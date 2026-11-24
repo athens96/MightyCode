@@ -77,7 +77,7 @@ Windows 电脑也一样，只是需要一条 Windows 防火墙规则，以免连
 
 在桌面应用（Mac 和 Windows）中通过 [Mighty 编排](delegation.md)创建的子窗格，会在会话列表中缩进一级显示在父窗格下方，右侧显示其状态（{{ui:delegation.child.state.reported}}、{{ui:delegation.child.state.merged}} 等）。不发送这些信息的旧版应用中的子窗格，在列表中与普通窗格一样显示。合并或丢弃子窗格无法在手机上进行，只能在桌面应用（Mac 或 Windows）中进行。只有对比运行的子窗格可以在下文的对比结果中合并或丢弃。使用 Antigravity 的桌面应用（Mac 0.4.23 及以上、Windows 0.4.28 及以上）中的 Gemini 窗格显示为 Antigravity（{{ui:badge.beta}}），更旧版本应用中的窗格显示为 Gemini。
 
-在自己的 worktree 中工作的窗格，会在画面顶部显示 worktree 栏。PORT 旁边显示分配给该 worktree 的端口范围（例如 `:41010–41019`），下方显示正在运行的[运行操作](delegation.md#mighty-yaml)及其开发服务器地址。地址是电脑上的地址，点按只会复制它。点按 {{ui:git.checks.tab}} 按钮，可以只读查看与桌面应用检查标签相同的内容（未提交的更改、PR 状态、CI 检查、未解决的评审讨论、剩余待办）。合并时如果这些检查仍有警告，手机会列出它们并再确认一次；点按 {{ui:git.checks.merge.confirm}} 即可合并。
+在自己的 worktree 中工作的窗格，会在画面顶部显示 worktree 栏。PORT 旁边显示分配给该 worktree 的端口范围（例如 `:41010–41019`），下方显示正在运行的[运行操作](delegation.md#mighty-yaml)及其开发服务器地址。地址是电脑上的地址，点按只会复制它。电脑上的 Mighty Code 为 0.6.0 或更高版本时，可以用 {{ui:phone.worktree.runStart}}、{{ui:phone.worktree.runStop}} 按钮在手机上启动和停止这些运行操作。只显示在电脑上批准过的 `.mighty.yaml` 中的运行操作（手机只发送名称，不发送命令），SSH 和远程工作区中不会运行，每次启动或停止都会在电脑上该窗格的记录里留下一行。电脑在 [Tailscale](#direct) 上、且开发服务器也在其 Tailscale 地址上监听时（例如用 `--host 0.0.0.0` 启动的服务器），地址会显示为 Tailscale 地址，点按即在手机浏览器中打开；手机也必须在同一个 Tailscale 网络中。只在 `localhost` 上监听的服务器不会被暴露，仍像以前一样复制地址。点按 {{ui:git.checks.tab}} 按钮，可以只读查看与桌面应用检查标签相同的内容（未提交的更改、PR 状态、CI 检查、未解决的评审讨论、剩余待办）。合并时如果这些检查仍有警告，手机会列出它们并再确认一次；点按 {{ui:git.checks.merge.confirm}} 即可合并。
 
 开始了[对比运行](delegation.md#compare)的窗格，会在栏下方显示对比运行卡片。点按后在 {{ui:compare.view.title}} 中查看每个子窗格的代理和模型、状态、更改的文件、耗时、费用和测试结果，可以{{ui:compare.action.merge}}已报告的子窗格，或{{ui:compare.action.discard}}子窗格。合并后，手机会询问是否一次丢弃其余子窗格（{{ui:compare.rest.title}}）。
 

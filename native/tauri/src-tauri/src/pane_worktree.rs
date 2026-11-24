@@ -1606,7 +1606,7 @@ async fn discard_confirmed(host: &Arc<Host>, session: &RunSession, pane: &PaneWo
 /// action runs or the last merge conflicted, its open children, and the run actions running in it (MC-25). No git here: it is read
 /// for every pane of every pass.
 pub(crate) fn phone_bar(
-    host: &Host,
+    host: &Arc<Host>,
     pane: &RunSession,
     snapshot: &mighty_core::model::AppSnapshot,
     children: &[mighty_core::shell::DelegationChildRow],
@@ -1623,18 +1623,17 @@ pub(crate) fn phone_bar(
         .iter()
         .filter(|c| c.parent_session_id == id && !matches!(c.state, ChildState::Failed | ChildState::Closed | ChildState::Discarded))
         .count();
+    // MC-44: with each running action's address at this computer's Tailscale address, when its server answers there.
     let actions = if crate::repo_tasks::any_action_running(host) {
-        crate::repo_tasks::running_actions_in(host, &crate::worktree_lifecycle::path_key(record.run_folder()))
-            .iter()
-            .filter_map(|action| {
-                let name = action.get("name")?.as_str()?.to_string();
-                let url = action.get("url").and_then(Value::as_str).map(str::to_string);
-                Some(mighty_remote::phone::desk::MobileRunAction { name, url })
-            })
-            .collect()
+        crate::repo_tasks::phone_running(host, &crate::worktree_lifecycle::path_key(record.run_folder()))
     } else {
         vec![]
     };
+    // MC-44: the approved `.mighty.yaml`'s run actions the phone may start here.
+    let run_actions = snapshot
+        .workspace(pane.workspace_id())
+        .map(|workspace| crate::repo_tasks::phone_startable(host, workspace, record))
+        .unwrap_or_default();
     Some(mighty_remote::phone::desk::MobilePaneWorktree {
         branch: record.branch().to_string(),
         base: record.base_branch().to_string(),
@@ -1650,6 +1649,7 @@ pub(crate) fn phone_bar(
         busy,
         children: panes.max(rows) as i64,
         actions,
+        run_actions,
     })
 }
 

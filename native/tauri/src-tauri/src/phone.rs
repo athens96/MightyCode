@@ -75,10 +75,18 @@ struct Desk {
 /// `mergeChecks`: `GET /m1/sessions/{id}/checks` (MC-27); `compare`: `GET`/`POST /m1/sessions/{id}/compare/{compareId}` (MC-29);
 /// `queueEdit`: `POST /m1/sessions/{id}/queue/{item}/edit|move` (MC-49).
 pub const EXTRA_CAPABILITIES: &[&str] = &["savedPrompts", "mergeChecks", "compare", "queueEdit"];
+/// MC-44: `runActions`: `POST /m1/sessions/{id}/run-actions {name, action}` and the worktree bar's `runActions` and `privateUrl`
+/// (kept apart from [`EXTRA_CAPABILITIES`] so additions there and here never touch the same line).
+pub const RUN_ACTION_CAPABILITIES: &[&str] = &["runActions"];
+
+/// The Tauri host's capabilities beyond the router's baseline: [`EXTRA_CAPABILITIES`] and the later lists.
+fn extra_capabilities() -> impl Iterator<Item = &'static &'static str> {
+    EXTRA_CAPABILITIES.iter().chain(RUN_ACTION_CAPABILITIES.iter())
+}
 
 /// Full capability list advertised by `/m1/info` and relay `auth_ok`.
 pub fn host_capabilities() -> Vec<String> {
-    mighty_remote::phone::router::CAPABILITIES.iter().chain(EXTRA_CAPABILITIES.iter()).map(|c| (*c).to_string()).collect()
+    mighty_remote::phone::router::CAPABILITIES.iter().chain(extra_capabilities()).map(|c| (*c).to_string()).collect()
 }
 
 /// `/m1/info`'s `platform`: this OS's `PlatformProfile::m1_platform` ("win32", "darwin").
@@ -1291,6 +1299,13 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
                 crate::pane_worktree::phone_action(&host, &id, &action, confirmed).await.map_err(|(status, why)| request(status, why))?;
             ActionAnswer::Value(value)
         }
+        // MC-44: start or stop one of the worktree's run actions (only an approved `.mighty.yaml`'s names start).
+        "run-action" => {
+            let (name, action) = (text("name").unwrap_or_default(), text("action").unwrap_or_default());
+            let value =
+                crate::repo_tasks::phone_run_action(&host, &id, &name, &action).await.map_err(|(status, why)| request(status, why))?;
+            ActionAnswer::Value(value)
+        }
         // MC-27: the pane's worktree's pre-merge checks, read now.
         "checks" => ActionAnswer::Value(crate::merge_checks::phone(&host, &id).await.map_err(|(status, why)| request(status, why))?),
         // MC-29: one of the pane's compare runs, and the compare view's actions on its children.
@@ -1638,7 +1653,7 @@ impl PhoneDesk for Desk {
         self.host().map(|h| crate::direct::endpoints(&h)).unwrap_or_default()
     }
     fn extra_capabilities(&self) -> Vec<String> {
-        EXTRA_CAPABILITIES.iter().map(|c| (*c).to_string()).collect()
+        extra_capabilities().map(|c| (*c).to_string()).collect()
     }
     fn saved_prompts(&self, workspace_id: &str) -> Vec<mighty_core::saved_prompts::SavedPrompt> {
         self.host().map(|h| crate::saved_prompts::offered(&h, Some(workspace_id))).unwrap_or_default()

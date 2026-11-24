@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { describeError, type MobileClient } from '@/api/client';
-import type { MergeWarning, MobilePaneWorktree, PaneWorktreeAction } from '@/api/types';
+import type { MergeWarning, MobilePaneWorktree, PaneWorktreeAction, RunActionVerb } from '@/api/types';
 import { Icon } from '@/components/icons';
 import { MergeChecksSheet } from '@/components/merge-checks-sheet';
 import { BottomSheet, ConfirmDialog, SheetRow } from '@/components/sheets';
@@ -12,7 +12,7 @@ import { mergeConfirmText, parseWarnings } from '@/lib/merge-checks';
 import {
   menuOffers,
   primaryOffers,
-  worktreeActions,
+  runActionRows,
   worktreeCounts,
   worktreeLabel,
   worktreeMarker,
@@ -34,6 +34,11 @@ import { radius, spacing, usePalette, useStyles, type Palette } from '@/theme';
  * each printed (MC-25; a tap copies the address, which is the computer's `localhost`), offers 점검 (MC-27, "mergeChecks")
  * and, when a merge comes back with what the pre-merge checks still warn about (`confirm`), lists it and asks once more
  * before sending the merge again with `confirmed` — never blocking it.
+ *
+ * MC-44, a host that advertised "runActions": each running action gets 멈춤 and each other run action of the approved
+ * `.mighty.yaml` 시작 (the host checks the approval and the name again and writes a line in the pane); a running server the
+ * host also found at the computer's Tailscale address opens there (the phone must be on the same tailnet), else its
+ * address is copied as before.
  */
 export function PaneWorktreeBar({
   sessionId,
@@ -41,6 +46,7 @@ export function PaneWorktreeBar({
   client,
   running,
   canCheck = false,
+  canRunActions = false,
   onDiscarded,
 }: {
   sessionId: string;
@@ -50,6 +56,8 @@ export function PaneWorktreeBar({
   running: boolean;
   /** The host reads the pre-merge checks for the phone ("mergeChecks"). */
   canCheck?: boolean;
+  /** MC-44: the host starts and stops run actions for the phone ("runActions"). */
+  canRunActions?: boolean;
   /** The pane is gone after a discard. */
   onDiscarded: () => void;
 }) {
@@ -62,6 +70,8 @@ export function PaneWorktreeBar({
   /** A merge the host sent back with what still warns: asked once more before it goes again with `confirmed`. */
   const [warned, setWarned] = useState<{ action: PaneWorktreeAction; warnings: MergeWarning[] } | undefined>(undefined);
   const sendingRef = useRef(false);
+  /** MC-44: the run action whose start or stop is on its way. */
+  const [runSending, setRunSending] = useState<string | undefined>(undefined);
 
   // The Mac reads the counts every 20 s while its own bar is on screen; a pane opened only here asks once on open and
   // after each run.
@@ -96,6 +106,22 @@ export function PaneWorktreeBar({
     [client, sessionId, onDiscarded],
   );
 
+  const runAction = useCallback(
+    async (name: string, action: RunActionVerb) => {
+      if (!client || runSending !== undefined) return;
+      setRunSending(name);
+      try {
+        const result = await client.runAction(sessionId, name, action);
+        if (result.message) showToast(result.message, result.done ? 'success' : 'error');
+      } catch (error) {
+        showToast(describeError(error), 'error');
+      } finally {
+        setRunSending(undefined);
+      }
+    },
+    [client, sessionId, runSending],
+  );
+
   const choose = (offer: WorktreeOffer) => {
     setMenuOpen(false);
     if (offer.disabledReason) {
@@ -110,9 +136,13 @@ export function PaneWorktreeBar({
   const counts = worktreeCounts(worktree);
   const setup = worktreeSetup(worktree);
   const block = worktreePortBlock(worktree);
-  const actions = worktreeActions(worktree);
+  const actions = runActionRows(worktree, canRunActions);
   const copy = (url: string) => {
     void Clipboard.setStringAsync(url).then(() => showToast(t('phone.worktree.addressCopied', { url })));
+  };
+  // MC-44: the computer's Tailscale address opens in the phone's browser; the computer's localhost can only be copied.
+  const open = (url: string) => {
+    void Linking.openURL(url).catch(() => showToast(t('phone.worktree.openFailed', { url }), 'error'));
   };
 
   return (
@@ -143,25 +173,48 @@ export function PaneWorktreeBar({
       {actions.length > 0 ? (
         <View style={styles.runs}>
           {actions.map((action) => (
-            <Pressable
-              key={action.name}
-              accessibilityRole="button"
-              accessibilityLabel={t('paneWorktree.bar.actionRunning', { name: action.name })}
-              accessibilityHint={action.url}
-              disabled={!action.url}
-              onPress={() => action.url && copy(action.url)}
-              style={({ pressed }) => [styles.run, pressed && styles.pressed]}
-            >
-              <Text style={styles.runMark}>▶</Text>
-              <Text numberOfLines={1} style={styles.runName}>
-                {action.name}
-              </Text>
-              {action.url ? (
-                <Text numberOfLines={1} ellipsizeMode="middle" style={styles.runUrl}>
-                  {action.url}
+            <View key={action.name} style={styles.runRow}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={
+                  action.privateUrl
+                    ? t('phone.worktree.openPrivate', { name: action.name })
+                    : action.running
+                      ? t('paneWorktree.bar.actionRunning', { name: action.name })
+                      : action.name
+                }
+                accessibilityHint={action.privateUrl ? t('phone.worktree.privateHint') : action.url}
+                disabled={!action.privateUrl && !action.url}
+                onPress={() => {
+                  if (action.privateUrl) open(action.privateUrl);
+                  else if (action.url) copy(action.url);
+                }}
+                style={({ pressed }) => [styles.run, pressed && styles.pressed]}
+              >
+                <Text style={action.running ? styles.runMark : styles.idleMark}>{action.running ? '▶' : '▷'}</Text>
+                <Text numberOfLines={1} style={styles.runName}>
+                  {action.name}
                 </Text>
+                {action.privateUrl || action.url ? (
+                  <Text numberOfLines={1} ellipsizeMode="middle" style={styles.runUrl}>
+                    {action.privateUrl ?? action.url}
+                  </Text>
+                ) : null}
+              </Pressable>
+              {canRunActions ? (
+                <Button
+                  label={action.running ? t('phone.worktree.runStop') : t('phone.worktree.runStart')}
+                  accessibilityLabel={t(action.running ? 'phone.worktree.runStopLabel' : 'phone.worktree.runStartLabel', {
+                    name: action.name,
+                  })}
+                  compact
+                  tone="neutral"
+                  busy={runSending === action.name}
+                  disabled={!client || runSending !== undefined}
+                  onPress={() => void runAction(action.name, action.running ? 'stop' : 'start')}
+                />
               ) : null}
-            </Pressable>
+            </View>
           ))}
         </View>
       ) : null}
@@ -269,7 +322,9 @@ const makeStyles = (palette: Palette) =>
       paddingHorizontal: spacing.lg,
       paddingVertical: spacing.xs,
     },
+    runRow: { alignItems: 'center', flexDirection: 'row', gap: spacing.sm, maxWidth: '100%' },
     runMark: { color: palette.success, fontSize: 9 },
+    idleMark: { color: palette.textMuted, fontSize: 9 },
     runName: { color: palette.text, fontSize: 12, fontWeight: '600' },
     runUrl: { color: palette.textMuted, flexShrink: 1, fontSize: 11.5 },
     failed: { color: palette.danger },

@@ -114,7 +114,12 @@ export type Capability =
   /** The host shows and acts on a pane's compare runs (`GET`/`POST /m1/sessions/{id}/compare/{compareId}`, MC-29). */
   | 'compare'
   /** The host edits and moves a pane's queued rows (`POST /m1/sessions/{id}/queue/{itemId}/edit|move`, MC-49). */
-  | 'queueEdit';
+  | 'queueEdit'
+  /**
+   * The host starts and stops a worktree's approved `.mighty.yaml` run actions (`POST /m1/sessions/{id}/run-actions`) and names
+   * them on the bar (`runActions`, a running one's `privateUrl`), MC-44.
+   */
+  | 'runActions';
 
 export const CAPABILITIES: readonly Capability[] = [
   'submit-mode',
@@ -142,6 +147,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'mergeChecks',
   'compare',
   'queueEdit',
+  'runActions',
 ] as const;
 
 export interface HostInfo {
@@ -294,11 +300,28 @@ export interface MobilePaneWorktree {
   portCount?: number;
   /** MC-25: the run actions running in the worktree, with the address each printed (the desktop's localhost). */
   actions?: MobileRunAction[];
+  /** MC-44 ("runActions"): the approved `.mighty.yaml`'s run actions the phone may start here. */
+  runActions?: string[];
 }
 
 export interface MobileRunAction {
   name: string;
   url?: string;
+  /**
+   * MC-44 ("runActions"): the same server at the computer's Tailscale address, sent only while it answers there; the phone opens
+   * it (it reaches it when it is on the same tailnet).
+   */
+  privateUrl?: string;
+}
+
+/** MC-44: what `POST /m1/sessions/{id}/run-actions` does with one of the worktree's run actions. */
+export type RunActionVerb = 'start' | 'stop';
+
+/** MC-44: a run action's answer: `done` and the line the desktop also wrote in the pane. */
+export interface RunActionResult {
+  protocol: number;
+  done: boolean;
+  message?: string;
 }
 
 /** What `POST /m1/sessions/{id}/worktree` does. The phone confirms `discard` itself. */

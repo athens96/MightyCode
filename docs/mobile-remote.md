@@ -94,7 +94,8 @@ MobilePaneWorktree {
   children?: number,   // 그 창 브랜치에서 갈라진 열린 자식 수: 0보다 크면 Mac이 버리기를 거절한다
   portBase?: number,   // MC-25(Rust 호스트): worktree의 포트 블록 첫 포트(MIGHTY_PORT)와 ┐ 둘 다 있거나 둘 다 없다
   portCount?: number,  //                     블록의 포트 수(MIGHTY_PORT_COUNT)          ┘
-  actions?: [{ name, url? }]   // MC-25(Rust 호스트): 그 worktree에서 실행 중인 실행 동작(.mighty.yaml run:)과 출력에서 찾은 개발 서버 주소(http·https만); 없으면 없음
+  actions?: [{ name, url?, privateUrl? }]   // MC-25(Rust 호스트): 그 worktree에서 실행 중인 실행 동작(.mighty.yaml run:)과 출력에서 찾은 개발 서버 주소(http·https만); 없으면 없음. privateUrl은 MC-44(아래 "실행 동작 시작·멈춤")
+  runActions?: string[]        // MC-44("runActions"): 승인된 .mighty.yaml의 실행 동작 이름(휴대폰이 시작할 수 있는 것, 20개·80자까지); 승인 전·SSH·원격 워크스페이스에는 없음
 }
 ```
 
@@ -104,7 +105,7 @@ MobilePaneWorktree {
 
 Rust 호스트(Mac·Windows 0.6.0+)도 같은 라우트를 같은 규칙으로 받는다(`pane_worktree::phone_action`, 데스크톱 막대와 같은 병합·되돌리기·충돌 해결 요청·버리기를 확인 창 없이). 다른 점: 같은 창의 다른 동작이 진행 중이면 409(`phone.worktree.busy`), 데스크톱에 확인 창이 떠 있으면 409(`phone.worktree.dialogOpen`), worktree가 없는 창은 409(`phone.worktree.none`). **병합 전 점검(MC-27)**: `merge`·`commitMerge`에 `confirmed: true`가 없고 데스크톱의 병합 전 점검(`merge_checks::merge_warnings`, 1분 안의 읽기면 그것, 아니면 새로 읽음)에 경고가 남아 있으면 병합하지 않고 `{ done: false, message, confirm: { warnings: [{ code, count }] } }`로 답한다. `code`는 `uncommitted`·`draft`·`conflicts`·`changesRequested`·`checksFailed`·`checksPending`·`threads`·`checklist`(`commitMerge`에는 `uncommitted`가 없다)이고, `message`는 같은 경고를 데스크톱 언어로 적은 글이다(이 필드를 모르는 휴대폰은 그것을 토스트로 보이고 병합은 데스크톱에서 한다). 새 휴대폰은 `git.checks.merge.title` 확인 창에 경고를 휴대폰 언어(`git.checks.warn.*`)로 한 줄씩 보이고, "그래도 병합"을 누르면 같은 동작을 `confirmed: true`로 다시 보낸다. 막지는 않는다(데스크톱의 "한 번 더 묻기"와 같다). Swift Mac 호스트는 `confirmed`를 무시하고 `confirm`을 보내지 않으므로 그 흐름은 예전과 같다.
 
-휴대폰 막대는 `portBase`·`portCount`가 있으면 PORT 옆에 블록(`:41010–41019`)을, `actions`가 있으면 그 아래에 실행 동작 칩(▶ 이름과 주소)을 보인다. 주소는 컴퓨터의 `localhost`라 휴대폰에서 열지 않고, 누르면 복사한다(`phone.worktree.addressCopied`). 실행 동작의 시작·멈춤은 휴대폰에 없다. 호스트가 `"mergeChecks"`를 알리면 막대에 **점검** 단추가 생긴다(아래 "병합 전 점검").
+휴대폰 막대는 `portBase`·`portCount`가 있으면 PORT 옆에 블록(`:41010–41019`)을, `actions`가 있으면 그 아래에 실행 동작 칩(▶ 이름과 주소)을 보인다. 주소는 컴퓨터의 `localhost`라 휴대폰에서 열지 않고, 누르면 복사한다(`phone.worktree.addressCopied`). 호스트가 `"runActions"`를 알리면 실행 동작을 휴대폰에서 시작·멈추고, 사설망 주소가 있는 개발 서버는 연다(아래 "실행 동작 시작·멈춤"). 호스트가 `"mergeChecks"`를 알리면 막대에 **점검** 단추가 생긴다(아래 "병합 전 점검").
 
 휴대폰은 창 목록 행에 브랜치 표시와 `mighty/… → base` 한 줄을 더하고(`SessionRow`, 읽기 이름에 `paneWorktree.marker`), 창 화면 맨 위에 막대를 둔다(`PaneWorktreeBar`): 브랜치 → base, PORT, 개수와 준비 상태, 주 단추(변경이 있으면 커밋하고 병합, 아니면 병합; 충돌로 거절된 뒤에는 충돌 해결 요청이 앞에), ⋯ 메뉴(다른 병합, 되돌릴 수 있을 때 되돌리기, 버리기 — 자식이 있으면 이유와 함께 흐리게). 결과는 Mac이 준 `message`를 토스트로 보이고, 버리기가 되면 창을 떠난다. 창을 열 때와 실행이 끝날 때 `refresh`를 한 번 보낸다. 휴대폰에서 연 새 창은 워크스페이스 설정(`decideWithoutAsking`, 묻기는 폴더)을 따르고, 만들기 응답의 `notice`(worktree에서 열었음과 그 브랜치·PORT, 또는 설정이 고른 worktree를 못 만들어 폴더에서 연 이유)를 토스트로 보인다. 문구는 모두 기존 `paneWorktree.*` 키다. 0.6.0 이전의 Windows·Rust 호스트는 `worktree`를 싣지 않고 이 경로가 없다(`routeNotFound`).
 
@@ -198,7 +199,7 @@ CompareView      { protocol, gone?: true, id, request, baseCommit, baseShort, ba
 
 기존 라우트와 필드는 그대로다. 아래는 모두 **추가**이며, 새 필드는 전부 선택(optional)이다. 업데이트하지 않은 휴대폰 앱은 모르는 필드를 무시하고 지금처럼 동작한다. 휴대폰은 `/m1/info`의 `capabilities`에 이름이 있을 때만 해당 기능을 보여 준다(없으면 구버전 호스트).
 
-`MobileInfo.capabilities: string[]` — 허용 값: `"submit-mode"`, `"queue"`, `"pane"`, `"history"`, `"settings"`, `"commands"`, `"mighty"`, `"status"`, `"attachments"`, `"style"`, `"files"`, `"screenShare"`, `"structure"`, `"direct"`, `"push"`, `"fileChanges"`, `"workMap"`, `"appUpdate"`, `"pi"`, `"opencode"`, `"hermes"`, `"roles"`, `"savedPrompts"`, `"mergeChecks"`, `"compare"`, `"queueEdit"`(MC-49, 아래 "대기열 행 고치기와 순서").
+`MobileInfo.capabilities: string[]` — 허용 값: `"submit-mode"`, `"queue"`, `"pane"`, `"history"`, `"settings"`, `"commands"`, `"mighty"`, `"status"`, `"attachments"`, `"style"`, `"files"`, `"screenShare"`, `"structure"`, `"direct"`, `"push"`, `"fileChanges"`, `"workMap"`, `"appUpdate"`, `"pi"`, `"opencode"`, `"hermes"`, `"roles"`, `"savedPrompts"`, `"mergeChecks"`, `"compare"`, `"queueEdit"`(MC-49, 아래 "대기열 행 고치기와 순서"), `"runActions"`(MC-44, 아래 "실행 동작 시작·멈춤").
 
 `"mergeChecks"`와 `"compare"`는 Rust 호스트(Mac·Windows 0.6.0+)가 `GET /m1/sessions/{id}/checks`와 `GET`·`POST /m1/sessions/{id}/compare/{compareId}`를 안다는 뜻이다(아래 "병합 전 점검", "비교 실행"). 이 이름이 없는 호스트에는 휴대폰이 점검 단추를 보이지 않고, 비교 실행 카드는 요약만으로 그리며 병합·폐기는 데스크톱에서 하라고 적는다.
 
@@ -245,6 +246,7 @@ CompareView      { protocol, gone?: true, id, request, baseCommit, baseShort, ba
 | POST | `/m1/sessions/{id}/queue/{itemId}/remove` | | `{ protocol, ok }` · 없는 항목 404 |
 | POST | `/m1/sessions/{id}/queue/{itemId}/run-now` | | `{ protocol, ok: true, ran: "worktree" \| "here" }` — 그 행의 바로 실행. 호스트는 누른 순간의 상태로 다시 판단한다. 없는 행 404 `remote.error.queueItemNotFound` · 지금 바로 실행할 수 없는 행(흐린 행이나 단추 없는 행. 폰은 부르지 않으므로 그 사이 상태가 바뀐 때만 온다) 409 `queue.runNowRefused` · 실행할 수 없는 창 409와 그 이유 · 시작 실패 409 `remote.error.startFailed` |
 | POST | `/m1/sessions/{id}/queue/{itemId}/edit` | `{ text }` | `{ protocol, ok }` — MC-49 `"queueEdit"`. 그 행의 글을 바꾼다(첨부·모드·자리 유지). 보류된 행 409 `queue.editRefused` · 허용한 카드의 이어가기 행 409 `queue.editRefused` · 글 없음 409 · 없는 행 404 · NUL이나 잘못된 본문 400 |
+| POST | `/m1/sessions/{id}/run-actions` | `{ name, action: "start" \| "stop" }` | `{ protocol, done, message }` — MC-44 `"runActions"`. 그 창 worktree의 실행 동작을 시작하거나 멈춘다. 본문은 두 키만(다른 키·빈 이름·81자 이상·제어 문자·모르는 `action`은 400, 호스트에 묻지 않음). 승인되지 않은 설정 403 `phone.runAction.notApproved` · 승인된 설정에 없는 이름 404 `phone.runAction.unknown` · 이미 실행 중 409 · 실행 중이 아닌 것 멈추기 409 · worktree 없는 창, SSH·원격 워크스페이스 409. 아래 "실행 동작 시작·멈춤" |
 | POST | `/m1/sessions/{id}/queue/{itemId}/move` | `{ to }` 또는 `{ before }` | `{ protocol, ok }` — MC-49 `"queueEdit"`. `to`는 0(맨 앞, 다음에 실행)부터 1000까지의 자리(끝을 넘으면 끝), `before`는 다른 대기 행 id(그 바로 앞으로). 둘 중 하나만. 보류된 행 409 · 없는 행(또는 `before`) 404 · 그 밖 400 |
 | POST | `/m1/sessions/{id}/queue/run-next` | | `{ protocol, ok }` · 실행 중이거나 대기열이 비면 409. 옛 폰용. 새 폰은 부르지 않는다 |
 | POST | `/m1/sessions/{id}/rename` | `{ title }` (앞뒤 공백 제거 후 1~80자) 또는 `{ title: "", titleMode: "auto" }` | `{ protocol, ok }` — `titleMode: "auto"`이면 `title`을 무시하고 제목을 자동 모드로 되돌린다; 오래된 폰이 `title`만 보내면 고정 이름으로 처리 |
@@ -693,6 +695,24 @@ oh-my-claudecode가 깔린 Claude 창은 입력창에 **보낼 대상** 스위�
 - 고치기는 행 자리에서 글을 바꾼다. 저장하면 `queue/{itemId}/edit {text}`, 글이 비면 저장이 막히고 `queue.editEmpty`를 보인다. 호스트가 거절하면 편집기를 둔 채 이유를 알린다.
 - ↑는 바로 위 행의 앞(`{ before: 위 행 id }`), ↓는 두 칸 아래 행의 앞(없으면 `{ to: 1000 }`, 끝)으로 보낸다. id로 자리를 말하므로 보류 행이 섞인 목록에서도 어긋나지 않는다.
 - 데스크톱 대기열은 바뀐 순서대로 실행된다. 창의 revision은 대기열 행의 id와 글이 바뀌어도 움직이므로(`queue_digest`), 데스크톱에서 고치거나 옮긴 것도 다음 세부 정보에 온다.
+
+### 실행 동작 시작·멈춤 (MC-44, `"runActions"`)
+
+`/m1/info`에 `"runActions"`가 있는 호스트(Rust 호스트, Mac·Windows)에서만 worktree 막대의 실행 동작 칩 옆에 **시작**·**멈춤**이 보인다. 없으면 칩은 예전처럼 실행 중인 것만, 누르면 주소 복사다.
+
+- **무엇을 시작하나**: 그 창 worktree의 실행 폴더가 읽는 `.mighty.yaml`(없으면 워크스페이스의 `.mighty.local.yaml`, 작업 창과 같은 읽기)의 `run:` 이름뿐이다. 그 설정이 이 컴퓨터에서 **신뢰 승인**된 동안에만(`repo_tasks::is_config_approved`, 내용 해시 단위) 요약의 `runActions`에 이름이 실리고 시작된다. 휴대폰은 명령을 보내지 않고 이름만 보낸다. 호스트는 승인을 먼저 보고(승인 전이면 이름을 보기도 전에 403), 그 다음 이름을 찾는다(없으면 404). 승인·승인 취소·설정 변경은 데스크톱에서만 한다.
+- **어떻게**: 데스크톱 작업 창의 실행 동작과 같은 `start_managed_task`다(포트 블록·worktree 값·`worktree.env`, `concurrent: false`면 다른 worktree의 같은 동작을 먼저 멈춤, 같은 폴더에서 이미 실행 중이면 409). 시작·멈춤마다 그 창 기록에 한 줄(`phone.runAction.started`·`stopped`)을 남겨 휴대폰이 무엇을 돌렸는지 데스크톱에서도 보이게 한다. 멈춤은 그 worktree에서 실행 중인 그 이름을 멈추며, 승인이 그 뒤 취소됐어도 멈출 수는 있다(돌고 있는 것을 끄는 쪽은 막지 않는다).
+- **어디서 안 되나**: worktree가 없는 창, SSH·원격 워크스페이스(실행 동작이 그곳에서 돌지 않는다, MC-47)는 409 `phone.runAction.notHere`이고 `runActions`도 싣지 않는다.
+- **리비전**: 이름 목록은 창 요약의 `worktree.runActions`라서, 목록이나 실행 상태·주소가 바뀌면 그 창의 리비전이 오른다. 호스트는 설정 파일을 요약마다 읽지 않고 10초에 한 번까지 창 스레드 밖에서 읽어 두며, 읽은 이름이 바뀌면 휴대폰에 알린다(`repo_tasks::phone_startable`).
+- **권한 규칙을 고른 근거**: 휴대폰에는 원격 데스크톱(미러)의 "원격에서 전체 권한·명령 실행 허용" 같은 전환이 없다. 페어링된 휴대폰은 그 컴퓨터 주인의 기기로 다뤄지고, 이미 에이전트에 요청을 보내고(전체 권한 모드의 창 포함) 권한 요청을 허용하고 병합·버리기를 한다. MC-49의 "전체 권한 전환을 기다림"은 미러(다른 컴퓨터)의 대기열 고치기에만 있는 규칙이고, 휴대폰의 `queue/{id}/edit` 라우트에는 없다. 그래서 실행 동작도 새 전환을 만들지 않고, 대신 **데스크톱에서 승인한 `.mighty.yaml`의 이름만** 받는 것을 경계로 삼는다. 임의 명령은 이 라우트로 실행할 수 없고, 승인되지 않은 설정의 이름은 403이다.
+
+**개발 서버 열기(`privateUrl`).** 실행 동작의 주소는 보통 `http://localhost:41010/`이라 휴대폰이 열 수 없다. 호스트는 이 컴퓨터에 Tailscale 주소(100.64.0.0/10, `fd7a:115c:a1e0::/48`; `remote::RemoteApp::tailscale`)가 있고 그 주소의 같은 포트에 TCP로 닿을 때(서버가 `0.0.0.0`이나 그 주소에서 듣고 있을 때, 300 ms 안에)만 `privateUrl`(`http://100.x.y.z:41010/…`, 경로 유지)을 싣는다. 주소가 이 컴퓨터 자신(`localhost`·`127.0.0.1`·`0.0.0.0`·`[::1]`·`[::]`)을 가리키는 `http://`일 때만 바꾸고, 확인은 10초에 한 번까지 창 스레드 밖에서 한다. 라우터는 Tailscale 주소에 포트가 있는 `http://`가 아니면 버리고(`router::private_web_address`), 휴대폰도 같은 검사를 한 뒤에만 연다(`isPrivateWebAddress`). 휴대폰은 칩을 누르면 그 주소를 브라우저로 연다. 휴대폰이 같은 tailnet에 있어야 열린다(아니면 브라우저가 닿지 못한다). `privateUrl`이 없으면 예전처럼 `localhost` 주소를 복사한다. 이 앱은 개발 서버의 듣는 주소를 바꾸지 않고, 포트를 열거나 방화벽 규칙을 만들지 않으며, 공개 인터넷으로 내보내는 방법은 만들지 않는다.
+
+**릴레이 프록시(검토만, 구현 안 함).** 휴대폰 → 릴레이 → 호스트로 HTTP를 실어 개발 서버를 보여 주는 방법을 검토했다. 하지 않은 이유:
+
+- 보안: 개발 서버는 인증이 없고 디버그 엔드포인트·소스맵·환경 값을 내보내는 일이 흔하다. 릴레이를 통하면 주인의 휴대폰 말고도 페어링 키를 가진 누구든(도난된 휴대폰, 새어 나간 키) 집 안 개발 서버에 닿는다. 프록시는 쿠키·`Host`·CORS·웹소켓(HMR)을 다시 써야 하고, 그 과정에서 같은 출처 정책을 깨거나 SSRF(블록 밖 포트·다른 호스트) 통로가 되기 쉽다. 막으려면 포트 블록 검사, 응답 크기·시간 한도, 헤더 정리, 웹소켓 중계가 모두 필요하다.
+- 비용: 릴레이는 Cloudflare Workers의 프레임 하나 1 MiB(relay.md)로 요청·응답을 나르는 구조라 번들된 JS·이미지·HMR 스트림을 나르면 요청 수와 전송량이 크게 늘고(Workers 요청·Durable Object 시간·전송 요금), 휴대폰 메시지 지연도 늘어난다. 종단 간 암호화를 지키려면 브라우저가 아닌 앱 안 웹뷰에서 풀어야 해서 휴대폰 쪽 구현도 커진다.
+- 그래서 지금은 Tailscale처럼 이미 사람이 꾸린 사설망에서 서버가 스스로 듣고 있을 때만 그 주소를 알려 주는 데서 멈춘다. 프록시를 만든다면 포트 블록 안·`localhost`만, 실행 중인 실행 동작의 포트만, 휴대폰 하나당 동시 요청 한도, 응답 크기 한도, 데스크톱의 명시적 켜기 스위치가 최소 조건이다.
 
 ### Antigravity 권한 카드
 
