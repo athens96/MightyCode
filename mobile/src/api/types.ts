@@ -119,7 +119,12 @@ export type Capability =
    * The host sends a session detail's entries as only what changed since the window the phone names with `bodySince` (MC-53,
    * `lib/body-delta.ts`). An older host does not know the name and would refuse it, so it is sent only to a host that lists it.
    */
-  | 'bodyDelta';
+  | 'bodyDelta'
+  /**
+   * The host starts and stops a worktree's approved `.mighty.yaml` run actions (`POST /m1/sessions/{id}/run-actions`) and names
+   * them on the bar (`runActions`, a running one's `privateUrl`), MC-44.
+   */
+  | 'runActions';
 
 export const CAPABILITIES: readonly Capability[] = [
   'submit-mode',
@@ -148,6 +153,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'compare',
   'queueEdit',
   'bodyDelta',
+  'runActions',
 ] as const;
 
 export interface HostInfo {
@@ -300,11 +306,28 @@ export interface MobilePaneWorktree {
   portCount?: number;
   /** MC-25: the run actions running in the worktree, with the address each printed (the desktop's localhost). */
   actions?: MobileRunAction[];
+  /** MC-44 ("runActions"): the approved `.mighty.yaml`'s run actions the phone may start here. */
+  runActions?: string[];
 }
 
 export interface MobileRunAction {
   name: string;
   url?: string;
+  /**
+   * MC-44 ("runActions"): the same server at the computer's Tailscale address, sent only while it answers there; the phone opens
+   * it (it reaches it when it is on the same tailnet).
+   */
+  privateUrl?: string;
+}
+
+/** MC-44: what `POST /m1/sessions/{id}/run-actions` does with one of the worktree's run actions. */
+export type RunActionVerb = 'start' | 'stop';
+
+/** MC-44: a run action's answer: `done` and the line the desktop also wrote in the pane. */
+export interface RunActionResult {
+  protocol: number;
+  done: boolean;
+  message?: string;
 }
 
 /** What `POST /m1/sessions/{id}/worktree` does. The phone confirms `discard` itself. */

@@ -41,7 +41,7 @@ use crate::git::merge::{ChildMergeOutcome, ChildUndoOutcome};
 use crate::git::paths::{self, DelegationPaths};
 use crate::git::worktree::Maker;
 use crate::host::{DelegationAgentAvailability, DelegationChildPane, DelegationHost, DelegationPaneActivity, DelegationPaneState};
-use crate::model::{ChildState, DeliveryRoute};
+use crate::model::{ChildKind, ChildState, DeliveryRoute};
 use crate::providers::{self, DelegationChildChoice};
 use crate::reports::ChildRunEnd;
 use crate::request::DelegationReasonCode;
@@ -177,11 +177,12 @@ impl DelegationHost for HostLink {
 
 /// MC-29's extras to a human's child ([`DelegationApp::start_human_child_with`]): `base_commit`, the head or an earlier commit of the
 /// parent's branch the child starts from (None: the head); `prepare`, called with the child's id once its pane exists and before its
-/// first run starts.
+/// first run starts; `compare_group` (MC-45), the compare run it is a row of, so it counts against the compare runs' cap.
 #[derive(Clone, Default)]
 pub struct HumanChildExtras {
     pub base_commit: Option<String>,
     pub prepare: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    pub compare_group: Option<String>,
 }
 
 /// What the app keeps of its cards, its merge queue, its closes and its human children; one lock, never held across an await.
@@ -594,8 +595,23 @@ impl DelegationApp {
     /// C# `WorktreeChildChoices`: Claude, Codex and Antigravity, each with why it cannot run the text now.
     pub fn worktree_child_choices(&self, session: &RunSession, plan_first: bool) -> Vec<DelegationChildChoice> {
         let mode = session.settings.as_ref().map(|s| s.permission_mode.clone()).unwrap_or_default();
-        let open = sidebar::open_human_child_count(session.id(), &self.rows());
+        // MC-45: a compare run's children have their own cap and leave the menu's room alone.
+        let open = self.open_children(session.id(), ChildKind::Human);
         providers::human_child_choices(session.provider(), &mode, plan_first, open, |provider| self.window.agent_availability(provider))
+    }
+
+    /// MC-45: the agents a compare run's row may pick on `session`, by the menu's rules but not its cap (a compare run has its own,
+    /// [`crate::compare::max_rows`]), and the open children of the pane's compare runs that cap counts.
+    pub fn compare_child_choices(&self, session: &RunSession, plan_first: bool) -> (Vec<DelegationChildChoice>, usize) {
+        let mode = session.settings.as_ref().map(|s| s.permission_mode.clone()).unwrap_or_default();
+        let choices =
+            providers::human_child_choices(session.provider(), &mode, plan_first, 0, |provider| self.window.agent_availability(provider));
+        (choices, self.open_children(session.id(), ChildKind::Compare))
+    }
+
+    /// MC-45: the open children of `kind` the pane `parent_id` has (0 while delegation is not loaded).
+    pub fn open_children(&self, parent_id: &str, kind: ChildKind) -> usize {
+        self.coordinator().map(|coordinator| coordinator.open_children(parent_id, kind)).unwrap_or(0)
     }
 
     /// C# `WorktreeMenuOnly`: the busy pane shows the worktree button for its menu alone.
@@ -749,7 +765,9 @@ impl DelegationApp {
                 })
             }),
         };
-        let answer = coordinator.start_human_child_at(text, parent_id, starter, plan_first, agent, extras.base_commit.as_deref()).await;
+        let at =
+            crate::tools::delegate::HumanChildAt { base_commit: extras.base_commit.clone(), compare_group: extras.compare_group.clone() };
+        let answer = coordinator.start_human_child_at(text, parent_id, starter, plan_first, agent, at).await;
         // A refused or failed answer made no child: nothing waits for its pane.
         if !matches!(answer, HumanChildStart::Started(_)) {
             self.end_quiet_child(parent_id, token.as_deref());

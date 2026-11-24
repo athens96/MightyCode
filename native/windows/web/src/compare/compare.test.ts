@@ -44,6 +44,16 @@ describe('the compare picker', () => {
     expect(firstRows({ ...options, max: 1 })).toEqual([]);
   });
 
+  it('allows four rows when the host offers the compare runs’ full room (MC-45)', () => {
+    const four = { ...options, max: 4 };
+    let rows = firstRows(four);
+    for (let added = nextRow(four, rows); added; added = nextRow(four, rows)) rows = rows.concat([added]);
+    expect(rows).toHaveLength(4);
+    expect(rows.filter((r) => r.agent === 'codex')).toHaveLength(2);
+    expect(nextRow(four, rows), 'no fifth row').toBeNull();
+    expect(budgetCheck(four, rows).estimate).toBe(0.5 + 1.5 + 0.5 + 1.5);
+  });
+
   it('estimates each row from the ledger and warns when the budget would be passed', () => {
     expect(estimateFor(options, { agent: 'claude', model: 'opus' })).toBe(3);
     expect(estimateFor(options, { agent: 'claude', model: 'haiku' })).toBe(1.5);

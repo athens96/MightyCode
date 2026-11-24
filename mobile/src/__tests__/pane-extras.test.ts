@@ -22,7 +22,7 @@ import {
   newestMarked,
   verifyLine,
 } from '@/lib/pane-marks';
-import { worktreeActions, worktreePortBlock } from '@/lib/pane-worktree';
+import { isPrivateWebAddress, runActionRows, worktreeActions, worktreePortBlock } from '@/lib/pane-worktree';
 
 beforeAll(() => resetLanguage('ko'));
 afterAll(() => resetLanguage());
@@ -82,6 +82,47 @@ describe('MC-25: the worktree bar’s port block and run actions', () => {
       }),
     ).toEqual([{ name: 'dev', url: 'http://localhost:41010/' }, { name: 'e2e' }]);
     expect(worktreeActions(base)).toEqual([]);
+  });
+});
+
+describe('MC-44: starting and stopping run actions, and the dev server over Tailscale', () => {
+  const base = { branch: 'mighty/p1', base: 'main', port: 4321 };
+
+  it('is offered only by a host that lists runActions', () => {
+    expect(CAPABILITIES).toContain('runActions');
+    expect(hasCapability(parseCapabilities({ capabilities: ['pane', 'runActions'] }), 'runActions')).toBe(true);
+    expect(hasCapability(parseCapabilities({ capabilities: ['pane', 'queueEdit'] }), 'runActions')).toBe(false);
+  });
+
+  it('lists the running actions to stop, then the approved others to start', () => {
+    const worktree = {
+      ...base,
+      actions: [{ name: 'dev', url: 'http://localhost:41010/', privateUrl: 'http://100.101.102.103:41010/' }],
+      runActions: ['dev', 'storybook', 'storybook', '', 'bad\nname', 'x'.repeat(81)],
+    };
+    expect(runActionRows(worktree, true)).toEqual([
+      { name: 'dev', running: true, url: 'http://localhost:41010/', privateUrl: 'http://100.101.102.103:41010/' },
+      { name: 'storybook', running: false },
+    ]);
+    // An older host, or one without the capability: only what runs, as before.
+    expect(runActionRows(worktree, false).map((row) => row.name)).toEqual(['dev']);
+    expect(runActionRows({ ...base, runActions: ['dev'] }, true)).toEqual([{ name: 'dev', running: false }]);
+  });
+
+  it('opens only a Tailscale address, never a public or local one', () => {
+    expect(isPrivateWebAddress('http://100.64.0.9:3000/app?x=1')).toBe(true);
+    expect(isPrivateWebAddress('http://100.127.255.1:5173')).toBe(true);
+    expect(isPrivateWebAddress('http://[fd7a:115c:a1e0::1]:8080/')).toBe(true);
+    expect(isPrivateWebAddress('http://100.128.0.1:3000/')).toBe(false);
+    expect(isPrivateWebAddress('http://8.8.8.8:3000/')).toBe(false);
+    expect(isPrivateWebAddress('http://localhost:3000/')).toBe(false);
+    expect(isPrivateWebAddress('https://100.64.0.9:3000/')).toBe(false);
+    expect(isPrivateWebAddress('http://100.64.0.9/')).toBe(false);
+    expect(isPrivateWebAddress('http://user@100.64.0.9:3000/')).toBe(false);
+    expect(isPrivateWebAddress('http://100.64.0.999:3000/')).toBe(false);
+    expect(
+      worktreeActions({ ...base, actions: [{ name: 'dev', url: 'http://localhost:1/', privateUrl: 'http://203.0.113.7:1/' }] }),
+    ).toEqual([{ name: 'dev', url: 'http://localhost:1/' }]);
   });
 });
 

@@ -100,13 +100,60 @@ export function worktreePortBlock(worktree: MobilePaneWorktree): string | undefi
 
 /**
  * MC-25: the run actions running in the worktree, each with the address its output named — only an `http(s)` one, which is
- * the desktop's own (`localhost`), so the phone offers it to copy rather than to open.
+ * the desktop's own (`localhost`), so the phone offers it to copy rather than to open. MC-44: with the same server at the
+ * computer's Tailscale address (`privateUrl`) when the host sent one and it is one ([`isPrivateWebAddress`]); that one opens.
  */
 export function worktreeActions(worktree: MobilePaneWorktree): MobileRunAction[] {
   if (!Array.isArray(worktree.actions)) return [];
   return worktree.actions
     .filter((action) => typeof action?.name === 'string' && action.name.length > 0)
-    .map((action) =>
-      typeof action.url === 'string' && /^https?:\/\//i.test(action.url) ? { name: action.name, url: action.url } : { name: action.name },
-    );
+    .map((action) => {
+      const kept: MobileRunAction = { name: action.name };
+      if (typeof action.url === 'string' && /^https?:\/\//i.test(action.url)) kept.url = action.url;
+      if (typeof action.privateUrl === 'string' && isPrivateWebAddress(action.privateUrl)) kept.privateUrl = action.privateUrl;
+      return kept;
+    });
+}
+
+/**
+ * MC-44: an `http://` address at one of Tailscale's private addresses (100.64.0.0/10, `fd7a:115c:a1e0::/48`) with a port — the
+ * only kind of dev-server address the phone opens; anything else (a public address, another scheme, credentials) is not.
+ */
+export function isPrivateWebAddress(url: string): boolean {
+  const match = /^http:\/\/(\[[0-9a-fA-F:]+\]|\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})(?:[/?#].*)?$/.exec(url);
+  if (!match) return false;
+  const port = Number(match[2]);
+  if (!(port > 0 && port <= 65535)) return false;
+  const host = match[1]!;
+  if (host.startsWith('[')) return /^\[fd7a:115c:a1e0:/i.test(host);
+  const parts = host.split('.').map(Number);
+  if (parts.some((part) => part > 255)) return false;
+  return parts[0] === 100 && parts[1]! >= 64 && parts[1]! <= 127;
+}
+
+/** MC-44: one row of the bar's run actions: a running one (멈춤, its address) or one the phone may start (시작). */
+export interface RunActionRow {
+  name: string;
+  running: boolean;
+  url?: string;
+  privateUrl?: string;
+}
+
+/**
+ * MC-44: the bar's run action rows: the running ones first (as [`worktreeActions`] keeps them), then the approved `.mighty.yaml`'s
+ * others the host offers to start (`runActions`). Without the host's "runActions" only the running ones, shown as before.
+ */
+export function runActionRows(worktree: MobilePaneWorktree, canRun: boolean): RunActionRow[] {
+  const running: RunActionRow[] = worktreeActions(worktree).map((action) => ({ ...action, running: true }));
+  if (!canRun || !Array.isArray(worktree.runActions)) return running;
+  const names = new Set(running.map((row) => row.name));
+  const startable = worktree.runActions
+    .filter((name): name is string => typeof name === 'string' && name.length > 0 && name.length <= 80 && !/[\u0000-\u001f\u007f]/.test(name))
+    .filter((name) => {
+      if (names.has(name)) return false;
+      names.add(name);
+      return true;
+    })
+    .map((name) => ({ name, running: false }));
+  return [...running, ...startable];
 }

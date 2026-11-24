@@ -3,7 +3,8 @@
 //! delegated child worktree from the same base commit, compared, and one merged.
 //!
 //! - Start (`compareOptions`, `compareStart`): the composer's 비교 실행… opens the page's picker with the agents that can start a
-//!   child now (installed, signed in, a mode that writes, room under the human children's cap), their models, the recent commits of
+//!   child now (installed, signed in, a mode that writes), the room under the compare runs' own cap of four (MC-45: apart from the
+//!   human children's three, each child recorded with its group), their models, the recent commits of
 //!   the branch (HEAD first), the repository's run actions and `.mighty.yaml` tasks, and the budget reading. The start checks the rows
 //!   again, warns once when the daily budget would likely be passed, and starts one human child per row
 //!   ([`mighty_delegation::app::DelegationApp::start_human_child_with`]) from the chosen commit, each child's pane given its model and
@@ -226,14 +227,15 @@ async fn git_lines(site: &Site, folder: &str, arguments: &[&str]) -> Option<Vec<
     (result.exit_code == 0).then(|| result.stdout.lines().map(|l| l.trim_end_matches('\r').to_string()).filter(|l| !l.is_empty()).collect())
 }
 
-/// MC-52: an SSH workspace pane's children still open (they count against the human children's cap as a local pane's do).
+/// MC-52: an SSH workspace pane's children still open (they count against the compare runs' cap as a local pane's do; MC-45).
 fn open_members(snapshot: &AppSnapshot, pane: &RunSession) -> usize {
     let states = child_states(snapshot);
     rules::open_members(pane.compare_runs.as_deref().unwrap_or(&[]), &states, |id| snapshot.session(id).is_some())
 }
 
 /// The agents a row may pick, with the mode each child runs in: delegation's choices here; MC-52 an SSH workspace's
-/// ([`rules::ssh_choices`]); and the open children counted against the cap.
+/// ([`rules::ssh_choices`]); and the open compare children counted against the compare runs' cap (MC-45: four, apart from the
+/// human children's three).
 fn choices_for(
     site: &Site,
     snapshot: &AppSnapshot,
@@ -242,15 +244,12 @@ fn choices_for(
 ) -> (Vec<mighty_delegation::providers::DelegationChildChoice>, usize) {
     match site {
         Site::Local => match crate::delegation::app() {
-            Some(app) => {
-                (app.worktree_child_choices(pane, plan_first), mighty_delegation::sidebar::open_human_child_count(pane.id(), &app.rows()))
-            }
+            Some(app) => app.compare_child_choices(pane, plan_first),
             None => (vec![], 0),
         },
         Site::Ssh { .. } => {
-            let open = open_members(snapshot, pane);
             let mode = pane.settings.as_ref().map(|s| s.permission_mode.clone()).unwrap_or_default();
-            (rules::ssh_choices(pane.provider(), &mode, plan_first, open), open)
+            (rules::ssh_choices(pane.provider(), &mode, plan_first), open_members(snapshot, pane))
         }
     }
 }
@@ -294,9 +293,7 @@ async fn options(host: &Arc<Host>, pane_id: &str) -> Value {
     let most = rules::max_rows(open);
     let ready = rules::ready_agents(&choices, pane.provider());
     if most < 2 {
-        return refuse(
-            locale.get_with("compare.reason.room", &[("cap", &mighty_delegation::coordinator::MAXIMUM_OPEN_CHILDREN.to_string())]),
-        );
+        return refuse(locale.get_with("compare.reason.room", &[("cap", &mighty_core::model::COMPARE_MAXIMUM_ROWS.to_string())]));
     }
     if ready.is_empty() {
         return refuse(locale.get("compare.reason.agents"));
@@ -577,8 +574,11 @@ async fn start(host: &Arc<Host>, args: &Value) -> Value {
     for (index, row) in rows.iter().enumerate() {
         let Some(app) = app.as_ref() else { break };
         let placeholder = placeholders[index].clone();
-        let extras =
-            HumanChildExtras { base_commit: Some(base.clone()), prepare: Some(prepare_child(host, &pane_id, &group, row, port_count)) };
+        let extras = HumanChildExtras {
+            base_commit: Some(base.clone()),
+            prepare: Some(prepare_child(host, &pane_id, &group, row, port_count)),
+            compare_group: Some(group.clone()),
+        };
         let failed_call = child_failed(host, &pane_id, &group);
         let answer = app
             .start_human_child_with(&pane_id, &request, attachments.clone(), plan_first, failed_call, Some(&row.agent), false, extras)

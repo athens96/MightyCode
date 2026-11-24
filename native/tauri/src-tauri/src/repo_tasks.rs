@@ -216,6 +216,8 @@ pub struct RepoTasksState {
     trust: Mutex<HashMap<String, String>>,
     runs: Mutex<IndexMap<String, Arc<ManagedRunHandle>>>,
     setup_failures: Mutex<HashMap<String, TaskRunSnapshot>>,
+    /// MC-44: what the phone's worktree bars show of run actions, read off the window's thread.
+    phone: Mutex<PhoneReadings>,
 }
 
 fn state(host: &Host) -> Arc<RepoTasksState> {
@@ -1571,6 +1573,253 @@ async fn stop_managed_task(host: &Host, run_id: &str) -> Result<Option<TaskRunSn
     Ok(Some(handle.snapshot()))
 }
 
+// ── the phone's run actions (MC-44) ─────────────────────────────────────────────────────────────────────────────────────
+
+/// How long a reading of a worktree's run action names, or of a server's private address, is kept before it is read again.
+const PHONE_READ_EVERY: Duration = Duration::from_secs(10);
+/// How long the check of a server at this computer's Tailscale address waits for it to answer.
+const PRIVATE_CONNECT_WAIT: Duration = Duration::from_millis(300);
+
+/// MC-44: the phone bars' readings: per worktree folder its `.mighty.yaml`'s run action names (with the content hash approval is
+/// checked against), and per running run action its address at this computer's Tailscale address, when the server answers there.
+#[derive(Default)]
+struct PhoneReadings {
+    folders: HashMap<String, Reading<(String, Vec<String>)>>,
+    private: HashMap<String, Reading<String>>,
+}
+
+/// One reading: what was read (None: nothing there), when, and whether a reading is under way.
+struct Reading<T> {
+    value: Option<T>,
+    read_at: Option<std::time::Instant>,
+    reading: bool,
+}
+
+impl<T> Default for Reading<T> {
+    fn default() -> Self {
+        Reading { value: None, read_at: None, reading: false }
+    }
+}
+
+impl<T> Reading<T> {
+    /// Whether a new reading should start now (marking it under way).
+    fn due(&mut self) -> bool {
+        if self.reading || self.read_at.is_some_and(|at| at.elapsed() < PHONE_READ_EVERY) {
+            return false;
+        }
+        self.reading = true;
+        true
+    }
+}
+
+/// MC-44: the run actions the phone may start in the worktree `record` of `workspace`: the names of the `.mighty.yaml` its run folder
+/// reads (the workspace's `.mighty.local.yaml` as the fallback, as the tasks panel reads it) while that config is approved here. None
+/// in a remote or SSH workspace (run actions do not run there). Read off the window's thread every ten seconds at most; a reading
+/// that changes the names moves the phone's revision.
+pub fn phone_startable(host: &Arc<Host>, workspace: &Workspace, record: &mighty_core::model::PaneWorktree) -> Vec<String> {
+    if workspace.remote.is_some() || workspace.is_ssh() || workspace.path().is_empty() || host.closing() {
+        return vec![];
+    }
+    let key = crate::worktree_lifecycle::path_key(record.run_folder());
+    let st = state(host);
+    let (value, due) = {
+        let mut readings = lock(&st.phone);
+        let entry = readings.folders.entry(key.clone()).or_default();
+        (entry.value.clone(), entry.due())
+    };
+    if due {
+        let (host, st, folder, workspace_folder) =
+            (host.clone(), st.clone(), PathBuf::from(record.run_folder()), PathBuf::from(workspace.path()));
+        tauri::async_runtime::spawn_blocking(move || {
+            let read = match mighty_yaml::load_from_folder_with_local_fallback(&folder, &workspace_folder) {
+                Ok(Some(loaded)) => Some((loaded.content_hash.clone(), loaded.config.run.keys().cloned().collect::<Vec<_>>())),
+                _ => None,
+            };
+            let changed = {
+                let mut readings = lock(&st.phone);
+                let entry = readings.folders.entry(key).or_default();
+                let changed = entry.value != read;
+                *entry = Reading { value: read, read_at: Some(std::time::Instant::now()), reading: false };
+                changed
+            };
+            if changed && !host.closing() {
+                crate::phone::changed(&host);
+            }
+        });
+    }
+    match value {
+        Some((hash, names)) if is_config_approved(host, workspace.path(), &hash) => names,
+        _ => vec![],
+    }
+}
+
+/// MC-44: the run actions running in `folder_key` as the phone's bar shows them: each name, the address its output named, and that
+/// server at this computer's Tailscale address when it answers there ([`private_url`]; checked off the window's thread every ten
+/// seconds at most, never in a smoke).
+pub fn phone_running(host: &Arc<Host>, folder_key: &str) -> Vec<mighty_remote::phone::desk::MobileRunAction> {
+    let st = state(host);
+    // (run id, name, address, its port) of each run action running here, and the ids of every run still running.
+    type Running = Vec<(String, String, Option<String>, Option<u16>)>;
+    let (running, live): (Running, HashSet<String>) = {
+        let runs = lock(&st.runs);
+        let mut live = HashSet::new();
+        let running = runs
+            .values()
+            .filter_map(|handle| {
+                let inner = lock(&handle.inner);
+                if inner.status == "running" {
+                    live.insert(handle.run_id.clone());
+                }
+                let name = inner.action.clone()?;
+                (inner.status == "running" && inner.folder == folder_key)
+                    .then(|| (handle.run_id.clone(), name, inner.url.clone(), inner.url_port))
+            })
+            .collect();
+        (running, live)
+    };
+    let mut readings = lock(&st.phone);
+    let mut actions = vec![];
+    for (run_id, name, url, port) in running {
+        let mut private_url = None;
+        if let (Some(url), Some(port)) = (url.clone(), port)
+            && host.smoke.is_none()
+            && local_web_address(&url)
+        {
+            let entry = readings.private.entry(run_id.clone()).or_default();
+            private_url = entry.value.clone();
+            if entry.due() {
+                let (host, st) = (host.clone(), st.clone());
+                tauri::async_runtime::spawn_blocking(move || {
+                    let addresses = crate::remote::app_if_made().and_then(|app| app.tailscale().ok()).unwrap_or_default();
+                    let found = addresses.iter().find_map(|address| {
+                        let ip: std::net::IpAddr = address.parse().ok()?;
+                        let at = std::net::SocketAddr::new(ip, port);
+                        std::net::TcpStream::connect_timeout(&at, PRIVATE_CONNECT_WAIT).ok()?;
+                        private_url_at(&url, address)
+                    });
+                    let changed = {
+                        let mut readings = lock(&st.phone);
+                        let entry = readings.private.entry(run_id).or_default();
+                        let changed = entry.value != found;
+                        *entry = Reading { value: found, read_at: Some(std::time::Instant::now()), reading: false };
+                        changed
+                    };
+                    if changed && !host.closing() {
+                        crate::phone::changed(&host);
+                    }
+                });
+            }
+        }
+        actions.push(mighty_remote::phone::desk::MobileRunAction { name, url, private_url });
+    }
+    // The readings of runs that ended go with them.
+    readings.private.retain(|run_id, _| live.contains(run_id));
+    actions
+}
+
+/// The host of an `http://` address, when it names this computer itself (`localhost`, `127.0.0.1`, `0.0.0.0`, `[::1]`, `[::]`): the
+/// only addresses a server can also be reached at over Tailscale. The authority and the rest of the address after it.
+fn local_authority(url: &str) -> Option<(&str, &str)> {
+    let rest = url.strip_prefix("http://")?;
+    let split = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(split);
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split_once(']').map(|(host, _)| host)?,
+        None => authority.rsplit_once(':').map_or(authority, |(host, _)| host),
+    };
+    matches!(host.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "0.0.0.0" | "::1" | "::").then_some((authority, tail))
+}
+
+/// Whether `url` is an `http://` address of this computer itself ([`local_authority`]).
+fn local_web_address(url: &str) -> bool {
+    local_authority(url).is_some()
+}
+
+/// `url` (an `http://` address of this computer) at `address`, one of its Tailscale addresses, with the same port and path; None for
+/// any other address or one without a port.
+fn private_url_at(url: &str, address: &str) -> Option<String> {
+    let (authority, tail) = local_authority(url)?;
+    let port = authority.rsplit_once(':').map(|(_, port)| port).filter(|p| p.parse::<u16>().is_ok_and(|p| p > 0))?;
+    if !mighty_remote::tailscale::contains(address) {
+        return None;
+    }
+    let host = if address.contains(':') { format!("[{address}]") } else { address.to_string() };
+    Some(format!("http://{host}:{port}{tail}"))
+}
+
+/// MC-44: the phone's `POST /m1/sessions/{id}/run-actions {name, action}` on a worktree pane: `start` runs the run action `name` of
+/// the `.mighty.yaml` its folder reads, as the tasks panel would (its variables, port block, `concurrent: false` stopping the others),
+/// and only while that config is approved here (403 before any name is looked at; 404 for a name it does not have; 409 while it runs
+/// already); `stop` stops it in this worktree (409 when it does not run). Nothing in a remote or SSH workspace. Each leaves a line in
+/// the pane, so what the phone ran is on the desktop too. `{ done, message }`; Err: the status and why.
+pub async fn phone_run_action(host: &Arc<Host>, pane_id: &str, name: &str, action: &str) -> Result<Value, (u16, String)> {
+    let l = host.locale;
+    let (session, workspace) = {
+        let view = host.view();
+        let Some(session) = view.snapshot.session(pane_id).cloned() else { return Err((404, l.get("remote.error.paneNotFound"))) };
+        let workspace = view.snapshot.workspace(session.workspace_id()).cloned();
+        (session, workspace)
+    };
+    if session.pane_worktree.is_none() {
+        return Err((409, l.get("phone.worktree.none")));
+    }
+    let Some(workspace) = workspace.filter(|w| w.remote.is_none() && !w.is_ssh() && !w.path().is_empty()) else {
+        return Err((409, l.get("phone.runAction.notHere")));
+    };
+    let Some(resolved) = resolve_target(host, Some(workspace.id()), Some(pane_id)) else {
+        return Err((409, l.get("phone.runAction.notHere")));
+    };
+    let words = [("name", name)];
+    match action {
+        "stop" => {
+            let folder = crate::worktree_lifecycle::path_key(&resolved.target_folder.to_string_lossy());
+            let ids: Vec<String> = {
+                let st = state(host);
+                let runs = lock(&st.runs);
+                runs.values()
+                    .filter(|handle| {
+                        let inner = lock(&handle.inner);
+                        inner.status == "running" && inner.folder == folder && inner.action.as_deref() == Some(name)
+                    })
+                    .map(|handle| handle.run_id.clone())
+                    .collect()
+            };
+            if ids.is_empty() {
+                return Err((409, l.get_with("phone.runAction.notRunning", &words)));
+            }
+            for id in &ids {
+                stop_managed_task(host, id).await.map_err(|why| (409, why))?;
+            }
+            crate::phone::changed(host);
+            let message = l.get_with("phone.runAction.stopped", &words);
+            crate::pane_worktree::append_system_note(host, pane_id, message.clone());
+            Ok(json!({ "done": true, "message": message }))
+        }
+        "start" => {
+            let (target, workspace_folder) = (resolved.target_folder.clone(), resolved.workspace_folder.clone());
+            let (config, tasks) = tauri::async_runtime::spawn_blocking(move || scan_folder_tasks(&target, &workspace_folder))
+                .await
+                .map_err(|error| (409, error.to_string()))?;
+            let loaded = config.ok().flatten();
+            let Some(approved) = loaded.as_ref().filter(|cfg| is_config_approved(host, workspace.path(), &cfg.content_hash)) else {
+                return Err((403, l.get("phone.runAction.notApproved")));
+            };
+            let Some(task) = tasks.into_iter().find(|task| task.source == "run" && task.name == name) else {
+                return Err((404, l.get_with("phone.runAction.unknown", &words)));
+            };
+            let place = run_place(host, &resolved, Some(approved));
+            make_room_for_action(host, name, task.concurrent.unwrap_or(true), &place)
+                .await
+                .map_err(|_| (409, l.get_with("phone.runAction.running", &words)))?;
+            start_managed_task(host, &resolved, task, Some(approved), place).await.map_err(|why| (409, why))?;
+            let message = l.get_with("phone.runAction.started", &words);
+            crate::pane_worktree::append_system_note(host, pane_id, message.clone());
+            Ok(json!({ "done": true, "message": message }))
+        }
+        _ => Err((400, l.get("remote.error.badBody"))),
+    }
+}
+
 // ── IPC registration ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 pub fn register(methods: &mut Registry) {
@@ -1754,6 +2003,35 @@ mod tests {
         assert_eq!(by_id["justfile:migrate"].description.as_deref(), Some("Run database migrations"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// MC-44: a dev server's address is offered to the phone at this computer's Tailscale address only when the server named this
+    /// computer itself, over http with a port; any other address (a public one, another host, https, no port) is never rewritten.
+    #[test]
+    fn a_local_dev_address_moves_only_to_a_tailscale_address() {
+        assert_eq!(private_url_at("http://localhost:41010/", "100.101.102.103").as_deref(), Some("http://100.101.102.103:41010/"));
+        assert_eq!(
+            private_url_at("http://127.0.0.1:5173/app?x=1#top", "100.64.0.9").as_deref(),
+            Some("http://100.64.0.9:5173/app?x=1#top")
+        );
+        assert_eq!(private_url_at("http://0.0.0.0:3000", "100.64.0.9").as_deref(), Some("http://100.64.0.9:3000"));
+        assert_eq!(
+            private_url_at("http://[::1]:8080/", "fd7a:115c:a1e0::1").as_deref(),
+            Some("http://[fd7a:115c:a1e0::1]:8080/"),
+            "an IPv6 address in brackets"
+        );
+        assert_eq!(private_url_at("http://localhost:41010/", "192.168.1.5"), None, "not a Tailscale address");
+        assert_eq!(private_url_at("http://localhost:41010/", "8.8.8.8"), None, "never a public one");
+        assert_eq!(private_url_at("http://example.com:80/", "100.64.0.9"), None, "another host");
+        assert_eq!(private_url_at("https://localhost:41010/", "100.64.0.9"), None, "https");
+        assert_eq!(private_url_at("http://localhost/", "100.64.0.9"), None, "no port");
+        assert!(local_web_address("http://LOCALHOST:1/") && !local_web_address("http://localhost.evil.com:1/"));
+        // What the phone router lets through is the same: a Tailscale host with a port, nothing else.
+        assert!(mighty_remote::phone::router::private_web_address("http://100.64.0.9:3000/app"));
+        assert!(mighty_remote::phone::router::private_web_address("http://[fd7a:115c:a1e0::1]:8080/"));
+        assert!(!mighty_remote::phone::router::private_web_address("http://8.8.8.8:3000/"));
+        assert!(!mighty_remote::phone::router::private_web_address("http://user@100.64.0.9:3000/"));
+        assert!(!mighty_remote::phone::router::private_web_address("http://100.64.0.9/"));
     }
 
     #[test]

@@ -419,6 +419,7 @@ fn child(value: &Value) -> Option<ChildRecord> {
         started_by_human: f.optional_boolean("startedByHuman")?,
         provider: f.optional_string("provider")?,
         report_run_id: f.optional_string("reportRunId")?,
+        compare_group: f.optional_string("compareGroup")?,
     })
 }
 

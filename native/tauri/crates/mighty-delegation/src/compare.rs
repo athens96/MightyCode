@@ -10,7 +10,6 @@ use mighty_core::model::{COMPARE_MAXIMUM_ROWS, CompareChild, CompareRun};
 use mighty_core::shell::{ChildState, PaneCompare};
 use mighty_core::usage_ledger::UsageRecord;
 
-use crate::coordinator::MAXIMUM_OPEN_CHILDREN;
 use crate::git::worktree::ChildWorktreeBase;
 use crate::git::{GitRunner, is_object_name, line, run};
 use crate::host::DelegationAgentAvailability;
@@ -31,16 +30,18 @@ pub struct CompareRow {
 pub enum CompareRowsError {
     /// Fewer than two rows: nothing to compare.
     TooFew,
-    /// More rows than [`max_rows`] allows now (the human children's cap, or four).
+    /// More rows than [`max_rows`] allows now (the room left under the compare runs' cap of four).
     TooMany(usize),
     /// An agent that cannot start a child now (not installed, signed out, no mode, or unknown).
     Unavailable(String),
 }
 
-/// How many children a compare run may start now: four at most, and no more than the room left under the human children's cap
-/// of the parent (`open_human_children` of them open already).
-pub fn max_rows(open_human_children: usize) -> usize {
-    COMPARE_MAXIMUM_ROWS.min(MAXIMUM_OPEN_CHILDREN.saturating_sub(open_human_children))
+/// How many children a compare run may start now: the room left under the compare runs' cap of four
+/// ([`crate::model::ChildKind::Compare`]), the parent's compare children still open (`open_compare_children`, of every group of its
+/// own) counted. MC-45: counted apart from the three children the human opens from the composer and the three its `delegate` makes,
+/// so neither kind takes a compare run's room nor the other way round.
+pub fn max_rows(open_compare_children: usize) -> usize {
+    COMPARE_MAXIMUM_ROWS.saturating_sub(open_compare_children)
 }
 
 /// The agents a row may pick: those that can start a child now, the parent's own agent first.
@@ -55,12 +56,12 @@ pub fn checked_rows(
     rows: &[CompareRow],
     choices: &[DelegationChildChoice],
     parent: &str,
-    open_human_children: usize,
+    open_compare_children: usize,
 ) -> Result<Vec<CompareRow>, CompareRowsError> {
     if rows.len() < 2 {
         return Err(CompareRowsError::TooFew);
     }
-    let most = max_rows(open_human_children);
+    let most = max_rows(open_compare_children);
     if rows.len() > most {
         return Err(CompareRowsError::TooMany(most));
     }
@@ -203,11 +204,12 @@ pub fn test_due(run: &CompareRun, child: &CompareChild, state: Option<ChildState
 // ── an SSH workspace's compare run (MC-52) ───────────────────────────────────────────────────────────────────────────────
 
 /// MC-52: the agents a row may pick in an SSH workspace, with the mode each child runs in: the human children's rules
-/// ([`crate::providers::human_child_choices`]: a mode in which the child can change files, the cap) for the agents whose CLI runs
-/// on an SSH machine (mighty-run `ssh::supported_provider`). Their CLI is the machine's, so this computer's installs and sign-ins
-/// are not asked: a CLI missing over there fails its child's first run, as any SSH pane's.
-pub fn ssh_choices(parent: &str, parent_mode: &str, plan_first: bool, open_children: usize) -> Vec<DelegationChildChoice> {
-    crate::providers::human_child_choices(parent, parent_mode, plan_first, open_children, |_| DelegationAgentAvailability::Ready)
+/// ([`crate::providers::human_child_choices`]: a mode in which the child can change files) for the agents whose CLI runs on an SSH
+/// machine (mighty-run `ssh::supported_provider`). Their CLI is the machine's, so this computer's installs and sign-ins are not asked:
+/// a CLI missing over there fails its child's first run, as any SSH pane's. MC-45: not the human children's cap of three; the room is
+/// the compare runs' cap of four ([`max_rows`] of [`open_members`]), as a local pane's.
+pub fn ssh_choices(parent: &str, parent_mode: &str, plan_first: bool) -> Vec<DelegationChildChoice> {
+    crate::providers::human_child_choices(parent, parent_mode, plan_first, 0, |_| DelegationAgentAvailability::Ready)
         .into_iter()
         .filter(|choice| mighty_run::ssh::supported_provider(&choice.agent))
         .collect()
@@ -267,8 +269,8 @@ pub fn member_state(child: &CompareChild, seen: Option<MemberSeen>) -> Option<Ch
     })
 }
 
-/// MC-52: an SSH workspace's open children of the pane, counted as a local pane's human children are (an open state, its pane still
-/// there: `alive`), so the room left under the cap is the same.
+/// MC-52: an SSH workspace's open children of the pane, counted as a local pane's compare children are (an open state, its pane still
+/// there: `alive`), so the room left under the compare runs' cap (MC-45: four, [`max_rows`]) is the same.
 pub fn open_members(runs: &[CompareRun], states: &HashMap<String, ChildState>, alive: impl Fn(&str) -> bool) -> usize {
     runs.iter()
         .flat_map(|run| &run.children)
@@ -343,15 +345,19 @@ mod tests {
         assert_eq!(checked_rows(&[row("claude", None)], &choices, "claude", 0), Err(CompareRowsError::TooFew));
     }
 
+    /// MC-45: four rows, counted apart from the human children's three.
     #[test]
     fn the_rows_stay_within_four_and_the_room_left() {
-        assert_eq!(max_rows(0), COMPARE_MAXIMUM_ROWS.min(MAXIMUM_OPEN_CHILDREN));
-        assert_eq!(max_rows(MAXIMUM_OPEN_CHILDREN - 1), 1);
-        assert_eq!(max_rows(MAXIMUM_OPEN_CHILDREN + 2), 0);
+        assert_eq!(COMPARE_MAXIMUM_ROWS, 4);
+        assert_eq!(max_rows(0), 4, "four, not the human children's three");
+        assert_eq!(max_rows(3), 1);
+        assert_eq!(max_rows(6), 0);
         let choices = [choice("claude", None)];
         let rows = vec![row("claude", None); 5];
-        assert_eq!(checked_rows(&rows, &choices, "claude", 0), Err(CompareRowsError::TooMany(max_rows(0))));
-        assert_eq!(checked_rows(&rows[..2], &choices, "claude", MAXIMUM_OPEN_CHILDREN - 1), Err(CompareRowsError::TooMany(1)));
+        assert_eq!(checked_rows(&rows[..4], &choices, "claude", 0).map(|r| r.len()), Ok(4), "four rows start");
+        assert_eq!(checked_rows(&rows, &choices, "claude", 0), Err(CompareRowsError::TooMany(4)));
+        assert_eq!(checked_rows(&rows[..2], &choices, "claude", 3), Err(CompareRowsError::TooMany(1)));
+        assert_eq!(checked_rows(&rows[..2], &choices, "claude", 2).map(|r| r.len()), Ok(2), "two still open leave room for two");
     }
 
     #[test]
@@ -462,9 +468,18 @@ mod tests {
         assert_eq!(open_members(std::slice::from_ref(&run), &states, |id| id == "a"), 1, "a gone pane leaves room");
         assert_eq!(rest_to_discard(&run, "a", &states), ["b"]);
 
-        let choices = ssh_choices("claude", "acceptEdits", false, 0);
+        let choices = ssh_choices("claude", "acceptEdits", false);
         assert!(choices.iter().all(|c| mighty_run::ssh::supported_provider(&c.agent)), "only agents whose CLI runs over ssh");
         assert!(choices.iter().any(|c| c.agent == "codex" && c.blocked.is_none()), "this computer's installs are not asked");
-        assert!(ssh_choices("claude", "acceptEdits", false, MAXIMUM_OPEN_CHILDREN).iter().all(|c| c.blocked.is_some()), "the same cap");
+        // MC-45: the same cap of four as a local pane's: three open members leave room for one row, so no run of two.
+        let three = CompareRun {
+            id: "g3".into(),
+            children: ["x", "y", "z"].iter().map(|id| CompareChild { id: (*id).into(), ..started.clone() }).collect(),
+            ..CompareRun::default()
+        };
+        let running: HashMap<String, ChildState> = ["x", "y", "z"].iter().map(|id| (id.to_string(), ChildState::Running)).collect();
+        let open = open_members(std::slice::from_ref(&three), &running, |_| true);
+        assert_eq!((open, max_rows(open)), (3, 1));
+        assert_eq!(max_rows(open_members(std::slice::from_ref(&three), &running, |id| id == "x")), 3, "closed panes leave room");
     }
 }

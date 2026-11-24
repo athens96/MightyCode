@@ -360,6 +360,8 @@ export default function SessionScreen() {
   const canSavedPrompts = hasCapability(capabilities, 'savedPrompts');
   const canSubmitMode = hasCapability(capabilities, 'submit-mode');
   const canMergeChecks = hasCapability(capabilities, 'mergeChecks');
+  // MC-44: the worktree bar's 시작·멈춤 and the Tailscale address of a running dev server.
+  const canRunActions = hasCapability(capabilities, 'runActions');
   const canCompare = hasCapability(capabilities, 'compare');
   // MC-53: the host sends only the entries changed since the window held (an older host would refuse `bodySince`).
   const canBodyDelta = hasCapability(capabilities, 'bodyDelta');
@@ -1607,6 +1609,7 @@ export default function SessionScreen() {
           client={client}
           running={running}
           canCheck={canMergeChecks}
+          canRunActions={canRunActions}
           onDiscarded={worktreeDiscarded}
         />
       ) : null}

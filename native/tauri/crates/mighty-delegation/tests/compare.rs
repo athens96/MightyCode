@@ -14,6 +14,7 @@ use mighty_delegation::app::{DelegationWindow, HumanChildExtras};
 use mighty_delegation::compare::{self, CompareStat};
 use mighty_delegation::git::worktree::{ChildWorktreeCheck, ChildWorktreeOutcome};
 use mighty_delegation::host::DelegationAgentAvailability;
+use mighty_delegation::model::ChildKind;
 use mighty_delegation::tools::delegate::HumanChildStart;
 use support::launch::{DelegationLaunch, PARENT, awaited};
 use support::{lane, place::DelegationPlace};
@@ -82,7 +83,11 @@ async fn compare_run() {
     let prepared: Arc<Mutex<Vec<String>>> = Arc::default();
     let extras = || {
         let prepared = prepared.clone();
-        HumanChildExtras { base_commit: Some(first.clone()), prepare: Some(Arc::new(move |id: String| prepared.lock().unwrap().push(id))) }
+        HumanChildExtras {
+            base_commit: Some(first.clone()),
+            prepare: Some(Arc::new(move |id: String| prepared.lock().unwrap().push(id))),
+            compare_group: Some("group-1".into()),
+        }
     };
     let none: Arc<dyn Fn(String) -> mighty_platform::BoxFuture<'static, ()> + Send + Sync> = Arc::new(|_| Box::pin(async {}));
     // "2× Claude" and an Antigravity row that cannot start.
@@ -110,7 +115,10 @@ async fn compare_run() {
         let record = file.children.iter().find(|child| &child.id == id).expect("its record");
         assert_eq!(record.base_commit, first, "every child starts from the chosen commit");
         assert_eq!(record.started_by_human, Some(true));
+        assert_eq!(record.compare_group.as_deref(), Some("group-1"), "MC-45: it counts against the compare runs' cap");
     }
+    assert_eq!(s.app.open_children(PARENT, ChildKind::Compare), 2);
+    assert_eq!(s.app.open_children(PARENT, ChildKind::Human), 0, "the human children's room is left alone");
     awaited("both panes prepared", || (prepared.lock().unwrap().len() == 2).then_some(())).await;
     let mut heard = prepared.lock().unwrap().clone();
     heard.sort();
@@ -128,7 +136,7 @@ async fn compare_run() {
             none,
             Some("claude"),
             false,
-            HumanChildExtras { base_commit: Some("0123456789abcdef0123456789abcdef01234567".into()), prepare: None },
+            HumanChildExtras { base_commit: Some("0123456789abcdef0123456789abcdef01234567".into()), ..HumanChildExtras::default() },
         )
         .await;
     assert_eq!(refused, HumanChildStart::Failed(Locale::new("en").get("compare.error.base")));

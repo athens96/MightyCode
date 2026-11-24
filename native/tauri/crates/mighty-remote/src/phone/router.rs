@@ -1775,6 +1775,21 @@ impl Inner {
             self.changed();
             return Ok(ok());
         }
+        // MC-44 (`runActions`): start or stop one of the worktree's run actions, `{name, action: "start" | "stop"}` and nothing else. The
+        // desktop starts only a name of its approved `.mighty.yaml` (403 while it is not approved, 404 for a name it does not have, 409
+        // when it cannot now) and answers `{ protocol, done, message? }`.
+        if method == "POST" && route.len() == 4 && route[3] == "run-actions" {
+            let value = body_object(body, MAXIMUM_BODY)?;
+            let bad = || request(400, l.get("remote.error.badBody"));
+            if value.len() != 2 {
+                return Err(bad());
+            }
+            let name = value.get("name").and_then(Value::as_str).filter(|name| run_action_name(name)).ok_or_else(bad)?;
+            let action = value.get("action").and_then(Value::as_str).filter(|a| matches!(*a, "start" | "stop")).ok_or_else(bad)?;
+            let answer = self.act(&id, "run-action", json!({"name": name, "action": action})).await?;
+            self.changed();
+            return Ok(value_reply(200, &answer_value(&answer)));
+        }
         Err(not_found())
     }
 
@@ -1904,11 +1919,48 @@ fn write_worktree(out: &mut JsonOut, bar: &crate::phone::desk::MobilePaneWorktre
             out.begin_object();
             out.prop_str("name", Some(&action.name.chars().take(80).collect::<String>()));
             out.prop_str("url", action.url.as_deref().filter(|u| u.starts_with("http://") || u.starts_with("https://")));
+            // MC-44: the same server at this computer's private (Tailscale) address, never any other.
+            out.prop_str("privateUrl", action.private_url.as_deref().filter(|u| private_web_address(u)));
             out.end_object();
         }
         out.end_array();
     }
+    // MC-44 (`runActions`): the approved `.mighty.yaml` run actions the phone may start here (at most 20 names of 80 characters).
+    if !bar.run_actions.is_empty() {
+        out.name("runActions");
+        out.begin_array();
+        for name in bar.run_actions.iter().filter(|name| run_action_name(name)).take(20) {
+            out.str(name);
+        }
+        out.end_array();
+    }
     out.end_object();
+}
+
+/// MC-44: a run action's name as the phone may send it back: 1 to 80 characters, no control character.
+pub fn run_action_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().count() <= 80 && !name.chars().any(char::is_control)
+}
+
+/// MC-44: an `http://` address whose host is one of Tailscale's private addresses (100.64.0.0/10 or `fd7a:115c:a1e0::/48`), with a
+/// port — what a run action's `privateUrl` must be, so the phone is never handed a public address.
+pub fn private_web_address(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else { return false };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
+        return false;
+    }
+    let (host, port) = match authority.strip_prefix('[') {
+        Some(v6) => match v6.split_once("]:") {
+            Some((host, port)) => (host, port),
+            None => return false,
+        },
+        None => match authority.rsplit_once(':') {
+            Some((host, port)) => (host, port),
+            None => return false,
+        },
+    };
+    port.parse::<u16>().is_ok_and(|p| p > 0) && crate::tailscale::contains(host)
 }
 
 /// A desk's answer written as a reply object: `protocol` first, then its own members (an answer that is no object is `ok: true`).
