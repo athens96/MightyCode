@@ -18,6 +18,7 @@ pub mod activator;
 pub mod agent_io;
 pub mod clipboard;
 pub mod console;
+pub mod control_access;
 pub mod disk;
 pub mod environment;
 mod error;

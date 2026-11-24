@@ -113,13 +113,16 @@ pub fn token_or_new(data_dir: &Path) -> std::io::Result<String> {
     Ok(token)
 }
 
-/// Where the app listens: `unix` (a socket's path) or `pipe` (a named pipe's name), with the app's process and version.
+/// Where the app listens: `unix` (a socket's path) or `pipe` (a named pipe's name), with the app's process and version. MC-43:
+/// `elevated` when the app runs as an administrator (Windows), so a CLI that does not is told why it is refused (the pipe itself
+/// refuses it; this only picks the words). An older app's file has none: false.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Endpoint {
     pub transport: String,
     pub address: String,
     pub pid: u32,
     pub version: String,
+    pub elevated: bool,
 }
 
 pub fn write_endpoint(data_dir: &Path, endpoint: &Endpoint) -> std::io::Result<()> {
@@ -129,6 +132,7 @@ pub fn write_endpoint(data_dir: &Path, endpoint: &Endpoint) -> std::io::Result<(
         "address": endpoint.address,
         "pid": endpoint.pid,
         "app": endpoint.version,
+        "elevated": endpoint.elevated,
     });
     write_private(&folder(data_dir).join(ENDPOINT_FILE), format!("{text}\n").as_bytes())
 }
@@ -140,6 +144,7 @@ pub fn read_endpoint(data_dir: &Path) -> Option<Endpoint> {
         address: value.get("address")?.as_str()?.to_string(),
         pid: value.get("pid").and_then(Value::as_u64).unwrap_or(0) as u32,
         version: value.get("app").and_then(Value::as_str).unwrap_or("").to_string(),
+        elevated: value.get("elevated").and_then(Value::as_bool).unwrap_or(false),
     })
 }
 
@@ -165,8 +170,19 @@ mod tests {
         assert_ne!(fresh, token);
         write_token(&data, &fresh).unwrap();
         assert_eq!(read_token(&data).as_deref(), Some(fresh.as_str()), "a rotation replaces it");
-        let endpoint = Endpoint { transport: "unix".into(), address: "/tmp/x.sock".into(), pid: 42, version: "0.6.0".into() };
+        let endpoint =
+            Endpoint { transport: "unix".into(), address: "/tmp/x.sock".into(), pid: 42, version: "0.6.0".into(), elevated: false };
         write_endpoint(&data, &endpoint).unwrap();
+        assert_eq!(read_endpoint(&data), Some(endpoint.clone()));
+        // MC-43: an elevated app says so; an older app's file without the field reads as not elevated.
+        let elevated = Endpoint { elevated: true, ..endpoint.clone() };
+        write_endpoint(&data, &elevated).unwrap();
+        assert_eq!(read_endpoint(&data), Some(elevated));
+        write_private(
+            &folder(&data).join(ENDPOINT_FILE),
+            br#"{"version":1,"transport":"unix","address":"/tmp/x.sock","pid":42,"app":"0.6.0"}"#,
+        )
+        .unwrap();
         assert_eq!(read_endpoint(&data), Some(endpoint));
         #[cfg(unix)]
         {

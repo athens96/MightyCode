@@ -1,0 +1,23 @@
+[package]
+name = "mighty-cli"
+version = "0.1.0"
+description = "MC-43: mighty.exe, the Windows `mighty` command: a console program that runs MightyCode.exe --cli with its own console, arguments, pipes and exit code."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+# The command's file is mighty.exe; scripts/build-tauri-windows.ps1 builds it beside the app (bin\mighty.exe). std only, so it stays
+# small and starts at once.
+[[bin]]
+name = "mighty"
+path = "src/main.rs"
+doc = false
+
+# Win32_System_Console: SetConsoleCtrlHandler (Ctrl+C reaches the app, which ends; this program waits for it).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
+
+# The control words must stay those the app's CLI reads (mighty-core's `control::cli::SUBCOMMANDS`).
+[dev-dependencies]
+mighty-core.workspace = true

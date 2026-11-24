@@ -156,6 +156,35 @@ pub fn automation(host: &Arc<Host>, ui: &mut Ui) -> El {
     .enabled(listening);
     let state = locale.get(if listening { "automation.api.listening" } else { "automation.api.off" });
     rows.add(ui.settings_labeled(ui.settings_text(state, TextStyle::size(12.0)), rotate, false));
+    // MC-43: Windows' `mighty` command (bin\mighty.exe beside the app): whether a new terminal finds it, and a button that puts its
+    // folder on the user's PATH. The Mac installs its command from the Workspace menu.
+    #[cfg(windows)]
+    {
+        let (said, can_add) = crate::shell_command::windows_words(&locale, &crate::shell_command::windows_command());
+        let to = host.clone();
+        let add = small(
+            ui,
+            locale.get("shellCommand.windows.addPath"),
+            Box::new(move || {
+                let host = to.clone();
+                crate::native::act(&to, async move {
+                    let worker = host.clone();
+                    let said = tauri::async_runtime::spawn_blocking(move || crate::shell_command::add_to_windows_path(&worker))
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    *API_MESSAGE.lock().unwrap_or_else(|p| p.into_inner()) = Some(said);
+                    redraw(&host);
+                    Ok(())
+                });
+            }),
+        )
+        .aid("settings-automation-api-path")
+        .enabled(can_add);
+        rows.add(ui.settings_labeled(ui.settings_text(said, TextStyle::size(12.0).selectable()), add, false));
+    }
+    if crate::platform::elevated() {
+        rows.add(caption(ui, locale.get("automation.api.elevated")));
+    }
     rows.add(caption(ui, locale.get("automation.api.note")));
     let api_message = API_MESSAGE.lock().unwrap_or_else(|p| p.into_inner()).clone();
     if let Some(message) = api_message {

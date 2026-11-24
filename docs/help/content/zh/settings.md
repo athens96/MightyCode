@@ -111,7 +111,9 @@ hooks:
 ```
 
 ### mighty 命令 {#cli}
-在 Mac 上，用 {{ui:menu.workspace}} 菜单中的 {{ui:shellCommand.install}} 安装 `~/.local/bin/mighty`。`mighty`、`mighty 文件夹`、`mighty "请求"` 仍像以前一样打开文件夹；与命令同名的文件夹用 `mighty ./status` 打开。下面的命令连接正在运行的应用，并以 JSON 回答。如果在 0.6.0 之前安装过，请重新安装一次。在 Windows 上使用 `MightyCode.exe --cli status` 等。
+在 Mac 上，用 {{ui:menu.workspace}} 菜单中的 {{ui:shellCommand.install}} 安装 `~/.local/bin/mighty`。`mighty`、`mighty 文件夹`、`mighty "请求"` 仍像以前一样打开文件夹；与命令同名的文件夹用 `mighty ./status` 打开。下面的命令连接正在运行的应用，并以 JSON 回答。如果在 0.6.0 之前安装过，请重新安装一次。
+
+在 Windows 上，`mighty` 命令是安装文件夹中的 `bin\mighty.exe`。安装程序的“将 mighty 命令添加到 PATH”（默认开启）会把该文件夹加入你的用户 PATH。如果应用只通过自动更新获得，请在 {{ui:settings.nav.companion}} 标签页的 {{ui:automation.api.title}} 中按 {{ui:shellCommand.windows.addPath}}。之后在新打开的 cmd、PowerShell、Windows Terminal 中使用与 Mac 相同的命令：参数、管道（`| jq`、`> out.json`、用 `-` 读取标准输入）、退出码和 Ctrl+C 都会原样传递。打开文件夹（`mighty 文件夹`）目前只在 Mac 上可用。像 `MightyCode.exe --cli status` 这样直接调用应用也会在控制台显示输出，但 shell 不会等待它，输出可能出现在提示符之后，所以请使用 `mighty`。
 
 ```sh
 mighty status                                   # 工作区、窗格、状态、提醒、worktree、端口范围
@@ -132,6 +134,7 @@ mighty server start                             # 无窗口启动 (status, show,
 - `pane read` 和输出中看起来像密钥的行会被隐藏。`events` 每行写一个事件（`pane.state`、`attention`、带费用的 `run.completed`）。
 - 退出码：成功 0，错误 1，超时 2。
 - 只有这台电脑上的同一用户可以连接（Mac 上是权限 0600 的套接字，Windows 上是只有当前用户能打开的命名管道），每个请求都需要数据文件夹中 `control/token` 的令牌。连接用 `--profile` 启动的应用时，使用 `mighty --profile <文件夹> status`。
+- 在 Windows 上，如果应用以管理员身份运行，`mighty` 也只能从以管理员身份打开的终端连接。普通终端会说明原因并以退出码 1 结束（否则你账户中的任何程序都能以管理员身份驱动代理）。管理员终端也能连接普通应用。其他用户账户即使是管理员也无法连接。
 
 ### 计划与触发器 {#schedules}
 在 {{ui:settings.nav.companion}} 标签页的 {{ui:automation.jobs.sectionTitle}} 框中，可以在设定的时间或事件发生时启动代理工作。选择工作区后，会显示它的计划和触发器、下次运行时间和上次结果。顶部显示今日花费、每日预算和今日自动化摘要。

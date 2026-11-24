@@ -2261,6 +2261,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mighty-cli"
+version = "0.1.0"
+dependencies = [
+ "mighty-core",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "mighty-companion"
 version = "0.1.0"
 dependencies = [

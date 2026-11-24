@@ -52,6 +52,8 @@ pub mod page;
 #[cfg(windows)]
 mod pairing;
 #[cfg(windows)]
+pub mod parent_console;
+#[cfg(windows)]
 mod pet;
 #[cfg(windows)]
 mod prefs;
@@ -83,6 +85,8 @@ pub mod update;
 pub mod update_transport;
 #[cfg(windows)]
 pub mod user_environment;
+#[cfg(windows)]
+pub mod user_path;
 #[cfg(windows)]
 mod variables;
 #[cfg(windows)]
