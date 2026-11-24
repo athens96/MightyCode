@@ -505,6 +505,8 @@ impl Inner {
                 .map(|pane| {
                     let digest = self.desk.digest(pane).unwrap_or_else(|| unread(pane));
                     let held = self.desk.held_items(pane.id()).iter().map(|i| i.id.clone()).collect::<Vec<_>>().join("\n");
+                    // MC-49: a queued request edited or moved moves the session's revision too.
+                    let held = format!("{held}\u{1}{}", self.desk.queue_digest(pane.id()));
                     (digest, self.summary(pane, 0, &snapshot, &children), held)
                 })
                 .collect();
@@ -1709,6 +1711,34 @@ impl Inner {
             self.changed();
             return Ok(ok());
         }
+        // MC-49 (`queueEdit`): a queued request's words (`{text}`), or its place (`{to}`, 0 the head, or `{before}`, another queued
+        // request's id). A row held for the pane is neither edited nor moved; the desktop's own rules refuse the rest (409).
+        if method == "POST" && route.len() == 6 && route[3] == "queue" && matches!(route[5], "edit" | "move") {
+            if !wire::identifier(route[4]) {
+                return Err(request(404, l.get("remote.error.queueItemNotFound")));
+            }
+            if self.desk.held_items(&id).iter().any(|h| h.id == route[4]) {
+                return Err(request(409, l.get("queue.editRefused")));
+            }
+            let value = body_object(body, MAXIMUM_BODY)?;
+            let bad = || request(400, l.get("remote.error.badBody"));
+            let action = if route[5] == "edit" {
+                let words = value.get("text").and_then(Value::as_str).ok_or_else(bad)?;
+                if words.contains('\0') {
+                    return Err(bad());
+                }
+                json!({"id": route[4], "text": words})
+            } else {
+                match (value.get("to"), value.get("before")) {
+                    (Some(to), None) if to.as_u64().is_some_and(|to| to <= 1_000) => json!({"id": route[4], "to": to}),
+                    (None, Some(Value::String(before))) if wire::identifier(before) => json!({"id": route[4], "before": before}),
+                    _ => return Err(bad()),
+                }
+            };
+            self.act(&id, if route[5] == "edit" { "queue-edit" } else { "queue-move" }, action).await?;
+            self.changed();
+            return Ok(ok());
+        }
         Err(not_found())
     }
 
@@ -1778,7 +1808,8 @@ fn unread(pane: &RunSession) -> MobilePaneDigest {
     }
 }
 
-/// The phone's `queued` rows (`MobileQueuedItem`: `runNow` and `runNowReason` only when the row has a button).
+/// The phone's `queued` rows (`MobileQueuedItem`: `runNow` and `runNowReason` only when the row has a button; `held` and `locked`
+/// only when true, MC-49).
 fn write_queued(out: &mut JsonOut, rows: &[crate::phone::desk::MobileQueuedItem]) {
     out.begin_array();
     for row in rows {
@@ -1787,6 +1818,12 @@ fn write_queued(out: &mut JsonOut, rows: &[crate::phone::desk::MobileQueuedItem]
         out.prop_str("text", Some(&row.text));
         out.prop_str("runNow", row.run_now.as_deref());
         out.prop_str("runNowReason", row.run_now_reason.as_deref());
+        if row.held {
+            out.prop_bool("held", true);
+        }
+        if row.locked {
+            out.prop_bool("locked", true);
+        }
         out.end_object();
     }
     out.end_array();
@@ -1900,6 +1937,8 @@ impl From<mighty_delegation::delivery::MobileQueuedRow> for crate::phone::desk::
             text: row.text,
             run_now: row.run_now.map(str::to_string),
             run_now_reason: row.run_now_reason.map(str::to_string),
+            held: false,
+            locked: false,
         }
     }
 }

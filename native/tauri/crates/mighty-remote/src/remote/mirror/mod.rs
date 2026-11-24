@@ -58,6 +58,9 @@ pub mod protocol {
     /// MC-49: what 바로 실행 does on a queued row, as the host decided it (the page's names, `QueueRunNowPath::name`); any other is
     /// read as none (no button).
     pub const RUN_NOW: [&str; 8] = ["worktree", "agentMenu", "here", "steer", "held", "waitsForTurn", "waitsForHeld", "waitsForUpdate"];
+    /// MC-49: the actions on a host pane's queued requests a host may take (`queueActionNames`): × (`remove`), 바로 실행 (`runNow`),
+    /// the words changed (`edit`) and the order (`move`). A host that sends only `queueActions: true` takes the first two.
+    pub const QUEUE_ACTIONS: [&str; 4] = ["remove", "runNow", "edit", "move"];
     /// Pending tool requests a pane's detail carries.
     pub const MAXIMUM_PERMISSIONS: usize = crate::remote::wire::protocol::MAXIMUM_PENDING_PERMISSIONS;
     /// Details a client reads in one pass of its poll.
@@ -92,12 +95,14 @@ pub struct MirrorSummary {
 }
 
 /// C# `RemoteMirrorQueued`: a request waiting in a host pane's queue. `run_now` (MC-49, `runNow` on the wire, left out by older hosts and
-/// for a row without the button): what 바로 실행 does on it there, one of [`protocol::RUN_NOW`].
+/// for a row without the button): what 바로 실행 does on it there, one of [`protocol::RUN_NOW`]. `cut` (MC-49, `cut: true`): the text is
+/// cut to [`protocol::MAXIMUM_QUEUED_TEXT`], so it is not the whole request and is never edited from a client.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MirrorQueued {
     pub id: String,
     pub text: String,
     pub run_now: Option<String>,
+    pub cut: bool,
 }
 
 /// C# `RemoteMirrorSession`: one host pane in full (`GET /v2/mirror/sessions/{id}`), in this app's types. On the wire it is the Mac's
@@ -128,9 +133,10 @@ pub struct MirrorSession {
     pub finished_at: Option<String>,
     pub branch: Option<String>,
     pub base: Option<String>,
-    /// MC-49 (`queueActions`, sent only when true): the host takes `queue/{item}/remove` and `queue/{item}/run-now` on this pane; an
-    /// older host leaves it out, and its queue is shown without them.
-    pub queue_actions: bool,
+    /// MC-49: the queue actions the host takes on this pane, of [`protocol::QUEUE_ACTIONS`] (`queueActionNames`; `queueActions: true`
+    /// as well when it takes `remove` and `runNow`, which is all an earlier MC-49 host sends). An older host takes none, and its queue
+    /// is shown without them.
+    pub queue_actions: Vec<String>,
 }
 
 /// C# `RemoteMirrorState`: the host's list as the client reads it; `unchanged`: the client's `since` was still current, and the lists
@@ -208,7 +214,10 @@ pub(crate) const QUESTIONS: &[Member] = &[
 ];
 pub(crate) const CREATE: &[Member] = &[Member("provider", Text, Required)];
 pub(crate) const CREATED: &[Member] = &[Member("protocol", Whole, Required), Member("sessionId", Text, Required)];
-pub(crate) const QUEUED: &[Member] = &[Member("id", Text, Required), Member("text", Text, Required), Member("runNow", Text, Nullable)];
+pub(crate) const QUEUE_EDIT: &[Member] = &[Member("text", Text, Required)];
+pub(crate) const QUEUE_MOVE: &[Member] = &[Member("to", Whole, Nullable), Member("before", Text, Nullable)];
+pub(crate) const QUEUED: &[Member] =
+    &[Member("id", Text, Required), Member("text", Text, Required), Member("runNow", Text, Nullable), Member("cut", Flag, Nullable)];
 
 fn text(o: &Map<String, Value>, name: &str) -> String {
     o.get(name).and_then(Value::as_str).unwrap_or_default().to_string()
@@ -473,6 +482,55 @@ impl WireMirrorQuestions {
         o.insert("requestId".into(), self.request_id.clone().into());
         o.insert("runId".into(), self.run_id.clone().into());
         o.insert("answers".into(), Value::Object(answers));
+        Value::Object(o)
+    }
+}
+
+/// MC-49: `POST …/queue/{item}/edit`'s body: the queued request's new words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WireMirrorQueueEdit {
+    pub text: String,
+}
+
+impl WireMirrorQueueEdit {
+    pub fn decode(body: &[u8]) -> Result<WireMirrorQueueEdit, BadBody> {
+        Ok(WireMirrorQueueEdit { text: text(&object(checked(body, QUEUE_EDIT)?), "text") })
+    }
+
+    pub fn to_value(&self) -> Value {
+        let mut o = Map::new();
+        o.insert("text".into(), self.text.clone().into());
+        Value::Object(o)
+    }
+}
+
+/// MC-49: where `POST …/queue/{item}/move` puts a queued request: at a place (`to`, 0 the head, past the end the end) or just before
+/// another queued request (`before`); exactly one of them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueuePlace {
+    To(usize),
+    Before(String),
+}
+
+impl QueuePlace {
+    /// The body, read strictly: one of `to` (0…1,000) and `before` (an identifier).
+    pub fn decode(body: &[u8]) -> Result<QueuePlace, BadBody> {
+        let o = object(checked(body, QUEUE_MOVE)?);
+        let to = o.get("to").and_then(Value::as_i64);
+        let before = o.get("before").and_then(Value::as_str);
+        match (to, before) {
+            (Some(to), None) if (0..=1_000).contains(&to) => Ok(QueuePlace::To(to as usize)),
+            (None, Some(before)) if wire::identifier(before) => Ok(QueuePlace::Before(before.to_string())),
+            _ => Err(BadBody),
+        }
+    }
+
+    pub fn to_value(&self) -> Value {
+        let mut o = Map::new();
+        match self {
+            QueuePlace::To(to) => o.insert("to".into(), (*to as i64).into()),
+            QueuePlace::Before(before) => o.insert("before".into(), before.clone().into()),
+        };
         Value::Object(o)
     }
 }

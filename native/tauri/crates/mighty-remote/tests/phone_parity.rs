@@ -117,6 +117,7 @@ fn extras(pane: &mighty_core::model::RunSession) -> mighty_remote::phone::desk::
         text: text.into(),
         run_now: run_now.map(str::to_string),
         run_now_reason: reason.map(str::to_string),
+        ..MobileQueuedItem::default()
     };
     let settings = mighty::MobileSettings {
         editable: true,

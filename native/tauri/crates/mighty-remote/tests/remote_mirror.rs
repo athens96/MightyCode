@@ -148,7 +148,10 @@ fn the_samples_decode_validate_and_round_trip() {
             && session.permissions[0].input_json.contains("notes.txt"),
         "entries, runs and the request read (inputJSON as input_json)"
     );
-    assert_eq!(session.queued, [MirrorQueued { id: "queued-1".into(), text: "Then update CHANGELOG.md".into(), run_now: None }]);
+    assert_eq!(
+        session.queued,
+        [MirrorQueued { id: "queued-1".into(), text: "Then update CHANGELOG.md".into(), run_now: None, cut: false }]
+    );
     assert!(session.base.as_deref() == Some("main") && session.branch.as_deref() == Some("mighty/pane-1"), "queue and branch read");
     assert!(
         session.settings.permission_mode == "acceptEdits"
@@ -209,37 +212,50 @@ fn the_samples_decode_validate_and_round_trip() {
 
 /// "remote mirror: a client refuses lists outside the rules" (the Mac's aClientRefusesListsOutsideTheRules), and the bodies are read
 /// as strictly as the Mac reads them.
-/// MC-49: what 바로 실행 does on a queued row and whether the host takes the queue's actions travel as members a Mac or an older app
-/// leaves out (read as none), and an older reader passes over; a name that is none of the page's reads as no button. The revision moves
-/// with a row's 바로 실행, and stays as before for a row without one.
+/// MC-49: what 바로 실행 does on a queued row, whether its words came cut, and the queue actions the host takes travel as members a Mac
+/// or an older app leaves out (read as none), and an older reader passes over; `queueActions: true` (an earlier MC-49 host) reads as
+/// × and 바로 실행. A name that is none of the page's reads as no button, an action this app does not know as none. The revision moves
+/// with a row's 바로 실행, its words (the same length too) and the order.
 #[test]
 fn the_queue_actions_travel_as_additions() {
     let session = fixture_session();
-    assert!(!session.queue_actions && session.queued.iter().all(|q| q.run_now.is_none()), "the Mac's detail has neither");
+    assert!(session.queue_actions.is_empty() && session.queued.iter().all(|q| q.run_now.is_none() && !q.cut), "the Mac's detail has none");
     let rows = vec![
-        MirrorQueued { id: "queued-1".into(), text: "Run the tests".into(), run_now: Some("worktree".into()) },
-        MirrorQueued { id: "queued-2".into(), text: "Then lint".into(), run_now: None },
+        MirrorQueued { id: "queued-1".into(), text: "Run the tests".into(), run_now: Some("worktree".into()), cut: false },
+        MirrorQueued { id: "queued-2".into(), text: "Then lint".into(), run_now: None, cut: true },
     ];
-    let hosted = mighty_remote::remote::mirror::MirrorSession { queued: rows.clone(), queue_actions: true, ..session.clone() };
+    let all: Vec<String> = protocol::QUEUE_ACTIONS.iter().map(|a| a.to_string()).collect();
+    let hosted = mighty_remote::remote::mirror::MirrorSession { queued: rows.clone(), queue_actions: all.clone(), ..session.clone() };
     let written = mirror::write(&hosted);
-    assert_eq!(written["queueActions"], json!(true));
+    assert_eq!(written["queueActions"], json!(true), "an earlier MC-49 client still offers × and 바로 실행");
+    assert_eq!(written["queueActionNames"], json!(["remove", "runNow", "edit", "move"]));
     assert_eq!(
         written["queued"],
-        json!([{"id": "queued-1", "text": "Run the tests", "runNow": "worktree"}, {"id": "queued-2", "text": "Then lint"}])
+        json!([{"id": "queued-1", "text": "Run the tests", "runNow": "worktree"}, {"id": "queued-2", "text": "Then lint", "cut": true}])
     );
     let read = mirror::read(&written).unwrap();
-    assert!(read.queue_actions && read.queued == rows, "they read back");
-    assert!(!mirror::write(&session).contains_key("queueActions"), "left out when the host does not take them");
+    assert!(read.queue_actions == all && read.queued == rows, "they read back");
+    let bare = mirror::write(&session);
+    assert!(!bare.contains_key("queueActions") && !bare.contains_key("queueActionNames"), "left out when the host takes none");
+    let mut earlier = written.clone();
+    earlier.shift_remove("queueActionNames");
+    assert_eq!(mirror::read(&earlier).unwrap().queue_actions, ["remove", "runNow"], "an earlier MC-49 host takes those two");
     let mut odd = written.clone();
+    odd["queueActionNames"] = json!(["move", "rename", "edit"]);
+    assert_eq!(mirror::read(&odd).unwrap().queue_actions, ["edit", "move"], "only the actions this app knows, in its order");
     odd["queued"][0]["runNow"] = json!("runNext");
     assert_eq!(mirror::read(&odd).unwrap().queued[0].run_now, None, "an unknown 바로 실행 is no button");
     odd["queued"][0]["runNow"] = json!(3);
     assert!(mirror::read(&odd).is_none(), "a runNow that is no text refuses the detail, as any member of the wrong kind");
     let pane = host_pane("pane-1", "ws", 2);
+    let revision = |queued: &[MirrorQueued]| mirror::revision(&pane, &[], queued, None, None);
     let plain = [MirrorQueued { run_now: None, ..rows[0].clone() }];
-    assert_ne!(mirror::revision(&pane, &[], &rows[..1], None, None), mirror::revision(&pane, &[], &plain, None, None));
+    assert_ne!(revision(&rows[..1]), revision(&plain));
     let waits = [MirrorQueued { run_now: Some("waitsForTurn".into()), ..rows[0].clone() }];
-    assert_ne!(mirror::revision(&pane, &[], &rows[..1], None, None), mirror::revision(&pane, &[], &waits, None, None));
+    assert_ne!(revision(&rows[..1]), revision(&waits));
+    let same_length = [MirrorQueued { text: "Run the tasks".into(), ..rows[0].clone() }];
+    assert_ne!(revision(&rows[..1]), revision(&same_length), "an edit that keeps the length");
+    assert_ne!(revision(&rows), revision(&[rows[1].clone(), rows[0].clone()]), "a new order");
 }
 
 #[test]
@@ -420,7 +436,7 @@ fn details_are_bounded_and_revisions_move_with_them() {
         ..host_pane("pane-1", "ws", 0)
     };
     let queued: Vec<MirrorQueued> =
-        (0..20).map(|i| MirrorQueued { id: format!("queued-{i}"), text: "q".repeat(600), run_now: None }).collect();
+        (0..20).map(|i| MirrorQueued { id: format!("queued-{i}"), text: "q".repeat(600), run_now: None, cut: false }).collect();
     let allowed = ToolPermissionRequest { id: "perm-2".into(), state: "allowed".into(), ..request.clone() };
     let session = mirror::session(&long, &[request.clone(), allowed], &queued, Some("mighty/pane-1"), Some("main"));
     assert!(session.logs.len() == 80 && session.has_older, "the newest 80 entries");
@@ -429,7 +445,7 @@ fn details_are_bounded_and_revisions_move_with_them() {
     assert!(session.graph_runs.len() == 20 && session.graph_runs[0].id.as_deref() == Some("run-5"), "the newest 20 runs");
     assert_eq!(session.permissions.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["perm-1"], "only waiting requests travel");
     assert!(
-        session.queued.len() == 16 && session.queued.iter().all(|q| q.text.chars().count() == 500),
+        session.queued.len() == 16 && session.queued.iter().all(|q| q.text.chars().count() == 500 && q.cut),
         "16 queued requests of 500 characters"
     );
     assert!(
@@ -795,14 +811,30 @@ async fn the_host_serves_only_shared_agent_panes() {
     assert_eq!(ask(port, &key, Method::Post, "/v2/mirror/sessions/pane-1/rename", Some("{}")).await.0, 404, "an unknown action");
     // MC-49: an app whose MirrorHost does not take the queue's actions (an older one's) says so in its details and refuses them with its
     // words; an item that is no identifier, another queue action and a pane outside the shared workspaces are unknown.
-    assert!(!mirror::read(&read.session).unwrap().queue_actions, "no queueActions from such an app");
-    for action in ["remove", "run-now"] {
-        let refused = ask(port, &key, Method::Post, &format!("/v2/mirror/sessions/pane-1/queue/queued-1/{action}"), Some("{}")).await;
+    assert!(mirror::read(&read.session).unwrap().queue_actions.is_empty(), "no queueActions from such an app");
+    for (action, body) in [("remove", "{}"), ("run-now", "{}"), ("edit", r#"{"text":"new words"}"#), ("move", r#"{"to":0}"#)] {
+        let refused = ask(port, &key, Method::Post, &format!("/v2/mirror/sessions/pane-1/queue/queued-1/{action}"), Some(body)).await;
         assert!(refused.0 == 409 && error_of(&refused) == get("remote.mirror.error.unavailable"), "{action}: {refused:?}");
     }
+    // An edit's and a move's bodies are read strictly: words (no NUL) for an edit, one of `to` (0…1,000) and `before` for a move.
+    for (action, body) in [
+        ("edit", "{}"),
+        ("edit", r#"{"text":5}"#),
+        ("edit", r#"{"text":"a\u0000b"}"#),
+        ("move", "{}"),
+        ("move", r#"{"to":-1}"#),
+        ("move", r#"{"to":1001}"#),
+        ("move", r#"{"to":0,"before":"queued-2"}"#),
+        ("move", r#"{"before":"-x"}"#),
+    ] {
+        let path = format!("/v2/mirror/sessions/pane-1/queue/queued-1/{action}");
+        assert_eq!(ask(port, &key, Method::Post, &path, Some(body)).await.0, 400, "{action} {body}");
+    }
+    let before = ask(port, &key, Method::Post, "/v2/mirror/sessions/pane-1/queue/queued-1/move", Some(r#"{"before":"queued-2"}"#)).await;
+    assert_eq!(before.0, 409, "a move before another row reaches the app");
     for path in [
         "/v2/mirror/sessions/pane-1/queue/-x/remove",
-        "/v2/mirror/sessions/pane-1/queue/queued-1/edit",
+        "/v2/mirror/sessions/pane-1/queue/queued-1/rename",
         "/v2/mirror/sessions/pane-1/queue/queued-1",
         "/v2/mirror/sessions/pane-hidden/queue/queued-1/remove",
     ] {
@@ -837,8 +869,15 @@ async fn the_host_serves_only_shared_agent_panes() {
         run_now.0 == 403 && error_of(&run_now) == get("remote.host.error.fullAccessOff"),
         "바로 실행 starts a request: the same switch"
     );
+    let edit = ask(port, &key, Method::Post, "/v2/mirror/sessions/pane-1/queue/queued-1/edit", Some(r#"{"text":"rm -rf"}"#)).await;
+    assert!(
+        edit.0 == 403 && error_of(&edit) == get("remote.host.error.fullAccessOff"),
+        "an edit changes what runs next: the same switch as a send"
+    );
     let removal = ask(port, &key, Method::Post, "/v2/mirror/sessions/pane-1/queue/queued-1/remove", Some("{}")).await;
     assert_eq!(removal.0, 409, "a removal runs nothing and is the app's to refuse, not the switch's");
+    let moved = ask(port, &key, Method::Post, "/v2/mirror/sessions/pane-1/queue/queued-1/move", Some(r#"{"to":0}"#)).await;
+    assert_eq!(moved.0, 409, "a move only reorders what may run and is the app's to refuse, not the switch's");
     *host.provider.lock().unwrap() = "codex".into();
     let codex = ask(port, &key, Method::Post, "/v2/mirror/sessions/pane-2/submit", Some(r#"{"text":"hi"}"#)).await;
     assert!(codex.0 == 403 && error_of(&codex) == strings::host_agent_needs_full_access("codex"), "a Windows host's Codex pane waits");
@@ -1135,10 +1174,10 @@ async fn a_windows_client_mirrors_a_windows_host() {
         ..ToolPermissionRequest::new("perm-1", "host-1", "toolu_1", "Bash", "{\"command\":\"ls\"}", "ls")
     };
     world.desk.calls().permissions.push(request.clone());
-    queued
-        .lock()
-        .unwrap()
-        .insert("host-1".into(), vec![MirrorQueued { id: "queued-1".into(), text: "Then update CHANGELOG.md".into(), run_now: None }]);
+    queued.lock().unwrap().insert(
+        "host-1".into(),
+        vec![MirrorQueued { id: "queued-1".into(), text: "Then update CHANGELOG.md".into(), run_now: None, cut: false }],
+    );
     host_service
         .update(|s| {
             let mut next = s.clone();
@@ -1270,15 +1309,19 @@ async fn a_mirrored_panes_queue_is_its_hosts() {
     let host_service = world.desk.service.clone();
     // The host pane's composer queue, as the app's `queued` closure reads it; the phone's queue handlers change it.
     let queued: Arc<Mutex<std::collections::HashMap<String, Vec<MirrorQueued>>>> = Arc::default();
-    let row =
-        |id: &str, text: &str, run_now: Option<&str>| MirrorQueued { id: id.into(), text: text.into(), run_now: run_now.map(Into::into) };
+    let row = |id: &str, text: &str, run_now: Option<&str>| MirrorQueued {
+        id: id.into(),
+        text: text.into(),
+        run_now: run_now.map(Into::into),
+        cut: false,
+    };
     let handled = queued.clone();
     world.desk.calls().action = Some(Arc::new(move |action: &MobileDesktopAction| {
         let item = action.body["id"].as_str().unwrap_or_default().to_string();
         let mut queue = handled.lock().unwrap();
         let rows = queue.entry(action.session_id.clone()).or_default();
         match action.action.as_str() {
-            "queue-remove" | "queue-run-now" if !rows.iter().any(|q| q.id == item) => {
+            "queue-remove" | "queue-run-now" | "queue-edit" | "queue-move" if !rows.iter().any(|q| q.id == item) => {
                 Err(mighty_remote::phone::desk::MobileError::request(404, "Queued request not found.", None))
             }
             "queue-remove" => {
@@ -1288,6 +1331,26 @@ async fn a_mirrored_panes_queue_is_its_hosts() {
             "queue-run-now" => {
                 rows.retain(|q| q.id != item);
                 Ok(ActionAnswer::Value(json!("here")))
+            }
+            // The desktop's own rules (the composer's queue): words none are refused; a place is an index or before another row.
+            "queue-edit" => {
+                let words = action.body["text"].as_str().unwrap_or_default();
+                if words.trim().is_empty() {
+                    return Err(mighty_remote::phone::desk::MobileError::request(409, "Enter a request.", None));
+                }
+                rows.iter_mut().find(|q| q.id == item).unwrap().text = words.into();
+                Ok(ActionAnswer::Value(Value::Null))
+            }
+            "queue-move" => {
+                let at = rows.iter().position(|q| q.id == item).unwrap();
+                let moving = rows.remove(at);
+                let to = match (action.body["to"].as_u64(), action.body["before"].as_str()) {
+                    (Some(to), _) => (to as usize).min(rows.len()),
+                    (None, Some(before)) => rows.iter().position(|q| q.id == before).unwrap_or(rows.len()),
+                    _ => rows.len(),
+                };
+                rows.insert(to, moving);
+                Ok(ActionAnswer::Value(Value::Null))
             }
             _ => Ok(ActionAnswer::Value(Value::Null)),
         }
@@ -1342,7 +1405,10 @@ async fn a_mirrored_panes_queue_is_its_hosts() {
     let ids = || items().iter().map(|q| q.id.clone()).collect::<Vec<_>>();
     until(|| ids() == ["queued-1", "queued-2"], 10_000, "the host's queue reaches the client").await;
     let counts = desk.counts(&pane_id).unwrap();
-    assert!(counts.queued == 2 && counts.queue_actions, "the count and the host's word that it takes the actions: {counts:?}");
+    assert!(
+        counts.queued == 2 && counts.queue_actions == ["remove", "runNow", "edit", "move"],
+        "the count and the host's word for the actions it takes: {counts:?}"
+    );
     assert_eq!(items(), [row("queued-1", "Run the tests", Some("worktree")), row("queued-2", "Then lint", Some("waitsForTurn"))]);
     assert_eq!(counts.queued_texts(), Some(vec!["Run the tests".to_string(), "Then lint".to_string()]), "the strip's tooltip");
 
@@ -1352,6 +1418,53 @@ async fn a_mirrored_panes_queue_is_its_hosts() {
     queued.lock().unwrap().get_mut("host-1").unwrap().push(row("queued-3", "And the docs", Some("waitsForTurn")));
     until(|| ids() == ["queued-2", "queued-3"], 10_000, "a row the host queued shows").await;
     assert_eq!(desk.counts(&pane_id).unwrap().queued, 2);
+    let host_rows = || queued.lock().unwrap()["host-1"].iter().map(|q| (q.id.clone(), q.text.clone())).collect::<Vec<_>>();
+
+    // 고치기 from here: the host's phone handler takes the new words, and they show here at once.
+    let edit = |words: &str| QueueAction::Edit(words.into());
+    assert_eq!(desk.queue_action(&pane_id, "queued-3", edit("And the docs, briefly")).await, Ok("edited".into()));
+    assert_eq!(items()[1].text, "And the docs, briefly", "the new words show at once");
+    assert_eq!(host_rows()[1], ("queued-3".to_string(), "And the docs, briefly".to_string()), "and are the host's");
+    let refused = desk.queue_action(&pane_id, "queued-3", edit("   ")).await;
+    assert_eq!(refused, Err("Enter a request.".into()), "the host's rules refuse words none, with its words");
+    assert_eq!(items()[1].text, "And the docs, briefly", "a refused edit changes nothing here");
+    // ↑/↓ from here: the new order shows at once and is the host's (the queue starts in it).
+    let to = |place: usize| QueueAction::Move(mighty_remote::remote::mirror::QueuePlace::To(place));
+    assert_eq!(desk.queue_action(&pane_id, "queued-3", to(0)).await, Ok("moved".into()));
+    assert_eq!(ids(), ["queued-3", "queued-2"], "the new order shows at once");
+    assert_eq!(host_rows().iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["queued-3", "queued-2"]);
+    let before = QueueAction::Move(mighty_remote::remote::mirror::QueuePlace::Before("queued-3".into()));
+    assert_eq!(desk.queue_action(&pane_id, "queued-2", before).await, Ok("moved".into()));
+    assert_eq!(ids(), ["queued-2", "queued-3"]);
+    let acted_words = || {
+        world
+            .desk
+            .actions()
+            .iter()
+            .filter(|a| a.action.starts_with("queue-"))
+            .map(|a| format!("{} {}", a.action, a.body))
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        acted_words().contains(&r#"queue-edit {"id":"queued-3","text":"And the docs, briefly"}"#.to_string())
+            && acted_words().contains(&r#"queue-move {"id":"queued-3","to":0}"#.to_string())
+            && acted_words().contains(&r#"queue-move {"id":"queued-2","before":"queued-3"}"#.to_string()),
+        "edits and moves reached the host's phone handlers: {:?}",
+        acted_words()
+    );
+    // The host edits a row in place (the same length) and reorders: both reach this pane through the revision.
+    queued.lock().unwrap().get_mut("host-1").unwrap()[0].text = "Then lunt".into();
+    until(|| items().first().is_some_and(|q| q.text == "Then lunt"), 10_000, "an edit on the host shows").await;
+    queued.lock().unwrap().get_mut("host-1").unwrap().reverse();
+    until(|| ids() == ["queued-3", "queued-2"], 10_000, "a new order on the host shows").await;
+    // A row whose words came cut is never edited from here (the rest would be lost); it still moves.
+    queued.lock().unwrap().get_mut("host-1").unwrap().push(row("queued-4", &"long ".repeat(200), None));
+    until(|| items().iter().any(|q| q.id == "queued-4" && q.cut), 10_000, "a long row shows cut").await;
+    assert_eq!(desk.queue_action(&pane_id, "queued-4", edit("short")).await, Err(get("queue.editRefused")));
+    assert!(host_rows()[2].1.starts_with("long long"), "nothing reached the host");
+    assert_eq!(desk.queue_action(&pane_id, "queued-4", to(0)).await, Ok("moved".into()));
+    queued.lock().unwrap().get_mut("host-1").unwrap().retain(|q| q.id != "queued-4");
+    until(|| ids() == ["queued-3", "queued-2"], 10_000, "the long row leaves").await;
 
     // × from here: the host's phone handler takes the row out, and it leaves here at once.
     assert_eq!(desk.queue_action(&pane_id, "queued-3", QueueAction::Remove).await, Ok("removed".into()));

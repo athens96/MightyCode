@@ -205,3 +205,38 @@ fn a_queued_rows_agent_pick_names_the_child() {
     assert_eq!(queue::worktree_agent(Some("codex"), "claude").as_deref(), Some("codex"));
     assert_eq!(queue::worktree_agent(Some("gemini"), "codex").as_deref(), Some("gemini"));
 }
+
+/// MC-49: a queued request's words change in place (its files, mode, prepared mark and place kept) by `add`'s rules, and a request
+/// moves to any place; the queue starts them in the new order. A continuation's words and a request no longer queued are refused.
+#[test]
+fn a_queued_request_is_edited_and_moved_in_place() {
+    let l = common::ko();
+    let mut queue = QueuedInputBuffer::new();
+    let first = queue.add("first", vec![], Some("plan"), false, false, &l).unwrap();
+    let second = queue.add("second", vec![], None, true, false, &l).unwrap();
+    let third = queue.add("third", vec![], None, false, false, &l).unwrap();
+    let card = queue.add("go on", vec![], None, false, true, &l).unwrap();
+    let ids = |q: &QueuedInputBuffer| q.items().iter().map(|i| i.id.clone()).collect::<Vec<_>>();
+
+    assert_eq!(queue.edit(&first.id, "first, but better", &l), Ok(true));
+    let edited = queue.items()[0].clone();
+    assert!(edited.text == "first, but better" && edited.permission_mode_override.as_deref() == Some("plan") && edited.id == first.id);
+    assert_eq!(queue.edit(&second.id, "second words", &l), Ok(true));
+    assert!(queue.items()[1].prepared, "a prepared row stays prepared");
+    for bad in ["", "   \n", "a\0b"] {
+        assert!(matches!(queue.edit(&third.id, bad, &l), Err(queue::QueueError::Invalid(_))), "refused: {bad:?}");
+    }
+    assert!(matches!(queue.edit(&third.id, &"x".repeat(100_001), &l), Err(queue::QueueError::Invalid(_))));
+    assert_eq!(queue.items()[2].text, "third", "a refused edit changes nothing");
+    assert!(matches!(queue.edit(&card.id, "something else", &l), Err(queue::QueueError::Invalid(_))), "a continuation keeps its words");
+    assert_eq!(queue.edit("gone", "x", &l), Ok(false));
+
+    assert!(queue.move_to(&third.id, 0));
+    assert_eq!(ids(&queue), [third.id.clone(), first.id.clone(), second.id.clone(), card.id.clone()]);
+    assert!(queue.move_to(&third.id, 99), "past the end is the end");
+    assert_eq!(ids(&queue), [first.id.clone(), second.id.clone(), card.id.clone(), third.id.clone()]);
+    assert!(queue.move_to(&first.id, 1));
+    assert_eq!(ids(&queue), [second.id.clone(), first.id.clone(), card.id.clone(), third.id.clone()]);
+    assert!(!queue.move_to("gone", 0));
+    assert_eq!(queue.items()[0].id, second.id, "the head is what starts next");
+}

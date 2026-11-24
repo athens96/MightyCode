@@ -1,6 +1,6 @@
 //! The remote mirror on the sharing host (C# `RemoteHostService.Mirror`, `IRemoteMirrorHost`; M/Remote/RemoteHostService.swift
 //! `serveMirror`): `GET /v2/mirror[?since=]`, `GET /v2/mirror/sessions/{id}`, `POST /v2/mirror/sessions/{id}/submit|stop|permission|
-//! questions|plan|close`, `POST /v2/mirror/sessions/{id}/queue/{item}/remove|run-now` (MC-49) and
+//! questions|plan|close`, `POST /v2/mirror/sessions/{id}/queue/{item}/remove|run-now|edit|move` (MC-49) and
 //! `POST /v2/mirror/workspaces/{id}/sessions`: the shared workspaces' own agent panes, read and driven as the
 //! phone does. A pane of a workspace not shared is unknown here (404), whatever its id. Every request has passed the /v2/ checks (key,
 //! version, peer, rate) before it gets here.
@@ -18,8 +18,8 @@ use mighty_run::questionnaire::UserQuestionAnswer;
 use mighty_run::strings::get;
 
 use super::{
-    MirrorPane, MirrorPaneInfo, MirrorSummary, WireMirrorCreate, WireMirrorCreated, WireMirrorDetail, WireMirrorOutcome,
-    WireMirrorPermission, WireMirrorQuestions, WireMirrorState, WireMirrorSubmit, known_provider, protocol, support,
+    MirrorPane, MirrorPaneInfo, MirrorSummary, QueuePlace, WireMirrorCreate, WireMirrorCreated, WireMirrorDetail, WireMirrorOutcome,
+    WireMirrorPermission, WireMirrorQuestions, WireMirrorQueueEdit, WireMirrorState, WireMirrorSubmit, known_provider, protocol, support,
 };
 use crate::remote::host::{HostFailure, RemoteHost, lock, reply};
 use crate::remote::http_server::{HttpRequest, HttpResponse};
@@ -68,6 +68,16 @@ pub trait MirrorHost: Send + Sync {
     /// refuses it (and leaves `queueActions` out of its details, so a client never offers it).
     fn queue_remove(&self, session_id: String, item_id: String) -> BoxFuture<'_, Result<(), Refusal>> {
         let _ = (session_id, item_id);
+        Box::pin(async { Err(get("remote.mirror.error.unavailable")) })
+    }
+    /// MC-49: a queued request's words changed, as the phone's `queue/{item}/edit`.
+    fn queue_edit(&self, session_id: String, item_id: String, text: String) -> BoxFuture<'_, Result<(), Refusal>> {
+        let _ = (session_id, item_id, text);
+        Box::pin(async { Err(get("remote.mirror.error.unavailable")) })
+    }
+    /// MC-49: a queued request moved in the host pane's queue, as the phone's `queue/{item}/move`.
+    fn queue_move(&self, session_id: String, item_id: String, place: QueuePlace) -> BoxFuture<'_, Result<(), Refusal>> {
+        let _ = (session_id, item_id, place);
         Box::pin(async { Err(get("remote.mirror.error.unavailable")) })
     }
     /// MC-49: 바로 실행 on a queued request of the host pane, as the phone's `queue/{item}/run-now`: what it did (`here`, `worktree`).
@@ -214,17 +224,40 @@ impl RemoteHost {
         let refused = RemoteHost::mirror_refusal(&pane, allowed, self.0.options.windows_host);
         // What the app refuses (settled, gone, busy, not its kind) is a conflict, its message the reason, as on the Mac.
         let conflict = |refusal: Refusal| HostFailure::new(409, refusal);
-        // MC-49: `queue/{item}/remove` and `queue/{item}/run-now`, the phone's queue actions; neither reads a body. 바로 실행 starts the
-        // request as a send does, so it waits for the same switch; a removal runs nothing.
+        // MC-49: `queue/{item}/remove|run-now|edit|move`, the phone's queue actions. 바로 실행 starts the request and an edit changes what
+        // runs next, so both wait for the same switch as a send; a removal or a move runs nothing new.
         if request.method == "POST"
-            && let [_, _, "queue", item, action @ ("remove" | "run-now")] = route
+            && let [_, _, "queue", item, action @ ("remove" | "run-now" | "edit" | "move")] = route
         {
             if !wire::identifier(item) {
                 return Err(HostFailure::new(404, get("remote.error.queueItemNotFound")));
             }
-            if *action == "remove" {
-                host.queue_remove(id, item.to_string()).await.map_err(conflict)?;
-                return Ok(reply(200, &RemoteWireAnswer { protocol: remote_protocol::VERSION, accepted: true }.to_value()));
+            let accepted = || Ok(reply(200, &RemoteWireAnswer { protocol: remote_protocol::VERSION, accepted: true }.to_value()));
+            match *action {
+                "remove" => {
+                    host.queue_remove(id, item.to_string()).await.map_err(conflict)?;
+                    return accepted();
+                }
+                // New words for a queued request: they run as soon as the pane's turn ends, so editing is a send and waits for the same
+                // switch (a client could otherwise rewrite a request the host's person queued into one that runs unconfined); the words
+                // are bounded as a send's. Moving only reorders what was already allowed to run.
+                "edit" => {
+                    if let Some(refusal) = refused {
+                        return Err(HostFailure::new(403, refusal));
+                    }
+                    let edit = body(request, WireMirrorQueueEdit::decode)?;
+                    if edit.text.len() > protocol::MAXIMUM_TEXT || edit.text.contains('\0') {
+                        return Err(HostFailure::new(400, get("validation.run.badInput")));
+                    }
+                    host.queue_edit(id, item.to_string(), edit.text).await.map_err(conflict)?;
+                    return accepted();
+                }
+                "move" => {
+                    let place = body(request, QueuePlace::decode)?;
+                    host.queue_move(id, item.to_string(), place).await.map_err(conflict)?;
+                    return accepted();
+                }
+                _ => {}
             }
             if let Some(refusal) = refused {
                 return Err(HostFailure::new(403, refusal));

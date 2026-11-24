@@ -956,8 +956,8 @@ pub fn register(methods: &mut Registry) {
     methods.add("queueRemove", |host: Arc<Host>, args| async move {
         // MC-49: a mirrored pane's row is its host's.
         let (pane, item) = (pane_id(&args).unwrap_or("").to_string(), text(&args, "itemId").unwrap_or("").to_string());
-        if crate::mirror::queue_action(&host, &pane, &item, QueueAction::Remove).await.is_some() {
-            return Ok(Value::Null);
+        if let Some(done) = crate::mirror::queue_action(&host, &pane, &item, QueueAction::Remove).await {
+            return done.map(|()| Value::Null);
         }
         let mut view = host.view();
         let id = ensure(&mut view, pane_id(&args))?;
@@ -968,11 +968,56 @@ pub fn register(methods: &mut Registry) {
         }
         Ok(Value::Null)
     });
+    // MC-49 고치기: a queued row's new words (`text`), by the queue's rules (none refused, files kept); a mirrored pane's on its host.
+    methods.add("queueEdit", |host: Arc<Host>, args| async move {
+        let (pane, item) = (pane_id(&args).unwrap_or("").to_string(), text(&args, "itemId").unwrap_or("").to_string());
+        let words = text(&args, "text").unwrap_or("").to_string();
+        if let Some(done) = crate::mirror::queue_action(&host, &pane, &item, QueueAction::Edit(words.clone())).await {
+            return done.map(|()| Value::Null);
+        }
+        let mut view = host.view();
+        let id = ensure(&mut view, pane_id(&args))?;
+        let ui = panes::ui(&mut view, &id)?;
+        match ui.queue.edit(&item, &words, &host.locale) {
+            Ok(true) => ui.dirty = true,
+            Ok(false) => return Err(host.locale.get("remote.error.queueItemNotFound")),
+            Err(refused) => return Err(refused.to_string()),
+        }
+        drop(view);
+        // A phone showing the pane reads its queue again.
+        crate::phone::changed(&host);
+        Ok(Value::Null)
+    });
+    // MC-49 ↑/↓: a queued row to its new place (`to`, 0 the head, the next to start); a mirrored pane's on its host.
+    methods.add("queueMove", |host: Arc<Host>, args| async move {
+        let (pane, item) = (pane_id(&args).unwrap_or("").to_string(), text(&args, "itemId").unwrap_or("").to_string());
+        let Some(to) = args.get("to").and_then(Value::as_u64).map(|to| to as usize) else {
+            return Err(host.locale.get("remote.error.badBody"));
+        };
+        let place = mighty_remote::remote::mirror::QueuePlace::To(to);
+        if let Some(done) = crate::mirror::queue_action(&host, &pane, &item, QueueAction::Move(place)).await {
+            return done.map(|()| Value::Null);
+        }
+        let mut view = host.view();
+        let id = ensure(&mut view, pane_id(&args))?;
+        let ui = panes::ui(&mut view, &id)?;
+        if ui.queue.move_to(&item, to) {
+            ui.dirty = true;
+            drop(view);
+            crate::phone::changed(&host);
+        }
+        Ok(Value::Null)
+    });
     // 바로 실행 on one queued row (`agent`: the row's agent pick; the pane's own agent is its default), C# `RunQueuedNow`.
     methods.add("queueRunNow", |host: Arc<Host>, args| async move {
         let item = text(&args, "itemId").unwrap_or("").to_string();
         // MC-49: a mirrored pane's row runs on its host, by the host's rules (its own agent; no pick from here).
-        if crate::mirror::queue_action(&host, pane_id(&args).unwrap_or(""), &item, QueueAction::RunNow).await.is_some() {
+        if let Some(done) = crate::mirror::queue_action(&host, pane_id(&args).unwrap_or(""), &item, QueueAction::RunNow).await {
+            // The page does not wait on 바로 실행: a refusal is said in the error line.
+            if let Err(words) = done {
+                host.view().error = Some(words);
+                host.schedule();
+            }
             return Ok(Value::Null);
         }
         let (id, path, agent) = {

@@ -321,6 +321,47 @@ impl QueuedInputBuffer {
         true
     }
 
+    /// MC-49: a queued request's words changed in place (its files, mode and place kept), by `add`'s rules for the words: none and no
+    /// files, past 100,000 UTF-16 units or a NUL is refused, and so is an Antigravity card's continuation (its grant is for its own
+    /// words). Ok(false) when it is not queued.
+    pub fn edit(&mut self, id: &str, text: &str, l: &Locale) -> Result<bool, QueueError> {
+        let Some(item) = self.items.iter_mut().find(|item| item.id == id) else { return Ok(false) };
+        if item.continuation {
+            return Err(QueueError::Invalid(l.get("queue.editRefused")));
+        }
+        if (text.chars().all(char::is_whitespace) && item.attachments.is_empty())
+            || crate::text::utf16_len(text) > 100_000
+            || text.contains('\0')
+        {
+            return Err(QueueError::Invalid(l.get("wire.startRun.emptyInput")));
+        }
+        // The row goes as it is shown: a prepared row (a style's command, an ask) stays prepared, its words as written now.
+        item.text = text.into();
+        Ok(true)
+    }
+
+    /// MC-49: a queued request moved to `index` (0 is the head, the next to start; past the end is the end); false when it is not
+    /// queued. The queue starts its requests in this order.
+    pub fn move_to(&mut self, id: &str, index: usize) -> bool {
+        let Some(from) = self.items.iter().position(|item| item.id == id) else { return false };
+        let item = self.items.remove(from);
+        let at = index.min(self.items.len());
+        self.items.insert(at, item);
+        true
+    }
+
+    /// MC-49: a queued request moved to just before another (`before`); false when either is not queued or they are the same.
+    pub fn move_before(&mut self, id: &str, before: &str) -> bool {
+        if id == before || !self.items.iter().any(|item| item.id == before) {
+            return false;
+        }
+        let Some(from) = self.items.iter().position(|item| item.id == id) else { return false };
+        let item = self.items.remove(from);
+        let at = self.items.iter().position(|queued| queued.id == before).unwrap_or(self.items.len());
+        self.items.insert(at, item);
+        true
+    }
+
     /// An item back at `index` as it was queued, without the 16-item check, and never twice.
     pub fn insert(&mut self, index: usize, item: QueuedComposerInput) {
         if !self.items.iter().any(|queued| queued.id == item.id) {

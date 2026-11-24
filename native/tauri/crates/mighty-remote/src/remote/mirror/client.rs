@@ -18,8 +18,8 @@ use mighty_run::questionnaire::UserQuestionAnswer;
 use mighty_run::strings::{get, get_with};
 
 use super::{
-    MirrorPane, MirrorState, WireMirrorCreate, WireMirrorCreated, WireMirrorDetail, WireMirrorOutcome, WireMirrorPermission,
-    WireMirrorQuestions, WireMirrorState, WireMirrorSubmit, protocol, routes, support,
+    MirrorPane, MirrorState, QueuePlace, WireMirrorCreate, WireMirrorCreated, WireMirrorDetail, WireMirrorOutcome, WireMirrorPermission,
+    WireMirrorQuestions, WireMirrorQueueEdit, WireMirrorState, WireMirrorSubmit, protocol, routes, support,
 };
 use crate::remote::client::{ClientError, RemoteClient, lock};
 use crate::remote::transport::{self, Method, Request, TransportError};
@@ -224,6 +224,34 @@ impl RemoteClient {
         let path = queue_path(host_session_id, item_id, "run-now")?;
         let data = self.mirror_request(connection_id, Method::Post, &path, Some(b"{}".to_vec()), Some(protocol::SEND_TIMEOUT)).await?;
         Ok(WireMirrorOutcome::decode(&data).map(|o| o.outcome).unwrap_or_else(|_| "accepted".into()))
+    }
+
+    /// MC-49: a queued request's new words (`POST …/queue/{item}/edit`).
+    pub async fn mirror_queue_edit(
+        &self,
+        connection_id: &str,
+        host_session_id: &str,
+        item_id: &str,
+        text: &str,
+    ) -> Result<(), ClientError> {
+        let path = queue_path(host_session_id, item_id, "edit")?;
+        let body = to_bytes(&WireMirrorQueueEdit { text: text.into() }.to_value());
+        if body.len() > remote_protocol::MAXIMUM_REQUEST_BYTES {
+            return Err(ClientError::Message(get("remote.run.error.tooLarge")));
+        }
+        self.mirror_request(connection_id, Method::Post, &path, Some(body), None).await.map(|_| ())
+    }
+
+    /// MC-49: a queued request's new place (`POST …/queue/{item}/move`).
+    pub async fn mirror_queue_move(
+        &self,
+        connection_id: &str,
+        host_session_id: &str,
+        item_id: &str,
+        place: &QueuePlace,
+    ) -> Result<(), ClientError> {
+        let path = queue_path(host_session_id, item_id, "move")?;
+        self.mirror_request(connection_id, Method::Post, &path, Some(to_bytes(&place.to_value())), None).await.map(|_| ())
     }
 
     /// `MirrorCloseAsync`.

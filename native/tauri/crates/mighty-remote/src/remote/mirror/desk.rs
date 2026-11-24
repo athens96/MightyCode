@@ -26,7 +26,7 @@ use mighty_run::{Result as RunResult, RunError};
 use tokio::sync::Notify;
 
 use super::client::{bad_data, refusal_status, transient};
-use super::{MirrorPane, MirrorQueued, MirrorState, MirrorSummary, protocol, support};
+use super::{MirrorPane, MirrorQueued, MirrorState, MirrorSummary, QueuePlace, protocol, support};
 use crate::remote::client::{ClientError, RemoteClient};
 use crate::remote::wire::RemoteConnectionStatus;
 
@@ -69,13 +69,14 @@ impl MirrorLink {
 
 /// C# `RemoteMirrorCounts`: what a mirrored pane shows beyond its record: the host's waiting work and branch from its list, the queued
 /// requests (id, text and what 바로 실행 does there) and base from its detail. `queued_items` is None until a detail was read, and empty
-/// as soon as the list says the queue is; `queue_actions`: the host takes the queue's actions (MC-49; an older host does not).
+/// as soon as the list says the queue is; `queue_actions`: the queue actions the host takes (MC-49, of [`protocol::QUEUE_ACTIONS`]; an
+/// older host takes none).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MirrorCounts {
     pub pending: i64,
     pub queued: i64,
     pub queued_items: Option<Vec<MirrorQueued>>,
-    pub queue_actions: bool,
+    pub queue_actions: Vec<String>,
     pub branch: Option<String>,
     pub base: Option<String>,
 }
@@ -85,15 +86,64 @@ impl MirrorCounts {
     pub fn queued_texts(&self) -> Option<Vec<String>> {
         self.queued_items.as_ref().map(|items| items.iter().map(|q| q.text.clone()).collect())
     }
+
+    /// Whether the host takes this queue action (`remove`, `runNow`, `edit`, `move`).
+    pub fn takes(&self, action: &str) -> bool {
+        self.queue_actions.iter().any(|a| a == action)
+    }
 }
 
 /// MC-49: an action on a queued request of a mirrored pane, taken on its host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QueueAction {
     /// × on the row: the request leaves the host pane's queue.
     Remove,
     /// 바로 실행 on the row: the host runs it now, as its own 바로 실행 would.
     RunNow,
+    /// 고치기: the request's new words.
+    Edit(String),
+    /// ↑/↓: the request's new place.
+    Move(QueuePlace),
+}
+
+impl QueueAction {
+    /// The action's name among [`protocol::QUEUE_ACTIONS`].
+    pub fn name(&self) -> &'static str {
+        match self {
+            QueueAction::Remove => "remove",
+            QueueAction::RunNow => "runNow",
+            QueueAction::Edit(_) => "edit",
+            QueueAction::Move(_) => "move",
+        }
+    }
+}
+
+/// MC-49: the rows as they are once `action` on `item_id` was taken (what the host does with them too), so the composer shows it
+/// before the next read; the rows unchanged when the row is not there.
+pub fn queue_acted(items: &[MirrorQueued], item_id: &str, action: &QueueAction) -> Vec<MirrorQueued> {
+    let mut rows = items.to_vec();
+    let Some(at) = rows.iter().position(|q| q.id == item_id) else { return rows };
+    match action {
+        QueueAction::Remove | QueueAction::RunNow => {
+            rows.remove(at);
+        }
+        QueueAction::Edit(text) => rows[at].text = text.clone(),
+        QueueAction::Move(place) => {
+            let row = rows.remove(at);
+            let to = match place {
+                QueuePlace::To(to) => (*to).min(rows.len()),
+                QueuePlace::Before(before) => match rows.iter().position(|q| &q.id == before) {
+                    Some(to) => to,
+                    None => {
+                        rows.insert(at, row);
+                        return rows;
+                    }
+                },
+            };
+            rows.insert(to, row);
+        }
+    }
+    rows
 }
 
 /// Set once to end a poll; every wait of the poll ends with it.
@@ -689,7 +739,7 @@ impl MirrorDesk {
                 MirrorCounts {
                     queued: pane.session.queued.len() as i64,
                     queued_items: Some(pane.session.queued.clone()),
-                    queue_actions: pane.session.queue_actions,
+                    queue_actions: pane.session.queue_actions.clone(),
                     branch: pane.session.branch.clone(),
                     base: pane.session.base.clone(),
                     ..counts
@@ -776,8 +826,9 @@ impl MirrorDesk {
         Ok(outcome)
     }
 
-    /// MC-49: × or 바로 실행 on a queued request of a mirrored pane, taken on its host by the host's own rules (the phone's queue
-    /// actions): the host's word for what 바로 실행 did (`here`, `worktree`), `removed` for a removal. A pane whose computer is not
+    /// MC-49: ×, 바로 실행, 고치기 or ↑/↓ on a queued request of a mirrored pane, taken on its host by the host's own rules (the phone's
+    /// queue actions): the host's word for what 바로 실행 did (`here`, `worktree`); `removed`, `edited`, `moved` for the others. A row
+    /// whose words came cut is not edited. A pane whose computer is not
     /// connected, or whose host does not take the queue's actions (an older Mighty Code), is refused before anything goes; a refusal is
     /// the host's words. The row leaves this pane's queue at once, and the poll reads the host again.
     pub async fn queue_action(&self, pane_id: &str, item_id: &str, action: QueueAction) -> Result<String, String> {
@@ -786,23 +837,30 @@ impl MirrorDesk {
             return Err(reason);
         }
         let counts = self.counts(pane_id).unwrap_or_default();
-        if !counts.queue_actions {
+        if !counts.takes(action.name()) {
             return Err(get("remote.mirror.error.unavailable"));
         }
+        // A row whose words came cut is not the whole request: its edit would lose the rest.
+        if matches!(action, QueueAction::Edit(_)) && counts.queued_items.iter().flatten().any(|q| q.id == item_id && q.cut) {
+            return Err(get("queue.editRefused"));
+        }
         let (connection, host) = (mirror.connection_id.as_str(), mirror.host_session_id.as_str());
-        let done = match action {
-            QueueAction::Remove => self.0.client.mirror_queue_remove(connection, host, item_id).await.map(|()| "removed".to_string()),
-            QueueAction::RunNow => self.0.client.mirror_queue_run_now(connection, host, item_id).await,
+        let client = &self.0.client;
+        let done = match &action {
+            QueueAction::Remove => client.mirror_queue_remove(connection, host, item_id).await.map(|()| "removed".to_string()),
+            QueueAction::RunNow => client.mirror_queue_run_now(connection, host, item_id).await,
+            QueueAction::Edit(text) => client.mirror_queue_edit(connection, host, item_id, text).await.map(|()| "edited".to_string()),
+            QueueAction::Move(place) => client.mirror_queue_move(connection, host, item_id, place).await.map(|()| "moved".to_string()),
         };
         let done = done.map_err(|e| e.message());
         if done.is_ok() {
             let mut book = self.book();
             if let Some(held) = book.counts.get_mut(pane_id)
                 && let Some(items) = held.queued_items.as_mut()
-                && let Some(at) = items.iter().position(|q| q.id == item_id)
             {
-                items.remove(at);
-                held.queued = (held.queued - 1).max(items.len() as i64);
+                let before = items.len();
+                *items = queue_acted(items, item_id, &action);
+                held.queued = (held.queued - (before - items.len()) as i64).max(items.len() as i64);
             }
         }
         self.wake(connection);

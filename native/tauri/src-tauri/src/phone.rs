@@ -72,8 +72,9 @@ struct Desk {
 }
 
 /// Extra `/m1/info` capabilities offered by the Tauri desktop host beyond `mighty_remote`'s C# baseline.
-/// `mergeChecks`: `GET /m1/sessions/{id}/checks` (MC-27); `compare`: `GET`/`POST /m1/sessions/{id}/compare/{compareId}` (MC-29).
-pub const EXTRA_CAPABILITIES: &[&str] = &["savedPrompts", "mergeChecks", "compare"];
+/// `mergeChecks`: `GET /m1/sessions/{id}/checks` (MC-27); `compare`: `GET`/`POST /m1/sessions/{id}/compare/{compareId}` (MC-29);
+/// `queueEdit`: `POST /m1/sessions/{id}/queue/{item}/edit|move` (MC-49).
+pub const EXTRA_CAPABILITIES: &[&str] = &["savedPrompts", "mergeChecks", "compare", "queueEdit"];
 
 /// Full capability list advertised by `/m1/info` and relay `auth_ok`.
 pub fn host_capabilities() -> Vec<String> {
@@ -463,7 +464,14 @@ fn queued_rows(host: &Host, id: &str) -> Vec<MobileQueuedItem> {
     drop(view);
     let paths: HashMap<String, QueueRunNowPath> = rows.into_iter().collect();
     let decide = |row: &str| paths.get(row).copied().unwrap_or(QueueRunNowPath::Hidden);
-    mighty_delegation::delivery::mobile_items(&held, &queue, Some(&decide)).into_iter().map(MobileQueuedItem::from).collect()
+    let mut rows: Vec<MobileQueuedItem> =
+        mighty_delegation::delivery::mobile_items(&held, &queue, Some(&decide)).into_iter().map(MobileQueuedItem::from).collect();
+    // MC-49: which rows the phone may not edit or move (held for the pane) or not edit (an allowed card's follow-up).
+    for row in &mut rows {
+        row.held = held.iter().any(|h| h.id == row.id);
+        row.locked = queue.iter().any(|q| q.id == row.id && q.continuation);
+    }
+    rows
 }
 
 fn hash_of(write: impl FnOnce(&mut DefaultHasher)) -> i32 {
@@ -927,6 +935,32 @@ async fn run_queued_now(host: &Arc<Host>, id: &str, item: &str) -> Result<Action
     Ok(ActionAnswer::Value(json!(wire_word)))
 }
 
+/// MC-49: `queue-edit {id, text}` or `queue-move {id, to | before}` on a pane's queue, by the queue's rules: 404 for a row not queued,
+/// 409 with the queue's words for an edit it refuses, 400 for a move that names no place.
+fn queue_change(
+    ui: &mut panes::PaneUi,
+    action: &str,
+    body: &serde_json::Map<String, Value>,
+    l: &mighty_core::locale::Locale,
+) -> Result<(), MobileError> {
+    let text = |k: &str| body.get(k).and_then(Value::as_str);
+    let item = text("id").unwrap_or_default();
+    let found = if action == "queue-edit" {
+        ui.queue.edit(item, text("text").unwrap_or_default(), l).map_err(|refused| request(409, refused.to_string()))?
+    } else {
+        match (body.get("to").and_then(Value::as_u64), text("before")) {
+            (Some(to), None) => ui.queue.move_to(item, to as usize),
+            (None, Some(before)) => ui.queue.move_before(item, before),
+            _ => return Err(request(400, l.get("remote.error.badBody"))),
+        }
+    };
+    if !found {
+        return Err(request(404, l.get("remote.error.queueItemNotFound")));
+    }
+    ui.dirty = true;
+    Ok(())
+}
+
 /// `MobileStopQueue`: the queue cancelled, unless the turn was over and only background work ran.
 fn stop_queue(host: &Host, id: &str) {
     let mut view = host.view();
@@ -1134,6 +1168,13 @@ async fn action(host: Arc<Host>, request_: MobileDesktopAction) -> Result<Action
             }
             ui.forget_unqueued();
             ui.dirty = true;
+            ActionAnswer::Value(Value::Null)
+        }
+        // MC-49: a queued request's words or place, by the queue's own rules (the page's 고치기 and ↑/↓ do the same).
+        "queue-edit" | "queue-move" => {
+            let mut view = host.view();
+            let ui = panes::ui(&mut view, &id).map_err(|_| not_found_session())?;
+            queue_change(ui, &request_.action, &body, &l)?;
             ActionAnswer::Value(Value::Null)
         }
         "queue-next" => run_next(&host, &id).await?,
@@ -1566,6 +1607,12 @@ impl PhoneDesk for Desk {
             && mighty_run::sandbox::supported()
             && snapshot.workspace(pane.workspace_id()).is_some_and(|w| w.sandbox_on().is_some())
     }
+    fn queue_digest(&self, session_id: &str) -> String {
+        let Ok(host) = self.host() else { return String::new() };
+        let view = host.view();
+        let items = view.panes.get(session_id).map(|u| u.queue.items()).unwrap_or_default();
+        hash_of(|hash| items.iter().for_each(|q| (q.id.as_str(), q.text.as_str()).hash(hash))).to_string()
+    }
     fn queue_count(&self, session_id: &str) -> Option<i32> {
         let host = self.host().ok()?;
         let count = host.view().panes.get(session_id).map_or(0, |u| u.queue.items().len() as i32);
@@ -1632,6 +1679,31 @@ mod tests {
         let (answer, revoke) = answer_start(Started::Failed("agy refused".into()), true, &l);
         assert_eq!(status_of(&answer), Some((409, "agy refused".into())));
         assert_eq!(revoke.as_deref(), Some("agy refused"), "with the start's own reason");
+    }
+
+    /// MC-49: the phone's (and a mirroring client's) 고치기 and ↑/↓ change the pane's own queue by its rules: the words in place, a
+    /// place by index or before another row; a row not queued is 404, words none or a continuation's 409, a move with no place 400.
+    #[test]
+    fn a_phone_edits_and_moves_the_panes_queue() {
+        let l = en();
+        let mut ui = panes::PaneUi::default();
+        let first = ui.queue.add("first", vec![], None, false, false, &l).unwrap().id;
+        let second = ui.queue.add("second", vec![], None, false, false, &l).unwrap().id;
+        let card = ui.queue.add("go on", vec![], None, false, true, &l).unwrap().id;
+        let body = |v: Value| v.as_object().cloned().unwrap();
+        queue_change(&mut ui, "queue-edit", &body(json!({"id": second, "text": "second, better"})), &l).unwrap();
+        assert!(ui.queue.items()[1].text == "second, better" && ui.dirty);
+        queue_change(&mut ui, "queue-move", &body(json!({"id": second, "to": 0})), &l).unwrap();
+        queue_change(&mut ui, "queue-move", &body(json!({"id": card, "before": first})), &l).unwrap();
+        let order: Vec<&str> = ui.queue.items().iter().map(|q| q.id.as_str()).collect();
+        assert_eq!(order, [second.as_str(), card.as_str(), first.as_str()]);
+        let code = |r: Result<(), MobileError>| status_of(&r.map(|()| SubmitReceipt::new("none"))).map(|(s, _)| s);
+        assert_eq!(code(queue_change(&mut ui, "queue-edit", &body(json!({"id": first, "text": " "})), &l)), Some(409));
+        assert_eq!(code(queue_change(&mut ui, "queue-edit", &body(json!({"id": card, "text": "other"})), &l)), Some(409));
+        assert_eq!(code(queue_change(&mut ui, "queue-edit", &body(json!({"id": "gone", "text": "x"})), &l)), Some(404));
+        assert_eq!(code(queue_change(&mut ui, "queue-move", &body(json!({"id": "gone", "to": 0})), &l)), Some(404));
+        assert_eq!(code(queue_change(&mut ui, "queue-move", &body(json!({"id": first})), &l)), Some(400));
+        assert_eq!(ui.queue.items()[2].text, "first", "a refusal changes nothing");
     }
 
     /// S-L3: the revoked continuation leaves the queue with its grant and card; the row behind it stays.

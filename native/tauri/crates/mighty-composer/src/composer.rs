@@ -174,6 +174,9 @@ pub struct QueueItem {
     pub attachments: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_now: Option<&'static str>,
+    /// MC-49: the row's words cannot be edited (an Antigravity card's continuation; a host's row whose words came cut). It still moves.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -188,12 +191,17 @@ pub struct QueueModel {
     pub remote: Option<RemoteQueue>,
 }
 
-/// MC-49: a mirrored pane's queue is its host's: × and 바로 실행 go to the host, and a worktree row runs with the host pane's own agent
-/// (no agent pick). `actions`: the host takes them (an older host does not: the rows are drawn without buttons).
+/// MC-49: a mirrored pane's queue is its host's: ×, 바로 실행, 고치기 and ↑/↓ go to the host, and a worktree row runs with the host pane's
+/// own agent (no agent pick). `actions`: the host takes × and 바로 실행; `edit` and `reorder` the other two (an older host takes none
+/// or only the first two: the rest are not drawn).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteQueue {
     pub actions: bool,
+    /// The host takes 고치기 (MC-49; an earlier host does not).
+    pub edit: bool,
+    /// The host takes ↑/↓.
+    pub reorder: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -676,6 +684,7 @@ pub fn composer_state(i: &ComposerInputs) -> ComposerState {
                     text: q.text.clone(),
                     attachments: q.attachments.iter().map(|a| a.name.clone()).collect(),
                     run_now: run_now_name(&rows, &q.id),
+                    locked: q.continuation,
                 })
                 .collect(),
             waits_on_background: queue::background::waits_on_background(pane.background_work.as_ref(), view.queue.len()).then_some(

@@ -198,7 +198,7 @@ CompareView      { protocol, gone?: true, id, request, baseCommit, baseShort, ba
 
 기존 라우트와 필드는 그대로다. 아래는 모두 **추가**이며, 새 필드는 전부 선택(optional)이다. 업데이트하지 않은 휴대폰 앱은 모르는 필드를 무시하고 지금처럼 동작한다. 휴대폰은 `/m1/info`의 `capabilities`에 이름이 있을 때만 해당 기능을 보여 준다(없으면 구버전 호스트).
 
-`MobileInfo.capabilities: string[]` — 허용 값: `"submit-mode"`, `"queue"`, `"pane"`, `"history"`, `"settings"`, `"commands"`, `"mighty"`, `"status"`, `"attachments"`, `"style"`, `"files"`, `"screenShare"`, `"structure"`, `"direct"`, `"push"`, `"fileChanges"`, `"workMap"`, `"appUpdate"`, `"pi"`, `"opencode"`, `"hermes"`, `"roles"`, `"savedPrompts"`, `"mergeChecks"`, `"compare"`.
+`MobileInfo.capabilities: string[]` — 허용 값: `"submit-mode"`, `"queue"`, `"pane"`, `"history"`, `"settings"`, `"commands"`, `"mighty"`, `"status"`, `"attachments"`, `"style"`, `"files"`, `"screenShare"`, `"structure"`, `"direct"`, `"push"`, `"fileChanges"`, `"workMap"`, `"appUpdate"`, `"pi"`, `"opencode"`, `"hermes"`, `"roles"`, `"savedPrompts"`, `"mergeChecks"`, `"compare"`, `"queueEdit"`(MC-49, 아래 "대기열 행 고치기와 순서").
 
 `"mergeChecks"`와 `"compare"`는 Rust 호스트(Mac·Windows 0.6.0+)가 `GET /m1/sessions/{id}/checks`와 `GET`·`POST /m1/sessions/{id}/compare/{compareId}`를 안다는 뜻이다(아래 "병합 전 점검", "비교 실행"). 이 이름이 없는 호스트에는 휴대폰이 점검 단추를 보이지 않고, 비교 실행 카드는 요약만으로 그리며 병합·폐기는 데스크톱에서 하라고 적는다.
 
@@ -244,6 +244,8 @@ CompareView      { protocol, gone?: true, id, request, baseCommit, baseShort, ba
 | POST | `/m1/sessions/{id}/submit` | `{ text, mode?, attachments?: [uploadId] }` | 202 `{ protocol, accepted }` — `accepted`는 **실제로 일어난 일**이다. 실행 중이면 `mode`와 상관없이(`"queue"`, `"steer"`, 생략 모두) 대기열에 넣고 `queued`를 돌려준다. `mode: "steer"`도 400이 아니라 대기열이다(구버전 휴대폰 호환). 실행 중인 턴에는 넣지 않는다. 실행 중이 아니면 `mode`와 상관없이 바로 시작하고 `started`를 돌려준다. 대기열이 가득 차면 409. 새 호스트는 `{ protocol, accepted, outcome, entryId?, runId? }`를 돌려준다: `outcome`은 `accepted`와 같은 낱말이고(`accepted`는 옛 휴대폰을 위해 그대로 둔다), 바로 시작한 요청에는 그 요청의 사용자 항목 id `entryId`와 그래프 실행 id `runId`가 붙는다(Mac은 둘이 같은 id이고 Windows는 서로 다른 id다. 그래프가 없는 창이면 `runId`가 없다). 대기열에 들어간 요청은 아직 블록이 없으므로 id가 없고, 위임으로 잡아 둔 항목과 함께 풀려 시작한 요청도 그 사이 다른 실행이 시작됐을 수 있어 id 없이 답한다. 휴대폰은 `entryId`로 먼저 그려 둔 요청 블록을 실제 항목에 맞추고, id가 없는 옛 응답이면 글과 시각으로 맞춘다. 읽는 규칙과 사례는 [interaction.md](interaction.md) "보내기 응답"과 `native/contracts/fixtures/pending.json` `submitResponses`. `guided`의 202도 같은 모양이다 |
 | POST | `/m1/sessions/{id}/queue/{itemId}/remove` | | `{ protocol, ok }` · 없는 항목 404 |
 | POST | `/m1/sessions/{id}/queue/{itemId}/run-now` | | `{ protocol, ok: true, ran: "worktree" \| "here" }` — 그 행의 바로 실행. 호스트는 누른 순간의 상태로 다시 판단한다. 없는 행 404 `remote.error.queueItemNotFound` · 지금 바로 실행할 수 없는 행(흐린 행이나 단추 없는 행. 폰은 부르지 않으므로 그 사이 상태가 바뀐 때만 온다) 409 `queue.runNowRefused` · 실행할 수 없는 창 409와 그 이유 · 시작 실패 409 `remote.error.startFailed` |
+| POST | `/m1/sessions/{id}/queue/{itemId}/edit` | `{ text }` | `{ protocol, ok }` — MC-49 `"queueEdit"`. 그 행의 글을 바꾼다(첨부·모드·자리 유지). 보류된 행 409 `queue.editRefused` · 허용한 카드의 이어가기 행 409 `queue.editRefused` · 글 없음 409 · 없는 행 404 · NUL이나 잘못된 본문 400 |
+| POST | `/m1/sessions/{id}/queue/{itemId}/move` | `{ to }` 또는 `{ before }` | `{ protocol, ok }` — MC-49 `"queueEdit"`. `to`는 0(맨 앞, 다음에 실행)부터 1000까지의 자리(끝을 넘으면 끝), `before`는 다른 대기 행 id(그 바로 앞으로). 둘 중 하나만. 보류된 행 409 · 없는 행(또는 `before`) 404 · 그 밖 400 |
 | POST | `/m1/sessions/{id}/queue/run-next` | | `{ protocol, ok }` · 실행 중이거나 대기열이 비면 409. 옛 폰용. 새 폰은 부르지 않는다 |
 | POST | `/m1/sessions/{id}/rename` | `{ title }` (앞뒤 공백 제거 후 1~80자) 또는 `{ title: "", titleMode: "auto" }` | `{ protocol, ok }` — `titleMode: "auto"`이면 `title`을 무시하고 제목을 자동 모드로 되돌린다; 오래된 폰이 `title`만 보내면 고정 이름으로 처리 |
 | POST | `/m1/sessions/{id}/close` | | `{ protocol, ok }` — 실행 중이면 Mac에서 닫을 때와 같이 중지 후 닫는다 |
@@ -682,6 +684,15 @@ oh-my-claudecode가 깔린 Claude 창은 입력창에 **보낼 대상** 스위�
 | 옛 휴대폰 | 머리의 다음 실행(쉬는 창, `/queue/run-next`), 호스트는 예전대로 답한다 | 지금 그대로 |
 
 새 휴대폰과 옛 호스트 조합에서는 쉬는 창의 멈춘 대기열을 휴대폰에서 다시 흘릴 수 없다. 호스트를 올리면 된다.
+
+### 대기열 행 고치기와 순서 (MC-49)
+
+`/m1/info`에 `"queueEdit"`가 있는 호스트에서만 휴대폰의 대기열 행에 **고치기**와 ↑/↓가 보인다. 없으면 목록은 예전 그대로다.
+
+- 행에 `held: true`(위임이 이 창에 보류한 항목)이면 고치기·↑/↓·삭제가 없다. 보류 행은 늘 맨 앞에 있고, 그 위로는 옮기지 않는다. `locked: true`(허용한 Antigravity 카드의 이어가기)이면 고치기만 없다. 두 필드는 참일 때만 실리고, 옛 휴대폰은 건너뛴다.
+- 고치기는 행 자리에서 글을 바꾼다. 저장하면 `queue/{itemId}/edit {text}`, 글이 비면 저장이 막히고 `queue.editEmpty`를 보인다. 호스트가 거절하면 편집기를 둔 채 이유를 알린다.
+- ↑는 바로 위 행의 앞(`{ before: 위 행 id }`), ↓는 두 칸 아래 행의 앞(없으면 `{ to: 1000 }`, 끝)으로 보낸다. id로 자리를 말하므로 보류 행이 섞인 목록에서도 어긋나지 않는다.
+- 데스크톱 대기열은 바뀐 순서대로 실행된다. 창의 revision은 대기열 행의 id와 글이 바뀌어도 움직이므로(`queue_digest`), 데스크톱에서 고치거나 옮긴 것도 다음 세부 정보에 온다.
 
 ### Antigravity 권한 카드
 

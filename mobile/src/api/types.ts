@@ -112,7 +112,9 @@ export type Capability =
   /** The host reads a worktree pane's pre-merge checks for the phone (`GET /m1/sessions/{id}/checks`, MC-27). */
   | 'mergeChecks'
   /** The host shows and acts on a pane's compare runs (`GET`/`POST /m1/sessions/{id}/compare/{compareId}`, MC-29). */
-  | 'compare';
+  | 'compare'
+  /** The host edits and moves a pane's queued rows (`POST /m1/sessions/{id}/queue/{itemId}/edit|move`, MC-49). */
+  | 'queueEdit';
 
 export const CAPABILITIES: readonly Capability[] = [
   'submit-mode',
@@ -139,6 +141,7 @@ export const CAPABILITIES: readonly Capability[] = [
   'savedPrompts',
   'mergeChecks',
   'compare',
+  'queueEdit',
 ] as const;
 
 export interface HostInfo {
@@ -580,7 +583,14 @@ export interface QueuedItem {
   runNow?: 'worktree' | 'here' | 'unavailable';
   /** With "unavailable": "turn" (the current task), "held" (held items first), "update" (a CLI update), "agent" (pick another agent on the computer). */
   runNowReason?: 'turn' | 'held' | 'update' | 'agent';
+  /** MC-49 ("queueEdit"): a row delegation holds for the pane, never edited, moved or removed. */
+  held?: boolean;
+  /** MC-49 ("queueEdit"): an allowed card's follow-up, whose words are never edited (it still moves). */
+  locked?: boolean;
 }
+
+/** MC-49 ("queueEdit"): where `queue/{itemId}/move` puts a row: at a place (0 the head) or just before another row. */
+export type QueuePlace = { to: number } | { before: string };
 
 export interface MobileUsage {
   model?: string;

@@ -58,13 +58,17 @@ pub struct MobilePaneDigest {
 }
 
 /// C# `MobileQueuedItem(Id, Text, RunNow?, RunNowReason?)`: one row of the phone's `queued` array; `run_now` and `run_now_reason`
-/// (`QueueRunNow.Wire`) left out when the row has no button (a held row after the first).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// (`QueueRunNow.Wire`) left out when the row has no button (a held row after the first). MC-49 (`queueEdit`): `held` (a row
+/// delegation holds for the pane: never edited, moved or removed) and `locked` (an allowed card's follow-up: never edited), each sent
+/// only when true.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MobileQueuedItem {
     pub id: String,
     pub text: String,
     pub run_now: Option<String>,
     pub run_now_reason: Option<String>,
+    pub held: bool,
+    pub locked: bool,
 }
 
 /// C# `MobileAskTarget(Id, Label)`: one choice of the phone's "send to" switch, in the desktop menu's order.
@@ -301,6 +305,12 @@ pub trait PhoneDesk: Send + Sync {
     fn app_update_act(&self, install: bool) -> BoxFuture<'_, Result<(), MobileError>>;
     /// `QueueCount`: the pane's queued requests; None: C#'s unset function.
     fn queue_count(&self, session_id: &str) -> Option<i32>;
+    /// MC-49: the pane's queued requests' ids and words in order, so a session's revision moves when one is edited or moved (not only
+    /// added or removed); empty where the desktop does not say.
+    fn queue_digest(&self, session_id: &str) -> String {
+        let _ = session_id;
+        String::new()
+    }
     /// `Catalog`: the model list this PC's CLI gave for the pane's provider (the summary's `resolvedModel`); None reads the fallback.
     fn catalog(&self, pane: &RunSession) -> Option<ModelCatalog>;
     /// `WorkMapRead`: the work map of one of this PC's workspaces; None: C#'s unset function (the work map routes answer 404).

@@ -1371,12 +1371,20 @@ async fn queue_the_phones_rows_held_first_and_their_routes() {
     );
     world.desk.calls().extras = Some(Arc::new(|_| MobilePaneExtras {
         queued: vec![
-            MobileQueuedItem { id: "held-1".into(), text: "notice".into(), run_now: Some("here".into()), run_now_reason: None },
+            MobileQueuedItem {
+                id: "held-1".into(),
+                text: "notice".into(),
+                run_now: Some("here".into()),
+                run_now_reason: None,
+                held: true,
+                locked: false,
+            },
             MobileQueuedItem {
                 id: "q-1".into(),
                 text: "next".into(),
                 run_now: Some("unavailable".into()),
                 run_now_reason: Some("held".into()),
+                ..MobileQueuedItem::default()
             },
         ],
         ..MobilePaneExtras::default()
@@ -1387,7 +1395,7 @@ async fn queue_the_phones_rows_held_first_and_their_routes() {
     let (_, detail) = world.route("GET", "/m1/sessions/pane", None).await;
     assert_eq!(
         detail["queued"],
-        json!([{"id":"held-1","text":"notice","runNow":"here"},{"id":"q-1","text":"next","runNow":"unavailable","runNowReason":"held"}])
+        json!([{"id":"held-1","text":"notice","runNow":"here","held":true},{"id":"q-1","text":"next","runNow":"unavailable","runNowReason":"held"}])
     );
     assert_eq!(detail["session"]["queued"], 2, "the list counts the held rows with the queue");
     let (status, body) = world.route("POST", "/m1/sessions/pane/queue/held-1/remove", None).await;
@@ -1406,6 +1414,72 @@ async fn queue_the_phones_rows_held_first_and_their_routes() {
     assert_eq!(world.route("POST", "/m1/sessions/pane/queue/run-next", None).await.0, 200);
     let names: Vec<String> = world.desk.actions().iter().map(|a| a.action.clone()).collect();
     assert_eq!(names, ["queue-remove", "queue-run-now", "queue-next"]);
+}
+
+/// MC-49 (`queueEdit`): `queue/{item}/edit {text}` and `queue/{item}/move {to | before}` hand the desktop the row and its words or
+/// place (`queue-edit`, `queue-move`); a held row is neither, a malformed row is not found, a body outside the rules is refused before
+/// the desktop is asked, and the desktop's refusal is the phone's.
+#[tokio::test]
+async fn queue_rows_are_edited_and_moved_through_the_desktop() {
+    use mighty_delegation::delivery::{DelegationDeliveryItem, DelegationDeliveryKind};
+    let world = World::new("mobile-queue-edit");
+    world.desk.set_sessions(vec![pane("pane", "w")]);
+    world.desk.calls().held.insert(
+        "pane".into(),
+        vec![DelegationDeliveryItem {
+            id: "held-1".into(),
+            kind: DelegationDeliveryKind::Notice,
+            child_id: "c".into(),
+            session_id: "pane".into(),
+            text: "notice".into(),
+        }],
+    );
+    world.desk.calls().action = Some(Arc::new(|a| {
+        if a.body["text"] == "refuse me" {
+            return Err(MobileError::request(409, "Enter a request.", None));
+        }
+        Ok(ActionAnswer::Value(Value::Null))
+    }));
+    let post = |path: &str, body: Value| {
+        let path = path.to_string();
+        let world = &world;
+        async move { world.route("POST", &path, Some(body)).await }
+    };
+    assert_eq!(post("/m1/sessions/pane/queue/q-1/edit", json!({"text": "new words"})).await.0, 200);
+    assert_eq!(post("/m1/sessions/pane/queue/q-1/move", json!({"to": 0})).await.0, 200);
+    assert_eq!(post("/m1/sessions/pane/queue/q-1/move", json!({"before": "q-2"})).await.0, 200);
+    let (status, body) = post("/m1/sessions/pane/queue/q-1/edit", json!({"text": "refuse me"})).await;
+    assert!(status == 409 && body["error"] == "Enter a request.", "the desktop's refusal: {status} {body}");
+    let seen: Vec<String> = world.desk.actions().iter().map(|a| format!("{} {}", a.action, a.body)).collect();
+    assert_eq!(
+        seen,
+        [
+            r#"queue-edit {"id":"q-1","text":"new words"}"#,
+            r#"queue-move {"id":"q-1","to":0}"#,
+            r#"queue-move {"id":"q-1","before":"q-2"}"#,
+            r#"queue-edit {"id":"q-1","text":"refuse me"}"#,
+        ]
+        .map(String::from)
+    );
+    let (status, body) = post("/m1/sessions/pane/queue/held-1/edit", json!({"text": "x"})).await;
+    assert!(status == 409 && body["error"] == l().get("queue.editRefused"), "a held row is not edited");
+    assert_eq!(post("/m1/sessions/pane/queue/held-1/move", json!({"to": 1})).await.0, 409, "nor moved");
+    let (status, body) = post("/m1/sessions/pane/queue/..%2Fx/edit", json!({"text": "x"})).await;
+    assert!(status == 404 && body["error"] == l().get("remote.error.queueItemNotFound"), "a malformed row is not found");
+    for (action, bad) in [
+        ("edit", json!({})),
+        ("edit", json!({"text": 1})),
+        ("edit", json!({"text": "a\u{0}b"})),
+        ("move", json!({})),
+        ("move", json!({"to": -1})),
+        ("move", json!({"to": 1001})),
+        ("move", json!({"to": 0, "before": "q-2"})),
+        ("move", json!({"before": "../x"})),
+    ] {
+        let status = post(&format!("/m1/sessions/pane/queue/q-1/{action}"), bad.clone()).await.0;
+        assert_eq!(status, 400, "{action} {bad}");
+    }
+    assert_eq!(world.desk.actions().len(), 4, "nothing outside the rules reached the desktop");
 }
 
 /// The router's preconditions and exception mapping (plan §1.5): only `/m1/`, a repeated query key or a POST with a query 400, a desk

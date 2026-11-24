@@ -19,7 +19,7 @@ use mighty_run::strings::get;
 use serde_json::{Map, Value, json};
 
 use super::host::{MirrorHost, Refusal};
-use super::{MirrorPane, MirrorPaneInfo, MirrorQueued, MirrorSession, MirrorSummary, support};
+use super::{MirrorPane, MirrorPaneInfo, MirrorQueued, MirrorSession, MirrorSummary, QueuePlace, support};
 use crate::phone::desk::{ActionAnswer, MobileError};
 use crate::phone::router::Router;
 use crate::relay::connection::MobileDevice;
@@ -149,7 +149,7 @@ impl MirrorHost for DeskMirrorHost {
                     revision: support::revision(&pane, &permissions, &queued, branch.as_deref(), base.as_deref()),
                     // MC-49: this app takes the queue's actions (the phone's queue routes).
                     session: MirrorSession {
-                        queue_actions: true,
+                        queue_actions: super::protocol::QUEUE_ACTIONS.iter().map(|a| (*a).to_string()).collect(),
                         ..support::session(&pane, &permissions, &queued, branch.as_deref(), base.as_deref())
                     },
                 }
@@ -251,6 +251,16 @@ impl MirrorHost for DeskMirrorHost {
             let answer = self.route(format!("/m1/sessions/{session_id}/queue/{item_id}/run-now"), json!({})).await?;
             Ok(answer.get("ran").and_then(Value::as_str).unwrap_or("here").to_string())
         })
+    }
+
+    fn queue_edit(&self, session_id: String, item_id: String, text: String) -> BoxFuture<'_, Result<(), Refusal>> {
+        Box::pin(
+            async move { self.route(format!("/m1/sessions/{session_id}/queue/{item_id}/edit"), json!({"text": text})).await.map(|_| ()) },
+        )
+    }
+
+    fn queue_move(&self, session_id: String, item_id: String, place: QueuePlace) -> BoxFuture<'_, Result<(), Refusal>> {
+        Box::pin(async move { self.route(format!("/m1/sessions/{session_id}/queue/{item_id}/move"), place.to_value()).await.map(|_| ()) })
     }
 
     fn create_session(&self, workspace_id: String, provider: String) -> BoxFuture<'_, Result<String, Refusal>> {

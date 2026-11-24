@@ -48,6 +48,7 @@ import {
   type MobileSessionDetail,
   type MobileState,
   type OkResponse,
+  type QueuePlace,
   type RunNowResponse,
   type Provider,
   type PlanDecisionKind,
@@ -255,6 +256,10 @@ export interface MobileClient {
   stop(sessionId: string, signal?: AbortSignal): Promise<StopResponse>;
   /** Drops one queued request ("queue"). */
   removeQueued(sessionId: string, itemId: string, signal?: AbortSignal): Promise<OkResponse>;
+  /** MC-49 ("queueEdit"): a queued row's new words; the host refuses none (409 with its words). */
+  editQueued(sessionId: string, itemId: string, text: string, signal?: AbortSignal): Promise<OkResponse>;
+  /** MC-49 ("queueEdit"): a queued row's new place; the queue starts its rows in that order. */
+  moveQueued(sessionId: string, itemId: string, place: QueuePlace, signal?: AbortSignal): Promise<OkResponse>;
   /** 바로 실행 on one queued row ("queue", host 0.4.47+): a new worktree child or this pane, as the host decides. */
   runQueuedNow(sessionId: string, itemId: string, signal?: AbortSignal): Promise<RunNowResponse>;
   /** Renames the pane ("pane"); the title is trimmed to 1..80 characters. */
@@ -513,6 +518,22 @@ export function createClient(channel: RelayChannel): MobileClient {
         'POST',
         `/m1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(itemId)}/remove`,
         {},
+        signal,
+      ),
+
+    editQueued: (sessionId, itemId, text, signal) =>
+      request<OkResponse>(
+        'POST',
+        `/m1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(itemId)}/edit`,
+        { text },
+        signal,
+      ),
+
+    moveQueued: (sessionId, itemId, place, signal) =>
+      request<OkResponse>(
+        'POST',
+        `/m1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(itemId)}/move`,
+        place,
         signal,
       ),
 

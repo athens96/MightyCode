@@ -32,6 +32,7 @@ import {
   type MobileSessionSummary,
   type PlanDecisionKind,
   type QueuedItem,
+  type QueuePlace,
   type QuestionAnswers,
   type SettingsPatch,
   type TerminalPrompt,
@@ -338,6 +339,8 @@ export default function SessionScreen() {
   useEffect(() => () => clearTimeout(holdTimer.current), []);
 
   const canQueue = hasCapability(capabilities, 'queue');
+  // MC-49: the host edits and moves its queued rows.
+  const canEditQueue = canQueue && hasCapability(capabilities, 'queueEdit');
   const canPane = hasCapability(capabilities, 'pane');
   const canHistory = hasCapability(capabilities, 'history');
   const canSettings = hasCapability(capabilities, 'settings');
@@ -969,6 +972,39 @@ export default function SessionScreen() {
     [client, poll, sessionId],
   );
 
+  const editQueued = useCallback(
+    async (item: QueuedItem, text: string): Promise<boolean> => {
+      if (!client || !sessionId) return false;
+      try {
+        await client.editQueued(sessionId, item.id, text);
+        poll.refresh();
+        return true;
+      } catch (error) {
+        showToast(describeError(error), 'error');
+        return false;
+      }
+    },
+    [client, poll, sessionId],
+  );
+
+  const moveQueued = useCallback(
+    (item: QueuedItem, place: QueuePlace) => {
+      if (!client || !sessionId) return;
+      void (async () => {
+        setQueueBusy(true);
+        try {
+          await client.moveQueued(sessionId, item.id, place);
+          poll.refresh();
+        } catch (error) {
+          showToast(describeError(error), 'error');
+        } finally {
+          setQueueBusy(false);
+        }
+      })();
+    },
+    [client, poll, sessionId],
+  );
+
   const runNow = useCallback(
     (item: QueuedItem) => {
       if (!client || !sessionId) return;
@@ -1498,6 +1534,9 @@ export default function SessionScreen() {
       <QueuedList
         items={detail.queued}
         manageable={canQueue}
+        editable={canEditQueue}
+        onEdit={editQueued}
+        onMove={moveQueued}
         busy={queueBusy}
         flash={queueFlash}
         onRemove={removeQueued}

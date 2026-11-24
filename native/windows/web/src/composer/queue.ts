@@ -36,23 +36,46 @@ export function rowAgent<T extends { agent: string; enabled: boolean }>(agents: 
 export const runNowBranches = (runNow: RunNow): boolean => runNow === 'worktree' || runNow === 'agentMenu';
 
 /**
- * MC-49: a mirrored pane's queue is its host's. × and 바로 실행 go to the host, which runs a worktree row with the host pane's own
- * agent (no agent pick here); `actions` false (an older host that does not take them) draws the rows without either.
+ * MC-49: a mirrored pane's queue is its host's. ×, 바로 실행, 고치기 and ↑/↓ go to the host, which runs a worktree row with the host pane's
+ * own agent (no agent pick here). `actions` (× and 바로 실행), `edit` and `reorder` say which the host takes; an older host takes none
+ * or only the first two, and the rest are not drawn.
  */
 export interface QueueRemote {
   actions: boolean;
+  edit?: boolean;
+  reorder?: boolean;
 }
 
-/** What a queued row draws: 바로 실행 (null: none), the agent pick before a worktree row, and ×. */
+/** What a queued row draws: 바로 실행 (null: none), the agent pick before a worktree row, ×, 고치기 and ↑/↓. */
 export interface QueueRowButtons {
   runNow: RunNow | null;
   pick: boolean;
   remove: boolean;
+  edit: boolean;
+  move: boolean;
 }
-export function queueRowButtons(runNow: RunNow | null, remote: QueueRemote | null | undefined): QueueRowButtons {
-  if (!remote) return { runNow, pick: true, remove: true };
-  if (!remote.actions) return { runNow: null, pick: false, remove: false };
-  return { runNow, pick: false, remove: true };
+/** `locked`: the row's words are not edited (an allowed card's follow-up; a host's row whose words came cut). */
+export function queueRowButtons(runNow: RunNow | null, remote: QueueRemote | null | undefined, locked = false): QueueRowButtons {
+  if (!remote) return { runNow, pick: true, remove: true, edit: !locked, move: true };
+  return {
+    runNow: remote.actions ? runNow : null,
+    pick: false,
+    remove: remote.actions,
+    edit: !!remote.edit && !locked,
+    move: !!remote.reorder,
+  };
+}
+
+/** ↑/↓ on a focused row (or its buttons): the place it moves to, or null when it is already at that end or the key is another. */
+export function queueMoveTarget(index: number, count: number, key: string): number | null {
+  if (key === 'ArrowUp') return index > 0 ? index - 1 : null;
+  if (key === 'ArrowDown') return index < count - 1 ? index + 1 : null;
+  return null;
+}
+
+/** 고치기's words as they would be saved: null when they cannot be (none on a row without files), as the host refuses them. */
+export function editedWords(text: string, files: number): string | null {
+  return text.trim().length === 0 && files === 0 ? null : text;
 }
 
 /** A host's row: whether 바로 실행 waits (a row that needs another agent's pick waits there), and its tooltip key and values. */

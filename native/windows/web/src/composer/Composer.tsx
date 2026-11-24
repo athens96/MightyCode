@@ -7,9 +7,9 @@ import { enterAction, maximumDraft, secondSendWords } from './keys';
 import { choose, closed, move, paletteDraft, paletteKey, paletteState, safeIndex, type PaletteState, type SlashCatalog, type SlashCommand } from './slash';
 import { BusySendPill, MenuList, SendMenu, StyleRow, Toolbar, usePopover } from './Toolbar';
 import { Guided } from './Guided';
-import { queueRowButtons, readRunNow, remoteRunNowTip, remoteRunNowWaits, rowAgent, runNowBranches, runNowTip, runNowWaits, type RunNow } from './queue';
+import { editedWords, queueMoveTarget, queueRowButtons, readRunNow, remoteRunNowTip, remoteRunNowWaits, rowAgent, runNowBranches, runNowTip, runNowWaits, type QueueRowButtons, type RunNow } from './queue';
 import { Icon } from '../icons/Icon';
-import type { AttachmentPreview, ComposerState, SendResult, WorktreeAgent } from './types';
+import type { AttachmentPreview, ComposerState, QueueItem, SendResult, WorktreeAgent } from './types';
 import { ProviderMark } from '../conversation/ProviderMark';
 import { usePageOverlay } from '../shell/overlay';
 import { hostCapabilities } from '../slot/host';
@@ -512,21 +512,12 @@ export function Composer({ session }: { session: RunSession }) {
               </div>
               );
             })}
-            {queue.items.map((item, index) => {
+            {queue.items.map((item, index) => (
               // MC-49: a mirrored pane's rows are its host's (queue.remote): their buttons act there.
-              const buttons = queueRowButtons(readRunNow(item.runNow), queue.remote);
-              return (
-              <div className="composer-queue-item" key={item.id} data-queue-item={item.id} data-queue-remote={queue.remote ? '' : undefined}>
-                <span className="composer-queue-number">{queue.held.length + index + 1}</span>
-                <span className="composer-queue-text">
-                  {item.text.length === 0 ? t('queue.attachmentsOnly') : item.text}
-                  {item.attachments.length > 0 && <span className="composer-queue-files">{item.attachments.join(', ')}</span>}
-                </span>
-                <RunNowButton paneId={paneId} itemId={item.id} runNow={buttons.runNow} held={queue.held.length} agents={agents} own={session.provider} remote={!buttons.pick} />
-                {buttons.remove && <button type="button" className="composer-icon-button" title={t('tooltip.composer.queueRemove')} aria-label={t('queue.remove')} onClick={() => call('queueRemove', { itemId: item.id })}>×</button>}
-              </div>
-              );
-            })}
+              <QueueRow key={item.id} paneId={paneId} item={item} index={index} count={queue.items.length} held={queue.held.length}
+                buttons={queueRowButtons(readRunNow(item.runNow), queue.remote, item.locked)} remote={!!queue.remote} agents={agents}
+                own={session.provider} call={call} />
+            ))}
           </div>
         )}
         <VoiceStatusBar
@@ -645,6 +636,97 @@ export function Composer({ session }: { session: RunSession }) {
             <button type="button" className="composer-text-button" title={t('tooltip.composer.closePreview')} onClick={() => setPreview(null)}>{t('settings.closeButton')}</button>
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One queued row (MC-49): its number and words, 바로 실행, 고치기, ↑/↓ and ×, as `buttons` allows. 고치기 turns the words into an editor
+ * in the row (Enter saves, Shift+Enter a new line, Esc cancels; words none are refused and the editor stays). ↑/↓ on the focused row
+ * move it; the row keeps the focus at its new place. The rule for each is the host's: the page only asks.
+ */
+function QueueRow({ paneId, item, index, count, held, buttons, remote, agents, own, call }: {
+  paneId: string; item: QueueItem; index: number; count: number; held: number; buttons: QueueRowButtons; remote: boolean;
+  agents: readonly WorktreeAgent[]; own: string; call: (method: string, args?: Record<string, unknown>) => void;
+}) {
+  const { bridge, t } = useServices();
+  const [editing, setEditing] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const row = useRef<HTMLDivElement | null>(null);
+  const moved = useRef(false);
+  // A row moved from the keyboard keeps the focus at its new place (the page draws the new order when the host pushes it).
+  useEffect(() => {
+    if (moved.current) {
+      moved.current = false;
+      row.current?.focus();
+    }
+  }, [index]);
+  const moveTo = (to: number | null, keyboard = false) => {
+    if (to === null) return;
+    moved.current = keyboard;
+    call('queueMove', { itemId: item.id, to });
+  };
+  const save = async () => {
+    if (editing === null || saving) return;
+    const words = editedWords(editing, item.attachments.length);
+    if (words === null) { setRefusal(t('queue.editEmpty')); return; }
+    if (words === item.text) { setEditing(null); setRefusal(null); return; }
+    setSaving(true);
+    try {
+      await bridge.call('queueEdit', { paneId, itemId: item.id, text: words });
+      setEditing(null);
+      setRefusal(null);
+    } catch (failure) {
+      setRefusal(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const cancel = () => { setEditing(null); setRefusal(null); row.current?.focus(); };
+  return (
+    <div className="composer-queue-item" ref={row} data-queue-item={item.id} data-queue-remote={remote ? '' : undefined}
+      tabIndex={buttons.move ? 0 : undefined} title={buttons.move && editing === null ? t('queue.rowHelp') : undefined}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget || !buttons.move) return;
+        const to = queueMoveTarget(index, count, event.key);
+        if (to === null) return;
+        event.preventDefault();
+        moveTo(to, true);
+      }}>
+      <span className="composer-queue-number">{held + index + 1}</span>
+      {editing !== null ? (
+        <span className="composer-queue-editing">
+          <textarea className="composer-queue-editor" value={editing} rows={Math.min(6, Math.max(1, editing.split('\n').length))} autoFocus
+            aria-label={t('queue.edit')} aria-invalid={refusal !== null || undefined} disabled={saving}
+            onChange={(event) => { setEditing(event.target.value); setRefusal(null); }}
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+              if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancel(); }
+              else if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void save(); }
+            }} />
+          {refusal && <span className="composer-queue-refusal" role="alert">{refusal}</span>}
+        </span>
+      ) : (
+        <span className="composer-queue-text">
+          {item.text.length === 0 ? t('queue.attachmentsOnly') : item.text}
+          {item.attachments.length > 0 && <span className="composer-queue-files">{item.attachments.join(', ')}</span>}
+        </span>
+      )}
+      {editing !== null ? (
+        <>
+          <button type="button" className="composer-icon-button" title={t('queue.editSave')} aria-label={t('queue.editSave')} disabled={saving} onClick={() => void save()}><Icon name="check" size={12} weight={2.2} /></button>
+          <button type="button" className="composer-icon-button" title={t('common.cancel')} aria-label={t('common.cancel')} onClick={cancel}>×</button>
+        </>
+      ) : (
+        <>
+          <RunNowButton paneId={paneId} itemId={item.id} runNow={buttons.runNow} held={held} agents={agents} own={own} remote={!buttons.pick} />
+          {buttons.edit && <button type="button" className="composer-icon-button" title={t('queue.editHelp')} aria-label={t('queue.edit')} onClick={() => { setEditing(item.text); setRefusal(null); }}><Icon name="pencil" size={11} weight={2.2} /></button>}
+          {buttons.move && <button type="button" className="composer-icon-button" title={t('queue.moveUp')} aria-label={t('queue.moveUp')} aria-disabled={index === 0 || undefined} onClick={() => moveTo(queueMoveTarget(index, count, 'ArrowUp'))}><Icon name="arrow-up" size={11} weight={2.2} /></button>}
+          {buttons.move && <button type="button" className="composer-icon-button" title={t('queue.moveDown')} aria-label={t('queue.moveDown')} aria-disabled={index === count - 1 || undefined} onClick={() => moveTo(queueMoveTarget(index, count, 'ArrowDown'))}><Icon name="arrow-down" size={11} weight={2.2} /></button>}
+          {buttons.remove && <button type="button" className="composer-icon-button" title={t('tooltip.composer.queueRemove')} aria-label={t('queue.remove')} onClick={() => call('queueRemove', { itemId: item.id })}>×</button>}
+        </>
       )}
     </div>
   );

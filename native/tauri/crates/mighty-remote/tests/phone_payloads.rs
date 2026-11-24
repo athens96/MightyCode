@@ -1130,7 +1130,13 @@ fn rows(paths: Option<&dyn Fn(&str) -> mighty_composer::queue::QueueRunNowPath>)
 }
 
 fn item(id: &str, text: &str, run_now: Option<&str>, reason: Option<&str>) -> MobileQueuedItem {
-    MobileQueuedItem { id: id.into(), text: text.into(), run_now: run_now.map(str::to_string), run_now_reason: reason.map(str::to_string) }
+    MobileQueuedItem {
+        id: id.into(),
+        text: text.into(),
+        run_now: run_now.map(str::to_string),
+        run_now_reason: reason.map(str::to_string),
+        ..MobileQueuedItem::default()
+    }
 }
 
 /// DelegationDeliveryVerification.cs:368-378 (MobileItems): held rows first in the phone's queued array, in its item shape.

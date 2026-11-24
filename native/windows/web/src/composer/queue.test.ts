@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { queueRowButtons, readRunNow, remoteRunNowTip, remoteRunNowWaits, rowAgent, runNowBranches, runNowTip, runNowWaits, type RunNow } from './queue';
+import { editedWords, queueMoveTarget, queueRowButtons, readRunNow, remoteRunNowTip, remoteRunNowWaits, rowAgent, runNowBranches, runNowTip, runNowWaits, type RunNow } from './queue';
 
 const names: RunNow[] = ['worktree', 'agentMenu', 'here', 'steer', 'held', 'waitsForTurn', 'waitsForHeld', 'waitsForUpdate'];
 
@@ -36,19 +36,44 @@ describe('바로 실행 on a queued row', () => {
   });
 });
 
-describe("a mirrored pane's queue (its host's, MC-49)", () => {
-  it('draws this PC\'s own rows as before: 바로 실행 with the agent pick, and ×', () => {
-    expect(queueRowButtons('worktree', undefined)).toEqual({ runNow: 'worktree', pick: true, remove: true });
-    expect(queueRowButtons(null, null)).toEqual({ runNow: null, pick: true, remove: true });
+describe("a queued row's buttons, this PC's and a mirrored pane's host's (MC-49)", () => {
+  it('draws this PC\'s own rows with 바로 실행 and its agent pick, ×, 고치기 and ↑/↓', () => {
+    expect(queueRowButtons('worktree', undefined)).toEqual({ runNow: 'worktree', pick: true, remove: true, edit: true, move: true });
+    expect(queueRowButtons(null, null)).toEqual({ runNow: null, pick: true, remove: true, edit: true, move: true });
+    // An allowed card's follow-up keeps its words, but moves.
+    expect(queueRowButtons('here', null, true)).toEqual({ runNow: 'here', pick: true, remove: true, edit: false, move: true });
   });
 
-  it("draws a host's rows with × and 바로 실행 but no agent pick (the host pane's own agent runs it)", () => {
-    for (const name of names) expect(queueRowButtons(name, { actions: true })).toEqual({ runNow: name, pick: false, remove: true });
-    expect(queueRowButtons(null, { actions: true })).toEqual({ runNow: null, pick: false, remove: true });
+  it("draws a host's rows with what the host takes, never the agent pick (the host pane's own agent runs it)", () => {
+    const all = { actions: true, edit: true, reorder: true };
+    for (const name of names) expect(queueRowButtons(name, all)).toEqual({ runNow: name, pick: false, remove: true, edit: true, move: true });
+    expect(queueRowButtons(null, all)).toEqual({ runNow: null, pick: false, remove: true, edit: true, move: true });
+    // A host row whose words came cut is not edited (the rest would be lost).
+    expect(queueRowButtons('here', all, true)).toEqual({ runNow: 'here', pick: false, remove: true, edit: false, move: true });
+    // An earlier MC-49 host takes × and 바로 실행 only.
+    expect(queueRowButtons('here', { actions: true })).toEqual({ runNow: 'here', pick: false, remove: true, edit: false, move: false });
   });
 
-  it('draws an older host\'s rows without buttons, since it does not take the actions', () => {
-    for (const name of [...names, null]) expect(queueRowButtons(name, { actions: false })).toEqual({ runNow: null, pick: false, remove: false });
+  it('draws an older host\'s rows without buttons, since it takes no queue action', () => {
+    for (const name of [...names, null]) {
+      expect(queueRowButtons(name, { actions: false, edit: false, reorder: false })).toEqual({ runNow: null, pick: false, remove: false, edit: false, move: false });
+    }
+  });
+
+  it('moves a focused row one place with ↑/↓, never past either end', () => {
+    expect(queueMoveTarget(1, 3, 'ArrowUp')).toBe(0);
+    expect(queueMoveTarget(1, 3, 'ArrowDown')).toBe(2);
+    expect(queueMoveTarget(0, 3, 'ArrowUp')).toBeNull();
+    expect(queueMoveTarget(2, 3, 'ArrowDown')).toBeNull();
+    expect(queueMoveTarget(0, 1, 'ArrowDown')).toBeNull();
+    for (const key of ['Enter', 'ArrowLeft', 'k']) expect(queueMoveTarget(1, 3, key)).toBeNull();
+  });
+
+  it('saves 고치기\'s words as written, and refuses none on a row without files', () => {
+    expect(editedWords('  new words \n', 0)).toBe('  new words \n');
+    expect(editedWords('', 0)).toBeNull();
+    expect(editedWords(' \n\t', 0)).toBeNull();
+    expect(editedWords('', 2)).toBe('');
   });
 
   it("lets a host's worktree row run, and makes a row that needs another agent's pick wait", () => {

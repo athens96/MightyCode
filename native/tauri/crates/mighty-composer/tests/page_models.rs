@@ -778,7 +778,8 @@ fn the_composer_state_has_the_pages_field_names() {
         attachments: vec![],
         permission_mode_override: None,
         prepared: false,
-        continuation: false,
+        // MC-49: an allowed card's follow-up, so `locked` is written.
+        continuation: true,
     };
     let file = mighty_composer::attachments::make("a.txt", b"text", &ko()).unwrap();
     let view = PaneViewState {
@@ -814,6 +815,9 @@ fn the_composer_state_has_the_pages_field_names() {
     ] {
         same_keys(&types, name, item);
     }
+    // MC-49: a mirrored pane's `queue.remote` (queue.ts `QueueRemote`).
+    let remote = mighty_composer::composer::RemoteQueue { actions: true, edit: true, reorder: true };
+    same_keys(&page_source("composer/queue.ts"), "QueueRemote", &serde_json::to_value(remote).unwrap());
     let menus_ts = page_source("composer/menus.ts");
     same_keys(&menus_ts, "Pills", &value["pills"]);
     let info = menus::run_settings_info(&menu_inputs(&full_pane, Some(&runtime), &levels, false));

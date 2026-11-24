@@ -18,6 +18,8 @@ export interface QueueItem {
   attachments: string[];
   /** What 바로 실행 does on the row (Core QueueRunNow); null draws no button. */
   runNow: RunNow | null;
+  /** MC-49: the words are not edited (an allowed card's follow-up; a host's row whose words came cut); absent: they may be. */
+  locked?: boolean;
 }
 
 export interface ComposerAttachment {

@@ -126,6 +126,7 @@ fn hosted_rows(
                 id: item.id.clone(),
                 text: item.text.clone(),
                 run_now: (path != QueueRunNowPath::Hidden).then(|| path.name().to_string()),
+                cut: false,
             }
         })
         .collect()
@@ -329,7 +330,7 @@ pub fn queue_model(session: &RunSession) -> Option<QueueModel> {
 fn hosted_queue(counts: &MirrorCounts) -> QueueModel {
     use mighty_composer::queue::QueueRunNowPath;
     let run_now = |row: &MirrorQueued| -> Option<&'static str> {
-        if !counts.queue_actions {
+        if !counts.takes("runNow") {
             return None;
         }
         let path = QueueRunNowPath::ALL.into_iter().find(|p| Some(p.name()) == row.run_now.as_deref())?;
@@ -342,16 +343,28 @@ fn hosted_queue(counts: &MirrorCounts) -> QueueModel {
             .queued_items
             .iter()
             .flatten()
-            .map(|row| QueueItem { id: row.id.clone(), text: row.text.clone(), attachments: vec![], run_now: run_now(row) })
+            .map(|row| QueueItem {
+                id: row.id.clone(),
+                text: row.text.clone(),
+                attachments: vec![],
+                run_now: run_now(row),
+                // Words that came cut are not the whole request: editing them here would lose the rest.
+                locked: row.cut,
+            })
             .collect(),
         waits_on_background: None,
-        remote: Some(RemoteQueue { actions: counts.queue_actions }),
+        remote: Some(RemoteQueue {
+            actions: counts.takes("remove") && counts.takes("runNow"),
+            edit: counts.takes("edit"),
+            reorder: counts.takes("move"),
+        }),
     }
 }
 
-/// MC-49: the page's × (`queueRemove`) or 바로 실행 (`queueRunNow`) on a mirrored pane's queued row, taken on its host; a refusal is said in
-/// the error line. None for any other pane (the composer takes it as its own).
-pub async fn queue_action(host: &Arc<Host>, id: &str, item: &str, action: QueueAction) -> Option<()> {
+/// MC-49: the page's × (`queueRemove`), 바로 실행 (`queueRunNow`), 고치기 (`queueEdit`) or ↑/↓ (`queueMove`) on a mirrored pane's queued
+/// row, taken on its host: Err with the host's (or the connection's) words when it was refused. None for any other pane (the composer
+/// takes it as its own).
+pub async fn queue_action(host: &Arc<Host>, id: &str, item: &str, action: QueueAction) -> Option<Result<(), String>> {
     let mirrored = host.view().snapshot.session(id).is_some_and(|s| s.mirror.is_some());
     if !mirrored {
         return None;
@@ -360,12 +373,9 @@ pub async fn queue_action(host: &Arc<Host>, id: &str, item: &str, action: QueueA
         Some(desk) => desk.queue_action(id, item, action).await.map(|_| ()),
         None => Err(host.locale.get("remote.mirror.error.unavailable")),
     };
-    if let Err(words) = result {
-        host.view().error = Some(words);
-    }
     host.panes_changed();
     host.schedule();
-    Some(())
+    Some(result)
 }
 
 /// `CloseSessionAsync` of a mirrored pane: closed on its computer, as the phone's close does; it leaves here at once. False for any other
@@ -758,8 +768,8 @@ mod tests {
         assert_eq!(
             rows,
             [
-                MirrorQueued { id: first, text: "Run the tests".into(), run_now: Some("worktree".into()) },
-                MirrorQueued { id: second, text: "Then lint".into(), run_now: None },
+                MirrorQueued { id: first, text: "Run the tests".into(), run_now: Some("worktree".into()), cut: false },
+                MirrorQueued { id: second, text: "Then lint".into(), run_now: None, cut: false },
             ]
         );
     }
@@ -772,14 +782,16 @@ mod tests {
             id: id.into(),
             text: text.into(),
             run_now: run_now.map(Into::into),
+            cut: false,
         };
+        let all = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
         let counts = MirrorCounts {
             queued: 3,
-            queue_actions: true,
+            queue_actions: all(&["remove", "runNow", "edit", "move"]),
             queued_items: Some(vec![
                 row("queued-1", "Run the tests", Some("worktree")),
                 row("queued-2", "Then lint", Some("agentMenu")),
-                row("queued-3", "", Some("bogus")),
+                MirrorQueued { cut: true, ..row("queued-3", "", Some("bogus")) },
             ]),
             ..MirrorCounts::default()
         };
@@ -790,14 +802,26 @@ mod tests {
             [("queued-1", "Run the tests", Some("worktree")), ("queued-2", "Then lint", Some("waitsForTurn")), ("queued-3", "", None)]
         );
         assert!(model.held.is_empty() && model.waits_on_background.is_none());
-        assert_eq!(model.remote, Some(RemoteQueue { actions: true }));
+        assert_eq!(model.remote, Some(RemoteQueue { actions: true, edit: true, reorder: true }));
+        assert_eq!(model.items.iter().map(|i| i.locked).collect::<Vec<_>>(), [false, false, true], "words that came cut are not edited");
         let json = serde_json::to_value(&model).unwrap();
-        assert_eq!(json["remote"], serde_json::json!({"actions": true}), "the page reads it as queue.remote");
+        assert_eq!(
+            json["remote"],
+            serde_json::json!({"actions": true, "edit": true, "reorder": true}),
+            "the page reads it as queue.remote"
+        );
         assert_eq!(json["items"][0]["runNow"], "worktree");
+        assert!(json["items"][0].get("locked").is_none() && json["items"][2]["locked"] == true);
 
-        let older = hosted_queue(&MirrorCounts { queue_actions: false, ..counts.clone() });
+        let earlier = hosted_queue(&MirrorCounts { queue_actions: all(&["remove", "runNow"]), ..counts.clone() });
+        assert_eq!(
+            earlier.remote,
+            Some(RemoteQueue { actions: true, edit: false, reorder: false }),
+            "an earlier MC-49 host: × and 바로 실행"
+        );
+        let older = hosted_queue(&MirrorCounts { queue_actions: vec![], ..counts.clone() });
         assert!(older.items.len() == 3 && older.items.iter().all(|i| i.run_now.is_none()), "an older host's rows have no buttons");
-        assert_eq!(older.remote, Some(RemoteQueue { actions: false }));
+        assert_eq!(older.remote, Some(RemoteQueue { actions: false, edit: false, reorder: false }));
         assert!(hosted_queue(&MirrorCounts { queued: 0, queued_items: Some(vec![]), ..counts.clone() }).items.is_empty());
         assert!(hosted_queue(&MirrorCounts::default()).items.is_empty(), "nothing before a detail was read");
         // Only a mirrored pane's composer is its host's.

@@ -95,10 +95,10 @@ pub fn revision(
         None => String::new(),
     });
     parts.extend(permissions.iter().map(|p| format!("{}:{}:{}", p.id, p.run_id, p.state)));
-    // MC-49: what 바로 실행 does on a row moves the revision too (a row the host has no button for reads as before).
+    // MC-49: the rows in order with their words (an edit that keeps the length moves it too) and what 바로 실행 does on each.
     parts.extend(queued.iter().map(|q| match &q.run_now {
-        Some(run_now) => format!("{}:{}:{run_now}", q.id, q.text.encode_utf16().count()),
-        None => format!("{}:{}", q.id, q.text.encode_utf16().count()),
+        Some(run_now) => format!("{}:{}:{run_now}", q.id, q.text),
+        None => format!("{}:{}", q.id, q.text),
     }));
     digest(parts)
 }
@@ -156,10 +156,14 @@ pub fn session(
         queued: queued
             .iter()
             .take(protocol::MAXIMUM_QUEUED)
-            .map(|q| MirrorQueued {
-                id: q.id.clone(),
-                text: text::cut(&q.text, protocol::MAXIMUM_QUEUED_TEXT),
-                run_now: q.run_now.clone().filter(|r| protocol::RUN_NOW.contains(&r.as_str())),
+            .map(|q| {
+                let shown = text::cut(&q.text, protocol::MAXIMUM_QUEUED_TEXT);
+                MirrorQueued {
+                    id: q.id.clone(),
+                    cut: q.cut || shown != q.text,
+                    text: shown,
+                    run_now: q.run_now.clone().filter(|r| protocol::RUN_NOW.contains(&r.as_str())),
+                }
             })
             .collect(),
         title_mode: pane.title_mode.clone(),
@@ -171,7 +175,7 @@ pub fn session(
         finished_at: pane.run_timing.as_ref().and_then(|t| t.finished_at).map(whole),
         branch: branch.map(str::to_string),
         base: base_branch.map(str::to_string),
-        queue_actions: false,
+        queue_actions: vec![],
     };
     fitted(value, protocol::MAXIMUM_DETAIL_BYTES)
 }
@@ -301,6 +305,7 @@ pub fn write(session: &MirrorSession) -> Map<String, Value> {
                     item.insert("id".into(), q.id.clone().into());
                     item.insert("text".into(), q.text.clone().into());
                     put(&mut item, "runNow", q.run_now.clone().map(Value::String));
+                    put(&mut item, "cut", q.cut.then_some(Value::Bool(true)));
                     Value::Object(item)
                 })
                 .collect(),
@@ -315,7 +320,13 @@ pub fn write(session: &MirrorSession) -> Map<String, Value> {
     put(&mut o, "finishedAt", session.finished_at.clone().map(Value::String));
     put(&mut o, "branch", session.branch.clone().map(Value::String));
     put(&mut o, "base", session.base.clone().map(Value::String));
-    put(&mut o, "queueActions", session.queue_actions.then_some(Value::Bool(true)));
+    let takes = |name: &str| session.queue_actions.iter().any(|a| a == name);
+    put(&mut o, "queueActions", (takes("remove") && takes("runNow")).then_some(Value::Bool(true)));
+    put(
+        &mut o,
+        "queueActionNames",
+        (!session.queue_actions.is_empty()).then(|| Value::Array(session.queue_actions.iter().cloned().map(Value::String).collect())),
+    );
     objects(o.get_mut("logs")).for_each(phone_entry);
     for run in objects(o.get_mut("graphRuns")) {
         entries_of_run(run, |agent| {
@@ -362,6 +373,7 @@ const SESSION: &[Member] = &[
     Member("branch", Text, Nullable),
     Member("base", Text, Nullable),
     Member("queueActions", Flag, Nullable),
+    Member("queueActionNames", List(&Text), Nullable),
 ];
 
 fn decodes<T: Wire>(value: &Value, members: &'static [Member]) -> bool {
@@ -454,6 +466,7 @@ pub fn read(wire: &Map<String, Value>) -> Option<MirrorSession> {
             id: q.get("id").and_then(Value::as_str).unwrap_or_default().into(),
             text: q.get("text").and_then(Value::as_str).unwrap_or_default().into(),
             run_now: q.get("runNow").and_then(Value::as_str).filter(|r| protocol::RUN_NOW.contains(r)).map(str::to_string),
+            cut: q.get("cut").and_then(Value::as_bool) == Some(true),
         })
         .collect();
     let member = |name: &str| o.get(name).filter(|v| !v.is_null());
@@ -481,8 +494,24 @@ pub fn read(wire: &Map<String, Value>) -> Option<MirrorSession> {
         finished_at: opt("finishedAt"),
         branch: opt("branch"),
         base: opt("base"),
-        queue_actions: o.get("queueActions").and_then(Value::as_bool) == Some(true),
+        queue_actions: queue_actions_read(o),
     })
+}
+
+/// MC-49: the queue actions a detail says its host takes: `queueActionNames` (the ones this app knows, in its order), else the two
+/// `queueActions: true` meant, else none.
+fn queue_actions_read(o: &Map<String, Value>) -> Vec<String> {
+    let named: Option<Vec<&str>> =
+        o.get("queueActionNames").and_then(Value::as_array).map(|l| l.iter().filter_map(Value::as_str).collect());
+    let earlier = o.get("queueActions").and_then(Value::as_bool) == Some(true);
+    protocol::QUEUE_ACTIONS
+        .iter()
+        .filter(|name| match &named {
+            Some(named) => named.contains(name),
+            None => earlier && matches!(**name, "remove" | "runNow"),
+        })
+        .map(|name| (*name).to_string())
+        .collect()
 }
 
 /// `RemoteText.Count`: characters as the Mac counts them, counted only as far as `limit` + 1.
