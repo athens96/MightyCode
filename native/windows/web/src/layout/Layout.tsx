@@ -13,6 +13,7 @@ import { BetaBadge, StatusGlyph, useCall, useMenu, usePaneInfo, type MenuItem } 
 import { useChoosePane } from '../shell/Sidebar';
 import type { LayoutModel, PaneInfo } from '../shell/types';
 import { activeSessionId } from '../store/store';
+import { chooseKeyboard } from '../panes/terminal/focus';
 import type { PaneLayoutNode } from '../store/models';
 import { usePageOverlay } from '../shell/overlay';
 import { clampRatio, dragSlack, layoutMetrics, layoutMinimum, type DropEdge } from './geometry';
@@ -161,7 +162,7 @@ const Tab = memo(function Tab({ info, selected, workspaceId, index }: TabProps) 
   return (
     <div className={'tab' + (selected ? ' selected' : '')} data-tab-id={info.id} data-tab-index={index} data-testid="tab">
       <button type="button" className="tab-handle" title={t('tooltip.layout.tabHandle', { title: info.help || info.title })} aria-selected={selected} role="tab"
-        onClick={(event) => { if (swallowClick && event.detail > 0) { swallowClick = false; return; } choose(info.id); }}
+        onClick={(event) => { if (swallowClick && event.detail > 0) { swallowClick = false; return; } choose(info.id); chooseKeyboard(info.id); }}
         onDoubleClick={() => call('renameSession', { id: info.id })} onContextMenu={(event) => menu.atPointer(event, items)}
         onPointerDown={(event) => pressTab(event, info.id, workspaceId, info.title, (target) => call('dockSession', dockArguments(info.id, workspaceId, target)))}>
         <KindIcon info={info} />

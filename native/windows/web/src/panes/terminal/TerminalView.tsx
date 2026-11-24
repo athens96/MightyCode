@@ -1,12 +1,14 @@
-import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { RunSession } from '../../store/models';
-import { useServices } from '../../app/context';
+import { useServices, useStoreSelector } from '../../app/context';
+import { activeSessionId } from '../../store/store';
 import { PaneShownContext } from '../../pane/shown';
 import { MiddlePath } from '../../shell/parts';
 import { hostCapabilities, nativeTerminal, useHostCapabilities } from '../../slot/host';
 import { listenPane } from '../channel';
 import { NativeSlot } from '../../slot/NativeSlot';
 import { fitShown, terminalEntry } from './entries';
+import { inputs, pageCovered, subscribeChoices, TerminalKeyboard, trackInputs, type FocusedElement } from './focus';
 import type { TerminalFooter } from './types';
 
 /** The footer's pushes of a terminal the platform draws (the Mac's Ghostty): the engine, the title, the folder and the grid as the host
@@ -17,6 +19,45 @@ function useNativeFooter(paneId: string, setFooter: (footer: TerminalFooter) => 
     if (!native) return;
     return listenPane('terminal', paneId, ({ message }) => { if (message.type === 'footer') setFooter(message.footer); });
   }, [native, paneId, setFooter]);
+}
+
+/**
+ * MC-50: the pane's terminal takes the keyboard when the pane becomes the active one and shown, when it is chosen again, and when
+ * the window comes back (focus.ts has the rules). `take` gives it (false while the terminal cannot take it yet); the returned
+ * function tries a waiting request again once it can.
+ */
+function useTerminalKeyboard(paneId: string, shown: boolean, take: () => boolean): () => void {
+  const { store } = useServices();
+  const live = useStoreSelector((state) => shown && activeSessionId(state) === paneId);
+  const covered = useStoreSelector(pageCovered);
+  const taking = useRef(take);
+  taking.current = take;
+  const keyboard = useRef<TerminalKeyboard | null>(null);
+  if (!keyboard.current) {
+    keyboard.current = new TerminalKeyboard({
+      read: () => ({
+        focused: document.activeElement as FocusedElement | null,
+        covered: pageCovered(store.getState()),
+        navigating: inputs.navigating(Date.now()),
+      }),
+      take: () => taking.current(),
+      now: () => Date.now(),
+    });
+  }
+  useEffect(() => trackInputs(), []);
+  useEffect(() => {
+    keyboard.current?.observe(live, covered, document.hasFocus());
+  }, [live, covered]);
+  useEffect(() => {
+    const choices = subscribeChoices((id) => { if (id === paneId) keyboard.current?.choose(); });
+    const focused = () => keyboard.current?.windowFocused(inputs.pressedLately(Date.now()));
+    window.addEventListener('focus', focused);
+    return () => {
+      choices();
+      window.removeEventListener('focus', focused);
+    };
+  }, [paneId]);
+  return useCallback(() => { keyboard.current?.attempt(); }, []);
 }
 
 /**
@@ -35,6 +76,25 @@ export function TerminalView({ session, fallback }: { session: RunSession; fallb
   useHostCapabilities();
   // There no xterm entry takes the footer's pushes: the pane listens for them itself (the Mac, D9).
   useNativeFooter(paneId, setFooter);
+  const native = import.meta.env.MODE === 'tauri' && nativeTerminal();
+  // MC-50: the native view takes the keyboard only once its slot's report has shown it (the host takes calls in order, so the focus
+  // reaches a view that is open and shown); xterm once it is mounted in this pane.
+  const slotShows = useRef(false);
+  const retryKeyboard = useTerminalKeyboard(paneId, shown, () => {
+    if (native) {
+      if (!slotShows.current) return false;
+      void bridge.call('surfaceAction', { paneId, surface: 'terminal', action: 'focus' }).catch(() => {});
+      return true;
+    }
+    const entry = terminalEntry(paneId);
+    if (!entry?.opened || !host.current || entry.root.parentElement !== host.current) return false;
+    entry.terminal.focus();
+    return true;
+  });
+  const onReported = useCallback((visible: boolean) => {
+    slotShows.current = visible;
+    if (visible) retryKeyboard();
+  }, [retryKeyboard]);
 
   useEffect(() => {
     let live = true;
@@ -49,6 +109,7 @@ export function TerminalView({ session, fallback }: { session: RunSession; fallb
         const entry = ensureTerminal(paneId, bridge);
         entry.footerListeners.add(setFooter);
         mountTerminal(entry, host.current);
+        retryKeyboard();
       }));
     }, () => {
       // A host that cannot give this pane a terminal: the pane shows what it would without one.
@@ -62,7 +123,7 @@ export function TerminalView({ session, fallback }: { session: RunSession; fallb
         if (!store.getState().snapshot?.sessions.some((pane) => pane.id === paneId)) terminalEntry(paneId)?.dispose();
       }, 0);
     };
-  }, [bridge, store, paneId]);
+  }, [bridge, store, paneId, retryKeyboard]);
 
   const available = footer?.available ?? false;
   useEffect(() => {
@@ -84,8 +145,8 @@ export function TerminalView({ session, fallback }: { session: RunSession; fallb
   if (footer && !footer.available) return <>{fallback ?? null}</>;
   return (
     <div className="terminal-pane" data-testid="terminal-pane" data-pane-terminal={paneId}>
-      {import.meta.env.MODE === 'tauri' && nativeTerminal()
-        ? <NativeSlot paneId={paneId} surface="terminal" className="terminal-host" label={t('terminal.accessibility')} />
+      {native
+        ? <NativeSlot paneId={paneId} surface="terminal" className="terminal-host" label={t('terminal.accessibility')} onReported={onReported} />
         : <div className="terminal-host" ref={host} aria-label={t('terminal.accessibility')} />}
       {footer?.notice && (
         <div className="terminal-notice" data-testid="terminal-notice">

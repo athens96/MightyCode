@@ -5,6 +5,7 @@ import { memo, useCallback, useEffect, useState } from 'react';
 import { shallowEqual, useServices, useStoreSelector } from '../app/context';
 import { ProviderMark } from '../conversation/ProviderMark';
 import { activeSessionId } from '../store/store';
+import { chooseKeyboard } from '../panes/terminal/focus';
 import { useAddMenu, useWorkspaceAddChoices } from './addMenu';
 import { sidebarGroups } from './servers';
 import { nestForks } from './forks';
@@ -125,7 +126,7 @@ const PaneRow = memo(function PaneRow({ info, active, child }: { info: PaneInfo;
   return (
     <button type="button" className={'sidebar-pane' + (active ? ' active' : '')} data-session-id={info.id} data-testid="sidebar-pane" aria-current={active ? 'true' : undefined}
       title={(info.help || info.title) + '\n' + t('tooltip.sidebar.paneRowHint')}
-      onClick={() => choose(info.id)} onContextMenu={(event) => menu.atPointer(event, items)}>
+      onClick={() => { choose(info.id); chooseKeyboard(info.id); }} onContextMenu={(event) => menu.atPointer(event, items)}>
       <StatusGlyph tone={info.tone} kind={info.kind} />
       <span className="sidebar-pane-text">
         <span className="sidebar-pane-line">

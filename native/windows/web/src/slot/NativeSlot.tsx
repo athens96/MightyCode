@@ -2,7 +2,7 @@ import { useContext, useEffect, useRef, type ReactNode, type RefObject } from 'r
 import { useServices } from '../app/context';
 import { PaneShownContext } from '../pane/shown';
 import { overlayBoxes } from '../shell/overlay';
-import { pageCovers, SlotReporter, slotReport } from './bounds';
+import { pageCovers, shows, SlotReporter, slotReport } from './bounds';
 import { useHostCapabilities, type SurfaceKind } from './host';
 
 const SAFE_SNAPSHOT_URL = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/i;
@@ -18,12 +18,15 @@ export function safeSnapshotUrl(url: string | undefined): string | null {
  * anything that can move or cover it (its size, the window, a scroll, the frame's model, the dialogs, the host's views, a page
  * overlay, the pane being shown or not), hidden when it goes. Nothing happens until the Rust host's `host` push has come: under
  * the C# host this hook does nothing. While the slot is covered, the view's last picture (when the platform gives one) stands in
- * as the slot's background.
+ * as the slot's background. `onReported` hears, after each report is sent, whether the view now shows (false when the slot goes),
+ * so a call that needs the view shown (MC-50's focus) goes to the host after the report that shows it.
  */
-export function useNativeSlot(element: RefObject<HTMLElement | null>, paneId: string, surface: SurfaceKind): void {
+export function useNativeSlot(element: RefObject<HTMLElement | null>, paneId: string, surface: SurfaceKind, onReported?: (shows: boolean) => void): void {
   const { bridge, store } = useServices();
   const shown = useContext(PaneShownContext);
   const host = useHostCapabilities();
+  const reported = useRef(onReported);
+  reported.current = onReported;
   useEffect(() => {
     const target = element.current;
     if (!target || !host) return undefined;
@@ -38,7 +41,9 @@ export function useNativeSlot(element: RefObject<HTMLElement | null>, paneId: st
       frame = 0;
       const box = target.getBoundingClientRect();
       const covered = pageCovers(store.getState(), box, () => overlayBoxes(document));
-      reporter.update(slotReport(box, window.devicePixelRatio || 1, shown && target.isConnected, covered));
+      const report = slotReport(box, window.devicePixelRatio || 1, shown && target.isConnected, covered);
+      reporter.update(report);
+      reported.current?.(shows(report));
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
     const observer = new ResizeObserver(schedule);
@@ -62,15 +67,16 @@ export function useNativeSlot(element: RefObject<HTMLElement | null>, paneId: st
       window.removeEventListener('resize', schedule);
       window.removeEventListener('scroll', schedule, true);
       reporter.release();
+      reported.current?.(false);
     };
   }, [bridge, store, element, paneId, surface, shown, host]);
 }
 
 /** An empty slot a native view covers (the Mac's Ghostty terminal); focusing it gives the view the keyboard. */
-export function NativeSlot({ paneId, surface, className, label, children }: { paneId: string; surface: SurfaceKind; className?: string; label?: string; children?: ReactNode }) {
+export function NativeSlot({ paneId, surface, className, label, children, onReported }: { paneId: string; surface: SurfaceKind; className?: string; label?: string; children?: ReactNode; onReported?: (shows: boolean) => void }) {
   const { bridge } = useServices();
   const element = useRef<HTMLDivElement>(null);
-  useNativeSlot(element, paneId, surface);
+  useNativeSlot(element, paneId, surface, onReported);
   return (
     <div ref={element} className={className} data-native-slot={surface} data-testid={'native-slot-' + surface} aria-label={label} tabIndex={-1}
       onFocus={() => void bridge.call('surfaceAction', { paneId, surface, action: 'focus' }).catch(() => {})}>
