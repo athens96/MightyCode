@@ -8,7 +8,7 @@
 //!
 //! The first look of a watch only learns what is there.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -61,6 +61,10 @@ pub fn endpoint(event: GitHubEvent, repo: &str) -> String {
         GitHubEvent::PrOpened => format!("repos/{repo}/pulls?state=open&sort=created&direction=desc&per_page=20"),
         GitHubEvent::ReviewRequested => format!("repos/{repo}/notifications?participating=true"),
         GitHubEvent::CiFailed => format!("repos/{repo}/actions/runs?status=failure&per_page=10"),
+        // MC-66
+        GitHubEvent::ReleasePublished => format!("repos/{repo}/releases?per_page=10"),
+        GitHubEvent::PrMerged => format!("repos/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=20"),
+        GitHubEvent::IssueOpened => format!("repos/{repo}/issues?state=open&sort=created&direction=desc&per_page=20"),
     }
 }
 
@@ -79,36 +83,63 @@ fn page_of(api: &str) -> Option<String> {
     }
 }
 
-/// The events an answer holds, newest first as GitHub lists them; each with the id duplicates are dropped by.
+/// MC-66: the named values of an event (for a filter and the prompt's `{{…}}`), the empty ones left out.
+fn fields(pairs: &[(&str, String)]) -> BTreeMap<String, String> {
+    pairs.iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| (k.to_string(), v.clone())).collect()
+}
+
+fn labels_of(item: &Value) -> String {
+    item.get("labels").and_then(Value::as_array).into_iter().flatten().map(|l| text(l, "name")).filter(|n| !n.is_empty()).collect::<Vec<_>>().join(",")
+}
+
+/// A pull request's values as `pr.*`, with the filter's `author`, `base` and `labels`.
+fn pr_fields(pr: &Value, number: u64) -> BTreeMap<String, String> {
+    let author = pr.get("user").map(|u| text(u, "login")).unwrap_or("").to_string();
+    let base = pr.get("base").map(|b| text(b, "ref")).unwrap_or("").to_string();
+    let branch = pr.get("head").map(|h| text(h, "ref")).unwrap_or("").to_string();
+    let labels = labels_of(pr);
+    fields(&[
+        ("pr.number", number.to_string()),
+        ("pr.title", text(pr, "title").to_string()),
+        ("pr.url", text(pr, "html_url").to_string()),
+        ("pr.author", author.clone()),
+        ("pr.base", base.clone()),
+        ("pr.branch", branch),
+        ("author", author),
+        ("base", base),
+        ("labels", labels),
+    ])
+}
+
+/// The events an answer holds, newest first as GitHub lists them.
 pub fn events_of(event: GitHubEvent, body: &Value) -> Vec<TriggerEvent> {
+    let items = || body.as_array().into_iter().flatten();
+    let url = |v: &Value| Some(text(v, "html_url").to_string()).filter(|u| !u.is_empty());
     match event {
-        GitHubEvent::PrOpened => body
-            .as_array()
-            .into_iter()
-            .flatten()
+        GitHubEvent::PrOpened => items()
             .filter_map(|pr| {
                 let number = pr.get("number")?.as_u64()?;
                 let author = pr.get("user").map(|u| text(u, "login")).unwrap_or("");
                 Some(TriggerEvent {
                     id: format!("pr:{number}"),
                     title: format!("PR #{number}: {} ({author})", text(pr, "title")),
-                    url: Some(text(pr, "html_url").to_string()).filter(|u| !u.is_empty()),
+                    url: url(pr),
                     detail: String::new(),
+                    fields: pr_fields(pr, number),
                 })
             })
             .collect(),
-        GitHubEvent::ReviewRequested => body
-            .as_array()
-            .into_iter()
-            .flatten()
+        GitHubEvent::ReviewRequested => items()
             .filter(|n| text(n, "reason") == "review_requested")
             .filter_map(|n| {
                 let subject = n.get("subject")?;
+                let page = page_of(text(subject, "url"));
                 Some(TriggerEvent {
                     id: format!("rr:{}:{}", text(n, "id"), text(n, "updated_at")),
                     title: format!("Review requested: {}", text(subject, "title")),
-                    url: page_of(text(subject, "url")),
+                    url: page.clone(),
                     detail: String::new(),
+                    fields: fields(&[("pr.title", text(subject, "title").to_string()), ("pr.url", page.unwrap_or_default())]),
                 })
             })
             .collect(),
@@ -119,11 +150,76 @@ pub fn events_of(event: GitHubEvent, body: &Value) -> Vec<TriggerEvent> {
             .flatten()
             .filter_map(|run| {
                 let id = run.get("id")?.as_u64()?;
+                let actor = run.get("actor").map(|a| text(a, "login")).unwrap_or("").to_string();
                 Some(TriggerEvent {
                     id: format!("ci:{id}"),
                     title: format!("CI failed: {} on {} ({})", text(run, "name"), text(run, "head_branch"), text(run, "display_title")),
-                    url: Some(text(run, "html_url").to_string()).filter(|u| !u.is_empty()),
+                    url: url(run),
                     detail: String::new(),
+                    fields: fields(&[
+                        ("ci.name", text(run, "name").to_string()),
+                        ("ci.branch", text(run, "head_branch").to_string()),
+                        ("ci.title", text(run, "display_title").to_string()),
+                        ("ci.url", text(run, "html_url").to_string()),
+                        ("author", actor),
+                        ("base", text(run, "head_branch").to_string()),
+                    ]),
+                })
+            })
+            .collect(),
+        GitHubEvent::ReleasePublished => items()
+            .filter(|r| !r.get("draft").and_then(Value::as_bool).unwrap_or(false))
+            .filter_map(|r| {
+                let id = r.get("id")?.as_u64()?;
+                let tag = text(r, "tag_name");
+                let author = r.get("author").map(|a| text(a, "login")).unwrap_or("").to_string();
+                Some(TriggerEvent {
+                    id: format!("rel:{id}"),
+                    title: format!("Release {tag}: {}", text(r, "name")),
+                    url: url(r),
+                    detail: String::new(),
+                    fields: fields(&[
+                        ("release.tag", tag.to_string()),
+                        ("release.name", text(r, "name").to_string()),
+                        ("release.url", text(r, "html_url").to_string()),
+                        ("author", author),
+                        ("base", text(r, "target_commitish").to_string()),
+                    ]),
+                })
+            })
+            .collect(),
+        GitHubEvent::PrMerged => items()
+            .filter(|pr| pr.get("merged_at").is_some_and(|m| !m.is_null()))
+            .filter_map(|pr| {
+                let number = pr.get("number")?.as_u64()?;
+                Some(TriggerEvent {
+                    id: format!("merged:{number}"),
+                    title: format!("PR #{number} merged: {}", text(pr, "title")),
+                    url: url(pr),
+                    detail: String::new(),
+                    fields: pr_fields(pr, number),
+                })
+            })
+            .collect(),
+        GitHubEvent::IssueOpened => items()
+            // The issues list carries pull requests too.
+            .filter(|i| i.get("pull_request").is_none())
+            .filter_map(|issue| {
+                let number = issue.get("number")?.as_u64()?;
+                let author = issue.get("user").map(|u| text(u, "login")).unwrap_or("").to_string();
+                Some(TriggerEvent {
+                    id: format!("issue:{number}"),
+                    title: format!("Issue #{number}: {} ({author})", text(issue, "title")),
+                    url: url(issue),
+                    detail: String::new(),
+                    fields: fields(&[
+                        ("issue.number", number.to_string()),
+                        ("issue.title", text(issue, "title").to_string()),
+                        ("issue.url", text(issue, "html_url").to_string()),
+                        ("issue.author", author.clone()),
+                        ("author", author),
+                        ("labels", labels_of(issue)),
+                    ]),
                 })
             })
             .collect(),
@@ -208,5 +304,36 @@ mod tests {
         assert_eq!((events[0].id.as_str(), events[0].title.as_str()), ("ci:555", "CI failed: CI on main (Bump deps)"));
         assert!(events_of(GitHubEvent::CiFailed, &Value::Null).is_empty());
         assert_eq!(endpoint(GitHubEvent::CiFailed, "a/b"), "repos/a/b/actions/runs?status=failure&per_page=10");
+    }
+
+    /// MC-66: a release, a merged pull request and an opened issue, with the fields filters and prompts read.
+    #[test]
+    fn releases_merges_and_issues_are_read_with_their_fields() {
+        let releases = serde_json::json!([
+            {"id": 9, "tag_name": "v0.6.3", "name": "0.6.3", "html_url": "https://github.com/a/b/releases/tag/v0.6.3", "draft": false, "author": {"login": "kim"}},
+            {"id": 10, "tag_name": "v0.7.0", "name": "draft", "draft": true}
+        ]);
+        let events = events_of(GitHubEvent::ReleasePublished, &releases);
+        assert_eq!(events.len(), 1, "a draft is not published");
+        assert_eq!(events[0].id, "rel:9");
+        assert_eq!(events[0].fields.get("release.tag").map(String::as_str), Some("v0.6.3"));
+        let pulls = serde_json::json!([
+            {"number": 5, "title": "Fix", "merged_at": "2026-11-25T01:00:00Z", "html_url": "u", "user": {"login": "kim"},
+             "base": {"ref": "main"}, "head": {"ref": "fix"}, "labels": [{"name": "bot"}]},
+            {"number": 6, "title": "Closed", "merged_at": null}
+        ]);
+        let merged = events_of(GitHubEvent::PrMerged, &pulls);
+        assert_eq!(merged.len(), 1, "closed without merging is not merged");
+        assert_eq!(merged[0].id, "merged:5");
+        let field = |name: &str| merged[0].fields.get(name).map(String::as_str);
+        assert_eq!((field("pr.author"), field("base"), field("labels"), field("pr.branch")), (Some("kim"), Some("main"), Some("bot"), Some("fix")));
+        let issues = serde_json::json!([
+            {"number": 7, "title": "Crash", "html_url": "i", "user": {"login": "lee"}, "labels": []},
+            {"number": 8, "title": "A PR", "pull_request": {}}
+        ]);
+        let opened = events_of(GitHubEvent::IssueOpened, &issues);
+        assert_eq!(opened.len(), 1, "pull requests in the issues list are not issues");
+        assert_eq!(opened[0].fields.get("issue.title").map(String::as_str), Some("Crash"));
+        assert_eq!(endpoint(GitHubEvent::PrMerged, "a/b"), "repos/a/b/pulls?state=closed&sort=updated&direction=desc&per_page=20");
     }
 }

@@ -184,21 +184,113 @@ pub enum GitHubEvent {
     PrOpened,
     ReviewRequested,
     CiFailed,
+    /// MC-66: a release published, a pull request merged, an issue opened.
+    ReleasePublished,
+    PrMerged,
+    IssueOpened,
 }
 
 impl GitHubEvent {
-    pub const ALL: [GitHubEvent; 3] = [GitHubEvent::PrOpened, GitHubEvent::ReviewRequested, GitHubEvent::CiFailed];
+    pub const ALL: [GitHubEvent; 6] = [
+        GitHubEvent::PrOpened,
+        GitHubEvent::ReviewRequested,
+        GitHubEvent::CiFailed,
+        GitHubEvent::ReleasePublished,
+        GitHubEvent::PrMerged,
+        GitHubEvent::IssueOpened,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             GitHubEvent::PrOpened => "pr_opened",
             GitHubEvent::ReviewRequested => "review_requested",
             GitHubEvent::CiFailed => "ci_failed",
+            GitHubEvent::ReleasePublished => "release_published",
+            GitHubEvent::PrMerged => "pr_merged",
+            GitHubEvent::IssueOpened => "issue_opened",
         }
     }
 
     pub fn parse(text: &str) -> Option<GitHubEvent> {
         GitHubEvent::ALL.into_iter().find(|e| e.name() == text.trim())
+    }
+}
+
+/// MC-66: which GitHub events a trigger takes: by author (`!name` for all but that one), base branch and label; each empty for any.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHubFilter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+impl GitHubFilter {
+    pub fn is_empty(&self) -> bool {
+        self.author.is_none() && self.base.is_none() && self.label.is_none()
+    }
+
+    /// Whether an event of `author`, on `base`, with `labels`, passes (a check the event cannot answer passes).
+    pub fn passes(&self, author: Option<&str>, base: Option<&str>, labels: &[String]) -> bool {
+        let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b.trim());
+        let author_ok = match (self.author.as_deref().map(str::trim).filter(|a| !a.is_empty()), author) {
+            (Some(not), Some(author)) if not.starts_with('!') => !same(author, &not[1..]),
+            (Some(wanted), Some(author)) => same(author, wanted),
+            _ => true,
+        };
+        let base_ok = match (self.base.as_deref().map(str::trim).filter(|b| !b.is_empty()), base) {
+            (Some(wanted), Some(base)) => same(base, wanted),
+            _ => true,
+        };
+        let label_ok = match self.label.as_deref().map(str::trim).filter(|l| !l.is_empty()) {
+            Some(wanted) => labels.iter().any(|l| same(l, wanted)),
+            None => true,
+        };
+        author_ok && base_ok && label_ok
+    }
+}
+
+/// MC-66: how a bot's request ended, for a chain trigger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BotOutcome {
+    Done,
+    Failed,
+}
+
+impl BotOutcome {
+    pub fn name(self) -> &'static str {
+        match self {
+            BotOutcome::Done => "done",
+            BotOutcome::Failed => "failed",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<BotOutcome> {
+        match text.trim() {
+            "done" => Some(BotOutcome::Done),
+            "failed" => Some(BotOutcome::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// MC-66: an event's name as `mighty event emit` sends it: 1 to 64 of lowercase letters, digits, `.`, `_`, `-`, starting with a
+/// letter; a trigger may end it with `*` for any name so begun (`release.*`).
+pub fn valid_event_name(name: &str, pattern: bool) -> bool {
+    let name = if pattern { name.strip_suffix('*').unwrap_or(name) } else { name };
+    let ok = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-');
+    (pattern && name.is_empty()) || (name.len() <= 64 && name.starts_with(|c: char| c.is_ascii_lowercase()) && name.chars().all(ok))
+}
+
+/// MC-66: whether the event `name` is one the trigger's `pattern` takes (`release.done`, or `release.*`).
+pub fn event_matches(pattern: &str, name: &str) -> bool {
+    match pattern.strip_suffix('*') {
+        Some(prefix) => name.starts_with(prefix),
+        None => pattern == name,
     }
 }
 
@@ -212,6 +304,9 @@ pub enum TriggerSource {
         events: Vec<GitHubEvent>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         repo: Option<String>,
+        /// MC-66: which of them it takes.
+        #[serde(default, skip_serializing_if = "GitHubFilter::is_empty")]
+        filter: GitHubFilter,
     },
     /// Linear issues (the workspace's MC-31 tracker) entering one of these states.
     #[serde(rename_all = "camelCase")]
@@ -221,6 +316,10 @@ pub enum TriggerSource {
     /// A shell check run every few minutes; its agent wakes when the output changes, at most `daily_cap` times a day.
     #[serde(rename_all = "camelCase")]
     Standing { command: String, every_minutes: u32, daily_cap: u32 },
+    /// MC-66: an event `mighty event emit` sends on this computer (`release.done`; `release.*` for any so begun).
+    Event { name: String },
+    /// MC-66: another bot's request ending (`@name`, or `@*` for any bot but the one it wakes).
+    Bot { bot: String, on: Vec<BotOutcome> },
 }
 
 impl TriggerSource {
@@ -230,12 +329,15 @@ impl TriggerSource {
             TriggerSource::Linear { .. } => "linear",
             TriggerSource::Webhook => "webhook",
             TriggerSource::Standing { .. } => "standing",
+            TriggerSource::Event { .. } => "event",
+            TriggerSource::Bot { .. } => "bot",
         }
     }
 
-    /// Whether the app has to look for it now and then (GitHub, Linear, a standing order); a webhook only listens.
+    /// Whether the app has to look for it now and then (GitHub, Linear, a standing order); a webhook, an event and a bot chain only
+    /// listen.
     pub fn polled(&self) -> bool {
-        !matches!(self, TriggerSource::Webhook)
+        !matches!(self, TriggerSource::Webhook | TriggerSource::Event { .. } | TriggerSource::Bot { .. })
     }
 }
 
@@ -258,6 +360,13 @@ impl TriggerSpec {
             TriggerSource::Github { events, .. } if events.is_empty() => return Err("name at least one GitHub event".into()),
             TriggerSource::Github { repo: Some(repo), .. } if !valid_repo(repo) => {
                 return Err(format!("'{repo}' is not a GitHub repository: owner/name"));
+            }
+            TriggerSource::Event { name } if !valid_event_name(name.trim(), true) => {
+                return Err(format!("'{name}' is not an event name: lowercase letters, digits, . _ - (a * at the end for any so begun)"));
+            }
+            TriggerSource::Bot { on, .. } if on.is_empty() => return Err("name done, failed or both".into()),
+            TriggerSource::Bot { bot, .. } if bot.trim() != "@*" && crate::model::PaneBot::handle_of(bot.trim().trim_start_matches('@')).is_none() => {
+                return Err(format!("'{bot}' is not a bot's name (@name, or @* for any)"));
             }
             TriggerSource::Linear { states } if states.iter().all(|s| s.trim().is_empty()) => {
                 return Err("name at least one Linear state".into());
@@ -361,7 +470,7 @@ mod tests {
         assert_eq!(serde_json::from_value::<TriggerSpec>(value).unwrap(), trigger);
         let github: TriggerSpec =
             serde_json::from_str(r#"{"name":"g","on":{"type":"github","events":["ci_failed"]},"prompt":"p"}"#).unwrap();
-        assert_eq!(github.on, TriggerSource::Github { events: vec![GitHubEvent::CiFailed], repo: None });
+        assert_eq!(github.on, TriggerSource::Github { events: vec![GitHubEvent::CiFailed], repo: None, filter: GitHubFilter::default() });
         assert!(github.enabled && github.validate(&PROVIDERS).is_ok());
     }
 
@@ -376,7 +485,7 @@ mod tests {
         assert!(trigger.validate(&PROVIDERS).unwrap_err().contains("everyMinutes"));
         trigger.on = TriggerSource::Standing { command: "true".into(), every_minutes: 5, daily_cap: 0 };
         assert!(trigger.validate(&PROVIDERS).unwrap_err().contains("dailyCap"));
-        trigger.on = TriggerSource::Github { events: vec![], repo: None };
+        trigger.on = TriggerSource::Github { events: vec![], repo: None, filter: GitHubFilter::default() };
         assert!(trigger.validate(&PROVIDERS).is_err());
         trigger.on = TriggerSource::Linear { states: vec!["Ready".into()] };
         assert!(trigger.validate(&PROVIDERS).is_ok());
@@ -398,13 +507,45 @@ mod tests {
         }
         let trigger = TriggerSpec {
             name: "pr".into(),
-            on: TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("owner/repo".into()) },
+            on: TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("owner/repo".into()), filter: GitHubFilter::default() },
             enabled: true,
             action: Action { prompt: "p".into(), ..Action::default() },
         };
         assert!(trigger.validate(&PROVIDERS).is_ok());
         assert_eq!(serde_json::to_value(&trigger).unwrap()["on"], serde_json::json!({"type": "github", "events": ["pr_opened"], "repo": "owner/repo"}));
-        let bad = TriggerSpec { on: TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("nope".into()) }, ..trigger };
+        let bad = TriggerSpec {
+            on: TriggerSource::Github { events: vec![GitHubEvent::PrOpened], repo: Some("nope".into()), filter: GitHubFilter::default() },
+            ..trigger
+        };
         assert!(bad.validate(&PROVIDERS).unwrap_err().contains("owner/name"));
+    }
+
+    /// MC-66: an event trigger names its event (or a prefix with `*`); a chain names a bot (or `@*`) and how its request ended; a
+    /// GitHub filter takes an event by author (`!` for all but), base and label.
+    #[test]
+    fn events_chains_and_github_filters_check_and_match() {
+        assert!(valid_event_name("release.done", false) && valid_event_name("release.*", true) && valid_event_name("*", true));
+        for bad in ["", "Release", "1st", "a b", "release.*"] {
+            assert!(!valid_event_name(bad, false), "{bad}");
+        }
+        assert!(event_matches("release.*", "release.done") && event_matches("release.done", "release.done"));
+        assert!(!event_matches("release.done", "release.failed") && event_matches("*", "anything"));
+        let trigger = |on: TriggerSource| TriggerSpec { name: "t".into(), on, enabled: true, action: Action { prompt: "p".into(), ..Action::default() } };
+        assert!(trigger(TriggerSource::Event { name: "release.done".into() }).validate(&PROVIDERS).is_ok());
+        assert!(trigger(TriggerSource::Event { name: "Release!".into() }).validate(&PROVIDERS).is_err());
+        assert!(trigger(TriggerSource::Bot { bot: "@콩이".into(), on: vec![BotOutcome::Done] }).validate(&PROVIDERS).is_ok());
+        assert!(trigger(TriggerSource::Bot { bot: "@*".into(), on: vec![BotOutcome::Failed] }).validate(&PROVIDERS).is_ok());
+        assert!(trigger(TriggerSource::Bot { bot: "@콩이".into(), on: vec![] }).validate(&PROVIDERS).is_err());
+        assert!(!TriggerSource::Event { name: "x".into() }.polled());
+        let filter = GitHubFilter { author: Some("!dependabot[bot]".into()), base: Some("main".into()), label: None };
+        assert!(filter.passes(Some("kim"), Some("main"), &[]));
+        assert!(!filter.passes(Some("dependabot[bot]"), Some("main"), &[]), "all but that author");
+        assert!(!filter.passes(Some("kim"), Some("dev"), &[]));
+        let labeled = GitHubFilter { label: Some("bot".into()), ..GitHubFilter::default() };
+        assert!(labeled.passes(None, None, &["Bot".into()]) && !labeled.passes(None, None, &[]));
+        assert_eq!(
+            serde_json::to_value(TriggerSource::Bot { bot: "@a".into(), on: vec![BotOutcome::Done] }).unwrap(),
+            serde_json::json!({"type": "bot", "bot": "@a", "on": ["done"]})
+        );
     }
 }

@@ -126,6 +126,8 @@ mighty agent wait <pane> --until done --timeout 600
 mighty pane wait-output <pane> --regex "passed|failed" --timeout 300
 mighty events --type pane.state
 mighty server start                             # 无窗口启动 (status, show, stop [--stop-all])
+mighty bot list                                 # 机器人及其计划和触发器 (bot new|update|pause|resume|run)
+mighty event emit release.done --data '{"version":"0.6.3"}'   # 运行等待此事件的触发器
 ```
 
 - 窗格 id 就是应用自己的 id，不会改变。状态为 `idle`、`running`、`blocked`（等待批准或回答）、`done`、`failed`、`stopped`。
@@ -139,7 +141,10 @@ mighty server start                             # 无窗口启动 (status, show,
 ### 计划与触发器 {#schedules}
 在 {{ui:settings.nav.companion}} 标签页的 {{ui:automation.jobs.sectionTitle}} 框中，可以在设定的时间或事件发生时启动代理工作。选择工作区后，会显示它的计划和触发器、下次运行时间和上次结果。顶部显示今日花费、每日预算和今日自动化摘要。
 - **计划**：用 5 字段 cron（`0 9 * * 1-5`）或 RRULE 子集（`FREQ=DAILY|WEEKLY|HOURLY`、`BYHOUR`、`BYMINUTE`、`BYDAY`）设定。使用这台电脑的时区；因夏令时被跳过的时间会在切换后立即运行一次，出现两次的时间只在第一次运行。
-- **触发器**：GitHub（PR 打开、请求审查、CI 失败）、Linear（问题进入所选状态）、Webhook，以及常驻检查（每隔几分钟运行一个 shell 命令，只有输出变化时才唤醒代理，最多到每日上限）。GitHub 通过已登录的 `gh` 账号最多每 5 分钟检查一次，没有变化或断网时会降低频率。Linear 使用工作区已连接的 Linear。
+- **触发器**：GitHub（PR 打开、请求审查、CI 失败、发布版本、PR 合并、issue 打开；可用 `owner/name` 直接指定仓库，并按作者、分支、标签筛选，作者前加 `!` 表示排除此人）、Linear（问题进入所选状态）、Webhook，以及常驻检查（每隔几分钟运行一个 shell 命令，只有输出变化时才唤醒代理，最多到每日上限）。GitHub 通过已登录的 `gh` 账号最多每 5 分钟检查一次，没有变化或断网时会降低频率。Linear 使用工作区已连接的 Linear。
+- **事件**：接收用 `mighty event emit <名字> --data '{"version":"0.6.3"}'` 发送的事件（像 `release.*` 这样末尾加 `*` 则接收所有以此开头的事件）。`scripts/release.py` 在发布完成后发送 `release.done`。
+- **机器人链**：其他机器人（`@名字`，任意机器人用 `@*`）的请求完成或失败时运行。机器人不会唤醒自己，链最多两级。
+- **提示变量**：在提示中使用 `{{pr.title}}`、`{{pr.url}}`、`{{pr.author}}`、`{{ci.url}}`、`{{release.tag}}`、`{{issue.title}}`、`{{data.version}}`（事件或 Webhook 的 JSON）、`{{bot.handle}}`、`{{bot.answer}}` 会替换为对应的值，没有的值为空。
 - **运行方式**：把提示词发送到新窗格（需要时在工作树中），或打开 {{ui:automation.form.heartbeat}} 后发送到同名窗格的同一对话中。可以选择代理和模型。
 - **预算**：如果今日花费加上本次运行的预计费用会超过每日预算，就不运行，并记录为“已跳过”。
 - **通知**：自动启动的工作在等待批准或回答时，会立即通过手机和系统通知告诉你。其他情况汇总到运行记录和今日摘要中。每次运行也会作为 `automation.fired`、`automation.skipped`、`automation.blocked`、`automation.finished` 事件出现在 `mighty events` 中；在 {{ui:automation.settings.events}} 中打开 {{ui:automation.event.automation}} 后，Webhook 和状态命令也会跟随。

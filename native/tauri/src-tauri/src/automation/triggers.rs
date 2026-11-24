@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use chrono::Local;
-use mighty_core::automation::spec::{GitHubEvent, TriggerSource};
+use mighty_core::automation::spec::{GitHubEvent, GitHubFilter, TriggerSource};
 use mighty_core::automation::watch::{Backoff, Observed, PollOutcome, TriggerEvent};
 
 use super::{Item, Job, lock, store, webhook};
@@ -100,9 +100,10 @@ async fn watch(weak: Weak<Host>, job: Job) {
                 standing(&host, &job, command, *daily_cap).await;
                 Duration::from_secs(u64::from(*every_minutes) * 60)
             }
-            TriggerSource::Github { events, repo } => backoff.after(github(&host, &job, events, repo.as_deref()).await),
+            TriggerSource::Github { events, repo, filter } => backoff.after(github(&host, &job, events, repo.as_deref(), filter).await),
             TriggerSource::Linear { states } => backoff.after(linear(&host, &job, states).await),
-            TriggerSource::Webhook => return,
+            // A webhook listens; MC-66: an event and a bot chain are fired where they happen.
+            TriggerSource::Webhook | TriggerSource::Event { .. } | TriggerSource::Bot { .. } => return,
         };
         drop(host);
         tokio::time::sleep(wait).await;
@@ -110,7 +111,7 @@ async fn watch(weak: Weak<Host>, job: Job) {
 }
 
 /// Fires `job` for an event, unless it was already seen.
-fn fire_event(host: &Arc<Host>, job: &Job, event: TriggerEvent) {
+pub(crate) fn fire_event(host: &Arc<Host>, job: &Job, event: TriggerEvent) {
     let (host, job) = (host.clone(), job.clone());
     tauri::async_runtime::spawn(async move {
         let reason = event.title.clone();
@@ -144,7 +145,13 @@ async fn standing(host: &Arc<Host>, job: &Job, command: &str, cap: u32) {
                 let chars: Vec<char> = output.chars().collect();
                 chars[chars.len().saturating_sub(2_000)..].iter().collect()
             };
-            let event = TriggerEvent { id: String::new(), title: host.locale.get("automation.reason.changed"), url: None, detail: tail };
+            let event = TriggerEvent {
+                id: String::new(),
+                title: host.locale.get("automation.reason.changed"),
+                url: None,
+                detail: tail,
+                fields: Default::default(),
+            };
             fire_event(host, job, event);
         }
         Observed::Capped => host.log.line(&format!("automation: standing order '{}' changed, daily cap reached", job.name())),
@@ -164,7 +171,7 @@ fn workspace(host: &Host, id: &str) -> Option<mighty_core::model::Workspace> {
     host.view().snapshot.workspace(id).cloned()
 }
 
-async fn github(host: &Arc<Host>, job: &Job, events: &[GitHubEvent], repo: Option<&str>) -> PollOutcome {
+async fn github(host: &Arc<Host>, job: &Job, events: &[GitHubEvent], repo: Option<&str>, filter: &GitHubFilter) -> PollOutcome {
     let gh = match repo {
         // MC-64: a named repository (a bot's own), whatever the workspace's folder is.
         Some(repo) => super::github::Gh::for_repo(host, repo),
@@ -202,8 +209,13 @@ async fn github(host: &Arc<Host>, job: &Job, events: &[GitHubEvent], repo: Optio
             state.seen.entry(key.clone()).or_default().new_of(found.iter().map(|e| e.id.as_str()))
         });
         super::save_state(host);
+        // MC-66: only what the trigger's filter takes (every event is seen either way).
+        let passes = |e: &TriggerEvent| {
+            let labels: Vec<String> = e.fields.get("labels").map(|l| l.split(',').map(str::to_string).collect()).unwrap_or_default();
+            filter.passes(e.fields.get("author").map(String::as_str), e.fields.get("base").map(String::as_str), &labels)
+        };
         // Oldest first, a few a look.
-        for event in found.into_iter().rev().filter(|e| fresh.contains(&e.id)).take(MAX_FIRES_A_LOOK) {
+        for event in found.into_iter().rev().filter(|e| fresh.contains(&e.id) && passes(e)).take(MAX_FIRES_A_LOOK) {
             changed = true;
             fire_event(host, job, event);
         }
@@ -245,6 +257,7 @@ async fn linear(host: &Arc<Host>, job: &Job, states: &[String]) -> PollOutcome {
             title: format!("{}: {} ({})", issue.key, issue.title, issue.state.clone().unwrap_or_default()),
             url: issue.url.clone(),
             detail: String::new(),
+            fields: Default::default(),
         };
         fire_event(host, job, event);
     }
@@ -310,7 +323,11 @@ impl webhook::Router for AppRouter {
         let detail: String =
             String::from_utf8_lossy(&delivery.body).chars().take(mighty_core::automation::watch::MAX_EVENT_CHARS).collect();
         let title = delivery.event.clone().unwrap_or_else(|| "webhook".into());
-        fire_event(&host, &job, TriggerEvent { id: delivery.delivery, title, url: None, detail });
+        // MC-66: a JSON body's values are the prompt's `{{data.…}}`.
+        let fields = serde_json::from_slice::<serde_json::Value>(&delivery.body)
+            .map(|v| mighty_core::automation::watch::data_fields(&v))
+            .unwrap_or_default();
+        fire_event(&host, &job, TriggerEvent { id: delivery.delivery, title, url: None, detail, fields });
     }
 }
 

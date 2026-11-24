@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use mighty_core::bot_spec::BotSpec;
 use mighty_core::model::{BOT_INSTRUCTIONS_LIMIT, PaneBot, RunSession};
 use mighty_native::surface::{DialogButton, DialogResult, DialogSpec};
 use mighty_native::ui::{Content, El, Local, Wrapping};
@@ -23,7 +24,20 @@ pub const ANSWER_LIMIT: usize = 12_000;
 /// mighty-terminal's `list_bots`, `ask_bot` and `bot_answer` (agent_io.rs), for the agent in pane `caller`; `value` is the
 /// arguments as the tool checked them (JSON).
 pub async fn tool(host: &Arc<Host>, caller: &str, tool: &str, value: &str) -> Result<Value, String> {
-    use mighty_delegation::agent_io::tools::{ASK_BOT, BOT_ANSWER, LIST_BOTS};
+    use mighty_delegation::agent_io::tools::{ASK_BOT, BOT_ANSWER, CREATE_BOT, LIST_BOTS, UPDATE_BOT};
+    // MC-65: a bot proposed by an agent waits for the person's approval sheet.
+    if matches!(tool, CREATE_BOT | UPDATE_BOT) {
+        let origin = {
+            let view = host.view();
+            let pane = view.snapshot.session(caller);
+            let named = pane.and_then(|p| p.bot.as_ref()).map(|b| format!("@{}", b.handle));
+            named.or_else(|| pane.map(|p| p.title().to_string())).unwrap_or_else(|| host.locale.get("bot.approve.anAgent"))
+        };
+        return Ok(match propose(host, value, tool == UPDATE_BOT, origin) {
+            Ok(()) => json!({ "pending": true, "message": host.locale.get("bot.approve.pending") }),
+            Err(words) => json!({ "refused": words }),
+        });
+    }
     let args: Value = serde_json::from_str(value).map_err(|_| "Unreadable arguments.".to_string())?;
     let bot = args.get("bot").and_then(Value::as_str).unwrap_or_default().to_string();
     match tool {
@@ -446,59 +460,96 @@ fn answer_of(logs: &[mighty_core::model::LogEntry]) -> String {
 
 // ── MC-59: independent bots ──────────────────────────────────────────────────────────────────────────────────────────────
 
-/// The sidebar 봇 group's +: a bot of no workspace. Its name, instructions and agent are asked in a sheet; 만들기 makes its folder
-/// in the app's data (`bots/<name>`), 폴더 골라 만들기… lets the person pick one. The bot is a pane of the bots' home (a workspace
-/// the sidebar never lists as one) working in that folder.
+/// The sidebar 봇 group's +: a bot of no workspace. Its name, agent, template (MC-65: its instructions and its schedules and triggers),
+/// a GitHub repository for the templates that watch one, and its instructions are asked in a sheet; 만들기 makes its folder in the
+/// app's data (`bots/<name>`), 폴더 골라 만들기… lets the person pick one. The bot is a pane of the bots' home (a workspace the sidebar
+/// never lists as one) working in that folder.
 pub fn open_new(host: &Arc<Host>) {
     let locale = host.locale;
     let providers: Vec<&'static str> = mighty_core::wire::PROVIDERS.to_vec();
     let handle = Local::new(String::new());
     let instructions = Local::new(String::new());
     let agent = Local::new(0usize);
+    let template = Local::new(0usize);
+    let repo = Local::new(String::new());
     let note = Local::new(String::new());
     let (handle_field, instructions_field, agent_field, note_text) = (handle.clone(), instructions.clone(), agent.clone(), note.clone());
+    let (template_field, repo_field) = (template.clone(), repo.clone());
     let names: Vec<String> = providers.iter().map(|p| mighty_run::providers::name(p).to_string()).collect();
+    let template_names: Vec<String> = Template::ALL.iter().map(|t| locale.get(t.label())).collect();
     let mut spec = DialogSpec::new(locale.get("bot.new.title"), move |_| {
         let into_handle = handle_field.clone();
         let into_instructions = instructions_field.clone();
         let into_agent = agent_field.clone();
-        let mut intro = El::text_block(locale.get("bot.new.message"));
-        if let Some(text) = intro.text_mut() {
-            text.wrapping = Wrapping::Wrap;
-        }
+        let into_template = template_field.clone();
+        let into_repo = repo_field.clone();
+        let (words_for_template, instructions_now) = (instructions_field.clone(), instructions_field.get());
+        let wrapped = |words: String| {
+            let mut block = El::text_block(words);
+            if let Some(text) = block.text_mut() {
+                text.wrapping = Wrapping::Wrap;
+            }
+            block
+        };
         let name = El::text_box(handle_field.get())
             .header(locale.get("bot.dialog.handle"))
-            .placeholder(locale.get("bot.dialog.handleHint"))
+            .placeholder(locale.get("bot.new.nameHint"))
             .on_text(move |words| into_handle.set(words));
         let items: Vec<Content> = names.iter().map(|n| n.clone().into()).collect();
         let picker = El::combo_box(agent_field.get() as i32, items)
             .header(locale.get("bot.new.agent"))
             .on_select(move |chosen| into_agent.set(usize::try_from(chosen).unwrap_or(0)));
-        let words = El::text_box(instructions_field.get())
+        let chosen = Template::ALL.get(template_field.get()).copied().unwrap_or(Template::Blank);
+        let kinds = El::combo_box(template_field.get() as i32, template_names.iter().map(|n| n.clone().into()).collect())
+            .header(locale.get("bot.new.template"))
+            .on_select(move |picked| {
+                let picked = usize::try_from(picked).unwrap_or(0);
+                into_template.set(picked);
+                // The template's instructions, unless the person wrote their own.
+                let template = Template::ALL.get(picked).copied().unwrap_or(Template::Blank);
+                let current = words_for_template.get();
+                if current.trim().is_empty() || Template::ALL.iter().any(|t| locale.get(t.instructions()) == current) {
+                    words_for_template.set(if template == Template::Blank { String::new() } else { locale.get(template.instructions()) });
+                }
+            });
+        let words = El::text_box(instructions_now)
             .multiline()
             .header(locale.get("bot.dialog.instructions"))
             .placeholder(locale.get("bot.dialog.instructionsHint"))
             .on_text(move |words| into_instructions.set(words));
-        let mut validation = El::text_block(note_text.get());
-        if let Some(text) = validation.text_mut() {
-            text.wrapping = Wrapping::Wrap;
+        let mut parts = vec![wrapped(locale.get("bot.new.message")), name, picker, kinds];
+        if chosen != Template::Blank {
+            parts.push(wrapped(locale.get(chosen.what())));
         }
-        Content::El(Box::new(El::stack(
-            false,
-            mighty_core::design_tokens::metrics::SPACING_SM,
-            vec![intro, name, picker, words, validation],
-        )))
+        if chosen.watches_github() {
+            parts.push(
+                El::text_box(repo_field.get())
+                    .header(locale.get("automation.form.repo"))
+                    .placeholder("owner/name")
+                    .on_text(move |words| into_repo.set(words)),
+            );
+        }
+        parts.push(words);
+        parts.push(wrapped(note_text.get()));
+        Content::El(Box::new(El::stack(false, mighty_core::design_tokens::metrics::SPACING_SM, parts)))
     })
     .styled(None, None);
     spec.primary = Some(DialogButton::new(locale.get("bot.new.create")));
     spec.secondary = Some(DialogButton::new(locale.get("bot.new.pickFolder")));
     spec.close = Some(locale.get("bot.dialog.cancel"));
-    let (checked_handle, checked_instructions, checker) = (handle.clone(), instructions.clone(), host.clone());
+    let (checked_handle, checked_instructions, checked_template, checked_repo, checker) =
+        (handle.clone(), instructions.clone(), template.clone(), repo.clone(), host.clone());
     spec.accept = Some(Box::new(move |answer| {
         if answer == DialogResult::None {
             return true;
         }
-        match refusal(&checker, "", checked_handle.get().trim(), &checked_instructions.get()) {
+        let typed = checked_handle.get();
+        let name_refused = (!typed.trim().is_empty()).then(|| refusal(&checker, "", typed.trim(), &checked_instructions.get())).flatten();
+        let template = Template::ALL.get(checked_template.get()).copied().unwrap_or(Template::Blank);
+        let repo = checked_repo.get();
+        let repo_refused = (template.watches_github() && !mighty_core::automation::spec::valid_repo(repo.trim()))
+            .then(|| checker.locale.get("bot.new.needsRepo"));
+        match name_refused.or(repo_refused) {
             Some(words) => {
                 note.set(words);
                 false
@@ -512,19 +563,21 @@ pub fn open_new(host: &Arc<Host>) {
         if answer == DialogResult::None {
             return;
         }
-        let Some(name) = PaneBot::handle_of(&handle.get()) else { return };
         let folder = if answer == DialogResult::Secondary {
             match crate::frame::pick_folder_path(&host).await {
-                Some(folder) => folder,
+                Some(folder) => Some(folder.to_string_lossy().to_string()),
                 None => return,
             }
         } else {
-            host.data_dir.join("bots").join(&name)
+            None
         };
-        let words = instructions.get().trim().to_string();
-        let provider = providers.get(agent.get()).copied().unwrap_or("claude").to_string();
-        let bot = PaneBot { handle: name, instructions: (!words.is_empty()).then_some(words), auto: Some(false), ..PaneBot::default() };
-        if let Err(error) = create_independent(&host, bot, &provider, &folder).await {
+        let chosen = Template::ALL.get(template.get()).copied().unwrap_or(Template::Blank);
+        let mut bot = chosen.spec(&host.locale, repo.get().trim());
+        bot.name = Some(handle.get().trim().to_string()).filter(|n| !n.is_empty());
+        bot.agent = Some(providers.get(agent.get()).copied().unwrap_or("claude").to_string());
+        bot.instructions = Some(instructions.get().trim().to_string()).filter(|i| !i.is_empty());
+        bot.folder = folder;
+        if let Err(error) = create_from_spec(&host, &bot).await {
             host.log.line(&format!("bot: an independent bot was not made: {error}"));
             let mut view = host.view();
             view.error = Some(error);
@@ -533,13 +586,352 @@ pub fn open_new(host: &Arc<Host>) {
     });
 }
 
+// ── MC-65: a bot from a spec ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/// The new-bot sheet's templates: instructions and the schedules and triggers they start with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Template {
+    Blank,
+    PrReviewer,
+    CiFixer,
+    MorningBriefing,
+    AfterRelease,
+    TaskKeeper,
+}
+
+impl Template {
+    pub const ALL: [Template; 6] =
+        [Template::Blank, Template::PrReviewer, Template::CiFixer, Template::MorningBriefing, Template::AfterRelease, Template::TaskKeeper];
+
+    fn key(self) -> &'static str {
+        match self {
+            Template::Blank => "blank",
+            Template::PrReviewer => "prReviewer",
+            Template::CiFixer => "ciFixer",
+            Template::MorningBriefing => "briefing",
+            Template::AfterRelease => "afterRelease",
+            Template::TaskKeeper => "taskKeeper",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Template::Blank => "bot.template.blank",
+            Template::PrReviewer => "bot.template.prReviewer",
+            Template::CiFixer => "bot.template.ciFixer",
+            Template::MorningBriefing => "bot.template.briefing",
+            Template::AfterRelease => "bot.template.afterRelease",
+            Template::TaskKeeper => "bot.template.taskKeeper",
+        }
+    }
+
+    /// Its instructions' locale key.
+    fn instructions(self) -> &'static str {
+        match self {
+            Template::Blank => "bot.template.blank",
+            Template::PrReviewer => "bot.template.prReviewer.instructions",
+            Template::CiFixer => "bot.template.ciFixer.instructions",
+            Template::MorningBriefing => "bot.template.briefing.instructions",
+            Template::AfterRelease => "bot.template.afterRelease.instructions",
+            Template::TaskKeeper => "bot.template.taskKeeper.instructions",
+        }
+    }
+
+    /// What it does, in a line under the picker.
+    fn what(self) -> &'static str {
+        match self {
+            Template::Blank => "bot.template.blank",
+            Template::PrReviewer => "bot.template.prReviewer.what",
+            Template::CiFixer => "bot.template.ciFixer.what",
+            Template::MorningBriefing => "bot.template.briefing.what",
+            Template::AfterRelease => "bot.template.afterRelease.what",
+            Template::TaskKeeper => "bot.template.taskKeeper.what",
+        }
+    }
+
+    /// Its jobs' prompt.
+    fn prompt(self) -> &'static str {
+        match self {
+            Template::Blank => "bot.template.blank",
+            Template::PrReviewer => "bot.template.prReviewer.prompt",
+            Template::CiFixer => "bot.template.ciFixer.prompt",
+            Template::MorningBriefing => "bot.template.briefing.prompt",
+            Template::AfterRelease => "bot.template.afterRelease.prompt",
+            Template::TaskKeeper => "bot.template.taskKeeper.prompt",
+        }
+    }
+
+    fn watches_github(self) -> bool {
+        matches!(self, Template::PrReviewer | Template::CiFixer)
+    }
+
+    /// The spec it makes: its instructions and jobs (the prompts in the app's language); `repo` for the GitHub ones.
+    pub fn spec(self, locale: &mighty_core::locale::Locale, repo: &str) -> BotSpec {
+        use mighty_core::automation::spec::{GitHubEvent, GitHubFilter, TriggerSource};
+        use mighty_core::bot_spec::{BotSchedule, BotTrigger};
+        let prompt = |_: &str| locale.get(self.prompt());
+        let github = |event: GitHubEvent| BotTrigger {
+            name: None,
+            on: TriggerSource::Github { events: vec![event], repo: Some(repo.to_string()), filter: GitHubFilter::default() },
+            prompt: prompt(self.key()),
+        };
+        let mut spec = BotSpec {
+            instructions: (self != Template::Blank).then(|| locale.get(self.instructions())),
+            ..BotSpec::default()
+        };
+        match self {
+            Template::Blank => {}
+            Template::PrReviewer => spec.triggers.push(github(GitHubEvent::PrOpened)),
+            Template::CiFixer => spec.triggers.push(github(GitHubEvent::CiFailed)),
+            Template::MorningBriefing => spec.schedules.push(BotSchedule {
+                cron: Some("0 9 * * 1-5".into()),
+                prompt: prompt(self.key()),
+                ..BotSchedule::default()
+            }),
+            Template::AfterRelease => spec.triggers.push(BotTrigger {
+                name: None,
+                on: TriggerSource::Event { name: "release.done".into() },
+                prompt: prompt(self.key()),
+            }),
+            Template::TaskKeeper => spec.schedules.push(BotSchedule {
+                cron: Some("*/30 9-19 * * 1-5".into()),
+                prompt: prompt(self.key()),
+                catch_up: Some(mighty_core::automation::spec::CatchUp::Skip),
+                ..BotSchedule::default()
+            }),
+        }
+        spec
+    }
+}
+
+/// A workspace of this computer a spec names: by id, else by name (case aside).
+fn workspace_named(host: &Host, named: &str) -> Option<String> {
+    let view = host.view();
+    let local = || view.snapshot.workspaces().iter().filter(|w| w.remote.is_none() && !w.is_bot_home());
+    local().find(|w| w.id() == named).or_else(|| local().find(|w| w.name().eq_ignore_ascii_case(named.trim()))).map(|w| w.id().to_string())
+}
+
+/// A folder as a spec writes it: `~` for the home folder.
+fn folder_path(text: &str) -> std::path::PathBuf {
+    match text.trim().strip_prefix("~/") {
+        Some(rest) => std::env::home_dir().unwrap_or_default().join(rest),
+        None => std::path::PathBuf::from(text.trim()),
+    }
+}
+
+/// A friendly name in the app's language, not taken.
+fn friendly_name(host: &Host) -> String {
+    let view = host.view();
+    let taken: std::collections::HashSet<String> = view.snapshot.bots().filter_map(|p| p.bot.as_ref()).map(|b| PaneBot::key(&b.handle)).collect();
+    let language = crate::methods::chosen_language(view.snapshot.language_preference());
+    mighty_core::bot_names::pick(&uuid::Uuid::new_v4().simple().to_string(), language, &taken)
+}
+
+/// Makes the bot a spec describes: its pane (in its workspace, or an independent one in its folder), its name, instructions, budget
+/// and permission, then its schedules and triggers sent to it. Its name.
+pub async fn create_from_spec(host: &Arc<Host>, spec: &BotSpec) -> Result<String, String> {
+    spec.validate(&mighty_core::wire::PROVIDERS, mighty_core::normalize::permission_modes)?;
+    let handle = match spec.handle() {
+        Some(handle) => handle,
+        None => friendly_name(host),
+    };
+    if host.view().snapshot.bot_pane(&handle).is_some() {
+        return Err(host.locale.get_with("bot.error.taken", &[("handle", &handle)]));
+    }
+    let bot = PaneBot {
+        handle: handle.clone(),
+        instructions: spec.instructions.clone().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()),
+        auto: Some(spec.handle().is_none()),
+        asleep: None,
+        budget_per_day: spec.budget_per_day,
+    };
+    let agent = spec.agent().to_string();
+    let model = spec.model.clone().filter(|m| !m.trim().is_empty());
+    let (pane, workspace) = match &spec.workspace {
+        Some(named) => {
+            let workspace = workspace_named(host, named).ok_or_else(|| host.locale.get_with("bot.error.noWorkspace", &[("name", named)]))?;
+            let pane = crate::phone::automation_create(host.clone(), workspace.clone(), agent.clone(), model, Some(handle.clone()), false)
+                .await
+                .map_err(|(_, words)| words)?;
+            (pane, workspace)
+        }
+        None => {
+            let folder = spec.folder.as_deref().map(folder_path).unwrap_or_else(|| host.data_dir.join("bots").join(&handle));
+            let pane = create_independent(host, bot.clone(), &agent, model, &folder).await?;
+            (pane, home(host)?)
+        }
+    };
+    let permission = spec.permission.clone();
+    let _ = crate::frame::act(host, async {
+        let mut view = host.view();
+        crate::composer::change(&mut view, &pane, |p| {
+            let mut settings = p.settings.clone().unwrap_or_default();
+            if let Some(permission) = &permission {
+                settings.permission_mode = permission.clone();
+            }
+            RunSession { bot: Some(bot.clone()), settings: Some(settings), ..p.clone() }
+        })
+    })
+    .await;
+    put_jobs(host, &workspace, spec, &handle)?;
+    host.log.line(&format!("bot: @{handle} made from a spec"));
+    Ok(handle)
+}
+
+/// The spec's schedules and triggers put in `workspace`'s jobs, sent to `@handle`.
+fn put_jobs(host: &Arc<Host>, workspace: &str, spec: &BotSpec, handle: &str) -> Result<(), String> {
+    let (schedules, triggers) = spec.jobs(handle);
+    for schedule in schedules {
+        crate::automation::put_schedule(host, workspace, None, schedule)?;
+    }
+    for trigger in triggers {
+        crate::automation::put_trigger(host, workspace, None, trigger)?;
+    }
+    Ok(())
+}
+
+/// Changes the bot the spec names: its instructions, budget and permission when given, and its own (the app's) schedules and
+/// triggers replaced by the spec's.
+pub async fn update_from_spec(host: &Arc<Host>, spec: &BotSpec) -> Result<String, String> {
+    spec.validate(&mighty_core::wire::PROVIDERS, mighty_core::normalize::permission_modes)?;
+    let handle = spec.handle().ok_or_else(|| host.locale.get("bot.error.updateNeedsName"))?;
+    let (pane, workspace) = {
+        let view = host.view();
+        let pane = view.snapshot.bot_pane(&handle).ok_or_else(|| host.locale.get_with("bot.ask.noBot", &[("handle", &handle)]))?;
+        (pane.id().to_string(), pane.workspace_id().to_string())
+    };
+    let (instructions, budget, permission) = (spec.instructions.clone(), spec.budget_per_day, spec.permission.clone());
+    let _ = crate::frame::act(host, async {
+        let mut view = host.view();
+        crate::composer::change(&mut view, &pane, |p| {
+            let mut bot = p.bot.clone().unwrap_or_default();
+            if let Some(words) = &instructions {
+                bot.instructions = Some(words.trim().to_string()).filter(|t| !t.is_empty());
+            }
+            if budget.is_some() {
+                bot.budget_per_day = budget;
+            }
+            let mut settings = p.settings.clone().unwrap_or_default();
+            if let Some(permission) = &permission {
+                settings.permission_mode = permission.clone();
+            }
+            RunSession { bot: Some(bot), settings: Some(settings), ..p.clone() }
+        })
+    })
+    .await;
+    if !spec.schedules.is_empty() || !spec.triggers.is_empty() {
+        for job in crate::automation::jobs_of_bot(&handle).iter().filter(|j| j.origin == crate::automation::Origin::App) {
+            let trigger = matches!(job.item, crate::automation::Item::Trigger(_));
+            crate::automation::remove_own(host, &job.workspace, trigger, job.name());
+        }
+        put_jobs(host, &workspace, spec, &handle)?;
+    }
+    Ok(handle)
+}
+
+/// The approval sheet's lines: who asks, the bot, its agent, permission, place, budget, instructions' first line and its jobs.
+fn summary(host: &Host, spec: &BotSpec, origin: &str) -> Vec<String> {
+    let l = host.locale;
+    let mut lines = vec![l.get_with("bot.approve.origin", &[("origin", origin)])];
+    let name = spec.handle().map(|h| format!("@{h}")).unwrap_or_else(|| l.get("bot.approve.friendlyName"));
+    let model = spec.model.as_deref().map(|m| format!(" · {m}")).unwrap_or_default();
+    lines.push(format!("{name} · {}{model}", mighty_run::providers::name(spec.agent())));
+    if let Some(permission) = &spec.permission {
+        lines.push(format!("{}: {}", l.get("bot.dialog.permission"), mighty_composer::runtime::permission_label(spec.agent(), permission, &l)));
+    }
+    lines.push(match (&spec.workspace, &spec.folder) {
+        (Some(workspace), _) => l.get_with("bot.approve.workspace", &[("name", workspace)]),
+        (None, Some(folder)) => l.get_with("bot.approve.folder", &[("folder", folder)]),
+        (None, None) => l.get("bot.approve.ownFolder"),
+    });
+    if let Some(budget) = spec.budget_per_day {
+        lines.push(format!("{}: ${budget:.2}", l.get("bot.dialog.budget")));
+    }
+    if let Some(first) = spec.instructions.as_deref().map(|t| first_line(t, 160)).filter(|t| !t.is_empty()) {
+        lines.push(format!("{}: {first}", l.get("bot.dialog.instructions")));
+    }
+    let (schedules, triggers) = spec.jobs(&spec.handle().unwrap_or_else(|| "bot".into()));
+    for s in &schedules {
+        lines.push(format!("• {} · {} · {}", s.name, crate::automation::kind_word(&l, "schedule"), s.when()));
+    }
+    for t in &triggers {
+        lines.push(format!("• {} · {} · {}", t.name, crate::automation::kind_word(&l, t.on.kind()), crate::automation::trigger_words(&l, &t.on)));
+    }
+    lines
+}
+
+/// MC-65: a bot made or changed from a spec someone else gave (another agent's `create_bot` / `update_bot`, `mighty bot new`): the
+/// spec checked, then the approval sheet shown, and made only if the person allows it. Returns once the sheet is up (or why not).
+pub fn propose(host: &Arc<Host>, text: &str, update: bool, origin: String) -> Result<(), String> {
+    let spec = BotSpec::parse(text)?;
+    spec.validate(&mighty_core::wire::PROVIDERS, mighty_core::normalize::permission_modes)?;
+    match (update, spec.handle()) {
+        (true, None) => return Err(host.locale.get("bot.error.updateNeedsName")),
+        (true, Some(handle)) if host.view().snapshot.bot_pane(&handle).is_none() => {
+            return Err(host.locale.get_with("bot.ask.noBot", &[("handle", &handle)]));
+        }
+        (false, Some(handle)) if host.view().snapshot.bot_pane(&handle).is_some() => {
+            return Err(host.locale.get_with("bot.error.taken", &[("handle", &handle)]));
+        }
+        _ => {}
+    }
+    if let Some(named) = &spec.workspace
+        && workspace_named(host, named).is_none()
+    {
+        return Err(host.locale.get_with("bot.error.noWorkspace", &[("name", named)]));
+    }
+    let locale = host.locale;
+    let lines = summary(host, &spec, &origin);
+    let title = match (update, spec.handle()) {
+        (true, Some(handle)) => locale.get_with("bot.approve.updateTitle", &[("handle", &handle)]),
+        _ => locale.get("bot.approve.title"),
+    };
+    let mut sheet = DialogSpec::new(title, move |_| {
+        let parts: Vec<El> = std::iter::once(locale.get("bot.approve.message"))
+            .chain(lines.iter().cloned())
+            .map(|words| {
+                let mut block = El::text_block(words);
+                if let Some(text) = block.text_mut() {
+                    text.wrapping = Wrapping::Wrap;
+                }
+                block
+            })
+            .collect();
+        Content::El(Box::new(El::stack(false, mighty_core::design_tokens::metrics::SPACING_SM, parts)))
+    })
+    .styled(None, None);
+    sheet.primary = Some(DialogButton::new(locale.get(if update { "bot.approve.update" } else { "bot.approve.create" })));
+    sheet.close = Some(locale.get("bot.dialog.cancel"));
+    let host = host.clone();
+    tauri::async_runtime::spawn(async move {
+        if crate::native::show_dialog(&host, sheet).await != DialogResult::Primary {
+            host.log.line("bot: a proposed bot was not allowed");
+            return;
+        }
+        let made = if update { update_from_spec(&host, &spec).await } else { create_from_spec(&host, &spec).await };
+        if let Err(error) = made {
+            host.log.line(&format!("bot: a proposed bot was not made: {error}"));
+            let mut view = host.view();
+            view.error = Some(error);
+            host.schedule();
+        }
+    });
+    Ok(())
+}
+
 /// Makes the independent bot: its folder (when missing), the bots' home, an agent pane there working in `folder`, named and
 /// instructed, then selected.
-pub async fn create_independent(host: &Arc<Host>, bot: PaneBot, provider: &str, folder: &std::path::Path) -> Result<String, String> {
+pub async fn create_independent(
+    host: &Arc<Host>,
+    bot: PaneBot,
+    provider: &str,
+    model: Option<String>,
+    folder: &std::path::Path,
+) -> Result<String, String> {
     std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
     let folder = std::path::absolute(folder).map_err(|error| error.to_string())?.to_string_lossy().to_string();
     let home = home(host)?;
-    let pane = crate::phone::automation_create(host.clone(), home, provider.to_string(), None, Some(bot.handle.clone()), false)
+    let pane = crate::phone::automation_create(host.clone(), home, provider.to_string(), model, Some(bot.handle.clone()), false)
         .await
         .map_err(|(_, words)| words)?;
     let id = pane.clone();
@@ -610,6 +1002,23 @@ mod tests {
         assert!(!answering_a_bot(&asked, "b", None));
         let logs = vec![entry("user", " first "), entry("assistant", "ok"), entry("user", "  check the build \n"), entry("assistant", "…")];
         assert_eq!(latest_request(&logs), Some("check the build"));
+    }
+
+    /// MC-65: every template makes a spec the app accepts (its jobs sent to the bot), in every language.
+    #[test]
+    fn every_template_makes_a_valid_spec() {
+        for language in mighty_core::locale::LANGUAGES {
+            let locale = mighty_core::locale::Locale::new(language);
+            for template in Template::ALL {
+                let spec = template.spec(&locale, "owner/repo");
+                spec.validate(&mighty_core::wire::PROVIDERS, mighty_core::normalize::permission_modes)
+                    .unwrap_or_else(|e| panic!("{template:?} in {language}: {e}"));
+                let (schedules, triggers) = spec.jobs("콩이");
+                assert!(schedules.iter().map(|s| &s.action).chain(triggers.iter().map(|t| &t.action)).all(|a| a.bot().as_deref() == Some("콩이")));
+                assert_eq!(template == Template::Blank, schedules.is_empty() && triggers.is_empty(), "{template:?}");
+                assert!(!locale.get(template.label()).starts_with("bot."), "{template:?} has its words in {language}");
+            }
+        }
     }
 
     /// MC-64: a daily budget as typed in the bot sheet.

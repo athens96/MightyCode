@@ -150,6 +150,30 @@ Every agent pane on this computer is a bot. A new pane gets a friendly name comm
 
 - **The bot list**: the {{ui:bot.sidebar.title}} group under the sidebar's workspaces lists every bot in two categories: the bots of workspace panes under {{ui:bot.sidebar.workspaceBots}}, the independent ones under {{ui:bot.sidebar.otherBots}}; each category folds on its own. Each row shows the state and the name; a workspace bot shows its workspace after the name and its pane's title below ({{ui:bot.sidebar.independent}} for an independent bot); a click opens its pane, and a double click selects the bot's workspace and opens it in the list above (not for an independent bot). The group folds.
 - **Independent bots**: a bot of no workspace that works in a folder of its own. Press + on the {{ui:bot.sidebar.title}} group and set its name, agent and instructions. {{ui:bot.new.create}} works in a `bots/name` folder inside the app's data folder; {{ui:bot.new.pickFolder}} works in a folder you choose. Independent bots are not listed among the sidebar's workspaces.
+- **Templates**: pick a template under the 봇 group's + and the bot gets its instructions and when it works: PR reviewer (a new pull request), CI fixer (a CI failure), Morning briefing (9:00 on weekdays), After-release check (the `release.done` event), Task keeper (the to-do list every 30 minutes from 9:00 to 19:00 on weekdays). PR reviewer and CI fixer need a GitHub repository (`owner/name`). Leave the name empty for a friendly one.
+- **When it works**: the bot's sheet lists its schedules and triggers with their next run. {{ui:bot.dialog.addJob}} saves the sheet and opens the [schedules and triggers](settings.md#schedules) form filled to send to this bot. Renaming a bot renames it in its schedules and triggers too. The sidebar's bot row shows ⏰ and the next run.
+- **Permission and budget**: the bot's sheet sets the permission its runs take and a daily budget (USD). Once the budget is spent, its schedules and triggers skip for the rest of the day and other agents' requests are refused. The overall daily budget still applies.
+- **Sleep**: put a bot to sleep with the check box in its sheet or {{ui:bot.menu.sleep}} on its sidebar row. A sleeping bot is dimmed with 💤; its schedules and triggers skip, and other agents' `ask_bot` and `mighty agent send @name` are refused. Requests typed in its own composer still go. {{ui:bot.menu.wake}} wakes it.
+- **Bots made by agents and commands**: an agent in a Claude or Codex pane can propose a bot by giving a bot spec (JSON) to the mighty-terminal tools `create_bot` and `update_bot`; `mighty bot new --spec file` does the same. The app shows an approval sheet with who asked, the name, agent, permission, where it works, its budget and its schedules and triggers, and makes it only when you press {{ui:bot.approve.create}}.
+
+```json
+{
+  "name": "pr-keeper",
+  "agent": "codex",
+  "permission": "acceptEdits",
+  "instructions": "Review open pull requests.",
+  "budgetPerDay": 3,
+  "schedules": [{ "cron": "0 9 * * 1-5", "prompt": "Sum up the PRs since yesterday" }],
+  "triggers": [{ "on": { "type": "github", "events": ["pr_opened"], "repo": "owner/repo" }, "prompt": "Review {{pr.url}}" }]
+}
+```
+
+```sh
+mighty bot list                       # bots, their schedules and triggers, next run
+mighty bot new --spec bot.json        # shows the approval sheet (bot update: change a bot)
+mighty bot pause @pr-keeper           # sleep (resume: wake)
+mighty bot run @pr-keeper --job daily # run a bot's schedule or trigger now
+```
 - **Name**: 1 to 32 letters (any language, 한글 included) and digits, with `-`, `_` or `.` between them (no spaces). Case does not matter: `@Reviewer` and `@reviewer` are one bot. Only one pane in a profile uses a name.
 - **Instructions**: what the bot is for and how it works (up to 16 KB). They go after the first request of every new conversation, to the agent only; the request block on screen shows just the request you sent. Changed instructions apply from the next new conversation.
 - **Calling it**: use `@name` in place of a pane id.

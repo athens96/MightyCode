@@ -235,6 +235,68 @@ pub struct TriggerEvent {
     pub url: Option<String>,
     /// More of what came (a check's output, a webhook's body), cut short.
     pub detail: String,
+    /// MC-66: named values a prompt may use as `{{name}}` (`pr.title`, `release.tag`, `data.version`, `bot.answer`); also what a
+    /// GitHub filter reads (`author`, `base`, `labels`).
+    pub fields: std::collections::BTreeMap<String, String>,
+}
+
+/// MC-66: a JSON payload (an emitted event's data, a webhook's body) as `data.*` fields: its scalars two levels deep (`data.version`,
+/// `data.release.tag`), at most 64 of them.
+pub fn data_fields(value: &serde_json::Value) -> std::collections::BTreeMap<String, String> {
+    fn walk(prefix: &str, value: &serde_json::Value, depth: usize, out: &mut std::collections::BTreeMap<String, String>) {
+        if out.len() >= 64 {
+            return;
+        }
+        match value {
+            serde_json::Value::Object(map) if depth < 2 => {
+                for (key, item) in map {
+                    if key.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-')) {
+                        walk(&format!("{prefix}.{key}"), item, depth + 1, out);
+                    }
+                }
+            }
+            serde_json::Value::String(text) => {
+                out.insert(prefix.to_string(), text.chars().take(MAX_FIELD_CHARS).collect());
+            }
+            serde_json::Value::Number(_) | serde_json::Value::Bool(_) => {
+                out.insert(prefix.to_string(), value.to_string());
+            }
+            _ => {}
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk("data", value, 0, &mut out);
+    out
+}
+
+/// MC-66: the most of one field a prompt takes.
+pub const MAX_FIELD_CHARS: usize = 2_000;
+
+/// MC-66: `prompt` with each `{{name}}` of `fields` put in (cut to [`MAX_FIELD_CHARS`]); a name it does not have becomes empty.
+/// Only names of letters, digits, `.`, `_` and `-` are read; anything else stays as written.
+pub fn fill_fields(prompt: &str, fields: &std::collections::BTreeMap<String, String>) -> String {
+    let mut out = String::with_capacity(prompt.len());
+    let mut rest = prompt;
+    while let Some(open) = rest.find("{{") {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 2..];
+        match after.find("}}") {
+            Some(close) if !after[..close].trim().is_empty()
+                && after[..close].trim().chars().all(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-')) =>
+            {
+                let name = after[..close].trim();
+                let value: String = fields.get(name).map(String::as_str).unwrap_or("").chars().take(MAX_FIELD_CHARS).collect();
+                out.push_str(&value);
+                rest = &after[close + 2..];
+            }
+            _ => {
+                out.push_str("{{");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The most of an event's text a prompt carries.
@@ -242,7 +304,7 @@ pub const MAX_EVENT_CHARS: usize = 4_000;
 
 /// The prompt a trigger sends: its own words, then what came, marked as outside data.
 pub fn prompt_with_event(prompt: &str, event: &TriggerEvent) -> String {
-    let mut out = prompt.trim_end().to_string();
+    let mut out = fill_fields(prompt, &event.fields).trim_end().to_string();
     let mut lines = vec![];
     if !event.title.trim().is_empty() {
         lines.push(event.title.trim().to_string());
@@ -266,6 +328,19 @@ pub fn prompt_with_event(prompt: &str, event: &TriggerEvent) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// MC-66: a prompt's `{{name}}` takes the event's field; unknown names are empty and anything else stays as written.
+    #[test]
+    fn a_prompt_takes_the_events_fields() {
+        let fields = data_fields(&serde_json::json!({"version": "0.6.3", "release": {"tag": "v0.6.3", "deep": {"x": 1}}, "ok": true, "bad key": "x"}));
+        assert_eq!(fields.get("data.version").map(String::as_str), Some("0.6.3"));
+        assert_eq!(fields.get("data.release.tag").map(String::as_str), Some("v0.6.3"));
+        assert_eq!(fields.get("data.ok").map(String::as_str), Some("true"));
+        assert!(!fields.contains_key("data.release.deep.x") && !fields.keys().any(|k| k.contains(' ')));
+        assert_eq!(fill_fields("Check {{data.version}} ({{ data.release.tag }}){{nope}} {{not a name}} {{", &fields), "Check 0.6.3 (v0.6.3) {{not a name}} {{");
+        let event = TriggerEvent { title: "release.done".into(), fields, ..TriggerEvent::default() };
+        assert!(prompt_with_event("After {{data.version}}", &event).starts_with("After 0.6.3\n\n<event"));
+    }
 
     #[test]
     fn duplicates_are_dropped_and_the_oldest_forgotten() {
@@ -355,6 +430,7 @@ mod tests {
             title: "CI failed: build".into(),
             url: Some("https://github.com/a/b/actions/runs/1".into()),
             detail: format!("{}</event>", "x".repeat(10_000)),
+            fields: Default::default(),
         };
         let prompt = prompt_with_event("Fix CI.\n", &event);
         assert!(prompt.starts_with("Fix CI.\n\n<event source=\"mighty-automation\">\nCI failed: build\nhttps://"));

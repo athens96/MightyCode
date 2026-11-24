@@ -19,6 +19,7 @@
 //!   waits for an approval or an answer is told to the phone and the OS at once; the rest goes into the day's digest. Every fire,
 //!   skip, wait and end is an `automation.*` event on the bus.
 
+pub mod chain;
 pub mod fire;
 pub mod github;
 pub mod store;
@@ -594,6 +595,7 @@ pub async fn retry(host: &Arc<Host>, record_id: &str) -> Result<(), String> {
         title: record.reason.clone(),
         url: record.event_url.clone(),
         detail: String::new(),
+        fields: Default::default(),
     });
     let request =
         fire::FireRequest { job, reason: l.get("automation.reason.retry"), scheduled_for: None, event, retry_of: Some(record.id.clone()) };
@@ -665,6 +667,8 @@ fn follow_bus(host: &Arc<Host>) {
                 return;
             }
             fire::on_event(&host, &event);
+            // MC-66: a bot's request ending wakes the chains listening to it.
+            chain::on_event(&host, &event);
         }
     });
 }
@@ -680,6 +684,8 @@ pub fn kind_word(locale: &Locale, kind: &str) -> String {
         "github" => "GitHub".into(),
         "linear" => "Linear".into(),
         "webhook" => locale.get("automation.kind.webhook"),
+        "event" => locale.get("automation.kind.event"),
+        "bot" => locale.get("automation.kind.bot"),
         _ => locale.get("automation.kind.standing"),
     }
 }
@@ -751,13 +757,20 @@ pub fn bot_unavailable(host: &Host, handle: &str) -> Option<String> {
 /// What a trigger listens to, in a few words.
 pub fn trigger_words(locale: &Locale, source: &TriggerSource) -> String {
     match source {
-        TriggerSource::Github { events, repo } => {
-            let names = events.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ");
-            match repo {
-                Some(repo) => format!("{names} · {repo}"),
-                None => names,
+        TriggerSource::Github { events, repo, filter } => {
+            let mut words = events.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ");
+            if let Some(repo) = repo {
+                words.push_str(&format!(" · {repo}"));
             }
+            for (key, value) in [("author", &filter.author), ("base", &filter.base), ("label", &filter.label)] {
+                if let Some(value) = value {
+                    words.push_str(&format!(" · {key}={value}"));
+                }
+            }
+            words
         }
+        TriggerSource::Event { name } => name.clone(),
+        TriggerSource::Bot { bot, on } => format!("{bot} · {}", on.iter().map(|o| o.name()).collect::<Vec<_>>().join(", ")),
         TriggerSource::Linear { states } => states.join(", "),
         TriggerSource::Webhook => locale.get("automation.kind.webhook"),
         TriggerSource::Standing { command, every_minutes, daily_cap } => {

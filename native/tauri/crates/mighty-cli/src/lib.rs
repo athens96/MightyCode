@@ -13,7 +13,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 /// The words that make `mighty` a control command (the Mac script's `case`): the app's subcommands and the options before them.
-pub const CONTROL_WORDS: [&str; 9] = ["status", "workspace", "pane", "agent", "events", "server", "--profile", "--help", "-h"];
+pub const CONTROL_WORDS: [&str; 11] =
+    ["status", "workspace", "pane", "agent", "events", "server", "bot", "event", "--profile", "--help", "-h"];
 
 /// The app's exe name, in the install folder.
 pub const APP_EXE: &str = "MightyCode.exe";

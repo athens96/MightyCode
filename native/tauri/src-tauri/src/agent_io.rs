@@ -232,6 +232,8 @@ async fn handle_tool(host: &Arc<Host>, call: &TerminalCall) -> Result<Value, Str
         mighty_delegation::agent_io::tools::LIST_BOTS
             | mighty_delegation::agent_io::tools::ASK_BOT
             | mighty_delegation::agent_io::tools::BOT_ANSWER
+            | mighty_delegation::agent_io::tools::CREATE_BOT
+            | mighty_delegation::agent_io::tools::UPDATE_BOT
     ) {
         // MC-58: bots, asked by another agent.
         return crate::bot::tool(host, &call.pane_id, &call.tool, &call.value).await;

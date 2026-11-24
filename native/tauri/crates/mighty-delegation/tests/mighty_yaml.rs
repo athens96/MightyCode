@@ -533,6 +533,21 @@ triggers:
     standing: npm test 2>&1 | tail -3
     everyMinutes: 30
     prompt: Tests changed
+  merged:
+    github: [pr_merged, release_published]
+    repo: owner/repo
+    author: "!dependabot[bot]"
+    base: main
+    mode: heartbeat
+    pane: "@콩이"
+    prompt: "Look at {{pr.title}}"
+  shipped:
+    event: release.*
+    prompt: "Check {{data.version}}"
+  after:
+    bot: "@콩이"
+    outcome: [done, failed]
+    prompt: "Go on from {{bot.answer}}"
 "#;
     std::fs::write(folder.join(".mighty.yaml"), shared).unwrap();
     let loaded = load_from_folder(&folder).unwrap().unwrap();
@@ -547,12 +562,35 @@ triggers:
         (nightly.action.mode, nightly.action.pane.as_deref(), nightly.catch_up),
         (FireMode::Heartbeat, Some("Night watch"), CatchUp::Skip)
     );
-    assert_eq!(config.triggers["ci"].on, TriggerSource::Github { events: vec![GitHubEvent::PrOpened, GitHubEvent::CiFailed], repo: None });
+    assert_eq!(config.triggers["ci"].on, TriggerSource::Github { events: vec![GitHubEvent::PrOpened, GitHubEvent::CiFailed], repo: None, filter: Default::default() });
     assert_eq!(config.triggers["ready"].on, TriggerSource::Linear { states: vec!["Ready".into(), "In Review".into()] });
     assert!(!config.triggers["deploy"].enabled && config.triggers["deploy"].on == TriggerSource::Webhook);
     assert_eq!(
         config.triggers["flaky"].on,
         TriggerSource::Standing { command: "npm test 2>&1 | tail -3".into(), every_minutes: 30, daily_cap: 5 }
+    );
+    // MC-64/66: a named repository and a filter, an emitted event, and a bot chain.
+    let merged = &config.triggers["merged"];
+    assert_eq!(
+        merged.on,
+        TriggerSource::Github {
+            events: vec![GitHubEvent::ReleasePublished, GitHubEvent::PrMerged],
+            repo: Some("owner/repo".into()),
+            filter: mighty_core::automation::spec::GitHubFilter {
+                author: Some("!dependabot[bot]".into()),
+                base: Some("main".into()),
+                label: None
+            },
+        }
+    );
+    assert_eq!(merged.action.bot().as_deref(), Some("콩이"), "a heartbeat to @콩이 is that bot's");
+    assert_eq!(config.triggers["shipped"].on, TriggerSource::Event { name: "release.*".into() });
+    assert_eq!(
+        config.triggers["after"].on,
+        TriggerSource::Bot {
+            bot: "@콩이".into(),
+            on: vec![mighty_core::automation::spec::BotOutcome::Done, mighty_core::automation::spec::BotOutcome::Failed]
+        }
     );
 
     // Any change to a prompt or a check changes the hash, so an earlier approval no longer holds.
@@ -571,7 +609,7 @@ triggers:
     let merged = load_from_folder(&folder).unwrap().unwrap();
     assert_eq!(merged.config.schedules["nightly"].action.prompt, "mine");
     assert_eq!(merged.config.schedules.len(), 3);
-    assert_eq!(merged.config.triggers.len(), 4);
+    assert_eq!(merged.config.triggers.len(), 7);
 
     for bad in [
         "schedules:\n  a:\n    prompt: p\n",

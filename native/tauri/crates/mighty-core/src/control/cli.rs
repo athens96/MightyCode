@@ -12,7 +12,7 @@ pub const EXIT_ERROR: i32 = 1;
 pub const EXIT_TIMEOUT: i32 = 2;
 
 /// The words that make `mighty` a control command rather than a folder or a request to open.
-pub const SUBCOMMANDS: [&str; 6] = ["status", "workspace", "pane", "agent", "events", "server"];
+pub const SUBCOMMANDS: [&str; 8] = ["status", "workspace", "pane", "agent", "events", "server", "bot", "event"];
 
 pub const USAGE: &str = "\
 usage: mighty <command> [options]
@@ -31,6 +31,11 @@ usage: mighty <command> [options]
   mighty server show                              open the window of the running app
   mighty server stop [--stop-all]                 quit it (--stop-all also ends the background daemon's work)
   mighty server ssh-pair                          a one-time code for another computer's Mighty Code over SSH
+  mighty bot list                                 the bots, their schedules, triggers and next run
+  mighty bot new --spec <file|->                  a bot from a JSON spec, once allowed in the app (bot update: change one)
+  mighty bot pause|resume <@bot>                  put a bot to sleep, or wake it
+  mighty bot run <@bot> [--job <name>]            run a bot's schedule or trigger now
+  mighty event emit <name> [--data <json>]        wake the triggers listening for an event (release.done)
 
   --profile <folder>   the app's data folder when it runs with --profile
   Output is JSON. Exit codes: 0 ok, 1 error, 2 timeout.
@@ -70,7 +75,10 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
     let mut options: Vec<(&str, Option<&str>)> = Vec::new();
     let mut at = 0;
     let takes_value = |name: &str| {
-        matches!(name, "--profile" | "--workspace" | "--agent" | "--lines" | "--until" | "--timeout" | "--regex" | "--pane" | "--type")
+        matches!(
+            name,
+            "--profile" | "--workspace" | "--agent" | "--lines" | "--until" | "--timeout" | "--regex" | "--pane" | "--type" | "--spec" | "--job" | "--data"
+        )
     };
     let mut after_dashes = false;
     while at < args.len() {
@@ -192,6 +200,48 @@ pub fn parse(args: &[String]) -> Result<Invocation, UsageError> {
             }
             Command::Events { pane: option("--pane").map(str::to_string), types }
         }
+        // MC-65: bots; `--spec`'s file is read by the caller (its path, or `-` for standard input, is in `spec` until then).
+        ["bot", "list", ..] | ["bot", "ls", ..] => {
+            allowed(&[])?;
+            extra(2)?;
+            Command::BotList
+        }
+        ["bot", verb @ ("new" | "update"), ..] => {
+            allowed(&["--spec"])?;
+            extra(2)?;
+            let spec = option("--spec").ok_or_else(|| usage("--spec <file> is needed (or - to read it from standard input)"))?;
+            Command::BotNew { spec: spec.to_string(), update: *verb == "update" }
+        }
+        ["bot", verb @ ("pause" | "resume" | "sleep" | "wake"), ..] => {
+            allowed(&[])?;
+            extra(3)?;
+            let bot = words.get(2).ok_or_else(|| usage("which bot? give its @name (mighty bot list)"))?;
+            let bot = crate::model::PaneBot::handle_of(bot).ok_or_else(|| usage(format!("'{bot}' is not a bot's name")))?;
+            Command::BotSleep { bot: format!("@{bot}"), asleep: matches!(*verb, "pause" | "sleep") }
+        }
+        ["bot", "run", ..] => {
+            allowed(&["--job"])?;
+            extra(3)?;
+            let bot = words.get(2).ok_or_else(|| usage("which bot? give its @name (mighty bot list)"))?;
+            let bot = crate::model::PaneBot::handle_of(bot).ok_or_else(|| usage(format!("'{bot}' is not a bot's name")))?;
+            Command::BotRun { bot: format!("@{bot}"), job: option("--job").map(str::to_string) }
+        }
+        // MC-66
+        ["event", "emit", ..] => {
+            allowed(&["--data"])?;
+            extra(3)?;
+            let name = words.get(2).ok_or_else(|| usage("which event? e.g. mighty event emit release.done"))?;
+            if !crate::automation::spec::valid_event_name(name, false) {
+                return Err(usage(format!("'{name}' is not an event name: lowercase letters, digits, . _ -")));
+            }
+            let data = option("--data").map(str::to_string);
+            if let Some(data) = &data
+                && serde_json::from_str::<serde_json::Value>(data).is_err()
+            {
+                return Err(usage("--data takes JSON, e.g. --data '{\"version\":\"0.6.3\"}'"));
+            }
+            Command::EventEmit { name: name.to_string(), data }
+        }
         ["server", "start", ..] => {
             allowed(&[])?;
             extra(2)?;
@@ -242,6 +292,27 @@ mod tests {
             Invocation::Run { command, .. } => command,
             Invocation::Help | Invocation::ServerStart { .. } => panic!("not a request"),
         }
+    }
+
+    /// MC-65/66: the bot and event commands.
+    #[test]
+    fn bot_and_event_commands_read_into_their_requests() {
+        assert_eq!(command(&["bot", "list"]), Command::BotList);
+        assert_eq!(command(&["bot", "new", "--spec", "bot.json"]), Command::BotNew { spec: "bot.json".into(), update: false });
+        assert_eq!(command(&["bot", "update", "--spec", "-"]), Command::BotNew { spec: "-".into(), update: true });
+        assert_eq!(command(&["bot", "pause", "콩이"]), Command::BotSleep { bot: "@콩이".into(), asleep: true });
+        assert_eq!(command(&["bot", "resume", "@콩이"]), Command::BotSleep { bot: "@콩이".into(), asleep: false });
+        assert_eq!(command(&["bot", "run", "@콩이", "--job", "아침"]), Command::BotRun { bot: "@콩이".into(), job: Some("아침".into()) });
+        assert_eq!(
+            command(&["event", "emit", "release.done", "--data", r#"{"version":"0.6.3"}"#]),
+            Command::EventEmit { name: "release.done".into(), data: Some(r#"{"version":"0.6.3"}"#.into()) }
+        );
+        let error = |args: &[&str]| run(args).unwrap_err().0;
+        assert!(error(&["bot", "new"]).contains("--spec"));
+        assert!(error(&["bot", "pause", "two words"]).contains("not a bot's name"));
+        assert!(error(&["event", "emit", "Release!"]).contains("not an event name"));
+        assert!(error(&["event", "emit", "release.done", "--data", "{oops"]).contains("JSON"));
+        assert!(SUBCOMMANDS.contains(&"bot") && SUBCOMMANDS.contains(&"event") && USAGE.contains("mighty event emit"));
     }
 
     #[test]

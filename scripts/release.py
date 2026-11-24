@@ -1051,7 +1051,23 @@ def step_verify(state, a):
     if problems:
         raise ReleaseError("확인 실패:\n  " + "\n  ".join(problems))
     mark_done(state, "verify")
+    emit_release_done(version)
     say(f"릴리스 {version} 끝. (도움말 사이트를 바꿨다면 scripts/help/upload.sh)")
+
+
+def emit_release_done(version):
+    """MC-66: tells this computer's Mighty Code the release is out (`mighty event emit release.done`), so a bot listening for it
+    (the 릴리스 뒤 점검 template) goes on. Nothing happens when the command or the app is missing."""
+    mighty = shutil.which("mighty")
+    if not mighty:
+        return
+    data = json.dumps({"version": version, "tag": f"v{version}"})
+    try:
+        done = subprocess.run([mighty, "event", "emit", "release.done", "--data", data], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return
+    if done.returncode == 0:
+        say("  release.done 이벤트를 보냈습니다 (mighty event emit).")
 
 
 def step_status(state, a):

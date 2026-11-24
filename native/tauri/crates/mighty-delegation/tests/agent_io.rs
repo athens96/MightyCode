@@ -131,7 +131,7 @@ async fn stdio_mcp_contract() {
     assert_eq!(hello["result"]["protocolVersion"], "2025-11-25", "protocol negotiates a supported revision");
     let tools = parse(server.handle(r#"{"jsonrpc":"2.0","id":"list","method":"tools/list"}"#).await);
     let listed = tools["result"]["tools"].as_array().unwrap();
-    assert_eq!(listed.len(), 8, "the Mac terminal/web tool set, MC-48's browser check and MC-58's bot tools");
+    assert_eq!(listed.len(), 10, "the Mac terminal/web tool set, MC-48's browser check, MC-58's bot tools and MC-65's bot specs");
     let check = &listed[4];
     assert_eq!(check["name"], "mighty_browser_check");
     assert!(check["inputSchema"]["required"].is_null(), "url and paths are optional: {check}");
@@ -144,6 +144,12 @@ async fn stdio_mcp_contract() {
     assert_eq!(listed[7]["name"], "bot_answer");
     assert_eq!(listed[7]["inputSchema"]["properties"]["wait"]["type"], "boolean");
     assert_eq!(listed[7]["inputSchema"]["required"], serde_json::json!(["bot"]));
+    // MC-65: create_bot and update_bot take one spec object.
+    for (at, name) in [(8, "create_bot"), (9, "update_bot")] {
+        assert_eq!(listed[at]["name"], name);
+        assert_eq!(listed[at]["inputSchema"]["properties"]["spec"]["type"], "object");
+        assert_eq!(listed[at]["inputSchema"]["required"], serde_json::json!(["spec"]));
+    }
     assert!(
         server.handle(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).await.is_none(),
         "notifications receive no protocol reply"

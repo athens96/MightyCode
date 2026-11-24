@@ -112,10 +112,22 @@ pub async fn run_with(
         }
         _ => {}
     }
+    // Standard input is read once, for `agent send -` or `bot new --spec -`.
+    let mut stdin = Some(stdin);
+    let mut read_stdin_once = || stdin.take().map_or_else(|| Err("standard input was already read".to_string()), |read| read());
     if stdin_text && let Command::AgentSend { text, .. } = &mut command {
-        match stdin() {
+        match read_stdin_once() {
             Ok(read) if !read.trim().is_empty() => *text = read,
             Ok(_) => return fail(out, err, &ControlError::bad("nothing was read from standard input")),
+            Err(error) => return fail(out, err, &ControlError::bad(error)),
+        }
+    }
+    // MC-65: a bot spec's file (or standard input for `-`) read here; the app gets its JSON text.
+    if let Command::BotNew { spec, .. } = &mut command {
+        let read = if spec.as_str() == "-" { read_stdin_once() } else { std::fs::read_to_string(spec.as_str()).map_err(|e| format!("{spec}: {e}")) };
+        match read {
+            Ok(text) if !text.trim().is_empty() => *spec = text,
+            Ok(_) => return fail(out, err, &ControlError::bad("the spec is empty")),
             Err(error) => return fail(out, err, &ControlError::bad(error)),
         }
     }

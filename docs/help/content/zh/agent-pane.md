@@ -150,6 +150,30 @@ Codex 和 Antigravity 的命令名称略有不同（例如 Codex 的 `/new`、`/
 
 - **机器人列表**：侧边栏工作区列表下方的 {{ui:bot.sidebar.title}} 组把所有机器人分成两类列出：工作区窗格的机器人在 {{ui:bot.sidebar.workspaceBots}} 下，独立机器人在 {{ui:bot.sidebar.otherBots}} 下，每一类都可以单独折叠。每行显示状态和名字，工作区机器人会在名字后面显示所连接的工作区，下方显示窗格标题（独立机器人显示 {{ui:bot.sidebar.independent}}），点击即可打开它的窗格，双击会选中该机器人所属的工作区并在上方列表中展开（独立机器人除外）。该组可以折叠。
 - **独立机器人**：不属于任何工作区、在自己文件夹中工作的机器人。点击 {{ui:bot.sidebar.title}} 组的 +，设置名字、代理和说明。{{ui:bot.new.create}} 在应用数据文件夹中的 `bots/名字` 文件夹里工作；{{ui:bot.new.pickFolder}} 在你选择的文件夹里工作。独立机器人不会出现在侧边栏的工作区列表中。
+- **模板**：在机器人组的 + 中选择模板，就会同时设好说明和工作时间：PR 审查员（新的 PR）、CI 修复员（CI 失败）、早间简报（工作日 9 点）、发布后检查（`release.done` 事件）、任务管家（工作日 9 点到 19 点每 30 分钟查看待办）。PR 审查员和 CI 修复员需要 GitHub 仓库（`owner/name`）。名字留空则起一个可爱的名字。
+- **何时工作**：机器人设置表单列出它的计划和触发器及下次运行时间。{{ui:bot.dialog.addJob}} 会保存设置，并打开已填好发给此机器人的[计划和触发器](settings.md#schedules)表单。改名时，发给它的计划和触发器也会跟着改。侧边栏机器人行显示 ⏰ 和下次运行时间。
+- **权限和预算**：在机器人设置表单中设置它运行时使用的权限和每日预算（美元）。预算用完后，当天剩余的计划和触发器会跳过，其他代理的请求也会被拒绝。整体每日预算仍然有效。
+- **休眠**：用设置表单中的复选框或侧边栏机器人行的 {{ui:bot.menu.sleep}} 让它休眠。休眠的机器人显示 💤 并变暗；计划和触发器会跳过，其他代理的 `ask_bot` 和 `mighty agent send @名字` 会被拒绝。直接在它的输入框发送的请求照常接收。用 {{ui:bot.menu.wake}} 唤醒。
+- **由代理和命令创建机器人**：Claude、Codex 窗格中的代理可以把机器人规格（JSON）交给 mighty-terminal 工具 `create_bot`、`update_bot` 来提议机器人；`mighty bot new --spec 文件` 也一样。应用会在批准表单中显示提议方、名字、代理、权限、工作位置、预算以及计划和触发器，只有你按下 {{ui:bot.approve.create}} 才会创建。
+
+```json
+{
+  "name": "pr-keeper",
+  "agent": "codex",
+  "permission": "acceptEdits",
+  "instructions": "审查打开的 PR。",
+  "budgetPerDay": 3,
+  "schedules": [{ "cron": "0 9 * * 1-5", "prompt": "总结昨天以来的 PR" }],
+  "triggers": [{ "on": { "type": "github", "events": ["pr_opened"], "repo": "owner/repo" }, "prompt": "请审查 {{pr.url}}" }]
+}
+```
+
+```sh
+mighty bot list                       # 机器人、计划和触发器、下次运行
+mighty bot new --spec bot.json        # 显示批准表单（bot update：修改已有机器人）
+mighty bot pause @pr-keeper           # 休眠（resume：唤醒）
+mighty bot run @pr-keeper --job daily # 立即运行机器人的计划或触发器
+```
 - **名字**：1 到 32 个文字（任何语言，包括中文）和数字，中间可用 `-`、`_`、`.`（不能有空格）。不区分大小写：`@Reviewer` 和 `@reviewer` 是同一个机器人。同一配置中一个名字只能由一个窗格使用。
 - **说明**：机器人负责什么、如何工作（最多 16 KB）。每次开始新对话时，说明会附在第一个请求之后，只发给代理；屏幕上的请求块只显示你发送的请求。修改后的说明从下一次新对话开始生效。
 - **调用方法**：用 `@名字` 代替窗格 id。

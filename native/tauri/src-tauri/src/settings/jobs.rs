@@ -10,7 +10,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Local, Utc};
 use mighty_core::automation::records::RunRecord;
 use mighty_core::automation::spec::{
-    Action, CatchUp, DEFAULT_DAILY_CAP, DEFAULT_EVERY_MINUTES, FireMode, GitHubEvent, ScheduleSpec, TriggerSource, TriggerSpec,
+    Action, BotOutcome, CatchUp, DEFAULT_DAILY_CAP, DEFAULT_EVERY_MINUTES, FireMode, GitHubEvent, GitHubFilter, ScheduleSpec, TriggerSource,
+    TriggerSpec,
 };
 use mighty_core::design_tokens::{Token, metrics};
 use mighty_core::wire::PROVIDERS;
@@ -25,7 +26,7 @@ const FIELD_WIDTH: f64 = 300.0;
 /// The history rows shown.
 const HISTORY_ROWS: usize = 12;
 /// The kinds the form makes, in its picker's order.
-const KINDS: [&str; 5] = ["schedule", "github", "linear", "webhook", "standing"];
+const KINDS: [&str; 7] = ["schedule", "github", "linear", "webhook", "standing", "event", "bot"];
 
 /// What a form field's typing changes.
 type Setter = Box<dyn Fn(&mut Form, String) + Send + Sync>;
@@ -50,6 +51,12 @@ struct Form {
     cap: String,
     /// MC-64: a GitHub trigger's repository (`owner/name`), empty for the workspace's own.
     repo: String,
+    /// MC-66: a GitHub trigger's filter: author (`!name` for all but), base branch, label.
+    author: String,
+    base: String,
+    label: String,
+    /// MC-66: a bot chain's outcomes (`done, failed`).
+    outcome: String,
 }
 
 impl Form {
@@ -76,9 +83,17 @@ impl Form {
             Item::Trigger(t) => {
                 form.kind = KINDS.iter().position(|k| *k == t.on.kind()).unwrap_or(0);
                 match &t.on {
-                    TriggerSource::Github { events, repo } => {
+                    TriggerSource::Github { events, repo, filter } => {
                         form.when = events.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ");
                         form.repo = repo.clone().unwrap_or_default();
+                        form.author = filter.author.clone().unwrap_or_default();
+                        form.base = filter.base.clone().unwrap_or_default();
+                        form.label = filter.label.clone().unwrap_or_default();
+                    }
+                    TriggerSource::Event { name } => form.when = name.clone(),
+                    TriggerSource::Bot { bot, on } => {
+                        form.when = bot.clone();
+                        form.outcome = on.iter().map(|o| o.name()).collect::<Vec<_>>().join(", ");
                     }
                     TriggerSource::Linear { states } => form.when = states.join(", "),
                     TriggerSource::Webhook => {}
@@ -131,8 +146,22 @@ impl Form {
                     .iter()
                     .map(|n| GitHubEvent::parse(n).ok_or_else(|| host.locale.get_with("automation.form.badEvent", &[("name", n)])))
                     .collect::<Result<Vec<_>, _>>()?;
-                let repo = Some(self.repo.trim().to_string()).filter(|r| !r.is_empty());
-                TriggerSource::Github { events, repo }
+                let text = |t: &str| Some(t.trim().to_string()).filter(|t| !t.is_empty());
+                let filter = GitHubFilter { author: text(&self.author), base: text(&self.base), label: text(&self.label) };
+                TriggerSource::Github { events, repo: text(&self.repo), filter }
+            }
+            "event" => TriggerSource::Event { name: self.when.trim().to_string() },
+            "bot" => {
+                let outcomes = list(&self.outcome);
+                let on = if outcomes.is_empty() {
+                    vec![BotOutcome::Done]
+                } else {
+                    outcomes
+                        .iter()
+                        .map(|n| BotOutcome::parse(n).ok_or_else(|| host.locale.get_with("automation.form.badEvent", &[("name", n)])))
+                        .collect::<Result<Vec<_>, _>>()?
+                };
+                TriggerSource::Bot { bot: self.when.trim().to_string(), on }
             }
             "linear" => TriggerSource::Linear { states: list(&self.when) },
             "webhook" => TriggerSource::Webhook,
@@ -617,9 +646,11 @@ fn form_body(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opti
     let kind = KINDS.get(current.kind).copied().unwrap_or("schedule");
     let (when_label, placeholder) = match kind {
         "schedule" => (locale.get("automation.form.when"), "0 9 * * 1-5"),
-        "github" => (locale.get("automation.form.events"), "pr_opened, review_requested, ci_failed"),
+        "github" => (locale.get("automation.form.events"), "pr_opened, review_requested, ci_failed, release_published, pr_merged, issue_opened"),
         "linear" => (locale.get("automation.form.states"), "Ready, In Review"),
         "standing" => (locale.get("automation.form.command"), "npm test 2>&1 | tail -5"),
+        "event" => (locale.get("automation.form.event"), "release.done"),
+        "bot" => (locale.get("automation.form.bot"), "@*"),
         _ => (String::new(), ""),
     };
     if kind != "webhook" {
@@ -635,6 +666,16 @@ fn form_body(host: &Arc<Host>, ui: &mut Ui, form: &mighty_native::ui::Local<Opti
             Box::new(|f, t| f.repo = t),
         ));
         parts.push(caption(ui, locale.get("automation.form.repoNote")));
+        parts.push(field(ui, locale.get("automation.form.author"), current.author.clone(), "!dependabot[bot]", "settings-jobs-form-author", Box::new(|f, t| f.author = t)));
+        parts.push(field(ui, locale.get("automation.form.base"), current.base.clone(), "main", "settings-jobs-form-base", Box::new(|f, t| f.base = t)));
+        parts.push(field(ui, locale.get("automation.form.label"), current.label.clone(), "", "settings-jobs-form-label", Box::new(|f, t| f.label = t)));
+    }
+    if kind == "event" {
+        parts.push(caption(ui, locale.get("automation.form.eventNote")));
+    }
+    if kind == "bot" {
+        parts.push(field(ui, locale.get("automation.form.outcome"), current.outcome.clone(), "done, failed", "settings-jobs-form-outcome", Box::new(|f, t| f.outcome = t)));
+        parts.push(caption(ui, locale.get("automation.form.botNote")));
     }
     if kind == "schedule" {
         parts.push(caption(ui, locale.get("automation.form.whenNote")));

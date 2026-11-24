@@ -147,7 +147,9 @@ async fn mcp_server_over_pipes_runs_echo_through_the_real_socket_server() {
                     "mighty_browser_check",
                     "list_bots",
                     "ask_bot",
-                    "bot_answer"
+                    "bot_answer",
+                    "create_bot",
+                    "update_bot"
                 ],
         "{names:?}"
     );

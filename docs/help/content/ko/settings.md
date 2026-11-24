@@ -126,6 +126,8 @@ mighty agent wait <pane> --until done --timeout 600
 mighty pane wait-output <pane> --regex "passed|failed" --timeout 300
 mighty events --type pane.state
 mighty server start                             # 창 없이 시작 (status, show, stop [--stop-all])
+mighty bot list                                 # 봇과 예약·트리거 (bot new|update|pause|resume|run)
+mighty event emit release.done --data '{"version":"0.6.3"}'   # 이 이벤트를 기다리는 트리거 실행
 ```
 
 - 창 id는 앱이 쓰는 그대로이고 바뀌지 않습니다. 상태는 `idle`, `running`, `blocked`(승인·질문 대기), `done`, `failed`, `stopped`입니다.
@@ -139,7 +141,10 @@ mighty server start                             # 창 없이 시작 (status, sho
 ### 예약과 트리거 {#schedules}
 {{ui:settings.nav.companion}} 탭의 {{ui:automation.jobs.sectionTitle}} 상자에서 정한 시간이나 이벤트에 에이전트 작업을 시작합니다. 워크스페이스를 고르면 그 워크스페이스의 예약과 트리거, 다음 실행 시각, 마지막 결과가 보입니다. 맨 위에는 오늘 쓴 금액과 하루 예산, 오늘의 자동화 요약이 있습니다.
 - **예약**: 5칸 cron(`0 9 * * 1-5`) 또는 RRULE 일부(`FREQ=DAILY|WEEKLY|HOURLY`, `BYHOUR`, `BYMINUTE`, `BYDAY`)로 정합니다. 이 컴퓨터의 시간대를 따르고, 서머타임으로 건너뛴 시각은 바로 다음에 한 번, 두 번 오는 시각은 처음에 한 번 실행합니다.
-- **트리거**: GitHub(PR 열림, 리뷰 요청, CI 실패), Linear(이슈가 고른 상태로 바뀜), 웹훅, 상시 점검(셸 명령을 몇 분마다 돌려 출력이 바뀔 때만 에이전트를 깨우고, 하루 상한까지만 깨움). GitHub는 `gh`로 로그인한 계정으로 5분에 한 번까지만 확인하고, 바뀐 것이 없거나 연결이 끊기면 더 드물게 확인합니다. Linear는 워크스페이스에 연결한 Linear를 씁니다.
+- **트리거**: GitHub(PR 열림, 리뷰 요청, CI 실패, 릴리스 발행, PR 병합, 이슈 열림. 저장소를 `owner/name`으로 직접 정할 수 있고, 작성자·브랜치·라벨로 거를 수 있음. 작성자 앞에 `!`를 붙이면 그 사람만 뺌), Linear(이슈가 고른 상태로 바뀜), 웹훅, 상시 점검(셸 명령을 몇 분마다 돌려 출력이 바뀔 때만 에이전트를 깨우고, 하루 상한까지만 깨움). GitHub는 `gh`로 로그인한 계정으로 5분에 한 번까지만 확인하고, 바뀐 것이 없거나 연결이 끊기면 더 드물게 확인합니다. Linear는 워크스페이스에 연결한 Linear를 씁니다.
+- **이벤트**: `mighty event emit <이름> --data '{"version":"0.6.3"}'`로 보낸 이벤트를 받습니다(`release.*`처럼 끝에 `*`를 붙이면 그렇게 시작하는 이벤트를 모두 받음). `scripts/release.py`는 릴리스가 끝나면 `release.done`을 보냅니다.
+- **봇 연쇄**: 다른 봇(`@이름`, 아무 봇이나는 `@*`)의 요청이 끝나거나 실패하면 실행합니다. 봇은 자기 자신을 깨우지 않고, 연쇄는 두 단계까지입니다.
+- **프롬프트 변수**: 프롬프트에 `{{pr.title}}`, `{{pr.url}}`, `{{pr.author}}`, `{{ci.url}}`, `{{release.tag}}`, `{{issue.title}}`, `{{data.version}}`(이벤트·웹훅 JSON), `{{bot.handle}}`, `{{bot.answer}}`를 쓰면 그 값으로 바뀝니다. 없는 값은 빈칸이 됩니다.
 - **실행 방식**: 새 창(필요하면 워크트리에서)에 프롬프트를 보내거나, {{ui:automation.form.heartbeat}}를 켜면 같은 이름의 창에 같은 대화로 보냅니다. 에이전트와 모델을 고를 수 있습니다.
 - **예산**: 오늘 쓴 금액에 이 실행의 예상 비용을 더해 하루 예산을 넘으면 실행하지 않고 "건너뜀"으로 남깁니다.
 - **알림**: 자동으로 시작한 작업이 승인이나 답을 기다리면 휴대폰과 OS 알림으로 바로 알립니다. 나머지는 실행 기록과 오늘 요약에 모읍니다. 모든 실행은 `automation.fired`, `automation.skipped`, `automation.blocked`, `automation.finished` 이벤트로 `mighty events`에서도 볼 수 있고, {{ui:automation.settings.events}}에서 {{ui:automation.event.automation}} 항목을 켜면 웹훅과 상태 명령도 따릅니다.

@@ -142,6 +142,15 @@ impl TerminalServer {
                         out.end_object();
                         out.end_object();
                         out.end_object();
+                    } else if tool.name == tools::CREATE_BOT || tool.name == tools::UPDATE_BOT {
+                        // MC-65: the bot's spec, an object.
+                        out.name("spec");
+                        out.begin_object();
+                        out.prop_str("type", Some("object"));
+                        out.end_object();
+                        out.end_object();
+                        out.name("required");
+                        out.strings(&["spec".to_string()]);
                     } else if tool.name == tools::LIST_BOTS {
                         // MC-58: no arguments.
                         out.end_object();

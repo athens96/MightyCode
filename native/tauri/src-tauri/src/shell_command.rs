@@ -26,7 +26,7 @@ pub const SCRIPT: &str = r#"#!/bin/sh
 #   mighty "fix the tests" open this folder with a request
 #   mighty status          control the running app (mighty --help)
 app="${MIGHTY_CODE_APP:-@APP@}"
-case "$1" in status|workspace|pane|agent|events|server|--profile|--help|-h)
+case "$1" in status|workspace|pane|agent|events|server|bot|event|--profile|--help|-h)
   [ -x "$app" ] || { echo "mighty: $app is not there; install the shell command again from Mighty Code" >&2; exit 1; }
   exec "$app" --cli "$@" ;;
 esac

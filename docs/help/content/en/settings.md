@@ -126,6 +126,8 @@ mighty agent wait <pane> --until done --timeout 600
 mighty pane wait-output <pane> --regex "passed|failed" --timeout 300
 mighty events --type pane.state
 mighty server start                             # start without a window (status, show, stop [--stop-all])
+mighty bot list                                 # bots and their schedules and triggers (bot new|update|pause|resume|run)
+mighty event emit release.done --data '{"version":"0.6.3"}'   # run the triggers waiting for this event
 ```
 
 - Pane ids are the app's own and never change. States are `idle`, `running`, `blocked` (waiting for an approval or an answer), `done`, `failed` and `stopped`.
@@ -139,7 +141,10 @@ mighty server start                             # start without a window (status
 ### Schedules and triggers {#schedules}
 The {{ui:automation.jobs.sectionTitle}} box in the {{ui:settings.nav.companion}} tab starts agent work at set times or on events. Pick a workspace to see its schedules and triggers, each with its next run and last result. At the top are today's spend, the daily budget and today's automation digest.
 - **Schedules**: a 5-field cron line (`0 9 * * 1-5`) or an RRULE subset (`FREQ=DAILY|WEEKLY|HOURLY`, `BYHOUR`, `BYMINUTE`, `BYDAY`). They follow this computer's time zone; a time skipped by daylight saving runs once right after the change, and a time that happens twice runs once, the first time.
-- **Triggers**: GitHub (PR opened, review requested, CI failed), Linear (an issue moving into a chosen state), a webhook, and standing orders (a shell command run every few minutes that wakes the agent only when its output changes, up to a daily limit). GitHub is checked through `gh` with your own sign-in, at most every 5 minutes, and less often while nothing changes or you are offline. Linear uses the workspace's connected Linear.
+- **Triggers**: GitHub (PR opened, review requested, CI failed, release published, PR merged, issue opened; the repository may be named as `owner/name`, and events filtered by author, branch and label, `!` before an author leaving that one out), Linear (an issue moving into a chosen state), a webhook, and standing orders (a shell command run every few minutes that wakes the agent only when its output changes, up to a daily limit). GitHub is checked through `gh` with your own sign-in, at most every 5 minutes, and less often while nothing changes or you are offline. Linear uses the workspace's connected Linear.
+- **Events**: takes the events sent with `mighty event emit <name> --data '{"version":"0.6.3"}'` (a `*` at the end, as in `release.*`, takes every event so begun). `scripts/release.py` sends `release.done` when a release is out.
+- **Bot chains**: runs when another bot's request (`@name`, or `@*` for any bot) ends or fails. A bot never wakes itself, and a chain goes two hand-offs at most.
+- **Prompt variables**: `{{pr.title}}`, `{{pr.url}}`, `{{pr.author}}`, `{{ci.url}}`, `{{release.tag}}`, `{{issue.title}}`, `{{data.version}}` (an event's or webhook's JSON), `{{bot.handle}}` and `{{bot.answer}}` in a prompt become their values; a missing one is empty.
 - **What runs**: the prompt goes to a new pane (in a worktree if you like) or, with {{ui:automation.form.heartbeat}} on, into the pane of that name in the same conversation. You choose the agent and model.
 - **Budget**: when today's spend plus this run's estimated cost would pass the daily budget, the run does not start and is recorded as skipped.
 - **Notifications**: when automated work waits for an approval or an answer, your phone and the OS are told at once. Everything else goes into the run history and today's digest. Every run is also an `automation.fired`, `automation.skipped`, `automation.blocked` or `automation.finished` event in `mighty events`; turn on {{ui:automation.event.automation}} under {{ui:automation.settings.events}} and webhooks and the status command follow them too.

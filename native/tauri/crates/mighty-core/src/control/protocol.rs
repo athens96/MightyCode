@@ -134,6 +134,29 @@ pub enum Command {
     /// MC-33: the app's loopback listener for another computer's Mighty Code reaching it over SSH started (when it is not), and a
     /// one-time pairing code for it: `{port, code, version}`. Asked by that computer through `mighty server ssh-pair` over ssh.
     ServerSshPair,
+    /// MC-65: the bots, each with its agent, sleep, schedules and triggers and next run.
+    BotList,
+    /// MC-65: a bot made (or, with `update`, an existing one changed) from a spec's JSON text, once the person allows it on the app's
+    /// approval sheet. The CLI reads the spec's file (`--spec <path|->`) into `spec` before it sends.
+    BotNew {
+        spec: String,
+        update: bool,
+    },
+    /// MC-65: a bot put to sleep or woken (`bot pause|resume`).
+    BotSleep {
+        bot: String,
+        asleep: bool,
+    },
+    /// MC-65: a bot's schedule or trigger run now (`job` may be left out when it has one).
+    BotRun {
+        bot: String,
+        job: Option<String>,
+    },
+    /// MC-66: an event sent to the triggers listening for it, with its data (JSON text).
+    EventEmit {
+        name: String,
+        data: Option<String>,
+    },
 }
 
 impl Command {
@@ -152,6 +175,11 @@ impl Command {
             Command::ServerStop { .. } => "server.stop",
             Command::AppShow => "app.show",
             Command::ServerSshPair => "server.sshPair",
+            Command::BotList => "bot.list",
+            Command::BotNew { .. } => "bot.new",
+            Command::BotSleep { .. } => "bot.sleep",
+            Command::BotRun { .. } => "bot.run",
+            Command::EventEmit { .. } => "event.emit",
         }
     }
 
@@ -163,7 +191,27 @@ impl Command {
             }
         };
         match self {
-            Command::Status | Command::WorkspaceList | Command::ServerStatus | Command::AppShow | Command::ServerSshPair => {}
+            Command::Status | Command::WorkspaceList | Command::ServerStatus | Command::AppShow | Command::ServerSshPair | Command::BotList => {}
+            Command::BotNew { spec, update } => {
+                out.insert("spec".into(), json!(spec));
+                out.insert("update".into(), json!(update));
+            }
+            Command::BotSleep { bot, asleep } => {
+                out.insert("bot".into(), json!(bot));
+                out.insert("asleep".into(), json!(asleep));
+            }
+            Command::BotRun { bot, job } => {
+                out.insert("bot".into(), json!(bot));
+                if let Some(job) = job {
+                    out.insert("job".into(), json!(job));
+                }
+            }
+            Command::EventEmit { name, data } => {
+                out.insert("name".into(), json!(name));
+                if let Some(data) = data {
+                    out.insert("data".into(), json!(data));
+                }
+            }
             Command::ServerStop { stop_all } => {
                 out.insert("stopAll".into(), json!(stop_all));
             }
@@ -263,6 +311,12 @@ fn id_field(object: &Map<String, Value>, name: &str) -> Result<String, ControlEr
     Ok(id)
 }
 
+/// MC-65: a bot's name, `@name` or `name`, as `@name`.
+fn bot_field(object: &Map<String, Value>) -> Result<String, ControlError> {
+    let text = text_field(object, "bot")?;
+    crate::model::PaneBot::handle_of(&text).map(|h| format!("@{h}")).ok_or_else(|| ControlError::bad("'bot' is not a bot's name"))
+}
+
 fn timeout_field(object: &Map<String, Value>) -> Result<Option<Duration>, ControlError> {
     match object.get("timeoutMs") {
         None | Some(Value::Null) => Ok(None),
@@ -352,6 +406,27 @@ pub fn parse_request(line: &[u8]) -> Result<Request, ControlError> {
         "server.stop" => Command::ServerStop { stop_all: object.get("stopAll").and_then(Value::as_bool).unwrap_or(false) },
         "app.show" => Command::AppShow,
         "server.sshPair" => Command::ServerSshPair,
+        "bot.list" => Command::BotList,
+        "bot.new" => {
+            let spec = text_field(object, "spec")?;
+            if spec.len() > crate::bot_spec::MAX_SPEC_BYTES {
+                return Err(ControlError::new(ErrorCode::TooLarge, "the spec is larger than 64 KB"));
+            }
+            Command::BotNew { spec, update: object.get("update").and_then(Value::as_bool).unwrap_or(false) }
+        }
+        "bot.sleep" => Command::BotSleep {
+            bot: bot_field(object)?,
+            asleep: object.get("asleep").and_then(Value::as_bool).unwrap_or(true),
+        },
+        "bot.run" => Command::BotRun { bot: bot_field(object)?, job: optional_text(object, "job") },
+        "event.emit" => {
+            let name = text_field(object, "name")?;
+            let data = optional_text(object, "data");
+            if data.as_ref().is_some_and(|d| d.len() > MAX_TEXT_BYTES) {
+                return Err(ControlError::new(ErrorCode::TooLarge, "the data is longer than 64 KB"));
+            }
+            Command::EventEmit { name, data }
+        }
         other => return Err(ControlError::bad(format!("unknown command '{}'", other.chars().take(40).collect::<String>()))),
     };
     Ok(Request { id, token, command })
@@ -470,6 +545,14 @@ mod tests {
             Command::ServerStop { stop_all: true },
             Command::AppShow,
             Command::ServerSshPair,
+            Command::BotList,
+            Command::BotNew { spec: r#"{"name":"콩이"}"#.into(), update: false },
+            Command::BotNew { spec: "{}".into(), update: true },
+            Command::BotSleep { bot: "@콩이".into(), asleep: true },
+            Command::BotRun { bot: "@콩이".into(), job: Some("아침".into()) },
+            Command::BotRun { bot: "@콩이".into(), job: None },
+            Command::EventEmit { name: "release.done".into(), data: Some(r#"{"version":"0.6.3"}"#.into()) },
+            Command::EventEmit { name: "release.done".into(), data: None },
         ];
         for command in commands {
             assert_eq!(round(command.clone()), command);

@@ -4,7 +4,7 @@
 use std::sync::{Arc, Weak};
 
 use mighty_core::control::events::PaneState;
-use mighty_core::control::protocol::{ControlError, ErrorCode};
+use mighty_core::control::protocol::{Command, ControlError, ErrorCode};
 use mighty_core::control::text::transcript_lines;
 use mighty_platform::BoxFuture;
 use serde_json::{Value, json};
@@ -54,6 +54,45 @@ impl Backend for HostBackend {
         let host = self.host()?;
         let view = host.view();
         view.snapshot.bot_pane(pane).map(|p| p.id().to_string()).ok_or_else(|| ControlError::not_found("bot"))
+    }
+
+    fn bot_command(&self, command: Command) -> BoxFuture<'_, Result<Value, ControlError>> {
+        Box::pin(async move {
+            let host = self.host()?;
+            let failed = |words: String| ControlError::new(ErrorCode::Failed, words);
+            match command {
+                Command::BotList => Ok(json!({ "bots": crate::bot::list(&host, "") })),
+                Command::BotNew { spec, update } => {
+                    crate::bot::propose(&host, &spec, update, host.locale.get("bot.approve.fromCli")).map_err(failed)?;
+                    Ok(json!({ "pending": true, "message": host.locale.get("bot.approve.pending") }))
+                }
+                Command::BotSleep { bot, asleep } => {
+                    let pane = host.view().snapshot.bot_pane(&bot).map(|p| p.id().to_string()).ok_or_else(|| ControlError::not_found("bot"))?;
+                    crate::bot::set_asleep(&host, &pane, asleep).await;
+                    Ok(json!({ "bot": bot, "asleep": asleep }))
+                }
+                Command::BotRun { bot, job } => {
+                    let jobs = crate::automation::jobs_of_bot(&bot);
+                    let chosen = match &job {
+                        Some(name) => jobs.iter().find(|j| j.name() == name.as_str()),
+                        None if jobs.len() == 1 => jobs.first(),
+                        None => None,
+                    };
+                    let Some(chosen) = chosen else {
+                        let names = jobs.iter().map(|j| j.name().to_string()).collect::<Vec<_>>().join(", ");
+                        return Err(ControlError::bad(if jobs.is_empty() { format!("{bot} has no schedule or trigger") } else { format!("which job? --job one of: {names}") }));
+                    };
+                    crate::automation::run_now(&host, &chosen.key).await.map_err(failed)?;
+                    Ok(json!({ "bot": bot, "job": chosen.name() }))
+                }
+                Command::EventEmit { name, data } => {
+                    let data = data.as_deref().map(serde_json::from_str::<Value>).transpose().map_err(|_| ControlError::bad("--data is not JSON"))?;
+                    let fired = crate::automation::chain::emit(&host, &name, data.as_ref()).map_err(ControlError::bad)?;
+                    Ok(json!({ "event": name, "fired": fired }))
+                }
+                _ => Err(ControlError::bad("not a bot command")),
+            }
+        })
     }
 
     fn bot_refusal(&self, handle: &str) -> Option<String> {

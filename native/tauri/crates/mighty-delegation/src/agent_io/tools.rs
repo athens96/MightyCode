@@ -26,11 +26,17 @@ pub const LIST_BOTS: &str = "list_bots";
 pub const ASK_BOT: &str = "ask_bot";
 pub const BOT_ANSWER: &str = "bot_answer";
 
+/// MC-65: a bot made or changed from a spec, once the person allows it.
+pub const CREATE_BOT: &str = "create_bot";
+pub const UPDATE_BOT: &str = "update_bot";
+/// MC-65: the largest spec, in bytes.
+pub const BOT_SPEC_BYTES: usize = 65_536;
+
 /// MC-58: the longest prompt `ask_bot` sends, in bytes.
 pub const BOT_PROMPT_BYTES: usize = 65_536;
 
 /// `AgentIOTools.All`, in this order (MC-48's browser check, then MC-58's bot tools).
-pub const ALL: [AgentIoTool; 8] = [
+pub const ALL: [AgentIoTool; 10] = [
     AgentIoTool {
         name: "run_in_terminal",
         argument: "command",
@@ -70,6 +76,16 @@ pub const ALL: [AgentIoTool; 8] = [
         name: BOT_ANSWER,
         argument: "bot",
         description: "Read a bot's state and the answer to its last request: status (running, blocked while it waits for the person, or done) and its answer, secrets redacted. With wait: true it waits up to 20 seconds for the bot to finish first; call it again while it is still running.",
+    },
+    AgentIoTool {
+        name: CREATE_BOT,
+        argument: "spec",
+        description: "Propose a new bot to the person: spec is a JSON object, every field optional — name (no @; a friendly one when left out), agent (claude, codex, gemini, pi, opencode, hermes), model, permission (one of the agent's modes), workspace (a workspace's id or name, for a bot of that workspace; else an independent bot), folder (an independent bot's folder), instructions, budgetPerDay (USD), schedules ([{name, cron or rrule, prompt, catchUp}]) and triggers ([{name, on, prompt}], on being {type: github, events: [pr_opened|review_requested|ci_failed|release_published|pr_merged|issue_opened], repo: owner/name, filter: {author, base, label}}, {type: event, name: release.done}, {type: bot, bot: @name, on: [done|failed]}, {type: standing, command, everyMinutes, dailyCap} or {type: webhook}). A prompt may use {{pr.title}}, {{pr.url}}, {{data.version}}, {{bot.answer}}. The app shows the person an approval sheet and makes the bot only if they allow it: this returns pending at once (see list_bots later), or refused with the reason.",
+    },
+    AgentIoTool {
+        name: UPDATE_BOT,
+        argument: "spec",
+        description: "Propose a change to an existing bot: spec as create_bot's, its name naming the bot. Given instructions, permission and budgetPerDay replace the bot's; given schedules or triggers replace the bot's own. The person allows it on an approval sheet; returns pending at once, or refused with the reason.",
     },
 ];
 
@@ -125,6 +141,9 @@ pub(crate) fn validate_in(document: &Lenient, tool: &str, arguments: &Value) -> 
     }
     if matches!(tool, LIST_BOTS | ASK_BOT | BOT_ANSWER) {
         return bot_arguments(document, tool, map);
+    }
+    if matches!(tool, CREATE_BOT | UPDATE_BOT) {
+        return spec_argument(document, map);
     }
     if map.len() != 1 {
         return Err(Invalid::NotOneString);
@@ -230,6 +249,26 @@ fn bot_arguments(document: &Lenient, tool: &str, map: &serde_json::Map<String, V
     Ok(serde_json::json!({ "bot": bot, "wait": wait }).to_string())
 }
 
+/// MC-65: `create_bot` / `update_bot`'s one `spec`, an object (or its JSON text), as compact JSON at most [`BOT_SPEC_BYTES`]; the app
+/// reads and checks the spec itself.
+fn spec_argument(document: &Lenient, map: &serde_json::Map<String, Value>) -> Result<String, Invalid> {
+    if map.len() != 1 {
+        return Err(Invalid::NotOneString);
+    }
+    let text = match map.get("spec") {
+        Some(Value::Object(_)) => map.get("spec").map(Value::to_string).unwrap_or_default(),
+        Some(Value::String(_)) => {
+            let text = document.text(map.get("spec"))?.ok_or(Invalid::NotOneString)?;
+            serde_json::from_str::<Value>(text).ok().filter(Value::is_object).ok_or(Invalid::NotOneString)?.to_string()
+        }
+        _ => return Err(Invalid::NotOneString),
+    };
+    if text.len() > BOT_SPEC_BYTES || text.contains('\0') {
+        return Err(Invalid::TooLong);
+    }
+    Ok(text)
+}
+
 /// `Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" && uri.UserInfo.Length == 0 &&
 /// uri.Host != "" && !value.Any(char.IsControl)`.
 pub fn web_address(value: &str) -> bool {
@@ -318,9 +357,32 @@ mod tests {
         assert_eq!(absolute_uri("http://localhost:3000"), "http://localhost:3000/");
         assert_eq!(
             ALL.map(|tool| tool.name),
-            ["run_in_terminal", "read_latest_output", "stop", "open_url", "mighty_browser_check", "list_bots", "ask_bot", "bot_answer"]
+            [
+                "run_in_terminal",
+                "read_latest_output",
+                "stop",
+                "open_url",
+                "mighty_browser_check",
+                "list_bots",
+                "ask_bot",
+                "bot_answer",
+                "create_bot",
+                "update_bot"
+            ]
         );
         assert!(ALL[0].description.starts_with(GUIDANCE));
+    }
+
+    /// MC-65: create_bot and update_bot take one spec, an object or its JSON text, as compact JSON.
+    #[test]
+    fn the_bot_spec_tools_take_one_object() {
+        let sent: Value = serde_json::from_str(&validate(CREATE_BOT, &json!({"spec": {"name": "a", "agent": "codex"}})).unwrap()).unwrap();
+        assert_eq!(sent, json!({"name": "a", "agent": "codex"}));
+        assert_eq!(validate(UPDATE_BOT, &json!({"spec": "{\"name\":\"a\"}"})).unwrap(), r#"{"name":"a"}"#);
+        assert_eq!(validate(CREATE_BOT, &json!({"spec": "not json"})), Err(Invalid::NotOneString));
+        assert_eq!(validate(CREATE_BOT, &json!({"spec": [1]})), Err(Invalid::NotOneString));
+        assert_eq!(validate(CREATE_BOT, &json!({"spec": {}, "extra": 1})), Err(Invalid::NotOneString));
+        assert_eq!(validate(CREATE_BOT, &json!({"spec": {"instructions": "x".repeat(BOT_SPEC_BYTES)}})), Err(Invalid::TooLong));
     }
 
     /// MC-58: the bot tools' arguments come out as compact JSON, with anything else refused.

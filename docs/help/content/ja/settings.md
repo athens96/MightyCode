@@ -126,6 +126,8 @@ mighty agent wait <pane> --until done --timeout 600
 mighty pane wait-output <pane> --regex "passed|failed" --timeout 300
 mighty events --type pane.state
 mighty server start                             # ウィンドウなしで起動 (status, show, stop [--stop-all])
+mighty bot list                                 # ボットとスケジュール・トリガー (bot new|update|pause|resume|run)
+mighty event emit release.done --data '{"version":"0.6.3"}'   # このイベントを待つトリガーを実行
 ```
 
 - ペイン id はアプリが使うものそのままで、変わりません。状態は `idle`、`running`、`blocked`（承認・質問待ち）、`done`、`failed`、`stopped` です。
@@ -139,7 +141,10 @@ mighty server start                             # ウィンドウなしで起動
 ### スケジュールとトリガー {#schedules}
 {{ui:settings.nav.companion}} タブの {{ui:automation.jobs.sectionTitle}} ボックスで、決めた時刻やイベントでエージェントの作業を始めます。ワークスペースを選ぶと、そのスケジュールとトリガー、次回の実行時刻、前回の結果が表示されます。上部には今日の使用額、1日の予算、今日の自動化のまとめがあります。
 - **スケジュール**: 5 項目の cron (`0 9 * * 1-5`) か RRULE の一部 (`FREQ=DAILY|WEEKLY|HOURLY`、`BYHOUR`、`BYMINUTE`、`BYDAY`) で決めます。このコンピューターのタイムゾーンに従い、夏時間で飛ばされた時刻は直後に 1 回、2 回来る時刻は最初の 1 回だけ実行します。
-- **トリガー**: GitHub (PR の作成、レビュー依頼、CI 失敗)、Linear (イシューが選んだ状態になる)、Webhook、常時チェック (シェルコマンドを数分ごとに実行し、出力が変わったときだけエージェントを起こす。1 日の上限まで)。GitHub は `gh` でログインしたアカウントで 5 分に 1 回まで確認し、変化がないときや接続が切れたときはもっと間隔を空けます。Linear はワークスペースに接続した Linear を使います。
+- **トリガー**: GitHub (PR の作成、レビュー依頼、CI 失敗、リリース公開、PR マージ、イシュー作成。リポジトリを `owner/name` で直接指定でき、作成者・ブランチ・ラベルで絞り込めます。作成者の前に `!` を付けるとその人を除きます)、Linear (イシューが選んだ状態になる)、Webhook、常時チェック (シェルコマンドを数分ごとに実行し、出力が変わったときだけエージェントを起こす。1 日の上限まで)。GitHub は `gh` でログインしたアカウントで 5 分に 1 回まで確認し、変化がないときや接続が切れたときはもっと間隔を空けます。Linear はワークスペースに接続した Linear を使います。
+- **イベント**: `mighty event emit <名前> --data '{"version":"0.6.3"}'` で送ったイベントを受けます（`release.*` のように末尾に `*` を付けると、そう始まるイベントをすべて受けます）。`scripts/release.py` はリリースが終わると `release.done` を送ります。
+- **ボット連鎖**: ほかのボット（`@名前`、どのボットでもよければ `@*`）のリクエストが終わるか失敗したときに実行します。ボットは自分自身を起こさず、連鎖は 2 段までです。
+- **プロンプト変数**: プロンプトに `{{pr.title}}`、`{{pr.url}}`、`{{pr.author}}`、`{{ci.url}}`、`{{release.tag}}`、`{{issue.title}}`、`{{data.version}}`（イベントや Webhook の JSON）、`{{bot.handle}}`、`{{bot.answer}}` を書くとその値に置き換わります。ない値は空になります。
 - **実行方法**: 新しいペイン (必要ならワークツリー) にプロンプトを送るか、{{ui:automation.form.heartbeat}} をオンにすると同じ名前のペインに同じ会話として送ります。エージェントとモデルを選べます。
 - **予算**: 今日の使用額にこの実行の見込み費用を足して 1 日の予算を超えるときは、実行せず「スキップ」として記録します。
 - **通知**: 自動で始めた作業が承認や回答を待つと、スマートフォンと OS の通知ですぐに知らせます。それ以外は実行履歴と今日のまとめに集めます。すべての実行は `automation.fired`、`automation.skipped`、`automation.blocked`、`automation.finished` イベントとして `mighty events` でも見られ、{{ui:automation.settings.events}} で {{ui:automation.event.automation}} をオンにすると Webhook と状態コマンドも従います。

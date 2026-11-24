@@ -1272,9 +1272,11 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
         let mut every = None;
         let mut cap = None;
         let mut repo: Option<String> = None;
+        let mut filter = automation::GitHubFilter::default();
+        let mut outcome: Option<Vec<automation::BotOutcome>> = None;
         let mut set_source = |next: TriggerSource| -> Result<(), String> {
             if source.replace(next).is_some() {
-                return Err(format!("'{field}' names more than one of github, linear, webhook, standing."));
+                return Err(format!("'{field}' names more than one of github, linear, webhook, standing, event, bot."));
             }
             Ok(())
         };
@@ -1286,11 +1288,14 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
                         .iter()
                         .map(|n| {
                             GitHubEvent::parse(n)
-                                .ok_or_else(|| format!("'{field}.github' names '{n}': use pr_opened, review_requested, ci_failed."))
+                                .ok_or_else(|| {
+                                    let all = GitHubEvent::ALL.iter().map(|e| e.name()).collect::<Vec<_>>().join(", ");
+                                    format!("'{field}.github' names '{n}': use {all}.")
+                                })
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     let events = GitHubEvent::ALL.into_iter().filter(|e| events.contains(e)).collect();
-                    set_source(TriggerSource::Github { events, repo: None })?;
+                    set_source(TriggerSource::Github { events, repo: None, filter: automation::GitHubFilter::default() })?;
                 }
                 "linear" => set_source(TriggerSource::Linear { states: decode_name_list(item, &format!("{field}.linear"))? })?,
                 "webhook" => {
@@ -1314,6 +1319,22 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
                 "dailyCap" => cap = Some(decode_bounded_u32(item, &format!("{field}.dailyCap"), 1, automation::MAX_DAILY_CAP)?),
                 // MC-64: the repository a GitHub trigger watches, when not the workspace's own.
                 "repo" => repo = Some(expect_scalar(item, &format!("{field}.repo"))?.trim().to_string()),
+                // MC-66: a GitHub trigger's filter.
+                "author" => filter.author = Some(expect_scalar(item, &format!("{field}.author"))?.trim().to_string()),
+                "base" => filter.base = Some(expect_scalar(item, &format!("{field}.base"))?.trim().to_string()),
+                "label" => filter.label = Some(expect_scalar(item, &format!("{field}.label"))?.trim().to_string()),
+                // MC-66: an event `mighty event emit` sends, and another bot's request ending.
+                "event" => set_source(TriggerSource::Event { name: expect_scalar(item, &format!("{field}.event"))?.trim().to_string() })?,
+                "bot" => set_source(TriggerSource::Bot { bot: expect_scalar(item, &format!("{field}.bot"))?.trim().to_string(), on: vec![] })?,
+                "outcome" => {
+                    let names = decode_name_list(item, &format!("{field}.outcome"))?;
+                    outcome = Some(
+                        names
+                            .iter()
+                            .map(|n| automation::BotOutcome::parse(n).ok_or_else(|| format!("'{field}.outcome' names '{n}': use done, failed.")))
+                            .collect::<Result<_, _>>()?,
+                    );
+                }
                 "enabled" => enabled = decode_bool(item, &format!("{field}.enabled"))?,
                 other => {
                     if !decode_action_key(&mut action, other, item, &field)? {
@@ -1331,12 +1352,16 @@ fn decode_triggers(value: &YamlValue) -> Result<IndexMap<String, TriggerSpec>, S
             Some(_) if every.is_some() || cap.is_some() => {
                 return Err(format!("'{field}': everyMinutes and dailyCap are for a standing order."));
             }
-            Some(TriggerSource::Github { events, .. }) => TriggerSource::Github { events, repo: repo.take() },
+            Some(TriggerSource::Github { events, .. }) => TriggerSource::Github { events, repo: repo.take(), filter: std::mem::take(&mut filter) },
+            Some(TriggerSource::Bot { bot, .. }) => TriggerSource::Bot { bot, on: outcome.take().unwrap_or_else(|| vec![automation::BotOutcome::Done]) },
             Some(other) => other,
-            None => return Err(format!("'{field}' needs one of github, linear, webhook, standing.")),
+            None => return Err(format!("'{field}' needs one of github, linear, webhook, standing, event, bot.")),
         };
-        if repo.is_some() {
-            return Err(format!("'{field}': repo is for a GitHub trigger."));
+        if repo.is_some() || !filter.is_empty() {
+            return Err(format!("'{field}': repo, author, base and label are for a GitHub trigger."));
+        }
+        if outcome.is_some() {
+            return Err(format!("'{field}': outcome is for a bot trigger."));
         }
         let spec = TriggerSpec { name: name.clone(), on, enabled, action };
         spec.validate(&mighty_core::wire::PROVIDERS).map_err(|e| format!("'{field}': {e}."))?;
