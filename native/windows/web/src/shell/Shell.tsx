@@ -12,6 +12,7 @@ import { Banners, StatusBar, WorkspaceHeader } from './Chrome';
 import { MenuHost } from './parts';
 import { macShortcutAction, shortcutAction } from './shortcuts';
 import { macHost, useMenu } from './menu';
+import { switchSidebarTab } from './botTab';
 import { Sidebar, sidebarSearchId } from './Sidebar';
 import { toggleReview, useReviewOpen } from '../review/queue';
 
@@ -103,6 +104,11 @@ function useShortcuts(blocked: boolean) {
         case 'textLarger': return call('textSize', { step: 1 });
         case 'textSmaller': return call('textSize', { step: -1 });
         case 'textReset': return call('textSize', { step: 0 });
+        case 'tabWorkspaces': case 'tabBots': {
+          // MC-68: the sidebar's tab, the sidebar shown first when it is collapsed.
+          if (snapshot.sidebarCollapsed) call('setSidebarCollapsed', { collapsed: false });
+          return switchSidebarTab(action === 'tabBots' ? 'bots' : 'workspaces');
+        }
       }
     };
     window.addEventListener('keydown', key);

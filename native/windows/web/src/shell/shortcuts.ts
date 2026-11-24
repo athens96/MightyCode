@@ -3,7 +3,9 @@
 
 export type ShortcutAction =
   | 'openFolder' | 'newPane' | 'search' | 'toggleSidebar' | 'newShell' | 'settings' | 'files' | 'help'
-  | 'textLarger' | 'textSmaller' | 'textReset' | 'conversationSearch' | 'reviewQueue' | 'nextAttention';
+  | 'textLarger' | 'textSmaller' | 'textReset' | 'conversationSearch' | 'reviewQueue' | 'nextAttention'
+  // MC-68: the sidebar's 워크스페이스 and 봇 tabs.
+  | 'tabWorkspaces' | 'tabBots';
 
 export interface ShortcutKey {
   key: string;
@@ -36,13 +38,15 @@ export function shortcutAction(event: ShortcutKey): ShortcutAction | null {
     case 'Equal': case 'NumpadAdd': return 'textLarger';
     case 'Minus': case 'NumpadSubtract': return 'textSmaller';
     case 'Digit0': case 'Numpad0': return 'textReset';
+    case 'Digit1': return 'tabWorkspaces';
+    case 'Digit2': return 'tabBots';
     default: return null;
   }
 }
 
 /**
  * The Mac's shortcuts in the Rust host's build (plan D9; `import.meta.env.MODE === 'tauri'` and the host's `macos` only): ⌘ is the
- * modifier where Windows has Ctrl (M/MightyCodeApp.swift's menu keys: ⌘O ⌘N ⌘K ⌘T ⇧⌘E ⇧⌘F ⇧⌘R ⇧⌘U ⌘, ⌘= ⌘- ⌘0, ⌃⌘S for the sidebar, ⌘? for help by its character),
+ * modifier where Windows has Ctrl (M/MightyCodeApp.swift's menu keys: ⌘O ⌘N ⌘K ⌘T ⇧⌘E ⇧⌘F ⇧⌘R ⇧⌘U ⌘, ⌘= ⌘- ⌘0, ⌘1 ⌘2 for the sidebar's tabs (MC-68), ⌃⌘S for the sidebar, ⌘? for help by its character),
  * and a Ctrl key is left to the text fields (⌃K, ⌃T edit text on a Mac). The menu bar has the same keys: what the page takes here
  * the menu does not see, and what it leaves the menu runs.
  */
@@ -67,6 +71,8 @@ export function macShortcutAction(event: ShortcutKey): ShortcutAction | null {
     case 'Equal': case 'NumpadAdd': return 'textLarger';
     case 'Minus': case 'NumpadSubtract': return 'textSmaller';
     case 'Digit0': case 'Numpad0': return 'textReset';
+    case 'Digit1': return 'tabWorkspaces';
+    case 'Digit2': return 'tabBots';
     default: return null;
   }
 }

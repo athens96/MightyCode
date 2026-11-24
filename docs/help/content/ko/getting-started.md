@@ -80,7 +80,7 @@ Git(Xcode Command Line Tools)은 시스템 설치 창이 열리고 그 창에서
 ## 워크스페이스 열기 {#open-workspace}
 워크스페이스는 프로젝트 폴더 하나입니다. 실행 창, 탭 배치, 대화 기록이 워크스페이스마다 따로 저장됩니다.
 
-추가하는 방법은 세 가지입니다. 사이드바 {{ui:sidebar.workspacesHeader}} 머리글 오른쪽의 폴더 단추(누르면 세 항목이 있는 메뉴가 열립니다), 파일 메뉴, 창 추가 메뉴, 사이드바가 비었을 때와 처음 화면의 세 단추 어디서나 고를 수 있습니다.
+추가하는 방법은 세 가지입니다. 사이드바 {{ui:sidebar.workspacesHeader}} 탭 오른쪽의 폴더 단추(누르면 세 항목이 있는 메뉴가 열립니다), 파일 메뉴, 창 추가 메뉴, 사이드바가 비었을 때와 처음 화면의 세 단추 어디서나 고를 수 있습니다.
 
 - **{{ui:workspace.add.existing}}** ({{kbd:⌘O}}): 이미 있는 폴더를 고릅니다.
 - **{{ui:workspace.add.newFolder}}**: {{ui:workspace.create.name}}과 {{ui:workspace.create.location}}를 정해 새 폴더를 만듭니다. {{ui:workspace.newFolder.gitInit}}을 켜면 빈 Git 저장소로 시작합니다. git init이 실패해도 폴더는 워크스페이스로 추가되고 알림이 그 사실을 알려 줍니다.

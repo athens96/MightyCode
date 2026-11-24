@@ -335,8 +335,36 @@ button { font: inherit; color: inherit; }
 .dashboard-row-meta { display: flex; gap: var(--space-xs); align-items: center; color: var(--ink2); font-size: 12.5px; white-space: nowrap; overflow: hidden; }
 /* MC-28: a forked pane's mark in the sidebar and its source on the dashboard row. */
 .sidebar-fork-mark { color: var(--accent); display: inline-flex; flex: none; }
-/* MC-59: the 봇 group under the workspaces. */
-.sidebar-bots { display: flex; flex-direction: column; gap: var(--inset-list-gap); margin-top: var(--space-sm); }
+/* MC-68: the sidebar's two tabs, 워크스페이스 and 봇: a segmented track (the chosen tab raised) and the + of the tab shown. */
+.sidebar-tabs { display: flex; align-items: center; gap: var(--space-xs); padding: var(--space-sm) var(--inset-sidebar-section-h) var(--space-xs); }
+.sidebar-tabs-track { display: flex; flex: 1; min-width: 0; gap: 2px; padding: 2px; border-radius: var(--radius-row); background: var(--segment-track); }
+.sidebar-tabs-track button {
+  display: flex; flex: 1 1 0; min-width: 0; align-items: center; justify-content: center; gap: var(--space-xs); height: 24px; padding: 0 var(--space-sm);
+  border: 0; border-radius: 5px; background: none; color: var(--sidebar-ink2); font: inherit; font-size: var(--type-small); font-weight: 500; white-space: nowrap; cursor: default;
+}
+.sidebar-tabs-track button > span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.sidebar-tabs-track button:hover { color: var(--ink); }
+.sidebar-tabs-track button.on { background: var(--segment-on); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .14); }
+.sidebar-tabs-track button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.sidebar-tab-count { flex: none; font-family: var(--font-mono); font-weight: 400; font-size: 11px; color: var(--sidebar-ink2); font-variant-numeric: tabular-nums; }
+.sidebar-tab-count.working { color: var(--accent); }
+/* A bot waiting for the user: a yellow count on the 봇 tab, seen from the other tab too. */
+.sidebar-tab-badge {
+  flex: none; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; border-radius: 8px;
+  background: var(--wait, #d29922); color: #1b1300; font-size: 10.5px; font-weight: 700; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.sidebar-tabs > .icon-button { flex: none; min-width: 22px; height: 22px; padding: 0; color: var(--sidebar-ink2); }
+.sidebar-workspaces { display: flex; flex-direction: column; gap: var(--inset-list-gap); }
+/* MC-68: what the search found in the tab not shown, and the 봇 tab's panes left out: quiet one-line buttons. */
+.sidebar-search-elsewhere, .sidebar-bots-more {
+  display: block; width: 100%; padding: var(--space-xs) var(--space-sm); border: 0; border-radius: var(--radius-row); background: none;
+  color: var(--accent); font: inherit; font-size: var(--type-small); text-align: left; cursor: default;
+}
+.sidebar-search-elsewhere:hover, .sidebar-bots-more:hover { background: var(--subtle); }
+.sidebar-bots-empty { display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-md) var(--space-xs); color: var(--sidebar-ink2); font-size: var(--type-row); }
+.sidebar-bots-empty .sidebar-open-folder { margin: 0; }
+/* MC-59, MC-68: the 봇 tab. */
+.sidebar-bots { display: flex; flex-direction: column; gap: var(--inset-list-gap); }
 .sidebar-bots-header { padding-left: 0; padding-right: 0; }
 /* MC-59: a category of the 봇 group (워크스페이스 봇, 기타 봇): a small folding title over its rows. */
 .sidebar-bot-category { display: flex; flex-direction: column; gap: var(--inset-list-gap); }
@@ -364,6 +392,8 @@ button { font: inherit; color: inherit; }
 .sidebar-bot.asleep .sidebar-pane-title, .sidebar-bot.asleep .sidebar-pane-meta { opacity: .55; }
 .sidebar-bot-sleep { flex: none; font-size: 11px; }
 .sidebar-bot-next { flex: none; font-size: var(--type-small); color: var(--sidebar-ink2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* MC-68: the line saying what a bot is doing; a bot waiting for the user says why in the waiting colour. */
+.sidebar-bot-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-bot.flashed { animation: sidebar-bot-flash 1.6s ease-out; }
 @keyframes sidebar-bot-flash {
   0%, 30% { box-shadow: inset 0 0 0 1.5px var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }

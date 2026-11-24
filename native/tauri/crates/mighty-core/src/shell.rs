@@ -1046,6 +1046,10 @@ pub struct SidebarBot {
     pub jobs: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_run: Option<String>,
+    /// MC-68: it carries instructions of its own: with an independent bot or one with jobs, a bot at work, listed in the 봇 tab
+    /// unless every pane is shown.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub instructed: bool,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -1065,6 +1069,7 @@ pub fn sidebar_bots(state: &AppSnapshot) -> Vec<SidebarBot> {
             asleep: bot.is_asleep(),
             jobs: 0,
             next_run: None,
+            instructed: bot.instructions.as_deref().is_some_and(|t| !t.trim().is_empty()),
         })
     };
     let independent = state.bots().filter(|s| home(s)).filter_map(|s| row(s, true));
@@ -1656,7 +1661,7 @@ mod tests {
         let text = format!(
             r#"{{"version":1,"workspaces":[{{"id":"w1","name":"Shop","path":"{root}/shop"}},{{"id":"home","name":"봇","path":"{root}/bots","botHome":true}}],
               "sessions":[
-                {{"id":"s1","workspaceId":"w1","titleMode":"fixed","title":"Claude","bot":{{"handle":"shop-bot"}}}},
+                {{"id":"s1","workspaceId":"w1","titleMode":"fixed","title":"Claude","bot":{{"handle":"shop-bot","instructions":"Watch the PRs."}}}},
                 {{"id":"s2","workspaceId":"home","titleMode":"fixed","title":"리뷰어","bot":{{"handle":"리뷰어"}},"workingFolder":"{root}/bots/리뷰어"}},
                 {{"id":"s3","workspaceId":"w1","kind":"shell","title":"Shell"}}]}}"#
         );
@@ -1668,6 +1673,7 @@ mod tests {
         assert_eq!(bots[1].workspace.as_deref(), Some("Shop"));
         assert_eq!((bots[0].workspace_id.as_deref(), bots[1].workspace_id.as_deref()), (None, Some("w1")));
         assert!(state.workspace("home").is_some_and(Workspace::is_bot_home), "the mark survives normalize");
+        assert_eq!((bots[0].instructed, bots[1].instructed), (false, true), "MC-68: who carries instructions");
     }
     use super::*;
     use crate::json::Wire;

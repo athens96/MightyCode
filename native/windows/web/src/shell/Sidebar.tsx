@@ -10,6 +10,8 @@ import { useAddMenu, useWorkspaceAddChoices } from './addMenu';
 import { sidebarGroups } from './servers';
 import { nestForks } from './forks';
 import { nextRunWords } from './botTime';
+import { atWork, botCounts, botMatches, botState, groupByState, listedBots, saveAllPanes, savedAllPanes, savedTab, saveTab, sidebarTabEvent, statusLine, switchSidebarTab, type BotState, type SidebarTab } from './botTab';
+import { macHost } from './menu';
 import { BetaBadge, StatusCounts, StatusGlyph, useCall, useMenu, usePaneInfo, useShell, type MenuItem } from './parts';
 import type { CardAction, ChildCard, PaneCompare, PaneInfo, RemoteServer, SidebarBot, SidebarItem, SidebarWorkspace } from './types';
 import { Icon } from '../icons/Icon';
@@ -136,7 +138,7 @@ const PaneRow = memo(function PaneRow({ info, active, child }: { info: PaneInfo;
           <span className={'sidebar-pane-title' + (info.settled ? '' : ' strong')}>{info.title}</span>
           {info.beta && <BetaBadge />}
           {/* MC-58: a bot's handle, the name it is called by. */}
-          {/* MC-61: a click on it shows the bot in the 봇 group below (and opens the pane, as the row does). */}
+          {/* MC-61, MC-68: a click on it shows the bot in the 봇 tab (and opens the pane, as the row does). */}
           {info.bot && <span className="sidebar-bot-mark" title={t('bot.label', { handle: info.bot }) + '\n' + t('bot.sidebar.showInList')} data-testid="sidebar-bot-mark"
             onClick={(event) => { event.stopPropagation(); choose(info.id); showBotInList(info.id); }}>@{info.bot}</span>}
           {info.worktree && <span className="sidebar-worktree-mark" title={info.worktree} aria-label={info.worktree} data-testid="sidebar-worktree-mark"><Icon name="git-branch" size={11} weight={2.2} /></span>}
@@ -316,72 +318,87 @@ function ServerHeader({ server }: { server: RemoteServer }) {
   );
 }
 
-/** MC-61: the event a workspace pane row's `@name` sends so the 봇 group shows that bot (its id the detail). */
+/** MC-61: the event a workspace pane row's `@name` sends so the 봇 tab shows that bot (its id the detail). */
 const showBotEvent = 'mighty:show-bot';
 function showBotInList(id: string) {
   window.dispatchEvent(new CustomEvent<string>(showBotEvent, { detail: id }));
 }
 
-/** MC-59: the open state of the 봇 group, kept in this window's storage (open unless closed). */
-const botsOpenKey = 'mighty.sidebar.botsOpen';
-/** MC-59: the bot categories folded, kept in this window's storage (every one open unless folded). */
+/** MC-59: the bot groups folded, kept in this window's storage (every one open unless folded). */
 const botCategoriesClosedKey = 'mighty.sidebar.botCategoriesClosed';
+/** MC-68: how the 봇 tab groups its bots: by state (the default) or by kind (워크스페이스 봇, 기타 봇). */
+const botGroupingKey = 'mighty.sidebar.botGrouping';
+
+/** MC-68: the title of each state group of the 봇 tab. */
+const stateTitles: Record<BotState, string> = {
+  needsYou: 'bot.sidebar.state.needsYou',
+  working: 'bot.sidebar.state.working',
+  idle: 'bot.sidebar.state.idle',
+  asleep: 'bot.sidebar.state.asleep',
+};
+
+function stored<T extends string>(key: string, fallback: T, values: readonly T[]): T {
+  try { const value = window.localStorage.getItem(key); return values.includes(value as T) ? value as T : fallback; } catch { return fallback; }
+}
 
 /**
- * MC-59: the 봇 group under the workspaces: every bot (each agent pane of this computer) in two categories, 워크스페이스 봇 then 기타 봇 (the independent ones), its state,
- * name and where it works; a click selects its pane, a double click selects its workspace (opened and brought into view in the
- * list above; an independent bot has none), + makes an independent bot (bot.rs), the row's menu opens its settings.
+ * MC-68: the 봇 tab: the bots at work (every bot with 모든 창 보기), grouped by state (needs you, working, idle, asleep) or by kind,
+ * each row its name, where it works and one line saying what it is doing; a click selects its pane, a double click its workspace, the
+ * row's menu opens its settings or puts it to sleep. `focus` is a bot a pane row's `@name` asked for: shown (every pane shown if it
+ * was left out), brought into view and flashed.
  */
-function BotGroup({ bots, panes, activeId, search, workspaces }: { bots: SidebarBot[]; panes: Map<string, PaneInfo>; activeId: string | undefined; search: string; workspaces: SidebarWorkspace[] }) {
+function BotTab({ bots, panes, activeId, search, workspaces, focus, onFocused }: {
+  bots: SidebarBot[]; panes: Map<string, PaneInfo>; activeId: string | undefined; search: string; workspaces: SidebarWorkspace[];
+  focus: string | undefined; onFocused: () => void;
+}) {
   const { t } = useServices();
   const call = useCall();
   const menu = useMenu();
   const choose = useChoosePane();
-  const [open, setOpen] = useState(() => {
-    try { return window.localStorage.getItem(botsOpenKey) !== 'false'; } catch { return true; }
+  const [allPanes, setAllPanesState] = useState(savedAllPanes);
+  const setAllPanes = (all: boolean) => { setAllPanesState(all); saveAllPanes(all); };
+  const [grouping, setGroupingState] = useState<'state' | 'kind'>(() => stored(botGroupingKey, 'state', ['state', 'kind'] as const));
+  const setGrouping = (next: 'state' | 'kind') => {
+    setGroupingState(next);
+    try { window.localStorage.setItem(botGroupingKey, next); } catch { /* storage off: this session only */ }
+  };
+  const [closed, setClosed] = useState<string[]>(() => {
+    try { return JSON.parse(window.localStorage.getItem(botCategoriesClosedKey) ?? '[]') as string[]; } catch { return []; }
   });
-  const toggle = () => {
-    const next = !open;
-    setOpen(next);
-    try { window.localStorage.setItem(botsOpenKey, String(next)); } catch { /* storage off: this session only */ }
+  const toggleGroup = (key: string) => {
+    const next = closed.includes(key) ? closed.filter((k) => k !== key) : [...closed, key];
+    setClosed(next);
+    try { window.localStorage.setItem(botCategoriesClosedKey, JSON.stringify(next)); } catch { /* storage off: this session only */ }
   };
   const showWorkspace = (id: string | undefined) => {
     if (!id) return;
+    switchSidebarTab('workspaces');
     call('selectWorkspace', { id });
     if (workspaces.some((w) => w.id === id && !w.expanded)) call('toggleDisclosure', { id });
     // Once the list has drawn the workspace's open group, its row is brought into view.
     window.requestAnimationFrame(() => document.querySelector(`[data-workspace-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
   };
-  const words = search.trim().toLowerCase();
-  const shown = words.length === 0 ? bots : bots.filter((bot) => [bot.handle, bot.workspace ?? '', panes.get(bot.id)?.title ?? ''].some((text) => text.toLowerCase().includes(words)));
-  // The categories: the workspaces' bots first, then every other bot (the independent ones), each folding on its own.
-  const categories: { key: string; label: string; bots: SidebarBot[] }[] = [
-    { key: 'workspace', label: 'bot.sidebar.workspaceBots', bots: shown.filter((bot) => bot.workspaceId) },
-    { key: 'other', label: 'bot.sidebar.otherBots', bots: shown.filter((bot) => !bot.workspaceId) },
-  ];
-  const [closed, setClosed] = useState<string[]>(() => {
-    try { return JSON.parse(window.localStorage.getItem(botCategoriesClosedKey) ?? '[]') as string[]; } catch { return []; }
-  });
-  const toggleCategory = (key: string) => {
-    const next = closed.includes(key) ? closed.filter((k) => k !== key) : [...closed, key];
-    setClosed(next);
-    try { window.localStorage.setItem(botCategoriesClosedKey, JSON.stringify(next)); } catch { /* storage off: this session only */ }
-  };
-  // MC-61: a pane row's `@name` asks for its bot: the group and the bot's category open, the row brought into view and flashed.
+  const { listed, hidden } = listedBots(bots, panes, allPanes);
+  const shown = listed.filter((bot) => botMatches(bot, panes.get(bot.id), search));
+  const groups: { key: string; label: string; bots: SidebarBot[] }[] = grouping === 'state'
+    ? groupByState(shown, panes).map((group) => ({ key: 'state:' + group.state, label: stateTitles[group.state], bots: group.bots }))
+    : [
+      { key: 'workspace', label: 'bot.sidebar.workspaceBots', bots: shown.filter((bot) => bot.workspaceId) },
+      { key: 'other', label: 'bot.sidebar.otherBots', bots: shown.filter((bot) => !bot.workspaceId) },
+    ].filter((group) => group.bots.length > 0);
+  // MC-61: a pane row's `@name` asks for its bot: shown, its group opened, the row brought into view and flashed.
   const [flashed, setFlashed] = useState<string | undefined>();
   useEffect(() => {
-    const show = (event: Event) => {
-      const id = (event as CustomEvent<string>).detail;
-      const bot = bots.find((b) => b.id === id);
-      if (!bot) return;
-      if (!open) toggle();
-      const key = bot.workspaceId ? 'workspace' : 'other';
-      if (closed.includes(key)) toggleCategory(key);
-      setFlashed(id);
-      window.requestAnimationFrame(() => document.querySelector(`[data-testid="sidebar-bot"][data-session-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
-    };
-    window.addEventListener(showBotEvent, show);
-    return () => window.removeEventListener(showBotEvent, show);
+    if (!focus) return;
+    const bot = bots.find((b) => b.id === focus);
+    onFocused();
+    if (!bot) return;
+    if (!listed.some((b) => b.id === focus)) setAllPanes(true);
+    const state = botState(bot, panes.get(bot.id));
+    const key = grouping === 'state' ? 'state:' + state : bot.workspaceId ? 'workspace' : 'other';
+    if (closed.includes(key)) toggleGroup(key);
+    setFlashed(focus);
+    window.requestAnimationFrame(() => document.querySelector(`[data-testid="sidebar-bot"][data-session-id="${CSS.escape(focus)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
   });
   useEffect(() => {
     if (!flashed) return;
@@ -390,65 +407,125 @@ function BotGroup({ bots, panes, activeId, search, workspaces }: { bots: Sidebar
   }, [flashed]);
   const row = (bot: SidebarBot) => {
     const info = panes.get(bot.id);
-    // MC-61: a workspace bot shows its workspace after its name, and what its pane is on below; any other bot where it lives.
-    const detail = bot.workspaceId ? info?.title ?? '' : t('bot.sidebar.independent');
     const items: MenuItem[] = [
       { label: t('bot.menu.edit'), action: () => call('paneBot', { paneId: bot.id }) },
       // MC-64: 재우기 / 깨우기.
       { label: t(bot.asleep ? 'bot.menu.wake' : 'bot.menu.sleep'), action: () => call('botSleep', { paneId: bot.id, asleep: !bot.asleep }) },
+      ...(bot.workspaceId ? [{ label: t('bot.menu.showWorkspace'), action: () => showWorkspace(bot.workspaceId) }] : []),
       { label: t('menu.closePane'), action: () => call('closeSession', { id: bot.id }) },
     ];
     const next = nextRunWords(bot.nextRun);
+    const state = botState(bot, info);
+    const line = statusLine(bot, info, next, t);
     const jobsLine = bot.jobs ? '\n' + t('bot.sidebar.jobs', { count: String(bot.jobs) }) + (next ? ' · ' + t('bot.sidebar.nextRun', { at: next }) : '') : '';
     return (
-      <button key={bot.id} type="button" className={'sidebar-pane sidebar-bot' + (bot.id === activeId ? ' active' : '') + (bot.id === flashed ? ' flashed' : '') + (bot.asleep ? ' asleep' : '')} data-testid="sidebar-bot" data-session-id={bot.id}
-        title={t('bot.label', { handle: bot.handle }) + (bot.asleep ? '\n' + t('bot.sidebar.asleep') : '') + jobsLine + (bot.folder ? '\n' + bot.folder : '') + (bot.workspaceId ? '\n' + t('bot.sidebar.doubleClick') : '')}
+      <button key={bot.id} type="button" className={'sidebar-pane sidebar-bot state-' + state + (bot.id === activeId ? ' active' : '') + (bot.id === flashed ? ' flashed' : '') + (bot.asleep ? ' asleep' : '')} data-testid="sidebar-bot" data-session-id={bot.id}
+        title={t('bot.label', { handle: bot.handle }) + '\n' + line + jobsLine + (bot.folder ? '\n' + bot.folder : '') + (bot.workspaceId ? '\n' + t('bot.sidebar.doubleClick') : '')}
         onClick={() => choose(bot.id)} onDoubleClick={() => showWorkspace(bot.workspaceId)} onContextMenu={(event) => menu.atPointer(event, items)}>
         <StatusGlyph tone={info?.tone ?? 'idle'} kind={info?.kind ?? 'claude'} />
         <span className="sidebar-pane-text">
           <span className="sidebar-pane-line">
             <span className={'sidebar-pane-title' + (info?.settled === false ? ' strong' : '')}>@{bot.handle}</span>
+            {/* MC-61: a workspace bot's workspace after its name. */}
             {bot.workspaceId && bot.workspace && <span className="sidebar-bot-workspace" data-testid="sidebar-bot-workspace">{bot.workspace}</span>}
-            {/* MC-64: asleep, or the next scheduled run. */}
+            {/* MC-64: asleep, or the next scheduled run (when the line says something else). */}
             {bot.asleep && <span className="sidebar-bot-sleep" aria-label={t('bot.sidebar.asleep')} data-testid="sidebar-bot-asleep">💤</span>}
-            {!bot.asleep && next && <span className="sidebar-bot-next" data-testid="sidebar-bot-next">⏰ {next}</span>}
-            {info?.attention && <span className="sidebar-attention-dot" title={info.attention.help} aria-label={info.attention.help} />}
+            {!bot.asleep && next && state !== 'idle' && <span className="sidebar-bot-next" data-testid="sidebar-bot-next">⏰ {next}</span>}
+            {state === 'needsYou' && <span className="sidebar-attention-dot" title={info?.attention?.help ?? line} aria-label={info?.attention?.help ?? line} />}
           </span>
+          {/* MC-68: what it is doing, in one line. */}
           <span className="sidebar-pane-meta">
             {info?.agent && <ProviderMark provider={info.agent} size={11} />}
-            <span className="sidebar-pane-detail">{detail}</span>
+            <span className={'sidebar-pane-detail sidebar-bot-line' + (state === 'needsYou' ? ' tone-text-wait' : '')} data-testid="sidebar-bot-line">{line}</span>
           </span>
         </span>
       </button>
     );
   };
+  const options: MenuItem[] = [
+    { label: (grouping === 'state' ? '✓ ' : '    ') + t('bot.sidebar.groupByState'), action: () => setGrouping('state') },
+    { label: (grouping === 'kind' ? '✓ ' : '    ') + t('bot.sidebar.groupByKind'), action: () => setGrouping('kind') },
+    { separator: true },
+    { label: (allPanes ? '✓ ' : '    ') + t('bot.sidebar.allPanes'), action: () => setAllPanes(!allPanes) },
+  ];
   return (
-    <div className="sidebar-bots" data-testid="sidebar-bots">
+    <div className="sidebar-bots" role="tabpanel" data-testid="sidebar-bots">
       <div className="sidebar-section sidebar-bots-header">
-        <button type="button" className="icon-button" title={t(open ? 'bot.sidebar.collapse' : 'bot.sidebar.expand')} aria-expanded={open} onClick={toggle}>
-          <Icon name={open ? 'chevron-down' : 'chevron-right'} size={11} weight={2.6} />
-        </button>
-        <span className="sidebar-section-title">{t('bot.sidebar.title')}</span>
-        <span className="sidebar-section-count">{bots.length}</span>
+        <span className="sidebar-section-title">{t(allPanes ? 'bot.sidebar.allPanesTitle' : 'bot.sidebar.atWorkTitle')}</span>
+        <span className="sidebar-section-count">{shown.length}</span>
         <span className="spacer" />
-        <button type="button" className="icon-button" title={t('bot.sidebar.add')} aria-label={t('bot.sidebar.add')} data-testid="sidebar-add-bot" onClick={() => call('botNew')}>
-          <Icon name="plus" size={13} />
+        <button type="button" className="icon-button" title={t('bot.sidebar.options')} aria-label={t('bot.sidebar.options')} data-testid="sidebar-bot-options"
+          onClick={(event) => menu.under(event.currentTarget, options)}>
+          <Icon name="ellipsis" size={13} weight={2.6} />
         </button>
       </div>
-      {open && categories.filter((category) => category.bots.length > 0).map((category) => {
-        const folded = closed.includes(category.key);
+      {groups.map((group) => {
+        const folded = closed.includes(group.key);
         return (
-          <div key={category.key} className="sidebar-bot-category" data-testid={'sidebar-bot-category-' + category.key}>
+          <div key={group.key} className="sidebar-bot-category" data-testid={'sidebar-bot-category-' + group.key}>
             <button type="button" className="sidebar-bot-category-header" aria-expanded={!folded} title={t(folded ? 'bot.sidebar.expand' : 'bot.sidebar.collapse')}
-              onClick={() => toggleCategory(category.key)}>
+              onClick={() => toggleGroup(group.key)}>
               <Icon name={folded ? 'chevron-right' : 'chevron-down'} size={10} weight={2.6} />
-              <span className="sidebar-bot-category-title">{t(category.label)}</span>
-              <span className="sidebar-section-count">{category.bots.length}</span>
+              <span className="sidebar-bot-category-title">{t(group.label)}</span>
+              <span className="sidebar-section-count">{group.bots.length}</span>
             </button>
-            {!folded && <div className="sidebar-bot-category-rows">{category.bots.map(row)}</div>}
+            {!folded && <div className="sidebar-bot-category-rows">{group.bots.map(row)}</div>}
           </div>
         );
       })}
+      {shown.length === 0 && search.trim().length === 0 && (
+        <div className="sidebar-bots-empty" data-testid="sidebar-bots-empty">
+          <span>{t('bot.sidebar.empty')}</span>
+          <button type="button" className="sidebar-open-folder" onClick={() => call('botNew')}><Icon name="plus" size={14} />{t('bot.sidebar.add')}</button>
+        </div>
+      )}
+      {/* MC-68: the panes left out, one click away. */}
+      {hidden > 0 && (
+        <button type="button" className="sidebar-bots-more" data-testid="sidebar-bots-more" onClick={() => setAllPanes(true)}>
+          {t('bot.sidebar.hiddenPanes', { count: hidden })}
+        </button>
+      )}
+      {allPanes && bots.some((bot) => !atWork(bot)) && (
+        <button type="button" className="sidebar-bots-more" data-testid="sidebar-bots-fewer" onClick={() => setAllPanes(false)}>
+          {t('bot.sidebar.atWorkOnly')}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** MC-68: the sidebar's tabs, 워크스페이스 and 봇, with the 봇 tab's count of bots waiting for the user, and the + of the tab shown. */
+function SidebarTabs({ tab, onTab, workspaceCount, botCount, needsYou, working, onAdd }: {
+  tab: SidebarTab; onTab: (tab: SidebarTab) => void; workspaceCount: number; botCount: number; needsYou: number; working: number;
+  onAdd: (anchor: HTMLElement) => void;
+}) {
+  const { t } = useServices();
+  const mac = import.meta.env.MODE === 'tauri' && macHost();
+  const key = (n: number) => (mac ? '⌘' : 'Ctrl+') + n;
+  return (
+    <div className="sidebar-tabs" data-testid="sidebar-tabs">
+      <div className="sidebar-tabs-track" role="tablist" aria-label={t('sidebar.tabs')}>
+        <button type="button" role="tab" aria-selected={tab === 'workspaces'} className={tab === 'workspaces' ? 'on' : ''} data-testid="sidebar-tab-workspaces"
+          title={t('sidebar.tab.workspacesHelp', { key: key(1) })} onClick={() => onTab('workspaces')}>
+          <span>{t('sidebar.workspacesHeader')}</span>
+          <span className="sidebar-tab-count" title={t('tooltip.sidebar.workspaceCount', { count: workspaceCount })}>{workspaceCount}</span>
+        </button>
+        <button type="button" role="tab" aria-selected={tab === 'bots'} className={tab === 'bots' ? 'on' : ''} data-testid="sidebar-tab-bots"
+          title={t('sidebar.tab.botsHelp', { key: key(2) }) + (needsYou > 0 ? '\n' + t('sidebar.tab.botsNeedYou', { count: needsYou }) : '') + (working > 0 ? '\n' + t('sidebar.tab.botsWorking', { count: working }) : '')}
+          onClick={() => onTab('bots')}>
+          <span>{t('bot.sidebar.title')}</span>
+          {needsYou > 0
+            ? <span className="sidebar-tab-badge" data-testid="sidebar-tab-bots-badge" aria-label={t('sidebar.tab.botsNeedYou', { count: needsYou })}>{needsYou}</span>
+            : <span className={'sidebar-tab-count' + (working > 0 ? ' working' : '')}>{botCount}</span>}
+        </button>
+      </div>
+      {tab === 'workspaces'
+        ? <button type="button" className="icon-button" title={t('tooltip.sidebar.addWorkspace')} aria-label={t('workspace.add.menu')} data-testid="sidebar-add-workspace" onClick={(event) => onAdd(event.currentTarget)}>
+          <Icon name="folder-plus" size={13} />
+        </button>
+        : <button type="button" className="icon-button" title={t('bot.sidebar.add')} aria-label={t('bot.sidebar.add')} data-testid="sidebar-add-bot" onClick={(event) => onAdd(event.currentTarget)}>
+          <Icon name="plus" size={13} />
+        </button>}
     </div>
   );
 }
@@ -470,11 +547,28 @@ export function Sidebar() {
   const menu = useMenu();
   const addChoices = useWorkspaceAddChoices();
   const [search, setSearch] = useState('');
+  // MC-68: the tab shown (kept in this window's storage), and a bot a pane row's `@name` asked the 봇 tab to show.
+  const [tab, setTab] = useState<SidebarTab>(savedTab);
+  const [focusBot, setFocusBot] = useState<string | undefined>();
+  const chooseTab = useCallback((next: SidebarTab) => { setTab(next); saveTab(next); }, []);
+  useEffect(() => {
+    const onTab = (event: Event) => chooseTab((event as CustomEvent<SidebarTab>).detail);
+    const onShow = (event: Event) => { chooseTab('bots'); setFocusBot((event as CustomEvent<string>).detail); };
+    window.addEventListener(sidebarTabEvent, onTab);
+    window.addEventListener(showBotEvent, onShow);
+    return () => { window.removeEventListener(sidebarTabEvent, onTab); window.removeEventListener(showBotEvent, onShow); };
+  }, [chooseTab]);
   if (!hasSnapshot || !shell) return <nav className="sidebar" />;
   const dashboard = shell.dashboard !== undefined;
   const groups = sidebarGroups(shell.workspaces, shell.servers, search);
   const listed = groups.local;
   const entryCounts = shell.entry;
+  const bots = shell.bots ?? [];
+  const counts = botCounts(bots, panes);
+  const searching = search.trim().length > 0;
+  // MC-68: what the search finds in the tab not shown.
+  const workspaceMatches = listed.length + groups.servers.reduce((n, g) => n + g.workspaces.length, 0);
+  const botMatchCount = searching ? bots.filter((bot) => botMatches(bot, panes.get(bot.id), search)).length : 0;
   return (
     <nav className="sidebar" aria-label={t('sidebar.workspacesHeader')} data-testid="sidebar">
       <div className="sidebar-search">
@@ -489,39 +583,46 @@ export function Sidebar() {
         <StatusCounts counts={entryCounts} />
       </button>
       <ReviewEntry />
-      <div className="sidebar-section">
-        <span className="sidebar-section-title">{t('sidebar.workspacesHeader')}</span>
-        <span className="sidebar-section-count" title={t('tooltip.sidebar.workspaceCount', { count: groups.ownCount })}>{groups.ownCount}</span>
-        <span className="spacer" />
-        {/* The three ways to add a workspace, as the Mac's sidebar menu offers them (M/WorkspaceView.swift:132). */}
-        <button type="button" className="icon-button" title={t('tooltip.sidebar.addWorkspace')} aria-label={t('workspace.add.menu')} data-testid="sidebar-add-workspace"
-          onClick={(event) => menu.under(event.currentTarget, addChoices.map((choice) => ({ label: choice.label, icon: <Icon name={choice.icon} size={12} />, action: choice.run, testId: 'workspace-add-' + choice.key })))}>
-          <Icon name="folder-plus" size={13} />
-        </button>
-      </div>
+      <SidebarTabs tab={tab} onTab={chooseTab} workspaceCount={groups.ownCount} botCount={listedBots(bots, panes, false).listed.length} needsYou={counts.needsYou} working={counts.working}
+        onAdd={(anchor) => (tab === 'workspaces'
+          // The three ways to add a workspace, as the Mac's sidebar menu offers them (M/WorkspaceView.swift:132).
+          ? menu.under(anchor, addChoices.map((choice) => ({ label: choice.label, icon: <Icon name={choice.icon} size={12} />, action: choice.run, testId: 'workspace-add-' + choice.key })))
+          : call('botNew'))} />
       <div className="sidebar-list">
-        {listed.length === 0 && groups.servers.every((g) => g.workspaces.length === 0) && (
-          <div className="sidebar-empty">{t(search.trim().length > 0 ? 'sidebar.noSearchResults' : 'dashboard.empty')}</div>
+        {/* MC-68: the search's finds in the other tab, one click away. */}
+        {tab === 'workspaces' && botMatchCount > 0 && (
+          <button type="button" className="sidebar-search-elsewhere" data-testid="sidebar-search-in-bots" onClick={() => chooseTab('bots')}>{t('sidebar.search.inBots', { count: botMatchCount })}</button>
         )}
-        {listed.map((workspace) => (
-          <WorkspaceGroup key={workspace.id} workspace={workspace} panes={panes} activeId={activeId} dashboard={dashboard}
-            selected={!dashboard && activeWorkspaceId === workspace.id} />
-        ))}
-        {/* Each connected computer's shared workspaces under its own header (the remote mirror). */}
-        {groups.servers.map((group) => (
-          <div key={group.server.id} className="sidebar-server-group" data-testid="sidebar-server-group">
-            <ServerHeader server={group.server} />
-            {group.workspaces.map((workspace) => (
+        {tab === 'bots' && searching && workspaceMatches > 0 && (
+          <button type="button" className="sidebar-search-elsewhere" data-testid="sidebar-search-in-workspaces" onClick={() => chooseTab('workspaces')}>{t('sidebar.search.inWorkspaces', { count: workspaceMatches })}</button>
+        )}
+        {tab === 'workspaces' ? (
+          <div className="sidebar-workspaces" role="tabpanel">
+            {listed.length === 0 && groups.servers.every((g) => g.workspaces.length === 0) && (
+              <div className="sidebar-empty">{t(searching ? 'sidebar.noSearchResults' : 'dashboard.empty')}</div>
+            )}
+            {listed.map((workspace) => (
               <WorkspaceGroup key={workspace.id} workspace={workspace} panes={panes} activeId={activeId} dashboard={dashboard}
                 selected={!dashboard && activeWorkspaceId === workspace.id} />
             ))}
+            {/* Each connected computer's shared workspaces under its own header (the remote mirror). */}
+            {groups.servers.map((group) => (
+              <div key={group.server.id} className="sidebar-server-group" data-testid="sidebar-server-group">
+                <ServerHeader server={group.server} />
+                {group.workspaces.map((workspace) => (
+                  <WorkspaceGroup key={workspace.id} workspace={workspace} panes={panes} activeId={activeId} dashboard={dashboard}
+                    selected={!dashboard && activeWorkspaceId === workspace.id} />
+                ))}
+              </div>
+            ))}
           </div>
-        ))}
-        {/* MC-59: the bots, under the workspaces. */}
-        <BotGroup bots={shell.bots ?? []} panes={panes} activeId={dashboard ? undefined : activeId} search={search} workspaces={shell.workspaces} />
+        ) : (
+          <BotTab bots={bots} panes={panes} activeId={dashboard ? undefined : activeId} search={search} workspaces={shell.workspaces}
+            focus={focusBot} onFocused={() => setFocusBot(undefined)} />
+        )}
       </div>
       {/* With no workspace listed (none yet, or none matching the search) these are the sidebar's ways in (M/WorkspaceView.swift:164-171). */}
-      {listed.length === 0 && (
+      {tab === 'workspaces' && listed.length === 0 && (
         <div className="sidebar-add-choices">
           {addChoices.map((choice) => (
             <button key={choice.key} type="button" className="sidebar-open-folder" title={choice.tooltip} data-testid={choice.key === 'existing' ? 'sidebar-open-folder' : 'sidebar-empty-add-' + choice.key} onClick={choice.run}>

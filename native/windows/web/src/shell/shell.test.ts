@@ -43,6 +43,8 @@ describe('shortcuts (spec section 8)', () => {
     expect(shortcutAction(key('Equal'))).toBe('textLarger');
     expect(shortcutAction(key('Minus'))).toBe('textSmaller');
     expect(shortcutAction(key('Digit0'))).toBe('textReset');
+    expect(shortcutAction(key('Digit1'))).toBe('tabWorkspaces');
+    expect(shortcutAction(key('Digit2'))).toBe('tabBots');
   });
   it('leaves other keys alone', () => {
     expect(shortcutAction(key('KeyA'))).toBeNull();
@@ -70,6 +72,8 @@ describe("the Mac's shortcuts and menu (D9, the Rust host on macOS only)", () =>
     expect(macShortcutAction(mac('Equal'))).toBe('textLarger');
     expect(macShortcutAction(mac('Minus'))).toBe('textSmaller');
     expect(macShortcutAction(mac('Digit0'))).toBe('textReset');
+    expect(macShortcutAction(mac('Digit1'))).toBe('tabWorkspaces');
+    expect(macShortcutAction(mac('Digit2'))).toBe('tabBots');
   });
   it('leaves Ctrl keys to the text fields and ⌘ keys of its own to the system', () => {
     expect(macShortcutAction(mac('KeyK', { metaKey: false, ctrlKey: true }))).toBeNull();

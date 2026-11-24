@@ -80,7 +80,7 @@ Git（Xcode Command Line Tools）会打开系统安装窗口，请在该窗口�
 ## 打开工作区 {#open-workspace}
 一个工作区就是一个项目文件夹。窗格、标签页布局和对话记录按工作区分别保存。
 
-添加工作区有三种方式。可以在侧边栏{{ui:sidebar.workspacesHeader}}标题右侧的文件夹按钮（点击后会打开包含这三项的菜单）、文件菜单、添加窗格菜单，以及侧边栏为空时和首次启动欢迎界面上的三个按钮中任选一处。
+添加工作区有三种方式。可以在侧边栏{{ui:sidebar.workspacesHeader}}标签右侧的文件夹按钮（点击后会打开包含这三项的菜单）、文件菜单、添加窗格菜单，以及侧边栏为空时和首次启动欢迎界面上的三个按钮中任选一处。
 
 - **{{ui:workspace.add.existing}}**（{{kbd:⌘O}}）：选择一个已有的文件夹。
 - **{{ui:workspace.add.newFolder}}**：设定{{ui:workspace.create.name}}和{{ui:workspace.create.location}}来创建新文件夹。开启{{ui:workspace.newFolder.gitInit}}后，会从一个空的 Git 仓库开始。即使 git init 失败，该文件夹仍会作为工作区添加，并有通知告诉你这一点。

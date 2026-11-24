@@ -271,6 +271,8 @@ export interface SidebarBot {
   /** MC-64: how many schedules and triggers are sent to it, and the soonest next fire (RFC 3339). */
   jobs?: number;
   nextRun?: string;
+  /** MC-68: it carries instructions of its own (a bot at work, listed in the 봇 tab). */
+  instructed?: boolean;
 }
 
 export interface ShellModel {
